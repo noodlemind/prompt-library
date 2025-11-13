@@ -31,10 +31,10 @@ Transform feature descriptions, bug reports, or improvement ideas into well-stru
 ### 1. Repository Research & Context Gathering
 
 <thinking>
-First, I need to understand the project's conventions and existing patterns, leveraging all available resources and use paralel subagents to do this.
+First, I need to understand the project's conventions and existing patterns, leveraging all available resources and use parallel subagents to do this.
 </thinking>
 
-Runn these three agents in paralel at the same time:
+Run these three agents in parallel at the same time:
 
 - Task repo-research-analyst(feature_description)
 - Task best-practices-researcher (feature_description)

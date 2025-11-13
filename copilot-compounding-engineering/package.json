@@ -27,10 +27,6 @@
     "url": "https://github.com/noodlemind/prompt-library.git"
   },
   "license": "MIT",
-  "main": "./out/extension.js",
-  "activationEvents": [
-    "onStartupFinished"
-  ],
   "contributes": {},
   "scripts": {
     "vscode:prepublish": "npm run compile",

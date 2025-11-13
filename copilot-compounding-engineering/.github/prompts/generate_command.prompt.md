@@ -1,11 +1,11 @@
 ---
 name: Generate Command
-description: Create a new slash command in `.claude/commands/` for the requested task.
+description: Create a new slash command in `.github/prompts/` for the requested task.
 tools: ['search']
 model: Claude Sonnet 4
 ---
 
-Create a new slash command in `.claude/commands/` for the requested task.
+Create a new slash command in `.github/prompts/` for the requested task.
 
 ## Goal
 
