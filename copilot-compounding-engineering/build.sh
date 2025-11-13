@@ -17,9 +17,10 @@ fi
 # Clean previous builds
 rm -f *.vsix
 
-# Create out directory (even though we don't compile TypeScript)
+# Clean and prepare directories
+echo "Preparing build directories..."
+rm -rf out
 mkdir -p out
-cp extension.js out/
 
 # Package the extension
 echo "Packaging extension..."

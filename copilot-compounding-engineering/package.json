@@ -1,22 +1,24 @@
 {
-  "name": "copilot-compounding-engineering",
-  "displayName": "Copilot Compounding Engineering",
+  "name": "compounding-engineering",
+  "displayName": "Compounding Engineering",
   "description": "A comprehensive collection of specialized AI agents and prompt templates for GitHub Copilot that compound your engineering productivity",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "publisher": "noodlemind",
+  "main": "./extension.js",
   "engines": {
     "vscode": "^1.85.0"
   },
   "categories": [
     "AI",
-    "Snippets",
-    "Other"
+    "Chat",
+    "Programming Languages"
   ],
   "keywords": [
     "github",
     "copilot",
     "ai",
     "agents",
+    "chat",
     "code-review",
     "security",
     "performance",
@@ -27,7 +29,204 @@
     "url": "https://github.com/noodlemind/prompt-library.git"
   },
   "license": "MIT",
-  "contributes": {},
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "contributes": {
+    "chatParticipants": [
+      {
+        "id": "compounding-engineering.architecture-strategist",
+        "name": "architecture-strategist",
+        "fullName": "Architecture Strategist",
+        "description": "Analyze code from an architectural perspective, evaluate system design decisions",
+        "isSticky": true
+      },
+      {
+        "id": "compounding-engineering.best-practices-researcher",
+        "name": "best-practices-researcher",
+        "fullName": "Best Practices Researcher",
+        "description": "Research industry best practices and standards",
+        "isSticky": true
+      },
+      {
+        "id": "compounding-engineering.code-simplicity-reviewer",
+        "name": "code-simplicity-reviewer",
+        "fullName": "Code Simplicity Reviewer",
+        "description": "Identify opportunities for code simplification and improvement",
+        "isSticky": true
+      },
+      {
+        "id": "compounding-engineering.compounding-python-reviewer",
+        "name": "compounding-python-reviewer",
+        "fullName": "Python Code Reviewer",
+        "description": "Expert Python code review with high standards",
+        "isSticky": true
+      },
+      {
+        "id": "compounding-engineering.compounding-rails-reviewer",
+        "name": "compounding-rails-reviewer",
+        "fullName": "Rails Code Reviewer",
+        "description": "Expert Rails code review with high standards",
+        "isSticky": true
+      },
+      {
+        "id": "compounding-engineering.compounding-typescript-reviewer",
+        "name": "compounding-typescript-reviewer",
+        "fullName": "TypeScript Code Reviewer",
+        "description": "Expert TypeScript code review with high standards",
+        "isSticky": true
+      },
+      {
+        "id": "compounding-engineering.data-integrity-guardian",
+        "name": "data-integrity-guardian",
+        "fullName": "Data Integrity Guardian",
+        "description": "Review database migrations and data integrity",
+        "isSticky": true
+      },
+      {
+        "id": "compounding-engineering.dhh-rails-reviewer",
+        "name": "dhh-rails-reviewer",
+        "fullName": "DHH Rails Reviewer",
+        "description": "Rails code review from DHH's perspective",
+        "isSticky": true
+      },
+      {
+        "id": "compounding-engineering.every-style-editor",
+        "name": "every-style-editor",
+        "fullName": "Every Style Editor",
+        "description": "Apply Every's editorial style guide",
+        "isSticky": true
+      },
+      {
+        "id": "compounding-engineering.feedback-codifier",
+        "name": "feedback-codifier",
+        "fullName": "Feedback Codifier",
+        "description": "Codify review feedback into standards",
+        "isSticky": true
+      },
+      {
+        "id": "compounding-engineering.framework-docs-researcher",
+        "name": "framework-docs-researcher",
+        "fullName": "Framework Docs Researcher",
+        "description": "Research framework documentation and capabilities",
+        "isSticky": true
+      },
+      {
+        "id": "compounding-engineering.git-history-analyzer",
+        "name": "git-history-analyzer",
+        "fullName": "Git History Analyzer",
+        "description": "Analyze git history and code evolution",
+        "isSticky": true
+      },
+      {
+        "id": "compounding-engineering.pattern-recognition-specialist",
+        "name": "pattern-recognition-specialist",
+        "fullName": "Pattern Recognition Specialist",
+        "description": "Identify patterns and anti-patterns in code",
+        "isSticky": true
+      },
+      {
+        "id": "compounding-engineering.performance-oracle",
+        "name": "performance-oracle",
+        "fullName": "Performance Oracle",
+        "description": "Analyze performance and scalability issues",
+        "isSticky": true
+      },
+      {
+        "id": "compounding-engineering.pr-comment-resolver",
+        "name": "pr-comment-resolver",
+        "fullName": "PR Comment Resolver",
+        "description": "Address PR comments systematically",
+        "isSticky": true
+      },
+      {
+        "id": "compounding-engineering.repo-research-analyst",
+        "name": "repo-research-analyst",
+        "fullName": "Repo Research Analyst",
+        "description": "Analyze repository structure and conventions",
+        "isSticky": true
+      },
+      {
+        "id": "compounding-engineering.security-sentinel",
+        "name": "security-sentinel",
+        "fullName": "Security Sentinel",
+        "description": "Perform security audits and vulnerability scanning",
+        "isSticky": true
+      },
+      {
+        "id": "compounding-engineering.review",
+        "name": "review",
+        "fullName": "Code Review",
+        "description": "Comprehensive multi-agent code review with security, performance, and architecture analysis",
+        "isSticky": true,
+        "commands": [
+          {
+            "name": "code",
+            "description": "Review code with multi-agent analysis"
+          }
+        ]
+      },
+      {
+        "id": "compounding-engineering.plan",
+        "name": "plan",
+        "fullName": "Plan Issue",
+        "description": "Transform feature descriptions into well-structured issues with research",
+        "isSticky": true,
+        "commands": [
+          {
+            "name": "issue",
+            "description": "Plan and create detailed issue"
+          }
+        ]
+      },
+      {
+        "id": "compounding-engineering.triage",
+        "name": "triage",
+        "fullName": "Triage Issues",
+        "description": "Analyze and prioritize GitHub issues",
+        "isSticky": true,
+        "commands": [
+          {
+            "name": "issues",
+            "description": "Triage and categorize issues"
+          }
+        ]
+      },
+      {
+        "id": "compounding-engineering.work",
+        "name": "work",
+        "fullName": "Work on Task",
+        "description": "Execute complex tasks with systematic planning and validation",
+        "isSticky": true,
+        "commands": [
+          {
+            "name": "on",
+            "description": "Work on a specific task"
+          }
+        ]
+      },
+      {
+        "id": "compounding-engineering.generate-command",
+        "name": "generate-command",
+        "fullName": "Generate Command",
+        "description": "Create custom workflow command templates",
+        "isSticky": true
+      },
+      {
+        "id": "compounding-engineering.resolve-todo",
+        "name": "resolve-todo",
+        "fullName": "Resolve TODO",
+        "description": "Work through TODO lists systematically in parallel",
+        "isSticky": true,
+        "commands": [
+          {
+            "name": "parallel",
+            "description": "Resolve multiple TODOs in parallel"
+          }
+        ]
+      }
+    ]
+  },
   "scripts": {
     "vscode:prepublish": "npm run compile",
     "compile": "echo 'No TypeScript to compile'",
@@ -37,5 +236,8 @@
   "devDependencies": {
     "@types/vscode": "^1.85.0",
     "@vscode/vsce": "^2.22.0"
+  },
+  "dependencies": {
+    "yaml": "^2.3.4"
   }
 }
