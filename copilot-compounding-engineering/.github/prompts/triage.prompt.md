@@ -224,6 +224,6 @@ Do you want to add this to the todo list?
 3. custom - modify before creating
 ```
 
-Do not code, and if you say yes, make sure to mark the to‑do as ready to pick up or something. If you make any changes, update the file and then continue to read the next one. If next is selecrte make sure to remove the to‑do from the list since its not relevant.
+Do not code, and if you say yes, make sure to mark the to-do as ready to pick up or something. If you make any changes, update the file and then continue to read the next one. If next is selecrte make sure to remove the to-do from the list since its not relevant.
 
-Every time you present the to‑do as a header, can you say what the progress of the triage is, how many we have done and how many are left, and an estimated time for completion, looking at how quickly we go through them as well?
+Every time you present the to-do as a header, can you say what the progress of the triage is, how many we have done and how many are left, and an estimated time for completion, looking at how quickly we go through them as well?
