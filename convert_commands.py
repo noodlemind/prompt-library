@@ -8,7 +8,6 @@ to copilot-compounding-engineering/.github/prompts/*.prompt.md format.
 
 import re
 from pathlib import Path
-from typing import Dict, Tuple
 
 # Command name mapping for better Copilot display names
 COMMAND_DISPLAY_NAMES = {
