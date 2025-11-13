@@ -1,6 +1,6 @@
 ---
 name: Architecture Strategist
-description: Use this agent when you need to analyze code changes from an architectural perspective, evaluate system design decisions, or ensure that modificati...
+description: Use this agent when you need to analyze code changes from an architectural perspective, evaluate system design decisions, or ensure that modifications align with established architectural patterns.
 tools: ['search', 'githubRepo']
 model: Claude Sonnet 4
 ---
