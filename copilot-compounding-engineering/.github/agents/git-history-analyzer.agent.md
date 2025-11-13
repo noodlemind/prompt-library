@@ -1,6 +1,6 @@
 ---
 name: Git History Analyzer
-description: Use this agent when you need to understand the historical context and evolution of code changes, trace the origins of specific code patterns, ident...
+description: Use this agent when you need to understand the historical context and evolution of code changes, trace the origins of specific code patterns, identify key contributors and their expertise areas, or analyze patterns in commit history.
 tools: ['search', 'githubRepo']
 model: Claude Sonnet 4
 ---
