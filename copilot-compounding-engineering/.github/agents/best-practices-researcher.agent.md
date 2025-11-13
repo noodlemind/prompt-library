@@ -1,6 +1,6 @@
 ---
 name: Best Practices Researcher
-description: Use this agent when you need to research and gather external best practices, documentation, and examples for any technology, framework, or developm...
+description: Use this agent when you need to research and gather external best practices, documentation, and examples for any technology, framework, or development practice.
 tools: ['search', 'fetch']
 model: Claude Sonnet 4
 ---
