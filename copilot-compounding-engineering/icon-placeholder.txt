@@ -1,0 +1,26 @@
+Icon Placeholder
+
+For the VSIX package, you'll need to create a 128x128 PNG icon named "icon.png".
+
+Suggested icon design:
+- A compound/layered design representing multiple agents working together
+- Colors: Blue/Purple gradient (matches VS Code/Copilot theme)
+- Include elements suggesting:
+  - Multiple layers/agents (circles or hexagons)
+  - Code/engineering symbols
+  - Growth/compound interest visualization
+
+You can create this using:
+- Canva (free)
+- Figma (free)
+- GIMP (free, open source)
+- Adobe Illustrator/Photoshop
+
+Icon requirements for VS Code extensions:
+- Size: 128x128 pixels
+- Format: PNG (not SVG)
+- No transparency issues
+- Clear and recognizable at small sizes
+
+Temporary workaround:
+Remove the "icon" line from package.json if you want to build without an icon.

@@ -1,0 +1,41 @@
+{
+  "name": "copilot-compounding-engineering",
+  "displayName": "Copilot Compounding Engineering",
+  "description": "A comprehensive collection of specialized AI agents and prompt templates for GitHub Copilot that compound your engineering productivity",
+  "version": "1.0.0",
+  "publisher": "noodlemind",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "AI",
+    "Snippets",
+    "Other"
+  ],
+  "keywords": [
+    "github",
+    "copilot",
+    "ai",
+    "agents",
+    "code-review",
+    "security",
+    "performance",
+    "architecture"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/noodlemind/prompt-library.git"
+  },
+  "license": "MIT",
+  "contributes": {},
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "echo 'No TypeScript to compile'",
+    "package": "vsce package",
+    "publish": "vsce publish"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.85.0",
+    "@vscode/vsce": "^2.22.0"
+  }
+}
