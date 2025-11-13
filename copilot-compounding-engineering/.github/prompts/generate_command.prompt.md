@@ -74,7 +74,7 @@ Create a new slash command in `.claude/commands/` for the requested task.
 ## Tips for Effective Commands
 
 - **Use {user input}** placeholder for dynamic inputs
-- **Reference CLAUDE.md** patterns and conventions
+- **Reference copilot-instructions.md** patterns and conventions
 - **Include verification steps** - tests, linting, visual checks
 - **Be explicit about constraints** - don't modify X, use pattern Y
 - **Use XML tags** for structured prompts: `<task>`, `<requirements>`, `<constraints>`
@@ -95,7 +95,7 @@ Implement {user input} following these steps:
 3. Implement
    - Follow existing code patterns (reference specific files)
    - Write tests first if doing TDD
-   - Ensure code follows CLAUDE.md conventions
+   - Ensure code follows copilot-instructions.md conventions
 
 4. Verify
    - Run tests:

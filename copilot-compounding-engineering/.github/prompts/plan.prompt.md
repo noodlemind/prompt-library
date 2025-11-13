@@ -45,7 +45,7 @@ Runn these three agents in paralel at the same time:
 - [ ] Document all research findings with specific file paths (e.g., `app/services/example_service.rb:42`)
 - [ ] Include URLs to external documentation and best practices guides
 - [ ] Create a reference list of similar issues or PRs (e.g., `#123`, `#456`)
-- [ ] Note any team conventions discovered in `CLAUDE.md` or team documentation
+- [ ] Note any team conventions discovered in `copilot-instructions.md` or team documentation
 
 ### 2. Issue Planning & Structure
 

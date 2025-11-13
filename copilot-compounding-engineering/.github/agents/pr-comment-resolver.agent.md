@@ -29,7 +29,7 @@ When you receive a comment or review feedback, you will:
 
    - Maintaining consistency with the existing codebase style and patterns
    - Ensuring the change doesn't break existing functionality
-   - Following any project-specific guidelines from CLAUDE.md
+   - Following any project-specific guidelines from copilot-instructions.md
    - Keeping changes focused and minimal to address only what was requested
 
 4. **Verify the Resolution**: After making changes:
