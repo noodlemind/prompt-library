@@ -113,4 +113,4 @@ Implement {user input} following these steps:
    - Write clear commit message
 ```
 
-Now create the command file at `.claude/commands/[name].md` with the structure above.
+Now create the command file at `.github/prompts/[name].prompt.md` with the structure above.
