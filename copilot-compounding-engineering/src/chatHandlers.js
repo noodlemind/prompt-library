@@ -7,9 +7,17 @@ const vscode = require('vscode');
  * @param {Map} allAgents - Map of all loaded agents for handoff support
  * @param {Set} visitedAgents - Set of agent IDs already visited in this call chain (for cycle detection)
  * @param {number} depth - Current recursion depth (for depth limiting)
+ * @param {vscode.OutputChannel} [outputChannel] - Output channel for structured logging
  * @returns {Function} Chat request handler function
  */
-function createChatHandler(config, participantId, allAgents = new Map(), visitedAgents = new Set(), depth = 0) {
+function createChatHandler(
+    config,
+    participantId,
+    allAgents = new Map(),
+    visitedAgents = new Set(),
+    depth = 0,
+    outputChannel = undefined
+) {
     // Maximum recursion depth to prevent infinite loops
     const MAX_DEPTH = 5;
 
@@ -186,7 +194,8 @@ function createChatHandler(config, participantId, allAgents = new Map(), visited
                                 `compounding-engineering.${agentId}`,
                                 allAgents,
                                 newVisited,
-                                depth + 1
+                                depth + 1,
+                                outputChannel
                             );
 
                             // Use safe default for prompt
@@ -207,30 +216,103 @@ function createChatHandler(config, participantId, allAgents = new Map(), visited
 
         } catch (error) {
             // Log detailed error information to output channel for debugging
-            // Note: outputChannel should be passed in future refactoring
-            console.error('[Compounding Engineering Error]', {
-                agent: config.name,
-                participantId,
-                error: error.message,
-                stack: error.stack
-            });
+            const logLines = [
+                `[Compounding Engineering Error] ${config.name} (${participantId})`,
+                `• Type: ${error?.constructor?.name || 'Unknown'}`,
+                `• Message: ${error?.message || 'No message provided'}`
+            ];
+
+            if (error && 'code' in error) {
+                logLines.push(`• Code: ${error.code}`);
+            }
+
+            if (error && 'cause' in error && error.cause) {
+                const cause = error.cause;
+                let causeText;
+                if (typeof cause === 'string') {
+                    causeText = cause;
+                } else if (typeof cause === 'object') {
+                    try {
+                        causeText = JSON.stringify(cause);
+                    } catch (jsonError) {
+                        causeText = `[Unserializable cause: ${jsonError.message}]`;
+                    }
+                }
+
+                if (causeText) {
+                    logLines.push(`• Cause: ${causeText}`);
+                }
+            }
+
+            if (error?.stack) {
+                logLines.push(error.stack);
+            }
+
+            if (outputChannel) {
+                for (const line of logLines) {
+                    outputChannel.appendLine(line);
+                }
+            } else {
+                console.error(logLines.join('\n'));
+            }
 
             // Handle LanguageModelError specifically
             if (error instanceof vscode.LanguageModelError) {
-                let errorMessage = 'An error occurred while processing your request.';
+                let normalizedCode = typeof error.code === 'string' ? error.code.toLowerCase() : '';
 
-                switch (error.code) {
-                    case vscode.LanguageModelError.NotFound:
-                        errorMessage = 'Language model not found. Please ensure GitHub Copilot is installed.';
+                const extractCauseCode = cause => {
+                    if (!cause) {
+                        return '';
+                    }
+
+                    if (typeof cause === 'string') {
+                        return cause.toLowerCase();
+                    }
+
+                    if (typeof cause === 'object') {
+                        if (typeof cause.code === 'string') {
+                            return cause.code.toLowerCase();
+                        }
+
+                        if (typeof cause.reason === 'string') {
+                            return cause.reason.toLowerCase();
+                        }
+                    }
+
+                    return '';
+                };
+
+                if (!normalizedCode) {
+                    normalizedCode = extractCauseCode(error.cause);
+                }
+
+                let errorMessage = 'A language model error occurred. Please try again shortly.';
+
+                switch (normalizedCode) {
+                    case 'off_topic':
+                    case 'content_filter':
+                    case 'content_filter_blocked':
+                    case 'blocked':
+                        errorMessage = 'Request was blocked by content filters. Please try rephrasing your prompt.';
                         break;
-                    case vscode.LanguageModelError.NoPermissions:
-                        errorMessage = 'You need to grant permission to use the language model. Please check your GitHub Copilot settings.';
+                    case 'no_permissions':
+                    case 'forbidden':
+                        errorMessage = 'You do not have permission to use this language model. Please check your GitHub Copilot settings.';
                         break;
-                    case vscode.LanguageModelError.Blocked:
-                        errorMessage = 'Request was blocked by content filters. Please try rephrasing your question.';
+                    case 'quota_exceeded':
+                    case 'rate_limited':
+                    case 'rate_limit_exceeded':
+                        errorMessage = 'Request exceeded usage limits. Please wait a moment and try again.';
+                        break;
+                    case 'model_not_found':
+                    case 'not_found':
+                        errorMessage = 'The requested language model is unavailable. Please ensure GitHub Copilot is installed and active.';
                         break;
                     default:
-                        errorMessage = 'Language model error occurred. Please try again.';
+                        if (normalizedCode) {
+                            errorMessage = `Language model error (${normalizedCode}). Please try again.`;
+                        }
+                        break;
                 }
 
                 stream.markdown(`⚠️ ${errorMessage}`);

@@ -78,7 +78,7 @@ function registerChatParticipants(context, participants, iconName, typeName, all
             // Create chat participant
             const participant = vscode.chat.createChatParticipant(
                 participantId,
-                createChatHandler(config, participantId, allAgents)
+                createChatHandler(config, participantId, allAgents, undefined, 0, outputChannel)
             );
 
             // Set icon
