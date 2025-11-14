@@ -63,9 +63,9 @@ After installation, all 17 agents and 6 workflow prompts will be instantly avail
 
 #### Option B: Install from VS Code Marketplace
 
-*(Coming soon - after publishing to the marketplace)*
+Coming soon - this extension will be available on the VS Code Marketplace after publishing.
 
-```
+```text
 Search for "Compounding Engineering" in the Extensions marketplace
 ```
 
