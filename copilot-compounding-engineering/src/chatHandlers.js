@@ -41,11 +41,34 @@ function createChatHandler(config, participantId, allAgents = new Map(), visited
 
             const model = request.model;
 
-            // Build messages array
-            const messages = [
-                vscode.LanguageModelChatMessage.User(systemPrompt),
-                vscode.LanguageModelChatMessage.User(finalPrompt)
-            ];
+            // Build messages array with conversation history
+            const messages = [];
+
+            // Add conversation history for context continuity
+            if (context.history && context.history.length > 0) {
+                for (const item of context.history) {
+                    if (item instanceof vscode.ChatResponseTurn) {
+                        // Extract markdown content from previous assistant responses
+                        const content = item.response
+                            .filter(r => r instanceof vscode.ChatResponseMarkdownPart)
+                            .map(r => r.value.value)
+                            .join('\n');
+
+                        if (content) {
+                            messages.push(vscode.LanguageModelChatMessage.Assistant(content));
+                        }
+                    } else if (item instanceof vscode.ChatRequestTurn) {
+                        // Add previous user requests
+                        messages.push(vscode.LanguageModelChatMessage.User(item.prompt));
+                    }
+                }
+            }
+
+            // Add system prompt
+            messages.push(vscode.LanguageModelChatMessage.User(systemPrompt));
+
+            // Add current user prompt
+            messages.push(vscode.LanguageModelChatMessage.User(finalPrompt));
 
             // Add context from the editor if available
             if (context.activeEditorSelection) {
@@ -61,6 +84,22 @@ function createChatHandler(config, participantId, allAgents = new Map(), visited
                         );
                     }
                 }
+            }
+
+            // Check token limit before sending request
+            const estimatedTokens = messages.reduce((sum, m) => {
+                const content = typeof m.content === 'string'
+                    ? m.content
+                    : m.content.map(p => p.value || '').join('');
+                return sum + Math.ceil(content.length / 4);
+            }, 0);
+
+            if (estimatedTokens > model.maxInputTokens) {
+                stream.markdown(
+                    `⚠️ Request is too large (${estimatedTokens} tokens). ` +
+                    `Maximum is ${model.maxInputTokens} tokens. Please start a new conversation or reduce the amount of context.`
+                );
+                return;
             }
 
             // Send request to language model with streaming
@@ -123,7 +162,8 @@ function createChatHandler(config, participantId, allAgents = new Map(), visited
                             const handoffPrompt = handoff.prompt || userMessage || 'Please continue the analysis using the context above.';
                             const subRequest = {
                                 prompt: handoffPrompt,
-                                command: undefined
+                                command: undefined,
+                                model: request.model
                             };
 
                             await subHandler(subRequest, context, stream, token);
@@ -135,12 +175,34 @@ function createChatHandler(config, participantId, allAgents = new Map(), visited
             }
 
         } catch (error) {
-            console.error(`Error in chat handler for ${participantId}:`, error);
+            // Error details are already sent to the user via stream.markdown below
+            // No need for additional logging here as it would be redundant
 
-            if (error.message.includes('rate limit')) {
-                stream.markdown('⚠️ Rate limit reached. Please try again in a moment.');
+            // Handle LanguageModelError specifically
+            if (error instanceof vscode.LanguageModelError) {
+                let errorMessage = 'An error occurred while processing your request.';
+
+                switch (error.code) {
+                    case vscode.LanguageModelError.NotFound:
+                        errorMessage = 'Language model not found. Please ensure GitHub Copilot is installed.';
+                        break;
+                    case vscode.LanguageModelError.NoPermissions:
+                        errorMessage = 'You need to grant permission to use the language model. Please check your GitHub Copilot settings.';
+                        break;
+                    case vscode.LanguageModelError.Blocked:
+                        errorMessage = 'Request was blocked by content filters. Please try rephrasing your question.';
+                        break;
+                    default:
+                        errorMessage = `Language model error: ${error.message}`;
+                }
+
+                stream.markdown(`⚠️ ${errorMessage}`);
+            } else if (error.message.includes('rate limit')) {
+                stream.markdown('⚠️ Rate limit reached. Please wait a moment and try again.');
             } else if (error.message.includes('model')) {
                 stream.markdown('⚠️ Language model unavailable. Please check your GitHub Copilot subscription.');
+            } else if (token.isCancellationRequested) {
+                stream.markdown('Request cancelled.');
             } else {
                 stream.markdown(`⚠️ An error occurred: ${error.message}`);
             }

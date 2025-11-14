@@ -10,13 +10,18 @@ const { createChatHandler, createFollowupProvider } = require('./src/chatHandler
 let allAgents = new Map();
 let allPrompts = new Map();
 let registeredParticipants = [];
+let outputChannel;
 
 /**
  * Extension activation
  * @param {vscode.ExtensionContext} context
  */
 function activate(context) {
-    console.log('Compounding Engineering extension is activating...');
+    // Create output channel for structured logging
+    outputChannel = vscode.window.createOutputChannel('Compounding Engineering');
+    context.subscriptions.push(outputChannel);
+
+    outputChannel.appendLine('Compounding Engineering extension is activating...');
 
     try {
         // Determine paths to agent and prompt directories
@@ -25,13 +30,13 @@ function activate(context) {
         const promptsDir = path.join(extensionPath, '.github', 'prompts');
 
         // Load all agents and prompts
-        console.log(`Loading agents from: ${agentsDir}`);
-        allAgents = loadAllAgents(agentsDir);
-        console.log(`Loaded ${allAgents.size} agents`);
+        outputChannel.appendLine(`Loading agents from: ${agentsDir}`);
+        allAgents = loadAllAgents(agentsDir, outputChannel);
+        outputChannel.appendLine(`Loaded ${allAgents.size} agents`);
 
-        console.log(`Loading prompts from: ${promptsDir}`);
-        allPrompts = loadAllPrompts(promptsDir);
-        console.log(`Loaded ${allPrompts.size} prompts`);
+        outputChannel.appendLine(`Loading prompts from: ${promptsDir}`);
+        allPrompts = loadAllPrompts(promptsDir, outputChannel);
+        outputChannel.appendLine(`Loaded ${allPrompts.size} prompts`);
 
         // Register all agents as chat participants
         registerAgents(context, allAgents);
@@ -45,11 +50,12 @@ function activate(context) {
             `✨ Compounding Engineering activated! ${totalParticipants} agents and prompts are now available in chat. Use @ to mention agents and / for commands.`
         );
 
-        console.log(`Compounding Engineering extension activated successfully!`);
-        console.log(`Registered ${registeredParticipants.length} chat participants`);
+        outputChannel.appendLine(`Compounding Engineering extension activated successfully!`);
+        outputChannel.appendLine(`Registered ${registeredParticipants.length} chat participants`);
 
     } catch (error) {
-        console.error('Error activating Compounding Engineering extension:', error);
+        outputChannel.appendLine(`ERROR: Failed to activate extension: ${error.message}`);
+        outputChannel.appendLine(error.stack);
         vscode.window.showErrorMessage(
             `Failed to activate Compounding Engineering: ${error.message}`
         );
@@ -82,10 +88,10 @@ function registerAgents(context, agents) {
             context.subscriptions.push(participant);
             registeredParticipants.push(participantId);
 
-            console.log(`✓ Registered agent: @${agentId}`);
+            outputChannel.appendLine(`✓ Registered agent: @${agentId}`);
 
         } catch (error) {
-            console.error(`Failed to register agent ${agentId}:`, error);
+            outputChannel.appendLine(`ERROR: Failed to register agent ${agentId}: ${error.message}`);
         }
     }
 }
@@ -117,10 +123,10 @@ function registerPrompts(context, prompts, agents) {
             context.subscriptions.push(participant);
             registeredParticipants.push(participantId);
 
-            console.log(`✓ Registered prompt: @${promptId}`);
+            outputChannel.appendLine(`✓ Registered prompt: @${promptId}`);
 
         } catch (error) {
-            console.error(`Failed to register prompt ${promptId}:`, error);
+            outputChannel.appendLine(`ERROR: Failed to register prompt ${promptId}: ${error.message}`);
         }
     }
 }
@@ -129,7 +135,9 @@ function registerPrompts(context, prompts, agents) {
  * Extension deactivation
  */
 function deactivate() {
-    console.log('Compounding Engineering extension is deactivating...');
+    if (outputChannel) {
+        outputChannel.appendLine('Compounding Engineering extension is deactivating...');
+    }
     registeredParticipants = [];
     allAgents.clear();
     allPrompts.clear();

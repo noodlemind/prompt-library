@@ -5,9 +5,10 @@ const yaml = require('yaml');
 /**
  * Parse a markdown file with YAML frontmatter
  * @param {string} filePath - Path to the .agent.md or .prompt.md file
+ * @param {Object} outputChannel - VS Code output channel for logging
  * @returns {Object} Parsed agent/prompt configuration with metadata and instructions
  */
-function parseAgentFile(filePath) {
+function parseAgentFile(filePath, outputChannel) {
     try {
         const content = fs.readFileSync(filePath, 'utf-8');
 
@@ -15,7 +16,9 @@ function parseAgentFile(filePath) {
         const frontmatterMatch = content.match(/^---\s*\n([\s\S]*?)\n---\s*\n([\s\S]*)$/);
 
         if (!frontmatterMatch) {
-            console.error(`No frontmatter found in ${filePath}`);
+            if (outputChannel) {
+                outputChannel.appendLine(`ERROR: No frontmatter found in ${filePath}`);
+            }
             return null;
         }
 
@@ -35,7 +38,9 @@ function parseAgentFile(filePath) {
             filePath
         };
     } catch (error) {
-        console.error(`Error parsing agent file ${filePath}:`, error);
+        if (outputChannel) {
+            outputChannel.appendLine(`ERROR: Failed to parse agent file ${filePath}: ${error.message}`);
+        }
         return null;
     }
 }
@@ -43,14 +48,17 @@ function parseAgentFile(filePath) {
 /**
  * Load all agent files from a directory
  * @param {string} agentsDir - Path to the agents directory
+ * @param {Object} outputChannel - VS Code output channel for logging
  * @returns {Map<string, Object>} Map of agent ID to parsed agent configuration
  */
-function loadAllAgents(agentsDir) {
+function loadAllAgents(agentsDir, outputChannel) {
     const agents = new Map();
 
     try {
         if (!fs.existsSync(agentsDir)) {
-            console.warn(`Agents directory not found: ${agentsDir}`);
+            if (outputChannel) {
+                outputChannel.appendLine(`WARNING: Agents directory not found: ${agentsDir}`);
+            }
             return agents;
         }
 
@@ -59,18 +67,22 @@ function loadAllAgents(agentsDir) {
         for (const file of files) {
             if (file.endsWith('.agent.md')) {
                 const filePath = path.join(agentsDir, file);
-                const agent = parseAgentFile(filePath);
+                const agent = parseAgentFile(filePath, outputChannel);
 
                 if (agent) {
                     // Extract agent ID from filename (e.g., "architecture-strategist.agent.md" -> "architecture-strategist")
                     const agentId = file.replace('.agent.md', '');
                     agents.set(agentId, agent);
-                    console.log(`Loaded agent: ${agentId}`);
+                    if (outputChannel) {
+                        outputChannel.appendLine(`  Loaded agent: ${agentId}`);
+                    }
                 }
             }
         }
     } catch (error) {
-        console.error(`Error loading agents from ${agentsDir}:`, error);
+        if (outputChannel) {
+            outputChannel.appendLine(`ERROR: Failed to load agents from ${agentsDir}: ${error.message}`);
+        }
     }
 
     return agents;
@@ -79,14 +91,17 @@ function loadAllAgents(agentsDir) {
 /**
  * Load all prompt files from a directory
  * @param {string} promptsDir - Path to the prompts directory
+ * @param {Object} outputChannel - VS Code output channel for logging
  * @returns {Map<string, Object>} Map of prompt ID to parsed prompt configuration
  */
-function loadAllPrompts(promptsDir) {
+function loadAllPrompts(promptsDir, outputChannel) {
     const prompts = new Map();
 
     try {
         if (!fs.existsSync(promptsDir)) {
-            console.warn(`Prompts directory not found: ${promptsDir}`);
+            if (outputChannel) {
+                outputChannel.appendLine(`WARNING: Prompts directory not found: ${promptsDir}`);
+            }
             return prompts;
         }
 
@@ -95,18 +110,22 @@ function loadAllPrompts(promptsDir) {
         for (const file of files) {
             if (file.endsWith('.prompt.md')) {
                 const filePath = path.join(promptsDir, file);
-                const prompt = parseAgentFile(filePath);
+                const prompt = parseAgentFile(filePath, outputChannel);
 
                 if (prompt) {
                     // Extract prompt ID from filename
                     const promptId = file.replace('.prompt.md', '');
                     prompts.set(promptId, prompt);
-                    console.log(`Loaded prompt: ${promptId}`);
+                    if (outputChannel) {
+                        outputChannel.appendLine(`  Loaded prompt: ${promptId}`);
+                    }
                 }
             }
         }
     } catch (error) {
-        console.error(`Error loading prompts from ${promptsDir}:`, error);
+        if (outputChannel) {
+            outputChannel.appendLine(`ERROR: Failed to load prompts from ${promptsDir}: ${error.message}`);
+        }
     }
 
     return prompts;
