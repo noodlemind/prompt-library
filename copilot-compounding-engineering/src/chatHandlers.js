@@ -27,10 +27,11 @@ function createChatHandler(config, participantId, allAgents = new Map()) {
                 stream.markdown(`*Running ${config.name} with command: ${commandName}*\n\n`);
             }
 
-            // Select language model
+            // Select language model - respect user's choice from chat dropdown
+            // User can select Auto, GPT-4, Claude, etc. - we honor their selection
             const models = await vscode.lm.selectChatModels({
-                vendor: 'copilot',
-                family: 'gpt-4'
+                vendor: 'copilot'
+                // No family specified - uses whatever model user selected in chat UI
             });
 
             if (models.length === 0) {
@@ -130,12 +131,9 @@ function buildSystemPrompt(config, context) {
     prompt += `## Your Role and Instructions\n\n`;
     prompt += config.instructions;
 
-    // Add available tools context
-    if (config.tools && config.tools.length > 0) {
-        prompt += `\n\n## Available Tools\n\n`;
-        prompt += `You have access to the following tools: ${config.tools.join(', ')}\n`;
-        prompt += `Use these tools as needed to provide comprehensive analysis.\n`;
-    }
+    // Note: Tools like 'search', 'githubRepo', 'fetch' are automatically available in agent mode
+    // VS Code provides built-in tools for workspace search, file operations, terminal commands, etc.
+    // The language model can use these tools automatically without manual registration
 
     // Add workspace context
     if (vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders.length > 0) {

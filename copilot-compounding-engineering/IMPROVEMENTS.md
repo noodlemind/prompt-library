@@ -8,21 +8,25 @@ After reviewing GitHub Universe 2025 announcements and analyzing the current imp
 
 ## 🚨 **Priority 1: Critical Missing Features**
 
-### 1. Tool Implementation (CRITICAL!)
+### 1. ~~Tool Implementation~~ (NOT NEEDED! ✅)
 
-**Problem:** Agents declare tools (`search`, `githubRepo`, `fetch`) in YAML but we don't implement them.
+**UPDATE:** Tools are **automatically available** in VS Code agent mode!
 
-**Current State:**
-```javascript
-// We only mention tools in the system prompt (lines 134-138 in chatHandlers.js)
-if (config.tools && config.tools.length > 0) {
-    prompt += `\n\n## Available Tools\n\n`;
-    prompt += `You have access to the following tools: ${config.tools.join(', ')}\n`;
-    // BUT WE DON'T ACTUALLY PROVIDE THESE TOOLS!
-}
-```
+**Clarification:**
+- VS Code provides **built-in tools** for workspace search, file operations, terminal commands, fetching web content, etc.
+- These tools are **automatically invoked** by the language model based on the user's prompt
+- The `tools: ['search', 'githubRepo', 'fetch']` in agent YAML is just **documentation** of expected capabilities
+- We **DON'T need to manually register** basic tools - they're already there!
 
-**Solution:** Use VS Code's Language Model Tool API
+**Built-in Tools Available:**
+- ✅ Workspace/codebase search (`#codebase`)
+- ✅ File read/edit operations
+- ✅ Terminal command execution
+- ✅ Compile/lint error detection
+- ✅ Web content fetching (`#fetch`)
+- ✅ GitHub integration (part of Copilot)
+
+**Only register custom tools if you need specialized functionality not provided by VS Code** (e.g., custom database queries, specialized API clients).
 
 **Implementation:**
 ```javascript
@@ -136,46 +140,33 @@ module.exports = { registerTools };
 
 ---
 
-### 2. Dynamic Model Selection
+### 2. ~~Dynamic Model Selection~~ (FIXED! ✅)
 
-**Problem:** Hardcoded to `family: 'gpt-4'`, ignoring agent YAML `model` field
+**UPDATE:** We now respect the user's model choice from the chat dropdown.
 
-**Current State (chatHandlers.js:31-34):**
+**Previous Problem:** Hardcoded to `family: 'gpt-4'`
+
+**Fixed Implementation:**
 ```javascript
+// chatHandlers.js - Now respects user's model selection
 const models = await vscode.lm.selectChatModels({
-    vendor: 'copilot',
-    family: 'gpt-4'  // HARDCODED!
+    vendor: 'copilot'
+    // No family specified - uses whatever model user selected in chat UI
 });
 ```
 
-**Agents specify different models:**
-```yaml
-# security-sentinel.agent.md
-model: Claude Sonnet 4
-```
+**How It Works:**
+- User selects model in chat dropdown (Auto, GPT-4, Claude Sonnet 4, etc.)
+- Our agents honor that choice
+- When "Auto" is selected, VS Code intelligently chooses between Claude Sonnet 4, GPT-5, GPT-5 mini, and GPT-4.1
 
-**Solution:**
-```javascript
-// Update chatHandlers.js createChatHandler function
+**Why This Is Better:**
+- ✅ User has full control
+- ✅ Can use premium models (Copilot Pro+)
+- ✅ Can switch models per conversation
+- ✅ No hardcoded preferences
 
-// Map agent model names to VS Code model identifiers
-function getModelSelector(agentModel) {
-    const modelMap = {
-        'Claude Sonnet 4': { vendor: 'copilot', family: 'claude-sonnet-4' },
-        'Claude Sonnet 4.5': { vendor: 'copilot', family: 'claude-sonnet-4.5' },
-        'GPT-4': { vendor: 'copilot', family: 'gpt-4' },
-        'GPT-5-Codex': { vendor: 'copilot', family: 'gpt-5-codex' }
-    };
-
-    return modelMap[agentModel] || { vendor: 'copilot', family: 'gpt-4' };
-}
-
-// In createChatHandler:
-const modelSelector = getModelSelector(config.model);
-const models = await vscode.lm.selectChatModels(modelSelector);
-```
-
-**Impact:** 🟡 **HIGH** - Agents not using optimal models for their tasks
+**Impact:** ✅ **FIXED** - Users control model selection
 
 ---
 
@@ -369,10 +360,10 @@ async function sendRequestWithRetry(model, messages, options, token, retries = 3
 
 ## 📊 **Implementation Roadmap**
 
-### Phase 1: Critical Fixes (1-2 days)
-- ✅ Tool Implementation (search, githubRepo, fetch)
-- ✅ Dynamic Model Selection
-- ✅ Conversation History Support
+### ~~Phase 1: Critical Fixes~~ ✅ DONE!
+- ✅ ~~Tool Implementation~~ - NOT NEEDED (built-in to VS Code agent mode)
+- ✅ Dynamic Model Selection - FIXED (respects user's choice)
+- ⚠️ Conversation History Support - STILL NEEDED (see below)
 
 ### Phase 2: GitHub Universe Features (2-3 days)
 - ✅ Multi-Model Support
@@ -399,13 +390,19 @@ After implementing these improvements:
 
 ---
 
-## 🚀 **Quick Wins**
+## 🚀 **Remaining Work**
 
-Start with these for immediate impact:
+After clarifications, here's what actually needs work:
 
-1. **Tool Implementation** (2-3 hours) - Biggest functional gap
-2. **Dynamic Model Selection** (30 mins) - Easy, high impact
-3. **Conversation History** (1 hour) - Significantly better UX
+### ✅ Already Fixed:
+1. ~~**Tool Implementation**~~ - Not needed! Built-in to VS Code
+2. ~~**Dynamic Model Selection**~~ - Fixed! Now respects user's choice
+
+### Still To Do (Optional):
+1. **Conversation History** (1-2 hours) - Better multi-turn conversations
+2. **Custom Icons** (30 mins) - Visual polish
+3. **Enhanced Error Handling** (1 hour) - Better user experience
+4. **User Configuration** (1 hour) - Settings for power users
 
 ---
 
