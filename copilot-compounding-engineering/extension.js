@@ -10,13 +10,18 @@ const { createChatHandler, createFollowupProvider } = require('./src/chatHandler
 let allAgents = new Map();
 let allPrompts = new Map();
 let registeredParticipants = [];
+let outputChannel;
 
 /**
  * Extension activation
  * @param {vscode.ExtensionContext} context
  */
 function activate(context) {
-    console.log('Compounding Engineering extension is activating...');
+    // Create output channel for structured logging
+    outputChannel = vscode.window.createOutputChannel('Compounding Engineering');
+    context.subscriptions.push(outputChannel);
+
+    outputChannel.appendLine('Compounding Engineering extension is activating...');
 
     try {
         // Determine paths to agent and prompt directories
@@ -25,13 +30,13 @@ function activate(context) {
         const promptsDir = path.join(extensionPath, '.github', 'prompts');
 
         // Load all agents and prompts
-        console.log(`Loading agents from: ${agentsDir}`);
-        allAgents = loadAllAgents(agentsDir);
-        console.log(`Loaded ${allAgents.size} agents`);
+        outputChannel.appendLine(`Loading agents from: ${agentsDir}`);
+        allAgents = loadAllAgents(agentsDir, outputChannel);
+        outputChannel.appendLine(`Loaded ${allAgents.size} agents`);
 
-        console.log(`Loading prompts from: ${promptsDir}`);
-        allPrompts = loadAllPrompts(promptsDir);
-        console.log(`Loaded ${allPrompts.size} prompts`);
+        outputChannel.appendLine(`Loading prompts from: ${promptsDir}`);
+        allPrompts = loadAllPrompts(promptsDir, outputChannel);
+        outputChannel.appendLine(`Loaded ${allPrompts.size} prompts`);
 
         // Register all agents as chat participants
         registerAgents(context, allAgents);
@@ -45,14 +50,52 @@ function activate(context) {
             `✨ Compounding Engineering activated! ${totalParticipants} agents and prompts are now available in chat. Use @ to mention agents and / for commands.`
         );
 
-        console.log(`Compounding Engineering extension activated successfully!`);
-        console.log(`Registered ${registeredParticipants.length} chat participants`);
+        outputChannel.appendLine(`Compounding Engineering extension activated successfully!`);
+        outputChannel.appendLine(`Registered ${registeredParticipants.length} chat participants`);
 
     } catch (error) {
-        console.error('Error activating Compounding Engineering extension:', error);
+        outputChannel.appendLine(`ERROR: Failed to activate extension: ${error.message}`);
+        outputChannel.appendLine(error.stack);
         vscode.window.showErrorMessage(
             `Failed to activate Compounding Engineering: ${error.message}`
         );
+    }
+}
+
+/**
+ * Register chat participants from a collection of configs
+ * @param {vscode.ExtensionContext} context
+ * @param {Map<string, Object>} participants - Map of participant configs
+ * @param {string} iconName - VS Code ThemeIcon name
+ * @param {string} typeName - Type name for logging (e.g., "agent" or "prompt")
+ * @param {Map<string, Object>} allAgents - All agents for handoff support
+ */
+function registerChatParticipants(context, participants, iconName, typeName, allAgents) {
+    for (const [id, config] of participants.entries()) {
+        try {
+            const participantId = `compounding-engineering.${id}`;
+
+            // Create chat participant
+            const participant = vscode.chat.createChatParticipant(
+                participantId,
+                createChatHandler(config, participantId, allAgents, undefined, 0, outputChannel)
+            );
+
+            // Set icon
+            participant.iconPath = new vscode.ThemeIcon(iconName);
+
+            // Set follow-up provider
+            participant.followupProvider = createFollowupProvider(config);
+
+            // Register for disposal
+            context.subscriptions.push(participant);
+            registeredParticipants.push(participantId);
+
+            outputChannel.appendLine(`✓ Registered ${typeName}: @${id}`);
+
+        } catch (error) {
+            outputChannel.appendLine(`ERROR: Failed to register ${typeName} ${id}: ${error.message}`);
+        }
     }
 }
 
@@ -62,32 +105,7 @@ function activate(context) {
  * @param {Map<string, Object>} agents
  */
 function registerAgents(context, agents) {
-    for (const [agentId, config] of agents.entries()) {
-        try {
-            const participantId = `compounding-engineering.${agentId}`;
-
-            // Create chat participant
-            const participant = vscode.chat.createChatParticipant(
-                participantId,
-                createChatHandler(config, participantId, agents)
-            );
-
-            // Set icon (use a default icon for now)
-            participant.iconPath = new vscode.ThemeIcon('robot');
-
-            // Set follow-up provider
-            participant.followupProvider = createFollowupProvider(config);
-
-            // Register for disposal
-            context.subscriptions.push(participant);
-            registeredParticipants.push(participantId);
-
-            console.log(`✓ Registered agent: @${agentId}`);
-
-        } catch (error) {
-            console.error(`Failed to register agent ${agentId}:`, error);
-        }
-    }
+    registerChatParticipants(context, agents, 'robot', 'agent', agents);
 }
 
 /**
@@ -97,40 +115,18 @@ function registerAgents(context, agents) {
  * @param {Map<string, Object>} agents - For handoff support
  */
 function registerPrompts(context, prompts, agents) {
-    for (const [promptId, config] of prompts.entries()) {
-        try {
-            const participantId = `compounding-engineering.${promptId}`;
-
-            // Create chat participant
-            const participant = vscode.chat.createChatParticipant(
-                participantId,
-                createChatHandler(config, participantId, agents)
-            );
-
-            // Set icon (use a different icon for prompts/workflows)
-            participant.iconPath = new vscode.ThemeIcon('layers');
-
-            // Set follow-up provider
-            participant.followupProvider = createFollowupProvider(config);
-
-            // Register for disposal
-            context.subscriptions.push(participant);
-            registeredParticipants.push(participantId);
-
-            console.log(`✓ Registered prompt: @${promptId}`);
-
-        } catch (error) {
-            console.error(`Failed to register prompt ${promptId}:`, error);
-        }
-    }
+    registerChatParticipants(context, prompts, 'layers', 'prompt', agents);
 }
 
 /**
  * Extension deactivation
  */
 function deactivate() {
-    console.log('Compounding Engineering extension is deactivating...');
-    registeredParticipants = [];
+    if (outputChannel) {
+        outputChannel.appendLine('Compounding Engineering extension is deactivating...');
+        outputChannel.dispose();
+    }
+    registeredParticipants.length = 0;
     allAgents.clear();
     allPrompts.clear();
 }

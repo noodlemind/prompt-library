@@ -7,9 +7,17 @@ const vscode = require('vscode');
  * @param {Map} allAgents - Map of all loaded agents for handoff support
  * @param {Set} visitedAgents - Set of agent IDs already visited in this call chain (for cycle detection)
  * @param {number} depth - Current recursion depth (for depth limiting)
+ * @param {vscode.OutputChannel} [outputChannel] - Output channel for structured logging
  * @returns {Function} Chat request handler function
  */
-function createChatHandler(config, participantId, allAgents = new Map(), visitedAgents = new Set(), depth = 0) {
+function createChatHandler(
+    config,
+    participantId,
+    allAgents = new Map(),
+    visitedAgents = new Set(),
+    depth = 0,
+    outputChannel = undefined
+) {
     // Maximum recursion depth to prevent infinite loops
     const MAX_DEPTH = 5;
 
@@ -41,11 +49,47 @@ function createChatHandler(config, participantId, allAgents = new Map(), visited
 
             const model = request.model;
 
-            // Build messages array
-            const messages = [
-                vscode.LanguageModelChatMessage.User(systemPrompt),
-                vscode.LanguageModelChatMessage.User(finalPrompt)
-            ];
+            // Build messages array with conversation history
+            const messages = [];
+
+            // Add conversation history for context continuity
+            // Limit history to prevent memory issues and token overflow
+            const MAX_HISTORY_TURNS = 20;
+            if (context.history && context.history.length > 0) {
+                const recentHistory = context.history.slice(-MAX_HISTORY_TURNS);
+
+                for (const item of recentHistory) {
+                    if (item instanceof vscode.ChatResponseTurn) {
+                        // Extract content from all response part types
+                        const content = item.response.map(r => {
+                            if (r instanceof vscode.ChatResponseMarkdownPart) {
+                                return r.value.value;
+                            } else if (r instanceof vscode.ChatResponseFileTree) {
+                                return '[File tree displayed]';
+                            } else if (r instanceof vscode.ChatResponseAnchorPart) {
+                                return `[Reference: ${r.value?.title || 'link'}]`;
+                            } else if (r instanceof vscode.ChatResponseCommandButtonPart) {
+                                return `[Button: ${r.value?.title || 'action'}]`;
+                            }
+                            return '';
+                        }).filter(Boolean).join('\n');
+
+                        // Always include assistant turn to maintain alternating sequence
+                        messages.push(vscode.LanguageModelChatMessage.Assistant(
+                            content || '[No text response]'
+                        ));
+                    } else if (item instanceof vscode.ChatRequestTurn) {
+                        // Add previous user requests
+                        messages.push(vscode.LanguageModelChatMessage.User(item.prompt));
+                    }
+                }
+            }
+
+            // Add system prompt
+            messages.push(vscode.LanguageModelChatMessage.User(systemPrompt));
+
+            // Add current user prompt
+            messages.push(vscode.LanguageModelChatMessage.User(finalPrompt));
 
             // Add context from the editor if available
             if (context.activeEditorSelection) {
@@ -61,6 +105,36 @@ function createChatHandler(config, participantId, allAgents = new Map(), visited
                         );
                     }
                 }
+            }
+
+            // Check token limit before sending request
+            // Use more conservative estimation: char count / 3 with 15% buffer
+            const estimatedTokens = messages.reduce((sum, m) => {
+                const content = typeof m.content === 'string'
+                    ? m.content
+                    : m.content.map(p => p.value || '').join('');
+                // More conservative estimation for better accuracy
+                return sum + Math.ceil(content.length / 3);
+            }, 0);
+
+            // Add 15% safety margin to prevent near-limit failures
+            const maxAllowedTokens = Math.floor(model.maxInputTokens * 0.85);
+            const utilizationPercent = (estimatedTokens / model.maxInputTokens) * 100;
+
+            // Warn at 80% capacity
+            if (utilizationPercent > 80 && utilizationPercent <= 100) {
+                stream.markdown(
+                    `⚠️ *Context is ${utilizationPercent.toFixed(0)}% full. ` +
+                    `Consider starting a new conversation soon to avoid hitting limits.*\n\n`
+                );
+            }
+
+            if (estimatedTokens > maxAllowedTokens) {
+                stream.markdown(
+                    `⚠️ Request is too large (estimated ${estimatedTokens} tokens). ` +
+                    `Maximum is ${maxAllowedTokens} tokens. Please start a new conversation or reduce the amount of context.`
+                );
+                return;
             }
 
             // Send request to language model with streaming
@@ -106,24 +180,30 @@ function createChatHandler(config, participantId, allAgents = new Map(), visited
                         const agentConfig = allAgents.get(agentId);
 
                         if (agentConfig) {
+                            // Extract agent ID consistently for cycle detection
+                            // participantId format: "compounding-engineering.agent-name"
+                            const currentAgentId = participantId.replace('compounding-engineering.', '');
+
                             // Create new visited set with current agent added
                             const newVisited = new Set(visitedAgents);
-                            newVisited.add(participantId);
+                            newVisited.add(currentAgentId);
 
                             // Create a sub-request to the other agent with cycle protection
                             const subHandler = createChatHandler(
                                 agentConfig,
-                                agentId,
+                                `compounding-engineering.${agentId}`,
                                 allAgents,
                                 newVisited,
-                                depth + 1
+                                depth + 1,
+                                outputChannel
                             );
 
                             // Use safe default for prompt
                             const handoffPrompt = handoff.prompt || userMessage || 'Please continue the analysis using the context above.';
                             const subRequest = {
                                 prompt: handoffPrompt,
-                                command: undefined
+                                command: undefined,
+                                model: request.model
                             };
 
                             await subHandler(subRequest, context, stream, token);
@@ -135,14 +215,112 @@ function createChatHandler(config, participantId, allAgents = new Map(), visited
             }
 
         } catch (error) {
-            console.error(`Error in chat handler for ${participantId}:`, error);
+            // Log detailed error information to output channel for debugging
+            const logLines = [
+                `[Compounding Engineering Error] ${config.name} (${participantId})`,
+                `• Type: ${error?.constructor?.name || 'Unknown'}`,
+                `• Message: ${error?.message || 'No message provided'}`
+            ];
 
-            if (error.message.includes('rate limit')) {
-                stream.markdown('⚠️ Rate limit reached. Please try again in a moment.');
-            } else if (error.message.includes('model')) {
-                stream.markdown('⚠️ Language model unavailable. Please check your GitHub Copilot subscription.');
+            if (error && 'code' in error) {
+                logLines.push(`• Code: ${error.code}`);
+            }
+
+            if (error && 'cause' in error && error.cause) {
+                const cause = error.cause;
+                let causeText;
+                if (typeof cause === 'string') {
+                    causeText = cause;
+                } else if (typeof cause === 'object') {
+                    try {
+                        causeText = JSON.stringify(cause);
+                    } catch (jsonError) {
+                        causeText = `[Unserializable cause: ${jsonError.message}]`;
+                    }
+                }
+
+                if (causeText) {
+                    logLines.push(`• Cause: ${causeText}`);
+                }
+            }
+
+            if (error?.stack) {
+                logLines.push(error.stack);
+            }
+
+            if (outputChannel) {
+                for (const line of logLines) {
+                    outputChannel.appendLine(line);
+                }
             } else {
-                stream.markdown(`⚠️ An error occurred: ${error.message}`);
+                console.error(logLines.join('\n'));
+            }
+
+            // Handle LanguageModelError specifically
+            if (error instanceof vscode.LanguageModelError) {
+                let normalizedCode = typeof error.code === 'string' ? error.code.toLowerCase() : '';
+
+                const extractCauseCode = cause => {
+                    if (!cause) {
+                        return '';
+                    }
+
+                    if (typeof cause === 'string') {
+                        return cause.toLowerCase();
+                    }
+
+                    if (typeof cause === 'object') {
+                        if (typeof cause.code === 'string') {
+                            return cause.code.toLowerCase();
+                        }
+
+                        if (typeof cause.reason === 'string') {
+                            return cause.reason.toLowerCase();
+                        }
+                    }
+
+                    return '';
+                };
+
+                if (!normalizedCode) {
+                    normalizedCode = extractCauseCode(error.cause);
+                }
+
+                let errorMessage = 'A language model error occurred. Please try again shortly.';
+
+                switch (normalizedCode) {
+                    case 'off_topic':
+                    case 'content_filter':
+                    case 'content_filter_blocked':
+                    case 'blocked':
+                        errorMessage = 'Request was blocked by content filters. Please try rephrasing your prompt.';
+                        break;
+                    case 'no_permissions':
+                    case 'forbidden':
+                        errorMessage = 'You do not have permission to use this language model. Please check your GitHub Copilot settings.';
+                        break;
+                    case 'quota_exceeded':
+                    case 'rate_limited':
+                    case 'rate_limit_exceeded':
+                        errorMessage = 'Request exceeded usage limits. Please wait a moment and try again.';
+                        break;
+                    case 'model_not_found':
+                    case 'not_found':
+                        errorMessage = 'The requested language model is unavailable. Please ensure GitHub Copilot is installed and active.';
+                        break;
+                    default:
+                        if (normalizedCode) {
+                            errorMessage = `Language model error (${normalizedCode}). Please try again.`;
+                        }
+                        break;
+                }
+
+                stream.markdown(`⚠️ ${errorMessage}`);
+            } else if (token.isCancellationRequested) {
+                stream.markdown('Request cancelled.');
+            } else {
+                // Generic error message without exposing internal details
+                stream.markdown('⚠️ An unexpected error occurred. Please check the Output panel (View > Output > Compounding Engineering) for details.');
             }
         }
     };
