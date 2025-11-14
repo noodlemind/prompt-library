@@ -30,13 +30,16 @@ This repository provides a suite of 17 specialized agents and 6 workflow prompts
 
 ### Method 1: Install VSIX Extension (VS Code Only - Recommended for VS Code users)
 
-This method installs the agents and prompts globally for all VS Code projects.
+**✨ This method installs all agents and prompts globally, making them available in ALL VS Code workspaces automatically!**
+
+After installation, all 17 agents and 6 workflow prompts will be instantly available in GitHub Copilot Chat across every project you open in VS Code—no per-project setup required.
 
 #### Option A: Install from VSIX file
 
 1. **Download the latest `.vsix` file** from releases or build it yourself:
    ```bash
    cd copilot-compounding-engineering
+   npm install
    npm install -g @vscode/vsce
    ./build.sh
    ```
@@ -45,7 +48,7 @@ This method installs the agents and prompts globally for all VS Code projects.
 
    Via command line:
    ```bash
-   code --install-extension copilot-compounding-engineering-1.0.0.vsix
+   code --install-extension compounding-engineering-2.0.0.vsix
    ```
 
    Or via VS Code:
@@ -56,12 +59,14 @@ This method installs the agents and prompts globally for all VS Code projects.
 
 3. **Reload VS Code** when prompted
 
+4. **Verify installation**: Open GitHub Copilot Chat and type `@` - you should see all 17 agents listed!
+
 #### Option B: Install from VS Code Marketplace
 
-*(Coming soon - after publishing to the marketplace)*
+Coming soon - this extension will be available on the VS Code Marketplace after publishing.
 
-```
-Search for "Copilot Compounding Engineering" in the Extensions marketplace
+```text
+Search for "Compounding Engineering" in the Extensions marketplace
 ```
 
 ### Method 2: Manual Installation (Works in VS Code, IntelliJ, and All JetBrains IDEs)
@@ -90,10 +95,15 @@ Create a `.github` repository in your organization and add the agents there:
 
 3. All repositories in your organization will have access to these agents
 
-**Note**:
-- VS Code VSIX extension provides global installation for VS Code only
-- Manual installation works in both VS Code and IntelliJ/JetBrains IDEs
-- Organization-wide installation makes agents available across all projects and teams
+**Comparison of Installation Methods**:
+
+| Method | Scope | Setup Effort | Best For |
+|--------|-------|--------------|----------|
+| **VSIX Extension** | Global (all VS Code workspaces) | One-time install | Individual VS Code users |
+| **Manual Installation** | Per-project | Copy to each project | IntelliJ/JetBrains IDEs, or workspace-specific customization |
+| **Organization Repository** | All org projects | One-time org setup | Teams and organizations |
+
+**Note**: The VSIX extension uses VS Code's Chat Participant API to register all agents globally. Once installed, they work exactly like built-in chat participants (e.g., `@workspace`, `@terminal`) and are available in every workspace automatically.
 
 ## Usage
 
@@ -260,43 +270,86 @@ Or invoke agents directly for focused analysis:
 
 ## Architecture
 
+### How It Works (VS Code Extension)
+
+The Compounding Engineering extension uses **VS Code's Chat Participant API** to provide global agent availability:
+
+1. **Extension Activation**: When VS Code starts, the extension automatically activates
+2. **Agent Loading**: All 17 `.agent.md` and 6 `.prompt.md` files are parsed from the bundled `.github` directory
+3. **Chat Participant Registration**: Each agent/prompt is registered as a chat participant using `vscode.chat.createChatParticipant()`
+4. **Global Availability**: Registered participants are available in ALL workspaces, just like `@workspace` or `@terminal`
+5. **Language Model Integration**: Uses VS Code's Language Model API to interact with GitHub Copilot's models
+6. **Streaming Responses**: Responses stream in real-time for better user experience
+
+**Key Technologies**:
+- **Chat Participant API**: Native VS Code API for registering chat agents
+- **Language Model API**: VS Code's interface to GitHub Copilot and other AI models
+- **YAML Frontmatter Parsing**: Extracts agent metadata and configuration
+- **Markdown Content**: Agent instructions embedded directly in response prompts
+
 ### Agent System
 
 Each agent is a specialized expert with:
 - **Domain expertise**: Focused on specific aspect (security, performance, etc.)
-- **Tool access**: Can search code, fetch docs, access GitHub
-- **Context awareness**: Understands project structure and conventions
-- **Handoff capability**: Can delegate to other agents
+- **Tool access**: Can search code, fetch docs, access GitHub (via language model capabilities)
+- **Context awareness**: Receives workspace and editor context automatically
+- **Handoff capability**: Can delegate to other agents for comprehensive analysis
+- **Persistent availability**: Always available once extension is installed
 
 ### Prompt System
 
 Prompts orchestrate workflows by:
-- **Planning**: Breaking down complex tasks
-- **Delegation**: Invoking appropriate agents
-- **Synthesis**: Combining agent insights
-- **Validation**: Ensuring quality standards
+- **Planning**: Breaking down complex tasks into phases
+- **Delegation**: Automatically invoking appropriate agents via handoffs
+- **Synthesis**: Combining insights from multiple specialized agents
+- **Validation**: Ensuring quality standards across all analysis
+- **Command support**: Can include sub-commands for different workflow variations
 
 ## Troubleshooting
 
-### Agents Not Appearing
+### Agents Not Appearing in VS Code (VSIX Extension)
+
+1. **Verify extension is installed**: Go to Extensions (Cmd/Ctrl+Shift+X) and search for "Compounding Engineering"
+2. **Check activation**: Look for the activation message in Output panel (View → Output → select "Compounding Engineering")
+3. **Reload VS Code**: Run "Developer: Reload Window" from Command Palette (Cmd/Ctrl+Shift+P)
+4. **Check GitHub Copilot**: Ensure GitHub Copilot extension is installed and active
+5. **View extension logs**: Check the Output panel for any error messages during activation
+
+### Agents Not Appearing (Manual Installation)
 
 1. Ensure files are in the correct location (`.github/agents/*.agent.md`)
-2. Restart VS Code
+2. Restart your IDE (VS Code or IntelliJ)
 3. Check file permissions
 4. Verify YAML frontmatter syntax
+5. For VS Code: Check that `chat.promptFiles` setting is enabled
 
-### Tools Not Working
+### Language Model Errors
 
-1. Ensure you have GitHub Copilot subscription
-2. Check that GitHub CLI (`gh`) is installed and authenticated
-3. Verify repository access permissions
+1. **"No language model available"**: Ensure you have an active GitHub Copilot subscription
+2. **"Rate limit reached"**: Wait a few moments and try again
+3. **"Model unavailable"**: Check your Copilot subscription status and network connection
 
 ### Agent Responses Not Helpful
 
 1. Provide more context in your query
 2. Use more specific prompts
-3. Try combining multiple agents
-4. Check that the agent has appropriate tool access
+3. Try combining multiple agents using handoffs
+4. Include relevant code selections before invoking agents
+5. Check that the agent has appropriate tool access
+
+### Extension Not Loading (VS Code)
+
+1. Check VS Code version: Requires VS Code 1.85.0 or higher
+2. View Developer Tools: Help → Toggle Developer Tools → Console tab for errors
+3. Reinstall the extension
+4. Check for conflicting extensions
+
+### Tested Environments
+
+- ✅ VS Code 1.105.1 (Latest tested version)
+- ✅ VS Code 1.85.0 (Minimum version)
+- ✅ GitHub Copilot extension active
+- ✅ GitHub Copilot subscription required
 
 ## Examples
 
