@@ -5,9 +5,14 @@ const vscode = require('vscode');
  * @param {Object} config - Agent/prompt configuration from parser
  * @param {string} participantId - Full participant ID (e.g., "compounding-engineering.architecture-strategist")
  * @param {Map} allAgents - Map of all loaded agents for handoff support
+ * @param {Set} visitedAgents - Set of agent IDs already visited in this call chain (for cycle detection)
+ * @param {number} depth - Current recursion depth (for depth limiting)
  * @returns {Function} Chat request handler function
  */
-function createChatHandler(config, participantId, allAgents = new Map()) {
+function createChatHandler(config, participantId, allAgents = new Map(), visitedAgents = new Set(), depth = 0) {
+    // Maximum recursion depth to prevent infinite loops
+    const MAX_DEPTH = 5;
+
     return async (request, context, stream, token) => {
         try {
             // Show that the agent is processing
@@ -68,33 +73,62 @@ function createChatHandler(config, participantId, allAgents = new Map()) {
 
             // Handle handoffs if configured (for prompts)
             if (config.handoffs && config.handoffs.length > 0) {
+                // Check depth limit before processing handoffs
+                if (depth >= MAX_DEPTH) {
+                    stream.markdown('\n\n⚠️ *Maximum handoff depth reached. Skipping additional agent consultations.*\n');
+                    return;
+                }
+
                 stream.markdown('\n\n---\n\n');
                 stream.markdown('**Additional Analysis from Specialized Agents:**\n\n');
 
                 for (const handoff of config.handoffs) {
                     if (handoff.send === false) {
                         // This is an optional handoff - show as a button
+                        // Use safe default for prompt
+                        const handoffPrompt = handoff.prompt || 'Please continue the analysis using the context above.';
                         stream.button({
                             command: 'workbench.action.chat.open',
-                            arguments: [`@${handoff.agent} ${handoff.prompt}`],
+                            arguments: [`@${handoff.agent} ${handoffPrompt}`],
                             title: handoff.label || `Consult ${handoff.agent}`
                         });
                     } else {
-                        // Auto-execute handoff
-                        stream.markdown(`\n\n### ${handoff.label || handoff.agent}\n\n`);
-                        const agentConfig = allAgents.get(handoff.agent);
+                        // Auto-execute handoff - check for cycles first
+                        const agentId = handoff.agent;
+
+                        // Cycle detection: skip if we've already visited this agent
+                        if (visitedAgents.has(agentId)) {
+                            stream.markdown(`\n\n⚠️ *Skipping @${agentId} to prevent circular handoff*\n`);
+                            continue;
+                        }
+
+                        stream.markdown(`\n\n### ${handoff.label || agentId}\n\n`);
+                        const agentConfig = allAgents.get(agentId);
 
                         if (agentConfig) {
-                            // Create a sub-request to the other agent
-                            const subHandler = createChatHandler(agentConfig, handoff.agent, allAgents);
+                            // Create new visited set with current agent added
+                            const newVisited = new Set(visitedAgents);
+                            newVisited.add(participantId);
+
+                            // Create a sub-request to the other agent with cycle protection
+                            const subHandler = createChatHandler(
+                                agentConfig,
+                                agentId,
+                                allAgents,
+                                newVisited,
+                                depth + 1
+                            );
+
+                            // Use safe default for prompt
+                            const handoffPrompt = handoff.prompt || userMessage || 'Please continue the analysis using the context above.';
                             const subRequest = {
-                                prompt: handoff.prompt || userMessage,
+                                prompt: handoffPrompt,
                                 command: undefined
                             };
 
                             await subHandler(subRequest, context, stream, token);
                         } else {
-                            stream.markdown(`*Agent @${handoff.agent} not found*\n`);
+                            stream.markdown(`*Agent @${agentId} not found*\n`);
                         }
                     }
                 }
@@ -164,8 +198,10 @@ function createFollowupProvider(config) {
         // Add handoff suggestions if configured
         if (config.handoffs && config.handoffs.length > 0) {
             for (const handoff of config.handoffs.slice(0, 3)) {
+                // Use safe default for prompt
+                const handoffPrompt = handoff.prompt || 'Please continue the analysis using the context above.';
                 followups.push({
-                    prompt: `@${handoff.agent} ${handoff.prompt}`,
+                    prompt: `@${handoff.agent} ${handoffPrompt}`,
                     label: handoff.label || `Consult ${handoff.agent}`,
                     command: undefined
                 });
