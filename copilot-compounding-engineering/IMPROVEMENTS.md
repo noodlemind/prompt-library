@@ -140,33 +140,37 @@ module.exports = { registerTools };
 
 ---
 
-### 2. ~~Dynamic Model Selection~~ (FIXED! ✅)
+### 2. ~~Model Selection~~ (FIXED! ✅)
 
-**UPDATE:** We now respect the user's model choice from the chat dropdown.
+**UPDATE:** We now use the model directly from the request object.
 
-**Previous Problem:** Hardcoded to `family: 'gpt-4'`
+**Previous Problem:** Called `selectChatModels()` and hardcoded to `family: 'gpt-4'`
 
 **Fixed Implementation:**
 ```javascript
-// chatHandlers.js - Now respects user's model selection
-const models = await vscode.lm.selectChatModels({
-    vendor: 'copilot'
-    // No family specified - uses whatever model user selected in chat UI
-});
+// chatHandlers.js - Use model from request (user's selection)
+if (!request.model) {
+    stream.markdown('⚠️ No language model available.');
+    return;
+}
+
+const model = request.model; // ✅ Uses user's selection from chat UI
 ```
 
 **How It Works:**
 - User selects model in chat dropdown (Auto, GPT-4, Claude Sonnet 4, etc.)
-- Our agents honor that choice
-- When "Auto" is selected, VS Code intelligently chooses between Claude Sonnet 4, GPT-5, GPT-5 mini, and GPT-4.1
+- VS Code provides the selected model on `request.model`
+- Our agents use that model directly
+- When "Auto" is selected, VS Code intelligently chooses the best model for the task
 
-**Why This Is Better:**
-- ✅ User has full control
+**Why `request.model` is Correct:**
+- ✅ `request.model` is the user's selection - already chosen and consented
+- ✅ `selectChatModels()` is for discovery/consent - wrong for chat handlers
+- ✅ User has full control over which model to use
 - ✅ Can use premium models (Copilot Pro+)
 - ✅ Can switch models per conversation
-- ✅ No hardcoded preferences
 
-**Impact:** ✅ **FIXED** - Users control model selection
+**Impact:** ✅ **FIXED** - Properly respects user's model selection
 
 ---
 

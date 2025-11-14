@@ -27,19 +27,14 @@ function createChatHandler(config, participantId, allAgents = new Map()) {
                 stream.markdown(`*Running ${config.name} with command: ${commandName}*\n\n`);
             }
 
-            // Select language model - respect user's choice from chat dropdown
-            // User can select Auto, GPT-4, Claude, etc. - we honor their selection
-            const models = await vscode.lm.selectChatModels({
-                vendor: 'copilot'
-                // No family specified - uses whatever model user selected in chat UI
-            });
-
-            if (models.length === 0) {
+            // Use the model from the request - this is the model the user selected in chat UI
+            // VS Code provides the selected model directly on the request object
+            if (!request.model) {
                 stream.markdown('⚠️ No language model available. Please ensure GitHub Copilot is active.');
                 return;
             }
 
-            const model = models[0];
+            const model = request.model;
 
             // Build messages array
             const messages = [
