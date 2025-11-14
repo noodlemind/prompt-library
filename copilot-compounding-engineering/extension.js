@@ -63,23 +63,26 @@ function activate(context) {
 }
 
 /**
- * Register all agents as chat participants
+ * Register chat participants from a collection of configs
  * @param {vscode.ExtensionContext} context
- * @param {Map<string, Object>} agents
+ * @param {Map<string, Object>} participants - Map of participant configs
+ * @param {string} iconName - VS Code ThemeIcon name
+ * @param {string} typeName - Type name for logging (e.g., "agent" or "prompt")
+ * @param {Map<string, Object>} allAgents - All agents for handoff support
  */
-function registerAgents(context, agents) {
-    for (const [agentId, config] of agents.entries()) {
+function registerChatParticipants(context, participants, iconName, typeName, allAgents) {
+    for (const [id, config] of participants.entries()) {
         try {
-            const participantId = `compounding-engineering.${agentId}`;
+            const participantId = `compounding-engineering.${id}`;
 
             // Create chat participant
             const participant = vscode.chat.createChatParticipant(
                 participantId,
-                createChatHandler(config, participantId, agents)
+                createChatHandler(config, participantId, allAgents)
             );
 
-            // Set icon (use a default icon for now)
-            participant.iconPath = new vscode.ThemeIcon('robot');
+            // Set icon
+            participant.iconPath = new vscode.ThemeIcon(iconName);
 
             // Set follow-up provider
             participant.followupProvider = createFollowupProvider(config);
@@ -88,12 +91,21 @@ function registerAgents(context, agents) {
             context.subscriptions.push(participant);
             registeredParticipants.push(participantId);
 
-            outputChannel.appendLine(`✓ Registered agent: @${agentId}`);
+            outputChannel.appendLine(`✓ Registered ${typeName}: @${id}`);
 
         } catch (error) {
-            outputChannel.appendLine(`ERROR: Failed to register agent ${agentId}: ${error.message}`);
+            outputChannel.appendLine(`ERROR: Failed to register ${typeName} ${id}: ${error.message}`);
         }
     }
+}
+
+/**
+ * Register all agents as chat participants
+ * @param {vscode.ExtensionContext} context
+ * @param {Map<string, Object>} agents
+ */
+function registerAgents(context, agents) {
+    registerChatParticipants(context, agents, 'robot', 'agent', agents);
 }
 
 /**
@@ -103,32 +115,7 @@ function registerAgents(context, agents) {
  * @param {Map<string, Object>} agents - For handoff support
  */
 function registerPrompts(context, prompts, agents) {
-    for (const [promptId, config] of prompts.entries()) {
-        try {
-            const participantId = `compounding-engineering.${promptId}`;
-
-            // Create chat participant
-            const participant = vscode.chat.createChatParticipant(
-                participantId,
-                createChatHandler(config, participantId, agents)
-            );
-
-            // Set icon (use a different icon for prompts/workflows)
-            participant.iconPath = new vscode.ThemeIcon('layers');
-
-            // Set follow-up provider
-            participant.followupProvider = createFollowupProvider(config);
-
-            // Register for disposal
-            context.subscriptions.push(participant);
-            registeredParticipants.push(participantId);
-
-            outputChannel.appendLine(`✓ Registered prompt: @${promptId}`);
-
-        } catch (error) {
-            outputChannel.appendLine(`ERROR: Failed to register prompt ${promptId}: ${error.message}`);
-        }
-    }
+    registerChatParticipants(context, prompts, 'layers', 'prompt', agents);
 }
 
 /**
@@ -137,8 +124,9 @@ function registerPrompts(context, prompts, agents) {
 function deactivate() {
     if (outputChannel) {
         outputChannel.appendLine('Compounding Engineering extension is deactivating...');
+        outputChannel.dispose();
     }
-    registeredParticipants = [];
+    registeredParticipants.length = 0;
     allAgents.clear();
     allPrompts.clear();
 }

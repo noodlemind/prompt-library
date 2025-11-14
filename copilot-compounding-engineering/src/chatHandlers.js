@@ -45,18 +45,31 @@ function createChatHandler(config, participantId, allAgents = new Map(), visited
             const messages = [];
 
             // Add conversation history for context continuity
+            // Limit history to prevent memory issues and token overflow
+            const MAX_HISTORY_TURNS = 20;
             if (context.history && context.history.length > 0) {
-                for (const item of context.history) {
-                    if (item instanceof vscode.ChatResponseTurn) {
-                        // Extract markdown content from previous assistant responses
-                        const content = item.response
-                            .filter(r => r instanceof vscode.ChatResponseMarkdownPart)
-                            .map(r => r.value.value)
-                            .join('\n');
+                const recentHistory = context.history.slice(-MAX_HISTORY_TURNS);
 
-                        if (content) {
-                            messages.push(vscode.LanguageModelChatMessage.Assistant(content));
-                        }
+                for (const item of recentHistory) {
+                    if (item instanceof vscode.ChatResponseTurn) {
+                        // Extract content from all response part types
+                        const content = item.response.map(r => {
+                            if (r instanceof vscode.ChatResponseMarkdownPart) {
+                                return r.value.value;
+                            } else if (r instanceof vscode.ChatResponseFileTree) {
+                                return '[File tree displayed]';
+                            } else if (r instanceof vscode.ChatResponseAnchorPart) {
+                                return `[Reference: ${r.value?.title || 'link'}]`;
+                            } else if (r instanceof vscode.ChatResponseCommandButtonPart) {
+                                return `[Button: ${r.value?.title || 'action'}]`;
+                            }
+                            return '';
+                        }).filter(Boolean).join('\n');
+
+                        // Always include assistant turn to maintain alternating sequence
+                        messages.push(vscode.LanguageModelChatMessage.Assistant(
+                            content || '[No text response]'
+                        ));
                     } else if (item instanceof vscode.ChatRequestTurn) {
                         // Add previous user requests
                         messages.push(vscode.LanguageModelChatMessage.User(item.prompt));
@@ -87,17 +100,31 @@ function createChatHandler(config, participantId, allAgents = new Map(), visited
             }
 
             // Check token limit before sending request
+            // Use more conservative estimation: char count / 3 with 15% buffer
             const estimatedTokens = messages.reduce((sum, m) => {
                 const content = typeof m.content === 'string'
                     ? m.content
                     : m.content.map(p => p.value || '').join('');
-                return sum + Math.ceil(content.length / 4);
+                // More conservative estimation for better accuracy
+                return sum + Math.ceil(content.length / 3);
             }, 0);
 
-            if (estimatedTokens > model.maxInputTokens) {
+            // Add 15% safety margin to prevent near-limit failures
+            const maxAllowedTokens = Math.floor(model.maxInputTokens * 0.85);
+            const utilizationPercent = (estimatedTokens / model.maxInputTokens) * 100;
+
+            // Warn at 80% capacity
+            if (utilizationPercent > 80 && utilizationPercent <= 100) {
                 stream.markdown(
-                    `⚠️ Request is too large (${estimatedTokens} tokens). ` +
-                    `Maximum is ${model.maxInputTokens} tokens. Please start a new conversation or reduce the amount of context.`
+                    `⚠️ *Context is ${utilizationPercent.toFixed(0)}% full. ` +
+                    `Consider starting a new conversation soon to avoid hitting limits.*\n\n`
+                );
+            }
+
+            if (estimatedTokens > maxAllowedTokens) {
+                stream.markdown(
+                    `⚠️ Request is too large (estimated ${estimatedTokens} tokens). ` +
+                    `Maximum is ${maxAllowedTokens} tokens. Please start a new conversation or reduce the amount of context.`
                 );
                 return;
             }
@@ -145,14 +172,18 @@ function createChatHandler(config, participantId, allAgents = new Map(), visited
                         const agentConfig = allAgents.get(agentId);
 
                         if (agentConfig) {
+                            // Extract agent ID consistently for cycle detection
+                            // participantId format: "compounding-engineering.agent-name"
+                            const currentAgentId = participantId.replace('compounding-engineering.', '');
+
                             // Create new visited set with current agent added
                             const newVisited = new Set(visitedAgents);
-                            newVisited.add(participantId);
+                            newVisited.add(currentAgentId);
 
                             // Create a sub-request to the other agent with cycle protection
                             const subHandler = createChatHandler(
                                 agentConfig,
-                                agentId,
+                                `compounding-engineering.${agentId}`,
                                 allAgents,
                                 newVisited,
                                 depth + 1
@@ -175,8 +206,14 @@ function createChatHandler(config, participantId, allAgents = new Map(), visited
             }
 
         } catch (error) {
-            // Error details are already sent to the user via stream.markdown below
-            // No need for additional logging here as it would be redundant
+            // Log detailed error information to output channel for debugging
+            // Note: outputChannel should be passed in future refactoring
+            console.error('[Compounding Engineering Error]', {
+                agent: config.name,
+                participantId,
+                error: error.message,
+                stack: error.stack
+            });
 
             // Handle LanguageModelError specifically
             if (error instanceof vscode.LanguageModelError) {
@@ -193,18 +230,15 @@ function createChatHandler(config, participantId, allAgents = new Map(), visited
                         errorMessage = 'Request was blocked by content filters. Please try rephrasing your question.';
                         break;
                     default:
-                        errorMessage = `Language model error: ${error.message}`;
+                        errorMessage = 'Language model error occurred. Please try again.';
                 }
 
                 stream.markdown(`⚠️ ${errorMessage}`);
-            } else if (error.message.includes('rate limit')) {
-                stream.markdown('⚠️ Rate limit reached. Please wait a moment and try again.');
-            } else if (error.message.includes('model')) {
-                stream.markdown('⚠️ Language model unavailable. Please check your GitHub Copilot subscription.');
             } else if (token.isCancellationRequested) {
                 stream.markdown('Request cancelled.');
             } else {
-                stream.markdown(`⚠️ An error occurred: ${error.message}`);
+                // Generic error message without exposing internal details
+                stream.markdown('⚠️ An unexpected error occurred. Please check the Output panel (View > Output > Compounding Engineering) for details.');
             }
         }
     };

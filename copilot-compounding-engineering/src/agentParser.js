@@ -24,16 +24,67 @@ function parseAgentFile(filePath, outputChannel) {
 
         const [, frontmatterStr, markdownContent] = frontmatterMatch;
 
-        // Parse YAML frontmatter
-        const metadata = yaml.parse(frontmatterStr);
+        // Parse YAML frontmatter with safety options
+        const metadata = yaml.parse(frontmatterStr, {
+            strict: true,
+            uniqueKeys: true,
+            maxAliasCount: 10
+        });
 
-        // Return combined object
+        // Validate metadata structure
+        if (!metadata || typeof metadata !== 'object') {
+            if (outputChannel) {
+                outputChannel.appendLine(`ERROR: Invalid YAML in ${filePath}: expected object`);
+            }
+            return null;
+        }
+
+        // Validate required fields
+        if (!metadata.name || typeof metadata.name !== 'string') {
+            if (outputChannel) {
+                outputChannel.appendLine(`ERROR: Missing or invalid 'name' field in ${filePath}`);
+            }
+            return null;
+        }
+
+        if (!metadata.description || typeof metadata.description !== 'string') {
+            if (outputChannel) {
+                outputChannel.appendLine(`ERROR: Missing or invalid 'description' field in ${filePath}`);
+            }
+            return null;
+        }
+
+        // Validate and filter handoffs
+        const handoffs = Array.isArray(metadata.handoffs)
+            ? metadata.handoffs.filter(h => {
+                if (!h || typeof h !== 'object') {
+                    if (outputChannel) {
+                        outputChannel.appendLine(`WARNING: Invalid handoff in ${filePath}: not an object`);
+                    }
+                    return false;
+                }
+                if (typeof h.agent !== 'string' || !h.agent) {
+                    if (outputChannel) {
+                        outputChannel.appendLine(`WARNING: Invalid handoff in ${filePath}: missing or invalid 'agent' field`);
+                    }
+                    return false;
+                }
+                return true;
+            })
+            : [];
+
+        // Validate tools array
+        const tools = Array.isArray(metadata.tools)
+            ? metadata.tools.filter(t => typeof t === 'string')
+            : [];
+
+        // Return combined object with validated data
         return {
             name: metadata.name,
             description: metadata.description,
-            tools: metadata.tools || [],
-            model: metadata.model || 'Claude Sonnet 4',
-            handoffs: metadata.handoffs || [],
+            tools: tools,
+            model: typeof metadata.model === 'string' ? metadata.model : 'Claude Sonnet 4',
+            handoffs: handoffs,
             instructions: markdownContent.trim(),
             filePath
         };
@@ -131,18 +182,8 @@ function loadAllPrompts(promptsDir, outputChannel) {
     return prompts;
 }
 
-/**
- * Extract agent name from handoff configuration
- * @param {Object} handoff - Handoff configuration from prompt
- * @returns {string} Agent ID to hand off to
- */
-function extractHandoffAgent(handoff) {
-    return handoff.agent;
-}
-
 module.exports = {
     parseAgentFile,
     loadAllAgents,
-    loadAllPrompts,
-    extractHandoffAgent
+    loadAllPrompts
 };
