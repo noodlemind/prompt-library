@@ -29,8 +29,15 @@ build.sh
 
 # Build artifacts
 *.vsix
-out/**
 dist/**
+
+# Source files (bundled into out/)
+extension.js
+src/**
+
+# Dependencies (bundled into out/)
+node_modules/**
+package-lock.json
 
 # Temporary files
 .DS_Store
