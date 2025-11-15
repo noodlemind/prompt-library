@@ -414,9 +414,13 @@ To add new agents or improve existing ones:
 3. Document the agent's purpose and capabilities
 4. Update this README with usage examples
 
+## Changelog
+
+See [CHANGELOG.md](CHANGELOG.md) for a detailed list of changes in each version.
+
 ## License
 
-This collection is provided as-is for use with GitHub Copilot.
+This collection is provided as-is for use with GitHub Copilot. Licensed under MIT License.
 
 ## Support
 

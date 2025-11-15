@@ -22,13 +22,33 @@
     "code-review",
     "security",
     "performance",
-    "architecture"
+    "architecture",
+    "typescript",
+    "python",
+    "rails",
+    "code-quality",
+    "best-practices",
+    "workflows",
+    "productivity",
+    "multi-agent",
+    "developer-tools"
   ],
   "repository": {
     "type": "git",
-    "url": "https://github.com/noodlemind/prompt-library.git"
+    "url": "https://github.com/noodlemind/prompt-library.git",
+    "directory": "copilot-compounding-engineering"
   },
+  "homepage": "https://github.com/noodlemind/prompt-library/tree/main/copilot-compounding-engineering",
+  "bugs": {
+    "url": "https://github.com/noodlemind/prompt-library/issues"
+  },
+  "qna": "https://github.com/noodlemind/prompt-library/discussions",
   "license": "MIT",
+  "galleryBanner": {
+    "color": "#1E1E1E",
+    "theme": "dark"
+  },
+  "icon": "icon.png",
   "activationEvents": [
     "onStartupFinished"
   ],
