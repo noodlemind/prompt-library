@@ -282,8 +282,10 @@ The Compounding Engineering extension uses **VS Code's Chat Participant API** to
 6. **Streaming Responses**: Responses stream in real-time for better user experience
 
 **Key Technologies**:
+- **TypeScript**: Full type safety with strict mode for robust, maintainable code
 - **Chat Participant API**: Native VS Code API for registering chat agents
 - **Language Model API**: VS Code's interface to GitHub Copilot and other AI models
+- **esbuild**: Fast bundling for optimal performance
 - **YAML Frontmatter Parsing**: Extracts agent metadata and configuration
 - **Markdown Content**: Agent instructions embedded directly in response prompts
 

@@ -16,6 +16,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Comprehensive test suite with 14 automated tests
 - ESLint configuration with modern flat config format
 - Development documentation in README (test, lint, build commands)
+- Full TypeScript migration with strict mode
+- Comprehensive type definitions (AgentConfig, Handoff, PromptConfig interfaces)
+- TypeScript-aware ESLint configuration
 
 ### Changed
 - Improved .vscodeignore to exclude development files and source files (now bundled)
@@ -24,10 +27,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - File count reduced from 191 to 35 files (82% reduction)
 - Fixed all linting issues (0 errors, 0 warnings)
 - Linked CHANGELOG from README
+- Migrated all source files to TypeScript (.ts)
+- Updated build system to compile TypeScript with esbuild
+- Enhanced ESLint to support both TypeScript and JavaScript files
 
 ### Fixed
 - Code style inconsistencies across the codebase
 - Trailing spaces and quote style issues
+- Type safety issues with strict TypeScript mode
 
 ## [2.0.0] - 2025-01-14
 
