@@ -282,8 +282,10 @@ The Compounding Engineering extension uses **VS Code's Chat Participant API** to
 6. **Streaming Responses**: Responses stream in real-time for better user experience
 
 **Key Technologies**:
+- **TypeScript**: Full type safety with strict mode for robust, maintainable code
 - **Chat Participant API**: Native VS Code API for registering chat agents
 - **Language Model API**: VS Code's interface to GitHub Copilot and other AI models
+- **esbuild**: Fast bundling for optimal performance
 - **YAML Frontmatter Parsing**: Extracts agent metadata and configuration
 - **Markdown Content**: Agent instructions embedded directly in response prompts
 
@@ -414,9 +416,42 @@ To add new agents or improve existing ones:
 3. Document the agent's purpose and capabilities
 4. Update this README with usage examples
 
+### Development
+
+**Running Tests:**
+```bash
+npm test
+```
+
+**Linting Code:**
+```bash
+npm run lint
+```
+
+**Building the Extension:**
+```bash
+npm run compile
+```
+
+**Watching for Changes:**
+```bash
+npm run watch
+```
+
+**Packaging for Distribution:**
+```bash
+npm run package
+```
+
+The extension uses esbuild for bundling, which creates a single optimized `out/extension.js` file from all source files.
+
+## Changelog
+
+See [CHANGELOG.md](CHANGELOG.md) for a detailed list of changes in each version.
+
 ## License
 
-This collection is provided as-is for use with GitHub Copilot.
+This collection is provided as-is for use with GitHub Copilot. Licensed under MIT License.
 
 ## Support
 

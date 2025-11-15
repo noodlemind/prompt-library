@@ -1,22 +1,23 @@
 // Compounding Engineering Extension for VS Code
 // Provides specialized AI agents and workflow prompts as global chat participants
 
-const vscode = require('vscode');
-const path = require('path');
-const { loadAllAgents, loadAllPrompts } = require('./src/agentParser');
-const { createChatHandler, createFollowupProvider } = require('./src/chatHandlers');
+import * as vscode from 'vscode';
+import * as path from 'path';
+import { loadAllAgents, loadAllPrompts } from './src/agentParser';
+import { createChatHandler, createFollowupProvider } from './src/chatHandlers';
+import { AgentConfig } from './src/types';
 
 // Global storage for all loaded agents and participants
-let allAgents = new Map();
-let allPrompts = new Map();
-const registeredParticipants = [];
-let outputChannel;
+let allAgents = new Map<string, AgentConfig>();
+let allPrompts = new Map<string, AgentConfig>();
+const registeredParticipants: string[] = [];
+let outputChannel: vscode.OutputChannel | undefined;
 
 /**
  * Extension activation
- * @param {vscode.ExtensionContext} context
+ * @param context - Extension context
  */
-function activate(context) {
+export function activate(context: vscode.ExtensionContext): void {
     // Create output channel for structured logging
     outputChannel = vscode.window.createOutputChannel('Compounding Engineering');
     context.subscriptions.push(outputChannel);
@@ -54,23 +55,37 @@ function activate(context) {
         outputChannel.appendLine(`Registered ${registeredParticipants.length} chat participants`);
 
     } catch (error) {
-        outputChannel.appendLine(`ERROR: Failed to activate extension: ${error.message}`);
-        outputChannel.appendLine(error.stack);
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        const errorStack = error instanceof Error ? error.stack : '';
+        outputChannel.appendLine(`ERROR: Failed to activate extension: ${errorMessage}`);
+        if (errorStack) {
+            outputChannel.appendLine(errorStack);
+        }
         vscode.window.showErrorMessage(
-            `Failed to activate Compounding Engineering: ${error.message}`
+            `Failed to activate Compounding Engineering: ${errorMessage}`
         );
     }
 }
 
 /**
  * Register chat participants from a collection of configs
- * @param {vscode.ExtensionContext} context
- * @param {Map<string, Object>} participants - Map of participant configs
- * @param {string} iconName - VS Code ThemeIcon name
- * @param {string} typeName - Type name for logging (e.g., "agent" or "prompt")
- * @param {Map<string, Object>} allAgents - All agents for handoff support
+ * @param context - Extension context
+ * @param participants - Map of participant configs
+ * @param iconName - VS Code ThemeIcon name
+ * @param typeName - Type name for logging (e.g., "agent" or "prompt")
+ * @param allAgents - All agents for handoff support
  */
-function registerChatParticipants(context, participants, iconName, typeName, allAgents) {
+function registerChatParticipants(
+    context: vscode.ExtensionContext,
+    participants: Map<string, AgentConfig>,
+    iconName: string,
+    typeName: string,
+    allAgents: Map<string, AgentConfig>
+): void {
+    if (!outputChannel) {
+        return;
+    }
+
     for (const [id, config] of participants.entries()) {
         try {
             const participantId = `compounding-engineering.${id}`;
@@ -94,34 +109,39 @@ function registerChatParticipants(context, participants, iconName, typeName, all
             outputChannel.appendLine(`✓ Registered ${typeName}: @${id}`);
 
         } catch (error) {
-            outputChannel.appendLine(`ERROR: Failed to register ${typeName} ${id}: ${error.message}`);
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            outputChannel.appendLine(`ERROR: Failed to register ${typeName} ${id}: ${errorMessage}`);
         }
     }
 }
 
 /**
  * Register all agents as chat participants
- * @param {vscode.ExtensionContext} context
- * @param {Map<string, Object>} agents
+ * @param context - Extension context
+ * @param agents - Map of agent configs
  */
-function registerAgents(context, agents) {
+function registerAgents(context: vscode.ExtensionContext, agents: Map<string, AgentConfig>): void {
     registerChatParticipants(context, agents, 'robot', 'agent', agents);
 }
 
 /**
  * Register all prompts as chat participants
- * @param {vscode.ExtensionContext} context
- * @param {Map<string, Object>} prompts
- * @param {Map<string, Object>} agents - For handoff support
+ * @param context - Extension context
+ * @param prompts - Map of prompt configs
+ * @param agents - For handoff support
  */
-function registerPrompts(context, prompts, agents) {
+function registerPrompts(
+    context: vscode.ExtensionContext,
+    prompts: Map<string, AgentConfig>,
+    agents: Map<string, AgentConfig>
+): void {
     registerChatParticipants(context, prompts, 'layers', 'prompt', agents);
 }
 
 /**
  * Extension deactivation
  */
-function deactivate() {
+export function deactivate(): void {
     if (outputChannel) {
         outputChannel.appendLine('Compounding Engineering extension is deactivating...');
         outputChannel.dispose();
@@ -130,8 +150,3 @@ function deactivate() {
     allAgents.clear();
     allPrompts.clear();
 }
-
-module.exports = {
-    activate,
-    deactivate
-};
