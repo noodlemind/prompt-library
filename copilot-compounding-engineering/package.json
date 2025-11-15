@@ -249,9 +249,9 @@
   },
   "scripts": {
     "vscode:prepublish": "npm run compile",
-    "compile": "esbuild ./extension.js --bundle --outfile=out/extension.js --external:vscode --format=cjs --platform=node --minify",
+    "compile": "esbuild ./extension.ts --bundle --outfile=out/extension.js --external:vscode --format=cjs --platform=node --minify",
     "watch": "npm run compile -- --sourcemap --watch",
-    "lint": "eslint extension.js src/**/*.js test/**/*.js",
+    "lint": "eslint extension.ts src/**/*.ts",
     "test": "node ./test/runTest.js",
     "package": "vsce package",
     "publish": "vsce publish"
@@ -259,14 +259,18 @@
   "devDependencies": {
     "@eslint/js": "^9.39.1",
     "@types/mocha": "^10.0.10",
+    "@types/node": "^24.10.1",
     "@types/vscode": "^1.85.0",
+    "@typescript-eslint/eslint-plugin": "^8.46.4",
+    "@typescript-eslint/parser": "^8.46.4",
     "@vscode/test-electron": "^2.5.2",
     "@vscode/vsce": "^2.22.0",
     "esbuild": "^0.27.0",
     "eslint": "^9.39.1",
     "glob": "^11.0.3",
     "globals": "^16.5.0",
-    "mocha": "^11.7.5"
+    "mocha": "^11.7.5",
+    "typescript": "^5.9.3"
   },
   "dependencies": {
     "yaml": "^2.3.4"
