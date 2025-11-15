@@ -414,6 +414,25 @@ To add new agents or improve existing ones:
 3. Document the agent's purpose and capabilities
 4. Update this README with usage examples
 
+### Development
+
+**Running Tests:**
+```bash
+npm test
+```
+
+**Building the Extension:**
+```bash
+npm run compile
+```
+
+**Packaging for Distribution:**
+```bash
+npm run package
+```
+
+The extension uses esbuild for bundling, which creates a single optimized `out/extension.js` file from all source files.
+
 ## Changelog
 
 See [CHANGELOG.md](CHANGELOG.md) for a detailed list of changes in each version.
