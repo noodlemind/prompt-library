@@ -9,7 +9,7 @@ const { createChatHandler, createFollowupProvider } = require('./src/chatHandler
 // Global storage for all loaded agents and participants
 let allAgents = new Map();
 let allPrompts = new Map();
-let registeredParticipants = [];
+const registeredParticipants = [];
 let outputChannel;
 
 /**
@@ -50,7 +50,7 @@ function activate(context) {
             `✨ Compounding Engineering activated! ${totalParticipants} agents and prompts are now available in chat. Use @ to mention agents and / for commands.`
         );
 
-        outputChannel.appendLine(`Compounding Engineering extension activated successfully!`);
+        outputChannel.appendLine('Compounding Engineering extension activated successfully!');
         outputChannel.appendLine(`Registered ${registeredParticipants.length} chat participants`);
 
     } catch (error) {

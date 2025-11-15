@@ -1,7 +1,7 @@
 const assert = require('assert');
 
 suite('Chat Handlers Test Suite', () => {
-    
+
     suite('Module Loading', () => {
         test('should load chat handlers module', () => {
             // chatHandlers requires vscode which isn't available in Node tests

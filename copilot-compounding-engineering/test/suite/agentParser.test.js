@@ -3,12 +3,12 @@ const path = require('path');
 const { parseAgentFile, loadAllAgents, loadAllPrompts } = require('../../src/agentParser');
 
 suite('Agent Parser Test Suite', () => {
-    
+
     suite('parseAgentFile', () => {
         test('should parse valid agent file', () => {
             const filePath = path.join(__dirname, '../fixtures/sample.agent.md');
             const result = parseAgentFile(filePath);
-            
+
             assert.strictEqual(result.name, 'Test Agent');
             assert.strictEqual(result.description, 'A test agent for unit testing');
             assert.strictEqual(result.model, 'Claude Sonnet 4');
@@ -21,7 +21,7 @@ suite('Agent Parser Test Suite', () => {
         test('should parse handoffs correctly', () => {
             const filePath = path.join(__dirname, '../fixtures/sample.agent.md');
             const result = parseAgentFile(filePath);
-            
+
             assert.ok(Array.isArray(result.handoffs));
             assert.strictEqual(result.handoffs.length, 1);
             assert.strictEqual(result.handoffs[0].label, 'Consult Security');
@@ -32,7 +32,7 @@ suite('Agent Parser Test Suite', () => {
         test('should parse markdown content as instructions', () => {
             const filePath = path.join(__dirname, '../fixtures/sample.agent.md');
             const result = parseAgentFile(filePath);
-            
+
             assert.ok(result.instructions);
             assert.ok(result.instructions.includes('Test Agent Instructions'));
             assert.ok(result.instructions.includes('unit testing the agent parser'));
@@ -48,7 +48,7 @@ suite('Agent Parser Test Suite', () => {
         test('should parse valid prompt file', () => {
             const filePath = path.join(__dirname, '../fixtures/sample.prompt.md');
             const result = parseAgentFile(filePath);
-            
+
             assert.strictEqual(result.name, 'Test Prompt');
             assert.strictEqual(result.description, 'A test prompt for unit testing');
             assert.ok(result.instructions.includes('Test Prompt Instructions'));
@@ -57,7 +57,7 @@ suite('Agent Parser Test Suite', () => {
         test('should parse prompt handoffs with send:true', () => {
             const filePath = path.join(__dirname, '../fixtures/sample.prompt.md');
             const result = parseAgentFile(filePath);
-            
+
             assert.ok(Array.isArray(result.handoffs));
             assert.strictEqual(result.handoffs.length, 1);
             assert.strictEqual(result.handoffs[0].agent, 'architecture-strategist');
@@ -69,10 +69,10 @@ suite('Agent Parser Test Suite', () => {
         test('should load agents from directory', () => {
             const agentsDir = path.join(__dirname, '../../.github/agents');
             const agents = loadAllAgents(agentsDir);
-            
+
             assert.ok(agents instanceof Map);
             assert.ok(agents.size > 0);
-            
+
             // Check that architecture-strategist exists
             assert.ok(agents.has('architecture-strategist'));
             const agent = agents.get('architecture-strategist');
@@ -90,7 +90,7 @@ suite('Agent Parser Test Suite', () => {
         test('should load prompts from directory', () => {
             const promptsDir = path.join(__dirname, '../../.github/prompts');
             const prompts = loadAllPrompts(promptsDir);
-            
+
             assert.ok(prompts instanceof Map);
             assert.ok(prompts.size > 0);
         });

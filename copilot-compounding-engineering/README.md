@@ -421,9 +421,19 @@ To add new agents or improve existing ones:
 npm test
 ```
 
+**Linting Code:**
+```bash
+npm run lint
+```
+
 **Building the Extension:**
 ```bash
 npm run compile
+```
+
+**Watching for Changes:**
+```bash
+npm run watch
 ```
 
 **Packaging for Distribution:**
