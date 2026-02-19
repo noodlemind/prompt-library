@@ -1,0 +1,52 @@
+# Copilot Preferences — Example Configuration
+#
+# Copy this file to `.github/copilot-preferences.yml` in your project
+# to customize how Copilot skills behave in your workspace.
+#
+# Skills resolve preferences in this order (highest priority first):
+#   1. .vscode/copilot-preferences.yml   (workspace-level)
+#   2. .github/copilot-preferences.yml   (project-level)
+#   3. policy/packs/*.yml                 (policy packs, merged alphabetically)
+#   4. policy/modules/*.yml              (module overrides)
+#   5. Built-in defaults                  (see below)
+
+# ── Coding style ────────────────────────────────────────────────────
+style:
+  language: typescript          # Primary language (typescript | python | ruby | go | java | ...)
+  indent: 2                     # Spaces per indent level
+  quotes: single                # single | double
+  semicolons: true              # Trailing semicolons (JS/TS)
+  max_line_length: 100          # Advisory max line length
+
+# ── Testing ─────────────────────────────────────────────────────────
+testing:
+  framework: jest               # jest | mocha | pytest | rspec | go-test | vitest | ...
+  coverage_threshold: 80        # Minimum coverage percentage (advisory)
+  test_location: colocated      # colocated | separate (__tests__/) | mirror (test/)
+
+# ── Logging ─────────────────────────────────────────────────────────
+logging:
+  library: pino                 # pino | winston | slf4j | logging | slog | ...
+  level: info                   # Default log level
+  format: json                  # json | text
+  no_secrets: true              # Enforce no secrets in log output
+
+# ── Observability ───────────────────────────────────────────────────
+observability:
+  metrics: true                 # Add metrics on critical paths
+  tracing: true                 # Add tracing spans
+  library: opentelemetry        # opentelemetry | datadog | newrelic | ...
+
+# ── Guardrails ──────────────────────────────────────────────────────
+guardrails:
+  max_diff_lines: 400           # Advisory max lines changed per phase
+  require_plan_lock: true       # Require locked plan before implementation
+  require_tests: true           # Require tests for all code changes
+  block_generated_files: true   # Block edits to generated / DO-NOT-EDIT files
+
+# ── Issue workflow ──────────────────────────────────────────────────
+issues:
+  template: docs/LOCAL_ISSUE_TEMPLATE.md
+  location: local_issues/       # Where issue files are stored
+  require_dor: true             # Enforce Definition of Ready
+  require_dod: true             # Enforce Definition of Done

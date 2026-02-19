@@ -3,18 +3,29 @@
 ## Operating Mode
 - Assume **agent mode**. Autonomously create/edit files; **do not** call CLIs or the network by default (determinism, portability, security).
 - Prefer **#selection** or **#file**; expand to **@workspace** only when necessary.
+- **VS Code 1.108+**: skills under `.github/skills/` are auto-discovered. Use skills for structured workflows (capture → plan → work → review).
 
-## Local Issues Policy (no GitHub Issues)
-- Issues live at `local_issues/YYYY/MM/YYYY-MM-DD-<slug>.md` using `docs/LOCAL_ISSUE_TEMPLATE.md`.
-- Maintain `local_issues/README.md` whenever an issue is created or updated.
+## Skills (VS Code 1.108+ / GitHub Copilot Coding Agent)
+Skills in `.github/skills/<name>/SKILL.md` provide step-by-step guidance for specific tasks. Each skill declares a `name` and `description` in YAML frontmatter; Copilot matches the description to the user's prompt.
 
-## Definition of Ready (DoR) — gate before work
-- Required in the issue: **Overview**, **Quick Context & Summary**, **Acceptance Criteria**, and **Steps to Reproduce** *or* **Expected vs Actual** (for bugs).
-- **Technical Notes** must include: **Implementation Approach**, **Key Considerations**, **Investigation Areas**, **Diagnostic Steps**, **Dependencies/Blockers**.
-- Provide at least one **Artifact** (stack/log/failing test) or "N/A". **Deduplicate** against `local_issues/**`. If info is missing, set `status: needs-info` and add a single question in `## Missing`.
+| Workflow Step | Skill | What It Does |
+|---------------|-------|--------------|
+| 1. Capture | `capture-issue` | Create a local issue with DoR validation |
+| 2. Plan | `analyze-and-plan` | Validate DoR, produce phased plan, lock it |
+| 3. Implement | `work-on-issue` | TDD for current phase; enforces plan lock |
+| 4. Review | `review-guardrails` | Audit changeset (read-only, no edits) |
+| Quick fix | `tdd-fix` | Red-green-refactor for a specific bug |
+| Context | `codebase-context` | Generate architecture docs + LLM context |
+| Knowledge | `kb-summarize` / `kb-attach-links` | Maintain agent knowledge base |
+| Index | `issues-reindex` | Rebuild `local_issues/README.md` |
+| Experiment | `edd-experiment` | Experiment-driven development log |
+| Config | `user-preferences` | Resolve and apply user preferences |
 
-## Policy Packs & Profile Inference
-- Before planning/implementation, **resolve a Profile** from the YAML packs in `policy/packs/` and optional overrides in `policy/module-policy.yml` or `policy/modules/*.yml`.
+Existing `.github/prompts/*.prompt.md` files continue to work for VS Code versions before 1.108.
+
+## User Preferences
+- Before planning/implementation, skills **resolve a Profile** from `.github/copilot-preferences.yml` (or `.vscode/copilot-preferences.yml`), then `policy/packs/*.yml`, then `policy/modules/*.yml`, then built-in defaults.
+- See `.github/copilot-preferences.example.yml` for the schema and all available options.
 - Treat library names in chat as **examples**, *not mandates*. Use the **module's canonical idioms** from the resolved Profile (e.g., logging, tests, generated-file markers, diff-size cap).
 - If the code contradicts the Profile, suggest updating the module override YAML rather than inventing a one-off rule.
 
