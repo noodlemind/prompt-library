@@ -33,7 +33,7 @@ Before generating context, resolve the user's Profile:
 
 ## Scope
 - Focus on source files; skip generated/third-party/build artifacts.
-- Exclude: `.git/**`, `**/node_modules/**`, `**/vendor/**`, `**/build/**`, `**/dist/**`, `**/target/**`, `**/.next/**`, `**/.nuxt/**`, `**/.vercel/**`, `**/coverage/**`, `**/__pycache__/**`, `**/.venv/**`, `**/.mypy_cache/**`, `**/.idea/**`, `**/.vscode/**`, `**/*.min.*`, `**/*.map`, `**/*.bundle.*`, binaries/images.
+- Exclude: `.git/**`, `**/node_modules/**`, `**/vendor/**`, `**/build/**`, `**/dist/**`, `**/target/**`, `**/.next/**`, `**/.nuxt/**`, `**/.vercel/**`, `**/coverage/**`, `**/__pycache__/**`, `**/.venv/**`, `**/.mypy_cache/**`, `**/.idea/**`, `**/.vscode/**`, `**/*.min.*`, `**/*.map`, `**/*.bundle.*`, `**/*.{png,jpg,jpeg,gif,ico,svg,woff,woff2,ttf,eot,exe,dll,so,dylib}`.
 
 ## Steps
 

@@ -33,7 +33,7 @@ Before implementation, resolve the user's Profile:
 
 1. **Re-read the Issue**
    - If `status: needs-info` → attempt to answer from context; else **stop**.
-   - If `mode: brainstorm` OR `plan_lock: false` → **refuse to code**. Summarize open options/questions, set `status: brainstorm`, print change summary, **stop**.
+   - If `status: brainstorm` OR `plan_lock: false` → **refuse to code**. Summarize open options/questions, set `status: brainstorm`, print change summary, **stop**.
 
 2. **Read the Plan**
    - If `## Plan` is absent, **stop** and instruct: "Run the analyze-and-plan skill to produce a phased plan + plan.json (locked)."

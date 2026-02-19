@@ -169,7 +169,7 @@ Skills are auto-discovered by VS Code 1.108+ Copilot agent mode from `.github/sk
 | `work-on-task` | Systematic task execution with phased validation | Tests after every change |
 | `triage-issues` | Interactive issue triage and prioritization | No code during triage |
 
-Skills complement agents and prompts — they are background knowledge that Copilot loads automatically when the user's request matches the skill description. Unlike agents (`@mention`) or prompts (`/command`), skills don't require explicit invocation.
+Skills complement agents and prompts — they are background knowledge that Copilot loads automatically when the user's request matches the skill description. Unlike agents (`@mention`) or prompts (`/command`), skills don't require explicit invocation. Skills require VS Code 1.108+ with GitHub Copilot.
 
 **To use a skill**: Simply describe what you want in Copilot Chat (e.g., "review this PR for security issues") and Copilot will automatically load the relevant skill.
 

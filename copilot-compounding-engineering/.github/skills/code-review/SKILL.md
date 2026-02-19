@@ -20,6 +20,7 @@ Activate when the user wants to:
 Before reviewing, resolve the user's Profile:
 1. Check for `.github/copilot-preferences.yml` or `.vscode/copilot-preferences.yml` in the workspace.
 2. Apply any custom review conventions, severity thresholds, or focus areas.
+3. For the full resolution order (including policy packs), see the `user-preferences` skill.
 
 ## Workflow
 

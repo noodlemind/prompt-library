@@ -23,7 +23,7 @@ This skill is also invoked internally by other skills to resolve the user's Prof
 1. **Workspace-level**: `.vscode/copilot-preferences.yml`
 2. **Project-level**: `.github/copilot-preferences.yml`
 3. **Policy packs**: `policy/packs/*.yml` (merged in alphabetical order)
-4. **Module overrides**: `policy/module-policy.yml` and `policy/modules/*.yml`
+4. **Module overrides**: `policy/modules/*.yml` (per-module settings that override packs)
 5. **Defaults**: built-in sensible defaults (below)
 
 Higher-priority sources override lower-priority ones. Within the same level, later files override earlier ones.
