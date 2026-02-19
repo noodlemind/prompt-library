@@ -1,27 +1,28 @@
-const vscode = require('vscode');
+import * as vscode from 'vscode';
+import { AgentConfig } from './types';
 
 /**
  * Create a chat handler for an agent or prompt
- * @param {Object} config - Agent/prompt configuration from parser
- * @param {string} participantId - Full participant ID (e.g., "compounding-engineering.architecture-strategist")
- * @param {Map} allAgents - Map of all loaded agents for handoff support
- * @param {Set} visitedAgents - Set of agent IDs already visited in this call chain (for cycle detection)
- * @param {number} depth - Current recursion depth (for depth limiting)
- * @param {vscode.OutputChannel} [outputChannel] - Output channel for structured logging
- * @returns {Function} Chat request handler function
+ * @param config - Agent/prompt configuration from parser
+ * @param participantId - Full participant ID (e.g., "compounding-engineering.architecture-strategist")
+ * @param allAgents - Map of all loaded agents for handoff support
+ * @param visitedAgents - Set of agent IDs already visited in this call chain (for cycle detection)
+ * @param depth - Current recursion depth (for depth limiting)
+ * @param outputChannel - Output channel for structured logging
+ * @returns Chat request handler function
  */
-function createChatHandler(
-    config,
-    participantId,
-    allAgents = new Map(),
-    visitedAgents = new Set(),
-    depth = 0,
-    outputChannel = undefined
-) {
+export function createChatHandler(
+    config: AgentConfig,
+    participantId: string,
+    allAgents: Map<string, AgentConfig> = new Map(),
+    visitedAgents: Set<string> = new Set(),
+    depth: number = 0,
+    outputChannel?: vscode.OutputChannel
+): vscode.ChatRequestHandler {
     // Maximum recursion depth to prevent infinite loops
     const MAX_DEPTH = 5;
 
-    return async (request, context, stream, token) => {
+    return async (request: vscode.ChatRequest, context: vscode.ChatContext, stream: vscode.ChatResponseStream, token: vscode.CancellationToken): Promise<void> => {
         try {
             // Show that the agent is processing
             stream.progress(`${config.name} is analyzing...`);
@@ -50,7 +51,7 @@ function createChatHandler(
             const model = request.model;
 
             // Build messages array with conversation history
-            const messages = [];
+            const messages: vscode.LanguageModelChatMessage[] = [];
 
             // Add conversation history for context continuity
             // Limit history to prevent memory issues and token overflow
@@ -328,11 +329,11 @@ function createChatHandler(
 
 /**
  * Build system prompt from agent configuration and context
- * @param {Object} config - Agent/prompt configuration
- * @param {Object} context - VS Code chat context
- * @returns {string} System prompt for the language model
+ * @param config - Agent/prompt configuration
+ * @param _context - VS Code chat context (unused but kept for interface compatibility)
+ * @returns System prompt for the language model
  */
-function buildSystemPrompt(config, _context) {
+function buildSystemPrompt(config: AgentConfig, _context: vscode.ChatContext): string {
     let prompt = `You are ${config.name}, an AI assistant specialized in the following:\n\n`;
     prompt += `${config.description}\n\n`;
     prompt += '## Your Role and Instructions\n\n';
@@ -353,12 +354,12 @@ function buildSystemPrompt(config, _context) {
 
 /**
  * Create a follow-up provider for a chat participant
- * @param {Object} config - Agent/prompt configuration
- * @returns {Function} Follow-up provider function
+ * @param config - Agent/prompt configuration
+ * @returns Follow-up provider function
  */
-function createFollowupProvider(config) {
-    return (_result, _context, _token) => {
-        const followups = [];
+export function createFollowupProvider(config: AgentConfig): vscode.ChatFollowupProvider {
+    return (_result: vscode.ChatResult, _context: vscode.ChatContext, _token: vscode.CancellationToken): vscode.ChatFollowup[] => {
+        const followups: vscode.ChatFollowup[] = [];
 
         // Add default follow-ups
         followups.push({
@@ -389,8 +390,3 @@ function createFollowupProvider(config) {
         return followups;
     };
 }
-
-module.exports = {
-    createChatHandler,
-    createFollowupProvider
-};
