@@ -34,7 +34,7 @@ function createChatHandler(
 
             // Handle commands if this is a prompt with commands
             const commandName = request.command;
-            let finalPrompt = userMessage;
+            const finalPrompt = userMessage;
 
             if (commandName) {
                 stream.markdown(`*Running ${config.name} with command: ${commandName}*\n\n`);
@@ -125,7 +125,7 @@ function createChatHandler(
             if (utilizationPercent > 80 && utilizationPercent <= 100) {
                 stream.markdown(
                     `⚠️ *Context is ${utilizationPercent.toFixed(0)}% full. ` +
-                    `Consider starting a new conversation soon to avoid hitting limits.*\n\n`
+                    'Consider starting a new conversation soon to avoid hitting limits.*\n\n'
                 );
             }
 
@@ -332,10 +332,10 @@ function createChatHandler(
  * @param {Object} context - VS Code chat context
  * @returns {string} System prompt for the language model
  */
-function buildSystemPrompt(config, context) {
+function buildSystemPrompt(config, _context) {
     let prompt = `You are ${config.name}, an AI assistant specialized in the following:\n\n`;
     prompt += `${config.description}\n\n`;
-    prompt += `## Your Role and Instructions\n\n`;
+    prompt += '## Your Role and Instructions\n\n';
     prompt += config.instructions;
 
     // Note: Tools like 'search', 'githubRepo', 'fetch' are automatically available in agent mode
@@ -344,7 +344,7 @@ function buildSystemPrompt(config, context) {
 
     // Add workspace context
     if (vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders.length > 0) {
-        prompt += `\n\n## Workspace Context\n\n`;
+        prompt += '\n\n## Workspace Context\n\n';
         prompt += `Current workspace: ${vscode.workspace.workspaceFolders[0].uri.fsPath}\n`;
     }
 
@@ -357,7 +357,7 @@ function buildSystemPrompt(config, context) {
  * @returns {Function} Follow-up provider function
  */
 function createFollowupProvider(config) {
-    return (result, context, token) => {
+    return (_result, _context, _token) => {
         const followups = [];
 
         // Add default follow-ups

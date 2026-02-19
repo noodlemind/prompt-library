@@ -16,6 +16,7 @@ This repository provides a suite of 17 specialized agents and 6 workflow prompts
 
 - **17 Specialized Agents**: Each agent is an expert in a specific domain (architecture, security, performance, etc.)
 - **6 Workflow Prompts**: Pre-built workflows for common engineering tasks (review, plan, triage, etc.)
+- **4 Agent Skills** (VS Code 1.108+): Reusable skills for code review, issue planning, task execution, and triage
 - **Agent Handoffs**: Agents can delegate to other agents for comprehensive multi-perspective analysis
 - **GitHub Integration**: Deep integration with GitHub repositories via the `githubRepo` tool
 - **Web Research**: Agents can fetch external documentation and best practices via the `fetch` and `search` tools
@@ -25,6 +26,7 @@ This repository provides a suite of 17 specialized agents and 6 workflow prompts
 ### Prerequisites
 
 - **For VS Code**: VS Code (version 1.85.0 or higher) with GitHub Copilot extension
+  - **VS Code 1.108+**: Agent skills in `.github/skills/` are auto-discovered — no extension needed for skills
 - **For JetBrains IDEs**: IntelliJ IDEA, PyCharm, WebStorm, etc. with GitHub Copilot plugin
 - GitHub Copilot subscription (Individual, Business, or Enterprise)
 
@@ -156,6 +158,21 @@ Prompts are invoked using the `/` slash command syntax:
 | `/triage-issues` | Triage and prioritize issues | Analyze and categorize GitHub issues |
 | `/work-on-task` | Execute complex tasks | Systematic task execution with planning and validation |
 
+### Using Skills (VS Code 1.108+)
+
+Skills are auto-discovered by VS Code 1.108+ Copilot agent mode from `.github/skills/<name>/SKILL.md` files. They provide structured, reusable guidance for specific workflows.
+
+| Skill | Purpose | Guardrail |
+|-------|---------|-----------|
+| `code-review` | Multi-perspective code review orchestration | Constructive, prioritized findings |
+| `plan-issue` | Research-backed issue planning with detail levels | No code; plan only |
+| `work-on-task` | Systematic task execution with phased validation | Tests after every change |
+| `triage-issues` | Interactive issue triage and prioritization | No code during triage |
+
+Skills complement agents and prompts — they are background knowledge that Copilot loads automatically when the user's request matches the skill description. Unlike agents (`@mention`) or prompts (`/command`), skills don't require explicit invocation. Skills require VS Code 1.108+ with GitHub Copilot.
+
+**To use a skill**: Simply describe what you want in Copilot Chat (e.g., "review this PR for security issues") and Copilot will automatically load the relevant skill.
+
 ## Agent Workflows
 
 ### Example: Comprehensive Code Review
@@ -282,8 +299,10 @@ The Compounding Engineering extension uses **VS Code's Chat Participant API** to
 6. **Streaming Responses**: Responses stream in real-time for better user experience
 
 **Key Technologies**:
+- **TypeScript**: Full type safety with strict mode for robust, maintainable code
 - **Chat Participant API**: Native VS Code API for registering chat agents
 - **Language Model API**: VS Code's interface to GitHub Copilot and other AI models
+- **esbuild**: Fast bundling for optimal performance
 - **YAML Frontmatter Parsing**: Extracts agent metadata and configuration
 - **Markdown Content**: Agent instructions embedded directly in response prompts
 
@@ -414,9 +433,42 @@ To add new agents or improve existing ones:
 3. Document the agent's purpose and capabilities
 4. Update this README with usage examples
 
+### Development
+
+**Running Tests:**
+```bash
+npm test
+```
+
+**Linting Code:**
+```bash
+npm run lint
+```
+
+**Building the Extension:**
+```bash
+npm run compile
+```
+
+**Watching for Changes:**
+```bash
+npm run watch
+```
+
+**Packaging for Distribution:**
+```bash
+npm run package
+```
+
+The extension uses esbuild for bundling, which creates a single optimized `out/extension.js` file from all source files.
+
+## Changelog
+
+See [CHANGELOG.md](CHANGELOG.md) for a detailed list of changes in each version.
+
 ## License
 
-This collection is provided as-is for use with GitHub Copilot.
+This collection is provided as-is for use with GitHub Copilot. Licensed under MIT License.
 
 ## Support
 
