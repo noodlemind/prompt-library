@@ -36,7 +36,7 @@ Read the issue file. Check:
 ### 2. Research (Parallel)
 
 Run these research tasks in parallel:
-- **Codebase analysis**: Search for related files, existing patterns, and conventions relevant to this issue. Read `.github/agent-context.md` for accumulated knowledge.
+- **Codebase analysis**: Search for related files, existing patterns, and conventions relevant to this issue. Read `docs/agent-context.md` for accumulated knowledge.
 - **Solution history**: Check `docs/solutions/` for previously solved problems with similar tags or symptoms.
 - **Best practices**: Research industry best practices for the specific technology and pattern involved.
 

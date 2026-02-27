@@ -59,4 +59,4 @@ code-prompts/      — issue-based development workflow
 
 ## Accumulated Knowledge
 
-Read `.github/agent-context.md` for patterns discovered by previous agent sessions. Read `docs/solutions/` for documented solutions to past problems.
+Read `docs/agent-context.md` for patterns discovered by previous agent sessions. Read `docs/solutions/` for documented solutions to past problems.

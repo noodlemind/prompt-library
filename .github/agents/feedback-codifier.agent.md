@@ -18,7 +18,7 @@ Turn recurring review feedback into permanent standards. If the same comment app
 1. **Collect feedback**: Gather review comments, team discussions, recurring issues
 2. **Identify patterns**: Group similar feedback into themes
 3. **Draft standards**: Write clear, specific, actionable standards for each theme
-4. **Recommend placement**: Where should each standard live (linter config, CONTRIBUTING.md, copilot-instructions.md, agent-context.md)?
+4. **Recommend placement**: Where should each standard live (linter config, CONTRIBUTING.md, copilot-instructions.md, docs/agent-context.md)?
 5. **Verify coverage**: Check if existing documentation already covers these points
 
 ## Output Format

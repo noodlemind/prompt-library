@@ -31,7 +31,7 @@ Determine what to review:
 ### 2. Gather Context
 
 - Read modified files and understand the changes
-- Check `.github/agent-context.md` for accumulated codebase knowledge
+- Check `docs/agent-context.md` for accumulated codebase knowledge
 - Detect project type (Rails, TypeScript, Python, etc.) from project files
 - Read related code and dependencies touched by the changes
 

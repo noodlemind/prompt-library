@@ -26,7 +26,7 @@ Plan files live in `docs/plans/`. Activity logs in `## Activity` sections provid
 
 ## Knowledge Compounding
 
-- **Accumulated knowledge**: `.github/agent-context.md` — read this at the start of any session for codebase patterns and conventions discovered by previous agent sessions.
+- **Accumulated knowledge**: `docs/agent-context.md` — read this at the start of any session for codebase patterns and conventions discovered by previous agent sessions.
 - **Documented solutions**: `docs/solutions/` — categorized learnings from solved problems. Check here before starting work to avoid repeating past mistakes.
 
 ## Coding Conventions
@@ -45,4 +45,4 @@ Plan files live in `docs/plans/`. Activity logs in `## Activity` sections provid
 
 ## Agent Context
 
-Read `.github/agent-context.md` for accumulated codebase knowledge discovered by previous agent sessions. This file grows over time as agents learn about the codebase.
+Read `docs/agent-context.md` for accumulated codebase knowledge discovered by previous agent sessions. This file grows over time as agents learn about the codebase.

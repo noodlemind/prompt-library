@@ -71,7 +71,7 @@ severity: low|medium|high|critical
 
 ### 4. Update Agent Context
 
-If the learning reveals a pattern that future agents should know about, append a brief note to `.github/agent-context.md`:
+If the learning reveals a pattern that future agents should know about, append a brief note to `docs/agent-context.md`:
 
 ```markdown
 ### [Category]: [Brief finding]

@@ -448,7 +448,7 @@ This is the shared baseline every agent and skill receives. Content:
 - Project conventions and directory structure
 - Security policies and coding standards
 - The compounding engineering philosophy
-- Instruction to read `.github/agent-context.md` for accumulated codebase knowledge
+- Instruction to read `docs/agent-context.md` for accumulated codebase knowledge
 
 **Scoped instructions** (`.github/instructions/*.instructions.md`):
 
@@ -498,7 +498,7 @@ MCP is the universal tool integration protocol adopted by all six major AI codin
 
 #### 2d: Accumulated Context (Knowledge Compounding)
 
-**File:** `.github/agent-context.md`
+**File:** `docs/agent-context.md`
 
 This implements the **knowledge compounding loop** — the defining pattern of the compound-engineering system:
 
@@ -525,7 +525,7 @@ Content (updated by agents over time):
 - Team-specific preferences and decisions
 - Architecture boundaries and module responsibilities
 
-Every agent's instructions include: "Read `.github/agent-context.md` at the start of any session for accumulated knowledge about this codebase."
+Every agent's instructions include: "Read `docs/agent-context.md` at the start of any session for accumulated knowledge about this codebase."
 
 ### Phase 3: Clean Up and Validate
 
@@ -564,7 +564,7 @@ Archive in a `legacy/` directory or git tag for reference.
 - [ ] `.github/copilot-instructions.md` exists with project conventions
 - [ ] `AGENTS.md` exists at repo root for cross-tool compatibility
 - [ ] `.vscode/mcp.json` exists with MCP server config
-- [ ] `.github/agent-context.md` exists (initially minimal, grows over time)
+- [ ] `docs/agent-context.md` exists (initially minimal, grows over time)
 
 **Testing:**
 - [ ] Each agent responds to `@agent-name` in Copilot Chat
@@ -738,7 +738,7 @@ model: ['Claude Sonnet 4.5 (copilot)', 'Claude Sonnet 4 (copilot)']
 - [ ] Write `AGENTS.md` at repo root for cross-tool compatibility
 - [ ] Update existing `CLAUDE.md` to reference new architecture
 - [ ] Create `.vscode/mcp.json` with Context7 configuration
-- [ ] Create `.github/agent-context.md` with initial codebase knowledge
+- [ ] Create `docs/agent-context.md` with initial codebase knowledge
 
 ### Phase 3: Clean Up and Validate
 

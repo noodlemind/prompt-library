@@ -76,7 +76,7 @@ Each step produces or updates a plan file in `docs/plans/` with state tracking (
 
 The system gets smarter over time:
 
-- `.github/agent-context.md` — Accumulated codebase knowledge from agent sessions
+- `docs/agent-context.md` — Accumulated codebase knowledge from agent sessions
 - `docs/solutions/` — Documented learnings from solved problems
 
 Agents check these before starting work to avoid repeating past mistakes.
@@ -89,10 +89,11 @@ Agents check these before starting work to avoid repeating past mistakes.
   skills/              10 skill directories
   instructions/        Scoped instructions (Rails, TypeScript, Python)
   copilot-instructions.md
-  agent-context.md
 .vscode/mcp.json       MCP server config
-docs/plans/            Issue and plan files
-docs/solutions/        Documented learnings
+docs/
+  agent-context.md     Accumulated codebase knowledge
+  plans/               Issue and plan files
+  solutions/           Documented learnings
 code-prompts/          Issue-based development workflow
 AGENTS.md              Cross-tool standard
 CLAUDE.md              Claude Code instructions

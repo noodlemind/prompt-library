@@ -37,7 +37,7 @@ When activated, build a context summary covering:
 - CI/CD pipeline structure
 
 ### Accumulated Knowledge
-- Read `.github/agent-context.md` for previously discovered patterns
+- Read `docs/agent-context.md` for previously discovered patterns
 - Read `docs/solutions/` index for documented learnings
 
 ## Output Format

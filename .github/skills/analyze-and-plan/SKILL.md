@@ -27,7 +27,7 @@ Read the issue file or user description. Identify:
 ### 2. Analyze the Codebase
 
 - Search for related files and patterns
-- Read `.github/agent-context.md` for accumulated knowledge
+- Read `docs/agent-context.md` for accumulated knowledge
 - Check `docs/solutions/` for relevant past solutions
 - Identify the minimal set of files that need to change
 

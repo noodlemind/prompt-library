@@ -27,7 +27,7 @@ Plan files live in `docs/plans/`. Activity logs in `## Activity` sections provid
 
 ### Knowledge Compounding
 
-- **Accumulated knowledge**: `.github/agent-context.md` — read at session start for codebase patterns.
+- **Accumulated knowledge**: `docs/agent-context.md` — read at session start for codebase patterns.
 - **Documented solutions**: `docs/solutions/` — categorized learnings from solved problems. Check before starting similar work.
 
 ## Directory Structure
@@ -38,10 +38,10 @@ Plan files live in `docs/plans/`. Activity logs in `## Activity` sections provid
   skills/              — 10 skill directories with SKILL.md
   instructions/        — scoped instructions (Rails, TypeScript, Python)
   copilot-instructions.md — shared context for all agents
-  agent-context.md     — accumulated codebase knowledge
 .vscode/
   mcp.json             — MCP server configuration (Context7)
 docs/
+  agent-context.md     — accumulated codebase knowledge
   plans/               — issue and plan files with state tracking
   solutions/           — documented learnings from solved problems
 code-prompts/          — issue-based development workflow (separate system)
@@ -101,7 +101,7 @@ Separate issue-based development workflow with:
 - **Progressive disclosure**: Skills load in 3 levels (frontmatter → body → references)
 - **Native-first**: VS Code discovers agents and skills from files, no extension needed
 - **Cross-tool**: AGENTS.md provides compatibility with Codex, Cursor, Gemini
-- **Knowledge compounding**: `docs/solutions/` and `agent-context.md` make the system smarter over time
+- **Knowledge compounding**: `docs/solutions/` and `docs/agent-context.md` make the system smarter over time
 
 ## Conventions
 
