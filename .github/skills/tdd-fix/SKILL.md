@@ -1,9 +1,6 @@
 ---
 name: tdd-fix
-description: >
-  Fix a bug or failing test using strict TDD methodology — reproduce with a failing
-  test, implement the minimal fix, then clean up. Use when the user has a bug to fix,
-  a failing test to resolve, or wants test-driven development guidance.
+description: "Fix a bug or failing test using strict TDD methodology \u2014 reproduce with a failing test, implement the minimal fix, then clean up. Use when the user has a bug to fix, a failing test to resolve, or wants test-driven development guidance."
 argument-hint: "[bug description, failing test, or error message]"
 ---
 

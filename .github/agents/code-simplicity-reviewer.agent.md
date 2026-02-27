@@ -1,9 +1,5 @@
 ---
-description: >
-  Identify over-engineering, unnecessary complexity, and simplification opportunities
-  in code changes. Use when checking for YAGNI violations, premature abstractions,
-  or when code feels more complex than the problem requires.
-tools: ["*"]
+description: Identify over-engineering, unnecessary complexity, and simplification opportunities in code changes. Use when checking for YAGNI violations, premature abstractions, or when code feels more complex than the problem requires.
 ---
 
 ## Mission

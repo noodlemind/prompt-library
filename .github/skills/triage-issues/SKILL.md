@@ -1,9 +1,6 @@
 ---
 name: triage-issues
-description: >
-  Analyze and prioritize a set of issues, bugs, or tasks. Use when the user has
-  multiple issues to sort through, needs to decide what to work on next, or wants
-  to assess the overall state of their backlog.
+description: Analyze and prioritize a set of issues, bugs, or tasks. Use when the user has multiple issues to sort through, needs to decide what to work on next, or wants to assess the overall state of their backlog.
 argument-hint: "[path to issues directory or GitHub issues URL]"
 ---
 

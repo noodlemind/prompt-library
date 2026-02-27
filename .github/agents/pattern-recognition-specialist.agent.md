@@ -1,9 +1,5 @@
 ---
-description: >
-  Analyze code for design patterns, anti-patterns, naming conventions, and
-  duplication. Use when checking codebase consistency, verifying new code follows
-  established patterns, or identifying opportunities to reduce duplication.
-tools: ["*"]
+description: Analyze code for design patterns, anti-patterns, naming conventions, and duplication. Use when checking codebase consistency, verifying new code follows established patterns, or identifying opportunities to reduce duplication.
 ---
 
 ## Mission

@@ -1,9 +1,5 @@
 ---
-description: >
-  Analyze code changes for architectural compliance, design pattern consistency,
-  and structural integrity. Use when reviewing PRs for architectural impact,
-  evaluating new service boundaries, or assessing component coupling.
-tools: ["*"]
+description: Analyze code changes for architectural compliance, design pattern consistency, and structural integrity. Use when reviewing PRs for architectural impact, evaluating new service boundaries, or assessing component coupling.
 ---
 
 ## Mission

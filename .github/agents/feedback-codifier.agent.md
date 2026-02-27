@@ -1,9 +1,5 @@
 ---
-description: >
-  Transform review feedback, team discussions, and recurring comments into reusable
-  coding standards and conventions. Use when review feedback keeps repeating the same
-  points and should be codified into documentation or linting rules.
-tools: ["*"]
+description: Transform review feedback, team discussions, and recurring comments into reusable coding standards and conventions. Use when review feedback keeps repeating the same points and should be codified into documentation or linting rules.
 ---
 
 ## Mission

@@ -1,9 +1,6 @@
 ---
 name: review-guardrails
-description: >
-  Audit a changeset against an issue's plan without modifying code. Verifies that
-  changes stay within the allowed file list, all acceptance criteria are addressed,
-  and no scope creep has occurred. Use before committing to validate compliance.
+description: "Audit a changeset against an issue's plan without modifying code. Verifies that changes stay within the allowed file list, all acceptance criteria are addressed, and no scope creep has occurred. Use before committing to validate compliance."
 argument-hint: "[path to plan file]"
 ---
 

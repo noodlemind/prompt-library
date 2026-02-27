@@ -1,9 +1,5 @@
 ---
-description: >
-  Review Python code for Pythonic patterns, type safety, PEP compliance, and
-  maintainability. Use when reviewing Python PRs, Django/Flask/FastAPI services,
-  data pipelines, or any Python code.
-tools: ["*"]
+description: Review Python code for Pythonic patterns, type safety, PEP compliance, and maintainability. Use when reviewing Python PRs, Django/Flask/FastAPI services, data pipelines, or any Python code.
 ---
 
 ## Mission

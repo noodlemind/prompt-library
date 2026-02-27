@@ -1,9 +1,5 @@
 ---
-description: >
-  Review Rails code from DHH's 37signals philosophy — clarity over cleverness,
-  fat models, Hotwire-first, REST purity. Use when reviewing Rails applications
-  or when you want opinionated feedback on Rails conventions and patterns.
-tools: ["*"]
+description: "Review Rails code from DHH's 37signals philosophy \u2014 clarity over cleverness, fat models, Hotwire-first, REST purity. Use when reviewing Rails applications or when you want opinionated feedback on Rails conventions and patterns."
 ---
 
 ## Mission

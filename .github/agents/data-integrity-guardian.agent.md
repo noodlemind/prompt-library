@@ -1,9 +1,5 @@
 ---
-description: >
-  Review database migrations, data models, and persistent data operations for safety
-  and correctness. Use when PRs include schema changes, data backfills, enum conversions,
-  column renames, or any operation that touches production data.
-tools: ["*"]
+description: Review database migrations, data models, and persistent data operations for safety and correctness. Use when PRs include schema changes, data backfills, enum conversions, column renames, or any operation that touches production data.
 ---
 
 ## Mission

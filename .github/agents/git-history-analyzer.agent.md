@@ -1,10 +1,5 @@
 ---
-description: >
-  Analyze git history to trace code evolution, understand why patterns exist,
-  and identify contributors and change frequency. Use when investigating why code
-  is written a certain way, finding when a bug was introduced, or understanding
-  the history behind a decision.
-tools: ["*"]
+description: Analyze git history to trace code evolution, understand why patterns exist, and identify contributors and change frequency. Use when investigating why code is written a certain way, finding when a bug was introduced, or understanding the history behind a decision.
 ---
 
 ## Mission

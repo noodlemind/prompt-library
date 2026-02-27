@@ -1,9 +1,5 @@
 ---
-description: >
-  Analyze code for performance bottlenecks, algorithmic complexity, database query
-  efficiency, memory usage, and scalability concerns. Use when reviewing code that
-  handles data at scale, touches hot paths, or when performance regressions are suspected.
-tools: ["*"]
+description: Analyze code for performance bottlenecks, algorithmic complexity, database query efficiency, memory usage, and scalability concerns. Use when reviewing code that handles data at scale, touches hot paths, or when performance regressions are suspected.
 ---
 
 ## Mission

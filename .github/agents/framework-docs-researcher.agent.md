@@ -1,9 +1,5 @@
 ---
-description: >
-  Research framework documentation, APIs, and version-specific capabilities.
-  Use when you need to understand a framework's API surface, find the right method
-  or configuration option, or verify behavior against official docs.
-tools: ["*"]
+description: "Research framework documentation, APIs, and version-specific capabilities. Use when you need to understand a framework's API surface, find the right method or configuration option, or verify behavior against official docs."
 ---
 
 ## Mission

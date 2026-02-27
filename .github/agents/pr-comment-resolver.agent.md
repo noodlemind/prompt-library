@@ -1,9 +1,5 @@
 ---
-description: >
-  Address PR review comments by implementing requested changes and reporting
-  resolutions. Use when code review feedback needs to be resolved with actual
-  code changes, not just discussion.
-tools: ["*"]
+description: Address PR review comments by implementing requested changes and reporting resolutions. Use when code review feedback needs to be resolved with actual code changes, not just discussion.
 ---
 
 ## Mission

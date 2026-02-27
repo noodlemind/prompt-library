@@ -1,9 +1,5 @@
 ---
-description: >
-  Review Ruby on Rails code for conventions, correctness, and maintainability.
-  Use when reviewing Rails PRs, models, controllers, migrations, or any Ruby code
-  in a Rails application.
-tools: ["*"]
+description: Review Ruby on Rails code for conventions, correctness, and maintainability. Use when reviewing Rails PRs, models, controllers, migrations, or any Ruby code in a Rails application.
 ---
 
 ## Mission

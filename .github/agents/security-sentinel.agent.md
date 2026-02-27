@@ -1,9 +1,5 @@
 ---
-description: >
-  Perform security audits and vulnerability assessments on code changes.
-  Use when reviewing code for security risks, checking authentication flows,
-  scanning for hardcoded secrets, or validating OWASP compliance.
-tools: ["*"]
+description: Perform security audits and vulnerability assessments on code changes. Use when reviewing code for security risks, checking authentication flows, scanning for hardcoded secrets, or validating OWASP compliance.
 ---
 
 ## Mission

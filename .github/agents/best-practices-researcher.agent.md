@@ -1,9 +1,5 @@
 ---
-description: >
-  Research and synthesize industry best practices, documentation, and implementation
-  examples for any technology or framework. Use when you need external best practices,
-  community conventions, or guidance before implementing a feature.
-tools: ["*"]
+description: Research and synthesize industry best practices, documentation, and implementation examples for any technology or framework. Use when you need external best practices, community conventions, or guidance before implementing a feature.
 ---
 
 ## Mission
