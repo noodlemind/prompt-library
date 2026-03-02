@@ -10,8 +10,8 @@ This is a prompt library containing specialized AI agent systems for software de
 
 The system is built on three primitives:
 
-- **Agents** (`.github/agents/*.agent.md`): Stateless domain experts that apply judgment and return structured findings. 17 agents covering security, architecture, performance, code quality, and language-specific review.
-- **Skills** (`.github/skills/*/SKILL.md`): User-invocable workflows that compose agents and tools. The connected pipeline `/capture-issue` → `/plan-issue` → `/work-on-task` → `/code-review` → `/compound-learnings` is the core engineering loop.
+- **Agents** (`.github/agents/*.agent.md`): Stateless domain experts that apply judgment and return structured findings. 19 agents covering security, architecture, performance, code quality, language-specific review, spec analysis, and bug reproduction. Agents are classified as reviewers (read-only), researchers, or actors (can modify code).
+- **Skills** (`.github/skills/*/SKILL.md`): User-invocable workflows that compose agents and tools. The connected pipeline `/brainstorming` (optional) → `/capture-issue` → `/plan-issue` → `/deepen-plan` (optional) → `/work-on-task` → `/code-review` → `/compound-learnings` is the core engineering loop.
 - **Instructions** (`.github/instructions/*.instructions.md`): Scoped context that activates based on file patterns.
 
 ## Connected Pipeline
@@ -19,8 +19,8 @@ The system is built on three primitives:
 Issues flow through a state machine:
 
 ```
-/capture-issue → /plan-issue → /work-on-task → /code-review → /compound-learnings
-     open      →   planned   →  in-progress  →    review    →      done
+/brainstorming (optional) → /capture-issue → /plan-issue → /deepen-plan (optional) → /work-on-task → /code-review → /compound-learnings
+                                  open      →   planned   →                          in-progress   →    review    →      done
 ```
 
 Plan files in `docs/plans/` track state via YAML frontmatter (`status`, `plan_lock`, `phase`). Activity logs in `## Activity` sections enable session continuity.
@@ -29,8 +29,8 @@ Plan files in `docs/plans/` track state via YAML frontmatter (`status`, `plan_lo
 
 ```
 .github/
-  agents/          — 17 agent definitions (flat, no subdirectories)
-  skills/          — 10 skill directories with SKILL.md
+  agents/          — 19 agent definitions (flat, no subdirectories)
+  skills/          — 14 skill directories with SKILL.md
   instructions/    — scoped instructions (Rails, TypeScript, Python)
   copilot-instructions.md — shared context for all agents
   agent-context.md — accumulated codebase knowledge
@@ -39,6 +39,7 @@ Plan files in `docs/plans/` track state via YAML frontmatter (`status`, `plan_lo
 docs/
   plans/           — issue and plan files with state tracking
   solutions/       — documented learnings from solved problems
+  brainstorms/     — brainstorm documents from /brainstorming skill
 code-prompts/      — issue-based development workflow
 ```
 

@@ -8,8 +8,8 @@ This is a multi-project prompt library containing AI agent systems for software 
 
 ## Architecture: Three Primitives
 
-- **Agents** (`.github/agents/*.agent.md`): Stateless domain experts. They receive context, apply judgment, and return structured findings. They don't know about workflows or other agents.
-- **Skills** (`.github/skills/*/SKILL.md`): User-invocable workflows that compose agents and tools. The connected pipeline — `/capture-issue` → `/plan-issue` → `/work-on-task` → `/code-review` → `/compound-learnings` — is the core engineering loop.
+- **Agents** (`.github/agents/*.agent.md`): 19 stateless domain experts. They receive context, apply judgment, and return structured findings. Classified as reviewers (read-only, tools: Read/Grep/Glob), researchers (info gathering), or actors (can modify code). All review agents include prompt injection guardrails.
+- **Skills** (`.github/skills/*/SKILL.md`): 14 user-invocable workflows that compose agents and tools. The connected pipeline — `/brainstorming` (optional) → `/capture-issue` → `/plan-issue` → `/deepen-plan` (optional) → `/work-on-task` → `/code-review` → `/compound-learnings` — is the core engineering loop.
 - **Instructions** (`.github/instructions/*.instructions.md`): Scoped context that loads based on file patterns. Rails conventions load for `.rb` files, TypeScript patterns for `.ts` files.
 
 ## Connected Pipeline
@@ -17,7 +17,7 @@ This is a multi-project prompt library containing AI agent systems for software 
 Issues flow through a state machine tracked in YAML frontmatter:
 
 ```
-open → planned → in-progress → review → done
+brainstorming (optional) → open → planned → deepen (optional) → in-progress → review → done
 ```
 
 Key fields: `status`, `plan_lock` (must be `true` before coding), `phase` (current execution phase).
