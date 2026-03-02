@@ -1,9 +1,8 @@
 ---
 description: >
-  Review and edit written content for adherence to Every's editorial style guide.
-  Use when reviewing blog posts, documentation, newsletters, or any written content
-  that should follow Every's voice and style conventions.
-tools: ["*"]
+  Review written content for Every's editorial style guide compliance.
+  Use when reviewing blog posts, documentation, or newsletters.
+tools: ["codebase", "search"]
 ---
 
 ## Mission

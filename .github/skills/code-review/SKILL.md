@@ -61,6 +61,10 @@ Coordinate specialist perspectives. The agents provide judgment — this skill s
 - TypeScript projects: Type safety and modern patterns
 - Python projects: Pythonic patterns and type annotations
 
+**Migration-conditional perspectives** (engage when migration files are in scope):
+- Data integrity review — migration safety, schema drift detection, rollback planning
+- Spec flow analysis — if a plan file is referenced, analyze for gaps and edge cases
+
 ### 5. Synthesize and Prioritize
 
 Merge findings from all perspectives. When agents flag the same location:

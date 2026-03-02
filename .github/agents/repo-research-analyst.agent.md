@@ -1,9 +1,8 @@
 ---
 description: >
-  Analyze repository structure, conventions, documentation, and implementation
-  patterns. Use when onboarding to a new codebase, understanding project conventions,
-  or gathering context before planning a feature.
-tools: ["*"]
+  Analyze repository structure, conventions, and implementation patterns.
+  Use when onboarding to a codebase or gathering context before planning.
+tools: ["codebase", "search", "fetch"]
 ---
 
 ## Mission
