@@ -36,11 +36,11 @@ Plan files in `docs/plans/` track state via YAML frontmatter (`status`, `plan_lo
   agent-context.md — accumulated codebase knowledge
 .vscode/
   mcp.json         — MCP server configuration
+archive/           — archived legacy systems and reference docs
 docs/
   plans/           — issue and plan files with state tracking
   solutions/       — documented learnings from solved problems
   brainstorms/     — brainstorm documents from /brainstorming skill
-code-prompts/      — issue-based development workflow
 ```
 
 ## Conventions

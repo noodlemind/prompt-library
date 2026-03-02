@@ -41,13 +41,11 @@ Plan files live in `docs/plans/`. Activity logs in `## Activity` sections provid
   agent-context.md     — accumulated codebase knowledge
 .vscode/
   mcp.json             — MCP server configuration (Context7)
+archive/               — archived legacy systems and reference docs
 docs/
   plans/               — issue and plan files with state tracking
   solutions/           — documented learnings from solved problems
   brainstorms/         — brainstorm documents from /brainstorming skill
-code-prompts/          — issue-based development workflow (separate system)
-compounding-engineering/ — Claude Code agent system (minimal)
-legacy/                — archived VSIX extension (reference only)
 AGENTS.md              — cross-tool open standard (Codex, Cursor, Gemini)
 CLAUDE.md              — this file (Claude Code instructions)
 ```
@@ -100,14 +98,6 @@ CLAUDE.md              — this file (Claude Code instructions)
 12. **/review-guardrails**: Read-only plan compliance audit
 13. **/tdd-fix**: Test-driven bug fixing
 14. **/triage-issues**: Analyze and prioritize backlog
-
-## Code Prompts System (code-prompts/)
-
-Separate issue-based development workflow with:
-- Local issues in `local_issues/YYYY/MM/`
-- Plan lock and phase-based execution
-- Definition of Ready / Definition of Done gates
-- Allowlist-based scope control
 
 ## Key Design Decisions
 

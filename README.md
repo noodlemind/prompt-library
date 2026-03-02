@@ -91,9 +91,9 @@ Agents check these before starting work to avoid repeating past mistakes.
   copilot-instructions.md
   agent-context.md
 .vscode/mcp.json       MCP server config
+archive/               Archived legacy systems and reference docs
 docs/plans/            Issue and plan files
 docs/solutions/        Documented learnings
-code-prompts/          Issue-based development workflow
 AGENTS.md              Cross-tool standard
 CLAUDE.md              Claude Code instructions
 ```
