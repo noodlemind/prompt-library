@@ -27,3 +27,6 @@ This repository is a prompt library containing AI agent systems:
 ## Technology Notes
 
 _This section grows as agents discover patterns. Add notes here when you learn something about the codebase that future sessions should know._
+
+### Prompt-to-Coordinator Wiring
+Prompt wrappers route `/plan-issue` → `plan-coordinator` and `/code-review` → `code-review-coordinator` via the `agent:` field. The `agent` tool must be in the prompt's tools list since prompt tools override agent tools in VS Code 1.108.

@@ -35,8 +35,8 @@ Read the issue file. Check:
 
 ### 2. Research
 
-**Orchestration:** If the `plan-coordinator` agent is available (VS Code 1.108+ with
-`chat.customAgentInSubagent.enabled`), use it to delegate research to isolated subagents.
+**Orchestration:** If the `agent` tool is available for subagent delegation, invoke
+research agents as isolated subagents (each with full feature context in the task prompt).
 Otherwise, run research tasks sequentially within this session.
 
 Run these research tasks:
