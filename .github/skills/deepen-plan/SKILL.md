@@ -32,27 +32,23 @@ Scan `.github/agents/` for agents that could provide expert perspective on the p
 - Performance agents for scalability sections
 - Language-specific reviewers for implementation sections
 
-### Step 3: Launch Research Agents in Parallel
+### Step 3: Launch Research Agents
 
-Spawn up to 5 agents simultaneously (cap for cost control):
+**Orchestration:** If the `agent` tool is available for subagent delegation, invoke
+research agents as isolated subagents (each with full plan context in the task prompt).
+Otherwise, run research tasks sequentially within this session.
 
-For each relevant section, spawn a Task agent:
-```
-Task: "Review and enhance this section of the plan with best practices,
-potential pitfalls, and implementation recommendations.
+**When subagents are available:** Spawn up to 5 agents simultaneously (cap for cost control).
+For each relevant section, invoke a research agent as a subagent with the full section content
+and project context in the task prompt.
 
-PLAN SECTION:
-[paste section content]
+**When subagents are not available:** Research each section sequentially — read relevant
+codebase files, check best practices, and consult framework documentation inline.
 
-PROJECT CONTEXT:
-[tech stack, framework, conventions]
-
-Return: enhanced section content with specific, actionable additions."
-```
-
-Also consider:
+Agents to consider per section:
 - `best-practices-researcher` for industry standards
 - `framework-docs-researcher` for framework-specific guidance
+- `repo-research-analyst` for codebase patterns
 - Context7 MCP for up-to-date documentation
 - WebSearch for recent developments
 
