@@ -1,8 +1,6 @@
 ---
 name: review-guardrails
-description: >
-  Read-only plan compliance audit. Verifies changes stay within allowed file list,
-  acceptance criteria are addressed, and no scope creep has occurred.
+description: Read-only plan compliance audit verifying changes stay within allowed files, acceptance criteria, and scope boundaries.
 argument-hint: "[path to plan file]"
 agent: agent
 tools:

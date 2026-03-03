@@ -1,9 +1,5 @@
 ---
-description: >
-  Coordinate issue planning with focused research. Delegates to research agents
-  for codebase analysis, best practices, and documentation lookup, then
-  synthesizes findings into a structured plan. Use when planning features, bugs,
-  or refactors that benefit from multi-perspective research.
+description: Coordinate issue planning by delegating to research agents and synthesizing structured plans.
 tools: ["agent", "codebase", "search", "fetch", "editFiles"]
 model: "Claude Sonnet 4.5"
 handoffs:

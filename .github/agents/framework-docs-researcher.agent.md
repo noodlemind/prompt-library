@@ -1,7 +1,5 @@
 ---
-description: >
-  Research framework documentation, APIs, and version-specific capabilities.
-  Use when you need to find the right API method or verify behavior against docs.
+description: Research framework documentation, APIs, and version-specific capabilities.
 tools: ["codebase", "search", "fetch"]
 ---
 

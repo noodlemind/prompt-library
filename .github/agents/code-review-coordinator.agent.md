@@ -1,8 +1,5 @@
 ---
-description: >
-  Coordinate multi-specialist code reviews. Delegates to domain expert agents
-  sequentially — each runs in isolated context for focused analysis.
-  Use when reviewing PRs, branches, or specific files across multiple dimensions.
+description: Coordinate multi-specialist code reviews by delegating to domain expert agents.
 tools: ["agent", "codebase", "search", "changes"]
 model: "Claude Sonnet 4.5"
 handoffs:

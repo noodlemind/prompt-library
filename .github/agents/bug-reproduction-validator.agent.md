@@ -1,7 +1,5 @@
 ---
-description: >
-  Systematically reproduce and validate bug reports to confirm reported behavior.
-  Use when a bug report needs verification before investing in a fix.
+description: Systematically reproduce and validate bug reports to confirm reported behavior.
 tools: ["*"]
 ---
 

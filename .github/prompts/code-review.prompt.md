@@ -1,8 +1,6 @@
 ---
 name: code-review
-description: >
-  Multi-agent code review covering security, performance, architecture, and code quality.
-  Use when reviewing pull requests, uncommitted changes, or specific files.
+description: Multi-agent code review covering security, performance, architecture, and code quality for PRs or code changes.
 agent: agent
 tools:
   - search

@@ -1,7 +1,5 @@
 ---
-description: >
-  Research industry best practices and implementation examples for any technology.
-  Use when you need external guidance or community conventions before implementing.
+description: Research industry best practices and implementation examples for any technology.
 tools: ["codebase", "search", "fetch"]
 ---
 

@@ -1,7 +1,5 @@
 ---
-description: >
-  Analyze git history to trace code evolution and understand why patterns exist.
-  Use when investigating code decisions or finding when a bug was introduced.
+description: Analyze git history to trace code evolution and understand why patterns exist.
 tools: ["codebase", "search", "terminalLastCommand"]
 ---
 

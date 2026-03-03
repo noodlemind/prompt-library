@@ -1,8 +1,6 @@
 ---
 name: tdd-fix
-description: >
-  Fix a bug or failing test using strict TDD — reproduce with a failing test,
-  implement the minimal fix, then clean up.
+description: Fix a bug using strict TDD — reproduce with a failing test, implement the minimal fix, then clean up.
 argument-hint: "[bug description, failing test, or error message]"
 agent: agent
 tools:

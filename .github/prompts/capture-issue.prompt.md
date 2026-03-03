@@ -1,8 +1,6 @@
 ---
 name: capture-issue
-description: >
-  Create a structured issue file from a bug report, feature request, or task description.
-  Produces a file under docs/plans/.
+description: Create a structured issue file in docs/plans/ from a bug report, feature request, or task description.
 argument-hint: "[issue description or URL]"
 agent: agent
 tools:

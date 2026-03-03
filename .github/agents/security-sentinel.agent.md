@@ -1,7 +1,5 @@
 ---
-description: >
-  Perform security audits and vulnerability assessments on code changes.
-  Use when reviewing for security risks, auth flows, secrets, or OWASP compliance.
+description: Perform security audits and vulnerability assessments on code changes.
 tools: ["codebase", "search"]
 ---
 

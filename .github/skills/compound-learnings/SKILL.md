@@ -1,9 +1,6 @@
 ---
 name: compound-learnings
-description: >
-  Document a recently solved problem as a reusable solution in docs/solutions/.
-  Use after completing an issue to capture the problem, root cause, solution, and
-  prevention strategy so future agents and developers can learn from it.
+description: Document a recently solved problem as a reusable solution in docs/solutions/. Use after completing an issue to capture the problem, root cause, and prevention strategy.
 argument-hint: "[path to completed issue or description of solved problem]"
 ---
 

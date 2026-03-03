@@ -1,7 +1,5 @@
 ---
-description: >
-  Transform recurring review feedback into reusable coding standards.
-  Use when the same comments keep appearing and should be codified.
+description: Transform recurring review feedback into reusable coding standards and conventions.
 tools: ["*"]
 ---
 

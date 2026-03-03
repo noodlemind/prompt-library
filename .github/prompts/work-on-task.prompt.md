@@ -1,8 +1,6 @@
 ---
 name: work-on-task
-description: >
-  Execute the current phase of a planned issue using TDD with scope control
-  and session logging. Enforces plan_lock and phase boundaries.
+description: Execute the current phase of a planned issue using TDD with scope control, session logging, and plan_lock enforcement.
 argument-hint: "[path to plan file]"
 agent: agent
 tools:

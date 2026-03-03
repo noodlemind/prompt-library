@@ -1,7 +1,5 @@
 ---
-description: >
-  Identify over-engineering and simplification opportunities in code.
-  Use when checking for YAGNI violations or premature abstractions.
+description: Identify over-engineering, YAGNI violations, and simplification opportunities in code.
 tools: ["codebase", "search"]
 ---
 

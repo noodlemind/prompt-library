@@ -1,7 +1,5 @@
 ---
-description: >
-  Review written content for Every's editorial style guide compliance.
-  Use when reviewing blog posts, documentation, or newsletters.
+description: Review written content for Every's editorial style guide compliance.
 tools: ["codebase", "search"]
 ---
 

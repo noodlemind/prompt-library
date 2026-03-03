@@ -1,7 +1,5 @@
 ---
-description: >
-  Analyze code for performance bottlenecks, algorithmic complexity, and scalability.
-  Use when reviewing code that handles data at scale or touches hot paths.
+description: Analyze code for performance bottlenecks, algorithmic complexity, and scalability.
 tools: ["codebase", "search"]
 ---
 

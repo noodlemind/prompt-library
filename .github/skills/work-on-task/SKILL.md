@@ -1,10 +1,6 @@
 ---
 name: work-on-task
-description: >
-  Execute the current phase of a planned issue using TDD with scope control and
-  session logging. Use when the user wants to implement code changes for a planned
-  issue, continue from a previous session, or work through a specific phase.
-  Enforces plan_lock, phase boundaries, and appends activity logs for session continuity.
+description: Execute the current phase of a planned issue using TDD with scope control and session logging. Use when implementing code changes for a planned issue or continuing from a previous session.
 argument-hint: "[path to plan file]"
 disable-model-invocation: true
 ---

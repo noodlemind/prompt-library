@@ -1,8 +1,6 @@
 ---
 name: deepen-plan
-description: >
-  Enhance a plan with parallel research for each section. Use after /plan-issue
-  to add depth, best practices, and implementation details.
+description: Enhance a plan with parallel research per section to add depth, best practices, and implementation details after /plan-issue.
 argument-hint: "[path to plan file]"
 agent: agent
 tools:

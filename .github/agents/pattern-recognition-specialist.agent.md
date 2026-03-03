@@ -1,7 +1,5 @@
 ---
-description: >
-  Analyze code for design patterns, anti-patterns, naming, and duplication.
-  Use when checking codebase consistency or verifying new code follows patterns.
+description: Analyze code for design patterns, anti-patterns, naming consistency, and duplication.
 tools: ["codebase", "search"]
 ---
 

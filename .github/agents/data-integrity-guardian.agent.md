@@ -1,7 +1,5 @@
 ---
-description: >
-  Review migrations, schema changes, and data operations for safety.
-  Use when PRs include schema changes, backfills, or operations touching production data.
+description: Review migrations, schema changes, and data operations for safety and correctness.
 tools: ["codebase", "search"]
 ---
 

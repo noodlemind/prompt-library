@@ -1,8 +1,6 @@
 ---
 name: triage-issues
-description: >
-  Analyze and prioritize a set of issues, bugs, or tasks. Use when deciding
-  what to work on next or assessing the backlog.
+description: Analyze and prioritize a set of issues, bugs, or tasks to decide what to work on next.
 argument-hint: "[path to issues directory or GitHub issues URL]"
 agent: agent
 tools:

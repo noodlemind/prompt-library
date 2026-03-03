@@ -1,8 +1,6 @@
 ---
 name: plan-issue
-description: >
-  Generate a phased implementation plan for an existing issue. Researches the codebase
-  and best practices. Use after /capture-issue.
+description: Generate a phased implementation plan for an existing issue by researching the codebase and best practices.
 argument-hint: "[path to issue file]"
 agent: agent
 tools:

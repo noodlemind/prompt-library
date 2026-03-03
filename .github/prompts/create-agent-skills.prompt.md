@@ -1,8 +1,6 @@
 ---
 name: create-agent-skills
-description: >
-  Expert guidance for creating new agents and skills following project conventions.
-  Use when building new agents, skills, or modifying existing ones.
+description: Expert guidance for creating or modifying agents and skills following project conventions.
 agent: agent
 tools:
   - search

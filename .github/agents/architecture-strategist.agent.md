@@ -1,7 +1,5 @@
 ---
-description: >
-  Analyze code for architectural compliance, design patterns, and structural integrity.
-  Use when reviewing PRs for architectural impact or assessing component coupling.
+description: Analyze code for architectural compliance, design patterns, and structural integrity.
 tools: ["codebase", "search"]
 ---
 

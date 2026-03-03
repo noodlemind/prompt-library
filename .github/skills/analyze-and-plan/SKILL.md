@@ -1,10 +1,6 @@
 ---
 name: analyze-and-plan
-description: >
-  Analyze an issue or requirement and generate a structured implementation plan
-  with phases, task breakdowns, and allowed file paths. Use when an issue exists
-  but needs a detailed technical plan before coding can begin. Lightweight
-  alternative to /plan-issue for quick planning.
+description: Analyze an issue and generate a structured implementation plan with phases and task breakdowns. Use as a lightweight alternative to /plan-issue for quick planning.
 argument-hint: "[issue description or file path]"
 ---
 

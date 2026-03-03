@@ -1,10 +1,6 @@
 ---
 name: code-review
-description: >
-  Perform comprehensive multi-agent code reviews covering security, performance,
-  architecture, and code quality. Use when reviewing pull requests, uncommitted
-  changes, specific files, or comparing branches. Coordinates specialized agents
-  for deep analysis across multiple dimensions.
+description: Perform comprehensive multi-agent code reviews covering security, performance, architecture, and code quality. Use when reviewing PRs, uncommitted changes, or comparing branches.
 ---
 
 # Code Review

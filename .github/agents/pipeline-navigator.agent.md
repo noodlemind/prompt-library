@@ -1,8 +1,5 @@
 ---
-description: >
-  Guide developers through the engineering pipeline. Reads plan file status and
-  provides handoff buttons to transition between steps. Use between pipeline stages
-  or when unsure which step comes next.
+description: Guide developers through the engineering pipeline with status-aware step transitions.
 tools: ["codebase", "search"]
 handoffs:
   - label: "Plan Issue"

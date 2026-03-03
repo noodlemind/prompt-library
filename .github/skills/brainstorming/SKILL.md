@@ -1,8 +1,6 @@
 ---
 name: brainstorming
-description: >
-  Explore requirements and approaches through collaborative dialogue before planning.
-  Use when a feature request has multiple valid interpretations or approaches.
+description: Explore requirements and approaches through collaborative dialogue before planning. Use when a feature request has multiple valid interpretations or approaches.
 disable-model-invocation: true
 ---
 

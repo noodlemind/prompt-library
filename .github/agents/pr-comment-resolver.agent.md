@@ -1,7 +1,5 @@
 ---
-description: >
-  Address PR review comments by implementing requested changes.
-  Use when code review feedback needs to be resolved with code changes.
+description: Address PR review comments by implementing the requested code changes.
 tools: ["*"]
 ---
 

@@ -1,9 +1,6 @@
 ---
 name: plan-issue
-description: >
-  Generate a phased implementation plan for an existing issue. Researches the codebase,
-  gathers best practices, and produces a detailed plan with phases, allowed paths,
-  and acceptance criteria. Use after /capture-issue to plan before coding.
+description: Generate a phased implementation plan for an existing issue with research, allowed paths, and acceptance criteria. Use after /capture-issue to plan before coding.
 argument-hint: "[path to issue file]"
 ---
 

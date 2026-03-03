@@ -1,7 +1,5 @@
 ---
-description: >
-  Analyze specifications for flow completeness, edge cases, and gap identification.
-  Use when reviewing specs, plans, or feature descriptions before implementation.
+description: Analyze specifications for flow completeness, edge cases, and gap identification.
 tools: ["codebase", "search"]
 ---
 

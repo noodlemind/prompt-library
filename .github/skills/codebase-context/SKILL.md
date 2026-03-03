@@ -1,9 +1,6 @@
 ---
 name: codebase-context
-description: >
-  Gather and summarize workspace context including project structure, technology
-  stack, conventions, and key file locations. Use when starting work on an
-  unfamiliar codebase or when agents need project context to make informed decisions.
+description: Gather and summarize workspace context including project structure, technology stack, and conventions. Use when starting on an unfamiliar codebase or when agents need project context.
 user-invokable: false
 ---
 

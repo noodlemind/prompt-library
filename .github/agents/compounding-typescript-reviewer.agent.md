@@ -1,7 +1,5 @@
 ---
-description: >
-  Review TypeScript code for type safety, modern patterns, and maintainability.
-  Use when reviewing TypeScript PRs, React components, or Node.js services.
+description: Review TypeScript code for type safety, modern patterns, and maintainability.
 tools: ["codebase", "search"]
 ---
 

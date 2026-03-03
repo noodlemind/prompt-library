@@ -1,8 +1,6 @@
 ---
 name: document-review
-description: >
-  Structured self-review of brainstorm or plan documents. Use when a document
-  needs refinement before proceeding to the next workflow step.
+description: Structured self-review of brainstorm or plan documents. Use when a document needs refinement before proceeding to the next workflow step.
 disable-model-invocation: true
 ---
 

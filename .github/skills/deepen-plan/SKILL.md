@@ -1,8 +1,6 @@
 ---
 name: deepen-plan
-description: >
-  Enhance a plan with parallel research agents for each section. Use after
-  /plan-issue to add depth, best practices, and implementation details.
+description: Enhance a plan with parallel research agents for each section. Use after /plan-issue to add depth, best practices, and implementation details.
 disable-model-invocation: true
 ---
 
