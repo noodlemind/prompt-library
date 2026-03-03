@@ -1,6 +1,7 @@
 ---
 description: Review written content for Every's editorial style guide compliance.
 tools: ["codebase", "search"]
+model: "Claude Sonnet 4.6"
 ---
 
 ## Mission

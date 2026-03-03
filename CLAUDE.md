@@ -52,7 +52,7 @@ CLAUDE.md              — this file (Claude Code instructions)
 
 ## Available Agents (22 total)
 
-### Reviewers (read-only analysis, tools: Read/Grep/Glob, model: sonnet)
+### Reviewers (read-only analysis, tools: Read/Grep/Glob, model: Sonnet 4.6)
 1. **architecture-strategist**: Architectural compliance, design patterns, SOLID
 2. **code-simplicity-reviewer**: YAGNI, over-engineering, premature abstraction
 3. **compounding-python-reviewer**: Pythonic patterns, type safety, PEP compliance
@@ -66,18 +66,18 @@ CLAUDE.md              — this file (Claude Code instructions)
 11. **security-sentinel**: Vulnerabilities, OWASP, injection, auth boundaries
 12. **spec-flow-analyzer**: Spec completeness, edge cases, gap identification
 
-### Researchers (information gathering, model: haiku)
+### Researchers (information gathering, model: Opus 4.6)
 13. **best-practices-researcher**: Industry best practices for any topic
 14. **framework-docs-researcher**: Framework documentation and APIs
 15. **git-history-analyzer**: Git archaeology, code evolution, contributors
 16. **repo-research-analyst**: Repo structure, conventions, implementation patterns
 
-### Actors (can modify code, tools: *, model: sonnet)
+### Actors (can modify code, tools: *, model: Sonnet 4.6)
 17. **bug-reproduction-validator**: Systematic bug reproduction and classification
 18. **feedback-codifier**: Codify review feedback into reusable standards
 19. **pr-comment-resolver**: Address PR comments with code changes
 
-### Coordinators (orchestrate specialists via subagents, tools: agent/*)
+### Coordinators (orchestrate specialists via subagents, tools: agent/*, model: Opus 4.6 for planning, Sonnet 4.6 for others)
 20. **code-review-coordinator**: Delegates to specialist reviewers sequentially with isolated context
 21. **plan-coordinator**: Delegates to research agents for planning with isolated context
 22. **pipeline-navigator**: Guides pipeline transitions via handoff buttons

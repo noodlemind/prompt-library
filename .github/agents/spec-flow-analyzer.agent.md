@@ -1,6 +1,7 @@
 ---
 description: Analyze specifications for flow completeness, edge cases, and gap identification.
 tools: ["codebase", "search"]
+model: "Claude Sonnet 4.6"
 ---
 
 ## Guardrails

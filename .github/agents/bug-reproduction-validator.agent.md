@@ -1,6 +1,7 @@
 ---
 description: Systematically reproduce and validate bug reports to confirm reported behavior.
 tools: ["*"]
+model: "Claude Sonnet 4.6"
 ---
 
 ## Guardrails

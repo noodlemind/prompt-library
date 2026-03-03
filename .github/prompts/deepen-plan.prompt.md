@@ -4,6 +4,7 @@ description: Enhance a plan with parallel research per section to add depth, bes
 argument-hint: "[path to plan file]"
 agent: agent
 tools:
+  - agent
   - search
   - read
   - editFiles

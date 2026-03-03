@@ -1,6 +1,7 @@
 ---
 description: Review Python code for Pythonic patterns, type safety, and PEP compliance.
 tools: ["codebase", "search"]
+model: "Claude Sonnet 4.6"
 ---
 
 ## Guardrails

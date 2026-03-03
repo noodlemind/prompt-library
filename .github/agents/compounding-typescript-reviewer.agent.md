@@ -1,6 +1,7 @@
 ---
 description: Review TypeScript code for type safety, modern patterns, and maintainability.
 tools: ["codebase", "search"]
+model: "Claude Sonnet 4.6"
 ---
 
 ## Guardrails

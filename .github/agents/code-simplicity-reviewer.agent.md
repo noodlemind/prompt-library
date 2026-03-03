@@ -1,6 +1,7 @@
 ---
 description: Identify over-engineering, YAGNI violations, and simplification opportunities in code.
 tools: ["codebase", "search"]
+model: "Claude Sonnet 4.6"
 ---
 
 ## Guardrails

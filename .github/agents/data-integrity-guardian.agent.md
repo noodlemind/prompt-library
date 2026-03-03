@@ -1,6 +1,7 @@
 ---
 description: Review migrations, schema changes, and data operations for safety and correctness.
 tools: ["codebase", "search"]
+model: "Claude Sonnet 4.6"
 ---
 
 ## Guardrails

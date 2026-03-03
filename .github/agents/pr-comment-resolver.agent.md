@@ -1,6 +1,7 @@
 ---
 description: Address PR review comments by implementing the requested code changes.
 tools: ["*"]
+model: "Claude Sonnet 4.6"
 ---
 
 ## Guardrails

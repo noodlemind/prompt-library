@@ -1,6 +1,7 @@
 ---
 description: Review Ruby on Rails code for conventions, correctness, and maintainability.
 tools: ["codebase", "search"]
+model: "Claude Sonnet 4.6"
 ---
 
 ## Guardrails

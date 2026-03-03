@@ -1,6 +1,7 @@
 ---
 description: Perform security audits and vulnerability assessments on code changes.
 tools: ["codebase", "search"]
+model: "Claude Sonnet 4.6"
 ---
 
 ## Guardrails

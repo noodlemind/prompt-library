@@ -1,6 +1,7 @@
 ---
 description: Analyze code for performance bottlenecks, algorithmic complexity, and scalability.
 tools: ["codebase", "search"]
+model: "Claude Sonnet 4.6"
 ---
 
 ## Guardrails

@@ -1,6 +1,7 @@
 ---
 description: Transform recurring review feedback into reusable coding standards and conventions.
 tools: ["*"]
+model: "Claude Sonnet 4.6"
 ---
 
 ## Mission

@@ -1,7 +1,7 @@
 ---
 description: Coordinate issue planning by delegating to research agents and synthesizing structured plans.
 tools: ["agent", "codebase", "search", "fetch", "editFiles"]
-model: "Claude Sonnet 4.5"
+model: "Claude Opus 4.6"
 handoffs:
   - label: "Start Implementation"
     agent: pipeline-navigator
