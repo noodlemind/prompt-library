@@ -36,8 +36,8 @@ Determine what to review:
 - Detect project type (Rails, TypeScript, Python, etc.) from project files
 - Read related code and dependencies touched by the changes
 
-**Orchestration:** If the `code-review-coordinator` agent is available (VS Code 1.108+ with
-`chat.customAgentInSubagent.enabled`), use it for isolated specialist analysis via subagents.
+**Orchestration:** If the `agent` tool is available for subagent delegation, invoke
+specialist agents as isolated subagents (each with full review context in the task prompt).
 Otherwise, apply each specialist perspective sequentially within this session.
 
 ### 3. Detect Project Type

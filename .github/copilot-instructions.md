@@ -58,6 +58,8 @@ Always read existing sections before starting work. Never overwrite prior sectio
 
 Coordinator agents (`code-review-coordinator`, `plan-coordinator`, `pipeline-navigator`) use `tools: ['agent']` to delegate work to specialist agents as subagents. Each subagent runs in isolated context — it does NOT inherit conversation history. Coordinators must include all necessary context in the subagent task prompt. Handoff buttons on coordinators guide pipeline transitions.
 
+The `/plan-issue` and `/code-review` prompt wrappers route to their respective coordinators via the `agent:` field. The `agent` tool is included in prompt tools since prompt tools override agent tools.
+
 ## Agent Context
 
 Read `.github/agent-context.md` for accumulated codebase knowledge discovered by previous agent sessions. This file grows over time as agents learn about the codebase.

@@ -62,6 +62,8 @@ docs/
 
 Coordinator agents (`code-review-coordinator`, `plan-coordinator`, `pipeline-navigator`) use `tools: ['agent']` to delegate work to specialist agents as subagents. Each subagent runs in isolated context. In VS Code 1.108, subagents run sequentially (one at a time). Handoff buttons on coordinator agents guide developers between pipeline steps.
 
+Prompt wrappers for `/plan-issue` and `/code-review` route to their respective coordinators via `agent: plan-coordinator` and `agent: code-review-coordinator`.
+
 For subagent orchestration, enable: `chat.customAgentInSubagent.enabled: true`.
 
 ## Accumulated Knowledge
