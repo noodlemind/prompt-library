@@ -1,6 +1,7 @@
 ---
 description: Analyze code for design patterns, anti-patterns, naming consistency, and duplication.
 tools: ["codebase", "search"]
+model: "Claude Sonnet 4.6"
 ---
 
 ## Guardrails

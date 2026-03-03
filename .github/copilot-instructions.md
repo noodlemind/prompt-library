@@ -8,7 +8,7 @@ This is a multi-project prompt library containing AI agent systems for software 
 
 ## Architecture: Three Primitives
 
-- **Agents** (`.github/agents/*.agent.md`): 22 agents — 19 stateless domain experts plus 3 coordinators that orchestrate specialists via subagents. Classified as reviewers (read-only), researchers (info gathering), actors (can modify code), or coordinators (delegate via `tools: ['agent']`). All review agents include prompt injection guardrails.
+- **Agents** (`.github/agents/*.agent.md`): 22 agents — 19 stateless domain experts plus 3 coordinators that orchestrate specialists via subagents. Classified as reviewers (read-only, Sonnet 4.6), researchers (info gathering, Opus 4.6), actors (can modify code, Sonnet 4.6), or coordinators (delegate via `tools: ['agent']`, Opus 4.6 for planning / Sonnet 4.6 for others). All review agents include prompt injection guardrails.
 - **Skills** (`.github/skills/*/SKILL.md`): 14 user-invocable workflows that compose agents and tools. The connected pipeline — `/brainstorming` (optional) → `/capture-issue` → `/plan-issue` → `/deepen-plan` (optional) → `/work-on-task` → `/code-review` → `/compound-learnings` — is the core engineering loop.
 - **Instructions** (`.github/instructions/*.instructions.md`): Scoped context that loads based on file patterns. Rails conventions load for `.rb` files, TypeScript patterns for `.ts` files.
 

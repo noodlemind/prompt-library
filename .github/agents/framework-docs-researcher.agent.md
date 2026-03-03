@@ -1,6 +1,7 @@
 ---
 description: Research framework documentation, APIs, and version-specific capabilities.
 tools: ["codebase", "search", "fetch"]
+model: "Claude Opus 4.6"
 ---
 
 ## Mission

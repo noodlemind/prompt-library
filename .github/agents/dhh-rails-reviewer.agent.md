@@ -1,6 +1,7 @@
 ---
 description: Review Rails code from DHH's 37signals philosophy -- clarity, fat models, Hotwire-first.
 tools: ["codebase", "search"]
+model: "Claude Sonnet 4.6"
 ---
 
 ## Guardrails

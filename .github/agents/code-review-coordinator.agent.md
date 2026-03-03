@@ -1,7 +1,7 @@
 ---
 description: Coordinate multi-specialist code reviews by delegating to domain expert agents.
 tools: ["agent", "codebase", "search", "changes"]
-model: "Claude Sonnet 4.5"
+model: "Claude Sonnet 4.6"
 handoffs:
   - label: "Document Learnings"
     agent: pipeline-navigator

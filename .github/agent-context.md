@@ -5,7 +5,7 @@ This file contains accumulated knowledge about the codebase, discovered by agent
 ## Project Structure
 
 This repository is a prompt library containing AI agent systems:
-- `.github/agents/` — 19 native VS Code Copilot agents (judgment-criteria style)
+- `.github/agents/` — 22 agents (19 specialists + 3 coordinators, judgment-criteria style)
 - `.github/skills/` — 14 skills forming the connected pipeline and utilities
 - `.github/instructions/` — scoped instructions (Rails, TypeScript, Python)
 - `code-prompts/` — issue-based development workflow with local issues
@@ -16,7 +16,7 @@ This repository is a prompt library containing AI agent systems:
 ## Conventions
 
 - Agents use judgment-criteria design (define outcomes, not procedures)
-- Agents are classified as reviewers (read-only), researchers, or actors (can modify code)
+- Agents are classified as reviewers (read-only, Sonnet 4.6), researchers (Opus 4.6), actors (can modify code, Sonnet 4.6), or coordinators (Opus 4.6 for planning, Sonnet 4.6 for others)
 - All review agents include prompt injection guardrails (Guardrails section before Mission)
 - Review agents have restricted tools: Read, Grep, Glob only
 - Skills follow progressive disclosure (frontmatter → body → references)

@@ -1,6 +1,7 @@
 ---
 description: Analyze repository structure, conventions, and implementation patterns.
 tools: ["codebase", "search", "fetch"]
+model: "Claude Opus 4.6"
 ---
 
 ## Mission

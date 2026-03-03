@@ -1,6 +1,7 @@
 ---
 description: Research industry best practices and implementation examples for any technology.
 tools: ["codebase", "search", "fetch"]
+model: "Claude Opus 4.6"
 ---
 
 ## Mission
