@@ -36,9 +36,13 @@ Read the issue file. Check:
 - If `status: needs-info` → attempt to resolve missing info from codebase context; if still missing, stop.
 - If `plan_lock: true` → inform user: "Plan is already locked."
 
-### 2. Research (Parallel)
+### 2. Research
 
-Run these research tasks in parallel:
+**Orchestration:** If the `plan-coordinator` agent is available (VS Code 1.108+ with
+`chat.customAgentInSubagent.enabled`), use it to delegate research to isolated subagents.
+Otherwise, run research tasks sequentially within this session.
+
+Run these research tasks:
 - **Codebase analysis**: Search for related files, existing patterns, and conventions relevant to this issue. Read `.github/agent-context.md` for accumulated knowledge.
 - **Solution history**: Check `docs/solutions/` for previously solved problems with similar tags or symptoms.
 - **Best practices**: Research industry best practices for the specific technology and pattern involved.

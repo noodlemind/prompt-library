@@ -8,7 +8,7 @@ This is a multi-project prompt library containing AI agent systems for software 
 
 ## Architecture: Three Primitives
 
-- **Agents** (`.github/agents/*.agent.md`): 19 stateless domain experts. They receive context, apply judgment, and return structured findings. Classified as reviewers (read-only, tools: Read/Grep/Glob), researchers (info gathering), or actors (can modify code). All review agents include prompt injection guardrails.
+- **Agents** (`.github/agents/*.agent.md`): 22 agents — 19 stateless domain experts plus 3 coordinators that orchestrate specialists via subagents. Classified as reviewers (read-only), researchers (info gathering), actors (can modify code), or coordinators (delegate via `tools: ['agent']`). All review agents include prompt injection guardrails.
 - **Skills** (`.github/skills/*/SKILL.md`): 14 user-invocable workflows that compose agents and tools. The connected pipeline — `/brainstorming` (optional) → `/capture-issue` → `/plan-issue` → `/deepen-plan` (optional) → `/work-on-task` → `/code-review` → `/compound-learnings` — is the core engineering loop.
 - **Instructions** (`.github/instructions/*.instructions.md`): Scoped context that loads based on file patterns. Rails conventions load for `.rb` files, TypeScript patterns for `.ts` files.
 
@@ -22,7 +22,7 @@ brainstorming (optional) → open → planned → deepen (optional) → in-progr
 
 Key fields: `status`, `plan_lock` (must be `true` before coding), `phase` (current execution phase).
 
-Plan files live in `docs/plans/`. Activity logs in `## Activity` sections provide session continuity.
+Plan files live in `docs/plans/`. Activity logs in `## Activity` sections provide session continuity. Inter-step memory flows through designated plan file sections (see below).
 
 ## Knowledge Compounding
 
@@ -42,6 +42,21 @@ Plan files live in `docs/plans/`. Activity logs in `## Activity` sections provid
 - Validate all user input at system boundaries.
 - Use parameterized queries for all database access.
 - Review OWASP Top 10 considerations for any code that handles user data.
+
+## Inter-Step Memory
+
+Plan files in `docs/plans/` serve as the memory layer between pipeline steps. Each skill reads prior sections and appends its own:
+
+- `## Context` — written by /capture-issue (problem description, technical context)
+- `## Research Notes` — written by /plan-issue (findings, file paths, patterns to follow)
+- `## Implementation Notes` — written by /work-on-task (decisions, trade-offs, gotchas)
+- `## Activity` — appended by /work-on-task (timestamped session logs)
+
+Always read existing sections before starting work. Never overwrite prior sections.
+
+## Orchestration
+
+Coordinator agents (`code-review-coordinator`, `plan-coordinator`, `pipeline-navigator`) use `tools: ['agent']` to delegate work to specialist agents as subagents. Each subagent runs in isolated context — it does NOT inherit conversation history. Coordinators must include all necessary context in the subagent task prompt. Handoff buttons on coordinators guide pipeline transitions.
 
 ## Agent Context
 

@@ -10,7 +10,7 @@ This is a prompt library containing specialized AI agent systems for software de
 
 The system is built on three primitives:
 
-- **Agents** (`.github/agents/*.agent.md`): Stateless domain experts that apply judgment and return structured findings. 19 agents covering security, architecture, performance, code quality, language-specific review, spec analysis, and bug reproduction. Agents are classified as reviewers (read-only), researchers, or actors (can modify code).
+- **Agents** (`.github/agents/*.agent.md`): 22 agents — 19 stateless domain experts plus 3 coordinator agents that orchestrate specialists via sequential subagents. Agents are classified as reviewers (read-only), researchers, actors (can modify code), or coordinators (delegate to subagents via `tools: ['agent']`).
 - **Skills** (`.github/skills/*/SKILL.md`): User-invocable workflows that compose agents and tools. The connected pipeline `/brainstorming` (optional) → `/capture-issue` → `/plan-issue` → `/deepen-plan` (optional) → `/work-on-task` → `/code-review` → `/compound-learnings` is the core engineering loop.
 - **Instructions** (`.github/instructions/*.instructions.md`): Scoped context that activates based on file patterns.
 
@@ -23,13 +23,13 @@ Issues flow through a state machine:
                                   open      →   planned   →                          in-progress   →    review    →      done
 ```
 
-Plan files in `docs/plans/` track state via YAML frontmatter (`status`, `plan_lock`, `phase`). Activity logs in `## Activity` sections enable session continuity.
+Plan files in `docs/plans/` track state via YAML frontmatter (`status`, `plan_lock`, `phase`). Activity logs in `## Activity` sections enable session continuity. Inter-step memory flows through designated plan file sections (`## Research Notes`, `## Implementation Notes`, `## Review Findings`).
 
 ## Directory Structure
 
 ```
 .github/
-  agents/          — 19 agent definitions (flat, no subdirectories)
+  agents/          — 22 agent definitions (19 specialists + 3 coordinators)
   skills/          — 14 skill directories with SKILL.md
   instructions/    — scoped instructions (Rails, TypeScript, Python)
   copilot-instructions.md — shared context for all agents
@@ -57,6 +57,12 @@ docs/
 - Never commit secrets or credentials.
 - Validate input at system boundaries.
 - Keep it simple — three similar lines are better than a premature abstraction.
+
+## Orchestration
+
+Coordinator agents (`code-review-coordinator`, `plan-coordinator`, `pipeline-navigator`) use `tools: ['agent']` to delegate work to specialist agents as subagents. Each subagent runs in isolated context. In VS Code 1.108, subagents run sequentially (one at a time). Handoff buttons on coordinator agents guide developers between pipeline steps.
+
+For subagent orchestration, enable: `chat.customAgentInSubagent.enabled: true`.
 
 ## Accumulated Knowledge
 

@@ -8,7 +8,7 @@ This is a prompt library containing specialized AI agent systems for software de
 
 ### Architecture: Three Primitives
 
-- **Agents** (`.github/agents/*.agent.md`): 19 stateless domain experts using judgment-criteria design. They receive context, apply judgment, and return structured findings. Agents are classified as reviewers (read-only), researchers, or actors (can modify code).
+- **Agents** (`.github/agents/*.agent.md`): 22 agents — 19 stateless domain experts using judgment-criteria design, plus 3 coordinator agents that orchestrate specialists via subagents. Agents are classified as reviewers (read-only), researchers, actors (can modify code), or coordinators (delegate to subagents).
 - **Skills** (`.github/skills/*/SKILL.md`): 14 user-invocable workflows that compose agents and tools. The connected pipeline `/capture-issue` → `/plan-issue` → `/work-on-task` → `/code-review` → `/compound-learnings` is the core engineering loop.
 - **Instructions** (`.github/instructions/*.instructions.md`): Scoped context that activates based on file patterns (Rails for `.rb`, TypeScript for `.ts`, Python for `.py`).
 
@@ -23,7 +23,7 @@ Issues flow through a state machine tracked in YAML frontmatter:
 
 Key fields: `status`, `plan_lock` (must be `true` before coding), `phase` (current phase number).
 
-Plan files live in `docs/plans/`. Activity logs in `## Activity` sections provide session continuity.
+Plan files live in `docs/plans/`. Activity logs in `## Activity` sections provide session continuity. Inter-step memory flows through designated plan file sections: `## Research Notes` (from planning), `## Implementation Notes` (from work), `## Review Findings` (from review).
 
 ### Knowledge Compounding
 
@@ -34,7 +34,7 @@ Plan files live in `docs/plans/`. Activity logs in `## Activity` sections provid
 
 ```
 .github/
-  agents/              — 19 agent definitions (flat, no subdirectories)
+  agents/              — 22 agent definitions (19 specialists + 3 coordinators)
   skills/              — 14 skill directories with SKILL.md
   instructions/        — scoped instructions (Rails, TypeScript, Python)
   copilot-instructions.md — shared context for all agents
@@ -50,7 +50,7 @@ AGENTS.md              — cross-tool open standard (Codex, Cursor, Gemini)
 CLAUDE.md              — this file (Claude Code instructions)
 ```
 
-## Available Agents (19 total)
+## Available Agents (22 total)
 
 ### Reviewers (read-only analysis, tools: Read/Grep/Glob, model: sonnet)
 1. **architecture-strategist**: Architectural compliance, design patterns, SOLID
@@ -76,6 +76,11 @@ CLAUDE.md              — this file (Claude Code instructions)
 17. **bug-reproduction-validator**: Systematic bug reproduction and classification
 18. **feedback-codifier**: Codify review feedback into reusable standards
 19. **pr-comment-resolver**: Address PR comments with code changes
+
+### Coordinators (orchestrate specialists via subagents, tools: agent/*)
+20. **code-review-coordinator**: Delegates to specialist reviewers sequentially with isolated context
+21. **plan-coordinator**: Delegates to research agents for planning with isolated context
+22. **pipeline-navigator**: Guides pipeline transitions via handoff buttons
 
 ## Available Skills (14 total)
 
@@ -131,3 +136,11 @@ Test agents in VS Code 1.108+:
 1. Open Copilot Chat
 2. Type `@` to see agents, `/` to see skills
 3. Invoke with `@agent-name` or `/skill-name`
+
+For coordinator agents (subagent orchestration), enable experimental settings:
+```json
+{
+  "chat.useAgentSkills": true,
+  "chat.customAgentInSubagent.enabled": true
+}
+```

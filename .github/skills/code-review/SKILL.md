@@ -36,8 +36,13 @@ Determine what to review:
 
 - Read modified files and understand the changes
 - Check `.github/agent-context.md` for accumulated codebase knowledge
+- If a plan file is referenced, read `## Implementation Notes` for decisions and trade-offs from the implementation phase
 - Detect project type (Rails, TypeScript, Python, etc.) from project files
 - Read related code and dependencies touched by the changes
+
+**Orchestration:** If the `code-review-coordinator` agent is available (VS Code 1.108+ with
+`chat.customAgentInSubagent.enabled`), use it for isolated specialist analysis via subagents.
+Otherwise, apply each specialist perspective sequentially within this session.
 
 ### 3. Detect Project Type
 

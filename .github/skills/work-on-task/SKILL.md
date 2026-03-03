@@ -36,10 +36,11 @@ When invoked, follow this exact sequence:
    - `in-progress` → Resume at current phase (check `## Activity` for progress).
    - `review` or `done` → "This issue is past the work phase."
 3. **Check `plan_lock`**: If `false` → "Plan is not locked. Run `/plan-issue` first."
-4. **Read `phase`**: Determine current phase number.
-5. **Read `## Activity`**: Understand what was already done in this phase.
-6. **Read plan checkboxes**: Find unchecked `- [ ]` items for the current phase.
-7. **Resume from first unchecked item**.
+4. **Read `## Research Notes`**: Understand findings from the planning phase — file paths, patterns to follow, constraints. This is the memory bridge from `/plan-issue`.
+5. **Read `phase`**: Determine current phase number.
+6. **Read `## Activity`**: Understand what was already done in this phase.
+7. **Read plan checkboxes**: Find unchecked `- [ ]` items for the current phase.
+8. **Resume from first unchecked item**.
 
 ## Execution Loop
 
@@ -84,7 +85,10 @@ When all tasks in the current phase are checked:
 - **Next:** Phase [N+1] — [brief description]
 ```
 
-4. **Check if all phases are done**:
+4. **Write `## Implementation Notes`** (append, do not overwrite):
+   Key decisions made, trade-offs chosen, gotchas encountered, and deviations from the plan.
+   This section persists context for `/code-review`.
+5. **Check if all phases are done**:
    - If yes → set `status: review` and suggest: "All phases complete. Run `/code-review` to review changes."
    - If no → suggest: "Phase [N] complete. Run `/work-on-task` again for Phase [N+1]."
 

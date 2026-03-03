@@ -27,7 +27,15 @@ Activate when:
 
 ### 1. Gather the Learning
 
-If an issue file is provided, read it for context. Otherwise, ask the user:
+If an issue file is provided, read it thoroughly — including all accumulated sections from prior pipeline steps:
+- `## Context` — initial problem analysis (from /capture-issue)
+- `## Research Notes` — findings, patterns, constraints (from /plan-issue)
+- `## Implementation Notes` — decisions, trade-offs, gotchas (from /work-on-task)
+- `## Activity` — timestamped session logs (from /work-on-task)
+
+These sections contain the full history of the issue lifecycle. Use them to extract learnings.
+
+If no issue file is provided, ask the user:
 - **What was the problem?** (symptom)
 - **What caused it?** (root cause)
 - **How was it fixed?** (solution)

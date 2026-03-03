@@ -1,6 +1,6 @@
 # Prompt Library
 
-Native VS Code Copilot agent system with 17 specialized agents and 10 skills. Works with VS Code 1.108+ — clone the repo and start using agents immediately. No extensions to install.
+Native VS Code Copilot agent system with 22 agents (19 specialists + 3 coordinators) and 14 skills. Works with VS Code 1.108+ — clone the repo and start using agents immediately. No extensions to install.
 
 ## Quick Start
 
@@ -12,7 +12,7 @@ Native VS Code Copilot agent system with 17 specialized agents and 10 skills. Wo
 
 The system is built on three primitives:
 
-**Agents** — Stateless domain experts that apply judgment and return structured findings. Defined in `.github/agents/*.agent.md`.
+**Agents** — 19 stateless domain experts plus 3 coordinator agents that orchestrate specialists via subagents. Defined in `.github/agents/*.agent.md`.
 
 **Skills** — User-invocable workflows that compose agents and tools. Defined in `.github/skills/*/SKILL.md`.
 
@@ -27,14 +27,15 @@ The core engineering loop:
      open      →   planned   →  in-progress  →    review    →      done
 ```
 
-Each step produces or updates a plan file in `docs/plans/` with state tracking (status, plan_lock, phase) and timestamped activity logs for session continuity.
+Each step produces or updates a plan file in `docs/plans/` with state tracking (status, plan_lock, phase), timestamped activity logs for session continuity, and inter-step memory sections (`## Research Notes`, `## Implementation Notes`) that carry context between pipeline steps.
 
-## Agents (17)
+## Specialist Agents (19)
 
 | Agent | Purpose |
 |-------|---------|
 | `@architecture-strategist` | Architectural compliance and design patterns |
 | `@best-practices-researcher` | Industry best practices for any topic |
+| `@bug-reproduction-validator` | Systematic bug reproduction and classification |
 | `@code-simplicity-reviewer` | YAGNI, over-engineering, premature abstraction |
 | `@compounding-python-reviewer` | Pythonic patterns, type safety, PEP compliance |
 | `@compounding-rails-reviewer` | Rails conventions, N+1, testing |
@@ -50,8 +51,19 @@ Each step produces or updates a plan file in `docs/plans/` with state tracking (
 | `@pr-comment-resolver` | Resolve PR review comments with code |
 | `@repo-research-analyst` | Codebase structure and conventions |
 | `@security-sentinel` | Vulnerabilities, OWASP, auth boundaries |
+| `@spec-flow-analyzer` | Spec completeness, edge cases, gap identification |
 
-## Skills (10)
+## Coordinator Agents (3)
+
+Coordinators use `tools: ['agent']` to delegate work to specialists as subagents, each running in isolated context. Requires `chat.customAgentInSubagent.enabled: true`.
+
+| Agent | Purpose |
+|-------|---------|
+| `@code-review-coordinator` | Orchestrate multi-specialist code reviews with isolated analysis per domain |
+| `@plan-coordinator` | Orchestrate research agents for codebase analysis and plan generation |
+| `@pipeline-navigator` | Guide pipeline transitions via handoff buttons |
+
+## Skills (14)
 
 | Skill | Type | Purpose |
 |-------|------|---------|
@@ -60,11 +72,15 @@ Each step produces or updates a plan file in `docs/plans/` with state tracking (
 | `/work-on-task` | Pipeline | Execute phase with TDD and session logging |
 | `/code-review` | Pipeline | Multi-agent code review |
 | `/compound-learnings` | Pipeline | Document solution for future reference |
+| `/brainstorming` | Extension | Collaborative requirements exploration |
+| `/deepen-plan` | Extension | Enhance plans with research agents |
+| `/document-review` | Extension | Structured self-review of documents |
+| `/create-agent-skills` | Extension | Guidance for creating new agents and skills |
 | `/analyze-and-plan` | Utility | Quick planning without external research |
+| `/codebase-context` | Background | Workspace context gathering |
 | `/review-guardrails` | Utility | Read-only plan compliance audit |
 | `/tdd-fix` | Utility | Test-driven bug fixing |
 | `/triage-issues` | Utility | Prioritize backlog |
-| `/codebase-context` | Background | Workspace context gathering |
 
 ## Cross-Tool Compatibility
 
@@ -85,8 +101,8 @@ Agents check these before starting work to avoid repeating past mistakes.
 
 ```
 .github/
-  agents/              17 agent files (flat)
-  skills/              10 skill directories
+  agents/              22 agent files (19 specialists + 3 coordinators)
+  skills/              14 skill directories
   instructions/        Scoped instructions (Rails, TypeScript, Python)
   copilot-instructions.md
   agent-context.md
