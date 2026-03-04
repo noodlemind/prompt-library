@@ -8,8 +8,8 @@ This is a prompt library containing specialized AI agent systems for software de
 
 ### Architecture: Three Primitives
 
-- **Agents** (`.github/agents/*.agent.md`): 22 agents — 19 stateless domain experts using judgment-criteria design, plus 3 coordinator agents that orchestrate specialists via subagents. Agents are classified as reviewers (read-only), researchers, actors (can modify code), or coordinators (delegate to subagents).
-- **Skills** (`.github/skills/*/SKILL.md`): 14 user-invocable workflows that compose agents and tools. The connected pipeline `/capture-issue` → `/plan-issue` → `/work-on-task` → `/code-review` → `/compound-learnings` is the core engineering loop.
+- **Agents** (`.github/agents/*.agent.md`): 23 agents — 19 stateless domain experts using judgment-criteria design, 1 engineer (full-cycle coordinator+actor hybrid), plus 3 coordinator agents that orchestrate specialists via subagents. Agents are classified as reviewers (read-only), researchers, actors (can modify code), engineers (can modify code + delegate to subagents), or coordinators (delegate to subagents).
+- **Skills** (`.github/skills/*/SKILL.md`): 15 user-invocable workflows that compose agents and tools. The connected pipeline `/capture-issue` → `/plan-issue` → `/work-on-task` → `/code-review` → `/compound-learnings` is the core engineering loop.
 - **Instructions** (`.github/instructions/*.instructions.md`): Scoped context that activates based on file patterns (Rails for `.rb`, TypeScript for `.ts`, Python for `.py`).
 
 ### Connected Pipeline
@@ -34,8 +34,8 @@ Plan files live in `docs/plans/`. Activity logs in `## Activity` sections provid
 
 ```
 .github/
-  agents/              — 22 agent definitions (19 specialists + 3 coordinators)
-  skills/              — 14 skill directories with SKILL.md
+  agents/              — 23 agent definitions (19 specialists + 1 engineer + 3 coordinators)
+  skills/              — 15 skill directories with SKILL.md
   instructions/        — scoped instructions (Rails, TypeScript, Python)
   copilot-instructions.md — shared context for all agents
   agent-context.md     — accumulated codebase knowledge
@@ -50,7 +50,7 @@ AGENTS.md              — cross-tool open standard (Codex, Cursor, Gemini)
 CLAUDE.md              — this file (Claude Code instructions)
 ```
 
-## Available Agents (22 total)
+## Available Agents (23 total)
 
 ### Reviewers (read-only analysis, tools: Read/Grep/Glob, model: Sonnet 4.6)
 1. **architecture-strategist**: Architectural compliance, design patterns, SOLID
@@ -77,12 +77,15 @@ CLAUDE.md              — this file (Claude Code instructions)
 18. **feedback-codifier**: Codify review feedback into reusable standards
 19. **pr-comment-resolver**: Address PR comments with code changes
 
-### Coordinators (orchestrate specialists via subagents, tools: agent/*, model: Opus 4.6 for planning, Sonnet 4.6 for others)
-20. **code-review-coordinator**: Delegates to specialist reviewers sequentially with isolated context
-21. **plan-coordinator**: Delegates to research agents for planning with isolated context
-22. **pipeline-navigator**: Guides pipeline transitions via handoff buttons
+### Engineers (full-cycle: understand + investigate + implement + delegate, tools: *, model: Opus 4.6)
+20. **engineer**: Full-cycle software engineer — understands requirements, debugs, implements, delegates to specialists, consults user
 
-## Available Skills (14 total)
+### Coordinators (orchestrate specialists via subagents, tools: agent/*, model: Opus 4.6 for planning, Sonnet 4.6 for others)
+21. **code-review-coordinator**: Delegates to specialist reviewers sequentially with isolated context
+22. **plan-coordinator**: Delegates to research agents for planning with isolated context
+23. **pipeline-navigator**: Guides pipeline transitions via handoff buttons
+
+## Available Skills (15 total)
 
 ### Connected Pipeline
 1. **/capture-issue**: Create structured issue from bug/feature/task
@@ -97,12 +100,15 @@ CLAUDE.md              — this file (Claude Code instructions)
 8. **/document-review**: Structured self-review of brainstorm/plan documents
 9. **/create-agent-skills**: Expert guidance for creating new agents and skills
 
+### Full-Cycle Engineering
+10. **/engineer**: Full-cycle software engineering — understand, debug, implement, verify with user steering
+
 ### Utilities
-10. **/analyze-and-plan**: Quick planning without external research
-11. **/codebase-context**: (Background) Workspace context gathering
-12. **/review-guardrails**: Read-only plan compliance audit
-13. **/tdd-fix**: Test-driven bug fixing
-14. **/triage-issues**: Analyze and prioritize backlog
+11. **/analyze-and-plan**: Quick planning without external research
+12. **/codebase-context**: (Background) Workspace context gathering
+13. **/review-guardrails**: Read-only plan compliance audit
+14. **/tdd-fix**: Test-driven bug fixing
+15. **/triage-issues**: Analyze and prioritize backlog
 
 ## Key Design Decisions
 

@@ -8,8 +8,8 @@ Prompt library with AI agent systems for software development using VS Code nati
 
 ## Primitives
 
-- **Agents** (`.github/agents/`): 22 agents (19 specialists + 3 coordinators). Review agents include prompt injection guardrails.
-- **Skills** (`.github/skills/`): 14 workflows. Pipeline: `/capture-issue` → `/plan-issue` → `/work-on-task` → `/code-review` → `/compound-learnings`.
+- **Agents** (`.github/agents/`): 23 agents (19 specialists + 1 engineer + 3 coordinators). Review agents include prompt injection guardrails. The `engineer` agent is a full-cycle hybrid that can both implement code and delegate to specialists.
+- **Skills** (`.github/skills/`): 15 workflows. Pipeline: `/capture-issue` → `/plan-issue` → `/work-on-task` → `/code-review` → `/compound-learnings`. `/engineer` provides full-cycle engineering with user steering.
 - **Instructions** (`.github/instructions/`): Scoped context by file pattern.
 
 ## Pipeline State
