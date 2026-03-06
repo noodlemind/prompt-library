@@ -104,21 +104,33 @@ Propose an approach before coding:
 
 ### Phase 4: Implement
 
-Execute the approved approach:
+Delegate implementation to `code-implementer` (Sonnet) for execution efficiency. You (Opus) prepare the task; the implementer writes the code.
 
-1. **TDD when applicable** — Write a failing test first, then the minimal fix, then clean up
-2. **Surgical diffs** — Change only what the task requires. No drive-by refactoring.
-3. **Follow existing patterns** — Match the codebase's style, naming, and conventions
-4. **Track progress** — If working from a plan file, check off tasks and update `## Activity`
+**For each task in the plan, delegate to `code-implementer` with:**
+1. **Task description** — exactly what to implement, fix, or change
+2. **Files to modify** — paths with relevant code sections (paste the actual code, since the subagent runs in isolated context)
+3. **Patterns to follow** — naming conventions, style, existing patterns from investigation
+4. **Test expectations** — what tests to write, test framework conventions, example test structure
+5. **Constraints** — files NOT to touch, scope boundaries, what to avoid
+
+**When to implement directly (skip delegation):**
+- Trivial one-line changes (renaming, config edits, typo fixes)
+- Changes that require ongoing conversational context with the user
+- When the subagent has already failed on the same task and you need to take over
+
+**After each delegation:**
+- Review the implementer's output for correctness
+- Run tests to verify
+- Check off completed tasks in the plan file
+- Update `## Activity` log
 
 **Scope guard:**
 - If using a plan file, only touch files listed in `## Impacted Files`
 - If a change requires more files than planned, pause and ask the user
 - If the change feels larger than expected, pause and ask to split
 
-**After implementation:**
-- Run tests if a test suite exists
-- Self-review the diff for obvious issues
+**After all tasks in the phase:**
+- Self-review the full diff across all changes
 - Update plan file frontmatter: increment `phase`, update `status` if appropriate
 - Write `## Implementation Notes` with decisions, trade-offs, gotchas
 
@@ -142,17 +154,18 @@ Validate the implementation:
 
 Invoke specialist agents as subagents when their focused expertise would outperform general analysis. Include full context in the task prompt — subagents run in isolated context.
 
-| Situation | Delegate to | What to include in task prompt |
-|-----------|-------------|-------------------------------|
-| Understand codebase patterns | `repo-research-analyst` | Feature description, file paths to investigate, specific questions |
-| Unfamiliar technology | `best-practices-researcher` | Technology name, what you're trying to do, constraints |
-| Framework API questions | `framework-docs-researcher` | Framework + version, specific feature/API, what you need |
-| Security-sensitive changes | `security-sentinel` | Changed files with diffs, what the code does, threat model |
-| Performance-critical code | `performance-oracle` | Changed files, expected load/data volume, performance requirements |
-| Architecture decisions | `architecture-strategist` | Proposed design, alternatives considered, system context |
-| Systematic bug reproduction | `bug-reproduction-validator` | Bug report, steps to reproduce, environment details |
-| Code evolution context | `git-history-analyzer` | File paths, what you want to understand about history |
-| Full code review | `code-review-coordinator` | All changed files, PR context, project type |
+| Situation | Delegate to | Model | What to include in task prompt |
+|-----------|-------------|-------|-------------------------------|
+| **Implementation tasks** | `code-implementer` | **Sonnet** | Task description, files to modify (with code), patterns, test expectations, constraints |
+| Understand codebase patterns | `repo-research-analyst` | Opus | Feature description, file paths to investigate, specific questions |
+| Unfamiliar technology | `best-practices-researcher` | Opus | Technology name, what you're trying to do, constraints |
+| Framework API questions | `framework-docs-researcher` | Opus | Framework + version, specific feature/API, what you need |
+| Security-sensitive changes | `security-sentinel` | Sonnet | Changed files with diffs, what the code does, threat model |
+| Performance-critical code | `performance-oracle` | Sonnet | Changed files, expected load/data volume, performance requirements |
+| Architecture decisions | `architecture-strategist` | Sonnet | Proposed design, alternatives considered, system context |
+| Systematic bug reproduction | `bug-reproduction-validator` | Sonnet | Bug report, steps to reproduce, environment details |
+| Code evolution context | `git-history-analyzer` | Sonnet | File paths, what you want to understand about history |
+| Full code review | `code-review-coordinator` | Opus | All changed files, PR context, project type |
 
 ## User Consultation Moments
 

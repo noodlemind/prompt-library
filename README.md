@@ -1,6 +1,6 @@
 # Prompt Library
 
-Native VS Code Copilot agent system with 23 agents (19 specialists + 1 engineer + 3 coordinators) and 15 skills. Works with VS Code 1.108+ — clone the repo and start using agents immediately. No extensions to install.
+Native VS Code Copilot agent system with 24 agents (19 specialists + 1 engineer + 1 implementer + 3 coordinators) and 15 skills. Works with VS Code 1.108+ — clone the repo and start using agents immediately. No extensions to install.
 
 ## Quick Start
 
@@ -12,7 +12,7 @@ Native VS Code Copilot agent system with 23 agents (19 specialists + 1 engineer 
 
 The system is built on three primitives:
 
-**Agents** — 19 stateless domain experts, 1 engineer (full-cycle hybrid), plus 3 coordinator agents that orchestrate specialists via subagents. Defined in `.github/agents/*.agent.md`.
+**Agents** — 19 stateless domain experts, 1 engineer (Opus brain) + 1 code-implementer (Sonnet hands), plus 3 coordinator agents that orchestrate specialists via subagents. Defined in `.github/agents/*.agent.md`.
 
 **Skills** — User-invocable workflows that compose agents and tools. Defined in `.github/skills/*/SKILL.md`.
 
@@ -53,13 +53,14 @@ Each step produces or updates a plan file in `docs/plans/` with state tracking (
 | `@security-sentinel` | Vulnerabilities, OWASP, auth boundaries |
 | `@spec-flow-analyzer` | Spec completeness, edge cases, gap identification |
 
-## Engineer Agent (1)
+## Engineer Agent (1 + 1 implementer)
 
-The engineer is a full-cycle hybrid (coordinator+actor) that understands requirements, debugs, implements, and delegates to specialists — guided by user steering. Follows a 5-phase cycle: Understand → Investigate → Plan → Implement → Verify.
+The engineer (Opus) is the "brain" that understands requirements, debugs, plans, and orchestrates. It delegates implementation to `@code-implementer` (Sonnet) for cost-efficient execution. Follows a 5-phase cycle: Understand → Investigate → Plan → Implement → Verify.
 
-| Agent | Purpose |
-|-------|---------|
-| `@engineer` | Full-cycle software engineering with autonomous investigation, implementation, and specialist delegation |
+| Agent | Model | Purpose |
+|-------|-------|---------|
+| `@engineer` | Opus 4.6 | Full-cycle engineering — plans, investigates, delegates, consults user |
+| `@code-implementer` | Sonnet 4.6 | Executes coding tasks with TDD (engineer's implementation subagent) |
 
 ## Coordinator Agents (3)
 
@@ -110,7 +111,7 @@ Agents check these before starting work to avoid repeating past mistakes.
 
 ```
 .github/
-  agents/              23 agent files (19 specialists + 1 engineer + 3 coordinators)
+  agents/              24 agent files (19 specialists + 1 engineer + 1 implementer + 3 coordinators)
   skills/              15 skill directories
   instructions/        Scoped instructions (Rails, TypeScript, Python)
   copilot-instructions.md

@@ -8,7 +8,7 @@ This is a prompt library containing specialized AI agent systems for software de
 
 ### Architecture: Three Primitives
 
-- **Agents** (`.github/agents/*.agent.md`): 23 agents — 19 stateless domain experts using judgment-criteria design, 1 engineer (full-cycle coordinator+actor hybrid), plus 3 coordinator agents that orchestrate specialists via subagents. Agents are classified as reviewers (read-only), researchers, actors (can modify code), engineers (can modify code + delegate to subagents), or coordinators (delegate to subagents).
+- **Agents** (`.github/agents/*.agent.md`): 24 agents — 19 stateless domain experts using judgment-criteria design, 1 engineer (full-cycle coordinator+actor hybrid), 1 code-implementer (engineer's execution subagent), plus 3 coordinator agents that orchestrate specialists via subagents. Agents are classified as reviewers (read-only), researchers, actors (can modify code), engineers (can modify code + delegate to subagents), or coordinators (delegate to subagents).
 - **Skills** (`.github/skills/*/SKILL.md`): 15 user-invocable workflows that compose agents and tools. The connected pipeline `/capture-issue` → `/plan-issue` → `/work-on-task` → `/code-review` → `/compound-learnings` is the core engineering loop.
 - **Instructions** (`.github/instructions/*.instructions.md`): Scoped context that activates based on file patterns (Rails for `.rb`, TypeScript for `.ts`, Python for `.py`).
 
@@ -34,7 +34,7 @@ Plan files live in `docs/plans/`. Activity logs in `## Activity` sections provid
 
 ```
 .github/
-  agents/              — 23 agent definitions (19 specialists + 1 engineer + 3 coordinators)
+  agents/              — 24 agent definitions (19 specialists + 1 engineer + 1 implementer + 3 coordinators)
   skills/              — 15 skill directories with SKILL.md
   instructions/        — scoped instructions (Rails, TypeScript, Python)
   copilot-instructions.md — shared context for all agents
@@ -50,7 +50,7 @@ AGENTS.md              — cross-tool open standard (Codex, Cursor, Gemini)
 CLAUDE.md              — this file (Claude Code instructions)
 ```
 
-## Available Agents (23 total)
+## Available Agents (24 total)
 
 ### Reviewers (read-only analysis, tools: Read/Grep/Glob, model: Sonnet 4.6)
 1. **architecture-strategist**: Architectural compliance, design patterns, SOLID
@@ -74,16 +74,17 @@ CLAUDE.md              — this file (Claude Code instructions)
 
 ### Actors (can modify code, tools: *, model: Sonnet 4.6)
 17. **bug-reproduction-validator**: Systematic bug reproduction and classification
-18. **feedback-codifier**: Codify review feedback into reusable standards
-19. **pr-comment-resolver**: Address PR comments with code changes
+18. **code-implementer**: Execute coding tasks with TDD — engineer's implementation subagent
+19. **feedback-codifier**: Codify review feedback into reusable standards
+20. **pr-comment-resolver**: Address PR comments with code changes
 
 ### Engineers (full-cycle: understand + investigate + implement + delegate, tools: *, model: Opus 4.6)
-20. **engineer**: Full-cycle software engineer — understands requirements, debugs, implements, delegates to specialists, consults user
+21. **engineer**: Full-cycle software engineer — understands requirements, debugs, delegates implementation to code-implementer (Sonnet), consults user
 
 ### Coordinators (orchestrate specialists via subagents, tools: agent/*, model: Opus 4.6 for planning, Sonnet 4.6 for others)
-21. **code-review-coordinator**: Delegates to specialist reviewers sequentially with isolated context
-22. **plan-coordinator**: Delegates to research agents for planning with isolated context
-23. **pipeline-navigator**: Guides pipeline transitions via handoff buttons
+22. **code-review-coordinator**: Delegates to specialist reviewers sequentially with isolated context
+23. **plan-coordinator**: Delegates to research agents for planning with isolated context
+24. **pipeline-navigator**: Guides pipeline transitions via handoff buttons
 
 ## Available Skills (15 total)
 

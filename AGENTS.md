@@ -10,7 +10,7 @@ This is a prompt library containing specialized AI agent systems for software de
 
 The system is built on three primitives:
 
-- **Agents** (`.github/agents/*.agent.md`): 23 agents — 19 stateless domain experts, 1 engineer (full-cycle coordinator+actor hybrid), plus 3 coordinator agents that orchestrate specialists via sequential subagents. Agents are classified as reviewers (read-only, Sonnet 4.6), researchers (Opus 4.6), actors (can modify code, Sonnet 4.6), engineers (can modify code + delegate, Opus 4.6), or coordinators (Opus 4.6 for planning, Sonnet 4.6 for others).
+- **Agents** (`.github/agents/*.agent.md`): 24 agents — 19 stateless domain experts, 1 engineer (Opus brain), 1 code-implementer (Sonnet hands), plus 3 coordinator agents that orchestrate specialists via sequential subagents. Agents are classified as reviewers (read-only, Sonnet 4.6), researchers (Opus 4.6), actors (can modify code, Sonnet 4.6), engineers (can modify code + delegate, Opus 4.6), or coordinators (Opus 4.6 for planning, Sonnet 4.6 for others).
 - **Skills** (`.github/skills/*/SKILL.md`): User-invocable workflows that compose agents and tools. The connected pipeline `/brainstorming` (optional) → `/capture-issue` → `/plan-issue` → `/deepen-plan` (optional) → `/work-on-task` → `/code-review` → `/compound-learnings` is the core engineering loop.
 - **Instructions** (`.github/instructions/*.instructions.md`): Scoped context that activates based on file patterns.
 
@@ -29,7 +29,7 @@ Plan files in `docs/plans/` track state via YAML frontmatter (`status`, `plan_lo
 
 ```
 .github/
-  agents/          — 23 agent definitions (19 specialists + 1 engineer + 3 coordinators)
+  agents/          — 24 agent definitions (19 specialists + 1 engineer + 1 implementer + 3 coordinators)
   skills/          — 15 skill directories with SKILL.md
   instructions/    — scoped instructions (Rails, TypeScript, Python)
   copilot-instructions.md — shared context for all agents
@@ -60,7 +60,7 @@ docs/
 
 ## Orchestration
 
-The `engineer` agent is a full-cycle hybrid (coordinator+actor) that understands requirements, debugs, implements, and delegates to specialists — guided by user steering. Coordinator agents (`code-review-coordinator`, `plan-coordinator`, `pipeline-navigator`) use `tools: ['agent']` to delegate work to specialist agents as subagents. Each subagent runs in isolated context. In VS Code 1.108, subagents run sequentially (one at a time). Handoff buttons on coordinator agents guide developers between pipeline steps.
+The `engineer` agent (Opus) is a full-cycle hybrid that understands requirements, debugs, plans, and delegates implementation to `code-implementer` (Sonnet) and specialist review/research to other agents — guided by user steering. Coordinator agents (`code-review-coordinator`, `plan-coordinator`, `pipeline-navigator`) use `tools: ['agent']` to delegate work to specialist agents as subagents. Each subagent runs in isolated context. In VS Code 1.108, subagents run sequentially (one at a time). Handoff buttons on coordinator agents guide developers between pipeline steps.
 
 Prompt wrappers for `/plan-issue` and `/code-review` route to their respective coordinators via `agent: plan-coordinator` and `agent: code-review-coordinator`.
 

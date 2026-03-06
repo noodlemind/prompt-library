@@ -5,7 +5,7 @@ This file contains accumulated knowledge about the codebase, discovered by agent
 ## Project Structure
 
 This repository is a prompt library containing AI agent systems:
-- `.github/agents/` — 23 agents (19 specialists + 1 engineer + 3 coordinators, judgment-criteria style)
+- `.github/agents/` — 24 agents (19 specialists + 1 engineer + 1 implementer + 3 coordinators, judgment-criteria style)
 - `.github/skills/` — 15 skills forming the connected pipeline and utilities
 - `.github/instructions/` — scoped instructions (Rails, TypeScript, Python)
 - `code-prompts/` — issue-based development workflow with local issues
@@ -31,5 +31,5 @@ _This section grows as agents discover patterns. Add notes here when you learn s
 ### Prompt-to-Coordinator Wiring
 Prompt wrappers route `/plan-issue` → `plan-coordinator` and `/code-review` → `code-review-coordinator` via the `agent:` field. The `agent` tool must be in the prompt's tools list since prompt tools override agent tools in VS Code 1.108.
 
-### Engineer Agent (Hybrid Coordinator+Actor)
-The `engineer` agent is the first hybrid classification — it can both modify code directly (`tools: ["*"]`) and delegate to specialist subagents. It follows a 5-phase workflow (Understand → Investigate → Plan → Implement → Verify) with user consultation checkpoints between phases. It integrates with the pipeline by reading/writing plan files and maintaining state machine fields. The `/engineer` skill is its entry point.
+### Engineer Agent (Opus Brain + Sonnet Hands)
+The `engineer` agent (Opus 4.6) is the "brain" — it understands requirements, investigates, plans, and orchestrates. It delegates implementation to `code-implementer` (Sonnet 4.6) for cost-efficient execution, and delegates to specialist reviewers/researchers for focused expertise. It follows a 5-phase workflow (Understand → Investigate → Plan → Implement → Verify) with user consultation checkpoints between phases. It integrates with the pipeline by reading/writing plan files and maintaining state machine fields. The `/engineer` skill is its entry point. The `code-implementer` is not intended for direct user invocation — it's the engineer's execution subagent.
