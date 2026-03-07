@@ -1,6 +1,6 @@
 ---
 description: Review Ruby on Rails code for conventions, correctness, and maintainability.
-tools: ["codebase", "search"]
+tools: ["search", "read", "changes"]
 model: "Claude Sonnet 4.6"
 ---
 

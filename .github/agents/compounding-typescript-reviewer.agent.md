@@ -1,6 +1,6 @@
 ---
 description: Review TypeScript code for type safety, modern patterns, and maintainability.
-tools: ["codebase", "search"]
+tools: ["search", "read", "changes"]
 model: "Claude Sonnet 4.6"
 ---
 

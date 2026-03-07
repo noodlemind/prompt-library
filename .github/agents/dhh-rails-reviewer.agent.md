@@ -1,6 +1,6 @@
 ---
 description: Review Rails code from DHH's 37signals philosophy -- clarity, fat models, Hotwire-first.
-tools: ["codebase", "search"]
+tools: ["search", "read", "changes"]
 model: "Claude Sonnet 4.6"
 ---
 

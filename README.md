@@ -87,7 +87,7 @@ Coordinators use `tools: ['agent']` to delegate work to specialists as subagents
 | `/create-agent-skills` | Extension | Guidance for creating new agents and skills |
 | `/engineer` | Engineering | Full-cycle engineering with user steering |
 | `/analyze-and-plan` | Utility | Quick planning without external research |
-| `/codebase-context` | Background | Workspace context gathering |
+| `/codebase-context` | Utility | Generate codebase snapshot with architecture diagrams |
 | `/review-guardrails` | Utility | Read-only plan compliance audit |
 | `/tdd-fix` | Utility | Test-driven bug fixing |
 | `/triage-issues` | Utility | Prioritize backlog |
@@ -120,6 +120,7 @@ Agents check these before starting work to avoid repeating past mistakes.
 archive/               Archived legacy systems and reference docs
 docs/plans/            Issue and plan files
 docs/solutions/        Documented learnings
+docs/codebase-snapshot.md  Generated codebase snapshot with architecture diagrams
 AGENTS.md              Cross-tool standard
 CLAUDE.md              Claude Code instructions
 ```

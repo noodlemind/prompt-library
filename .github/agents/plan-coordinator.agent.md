@@ -1,6 +1,6 @@
 ---
 description: Coordinate issue planning by delegating to research agents and synthesizing structured plans.
-tools: ["agent", "codebase", "search", "fetch", "editFiles"]
+tools: ["agent", "search", "read", "editFiles", "fetch"]
 model: "Claude Opus 4.6"
 handoffs:
   - label: "Start Implementation"

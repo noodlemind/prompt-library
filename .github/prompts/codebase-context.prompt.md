@@ -1,10 +1,12 @@
 ---
 name: codebase-context
-description: Gather and summarize workspace context including project structure, tech stack, conventions, and key file locations.
+description: Generate codebase snapshot with architecture diagrams and persist to docs/codebase-snapshot.md.
 agent: agent
 tools:
   - search
   - read
+  - editFiles
 ---
 
 Follow the instructions in [codebase-context skill](../skills/codebase-context/SKILL.md).
+Read the shared context first: [agent-context](../agent-context.md).

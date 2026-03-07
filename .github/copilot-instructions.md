@@ -18,7 +18,7 @@ Plan files in `docs/plans/` track state via YAML frontmatter: `status` (open/pla
 
 ## Knowledge
 
-Read `.github/agent-context.md` for codebase patterns. Check `docs/solutions/` before starting similar work.
+Read `.github/agent-context.md` for codebase patterns. Check `docs/solutions/` before starting similar work. Read `docs/codebase-snapshot.md` for project structure and architecture diagrams (if it exists).
 
 ## Conventions
 

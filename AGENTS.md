@@ -41,6 +41,7 @@ docs/
   plans/           — issue and plan files with state tracking
   solutions/       — documented learnings from solved problems
   brainstorms/     — brainstorm documents from /brainstorming skill
+  codebase-snapshot.md — generated codebase snapshot with architecture diagrams
 ```
 
 ## Conventions

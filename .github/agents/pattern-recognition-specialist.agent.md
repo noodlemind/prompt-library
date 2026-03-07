@@ -1,6 +1,6 @@
 ---
 description: Analyze code for design patterns, anti-patterns, naming consistency, and duplication.
-tools: ["codebase", "search"]
+tools: ["search", "read", "changes"]
 model: "Claude Sonnet 4.6"
 ---
 

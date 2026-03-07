@@ -46,13 +46,14 @@ docs/
   plans/               — issue and plan files with state tracking
   solutions/           — documented learnings from solved problems
   brainstorms/         — brainstorm documents from /brainstorming skill
+  codebase-snapshot.md — generated codebase snapshot with architecture diagrams
 AGENTS.md              — cross-tool open standard (Codex, Cursor, Gemini)
 CLAUDE.md              — this file (Claude Code instructions)
 ```
 
 ## Available Agents (24 total)
 
-### Reviewers (read-only analysis, tools: Read/Grep/Glob, model: Sonnet 4.6)
+### Reviewers (read-only analysis, tools: search/read/changes, model: Sonnet 4.6)
 1. **architecture-strategist**: Architectural compliance, design patterns, SOLID
 2. **code-simplicity-reviewer**: YAGNI, over-engineering, premature abstraction
 3. **compounding-python-reviewer**: Pythonic patterns, type safety, PEP compliance
@@ -72,16 +73,16 @@ CLAUDE.md              — this file (Claude Code instructions)
 15. **git-history-analyzer**: Git archaeology, code evolution, contributors
 16. **repo-research-analyst**: Repo structure, conventions, implementation patterns
 
-### Actors (can modify code, tools: *, model: Sonnet 4.6)
+### Actors (can modify code, model: Sonnet 4.6)
 17. **bug-reproduction-validator**: Systematic bug reproduction and classification
 18. **code-implementer**: Execute coding tasks with TDD — engineer's implementation subagent
 19. **feedback-codifier**: Codify review feedback into reusable standards
 20. **pr-comment-resolver**: Address PR comments with code changes
 
-### Engineers (full-cycle: understand + investigate + implement + delegate, tools: *, model: Opus 4.6)
+### Engineers (full-cycle: understand + investigate + implement + delegate, model: Opus 4.6)
 21. **engineer**: Full-cycle software engineer — understands requirements, debugs, delegates implementation to code-implementer (Sonnet), consults user
 
-### Coordinators (orchestrate specialists via subagents, tools: agent/*, model: Opus 4.6 for planning, Sonnet 4.6 for others)
+### Coordinators (orchestrate specialists via subagents, model: Opus 4.6 for planning, Sonnet 4.6 for others)
 22. **code-review-coordinator**: Delegates to specialist reviewers sequentially with isolated context
 23. **plan-coordinator**: Delegates to research agents for planning with isolated context
 24. **pipeline-navigator**: Guides pipeline transitions via handoff buttons
@@ -106,7 +107,7 @@ CLAUDE.md              — this file (Claude Code instructions)
 
 ### Utilities
 11. **/analyze-and-plan**: Quick planning without external research
-12. **/codebase-context**: (Background) Workspace context gathering
+12. **/codebase-context**: Generate codebase snapshot with architecture diagrams to docs/codebase-snapshot.md
 13. **/review-guardrails**: Read-only plan compliance audit
 14. **/tdd-fix**: Test-driven bug fixing
 15. **/triage-issues**: Analyze and prioritize backlog

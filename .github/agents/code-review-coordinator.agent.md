@@ -1,6 +1,6 @@
 ---
 description: Coordinate multi-specialist code reviews by delegating to domain expert agents.
-tools: ["agent", "codebase", "search", "changes"]
+tools: ["agent", "search", "read", "changes", "terminalLastCommand", "githubRepo"]
 model: "Claude Sonnet 4.6"
 handoffs:
   - label: "Document Learnings"
@@ -29,9 +29,17 @@ runs in its own context window, ensuring focused domain expertise without cross-
 
 Determine what to review:
 - If given a PR number, fetch the changed files and diff
-- If given a branch, diff against the base branch
 - If given file paths, review those files directly
 - Use the `changes` tool to see uncommitted modifications
+- If given a branch or asked to review branch changes, use the branch-diff workflow below
+
+**Branch-Diff Workflow:**
+1. Determine the base branch. Ask the user if unclear; default to `main` or `master`.
+2. Ask the user to run the following in the terminal:
+   `git diff <base>...<branch> -- . ':!*.lock'`
+3. Use `terminalLastCommand` to read the diff output from the terminal.
+4. Parse the diff into a changed files list with per-file hunks.
+5. Use this as the input for every specialist — same as any other scope type.
 
 Collect the full list of changed files and their diffs. This becomes the input for every specialist.
 

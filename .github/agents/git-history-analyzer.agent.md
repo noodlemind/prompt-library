@@ -1,6 +1,6 @@
 ---
 description: Analyze git history to trace code evolution and understand why patterns exist.
-tools: ["codebase", "search", "terminalLastCommand"]
+tools: ["search", "read", "terminalLastCommand"]
 model: "Claude Opus 4.6"
 ---
 

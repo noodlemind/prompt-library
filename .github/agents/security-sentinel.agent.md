@@ -1,6 +1,6 @@
 ---
 description: Perform security audits and vulnerability assessments on code changes.
-tools: ["codebase", "search"]
+tools: ["search", "read", "changes"]
 model: "Claude Sonnet 4.6"
 ---
 

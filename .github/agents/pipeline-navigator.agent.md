@@ -1,6 +1,6 @@
 ---
 description: Guide developers through the engineering pipeline with status-aware step transitions.
-tools: ["codebase", "search"]
+tools: ["search", "read"]
 model: "Claude Sonnet 4.6"
 handoffs:
   - label: "Plan Issue"

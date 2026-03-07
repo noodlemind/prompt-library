@@ -1,6 +1,6 @@
 ---
 description: Review migrations, schema changes, and data operations for safety and correctness.
-tools: ["codebase", "search"]
+tools: ["search", "read", "changes"]
 model: "Claude Sonnet 4.6"
 ---
 

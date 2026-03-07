@@ -1,6 +1,6 @@
 ---
 description: Execute specific coding tasks with TDD — write tests, implement changes, and verify. Used as a subagent by the engineer for implementation work.
-tools: ["*"]
+tools: ["search", "read", "editFiles", "terminalLastCommand", "changes"]
 model: "Claude Sonnet 4.6"
 ---
 

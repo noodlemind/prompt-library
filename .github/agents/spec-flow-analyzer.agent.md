@@ -1,6 +1,6 @@
 ---
 description: Analyze specifications for flow completeness, edge cases, and gap identification.
-tools: ["codebase", "search"]
+tools: ["search", "read"]
 model: "Claude Sonnet 4.6"
 ---
 
