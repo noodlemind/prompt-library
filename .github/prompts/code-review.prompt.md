@@ -1,6 +1,6 @@
 ---
 name: code-review
-description: Multi-agent code review covering security, performance, architecture, and code quality for PRs or code changes.
+description: Multi-agent code review covering security, performance, architecture, and code quality for PRs, branches, or code changes.
 agent: code-review-coordinator
 tools:
   - agent
@@ -9,6 +9,7 @@ tools:
   - fetch
   - githubRepo
   - changes
+  - terminalLastCommand
 ---
 
 Follow the instructions in [code-review skill](../skills/code-review/SKILL.md).

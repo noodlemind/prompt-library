@@ -1,6 +1,6 @@
 ---
 description: Identify over-engineering, YAGNI violations, and simplification opportunities in code.
-tools: ["codebase", "search"]
+tools: ["search", "read", "changes"]
 model: "Claude Sonnet 4.6"
 ---
 

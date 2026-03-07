@@ -8,8 +8,8 @@ Prompt library with AI agent systems for software development using VS Code nati
 
 ## Primitives
 
-- **Agents** (`.github/agents/`): 22 agents (19 specialists + 3 coordinators). Review agents include prompt injection guardrails.
-- **Skills** (`.github/skills/`): 14 workflows. Pipeline: `/capture-issue` → `/plan-issue` → `/work-on-task` → `/code-review` → `/compound-learnings`.
+- **Agents** (`.github/agents/`): 24 agents (19 specialists + 1 engineer + 1 implementer + 3 coordinators). Review agents include prompt injection guardrails. The `engineer` (Opus) plans and orchestrates; `code-implementer` (Sonnet) executes coding tasks.
+- **Skills** (`.github/skills/`): 15 workflows. Pipeline: `/capture-issue` → `/plan-issue` → `/work-on-task` → `/code-review` → `/compound-learnings`. `/engineer` provides full-cycle engineering with user steering.
 - **Instructions** (`.github/instructions/`): Scoped context by file pattern.
 
 ## Pipeline State
@@ -18,7 +18,7 @@ Plan files in `docs/plans/` track state via YAML frontmatter: `status` (open/pla
 
 ## Knowledge
 
-Read `.github/agent-context.md` for codebase patterns. Check `docs/solutions/` before starting similar work.
+Read `.github/agent-context.md` for codebase patterns. Check `docs/solutions/` before starting similar work. Read `docs/codebase-snapshot.md` for project structure and architecture diagrams (if it exists).
 
 ## Conventions
 

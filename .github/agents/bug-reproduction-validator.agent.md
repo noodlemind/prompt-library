@@ -1,6 +1,6 @@
 ---
 description: Systematically reproduce and validate bug reports to confirm reported behavior.
-tools: ["*"]
+tools: ["search", "read", "editFiles", "terminalLastCommand", "changes"]
 model: "Claude Sonnet 4.6"
 ---
 
