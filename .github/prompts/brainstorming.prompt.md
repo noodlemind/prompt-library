@@ -5,6 +5,7 @@ agent: agent
 tools:
   - search
   - read
+  - editFiles
 ---
 
 Follow the instructions in [brainstorming skill](../skills/brainstorming/SKILL.md).

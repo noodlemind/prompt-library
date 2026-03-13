@@ -20,7 +20,7 @@ Activate when the user wants to:
 
 Scan for open issues from available sources:
 - `docs/plans/*.md` files with `status: open` or `status: planned`
-- GitHub issues (if URL or repo context provided)
+- GitHub issues — use `githubRepo` (VS Code), or run `gh issue list` via `run_command`/`Bash` (CLI/Claude Code)
 - User-provided list of tasks
 
 ### 2. Analyze Each Issue

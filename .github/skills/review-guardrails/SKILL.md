@@ -25,7 +25,11 @@ Read the issue/plan file and extract:
 
 ### 2. Check File Compliance
 
-Compare actual changes (`git diff --name-only` or workspace changes) against `## Impacted Files`:
+Compare actual changes against `## Impacted Files`. Get the changed file list using the best available tool:
+- **VS Code**: Use `changes` to view workspace changes
+- **CLI/Claude Code**: Run `git diff --name-only` via `run_command` or `Bash`
+
+Check each file:
 - **In allowlist**: Expected — verify the change matches the plan
 - **Not in allowlist**: Flag as potential scope creep
 - **In allowlist but unchanged**: May indicate incomplete work

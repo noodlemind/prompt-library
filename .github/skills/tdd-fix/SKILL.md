@@ -26,7 +26,7 @@ Gather:
 
 If no test exists for this bug:
 - Write a test that reproduces the exact failure
-- Run it to confirm it fails for the right reason
+- Run it to confirm it fails for the right reason (use `terminalLastCommand` in VS Code, `run_command` in CLI, or `Bash` in Claude Code)
 - The test name should describe the expected behavior, not the bug
 
 If a test already fails:

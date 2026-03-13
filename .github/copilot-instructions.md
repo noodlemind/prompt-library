@@ -30,3 +30,17 @@ Read `.github/agent-context.md` for codebase patterns. Check `docs/solutions/` b
 ## Orchestration
 
 Coordinators delegate to specialist subagents via `tools: ['agent']`. Subagents run in isolated context — include all necessary context in the task prompt. `/plan-issue` and `/code-review` prompt wrappers route to their coordinators via the `agent:` field (prompt tools override agent tools).
+
+## Cross-Environment Tool Compatibility
+
+This library targets VS Code Copilot, GHCP CLI, and Claude Code. Prompt wrappers declare VS Code tool names. When a tool isn't available, use the environment-appropriate alternative:
+
+| VS Code Tool | GHCP CLI | Claude Code | Fallback |
+|-------------|----------|-------------|----------|
+| `changes` | — | — | `git diff` via terminal |
+| `terminalLastCommand` | `run_command` | `Bash` | Run the command directly |
+| `githubRepo` | — | — | `gh` CLI via terminal |
+| `fetch` | `web` | `WebFetch` | Auto-mapped |
+| `editFiles` | `edit` | `Edit` | Auto-mapped |
+
+Skills that reference `changes`, `terminalLastCommand`, or `githubRepo` include inline fallback instructions for non-VS Code environments.

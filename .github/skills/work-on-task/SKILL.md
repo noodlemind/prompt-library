@@ -50,6 +50,9 @@ List the exact files, symbols, and lines that justify the planned change. If key
 
 - Write a failing test first (or test outline for the pattern)
 - Write the minimal code to make it pass
+- Run tests using the best available tool:
+  - **VS Code**: Run in terminal, read output with `terminalLastCommand`
+  - **CLI/Claude Code**: Run test commands directly via `run_command` or `Bash`
 - Clean up while tests are green
 - Keep diffs surgical — change only what the task requires
 
