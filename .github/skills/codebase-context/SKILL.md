@@ -13,6 +13,8 @@ Gather workspace context, generate architecture diagrams from actual codebase an
 
 ### Step 1: Gather Context
 
+Use file search and read tools to scan the codebase. For commands that require terminal access (e.g., checking versions, counting files), use `terminalLastCommand` (VS Code), `run_command` (CLI), or `Bash` (Claude Code).
+
 Build a context summary covering:
 
 #### Project Identity

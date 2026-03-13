@@ -6,6 +6,7 @@ tools:
   - search
   - read
   - editFiles
+  - terminalLastCommand
 ---
 
 Follow the instructions in [codebase-context skill](../skills/codebase-context/SKILL.md).

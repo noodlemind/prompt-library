@@ -6,6 +6,8 @@ agent: agent
 tools:
   - search
   - read
+  - changes
+  - terminalLastCommand
 ---
 
 Follow the instructions in [review-guardrails skill](../skills/review-guardrails/SKILL.md).

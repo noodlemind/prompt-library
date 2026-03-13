@@ -26,11 +26,12 @@ Determine what to review:
 - **Pull Request**: Fetch PR details and modified files
 - **Current Changes**: Review uncommitted changes in the workspace
 - **Specific Files**: Review files or directories specified by the user
-- **Branch Comparison**: Diff between two branches using the terminal workflow:
+- **Branch Comparison**: Diff between two branches:
   1. Determine the base branch (ask the user if unclear; default `main` or `master`)
-  2. Ask the user to run in the terminal: `git diff <base>...<branch> -- . ':!*.lock'`
-  3. Read the diff output using `terminalLastCommand`
-  4. Parse into changed files list with per-file hunks for specialist input
+  2. Get the diff using the best available tool:
+     - **VS Code**: Ask the user to run `git diff <base>...<branch> -- . ':!*.lock'` in terminal, then read with `terminalLastCommand`
+     - **CLI/Claude Code**: Run `git diff <base>...<branch> -- . ':!*.lock'` directly via `run_command` or `Bash`
+  3. Parse into changed files list with per-file hunks for specialist input
 
 ### 2. Gather Context
 
