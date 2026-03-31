@@ -1,6 +1,6 @@
 ---
 name: engineer
-description: "Full-cycle software engineering — understand requirements, debug issues, implement changes, and verify results. Use when you need hands-on engineering work with autonomous investigation and implementation, guided by your steering."
+description: "Full-cycle software engineering — understand, debug, implement, and verify. Use for hands-on engineering with autonomous investigation. Not when following an existing plan — use /work-on-task."
 argument-hint: "[describe what you need built, fixed, or investigated]"
 disable-model-invocation: true
 ---
@@ -38,3 +38,10 @@ Route to the `@engineer` agent. Provide:
 - A path to an existing plan file in `docs/plans/`
 
 The engineer will read the codebase, consult `.github/agent-context.md` and `docs/solutions/` for prior knowledge, then begin the understand → investigate → plan → implement → verify cycle.
+
+## Error Handling
+
+- If a subagent fails (no output), report which specialist failed and present findings from successful specialists.
+- If a subagent times out (partial output), include whatever findings were returned.
+- If the plan file is missing or malformed, report the error and suggest running the prior pipeline step.
+- If a tool is not available in the current environment, use the fallback from the cross-environment compatibility table in copilot-instructions.md.

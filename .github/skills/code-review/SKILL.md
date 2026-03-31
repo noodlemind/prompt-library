@@ -1,6 +1,6 @@
 ---
 name: code-review
-description: Perform comprehensive multi-agent code reviews covering security, performance, architecture, and code quality. Use when reviewing PRs, uncommitted changes, or comparing branches.
+description: Multi-agent code review covering security, performance, architecture, and quality. Use when reviewing PRs, changes, or branches. Not for single-domain review — delegate to the specialist directly.
 ---
 
 # Code Review
@@ -41,7 +41,7 @@ Determine what to review:
 - Detect project type (Rails, TypeScript, Python, etc.) from project files
 - Read related code and dependencies touched by the changes
 
-**Orchestration:** If the `agent` tool is available for subagent delegation, invoke
+**Orchestration:** If the `agent` tool is available for subagent delegation, delegate to
 specialist agents as isolated subagents (each with full review context in the task prompt).
 Otherwise, apply each specialist perspective sequentially within this session.
 
@@ -55,19 +55,19 @@ Otherwise, apply each specialist perspective sequentially within this session.
 
 Coordinate specialist perspectives. The agents provide judgment — this skill synthesizes their findings.
 
-**Always engage these perspectives**:
+**Always delegate to these perspectives**:
 - Architecture analysis — structural integrity and design patterns
 - Security audit — vulnerabilities and attack surface
 - Performance review — bottlenecks and scalability
 - Code simplicity — over-engineering and unnecessary complexity
 - Pattern consistency — adherence to established codebase patterns
 
-**Language-specific perspectives** (engage when applicable):
+**Language-specific perspectives** (delegate to when applicable):
 - Rails projects: Rails conventions + DHH philosophy
 - TypeScript projects: Type safety and modern patterns
 - Python projects: Pythonic patterns and type annotations
 
-**Migration-conditional perspectives** (engage when migration files are in scope):
+**Migration-conditional perspectives** (delegate to when migration files are in scope):
 - Data integrity review — migration safety, schema drift detection, rollback planning
 - Spec flow analysis — if a plan file is referenced, analyze for gaps and edge cases
 
@@ -122,6 +122,13 @@ Merge findings from all perspectives. When agents flag the same location:
 
 If reviewing a plan file with `status: review`:
 - After review is complete, suggest: "Run `/compound-learnings` to document any lessons learned."
+
+## Error Handling
+
+- If a subagent fails (no output), report which specialist failed and present findings from successful specialists.
+- If a subagent times out (partial output), include whatever findings were returned.
+- If the plan file is missing or malformed, report the error and suggest running the prior pipeline step.
+- If a tool is not available in the current environment, use the fallback from the cross-environment compatibility table in copilot-instructions.md.
 
 ## Guardrails
 

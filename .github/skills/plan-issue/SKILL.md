@@ -1,6 +1,6 @@
 ---
 name: plan-issue
-description: Generate a phased implementation plan for an existing issue with research, allowed paths, and acceptance criteria. Use after /capture-issue to plan before coding.
+description: Generate a phased implementation plan with research and acceptance criteria. Use after /capture-issue to plan before coding. Not for quick fixes — use /tdd-fix or /analyze-and-plan.
 argument-hint: "[path to issue file]"
 ---
 
@@ -35,7 +35,7 @@ Read the issue file. Check:
 
 ### 2. Research
 
-**Orchestration:** If the `agent` tool is available for subagent delegation, invoke
+**Orchestration:** If the `agent` tool is available for subagent delegation, delegate to
 research agents as isolated subagents (each with full feature context in the task prompt).
 Otherwise, run research tasks sequentially within this session.
 
@@ -81,6 +81,13 @@ updated: YYYY-MM-DD
 
 Confirm: "Plan generated with [N] phases and [M] tasks. Plan is locked."
 Suggest next step: "Run `/work-on-task docs/plans/<filename>.md` to start Phase 1."
+
+## Error Handling
+
+- If a subagent fails (no output), report which specialist failed and present findings from successful specialists.
+- If a subagent times out (partial output), include whatever findings were returned.
+- If the plan file is missing or malformed, report the error and suggest running the prior pipeline step.
+- If a tool is not available in the current environment, use the fallback from the cross-environment compatibility table in copilot-instructions.md.
 
 ## Guardrails
 
