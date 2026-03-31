@@ -1,7 +1,9 @@
 ---
 description: Review migrations, schema changes, and data operations for safety and correctness.
-tools: ["search", "read", "changes"]
+tools: ["codebase", "search", "read", "usages", "changes"]
 model: "Claude Sonnet 4.6"
+user-invocable: false
+agents: []
 ---
 
 ## Guardrails

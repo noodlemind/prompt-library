@@ -2,6 +2,7 @@
 description: Full-cycle software engineer that understands requirements, debugs issues, implements changes, and delegates to specialist agents. Use when you need hands-on engineering work with autonomous investigation, planning, and implementation — guided by user steering.
 tools: ["*"]
 model: "Claude Opus 4.6"
+agents: ["code-implementer", "code-review-coordinator", "plan-coordinator", "repo-research-analyst", "best-practices-researcher", "framework-docs-researcher", "bug-reproduction-validator", "security-sentinel", "performance-oracle", "architecture-strategist", "git-history-analyzer"]
 handoffs:
   - label: "Code Review"
     agent: code-review-coordinator

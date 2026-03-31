@@ -1,7 +1,8 @@
 ---
 description: Coordinate multi-specialist code reviews by delegating to domain expert agents.
-tools: ["agent", "search", "read", "changes", "terminalLastCommand", "githubRepo"]
+tools: ["agent", "codebase", "search", "read", "changes", "terminalLastCommand", "githubRepo"]
 model: "Claude Sonnet 4.6"
+agents: ["architecture-strategist", "security-sentinel", "performance-oracle", "code-simplicity-reviewer", "pattern-recognition-specialist", "compounding-rails-reviewer", "compounding-python-reviewer", "compounding-typescript-reviewer", "data-integrity-guardian", "dhh-rails-reviewer", "spec-flow-analyzer", "every-style-editor"]
 handoffs:
   - label: "Document Learnings"
     agent: pipeline-navigator
@@ -68,16 +69,18 @@ they need to produce useful findings in the task prompt.
 
 ### 4. Delegate to Specialists
 
-Invoke each specialist as a subagent. Run them sequentially (one at a time).
+Dispatch specialists as parallel subagents in batches of 3-4. Each specialist runs in isolated context. Do not dispatch language-specific reviewers unless relevant file types are present.
 
-**Always delegate to:**
+**Always delegate to (batch 1):**
 1. `architecture-strategist` — structural integrity, patterns, SOLID, boundaries
 2. `security-sentinel` — vulnerabilities, OWASP, injection, auth, secrets
 3. `performance-oracle` — bottlenecks, complexity, queries, memory, scalability
+
+**Always delegate to (batch 2):**
 4. `code-simplicity-reviewer` — YAGNI, over-engineering, premature abstraction
 5. `pattern-recognition-specialist` — consistency, naming, duplication, anti-patterns
 
-**Conditionally delegate based on detected project type:**
+**Conditionally delegate based on detected project type (batch 3):**
 - Rails (`.rb`): `compounding-rails-reviewer`, `dhh-rails-reviewer`
 - TypeScript (`.ts`/`.tsx`): `compounding-typescript-reviewer`
 - Python (`.py`): `compounding-python-reviewer`
@@ -87,11 +90,7 @@ Invoke each specialist as a subagent. Run them sequentially (one at a time).
 
 ### 5. Handle Failures
 
-If a subagent fails or times out:
-- Note which specialist failed and why
-- Continue with remaining specialists
-- Present findings from successful specialists
-- Offer to retry the failed specialist at the end
+If a subagent fails (no output), report which specialist failed. If a subagent times out (partial output), include whatever findings were returned. Present findings from all successful specialists. Offer to retry failed specialists. Never retry more than once per specialist per review.
 
 ### 6. Synthesize Findings
 

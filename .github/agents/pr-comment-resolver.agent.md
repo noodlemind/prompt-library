@@ -2,6 +2,8 @@
 description: Address PR review comments by implementing the requested code changes.
 tools: ["search", "read", "editFiles", "changes", "githubRepo", "terminalLastCommand"]
 model: "Claude Sonnet 4.6"
+user-invocable: false
+agents: []
 ---
 
 ## Guardrails

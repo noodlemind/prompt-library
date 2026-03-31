@@ -2,6 +2,8 @@
 description: Analyze git history to trace code evolution and understand why patterns exist.
 tools: ["search", "read", "terminalLastCommand"]
 model: "Claude Opus 4.6"
+user-invocable: false
+agents: []
 ---
 
 ## Mission

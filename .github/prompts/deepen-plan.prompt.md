@@ -5,6 +5,7 @@ argument-hint: "[path to plan file]"
 agent: agent
 tools:
   - agent
+  - codebase
   - search
   - read
   - editFiles

@@ -4,7 +4,7 @@ This file provides context for AI coding agents working in this repository. It f
 
 ## Project Overview
 
-This is a prompt library containing specialized AI agent systems for software development. The primary system targets VS Code 1.108+ with native agent and skill discovery.
+This is a prompt library containing specialized AI agent systems for software development. The primary system targets VS Code 1.109+ with native agent and skill discovery.
 
 ## Architecture
 
@@ -61,11 +61,17 @@ docs/
 
 ## Orchestration
 
-The `engineer` agent (Opus) is a full-cycle hybrid that understands requirements, debugs, plans, and delegates implementation to `code-implementer` (Sonnet) and specialist review/research to other agents — guided by user steering. Coordinator agents (`code-review-coordinator`, `plan-coordinator`, `pipeline-navigator`) use `tools: ['agent']` to delegate work to specialist agents as subagents. Each subagent runs in isolated context. In VS Code 1.108, subagents run sequentially (one at a time). Handoff buttons on coordinator agents guide developers between pipeline steps.
+The `engineer` agent (Opus) is a full-cycle hybrid that understands requirements, debugs, plans, and delegates implementation to `code-implementer` (Sonnet) and specialist review/research to other agents — guided by user steering. Coordinator agents (`code-review-coordinator`, `plan-coordinator`, `pipeline-navigator`) use `tools: ['agent']` to delegate work to specialist agents as subagents. Each subagent runs in isolated context. Coordinators dispatch subagents in parallel batches (3-4 at a time). Handoff buttons on coordinator agents guide developers between pipeline steps.
 
 Prompt wrappers for `/plan-issue` and `/code-review` route to their respective coordinators via `agent: plan-coordinator` and `agent: code-review-coordinator`.
 
-For subagent orchestration, enable: `chat.customAgentInSubagent.enabled: true`.
+### Frontmatter Properties (VS Code 1.109)
+
+- `user-invocable: false` — Prevents direct `@agent-name` invocation; agent can only be invoked as a subagent
+- `agents: [...]` — Allowlist of agents this agent can invoke as subagents (empty array `[]` prevents accidental spawning)
+- `disable-model-invocation: true` — Agent cannot be invoked by model selection; only via subagent dispatch
+
+Subagent orchestration works natively in VS Code 1.109+ without experimental settings. These frontmatter properties are ignored by VS Code 1.108 (backward-compatible).
 
 ## Accumulated Knowledge
 

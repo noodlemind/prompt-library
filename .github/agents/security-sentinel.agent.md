@@ -1,7 +1,9 @@
 ---
 description: Perform security audits and vulnerability assessments on code changes.
-tools: ["search", "read", "changes"]
+tools: ["codebase", "search", "read", "usages", "changes"]
 model: "Claude Sonnet 4.6"
+user-invocable: false
+agents: []
 ---
 
 ## Guardrails

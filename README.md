@@ -1,11 +1,11 @@
 # Prompt Library
 
-Native VS Code Copilot agent system with 24 agents (19 specialists + 1 engineer + 1 implementer + 3 coordinators) and 15 skills. Works with VS Code 1.108+ — clone the repo and start using agents immediately. No extensions to install.
+Native VS Code Copilot agent system with 24 agents (19 specialists + 1 engineer + 1 implementer + 3 coordinators) and 15 skills. Works with VS Code 1.109+ — clone the repo and start using agents immediately. No extensions to install.
 
 ## Quick Start
 
 1. Clone this repository
-2. Open in VS Code 1.108+ with GitHub Copilot Chat enabled
+2. Open in VS Code 1.109+ with GitHub Copilot Chat enabled
 3. Type `@` in Copilot Chat to see agents, `/` to see skills
 
 ## Architecture
@@ -64,7 +64,7 @@ The engineer (Opus) is the "brain" that understands requirements, debugs, plans,
 
 ## Coordinator Agents (3)
 
-Coordinators use `tools: ['agent']` to delegate work to specialists as subagents, each running in isolated context. Requires `chat.customAgentInSubagent.enabled: true`.
+Coordinators use `tools: ['agent']` to delegate work to specialists as subagents in parallel batches, each running in isolated context.
 
 | Agent | Purpose |
 |-------|---------|
@@ -127,5 +127,5 @@ CLAUDE.md              Claude Code instructions
 
 ## Requirements
 
-- VS Code 1.108+
+- VS Code 1.109+ (backward-compatible with 1.108; new frontmatter properties are ignored by older versions)
 - GitHub Copilot Chat extension
