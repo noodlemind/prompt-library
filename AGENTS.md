@@ -10,7 +10,7 @@ This is a prompt library containing specialized AI agent systems for software de
 
 The system is built on three primitives:
 
-- **Agents** (`.github/agents/*.agent.md`): 24 agents — 19 stateless domain experts, 1 engineer (Opus brain), 1 code-implementer (Sonnet hands), plus 3 coordinator agents that orchestrate specialists via sequential subagents. Agents are classified as reviewers (read-only, Sonnet 4.6), researchers (Opus 4.6), actors (can modify code, Sonnet 4.6), engineers (can modify code + delegate, Opus 4.6), or coordinators (Opus 4.6 for planning, Sonnet 4.6 for others).
+- **Agents** (`.github/agents/*.agent.md`): 24 agents — 19 stateless domain experts, 1 engineer (Opus brain), 1 code-implementer (Sonnet hands), plus 3 coordinator agents that orchestrate specialists via parallel subagent batches. Agents are classified as reviewers (read-only, Sonnet 4.6), researchers (Opus 4.6), actors (can modify code, Sonnet 4.6), engineers (can modify code + delegate, Opus 4.6), or coordinators (Opus 4.6 for planning, Sonnet 4.6 for others).
 - **Skills** (`.github/skills/*/SKILL.md`): User-invocable workflows that compose agents and tools. The connected pipeline `/brainstorming` (optional) → `/capture-issue` → `/plan-issue` → `/deepen-plan` (optional) → `/work-on-task` → `/code-review` → `/compound-learnings` is the core engineering loop.
 - **Instructions** (`.github/instructions/*.instructions.md`): Scoped context that activates based on file patterns.
 

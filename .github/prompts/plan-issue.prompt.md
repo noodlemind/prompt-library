@@ -10,6 +10,7 @@ tools:
   - read
   - editFiles
   - fetch
+  - terminalLastCommand
 ---
 
 Follow the instructions in [plan-issue skill](../skills/plan-issue/SKILL.md).

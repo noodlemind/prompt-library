@@ -23,11 +23,11 @@ Read references/agent-template.md for the complete agent template with all secti
 
 | Classification | Tools | Model | Guardrails? | Use When |
 |---------------|-------|-------|-------------|----------|
-| **Reviewer** | `["search", "read", "changes"]` | Sonnet 4.6 | Yes | Read-only code analysis |
-| **Researcher** | `["search", "read", "fetch"]` | Opus 4.6 | No | Information gathering |
-| **Actor** | `["search", "read", "editFiles", "terminalLastCommand", "changes"]` | Sonnet 4.6 | Yes | Needs to modify code |
+| **Reviewer** | `["codebase", "search", "read", "usages", "changes"]` | Sonnet 4.6 | Yes | Read-only code analysis |
+| **Researcher** | `["codebase", "search", "read", "fetch"]` | Opus 4.6 | No | Information gathering |
+| **Actor** | `["codebase", "search", "read", "editFiles", "terminalLastCommand", "changes", "problems", "usages", "awaitTerminal"]` | Sonnet 4.6 | Yes | Needs to modify code |
 | **Engineer** | `["*"]` | Opus 4.6 | No | Full-cycle understand + implement + delegate |
-| **Coordinator** | `["agent", "search", "read", ...]` | Opus 4.6 / Sonnet 4.6 | No | Orchestrating subagents |
+| **Coordinator** | `["agent", "codebase", "search", "read", ...]` | Opus 4.6 / Sonnet 4.6 | No | Orchestrating subagents |
 
 **Note:** Tool names use VS Code conventions. See `copilot-instructions.md` for cross-environment mapping.
 
@@ -90,6 +90,8 @@ After creating an agent or skill, verify:
 - [ ] Description ≤180 characters, conveys WHAT + WHEN
 - [ ] Correct tool classification (reviewer/researcher/actor)
 - [ ] Model selection set (Opus 4.6 for planning/research, Sonnet 4.6 for others)
+- [ ] `user-invocable: false` set for specialist/leaf-node agents
+- [ ] `agents: []` set for non-coordinator agents (prevents accidental subagent spawning)
 - [ ] Guardrails section present (for reviewers and actors)
 - [ ] Output format defined with markdown template
 - [ ] "What NOT to Report" section present (for reviewers)
