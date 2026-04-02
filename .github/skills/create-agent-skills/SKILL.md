@@ -1,29 +1,31 @@
 ---
 name: create-agent-skills
-description: Expert guidance for creating new agents and skills following project conventions. Use when building new agents, skills, or modifying existing ones. Not for using existing skills — invoke the skill directly.
+description: Expert guidance for creating agents, skills, and instructions following project conventions. Use when building new agents, skills, scoped instructions, or modifying existing ones. Not for importing from external repos — use /import-conventions.
 disable-model-invocation: true
 ---
 
-# Create Agent & Skills
+# Create Agents, Skills & Instructions
 
 ## When to Use
 
 - Creating a new agent (`.github/agents/*.agent.md`)
 - Creating a new skill (`.github/skills/*/SKILL.md`)
-- Modifying an existing agent or skill
-- Understanding the conventions for agent/skill design
+- Creating a new scoped instruction (`.github/instructions/*.instructions.md`)
+- Modifying an existing agent, skill, or instruction
+- Understanding the conventions for agent/skill/instruction design
 
 ## Trigger Examples
 
 **Should trigger:**
 - "Create a new agent"
 - "Build a new skill"
+- "Add a Java instruction file"
 - "How do I write an agent file?"
 
 **Should not trigger:**
+- "Import conventions from a repo" → use /import-conventions
 - "Review my code" → use /code-review
 - "Plan a feature" → use /plan-issue
-- "Brainstorm an idea" → use /brainstorming
 
 ## Agent Creation
 
@@ -95,9 +97,52 @@ Five patterns for structuring SKILL.md content ([source](https://lavinigam.com/p
 - Skills teach agents when and how to use tools — they are not tools themselves
 - Keep SKILL.md under 500 lines; extract dense content to `references/`
 
+## Instruction Creation
+
+### Instruction Template
+
+```markdown
+---
+name: '<Language/Framework> Conventions'
+description: '<What these conventions cover>'
+applyTo: '<glob pattern for relevant files>'
+---
+
+# <Language/Framework> Conventions
+
+## <Category>
+- [Specific, actionable convention with rationale]
+
+## <Category>
+- [Specific, actionable convention with rationale]
+```
+
+### Instruction Design Principles
+
+- **Scoped activation**: The `applyTo` glob pattern determines when the instruction loads. Use `**/*.java` for language-wide, or `src/main/**/*.java` for project-specific scoping.
+- **Specific and actionable**: "Use `@Transactional(readOnly = true)` for read queries" not "Use transactions appropriately."
+- **Include the WHY**: Conventions without rationale are ignored. One sentence explaining the benefit.
+- **Keep concise**: Under 100 lines. If longer, the instruction is trying to cover too much — split by concern.
+- **Source from reality**: Conventions must reflect actual project standards or industry guidelines (Google Style, PEP 8, etc.), not invented preferences.
+
+### Existing Instructions
+
+| File | Scope | Coverage |
+|------|-------|---------|
+| `rails.instructions.md` | `**/*.rb` | Rails conventions, ActiveRecord, testing |
+| `typescript.instructions.md` | `**/*.{ts,tsx}` | Type safety, React, modules |
+| `python.instructions.md` | `**/*.py` | Type annotations, Pythonic patterns, pytest |
+| `java.instructions.md` | `**/*.java` | Google Java Style, Java 17+, records, testing |
+
+### Instruction Naming
+
+- Use kebab-case matching the language/framework: `java`, `typescript`, `spring-boot`, `react-native`
+- File: `.github/instructions/<name>.instructions.md`
+- For framework-specific instructions that layer on a language instruction, name after the framework: `spring-boot.instructions.md` layers on top of `java.instructions.md`
+
 ## Validation Checklist
 
-After creating an agent or skill, verify:
+After creating an agent, skill, or instruction, verify:
 
 - [ ] Description ≤180 characters, conveys WHAT + WHEN
 - [ ] Correct tool classification (reviewer/researcher/actor)
@@ -108,4 +153,5 @@ After creating an agent or skill, verify:
 - [ ] Output format defined with markdown template
 - [ ] "What NOT to Report" section present (for reviewers)
 - [ ] File in correct directory with correct naming
+- [ ] For instructions: `applyTo` glob pattern matches target files, conventions are specific and actionable
 - [ ] Documentation updated: CLAUDE.md, AGENTS.md, copilot-instructions.md, agent-context.md
