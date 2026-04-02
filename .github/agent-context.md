@@ -31,6 +31,9 @@ This repository is a prompt library containing AI agent systems:
 
 _This section grows as agents discover patterns. Add notes here when you learn something about the codebase that future sessions should know._
 
+### Subagent Tool Restrictions
+When agents run as subagents (dispatched by coordinators), VS Code may restrict tool access even if the tool is in the agent's `tools:` array. Terminal and editor tools are most commonly restricted. Agents should check tool availability at execution time and use fallbacks from the cross-environment compatibility table in copilot-instructions.md. Extension-provided diagnostics (SonarQube, ESLint, Checkstyle) are accessed via the `problems` tool, not as individual named tools — they contribute to workspace diagnostics, not the tool registry.
+
 ### Prompt-to-Coordinator Wiring
 Prompt wrappers route `/plan-issue` → `plan-coordinator` and `/code-review` → `code-review-coordinator` via the `agent:` field. The `agent` tool must be in the prompt's tools list since prompt tools override agent tools in VS Code 1.109.
 
