@@ -1,6 +1,6 @@
 ---
 name: compound-learnings
-description: Document a recently solved problem as a reusable solution in docs/solutions/. Use after completing an issue to capture the problem, root cause, and prevention strategy.
+description: Document a recently solved problem as a reusable solution. Use after completing work to capture problem, root cause, fix, and prevention. Not for planning or implementation — use after the fix is verified.
 argument-hint: "[path to completed issue or description of solved problem]"
 ---
 
@@ -21,6 +21,8 @@ Activate when:
 - The user explicitly wants to document a learning
 
 ## Steps
+
+Read `assets/solution-template.md` for the solution document template and tagging guidelines.
 
 ### 1. Gather the Learning
 
@@ -52,30 +54,7 @@ If none fit, create a new category directory.
 
 **Path**: `docs/solutions/<category>/<descriptive-slug>.md`
 
-```yaml
----
-title: "[Descriptive title of the problem and solution]"
-date: YYYY-MM-DD
-category: [category-name]
-tags: [relevant, technology, tags]
-module: [affected module or area]
-symptom: "[What the developer observed]"
-root_cause: "[Why it happened]"
-severity: low|medium|high|critical
----
-
-## Problem
-[Detailed description of what went wrong]
-
-## Root Cause
-[Technical explanation of why it happened]
-
-## Solution
-[What was done to fix it, with code snippets where helpful]
-
-## Prevention
-[How to avoid this in the future — tests, linting rules, conventions]
-```
+Use the template from `assets/solution-template.md`. Follow the tagging guidelines in that file.
 
 ### 4. Update Agent Context
 
@@ -100,6 +79,18 @@ If working from a plan file, set `status: done` and append a final activity entr
 ### 6. Print Summary
 
 Confirm: "Learning documented at `docs/solutions/<path>`. Future agents will reference this when encountering similar problems."
+
+## Trigger Examples
+
+**Should trigger:**
+- "Document what we learned from this bug fix"
+- "Save this solution for future reference"
+- "Let's compound this learning"
+
+**Should not trigger:**
+- "Plan this feature" → /plan-issue
+- "Review this code" → /code-review
+- "Fix this bug" → /tdd-fix
 
 ## Guardrails
 
