@@ -133,6 +133,9 @@ applyTo: '<glob pattern for relevant files>'
 | `typescript.instructions.md` | `**/*.{ts,tsx}` | Type safety, React, modules |
 | `python.instructions.md` | `**/*.py` | Type annotations, Pythonic patterns, pytest |
 | `java.instructions.md` | `**/*.java` | Google Java Style, Java 17+, records, testing |
+| `spring-boot.instructions.md` | `**/*.java` | Spring Boot 3.x, DI, REST, JPA, Security, testing |
+| `postgresql.instructions.md` | `**/*.sql` | Schema design, queries, migrations, performance |
+| `aws-sdk.instructions.md` | `**/*.java` | AWS SDK v2, SQS, SNS, async clients, error handling |
 
 ### Instruction Naming
 
