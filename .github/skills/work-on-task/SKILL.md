@@ -13,6 +13,12 @@ disable-model-invocation: true
 
 This skill executes the current phase of a locked plan, tracks progress with checkboxes, and appends timestamped activity entries so the next session can resume automatically.
 
+## Mode Detection
+
+**Pipeline mode:** If a plan file is provided as argument AND the file contains `status:` in YAML frontmatter, enforce pipeline state validation (`plan_lock` required, status checks, phase tracking, activity log entries).
+
+**Standalone mode:** If no plan file is provided or the file lacks state machine fields, skip `plan_lock` check, status validation, and activity log entries. Work on the user's described task directly using TDD.
+
 ## When to Use
 
 Activate when the user wants to:

@@ -12,6 +12,12 @@ argument-hint: "[path to completed issue or description of solved problem]"
 
 This skill closes the knowledge loop. When a problem is solved, it documents the solution so future work can reference it. This is the mechanism that makes the system smarter over time.
 
+## Mode Detection
+
+**Pipeline mode:** If a plan file is provided as argument AND the file contains `status:` in YAML frontmatter, enforce pipeline state validation (read plan file sections, update `status: done`, append activity log entries).
+
+**Standalone mode:** If no plan file is provided or the file lacks state machine fields, skip status transitions and activity log entries. Document the learning directly from user-provided input.
+
 ## When to Use
 
 Activate when:

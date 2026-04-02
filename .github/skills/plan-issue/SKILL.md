@@ -12,6 +12,12 @@ argument-hint: "[path to issue file]"
 
 This skill reads an open issue file, researches the codebase and best practices, and produces a phased implementation plan. It sets `plan_lock: true` to authorize coding.
 
+## Mode Detection
+
+**Pipeline mode:** If a plan file is provided as argument AND the file contains `status:` in YAML frontmatter, enforce pipeline state validation (status checks, `plan_lock` verification, activity logging).
+
+**Standalone mode:** If no plan file is provided or the file lacks state machine fields, skip pipeline validation. Generate a plan directly from the provided description without requiring `status` or `plan_lock` checks.
+
 ## When to Use
 
 Activate when the user wants to:
