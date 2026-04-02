@@ -25,6 +25,18 @@ Activate when the user wants to:
 - Generate a phased development plan with research backing
 - Transform an idea into an actionable, phase-locked work plan
 
+## Trigger Examples
+
+**Should trigger:**
+- "Create an implementation plan for this issue"
+- "How should we build this?"
+- "Plan the approach for this feature"
+
+**Should not trigger:**
+- "Just fix the bug" → use /tdd-fix
+- "Start coding" → use /work-on-task
+- "Quick plan without research" → use /analyze-and-plan
+
 ## Prerequisites
 
 - An issue file exists (created by `/capture-issue` or manually)

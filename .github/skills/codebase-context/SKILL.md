@@ -1,6 +1,6 @@
 ---
 name: codebase-context
-description: Generate a codebase snapshot with architecture diagrams and write it to docs/codebase-snapshot.md. Use when starting on an unfamiliar codebase, onboarding, or refreshing project context.
+description: Generate a codebase snapshot with architecture diagrams and write it to docs/codebase-snapshot.md. Use when starting on an unfamiliar codebase, onboarding, or refreshing project context. Not for code review — use /code-review.
 ---
 
 # Codebase Context
@@ -8,6 +8,18 @@ description: Generate a codebase snapshot with architecture diagrams and write i
 ## Purpose
 
 Gather workspace context, generate architecture diagrams from actual codebase analysis, and persist everything to `docs/codebase-snapshot.md` as a point-in-time snapshot.
+
+## Trigger Examples
+
+**Should trigger:**
+- "Map out the codebase structure"
+- "Generate a codebase snapshot"
+- "Create architecture diagrams"
+
+**Should not trigger:**
+- "Review this code" → use /code-review
+- "Analyze this specific file" → delegate to specialist agent
+- "Plan a feature" → use /plan-issue
 
 ## Workflow
 

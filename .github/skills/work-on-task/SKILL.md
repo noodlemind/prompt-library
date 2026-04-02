@@ -26,6 +26,18 @@ Activate when the user wants to:
 - Continue work from a previous session
 - Execute a specific phase of a development plan
 
+## Trigger Examples
+
+**Should trigger:**
+- "Start working on Phase 1"
+- "Continue implementing the plan"
+- "Resume where I left off"
+
+**Should not trigger:**
+- "Plan this feature" → use /plan-issue
+- "Fix this quick bug" → use /tdd-fix
+- "Review my changes" → use /code-review
+
 ## Session Pickup Sequence
 
 When invoked, follow this exact sequence:

@@ -25,6 +25,18 @@ Activate when the user wants to:
 - Convert a finding or conversation into a trackable work item
 - File a structured issue for planning and execution
 
+## Trigger Examples
+
+**Should trigger:**
+- "Log this bug"
+- "Create an issue for this feature request"
+- "Track this task"
+
+**Should not trigger:**
+- "Plan how to fix this" → use /plan-issue
+- "Fix this bug now" → use /tdd-fix
+- "Brainstorm solutions" → use /brainstorming
+
 ## Steps
 
 ### 1. Gather Information

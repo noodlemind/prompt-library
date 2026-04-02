@@ -1,6 +1,6 @@
 ---
 name: tdd-fix
-description: Fix a bug or failing test using strict TDD methodology -- reproduce, implement minimal fix, then clean up. Use when fixing bugs or resolving failing tests.
+description: Test-driven bug fixing for isolated issues. Fix a bug or failing test using strict TDD methodology -- reproduce, implement minimal fix, then clean up. Not for planned features — use /work-on-task.
 argument-hint: "[bug description, failing test, or error message]"
 ---
 
@@ -12,6 +12,18 @@ Activate when the user wants to:
 - Fix a bug with test-driven methodology
 - Resolve a failing test
 - Implement a fix with confidence that it actually solves the problem
+
+## Trigger Examples
+
+**Should trigger:**
+- "Fix this failing test"
+- "This bug needs a TDD approach"
+- "Write a test for this bug then fix it"
+
+**Should not trigger:**
+- "Build a new feature" → use /work-on-task
+- "Plan the fix first" → use /plan-issue
+- "Review the fix" → use /code-review
 
 ## Steps
 

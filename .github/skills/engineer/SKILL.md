@@ -16,6 +16,18 @@ Activate when you need a software engineer to:
 - **Investigate an issue** — trace through code, identify causes, propose solutions
 - **Continue work** on an existing plan file from `docs/plans/`
 
+## Trigger Examples
+
+**Should trigger:**
+- "I need you to build this feature end-to-end"
+- "Debug and fix this issue"
+- "Investigate why this is broken"
+
+**Should not trigger:**
+- "Follow this existing plan" → use /work-on-task
+- "Just review the code" → use /code-review
+- "Create a plan first" → use /plan-issue
+
 ## How It Works
 
 The engineer follows a 5-phase cycle: **Understand → Investigate → Plan → Implement → Verify**.

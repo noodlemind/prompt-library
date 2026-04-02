@@ -1,6 +1,6 @@
 ---
 name: create-agent-skills
-description: Expert guidance for creating new agents and skills following project conventions. Use when building new agents, skills, or modifying existing ones.
+description: Expert guidance for creating new agents and skills following project conventions. Use when building new agents, skills, or modifying existing ones. Not for using existing skills — invoke the skill directly.
 disable-model-invocation: true
 ---
 
@@ -12,6 +12,18 @@ disable-model-invocation: true
 - Creating a new skill (`.github/skills/*/SKILL.md`)
 - Modifying an existing agent or skill
 - Understanding the conventions for agent/skill design
+
+## Trigger Examples
+
+**Should trigger:**
+- "Create a new agent"
+- "Build a new skill"
+- "How do I write an agent file?"
+
+**Should not trigger:**
+- "Review my code" → use /code-review
+- "Plan a feature" → use /plan-issue
+- "Brainstorm an idea" → use /brainstorming
 
 ## Agent Creation
 

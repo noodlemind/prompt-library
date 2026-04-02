@@ -1,6 +1,6 @@
 ---
 name: review-guardrails
-description: Audit a changeset against an issue's plan without modifying code. Use before committing to verify file compliance, acceptance criteria, and scope control.
+description: Read-only plan compliance audit. Audit a changeset against an issue's plan without modifying code. Use before committing to verify file compliance, acceptance criteria, and scope control. Not for code review — use /code-review.
 argument-hint: "[path to plan file]"
 ---
 
@@ -12,6 +12,18 @@ Activate when the user wants to:
 - Verify changes comply with the plan before committing
 - Check that all acceptance criteria are addressed
 - Audit for scope creep or unplanned changes
+
+## Trigger Examples
+
+**Should trigger:**
+- "Check if implementation matches the plan"
+- "Audit plan compliance"
+- "Are we following the plan?"
+
+**Should not trigger:**
+- "Review the code quality" → use /code-review
+- "Review this document" → use /document-review
+- "Update the plan" → use /deepen-plan
 
 ## Steps
 
