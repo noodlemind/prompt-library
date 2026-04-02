@@ -11,6 +11,7 @@ tools:
   - editFiles
   - fetch
   - terminalLastCommand
+  - problems
 ---
 
 Follow the instructions in [plan-issue skill](../skills/plan-issue/SKILL.md).

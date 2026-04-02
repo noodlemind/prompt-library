@@ -44,7 +44,8 @@ Based on the current status:
 
 | Status | Suggest |
 |--------|---------|
-| No plan exists | `/capture-issue` to create one |
+| No plan exists + raw work prompt | `/start` to classify and route to the right entry point |
+| No plan exists + clear issue | `/capture-issue` to create one |
 | `open` | `/plan-issue` or `@plan-coordinator` to generate a plan |
 | `planned` | `/work-on-task` to start implementation |
 | `in-progress` | Continue `/work-on-task` or `/code-review` when ready |

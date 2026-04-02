@@ -12,12 +12,30 @@ argument-hint: "[path to issue file]"
 
 This skill reads an open issue file, researches the codebase and best practices, and produces a phased implementation plan. It sets `plan_lock: true` to authorize coding.
 
+## Mode Detection
+
+**Pipeline mode:** If a plan file is provided as argument AND the file contains `status:` in YAML frontmatter, enforce pipeline state validation (status checks, `plan_lock` verification, activity logging).
+
+**Standalone mode:** If no plan file is provided or the file lacks state machine fields, skip pipeline validation. Generate a plan directly from the provided description without requiring `status` or `plan_lock` checks.
+
 ## When to Use
 
 Activate when the user wants to:
 - Plan an implementation approach for a captured issue
 - Generate a phased development plan with research backing
 - Transform an idea into an actionable, phase-locked work plan
+
+## Trigger Examples
+
+**Should trigger:**
+- "Create an implementation plan for this issue"
+- "How should we build this?"
+- "Plan the approach for this feature"
+
+**Should not trigger:**
+- "Just fix the bug" → use /tdd-fix
+- "Start coding" → use /work-on-task
+- "Quick plan without research" → use /analyze-and-plan
 
 ## Prerequisites
 
@@ -84,10 +102,16 @@ Suggest next step: "Run `/work-on-task docs/plans/<filename>.md` to start Phase 
 
 ## Error Handling
 
-- If a subagent fails (no output), report which specialist failed and present findings from successful specialists.
-- If a subagent times out (partial output), include whatever findings were returned.
-- If the plan file is missing or malformed, report the error and suggest running the prior pipeline step.
-- If a tool is not available in the current environment, use the fallback from the cross-environment compatibility table in copilot-instructions.md.
+### Skill-Specific Errors
+
+- **Missing issue file** → "Issue file not found at `[path]`. Create one with `/capture-issue` first."
+- **Research agent returns no results** → Proceed with codebase-only analysis. Note the gap in `## Research Notes` so downstream skills know which areas lack external validation.
+- **Plan file already exists with `plan_lock: true`** → "A locked plan already exists. Run `/work-on-task` to execute it, or unlock to re-plan."
+- **Issue has `status: needs-info`** → Attempt to resolve from codebase context (search for related files, patterns, prior solutions). If still missing, stop and report exactly what information is needed.
+
+### Common Errors
+
+For subagent failure, tool unavailability, file-not-found, and timeout recovery, follow the shared patterns in `.github/skills/references/error-handling-patterns.md`.
 
 ## Guardrails
 

@@ -1,6 +1,6 @@
 ---
 description: Review written content for Every's editorial style guide compliance.
-tools: ["search", "read"]
+tools: ["search", "read", "problems", "terminalLastCommand"]
 model: "Claude Sonnet 4.6"
 user-invocable: false
 agents: []

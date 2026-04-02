@@ -1,6 +1,6 @@
 ---
 name: analyze-and-plan
-description: Analyze an issue and generate a structured implementation plan with phases and task breakdowns. Use as a lightweight alternative to /plan-issue for quick planning.
+description: Quick planning without external research. Analyze an issue and generate a structured implementation plan with phases and task breakdowns. Not for deep research — use /plan-issue.
 argument-hint: "[issue description or file path]"
 ---
 
@@ -14,6 +14,18 @@ Activate when the user wants to:
 - Add a `## Plan` section to an existing issue file
 
 This is a lighter-weight alternative to `/plan-issue` — it skips external research and focuses on codebase analysis and task breakdown.
+
+## Trigger Examples
+
+**Should trigger:**
+- "Quick plan for this change"
+- "What files would I need to modify?"
+- "Sketch out the approach"
+
+**Should not trigger:**
+- "Deep research plan" → use /plan-issue
+- "Start implementing" → use /work-on-task
+- "Explore requirements" → use /brainstorming
 
 ## Steps
 

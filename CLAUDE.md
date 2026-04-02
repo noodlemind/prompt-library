@@ -9,8 +9,8 @@ This is a prompt library containing specialized AI agent systems for software de
 ### Architecture: Three Primitives
 
 - **Agents** (`.github/agents/*.agent.md`): 24 agents — 19 stateless domain experts using judgment-criteria design, 1 engineer (full-cycle coordinator+actor hybrid), 1 code-implementer (engineer's execution subagent), plus 3 coordinator agents that orchestrate specialists via subagents. Agents are classified as reviewers (read-only), researchers, actors (can modify code), engineers (can modify code + delegate to subagents), or coordinators (delegate to subagents).
-- **Skills** (`.github/skills/*/SKILL.md`): 15 user-invocable workflows that compose agents and tools. The connected pipeline `/capture-issue` → `/plan-issue` → `/work-on-task` → `/code-review` → `/compound-learnings` is the core engineering loop.
-- **Instructions** (`.github/instructions/*.instructions.md`): Scoped context that activates based on file patterns (Rails for `.rb`, TypeScript for `.ts`, Python for `.py`).
+- **Skills** (`.github/skills/*/SKILL.md`): 17 user-invocable workflows that compose agents and tools. The connected pipeline `/capture-issue` → `/plan-issue` → `/work-on-task` → `/code-review` → `/compound-learnings` is the core engineering loop.
+- **Instructions** (`.github/instructions/*.instructions.md`): Scoped context that activates based on file patterns (Rails for `.rb`, TypeScript for `.ts`, Python for `.py`, Java for `.java`).
 
 ### Connected Pipeline
 
@@ -53,7 +53,7 @@ CLAUDE.md              — this file (Claude Code instructions)
 
 ## Available Agents (24 total)
 
-### Reviewers (read-only analysis, tools: codebase/search/read/usages/changes, model: Sonnet 4.6)
+### Reviewers (read-only analysis, tools: codebase/search/read/usages/changes/problems/terminalLastCommand, model: Sonnet 4.6)
 1. **architecture-strategist**: Architectural compliance, design patterns, SOLID
 2. **code-simplicity-reviewer**: YAGNI, over-engineering, premature abstraction
 3. **compounding-python-reviewer**: Pythonic patterns, type safety, PEP compliance
@@ -87,30 +87,34 @@ CLAUDE.md              — this file (Claude Code instructions)
 23. **plan-coordinator**: Delegates to research agents in parallel with isolated context
 24. **pipeline-navigator**: Guides pipeline transitions via handoff buttons
 
-## Available Skills (15 total)
+## Available Skills (17 total)
 
 ### Connected Pipeline
 1. **/capture-issue**: Create structured issue from bug/feature/task
 2. **/plan-issue**: Generate phased implementation plan with research
 3. **/work-on-task**: Execute current phase with TDD and session logging
-4. **/code-review**: Multi-agent code review across all perspectives
-5. **/compound-learnings**: Document solved problems for future reference
+4. **/code-review**: Confidence-scored, persona-based code review with action routing
+5. **/compound-learnings**: Document solved problems with tagged solution templates
 
 ### Pipeline Extensions (optional steps)
 6. **/brainstorming**: Collaborative requirements exploration before planning
-7. **/deepen-plan**: Enhance plans with parallel research agents per section
-8. **/document-review**: Structured self-review of brainstorm/plan documents
-9. **/create-agent-skills**: Expert guidance for creating new agents and skills
+7. **/deepen-plan**: Interactive plan deepening with user-steered research integration
+8. **/document-review**: Multi-persona quality gate (design, scope, coherence, feasibility)
+9. **/create-agent-skills**: Expert guidance for creating agents, skills, and instructions
+10. **/import-conventions**: Generate instructions and skills from external repos and frameworks
 
 ### Full-Cycle Engineering
 10. **/engineer**: Full-cycle software engineering — understand, debug, implement, verify with user steering
 
+### Intake
+11. **/start**: Intelligent intake — classify work and route to the right pipeline entry point
+
 ### Utilities
-11. **/analyze-and-plan**: Quick planning without external research
-12. **/codebase-context**: Generate codebase snapshot with architecture diagrams to docs/codebase-snapshot.md
-13. **/review-guardrails**: Read-only plan compliance audit
-14. **/tdd-fix**: Test-driven bug fixing
-15. **/triage-issues**: Analyze and prioritize backlog
+12. **/analyze-and-plan**: Quick planning without external research
+13. **/codebase-context**: Generate codebase snapshot with architecture diagrams to docs/codebase-snapshot.md
+14. **/review-guardrails**: Read-only plan compliance audit
+15. **/tdd-fix**: Test-driven bug fixing
+16. **/triage-issues**: Analyze and prioritize backlog
 
 ## Key Design Decisions
 
@@ -119,6 +123,9 @@ CLAUDE.md              — this file (Claude Code instructions)
 - **Native-first**: VS Code discovers agents and skills from files, no extension needed
 - **Cross-tool**: AGENTS.md provides compatibility with Codex, Cursor, Gemini
 - **Knowledge compounding**: `docs/solutions/` and `agent-context.md` make the system smarter over time
+- **Confidence-gated review**: Code review uses persona synthesis with 0.0-1.0 confidence scores, merge/dedup, and action routing
+- **Standalone + pipeline mode**: Pipeline skills work both standalone (ad-hoc) and in pipeline mode (state machine enforced)
+- **Skill-specific error recovery**: Each orchestrating skill handles its own failure modes, not generic boilerplate
 
 ## Conventions
 

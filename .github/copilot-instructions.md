@@ -9,7 +9,7 @@ Prompt library with AI agent systems for software development using VS Code nati
 ## Primitives
 
 - **Agents** (`.github/agents/`): 24 agents (19 specialists + 1 engineer + 1 implementer + 3 coordinators). Review agents include prompt injection guardrails. The `engineer` (Opus) plans and orchestrates; `code-implementer` (Sonnet) executes coding tasks.
-- **Skills** (`.github/skills/`): 15 workflows. Pipeline: `/capture-issue` → `/plan-issue` → `/work-on-task` → `/code-review` → `/compound-learnings`. `/engineer` provides full-cycle engineering with user steering.
+- **Skills** (`.github/skills/`): 17 workflows with trigger examples and negative triggers. `/start` classifies incoming work and routes to the right entry point. Pipeline: `/capture-issue` → `/plan-issue` → `/work-on-task` → `/code-review` → `/compound-learnings`. `/document-review` available as quality gate between stages. `/engineer` provides full-cycle engineering with user steering. Pipeline skills support standalone mode (skip state validation) and pipeline mode (enforce state machine).
 - **Instructions** (`.github/instructions/`): Scoped context by file pattern.
 
 ## Pipeline State
@@ -48,3 +48,18 @@ This library targets VS Code Copilot, GHCP CLI, and Claude Code. Prompt wrappers
 | `editFiles` | `edit` | `Edit` | Auto-mapped |
 
 Skills that reference `changes`, `terminalLastCommand`, or `githubRepo` include inline fallback instructions for non-VS Code environments.
+
+## Tool Access Constraints
+
+**Subagent tool restrictions:** When an agent runs as a subagent (dispatched by a coordinator), VS Code restricts tool access to the set declared in the subagent's `tools:` frontmatter. Some tools (terminal execution, file editing) may be unavailable in the subagent context even if declared. If a tool is unavailable:
+1. Check if the tool is in the agent's `tools:` array — if not, it won't be available
+2. If it is declared but still unavailable, the agent is likely running in a restricted subagent context
+3. Use the fallback from the compatibility table above
+4. Report the limitation rather than failing silently
+
+**Extension-contributed tools:** VS Code extensions (SonarQube, ESLint, Checkstyle, etc.) contribute diagnostics that appear via the `problems` tool (workspace diagnostics panel). They do NOT register as individually-named tools in agent frontmatter. To leverage extension diagnostics:
+- Use the `problems` tool to read workspace diagnostics (includes all extension findings)
+- Run extension-provided commands via terminal when available (e.g., `sonar-scanner`, `eslint --fix`)
+- Extension tools are NOT discoverable via `tools:` frontmatter — they work through the diagnostics system
+
+**Prompt wrapper tool override:** In VS Code, prompt wrapper `tools:` arrays override the routed agent's tools. If an agent needs a tool and the prompt wrapper doesn't list it, the agent won't have access. Ensure prompt wrappers include all tools their routed agent requires.

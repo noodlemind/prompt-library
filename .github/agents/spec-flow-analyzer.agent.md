@@ -1,6 +1,6 @@
 ---
 description: Analyze specifications for flow completeness, edge cases, and gap identification.
-tools: ["search", "read"]
+tools: ["search", "read", "problems", "terminalLastCommand"]
 model: "Claude Sonnet 4.6"
 user-invocable: false
 agents: []

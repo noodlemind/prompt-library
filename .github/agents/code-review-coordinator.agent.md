@@ -1,6 +1,6 @@
 ---
 description: Coordinate multi-specialist code reviews by delegating to domain expert agents.
-tools: ["agent", "codebase", "search", "read", "changes", "terminalLastCommand", "githubRepo"]
+tools: ["agent", "codebase", "search", "read", "changes", "terminalLastCommand", "githubRepo", "problems"]
 model: "Claude Sonnet 4.6"
 agents: ["architecture-strategist", "security-sentinel", "performance-oracle", "code-simplicity-reviewer", "pattern-recognition-specialist", "compounding-rails-reviewer", "compounding-python-reviewer", "compounding-typescript-reviewer", "data-integrity-guardian", "dhh-rails-reviewer", "spec-flow-analyzer", "every-style-editor"]
 handoffs:

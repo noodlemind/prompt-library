@@ -1,6 +1,6 @@
 ---
 name: compound-learnings
-description: Document a recently solved problem as a reusable solution in docs/solutions/. Use after completing an issue to capture the problem, root cause, and prevention strategy.
+description: Document a recently solved problem as a reusable solution. Use after completing work to capture problem, root cause, fix, and prevention. Not for planning or implementation — use after the fix is verified.
 argument-hint: "[path to completed issue or description of solved problem]"
 ---
 
@@ -12,6 +12,12 @@ argument-hint: "[path to completed issue or description of solved problem]"
 
 This skill closes the knowledge loop. When a problem is solved, it documents the solution so future work can reference it. This is the mechanism that makes the system smarter over time.
 
+## Mode Detection
+
+**Pipeline mode:** If a plan file is provided as argument AND the file contains `status:` in YAML frontmatter, enforce pipeline state validation (read plan file sections, update `status: done`, append activity log entries).
+
+**Standalone mode:** If no plan file is provided or the file lacks state machine fields, skip status transitions and activity log entries. Document the learning directly from user-provided input.
+
 ## When to Use
 
 Activate when:
@@ -21,6 +27,8 @@ Activate when:
 - The user explicitly wants to document a learning
 
 ## Steps
+
+Read `assets/solution-template.md` for the solution document template and tagging guidelines.
 
 ### 1. Gather the Learning
 
@@ -52,39 +60,31 @@ If none fit, create a new category directory.
 
 **Path**: `docs/solutions/<category>/<descriptive-slug>.md`
 
-```yaml
----
-title: "[Descriptive title of the problem and solution]"
-date: YYYY-MM-DD
-category: [category-name]
-tags: [relevant, technology, tags]
-module: [affected module or area]
-symptom: "[What the developer observed]"
-root_cause: "[Why it happened]"
-severity: low|medium|high|critical
----
+Use the template from `assets/solution-template.md`. Follow the tagging guidelines in that file.
 
-## Problem
-[Detailed description of what went wrong]
+### 4. Graduate to Agent Context (Curation Step)
 
-## Root Cause
-[Technical explanation of why it happened]
+Evaluate whether this learning should be **graduated** to `.github/agent-context.md` — the curated project memory that every agent session reads at start.
 
-## Solution
-[What was done to fix it, with code snippets where helpful]
+**Graduate when** the learning reveals:
+- A project-level convention ("In this project, we always X because Y")
+- An architectural pattern ("Service A communicates with B via events, not direct calls")
+- A recurring gotcha ("The payments API returns 200 on validation failure — check the response body")
+- An active decision ("We chose library X over Y because Z — don't switch without team discussion")
 
-## Prevention
-[How to avoid this in the future — tests, linting rules, conventions]
-```
+**Don't graduate** when the learning is:
+- A one-time fix (the solution doc in `docs/solutions/` is sufficient)
+- Too detailed for a one-liner (keep the detail in the solution doc, link from agent-context)
+- Already covered by existing conventions or instructions
 
-### 4. Update Agent Context
-
-If the learning reveals a pattern that future agents should know about, append a brief note to `.github/agent-context.md`:
+**When graduating**, add to the appropriate section of `agent-context.md`:
 
 ```markdown
 ### [Category]: [Brief finding]
-[One-sentence summary with reference to docs/solutions/<file>]
+[One-sentence summary. See docs/solutions/<file> for details.]
 ```
+
+**Curation check**: If `agent-context.md` exceeds ~200 lines, review for stale entries — patterns that are no longer accurate, decisions that have been superseded, or gotchas that have been fixed. Remove or archive stale entries to keep the file compact and high-signal.
 
 ### 5. Update Plan File
 
@@ -100,6 +100,18 @@ If working from a plan file, set `status: done` and append a final activity entr
 ### 6. Print Summary
 
 Confirm: "Learning documented at `docs/solutions/<path>`. Future agents will reference this when encountering similar problems."
+
+## Trigger Examples
+
+**Should trigger:**
+- "Document what we learned from this bug fix"
+- "Save this solution for future reference"
+- "Let's compound this learning"
+
+**Should not trigger:**
+- "Plan this feature" → /plan-issue
+- "Review this code" → /code-review
+- "Fix this bug" → /tdd-fix
 
 ## Guardrails
 

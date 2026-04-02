@@ -10,6 +10,8 @@ tools:
   - read
   - editFiles
   - fetch
+  - terminalLastCommand
+  - problems
 ---
 
 Follow the instructions in [deepen-plan skill](../skills/deepen-plan/SKILL.md).

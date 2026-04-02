@@ -13,12 +13,30 @@ disable-model-invocation: true
 
 This skill executes the current phase of a locked plan, tracks progress with checkboxes, and appends timestamped activity entries so the next session can resume automatically.
 
+## Mode Detection
+
+**Pipeline mode:** If a plan file is provided as argument AND the file contains `status:` in YAML frontmatter, enforce pipeline state validation (`plan_lock` required, status checks, phase tracking, activity log entries).
+
+**Standalone mode:** If no plan file is provided or the file lacks state machine fields, skip `plan_lock` check, status validation, and activity log entries. Work on the user's described task directly using TDD.
+
 ## When to Use
 
 Activate when the user wants to:
 - Implement code changes for a planned issue
 - Continue work from a previous session
 - Execute a specific phase of a development plan
+
+## Trigger Examples
+
+**Should trigger:**
+- "Start working on Phase 1"
+- "Continue implementing the plan"
+- "Resume where I left off"
+
+**Should not trigger:**
+- "Plan this feature" → use /plan-issue
+- "Fix this quick bug" → use /tdd-fix
+- "Review my changes" → use /code-review
 
 ## Session Pickup Sequence
 
@@ -91,6 +109,26 @@ When all tasks in the current phase are checked:
    - If yes → set `status: review` and suggest: "All phases complete. Run `/code-review` to review changes."
    - If no → suggest: "Phase [N] complete. Run `/work-on-task` again for Phase [N+1]."
 
+## Verification Before Completion
+
+Before marking a phase complete, run verification and report evidence:
+
+1. **Tests pass**: Run the project's test suite. Report the actual test output, not just "tests pass."
+2. **Files match plan**: Compare modified files against `## Impacted Files` in the plan. Flag any files modified that aren't listed (ask user to update plan or revert).
+3. **Phase tasks checked**: All checkboxes in the current phase must be checked.
+4. **Clean working state**: No uncommitted changes that should be committed. Ignore expected untracked files (.env, lockfiles, generated files). Use git status + gitignore awareness to distinguish.
+
+Report verification results as evidence in the activity log:
+```
+### Verification — Phase [N]
+- Tests: [PASS/FAIL] — [summary of test output]
+- Scope: [N] files modified, all within Impacted Files [or: file X not in scope]
+- Tasks: [N/N] checked
+- Working state: clean [or: uncommitted changes in X]
+```
+
+DO NOT claim completion if any check fails. Report the failure and stop.
+
 ## Activity Log Rules
 
 1. **Append-only** — never modify previous entries
@@ -102,10 +140,16 @@ When all tasks in the current phase are checked:
 
 ## Error Handling
 
-- If a subagent fails (no output), report which specialist failed and present findings from successful specialists.
-- If a subagent times out (partial output), include whatever findings were returned.
-- If the plan file is missing or malformed, report the error and suggest running the prior pipeline step.
-- If a tool is not available in the current environment, use the fallback from the cross-environment compatibility table in copilot-instructions.md.
+### Skill-Specific Errors
+
+- **`plan_lock` not set** → "Plan is not locked. Run `/plan-issue` to generate and lock a plan first."
+- **Phase already complete** → "All tasks in Phase [N] are checked. Advance to the next phase or run `/code-review`."
+- **Test failure during verification** → Report specific test failures with the actual test output. Do not claim completion. Log the failure in `## Activity` and stop.
+- **File outside `## Impacted Files` scope** → Stop immediately. Report the file path and why it needs to change. Ask the user to update the plan's `## Impacted Files` section or revert the change.
+
+### Common Errors
+
+For subagent failure, tool unavailability, file-not-found, and timeout recovery, follow the shared patterns in `.github/skills/references/error-handling-patterns.md`.
 
 ## Guardrails
 
@@ -114,3 +158,4 @@ When all tasks in the current phase are checked:
 - Never skip the test step — TDD is mandatory.
 - Never modify previous `## Activity` entries.
 - If blocked, document the blocker in the activity log and stop.
+- Never claim phase completion without running verification. Evidence before assertions.

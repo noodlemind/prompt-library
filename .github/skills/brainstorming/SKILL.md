@@ -1,6 +1,6 @@
 ---
 name: brainstorming
-description: Explore requirements and approaches through collaborative dialogue before planning. Use when a feature request has multiple valid interpretations or approaches.
+description: Explore requirements and approaches through collaborative dialogue before planning. Use when a feature request has multiple valid interpretations or approaches. Not for planning implementation — use /plan-issue after brainstorming.
 disable-model-invocation: true
 ---
 
@@ -16,6 +16,18 @@ disable-model-invocation: true
 - User says "let's brainstorm", "help me think through", "explore approaches"
 - Requirements are ambiguous and need collaborative refinement
 - Multiple architectural approaches are viable
+
+## Trigger Examples
+
+**Should trigger:**
+- "Let's brainstorm this feature"
+- "Help me think through this problem"
+- "I have an idea I want to explore"
+
+**Should not trigger:**
+- "Plan this feature" → use /plan-issue
+- "Implement this" → use /work-on-task
+- "Review this document" → use /document-review
 
 ## Workflow
 

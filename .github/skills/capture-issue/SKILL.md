@@ -12,12 +12,30 @@ argument-hint: "[issue description or URL]"
 
 This skill creates the issue file that all subsequent skills operate on. It sets the initial state machine values and ensures enough context is captured to plan effectively.
 
+## Mode Detection
+
+**Pipeline mode:** If a plan file is provided as argument AND the file contains `status:` in YAML frontmatter, enforce pipeline state validation (duplicate checking, status transitions, `status: open` on creation).
+
+**Standalone mode:** If no plan file is provided or the file lacks state machine fields, skip pipeline validation. Create an issue file directly from the provided input without checking for prior pipeline state or enforcing status transitions.
+
 ## When to Use
 
 Activate when the user wants to:
 - Create or log a new issue, bug, feature request, or task
 - Convert a finding or conversation into a trackable work item
 - File a structured issue for planning and execution
+
+## Trigger Examples
+
+**Should trigger:**
+- "Log this bug"
+- "Create an issue for this feature request"
+- "Track this task"
+
+**Should not trigger:**
+- "Plan how to fix this" → use /plan-issue
+- "Fix this bug now" → use /tdd-fix
+- "Brainstorm solutions" → use /brainstorming
 
 ## Steps
 
