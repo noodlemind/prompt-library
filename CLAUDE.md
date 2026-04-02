@@ -9,7 +9,7 @@ This is a prompt library containing specialized AI agent systems for software de
 ### Architecture: Three Primitives
 
 - **Agents** (`.github/agents/*.agent.md`): 24 agents — 19 stateless domain experts using judgment-criteria design, 1 engineer (full-cycle coordinator+actor hybrid), 1 code-implementer (engineer's execution subagent), plus 3 coordinator agents that orchestrate specialists via subagents. Agents are classified as reviewers (read-only), researchers, actors (can modify code), engineers (can modify code + delegate to subagents), or coordinators (delegate to subagents).
-- **Skills** (`.github/skills/*/SKILL.md`): 15 user-invocable workflows that compose agents and tools. The connected pipeline `/capture-issue` → `/plan-issue` → `/work-on-task` → `/code-review` → `/compound-learnings` is the core engineering loop.
+- **Skills** (`.github/skills/*/SKILL.md`): 16 user-invocable workflows that compose agents and tools. The connected pipeline `/capture-issue` → `/plan-issue` → `/work-on-task` → `/code-review` → `/compound-learnings` is the core engineering loop.
 - **Instructions** (`.github/instructions/*.instructions.md`): Scoped context that activates based on file patterns (Rails for `.rb`, TypeScript for `.ts`, Python for `.py`).
 
 ### Connected Pipeline
@@ -87,7 +87,7 @@ CLAUDE.md              — this file (Claude Code instructions)
 23. **plan-coordinator**: Delegates to research agents in parallel with isolated context
 24. **pipeline-navigator**: Guides pipeline transitions via handoff buttons
 
-## Available Skills (15 total)
+## Available Skills (16 total)
 
 ### Connected Pipeline
 1. **/capture-issue**: Create structured issue from bug/feature/task
@@ -105,12 +105,15 @@ CLAUDE.md              — this file (Claude Code instructions)
 ### Full-Cycle Engineering
 10. **/engineer**: Full-cycle software engineering — understand, debug, implement, verify with user steering
 
+### Intake
+11. **/start**: Intelligent intake — classify work and route to the right pipeline entry point
+
 ### Utilities
-11. **/analyze-and-plan**: Quick planning without external research
-12. **/codebase-context**: Generate codebase snapshot with architecture diagrams to docs/codebase-snapshot.md
-13. **/review-guardrails**: Read-only plan compliance audit
-14. **/tdd-fix**: Test-driven bug fixing
-15. **/triage-issues**: Analyze and prioritize backlog
+12. **/analyze-and-plan**: Quick planning without external research
+13. **/codebase-context**: Generate codebase snapshot with architecture diagrams to docs/codebase-snapshot.md
+14. **/review-guardrails**: Read-only plan compliance audit
+15. **/tdd-fix**: Test-driven bug fixing
+16. **/triage-issues**: Analyze and prioritize backlog
 
 ## Key Design Decisions
 

@@ -1,6 +1,6 @@
 # Prompt Library
 
-Native VS Code Copilot agent system with 24 agents (19 specialists + 1 engineer + 1 implementer + 3 coordinators) and 15 skills. Works with VS Code 1.109+ — clone the repo and start using agents immediately. No extensions to install.
+Native VS Code Copilot agent system with 24 agents (19 specialists + 1 engineer + 1 implementer + 3 coordinators) and 16 skills. Works with VS Code 1.109+ — clone the repo and start using agents immediately. No extensions to install.
 
 ## Quick Start
 
@@ -72,7 +72,7 @@ Coordinators use `tools: ['agent']` to delegate work to specialists as subagents
 | `@plan-coordinator` | Orchestrate research agents for codebase analysis and plan generation |
 | `@pipeline-navigator` | Guide pipeline transitions via handoff buttons |
 
-## Skills (15)
+## Skills (16)
 
 | Skill | Type | Purpose |
 |-------|------|---------|
@@ -86,6 +86,7 @@ Coordinators use `tools: ['agent']` to delegate work to specialists as subagents
 | `/document-review` | Extension | Multi-persona quality gate (design, scope, coherence, feasibility) |
 | `/create-agent-skills` | Extension | Guidance for creating new agents and skills |
 | `/engineer` | Engineering | Full-cycle engineering with user steering |
+| `/start` | Intake | Classify work and route to the right pipeline entry point |
 | `/analyze-and-plan` | Utility | Quick planning without external research |
 | `/codebase-context` | Utility | Generate codebase snapshot with architecture diagrams |
 | `/review-guardrails` | Utility | Read-only plan compliance audit |
