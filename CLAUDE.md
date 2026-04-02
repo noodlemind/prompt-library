@@ -9,8 +9,8 @@ This is a prompt library containing specialized AI agent systems for software de
 ### Architecture: Three Primitives
 
 - **Agents** (`.github/agents/*.agent.md`): 24 agents — 19 stateless domain experts using judgment-criteria design, 1 engineer (full-cycle coordinator+actor hybrid), 1 code-implementer (engineer's execution subagent), plus 3 coordinator agents that orchestrate specialists via subagents. Agents are classified as reviewers (read-only), researchers, actors (can modify code), engineers (can modify code + delegate to subagents), or coordinators (delegate to subagents).
-- **Skills** (`.github/skills/*/SKILL.md`): 16 user-invocable workflows that compose agents and tools. The connected pipeline `/capture-issue` → `/plan-issue` → `/work-on-task` → `/code-review` → `/compound-learnings` is the core engineering loop.
-- **Instructions** (`.github/instructions/*.instructions.md`): Scoped context that activates based on file patterns (Rails for `.rb`, TypeScript for `.ts`, Python for `.py`).
+- **Skills** (`.github/skills/*/SKILL.md`): 17 user-invocable workflows that compose agents and tools. The connected pipeline `/capture-issue` → `/plan-issue` → `/work-on-task` → `/code-review` → `/compound-learnings` is the core engineering loop.
+- **Instructions** (`.github/instructions/*.instructions.md`): Scoped context that activates based on file patterns (Rails for `.rb`, TypeScript for `.ts`, Python for `.py`, Java for `.java`).
 
 ### Connected Pipeline
 
@@ -87,7 +87,7 @@ CLAUDE.md              — this file (Claude Code instructions)
 23. **plan-coordinator**: Delegates to research agents in parallel with isolated context
 24. **pipeline-navigator**: Guides pipeline transitions via handoff buttons
 
-## Available Skills (16 total)
+## Available Skills (17 total)
 
 ### Connected Pipeline
 1. **/capture-issue**: Create structured issue from bug/feature/task
@@ -100,7 +100,8 @@ CLAUDE.md              — this file (Claude Code instructions)
 6. **/brainstorming**: Collaborative requirements exploration before planning
 7. **/deepen-plan**: Interactive plan deepening with user-steered research integration
 8. **/document-review**: Multi-persona quality gate (design, scope, coherence, feasibility)
-9. **/create-agent-skills**: Expert guidance for creating new agents and skills
+9. **/create-agent-skills**: Expert guidance for creating agents, skills, and instructions
+10. **/import-conventions**: Generate instructions and skills from external repos and frameworks
 
 ### Full-Cycle Engineering
 10. **/engineer**: Full-cycle software engineering — understand, debug, implement, verify with user steering
