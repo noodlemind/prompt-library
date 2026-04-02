@@ -12,6 +12,7 @@ tools:
   - usages
   - changes
   - terminalLastCommand
+  - problems
 ---
 
 Follow the instructions in [code-review skill](../skills/code-review/SKILL.md).

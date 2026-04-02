@@ -53,7 +53,7 @@ CLAUDE.md              — this file (Claude Code instructions)
 
 ## Available Agents (24 total)
 
-### Reviewers (read-only analysis, tools: codebase/search/read/usages/changes, model: Sonnet 4.6)
+### Reviewers (read-only analysis, tools: codebase/search/read/usages/changes/problems/terminalLastCommand, model: Sonnet 4.6)
 1. **architecture-strategist**: Architectural compliance, design patterns, SOLID
 2. **code-simplicity-reviewer**: YAGNI, over-engineering, premature abstraction
 3. **compounding-python-reviewer**: Pythonic patterns, type safety, PEP compliance

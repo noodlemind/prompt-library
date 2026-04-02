@@ -17,7 +17,7 @@ This repository is a prompt library containing AI agent systems:
 
 - Agents use judgment-criteria design (define outcomes, not procedures)
 - Agents are classified as reviewers (read-only, Sonnet 4.6), researchers (Opus 4.6), actors (can modify code, Sonnet 4.6), engineers (full-cycle: modify code + delegate to subagents, Opus 4.6), or coordinators (Opus 4.6 for planning, Sonnet 4.6 for others)
-- Agent tools follow least-privilege: reviewers get `codebase`, `search`, `read`, `usages`, `changes`; researchers get `codebase`, `search`, `read`, `fetch` (or `terminalLastCommand` for git-history-analyzer); actors get tools matching their responsibilities plus `codebase`, `problems`, `usages`, `awaitTerminal`; coordinators get `agent`, `codebase` plus their operational tools; only the engineer has `["*"]`
+- Agent tools follow generous-but-meaningful restrictions: reviewers get `codebase`, `search`, `read`, `usages`, `changes`, `problems`, `terminalLastCommand` (no editFiles); researchers get `codebase`, `search`, `read`, `fetch`, `problems`, `terminalLastCommand`; actors get tools matching their responsibilities plus `codebase`, `problems`, `usages`, `terminalLastCommand`; coordinators get `agent`, `codebase`, `problems` plus their operational tools; only the engineer has `["*"]`
 - Leaf-node agents set `user-invocable: false` and `agents: []` to prevent direct user invocation and accidental subagent spawning
 - Coordinators and the engineer define `agents:` allowlists restricting which specialists they can invoke
 - Coordinators dispatch subagents in parallel batches (3-4 at a time) rather than sequentially

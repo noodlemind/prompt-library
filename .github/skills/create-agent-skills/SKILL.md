@@ -37,11 +37,11 @@ Read references/agent-template.md for the complete agent template with all secti
 
 | Classification | Tools | Model | Guardrails? | Use When |
 |---------------|-------|-------|-------------|----------|
-| **Reviewer** | `["codebase", "search", "read", "usages", "changes"]` | Sonnet 4.6 | Yes | Read-only code analysis |
-| **Researcher** | `["codebase", "search", "read", "fetch"]` | Opus 4.6 | No | Information gathering |
+| **Reviewer** | `["codebase", "search", "read", "usages", "changes", "problems", "terminalLastCommand"]` | Sonnet 4.6 | Yes | Read-only code analysis |
+| **Researcher** | `["codebase", "search", "read", "fetch", "problems", "terminalLastCommand"]` | Opus 4.6 | No | Information gathering |
 | **Actor** | `["codebase", "search", "read", "editFiles", "terminalLastCommand", "changes", "problems", "usages", "awaitTerminal"]` | Sonnet 4.6 | Yes | Needs to modify code |
 | **Engineer** | `["*"]` | Opus 4.6 | No | Full-cycle understand + implement + delegate |
-| **Coordinator** | `["agent", "codebase", "search", "read", ...]` | Opus 4.6 / Sonnet 4.6 | No | Orchestrating subagents |
+| **Coordinator** | `["agent", "codebase", "search", "read", "problems", ...]` | Opus 4.6 / Sonnet 4.6 | No | Orchestrating subagents |
 
 **Note:** Tool names use VS Code conventions. See `copilot-instructions.md` for cross-environment mapping.
 

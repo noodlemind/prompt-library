@@ -1,6 +1,6 @@
 ---
 description: Coordinate issue planning by delegating to research agents and synthesizing structured plans.
-tools: ["agent", "codebase", "search", "read", "editFiles", "fetch", "terminalLastCommand"]
+tools: ["agent", "codebase", "search", "read", "editFiles", "fetch", "terminalLastCommand", "problems"]
 model: "Claude Opus 4.6"
 agents: ["repo-research-analyst", "best-practices-researcher", "framework-docs-researcher", "git-history-analyzer", "spec-flow-analyzer"]
 handoffs:
