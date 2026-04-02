@@ -84,10 +84,16 @@ Suggest next step: "Run `/work-on-task docs/plans/<filename>.md` to start Phase 
 
 ## Error Handling
 
-- If a subagent fails (no output), report which specialist failed and present findings from successful specialists.
-- If a subagent times out (partial output), include whatever findings were returned.
-- If the plan file is missing or malformed, report the error and suggest running the prior pipeline step.
-- If a tool is not available in the current environment, use the fallback from the cross-environment compatibility table in copilot-instructions.md.
+### Skill-Specific Errors
+
+- **Missing issue file** → "Issue file not found at `[path]`. Create one with `/capture-issue` first."
+- **Research agent returns no results** → Proceed with codebase-only analysis. Note the gap in `## Research Notes` so downstream skills know which areas lack external validation.
+- **Plan file already exists with `plan_lock: true`** → "A locked plan already exists. Run `/work-on-task` to execute it, or unlock to re-plan."
+- **Issue has `status: needs-info`** → Attempt to resolve from codebase context (search for related files, patterns, prior solutions). If still missing, stop and report exactly what information is needed.
+
+### Common Errors
+
+For subagent failure, tool unavailability, file-not-found, and timeout recovery, follow the shared patterns in `.github/skills/references/error-handling-patterns.md`.
 
 ## Guardrails
 

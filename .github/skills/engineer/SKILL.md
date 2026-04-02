@@ -39,9 +39,26 @@ Route to the `@engineer` agent. Provide:
 
 The engineer will read the codebase, consult `.github/agent-context.md` and `docs/solutions/` for prior knowledge, then begin the understand → investigate → plan → implement → verify cycle.
 
+## Verify Phase
+
+In the Verify phase, run evidence-based checks before claiming completion:
+
+1. **Tests pass** — Run the project's test suite and report actual output. Do not summarize as "tests pass" without showing evidence.
+2. **Changed files are within scope** — Compare modified files against the plan or stated requirements. Flag any files changed that fall outside the expected scope.
+3. **Implementation matches acceptance criteria** — Verify each criterion from the requirements with specific evidence (test output, behavior confirmation, code references).
+4. **No regressions** — Run the full test suite, not just tests for changed code. Report the complete test results.
+
+Report verification results before claiming completion. If any check fails, report the failure with evidence and do not claim the work is done.
+
 ## Error Handling
 
-- If a subagent fails (no output), report which specialist failed and present findings from successful specialists.
-- If a subagent times out (partial output), include whatever findings were returned.
-- If the plan file is missing or malformed, report the error and suggest running the prior pipeline step.
-- If a tool is not available in the current environment, use the fallback from the cross-environment compatibility table in copilot-instructions.md.
+### Skill-Specific Errors
+
+- **No clear requirement** → Ask the user to clarify what needs to be built, fixed, or investigated before proceeding.
+- **Delegation to code-implementer fails** → Report the failure with context. Offer to retry the delegation or implement inline within the current session.
+- **User consultation needed but non-interactive mode** → Make the most conservative decision available. Document the assumption in the `## Activity` log so it can be reviewed.
+- **Test suite fails after implementation** → Report failures with the actual test output as evidence. Do not claim completion. Log the failures and stop for user guidance.
+
+### Common Errors
+
+For subagent failure, tool unavailability, file-not-found, and timeout recovery, follow the shared patterns in `.github/skills/references/error-handling-patterns.md`.
