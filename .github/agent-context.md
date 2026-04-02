@@ -40,5 +40,23 @@ Prompt wrappers route `/plan-issue` → `plan-coordinator` and `/code-review` �
 ### Code Review Branch Diffs
 The code review coordinator uses `terminalLastCommand` to read branch diffs. When reviewing a feature branch, ask the user to run `git diff <base>...<branch> -- . ':!*.lock'` in the terminal, then read the output via `terminalLastCommand`. This works regardless of hosting provider (GitHub, GitLab, etc.) and captures the full diff without relying on the `changes` tool (which only shows uncommitted modifications).
 
+### Confidence-Gated Code Review
+The `/code-review` skill uses persona-based review with structured JSON findings. Each persona returns findings with severity (P1-P3) and confidence (0.0-1.0). Synthesis: validate → confidence-gate (0.60 threshold, P1@0.50+ exception) → dedup (fingerprint on file+line+title) → cross-persona boost (+0.10 when 2+ agree) → route by autofix_class (safe_auto/gated_auto/manual/advisory). Persona definitions in `references/review-personas.md`, output schema in `references/findings-schema.md`. Quality gates verify actionability, accuracy, and calibration before delivery.
+
+### Document Review as Quality Gate
+The `/document-review` skill uses 4 personas (design, scope, coherence, feasibility) with per-document-type criteria. Available between brainstorm→plan and plan→work as a quality gate. Evaluation criteria in `references/review-criteria.md`. P1 findings block proceeding; P2/P3 auto-applied in non-interactive mode.
+
+### Standalone + Pipeline Mode
+Pipeline skills (capture-issue, plan-issue, work-on-task, code-review, compound-learnings) support two modes. Pipeline mode: plan file with `status:` field → enforce state machine. Standalone mode: no plan file or no state fields → skip validation, do the core job directly. Mode detection is at the top of each skill's workflow.
+
+### Verification Before Completion
+`/work-on-task` and `/engineer` run evidence-based verification before claiming completion: tests pass (actual output reported), files match plan scope, all phase tasks checked, clean working state. Verification results logged in activity entries. Failed verification blocks completion claims.
+
+### Skill-Specific Error Recovery
+Five orchestrating skills (code-review, plan-issue, deepen-plan, work-on-task, engineer) have error handling specific to their failure modes. Common patterns (subagent failure, tool unavailability, file not found, timeout) are in `.github/skills/references/error-handling-patterns.md`. Each skill references shared patterns plus adds domain-specific errors.
+
+### Solution Document Format
+`/compound-learnings` uses a template at `assets/solution-template.md` with YAML frontmatter (title, date, category, tags, module, symptom, root_cause, severity) and body sections (Problem, Root Cause, Solution, Prevention). Tags should be specific: "n-plus-one", "rails-7", not just "performance". 3-7 tags per document.
+
 ### Engineer Agent (Opus Brain + Sonnet Hands)
 The `engineer` agent (Opus 4.6) is the "brain" — it understands requirements, investigates, plans, and orchestrates. It delegates implementation to `code-implementer` (Sonnet 4.6) for cost-efficient execution, and delegates to specialist reviewers/researchers for focused expertise. It follows a 5-phase workflow (Understand → Investigate → Plan → Implement → Verify) with user consultation checkpoints between phases. It integrates with the pipeline by reading/writing plan files and maintaining state machine fields. The `/engineer` skill is its entry point. The `code-implementer` is not intended for direct user invocation — it's the engineer's execution subagent (marked `user-invocable: false` and `disable-model-invocation: true`).

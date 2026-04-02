@@ -73,6 +73,16 @@ Prompt wrappers for `/plan-issue` and `/code-review` route to their respective c
 
 Subagent orchestration works natively in VS Code 1.109+ without experimental settings. These frontmatter properties are ignored by VS Code 1.108 (backward-compatible).
 
+### Skill Patterns
+
+Skills follow proven design patterns from Google ADK and Compound Engineering:
+- **Code review** uses confidence-scored persona synthesis with structured JSON findings, merge/dedup, and action routing (safe_auto/gated_auto/manual/advisory). Review personas and findings schema in `references/`.
+- **Document review** uses 4 personas (design, scope, coherence, feasibility) as a quality gate between pipeline stages. Evaluation criteria in `references/`.
+- **Plan deepening** presents research findings interactively for user accept/reject before integration.
+- **Pipeline skills** support standalone mode (skip state validation) and pipeline mode (enforce state machine). Mode detected from plan file presence.
+- **Error handling** is skill-specific, referencing shared patterns from `.github/skills/references/error-handling-patterns.md`.
+- **All skills** have trigger examples (3 should-trigger, 3 should-not) and negative triggers for confusable pairs.
+
 ## Accumulated Knowledge
 
 Read `.github/agent-context.md` for patterns discovered by previous agent sessions. Read `docs/solutions/` for documented solutions to past problems.

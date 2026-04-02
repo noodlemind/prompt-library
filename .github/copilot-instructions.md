@@ -9,7 +9,7 @@ Prompt library with AI agent systems for software development using VS Code nati
 ## Primitives
 
 - **Agents** (`.github/agents/`): 24 agents (19 specialists + 1 engineer + 1 implementer + 3 coordinators). Review agents include prompt injection guardrails. The `engineer` (Opus) plans and orchestrates; `code-implementer` (Sonnet) executes coding tasks.
-- **Skills** (`.github/skills/`): 15 workflows. Pipeline: `/capture-issue` → `/plan-issue` → `/work-on-task` → `/code-review` → `/compound-learnings`. `/engineer` provides full-cycle engineering with user steering.
+- **Skills** (`.github/skills/`): 15 workflows with trigger examples and negative triggers. Pipeline: `/capture-issue` → `/plan-issue` → `/work-on-task` → `/code-review` → `/compound-learnings`. `/document-review` available as quality gate between stages. `/engineer` provides full-cycle engineering with user steering. Pipeline skills support standalone mode (skip state validation) and pipeline mode (enforce state machine).
 - **Instructions** (`.github/instructions/`): Scoped context by file pattern.
 
 ## Pipeline State

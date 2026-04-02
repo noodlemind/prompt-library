@@ -93,13 +93,13 @@ CLAUDE.md              — this file (Claude Code instructions)
 1. **/capture-issue**: Create structured issue from bug/feature/task
 2. **/plan-issue**: Generate phased implementation plan with research
 3. **/work-on-task**: Execute current phase with TDD and session logging
-4. **/code-review**: Multi-agent code review across all perspectives
-5. **/compound-learnings**: Document solved problems for future reference
+4. **/code-review**: Confidence-scored, persona-based code review with action routing
+5. **/compound-learnings**: Document solved problems with tagged solution templates
 
 ### Pipeline Extensions (optional steps)
 6. **/brainstorming**: Collaborative requirements exploration before planning
-7. **/deepen-plan**: Enhance plans with parallel research agents per section
-8. **/document-review**: Structured self-review of brainstorm/plan documents
+7. **/deepen-plan**: Interactive plan deepening with user-steered research integration
+8. **/document-review**: Multi-persona quality gate (design, scope, coherence, feasibility)
 9. **/create-agent-skills**: Expert guidance for creating new agents and skills
 
 ### Full-Cycle Engineering
@@ -119,6 +119,9 @@ CLAUDE.md              — this file (Claude Code instructions)
 - **Native-first**: VS Code discovers agents and skills from files, no extension needed
 - **Cross-tool**: AGENTS.md provides compatibility with Codex, Cursor, Gemini
 - **Knowledge compounding**: `docs/solutions/` and `agent-context.md` make the system smarter over time
+- **Confidence-gated review**: Code review uses persona synthesis with 0.0-1.0 confidence scores, merge/dedup, and action routing
+- **Standalone + pipeline mode**: Pipeline skills work both standalone (ad-hoc) and in pipeline mode (state machine enforced)
+- **Skill-specific error recovery**: Each orchestrating skill handles its own failure modes, not generic boilerplate
 
 ## Conventions
 

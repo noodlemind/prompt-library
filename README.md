@@ -79,11 +79,11 @@ Coordinators use `tools: ['agent']` to delegate work to specialists as subagents
 | `/capture-issue` | Pipeline | Create structured issue from description |
 | `/plan-issue` | Pipeline | Generate phased plan with research |
 | `/work-on-task` | Pipeline | Execute phase with TDD and session logging |
-| `/code-review` | Pipeline | Multi-agent code review |
-| `/compound-learnings` | Pipeline | Document solution for future reference |
+| `/code-review` | Pipeline | Confidence-scored persona review with action routing |
+| `/compound-learnings` | Pipeline | Document solution with tagged templates |
 | `/brainstorming` | Extension | Collaborative requirements exploration |
-| `/deepen-plan` | Extension | Enhance plans with research agents |
-| `/document-review` | Extension | Structured self-review of documents |
+| `/deepen-plan` | Extension | Interactive plan deepening with user-steered research |
+| `/document-review` | Extension | Multi-persona quality gate (design, scope, coherence, feasibility) |
 | `/create-agent-skills` | Extension | Guidance for creating new agents and skills |
 | `/engineer` | Engineering | Full-cycle engineering with user steering |
 | `/analyze-and-plan` | Utility | Quick planning without external research |
