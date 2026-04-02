@@ -78,6 +78,52 @@ Read references/skill-template.md for the complete skill template with all secti
 - Use kebab-case: `brainstorming`, `deepen-plan`, `code-review`
 - Directory: `.github/skills/<name>/SKILL.md`
 
+## Cross-Tool Frontmatter Compatibility
+
+This library targets VS Code 1.109 as the primary platform. VS Code reads specific frontmatter fields. Other tools (Amp, Cursor, Windsurf, Augment) read `AGENTS.md` and may adopt the agentskills.io standard.
+
+**VS Code 1.109 frontmatter (primary — always use these):**
+
+| Field | Used by | Purpose |
+|-------|---------|---------|
+| `name` | Skills, prompts | Display name in `/` menu |
+| `description` | Agents, skills | Discovery matching — the search index |
+| `tools` | Agents, prompts | Tool whitelist (omit for all tools) |
+| `model` | Agents | Model selection |
+| `user-invocable` | Agents | Show/hide in `@` menu |
+| `agents` | Agents | Subagent allowlist |
+| `disable-model-invocation` | Agents, skills | Prevent auto-invocation |
+| `applyTo` | Instructions | Glob pattern for activation |
+
+**agentskills.io standard (emerging — add for cross-tool portability when relevant):**
+
+| Field | Maps to VS Code | Notes |
+|-------|-----------------|-------|
+| `name` | Same | Required in both |
+| `description` | Same | Required in both |
+| `allowed-tools` | `tools` | Different name, same concept |
+| `license` | — | Not read by VS Code; useful for shared skills |
+| `compatibility` | — | Not read by VS Code; documents which tools support this skill |
+| `metadata` | — | Not read by VS Code; freeform extension point |
+
+**Rule of thumb:** Use VS Code frontmatter as primary. Add agentskills.io fields only when publishing skills for cross-tool consumption.
+
+## Token Budget Guidance
+
+Agent context windows are finite. Keep artifacts concise:
+
+| Artifact | Size Limit | Rationale |
+|----------|-----------|-----------|
+| Skill SKILL.md | ≤500 lines | Extract dense content to `references/` |
+| Instruction `.instructions.md` | ≤100 lines | Focused conventions, not encyclopedias |
+| Agent `.agent.md` | ≤200 lines | Judgment criteria, not procedures |
+| `agent-context.md` | ≤200 lines | Curated patterns, prune stale entries |
+| Review check `.md` | ≤50 lines | One concern per check |
+| Skill `description:` | ≤220 chars | Search index — dense and specific |
+| Agent `description:` | ≤180 chars | Discovery text |
+
+These align with industry limits: Windsurf caps at 6K/rule, Augment at 24K user + 49K workspace, Codex at 32-64 KiB total. Staying within these limits ensures cross-tool compatibility.
+
 ## Skill Design Patterns
 
 Five patterns for structuring SKILL.md content ([source](https://lavinigam.com/posts/adk-skill-design-patterns/)):

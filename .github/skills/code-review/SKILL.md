@@ -76,9 +76,16 @@ Read `references/review-personas.md` for the full persona catalog.
 - **Language-specific**: compounding-rails-reviewer (Rails), compounding-typescript-reviewer (TypeScript), compounding-python-reviewer (Python)
 - **Domain-specific**: dhh-rails-reviewer (Rails architecture/philosophy decisions), data-integrity-guardian (migration files), spec-flow-analyzer (plan file referenced), every-style-editor (prose content)
 
-Announce the selected team before dispatching.
+### 4b. Discover Project Checks
 
-### 5. Dispatch Personas
+Scan `.github/checks/` for check files (`.md` files with `name:` frontmatter). For each check:
+- If the check has a `globs:` field, only include it when changed files match the glob pattern
+- If no `globs:`, include for all reviews
+- Each check will be dispatched as a focused subagent alongside personas
+
+Announce the selected team (personas + checks) before dispatching.
+
+### 5. Dispatch Personas and Checks
 
 **Orchestration:** If the `agent` tool is available for subagent delegation, delegate to persona agents as isolated subagents in parallel batches (3-4 at a time). Otherwise, apply each persona's perspective sequentially within this session.
 
@@ -87,6 +94,14 @@ Each persona receives:
 2. The findings schema from `references/findings-schema.md`
 3. Review context: intent summary, file list, diff, project type
 4. Instruction to return structured JSON matching the schema
+
+**Check dispatch:** Each discovered check is dispatched as a focused subagent. The subagent receives:
+1. The check's full content (criteria, examples)
+2. The findings schema from `references/findings-schema.md`
+3. The same review context as personas
+4. The check's `severity-default` as the default severity for findings
+
+Checks run in parallel with personas. Their findings are merged into the same synthesis pipeline.
 
 Each persona returns JSON:
 ```json
