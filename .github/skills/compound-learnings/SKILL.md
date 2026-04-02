@@ -62,14 +62,29 @@ If none fit, create a new category directory.
 
 Use the template from `assets/solution-template.md`. Follow the tagging guidelines in that file.
 
-### 4. Update Agent Context
+### 4. Graduate to Agent Context (Curation Step)
 
-If the learning reveals a pattern that future agents should know about, append a brief note to `.github/agent-context.md`:
+Evaluate whether this learning should be **graduated** to `.github/agent-context.md` — the curated project memory that every agent session reads at start.
+
+**Graduate when** the learning reveals:
+- A project-level convention ("In this project, we always X because Y")
+- An architectural pattern ("Service A communicates with B via events, not direct calls")
+- A recurring gotcha ("The payments API returns 200 on validation failure — check the response body")
+- An active decision ("We chose library X over Y because Z — don't switch without team discussion")
+
+**Don't graduate** when the learning is:
+- A one-time fix (the solution doc in `docs/solutions/` is sufficient)
+- Too detailed for a one-liner (keep the detail in the solution doc, link from agent-context)
+- Already covered by existing conventions or instructions
+
+**When graduating**, add to the appropriate section of `agent-context.md`:
 
 ```markdown
 ### [Category]: [Brief finding]
-[One-sentence summary with reference to docs/solutions/<file>]
+[One-sentence summary. See docs/solutions/<file> for details.]
 ```
+
+**Curation check**: If `agent-context.md` exceeds ~200 lines, review for stale entries — patterns that are no longer accurate, decisions that have been superseded, or gotchas that have been fixed. Remove or archive stale entries to keep the file compact and high-signal.
 
 ### 5. Update Plan File
 
