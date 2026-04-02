@@ -1,7 +1,9 @@
 ---
 description: Review Ruby on Rails code for conventions, correctness, and maintainability.
-tools: ["search", "read", "changes"]
+tools: ["codebase", "search", "read", "usages", "changes"]
 model: "Claude Sonnet 4.6"
+user-invocable: false
+agents: []
 ---
 
 ## Guardrails

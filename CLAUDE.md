@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Repository Overview
 
-This is a prompt library containing specialized AI agent systems for software development. The primary system uses VS Code 1.108+ native agent and skill discovery — no extensions required.
+This is a prompt library containing specialized AI agent systems for software development. The primary system uses VS Code 1.109+ native agent and skill discovery — no extensions required.
 
 ### Architecture: Three Primitives
 
@@ -53,7 +53,7 @@ CLAUDE.md              — this file (Claude Code instructions)
 
 ## Available Agents (24 total)
 
-### Reviewers (read-only analysis, tools: search/read/changes, model: Sonnet 4.6)
+### Reviewers (read-only analysis, tools: codebase/search/read/usages/changes, model: Sonnet 4.6)
 1. **architecture-strategist**: Architectural compliance, design patterns, SOLID
 2. **code-simplicity-reviewer**: YAGNI, over-engineering, premature abstraction
 3. **compounding-python-reviewer**: Pythonic patterns, type safety, PEP compliance
@@ -83,8 +83,8 @@ CLAUDE.md              — this file (Claude Code instructions)
 21. **engineer**: Full-cycle software engineer — understands requirements, debugs, delegates implementation to code-implementer (Sonnet), consults user
 
 ### Coordinators (orchestrate specialists via subagents, model: Opus 4.6 for planning, Sonnet 4.6 for others)
-22. **code-review-coordinator**: Delegates to specialist reviewers sequentially with isolated context
-23. **plan-coordinator**: Delegates to research agents for planning with isolated context
+22. **code-review-coordinator**: Delegates to specialist reviewers in parallel batches with isolated context
+23. **plan-coordinator**: Delegates to research agents in parallel with isolated context
 24. **pipeline-navigator**: Guides pipeline transitions via handoff buttons
 
 ## Available Skills (15 total)
@@ -140,15 +140,13 @@ Update these files to keep everything synchronized:
 
 ## Testing
 
-Test agents in VS Code 1.108+:
+Test agents in VS Code 1.109+:
 1. Open Copilot Chat
 2. Type `@` to see agents, `/` to see skills
 3. Invoke with `@agent-name` or `/skill-name`
 
-For coordinator agents (subagent orchestration), enable experimental settings:
-```json
-{
-  "chat.useAgentSkills": true,
-  "chat.customAgentInSubagent.enabled": true
-}
-```
+Subagent orchestration (coordinators dispatching specialists) works natively in VS Code 1.109+ without experimental settings.
+
+## Backward Compatibility
+
+Agents use `user-invocable: false`, `agents:` allowlists, and `disable-model-invocation: true` (VS Code 1.109 frontmatter). VS Code 1.108 ignores unrecognized frontmatter properties, so these files remain backward-compatible — agents still function, but without the enforcement these properties provide.

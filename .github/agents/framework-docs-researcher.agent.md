@@ -1,7 +1,9 @@
 ---
 description: Research framework documentation, APIs, and version-specific capabilities.
-tools: ["search", "read", "fetch"]
+tools: ["codebase", "search", "read", "fetch"]
 model: "Claude Opus 4.6"
+user-invocable: false
+agents: []
 ---
 
 ## Mission

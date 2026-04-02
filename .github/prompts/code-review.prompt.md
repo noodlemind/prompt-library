@@ -4,10 +4,12 @@ description: Multi-agent code review covering security, performance, architectur
 agent: code-review-coordinator
 tools:
   - agent
+  - codebase
   - search
   - read
   - fetch
   - githubRepo
+  - usages
   - changes
   - terminalLastCommand
 ---

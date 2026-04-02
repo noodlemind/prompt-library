@@ -1,7 +1,9 @@
 ---
 description: Analyze code for architectural compliance, design patterns, and structural integrity.
-tools: ["search", "read", "changes"]
+tools: ["codebase", "search", "read", "usages", "changes"]
 model: "Claude Sonnet 4.6"
+user-invocable: false
+agents: []
 ---
 
 ## Guardrails

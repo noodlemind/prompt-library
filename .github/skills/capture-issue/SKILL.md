@@ -1,6 +1,6 @@
 ---
 name: capture-issue
-description: Create a structured issue file from a bug report, feature request, or task description. Use when logging a new issue or converting a conversation into a trackable work item.
+description: Create a structured issue file from a bug report, feature request, or task. Use when logging new issues or converting conversations into trackable work items. Not for planning — use /plan-issue after capture.
 argument-hint: "[issue description or URL]"
 ---
 

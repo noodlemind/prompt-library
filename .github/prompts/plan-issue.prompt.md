@@ -5,10 +5,12 @@ argument-hint: "[path to issue file]"
 agent: plan-coordinator
 tools:
   - agent
+  - codebase
   - search
   - read
   - editFiles
   - fetch
+  - terminalLastCommand
 ---
 
 Follow the instructions in [plan-issue skill](../skills/plan-issue/SKILL.md).

@@ -34,12 +34,12 @@ Scan `.github/agents/` for agents that could provide expert perspective on the p
 
 ### Step 3: Launch Research Agents
 
-**Orchestration:** If the `agent` tool is available for subagent delegation, invoke
+**Orchestration:** If the `agent` tool is available for subagent delegation, delegate to
 research agents as isolated subagents (each with full plan context in the task prompt).
 Otherwise, run research tasks sequentially within this session.
 
 **When subagents are available:** Spawn up to 5 agents simultaneously (cap for cost control).
-For each relevant section, invoke a research agent as a subagent with the full section content
+For each relevant section, delegate to a research agent as a subagent with the full section content
 and project context in the task prompt.
 
 **When subagents are not available:** Research each section sequentially — read relevant
@@ -97,6 +97,13 @@ When invoked by another skill:
 - Skip AskUserQuestion calls
 - Write the enhanced plan automatically
 - Return the file path
+
+## Error Handling
+
+- If a subagent fails (no output), report which specialist failed and present findings from successful specialists.
+- If a subagent times out (partial output), include whatever findings were returned.
+- If the plan file is missing or malformed, report the error and suggest running the prior pipeline step.
+- If a tool is not available in the current environment, use the fallback from the cross-environment compatibility table in copilot-instructions.md.
 
 ## Guidelines
 

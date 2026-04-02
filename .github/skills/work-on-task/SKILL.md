@@ -1,6 +1,6 @@
 ---
 name: work-on-task
-description: Execute the current phase of a planned issue using TDD with scope control and session logging. Use when implementing code changes for a planned issue or continuing from a previous session.
+description: Execute the current phase of a planned issue using TDD with scope control and session logging. Use when implementing planned changes or resuming a session. Not without a plan — run /plan-issue first.
 argument-hint: "[path to plan file]"
 disable-model-invocation: true
 ---
@@ -99,6 +99,13 @@ When all tasks in the current phase are checked:
 4. **File references** — include paths of created/modified files
 5. **Blockers noted** — record blockers and decisions explicitly
 6. **Status summary** — end with current state and what's next
+
+## Error Handling
+
+- If a subagent fails (no output), report which specialist failed and present findings from successful specialists.
+- If a subagent times out (partial output), include whatever findings were returned.
+- If the plan file is missing or malformed, report the error and suggest running the prior pipeline step.
+- If a tool is not available in the current environment, use the fallback from the cross-environment compatibility table in copilot-instructions.md.
 
 ## Guardrails
 

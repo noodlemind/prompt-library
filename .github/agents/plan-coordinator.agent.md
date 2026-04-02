@@ -1,7 +1,8 @@
 ---
 description: Coordinate issue planning by delegating to research agents and synthesizing structured plans.
-tools: ["agent", "search", "read", "editFiles", "fetch"]
+tools: ["agent", "codebase", "search", "read", "editFiles", "fetch", "terminalLastCommand"]
 model: "Claude Opus 4.6"
+agents: ["repo-research-analyst", "best-practices-researcher", "framework-docs-researcher", "git-history-analyzer", "spec-flow-analyzer"]
 handoffs:
   - label: "Start Implementation"
     agent: pipeline-navigator
@@ -36,8 +37,7 @@ Before delegating research:
 
 ### 3. Delegate Research
 
-Invoke research agents as subagents. Each runs in isolated context — include the full
-feature description and specific research questions in the task prompt.
+Dispatch research agents in parallel. Each runs in isolated context with the feature description and specific questions.
 
 **Always delegate:**
 1. `repo-research-analyst` — existing patterns, conventions, similar implementations in the codebase
