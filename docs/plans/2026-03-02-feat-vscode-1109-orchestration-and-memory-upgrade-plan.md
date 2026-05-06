@@ -450,7 +450,7 @@ Always read existing sections before starting work. Never overwrite prior sectio
 | `AGENTS.md` | Add coordinators section, document handoff chain, inter-step memory, note subagent feature requires `chat.customAgentInSubagent.enabled` |
 | `README.md` | Update agent count, add orchestration overview, note experimental settings needed |
 | `.github/copilot-instructions.md` | Add orchestration conventions, inter-step memory section, coordinator patterns |
-| `.github/skills/create-agent-skills/SKILL.md` | Add coordinator classification to agent template, document `tools: ['agent']` and `handoffs:` properties |
+| `.github/skills/create-primitive/SKILL.md` | Add coordinator classification to agent template, document `tools: ['agent']` and `handoffs:` properties |
 
 **VS Code settings documentation** — note these experimental flags in README:
 
@@ -465,7 +465,7 @@ Always read existing sections before starting work. Never overwrite prior sectio
 - [ ] All documentation updated with new agent inventory
 - [ ] Experimental settings documented
 - [ ] Inter-step memory convention documented everywhere
-- [ ] `create-agent-skills` template includes coordinator pattern
+- [ ] `create-primitive` template includes coordinator pattern
 
 ## Alternative Approaches Considered
 

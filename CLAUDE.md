@@ -8,7 +8,7 @@ This is a skill-driven prompt library for software development teams. The primar
 
 ### Architecture: Skill-First Primitives
 
-- **Skills** (`.github/skills/*/SKILL.md`): 23 user-invocable workflows that compose local context, scoped instructions, tools, checks, and agents. The connected pipeline `/capture-issue` → `/plan-issue` → `/work-on-task` → `/code-review` → `/compound-learnings` is the core engineering loop. `/btw` handles quick Q&A. `/project-readme` creates or updates project README files. Domain skills include `/java`, `/python`, `/sql`, and `/aws`.
+- **Skills** (`.github/skills/*/SKILL.md`): 23 user-invocable workflows that compose local context, scoped instructions, tools, checks, and agents. The connected pipeline `/capture-issue` → `/plan-issue` → `/work-on-task` → `/code-review` → `/compound-learnings` is the core engineering loop. `/btw` handles quick Q&A. `/project-readme` creates or updates project README files. `/create-primitive` decides and creates the right primitive type. Domain skills include `/java`, `/python`, `/sql`, and `/aws`.
 - **Agents** (`.github/agents/*.agent.md`): 24 agents — 19 stateless domain experts using judgment-criteria design, 1 engineer, 1 code-implementer, plus 3 coordinator/navigation agents. Agents exist for separate judgment, tool authority, runtime profile, isolation, or accountability. Active Java, Python, SQL, and AWS reviewers are included.
 - **Instructions** (`.github/instructions/*.instructions.md`): Scoped context that activates based on file patterns (TypeScript, Python, Java, Spring Boot, PostgreSQL, AWS SDK).
 - **Prompt wrappers** (`.github/prompts/*.prompt.md`): Thin host-facing adapters that route to skills and declare host tools.
@@ -104,7 +104,7 @@ CLAUDE.md              — optional compatibility guidance
 6. **/brainstorming**: Collaborative requirements exploration before planning
 7. **/deepen-plan**: Interactive plan deepening with user-steered research integration
 8. **/document-review**: Multi-persona quality gate (design, scope, coherence, feasibility)
-9. **/create-agent-skills**: Expert guidance for creating agents, skills, and instructions
+9. **/create-primitive**: Decide and create the right primitive: skill, agent, instruction, check, wrapper, reference, or solution doc
 10. **/import-conventions**: Generate instructions and skills from external repos and frameworks
 11. **/project-readme**: Create or update project README.md
 

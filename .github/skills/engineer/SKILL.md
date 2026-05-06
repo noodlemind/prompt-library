@@ -62,7 +62,7 @@ Before coding, the engineer should produce a short route decision:
 | Existing locked plan | `/work-on-task` or direct plan pickup |
 | Isolated reproducible bug | `/tdd-fix` |
 | Review-only request | `/code-review`, `/document-review`, or specialist agent |
-| Primitive creation/change | `/create-agent-skills` |
+| Primitive creation/change | `/create-primitive` |
 
 Use `@engineer` as primary when the user wants hands-on autonomous engineering, investigation, or implementation. Do not bypass the local-first pipeline for multi-step work unless the user explicitly wants an inline path.
 

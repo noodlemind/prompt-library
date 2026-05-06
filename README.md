@@ -97,7 +97,7 @@ Planning and code-review coordinators use `tools: ['agent']` to delegate work to
 | `/brainstorming` | Extension | Collaborative requirements exploration |
 | `/deepen-plan` | Extension | Interactive plan deepening with user-steered research |
 | `/document-review` | Extension | Multi-persona quality gate (design, scope, coherence, feasibility) |
-| `/create-agent-skills` | Extension | Guidance for creating agents, skills, and instructions |
+| `/create-primitive` | Extension | Decide and create the right primitive: skill, agent, instruction, check, wrapper, reference, or solution doc |
 | `/import-conventions` | Extension | Generate instructions from external repos and frameworks |
 | `/project-readme` | Documentation | Create or update project README.md |
 | `/java` | Domain | Java and Spring Boot engineering workflow |

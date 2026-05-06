@@ -23,7 +23,7 @@ The current structure now has 23 skills, 24 agents, scoped instructions, prompt 
 
 - [x] Add a skill-driven architecture standard for teams adapting the repo
 - [x] Reframe README, AGENTS.md, CLAUDE.md, and Copilot shared instructions as skill-first
-- [x] Strengthen `/create-agent-skills` and its templates with primitive decision rules
+- [x] Strengthen `/create-primitive` and its templates with primitive decision rules
 - [x] Update engineer and planning guidance to route by skill, risk, context, and verification
 - [x] Add a review check for primitive boundary regressions
 
@@ -66,11 +66,11 @@ The current structure now has 23 skills, 24 agents, scoped instructions, prompt 
 - `.github/copilot-instructions.md` — shared runtime context
 - `.github/instructions/prompt-library-global.instructions.md` — globally applied prompt-library workflow guidance
 - `.github/agent-context.md` — accumulated repository knowledge
-- `.github/prompts/create-agent-skills.prompt.md` — creator prompt wrapper description
+- `.github/prompts/create-primitive.prompt.md` — creator prompt wrapper description
 - `.github/skills/analyze-and-plan/SKILL.md` — quick plan contract
-- `.github/skills/create-agent-skills/SKILL.md` — creator workflow
-- `.github/skills/create-agent-skills/references/skill-template.md` — skill template
-- `.github/skills/create-agent-skills/references/agent-template.md` — agent template
+- `.github/skills/create-primitive/SKILL.md` — creator workflow
+- `.github/skills/create-primitive/references/skill-template.md` — skill template
+- `.github/skills/create-primitive/references/agent-template.md` — agent template
 - `.github/skills/engineer/SKILL.md` — skill-driven engineer entry point
 - `.github/agents/engineer.agent.md` — engineer operating model
 - `.github/skills/plan-issue/SKILL.md` — plan contract

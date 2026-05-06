@@ -35,6 +35,8 @@ The main gap is presentation and governance. The repo historically explains itse
 
 This library implements all standardization primitives needed for the current target: agents, skills, instructions, prompt wrappers, checks, references/assets, local plans, solution docs, and global install guidance. Checks are intentionally a prompt-library convention rather than a native Copilot customization type.
 
+Use `/create-primitive` as the single creator workflow for new or changed primitives. It must classify the request first, state why the selected primitive is correct, and then create the smallest artifact that satisfies the need.
+
 ## Decision Rules
 
 Default to a **skill**. Skills change how the engineer works and keep procedural knowledge discoverable without bloating every agent prompt.

@@ -1,13 +1,13 @@
 ---
-name: create-agent-skills
-description: Skill-first guidance for creating skills, agents, instructions, prompt wrappers, and checks. Use when modifying prompt-library primitives. Not for importing external repos — use /import-conventions.
+name: create-primitive
+description: Decide and create the right prompt-library primitive: skill, agent, instruction, check, prompt wrapper, reference, or solution doc. Not for importing external repos — use /import-conventions.
 ---
 
-# Create Agents, Skills & Instructions
+# Create Primitive
 
 ## Pipeline Role
 
-Primitive creator and maintainer for this prompt library. Use it to keep the library skill-driven: skills hold reusable workflows, agents hold isolated roles, instructions hold scoped conventions, prompt wrappers route to skills, and checks hold narrow review criteria.
+Canonical primitive creator and maintainer for this prompt library. Use it to keep the library skill-driven: skills hold reusable workflows, agents hold isolated roles, instructions hold scoped conventions, prompt wrappers route to skills, checks hold narrow review criteria, references hold dense supporting material, and solution docs hold verified learnings.
 
 ## When to Use
 
@@ -15,8 +15,10 @@ Primitive creator and maintainer for this prompt library. Use it to keep the lib
 - Creating a new skill (`.github/skills/*/SKILL.md`)
 - Creating a new scoped instruction (`.github/instructions/*.instructions.md`)
 - Creating a new review check (`.github/checks/*.md`) or thin prompt wrapper (`.github/prompts/*.prompt.md`)
-- Modifying an existing agent, skill, or instruction
-- Understanding the conventions for agent/skill/instruction design
+- Creating or moving dense supporting material into skill `references/` or `assets/`
+- Creating or updating a solution doc under `docs/solutions/`
+- Modifying any prompt-library primitive
+- Understanding which primitive type should exist
 
 ## Trigger Examples
 
@@ -24,7 +26,9 @@ Primitive creator and maintainer for this prompt library. Use it to keep the lib
 - "Create a new agent"
 - "Build a new skill"
 - "Add a Java instruction file"
-- "How do I write an agent file?"
+- "Add a review check for Sonar complexity issues"
+- "Where should this new convention live?"
+- "How do I write a prompt-library primitive?"
 
 **Should not trigger:**
 - "Import conventions from a repo" → use /import-conventions
@@ -35,7 +39,7 @@ Primitive creator and maintainer for this prompt library. Use it to keep the lib
 
 Read `docs/architecture/skill-driven-prompt-library.md` before creating or substantially changing primitives.
 
-Default to a **skill**. Create a new artifact only after answering:
+Default to a **skill** only when the request is a reusable workflow. Do not create any artifact before classifying the primitive:
 
 | Question | If yes, create |
 |---|---|
@@ -44,21 +48,96 @@ Default to a **skill**. Create a new artifact only after answering:
 | Should it load automatically for matching file patterns? | Instruction |
 | Is it a host-facing slash command wrapper for an existing skill? | Prompt wrapper |
 | Is it a narrow project-specific review rule? | Review check |
+| Is it dense examples, schema, checklist detail, or a template used only by one skill? | Reference or asset under the owning skill |
 | Is it a verified learning from completed work? | Solution doc |
 
 Do not create a new agent just to store reference material. Put long criteria in `references/`, team conventions in scoped instructions, and narrow review rules in `.github/checks/`.
+
+### Host Mapping
+
+This repository is host-neutral source material, but the current primary consumption target is GitHub Copilot in VS Code and IntelliJ IDEA:
+
+| Prompt-library primitive | Host-native status |
+|---|---|
+| Agent | Native in VS Code Copilot custom agents; instruction-first/manual in IntelliJ when discovery differs |
+| Skill | Native in Copilot skills where available; otherwise invoked through prompt wrappers and global instructions |
+| Instruction | Native as Copilot custom instructions / instruction files |
+| Prompt wrapper | Native VS Code prompt file / slash command adapter |
+| Review check | Prompt-library-native; consumed by `/code-review`, not a universal Copilot primitive |
+| Reference/asset | Prompt-library-native progressive disclosure material |
+| Solution doc | Product-repo knowledge artifact, not a global prompt customization |
+
+Do not claim feature parity across hosts. When a host lacks a primitive, document the fallback behavior.
 
 ## Creator Workflow
 
 Before writing files:
 
 1. **Classify the primitive** using the decision rules above.
-2. **Check for overlap** in `.github/skills/`, `.github/agents/`, `.github/instructions/`, `.github/checks/`, and `docs/solutions/`.
-3. **Define triggers and negative triggers** for discovery.
-4. **Declare permissions/tool needs** using the smallest sufficient tool set.
-5. **Define outputs and verification**: generated files, state changes, review criteria, or acceptance checks.
-6. **Add eval scenarios**: at least 3 should-trigger and 3 should-not examples for skills/agents, or good/bad examples for checks/instructions.
-7. **Update docs** listed in the validation checklist.
+2. **Check for overlap** in `.github/skills/`, `.github/agents/`, `.github/instructions/`, `.github/checks/`, `.github/prompts/`, skill `references/`, and `docs/solutions/`.
+3. **State the decision** before editing: "This should be a [primitive] because [boundary]."
+4. **Define triggers and negative triggers** for discovery when the primitive is user/model selectable.
+5. **Declare permissions/tool needs** using the smallest sufficient tool set.
+6. **Define outputs and verification**: generated files, state changes, review criteria, or acceptance checks.
+7. **Add eval scenarios**: at least 3 should-trigger and 3 should-not examples for skills/agents, or good/bad examples for checks/instructions.
+8. **Update docs** listed in the validation checklist.
+
+## Primitive Creation Paths
+
+### Skill
+
+Use for reusable workflows, generators, reviewer protocols, or pipeline steps. Read `references/skill-template.md`.
+
+Required files:
+- `.github/skills/<name>/SKILL.md`
+- `.github/prompts/<name>.prompt.md` only if the skill needs a VS Code slash-command wrapper
+
+### Agent
+
+Use only for separate judgment, authority, isolation, runtime profile, or accountability. Read `references/agent-template.md`.
+
+Required file:
+- `.github/agents/<name>.agent.md`
+
+### Instruction
+
+Use for concise standards that should load by file pattern, such as language conventions, framework conventions, or quality standards.
+
+Read `references/instruction-template.md`.
+
+Required file:
+- `.github/instructions/<name>.instructions.md`
+
+### Review Check
+
+Use for narrow review-time criteria that `/code-review` discovers, such as complexity budgets, Sonar maintainability concerns, logging standards, or API versioning rules.
+
+Read `references/check-template.md`.
+
+Required file:
+- `.github/checks/<name>.md`
+
+### Prompt Wrapper
+
+Use only as a host-facing route to an existing skill. Do not put workflow logic here.
+
+Required file:
+- `.github/prompts/<name>.prompt.md`
+
+### Reference or Asset
+
+Use when an existing skill needs dense criteria, templates, schemas, or examples without bloating `SKILL.md`.
+
+Required location:
+- `.github/skills/<skill>/references/<name>.md` for readable supporting material
+- `.github/skills/<skill>/assets/<name>` for templates or output resources
+
+### Solution Doc
+
+Use only for verified learnings from completed work. Prefer `/compound-learnings` when the learning came from a pipeline issue.
+
+Required location:
+- `docs/solutions/<category>/<slug>.md`
 
 ## Agent Creation
 

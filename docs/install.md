@@ -142,12 +142,14 @@ $Retired = @(
   "agents\compounding-rails-reviewer.agent.md",
   "agents\dhh-rails-reviewer.agent.md",
   "agents\every-style-editor.agent.md",
-  "instructions\rails.instructions.md"
+  "instructions\rails.instructions.md",
+  "prompts\create-agent-skills.prompt.md",
+  "skills\create-agent-skills"
 )
 
 foreach ($Relative in $Retired) {
   $RetiredPath = Join-Path $Copilot $Relative
-  if (Test-Path $RetiredPath) { Remove-Item $RetiredPath -Force }
+  if (Test-Path $RetiredPath) { Remove-Item $RetiredPath -Recurse -Force }
 }
 
 Sync-PromptLibraryDir "$PromptLibrary\.github\skills" "$Copilot\skills"

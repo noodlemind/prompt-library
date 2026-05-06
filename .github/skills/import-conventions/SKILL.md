@@ -1,6 +1,6 @@
 ---
 name: import-conventions
-description: Generate instructions and skills from a custom framework, library, or repo. Use when onboarding a new dependency, capturing team conventions, or creating a Tool Wrapper from an existing codebase. Not for creating agents from scratch — use /create-agent-skills.
+description: Generate instructions and skills from a custom framework, library, or repo. Use when onboarding a new dependency, capturing team conventions, or creating a Tool Wrapper from an existing codebase. Not for creating primitives from scratch — use /create-primitive.
 argument-hint: "[repo URL, path, or framework name]"
 ---
 
@@ -25,7 +25,7 @@ Read a custom framework, library, or repository and generate `.instructions.md` 
 - "Capture how we use this internal library"
 
 **Should not trigger:**
-- "Create a new agent" → use /create-agent-skills
+- "Create a new agent" → use /create-primitive
 - "Write a Java class" → the agent should follow existing java.instructions.md
 - "Review this code" → use /code-review
 

@@ -69,7 +69,7 @@ Choose the workflow before coding:
 | Existing locked plan | Resume the plan and follow `/work-on-task` rules |
 | Isolated reproducible bug | `/tdd-fix` |
 | Review-only request | `/code-review`, `/document-review`, or a specialist reviewer |
-| Primitive creation/change | `/create-agent-skills` |
+| Primitive creation/change | `/create-primitive` |
 
 Record the route decision in the plan file or response. If choosing an inline path for multi-step work, state why the local-first pipeline is not being used.
 

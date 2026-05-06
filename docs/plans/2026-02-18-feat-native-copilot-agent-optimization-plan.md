@@ -12,7 +12,7 @@ deepened-round-2: 2026-02-18
 ## Enhancement Summary
 
 **Deepened on:** 2026-02-18 (Round 2 — ground-up redesign)
-**Research agents used:** create-agent-skills, agent-native-architecture, orchestrating-swarms, best-practices-researcher, architecture-strategist, code-simplicity-reviewer, Claude Code architecture analyst, frontier AI architecture comparator
+**Research agents used:** create-primitive, agent-native-architecture, orchestrating-swarms, best-practices-researcher, architecture-strategist, code-simplicity-reviewer, Claude Code architecture analyst, frontier AI architecture comparator
 
 ### Round 2 Key Improvements
 

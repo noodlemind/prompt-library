@@ -36,7 +36,7 @@ deepened: 2026-03-28
 
 **5. Skill polish scoped to where value is highest**
 - Negative triggers: only 5 confusable pipeline skills (not all 15)
-- `references/` extraction: only `create-agent-skills` (templates are genuine reference material). Defer others — no skill exceeds 140 lines.
+- `references/` extraction: only `create-primitive` (templates are genuine reference material). Defer others — no skill exceeds 140 lines.
 - Terminology: keep "read" (matches the tool name). Standardize only "delegate to" for subagent dispatch.
 - Error handling sections: added to 5 orchestrating skills
 
@@ -105,7 +105,7 @@ Agents use a narrow subset of available tools. Key tools not used by any agent:
 | `awaitTerminal` | Wait for background terminal commands | `code-implementer`, `bug-reproduction-validator` — wait for test runs |
 | `killTerminal` | Terminal cleanup | `code-implementer` — manage long-running processes |
 
-The `create-agent-skills` template recommends `codebase` but no actual agent uses it — template and practice are out of sync.
+The `create-primitive` template recommends `codebase` but no actual agent uses it — template and practice are out of sync.
 
 ### 3. Skills Don't Follow Best Practices
 
@@ -137,7 +137,7 @@ Compared to the [skills-best-practices](https://github.com/mgechev/skills-best-p
 
 **Phase A: Agent Upgrade** — One pass per agent file covering: 1.109 frontmatter properties, selective tool enrichment, prompt wrapper updates, and documentation sync. All changes to a given agent happen in a single edit.
 
-**Phase B: Skill Polish** — Targeted improvements to 5 confusable pipeline skills (negative triggers, error handling) and 1 skill with reference extraction (`create-agent-skills`).
+**Phase B: Skill Polish** — Targeted improvements to 5 confusable pipeline skills (negative triggers, error handling) and 1 skill with reference extraction (`create-primitive`).
 
 ## Technical Approach
 
@@ -304,9 +304,9 @@ Add failure handling:
 
 Files: `.github/agents/code-review-coordinator.agent.md`, `plan-coordinator.agent.md`
 
-#### A7. Update `create-agent-skills` template
+#### A7. Update `create-primitive` template
 
-Sync the template in `.github/skills/create-agent-skills/SKILL.md` with actual agent declarations:
+Sync the template in `.github/skills/create-primitive/SKILL.md` with actual agent declarations:
 
 | Classification | Tools | Model | user-invocable | agents |
 |---------------|-------|-------|----------------|--------|
@@ -323,7 +323,7 @@ agents: []                   # For leaf nodes — prevent subagent spawning
 # For coordinators: agents: [list of allowed subagents]
 ```
 
-File: `.github/skills/create-agent-skills/SKILL.md`
+File: `.github/skills/create-primitive/SKILL.md`
 
 #### A8. Update cross-environment compatibility table and documentation
 
@@ -359,7 +359,7 @@ Files: `.github/copilot-instructions.md`, `CLAUDE.md`, `AGENTS.md`, `README.md`,
 - [ ] ~16 agents have enriched tool declarations
 - [ ] 14 prompt wrappers updated to include new tools
 - [ ] Coordinators instruct staggered parallel dispatch with failure handling
-- [ ] `create-agent-skills` template matches actual declarations
+- [ ] `create-primitive` template matches actual declarations
 - [ ] All 5 documentation files synchronized with 1.109 references
 
 ---
@@ -402,9 +402,9 @@ Add to: `/code-review`, `/deepen-plan`, `/plan-issue`, `/work-on-task`, `/engine
 
 Files: 5 `.github/skills/*/SKILL.md`
 
-#### B3. Extract references from `create-agent-skills` only
+#### B3. Extract references from `create-primitive` only
 
-> **Deepen-plan finding (simplicity + architecture reviews)**: No skill exceeds 140 lines. The 500-line threshold is already met. Only `create-agent-skills` has genuine reference material (templates that developers copy from). Don't extract from `/code-review` — the specialist selection matrix is critical-path information used on every invocation.
+> **Deepen-plan finding (simplicity + architecture reviews)**: No skill exceeds 140 lines. The 500-line threshold is already met. Only `create-primitive` has genuine reference material (templates that developers copy from). Don't extract from `/code-review` — the specialist selection matrix is critical-path information used on every invocation.
 
 Extract to:
 - `references/agent-template.md` — Full agent template with all sections and guardrails
@@ -415,7 +415,7 @@ Add explicit loading directive in SKILL.md body:
 Read `references/agent-template.md` for the complete agent template.
 ```
 
-File: `.github/skills/create-agent-skills/`
+File: `.github/skills/create-primitive/`
 
 #### B4. Standardize subagent terminology (going forward only)
 
@@ -427,11 +427,11 @@ For **new and modified content** going forward:
 
 Do NOT retrofit all 15 skills. Apply to content touched in B1-B3 only.
 
-#### B5. Document Google's 5 Skill Design Patterns in `create-agent-skills`
+#### B5. Document Google's 5 Skill Design Patterns in `create-primitive`
 
 > **Research insight**: Google's [5 ADK Skill Design Patterns](https://lavinigam.com/posts/adk-skill-design-patterns/) (Tool Wrapper, Generator, Reviewer, Inversion, Pipeline) provide a taxonomy for structuring SKILL.md content. Our skills already implicitly follow these patterns but don't name them or follow their structural recommendations (e.g., `assets/` for templates, `references/` for checklists, gate conditions like "DO NOT proceed until...").
 
-Add a "Skill Design Patterns" section to `create-agent-skills/SKILL.md` documenting:
+Add a "Skill Design Patterns" section to `create-primitive/SKILL.md` documenting:
 
 | Pattern | When to Use | Directory Structure | Example in This Repo |
 |---------|------------|--------------------|--------------------|
@@ -447,13 +447,13 @@ Key guidance to include:
 - "Gate conditions ('DO NOT proceed to Step N until...') prevent agents from skipping validation"
 - "Skills teach agents when and how to use tools; they are not tools themselves"
 
-File: `.github/skills/create-agent-skills/SKILL.md`
+File: `.github/skills/create-primitive/SKILL.md`
 
 **Phase B success criteria:**
 - [ ] 5 confusable skills have negative triggers in descriptions
 - [ ] 5 orchestrating skills have error handling sections
-- [ ] `create-agent-skills` has `references/` with agent and skill templates
-- [ ] `create-agent-skills` documents the 5 skill design patterns
+- [ ] `create-primitive` has `references/` with agent and skill templates
+- [ ] `create-primitive` documents the 5 skill design patterns
 - [ ] New/modified content uses "delegate to" for subagent dispatch
 - [ ] All 5 documentation files synchronized
 
@@ -521,7 +521,7 @@ User invokes /code-review (skill)
 - [ ] Coordinators dispatch subagents in staggered parallel batches
 - [ ] 5 confusable skills have negative triggers
 - [ ] 5 orchestrating skills have error handling sections
-- [ ] `create-agent-skills` has `references/` with templates
+- [ ] `create-primitive` has `references/` with templates
 - [ ] All documentation synchronized
 
 ### Non-Functional Requirements
@@ -538,7 +538,7 @@ User invokes /code-review (skill)
 - [ ] `@` menu shows only 4 agents
 - [ ] Parallel review completes faster than sequential
 - [ ] All 5 documentation files synchronized with matching counts
-- [ ] `create-agent-skills` template matches actual agent declarations
+- [ ] `create-primitive` template matches actual agent declarations
 - [ ] Engineer's delegation table matches its `agents:` allowlist
 
 ## Dependencies & Prerequisites
@@ -587,7 +587,7 @@ Items removed from this plan based on deepen-plan analysis:
 - Cross-repo audit: `docs/plans/2026-02-27-feat-cross-repo-agent-skill-audit-and-improvement-plan.md`
 - Global sync plan: `docs/plans/2026-03-12-feat-global-workspace-sync-and-copilot-cli-compatibility-plan.md`
 - Agent context: `.github/agent-context.md`
-- Create-agent-skills template: `.github/skills/create-agent-skills/SKILL.md`
+- Create-primitive template: `.github/skills/create-primitive/SKILL.md`
 - Copilot instructions: `.github/copilot-instructions.md`
 - Engineer delegation table: `.github/agents/engineer.agent.md:143-167`
 
