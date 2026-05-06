@@ -3,6 +3,7 @@ name: aws
 description: Apply the AWS skill for SDK usage, IAM, queues, topics, configuration, reliability, observability, or review preparation.
 agent: agent
 tools:
+  - agent
   - search
   - read
   - codebase

@@ -25,6 +25,7 @@ C:\Users\<you>\.copilot\skills
 C:\Users\<you>\.copilot\instructions
 C:\Users\<you>\.copilot\prompts
 C:\Users\<you>\.copilot\checks
+C:\Users\<you>\AppData\Local\github-copilot\intellij\global-copilot-instructions.md
 ```
 
 `checks` are copied as support artifacts for prompt-library skills. They are not a standard Copilot primitive.
@@ -39,7 +40,7 @@ The preferred Windows workflow is:
 4. Run `Tasks: Run Task`.
 5. Choose `Prompt Library: Hydrate Global Copilot Customizations`.
 
-The task definition lives in `.vscode/tasks.json`. It copies source artifacts from the current prompt-library checkout into `%USERPROFILE%\.copilot`.
+The task definition lives in `.vscode/tasks.json`. It syncs source artifacts from the current prompt-library checkout into `%USERPROFILE%\.copilot`, removes stale files previously created by this library, removes known retired legacy artifacts, and updates IntelliJ IDEA's global Copilot instructions file.
 
 Run this task again whenever the prompt-library repo is updated.
 
@@ -57,6 +58,9 @@ VS Code can discover some user-level Copilot customizations directly. To make di
   },
   "chat.instructionsFilesLocations": {
     "C:\\Users\\<you>\\.copilot\\instructions": true
+  },
+  "chat.agentSkillsLocations": {
+    "C:\\Users\\<you>\\.copilot\\skills": true
   }
 }
 ```
@@ -83,13 +87,13 @@ Keep `.github/copilot-instructions.md` in this repo. It is still useful when dev
 
 ## IntelliJ IDEA Global Usage
 
-IntelliJ IDEA does not use VS Code tasks and does not have identical global customization discovery.
+IntelliJ IDEA does not use VS Code tasks from inside IntelliJ and does not have identical global customization discovery.
 
 Use this policy:
 
 - Run the Hydrate task from VS Code to keep `%USERPROFILE%\.copilot` current.
-- In IntelliJ IDEA, configure **global Copilot instructions** through the GitHub Copilot settings UI.
-- Keep the global IntelliJ instruction short: tell Copilot to follow the globally hydrated prompt-library conventions and name the expected workflows (`/start`, `/btw`, `/capture-issue`, `/plan-issue`, `/work-on-task`, `/code-review`, `/project-readme`, `/java`, `/python`, `/sql`, `/aws`).
+- The Hydrate task also writes IntelliJ IDEA's global Copilot instructions file at `%LOCALAPPDATA%\github-copilot\intellij\global-copilot-instructions.md`.
+- In IntelliJ IDEA, confirm **global Copilot instructions** are enabled through the GitHub Copilot settings UI.
 - Verify whether the installed IntelliJ Copilot plugin discovers global prompt files and custom agents. If it does not, users can still manually invoke the workflow names in chat, but slash-command and agent-dropdown behavior may differ from VS Code.
 
 Do not copy prompt-library artifacts into product repositories just to make IntelliJ discover them. That violates the global-only policy.
@@ -106,11 +110,57 @@ $Copilot = "$env:USERPROFILE\.copilot"
 
 New-Item -ItemType Directory -Force $Copilot | Out-Null
 
-robocopy "$PromptLibrary\.github\skills" "$Copilot\skills" /E
-robocopy "$PromptLibrary\.github\agents" "$Copilot\agents" /E
-robocopy "$PromptLibrary\.github\instructions" "$Copilot\instructions" /E
-robocopy "$PromptLibrary\.github\prompts" "$Copilot\prompts" /E
-robocopy "$PromptLibrary\.github\checks" "$Copilot\checks" /E
+function Sync-PromptLibraryDir($From, $To) {
+  if (!(Test-Path $From)) { return }
+
+  New-Item -ItemType Directory -Force $To | Out-Null
+  $Manifest = Join-Path $To ".prompt-library-manifest.txt"
+
+  if (Test-Path $Manifest) {
+    Get-Content $Manifest | ForEach-Object {
+      if ($_) {
+        $Old = Join-Path $To $_
+        $Replacement = Join-Path $From $_
+        if ((Test-Path $Old) -and !(Test-Path $Replacement)) {
+          Remove-Item $Old -Recurse -Force
+        }
+      }
+    }
+  }
+
+  robocopy $From $To /E /NFL /NDL /NJH /NJS /NP /XF .prompt-library-manifest.txt
+  if ($LASTEXITCODE -ge 8) { throw "robocopy failed with exit code $LASTEXITCODE" }
+
+  Get-ChildItem $From -Recurse -File |
+    ForEach-Object { $_.FullName.Substring($From.Length).TrimStart([char]92) } |
+    Sort-Object |
+    Set-Content -Path $Manifest -Encoding utf8
+}
+
+$Retired = @(
+  "agents\compounding-python-reviewer.agent.md",
+  "agents\compounding-rails-reviewer.agent.md",
+  "agents\dhh-rails-reviewer.agent.md",
+  "agents\every-style-editor.agent.md",
+  "instructions\rails.instructions.md"
+)
+
+foreach ($Relative in $Retired) {
+  $RetiredPath = Join-Path $Copilot $Relative
+  if (Test-Path $RetiredPath) { Remove-Item $RetiredPath -Force }
+}
+
+Sync-PromptLibraryDir "$PromptLibrary\.github\skills" "$Copilot\skills"
+Sync-PromptLibraryDir "$PromptLibrary\.github\agents" "$Copilot\agents"
+Sync-PromptLibraryDir "$PromptLibrary\.github\instructions" "$Copilot\instructions"
+Sync-PromptLibraryDir "$PromptLibrary\.github\prompts" "$Copilot\prompts"
+Sync-PromptLibraryDir "$PromptLibrary\.github\checks" "$Copilot\checks"
+
+$IntelliJ = "$env:LOCALAPPDATA\github-copilot\intellij"
+New-Item -ItemType Directory -Force $IntelliJ | Out-Null
+$Content = Get-Content "$PromptLibrary\.github\instructions\prompt-library-global.instructions.md" -Raw
+$Content = $Content -replace '(?s)^---\r?\n.*?\r?\n---\r?\n', ''
+Set-Content "$IntelliJ\global-copilot-instructions.md" $Content -Encoding utf8
 ```
 
 ## Verification Checklist
@@ -120,7 +170,7 @@ After hydration:
 - In VS Code, type `/` and confirm prompts such as `/start`, `/btw`, `/project-readme`, `/java`, `/python`, `/sql`, and `/aws` appear.
 - In VS Code, type `@` and confirm `@engineer` and coordinator agents are available.
 - In VS Code diagnostics, confirm agents, prompts, and instructions are loaded from `%USERPROFILE%\.copilot`.
-- In IntelliJ IDEA, confirm global Copilot instructions are enabled.
+- In IntelliJ IDEA, confirm global Copilot instructions are enabled and that `%LOCALAPPDATA%\github-copilot\intellij\global-copilot-instructions.md` exists.
 - Run a small smoke test: `/btw What is the workflow for implementing a feature?`
 
 ## Sync Policy
@@ -134,4 +184,4 @@ Recommended update process:
 3. Run `Tasks: Run Task` -> `Prompt Library: Hydrate Global Copilot Customizations`.
 4. Verify VS Code and IntelliJ behavior.
 
-Hydrate overwrites same-named global library artifacts. If a prompt-library release retires an artifact, delete the stale global file explicitly from `%USERPROFILE%\.copilot`.
+Hydrate overwrites same-named global library artifacts. It also keeps a `.prompt-library-manifest.txt` in each hydrated folder so later runs can remove files that this library previously installed but no longer ships. The cleanup only targets files recorded in that manifest plus known retired legacy artifacts, so unrelated user customizations in `%USERPROFILE%\.copilot` are not deleted.

@@ -3,6 +3,7 @@ name: python
 description: Apply the Python engineering skill for implementation, debugging, refactoring, testing, typing, or review preparation.
 agent: agent
 tools:
+  - agent
   - search
   - read
   - codebase
