@@ -4,15 +4,17 @@ This file provides context for AI coding agents working in this repository. It f
 
 ## Project Overview
 
-This is a prompt library containing specialized AI agent systems for software development. The primary system targets VS Code 1.109+ with native agent and skill discovery.
+This is a skill-driven prompt library for software development teams. The primary consumption platforms are GitHub Copilot in VS Code and IntelliJ IDEA on Windows. Teams hydrate prompts, agents, skills, and instructions globally from this repo; product repositories should not receive prompt-library source artifacts.
 
 ## Architecture
 
-The system is built on three primitives:
+The system is skill-first. Skills are the primary reusable workflow contracts; agents, instructions, prompt wrappers, checks, plans, and solution docs support those skills.
 
-- **Agents** (`.github/agents/*.agent.md`): 24 agents — 19 stateless domain experts, 1 engineer (Opus brain), 1 code-implementer (Sonnet hands), plus 3 coordinator agents that orchestrate specialists via parallel subagent batches. Agents are classified as reviewers (read-only, Sonnet 4.6), researchers (Opus 4.6), actors (can modify code, Sonnet 4.6), engineers (can modify code + delegate, Opus 4.6), or coordinators (Opus 4.6 for planning, Sonnet 4.6 for others).
-- **Skills** (`.github/skills/*/SKILL.md`): 17 user-invocable workflows that compose agents and tools. `/start` classifies incoming work and routes to the appropriate entry point. The connected pipeline `/brainstorming` (optional) → `/capture-issue` → `/plan-issue` → `/deepen-plan` (optional) → `/work-on-task` → `/code-review` → `/compound-learnings` is the core engineering loop.
+- **Skills** (`.github/skills/*/SKILL.md`): 23 user-invocable workflows that compose local context, scoped instructions, tools, checks, and agents. `/start` classifies incoming work and routes to the appropriate entry point. `/btw` handles quick Q&A without plans or edits. `/project-readme` creates or updates project README files. Domain skills include `/java`, `/python`, `/sql`, and `/aws`. The connected pipeline `/brainstorming` (optional) → `/capture-issue` → `/plan-issue` → `/deepen-plan` (optional) → `/work-on-task` → `/code-review` → `/compound-learnings` is the core engineering loop.
+- **Agents** (`.github/agents/*.agent.md`): 24 agents — 19 stateless domain experts, 1 engineer, 1 code-implementer, plus 3 coordinator/navigation agents. Agents are used when work needs separate judgment, tool authority, runtime profile, isolation, or accountability. Active language/cloud/data reviewers include Java, Python, SQL, and AWS.
 - **Instructions** (`.github/instructions/*.instructions.md`): Scoped context that activates based on file patterns.
+- **Prompt wrappers** (`.github/prompts/*.prompt.md`): Thin host-facing adapters that route to skills and declare host tools.
+- **Review checks** (`.github/checks/*.md`): Project-specific review criteria discovered by `/code-review`.
 
 ## Connected Pipeline
 
@@ -23,21 +25,23 @@ Issues flow through a state machine:
                                   open      →   planned   →                          in-progress   →    review    →      done
 ```
 
-Plan files in `docs/plans/` track state via YAML frontmatter (`status`, `plan_lock`, `phase`). Activity logs in `## Activity` sections enable session continuity. Inter-step memory flows through designated plan file sections (`## Research Notes`, `## Implementation Notes`, `## Review Findings`).
+Plan files in `docs/plans/` track state via YAML frontmatter (`status`, `plan_lock`, `phase`). Activity logs in `## Activity` sections enable session continuity. Inter-step memory flows through designated plan file sections (`## Context`, `## Acceptance Criteria`, `## Research Notes`, `## Impacted Files`, `## Verification Plan`, `## Risk & Review Routing`, `## Implementation Notes`, `## Review Findings`). Treat each plan file as the local context pack for the work.
 
 ## Directory Structure
 
 ```
 .github/
   agents/          — 24 agent definitions (19 specialists + 1 engineer + 1 implementer + 3 coordinators)
-  skills/          — 15 skill directories with SKILL.md
-  instructions/    — scoped instructions (Rails, TypeScript, Python)
+  skills/          — 23 skill directories with SKILL.md
+  instructions/    — scoped instructions (TypeScript, Python, Java, Spring Boot, PostgreSQL, AWS SDK)
+  prompts/         — thin prompt wrappers that route to skills
+  checks/          — local review checks discovered by /code-review
   copilot-instructions.md — shared context for all agents
-  agent-context.md — accumulated codebase knowledge
+  agent-context.md — prompt-library repo knowledge, not a global Copilot primitive
 .vscode/
   mcp.json         — MCP server configuration
-archive/           — archived legacy systems and reference docs
 docs/
+  architecture/    — skill-driven standard and architecture notes
   plans/           — issue and plan files with state tracking
   solutions/       — documented learnings from solved problems
   brainstorms/     — brainstorm documents from /brainstorming skill
@@ -48,6 +52,7 @@ docs/
 
 - **Agent design**: Judgment-criteria style — define what to look for, not what commands to run
 - **Skills**: Progressive disclosure — frontmatter (discovery) → body (activation) → references (execution)
+- **Primitive boundaries**: Default repeated procedures to skills; create agents only for distinct judgment, authority, isolation, or evaluation standards; keep prompt wrappers thin.
 - **Testing**: TDD mandatory — failing test → minimal fix → cleanup
 - **Diffs**: Surgical changes only. No drive-by refactoring.
 - **Knowledge compounding**: `docs/solutions/` stores documented learnings. Check before starting similar work.
@@ -61,17 +66,15 @@ docs/
 
 ## Orchestration
 
-The `engineer` agent (Opus) is a full-cycle hybrid that understands requirements, debugs, plans, and delegates implementation to `code-implementer` (Sonnet) and specialist review/research to other agents — guided by user steering. Coordinator agents (`code-review-coordinator`, `plan-coordinator`, `pipeline-navigator`) use `tools: ['agent']` to delegate work to specialist agents as subagents. Each subagent runs in isolated context. Coordinators dispatch subagents in parallel batches (3-4 at a time). Handoff buttons on coordinator agents guide developers between pipeline steps.
+The `engineer` agent is a full-cycle hybrid that understands requirements, selects the right skill/flow, debugs, plans, implements, verifies, and delegates implementation to `code-implementer` or specialist review/research agents when separate judgment, authority, or isolation is useful. `code-review-coordinator` and `plan-coordinator` use `tools: ['agent']` to delegate work to specialist agents as subagents. Each subagent runs in isolated context, and coordinators dispatch in parallel batches (3-4 at a time). `pipeline-navigator` uses handoff buttons rather than subagent dispatch to guide developers between pipeline steps.
 
 Prompt wrappers for `/plan-issue` and `/code-review` route to their respective coordinators via `agent: plan-coordinator` and `agent: code-review-coordinator`.
 
 ### Frontmatter Properties (VS Code 1.109)
 
-- `user-invocable: false` — Prevents direct `@agent-name` invocation; agent can only be invoked as a subagent
+- `user-invocable: false` — Hides an agent from the `@` menu for cleaner discovery. Treat this as UX control, not a security boundary.
 - `agents: [...]` — Allowlist of agents this agent can invoke as subagents (empty array `[]` prevents accidental spawning)
-- `disable-model-invocation: true` — Agent cannot be invoked by model selection; only via subagent dispatch
-
-Subagent orchestration works natively in VS Code 1.109+ without experimental settings. These frontmatter properties are ignored by VS Code 1.108 (backward-compatible).
+Subagent orchestration works natively in VS Code 1.109+ without experimental settings. Agent files avoid provider-specific model pinning so the active GitHub Copilot host controls model selection.
 
 ### Skill Patterns
 
@@ -82,7 +85,12 @@ Skills follow proven design patterns from Google ADK and Compound Engineering:
 - **Pipeline skills** support standalone mode (skip state validation) and pipeline mode (enforce state machine). Mode detected from plan file presence.
 - **Error handling** is skill-specific, referencing shared patterns from `.github/skills/references/error-handling-patterns.md`.
 - **All skills** have trigger examples (3 should-trigger, 3 should-not) and negative triggers for confusable pairs.
+- **Primitive boundary checks** in `.github/checks/` catch skill-vs-agent-vs-instruction drift during reviews.
+
+## Standardization Reference
+
+Read `docs/architecture/skill-driven-prompt-library.md` before adding or substantially changing agents, skills, instructions, prompt wrappers, checks, plan structure, or solution templates.
 
 ## Accumulated Knowledge
 
-Read `.github/agent-context.md` for patterns discovered by previous agent sessions. Read `docs/solutions/` for documented solutions to past problems.
+Read `.github/agent-context.md` for prompt-library repo patterns. In product repositories, read product-owned context docs such as `README.md`, `docs/agent-context.md`, `docs/codebase-snapshot.md`, and `docs/solutions/`.

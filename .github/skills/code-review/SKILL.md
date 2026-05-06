@@ -27,7 +27,7 @@ Activate when the user wants to:
 
 **Should not trigger:**
 - "Check this code for security issues only" → delegate to @security-sentinel directly
-- "Is this Rails code idiomatic?" → delegate to @compounding-rails-reviewer directly
+- "Is this Java code idiomatic?" → delegate to @java-reviewer directly
 - "Review this plan document" → use /document-review
 
 ## References
@@ -59,10 +59,10 @@ Determine what to review:
 ### 3. Gather Context and Detect Intent
 
 - Read modified files and understand the changes
-- Check `.github/agent-context.md` for accumulated codebase knowledge
+- Check available repository context for accumulated codebase knowledge: `README.md`, `docs/agent-context.md`, `docs/codebase-snapshot.md`, and `docs/solutions/`. When reviewing this prompt-library repo, also check `.github/agent-context.md`.
 - Check `docs/solutions/` for prior solutions related to the changed areas
 - If a plan file is referenced, read `## Implementation Notes` for decisions and trade-offs
-- Detect project type (Rails, TypeScript, Python) from project files
+- Detect project type (Java, Python, TypeScript, SQL/data, AWS) from project files
 - Read related code and dependencies touched by the changes
 - Write a 2-3 line intent summary: what the change is trying to accomplish
 
@@ -73,12 +73,16 @@ Read `references/review-personas.md` for the full persona catalog.
 **Always engage** (every review): architecture-strategist, security-sentinel, performance-oracle, code-simplicity-reviewer, pattern-recognition-specialist (5 personas)
 
 **Conditionally engage** based on diff content — this is judgment, not keyword matching:
-- **Language-specific**: compounding-rails-reviewer (Rails), compounding-typescript-reviewer (TypeScript), compounding-python-reviewer (Python)
-- **Domain-specific**: dhh-rails-reviewer (Rails architecture/philosophy decisions), data-integrity-guardian (migration files), spec-flow-analyzer (plan file referenced), every-style-editor (prose content)
+- **Language-specific**: java-reviewer (Java), compounding-typescript-reviewer (TypeScript), python-reviewer (Python)
+- **Domain-specific**: sql-reviewer (SQL/query/schema work), aws-reviewer (AWS integrations), data-integrity-guardian (migration/backfill/schema risk), spec-flow-analyzer (plan file referenced)
 
 ### 4b. Discover Project Checks
 
-Scan `.github/checks/` for check files (`.md` files with `name:` frontmatter). For each check:
+Scan available check directories for check files (`.md` files with `name:` frontmatter):
+- global checks under `%USERPROFILE%\.copilot\checks` on Windows, if available
+- workspace `.github/checks/`, if the product repo defines project-specific checks
+
+For each check:
 - If the check has a `globs:` field, only include it when changed files match the glob pattern
 - If no `globs:`, include for all reviews
 - Each check will be dispatched as a focused subagent alongside personas
@@ -175,7 +179,7 @@ Present findings as pipe-delimited markdown tables grouped by severity level. Om
 
 Before delivering the review, verify:
 
-1. **Every finding is actionable** — if it says "consider" or "might want to" without a concrete fix, rewrite it
+1. **Each finding is actionable** — if it says "consider" or "might want to" without a concrete fix, rewrite it
 2. **No false positives from skimming** — verify the "bug" isn't handled elsewhere in the same function
 3. **Severity is calibrated** — a style nit is never P1; a SQL injection is never P3
 4. **Line numbers are accurate** — verified against file content

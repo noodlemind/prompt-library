@@ -1,7 +1,6 @@
 ---
 name: deepen-plan
 description: Enhance a plan with parallel research agents and interactive finding review per section. Use after /plan-issue to add depth, best practices, and implementation details. Not for initial planning — use /plan-issue first.
-disable-model-invocation: true
 argument-hint: "[path to plan file]"
 ---
 
@@ -89,7 +88,7 @@ Process one section at a time. Wait for the user's decision before moving to the
 For each accepted finding:
 1. Merge the research into the relevant plan section inline — add detail, citations, and implementation guidance where they are most useful
 2. Add source links and citations for external research
-3. Resolve any conflicts between agent recommendations (prefer the recommendation that aligns with existing codebase patterns from `.github/agent-context.md`)
+3. Resolve any conflicts between agent recommendations (prefer the recommendation that aligns with existing codebase patterns from available repository context such as `README.md`, `docs/agent-context.md`, `docs/codebase-snapshot.md`, and `docs/solutions/`)
 
 Preserve the plan's original structure — enhance sections, don't restructure the document.
 

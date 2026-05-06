@@ -1,7 +1,6 @@
 ---
 description: Identify over-engineering, YAGNI violations, and simplification opportunities in code.
 tools: ["codebase", "search", "read", "usages", "changes", "problems", "terminalLastCommand"]
-model: "Claude Sonnet 4.6"
 user-invocable: false
 agents: []
 ---
@@ -33,7 +32,7 @@ Ensure code is as simple as possible while still meeting requirements. The best 
 - Already-simple code that doesn't need further simplification
 - Documentation files and README content
 - Test helper boilerplate that exists for clarity
-- Framework-required ceremony (e.g., Rails migrations DSL, config files)
+- Framework-required ceremony (e.g., migration DSLs, generated config files)
 
 ## Anti-Patterns to Flag
 

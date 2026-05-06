@@ -1,7 +1,6 @@
 ---
 description: Research industry best practices and implementation examples for any technology.
 tools: ["codebase", "search", "read", "fetch", "problems", "terminalLastCommand"]
-model: "Claude Opus 4.6"
 user-invocable: false
 agents: []
 ---

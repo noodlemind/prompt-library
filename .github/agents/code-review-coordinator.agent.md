@@ -1,8 +1,7 @@
 ---
 description: Coordinate multi-specialist code reviews by delegating to domain expert agents.
 tools: ["agent", "codebase", "search", "read", "changes", "terminalLastCommand", "githubRepo", "problems"]
-model: "Claude Sonnet 4.6"
-agents: ["architecture-strategist", "security-sentinel", "performance-oracle", "code-simplicity-reviewer", "pattern-recognition-specialist", "compounding-rails-reviewer", "compounding-python-reviewer", "compounding-typescript-reviewer", "data-integrity-guardian", "dhh-rails-reviewer", "spec-flow-analyzer", "every-style-editor"]
+agents: ["architecture-strategist", "security-sentinel", "performance-oracle", "code-simplicity-reviewer", "pattern-recognition-specialist", "java-reviewer", "python-reviewer", "sql-reviewer", "aws-reviewer", "compounding-typescript-reviewer", "data-integrity-guardian", "spec-flow-analyzer"]
 handoffs:
   - label: "Document Learnings"
     agent: pipeline-navigator
@@ -47,20 +46,21 @@ Collect the full list of changed files and their diffs. This becomes the input f
 ### 2. Detect Project Context
 
 Identify the primary technologies by examining file extensions:
-- `.rb` files → Rails project
+- `.java` files → Java project
 - `.ts`/`.tsx` files → TypeScript project
 - `.py` files → Python project
-- Migration files → database changes present
+- `.sql` files, migration files, schema files, query-heavy changes → SQL/data changes present
+- AWS SDK, IAM, SQS/SNS, S3, Lambda, EventBridge, CloudWatch, or infrastructure config → AWS integration present
 - Mixed → note all detected types
 
-Read `.github/agent-context.md` for accumulated codebase knowledge and conventions.
+Read available repository context for accumulated codebase knowledge and conventions: `README.md`, `docs/agent-context.md`, `docs/codebase-snapshot.md`, and `docs/solutions/`. When reviewing this prompt-library repo, also read `.github/agent-context.md`.
 
 ### 3. Build Specialist Context
 
 For each specialist subagent, prepare a task prompt containing:
 - The files under review with relevant code sections and diffs
 - The project type and framework
-- Key conventions from `agent-context.md`
+- Key conventions from available repository context
 - The specialist's specific focus area
 - The review scope (PR, branch diff, specific files)
 
@@ -81,10 +81,11 @@ Dispatch specialists as parallel subagents in batches of 3-4. Each specialist ru
 5. `pattern-recognition-specialist` — consistency, naming, duplication, anti-patterns
 
 **Conditionally delegate based on detected project type (batch 3):**
-- Rails (`.rb`): `compounding-rails-reviewer`, `dhh-rails-reviewer`
+- Java (`.java`): `java-reviewer`
 - TypeScript (`.ts`/`.tsx`): `compounding-typescript-reviewer`
-- Python (`.py`): `compounding-python-reviewer`
-- Database migrations: `data-integrity-guardian`
+- Python (`.py`): `python-reviewer`
+- SQL/data changes: `sql-reviewer`, plus `data-integrity-guardian` when migrations/backfills/schema changes are present
+- AWS integrations: `aws-reviewer`
 
 **Cap at 8 specialists per review** to keep total review time reasonable.
 

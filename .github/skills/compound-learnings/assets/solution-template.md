@@ -27,8 +27,8 @@ severity: [low|medium|high|critical]
 
 Tags should be specific enough to match future searches. They are how agents and developers find relevant solutions when encountering similar problems.
 
-- Use specific technology terms, not generic categories: "n-plus-one", "rails-7", "sidekiq-retry" — NOT just "performance" or "ruby"
-- Include the technology/framework version when the solution is version-specific (e.g., "rails-7", "node-20", "typescript-5.3")
+- Use specific technology terms, not generic categories: "n-plus-one", "java-21", "postgres-index", "aws-sqs-dlq" — NOT just "performance" or "backend"
+- Include the technology/framework version when the solution is version-specific (e.g., "java-21", "python-3.12", "typescript-5.3")
 - Include the symptom category (e.g., "timeout", "memory-leak", "race-condition", "flaky-test")
 - Aim for 3-7 tags per solution document
 
@@ -36,7 +36,7 @@ Tags should be specific enough to match future searches. They are how agents and
 
 **Good tags:**
 ```yaml
-tags: [n-plus-one, rails-7, activerecord, eager-loading, api-endpoint]
+tags: [n-plus-one, postgres-index, java-21, api-endpoint]
 tags: [memory-leak, node-20, event-listener, heap-snapshot, websocket]
 tags: [race-condition, sidekiq-7, redis-lock, duplicate-job, idempotency]
 ```

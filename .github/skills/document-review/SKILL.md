@@ -1,7 +1,6 @@
 ---
 name: document-review
 description: Multi-persona document review with severity-scored findings. Use as a quality gate between brainstorm and plan, or between plan and work. Not for code review — use /code-review.
-disable-model-invocation: true
 ---
 
 # Document Review
@@ -30,7 +29,7 @@ disable-model-invocation: true
 **Should not trigger:**
 - "Review this PR" → use /code-review
 - "Review this code for security" → delegate to @security-sentinel
-- "Improve this README" → use @every-style-editor
+- "Improve this README" → use /project-readme
 
 ## References
 

@@ -101,7 +101,7 @@ Following Claude Code's proven architecture, the system is built on three primit
 
 **Skills** are user-invocable workflows that compose agents and tools. `/code-review` is a skill that invokes security, architecture, and performance agents. `/plan-issue` is a skill that uses research agents to gather context before planning.
 
-**Instructions** are always-on context that every agent and skill receives. Project conventions, security policies, coding standards. Scoped instructions activate based on file patterns (`.rb` files get Rails conventions).
+**Instructions** are always-on context that every agent and skill receives. Project conventions, security policies, coding standards. Scoped instructions activate based on file patterns (`.rb` files get framework conventions).
 
 ### Cross-Tool Compatibility Layer
 
@@ -146,8 +146,8 @@ Agents follow a **judgment-criteria design** — they define what to look for an
 description: >
   [WHAT it does] AND [WHEN to use it]. This description is critical —
   VS Code uses it for semantic routing (auto-selecting the right agent).
-tools: ["*"]
-model: ['Claude Sonnet 4 (copilot)', 'GPT-5 (copilot)']
+tools: ["codebase", "search", "read", "editFiles"]
+model: ['host-selected implementation model', 'host-selected coding model']
 ---
 
 ## Mission
@@ -183,15 +183,15 @@ model: ['Claude Sonnet 4 (copilot)', 'GPT-5 (copilot)']
 | Field | Type | Required | Default | Notes |
 |-------|------|----------|---------|-------|
 | `description` | string | **Yes** | — | WHAT + WHEN; used for semantic routing |
-| `tools` | list | No | All | `["*"]` for all, or specific names |
+| `tools` | list | No | All | `[explicit allowlist]` for all, or specific names |
 | `model` | string or list | No | User's pick | Array for fallback |
 | `agents` | list or `"*"` | No | `"*"` | Subagent access control |
 | `user-invokable` | boolean | No | `true` | `false` hides from `@` menu |
-| `disable-model-invocation` | boolean | No | `false` | `true` prevents auto-selection |
+| `auto-invocation restriction` | boolean | No | `false` | `true` prevents auto-selection |
 | `argument-hint` | string | No | — | Chat input guidance |
 | `target` | string | No | Both | `vscode` or `github-copilot` |
 
-**Deprecated:** `infer` — do not use. Replaced by `user-invokable` + `disable-model-invocation`.
+**Deprecated:** `infer` — do not use. Replaced by `user-invokable` + `auto-invocation restriction`.
 
 **Tool aliases (case-insensitive):**
 
@@ -214,11 +214,11 @@ model: ['Claude Sonnet 4 (copilot)', 'GPT-5 (copilot)']
 | `best-practices-researcher.agent.md` | Domain | Research industry best practices for a topic |
 | `code-simplicity-reviewer.agent.md` | Domain | YAGNI, over-engineering, premature abstraction |
 | `compounding-python-reviewer.agent.md` | Domain | Pythonic patterns, type safety, PEP compliance |
-| `compounding-rails-reviewer.agent.md` | Domain | Rails conventions, N+1, fat models, REST purity |
+| `framework-reviewer.agent.md` | Domain | framework conventions, N+1, fat models, REST purity |
 | `compounding-typescript-reviewer.agent.md` | Domain | Type safety, modern patterns, strict mode |
 | `data-integrity-guardian.agent.md` | Deep | Migration safety, constraints, transaction boundaries |
-| `dhh-rails-reviewer.agent.md` | Deep | 37signals style, Hotwire, clarity over cleverness |
-| `every-style-editor.agent.md` | Domain | Editorial style guide compliance |
+| `opinionated-framework-reviewer.agent.md` | Deep | 37signals style, Hotwire, clarity over cleverness |
+| `style-editor.agent.md` | Domain | Editorial style guide compliance |
 | `feedback-codifier.agent.md` | Domain | Codify review feedback into reusable standards |
 | `framework-docs-researcher.agent.md` | Domain | Research framework documentation and APIs |
 | `git-history-analyzer.agent.md` | Domain | Git archaeology, code evolution, contributor patterns |
@@ -256,7 +256,7 @@ skill-name/
 | `description` | **Yes** | 1-1024 chars, specific enough for semantic routing |
 | `argument-hint` | No | Guidance for `/skill-name` invocation |
 | `user-invokable` | No | Default `true`; `false` for background knowledge |
-| `disable-model-invocation` | No | Default `false`; `true` for side-effect workflows |
+| `auto-invocation restriction` | No | Default `false`; `true` for side-effect workflows |
 | `allowed-tools` | No | Space-delimited tool restrictions |
 
 **Visibility matrix:**
@@ -265,7 +265,7 @@ skill-name/
 |--------|----------|-----------|----------|
 | Default | Yes | Yes | General-purpose skills |
 | `user-invokable: false` | No | Yes | Background knowledge |
-| `disable-model-invocation: true` | Yes | No | Side-effect workflows |
+| `auto-invocation restriction enabled` | Yes | No | Side-effect workflows |
 
 #### 1d: Skills to Build (10 general-purpose)
 
@@ -273,7 +273,7 @@ skill-name/
 |-------|------|-----------------|---------------|
 | `capture-issue/SKILL.md` | Workflow | `argument-hint: "[issue description or URL]"` | **Step 1**: Capture |
 | `plan-issue/SKILL.md` | Workflow | `argument-hint: "[issue file path]"` | **Step 2**: Plan |
-| `work-on-task/SKILL.md` | Workflow | `disable-model-invocation: true` | **Step 3**: Execute |
+| `work-on-task/SKILL.md` | Workflow | `auto-invocation restriction enabled` | **Step 3**: Execute |
 | `code-review/SKILL.md` | Workflow | Multi-agent review coordination | **Step 4**: Review |
 | `analyze-and-plan/SKILL.md` | Workflow | `allowed-tools: Read, Edit` | Planning helper |
 | `codebase-context/SKILL.md` | Background | Workspace context gathering | Context |
@@ -454,8 +454,8 @@ This is the shared baseline every agent and skill receives. Content:
 
 ```yaml
 ---
-name: 'Rails Conventions'
-description: 'Rails-specific coding standards and patterns'
+name: 'framework Conventions'
+description: 'framework-specific coding standards and patterns'
 applyTo: '**/*.rb'
 ---
 ```
@@ -557,7 +557,7 @@ Archive in a `legacy/` directory or git tag for reference.
 - [ ] Every `SKILL.md` has `name` and `description`
 - [ ] `name` matches parent directory name exactly
 - [ ] SKILL.md bodies under 500 lines
-- [ ] Side-effect skills have `disable-model-invocation: true`
+- [ ] Side-effect skills have `auto-invocation restriction enabled`
 - [ ] Read-only skills have `allowed-tools` restrictions
 
 **Configuration:**
@@ -584,11 +584,11 @@ prompt-library/
 │   │   ├── best-practices-researcher.agent.md
 │   │   ├── code-simplicity-reviewer.agent.md
 │   │   ├── compounding-python-reviewer.agent.md
-│   │   ├── compounding-rails-reviewer.agent.md
+│   │   ├── framework-reviewer.agent.md
 │   │   ├── compounding-typescript-reviewer.agent.md
 │   │   ├── data-integrity-guardian.agent.md
-│   │   ├── dhh-rails-reviewer.agent.md
-│   │   ├── every-style-editor.agent.md
+│   │   ├── opinionated-framework-reviewer.agent.md
+│   │   ├── style-editor.agent.md
 │   │   ├── feedback-codifier.agent.md
 │   │   ├── framework-docs-researcher.agent.md
 │   │   ├── git-history-analyzer.agent.md
@@ -620,7 +620,7 @@ prompt-library/
 │   │   └── work-on-task/
 │   │       └── SKILL.md
 │   ├── instructions/
-│   │   ├── rails.instructions.md      (applyTo: '**/*.rb')
+│   │   ├── framework.instructions.md      (applyTo: '**/*.rb')
 │   │   ├── typescript.instructions.md (applyTo: '**/*.{ts,tsx}')
 │   │   └── python.instructions.md     (applyTo: '**/*.py')
 │   ├── copilot-instructions.md
@@ -689,7 +689,7 @@ tools: ['agent', 'read', 'search']
 agents: ['security-sentinel', 'performance-oracle', 'architecture-strategist',
          'code-simplicity-reviewer', 'pattern-recognition-specialist',
          'data-integrity-guardian']
-model: ['Claude Sonnet 4.5 (copilot)', 'Claude Sonnet 4 (copilot)']
+model: ['host-selected implementation model', 'host-selected implementation model']
 ---
 ```
 
@@ -734,7 +734,7 @@ model: ['Claude Sonnet 4.5 (copilot)', 'Claude Sonnet 4 (copilot)']
 ### Phase 2: Build Configuration Layer
 
 - [ ] Write `.github/copilot-instructions.md` with project conventions
-- [ ] Write scoped `.github/instructions/*.instructions.md` files (Rails, TypeScript, Python)
+- [ ] Write scoped `.github/instructions/*.instructions.md` files (framework, TypeScript, Python)
 - [ ] Write `AGENTS.md` at repo root for cross-tool compatibility
 - [ ] Update existing `CLAUDE.md` to reference new architecture
 - [ ] Create `.vscode/mcp.json` with Context7 configuration
@@ -759,7 +759,7 @@ model: ['Claude Sonnet 4.5 (copilot)', 'Claude Sonnet 4 (copilot)']
 - [ ] All 10 skills invocable via `/` in Copilot Chat
 - [ ] Semantic routing works (domain-specific queries activate the right agent)
 - [ ] Skills coordinate agents (e.g., `/code-review` covers multiple review perspectives)
-- [ ] Works with Claude Sonnet 4, GPT-5, and other supported models
+- [ ] Works with host-selected implementation model, host-selected coding model, and other supported models
 - [ ] AGENTS.md provides useful context in non-Copilot tools
 - [ ] Connected pipeline works end-to-end: `/capture-issue` → `/plan-issue` → `/work-on-task` → `/code-review` → `/compound-learnings`
 - [ ] Session work log persists across sessions: start a task, close VS Code, reopen, `/work-on-task` resumes from last checkpoint
@@ -816,11 +816,11 @@ model: ['Claude Sonnet 4.5 (copilot)', 'Claude Sonnet 4 (copilot)']
 | Feature | When | Why |
 |---------|------|-----|
 | Orchestrator agents | Subagent API reaches GA | Native parallel fan-out to specialist agents |
-| General-purpose agent | After orchestrators work | Broad agent with `agents: ["*"]` for emergent capability |
+| General-purpose agent | After orchestrators work | Broad agent with `agents: [explicit allowlist]` for emergent capability |
 | Agent hooks | Hooks API reaches GA | `SessionStart` for dynamic context injection |
 | Knowledge compounding skill | After agent-context.md proves useful | Formalize the solve → document → reference loop |
 | User preferences | When users request it | Per-workspace customization (severity thresholds, focus areas) |
-| Converter pipeline | If multi-platform needed | Every Inc `compound` CLI for Claude Code → Copilot conversion |
+| Converter pipeline | If multi-platform needed | Legacy vendor `compound` CLI for Claude Code → Copilot conversion |
 | Per-project agent selection | After 30+ agents | Config file listing active agents (like compound-engineering.local.md) |
 
 ---
@@ -850,8 +850,8 @@ model: ['Claude Sonnet 4.5 (copilot)', 'Claude Sonnet 4 (copilot)']
 - [Linux Foundation Agentic AI Foundation](https://www.linuxfoundation.org/press/linux-foundation-announces-the-formation-of-the-agentic-ai-foundation)
 
 ### External — Reference Implementations
-- [Every Inc Compound CLI](https://github.com/EveryInc/every-marketplace)
-- [Every Inc Copilot Spec](https://github.com/EveryInc/every-marketplace/blob/main/docs/specs/copilot.md)
+- [Legacy vendor Compound CLI](https://github.com/LegacyVendor/every-marketplace)
+- [Legacy vendor Copilot Spec](https://github.com/LegacyVendor/every-marketplace/blob/main/docs/specs/copilot.md)
 - [Claude Code Agent Architecture](https://www.zenml.io/llmops-database/claude-code-agent-architecture-single-threaded-master-loop-for-autonomous-coding)
 - [OpenAI Codex AGENTS.md Guide](https://developers.openai.com/codex/guides/agents-md/)
 - [OpenAI Codex Skills](https://developers.openai.com/codex/skills/)

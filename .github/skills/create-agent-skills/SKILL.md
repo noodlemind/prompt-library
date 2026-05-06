@@ -1,16 +1,20 @@
 ---
 name: create-agent-skills
-description: Expert guidance for creating agents, skills, and instructions following project conventions. Use when building new agents, skills, scoped instructions, or modifying existing ones. Not for importing from external repos — use /import-conventions.
-disable-model-invocation: true
+description: Skill-first guidance for creating skills, agents, instructions, prompt wrappers, and checks. Use when modifying prompt-library primitives. Not for importing external repos — use /import-conventions.
 ---
 
 # Create Agents, Skills & Instructions
+
+## Pipeline Role
+
+Primitive creator and maintainer for this prompt library. Use it to keep the library skill-driven: skills hold reusable workflows, agents hold isolated roles, instructions hold scoped conventions, prompt wrappers route to skills, and checks hold narrow review criteria.
 
 ## When to Use
 
 - Creating a new agent (`.github/agents/*.agent.md`)
 - Creating a new skill (`.github/skills/*/SKILL.md`)
 - Creating a new scoped instruction (`.github/instructions/*.instructions.md`)
+- Creating a new review check (`.github/checks/*.md`) or thin prompt wrapper (`.github/prompts/*.prompt.md`)
 - Modifying an existing agent, skill, or instruction
 - Understanding the conventions for agent/skill/instruction design
 
@@ -27,7 +31,38 @@ disable-model-invocation: true
 - "Review my code" → use /code-review
 - "Plan a feature" → use /plan-issue
 
+## Primitive Decision Rules
+
+Read `docs/architecture/skill-driven-prompt-library.md` before creating or substantially changing primitives.
+
+Default to a **skill**. Create a new artifact only after answering:
+
+| Question | If yes, create |
+|---|---|
+| Is this a repeated workflow, checklist, generator, reviewer protocol, or pipeline step? | Skill |
+| Does it need separate judgment, tool authority, isolation, runtime profile, or accountability? | Agent |
+| Should it load automatically for matching file patterns? | Instruction |
+| Is it a host-facing slash command wrapper for an existing skill? | Prompt wrapper |
+| Is it a narrow project-specific review rule? | Review check |
+| Is it a verified learning from completed work? | Solution doc |
+
+Do not create a new agent just to store reference material. Put long criteria in `references/`, team conventions in scoped instructions, and narrow review rules in `.github/checks/`.
+
+## Creator Workflow
+
+Before writing files:
+
+1. **Classify the primitive** using the decision rules above.
+2. **Check for overlap** in `.github/skills/`, `.github/agents/`, `.github/instructions/`, `.github/checks/`, and `docs/solutions/`.
+3. **Define triggers and negative triggers** for discovery.
+4. **Declare permissions/tool needs** using the smallest sufficient tool set.
+5. **Define outputs and verification**: generated files, state changes, review criteria, or acceptance checks.
+6. **Add eval scenarios**: at least 3 should-trigger and 3 should-not examples for skills/agents, or good/bad examples for checks/instructions.
+7. **Update docs** listed in the validation checklist.
+
 ## Agent Creation
+
+Create an agent only when the primitive decision rule says this needs a separate role. Most new procedural knowledge belongs in a skill.
 
 ### Agent Template
 
@@ -35,19 +70,20 @@ Read references/agent-template.md for the complete agent template with all secti
 
 ### Agent Classifications
 
-| Classification | Tools | Model | Guardrails? | Use When |
-|---------------|-------|-------|-------------|----------|
-| **Reviewer** | `["codebase", "search", "read", "usages", "changes", "problems", "terminalLastCommand"]` | Sonnet 4.6 | Yes | Read-only code analysis |
-| **Researcher** | `["codebase", "search", "read", "fetch", "problems", "terminalLastCommand"]` | Opus 4.6 | No | Information gathering |
-| **Actor** | `["codebase", "search", "read", "editFiles", "terminalLastCommand", "changes", "problems", "usages", "awaitTerminal"]` | Sonnet 4.6 | Yes | Needs to modify code |
-| **Engineer** | `["*"]` | Opus 4.6 | No | Full-cycle understand + implement + delegate |
-| **Coordinator** | `["agent", "codebase", "search", "read", "problems", ...]` | Opus 4.6 / Sonnet 4.6 | No | Orchestrating subagents |
+| Classification | Tools | Guardrails? | Use When |
+|---------------|-------|-------------|----------|
+| **Reviewer** | `["codebase", "search", "read", "usages", "changes", "problems", "terminalLastCommand"]` | Yes | Read-only code analysis |
+| **Researcher** | `["codebase", "search", "read", "fetch", "problems", "terminalLastCommand"]` | No | Information gathering |
+| **Actor** | `["codebase", "search", "read", "editFiles", "terminalLastCommand", "changes", "problems", "usages", "awaitTerminal"]` | Yes | Needs to modify code |
+| **Engineer** | `["agent", "codebase", "search", "read", "editFiles", "changes", "terminalLastCommand", "problems", "usages", "fetch", "githubRepo", "awaitTerminal"]` | No | Full-cycle understand + implement + delegate |
+| **Coordinator** | `["agent", "codebase", "search", "read", "problems", ...]` | No | Orchestrating subagents |
 
 **Note:** Tool names use VS Code conventions. See `copilot-instructions.md` for cross-environment mapping.
 
 ### Agent Design Principles
 
 - **Judgment-criteria, not procedures**: Define WHAT to look for, not HOW to search
+- **Boundary over breadth**: State why this must be an agent rather than a skill, instruction, or check
 - **Structured output**: Every agent has a defined output format
 - **Single responsibility**: One domain per agent
 - **Description ≤180 chars**: Must convey WHAT + WHEN concisely
@@ -61,6 +97,8 @@ Read references/agent-template.md for the complete agent template with all secti
 
 ## Skill Creation
 
+Skills are the default home for reusable expertise. A skill may orchestrate agents, read references, use assets, enforce gates, and update plan/solution artifacts.
+
 ### Skill Template
 
 Read references/skill-template.md for the complete skill template with all sections.
@@ -68,10 +106,10 @@ Read references/skill-template.md for the complete skill template with all secti
 ### Skill Design Principles
 
 - **Progressive disclosure**: Frontmatter for discovery → body for activation → references for deep execution
+- **Explicit contract**: State inputs, outputs, state changes, gates, and verification evidence
 - **Interactive + non-interactive**: Skills must work both when invoked by users and by other skills
-- **`disable-model-invocation: true`**: Prevents the model from auto-invoking the skill
-- **`user-invokable`**: Controls visibility in `/` slash command menu (default: `true`)
-- **Composable**: Skills can delegate to agents via Task tool
+- **`user-invocable`**: Controls visibility in `/` slash command menu when supported (default: `true`)
+- **Composable**: Skills can delegate to agents when separate judgment, authority, or isolation is useful
 
 ### Skill Naming
 
@@ -80,7 +118,7 @@ Read references/skill-template.md for the complete skill template with all secti
 
 ## Cross-Tool Frontmatter Compatibility
 
-This library targets VS Code 1.109 as the primary platform. VS Code reads specific frontmatter fields. Other tools (Amp, Cursor, Windsurf, Augment) read `AGENTS.md` and may adopt the agentskills.io standard.
+This library targets VS Code 1.109 as the primary platform. VS Code reads specific frontmatter fields from globally hydrated customizations. IntelliJ IDEA users rely on global Copilot instructions and manually invoked workflow names when plugin discovery differs. Keep host-specific behavior in prompt wrappers and shared behavior in skills.
 
 **VS Code 1.109 frontmatter (primary — always use these):**
 
@@ -89,10 +127,8 @@ This library targets VS Code 1.109 as the primary platform. VS Code reads specif
 | `name` | Skills, prompts | Display name in `/` menu |
 | `description` | Agents, skills | Discovery matching — the search index |
 | `tools` | Agents, prompts | Tool whitelist (omit for all tools) |
-| `model` | Agents | Model selection |
 | `user-invocable` | Agents | Show/hide in `@` menu |
 | `agents` | Agents | Subagent allowlist |
-| `disable-model-invocation` | Agents, skills | Prevent auto-invocation |
 | `applyTo` | Instructions | Glob pattern for activation |
 
 **agentskills.io standard (emerging — add for cross-tool portability when relevant):**
@@ -117,7 +153,7 @@ Agent context windows are finite. Keep artifacts concise:
 | Skill SKILL.md | ≤500 lines | Extract dense content to `references/` |
 | Instruction `.instructions.md` | ≤100 lines | Focused conventions, not encyclopedias |
 | Agent `.agent.md` | ≤200 lines | Judgment criteria, not procedures |
-| `agent-context.md` | ≤200 lines | Curated patterns, prune stale entries |
+| `agent-context.md` | ≤200 lines | Repository-owned curated patterns, prune stale entries |
 | Review check `.md` | ≤50 lines | One concern per check |
 | Skill `description:` | ≤220 chars | Search index — dense and specific |
 | Agent `description:` | ≤180 chars | Discovery text |
@@ -142,6 +178,26 @@ Five patterns for structuring SKILL.md content ([source](https://lavinigam.com/p
 - Use gate conditions ("DO NOT proceed to Step N until...") to prevent agents from skipping validation
 - Skills teach agents when and how to use tools — they are not tools themselves
 - Keep SKILL.md under 500 lines; extract dense content to `references/`
+
+## Prompt Wrapper Creation
+
+Prompt wrappers in `.github/prompts/` should be thin:
+
+- Frontmatter declares `name`, `description`, `argument-hint`, `agent`, and `tools`
+- Body should point to the matching skill and shared context
+- Do not duplicate workflow steps from `SKILL.md`
+- If the prompt needs more than routing and tool declarations, move that logic into the skill
+
+## Review Check Creation
+
+Create `.github/checks/<name>.md` when a team wants a narrow review criterion that `/code-review` should discover.
+
+Required shape:
+
+- Frontmatter: `name`, `description`, optional `severity-default`, optional `globs`
+- `## What to Look For`: specific patterns and anti-patterns
+- `## Examples`: at least one bad and good example when practical
+- Keep under 50 lines and one concern per check
 
 ## Instruction Creation
 
@@ -175,7 +231,6 @@ applyTo: '<glob pattern for relevant files>'
 
 | File | Scope | Coverage |
 |------|-------|---------|
-| `rails.instructions.md` | `**/*.rb` | Rails conventions, ActiveRecord, testing |
 | `typescript.instructions.md` | `**/*.{ts,tsx}` | Type safety, React, modules |
 | `python.instructions.md` | `**/*.py` | Type annotations, Pythonic patterns, pytest |
 | `java.instructions.md` | `**/*.java` | Google Java Style, Java 17+, records, testing |
@@ -193,14 +248,18 @@ applyTo: '<glob pattern for relevant files>'
 
 After creating an agent, skill, or instruction, verify:
 
-- [ ] Description ≤180 characters, conveys WHAT + WHEN
+- [ ] Primitive type is justified against `docs/architecture/skill-driven-prompt-library.md`
+- [ ] Description conveys WHAT + WHEN (agents ≤180 characters, skills ≤220 characters)
 - [ ] Correct tool classification (reviewer/researcher/actor)
-- [ ] Model selection set (Opus 4.6 for planning/research, Sonnet 4.6 for others)
+- [ ] No provider-specific model pinning; let GitHub Copilot choose the active model in VS Code or IntelliJ IDEA
 - [ ] `user-invocable: false` set for specialist/leaf-node agents
 - [ ] `agents: []` set for non-coordinator agents (prevents accidental subagent spawning)
 - [ ] Guardrails section present (for reviewers and actors)
 - [ ] Output format defined with markdown template
 - [ ] "What NOT to Report" section present (for reviewers)
 - [ ] File in correct directory with correct naming
+- [ ] For skills: inputs, outputs, mode behavior, gates, verification, error handling, and trigger examples are present
 - [ ] For instructions: `applyTo` glob pattern matches target files, conventions are specific and actionable
-- [ ] Documentation updated: CLAUDE.md, AGENTS.md, copilot-instructions.md, agent-context.md
+- [ ] For prompt wrappers: body routes to the matching skill instead of duplicating workflow logic
+- [ ] For checks: follows `.github/checks/README.md` format and stays focused on one concern
+- [ ] Documentation updated: CLAUDE.md, AGENTS.md, README.md, copilot-instructions.md, repository context docs, and architecture docs if the standard changed

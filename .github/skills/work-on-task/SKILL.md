@@ -2,7 +2,6 @@
 name: work-on-task
 description: Execute the current phase of a planned issue using TDD with scope control and session logging. Use when implementing planned changes or resuming a session. Not without a plan — run /plan-issue first.
 argument-hint: "[path to plan file]"
-disable-model-invocation: true
 ---
 
 # Work on Task
@@ -50,7 +49,7 @@ When invoked, follow this exact sequence:
    - `in-progress` → Resume at current phase (check `## Activity` for progress).
    - `review` or `done` → "This issue is past the work phase."
 3. **Check `plan_lock`**: If `false` → "Plan is not locked. Run `/plan-issue` first."
-4. **Read `## Research Notes`**: Understand findings from the planning phase — file paths, patterns to follow, constraints. This is the memory bridge from `/plan-issue`.
+4. **Read the local context pack**: `## Context`, `## Acceptance Criteria`, `## Research Notes`, `## Impacted Files`, `## Verification Plan`, and `## Risk & Review Routing`. These sections are the memory bridge from `/capture-issue` and `/plan-issue`.
 5. **Read `phase`**: Determine current phase number.
 6. **Read `## Activity`**: Understand what was already done in this phase.
 7. **Read plan checkboxes**: Find unchecked `- [ ]` items for the current phase.
@@ -62,7 +61,7 @@ For each task in the current phase:
 
 ### 1. Verify Before Coding
 
-List the exact files, symbols, and lines that justify the planned change. If key evidence is missing, set `status: needs-info` with one focused question and stop.
+List the exact files, symbols, and lines that justify the planned change. Confirm the task is within `## Impacted Files` and has a matching acceptance criterion or verification item. If key evidence is missing, set `status: needs-info` with one focused question and stop.
 
 ### 2. Implement with TDD
 
@@ -90,7 +89,7 @@ After completing each task:
 
 When all tasks in the current phase are checked:
 
-1. **Run tests** — all must pass
+1. **Run verification** — execute relevant checks from `## Verification Plan`; all required checks must pass
 2. **Increment `phase`** in frontmatter
 3. **Append to `## Activity`**:
 
@@ -114,14 +113,18 @@ When all tasks in the current phase are checked:
 Before marking a phase complete, run verification and report evidence:
 
 1. **Tests pass**: Run the project's test suite. Report the actual test output, not just "tests pass."
-2. **Files match plan**: Compare modified files against `## Impacted Files` in the plan. Flag any files modified that aren't listed (ask user to update plan or revert).
-3. **Phase tasks checked**: All checkboxes in the current phase must be checked.
-4. **Clean working state**: No uncommitted changes that should be committed. Ignore expected untracked files (.env, lockfiles, generated files). Use git status + gitignore awareness to distinguish.
+2. **Verification plan satisfied**: Run or explicitly account for each applicable item in `## Verification Plan`.
+3. **Risk routing satisfied**: If `## Risk & Review Routing` names specialist checks for touched areas, run them or document why they are deferred to `/code-review`.
+4. **Files match plan**: Compare modified files against `## Impacted Files` in the plan. Flag any files modified that aren't listed (ask user to update plan or revert).
+5. **Phase tasks checked**: All checkboxes in the current phase must be checked.
+6. **Clean working state**: No uncommitted changes that should be committed. Ignore expected untracked files (.env, lockfiles, generated files). Use git status + gitignore awareness to distinguish.
 
 Report verification results as evidence in the activity log:
 ```
 ### Verification — Phase [N]
 - Tests: [PASS/FAIL] — [summary of test output]
+- Verification plan: [PASS/FAIL] — [items run or deferred]
+- Risk routing: [completed/deferred/not applicable] — [specialist checks]
 - Scope: [N] files modified, all within Impacted Files [or: file X not in scope]
 - Tasks: [N/N] checked
 - Working state: clean [or: uncommitted changes in X]
@@ -145,6 +148,8 @@ DO NOT claim completion if any check fails. Report the failure and stop.
 - **`plan_lock` not set** → "Plan is not locked. Run `/plan-issue` to generate and lock a plan first."
 - **Phase already complete** → "All tasks in Phase [N] are checked. Advance to the next phase or run `/code-review`."
 - **Test failure during verification** → Report specific test failures with the actual test output. Do not claim completion. Log the failure in `## Activity` and stop.
+- **Verification plan missing** → Generate a minimal verification plan from acceptance criteria and touched files, append it to the plan, and continue only after it is explicit.
+- **Risk routing missing** → Add a short `## Risk & Review Routing` section before implementation continues.
 - **File outside `## Impacted Files` scope** → Stop immediately. Report the file path and why it needs to change. Ask the user to update the plan's `## Impacted Files` section or revert the change.
 
 ### Common Errors

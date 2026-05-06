@@ -2,7 +2,6 @@
 name: import-conventions
 description: Generate instructions and skills from a custom framework, library, or repo. Use when onboarding a new dependency, capturing team conventions, or creating a Tool Wrapper from an existing codebase. Not for creating agents from scratch — use /create-agent-skills.
 argument-hint: "[repo URL, path, or framework name]"
-disable-model-invocation: true
 ---
 
 # Import Conventions
@@ -13,7 +12,7 @@ Read a custom framework, library, or repository and generate `.instructions.md` 
 
 ## When to Use
 
-- Onboarding a custom framework wrapper (e.g., internal Spring Boot starter, custom Rails engine)
+- Onboarding a custom framework wrapper (e.g., internal Spring Boot starter or shared Python platform package)
 - Capturing team conventions from an existing codebase
 - Creating a Tool Wrapper skill from a library's documentation and examples
 - Converting a README or style guide into agent-consumable instructions
@@ -111,7 +110,6 @@ If the framework has workflow patterns worth encoding, create `.github/skills/<n
 ---
 name: <skill-name>
 description: '<What and when>. Not for <confusable alternative>.'
-disable-model-invocation: true
 ---
 
 # <Skill Name>
@@ -146,7 +144,7 @@ Present the generated files to the user for review before writing.
 After creating new files:
 - Update CLAUDE.md instruction count if applicable
 - Update AGENTS.md if a new skill was created
-- Note the new instruction/skill in `.github/agent-context.md`
+- Note the new instruction/skill in the repository-owned context docs, such as `docs/agent-context.md` for product repos or `.github/agent-context.md` when working in this prompt-library repo
 
 ## Non-Interactive Mode
 

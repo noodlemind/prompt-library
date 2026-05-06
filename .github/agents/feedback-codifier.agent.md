@@ -1,7 +1,6 @@
 ---
 description: Transform recurring review feedback into reusable coding standards and conventions.
 tools: ["codebase", "search", "read", "editFiles", "usages", "problems", "terminalLastCommand"]
-model: "Claude Sonnet 4.6"
 user-invocable: false
 agents: []
 ---

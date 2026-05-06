@@ -4,17 +4,19 @@ Shared context loaded into every agent and skill session.
 
 ## Project
 
-Prompt library with AI agent systems for software development using VS Code native agent/skill discovery.
+Skill-driven prompt library for software development using GitHub Copilot in VS Code and IntelliJ IDEA on Windows. Teams hydrate prompts, agents, skills, and instructions globally from this repo; product repositories should not receive prompt-library source artifacts.
 
 ## Primitives
 
-- **Agents** (`.github/agents/`): 24 agents (19 specialists + 1 engineer + 1 implementer + 3 coordinators). Review agents include prompt injection guardrails. The `engineer` (Opus) plans and orchestrates; `code-implementer` (Sonnet) executes coding tasks.
-- **Skills** (`.github/skills/`): 17 workflows with trigger examples and negative triggers. `/start` classifies incoming work and routes to the right entry point. Pipeline: `/capture-issue` → `/plan-issue` → `/work-on-task` → `/code-review` → `/compound-learnings`. `/document-review` available as quality gate between stages. `/engineer` provides full-cycle engineering with user steering. Pipeline skills support standalone mode (skip state validation) and pipeline mode (enforce state machine).
+- **Skills** (`.github/skills/`): 23 workflows with trigger examples and negative triggers. Skills are the primary reusable contract: they compose local context, instructions, tools, review checks, and agents. `/start` classifies incoming work and routes to the right entry point. `/btw` handles quick Q&A without plans or edits. `/project-readme` creates or updates project README files. Domain skills include `/java`, `/python`, `/sql`, and `/aws`. Pipeline: `/capture-issue` → `/plan-issue` → `/work-on-task` → `/code-review` → `/compound-learnings`.
+- **Agents** (`.github/agents/`): 24 agents (19 specialists + 1 engineer + 1 implementer + 3 coordinators). Review agents include prompt injection guardrails. Use agents when work needs separate judgment, tool authority, runtime profile, isolation, or accountability. Active Java, Python, SQL, and AWS reviewers are included.
 - **Instructions** (`.github/instructions/`): Scoped context by file pattern.
+- **Prompt wrappers** (`.github/prompts/`): Thin host adapters that route to skills and declare host tools.
+- **Review checks** (`.github/checks/`): Small project-specific review criteria discovered by `/code-review`.
 
 ## Pipeline State
 
-Plan files in `docs/plans/` track state via YAML frontmatter: `status` (open/planned/in-progress/review/done), `plan_lock`, `phase`. Inter-step memory flows through plan file sections: `## Context`, `## Research Notes`, `## Implementation Notes`, `## Activity`. Always read existing sections before starting work. Never overwrite prior sections.
+Plan files in `docs/plans/` track state via YAML frontmatter: `status` (open/planned/in-progress/review/done), `plan_lock`, `phase`. Treat each plan file as the local context pack. Inter-step memory flows through plan file sections: `## Context`, `## Acceptance Criteria`, `## Research Notes`, `## Impacted Files`, `## Verification Plan`, `## Risk & Review Routing`, `## Implementation Notes`, `## Review Findings`, `## Activity`. Always read existing sections before starting work. Never overwrite prior sections.
 
 ## Knowledge
 
@@ -23,29 +25,34 @@ Read `.github/agent-context.md` for codebase patterns. Check `docs/solutions/` b
 ## Conventions
 
 - Follow existing patterns. Consistency over preference.
+- Keep primitive boundaries clear: workflows belong in skills, role-specific judgment belongs in agents, file-scoped conventions belong in instructions, host routing belongs in prompt wrappers, and narrow project review rules belong in checks.
 - TDD: failing test → minimal fix → cleanup.
 - Surgical diffs only. No drive-by refactoring. Three similar lines > premature abstraction.
 - Never commit secrets or credentials. Validate input at boundaries. Parameterized queries.
 
 ## Orchestration
 
-Coordinators delegate to specialist subagents via `tools: ['agent']`. Subagents run in isolated context — include all necessary context in the task prompt. `/plan-issue` and `/code-review` prompt wrappers route to their coordinators via the `agent:` field (prompt tools override agent tools). Coordinators use `agents:` allowlists to restrict which specialists they can invoke. Coordinators dispatch subagents in parallel batches (3-4 at a time) rather than sequentially.
+The engineer selects the skill/flow first, then delegates only when separate judgment, authority, or isolation improves the result. Coordinators delegate to specialist subagents via `tools: ['agent']`. Subagents run in isolated context — include all necessary context in the task prompt. `/plan-issue` and `/code-review` prompt wrappers route to their coordinators via the `agent:` field (prompt tools override agent tools). Coordinators use `agents:` allowlists to restrict which specialists they can invoke. Coordinators dispatch subagents in parallel batches (3-4 at a time) rather than sequentially.
+
+## Standardization
+
+Read `docs/architecture/skill-driven-prompt-library.md` before adding or substantially changing agents, skills, instructions, prompt wrappers, checks, plan structure, or solution templates.
 
 ## Cross-Environment Tool Compatibility
 
-This library targets VS Code Copilot, GHCP CLI, and Claude Code. Prompt wrappers declare VS Code tool names. When a tool isn't available, use the environment-appropriate alternative:
+This library primarily targets GitHub Copilot in VS Code and IntelliJ IDEA. Prompt wrappers declare VS Code tool names. When a tool is unavailable in another host, use the closest host-native equivalent:
 
-| VS Code Tool | GHCP CLI | Claude Code | Fallback |
-|-------------|----------|-------------|----------|
-| `codebase` | — | `Grep`/`Glob` | Semantic code search |
-| `usages` | — | `Grep` | Find references via search |
-| `problems` | — | — | Run linter/compiler via terminal |
-| `awaitTerminal` | — | — | `terminalLastCommand` or `Bash` |
-| `changes` | — | — | `git diff` via terminal |
-| `terminalLastCommand` | `run_command` | `Bash` | Run the command directly |
-| `githubRepo` | — | — | `gh` CLI via terminal |
-| `fetch` | `web` | `WebFetch` | Auto-mapped |
-| `editFiles` | `edit` | `Edit` | Auto-mapped |
+| VS Code Tool | Fallback |
+|-------------|----------|
+| `codebase` | Repository search and targeted file reads |
+| `usages` | Text search or IDE find references |
+| `problems` | Run linter/compiler/test command and inspect output |
+| `awaitTerminal` | Wait for the command in the host terminal |
+| `changes` | `git diff` or IDE changes view |
+| `terminalLastCommand` | Run/read the equivalent terminal command |
+| `githubRepo` | GitHub UI, GitHub integration, or `gh` CLI |
+| `fetch` | Host-approved web/documentation lookup |
+| `editFiles` | Host-native file edit tool |
 
 Skills that reference `changes`, `terminalLastCommand`, or `githubRepo` include inline fallback instructions for non-VS Code environments.
 

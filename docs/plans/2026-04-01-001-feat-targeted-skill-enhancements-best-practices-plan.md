@@ -78,7 +78,7 @@ The prompt library's foundation is solid (sequential pipeline, validation gates,
 
 ### Resolved During Planning
 
-- **How many review personas?** Use the existing 12 from code-review-coordinator's allowlist. 5 always-on (architecture, security, performance, simplicity, patterns) + 7 conditional (3 language-specific, 2 DHH/migrations, 1 spec-flow, 1 style). Matches the coordinator's current structure.
+- **How many review personas?** Use the existing 12 from code-review-coordinator's allowlist. 5 always-on (architecture, security, performance, simplicity, patterns) + 7 conditional (3 language-specific, 2 opinionated framework/migrations, 1 spec-flow, 1 style). Matches the coordinator's current structure.
 - **Reference file structure?** Two files for code review (perspectives + schema). One file for document review (criteria). One shared file for error handling patterns.
 - **Solution doc YAML schema?** Use the existing format from /compound-learnings (title, date, category, tags, module, symptom, root_cause, severity). Already well-designed.
 - **Standalone vs pipeline detection?** If a plan file is provided as argument AND contains `status:` in YAML frontmatter → pipeline mode. Otherwise → standalone mode.
@@ -383,7 +383,7 @@ Compound-learnings activation + skill descriptions. Closes the knowledge loop an
 **Approach:**
 - Extract the existing YAML frontmatter format (title, date, category, tags, module, symptom, root_cause, severity) and markdown body structure (Problem, Root Cause, Solution, Prevention) into `assets/solution-template.md`.
 - Add a `## Solution Document Format` section to the skill documenting the schema and giving examples.
-- Add guidance for tagging: tags should be specific enough to match future searches (e.g., "n-plus-one", "rails-7", "sidekiq" not just "performance").
+- Add guidance for tagging: tags should be specific enough to match future searches (e.g., "n-plus-one", "framework-7", "sidekiq" not just "performance").
 - Ensure the skill instructs agents to use the template when creating solution docs.
 
 **Patterns to follow:**

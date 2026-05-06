@@ -1,7 +1,6 @@
 ---
 description: Address PR review comments by implementing the requested code changes.
 tools: ["codebase", "search", "read", "editFiles", "changes", "githubRepo", "terminalLastCommand", "usages", "problems"]
-model: "Claude Sonnet 4.6"
 user-invocable: false
 agents: []
 ---

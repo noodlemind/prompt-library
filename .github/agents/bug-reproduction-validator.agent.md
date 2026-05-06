@@ -1,7 +1,6 @@
 ---
 description: Systematically reproduce and validate bug reports to confirm reported behavior.
 tools: ["codebase", "search", "read", "editFiles", "terminalLastCommand", "changes", "problems", "usages", "awaitTerminal"]
-model: "Claude Sonnet 4.6"
 user-invocable: false
 agents: []
 ---

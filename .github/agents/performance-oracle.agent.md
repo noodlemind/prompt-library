@@ -1,7 +1,6 @@
 ---
 description: Analyze code for performance bottlenecks, algorithmic complexity, and scalability.
 tools: ["codebase", "search", "read", "usages", "changes", "problems", "terminalLastCommand"]
-model: "Claude Sonnet 4.6"
 user-invocable: false
 agents: []
 ---
@@ -22,7 +21,7 @@ Identify performance problems before they hit production. Focus on issues that m
 ## What Matters
 
 - **Algorithmic complexity**: O(n^2) or worse in loops processing user data. Nested iterations over collections that grow. Sorting or searching without appropriate data structures.
-- **Database query patterns**: N+1 queries (the most common Rails performance bug). Missing indexes on frequently-queried columns. Full table scans. Unbounded queries without LIMIT. Expensive joins that could be avoided.
+- **Database query patterns**: N+1 queries in ORM or data-loader code. Missing indexes on frequently queried columns. Full table scans. Unbounded queries without LIMIT. Expensive joins that could be avoided.
 - **Memory allocation**: Loading entire result sets into memory. String concatenation in loops. Unbounded caches. Large object creation in hot paths.
 - **I/O bottlenecks**: Synchronous calls where async is appropriate. Sequential API calls that could be parallelized. Missing connection pooling. Unbuffered I/O.
 - **Caching opportunities**: Repeated expensive computations. Stable data fetched on every request. Missing HTTP cache headers. Cacheable database queries.
@@ -38,7 +37,7 @@ Identify performance problems before they hit production. Focus on issues that m
 
 ## Anti-Patterns to Flag
 
-- N+1 queries in loops (especially in Rails `has_many` associations)
+- N+1 queries in loops or ORM relationship traversal
 - Loading entire database tables into memory without LIMIT
 - Synchronous I/O calls in hot paths that could be async
 - Unbounded growth in caches or in-memory collections

@@ -1,33 +1,46 @@
 # Prompt Library
 
-Native VS Code Copilot agent system with 24 agents (19 specialists + 1 engineer + 1 implementer + 3 coordinators) and 17 skills. Works with VS Code 1.109+ — clone the repo and start using agents immediately. No extensions to install.
+Skill-driven software engineering prompt library with 23 skills, 24 agents, scoped instructions, review checks, and local-first plan/solution artifacts. The primary consumption platforms are GitHub Copilot in VS Code and IntelliJ IDEA. No plugin packaging or extension installation is required.
 
 ## Quick Start
 
 1. Clone this repository
-2. Open in VS Code 1.109+ with GitHub Copilot Chat enabled
-3. Type `@` in Copilot Chat to see agents, `/` to see skills
+2. Open this prompt-library repo in VS Code 1.109+ with GitHub Copilot Chat enabled
+3. Run `Tasks: Run Task` -> `Prompt Library: Hydrate Global Copilot Customizations`
+4. Open the product repository in VS Code or IntelliJ IDEA
+5. Type `/` in Copilot Chat to see skills, or start with `/start` when you are unsure which workflow applies
+6. Type `@` only when you intentionally need a specific agent or coordinator
 
 ## Architecture
 
-The system is built on three primitives:
+The system is skill-first. Skills are the reusable workflow contracts; agents, instructions, prompt wrappers, checks, plans, and solution docs support those workflows.
 
-**Agents** — 19 stateless domain experts, 1 engineer (Opus brain) + 1 code-implementer (Sonnet hands), plus 3 coordinator agents that orchestrate specialists via subagents. Defined in `.github/agents/*.agent.md`.
+**Skills** — User-invocable workflows that compose local context, scoped instructions, tools, and agents. Defined in `.github/skills/*/SKILL.md`.
 
-**Skills** — User-invocable workflows that compose agents and tools. Defined in `.github/skills/*/SKILL.md`.
+**Agents** — Isolated roles for separate judgment, tool authority, runtime profile, or accountability: 19 stateless domain experts, 1 engineer, 1 code-implementer, and 3 coordinators. Defined in `.github/agents/*.agent.md`.
 
 **Instructions** — Scoped context loaded based on file patterns. Defined in `.github/instructions/*.instructions.md`.
+
+**Prompt wrappers** — Thin host-facing adapters in `.github/prompts/*.prompt.md` that route to skills and declare host tools.
+
+**References and checks** — Skill references/assets provide dense examples, templates, and schemas loaded only when needed. `.github/checks/` adds review criteria consumed by prompt-library skills; checks are not a native Copilot primitive.
+
+**Plans and solutions** — `docs/plans/` stores local specs/context packs, and `docs/solutions/` stores verified learnings.
+
+See [Skill-Driven Prompt Library Standard](docs/architecture/skill-driven-prompt-library.md) for primitive boundaries and team adoption guidance.
+
+![Skill-driven prompt library flow](docs/architecture/assets/skill-driven-prompt-library-flow.png)
 
 ## Connected Pipeline
 
 The core engineering loop:
 
 ```
-/capture-issue → /plan-issue → /work-on-task → /code-review → /compound-learnings
-     open      →   planned   →  in-progress  →    review    →      done
+/brainstorming (optional) → /capture-issue → /plan-issue → /deepen-plan (optional) → /work-on-task → /code-review → /compound-learnings
+                                  open      →   planned   →                          in-progress   →    review    →      done
 ```
 
-Each step produces or updates a plan file in `docs/plans/` with state tracking (status, plan_lock, phase), timestamped activity logs for session continuity, and inter-step memory sections (`## Research Notes`, `## Implementation Notes`) that carry context between pipeline steps.
+Each step produces or updates a plan file in `docs/plans/` with state tracking (`status`, `plan_lock`, `phase`), timestamped activity logs, and inter-step memory sections. A plan file is the local context pack: it carries `## Context`, `## Acceptance Criteria`, `## Research Notes`, `## Impacted Files`, `## Verification Plan`, `## Risk & Review Routing`, `## Implementation Notes`, and `## Review Findings` between sessions and hosts.
 
 ## Specialist Agents (19)
 
@@ -37,12 +50,12 @@ Each step produces or updates a plan file in `docs/plans/` with state tracking (
 | `@best-practices-researcher` | Industry best practices for any topic |
 | `@bug-reproduction-validator` | Systematic bug reproduction and classification |
 | `@code-simplicity-reviewer` | YAGNI, over-engineering, premature abstraction |
-| `@compounding-python-reviewer` | Pythonic patterns, type safety, PEP compliance |
-| `@compounding-rails-reviewer` | Rails conventions, N+1, testing |
 | `@compounding-typescript-reviewer` | Type safety, modern patterns, strict mode |
 | `@data-integrity-guardian` | Migration safety, constraints, transactions |
-| `@dhh-rails-reviewer` | 37signals style, Hotwire, REST purity |
-| `@every-style-editor` | Editorial style guide compliance |
+| `@java-reviewer` | Java correctness, API design, concurrency, and testing |
+| `@python-reviewer` | Pythonic patterns, type safety, async correctness, and testing |
+| `@sql-reviewer` | SQL, schema, migration, data integrity, and query safety |
+| `@aws-reviewer` | AWS SDK, IAM, messaging, resilience, and observability |
 | `@feedback-codifier` | Turn review feedback into standards |
 | `@framework-docs-researcher` | Framework docs and API reference |
 | `@git-history-analyzer` | Git archaeology and code evolution |
@@ -55,16 +68,16 @@ Each step produces or updates a plan file in `docs/plans/` with state tracking (
 
 ## Engineer Agent (1 + 1 implementer)
 
-The engineer (Opus) is the "brain" that understands requirements, debugs, plans, and orchestrates. It delegates implementation to `@code-implementer` (Sonnet) for cost-efficient execution. Follows a 5-phase cycle: Understand → Investigate → Plan → Implement → Verify.
+The engineer is the accountable full-cycle actor that understands requirements, chooses the right skill/flow, debugs, plans, implements, and verifies. It delegates implementation to `@code-implementer` for bounded coding tasks and delegates to specialists only when separate judgment, authority, or isolation improves the result. Follows a skill-driven cycle: Understand → Route → Investigate → Plan → Implement → Verify.
 
-| Agent | Model | Purpose |
-|-------|-------|---------|
-| `@engineer` | Opus 4.6 | Full-cycle engineering — plans, investigates, delegates, consults user |
-| `@code-implementer` | Sonnet 4.6 | Executes coding tasks with TDD (engineer's implementation subagent) |
+| Agent | Purpose |
+|-------|---------|
+| `@engineer` | Full-cycle engineering — plans, investigates, delegates, consults user |
+| `@code-implementer` | Executes coding tasks with TDD (engineer's implementation subagent) |
 
 ## Coordinator Agents (3)
 
-Coordinators use `tools: ['agent']` to delegate work to specialists as subagents in parallel batches, each running in isolated context.
+Planning and code-review coordinators use `tools: ['agent']` to delegate work to specialists as subagents in parallel batches, each running in isolated context. Pipeline navigator uses handoff buttons to guide users between workflow steps.
 
 | Agent | Purpose |
 |-------|---------|
@@ -72,11 +85,11 @@ Coordinators use `tools: ['agent']` to delegate work to specialists as subagents
 | `@plan-coordinator` | Orchestrate research agents for codebase analysis and plan generation |
 | `@pipeline-navigator` | Guide pipeline transitions via handoff buttons |
 
-## Skills (17)
+## Skills (23)
 
 | Skill | Type | Purpose |
 |-------|------|---------|
-| `/capture-issue` | Pipeline | Create structured issue from description |
+| `/capture-issue` | Pipeline | Create initial plan file under `docs/plans/` from description |
 | `/plan-issue` | Pipeline | Generate phased plan with research |
 | `/work-on-task` | Pipeline | Execute phase with TDD and session logging |
 | `/code-review` | Pipeline | Confidence-scored persona review with action routing |
@@ -86,48 +99,64 @@ Coordinators use `tools: ['agent']` to delegate work to specialists as subagents
 | `/document-review` | Extension | Multi-persona quality gate (design, scope, coherence, feasibility) |
 | `/create-agent-skills` | Extension | Guidance for creating agents, skills, and instructions |
 | `/import-conventions` | Extension | Generate instructions from external repos and frameworks |
+| `/project-readme` | Documentation | Create or update project README.md |
+| `/java` | Domain | Java and Spring Boot engineering workflow |
+| `/python` | Domain | Python engineering workflow with typing, tests, and async checks |
+| `/sql` | Domain | SQL/PostgreSQL query, schema, migration, and data workflow |
+| `/aws` | Domain | AWS SDK, IAM, messaging, reliability, and observability workflow |
 | `/engineer` | Engineering | Full-cycle engineering with user steering |
 | `/start` | Intake | Classify work and route to the right pipeline entry point |
+| `/btw` | Q&A | Quick repository or general questions without edits or plans |
 | `/analyze-and-plan` | Utility | Quick planning without external research |
 | `/codebase-context` | Utility | Generate codebase snapshot with architecture diagrams |
 | `/review-guardrails` | Utility | Read-only plan compliance audit |
 | `/tdd-fix` | Utility | Test-driven bug fixing |
 | `/triage-issues` | Utility | Prioritize backlog |
 
-## Cross-Tool Compatibility
+## Primary Platforms
 
-- **VS Code Copilot**: Native discovery via `.github/agents/` and `.github/skills/`
-- **Claude Code**: Instructions via `CLAUDE.md`
-- **Codex / Cursor / Gemini**: Context via `AGENTS.md` (Linux Foundation open standard)
+- **GitHub Copilot in VS Code**: Global discovery through hydrated `%USERPROFILE%\.copilot` customizations
+- **GitHub Copilot in IntelliJ IDEA**: Global Copilot instructions plus manually invoked workflow names; prompt/agent discovery depends on the installed plugin version
+
+This repo intentionally does not compile to host plugins and does not hydrate product repositories. Teams clone this repo once, run the global Hydrate task, and keep product repositories clean of prompt-library source artifacts. Agent files avoid provider-specific model pinning so the active GitHub Copilot host controls model selection.
 
 ## Knowledge Compounding
 
 The system gets smarter over time:
 
-- `.github/agent-context.md` — Accumulated codebase knowledge from agent sessions
+- `.github/agent-context.md` — Accumulated knowledge for this prompt-library repo only
+- `docs/plans/` — Active product work context and execution history
 - `docs/solutions/` — Documented learnings from solved problems
+- `docs/codebase-snapshot.md`, `docs/agent-context.md`, and `README.md` — Product-owned overview and convention artifacts when generated or updated by skills
 
-Agents check these before starting work to avoid repeating past mistakes.
+`agent-context.md` is not a VS Code global customization file. Global reusable behavior belongs in hydrated instructions, skills, agents, and prompts. Product-specific context stays in the product repo as product-owned docs.
 
 ## Directory Structure
 
 ```
 .github/
   agents/              24 agent files (19 specialists + 1 engineer + 1 implementer + 3 coordinators)
-  skills/              15 skill directories
-  instructions/        Scoped instructions (Rails, TypeScript, Python)
+  skills/              23 skill directories
+  instructions/        Scoped instructions (TypeScript, Python, Java, Spring Boot, PostgreSQL, AWS SDK)
+  prompts/             Thin host-facing skill wrappers
+  checks/              Project-specific review checks discovered by /code-review
   copilot-instructions.md
   agent-context.md
 .vscode/mcp.json       MCP server config
-archive/               Archived legacy systems and reference docs
+docs/architecture/      Skill-driven standard and architecture notes
 docs/plans/            Issue and plan files
 docs/solutions/        Documented learnings
 docs/codebase-snapshot.md  Generated codebase snapshot with architecture diagrams
 AGENTS.md              Cross-tool standard
-CLAUDE.md              Claude Code instructions
+CLAUDE.md              Optional compatibility guidance
 ```
 
 ## Requirements
 
-- VS Code 1.109+ (backward-compatible with 1.108; new frontmatter properties are ignored by older versions)
-- GitHub Copilot Chat extension
+- GitHub Copilot Chat in VS Code 1.109+
+- GitHub Copilot in IntelliJ IDEA for teams using global Copilot instructions and manually invoked workflow names
+- Windows developer machines are the primary target environment for setup guidance
+
+## Installation
+
+See [Install and Sync Guide](docs/install.md) for Windows-first global setup across VS Code and IntelliJ IDEA. The recommended update path is to open this repo in VS Code, pull the latest version, and run `Tasks: Run Task` -> `Prompt Library: Hydrate Global Copilot Customizations`.

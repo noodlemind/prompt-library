@@ -10,4 +10,4 @@ tools:
 ---
 
 Follow the instructions in [codebase-context skill](../skills/codebase-context/SKILL.md).
-Read the shared context first: [agent-context](../agent-context.md).
+For repository-specific work, read available product-owned context first: `README.md`, `docs/agent-context.md`, `docs/codebase-snapshot.md`, `docs/plans/`, and `docs/solutions/`.

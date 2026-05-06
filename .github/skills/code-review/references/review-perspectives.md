@@ -43,12 +43,12 @@
 
 ## Language-Specific Perspectives
 
-### Rails
-- Strong parameters and mass assignment
-- N+1 queries (includes/preload)
-- REST purity (custom actions → new controllers)
-- Fat models, thin controllers
-- Hotwire over JavaScript frameworks
+### Java
+- API contracts and nullability
+- Resource lifecycle and thread safety
+- Exception behavior and validation
+- Modern Java conventions
+- Test coverage at unit and integration boundaries
 
 ### TypeScript
 - Type safety (no `any`, proper narrowing)
@@ -61,3 +61,15 @@
 - Pythonic patterns (comprehensions, context managers)
 - Specific exception handling
 - Pydantic for data validation
+
+### SQL/Data
+- Query correctness and parameterization
+- Index coverage and lock behavior
+- Migration rollback and batching
+- Constraints that enforce business invariants
+
+### AWS
+- Least-privilege IAM
+- Credential and secret handling
+- Retry, timeout, DLQ, and idempotency behavior
+- Observability, quotas, and cost controls

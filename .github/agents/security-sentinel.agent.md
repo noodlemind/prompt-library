@@ -1,7 +1,6 @@
 ---
 description: Perform security audits and vulnerability assessments on code changes.
 tools: ["codebase", "search", "read", "usages", "changes", "problems", "terminalLastCommand"]
-model: "Claude Sonnet 4.6"
 user-invocable: false
 agents: []
 ---
@@ -73,6 +72,6 @@ Find security vulnerabilities before they reach production. Think like an attack
 ## Framework Awareness
 
 Adapt your analysis to the project's stack:
-- **Rails**: Strong parameters, CSRF tokens, mass assignment, `html_safe` misuse
+- **Web frameworks**: CSRF protection, mass assignment, unsafe template rendering, request validation
 - **TypeScript/Node**: Zod/Joi validation, helmet.js, JWT handling, prototype pollution
 - **Python**: Pydantic validation, SQLAlchemy parameter binding, pickle deserialization

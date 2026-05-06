@@ -64,7 +64,7 @@ Use the template from `assets/solution-template.md`. Follow the tagging guidelin
 
 ### 4. Graduate to Agent Context (Curation Step)
 
-Evaluate whether this learning should be **graduated** to `.github/agent-context.md` — the curated project memory that every agent session reads at start.
+Evaluate whether this learning should be **graduated** to repository-owned context memory. For product repos, use `docs/agent-context.md`. When working in this prompt-library repo, use `.github/agent-context.md`.
 
 **Graduate when** the learning reveals:
 - A project-level convention ("In this project, we always X because Y")
@@ -77,14 +77,14 @@ Evaluate whether this learning should be **graduated** to `.github/agent-context
 - Too detailed for a one-liner (keep the detail in the solution doc, link from agent-context)
 - Already covered by existing conventions or instructions
 
-**When graduating**, add to the appropriate section of `agent-context.md`:
+**When graduating**, add to the appropriate section of the repository-owned context file:
 
 ```markdown
 ### [Category]: [Brief finding]
 [One-sentence summary. See docs/solutions/<file> for details.]
 ```
 
-**Curation check**: If `agent-context.md` exceeds ~200 lines, review for stale entries — patterns that are no longer accurate, decisions that have been superseded, or gotchas that have been fixed. Remove or archive stale entries to keep the file compact and high-signal.
+**Curation check**: If the context file exceeds ~200 lines, review for stale entries — patterns that are no longer accurate, decisions that have been superseded, or gotchas that have been fixed. Remove or archive stale entries to keep the file compact and high-signal.
 
 ### 5. Update Plan File
 

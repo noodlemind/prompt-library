@@ -1,0 +1,18 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Prompt Library: Hydrate Global Copilot Customizations",
+      "type": "shell",
+      "command": "powershell",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-Command",
+        "$ErrorActionPreference = 'Stop'; $Source = '${workspaceFolder}'; $Copilot = Join-Path $env:USERPROFILE '.copilot'; New-Item -ItemType Directory -Force $Copilot | Out-Null; function SyncDir($From, $To) { if (Test-Path $From) { New-Item -ItemType Directory -Force $To | Out-Null; & robocopy $From $To /E /NFL /NDL /NJH /NJS /NP; if ($LASTEXITCODE -ge 8) { throw ('robocopy failed with exit code ' + $LASTEXITCODE + ' for ' + $From + ' -> ' + $To) } } else { Write-Host ('Skipping missing path ' + $From) } }; SyncDir (Join-Path $Source '.github/skills') (Join-Path $Copilot 'skills'); SyncDir (Join-Path $Source '.github/agents') (Join-Path $Copilot 'agents'); SyncDir (Join-Path $Source '.github/instructions') (Join-Path $Copilot 'instructions'); SyncDir (Join-Path $Source '.github/prompts') (Join-Path $Copilot 'prompts'); SyncDir (Join-Path $Source '.github/checks') (Join-Path $Copilot 'checks'); Write-Host 'Hydrated global Copilot customizations under ' $Copilot; Write-Host 'For VS Code, ensure chat.*FilesLocations settings include these global folders where required.'; Write-Host 'For IntelliJ IDEA, configure global Copilot instructions in the IDE and verify prompt/agent support in the installed plugin.'"
+      ],
+      "problemMatcher": []
+    }
+  ]
+}

@@ -1,7 +1,6 @@
 ---
 description: Review migrations, schema changes, and data operations for safety and correctness.
 tools: ["codebase", "search", "read", "usages", "changes", "problems", "terminalLastCommand"]
-model: "Claude Sonnet 4.6"
 user-invocable: false
 agents: []
 ---

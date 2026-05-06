@@ -4,28 +4,32 @@ This file contains accumulated knowledge about the codebase, discovered by agent
 
 ## Project Structure
 
-This repository is a prompt library containing AI agent systems:
+This repository is a skill-driven prompt library containing AI agent systems:
 - `.github/agents/` — 24 agents (19 specialists + 1 engineer + 1 implementer + 3 coordinators, judgment-criteria style)
-- `.github/skills/` — 15 skills forming the connected pipeline and utilities
-- `.github/instructions/` — scoped instructions (Rails, TypeScript, Python)
-- `code-prompts/` — issue-based development workflow with local issues
+- `.github/skills/` — 23 skills forming the connected pipeline, domain workflows, README maintenance, quick Q&A, and utilities
+- `.github/instructions/` — scoped instructions (TypeScript, Python, Java, Spring Boot, PostgreSQL, AWS SDK)
+- `.github/prompts/` — thin host-facing wrappers that route to skills and declare host tools
+- `.github/checks/` — local review checks discovered by `/code-review`
 - `docs/plans/` — issue and plan files with state machine tracking
+- `docs/architecture/` — skill-driven standard and architecture notes
 - `docs/solutions/` — documented learnings from solved problems
 - `docs/brainstorms/` — brainstorm documents from `/brainstorming` skill
 
 ## Conventions
 
 - Agents use judgment-criteria design (define outcomes, not procedures)
-- Agents are classified as reviewers (read-only, Sonnet 4.6), researchers (Opus 4.6), actors (can modify code, Sonnet 4.6), engineers (full-cycle: modify code + delegate to subagents, Opus 4.6), or coordinators (Opus 4.6 for planning, Sonnet 4.6 for others)
-- Agent tools follow generous-but-meaningful restrictions: reviewers get `codebase`, `search`, `read`, `usages`, `changes`, `problems`, `terminalLastCommand` (no editFiles); researchers get `codebase`, `search`, `read`, `fetch`, `problems`, `terminalLastCommand`; actors get tools matching their responsibilities plus `codebase`, `problems`, `usages`, `terminalLastCommand`; coordinators get `agent`, `codebase`, `problems` plus their operational tools; only the engineer has `["*"]`
-- Leaf-node agents set `user-invocable: false` and `agents: []` to prevent direct user invocation and accidental subagent spawning
+- Skills are the primary reusable contract. Default repeated procedures, checklists, generators, and workflow guidance to skills; create agents only for separate judgment, authority, isolation, runtime profile, or accountability.
+- Agents are classified as reviewers (read-only), researchers, actors (can modify code), engineers (full-cycle: modify code + delegate to subagents), or coordinators/navigation.
+- Agent tools follow generous-but-meaningful permissions: reviewers get `codebase`, `search`, `read`, `usages`, `changes`, `problems`, `terminalLastCommand` (no editFiles); researchers get `codebase`, `search`, `read`, `fetch`, `problems`, `terminalLastCommand`; actors get tools matching their responsibilities plus `codebase`, `problems`, `usages`, `terminalLastCommand`; coordinators get `agent`, `codebase`, `problems` plus their operational tools; engineer has a broad but explicit tool allowlist, not wildcard access.
+- Leaf-node agents set `user-invocable: false` to keep the `@` menu focused and `agents: []` to prevent accidental subagent spawning. Treat `user-invocable` as discovery/UX, not a security boundary.
 - Coordinators and the engineer define `agents:` allowlists restricting which specialists they can invoke
 - Coordinators dispatch subagents in parallel batches (3-4 at a time) rather than sequentially
 - All review agents include prompt injection guardrails (Guardrails section before Mission)
 - Skills follow progressive disclosure (frontmatter → body → references)
-- The connected pipeline: `/brainstorming` (optional) → `/capture-issue` → `/plan-issue` → `/deepen-plan` (optional) → `/work-on-task` → `/code-review` → `/compound-learnings`
+- The connected pipeline: `/brainstorming` (optional) → `/capture-issue` → `/plan-issue` → `/deepen-plan` (optional) → `/work-on-task` → `/code-review` → `/compound-learnings`. `/btw` is quick Q&A outside the pipeline. `/project-readme` is documentation maintenance outside implementation planning. `/java`, `/python`, `/sql`, and `/aws` are reusable domain workflow skills that pair with scoped instructions and specialist reviewers.
 - State machine: `status` (open/planned/in-progress/review/done), `plan_lock`, `phase`
 - Activity logs in plan files provide session continuity
+- Plan files are the local context pack. Standard sections include `## Context`, `## Acceptance Criteria`, `## Research Notes`, `## Impacted Files`, `## Verification Plan`, `## Risk & Review Routing`, `## Implementation Notes`, `## Review Findings`, and `## Activity`.
 
 ## Technology Notes
 
@@ -62,7 +66,10 @@ Pipeline skills (capture-issue, plan-issue, work-on-task, code-review, compound-
 Five orchestrating skills (code-review, plan-issue, deepen-plan, work-on-task, engineer) have error handling specific to their failure modes. Common patterns (subagent failure, tool unavailability, file not found, timeout) are in `.github/skills/references/error-handling-patterns.md`. Each skill references shared patterns plus adds domain-specific errors.
 
 ### Solution Document Format
-`/compound-learnings` uses a template at `assets/solution-template.md` with YAML frontmatter (title, date, category, tags, module, symptom, root_cause, severity) and body sections (Problem, Root Cause, Solution, Prevention). Tags should be specific: "n-plus-one", "rails-7", not just "performance". 3-7 tags per document.
+`/compound-learnings` uses a template at `assets/solution-template.md` with YAML frontmatter (title, date, category, tags, module, symptom, root_cause, severity) and body sections (Problem, Root Cause, Solution, Prevention). Tags should be specific, for example "n-plus-one", "java-21", "postgres-index", or "aws-sqs-dlq", not just "performance". 3-7 tags per document.
 
-### Engineer Agent (Opus Brain + Sonnet Hands)
-The `engineer` agent (Opus 4.6) is the "brain" — it understands requirements, investigates, plans, and orchestrates. It delegates implementation to `code-implementer` (Sonnet 4.6) for cost-efficient execution, and delegates to specialist reviewers/researchers for focused expertise. It follows a 5-phase workflow (Understand → Investigate → Plan → Implement → Verify) with user consultation checkpoints between phases. It integrates with the pipeline by reading/writing plan files and maintaining state machine fields. The `/engineer` skill is its entry point. The `code-implementer` is not intended for direct user invocation — it's the engineer's execution subagent (marked `user-invocable: false` and `disable-model-invocation: true`).
+### Engineer Agent
+The `engineer` agent understands requirements, routes to the right skill/flow, investigates, plans, and orchestrates. It delegates implementation to `code-implementer` for bounded execution tasks, and delegates to specialist reviewers/researchers when separate judgment, authority, or isolation is useful. It follows a workflow of Understand → Route → Investigate → Plan → Implement → Verify with user consultation checkpoints between phases. It integrates with the pipeline by reading/writing plan files and maintaining state machine fields. The `/engineer` skill is its entry point.
+
+### Skill-Driven Standardization
+`docs/architecture/skill-driven-prompt-library.md` defines primitive boundaries for teams adapting this repo. Prompt wrappers stay thin, workflows live in skills, long criteria go in `references/` or `.github/checks/`, file-scoped conventions go in `.github/instructions/`, and solution docs graduate to `agent-context.md` only when they capture durable project-level knowledge.
