@@ -133,7 +133,7 @@ CLAUDE.md              — optional compatibility guidance
 - **Judgment-criteria agents**: Define what to look for, not what commands to run
 - **Progressive disclosure**: Skills load in 3 levels (frontmatter → body → references)
 - **Skill-first primitive boundaries**: Default repeated procedures to skills; create agents only for distinct judgment, authority, isolation, or evaluation standards; keep prompt wrappers thin
-- **GitHub Copilot-first**: VS Code discovers globally hydrated agents, skills, prompts, and instructions; IntelliJ IDEA teams use global Copilot instructions and manually invoked workflow names where plugin discovery differs
+- **GitHub Copilot-first**: VS Code discovers globally hydrated agents, skills, prompts, and instructions from `%USERPROFILE%\.copilot`; IntelliJ IDEA discovers hydrated customizations from `%LOCALAPPDATA%\github-copilot\intellij` when the current plugin features are enabled
 - **Knowledge compounding**: `docs/solutions/` and repository-owned context docs make the system smarter over time
 - **Confidence-gated review**: Code review uses persona synthesis with 0.0-1.0 confidence scores, merge/dedup, and action routing
 - **Standalone + pipeline mode**: Pipeline skills work both standalone (ad-hoc) and in pipeline mode (state machine enforced)
