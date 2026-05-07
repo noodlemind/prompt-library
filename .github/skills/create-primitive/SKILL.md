@@ -59,10 +59,10 @@ This repository is host-neutral source material, but the current primary consump
 
 | Prompt-library primitive | Host-native status |
 |---|---|
-| Agent | Native in VS Code Copilot custom agents; instruction-first/manual in IntelliJ when discovery differs |
-| Skill | Native in Copilot skills where available; otherwise invoked through prompt wrappers and global instructions |
+| Agent | Native in VS Code Copilot custom agents; native in current JetBrains Copilot custom agents when global customizations are enabled |
+| Skill | Native in Copilot Agent Skills where available; hydrated globally for both VS Code and IntelliJ IDEA |
 | Instruction | Native as Copilot custom instructions / instruction files |
-| Prompt wrapper | Native VS Code prompt file / slash command adapter |
+| Prompt wrapper | Native prompt file / slash command adapter where supported by the host |
 | Review check | Prompt-library-native; consumed by `/code-review`, not a universal Copilot primitive |
 | Reference/asset | Prompt-library-native progressive disclosure material |
 | Solution doc | Product-repo knowledge artifact, not a global prompt customization |
@@ -198,7 +198,7 @@ Read references/skill-template.md for the complete skill template with all secti
 
 ## Cross-Tool Frontmatter Compatibility
 
-This library targets VS Code 1.109 as the primary platform. VS Code reads specific frontmatter fields from globally hydrated customizations. IntelliJ IDEA users rely on global Copilot instructions and manually invoked workflow names when plugin discovery differs. Keep host-specific behavior in prompt wrappers and shared behavior in skills.
+This library targets GitHub Copilot in VS Code and IntelliJ IDEA. VS Code reads specific frontmatter fields from globally hydrated `%USERPROFILE%\.copilot` customizations. IntelliJ IDEA reads global customizations from `%LOCALAPPDATA%\github-copilot\intellij` when the current plugin features are enabled. Keep host-specific behavior in prompt wrappers and shared behavior in skills.
 
 **VS Code 1.109 frontmatter (primary — always use these):**
 

@@ -1,6 +1,6 @@
 # Skill-Driven Prompt Library Standard
 
-This repository is a source-of-truth prompt library, not a host plugin or generated package. Teams should clone the repo once and hydrate global Copilot customizations from it. The primary consumption surfaces are GitHub Copilot in VS Code and IntelliJ IDEA on Windows, with user-level global files under `%USERPROFILE%\.copilot` as the portable source of truth.
+This repository is a source-of-truth prompt library, not a host plugin or generated package. Teams should clone the repo once and hydrate global Copilot customizations from it. The primary consumption surfaces are GitHub Copilot in VS Code and IntelliJ IDEA on Windows, with user-level global files under `%USERPROFILE%\.copilot` for VS Code/shared Copilot personal assets and `%LOCALAPPDATA%\github-copilot\intellij` for IntelliJ IDEA.
 
 ## Flow Overview
 
@@ -24,8 +24,10 @@ The main gap is presentation and governance. The repo historically explains itse
 
 The global install and primitive boundaries mirror current agentic IDE patterns rather than inventing a host-specific plugin model:
 
-- [VS Code Copilot custom instructions](https://code.visualstudio.com/docs/copilot/customization/custom-instructions) separates always-on instructions from file-based `.instructions.md` files. This supports global team standards plus scoped language/framework standards.
-- [GitHub Copilot for JetBrains](https://docs.github.com/en/copilot/customizing-copilot/adding-custom-instructions-for-github-copilot) reliably supports a local `global-copilot-instructions.md` file, so the hydrate task compiles all instruction standards into that single IntelliJ path.
+- [VS Code Copilot settings](https://code.visualstudio.com/docs/copilot/reference/copilot-settings) support user-level custom locations for agents, instructions, prompts, and skills. This supports global team standards plus scoped language/framework standards.
+- [GitHub Copilot for JetBrains global instructions](https://docs.github.com/en/copilot/how-tos/configure-custom-instructions-in-your-ide/add-repository-instructions-in-your-ide?tool=jetbrains) reliably supports a local `global-copilot-instructions.md` file under `%LOCALAPPDATA%\github-copilot\intellij`, so the hydrate task compiles all instruction standards into that single IntelliJ path.
+- [GitHub Copilot for JetBrains Agent Skills](https://github.blog/changelog/2026-02-13-new-features-and-improvements-in-github-copilot-in-jetbrains-ides-2/) are available in Agent Mode when enabled in the JetBrains Copilot settings.
+- [GitHub Copilot for JetBrains agentic capabilities](https://github.blog/changelog/2026-03-11-major-agentic-capabilities-improvements-in-github-copilot-for-jetbrains-ides/) now include custom agents, sub-agents, global agent instruction files, and related customization settings; the hydrate task mirrors agents, skills, instructions, and prompts into the IntelliJ global root rather than requiring product-repo copies.
 - [Cline Rules](https://docs.cline.bot/customization/cline-rules), [Cursor Rules](https://docs.cursor.com/en/context), and [Windsurf Rules](https://docs.windsurf.com/windsurf/cascade/memories) all separate global/user rules from workspace/project rules. Product repositories can add their own product-owned overlays, but prompt-library source artifacts stay global.
 - [Windsurf Skills and Workflows](https://docs.windsurf.com/windsurf/cascade/memories) and [Continue prompts](https://docs.continue.dev/customize/prompts) treat repeatable task behavior and specialist review guidance as reusable procedural assets, which matches this repo's skill-first model.
 - [Plandex context management](https://docs.plandex.ai/core-concepts/context-management/) keeps context associated with plans and loads only relevant context per step. This maps to `docs/plans/` acting as the local context pack for capture -> plan -> work -> review.

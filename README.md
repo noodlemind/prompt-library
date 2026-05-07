@@ -116,7 +116,7 @@ Planning and code-review coordinators use `tools: ['agent']` to delegate work to
 ## Primary Platforms
 
 - **GitHub Copilot in VS Code**: Global discovery through hydrated `%USERPROFILE%\.copilot` customizations
-- **GitHub Copilot in IntelliJ IDEA**: Global Copilot instructions plus manually invoked workflow names; prompt/agent discovery depends on the installed plugin version
+- **GitHub Copilot in IntelliJ IDEA**: Global discovery through hydrated `%LOCALAPPDATA%\github-copilot\intellij` customizations plus the documented global instructions file
 
 This repo intentionally does not compile to host plugins and does not hydrate product repositories. Teams clone this repo once, run the global Hydrate task, and keep product repositories clean of prompt-library source artifacts. Agent files avoid provider-specific model pinning so the active GitHub Copilot host controls model selection.
 
@@ -154,7 +154,7 @@ CLAUDE.md              Optional compatibility guidance
 ## Requirements
 
 - GitHub Copilot Chat in VS Code 1.109+
-- GitHub Copilot in IntelliJ IDEA for teams using global Copilot instructions and manually invoked workflow names
+- Current GitHub Copilot plugin for IntelliJ IDEA with global customizations enabled
 - Windows developer machines are the primary target environment for setup guidance
 
 ## Installation
