@@ -65,12 +65,13 @@ Run these research tasks:
 
 ### 3. Generate Plan
 
-Add these sections to the issue file:
+Create missing sections or update existing sections in place. Do not create duplicate headings when `/capture-issue` already created `## Context`, `## Acceptance Criteria`, `## Technical Notes`, or `## Activity`.
 
 **`## Context`** — task-scoped context pack:
 - User intent and constraints
 - Relevant code paths, symbols, and prior artifacts
 - Assumptions and open questions resolved during planning
+- If `## Context` already exists from capture, enrich it in place and preserve captured facts.
 
 **`## Plan`** — ordered list of phases, each with:
 - Phase number and title

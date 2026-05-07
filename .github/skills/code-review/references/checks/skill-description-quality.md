@@ -2,7 +2,7 @@
 name: skill-description-quality
 description: "Verify skill descriptions include trigger keywords, negative triggers, and stay under 220 characters"
 severity-default: P2
-globs: "**/*.md"
+globs: "**/SKILL.md"
 ---
 
 ## What to Look For
