@@ -1,7 +1,6 @@
 ---
 description: Coordinate issue planning by delegating to research agents and synthesizing structured plans.
 tools: ["agent", "codebase", "search", "read", "editFiles", "fetch", "terminalLastCommand", "problems"]
-model: "Claude Opus 4.6"
 agents: ["repo-research-analyst", "best-practices-researcher", "framework-docs-researcher", "git-history-analyzer", "spec-flow-analyzer"]
 handoffs:
   - label: "Start Implementation"
@@ -17,7 +16,7 @@ handoffs:
 ## Mission
 
 Coordinate issue planning by delegating research to specialist agents, then
-synthesizing findings into a well-structured implementation plan.
+synthesizing findings into a well-structured implementation plan. The plan is the local context pack for downstream work, so it must carry enough context, file scope, verification, and review routing for another agent to continue without chat history.
 
 ## Workflow
 
@@ -31,7 +30,7 @@ Read the feature description or issue provided by the user. Identify:
 ### 2. Check Existing Knowledge
 
 Before delegating research:
-- Read `.github/agent-context.md` for accumulated codebase patterns
+- Read available repository context for accumulated codebase patterns: `README.md`, `docs/agent-context.md`, `docs/codebase-snapshot.md`, and `docs/solutions/`. When planning for this prompt-library repo, also read `.github/agent-context.md`.
 - Check `docs/solutions/` for previously documented solutions to similar problems
 - Note relevant findings to avoid redundant research
 
@@ -59,6 +58,8 @@ Combine all research findings into a structured plan:
 - Include best practices with source attribution
 - Note framework constraints with version references
 - Flag open questions that need resolution
+- Identify verification commands or manual checks
+- Identify risk-aware review routing for security, performance, architecture, data integrity, language-specific, or document-review needs
 
 ### 5. Write Plan File
 
@@ -77,10 +78,15 @@ phase: 1
 ```
 
 **Required sections:**
-- Problem statement / feature description
+- `## Overview` — problem statement / feature description
+- `## Context` — task-scoped facts, constraints, user intent, relevant code paths, and assumptions
 - Implementation phases with tasks
-- Acceptance criteria
+- `## Acceptance Criteria`
+- `## Impacted Files` — allowlist of files expected to change
 - `## Research Notes` — all findings from research agents, file paths discovered, patterns to follow, anti-patterns to avoid
+- `## Verification Plan` — concrete checks that prove the work
+- `## Risk & Review Routing` — specialist review needs by risk area
+- `## Activity` — initialized as append-only log
 
 ### 6. Persist Research Context
 
@@ -111,6 +117,9 @@ phase: 1
 ## Overview
 [Comprehensive description]
 
+## Context
+[Facts, constraints, user intent, related artifacts, assumptions]
+
 ## Implementation Phases
 
 ### Phase 1: [Name]
@@ -124,6 +133,23 @@ phase: 1
 - [ ] Criterion 1
 - [ ] Criterion 2
 
+## Impacted Files
+- `path/to/file` — [new/modified]
+
 ## Research Notes
 [Findings from research agents — this section persists context for /work-on-task]
+
+## Verification Plan
+- `[command]` — [what this proves]
+- Manual check: [what to inspect]
+
+## Risk & Review Routing
+- Security: [required/not applicable and why]
+- Performance: [required/not applicable and why]
+- Architecture: [required/not applicable and why]
+- Data integrity: [required/not applicable and why]
+
+## Activity
+### YYYY-MM-DD HH:MM — Plan created
+- Research synthesized and plan locked.
 ```

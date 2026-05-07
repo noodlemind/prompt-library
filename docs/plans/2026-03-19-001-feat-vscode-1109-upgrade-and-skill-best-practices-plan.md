@@ -36,14 +36,14 @@ deepened: 2026-03-28
 
 **5. Skill polish scoped to where value is highest**
 - Negative triggers: only 5 confusable pipeline skills (not all 15)
-- `references/` extraction: only `create-agent-skills` (templates are genuine reference material). Defer others — no skill exceeds 140 lines.
+- `references/` extraction: only `create-primitive` (templates are genuine reference material). Defer others — no skill exceeds 140 lines.
 - Terminology: keep "read" (matches the tool name). Standardize only "delegate to" for subagent dispatch.
 - Error handling sections: added to 5 orchestrating skills
 
 **6. Security improvements adopted**
 - `user-invocable: false` reframed as UX improvement, not security measure (agents still accessible by name)
-- `disable-model-invocation: true` removed from reviewers — preserves power-user direct access via `@agent-name`
-- `every-style-editor`, `feedback-codifier`, `pr-comment-resolver` remain reachable (model can invoke contextually)
+- `auto-invocation restriction enabled` removed from reviewers — preserves power-user direct access via `@agent-name`
+- `style-editor`, `feedback-codifier`, `pr-comment-resolver` remain reachable (model can invoke contextually)
 - `pipeline-navigator` — `agents:` property removed (it uses handoffs, not the agent tool)
 
 **7. Parallel dispatch refined**
@@ -84,7 +84,7 @@ The repo was designed for 1.108. Three plans documented 1.109 features as "futur
 | Parallel subagent execution | Coordinators dispatch sequentially | Code reviews take 5-8x longer than necessary |
 | `agents:` allowlist | Not used — any agent can invoke any subagent | No guardrails on coordinator delegation |
 | `user-invocable: false` | Not used — all 24 agents in `@` menu | Overwhelming UX, security risk at user-level |
-| `disable-model-invocation` on agents | Only used on skills | Specialists can be auto-invoked inappropriately |
+| `auto-invocation restriction` on agents | Only used on skills | Specialists can be auto-invoked inappropriately |
 | Agent hooks | No hooks exist | No lifecycle guardrails (file protection, destructive command blocking) |
 | Model arrays (fallback chains) | Single model per agent | No fallback if preferred model unavailable |
 | Claude compatibility (reads CLAUDE.md) | Not leveraged | Duplicate instructions between CLAUDE.md and copilot-instructions.md |
@@ -105,7 +105,7 @@ Agents use a narrow subset of available tools. Key tools not used by any agent:
 | `awaitTerminal` | Wait for background terminal commands | `code-implementer`, `bug-reproduction-validator` — wait for test runs |
 | `killTerminal` | Terminal cleanup | `code-implementer` — manage long-running processes |
 
-The `create-agent-skills` template recommends `codebase` but no actual agent uses it — template and practice are out of sync.
+The `create-primitive` template recommends `codebase` but no actual agent uses it — template and practice are out of sync.
 
 ### 3. Skills Don't Follow Best Practices
 
@@ -123,7 +123,7 @@ Compared to the [skills-best-practices](https://github.com/mgechev/skills-best-p
 
 | Pattern | Description | Our Skills That Match | Gap |
 |---------|------------|----------------------|-----|
-| **Tool Wrapper** | Encodes library best practices into on-demand context via `references/` | `compounding-rails-reviewer`, `compounding-typescript-reviewer`, `compounding-python-reviewer` | These are agents, not skills. The convention references could be extracted to `references/` for just-in-time loading |
+| **Tool Wrapper** | Encodes library best practices into on-demand context via `references/` | `framework-reviewer`, `compounding-typescript-reviewer`, `compounding-python-reviewer` | These are agents, not skills. The convention references could be extracted to `references/` for just-in-time loading |
 | **Generator** | Produces structured output from templates (`assets/` + `references/`) | `/capture-issue`, `/compound-learnings`, `/codebase-context` | Templates are inlined in SKILL.md body, not in `assets/` |
 | **Reviewer** | Evaluates against checklists stored in `references/`, outputs severity-grouped findings | `/code-review`, `/review-guardrails` | `/code-review` has `references/review-perspectives.md` — good. `/review-guardrails` inlines everything. |
 | **Inversion** | Interviews user before acting, with "DO NOT start building" gate | `/brainstorming`, `/capture-issue` | `/brainstorming` follows this pattern well already |
@@ -137,7 +137,7 @@ Compared to the [skills-best-practices](https://github.com/mgechev/skills-best-p
 
 **Phase A: Agent Upgrade** — One pass per agent file covering: 1.109 frontmatter properties, selective tool enrichment, prompt wrapper updates, and documentation sync. All changes to a given agent happen in a single edit.
 
-**Phase B: Skill Polish** — Targeted improvements to 5 confusable pipeline skills (negative triggers, error handling) and 1 skill with reference extraction (`create-agent-skills`).
+**Phase B: Skill Polish** — Targeted improvements to 5 confusable pipeline skills (negative triggers, error handling) and 1 skill with reference extraction (`create-primitive`).
 
 ## Technical Approach
 
@@ -157,7 +157,7 @@ Only 4 agents visible in the `@` menu. This is a **UX improvement** (cleaner men
 
 **Hidden (`user-invocable: false`):**
 All 19 specialists + `code-implementer` (20 total):
-- Reviewers (12): `architecture-strategist`, `code-simplicity-reviewer`, `compounding-python-reviewer`, `compounding-rails-reviewer`, `compounding-typescript-reviewer`, `data-integrity-guardian`, `dhh-rails-reviewer`, `every-style-editor`, `pattern-recognition-specialist`, `performance-oracle`, `security-sentinel`, `spec-flow-analyzer`
+- Reviewers (12): `architecture-strategist`, `code-simplicity-reviewer`, `compounding-python-reviewer`, `framework-reviewer`, `compounding-typescript-reviewer`, `data-integrity-guardian`, `opinionated-framework-reviewer`, `style-editor`, `pattern-recognition-specialist`, `performance-oracle`, `security-sentinel`, `spec-flow-analyzer`
 - Researchers (4): `best-practices-researcher`, `framework-docs-researcher`, `git-history-analyzer`, `repo-research-analyst`
 - Actors (4): `bug-reproduction-validator`, `code-implementer`, `feedback-codifier`, `pr-comment-resolver`
 
@@ -175,13 +175,13 @@ agents:
   - performance-oracle
   - code-simplicity-reviewer
   - pattern-recognition-specialist
-  - compounding-rails-reviewer
+  - framework-reviewer
   - compounding-python-reviewer
   - compounding-typescript-reviewer
   - data-integrity-guardian
-  - dhh-rails-reviewer
+  - opinionated-framework-reviewer
   - spec-flow-analyzer
-  - every-style-editor
+  - style-editor
 ```
 
 **`plan-coordinator`:**
@@ -215,19 +215,19 @@ agents:
 **Leaf-node agents — prevent accidental subagent spawning:**
 - [ ] Add `agents: []` to all 12 reviewers, 4 researchers, and 4 actors (20 agents)
 
-> **Research insight**: Explicitly listing an agent in a coordinator's `agents:` array overrides `disable-model-invocation: true` on the target. This means leaf-node agents are protected from general use but accessible to their designated coordinator.
+> **Research insight**: Explicitly listing an agent in a coordinator's `agents:` array overrides `auto-invocation restriction enabled` on the target. This means leaf-node agents are protected from general use but accessible to their designated coordinator.
 
 Files: `.github/agents/code-review-coordinator.agent.md`, `plan-coordinator.agent.md`, `engineer.agent.md`, all 20 leaf-node agents
 
-#### A3. Add `disable-model-invocation: true` to `code-implementer` only
+#### A3. Add `auto-invocation restriction enabled` to `code-implementer` only
 
-The original plan applied this to all 11 reviewers + code-implementer (12 total). Review feedback showed this is a **UX regression** — power users currently invoke `@security-sentinel` directly for focused single-domain reviews. With `user-invocable: false` already hiding them from the menu, adding `disable-model-invocation: true` makes specialists unreachable except through coordinators.
+The original plan applied this to all 11 reviewers + code-implementer (12 total). Review feedback showed this is a **UX regression** — power users currently invoke `@security-sentinel` directly for focused single-domain reviews. With `user-invocable: false` already hiding them from the menu, adding `auto-invocation restriction enabled` makes specialists unreachable except through coordinators.
 
 **Revised approach:**
-- `code-implementer` — `disable-model-invocation: true` (should only be invoked by `engineer`)
-- All other specialists — leave `disable-model-invocation` at default (`false`). Hidden from the `@` menu but the model can still invoke them when contextually appropriate.
+- `code-implementer` — `auto-invocation restriction enabled` (should only be invoked by `engineer`)
+- All other specialists — leave `auto-invocation restriction` at default (`false`). Hidden from the `@` menu but the model can still invoke them when contextually appropriate.
 
-> **Deepen-plan finding (security review)**: `user-invocable: false` is a UX control, not a security control. Any user who knows the agent name can still invoke it directly. `disable-model-invocation` only prevents autonomous model-initiated invocation, not explicit user or coordinator references.
+> **Deepen-plan finding (security review)**: `user-invocable: false` is a UX control, not a security control. Any user who knows the agent name can still invoke it directly. `auto-invocation restriction` only prevents autonomous model-initiated invocation, not explicit user or coordinator references.
 
 File: `.github/agents/code-implementer.agent.md`
 
@@ -245,7 +245,7 @@ Add missing VS Code built-in tools to agents that benefit. **Not blanket** — o
 - [ ] `architecture-strategist` → `["codebase", "search", "read", "usages", "changes"]`
 - [ ] `code-simplicity-reviewer` → `["codebase", "search", "read", "usages", "changes"]`
 - [ ] `compounding-python-reviewer` → `["codebase", "search", "read", "usages", "changes"]`
-- [ ] `compounding-rails-reviewer` → `["codebase", "search", "read", "usages", "changes"]`
+- [ ] `framework-reviewer` → `["codebase", "search", "read", "usages", "changes"]`
 - [ ] `compounding-typescript-reviewer` → `["codebase", "search", "read", "usages", "changes"]`
 - [ ] `data-integrity-guardian` → `["codebase", "search", "read", "usages", "changes"]`
 - [ ] `pattern-recognition-specialist` → `["codebase", "search", "read", "usages", "changes"]`
@@ -253,8 +253,8 @@ Add missing VS Code built-in tools to agents that benefit. **Not blanket** — o
 - [ ] `security-sentinel` → `["codebase", "search", "read", "usages", "changes"]`
 
 **Reviewers that DON'T need code-intent search** (unchanged):
-- `dhh-rails-reviewer` — already has appropriate tools for Rails convention review
-- `every-style-editor` — reviews prose, not code semantics
+- `opinionated-framework-reviewer` — already has appropriate tools for framework convention review
+- `style-editor` — reviews prose, not code semantics
 - `spec-flow-analyzer` — analyzes documents, not code (`["search", "read"]`)
 
 **Researchers** (add `codebase`):
@@ -274,7 +274,7 @@ Add missing VS Code built-in tools to agents that benefit. **Not blanket** — o
 - [ ] `plan-coordinator` → `["agent", "codebase", "search", "read", "editFiles", "fetch"]`
 - [ ] `pipeline-navigator` → unchanged (`["search", "read"]`)
 
-**Engineer:** Unchanged — `["*"]`
+**Engineer:** Unchanged — `[explicit allowlist]`
 
 Files: ~16 `.github/agents/*.agent.md`
 
@@ -304,16 +304,16 @@ Add failure handling:
 
 Files: `.github/agents/code-review-coordinator.agent.md`, `plan-coordinator.agent.md`
 
-#### A7. Update `create-agent-skills` template
+#### A7. Update `create-primitive` template
 
-Sync the template in `.github/skills/create-agent-skills/SKILL.md` with actual agent declarations:
+Sync the template in `.github/skills/create-primitive/SKILL.md` with actual agent declarations:
 
 | Classification | Tools | Model | user-invocable | agents |
 |---------------|-------|-------|----------------|--------|
-| **Reviewer** | `["codebase", "search", "read", "usages", "changes"]` | Sonnet 4.6 | `false` | `[]` |
-| **Researcher** | `["codebase", "search", "read", "fetch"]` | Opus 4.6 | `false` | `[]` |
-| **Actor** | `["codebase", "search", "read", "editFiles", ...]` | Sonnet 4.6 | `false` | `[]` |
-| **Engineer** | `["*"]` | Opus 4.6 | `true` | `[allowlist]` |
+| **Reviewer** | `["codebase", "search", "read", "usages", "changes"]` | implementation runtime | `false` | `[]` |
+| **Researcher** | `["codebase", "search", "read", "fetch"]` | high-reasoning runtime | `false` | `[]` |
+| **Actor** | `["codebase", "search", "read", "editFiles", ...]` | implementation runtime | `false` | `[]` |
+| **Engineer** | `[explicit allowlist]` | high-reasoning runtime | `true` | `[allowlist]` |
 | **Coordinator** | `["agent", "codebase", "search", "read", ...]` | varies | `true` | `[allowlist]` |
 
 Add 1.109 properties to template:
@@ -323,7 +323,7 @@ agents: []                   # For leaf nodes — prevent subagent spawning
 # For coordinators: agents: [list of allowed subagents]
 ```
 
-File: `.github/skills/create-agent-skills/SKILL.md`
+File: `.github/skills/create-primitive/SKILL.md`
 
 #### A8. Update cross-environment compatibility table and documentation
 
@@ -355,11 +355,11 @@ Files: `.github/copilot-instructions.md`, `CLAUDE.md`, `AGENTS.md`, `README.md`,
 - [ ] 20 agents have `user-invocable: false`
 - [ ] 3 coordinators + engineer have `agents:` allowlists
 - [ ] 20 leaf-node agents have `agents: []`
-- [ ] Only `code-implementer` has `disable-model-invocation: true`
+- [ ] Only `code-implementer` has `auto-invocation restriction enabled`
 - [ ] ~16 agents have enriched tool declarations
 - [ ] 14 prompt wrappers updated to include new tools
 - [ ] Coordinators instruct staggered parallel dispatch with failure handling
-- [ ] `create-agent-skills` template matches actual declarations
+- [ ] `create-primitive` template matches actual declarations
 - [ ] All 5 documentation files synchronized with 1.109 references
 
 ---
@@ -402,9 +402,9 @@ Add to: `/code-review`, `/deepen-plan`, `/plan-issue`, `/work-on-task`, `/engine
 
 Files: 5 `.github/skills/*/SKILL.md`
 
-#### B3. Extract references from `create-agent-skills` only
+#### B3. Extract references from `create-primitive` only
 
-> **Deepen-plan finding (simplicity + architecture reviews)**: No skill exceeds 140 lines. The 500-line threshold is already met. Only `create-agent-skills` has genuine reference material (templates that developers copy from). Don't extract from `/code-review` — the specialist selection matrix is critical-path information used on every invocation.
+> **Deepen-plan finding (simplicity + architecture reviews)**: No skill exceeds 140 lines. The 500-line threshold is already met. Only `create-primitive` has genuine reference material (templates that developers copy from). Don't extract from `/code-review` — the specialist selection matrix is critical-path information used on every invocation.
 
 Extract to:
 - `references/agent-template.md` — Full agent template with all sections and guardrails
@@ -415,7 +415,7 @@ Add explicit loading directive in SKILL.md body:
 Read `references/agent-template.md` for the complete agent template.
 ```
 
-File: `.github/skills/create-agent-skills/`
+File: `.github/skills/create-primitive/`
 
 #### B4. Standardize subagent terminology (going forward only)
 
@@ -427,11 +427,11 @@ For **new and modified content** going forward:
 
 Do NOT retrofit all 15 skills. Apply to content touched in B1-B3 only.
 
-#### B5. Document Google's 5 Skill Design Patterns in `create-agent-skills`
+#### B5. Document Google's 5 Skill Design Patterns in `create-primitive`
 
 > **Research insight**: Google's [5 ADK Skill Design Patterns](https://lavinigam.com/posts/adk-skill-design-patterns/) (Tool Wrapper, Generator, Reviewer, Inversion, Pipeline) provide a taxonomy for structuring SKILL.md content. Our skills already implicitly follow these patterns but don't name them or follow their structural recommendations (e.g., `assets/` for templates, `references/` for checklists, gate conditions like "DO NOT proceed until...").
 
-Add a "Skill Design Patterns" section to `create-agent-skills/SKILL.md` documenting:
+Add a "Skill Design Patterns" section to `create-primitive/SKILL.md` documenting:
 
 | Pattern | When to Use | Directory Structure | Example in This Repo |
 |---------|------------|--------------------|--------------------|
@@ -447,13 +447,13 @@ Key guidance to include:
 - "Gate conditions ('DO NOT proceed to Step N until...') prevent agents from skipping validation"
 - "Skills teach agents when and how to use tools; they are not tools themselves"
 
-File: `.github/skills/create-agent-skills/SKILL.md`
+File: `.github/skills/create-primitive/SKILL.md`
 
 **Phase B success criteria:**
 - [ ] 5 confusable skills have negative triggers in descriptions
 - [ ] 5 orchestrating skills have error handling sections
-- [ ] `create-agent-skills` has `references/` with agent and skill templates
-- [ ] `create-agent-skills` documents the 5 skill design patterns
+- [ ] `create-primitive` has `references/` with agent and skill templates
+- [ ] `create-primitive` documents the 5 skill design patterns
 - [ ] New/modified content uses "delegate to" for subagent dispatch
 - [ ] All 5 documentation files synchronized
 
@@ -515,13 +515,13 @@ User invokes /code-review (skill)
 - [ ] 20 agents have `user-invocable: false`
 - [ ] 3 coordinators + engineer have `agents:` allowlists
 - [ ] 20 leaf-node agents have `agents: []`
-- [ ] Only `code-implementer` has `disable-model-invocation: true`
+- [ ] Only `code-implementer` has `auto-invocation restriction enabled`
 - [ ] ~16 agents have selectively enriched tool declarations
 - [ ] 14 prompt wrappers updated with new tools
 - [ ] Coordinators dispatch subagents in staggered parallel batches
 - [ ] 5 confusable skills have negative triggers
 - [ ] 5 orchestrating skills have error handling sections
-- [ ] `create-agent-skills` has `references/` with templates
+- [ ] `create-primitive` has `references/` with templates
 - [ ] All documentation synchronized
 
 ### Non-Functional Requirements
@@ -538,7 +538,7 @@ User invokes /code-review (skill)
 - [ ] `@` menu shows only 4 agents
 - [ ] Parallel review completes faster than sequential
 - [ ] All 5 documentation files synchronized with matching counts
-- [ ] `create-agent-skills` template matches actual agent declarations
+- [ ] `create-primitive` template matches actual agent declarations
 - [ ] Engineer's delegation table matches its `agents:` allowlist
 
 ## Dependencies & Prerequisites
@@ -570,7 +570,7 @@ Items removed from this plan based on deepen-plan analysis:
 | **`references/` for code-review, work-on-task, plan-issue** | No skill exceeds 140 lines. Code-review specialist matrix is critical-path (loaded every invocation). | Any skill crosses 300 lines |
 | **Negative triggers on all 15 skills** | 10 skills have sufficiently distinct names. Blanket application is busywork. | Users report confusion between non-pipeline skills |
 | **Terminology standardization retrofit** | "Read" matches the `read` tool name. Retrofitting 15 skills for cosmetic consistency delivers no behavior improvement. | Major skill rewrite happens |
-| **`killTerminal` on code-implementer** | Terminal lifecycle management exceeds implementation-focused mission. Engineer (with `["*"]`) handles this. | Code-implementer needs to manage long-running processes |
+| **`killTerminal` on code-implementer** | Terminal lifecycle management exceeds implementation-focused mission. Engineer (with `[explicit allowlist]`) handles this. | Code-implementer needs to manage long-running processes |
 | **Full Google 5-pattern adoption** | Extract templates to `assets/`, add gate conditions to pipeline skills, restructure generator skills with `assets/` + `references/`. Phase B documents the patterns; full restructuring is a follow-up. | Next skill refactoring cycle |
 | **skillgrade validation** | [skillgrade](https://github.com/mgechev/skillgrade) provides unit testing for skill discovery (3 should-trigger, 3 should-not prompts). Add `evals/` to skills and CI validation. | Skill quality becomes a concern |
 | **Copilot Memory tool** | Supplements file-based memory. Requires more experimentation with the 1.109 API. | Memory tool API stabilizes |
@@ -587,7 +587,7 @@ Items removed from this plan based on deepen-plan analysis:
 - Cross-repo audit: `docs/plans/2026-02-27-feat-cross-repo-agent-skill-audit-and-improvement-plan.md`
 - Global sync plan: `docs/plans/2026-03-12-feat-global-workspace-sync-and-copilot-cli-compatibility-plan.md`
 - Agent context: `.github/agent-context.md`
-- Create-agent-skills template: `.github/skills/create-agent-skills/SKILL.md`
+- Create-primitive template: `.github/skills/create-primitive/SKILL.md`
 - Copilot instructions: `.github/copilot-instructions.md`
 - Engineer delegation table: `.github/agents/engineer.agent.md:143-167`
 

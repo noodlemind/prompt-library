@@ -51,7 +51,7 @@ Build a context summary covering:
 - CI/CD pipeline structure
 
 #### Accumulated Knowledge
-- Read `.github/agent-context.md` for previously discovered patterns
+- Read available repository context for previously discovered patterns: `README.md`, `docs/agent-context.md`, `docs/codebase-snapshot.md`, and `docs/solutions/`. When working in this prompt-library repo, also read `.github/agent-context.md`.
 - Read `docs/solutions/` index for documented learnings
 
 ### Step 2: Generate Architecture Diagrams
@@ -61,7 +61,7 @@ Generate three Mermaid diagrams from actual file analysis. Never hardcode diagra
 #### Agent System Architecture
 
 1. Scan `.github/agents/*.agent.md`
-2. Read each agent's frontmatter to extract: description, tools, model
+2. Read each agent's frontmatter to extract: description, tools, and delegation metadata
 3. Classify each agent into its category: reviewer, researcher, actor, engineer, or coordinator
 4. Read agent bodies for delegation targets (references to other agents via `agent` tool or handoffs)
 5. Generate a Mermaid `graph TD` with:
@@ -110,7 +110,7 @@ generator: /codebase-context
 - [Convention 2]
 
 ## Accumulated Knowledge
-[Summary from agent-context.md and docs/solutions/]
+[Summary from repository context and docs/solutions/]
 
 ## Architecture Diagrams
 

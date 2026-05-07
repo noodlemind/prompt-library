@@ -127,16 +127,16 @@ VS Code requires these settings to discover user-level assets:
 |---|---|---|---|
 | `description` | Required | Required | All agents have it |
 | `tools` | Supported | Supported | All agents specify tools |
-| `model` | Honored | **Ignored** (issue #980) | Used on coordinators (Opus) and specialists (Sonnet) |
+| `model` | Honored | **Ignored** (issue #980) | Used on coordinators (high-reasoning model) and specialists (implementation model) |
 | `handoffs` | Supported | Supported (not on GitHub.com) | Used on engineer, coordinators |
 | `user-invocable` | Supported | Supported | Not currently used; should add for subagent-only agents |
-| `disable-model-invocation` | Supported | Supported | Not currently used |
+| `auto-invocation restriction` | Supported | Supported | Not currently used |
 | `target` | Not used | Supported | Not currently used |
 | `agents` | Not documented | Supported | Not currently used; restricts which subagents available |
 | `mcp-servers` | Not used | Supported | Not currently used |
 | `argument-hint` | Supported | Ignored | Used on some prompts |
 
-**Key gap**: CLI ignores the `model` field. The Opus/Sonnet model routing (coordinators on Opus, specialists on Sonnet) won't be honored in CLI. Users must manually `/model claude-opus-4-6` when using coordinator agents in CLI.
+**Key gap**: CLI ignores the `model` field. The high-reasoning model/implementation model model routing (coordinators on high-reasoning model, specialists on implementation model) won't be honored in CLI. Users must manually `select an appropriate high-reasoning model` when using coordinator agents in CLI.
 
 ### Tool name compatibility
 
@@ -150,7 +150,7 @@ VS Code requires these settings to discover user-level assets:
 | `changes` | VS Code only | Silently ignored in CLI |
 | `terminalLastCommand` | VS Code only | Silently ignored in CLI |
 | `githubRepo` | CLI uses `github/*` MCP prefix | Silently ignored in CLI |
-| `["*"]` | All tools | None |
+| `[explicit allowlist]` | All tools | None |
 
 CLI silently ignores unrecognized tool names, so VS Code-specific tools like `changes` and `terminalLastCommand` won't break anything — they just won't be available. The code-review skill's branch-diff workflow needs a CLI-aware fallback (use `shell(git diff)` instead).
 
@@ -168,14 +168,14 @@ The prompt library must work across VS Code Copilot, Copilot CLI, and Claude Cod
 | Web access | `fetch` | `web` (alias) | `WebFetch`/`WebSearch` | Declare `fetch`; CLI recognizes both |
 | GitHub API | `githubRepo` | `github/*` MCP | `Bash` + `gh` CLI | VS Code-only; skill bodies must fallback |
 | Subagent dispatch | `agent` | `agent` | `Agent` | Same in VS Code/CLI |
-| All tools | `["*"]` | `["*"]` | Implicit | Same in VS Code/CLI |
+| All tools | `[explicit allowlist]` | `[explicit allowlist]` | Implicit | Same in VS Code/CLI |
 
 **Strategy for tool declarations in agent frontmatter:**
 
 1. **Declare VS Code tool names** — they are the canonical source. CLI maps `editFiles` → `edit` and `fetch` → `web` automatically.
 2. **For VS Code-only tools (`changes`, `terminalLastCommand`, `githubRepo`)** — include them in declarations AND add fallback instructions in skill/agent bodies: "If `changes` is not available, use `terminalLastCommand` to run `git diff`. If neither is available, run the diff command directly."
 3. **For Claude Code** — tool names are completely different. The AGENTS.md file and Claude Code's CLAUDE.md provide the mapping. No changes needed to agent files — Claude Code's system prompt handles translation.
-4. **`["*"]` is universally supported** — use it for orchestrator agents that need maximum capability.
+4. **`[explicit allowlist]` is universally supported** — use it for orchestrator agents that need maximum capability.
 
 ### Tool access audit findings (2026-03-12)
 
@@ -651,11 +651,11 @@ The sync engine resolves `<copilot-home>` by checking `$COPILOT_HOME` first. If 
 
 **2. Single-Point-of-Compromise Trust Model**
 
-The sync engine copies agent definitions with `tools: ["*"]` (unrestricted) into `~/.copilot/`, where they are auto-discovered across ALL workspaces. A malicious PR merged into this repo would distribute compromised agents globally. Agent body instructions can override LLM guardrails.
+The sync engine copies agent definitions with `tools: [explicit allowlist]` (unrestricted) into `~/.copilot/`, where they are auto-discovered across ALL workspaces. A malicious PR merged into this repo would distribute compromised agents globally. Agent body instructions can override LLM guardrails.
 
 **Required mitigations:**
 - Add `user-invocable: false` to the 20 specialist agents (reduces attack surface)
-- Restrict `tools` to minimum necessary per agent (instead of `["*"]` on subagent-only agents)
+- Restrict `tools` to minimum necessary per agent (instead of `[explicit allowlist]` on subagent-only agents)
 - The `--dry-run` mode must show a human-readable diff of WHAT CHANGED in agent/skill instructions before writing
 - Document the threat model: "This repo is a single point of trust for all agent behavior across all workspaces"
 
@@ -685,13 +685,13 @@ Analysis of compound-engineering v2.40.0, superpowers v5.0.2, nanodex-marketplac
 
 | Agent | Type | Model | Source | Priority | Rationale |
 |-------|------|-------|--------|----------|-----------|
-| **deployment-verification** | Reviewer | Sonnet 4.6 | compound-engineering | HIGH | Go/No-Go deployment checklists with SQL queries, rollback procedures, monitoring plans — distinct from `data-integrity-guardian` |
-| **data-migration-expert** | Reviewer | Sonnet 4.6 | compound-engineering | HIGH | Validates migration mappings against production data, checks for swapped IDs, verifies rollback safety with SQL |
-| **frontend-race-reviewer** | Reviewer | Sonnet 4.6 | compound-engineering | HIGH | JavaScript/Stimulus race conditions, timing issues, DOM lifecycle, cancelation tokens — no current frontend race specialist |
-| **learnings-researcher** | Researcher | Haiku 4.5 | compound-engineering | HIGH | Efficiently searches `docs/solutions/` using frontmatter metadata before work begins — closes the read side of knowledge compounding |
-| **schema-drift-detector** | Reviewer | Sonnet 4.6 | compound-engineering | MEDIUM | Cross-references `schema.rb` changes against included migrations — Rails-specific |
-| **lint-agent** | Actor | Haiku 4.5 | compound-engineering | MEDIUM | Runs linting/formatting (ESLint, Prettier, Ruff, standardrb) and auto-commits fixes — cheap, fast pre-push quality gate |
-| **design-implementation-reviewer** | Reviewer | Sonnet 4.6 | compound-engineering | LOW | Compares live UI screenshots against Figma designs — only for teams with designers |
+| **deployment-verification** | Reviewer | implementation runtime | compound-engineering | HIGH | Go/No-Go deployment checklists with SQL queries, rollback procedures, monitoring plans — distinct from `data-integrity-guardian` |
+| **data-migration-expert** | Reviewer | implementation runtime | compound-engineering | HIGH | Validates migration mappings against production data, checks for swapped IDs, verifies rollback safety with SQL |
+| **frontend-race-reviewer** | Reviewer | implementation runtime | compound-engineering | HIGH | JavaScript/Stimulus race conditions, timing issues, DOM lifecycle, cancelation tokens — no current frontend race specialist |
+| **learnings-researcher** | Researcher | lightweight runtime | compound-engineering | HIGH | Efficiently searches `docs/solutions/` using frontmatter metadata before work begins — closes the read side of knowledge compounding |
+| **schema-drift-detector** | Reviewer | implementation runtime | compound-engineering | MEDIUM | Cross-references `schema.rb` changes against included migrations — framework-specific |
+| **lint-agent** | Actor | lightweight runtime | compound-engineering | MEDIUM | Runs linting/formatting (ESLint, Prettier, Ruff, standardrb) and auto-commits fixes — cheap, fast pre-push quality gate |
+| **design-implementation-reviewer** | Reviewer | implementation runtime | compound-engineering | LOW | Compares live UI screenshots against Figma designs — only for teams with designers |
 
 ### New Skills (9 proposed)
 
@@ -812,7 +812,7 @@ Deliverable: `configure-vscode` works on macOS and Windows; new workspaces get c
   - `deployment-verification.agent.md` (reviewer)
   - `data-migration-expert.agent.md` (reviewer)
   - `frontend-race-reviewer.agent.md` (reviewer)
-  - `learnings-researcher.agent.md` (researcher, Haiku 4.5)
+  - `learnings-researcher.agent.md` (researcher, lightweight runtime)
 - Add HIGH-priority skills from gap analysis:
   - `systematic-debugging/SKILL.md`
   - `verification-before-completion/SKILL.md`

@@ -67,7 +67,7 @@ User: "Fix the calculator precision and add a new interface"
 
 - R11. The engineer consults specialist review personas when confidence is low in a domain (security, performance, data integrity).
 - R12. Specialist consultation is the engineer's decision, not the user's — like a senior dev asking a security expert to look at something.
-- R13. The engineer can delegate implementation to code-implementer (Sonnet) for cost efficiency while maintaining oversight.
+- R13. The engineer can delegate implementation to code-implementer (implementation model) for cost efficiency while maintaining oversight.
 
 **Context Efficiency (Pi Lessons)**
 
@@ -97,7 +97,7 @@ User: "Fix the calculator precision and add a new interface"
 ## Dependencies / Assumptions
 
 - PR #14 (skill enhancements) provides the enhanced code-review, document-review, compound-learnings, and /start that the engineer will internalize
-- The engineer agent already has `tools: ["*"]` and an `agents:` allowlist covering 11 specialists
+- The engineer agent already has an explicit `tools:` allowlist and an `agents:` allowlist covering 11 specialists
 - VS Code 1.109's subagent dispatch and parallel execution are the substrate
 
 ## Outstanding Questions

@@ -35,27 +35,32 @@ These personas are engaged on every review regardless of project type or diff co
 
 Engage these when the diff contains files of the matching language.
 
-### compounding-rails-reviewer
-- **Trigger:** `.rb` files in a Rails project (Gemfile with rails, app/ directory)
-- **Focus:** Rails conventions, N+1 prevention, fat models/thin controllers, REST purity
-- **Look for:** Business logic in controllers, missing eager loading, non-RESTful routes, raw SQL where ActiveRecord suffices, missing validations.
+### java-reviewer
+- **Trigger:** `.java` files
+- **Focus:** Java correctness, API contracts, concurrency, resource management, testing, maintainability
+- **Look for:** Nullability ambiguity, resource leaks, unsafe shared state, weak exception handling, brittle tests, unsafe deserialization, query parameterization issues.
 
 ### compounding-typescript-reviewer
 - **Trigger:** `.ts`/`.tsx` files with tsconfig.json
 - **Focus:** Type safety, modern TypeScript patterns, strict mode compliance
 - **Look for:** `any` types, missing null checks, improper type narrowing, unused generics, missing discriminated unions for state.
 
-### compounding-python-reviewer
+### python-reviewer
 - **Trigger:** `.py` files with pyproject.toml or requirements.txt
 - **Focus:** Pythonic patterns, type annotations, PEP compliance
 - **Look for:** Missing type hints, non-idiomatic patterns, bare except clauses, mutable default arguments, import organization.
 
-## Conditional Personas — Domain-Specific
+### sql-reviewer
+- **Trigger:** `.sql` files, schema changes, query-heavy code, migrations, or backfills
+- **Focus:** Query correctness, migration safety, constraints, transaction boundaries, performance, injection safety
+- **Look for:** Unsafe dynamic SQL, missing indexes, irreversible migrations, missing constraints, data-loss risks, long locks, unbatched backfills.
 
-### dhh-rails-reviewer
-- **Trigger:** Rails diff introduces service objects, complex abstractions, or Hotwire-vs-SPA decisions
-- **Focus:** 37signals philosophy — clarity over cleverness, fat models, Hotwire-first
-- **Look for:** Service objects that should be model methods, unnecessary abstractions around simple CRUD, SPA patterns where Turbo would suffice.
+### aws-reviewer
+- **Trigger:** AWS SDK usage, IAM policies, SQS/SNS/S3/Lambda/EventBridge/CloudWatch changes, or infrastructure-adjacent configuration
+- **Focus:** Least privilege, credential safety, retries/timeouts, DLQs, idempotency, observability, cost and quota risk
+- **Look for:** Hardcoded credentials, broad IAM actions/resources, missing timeouts/retries, no DLQ, duplicate message processing risk, missing request ID logging.
+
+## Conditional Personas — Domain-Specific
 
 ### data-integrity-guardian
 - **Trigger:** Diff includes migration files, schema changes, or backfill scripts
@@ -66,8 +71,3 @@ Engage these when the diff contains files of the matching language.
 - **Trigger:** Diff references a plan file or spec document
 - **Focus:** Spec completeness, edge cases, flow gaps
 - **Look for:** Missing error states in flows, unhandled edge cases in specs, gaps between what the spec says and what the code implements.
-
-### every-style-editor
-- **Trigger:** Diff includes prose content (README, documentation, editorial content)
-- **Focus:** Editorial style guide compliance — clear, direct prose
-- **Look for:** Passive voice, corporate jargon, inconsistent formatting, unclear pronouns, overly long sentences.

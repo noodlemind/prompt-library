@@ -39,13 +39,13 @@ Read the issue file or user description. Identify:
 ### 2. Analyze the Codebase
 
 - Search for related files and patterns
-- Read `.github/agent-context.md` for accumulated knowledge
+- Read available repository context for accumulated knowledge: `README.md`, `docs/agent-context.md`, `docs/codebase-snapshot.md`, and `docs/solutions/`. When planning in this prompt-library repo, also read `.github/agent-context.md`.
 - Check `docs/solutions/` for relevant past solutions
 - Identify the minimal set of files that need to change
 
 ### 3. Generate Plan
 
-Create a phased plan where each phase is completable in one session:
+Create a phased plan where each phase is completable in one session. Even quick plans should preserve the local context-pack sections downstream skills expect:
 
 ```markdown
 ## Plan
@@ -61,6 +61,16 @@ Create a phased plan where each phase is completable in one session:
 ## Impacted Files
 - `path/to/file1` — [new/modified]
 - `path/to/file2` — [new/modified]
+
+## Verification Plan
+- `[command]` — [what this proves]
+- Manual check: [what to inspect]
+
+## Risk & Review Routing
+- Security: [required/not applicable and why]
+- Performance: [required/not applicable and why]
+- Architecture: [required/not applicable and why]
+- Data integrity: [required/not applicable and why]
 ```
 
 ### 4. Lock the Plan
@@ -82,3 +92,4 @@ Confirm plan structure and suggest: "Run `/work-on-task` to start Phase 1."
 - Keep plans realistic — 3-8 tasks per phase.
 - Every task must reference a specific file path.
 - Each phase should have clear success criteria.
+- Include `## Verification Plan` and `## Risk & Review Routing` even for quick plans.

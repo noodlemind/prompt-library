@@ -8,7 +8,7 @@ argument-hint: "[describe what you need done]"
 
 ## Purpose
 
-Intelligent intake router — classifies your work prompt and guides you to the right pipeline entry point. This is the **fallback** for ambiguous prompts. If you already know which skill you need, invoke it directly.
+Intelligent intake router — classifies your work prompt and guides you to the right skill or pipeline entry point. This is the **fallback** for ambiguous prompts. If you already know which skill you need, invoke it directly.
 
 ## When to Use
 
@@ -71,6 +71,12 @@ Extract signals from the user's prompt across three dimensions:
 | "refactor", "clean up", "reorganize", "simplify" | Refactor |
 | "investigate", "debug", "figure out", "understand" | Investigation |
 | "explore", "brainstorm", "think through", "what if" | Exploration |
+| "quick question", "btw", "where is", "what does", "how does" | Q&A |
+| "README", "readme", "project docs", "overview documentation" | Documentation |
+| "Java", "Spring Boot", ".java", "JVM" | Java domain |
+| "Python", ".py", "pytest", "asyncio", "type hints" | Python domain |
+| "SQL", "PostgreSQL", "migration", "schema", "query", "index" | SQL domain |
+| "AWS", "SQS", "SNS", "IAM", "SDK", "CloudWatch" | AWS domain |
 
 **Clarity:**
 | Signal | Classification |
@@ -81,7 +87,7 @@ Extract signals from the user's prompt across three dimensions:
 
 ### Step 3: Route to Target Skill
 
-Map classification to the appropriate skill:
+Map classification to the appropriate skill. Prefer skills and pipeline flows over direct agent invocation unless the task is primarily a specialist review/research request or the user explicitly asks for an agent.
 
 | Classification | Route | Reason |
 |---------------|-------|--------|
@@ -92,6 +98,12 @@ Map classification to the appropriate skill:
 | Deep + any | `/capture-issue` | Needs formal planning pipeline |
 | Deep + Unclear | `/brainstorming` | Needs exploration before capture |
 | Investigation/Debug | `/engineer` | Autonomous investigation needed |
+| Q&A | `/btw` | Quick answer without plan or file edits |
+| Documentation + README | `/project-readme` | Update project-level README documentation |
+| Java domain + focused | `/java` | Apply Java conventions and review routing |
+| Python domain + focused | `/python` | Apply Python conventions and review routing |
+| SQL domain + focused | `/sql` | Apply SQL/PostgreSQL conventions and data review routing |
+| AWS domain + focused | `/aws` | Apply AWS conventions and cloud review routing |
 | Exploration | `/brainstorming` | Exploring ideas |
 | Refactor + Clear | `/capture-issue` | Track scope before changing |
 | Refactor + Trivial | `/analyze-and-plan` | Quick plan sufficient |

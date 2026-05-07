@@ -15,7 +15,7 @@ When a subagent returns no output or errors out:
 
 When a required tool is not available in the current environment:
 
-1. Consult the cross-environment compatibility table in `.github/copilot-instructions.md` for the correct fallback.
+1. Consult the cross-environment compatibility table from the globally hydrated prompt-library instructions or `.github/copilot-instructions.md` when present.
 2. Use the fallback tool transparently — do not ask the user to switch environments.
 3. If no fallback exists, report what capability is missing and what the user can do (e.g., switch to VS Code, install an extension, use CLI).
 

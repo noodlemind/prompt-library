@@ -1,7 +1,6 @@
 ---
 description: Analyze code for design patterns, anti-patterns, naming consistency, and duplication.
 tools: ["codebase", "search", "read", "usages", "changes", "problems", "terminalLastCommand"]
-model: "Claude Sonnet 4.6"
 user-invocable: false
 agents: []
 ---

@@ -10,7 +10,7 @@ argument-hint: "[path to issue file]"
 
 **Step 2** of the connected pipeline: Capture → **Plan** → Work → Review → Compound.
 
-This skill reads an open issue file, researches the codebase and best practices, and produces a phased implementation plan. It sets `plan_lock: true` to authorize coding.
+This skill reads an open issue file, researches the codebase and best practices, and produces a phased implementation plan. The plan is the local context pack for downstream work: it preserves requirements, evidence, impacted files, verification, and review routing. It sets `plan_lock: true` to authorize coding.
 
 ## Mode Detection
 
@@ -58,13 +58,20 @@ research agents as isolated subagents (each with full feature context in the tas
 Otherwise, run research tasks sequentially within this session.
 
 Run these research tasks:
-- **Codebase analysis**: Search for related files, existing patterns, and conventions relevant to this issue. Read `.github/agent-context.md` for accumulated knowledge.
+- **Codebase analysis**: Search for related files, existing patterns, and conventions relevant to this issue. Read available repository context (`README.md`, `docs/agent-context.md`, `docs/codebase-snapshot.md`, `docs/solutions/`, and `.github/agent-context.md` only when working in this prompt-library repo) for accumulated knowledge.
 - **Solution history**: Check `docs/solutions/` for previously solved problems with similar tags or symptoms.
 - **Best practices**: Research industry best practices for the specific technology and pattern involved.
+- **Risk routing**: Identify security, performance, architecture, data integrity, or language-specific review needs.
 
 ### 3. Generate Plan
 
-Add these sections to the issue file:
+Create missing sections or update existing sections in place. Do not create duplicate headings when `/capture-issue` already created `## Context`, `## Acceptance Criteria`, `## Technical Notes`, or `## Activity`.
+
+**`## Context`** — task-scoped context pack:
+- User intent and constraints
+- Relevant code paths, symbols, and prior artifacts
+- Assumptions and open questions resolved during planning
+- If `## Context` already exists from capture, enrich it in place and preserve captured facts.
 
 **`## Plan`** — ordered list of phases, each with:
 - Phase number and title
@@ -84,6 +91,23 @@ Add these sections to the issue file:
 - Relevant codebase patterns found
 - Best practices that apply
 - Past solutions from `docs/solutions/` that inform this work
+
+**`## Verification Plan`** — evidence required before completion:
+```markdown
+## Verification Plan
+- `pnpm test --filter app` — proves affected unit tests pass
+- Manual check: verify settings page saves the new option
+- Review gate: run `/code-review` after all phases complete
+```
+
+**`## Risk & Review Routing`** — risk-aware review plan:
+```markdown
+## Risk & Review Routing
+- Security: required if auth, input parsing, secrets, or permissions are touched
+- Performance: required if hot paths, large loops, database queries, or caching are touched
+- Architecture: required if new boundaries, services, or public contracts are introduced
+- Data integrity: required if migrations, backfills, schema, or persistence code changes
+```
 
 ### 4. Lock the Plan
 
@@ -119,3 +143,4 @@ For subagent failure, tool unavailability, file-not-found, and timeout recovery,
 - Do **not** start execution. Lock the plan and stop.
 - Include realistic phase scoping — each phase should be completable in one session.
 - Every task must reference a specific file in `## Impacted Files`.
+- Every plan must include `## Verification Plan` and `## Risk & Review Routing` so `/work-on-task` and `/code-review` know how to prove and review the work.

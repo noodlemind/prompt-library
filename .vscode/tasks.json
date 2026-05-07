@@ -1,0 +1,18 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Prompt Library: Hydrate Global Copilot Customizations",
+      "type": "shell",
+      "command": "powershell",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-Command",
+        "$ErrorActionPreference = 'Stop'; $Source = '${workspaceFolder}'; $Copilot = Join-Path $env:USERPROFILE '.copilot'; New-Item -ItemType Directory -Force $Copilot | Out-Null; function SyncDir($From, $To) { if (Test-Path $From) { New-Item -ItemType Directory -Force $To | Out-Null; $Manifest = Join-Path $To '.prompt-library-manifest.txt'; if (Test-Path $Manifest) { Get-Content $Manifest | ForEach-Object { if ($_) { $Old = Join-Path $To $_; $Replacement = Join-Path $From $_; if ((Test-Path $Old) -and -not (Test-Path $Replacement)) { Remove-Item $Old -Recurse -Force } } } }; & robocopy $From $To /E /NFL /NDL /NJH /NJS /NP /XF .prompt-library-manifest.txt; if ($LASTEXITCODE -ge 8) { throw ('robocopy failed with exit code ' + $LASTEXITCODE + ' for ' + $From + ' -> ' + $To) }; Get-ChildItem $From -Recurse -File | ForEach-Object { $_.FullName.Substring($From.Length).TrimStart([char]92) } | Sort-Object | Set-Content -Path $Manifest -Encoding utf8 } else { Write-Host ('Skipping missing path ' + $From) } }; $Retired = @('agents/compounding-python-reviewer.agent.md', 'agents/compounding-rails-reviewer.agent.md', 'agents/dhh-rails-reviewer.agent.md', 'agents/every-style-editor.agent.md', 'instructions/rails.instructions.md', 'prompts/create-agent-skills.prompt.md', 'skills/create-agent-skills', 'checks/README.md', 'checks/skill-description-quality.md', 'checks/primitive-boundary-quality.md'); foreach ($Relative in $Retired) { $RetiredPath = Join-Path $Copilot $Relative; if (Test-Path $RetiredPath) { Remove-Item $RetiredPath -Recurse -Force } }; SyncDir (Join-Path $Source '.github/skills') (Join-Path $Copilot 'skills'); SyncDir (Join-Path $Source '.github/agents') (Join-Path $Copilot 'agents'); SyncDir (Join-Path $Source '.github/instructions') (Join-Path $Copilot 'instructions'); SyncDir (Join-Path $Source '.github/prompts') (Join-Path $Copilot 'prompts'); $IntelliJ = Join-Path $env:LOCALAPPDATA 'github-copilot\\intellij'; New-Item -ItemType Directory -Force $IntelliJ | Out-Null; $InstructionRoot = Join-Path $Source '.github/instructions'; if (Test-Path $InstructionRoot) { $InstructionFiles = @(Get-ChildItem $InstructionRoot -Filter '*.instructions.md' | Sort-Object @{ Expression = { if ($_.Name -eq 'prompt-library-global.instructions.md') { 0 } else { 1 } } }, Name); $Parts = @($InstructionFiles | ForEach-Object { $Text = Get-Content $_.FullName -Raw; $Text = $Text -replace '(?s)^---\\r?\\n.*?\\r?\\n---\\r?\\n', ''; '<!-- Source: ' + $_.Name + ' -->' + [Environment]::NewLine + $Text.Trim() }); if ($Parts.Count -gt 0) { Set-Content -Path (Join-Path $IntelliJ 'global-copilot-instructions.md') -Value ($Parts -join ([Environment]::NewLine + [Environment]::NewLine)) -Encoding utf8 } }; Write-Host 'Hydrated global Copilot customizations under ' $Copilot; Write-Host 'Hydrated IntelliJ global Copilot instructions under ' $IntelliJ; Write-Host 'Bundled review checks stay inside the code-review skill references so they load with the skill.'; Write-Host 'For VS Code, ensure chat.*FilesLocations settings include these global folders where required.'"
+      ],
+      "problemMatcher": []
+    }
+  ]
+}

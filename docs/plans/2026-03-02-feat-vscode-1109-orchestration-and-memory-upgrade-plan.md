@@ -29,13 +29,13 @@ Memory remains file-based — 1.108 has no built-in persistent memory. The exist
 | Primitive | Status in 1.108 | How it works |
 |-----------|-----------------|--------------|
 | Agents (`.agent.md`) | Stable | Frontmatter: `name`, `description`, `tools`, `model`, `infer`, `handoffs` |
-| Skills (`SKILL.md`) | Experimental (`chat.useAgentSkills`) | Frontmatter: `name`, `description`, `user-invokable`, `disable-model-invocation` |
+| Skills (`SKILL.md`) | Experimental (`chat.useAgentSkills`) | Frontmatter: `name`, `description`, `user-invokable`, `auto-invocation restriction` |
 | Instructions (`.instructions.md`) | Stable | Scoped context via `applyTo` glob patterns |
 | Subagents | Experimental (`chat.customAgentInSubagent.enabled`) | Sequential only. Isolated context. Via `tools: ['agent']` |
 | Handoffs | Stable (since 1.106) | Buttons on agents. Carry conversation context. New session. |
 | Persistent memory | **None** | No built-in mechanism. File-based is the only option. |
 
-**Not available in 1.108** (added in 1.109+): parallel subagents, `agents:` allowlist, agent hooks, Copilot Memory, `user-invokable`/`disable-model-invocation` on agents, model arrays.
+**Not available in 1.108** (added in 1.109+): parallel subagents, `agents:` allowlist, agent hooks, Copilot Memory, `user-invokable`/`auto-invocation restriction` on agents, model arrays.
 
 ## Proposed Solution
 
@@ -108,7 +108,7 @@ description: >
   sequentially — each runs in isolated context for focused analysis.
   Use when reviewing PRs, branches, or specific files across multiple dimensions.
 tools: ["agent", "codebase", "search", "changes"]
-model: "Claude Sonnet 4.5"
+model: "host-selected implementation model"
 handoffs:
   - label: "Document Learnings"
     agent: pipeline-navigator
@@ -134,7 +134,7 @@ Determine what to review:
 ### 2. Detect Project Context
 
 Identify the primary technologies by examining file extensions:
-- `.rb` files → Rails project
+- `.rb` files → framework project
 - `.ts`/`.tsx` files → TypeScript project
 - `.py` files → Python project
 - Migration files → database changes present
@@ -158,7 +158,7 @@ Run each specialist as a subagent. For each, provide:
 5. `pattern-recognition-specialist` — consistency, naming, duplication
 
 **Conditionally delegate based on project type:**
-- Rails (`.rb`): `compounding-rails-reviewer`, `dhh-rails-reviewer`
+- framework (`.rb`): `framework-reviewer`, `opinionated-framework-reviewer`
 - TypeScript (`.ts`/`.tsx`): `compounding-typescript-reviewer`
 - Python (`.py`): `compounding-python-reviewer`
 - Database migrations: `data-integrity-guardian`
@@ -239,7 +239,7 @@ description: >
   for codebase analysis, best practices, and documentation lookup, then
   synthesizes findings into a structured plan.
 tools: ["agent", "codebase", "search", "fetch", "editFiles"]
-model: "Claude Sonnet 4.5"
+model: "host-selected implementation model"
 handoffs:
   - label: "Start Implementation"
     agent: pipeline-navigator
@@ -450,7 +450,7 @@ Always read existing sections before starting work. Never overwrite prior sectio
 | `AGENTS.md` | Add coordinators section, document handoff chain, inter-step memory, note subagent feature requires `chat.customAgentInSubagent.enabled` |
 | `README.md` | Update agent count, add orchestration overview, note experimental settings needed |
 | `.github/copilot-instructions.md` | Add orchestration conventions, inter-step memory section, coordinator patterns |
-| `.github/skills/create-agent-skills/SKILL.md` | Add coordinator classification to agent template, document `tools: ['agent']` and `handoffs:` properties |
+| `.github/skills/create-primitive/SKILL.md` | Add coordinator classification to agent template, document `tools: ['agent']` and `handoffs:` properties |
 
 **VS Code settings documentation** — note these experimental flags in README:
 
@@ -465,7 +465,7 @@ Always read existing sections before starting work. Never overwrite prior sectio
 - [ ] All documentation updated with new agent inventory
 - [ ] Experimental settings documented
 - [ ] Inter-step memory convention documented everywhere
-- [ ] `create-agent-skills` template includes coordinator pattern
+- [ ] `create-primitive` template includes coordinator pattern
 
 ## Alternative Approaches Considered
 

@@ -1,9 +1,7 @@
 ---
 description: Execute specific coding tasks with TDD — write tests, implement changes, and verify. Used as a subagent by the engineer for implementation work.
 tools: ["codebase", "search", "read", "editFiles", "terminalLastCommand", "changes", "problems", "usages", "awaitTerminal"]
-model: "Claude Sonnet 4.6"
 user-invocable: false
-disable-model-invocation: true
 agents: []
 ---
 
