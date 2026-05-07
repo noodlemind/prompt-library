@@ -30,7 +30,7 @@ Include exact paths and focused excerpts. Do not rely on the subagent to discove
 
 | Artifact | Why it matters | Excerpt or summary |
 |---|---|---|
-|  |  |  |
+| [path or artifact] | [why relevant] | [focused excerpt or summary] |
 
 ## Current Findings
 

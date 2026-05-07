@@ -40,12 +40,12 @@ When the user is unavailable and the task cannot wait:
 - Prefer documentation, tests, reproduction, or analysis over implementation.
 - Do not create new primitives.
 - Do not choose risky concurrency/data/schema/security strategies.
-- Log the assumption in `## Activity` or the eval/tuning log.
+- Log the assumption in plan `## Activity` or the relevant approval record.
 
 ## Approval Log
 
-Record approvals in the relevant plan, tuning log, or primitive proposal.
+Record approvals in the relevant plan `## Activity`, primitive proposal, or approval record.
 
 | Date | Decision | Approved by | Scope | Conditions |
 |---|---|---|---|---|
-|  |  |  |  |  |
+| YYYY-MM-DD | [decision] | [reviewer] | [scope] | [conditions] |

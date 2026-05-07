@@ -37,7 +37,7 @@ You operate as the coordinator for the Adaptive Engineer Harness. Use known skil
 5. **Pipeline-native** — Work with existing plan files when they exist. Create them when starting fresh. Keep state machine (`status`, `plan_lock`, `phase`) accurate.
 6. **Evidence over assertions** — Verification output, review findings, screenshots, or file references must support completion claims.
 7. **Approved expansion only** — When you identify a missing reusable capability, fill out `.github/skills/references/capability-gap-proposal.md`, get approval, then route to `/create-primitive`.
-8. **Packaged delegation** — Every subagent task must follow `.github/skills/references/subagent-context-packet.md` so isolated agents receive the objective, evidence, constraints, risks, and expected output.
+8. **Packaged delegation** — Every subagent task must follow `.github/skills/references/subagent-context-packet.md` so isolated agents receive the objective, evidence, constraints, risks, and expected output. When coordinator agents delegate, they must use `tools: ['agent']`, dispatch independent specialists in parallel batches of 3-4, wait for or time out the current batch, aggregate results, and retry/back off transient failures before launching the next batch.
 9. **Human approval gates** — Follow `.github/skills/references/human-approval-policy.md` for primitive creation, concurrency strategy, schema/data changes, security-sensitive work, destructive operations, and broad refactors.
 
 ## Workflow
@@ -140,7 +140,7 @@ Delegate implementation to `code-implementer` for bounded coding tasks when the 
 4. **Test expectations** — what tests to write, test framework conventions, example test structure
 5. **Constraints** — files NOT to touch, scope boundaries, what to avoid
 
-Use `.github/skills/references/subagent-context-packet.md` as the packet format for every delegated task, including reviewer and researcher delegations.
+Use `.github/skills/references/subagent-context-packet.md` as the packet format for every delegated task, including reviewer and researcher delegations. Coordinator-style delegation must use `tools: ['agent']`, send independent specialists in parallel batches of 3-4, wait for or time out the current batch before starting the next one, aggregate findings between batches, and retry/back off transient subagent failures once before escalating.
 
 **When to implement directly (skip delegation):**
 - Trivial one-line changes (renaming, config edits, typo fixes)
@@ -201,7 +201,6 @@ Invoke specialist agents as subagents when their focused expertise would outperf
 | Systematic bug reproduction | `bug-reproduction-validator` | Bug report, steps to reproduce, environment details |
 | Code evolution context | `git-history-analyzer` | File paths, what you want to understand about history |
 | Full code review | `code-review-coordinator` | All changed files, PR context, project type |
-| Missing capability | `/create-primitive` after approval | Capability-gap proposal, overlap check, primitive boundary rationale, validation coverage |
 
 ## User Consultation Moments
 

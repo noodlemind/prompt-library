@@ -2,7 +2,7 @@
 name: capability-expansion-quality
 description: Review prompt-library primitive changes for missing capability-gap proposals, approval gates, overlap checks, and primitive boundary drift.
 severity-default: P2
-globs: ".github/{agents,skills,instructions,prompts}/**/*.md"
+globs: ".github/**/*.md,docs/{architecture,solutions}/**/*.md"
 ---
 
 # Capability Expansion Quality

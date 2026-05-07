@@ -63,9 +63,9 @@ Define what the new or changed primitive must do.
 
 List validation scenarios or checks that should cover this gap.
 
-| Case id | Priority | Expected behavior |
+| Validation item | Priority | Expected behavior |
 |---|---|---|
-|  |  |  |
+| [scenario or check] | [P1/P2/P3] | [expected behavior] |
 
 ## Human Decision
 
