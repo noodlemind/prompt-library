@@ -34,6 +34,8 @@ Read `.github/agent-context.md` for codebase patterns. Check `docs/solutions/` b
 
 The engineer selects the skill/flow first, then delegates only when separate judgment, authority, or isolation improves the result. Coordinators delegate to specialist subagents via `tools: ['agent']`. Subagents run in isolated context — include all necessary context in the task prompt. `/plan-issue` and `/code-review` prompt wrappers route to their coordinators via the `agent:` field (prompt tools override agent tools). Coordinators use `agents:` allowlists to restrict which specialists they can invoke. Coordinators dispatch subagents in parallel batches (3-4 at a time) rather than sequentially.
 
+Adaptive Engineer Harness rules: use existing skills first; use `.github/skills/references/capability-gap-proposal.md` and `/create-primitive` before adding capabilities; use `.github/skills/references/subagent-context-packet.md` for delegated work; use `.github/skills/references/human-approval-policy.md` before risky concurrency, schema/data, security, destructive, broad-refactor, or primitive-expansion decisions.
+
 ## Standardization
 
 Read `docs/architecture/skill-driven-prompt-library.md` before adding or substantially changing agents, skills, instructions, prompt wrappers, checks, plan structure, or solution templates.

@@ -27,7 +27,7 @@ The system is skill-first. Skills are the reusable workflow contracts; agents, i
 
 **Plans and solutions** — `docs/plans/` stores local specs/context packs, and `docs/solutions/` stores verified learnings.
 
-See [Skill-Driven Prompt Library Standard](docs/architecture/skill-driven-prompt-library.md) for primitive boundaries and team adoption guidance.
+See [Skill-Driven Prompt Library Standard](docs/architecture/skill-driven-prompt-library.md) for primitive boundaries and team adoption guidance. See [Adaptive Engineer Harness](docs/architecture/adaptive-engineer-harness.md) for `@engineer` capability expansion, subagent delegation, human approval, and eval runtime policy.
 
 ![Skill-driven prompt library flow](docs/architecture/assets/skill-driven-prompt-library-flow.png)
 

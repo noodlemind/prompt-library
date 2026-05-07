@@ -72,5 +72,8 @@ Five orchestrating skills (code-review, plan-issue, deepen-plan, work-on-task, e
 ### Engineer Agent
 The `engineer` agent understands requirements, routes to the right skill/flow, investigates, plans, and orchestrates. It delegates implementation to `code-implementer` for bounded execution tasks, and delegates to specialist reviewers/researchers when separate judgment, authority, or isolation is useful. It follows a workflow of Understand → Route → Investigate → Plan → Implement → Verify with user consultation checkpoints between phases. It integrates with the pipeline by reading/writing plan files and maintaining state machine fields. The `/engineer` skill is its entry point.
 
+### Adaptive Engineer Harness
+`@engineer` is the central coordinator for adaptive capability expansion. It routes to known skills first, uses `.github/skills/references/subagent-context-packet.md` for delegated work, and uses `.github/skills/references/human-approval-policy.md` before risky strategy choices. Missing reusable capability must be documented with `.github/skills/references/capability-gap-proposal.md` and then routed to `/create-primitive` after human approval. Architecture details live in `docs/architecture/adaptive-engineer-harness.md`.
+
 ### Skill-Driven Standardization
 `docs/architecture/skill-driven-prompt-library.md` defines primitive boundaries for teams adapting this repo. Prompt wrappers stay thin, workflows live in skills, long criteria and library-managed checks go in skill `references/`, product-owned review overlays can live in product `.github/checks/`, file-scoped conventions go in `.github/instructions/`, and solution docs graduate to `agent-context.md` only when they capture durable project-level knowledge.

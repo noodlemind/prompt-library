@@ -66,7 +66,7 @@ docs/
 
 ## Orchestration
 
-The `engineer` agent is a full-cycle hybrid that understands requirements, selects the right skill/flow, debugs, plans, implements, verifies, and delegates implementation to `code-implementer` or specialist review/research agents when separate judgment, authority, or isolation is useful. `code-review-coordinator` and `plan-coordinator` use `tools: ['agent']` to delegate work to specialist agents as subagents. Each subagent runs in isolated context, and coordinators dispatch in parallel batches (3-4 at a time). `pipeline-navigator` uses handoff buttons rather than subagent dispatch to guide developers between pipeline steps.
+The `engineer` agent is a full-cycle hybrid and Adaptive Engineer Harness coordinator that understands requirements, selects the right skill/flow, debugs, plans, implements, verifies, and delegates implementation to `code-implementer` or specialist review/research agents when separate judgment, authority, or isolation is useful. Missing reusable capability goes through a capability-gap proposal and `/create-primitive` with human approval. `code-review-coordinator` and `plan-coordinator` use `tools: ['agent']` to delegate work to specialist agents as subagents. Each subagent runs in isolated context, and coordinators dispatch in parallel batches (3-4 at a time). `pipeline-navigator` uses handoff buttons rather than subagent dispatch to guide developers between pipeline steps.
 
 Prompt wrappers for `/plan-issue` and `/code-review` route to their respective coordinators via `agent: plan-coordinator` and `agent: code-review-coordinator`.
 
