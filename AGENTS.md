@@ -10,7 +10,7 @@ This is a skill-driven prompt library for software development teams. The primar
 
 The system is skill-first. Skills are the primary reusable workflow contracts; agents, instructions, prompt wrappers, checks, plans, and solution docs support those skills.
 
-- **Skills** (`.github/skills/*/SKILL.md`): 23 user-invocable workflows that compose local context, scoped instructions, tools, checks, and agents. `/start` classifies incoming work and routes to the appropriate entry point. `/btw` handles quick Q&A without plans or edits. `/project-readme` creates or updates project README files. `/create-primitive` decides and creates the right primitive type. Domain skills include `/java`, `/python`, `/sql`, and `/aws`. The connected pipeline `/brainstorming` (optional) → `/capture-issue` → `/plan-issue` → `/deepen-plan` (optional) → `/work-on-task` → `/code-review` → `/compound-learnings` is the core engineering loop.
+- **Skills** (`.github/skills/*/SKILL.md`): 24 user-invocable workflows that compose local context, scoped instructions, tools, checks, and agents. `/start` classifies incoming work and routes to the appropriate entry point. `/btw` handles quick Q&A without plans or edits. `/project-readme` creates or updates project README files. `/create-primitive` decides and creates the right primitive type. `/harness-eval` evaluates the Adaptive Engineer Harness. Domain skills include `/java`, `/python`, `/sql`, and `/aws`. The connected pipeline `/brainstorming` (optional) → `/capture-issue` → `/plan-issue` → `/deepen-plan` (optional) → `/work-on-task` → `/code-review` → `/compound-learnings` is the core engineering loop.
 - **Agents** (`.github/agents/*.agent.md`): 24 agents — 19 stateless domain experts, 1 engineer, 1 code-implementer, plus 3 coordinator/navigation agents. Agents are used when work needs separate judgment, tool authority, runtime profile, isolation, or accountability. Active language/cloud/data reviewers include Java, Python, SQL, and AWS.
 - **Instructions** (`.github/instructions/*.instructions.md`): Scoped context that activates based on file patterns.
 - **Prompt wrappers** (`.github/prompts/*.prompt.md`): Thin host-facing adapters that route to skills and declare host tools.
@@ -32,7 +32,7 @@ Plan files in `docs/plans/` track state via YAML frontmatter (`status`, `plan_lo
 ```
 .github/
   agents/          — 24 agent definitions (19 specialists + 1 engineer + 1 implementer + 3 coordinators)
-  skills/          — 23 skill directories with SKILL.md
+  skills/          — 24 skill directories with SKILL.md
   instructions/    — scoped instructions (TypeScript, Python, Java, Spring Boot, PostgreSQL, AWS SDK)
   prompts/         — thin prompt wrappers that route to skills
   checks/          — optional product-specific review check examples

@@ -67,6 +67,7 @@ Before coding, the engineer should produce a short route decision:
 | Primitive creation/change | `/create-primitive` |
 | Missing reusable capability | Capability-gap proposal, human approval, then `/create-primitive` |
 | Data-integrity or concurrency bug | `/tdd-fix` if isolated and reproducible; otherwise `/capture-issue` -> `/plan-issue` with Java/SQL/performance risk routing |
+| Harness eval, prompt tuning, or release-gate scoring | `/harness-eval` |
 
 Use `@engineer` as primary when the user wants hands-on autonomous engineering, investigation, or implementation. Do not bypass the local-first pipeline for multi-step work unless the user explicitly wants an inline path.
 
@@ -79,7 +80,7 @@ When the engineer believes it lacks a skill, agent, instruction, prompt wrapper,
 3. State the primitive boundary recommendation.
 4. Ask the human liaison for approval.
 5. Route approved creation or modification through `/create-primitive`.
-6. Document required validation coverage when the new capability changes routing, safety, HITL, or verification behavior.
+6. Add or update eval coverage when the new capability changes routing, safety, HITL, or verification behavior.
 
 Do not create a primitive directly because a user asked for one. The primitive type must be justified by the boundary rules.
 

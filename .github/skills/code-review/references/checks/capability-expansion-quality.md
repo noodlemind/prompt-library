@@ -13,7 +13,7 @@ globs: ".github/{agents,skills,instructions,prompts}/**/*.md"
 - New agents that only store procedural knowledge better suited to a skill, reference, instruction, or check.
 - Prompt wrappers that contain workflow logic instead of routing to a skill.
 - Skills that omit should-trigger and should-not-trigger examples.
-- Primitive changes that lack validation coverage, verification guidance, or documentation updates.
+- Primitive changes that lack eval coverage, verification guidance, or documentation updates.
 - Missing overlap checks against existing skills, agents, instructions, prompts, checks, references, and solution docs.
 
 ## Examples

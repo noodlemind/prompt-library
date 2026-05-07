@@ -1,0 +1,15 @@
+provider: copilot-localhost
+base_url: http://127.0.0.1:3001
+model_policy: approved-only
+default_model: auto
+max_cases_per_run: 10
+max_llm_calls_per_case: 2
+judge_mode: deterministic-first
+allow_external_api_keys: false
+allow_local_models: false
+
+# Maintainer-only override example:
+# provider: maintainer-local-or-subscription
+# allow_external_api_keys: true
+# allow_local_models: true
+# release_gate_provider: copilot-localhost
