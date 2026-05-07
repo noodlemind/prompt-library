@@ -82,6 +82,12 @@ Before writing files:
 7. **Add eval scenarios**: at least 3 should-trigger and 3 should-not examples for skills/agents, or good/bad examples for checks/instructions.
 8. **Update docs** listed in the validation checklist.
 
+## Capability Expansion Mode
+
+When invoked because `@engineer` or another skill found a missing capability, require `.github/skills/references/capability-gap-proposal.md` before creating or substantially changing primitives. Follow the steps in that template's `## Usage Workflow`.
+
+Do not create primitives in non-interactive mode unless prior human approval is already recorded.
+
 ## Primitive Creation Paths
 
 ### Skill

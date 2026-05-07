@@ -63,6 +63,8 @@ For each task in the current phase:
 
 List the exact files, symbols, and lines that justify the planned change. Confirm the task is within `## Impacted Files` and has a matching acceptance criterion or verification item. If key evidence is missing, set `status: needs-info` with one focused question and stop.
 
+If the next step requires a risky strategy choice, follow `.github/skills/references/human-approval-policy.md` before coding. This includes concurrency fixes, schema/data changes, destructive operations, security-sensitive work, public contract changes, broad refactors, and primitive creation.
+
 ### 2. Implement with TDD
 
 - Write a failing test first (or test outline for the pattern)
@@ -73,11 +75,14 @@ List the exact files, symbols, and lines that justify the planned change. Confir
 - Clean up while tests are green
 - Keep diffs surgical — change only what the task requires
 
+For delegated implementation or specialist review, use `.github/skills/references/subagent-context-packet.md` so the subagent receives the task objective, plan context, impacted files, constraints, approval dependencies, and expected response.
+
 ### 3. Scope Guard
 
 - Only touch files listed in `## Impacted Files`
 - If a change requires a file not in the allowlist, stop and ask to update the plan
 - If the change feels too large for the phase, stop and ask to split
+- If a missing reusable capability is discovered, fill out `.github/skills/references/capability-gap-proposal.md` and ask for approval before invoking `/create-primitive`
 
 ### 4. Check Off and Log
 
@@ -151,6 +156,7 @@ DO NOT claim completion if any check fails. Report the failure and stop.
 - **Verification plan missing** → Generate a minimal verification plan from acceptance criteria and touched files, append it to the plan, and continue only after it is explicit.
 - **Risk routing missing** → Add a short `## Risk & Review Routing` section before implementation continues.
 - **File outside `## Impacted Files` scope** → Stop immediately. Report the file path and why it needs to change. Ask the user to update the plan's `## Impacted Files` section or revert the change.
+- **Approval gate hit in non-interactive mode** → Choose the lowest-risk reversible action (prefer analysis, test writing, or documentation). Log the assumption in `## Activity`. Do not proceed with the gated change. See `.github/skills/references/human-approval-policy.md` Non-Interactive Mode.
 
 ### Common Errors
 
@@ -164,3 +170,4 @@ For subagent failure, tool unavailability, file-not-found, and timeout recovery,
 - Never modify previous `## Activity` entries.
 - If blocked, document the blocker in the activity log and stop.
 - Never claim phase completion without running verification. Evidence before assertions.
+- Never choose a risky concurrency, data, schema, security, destructive, broad-refactor, or primitive-expansion strategy without the required approval.

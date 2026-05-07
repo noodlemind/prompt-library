@@ -68,6 +68,14 @@ Create a **review check** when the concern is narrow, project-specific, and can 
 
 Keep **prompt wrappers** thin. They should route to skills and declare host tools; they should not become a second implementation of the workflow.
 
+## Adaptive Capability Expansion
+
+When a repeated workflow, review need, convention, or supporting artifact appears missing, do not create a primitive directly. First document the gap with `.github/skills/references/capability-gap-proposal.md`, including overlap checks against existing skills, agents, instructions, prompt wrappers, checks, references, and solution docs.
+
+Primitive creation or substantial primitive changes require human approval before `/create-primitive` proceeds. Use `.github/skills/references/human-approval-policy.md` for approval gates and record the decision in the proposal or active plan.
+
+Delegated research, review, or implementation work should be packaged with `.github/skills/references/subagent-context-packet.md` when separate agent judgment or isolation is useful.
+
 ## Engineer-First Routing
 
 The engineer remains the default accountable actor, but routing should be skill-driven:

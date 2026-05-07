@@ -84,7 +84,7 @@ CLAUDE.md              — optional compatibility guidance
 20. **pr-comment-resolver**: Address PR comments with code changes
 
 ### Engineers (full-cycle: understand + investigate + implement + delegate)
-21. **engineer**: Full-cycle software engineer — understands requirements, debugs, delegates implementation to code-implementer, consults user
+21. **engineer**: Full-cycle software engineer and Adaptive Engineer Harness coordinator — understands requirements, debugs, plans, implements, delegates, and routes capability expansion through capability-gap proposals and `/create-primitive` with user approval
 
 ### Coordinators and Navigation
 22. **code-review-coordinator**: Delegates to specialist reviewers in parallel batches with isolated context

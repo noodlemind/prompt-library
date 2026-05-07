@@ -45,11 +45,12 @@ Dispatch research agents in parallel. Each runs in isolated context with the fea
 2. `best-practices-researcher` — when the approach is unclear, or the topic involves security, payments, external APIs, or unfamiliar technology
 3. `framework-docs-researcher` — when using framework features that need version-specific guidance
 
-For each research agent, provide:
-- The feature description
-- Specific questions to answer
-- File paths or patterns to investigate (if known)
-- Any constraints or requirements already identified
+For each research agent, package the dispatch using `.github/skills/references/subagent-context-packet.md` so the isolated subagent receives objective, context, artifacts, scope boundaries, review criteria, and approval dependencies. Map the feature into packet fields:
+
+- Feature description → `## Objective` and `## Required Context`
+- Specific questions → `## Objective` and `## Review Criteria`
+- File paths or patterns → `## Relevant Artifacts` and `## Scope Boundaries`
+- Constraints or requirements already identified → `## Required Context` (Constraints / Non-goals)
 
 ### 4. Synthesize into Plan
 
