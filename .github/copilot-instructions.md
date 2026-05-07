@@ -12,7 +12,7 @@ Skill-driven prompt library for software development using GitHub Copilot in VS 
 - **Agents** (`.github/agents/`): 24 agents (19 specialists + 1 engineer + 1 implementer + 3 coordinators). Review agents include prompt injection guardrails. Use agents when work needs separate judgment, tool authority, runtime profile, isolation, or accountability. Active Java, Python, SQL, and AWS reviewers are included.
 - **Instructions** (`.github/instructions/`): Scoped context by file pattern.
 - **Prompt wrappers** (`.github/prompts/`): Thin host adapters that route to skills and declare host tools.
-- **Review checks** (`.github/checks/`): Small project-specific review criteria discovered by `/code-review`.
+- **Review checks** (`.github/skills/code-review/references/checks/`, optional product `.github/checks/`): Bundled and project-specific review criteria discovered by `/code-review`.
 
 ## Pipeline State
 
@@ -25,7 +25,7 @@ Read `.github/agent-context.md` for codebase patterns. Check `docs/solutions/` b
 ## Conventions
 
 - Follow existing patterns. Consistency over preference.
-- Keep primitive boundaries clear: workflows belong in skills, role-specific judgment belongs in agents, file-scoped conventions belong in instructions, host routing belongs in prompt wrappers, and narrow project review rules belong in checks.
+- Keep primitive boundaries clear: workflows belong in skills, role-specific judgment belongs in agents, file-scoped conventions belong in instructions, host routing belongs in prompt wrappers, bundled review checks belong in the owning skill's references, and narrow product-specific review rules belong in product `.github/checks`.
 - TDD: failing test → minimal fix → cleanup.
 - Surgical diffs only. No drive-by refactoring. Three similar lines > premature abstraction.
 - Never commit secrets or credentials. Validate input at boundaries. Parameterized queries.

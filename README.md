@@ -23,7 +23,7 @@ The system is skill-first. Skills are the reusable workflow contracts; agents, i
 
 **Prompt wrappers** — Thin host-facing adapters in `.github/prompts/*.prompt.md` that route to skills and declare host tools.
 
-**References and checks** — Skill references/assets provide dense examples, templates, and schemas loaded only when needed. `.github/checks/` adds review criteria consumed by prompt-library skills; checks are not a native Copilot primitive.
+**References and checks** — Skill references/assets provide dense examples, templates, schemas, and bundled review checks loaded only when needed. `.github/checks/` is reserved for product-specific review criteria; checks are not a native Copilot primitive.
 
 **Plans and solutions** — `docs/plans/` stores local specs/context packs, and `docs/solutions/` stores verified learnings.
 
@@ -139,7 +139,7 @@ The system gets smarter over time:
   skills/              23 skill directories
   instructions/        Scoped instructions (TypeScript, Python, Java, Spring Boot, PostgreSQL, AWS SDK)
   prompts/             Thin host-facing skill wrappers
-  checks/              Project-specific review checks discovered by /code-review
+  checks/              Optional product-specific review check examples
   copilot-instructions.md
   agent-context.md
 .vscode/mcp.json       MCP server config

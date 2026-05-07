@@ -14,7 +14,7 @@ Canonical primitive creator and maintainer for this prompt library. Use it to ke
 - Creating a new agent (`.github/agents/*.agent.md`)
 - Creating a new skill (`.github/skills/*/SKILL.md`)
 - Creating a new scoped instruction (`.github/instructions/*.instructions.md`)
-- Creating a new review check (`.github/checks/*.md`) or thin prompt wrapper (`.github/prompts/*.prompt.md`)
+- Creating a new review check (bundled under `.github/skills/code-review/references/checks/*.md` or product-owned `.github/checks/*.md`) or thin prompt wrapper (`.github/prompts/*.prompt.md`)
 - Creating or moving dense supporting material into skill `references/` or `assets/`
 - Creating or updating a solution doc under `docs/solutions/`
 - Modifying any prompt-library primitive
@@ -47,11 +47,11 @@ Default to a **skill** only when the request is a reusable workflow. Do not crea
 | Does it need separate judgment, tool authority, isolation, runtime profile, or accountability? | Agent |
 | Should it load automatically for matching file patterns? | Instruction |
 | Is it a host-facing slash command wrapper for an existing skill? | Prompt wrapper |
-| Is it a narrow project-specific review rule? | Review check |
+| Is it a narrow review-time rule? | Review check |
 | Is it dense examples, schema, checklist detail, or a template used only by one skill? | Reference or asset under the owning skill |
 | Is it a verified learning from completed work? | Solution doc |
 
-Do not create a new agent just to store reference material. Put long criteria in `references/`, team conventions in scoped instructions, and narrow review rules in `.github/checks/`.
+Do not create a new agent just to store reference material. Put long criteria in `references/`, team conventions in scoped instructions, bundled review rules under the owning skill's references, and product-specific review rules in product `.github/checks/`.
 
 ### Host Mapping
 
@@ -74,7 +74,7 @@ Do not claim feature parity across hosts. When a host lacks a primitive, documen
 Before writing files:
 
 1. **Classify the primitive** using the decision rules above.
-2. **Check for overlap** in `.github/skills/`, `.github/agents/`, `.github/instructions/`, `.github/checks/`, `.github/prompts/`, skill `references/`, and `docs/solutions/`.
+2. **Check for overlap** in `.github/skills/`, `.github/agents/`, `.github/instructions/`, `.github/prompts/`, skill `references/`, optional product `.github/checks/`, and `docs/solutions/`.
 3. **State the decision** before editing: "This should be a [primitive] because [boundary]."
 4. **Define triggers and negative triggers** for discovery when the primitive is user/model selectable.
 5. **Declare permissions/tool needs** using the smallest sufficient tool set.
@@ -115,7 +115,8 @@ Use for narrow review-time criteria that `/code-review` discovers, such as compl
 Read `references/check-template.md`.
 
 Required file:
-- `.github/checks/<name>.md`
+- `.github/skills/code-review/references/checks/<name>.md` for prompt-library-managed checks
+- `.github/checks/<name>.md` only for product-repo overlays
 
 ### Prompt Wrapper
 
@@ -269,7 +270,7 @@ Prompt wrappers in `.github/prompts/` should be thin:
 
 ## Review Check Creation
 
-Create `.github/checks/<name>.md` when a team wants a narrow review criterion that `/code-review` should discover.
+Create `.github/skills/code-review/references/checks/<name>.md` when this prompt library ships a narrow review criterion that `/code-review` should discover. Product repositories may create `.github/checks/<name>.md` for product-owned overlays without modifying global prompt-library artifacts.
 
 Required shape:
 
@@ -340,5 +341,5 @@ After creating an agent, skill, or instruction, verify:
 - [ ] For skills: inputs, outputs, mode behavior, gates, verification, error handling, and trigger examples are present
 - [ ] For instructions: `applyTo` glob pattern matches target files, conventions are specific and actionable
 - [ ] For prompt wrappers: body routes to the matching skill instead of duplicating workflow logic
-- [ ] For checks: follows `.github/checks/README.md` format and stays focused on one concern
+- [ ] For checks: follows `.github/checks/README.md` format, lives in the correct bundled or product-owned location, and stays focused on one concern
 - [ ] Documentation updated: CLAUDE.md, AGENTS.md, README.md, copilot-instructions.md, repository context docs, and architecture docs if the standard changed

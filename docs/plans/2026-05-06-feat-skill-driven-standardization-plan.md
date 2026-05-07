@@ -42,7 +42,7 @@ The current structure now has 23 skills, 24 agents, scoped instructions, prompt 
 - [x] Update creator skill and templates to force skill-vs-agent-vs-instruction decisions
 - [x] Update engineer routing to prefer skills and delegate only for separate judgment, authority, or isolation
 - [x] Update planning and work skills to preserve context pack, verification plan, and review routing sections
-- [x] Add `.github/checks/primitive-boundary-quality.md`
+- [x] Add `.github/skills/code-review/references/checks/primitive-boundary-quality.md`
 
 ### Phase 4: Platform and Inventory Cleanup
 - [x] Remove active retired framework/editorial specialist agents, instructions, and references
@@ -77,7 +77,7 @@ The current structure now has 23 skills, 24 agents, scoped instructions, prompt 
 - `.github/agents/plan-coordinator.agent.md` — coordinator output contract
 - `.github/skills/start/SKILL.md` — intake routing language
 - `.github/skills/work-on-task/SKILL.md` — context/verification pickup
-- `.github/checks/primitive-boundary-quality.md` — review check
+- `.github/skills/code-review/references/checks/primitive-boundary-quality.md` — bundled review check
 - `.github/agents/java-reviewer.agent.md` — Java review agent
 - `.github/agents/python-reviewer.agent.md` — Python review agent
 - `.github/agents/sql-reviewer.agent.md` — SQL/data review agent
@@ -102,7 +102,7 @@ The current structure now has 23 skills, 24 agents, scoped instructions, prompt 
 - [x] Inspect `git diff --check` for whitespace and patch quality
 - [x] Confirm all modified Markdown files still have valid frontmatter fences where applicable
 - [x] Confirm docs consistently present 23 skills and skill-first architecture
-- [x] Confirm new check follows `.github/checks/README.md` format
+- [x] Confirm new check follows `.github/checks/README.md` format from the bundled checks location
 
 ## Risk & Review Routing
 

@@ -14,7 +14,7 @@ The system is skill-first. Skills are the primary reusable workflow contracts; a
 - **Agents** (`.github/agents/*.agent.md`): 24 agents — 19 stateless domain experts, 1 engineer, 1 code-implementer, plus 3 coordinator/navigation agents. Agents are used when work needs separate judgment, tool authority, runtime profile, isolation, or accountability. Active language/cloud/data reviewers include Java, Python, SQL, and AWS.
 - **Instructions** (`.github/instructions/*.instructions.md`): Scoped context that activates based on file patterns.
 - **Prompt wrappers** (`.github/prompts/*.prompt.md`): Thin host-facing adapters that route to skills and declare host tools.
-- **Review checks** (`.github/checks/*.md`): Project-specific review criteria discovered by `/code-review`.
+- **Review checks** (`.github/skills/code-review/references/checks/*.md`, optional product `.github/checks/*.md`): Bundled and product-specific review criteria discovered by `/code-review`.
 
 ## Connected Pipeline
 
@@ -35,7 +35,7 @@ Plan files in `docs/plans/` track state via YAML frontmatter (`status`, `plan_lo
   skills/          — 23 skill directories with SKILL.md
   instructions/    — scoped instructions (TypeScript, Python, Java, Spring Boot, PostgreSQL, AWS SDK)
   prompts/         — thin prompt wrappers that route to skills
-  checks/          — local review checks discovered by /code-review
+  checks/          — optional product-specific review check examples
   copilot-instructions.md — shared context for all agents
   agent-context.md — prompt-library repo knowledge, not a global Copilot primitive
 .vscode/
@@ -85,7 +85,7 @@ Skills follow proven design patterns from Google ADK and Compound Engineering:
 - **Pipeline skills** support standalone mode (skip state validation) and pipeline mode (enforce state machine). Mode detected from plan file presence.
 - **Error handling** is skill-specific, referencing shared patterns from `.github/skills/references/error-handling-patterns.md`.
 - **All skills** have trigger examples (3 should-trigger, 3 should-not) and negative triggers for confusable pairs.
-- **Primitive boundary checks** in `.github/checks/` catch skill-vs-agent-vs-instruction drift during reviews.
+- **Primitive boundary checks** bundled under `.github/skills/code-review/references/checks/` catch skill-vs-agent-vs-instruction drift during reviews.
 
 ## Standardization Reference
 

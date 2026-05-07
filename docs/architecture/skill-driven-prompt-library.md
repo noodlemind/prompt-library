@@ -16,9 +16,21 @@ The current library already has a strong compound-engineering base:
 - Plan files in `docs/plans/` that preserve state, research notes, implementation notes, activity logs, and review findings
 - Specialist agents with bounded responsibilities and coordinator agents for planning and review
 - Skills using progressive disclosure, trigger examples, references, assets, and standalone/pipeline modes
-- Review checks under `.github/checks/` and durable learnings under `docs/solutions/`
+- Bundled review checks under skill references, optional product checks under `.github/checks/`, and durable learnings under `docs/solutions/`
 
 The main gap is presentation and governance. The repo historically explains itself as an agent collection with supporting skills. The standardized model should be the inverse: **skills are the primary reusable contract; agents, instructions, prompt wrappers, checks, plans, and solution docs support those skills.**
+
+## External Tool Alignment
+
+The global install and primitive boundaries mirror current agentic IDE patterns rather than inventing a host-specific plugin model:
+
+- [VS Code Copilot custom instructions](https://code.visualstudio.com/docs/copilot/customization/custom-instructions) separates always-on instructions from file-based `.instructions.md` files. This supports global team standards plus scoped language/framework standards.
+- [GitHub Copilot for JetBrains](https://docs.github.com/en/copilot/customizing-copilot/adding-custom-instructions-for-github-copilot) reliably supports a local `global-copilot-instructions.md` file, so the hydrate task compiles all instruction standards into that single IntelliJ path.
+- [Cline Rules](https://docs.cline.bot/customization/cline-rules), [Cursor Rules](https://docs.cursor.com/en/context), and [Windsurf Rules](https://docs.windsurf.com/windsurf/cascade/memories) all separate global/user rules from workspace/project rules. Product repositories can add their own product-owned overlays, but prompt-library source artifacts stay global.
+- [Windsurf Skills and Workflows](https://docs.windsurf.com/windsurf/cascade/memories) and [Continue prompts](https://docs.continue.dev/customize/prompts) treat repeatable task behavior and specialist review guidance as reusable procedural assets, which matches this repo's skill-first model.
+- [Plandex context management](https://docs.plandex.ai/core-concepts/context-management/) keeps context associated with plans and loads only relevant context per step. This maps to `docs/plans/` acting as the local context pack for capture -> plan -> work -> review.
+
+The practical rule is: global instructions carry broad behavior, scoped instructions carry file-pattern standards, skills carry procedures and bundled references, agents carry isolated judgment, and product repos may add product-specific context or review overlays without receiving prompt-library source copies.
 
 ## Primitive Model
 
@@ -28,7 +40,7 @@ The main gap is presentation and governance. The repo historically explains itse
 | Agent | `.github/agents/*.agent.md` | Isolated role with separate judgment, tool budget, runtime profile, or accountability | Work needs a distinct reviewer, researcher, actor, coordinator, or full-cycle engineer |
 | Instruction | `.github/instructions/*.instructions.md` | Scoped coding conventions activated by file pattern | A language, framework, or team convention should apply automatically to matching files |
 | Prompt wrapper | `.github/prompts/*.prompt.md` | Host-facing slash-command adapter that points at a skill | A host needs explicit prompt files or extra tool routing for a skill |
-| Review check | `.github/checks/*.md` | Project-specific review criterion discovered by `/code-review` | A team wants a small, repeatable review rule without editing core agents |
+| Review check | `.github/skills/code-review/references/checks/*.md` for library-managed checks; product repos may add `.github/checks/*.md` | Review criterion discovered by `/code-review` | A team wants a small, repeatable review rule without editing core agents |
 | Reference | `.github/skills/**/references/*.md` or `.github/skills/**/assets/*` | Supporting material loaded only by the owning skill | A skill needs dense examples, schemas, templates, or criteria without loading them every time |
 | Plan file | `docs/plans/*.md` | Local spec, state machine, context pack, and execution ledger | Work needs capture, planning, phased execution, review, and continuity |
 | Solution doc | `docs/solutions/**/*.md` | Verified learning that should be reusable in future work | A completed fix reveals a durable pattern, gotcha, or prevention rule |
@@ -114,7 +126,7 @@ Every agent should make these details explicit:
 - What not to report
 - Prompt-injection guardrails for reviewers and actors
 
-Agents should not store long reference material. Put reusable procedures in skills and dense criteria in `references/` or `.github/checks/`.
+Agents should not store long reference material. Put reusable procedures in skills and dense criteria in skill `references/`; use `.github/checks/` only for product-owned review overlays.
 
 ## Standard Workflow
 

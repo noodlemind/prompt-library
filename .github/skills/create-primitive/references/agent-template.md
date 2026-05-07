@@ -2,7 +2,7 @@
 
 Use this template when creating a new agent file at `.github/agents/<name>.agent.md`.
 
-Before creating an agent, confirm the primitive decision rule from `docs/architecture/skill-driven-prompt-library.md`: create an agent only for separate judgment, tool authority, runtime profile, isolation, or accountability. Reusable procedures belong in skills; scoped conventions belong in instructions; narrow review rules belong in `.github/checks/`.
+Before creating an agent, confirm the primitive decision rule from `docs/architecture/skill-driven-prompt-library.md`: create an agent only for separate judgment, tool authority, runtime profile, isolation, or accountability. Reusable procedures belong in skills; scoped conventions belong in instructions; narrow bundled review rules belong in the owning skill's references.
 
 ## Agent File Structure
 
@@ -36,7 +36,7 @@ Do not use this agent for [confusable workflow]; use `[skill/check/instruction]`
 
 - Apply `[relevant skill]` when [condition]
 - Read available repository context (`README.md`, `docs/agent-context.md`, `docs/codebase-snapshot.md`, `docs/solutions/`, and `.github/agent-context.md` only when working in this prompt-library repo) when project history matters
-- Keep long criteria in `references/` or `.github/checks/`, not in this agent prompt
+- Keep long criteria in `references/`, not in this agent prompt
 
 ## What Matters
 - **[Criterion]**: [Judgment criteria — what to look for and why it matters]

@@ -9,7 +9,8 @@ This repository is a skill-driven prompt library containing AI agent systems:
 - `.github/skills/` — 23 skills forming the connected pipeline, primitive creation, domain workflows, README maintenance, quick Q&A, and utilities
 - `.github/instructions/` — scoped instructions (TypeScript, Python, Java, Spring Boot, PostgreSQL, AWS SDK)
 - `.github/prompts/` — thin host-facing wrappers that route to skills and declare host tools
-- `.github/checks/` — local review checks discovered by `/code-review`
+- `.github/skills/code-review/references/checks/` — bundled review checks discovered by `/code-review`
+- `.github/checks/` — optional product-specific review check examples
 - `docs/plans/` — issue and plan files with state machine tracking
 - `docs/architecture/` — skill-driven standard and architecture notes
 - `docs/solutions/` — documented learnings from solved problems
@@ -72,4 +73,4 @@ Five orchestrating skills (code-review, plan-issue, deepen-plan, work-on-task, e
 The `engineer` agent understands requirements, routes to the right skill/flow, investigates, plans, and orchestrates. It delegates implementation to `code-implementer` for bounded execution tasks, and delegates to specialist reviewers/researchers when separate judgment, authority, or isolation is useful. It follows a workflow of Understand → Route → Investigate → Plan → Implement → Verify with user consultation checkpoints between phases. It integrates with the pipeline by reading/writing plan files and maintaining state machine fields. The `/engineer` skill is its entry point.
 
 ### Skill-Driven Standardization
-`docs/architecture/skill-driven-prompt-library.md` defines primitive boundaries for teams adapting this repo. Prompt wrappers stay thin, workflows live in skills, long criteria go in `references/` or `.github/checks/`, file-scoped conventions go in `.github/instructions/`, and solution docs graduate to `agent-context.md` only when they capture durable project-level knowledge.
+`docs/architecture/skill-driven-prompt-library.md` defines primitive boundaries for teams adapting this repo. Prompt wrappers stay thin, workflows live in skills, long criteria and library-managed checks go in skill `references/`, product-owned review overlays can live in product `.github/checks/`, file-scoped conventions go in `.github/instructions/`, and solution docs graduate to `agent-context.md` only when they capture durable project-level knowledge.

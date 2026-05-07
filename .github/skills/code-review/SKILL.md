@@ -79,7 +79,7 @@ Read `references/review-personas.md` for the full persona catalog.
 ### 4b. Discover Project Checks
 
 Scan available check directories for check files (`.md` files with `name:` frontmatter):
-- global checks under `%USERPROFILE%\.copilot\checks` on Windows, if available
+- bundled library checks under this skill's `references/checks/` directory
 - workspace `.github/checks/`, if the product repo defines project-specific checks
 
 For each check:

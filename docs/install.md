@@ -24,11 +24,10 @@ C:\Users\<you>\.copilot\agents
 C:\Users\<you>\.copilot\skills
 C:\Users\<you>\.copilot\instructions
 C:\Users\<you>\.copilot\prompts
-C:\Users\<you>\.copilot\checks
 C:\Users\<you>\AppData\Local\github-copilot\intellij\global-copilot-instructions.md
 ```
 
-`checks` are copied as support artifacts for prompt-library skills. They are not a standard Copilot primitive.
+Library-managed review checks are bundled inside the `/code-review` skill under `skills\code-review\references\checks`. They are not copied to a separate global checks folder because checks are not a standard Copilot primitive.
 
 ## VS Code Hydrate Task
 
@@ -79,7 +78,7 @@ VS Code supports user-level instruction files, prompt files, custom agents, and 
 | Agents | `%USERPROFILE%\.copilot\agents\*.agent.md` | Available across workspaces when configured as custom agent files |
 | Skills | `%USERPROFILE%\.copilot\skills\<skill>\SKILL.md` | Available as personal skills and slash commands |
 | Prompts | `%USERPROFILE%\.copilot\prompts\*.prompt.md` | Available as user prompt files and slash commands |
-| Checks | `%USERPROFILE%\.copilot\checks\*.md` | Prompt-library support files read by library skills; not a native Copilot primitive |
+| Bundled checks | `%USERPROFILE%\.copilot\skills\code-review\references\checks\*.md` | Skill-local review criteria loaded by `/code-review`; not a native Copilot primitive |
 
 `agent-context.md` is not a VS Code global customization primitive. Treat it as repository knowledge, not as something VS Code automatically discovers globally. For this prompt-library repo, `.github/agent-context.md` records library-specific learnings. For product repositories, persistent product context should live in product-owned docs such as `docs/plans/`, `docs/solutions/`, `docs/codebase-snapshot.md`, `docs/agent-context.md`, or `README.md` when a skill intentionally creates or updates them.
 
@@ -93,6 +92,7 @@ Use this policy:
 
 - Run the Hydrate task from VS Code to keep `%USERPROFILE%\.copilot` current.
 - The Hydrate task also writes IntelliJ IDEA's global Copilot instructions file at `%LOCALAPPDATA%\github-copilot\intellij\global-copilot-instructions.md`.
+- The IntelliJ global instructions file is compiled from every `.github/instructions/*.instructions.md` file so Java, Python, PostgreSQL, AWS SDK, Spring Boot, TypeScript, and prompt-library workflow standards are all present.
 - In IntelliJ IDEA, confirm **global Copilot instructions** are enabled through the GitHub Copilot settings UI.
 - Verify whether the installed IntelliJ Copilot plugin discovers global prompt files and custom agents. If it does not, users can still manually invoke the workflow names in chat, but slash-command and agent-dropdown behavior may differ from VS Code.
 
@@ -144,7 +144,10 @@ $Retired = @(
   "agents\every-style-editor.agent.md",
   "instructions\rails.instructions.md",
   "prompts\create-agent-skills.prompt.md",
-  "skills\create-agent-skills"
+  "skills\create-agent-skills",
+  "checks\README.md",
+  "checks\skill-description-quality.md",
+  "checks\primitive-boundary-quality.md"
 )
 
 foreach ($Relative in $Retired) {
@@ -156,13 +159,28 @@ Sync-PromptLibraryDir "$PromptLibrary\.github\skills" "$Copilot\skills"
 Sync-PromptLibraryDir "$PromptLibrary\.github\agents" "$Copilot\agents"
 Sync-PromptLibraryDir "$PromptLibrary\.github\instructions" "$Copilot\instructions"
 Sync-PromptLibraryDir "$PromptLibrary\.github\prompts" "$Copilot\prompts"
-Sync-PromptLibraryDir "$PromptLibrary\.github\checks" "$Copilot\checks"
 
 $IntelliJ = "$env:LOCALAPPDATA\github-copilot\intellij"
 New-Item -ItemType Directory -Force $IntelliJ | Out-Null
-$Content = Get-Content "$PromptLibrary\.github\instructions\prompt-library-global.instructions.md" -Raw
-$Content = $Content -replace '(?s)^---\r?\n.*?\r?\n---\r?\n', ''
-Set-Content "$IntelliJ\global-copilot-instructions.md" $Content -Encoding utf8
+$InstructionRoot = "$PromptLibrary\.github\instructions"
+if (Test-Path $InstructionRoot) {
+  $InstructionFiles = @(
+    Get-ChildItem $InstructionRoot -Filter "*.instructions.md" |
+      Sort-Object @{ Expression = { if ($_.Name -eq "prompt-library-global.instructions.md") { 0 } else { 1 } } }, Name
+  )
+
+  $Parts = @(
+    $InstructionFiles | ForEach-Object {
+      $Text = Get-Content $_.FullName -Raw
+      $Text = $Text -replace '(?s)^---\r?\n.*?\r?\n---\r?\n', ''
+      "<!-- Source: $($_.Name) -->`r`n$($Text.Trim())"
+    }
+  )
+
+  if ($Parts.Count -gt 0) {
+    Set-Content "$IntelliJ\global-copilot-instructions.md" ($Parts -join "`r`n`r`n") -Encoding utf8
+  }
+}
 ```
 
 ## Verification Checklist

@@ -12,7 +12,7 @@ This is a skill-driven prompt library for software development teams. The primar
 - **Agents** (`.github/agents/*.agent.md`): 24 agents — 19 stateless domain experts using judgment-criteria design, 1 engineer, 1 code-implementer, plus 3 coordinator/navigation agents. Agents exist for separate judgment, tool authority, runtime profile, isolation, or accountability. Active Java, Python, SQL, and AWS reviewers are included.
 - **Instructions** (`.github/instructions/*.instructions.md`): Scoped context that activates based on file patterns (TypeScript, Python, Java, Spring Boot, PostgreSQL, AWS SDK).
 - **Prompt wrappers** (`.github/prompts/*.prompt.md`): Thin host-facing adapters that route to skills and declare host tools.
-- **Review checks** (`.github/checks/*.md`): Small project-specific criteria discovered by `/code-review`.
+- **Review checks** (`.github/skills/code-review/references/checks/*.md`, optional product `.github/checks/*.md`): Bundled and project-specific criteria discovered by `/code-review`.
 
 ### Connected Pipeline
 
@@ -40,7 +40,7 @@ Plan files live in `docs/plans/`. Activity logs in `## Activity` sections provid
   skills/              — 23 skill directories with SKILL.md
   instructions/        — scoped instructions (TypeScript, Python, Java, Spring Boot, PostgreSQL, AWS SDK)
   prompts/             — thin prompt wrappers that route to skills
-  checks/              — project-specific review checks
+  checks/              — optional product-specific review check examples
   copilot-instructions.md — shared context for all agents
   agent-context.md     — prompt-library repo knowledge
 .vscode/

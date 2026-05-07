@@ -1,13 +1,15 @@
 # Review Checks
 
-User-definable automated review criteria. Each `.md` file in this directory defines a check that `/code-review` discovers and applies during reviews.
+Product-repo automated review criteria. Each `.md` file in this directory defines a workspace-specific check that `/code-review` discovers and applies during reviews.
+
+Library-managed checks are bundled with the `/code-review` skill under `.github/skills/code-review/references/checks/` so global installations can load them with the skill. Use `.github/checks/` only for product-specific additions.
 
 ## How It Works
 
-1. `/code-review` scans `.github/checks/` for check files
+1. `/code-review` scans bundled checks first, then workspace `.github/checks/` for product-specific check files
 2. Each check spawns a focused review subagent with the check's criteria
 3. Findings use the same severity (P1-P3) and confidence (0.0-1.0) scoring as persona reviewers
-4. Project teams add their own checks without modifying agents or skills
+4. Project teams add their own workspace checks without modifying global agents or skills
 
 ## Check Format
 
@@ -48,9 +50,9 @@ globs: "**/*.java"
 - Use examples to show good/bad patterns
 - Reference external docs when the full convention is too long to inline
 
-## Adding Project-Specific Checks
+## Adding Product-Specific Checks
 
-Consumer projects copy this directory to their repo and add checks for their domain:
+Product repositories may create their own `.github/checks/` directory for product-owned review overlays:
 
 ```
 .github/checks/
