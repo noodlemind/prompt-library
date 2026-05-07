@@ -59,9 +59,9 @@ Define what the new or changed primitive must do.
 - **Misrouting risks:**
 - **Maintenance risks:**
 
-## Validation Coverage
+## Eval Coverage
 
-List validation scenarios or checks that should cover this gap.
+List eval cases that already cover this gap or need to be added before tuning.
 
 | Case id | Priority | Expected behavior |
 |---|---|---|

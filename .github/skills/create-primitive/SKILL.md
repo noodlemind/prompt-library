@@ -86,12 +86,12 @@ Before writing files:
 
 When invoked because `@engineer` or another skill found a missing capability, require `.github/skills/references/capability-gap-proposal.md` before creating or substantially changing primitives.
 
-1. Read the proposal and verify the requested outcome, observed gap, overlap check, primitive recommendation, risks, and validation coverage.
+1. Read the proposal and verify the requested outcome, observed gap, overlap check, primitive recommendation, risks, and eval coverage.
 2. If the proposal is missing or incomplete, stop and produce the missing sections instead of creating files.
 3. Apply the primitive decision rules even if the user asked for a specific primitive type. A requested "agent" may be a skill, check, instruction, or reference instead.
 4. Ask for human approval before writing or changing the primitive.
-5. Keep the change scoped to the approved primitive and its required wrapper, references, checks, docs, and validation artifacts.
-6. Document how the primitive's routing, HITL, delegation, safety, verification, or cost/request behavior will be validated.
+5. Keep the change scoped to the approved primitive and its required wrapper, references, checks, docs, and eval cases.
+6. Add or update harness eval cases when the primitive affects routing, HITL, delegation, safety, verification, or cost/request discipline.
 7. Record any approval conditions in the plan, tuning log, or proposal artifact.
 
 Do not create primitives in non-interactive mode unless prior human approval is already recorded.

@@ -77,6 +77,7 @@ Choose the workflow before coding:
 | Primitive creation/change | `/create-primitive` |
 | Missing reusable capability | Capability-gap proposal, human approval, then `/create-primitive` |
 | Data-integrity or concurrency bug | `/tdd-fix` if isolated and reproducible; otherwise `/capture-issue` -> `/plan-issue` with Java/SQL/performance risk routing |
+| Harness eval or tuning request | `/harness-eval` |
 
 Record the route decision in the plan file or response. If choosing an inline path for multi-step work, state why the local-first pipeline is not being used.
 
@@ -201,7 +202,7 @@ Invoke specialist agents as subagents when their focused expertise would outperf
 | Systematic bug reproduction | `bug-reproduction-validator` | Bug report, steps to reproduce, environment details |
 | Code evolution context | `git-history-analyzer` | File paths, what you want to understand about history |
 | Full code review | `code-review-coordinator` | All changed files, PR context, project type |
-| Missing capability | `/create-primitive` after approval | Capability-gap proposal, overlap check, primitive boundary rationale, validation coverage |
+| Missing capability | `/create-primitive` after approval | Capability-gap proposal, overlap check, primitive boundary rationale, eval coverage |
 
 ## User Consultation Moments
 

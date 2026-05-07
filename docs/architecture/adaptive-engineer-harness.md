@@ -4,7 +4,7 @@
 
 The Adaptive Engineer Harness makes `@engineer` the accountable coordinator for software work while keeping expertise expandable, reviewable, and measurable. The harness keeps the system skill-first: known work routes to known skills, focused judgment routes to specialist agents, and missing reusable capability becomes a proposed primitive only after human approval.
 
-The goal is not to make one prompt know everything. The goal is to make `@engineer` behave like a disciplined senior engineer with access to a network of experts, templates, local context, and a human liaison for approval when the next step changes risk, scope, or system capability.
+The goal is not to make one prompt know everything. The goal is to make `@engineer` behave like a disciplined senior engineer with access to a network of experts, templates, local context, evals, and a human liaison for approval when the next step changes risk, scope, or system capability.
 
 ## Runtime Model
 
@@ -17,7 +17,7 @@ The goal is not to make one prompt know everything. The goal is to make `@engine
 5. Ask the human for approval before risky decisions or capability expansion.
 6. Implement or orchestrate implementation.
 7. Verify with evidence.
-8. Record misses as capability gaps or validation needs.
+8. Feed misses into evals and tuning experiments.
 
 This creates three expansion mechanisms:
 
@@ -27,6 +27,23 @@ This creates three expansion mechanisms:
 | Separate judgment, authority, isolation, or accountability | Agent via `/create-primitive` | Required |
 | Narrow review criterion | Review check via `/create-primitive` | Required |
 
+## Provider Policy for Evals
+
+User-facing evals run through the VS Code GitHub Copilot localhost bridge:
+
+```yaml
+provider: copilot-localhost
+base_url: http://127.0.0.1:3001
+model_policy: approved-only
+default_model: auto
+allow_external_api_keys: false
+allow_local_models: false
+```
+
+This consumes the user or organization's existing GitHub Copilot subscription and included or premium requests. It must not download models and must not require external API keys.
+
+Maintainers may run exploratory evals with paid subscriptions or local models, but those runs are advisory. Release candidates must pass the same gate on the Copilot localhost provider, and eval logs must record provider and model.
+
 ## Core Contracts
 
 The harness is enforced through shared contracts under `.github/skills/references/`:
@@ -34,6 +51,8 @@ The harness is enforced through shared contracts under `.github/skills/reference
 - `capability-gap-proposal.md`: records why an existing skill, agent, instruction, check, or reference is insufficient before creating a new primitive.
 - `subagent-context-packet.md`: standardizes delegated work so isolated subagents receive the task, relevant code, constraints, risks, and expected output.
 - `human-approval-policy.md`: defines when the engineer must pause for the human liaison.
+- `eval-case-template.md`: standardizes eval cases for routing, HITL, delegation, verification, safety, and output quality.
+- `agent-tuning-experiment-template.md`: standardizes one-change-at-a-time tuning experiments.
 
 ## Human-In-The-Loop Gates
 
@@ -43,7 +62,7 @@ The engineer must ask for explicit approval before:
 - Choosing a strategy for concurrency fixes, schema/data changes, destructive operations, or broad refactors.
 - Modifying production data, migrations, persistence behavior, auth, permissions, secrets, or public contracts.
 - Expanding scope beyond the active plan's impacted files.
-- Accepting unverified tool output as release evidence.
+- Accepting a local/subscription eval result as anything more than advisory.
 
 When non-interactive mode is unavoidable, the engineer must choose the lowest-risk reversible path and log the assumption. It must not create new primitives or perform destructive/risky changes without approval.
 
@@ -59,6 +78,20 @@ Delegation is useful when the work benefits from separate judgment, domain exper
 - Risk level and approval dependencies.
 
 Delegation does not remove accountability. `@engineer` reviews results, integrates findings, runs verification, and presents evidence to the user.
+
+## Eval And Tuning Loop
+
+The harness is improved through a frozen eval suite:
+
+1. Run a baseline eval against seeded cases.
+2. Create one candidate branch per tuning idea.
+3. Change one prompt, skill, template, or check area.
+4. Run the frozen eval suite.
+5. Log provider, model, score, request count estimate, and decision.
+6. Keep the change only if aggregate score improves, no P1 case regresses, and human review approves.
+7. Confirm release candidates against Copilot localhost before merging.
+
+Do not modify the eval rubric and tuned prompt in the same candidate. Add new eval cases in a separate preparatory change.
 
 ## Sample Flow: Transaction Race Condition
 
@@ -80,3 +113,12 @@ Expected engineer behavior:
 10. **Present**: Report root cause, chosen strategy, why alternatives were not selected, evidence from repeated concurrent runs, and remaining risk.
 
 If the engineer encounters this class of issue repeatedly and existing skills are not sufficient, it should prepare a capability-gap proposal and ask the human whether to create a dedicated primitive. The sample does not imply that a transaction-concurrency skill ships by default.
+
+## Release Gate
+
+Before a harness release:
+
+- Copilot localhost provider must pass.
+- Aggregate eval score must be at least 85%.
+- P1 cases must pass routing, human approval, and safety.
+- Maintainer local/subscription runs must be confirmed against Copilot localhost before they influence release decisions.

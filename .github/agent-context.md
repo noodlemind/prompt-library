@@ -6,7 +6,7 @@ This file contains accumulated knowledge about the codebase, discovered by agent
 
 This repository is a skill-driven prompt library containing AI agent systems:
 - `.github/agents/` — 24 agents (19 specialists + 1 engineer + 1 implementer + 3 coordinators, judgment-criteria style)
-- `.github/skills/` — 23 skills forming the connected pipeline, primitive creation, domain workflows, README maintenance, quick Q&A, and utilities
+- `.github/skills/` — 24 skills forming the connected pipeline, primitive creation, harness evals, domain workflows, README maintenance, quick Q&A, and utilities
 - `.github/instructions/` — scoped instructions (TypeScript, Python, Java, Spring Boot, PostgreSQL, AWS SDK)
 - `.github/prompts/` — thin host-facing wrappers that route to skills and declare host tools
 - `.github/skills/code-review/references/checks/` — bundled review checks discovered by `/code-review`
@@ -27,7 +27,7 @@ This repository is a skill-driven prompt library containing AI agent systems:
 - Coordinators dispatch subagents in parallel batches (3-4 at a time) rather than sequentially
 - All review agents include prompt injection guardrails (Guardrails section before Mission)
 - Skills follow progressive disclosure (frontmatter → body → references)
-- The connected pipeline: `/brainstorming` (optional) → `/capture-issue` → `/plan-issue` → `/deepen-plan` (optional) → `/work-on-task` → `/code-review` → `/compound-learnings`. `/btw` is quick Q&A outside the pipeline. `/project-readme` is documentation maintenance outside implementation planning. `/create-primitive` is the canonical primitive creator for skills, agents, instructions, checks, wrappers, references, and solution docs. `/java`, `/python`, `/sql`, and `/aws` are reusable domain workflow skills that pair with scoped instructions and specialist reviewers.
+- The connected pipeline: `/brainstorming` (optional) → `/capture-issue` → `/plan-issue` → `/deepen-plan` (optional) → `/work-on-task` → `/code-review` → `/compound-learnings`. `/btw` is quick Q&A outside the pipeline. `/project-readme` is documentation maintenance outside implementation planning. `/create-primitive` is the canonical primitive creator for skills, agents, instructions, checks, wrappers, references, and solution docs. `/harness-eval` evaluates the Adaptive Engineer Harness. `/java`, `/python`, `/sql`, and `/aws` are reusable domain workflow skills that pair with scoped instructions and specialist reviewers.
 - State machine: `status` (open/planned/in-progress/review/done), `plan_lock`, `phase`
 - Activity logs in plan files provide session continuity
 - Plan files are the local context pack. Standard sections include `## Context`, `## Acceptance Criteria`, `## Research Notes`, `## Impacted Files`, `## Verification Plan`, `## Risk & Review Routing`, `## Implementation Notes`, `## Review Findings`, and `## Activity`.
@@ -74,6 +74,9 @@ The `engineer` agent understands requirements, routes to the right skill/flow, i
 
 ### Adaptive Engineer Harness
 `@engineer` is the central coordinator for adaptive capability expansion. It routes to known skills first, uses `.github/skills/references/subagent-context-packet.md` for delegated work, and uses `.github/skills/references/human-approval-policy.md` before risky strategy choices. Missing reusable capability must be documented with `.github/skills/references/capability-gap-proposal.md` and then routed to `/create-primitive` after human approval. Architecture details live in `docs/architecture/adaptive-engineer-harness.md`.
+
+### Harness Evals
+`/harness-eval` scores `@engineer` routing, HITL, delegation, primitive boundaries, verification, safety, and provider discipline. User default evals use the VS Code GitHub Copilot localhost bridge at `http://127.0.0.1:3001` with `/availableModels`, `/approvedModels`, and `/v1/chat/completions`; they must not require external API keys or model downloads. Maintainer local/subscription runs are advisory until confirmed against the Copilot localhost provider.
 
 ### Skill-Driven Standardization
 `docs/architecture/skill-driven-prompt-library.md` defines primitive boundaries for teams adapting this repo. Prompt wrappers stay thin, workflows live in skills, long criteria and library-managed checks go in skill `references/`, product-owned review overlays can live in product `.github/checks/`, file-scoped conventions go in `.github/instructions/`, and solution docs graduate to `agent-context.md` only when they capture durable project-level knowledge.
