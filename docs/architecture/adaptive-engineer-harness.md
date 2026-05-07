@@ -19,13 +19,17 @@ The goal is not to make one prompt know everything. The goal is to make `@engine
 7. Verify with evidence.
 8. Record misses as capability gaps or validation needs.
 
-This creates three expansion mechanisms:
+Expansion uses `/create-primitive` across all primitive types:
 
-| Expansion need | Mechanism | Approval |
+| Expansion need | Primitive | Approval |
 |---|---|---|
-| Reusable workflow, checklist, or protocol | Skill via `/create-primitive` | Required |
-| Separate judgment, authority, isolation, or accountability | Agent via `/create-primitive` | Required |
-| Narrow review criterion | Review check via `/create-primitive` | Required |
+| Reusable workflow, checklist, generator, reviewer protocol, or pipeline step | Skill | Required |
+| Separate judgment, authority, isolation, runtime profile, or accountability | Agent | Required |
+| File-scoped convention that should load by pattern | Instruction | Required |
+| Host-facing route to an existing skill | Prompt wrapper | Required |
+| Narrow review-time criterion | Review check | Required |
+| Dense supporting material, template, schema, examples, or assets | Reference or asset | Required |
+| Verified learning from completed work | Solution doc | Required |
 
 ## Core Contracts
 

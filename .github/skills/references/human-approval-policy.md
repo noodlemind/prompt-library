@@ -12,8 +12,6 @@ Ask the human before:
 - Touching auth, permissions, secrets, tenant isolation, encryption, or public API contracts.
 - Running destructive operations, deleting files, resetting state, force pushing, or changing generated artifacts that may be consumed downstream.
 - Starting broad refactors, cross-cutting rewrites, framework migrations, or changes outside the active plan's impacted files.
-- Accepting a maintainer local/subscription eval result as release evidence.
-- Spending substantial paid model requests beyond the configured eval budget.
 
 ## Approval Request Format
 
@@ -32,6 +30,15 @@ Use this concise structure:
 **Rollback/containment:** [How risk is limited]
 ```
 
+## Response Interpretation
+
+Agents must interpret the human's reply against four states before acting:
+
+- **Approved** — proceed with the chosen option; treat any conditions as constraints.
+- **Rejected** — log the rejection in the relevant plan or proposal artifact and stop.
+- **Deferred** — set the work item to `needs-info` and stop until the human resumes.
+- **Ambiguous** — re-present the options before proceeding; do not assume intent.
+
 ## Non-Interactive Mode
 
 When the user is unavailable and the task cannot wait:
@@ -41,6 +48,15 @@ When the user is unavailable and the task cannot wait:
 - Do not create new primitives.
 - Do not choose risky concurrency/data/schema/security strategies.
 - Log the assumption in plan `## Activity` or the relevant approval record.
+
+## Approval Record Locations
+
+Downstream skills and reviewers must verify prior approval in one of these places:
+
+- **Primitive creation or capability expansion**: the capability-gap proposal's `## Human Decision` section must be filled in with Decision, Reviewer, Date, and any Conditions.
+- **Other gated engineering decisions**: the active plan's `## Risk & Review Routing` or `## Activity` section must record the decision, approver, date, scope, and conditions.
+
+If neither artifact contains a complete approval record, treat approval as pending and do not proceed with the gated action.
 
 ## Approval Log
 

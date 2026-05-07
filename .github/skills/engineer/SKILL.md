@@ -72,14 +72,7 @@ Use `@engineer` as primary when the user wants hands-on autonomous engineering, 
 
 ## Capability Expansion Contract
 
-When the engineer believes it lacks a skill, agent, instruction, prompt wrapper, review check, reference, or template:
-
-1. Check existing primitives for overlap.
-2. Fill out `.github/skills/references/capability-gap-proposal.md`.
-3. State the primitive boundary recommendation.
-4. Ask the human liaison for approval.
-5. Route approved creation or modification through `/create-primitive`.
-6. Document required validation coverage when the new capability changes routing, safety, HITL, or verification behavior.
+When the engineer believes it lacks a skill, agent, instruction, prompt wrapper, review check, reference, or template, follow the steps in `.github/skills/references/capability-gap-proposal.md` (`## Usage Workflow`).
 
 Do not create a primitive directly because a user asked for one. The primitive type must be justified by the boundary rules.
 
@@ -91,7 +84,6 @@ Follow `.github/skills/references/human-approval-policy.md` before:
 - Choosing concurrency strategies such as idempotency, uniqueness, locking, atomic updates, retries, or isolation changes.
 - Making schema/data changes, destructive operations, security-sensitive changes, public contract changes, or broad refactors.
 - Touching files outside a locked plan's `## Impacted Files`.
-- Treating maintainer local/subscription eval results as release evidence.
 
 ## Context Pack Contract
 

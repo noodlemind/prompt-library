@@ -214,6 +214,7 @@ Always pause and consult the user at these moments:
 6. **After implementation** — Present the completed work for review
 7. **Before risky strategy choices** — concurrency fixes, schema/data changes, security-sensitive work, destructive operations, broad refactors, or public contract changes
 8. **Before capability expansion** — new or substantially changed skills, agents, instructions, prompt wrappers, checks, references, or solution templates
+9. **When non-interactive and a consultation point is reached** — Make the most conservative available decision. Log the assumption in `## Activity`. Do not create primitives or execute irreversible actions. See `.github/skills/references/human-approval-policy.md` Non-Interactive Mode section.
 
 ## Pipeline Integration
 

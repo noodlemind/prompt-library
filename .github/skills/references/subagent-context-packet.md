@@ -61,7 +61,7 @@ List any decisions the subagent must not make without human approval.
 
 ## Expected Response
 
-Ask for findings in a structured form:
+If the subagent has a defined output format, reference that format here instead of overriding it. Examples include reviewer JSON findings, confidence-scored review outputs, or researcher Markdown sections. Use the default template below only when the subagent has no predefined response format.
 
 ```markdown
 ## Result

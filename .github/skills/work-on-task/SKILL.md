@@ -156,6 +156,7 @@ DO NOT claim completion if any check fails. Report the failure and stop.
 - **Verification plan missing** → Generate a minimal verification plan from acceptance criteria and touched files, append it to the plan, and continue only after it is explicit.
 - **Risk routing missing** → Add a short `## Risk & Review Routing` section before implementation continues.
 - **File outside `## Impacted Files` scope** → Stop immediately. Report the file path and why it needs to change. Ask the user to update the plan's `## Impacted Files` section or revert the change.
+- **Approval gate hit in non-interactive mode** → Choose the lowest-risk reversible action (prefer analysis, test writing, or documentation). Log the assumption in `## Activity`. Do not proceed with the gated change. See `.github/skills/references/human-approval-policy.md` Non-Interactive Mode.
 
 ### Common Errors
 

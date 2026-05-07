@@ -16,6 +16,10 @@ globs: ".github/**/*.md,docs/{architecture,solutions}/**/*.md"
 - Primitive changes that lack validation coverage, verification guidance, or documentation updates.
 - Missing overlap checks against existing skills, agents, instructions, prompts, checks, references, and solution docs.
 
+## Approval Record Sufficiency
+
+An approval record is sufficient when the `capability-gap-proposal.md` template's `## Human Decision` section is filled in with Decision, Reviewer, and Date (plus any Conditions), and the filled-in proposal file is referenced from the plan or PR. An inline comment in a PR description without the structured template does not satisfy this criterion.
+
 ## Examples
 
 **Finding:** "This adds a Kafka expert agent, but the behavior is a reusable workflow/checklist and no separate judgment or tool authority is defined. Route this through a capability-gap proposal and likely create a skill or review check instead."

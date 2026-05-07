@@ -57,7 +57,7 @@ Read the issue file. Check:
 research agents as isolated subagents (each with full feature context in the task prompt).
 Otherwise, run research tasks sequentially within this session.
 
-Use `.github/skills/references/subagent-context-packet.md` for every delegated research or review task so the subagent receives the issue, acceptance criteria, relevant files, constraints, risk areas, and expected output.
+Delegated research must use the shared subagent context packet contract; see `.github/skills/references/subagent-context-packet.md` and `plan-coordinator.agent.md` `### 3. Delegate Research` for the dispatch shape and field mapping.
 
 Run these research tasks:
 - **Codebase analysis**: Search for related files, existing patterns, and conventions relevant to this issue. Read available repository context (`README.md`, `docs/agent-context.md`, `docs/codebase-snapshot.md`, `docs/solutions/`, and `.github/agent-context.md` only when working in this prompt-library repo) for accumulated knowledge.
