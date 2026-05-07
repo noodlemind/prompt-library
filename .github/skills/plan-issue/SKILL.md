@@ -57,6 +57,8 @@ Read the issue file. Check:
 research agents as isolated subagents (each with full feature context in the task prompt).
 Otherwise, run research tasks sequentially within this session.
 
+Use `.github/skills/references/subagent-context-packet.md` for every delegated research or review task so the subagent receives the issue, acceptance criteria, relevant files, constraints, risk areas, and expected output.
+
 Run these research tasks:
 - **Codebase analysis**: Search for related files, existing patterns, and conventions relevant to this issue. Read available repository context (`README.md`, `docs/agent-context.md`, `docs/codebase-snapshot.md`, `docs/solutions/`, and `.github/agent-context.md` only when working in this prompt-library repo) for accumulated knowledge.
 - **Solution history**: Check `docs/solutions/` for previously solved problems with similar tags or symptoms.
@@ -107,7 +109,10 @@ Create missing sections or update existing sections in place. Do not create dupl
 - Performance: required if hot paths, large loops, database queries, or caching are touched
 - Architecture: required if new boundaries, services, or public contracts are introduced
 - Data integrity: required if migrations, backfills, schema, or persistence code changes
+- Human approval: required before risky strategy choices, schema/data changes, destructive operations, broad refactors, concurrency strategies, public contract changes, or primitive creation
 ```
+
+If the issue involves transaction races, lost updates, duplicate writes, or flush/commit misconceptions, require a failing concurrent reproduction before strategy selection and route Java, SQL/data-integrity, and performance review as needed. If this pattern recurs and current primitives are insufficient, capture a capability-gap proposal instead of creating a new skill inline.
 
 ### 4. Lock the Plan
 
@@ -144,3 +149,4 @@ For subagent failure, tool unavailability, file-not-found, and timeout recovery,
 - Include realistic phase scoping — each phase should be completable in one session.
 - Every task must reference a specific file in `## Impacted Files`.
 - Every plan must include `## Verification Plan` and `## Risk & Review Routing` so `/work-on-task` and `/code-review` know how to prove and review the work.
+- Every plan with risky strategy choices must include explicit human approval checkpoints from `.github/skills/references/human-approval-policy.md`.

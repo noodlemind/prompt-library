@@ -8,7 +8,7 @@ This is a skill-driven prompt library for software development teams. The primar
 
 ### Architecture: Skill-First Primitives
 
-- **Skills** (`.github/skills/*/SKILL.md`): 23 user-invocable workflows that compose local context, scoped instructions, tools, checks, and agents. The connected pipeline `/capture-issue` → `/plan-issue` → `/work-on-task` → `/code-review` → `/compound-learnings` is the core engineering loop. `/btw` handles quick Q&A. `/project-readme` creates or updates project README files. `/create-primitive` decides and creates the right primitive type. Domain skills include `/java`, `/python`, `/sql`, and `/aws`.
+- **Skills** (`.github/skills/*/SKILL.md`): 24 user-invocable workflows that compose local context, scoped instructions, tools, checks, and agents. The connected pipeline `/capture-issue` → `/plan-issue` → `/work-on-task` → `/code-review` → `/compound-learnings` is the core engineering loop. `/btw` handles quick Q&A. `/project-readme` creates or updates project README files. `/create-primitive` decides and creates the right primitive type. `/harness-eval` evaluates the Adaptive Engineer Harness. Domain skills include `/java`, `/python`, `/sql`, and `/aws`.
 - **Agents** (`.github/agents/*.agent.md`): 24 agents — 19 stateless domain experts using judgment-criteria design, 1 engineer, 1 code-implementer, plus 3 coordinator/navigation agents. Agents exist for separate judgment, tool authority, runtime profile, isolation, or accountability. Active Java, Python, SQL, and AWS reviewers are included.
 - **Instructions** (`.github/instructions/*.instructions.md`): Scoped context that activates based on file patterns (TypeScript, Python, Java, Spring Boot, PostgreSQL, AWS SDK).
 - **Prompt wrappers** (`.github/prompts/*.prompt.md`): Thin host-facing adapters that route to skills and declare host tools.
@@ -37,7 +37,7 @@ Plan files live in `docs/plans/`. Activity logs in `## Activity` sections provid
 ```
 .github/
   agents/              — 24 agent definitions (19 specialists + 1 engineer + 1 implementer + 3 coordinators)
-  skills/              — 23 skill directories with SKILL.md
+  skills/              — 24 skill directories with SKILL.md
   instructions/        — scoped instructions (TypeScript, Python, Java, Spring Boot, PostgreSQL, AWS SDK)
   prompts/             — thin prompt wrappers that route to skills
   checks/              — optional product-specific review check examples

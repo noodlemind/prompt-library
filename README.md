@@ -1,6 +1,6 @@
 # Prompt Library
 
-Skill-driven software engineering prompt library with 23 skills, 24 agents, scoped instructions, review checks, and local-first plan/solution artifacts. The primary consumption platforms are GitHub Copilot in VS Code and IntelliJ IDEA. No plugin packaging or extension installation is required.
+Skill-driven software engineering prompt library with 24 skills, 24 agents, scoped instructions, review checks, and local-first plan/solution artifacts. The primary consumption platforms are GitHub Copilot in VS Code and IntelliJ IDEA. No plugin packaging or extension installation is required.
 
 ## Quick Start
 
@@ -27,7 +27,7 @@ The system is skill-first. Skills are the reusable workflow contracts; agents, i
 
 **Plans and solutions** — `docs/plans/` stores local specs/context packs, and `docs/solutions/` stores verified learnings.
 
-See [Skill-Driven Prompt Library Standard](docs/architecture/skill-driven-prompt-library.md) for primitive boundaries and team adoption guidance.
+See [Skill-Driven Prompt Library Standard](docs/architecture/skill-driven-prompt-library.md) for primitive boundaries and team adoption guidance. See [Adaptive Engineer Harness](docs/architecture/adaptive-engineer-harness.md) for `@engineer` capability expansion, subagent delegation, human approval, and eval runtime policy.
 
 ![Skill-driven prompt library flow](docs/architecture/assets/skill-driven-prompt-library-flow.png)
 
@@ -85,7 +85,7 @@ Planning and code-review coordinators use `tools: ['agent']` to delegate work to
 | `@plan-coordinator` | Orchestrate research agents for codebase analysis and plan generation |
 | `@pipeline-navigator` | Guide pipeline transitions via handoff buttons |
 
-## Skills (23)
+## Skills (24)
 
 | Skill | Type | Purpose |
 |-------|------|---------|
@@ -98,6 +98,7 @@ Planning and code-review coordinators use `tools: ['agent']` to delegate work to
 | `/deepen-plan` | Extension | Interactive plan deepening with user-steered research |
 | `/document-review` | Extension | Multi-persona quality gate (design, scope, coherence, feasibility) |
 | `/create-primitive` | Extension | Decide and create the right primitive: skill, agent, instruction, check, wrapper, reference, or solution doc |
+| `/harness-eval` | Extension | Evaluate `@engineer` routing, HITL, delegation, verification, safety, and provider discipline |
 | `/import-conventions` | Extension | Generate instructions from external repos and frameworks |
 | `/project-readme` | Documentation | Create or update project README.md |
 | `/java` | Domain | Java and Spring Boot engineering workflow |
@@ -136,7 +137,7 @@ The system gets smarter over time:
 ```
 .github/
   agents/              24 agent files (19 specialists + 1 engineer + 1 implementer + 3 coordinators)
-  skills/              23 skill directories
+  skills/              24 skill directories
   instructions/        Scoped instructions (TypeScript, Python, Java, Spring Boot, PostgreSQL, AWS SDK)
   prompts/             Thin host-facing skill wrappers
   checks/              Optional product-specific review check examples

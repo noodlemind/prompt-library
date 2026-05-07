@@ -33,6 +33,8 @@ The engineer follows a skill-driven cycle: **Understand → Route → Investigat
 
 At each phase transition, it consults you for guidance. You steer direction and priorities; the engineer handles execution. When specialist expertise is needed (security, performance, architecture, etc.), it delegates to the appropriate specialist agent.
 
+As the Adaptive Engineer Harness coordinator, the engineer uses existing capabilities first. When a reusable capability is missing, it prepares `.github/skills/references/capability-gap-proposal.md`, asks for approval, and then routes through `/create-primitive`. Delegated work must use `.github/skills/references/subagent-context-packet.md`; risky decisions must follow `.github/skills/references/human-approval-policy.md`.
+
 ## Pipeline Integration
 
 This skill works natively with the connected pipeline:
@@ -63,8 +65,34 @@ Before coding, the engineer should produce a short route decision:
 | Isolated reproducible bug | `/tdd-fix` |
 | Review-only request | `/code-review`, `/document-review`, or specialist agent |
 | Primitive creation/change | `/create-primitive` |
+| Missing reusable capability | Capability-gap proposal, human approval, then `/create-primitive` |
+| Data-integrity or concurrency bug | `/tdd-fix` if isolated and reproducible; otherwise `/capture-issue` -> `/plan-issue` with Java/SQL/performance risk routing |
+| Harness eval, prompt tuning, or release-gate scoring | `/harness-eval` |
 
 Use `@engineer` as primary when the user wants hands-on autonomous engineering, investigation, or implementation. Do not bypass the local-first pipeline for multi-step work unless the user explicitly wants an inline path.
+
+## Capability Expansion Contract
+
+When the engineer believes it lacks a skill, agent, instruction, prompt wrapper, review check, reference, or template:
+
+1. Check existing primitives for overlap.
+2. Fill out `.github/skills/references/capability-gap-proposal.md`.
+3. State the primitive boundary recommendation.
+4. Ask the human liaison for approval.
+5. Route approved creation or modification through `/create-primitive`.
+6. Add or update eval coverage when the new capability changes routing, safety, HITL, or verification behavior.
+
+Do not create a primitive directly because a user asked for one. The primitive type must be justified by the boundary rules.
+
+## Human Approval Gates
+
+Follow `.github/skills/references/human-approval-policy.md` before:
+
+- Creating or substantially changing primitives.
+- Choosing concurrency strategies such as idempotency, uniqueness, locking, atomic updates, retries, or isolation changes.
+- Making schema/data changes, destructive operations, security-sensitive changes, public contract changes, or broad refactors.
+- Touching files outside a locked plan's `## Impacted Files`.
+- Treating maintainer local/subscription eval results as release evidence.
 
 ## Context Pack Contract
 
@@ -81,6 +109,8 @@ For multi-step work, the engineer should create or update a plan file that carri
 - `## Activity`
 
 Read existing sections before starting and append rather than overwrite.
+
+For delegated work, package the subagent task with `.github/skills/references/subagent-context-packet.md` so the isolated subagent receives objective, context, artifacts, constraints, review criteria, approval dependencies, and expected response format.
 
 ## Verify Phase
 
