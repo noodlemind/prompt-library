@@ -32,7 +32,7 @@ Plan files in `docs/plans/` track state via YAML frontmatter (`status`, `plan_lo
 ```
 .github/
   agents/          — 24 agent definitions (19 specialists + 1 engineer + 1 implementer + 3 coordinators)
-  skills/          — 23 skill directories with SKILL.md
+  skills/          — 25 skill directories with SKILL.md
   instructions/    — scoped instructions (TypeScript, Python, Java, Spring Boot, PostgreSQL, AWS SDK)
   prompts/         — thin prompt wrappers that route to skills
   checks/          — optional product-specific review check examples
