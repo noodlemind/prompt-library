@@ -36,27 +36,23 @@ From the user prompt or plan path, extract 3–7 keywords (symptoms, technologie
 
 ### 2. Global knowledge (team-wide)
 
-Read the hydrated manifest:
+Read manifest per `knowledge-locations.md`. Score `entries[]` by tag/symptom/title overlap with query keywords.
 
-- **Windows:** `%USERPROFILE%\.copilot\knowledge\manifest.yaml`
-- **macOS/Linux:** `~/.copilot/knowledge/manifest.yaml`
+**Composer-style cap** (`.github/skills/references/context-budget.md`):
 
-If missing, read `knowledge/manifest.yaml` in the prompt-library checkout when working in that repo.
-
-Match `entries[]` by `tags`, `symptom`, `summary`, and `title` fields (case-insensitive substring).
-
-For top 3 global matches, read only the **frontmatter + first 30 lines** of each `path` listed in the entry.
+- Return **top 3** matches only
+- Per match: read ≤25 lines of solution file (frontmatter + problem summary)
+- Total recall output ≤800 tokens
 
 ### 3. Local product repo
 
-1. Scan `docs/plans/*.md` — filenames and YAML `title:` for keyword overlap.
-2. If a plan path was provided, read its `## Memory Cards` first, then `## Context`.
-3. Scan `docs/solutions/**/*.md` if the directory exists (repo-private learnings).
-4. Read `docs/agent-context.md` if present (repo conventions only).
+1. Scan `docs/plans/*.md` titles — best match only (do not read every plan).
+2. If plan path given: read `## Memory Cards` only (not full Activity).
+3. Optional: one repo-private `docs/solutions/` file if highly relevant.
 
 ### 4. Build memory cards
 
-Produce 5–15 bullets in `.github/skills/references/memory-cards.md` format:
+Produce **5–15 bullets**, ≤1200 characters total:
 
 ```markdown
 ## Recall Summary

@@ -74,7 +74,7 @@ Five orchestrating skills (code-review, plan-issue, deepen-plan, work-on-task, e
 `.github/skills/references/knowledge-locations.md` — single list of read/write paths; do not duplicate in other primitives.
 
 ### Engineer Agent
-The `engineer` agent understands requirements, routes to the right skill/flow, investigates, plans, and orchestrates. It delegates implementation to `code-implementer` for bounded execution tasks, and delegates to specialist reviewers/researchers when separate judgment, authority, or isolation is useful. It follows Understand → Route → **Capture Gate** → Investigate → Plan → Implement → Verify. On trackable work it **must invoke `/capture-issue`** before code edits; it must not create plan files inline (see `.github/skills/references/capture-gate.md`). The `/engineer` skill is its entry point.
+Slim orchestrator with **inlined session checklist** (~4 KB agent body). Loop: Recall → Gate → Investigate → Plan → Implement → Verify. Context caps: `context-budget.md`. Composer parity: `docs/architecture/composer-parity-review.md`. Entry: `@engineer` or `/engineer`.
 
 ### Engineer Memory System
 `docs/architecture/engineer-memory-system.md` defines three tiers: product `docs/plans/` (local), global `knowledge/solutions/` (hydrated team-wide), optional `profile.md` (user preferences). `/recall` runs before investigate; `/compound-learnings` publishes globally; `/index-memory` rebuilds `manifest.yaml`. Capture gate: `.github/skills/references/capture-gate.md`.

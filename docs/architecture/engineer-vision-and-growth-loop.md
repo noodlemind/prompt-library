@@ -132,11 +132,20 @@ Hermes-style **skill extraction** maps to: repeated successful use of a workflow
 | Registry not updated after `/create-primitive` | Creator workflow step added |
 | Engineer allowlist growth not documented | Documented in `engineer-starter-kit.md` |
 
-### Pass 6 — Remaining (v2, not blocking)
+### Pass 7 — Composer/Windsurf tightening
 
-- Automated compliance hook when hosts support agent hooks.
-- Embedding search over `knowledge/solutions`.
-- Auto-append to engineer `agents:` when new reviewer agent ships (still needs human edit today).
+| Gap | Fix |
+|-----|-----|
+| 17 KB engineer prompt | Slim agent (~4 KB) with **inlined checklist** |
+| “Read five references” | `engineer-runtime.md`, `context-budget.md` on demand only |
+| Unbounded recall | Top-3 manifest, 1200-char memory cards |
+| `copilot-instructions` engineer duplication | Engineer rules only in agent file |
+| Unclear product positioning | `composer-parity-review.md` |
+
+### Pass 8 — Remaining (v2)
+
+- Semantic index over `knowledge/solutions/` (Composer-class retrieval).
+- Host hooks for automatic memory card injection.
 
 ## Model-robustness contract
 

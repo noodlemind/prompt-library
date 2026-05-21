@@ -1,13 +1,9 @@
 ---
-description: Full-cycle engineering with recall, capture gate, and skill-first routing
+description: Adaptive Engineer — recall, capture gate, skill-first execution
 agent: engineer
 tools: ["agent", "codebase", "search", "read", "editFiles", "changes", "terminalLastCommand", "problems", "usages", "fetch", "githubRepo", "awaitTerminal"]
 ---
 
-Run as `@engineer` with the Adaptive Engineer Harness:
+${input}
 
-1. **Phase 0:** `/recall` for: ${input}
-2. **Capture gate:** `/capture-issue` before any product code edits on trackable work
-3. Follow `.github/skills/references/engineer-session-checklist.md`
-
-User request: ${input}
+Follow the inlined session checklist in `@engineer`. Phase 0 recall → capture gate before any product code edits.

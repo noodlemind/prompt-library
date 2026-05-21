@@ -12,8 +12,8 @@ Use the globally hydrated prompt-library customizations as the default engineeri
 
 - Use `/btw` for quick repository or general questions without file edits.
 - Use `/start` when the user is unsure which workflow applies.
-- Use `/capture-issue` -> `/plan-issue` -> `/work-on-task` -> `/code-review` -> `/compound-learnings` for tracked engineering work.
-- Use `@engineer` for hands-on autonomous investigation, implementation, and verification.
+- Tracked work: `/recall` (optional) → `/capture-issue` → `/plan-issue` → `/work-on-task` → `/code-review` → `/compound-learnings` → `/index-memory`.
+- `@engineer` for hands-on work — obeys inlined capture checklist; does not skip plan capture on trackable work.
 - Use `/project-readme` for project-level README creation or refresh.
 - Use `/java`, `/python`, `/sql`, and `/aws` for focused domain work.
 

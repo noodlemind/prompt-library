@@ -15,7 +15,7 @@ Section in plan files:
 
 ## Rules
 
-- **5–15 bullets** per active plan; prune stale cards when closing the issue.
+- **5–15 bullets** per active plan; **≤1200 characters** for the whole section (`context-budget.md`).
 - **One line each** — fact + `source:` path (global `knowledge/...` or local `docs/...`).
 - **No secrets** in cards (use pattern descriptions only).
 - **Append only** during a pipeline step; do not delete prior cards without user approval.
