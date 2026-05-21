@@ -94,3 +94,12 @@ Read `docs/architecture/skill-driven-prompt-library.md` before adding or substan
 ## Accumulated Knowledge
 
 Read `.github/agent-context.md` for prompt-library repo patterns. In product repositories, read product-owned context docs such as `README.md`, `docs/agent-context.md`, `docs/codebase-snapshot.md`, and `docs/solutions/`.
+
+## Cursor Cloud specific instructions
+
+This is a pure Markdown prompt library with **no runtime code, no build system, no test framework, and no package dependencies**. There is nothing to install, build, or start as a service.
+
+- **No dependencies**: No `package.json`, `requirements.txt`, or any other dependency manifest exists. The update script is a no-op.
+- **Validation**: The only meaningful "test" is structural validation — verifying file counts (24 agents, 23 skills, 7 instructions, 20 prompts), YAML frontmatter presence, prompt-to-skill mapping, and key documentation existence. See `README.md` and `CLAUDE.md` for documented counts.
+- **Hydrate task**: The VS Code Hydrate task (`.vscode/tasks.json`) is PowerShell/Windows-only and copies Markdown files to global Copilot directories. It cannot run in a Linux cloud agent. A manual PowerShell fallback is documented in `docs/install.md`.
+- **When editing primitives**: After adding or removing agents, skills, instructions, or prompts, update inventory lists in `CLAUDE.md`, `AGENTS.md`, `.github/copilot-instructions.md`, `.github/agent-context.md`, `README.md`, and `docs/architecture/skill-driven-prompt-library.md` per the sync convention in `CLAUDE.md`.
