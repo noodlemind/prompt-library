@@ -100,3 +100,5 @@ Suggest next step: "Run `/plan-issue docs/plans/<filename>.md` to generate an im
 - Do **not** start implementation. This skill creates the initial plan file shell, but `/plan-issue` owns implementation planning and locking.
 - Do **not** set `plan_lock: true` — that's the plan-issue skill's job.
 - Keep the issue file under 100 lines. Brevity forces clarity.
+- **`@engineer` must invoke this skill** for new trackable work — it must not create `docs/plans/*.md` inline. See `.github/skills/references/capture-gate.md`.
+- Use `docs/plans/_plan-template.md` for section layout when needed.

@@ -29,7 +29,9 @@ Activate when you need a software engineer to:
 
 ## How It Works
 
-The engineer follows a skill-driven cycle: **Understand → Route → Investigate → Plan → Implement → Verify**. It selects the right skill or pipeline flow first, then delegates to specialist agents only when separate judgment, authority, or isolation materially improves the result.
+The engineer follows a skill-driven cycle: **Understand → Route → Capture Gate → Investigate → Plan → Implement → Verify**. It selects the right skill or pipeline flow first, then delegates to specialist agents only when separate judgment, authority, or isolation materially improves the result.
+
+**Capture gate:** On trackable work, `@engineer` must invoke **`/capture-issue`** before investigating for fixes or editing code. It must not create `docs/plans/*.md` inline or skip capture. See `.github/skills/references/capture-gate.md`.
 
 At each phase transition, it consults you for guidance. You steer direction and priorities; the engineer handles execution. When specialist expertise is needed (security, performance, architecture, etc.), it delegates to the appropriate specialist agent.
 
@@ -40,8 +42,8 @@ As the Adaptive Engineer Harness coordinator, the engineer uses existing capabil
 This skill works natively with the connected pipeline:
 
 - If a plan file exists in `docs/plans/`, the engineer picks up where the last session left off
-- For new multi-step work, it creates a plan file with proper frontmatter and phased tasks
-- It updates `status`, `plan_lock`, `phase`, `## Activity`, and `## Implementation Notes` as work progresses
+- For new trackable work, it **invokes `/capture-issue`** (then `/plan-issue` when needed) — it does not create plan files itself
+- It updates `status`, `plan_lock`, `phase`, `## Activity`, and `## Implementation Notes` on an existing plan as work progresses
 - When all phases are complete, it transitions to `status: review` for `/code-review`
 
 ## Invocation
@@ -58,7 +60,7 @@ Before coding, the engineer should produce a short route decision:
 
 | Signal | Preferred route |
 |---|---|
-| Raw ambiguous request | `/start` or inline classification |
+| Raw ambiguous request | `/start` (invoke the skill) |
 | Requirements need exploration | `/brainstorming` then `/capture-issue` |
 | Trackable multi-step work | `/capture-issue` -> `/plan-issue` -> `/work-on-task` |
 | Existing locked plan | `/work-on-task` or direct plan pickup |
@@ -68,7 +70,17 @@ Before coding, the engineer should produce a short route decision:
 | Missing reusable capability | Capability-gap proposal, human approval, then `/create-primitive` |
 | Data-integrity or concurrency bug | `/tdd-fix` if isolated and reproducible; otherwise `/capture-issue` -> `/plan-issue` with Java/SQL/performance risk routing |
 
-Use `@engineer` as primary when the user wants hands-on autonomous engineering, investigation, or implementation. Do not bypass the local-first pipeline for multi-step work unless the user explicitly wants an inline path.
+Use `@engineer` as primary when the user wants hands-on autonomous engineering, investigation, or implementation. Do not bypass `/capture-issue` for trackable work unless the user explicitly waives capture in the current turn.
+
+## Capture Gate
+
+Before Phase 2 or any product code edits, follow `.github/skills/references/capture-gate.md`:
+
+1. Plan file exists under `docs/plans/`.
+2. Created via `/capture-issue` (`status: open`, `plan_lock: false`).
+3. Implementation requires `plan_lock: true` from `/plan-issue` unless waived.
+
+If the gate fails, invoke `/capture-issue` and stop — do not jump into code.
 
 ## Capability Expansion Contract
 
@@ -87,7 +99,7 @@ Follow `.github/skills/references/human-approval-policy.md` before:
 
 ## Context Pack Contract
 
-For multi-step work, the engineer should create or update a plan file that carries the local context pack:
+For multi-step work, the engineer uses plan files created by **`/capture-issue`** and **`/plan-issue`** — not ad-hoc files. It updates sections on an existing plan:
 
 - `## Context`
 - `## Acceptance Criteria`

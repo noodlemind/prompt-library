@@ -18,6 +18,8 @@ Skill-driven prompt library for software development using GitHub Copilot in VS 
 
 Plan files in `docs/plans/` track state via YAML frontmatter: `status` (open/planned/in-progress/review/done), `plan_lock`, `phase`. Treat each plan file as the local context pack. Inter-step memory flows through plan file sections: `## Context`, `## Acceptance Criteria`, `## Research Notes`, `## Impacted Files`, `## Verification Plan`, `## Risk & Review Routing`, `## Implementation Notes`, `## Review Findings`, `## Activity`. Always read existing sections before starting work. Never overwrite prior sections.
 
+**Capture gate:** `@engineer` and `/engineer` must invoke **`/capture-issue`** before investigating for fixes or editing product code on trackable work. Do not create `docs/plans/*.md` inline or set `plan_lock: true` without `/plan-issue`. See `.github/skills/references/capture-gate.md` and `docs/plans/_plan-template.md`.
+
 ## Knowledge
 
 Read `.github/agent-context.md` for codebase patterns. Check `docs/solutions/` before starting similar work. Read `docs/codebase-snapshot.md` for project structure and architecture diagrams (if it exists).

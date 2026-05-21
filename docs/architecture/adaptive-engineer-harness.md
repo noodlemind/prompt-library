@@ -13,11 +13,11 @@ The goal is not to make one prompt know everything. The goal is to make `@engine
 1. Understand the user request and local context.
 2. Route to the best existing skill or pipeline step.
 3. Identify whether specialist judgment is needed.
-4. Package delegated work with a subagent context packet.
-5. Ask the human for approval before risky decisions or capability expansion.
-6. Implement or orchestrate implementation.
-7. Verify with evidence.
-8. Record misses as capability gaps or validation needs.
+5. Package delegated work with a subagent context packet.
+6. Ask the human for approval before risky decisions or capability expansion.
+7. Implement or orchestrate implementation.
+8. Verify with evidence.
+9. Record misses as capability gaps or validation needs.
 
 Expansion uses `/create-primitive` across all primitive types:
 
