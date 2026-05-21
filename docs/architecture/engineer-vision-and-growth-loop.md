@@ -164,7 +164,8 @@ See `.github/skills/references/engineer-session-checklist.md`.
 
 ## Related docs
 
+- `composer-parity-review.md` — would Cursor/Windsurf approve; what we fixed
 - `engineer-memory-system.md` — tiers and token model
+- `context-budget.md` — top-k and character caps
 - `adaptive-engineer-harness.md` — runtime loop
-- `skill-driven-prompt-library.md` — primitive boundaries
 - `knowledge/capability-registry.yaml` — starter kit and growth inventory

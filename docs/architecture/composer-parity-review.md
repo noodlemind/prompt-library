@@ -77,7 +77,10 @@ Would engineers who built **Cursor Composer** or **Windsurf Cascade** approve th
 
 - MCP or host semantic search over `knowledge/solutions/`
 - Session hook: inject plan `## Memory Cards` only (not full plan)
-- Auto-recall on `@engineer` without separate slash step where host supports it
+
+## Autonomous target (full proposal)
+
+See [`composer-style-autonomous-harness-proposal.md`](composer-style-autonomous-harness-proposal.md): one loop, auto capture/recall/compound/index, consent Tier 3 only. Policy: `.github/skills/references/autonomy-policy.md`.
 
 ## Positioning statement
 

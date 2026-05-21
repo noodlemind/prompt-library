@@ -90,7 +90,10 @@ growth:
 
 references:
   principles: .github/skills/references/engineer-principles.md
+  autonomy: .github/skills/references/autonomy-policy.md
   capture_gate: .github/skills/references/capture-gate.md
+  context_budget: .github/skills/references/context-budget.md
   session_checklist: .github/skills/references/engineer-session-checklist.md
   starter_kit: .github/skills/references/engineer-starter-kit.md
+  autonomous_proposal: docs/architecture/composer-style-autonomous-harness-proposal.md
   vision: docs/architecture/engineer-vision-and-growth-loop.md

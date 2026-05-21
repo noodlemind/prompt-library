@@ -1,6 +1,10 @@
 # Human Approval Policy
 
-The human is the liaison for decisions that change risk, scope, data, architecture, or the prompt-library capability surface. Agents may investigate and recommend, but they must pause for explicit approval before gated actions.
+The human is the liaison for **Tier 3 (hard consent)** decisions only. Default behavior is **autonomous** per `.github/skills/references/autonomy-policy.md` and `docs/architecture/composer-style-autonomous-harness-proposal.md`.
+
+Capture, recall, plan lock, compound, and index run **without** asking unless `autonomy: strict` or `risk: red` blocks implementation.
+
+Agents may investigate and recommend freely; they must pause for explicit approval only before Tier 3 gated actions.
 
 ## Required Approval Gates
 

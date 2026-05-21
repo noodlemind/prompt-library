@@ -26,7 +26,7 @@ Skill-first: skills are workflow contracts; agents provide isolated judgment; in
 | Team knowledge | `knowledge/` → hydrated to `~/.copilot/knowledge/` |
 | Product plans | `docs/plans/` in each **product** repo only |
 
-Standards: [Skill-Driven Prompt Library](docs/architecture/skill-driven-prompt-library.md), [Adaptive Engineer Harness](docs/architecture/adaptive-engineer-harness.md), [Engineer Memory](docs/architecture/engineer-memory-system.md).
+Standards: [Composer Parity Review](docs/architecture/composer-parity-review.md), [Engineer Vision](docs/architecture/engineer-vision-and-growth-loop.md), [Memory System](docs/architecture/engineer-memory-system.md), [Skill-Driven Library](docs/architecture/skill-driven-prompt-library.md).
 
 ## Connected Pipeline
 

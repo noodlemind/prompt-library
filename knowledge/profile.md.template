@@ -7,11 +7,17 @@ Copy to `profile.md` on first hydrate if missing. Keep under ~1,500 characters �
 - Response style: (concise | detailed)
 - Approval style: (checkpoint each phase | batch at plan lock)
 
+## Autonomy (Composer-style)
+
+- **autonomy:** full | balanced | strict
+  - **full** — auto capture, plan, compound, index; ask only on red risk + new agents
+  - **balanced** — same; more Activity notifications (default for teams)
+  - **strict** — legacy explicit approvals at capture/plan/implement
+
 ## Engineering preferences
 
 - Default languages/stacks:
 - Always run full test suite before claiming done: (yes | no)
-- Prefer pipeline capture for multi-step work: yes
 
 ## Skill usage notes
 

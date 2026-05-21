@@ -5,10 +5,12 @@ How the Adaptive Engineer Harness combines **local plan memory** (product repos)
 ## Design goals
 
 1. **Capture before code** — reusable `docs/plans/` artifacts (see `capture-gate.md`).
-2. **Recall before investigate** — load the smallest high-signal context first.
+2. **Recall before investigate** — top-k manifest + memory cards only (`context-budget.md`).
 3. **Compound after verify** — publish patterns every team repo can reuse.
-4. **Bounded prompts** — memory cards and manifest entries, not full chat replay.
+4. **Bounded prompts** — frozen checklist in `@engineer`; details on demand (`engineer-runtime.md`).
 5. **Host portability** — files + hydrate; no dependency on a single IDE memory API.
+
+**Composer parity bar:** `composer-parity-review.md`.
 
 ## Research synthesis
 

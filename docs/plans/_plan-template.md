@@ -5,6 +5,8 @@ status: open
 plan_lock: false
 phase: 0
 priority: P2
+risk: green
+autonomy: balanced
 created: YYYY-MM-DD
 updated: YYYY-MM-DD
 ---
