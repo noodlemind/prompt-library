@@ -25,7 +25,7 @@ Issues flow through a state machine:
                                   open      →   planned   →                          in-progress   →    review    →      done
 ```
 
-Plan files in `docs/plans/` track state via YAML frontmatter (`status`, `plan_lock`, `phase`). Activity logs in `## Activity` sections enable session continuity. Inter-step memory flows through designated plan file sections (`## Context`, `## Acceptance Criteria`, `## Research Notes`, `## Impacted Files`, `## Verification Plan`, `## Risk & Review Routing`, `## Implementation Notes`, `## Review Findings`). Treat each plan file as the local context pack for the work.
+Plan files in `docs/plans/` (product repos only) track state via YAML frontmatter (`status`, `plan_lock`, `phase`). Team-wide learnings hydrate from `knowledge/` to `~/.copilot/knowledge/`. Run `/recall` before engineering work. Inter-step memory flows through plan sections including `## Memory Cards`, `## Context`, `## Research Notes`, and `## Activity`. See `docs/architecture/engineer-memory-system.md`.
 
 ## Directory Structure
 
@@ -40,10 +40,10 @@ Plan files in `docs/plans/` track state via YAML frontmatter (`status`, `plan_lo
   agent-context.md — prompt-library repo knowledge, not a global Copilot primitive
 .vscode/
   mcp.json         — MCP server configuration
+knowledge/         — team-wide solutions + manifest (hydrated to ~/.copilot/knowledge/)
 docs/
   architecture/    — skill-driven standard and architecture notes
-  plans/           — issue and plan files with state tracking
-  solutions/       — documented learnings from solved problems
+  plans/           — plan template; product repos use docs/plans/ for active work
   brainstorms/     — brainstorm documents from /brainstorming skill
   codebase-snapshot.md — generated codebase snapshot with architecture diagrams
 ```
