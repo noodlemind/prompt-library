@@ -1,0 +1,9 @@
+# Optional: copy to skill-usage.yaml in hydrated ~/.copilot/knowledge/
+# Engineer and skills may append after successful invocations (Hermes-style growth signal).
+version: 1
+skills: {}
+# Example entry:
+#   capture-issue:
+#     count: 12
+#     last_used: 2026-05-21
+#     notes: "Team prefers P1/P2 on capture"

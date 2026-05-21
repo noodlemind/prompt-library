@@ -74,6 +74,8 @@ Return **memory cards** (bullets with `source:` paths) — not full file dumps.
 
 `@engineer` workflow: **Recall (0) → Understand → Route → Capture Gate → Investigate → Plan → Implement → Verify → Compound suggestion**.
 
+Context paths: `.github/skills/references/knowledge-locations.md`. Vision and growth: `engineer-vision-and-growth-loop.md`.
+
 ## Future (v2+)
 
 - MCP semantic retrieval over `knowledge/solutions` (Cursor-like embeddings).

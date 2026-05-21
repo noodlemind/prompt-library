@@ -54,7 +54,7 @@ Route to the `@engineer` agent. Provide:
 - A description of the work needed, OR
 - A path to an existing plan file in `docs/plans/`
 
-The engineer will read the codebase, consult available repository context (`README.md`, `docs/agent-context.md`, `docs/codebase-snapshot.md`, `docs/solutions/`, and `.github/agent-context.md` only when working in this prompt-library repo), then begin the understand → route → investigate → implement → verify cycle.
+The engineer runs **Recall → Understand → Route → Capture Gate → Investigate → Plan → Implement → Verify**. Context paths: `.github/skills/references/knowledge-locations.md`.
 
 ## Routing Contract
 

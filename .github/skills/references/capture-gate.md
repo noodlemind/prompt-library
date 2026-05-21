@@ -43,6 +43,7 @@ If any item fails → **stop**. Run `/capture-issue` first. Do not investigate d
 
 ## Forbidden engineer behaviors
 
+- Using `/analyze-and-plan` to create a plan from scratch (that skill only enriches an existing captured plan).
 - Creating `docs/plans/*.md` inline with `status: planned` or `plan_lock: true` (that skips capture and plan-issue).
 - Setting `plan_lock: true` without `/plan-issue`.
 - "Skipping plan file creation" for multi-step or multi-file work.

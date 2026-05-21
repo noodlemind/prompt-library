@@ -29,4 +29,4 @@ Do not put secrets, customer PII, or proprietary code blocks in global solutions
 - After compounding: run `/index-memory` or let `/compound-learnings` update `manifest.yaml`.
 - Re-hydrate after pulling prompt-library updates.
 
-See `docs/architecture/engineer-memory-system.md`.
+See `docs/architecture/engineer-memory-system.md`. Context paths: `.github/skills/references/knowledge-locations.md`.

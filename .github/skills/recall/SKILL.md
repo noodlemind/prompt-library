@@ -8,7 +8,7 @@ argument-hint: "[task description or plan file path]"
 
 ## Purpose
 
-**Phase 0** for the Adaptive Engineer Harness — load the smallest high-signal context before investigation or capture. Reduces redundant research and surfaces cross-repo solutions (see `docs/architecture/engineer-memory-system.md`).
+**Phase 0** for the Adaptive Engineer Harness — load the smallest high-signal context before investigation or capture. Follow `.github/skills/references/knowledge-locations.md` for paths (see `docs/architecture/engineer-memory-system.md`).
 
 ## When to Use
 

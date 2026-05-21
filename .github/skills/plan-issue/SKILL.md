@@ -61,7 +61,7 @@ Delegated research must use the shared subagent context packet contract; see `.g
 
 Run these research tasks:
 - **Codebase analysis**: Search for related files, existing patterns, and conventions relevant to this issue. Read available repository context (`README.md`, `docs/agent-context.md`, `docs/codebase-snapshot.md`, `docs/solutions/`, and `.github/agent-context.md` only when working in this prompt-library repo) for accumulated knowledge.
-- **Solution history**: Check `docs/solutions/` for previously solved problems with similar tags or symptoms.
+- **Solution history**: Run `/recall` or read `knowledge/manifest.yaml` (hydrated) and optional product `docs/solutions/` per `knowledge-locations.md`.
 - **Best practices**: Research industry best practices for the specific technology and pattern involved.
 - **Risk routing**: Identify security, performance, architecture, data integrity, or language-specific review needs.
 

@@ -31,7 +31,7 @@ Read the feature description or issue provided by the user. Identify:
 
 Before delegating research:
 - Read available repository context for accumulated codebase patterns: `README.md`, `docs/agent-context.md`, `docs/codebase-snapshot.md`, and `docs/solutions/`. When planning for this prompt-library repo, also read `.github/agent-context.md`.
-- Check `docs/solutions/` for previously documented solutions to similar problems
+- Check team knowledge via `knowledge/manifest.yaml` or `/recall`; see `knowledge-locations.md`
 - Note relevant findings to avoid redundant research
 
 ### 3. Delegate Research

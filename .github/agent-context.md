@@ -14,7 +14,7 @@ This repository is a skill-driven prompt library containing AI agent systems:
 - `.github/checks/` — optional product-specific review check examples
 - `docs/plans/` — issue and plan files with state machine tracking
 - `docs/architecture/` — skill-driven standard and architecture notes
-- `docs/solutions/` — documented learnings from solved problems
+- `knowledge/solutions/` — team-wide compounded learnings (hydrated to `~/.copilot/knowledge/`); product repos may use optional `docs/solutions/` for repo-private learnings only
 - `docs/brainstorms/` — brainstorm documents from `/brainstorming` skill
 
 ## Conventions
@@ -68,7 +68,10 @@ Pipeline skills (capture-issue, plan-issue, work-on-task, code-review, compound-
 Five orchestrating skills (code-review, plan-issue, deepen-plan, work-on-task, engineer) have error handling specific to their failure modes. Common patterns (subagent failure, tool unavailability, file not found, timeout) are in `.github/skills/references/error-handling-patterns.md`. Each skill references shared patterns plus adds domain-specific errors.
 
 ### Solution Document Format
-`/compound-learnings` uses a template at `assets/solution-template.md` with YAML frontmatter (title, date, category, tags, module, symptom, root_cause, severity) and body sections (Problem, Root Cause, Solution, Prevention). Tags should be specific, for example "n-plus-one", "java-21", "postgres-index", or "aws-sqs-dlq", not just "performance". 3-7 tags per document.
+`/compound-learnings` publishes to **`knowledge/solutions/<category>/<slug>.md`** (global, cross-repo after hydrate). Template: `assets/solution-template.md`. Then **required** `/index-memory`. Repo-private copies optional under product `docs/solutions/`. Tags: specific ("n-plus-one", "java-21"), 3-7 per doc.
+
+### Knowledge Lookup SSOT
+`.github/skills/references/knowledge-locations.md` — single list of read/write paths; do not duplicate in other primitives.
 
 ### Engineer Agent
 The `engineer` agent understands requirements, routes to the right skill/flow, investigates, plans, and orchestrates. It delegates implementation to `code-implementer` for bounded execution tasks, and delegates to specialist reviewers/researchers when separate judgment, authority, or isolation is useful. It follows Understand → Route → **Capture Gate** → Investigate → Plan → Implement → Verify. On trackable work it **must invoke `/capture-issue`** before code edits; it must not create plan files inline (see `.github/skills/references/capture-gate.md`). The `/engineer` skill is its entry point.

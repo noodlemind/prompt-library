@@ -169,7 +169,7 @@ flowchart TD
 - Keep permissions minimal in agent frontmatter and prompt wrappers.
 - Prefer read-only specialist agents for review and research.
 - Add or update at least one trigger example, review check, test scenario, or validation checklist item when changing a primitive.
-- Compound patterns only after verification and user acceptance. One-off fixes belong in `docs/solutions/`; broad reusable conventions can graduate to a skill or scoped instruction. Repository-specific learnings belong in that repository's context docs.
+- Compound patterns only after verification and user acceptance. Cross-repo fixes belong in `knowledge/solutions/`; repo-private fixes may use product `docs/solutions/`. Broad conventions graduate to a skill or scoped instruction; repo-specific one-liners belong in product `docs/agent-context.md`.
 
 ## Team Adoption
 

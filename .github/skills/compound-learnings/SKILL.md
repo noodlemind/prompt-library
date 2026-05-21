@@ -80,9 +80,9 @@ When the learning is **repo-specific** (internal URLs, naming, deployment quirks
 
 Skip this step when the fix applies across all product repositories.
 
-### 4. Update Knowledge Index
+### 4. Update Knowledge Index (required)
 
-Run **`/index-memory`** or append an entry to `knowledge/manifest.yaml` per `.github/skills/index-memory/SKILL.md`.
+**Must** run **`/index-memory`** (or manually update `knowledge/manifest.yaml` per `.github/skills/index-memory/SKILL.md`). Compounding is incomplete without index update.
 
 Remind the user to **Hydrate** global Copilot customizations so `~/.copilot/knowledge/` updates on other machines.
 

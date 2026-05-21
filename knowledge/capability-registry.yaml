@@ -1,0 +1,96 @@
+# Adaptive Engineer Harness — capability inventory (starter kit + growth)
+# Update via /create-primitive after human-approved capability-gap proposals.
+version: 1
+updated: 2026-05-21
+
+engineer:
+  entry_agent: engineer
+  entry_skill: engineer
+  workflow: recall → capture-issue → plan-issue → work-on-task → code-review → compound-learnings
+
+starter_skills:
+  pipeline:
+    - start
+    - capture-issue
+    - plan-issue
+    - work-on-task
+    - code-review
+    - compound-learnings
+    - recall
+    - index-memory
+  engineering:
+    - engineer
+    - tdd-fix
+    - brainstorming
+    - deepen-plan
+    - document-review
+  domain:
+    - java
+    - python
+    - sql
+    - aws
+  utilities:
+    - btw
+    - analyze-and-plan
+    - codebase-context
+    - review-guardrails
+    - triage-issues
+    - create-primitive
+    - import-conventions
+    - project-readme
+
+starter_agents:
+  coordinators:
+    - plan-coordinator
+    - code-review-coordinator
+    - pipeline-navigator
+  implementation:
+    - code-implementer
+  research:
+    - repo-research-analyst
+    - best-practices-researcher
+    - framework-docs-researcher
+    - git-history-analyzer
+  review:
+    - architecture-strategist
+    - security-sentinel
+    - performance-oracle
+    - java-reviewer
+    - python-reviewer
+    - sql-reviewer
+    - aws-reviewer
+    - code-simplicity-reviewer
+    - pattern-recognition-specialist
+    - data-integrity-guardian
+    - compounding-typescript-reviewer
+    - spec-flow-analyzer
+
+engineer_allowlist:
+  # Must match engineer.agent.md frontmatter agents: array when adding reviewers
+  - code-implementer
+  - code-review-coordinator
+  - plan-coordinator
+  - repo-research-analyst
+  - best-practices-researcher
+  - framework-docs-researcher
+  - bug-reproduction-validator
+  - security-sentinel
+  - performance-oracle
+  - architecture-strategist
+  - git-history-analyzer
+  - java-reviewer
+  - python-reviewer
+  - sql-reviewer
+  - aws-reviewer
+
+growth:
+  new_skill: capability-gap-proposal → human approval → create-primitive → append starter_skills or new category
+  new_agent: capability-gap-proposal → human approval → create-primitive → append starter_agents + engineer_allowlist in engineer.agent.md
+  new_learning: compound-learnings → knowledge/solutions → index-memory
+
+references:
+  principles: .github/skills/references/engineer-principles.md
+  capture_gate: .github/skills/references/capture-gate.md
+  session_checklist: .github/skills/references/engineer-session-checklist.md
+  starter_kit: .github/skills/references/engineer-starter-kit.md
+  vision: docs/architecture/engineer-vision-and-growth-loop.md

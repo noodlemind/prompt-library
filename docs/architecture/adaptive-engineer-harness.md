@@ -4,7 +4,7 @@
 
 The Adaptive Engineer Harness makes `@engineer` the accountable coordinator for software work while keeping expertise expandable, reviewable, and measurable. The harness keeps the system skill-first: known work routes to known skills, focused judgment routes to specialist agents, and missing reusable capability becomes a proposed primitive only after human approval.
 
-The goal is not to make one prompt know everything. The goal is to make `@engineer` behave like a disciplined senior engineer with access to a network of experts, templates, local context, and a human liaison for approval when the next step changes risk, scope, or system capability.
+The goal is not to make one prompt know everything. The goal is to make `@engineer` behave like a disciplined senior engineer who **starts with a starter kit**, **compounds knowledge**, **gains skills and specialists over time**, and follows **clear principles** — see `engineer-vision-and-growth-loop.md`.
 
 ## Runtime Model
 

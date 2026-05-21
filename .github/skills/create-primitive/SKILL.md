@@ -16,7 +16,7 @@ Canonical primitive creator and maintainer for this prompt library. Use it to ke
 - Creating a new scoped instruction (`.github/instructions/*.instructions.md`)
 - Creating a new review check (bundled under `.github/skills/code-review/references/checks/*.md` or product-owned `.github/checks/*.md`) or thin prompt wrapper (`.github/prompts/*.prompt.md`)
 - Creating or moving dense supporting material into skill `references/` or `assets/`
-- Creating or updating a solution doc under `docs/solutions/`
+- Creating or updating a team solution under `knowledge/solutions/` (global) or product `docs/solutions/` (repo-private)
 - Modifying any prompt-library primitive
 - Understanding which primitive type should exist
 
@@ -74,13 +74,17 @@ Do not claim feature parity across hosts. When a host lacks a primitive, documen
 Before writing files:
 
 1. **Classify the primitive** using the decision rules above.
-2. **Check for overlap** in `.github/skills/`, `.github/agents/`, `.github/instructions/`, `.github/prompts/`, skill `references/`, optional product `.github/checks/`, and `docs/solutions/`.
+2. **Check for overlap** in `.github/skills/`, `.github/agents/`, `.github/instructions/`, `.github/prompts/`, skill `references/`, `knowledge/solutions/`, optional product `.github/checks/`, and product `docs/solutions/`.
 3. **State the decision** before editing: "This should be a [primitive] because [boundary]."
 4. **Define triggers and negative triggers** for discovery when the primitive is user/model selectable.
 5. **Declare permissions/tool needs** using the smallest sufficient tool set.
 6. **Define outputs and verification**: generated files, state changes, review criteria, or acceptance checks.
 7. **Add eval scenarios**: at least 3 should-trigger and 3 should-not examples for skills/agents, or good/bad examples for checks/instructions.
 8. **Update docs** listed in the validation checklist.
+9. **Update growth inventory** when adding a skill or agent in this repo:
+   - Append to `knowledge/capability-registry.yaml` under `starter_skills` or `starter_agents`.
+   - If new agent is delegatable from `@engineer`, add to `engineer_allowlist` and `engineer.agent.md` frontmatter `agents:` (human-approved).
+   - Document in `docs/architecture/engineer-vision-and-growth-loop.md` if primitive boundaries changed.
 
 ## Capability Expansion Mode
 
@@ -143,8 +147,9 @@ Required location:
 
 Use only for verified learnings from completed work. Prefer `/compound-learnings` when the learning came from a pipeline issue.
 
-Required location:
-- `docs/solutions/<category>/<slug>.md`
+Required locations:
+- **Team-wide:** `knowledge/solutions/<category>/<slug>.md` (preferred; hydrated globally)
+- **Repo-private:** product `docs/solutions/<category>/<slug>.md` when the learning must not be shared
 
 ## Agent Creation
 

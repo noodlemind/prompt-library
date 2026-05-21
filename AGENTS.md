@@ -21,9 +21,11 @@ The system is skill-first. Skills are the primary reusable workflow contracts; a
 Issues flow through a state machine:
 
 ```
-/brainstorming (optional) → /capture-issue → /plan-issue → /deepen-plan (optional) → /work-on-task → /code-review → /compound-learnings
-                                  open      →   planned   →                          in-progress   →    review    →      done
+/recall (recommended) → /brainstorming (optional) → /capture-issue → /plan-issue → /deepen-plan (optional) → /work-on-task → /code-review → /compound-learnings → /index-memory
+                         open → planned → in-progress → review → done
 ```
+
+Vision and growth: `docs/architecture/engineer-vision-and-growth-loop.md`. Knowledge lookup: `.github/skills/references/knowledge-locations.md`.
 
 Plan files in `docs/plans/` (product repos only) track state via YAML frontmatter (`status`, `plan_lock`, `phase`). Team-wide learnings hydrate from `knowledge/` to `~/.copilot/knowledge/`. Run `/recall` before engineering work. Inter-step memory flows through plan sections including `## Memory Cards`, `## Context`, `## Research Notes`, and `## Activity`. See `docs/architecture/engineer-memory-system.md`.
 
@@ -55,7 +57,7 @@ docs/
 - **Primitive boundaries**: Default repeated procedures to skills; create agents only for distinct judgment, authority, isolation, or evaluation standards; keep prompt wrappers thin.
 - **Testing**: TDD mandatory — failing test → minimal fix → cleanup
 - **Diffs**: Surgical changes only. No drive-by refactoring.
-- **Knowledge compounding**: `docs/solutions/` stores documented learnings. Check before starting similar work.
+- **Knowledge compounding**: Team learnings in `knowledge/solutions/` (hydrated globally). Product repos use `docs/plans/` for issues and optional `docs/solutions/` for repo-private learnings. Run `/recall` before similar work.
 
 ## Coding Standards
 
@@ -93,4 +95,4 @@ Read `docs/architecture/skill-driven-prompt-library.md` before adding or substan
 
 ## Accumulated Knowledge
 
-Read `.github/agent-context.md` for prompt-library repo patterns. In product repositories, read product-owned context docs such as `README.md`, `docs/agent-context.md`, `docs/codebase-snapshot.md`, and `docs/solutions/`.
+Read `.github/agent-context.md` for prompt-library repo patterns. In product repositories, follow `.github/skills/references/knowledge-locations.md`.

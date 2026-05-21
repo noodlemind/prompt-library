@@ -24,7 +24,7 @@ Plan files in `docs/plans/` track state via YAML frontmatter: `status` (open/pla
 
 ## Knowledge
 
-Read `.github/agent-context.md` for codebase patterns. Run `/recall` for global `knowledge/manifest.yaml` and local `docs/plans/`. Optional product `docs/solutions/` for repo-private learnings. Read `docs/codebase-snapshot.md` for project structure (if it exists).
+Load context per `.github/skills/references/knowledge-locations.md`. Run `/recall` before trackable engineering work.
 
 ## Conventions
 
@@ -38,7 +38,7 @@ Read `.github/agent-context.md` for codebase patterns. Run `/recall` for global 
 
 The engineer selects the skill/flow first, then delegates only when separate judgment, authority, or isolation improves the result. Coordinators delegate to specialist subagents via `tools: ['agent']`. Subagents run in isolated context — include all necessary context in the task prompt. `/plan-issue` and `/code-review` prompt wrappers route to their coordinators via the `agent:` field (prompt tools override agent tools). Coordinators use `agents:` allowlists to restrict which specialists they can invoke. Coordinators dispatch subagents in parallel batches (3-4 at a time) rather than sequentially.
 
-Adaptive Engineer Harness rules: use existing skills first; use `.github/skills/references/capability-gap-proposal.md` and `/create-primitive` before adding capabilities; use `.github/skills/references/subagent-context-packet.md` for delegated work; use `.github/skills/references/human-approval-policy.md` before risky concurrency, schema/data, security, destructive, broad-refactor, or primitive-expansion decisions.
+Adaptive Engineer Harness: principles in `.github/skills/references/engineer-principles.md`; session checklist in `engineer-session-checklist.md`; vision in `docs/architecture/engineer-vision-and-growth-loop.md`. Use existing skills first; use `.github/skills/references/capability-gap-proposal.md` and `/create-primitive` before adding capabilities; use `.github/skills/references/subagent-context-packet.md` for delegated work; use `.github/skills/references/human-approval-policy.md` before risky concurrency, schema/data, security, destructive, broad-refactor, or primitive-expansion decisions.
 
 ## Standardization
 
