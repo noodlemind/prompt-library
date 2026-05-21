@@ -31,9 +31,7 @@ Activate when you need a software engineer to:
 
 The engineer follows: **Recall → Understand → Route → Capture Gate → Investigate → Plan → Implement → Verify**. It selects the right skill or pipeline flow first, then delegates to specialist agents only when separate judgment, authority, or isolation materially improves the result.
 
-**Recall:** Run **`/recall`** first for global `knowledge/manifest.yaml` and local plans. See `docs/architecture/engineer-memory-system.md`.
-
-**Capture gate:** On trackable work, `@engineer` must invoke **`/capture-issue`** before investigating for fixes or editing code. It must not create `docs/plans/*.md` inline or skip capture. See `.github/skills/references/capture-gate.md`.
+**Recall + gate:** Inlined in `@engineer` (checklist + Phase 0). Optional `/recall` for a report. Caps: `context-budget.md`. Parity bar: `docs/architecture/composer-parity-review.md`.
 
 At each phase transition, it consults you for guidance. You steer direction and priorities; the engineer handles execution. When specialist expertise is needed (security, performance, architecture, etc.), it delegates to the appropriate specialist agent.
 
