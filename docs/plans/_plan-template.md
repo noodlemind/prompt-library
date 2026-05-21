@@ -21,6 +21,10 @@ What and why (2-3 sentences).
 
 Problem facts, constraints, related paths, prior art.
 
+## Memory Cards
+
+Compact recall bullets with `source:` paths (global `knowledge/solutions/...` or local docs). See `.github/skills/references/memory-cards.md`.
+
 ## Acceptance Criteria
 
 - [ ] Measurable outcome 1

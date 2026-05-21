@@ -6,7 +6,8 @@ This file contains accumulated knowledge about the codebase, discovered by agent
 
 This repository is a skill-driven prompt library containing AI agent systems:
 - `.github/agents/` — 24 agents (19 specialists + 1 engineer + 1 implementer + 3 coordinators, judgment-criteria style)
-- `.github/skills/` — 23 skills forming the connected pipeline, primitive creation, domain workflows, README maintenance, quick Q&A, and utilities
+- `.github/skills/` — 25 skills forming the connected pipeline (includes `/recall`, `/index-memory`)
+- `knowledge/` — team-wide solutions and manifest (hydrated to `~/.copilot/knowledge/`), primitive creation, domain workflows, README maintenance, quick Q&A, and utilities
 - `.github/instructions/` — scoped instructions (TypeScript, Python, Java, Spring Boot, PostgreSQL, AWS SDK)
 - `.github/prompts/` — thin host-facing wrappers that route to skills and declare host tools
 - `.github/skills/code-review/references/checks/` — bundled review checks discovered by `/code-review`
@@ -71,6 +72,9 @@ Five orchestrating skills (code-review, plan-issue, deepen-plan, work-on-task, e
 
 ### Engineer Agent
 The `engineer` agent understands requirements, routes to the right skill/flow, investigates, plans, and orchestrates. It delegates implementation to `code-implementer` for bounded execution tasks, and delegates to specialist reviewers/researchers when separate judgment, authority, or isolation is useful. It follows Understand → Route → **Capture Gate** → Investigate → Plan → Implement → Verify. On trackable work it **must invoke `/capture-issue`** before code edits; it must not create plan files inline (see `.github/skills/references/capture-gate.md`). The `/engineer` skill is its entry point.
+
+### Engineer Memory System
+`docs/architecture/engineer-memory-system.md` defines three tiers: product `docs/plans/` (local), global `knowledge/solutions/` (hydrated team-wide), optional `profile.md` (user preferences). `/recall` runs before investigate; `/compound-learnings` publishes globally; `/index-memory` rebuilds `manifest.yaml`. Capture gate: `.github/skills/references/capture-gate.md`.
 
 ### Adaptive Engineer Harness
 `@engineer` is the central coordinator for adaptive capability expansion. It routes to known skills first, uses `.github/skills/references/subagent-context-packet.md` for delegated work, and uses `.github/skills/references/human-approval-policy.md` before risky strategy choices. Missing reusable capability must be documented with `.github/skills/references/capability-gap-proposal.md` and then routed to `/create-primitive` after human approval. Architecture details live in `docs/architecture/adaptive-engineer-harness.md`.

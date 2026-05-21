@@ -65,6 +65,17 @@ If the gate fails → **invoke `/capture-issue` now** and stop. Do not read deep
 
 ## Workflow
 
+### Phase 0: Recall
+
+Before Phase 1, run **`/recall`** (or follow `.github/skills/recall/SKILL.md`) using the user's request or plan path.
+
+1. Query global `knowledge/manifest.yaml` (hydrated under `~/.copilot/knowledge/`).
+2. Query product `docs/plans/` and optional `docs/solutions/`.
+3. Present **memory cards** (see `.github/skills/references/memory-cards.md`).
+4. If a matching **global solution** exists, cite it before capture — half the fix may already be documented.
+
+Do not edit product code in Phase 0. Append recall cards to the active plan `## Memory Cards` when a plan file exists.
+
 ### Phase 1: Understand
 
 Parse the user's request and determine the type of work:
@@ -78,9 +89,10 @@ Parse the user's request and determine the type of work:
 | **Investigation** | "why does", "how does", "understand", "explain" |
 
 Read plan files and repository context only (no product code edits in this phase):
+- Use Phase 0 recall results; read plan `## Memory Cards` before long sections
 - Check `docs/plans/` for existing plan files related to the request
-- Read available repository context: `README.md`, `docs/agent-context.md`, `docs/codebase-snapshot.md`, and `docs/solutions/`. When working in this prompt-library repo, also read `.github/agent-context.md`.
-- Check `docs/solutions/` for previously solved similar problems
+- Read `README.md`, `docs/agent-context.md`, `docs/codebase-snapshot.md`; global team solutions via `~/.copilot/knowledge/solutions/` (see `knowledge/README.md`)
+- When working in this prompt-library repo, also read `.github/agent-context.md`
 
 **Checkpoint: Present your understanding to the user.** "Here's what I understand: [summary]. Is this correct?"
 
@@ -206,26 +218,9 @@ Validate the implementation:
 
 **If all phases of a plan are complete**, set `status: review` and suggest `/code-review`.
 
-## Delegation Table
+## Delegation
 
-Invoke specialist agents as subagents when their focused expertise would outperform general analysis. Include full context in the task prompt — subagents run in isolated context.
-
-| Situation | Delegate to | What to include in task prompt |
-|-----------|-------------|-------------------------------|
-| **Implementation tasks** | `code-implementer` | Task description, files to modify (with code), patterns, test expectations, constraints |
-| Understand codebase patterns | `repo-research-analyst` | Feature description, file paths to investigate, specific questions |
-| Unfamiliar technology | `best-practices-researcher` | Technology name, what you're trying to do, constraints |
-| Framework API questions | `framework-docs-researcher` | Framework + version, specific feature/API, what you need |
-| Security-sensitive changes | `security-sentinel` | Changed files with diffs, what the code does, threat model |
-| Performance-critical code | `performance-oracle` | Changed files, expected load/data volume, performance requirements |
-| Architecture decisions | `architecture-strategist` | Proposed design, alternatives considered, system context |
-| Java review | `java-reviewer` | Changed Java files, project conventions, tests, risks |
-| Python review | `python-reviewer` | Changed Python files, runtime version, tests, risks |
-| SQL/data review | `sql-reviewer` | SQL/schema/migration/query changes, data volume assumptions, rollback expectations |
-| AWS review | `aws-reviewer` | AWS services touched, IAM/config snippets, reliability and observability expectations |
-| Systematic bug reproduction | `bug-reproduction-validator` | Bug report, steps to reproduce, environment details |
-| Code evolution context | `git-history-analyzer` | File paths, what you want to understand about history |
-| Full code review | `code-review-coordinator` | All changed files, PR context, project type |
+When delegating, read `.github/skills/references/engineer-delegation-matrix.md`. Subagents run in isolated context — use `.github/skills/references/subagent-context-packet.md` for every task.
 
 ## User Consultation Moments
 
@@ -255,5 +250,7 @@ This agent works natively with the connected pipeline:
 When invoked on an existing plan file, follow the Session Pickup Sequence:
 1. Read the plan file
 2. Check `status` and `plan_lock`
-3. Read `## Research Notes` and `## Activity` for context
+3. Read `## Memory Cards`, then `## Research Notes` and `## Activity`
 4. Resume at the current phase's first unchecked task
+
+When work completes, suggest **`/compound-learnings`** and **`/index-memory`** to publish team-wide knowledge.

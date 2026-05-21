@@ -1,6 +1,6 @@
 # Prompt Library
 
-Skill-driven software engineering prompt library with 23 skills, 24 agents, scoped instructions, review checks, and local-first plan/solution artifacts. The primary consumption platforms are GitHub Copilot in VS Code and IntelliJ IDEA. No plugin packaging or extension installation is required.
+Skill-driven software engineering prompt library with 25 skills, 24 agents, scoped instructions, review checks, and local-first plan/solution artifacts. The primary consumption platforms are GitHub Copilot in VS Code and IntelliJ IDEA. No plugin packaging or extension installation is required.
 
 ## Quick Start
 

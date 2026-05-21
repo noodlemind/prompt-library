@@ -8,7 +8,7 @@ Skill-driven prompt library for software development using GitHub Copilot in VS 
 
 ## Primitives
 
-- **Skills** (`.github/skills/`): 23 workflows with trigger examples and negative triggers. Skills are the primary reusable contract: they compose local context, instructions, tools, review checks, and agents. `/start` classifies incoming work and routes to the right entry point. `/btw` handles quick Q&A without plans or edits. `/project-readme` creates or updates project README files. `/create-primitive` decides and creates the right prompt-library artifact. Domain skills include `/java`, `/python`, `/sql`, and `/aws`. Pipeline: `/capture-issue` → `/plan-issue` → `/work-on-task` → `/code-review` → `/compound-learnings`.
+- **Skills** (`.github/skills/`): 25 workflows with trigger examples and negative triggers. Skills are the primary reusable contract: they compose local context, instructions, tools, review checks, and agents. `/start` classifies incoming work and routes to the right entry point. `/btw` handles quick Q&A without plans or edits. `/project-readme` creates or updates project README files. `/create-primitive` decides and creates the right prompt-library artifact. Domain skills include `/java`, `/python`, `/sql`, and `/aws`. Pipeline: `/capture-issue` → `/plan-issue` → `/work-on-task` → `/code-review` → `/compound-learnings`.
 - **Agents** (`.github/agents/`): 24 agents (19 specialists + 1 engineer + 1 implementer + 3 coordinators). Review agents include prompt injection guardrails. Use agents when work needs separate judgment, tool authority, runtime profile, isolation, or accountability. Active Java, Python, SQL, and AWS reviewers are included.
 - **Instructions** (`.github/instructions/`): Scoped context by file pattern.
 - **Prompt wrappers** (`.github/prompts/`): Thin host adapters that route to skills and declare host tools.
@@ -20,9 +20,11 @@ Plan files in `docs/plans/` track state via YAML frontmatter: `status` (open/pla
 
 **Capture gate:** `@engineer` and `/engineer` must invoke **`/capture-issue`** before investigating for fixes or editing product code on trackable work. Do not create `docs/plans/*.md` inline or set `plan_lock: true` without `/plan-issue`. See `.github/skills/references/capture-gate.md` and `docs/plans/_plan-template.md`.
 
+**Recall:** Run **`/recall`** at session start. Team learnings live in hydrated `~/.copilot/knowledge/` (`knowledge/solutions/`, `manifest.yaml`). Product plans stay in `docs/plans/` only. See `docs/architecture/engineer-memory-system.md`.
+
 ## Knowledge
 
-Read `.github/agent-context.md` for codebase patterns. Check `docs/solutions/` before starting similar work. Read `docs/codebase-snapshot.md` for project structure and architecture diagrams (if it exists).
+Read `.github/agent-context.md` for codebase patterns. Run `/recall` for global `knowledge/manifest.yaml` and local `docs/plans/`. Optional product `docs/solutions/` for repo-private learnings. Read `docs/codebase-snapshot.md` for project structure (if it exists).
 
 ## Conventions
 

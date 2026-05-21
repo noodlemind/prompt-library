@@ -10,14 +10,18 @@ The goal is not to make one prompt know everything. The goal is to make `@engine
 
 `@engineer` owns the main loop:
 
-1. Understand the user request and local context.
-2. Route to the best existing skill or pipeline step.
-3. Identify whether specialist judgment is needed.
-5. Package delegated work with a subagent context packet.
-6. Ask the human for approval before risky decisions or capability expansion.
-7. Implement or orchestrate implementation.
-8. Verify with evidence.
-9. Record misses as capability gaps or validation needs.
+1. **Recall** team and repo knowledge (`/recall`; global `knowledge/manifest.yaml` + local plans).
+2. Understand the user request and local context.
+3. Route to the best existing skill or pipeline step.
+4. Pass the **capture gate** on trackable work (`/capture-issue` before code edits; see `.github/skills/references/capture-gate.md`).
+5. Identify whether specialist judgment is needed.
+6. Package delegated work with a subagent context packet.
+7. Ask the human for approval before risky decisions or capability expansion.
+8. Implement or orchestrate implementation.
+9. Verify with evidence.
+10. Suggest **`/compound-learnings`** and **`/index-memory`** to publish cross-repo learnings.
+
+See `docs/architecture/engineer-memory-system.md` for tiers (user / global / product).
 
 Expansion uses `/create-primitive` across all primitive types:
 
@@ -74,7 +78,7 @@ Expected engineer behavior:
 
 1. **Understand**: Restate the symptom, affected flow, data invariants, and current assumption: `saveAndFlush` flushes the persistence context but does not serialize concurrent transactions.
 2. **Route**: Treat it as a high-risk data-integrity/concurrency bug. Use `/tdd-fix` if the failure is isolated and reproducible; otherwise capture and plan it with Java, SQL/data-integrity, and performance review routing.
-3. **Capture if needed**: If the fix is multi-file or data-sensitive, create or update a plan with affected files, verification plan, and risk routing.
+3. **Recall + capture**: Run `/recall` for similar team solutions; if multi-file or data-sensitive, invoke `/capture-issue` then `/plan-issue` — do not create plans inline.
 4. **Reproduce first**: Require a failing concurrent reproduction before implementation.
 5. **Investigate**: Inspect transaction boundaries, database constraints, idempotency keys, lock use, atomic updates, isolation level, retries, and error handling.
 6. **Delegate**: Package Java, SQL/data-integrity, and performance review requests with subagent context packets when separate judgment is useful.

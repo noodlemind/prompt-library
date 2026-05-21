@@ -8,7 +8,7 @@ This is a skill-driven prompt library for software development teams. The primar
 
 ### Architecture: Skill-First Primitives
 
-- **Skills** (`.github/skills/*/SKILL.md`): 23 user-invocable workflows that compose local context, scoped instructions, tools, checks, and agents. The connected pipeline `/capture-issue` → `/plan-issue` → `/work-on-task` → `/code-review` → `/compound-learnings` is the core engineering loop. `/btw` handles quick Q&A. `/project-readme` creates or updates project README files. `/create-primitive` decides and creates the right primitive type. Domain skills include `/java`, `/python`, `/sql`, and `/aws`.
+- **Skills** (`.github/skills/*/SKILL.md`): 25 user-invocable workflows that compose local context, scoped instructions, tools, checks, and agents. The connected pipeline `/capture-issue` → `/plan-issue` → `/work-on-task` → `/code-review` → `/compound-learnings` is the core engineering loop. `/btw` handles quick Q&A. `/project-readme` creates or updates project README files. `/create-primitive` decides and creates the right primitive type. Domain skills include `/java`, `/python`, `/sql`, and `/aws`.
 - **Agents** (`.github/agents/*.agent.md`): 24 agents — 19 stateless domain experts using judgment-criteria design, 1 engineer, 1 code-implementer, plus 3 coordinator/navigation agents. Agents exist for separate judgment, tool authority, runtime profile, isolation, or accountability. Active Java, Python, SQL, and AWS reviewers are included.
 - **Instructions** (`.github/instructions/*.instructions.md`): Scoped context that activates based on file patterns (TypeScript, Python, Java, Spring Boot, PostgreSQL, AWS SDK).
 - **Prompt wrappers** (`.github/prompts/*.prompt.md`): Thin host-facing adapters that route to skills and declare host tools.
@@ -91,7 +91,7 @@ CLAUDE.md              — optional compatibility guidance
 23. **plan-coordinator**: Delegates to research agents in parallel with isolated context
 24. **pipeline-navigator**: Guides pipeline transitions via handoff buttons, not subagent dispatch
 
-## Available Skills (23 total)
+## Available Skills (25 total)
 
 ### Connected Pipeline
 1. **/capture-issue**: Create initial plan file under `docs/plans/` from bug/feature/task

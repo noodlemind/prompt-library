@@ -29,7 +29,11 @@ C:\Users\<you>\AppData\Local\github-copilot\intellij\skills
 C:\Users\<you>\AppData\Local\github-copilot\intellij\instructions
 C:\Users\<you>\AppData\Local\github-copilot\intellij\prompts
 C:\Users\<you>\AppData\Local\github-copilot\intellij\global-copilot-instructions.md
+C:\Users\<you>\.copilot\knowledge
+C:\Users\<you>\AppData\Local\github-copilot\intellij\knowledge
 ```
+
+Team compounded learnings (`knowledge/solutions/`, `manifest.yaml`, `profile.md`) hydrate to `knowledge\` under both global roots. Product repositories keep **plans** in `docs/plans/` only; they consume global solutions via `/recall` after hydrate. See `docs/architecture/engineer-memory-system.md`.
 
 Library-managed review checks are bundled inside the `/code-review` skill under `skills\code-review\references\checks`. They are not copied to a separate global checks folder because checks are not a standard Copilot primitive.
 
@@ -83,6 +87,7 @@ VS Code supports user-level instruction files, prompt files, custom agents, and 
 | Skills | `%USERPROFILE%\.copilot\skills\<skill>\SKILL.md` | Available as personal skills and slash commands |
 | Prompts | `%USERPROFILE%\.copilot\prompts\*.prompt.md` | Available as user prompt files and slash commands |
 | Bundled checks | `%USERPROFILE%\.copilot\skills\code-review\references\checks\*.md` | Skill-local review criteria loaded by `/code-review`; not a native Copilot primitive |
+| Team knowledge | `%USERPROFILE%\.copilot\knowledge\` | `solutions/`, `manifest.yaml`, `profile.md` for `/recall` and cross-repo compounding |
 
 `agent-context.md` is not a VS Code global customization primitive. Treat it as repository knowledge, not as something VS Code automatically discovers globally. For this prompt-library repo, `.github/agent-context.md` records library-specific learnings. For product repositories, persistent product context should live in product-owned docs such as `docs/plans/`, `docs/solutions/`, `docs/codebase-snapshot.md`, `docs/agent-context.md`, or `README.md` when a skill intentionally creates or updates them.
 

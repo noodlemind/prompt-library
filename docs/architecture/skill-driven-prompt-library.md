@@ -106,7 +106,9 @@ This repo does not need a separate runtime context-pack format to get most of th
 
 This gives every host a simple artifact to read while preserving the capture -> analyze/plan -> work -> review workflow.
 
-`agent-context.md` is not part of the global customization contract. Use it only as repository-owned accumulated knowledge. Product-level context should be captured in product-owned files: `docs/plans/` for active work, `docs/solutions/` for verified learnings, `docs/codebase-snapshot.md` for generated architecture snapshots, `docs/agent-context.md` for accumulated product context when a team wants one, and `README.md` for stable project overview and integration points.
+`agent-context.md` is not part of the global customization contract. Use it only as repository-owned accumulated knowledge. Product-level context should be captured in product-owned files: `docs/plans/` for active work, optional `docs/solutions/` for repo-private learnings, `docs/codebase-snapshot.md` for generated architecture snapshots, `docs/agent-context.md` for accumulated product context when a team wants one, and `README.md` for stable project overview and integration points.
+
+**Team-wide compounded learnings** hydrate globally under `knowledge/` (see `docs/architecture/engineer-memory-system.md`). `/recall` and `/index-memory` maintain cross-repo recall; `/compound-learnings` publishes to `knowledge/solutions/`.
 
 ## Skill Contract
 

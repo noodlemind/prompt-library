@@ -76,6 +76,7 @@ updated: YYYY-MM-DD
 **Body sections** (minimum for Definition of Ready):
 - `## Overview` — what and why, 2-3 sentences
 - `## Context` — relevant technical context, related code paths, prior art
+- `## Memory Cards` — optional; run `/recall` first and copy matching global/local bullets
 - `## Acceptance Criteria` — measurable checklist of requirements
 - `## Technical Notes` — implementation hints, constraints, dependencies
 - `## Activity` — append-only lifecycle log, initialized with capture timestamp

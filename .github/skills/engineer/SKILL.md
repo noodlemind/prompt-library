@@ -29,7 +29,9 @@ Activate when you need a software engineer to:
 
 ## How It Works
 
-The engineer follows a skill-driven cycle: **Understand → Route → Capture Gate → Investigate → Plan → Implement → Verify**. It selects the right skill or pipeline flow first, then delegates to specialist agents only when separate judgment, authority, or isolation materially improves the result.
+The engineer follows: **Recall → Understand → Route → Capture Gate → Investigate → Plan → Implement → Verify**. It selects the right skill or pipeline flow first, then delegates to specialist agents only when separate judgment, authority, or isolation materially improves the result.
+
+**Recall:** Run **`/recall`** first for global `knowledge/manifest.yaml` and local plans. See `docs/architecture/engineer-memory-system.md`.
 
 **Capture gate:** On trackable work, `@engineer` must invoke **`/capture-issue`** before investigating for fixes or editing code. It must not create `docs/plans/*.md` inline or skip capture. See `.github/skills/references/capture-gate.md`.
 
@@ -71,6 +73,10 @@ Before coding, the engineer should produce a short route decision:
 | Data-integrity or concurrency bug | `/tdd-fix` if isolated and reproducible; otherwise `/capture-issue` -> `/plan-issue` with Java/SQL/performance risk routing |
 
 Use `@engineer` as primary when the user wants hands-on autonomous engineering, investigation, or implementation. Do not bypass `/capture-issue` for trackable work unless the user explicitly waives capture in the current turn.
+
+## Recall (Phase 0)
+
+Invoke **`/recall`** with the user request or plan path before Phase 1. Load team solutions from hydrated `~/.copilot/knowledge/` when available.
 
 ## Capture Gate
 

@@ -89,6 +89,8 @@ Create missing sections or update existing sections in place. Do not create dupl
 - `config/routes.rb` — modified
 ```
 
+**`## Memory Cards`** — 3–7 bullets from `/recall` or initial research, each with `source:` path (see `.github/skills/references/memory-cards.md`).
+
 **`## Research Notes`** — key findings from research:
 - Relevant codebase patterns found
 - Best practices that apply
