@@ -22,7 +22,7 @@ Read-only diagnostics. **No** product code edits.
 
 ## Output
 
-Markdown report: PASS / FAIL per check with fix hint (e.g. `npx @dev-kit/harness install` or VS Code Hydrate task).
+Markdown report: PASS / FAIL per check with fix hint (e.g. `npx @dev-kit/harness install`).
 
 ## Linux / cloud workspace
 

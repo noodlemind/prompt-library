@@ -61,7 +61,7 @@ Sort entries by `date` descending.
 
 ### 4. Confirm
 
-Report: entry count, categories, and path to manifest. Remind user to re-hydrate if they edited the prompt-library repo copy (Hydrate task copies `knowledge/` to `~/.copilot/knowledge/`).
+Report: entry count, categories, and path to manifest. After editing repo `knowledge/`, run `npx @dev-kit/harness install` or `harness index` on the global `~/.copilot/knowledge/` tree.
 
 ## Guardrails
 

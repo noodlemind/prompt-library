@@ -1,228 +1,112 @@
 # Global Install and Sync Guide
 
-This prompt library is source material, not an IDE extension. The target policy is:
+This prompt library is **source material**, not an IDE extension. Policy:
 
-**Prompts, agents, skills, and instructions are installed globally only.**
+**Prompts, agents, skills, and instructions are installed globally only** — not copied into product repositories.
 
-Do not hydrate product repositories with prompt-library artifacts. Product repositories remain clean, and developers update their global Copilot customizations from this source repo.
+Install and upgrade use **`@dev-kit/harness`** ([Nexus setup](./onboarding/nexus-registry-setup.md), [distribution plan](./architecture/npm-harness-distribution-plan.md)).
 
-For the current target users, assume **Windows**, **GitHub Copilot**, **VS Code**, and **IntelliJ IDEA**.
+## Quick install
 
-## Recommended Windows Layout
+### Enterprise (Nexus)
 
-Clone the prompt library once:
+After `.npmrc` maps `@dev-kit` to your registry:
 
-```powershell
-git clone <prompt-library-url> $env:USERPROFILE\prompt-library
-$PromptLibrary = "$env:USERPROFILE\prompt-library"
+```bash
+npx @dev-kit/harness@latest install --configure-vscode --autonomy balanced
+npx @dev-kit/harness doctor
 ```
 
-Global Hydrate copies the library into:
+Pin versions in team runbooks when you need reproducibility.
+
+### Maintainers (this repo)
+
+```bash
+node packages/harness/bin/harness.mjs install --configure-vscode --autonomy balanced
+node packages/harness/bin/harness.mjs doctor
+```
+
+Or in VS Code: **Tasks: Run Task** → **Dev Kit: Install Harness**.
+
+Other tasks: **Dev Kit: Upgrade Harness**, **Dev Kit: Harness Doctor**.
+
+## What gets installed
+
+The harness syncs into:
+
+| Host | Global root |
+|------|-------------|
+| VS Code / Copilot CLI | `~/.copilot/` (Windows: `%USERPROFILE%\.copilot\`) |
+| IntelliJ IDEA | `%LOCALAPPDATA%\github-copilot\intellij\` (Windows) or platform equivalent |
 
 ```text
-C:\Users\<you>\.copilot\agents
-C:\Users\<you>\.copilot\skills
-C:\Users\<you>\.copilot\instructions
-C:\Users\<you>\.copilot\prompts
-C:\Users\<you>\AppData\Local\github-copilot\intellij\agents
-C:\Users\<you>\AppData\Local\github-copilot\intellij\skills
-C:\Users\<you>\AppData\Local\github-copilot\intellij\instructions
-C:\Users\<you>\AppData\Local\github-copilot\intellij\prompts
-C:\Users\<you>\AppData\Local\github-copilot\intellij\global-copilot-instructions.md
-C:\Users\<you>\.copilot\knowledge
-C:\Users\<you>\AppData\Local\github-copilot\intellij\knowledge
+~/.copilot/
+├── agents/
+├── skills/
+├── instructions/
+├── prompts/
+├── knowledge/          # manifest, profile, solutions (team memory)
+├── enterprise/         # optional corp overlay
+├── copilot-instructions.md
+└── .harness-lock.json  # version + file manifest for safe upgrades
 ```
 
-Team compounded learnings (`knowledge/solutions/`, `manifest.yaml`, `profile.md`) hydrate to `knowledge\` under both global roots. Product repositories keep **plans** in `docs/plans/` only; they consume global solutions via `/recall` after hydrate. See `docs/architecture/engineer-memory-system.md`.
+Product repos keep **`docs/plans/`** only. Team learnings live in global `knowledge/solutions/` after `/compound-learnings` and `harness index`.
 
-Library-managed review checks are bundled inside the `/code-review` skill under `skills\code-review\references\checks`. They are not copied to a separate global checks folder because checks are not a standard Copilot primitive.
+Bundled review checks ship inside `skills/code-review/references/checks/` (not a separate global folder).
 
-## VS Code Hydrate Task
+## VS Code discovery
 
-The preferred Windows workflow is:
-
-1. Open the prompt-library checkout in VS Code.
-2. Pull the latest prompt-library changes.
-3. Open the Command Palette.
-4. Run `Tasks: Run Task`.
-5. Choose `Prompt Library: Hydrate Global Copilot Customizations`.
-
-The task definition lives in `.vscode/tasks.json`. It syncs source artifacts from the current prompt-library checkout into `%USERPROFILE%\.copilot` for VS Code and shared Copilot personal skills, mirrors the same artifacts into `%LOCALAPPDATA%\github-copilot\intellij` for IntelliJ IDEA, removes stale files previously created by this library, removes known retired legacy artifacts, and updates IntelliJ IDEA's global Copilot instructions file.
-
-Run this task again whenever the prompt-library repo is updated.
-
-## VS Code Global Discovery
-
-VS Code can discover some user-level Copilot customizations directly. To make discovery explicit, add these user settings in VS Code:
+`install --configure-vscode` merges recommended settings:
 
 ```json
 {
-  "chat.agentFilesLocations": {
-    "C:\\Users\\<you>\\.copilot\\agents": true
-  },
-  "chat.promptFilesLocations": {
-    "C:\\Users\\<you>\\.copilot\\prompts": true
-  },
-  "chat.instructionsFilesLocations": {
-    "C:\\Users\\<you>\\.copilot\\instructions": true
-  },
-  "chat.agentSkillsLocations": {
-    "C:\\Users\\<you>\\.copilot\\skills": true
-  }
+  "chat.agentFilesLocations": { "~/.copilot/agents": true },
+  "chat.instructionsFilesLocations": { "~/.copilot/instructions": true },
+  "chat.agentSkillsLocations": { "~/.copilot/skills": true },
+  "chat.customAgentInSubagent.enabled": true,
+  "chat.useAgentSkills": true
 }
 ```
 
-Skills are installed under `%USERPROFILE%\.copilot\skills`, which Copilot supports for personal skills.
+Confirm in the Copilot chat customization diagnostics view.
 
-Use the VS Code chat customization diagnostics view to confirm which agents, prompts, and instructions are loaded.
+## IntelliJ IDEA
 
-### What VS Code Loads Globally
+The harness installs the same artifacts under the IntelliJ global root and writes `global-copilot-instructions.md` from library instructions.
 
-VS Code supports user-level instruction files, prompt files, custom agents, and skills. The hydrate task installs this library into those global user-level locations:
+Enable:
 
-| Artifact | Global location | VS Code behavior |
-|---|---|---|
-| Instructions | `%USERPROFILE%\.copilot\instructions\*.instructions.md` | Loaded as user instructions when configured through VS Code customization settings |
-| Agents | `%USERPROFILE%\.copilot\agents\*.agent.md` | Available across workspaces when configured as custom agent files |
-| Skills | `%USERPROFILE%\.copilot\skills\<skill>\SKILL.md` | Available as personal skills and slash commands |
-| Prompts | `%USERPROFILE%\.copilot\prompts\*.prompt.md` | Available as user prompt files and slash commands |
-| Bundled checks | `%USERPROFILE%\.copilot\skills\code-review\references\checks\*.md` | Skill-local review criteria loaded by `/code-review`; not a native Copilot primitive |
-| Team knowledge | `%USERPROFILE%\.copilot\knowledge\` | `solutions/`, `manifest.yaml`, `profile.md` for `/recall` and cross-repo compounding |
+- **Settings** → **Tools** → **GitHub Copilot** → **Customizations**
+- **Settings** → **Tools** → **GitHub Copilot** → **Chat** → **Agent** (Agent Skills if required)
 
-`agent-context.md` is not a VS Code global customization primitive. Treat it as repository knowledge, not as something VS Code automatically discovers globally. For this prompt-library repo, `.github/agent-context.md` records library-specific learnings. For product repositories, persistent product context should live in product-owned docs such as `docs/plans/`, `docs/solutions/`, `docs/codebase-snapshot.md`, `docs/agent-context.md`, or `README.md` when a skill intentionally creates or updates them.
+Re-run **`npx @dev-kit/harness upgrade`** after pulling prompt-library updates (from any machine with the CLI).
 
-Keep `.github/copilot-instructions.md` in this repo. It is still useful when developing the prompt library itself and when GitHub/Copilot needs repository-wide guidance. Do not copy it into product repositories under the global-only policy; use global `.instructions.md` files for reusable team behavior instead.
+## Update process
 
-## IntelliJ IDEA Global Usage
+1. Pull latest prompt-library (maintainers) or wait for a new **`@dev-kit/harness`** publish (enterprise).
+2. Run **`harness upgrade`** (or `install` — same sync engine).
+3. Run **`harness doctor`**.
 
-IntelliJ IDEA does not run VS Code tasks from inside IntelliJ, but it now has its own GitHub Copilot global customization surface. Use the same Hydrate task as the single install/update step, then confirm IntelliJ settings are enabled.
+Upgrades use **`.harness-lock.json`** and **`retired.json`** to remove only harness-owned paths. **`knowledge/solutions/`** and **`profile.md`** are preserved by default.
 
-Use this policy:
+## Bootstrap a product repo
 
-- Run the Hydrate task from VS Code to keep both global roots current.
-- VS Code/shared Copilot personal assets are installed under `%USERPROFILE%\.copilot`.
-- IntelliJ IDEA assets are installed under `%LOCALAPPDATA%\github-copilot\intellij`.
-- The Hydrate task mirrors `agents`, `skills`, `instructions`, and `prompts` into the IntelliJ global root so users do not copy prompt-library artifacts into product repositories.
-- The Hydrate task also writes IntelliJ IDEA's documented global Copilot instructions file at `%LOCALAPPDATA%\github-copilot\intellij\global-copilot-instructions.md`.
-- The IntelliJ global instructions file is compiled from every `.github/instructions/*.instructions.md` file so Java, Python, PostgreSQL, AWS SDK, Spring Boot, TypeScript, and prompt-library workflow standards are all present.
-- In IntelliJ IDEA, open **Settings** -> **Tools** -> **GitHub Copilot** -> **Customizations** and confirm global customizations/instruction files are enabled.
-- In IntelliJ IDEA, open **Settings** -> **Tools** -> **GitHub Copilot** -> **Chat** -> **Agent** and enable Agent Skills if your organization/plugin version requires an explicit preview toggle.
-
-Do not copy prompt-library artifacts into product repositories just to make IntelliJ discover them. That violates the global-only policy. If an older JetBrains Copilot plugin does not yet discover a specific global primitive, update the plugin or enable the corresponding Copilot preview policy; keep the prompt-library artifacts in the global IntelliJ root.
-
-## Manual Global Fallback
-
-If VS Code tasks are unavailable, run the equivalent PowerShell from the prompt-library checkout:
-
-```powershell
-$PromptLibrary = "$env:USERPROFILE\prompt-library"
-$Copilot = "$env:USERPROFILE\.copilot"
-
-New-Item -ItemType Directory -Force $Copilot | Out-Null
-
-function Sync-PromptLibraryDir($From, $To) {
-  if (!(Test-Path $From)) { return }
-
-  New-Item -ItemType Directory -Force $To | Out-Null
-  $Manifest = Join-Path $To ".prompt-library-manifest.txt"
-
-  if (Test-Path $Manifest) {
-    Get-Content $Manifest | ForEach-Object {
-      if ($_) {
-        $Old = Join-Path $To $_
-        $Replacement = Join-Path $From $_
-        if ((Test-Path $Old) -and !(Test-Path $Replacement)) {
-          Remove-Item $Old -Recurse -Force
-        }
-      }
-    }
-  }
-
-  robocopy $From $To /E /NFL /NDL /NJH /NJS /NP /XF .prompt-library-manifest.txt
-  if ($LASTEXITCODE -ge 8) { throw "robocopy failed with exit code $LASTEXITCODE" }
-
-  Get-ChildItem $From -Recurse -File |
-    ForEach-Object { $_.FullName.Substring($From.Length).TrimStart([char]92) } |
-    Sort-Object |
-    Set-Content -Path $Manifest -Encoding utf8
-}
-
-$Retired = @(
-  "agents\compounding-python-reviewer.agent.md",
-  "agents\compounding-rails-reviewer.agent.md",
-  "agents\dhh-rails-reviewer.agent.md",
-  "agents\every-style-editor.agent.md",
-  "instructions\rails.instructions.md",
-  "prompts\create-agent-skills.prompt.md",
-  "skills\create-agent-skills",
-  "checks\README.md",
-  "checks\skill-description-quality.md",
-  "checks\primitive-boundary-quality.md"
-)
-
-foreach ($Relative in $Retired) {
-  $RetiredPath = Join-Path $Copilot $Relative
-  if (Test-Path $RetiredPath) { Remove-Item $RetiredPath -Recurse -Force }
-}
-
-Sync-PromptLibraryDir "$PromptLibrary\.github\skills" "$Copilot\skills"
-Sync-PromptLibraryDir "$PromptLibrary\.github\agents" "$Copilot\agents"
-Sync-PromptLibraryDir "$PromptLibrary\.github\instructions" "$Copilot\instructions"
-Sync-PromptLibraryDir "$PromptLibrary\.github\prompts" "$Copilot\prompts"
-
-$IntelliJ = "$env:LOCALAPPDATA\github-copilot\intellij"
-New-Item -ItemType Directory -Force $IntelliJ | Out-Null
-foreach ($Relative in $Retired) {
-  $RetiredPath = Join-Path $IntelliJ $Relative
-  if (Test-Path $RetiredPath) { Remove-Item $RetiredPath -Recurse -Force }
-}
-
-Sync-PromptLibraryDir "$PromptLibrary\.github\skills" "$IntelliJ\skills"
-Sync-PromptLibraryDir "$PromptLibrary\.github\agents" "$IntelliJ\agents"
-Sync-PromptLibraryDir "$PromptLibrary\.github\instructions" "$IntelliJ\instructions"
-Sync-PromptLibraryDir "$PromptLibrary\.github\prompts" "$IntelliJ\prompts"
-
-$InstructionRoot = "$PromptLibrary\.github\instructions"
-if (Test-Path $InstructionRoot) {
-  $InstructionFiles = @(
-    Get-ChildItem $InstructionRoot -Filter "*.instructions.md" |
-      Sort-Object @{ Expression = { if ($_.Name -eq "prompt-library-global.instructions.md") { 0 } else { 1 } } }, Name
-  )
-
-  $Parts = @(
-    $InstructionFiles | ForEach-Object {
-      $Text = Get-Content $_.FullName -Raw
-      $Text = $Text -replace '(?s)^---\r?\n.*?\r?\n---\r?\n', ''
-      "<!-- Source: $($_.Name) -->`r`n$($Text.Trim())"
-    }
-  )
-
-  if ($Parts.Count -gt 0) {
-    Set-Content "$IntelliJ\global-copilot-instructions.md" ($Parts -join "`r`n`r`n") -Encoding utf8
-  }
-}
+```bash
+npx @dev-kit/harness init-repo
 ```
 
-## Verification Checklist
+Creates `docs/plans/` and `docs/agent-context.md`.
 
-After hydration:
+## Verification
 
-- In VS Code, type `/` and confirm prompts such as `/start`, `/btw`, `/project-readme`, `/java`, `/python`, `/sql`, and `/aws` appear.
-- In VS Code, type `@` and confirm `@engineer` and coordinator agents are available.
-- In VS Code diagnostics, confirm agents, prompts, and instructions are loaded from `%USERPROFILE%\.copilot`.
-- In IntelliJ IDEA, confirm global Copilot customizations are enabled and that `%LOCALAPPDATA%\github-copilot\intellij\agents`, `skills`, `instructions`, and `prompts` exist.
-- In IntelliJ IDEA, confirm `%LOCALAPPDATA%\github-copilot\intellij\global-copilot-instructions.md` exists.
-- Run a small smoke test: `/btw What is the workflow for implementing a feature?`
+- `/` shows skills such as `/btw`, `/code-review`, `/harness-doctor`
+- `@engineer` and coordinators appear in the agent menu
+- `npx @dev-kit/harness doctor` — all required checks PASS
+- Smoke: `@engineer` or `/btw` on a small question
 
-## Sync Policy
+## More detail
 
-Use copied files for stability. Symlinks on Windows can require Developer Mode or elevated permissions and are harder for teams to troubleshoot.
-
-Recommended update process:
-
-1. Pull the latest prompt-library repo.
-2. Review the diff.
-3. Run `Tasks: Run Task` -> `Prompt Library: Hydrate Global Copilot Customizations`.
-4. Verify VS Code and IntelliJ behavior.
-
-Hydrate overwrites same-named global library artifacts. It also keeps a `.prompt-library-manifest.txt` in each hydrated folder so later runs can remove files that this library previously installed but no longer ships. The cleanup only targets files recorded in that manifest plus known retired legacy artifacts, so unrelated user customizations in `%USERPROFILE%\.copilot` or `%LOCALAPPDATA%\github-copilot\intellij` are not deleted.
+- [Harness quickstart](./onboarding/harness-quickstart.md)
+- [Memory system](./architecture/engineer-memory-system.md)
+- [Skill-driven standard](./architecture/skill-driven-prompt-library.md)

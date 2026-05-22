@@ -17,7 +17,7 @@ npx @dev-kit/harness doctor
 node packages/harness/bin/harness.mjs install --configure-vscode
 ```
 
-Or VS Code task **Dev Kit: Install Harness**. Legacy PowerShell hydrate remains under **Prompt Library: Hydrate (legacy PowerShell)**.
+Or VS Code: **Dev Kit: Install Harness** / **Dev Kit: Harness Doctor**.
 
 Copies to `%USERPROFILE%\.copilot\` (or `~/.copilot/` on macOS/Linux):
 

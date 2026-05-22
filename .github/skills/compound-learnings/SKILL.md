@@ -86,7 +86,7 @@ Skip this step when the fix applies across all product repositories.
 
 **`@engineer`** chains this via internal **`/auto-compound`** after verify — manual index optional for power users.
 
-Remind the user to **Hydrate** global Copilot customizations so `~/.copilot/knowledge/` updates on other machines.
+Remind the user to run **`npx @dev-kit/harness upgrade`** (or `harness index`) so `~/.copilot/knowledge/` updates on other machines after publish.
 
 ### 5. Graduate to Agent Context (Curation Step)
 

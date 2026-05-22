@@ -175,4 +175,4 @@ flowchart TD
 
 Teams adapting this library should start by hydrating the global skills, agents, prompts, and instructions. Do not copy prompt-library artifacts into product repositories. New agents are the last resort, not the first customization point.
 
-For the current target teams, assume Windows workstations with GitHub Copilot in VS Code and IntelliJ IDEA. Use the global Hydrate task as the supported path. See [Install and Sync Guide](../install.md).
+For the current target teams, assume Windows workstations with GitHub Copilot in VS Code and IntelliJ IDEA. Use **`@dev-kit/harness`** as the supported install path. See [Install and Sync Guide](../install.md).

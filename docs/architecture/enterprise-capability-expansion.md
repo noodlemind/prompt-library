@@ -123,7 +123,7 @@ Engineer (and `/start`) reads:
 2. `enterprise/capability-registry.yaml` (overlay, if present)
 3. Plan `## Risk & Review Routing` may name specialists: `splunk-reviewer`
 
-**Hydrate task (future):** sync `enterprise/` from team git repo the same way as `.github/`.
+**Harness CLI:** `npx @dev-kit/harness install` syncs `enterprise/` from the published package (or repo `assets/` when building locally).
 
 ---
 
@@ -222,7 +222,7 @@ See updated **Phase F & G** in `composer-style-autonomous-harness-proposal.md`.
 |-------|-------------|
 | **F1** | `enterprise/` overlay contract + `capability-registry.enterprise.yaml` template |
 | **F2** | Engineer domain router + plan fields `domains`, `specialists`, `capability_gaps` |
-| **F3** | Hydrate task merges enterprise layer |
+| **F3** | `@dev-kit/harness` syncs enterprise layer |
 | **F4** | `capability-gap` auto-draft to `docs/capability-gaps/` (product or enterprise repo) |
 | **G1** | Optional auto-skill from 3× compounded solutions (enterprise only) |
 

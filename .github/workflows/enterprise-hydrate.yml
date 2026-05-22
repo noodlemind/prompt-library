@@ -27,4 +27,4 @@ jobs:
           path: enterprise-overlay.tar.gz
           retention-days: 90
 
-# DevEx: download artifact in desktop Hydrate task or extract to ~/.copilot/enterprise/
+# DevEx: extract artifact to ~/.copilot/enterprise/ or document in harness upgrade runbook

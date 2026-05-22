@@ -60,7 +60,7 @@ Think of three layers the user never has to memorize:
 | Enterprise scaffold | Done | `enterprise/README.md`, registry template |
 | Architecture narrative | Done | Memory, enterprise expansion, gap fulfillment, Composer proposal |
 | **Autonomous loop skills** | **Not done** | No `ensure-plan`, `auto-compound`, `ensure-capability` |
-| **Enterprise hydrate** | **Not done** | VS Code task does not sync `enterprise/` |
+| **Enterprise hydrate** | **Done** | `@dev-kit/harness install` syncs `enterprise/` |
 | **Domain router in engineer** | **Not done** | Registry merge not in agent workflow |
 | **Deterministic index script** | **Not done** | `scripts/index-knowledge.mjs` missing |
 | **Pipeline UX shrink** | **Not done** | Pipeline skills still user-invocable |
@@ -93,7 +93,7 @@ Ingest → Preflight (H) → Recall → EnsurePlan (B) → AutoPlan (B) → Exec
 
 Anyone joining must:
 
-1. Run Hydrate (Windows paths in `tasks.json` today)
+1. Run `npx @dev-kit/harness install` (or Dev Kit VS Code task)
 2. Have `knowledge/profile.md` with `autonomy`
 3. (Future) Enterprise overlay hydrated
 
@@ -113,7 +113,7 @@ Anyone joining must:
 |-------------|-----|
 | **VS Code Copilot (Windows)** | Primary target; hydrate works |
 | **IntelliJ** | Separate mirror path; feature parity (subagents, `user-invocable`) must be tested |
-| **Linux cloud agents** | Hydrate task is PowerShell/`%USERPROFILE%\.copilot` — cloud workspace may **not** see global knowledge unless repo-local `knowledge/` fallback is enforced |
+| **Linux cloud agents** | Run `harness install` or keep repo-local `knowledge/` fallback |
 
 **Foolproof rule:** Engineer recall path must **always** fall back to repo `knowledge/manifest.yaml` when `~/.copilot/knowledge/` absent (partially documented; enforce in checklist).
 

@@ -37,4 +37,4 @@ Full list: `knowledge/capability-registry.yaml`
 | New specialist | capability-gap → new agent → update `engineer.agents:` + registry |
 | New convention | scoped instruction or repo `agent-context.md` |
 
-After adding skills/agents in this repo, run **Hydrate** and update `knowledge/capability-registry.yaml`.
+After adding skills/agents in this repo, run **`npm run build:assets`** in `packages/harness`, publish **`@dev-kit/harness`**, and update `knowledge/capability-registry.yaml`.

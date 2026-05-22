@@ -9,7 +9,7 @@
 
 ## 1. Executive summary
 
-Today, teams install the harness by cloning **prompt-library** and running a **VS Code PowerShell task** (robocopy → `~/.copilot/`). That works for maintainers but is weak for enterprise rollout: Windows-centric, easy to forget, hard to version, and unrelated to how modern AI-config tools ship (**npx**, **semver upgrades**, **doctor** commands).
+Teams install via **`npx @dev-kit/harness`** (Nexus). Maintainers can also run `node packages/harness/bin/harness.mjs` from a prompt-library clone. The legacy PowerShell/robocopy VS Code task has been **removed**.
 
 **Recommendation:** Publish **`@dev-kit/harness`** to your enterprise npm registry (e.g. **Sonatype Nexus**). Maintainers build assets and **`npm publish`** manually; developers consume via **`npx @dev-kit/harness`**.
 
@@ -51,7 +51,7 @@ npx @dev-kit/harness upgrade
 | Pattern | Source | Our use |
 |---------|--------|---------|
 | **`npx package@latest install`** | ai-rulez, aicm | Zero global install for first run; pin version in docs for enterprises |
-| **Manifest + retire list** | Our existing `.prompt-library-manifest.txt` | `~/.copilot/.harness-lock.json` on upgrade |
+| **Manifest + retire list** | — | `~/.copilot/.harness-lock.json` on upgrade |
 | **Doctor / status** | DotAI, 2026-03-12 internal plan | `harness doctor` (= `/harness-doctor` checks in Node) |
 | **Separate content packs** | ai-rulez profiles, load-rules registry | `@dev-kit/harness-enterprise`, `@dev-kit/harness-knowledge` |
 | **Remote includes (git)** | ai-rulez `includes` | `harness knowledge pull --repo <url>` (alternative to private npm) |
@@ -75,7 +75,7 @@ npx @dev-kit/harness upgrade
 
 ```text
 prompt-library (git clone)
-    └── VS Code Task: PowerShell + robocopy
+    └── (removed) legacy PowerShell hydrate
             ├── %USERPROFILE%\.copilot\   (VS Code / CLI)
             └── %LOCALAPPDATA%\github-copilot\intellij\   (IntelliJ)
 ```
@@ -83,7 +83,7 @@ prompt-library (git clone)
 | Gap | Impact |
 |-----|--------|
 | Requires clone + IDE task | High friction for “anybody in enterprise” |
-| Windows-first (robocopy) | Linux/macOS CI and cloud agents uneven |
+| ~~Windows-first (robocopy)~~ | Resolved — Node CLI is cross-platform |
 | No semver on installed bits | Teams cannot audit “which harness version?” |
 | Knowledge upgrade unclear | Fear of wiping `~/.copilot/knowledge/solutions/` |
 | Enterprise overlay manual | No `npx` story for corp Splunk/Terraform pack |
@@ -227,7 +227,7 @@ npx @dev-kit/harness@2.3.0 doctor --json
 
 ---
 
-## 6. Sync engine (replace PowerShell)
+## 6. Sync engine (`packages/harness/lib`)
 
 Port logic from `.vscode/tasks.json` to Node (aligns with [2026-03-12 sync plan](../plans/2026-03-12-feat-global-workspace-sync-and-copilot-cli-compatibility-plan.md)):
 
@@ -310,7 +310,7 @@ jobs:
     - run: tar -czf enterprise-overlay.tar.gz enterprise/
 ```
 
-Deprecate: VS Code hydrate task → thin wrapper calling `npx @dev-kit/harness install` for maintainers who work inside the repo.
+VS Code tasks: **Dev Kit: Install / Upgrade / Doctor** only (see `.vscode/tasks.json`).
 
 ---
 
@@ -351,7 +351,7 @@ Full runbook: [`nexus-registry-setup.md`](../onboarding/nexus-registry-setup.md)
 | **M1** | Implement sync in `packages/harness`; parity test vs PowerShell |
 | **M2** | `harness doctor` + `harness status`; CI smoke on win/mac/linux |
 | **M3** | Default onboarding = npm; VS Code task → `npx @dev-kit/harness install` |
-| **M4** | Remove embedded PowerShell from `tasks.json` (or keep 3-line wrapper) |
+| **M4** | Remove embedded PowerShell from `tasks.json` | ✓ |
 | **M5** | Private enterprise + knowledge packages |
 
 ---
@@ -391,10 +391,11 @@ Full runbook: [`nexus-registry-setup.md`](../onboarding/nexus-registry-setup.md)
 - [ ] `aeh install --enterprise @org/harness-enterprise@x.y.z`
 - [ ] `doctor` validates peer versions
 
-### Phase 6 — Deprecate PowerShell (1 deliverable)
+### Phase 6 — Remove legacy PowerShell hydrate
 
-- [ ] Update `harness-quickstart.md`, README, AGENTS.md
-- [ ] VS Code task calls `npx aeh install`
+- [x] Removed PowerShell task from `.vscode/tasks.json`
+- [x] Rewrote `docs/install.md` for `@dev-kit/harness`
+- [x] Updated skill/docs references (compound, index-memory, install guide)
 
 ### Deferred (v2)
 
@@ -429,7 +430,7 @@ Full runbook: [`nexus-registry-setup.md`](../onboarding/nexus-registry-setup.md)
 | 3 | Knowledge distribution | `@dev-kit/harness-knowledge` when solutions > ~20 docs |
 | 4 | Enterprise distribution | `@dev-kit/harness-enterprise` peer package |
 | 5 | Preserve solutions on upgrade | **Default yes** — opt-in force reset only |
-| 6 | PowerShell task | Deprecate after Phase 6; wrapper until then |
+| 6 | Legacy PowerShell | Removed — use `@dev-kit/harness` only ✓ |
 | 7 | First supported OS | Windows + macOS (Linux agent via repo-local `knowledge/` fallback) |
 | 8 | Public vs private | Core public MIT; enterprise/knowledge private scoped |
 
@@ -449,4 +450,4 @@ Full runbook: [`nexus-registry-setup.md`](../onboarding/nexus-registry-setup.md)
 
 Industry leaders (**ai-rulez**, **aicm**, **DotAI**) treat AI harness distribution as **versioned CLI + optional content packs**, not IDE tasks. Moving to npm standardizes onboarding, upgrades, and enterprise overlays while keeping **prompt-library** as the authoring source. The existing **2026-03-12 sync plan** already specifies the Node sync engine — this plan **productizes** it as a publishable package and adds **semver**, **knowledge/enterprise satellites**, and a clear **migration** from PowerShell hydrate.
 
-**Next step:** implement Phase 1 (`harness install` / `harness doctor` sync engine) in `packages/harness`. Package skeleton and Nexus runbook are in repo.
+**Status:** CLI v0.2.0 implemented; legacy hydrate removed. Publish to Nexus and announce `npx @dev-kit/harness install`.

@@ -90,14 +90,14 @@ Context lookup order: `.github/skills/references/knowledge-locations.md`.
 knowledge/        team solutions, manifest, capability-registry (hydrated globally)
 docs/architecture/  standards and vision
 docs/plans/       template + historical prompt-library plans (see docs/plans/README.md)
-.vscode/          Hydrate task, MCP config
+.vscode/          @dev-kit/harness tasks (install/upgrade/doctor), MCP config
 AGENTS.md         Cross-tool guidance
 ```
 
 ## Requirements
 
 - VS Code 1.109+ with GitHub Copilot Chat (or current IntelliJ Copilot with global customizations)
-- Windows-oriented Hydrate task (see [Install](docs/install.md))
+- Global install via `@dev-kit/harness` (see [Install](docs/install.md))
 
 ## Installation
 

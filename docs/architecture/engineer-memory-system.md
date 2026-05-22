@@ -49,7 +49,7 @@ Tier A — Product repo (local only)
   docs/solutions/**       optional repo-private learnings
 ```
 
-Hydrate copies `knowledge/` from this prompt-library checkout to `%USERPROFILE%\.copilot\knowledge\` (and IntelliJ mirror). Product repos **do not** receive prompt-library source copies; they only hold **plans** and optional local solutions.
+**`@dev-kit/harness install`** copies `knowledge/` to `~/.copilot/knowledge/` (and IntelliJ mirror). Product repos **do not** receive prompt-library source copies; they only hold **plans** and optional local solutions.
 
 ## Recall order (`/recall`)
 
