@@ -494,4 +494,6 @@ Proposal: ship **`balanced`** globally, document **`full`** for autonomous loop,
 
 **Pre-implementation gap review:** [`harness-pre-implementation-review.md`](harness-pre-implementation-review.md) — contradictions, MVP order, foolproof checklist.
 
+**Distribution (planned):** [`npm-harness-distribution-plan.md`](npm-harness-distribution-plan.md) — npm/`npx` packaging replacing workspace PowerShell hydrate.
+
 **After confirmation:** implement MVP per gap review (G1 reconcile → B → C → F2/F3 → H → D) on `cursor/engineer-vision-review-a13c` (or main).

@@ -2,11 +2,18 @@
 
 Get from zero to **`@engineer`** delivering work in any enterprise product repo.
 
-## 1. Hydrate once (per machine)
+## 1. Install once (per machine)
 
-**VS Code (Windows):** Run task **Prompt Library: Hydrate Global Copilot Customizations** from this repo.
+**Recommended (planned):** npm CLI — see [`docs/architecture/npm-harness-distribution-plan.md`](../architecture/npm-harness-distribution-plan.md).
 
-Copies to `%USERPROFILE%\.copilot\`:
+```bash
+npx @your-org/adaptive-engineer-harness@latest install
+npx @your-org/adaptive-engineer-harness doctor
+```
+
+**Today (maintainers):** Run VS Code task **Prompt Library: Hydrate Global Copilot Customizations** from a prompt-library clone (PowerShell → `~/.copilot/`). This will be replaced by the CLI above.
+
+Copies to `%USERPROFILE%\.copilot\` (or `~/.copilot/` on macOS/Linux):
 
 - `skills/`, `agents/`, `instructions/`, `prompts/`
 - `knowledge/` (manifest, solutions, profile template)

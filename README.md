@@ -6,7 +6,7 @@ Skill-driven software engineering prompt library with **31 skills** (including i
 
 1. Clone this repository
 2. Open in VS Code 1.109+ with GitHub Copilot Chat
-3. Run **Tasks: Run Task** → **Prompt Library: Hydrate Global Copilot Customizations**
+3. Install harness: **`npx @your-org/adaptive-engineer-harness install`** (planned — see [NPM distribution plan](docs/architecture/npm-harness-distribution-plan.md)) *or* run **Tasks: Run Task** → **Hydrate Global Copilot Customizations** from a repo clone
 4. Open a **product** repository (no prompt-library files copied into it); ensure `docs/plans/` exists
 5. **`@engineer`** — describe the work (autonomous capture, plan, implement, verify, compound)
 6. Optional: **`/harness-doctor`** — health check; **`/btw`** — Q&A; **`/code-review`** — review pass
