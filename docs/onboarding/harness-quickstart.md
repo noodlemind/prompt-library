@@ -11,7 +11,13 @@ npx @dev-kit/harness@latest install
 npx @dev-kit/harness doctor
 ```
 
-**Today (maintainers):** Run VS Code task **Prompt Library: Hydrate Global Copilot Customizations** from a prompt-library clone (PowerShell → `~/.copilot/`). This will be replaced by the CLI above.
+**From prompt-library clone (maintainers):**
+
+```bash
+node packages/harness/bin/harness.mjs install --configure-vscode
+```
+
+Or VS Code task **Dev Kit: Install Harness**. Legacy PowerShell hydrate remains under **Prompt Library: Hydrate (legacy PowerShell)**.
 
 Copies to `%USERPROFILE%\.copilot\` (or `~/.copilot/` on macOS/Linux):
 

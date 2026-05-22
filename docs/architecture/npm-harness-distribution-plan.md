@@ -360,8 +360,9 @@ Full runbook: [`nexus-registry-setup.md`](../onboarding/nexus-registry-setup.md)
 
 ### Phase 1 — Package skeleton (1 deliverable)
 
-- [x] `packages/harness/package.json` — `@dev-kit/harness`, bin `harness` (stub CLI)
-- [ ] `harness install` + `harness doctor` implementation
+- [x] `packages/harness/package.json` — `@dev-kit/harness`, bin `harness`
+- [x] `harness install` + `upgrade` + `doctor` + `status` + `index` + `init-repo` + `uninstall`
+- [x] VS Code tasks → `node packages/harness/bin/harness.mjs install`
 - [ ] `build:assets` script copying `.github/skills`, `.github/agents`, etc.
 - [ ] `aeh install` + `aeh doctor` MVP (citty + picocolors per sync plan)
 - [ ] `.aeh-lock.json` manifest

@@ -1,53 +1,86 @@
 #!/usr/bin/env node
 /**
- * @dev-kit/harness CLI — Phase 1 stub.
- * Full install/upgrade/doctor: docs/architecture/npm-harness-distribution-plan.md
+ * @dev-kit/harness — install Adaptive Engineer Harness into global Copilot paths.
  */
-import { fileURLToPath } from 'url';
-import path from 'path';
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const pkgRoot = path.resolve(__dirname, '..');
+import {
+  cmdInstallOrUpgrade,
+  cmdDoctor,
+  cmdStatus,
+  cmdInitRepo,
+  cmdIndex,
+  cmdUninstall,
+} from '../lib/commands.mjs';
 
 const [, , command = 'help', ...args] = process.argv;
 
 const HELP = `
-@dev-kit/harness — Adaptive Engineer Harness installer
+@dev-kit/harness — Adaptive Engineer Harness for GitHub Copilot (VS Code, CLI, IntelliJ)
 
 Usage:
-  npx @dev-kit/harness install [--dry-run] [--autonomy balanced|full|strict]
-  npx @dev-kit/harness upgrade
-  npx @dev-kit/harness doctor
-  npx @dev-kit/harness status
+  npx @dev-kit/harness install [options]
+  npx @dev-kit/harness upgrade [options]
+  npx @dev-kit/harness doctor [options]
+  npx @dev-kit/harness status [options]
+  npx @dev-kit/harness index [options]
+  npx @dev-kit/harness init-repo [options]
+  npx @dev-kit/harness uninstall [options]
 
-Package root: ${pkgRoot}
-Assets: ${path.join(pkgRoot, 'assets')} (run npm run build:assets before publish)
+Options:
+  --dry-run              Print actions without writing
+  --verbose, -v          Per-file logging
+  --json                 JSON output
+  --copilot-home <path>  Override ~/.copilot
+  --target vscode,cli,intellij
+  --autonomy full|balanced|strict
+  --configure-vscode     Merge VS Code chat.* discovery settings
+  --force-profile        Overwrite knowledge/profile.md
+  --force-knowledge-reset  Overwrite knowledge/solutions (danger)
+  --workspace <path>     For init-repo / index (default: cwd)
 
-Implementation in progress — see packages/harness and npm-harness-distribution-plan.md
-`;
+Docs: docs/onboarding/nexus-registry-setup.md
+`.trim();
 
-switch (command) {
-  case 'help':
-  case '--help':
-  case '-h':
-    console.log(HELP.trim());
-    break;
-  case 'install':
-  case 'upgrade':
-  case 'doctor':
-  case 'status':
-  case 'index':
-  case 'init-repo':
-    console.error(
-      `[harness] "${command}" is not implemented yet. Use VS Code task Hydrate or implement Phase 1 in packages/harness.`
-    );
-    if (args.includes('--dry-run')) {
-      console.error('[harness] dry-run: no files written.');
+async function main() {
+  let code = 0;
+  try {
+    switch (command) {
+      case 'help':
+      case '--help':
+      case '-h':
+        console.log(HELP);
+        break;
+      case 'install':
+        code = await cmdInstallOrUpgrade('install', args);
+        break;
+      case 'upgrade':
+        code = await cmdInstallOrUpgrade('upgrade', args);
+        break;
+      case 'doctor':
+        code = await cmdDoctor(args);
+        break;
+      case 'status':
+        code = await cmdStatus(args);
+        break;
+      case 'init-repo':
+        code = await cmdInitRepo(args);
+        break;
+      case 'index':
+        code = await cmdIndex(args);
+        break;
+      case 'uninstall':
+        code = await cmdUninstall(args);
+        break;
+      default:
+        console.error(`Unknown command: ${command}\n`);
+        console.log(HELP);
+        code = 1;
     }
-    process.exit(2);
-    break;
-  default:
-    console.error(`Unknown command: ${command}\n`);
-    console.log(HELP.trim());
-    process.exit(1);
+  } catch (err) {
+    console.error(`[harness] ${err.message}`);
+    if (process.env.HARNESS_DEBUG) console.error(err);
+    code = 1;
+  }
+  process.exit(code);
 }
+
+main();

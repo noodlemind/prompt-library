@@ -19,6 +19,8 @@ const copies = [
   { from: 'enterprise', to: 'enterprise' },
 ];
 
+const singleFiles = [{ from: '.github/copilot-instructions.md', to: 'copilot-instructions.md' }];
+
 function rmrf(dir) {
   if (fs.existsSync(dir)) fs.rmSync(dir, { recursive: true, force: true });
 }
@@ -39,6 +41,18 @@ for (const { from, to } of copies) {
     continue;
   }
   cpRecursive(src, dst);
+  console.log(`copied ${from} → assets/${to}`);
+}
+
+for (const { from, to } of singleFiles) {
+  const src = path.join(repoRoot, from);
+  const dst = path.join(outRoot, to);
+  if (!fs.existsSync(src)) {
+    console.warn(`skip missing: ${from}`);
+    continue;
+  }
+  fs.mkdirSync(path.dirname(dst), { recursive: true });
+  fs.copyFileSync(src, dst);
   console.log(`copied ${from} → assets/${to}`);
 }
 

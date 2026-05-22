@@ -1,41 +1,64 @@
 # @dev-kit/harness
 
-Enterprise CLI for installing and upgrading the **Adaptive Engineer Harness** into global GitHub Copilot paths (`~/.copilot/`).
+CLI to install and upgrade the **Adaptive Engineer Harness** into global GitHub Copilot paths (`~/.copilot/`).
 
-## Install (developers)
+## Developers
 
-Configure your registry once (see [Nexus publish guide](../../docs/onboarding/nexus-registry-setup.md)), then:
+After Nexus `.npmrc` setup ([guide](../../docs/onboarding/nexus-registry-setup.md)):
 
 ```bash
 npx @dev-kit/harness@latest install
 npx @dev-kit/harness doctor
+npx @dev-kit/harness upgrade
 ```
 
-Pin a version in team docs for reproducibility:
+Bootstrap a product repo:
 
 ```bash
-npx @dev-kit/harness@0.1.0 install --autonomy balanced
+npx @dev-kit/harness init-repo
 ```
 
-## Commands (planned)
+## Commands
 
-| Command | Status |
-|---------|--------|
-| `install` | Phase 1 |
-| `upgrade` | Phase 2 |
-| `doctor` | Phase 1 |
-| `index` | Phase 4 |
-| `init-repo` | Phase 4 |
-| `status` | Phase 2 |
+| Command | Description |
+|---------|-------------|
+| `install` | Sync skills, agents, knowledge, enterprise to `~/.copilot/` |
+| `upgrade` | Same as install + retire removed paths from lock file |
+| `doctor` | Health checks |
+| `status` | Installed version and lock file |
+| `index` | Rebuild `knowledge/manifest.yaml` |
+| `init-repo` | Create `docs/plans/`, `docs/agent-context.md` |
+| `uninstall` | Remove files tracked in `.harness-lock.json` only |
 
-## Maintainers
+### Options
 
-From repo root:
+`--dry-run`, `--verbose`, `--json`, `--copilot-home <path>`, `--target vscode,cli,intellij`, `--autonomy balanced|full|strict`, `--configure-vscode`, `--preserve-knowledge` (default), `--force-knowledge-reset`, `--force-profile`
+
+## Maintainers (prompt-library repo)
 
 ```bash
 cd packages/harness
-npm run build:assets
-npm publish   # after .npmrc points at Nexus
+npm run build:assets    # bundle .github + knowledge → assets/
+npm version patch
+npm publish             # to Nexus — see nexus-registry-setup.md
 ```
 
-See `docs/architecture/npm-harness-distribution-plan.md`.
+Local install without Nexus:
+
+```bash
+node packages/harness/bin/harness.mjs install --configure-vscode
+```
+
+VS Code: **Dev Kit: Install Harness** task.
+
+## Package layout
+
+```text
+packages/harness/
+  bin/harness.mjs       # CLI entry
+  lib/                  # install, sync, doctor, lock
+  assets/               # build output (gitignored, in npm tarball)
+  retired.json          # paths removed on upgrade
+```
+
+Zero runtime npm dependencies (Node 20+ only).

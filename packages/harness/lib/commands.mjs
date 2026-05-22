@@ -1,0 +1,230 @@
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import { execSync } from 'child_process';
+import { parseFlags } from './flags.mjs';
+import { resolveCopilotHome, resolveIntelliJHome, pkgRootFromImportMeta } from './paths.mjs';
+import { readLock, writeLock, LOCK_NAME } from './lock.mjs';
+import {
+  loadRetired,
+  applyRetired,
+  syncAssetsToTarget,
+  seedProfile,
+  mergeIntelliJInstructions,
+} from './sync.mjs';
+import { runDoctor } from './doctor.mjs';
+import { runInitRepo } from './init-repo.mjs';
+import { runIndexKnowledge } from './index-knowledge.mjs';
+import { configureVSCodeSettings } from './vscode-settings.mjs';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+export const pkgRoot = pkgRootFromImportMeta(import.meta.url);
+
+function readPkgVersion() {
+  const p = JSON.parse(fs.readFileSync(path.join(pkgRoot, 'package.json'), 'utf8'));
+  return p.version;
+}
+
+export function getAssetsRoot() {
+  const bundled = path.join(pkgRoot, 'assets');
+  if (fs.existsSync(path.join(bundled, 'skills', 'engineer', 'SKILL.md'))) {
+    return bundled;
+  }
+  const buildScript = path.resolve(pkgRoot, '../../scripts/build-harness-assets.mjs');
+  if (fs.existsSync(buildScript)) {
+    execSync(`node "${buildScript}"`, { cwd: pkgRoot, stdio: 'pipe' });
+    if (fs.existsSync(path.join(bundled, 'skills'))) return bundled;
+  }
+  throw new Error(
+    'Package assets not found. Maintainer: npm run build:assets. User: reinstall @dev-kit/harness from Nexus.'
+  );
+}
+
+function log(flags, msg) {
+  if (flags.json) return;
+  console.log(`[harness] ${msg}`);
+}
+
+export async function cmdInstallOrUpgrade(command, argv) {
+  const flags = parseFlags(argv);
+  const version = readPkgVersion();
+  const assets = getAssetsRoot();
+  const copilotHome = resolveCopilotHome(flags.copilotHome);
+  const previousLock = readLock(copilotHome);
+  const retired = loadRetired(pkgRoot);
+  const logger = (m) => log(flags, m);
+
+  const allStats = { vscode: null, intellij: null };
+
+  if (flags.targets.has('vscode') || flags.targets.has('cli')) {
+    applyRetired(copilotHome, retired, previousLock, flags, logger);
+    allStats.vscode = syncAssetsToTarget(assets, copilotHome, flags, logger);
+    seedProfile(assets, copilotHome, flags, logger);
+    if (flags.configureVsCode) {
+      configureVSCodeSettings(flags, logger);
+    }
+  }
+
+  if (flags.targets.has('intellij')) {
+    const ij = resolveIntelliJHome();
+    if (!flags.dryRun) fs.mkdirSync(ij, { recursive: true });
+    applyRetired(ij, retired, previousLock, flags, logger);
+    allStats.intellij = syncAssetsToTarget(assets, ij, flags, logger);
+    seedProfile(assets, ij, flags, logger);
+    mergeIntelliJInstructions(assets, ij, flags, logger);
+  }
+
+  const files = new Set([
+    ...(allStats.vscode?.files || []),
+    ...(allStats.intellij?.files || []),
+  ]);
+
+  const lock = {
+    package: '@dev-kit/harness',
+    version,
+    installedAt: new Date().toISOString(),
+    command,
+    targets: [...flags.targets],
+    files: [...files].sort(),
+    retiredApplied: retired,
+  };
+
+  if (!flags.dryRun) {
+    writeLock(copilotHome, lock, false);
+  }
+
+  if (flags.json) {
+    console.log(
+      JSON.stringify(
+        {
+          command,
+          version,
+          copilotHome,
+          dryRun: flags.dryRun,
+          vscode: allStats.vscode,
+          intellij: allStats.intellij,
+        },
+        null,
+        2
+      )
+    );
+  } else {
+    console.log('');
+    console.log(`@dev-kit/harness ${command} complete (${version})`);
+    console.log(`  Copilot home: ${copilotHome}`);
+    if (allStats.vscode) {
+      console.log(
+        `  VS Code/CLI: +${allStats.vscode.created} ~${allStats.vscode.updated} =${allStats.vscode.unchanged} skip=${allStats.vscode.skipped}`
+      );
+    }
+    if (allStats.intellij) {
+      console.log(
+        `  IntelliJ: +${allStats.intellij.created} ~${allStats.intellij.updated} =${allStats.intellij.unchanged}`
+      );
+    }
+    if (flags.dryRun) console.log('  (dry-run — no files written)');
+    else console.log('  Next: npx @dev-kit/harness doctor');
+  }
+
+  return 0;
+}
+
+export async function cmdDoctor(argv) {
+  const flags = parseFlags(argv);
+  const copilotHome = resolveCopilotHome(flags.copilotHome);
+  let assets = pkgRoot;
+  try {
+    assets = getAssetsRoot();
+  } catch {
+    /* doctor still runs */
+  }
+  const { checks, pass } = runDoctor({
+    copilotHome,
+    assetsRoot: assets,
+    pkgRoot,
+    flags,
+  });
+
+  if (flags.json) {
+    console.log(JSON.stringify({ pass, checks }, null, 2));
+  } else {
+    for (const c of checks) {
+      const mark = c.pass ? 'PASS' : c.optional ? 'WARN' : 'FAIL';
+      console.log(`${mark}  ${c.id}  ${c.name}`);
+      if (!c.pass && c.hint) console.log(`       → ${c.hint}`);
+    }
+    console.log('');
+    console.log(pass ? 'Harness doctor: all required checks passed.' : 'Harness doctor: fix FAIL items above.');
+  }
+  return pass ? 0 : 1;
+}
+
+export async function cmdStatus(argv) {
+  const flags = parseFlags(argv);
+  const copilotHome = resolveCopilotHome(flags.copilotHome);
+  const lock = readLock(copilotHome);
+  const version = readPkgVersion();
+
+  if (flags.json) {
+    console.log(JSON.stringify({ packageVersion: version, copilotHome, lock }, null, 2));
+  } else {
+    console.log(`@dev-kit/harness CLI ${version}`);
+    console.log(`Copilot home: ${copilotHome}`);
+    if (lock) {
+      console.log(`Installed: ${lock.package}@${lock.version} at ${lock.installedAt}`);
+      console.log(`Files tracked: ${lock.files?.length ?? 0}`);
+    } else {
+      console.log('No lock file — run: npx @dev-kit/harness install');
+    }
+  }
+  return 0;
+}
+
+export async function cmdInitRepo(argv) {
+  const flags = parseFlags(argv);
+  const logger = (m) => log(flags, m);
+  runInitRepo({ workspace: path.resolve(flags.workspace), flags, log: logger });
+  if (!flags.json) console.log('[harness] init-repo done.');
+  return 0;
+}
+
+export async function cmdIndex(argv) {
+  const flags = parseFlags(argv);
+  const copilotHome = resolveCopilotHome(flags.copilotHome);
+  const knowledgeRoot = path.join(copilotHome, 'knowledge');
+  const logger = (m) => log(flags, m);
+  runIndexKnowledge({
+    knowledgeRoot: fs.existsSync(knowledgeRoot) ? knowledgeRoot : null,
+    workspace: path.resolve(flags.workspace),
+    flags,
+    log: logger,
+  });
+  return 0;
+}
+
+export async function cmdUninstall(argv) {
+  const flags = parseFlags(argv);
+  const copilotHome = resolveCopilotHome(flags.copilotHome);
+  const lock = readLock(copilotHome);
+  if (!lock?.files?.length) {
+    console.error('[harness] no lock file — nothing to uninstall');
+    return 1;
+  }
+  let removed = 0;
+  for (const rel of lock.files) {
+    const dest = path.join(copilotHome, rel);
+    if (!fs.existsSync(dest)) continue;
+    if (flags.dryRun) {
+      log(flags, `would remove ${rel}`);
+      removed++;
+      continue;
+    }
+    fs.rmSync(dest, { recursive: true, force: true });
+    removed++;
+  }
+  if (!flags.dryRun) {
+    fs.rmSync(path.join(copilotHome, LOCK_NAME), { force: true });
+  }
+  log(flags, `uninstall removed ${removed} paths`);
+  return 0;
+}
