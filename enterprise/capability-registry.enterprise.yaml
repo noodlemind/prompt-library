@@ -1,0 +1,26 @@
+# Enterprise overlay — merge with knowledge/capability-registry.yaml at engineer intake
+# Platform team maintains. Hydrate to ~/.copilot/enterprise/
+version: 1
+updated: null
+organization: "<your-org>"
+
+enterprise_skills:
+  # - terraform
+  # - splunk-queries
+
+enterprise_agents:
+  # - splunk-reviewer
+  # - terraform-reviewer
+
+engineer_allowlist_additions:
+  # Agents @engineer may delegate in addition to base allowlist:
+  # - splunk-reviewer
+  # - terraform-reviewer
+
+domain_routing:
+  - signals: [terraform, ".tf", "hcl", "module.tf"]
+    skill: terraform
+    specialists: [terraform-reviewer]
+  - signals: [splunk, "spl", "index="]
+    skill: null
+    specialists: [splunk-reviewer]

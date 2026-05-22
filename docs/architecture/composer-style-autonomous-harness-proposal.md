@@ -6,6 +6,65 @@ Companion docs: [`composer-parity-review.md`](composer-parity-review.md), [`engi
 
 ---
 
+## 0. Clarification: three user commands vs many capabilities
+
+**User types only:** `@engineer`, `/btw`, `/code-review`.
+
+**Engineer still uses** all hydrated skills (`/java`, `/aws`, `/terraform`, …) and agents (`@splunk-reviewer`, …) **internally** via domain routing — full detail in [`enterprise-capability-expansion.md`](enterprise-capability-expansion.md).
+
+### 0.1 The gap you called out (answered)
+
+The engineer does **not** “learn” Java or AWS during a chat session the way a human picks up a new language. Capability works in **two layers**:
+
+| Layer | What it is | How the engineer gets it |
+|-------|------------|---------------------------|
+| **Hydrated capability** | Skills, agents, instructions on disk after **Hydrate** | Already available every turn — engineer **routes** to them by domain signals |
+| **Growing capability** | New corp-specific primitives (Terraform skill, Splunk agent) | **Enterprise overlay** or `/import-conventions` / `/create-primitive` — then hydrate again |
+
+**Session “learning”** (compounding) is separate: solved-problem facts in `knowledge/solutions/` via auto-compound — not new slash skills.
+
+```text
+                    USER (3 commands)
+                    @engineer  /btw  /code-review
+                           │
+                           ▼
+              ┌────────────────────────────┐
+              │  Engineer (thin orchestrator) │
+              │  • domain router (intake)     │
+              │  • reads merged registries    │
+              └─────────────┬──────────────┘
+                            │
+         ┌──────────────────┼──────────────────┐
+         ▼                  ▼                  ▼
+   Internal skills    Specialist agents    Knowledge recall
+   /java /aws /sql     @aws-reviewer        manifest + solutions
+   (hydrated)          @splunk-reviewer     (compounded facts)
+                       (hydrated + allowlist)
+```
+
+### 0.2 Scenario table (your examples)
+
+| Your question | Short answer |
+|---------------|--------------|
+| AWS task but engineer “only knew” Java/SQL? | **`/aws` is already in the base library.** After global hydrate, the engineer applies the AWS workflow and can delegate `@aws-reviewer` — no new skill step; routing is automatic from prompt/file signals. |
+| Terraform (not in base library)? | **Not runtime learning.** Platform adds `enterprise/skills/terraform/` (or `/import-conventions`), hydrates overlay; engineer routes `.tf` / “terraform” to `/terraform`. Until then: capability-gap draft + generic researchers; work can continue under `full` profile. |
+| Splunk expert validation? | **Specialists are agents, not skills.** Add `splunk-reviewer.agent.md` to enterprise overlay, add to `engineer.agent.md` `agents:` allowlist (**Tier 3 once**), hydrate. Then `@engineer` auto-delegates on Splunk/SPL signals. Users can always `@splunk-reviewer` directly once hydrated. |
+| Enterprise terminology / style? | **Instructions** (file-pattern scoped) + **knowledge/solutions** + product `docs/agent-context.md` — not a new public slash command per term. |
+
+### 0.3 How routing + access control work (implementation)
+
+At **ingest** (Phase F3), engineer:
+
+1. Merges `knowledge/capability-registry.yaml` + `enterprise/capability-registry.enterprise.yaml`.
+2. Sets plan frontmatter `domains`, `specialists`, `capability_gaps` (F4).
+3. Invokes **internal** domain skills when registry lists them (user never types `/aws`).
+4. Delegates specialists only if (a) agent file hydrated and (b) name appears in engineer `agents:` allowlist (base + `engineer_allowlist_additions` from enterprise registry).
+5. If specialist missing → auto-draft `docs/capability-gaps/<slug>.md` (F6) + Tier 1 notify; optional fallback to researchers or user-provided context.
+
+**Important:** “Three interactions” limits **what humans type**, not **what the harness can load or delegate**.
+
+---
+
 ## 1. Executive shift
 
 | Today (compliance-first) | Target (Composer-first) |
@@ -291,12 +350,13 @@ We **do not** beat Composer on native codebase embedding until v2 index — acce
 
 ## 9. Implementation roadmap
 
-### Phase A — Policy (docs + references, 1 pass)
+### Phase A — Policy (docs + references)
 
-- [ ] Add `autonomy-policy.md`
-- [ ] Add `profile.md` fields: `autonomy`, `notify_channel`
-- [ ] Update `human-approval-policy.md` → “Tier 3 only; Tier 0 default autonomous”
-- [ ] Update `composer-parity-review.md` with autonomous target
+- [x] Add `autonomy-policy.md`
+- [x] Add `profile.md` fields: `autonomy`, `notify_channel`
+- [x] Update `human-approval-policy.md` → Tier 3 only; Tier 0 default autonomous
+- [x] Update `composer-parity-review.md` with autonomous target
+- [x] Add `enterprise-capability-expansion.md` (skills vs agents vs knowledge)
 
 ### Phase B — Engineer behavior (1 pass)
 
@@ -321,6 +381,39 @@ We **do not** beat Composer on native codebase embedding until v2 index — acce
 
 - [ ] Semantic ranker for manifest
 - [ ] MCP retrieval tool spec
+
+### Phase F — Enterprise capability layer (skills + specialists)
+
+**Goal:** Corp-specific skills (Terraform, internal frameworks) and agents (Splunk expert) without forking the whole library.
+
+| ID | Deliverable | Owner |
+|----|-------------|-------|
+| F1 | `enterprise/README.md` + `capability-registry.enterprise.yaml` template | Platform |
+| F2 | Hydrate sync: `enterprise/skills`, `enterprise/agents`, `enterprise/instructions` → `~/.copilot/enterprise/` | DevEx |
+| F3 | Engineer **domain router** at intake: map signals → internal skill + `specialists[]` | Harness |
+| F4 | Plan frontmatter: `domains`, `specialists`, `capability_gaps` | Harness |
+| F5 | `engineer-delegation-matrix.md` + registry: document enterprise-only rows | Platform |
+| F6 | Capability-gap auto-draft → `docs/capability-gaps/<slug>.md` + Activity notify | Harness |
+
+**Splunk reviewer example (one-time setup):**
+
+1. Platform adds `enterprise/agents/splunk-reviewer.agent.md`.
+2. Adds `splunk-reviewer` to enterprise registry and `engineer.agent.md` `agents:` (Tier 3).
+3. Hydrate.  
+4. All future `@engineer` tasks mentioning Splunk/SPL auto-delegate `@splunk-reviewer`.
+
+**Terraform skill example:**
+
+1. Platform runs `/import-conventions` on corp Terraform module repo **or** adds `enterprise/skills/terraform/SKILL.md`.
+2. Hydrate.
+3. Engineer routes `.tf` / “terraform” signals to `/terraform` without user typing it.
+
+### Phase G — Optional auto-skill (Hermes-style, enterprise only)
+
+- [ ] After 3 verified similar tasks in `knowledge/solutions/`, draft `enterprise/skills/<domain>/SKILL.md` from patterns
+- [ ] Tier 1 notify platform; never auto-create **agents**
+
+**Confirmation gate for you:** approve Phase F before G; F is required for enterprise specialists.
 
 ---
 
@@ -361,3 +454,22 @@ Choose default autonomy profile for hydrated installs:
 | **strict** | Current behavior (explicit approvals) |
 
 Proposal: ship **`balanced`** globally, document **`full`** for autonomous loop, keep **`strict`** for liaison-heavy orgs.
+
+---
+
+## 13. Confirmation checklist (for reviewer sign-off)
+
+| # | Decision | Options |
+|---|----------|---------|
+| 1 | Default autonomy profile | `balanced` (recommended) / `full` / `strict` |
+| 2 | Enterprise overlay path | `~/.copilot/enterprise/` (recommended) / separate git repo hydrate |
+| 3 | New specialist agents (Splunk) | Tier 3 once per agent + allowlist update (recommended) |
+| 4 | New domain skills (Terraform) | Enterprise overlay + Tier 1 notify under `full` (recommended) |
+| 5 | Phase F before autonomous loop Phase B | Yes (recommended) / parallel |
+| 6 | Public commands stay 3 | Yes — internal skills/agents expand (recommended) |
+| 7 | Capability model | Hydration + domain router + enterprise overlay (recommended) — **not** in-session skill learning |
+| 8 | Missing specialist behavior | Gap draft + notify + researcher fallback until agent shipped (recommended) |
+
+**Capability model (for #7):** Base library skills/agents are always available after hydrate. Enterprise adds overlay primitives; engineer discovers gaps and drafts proposals but does not invent new agents without Tier 3. Compounding adds **knowledge**, not new skills.
+
+**After confirmation:** implement Phase B + F in priority order on `cursor/engineer-vision-review-a13c` (or main).
