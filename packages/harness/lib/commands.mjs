@@ -319,6 +319,61 @@ export async function cmdEvents(argv) {
   return 0;
 }
 
+export async function cmdValidatePlan(argv) {
+  const { runValidatePlan } = await import('./validate-plan.mjs');
+  const flags = parseFlags(argv);
+  const workspace = path.resolve(flags.workspace);
+  const result = runValidatePlan({ workspace, flags, planPath: flags.plan });
+  writeEvent(workspace, flags, {
+    type: 'validate_plan',
+    command: 'validate-plan',
+    plan: result.plan?.path || null,
+    exitCode: result.exitCode,
+    checks: result.checks,
+    blockedReason: result.blockedReason,
+  });
+
+  if (flags.json) {
+    console.log(JSON.stringify(result, null, 2));
+  } else {
+    for (const c of result.checks) {
+      const mark = c.pass ? 'PASS' : c.severity === 'warn' ? 'WARN' : 'FAIL';
+      console.log(`${mark}  ${c.id}  ${c.message}`);
+    }
+    console.log('');
+    console.log(result.pass ? 'harness validate-plan: pass' : 'harness validate-plan: FAIL');
+  }
+  return result.exitCode;
+}
+
+export async function cmdCompound(argv) {
+  const { runCompound } = await import('./compound.mjs');
+  const flags = parseFlags(argv);
+  const workspace = path.resolve(flags.workspace);
+  const copilotHome = resolveCopilotHome(flags.copilotHome);
+  const logger = (m) => log(flags, m);
+  const result = runCompound({ workspace, copilotHome, flags, log: logger });
+  writeEvent(workspace, flags, {
+    type: 'compound',
+    command: 'compound',
+    exitCode: result.exitCode,
+    result: result.pass ? (result.exitCode === 2 ? 'warn' : 'pass') : 'fail',
+    blockedReason: result.blockedReason,
+  });
+
+  if (flags.json) {
+    console.log(JSON.stringify(result, null, 2));
+  } else {
+    if (result.pass) {
+      console.log(`[harness] compound: indexed ${result.indexed?.entries ?? 0} entries`);
+      if (result.exitCode === 2) console.log('  verify gate warned — review Activity');
+    } else {
+      console.log(`[harness] compound: blocked — ${result.blockedReason}`);
+    }
+  }
+  return result.exitCode;
+}
+
 export async function cmdUninstall(argv) {
   const flags = parseFlags(argv);
   const copilotHome = resolveCopilotHome(flags.copilotHome);
@@ -345,3 +400,4 @@ export async function cmdUninstall(argv) {
   log(flags, `uninstall removed ${removed} paths`);
   return 0;
 }
+

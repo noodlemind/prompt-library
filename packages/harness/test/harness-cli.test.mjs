@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 import { syncAssetsToTarget } from '../lib/sync.mjs';
 import { parsePlanFrontmatter } from '../lib/plan-parse.mjs';
+import { CONTEXT_PACK_MAX_BYTES, buildContextPack } from '../lib/context-pack.mjs';
 
 const packageRoot = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -45,6 +46,12 @@ ${frontmatter}---
 
 Do the work.
 
+## Intent Contract
+
+- **Goal:** Fix example
+- **Expected outputs:** code change
+- **Success criteria:** tests pass
+
 ## Acceptance Criteria
 
 - [ ] Example is fixed.
@@ -52,6 +59,10 @@ Do the work.
 ## Verification Plan
 
 Run the relevant test command.
+
+## Impacted Files
+
+- src/example.ts
 
 ## Activity
 
@@ -374,4 +385,126 @@ test('preserved knowledge files are not reported as harness-owned', () => {
 
   assert.equal(stats.skipped, 1);
   assert.deepEqual(stats.files, []);
+});
+
+test('context pack stays within byte budget cap', () => {
+  const recall = Array.from({ length: 20 }, (_, i) => ({
+    title: `Solution ${i}`,
+    path: `knowledge/solutions/cat/s-${i}.md`,
+    score: 0.9,
+    summary: 'x'.repeat(200),
+  }));
+  const body = buildContextPack({
+    query: 'a'.repeat(500),
+    recall,
+    plans: Array.from({ length: 10 }, (_, i) => ({
+      path: `docs/plans/plan-${i}.md`,
+      status: 'in-progress',
+      plan_lock: true,
+      score: 0.5,
+    })),
+    activePlan: {
+      path: 'docs/plans/active.md',
+      status: 'in-progress',
+      plan_lock: true,
+      phase: 1,
+      memoryExcerpt: 'y'.repeat(1500),
+    },
+    gatePreview: { pass: false, blockedReason: 'blocked'.repeat(50) },
+    nextTools: ['harness gate'],
+  });
+  assert.ok(Buffer.byteLength(body, 'utf8') <= CONTEXT_PACK_MAX_BYTES);
+  assert.match(body, /truncated to 2KB budget/);
+});
+
+test('validate-plan fails when required sections missing', () => {
+  const workspace = tempDir('harness-workspace-');
+  const plansDir = path.join(workspace, 'docs', 'plans');
+  fs.mkdirSync(plansDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(plansDir, 'bad-plan.md'),
+    `---
+title: "Bad"
+status: open
+plan_lock: false
+---
+
+# Bad
+
+## Overview
+
+Only overview.
+`,
+    'utf8'
+  );
+
+  const result = runHarness([
+    'validate-plan',
+    '--plan',
+    'docs/plans/bad-plan.md',
+    '--workspace',
+    workspace,
+    '--json',
+  ]);
+
+  assert.equal(result.status, 1, result.stderr);
+  const body = JSON.parse(result.stdout);
+  assert.equal(body.pass, false);
+  assert.equal(body.checks.find((c) => c.id === 'S2')?.pass, false);
+});
+
+test('validate-plan passes complete locked plan', () => {
+  const workspace = tempDir('harness-workspace-');
+  writePlan(workspace, {
+    frontmatter:
+      'intent: "Fix example safely"\nexpected_outputs: ["code change"]\nsuccess_criteria: ["tests pass"]\n',
+  });
+
+  const result = runHarness(['validate-plan', '--workspace', workspace, '--json']);
+
+  assert.equal(result.status, 0, result.stderr);
+  const body = JSON.parse(result.stdout);
+  assert.equal(body.pass, true);
+  assert.equal(body.checks.find((c) => c.id === 'S4')?.pass, true);
+});
+
+test('compound indexes after verify gate passes', () => {
+  const workspace = tempDir('harness-workspace-');
+  const copilotHome = tempDir('harness-copilot-');
+  writePlan(workspace, {
+    frontmatter:
+      'intent: "Fix example safely"\nexpected_outputs: ["code change"]\nsuccess_criteria: ["tests pass"]\n',
+    activity: '- Verification: npm test passed.',
+  });
+
+  const result = runHarness([
+    'compound',
+    '--workspace',
+    workspace,
+    '--copilot-home',
+    copilotHome,
+    '--json',
+  ]);
+
+  assert.equal(result.status, 0, result.stderr);
+  const body = JSON.parse(result.stdout);
+  assert.equal(body.pass, true);
+  assert.ok(body.indexed);
+  assert.equal(readEvents(workspace).some((e) => e.type === 'compound'), true);
+});
+
+test('compound fails when verify gate not satisfied', () => {
+  const workspace = tempDir('harness-workspace-');
+  writePlan(workspace, {
+    frontmatter:
+      'intent: "Fix example safely"\nexpected_outputs: ["code change"]\nsuccess_criteria: ["tests pass"]\n',
+    activity: '- Plan created only.',
+  });
+
+  const result = runHarness(['compound', '--workspace', workspace, '--json']);
+
+  assert.equal(result.status, 2, result.stderr);
+  const body = JSON.parse(result.stdout);
+  assert.equal(body.pass, true);
+  assert.equal(body.exitCode, 2);
 });

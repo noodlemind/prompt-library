@@ -41,13 +41,20 @@ Set **`autonomy`**:
 
 ## 3. Product repo layout
 
-Each service repo needs:
+Bootstrap each service repo:
+
+```bash
+npx @dev-kit/harness init-repo
+```
 
 ```text
-docs/plans/          # @engineer creates/updates plans here
+docs/plans/             # plans + state machine
+.harness/               # session.json, context-pack.md (gitignored)
 docs/agent-context.md   # optional thin conventions
-knowledge/           # optional — use when global ~/.copilot missing (cloud/Linux)
+.harness-version        # optional pin, e.g. 0.3.1
 ```
+
+Pin harness in `package.json` `devDependencies` or `.harness-version` for CI reproducibility.
 
 ## 4. Run work
 
@@ -57,11 +64,22 @@ In Copilot Chat:
 @engineer Fix the timeout on the orders API under load
 ```
 
-The harness automatically: recalls team memory → checks capabilities → ensures plan → implements → verifies → compounds learnings.
+`@engineer` runs harness tools via terminal (you do not prompt the CLI):
+
+1. `harness orient` → read `.harness/context-pack.md`
+2. `harness gate` before edits
+3. implement → verify → `harness compound` or `/auto-compound`
 
 You do **not** need `/capture-issue`, `/plan-issue`, `/recall`, or `/compound-learnings` unless debugging.
 
-## 5. Health check
+## 5. CI (optional hard gate)
+
+```yaml
+- run: npx @dev-kit/harness@0.3.1 gate --workspace . --json
+- run: npx @dev-kit/harness@0.3.1 validate-plan --workspace . --json
+```
+
+## 6. Health check
 
 ```text
 /harness-doctor
@@ -79,6 +97,7 @@ If `~/.copilot/knowledge/` is unavailable, keep `knowledge/` in the product repo
 
 ## Docs
 
+- Tool contract: `.github/skills/references/harness-tool-contract.md`
 - Autonomous loop: `docs/architecture/composer-style-autonomous-harness-proposal.md`
 - Memory: `docs/architecture/engineer-memory-system.md`
 - Enterprise capability: `docs/architecture/enterprise-capability-expansion.md`

@@ -267,7 +267,20 @@ Fail PR if trackable code changed without `plan_lock` plan linked in PR body or 
 | **T5** | `init-repo` creates `.harness/` | Done |
 | **T6** | Keyword ranker tests (vitest) | Planned |
 | **T7** | `index --semantic` optional dep (`vectra`) | Spike |
-| **T8** | `harness compound` one-shot | Planned |
+| **T8** | `harness compound` one-shot | Done (0.3.1) |
+
+---
+
+## 13. Harness vs skill-local scripts
+
+| Tier | Location | When |
+|------|----------|------|
+| **A — Harness CLI** | `@dev-kit/harness` | Same behavior across all product repos |
+| **B — Skill scripts** | `.github/skills/<name>/scripts/` | Read-only, skill-specific validators only |
+
+SSOT: [`.github/skills/references/harness-tool-contract.md`](../../.github/skills/references/harness-tool-contract.md)
+
+Product repos pin harness version via `devDependencies` or `.harness-version` for reproducible agent tooling.
 
 ---
 

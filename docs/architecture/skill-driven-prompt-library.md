@@ -165,6 +165,7 @@ flowchart TD
 ## Governance
 
 - Treat skills, agents, instructions, prompt wrappers, hooks, checks, scripts, and MCP metadata as executable governance artifacts.
+- **Harness vs skill scripts:** Cross-repo deterministic agent tools live in **`@dev-kit/harness`** (`orient`, `gate`, `recall`, `index`, `compound`, `validate-plan`). Skills are thin orchestration that invoke harness with `--json`. Skill-local `scripts/` is allowed only for narrow, read-only validators tied to one skill — see [`.github/skills/references/harness-tool-contract.md`](../.github/skills/references/harness-tool-contract.md).
 - Do not pre-approve shell or network access in community or shared artifacts without local review.
 - Keep permissions minimal in agent frontmatter and prompt wrappers.
 - Prefer read-only specialist agents for review and research.

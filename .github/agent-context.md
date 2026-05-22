@@ -8,7 +8,7 @@ This repository is a skill-driven prompt library containing AI agent systems:
 - `.github/agents/` — 24 agents (19 specialists + 1 engineer + 1 implementer + 3 coordinators, judgment-criteria style)
 - `.github/skills/` — 31 skills including Composer-style autopilot (`ensure-plan`, `ensure-capability`, `auto-compound`, `engineer-autopilot`)
 - `enterprise/` — optional corp overlay (skills, agents, capability-gaps) hydrated to `~/.copilot/enterprise/`
-- `scripts/index-knowledge.mjs` — deterministic manifest rebuild
+- `npx @dev-kit/harness index` — deterministic manifest rebuild (replaces manual index steps)
 - `docs/onboarding/harness-quickstart.md` — enterprise onboarding
 - `knowledge/` — team-wide solutions and manifest (hydrated to `~/.copilot/knowledge/`), primitive creation, domain workflows, README maintenance, quick Q&A, and utilities
 - `.github/instructions/` — scoped instructions (TypeScript, Python, Java, Spring Boot, PostgreSQL, AWS SDK)

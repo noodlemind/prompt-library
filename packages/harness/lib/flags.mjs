@@ -18,6 +18,7 @@ export function parseFlags(argv) {
     includePlans: false,
     strictIntent: false,
     noEvents: false,
+    plan: null,
   };
 
   for (let i = 0; i < argv.length; i++) {
@@ -48,7 +49,9 @@ export function parseFlags(argv) {
       flags.targets = new Set(a.split('=')[1].split(',').map((t) => t.trim()));
     } else if (a === '--target') {
       flags.targets = new Set(argv[++i].split(',').map((t) => t.trim()));
-    } else if (a.startsWith('--workspace=')) flags.workspace = a.split('=')[1];
+    } else if (a.startsWith('--plan=')) flags.plan = a.split('=').slice(1).join('=');
+    else if (a === '--plan') flags.plan = argv[++i];
+    else if (a.startsWith('--workspace=')) flags.workspace = a.split('=')[1];
     else if (a === '--workspace') flags.workspace = argv[++i];
   }
 

@@ -15,7 +15,7 @@ Design: `docs/architecture/tool-native-harness-design.md`
 | 5 | `npx @dev-kit/harness gate --phase implement` — **exit 0 required** | No |
 | 6 | Implement — scope `## Impacted Files` on active plan | Yes |
 | 7 | `npx @dev-kit/harness gate --phase verify` | No |
-| 8 | `/auto-compound` or future `harness compound` | Knowledge only |
+| 8 | `/auto-compound` or `harness compound` | Knowledge only |
 
 Use `--json` when parsing tool output programmatically.
 The CLI is setup/structure tooling for agents and automation; users should interact through Copilot skills and agents, not by feeding prompts to the CLI.
@@ -43,7 +43,8 @@ After orient/gate tools pass, still run when needed:
 ## CI (hard enforcement)
 
 ```yaml
-- run: npx @dev-kit/harness@0.3.0 gate --workspace . --json
+- run: npx @dev-kit/harness@0.3.1 gate --workspace . --json
+- run: npx @dev-kit/harness@0.3.1 validate-plan --workspace . --json
 ```
 
 Fail PR when product code changes without `plan_lock: true` on a linked plan.

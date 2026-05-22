@@ -1,83 +1,34 @@
 ---
 name: recall
 user-invocable: false
-description: Recall team and repo knowledge before engineering work. Use at session start or before investigate/fix. Searches global knowledge manifest, local plans, and solutions. Not for implementation — use after recall to /capture-issue or /engineer.
-argument-hint: "[task description or plan file path]"
+description: Recall team and repo knowledge before engineering work. Delegates ranking to @dev-kit/harness orient/recall. Not for implementation.
+argument-hint: "[task description]"
 ---
 
-# Recall
+# Recall (CLI-first)
 
-## Purpose
-
-**Phase 0** for the Adaptive Engineer Harness — load the smallest high-signal context before investigation or capture. Follow `.github/skills/references/knowledge-locations.md` for paths (see `docs/architecture/engineer-memory-system.md`).
-
-## When to Use
-
-- Starting `@engineer` or `/work-on-task` on a new or resumed task
-- User asks "have we solved this before?"
-- Before `/capture-issue` when checking duplicates
-- After hydrating global `knowledge/` from prompt-library
-
-## Trigger Examples
-
-**Should trigger:**
-- "What do we already know about this?"
-- "Recall context for this bug"
-- "Check team knowledge before we start"
-
-**Should not trigger:**
-- "Fix this now" without recall → still run recall quickly, then capture gate
-- "Document the learning" → `/compound-learnings`
+**Phase 0** — load bounded context before investigation. Contract: [`harness-tool-contract.md`](../references/harness-tool-contract.md).
 
 ## Steps
 
-### 1. Extract signals
+### 1. Orient (preferred)
 
-From the user prompt or plan path, extract 3–7 keywords (symptoms, technologies, modules, error types).
-
-### 2. Global knowledge (team-wide)
-
-Read manifest per `knowledge-locations.md`. Score `entries[]` by tag/symptom/title overlap with query keywords.
-
-**Composer-style cap** (`.github/skills/references/context-budget.md`):
-
-- Return **top 3** matches only
-- Per match: read ≤25 lines of solution file (frontmatter + problem summary)
-- Total recall output ≤800 tokens
-
-### 3. Local product repo
-
-1. Scan `docs/plans/*.md` titles — best match only (do not read every plan).
-2. If plan path given: read `## Memory Cards` only (not full Activity).
-3. Optional: one repo-private `docs/solutions/` file if highly relevant.
-
-### 4. Build memory cards
-
-Produce **5–15 bullets**, ≤1200 characters total:
-
-```markdown
-## Recall Summary
-
-**Global matches:** N | **Local plans:** M | **Local solutions:** K
-
-### Memory Cards
-
-- [fact] — `source: <path>`
+```bash
+npx @dev-kit/harness orient --query "<task keywords>" --workspace . --json
 ```
 
-### 5. Recommend next step
+Read **only** `.harness/context-pack.md` (≤2 KB). Do not paste CLI stdout into chat.
 
-| Situation | Next step |
-|-----------|-----------|
-| Matching open/in-progress plan | Resume that plan; `/work-on-task` |
-| Global solution strongly matches | Cite it; then `/capture-issue` if no plan |
-| No matches | `/capture-issue` for trackable work |
-| Review-only | `/code-review` |
+### 2. Or standalone recall
 
-Do not edit product code in this skill.
+```bash
+npx @dev-kit/harness recall "<keywords>" --limit 3 --workspace . --json
+```
 
-## Guardrails
+`read` returned paths only — ≤25 lines per solution per [`context-budget.md`](../references/context-budget.md).
 
-- Prefer manifest + cards over loading entire solution corpora.
-- Never paste secrets from old solutions into output.
-- If manifest is empty, say so and suggest `/compound-learnings` + `/index-memory` after the next fix.
+### 3. Summarize
+
+Produce ≤15 bullets with `source:` paths. Recommend next step (resume plan, `/capture-issue`, `/code-review`).
+
+Do not edit product code. Do not manually scan manifest or all plans — harness already ranked them.

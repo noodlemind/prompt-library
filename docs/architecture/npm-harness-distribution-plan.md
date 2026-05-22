@@ -382,7 +382,8 @@ Full runbook: [`nexus-registry-setup.md`](../onboarding/nexus-registry-setup.md)
 ### Phase 4 — Repo + knowledge (1 deliverable)
 
 - [ ] `aeh init-repo`
-- [ ] `aeh index` wrapping `index-knowledge.mjs`
+- [x] `harness index` (manifest rebuild)
+- [x] Agent runtime: `orient`, `gate`, `recall`, `validate-plan`, `compound`, `events`
 - [ ] `aeh knowledge pull` from git tag OR install `@org/harness-knowledge`
 
 ### Phase 5 — Enterprise (1 deliverable)

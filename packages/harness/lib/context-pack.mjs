@@ -1,5 +1,7 @@
 const MAX_BYTES = 2048;
 
+export const CONTEXT_PACK_MAX_BYTES = MAX_BYTES;
+
 export function buildContextPack({
   query,
   recall,
