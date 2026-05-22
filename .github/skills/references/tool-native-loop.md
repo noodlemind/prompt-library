@@ -8,20 +8,23 @@ Design: `docs/architecture/tool-native-harness-design.md`
 
 | # | Tool / action | Product edits? |
 |---|---------------|----------------|
-| 1 | `npx @dev-kit/harness orient --query "<user request>"` | No |
+| 1 | `npx @dev-kit/harness orient --query "<agent task summary>"` | No |
 | 2 | `read` `.harness/context-pack.md` only (≤2 KB slice) | No |
 | 3 | Investigate (`codebase`, `search`, `read`) | No |
-| 4 | `npx @dev-kit/harness gate --phase implement` — **exit 0 required** | No |
-| 5 | Implement — scope `## Impacted Files` on active plan | Yes |
-| 6 | `npx @dev-kit/harness gate --phase verify` | No |
-| 7 | `/auto-compound` or future `harness compound` | Knowledge only |
+| 4 | Append plan `## Agent Journal` entry if uncertain, blocked, escalating, or changing strategy | Plan docs only |
+| 5 | `npx @dev-kit/harness gate --phase implement` — **exit 0 required** | No |
+| 6 | Implement — scope `## Impacted Files` on active plan | Yes |
+| 7 | `npx @dev-kit/harness gate --phase verify` | No |
+| 8 | `/auto-compound` or future `harness compound` | Knowledge only |
 
 Use `--json` when parsing tool output programmatically.
+The CLI is setup/structure tooling for agents and automation; users should interact through Copilot skills and agents, not by feeding prompts to the CLI.
 
 ## Session
 
 - `.harness/session.json` — `activePlan`, `gateStatus`, `lastQuery`
 - `.harness/context-pack.md` — ephemeral; gitignored in `init-repo`
+- Plan `## Agent Journal` — durable notes for stuck/confused/escalated states; not a full transcript
 
 ## Internal skills (unchanged semantics)
 

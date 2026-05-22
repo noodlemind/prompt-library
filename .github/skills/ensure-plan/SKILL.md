@@ -27,7 +27,7 @@ List `docs/plans/*.md`. Fuzzy-match titles/Overview against the user request. If
 Follow **`/capture-issue`** exactly:
 
 - Path: `docs/plans/YYYY-MM-DD-<type>-<slug>-plan.md`
-- Frontmatter: `status: open`, `plan_lock: false`, `phase: 0`, `risk`, `domains`, `specialists`, `capability_gaps` from intake
+- Frontmatter: `status: open`, `plan_lock: false`, `phase: 0`, `risk`, `intent` when known, `expected_outputs: []`, `success_criteria: []`, `verification_commands: []`, `org_objectives: []`, `domains`, `specialists`, `capability_gaps` from intake
 - Body minimum: `## Overview`, `## Context`, `## Acceptance Criteria`, `## Activity`
 - Append Activity: `YYYY-MM-DD — ensure-plan: captured (autonomous)`
 
@@ -38,7 +38,8 @@ Do **not** set `plan_lock: true` in this step.
 Follow **`/plan-issue`** for that path:
 
 - Research as needed (delegate `plan-coordinator` when `agent` tool available)
-- Fill `## Research Notes`, `## Impacted Files`, `## Verification Plan`, `## Risk & Review Routing`, phased tasks
+- Fill `## Intent Contract`, `## Research Notes`, `## Impacted Files`, `## Verification Plan`, `## Risk & Review Routing`, phased tasks
+- Populate frontmatter `intent`, `expected_outputs`, `success_criteria`, and `verification_commands`; leave `org_objectives: []` unless an objective is known
 - Set `status: planned`, `plan_lock: true`, `phase: 1`
 - Append Activity: `YYYY-MM-DD — ensure-plan: planned and locked (autonomous)`
 

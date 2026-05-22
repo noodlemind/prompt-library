@@ -8,6 +8,11 @@ phase: 0
 priority: P2
 risk: green
 autonomy: balanced
+intent: ""
+expected_outputs: []
+success_criteria: []
+verification_commands: []
+org_objectives: []
 domains: []
 specialists: []
 capability_gaps: []
@@ -26,6 +31,16 @@ What and why (2-3 sentences).
 ## Context
 
 Problem facts, constraints, related paths, prior art.
+
+## Intent Contract
+
+Mirror the machine-readable frontmatter in human language. Keep this section testable.
+
+- **Goal:**
+- **Expected outputs:**
+- **Success criteria:**
+- **Verification commands:**
+- **Organizational objective:**
 
 ## Memory Cards
 
@@ -75,6 +90,17 @@ Filled during `/work-on-task` or engineer implement phase.
 ## Review Findings
 
 Filled by `/code-review`.
+
+## Agent Journal
+
+Append only when useful for debugging the agent workflow: uncertainty, stuck states, strategy changes, escalations, or scope changes.
+
+### YYYY-MM-DD HH:MM — Signal
+
+- **state:** on-track | uncertain | blocked | escalated
+- **observation:**
+- **decision:**
+- **next:**
 
 ## Activity
 

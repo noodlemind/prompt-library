@@ -1,6 +1,8 @@
 import fs from 'fs';
 import path from 'path';
-import yaml from 'yaml';
+import { createRequire } from 'module';
+
+const require = createRequire(import.meta.url);
 
 function tokenize(s) {
   return (s || '')
@@ -43,6 +45,7 @@ export function loadManifest(copilotHome, workspace) {
   for (const p of paths) {
     if (!fs.existsSync(p)) continue;
     try {
+      const yaml = require('yaml');
       const doc = yaml.parse(fs.readFileSync(p, 'utf8'));
       return { entries: doc.entries || [], path: p };
     } catch {

@@ -15,4 +15,6 @@ Files here are **historical implementation and feature plans** for the prompt-li
 
 Track active issues under **`docs/plans/` in each product repo**, not in this prompt-library repo.
 
+Plans should carry both human-readable sections and machine-readable frontmatter for `intent`, `expected_outputs`, `success_criteria`, `verification_commands`, and `org_objectives` when those are known.
+
 Do not treat dated `2026-*-plan.md` files in this folder as instructions for current behavior unless explicitly referenced by an open initiative.

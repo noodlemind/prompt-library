@@ -25,6 +25,18 @@ How a **Cursor / Windsurf** engineering team would maximize robustness **without
 
 **Design principle:** Treat every harness step as a **tool with a schema**, not prose the model may skip.
 
+### 1.1 Runtime contract tightening
+
+The next durability step is to turn existing conventions into lightweight runtime contracts:
+
+| Theme | Fit | Harness response |
+|-------|-----|------------------|
+| Multi-agent teams, not a god-model | Strong | `@engineer` remains a thin orchestrator; specialized agents execute planner, implementer, reviewer, research, and domain roles. |
+| Keep agent teams manageable (3-5) | Strong with explicit cap | Delegation guidance now defaults to 3-5 active agents per workstream, with extra specialists batched and journaled. |
+| Shift left on intent with specs | Strong, now tighter | `docs/plans/` are versioned specs; the template now includes machine-readable intent, outputs, success criteria, verification commands, and organizational objectives. |
+| Observability and feedback loops | Partial | CLI `--json`, `.harness/session.json`, context packs, Activity, and `.harness/events.jsonl` cover v1. |
+| Organizational alignment | Strong, now more explicit | Enterprise overlays and registries exist; plans now carry `org_objectives` when known. |
+
 ---
 
 ## 2. Architecture: three layers
@@ -66,7 +78,7 @@ How a **Cursor / Windsurf** engineering team would maximize robustness **without
 Every `@engineer` trackable turn:
 
 ```text
-1. harness orient --query "<user request>"
+1. harness orient --query "<agent task summary>"
       → JSON + writes .harness/context-pack.md (≤2 KB)
 
 2. read .harness/context-pack.md   (single retrieved slice)
@@ -95,10 +107,10 @@ Every `@engineer` trackable turn:
 
 ### 4.1 `harness orient` (highest ROI)
 
-**Purpose:** One call replaces ad-hoc recall + manifest grep + plan scan.
+**Purpose:** Agent/internal structural command that replaces ad-hoc recall + manifest grep + plan scan. It is not a user prompt input surface.
 
 ```bash
-npx @dev-kit/harness orient --query "fix orders API timeout under load"
+npx @dev-kit/harness orient --query "orders api timeout"
 npx @dev-kit/harness orient --json
 ```
 
@@ -168,6 +180,16 @@ npx @dev-kit/harness index --semantic   # optional, offline embeddings
 
 Future: single command after verify pass.
 
+### 4.6 `harness events`
+
+**Purpose:** Inspect local structural outcomes from harness commands. This is observability for setup, validation, and agent-internal workflow tooling, not prompt capture.
+
+```bash
+npx @dev-kit/harness events --json
+```
+
+Events append to `.harness/events.jsonl` unless `--no-events` or `HARNESS_NO_EVENTS=1` is set. Logged fields are structural only: command type, plan path, phase, result, exit code, and check ids/severities. Do not log user prompts, full queries, completions, source excerpts, or full plan text.
+
 ---
 
 ## 5. Semantic recall (optional, no MCP)
@@ -206,6 +228,7 @@ This is the maximum robustness available without Copilot hooks — **comparable 
 | `.harness/context-pack.md` | ~2 KB | Every turn (via `orient`) |
 | Plan sections | On demand | Phase only (not full Activity dump) |
 | Solution files | ≤3 × ~30 lines | After orient paths |
+| Agent Journal | On demand | Only uncertainty, stuck states, escalation, or strategy changes |
 
 **Forbidden:** Paste full plan + full solutions into chat manually.
 

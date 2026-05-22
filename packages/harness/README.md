@@ -2,6 +2,8 @@
 
 CLI to install and upgrade the **Adaptive Engineer Harness** into global GitHub Copilot paths (`~/.copilot/`).
 
+The CLI is setup, sync, validation, and local-structure tooling. Developers should provide work prompts through Copilot agents and skills, not through this CLI.
+
 ## Developers
 
 After Nexus `.npmrc` setup ([guide](../../docs/onboarding/nexus-registry-setup.md)):
@@ -27,15 +29,16 @@ npx @dev-kit/harness init-repo
 | `doctor` | Health checks |
 | `status` | Installed version and lock file |
 | `index` | Rebuild `knowledge/manifest.yaml` |
-| `orient` | Recall + plan match + write `.harness/context-pack.md` |
+| `orient` | Agent/internal recall + plan match + write `.harness/context-pack.md` |
 | `gate` | Preflight before `editFiles` (exit 0/1/2) |
-| `recall` | Standalone manifest search |
+| `recall` | Agent/internal manifest search |
+| `events` | Inspect local harness event outcomes |
 | `init-repo` | Create `docs/plans/`, `.harness/`, `docs/agent-context.md` |
 | `uninstall` | Remove files tracked in `.harness-lock.json` only |
 
 ### Options
 
-`--dry-run`, `--verbose`, `--json`, `--copilot-home <path>`, `--target vscode,cli,intellij`, `--autonomy balanced|full|strict`, `--configure-vscode`, `--preserve-knowledge` (default), `--force-knowledge-reset`, `--force-profile`
+`--dry-run`, `--verbose`, `--json`, `--copilot-home <path>`, `--target vscode,cli,intellij`, `--autonomy balanced|full|strict`, `--configure-vscode`, `--preserve-knowledge` (default), `--force-knowledge-reset`, `--force-profile`, `--strict-intent`, `--no-events`
 
 ## Maintainers (prompt-library repo)
 

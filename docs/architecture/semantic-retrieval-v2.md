@@ -14,7 +14,7 @@ Keyword ranking via `harness recall` / `harness orient` is **v1** (manifest toke
 
 ```bash
 npx @dev-kit/harness recall "orders api timeout" --limit 3 --json
-npx @dev-kit/harness orient --query "fix checkout timeout"
+npx @dev-kit/harness orient --query "checkout timeout"
 ```
 
 Returns `{ path, title, score }[]` from `~/.copilot/knowledge/manifest.yaml` (then repo fallback).
@@ -25,7 +25,7 @@ Returns `{ path, title, score }[]` from `~/.copilot/knowledge/manifest.yaml` (th
 
 ```bash
 npx @dev-kit/harness index --semantic
-npx @dev-kit/harness recall "query" --semantic --json
+npx @dev-kit/harness recall "search terms" --semantic --json
 ```
 
 | Tier | Technology | Storage |

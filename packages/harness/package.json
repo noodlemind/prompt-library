@@ -21,7 +21,8 @@
     "build:assets": "node ../../scripts/build-harness-assets.mjs",
     "prepublishOnly": "npm run build:assets",
     "doctor": "node ./bin/harness.mjs doctor",
-    "install:local": "node ./bin/harness.mjs install"
+    "install:local": "node ./bin/harness.mjs install",
+    "test": "node --test ./test/*.test.mjs"
   },
   "publishConfig": {
     "registry": "https://your-nexus.example/repository/npm-hosted/",

@@ -75,12 +75,18 @@ status: planned
 plan_lock: true
 date: YYYY-MM-DD
 phase: 1
+intent: "<one sentence goal>"
+expected_outputs: ["<artifact or behavior>"]
+success_criteria: ["<testable outcome>"]
+verification_commands: ["<command or manual check>"]
+org_objectives: []
 ---
 ```
 
 **Required sections:**
 - `## Overview` — problem statement / feature description
 - `## Context` — task-scoped facts, constraints, user intent, relevant code paths, and assumptions
+- `## Intent Contract` — goal, expected outputs, success criteria, verification commands, and known org objective
 - Implementation phases with tasks
 - `## Acceptance Criteria`
 - `## Impacted Files` — allowlist of files expected to change
@@ -111,6 +117,11 @@ status: planned
 plan_lock: true
 date: YYYY-MM-DD
 phase: 1
+intent: "<one sentence goal>"
+expected_outputs: ["<artifact or behavior>"]
+success_criteria: ["<testable outcome>"]
+verification_commands: ["<command or manual check>"]
+org_objectives: []
 ---
 
 # <Title>
@@ -120,6 +131,9 @@ phase: 1
 
 ## Context
 [Facts, constraints, user intent, related artifacts, assumptions]
+
+## Intent Contract
+[Goal, expected outputs, success criteria, verification commands, org objective if known]
 
 ## Implementation Phases
 

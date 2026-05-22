@@ -16,9 +16,8 @@ import { runDoctor } from './doctor.mjs';
 import { runInitRepo } from './init-repo.mjs';
 import { runIndexKnowledge } from './index-knowledge.mjs';
 import { configureVSCodeSettings } from './vscode-settings.mjs';
-import { runOrient, parseQueryFromArgv } from './orient.mjs';
-import { runGate } from './gate.mjs';
-import { runRecall } from './recall-cmd.mjs';
+import { parseQueryFromArgv } from './argv.mjs';
+import { readEvents, summarizeEvents, writeEvent } from './events.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const pkgRoot = pkgRootFromImportMeta(import.meta.url);
@@ -185,8 +184,15 @@ export async function cmdStatus(argv) {
 
 export async function cmdInitRepo(argv) {
   const flags = parseFlags(argv);
+  const workspace = path.resolve(flags.workspace);
   const logger = (m) => log(flags, m);
-  runInitRepo({ workspace: path.resolve(flags.workspace), flags, log: logger });
+  runInitRepo({ workspace, flags, log: logger });
+  writeEvent(workspace, flags, {
+    type: 'init_repo',
+    command: 'init-repo',
+    result: 'pass',
+    exitCode: 0,
+  });
   if (!flags.json) console.log('[harness] init-repo done.');
   return 0;
 }
@@ -195,22 +201,38 @@ export async function cmdIndex(argv) {
   const flags = parseFlags(argv);
   const copilotHome = resolveCopilotHome(flags.copilotHome);
   const knowledgeRoot = path.join(copilotHome, 'knowledge');
+  const workspace = path.resolve(flags.workspace);
   const logger = (m) => log(flags, m);
   runIndexKnowledge({
     knowledgeRoot: fs.existsSync(knowledgeRoot) ? knowledgeRoot : null,
-    workspace: path.resolve(flags.workspace),
+    workspace,
     flags,
     log: logger,
+  });
+  writeEvent(workspace, flags, {
+    type: 'index',
+    command: 'index',
+    result: 'pass',
+    exitCode: 0,
   });
   return 0;
 }
 
 export async function cmdOrient(argv) {
+  const { runOrient } = await import('./orient.mjs');
   const flags = parseFlags(argv);
   const workspace = path.resolve(flags.workspace);
   const copilotHome = resolveCopilotHome(flags.copilotHome);
   const query = parseQueryFromArgv(argv, flags);
   const result = runOrient({ workspace, copilotHome, flags, query });
+  writeEvent(workspace, flags, {
+    type: 'orient',
+    command: 'orient',
+    plan: result.activePlan?.path || null,
+    result: result.gateStatus === 'pass' ? 'pass' : 'fail',
+    exitCode: 0,
+    blockedReason: result.blockedReason,
+  });
 
   if (flags.json) {
     console.log(JSON.stringify(result, null, 2));
@@ -223,10 +245,20 @@ export async function cmdOrient(argv) {
 }
 
 export async function cmdGate(argv) {
+  const { runGate } = await import('./gate.mjs');
   const flags = parseFlags(argv);
   const workspace = path.resolve(flags.workspace);
   const query = parseQueryFromArgv(argv, flags);
   const result = runGate({ workspace, flags, query });
+  writeEvent(workspace, flags, {
+    type: 'gate',
+    command: 'gate',
+    plan: result.plan?.path || null,
+    phase: result.phase,
+    exitCode: result.exitCode,
+    checks: result.checks,
+    blockedReason: result.blockedReason,
+  });
 
   if (flags.json) {
     console.log(JSON.stringify(result, null, 2));
@@ -242,11 +274,18 @@ export async function cmdGate(argv) {
 }
 
 export async function cmdRecall(argv) {
+  const { runRecall } = await import('./recall-cmd.mjs');
   const flags = parseFlags(argv);
   if (argv.includes('--include-plans')) flags.includePlans = true;
   const workspace = path.resolve(flags.workspace);
   const copilotHome = resolveCopilotHome(flags.copilotHome);
   const result = runRecall({ workspace, copilotHome, flags, argv });
+  writeEvent(workspace, flags, {
+    type: 'recall',
+    command: 'recall',
+    result: 'pass',
+    exitCode: 0,
+  });
 
   if (flags.json) {
     console.log(JSON.stringify(result, null, 2));
@@ -259,6 +298,23 @@ export async function cmdRecall(argv) {
       console.log('  plans:');
       for (const p of result.plans) console.log(`    ${p.path} (${p.status})`);
     }
+  }
+  return 0;
+}
+
+export async function cmdEvents(argv) {
+  const flags = parseFlags(argv);
+  const workspace = path.resolve(flags.workspace);
+  const events = readEvents(workspace, flags.limit || 20);
+  const summary = summarizeEvents(events);
+
+  if (flags.json) {
+    console.log(JSON.stringify({ count: events.length, summary, events }, null, 2));
+  } else {
+    console.log(`[harness] events: ${events.length}`);
+    console.log(`  pass=${summary.pass} warn=${summary.warn} fail=${summary.fail}`);
+    if (summary.lastActivePlan) console.log(`  last plan: ${summary.lastActivePlan}`);
+    if (summary.latestBlockedReason) console.log(`  blocked: ${summary.latestBlockedReason}`);
   }
   return 0;
 }

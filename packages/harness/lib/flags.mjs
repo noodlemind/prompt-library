@@ -16,6 +16,8 @@ export function parseFlags(argv) {
     refresh: false,
     semantic: false,
     includePlans: false,
+    strictIntent: false,
+    noEvents: false,
   };
 
   for (let i = 0; i < argv.length; i++) {
@@ -26,6 +28,8 @@ export function parseFlags(argv) {
     else if (a === '--refresh') flags.refresh = true;
     else if (a === '--semantic') flags.semantic = true;
     else if (a === '--include-plans') flags.includePlans = true;
+    else if (a === '--strict-intent') flags.strictIntent = true;
+    else if (a === '--no-events') flags.noEvents = true;
     else if (a.startsWith('--query=')) flags.query = a.split('=').slice(1).join('=');
     else if (a === '--query') flags.query = argv[++i];
     else if (a.startsWith('--phase=')) flags.phase = a.split('=')[1];

@@ -75,7 +75,6 @@ export function syncAssetsToTarget(assetsRoot, targetRoot, flags, log) {
 
       if (shouldSkipDest(relPosix, flags, fs.existsSync(dest))) {
         stats.skipped++;
-        stats.files.push(relPosix);
         if (flags.verbose) log(`skip preserve: ${relPosix}`);
         continue;
       }

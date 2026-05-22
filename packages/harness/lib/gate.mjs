@@ -55,6 +55,38 @@ export function runGate({ workspace, flags, query = '' }) {
       checks.push({ id: 'C4', pass: true, message: '## Activity present', severity: 'ok' });
     }
 
+    if (plan.plan_lock) {
+      checkIntentField({
+        checks,
+        flags,
+        plan,
+        id: 'I1',
+        field: 'intent',
+        message: 'Missing intent frontmatter on locked plan',
+      });
+      checkIntentField({
+        checks,
+        flags,
+        plan,
+        id: 'I2',
+        field: 'expected_outputs',
+        message: 'Missing expected_outputs frontmatter on locked plan',
+      });
+      checkIntentField({
+        checks,
+        flags,
+        plan,
+        id: 'I3',
+        field: 'success_criteria',
+        message: 'Missing success_criteria frontmatter on locked plan',
+      });
+      const intentFailures = checks.filter((check) => check.id.startsWith('I') && !check.pass);
+      if (intentFailures.length) {
+        if (flags.strictIntent) pass = false;
+        else exitCode = Math.max(exitCode, 2);
+      }
+    }
+
     if (plan.status === 'blocked-capability') {
       checks.push({
         id: 'CAP',
@@ -80,11 +112,11 @@ export function runGate({ workspace, flags, query = '' }) {
     }
 
     if (phase === 'verify') {
-      const vp = /## Verification Plan/i.test(plan.text);
+      const activityEvidence = plan.sections.activityText || '';
       const tests =
-        /npm test|pytest|mvn test|gradle test|go test|cargo test|vitest|jest/i.test(plan.text) ||
-        /tests?\s+(pass|run|green)/i.test(plan.sections.activity || '');
-      if (!vp && !tests) {
+        /npm test|pytest|mvn test|gradle test|go test|cargo test|vitest|jest/i.test(activityEvidence) &&
+        /(pass|passed|green|succeeded|success|ok|complete|completed)/i.test(activityEvidence);
+      if (!tests) {
         checks.push({
           id: 'V1',
           pass: false,
@@ -134,4 +166,23 @@ export function scanPlansForGate(workspace) {
     if (fm.plan_lock === 'true') return rel;
   }
   return null;
+}
+
+function hasValue(value) {
+  if (Array.isArray(value)) return value.length > 0;
+  return typeof value === 'string' ? value.trim().length > 0 : Boolean(value);
+}
+
+function checkIntentField({ checks, flags, plan, id, field, message }) {
+  const ok = hasValue(plan.fm[field]);
+  if (ok) {
+    checks.push({ id, pass: true, message: `${field} present`, severity: 'ok' });
+    return;
+  }
+  checks.push({
+    id,
+    pass: false,
+    message,
+    severity: flags.strictIntent ? 'fail' : 'warn',
+  });
 }

@@ -38,12 +38,16 @@ export function writeSession(workspace, session, dryRun) {
 export function ensureHarnessDir(workspace, dryRun) {
   const dir = harnessDir(workspace);
   const gitignore = path.join(dir, '.gitignore');
+  const content = '# Ephemeral per-turn artifacts\ncontext-pack.md\nevents.jsonl\n';
   if (!fs.existsSync(gitignore)) {
-    const content = '# Ephemeral per-turn artifacts\ncontext-pack.md\n';
     if (!dryRun) {
       fs.mkdirSync(dir, { recursive: true });
       fs.writeFileSync(gitignore, content, 'utf8');
     }
+  } else if (!dryRun) {
+    const current = fs.readFileSync(gitignore, 'utf8');
+    const missing = ['context-pack.md', 'events.jsonl'].filter((entry) => !current.includes(entry));
+    if (missing.length) fs.appendFileSync(gitignore, `${missing.join('\n')}\n`, 'utf8');
   }
   return dir;
 }

@@ -69,6 +69,11 @@ status: open
 plan_lock: false
 phase: 0
 priority: P0|P1|P2|P3
+intent: ""
+expected_outputs: []
+success_criteria: []
+verification_commands: []
+org_objectives: []
 created: YYYY-MM-DD
 updated: YYYY-MM-DD
 ---
@@ -77,6 +82,7 @@ updated: YYYY-MM-DD
 **Body sections** (minimum for Definition of Ready):
 - `## Overview` — what and why, 2-3 sentences
 - `## Context` — relevant technical context, related code paths, prior art
+- `## Intent Contract` — optional at capture; `/plan-issue` must fill it before locking
 - `## Memory Cards` — optional; run `/recall` first and copy matching global/local bullets
 - `## Acceptance Criteria` — measurable checklist of requirements
 - `## Technical Notes` — implementation hints, constraints, dependencies

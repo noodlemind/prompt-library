@@ -11,6 +11,7 @@ import {
   cmdOrient,
   cmdGate,
   cmdRecall,
+  cmdEvents,
   cmdUninstall,
 } from '../lib/commands.mjs';
 
@@ -25,9 +26,10 @@ Usage:
   npx @dev-kit/harness doctor [options]
   npx @dev-kit/harness status [options]
   npx @dev-kit/harness index [options]
-  npx @dev-kit/harness orient [options] [--query "text"]
+  npx @dev-kit/harness orient [options] [--query "task summary"]
   npx @dev-kit/harness gate [options] [--phase implement|verify]
-  npx @dev-kit/harness recall "query" [options]
+  npx @dev-kit/harness recall "search terms" [options]
+  npx @dev-kit/harness events [options]
   npx @dev-kit/harness init-repo [options]
   npx @dev-kit/harness uninstall [options]
 
@@ -42,10 +44,12 @@ Options:
   --force-profile        Overwrite knowledge/profile.md
   --force-knowledge-reset  Overwrite knowledge/solutions (danger)
   --workspace <path>     Repo root (default: cwd)
-  --query <text>         For orient (or positional after recall)
+  --query <text>         Agent/internal task summary for orient
   --phase <name>         gate: implement | verify
+  --strict-intent        gate: fail locked plans missing intent fields
   --limit <n>            recall/orient result count (default 3)
   --include-plans        recall: include matching plans
+  --no-events            Do not write .harness/events.jsonl
 
 Docs: docs/architecture/tool-native-harness-design.md
 `.trim();
@@ -85,6 +89,9 @@ async function main() {
         break;
       case 'recall':
         code = await cmdRecall(args);
+        break;
+      case 'events':
+        code = await cmdEvents(args);
         break;
       case 'uninstall':
         code = await cmdUninstall(args);

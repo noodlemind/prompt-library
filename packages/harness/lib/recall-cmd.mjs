@@ -1,6 +1,5 @@
 import { rankRecall, findMatchingPlans } from './recall-rank.mjs';
-import { resolveCopilotHome } from './paths.mjs';
-import { parseQueryFromArgv } from './orient.mjs';
+import { parseQueryFromArgv } from './argv.mjs';
 
 export function runRecall({ workspace, copilotHome, flags, argv }) {
   const query = parseQueryFromArgv(argv, flags);

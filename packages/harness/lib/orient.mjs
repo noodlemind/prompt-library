@@ -5,7 +5,7 @@ import { runGate } from './gate.mjs';
 import { buildContextPack } from './context-pack.mjs';
 import { ensureHarnessDir, readSession, writeSession } from './session.mjs';
 import { pickActivePlan, listPlanRels } from './plan-parse.mjs';
-import { resolveCopilotHome } from './paths.mjs';
+import { parseQueryFromArgv } from './argv.mjs';
 
 export function runOrient({ workspace, copilotHome, flags, query }) {
   const q = query || flags.query || '';
@@ -95,12 +95,4 @@ export function runOrient({ workspace, copilotHome, flags, query }) {
   };
 }
 
-export function parseQueryFromArgv(argv, flags) {
-  if (flags.query) return flags.query;
-  const parts = [];
-  for (const a of argv) {
-    if (a.startsWith('--')) continue;
-    parts.push(a);
-  }
-  return parts.join(' ').trim();
-}
+export { parseQueryFromArgv };

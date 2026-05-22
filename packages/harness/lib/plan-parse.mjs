@@ -16,9 +16,35 @@ export function parsePlanFrontmatter(text) {
   const out = {};
   for (const line of m[1].split('\n')) {
     const kv = line.match(/^([\w-]+):\s*(.*)$/);
-    if (kv) out[kv[1]] = kv[2].replace(/^["']|["']$/g, '').trim();
+    if (kv) out[kv[1]] = parseFrontmatterValue(kv[2]);
   }
   return out;
+}
+
+function stripQuotes(value) {
+  const trimmed = value.trim();
+  if (
+    (trimmed.startsWith('"') && trimmed.endsWith('"')) ||
+    (trimmed.startsWith("'") && trimmed.endsWith("'"))
+  ) {
+    return trimmed.slice(1, -1);
+  }
+  return trimmed;
+}
+
+function parseInlineArray(value) {
+  const inner = value.trim().slice(1, -1).trim();
+  if (!inner) return [];
+  return inner
+    .split(',')
+    .map((item) => stripQuotes(item))
+    .filter((item) => item.length > 0);
+}
+
+function parseFrontmatterValue(value) {
+  const trimmed = value.trim();
+  if (trimmed.startsWith('[') && trimmed.endsWith(']')) return parseInlineArray(trimmed);
+  return stripQuotes(trimmed);
 }
 
 export function loadPlan(workspace, relPath) {
@@ -30,6 +56,8 @@ export function loadPlan(workspace, relPath) {
     overview: /## Overview/i.test(text),
     acceptance: /## Acceptance Criteria/i.test(text),
     activity: /## Activity/i.test(text),
+    activityText: extractSection(text, 'Activity'),
+    verificationPlan: extractSection(text, 'Verification Plan'),
     memoryCards: extractSection(text, 'Memory Cards'),
   };
   return {

@@ -146,6 +146,17 @@ Hermes-style **skill extraction** maps to: repeated successful use of a workflow
 
 - Semantic index over `knowledge/solutions/` (Composer-class retrieval).
 - Host hooks for automatic memory card injection.
+- Structured `.harness/events.jsonl` for cross-repo observability.
+
+### Pass 9 — Runtime contract tightening
+
+| Theme | Fit | Change |
+|-------|-----|--------|
+| Bounded multi-agent teams | Strong | Delegation guidance now defaults to 3-5 active agents per workstream. |
+| Spec-driven intent | Strong / partial | Plan template now has machine-readable intent, outputs, success criteria, verification commands, and organizational objectives. |
+| Agent journaling | Partial | Plan template now includes `## Agent Journal` for uncertainty, blocked states, escalations, and strategy changes. |
+| Structured monitoring | Partial | CLI JSON, session files, and `.harness/events.jsonl` now capture structural outcomes. |
+| Organizational alignment | Strong / partial | Plan template now tracks `org_objectives` when known. |
 
 ## Model-robustness contract
 

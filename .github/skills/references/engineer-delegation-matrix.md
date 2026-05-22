@@ -2,6 +2,10 @@
 
 Load when delegating from `@engineer`. Every delegation uses `.github/skills/references/subagent-context-packet.md`.
 
+## Team Size
+
+Default to **3-5 active agents per workstream**, including the orchestrator/planner, executor, and reviewers or researchers. Use more specialists only by batching them and recording the reason in the plan `## Agent Journal` or `## Activity`.
+
 | Situation | Delegate to | Include in task prompt |
 |-----------|-------------|------------------------|
 | Implementation tasks | `code-implementer` | Task, files + code excerpts, patterns, tests, constraints |

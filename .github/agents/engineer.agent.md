@@ -23,7 +23,7 @@ Contract: `tool-native-loop.md` · `engineer-autopilot/SKILL.md`. **Do not ask**
 
 | Step | Action |
 |------|--------|
-| **0** | Terminal: `npx @dev-kit/harness orient --query "<request>"` → **read** `.harness/context-pack.md` |
+| **0** | Terminal: `npx @dev-kit/harness orient --query "<agent task summary>"` → **read** `.harness/context-pack.md` |
 | **0b** | **`/ensure-capability`** if context-pack or registry shows hard gap |
 | **0c** | **`/ensure-plan`** if `harness gate` would fail C1/C3 |
 | **1** | Understand + domain route (`domain-routing.md`) |
