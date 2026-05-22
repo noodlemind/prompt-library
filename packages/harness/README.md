@@ -27,7 +27,10 @@ npx @dev-kit/harness init-repo
 | `doctor` | Health checks |
 | `status` | Installed version and lock file |
 | `index` | Rebuild `knowledge/manifest.yaml` |
-| `init-repo` | Create `docs/plans/`, `docs/agent-context.md` |
+| `orient` | Recall + plan match + write `.harness/context-pack.md` |
+| `gate` | Preflight before `editFiles` (exit 0/1/2) |
+| `recall` | Standalone manifest search |
+| `init-repo` | Create `docs/plans/`, `.harness/`, `docs/agent-context.md` |
 | `uninstall` | Remove files tracked in `.harness-lock.json` only |
 
 ### Options

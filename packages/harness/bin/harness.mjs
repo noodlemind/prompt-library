@@ -8,6 +8,9 @@ import {
   cmdStatus,
   cmdInitRepo,
   cmdIndex,
+  cmdOrient,
+  cmdGate,
+  cmdRecall,
   cmdUninstall,
 } from '../lib/commands.mjs';
 
@@ -22,6 +25,9 @@ Usage:
   npx @dev-kit/harness doctor [options]
   npx @dev-kit/harness status [options]
   npx @dev-kit/harness index [options]
+  npx @dev-kit/harness orient [options] [--query "text"]
+  npx @dev-kit/harness gate [options] [--phase implement|verify]
+  npx @dev-kit/harness recall "query" [options]
   npx @dev-kit/harness init-repo [options]
   npx @dev-kit/harness uninstall [options]
 
@@ -35,9 +41,13 @@ Options:
   --configure-vscode     Merge VS Code chat.* discovery settings
   --force-profile        Overwrite knowledge/profile.md
   --force-knowledge-reset  Overwrite knowledge/solutions (danger)
-  --workspace <path>     For init-repo / index (default: cwd)
+  --workspace <path>     Repo root (default: cwd)
+  --query <text>         For orient (or positional after recall)
+  --phase <name>         gate: implement | verify
+  --limit <n>            recall/orient result count (default 3)
+  --include-plans        recall: include matching plans
 
-Docs: docs/onboarding/nexus-registry-setup.md
+Docs: docs/architecture/tool-native-harness-design.md
 `.trim();
 
 async function main() {
@@ -66,6 +76,15 @@ async function main() {
         break;
       case 'index':
         code = await cmdIndex(args);
+        break;
+      case 'orient':
+        code = await cmdOrient(args);
+        break;
+      case 'gate':
+        code = await cmdGate(args);
+        break;
+      case 'recall':
+        code = await cmdRecall(args);
         break;
       case 'uninstall':
         code = await cmdUninstall(args);

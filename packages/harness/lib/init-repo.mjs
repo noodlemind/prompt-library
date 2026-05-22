@@ -1,5 +1,6 @@
 import fs from 'fs';
 import path from 'path';
+import { ensureHarnessDir } from './session.mjs';
 
 const AGENT_CONTEXT_STUB = `# Agent Context
 
@@ -39,6 +40,11 @@ export function runInitRepo({ workspace, flags, log }) {
   } else {
     log('skip docs/agent-context.md (exists)');
   }
+
+  if (!flags.dryRun) ensureHarnessDir(workspace, false);
+  else ensureHarnessDir(workspace, true);
+  stats.created.push('.harness/.gitignore');
+  log('ensured .harness/ (session + context-pack)');
 
   const manifest = path.join(knowledgeDir, 'manifest.yaml');
   if (!fs.existsSync(manifest)) {

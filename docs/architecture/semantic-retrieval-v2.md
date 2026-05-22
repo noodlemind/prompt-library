@@ -1,32 +1,49 @@
-# Semantic Retrieval v2 (Phase E)
+# Semantic Retrieval v2 (script-native)
 
-Keyword `manifest.yaml` is v1. v2 adds ranked recall without full-file scans.
+Keyword ranking via `harness recall` / `harness orient` is **v1** (manifest token overlap). v2 adds optional local embeddings — **no MCP**, no Copilot API.
 
 ## Target
 
 | Component | Approach |
 |-----------|----------|
-| Solution ranker | Tag overlap + recency + optional embedding score |
-| Plan dedupe | Fuzzy title match + optional embedding |
-| Host | MCP tool `knowledge_search` or Context7-style server |
+| Solution ranker | Manifest fields + optional embedding score |
+| Plan dedupe | Title token overlap in `orient` |
+| Host | Terminal: `@dev-kit/harness` only |
 
-## Contract (future MCP)
+## v1 (shipped in 0.3.0)
 
-```json
-{
-  "query": "orders api timeout",
-  "limit": 3,
-  "scopes": ["global", "product"]
-}
+```bash
+npx @dev-kit/harness recall "orders api timeout" --limit 3 --json
+npx @dev-kit/harness orient --query "fix checkout timeout"
 ```
 
-Returns `{ path, title, summary, score }[]`.
+Returns `{ path, title, score }[]` from `~/.copilot/knowledge/manifest.yaml` (then repo fallback).
 
-## v1 until v2 ships
+`orient` also writes `.harness/context-pack.md` (≤2 KB) for a single read per turn.
 
-- `/recall` and engineer Phase 0 use manifest tags/symptoms
-- Run `node scripts/index-knowledge.mjs` after compound
+## v2 (optional, offline)
 
-## Implementation trigger
+```bash
+npx @dev-kit/harness index --semantic
+npx @dev-kit/harness recall "query" --semantic --json
+```
 
-Adopt v2 when manifest entries exceed ~50 or recall miss rate is reported by teams.
+| Tier | Technology | Storage |
+|------|------------|---------|
+| v1 | Token overlap (`lib/recall-rank.mjs`) | `manifest.yaml` only |
+| v2 | `vectra` or `@xenova/transformers` (opt-in dep) | `~/.copilot/knowledge/.harness-index/` |
+
+**Rule:** Index is derived. Delete `.harness-index/` and re-run `index` to rebuild from markdown.
+
+## Fallback
+
+Host `codebase` / `search` on `knowledge/solutions/` and `docs/solutions/` always available when manifest is empty.
+
+## Trigger for v2
+
+Adopt semantic index when manifest entries exceed ~50 or teams report recall misses in `harness doctor` feedback.
+
+## Related
+
+- [`tool-native-harness-design.md`](tool-native-harness-design.md)
+- [`engineer-memory-system.md`](engineer-memory-system.md)

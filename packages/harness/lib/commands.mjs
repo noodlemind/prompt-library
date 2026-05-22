@@ -16,6 +16,9 @@ import { runDoctor } from './doctor.mjs';
 import { runInitRepo } from './init-repo.mjs';
 import { runIndexKnowledge } from './index-knowledge.mjs';
 import { configureVSCodeSettings } from './vscode-settings.mjs';
+import { runOrient, parseQueryFromArgv } from './orient.mjs';
+import { runGate } from './gate.mjs';
+import { runRecall } from './recall-cmd.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const pkgRoot = pkgRootFromImportMeta(import.meta.url);
@@ -199,6 +202,64 @@ export async function cmdIndex(argv) {
     flags,
     log: logger,
   });
+  return 0;
+}
+
+export async function cmdOrient(argv) {
+  const flags = parseFlags(argv);
+  const workspace = path.resolve(flags.workspace);
+  const copilotHome = resolveCopilotHome(flags.copilotHome);
+  const query = parseQueryFromArgv(argv, flags);
+  const result = runOrient({ workspace, copilotHome, flags, query });
+
+  if (flags.json) {
+    console.log(JSON.stringify(result, null, 2));
+  } else {
+    console.log(`[harness] orient: context pack → ${result.contextPack}`);
+    console.log(`  recall: ${result.recall.length} | plans: ${result.plans.length} | gate: ${result.gateStatus}`);
+    if (result.blockedReason) console.log(`  blocked: ${result.blockedReason}`);
+  }
+  return 0;
+}
+
+export async function cmdGate(argv) {
+  const flags = parseFlags(argv);
+  const workspace = path.resolve(flags.workspace);
+  const query = parseQueryFromArgv(argv, flags);
+  const result = runGate({ workspace, flags, query });
+
+  if (flags.json) {
+    console.log(JSON.stringify(result, null, 2));
+  } else {
+    for (const c of result.checks) {
+      const mark = c.pass ? 'PASS' : c.severity === 'warn' ? 'WARN' : 'FAIL';
+      console.log(`${mark}  ${c.id}  ${c.message}`);
+    }
+    console.log('');
+    console.log(result.pass ? 'harness gate: pass' : 'harness gate: FAIL — stop before editFiles');
+  }
+  return result.exitCode;
+}
+
+export async function cmdRecall(argv) {
+  const flags = parseFlags(argv);
+  if (argv.includes('--include-plans')) flags.includePlans = true;
+  const workspace = path.resolve(flags.workspace);
+  const copilotHome = resolveCopilotHome(flags.copilotHome);
+  const result = runRecall({ workspace, copilotHome, flags, argv });
+
+  if (flags.json) {
+    console.log(JSON.stringify(result, null, 2));
+  } else {
+    console.log(`[harness] recall: "${result.query}"`);
+    for (const r of result.recall) {
+      console.log(`  ${r.score}  ${r.path}  ${r.title}`);
+    }
+    if (result.plans?.length) {
+      console.log('  plans:');
+      for (const p of result.plans) console.log(`    ${p.path} (${p.status})`);
+    }
+  }
   return 0;
 }
 

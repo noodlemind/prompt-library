@@ -12,11 +12,11 @@ Single-session loop. User types **`@engineer`** only.
 
 | Step | Skill / reference | Edits product code? |
 |------|-------------------|---------------------|
-| 0 Recall | Inline in `engineer.agent.md` | No |
+| 0 Orient | `harness orient` + `tool-native-loop.md` | No |
 | 0b Preflight | `capability-preflight.md` + **`/ensure-capability`** | No |
-| 0c Ensure plan | **`/ensure-plan`** | No |
+| 0c Ensure plan | **`/ensure-plan`** (if gate C1/C3 fail) | No |
 | 1 Understand / route | `engineer-runtime.md`, `domain-routing.md` | No |
-| 1c Gate | `capture-gate.md` (C1–C4) | No |
+| 1c Gate | `harness gate` + `capture-gate.md` (C1–C4) | No |
 | 2 Investigate | Read-only + delegation matrix | No |
 | 3 Plan approach | Within locked plan | No |
 | 4 Implement | `/work-on-task` or `code-implementer` | Yes (scoped) |

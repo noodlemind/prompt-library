@@ -39,8 +39,11 @@ Read-only tools are allowed before the gate for classify, recall, preflight, and
 ## Autonomous path (`@engineer`)
 
 ```
-/ensure-capability → /ensure-plan → gate C1–C4 → investigate → implement
+harness orient → read context-pack → /ensure-capability → /ensure-plan (if needed)
+→ harness gate (exit 0) → investigate → implement
 ```
+
+CLI maps C1–C4: `npx @dev-kit/harness gate --phase implement`. See `tool-native-loop.md`.
 
 Engineer **must not** ask the user to run `/capture-issue` or `/plan-issue` manually. Internal skills apply capture/plan **logic** with canonical template.
 

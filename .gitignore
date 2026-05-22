@@ -1,4 +1,5 @@
 .worktrees
+.harness/
 node_modules/
 packages/harness/assets/
 *.vsix
