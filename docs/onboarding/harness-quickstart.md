@@ -4,11 +4,11 @@ Get from zero to **`@engineer`** delivering work in any enterprise product repo.
 
 ## 1. Install once (per machine)
 
-**Recommended (planned):** npm CLI — see [`docs/architecture/npm-harness-distribution-plan.md`](../architecture/npm-harness-distribution-plan.md).
+**Recommended:** **`@dev-kit/harness`** from your enterprise npm registry (Nexus). See [`nexus-registry-setup.md`](./nexus-registry-setup.md) and [`npm-harness-distribution-plan.md`](../architecture/npm-harness-distribution-plan.md).
 
 ```bash
-npx @your-org/adaptive-engineer-harness@latest install
-npx @your-org/adaptive-engineer-harness doctor
+npx @dev-kit/harness@latest install
+npx @dev-kit/harness doctor
 ```
 
 **Today (maintainers):** Run VS Code task **Prompt Library: Hydrate Global Copilot Customizations** from a prompt-library clone (PowerShell → `~/.copilot/`). This will be replaced by the CLI above.

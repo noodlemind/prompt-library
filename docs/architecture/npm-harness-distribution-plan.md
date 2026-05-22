@@ -1,6 +1,7 @@
 # NPM Harness Distribution Plan
 
-**Status:** Proposed (replaces workspace PowerShell hydrate as primary distribution)  
+**Status:** Approved naming — **`@dev-kit/harness`**; Nexus manual publish; CLI implementation Phase 1+  
+**Package path:** `packages/harness/` in prompt-library  
 **Audience:** Platform / DevEx teams packaging the Adaptive Engineer Harness for enterprise  
 **Related:** [`harness-quickstart.md`](../onboarding/harness-quickstart.md), [`2026-03-12-feat-global-workspace-sync-and-copilot-cli-compatibility-plan.md`](../plans/2026-03-12-feat-global-workspace-sync-and-copilot-cli-compatibility-plan.md), [`composer-style-autonomous-harness-proposal.md`](composer-style-autonomous-harness-proposal.md)
 
@@ -10,7 +11,7 @@
 
 Today, teams install the harness by cloning **prompt-library** and running a **VS Code PowerShell task** (robocopy → `~/.copilot/`). That works for maintainers but is weak for enterprise rollout: Windows-centric, easy to forget, hard to version, and unrelated to how modern AI-config tools ship (**npx**, **semver upgrades**, **doctor** commands).
 
-**Recommendation:** Publish an **npm CLI package** (e.g. `@your-org/adaptive-engineer-harness` or public `adaptive-engineer-harness`) that:
+**Recommendation:** Publish **`@dev-kit/harness`** to your enterprise npm registry (e.g. **Sonatype Nexus**). Maintainers build assets and **`npm publish`** manually; developers consume via **`npx @dev-kit/harness`**.
 
 1. **Installs** skills, agents, instructions, knowledge skeleton, and enterprise scaffold into Copilot global paths (VS Code + IntelliJ + CLI).
 2. **Upgrades** in place with a file manifest (retire removed paths, preserve user `profile.md` and compounded solutions).
@@ -20,10 +21,14 @@ Today, teams install the harness by cloning **prompt-library** and running a **V
 **Primary UX:**
 
 ```bash
-npx @your-org/adaptive-engineer-harness@latest install
-npx @your-org/adaptive-engineer-harness doctor
-npx @your-org/adaptive-engineer-harness upgrade
+npx @dev-kit/harness@latest install
+npx @dev-kit/harness doctor
+npx @dev-kit/harness upgrade
 ```
+
+**Registry:** Private Nexus (or equivalent). See [`nexus-registry-setup.md`](../onboarding/nexus-registry-setup.md).
+
+> **Scope note:** The npm scope is **`@dev-kit`** (hyphen). Configure `@dev-kit:registry=...` in `.npmrc` — not `@devkits`.
 
 ---
 
@@ -46,11 +51,11 @@ npx @your-org/adaptive-engineer-harness upgrade
 | Pattern | Source | Our use |
 |---------|--------|---------|
 | **`npx package@latest install`** | ai-rulez, aicm | Zero global install for first run; pin version in docs for enterprises |
-| **Manifest + retire list** | Our existing `.prompt-library-manifest.txt` | `~/.copilot/.aeh-manifest.json` on upgrade |
-| **Doctor / status** | DotAI, 2026-03-12 internal plan | `aeh doctor` (= `/harness-doctor` checks in Node) |
-| **Separate content packs** | ai-rulez profiles, load-rules registry | `@org/harness-enterprise`, `@org/harness-knowledge` |
-| **Remote includes (git)** | ai-rulez `includes` | `aeh knowledge pull --repo <url>` for compounded solutions (alternative to private npm) |
-| **Dry-run / `--verbose`** | Sync plan 2026-03-12 | `aeh install --dry-run` for IT review |
+| **Manifest + retire list** | Our existing `.prompt-library-manifest.txt` | `~/.copilot/.harness-lock.json` on upgrade |
+| **Doctor / status** | DotAI, 2026-03-12 internal plan | `harness doctor` (= `/harness-doctor` checks in Node) |
+| **Separate content packs** | ai-rulez profiles, load-rules registry | `@dev-kit/harness-enterprise`, `@dev-kit/harness-knowledge` |
+| **Remote includes (git)** | ai-rulez `includes` | `harness knowledge pull --repo <url>` (alternative to private npm) |
+| **Dry-run / `--verbose`** | Sync plan 2026-03-12 | `harness install --dry-run` for IT review |
 | **Cross-platform Node** | Sync plan 2026-03-12 | Replace robocopy/PowerShell entirely |
 
 ### Patterns to avoid
@@ -86,8 +91,8 @@ prompt-library (git clone)
 ### Target
 
 ```text
-npm package (versioned tarball)
-    └── bin: aeh (or engineer-harness)
+npm package @dev-kit/harness (versioned tarball)
+    └── bin: harness
             ├── install | upgrade | doctor | index | init-repo
             └── copies bundled assets/ → Copilot homes
 ```
@@ -97,8 +102,8 @@ npm package (versioned tarball)
 ├── agents/ skills/ instructions/ prompts/
 ├── knowledge/          # manifest, profile, solutions (user + team data preserved)
 ├── enterprise/         # optional; from overlay package or install --enterprise
-├── .aeh-lock.json       # installed version + file list + retired paths
-└── .aeh-config.json     # targets: vscode, intellij, cli; autonomy default
+├── .harness-lock.json  # installed version + file list + retired paths
+└── .harness-config.json # targets: vscode, intellij, cli; autonomy default
 ```
 
 ---
@@ -117,9 +122,9 @@ prompt-library/
 ├── scripts/
 │   └── index-knowledge.mjs   # moved or wrapped by CLI
 ├── packages/
-│   └── adaptive-engineer-harness/
+│   └── harness/                    # npm name: @dev-kit/harness
 │       ├── package.json
-│       ├── bin/aeh.mjs
+│       ├── bin/harness.mjs
 │       ├── src/
 │       │   ├── cli.ts
 │       │   ├── commands/
@@ -145,29 +150,31 @@ npm version patch
 npm publish --access public   # or private registry
 ```
 
-### 4.2 Package naming and bins
+### 4.2 Package naming and bins (decided)
 
-| Option | npm name | Binary | Notes |
-|--------|----------|--------|-------|
-| A (public OSS) | `adaptive-engineer-harness` | `aeh` | Short; clear |
-| B (enterprise) | `@your-org/adaptive-engineer-harness` | `aeh` | Scoped private registry |
-| C (workspace) | `@your-org/engineer-harness` | `engineer-harness` | Explicit |
+| Field | Value |
+|-------|--------|
+| **npm name** | `@dev-kit/harness` |
+| **Scope** | `@dev-kit` |
+| **CLI binary** | `harness` |
+| **Invocation** | `npx @dev-kit/harness install` |
+| **Registry** | Enterprise Nexus (manual `npm publish`) |
 
-**Recommendation:** scoped private **`@your-org/adaptive-engineer-harness`** for enterprise; optional unscoped fork for open-source prompt-library consumers.
+See `packages/harness/package.json` and [`nexus-registry-setup.md`](../onboarding/nexus-registry-setup.md).
 
 ### 4.3 Optional satellite packages
 
 | Package | Contents | When to use |
 |---------|----------|-------------|
-| **Core** (`adaptive-engineer-harness`) | All base skills, agents, knowledge templates, internal autopilot skills | Everyone |
-| **`@org/harness-enterprise`** | Splunk/Terraform agents, corp instructions, `capability-registry.enterprise.yaml` | Corp overlay only |
-| **`@org/harness-knowledge`** | Pre-built `solutions/` + `manifest.yaml` (semver team memory) | Platform publishes after compounding milestones |
-| **`@org/harness-knowledge`** (alt) | Not npm — `aeh knowledge pull --tag v1.2.0` from git release | Simpler for fast-moving solutions |
+| **Core** (`@dev-kit/harness`) | All base skills, agents, knowledge templates, internal autopilot skills | Everyone |
+| **`@dev-kit/harness-enterprise`** | Splunk/Terraform agents, corp instructions, `capability-registry.enterprise.yaml` | Corp overlay only |
+| **`@dev-kit/harness-knowledge`** | Pre-built `solutions/` + `manifest.yaml` (semver team memory) | Platform publishes after compounding milestones |
+| **Git release** (alt) | `harness knowledge pull --tag v1.2.0` | Simpler for fast-moving solutions |
 
 **Version coupling:**
 
 ```text
-@org/harness-enterprise@2.1.0  →  requires  adaptive-engineer-harness >= 2.0.0 < 3.0.0
+@dev-kit/harness-enterprise@2.1.0  →  requires  @dev-kit/harness >= 2.0.0 < 3.0.0
 ```
 
 Declare in `peerDependencies` and verify in `aeh doctor`.
@@ -180,13 +187,13 @@ Declare in `peerDependencies` and verify in `aeh doctor`.
 
 | Command | Purpose |
 |---------|---------|
-| **`aeh install`** | First-time sync to all configured targets |
-| **`aeh upgrade`** | Same as install with version bump + retire cleanup |
-| **`aeh doctor`** | Health checks (replaces `/harness-doctor` file checks + paths) |
-| **`aeh index`** | Run manifest rebuild (`index-knowledge`) |
-| **`aeh init-repo`** | Create `docs/plans/`, stub `docs/agent-context.md`, optional `knowledge/` fallback |
-| **`aeh status`** | Print installed version, paths, last sync time |
-| **`aeh uninstall`** | Remove only files listed in `.aeh-lock.json` (never delete whole `~/.copilot`) |
+| **`harness install`** | First-time sync to all configured targets |
+| **`harness upgrade`** | Same as install with version bump + retire cleanup |
+| **`harness doctor`** | Health checks (replaces `/harness-doctor` file checks + paths) |
+| **`harness index`** | Run manifest rebuild (`index-knowledge`) |
+| **`harness init-repo`** | Create `docs/plans/`, stub `docs/agent-context.md`, optional `knowledge/` fallback |
+| **`harness status`** | Print installed version, paths, last sync time |
+| **`harness uninstall`** | Remove only files listed in `.harness-lock.json` (never delete whole `~/.copilot`) |
 
 ### 5.2 Flags (install / upgrade)
 
@@ -203,19 +210,19 @@ Declare in `peerDependencies` and verify in `aeh doctor`.
 ### 5.3 Example enterprise rollout
 
 ```bash
-# Developer laptop (first time)
-npx @acme/adaptive-engineer-harness@2.3.0 install --autonomy balanced
+# Developer laptop (first time) — after .npmrc maps @dev-kit to Nexus
+npx @dev-kit/harness@2.3.0 install --autonomy balanced
 
 # Platform releases new specialists
-npx @acme/harness-enterprise@1.4.0 install
-npx @acme/adaptive-engineer-harness@2.3.0 upgrade
+npx @dev-kit/harness-enterprise@1.4.0 install
+npx @dev-kit/harness@2.3.0 upgrade
 
 # Product repo bootstrap
 cd ~/services/orders-api
-npx @acme/adaptive-engineer-harness init-repo
+npx @dev-kit/harness init-repo
 
 # CI (optional)
-npx @acme/adaptive-engineer-harness@2.3.0 doctor --json
+npx @dev-kit/harness@2.3.0 doctor --json
 ```
 
 ---
@@ -248,11 +255,11 @@ Port logic from `.vscode/tasks.json` to Node (aligns with [2026-03-12 sync plan]
 | **MINOR** | New skills/agents, new enterprise registry fields |
 | **PATCH** | Doc-only asset changes, checklist tweaks |
 
-### 7.2 Lock file (`.aeh-lock.json`)
+### 7.2 Lock file (`.harness-lock.json`)
 
 ```json
 {
-  "package": "@acme/adaptive-engineer-harness",
+  "package": "@dev-kit/harness",
   "version": "2.3.0",
   "installedAt": "2026-05-21T12:00:00Z",
   "targets": ["vscode", "intellij"],
@@ -286,7 +293,7 @@ Port logic from `.vscode/tasks.json` to Node (aligns with [2026-03-12 sync plan]
 | Role | Repo | npm |
 |------|------|-----|
 | **Authoring** | prompt-library `.github/`, `knowledge/` | — |
-| **Consumption** | Product repos: `docs/plans/` only | `npx @org/adaptive-engineer-harness install` |
+| **Consumption** | Product repos: `docs/plans/` only | `npx @dev-kit/harness install` |
 | **Compounding** | Still writes `knowledge/solutions/` in library OR team's knowledge package source repo | `harness-knowledge` publish pipeline |
 
 **CI in prompt-library:**
@@ -298,12 +305,29 @@ on:
 jobs:
   publish-npm:
     - run: npm run build:assets
-    - run: npm publish -w packages/adaptive-engineer-harness
+    - run: npm publish -w packages/harness   # publishes @dev-kit/harness to Nexus
   attach-enterprise-artifact:
     - run: tar -czf enterprise-overlay.tar.gz enterprise/
 ```
 
-Deprecate: VS Code hydrate task → thin wrapper calling `npx aeh install` for maintainers who work inside the repo.
+Deprecate: VS Code hydrate task → thin wrapper calling `npx @dev-kit/harness install` for maintainers who work inside the repo.
+
+---
+
+## 8b. Publishing to Nexus (manual — approved)
+
+Platform team publishes; developers only consume from registry.
+
+| Step | Action |
+|------|--------|
+| 1 | Set `packages/harness/.npmrc`: `@dev-kit:registry=https://<nexus>/repository/npm-hosted/` |
+| 2 | Auth: `NEXUS_NPM_TOKEN` or `npm login` per org policy |
+| 3 | `cd packages/harness && npm run build:assets && npm version patch && npm publish` |
+| 4 | Announce version; developers run `npx @dev-kit/harness@X.Y.Z upgrade` |
+
+Full runbook: [`nexus-registry-setup.md`](../onboarding/nexus-registry-setup.md).
+
+**Do not commit** tokens or production Nexus URLs with credentials — use env vars and internal wiki for URLs.
 
 ---
 
@@ -314,7 +338,7 @@ Deprecate: VS Code hydrate task → thin wrapper calling `npx aeh install` for m
 | **Supply chain** | Pin `npx @org/pkg@2.3.0` in docs; SBOM in npm; signed publishes on GitHub Actions |
 | **Path traversal** | Resolve all paths under `copilotHome`; reject `..` in `--enterprise` |
 | **Secrets** | Never bundle secrets; doctor warns if solutions contain `AKIA` patterns |
-| **Air-gapped** | `aeh install --offline --from ./vendor/adaptive-engineer-harness-2.3.0.tgz` |
+| **Air-gapped** | Download tarball from Nexus → `harness install --offline --from ./dev-kit-harness-2.3.0.tgz` |
 | **Policy** | `--dry-run` output for change-management tickets |
 
 ---
@@ -323,10 +347,10 @@ Deprecate: VS Code hydrate task → thin wrapper calling `npx aeh install` for m
 
 | Phase | Action |
 |-------|--------|
-| **M0** | Document `npx` path in quickstart (parallel to existing task) |
-| **M1** | Extract sync logic to `packages/adaptive-engineer-harness`; parity test vs PowerShell |
-| **M2** | `aeh doctor` + `aeh status`; CI smoke on win/mac/linux |
-| **M3** | Default onboarding = npm; VS Code task → `npx aeh install` |
+| **M0** | Document `npx @dev-kit/harness` in quickstart ✓ |
+| **M1** | Implement sync in `packages/harness`; parity test vs PowerShell |
+| **M2** | `harness doctor` + `harness status`; CI smoke on win/mac/linux |
+| **M3** | Default onboarding = npm; VS Code task → `npx @dev-kit/harness install` |
 | **M4** | Remove embedded PowerShell from `tasks.json` (or keep 3-line wrapper) |
 | **M5** | Private enterprise + knowledge packages |
 
@@ -336,7 +360,8 @@ Deprecate: VS Code hydrate task → thin wrapper calling `npx aeh install` for m
 
 ### Phase 1 — Package skeleton (1 deliverable)
 
-- [ ] `packages/adaptive-engineer-harness/package.json` (`bin`, `files`, `engines: node>=20`)
+- [x] `packages/harness/package.json` — `@dev-kit/harness`, bin `harness` (stub CLI)
+- [ ] `harness install` + `harness doctor` implementation
 - [ ] `build:assets` script copying `.github/skills`, `.github/agents`, etc.
 - [ ] `aeh install` + `aeh doctor` MVP (citty + picocolors per sync plan)
 - [ ] `.aeh-lock.json` manifest
@@ -398,10 +423,10 @@ Deprecate: VS Code hydrate task → thin wrapper calling `npx aeh install` for m
 
 | # | Decision | Recommendation |
 |---|----------|----------------|
-| 1 | Package scope | `@org/adaptive-engineer-harness` private npm |
-| 2 | Binary name | `aeh` |
-| 3 | Knowledge distribution | Separate `@org/harness-knowledge` when solutions > ~20 docs |
-| 4 | Enterprise distribution | `@org/harness-enterprise` peer package |
+| 1 | Package scope | **`@dev-kit/harness`** on Nexus ✓ |
+| 2 | Binary name | **`harness`** ✓ |
+| 3 | Knowledge distribution | `@dev-kit/harness-knowledge` when solutions > ~20 docs |
+| 4 | Enterprise distribution | `@dev-kit/harness-enterprise` peer package |
 | 5 | Preserve solutions on upgrade | **Default yes** — opt-in force reset only |
 | 6 | PowerShell task | Deprecate after Phase 6; wrapper until then |
 | 7 | First supported OS | Windows + macOS (Linux agent via repo-local `knowledge/` fallback) |
@@ -411,10 +436,10 @@ Deprecate: VS Code hydrate task → thin wrapper calling `npx aeh install` for m
 
 ## 14. Success criteria
 
-1. New hire runs **one command** and passes **`aeh doctor`** without cloning prompt-library.
-2. Platform publishes **harness@2.4.0**; developers run **`aeh upgrade`** with predictable diff (retire list only).
+1. New hire runs **`npx @dev-kit/harness install`** and passes **`harness doctor`** without cloning prompt-library.
+2. Platform publishes **`@dev-kit/harness@2.4.0`** to Nexus; developers run **`npx @dev-kit/harness@2.4.0 upgrade`**.
 3. Compounded solutions survive upgrades unless explicitly reset.
-4. IT can review **`aeh install --dry-run`** output.
+4. IT can review **`harness install --dry-run`** output.
 5. Product repos stay free of `.github/agents` copies — only `docs/plans/` (+ optional local knowledge fallback).
 
 ---
@@ -423,4 +448,4 @@ Deprecate: VS Code hydrate task → thin wrapper calling `npx aeh install` for m
 
 Industry leaders (**ai-rulez**, **aicm**, **DotAI**) treat AI harness distribution as **versioned CLI + optional content packs**, not IDE tasks. Moving to npm standardizes onboarding, upgrades, and enterprise overlays while keeping **prompt-library** as the authoring source. The existing **2026-03-12 sync plan** already specifies the Node sync engine — this plan **productizes** it as a publishable package and adds **semver**, **knowledge/enterprise satellites**, and a clear **migration** from PowerShell hydrate.
 
-**Next step after approval:** implement Phase 1 (`packages/adaptive-engineer-harness` + `aeh install` / `aeh doctor`) on a dedicated branch.
+**Next step:** implement Phase 1 (`harness install` / `harness doctor` sync engine) in `packages/harness`. Package skeleton and Nexus runbook are in repo.
