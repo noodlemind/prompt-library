@@ -92,7 +92,7 @@ Today: **no Splunk agent** in the library. So:
 | **User @mention** | Developer types `@splunk-reviewer` with task | No engineer delegation |
 | **Engineer requests expansion** | Gap proposal → create agent → update allowlist | Tier 3 for new agent |
 
-Under **autonomous proposal**: engineer detects “need Splunk validation” → if agent missing → **auto-draft** capability-gap + **notify** platform team; can still proceed with `framework-docs-researcher` or user-provided Splunk query context until agent exists.
+Under **Composer-style gap fulfillment** ([`composer-gap-fulfillment-loop.md`](composer-gap-fulfillment-loop.md)): if Splunk validation is **required for verify**, missing `@splunk-reviewer` is a **hard gap** → `status: blocked-capability` → fulfill agent + allowlist (Tier 3) or approved **bridge** (Splunk MCP/CLI) in the same session → merge `enterprise/` → **hydrate team**. Researcher fallback is only for **soft** gaps or explicit waiver.
 
 ---
 

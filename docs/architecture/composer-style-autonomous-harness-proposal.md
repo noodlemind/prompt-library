@@ -59,9 +59,11 @@ At **ingest** (Phase F3), engineer:
 2. Sets plan frontmatter `domains`, `specialists`, `capability_gaps` (F4).
 3. Invokes **internal** domain skills when registry lists them (user never types `/aws`).
 4. Delegates specialists only if (a) agent file hydrated and (b) name appears in engineer `agents:` allowlist (base + `engineer_allowlist_additions` from enterprise registry).
-5. If specialist missing → auto-draft `docs/capability-gaps/<slug>.md` (F6) + Tier 1 notify; optional fallback to researchers or user-provided context.
+5. If specialist missing → run **capability preflight** (Phase H): **hard** gaps block execute until fulfilled, bridged (MCP/CLI), or Tier 3 waiver — see [`composer-gap-fulfillment-loop.md`](composer-gap-fulfillment-loop.md).
 
 **Important:** “Three interactions” limits **what humans type**, not **what the harness can load or delegate**.
+
+**Blocking gaps (your point):** Cursor/Windsurf would not treat a missing Splunk reviewer as “optional notify.” If verify requires that primitive, the session **fulfills the gap in the same PR**, then **hydrates enterprise overlay for the team** — not permanent researcher fallback.
 
 ---
 
@@ -273,7 +275,7 @@ Still require explicit human yes:
 |----------|--------|
 | Audit trail | Activity + git commits, not chat approval |
 | Risk tier in plan frontmatter | `risk: green\|amber\|red` drives consent |
-| Auto capability-gap **draft** | File proposal; don’t block work; consent to merge primitive |
+| Capability preflight | **Hard** gaps block execute; fulfill → promote → hydrate (see gap-fulfillment doc) |
 
 ### F. Remove (Composer would delete ceremony)
 
@@ -413,7 +415,22 @@ We **do not** beat Composer on native codebase embedding until v2 index — acce
 - [ ] After 3 verified similar tasks in `knowledge/solutions/`, draft `enterprise/skills/<domain>/SKILL.md` from patterns
 - [ ] Tier 1 notify platform; never auto-create **agents**
 
-**Confirmation gate for you:** approve Phase F before G; F is required for enterprise specialists.
+### Phase H — Blocking gap fulfillment (Composer-style — **recommended with F**)
+
+**Goal:** Missing primitive **blocks** work when required; same-session fulfill; team-wide hydrate.
+
+| ID | Deliverable |
+|----|-------------|
+| H1 | `capability-preflight.md` + engineer ingest (before `plan_lock`) |
+| H2 | Plan: `capability_gaps[].class: hard\|soft\|bridge`, `status: blocked-capability` |
+| H3 | Internal `ensure-capability` skill (fulfill via `/create-primitive` or import) |
+| H4 | Engineer: no execute while hard gap `pending` (Tier 3 waiver only) |
+| H5 | Enterprise hydrate CI / version pin in registry |
+| H6 | Gap queue under `enterprise/capability-gaps/` |
+
+Detail: [`composer-gap-fulfillment-loop.md`](composer-gap-fulfillment-loop.md).
+
+**Confirmation gate for you:** approve Phase F + H before G; F+H required if gaps must block delivery.
 
 ---
 
@@ -468,8 +485,11 @@ Proposal: ship **`balanced`** globally, document **`full`** for autonomous loop,
 | 5 | Phase F before autonomous loop Phase B | Yes (recommended) / parallel |
 | 6 | Public commands stay 3 | Yes — internal skills/agents expand (recommended) |
 | 7 | Capability model | Hydration + domain router + enterprise overlay (recommended) — **not** in-session skill learning |
-| 8 | Missing specialist behavior | Gap draft + notify + researcher fallback until agent shipped (recommended) |
+| 8 | Missing specialist behavior | **Hard gap blocks** + fulfill + hydrate (recommended) / notify-only fallback |
+| 9 | Hard gaps block execute | Yes until fulfill, bridge, or Tier 3 waiver (recommended) |
+| 10 | Fulfillment lands in | `enterprise/` overlay PR (recommended) |
+| 11 | Team-wide rollout | CI hydrate on enterprise merge (recommended) |
 
-**Capability model (for #7):** Base library skills/agents are always available after hydrate. Enterprise adds overlay primitives; engineer discovers gaps and drafts proposals but does not invent new agents without Tier 3. Compounding adds **knowledge**, not new skills.
+**Capability model (for #7):** Base library skills/agents are always available after hydrate. Enterprise adds overlay primitives; **hard** gaps must be fulfilled (or waived) before verify. Compounding adds **knowledge**, not new skills.
 
-**After confirmation:** implement Phase B + F in priority order on `cursor/engineer-vision-review-a13c` (or main).
+**After confirmation:** implement Phase F + H, then B, on `cursor/engineer-vision-review-a13c` (or main).
