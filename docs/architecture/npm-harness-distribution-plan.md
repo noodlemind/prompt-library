@@ -190,7 +190,11 @@ Declare in `peerDependencies` and verify in `aeh doctor`.
 | **`harness install`** | First-time sync to all configured targets |
 | **`harness upgrade`** | Same as install with version bump + retire cleanup |
 | **`harness doctor`** | Health checks (replaces `/harness-doctor` file checks + paths) |
-| **`harness index`** | Run manifest rebuild (`index-knowledge`) |
+| **`harness index`** | Rebuild `knowledge/manifest.yaml` |
+| **`harness orient`** | Recall + context-pack for `@engineer` |
+| **`harness gate`** | Pre-edit / verify enforcement (exit codes) |
+| **`harness validate-plan`** | Read-only plan template compliance |
+| **`harness compound`** | Post-verify index + session close-out |
 | **`harness init-repo`** | Create `docs/plans/`, stub `docs/agent-context.md`, optional `knowledge/` fallback |
 | **`harness status`** | Print installed version, paths, last sync time |
 | **`harness uninstall`** | Remove only files listed in `.harness-lock.json` (never delete whole `~/.copilot`) |
