@@ -16,7 +16,7 @@ Skills = workflows. Agents = isolated judgment. Instructions = file-pattern rule
 - Team **`knowledge/solutions/`** — cross-repo learnings (hydrated to `~/.copilot/knowledge/`).
 - Lookup order: `.github/skills/references/knowledge-locations.md`.
 
-**`@engineer` only:** capture gate and checklist live in `engineer.agent.md` — not duplicated here.
+**`@engineer` only:** autonomous loop, capture gate, and checklist live in `engineer.agent.md` — not duplicated here. Onboarding: `docs/onboarding/harness-quickstart.md`.
 
 ## Conventions
 

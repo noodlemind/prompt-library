@@ -65,7 +65,7 @@ Think of three layers the user never has to memorize:
 | **Deterministic index script** | **Not done** | `scripts/index-knowledge.mjs` missing |
 | **Pipeline UX shrink** | **Not done** | Pipeline skills still user-invocable |
 
-**Reality check:** Today `@engineer` still behaves largely like **compliance-first** (user/handoff expected for capture/plan/compound) unless the model follows prose about autonomy. **Foolproof requires implementing Phases B, C, F, H** and reconciling contradictions below.
+**Implementation status (2026-05-21):** Phases B, C, D, F, G, H implemented on branch `cursor/full-harness-implementation-a13c` — internal skills, engineer agent autopilot, enterprise hydrate in VS Code task, gap queue, harness-doctor, index script. Phase E semantic runtime remains v2 spec only.
 
 ---
 

@@ -19,7 +19,7 @@ Run at **engineer ingest**, before `plan_lock` and before `editFiles`, when doma
 
 1. Set plan `status: blocked-capability`.
 2. Append `capability_gaps` with `class: hard`, `required_for: verify|implement`.
-3. Invoke `/create-primitive` (skills) or gap proposal + Tier 3 (agents).
+3. Invoke **`/ensure-capability`** (orchestrates fulfillment); then `/create-primitive` (skills) or gap proposal + Tier 3 (agents).
 4. Target `enterprise/` overlay; on merge, team hydrates.
 5. Resume plan → `in-progress` when registry shows primitive + allowlist (if agent).
 

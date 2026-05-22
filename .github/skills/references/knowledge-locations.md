@@ -4,13 +4,14 @@ Where agents and skills load context. Do not duplicate this list elsewhere — l
 
 ## Recall order (default)
 
-1. **Global team index** — `~/.copilot/knowledge/manifest.yaml` (hydrated from repo `knowledge/manifest.yaml`)
-2. **Global team solutions** — `~/.copilot/knowledge/solutions/**/*.md`
-3. **User preferences** — `~/.copilot/knowledge/profile.md`
-4. **Product active plans** — `docs/plans/*.md` in the **current workspace**
-5. **Product repo-private solutions** — `docs/solutions/**/*.md` (optional; use when learning must not be shared)
-6. **Product repo context** — `docs/agent-context.md`, `README.md`, `docs/codebase-snapshot.md`
-7. **Prompt-library repo only** — `.github/agent-context.md`
+1. **Global team index** — `~/.copilot/knowledge/manifest.yaml` (hydrated from repo `knowledge/manifest.yaml`); **fallback:** repo `knowledge/manifest.yaml` (cloud/Linux)
+2. **Global team solutions** — `~/.copilot/knowledge/solutions/**/*.md` or repo `knowledge/solutions/`
+3. **User preferences** — `~/.copilot/knowledge/profile.md` or repo `knowledge/profile.md`
+4. **Enterprise capability** — `~/.copilot/enterprise/capability-registry.enterprise.yaml` or repo `enterprise/`
+5. **Product active plans** — `docs/plans/*.md` in the **current workspace**
+6. **Product repo-private solutions** — `docs/solutions/**/*.md` (optional)
+7. **Product repo context** — `docs/agent-context.md`, `README.md`, `docs/codebase-snapshot.md`
+8. **Prompt-library repo only** — `.github/agent-context.md`
 
 ## Write targets
 
@@ -19,7 +20,7 @@ Where agents and skills load context. Do not duplicate this list elsewhere — l
 | Cross-repo verified fix | `knowledge/solutions/<category>/<slug>.md` + `/index-memory` |
 | Repo-specific only | Product `docs/solutions/` (optional) |
 | Repo convention one-liner | Product `docs/agent-context.md` |
-| Active issue | Product `docs/plans/` via `/capture-issue` |
+| Active issue | Product `docs/plans/` via `/ensure-plan` or `/capture-issue` |
 | New skill/agent | `/create-primitive` + `knowledge/capability-registry.yaml` |
 
 ## This repository (prompt-library)

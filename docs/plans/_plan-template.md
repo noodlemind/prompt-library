@@ -2,11 +2,15 @@
 title: "<short, imperative title>"
 type: feat|fix|docs|refactor|chore
 status: open
+# status: open | planned | in-progress | review | done | blocked-capability | needs-info
 plan_lock: false
 phase: 0
 priority: P2
 risk: green
 autonomy: balanced
+domains: []
+specialists: []
+capability_gaps: []
 created: YYYY-MM-DD
 updated: YYYY-MM-DD
 ---

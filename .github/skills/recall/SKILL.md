@@ -1,5 +1,6 @@
 ---
 name: recall
+user-invocable: false
 description: Recall team and repo knowledge before engineering work. Use at session start or before investigate/fix. Searches global knowledge manifest, local plans, and solutions. Not for implementation — use after recall to /capture-issue or /engineer.
 argument-hint: "[task description or plan file path]"
 ---

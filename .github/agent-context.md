@@ -6,7 +6,10 @@ This file contains accumulated knowledge about the codebase, discovered by agent
 
 This repository is a skill-driven prompt library containing AI agent systems:
 - `.github/agents/` — 24 agents (19 specialists + 1 engineer + 1 implementer + 3 coordinators, judgment-criteria style)
-- `.github/skills/` — 25 skills forming the connected pipeline (includes `/recall`, `/index-memory`)
+- `.github/skills/` — 31 skills including Composer-style autopilot (`ensure-plan`, `ensure-capability`, `auto-compound`, `engineer-autopilot`)
+- `enterprise/` — optional corp overlay (skills, agents, capability-gaps) hydrated to `~/.copilot/enterprise/`
+- `scripts/index-knowledge.mjs` — deterministic manifest rebuild
+- `docs/onboarding/harness-quickstart.md` — enterprise onboarding
 - `knowledge/` — team-wide solutions and manifest (hydrated to `~/.copilot/knowledge/`), primitive creation, domain workflows, README maintenance, quick Q&A, and utilities
 - `.github/instructions/` — scoped instructions (TypeScript, Python, Java, Spring Boot, PostgreSQL, AWS SDK)
 - `.github/prompts/` — thin host-facing wrappers that route to skills and declare host tools
@@ -29,7 +32,8 @@ This repository is a skill-driven prompt library containing AI agent systems:
 - All review agents include prompt injection guardrails (Guardrails section before Mission)
 - Skills follow progressive disclosure (frontmatter → body → references)
 - The connected pipeline: `/brainstorming` (optional) → `/capture-issue` → `/plan-issue` → `/deepen-plan` (optional) → `/work-on-task` → `/code-review` → `/compound-learnings`. `/btw` is quick Q&A outside the pipeline. `/project-readme` is documentation maintenance outside implementation planning. `/create-primitive` is the canonical primitive creator for skills, agents, instructions, checks, wrappers, references, and solution docs. `/java`, `/python`, `/sql`, and `/aws` are reusable domain workflow skills that pair with scoped instructions and specialist reviewers.
-- State machine: `status` (open/planned/in-progress/review/done), `plan_lock`, `phase`
+- State machine: `status` (open/planned/in-progress/review/done/blocked-capability), `plan_lock`, `phase`, `domains`, `capability_gaps`
+- `@engineer` runs autonomous loop per `engineer-autopilot` — do not ask users to run capture/plan/recall/compound manually
 - Activity logs in plan files provide session continuity
 - Plan files are the local context pack. Standard sections include `## Context`, `## Acceptance Criteria`, `## Research Notes`, `## Impacted Files`, `## Verification Plan`, `## Risk & Review Routing`, `## Implementation Notes`, `## Review Findings`, and `## Activity`.
 

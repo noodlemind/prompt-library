@@ -1,39 +1,31 @@
 # Engineer Session Checklist
 
-Use at **every** `@engineer` turn on trackable work. Designed for small models: binary checks, stop if any fail.
+Binary checks for `@engineer` on trackable work.
 
 ## Before investigation or `editFiles`
 
-- [ ] **R0** Ran `/recall` or Phase 0 Recall (memory cards presented)
-- [ ] **C1** Plan file exists under `docs/plans/`
-- [ ] **C2** Plan created by `/capture-issue` (`status: open` or progressed legally)
-- [ ] **C3** For implementation: `plan_lock: true` from `/plan-issue` (or documented exemption)
-- [ ] **C4** Route recorded in Activity or chat (`/capture-issue` → `/plan-issue` → …)
+- [ ] **R0** Recall (Phase 0)
+- [ ] **P0** `/ensure-capability` — no pending **hard** gaps (or Tier 3 waiver logged)
+- [ ] **C1** Plan under `docs/plans/`
+- [ ] **C2** Plan via `/ensure-plan` or `/capture-issue` template
+- [ ] **C3** `plan_lock: true` before implement
+- [ ] **C4** Route in Activity
 
-**If C1–C4 fail → invoke `/capture-issue` and STOP.**
+**Fail C1–C4 → `/ensure-plan` and STOP edits.**
 
 ## During work
 
-- [ ] **W1** Only files in `## Impacted Files` (or user-approved scope expansion)
-- [ ] **W2** Read `## Memory Cards` before long Research/Activity sections
-- [ ] **W3** Subagent tasks use `subagent-context-packet.md`
-- [ ] **W4** Risky choices paused per `human-approval-policy.md`
+- [ ] **W1** Scope = `## Impacted Files`
+- [ ] **W2** Read `## Memory Cards` before long sections
+- [ ] **W3** Subagent packet used
+- [ ] **W4** Tier 3 per `human-approval-policy.md`
 
-## Before claiming done
+## Before done
 
-- [ ] **D1** Verification plan executed with evidence
-- [ ] **D2** Tests reported with actual output
-- [ ] **D3** Suggested `/compound-learnings` + `/index-memory` for durable learnings
+- [ ] **D1** Verification evidence
+- [ ] **D2** Tests reported
+- [ ] **D3** `/auto-compound` (or `/compound-learnings` + `/index-memory`)
 
-## Exemptions (quote user or mark in Activity)
+## Exemptions
 
-- `/tdd-fix` isolated bug
-- Review-only / `/btw` Q&A
-- Existing locked plan resume
-- User explicitly waived capture **this turn**
-
-## Exemptions do NOT include
-
-- "Small" multi-file feature
-- "Quick" refactor without plan
-- `/analyze-and-plan` instead of capture (only enriches **existing** captured plans)
+`/tdd-fix`, review-only, `/btw`, locked-plan resume, quoted capture waiver.

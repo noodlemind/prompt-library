@@ -1,5 +1,6 @@
 ---
 name: work-on-task
+user-invocable: false
 description: Execute the current phase of a planned issue using TDD with scope control and session logging. Use when implementing planned changes or resuming a session. Not without a plan — run /plan-issue first.
 argument-hint: "[path to plan file]"
 ---

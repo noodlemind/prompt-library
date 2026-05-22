@@ -1,7 +1,8 @@
 ---
 name: plan-issue
-description: Generate a phased implementation plan with research and acceptance criteria. Use after /capture-issue to plan before coding. Not for quick fixes — use /tdd-fix or /analyze-and-plan.
+description: Generate a phased implementation plan with research and acceptance criteria. Power-user step; @engineer uses /ensure-plan. Not for quick fixes — use /tdd-fix or /analyze-and-plan.
 argument-hint: "[path to issue file]"
+user-invocable: false
 ---
 
 # Plan Issue

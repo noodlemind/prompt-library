@@ -1,5 +1,6 @@
 ---
 name: index-memory
+user-invocable: false
 description: Rebuild the team knowledge manifest from solution files for /recall. Use after adding or changing knowledge/solutions or docs/solutions. Not for capturing issues or compounding content — use /compound-learnings to write solutions first.
 argument-hint: "[optional path to scan, default knowledge/solutions]"
 ---

@@ -1,0 +1,30 @@
+# Publishes enterprise overlay artifact for team hydrate pipelines.
+# Customize ORG_ENTERPRISE_REPO secret to your platform overlay repository.
+name: Enterprise Hydrate
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'enterprise/**'
+  workflow_dispatch:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate enterprise registry
+        run: |
+          test -f enterprise/capability-registry.enterprise.yaml
+          test -f enterprise/README.md
+      - name: Archive enterprise overlay
+        run: |
+          tar -czf enterprise-overlay.tar.gz enterprise/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: enterprise-overlay
+          path: enterprise-overlay.tar.gz
+          retention-days: 90
+
+# DevEx: download artifact in desktop Hydrate task or extract to ~/.copilot/enterprise/

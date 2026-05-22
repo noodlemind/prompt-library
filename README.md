@@ -1,15 +1,17 @@
 # Prompt Library
 
-Skill-driven software engineering prompt library with **25 skills**, **24 agents**, scoped instructions, review checks, and a three-tier memory model (product plans, global knowledge, user profile). Primary platforms: GitHub Copilot in VS Code and IntelliJ IDEA.
+Skill-driven software engineering prompt library with **31 skills** (including internal autopilot steps), **24 agents**, scoped instructions, review checks, and a three-tier memory model (product plans, global knowledge, user profile). Primary platforms: GitHub Copilot in VS Code and IntelliJ IDEA.
 
 ## Quick Start
 
 1. Clone this repository
 2. Open in VS Code 1.109+ with GitHub Copilot Chat
 3. Run **Tasks: Run Task** → **Prompt Library: Hydrate Global Copilot Customizations**
-4. Open a **product** repository (no prompt-library files copied into it)
-5. `/recall` then `/capture-issue` or `@engineer` for engineering work
-6. `/` for skills; `@` for a specific agent when needed
+4. Open a **product** repository (no prompt-library files copied into it); ensure `docs/plans/` exists
+5. **`@engineer`** — describe the work (autonomous capture, plan, implement, verify, compound)
+6. Optional: **`/harness-doctor`** — health check; **`/btw`** — Q&A; **`/code-review`** — review pass
+
+See [Harness Quickstart](docs/onboarding/harness-quickstart.md).
 
 ## Vision
 
@@ -26,20 +28,18 @@ Skill-first: skills are workflow contracts; agents provide isolated judgment; in
 | Team knowledge | `knowledge/` → hydrated to `~/.copilot/knowledge/` |
 | Product plans | `docs/plans/` in each **product** repo only |
 
-Standards: [Composer Parity Review](docs/architecture/composer-parity-review.md), [Engineer Vision](docs/architecture/engineer-vision-and-growth-loop.md), [Memory System](docs/architecture/engineer-memory-system.md), [Skill-Driven Library](docs/architecture/skill-driven-prompt-library.md).
+Standards: [Autonomous Harness Proposal](docs/architecture/composer-style-autonomous-harness-proposal.md) (Composer-style target), [Composer Parity Review](docs/architecture/composer-parity-review.md), [Engineer Vision](docs/architecture/engineer-vision-and-growth-loop.md), [Memory System](docs/architecture/engineer-memory-system.md).
 
 ## Connected Pipeline
 
 ```
-/recall → /capture-issue → /plan-issue → /work-on-task → /code-review → /compound-learnings → /index-memory
-          open          → planned      → in-progress  → review       → done
+@engineer (autopilot): recall → preflight → ensure-plan → work → verify → auto-compound
+          open → planned → in-progress → review → done  (or blocked-capability)
 ```
 
-Optional: `/brainstorming`, `/deepen-plan`, `/document-review`. Plan files are the per-issue context pack (`## Memory Cards`, `## Context`, `## Research Notes`, …). See `docs/plans/_plan-template.md`.
+Power-user pipeline steps (`/capture-issue`, `/plan-issue`, …) remain available but are **internal** to `@engineer` by default. Optional: `/brainstorming`, `/deepen-plan`, `/document-review`. Plan files are the per-issue context pack. See `docs/plans/_plan-template.md` and `capture-gate.md`.
 
-**Capture gate:** `@engineer` must not edit product code until `/capture-issue` (and `/plan-issue` when locking) — see `.github/skills/references/capture-gate.md`.
-
-## Skills (25)
+## Skills (31)
 
 | Skill | Type | Purpose |
 |-------|------|---------|
@@ -57,7 +57,9 @@ Optional: `/brainstorming`, `/deepen-plan`, `/document-review`. Plan files are t
 | `/import-conventions` | Extension | Import external conventions |
 | `/project-readme` | Documentation | README maintenance |
 | `/java`, `/python`, `/sql`, `/aws` | Domain | Domain workflows |
-| `/engineer` | Engineering | Full-cycle coordinator |
+| `/engineer` | Engineering | Full-cycle coordinator (autopilot loop) |
+| `/harness-doctor` | Utility | Hydrate and harness health check |
+| `/ensure-plan`, `/ensure-capability`, `/auto-compound` | Internal | Autopilot steps (not in `/` menu) |
 | `/start` | Intake | Route ambiguous work |
 | `/btw` | Q&A | Quick answers, no plans |
 | `/analyze-and-plan` | Utility | Enrich **existing** captured plan only |

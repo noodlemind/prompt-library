@@ -82,7 +82,9 @@ Skip this step when the fix applies across all product repositories.
 
 ### 4. Update Knowledge Index (required)
 
-**Must** run **`/index-memory`** (or manually update `knowledge/manifest.yaml` per `.github/skills/index-memory/SKILL.md`). Compounding is incomplete without index update.
+**Must** run **`/index-memory`** or `node scripts/index-knowledge.mjs`. Compounding is incomplete without index update.
+
+**`@engineer`** chains this via internal **`/auto-compound`** after verify — manual index optional for power users.
 
 Remind the user to **Hydrate** global Copilot customizations so `~/.copilot/knowledge/` updates on other machines.
 

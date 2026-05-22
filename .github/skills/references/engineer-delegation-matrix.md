@@ -18,5 +18,9 @@ Load when delegating from `@engineer`. Every delegation uses `.github/skills/ref
 | Bug reproduction | `bug-reproduction-validator` | Report, steps, environment |
 | Code history | `git-history-analyzer` | Paths, history questions |
 | Full code review | `code-review-coordinator` | Changed files, PR context, project type |
+| Splunk / SPL validation (enterprise) | `splunk-reviewer` | Index, query, expected signal |
+| Terraform / IaC review (enterprise) | `terraform-reviewer` | Modules, plan output, conventions |
 
 Coordinators: use `tools: ['agent']`, parallel batches of 3–4, aggregate between batches.
+
+Enterprise agents require hydration + `engineer.agent.md` allowlist (Tier 3 once).

@@ -362,40 +362,40 @@ We **do not** beat Composer on native codebase embedding until v2 index — acce
 
 ### Phase B — Engineer behavior (1 pass)
 
-- [ ] Engineer agent: autonomous loop steps; “do not ask user to run /capture-issue”
-- [ ] `ensure-plan` skill (capture + dedupe)
-- [ ] `engineer-autopilot` or expand engineer SKILL with loop
-- [ ] plan frontmatter `risk` + template
+- [x] Engineer agent: autonomous loop steps; “do not ask user to run /capture-issue”
+- [x] `ensure-plan` skill (capture + dedupe)
+- [x] `engineer-autopilot` or expand engineer SKILL with loop
+- [x] plan frontmatter `risk` + template
 
 ### Phase C — Memory automation (1 pass)
 
-- [ ] `auto-compound` skill (gates: tests + verification plan)
-- [ ] Chain index after compound in skill body
-- [ ] `scripts/index-knowledge.mjs` optional deterministic indexer
+- [x] `auto-compound` skill (gates: tests + verification plan)
+- [x] Chain index after compound in skill body
+- [x] `scripts/index-knowledge.mjs` optional deterministic indexer
 
 ### Phase D — UX shrink (1 pass)
 
-- [ ] Mark pipeline skills `user-invocable: false` where host supports
-- [ ] README: “Use @engineer; pipeline is automatic”
-- [ ] Global instruction: autonomous default
+- [x] Mark pipeline skills `user-invocable: false` where host supports
+- [x] README: “Use @engineer; pipeline is automatic”
+- [x] Global instruction: autonomous default
 
 ### Phase E — Retrieval v2
 
-- [ ] Semantic ranker for manifest
-- [ ] MCP retrieval tool spec
+- [ ] Semantic ranker for manifest (runtime — see `semantic-retrieval-v2.md`)
+- [x] MCP retrieval tool spec (`docs/architecture/semantic-retrieval-v2.md`)
 
 ### Phase F — Enterprise capability layer (skills + specialists)
 
 **Goal:** Corp-specific skills (Terraform, internal frameworks) and agents (Splunk expert) without forking the whole library.
 
-| ID | Deliverable | Owner |
-|----|-------------|-------|
-| F1 | `enterprise/README.md` + `capability-registry.enterprise.yaml` template | Platform |
-| F2 | Hydrate sync: `enterprise/skills`, `enterprise/agents`, `enterprise/instructions` → `~/.copilot/enterprise/` | DevEx |
-| F3 | Engineer **domain router** at intake: map signals → internal skill + `specialists[]` | Harness |
-| F4 | Plan frontmatter: `domains`, `specialists`, `capability_gaps` | Harness |
-| F5 | `engineer-delegation-matrix.md` + registry: document enterprise-only rows | Platform |
-| F6 | Capability-gap auto-draft → `docs/capability-gaps/<slug>.md` + Activity notify | Harness |
+| ID | Deliverable | Owner | Status |
+|----|-------------|-------|--------|
+| F1 | `enterprise/README.md` + `capability-registry.enterprise.yaml` template | Platform | [x] |
+| F2 | Hydrate sync: `enterprise/` → `~/.copilot/enterprise/` | DevEx | [x] |
+| F3 | Engineer **domain router** at intake | Harness | [x] |
+| F4 | Plan frontmatter: `domains`, `specialists`, `capability_gaps` | Harness | [x] |
+| F5 | `engineer-delegation-matrix.md` + registry enterprise rows | Platform | [x] |
+| F6 | Capability-gap queue `enterprise/capability-gaps/` | Harness | [x] |
 
 **Splunk reviewer example (one-time setup):**
 
@@ -412,21 +412,21 @@ We **do not** beat Composer on native codebase embedding until v2 index — acce
 
 ### Phase G — Optional auto-skill (Hermes-style, enterprise only)
 
-- [ ] After 3 verified similar tasks in `knowledge/solutions/`, draft `enterprise/skills/<domain>/SKILL.md` from patterns
-- [ ] Tier 1 notify platform; never auto-create **agents**
+- [x] `/auto-skill-draft` skill — draft from repeated solutions
+- [x] Tier 1 notify platform; never auto-create **agents**
 
 ### Phase H — Blocking gap fulfillment (Composer-style — **recommended with F**)
 
 **Goal:** Missing primitive **blocks** work when required; same-session fulfill; team-wide hydrate.
 
-| ID | Deliverable |
-|----|-------------|
-| H1 | `capability-preflight.md` + engineer ingest (before `plan_lock`) |
-| H2 | Plan: `capability_gaps[].class: hard\|soft\|bridge`, `status: blocked-capability` |
-| H3 | Internal `ensure-capability` skill (fulfill via `/create-primitive` or import) |
-| H4 | Engineer: no execute while hard gap `pending` (Tier 3 waiver only) |
-| H5 | Enterprise hydrate CI / version pin in registry |
-| H6 | Gap queue under `enterprise/capability-gaps/` |
+| ID | Deliverable | Status |
+|----|-------------|--------|
+| H1 | `capability-preflight.md` + engineer ingest (before `plan_lock`) | [x] |
+| H2 | Plan: `capability_gaps[].class: hard\|soft\|bridge`, `status: blocked-capability` | [x] |
+| H3 | Internal `ensure-capability` skill (fulfill via `/create-primitive` or import) | [x] |
+| H4 | Engineer: no execute while hard gap `pending` (Tier 3 waiver only) | [x] |
+| H5 | Enterprise hydrate CI / version pin in registry | [x] workflow |
+| H6 | Gap queue under `enterprise/capability-gaps/` | [x] |
 
 Detail: [`composer-gap-fulfillment-loop.md`](composer-gap-fulfillment-loop.md).
 

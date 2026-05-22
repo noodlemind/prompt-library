@@ -1,7 +1,8 @@
 ---
 name: capture-issue
-description: Create the initial docs/plans plan file from a bug, feature, or task. Use when logging trackable work. Not for implementation planning -- use /plan-issue after capture.
+description: Create the initial docs/plans plan file from a bug, feature, or task. Power-user pipeline step; @engineer uses internal /ensure-plan. Not for implementation planning -- use /plan-issue after capture.
 argument-hint: "[issue description or URL]"
+user-invocable: false
 ---
 
 # Capture Issue
@@ -101,5 +102,5 @@ Suggest next step: "Run `/plan-issue docs/plans/<filename>.md` to generate an im
 - Do **not** start implementation. This skill creates the initial plan file shell, but `/plan-issue` owns implementation planning and locking.
 - Do **not** set `plan_lock: true` — that's the plan-issue skill's job.
 - Keep the issue file under 100 lines. Brevity forces clarity.
-- **`@engineer` must invoke this skill** for new trackable work — it must not create `docs/plans/*.md` inline. See `.github/skills/references/capture-gate.md`.
+- **`@engineer`** uses internal **`/ensure-plan`** (same steps as this skill). See `capture-gate.md`.
 - Use `docs/plans/_plan-template.md` for section layout when needed.

@@ -18,8 +18,15 @@ starter_skills:
     - compound-learnings
     - recall
     - index-memory
+  internal_autopilot:
+    - ensure-plan
+    - ensure-capability
+    - auto-compound
+    - engineer-autopilot
+    - auto-skill-draft
   engineering:
     - engineer
+    - harness-doctor
     - tdd-fix
     - brainstorming
     - deepen-plan
@@ -92,8 +99,12 @@ references:
   principles: .github/skills/references/engineer-principles.md
   autonomy: .github/skills/references/autonomy-policy.md
   capture_gate: .github/skills/references/capture-gate.md
+  capability_preflight: .github/skills/references/capability-preflight.md
+  domain_routing: .github/skills/references/domain-routing.md
   context_budget: .github/skills/references/context-budget.md
   session_checklist: .github/skills/references/engineer-session-checklist.md
   starter_kit: .github/skills/references/engineer-starter-kit.md
+  quickstart: docs/onboarding/harness-quickstart.md
+  gap_fulfillment: docs/architecture/composer-gap-fulfillment-loop.md
   autonomous_proposal: docs/architecture/composer-style-autonomous-harness-proposal.md
   vision: docs/architecture/engineer-vision-and-growth-loop.md
