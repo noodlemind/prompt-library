@@ -47,7 +47,7 @@ The engineer does **not** “learn” Java or AWS during a chat session the way 
 | Your question | Short answer |
 |---------------|--------------|
 | AWS task but engineer “only knew” Java/SQL? | **`/aws` is already in the base library.** After global hydrate, the engineer applies the AWS workflow and can delegate `@aws-reviewer` — no new skill step; routing is automatic from prompt/file signals. |
-| Terraform (not in base library)? | **Not runtime learning.** Platform adds `enterprise/skills/terraform/` (or `/import-conventions`), hydrates overlay; engineer routes `.tf` / “terraform” to `/terraform`. Until then: capability-gap draft + generic researchers; work can continue under `full` profile. |
+| Terraform (not in base library)? | **Not runtime learning.** Platform adds `enterprise/skills/terraform/` (or `/import-conventions`), hydrates overlay; engineer routes `.tf` / “terraform” to `/terraform`. If verify requires that skill and it is missing: **hard gap** → block until fulfill, bridge, or waiver (see Phase H). |
 | Splunk expert validation? | **Specialists are agents, not skills.** Add `splunk-reviewer.agent.md` to enterprise overlay, add to `engineer.agent.md` `agents:` allowlist (**Tier 3 once**), hydrate. Then `@engineer` auto-delegates on Splunk/SPL signals. Users can always `@splunk-reviewer` directly once hydrated. |
 | Enterprise terminology / style? | **Instructions** (file-pattern scoped) + **knowledge/solutions** + product `docs/agent-context.md` — not a new public slash command per term. |
 
@@ -492,4 +492,6 @@ Proposal: ship **`balanced`** globally, document **`full`** for autonomous loop,
 
 **Capability model (for #7):** Base library skills/agents are always available after hydrate. Enterprise adds overlay primitives; **hard** gaps must be fulfilled (or waived) before verify. Compounding adds **knowledge**, not new skills.
 
-**After confirmation:** implement Phase F + H, then B, on `cursor/engineer-vision-review-a13c` (or main).
+**Pre-implementation gap review:** [`harness-pre-implementation-review.md`](harness-pre-implementation-review.md) — contradictions, MVP order, foolproof checklist.
+
+**After confirmation:** implement MVP per gap review (G1 reconcile → B → C → F2/F3 → H → D) on `cursor/engineer-vision-review-a13c` (or main).
