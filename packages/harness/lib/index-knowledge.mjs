@@ -1,5 +1,7 @@
 import fs from 'fs';
 import path from 'path';
+import { runBuildPostingsIndex } from './postings-index.mjs';
+import { resolveIndexDir } from './recall-config.mjs';
 
 function parseFrontmatter(text) {
   const m = text.match(/^---\r?\n([\s\S]*?)\r?\n---/);
@@ -25,6 +27,17 @@ function summaryFromBody(text) {
   );
 }
 
+function excerptFromBody(text) {
+  const body = text.replace(/^---[\s\S]*?---\n/, '').trim();
+  const prob = body.match(/## Problem\s*\n+([\s\S]*?)(?=\n## |\n# |$)/i);
+  const source = prob ? prob[1].trim() : body;
+  return source.replace(/\s+/g, ' ').slice(0, 400);
+}
+
+function yamlQuote(value) {
+  return `"${String(value || '').replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+}
+
 function collectSolutions(dir, scope, base) {
   const entries = [];
   if (!fs.existsSync(dir)) return entries;
@@ -38,8 +51,10 @@ function collectSolutions(dir, scope, base) {
       const fm = parseFrontmatter(text);
       const rel = path.relative(base, full).split(path.sep).join('/');
       const slug = f.replace(/\.md$/, '');
+      const entryId = `${scope}-${cat.name}-${slug}`;
       entries.push({
-        id: `${cat.name}-${slug}`,
+        id: entryId,
+        docid: entryId,
         kind: 'solution',
         scope,
         path: rel,
@@ -49,14 +64,16 @@ function collectSolutions(dir, scope, base) {
         module: fm.module || '',
         symptom: fm.symptom || '',
         summary: summaryFromBody(text),
-        updated: fm.date || '',
+        excerpt: excerptFromBody(text),
+        date: fm.date || fm.updated || '',
+        updated: fm.updated || fm.date || '',
       });
     }
   }
   return entries;
 }
 
-export function runIndexKnowledge({ knowledgeRoot, workspace, flags, log }) {
+export function runIndexKnowledge({ knowledgeRoot, workspace, copilotHome, flags, log }) {
   const roots = [];
   if (knowledgeRoot) {
     roots.push({
@@ -74,6 +91,15 @@ export function runIndexKnowledge({ knowledgeRoot, workspace, flags, log }) {
   for (const { dir, scope, base } of roots) {
     entries = entries.concat(collectSolutions(dir, scope, base));
   }
+
+  const seenIds = new Set();
+  for (const e of entries) {
+    if (seenIds.has(e.id)) {
+      throw new Error(`duplicate manifest id "${e.id}" — paths collide across knowledge roots`);
+    }
+    seenIds.add(e.id);
+  }
+
   entries.sort((a, b) => a.id.localeCompare(b.id));
 
   const manifestPath = path.join(knowledgeRoot || path.join(workspace, 'knowledge'), 'manifest.yaml');
@@ -86,22 +112,40 @@ export function runIndexKnowledge({ knowledgeRoot, workspace, flags, log }) {
   ];
   for (const e of entries) {
     lines.push(`  - id: ${e.id}`);
+    lines.push(`    docid: ${e.docid}`);
     lines.push(`    kind: ${e.kind}`);
     lines.push(`    scope: ${e.scope}`);
     lines.push(`    path: ${e.path}`);
-    lines.push(`    title: "${(e.title || '').replace(/"/g, '\\"')}"`);
+    lines.push(`    title: ${yamlQuote(e.title)}`);
     lines.push(`    category: ${e.category}`);
-    if (e.tags?.length) lines.push(`    tags: [${e.tags.map((t) => `"${t}"`).join(', ')}]`);
-    if (e.summary) lines.push(`    summary: "${e.summary.replace(/"/g, '\\"')}"`);
+    if (e.tags?.length) lines.push(`    tags: [${e.tags.map((t) => yamlQuote(t)).join(', ')}]`);
+    if (e.module) lines.push(`    module: ${yamlQuote(e.module)}`);
+    if (e.symptom) lines.push(`    symptom: ${yamlQuote(e.symptom)}`);
+    if (e.date) lines.push(`    date: ${e.date}`);
+    if (e.summary) lines.push(`    summary: ${yamlQuote(e.summary)}`);
+    if (e.excerpt) lines.push(`    excerpt: ${yamlQuote(e.excerpt)}`);
   }
 
   const body = lines.join('\n') + '\n';
   if (flags.dryRun) {
     log(`would write ${manifestPath} (${entries.length} entries)`);
-    return { entries: entries.length, manifestPath };
+    const indexDir = resolveIndexDir(copilotHome || '', workspace);
+    runBuildPostingsIndex({ entries, indexDir, manifestUpdated: today, flags });
+    log(`would write ${indexDir} (${entries.length} postings)`);
+    return { entries: entries.length, manifestPath, indexDir };
   }
   fs.mkdirSync(path.dirname(manifestPath), { recursive: true });
   fs.writeFileSync(manifestPath, body, 'utf8');
   log(`wrote ${manifestPath} (${entries.length} entries)`);
-  return { entries: entries.length, manifestPath };
+
+  const indexDir = resolveIndexDir(copilotHome || '', workspace);
+  const indexResult = runBuildPostingsIndex({
+    entries,
+    indexDir,
+    manifestUpdated: today,
+    flags,
+  });
+  log(`wrote ${indexDir} (${indexResult.entryCount} postings)`);
+
+  return { entries: entries.length, manifestPath, indexDir, indexEntries: indexResult.entryCount };
 }

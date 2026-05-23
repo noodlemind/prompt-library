@@ -27,7 +27,7 @@ npx @dev-kit/harness init-repo
 ```json
 {
   "devDependencies": {
-    "@dev-kit/harness": "0.3.1"
+    "@dev-kit/harness": "0.4.0"
   }
 }
 ```
@@ -35,14 +35,14 @@ npx @dev-kit/harness init-repo
 **Option B — `.harness-version` file at repo root:**
 
 ```text
-0.3.1
+0.4.0
 ```
 
 Use pinned version in CI:
 
 ```yaml
-- run: npx @dev-kit/harness@0.3.1 gate --workspace . --json
-- run: npx @dev-kit/harness@0.3.1 validate-plan --workspace . --json
+- run: npx @dev-kit/harness@0.4.0 gate --workspace . --json
+- run: npx @dev-kit/harness@0.4.0 validate-plan --workspace . --json
 ```
 
 ## Commands
@@ -64,15 +64,18 @@ Use pinned version in CI:
 |---------|-------------|
 | `orient` | Recall + plan match → `.harness/context-pack.md` (≤2 KB) |
 | `gate` | Preflight before `editFiles` (exit 0/1/2) |
-| `recall` | Standalone manifest search |
+| `recall` | BM25 manifest search (`-c`, `--min-score`) |
+| `get` | Bounded doc excerpt by `--docid` or `--path` |
 | `validate-plan` | Read-only plan template / intent compliance |
-| `index` | Rebuild `knowledge/manifest.yaml` |
+| `index` | Rebuild `knowledge/manifest.yaml` + `.harness-index/` |
 | `compound` | Post-verify index + session close-out |
 | `events` | Inspect `.harness/events.jsonl` |
 
 ### Options
 
-`--dry-run`, `--verbose`, `--json`, `--workspace <path>`, `--copilot-home <path>`, `--query <text>`, `--phase implement|verify`, `--plan <path>`, `--strict-intent`, `--no-events`, `--limit <n>`
+`--dry-run`, `--verbose`, `--json`, `--workspace <path>`, `--copilot-home <path>`, `--query <text>`, `--phase implement|verify`, `--plan <path>`, `--strict-intent`, `--no-events`, `--limit <n>`, `-c <collection>`, `--min-score <n>`, `--docid <id>`, `--path <rel>`, `--lines <n>`, `--max-bytes <n>`
+
+**Enterprise Nexus:** v0.4.0 uses pure-JS BM25 — no `minisearch` or `better-sqlite3` required.
 
 ## Maintainers (prompt-library repo)
 

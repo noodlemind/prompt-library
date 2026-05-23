@@ -548,3 +548,263 @@ test('compound fails when verify gate not satisfied', () => {
   assert.equal(body.pass, true);
   assert.equal(body.exitCode, 2);
 });
+
+function writeKnowledgeSolution(copilotHome, {
+  category = 'api',
+  slug = 'orders-timeout',
+  title = 'Orders API timeout',
+  symptom = 'checkout requests hang after 30 seconds',
+  module = 'orders-service',
+  scope = 'global',
+  tags = 'commerce, checkout',
+  body = '## Problem\n\nCheckout requests hang after 30 seconds under load.',
+} = {}) {
+  const knowledgeRoot = path.join(copilotHome, 'knowledge');
+  const solDir = path.join(knowledgeRoot, 'solutions', category);
+  fs.mkdirSync(solDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(solDir, `${slug}.md`),
+    `---
+title: "${title}"
+category: ${category}
+module: ${module}
+symptom: ${symptom}
+tags: ${tags}
+date: 2026-05-01
+---
+
+${body}
+`,
+    'utf8'
+  );
+  fs.copyFileSync(
+    path.join(packageRoot, '../../knowledge/collections.yaml'),
+    path.join(knowledgeRoot, 'collections.yaml')
+  );
+  fs.copyFileSync(
+    path.join(packageRoot, '../../knowledge/recall-synonyms.yaml'),
+    path.join(knowledgeRoot, 'recall-synonyms.yaml')
+  );
+  return `${scope}-${category}-${slug}`;
+}
+
+function runIndex(workspace, copilotHome) {
+  const result = runHarness(['index', '--workspace', workspace, '--copilot-home', copilotHome]);
+  assert.equal(result.status, 0, result.stderr);
+}
+
+function writeProductSolution(workspace, {
+  category = 'product',
+  slug = 'local-fix',
+  title = 'Local product fix',
+  symptom = 'product-only symptom',
+} = {}) {
+  const solDir = path.join(workspace, 'docs', 'solutions', category);
+  fs.mkdirSync(solDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(solDir, `${slug}.md`),
+    `---
+title: "${title}"
+category: ${category}
+symptom: ${symptom}
+date: 2026-05-10
+---
+
+## Problem
+
+Product scoped solution.
+`,
+    'utf8'
+  );
+  return `product-${category}-${slug}`;
+}
+
+test('index writes enriched manifest fields and postings index', () => {
+  const workspace = tempDir('harness-workspace-');
+  const copilotHome = tempDir('harness-copilot-');
+  writeKnowledgeSolution(copilotHome);
+
+  const result = runHarness(['index', '--workspace', workspace, '--copilot-home', copilotHome, '--json']);
+  assert.equal(result.status, 0, result.stderr);
+
+  const manifest = fs.readFileSync(path.join(copilotHome, 'knowledge', 'manifest.yaml'), 'utf8');
+  assert.match(manifest, /symptom:/);
+  assert.match(manifest, /module:/);
+  assert.match(manifest, /excerpt:/);
+  assert.match(manifest, /docid:/);
+  assert.ok(fs.existsSync(path.join(copilotHome, 'knowledge', '.harness-index', 'postings.json')));
+  assert.ok(fs.existsSync(path.join(copilotHome, 'knowledge', '.harness-index', 'meta.json')));
+});
+
+test('BM25 recall ranks symptom match above title-only match', () => {
+  const workspace = tempDir('harness-workspace-');
+  const copilotHome = tempDir('harness-copilot-');
+  writeKnowledgeSolution(copilotHome, {
+    slug: 'orders-timeout',
+    symptom: 'checkout requests hang after 30 seconds',
+    title: 'Orders API timeout',
+  });
+  writeKnowledgeSolution(copilotHome, {
+    category: 'misc',
+    slug: 'unrelated',
+    title: 'checkout dashboard',
+    symptom: 'unrelated issue',
+    body: '## Problem\n\nUnrelated content.',
+  });
+  runIndex(workspace, copilotHome);
+
+  const result = runHarness([
+    'recall',
+    'checkout hang',
+    '--workspace',
+    workspace,
+    '--copilot-home',
+    copilotHome,
+    '--json',
+  ]);
+
+  assert.equal(result.status, 0, result.stderr);
+  const body = JSON.parse(result.stdout);
+  assert.ok(body.recall.length >= 1);
+  assert.equal(body.recall[0].docid, 'global-api-orders-timeout');
+  assert.equal(body.recall[0].ranker, 'bm25');
+  assert.ok(body.recall[0].snippet.length > 0);
+});
+
+test('synonym expansion improves recall for aliased query', () => {
+  const workspace = tempDir('harness-workspace-');
+  const copilotHome = tempDir('harness-copilot-');
+  writeKnowledgeSolution(copilotHome, {
+    symptom: 'requests hit deadline after 30 seconds',
+    title: 'Deadline issue',
+    tags: 'commerce, checkout',
+  });
+  runIndex(workspace, copilotHome);
+
+  const result = runHarness([
+    'recall',
+    'timeout',
+    '--workspace',
+    workspace,
+    '--copilot-home',
+    copilotHome,
+    '--json',
+  ]);
+
+  assert.equal(result.status, 0, result.stderr);
+  const body = JSON.parse(result.stdout);
+  assert.ok(body.recall.length >= 1);
+  assert.ok(body.recall[0].score > 0);
+});
+
+test('collection filter excludes non-matching scope', () => {
+  const workspace = tempDir('harness-workspace-');
+  const copilotHome = tempDir('harness-copilot-');
+  writeKnowledgeSolution(copilotHome, { slug: 'global-one', symptom: 'shared timeout symptom' });
+  writeProductSolution(workspace, { slug: 'prod-one', symptom: 'shared timeout symptom' });
+  runIndex(workspace, copilotHome);
+
+  const result = runHarness([
+    'recall',
+    'timeout symptom',
+    '-c',
+    'product',
+    '--workspace',
+    workspace,
+    '--copilot-home',
+    copilotHome,
+    '--json',
+  ]);
+
+  assert.equal(result.status, 0, result.stderr);
+  const body = JSON.parse(result.stdout);
+  assert.equal(body.recall.length, 1);
+  assert.match(body.recall[0].path, /docs\/solutions/);
+});
+
+test('min-score filters low-scoring recall hits', () => {
+  const workspace = tempDir('harness-workspace-');
+  const copilotHome = tempDir('harness-copilot-');
+  writeKnowledgeSolution(copilotHome, { symptom: 'very specific database deadlock symptom' });
+  runIndex(workspace, copilotHome);
+
+  const baseline = runHarness([
+    'recall',
+    'database',
+    '--workspace',
+    workspace,
+    '--copilot-home',
+    copilotHome,
+    '--json',
+  ]);
+  assert.equal(baseline.status, 0, baseline.stderr);
+  const baselineBody = JSON.parse(baseline.stdout);
+  assert.ok(baselineBody.recall.length > 0, 'baseline recall should return hits');
+  const hitScore = baselineBody.recall[0].score;
+
+  const result = runHarness([
+    'recall',
+    'database',
+    '--min-score',
+    String(Math.min(hitScore + 0.001, 1)),
+    '--workspace',
+    workspace,
+    '--copilot-home',
+    copilotHome,
+    '--json',
+  ]);
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(JSON.parse(result.stdout).recall.length, 0);
+});
+
+test('get returns bounded excerpt by docid', () => {
+  const workspace = tempDir('harness-workspace-');
+  const copilotHome = tempDir('harness-copilot-');
+  const docid = writeKnowledgeSolution(copilotHome);
+  runIndex(workspace, copilotHome);
+
+  const result = runHarness([
+    'get',
+    '--docid',
+    docid,
+    '--lines',
+    '10',
+    '--max-bytes',
+    '500',
+    '--workspace',
+    workspace,
+    '--copilot-home',
+    copilotHome,
+    '--json',
+  ]);
+
+  assert.equal(result.status, 0, result.stderr);
+  const body = JSON.parse(result.stdout);
+  assert.equal(body.docid, docid);
+  assert.ok(body.excerpt.includes('Problem'));
+  assert.ok(body.bytes <= 500);
+});
+
+test('recall falls back to overlap ranker when postings index missing', () => {
+  const workspace = tempDir('harness-workspace-');
+  const copilotHome = tempDir('harness-copilot-');
+  writeKnowledgeSolution(copilotHome, { symptom: 'timeout on checkout path' });
+  runIndex(workspace, copilotHome);
+  fs.rmSync(path.join(copilotHome, 'knowledge', '.harness-index'), { recursive: true, force: true });
+
+  const result = runHarness([
+    'recall',
+    'checkout timeout',
+    '--workspace',
+    workspace,
+    '--copilot-home',
+    copilotHome,
+    '--json',
+  ]);
+
+  assert.equal(result.status, 0, result.stderr);
+  const body = JSON.parse(result.stdout);
+  assert.ok(body.recall.length >= 1);
+  assert.equal(body.recall[0].ranker, 'overlap');
+});

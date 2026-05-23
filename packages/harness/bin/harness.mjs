@@ -14,6 +14,7 @@ import {
   cmdEvents,
   cmdValidatePlan,
   cmdCompound,
+  cmdGet,
   cmdUninstall,
 } from '../lib/commands.mjs';
 
@@ -31,6 +32,7 @@ Usage:
   npx @dev-kit/harness orient [options] [--query "task summary"]
   npx @dev-kit/harness gate [options] [--phase implement|verify]
   npx @dev-kit/harness recall "search terms" [options]
+  npx @dev-kit/harness get [options] [--docid id | --path rel/path]
   npx @dev-kit/harness validate-plan [options] [--plan docs/plans/file.md]
   npx @dev-kit/harness compound [options]
   npx @dev-kit/harness events [options]
@@ -52,7 +54,13 @@ Options:
   --phase <name>         gate: implement | verify
   --strict-intent        gate: fail locked plans missing intent fields
   --limit <n>            recall/orient result count (default 3)
+  -c, --collection <name>  recall/orient: filter by knowledge/collections.yaml
+  --min-score <n>        recall/orient minimum score (default 0.15)
   --include-plans        recall: include matching plans
+  --docid <id>           get: manifest doc id
+  --path <rel>           get: relative file path
+  --lines <n>            get: max lines (default 40)
+  --max-bytes <n>        get: max excerpt bytes (default 2048)
   --plan <path>          validate-plan: specific plan file
   --no-events            Do not write .harness/events.jsonl
 
@@ -94,6 +102,9 @@ async function main() {
         break;
       case 'recall':
         code = await cmdRecall(args);
+        break;
+      case 'get':
+        code = await cmdGet(args);
         break;
       case 'validate-plan':
         code = await cmdValidatePlan(args);

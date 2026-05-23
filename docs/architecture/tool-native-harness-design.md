@@ -162,8 +162,9 @@ Exit codes: `0` pass, `1` fail, `2` warn (amber — proceed with log).
 npx @dev-kit/harness recall "orders timeout" --limit 3 --json
 ```
 
-v1: token overlap on manifest fields.  
-v2 (optional): `--semantic` if local index exists (`harness index --semantic`).
+v1: token overlap on manifest fields (fallback).  
+v1.5 (0.4.0): pure-JS BM25 on `.harness-index/postings.json` — see [`lexical-retrieval-v2.md`](lexical-retrieval-v2.md).  
+v3 (deferred): `--semantic` if local embedding index exists.
 
 ### 4.4 `harness index`
 
@@ -295,5 +296,6 @@ Not weaker — **different substrate**. Robustness comes from **deterministic to
 ## 12. Related
 
 - [`composer-parity-review.md`](composer-parity-review.md)
-- [`semantic-retrieval-v2.md`](semantic-retrieval-v2.md) (updated: script-native)
+- [`lexical-retrieval-v2.md`](lexical-retrieval-v2.md) (v1.5 BM25, zero npm deps)
+- [`semantic-retrieval-v2.md`](semantic-retrieval-v2.md) (v3 embeddings — deferred)
 - [`npm-harness-distribution-plan.md`](npm-harness-distribution-plan.md)

@@ -11,12 +11,17 @@ export function runRecall({ workspace, copilotHome, flags, argv }) {
     copilotHome,
     workspace,
     limit: flags.limit || 3,
+    collection: flags.collection,
+    minScore: flags.minScore ?? 0.15,
   }).map((e) => ({
+    docid: e.docid || e.id,
     path: e.path,
     title: e.title || e.id,
     score: Number(e.score.toFixed(3)),
     summary: e.summary || '',
+    snippet: e.snippet || '',
     scope: e.scope,
+    ranker: e.ranker || 'overlap',
   }));
 
   const plans = flags.includePlans

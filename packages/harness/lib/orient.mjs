@@ -15,12 +15,17 @@ export function runOrient({ workspace, copilotHome, flags, query }) {
     copilotHome,
     workspace,
     limit: flags.limit || 3,
+    collection: flags.collection,
+    minScore: flags.minScore ?? 0.15,
   }).map((e) => ({
+    docid: e.docid || e.id,
     path: e.path,
     title: e.title,
     score: Number(e.score.toFixed(3)),
     summary: e.summary || '',
+    snippet: e.snippet || '',
     scope: e.scope,
+    ranker: e.ranker || 'overlap',
   }));
 
   const plans = findMatchingPlans(workspace, q, flags.limit || 3).map((p) => ({

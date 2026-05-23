@@ -207,6 +207,7 @@ export async function cmdIndex(argv) {
   runIndexKnowledge({
     knowledgeRoot: fs.existsSync(knowledgeRoot) ? knowledgeRoot : null,
     workspace,
+    copilotHome,
     flags,
     log: logger,
   });
@@ -373,6 +374,22 @@ export async function cmdCompound(argv) {
     }
   }
   return result.exitCode;
+}
+
+export async function cmdGet(argv) {
+  const { runGet } = await import('./get-cmd.mjs');
+  const flags = parseFlags(argv);
+  const workspace = path.resolve(flags.workspace);
+  const copilotHome = resolveCopilotHome(flags.copilotHome);
+  const result = runGet({ workspace, copilotHome, flags });
+
+  if (flags.json) {
+    console.log(JSON.stringify(result, null, 2));
+  } else {
+    console.log(`[harness] get: ${result.docid || result.path}`);
+    console.log(result.excerpt);
+  }
+  return 0;
 }
 
 export async function cmdUninstall(argv) {

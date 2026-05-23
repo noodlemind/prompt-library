@@ -6,6 +6,13 @@ const FLAGS_WITH_VALUES = new Set([
   '--query',
   '--target',
   '--workspace',
+  '-c',
+  '--collection',
+  '--min-score',
+  '--docid',
+  '--path',
+  '--lines',
+  '--max-bytes',
 ]);
 
 export function parseQueryFromArgv(argv, flags) {
@@ -19,6 +26,11 @@ export function parseQueryFromArgv(argv, flags) {
       break;
     }
     if (arg.startsWith('--')) {
+      const flagName = arg.includes('=') ? arg.slice(0, arg.indexOf('=')) : arg;
+      if (!arg.includes('=') && FLAGS_WITH_VALUES.has(flagName)) i++;
+      continue;
+    }
+    if (arg.startsWith('-') && arg !== '-') {
       const flagName = arg.includes('=') ? arg.slice(0, arg.indexOf('=')) : arg;
       if (!arg.includes('=') && FLAGS_WITH_VALUES.has(flagName)) i++;
       continue;
