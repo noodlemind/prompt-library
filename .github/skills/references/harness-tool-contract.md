@@ -50,7 +50,8 @@ npx @dev-kit/harness <command> [args] --workspace . --json
 | `recall "<query>"` | Standalone search / debug | F1 paths only | events |
 | `gate [--phase implement\|verify]` | Pre-edit lint / task guard | F3 on fail | events |
 | `validate-plan [--plan path]` | Spec/schema lint | read-only | none |
-| `index` | Rebuild search index | none in chat | manifest.yaml, events |
+| `index` | Rebuild search index | none in chat | manifest.yaml, `.harness-index/`, events |
+| `get [--docid id \| --path rel]` | Fetch bounded doc excerpt | F2 on demand | none |
 | `compound` | Post-verify index + close-out | after verify gate | index + session, events |
 | `events` | Audit / stuck debugging | read-only | none |
 
@@ -59,7 +60,7 @@ npx @dev-kit/harness <command> [args] --workspace . --json
 **orient**
 ```json
 {
-  "recall": [{ "path": "...", "title": "...", "score": 0.82, "summary": "..." }],
+  "recall": [{ "docid": "...", "path": "...", "title": "...", "score": 0.82, "summary": "...", "snippet": "...", "ranker": "bm25" }],
   "plans": [{ "path": "docs/plans/...", "status": "planned", "plan_lock": true, "score": 0.67 }],
   "activePlan": { "path": "...", "status": "...", "plan_lock": true },
   "contextPack": ".harness/context-pack.md",
@@ -83,7 +84,12 @@ npx @dev-kit/harness <command> [args] --workspace . --json
 
 **recall**
 ```json
-{ "query": "...", "recall": [{ "path": "...", "title": "...", "score": 0.5 }], "plans": [] }
+{ "query": "...", "recall": [{ "docid": "...", "path": "...", "title": "...", "score": 0.5, "snippet": "...", "ranker": "bm25|overlap" }], "plans": [] }
+```
+
+**get**
+```json
+{ "docid": "...", "path": "...", "title": "...", "excerpt": "...", "bytes": 512, "lines": 12 }
 ```
 
 **compound**
@@ -113,16 +119,16 @@ After orient: `read` ≤3 solution paths, ≤30 lines each per [`context-budget.
 | Skill | Harness command(s) |
 |-------|-------------------|
 | `@engineer` / autopilot | `orient` → read pack → `gate` → work → `gate --phase verify` → `compound` or `/auto-compound` |
-| `/recall` | `orient` or `recall` |
-| `/index-memory` | `index` |
+| `/recall` | `orient` or `recall` (`-c`, `--min-score`) |
+| `/index-memory` | `index` (manifest + BM25 postings) |
 | `/auto-compound` | `/compound-learnings` (write solution) then `compound` or `index` |
 | `/review-guardrails` | `validate-plan`, `gate` |
 
 ## CI examples
 
 ```yaml
-- run: npx @dev-kit/harness@0.3.1 gate --workspace . --json
-- run: npx @dev-kit/harness@0.3.1 validate-plan --workspace . --json
+- run: npx @dev-kit/harness@0.4.0 gate --workspace . --json
+- run: npx @dev-kit/harness@0.4.0 validate-plan --workspace . --json
 ```
 
 ## Related

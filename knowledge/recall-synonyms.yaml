@@ -1,0 +1,17 @@
+# Query synonym expansion for harness recall (token → aliases)
+synonyms:
+  timeout:
+    - deadline
+    - hang
+    - slow
+  error:
+    - failure
+    - exception
+    - crash
+  deploy:
+    - release
+    - rollout
+  auth:
+    - login
+    - authentication
+    - oauth

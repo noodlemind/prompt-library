@@ -19,6 +19,12 @@ export function parseFlags(argv) {
     strictIntent: false,
     noEvents: false,
     plan: null,
+    collection: null,
+    minScore: 0.15,
+    docid: null,
+    path: null,
+    lines: 40,
+    maxBytes: 2048,
   };
 
   for (let i = 0; i < argv.length; i++) {
@@ -53,6 +59,18 @@ export function parseFlags(argv) {
     else if (a === '--plan') flags.plan = argv[++i];
     else if (a.startsWith('--workspace=')) flags.workspace = a.split('=')[1];
     else if (a === '--workspace') flags.workspace = argv[++i];
+    else if (a === '-c' || a === '--collection') flags.collection = argv[++i];
+    else if (a.startsWith('--collection=')) flags.collection = a.split('=')[1];
+    else if (a.startsWith('--min-score=')) flags.minScore = parseFloat(a.split('=')[1]);
+    else if (a === '--min-score') flags.minScore = parseFloat(argv[++i]);
+    else if (a.startsWith('--docid=')) flags.docid = a.split('=').slice(1).join('=');
+    else if (a === '--docid') flags.docid = argv[++i];
+    else if (a.startsWith('--path=')) flags.path = a.split('=').slice(1).join('=');
+    else if (a === '--path') flags.path = argv[++i];
+    else if (a.startsWith('--lines=')) flags.lines = parseInt(a.split('=')[1], 10);
+    else if (a === '--lines') flags.lines = parseInt(argv[++i], 10);
+    else if (a.startsWith('--max-bytes=')) flags.maxBytes = parseInt(a.split('=')[1], 10);
+    else if (a === '--max-bytes') flags.maxBytes = parseInt(argv[++i], 10);
   }
 
   return flags;

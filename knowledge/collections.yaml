@@ -1,0 +1,8 @@
+# Collection filters for harness recall / orient (-c <name>)
+collections:
+  solutions:
+    kinds: [solution]
+  product:
+    scope: product
+  global:
+    scope: global

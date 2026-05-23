@@ -1,6 +1,21 @@
 import fs from 'fs';
 import path from 'path';
-import { resolveCopilotHome, resolveIntelliJHome } from './paths.mjs';
+import { createRequire } from 'module';
+import { resolveIndexDir } from './recall-config.mjs';
+import { isIndexStale } from './postings-index.mjs';
+
+const require = createRequire(import.meta.url);
+
+function loadManifestEntries(manifestPath) {
+  if (!fs.existsSync(manifestPath)) return { entries: [], updated: null };
+  try {
+    const yaml = require('yaml');
+    const doc = yaml.parse(fs.readFileSync(manifestPath, 'utf8'));
+    return { entries: doc.entries || [], updated: doc.updated || null };
+  } catch {
+    return { entries: [], updated: null };
+  }
+}
 
 export function runDoctor({ copilotHome, assetsRoot, pkgRoot, flags }) {
   const checks = [];
@@ -86,6 +101,36 @@ export function runDoctor({ copilotHome, assetsRoot, pkgRoot, flags }) {
     pass: fs.existsSync(lockPath),
     hint: 'Run install or upgrade',
     optional: true,
+  });
+
+  const manifestPath = fs.existsSync(manifest)
+    ? manifest
+    : fs.existsSync(path.join(flags.workspace, 'knowledge', 'manifest.yaml'))
+      ? path.join(flags.workspace, 'knowledge', 'manifest.yaml')
+      : manifestRepo;
+  const { entries: manifestEntries, updated: manifestUpdated } = loadManifestEntries(manifestPath);
+  const hasEnrichedFields =
+    manifestEntries.length === 0 ||
+    manifestEntries.some((e) => (e.symptom && e.symptom.trim()) || (e.module && e.module.trim()));
+  checks.push({
+    id: 'H10',
+    name: 'Manifest enriched fields (symptom/module)',
+    pass: hasEnrichedFields,
+    hint: 'Run: npx @dev-kit/harness index — rebuild manifest with symptom/module/excerpt',
+    optional: manifestEntries.length === 0,
+  });
+
+  const indexDir = resolveIndexDir(copilotHome, flags.workspace);
+  const indexFresh =
+    manifestEntries.length === 0 || !fs.existsSync(path.join(indexDir, 'meta.json'))
+      ? false
+      : !isIndexStale(indexDir, manifestUpdated);
+  checks.push({
+    id: 'H11',
+    name: 'BM25 postings index fresh',
+    pass: indexFresh,
+    hint: 'Run: npx @dev-kit/harness index — rebuild .harness-index/postings.json',
+    optional: manifestEntries.length === 0,
   });
 
   const required = checks.filter((c) => !c.optional);

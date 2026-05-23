@@ -33,6 +33,7 @@ export function runCompound({ workspace, copilotHome, flags, log = () => {} }) {
   const indexed = runIndexKnowledge({
     knowledgeRoot,
     workspace,
+    copilotHome,
     flags,
     log,
   });

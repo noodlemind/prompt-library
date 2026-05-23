@@ -6,6 +6,13 @@ const FLAGS_WITH_VALUES = new Set([
   '--query',
   '--target',
   '--workspace',
+  '-c',
+  '--collection',
+  '--min-score',
+  '--docid',
+  '--path',
+  '--lines',
+  '--max-bytes',
 ]);
 
 export function parseQueryFromArgv(argv, flags) {
