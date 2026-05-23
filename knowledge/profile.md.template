@@ -1,0 +1,24 @@
+# User Profile (Global)
+
+Copy to `profile.md` on first hydrate if missing. Keep under ~1,500 characters — preferences only, not issue-specific facts.
+
+## Communication
+
+- Response style: (concise | detailed)
+- Approval style: (checkpoint each phase | batch at plan lock)
+
+## Autonomy (Composer-style)
+
+- **autonomy:** full | balanced | strict
+  - **full** — auto capture, plan, compound, index; ask only on red risk + new agents
+  - **balanced** — same; more Activity notifications (default for teams)
+  - **strict** — legacy explicit approvals at capture/plan/implement
+
+## Engineering preferences
+
+- Default languages/stacks:
+- Always run full test suite before claiming done: (yes | no)
+
+## Skill usage notes
+
+_Optional: patterns discovered across repos, e.g. "prefer /sql skill for migration work"._

@@ -31,7 +31,7 @@ Read the feature description or issue provided by the user. Identify:
 
 Before delegating research:
 - Read available repository context for accumulated codebase patterns: `README.md`, `docs/agent-context.md`, `docs/codebase-snapshot.md`, and `docs/solutions/`. When planning for this prompt-library repo, also read `.github/agent-context.md`.
-- Check `docs/solutions/` for previously documented solutions to similar problems
+- Check team knowledge via `knowledge/manifest.yaml` or `/recall`; see `knowledge-locations.md`
 - Note relevant findings to avoid redundant research
 
 ### 3. Delegate Research
@@ -75,12 +75,18 @@ status: planned
 plan_lock: true
 date: YYYY-MM-DD
 phase: 1
+intent: "<one sentence goal>"
+expected_outputs: ["<artifact or behavior>"]
+success_criteria: ["<testable outcome>"]
+verification_commands: ["<command or manual check>"]
+org_objectives: []
 ---
 ```
 
 **Required sections:**
 - `## Overview` — problem statement / feature description
 - `## Context` — task-scoped facts, constraints, user intent, relevant code paths, and assumptions
+- `## Intent Contract` — goal, expected outputs, success criteria, verification commands, and known org objective
 - Implementation phases with tasks
 - `## Acceptance Criteria`
 - `## Impacted Files` — allowlist of files expected to change
@@ -111,6 +117,11 @@ status: planned
 plan_lock: true
 date: YYYY-MM-DD
 phase: 1
+intent: "<one sentence goal>"
+expected_outputs: ["<artifact or behavior>"]
+success_criteria: ["<testable outcome>"]
+verification_commands: ["<command or manual check>"]
+org_objectives: []
 ---
 
 # <Title>
@@ -120,6 +131,9 @@ phase: 1
 
 ## Context
 [Facts, constraints, user intent, related artifacts, assumptions]
+
+## Intent Contract
+[Goal, expected outputs, success criteria, verification commands, org objective if known]
 
 ## Implementation Phases
 

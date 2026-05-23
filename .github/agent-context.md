@@ -6,14 +6,18 @@ This file contains accumulated knowledge about the codebase, discovered by agent
 
 This repository is a skill-driven prompt library containing AI agent systems:
 - `.github/agents/` — 24 agents (19 specialists + 1 engineer + 1 implementer + 3 coordinators, judgment-criteria style)
-- `.github/skills/` — 23 skills forming the connected pipeline, primitive creation, domain workflows, README maintenance, quick Q&A, and utilities
+- `.github/skills/` — 31 skills including Composer-style autopilot (`ensure-plan`, `ensure-capability`, `auto-compound`, `engineer-autopilot`)
+- `enterprise/` — optional corp overlay (skills, agents, capability-gaps) hydrated to `~/.copilot/enterprise/`
+- `npx @dev-kit/harness index` — deterministic manifest rebuild (replaces manual index steps)
+- `docs/onboarding/harness-quickstart.md` — enterprise onboarding
+- `knowledge/` — team-wide solutions and manifest (hydrated to `~/.copilot/knowledge/`), primitive creation, domain workflows, README maintenance, quick Q&A, and utilities
 - `.github/instructions/` — scoped instructions (TypeScript, Python, Java, Spring Boot, PostgreSQL, AWS SDK)
 - `.github/prompts/` — thin host-facing wrappers that route to skills and declare host tools
 - `.github/skills/code-review/references/checks/` — bundled review checks discovered by `/code-review`
 - `.github/checks/` — optional product-specific review check examples
 - `docs/plans/` — issue and plan files with state machine tracking
 - `docs/architecture/` — skill-driven standard and architecture notes
-- `docs/solutions/` — documented learnings from solved problems
+- `knowledge/solutions/` — team-wide compounded learnings (hydrated to `~/.copilot/knowledge/`); product repos may use optional `docs/solutions/` for repo-private learnings only
 - `docs/brainstorms/` — brainstorm documents from `/brainstorming` skill
 
 ## Conventions
@@ -28,7 +32,8 @@ This repository is a skill-driven prompt library containing AI agent systems:
 - All review agents include prompt injection guardrails (Guardrails section before Mission)
 - Skills follow progressive disclosure (frontmatter → body → references)
 - The connected pipeline: `/brainstorming` (optional) → `/capture-issue` → `/plan-issue` → `/deepen-plan` (optional) → `/work-on-task` → `/code-review` → `/compound-learnings`. `/btw` is quick Q&A outside the pipeline. `/project-readme` is documentation maintenance outside implementation planning. `/create-primitive` is the canonical primitive creator for skills, agents, instructions, checks, wrappers, references, and solution docs. `/java`, `/python`, `/sql`, and `/aws` are reusable domain workflow skills that pair with scoped instructions and specialist reviewers.
-- State machine: `status` (open/planned/in-progress/review/done), `plan_lock`, `phase`
+- State machine: `status` (open/planned/in-progress/review/done/blocked-capability), `plan_lock`, `phase`, `domains`, `capability_gaps`
+- `@engineer` runs autonomous loop per `engineer-autopilot` — do not ask users to run capture/plan/recall/compound manually
 - Activity logs in plan files provide session continuity
 - Plan files are the local context pack. Standard sections include `## Context`, `## Acceptance Criteria`, `## Research Notes`, `## Impacted Files`, `## Verification Plan`, `## Risk & Review Routing`, `## Implementation Notes`, `## Review Findings`, and `## Activity`.
 
@@ -67,10 +72,16 @@ Pipeline skills (capture-issue, plan-issue, work-on-task, code-review, compound-
 Five orchestrating skills (code-review, plan-issue, deepen-plan, work-on-task, engineer) have error handling specific to their failure modes. Common patterns (subagent failure, tool unavailability, file not found, timeout) are in `.github/skills/references/error-handling-patterns.md`. Each skill references shared patterns plus adds domain-specific errors.
 
 ### Solution Document Format
-`/compound-learnings` uses a template at `assets/solution-template.md` with YAML frontmatter (title, date, category, tags, module, symptom, root_cause, severity) and body sections (Problem, Root Cause, Solution, Prevention). Tags should be specific, for example "n-plus-one", "java-21", "postgres-index", or "aws-sqs-dlq", not just "performance". 3-7 tags per document.
+`/compound-learnings` publishes to **`knowledge/solutions/<category>/<slug>.md`** (global, cross-repo after hydrate). Template: `assets/solution-template.md`. Then **required** `/index-memory`. Repo-private copies optional under product `docs/solutions/`. Tags: specific ("n-plus-one", "java-21"), 3-7 per doc.
+
+### Knowledge Lookup SSOT
+`.github/skills/references/knowledge-locations.md` — single list of read/write paths; do not duplicate in other primitives.
 
 ### Engineer Agent
-The `engineer` agent understands requirements, routes to the right skill/flow, investigates, plans, and orchestrates. It delegates implementation to `code-implementer` for bounded execution tasks, and delegates to specialist reviewers/researchers when separate judgment, authority, or isolation is useful. It follows a workflow of Understand → Route → Investigate → Plan → Implement → Verify with user consultation checkpoints between phases. It integrates with the pipeline by reading/writing plan files and maintaining state machine fields. The `/engineer` skill is its entry point.
+Slim orchestrator with **inlined session checklist** (~4 KB agent body). Loop: Recall → Gate → Investigate → Plan → Implement → Verify. Context caps: `context-budget.md`. Composer parity: `docs/architecture/composer-parity-review.md`. Entry: `@engineer` or `/engineer`.
+
+### Engineer Memory System
+`docs/architecture/engineer-memory-system.md` defines three tiers: product `docs/plans/` (local), global `knowledge/solutions/` (hydrated team-wide), optional `profile.md` (user preferences). `/recall` runs before investigate; `/compound-learnings` publishes globally; `/index-memory` rebuilds `manifest.yaml`. Capture gate: `.github/skills/references/capture-gate.md`.
 
 ### Adaptive Engineer Harness
 `@engineer` is the central coordinator for adaptive capability expansion. It routes to known skills first, uses `.github/skills/references/subagent-context-packet.md` for delegated work, and uses `.github/skills/references/human-approval-policy.md` before risky strategy choices. Missing reusable capability must be documented with `.github/skills/references/capability-gap-proposal.md` and then routed to `/create-primitive` after human approval. Architecture details live in `docs/architecture/adaptive-engineer-harness.md`.

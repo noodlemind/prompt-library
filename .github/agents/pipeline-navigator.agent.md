@@ -20,8 +20,8 @@ in the workflow and guide them to the appropriate next step.
 ## Pipeline
 
 ```
-/capture-issue → /plan-issue → /work-on-task → /code-review → /compound-learnings
-     open      →   planned   →  in-progress  →    review    →      done
+/recall (recommended) → /capture-issue → /plan-issue → /work-on-task → /code-review → /compound-learnings → /index-memory
+                         open          →   planned   →  in-progress  →    review    →      done
 ```
 
 ## Workflow
@@ -43,8 +43,9 @@ Based on the current status:
 
 | Status | Suggest |
 |--------|---------|
-| No plan exists + raw work prompt | `/start` to classify and route to the right entry point |
-| No plan exists + clear issue | `/capture-issue` to create one |
+| No plan exists + raw work prompt | `/recall` then `/start` or `/capture-issue` |
+| No plan exists + clear issue | `/recall` then `/capture-issue` to create one |
+| Trackable work before code | Never skip `/capture-issue` — see `capture-gate.md` |
 | `open` | `/plan-issue` or `@plan-coordinator` to generate a plan |
 | `planned` | `/work-on-task` to start implementation |
 | `in-progress` | Continue `/work-on-task` or `/code-review` when ready |

@@ -29,6 +29,13 @@ Activate when the user wants to:
 
 ### 1. Read the Plan
 
+Verify capture compliance:
+
+- Plan path is under `docs/plans/`
+- Frontmatter shows legal pipeline state (`open` with unlock for planning, or `planned`/`in-progress` with `plan_lock: true` for implementation audit)
+- `## Memory Cards` present or noted as missing
+- Flag if plan appears created without `/capture-issue` (e.g. missing Overview/Acceptance Criteria)
+
 Read the issue/plan file and extract:
 - `## Impacted Files` — the allowed file list
 - `## Acceptance Criteria` — what must be true

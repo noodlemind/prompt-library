@@ -33,6 +33,8 @@ Intelligent intake router — classifies your work prompt and guides you to the 
 
 ### Step 1: Check Existing State
 
+Optionally run **`/recall`** for a quick global + local match before classifying.
+
 Before classifying, scan for existing work that matches the user's prompt:
 
 1. Extract 2-3 keywords from the prompt
@@ -106,7 +108,7 @@ Map classification to the appropriate skill. Prefer skills and pipeline flows ov
 | AWS domain + focused | `/aws` | Apply AWS conventions and cloud review routing |
 | Exploration | `/brainstorming` | Exploring ideas |
 | Refactor + Clear | `/capture-issue` | Track scope before changing |
-| Refactor + Trivial | `/analyze-and-plan` | Quick plan sufficient |
+| Refactor + Trivial | `/capture-issue` then `/analyze-and-plan` or `/tdd-fix` | Still capture trackable work |
 
 **Confidence-based invocation:**
 

@@ -1,5 +1,6 @@
 ---
 name: work-on-task
+user-invocable: false
 description: Execute the current phase of a planned issue using TDD with scope control and session logging. Use when implementing planned changes or resuming a session. Not without a plan — run /plan-issue first.
 argument-hint: "[path to plan file]"
 ---
@@ -49,7 +50,7 @@ When invoked, follow this exact sequence:
    - `in-progress` → Resume at current phase (check `## Activity` for progress).
    - `review` or `done` → "This issue is past the work phase."
 3. **Check `plan_lock`**: If `false` → "Plan is not locked. Run `/plan-issue` first."
-4. **Read the local context pack**: `## Context`, `## Acceptance Criteria`, `## Research Notes`, `## Impacted Files`, `## Verification Plan`, and `## Risk & Review Routing`. These sections are the memory bridge from `/capture-issue` and `/plan-issue`.
+4. **Read the local context pack**: `## Memory Cards` first, then `## Context`, `## Acceptance Criteria`, `## Research Notes`, `## Impacted Files`, `## Verification Plan`, and `## Risk & Review Routing`. Run `/recall` if cards are empty. Global team context lives in hydrated `~/.copilot/knowledge/`.
 5. **Read `phase`**: Determine current phase number.
 6. **Read `## Activity`**: Understand what was already done in this phase.
 7. **Read plan checkboxes**: Find unchecked `- [ ]` items for the current phase.

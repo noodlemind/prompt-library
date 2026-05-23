@@ -1,0 +1,12 @@
+{
+  "comment": "Paths removed from harness; deleted on upgrade only if present in .harness-lock.json",
+  "retired": [
+    "agents/compounding-python-reviewer.agent.md",
+    "agents/compounding-rails-reviewer.agent.md",
+    "agents/dhh-rails-reviewer.agent.md",
+    "agents/every-style-editor.agent.md",
+    "instructions/rails.instructions.md",
+    "prompts/create-agent-skills.prompt.md",
+    "skills/create-agent-skills"
+  ]
+}

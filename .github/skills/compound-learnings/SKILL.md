@@ -48,7 +48,7 @@ If no issue file is provided, ask the user:
 
 ### 2. Categorize
 
-Choose the most appropriate category for `docs/solutions/`:
+Choose the most appropriate category (same folders under global and optional product paths):
 - `performance-issues/` — slow queries, memory leaks, scaling problems
 - `security-issues/` — vulnerabilities, auth bugs, data exposure
 - `build-errors/` — dependency issues, compilation failures, CI problems
@@ -56,15 +56,43 @@ Choose the most appropriate category for `docs/solutions/`:
 
 If none fit, create a new category directory.
 
-### 3. Create Solution File
+### 3. Create Global Solution File (team-wide)
 
-**Path**: `docs/solutions/<category>/<descriptive-slug>.md`
+**Canonical path** (prompt-library repo, hydrated globally):
 
-Use the template from `assets/solution-template.md`. Follow the tagging guidelines in that file.
+`knowledge/solutions/<category>/<descriptive-slug>.md`
 
-### 4. Graduate to Agent Context (Curation Step)
+Use `assets/solution-template.md`. Add optional frontmatter fields:
 
-Evaluate whether this learning should be **graduated** to repository-owned context memory. For product repos, use `docs/agent-context.md`. When working in this prompt-library repo, use `.github/agent-context.md`.
+```yaml
+source_repo: "<product repo name or omit>"
+source_plan: "docs/plans/<file>.md in source repo"
+scope: global
+```
+
+**Privacy:** No secrets, customer PII, or proprietary code blocks — patterns and symptoms only. See `knowledge/README.md`.
+
+### 3b. Optional Product-Local Copy
+
+When the learning is **repo-specific** (internal URLs, naming, deployment quirks):
+
+`docs/solutions/<category>/<descriptive-slug>.md`
+
+Skip this step when the fix applies across all product repositories.
+
+### 4. Update Knowledge Index (required)
+
+**Must** run `npx @dev-kit/harness index` or **`/index-memory`**. Compounding is incomplete without index update.
+
+**`@engineer`** chains this via internal **`/auto-compound`** after verify — manual index optional for power users.
+
+Remind the user to run **`npx @dev-kit/harness upgrade`** (or `harness index`) so `~/.copilot/knowledge/` updates on other machines after publish.
+
+### 5. Graduate to Agent Context (Curation Step)
+
+Evaluate whether this learning should be **graduated** to **repository-owned** context (repo conventions only). For product repos, use `docs/agent-context.md`. When working in this prompt-library repo, use `.github/agent-context.md`.
+
+**Do not** duplicate full global solutions in agent-context — link with one line: `See knowledge/solutions/<path>`.
 
 **Graduate when** the learning reveals:
 - A project-level convention ("In this project, we always X because Y")
@@ -86,20 +114,25 @@ Evaluate whether this learning should be **graduated** to repository-owned conte
 
 **Curation check**: If the context file exceeds ~200 lines, review for stale entries — patterns that are no longer accurate, decisions that have been superseded, or gotchas that have been fixed. Remove or archive stale entries to keep the file compact and high-signal.
 
-### 5. Update Plan File
+### 6. Update Plan Memory Cards and Status
 
-If working from a plan file, set `status: done` and append a final activity entry:
+If working from a plan file:
+
+1. Append final bullets to `## Memory Cards` (see `.github/skills/references/memory-cards.md`).
+2. Set `status: done` and append:
 
 ```markdown
 ### YYYY-MM-DD HH:MM — Issue completed
-- Learning documented: `docs/solutions/<category>/<file>.md`
+- Global learning: `knowledge/solutions/<category>/<file>.md`
+- Product copy: [path or None]
+- Manifest updated: [Yes/No]
 - Agent context updated: [Yes/No]
 - **Status:** Done
 ```
 
-### 6. Print Summary
+### 7. Print Summary
 
-Confirm: "Learning documented at `docs/solutions/<path>`. Future agents will reference this when encountering similar problems."
+Confirm: "Learning documented at `knowledge/solutions/<path>` (team-wide after hydrate). Run `/recall` on similar issues in any product repo."
 
 ## Trigger Examples
 

@@ -1,7 +1,8 @@
 ---
 name: plan-issue
-description: Generate a phased implementation plan with research and acceptance criteria. Use after /capture-issue to plan before coding. Not for quick fixes — use /tdd-fix or /analyze-and-plan.
+description: Generate a phased implementation plan with research and acceptance criteria. Power-user step; @engineer uses /ensure-plan. Not for quick fixes — use /tdd-fix or /analyze-and-plan.
 argument-hint: "[path to issue file]"
+user-invocable: false
 ---
 
 # Plan Issue
@@ -61,7 +62,7 @@ Delegated research must use the shared subagent context packet contract; see `.g
 
 Run these research tasks:
 - **Codebase analysis**: Search for related files, existing patterns, and conventions relevant to this issue. Read available repository context (`README.md`, `docs/agent-context.md`, `docs/codebase-snapshot.md`, `docs/solutions/`, and `.github/agent-context.md` only when working in this prompt-library repo) for accumulated knowledge.
-- **Solution history**: Check `docs/solutions/` for previously solved problems with similar tags or symptoms.
+- **Solution history**: Run `/recall` or read `knowledge/manifest.yaml` (hydrated) and optional product `docs/solutions/` per `knowledge-locations.md`.
 - **Best practices**: Research industry best practices for the specific technology and pattern involved.
 - **Risk routing**: Identify security, performance, architecture, data integrity, or language-specific review needs.
 
@@ -88,6 +89,8 @@ Create missing sections or update existing sections in place. Do not create dupl
 - `test/services/auth_handler_test.rb` — new file
 - `config/routes.rb` — modified
 ```
+
+**`## Memory Cards`** — 3–7 bullets from `/recall` or initial research, each with `source:` path (see `.github/skills/references/memory-cards.md`).
 
 **`## Research Notes`** — key findings from research:
 - Relevant codebase patterns found

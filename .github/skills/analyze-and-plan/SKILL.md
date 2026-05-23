@@ -1,6 +1,6 @@
 ---
 name: analyze-and-plan
-description: Quick planning without external research. Analyze an issue and generate a structured implementation plan with phases and task breakdowns. Not for deep research — use /plan-issue.
+description: Add phased tasks to an existing captured plan without external research. Requires /capture-issue first. Not for new issues from scratch — use /capture-issue then /plan-issue.
 argument-hint: "[issue description or file path]"
 ---
 
@@ -9,11 +9,10 @@ argument-hint: "[issue description or file path]"
 ## When to Use
 
 Activate when the user wants to:
-- Generate a quick implementation plan for a straightforward task
-- Break a requirement into phased tasks with file paths
-- Add a `## Plan` section to an existing issue file
+- Add or refine `## Plan`, `## Impacted Files`, and verification sections on an **existing** captured plan
+- Quick task breakdown **after** `/capture-issue` already created `docs/plans/*.md`
 
-This is a lighter-weight alternative to `/plan-issue` — it skips external research and focuses on codebase analysis and task breakdown.
+This is a lighter-weight alternative to `/plan-issue` — no research subagents. It **does not** replace `/capture-issue` or create plans from scratch.
 
 ## Trigger Examples
 
@@ -29,9 +28,16 @@ This is a lighter-weight alternative to `/plan-issue` — it skips external rese
 
 ## Steps
 
+### 0. Capture gate
+
+**Require** a plan file created by `/capture-issue`:
+
+- Path must be `docs/plans/*.md` with `status: open` (or user provides that path).
+- If no plan exists → **stop** and invoke `/capture-issue` first. Do not create a new plan file in this skill.
+
 ### 1. Understand the Requirement
 
-Read the issue file or user description. Identify:
+Read the captured plan file. Identify:
 - What needs to be built or changed
 - Which existing code is involved
 - What the acceptance criteria are
@@ -39,8 +45,7 @@ Read the issue file or user description. Identify:
 ### 2. Analyze the Codebase
 
 - Search for related files and patterns
-- Read available repository context for accumulated knowledge: `README.md`, `docs/agent-context.md`, `docs/codebase-snapshot.md`, and `docs/solutions/`. When planning in this prompt-library repo, also read `.github/agent-context.md`.
-- Check `docs/solutions/` for relevant past solutions
+- Load context per `.github/skills/references/knowledge-locations.md` (include `/recall` when useful).
 - Identify the minimal set of files that need to change
 
 ### 3. Generate Plan
@@ -75,12 +80,16 @@ Create a phased plan where each phase is completable in one session. Even quick 
 
 ### 4. Lock the Plan
 
-If working on an issue file, update frontmatter:
+Only when the plan already has Overview, Context, and Acceptance Criteria from capture.
+
+Update frontmatter:
 ```yaml
 status: planned
 plan_lock: true
 phase: 1
 ```
+
+If research, risk routing, or specialist delegation is needed → use `/plan-issue` instead.
 
 ### 5. Print Summary
 
@@ -88,7 +97,9 @@ Confirm plan structure and suggest: "Run `/work-on-task` to start Phase 1."
 
 ## Guardrails
 
+- Do **not** create `docs/plans/*.md` from scratch — `/capture-issue` only.
 - Do **not** implement any code. Planning only.
+- `@engineer` must not use this skill to skip `/capture-issue` on trackable work.
 - Keep plans realistic — 3-8 tasks per phase.
 - Every task must reference a specific file path.
 - Each phase should have clear success criteria.

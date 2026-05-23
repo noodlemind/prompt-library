@@ -1,7 +1,8 @@
 ---
 name: capture-issue
-description: Create the initial docs/plans plan file from a bug, feature, or task. Use when logging trackable work. Not for implementation planning -- use /plan-issue after capture.
+description: Create the initial docs/plans plan file from a bug, feature, or task. Power-user pipeline step; @engineer uses internal /ensure-plan. Not for implementation planning -- use /plan-issue after capture.
 argument-hint: "[issue description or URL]"
+user-invocable: false
 ---
 
 # Capture Issue
@@ -68,6 +69,11 @@ status: open
 plan_lock: false
 phase: 0
 priority: P0|P1|P2|P3
+intent: ""
+expected_outputs: []
+success_criteria: []
+verification_commands: []
+org_objectives: []
 created: YYYY-MM-DD
 updated: YYYY-MM-DD
 ---
@@ -76,6 +82,8 @@ updated: YYYY-MM-DD
 **Body sections** (minimum for Definition of Ready):
 - `## Overview` — what and why, 2-3 sentences
 - `## Context` — relevant technical context, related code paths, prior art
+- `## Intent Contract` — optional at capture; `/plan-issue` must fill it before locking
+- `## Memory Cards` — optional; run `/recall` first and copy matching global/local bullets
 - `## Acceptance Criteria` — measurable checklist of requirements
 - `## Technical Notes` — implementation hints, constraints, dependencies
 - `## Activity` — append-only lifecycle log, initialized with capture timestamp
@@ -100,3 +108,5 @@ Suggest next step: "Run `/plan-issue docs/plans/<filename>.md` to generate an im
 - Do **not** start implementation. This skill creates the initial plan file shell, but `/plan-issue` owns implementation planning and locking.
 - Do **not** set `plan_lock: true` — that's the plan-issue skill's job.
 - Keep the issue file under 100 lines. Brevity forces clarity.
+- **`@engineer`** uses internal **`/ensure-plan`** (same steps as this skill). See `capture-gate.md`.
+- Use `docs/plans/_plan-template.md` for section layout when needed.

@@ -1,6 +1,6 @@
 ---
 name: engineer
-description: "Full-cycle software engineering — understand, debug, implement, and verify. Use for hands-on engineering with autonomous investigation. Not when following an existing plan — use /work-on-task."
+description: "Full-cycle software engineering — autonomous loop with plan, memory, and capability routing. Use @engineer in chat. Not for locked-plan-only execution — /work-on-task."
 argument-hint: "[describe what you need built, fixed, or investigated]"
 ---
 
@@ -8,123 +8,42 @@ argument-hint: "[describe what you need built, fixed, or investigated]"
 
 ## When to Use
 
-Activate when you need a software engineer to:
-- **Fix a bug** — investigate, find root cause, implement the fix, verify
-- **Build a feature** — understand requirements, plan, implement, test
-- **Enhance existing code** — research patterns, plan changes, implement
-- **Investigate an issue** — trace through code, identify causes, propose solutions
-- **Continue work** on an existing plan file from `docs/plans/`
+- Fix bugs, build features, investigate issues end-to-end
+- Continue work on a plan in `docs/plans/`
 
-## Trigger Examples
+## User experience (Composer-style)
 
-**Should trigger:**
-- "I need you to build this feature end-to-end"
-- "Debug and fix this issue"
-- "Investigate why this is broken"
+Type **`@engineer`** with your goal. The agent runs the full loop internally:
 
-**Should not trigger:**
-- "Follow this existing plan" → use /work-on-task
-- "Just review the code" → use /code-review
-- "Create a plan first" → use /plan-issue
+**Recall → capability preflight → ensure plan → implement → verify → auto-compound**
 
-## How It Works
+Do **not** ask users to run `/capture-issue`, `/plan-issue`, `/recall`, or `/compound-learnings` unless debugging.
 
-The engineer follows a skill-driven cycle: **Understand → Route → Investigate → Plan → Implement → Verify**. It selects the right skill or pipeline flow first, then delegates to specialist agents only when separate judgment, authority, or isolation materially improves the result.
+Optional: **`/harness-doctor`** for setup health.
 
-At each phase transition, it consults you for guidance. You steer direction and priorities; the engineer handles execution. When specialist expertise is needed (security, performance, architecture, etc.), it delegates to the appropriate specialist agent.
+## Routing (internal)
 
-As the Adaptive Engineer Harness coordinator, the engineer uses existing capabilities first. When a reusable capability is missing, it prepares `.github/skills/references/capability-gap-proposal.md`, asks for approval, and then routes through `/create-primitive`. Delegated work must use `.github/skills/references/subagent-context-packet.md`; risky decisions must follow `.github/skills/references/human-approval-policy.md`.
+| Signal | Route |
+|--------|-------|
+| Trackable work | Autopilot (`engineer-autopilot` skill) |
+| Locked plan path | `/work-on-task` |
+| Isolated bug | `/tdd-fix` |
+| Review only | `/code-review` |
+| Missing capability | `/ensure-capability` → `/create-primitive` |
+| Ambiguous intake | `/start` |
 
-## Pipeline Integration
+Domain skills (`/java`, `/aws`, enterprise `/terraform`) apply automatically per `domain-routing.md`.
 
-This skill works natively with the connected pipeline:
+## Pipeline
 
-- If a plan file exists in `docs/plans/`, the engineer picks up where the last session left off
-- For new multi-step work, it creates a plan file with proper frontmatter and phased tasks
-- It updates `status`, `plan_lock`, `phase`, `## Activity`, and `## Implementation Notes` as work progresses
-- When all phases are complete, it transitions to `status: review` for `/code-review`
+Works with `docs/plans/` state machine. Updates `status`, `phase`, Activity, Implementation Notes. Transitions to `review` then **`/auto-compound`** on success.
 
 ## Invocation
 
-Route to the `@engineer` agent. Provide:
-- A description of the work needed, OR
-- A path to an existing plan file in `docs/plans/`
+Route to **`@engineer`** agent. Provide a task description or plan path.
 
-The engineer will read the codebase, consult available repository context (`README.md`, `docs/agent-context.md`, `docs/codebase-snapshot.md`, `docs/solutions/`, and `.github/agent-context.md` only when working in this prompt-library repo), then begin the understand → route → investigate → implement → verify cycle.
+References: `capture-gate.md`, `knowledge-locations.md`, `docs/onboarding/harness-quickstart.md`.
 
-## Routing Contract
+## Capability growth
 
-Before coding, the engineer should produce a short route decision:
-
-| Signal | Preferred route |
-|---|---|
-| Raw ambiguous request | `/start` or inline classification |
-| Requirements need exploration | `/brainstorming` then `/capture-issue` |
-| Trackable multi-step work | `/capture-issue` -> `/plan-issue` -> `/work-on-task` |
-| Existing locked plan | `/work-on-task` or direct plan pickup |
-| Isolated reproducible bug | `/tdd-fix` |
-| Review-only request | `/code-review`, `/document-review`, or specialist agent |
-| Primitive creation/change | `/create-primitive` |
-| Missing reusable capability | Capability-gap proposal, human approval, then `/create-primitive` |
-| Data-integrity or concurrency bug | `/tdd-fix` if isolated and reproducible; otherwise `/capture-issue` -> `/plan-issue` with Java/SQL/performance risk routing |
-
-Use `@engineer` as primary when the user wants hands-on autonomous engineering, investigation, or implementation. Do not bypass the local-first pipeline for multi-step work unless the user explicitly wants an inline path.
-
-## Capability Expansion Contract
-
-When the engineer believes it lacks a skill, agent, instruction, prompt wrapper, review check, reference, or template, follow the steps in `.github/skills/references/capability-gap-proposal.md` (`## Usage Workflow`).
-
-Do not create a primitive directly because a user asked for one. The primitive type must be justified by the boundary rules.
-
-## Human Approval Gates
-
-Follow `.github/skills/references/human-approval-policy.md` before:
-
-- Creating or substantially changing primitives.
-- Choosing concurrency strategies such as idempotency, uniqueness, locking, atomic updates, retries, or isolation changes.
-- Making schema/data changes, destructive operations, security-sensitive changes, public contract changes, or broad refactors.
-- Touching files outside a locked plan's `## Impacted Files`.
-
-## Context Pack Contract
-
-For multi-step work, the engineer should create or update a plan file that carries the local context pack:
-
-- `## Context`
-- `## Acceptance Criteria`
-- `## Research Notes`
-- `## Impacted Files`
-- `## Verification Plan`
-- `## Risk & Review Routing`
-- `## Implementation Notes`
-- `## Review Findings`
-- `## Activity`
-
-Read existing sections before starting and append rather than overwrite.
-
-For delegated work, package the subagent task with `.github/skills/references/subagent-context-packet.md` so the isolated subagent receives objective, context, artifacts, constraints, review criteria, approval dependencies, and expected response format.
-
-## Verify Phase
-
-In the Verify phase, run evidence-based checks before claiming completion:
-
-1. **Tests pass** — Run the project's test suite and report actual output. Do not summarize as "tests pass" without showing evidence.
-2. **Verification plan satisfied** — Run the checks named in `## Verification Plan`, or explain why a listed check is not applicable.
-3. **Changed files are within scope** — Compare modified files against `## Impacted Files` or stated requirements. Flag any files changed that fall outside the expected scope.
-4. **Implementation matches acceptance criteria** — Verify each criterion from the requirements with specific evidence (test output, behavior confirmation, code references).
-5. **Risk routing completed** — Run specialist review or checks named in `## Risk & Review Routing` when the touched area warrants it.
-6. **No regressions** — Run the full test suite when feasible, not just tests for changed code. Report the complete test results.
-
-Report verification results before claiming completion. If any check fails, report the failure with evidence and do not claim the work is done.
-
-## Error Handling
-
-### Skill-Specific Errors
-
-- **No clear requirement** → Ask the user to clarify what needs to be built, fixed, or investigated before proceeding.
-- **Delegation to code-implementer fails** → Report the failure with context. Offer to retry the delegation or implement inline within the current session.
-- **User consultation needed but non-interactive mode** → Make the most conservative decision available. Document the assumption in the `## Activity` log so it can be reviewed.
-- **Test suite fails after implementation** → Report failures with the actual test output as evidence. Do not claim completion. Log the failures and stop for user guidance.
-
-### Common Errors
-
-For subagent failure, tool unavailability, file-not-found, and timeout recovery, follow the shared patterns in `.github/skills/references/error-handling-patterns.md`.
+Repeated gaps → `capability-gap-proposal.md` → `/create-primitive` → enterprise overlay + hydrate.

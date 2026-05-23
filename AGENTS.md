@@ -10,7 +10,7 @@ This is a skill-driven prompt library for software development teams. The primar
 
 The system is skill-first. Skills are the primary reusable workflow contracts; agents, instructions, prompt wrappers, checks, plans, and solution docs support those skills.
 
-- **Skills** (`.github/skills/*/SKILL.md`): 23 user-invocable workflows that compose local context, scoped instructions, tools, checks, and agents. `/start` classifies incoming work and routes to the appropriate entry point. `/btw` handles quick Q&A without plans or edits. `/project-readme` creates or updates project README files. `/create-primitive` decides and creates the right primitive type. Domain skills include `/java`, `/python`, `/sql`, and `/aws`. The connected pipeline `/brainstorming` (optional) → `/capture-issue` → `/plan-issue` → `/deepen-plan` (optional) → `/work-on-task` → `/code-review` → `/compound-learnings` is the core engineering loop.
+- **Skills** (`.github/skills/*/SKILL.md`): 31 workflows (internal autopilot: `ensure-plan`, `ensure-capability`, `auto-compound`, `engineer-autopilot`, `auto-skill-draft`; public entry **`@engineer`** + `/harness-doctor`, `/btw`, `/code-review`, domain skills, utilities). `/start` classifies incoming work and routes to the appropriate entry point. `/btw` handles quick Q&A without plans or edits. `/project-readme` creates or updates project README files. `/create-primitive` decides and creates the right primitive type. Domain skills include `/java`, `/python`, `/sql`, and `/aws`. The connected pipeline `/brainstorming` (optional) → `/capture-issue` → `/plan-issue` → `/deepen-plan` (optional) → `/work-on-task` → `/code-review` → `/compound-learnings` is the core engineering loop.
 - **Agents** (`.github/agents/*.agent.md`): 24 agents — 19 stateless domain experts, 1 engineer, 1 code-implementer, plus 3 coordinator/navigation agents. Agents are used when work needs separate judgment, tool authority, runtime profile, isolation, or accountability. Active language/cloud/data reviewers include Java, Python, SQL, and AWS.
 - **Instructions** (`.github/instructions/*.instructions.md`): Scoped context that activates based on file patterns.
 - **Prompt wrappers** (`.github/prompts/*.prompt.md`): Thin host-facing adapters that route to skills and declare host tools.
@@ -21,18 +21,20 @@ The system is skill-first. Skills are the primary reusable workflow contracts; a
 Issues flow through a state machine:
 
 ```
-/brainstorming (optional) → /capture-issue → /plan-issue → /deepen-plan (optional) → /work-on-task → /code-review → /compound-learnings
-                                  open      →   planned   →                          in-progress   →    review    →      done
+/recall (recommended) → /brainstorming (optional) → /capture-issue → /plan-issue → /deepen-plan (optional) → /work-on-task → /code-review → /compound-learnings → /index-memory
+                         open → planned → in-progress → review → done
 ```
 
-Plan files in `docs/plans/` track state via YAML frontmatter (`status`, `plan_lock`, `phase`). Activity logs in `## Activity` sections enable session continuity. Inter-step memory flows through designated plan file sections (`## Context`, `## Acceptance Criteria`, `## Research Notes`, `## Impacted Files`, `## Verification Plan`, `## Risk & Review Routing`, `## Implementation Notes`, `## Review Findings`). Treat each plan file as the local context pack for the work.
+Vision and growth: `docs/architecture/engineer-vision-and-growth-loop.md`. Knowledge lookup: `.github/skills/references/knowledge-locations.md`.
+
+Plan files in `docs/plans/` (product repos only) track state via YAML frontmatter (`status`, `plan_lock`, `phase`). Team-wide learnings hydrate from `knowledge/` to `~/.copilot/knowledge/`. Run `/recall` before engineering work. Inter-step memory flows through plan sections including `## Memory Cards`, `## Context`, `## Research Notes`, and `## Activity`. See `docs/architecture/engineer-memory-system.md`.
 
 ## Directory Structure
 
 ```
 .github/
   agents/          — 24 agent definitions (19 specialists + 1 engineer + 1 implementer + 3 coordinators)
-  skills/          — 23 skill directories with SKILL.md
+  skills/          — 25 skill directories with SKILL.md
   instructions/    — scoped instructions (TypeScript, Python, Java, Spring Boot, PostgreSQL, AWS SDK)
   prompts/         — thin prompt wrappers that route to skills
   checks/          — optional product-specific review check examples
@@ -40,10 +42,10 @@ Plan files in `docs/plans/` track state via YAML frontmatter (`status`, `plan_lo
   agent-context.md — prompt-library repo knowledge, not a global Copilot primitive
 .vscode/
   mcp.json         — MCP server configuration
+knowledge/         — team-wide solutions + manifest (hydrated to ~/.copilot/knowledge/)
 docs/
   architecture/    — skill-driven standard and architecture notes
-  plans/           — issue and plan files with state tracking
-  solutions/       — documented learnings from solved problems
+  plans/           — plan template; product repos use docs/plans/ for active work
   brainstorms/     — brainstorm documents from /brainstorming skill
   codebase-snapshot.md — generated codebase snapshot with architecture diagrams
 ```
@@ -55,7 +57,7 @@ docs/
 - **Primitive boundaries**: Default repeated procedures to skills; create agents only for distinct judgment, authority, isolation, or evaluation standards; keep prompt wrappers thin.
 - **Testing**: TDD mandatory — failing test → minimal fix → cleanup
 - **Diffs**: Surgical changes only. No drive-by refactoring.
-- **Knowledge compounding**: `docs/solutions/` stores documented learnings. Check before starting similar work.
+- **Knowledge compounding**: Team learnings in `knowledge/solutions/` (hydrated globally). Product repos use `docs/plans/` for issues and optional `docs/solutions/` for repo-private learnings. Run `/recall` before similar work.
 
 ## Coding Standards
 
@@ -93,4 +95,4 @@ Read `docs/architecture/skill-driven-prompt-library.md` before adding or substan
 
 ## Accumulated Knowledge
 
-Read `.github/agent-context.md` for prompt-library repo patterns. In product repositories, read product-owned context docs such as `README.md`, `docs/agent-context.md`, `docs/codebase-snapshot.md`, and `docs/solutions/`.
+Read `.github/agent-context.md` for prompt-library repo patterns. In product repositories, follow `.github/skills/references/knowledge-locations.md`.

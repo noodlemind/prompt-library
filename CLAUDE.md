@@ -8,7 +8,7 @@ This is a skill-driven prompt library for software development teams. The primar
 
 ### Architecture: Skill-First Primitives
 
-- **Skills** (`.github/skills/*/SKILL.md`): 23 user-invocable workflows that compose local context, scoped instructions, tools, checks, and agents. The connected pipeline `/capture-issue` → `/plan-issue` → `/work-on-task` → `/code-review` → `/compound-learnings` is the core engineering loop. `/btw` handles quick Q&A. `/project-readme` creates or updates project README files. `/create-primitive` decides and creates the right primitive type. Domain skills include `/java`, `/python`, `/sql`, and `/aws`.
+- **Skills** (`.github/skills/*/SKILL.md`): 31 workflows (primary entry `@engineer` autopilot; internal pipeline steps; `/harness-doctor`, `/btw`, `/code-review`, domain and utility skills). The connected pipeline `/capture-issue` → `/plan-issue` → `/work-on-task` → `/code-review` → `/compound-learnings` is the core engineering loop. `/btw` handles quick Q&A. `/project-readme` creates or updates project README files. `/create-primitive` decides and creates the right primitive type. Domain skills include `/java`, `/python`, `/sql`, and `/aws`.
 - **Agents** (`.github/agents/*.agent.md`): 24 agents — 19 stateless domain experts using judgment-criteria design, 1 engineer, 1 code-implementer, plus 3 coordinator/navigation agents. Agents exist for separate judgment, tool authority, runtime profile, isolation, or accountability. Active Java, Python, SQL, and AWS reviewers are included.
 - **Instructions** (`.github/instructions/*.instructions.md`): Scoped context that activates based on file patterns (TypeScript, Python, Java, Spring Boot, PostgreSQL, AWS SDK).
 - **Prompt wrappers** (`.github/prompts/*.prompt.md`): Thin host-facing adapters that route to skills and declare host tools.
@@ -30,7 +30,7 @@ Plan files live in `docs/plans/`. Activity logs in `## Activity` sections provid
 ### Knowledge Compounding
 
 - **Accumulated knowledge**: `.github/agent-context.md` — prompt-library repo knowledge, not a global Copilot primitive.
-- **Documented solutions**: `docs/solutions/` — categorized learnings from solved problems. Check before starting similar work.
+- **Team solutions**: `knowledge/solutions/` (hydrated globally). Product repos may use optional `docs/solutions/` for repo-private learnings. Use `/recall` before similar work.
 
 ## Directory Structure
 
@@ -91,7 +91,7 @@ CLAUDE.md              — optional compatibility guidance
 23. **plan-coordinator**: Delegates to research agents in parallel with isolated context
 24. **pipeline-navigator**: Guides pipeline transitions via handoff buttons, not subagent dispatch
 
-## Available Skills (23 total)
+## Available Skills (25 total)
 
 ### Connected Pipeline
 1. **/capture-issue**: Create initial plan file under `docs/plans/` from bug/feature/task
@@ -127,6 +127,8 @@ CLAUDE.md              — optional compatibility guidance
 21. **/review-guardrails**: Read-only plan compliance audit
 22. **/tdd-fix**: Test-driven bug fixing
 23. **/triage-issues**: Analyze and prioritize backlog
+24. **/recall**: Recall global knowledge manifest and local plans before engineering work
+25. **/index-memory**: Rebuild team knowledge manifest from solution files
 
 ## Key Design Decisions
 
@@ -134,7 +136,7 @@ CLAUDE.md              — optional compatibility guidance
 - **Progressive disclosure**: Skills load in 3 levels (frontmatter → body → references)
 - **Skill-first primitive boundaries**: Default repeated procedures to skills; create agents only for distinct judgment, authority, isolation, or evaluation standards; keep prompt wrappers thin
 - **GitHub Copilot-first**: VS Code discovers globally hydrated agents, skills, prompts, and instructions from `%USERPROFILE%\.copilot`; IntelliJ IDEA discovers hydrated customizations from `%LOCALAPPDATA%\github-copilot\intellij` when the current plugin features are enabled
-- **Knowledge compounding**: `docs/solutions/` and repository-owned context docs make the system smarter over time
+- **Knowledge compounding**: `knowledge/solutions/` + `/index-memory` + repository `docs/agent-context.md` make the system smarter over time
 - **Confidence-gated review**: Code review uses persona synthesis with 0.0-1.0 confidence scores, merge/dedup, and action routing
 - **Standalone + pipeline mode**: Pipeline skills work both standalone (ad-hoc) and in pipeline mode (state machine enforced)
 - **Skill-specific error recovery**: Each orchestrating skill handles its own failure modes, not generic boilerplate

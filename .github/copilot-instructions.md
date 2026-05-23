@@ -8,19 +8,15 @@ Skill-driven prompt library for software development using GitHub Copilot in VS 
 
 ## Primitives
 
-- **Skills** (`.github/skills/`): 23 workflows with trigger examples and negative triggers. Skills are the primary reusable contract: they compose local context, instructions, tools, review checks, and agents. `/start` classifies incoming work and routes to the right entry point. `/btw` handles quick Q&A without plans or edits. `/project-readme` creates or updates project README files. `/create-primitive` decides and creates the right prompt-library artifact. Domain skills include `/java`, `/python`, `/sql`, and `/aws`. Pipeline: `/capture-issue` → `/plan-issue` → `/work-on-task` → `/code-review` → `/compound-learnings`.
-- **Agents** (`.github/agents/`): 24 agents (19 specialists + 1 engineer + 1 implementer + 3 coordinators). Review agents include prompt injection guardrails. Use agents when work needs separate judgment, tool authority, runtime profile, isolation, or accountability. Active Java, Python, SQL, and AWS reviewers are included.
-- **Instructions** (`.github/instructions/`): Scoped context by file pattern.
-- **Prompt wrappers** (`.github/prompts/`): Thin host adapters that route to skills and declare host tools.
-- **Review checks** (`.github/skills/code-review/references/checks/`, optional product `.github/checks/`): Bundled and project-specific review criteria discovered by `/code-review`.
+Skills = workflows. Agents = isolated judgment. Instructions = file-pattern rules. Details: `docs/architecture/skill-driven-prompt-library.md`.
 
-## Pipeline State
+## Plans and knowledge
 
-Plan files in `docs/plans/` track state via YAML frontmatter: `status` (open/planned/in-progress/review/done), `plan_lock`, `phase`. Treat each plan file as the local context pack. Inter-step memory flows through plan file sections: `## Context`, `## Acceptance Criteria`, `## Research Notes`, `## Impacted Files`, `## Verification Plan`, `## Risk & Review Routing`, `## Implementation Notes`, `## Review Findings`, `## Activity`. Always read existing sections before starting work. Never overwrite prior sections.
+- Product **`docs/plans/`** — per-issue context pack (`status`, `plan_lock`, `phase`, `## Memory Cards`).
+- Team **`knowledge/solutions/`** — cross-repo learnings (hydrated to `~/.copilot/knowledge/`).
+- Lookup order: `.github/skills/references/knowledge-locations.md`.
 
-## Knowledge
-
-Read `.github/agent-context.md` for codebase patterns. Check `docs/solutions/` before starting similar work. Read `docs/codebase-snapshot.md` for project structure and architecture diagrams (if it exists).
+**`@engineer` only:** autonomous loop, capture gate, and checklist live in `engineer.agent.md` — not duplicated here. Onboarding: `docs/onboarding/harness-quickstart.md`.
 
 ## Conventions
 
@@ -34,7 +30,7 @@ Read `.github/agent-context.md` for codebase patterns. Check `docs/solutions/` b
 
 The engineer selects the skill/flow first, then delegates only when separate judgment, authority, or isolation improves the result. Coordinators delegate to specialist subagents via `tools: ['agent']`. Subagents run in isolated context — include all necessary context in the task prompt. `/plan-issue` and `/code-review` prompt wrappers route to their coordinators via the `agent:` field (prompt tools override agent tools). Coordinators use `agents:` allowlists to restrict which specialists they can invoke. Coordinators dispatch subagents in parallel batches (3-4 at a time) rather than sequentially.
 
-Adaptive Engineer Harness rules: use existing skills first; use `.github/skills/references/capability-gap-proposal.md` and `/create-primitive` before adding capabilities; use `.github/skills/references/subagent-context-packet.md` for delegated work; use `.github/skills/references/human-approval-policy.md` before risky concurrency, schema/data, security, destructive, broad-refactor, or primitive-expansion decisions.
+Engineer harness: `@engineer` agent file. Parity bar: `docs/architecture/composer-parity-review.md`. Delegation: `subagent-context-packet.md`. Risky work: `human-approval-policy.md`.
 
 ## Standardization
 

@@ -106,7 +106,9 @@ This repo does not need a separate runtime context-pack format to get most of th
 
 This gives every host a simple artifact to read while preserving the capture -> analyze/plan -> work -> review workflow.
 
-`agent-context.md` is not part of the global customization contract. Use it only as repository-owned accumulated knowledge. Product-level context should be captured in product-owned files: `docs/plans/` for active work, `docs/solutions/` for verified learnings, `docs/codebase-snapshot.md` for generated architecture snapshots, `docs/agent-context.md` for accumulated product context when a team wants one, and `README.md` for stable project overview and integration points.
+`agent-context.md` is not part of the global customization contract. Use it only as repository-owned accumulated knowledge. Product-level context should be captured in product-owned files: `docs/plans/` for active work, optional `docs/solutions/` for repo-private learnings, `docs/codebase-snapshot.md` for generated architecture snapshots, `docs/agent-context.md` for accumulated product context when a team wants one, and `README.md` for stable project overview and integration points.
+
+**Team-wide compounded learnings** hydrate globally under `knowledge/` (see `docs/architecture/engineer-memory-system.md`). `/recall` and `/index-memory` maintain cross-repo recall; `/compound-learnings` publishes to `knowledge/solutions/`.
 
 ## Skill Contract
 
@@ -163,14 +165,15 @@ flowchart TD
 ## Governance
 
 - Treat skills, agents, instructions, prompt wrappers, hooks, checks, scripts, and MCP metadata as executable governance artifacts.
+- **Harness vs skill scripts:** Cross-repo deterministic agent tools live in **`@dev-kit/harness`** (`orient`, `gate`, `recall`, `index`, `compound`, `validate-plan`). Skills are thin orchestration that invoke harness with `--json`. Skill-local `scripts/` is allowed only for narrow, read-only validators tied to one skill — see [`.github/skills/references/harness-tool-contract.md`](../.github/skills/references/harness-tool-contract.md).
 - Do not pre-approve shell or network access in community or shared artifacts without local review.
 - Keep permissions minimal in agent frontmatter and prompt wrappers.
 - Prefer read-only specialist agents for review and research.
 - Add or update at least one trigger example, review check, test scenario, or validation checklist item when changing a primitive.
-- Compound patterns only after verification and user acceptance. One-off fixes belong in `docs/solutions/`; broad reusable conventions can graduate to a skill or scoped instruction. Repository-specific learnings belong in that repository's context docs.
+- Compound patterns only after verification and user acceptance. Cross-repo fixes belong in `knowledge/solutions/`; repo-private fixes may use product `docs/solutions/`. Broad conventions graduate to a skill or scoped instruction; repo-specific one-liners belong in product `docs/agent-context.md`.
 
 ## Team Adoption
 
 Teams adapting this library should start by hydrating the global skills, agents, prompts, and instructions. Do not copy prompt-library artifacts into product repositories. New agents are the last resort, not the first customization point.
 
-For the current target teams, assume Windows workstations with GitHub Copilot in VS Code and IntelliJ IDEA. Use the global Hydrate task as the supported path. See [Install and Sync Guide](../install.md).
+For the current target teams, assume Windows workstations with GitHub Copilot in VS Code and IntelliJ IDEA. Use **`@dev-kit/harness`** as the supported install path. See [Install and Sync Guide](../install.md).
