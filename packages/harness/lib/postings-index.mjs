@@ -10,7 +10,7 @@ function addFieldTokens(termMap, docId, text, boost) {
   const tokens = tokenize(text);
   if (!tokens.length) return 0;
   for (const t of tokens) {
-    if (!termMap[t]) termMap[t] = {};
+    if (!termMap[t]) termMap[t] = Object.create(null);
     termMap[t][docId] = (termMap[t][docId] || 0) + boost;
   }
   return tokens.length;
@@ -29,9 +29,9 @@ function indexEntry(termMap, entry) {
 }
 
 export function buildPostingsIndex(entries) {
-  const terms = {};
-  const docLengths = {};
-  const entryMeta = {};
+  const terms = Object.create(null);
+  const docLengths = Object.create(null);
+  const entryMeta = Object.create(null);
 
   for (const entry of entries) {
     docLengths[entry.id] = indexEntry(terms, entry);

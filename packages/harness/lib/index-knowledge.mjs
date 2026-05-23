@@ -51,9 +51,10 @@ function collectSolutions(dir, scope, base) {
       const fm = parseFrontmatter(text);
       const rel = path.relative(base, full).split(path.sep).join('/');
       const slug = f.replace(/\.md$/, '');
+      const entryId = `${scope}-${cat.name}-${slug}`;
       entries.push({
-        id: `${cat.name}-${slug}`,
-        docid: `${cat.name}-${slug}`,
+        id: entryId,
+        docid: entryId,
         kind: 'solution',
         scope,
         path: rel,
@@ -64,8 +65,8 @@ function collectSolutions(dir, scope, base) {
         symptom: fm.symptom || '',
         summary: summaryFromBody(text),
         excerpt: excerptFromBody(text),
-        date: fm.date || '',
-        updated: fm.date || '',
+        date: fm.date || fm.updated || '',
+        updated: fm.updated || fm.date || '',
       });
     }
   }
@@ -90,6 +91,15 @@ export function runIndexKnowledge({ knowledgeRoot, workspace, copilotHome, flags
   for (const { dir, scope, base } of roots) {
     entries = entries.concat(collectSolutions(dir, scope, base));
   }
+
+  const seenIds = new Set();
+  for (const e of entries) {
+    if (seenIds.has(e.id)) {
+      throw new Error(`duplicate manifest id "${e.id}" — paths collide across knowledge roots`);
+    }
+    seenIds.add(e.id);
+  }
+
   entries.sort((a, b) => a.id.localeCompare(b.id));
 
   const manifestPath = path.join(knowledgeRoot || path.join(workspace, 'knowledge'), 'manifest.yaml');

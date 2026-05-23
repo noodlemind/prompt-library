@@ -43,8 +43,9 @@ export function expandQueryTokens(queryTokens, synonyms) {
   const expanded = new Set(queryTokens);
   for (const token of queryTokens) {
     const aliases = synonyms[token];
-    if (!aliases) continue;
+    if (!Array.isArray(aliases)) continue;
     for (const alias of aliases) {
+      if (alias == null || typeof alias !== 'string') continue;
       for (const t of alias.toLowerCase().split(/\s+/)) {
         if (t.length > 2) expanded.add(t);
       }
@@ -56,7 +57,7 @@ export function expandQueryTokens(queryTokens, synonyms) {
 export function entryMatchesCollection(entry, collectionName, collections) {
   if (!collectionName) return true;
   const spec = collections[collectionName];
-  if (!spec) return true;
+  if (!spec) return false;
 
   if (spec.kinds?.length && !spec.kinds.includes(entry.kind)) return false;
   if (spec.scope && entry.scope !== spec.scope) return false;

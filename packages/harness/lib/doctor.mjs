@@ -6,6 +6,12 @@ import { isIndexStale } from './postings-index.mjs';
 
 const require = createRequire(import.meta.url);
 
+const MIN_ENRICHED_RATIO = 0.5;
+
+function isEntryEnriched(e) {
+  return Boolean((e.symptom && e.symptom.trim()) || (e.module && e.module.trim()));
+}
+
 function loadManifestEntries(manifestPath) {
   if (!fs.existsSync(manifestPath)) return { entries: [], updated: null };
   try {
@@ -109,9 +115,10 @@ export function runDoctor({ copilotHome, assetsRoot, pkgRoot, flags }) {
       ? path.join(flags.workspace, 'knowledge', 'manifest.yaml')
       : manifestRepo;
   const { entries: manifestEntries, updated: manifestUpdated } = loadManifestEntries(manifestPath);
+  const enrichedCount = manifestEntries.filter(isEntryEnriched).length;
   const hasEnrichedFields =
     manifestEntries.length === 0 ||
-    manifestEntries.some((e) => (e.symptom && e.symptom.trim()) || (e.module && e.module.trim()));
+    enrichedCount / manifestEntries.length >= MIN_ENRICHED_RATIO;
   checks.push({
     id: 'H10',
     name: 'Manifest enriched fields (symptom/module)',

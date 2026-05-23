@@ -9,9 +9,9 @@ import {
   expandQueryTokens,
   entryMatchesCollection,
   resolveIndexDir,
-  resolveManifestPath,
 } from './recall-config.mjs';
 import { loadPostingsIndex, isIndexStale } from './postings-index.mjs';
+import { safeResolveUnderRoot } from './path-safe.mjs';
 
 const require = createRequire(import.meta.url);
 
@@ -130,7 +130,8 @@ export function rankRecall(query, { copilotHome, workspace, limit = 3, collectio
   if (!queryTokens.length) return [];
 
   const filtered = entries.filter((e) => entryMatchesCollection(e, collection, collections));
-  const entriesById = new Map(filtered.map((e) => [e.id, e]));
+  const entryKey = (e) => e.docid || e.id;
+  const entriesById = new Map(filtered.map((e) => [entryKey(e), e]));
 
   const indexDir = resolveIndexDir(copilotHome, workspace);
   const index = loadPostingsIndex(indexDir);
@@ -194,11 +195,9 @@ export function resolveDocPath(copilotHome, workspace, entry) {
     workspace,
   ];
   for (const root of knowledgeRoots) {
-    const full = path.join(root, entry.path);
-    if (fs.existsSync(full)) return full;
+    const full = safeResolveUnderRoot(root, entry.path);
+    if (full && fs.existsSync(full)) return full;
   }
-  const productPath = path.join(workspace, entry.path);
-  if (fs.existsSync(productPath)) return productPath;
   return null;
 }
 

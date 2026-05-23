@@ -1,12 +1,27 @@
 import fs from 'fs';
 import path from 'path';
 import { findEntryByDocid, resolveDocPath } from './recall-rank.mjs';
+import { safeResolveUnderRoot } from './path-safe.mjs';
+
+function truncateUtf8(text, maxBytes) {
+  let buf = Buffer.from(text, 'utf8');
+  if (buf.length <= maxBytes) return text;
+  buf = buf.slice(0, maxBytes);
+  while (buf.length > 0 && (buf[buf.length - 1] & 0xc0) === 0x80) {
+    buf = buf.slice(0, -1);
+  }
+  let excerpt = buf.toString('utf8');
+  const lastNl = excerpt.lastIndexOf('\n');
+  if (lastNl > maxBytes * 0.5) excerpt = excerpt.slice(0, lastNl);
+  return `${excerpt}\n…(truncated)`;
+}
 
 export function runGet({ workspace, copilotHome, flags }) {
   const docid = flags.docid;
   const relPath = flags.path;
   const maxLines = flags.lines || 40;
   const maxBytes = flags.maxBytes || 2048;
+  const workspaceResolved = path.resolve(workspace);
 
   let entry = null;
   let fullPath = null;
@@ -16,7 +31,8 @@ export function runGet({ workspace, copilotHome, flags }) {
     if (!entry) throw new Error(`docid not found in manifest: ${docid}`);
     fullPath = resolveDocPath(copilotHome, workspace, entry);
   } else if (relPath) {
-    fullPath = path.isAbsolute(relPath) ? relPath : path.join(workspace, relPath);
+    fullPath = safeResolveUnderRoot(workspaceResolved, relPath);
+    if (!fullPath) throw new Error(`path escapes workspace: ${relPath}`);
     entry = findEntryByDocid(copilotHome, workspace, path.basename(relPath, '.md')) || {
       docid: null,
       path: relPath,
@@ -34,10 +50,7 @@ export function runGet({ workspace, copilotHome, flags }) {
   const lines = raw.split(/\r?\n/).slice(0, maxLines);
   let excerpt = lines.join('\n');
   if (Buffer.byteLength(excerpt, 'utf8') > maxBytes) {
-    excerpt = excerpt.slice(0, maxBytes);
-    const lastNl = excerpt.lastIndexOf('\n');
-    if (lastNl > maxBytes * 0.5) excerpt = excerpt.slice(0, lastNl);
-    excerpt += '\n…(truncated)';
+    excerpt = truncateUtf8(excerpt, maxBytes);
   }
 
   return {

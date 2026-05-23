@@ -1,3 +1,23 @@
+function invalidFlag(name, value, hint) {
+  throw new Error(`invalid ${name}: ${JSON.stringify(value)} — ${hint}`);
+}
+
+function parseMinScore(raw, flagName) {
+  const n = parseFloat(raw);
+  if (!Number.isFinite(n) || n < 0 || n > 1) {
+    invalidFlag(flagName, raw, 'must be a number between 0 and 1');
+  }
+  return n;
+}
+
+function parsePositiveInt(raw, flagName) {
+  const n = parseInt(raw, 10);
+  if (!Number.isFinite(n) || n < 1) {
+    invalidFlag(flagName, raw, 'must be an integer >= 1');
+  }
+  return n;
+}
+
 export function parseFlags(argv) {
   const flags = {
     dryRun: false,
@@ -61,16 +81,16 @@ export function parseFlags(argv) {
     else if (a === '--workspace') flags.workspace = argv[++i];
     else if (a === '-c' || a === '--collection') flags.collection = argv[++i];
     else if (a.startsWith('--collection=')) flags.collection = a.split('=')[1];
-    else if (a.startsWith('--min-score=')) flags.minScore = parseFloat(a.split('=')[1]);
-    else if (a === '--min-score') flags.minScore = parseFloat(argv[++i]);
+    else if (a.startsWith('--min-score=')) flags.minScore = parseMinScore(a.split('=')[1], '--min-score');
+    else if (a === '--min-score') flags.minScore = parseMinScore(argv[++i], '--min-score');
     else if (a.startsWith('--docid=')) flags.docid = a.split('=').slice(1).join('=');
     else if (a === '--docid') flags.docid = argv[++i];
     else if (a.startsWith('--path=')) flags.path = a.split('=').slice(1).join('=');
     else if (a === '--path') flags.path = argv[++i];
-    else if (a.startsWith('--lines=')) flags.lines = parseInt(a.split('=')[1], 10);
-    else if (a === '--lines') flags.lines = parseInt(argv[++i], 10);
-    else if (a.startsWith('--max-bytes=')) flags.maxBytes = parseInt(a.split('=')[1], 10);
-    else if (a === '--max-bytes') flags.maxBytes = parseInt(argv[++i], 10);
+    else if (a.startsWith('--lines=')) flags.lines = parsePositiveInt(a.split('=')[1], '--lines');
+    else if (a === '--lines') flags.lines = parsePositiveInt(argv[++i], '--lines');
+    else if (a.startsWith('--max-bytes=')) flags.maxBytes = parsePositiveInt(a.split('=')[1], '--max-bytes');
+    else if (a === '--max-bytes') flags.maxBytes = parsePositiveInt(argv[++i], '--max-bytes');
   }
 
   return flags;

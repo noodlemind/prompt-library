@@ -1,5 +1,5 @@
 export function tokenize(s) {
-  return (s || '')
+  return String(s ?? '')
     .toLowerCase()
     .replace(/[^a-z0-9\s-]/g, ' ')
     .split(/\s+/)

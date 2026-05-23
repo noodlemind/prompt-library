@@ -30,6 +30,11 @@ export function parseQueryFromArgv(argv, flags) {
       if (!arg.includes('=') && FLAGS_WITH_VALUES.has(flagName)) i++;
       continue;
     }
+    if (arg.startsWith('-') && arg !== '-') {
+      const flagName = arg.includes('=') ? arg.slice(0, arg.indexOf('=')) : arg;
+      if (!arg.includes('=') && FLAGS_WITH_VALUES.has(flagName)) i++;
+      continue;
+    }
     if (arg === '-v') continue;
     parts.push(arg);
   }
