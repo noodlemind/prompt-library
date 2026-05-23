@@ -5,7 +5,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
-import { syncAssetsToTarget } from '../lib/sync.mjs';
+import { applyRetired, syncAssetsToTarget } from '../lib/sync.mjs';
 import { parsePlanFrontmatter } from '../lib/plan-parse.mjs';
 import { CONTEXT_PACK_MAX_BYTES, buildContextPack } from '../lib/context-pack.mjs';
 
@@ -385,6 +385,46 @@ test('preserved knowledge files are not reported as harness-owned', () => {
 
   assert.equal(stats.skipped, 1);
   assert.deepEqual(stats.files, []);
+});
+
+test('retired cleanup refuses paths outside copilot home', () => {
+  const parent = tempDir('harness-parent-');
+  const copilotHome = path.join(parent, 'copilot');
+  const outside = path.join(parent, 'outside-retired');
+  fs.mkdirSync(copilotHome, { recursive: true });
+  fs.mkdirSync(outside, { recursive: true });
+  fs.writeFileSync(path.join(outside, 'keep.txt'), 'do not delete', 'utf8');
+
+  const stats = applyRetired(
+    copilotHome,
+    ['../outside-retired'],
+    { files: ['../outside-retired'] },
+    { dryRun: false },
+    () => {}
+  );
+
+  assert.equal(fs.existsSync(path.join(outside, 'keep.txt')), true);
+  assert.equal(stats.removed, 0);
+  assert.equal(stats.skipped, 1);
+});
+
+test('uninstall refuses lock paths outside copilot home', () => {
+  const parent = tempDir('harness-parent-');
+  const copilotHome = path.join(parent, 'copilot');
+  const outside = path.join(parent, 'outside-uninstall');
+  fs.mkdirSync(copilotHome, { recursive: true });
+  fs.mkdirSync(outside, { recursive: true });
+  fs.writeFileSync(path.join(outside, 'keep.txt'), 'do not delete', 'utf8');
+  fs.writeFileSync(
+    path.join(copilotHome, '.harness-lock.json'),
+    JSON.stringify({ files: ['../outside-uninstall'] }, null, 2),
+    'utf8'
+  );
+
+  const result = runHarness(['uninstall', '--copilot-home', copilotHome]);
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(fs.existsSync(path.join(outside, 'keep.txt')), true);
 });
 
 test('context pack stays within byte budget cap', () => {

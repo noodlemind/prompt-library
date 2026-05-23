@@ -8,6 +8,7 @@ import { readLock, writeLock, LOCK_NAME } from './lock.mjs';
 import {
   loadRetired,
   applyRetired,
+  resolveContainedPath,
   syncAssetsToTarget,
   seedProfile,
   mergeIntelliJInstructions,
@@ -384,7 +385,11 @@ export async function cmdUninstall(argv) {
   }
   let removed = 0;
   for (const rel of lock.files) {
-    const dest = path.join(copilotHome, rel);
+    const dest = resolveContainedPath(copilotHome, rel);
+    if (!dest) {
+      log(flags, `skip unsafe lock path: ${rel}`);
+      continue;
+    }
     if (!fs.existsSync(dest)) continue;
     if (flags.dryRun) {
       log(flags, `would remove ${rel}`);
@@ -400,4 +405,3 @@ export async function cmdUninstall(argv) {
   log(flags, `uninstall removed ${removed} paths`);
   return 0;
 }
-

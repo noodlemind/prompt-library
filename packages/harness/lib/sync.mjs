@@ -14,6 +14,20 @@ export function loadRetired(pkgRoot) {
   return data.retired || [];
 }
 
+export function resolveContainedPath(root, rel) {
+  if (!rel || typeof rel !== 'string') return null;
+  if (path.isAbsolute(rel) || path.win32.isAbsolute(rel)) return null;
+
+  const parts = rel.replace(/\\/g, '/').split('/');
+  if (parts.some((part) => part === '..')) return null;
+
+  const rootResolved = path.resolve(root);
+  const dest = path.resolve(rootResolved, ...parts.filter(Boolean));
+  const relative = path.relative(rootResolved, dest);
+  if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) return null;
+  return dest;
+}
+
 function fileHash(filePath) {
   const buf = fs.readFileSync(filePath);
   return crypto.createHash('sha256').update(buf).digest('hex');
@@ -46,7 +60,12 @@ export function applyRetired(copilotHome, retiredList, previousLock, flags, log)
       stats.skipped++;
       continue;
     }
-    const dest = path.join(copilotHome, rel);
+    const dest = resolveContainedPath(copilotHome, rel);
+    if (!dest) {
+      log(`warn: skipped unsafe retired path: ${rel}`);
+      stats.skipped++;
+      continue;
+    }
     if (!fs.existsSync(dest)) continue;
     if (flags.dryRun) {
       log(`would remove retired: ${rel}`);
