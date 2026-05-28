@@ -12,7 +12,7 @@ Single-session loop. User types **`@engineer`** only.
 
 | Step | Skill / reference | Edits product code? |
 |------|-------------------|---------------------|
-| 0 Orient | `harness orient` + `tool-native-loop.md` | No |
+| 0 Orient | `harness orient` + `harness-cli.md` + `tool-native-loop.md` | No |
 | 0b Preflight | `capability-preflight.md` + **`/ensure-capability`** | No |
 | 0c Ensure plan | **`/ensure-plan`** (if gate C1/C3 fail) | No |
 | 1 Understand / route | `engineer-runtime.md`, `domain-routing.md` | No |

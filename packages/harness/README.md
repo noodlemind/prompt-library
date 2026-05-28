@@ -2,22 +2,64 @@
 
 CLI to install and upgrade the **Adaptive Engineer Harness** into global GitHub Copilot paths (`~/.copilot/`).
 
-The CLI is setup, sync, validation, and **agent-runtime tooling**. Developers use Copilot `@engineer` and skills; agents invoke harness via terminal. See [harness-tool-contract.md](../../.github/skills/references/harness-tool-contract.md).
+**npm package name:** `@dev-kit/harness` (scoped for registry uniqueness). **Commands:** use the `harness` binary — you do not type `@dev-kit` on every command.
 
-## Developers
+The CLI is setup, sync, validation, and **agent-runtime tooling**. Developers use Copilot `@engineer` and skills; agents invoke harness via terminal. See [harness-tool-contract.md](../../.github/skills/references/harness-tool-contract.md) and [harness-cli.md](../../.github/skills/references/harness-cli.md).
+
+## Install without publishing (maintainers)
+
+From **prompt-library repo root**:
+
+```bash
+npm run build:harness          # or: cd packages/harness && npm run build:assets
+npm run harness:install        # sync to ~/.copilot/
+npm run harness -- doctor      # any subcommand
+```
+
+Optional global link:
+
+```bash
+cd packages/harness && npm run build:assets && npm link
+harness install --configure-vscode
+```
+
+Direct node (no npm install):
+
+```bash
+node packages/harness/bin/harness.mjs install --configure-vscode
+```
+
+## Developers (Nexus / registry)
 
 After Nexus `.npmrc` setup ([guide](../../docs/onboarding/nexus-registry-setup.md)):
 
 ```bash
 npx @dev-kit/harness@latest install
-npx @dev-kit/harness doctor
-npx @dev-kit/harness upgrade
+harness doctor
+harness upgrade
 ```
 
 Bootstrap a product repo:
 
 ```bash
-npx @dev-kit/harness init-repo
+harness init-repo
+```
+
+### Product repo without global install
+
+Add a file dependency and use the local binary:
+
+```json
+{
+  "devDependencies": {
+    "@dev-kit/harness": "file:../prompt-library/packages/harness"
+  }
+}
+```
+
+```bash
+npm install
+npx harness doctor
 ```
 
 ### Pin version (recommended for product repos)
@@ -41,8 +83,8 @@ npx @dev-kit/harness init-repo
 Use pinned version in CI:
 
 ```yaml
-- run: npx @dev-kit/harness@0.4.0 gate --workspace . --json
-- run: npx @dev-kit/harness@0.4.0 validate-plan --workspace . --json
+- run: npx harness gate --workspace . --json
+- run: npx harness validate-plan --workspace . --json
 ```
 
 ## Commands
@@ -77,7 +119,7 @@ Use pinned version in CI:
 
 **Enterprise Nexus:** v0.4.0 uses pure-JS BM25 — no `minisearch` or `better-sqlite3` required.
 
-## Maintainers (prompt-library repo)
+## Maintainers (publish)
 
 ```bash
 cd packages/harness
@@ -85,12 +127,6 @@ npm run build:assets
 npm test
 npm version patch
 npm publish
-```
-
-Local install:
-
-```bash
-node packages/harness/bin/harness.mjs install --configure-vscode
 ```
 
 ## Package layout

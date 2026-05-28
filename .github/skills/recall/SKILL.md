@@ -14,7 +14,7 @@ argument-hint: "[task description]"
 ### 1. Orient (preferred)
 
 ```bash
-npx @dev-kit/harness orient --query "<task keywords>" --workspace . --json
+harness orient --query "<task keywords>" --workspace . --json
 ```
 
 Read **only** `.harness/context-pack.md` (≤2 KB). Do not paste CLI stdout into chat.

@@ -2,23 +2,26 @@
 
 **SSOT** for the Composer-style turn contract under file/docs + npm CLI constraints (no MCP, no Copilot API).
 
-Design: `docs/architecture/tool-native-harness-design.md`
+Design: `docs/architecture/tool-native-harness-design.md` · Invocation: [`harness-cli.md`](harness-cli.md)
 
 ## Every trackable turn
 
 | # | Tool / action | Product edits? |
 |---|---------------|----------------|
-| 1 | `npx @dev-kit/harness orient --query "<agent task summary>"` | No |
+| 1 | `harness orient --query "<agent task summary>" --workspace .` | No |
 | 2 | `read` `.harness/context-pack.md` only (≤2 KB slice) | No |
 | 3 | Investigate (`codebase`, `search`, `read`) | No |
 | 4 | Append plan `## Agent Journal` entry if uncertain, blocked, escalating, or changing strategy | Plan docs only |
-| 5 | `npx @dev-kit/harness gate --phase implement` — **exit 0 required** | No |
+| 5 | `harness gate --phase implement --workspace .` — **exit 0 required** | No |
 | 6 | Implement — scope `## Impacted Files` on active plan | Yes |
-| 7 | `npx @dev-kit/harness gate --phase verify` | No |
+| 7 | `harness gate --phase verify --workspace .` | No |
 | 8 | `/auto-compound` or `harness compound` | Knowledge only |
 
 Use `--json` when parsing tool output programmatically.
-The CLI is setup/structure tooling for agents and automation; users should interact through Copilot skills and agents, not by feeding prompts to the CLI.
+
+**Do not** use `npx @dev-kit/harness` unless that package is installed from your registry (404 → use `harness` or `npm run harness --` per `harness-cli.md`).
+
+The CLI is setup/structure tooling for agents and automation; users interact through Copilot skills and agents, not by prompting the CLI.
 
 ## Session
 
@@ -42,9 +45,11 @@ After orient/gate tools pass, still run when needed:
 
 ## CI (hard enforcement)
 
+Pin `@dev-kit/harness` in devDependencies, then:
+
 ```yaml
-- run: npx @dev-kit/harness@0.3.1 gate --workspace . --json
-- run: npx @dev-kit/harness@0.3.1 validate-plan --workspace . --json
+- run: npx harness gate --workspace . --json
+- run: npx harness validate-plan --workspace . --json
 ```
 
 Fail PR when product code changes without `plan_lock: true` on a linked plan.

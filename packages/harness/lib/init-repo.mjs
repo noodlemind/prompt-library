@@ -13,7 +13,7 @@ _Add project-specific notes here._
 ## Related
 
 - Plans: \`docs/plans/\`
-- Run \`npx @dev-kit/harness doctor\` after global install.
+- Run \`harness doctor\` after global install (see skills/references/harness-cli.md).
 `;
 
 export function runInitRepo({ workspace, flags, log }) {

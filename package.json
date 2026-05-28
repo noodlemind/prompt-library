@@ -1,0 +1,12 @@
+{
+  "name": "prompt-library",
+  "private": true,
+  "description": "Skill-driven prompt library — maintainer scripts",
+  "scripts": {
+    "harness": "node packages/harness/bin/harness.mjs",
+    "harness:install": "node packages/harness/bin/harness.mjs install --configure-vscode --autonomy balanced",
+    "harness:doctor": "node packages/harness/bin/harness.mjs doctor",
+    "harness:upgrade": "node packages/harness/bin/harness.mjs upgrade --configure-vscode",
+    "build:harness": "node scripts/build-harness-assets.mjs"
+  }
+}

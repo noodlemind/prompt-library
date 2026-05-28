@@ -102,7 +102,7 @@ Creates `docs/plans/` and `docs/agent-context.md`.
 
 - `/` shows skills such as `/btw`, `/code-review`, `/harness-doctor`
 - `@engineer` and coordinators appear in the agent menu
-- `npx @dev-kit/harness doctor` — all required checks PASS
+- `harness doctor` (or `npm run harness -- doctor` from this repo) — all required checks PASS
 - Smoke: `@engineer` or `/btw` on a small question
 
 ## More detail

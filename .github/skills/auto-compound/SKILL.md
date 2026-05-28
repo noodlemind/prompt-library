@@ -36,7 +36,7 @@ Execute **`/compound-learnings`** — write solution md (global `knowledge/solut
 npx @dev-kit/harness compound --workspace . --json
 ```
 
-Or after solution write only: `npx @dev-kit/harness index --workspace . --json`
+Or after solution write only: `harness index --workspace . --json`
 
 ### 4. Memory cards
 

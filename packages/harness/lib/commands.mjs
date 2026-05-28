@@ -126,7 +126,7 @@ export async function cmdInstallOrUpgrade(command, argv) {
       );
     }
     if (flags.dryRun) console.log('  (dry-run — no files written)');
-    else console.log('  Next: npx @dev-kit/harness doctor');
+    else console.log(`  Next: ${hintDoctor()}`);
   }
 
   return 0;

@@ -88,7 +88,10 @@ test('help works from a clean repo checkout without installed package deps', () 
   const result = runHarness(['help']);
 
   assert.equal(result.status, 0, result.stderr);
-  assert.match(result.stdout, /Usage:/);
+  assert.match(result.stdout, /Usage \(binary: harness\):/);
+  assert.match(result.stdout, /harness install \[options\]/);
+  assert.match(result.stdout, /npm run harness:install/);
+  assert.doesNotMatch(result.stdout, /npx @dev-kit\/harness install \[options\]/);
 });
 
 test('recall positional query excludes option values', () => {

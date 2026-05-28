@@ -1,14 +1,14 @@
 # Harness Tool Contract
 
-**SSOT** for `@dev-kit/harness` agent-runtime commands. Skills and `@engineer` **call harness**; harness does not invoke skills.
+**SSOT** for harness agent-runtime commands. Skills and `@engineer` **call harness**; harness does not invoke skills.
 
-Design: [`docs/architecture/tool-native-harness-design.md`](../../../docs/architecture/tool-native-harness-design.md) · Budget: [`context-budget.md`](context-budget.md)
+Design: [`docs/architecture/tool-native-harness-design.md`](../../../docs/architecture/tool-native-harness-design.md) · Budget: [`context-budget.md`](context-budget.md) · Invocation: [`harness-cli.md`](harness-cli.md)
 
 ## Two-tier boundary
 
 | Tier | Location | Use when |
 |------|----------|----------|
-| **A — Harness CLI** | `@dev-kit/harness` npm package | Same behavior needed across product repos (recall, gate, index, compound, validate-plan) |
+| **A — Harness CLI** | npm package `@dev-kit/harness` (binary: `harness`) | Same behavior needed across product repos (recall, gate, index, compound, validate-plan) |
 | **B — Skill-local scripts** | `.github/skills/<name>/scripts/` | Narrow, read-only validators for one skill only — **exception**, not default |
 
 **Rule:** Cross-repo → harness command. Product-only → product check or script.
@@ -16,9 +16,10 @@ Design: [`docs/architecture/tool-native-harness-design.md`](../../../docs/archit
 ## Invocation (agents)
 
 ```bash
-npx @dev-kit/harness <command> [args] --workspace . --json
+harness <command> [args] --workspace . --json
 ```
 
+- Install once: see `harness-cli.md` (maintainers use `npm run harness:install`; registry users use `npx @dev-kit/harness install`).
 - Pin version in product repos: `devDependencies` or `.harness-version` (see harness README).
 - **Read** `.harness/context-pack.md` after `orient` — do not paste full CLI stdout into chat.
 - Developers use Copilot agents/skills; they do not prompt the CLI directly.
@@ -127,9 +128,11 @@ After orient: `read` ≤3 solution paths, ≤30 lines each per [`context-budget.
 ## CI examples
 
 ```yaml
-- run: npx @dev-kit/harness@0.4.0 gate --workspace . --json
-- run: npx @dev-kit/harness@0.4.0 validate-plan --workspace . --json
+- run: npx harness gate --workspace . --json
+- run: npx harness validate-plan --workspace . --json
 ```
+
+(`npx harness` uses the project devDependency binary when `@dev-kit/harness` is installed locally.)
 
 ## Related
 

@@ -2,6 +2,7 @@
 /**
  * @dev-kit/harness — install Adaptive Engineer Harness into global Copilot paths.
  */
+import { CLI_BIN, PACKAGE_NAME } from '../lib/cli-hints.mjs';
 import {
   cmdInstallOrUpgrade,
   cmdDoctor,
@@ -21,23 +22,30 @@ import {
 const [, , command = 'help', ...args] = process.argv;
 
 const HELP = `
-@dev-kit/harness — Adaptive Engineer Harness for GitHub Copilot (VS Code, CLI, IntelliJ)
+${PACKAGE_NAME} — Adaptive Engineer Harness for GitHub Copilot (VS Code, CLI, IntelliJ)
 
-Usage:
-  npx @dev-kit/harness install [options]
-  npx @dev-kit/harness upgrade [options]
-  npx @dev-kit/harness doctor [options]
-  npx @dev-kit/harness status [options]
-  npx @dev-kit/harness index [options]
-  npx @dev-kit/harness orient [options] [--query "task summary"]
-  npx @dev-kit/harness gate [options] [--phase implement|verify]
-  npx @dev-kit/harness recall "search terms" [options]
-  npx @dev-kit/harness get [options] [--docid id | --path rel/path]
-  npx @dev-kit/harness validate-plan [options] [--plan docs/plans/file.md]
-  npx @dev-kit/harness compound [options]
-  npx @dev-kit/harness events [options]
-  npx @dev-kit/harness init-repo [options]
-  npx @dev-kit/harness uninstall [options]
+Usage (binary: ${CLI_BIN}):
+  harness install [options]
+  harness upgrade [options]
+  harness doctor [options]
+  harness status [options]
+  harness index [options]
+  harness orient [options] [--query "task summary"]
+  harness gate [options] [--phase implement|verify]
+  harness recall "search terms" [options]
+  harness get [options] [--docid id | --path rel/path]
+  harness validate-plan [options] [--plan docs/plans/file.md]
+  harness compound [options]
+  harness events [options]
+  harness init-repo [options]
+  harness uninstall [options]
+
+Install without publishing:
+  npm run harness:install     (from prompt-library repo root)
+  npm link && harness install (after: cd packages/harness && npm run build:assets)
+
+Registry install (when published):
+  npx ${PACKAGE_NAME} install
 
 Options:
   --dry-run              Print actions without writing
