@@ -4,17 +4,20 @@ Get from zero to **`@engineer`** delivering work in any enterprise product repo.
 
 ## 1. Install once (per machine)
 
-**Recommended:** **`@dev-kit/harness`** from your enterprise npm registry (Nexus). See [`nexus-registry-setup.md`](./nexus-registry-setup.md) and [`npm-harness-distribution-plan.md`](../architecture/npm-harness-distribution-plan.md).
+**Recommended:** install the **`harness`** command from your enterprise npm registry package **`@dev-kit/harness`** (Nexus). The scoped name is only the package identity; daily commands use `harness`. See [`nexus-registry-setup.md`](./nexus-registry-setup.md) and [`npm-harness-distribution-plan.md`](../architecture/npm-harness-distribution-plan.md).
 
 ```bash
-npx @dev-kit/harness@latest install
-npx @dev-kit/harness doctor
+npm install -g @dev-kit/harness@latest
+harness install
+harness doctor
 ```
 
-**From prompt-library clone (maintainers):**
+**From prompt-library clone before publishing (maintainers):**
 
 ```bash
-node packages/harness/bin/harness.mjs install --configure-vscode
+npm install -g ./packages/harness
+harness install --configure-vscode
+harness doctor
 ```
 
 Or VS Code: **Dev Kit: Install Harness** / **Dev Kit: Harness Doctor**.
@@ -44,7 +47,7 @@ Set **`autonomy`**:
 Bootstrap each service repo:
 
 ```bash
-npx @dev-kit/harness init-repo
+harness init-repo
 ```
 
 ```text
@@ -75,8 +78,8 @@ You do **not** need `/capture-issue`, `/plan-issue`, `/recall`, or `/compound-le
 ## 5. CI (optional hard gate)
 
 ```yaml
-- run: npx @dev-kit/harness@0.3.1 gate --workspace . --json
-- run: npx @dev-kit/harness@0.3.1 validate-plan --workspace . --json
+- run: harness gate --workspace . --json
+- run: harness validate-plan --workspace . --json
 ```
 
 ## 6. Health check

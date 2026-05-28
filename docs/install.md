@@ -4,7 +4,7 @@ This prompt library is **source material**, not an IDE extension. Policy:
 
 **Prompts, agents, skills, and instructions are installed globally only** — not copied into product repositories.
 
-Install and upgrade use **`@dev-kit/harness`** ([Nexus setup](./onboarding/nexus-registry-setup.md), [distribution plan](./architecture/npm-harness-distribution-plan.md)).
+Install and upgrade use the **`harness`** CLI. The npm package is named **`@dev-kit/harness`** for registry uniqueness, but daily commands should use `harness` ([Nexus setup](./onboarding/nexus-registry-setup.md), [distribution plan](./architecture/npm-harness-distribution-plan.md)).
 
 ## Quick install
 
@@ -13,13 +13,24 @@ Install and upgrade use **`@dev-kit/harness`** ([Nexus setup](./onboarding/nexus
 After `.npmrc` maps `@dev-kit` to your registry:
 
 ```bash
-npx @dev-kit/harness@latest install --configure-vscode --autonomy balanced
-npx @dev-kit/harness doctor
+npm install -g @dev-kit/harness@latest
+harness install --configure-vscode --autonomy balanced
+harness doctor
 ```
 
 Pin versions in team runbooks when you need reproducibility.
 
-### Maintainers (this repo)
+### Maintainers / unpublished package (this repo)
+
+Install the local package globally from the prompt-library clone. This builds the ignored assets bundle before packing, so no registry publish is required:
+
+```bash
+npm install -g ./packages/harness
+harness install --configure-vscode --autonomy balanced
+harness doctor
+```
+
+If you do not want to put `harness` on `PATH`, you can run the repo script directly for setup:
 
 ```bash
 node packages/harness/bin/harness.mjs install --configure-vscode --autonomy balanced
@@ -80,7 +91,7 @@ Enable:
 - **Settings** → **Tools** → **GitHub Copilot** → **Customizations**
 - **Settings** → **Tools** → **GitHub Copilot** → **Chat** → **Agent** (Agent Skills if required)
 
-Re-run **`npx @dev-kit/harness upgrade`** after pulling prompt-library updates (from any machine with the CLI).
+Re-run **`harness upgrade`** after pulling prompt-library updates (from any machine with the CLI).
 
 ## Update process
 
@@ -93,7 +104,7 @@ Upgrades use **`.harness-lock.json`** and **`retired.json`** to remove only harn
 ## Bootstrap a product repo
 
 ```bash
-npx @dev-kit/harness init-repo
+harness init-repo
 ```
 
 Creates `docs/plans/` and `docs/agent-context.md`.
@@ -102,7 +113,7 @@ Creates `docs/plans/` and `docs/agent-context.md`.
 
 - `/` shows skills such as `/btw`, `/code-review`, `/harness-doctor`
 - `@engineer` and coordinators appear in the agent menu
-- `npx @dev-kit/harness doctor` — all required checks PASS
+- `harness doctor` — all required checks PASS
 - Smoke: `@engineer` or `/btw` on a small question
 
 ## More detail

@@ -82,11 +82,11 @@ Skip this step when the fix applies across all product repositories.
 
 ### 4. Update Knowledge Index (required)
 
-**Must** run `npx @dev-kit/harness index` or **`/index-memory`**. Compounding is incomplete without index update.
+**Must** run `harness index` or **`/index-memory`**. Compounding is incomplete without index update.
 
 **`@engineer`** chains this via internal **`/auto-compound`** after verify — manual index optional for power users.
 
-Remind the user to run **`npx @dev-kit/harness upgrade`** (or `harness index`) so `~/.copilot/knowledge/` updates on other machines after publish.
+Remind the user to run **`harness upgrade`** (or `harness index`) so `~/.copilot/knowledge/` updates on other machines after publish.
 
 ### 5. Graduate to Agent Context (Curation Step)
 
