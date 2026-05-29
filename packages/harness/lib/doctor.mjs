@@ -140,6 +140,27 @@ export function runDoctor({ copilotHome, assetsRoot, pkgRoot, flags }) {
     optional: manifestEntries.length === 0,
   });
 
+  const mapPath = path.join(flags.workspace, '.harness', 'codebase-map.md');
+  const mapAlt = path.join(flags.workspace, 'docs', 'codebase-map.md');
+  const mapFile = fs.existsSync(mapPath) ? mapPath : fs.existsSync(mapAlt) ? mapAlt : null;
+  let mapFresh = true;
+  let mapHint = 'Run: harness init-repo --snapshot or harness snapshot';
+  if (mapFile) {
+    const ageMs = Date.now() - fs.statSync(mapFile).mtimeMs;
+    const ageDays = ageMs / (86400 * 1000);
+    mapFresh = ageDays <= 30;
+    mapHint = mapFresh
+      ? `Map fresh (${Math.floor(ageDays)}d old)`
+      : `Map stale (${Math.floor(ageDays)}d) — run: harness snapshot`;
+  }
+  checks.push({
+    id: 'H12',
+    name: 'Codebase map freshness (≤30 days)',
+    pass: mapFile ? mapFresh : false,
+    hint: mapHint,
+    optional: !mapFile,
+  });
+
   const required = checks.filter((c) => !c.optional);
   const pass = required.every((c) => c.pass);
   return { checks, pass };

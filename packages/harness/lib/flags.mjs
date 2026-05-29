@@ -45,6 +45,11 @@ export function parseFlags(argv) {
     path: null,
     lines: 40,
     maxBytes: 2048,
+    noGit: false,
+    snapshot: false,
+    snapshotOut: null,
+    snapshotCommit: false,
+    snapshotMaxFiles: 200,
   };
 
   for (let i = 0; i < argv.length; i++) {
@@ -57,6 +62,13 @@ export function parseFlags(argv) {
     else if (a === '--include-plans') flags.includePlans = true;
     else if (a === '--strict-intent') flags.strictIntent = true;
     else if (a === '--no-events') flags.noEvents = true;
+    else if (a === '--no-git') flags.noGit = true;
+    else if (a === '--snapshot') flags.snapshot = true;
+    else if (a === '--snapshot-commit') flags.snapshotCommit = true;
+    else if (a.startsWith('--snapshot-out=')) flags.snapshotOut = a.split('=').slice(1).join('=');
+    else if (a === '--snapshot-out') flags.snapshotOut = argv[++i];
+    else if (a.startsWith('--max-files=')) flags.snapshotMaxFiles = parsePositiveInt(a.split('=')[1], '--max-files');
+    else if (a === '--max-files') flags.snapshotMaxFiles = parsePositiveInt(argv[++i], '--max-files');
     else if (a.startsWith('--query=')) flags.query = a.split('=').slice(1).join('=');
     else if (a === '--query') flags.query = argv[++i];
     else if (a.startsWith('--phase=')) flags.phase = a.split('=')[1];
@@ -67,7 +79,6 @@ export function parseFlags(argv) {
     else if (a === '--force-knowledge-reset') flags.preserveKnowledge = false;
     else if (a === '--force-profile') flags.forceProfile = true;
     else if (a === '--configure-vscode') flags.configureVsCode = true;
-    else if (a === '--no-configure-vscode') flags.configureVsCode = false;
     else if (a.startsWith('--autonomy=')) flags.autonomy = a.split('=')[1];
     else if (a === '--autonomy') flags.autonomy = argv[++i];
     else if (a.startsWith('--copilot-home=')) flags.copilotHome = a.split('=')[1];

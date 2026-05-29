@@ -59,6 +59,8 @@ export function loadPlan(workspace, relPath) {
     activityText: extractSection(text, 'Activity'),
     verificationPlan: extractSection(text, 'Verification Plan'),
     memoryCards: extractSection(text, 'Memory Cards'),
+    editScope: extractSection(text, 'Edit Scope'),
+    impactedFilesText: extractSection(text, 'Impacted Files'),
   };
   return {
     path: relPath.replace(/\\/g, '/'),

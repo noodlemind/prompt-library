@@ -9,6 +9,7 @@ export function buildContextPack({
   activePlan,
   gatePreview,
   nextTools,
+  codebaseMap,
 }) {
   const lines = [
     '# Harness Context Pack',

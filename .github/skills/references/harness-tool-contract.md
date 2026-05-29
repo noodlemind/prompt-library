@@ -41,7 +41,8 @@ harness <command> [args] --workspace . --json
 |---------|---------|
 | `install` / `upgrade` | Sync skills, agents, knowledge to `~/.copilot/` |
 | `doctor` | Health checks |
-| `init-repo` | Scaffold `docs/plans/`, `.harness/` |
+| `init-repo` | Scaffold `docs/plans/`, `.harness/`; optional `--snapshot` |
+| `snapshot` | Deterministic codebase map (no LLM) → `.harness/codebase-map.md` |
 | `status` / `uninstall` | Lock file introspection / safe remove |
 
 ### Agent runtime (every `@engineer` trackable turn)

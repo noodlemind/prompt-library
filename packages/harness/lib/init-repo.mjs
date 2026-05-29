@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { ensureHarnessDir } from './session.mjs';
+import { runSnapshot } from './snapshot.mjs';
 
 const AGENT_CONTEXT_STUB = `# Agent Context
 
@@ -60,6 +61,20 @@ export function runInitRepo({ workspace, flags, log }) {
     }
     stats.created.push('knowledge/manifest.yaml');
     log('created knowledge/manifest.yaml (optional fallback)');
+  }
+
+  if (flags.snapshot) {
+    const snap = runSnapshot({
+      workspace,
+      flags: {
+        dryRun: flags.dryRun,
+        snapshotOut: flags.snapshotOut,
+        snapshotCommit: flags.snapshotCommit,
+        snapshotMaxFiles: flags.snapshotMaxFiles,
+      },
+    });
+    stats.snapshot = snap.out;
+    log(`snapshot → ${snap.out} (~${snap.tokenEstimate} tokens)`);
   }
 
   return stats;

@@ -17,8 +17,6 @@ import { runDoctor } from './doctor.mjs';
 import { runInitRepo } from './init-repo.mjs';
 import { runIndexKnowledge } from './index-knowledge.mjs';
 import { configureVSCodeSettings } from './vscode-settings.mjs';
-import { applyInstallDefaults } from './install-defaults.mjs';
-import { isFirstHarnessInstall, markOnboardingComplete, printPostSetupOnboarding } from './onboard.mjs';
 import { parseQueryFromArgv } from './argv.mjs';
 import { readEvents, summarizeEvents, writeEvent } from './events.mjs';
 
@@ -51,22 +49,13 @@ function log(flags, msg) {
 }
 
 export async function cmdInstallOrUpgrade(command, argv) {
-  const flags = applyInstallDefaults(parseFlags(argv), argv, command);
+  const flags = parseFlags(argv);
   const version = readPkgVersion();
   const assets = getAssetsRoot();
   const copilotHome = resolveCopilotHome(flags.copilotHome);
   const previousLock = readLock(copilotHome);
   const retired = loadRetired(pkgRoot);
   const logger = (m) => log(flags, m);
-
-  if (!flags.json && (command === 'setup' || command === 'install')) {
-    log(
-      flags,
-      command === 'setup'
-        ? 'setup: syncing Copilot globals (VS Code discovery, autonomy=balanced)'
-        : 'install: syncing Copilot globals (use harness setup for the same defaults)'
-    );
-  }
 
   const allStats = { vscode: null, intellij: null };
 
@@ -138,10 +127,6 @@ export async function cmdInstallOrUpgrade(command, argv) {
     }
     if (flags.dryRun) console.log('  (dry-run — no files written)');
     else console.log('  Next: harness doctor');
-    if (!flags.dryRun && firstInstall && (command === 'setup' || command === 'install')) {
-      markOnboardingComplete(copilotHome, false);
-      printPostSetupOnboarding({ copilotHome });
-    }
   }
 
   return 0;
@@ -202,14 +187,41 @@ export async function cmdInitRepo(argv) {
   const flags = parseFlags(argv);
   const workspace = path.resolve(flags.workspace);
   const logger = (m) => log(flags, m);
-  runInitRepo({ workspace, flags, log: logger });
+  const stats = runInitRepo({ workspace, flags, log: logger });
   writeEvent(workspace, flags, {
     type: 'init_repo',
     command: 'init-repo',
     result: 'pass',
     exitCode: 0,
+    snapshot: stats.snapshot || null,
   });
-  if (!flags.json) console.log('[harness] init-repo done.');
+  if (flags.json) {
+    console.log(JSON.stringify({ pass: true, stats }, null, 2));
+  } else {
+    console.log('[harness] init-repo done.');
+    if (stats.snapshot) console.log(`  snapshot: ${stats.snapshot}`);
+  }
+  return 0;
+}
+
+export async function cmdSnapshot(argv) {
+  const { runSnapshot } = await import('./snapshot.mjs');
+  const flags = parseFlags(argv);
+  const workspace = path.resolve(flags.workspace);
+  const result = runSnapshot({ workspace, flags });
+  writeEvent(workspace, flags, {
+    type: 'snapshot',
+    command: 'snapshot',
+    result: 'pass',
+    exitCode: 0,
+    out: result.out,
+    tokenEstimate: result.tokenEstimate,
+  });
+  if (flags.json) {
+    console.log(JSON.stringify({ pass: true, ...result }, null, 2));
+  } else {
+    console.log(`[harness] snapshot → ${result.out} (~${result.tokenEstimate} tokens, ${result.bytes} bytes)`);
+  }
   return 0;
 }
 
@@ -265,8 +277,9 @@ export async function cmdGate(argv) {
   const { runGate } = await import('./gate.mjs');
   const flags = parseFlags(argv);
   const workspace = path.resolve(flags.workspace);
+  const copilotHome = resolveCopilotHome(flags.copilotHome);
   const query = parseQueryFromArgv(argv, flags);
-  const result = runGate({ workspace, flags, query });
+  const result = runGate({ workspace, flags, query, copilotHome });
   writeEvent(workspace, flags, {
     type: 'gate',
     command: 'gate',

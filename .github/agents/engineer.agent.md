@@ -27,8 +27,11 @@ Contract: `tool-native-loop.md` · `engineer-autopilot/SKILL.md`. **Do not ask**
 | **0b** | **`/ensure-capability`** if context-pack or registry shows hard gap |
 | **0c** | **`/ensure-plan`** if `harness gate` would fail C1/C3 |
 | **1** | Understand + domain route (`domain-routing.md`) |
-| **1c** | Terminal: `harness gate --phase implement` — **exit 0** before `editFiles` |
-| **2–4** | Investigate → implement (`## Impacted Files` only) |
+| **1c** | Terminal: `harness gate --phase implement` — **exit 0** before `editFiles` (exit `2` = warn only unless `autonomy: strict`) |
+| **2a** | State **root-cause hypothesis** (1–2 sentences) in plan `## Activity` |
+| **2b** | List **evidence** (test, stack frame, symbol) before editing |
+| **2–4** | Investigate → implement per `surgical-edit-policy.md` and `## Impacted Files` / `## Edit Scope` |
+| **4** | **Edit policy:** minimal patch; files &gt;200 LOC → cite line range in Activity; delegate `code-implementer` when &gt;2 files or fix is localized |
 | **5** | `harness gate --phase verify` + tests |
 | **6** | **`/auto-compound`** on success |
 

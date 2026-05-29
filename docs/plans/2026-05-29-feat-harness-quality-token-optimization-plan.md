@@ -1,9 +1,9 @@
 ---
 title: "Harness quality and token optimization (surgical edits + deterministic snapshot)"
 type: feat
-status: planned
+status: in-progress
 plan_lock: false
-phase: 0
+phase: 3
 priority: P1
 risk: yellow
 autonomy: balanced
@@ -61,12 +61,12 @@ Research and phased implementation for **surgical edits** (stop whole-file rewri
 
 ## Acceptance Criteria
 
-- [ ] `surgical-edit-policy.md` exists and is linked from `engineer.agent.md`
-- [ ] Plan template includes `## Edit Scope` and optional `edit_strategy` / `max_lines_changed`
-- [ ] `harness snapshot` implemented with tree + manifest parsing (no LLM)
-- [ ] `init-repo --snapshot` documented in install guide and getting-started
-- [ ] Chronicle vs Harness documented for end users without repo access
-- [ ] Phase 1 shippable via skill hydrate without waiting for Phase 2 npm
+- [x] `surgical-edit-policy.md` exists and is linked from `engineer.agent.md`
+- [x] Plan template includes `## Edit Scope` and optional `edit_strategy` / `max_lines_changed`
+- [x] `harness snapshot` implemented with tree + manifest parsing (no LLM)
+- [x] `init-repo --snapshot` documented in install guide and getting-started
+- [x] Chronicle vs Harness documented (prior session) for end users without repo access
+- [x] Phase 1 shippable via skill hydrate without waiting for Phase 2 npm
 
 ## Research Notes
 
@@ -161,4 +161,5 @@ Optional `--via repomix` in Phase 4; not a hard dependency.
 ## Activity
 
 - 2026-05-29: Research plan authored (architecture + this plan file).
+- 2026-05-29: Phases 1–3 implemented (surgical-edit policy, harness snapshot, gate E1–E3, review check).
 - 2026-05-29: External industry research finalized (Aider, Chroma, GitHub agentic workflows, AGENTS.md, SWE-agent family); recommendations matrix §3.6 added.

@@ -40,11 +40,12 @@ Skip this step only if the task explicitly says "no test needed" or if the chang
 
 ### 3. Implement the Change
 
-Write the minimal code to make the test pass:
+Write the minimal code to make the test pass (see `surgical-edit-policy.md`):
 - Match existing style exactly (indentation, naming, patterns)
-- Change only the files specified in the task
-- Keep the diff as small as possible
+- Change only the files and symbols specified in the task
+- Keep the diff as small as possible; honor line-range scope when given
 - No drive-by refactoring of surrounding code
+- Log root cause in your report: `fix: path:Lstart-Lend — one line`
 
 ### 4. Verify
 

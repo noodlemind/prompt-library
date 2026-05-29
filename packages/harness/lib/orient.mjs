@@ -1,5 +1,20 @@
 import fs from 'fs';
 import path from 'path';
+
+const MAP_MAX_AGE_DAYS = 7;
+
+function resolveCodebaseMap(workspace) {
+  for (const rel of ['.harness/codebase-map.md', 'docs/codebase-map.md']) {
+    const full = path.join(workspace, rel);
+    if (!fs.existsSync(full)) continue;
+    const ageMs = Date.now() - fs.statSync(full).mtimeMs;
+    const ageDays = Math.floor(ageMs / 86400000);
+    if (ageDays <= MAP_MAX_AGE_DAYS) {
+      return { path: rel.replace(/\\/g, '/'), ageDays };
+    }
+  }
+  return null;
+}
 import { rankRecall, findMatchingPlans } from './recall-rank.mjs';
 import { runGate } from './gate.mjs';
 import { buildContextPack } from './context-pack.mjs';

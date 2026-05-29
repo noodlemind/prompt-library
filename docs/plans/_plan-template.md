@@ -75,6 +75,12 @@ Filled by `/plan-issue` or coordinators: findings, patterns, file paths.
 
 Allowlist of paths expected to change.
 
+## Edit Scope
+
+- **Strategy:** patch (or `refactor` / `new-file` — set `edit_strategy` in frontmatter)
+- **Files and symbols:** e.g. `src/foo.ts` — `handleRequest()` approx. L42–68 only
+- **Out of scope:** formatting, renaming unrelated symbols
+
 ## Verification Plan
 
 Commands, tests, or checks that prove done.

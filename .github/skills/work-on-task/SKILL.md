@@ -74,9 +74,10 @@ If the next step requires a risky strategy choice, follow `.github/skills/refere
   - **VS Code**: Run in terminal, read output with `terminalLastCommand`
   - **CLI/Claude Code**: Run test commands directly via `run_command` or `Bash`
 - Clean up while tests are green
-- Keep diffs surgical — change only what the task requires
+- Keep diffs surgical — change only what the task requires (`.github/skills/references/surgical-edit-policy.md`)
+- Honor `## Edit Scope` and frontmatter `edit_strategy` / `max_lines_changed` when present
 
-For delegated implementation or specialist review, use `.github/skills/references/subagent-context-packet.md` so the subagent receives the task objective, plan context, impacted files, constraints, approval dependencies, and expected response.
+For delegated implementation or specialist review, use `.github/skills/references/subagent-context-packet.md` so the subagent receives the task objective, plan context, impacted files, **Edit Scope**, constraints, approval dependencies, and expected response.
 
 ### 3. Scope Guard
 

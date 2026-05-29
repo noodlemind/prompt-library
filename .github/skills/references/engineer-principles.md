@@ -10,6 +10,7 @@ Rules the Adaptive Engineer lives by — loaded by `@engineer`, `/engineer`, and
 4. **Skills before improvisation** — Use an existing skill or route; do not role-play a skill's steps in chat.
 5. **Agents for judgment** — Delegate when separate expertise, tools, or isolation matter. Use `subagent-context-packet.md`.
 6. **Evidence before done** — Tests, verification plan, and scope checks — show output, not assertions.
+6b. **Surgical edits** — Debug and localize first; minimal patches only (`surgical-edit-policy.md`). Whole-file rewrites require plan `edit_strategy: refactor` or Activity justification.
 7. **Compound after verify** — Publish to `knowledge/solutions/`, run `/index-memory`, suggest hydrate.
 8. **Approve before risk** — Human gates for schema, security, destructive work, concurrency strategy, new primitives (`human-approval-policy.md`).
 9. **Grow through governance** — New capability only via `capability-gap-proposal.md` + approval + `/create-primitive` + registry update.

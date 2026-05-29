@@ -4,7 +4,10 @@ import { readSession } from './session.mjs';
 import { pickActivePlan, listPlanRels, parsePlanFrontmatter } from './plan-parse.mjs';
 import { findMatchingPlans } from './recall-rank.mjs';
 
-export function runGate({ workspace, flags, query = '' }) {
+import { runDiffAdvisories } from './gate-diff.mjs';
+import { resolveAutonomy } from './autonomy.mjs';
+
+export function runGate({ workspace, flags, query = '', copilotHome = null }) {
   const session = readSession(workspace);
   const phase = flags.phase || 'implement';
   const checks = [];
@@ -140,6 +143,18 @@ export function runGate({ workspace, flags, query = '' }) {
     exitCode = Math.max(exitCode, 2);
   }
 
+  const autonomy = resolveAutonomy({ flags, plan, copilotHome });
+  if (plan && (phase === 'implement' || phase === 'default') && pass) {
+    const diff = runDiffAdvisories({ workspace, plan, flags, autonomy });
+    checks.push(...diff.checks);
+    if (diff.exitCode === 1) {
+      pass = false;
+      exitCode = 1;
+    } else {
+      exitCode = Math.max(exitCode, diff.exitCode);
+    }
+  }
+
   const result = {
     pass,
     phase,
@@ -147,6 +162,7 @@ export function runGate({ workspace, flags, query = '' }) {
     plan: plan ? { path: plan.path, status: plan.status, plan_lock: plan.plan_lock } : null,
     checks,
     blockedReason: pass ? null : checks.filter((c) => !c.pass).map((c) => c.message).join('; '),
+    autonomy,
     nextTools: pass
       ? phase === 'verify'
         ? ['harness compound', '/auto-compound']
