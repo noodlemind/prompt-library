@@ -1,6 +1,6 @@
 # Harness Tool Contract
 
-**SSOT** for `@dev-kit/harness` agent-runtime commands. Skills and `@engineer` **call harness**; harness does not invoke skills.
+**SSOT** for harness agent-runtime commands. Skills and `@engineer` **call harness**; harness does not invoke skills. `@dev-kit/harness` is the npm package name; `harness` is the command name.
 
 Design: [`docs/architecture/tool-native-harness-design.md`](../../../docs/architecture/tool-native-harness-design.md) · Budget: [`context-budget.md`](context-budget.md)
 
@@ -8,7 +8,7 @@ Design: [`docs/architecture/tool-native-harness-design.md`](../../../docs/archit
 
 | Tier | Location | Use when |
 |------|----------|----------|
-| **A — Harness CLI** | `@dev-kit/harness` npm package | Same behavior needed across product repos (recall, gate, index, compound, validate-plan) |
+| **A — Harness CLI** | `harness` command from the `@dev-kit/harness` npm package or local clone | Same behavior needed across product repos (recall, gate, index, compound, validate-plan) |
 | **B — Skill-local scripts** | `.github/skills/<name>/scripts/` | Narrow, read-only validators for one skill only — **exception**, not default |
 
 **Rule:** Cross-repo → harness command. Product-only → product check or script.
@@ -16,10 +16,12 @@ Design: [`docs/architecture/tool-native-harness-design.md`](../../../docs/archit
 ## Invocation (agents)
 
 ```bash
-npx @dev-kit/harness <command> [args] --workspace . --json
+harness <command> [args] --workspace . --json
 ```
 
-- Pin version in product repos: `devDependencies` or `.harness-version` (see harness README).
+- Pin version in product repos: `devDependencies`, a globally installed package, or `.harness-version` (see harness README).
+- If `harness` is not on `PATH`, install it from a prompt-library clone before publishing: `npm install -g ./packages/harness`. For registry installs: `npm install -g @dev-kit/harness@latest`.
+- Do not use `npx @dev-kit/harness` in agent runtime instructions; reserve `npx` for one-off bootstrap or pinned CI when a registry package is available.
 - **Read** `.harness/context-pack.md` after `orient` — do not paste full CLI stdout into chat.
 - Developers use Copilot agents/skills; they do not prompt the CLI directly.
 
@@ -127,8 +129,8 @@ After orient: `read` ≤3 solution paths, ≤30 lines each per [`context-budget.
 ## CI examples
 
 ```yaml
-- run: npx @dev-kit/harness@0.4.0 gate --workspace . --json
-- run: npx @dev-kit/harness@0.4.0 validate-plan --workspace . --json
+- run: harness gate --workspace . --json
+- run: harness validate-plan --workspace . --json
 ```
 
 ## Related

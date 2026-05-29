@@ -494,6 +494,6 @@ Proposal: ship **`balanced`** globally, document **`full`** for autonomous loop,
 
 **Pre-implementation gap review:** [`harness-pre-implementation-review.md`](harness-pre-implementation-review.md) — contradictions, MVP order, foolproof checklist.
 
-**Distribution:** [`npm-harness-distribution-plan.md`](npm-harness-distribution-plan.md) — **`@dev-kit/harness`** via Nexus (`npx @dev-kit/harness install`).
+**Distribution:** [`npm-harness-distribution-plan.md`](npm-harness-distribution-plan.md) — install the **`harness`** command from `@dev-kit/harness` via Nexus or a local clone.
 
 **After confirmation:** implement MVP per gap review (G1 reconcile → B → C → F2/F3 → H → D) on `cursor/engineer-vision-review-a13c` (or main).

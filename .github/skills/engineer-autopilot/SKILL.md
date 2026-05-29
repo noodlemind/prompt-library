@@ -24,6 +24,10 @@ Single-session loop. User types **`@engineer`** only.
 | 6 Compound | **`/auto-compound`** | Knowledge only |
 | 7 Notify | Summary + plan/solution links | No |
 
+## Small-model execution rule
+
+Follow the loop exactly in order. Harness commands are hard gates, not suggestions: run `harness orient`, read `.harness/context-pack.md`, run `harness gate`, then proceed only when the gate allows it. If a command fails because the CLI is missing, install/link the local package per `harness-tool-contract.md` instead of skipping the step.
+
 ## User must not be asked to run
 
 `/capture-issue`, `/plan-issue`, `/recall`, `/compound-learnings`, `/index-memory` — engineer invokes internal equivalents.

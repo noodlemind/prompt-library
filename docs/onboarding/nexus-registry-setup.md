@@ -1,6 +1,6 @@
 # Nexus (private npm) setup for @dev-kit/harness
 
-Platform teams publish **`@dev-kit/harness`** manually to Sonatype Nexus (or compatible npm registry). Developers install with **`npx`** after registry auth.
+Platform teams publish **`@dev-kit/harness`** manually to Sonatype Nexus (or compatible npm registry). Developers install the package after registry auth, then run the shorter **`harness`** command.
 
 ## Package identity
 
@@ -8,7 +8,7 @@ Platform teams publish **`@dev-kit/harness`** manually to Sonatype Nexus (or com
 |-------|--------|
 | **npm name** | `@dev-kit/harness` |
 | **Scope** | `@dev-kit` (must match Nexus hosted scope configuration) |
-| **CLI binary** | `harness` (invoked via `npx @dev-kit/harness <command>`) |
+| **CLI binary** | `harness` |
 | **Source** | `packages/harness/` in prompt-library |
 
 Optional satellite packages (later):
@@ -38,7 +38,7 @@ npm version patch   # or minor/major — semver
 npm publish
 ```
 
-`prepublishOnly` runs `build:assets` automatically if you publish from `packages/harness`.
+`prepare` / `prepack` / `prepublishOnly` run `build:assets` automatically if you package or publish from `packages/harness`.
 
 ### 3. Verify on Nexus
 
@@ -68,21 +68,23 @@ Same scope mapping; each developer authenticates once.
 ### Install harness
 
 ```bash
-npx @dev-kit/harness@latest install
-npx @dev-kit/harness doctor
+npm install -g @dev-kit/harness@latest
+harness install
+harness doctor
 ```
 
 Pin version in internal docs:
 
 ```bash
-npx @dev-kit/harness@0.1.0 install --autonomy balanced
+npm install -g @dev-kit/harness@0.1.0
+harness install --autonomy balanced
 ```
 
 ## CI / air-gapped
 
 | Scenario | Approach |
 |----------|----------|
-| **CI doctor check** | `npx @dev-kit/harness@0.1.0 doctor --json` with registry auth in pipeline |
+| **CI doctor check** | `npm install -g @dev-kit/harness@0.1.0 && harness doctor --json` with registry auth in pipeline |
 | **Air-gapped** | Download `.tgz` from Nexus UI → `npm install -g ./dev-kit-harness-0.1.0.tgz` → `harness install --offline` (Phase 1+) |
 | **Proxy** | Set `npm_config_registry` only for `@dev-kit` scope, not public npm |
 
@@ -94,7 +96,7 @@ npx @dev-kit/harness@0.1.0 install --autonomy balanced
 | **MINOR** | New skill/agent, new enterprise registry fields |
 | **MAJOR** | Removed agents, breaking plan schema |
 
-Announce in `#platform-dev` with: `npx @dev-kit/harness@X.Y.Z upgrade`.
+Announce in `#platform-dev` with: `npm install -g @dev-kit/harness@X.Y.Z && harness upgrade`.
 
 ## Lock file on developer machines
 
@@ -110,10 +112,11 @@ Contains installed version and file manifest — used for safe `upgrade` and `un
 
 | Issue | Fix |
 |-------|-----|
-| `404` on `npx @dev-kit/harness` | Scope `@dev-kit:registry` missing in `.npmrc` |
+| `404` installing `@dev-kit/harness` | Scope `@dev-kit:registry` missing in `.npmrc` |
 | `ENEEDAUTH` | Renew Nexus npm token / `npm login` |
 | Wrong version installed | Pin `@dev-kit/harness@X.Y.Z`, not `@latest`, in runbooks |
-| Copilot still old skills | Run `npx @dev-kit/harness upgrade`; restart VS Code |
+| `harness: command not found` | Run `npm install -g @dev-kit/harness@X.Y.Z` or install from a local clone with `npm install -g ./packages/harness` |
+| Copilot still old skills | Run `harness upgrade`; restart VS Code |
 
 ## Related
 

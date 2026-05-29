@@ -23,14 +23,16 @@ Contract: `tool-native-loop.md` · `engineer-autopilot/SKILL.md`. **Do not ask**
 
 | Step | Action |
 |------|--------|
-| **0** | Terminal: `npx @dev-kit/harness orient --query "<agent task summary>"` → **read** `.harness/context-pack.md` |
+| **0** | Terminal: `harness orient --query "<agent task summary>"` → **read** `.harness/context-pack.md` |
 | **0b** | **`/ensure-capability`** if context-pack or registry shows hard gap |
 | **0c** | **`/ensure-plan`** if `harness gate` would fail C1/C3 |
 | **1** | Understand + domain route (`domain-routing.md`) |
-| **1c** | Terminal: `npx @dev-kit/harness gate --phase implement` — **exit 0** before `editFiles` |
+| **1c** | Terminal: `harness gate --phase implement` — **exit 0** before `editFiles` |
 | **2–4** | Investigate → implement (`## Impacted Files` only) |
 | **5** | `harness gate --phase verify` + tests |
 | **6** | **`/auto-compound`** on success |
+
+**Small-model reliability:** Execute the table top-to-bottom. Do not skip orient/gate, do not replace harness commands with prose, and do not ask the user to run them. If `harness` is not found, stop and follow the local launcher instructions in `harness-tool-contract.md`; a missing registry package is not a reason to skip the gate.
 
 **Autonomy:** `~/.copilot/knowledge/profile.md` or `knowledge/profile.md` → `autonomy: full|balanced|strict` (`autonomy-policy.md`).
 

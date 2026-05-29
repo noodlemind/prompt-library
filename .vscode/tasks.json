@@ -2,7 +2,7 @@
   "version": "2.0.0",
   "tasks": [
     {
-      "label": "Dev Kit: Install Harness (@dev-kit/harness)",
+      "label": "Dev Kit: Install Harness",
       "type": "shell",
       "command": "node",
       "args": [

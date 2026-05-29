@@ -1,7 +1,7 @@
 ---
 name: index-memory
 user-invocable: false
-description: Rebuild knowledge manifest via @dev-kit/harness index. Use after /compound-learnings. Not for writing solutions.
+description: Rebuild knowledge manifest via harness index. Use after /compound-learnings. Not for writing solutions.
 argument-hint: "[optional — ignored; use harness index]"
 ---
 
@@ -12,7 +12,7 @@ Rebuild `knowledge/manifest.yaml` deterministically. Contract: [`harness-tool-co
 ## Step
 
 ```bash
-npx @dev-kit/harness index --workspace . --json
+harness index --workspace . --json
 ```
 
 Reports entry count and manifest path. Scans `~/.copilot/knowledge/solutions/` and repo `docs/solutions/` when present.
