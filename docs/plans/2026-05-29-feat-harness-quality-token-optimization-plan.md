@@ -1,7 +1,7 @@
 ---
 title: "Harness quality and token optimization (surgical edits + deterministic snapshot)"
 type: feat
-status: open
+status: planned
 plan_lock: false
 phase: 0
 priority: P1
@@ -70,6 +70,18 @@ Research and phased implementation for **surgical edits** (stop whole-file rewri
 
 ## Research Notes
 
+**Industry research finalized 2026-05-29.** Full synthesis, source tables, and build/document/defer matrix: [`harness-quality-and-token-optimization-plan.md`](../architecture/harness-quality-and-token-optimization-plan.md) §3.
+
+### Key external findings (summary)
+
+| Theme | Industry practice | Harness decision |
+|-------|-------------------|------------------|
+| Surgical edits | Aider architect/editor; diff formats beat whole-file for tokens | Phase 1 policy + implementer delegation; gate in Phase 3 |
+| Context rot | Chroma 2025: all 18 models degrade with length | Keep entry instructions &lt;200 lines; progressive disclosure |
+| Token CI | GitHub May 2026: prune MCP tools, `gh` pre-fetch, ET logging | Document for agentic CI; keep harness CLI lean |
+| Codebase map | Repomix/Gitingest deterministic; Copilot semantic index in VS Code | `harness snapshot` (build); no npm embeddings (do not build) |
+| Onboarding | AGENTS.md ~100 lines as agent README | Align `init-repo` + snapshot with AGENTS.md / agent-context |
+
 ### Chronicle vs Harness
 
 | Chronicle | Harness |
@@ -88,6 +100,12 @@ Research and phased implementation for **surgical edits** (stop whole-file rewri
 ### Repomix
 
 Optional `--via repomix` in Phase 4; not a hard dependency.
+
+### Approval gate
+
+- [x] External industry research complete (§3.0 + §3.6 in architecture plan)
+- [ ] Platform/DevEx sign-off on Phase 1 scope
+- [ ] Phase 2 npm release train scheduled
 
 ## Impacted Files
 
@@ -143,3 +161,4 @@ Optional `--via repomix` in Phase 4; not a hard dependency.
 ## Activity
 
 - 2026-05-29: Research plan authored (architecture + this plan file).
+- 2026-05-29: External industry research finalized (Aider, Chroma, GitHub agentic workflows, AGENTS.md, SWE-agent family); recommendations matrix §3.6 added.

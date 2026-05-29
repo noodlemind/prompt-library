@@ -1,6 +1,6 @@
 # Harness Quality and Token Optimization Plan
 
-**Status:** Research complete — ready for phased implementation  
+**Status:** Industry research finalized — ready for phased implementation approval  
 **Audience:** Platform / DevEx, harness maintainers, `@engineer` owners  
 **Related:** [`tool-native-harness-design.md`](tool-native-harness-design.md), [`engineer-memory-system.md`](engineer-memory-system.md), [`context-budget.md`](../../.github/skills/references/context-budget.md), [`harness-tool-contract.md`](../../.github/skills/references/harness-tool-contract.md)
 
@@ -61,7 +61,58 @@ This plan defines a **four-pillar program** that complements (does not duplicate
 
 ---
 
-## 3. Research synthesis
+## 3. Industry research and synthesis
+
+This section records **external** industry practice (May 2026), then maps it to harness decisions. Full phased design remains in §§5–10; **build vs document vs defer** is in §3.6.
+
+### 3.0 External industry research
+
+#### 3.0.1 Surgical edits and edit formats
+
+| Source | Finding | Harness implication |
+|--------|---------|---------------------|
+| **[Aider edit formats](https://aider.chat/docs/more/edit-formats.html)** | `whole` returns entire files (simple, costly); `diff` / `udiff` return only changed regions; models differ in reliability by format | Host `editFiles` is whole-file by default — **policy + delegation** must compensate; we cannot assume diff-format tools |
+| **[Aider architect mode](https://aider.chat/docs/usage/modes.html)** | Architect model proposes *what* to change; editor model applies *how* (editor-diff / editor-whole) | Aligns with **engineer → code-implementer** split; strengthen handoff with symbol/line scope |
+| **[Aider unified diffs](https://aider.chat/docs/unified-diffs.html)** | Udiff reduced “lazy” incomplete edits vs SEARCH/REPLACE on GPT-4 Turbo benchmarks | Prefer **evidence-before-edit** and scoped delegation over betting on one host edit transport |
+| **[mini-SWE-agent](https://github.com/SWE-agent/mini-swe-agent)** | Default path uses **bash/sed** for edits — minimal scaffold, brittle multi-line edits | Do not copy sed-only editing; document why harness uses host editor + surgical policy |
+| **[mini-swe-agent-plus](https://github.com/Kwai-Klear/mini-swe-agent-plus)** | Adds **single-match string replacement** tool → fewer rounds, closer to SWE-agent on benchmarks | Optional future MCP — **defer**; harness does not own edit transport today |
+| **[Intent-based editing](https://dev.to/youssefmejdi/why-file-editing-is-the-hardest-part-of-building-a-coding-agent-24k8)** | Too many edit transports confuses models; converge on read / replace_string / symbol edit | Keep **one host edit surface**; encode intent in plan `## Edit Scope` + implementer brief |
+| **[surgical-dev](https://github.com/sniperwolf/surgical-dev)** | Minimal change surface, no drive-by refactors | Encode in `surgical-edit-policy.md` (Phase 1) |
+| **IDE agent norms (Cursor, Copilot rules)** | Cap scope, forbid unrelated files, prefer bounded reads | Match **200 LOC** read-before-edit threshold in engineer checklist |
+
+**Industry consensus:** Separate **planning/judgment** from **application of edits**, with **bounded change descriptions**, instead of relying on the model to choose minimal whole-file writes.
+
+#### 3.0.2 Context budget, instruction limits, and context rot
+
+| Source | Finding | Harness implication |
+|--------|---------|---------------------|
+| **[Chroma: Context rot](https://www.trychroma.com/research/context-rot)** (18 frontier models) | Quality degrades as input length grows, often sharply, below max context | Budget **always-loaded** instructions (AGENTS.md, copilot-instructions, thin engineer body) |
+| **[Claude Code memory](https://code.claude.com/docs/en/memory)** | Target **under 200 lines** per project memory file; auto-memory capped at 200 lines / 25KB | Align `docs/agent-context.md` + root **AGENTS.md** as short maps |
+| **[CLAUDE.md best practices](https://dev.to/nishilbhave/claudemd-best-practices-the-complete-2026-guide-435j)** | ~150–200 reliable instructions; long files → adherence drop | **Progressive disclosure** via skill references (existing pattern) |
+| **[GitHub: Token efficiency in agentic workflows](https://github.blog/ai-and-ml/github-copilot/improving-token-efficiency-in-github-agentic-workflows/)** | Prune unused MCP tools; pre-fetch with **`gh` CLI**; `token-usage.jsonl`; Effective Tokens (ET) | **Document** for CI; keep harness CLI tools minimal; no unused MCP in templates |
+| **MCP gateway / filtering** | Full tool catalogs can cost 10k+ tokens per turn | Allowlist MCP tools in product repos |
+
+**Industry consensus:** **Small stable entry context** + **just-in-time retrieval** beats monolithic repo dumps.
+
+#### 3.0.3 Deterministic codebase maps vs host semantic index
+
+| Source | Finding | Harness implication |
+|--------|---------|---------------------|
+| **[VS Code workspace context](https://code.visualstudio.com/docs/copilot/reference/workspace-context)** | Workspace **embedding index** + semantic search | **Do not rebuild** in npm; document host-first search |
+| **[Repomix](https://github.com/yamadashy/repomix)** | Deterministic MD/XML pack; token count; gitignore-aware | Optional `harness snapshot --via repomix` (Phase 4) |
+| **[Gitingest](https://github.com/cyclotruc/gitingest)** | Python repo digest | Document only; no dependency |
+| **Symbol/index MCP ecosystems** | Offline graphs for large monorepos | Phase 5 enterprise spike |
+| **`/codebase-context` skill** | LLM + Mermaid narrative | On-demand human-reviewed snapshot, not init default |
+
+**Industry consensus:** **Structural map (deterministic)** + **semantic search (host)** + **narrative (LLM on demand)**.
+
+#### 3.0.4 Onboarding without repo docs (AGENTS.md)
+
+| Source | Finding | Harness implication |
+|--------|---------|---------------------|
+| **[agents.md](https://agents.md/)** | Cross-tool agent README: commands, tests, boundaries | `init-repo` + snapshot should reinforce root **AGENTS.md** / `docs/agent-context.md` |
+| **[AgentPatterns AGENTS.md](https://agentpatterns.ai/standards/agents-md/)** | ~100 lines pointing to `docs/` | Same as our AGENTS.md / CLAUDE.md guidance |
+| **[Anthropic: Effective harnesses](https://www.anthropic.com/engineering/effective-harnesses-for-long-running-agents)** | Artifacts bridge sessions; separate generation from evaluation | Plans, solutions, gates — continue as primary harness value |
 
 ### 3.1 Microsoft / GitHub Copilot (host-native)
 
@@ -108,6 +159,34 @@ This plan defines a **four-pillar program** that complements (does not duplicate
 | `/codebase-context` | — | **LLM required** | Large output |
 | `init-repo` | — | Stub only | — |
 | `context-budget.md` | — | — | Strong theory, partial enforcement |
+
+---
+
+### 3.6 Recommendations matrix (build · document · defer)
+
+| Recommendation | Action | Phase | Rationale (evidence) |
+|----------------|--------|-------|----------------------|
+| `surgical-edit-policy.md` + engineer wiring | **Build** | 1 | Aider architect/editor; weak host whole-file edits |
+| Plan `## Edit Scope` + `edit_strategy` / `max_lines_changed` | **Build** | 1 | SWE-bench scaffolds use explicit scope |
+| `harness gate` diff advisories (E1–E3) | **Build** | 3 | Industry diff-size review; non-blocking advisory |
+| Code review check `surgical-edit.md` | **Build** | 3 | Human + agent review alignment |
+| `harness snapshot` deterministic map | **Build** | 2 | Repomix/Gitingest pattern without LLM at init |
+| `init-repo --snapshot` + orient cites map | **Build** | 2 | Cold-start / IntelliJ / offline |
+| Chronicle vs Harness in CLI guide | **Document** | 1 | GitHub Chronicle = personal; harness = team workflow |
+| Host semantic index first; no harness embeddings | **Document** | 1 | VS Code workspace context |
+| AGENTS.md ~100 lines + pointers to `docs/` | **Document** | 1 | agents.md standard; Chroma context rot |
+| MCP tool pruning + `gh` pre-fetch for CI agents | **Document** | 1 | GitHub agentic workflows blog (May 2026) |
+| Context rot / &lt;200 line instruction files | **Document** | 1 | Chroma 2025; Claude Code memory docs |
+| `context-budget.md` enforcement in engineer | **Build** (extend) | 1–2 | Existing reference; partial today |
+| `harness snapshot --via repomix` | **Defer** | 4 | Optional peer; not required for MVP |
+| Symbol tree-sitter index / MCP graph | **Defer** | 5 | Heavy; enterprise-only candidate |
+| `replace_string` edit MCP in harness | **Defer** | — | Host owns edits; mini-swe-agent-plus pattern |
+| Index `docs/plans` in BM25 manifest | **Defer** | RFC §12 | Conflate workflow vs solutions |
+| Full Copilot embedding index in npm | **Do not build** | — | Host-native capability |
+| LLM at every `init-repo` | **Do not build** | — | Cost/variance; use `/codebase-context` optionally |
+| Auto-delete repo solutions when global exists | **Do not build** | — | Data loss risk |
+
+**Finalized priority order:** Phase 1 (policy + docs) → Phase 2 (snapshot CLI) → Phase 3 (gate + review) → Phase 4–5 (optional integrations). Phase 1 is **approval-ready** without npm release.
 
 ---
 
@@ -425,11 +504,41 @@ If teams want `harness index` to include plans:
 
 ## 14. References
 
+### Host and GitHub
+
 - [VS Code: How Copilot understands your workspace](https://code.visualstudio.com/docs/copilot/reference/workspace-context)
 - [GitHub: Indexing repositories for Copilot](https://docs.github.com/copilot/concepts/indexing-repositories-for-copilot-chat)
 - [GitHub: Copilot CLI Chronicle](https://docs.github.com/en/copilot/concepts/agents/copilot-cli/chronicle)
+- [GitHub Blog: Improving token efficiency in GitHub Agentic Workflows](https://github.blog/ai-and-ml/github-copilot/improving-token-efficiency-in-github-agentic-workflows/) (May 2026)
+
+### Surgical edits and coding agents
+
+- [Aider: Edit formats](https://aider.chat/docs/more/edit-formats.html)
+- [Aider: Architect mode](https://aider.chat/docs/usage/modes.html)
+- [Aider: Unified diffs](https://aider.chat/docs/unified-diffs.html)
+- [mini-SWE-agent](https://github.com/SWE-agent/mini-swe-agent)
+- [mini-swe-agent-plus](https://github.com/Kwai-Klear/mini-swe-agent-plus)
+- [Why file editing is the hardest part of building a coding agent](https://dev.to/youssefmejdi/why-file-editing-is-the-hardest-part-of-building-a-coding-agent-24k8)
+- [surgical-dev](https://github.com/sniperwolf/surgical-dev)
+
+### Context, memory, and standards
+
+- [Chroma: Context rot research](https://www.trychroma.com/research/context-rot)
+- [Claude Code: Memory and CLAUDE.md](https://code.claude.com/docs/en/memory)
+- [agents.md specification](https://agents.md/)
+- [AgentPatterns: AGENTS.md standard](https://agentpatterns.ai/standards/agents-md/)
+- [Anthropic: Effective harnesses for long-running agents](https://www.anthropic.com/engineering/effective-harnesses-for-long-running-agents)
+
+### Deterministic repo packing
+
 - [Repomix](https://github.com/yamadashy/repomix)
-- Internal: `docs/architecture/tool-native-harness-design.md`, `.github/skills/references/context-budget.md`
+- [Gitingest](https://github.com/cyclotruc/gitingest)
+
+### Internal
+
+- `docs/architecture/tool-native-harness-design.md`
+- `.github/skills/references/context-budget.md`
+- `.github/skills/references/harness-tool-contract.md`
 
 ---
 
