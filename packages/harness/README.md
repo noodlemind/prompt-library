@@ -15,6 +15,15 @@ harness doctor
 harness upgrade
 ```
 
+**Windows tarball QA:** use global install or `npx`:
+
+```powershell
+npm install -g .\dev-kit-harness-0.4.0.tgz
+harness install --configure-vscode
+```
+
+Without `-g`, run `npx harness install` from the same folder instead of `harness install`.
+
 Before the package is published, install from a prompt-library clone:
 
 ```bash
@@ -90,34 +99,15 @@ Use pinned version in CI:
 
 ## Maintainers (prompt-library repo)
 
-### Build tarball for testers (before Nexus publish)
-
-From the repo root or `packages/harness`:
-
-```bash
-npm --prefix packages/harness run pack:dist
-```
-
-Creates `packages/harness/dist/dev-kit-harness-<version>.tgz` with the full `assets/` bundle (skills, agents, knowledge, enterprise). Share that file with QA or air-gapped teams:
-
-```bash
-npm install -g ./packages/harness/dist/dev-kit-harness-0.4.0.tgz
-harness install --configure-vscode --autonomy balanced
-harness doctor
-```
-
-`prepack` / `prepublishOnly` run `build:assets` automatically, so `npm publish` uploads the same bundle to Nexus.
-
-### Publish to Nexus
-
 ```bash
 cd packages/harness
+npm run build:assets
 npm test
 npm version patch
 npm publish
 ```
 
-### Install from clone (no tarball)
+Local install:
 
 ```bash
 npm install -g ./packages/harness

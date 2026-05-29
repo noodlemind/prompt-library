@@ -85,7 +85,7 @@ harness install --autonomy balanced
 | Scenario | Approach |
 |----------|----------|
 | **CI doctor check** | `npm install -g @dev-kit/harness@0.1.0 && harness doctor --json` with registry auth in pipeline |
-| **Air-gapped** | Maintainer `npm run pack:dist` or download `.tgz` from Nexus → `npm install -g ./dev-kit-harness-0.4.0.tgz` → `harness install --configure-vscode` |
+| **Air-gapped** | Download `.tgz` from Nexus UI → `npm install -g ./dev-kit-harness-0.1.0.tgz` → `harness install --offline` (Phase 1+) |
 | **Proxy** | Set `npm_config_registry` only for `@dev-kit` scope, not public npm |
 
 ## Versioning policy
@@ -115,7 +115,7 @@ Contains installed version and file manifest — used for safe `upgrade` and `un
 | `404` installing `@dev-kit/harness` | Scope `@dev-kit:registry` missing in `.npmrc` |
 | `ENEEDAUTH` | Renew Nexus npm token / `npm login` |
 | Wrong version installed | Pin `@dev-kit/harness@X.Y.Z`, not `@latest`, in runbooks |
-| `harness: command not found` | Run `npm install -g @dev-kit/harness@X.Y.Z` or install from a local clone with `npm install -g ./packages/harness` |
+| `harness: command not found` | Use **`npm install -g`** (not `npm install .\file.tgz` alone). On Windows, ensure `%APPDATA%\npm` is on PATH and open a new terminal. Or run `npx harness` from the folder where you local-installed the tarball. |
 | Copilot still old skills | Run `harness upgrade`; restart VS Code |
 
 ## Related
