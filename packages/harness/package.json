@@ -19,6 +19,7 @@
   ],
   "scripts": {
     "build:assets": "node ../../scripts/build-harness-assets.mjs",
+    "pack:local": "node ../../scripts/pack-harness-local.mjs",
     "prepare": "npm run build:assets",
     "prepack": "npm run build:assets",
     "prepublishOnly": "npm run build:assets",

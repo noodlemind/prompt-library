@@ -33,12 +33,12 @@ Replace URL with your **npm-hosted** (or `npm-releases`) repository URL.
 
 ```bash
 cd packages/harness
-npm run build:assets
+npm run pack:local  # optional local validation artifact in dist/
 npm version patch   # or minor/major — semver
 npm publish
 ```
 
-`prepare` / `prepack` / `prepublishOnly` run `build:assets` automatically if you package or publish from `packages/harness`.
+`prepare` / `prepack` / `prepublishOnly` run `build:assets` automatically if you package or publish from `packages/harness`. `npm run pack:local` writes the same gzip-compressed npm tarball shape to `packages/harness/dist/` so testers can run `npm install -g ./dist/dev-kit-harness-<version>.tgz` before the Nexus publish.
 
 ### 3. Verify on Nexus
 

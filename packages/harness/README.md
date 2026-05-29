@@ -25,6 +25,18 @@ harness doctor
 
 `prepare`/`prepack` build the ignored `packages/harness/assets/` bundle so local installs and tarballs contain the same prompt assets as published packages.
 
+To create the same npm package artifact locally for testers:
+
+```bash
+cd packages/harness
+npm run pack:local
+npm install -g ./dist/dev-kit-harness-<version>.tgz
+harness install --configure-vscode
+harness doctor
+```
+
+The generated `.tgz` file is the npm tarball that can be shared directly. It is written under `packages/harness/dist/` and is intentionally gitignored.
+
 Bootstrap a product repo:
 
 ```bash
@@ -92,11 +104,13 @@ Use pinned version in CI:
 
 ```bash
 cd packages/harness
-npm run build:assets
 npm test
+npm run pack:local
 npm version patch
 npm publish
 ```
+
+`npm publish` runs `prepack`/`prepublishOnly`, so the published package is rebuilt with the current assets. Use `npm run pack:local` first when you want a local tarball for validation or handoff before publishing.
 
 Local install:
 

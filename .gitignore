@@ -2,6 +2,7 @@
 .harness/
 node_modules/
 packages/harness/assets/
+packages/harness/dist/
 *.vsix
 .DS_Store
 .compound-engineering-plugin-analysis/

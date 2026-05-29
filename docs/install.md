@@ -30,6 +30,18 @@ harness install --configure-vscode --autonomy balanced
 harness doctor
 ```
 
+To hand testers the same package shape that will be published to npm, build a local tarball:
+
+```bash
+cd packages/harness
+npm run pack:local
+npm install -g ./dist/dev-kit-harness-<version>.tgz
+harness install --configure-vscode --autonomy balanced
+harness doctor
+```
+
+The `.tgz` artifact under `packages/harness/dist/` is a gzip-compressed npm tarball and can be shared directly for local validation before publishing.
+
 If you do not want to put `harness` on `PATH`, you can run the repo script directly for setup:
 
 ```bash
