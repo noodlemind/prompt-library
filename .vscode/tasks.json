@@ -21,17 +21,7 @@
       "label": "Dev Kit: Upgrade Harness",
       "type": "shell",
       "command": "node",
-      "args": ["${workspaceFolder}/packages/harness/bin/harness.mjs", "upgrade", "--configure-vscode"],
-      "options": {
-        "cwd": "${workspaceFolder}"
-      },
-      "problemMatcher": []
-    },
-    {
-      "label": "Dev Kit: Pack Harness Tarball",
-      "type": "shell",
-      "command": "npm",
-      "args": ["--prefix", "${workspaceFolder}/packages/harness", "run", "pack:dist"],
+      "args": ["${workspaceFolder}/packages/harness/bin/harness.mjs", "upgrade"],
       "options": {
         "cwd": "${workspaceFolder}"
       },

@@ -15,20 +15,11 @@ harness doctor
 harness upgrade
 ```
 
-**Windows tarball QA:** use global install or `npx`:
-
-```powershell
-npm install -g .\dev-kit-harness-0.4.0.tgz
-harness install --configure-vscode
-```
-
-Without `-g`, run `npx harness install` from the same folder instead of `harness install`.
-
 Before the package is published, install from a prompt-library clone:
 
 ```bash
 npm install -g ./packages/harness
-harness install --configure-vscode
+harness setup
 harness doctor
 ```
 
@@ -111,7 +102,7 @@ Local install:
 
 ```bash
 npm install -g ./packages/harness
-harness install --configure-vscode
+harness setup
 ```
 
 ## Package layout

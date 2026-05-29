@@ -16,20 +16,11 @@ harness doctor
 
 ```bash
 npm install -g ./packages/harness
-harness install --configure-vscode
+harness setup
 harness doctor
 ```
 
-**Share a tarball with QA before Nexus publish:**
-
-```bash
-npm --prefix packages/harness run pack:dist
-# → packages/harness/dist/dev-kit-harness-<version>.tgz
-npm install -g ./packages/harness/dist/dev-kit-harness-0.4.0.tgz
-harness install --configure-vscode
-```
-
-Or VS Code: **Dev Kit: Pack Harness Tarball**, **Dev Kit: Install Harness**, **Dev Kit: Harness Doctor**.
+Or VS Code: **Dev Kit: Install Harness** / **Dev Kit: Harness Doctor**.
 
 Copies to `%USERPROFILE%\.copilot\` (or `~/.copilot/` on macOS/Linux):
 

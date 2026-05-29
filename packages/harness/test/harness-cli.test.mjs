@@ -84,13 +84,30 @@ function readEvents(workspace) {
     .map((line) => JSON.parse(line));
 }
 
-test('help works from a clean repo checkout without installed package deps', () => {
+test('default command shows human guide without npx install instructions', () => {
+  const result = runHarness([]);
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /WHAT IT DOES/);
+  assert.match(result.stdout, /harness setup/);
+  assert.doesNotMatch(result.stdout, /npx @dev-kit\/harness/);
+});
+
+test('help shows short command list not a wall of flags', () => {
   const result = runHarness(['help']);
 
   assert.equal(result.status, 0, result.stderr);
-  assert.match(result.stdout, /Usage:/);
-  assert.match(result.stdout, /harness install \[options\]/);
-  assert.match(result.stdout, /Package name: @dev-kit\/harness\. Command name: harness\./);
+  assert.match(result.stdout, /harness setup/);
+  assert.doesNotMatch(result.stdout, /--min-score/);
+  assert.doesNotMatch(result.stdout, /npx/);
+});
+
+test('help advanced exposes maintainer flags', () => {
+  const result = runHarness(['help', 'advanced']);
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /--dry-run/);
+  assert.match(result.stdout, /--json/);
 });
 
 test('recall positional query excludes option values', () => {

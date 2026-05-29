@@ -35,7 +35,7 @@ enterprise/
 1. Add `agents/splunk-reviewer.agent.md` (judgment-criteria reviewer).
 2. Register in `capability-registry.enterprise.yaml`.
 3. Add `splunk-reviewer` to `engineer.agent.md` frontmatter `agents:` in the **enterprise-maintained** patch or central platform PR (Tier 3 once).
-4. `npx @dev-kit/harness upgrade`.
+4. `harness upgrade`.
 5. Engineer auto-delegates when tasks mention Splunk/SPL.
 
 ## Adding a domain skill (e.g. Terraform)

@@ -41,55 +41,6 @@ Or in VS Code: **Tasks: Run Task** → **Dev Kit: Install Harness**.
 
 Other tasks: **Dev Kit: Upgrade Harness**, **Dev Kit: Harness Doctor**.
 
-### Install from a `.tgz` tarball (QA / air-gapped)
-
-The tarball only installs the **CLI**. You still run **`harness install`** afterward to copy skills into `%USERPROFILE%\.copilot\`.
-
-**Use a global install** so `harness` is on your PATH:
-
-```powershell
-# PowerShell (Windows) — note -g
-npm install -g .\dev-kit-harness-0.4.0.tgz
-
-# New terminal, then hydrate Copilot globals
-harness install --configure-vscode --autonomy balanced
-harness doctor
-```
-
-```bash
-# macOS / Linux
-npm install -g ./dev-kit-harness-0.4.0.tgz
-harness install --configure-vscode --autonomy balanced
-harness doctor
-```
-
-**If you already ran `npm install .\dev-kit-harness-0.4.0.tgz` without `-g`** (local install in the current folder), either reinstall globally as above, or run via `npx` from that folder:
-
-```powershell
-npx harness install --configure-vscode --autonomy balanced
-npx harness doctor
-```
-
-### Troubleshooting: `harness` is not recognized (Windows)
-
-| Symptom | Cause | Fix |
-|---------|--------|-----|
-| `harness` not recognized after `npm install .\file.tgz` | **Local** install — binary is only under `node_modules\.bin\` | Use `npm install -g .\dev-kit-harness-0.4.0.tgz`, or `npx harness …` from that directory |
-| Still not recognized after `npm install -g` | Global npm bin not on PATH | Add `%APPDATA%\npm` to your user PATH, **close and reopen** the terminal, then run `where.exe harness` |
-| Command works in one terminal only | PATH not refreshed | Open a new PowerShell or VS Code terminal |
-
-Check global npm prefix and PATH:
-
-```powershell
-npm prefix -g
-npm bin -g
-where.exe harness
-```
-
-Expected global prefix on Windows is often `C:\Users\<you>\AppData\Roaming\npm`. That folder must be on PATH.
-
-The `added 2 packages` / audit message from npm is normal (`@dev-kit/harness` plus its `yaml` dependency). It is unrelated to the `harness` command not being found.
-
 ## What gets installed
 
 The harness syncs into:
@@ -117,7 +68,7 @@ Bundled review checks ship inside `skills/code-review/references/checks/` (not a
 
 ## VS Code discovery
 
-`install --configure-vscode` merges recommended settings:
+`harness setup` (and `install` / `upgrade`) merges recommended VS Code settings by default:
 
 ```json
 {

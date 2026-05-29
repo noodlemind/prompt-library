@@ -18,71 +18,29 @@ import {
   cmdGet,
   cmdUninstall,
 } from '../lib/commands.mjs';
+import { printGuide } from '../lib/guide.mjs';
+import { printHelp } from '../lib/help.mjs';
 
-const [, , command = 'help', ...args] = process.argv;
-
-const HELP = `
-harness — Adaptive Engineer Harness for GitHub Copilot (VS Code, CLI, IntelliJ)
-
-Package name: @dev-kit/harness. Command name: harness.
-
-Usage:
-  harness install [options]
-  harness upgrade [options]
-  harness doctor [options]
-  harness status [options]
-  harness index [options]
-  harness orient [options] [--query "task summary"]
-  harness gate [options] [--phase implement|verify]
-  harness recall "search terms" [options]
-  harness get [options] [--docid id | --path rel/path]
-  harness validate-plan [options] [--plan docs/plans/file.md]
-  harness compound [options]
-  harness events [options]
-  harness init-repo [options]
-  harness uninstall [options]
-
-Install the command:
-  npm install -g @dev-kit/harness@latest
-  # or from a prompt-library clone before publishing:
-  npm install -g ./packages/harness
-
-Options:
-  --dry-run              Print actions without writing
-  --verbose, -v          Per-file logging
-  --json                 JSON output
-  --copilot-home <path>  Override ~/.copilot
-  --target vscode,cli,intellij
-  --autonomy full|balanced|strict
-  --configure-vscode     Merge VS Code chat.* discovery settings
-  --force-profile        Overwrite knowledge/profile.md
-  --force-knowledge-reset  Overwrite knowledge/solutions (danger)
-  --workspace <path>     Repo root (default: cwd)
-  --query <text>         Agent/internal task summary for orient
-  --phase <name>         gate: implement | verify
-  --strict-intent        gate: fail locked plans missing intent fields
-  --limit <n>            recall/orient result count (default 3)
-  -c, --collection <name>  recall/orient: filter by knowledge/collections.yaml
-  --min-score <n>        recall/orient minimum score (default 0.15)
-  --include-plans        recall: include matching plans
-  --docid <id>           get: manifest doc id
-  --path <rel>           get: relative file path
-  --lines <n>            get: max lines (default 40)
-  --max-bytes <n>        get: max excerpt bytes (default 2048)
-  --plan <path>          validate-plan: specific plan file
-  --no-events            Do not write .harness/events.jsonl
-
-Docs: docs/architecture/tool-native-harness-design.md
-`.trim();
+const [, , rawCommand, ...args] = process.argv;
+const command = rawCommand ?? 'guide';
 
 async function main() {
   let code = 0;
   try {
     switch (command) {
+      case 'guide':
+        printGuide();
+        break;
       case 'help':
       case '--help':
-      case '-h':
-        console.log(HELP);
+      case '-h': {
+        const advanced =
+          args[0] === 'advanced' || args.includes('--advanced') || args.includes('advanced');
+        printHelp(advanced ? 'advanced' : 'commands');
+        break;
+      }
+      case 'setup':
+        code = await cmdInstallOrUpgrade('setup', args);
         break;
       case 'install':
         code = await cmdInstallOrUpgrade('install', args);
@@ -128,7 +86,8 @@ async function main() {
         break;
       default:
         console.error(`Unknown command: ${command}\n`);
-        console.log(HELP);
+        console.error('Run harness for the setup guide, or harness help for commands.\n');
+        printHelp('commands');
         code = 1;
     }
   } catch (err) {

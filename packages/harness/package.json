@@ -1,6 +1,6 @@
 {
   "name": "@dev-kit/harness",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "Adaptive Engineer Harness — install and upgrade GitHub Copilot skills, agents, and team knowledge globally",
   "license": "UNLICENSED",
   "type": "module",
@@ -19,7 +19,6 @@
   ],
   "scripts": {
     "build:assets": "node ../../scripts/build-harness-assets.mjs",
-    "pack:dist": "node ../../scripts/pack-harness.mjs",
     "prepare": "npm run build:assets",
     "prepack": "npm run build:assets",
     "prepublishOnly": "npm run build:assets",

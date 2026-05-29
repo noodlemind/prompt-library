@@ -67,6 +67,7 @@ export function parseFlags(argv) {
     else if (a === '--force-knowledge-reset') flags.preserveKnowledge = false;
     else if (a === '--force-profile') flags.forceProfile = true;
     else if (a === '--configure-vscode') flags.configureVsCode = true;
+    else if (a === '--no-configure-vscode') flags.configureVsCode = false;
     else if (a.startsWith('--autonomy=')) flags.autonomy = a.split('=')[1];
     else if (a === '--autonomy') flags.autonomy = argv[++i];
     else if (a.startsWith('--copilot-home=')) flags.copilotHome = a.split('=')[1];

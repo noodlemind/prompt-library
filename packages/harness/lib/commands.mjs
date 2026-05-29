@@ -17,6 +17,7 @@ import { runDoctor } from './doctor.mjs';
 import { runInitRepo } from './init-repo.mjs';
 import { runIndexKnowledge } from './index-knowledge.mjs';
 import { configureVSCodeSettings } from './vscode-settings.mjs';
+import { applyInstallDefaults } from './install-defaults.mjs';
 import { parseQueryFromArgv } from './argv.mjs';
 import { readEvents, summarizeEvents, writeEvent } from './events.mjs';
 
@@ -49,13 +50,22 @@ function log(flags, msg) {
 }
 
 export async function cmdInstallOrUpgrade(command, argv) {
-  const flags = parseFlags(argv);
+  const flags = applyInstallDefaults(parseFlags(argv), argv, command);
   const version = readPkgVersion();
   const assets = getAssetsRoot();
   const copilotHome = resolveCopilotHome(flags.copilotHome);
   const previousLock = readLock(copilotHome);
   const retired = loadRetired(pkgRoot);
   const logger = (m) => log(flags, m);
+
+  if (!flags.json && (command === 'setup' || command === 'install')) {
+    log(
+      flags,
+      command === 'setup'
+        ? 'setup: syncing Copilot globals (VS Code discovery, autonomy=balanced)'
+        : 'install: syncing Copilot globals (use harness setup for the same defaults)'
+    );
+  }
 
   const allStats = { vscode: null, intellij: null };
 
