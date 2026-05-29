@@ -85,7 +85,7 @@ harness install --autonomy balanced
 | Scenario | Approach |
 |----------|----------|
 | **CI doctor check** | `npm install -g @dev-kit/harness@0.1.0 && harness doctor --json` with registry auth in pipeline |
-| **Air-gapped** | Download `.tgz` from Nexus UI → `npm install -g ./dev-kit-harness-0.1.0.tgz` → `harness install --offline` (Phase 1+) |
+| **Air-gapped** | Maintainer `npm run pack:dist` or download `.tgz` from Nexus → `npm install -g ./dev-kit-harness-0.4.0.tgz` → `harness install --configure-vscode` |
 | **Proxy** | Set `npm_config_registry` only for `@dev-kit` scope, not public npm |
 
 ## Versioning policy

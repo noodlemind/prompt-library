@@ -28,6 +28,16 @@
       "problemMatcher": []
     },
     {
+      "label": "Dev Kit: Pack Harness Tarball",
+      "type": "shell",
+      "command": "npm",
+      "args": ["--prefix", "${workspaceFolder}/packages/harness", "run", "pack:dist"],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": []
+    },
+    {
       "label": "Dev Kit: Harness Doctor",
       "type": "shell",
       "command": "node",

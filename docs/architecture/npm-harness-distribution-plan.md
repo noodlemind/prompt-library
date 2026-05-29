@@ -146,9 +146,9 @@ prompt-library/
 **Publish flow:**
 
 ```bash
-npm run build:assets   # rsync .github → assets/github, knowledge → assets/knowledge, ...
-npm version patch
-npm publish --access public   # or private registry
+npm --prefix packages/harness run pack:dist   # optional: dist/*.tgz for local QA
+cd packages/harness && npm version patch && npm publish
+# prepack / prepublishOnly run build:assets — Nexus tarball matches pack:dist output
 ```
 
 ### 4.2 Package naming and bins (decided)

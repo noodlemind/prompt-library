@@ -22,13 +22,28 @@ Pin versions in team runbooks when you need reproducibility.
 
 ### Maintainers / unpublished package (this repo)
 
-Install the local package globally from the prompt-library clone. This builds the ignored assets bundle before packing, so no registry publish is required:
+**Option A — install from the package directory** (builds assets via `prepare`):
 
 ```bash
 npm install -g ./packages/harness
 harness install --configure-vscode --autonomy balanced
 harness doctor
 ```
+
+**Option B — share a `.tgz` tarball** (same contents as Nexus publish; good for QA before release):
+
+```bash
+# Maintainer (prompt-library clone)
+npm --prefix packages/harness run pack:dist
+# → packages/harness/dist/dev-kit-harness-<version>.tgz
+
+# Tester
+npm install -g /path/to/dev-kit-harness-0.4.0.tgz
+harness install --configure-vscode --autonomy balanced
+harness doctor
+```
+
+**Option C — run the CLI from the clone** without global install:
 
 If you do not want to put `harness` on `PATH`, you can run the repo script directly for setup:
 
