@@ -2,10 +2,11 @@ const COMMANDS = `
 harness — Adaptive Engineer Harness
 
 QUICK START
-  harness              This guide
-  harness setup        Install ~/.copilot + VS Code discovery (recommended)
-  harness doctor       Verify install
-  harness upgrade      Refresh after a new package version
+  harness | getting-started | start   Onboarding guide (default)
+  harness setup                       Install ~/.copilot + VS Code discovery
+  harness doctor                      Verify install
+  harness upgrade                     Refresh after a new package version
+  harness chronicle                   How Harness relates to VS Code /chronicle
 
 COMMANDS
   setup | install | upgrade   Sync skills, agents, knowledge to global Copilot paths

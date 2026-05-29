@@ -18,6 +18,7 @@ import { runInitRepo } from './init-repo.mjs';
 import { runIndexKnowledge } from './index-knowledge.mjs';
 import { configureVSCodeSettings } from './vscode-settings.mjs';
 import { applyInstallDefaults } from './install-defaults.mjs';
+import { isFirstHarnessInstall, markOnboardingComplete, printPostSetupOnboarding } from './onboard.mjs';
 import { parseQueryFromArgv } from './argv.mjs';
 import { readEvents, summarizeEvents, writeEvent } from './events.mjs';
 
@@ -137,6 +138,10 @@ export async function cmdInstallOrUpgrade(command, argv) {
     }
     if (flags.dryRun) console.log('  (dry-run — no files written)');
     else console.log('  Next: harness doctor');
+    if (!flags.dryRun && firstInstall && (command === 'setup' || command === 'install')) {
+      markOnboardingComplete(copilotHome, false);
+      printPostSetupOnboarding({ copilotHome });
+    }
   }
 
   return 0;

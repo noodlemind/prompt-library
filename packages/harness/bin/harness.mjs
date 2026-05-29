@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 /**
  * harness — install Adaptive Engineer Harness into global Copilot paths.
- * The npm package name is @dev-kit/harness; the command users and agents run is harness.
  */
 import {
   cmdInstallOrUpgrade,
@@ -29,7 +28,12 @@ async function main() {
   try {
     switch (command) {
       case 'guide':
+      case 'getting-started':
+      case 'start':
         printGuide();
+        break;
+      case 'chronicle':
+        printGuide({ section: 'chronicle' });
         break;
       case 'help':
       case '--help':
@@ -86,7 +90,7 @@ async function main() {
         break;
       default:
         console.error(`Unknown command: ${command}\n`);
-        console.error('Run harness for the setup guide, or harness help for commands.\n');
+        console.error('Run harness or harness getting-started for the onboarding guide.\n');
         printHelp('commands');
         code = 1;
     }

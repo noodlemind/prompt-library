@@ -1,57 +1,83 @@
 import fs from 'fs';
+import path from 'path';
 import { resolveCopilotHome } from './paths.mjs';
 
 /** Human onboarding — default when you run `harness` with no subcommand. */
-export function printGuide({ copilotHome } = {}) {
+export function printGuide({ copilotHome, section = 'full' } = {}) {
   const home = copilotHome || resolveCopilotHome(null);
-  const installed = fs.existsSync(`${home}/.harness-lock.json`);
+  const installed = fs.existsSync(path.join(home, '.harness-lock.json'));
+
+  if (section === 'chronicle') {
+    printChronicleComparison();
+    return;
+  }
 
   console.log(`
 harness — Adaptive Engineer Harness for GitHub Copilot
 
 WHAT IT DOES
-  Copies team skills, agents, instructions, and knowledge templates into your
-  global Copilot folder so VS Code, Copilot CLI, and IntelliJ can use them.
-  Product repos keep only docs/plans/ — not a copy of the whole prompt library.
+  Installs team skills, agents, instructions, and knowledge into your global
+  Copilot folder (%USERPROFILE%\\.copilot on Windows). Product repos keep only
+  docs/plans/ — not a copy of the whole prompt library.
 
 ONE-TIME SETUP (per machine)
-  1. Install the CLI globally (if harness is not on PATH yet):
-       npm install -g @dev-kit/harness@latest
-     Or from a shared tarball:
-       npm install -g .\\dev-kit-harness-0.4.0.tgz
+  1. npm install -g @dev-kit/harness@latest
+     (or npm install -g .\\dev-kit-harness-0.4.1.tgz from your team tarball)
 
-  2. Hydrate Copilot globals (recommended — no extra flags needed):
-       harness setup
+  2. harness setup
 
-  3. Verify:
-       harness doctor
+  3. harness doctor
 
-  4. In VS Code: open Copilot Chat → confirm /btw and @engineer appear.
+  4. Restart VS Code → Copilot Chat: try /btw and @engineer
 
-${installed ? `STATUS: Installed under ${home}\n  Run harness upgrade after a new package version.\n` : `STATUS: Not installed yet under ${home}\n  Run: harness setup\n`}
+${installed ? `STATUS: Installed under ${home}\n` : `STATUS: Not installed yet → run: harness setup\n`}
 
-DAY-TO-DAY COMMANDS
-  harness setup      Install or refresh ~/.copilot (VS Code settings + balanced profile)
-  harness upgrade    Same as setup; removes retired paths from the lock file
-  harness doctor     Health check
-  harness status     Installed version
-  harness init-repo  In a product repo: create docs/plans/ and .harness/
+IN A PRODUCT REPO
+  harness init-repo          Create docs/plans/ and .harness/
+  Copilot: /capture-issue → /plan-issue → /work-on-task → /code-review
+  After a verified fix: /compound-learnings → harness index
 
 HOW KNOWLEDGE WORKS
-  Product repo (local)     docs/plans/*.md — issues, phases, Memory Cards, Activity
-  Team memory (global)     ~/.copilot/knowledge/solutions/ — compounded fixes
-  Recall index             ~/.copilot/knowledge/manifest.yaml — use /recall in Copilot
+  docs/plans/              Active issues (local, not in manifest index)
+  ~/.copilot/knowledge/solutions/   Team learnings (indexed by harness index)
+  /recall in Copilot       Search team manifest before similar work
 
-  Flow: plan → work in phases → verify → /compound-learnings → harness index
+  harness index = 0 entries until you have solution .md files (after compound).
+
+VS CODE CHRONICLE (/chronicle) — RELATED BUT DIFFERENT
+  Chronicle (experimental): indexes YOUR Copilot chat sessions locally (SQLite).
+  Good for "what did I do yesterday?" and standups from chat history.
+  Enable: Settings → github.copilot.chat.localIndex.enabled → /chronicle in chat.
+
+  Harness: team engineering system — skills, @engineer, plans, gates, shared
+  solutions. Git-auditable markdown, not private chat logs.
+  Use both: Chronicle for personal recall; Harness for team workflow + memory.
 
 CONTEXT AND TOKEN TIPS
-  • Use a plan in docs/plans/ instead of pasting large logs into chat.
-  • Run /recall before re-solving a problem the team already fixed.
-  • Keep ## Memory Cards short; full solutions stay on disk.
-  • @engineer uses harness orient → read .harness/context-pack.md (one small file).
+  • Prefer plans + /recall over pasting large logs into chat.
+  • @engineer reads .harness/context-pack.md (small) — not full CLI output.
+  • Compound after verify so the team index grows over time.
 
-MORE
-  harness help           Command list
-  harness help advanced  Flags for CI and maintainers
+COMMANDS YOU NEED
+  harness setup | upgrade | doctor | getting-started | init-repo
+
+  harness help advanced    All flags (CI and maintainers only)
+`.trim());
+}
+
+export function printChronicleComparison() {
+  console.log(`
+Harness vs VS Code Chronicle (/chronicle)
+
+| | Chronicle | Harness |
+|---|-----------|---------|
+| What it remembers | Your Copilot chat sessions | Team skills, agents, plans, solutions |
+| Storage | Local SQLite (IDE) | ~/.copilot/ + product docs/plans/ |
+| Who sees it | You | Whole team (after hydrate) |
+| Typical question | "What was I doing Tuesday?" | "How do we fix X?" / capture → plan → verify |
+| In Copilot | /chronicle standup, tips, query | @engineer, /recall, /compound-learnings |
+| Indexed by harness index | No | Solutions only (not chat, not plans) |
+
+They complement each other — not replacements.
 `.trim());
 }
