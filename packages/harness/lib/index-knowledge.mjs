@@ -127,6 +127,12 @@ export function runIndexKnowledge({ knowledgeRoot, workspace, copilotHome, flags
   }
 
   const body = lines.join('\n') + '\n';
+  if (entries.length === 0) {
+    log(
+      'no solution files found — index only scans knowledge/solutions and docs/solutions (not docs/plans). After verify, use /compound-learnings then re-run harness index.'
+    );
+  }
+
   if (flags.dryRun) {
     log(`would write ${manifestPath} (${entries.length} entries)`);
     const indexDir = resolveIndexDir(copilotHome || '', workspace);
