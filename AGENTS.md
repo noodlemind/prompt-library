@@ -96,3 +96,48 @@ Read `docs/architecture/skill-driven-prompt-library.md` before adding or substan
 ## Accumulated Knowledge
 
 Read `.github/agent-context.md` for prompt-library repo patterns. In product repositories, follow `.github/skills/references/knowledge-locations.md`.
+
+## Cursor Cloud specific instructions
+
+This repository is a **prompt library + Node harness CLI**, not a long-running web app. There is no dev server to start; validation is **build assets → unit tests → harness install/doctor → CLI smoke commands**.
+
+### Toolchain
+
+- **Node.js ≥ 20** and **npm** (only under `packages/harness/`).
+- The VM update script runs `cd packages/harness && npm install`, which triggers `prepare` → `build:assets` (copies `.github/` and `knowledge/` into `packages/harness/assets/`).
+
+### Harness CLI on PATH
+
+Cloud VMs may not allow `npm install -g` into system paths. Use a user prefix:
+
+```bash
+npm install -g ./packages/harness --prefix "$HOME/.local"
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+Alternatively, invoke without global install: `node packages/harness/bin/harness.mjs <command>` from the repo root (same as VS Code tasks in `.vscode/tasks.json`).
+
+### One-time global hydrate (after install)
+
+From the **repository root** (`/workspace`):
+
+```bash
+harness install --configure-vscode --autonomy balanced
+```
+
+Syncs skills, agents, and knowledge to `~/.copilot/`. Re-run `harness upgrade` after pulling prompt-library changes.
+
+### Verify (maintainer / CI equivalent)
+
+| Step | Command | Notes |
+|------|---------|--------|
+| Unit tests | `cd packages/harness && npm test` | 31 `node --test` cases |
+| Health check | `cd /workspace && harness doctor` | Must run from repo root so **H5** (`docs/plans/`) passes |
+| Optional index | `harness index` | Rebuilds BM25 under `~/.copilot/knowledge/.harness-index/` |
+| Smoke | `harness status`, `harness orient --query "…"`, `harness gate --workspace /workspace --json` | Core harness runtime behavior |
+
+There is **no** root ESLint/Prettier script; quality gates for markdown primitives are host-side (`/code-review`, `harness validate-plan`).
+
+### Full product E2E (not available in headless Cloud)
+
+GitHub Copilot Chat in **VS Code 1.109+** (or IntelliJ with customizations) is the primary runtime: `/btw`, `@engineer`, skill menus. That layer cannot be exercised inside a headless cloud VM; treat passing `npm test` + `harness doctor` + CLI smoke as environment-ready for harness development.
