@@ -36,6 +36,13 @@ Include exact paths and focused excerpts. Do not rely on the subagent to discove
 
 Summarize what has already been learned so the subagent does not duplicate work.
 
+## Edit scope (implementer / surgical work)
+
+- **edit_strategy:** patch | refactor | new-file
+- **Files and line/symbol ranges:** e.g. `src/foo.ts` — `handleRequest()` L42–68 only
+- **max_lines_changed:** from plan frontmatter if set
+- **Out of scope:** formatting, unrelated refactors
+
 ## Scope Boundaries
 
 - **Files allowed to inspect:**

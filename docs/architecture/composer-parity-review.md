@@ -67,11 +67,12 @@ Would engineers who built **Cursor Composer** or **Windsurf Cascade** approve th
 
 ## Implementation checklist (maintainers)
 
-- [ ] `engineer.agent.md` under ~8 KB; checklist **inlined**
-- [ ] `context-budget.md` enforced in recall + memory cards
-- [ ] No second full copy of capture gate in agent body
+- [x] `engineer.agent.md` slim; checklist **inlined**; context-pack is turn-0 source of truth
+- [x] `context-budget.md` enforced via `validate-plan` B1/B2 + context-pack truncation
+- [x] Autopilot skill does not require four references at turn start
 - [ ] `copilot-instructions.md` under ~4 KB for non-engineer agents
 - [ ] Every pipeline skill points to `knowledge-locations.md` only
+- [ ] Harness eval fixtures (see `external-harness-review-remediation.md`)
 
 ## v2 (parity with Composer index)
 

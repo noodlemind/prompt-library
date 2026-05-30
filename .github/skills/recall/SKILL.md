@@ -17,7 +17,7 @@ argument-hint: "[task description]"
 harness orient --query "<task keywords>" --workspace . --json
 ```
 
-Read **only** `.harness/context-pack.md` (≤2 KB). Do not paste CLI stdout into chat.
+Read **only** `.harness/context-pack.md` (≤2 KB). It includes gate preview, edit scope, and host-search rules. Do not paste CLI stdout or full solution files into chat — use `harness get --docid`.
 
 ### 2. Or standalone recall
 

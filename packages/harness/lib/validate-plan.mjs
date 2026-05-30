@@ -1,5 +1,6 @@
 import { readSession } from './session.mjs';
 import { loadPlan, pickActivePlan, listPlanRels } from './plan-parse.mjs';
+import { validateMemoryCards } from './context-budget.mjs';
 
 function hasValue(value) {
   if (Array.isArray(value)) return value.length > 0;
@@ -101,6 +102,30 @@ export function runValidatePlan({ workspace, flags, planPath = null }) {
     exitCode = Math.max(exitCode, 2);
   } else {
     addCheck(checks, { id: 'S6', pass: true, message: '## Activity present', severity: 'ok' });
+  }
+
+  const mem = validateMemoryCards(plan.sections.memoryCards || '');
+  addCheck(checks, {
+    id: 'B1',
+    pass: mem.pass,
+    message: mem.pass ? `Memory Cards ${mem.message}` : `Memory Cards over budget: ${mem.message}`,
+    severity: mem.pass ? 'ok' : flags.strictIntent ? 'fail' : 'warn',
+  });
+  if (!mem.pass) {
+    if (flags.strictIntent) pass = false;
+    else exitCode = Math.max(exitCode, 2);
+  }
+
+  if (plan.plan_lock && !plan.sections.editScope && (plan.fm?.edit_strategy || 'patch') === 'patch') {
+    addCheck(checks, {
+      id: 'B2',
+      pass: false,
+      message: 'Locked patch plan missing ## Edit Scope (recommended for surgical edits)',
+      severity: 'warn',
+    });
+    exitCode = Math.max(exitCode, 2);
+  } else if (plan.sections.editScope) {
+    addCheck(checks, { id: 'B2', pass: true, message: '## Edit Scope present', severity: 'ok' });
   }
 
   return buildResult({

@@ -1,6 +1,6 @@
 {
   "name": "@dev-kit/harness",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "Adaptive Engineer Harness — install and upgrade GitHub Copilot skills, agents, and team knowledge globally",
   "license": "UNLICENSED",
   "type": "module",

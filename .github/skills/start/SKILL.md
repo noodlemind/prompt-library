@@ -93,7 +93,7 @@ Map classification to the appropriate skill. Prefer skills and pipeline flows ov
 
 | Classification | Route | Reason |
 |---------------|-------|--------|
-| Trivial + Bug + Clear | `/tdd-fix` | Isolated bug, TDD approach |
+| Trivial + Bug + Clear (no plan needed) | `/tdd-fix` or `@engineer` | `/tdd-fix` when test-led; engineer when harness gates help |
 | Standard + Feature + Unclear | `/brainstorming` | Needs requirements exploration first |
 | Standard + Feature + Clear | `/capture-issue` | Ready to capture and plan |
 | Standard + Compound | `/capture-issue` | Multiple concerns → single compound issue |

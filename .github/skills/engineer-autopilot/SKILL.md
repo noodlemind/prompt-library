@@ -10,36 +10,31 @@ Single-session loop. User types **`@engineer`** only.
 
 ## Loop
 
-| Step | Skill / reference | Edits product code? |
-|------|-------------------|---------------------|
-| 0 Orient | `harness orient` + `tool-native-loop.md` | No |
-| 0b Preflight | `capability-preflight.md` + **`/ensure-capability`** | No |
-| 0c Ensure plan | **`/ensure-plan`** (if gate C1/C3 fail) | No |
-| 1 Understand / route | `engineer-runtime.md`, `domain-routing.md` | No |
-| 1c Gate | `harness gate` + `capture-gate.md` (C1–C4) | No |
-| 2 Investigate | Read-only + delegation matrix | No |
-| 3 Plan approach | Within locked plan | No |
-| 4 Implement | `/work-on-task` or `code-implementer` | Yes (scoped) |
-| 5 Verify | Tests + verification plan | No |
-| 6 Compound | **`/auto-compound`** | Knowledge only |
-| 7 Notify | Summary + plan/solution links | No |
+| Step | Action | Edits product code? |
+|------|--------|---------------------|
+| 0 | `harness orient` → read `.harness/context-pack.md` only | No |
+| 0b | `/ensure-capability` if context-pack blocked | No |
+| 0c | `/ensure-plan` if gate preview failed C1/C3 | No |
+| 1 | Route from context-pack + host search | No |
+| 1c | `harness gate --phase implement` | No |
+| 2–4 | Investigate → implement or delegate `code-implementer` | Yes (scoped) |
+| 5 | Verify + `harness gate --phase verify` | No |
+| 6 | `/auto-compound` | Knowledge only |
 
-## Small-model execution rule
+## Execution rule
 
-Follow the loop exactly in order. Harness commands are hard gates, not suggestions: run `harness orient`, read `.harness/context-pack.md`, run `harness gate`, then proceed only when the gate allows it. If a command fails because the CLI is missing, install/link the local package per `harness-tool-contract.md` instead of skipping the step.
+Follow steps in order. **Do not** load `capture-gate.md`, `engineer-runtime.md`, or `domain-routing.md` at turn start — context-pack already encodes gate preview, next tools, edit scope, and host hints. Load references only when a step requires detail.
 
-## User must not be asked to run
+Harness commands are hard gates. If `harness` is missing, see `harness-tool-contract.md` — do not skip gates.
+
+## User must not run manually
 
 `/capture-issue`, `/plan-issue`, `/recall`, `/compound-learnings`, `/index-memory` — engineer invokes internal equivalents.
 
-## Risk
-
-Set `risk` on plan at ingest (`green` | `amber` | `red`). Red fields block auto-implement per `autonomy-policy.md`.
-
 ## Profiles
 
-Read `~/.copilot/knowledge/profile.md` or repo `knowledge/profile.md` → `autonomy: full|balanced|strict`.
+`~/.copilot/knowledge/profile.md` → `autonomy: full|balanced|strict` (`autonomy-policy.md`).
 
 ## Completion message
 
-Include: plan path, status, tests, solution path (if compounded), open capability gaps (if any).
+Plan path, status, tests, solution path (if compounded), open capability gaps.

@@ -23,47 +23,41 @@ Contract: `tool-native-loop.md` · `engineer-autopilot/SKILL.md`. **Do not ask**
 
 | Step | Action |
 |------|--------|
-| **0** | Terminal: `harness orient --query "<agent task summary>"` → **read** `.harness/context-pack.md` |
-| **0b** | **`/ensure-capability`** if context-pack or registry shows hard gap |
-| **0c** | **`/ensure-plan`** if `harness gate` would fail C1/C3 |
-| **1** | Understand + domain route (`domain-routing.md`) |
-| **1c** | Terminal: `harness gate --phase implement` — **exit 0** before `editFiles` (exit `2` = warn only unless `autonomy: strict`) |
-| **2a** | State **root-cause hypothesis** (1–2 sentences) in plan `## Activity` |
-| **2b** | List **evidence** (test, stack frame, symbol) before editing |
-| **2–4** | Investigate → implement per `surgical-edit-policy.md` and `## Impacted Files` / `## Edit Scope` |
-| **4** | **Edit policy:** minimal patch; files &gt;200 LOC → cite line range in Activity; delegate `code-implementer` when &gt;2 files or fix is localized |
+| **0** | `harness orient --query "<task>"` → read **only** `.harness/context-pack.md` (do not load other references this turn) |
+| **0b** | `/ensure-capability` if context-pack shows blocked / CAP |
+| **0c** | `/ensure-plan` if context-pack gate preview failed C1/C3 |
+| **1** | Domain route per context-pack; use host `#codebase` before reading huge files |
+| **1c** | `harness gate --phase implement` — exit **0** before `editFiles` (exit **2** = warn unless `autonomy: strict`) |
+| **2a** | Root-cause hypothesis in plan `## Activity` |
+| **2b** | Evidence (test, stack, symbol) before edit |
+| **2–4** | Implement per `surgical-edit-policy.md`, `## Edit Scope`, `## Impacted Files` |
+| **4** | Minimal patch; file &gt;200 LOC → line range in Activity; **delegate** `code-implementer` when &gt;2 files or localized fix in large file |
 | **5** | `harness gate --phase verify` + tests |
-| **6** | **`/auto-compound`** on success |
+| **6** | `/auto-compound` on success |
 
-**Small-model reliability:** Execute the table top-to-bottom. Do not skip orient/gate, do not replace harness commands with prose, and do not ask the user to run them. If `harness` is not found, stop and follow the local launcher instructions in `harness-tool-contract.md`; a missing registry package is not a reason to skip the gate.
-
-**Autonomy:** `~/.copilot/knowledge/profile.md` or `knowledge/profile.md` → `autonomy: full|balanced|strict` (`autonomy-policy.md`).
+**Context:** One frozen slice per turn (`context-budget.md`). Load `engineer-runtime.md` / `domain-routing.md` only when context-pack points you there.
 
 **Exempt:** `/tdd-fix`, review-only, `/btw`, locked-plan resume.
 
 ## Session checklist
 
-- [ ] **T0** `harness orient` + read `context-pack.md`
+- [ ] **T0** orient + `context-pack.md`
 - [ ] **P0** `/ensure-capability` if blocked
-- [ ] **G0** `harness gate` exit 0 (implement)
-- [ ] **D1–D3** verify gate + `/auto-compound`
+- [ ] **G0** gate exit 0 (implement)
+- [ ] **D1–D3** verify + compound
+
+## Delegation (architect → editor)
+
+Use `subagent-context-packet.md` with **files, symbols, line-range, do-not-touch**. Mandatory for `code-implementer` when: &gt;2 impacted files, any file &gt;200 LOC, or patch is localized to named symbols. Coordinators: batches of 3–5 agents max.
 
 ## Capability
 
-Merge registries per `domain-routing.md`. Enterprise: `~/.copilot/enterprise/` or repo `enterprise/`. Hard gap → no implement until fulfilled, bridged, or Tier 3 waiver.
+`domain-routing.md` · enterprise registry. Hard gap → no implement until fulfilled or Tier 3 waiver.
 
 ## Mission
 
-Deliver faster with git-auditable plans and team memory. Tier 3: schema, security, destructive ops, new agents, allowlist changes.
-
-## Workflow detail
-
-`engineer-runtime.md` · `engineer-delegation-matrix.md` · `knowledge-locations.md` · `docs/onboarding/harness-quickstart.md`
+Git-auditable plans + team memory. Tier 3: schema, security, destructive ops, new agents, allowlist changes.
 
 ## Pickup
 
-Plan path given → read `status`, `plan_lock`, `phase`, Memory Cards, current phase task.
-
-## Delegation
-
-`subagent-context-packet.md` for every subagent. Coordinators: batches of 3–4.
+Plan path given → read frontmatter + context-pack slices; use `harness get` for solutions — not full file dumps.
