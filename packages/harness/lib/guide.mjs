@@ -28,6 +28,10 @@ ONE-TIME SETUP (per machine)
 
   3. harness doctor
 
+CREDITS (metered GitHub Copilot ~6000 AI credits)
+  harness orient before @engineer — read .harness/context-pack.md only
+  docs/onboarding/github-copilot-credit-efficiency.md
+
   4. Restart VS Code → Copilot Chat: try /btw and @engineer
 
 ${installed ? `STATUS: Installed under ${home}\n` : `STATUS: Not installed yet → run: harness setup\n`}

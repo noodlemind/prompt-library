@@ -36,35 +36,10 @@ Engineer harness: `@engineer` agent file. Parity bar: `docs/architecture/compose
 
 Read `docs/architecture/skill-driven-prompt-library.md` before adding or substantially changing agents, skills, instructions, prompt wrappers, checks, plan structure, or solution templates.
 
-## Cross-Environment Tool Compatibility
+## Tool compatibility
 
-This library primarily targets GitHub Copilot in VS Code and IntelliJ IDEA. Prompt wrappers declare VS Code tool names. When a tool is unavailable in another host, use the closest host-native equivalent:
+VS Code / IntelliJ fallback table and subagent tool rules: `.github/skills/references/tool-compatibility.md`.
 
-| VS Code Tool | Fallback |
-|-------------|----------|
-| `codebase` | Repository search and targeted file reads |
-| `usages` | Text search or IDE find references |
-| `problems` | Run linter/compiler/test command and inspect output |
-| `awaitTerminal` | Wait for the command in the host terminal |
-| `changes` | `git diff` or IDE changes view |
-| `terminalLastCommand` | Run/read the equivalent terminal command |
-| `githubRepo` | GitHub UI, GitHub integration, or `gh` CLI |
-| `fetch` | Host-approved web/documentation lookup |
-| `editFiles` | Host-native file edit tool |
+## Credit efficiency (GitHub Copilot)
 
-Skills that reference `changes`, `terminalLastCommand`, or `githubRepo` include inline fallback instructions for non-VS Code environments.
-
-## Tool Access Constraints
-
-**Subagent tool restrictions:** When an agent runs as a subagent (dispatched by a coordinator), VS Code restricts tool access to the set declared in the subagent's `tools:` frontmatter. Some tools (terminal execution, file editing) may be unavailable in the subagent context even if declared. If a tool is unavailable:
-1. Check if the tool is in the agent's `tools:` array — if not, it won't be available
-2. If it is declared but still unavailable, the agent is likely running in a restricted subagent context
-3. Use the fallback from the compatibility table above
-4. Report the limitation rather than failing silently
-
-**Extension-contributed tools:** VS Code extensions (SonarQube, ESLint, Checkstyle, etc.) contribute diagnostics that appear via the `problems` tool (workspace diagnostics panel). They do NOT register as individually-named tools in agent frontmatter. To leverage extension diagnostics:
-- Use the `problems` tool to read workspace diagnostics (includes all extension findings)
-- Run extension-provided commands via terminal when available (e.g., `sonar-scanner`, `eslint --fix`)
-- Extension tools are NOT discoverable via `tools:` frontmatter — they work through the diagnostics system
-
-**Prompt wrapper tool override:** In VS Code, prompt wrapper `tools:` arrays override the routed agent's tools. If an agent needs a tool and the prompt wrapper doesn't list it, the agent won't have access. Ensure prompt wrappers include all tools their routed agent requires.
+Teams on metered plans (~6000 AI credits): run `harness orient` + read `.harness/context-pack.md` before `@engineer`; avoid pasting full plans or repo dumps; prefer `balanced` autonomy. Guide: `docs/onboarding/github-copilot-credit-efficiency.md`.

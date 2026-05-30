@@ -11,6 +11,8 @@ argument-hint: "[path to plan file]"
 
 **Step 3** of the connected pipeline: Capture → Plan → **Work** → Review → Compound.
 
+**Knowledge:** `.github/skills/references/knowledge-locations.md` (recall, plans, solutions — no duplicate paths here).
+
 This skill executes the current phase of a locked plan, tracks progress with checkboxes, and appends timestamped activity entries so the next session can resume automatically.
 
 ## Mode Detection
@@ -74,10 +76,9 @@ If the next step requires a risky strategy choice, follow `.github/skills/refere
   - **VS Code**: Run in terminal, read output with `terminalLastCommand`
   - **CLI/Claude Code**: Run test commands directly via `run_command` or `Bash`
 - Clean up while tests are green
-- Keep diffs surgical — change only what the task requires (`.github/skills/references/surgical-edit-policy.md`)
-- Honor `## Edit Scope` and frontmatter `edit_strategy` / `max_lines_changed` when present
+- Keep diffs surgical — change only what the task requires
 
-For delegated implementation or specialist review, use `.github/skills/references/subagent-context-packet.md` so the subagent receives the task objective, plan context, impacted files, **Edit Scope**, constraints, approval dependencies, and expected response.
+For delegated implementation or specialist review, use `.github/skills/references/subagent-context-packet.md` so the subagent receives the task objective, plan context, impacted files, constraints, approval dependencies, and expected response.
 
 ### 3. Scope Guard
 

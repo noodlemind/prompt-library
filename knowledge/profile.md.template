@@ -11,8 +11,10 @@ Copy to `profile.md` on first hydrate if missing. Keep under ~1,500 characters �
 
 - **autonomy:** full | balanced | strict
   - **full** — auto capture, plan, compound, index; ask only on red risk + new agents
-  - **balanced** — same; more Activity notifications (default for teams)
+  - **balanced** — same; more Activity notifications (**default for metered GitHub Copilot credits**)
   - **strict** — legacy explicit approvals at capture/plan/implement
+
+**GitHub Copilot credits:** Prefer `balanced` unless you keep a fresh codebase map (`harness snapshot` ≤30d). See `docs/onboarding/github-copilot-credit-efficiency.md`.
 
 ## Engineering preferences
 

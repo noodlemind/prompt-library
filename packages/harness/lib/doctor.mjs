@@ -161,6 +161,67 @@ export function runDoctor({ copilotHome, assetsRoot, pkgRoot, flags }) {
     optional: !mapFile,
   });
 
+  const instrPaths = [
+    path.join(copilotHome, 'copilot-instructions.md'),
+    path.join(assetsRoot, 'copilot-instructions.md'),
+  ];
+  const instrFile = instrPaths.find((p) => fs.existsSync(p));
+  const INSTR_MAX = 4500;
+  let instrOk = true;
+  let instrHint = 'Run: harness install';
+  if (instrFile) {
+    const bytes = fs.statSync(instrFile).size;
+    instrOk = bytes <= INSTR_MAX;
+    instrHint = instrOk
+      ? `Shared instructions ${bytes}B (≤${INSTR_MAX}B)`
+      : `Instructions ${bytes}B exceed ${INSTR_MAX}B — trim copilot-instructions.md (credit rot)`;
+  }
+  checks.push({
+    id: 'H13',
+    name: 'Shared instructions size (credit budget)',
+    pass: instrFile ? instrOk : false,
+    hint: instrHint,
+    optional: !instrFile,
+  });
+
+  let autonomy = 'balanced';
+  if (fs.existsSync(profile)) {
+    const pt = fs.readFileSync(profile, 'utf8');
+    const m =
+      pt.match(/\*\*autonomy:\*\*\s*(full|balanced|strict)/i) ||
+      pt.match(/^autonomy:\s*(full|balanced|strict)\s*$/im);
+    if (m) autonomy = m[1].toLowerCase();
+  }
+  const creditRisk = autonomy === 'full' && (!mapFile || !mapFresh);
+  checks.push({
+    id: 'H14',
+    name: 'Credit-conscious autonomy (full + stale/no map)',
+    pass: !creditRisk,
+    hint: creditRisk
+      ? 'autonomy: full without fresh map — use balanced or run harness snapshot'
+      : 'Autonomy/map pairing OK for metered Copilot credits',
+    optional: !fs.existsSync(profile),
+  });
+
+  const packPath = path.join(flags.workspace, '.harness', 'context-pack.md');
+  const PACK_MAX = 2048;
+  let packOk = true;
+  let packHint = 'Run: harness orient before @engineer';
+  if (fs.existsSync(packPath)) {
+    const bytes = fs.statSync(packPath).size;
+    packOk = bytes <= PACK_MAX;
+    packHint = packOk
+      ? `context-pack ${bytes}B`
+      : `context-pack ${bytes}B > ${PACK_MAX}B — re-run orient or report harness bug`;
+  }
+  checks.push({
+    id: 'H15',
+    name: 'Context-pack byte budget',
+    pass: fs.existsSync(packPath) ? packOk : false,
+    hint: packHint,
+    optional: !fs.existsSync(path.join(flags.workspace, 'docs', 'plans')),
+  });
+
   const required = checks.filter((c) => !c.optional);
   const pass = required.every((c) => c.pass);
   return { checks, pass };

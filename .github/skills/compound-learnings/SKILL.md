@@ -10,6 +10,8 @@ argument-hint: "[path to completed issue or description of solved problem]"
 
 **Step 5** of the connected pipeline: Capture → Plan → Work → Review → **Compound**.
 
+**Knowledge:** Write targets in `.github/skills/references/knowledge-locations.md` only.
+
 This skill closes the knowledge loop. When a problem is solved, it documents the solution so future work can reference it. This is the mechanism that makes the system smarter over time.
 
 ## Mode Detection

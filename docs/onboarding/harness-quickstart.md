@@ -16,7 +16,7 @@ harness doctor
 
 ```bash
 npm install -g ./packages/harness
-harness setup
+harness install --configure-vscode
 harness doctor
 ```
 
@@ -41,6 +41,8 @@ Set **`autonomy`**:
 | `full` | Maximum speed — auto capture, plan, compound |
 | `balanced` | Default — same with more Activity logging |
 | `strict` | Explicit human approvals |
+
+**Metered Copilot plans (~6000 AI credits):** use `balanced`, run `harness orient` before `@engineer`, and read [`github-copilot-credit-efficiency.md`](./github-copilot-credit-efficiency.md).
 
 ## 3. Product repo layout
 

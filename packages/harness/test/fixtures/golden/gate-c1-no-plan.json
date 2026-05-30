@@ -1,0 +1,9 @@
+{
+  "pass": false,
+  "phase": "implement",
+  "exitCode": 1,
+  "checkIds": [
+    { "id": "C1", "pass": false, "severity": "fail" }
+  ],
+  "autonomy": "balanced"
+}

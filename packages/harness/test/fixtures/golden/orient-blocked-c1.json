@@ -1,0 +1,6 @@
+{
+  "gateStatus": "blocked",
+  "contextPack": ".harness/context-pack.md",
+  "nextTools": ["harness gate --json", "/ensure-plan"],
+  "activePlan": null
+}

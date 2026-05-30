@@ -11,6 +11,8 @@ user-invocable: false
 
 **Step 1** of the connected pipeline: Capture → Plan → Work → Review → Compound.
 
+**Knowledge:** Load and write paths per `.github/skills/references/knowledge-locations.md` only — do not duplicate manifest/plan location lists here.
+
 This skill creates the initial local plan file that all subsequent skills operate on. It stores the file under `docs/plans/`, sets the initial state machine values, and ensures enough context is captured to plan effectively.
 
 ## Mode Detection

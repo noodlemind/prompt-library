@@ -9,6 +9,8 @@ description: Multi-agent code review with confidence-scored findings, persona sy
 
 **Step 4** of the connected pipeline: Capture → Plan → Work → **Review** → Compound.
 
+**Knowledge:** `.github/skills/references/knowledge-locations.md` for solution recall and plan context.
+
 This skill coordinates multiple specialist personas to provide comprehensive code review. Each persona returns structured findings with severity and confidence scores. The skill merges, deduplicates, and routes findings by action type.
 
 ## When to Use

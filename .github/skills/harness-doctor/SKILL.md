@@ -19,6 +19,14 @@ Read-only diagnostics. **No** product code edits.
 | H5 | Product plans dir | `docs/plans/` exists (create if missing — report only) |
 | H6 | Enterprise overlay | `~/.copilot/enterprise/capability-registry.enterprise.yaml` OR repo `enterprise/` (optional) |
 | H7 | Internal autopilot skills | `ensure-plan`, `auto-compound`, `ensure-capability` in hydrated skills |
+| H10 | Manifest enriched fields | symptom/module on manifest entries |
+| H11 | BM25 index fresh | `harness index` when stale |
+| H12 | Codebase map ≤30 days | `harness snapshot` when stale or missing |
+| H13 | Shared instructions ≤4.5KB | trim `copilot-instructions.md` if bloated |
+| H14 | Credit: full + no fresh map | prefer `balanced` or refresh snapshot |
+| H15 | context-pack ≤2KB | run `harness orient` before `@engineer` |
+
+**Credits:** See `docs/onboarding/github-copilot-credit-efficiency.md`.
 
 ## Output
 
