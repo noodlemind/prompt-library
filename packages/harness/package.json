@@ -19,6 +19,8 @@
   ],
   "scripts": {
     "build:assets": "node ../../scripts/build-harness-assets.mjs",
+    "prepare": "npm run build:assets",
+    "prepack": "npm run build:assets",
     "prepublishOnly": "npm run build:assets",
     "doctor": "node ./bin/harness.mjs doctor",
     "install:local": "node ./bin/harness.mjs install --configure-vscode --configure-path",

@@ -46,7 +46,7 @@ export function getAssetsRoot() {
     }
   }
   throw new Error(
-    'Package assets not found. Maintainer: npm run build:assets. User: reinstall @dev-kit/harness from Nexus.'
+    'Package assets not found. From a prompt-library clone run: npm --prefix packages/harness run build:assets. Otherwise reinstall the packaged CLI with: npm install -g @dev-kit/harness.'
   );
 }
 
@@ -130,7 +130,7 @@ export async function cmdInstallOrUpgrade(command, argv) {
     );
   } else {
     console.log('');
-    console.log(`@dev-kit/harness ${command} complete (${version})`);
+    console.log(`harness ${command} complete (${version})`);
     console.log(`  Copilot home: ${copilotHome}`);
     if (allStats.vscode) {
       console.log(
@@ -193,13 +193,13 @@ export async function cmdStatus(argv) {
   if (flags.json) {
     console.log(JSON.stringify({ packageVersion: version, copilotHome, lock }, null, 2));
   } else {
-    console.log(`@dev-kit/harness CLI ${version}`);
+    console.log(`harness CLI ${version}`);
     console.log(`Copilot home: ${copilotHome}`);
     if (lock) {
       console.log(`Installed: ${lock.package}@${lock.version} at ${lock.installedAt}`);
       console.log(`Files tracked: ${lock.files?.length ?? 0}`);
     } else {
-      console.log('No lock file — run: npx @dev-kit/harness install');
+      console.log('No lock file — run: harness install');
     }
   }
   return 0;

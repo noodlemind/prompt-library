@@ -105,7 +105,7 @@ export function runIndexKnowledge({ knowledgeRoot, workspace, copilotHome, flags
   const manifestPath = path.join(knowledgeRoot || path.join(workspace, 'knowledge'), 'manifest.yaml');
   const today = new Date().toISOString().slice(0, 10);
   const lines = [
-    '# Team knowledge index — rebuilt by @dev-kit/harness index',
+    '# Team knowledge index — rebuilt by harness index',
     'version: 1',
     `updated: ${today}`,
     'entries:',

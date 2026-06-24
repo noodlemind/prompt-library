@@ -9,9 +9,9 @@
 
 ## 1. Executive summary
 
-Teams install via **`npx @dev-kit/harness`** (Nexus). Maintainers can also run `node packages/harness/bin/harness.mjs` from a prompt-library clone. The legacy PowerShell/robocopy VS Code task has been **removed**.
+Teams install the **`harness`** command from **`@dev-kit/harness`** (Nexus). Maintainers can also install the package directly from a prompt-library clone before publishing. The legacy PowerShell/robocopy VS Code task has been **removed**.
 
-**Recommendation:** Publish **`@dev-kit/harness`** to your enterprise npm registry (e.g. **Sonatype Nexus**). Maintainers build assets and **`npm publish`** manually; developers consume via **`npx @dev-kit/harness`**.
+**Recommendation:** Publish **`@dev-kit/harness`** to your enterprise npm registry (e.g. **Sonatype Nexus**) for team distribution. For unpublished validation, run `npm install -g ./packages/harness` from the clone; package lifecycle scripts build the ignored assets bundle before packing.
 
 1. **Installs** skills, agents, instructions, knowledge skeleton, and enterprise scaffold into Copilot global paths (VS Code + IntelliJ + CLI).
 2. **Upgrades** in place with a file manifest (retire removed paths, preserve user `profile.md` and compounded solutions).
@@ -21,9 +21,10 @@ Teams install via **`npx @dev-kit/harness`** (Nexus). Maintainers can also run `
 **Primary UX:**
 
 ```bash
-npx @dev-kit/harness@latest install
-npx @dev-kit/harness doctor
-npx @dev-kit/harness upgrade
+npm install -g @dev-kit/harness@latest
+harness install
+harness doctor
+harness upgrade
 ```
 
 **Registry:** Private Nexus (or equivalent). See [`nexus-registry-setup.md`](../onboarding/nexus-registry-setup.md).
@@ -157,7 +158,7 @@ npm publish --access public   # or private registry
 | **npm name** | `@dev-kit/harness` |
 | **Scope** | `@dev-kit` |
 | **CLI binary** | `harness` |
-| **Invocation** | `npx @dev-kit/harness install` |
+| **Invocation** | `harness install` after installing `@dev-kit/harness` or local package |
 | **Registry** | Enterprise Nexus (manual `npm publish`) |
 
 See `packages/harness/package.json` and [`nexus-registry-setup.md`](../onboarding/nexus-registry-setup.md).
@@ -215,18 +216,20 @@ Declare in `peerDependencies` and verify in `aeh doctor`.
 
 ```bash
 # Developer laptop (first time) — after .npmrc maps @dev-kit to Nexus
-npx @dev-kit/harness@2.3.0 install --autonomy balanced
+npm install -g @dev-kit/harness@2.3.0
+harness install --autonomy balanced
 
 # Platform releases new specialists
 npx @dev-kit/harness-enterprise@1.4.0 install
-npx @dev-kit/harness@2.3.0 upgrade
+npm install -g @dev-kit/harness@2.3.0
+harness upgrade
 
 # Product repo bootstrap
 cd ~/services/orders-api
-npx @dev-kit/harness init-repo
+harness init-repo
 
 # CI (optional)
-npx @dev-kit/harness@2.3.0 doctor --json
+harness doctor --json
 ```
 
 ---
@@ -297,7 +300,7 @@ Port logic from `.vscode/tasks.json` to Node (aligns with [2026-03-12 sync plan]
 | Role | Repo | npm |
 |------|------|-----|
 | **Authoring** | prompt-library `.github/`, `knowledge/` | — |
-| **Consumption** | Product repos: `docs/plans/` only | `npx @dev-kit/harness install` |
+| **Consumption** | Product repos: `docs/plans/` only | `harness install` |
 | **Compounding** | Still writes `knowledge/solutions/` in library OR team's knowledge package source repo | `harness-knowledge` publish pipeline |
 
 **CI in prompt-library:**
@@ -327,7 +330,7 @@ Platform team publishes; developers only consume from registry.
 | 1 | Set `packages/harness/.npmrc`: `@dev-kit:registry=https://<nexus>/repository/npm-hosted/` |
 | 2 | Auth: `NEXUS_NPM_TOKEN` or `npm login` per org policy |
 | 3 | `cd packages/harness && npm run build:assets && npm version patch && npm publish` |
-| 4 | Announce version; developers run `npx @dev-kit/harness@X.Y.Z upgrade` |
+| 4 | Announce version; developers run `npm install -g @dev-kit/harness@X.Y.Z && harness upgrade` |
 
 Full runbook: [`nexus-registry-setup.md`](../onboarding/nexus-registry-setup.md).
 
@@ -351,10 +354,10 @@ Full runbook: [`nexus-registry-setup.md`](../onboarding/nexus-registry-setup.md)
 
 | Phase | Action |
 |-------|--------|
-| **M0** | Document `npx @dev-kit/harness` in quickstart ✓ |
+| **M0** | Document `harness` command in quickstart ✓ |
 | **M1** | Implement sync in `packages/harness`; parity test vs PowerShell |
 | **M2** | `harness doctor` + `harness status`; CI smoke on win/mac/linux |
-| **M3** | Default onboarding = npm; VS Code task → `npx @dev-kit/harness install` |
+| **M3** | Default onboarding = npm; VS Code task → `harness install` |
 | **M4** | Remove embedded PowerShell from `tasks.json` | ✓ |
 | **M5** | Private enterprise + knowledge packages |
 
@@ -443,8 +446,8 @@ Full runbook: [`nexus-registry-setup.md`](../onboarding/nexus-registry-setup.md)
 
 ## 14. Success criteria
 
-1. New hire runs **`npx @dev-kit/harness install`** and passes **`harness doctor`** without cloning prompt-library.
-2. Platform publishes **`@dev-kit/harness@2.4.0`** to Nexus; developers run **`npx @dev-kit/harness@2.4.0 upgrade`**.
+1. New hire installs **`@dev-kit/harness`**, runs **`harness install`**, and passes **`harness doctor`** without cloning prompt-library.
+2. Platform publishes **`@dev-kit/harness@2.4.0`** to Nexus; developers run **`npm install -g @dev-kit/harness@2.4.0 && harness upgrade`**.
 3. Compounded solutions survive upgrades unless explicitly reset.
 4. IT can review **`harness install --dry-run`** output.
 5. Product repos stay free of `.github/agents` copies — only `docs/plans/` (+ optional local knowledge fallback).
@@ -455,4 +458,4 @@ Full runbook: [`nexus-registry-setup.md`](../onboarding/nexus-registry-setup.md)
 
 Industry leaders (**ai-rulez**, **aicm**, **DotAI**) treat AI harness distribution as **versioned CLI + optional content packs**, not IDE tasks. Moving to npm standardizes onboarding, upgrades, and enterprise overlays while keeping **prompt-library** as the authoring source. The existing **2026-03-12 sync plan** already specifies the Node sync engine — this plan **productizes** it as a publishable package and adds **semver**, **knowledge/enterprise satellites**, and a clear **migration** from PowerShell hydrate.
 
-**Status:** CLI v0.2.0 implemented; legacy hydrate removed. Publish to Nexus and announce `npx @dev-kit/harness install`.
+**Status:** CLI v0.2.0 implemented; legacy hydrate removed. Publish to Nexus and announce `harness install` after package install.

@@ -110,8 +110,8 @@ Every `@engineer` trackable turn:
 **Purpose:** Agent/internal structural command that replaces ad-hoc recall + manifest grep + plan scan. It is not a user prompt input surface.
 
 ```bash
-npx @dev-kit/harness orient --query "orders api timeout"
-npx @dev-kit/harness orient --json
+harness orient --query "orders api timeout"
+harness orient --json
 ```
 
 **Actions:**
@@ -140,8 +140,8 @@ Model reads **one file** (`context-pack.md`) instead of five references.
 **Purpose:** Deterministic preflight before edits.
 
 ```bash
-npx @dev-kit/harness gate
-npx @dev-kit/harness gate --phase implement --json
+harness gate
+harness gate --phase implement --json
 ```
 
 | Check | implement phase |
@@ -159,7 +159,7 @@ Exit codes: `0` pass, `1` fail, `2` warn (amber — proceed with log).
 **Purpose:** Standalone recall (debug) or called by `orient`.
 
 ```bash
-npx @dev-kit/harness recall "orders timeout" --limit 3 --json
+harness recall "orders timeout" --limit 3 --json
 ```
 
 v1: token overlap on manifest fields (fallback).  
@@ -171,8 +171,8 @@ v3 (deferred): `--semantic` if local embedding index exists.
 **Purpose:** Rebuild derived indexes from L1 files.
 
 ```bash
-npx @dev-kit/harness index
-npx @dev-kit/harness index --semantic   # optional, offline embeddings
+harness index
+harness index --semantic   # optional, offline embeddings
 ```
 
 ### 4.5 `harness compound`
@@ -186,7 +186,7 @@ Future: single command after verify pass.
 **Purpose:** Inspect local structural outcomes from harness commands. This is observability for setup, validation, and agent-internal workflow tooling, not prompt capture.
 
 ```bash
-npx @dev-kit/harness events --json
+harness events --json
 ```
 
 Events append to `.harness/events.jsonl` unless `--no-events` or `HARNESS_NO_EVENTS=1` is set. Logged fields are structural only: command type, plan path, phase, result, exit code, and check ids/severities. Do not log user prompts, full queries, completions, source excerpts, or full plan text.
@@ -250,7 +250,8 @@ This is the maximum robustness available without Copilot hooks — **comparable 
 ## 9. CI (real enforcement)
 
 ```yaml
-- run: npx @dev-kit/harness@0.4.0 gate --workspace . --json
+- run: harness gate --workspace . --json
+- run: harness validate-plan --workspace . --json
 ```
 
 Fail PR if trackable code changed without `plan_lock` plan linked in PR body or `docs/plans/` updated.

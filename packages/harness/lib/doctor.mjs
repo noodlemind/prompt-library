@@ -34,7 +34,7 @@ export function runDoctor({ copilotHome, assetsRoot, pkgRoot, flags }) {
     id: 'H1',
     name: 'Global knowledge manifest',
     pass: fs.existsSync(manifest) || fs.existsSync(manifestRepo),
-    hint: 'Run: npx @dev-kit/harness install',
+    hint: 'Run: harness install',
   });
 
   const profile = path.join(copilotHome, 'knowledge', 'profile.md');
@@ -51,7 +51,7 @@ export function runDoctor({ copilotHome, assetsRoot, pkgRoot, flags }) {
     id: 'H3',
     name: 'Engineer agent',
     pass: fs.existsSync(engineer) || fs.existsSync(engineerAsset),
-    hint: 'Run: npx @dev-kit/harness install',
+    hint: 'Run: harness install',
   });
 
   const captureGate = path.join(
@@ -73,7 +73,7 @@ export function runDoctor({ copilotHome, assetsRoot, pkgRoot, flags }) {
     id: 'H5',
     name: 'Product docs/plans (cwd)',
     pass: fs.existsSync(path.join(flags.workspace, 'docs', 'plans')),
-    hint: 'npx @dev-kit/harness init-repo',
+    hint: 'harness init-repo',
   });
 
   const entReg = path.join(copilotHome, 'enterprise', 'capability-registry.enterprise.yaml');
@@ -91,7 +91,7 @@ export function runDoctor({ copilotHome, assetsRoot, pkgRoot, flags }) {
       id: 'H7',
       name: `Autopilot skill /${skill}`,
       pass: fs.existsSync(p) || fs.existsSync(path.join(assetsRoot, 'skills', skill, 'SKILL.md')),
-      hint: 'Upgrade to latest @dev-kit/harness',
+      hint: 'Run: harness upgrade',
     });
   }
 

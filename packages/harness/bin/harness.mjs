@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 /**
- * @dev-kit/harness — install Adaptive Engineer Harness into global Copilot paths.
+ * harness — install Adaptive Engineer Harness into global Copilot paths.
+ * The npm package name is @dev-kit/harness; the command users and agents run is harness.
  */
 import {
   cmdInstallOrUpgrade,
@@ -22,24 +23,32 @@ import {
 const [, , command = 'help', ...args] = process.argv;
 
 const HELP = `
-@dev-kit/harness — Adaptive Engineer Harness for GitHub Copilot (VS Code, CLI, IntelliJ)
+harness — Adaptive Engineer Harness for GitHub Copilot (VS Code, CLI, IntelliJ)
+
+Package name: @dev-kit/harness. Command name: harness.
 
 Usage:
-  npx @dev-kit/harness install [options]
-  npx @dev-kit/harness upgrade [options]
-  npx @dev-kit/harness doctor [options]
-  npx @dev-kit/harness status [options]
-  npx @dev-kit/harness index [options]
-  npx @dev-kit/harness orient [options] [--query "task summary"]
-  npx @dev-kit/harness gate [options] [--phase implement|verify]
-  npx @dev-kit/harness recall "search terms" [options]
-  npx @dev-kit/harness get [options] [--docid id | --path rel/path]
-  npx @dev-kit/harness validate-plan [options] [--plan docs/plans/file.md]
-  npx @dev-kit/harness compound [options]
-  npx @dev-kit/harness events [options]
-  npx @dev-kit/harness init-repo [options]
-  npx @dev-kit/harness resolve [options]   Print resolved harness CLI path for agents
-  npx @dev-kit/harness uninstall [options]
+  harness install [options]
+  harness upgrade [options]
+  harness doctor [options]
+  harness status [options]
+  harness index [options]
+  harness orient [options] [--query "task summary"]
+  harness gate [options] [--phase implement|verify]
+  harness recall "search terms" [options]
+  harness get [options] [--docid id | --path rel/path]
+  harness validate-plan [options] [--plan docs/plans/file.md]
+  harness compound [options]
+  harness events [options]
+  harness init-repo [options]
+  harness resolve [options]   Print resolved harness CLI path for agents
+  harness uninstall [options]
+
+Install the command:
+  npm install -g @dev-kit/harness@latest
+  # or from a prompt-library clone before publishing:
+  npm install -g ./packages/harness
+  # shim at ~/.copilot/bin/harness after harness install; add PATH: harness install --configure-path
 
 Options:
   --dry-run              Print actions without writing

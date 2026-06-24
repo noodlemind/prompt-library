@@ -4,13 +4,13 @@ Get from zero to **`@engineer`** delivering work in any enterprise product repo.
 
 ## 1. Install once (per machine)
 
-**Any install method** ends with a global `harness` CLI at `~/.copilot/bin/harness`:
+**Recommended:** every install method ends with a global `harness` CLI at `~/.copilot/bin/harness`. The scoped npm name is `@dev-kit/harness`; daily commands use `harness`. See [`nexus-registry-setup.md`](./nexus-registry-setup.md) and [`npm-harness-distribution-plan.md`](../architecture/npm-harness-distribution-plan.md).
 
 | Method | Commands |
 |--------|----------|
-| Enterprise registry | `npx @dev-kit/harness install --configure-path` |
+| Enterprise registry | `npm install -g @dev-kit/harness@latest` then `harness install --configure-path` |
 | npm global | `npm install -g @dev-kit/harness && harness install --configure-path` |
-| Local clone (maintainers) | `node packages/harness/bin/harness.mjs install --configure-vscode --configure-path` |
+| Local clone (maintainers) | `npm install -g ./packages/harness` or `node packages/harness/bin/harness.mjs install --configure-vscode --configure-path` |
 
 Verify:
 
@@ -18,6 +18,9 @@ Verify:
 harness doctor          # after --configure-path (or: node ~/.copilot/bin/harness doctor)
 harness resolve --json  # should show agentCommand: "harness"
 ```
+
+Or VS Code: **Dev Kit: Install Harness** / **Dev Kit: Harness Doctor**.
+
 
 Copies to `%USERPROFILE%\.copilot\` (or `~/.copilot/` on macOS/Linux):
 
@@ -44,7 +47,7 @@ Set **`autonomy`**:
 Bootstrap each service repo:
 
 ```bash
-npx @dev-kit/harness init-repo
+harness init-repo
 ```
 
 ```text
@@ -75,8 +78,8 @@ You do **not** need `/capture-issue`, `/plan-issue`, `/recall`, or `/compound-le
 ## 5. CI (optional hard gate)
 
 ```yaml
-- run: npx @dev-kit/harness@0.4.0 gate --workspace . --json
-- run: npx @dev-kit/harness@0.4.0 validate-plan --workspace . --json
+- run: harness gate --workspace . --json
+- run: harness validate-plan --workspace . --json
 ```
 
 ## 6. Health check

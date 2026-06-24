@@ -9,16 +9,16 @@ Keyword ranking via `harness recall` / `harness orient` is **v1** (manifest toke
 | Solution ranker | BM25 + field boosts + synonym expansion |
 | Index storage | `.harness-index/postings.json` + `meta.json` |
 | Config | `knowledge/collections.yaml`, `knowledge/recall-synonyms.yaml` |
-| Host | Terminal: `@dev-kit/harness` only |
+| Host | Terminal: `harness` only |
 
 ## Commands
 
 ```bash
-npx @dev-kit/harness index
-npx @dev-kit/harness recall "orders api timeout" --limit 3 --json
-npx @dev-kit/harness recall "checkout hang" -c product --min-score 0.2 --json
-npx @dev-kit/harness get --docid orders-timeout-fix --lines 40 --json
-npx @dev-kit/harness orient --query "checkout timeout"
+harness index
+harness recall "orders api timeout" --limit 3 --json
+harness recall "checkout hang" -c product --min-score 0.2 --json
+harness get --docid orders-timeout-fix --lines 40 --json
+harness orient --query "checkout timeout"
 ```
 
 ## JSON recall shape (0.4.0+)

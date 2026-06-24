@@ -1,7 +1,7 @@
 ---
 name: index-memory
 user-invocable: false
-description: Rebuild knowledge manifest via @dev-kit/harness index. Use after /compound-learnings. Not for writing solutions.
+description: Rebuild knowledge manifest via harness index. Use after /compound-learnings. Not for writing solutions.
 argument-hint: "[optional — ignored; use harness index]"
 ---
 

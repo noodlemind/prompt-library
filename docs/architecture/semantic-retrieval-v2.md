@@ -7,9 +7,9 @@ Keyword + BM25 ranking via `harness recall` / `harness orient` is **v1.5** (pure
 ## v1.5 (shipped in 0.4.0)
 
 ```bash
-npx @dev-kit/harness index
-npx @dev-kit/harness recall "orders api timeout" --limit 3 --json
-npx @dev-kit/harness orient --query "checkout timeout"
+harness index
+harness recall "orders api timeout" --limit 3 --json
+harness orient --query "checkout timeout"
 ```
 
 Returns `{ docid, path, title, score, snippet, ranker }[]` from manifest + BM25 index.
@@ -17,8 +17,8 @@ Returns `{ docid, path, title, score, snippet, ranker }[]` from manifest + BM25 
 ## v3 (optional, offline — not implemented)
 
 ```bash
-npx @dev-kit/harness index --semantic
-npx @dev-kit/harness recall "search terms" --semantic --json
+harness index --semantic
+harness recall "search terms" --semantic --json
 ```
 
 | Tier | Technology | Storage |

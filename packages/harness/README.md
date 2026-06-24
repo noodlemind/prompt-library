@@ -2,22 +2,33 @@
 
 CLI to install and upgrade the **Adaptive Engineer Harness** into global GitHub Copilot paths (`~/.copilot/`).
 
-The CLI is setup, sync, validation, and **agent-runtime tooling**. Developers use Copilot `@engineer` and skills; agents invoke harness via terminal. See [harness-tool-contract.md](../../.github/skills/references/harness-tool-contract.md).
+The npm package is named **`@dev-kit/harness`** for registry uniqueness. The executable command is **`harness`**. The CLI is setup, sync, validation, and **agent-runtime tooling**. Developers use Copilot `@engineer` and skills; agents invoke `harness` via terminal. See [harness-tool-contract.md](../../.github/skills/references/harness-tool-contract.md).
 
 ## Developers
 
 After Nexus `.npmrc` setup ([guide](../../docs/onboarding/nexus-registry-setup.md)):
 
 ```bash
-npx @dev-kit/harness@latest install
-npx @dev-kit/harness doctor
-npx @dev-kit/harness upgrade
+npm install -g @dev-kit/harness@latest
+harness install
+harness doctor
+harness upgrade
 ```
+
+Before the package is published, install from a prompt-library clone:
+
+```bash
+npm install -g ./packages/harness
+harness install --configure-vscode
+harness doctor
+```
+
+`prepare`/`prepack` build the ignored `packages/harness/assets/` bundle so local installs and tarballs contain the same prompt assets as published packages.
 
 Bootstrap a product repo:
 
 ```bash
-npx @dev-kit/harness init-repo
+harness init-repo
 ```
 
 ### Pin version (recommended for product repos)
@@ -41,8 +52,8 @@ npx @dev-kit/harness init-repo
 Use pinned version in CI:
 
 ```yaml
-- run: npx @dev-kit/harness@0.4.0 gate --workspace . --json
-- run: npx @dev-kit/harness@0.4.0 validate-plan --workspace . --json
+- run: harness gate --workspace . --json
+- run: harness validate-plan --workspace . --json
 ```
 
 ## Commands
@@ -90,7 +101,8 @@ npm publish
 Local install:
 
 ```bash
-node packages/harness/bin/harness.mjs install --configure-vscode
+npm install -g ./packages/harness
+harness install --configure-vscode
 ```
 
 ## Package layout

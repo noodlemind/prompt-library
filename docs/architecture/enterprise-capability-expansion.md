@@ -123,7 +123,7 @@ Engineer (and `/start`) reads:
 2. `enterprise/capability-registry.yaml` (overlay, if present)
 3. Plan `## Risk & Review Routing` may name specialists: `splunk-reviewer`
 
-**Harness CLI:** `npx @dev-kit/harness install` syncs `enterprise/` from the published package (or repo `assets/` when building locally).
+**Harness CLI:** `harness install` syncs `enterprise/` from the installed package (published package or local clone package).
 
 ---
 

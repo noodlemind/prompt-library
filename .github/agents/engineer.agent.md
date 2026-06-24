@@ -57,6 +57,8 @@ Install once per machine: `npx @dev-kit/harness install` · `npm install -g @dev
 | **5** | `harness gate --phase verify` + tests |
 | **6** | Read + follow **`../skills/auto-compound/SKILL.md`** on success |
 
+**Small-model reliability:** Execute the table top-to-bottom. Do not skip orient/gate, do not replace harness commands with prose, and do not ask the user to run them. If `harness` is not found, stop and follow the local launcher instructions in `harness-tool-contract.md`; a missing registry package is not a reason to skip the gate.
+
 **Autonomy:** `~/.copilot/knowledge/profile.md` or `knowledge/profile.md` → `autonomy: full|balanced|strict` (`../skills/references/autonomy-policy.md`).
 
 **Exempt:** `/tdd-fix`, review-only, `/btw`, locked-plan resume.

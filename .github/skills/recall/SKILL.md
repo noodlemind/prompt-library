@@ -1,7 +1,7 @@
 ---
 name: recall
 user-invocable: false
-description: Recall team and repo knowledge before engineering work. Delegates ranking to @dev-kit/harness orient/recall. Not for implementation.
+description: Recall team and repo knowledge before engineering work. Delegates ranking to harness orient/recall. Not for implementation.
 argument-hint: "[task description]"
 ---
 
