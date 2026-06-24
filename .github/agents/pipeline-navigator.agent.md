@@ -2,6 +2,10 @@
 description: Guide developers through the engineering pipeline with status-aware step transitions.
 tools: ["search", "read"]
 handoffs:
+  - label: "Engineer (autopilot)"
+    agent: engineer
+    prompt: "Continue this engineering work via the @engineer autopilot loop."
+    send: false
   - label: "Plan Issue"
     agent: plan-coordinator
     prompt: "Help me plan the issue discussed above."
@@ -17,12 +21,16 @@ handoffs:
 Help developers navigate the connected engineering pipeline. Determine where they are
 in the workflow and guide them to the appropriate next step.
 
+**Default for trackable engineering work:** route to **`@engineer`**, which runs recall, capture, plan, gate, implement, verify, and compound internally. **Do not** ask users to run `/capture-issue`, `/plan-issue`, `/recall`, or `/compound-learnings` manually unless they explicitly want manual pipeline mode or are debugging harness behavior.
+
 ## Pipeline
 
 ```
 /recall (recommended) → /capture-issue → /plan-issue → /work-on-task → /code-review → /compound-learnings → /index-memory
                          open          →   planned   →  in-progress  →    review    →      done
 ```
+
+Manual pipeline mode is for power users and debugging only. `@engineer` covers the same semantics via internal skills (`ensure-plan`, `auto-compound`, harness CLI).
 
 ## Workflow
 
@@ -43,14 +51,16 @@ Based on the current status:
 
 | Status | Suggest |
 |--------|---------|
-| No plan exists + raw work prompt | `/recall` then `/start` or `/capture-issue` |
-| No plan exists + clear issue | `/recall` then `/capture-issue` to create one |
-| Trackable work before code | Never skip `/capture-issue` — see `capture-gate.md` |
-| `open` | `/plan-issue` or `@plan-coordinator` to generate a plan |
-| `planned` | `/work-on-task` to start implementation |
-| `in-progress` | Continue `/work-on-task` or `/code-review` when ready |
-| `review` | `/code-review` or `@code-review-coordinator` for multi-specialist review |
-| `done` | `/compound-learnings` to document what was learned |
+| No plan + trackable engineering work | **`@engineer`** with the user's task (autopilot handles capture/plan internally) |
+| No plan + wants manual pipeline | `/recall` then `/capture-issue` or `/start` |
+| No plan + quick Q&A | `/btw` |
+| `open` (manual mode) | `/plan-issue` or `@plan-coordinator` |
+| `planned` (manual mode) | `/work-on-task` |
+| `in-progress` | Continue **`@engineer`** or `/work-on-task`; `/code-review` when ready |
+| `review` | `/code-review` or `@code-review-coordinator` |
+| `done` | **`@engineer`** compounds via `/auto-compound`, or manual `/compound-learnings` |
+
+When the user has not asked for manual pipeline mode, prefer **`@engineer`** over individual pipeline skills.
 
 ### 3. Provide Context
 
@@ -63,4 +73,4 @@ When suggesting the next step:
 
 - The handoff buttons carry conversation context to the target agent automatically
 - Use `send: false` — the developer can review and adjust the prompt before submitting
-- If the developer wants to skip a step, that's fine — the skills validate state independently
+- If the developer explicitly wants to skip a step in manual mode, that's fine — the skills validate state independently

@@ -26,6 +26,22 @@ export function runCompound({ workspace, copilotHome, flags, log = () => {} }) {
     };
   }
 
+  if (verifyGate.exitCode === 2) {
+    return {
+      pass: true,
+      exitCode: 2,
+      verifyGate: {
+        pass: verifyGate.pass,
+        exitCode: verifyGate.exitCode,
+        checks: verifyGate.checks?.filter((c) => c.id === 'V1') || [],
+        blockedReason: verifyGate.blockedReason,
+      },
+      indexed: null,
+      blockedReason: verifyGate.blockedReason || 'verify gate warning — complete verification before compound',
+      nextTools: ['harness gate --phase verify', '/auto-compound'],
+    };
+  }
+
   const knowledgeRoot = fs.existsSync(path.join(copilotHome, 'knowledge'))
     ? path.join(copilotHome, 'knowledge')
     : null;

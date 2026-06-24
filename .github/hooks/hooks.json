@@ -1,0 +1,52 @@
+{
+  "version": 1,
+  "description": "Copilot CLI lifecycle hooks — synced to ~/.copilot/hooks/ on harness install. Commands run with cwd = hooks directory.",
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node load-context.mjs",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node guard-critical-files.mjs",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node block-destructive-commands.mjs",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node preserve-context.mjs",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -50,7 +50,7 @@ When invoked, follow this exact sequence:
    - `in-progress` → Resume at current phase (check `## Activity` for progress).
    - `review` or `done` → "This issue is past the work phase."
 3. **Check `plan_lock`**: If `false` → "Plan is not locked. Run `/plan-issue` first."
-4. **Read the local context pack**: `## Memory Cards` first, then `## Context`, `## Acceptance Criteria`, `## Research Notes`, `## Impacted Files`, `## Verification Plan`, and `## Risk & Review Routing`. Run `/recall` if cards are empty. Global team context lives in hydrated `~/.copilot/knowledge/`.
+4. **Read the local context pack**: `## Memory Cards` first, then `## Intent Contract` (goal), `## Context`, `## Acceptance Criteria`, `## Research Notes`, `## Impacted Files`, `## Verification Plan`, and `## Risk & Review Routing`. Run `/recall` if cards are empty. Global team context lives in hydrated `~/.copilot/knowledge/`.
 5. **Read `phase`**: Determine current phase number.
 6. **Read `## Activity`**: Understand what was already done in this phase.
 7. **Read plan checkboxes**: Find unchecked `- [ ]` items for the current phase.
@@ -62,7 +62,7 @@ For each task in the current phase:
 
 ### 1. Verify Before Coding
 
-List the exact files, symbols, and lines that justify the planned change. Confirm the task is within `## Impacted Files` and has a matching acceptance criterion or verification item. If key evidence is missing, set `status: needs-info` with one focused question and stop.
+List the exact files, symbols, and lines that justify the planned change. Confirm the task is within `## Impacted Files`, traces to `## Intent Contract` / acceptance criteria, and has a matching verification item. If key evidence is missing, set `status: needs-info` with one focused question and stop.
 
 If the next step requires a risky strategy choice, follow `.github/skills/references/human-approval-policy.md` before coding. This includes concurrency fixes, schema/data changes, destructive operations, security-sensitive work, public contract changes, broad refactors, and primitive creation.
 

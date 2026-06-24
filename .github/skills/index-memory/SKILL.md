@@ -12,7 +12,7 @@ Rebuild `knowledge/manifest.yaml` deterministically. Contract: [`harness-tool-co
 ## Step
 
 ```bash
-npx @dev-kit/harness index --workspace . --json
+harness index --workspace . --json
 ```
 
 Reports entry count and manifest path. Scans `~/.copilot/knowledge/solutions/` and repo `docs/solutions/` when present.

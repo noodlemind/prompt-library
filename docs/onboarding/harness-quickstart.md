@@ -4,20 +4,20 @@ Get from zero to **`@engineer`** delivering work in any enterprise product repo.
 
 ## 1. Install once (per machine)
 
-**Recommended:** **`@dev-kit/harness`** from your enterprise npm registry (Nexus). See [`nexus-registry-setup.md`](./nexus-registry-setup.md) and [`npm-harness-distribution-plan.md`](../architecture/npm-harness-distribution-plan.md).
+**Any install method** ends with a global `harness` CLI at `~/.copilot/bin/harness`:
+
+| Method | Commands |
+|--------|----------|
+| Enterprise registry | `npx @dev-kit/harness install --configure-path` |
+| npm global | `npm install -g @dev-kit/harness && harness install --configure-path` |
+| Local clone (maintainers) | `node packages/harness/bin/harness.mjs install --configure-vscode --configure-path` |
+
+Verify:
 
 ```bash
-npx @dev-kit/harness@latest install
-npx @dev-kit/harness doctor
+harness doctor          # after --configure-path (or: node ~/.copilot/bin/harness doctor)
+harness resolve --json  # should show agentCommand: "harness"
 ```
-
-**From prompt-library clone (maintainers):**
-
-```bash
-node packages/harness/bin/harness.mjs install --configure-vscode
-```
-
-Or VS Code: **Dev Kit: Install Harness** / **Dev Kit: Harness Doctor**.
 
 Copies to `%USERPROFILE%\.copilot\` (or `~/.copilot/` on macOS/Linux):
 
@@ -51,7 +51,7 @@ npx @dev-kit/harness init-repo
 docs/plans/             # plans + state machine
 .harness/               # session.json, context-pack.md (gitignored)
 docs/agent-context.md   # optional thin conventions
-.harness-version        # optional pin, e.g. 0.3.1
+.harness-version        # optional pin, e.g. 0.4.0
 ```
 
 Pin harness in `package.json` `devDependencies` or `.harness-version` for CI reproducibility.
@@ -75,8 +75,8 @@ You do **not** need `/capture-issue`, `/plan-issue`, `/recall`, or `/compound-le
 ## 5. CI (optional hard gate)
 
 ```yaml
-- run: npx @dev-kit/harness@0.3.1 gate --workspace . --json
-- run: npx @dev-kit/harness@0.3.1 validate-plan --workspace . --json
+- run: npx @dev-kit/harness@0.4.0 gate --workspace . --json
+- run: npx @dev-kit/harness@0.4.0 validate-plan --workspace . --json
 ```
 
 ## 6. Health check

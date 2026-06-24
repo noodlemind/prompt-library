@@ -73,17 +73,18 @@ export function loadManifest(copilotHome, workspace) {
     path.join(copilotHome, 'knowledge', 'manifest.yaml'),
     path.join(workspace, 'knowledge', 'manifest.yaml'),
   ];
+  let lastError = null;
   for (const p of paths) {
     if (!fs.existsSync(p)) continue;
     try {
       const yaml = require('yaml');
       const doc = yaml.parse(fs.readFileSync(p, 'utf8'));
-      return { entries: doc.entries || [], path: p, updated: doc.updated || null };
-    } catch {
-      /* try next */
+      return { entries: doc.entries || [], path: p, updated: doc.updated || null, error: null };
+    } catch (err) {
+      lastError = err.message || String(err);
     }
   }
-  return { entries: [], path: null, updated: null };
+  return { entries: [], path: null, updated: null, error: lastError };
 }
 
 function rankWithBm25(queryTokens, index, entriesById, minScore) {
@@ -123,7 +124,12 @@ function rankWithOverlap(queryTokens, entries, minScore) {
 }
 
 export function rankRecall(query, { copilotHome, workspace, limit = 3, collection = null, minScore = 0.15 }) {
-  const { entries, updated } = loadManifest(copilotHome, workspace);
+  const { entries, updated, path: manifestPath, error } = loadManifest(copilotHome, workspace);
+  if (error && manifestPath) {
+    throw new Error(
+      `manifest parse failed (${manifestPath}): ${error} — run npm install in packages/harness or harness index`
+    );
+  }
   const synonyms = loadRecallSynonyms(copilotHome, workspace);
   const collections = loadCollections(copilotHome, workspace);
   const queryTokens = expandQueryTokens(tokenize(query), synonyms);

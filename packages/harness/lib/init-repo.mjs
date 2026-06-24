@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { ensureHarnessDir } from './session.mjs';
+import { writeHarnessRunner } from './resolve-harness-bin.mjs';
 
 const AGENT_CONTEXT_STUB = `# Agent Context
 
@@ -13,7 +14,7 @@ _Add project-specific notes here._
 ## Related
 
 - Plans: \`docs/plans/\`
-- Run \`npx @dev-kit/harness doctor\` after global install.
+- Run \`harness doctor\` after global harness install.
 `;
 
 export function runInitRepo({ workspace, flags, log }) {
@@ -45,6 +46,17 @@ export function runInitRepo({ workspace, flags, log }) {
   else ensureHarnessDir(workspace, true);
   stats.created.push('.harness/.gitignore');
   log('ensured .harness/ (session + context-pack)');
+
+  const runner = writeHarnessRunner(workspace, flags.dryRun);
+  if (runner.created) {
+    stats.created.push('.harness/run.mjs');
+    log('created .harness/run.mjs (local harness runner)');
+  } else if (runner.updated) {
+    stats.created.push('.harness/run.mjs');
+    log('updated .harness/run.mjs (refreshed stale runner)');
+  } else {
+    log('skip .harness/run.mjs (exists)');
+  }
 
   const manifest = path.join(knowledgeDir, 'manifest.yaml');
   if (!fs.existsSync(manifest)) {

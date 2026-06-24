@@ -75,15 +75,15 @@ npx @dev-kit/harness doctor
 Pin version in internal docs:
 
 ```bash
-npx @dev-kit/harness@0.1.0 install --autonomy balanced
+npx @dev-kit/harness@0.4.0 install --autonomy balanced
 ```
 
 ## CI / air-gapped
 
 | Scenario | Approach |
 |----------|----------|
-| **CI doctor check** | `npx @dev-kit/harness@0.1.0 doctor --json` with registry auth in pipeline |
-| **Air-gapped** | Download `.tgz` from Nexus UI → `npm install -g ./dev-kit-harness-0.1.0.tgz` → `harness install --offline` (Phase 1+) |
+| **CI doctor check** | `npx @dev-kit/harness@0.4.0 doctor --json` with registry auth in pipeline |
+| **Air-gapped** | Download `.tgz` from Nexus UI → `npm install -g ./dev-kit-harness-0.4.0.tgz` → `harness install --offline` (Phase 1+) |
 | **Proxy** | Set `npm_config_registry` only for `@dev-kit` scope, not public npm |
 
 ## Versioning policy

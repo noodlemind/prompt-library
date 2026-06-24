@@ -8,6 +8,9 @@ import { test } from 'node:test';
 import { applyRetired, syncAssetsToTarget } from '../lib/sync.mjs';
 import { parsePlanFrontmatter } from '../lib/plan-parse.mjs';
 import { CONTEXT_PACK_MAX_BYTES, buildContextPack } from '../lib/context-pack.mjs';
+import { extractGoalFromPlan } from '../lib/plan-goal.mjs';
+import { loadPlan } from '../lib/plan-parse.mjs';
+import { installGlobalHarnessShim, globalHarnessShimPath } from '../lib/global-bin.mjs';
 
 const packageRoot = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -202,6 +205,12 @@ success_criteria: ["tests pass"]
 ## Overview
 
 Do the work.
+
+## Intent Contract
+
+- **Goal:** Fix example safely
+- **Expected outputs:** code change
+- **Success criteria:** tests pass
 
 ## Acceptance Criteria
 
@@ -425,6 +434,114 @@ test('uninstall refuses lock paths outside copilot home', () => {
 
   assert.equal(result.status, 0, result.stderr);
   assert.equal(fs.existsSync(path.join(outside, 'keep.txt')), true);
+});
+
+test('orient context-pack includes Goal Intent Contract from active plan', () => {
+  const workspace = tempDir('harness-workspace-');
+  const copilotHome = tempDir('harness-copilot-');
+  writePlan(workspace, {
+    frontmatter:
+      'intent: "Fix example safely"\nexpected_outputs: ["code change"]\nsuccess_criteria: ["tests pass"]\n',
+  });
+
+  const result = runHarness([
+    'orient',
+    '--query',
+    'fix example',
+    '--workspace',
+    workspace,
+    '--copilot-home',
+    copilotHome,
+    '--json',
+  ]);
+
+  assert.equal(result.status, 0, result.stderr);
+  const body = JSON.parse(result.stdout);
+  assert.ok(body.planGoal);
+  assert.equal(body.planGoal.intent, 'Fix example safely');
+  assert.deepEqual(body.planGoal.success_criteria, ['tests pass']);
+
+  const pack = fs.readFileSync(path.join(workspace, '.harness', 'context-pack.md'), 'utf8');
+  assert.match(pack, /## Goal \(Intent Contract\)/);
+  assert.match(pack, /Fix example safely/);
+  assert.match(pack, /Intent Contract \(excerpt\)/);
+});
+
+test('validate-plan strict-intent fails locked plan with empty intent contract', () => {
+  const workspace = tempDir('harness-workspace-');
+  const plansDir = path.join(workspace, 'docs', 'plans');
+  fs.mkdirSync(plansDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(plansDir, 'empty-intent-plan.md'),
+    `---
+title: "Empty intent"
+status: planned
+plan_lock: true
+phase: 1
+intent: "Do something"
+success_criteria: ["done"]
+expected_outputs: ["change"]
+---
+
+# Empty intent
+
+## Overview
+
+Overview text.
+
+## Intent Contract
+
+- **Goal:**
+- **Expected outputs:**
+- **Success criteria:**
+
+## Acceptance Criteria
+
+- [ ] Done.
+
+## Verification Plan
+
+Run tests.
+
+## Impacted Files
+
+- src/example.ts
+
+## Activity
+
+- Created.
+`,
+    'utf8'
+  );
+
+  const result = runHarness([
+    'validate-plan',
+    '--plan',
+    'docs/plans/empty-intent-plan.md',
+    '--workspace',
+    workspace,
+    '--strict-intent',
+    '--json',
+  ]);
+
+  assert.equal(result.status, 1, result.stderr);
+  const body = JSON.parse(result.stdout);
+  assert.equal(body.pass, false);
+  assert.equal(body.checks.find((c) => c.id === 'S5')?.pass, false);
+});
+
+test('extractGoalFromPlan reads intent contract and frontmatter', () => {
+  const workspace = tempDir('harness-workspace-');
+  writePlan(workspace, {
+    frontmatter:
+      'intent: "Fix example safely"\nexpected_outputs: ["code change"]\nsuccess_criteria: ["tests pass"]\n',
+  });
+  const plan = loadPlan(workspace, 'docs/plans/2026-05-22-fix-example-plan.md');
+  const goal = extractGoalFromPlan(plan);
+  assert.equal(goal.planPath, 'docs/plans/2026-05-22-fix-example-plan.md');
+  assert.equal(goal.intent, 'Fix example safely');
+  assert.deepEqual(goal.success_criteria, ['tests pass']);
+  assert.ok(goal.intentContractExcerpt.includes('Fix example'));
 });
 
 test('context pack stays within byte budget cap', () => {
@@ -807,4 +924,36 @@ test('recall falls back to overlap ranker when postings index missing', () => {
   const body = JSON.parse(result.stdout);
   assert.ok(body.recall.length >= 1);
   assert.equal(body.recall[0].ranker, 'overlap');
+});
+
+test('install creates global harness shim', () => {
+  const copilotHome = tempDir('harness-copilot-');
+  installGlobalHarnessShim(copilotHome, { dryRun: false, verbose: false }, () => {});
+  const shim = globalHarnessShimPath(copilotHome);
+  assert.ok(fs.existsSync(shim));
+  const result = spawnSync(process.execPath, [shim, 'help'], { encoding: 'utf8' });
+  assert.equal(result.status, 0, result.stderr);
+});
+
+test('resolve finds monorepo harness bin', () => {
+  const repoRoot = path.resolve(packageRoot, '../..');
+  const result = runHarness(['resolve', '--workspace', repoRoot, '--json']);
+  assert.equal(result.status, 0, result.stderr);
+  const body = JSON.parse(result.stdout);
+  assert.ok(body.bin);
+  assert.ok(body.agentCommand);
+});
+
+test('init-repo creates harness runner', () => {
+  const workspace = tempDir('harness-workspace-');
+  const result = runHarness(['init-repo', '--workspace', workspace]);
+  assert.equal(result.status, 0, result.stderr);
+  const runner = path.join(workspace, '.harness', 'run.mjs');
+  assert.ok(fs.existsSync(runner));
+  const runResult = spawnSync(process.execPath, [runner, 'resolve', '--json'], {
+    cwd: workspace,
+    encoding: 'utf8',
+    env: { ...process.env, HARNESS_BIN: binPath },
+  });
+  assert.equal(runResult.status, 0, runResult.stderr);
 });

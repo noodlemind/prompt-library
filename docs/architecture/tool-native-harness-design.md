@@ -250,7 +250,7 @@ This is the maximum robustness available without Copilot hooks — **comparable 
 ## 9. CI (real enforcement)
 
 ```yaml
-- run: npx @dev-kit/harness@0.3.0 gate --workspace . --json
+- run: npx @dev-kit/harness@0.4.0 gate --workspace . --json
 ```
 
 Fail PR if trackable code changed without `plan_lock` plan linked in PR body or `docs/plans/` updated.

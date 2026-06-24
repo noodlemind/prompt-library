@@ -15,9 +15,23 @@ Design: [`docs/architecture/tool-native-harness-design.md`](../../../docs/archit
 
 ## Invocation (agents)
 
+**Primary** — global CLI (after `harness install`):
+
 ```bash
-npx @dev-kit/harness <command> [args] --workspace . --json
+harness <command> [args] --workspace . --json
 ```
+
+Installed to `~/.copilot/bin/harness` on every `harness install`. Add to PATH with `harness install --configure-path`, or invoke as `node ~/.copilot/bin/harness …` from any directory.
+
+**Install paths (all produce the same global CLI):**
+
+| Method | Command |
+|--------|---------|
+| Enterprise registry | `npx @dev-kit/harness install` |
+| npm global | `npm install -g @dev-kit/harness && harness install` |
+| Local clone | `node packages/harness/bin/harness.mjs install --configure-path` |
+
+**Per-repo bootstrap:** `harness init-repo` creates `.harness/run.mjs` (delegates to global harness + sets `--workspace`).
 
 - Pin version in product repos: `devDependencies` or `.harness-version` (see harness README).
 - **Read** `.harness/context-pack.md` after `orient` — do not paste full CLI stdout into chat.
@@ -46,7 +60,7 @@ npx @dev-kit/harness <command> [args] --workspace . --json
 
 | Command | Cursor analogue | Budget tier | Side effects |
 |---------|-----------------|-------------|--------------|
-| `orient --query "<task>"` | Codebase search + task context | **F1** — writes ≤2 KB `.harness/context-pack.md` | session.json, events.jsonl |
+| `orient --query "<task>"` | Codebase search + task context | **F1** — writes ≤2 KB `.harness/context-pack.md` (goal from plan Intent Contract) | session.json, events.jsonl |
 | `recall "<query>"` | Standalone search / debug | F1 paths only | events |
 | `gate [--phase implement\|verify]` | Pre-edit lint / task guard | F3 on fail | events |
 | `validate-plan [--plan path]` | Spec/schema lint | read-only | none |
@@ -63,6 +77,13 @@ npx @dev-kit/harness <command> [args] --workspace . --json
   "recall": [{ "docid": "...", "path": "...", "title": "...", "score": 0.82, "summary": "...", "snippet": "...", "ranker": "bm25" }],
   "plans": [{ "path": "docs/plans/...", "status": "planned", "plan_lock": true, "score": 0.67 }],
   "activePlan": { "path": "...", "status": "...", "plan_lock": true },
+  "planGoal": {
+    "planPath": "docs/plans/...",
+    "intent": "...",
+    "success_criteria": ["..."],
+    "expected_outputs": ["..."],
+    "intentContractExcerpt": "..."
+  },
   "contextPack": ".harness/context-pack.md",
   "gateStatus": "pass|blocked",
   "blockedReason": null,
@@ -112,7 +133,7 @@ npx @dev-kit/harness <command> [args] --workspace . --json
 | F2 Plan slice | ~1500 tokens | Read plan sections from `activePlan.path` on demand |
 | F3 On demand | skill-defined | Load gate/delegation refs when `gate` fails |
 
-After orient: `read` ≤3 solution paths, ≤30 lines each per [`context-budget.md`](context-budget.md).
+After orient: `read` ≤3 solution paths, ≤30 lines each per [`context-budget.md`](context-budget.md). Goal lives in the active plan — `orient` surfaces it in context-pack `## Goal (Intent Contract)`; no separate goal file or CLI command.
 
 ## Skill integration
 

@@ -3,6 +3,7 @@ import path from 'path';
 import { rankRecall, findMatchingPlans } from './recall-rank.mjs';
 import { runGate } from './gate.mjs';
 import { buildContextPack } from './context-pack.mjs';
+import { extractGoalFromPlan } from './plan-goal.mjs';
 import { ensureHarnessDir, readSession, writeSession } from './session.mjs';
 import { pickActivePlan, listPlanRels } from './plan-parse.mjs';
 import { parseQueryFromArgv } from './argv.mjs';
@@ -37,6 +38,8 @@ export function runOrient({ workspace, copilotHome, flags, query }) {
 
   const session = readSession(workspace) || {};
   const active = pickActivePlan(workspace, session, plans, listPlanRels(workspace));
+  const planGoal = active ? extractGoalFromPlan(active) : null;
+
   let memoryExcerpt = '';
   if (active) {
     const cards = active.sections.memoryCards || '';
@@ -55,7 +58,7 @@ export function runOrient({ workspace, copilotHome, flags, query }) {
 
   const nextTools = gatePreview.pass
     ? ['harness gate --phase implement', 'read plan ## Impacted Files']
-    : ['harness gate', '/ensure-plan', '/ensure-capability'];
+    : ['harness gate', 'read ensure-plan/SKILL.md', 'read ensure-capability/SKILL.md'];
 
   const packBody = buildContextPack({
     query: q,
@@ -70,6 +73,7 @@ export function runOrient({ workspace, copilotHome, flags, query }) {
           memoryExcerpt,
         }
       : null,
+    planGoal,
     gatePreview: { pass: gatePreview.pass, blockedReason: gatePreview.blockedReason },
     nextTools,
   });
@@ -93,6 +97,15 @@ export function runOrient({ workspace, copilotHome, flags, query }) {
     recall,
     plans,
     activePlan: active ? { path: active.path, status: active.status, plan_lock: active.plan_lock } : null,
+    planGoal: planGoal
+      ? {
+          planPath: planGoal.planPath,
+          intent: planGoal.intent,
+          success_criteria: planGoal.success_criteria,
+          expected_outputs: planGoal.expected_outputs,
+          intentContractExcerpt: planGoal.intentContractExcerpt,
+        }
+      : null,
     contextPack: packRel,
     gateStatus: newSession.gateStatus,
     blockedReason: newSession.blockedReason,

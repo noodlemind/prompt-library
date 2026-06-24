@@ -21,10 +21,10 @@ If gates fail → skip; log in Activity.
 ### 1. Verify gate
 
 ```bash
-npx @dev-kit/harness gate --phase verify --workspace . --json
+harness gate --phase verify --workspace . --json
 ```
 
-Exit 0 or 2 required before compound.
+Exit 0 required before compound (exit 2 = warn only — do not compound until resolved).
 
 ### 2. Compound learnings
 
@@ -33,10 +33,10 @@ Execute **`/compound-learnings`** — write solution md (global `knowledge/solut
 ### 3. Index + close-out
 
 ```bash
-npx @dev-kit/harness compound --workspace . --json
+harness compound --workspace . --json
 ```
 
-Or after solution write only: `npx @dev-kit/harness index --workspace . --json`
+Or after solution write only: `harness index --workspace . --json`
 
 ### 4. Memory cards
 
