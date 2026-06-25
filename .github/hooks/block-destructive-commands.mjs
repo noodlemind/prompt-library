@@ -6,7 +6,8 @@ import fs from 'fs';
 
 const BLOCKED = [
   /\brm\s+-rf\s+\//,
-  /\bgit\s+push\b[^\n]*--force\b[^\n]*(main|master)\b/i,
+  /\bgit\s+push\b[^\n]*(?:--force-with-lease|--force)\b[^\n]*\b(main|master)\b/i,
+  /\bgit\s+push\b[^\n]*\b(main|master)\b[^\n]*(?:--force-with-lease|--force)\b/i,
   /\bgit\s+reset\s+--hard\b/,
   // Destructive clean: -d, -x, or -X in flag cluster (-fd, -fx, -fX, -ffd, etc.) — not benign `git clean -f <path>`
   /\bgit\s+clean\b[^;\n|&]*(?:-[a-zA-Z]*[dxX][a-zA-Z]*|\s+-[dxX]\b)/,

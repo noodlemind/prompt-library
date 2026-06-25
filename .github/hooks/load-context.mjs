@@ -14,26 +14,60 @@ function readStdin() {
   }
 }
 
-function findActivePlan(workspace) {
+function listPlanRels(workspace) {
   const plansDir = path.join(workspace, 'docs', 'plans');
-  if (!fs.existsSync(plansDir)) return null;
-  const files = fs
+  if (!fs.existsSync(plansDir)) return [];
+  return fs
     .readdirSync(plansDir)
-    .filter((f) => f.endsWith('.md') && !f.startsWith('_'))
+    .filter((f) => f.endsWith('.md') && !f.startsWith('_') && f !== 'README.md')
     .sort()
-    .map((f) => path.join(plansDir, f));
-  for (const file of [...files].reverse()) {
-    let text;
+    .map((f) => path.join('docs', 'plans', f).replace(/\\/g, '/'));
+}
+
+function parsePlanFrontmatter(text) {
+  const m = text.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+  if (!m) return {};
+  const fm = {};
+  for (const line of m[1].split(/\r?\n/)) {
+    const kv = line.match(/^([A-Za-z0-9_-]+):\s*(.+)$/);
+    if (kv) fm[kv[1]] = kv[2].trim();
+  }
+  return fm;
+}
+
+function planPriority(fm) {
+  let score = 0;
+  if (fm.plan_lock === 'true') score += 10;
+  if (fm.status === 'in-progress') score += 5;
+  if (fm.status === 'planned') score += 2;
+  return score;
+}
+
+function findActivePlan(workspace) {
+  const sessionPath = path.join(workspace, '.harness', 'session.json');
+  if (fs.existsSync(sessionPath)) {
     try {
-      text = fs.readFileSync(file, 'utf8');
+      const session = JSON.parse(fs.readFileSync(sessionPath, 'utf8'));
+      if (session.activePlan) return session.activePlan.replace(/\\/g, '/');
     } catch {
-      continue;
-    }
-    if (/plan_lock:\s*true/.test(text) && /status:\s*(in-progress|planned)/.test(text)) {
-      return path.relative(workspace, file);
+      /* ignore */
     }
   }
-  return files.length ? path.relative(workspace, files[files.length - 1]) : null;
+
+  const planRels = listPlanRels(workspace);
+  const candidates = planRels
+    .map((rel) => {
+      try {
+        const text = fs.readFileSync(path.join(workspace, rel), 'utf8');
+        return { rel, fm: parsePlanFrontmatter(text) };
+      } catch {
+        return null;
+      }
+    })
+    .filter(Boolean)
+    .sort((a, b) => planPriority(b.fm) - planPriority(a.fm));
+
+  return candidates[0]?.rel || null;
 }
 
 const raw = readStdin();

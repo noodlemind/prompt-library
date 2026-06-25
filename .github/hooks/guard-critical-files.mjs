@@ -6,7 +6,7 @@ import fs from 'fs';
 
 const BLOCKED = [
   /^\.env/i,
-  /(?:^|/)[._]?credentials(?:\.|$)/i,
+  /(?:^|\/)[._]?credentials(?:\.|$)/i,
   /\.pem$/i,
   /\.key$/i,
   /node_modules\//,

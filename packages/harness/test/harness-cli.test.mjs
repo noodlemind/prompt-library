@@ -11,6 +11,7 @@ import { CONTEXT_PACK_MAX_BYTES, buildContextPack } from '../lib/context-pack.mj
 import { extractGoalFromPlan } from '../lib/plan-goal.mjs';
 import { loadPlan } from '../lib/plan-parse.mjs';
 import { installGlobalHarnessShim, globalHarnessShimPath } from '../lib/global-bin.mjs';
+import { installHarnessBin } from '../lib/install-harness-bin.mjs';
 
 const packageRoot = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -930,10 +931,14 @@ test('recall falls back to overlap ranker when postings index missing', () => {
 
 test('install creates global harness shim', () => {
   const copilotHome = tempDir('harness-copilot-');
+  installHarnessBin(packageRoot, copilotHome, { dryRun: false, verbose: false }, () => {});
   installGlobalHarnessShim(copilotHome, { dryRun: false, verbose: false }, () => {});
   const shim = globalHarnessShimPath(copilotHome);
   assert.ok(fs.existsSync(shim));
-  const result = spawnSync(process.execPath, [shim, 'help'], { encoding: 'utf8' });
+  const result = spawnSync(process.execPath, [shim, 'help'], {
+    encoding: 'utf8',
+    env: { ...process.env, COPILOT_HOME: copilotHome },
+  });
   assert.equal(result.status, 0, result.stderr);
 });
 
