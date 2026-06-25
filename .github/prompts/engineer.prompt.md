@@ -1,14 +1,14 @@
 ---
 description: Adaptive Engineer — recall, capture gate, skill-first execution
 agent: engineer
-tools: ["agent", "codebase", "search", "read", "editFiles", "changes", "terminalLastCommand", "problems", "usages", "fetch", "githubRepo", "awaitTerminal"]
+tools: ["agent", "codebase", "search", "read", "editFiles", "changes", "execute", "terminalLastCommand", "awaitTerminal", "problems", "usages", "fetch", "githubRepo"]
 ---
 
 ${input}
 
 **Mandatory before any work:** Read [engineer-autopilot skill](../skills/engineer-autopilot/SKILL.md) and follow its loop exactly.
 
-**Harness CLI (global — after `harness install`):**
+**Harness CLI (global — after `harness install`):** Run via **`execute`** tool:
 ```bash
 harness orient --query "<task summary>" --workspace . --json
 harness gate --phase implement --workspace . --json

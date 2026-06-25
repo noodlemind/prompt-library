@@ -1,6 +1,6 @@
 ---
 description: Recall team and repo knowledge before starting engineering work
-tools: ["codebase", "search", "read", "terminalLastCommand", "awaitTerminal"]
+tools: ["codebase", "search", "read", "execute", "terminalLastCommand", "awaitTerminal"]
 ---
 
 Recall knowledge for: ${input}

@@ -1,6 +1,6 @@
 ---
 description: Read-only health check for Adaptive Engineer Harness setup
-tools: ["codebase", "search", "read", "terminalLastCommand", "awaitTerminal"]
+tools: ["codebase", "search", "read", "execute", "terminalLastCommand", "awaitTerminal"]
 ---
 
 Run harness doctor for: ${input}

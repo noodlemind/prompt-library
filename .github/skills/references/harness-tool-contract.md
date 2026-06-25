@@ -15,6 +15,8 @@ Design: [`docs/architecture/tool-native-harness-design.md`](../../../docs/archit
 
 ## Invocation (agents)
 
+**Run commands with the `execute` tool** (`shell` / `bash` / `execute/runInTerminal`). `terminalLastCommand` only reads prior output — it cannot start `harness orient`, tests, or builds.
+
 **Primary** — global CLI (after `harness install`):
 
 ```bash

@@ -1,6 +1,6 @@
 ---
 description: Rebuild team knowledge manifest from solution files
-tools: ["codebase", "search", "read", "terminalLastCommand", "awaitTerminal"]
+tools: ["codebase", "search", "read", "execute", "terminalLastCommand", "awaitTerminal"]
 ---
 
 Index memory for: ${input}

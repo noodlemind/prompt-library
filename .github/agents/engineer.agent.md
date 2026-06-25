@@ -1,6 +1,6 @@
 ---
 description: Full-cycle software engineer — autonomous Composer-style loop with capture, capability routing, and team memory. Use for hands-on engineering; user steers Tier 3 only.
-tools: ["agent", "codebase", "search", "read", "editFiles", "changes", "terminalLastCommand", "problems", "usages", "fetch", "githubRepo", "awaitTerminal"]
+tools: ["agent", "codebase", "search", "read", "editFiles", "changes", "execute", "terminalLastCommand", "awaitTerminal", "problems", "usages", "fetch", "githubRepo"]
 agents: ["code-implementer", "code-review-coordinator", "plan-coordinator", "repo-research-analyst", "best-practices-researcher", "framework-docs-researcher", "bug-reproduction-validator", "security-sentinel", "performance-oracle", "architecture-strategist", "git-history-analyzer", "java-reviewer", "python-reviewer", "sql-reviewer", "aws-reviewer"]
 handoffs:
   - label: "Code Review"
@@ -35,7 +35,7 @@ If no skill covers the work → document gap per `../skills/references/capabilit
 
 Contract: `../skills/references/tool-native-loop.md` · `../skills/engineer-autopilot/SKILL.md`. **Do not ask** the user to run pipeline skills manually.
 
-**Harness invocation** — use the **global** `harness` CLI (installed to `~/.copilot/bin/` on `harness install`):
+**Harness invocation** — use the **global** `harness` CLI via the **`execute`** tool (installed to `~/.copilot/bin/` on `harness install`). Use `terminalLastCommand` / `awaitTerminal` only to read or wait on output — they do not run new commands.
 
 ```bash
 harness orient --query "<agent task summary>" --workspace . --json
@@ -48,16 +48,16 @@ Install once per machine: `npx @dev-kit/harness install` · `npm install -g @dev
 
 | Step | Action |
 |------|--------|
-| **0** | Terminal: `harness orient --query "<agent task summary>"` → **read** `.harness/context-pack.md` (includes **## Goal (Intent Contract)** from active plan) |
+| **0** | **`execute`:** `harness orient --query "<agent task summary>"` → **read** `.harness/context-pack.md` (includes **## Goal (Intent Contract)** from active plan) |
 | **0b** | Read + follow **`../skills/ensure-capability/SKILL.md`** if context-pack or registry shows hard gap |
 | **0c** | Read + follow **`../skills/ensure-plan/SKILL.md`** if `harness gate` would fail C1/C3 |
 | **1** | Understand + domain route (`../skills/references/domain-routing.md`) |
-| **1c** | Terminal: `harness gate --phase implement` — **exit 0** before `editFiles` |
+| **1c** | **`execute`:** `harness gate --phase implement` — **exit 0** before `editFiles` |
 | **2–4** | Investigate → read **`../skills/work-on-task/SKILL.md`** → implement (`## Impacted Files` only) |
 | **5** | `harness gate --phase verify` + tests |
 | **6** | Read + follow **`../skills/auto-compound/SKILL.md`** on success |
 
-**Small-model reliability:** Execute the table top-to-bottom. Do not skip orient/gate, do not replace harness commands with prose, and do not ask the user to run them. If `harness` is not found, stop and follow the local launcher instructions in `harness-tool-contract.md`; a missing registry package is not a reason to skip the gate.
+**Small-model reliability:** Execute the table top-to-bottom. Use **`execute`** for harness and test commands yourself — do not ask the user to run them. Do not skip orient/gate or replace harness commands with prose. If `harness` is not found, stop and follow the local launcher instructions in `harness-tool-contract.md`; a missing registry package is not a reason to skip the gate.
 
 **Autonomy:** `~/.copilot/knowledge/profile.md` or `knowledge/profile.md` → `autonomy: full|balanced|strict` (`../skills/references/autonomy-policy.md`).
 
