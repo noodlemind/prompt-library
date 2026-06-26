@@ -165,8 +165,8 @@ Read references/agent-template.md for the complete agent template with all secti
 |---------------|-------|-------------|----------|
 | **Reviewer** | `["codebase", "search", "read", "usages", "changes", "problems", "terminalLastCommand"]` | Yes | Read-only code analysis |
 | **Researcher** | `["codebase", "search", "read", "fetch", "problems", "terminalLastCommand"]` | No | Information gathering |
-| **Actor** | `["codebase", "search", "read", "editFiles", "terminalLastCommand", "changes", "problems", "usages", "awaitTerminal"]` | Yes | Needs to modify code |
-| **Engineer** | `["agent", "codebase", "search", "read", "editFiles", "changes", "terminalLastCommand", "problems", "usages", "fetch", "githubRepo", "awaitTerminal"]` | No | Full-cycle understand + implement + delegate |
+| **Actor** | `["codebase", "search", "read", "editFiles", "execute", "terminalLastCommand", "awaitTerminal", "changes", "problems", "usages"]` | Yes | Needs to modify code and run commands |
+| **Engineer** | `["agent", "codebase", "search", "read", "editFiles", "changes", "execute", "terminalLastCommand", "awaitTerminal", "problems", "usages", "fetch", "githubRepo"]` | No | Full-cycle understand + implement + delegate |
 | **Coordinator** | `["agent", "codebase", "search", "read", "problems", ...]` | No | Orchestrating subagents |
 
 **Note:** Tool names use VS Code conventions. See `copilot-instructions.md` for cross-environment mapping.

@@ -7,7 +7,9 @@ tools:
   - search
   - read
   - editFiles
+  - execute
   - terminalLastCommand
+  - awaitTerminal
   - fetch
 ---
 

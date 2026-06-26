@@ -74,7 +74,7 @@ export function loadPlan(workspace, relPath) {
   };
 }
 
-function extractSection(text, name) {
+export function extractSection(text, name) {
   const re = new RegExp(`## ${name}\\s*\\n([\\s\\S]*?)(?=\\n## |$)`, 'i');
   const m = text.match(re);
   return m ? m[1].trim() : '';

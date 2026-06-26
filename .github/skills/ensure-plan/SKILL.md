@@ -28,7 +28,7 @@ Follow **`/capture-issue`** exactly:
 
 - Path: `docs/plans/YYYY-MM-DD-<type>-<slug>-plan.md`
 - Frontmatter: `status: open`, `plan_lock: false`, `phase: 0`, `risk`, `intent` when known, `expected_outputs: []`, `success_criteria: []`, `verification_commands: []`, `org_objectives: []`, `domains`, `specialists`, `capability_gaps` from intake
-- Body minimum: `## Overview`, `## Context`, `## Acceptance Criteria`, `## Activity`
+- Body minimum: `## Overview`, `## Context`, `## Intent Contract` (goal stub from user message), `## Acceptance Criteria`, `## Activity`
 - Append Activity: `YYYY-MM-DD — ensure-plan: captured (autonomous)`
 
 Do **not** set `plan_lock: true` in this step.
@@ -38,7 +38,7 @@ Do **not** set `plan_lock: true` in this step.
 Follow **`/plan-issue`** for that path:
 
 - Research as needed (delegate `plan-coordinator` when `agent` tool available)
-- Fill `## Intent Contract`, `## Research Notes`, `## Impacted Files`, `## Verification Plan`, `## Risk & Review Routing`, phased tasks
+- Fill `## Intent Contract` as the durable goal (from user message), `## Research Notes`, `## Impacted Files`, `## Verification Plan`, `## Risk & Review Routing`, phased tasks
 - Populate frontmatter `intent`, `expected_outputs`, `success_criteria`, and `verification_commands`; leave `org_objectives: []` unless an objective is known
 - Set `status: planned`, `plan_lock: true`, `phase: 1`
 - Append Activity: `YYYY-MM-DD — ensure-plan: planned and locked (autonomous)`

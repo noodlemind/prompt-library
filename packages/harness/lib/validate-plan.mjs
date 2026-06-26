@@ -1,5 +1,6 @@
 import { readSession } from './session.mjs';
 import { loadPlan, pickActivePlan, listPlanRels } from './plan-parse.mjs';
+import { intentContractHasContent } from './plan-goal.mjs';
 
 function hasValue(value) {
   if (Array.isArray(value)) return value.length > 0;
@@ -56,13 +57,13 @@ export function runValidatePlan({ workspace, flags, planPath = null }) {
     }
   }
 
-  if (/## Intent Contract/i.test(plan.text)) {
+  if (intentContractHasContent(plan.text)) {
     addCheck(checks, { id: 'S5', pass: true, message: '## Intent Contract present', severity: 'ok' });
   } else if (plan.plan_lock) {
     addCheck(checks, {
       id: 'S5',
       pass: false,
-      message: 'Missing ## Intent Contract on locked plan',
+      message: 'Missing or empty ## Intent Contract on locked plan',
       severity: flags.strictIntent ? 'fail' : 'warn',
     });
     if (flags.strictIntent) pass = false;
@@ -123,6 +124,6 @@ function buildResult({ pass, exitCode, plan, checks }) {
       : null,
     nextTools: pass
       ? ['harness gate --phase implement']
-      : ['/ensure-plan', 'harness orient'],
+      : ['read ensure-plan/SKILL.md', 'harness orient'],
   };
 }

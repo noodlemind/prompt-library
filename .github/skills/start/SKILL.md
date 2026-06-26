@@ -46,8 +46,7 @@ Before classifying, scan for existing work that matches the user's prompt:
 - Ask: resume this work, or start fresh?
 - If resume: route based on the file's status:
   - Brainstorm doc → `/brainstorming` (resume)
-  - Plan with `status: planned` → `/work-on-task`
-  - Plan with `status: in-progress` → `/work-on-task` (continue)
+  - Plan with `status: planned` or `in-progress` → **`@engineer`** (continue autopilot on that plan)
   - Plan with `status: review` → `/code-review`
 
 **If no match found:** proceed to Step 2.
@@ -89,26 +88,28 @@ Extract signals from the user's prompt across three dimensions:
 
 ### Step 3: Route to Target Skill
 
-Map classification to the appropriate skill. Prefer skills and pipeline flows over direct agent invocation unless the task is primarily a specialist review/research request or the user explicitly asks for an agent.
+Map classification to the appropriate skill. **Default trackable engineering work to `@engineer`** — it runs capture, plan, gate, implement, verify, and compound internally. Use individual pipeline skills only when the user wants manual pipeline mode or debugging.
 
 | Classification | Route | Reason |
 |---------------|-------|--------|
-| Trivial + Bug + Clear | `/tdd-fix` | Isolated bug, TDD approach |
+| Trivial + Bug + Clear | `/tdd-fix` or **`@engineer`** | Isolated bug — TDD skill or full autopilot |
 | Standard + Feature + Unclear | `/brainstorming` | Needs requirements exploration first |
-| Standard + Feature + Clear | `/capture-issue` | Ready to capture and plan |
-| Standard + Compound | `/capture-issue` | Multiple concerns → single compound issue |
-| Deep + any | `/capture-issue` | Needs formal planning pipeline |
+| Standard + Feature + Clear | **`@engineer`** | Autopilot captures and plans internally |
+| Standard + Compound | **`@engineer`** | Multiple concerns — engineer handles compound scope |
+| Deep + any | **`@engineer`** | Formal planning via ensure-plan inside autopilot |
 | Deep + Unclear | `/brainstorming` | Needs exploration before capture |
-| Investigation/Debug | `/engineer` | Autonomous investigation needed |
+| Investigation/Debug | **`@engineer`** | Autonomous investigation needed |
 | Q&A | `/btw` | Quick answer without plan or file edits |
 | Documentation + README | `/project-readme` | Update project-level README documentation |
-| Java domain + focused | `/java` | Apply Java conventions and review routing |
-| Python domain + focused | `/python` | Apply Python conventions and review routing |
-| SQL domain + focused | `/sql` | Apply SQL/PostgreSQL conventions and data review routing |
-| AWS domain + focused | `/aws` | Apply AWS conventions and cloud review routing |
+| Java domain + focused | `/java` or **`@engineer`** | Domain skill for narrow tasks; engineer for full delivery |
+| Python domain + focused | `/python` or **`@engineer`** | Same |
+| SQL domain + focused | `/sql` or **`@engineer`** | Same |
+| AWS domain + focused | `/aws` or **`@engineer`** | Same |
 | Exploration | `/brainstorming` | Exploring ideas |
-| Refactor + Clear | `/capture-issue` | Track scope before changing |
-| Refactor + Trivial | `/capture-issue` then `/analyze-and-plan` or `/tdd-fix` | Still capture trackable work |
+| Refactor + Clear | **`@engineer`** | Track scope and implement via autopilot |
+| Refactor + Trivial | `/tdd-fix` or **`@engineer`** | Small refactors may use TDD; otherwise autopilot |
+| Refactor + Unclear | `/brainstorming` | Scope exploration needed before refactor plan |
+| Manual pipeline (explicit) | `/capture-issue` | User asked for step-by-step pipeline control |
 
 **Confidence-based invocation:**
 
@@ -118,7 +119,7 @@ Map classification to the appropriate skill. Prefer skills and pipeline flows ov
 - Pass the user's original prompt as the argument to the target skill
 
 **Low confidence** (multiple rows could match, or signals are mixed):
-- Present the recommendation: "This could go a few ways. I'd recommend `/capture-issue` because [reason]. Other options: `/brainstorming` (if scope needs exploration) or `/engineer` (if you want autonomous handling)."
+- Present the recommendation: "This could go a few ways. I'd recommend **`@engineer`** because [reason]. Other options: `/brainstorming` (if scope needs exploration), `/tdd-fix` (isolated bug), or manual `/capture-issue` (step-by-step pipeline)."
 - Wait for the user to confirm or choose differently
 - Then invoke the selected skill with the original prompt
 
@@ -140,4 +141,5 @@ If the target skill supports standalone mode, note that no plan file context is 
 - Classification must complete in 1-2 exchanges maximum. If it takes more, you're over-thinking.
 - Never block direct skill invocation. /start is a fallback, not a gateway.
 - Pass the user's original prompt to the target skill. Don't lose context.
-- When in doubt between /capture-issue and /brainstorming, prefer /brainstorming — it's cheaper to explore than to plan the wrong thing.
+- When in doubt between **`@engineer`** and /brainstorming, prefer /brainstorming if scope is very unclear — explore before committing to implementation.
+- Do not route trackable work to `/capture-issue` unless the user explicitly wants manual pipeline mode.

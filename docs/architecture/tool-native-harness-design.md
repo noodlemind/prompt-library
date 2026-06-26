@@ -251,6 +251,7 @@ This is the maximum robustness available without Copilot hooks — **comparable 
 
 ```yaml
 - run: harness gate --workspace . --json
+- run: harness validate-plan --workspace . --json
 ```
 
 Fail PR if trackable code changed without `plan_lock` plan linked in PR body or `docs/plans/` updated.

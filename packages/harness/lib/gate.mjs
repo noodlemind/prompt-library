@@ -3,6 +3,7 @@ import path from 'path';
 import { readSession } from './session.mjs';
 import { pickActivePlan, listPlanRels, parsePlanFrontmatter } from './plan-parse.mjs';
 import { findMatchingPlans } from './recall-rank.mjs';
+import { intentContractHasContent } from './plan-goal.mjs';
 
 export function runGate({ workspace, flags, query = '' }) {
   const session = readSession(workspace);
@@ -56,6 +57,20 @@ export function runGate({ workspace, flags, query = '' }) {
     }
 
     if (plan.plan_lock) {
+      const intentSectionOk = intentContractHasContent(plan.text);
+      if (intentSectionOk) {
+        checks.push({ id: 'C-goal', pass: true, message: '## Intent Contract present', severity: 'ok' });
+      } else {
+        checks.push({
+          id: 'C-goal',
+          pass: false,
+          message: 'Missing or empty ## Intent Contract on locked plan',
+          severity: flags.strictIntent ? 'fail' : 'warn',
+        });
+        if (flags.strictIntent) pass = false;
+        else exitCode = Math.max(exitCode, 2);
+      }
+
       checkIntentField({
         checks,
         flags,

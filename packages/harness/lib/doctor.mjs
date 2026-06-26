@@ -3,6 +3,8 @@ import path from 'path';
 import { createRequire } from 'module';
 import { resolveIndexDir } from './recall-config.mjs';
 import { isIndexStale } from './postings-index.mjs';
+import { resolveHarnessBin } from './resolve-harness-bin.mjs';
+import { globalHarnessShimPath, findHarnessOnPath } from './global-bin.mjs';
 
 const require = createRequire(import.meta.url);
 
@@ -138,6 +140,53 @@ export function runDoctor({ copilotHome, assetsRoot, pkgRoot, flags }) {
     pass: indexFresh,
     hint: 'Run: harness index — rebuild .harness-index/postings.json',
     optional: manifestEntries.length === 0,
+  });
+
+  const resolved = resolveHarnessBin({ workspace: flags.workspace, copilotHome });
+  const runnerPath = path.join(flags.workspace, '.harness', 'run.mjs');
+  checks.push({
+    id: 'H12',
+    name: 'Harness CLI resolvable',
+    pass: Boolean(resolved.bin),
+    hint: resolved.bin
+      ? `Resolved via ${resolved.source}: ${resolved.bin}`
+      : 'Run: harness install, then init-repo (creates .harness/run.mjs)',
+  });
+  checks.push({
+    id: 'H13',
+    name: 'Workspace harness runner',
+    pass: fs.existsSync(runnerPath),
+    hint: 'Run: harness init-repo',
+    optional: true,
+  });
+
+  const hooksJson = path.join(copilotHome, 'hooks', 'hooks.json');
+  const hooksAsset = path.join(assetsRoot, 'hooks', 'hooks.json');
+  checks.push({
+    id: 'H14',
+    name: 'Lifecycle hooks bundle',
+    pass: fs.existsSync(hooksJson) || fs.existsSync(hooksAsset),
+    hint: 'Re-run harness install to sync .github/hooks/',
+    optional: true,
+  });
+
+  const shim = globalHarnessShimPath(copilotHome);
+  const cliResolvable = Boolean(resolved.bin);
+  checks.push({
+    id: 'H15',
+    name: 'Global harness shim (~/.copilot/bin/harness)',
+    pass: fs.existsSync(shim),
+    hint: 'Run: harness install (creates ~/.copilot/bin/harness)',
+    optional: cliResolvable && !fs.existsSync(shim),
+  });
+
+  const onPath = Boolean(findHarnessOnPath());
+  checks.push({
+    id: 'H16',
+    name: 'harness on PATH',
+    pass: onPath,
+    hint: 'Run: harness install --configure-path  (or add ~/.copilot/bin to PATH)',
+    optional: true,
   });
 
   const required = checks.filter((c) => !c.optional);

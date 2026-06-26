@@ -17,6 +17,7 @@ import {
   cmdCompound,
   cmdGet,
   cmdUninstall,
+  cmdResolve,
 } from '../lib/commands.mjs';
 
 const [, , command = 'help', ...args] = process.argv;
@@ -40,12 +41,14 @@ Usage:
   harness compound [options]
   harness events [options]
   harness init-repo [options]
+  harness resolve [options]   Print resolved harness CLI path for agents
   harness uninstall [options]
 
 Install the command:
   npm install -g @dev-kit/harness@latest
   # or from a prompt-library clone before publishing:
   npm install -g ./packages/harness
+  # shim at ~/.copilot/bin/harness after harness install; add PATH: harness install --configure-path
 
 Options:
   --dry-run              Print actions without writing
@@ -55,6 +58,7 @@ Options:
   --target vscode,cli,intellij
   --autonomy full|balanced|strict
   --configure-vscode     Merge VS Code chat.* discovery settings
+  --configure-path       Append ~/.copilot/bin to shell PATH (~/.zshrc, ~/.bashrc)
   --force-profile        Overwrite knowledge/profile.md
   --force-knowledge-reset  Overwrite knowledge/solutions (danger)
   --workspace <path>     Repo root (default: cwd)
@@ -125,6 +129,9 @@ async function main() {
         break;
       case 'uninstall':
         code = await cmdUninstall(args);
+        break;
+      case 'resolve':
+        code = await cmdResolve(args);
         break;
       default:
         console.error(`Unknown command: ${command}\n`);

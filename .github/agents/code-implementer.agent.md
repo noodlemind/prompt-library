@@ -1,6 +1,6 @@
 ---
 description: Execute specific coding tasks with TDD — write tests, implement changes, and verify. Used as a subagent by the engineer for implementation work.
-tools: ["codebase", "search", "read", "editFiles", "terminalLastCommand", "changes", "problems", "usages", "awaitTerminal"]
+tools: ["codebase", "search", "read", "editFiles", "execute", "terminalLastCommand", "awaitTerminal", "changes", "problems", "usages"]
 user-invocable: false
 agents: []
 ---

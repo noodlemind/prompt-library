@@ -4,23 +4,23 @@ Get from zero to **`@engineer`** delivering work in any enterprise product repo.
 
 ## 1. Install once (per machine)
 
-**Recommended:** install the **`harness`** command from your enterprise npm registry package **`@dev-kit/harness`** (Nexus). The scoped name is only the package identity; daily commands use `harness`. See [`nexus-registry-setup.md`](./nexus-registry-setup.md) and [`npm-harness-distribution-plan.md`](../architecture/npm-harness-distribution-plan.md).
+**Recommended:** every install method ends with a global `harness` CLI at `~/.copilot/bin/harness`. The scoped npm name is `@dev-kit/harness`; daily commands use `harness`. See [`nexus-registry-setup.md`](./nexus-registry-setup.md) and [`npm-harness-distribution-plan.md`](../architecture/npm-harness-distribution-plan.md).
+
+| Method | Commands |
+|--------|----------|
+| Enterprise registry | `npm install -g @dev-kit/harness@latest` then `harness install --configure-path` |
+| npm global | `npm install -g @dev-kit/harness && harness install --configure-path` |
+| Local clone (maintainers) | `npm install -g ./packages/harness` or `node packages/harness/bin/harness.mjs install --configure-vscode --configure-path` |
+
+Verify:
 
 ```bash
-npm install -g @dev-kit/harness@latest
-harness install
-harness doctor
-```
-
-**From prompt-library clone before publishing (maintainers):**
-
-```bash
-npm install -g ./packages/harness
-harness install --configure-vscode
-harness doctor
+harness doctor          # after --configure-path (or: node ~/.copilot/bin/harness doctor)
+harness resolve --json  # should show agentCommand: "harness"
 ```
 
 Or VS Code: **Dev Kit: Install Harness** / **Dev Kit: Harness Doctor**.
+
 
 Copies to `%USERPROFILE%\.copilot\` (or `~/.copilot/` on macOS/Linux):
 
@@ -54,7 +54,7 @@ harness init-repo
 docs/plans/             # plans + state machine
 .harness/               # session.json, context-pack.md (gitignored)
 docs/agent-context.md   # optional thin conventions
-.harness-version        # optional pin, e.g. 0.3.1
+.harness-version        # optional pin, e.g. 0.4.0
 ```
 
 Pin harness in `package.json` `devDependencies` or `.harness-version` for CI reproducibility.

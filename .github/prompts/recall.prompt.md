@@ -1,9 +1,14 @@
 ---
 description: Recall team and repo knowledge before starting engineering work
-agent: engineer
-tools: ["codebase", "search", "read"]
+tools: ["codebase", "search", "read", "execute", "terminalLastCommand", "awaitTerminal"]
 ---
 
-Run the `/recall` skill for: ${input}
+Recall knowledge for: ${input}
 
-Present memory cards and recommend the next pipeline step. Do not edit product code.
+Follow [recall skill](../skills/recall/SKILL.md).
+
+```bash
+harness orient --query "${input}" --workspace . --json
+```
+
+Read only `.harness/context-pack.md`. Present memory cards and recommend next step. Do not edit product code.

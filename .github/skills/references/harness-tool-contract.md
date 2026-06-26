@@ -15,12 +15,28 @@ Design: [`docs/architecture/tool-native-harness-design.md`](../../../docs/archit
 
 ## Invocation (agents)
 
+**Run commands with the `execute` tool** (`shell` / `bash` / `execute/runInTerminal`). `terminalLastCommand` only reads prior output — it cannot start `harness orient`, tests, or builds.
+
+**Primary** — global CLI (after `harness install`):
+
 ```bash
 harness <command> [args] --workspace . --json
 ```
 
+Installed to `~/.copilot/bin/harness` on every `harness install`. Add to PATH with `harness install --configure-path`, or invoke as `node ~/.copilot/bin/harness …` from any directory.
+
+**Install paths (all produce the same global CLI):**
+
+| Method | Command |
+|--------|---------|
+| Enterprise registry | `npm install -g @dev-kit/harness@latest` then `harness install` |
+| npm global | `npm install -g @dev-kit/harness && harness install` |
+| Local clone | `npm install -g ./packages/harness` or `node packages/harness/bin/harness.mjs install --configure-path` |
+
+**Per-repo bootstrap:** `harness init-repo` creates `.harness/run.mjs` (delegates to global harness + sets `--workspace`).
+
 - Pin version in product repos: `devDependencies`, a globally installed package, or `.harness-version` (see harness README).
-- If `harness` is not on `PATH`, install it from a prompt-library clone before publishing: `npm install -g ./packages/harness`. For registry installs: `npm install -g @dev-kit/harness@latest`.
+- If `harness` is not on `PATH`, install from a prompt-library clone: `npm install -g ./packages/harness`, or from registry: `npm install -g @dev-kit/harness@latest`, then `harness install --configure-path`.
 - Do not use `npx @dev-kit/harness` in agent runtime instructions; reserve `npx` for one-off bootstrap or pinned CI when a registry package is available.
 - **Read** `.harness/context-pack.md` after `orient` — do not paste full CLI stdout into chat.
 - Developers use Copilot agents/skills; they do not prompt the CLI directly.
@@ -48,7 +64,7 @@ harness <command> [args] --workspace . --json
 
 | Command | Cursor analogue | Budget tier | Side effects |
 |---------|-----------------|-------------|--------------|
-| `orient --query "<task>"` | Codebase search + task context | **F1** — writes ≤2 KB `.harness/context-pack.md` | session.json, events.jsonl |
+| `orient --query "<task>"` | Codebase search + task context | **F1** — writes ≤2 KB `.harness/context-pack.md` (goal from plan Intent Contract) | session.json, events.jsonl |
 | `recall "<query>"` | Standalone search / debug | F1 paths only | events |
 | `gate [--phase implement\|verify]` | Pre-edit lint / task guard | F3 on fail | events |
 | `validate-plan [--plan path]` | Spec/schema lint | read-only | none |
@@ -65,6 +81,13 @@ harness <command> [args] --workspace . --json
   "recall": [{ "docid": "...", "path": "...", "title": "...", "score": 0.82, "summary": "...", "snippet": "...", "ranker": "bm25" }],
   "plans": [{ "path": "docs/plans/...", "status": "planned", "plan_lock": true, "score": 0.67 }],
   "activePlan": { "path": "...", "status": "...", "plan_lock": true },
+  "planGoal": {
+    "planPath": "docs/plans/...",
+    "intent": "...",
+    "success_criteria": ["..."],
+    "expected_outputs": ["..."],
+    "intentContractExcerpt": "..."
+  },
   "contextPack": ".harness/context-pack.md",
   "gateStatus": "pass|blocked",
   "blockedReason": null,
@@ -114,7 +137,7 @@ harness <command> [args] --workspace . --json
 | F2 Plan slice | ~1500 tokens | Read plan sections from `activePlan.path` on demand |
 | F3 On demand | skill-defined | Load gate/delegation refs when `gate` fails |
 
-After orient: `read` ≤3 solution paths, ≤30 lines each per [`context-budget.md`](context-budget.md).
+After orient: `read` ≤3 solution paths, ≤30 lines each per [`context-budget.md`](context-budget.md). Goal lives in the active plan — `orient` surfaces it in context-pack `## Goal (Intent Contract)`; no separate goal file or CLI command.
 
 ## Skill integration
 

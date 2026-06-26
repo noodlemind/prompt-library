@@ -46,8 +46,9 @@ This library primarily targets GitHub Copilot in VS Code and IntelliJ IDEA. Prom
 | `usages` | Text search or IDE find references |
 | `problems` | Run linter/compiler/test command and inspect output |
 | `awaitTerminal` | Wait for the command in the host terminal |
+| `execute` | Run shell commands (`execute/runInTerminal`, `shell`, `bash`) — required to run harness CLI, tests, builds |
 | `changes` | `git diff` or IDE changes view |
-| `terminalLastCommand` | Run/read the equivalent terminal command |
+| `terminalLastCommand` | Read output from the last terminal command (does not run new commands) |
 | `githubRepo` | GitHub UI, GitHub integration, or `gh` CLI |
 | `fetch` | Host-approved web/documentation lookup |
 | `editFiles` | Host-native file edit tool |

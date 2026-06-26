@@ -19,6 +19,9 @@ import { runIndexKnowledge } from './index-knowledge.mjs';
 import { configureVSCodeSettings } from './vscode-settings.mjs';
 import { parseQueryFromArgv } from './argv.mjs';
 import { readEvents, summarizeEvents, writeEvent } from './events.mjs';
+import { installHarnessBin } from './install-harness-bin.mjs';
+import { resolveHarnessBin, agentHarnessCommand } from './resolve-harness-bin.mjs';
+import { installGlobalHarnessShim, configureShellPath, globalHarnessShimPath } from './global-bin.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const pkgRoot = pkgRootFromImportMeta(import.meta.url);
@@ -30,13 +33,17 @@ function readPkgVersion() {
 
 export function getAssetsRoot() {
   const bundled = path.join(pkgRoot, 'assets');
-  if (fs.existsSync(path.join(bundled, 'skills', 'engineer', 'SKILL.md'))) {
+  const skillsOk = fs.existsSync(path.join(bundled, 'skills', 'engineer', 'SKILL.md'));
+  const hooksOk = fs.existsSync(path.join(bundled, 'hooks', 'hooks.json'));
+  if (skillsOk && hooksOk) {
     return bundled;
   }
   const buildScript = path.resolve(pkgRoot, '../../scripts/build-harness-assets.mjs');
   if (fs.existsSync(buildScript)) {
     execSync(`node "${buildScript}"`, { cwd: pkgRoot, stdio: 'pipe' });
-    if (fs.existsSync(path.join(bundled, 'skills'))) return bundled;
+    if (fs.existsSync(path.join(bundled, 'skills')) && fs.existsSync(path.join(bundled, 'hooks', 'hooks.json'))) {
+      return bundled;
+    }
   }
   throw new Error(
     'Package assets not found. From a prompt-library clone run: npm --prefix packages/harness run build:assets. Otherwise reinstall the packaged CLI with: npm install -g @dev-kit/harness.'
@@ -63,6 +70,12 @@ export async function cmdInstallOrUpgrade(command, argv) {
     applyRetired(copilotHome, retired, previousLock, flags, logger);
     allStats.vscode = syncAssetsToTarget(assets, copilotHome, flags, logger);
     seedProfile(assets, copilotHome, flags, logger);
+    const binStats = installHarnessBin(pkgRoot, copilotHome, flags, logger);
+    allStats.harnessBin = binStats;
+    allStats.globalShim = installGlobalHarnessShim(copilotHome, flags, logger);
+    if (flags.configurePath) {
+      allStats.pathConfig = configureShellPath(copilotHome, flags, logger);
+    }
     if (flags.configureVsCode) {
       configureVSCodeSettings(flags, logger);
     }
@@ -80,7 +93,11 @@ export async function cmdInstallOrUpgrade(command, argv) {
   const files = new Set([
     ...(allStats.vscode?.files || []),
     ...(allStats.intellij?.files || []),
+    ...(allStats.harnessBin?.files || []),
   ]);
+  if (allStats.globalShim?.path) {
+    files.add('bin/harness');
+  }
 
   const lock = {
     package: '@dev-kit/harness',
@@ -126,7 +143,12 @@ export async function cmdInstallOrUpgrade(command, argv) {
       );
     }
     if (flags.dryRun) console.log('  (dry-run — no files written)');
-    else console.log('  Next: harness doctor');
+    else console.log('  Next: harness doctor  (or: node ~/.copilot/bin/harness doctor)');
+    const shim = globalHarnessShimPath(copilotHome);
+    if (!flags.dryRun && fs.existsSync(shim)) {
+      console.log(`  Global CLI: ${shim}`);
+      console.log('  Add to PATH: harness install --configure-path');
+    }
   }
 
   return 0;
@@ -421,4 +443,36 @@ export async function cmdUninstall(argv) {
   }
   log(flags, `uninstall removed ${removed} paths`);
   return 0;
+}
+
+export async function cmdResolve(argv) {
+  const flags = parseFlags(argv);
+  const copilotHome = resolveCopilotHome(flags.copilotHome);
+  const workspace = path.resolve(flags.workspace);
+  const resolved = resolveHarnessBin({ workspace, copilotHome });
+  const runner = path.join(workspace, '.harness', 'run.mjs');
+  const shim = globalHarnessShimPath(copilotHome);
+
+  const payload = {
+    bin: resolved.bin,
+    source: resolved.source,
+    globalShim: fs.existsSync(shim) ? shim : null,
+    onPath: resolved.onPath,
+    runner: fs.existsSync(runner) ? runner : null,
+    agentCommand: agentHarnessCommand(resolved),
+    tried: resolved.tried,
+  };
+
+  if (flags.json) {
+    console.log(JSON.stringify(payload, null, 2));
+  } else {
+    if (payload.agentCommand) {
+      console.log(`[harness] resolved (${resolved.source}): ${resolved.bin}`);
+      console.log(`[harness] agent command prefix: ${payload.agentCommand}`);
+    } else {
+      console.error('[harness] Could not resolve harness CLI');
+      for (const t of resolved.tried) console.error(`  tried ${t.source}: ${t.path}`);
+    }
+  }
+  return resolved.bin ? 0 : 1;
 }

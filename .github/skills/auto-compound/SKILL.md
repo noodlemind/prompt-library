@@ -24,7 +24,7 @@ If gates fail → skip; log in Activity.
 harness gate --phase verify --workspace . --json
 ```
 
-Exit 0 or 2 required before compound.
+Exit 0 required before compound (exit 2 = warn only — do not compound until resolved).
 
 ### 2. Compound learnings
 

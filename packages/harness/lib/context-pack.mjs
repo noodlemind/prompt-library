@@ -7,6 +7,7 @@ export function buildContextPack({
   recall,
   plans,
   activePlan,
+  planGoal,
   gatePreview,
   nextTools,
 }) {
@@ -47,6 +48,24 @@ export function buildContextPack({
     lines.push(`- status: ${activePlan.status} | plan_lock: ${activePlan.plan_lock} | phase: ${activePlan.phase}`);
     if (activePlan.memoryExcerpt) {
       lines.push('', '### Memory Cards (excerpt)', activePlan.memoryExcerpt);
+    }
+  }
+
+  if (planGoal) {
+    lines.push('', '## Goal (Intent Contract)', `- Plan: \`${planGoal.planPath}\``);
+    if (planGoal.intent) lines.push(`- intent: ${planGoal.intent}`);
+    if (planGoal.success_criteria?.length) {
+      lines.push(
+        '- success_criteria: ' + planGoal.success_criteria.slice(0, 3).join('; ')
+      );
+    }
+    if (planGoal.expected_outputs?.length) {
+      lines.push(
+        '- expected_outputs: ' + planGoal.expected_outputs.slice(0, 3).join('; ')
+      );
+    }
+    if (planGoal.intentContractExcerpt) {
+      lines.push('', '### Intent Contract (excerpt)', planGoal.intentContractExcerpt);
     }
   }
 

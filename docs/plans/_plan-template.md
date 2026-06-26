@@ -26,7 +26,7 @@ updated: YYYY-MM-DD
 
 ## Overview
 
-What and why (2-3 sentences).
+What and why (2-3 sentences). The durable **goal** for this work lives in **`## Intent Contract`** below (mirrored in frontmatter `intent`, `success_criteria`, `expected_outputs`).
 
 ## Context
 
@@ -34,7 +34,7 @@ Problem facts, constraints, related paths, prior art.
 
 ## Intent Contract
 
-Mirror the machine-readable frontmatter in human language. Keep this section testable.
+**This section IS the durable goal** — `@engineer` and harness `orient` read it every turn. Mirror frontmatter in human language. Keep testable.
 
 - **Goal:**
 - **Expected outputs:**
