@@ -51,6 +51,8 @@ harness init-repo
 
 Use pinned version in CI:
 
+`$PLAN` is the single plan resolved from the PR; `$BASE_SHA` is the PR base SHA. The supplied workflow template sets both values.
+
 ```yaml
 - run: harness validate-plan --plan "$PLAN" --workspace . --json
 - run: harness gate --phase implement --plan "$PLAN" --workspace . --json

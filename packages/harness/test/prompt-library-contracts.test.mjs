@@ -335,6 +335,10 @@ test('review fixes preserve thin wrappers, complete skill metadata, and CI pinni
   assert.match(standard, /verification:\s*\n\s+required:[\s\S]*criteria:/);
   assert.match(standard, /reviews:\s*\n\s+required:[\s\S]*completed:[\s\S]*critical_open:/);
 
+  const packageReadme = read('packages/harness/README.md');
+  assert.match(packageReadme, /\$PLAN[^\n]*single plan resolved from the PR/i);
+  assert.match(packageReadme, /\$BASE_SHA[^\n]*PR base SHA/i);
+
   assert.match(read('.github/skills/references/harness-tool-contract.md'), /verify --plan <path> \[--base ref\] \[--enforcement mode\]/);
   assert.match(read('.github/skills/references/engineer-starter-kit.md'), /docs\/architecture\/skill-driven-prompt-library\.md/);
   assert.match(read('docs/architecture/engineer-vision-and-growth-loop.md'), /Bounded multi-agent teams \| Strong \|[^\n]*3-4/);
