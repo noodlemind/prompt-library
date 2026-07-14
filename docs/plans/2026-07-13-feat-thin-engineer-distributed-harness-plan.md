@@ -245,6 +245,7 @@ Implement the attached Adaptive Engineer plan as the prompt library's runtime an
 - `packages/harness/retired.json`
 - `packages/harness/README.md`
 - `packages/harness/test/harness-cli.test.mjs`
+- `packages/harness/test/host-compatibility.test.mjs`
 - `packages/harness/test/prompt-library-contracts.test.mjs`
 - `README.md`
 - `AGENTS.md`
@@ -264,8 +265,8 @@ Implement the attached Adaptive Engineer plan as the prompt library's runtime an
 ## Verification Evidence
 
 - **Outcome:** passed
-- **Artifact:** `.harness/evidence/2026-07-13-feat-thin-engineer-distributed-harness-plan.json`
-- **Named checks:** `harness-tests` (63/63), `prompt-contracts` (12/12), `host-contracts` (12/12), and `build-assets` passed.
+- **Artifact:** `.harness/evidence/2026-07-13-feat-thin-engineer-distributed-harness-plan-ea4eb10ef887.json`
+- **Named checks:** `harness-tests` (72/72), `prompt-contracts` (11/11), `host-contracts` (2/2), and `build-assets` passed.
 - **Structural checks:** schema/state, all phase tasks, all 17 criterion mappings, changed-file scope, reviews, hard gaps, and critical findings passed.
 
 ## Risk & Review Routing
@@ -291,7 +292,12 @@ Implement the attached Adaptive Engineer plan as the prompt library's runtime an
 
 ## Review Findings
 
-No open critical findings.
+### CodeRabbit pass 1
+
+- Reported 28 findings: 13 major and 15 minor, with no critical findings.
+- Addressed 26 confirmed findings across validation, evidence naming, phase scoping, hook safety, CI resolution, host checks, workflow metadata, and documentation consistency.
+- Declined two non-applicable suggestions: capitalization of a linked filename and removal of the approved explicit CI enforcement override.
+- No open critical findings; a clean follow-up review is required before handoff.
 
 ## Agent Journal
 
@@ -351,3 +357,11 @@ No open critical findings.
 - `harness verify --plan ... --base HEAD --enforcement enforce` returned `passed` and refreshed the evidence artifact.
 - All 17 acceptance criteria have passed named evidence; changed files match plan scope; required reviews, hard gaps, and critical findings are empty.
 - **Status:** done, Phase 8.
+
+### 2026-07-14 02:15 — External review findings addressed
+
+- Triaged the first CodeRabbit pass: 28 findings, no critical issues.
+- Added failing regression coverage before implementation, then fixed all 26 confirmed findings; two non-applicable suggestions were declined with evidence.
+- Split host compatibility into a dedicated validator and expanded the full harness suite to 72 tests.
+- **Verification:** focused review suite 68/68 and full package suite 72/72 passed; named evidence refresh follows.
+- **Status:** review-fix verification, Phase 8.

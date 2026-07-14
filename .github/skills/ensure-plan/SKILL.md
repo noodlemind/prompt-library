@@ -8,6 +8,27 @@ user-invocable: false
 
 Apply `/capture-issue` and `/plan-issue` logic without asking the user to run slash commands. This skill owns detailed planning; it does not own the Engineer runtime loop.
 
+## Trigger Examples
+
+**Should trigger:**
+
+- "Implement this feature" when no matching plan exists.
+- "Continue this task" when the matched plan is still open and unlocked.
+- "Make these trackable changes" when the implement capture gate would fail.
+
+**Should not trigger:**
+
+- "Log this issue for later." → use `/capture-issue`
+- "Research and lock this captured issue." → use `/plan-issue`
+- "Execute this already locked plan." → use `/work-on-task`
+
+## Confusable Boundaries
+
+- `/ensure-plan` is the internal autonomous bridge across capture and planning.
+- `/capture-issue` only creates an open, unlocked issue shell.
+- `/plan-issue` researches and locks a captured issue as an explicit power-user step.
+- `/work-on-task` executes a locked plan; `/ensure-capability` resolves encountered capability gaps.
+
 ## When to invoke
 
 `@engineer` calls this when trackable work needs a plan and any of:

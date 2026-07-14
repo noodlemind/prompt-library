@@ -180,9 +180,13 @@ export function runGate({ workspace, flags, query = '' }) {
 export function scanPlansForGate(workspace) {
   for (const rel of listPlanRels(workspace)) {
     const full = path.join(workspace, rel);
-    const text = fs.readFileSync(full, 'utf8');
-    const fm = parsePlanFrontmatter(text);
-    if (fm.plan_lock === 'true' || fm.plan_lock === true) return rel;
+    try {
+      const text = fs.readFileSync(full, 'utf8');
+      const fm = parsePlanFrontmatter(text);
+      if (fm.plan_lock === 'true' || fm.plan_lock === true) return rel;
+    } catch {
+      // A malformed plan must not prevent scanning the remaining candidates.
+    }
   }
   return null;
 }

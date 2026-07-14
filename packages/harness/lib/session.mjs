@@ -46,8 +46,12 @@ export function ensureHarnessDir(workspace, dryRun) {
     }
   } else if (!dryRun) {
     const current = fs.readFileSync(gitignore, 'utf8');
-    const missing = ['context-pack.md', 'events.jsonl', 'evidence/'].filter((entry) => !current.includes(entry));
-    if (missing.length) fs.appendFileSync(gitignore, `${missing.join('\n')}\n`, 'utf8');
+    const lines = current.split(/\r?\n/);
+    const missing = ['context-pack.md', 'events.jsonl', 'evidence/'].filter((entry) => !lines.includes(entry));
+    if (missing.length) {
+      const separator = current.length > 0 && !current.endsWith('\n') ? '\n' : '';
+      fs.appendFileSync(gitignore, `${separator}${missing.join('\n')}\n`, 'utf8');
+    }
   }
   return dir;
 }

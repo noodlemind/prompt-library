@@ -263,39 +263,28 @@ test('capability lifecycle and catalog review define promotion through retiremen
   assert.match(review, /overlap/i);
 });
 
-test('cross-host matrix covers full and degraded target operation', () => {
-  const matrix = YAML.parse(read('evals/host-compatibility.yaml'));
-  const expected = [
-    'github-copilot-vscode',
-    'github-copilot-cli',
-    'github-copilot-intellij',
-    'portable-agent-skills',
-  ];
-  assert.deepEqual(Object.keys(matrix.hosts), expected);
-  for (const host of expected) {
-    assert.ok(matrix.hosts[host].full?.assertions?.length > 0, `${host} full mode`);
-    assert.ok(matrix.hosts[host].degraded?.assertions?.length > 0, `${host} degraded mode`);
-  }
-  assert.match(read('docs/architecture/cross-host-validation.md'), /automated evidence/i);
-});
+test('review fixes preserve thin wrappers, complete skill metadata, and CI pinning', () => {
+  const prompt = read('.github/prompts/engineer.prompt.md');
+  assert.match(prompt, /\$\{input\}/);
+  assert.doesNotMatch(prompt, /Select the appropriate task mode/i);
 
-test('portable skill sources and hydrated assets preserve the thin runtime contract', () => {
-  const skillDirs = fs
-    .readdirSync(path.join(repoRoot, '.github', 'skills'), { withFileTypes: true })
-    .filter((entry) => entry.isDirectory() && exists(`.github/skills/${entry.name}/SKILL.md`));
-  for (const entry of skillDirs) {
-    const text = read(`.github/skills/${entry.name}/SKILL.md`);
-    const frontmatter = text.match(/^---\n([\s\S]*?)\n---/)?.[1];
-    assert.ok(frontmatter, `${entry.name} frontmatter`);
-    const parsed = YAML.parse(frontmatter);
-    assert.equal(parsed.name, entry.name);
-    assert.match(parsed.description || '', /\S/, `${entry.name} description`);
+  for (const rel of [
+    '.github/skills/engineer/SKILL.md',
+    '.github/skills/ensure-plan/SKILL.md',
+    '.github/skills/auto-compound/SKILL.md',
+  ]) {
+    const skill = read(rel);
+    assert.match(skill, /Should trigger:/i, `${rel} missing positive trigger examples`);
+    assert.match(skill, /Should not trigger:/i, `${rel} missing negative trigger examples`);
+    assert.match(skill, /Confusable/i, `${rel} missing confusable boundaries`);
   }
 
-  const assetEngineer = read('packages/harness/assets/agents/engineer.agent.md');
-  assert.match(assetEngineer, /9\. Report/i);
-  assert.doesNotMatch(assetEngineer, /Skill-first contract \(mandatory\)/i);
-  assert.equal(exists('packages/harness/assets/skills/engineer-autopilot/SKILL.md'), false);
-  assert.match(read('packages/harness/assets/skills/work-on-task/SKILL.md'), /harness verify --plan/i);
-  assert.match(read('packages/harness/assets/hooks/hooks.json'), /require-verification\.mjs/);
+  const workflow = read('.github/workflow-templates/harness-plan-verification.yml');
+  assert.match(workflow, /HARNESS_VERSION:\?Harness version must be configured/i);
+  assert.match(workflow, /base_sha:/i);
+  assert.doesNotMatch(workflow, /grep -Ev ['"]\^\(docs\/plans\/\|docs\/\|\\\.github\/\)/);
+
+  const checks = YAML.parse(read('.github/harness/checks.yaml'));
+  assert.notDeepEqual(checks.checks['host-contracts'].command, checks.checks['prompt-contracts'].command);
+  assert.match(checks.checks['host-contracts'].command.join(' '), /host-compatibility\.test\.mjs/);
 });

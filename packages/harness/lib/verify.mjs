@@ -85,6 +85,18 @@ function resolveOutcome(checks) {
   return 'passed';
 }
 
+function currentPhaseTasks(taskBody, phase) {
+  const current = Number(phase);
+  if (!Number.isInteger(current)) return taskBody;
+  const heading = new RegExp(`^###\\s+Phase\\s+${current}\\b[^\\n]*\\n`, 'im');
+  const match = heading.exec(taskBody);
+  if (!match) return taskBody;
+  const bodyStart = match.index + match[0].length;
+  const remaining = taskBody.slice(bodyStart);
+  const nextHeading = remaining.search(/^###\s+Phase\s+\d+\b/im);
+  return nextHeading === -1 ? remaining : remaining.slice(0, nextHeading);
+}
+
 function finalize(workspace, flags, partial) {
   const policy = loadPolicy(workspace, flags.enforcement);
   const result = {
@@ -133,9 +145,9 @@ export function runVerify({ workspace, flags }) {
   const statePass = plan.plan_lock && ['in-progress', 'review', 'done'].includes(plan.status);
   checks.push(resultCheck('plan-state', statePass ? 'passed' : 'failed', statePass ? 'Plan is locked in a verifiable state' : `Invalid verify state: ${plan.status}, plan_lock=${plan.plan_lock}`));
 
-  const taskBody = plan.sections.plan || '';
+  const taskBody = currentPhaseTasks(plan.sections.plan || '', plan.phase);
   const openTasks = [...taskBody.matchAll(/^-\s*\[ \]\s+(.+)$/gm)].map((match) => match[1]);
-  checks.push(resultCheck('phase-tasks', openTasks.length ? 'failed' : 'passed', openTasks.length ? `${openTasks.length} phase tasks remain open` : 'All phase tasks are complete', { openTasks }));
+  checks.push(resultCheck('phase-tasks', openTasks.length ? 'failed' : 'passed', openTasks.length ? `${openTasks.length} current phase tasks remain open` : 'All current phase tasks are complete', { openTasks }));
 
   const named = loadNamedChecks(workspace);
   const required = Array.isArray(plan.fm.verification?.required) ? plan.fm.verification.required : [];

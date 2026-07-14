@@ -10,15 +10,20 @@ export function loadPolicy(workspace, override = null) {
   if (fs.existsSync(policyPath)) {
     try {
       policy = YAML.parse(fs.readFileSync(policyPath, 'utf8'), { maxAliasCount: 50 }) || {};
-    } catch {
-      policy = {};
+    } catch (error) {
+      throw new Error(`Invalid harness policy ${policyPath}: ${error.message}`);
     }
   }
-  const requested = override || policy.enforcement || 'enforce';
-  const enforcement = MODES.has(requested) ? requested : 'enforce';
+  if (typeof policy !== 'object' || Array.isArray(policy)) {
+    throw new Error(`Invalid harness policy ${policyPath}: expected a YAML mapping`);
+  }
+  const requested = override ?? policy.enforcement ?? 'enforce';
+  if (!MODES.has(requested)) {
+    throw new Error(`Invalid enforcement mode: ${requested}. Expected observe, warn, or enforce`);
+  }
   return {
     version: policy.version === 1 ? 1 : null,
-    enforcement,
+    enforcement: requested,
     gateTtlMinutes: Number.isFinite(policy.gate_ttl_minutes) ? policy.gate_ttl_minutes : 30,
     evidenceTtlHours: Number.isFinite(policy.evidence_ttl_hours) ? policy.evidence_ttl_hours : 24,
     exemptions: Array.isArray(policy.exemptions) ? policy.exemptions : [],

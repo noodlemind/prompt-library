@@ -5,6 +5,9 @@ on:
     types: [opened, synchronize, reopened, ready_for_review]
   workflow_dispatch:
     inputs:
+      base_sha:
+        description: Optional base commit for manual diff verification
+        required: false
       enforcement:
         description: observe, warn, or enforce
         required: false
@@ -29,7 +32,10 @@ jobs:
           node-version: 20
 
       - name: Install pinned harness
-        run: npm install --global "@dev-kit/harness@${HARNESS_VERSION:-latest}"
+        run: |
+          set -euo pipefail
+          : "${HARNESS_VERSION:?Harness version must be configured in the HARNESS_VERSION repository variable}"
+          npm install --global "@dev-kit/harness@${HARNESS_VERSION}"
         env:
           HARNESS_VERSION: ${{ vars.HARNESS_VERSION }}
 
@@ -37,12 +43,20 @@ jobs:
         id: plan
         shell: bash
         env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha || inputs.base_sha || github.event.before }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           set -euo pipefail
+          if [[ -z "${BASE_SHA:-}" || "$BASE_SHA" =~ ^0+$ ]]; then
+            BASE_SHA="$(git rev-parse "${HEAD_SHA}^" 2>/dev/null || true)"
+          fi
+          if [[ -z "$BASE_SHA" ]] || ! git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
+            echo "Unable to resolve a valid base commit; provide workflow_dispatch input base_sha." >&2
+            exit 1
+          fi
+          echo "base_sha=$BASE_SHA" >> "$GITHUB_OUTPUT"
           mapfile -t changed < <(git diff --name-only "${BASE_SHA}" "${HEAD_SHA}")
-          mapfile -t product < <(printf '%s\n' "${changed[@]}" | grep -Ev '^(docs/plans/|docs/|\.github/)' || true)
+          mapfile -t product < <(printf '%s\n' "${changed[@]}" | grep -Ev '^(docs/plans/|docs/)' || true)
           if [[ ${#product[@]} -eq 0 ]]; then
             echo "skip=true" >> "$GITHUB_OUTPUT"
             echo "No product files changed; plan verification is not required."
@@ -77,7 +91,7 @@ jobs:
         shell: bash
         env:
           PLAN: ${{ steps.plan.outputs.path }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          BASE_SHA: ${{ steps.plan.outputs.base_sha }}
         run: harness verify --plan "$PLAN" --base "$BASE_SHA" --enforcement "$HARNESS_ENFORCEMENT" --workspace . --json
 
       - name: Upload verification evidence

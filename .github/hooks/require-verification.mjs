@@ -82,5 +82,9 @@ if (Date.parse(session.lastVerifyAt) < lastEditAt) {
 }
 session.lastCompletedEditAt = session.lastEditAt;
 session.lastCompletionAt = new Date().toISOString();
-fs.writeFileSync(sessionPath, `${JSON.stringify(session, null, 2)}\n`, 'utf8');
+try {
+  fs.writeFileSync(sessionPath, `${JSON.stringify(session, null, 2)}\n`, 'utf8');
+} catch (error) {
+  console.error(`[harness hook] Verification passed, but completion bookkeeping could not be saved: ${error.message}`);
+}
 process.exit(0);

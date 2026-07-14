@@ -4,11 +4,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 function readPayload() {
-  try {
-    return JSON.parse(fs.readFileSync(0, 'utf8') || '{}');
-  } catch {
-    return {};
-  }
+  const raw = fs.readFileSync(0, 'utf8');
+  if (!raw.trim()) throw new Error('Hook payload is empty');
+  return JSON.parse(raw);
 }
 
 function loadPolicy(workspace) {
@@ -53,7 +51,13 @@ function inScope(file, entries) {
   });
 }
 
-const payload = readPayload();
+let payload;
+try {
+  payload = readPayload();
+} catch (error) {
+  console.error(`[harness hook] Invalid hook payload: ${error.message}`);
+  process.exit(2);
+}
 const workspace = path.resolve(payload.workspace || payload.cwd || process.cwd());
 activePolicy = loadPolicy(workspace);
 const filePath = payload.tool_input?.file_path || payload.file_path || payload.path || '';
@@ -75,7 +79,9 @@ try {
 if (session.gateStatus !== 'pass' || !session.gatedPlan || !session.lastGateAt) {
   stop('Implement gate has not passed for an explicit plan');
 }
-if (Date.now() - Date.parse(session.lastGateAt) > activePolicy.gateTtlMinutes * 60 * 1000) {
+const lastGateAt = Date.parse(session.lastGateAt);
+if (!Number.isFinite(lastGateAt)) stop('Implement gate timestamp is invalid; rerun harness gate --phase implement --plan <path>');
+if (Date.now() - lastGateAt > activePolicy.gateTtlMinutes * 60 * 1000) {
   stop('Implement gate is stale; rerun harness gate --phase implement --plan <path>');
 }
 

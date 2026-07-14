@@ -147,9 +147,10 @@ Hermes-style **skill extraction** maps to: repeated successful use of a workflow
 | Nine steps appeared mandatory for every interaction | Classify Answer, Investigate, Deliver, or Review; apply the lifecycle only to Deliver |
 | Completion hook blocked read-only turns | Enforce only a newly recorded edit and mark successfully completed edits |
 | `/btw` lacked core trigger coverage | Add positive, negative, outcome, transition, and host evals |
+
 - Cross-repo aggregation of the implemented structured harness telemetry.
 
-### Pass 9 — Runtime contract tightening
+### Pass 10 — Runtime contract tightening
 
 | Theme | Fit | Change |
 |-------|-----|--------|

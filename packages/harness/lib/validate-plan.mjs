@@ -42,7 +42,7 @@ export function runValidatePlan({ workspace, flags, planPath = null }) {
 
   addCheck(checks, { id: 'P0', pass: true, message: `Plan: ${plan.path}`, severity: 'ok' });
 
-  if (plan.fm.plan_schema !== undefined) {
+  if (plan.fm?.plan_schema !== undefined || plan.fm?.__parseError) {
     const schema = validatePlanSchema(plan);
     addCheck(checks, {
       id: 'P-schema',

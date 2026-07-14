@@ -92,17 +92,20 @@ updated: YYYY-MM-DD
 ---
 ```
 
-**Body sections** (minimum for Definition of Ready):
+**Body sections** (create every heading; use a concise pending marker where planning owns the content):
 - `## Overview` — what and why, 2-3 sentences
 - `## Context` — relevant technical context, related code paths, prior art
 - `## Intent Contract` — optional at capture; `/plan-issue` must fill it before locking
-- `## Memory Cards` — optional; run `/recall` first and copy matching global/local bullets
+- `## Memory Cards` — run `/recall` first; state that no relevant cards were found when empty
 - `## Acceptance Criteria` — measurable checklist of requirements
 - `## Technical Notes` — implementation hints, constraints, dependencies
 - `## Plan` — state that phased tasks are pending `/plan-issue`
+- `## Research Notes` — state that research synthesis is pending `/plan-issue`
 - `## Impacted Files` — state that the allowlist is pending planning
 - `## Verification Plan` — state that named checks are pending; never add plan-authored command strings
 - `## Risk & Review Routing` — initial risk and expected review needs
+- `## Implementation Notes` — state that implementation has not started
+- `## Review Findings` — state that review has not started
 - `## Activity` — append-only lifecycle log, initialized with capture timestamp
 
 For bugs, add:

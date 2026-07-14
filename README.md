@@ -60,7 +60,7 @@ Power-user pipeline steps (`/capture-issue`, `/plan-issue`, …) remain availabl
 | `/java`, `/python`, `/sql`, `/aws` | Domain | Domain workflows |
 | `/engineer` | Engineering | Accountable full-cycle coordinator |
 | `/harness-doctor` | Utility | Hydrate and harness health check |
-| `/ensure-plan`, `/ensure-capability`, `/auto-compound` | Internal | Planning, on-demand gap resolution, and post-success learning |
+| `/ensure-plan`, `/ensure-capability`, `/auto-compound`, `/auto-skill-draft` | Internal | Planning, on-demand gap resolution, automatic post-success learning, and experimental skill drafting |
 | `/start` | Intake | Route ambiguous work |
 | `/btw` | Q&A | Quick answers, no plans |
 | `/analyze-and-plan` | Utility | Enrich **existing** captured plan only |

@@ -7,7 +7,7 @@ checks:
     command: ["node", "--test", "packages/harness/test/prompt-library-contracts.test.mjs"]
     timeout_seconds: 120
   host-contracts:
-    command: ["node", "--test", "packages/harness/test/prompt-library-contracts.test.mjs"]
+    command: ["node", "--test", "packages/harness/test/host-compatibility.test.mjs"]
     timeout_seconds: 120
   build-assets:
     command: ["node", "scripts/build-harness-assets.mjs"]

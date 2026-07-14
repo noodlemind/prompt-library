@@ -74,7 +74,13 @@ export function validatePlanSchema(plan) {
   const reviews = plan.fm.reviews;
   checks.push({
     id: 'verification-shape',
-    pass: Boolean(verification && Array.isArray(verification.required) && verification.criteria && typeof verification.criteria === 'object'),
+    pass: Boolean(
+      verification &&
+        Array.isArray(verification.required) &&
+        verification.criteria &&
+        typeof verification.criteria === 'object' &&
+        !Array.isArray(verification.criteria)
+    ),
     message: 'verification requires named checks and criterion mappings',
   });
   checks.push({

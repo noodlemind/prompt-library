@@ -58,7 +58,7 @@ export function runOrient({ workspace, copilotHome, flags, query }) {
 
   const nextTools = gatePreview.pass
     ? [`harness gate --phase implement --plan ${active?.path || '<path>'}`, 'read plan ## Impacted Files']
-    : ['harness gate --plan <path>', 'read ensure-plan/SKILL.md'];
+    : [`harness gate --plan ${active?.path || '<path>'}`, 'read ensure-plan/SKILL.md'];
 
   const packBody = buildContextPack({
     query: q,

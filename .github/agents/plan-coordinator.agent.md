@@ -75,6 +75,7 @@ type: feat|fix|refactor
 status: planned
 plan_lock: true
 phase: 1
+priority: P0|P1|P2|P3
 risk: green|amber|red
 autonomy: full|balanced|strict
 intent: "<one sentence goal>"
@@ -133,6 +134,7 @@ type: feat|fix|refactor
 status: planned
 plan_lock: true
 phase: 1
+priority: P0|P1|P2|P3
 risk: green|amber|red
 autonomy: full|balanced|strict
 intent: "<one sentence goal>"

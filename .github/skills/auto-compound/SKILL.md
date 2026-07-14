@@ -6,6 +6,27 @@ user-invocable: false
 
 # Auto Compound
 
+## Trigger Examples
+
+**Should trigger:**
+
+- "Verification passed; classify what this task taught us."
+- "Route the durable learning from this completed plan."
+- "Record post-success learning and decide whether promotion is warranted."
+
+**Should not trigger:**
+
+- "Verification failed; summarize what happened." → fix verification first
+- "Create a new reusable skill now." → use `/create-primitive` after approval
+- "Review this implementation." → use `/code-review`
+
+## Confusable Boundaries
+
+- `/auto-compound` is the Engineer's internal, automatic post-success classifier and recorder.
+- `/compound-learnings` is the manual, user-invoked learning publication workflow.
+- `/create-primitive` governs approved primitive creation; classification never creates one directly.
+- `/code-review` evaluates work before learning is compounded.
+
 ## Gate
 
 Require explicit passed evidence:
