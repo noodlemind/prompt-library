@@ -2,15 +2,15 @@
 plan_schema: 1
 title: "Implement Thin Engineer, Distributed Harness"
 type: feat
-status: done
+status: review
 plan_lock: true
-phase: 8
+phase: 9
 priority: P1
 risk: amber
 autonomy: balanced
 intent: "Implement the approved Adaptive Engineer plan completely: one accountable Engineer loop, on-demand capabilities, deterministic verification, enforcement, lifecycle governance, and cross-host validation."
-expected_outputs: ["Thin Engineer operating model and runtime primitives", "harness verify with trusted named checks and evidence artifacts", "Plan schema, scope enforcement, hooks, and CI template", "Capability lifecycle registry, telemetry, evals, and host validation"]
-success_criteria: ["AC1 Engineer completes ordinary work without an exact domain skill", "AC2 No mandatory multi-skill bulk read occurs at session start", "AC3 Consultations are bounded and Engineer-owned", "AC4 Capability gaps are handled on demand", "AC5 Skill promotion requires verified reuse evidence", "AC6 Engineer prompt stays within the frozen context budget", "AC7 Exactly one normative Engineer delivery lifecycle exists", "AC8 harness verify returns passed, failed, or inconclusive with evidence", "AC9 Failed or inconclusive verification cannot be reported complete", "AC10 CI uses an explicit plan and validates the PR diff", "AC11 Missing optional capability does not block ordinary work", "AC12 Safety-critical gaps block affected work unless waived", "AC13 Promoted skills have trigger and outcome evals", "AC14 Capability entries have owner and lifecycle state", "AC15 Full and degraded host modes are validated", "AC16 Read-only answers and investigations require no plan or verification ceremony", "AC17 Every supported file mutation still requires a plan gate and fresh passed verification"]
+expected_outputs: ["Thin Engineer operating model and runtime primitives", "harness verify with trusted named checks and evidence artifacts", "Plan schema, scope enforcement, hooks, and CI template", "Capability lifecycle registry, telemetry, evals, and host validation", "Transient plan retention policy with one live PR plan"]
+success_criteria: ["AC1 Engineer completes ordinary work without an exact domain skill", "AC2 No mandatory multi-skill bulk read occurs at session start", "AC3 Consultations are bounded and Engineer-owned", "AC4 Capability gaps are handled on demand", "AC5 Skill promotion requires verified reuse evidence", "AC6 Engineer prompt stays within the frozen context budget", "AC7 Exactly one normative Engineer delivery lifecycle exists", "AC8 harness verify returns passed, failed, or inconclusive with evidence", "AC9 Failed or inconclusive verification cannot be reported complete", "AC10 CI uses an explicit plan and validates the PR diff", "AC11 Missing optional capability does not block ordinary work", "AC12 Safety-critical gaps block affected work unless waived", "AC13 Promoted skills have trigger and outcome evals", "AC14 Capability entries have owner and lifecycle state", "AC15 Full and degraded host modes are validated", "AC16 Read-only answers and investigations require no plan or verification ceremony", "AC17 Every supported file mutation still requires a plan gate and fresh passed verification", "AC18 Completed plans without durable value are removed and CI resolves only the one live PR plan"]
 verification:
   required:
     - harness-tests
@@ -35,6 +35,7 @@ verification:
     AC15: [host-contracts]
     AC16: [harness-tests, prompt-contracts]
     AC17: [harness-tests, prompt-contracts]
+    AC18: [prompt-contracts]
 reviews:
   required: []
   completed: []
@@ -78,7 +79,7 @@ Implement the attached Adaptive Engineer plan as the prompt library's runtime an
 
 - **Goal:** Implement the attached Adaptive Engineer plan completely.
 - **Expected outputs:** Thin Engineer primitives; deterministic `harness verify`; versioned plans and trusted checks; enforcement hooks/CI; governed capability lifecycle and telemetry; cross-host validation.
-- **Success criteria:** All 17 acceptance criteria in this plan pass with recorded evidence.
+- **Success criteria:** All 18 acceptance criteria in this plan pass with recorded evidence.
 - **Verification commands:** Named checks from `.github/harness/checks.yaml` only.
 - **Organizational objective:** Make `@engineer` behave like an accountable real-world engineer while keeping safety and completion independently enforceable.
 
@@ -106,6 +107,7 @@ Implement the attached Adaptive Engineer plan as the prompt library's runtime an
 - [x] **AC15** VS Code, Copilot CLI, IntelliJ, and portable/degraded modes have validation evidence.
 - [x] **AC16** Read-only answers and investigations finish without a plan, delivery gate, or completion evidence requirement.
 - [x] **AC17** A new supported file mutation still requires a passed implement gate and fresh passed verification before completion.
+- [x] **AC18** Completed plans without durable value are removed; the open PR retains only its one required live plan, and CI ignores deleted plan paths during resolution.
 
 ## Plan
 
@@ -158,6 +160,14 @@ Implement the attached Adaptive Engineer plan as the prompt library's runtime an
 - [x] Add trigger, transition, hook-runtime, and hydrated-asset contract coverage.
 - [x] Rerun all named checks and replace final verification evidence.
 
+### Phase 9 — Transient plan retention
+
+- [x] Add a contract test proving CI resolves only live changed plan files.
+- [x] Remove stale and superseded dated plans, retaining only this open PR's required plan.
+- [x] Document that completed plans move to Git history after merge unless they contain durable knowledge that belongs elsewhere.
+- [x] Update the CI resolver to ignore deleted plan paths and verify the remaining live plan.
+- [x] Run named checks and refresh terminal evidence.
+
 ## Research Notes
 
 - `packages/harness/package.json` already includes `yaml@^2.8.0`.
@@ -168,6 +178,8 @@ Implement the attached Adaptive Engineer plan as the prompt library's runtime an
 
 ## Impacted Files
 
+- `docs/plans/**`
+- `docs/architecture/engineer-harness.md`
 - `docs/plans/2026-07-13-feat-thin-engineer-distributed-harness-plan.md`
 - `docs/plans/_plan-template.md`
 - `docs/plans/README.md`
@@ -266,8 +278,8 @@ Implement the attached Adaptive Engineer plan as the prompt library's runtime an
 
 - **Outcome:** passed
 - **Artifact:** `.harness/evidence/2026-07-13-feat-thin-engineer-distributed-harness-plan-ea4eb10ef887.json`
-- **Named checks:** `harness-tests` (73/73), `prompt-contracts` (11/11), `host-contracts` (2/2), and `build-assets` passed.
-- **Structural checks:** schema/state, all phase tasks, all 17 criterion mappings, changed-file scope, reviews, hard gaps, and critical findings passed.
+- **Named checks:** `harness-tests` (75/75), `prompt-contracts` (13/13), `host-contracts` (2/2), and `build-assets` passed.
+- **Structural checks:** schema/state, all phase tasks, all 18 criterion mappings, changed-file scope, reviews, hard gaps, and critical findings passed.
 
 ## Risk & Review Routing
 
@@ -289,6 +301,7 @@ Implement the attached Adaptive Engineer plan as the prompt library's runtime an
 - Task intake now selects Answer, Investigate, Deliver, or Review. Only Deliver uses the nine-step lifecycle; Answer and Investigate transition before any requested edit.
 - The completion hook treats `lastEditAt` as the enforcement boundary, records `lastCompletedEditAt` only after fresh passed evidence, and ignores sessions with no pending edit.
 - `/btw` has first-class positive, negative, outcome, transition, registry, and cross-host coverage.
+- Completed plans are transient: promote durable decisions first, retain one live plan while a product-changing PR is open, then remove it in a plan-only post-merge cleanup.
 
 ## Review Findings
 
@@ -330,6 +343,13 @@ Implement the attached Adaptive Engineer plan as the prompt library's runtime an
 - The final review session reached its terminal timeout with zero findings emitted (review ID `5bfc24b4-856f-4dec-b5e9-148568a685a9`).
 - Across the two final attempts, no critical or major findings were reported; every earlier confirmed finding was resolved and verified.
 - **Disposition:** external review complete with the timeout recorded transparently; deterministic enforce-mode verification remains the terminal quality gate.
+
+### Plan retention review
+
+- Removed eight stale or supplemental dated plans with no active inbound references, reducing plan history by 4,251 lines.
+- Retained only this non-terminal PR-linked plan; a contract test enforces at most one dated plan and rejects terminal plans in the prompt-library repository.
+- Fixed CI resolution to consider only live dated plan files, excluding deleted paths, `README.md`, and `_plan-template.md`.
+- No open findings; the retained plan remains `review` until PR merge, then it is removed in a plan-only cleanup.
 
 ## Agent Journal
 
@@ -433,3 +453,16 @@ Implement the attached Adaptive Engineer plan as the prompt library's runtime an
 - All confirmed findings from the earlier review passes are resolved, and no critical or major findings remain open.
 - **Verification:** enforce-mode `harness verify` passed every named and structural gate after this administrative plan update; evidence refreshed at `.harness/evidence/2026-07-13-feat-thin-engineer-distributed-harness-plan-ea4eb10ef887.json`.
 - **Status:** done, Phase 8.
+
+### 2026-07-14 09:00 — Plan retention cleanup opened
+
+- Audited all nine dated plan files and their inbound references; none of the eight older/supplemental plans is required by active runtime guidance.
+- Retained this plan temporarily because the open PR still needs one explicit live plan for base-to-head verification.
+- **Status:** in-progress, Phase 9.
+
+### 2026-07-14 09:30 — Plan retention cleanup verified
+
+- Removed eight dated plans with no active consumers and promoted the retention rule into `docs/plans/README.md` and the canonical architecture.
+- Added failing-first contracts for one non-terminal PR plan and live dated-plan CI resolution; focused contracts then passed 13/13.
+- Full harness suite passed 75/75, built assets succeeded, changed Markdown links resolve, and no active reference names a removed plan.
+- **Status:** review, Phase 9; retain this plan only until PR merge.

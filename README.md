@@ -90,7 +90,7 @@ Context lookup order: `.github/skills/references/knowledge-locations.md`.
 .github/          agents, skills, instructions, prompts, copilot-instructions.md
 knowledge/        team solutions, manifest, capability-registry (hydrated globally)
 docs/architecture/  canonical harness architecture and primitive standard
-docs/plans/       template + historical prompt-library plans (see docs/plans/README.md)
+docs/plans/       template + at most one live PR plan (see docs/plans/README.md)
 .vscode/          @dev-kit/harness tasks (install/upgrade/doctor), MCP config
 AGENTS.md         Cross-tool guidance
 ```

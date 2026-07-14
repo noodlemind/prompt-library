@@ -209,4 +209,4 @@ The verification suite checks the thin Engineer contract, plan and policy schema
 - [Install Guide](../install.md)
 - [Harness Quickstart](../onboarding/harness-quickstart.md)
 
-Historical proposals, comparative reviews, and implementation roadmaps were removed from active architecture after implementation. Their decisions remain available through Git history and completed plans under `docs/plans/`.
+Historical proposals, comparative reviews, and implementation roadmaps are removed from active documentation after implementation. Their audit remains in Git and pull-request history; durable decisions are promoted to this architecture or team knowledge before completed plans are deleted.

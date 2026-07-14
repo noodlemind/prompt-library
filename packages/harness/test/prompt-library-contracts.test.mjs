@@ -175,6 +175,22 @@ test('plan-producing primitives emit schema v1 and trusted named checks', () => 
   }
 });
 
+test('prompt-library retains at most one non-terminal PR plan and documents cleanup', () => {
+  const datedPlans = fs
+    .readdirSync(path.join(repoRoot, 'docs', 'plans'))
+    .filter((name) => /^\d{4}-\d{2}-\d{2}.*\.md$/.test(name));
+  assert.ok(datedPlans.length <= 1, `expected at most one live PR plan, found ${datedPlans.length}`);
+  for (const name of datedPlans) {
+    const frontmatter = read(`docs/plans/${name}`).match(/^---\n([\s\S]*?)\n---/)?.[1];
+    const plan = YAML.parse(frontmatter || '');
+    assert.ok(plan?.plan_schema, `${name} must use the current plan schema`);
+    assert.ok(!['done', 'completed'].includes(plan.status), `${name} is terminal and should be removed`);
+  }
+  const policy = read('docs/plans/README.md');
+  assert.match(policy, /transient/i);
+  assert.match(policy, /after[^\n]*merge[^\n]*(?:remove|delete)/i);
+});
+
 test('core and confusable skills have trigger and outcome eval coverage', () => {
   const suite = YAML.parse(read('evals/skill-trigger-evals.yaml'));
   assert.equal(suite.version, 1);
@@ -235,6 +251,9 @@ test('hooks and CI enforce explicit plans and passed verification evidence', () 
   assert.match(workflow, /upload-artifact@v4/);
   assert.match(workflow, /HARNESS_ENFORCEMENT/);
   assert.match(workflow, /exactly one/i);
+  assert.match(workflow, /plan_candidates/);
+  assert.match(workflow, /\[\[ -f "\$candidate" \]\]/);
+  assert.ok(workflow.includes("^docs/plans/[0-9]{4}-[0-9]{2}-[0-9]{2}[^/]*\\.md$"));
 
   const policy = YAML.parse(read('.github/harness/policy.yaml'));
   assert.equal(policy.version, 1);
