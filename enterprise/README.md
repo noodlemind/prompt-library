@@ -49,4 +49,4 @@ enterprise/
 - **Skill/agent** = how to work (procedure, review criteria).
 - **Knowledge** = what we learned (solutions under `enterprise/knowledge/solutions/`).
 
-See `docs/architecture/enterprise-capability-expansion.md`.
+Capability lifecycle and approval remain governed by `knowledge/capability-registry.yaml`, `capability-gap-proposal.md`, and `/create-primitive`.

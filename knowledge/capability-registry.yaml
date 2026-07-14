@@ -6,7 +6,7 @@ lifecycle_states: [candidate, experimental, active, deprecated, retired]
 engineer:
   entry_agent: engineer
   entry_skill: engineer
-  operating_model: docs/architecture/engineer-operating-model.md
+  architecture: docs/architecture/engineer-harness.md
   workflow: orient → establish intent → investigate → work → handle gaps → verify → review → compound → report
 
 capabilities:
@@ -195,8 +195,6 @@ growth:
   retirement: deprecate → warn and migrate → remove source → retain registry tombstone
 
 references:
-  operating_model: docs/architecture/engineer-operating-model.md
-  lifecycle: docs/architecture/capability-lifecycle.md
-  catalog_review: docs/architecture/capability-catalog-review.md
+  architecture: docs/architecture/engineer-harness.md
   trigger_evals: evals/skill-trigger-evals.yaml
   harness_contract: .github/skills/references/harness-tool-contract.md

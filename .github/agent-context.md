@@ -16,7 +16,7 @@ This repository is a skill-driven prompt library containing AI agent systems:
 - `.github/skills/code-review/references/checks/` — bundled review checks discovered by `/code-review`
 - `.github/checks/` — optional product-specific review check examples
 - `docs/plans/` — issue and plan files with state machine tracking
-- `docs/architecture/` — skill-driven standard and architecture notes
+- `docs/architecture/` — canonical Engineer Harness architecture and primitive standard
 - `knowledge/solutions/` — team-wide compounded learnings (hydrated to `~/.copilot/knowledge/`); product repos may use optional `docs/solutions/` for repo-private learnings only
 - `docs/brainstorms/` — brainstorm documents from `/brainstorming` skill
 
@@ -78,13 +78,13 @@ Five orchestrating skills (code-review, plan-issue, deepen-plan, work-on-task, e
 `.github/skills/references/knowledge-locations.md` — single list of read/write paths; do not duplicate in other primitives.
 
 ### Engineer Agent
-Thin accountable orchestrator within a 600–900 estimated-token frozen budget. It classifies Answer, Investigate, Deliver, or Review; its nine-step delivery lifecycle is the only normative change-making sequence. Context caps: `context-budget.md`; operating model: `docs/architecture/engineer-operating-model.md`. Entry: `@engineer` or `/engineer`.
+Thin accountable orchestrator within a 600–900 estimated-token frozen budget. It classifies Answer, Investigate, Deliver, or Review; its nine-step delivery lifecycle is the only normative change-making sequence. Context caps: `context-budget.md`; architecture: `docs/architecture/engineer-harness.md`. Entry: `@engineer` or `/engineer`.
 
 ### Engineer Memory System
-`docs/architecture/engineer-memory-system.md` defines three tiers: product `docs/plans/` (local), global `knowledge/solutions/` (hydrated team-wide), optional `profile.md` (user preferences). `/recall` runs before investigate; `/compound-learnings` publishes globally; `/index-memory` rebuilds `manifest.yaml`. Capture gate: `.github/skills/references/capture-gate.md`.
+`docs/architecture/engineer-harness.md` defines the three memory tiers: product `docs/plans/` (local), global `knowledge/solutions/` (hydrated team-wide), and optional `profile.md` (user preferences). `/recall` runs before investigate; `/compound-learnings` publishes globally; `/index-memory` rebuilds `manifest.yaml`. Capture gate: `.github/skills/references/capture-gate.md`.
 
 ### Adaptive Engineer Harness
-`@engineer` is the central coordinator for adaptive capability expansion. It routes to known skills first, uses `.github/skills/references/subagent-context-packet.md` for delegated work, and uses `.github/skills/references/human-approval-policy.md` before risky strategy choices. Missing reusable capability must be documented with `.github/skills/references/capability-gap-proposal.md` and then routed to `/create-primitive` after human approval. Architecture details live in `docs/architecture/adaptive-engineer-harness.md`.
+`@engineer` is the central coordinator for adaptive capability expansion. It routes to known skills first, uses `.github/skills/references/subagent-context-packet.md` for delegated work, and uses `.github/skills/references/human-approval-policy.md` before risky strategy choices. Missing reusable capability must be documented with `.github/skills/references/capability-gap-proposal.md` and then routed to `/create-primitive` after human approval. Architecture details live in `docs/architecture/engineer-harness.md`.
 
 ### Skill-Driven Standardization
 `docs/architecture/skill-driven-prompt-library.md` defines primitive boundaries for teams adapting this repo. Prompt wrappers stay thin, workflows live in skills, long criteria and library-managed checks go in skill `references/`, product-owned review overlays can live in product `.github/checks/`, file-scoped conventions go in `.github/instructions/`, and solution docs graduate to `agent-context.md` only when they capture durable project-level knowledge.

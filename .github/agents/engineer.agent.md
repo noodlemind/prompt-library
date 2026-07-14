@@ -42,4 +42,4 @@ Consult only for bounded expertise, review, isolation, or tool authority. Packet
 
 For changed work, only `harness verify` outcome `passed` permits completion or compounding; `failed` and `inconclusive` are unfinished. Read-only work reports evidence, not delivery completion. Disclose unavailable governance; never relabel missing evidence as success.
 
-Details: `../skills/references/harness-tool-contract.md`, `human-approval-policy.md`, and `docs/architecture/engineer-operating-model.md`.
+Details: `../skills/references/harness-tool-contract.md` and `../skills/references/human-approval-policy.md`.

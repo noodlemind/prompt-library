@@ -2,7 +2,7 @@
 
 **SSOT** for harness agent-runtime commands. Skills and `@engineer` **call harness**; harness does not invoke skills. `@dev-kit/harness` is the npm package name; `harness` is the command name.
 
-Design: [`docs/architecture/tool-native-harness-design.md`](../../../docs/architecture/tool-native-harness-design.md) · Budget: [`context-budget.md`](context-budget.md)
+Budget: [`context-budget.md`](context-budget.md)
 
 ## Two-tier boundary
 

@@ -35,4 +35,4 @@ Route the user's outcome and any explicit plan path to `@engineer`. The agent se
 - Substantial evidence-only diagnosis → `@engineer` Investigate mode
 - Setup diagnosis → `/harness-doctor`
 
-Do not duplicate runtime steps here. Contract: `docs/architecture/engineer-operating-model.md`.
+Do not duplicate runtime steps here. Contract: `@engineer` and `../references/harness-tool-contract.md`.

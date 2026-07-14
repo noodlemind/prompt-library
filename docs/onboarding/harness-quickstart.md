@@ -4,7 +4,7 @@ Get from zero to **`@engineer`** delivering work in any enterprise product repo.
 
 ## 1. Install once (per machine)
 
-**Recommended:** every install method ends with a global `harness` CLI at `~/.copilot/bin/harness`. The scoped npm name is `@dev-kit/harness`; daily commands use `harness`. See [`nexus-registry-setup.md`](./nexus-registry-setup.md) and [`npm-harness-distribution-plan.md`](../architecture/npm-harness-distribution-plan.md).
+**Recommended:** every install method ends with a global `harness` CLI at `~/.copilot/bin/harness`. The scoped npm name is `@dev-kit/harness`; daily commands use `harness`. See [`nexus-registry-setup.md`](./nexus-registry-setup.md) and [Engineer Harness Architecture](../architecture/engineer-harness.md).
 
 | Method | Commands |
 |--------|----------|
@@ -114,7 +114,5 @@ If `~/.copilot/knowledge/` is unavailable, keep `knowledge/` in the product repo
 ## Docs
 
 - Tool contract: `.github/skills/references/harness-tool-contract.md`
-- Operating model: `docs/architecture/engineer-operating-model.md`
-- Memory: `docs/architecture/engineer-memory-system.md`
-- Enterprise capability: `docs/architecture/enterprise-capability-expansion.md`
-- Capability lifecycle: `docs/architecture/capability-lifecycle.md`
+- Runtime, memory, capability lifecycle, and host modes: `docs/architecture/engineer-harness.md`
+- Primitive boundaries: `docs/architecture/skill-driven-prompt-library.md`

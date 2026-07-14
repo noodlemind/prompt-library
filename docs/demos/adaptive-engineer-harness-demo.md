@@ -48,7 +48,7 @@ This is the line for the non-technical viewer. The next acts back it up.
 
 Open each in order. ~1 min each.
 
-### 2a. `docs/architecture/adaptive-engineer-harness.md`
+### 2a. `docs/architecture/engineer-harness.md`
 
 - Read the **Purpose** (lines 3–7) aloud — that's the thesis.
 - Show the **Runtime Model** (lines 11–20) — point at step 5 ("Ask the human for approval before risky decisions or capability expansion") and step 8 ("Record misses as capability gaps").
@@ -138,7 +138,7 @@ This is the demo's punchline: the engineer *stops*. Point at the screen and say 
 
 ## Files to pin in your editor before starting
 
-- `docs/architecture/adaptive-engineer-harness.md`
+- `docs/architecture/engineer-harness.md`
 - `.github/skills/references/capability-gap-proposal.md`
 - `.github/skills/create-primitive/SKILL.md`
 - `.github/agents/engineer.agent.md` (have ready in case someone asks "where does this behavior live?")

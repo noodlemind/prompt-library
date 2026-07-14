@@ -29,7 +29,7 @@ test('host matrix covers full and degraded target operation', () => {
     assert.ok(matrix.hosts[host].full?.assertions?.length > 0, `${host} full mode`);
     assert.ok(matrix.hosts[host].degraded?.assertions?.length > 0, `${host} degraded mode`);
   }
-  assert.match(read('docs/architecture/cross-host-validation.md'), /automated evidence/i);
+  assert.match(read('docs/architecture/engineer-harness.md'), /automated evidence/i);
 });
 
 test('portable sources and built assets preserve the thin runtime contract', () => {

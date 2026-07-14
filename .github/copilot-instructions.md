@@ -30,7 +30,7 @@ Skills = workflows. Agents = isolated judgment. Instructions = file-pattern rule
 
 The engineer selects the skill/flow first, then delegates only when separate judgment, authority, or isolation improves the result. Coordinators delegate to specialist subagents via `tools: ['agent']`. Subagents run in isolated context — include all necessary context in the task prompt. `/plan-issue` and `/code-review` prompt wrappers route to their coordinators via the `agent:` field (prompt tools override agent tools). Coordinators use `agents:` allowlists to restrict which specialists they can invoke. Coordinators dispatch subagents in parallel batches (3-4 at a time) rather than sequentially.
 
-Engineer harness: `@engineer` agent file owns the only normative delivery lifecycle; read-only modes stay outside it. Operating model: `docs/architecture/engineer-operating-model.md`. Delegation: `subagent-context-packet.md`. Risky work: `human-approval-policy.md`.
+Engineer harness: `@engineer` agent file owns the only normative delivery lifecycle; read-only modes stay outside it. Runtime details: `harness-tool-contract.md`. Delegation: `subagent-context-packet.md`. Risky work: `human-approval-policy.md`.
 
 ## Standardization
 

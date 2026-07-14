@@ -120,5 +120,5 @@ Contains installed version and file manifest — used for safe `upgrade` and `un
 
 ## Related
 
-- [NPM distribution plan](../architecture/npm-harness-distribution-plan.md)
+- [Engineer harness architecture](../architecture/engineer-harness.md)
 - [Harness quickstart](./harness-quickstart.md)

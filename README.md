@@ -15,7 +15,7 @@ See [Harness Quickstart](docs/onboarding/harness-quickstart.md).
 
 ## Vision
 
-`@engineer` behaves like a real engineer: **starter skills**, **expert network**, **principles**, **compounded team knowledge**, and **approved growth** of skills and specialists. See [Engineer Vision and Growth Loop](docs/architecture/engineer-vision-and-growth-loop.md).
+`@engineer` behaves like a real engineer: **starter skills**, **expert network**, **principles**, **compounded team knowledge**, and **approved growth** of skills and specialists. See [Engineer Harness Architecture](docs/architecture/engineer-harness.md).
 
 ## Architecture
 
@@ -28,7 +28,7 @@ Skill-first: skills are workflow contracts; agents provide isolated judgment; in
 | Team knowledge | `knowledge/` → hydrated to `~/.copilot/knowledge/` |
 | Product plans | `docs/plans/` in each **product** repo only |
 
-Standards: [Engineer Operating Model](docs/architecture/engineer-operating-model.md), [Harness Enforcement](docs/architecture/harness-enforcement.md), [Engineer Vision](docs/architecture/engineer-vision-and-growth-loop.md), [Memory System](docs/architecture/engineer-memory-system.md).
+Standards: [Engineer Harness Architecture](docs/architecture/engineer-harness.md) and [Skill-Driven Prompt Library Standard](docs/architecture/skill-driven-prompt-library.md).
 
 ## Connected Pipeline
 
@@ -89,7 +89,7 @@ Context lookup order: `.github/skills/references/knowledge-locations.md`.
 ```
 .github/          agents, skills, instructions, prompts, copilot-instructions.md
 knowledge/        team solutions, manifest, capability-registry (hydrated globally)
-docs/architecture/  standards and vision
+docs/architecture/  canonical harness architecture and primitive standard
 docs/plans/       template + historical prompt-library plans (see docs/plans/README.md)
 .vscode/          @dev-kit/harness tasks (install/upgrade/doctor), MCP config
 AGENTS.md         Cross-tool guidance

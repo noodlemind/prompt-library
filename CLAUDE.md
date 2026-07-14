@@ -46,7 +46,7 @@ Plan files live in `docs/plans/`. Activity logs in `## Activity` sections provid
 .vscode/
   mcp.json             — MCP server configuration (Context7)
 docs/
-  architecture/        — skill-driven standard and architecture notes
+  architecture/        — canonical Engineer Harness architecture and primitive standard
   plans/               — issue and plan files with state tracking
   solutions/           — documented learnings from solved problems
   brainstorms/         — brainstorm documents from /brainstorming skill

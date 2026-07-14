@@ -6,6 +6,26 @@ import { test } from 'node:test';
 import YAML from 'yaml';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
+const architecturePath = 'docs/architecture/engineer-harness.md';
+const supersededArchitectureDocs = [
+  'adaptive-engineer-harness.md',
+  'capability-catalog-review.md',
+  'capability-lifecycle.md',
+  'composer-gap-fulfillment-loop.md',
+  'composer-parity-review.md',
+  'composer-style-autonomous-harness-proposal.md',
+  'cross-host-validation.md',
+  'engineer-memory-system.md',
+  'engineer-operating-model.md',
+  'engineer-vision-and-growth-loop.md',
+  'enterprise-capability-expansion.md',
+  'harness-enforcement.md',
+  'harness-pre-implementation-review.md',
+  'lexical-retrieval-v2.md',
+  'npm-harness-distribution-plan.md',
+  'semantic-retrieval-v2.md',
+  'tool-native-harness-design.md',
+];
 
 function read(rel) {
   return fs.readFileSync(path.join(repoRoot, rel), 'utf8');
@@ -15,8 +35,8 @@ function exists(rel) {
   return fs.existsSync(path.join(repoRoot, rel));
 }
 
-test('operating model defines task modes, ownership, gap handling, and all runtime modes', () => {
-  const model = read('docs/architecture/engineer-operating-model.md');
+test('canonical architecture defines task modes, ownership, gap handling, and runtime modes', () => {
+  const model = read(architecturePath);
 
   for (const phrase of [
     'Task modes',
@@ -30,9 +50,20 @@ test('operating model defines task modes, ownership, gap handling, and all runti
     'Standalone mode',
     'Degraded mode',
     'Governed mode',
-    'Duplicated-loop inventory',
+    'Single-owner contracts',
   ]) {
     assert.match(model, new RegExp(phrase, 'i'), `missing ${phrase}`);
+  }
+});
+
+test('canonical architecture replaces superseded harness architecture fragments', () => {
+  const architectureDocs = fs
+    .readdirSync(path.join(repoRoot, 'docs', 'architecture'))
+    .filter((name) => name.endsWith('.md'))
+    .sort();
+  assert.deepEqual(architectureDocs, ['engineer-harness.md', 'skill-driven-prompt-library.md']);
+  for (const name of supersededArchitectureDocs) {
+    assert.equal(exists(`docs/architecture/${name}`), false, `${name} should be removed`);
   }
 });
 
@@ -250,19 +281,16 @@ test('capability registry inventories every current primitive with ownership and
   }
 });
 
-test('capability lifecycle and catalog review define promotion through retirement', () => {
-  const lifecycle = read('docs/architecture/capability-lifecycle.md');
+test('canonical architecture defines capability promotion through retirement', () => {
+  const lifecycle = read(architecturePath);
   for (const state of ['candidate', 'experimental', 'active', 'deprecated', 'retired']) {
     assert.match(lifecycle, new RegExp(state, 'i'));
   }
   assert.match(lifecycle, /trigger eval/i);
   assert.match(lifecycle, /outcome eval/i);
   assert.match(lifecycle, /promotion evidence/i);
-
-  const review = read('docs/architecture/capability-catalog-review.md');
-  assert.match(review, /engineer-autopilot/i);
-  assert.match(review, /retired/i);
-  assert.match(review, /overlap/i);
+  assert.match(lifecycle, /engineer-autopilot/i);
+  assert.match(lifecycle, /overlap/i);
 });
 
 test('review fixes preserve thin wrappers, complete skill metadata, and CI pinning', () => {
@@ -326,7 +354,7 @@ test('review fixes preserve thin wrappers, complete skill metadata, and CI pinni
 
   assert.match(read('.github/skills/harness-doctor/SKILL.md'), /H7[^\n]*auto-skill-draft/);
 
-  const enforcementDoc = read('docs/architecture/harness-enforcement.md');
+  const enforcementDoc = read(architecturePath);
   assert.doesNotMatch(enforcementDoc, /Each entry must include/);
   assert.match(enforcementDoc, /exemptions.*waivers.*arrays/is);
 
@@ -341,7 +369,7 @@ test('review fixes preserve thin wrappers, complete skill metadata, and CI pinni
 
   assert.match(read('.github/skills/references/harness-tool-contract.md'), /verify --plan <path> \[--base ref\] \[--enforcement mode\]/);
   assert.match(read('.github/skills/references/engineer-starter-kit.md'), /docs\/architecture\/skill-driven-prompt-library\.md/);
-  assert.match(read('docs/architecture/engineer-vision-and-growth-loop.md'), /Bounded multi-agent teams \| Strong \|[^\n]*3-4/);
+  assert.match(read(architecturePath), /bounded delegation/i);
 
   const agents = read('AGENTS.md');
   for (const mode of ['Answer', 'Investigate', 'Deliver']) assert.match(agents, new RegExp(mode));

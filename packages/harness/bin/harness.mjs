@@ -80,7 +80,7 @@ Options:
   --enforcement <mode>   observe | warn | enforce (default enforce)
   --no-events            Do not write .harness/events.jsonl
 
-Docs: docs/architecture/tool-native-harness-design.md
+Docs: @dev-kit/harness README and the hydrated harness-tool-contract.md reference
 `.trim();
 
 async function main() {

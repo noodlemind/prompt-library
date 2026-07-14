@@ -23,4 +23,4 @@ Rules the Adaptive Engineer lives by — loaded by `@engineer`, `/engineer`, and
 
 ## Vision
 
-Full growth model: `docs/architecture/engineer-vision-and-growth-loop.md`.
+Growth contracts: `capability-gap-proposal.md`, `human-approval-policy.md`, and `knowledge/capability-registry.yaml`.

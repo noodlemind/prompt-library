@@ -29,9 +29,9 @@ Deliver-mode internal skill chain:
                          open → planned → in-progress → review → done
 ```
 
-Vision and growth: `docs/architecture/engineer-vision-and-growth-loop.md`. Knowledge lookup: `.github/skills/references/knowledge-locations.md`.
+Harness architecture: `docs/architecture/engineer-harness.md`. Knowledge lookup: `.github/skills/references/knowledge-locations.md`.
 
-Plan files in `docs/plans/` (product repos only) track state via YAML frontmatter (`status`, `plan_lock`, `phase`). Team-wide learnings hydrate from `knowledge/` to `~/.copilot/knowledge/`. Run `/recall` before engineering work. Inter-step memory flows through plan sections including `## Memory Cards`, `## Context`, `## Research Notes`, and `## Activity`. See `docs/architecture/engineer-memory-system.md`.
+Plan files in `docs/plans/` (product repos only) track state via YAML frontmatter (`status`, `plan_lock`, `phase`). Team-wide learnings hydrate from `knowledge/` to `~/.copilot/knowledge/`. Run `/recall` before engineering work. Inter-step memory flows through plan sections including `## Memory Cards`, `## Context`, `## Research Notes`, and `## Activity`. See `docs/architecture/engineer-harness.md`.
 
 ## Directory Structure
 
@@ -48,7 +48,7 @@ Plan files in `docs/plans/` (product repos only) track state via YAML frontmatte
   mcp.json         — MCP server configuration
 knowledge/         — team-wide solutions + manifest (hydrated to ~/.copilot/knowledge/)
 docs/
-  architecture/    — skill-driven standard and architecture notes
+  architecture/    — canonical Engineer Harness architecture and primitive standard
   plans/           — plan template; product repos use docs/plans/ for active work
   brainstorms/     — brainstorm documents from /brainstorming skill
   codebase-snapshot.md — generated codebase snapshot with architecture diagrams

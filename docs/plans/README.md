@@ -6,8 +6,7 @@ Files here are **historical implementation and feature plans** for the prompt-li
 
 | Need | Location |
 |------|----------|
-| Vision and growth loop | `docs/architecture/engineer-vision-and-growth-loop.md` |
-| Memory tiers | `docs/architecture/engineer-memory-system.md` |
+| Engineer runtime, growth, memory, and enforcement | `docs/architecture/engineer-harness.md` |
 | Plan file template for product work | `docs/plans/_plan-template.md` |
 | Capture gate | `.github/skills/references/capture-gate.md` |
 

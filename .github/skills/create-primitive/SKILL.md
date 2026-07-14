@@ -84,7 +84,7 @@ Before writing files:
 9. **Update growth inventory** when adding a skill or agent in this repo:
    - Append to `knowledge/capability-registry.yaml` under `starter_skills` or `starter_agents`.
    - If new agent is delegatable from `@engineer`, add to `engineer_allowlist` and `engineer.agent.md` frontmatter `agents:` (human-approved).
-   - Document in `docs/architecture/engineer-vision-and-growth-loop.md` if primitive boundaries changed.
+   - Update `docs/architecture/engineer-harness.md` if runtime or capability boundaries changed.
 
 ## Capability Expansion Mode
 
