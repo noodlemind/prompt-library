@@ -60,7 +60,7 @@ Append only:
 ### YYYY-MM-DD HH:MM — Phase N verification
 - Tasks: N/N checked
 - Scope: passed|amended
-- Verification: passed|failed|inconclusive — `.harness/evidence/<plan>.json`
+- Verification: passed|failed|inconclusive — `<evidencePath copied from harness verify --json>`
 - Decisions: <implementation notes or none>
 - Next: <next phase, remediation, or review>
 ```

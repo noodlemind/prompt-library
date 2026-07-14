@@ -16,6 +16,26 @@ Resolve gaps when encountered. Invoke only when:
 
 Do not scan or load the full registry before ordinary work. Missing optional capability never blocks low-risk work.
 
+### Trigger examples
+
+**Should trigger:**
+
+- An acceptance criterion requires a security review capability that is not currently available.
+- A destructive database migration needs independent data-integrity assurance.
+- Investigation reaches an executable blocker after repository evidence and authoritative documentation are exhausted.
+
+**Should not trigger:**
+
+- A routine low-risk change can proceed with current repository patterns and tests.
+- A quick read-only question needs `/btw`, not capability acquisition.
+- A one-off unfamiliar API can be resolved from authoritative documentation without creating or importing a primitive.
+
+### Confusable boundaries
+
+- `/ensure-capability` resolves a specific encountered gap; `/ensure-plan` establishes the work contract.
+- `/create-primitive` creates an approved reusable artifact only after promotion evidence; one gap is not promotion evidence.
+- `/harness-doctor` diagnoses installed harness health; it does not fulfill task-specific expertise or tool gaps.
+
 ## Gap classification
 
 | Gap | First response | Escalation |
@@ -34,8 +54,8 @@ Do not scan or load the full registry before ordinary work. Missing optional cap
 2. Classify the gap as `soft`, `bridge`, or `hard` and record it on the explicit plan.
 3. Choose the smallest response from the table. Consultations use `subagent-context-packet.md`.
 4. For a repeatable capability candidate, search existing skills and registry overlap before drafting anything.
-5. For a hard gap, set the affected work to `blocked-capability` until fulfillment, an approved bridge, or an explicit waiver is recorded.
-6. Resume unrelated safe work when the gap is limited to one operation or criterion.
+5. For a hard gap, record its affected criterion or operation and stop only that scope until fulfillment, an approved bridge, or an explicit waiver is recorded.
+6. Keep the plan `in-progress` while unrelated safe work remains. Use plan-level `status: blocked-capability` only when no executable safe work remains.
 
 ## Plan record
 
@@ -44,11 +64,12 @@ capability_gaps:
   - id: secure-schema-review
     class: hard
     required_for: AC4
+    scope: criterion
     fulfillment: pending
     evidence: ["docs inspected", "missing required reviewer"]
 ```
 
-Allowed fulfillment values are `pending`, `bridge`, `done`, or `waived`. A waiver quotes the human decision and scope.
+Allowed scope values are `operation`, `criterion`, or `plan`. Allowed fulfillment values are `pending`, `bridge`, `done`, or `waived`. A waiver quotes the human decision and scope. `scope: plan` is required before setting the entire plan to `blocked-capability`.
 
 ## Promotion boundary
 

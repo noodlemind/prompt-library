@@ -25,11 +25,11 @@ Classify first. **Answer** routes quick read-only questions to `/btw`. **Investi
 1. Orient — inspect proportionally; for trackable delivery run `harness orient --query "<task>" --workspace . --json` and read its bounded pack.
 2. Establish intent — identify goal, outputs, criteria, constraints, and risk; reuse or create a proportional plan.
 3. Investigate — inspect code, tests, history, authoritative documentation, and prior knowledge.
-4. Work — pass `harness gate --phase implement --plan <path>`, make and test the smallest coherent in-scope change.
+4. Work — pass `harness gate --phase implement --plan <path> --workspace . --json`; make and test the smallest in-scope change.
 5. Handle gaps when encountered — retrieve facts, load one skill, consult an expert, or acquire an approved tool. Check proactively only for explicit specialization or high-risk work.
-6. Verify — run `harness verify --plan <path>` and resolve every failed or inconclusive required check.
+6. Verify — run `harness verify --plan <path> --workspace . --json`; resolve every failed or inconclusive check.
 7. Review — request independent specialist review when risk, uncertainty, or the plan requires it.
-8. Compound — record durable learning after passed verification; propose a reusable skill only when promotion evidence passes.
+8. Compound — after a pass run `harness compound --plan <path> --workspace . --json`; propose skills only with promotion evidence.
 9. Report — summarize outcome, evidence, decisions, remaining risks, and artifacts.
 
 ## Gaps and consultation

@@ -2,6 +2,8 @@
 /** Stop/completion gate: require passed evidence only for a newly recorded edit. */
 import fs from 'node:fs';
 import path from 'node:path';
+import { validateEvidenceBinding } from './lib/evidence-binding.mjs';
+import { enforcementExitCode, loadHookPolicy } from './lib/policy.mjs';
 
 function payload() {
   try {
@@ -11,34 +13,17 @@ function payload() {
   }
 }
 
-function loadPolicy(workspace) {
-  let text = '';
-  try {
-    text = fs.readFileSync(path.join(workspace, '.github', 'harness', 'policy.yaml'), 'utf8');
-  } catch {
-    // A missing policy uses safe enforcement defaults.
-  }
-  const configured = text.match(/^enforcement:\s*(observe|warn|enforce)\s*$/m)?.[1];
-  const environment = ['observe', 'warn', 'enforce'].includes(process.env.HARNESS_ENFORCEMENT)
-    ? process.env.HARNESS_ENFORCEMENT
-    : null;
-  const ttl = Number(text.match(/^evidence_ttl_hours:\s*(\d+)\s*$/m)?.[1] || 24);
-  return {
-    enforcement: environment || configured || 'enforce',
-    evidenceTtlHours: Number.isFinite(ttl) && ttl > 0 ? ttl : 24,
-  };
-}
-
 let activePolicy = { enforcement: 'enforce', evidenceTtlHours: 24 };
 
 function deny(message) {
   console.error(`[harness hook] Completion blocked: ${message}`);
-  process.exit(activePolicy.enforcement === 'enforce' ? 2 : 0);
+  process.exit(enforcementExitCode(activePolicy.enforcement));
 }
 
 const input = payload();
 const workspace = path.resolve(input.workspace || input.cwd || process.cwd());
-activePolicy = loadPolicy(workspace);
+const policy = loadHookPolicy(workspace, { ttlKey: 'evidence_ttl_hours', ttlDefault: 24 });
+activePolicy = { enforcement: policy.enforcement, evidenceTtlHours: policy.ttl };
 const sessionPath = path.join(workspace, '.harness', 'session.json');
 // Read-only answers and investigations never enter the delivery lifecycle. The
 // pre-edit hook requires a session before supported file mutations, so no
@@ -71,13 +56,21 @@ try {
   deny('verification evidence is unreadable');
 }
 if (evidence.outcome !== 'passed') deny(`verification outcome is ${evidence.outcome || 'unknown'}`);
-if (session.activePlan && evidence.plan !== session.activePlan) deny('verification evidence belongs to a different plan');
-const verifiedAt = Date.parse(evidence.verifiedAt || session.lastVerifyAt);
-if (!Number.isFinite(verifiedAt)) deny('verification timestamp is missing or invalid');
-if (Date.now() - verifiedAt > activePolicy.evidenceTtlHours * 60 * 60 * 1000) {
-  deny('verification evidence is stale');
+const normalizedPlan = (value) => String(value || '').replace(/\\/g, '/');
+if (session.activePlan && normalizedPlan(evidence.plan) !== normalizedPlan(session.activePlan)) {
+  deny('verification evidence belongs to a different plan');
 }
-if (Date.parse(session.lastVerifyAt) < lastEditAt) {
+const bindingError = validateEvidenceBinding({
+  workspace,
+  planPath: evidence.plan,
+  evidence,
+  maxAgeHours: activePolicy.evidenceTtlHours,
+});
+if (bindingError) deny(bindingError);
+const lastVerifyAt = Date.parse(session.lastVerifyAt);
+if (!Number.isFinite(lastVerifyAt)) deny('verification timestamp is missing or invalid');
+const evidenceVerifiedAt = Date.parse(evidence.verifiedAt);
+if (lastVerifyAt < lastEditAt || evidenceVerifiedAt < lastEditAt) {
   deny('files changed after the latest passed verification');
 }
 session.lastCompletedEditAt = session.lastEditAt;

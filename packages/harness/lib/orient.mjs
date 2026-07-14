@@ -86,7 +86,7 @@ export function runOrient({ workspace, copilotHome, flags, query }) {
     ...session,
     lastQuery: q,
     lastOrientAt: new Date().toISOString(),
-    activePlan: active?.path || session.activePlan || null,
+    activePlan: active?.path || null,
     contextPack: packRel,
     gateStatus: gatePreview.pass ? 'pass' : 'blocked',
     blockedReason: gatePreview.blockedReason,

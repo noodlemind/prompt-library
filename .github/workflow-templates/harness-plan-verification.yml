@@ -101,7 +101,7 @@ jobs:
         run: harness verify --plan "$PLAN" --base "$BASE_SHA" --enforcement "$HARNESS_ENFORCEMENT" --workspace . --json
 
       - name: Upload verification evidence
-        if: always() && steps.plan.outputs.skip != 'true'
+        if: always() && steps.plan.outcome == 'success' && steps.plan.outputs.skip != 'true'
         uses: actions/upload-artifact@v4
         with:
           name: harness-verification-evidence

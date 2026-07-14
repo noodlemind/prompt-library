@@ -81,19 +81,22 @@ evidence.
 The relevant integration commands are:
 
 ```bash
-harness gate --plan docs/plans/<plan>.md --phase implement --json
-harness verify --plan docs/plans/<plan>.md --base <git-ref> --json
-harness compound --plan docs/plans/<plan>.md --json
+harness gate --plan docs/plans/<plan>.md --phase implement --workspace . --json
+harness verify --plan docs/plans/<plan>.md --base <git-ref> --workspace . --json
+harness compound --plan docs/plans/<plan>.md --workspace . --json
 ```
 
 You do **not** need `/capture-issue`, `/plan-issue`, `/recall`, or `/compound-learnings` unless debugging.
 
 ## 5. CI enforcement
 
-Install `.github/workflow-templates/harness-plan-verification.yml`. It resolves
-exactly one plan changed by the PR, validates it, passes it explicitly to the
-gate and verifier, and checks the PR diff against `## Impacted Files`. Select
-`observe`, `warn`, or `enforce` in `.github/harness/policy.yaml`.
+The supplied `.github/workflow-templates/harness-plan-verification.yml` is a
+GitHub workflow template, not an automatically active workflow. Enable it through
+GitHub's workflow-template picker or copy it into `.github/workflows/` in the
+product repository. It resolves exactly one plan changed by the PR, validates
+it, passes it explicitly to the gate and verifier, and checks the PR diff against
+`## Impacted Files`. Select `observe`, `warn`, or `enforce` in
+`.github/harness/policy.yaml`.
 
 ## 6. Health check
 

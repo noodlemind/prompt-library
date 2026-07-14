@@ -20,12 +20,12 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node require-plan-gate.mjs",
+            "command": "node guard-critical-files.mjs",
             "timeout": 5
           },
           {
             "type": "command",
-            "command": "node guard-critical-files.mjs",
+            "command": "node require-plan-gate.mjs",
             "timeout": 5
           }
         ]
@@ -35,12 +35,12 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node require-plan-gate.mjs",
+            "command": "node block-destructive-commands.mjs",
             "timeout": 5
           },
           {
             "type": "command",
-            "command": "node block-destructive-commands.mjs",
+            "command": "node require-plan-gate.mjs",
             "timeout": 5
           }
         ]

@@ -16,7 +16,7 @@ The current library already has a strong compound-engineering base:
 - Plan files in `docs/plans/` that preserve state, research notes, implementation notes, activity logs, and review findings
 - Specialist agents with bounded responsibilities and coordinator agents for planning and review
 - Skills using progressive disclosure, trigger examples, references, assets, and explicit execution boundaries
-- Bundled review checks under skill references, optional product checks under `.github/checks/`, and durable learnings under `docs/solutions/`
+- Bundled review checks under skill references, optional product checks under `.github/checks/`, and team-wide durable learnings under `knowledge/solutions/`
 
 The main gap is presentation and governance. The repo historically explains itself as an agent collection with supporting skills. The standardized model should be the inverse: **skills are the primary reusable contract; agents, instructions, prompt wrappers, checks, plans, and solution docs support those skills.**
 

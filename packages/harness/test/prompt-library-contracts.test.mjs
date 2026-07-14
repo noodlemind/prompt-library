@@ -231,6 +231,17 @@ test('hooks and CI enforce explicit plans and passed verification evidence', () 
   assert.ok(preEditCommands.includes('node require-plan-gate.mjs'));
   const bashHooks = hooks.hooks.PreToolUse.find((entry) => entry.matcher === 'Bash')?.hooks || [];
   assert.ok(bashHooks.some((hook) => hook.command === 'node require-plan-gate.mjs'));
+  assert.ok(
+    bashHooks.findIndex((hook) => hook.command === 'node block-destructive-commands.mjs') <
+      bashHooks.findIndex((hook) => hook.command === 'node require-plan-gate.mjs'),
+    'destructive-command blocker must run before the plan gate records an edit'
+  );
+  const editHooks = hooks.hooks.PreToolUse.find((entry) => entry.matcher.startsWith('Edit|'))?.hooks || [];
+  assert.ok(
+    editHooks.findIndex((hook) => hook.command === 'node guard-critical-files.mjs') <
+      editHooks.findIndex((hook) => hook.command === 'node require-plan-gate.mjs'),
+    'critical-file guard must run before the plan gate records an edit'
+  );
   const stopCommands = (hooks.hooks.Stop || []).flatMap((entry) => entry.hooks.map((hook) => hook.command));
   assert.ok(stopCommands.includes('node require-verification.mjs'));
 
@@ -243,6 +254,7 @@ test('hooks and CI enforce explicit plans and passed verification evidence', () 
   assert.match(completion, /outcome\s*!==\s*['"]passed['"]/);
   assert.match(completion, /if \(!session\.lastEditAt\) process\.exit\(0\)/);
   assert.match(completion, /lastCompletedEditAt/);
+  assert.match(completion, /validateEvidenceBinding/);
 
   const workflow = read('.github/workflow-templates/harness-plan-verification.yml');
   assert.match(workflow, /validate-plan --plan/);
@@ -253,6 +265,7 @@ test('hooks and CI enforce explicit plans and passed verification evidence', () 
   assert.match(workflow, /exactly one/i);
   assert.match(workflow, /plan_candidates/);
   assert.match(workflow, /\[\[ -f "\$candidate" \]\]/);
+  assert.match(workflow, /steps\.plan\.outcome == 'success'/);
   assert.ok(workflow.includes("^docs/plans/[0-9]{4}-[0-9]{2}-[0-9]{2}[^/]*\\.md$"));
 
   const policy = YAML.parse(read('.github/harness/policy.yaml'));
@@ -320,6 +333,7 @@ test('review fixes preserve thin wrappers, complete skill metadata, and CI pinni
   for (const rel of [
     '.github/skills/engineer/SKILL.md',
     '.github/skills/ensure-plan/SKILL.md',
+    '.github/skills/ensure-capability/SKILL.md',
     '.github/skills/auto-compound/SKILL.md',
   ]) {
     const skill = read(rel);
@@ -370,6 +384,7 @@ test('review fixes preserve thin wrappers, complete skill metadata, and CI pinni
   assert.ok(gateIndex >= 0 && transitionIndex > gateIndex, 'work-on-task must gate before changing plan state');
   assert.match(work, /failed gate[^\n]*no plan edits/i);
   assert.match(work, /Scope: passed\|amended/);
+  assert.match(work, /evidencePath copied from harness verify --json/);
 
   assert.match(read('.github/skills/harness-doctor/SKILL.md'), /H7[^\n]*auto-skill-draft/);
 

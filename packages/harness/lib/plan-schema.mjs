@@ -50,7 +50,8 @@ export function validatePlanSchema(plan) {
   }
 
   for (const field of schema.required_frontmatter) {
-    const pass = hasValue(plan.fm[field]) || (Array.isArray(plan.fm[field]) && plan.fm[field].length === 0);
+    const emptyArrayAllowed = !plan.plan_lock || field === 'capability_gaps';
+    const pass = hasValue(plan.fm[field]) || (emptyArrayAllowed && Array.isArray(plan.fm[field]) && plan.fm[field].length === 0);
     checks.push({ id: `field:${field}`, pass, message: pass ? `${field} present` : `Missing ${field}` });
   }
 
@@ -72,16 +73,19 @@ export function validatePlanSchema(plan) {
 
   const verification = plan.fm.verification;
   const reviews = plan.fm.reviews;
+  const verificationRequired = verification?.required;
+  const verificationShape = Boolean(
+    verification &&
+      Array.isArray(verificationRequired) &&
+      (!plan.plan_lock || verificationRequired.length > 0) &&
+      verification.criteria &&
+      typeof verification.criteria === 'object' &&
+      !Array.isArray(verification.criteria)
+  );
   checks.push({
     id: 'verification-shape',
-    pass: Boolean(
-      verification &&
-        Array.isArray(verification.required) &&
-        verification.criteria &&
-        typeof verification.criteria === 'object' &&
-        !Array.isArray(verification.criteria)
-    ),
-    message: 'verification requires named checks and criterion mappings',
+    pass: verificationShape,
+    message: 'verification requires a non-empty named-check array on locked plans and criterion mappings',
   });
   checks.push({
     id: 'reviews-shape',
@@ -90,10 +94,16 @@ export function validatePlanSchema(plan) {
   });
 
   const criteria = extractAcceptanceCriteria(plan);
+  const uniqueCriteria = new Set(criteria);
   checks.push({
     id: 'criteria-ids',
-    pass: criteria.length > 0,
-    message: criteria.length > 0 ? `${criteria.length} acceptance criteria identified` : 'Acceptance criteria need stable IDs such as **AC1**',
+    pass: criteria.length > 0 && uniqueCriteria.size === criteria.length,
+    message:
+      criteria.length === 0
+        ? 'Acceptance criteria need stable IDs such as **AC1**'
+        : uniqueCriteria.size !== criteria.length
+          ? 'Acceptance criterion IDs must be unique'
+          : `${criteria.length} unique acceptance criteria identified`,
   });
 
   return { pass: checks.every((check) => check.pass), version, checks, criteria };

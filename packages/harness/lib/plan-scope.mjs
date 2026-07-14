@@ -3,7 +3,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 
 function runGit(workspace, args) {
-  return spawnSync('git', args, { cwd: workspace, encoding: 'utf8' });
+  return spawnSync('git', args, { cwd: workspace, encoding: 'utf8', timeout: 30_000 });
 }
 
 function lines(output) {
@@ -36,13 +36,20 @@ export function collectChangedFiles(workspace, base = null) {
   }
 
   const diffArgs = ['diff', '--name-only', '--diff-filter=ACMRDTUXB'];
-  if (base) diffArgs.push(base);
+  if (base && (typeof base !== 'string' || base.startsWith('-') || /[\0\r\n]/.test(base))) {
+    return { files: [], error: 'Base must be a safe git ref' };
+  }
+  if (base) diffArgs.push(base, '--');
   else if (fs.existsSync(path.join(workspace, '.git'))) diffArgs.push('HEAD');
   const diff = runGit(workspace, diffArgs);
-  if (diff.status !== 0) return { files: [], error: diff.stderr.trim() || 'git diff failed' };
+  if (diff.status !== 0) {
+    return { files: [], error: diff.error?.message || String(diff.stderr || '').trim() || 'git diff failed' };
+  }
 
   const untracked = runGit(workspace, ['ls-files', '--others', '--exclude-standard']);
-  if (untracked.status !== 0) return { files: [], error: untracked.stderr.trim() || 'git ls-files failed' };
+  if (untracked.status !== 0) {
+    return { files: [], error: untracked.error?.message || String(untracked.stderr || '').trim() || 'git ls-files failed' };
+  }
 
   const files = [...new Set([...lines(diff.stdout), ...lines(untracked.stdout)])]
     .filter((file) => !file.startsWith('.harness/'))

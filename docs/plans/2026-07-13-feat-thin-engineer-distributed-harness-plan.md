@@ -37,8 +37,8 @@ verification:
     AC17: [harness-tests, prompt-contracts]
     AC18: [prompt-contracts]
 reviews:
-  required: []
-  completed: []
+  required: ["CodeRabbit full-diff review"]
+  completed: ["CodeRabbit full-diff review"]
   critical_open: []
 skills_used:
   - engineer
@@ -213,7 +213,11 @@ Implement the attached Adaptive Engineer plan as the prompt library's runtime an
 - `.github/skills/references/engineer-runtime.md`
 - `.github/skills/references/engineer-session-checklist.md`
 - `.github/skills/references/tool-native-loop.md`
+- `.github/skills/references/autonomy-policy.md`
+- `.github/skills/references/engineer-principles.md`
 - `.github/skills/references/harness-tool-contract.md`
+- `.github/skills/references/human-approval-policy.md`
+- `.github/skills/references/knowledge-locations.md`
 - `.github/skills/references/context-budget.md`
 - `.github/skills/references/capability-preflight.md`
 - `.github/skills/references/capture-gate.md`
@@ -225,6 +229,8 @@ Implement the attached Adaptive Engineer plan as the prompt library's runtime an
 - `.github/prompts/start.prompt.md`
 - `.github/instructions/prompt-library-global.instructions.md`
 - `.github/hooks/hooks.json`
+- `.github/hooks/lib/evidence-binding.mjs`
+- `.github/hooks/lib/policy.mjs`
 - `.github/hooks/require-plan-gate.mjs`
 - `.github/hooks/require-verification.mjs`
 - `.github/harness/checks.yaml`
@@ -265,6 +271,14 @@ Implement the attached Adaptive Engineer plan as the prompt library's runtime an
 - `.github/copilot-instructions.md`
 - `.github/agent-context.md`
 - `docs/architecture/skill-driven-prompt-library.md`
+- `docs/architecture/enterprise-capability-expansion.md`
+- `docs/architecture/lexical-retrieval-v2.md`
+- `docs/architecture/semantic-retrieval-v2.md`
+- `docs/demos/adaptive-engineer-harness-demo.md`
+- `docs/install.md`
+- `docs/onboarding/nexus-registry-setup.md`
+- `enterprise/README.md`
+- `knowledge/README.md`
 
 ## Verification Plan
 
@@ -272,13 +286,13 @@ Implement the attached Adaptive Engineer plan as the prompt library's runtime an
 - `prompt-contracts`: single-loop, token budget, skill/eval, registry, hook, CI, and schema assertions.
 - `host-contracts`: hydration/static compatibility checks for VS Code, CLI, IntelliJ, and portable degraded mode.
 - `build-assets`: rebuild distributable harness assets from the source primitives and hooks.
-- `harness verify --plan docs/plans/2026-07-13-feat-thin-engineer-distributed-harness-plan.md --base HEAD --enforcement enforce --json` for final evidence after all tasks are checked.
+- `harness verify --plan docs/plans/2026-07-13-feat-thin-engineer-distributed-harness-plan.md --base main --workspace . --enforcement enforce --json` for final evidence after all tasks are checked.
 
 ## Verification Evidence
 
 - **Outcome:** passed
 - **Artifact:** `.harness/evidence/2026-07-13-feat-thin-engineer-distributed-harness-plan-ea4eb10ef887.json`
-- **Named checks:** `harness-tests` (75/75), `prompt-contracts` (13/13), `host-contracts` (2/2), and `build-assets` passed.
+- **Named checks:** `harness-tests` (87/87), `prompt-contracts` (13/13), `host-contracts` (2/2), and `build-assets` passed.
 - **Structural checks:** schema/state, all phase tasks, all 18 criterion mappings, changed-file scope, reviews, hard gaps, and critical findings passed.
 
 ## Risk & Review Routing
@@ -350,6 +364,20 @@ Implement the attached Adaptive Engineer plan as the prompt library's runtime an
 - Retained only this non-terminal PR-linked plan; a contract test enforces at most one dated plan and rejects terminal plans in the prompt-library repository.
 - Fixed CI resolution to consider only live dated plan files, excluding deleted paths, `README.md`, and `_plan-template.md`.
 - No open findings; the retained plan remains `review` until PR merge, then it is removed in a plan-only cleanup.
+
+### CodeRabbit pass 7 cleanup
+
+- Re-audited the 13 current, non-outdated review threads and independently reproduced each applicable defect before changing code.
+- Addressed evidence freshness and binding, gate failure propagation, safe plan selection, destructive Git coverage, telemetry integrity and concurrency, schema enforcement, timeout defaults, hook ordering, capability-gap semantics, CI upload safety, and supporting documentation.
+- Added regression coverage for every runtime defect and expanded the complete suite from 75 to 87 tests.
+- **Status:** implementation and deterministic tests pass; the completed full-diff review is recorded below.
+
+### CodeRabbit pass 8
+
+- The fresh full-diff review completed normally with three findings: one major and two minor.
+- Addressed both valid minor findings by normalizing Windows plan paths and making Git subprocess error handling null-safe; added a completion-hook portability regression.
+- Declined the major suggestion to remove `Review` task mode because it contradicts the canonical four-mode definitions in `docs/architecture/engineer-harness.md`, `AGENTS.md`, and `.github/agents/engineer.agent.md`.
+- **Disposition:** all applicable findings resolved; no open critical findings.
 
 ## Agent Journal
 
@@ -466,3 +494,26 @@ Implement the attached Adaptive Engineer plan as the prompt library's runtime an
 - Added failing-first contracts for one non-terminal PR plan and live dated-plan CI resolution; focused contracts then passed 13/13.
 - Full harness suite passed 75/75, built assets succeeded, changed Markdown links resolve, and no active reference names a removed plan.
 - **Status:** review, Phase 9; retain this plan only until PR merge.
+
+### 2026-07-14 12:33 — Merge-readiness cleanup implemented
+
+- Audited every current CodeRabbit thread plus the surrounding runtime paths; confirmed and fixed all 13 applicable defects and the related consistency cleanup.
+- Bound verification evidence to the canonical plan, base, changed-file set, and workspace contents; hardened plan resolution, hook policy parsing, destructive Git detection, telemetry writes, schema validation, CI behavior, and install dependency discovery.
+- Added failing-first regressions for stale or malformed evidence, terminal and escaping plans, omitted timeouts, empty checks, duplicate acceptance IDs, malformed and concurrent telemetry, destructive Git aliases, and completion enforcement.
+- The first enforce-mode verification correctly rejected twelve historical PR paths missing from the retained plan scope; each exact path was added before evidence refresh.
+- **Verification:** complete package suite passed 85/85 before the external review; build, package, syntax, schema, and diff-integrity checks passed.
+- **Status:** review, Phase 9.
+
+### 2026-07-14 12:55 — Fresh review findings resolved
+
+- Completed the fresh CodeRabbit full-diff pass: two valid minor findings fixed and one architecture-conflicting major suggestion declined with canonical references.
+- The independent local review additionally hardened malformed evidence, authoritative completion timestamps, safe Git refs, nested telemetry history, empty locked-plan intent arrays, non-file plan paths, and terminal-plan tie selection.
+- Focused post-review regressions passed; final enforce-mode evidence refresh follows on the exact commit candidate.
+- **Status:** review, Phase 9.
+
+### 2026-07-14 12:58 — Final cleanup verification passed
+
+- Enforce-mode `harness verify` passed 87/87 harness tests, 13/13 prompt contracts, 2/2 host contracts, asset build, all 18 acceptance criteria, exact PR scope, required review, hard-gap, and critical-finding gates.
+- JavaScript syntax, plan schema, diff integrity, hydrated asset build, and npm package dry-run all passed on the final commit candidate.
+- **Evidence:** `.harness/evidence/2026-07-13-feat-thin-engineer-distributed-harness-plan-ea4eb10ef887.json`, bound to `main`, the plan contract, changed-file set, and workspace contents.
+- **Status:** review, Phase 9; ready for cleanup commit and PR update.

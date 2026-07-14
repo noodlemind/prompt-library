@@ -2,6 +2,29 @@ import fs from 'fs';
 import path from 'path';
 import YAML from 'yaml';
 
+const ACTIVE_STATUSES = new Set(['planned', 'in-progress', 'review']);
+
+function isWithin(root, candidate) {
+  const relative = path.relative(root, candidate);
+  return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
+}
+
+function canonicalPlanPath(workspace, normalized) {
+  try {
+    const root = fs.realpathSync(path.resolve(workspace));
+    const plansRoot = fs.realpathSync(path.join(workspace, 'docs', 'plans'));
+    if (!isWithin(root, plansRoot)) return null;
+    const full = fs.realpathSync(path.join(workspace, normalized));
+    return isWithin(plansRoot, full) ? full : null;
+  } catch {
+    return null;
+  }
+}
+
+function isActivePlan(plan) {
+  return Boolean(plan?.plan_lock && ACTIVE_STATUSES.has(plan.status));
+}
+
 export function listPlanRels(workspace) {
   const plansDir = path.join(workspace, 'docs', 'plans');
   if (!fs.existsSync(plansDir)) return [];
@@ -21,8 +44,8 @@ export function parsePlanFrontmatter(text) {
 export function loadPlan(workspace, relPath) {
   const normalized = normalizePlanRel(workspace, relPath);
   if (!normalized) return null;
-  const full = path.join(workspace, normalized);
-  if (!fs.existsSync(full)) return null;
+  const full = canonicalPlanPath(workspace, normalized);
+  if (!full || !fs.statSync(full).isFile()) return null;
   const text = fs.readFileSync(full, 'utf8');
   let fm;
   try {
@@ -76,12 +99,12 @@ export function selectPlan(workspace, { planPath = null, session = null, require
 
   if (session?.activePlan) {
     const plan = loadPlan(workspace, session.activePlan);
-    if (plan) return { plan, error: null };
+    if (isActivePlan(plan)) return { plan, error: null };
   }
 
   const candidates = listPlanRels(workspace)
     .map((rel) => loadPlan(workspace, rel))
-    .filter((plan) => plan && plan.plan_lock && ['planned', 'in-progress', 'review'].includes(plan.status));
+    .filter(isActivePlan);
 
   if (candidates.length === 1) return { plan: candidates[0], error: null };
   if (candidates.length > 1 && requireUnique) {
@@ -110,7 +133,7 @@ function planPriority(p) {
 export function pickActivePlan(workspace, session, planMatches, allPlanRels = []) {
   if (session?.activePlan) {
     const p = loadPlan(workspace, session.activePlan);
-    if (p) return p;
+    if (isActivePlan(p)) return p;
   }
   const candidates = new Set([
     ...(planMatches || []).map((m) => m.path),
@@ -118,7 +141,7 @@ export function pickActivePlan(workspace, session, planMatches, allPlanRels = []
   ]);
   const loaded = [...candidates]
     .map((rel) => loadPlan(workspace, rel))
-    .filter(Boolean)
+    .filter((plan) => plan && plan.status !== 'done')
     .sort((a, b) => planPriority(b) - planPriority(a));
   return loaded[0] || null;
 }

@@ -2,6 +2,7 @@
 /** PreToolUse edit gate: require recent explicit implement gate and planned scope. */
 import fs from 'node:fs';
 import path from 'node:path';
+import { enforcementExitCode, loadHookPolicy } from './lib/policy.mjs';
 
 function readPayload() {
   const raw = fs.readFileSync(0, 'utf8');
@@ -9,29 +10,11 @@ function readPayload() {
   return JSON.parse(raw);
 }
 
-function loadPolicy(workspace) {
-  let text = '';
-  try {
-    text = fs.readFileSync(path.join(workspace, '.github', 'harness', 'policy.yaml'), 'utf8');
-  } catch {
-    // A missing policy uses safe enforcement defaults.
-  }
-  const configured = text.match(/^enforcement:\s*(observe|warn|enforce)\s*$/m)?.[1];
-  const environment = ['observe', 'warn', 'enforce'].includes(process.env.HARNESS_ENFORCEMENT)
-    ? process.env.HARNESS_ENFORCEMENT
-    : null;
-  const ttl = Number(text.match(/^gate_ttl_minutes:\s*(\d+)\s*$/m)?.[1] || 30);
-  return {
-    enforcement: environment || configured || 'enforce',
-    gateTtlMinutes: Number.isFinite(ttl) && ttl > 0 ? ttl : 30,
-  };
-}
-
 let activePolicy = { enforcement: 'enforce', gateTtlMinutes: 30 };
 
 function stop(message) {
   console.error(`[harness hook] ${message}`);
-  process.exit(activePolicy.enforcement === 'enforce' ? 2 : 0);
+  process.exit(enforcementExitCode(activePolicy.enforcement));
 }
 
 function impactedFiles(text) {
@@ -160,7 +143,11 @@ function analyzeShellMutation(command) {
       if (positional.length > 1) targets.push(...positional.slice(1));
     } else if (executable === 'git') {
       const git = parseGitInvocation(args);
-      if (['apply', 'checkout', 'restore', 'rm', 'mv', 'clean'].includes(git.subcommand)) {
+      if (
+        ['apply', 'checkout', 'restore', 'rm', 'mv', 'clean', 'reset', 'stash', 'switch', 'merge', 'rebase', 'cherry-pick', 'revert', 'am', 'pull'].includes(
+          git.subcommand
+        )
+      ) {
         mutates = true;
         const separator = git.args.indexOf('--');
         let gitTargets = separator >= 0 ? git.args.slice(separator + 1) : [];
@@ -210,7 +197,8 @@ try {
   process.exit(2);
 }
 const workspace = path.resolve(payload.workspace || payload.cwd || process.cwd());
-activePolicy = loadPolicy(workspace);
+const policy = loadHookPolicy(workspace, { ttlKey: 'gate_ttl_minutes', ttlDefault: 30 });
+activePolicy = { enforcement: policy.enforcement, gateTtlMinutes: policy.ttl };
 const mutation = mutationTargets(payload);
 if (!mutation.mutates) process.exit(0);
 if (mutation.targets.length === 0) stop('Mutation target could not be resolved for scope validation');
@@ -241,8 +229,17 @@ if (Date.now() - lastGateAt > activePolicy.gateTtlMinutes * 60 * 1000) {
   stop('Implement gate is stale; rerun harness gate --phase implement --plan <path>');
 }
 
-const planPath = path.resolve(workspace, session.gatedPlan);
-if (!planPath.startsWith(path.join(workspace, 'docs', 'plans') + path.sep) || !fs.existsSync(planPath)) {
+const lexicalPlanPath = path.resolve(workspace, session.gatedPlan);
+let planPath = null;
+try {
+  const plansRoot = fs.realpathSync(path.join(workspace, 'docs', 'plans'));
+  const candidate = fs.realpathSync(lexicalPlanPath);
+  const relative = path.relative(plansRoot, candidate);
+  if (!relative.startsWith('..') && !path.isAbsolute(relative)) planPath = candidate;
+} catch {
+  // The fail-closed check below reports the missing or escaping plan.
+}
+if (!planPath) {
   stop('Gated plan is missing or outside docs/plans');
 }
 const allowed = impactedFiles(fs.readFileSync(planPath, 'utf8'));

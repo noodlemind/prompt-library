@@ -6,7 +6,7 @@ import { readSession } from './session.mjs';
 import { selectPlan } from './plan-parse.mjs';
 import { extractAcceptanceCriteria, validatePlanSchema } from './plan-schema.mjs';
 import { validatePlanScope } from './plan-scope.mjs';
-import { writeEvidence } from './evidence.mjs';
+import { createEvidenceBinding, writeEvidence } from './evidence.mjs';
 import { enforcementExitCode, loadPolicy } from './policy.mjs';
 
 const CHECKS_REL = '.github/harness/checks.yaml';
@@ -52,11 +52,12 @@ function runNamedCheck(workspace, name, config) {
   const invalid = validateCommand(name, config);
   if (invalid) return resultCheck(name, 'unavailable', invalid);
 
+  const timeoutSeconds = config.timeout_seconds ?? 600;
   const started = Date.now();
   const execution = spawnSync(config.command[0], config.command.slice(1), {
     cwd: workspace,
     encoding: 'utf8',
-    timeout: config.timeout_seconds * 1000,
+    timeout: timeoutSeconds * 1000,
     shell: false,
     maxBuffer: 1024 * 1024,
   });
@@ -64,7 +65,7 @@ function runNamedCheck(workspace, name, config) {
   const output = { stdout: trimOutput(execution.stdout), stderr: trimOutput(execution.stderr), durationMs };
 
   if (execution.error?.code === 'ETIMEDOUT' || execution.signal) {
-    return resultCheck(name, 'timeout', `Timed out after ${config.timeout_seconds}s`, output);
+    return resultCheck(name, 'timeout', `Timed out after ${timeoutSeconds}s`, output);
   }
   if (execution.error) return resultCheck(name, 'unavailable', execution.error.message, output);
   if (execution.status !== 0) return resultCheck(name, 'failed', `Exited with status ${execution.status}`, { ...output, exitCode: execution.status });
@@ -110,6 +111,7 @@ function finalize(workspace, flags, partial) {
     enforcement: policy.enforcement,
     exemptions: policy.exemptions,
     waivers: policy.waivers,
+    binding: partial.binding || null,
     evidencePath: null,
   };
   result.evidencePath = writeEvidence(workspace, result, flags.dryRun);
@@ -193,6 +195,12 @@ export function runVerify({ workspace, flags }) {
     scopeViolations: scope.violations,
     openHardGaps,
     requiredReviews,
+    binding: createEvidenceBinding({
+      workspace,
+      plan,
+      base: flags.base,
+      changedFiles: scope.changedFiles,
+    }),
   });
 }
 

@@ -119,11 +119,17 @@ Installed to `~/.copilot/bin/harness` on every `harness install`. Add to PATH wi
   "openHardGaps": [],
   "requiredReviews": [],
   "enforcement": "enforce",
+  "binding": {
+    "base": "<git-ref>",
+    "planDigest": "<sha256>",
+    "changedFiles": ["src/example.ts"],
+    "workspaceDigest": "<sha256>"
+  },
   "evidencePath": ".harness/evidence/example-plan.json"
 }
 ```
 
-Allowed outcomes are `passed`, `failed`, and `inconclusive`. Only `passed` permits a delivery completion claim or compound; read-only Answer and Investigate modes do not run delivery verification. Plan frontmatter names checks; executable argv arrays come only from `.github/harness/checks.yaml` and run without a shell. Approved one-off commands run outside harness through explicit host tool approval and are recorded as external evidence.
+Allowed outcomes are `passed`, `failed`, and `inconclusive`. Only fresh `passed` evidence bound to the current plan contract, base ref, changed-file set, and workspace contents permits a delivery completion claim or compound. Plan Activity entries are excluded from the contract digest so the append-only ledger can record the returned evidence path. Read-only Answer and Investigate modes do not run delivery verification. Plan frontmatter names checks; executable argv arrays come only from `.github/harness/checks.yaml` and run without a shell. Approved one-off commands run outside harness through explicit host tool approval and are recorded as external evidence.
 
 **recall**
 ```json

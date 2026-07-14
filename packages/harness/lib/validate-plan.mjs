@@ -42,18 +42,16 @@ export function runValidatePlan({ workspace, flags, planPath = null }) {
 
   addCheck(checks, { id: 'P0', pass: true, message: `Plan: ${plan.path}`, severity: 'ok' });
 
-  if (plan.fm?.plan_schema !== undefined || plan.fm?.__parseError) {
-    const schema = validatePlanSchema(plan);
-    addCheck(checks, {
-      id: 'P-schema',
-      pass: schema.pass,
-      message: schema.pass
-        ? `Plan schema v${schema.version} valid`
-        : schema.checks.filter((check) => !check.pass).map((check) => check.message).join('; '),
-      severity: 'fail',
-    });
-    if (!schema.pass) pass = false;
-  }
+  const schema = validatePlanSchema(plan);
+  addCheck(checks, {
+    id: 'P-schema',
+    pass: schema.pass,
+    message: schema.pass
+      ? `Plan schema v${schema.version} valid`
+      : schema.checks.filter((check) => !check.pass).map((check) => check.message).join('; '),
+    severity: 'fail',
+  });
+  if (!schema.pass) pass = false;
 
   const sectionChecks = [
     { id: 'S1', ok: plan.sections.overview, label: '## Overview' },

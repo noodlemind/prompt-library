@@ -4,7 +4,8 @@ import { readSession } from './session.mjs';
 import { loadPlan, pickActivePlan, listPlanRels, parsePlanFrontmatter } from './plan-parse.mjs';
 import { findMatchingPlans } from './recall-rank.mjs';
 import { intentContractHasContent } from './plan-goal.mjs';
-import { readEvidence } from './evidence.mjs';
+import { readEvidence, validateEvidence } from './evidence.mjs';
+import { loadPolicy } from './policy.mjs';
 
 export function runGate({ workspace, flags, query = '' }) {
   const session = readSession(workspace);
@@ -115,7 +116,18 @@ export function runGate({ workspace, flags, query = '' }) {
       pass = false;
     }
 
-    if (phase === 'implement' || phase === 'default') {
+    if (phase === 'implement') {
+      if (!['planned', 'in-progress', 'review'].includes(plan.status)) {
+        checks.push({
+          id: 'C2',
+          pass: false,
+          message: `Plan status is not implementable: ${plan.status}`,
+          severity: 'fail',
+        });
+        pass = false;
+      } else {
+        checks.push({ id: 'C2', pass: true, message: `Implementable status: ${plan.status}`, severity: 'ok' });
+      }
       if (!plan.plan_lock) {
         checks.push({
           id: 'C3',
@@ -131,18 +143,22 @@ export function runGate({ workspace, flags, query = '' }) {
 
     if (phase === 'verify') {
       const evidence = readEvidence(workspace, plan.path);
-      if (evidence?.outcome !== 'passed') {
+      const freshness = validateEvidence({
+        workspace,
+        plan,
+        evidence,
+        maxAgeHours: loadPolicy(workspace, flags.enforcement).evidenceTtlHours,
+      });
+      if (!freshness.pass) {
+        pass = false;
         checks.push({
           id: 'V1',
           pass: false,
-          message: evidence
-            ? `Latest harness verify outcome is ${evidence.outcome}`
-            : 'No harness verify evidence artifact for this plan',
-          severity: 'warn',
+          message: freshness.message,
+          severity: 'fail',
         });
-        exitCode = Math.max(exitCode, 2);
       } else {
-        checks.push({ id: 'V1', pass: true, message: `Passed verification evidence: ${evidence.evidencePath}`, severity: 'ok' });
+        checks.push({ id: 'V1', pass: true, message: freshness.message, severity: 'ok' });
       }
     }
   }

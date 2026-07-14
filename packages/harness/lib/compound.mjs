@@ -2,8 +2,9 @@ import fs from 'fs';
 import path from 'path';
 import { runIndexKnowledge } from './index-knowledge.mjs';
 import { readSession, writeSession } from './session.mjs';
-import { readEvidence } from './evidence.mjs';
+import { readEvidence, validateEvidence } from './evidence.mjs';
 import { selectPlan } from './plan-parse.mjs';
+import { loadPolicy } from './policy.mjs';
 import { recordSkillUsage } from './telemetry.mjs';
 
 export function runCompound({ workspace, copilotHome, flags, log = () => {} }) {
@@ -22,16 +23,20 @@ export function runCompound({ workspace, copilotHome, flags, log = () => {} }) {
   }
 
   const evidence = readEvidence(workspace, selected.plan.path);
-  if (evidence?.outcome !== 'passed') {
+  const freshness = validateEvidence({
+    workspace,
+    plan: selected.plan,
+    evidence,
+    maxAgeHours: loadPolicy(workspace, flags.enforcement).evidenceTtlHours,
+  });
+  if (!freshness.pass) {
     return {
       pass: false,
       exitCode: evidence?.outcome === 'failed' ? 1 : 2,
       plan: selected.plan.path,
       verificationEvidence: evidence,
       indexed: null,
-      blockedReason: evidence
-        ? `Cannot compound verification outcome ${evidence.outcome}`
-        : 'No harness verify evidence artifact for this plan',
+      blockedReason: freshness.message,
       nextTools: [`harness verify --plan ${selected.plan.path}`, '/auto-compound'],
     };
   }

@@ -5,7 +5,6 @@ import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 const COPY_DIRS = ['bin', 'lib', 'config'];
 const COPY_FILES = ['package.json', 'retired.json'];
-const RUNTIME_DEPENDENCIES = ['yaml'];
 
 /**
  * Copy harness CLI into ~/.copilot/.harness-bin so agents can run without npx.
@@ -37,7 +36,8 @@ export function installHarnessBin(pkgRoot, copilotHome, flags, log) {
     copyFile(src, dest, rel, flags, log, stats);
   }
 
-  for (const dependency of RUNTIME_DEPENDENCIES) {
+  const manifest = JSON.parse(fs.readFileSync(path.join(pkgRoot, 'package.json'), 'utf8'));
+  for (const dependency of Object.keys(manifest.dependencies || {})) {
     const src = resolveDependencyRoot(dependency);
     const dest = path.join(destRoot, 'node_modules', dependency);
     copyDirRecursive(src, dest, destRoot, flags, log, stats);
