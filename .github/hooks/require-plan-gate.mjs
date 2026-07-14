@@ -76,6 +76,49 @@ function withoutRedirections(args) {
   return result;
 }
 
+function parseGitInvocation(args) {
+  const valueOptions = new Set([
+    '-C',
+    '-c',
+    '--exec-path',
+    '--git-dir',
+    '--work-tree',
+    '--namespace',
+    '--super-prefix',
+    '--config-env',
+  ]);
+  let cwd = '';
+  let index = 0;
+  while (index < args.length) {
+    const arg = args[index];
+    if (arg === '-C') {
+      const value = args[index + 1];
+      if (!value) return { subcommand: null, args: [], cwd };
+      cwd = path.isAbsolute(value) ? value : path.join(cwd, value);
+      index += 2;
+      continue;
+    }
+    if (valueOptions.has(arg)) {
+      index += 2;
+      continue;
+    }
+    if (/^--(?:exec-path|git-dir|work-tree|namespace|super-prefix|config-env)=/.test(arg)) {
+      index += 1;
+      continue;
+    }
+    if (arg.startsWith('-')) {
+      index += 1;
+      continue;
+    }
+    return { subcommand: arg, args: args.slice(index + 1), cwd };
+  }
+  return { subcommand: null, args: [], cwd };
+}
+
+function withGitCwd(cwd, targets) {
+  return targets.map((target) => (path.isAbsolute(target) || !cwd ? target : path.join(cwd, target)));
+}
+
 function analyzeShellMutation(command) {
   const targets = [];
   let mutates = false;
@@ -97,22 +140,35 @@ function analyzeShellMutation(command) {
     if (['touch', 'mkdir', 'rm', 'rmdir', 'unlink', 'truncate'].includes(executable)) {
       mutates = true;
       targets.push(...positional);
-    } else if (['cp', 'mv', 'ln', 'install'].includes(executable)) {
+    } else if (['cp', 'install'].includes(executable)) {
       mutates = true;
       if (positional.length) targets.push(positional.at(-1));
+    } else if (['mv', 'ln'].includes(executable)) {
+      mutates = true;
+      targets.push(...positional);
     } else if (executable === 'tee') {
       const teeTargets = args.filter((arg) => !arg.startsWith('-') && !arg.startsWith('/dev/'));
       if (teeTargets.length) {
         mutates = true;
         targets.push(...teeTargets);
       }
-    } else if (['sed', 'perl'].includes(executable) && args.some((arg) => /^-(?:[^-]*i|p?i)/.test(arg))) {
+    } else if (
+      ['sed', 'perl'].includes(executable) &&
+      args.some((arg) => /^-[^-]*i/.test(arg) || (executable === 'sed' && /^--in-place(?:=|$)/.test(arg)))
+    ) {
       mutates = true;
       if (positional.length > 1) targets.push(...positional.slice(1));
-    } else if (executable === 'git' && ['apply', 'checkout', 'restore', 'rm', 'mv', 'clean'].includes(positional[0])) {
-      mutates = true;
-      const separator = args.indexOf('--');
-      if (separator >= 0) targets.push(...args.slice(separator + 1));
+    } else if (executable === 'git') {
+      const git = parseGitInvocation(args);
+      if (['apply', 'checkout', 'restore', 'rm', 'mv', 'clean'].includes(git.subcommand)) {
+        mutates = true;
+        const separator = git.args.indexOf('--');
+        let gitTargets = separator >= 0 ? git.args.slice(separator + 1) : [];
+        if (separator < 0 && ['restore', 'rm', 'mv', 'clean'].includes(git.subcommand)) {
+          gitTargets = git.args.filter((arg) => !arg.startsWith('-'));
+        }
+        targets.push(...withGitCwd(git.cwd, gitTargets));
+      }
     }
   }
 

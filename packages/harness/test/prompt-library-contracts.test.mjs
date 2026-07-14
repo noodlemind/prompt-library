@@ -293,6 +293,35 @@ test('review fixes preserve thin wrappers, complete skill metadata, and CI pinni
   const coordinator = read('.github/agents/plan-coordinator.agent.md');
   assert.match(coordinator, /Required sections:[\s\S]*## Implementation Notes/i);
   assert.match(coordinator, /## Implementation Notes\n\[/i);
+  assert.match(coordinator, /type: feat\|fix\|docs\|refactor\|chore/);
+  for (const section of ['Memory Cards', 'Review Findings']) {
+    assert.match(coordinator, new RegExp(`Required sections:[\\s\\S]*## ${section}`, 'i'));
+    assert.match(coordinator, new RegExp(`## ${section}\\n\\[`, 'i'));
+  }
+  assert.match(coordinator, /harness verify[^\n]*evidencePath/i);
+  assert.match(coordinator, /Verification Evidence[^\n]*does not populate the plan section/i);
+
+  const ensurePlan = read('.github/skills/ensure-plan/SKILL.md');
+  const ensureCapture = ensurePlan.match(/### 2\. Capture[\s\S]*?(?=### 3\.)/)?.[0] || '';
+  for (const section of [
+    'Memory Cards',
+    'Technical Notes',
+    'Plan',
+    'Research Notes',
+    'Impacted Files',
+    'Verification Plan',
+    'Risk & Review Routing',
+    'Implementation Notes',
+    'Review Findings',
+  ]) {
+    assert.match(ensureCapture, new RegExp(`## ${section}`), `ensure-plan missing ${section}`);
+  }
+
+  const work = read('.github/skills/work-on-task/SKILL.md');
+  const gateIndex = work.indexOf('harness gate --phase implement');
+  const transitionIndex = work.indexOf('set `planned` to `in-progress`');
+  assert.ok(gateIndex >= 0 && transitionIndex > gateIndex, 'work-on-task must gate before changing plan state');
+  assert.match(work, /failed gate[^\n]*no plan edits/i);
 
   assert.match(read('.github/skills/references/harness-tool-contract.md'), /verify --plan <path> \[--base ref\] \[--enforcement mode\]/);
   assert.match(read('.github/skills/references/engineer-starter-kit.md'), /docs\/architecture\/skill-driven-prompt-library\.md/);

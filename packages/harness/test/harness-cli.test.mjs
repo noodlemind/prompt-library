@@ -1492,6 +1492,17 @@ test('Bash file mutations require planned scope and create pending verification 
   assert.equal(hiddenOutside.status, 2);
   assert.match(hiddenOutside.stderr, /src\/outside\.js/);
 
+  for (const command of [
+    'mv src/outside.js src/example.js',
+    'ln src/outside.js src/example.js',
+    'git -C . checkout -- src/outside.js',
+    'sed --in-place s/old/new/ src/outside.js',
+  ]) {
+    const scoped = runHook('require-plan-gate.mjs', workspace, { command });
+    assert.equal(scoped.status, 2, `${command}: ${scoped.stderr}`);
+    assert.match(scoped.stderr, /src\/outside\.js/);
+  }
+
   const allowed = runHook('require-plan-gate.mjs', workspace, { command: 'printf changed > src/example.js' });
   assert.equal(allowed.status, 0, allowed.stderr);
   const pending = runHook('require-verification.mjs', workspace);

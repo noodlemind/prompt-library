@@ -49,7 +49,10 @@ Follow **`/capture-issue`** exactly:
 
 - Path: `docs/plans/YYYY-MM-DD-<type>-<slug>-plan.md`
 - Frontmatter: `plan_schema: 1`, `status: open`, `plan_lock: false`, `phase: 0`, `risk`, `intent` when known, `expected_outputs: []`, `success_criteria: []`, `verification`, `reviews`, `skills_used`, `org_objectives: []`, `domains`, `specialists`, and encountered `capability_gaps`
-- Body minimum: `## Overview`, `## Context`, `## Intent Contract` (goal stub from user message), `## Acceptance Criteria`, `## Activity`
+- Body minimum (create every heading; use pending markers for planning-owned content):
+  - `## Overview`, `## Context`, `## Intent Contract` (goal stub from user message), `## Memory Cards`
+  - `## Acceptance Criteria`, `## Technical Notes`, `## Plan`, `## Research Notes`, `## Impacted Files`
+  - `## Verification Plan`, `## Risk & Review Routing`, `## Implementation Notes`, `## Review Findings`, `## Activity`
 - Append Activity: `YYYY-MM-DD — ensure-plan: captured (autonomous)`
 
 Do **not** set `plan_lock: true` in this step.

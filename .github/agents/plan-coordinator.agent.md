@@ -71,7 +71,7 @@ Write the plan to `docs/plans/YYYY-MM-DD-<type>-<descriptive-name>-plan.md` with
 ---
 plan_schema: 1
 title: "<type>: <descriptive title>"
-type: feat|fix|refactor
+type: feat|fix|docs|refactor|chore
 status: planned
 plan_lock: true
 phase: 1
@@ -103,14 +103,16 @@ updated: YYYY-MM-DD
 - `## Overview` — problem statement / feature description
 - `## Context` — task-scoped facts, constraints, user intent, relevant code paths, and assumptions
 - `## Intent Contract` — goal, expected outputs, success criteria, trusted named checks, and known org objective
+- `## Memory Cards` — bounded `/recall` findings with source paths, or an explicit no-match marker
 - Implementation phases with tasks
 - `## Acceptance Criteria`
 - `## Impacted Files` — allowlist of files expected to change
 - `## Research Notes` — all findings from research agents, file paths discovered, patterns to follow, anti-patterns to avoid
 - `## Verification Plan` — concrete checks that prove the work
-- `## Verification Evidence` — empty until `harness verify` writes an artifact
+- `## Verification Evidence` — reserve this heading; `harness verify` returns `evidencePath` and records evidence, session, and events, but does not populate the plan section; `/work-on-task` updates it explicitly when plan-local evidence is desired
 - `## Risk & Review Routing` — specialist review needs by risk area
 - `## Implementation Notes` — initialized for `/work-on-task` decisions and deviations
+- `## Review Findings` — initialized for `/code-review` handoff findings
 - `## Activity` — initialized as append-only log
 
 ### 6. Persist Research Context
@@ -131,7 +133,7 @@ Include in Research Notes:
 ---
 plan_schema: 1
 title: "<type>: <title>"
-type: feat|fix|refactor
+type: feat|fix|docs|refactor|chore
 status: planned
 plan_lock: true
 phase: 1
@@ -169,6 +171,9 @@ updated: YYYY-MM-DD
 ## Intent Contract
 [Goal, expected outputs, success criteria, trusted named checks, org objective if known]
 
+## Memory Cards
+[Bounded `/recall` findings with source paths, or no relevant cards found]
+
 ## Implementation Phases
 
 ### Phase 1: [Name]
@@ -193,7 +198,7 @@ updated: YYYY-MM-DD
 - Manual check: [what to inspect]
 
 ## Verification Evidence
-[Filled by `harness verify`; only `passed` permits completion]
+[Updated explicitly by `/work-on-task` from the verifier's returned `evidencePath`; only `passed` permits completion]
 
 ## Risk & Review Routing
 - Security: [required/not applicable and why]
@@ -203,6 +208,9 @@ updated: YYYY-MM-DD
 
 ## Implementation Notes
 [Filled by `/work-on-task` with decisions, deviations, and follow-up context]
+
+## Review Findings
+[Filled by `/code-review` with findings and dispositions]
 
 ## Activity
 ### YYYY-MM-DD HH:MM — Plan created

@@ -14,14 +14,16 @@ This skill owns locked-plan execution and resumption only. Input is one explicit
 ## Entry gate
 
 1. Read the explicit plan and its `## Intent Contract`, Memory Cards, current phase, last two Activity entries, Impacted Files, Verification Plan, and Risk & Review Routing.
-2. Require `plan_lock: true` and `status: planned|in-progress`. Set `planned` to `in-progress`.
+2. Require `plan_lock: true` and `status: planned|in-progress`.
 3. Run:
 
 ```bash
 harness gate --phase implement --plan <path> --workspace . --json
 ```
 
-Do not edit when the gate fails. A missing or unlocked plan routes to `/ensure-plan`; `review` or `done` routes out of this skill.
+4. Only after the gate passes, set `planned` to `in-progress`; leave an already `in-progress` plan unchanged.
+
+A failed gate makes no plan edits. A missing or unlocked plan routes to `/ensure-plan`; `review` or `done` routes out of this skill.
 
 ## Phase execution
 
