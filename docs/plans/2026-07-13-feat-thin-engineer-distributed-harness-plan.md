@@ -312,6 +312,13 @@ Implement the attached Adaptive Engineer plan as the prompt library's runtime an
 - Declined one contradictory suggestion to expand `.github/prompts/engineer.prompt.md`; pass 1 required this wrapper to remain thin, and host fallbacks already live in `.github/copilot-instructions.md`.
 - **Status:** review fixes in progress; final evidence refresh required before returning to `done`.
 
+### CodeRabbit pass 4
+
+- The review session timed out after reporting five minor findings and no critical or major findings.
+- Four valid consistency findings are being addressed in the work Activity template, doctor inventory, policy documentation, and architecture plan contract.
+- Declined the generated-asset cleanliness suggestion: `packages/harness/assets/` is intentionally ignored and rebuilt during tests, `prepare`, `prepack`, and `prepublishOnly`, so there is no checked-in generated state that can become stale.
+- **Status:** minor review cleanup in progress; follow-up review required because the pass ended by timeout.
+
 ## Agent Journal
 
 ### 2026-07-13 21:00 — Dedicated plan established
@@ -394,3 +401,10 @@ Implement the attached Adaptive Engineer plan as the prompt library's runtime an
 - **Verification:** enforce-mode `harness verify` passed with 73/73 harness tests, 11/11 prompt contracts, 2/2 host contracts, all 17 acceptance criteria, and clean scope/review/gap checks.
 - **Evidence:** `.harness/evidence/2026-07-13-feat-thin-engineer-distributed-harness-plan-ea4eb10ef887.json`.
 - **Status:** review, Phase 8; follow-up CodeRabbit pass required before terminal `done`.
+
+### 2026-07-14 05:20 — Fourth-pass minor cleanup verified
+
+- The fourth CodeRabbit pass timed out after five minor findings and no critical or major findings.
+- Addressed the four valid consistency comments; retained generated assets as intentionally ignored build output and documented that disposition.
+- **Verification:** enforce-mode `harness verify` passed with all named checks, all 17 acceptance criteria, clean scope, and no open review/gap/critical state.
+- **Status:** review, Phase 8; rerun required because the external review ended by timeout.

@@ -18,7 +18,7 @@ Read-only diagnostics. **No** product code edits.
 | H4 | Capture gate ref | `capture-gate.md` present in hydrated skills |
 | H5 | Product plans dir | `docs/plans/` exists (create if missing — report only) |
 | H6 | Enterprise overlay | `~/.copilot/enterprise/capability-registry.enterprise.yaml` OR repo `enterprise/` (optional) |
-| H7 | Internal support skills | `ensure-plan`, `auto-compound`, `ensure-capability` in hydrated skills |
+| H7 | Internal support skills | `ensure-plan`, `auto-compound`, `ensure-capability`, `auto-skill-draft` in hydrated skills |
 | H8 | Trusted checks | `.github/harness/checks.yaml` exists in governed repositories |
 | H9 | Verification policy | `.github/harness/policy.yaml` declares `enforcement: observe`, `warn`, or `enforce`; a missing file safely defaults to `enforce`, while an invalid file or value is a FAIL |
 | H12 | Harness CLI resolvable | `harness resolve` finds a binary |

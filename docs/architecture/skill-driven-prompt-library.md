@@ -104,6 +104,18 @@ Use a specialist agent as primary only when the task is predominantly that speci
 
 This repo does not need a separate runtime context-pack format to get most of the value. The plan file is the portable context pack. Standard plans should include:
 
+```yaml
+plan_schema: 1
+verification:
+  required: [trusted-check-id]
+  criteria:
+    AC1: [trusted-check-id]
+reviews:
+  required: []
+  completed: []
+  critical_open: []
+```
+
 - `## Context` — problem facts, constraints, user intent, and related artifacts
 - `## Acceptance Criteria` — measurable outcomes
 - `## Research Notes` — local patterns, prior solution docs, external references, and open questions

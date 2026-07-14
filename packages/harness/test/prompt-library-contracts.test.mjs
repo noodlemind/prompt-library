@@ -322,6 +322,18 @@ test('review fixes preserve thin wrappers, complete skill metadata, and CI pinni
   const transitionIndex = work.indexOf('set `planned` to `in-progress`');
   assert.ok(gateIndex >= 0 && transitionIndex > gateIndex, 'work-on-task must gate before changing plan state');
   assert.match(work, /failed gate[^\n]*no plan edits/i);
+  assert.match(work, /Scope: passed\|amended/);
+
+  assert.match(read('.github/skills/harness-doctor/SKILL.md'), /H7[^\n]*auto-skill-draft/);
+
+  const enforcementDoc = read('docs/architecture/harness-enforcement.md');
+  assert.doesNotMatch(enforcementDoc, /Each entry must include/);
+  assert.match(enforcementDoc, /exemptions.*waivers.*arrays/is);
+
+  const standard = read('docs/architecture/skill-driven-prompt-library.md');
+  assert.match(standard, /plan_schema:\s*1/);
+  assert.match(standard, /verification:\s*\n\s+required:[\s\S]*criteria:/);
+  assert.match(standard, /reviews:\s*\n\s+required:[\s\S]*completed:[\s\S]*critical_open:/);
 
   assert.match(read('.github/skills/references/harness-tool-contract.md'), /verify --plan <path> \[--base ref\] \[--enforcement mode\]/);
   assert.match(read('.github/skills/references/engineer-starter-kit.md'), /docs\/architecture\/skill-driven-prompt-library\.md/);

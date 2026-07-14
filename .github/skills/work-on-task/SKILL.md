@@ -59,7 +59,7 @@ Append only:
 ```markdown
 ### YYYY-MM-DD HH:MM — Phase N verification
 - Tasks: N/N checked
-- Scope: passed
+- Scope: passed|amended
 - Verification: passed|failed|inconclusive — `.harness/evidence/<plan>.json`
 - Decisions: <implementation notes or none>
 - Next: <next phase, remediation, or review>

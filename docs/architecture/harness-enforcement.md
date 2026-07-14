@@ -48,7 +48,7 @@ Hosts without hooks still use explicit harness commands and required CI.
 
 `policy.yaml` keeps separate arrays:
 
-- `exemptions`: narrow repository policy exclusions such as docs-only changes. Each entry must include `id`, `paths`, `reason`, `owner`, and optional `expires`.
-- `waivers`: explicit human decisions for a named plan criterion or safety-critical gap. Each entry must include `id`, `plan`, `criterion`, `approved_by`, `approved_at`, `reason`, and `expires`.
+- `exemptions`: repository policy exclusions reserved for governance integrations.
+- `waivers`: explicit human decisions reserved for governance integrations.
 
-Exemptions affect whether the governance workflow applies; they do not fabricate passed evidence. Waivers scope a known restriction and remain visible in evidence. Expired, missing-owner, or ambiguous entries are invalid. Product-code CI should normally use no exemptions and no waivers.
+The current schema and runtime validate only the top-level `version`, `enforcement`, TTL settings, and that `exemptions`/`waivers` are arrays; the CLI carries both arrays into evidence but does not interpret or enforce per-entry fields. Product-code CI should normally use empty arrays until a separate validator and enforcement contract are implemented.
