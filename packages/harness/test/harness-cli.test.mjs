@@ -162,10 +162,15 @@ test('gate rejects malformed policy files and invalid enforcement overrides', ()
   assert.equal(malformed.status, 1);
   assert.match(malformed.stderr, /Invalid harness policy/i);
 
+  fs.writeFileSync(path.join(configDir, 'policy.yaml'), 'enforcement: enforce\n', 'utf8');
+  const missingVersion = runHarness(['gate', '--workspace', workspace, '--json']);
+  assert.equal(missingVersion.status, 1);
+  assert.match(missingVersion.stderr, /expected version 1/i);
+
   fs.writeFileSync(path.join(configDir, 'policy.yaml'), 'version: 1\nenforcement: enforce\n', 'utf8');
-  const invalidOverride = runHarness(['gate', '--enforcement', 'sometimes', '--workspace', workspace, '--json']);
+  const invalidOverride = runHarness(['gate', '--enforcement=warn=typo', '--workspace', workspace, '--json']);
   assert.equal(invalidOverride.status, 1);
-  assert.match(invalidOverride.stderr, /Invalid enforcement mode/i);
+  assert.match(invalidOverride.stderr, /Invalid enforcement mode: warn=typo/i);
 });
 
 test('gate scan skips malformed plan frontmatter and continues to a locked plan', () => {
@@ -1285,7 +1290,8 @@ test('harness verify is inconclusive when plan selection is ambiguous', () => {
 test('harness verify never executes commands authored in a plan', () => {
   const workspace = tempDir('harness-workspace-');
   const marker = path.join(workspace, 'plan-command-ran');
-  const malicious = `${process.execPath} -e "require('fs').writeFileSync('${marker}', 'bad')"`;
+  const markerBase64 = Buffer.from(marker).toString('base64');
+  const malicious = `${process.execPath} -e "require('fs').writeFileSync(Buffer.from('${markerBase64}', 'base64'), 'bad')"`;
   const plan = writeVersionedPlan(workspace, {
     extraFrontmatter: `verification_commands:\n  - ${JSON.stringify(malicious)}\n`,
   });
@@ -1462,6 +1468,35 @@ test('pre-edit hook requires an explicit passed gate and planned scope', () => {
   const invalidTimestamp = runHook('require-plan-gate.mjs', workspace, { file_path: 'src/example.js' });
   assert.equal(invalidTimestamp.status, 2);
   assert.match(invalidTimestamp.stderr, /timestamp/i);
+});
+
+test('Bash file mutations require planned scope and create pending verification state', () => {
+  const workspace = tempDir('harness-workspace-');
+  const plan = writeVersionedPlan(workspace);
+
+  const readOnly = runHook('require-plan-gate.mjs', workspace, { command: 'rg -n TODO src' });
+  assert.equal(readOnly.status, 0, readOnly.stderr);
+
+  const blocked = runHook('require-plan-gate.mjs', workspace, { command: 'printf changed > src/example.js' });
+  assert.equal(blocked.status, 2);
+  assert.match(blocked.stderr, /no harness session/i);
+
+  assert.equal(runHarness(['gate', '--phase', 'implement', '--plan', plan, '--workspace', workspace, '--json']).status, 0);
+  const outside = runHook('require-plan-gate.mjs', workspace, { command: 'printf changed > src/outside.js' });
+  assert.equal(outside.status, 2);
+  assert.match(outside.stderr, /outside the plan/i);
+
+  const hiddenOutside = runHook('require-plan-gate.mjs', workspace, {
+    command: 'cp src/example.js src/outside.js > src/example.js',
+  });
+  assert.equal(hiddenOutside.status, 2);
+  assert.match(hiddenOutside.stderr, /src\/outside\.js/);
+
+  const allowed = runHook('require-plan-gate.mjs', workspace, { command: 'printf changed > src/example.js' });
+  assert.equal(allowed.status, 0, allowed.stderr);
+  const pending = runHook('require-verification.mjs', workspace);
+  assert.equal(pending.status, 2);
+  assert.match(pending.stderr, /verify has not run/i);
 });
 
 test('completion hook bypasses read-only work and enforces each new recorded edit', () => {

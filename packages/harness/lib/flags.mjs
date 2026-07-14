@@ -83,7 +83,7 @@ export function parseFlags(argv) {
     else if (a === '--plan') flags.plan = argv[++i];
     else if (a.startsWith('--base=')) flags.base = a.split('=').slice(1).join('=');
     else if (a === '--base') flags.base = argv[++i];
-    else if (a.startsWith('--enforcement=')) flags.enforcement = a.split('=')[1];
+    else if (a.startsWith('--enforcement=')) flags.enforcement = a.split('=').slice(1).join('=');
     else if (a === '--enforcement') flags.enforcement = argv[++i];
     else if (a.startsWith('--workspace=')) flags.workspace = a.split('=')[1];
     else if (a === '--workspace') flags.workspace = argv[++i];

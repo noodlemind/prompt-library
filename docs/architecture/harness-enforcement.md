@@ -34,7 +34,7 @@ The workflow template treats the single changed `docs/plans/*.md` file as the li
 
 Where the host supports lifecycle hooks:
 
-- `require-plan-gate.mjs` runs before edits, requires a recent passed explicit implement gate, validates the target against Impacted Files, applies `gate_ttl_minutes`, and records edit time.
+- `require-plan-gate.mjs` runs before host-native edits and detected Bash file mutations, requires a recent passed explicit implement gate, validates every resolved target against Impacted Files, applies `gate_ttl_minutes`, and records edit time.
 - `guard-critical-files.mjs` and `block-destructive-commands.mjs` retain sensitive-path and destructive-command protection.
 - `require-verification.mjs` runs before completion. It exits immediately when no supported edit was recorded, requires same-plan passed evidence produced after each new recorded edit and within `evidence_ttl_hours`, then marks that edit complete so later read-only turns are not blocked by stale delivery state.
 

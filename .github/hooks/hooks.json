@@ -16,7 +16,7 @@
     ],
     "PreToolUse": [
       {
-        "matcher": "Edit|Write|MultiEdit",
+        "matcher": "Edit|Write|MultiEdit|edit|editFiles|apply_patch|create_file|replace_string_in_file",
         "hooks": [
           {
             "type": "command",
@@ -33,6 +33,11 @@
       {
         "matcher": "Bash",
         "hooks": [
+          {
+            "type": "command",
+            "command": "node require-plan-gate.mjs",
+            "timeout": 5
+          },
           {
             "type": "command",
             "command": "node block-destructive-commands.mjs",

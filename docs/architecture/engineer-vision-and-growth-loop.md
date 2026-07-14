@@ -154,7 +154,7 @@ Hermes-style **skill extraction** maps to: repeated successful use of a workflow
 
 | Theme | Fit | Change |
 |-------|-----|--------|
-| Bounded multi-agent teams | Strong | Delegation guidance now defaults to 3-5 active agents per workstream. |
+| Bounded multi-agent teams | Strong | Coordinators dispatch parallel batches of 3-4 agents; broader workstreams may sequence additional batches. |
 | Spec-driven intent | Strong / partial | Plan template now has machine-readable intent, outputs, success criteria, trusted named checks, and organizational objectives. |
 | Agent journaling | Partial | Plan template now includes `## Agent Journal` for uncertainty, blocked states, escalations, and strategy changes. |
 | Structured monitoring | Partial | CLI JSON, session files, and `.harness/events.jsonl` now capture structural outcomes. |

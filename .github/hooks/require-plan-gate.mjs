@@ -51,6 +51,101 @@ function inScope(file, entries) {
   });
 }
 
+function cleanShellToken(value) {
+  const token = String(value || '').trim();
+  if ((token.startsWith('"') && token.endsWith('"')) || (token.startsWith("'") && token.endsWith("'"))) {
+    return token.slice(1, -1);
+  }
+  return token;
+}
+
+function tokenizeShell(segment) {
+  return [...segment.matchAll(/"(?:\\.|[^"\\])*"|'[^']*'|[^\s]+/g)].map((match) => cleanShellToken(match[0]));
+}
+
+function withoutRedirections(args) {
+  const result = [];
+  for (let i = 0; i < args.length; i++) {
+    if (/^(?:\d*>>?|&>)$/.test(args[i])) {
+      i += 1;
+      continue;
+    }
+    if (/^(?:\d*>>?|&>).+/.test(args[i])) continue;
+    result.push(args[i]);
+  }
+  return result;
+}
+
+function analyzeShellMutation(command) {
+  const targets = [];
+  let mutates = false;
+  const redirection = /(?:^|[\s;&|])(?:\d*>>?|&>)\s*("(?:\\.|[^"\\])*"|'[^']*'|[^\s;&|]+)/g;
+  for (const match of command.matchAll(redirection)) {
+    const target = cleanShellToken(match[1]);
+    if (target.startsWith('&') || /^\/dev\/(?:null|stdout|stderr)$/.test(target)) continue;
+    mutates = true;
+    targets.push(target);
+  }
+
+  for (const segment of command.split(/(?:&&|\|\||[;|\n])/)) {
+    const tokens = tokenizeShell(segment);
+    while (tokens[0]?.includes('=') && !tokens[0].startsWith('=')) tokens.shift();
+    const executable = path.basename(tokens[0] || '');
+    const args = withoutRedirections(tokens.slice(1));
+    const positional = args.filter((arg) => !arg.startsWith('-'));
+
+    if (['touch', 'mkdir', 'rm', 'rmdir', 'unlink', 'truncate'].includes(executable)) {
+      mutates = true;
+      targets.push(...positional);
+    } else if (['cp', 'mv', 'ln', 'install'].includes(executable)) {
+      mutates = true;
+      if (positional.length) targets.push(positional.at(-1));
+    } else if (executable === 'tee') {
+      const teeTargets = args.filter((arg) => !arg.startsWith('-') && !arg.startsWith('/dev/'));
+      if (teeTargets.length) {
+        mutates = true;
+        targets.push(...teeTargets);
+      }
+    } else if (['sed', 'perl'].includes(executable) && args.some((arg) => /^-(?:[^-]*i|p?i)/.test(arg))) {
+      mutates = true;
+      if (positional.length > 1) targets.push(...positional.slice(1));
+    } else if (executable === 'git' && ['apply', 'checkout', 'restore', 'rm', 'mv', 'clean'].includes(positional[0])) {
+      mutates = true;
+      const separator = args.indexOf('--');
+      if (separator >= 0) targets.push(...args.slice(separator + 1));
+    }
+  }
+
+  return { mutates, targets };
+}
+
+function mutationTargets(payload) {
+  const input = payload.tool_input || {};
+  const targets = [];
+  for (const candidate of [payload.file_path, payload.path, input.file_path, input.path]) {
+    if (typeof candidate === 'string' && candidate.trim()) targets.push(candidate.trim());
+  }
+  for (const collection of [input.files, input.edits]) {
+    if (!Array.isArray(collection)) continue;
+    for (const item of collection) {
+      const candidate = typeof item === 'string' ? item : item?.file_path || item?.path;
+      if (typeof candidate === 'string' && candidate.trim()) targets.push(candidate.trim());
+    }
+  }
+
+  const patchText = input.patch || input.input || '';
+  for (const match of String(patchText).matchAll(/^\*\*\* (?:Add|Update|Delete) File:\s+(.+)$/gm)) {
+    targets.push(match[1].trim());
+  }
+
+  const command = input.command || payload.command || '';
+  const shell = command ? analyzeShellMutation(command) : { mutates: false, targets: [] };
+  return {
+    mutates: targets.length > 0 || shell.mutates,
+    targets: [...new Set([...targets, ...shell.targets])],
+  };
+}
+
 let payload;
 try {
   payload = readPayload();
@@ -60,12 +155,17 @@ try {
 }
 const workspace = path.resolve(payload.workspace || payload.cwd || process.cwd());
 activePolicy = loadPolicy(workspace);
-const filePath = payload.tool_input?.file_path || payload.file_path || payload.path || '';
-if (!filePath) process.exit(0);
+const mutation = mutationTargets(payload);
+if (!mutation.mutates) process.exit(0);
+if (mutation.targets.length === 0) stop('Mutation target could not be resolved for scope validation');
 
-const relative = path.relative(workspace, path.resolve(workspace, filePath)).replace(/\\/g, '/');
-if (relative.startsWith('../') || path.isAbsolute(relative)) stop(`Edit target is outside workspace: ${filePath}`);
-if (relative.startsWith('docs/plans/') || relative.startsWith('.harness/')) process.exit(0);
+const relatives = mutation.targets.map((target) => {
+  const relative = path.relative(workspace, path.resolve(workspace, target)).replace(/\\/g, '/');
+  if (relative.startsWith('../') || path.isAbsolute(relative)) stop(`Edit target is outside workspace: ${target}`);
+  return relative;
+});
+const governed = relatives.filter((relative) => !relative.startsWith('docs/plans/') && !relative.startsWith('.harness/'));
+if (governed.length === 0) process.exit(0);
 
 const sessionPath = path.join(workspace, '.harness', 'session.json');
 if (!fs.existsSync(sessionPath)) stop('No harness session; run an explicit implement gate before edits');
@@ -90,8 +190,15 @@ if (!planPath.startsWith(path.join(workspace, 'docs', 'plans') + path.sep) || !f
   stop('Gated plan is missing or outside docs/plans');
 }
 const allowed = impactedFiles(fs.readFileSync(planPath, 'utf8'));
-if (!inScope(relative, allowed)) stop(`File is outside the plan's ## Impacted Files: ${relative}`);
+for (const relative of governed) {
+  if (!inScope(relative, allowed)) stop(`File is outside the plan's ## Impacted Files: ${relative}`);
+}
 
 session.lastEditAt = new Date().toISOString();
-fs.writeFileSync(sessionPath, `${JSON.stringify(session, null, 2)}\n`, 'utf8');
+session.lastEditTargets = governed;
+try {
+  fs.writeFileSync(sessionPath, `${JSON.stringify(session, null, 2)}\n`, 'utf8');
+} catch (error) {
+  stop(`Harness session could not record pending edits: ${error.message}`);
+}
 process.exit(0);

@@ -67,7 +67,7 @@ Installed to `~/.copilot/bin/harness` on every `harness install`. Add to PATH wi
 | `orient --query "<task>"` | Codebase search + task context | **F1** — writes ≤2 KB `.harness/context-pack.md` (goal from plan Intent Contract) | session.json, events.jsonl |
 | `recall "<query>"` | Standalone search / debug | F1 paths only | events |
 | `gate --phase implement --plan <path>` | Pre-edit plan/state guard | F3 on fail | session + events |
-| `verify --plan <path> [--base ref]` | Named checks, schema/state, tasks, scope, reviews, gaps, findings, evidence | no prompt context | evidence + session + events |
+| `verify --plan <path> [--base ref] [--enforcement mode]` | Named checks, schema/state, tasks, scope, reviews, gaps, findings, evidence | no prompt context | evidence + session + events |
 | `validate-plan [--plan path]` | Spec/schema lint | read-only | none |
 | `index` | Rebuild search index | none in chat | manifest.yaml, `.harness-index/`, events |
 | `get [--docid id \| --path rel]` | Fetch bounded doc excerpt | F2 on demand | none |

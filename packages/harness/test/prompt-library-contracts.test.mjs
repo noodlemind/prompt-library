@@ -182,6 +182,8 @@ test('hooks and CI enforce explicit plans and passed verification evidence', () 
   const hooks = JSON.parse(read('.github/hooks/hooks.json'));
   const preEditCommands = hooks.hooks.PreToolUse.flatMap((entry) => entry.hooks.map((hook) => hook.command));
   assert.ok(preEditCommands.includes('node require-plan-gate.mjs'));
+  const bashHooks = hooks.hooks.PreToolUse.find((entry) => entry.matcher === 'Bash')?.hooks || [];
+  assert.ok(bashHooks.some((hook) => hook.command === 'node require-plan-gate.mjs'));
   const stopCommands = (hooks.hooks.Stop || []).flatMap((entry) => entry.hooks.map((hook) => hook.command));
   assert.ok(stopCommands.includes('node require-verification.mjs'));
 
@@ -287,4 +289,17 @@ test('review fixes preserve thin wrappers, complete skill metadata, and CI pinni
   const checks = YAML.parse(read('.github/harness/checks.yaml'));
   assert.notDeepEqual(checks.checks['host-contracts'].command, checks.checks['prompt-contracts'].command);
   assert.match(checks.checks['host-contracts'].command.join(' '), /host-compatibility\.test\.mjs/);
+
+  const coordinator = read('.github/agents/plan-coordinator.agent.md');
+  assert.match(coordinator, /Required sections:[\s\S]*## Implementation Notes/i);
+  assert.match(coordinator, /## Implementation Notes\n\[/i);
+
+  assert.match(read('.github/skills/references/harness-tool-contract.md'), /verify --plan <path> \[--base ref\] \[--enforcement mode\]/);
+  assert.match(read('.github/skills/references/engineer-starter-kit.md'), /docs\/architecture\/skill-driven-prompt-library\.md/);
+  assert.match(read('docs/architecture/engineer-vision-and-growth-loop.md'), /Bounded multi-agent teams \| Strong \|[^\n]*3-4/);
+
+  const agents = read('AGENTS.md');
+  for (const mode of ['Answer', 'Investigate', 'Deliver']) assert.match(agents, new RegExp(mode));
+  assert.match(agents, /skill chain[^\n]*Deliver mode/i);
+  assert.match(read('README.md'), /```text\n@engineer:/);
 });

@@ -110,6 +110,7 @@ updated: YYYY-MM-DD
 - `## Verification Plan` — concrete checks that prove the work
 - `## Verification Evidence` — empty until `harness verify` writes an artifact
 - `## Risk & Review Routing` — specialist review needs by risk area
+- `## Implementation Notes` — initialized for `/work-on-task` decisions and deviations
 - `## Activity` — initialized as append-only log
 
 ### 6. Persist Research Context
@@ -199,6 +200,9 @@ updated: YYYY-MM-DD
 - Performance: [required/not applicable and why]
 - Architecture: [required/not applicable and why]
 - Data integrity: [required/not applicable and why]
+
+## Implementation Notes
+[Filled by `/work-on-task` with decisions, deviations, and follow-up context]
 
 ## Activity
 ### YYYY-MM-DD HH:MM — Plan created

@@ -266,7 +266,7 @@ Implement the attached Adaptive Engineer plan as the prompt library's runtime an
 
 - **Outcome:** passed
 - **Artifact:** `.harness/evidence/2026-07-13-feat-thin-engineer-distributed-harness-plan-ea4eb10ef887.json`
-- **Named checks:** `harness-tests` (72/72), `prompt-contracts` (11/11), `host-contracts` (2/2), and `build-assets` passed.
+- **Named checks:** `harness-tests` (73/73), `prompt-contracts` (11/11), `host-contracts` (2/2), and `build-assets` passed.
 - **Structural checks:** schema/state, all phase tasks, all 17 criterion mappings, changed-file scope, reviews, hard gaps, and critical findings passed.
 
 ## Risk & Review Routing
@@ -298,6 +298,12 @@ Implement the attached Adaptive Engineer plan as the prompt library's runtime an
 - Addressed 26 confirmed findings across validation, evidence naming, phase scoping, hook safety, CI resolution, host checks, workflow metadata, and documentation consistency.
 - Declined two non-applicable suggestions: capitalization of a linked filename and removal of the approved explicit CI enforcement override.
 - No open critical findings; a clean follow-up review is required before handoff.
+
+### CodeRabbit pass 2
+
+- Reported 10 findings: 7 major and 3 minor, with no critical findings.
+- Addressed all 10, including scope-aware Bash mutation enforcement, policy-schema validation, complete enforcement flag parsing, portable malicious-command regression data, plan-section completeness, and synchronized operating guidance.
+- No open critical findings; another follow-up review is required before handoff.
 
 ## Agent Journal
 
@@ -364,4 +370,12 @@ Implement the attached Adaptive Engineer plan as the prompt library's runtime an
 - Added failing regression coverage before implementation, then fixed all 26 confirmed findings; two non-applicable suggestions were declined with evidence.
 - Split host compatibility into a dedicated validator and expanded the full harness suite to 72 tests.
 - **Verification:** focused review suite 68/68 and full package suite 72/72 passed; named evidence refresh follows.
+- **Status:** review-fix verification, Phase 8.
+
+### 2026-07-14 03:10 — Second external review pass addressed
+
+- Triaged the second CodeRabbit pass: 10 findings, no critical issues.
+- Added Bash mutation target extraction and lifecycle enforcement without gating read-only shell commands.
+- Added policy version and malformed enforcement regression coverage, completed plan/host documentation contracts, and synchronized the task-mode pipeline.
+- **Verification:** focused review suite 67/67 passed; full named evidence refresh follows.
 - **Status:** review-fix verification, Phase 8.

@@ -32,7 +32,7 @@ Standards: [Engineer Operating Model](docs/architecture/engineer-operating-model
 
 ## Connected Pipeline
 
-```
+```text
 @engineer: Answer → /btw; Investigate → evidence-backed read-only report
            Deliver → orient → establish intent → investigate → work → on-demand gaps → verify → review → compound → report
                      open → planned → in-progress → review → done  (or blocked-capability)

@@ -10,7 +10,7 @@ This is a skill-driven prompt library for software development teams. The primar
 
 The system is skill-first. Skills are the primary reusable workflow contracts; agents, instructions, prompt wrappers, checks, plans, and solution docs support those skills.
 
-- **Skills** (`.github/skills/*/SKILL.md`): 30 workflows (internal support: `ensure-plan`, on-demand `ensure-capability`, `auto-compound`, `auto-skill-draft`; public entry **`@engineer`** + `/harness-doctor`, `/btw`, `/code-review`, domain skills, utilities). `/start` classifies incoming work and routes to the appropriate entry point. `/btw` handles quick Q&A without plans or edits. `/project-readme` creates or updates project README files. `/create-primitive` decides and creates the right primitive type. Domain skills include `/java`, `/python`, `/sql`, and `/aws`. The connected pipeline `/brainstorming` (optional) → `/capture-issue` → `/plan-issue` → `/deepen-plan` (optional) → `/work-on-task` → `/code-review` → `/compound-learnings` is the core engineering loop.
+- **Skills** (`.github/skills/*/SKILL.md`): 30 workflows (internal support: `ensure-plan`, on-demand `ensure-capability`, `auto-compound`, `auto-skill-draft`; public entry **`@engineer`** + `/harness-doctor`, `/btw`, `/code-review`, domain skills, utilities). `/start` classifies incoming work and routes to the appropriate entry point. `/btw` handles quick Q&A without plans or edits. `/project-readme` creates or updates project README files. `/create-primitive` decides and creates the right primitive type. Domain skills include `/java`, `/python`, `/sql`, and `/aws`. The connected skill chain `/brainstorming` (optional) → `/capture-issue` → `/plan-issue` → `/deepen-plan` (optional) → `/work-on-task` → `/code-review` → `/compound-learnings` is an internal sequence used only within Deliver mode, while remaining directly available to power users.
 - **Agents** (`.github/agents/*.agent.md`): 24 agents — 19 stateless domain experts, 1 engineer, 1 code-implementer, plus 3 coordinator/navigation agents. Agents are used when work needs separate judgment, tool authority, runtime profile, isolation, or accountability. Active language/cloud/data reviewers include Java, Python, SQL, and AWS.
 - **Instructions** (`.github/instructions/*.instructions.md`): Scoped context that activates based on file patterns.
 - **Prompt wrappers** (`.github/prompts/*.prompt.md`): Thin host-facing adapters that route to skills and declare host tools.
@@ -20,7 +20,11 @@ The system is skill-first. Skills are the primary reusable workflow contracts; a
 
 Issues flow through a state machine:
 
-```
+```text
+@engineer: Answer → /btw; Investigate → evidence-backed read-only report
+           Deliver → orient → establish intent → investigate → work → on-demand gaps → verify → review → compound → report
+
+Deliver-mode internal skill chain:
 /recall (recommended) → /brainstorming (optional) → /capture-issue → /plan-issue → /deepen-plan (optional) → /work-on-task → /code-review → /compound-learnings → /index-memory
                          open → planned → in-progress → review → done
 ```
@@ -34,7 +38,7 @@ Plan files in `docs/plans/` (product repos only) track state via YAML frontmatte
 ```
 .github/
   agents/          — 24 agent definitions (19 specialists + 1 engineer + 1 implementer + 3 coordinators)
-  skills/          — 25 skill directories with SKILL.md
+  skills/          — 30 skill directories with SKILL.md
   instructions/    — scoped instructions (TypeScript, Python, Java, Spring Boot, PostgreSQL, AWS SDK)
   prompts/         — thin prompt wrappers that route to skills
   checks/          — optional product-specific review check examples

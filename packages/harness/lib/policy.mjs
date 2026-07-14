@@ -6,8 +6,9 @@ const MODES = new Set(['observe', 'warn', 'enforce']);
 
 export function loadPolicy(workspace, override = null) {
   const policyPath = path.join(workspace, '.github', 'harness', 'policy.yaml');
+  const policyExists = fs.existsSync(policyPath);
   let policy = {};
-  if (fs.existsSync(policyPath)) {
+  if (policyExists) {
     try {
       policy = YAML.parse(fs.readFileSync(policyPath, 'utf8'), { maxAliasCount: 50 }) || {};
     } catch (error) {
@@ -16,6 +17,9 @@ export function loadPolicy(workspace, override = null) {
   }
   if (typeof policy !== 'object' || Array.isArray(policy)) {
     throw new Error(`Invalid harness policy ${policyPath}: expected a YAML mapping`);
+  }
+  if (policyExists && policy.version !== 1) {
+    throw new Error(`Invalid harness policy ${policyPath}: expected version 1`);
   }
   const requested = override ?? policy.enforcement ?? 'enforce';
   if (!MODES.has(requested)) {
