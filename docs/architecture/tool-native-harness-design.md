@@ -2,6 +2,10 @@
 
 How a **Cursor / Windsurf** engineering team would maximize robustness **without** MCP, Copilot CLI/API, or a native vector store in the IDE — using **files as truth** and **npm CLI tools as the runtime**.
 
+This document specifies tool integration. It is not an Engineer runtime
+checklist; `.github/agents/engineer.agent.md` owns the task-mode boundary and
+sole normative delivery lifecycle.
+
 **Constraints (fixed):**
 
 - No MCP, no Copilot programmatic hooks.
@@ -18,23 +22,23 @@ How a **Cursor / Windsurf** engineering team would maximize robustness **without
 | **Thin model prompt** | Small system slice | Slim `engineer.agent.md` + **one context file** per turn |
 | **Retrieval before reason** | Index search → top-k chunks | `harness recall` → paths → `read` those `.md` files |
 | **Session state** | In-product task object | `.harness/session.json` + active plan path |
-| **Loop enforcement** | Runtime blocks bad transitions | `harness gate` exit codes + **CI** + skill contract |
+| **Loop enforcement** | Runtime blocks bad transitions | `harness gate` + `harness verify` + hooks and CI |
 | **Deterministic tools** | Built-in tools with schemas | CLI with **`--json`** stable output |
-| **Low ceremony** | Auto plan/memory | `harness orient` at turn start; `auto-compound` at end |
+| **Low ceremony** | Adaptive context | Minimal reads for Answer; `harness orient` and `auto-compound` only in the relevant delivery lifecycle |
 | **Audit** | Local history | Git: plans, Activity, solutions |
 
 **Design principle:** Treat every harness step as a **tool with a schema**, not prose the model may skip.
 
 ### 1.1 Runtime contract tightening
 
-The next durability step is to turn existing conventions into lightweight runtime contracts:
+The implemented runtime contracts are:
 
 | Theme | Fit | Harness response |
 |-------|-----|------------------|
-| Multi-agent teams, not a god-model | Strong | `@engineer` remains a thin orchestrator; specialized agents execute planner, implementer, reviewer, research, and domain roles. |
-| Keep agent teams manageable (3-5) | Strong with explicit cap | Delegation guidance now defaults to 3-5 active agents per workstream, with extra specialists batched and journaled. |
-| Shift left on intent with specs | Strong, now tighter | `docs/plans/` are versioned specs; the template now includes machine-readable intent, outputs, success criteria, verification commands, and organizational objectives. |
-| Observability and feedback loops | Partial | CLI `--json`, `.harness/session.json`, context packs, Activity, and `.harness/events.jsonl` cover v1. |
+| Accountable Engineer, bounded consultation | Strong | `@engineer` owns the outcome; specialists provide evidence only when separate judgment is useful. |
+| Versioned intent and scope | Strong | `docs/plans/` are schema-validated specs with explicit scope and trusted named checks. |
+| Deterministic completion | Strong | `harness verify` runs argv-only named checks and writes a passed, failed, or inconclusive artifact. |
+| Observability and feedback loops | Strong | CLI JSON, session state, evidence artifacts, Activity, events, and outcome telemetry cover v1. |
 | Organizational alignment | Strong, now more explicit | Enterprise overlays and registries exist; plans now carry `org_objectives` when known. |
 
 ---
@@ -58,14 +62,16 @@ The next durability step is to turn existing conventions into lightweight runtim
 ┌───────────────────────────────▼─────────────────────────────────┐
 │ L3  TOOLS (@dev-kit/harness CLI — deterministic)                 │
 │     orient → recall + session + context-pack                       │
-│     gate     → exit 0/1 before editFiles                           │
+│     gate     → explicit locked-plan + pre-edit scope decision       │
+│     verify   → named checks + scope + evidence outcome              │
+│     compound → passed-evidence learning + telemetry                 │
 │     index    → rebuild manifest (+ optional semantic)              │
 │     install / upgrade / doctor                                     │
 └───────────────────────────────┬─────────────────────────────────┘
                                 │
 ┌───────────────────────────────▼─────────────────────────────────┐
-│ L4  AGENT (@engineer — tool-first checklist only)                │
-│     Run tools via terminal; read context-pack.md; then act         │
+│ L4  AGENT (@engineer — task modes + delivery checklist)          │
+│     Read minimally or run delivery tools at mutation boundaries    │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -73,33 +79,18 @@ The next durability step is to turn existing conventions into lightweight runtim
 
 ---
 
-## 3. The turn contract (Cursor-style loop)
+## 3. Tool integration points
 
-Every `@engineer` trackable turn:
+The Engineer's Deliver mode calls deterministic tools at the relevant decision
+boundaries. `harness orient --query "<task summary>"` can produce a bounded
+context pack for substantial work. Before trackable edits, `harness gate --plan <path> --phase
+implement` requires the explicit locked plan. After edits, `harness verify
+--plan <path> --base <ref>` validates plan structure, declared scope, trusted
+named checks, and acceptance-criterion mappings, then writes immutable evidence.
+`harness compound --plan <path>` accepts only passed post-edit evidence.
 
-```text
-1. harness orient --query "<agent task summary>"
-      → JSON + writes .harness/context-pack.md (≤2 KB)
-
-2. read .harness/context-pack.md   (single retrieved slice)
-
-3. [investigate: codebase / search / read — read-only]
-
-4. harness gate [--phase implement]
-      → exit 0 required before editFiles
-
-5. implement (scope = plan ## Impacted Files)
-
-6. harness gate --phase verify
-      → tests evidence in plan or session
-
-7. harness compound  (or auto-compound skill logic)
-      → solution md + index
-
-8. harness orient --refresh   (optional close-out summary)
-```
-
-**Skills** (`engineer-autopilot`, `ensure-plan`) reference **commands**, not duplicate prose.
+Skills such as `ensure-plan`, `work-on-task`, and `auto-compound` reference these
+commands without defining a competing Engineer loop.
 
 ---
 
@@ -107,7 +98,7 @@ Every `@engineer` trackable turn:
 
 ### 4.1 `harness orient` (highest ROI)
 
-**Purpose:** Agent/internal structural command that replaces ad-hoc recall + manifest grep + plan scan. It is not a user prompt input surface.
+**Purpose:** Agent/internal structural command for substantial investigation or delivery that replaces ad-hoc recall + manifest grep + plan scan. Quick Answer mode does not require it. It is not a user prompt input surface.
 
 ```bash
 harness orient --query "orders api timeout"
@@ -129,7 +120,7 @@ harness orient --json
   "recall": [{ "path": "knowledge/solutions/...", "score": 0.82, "title": "..." }],
   "plans": [{ "path": "docs/plans/...", "status": "planned", "plan_lock": true }],
   "contextPack": ".harness/context-pack.md",
-  "nextTools": ["harness gate", "harness ensure-plan"]
+  "nextTools": ["harness gate --phase implement --plan <path>"]
 }
 ```
 
@@ -137,24 +128,37 @@ Model reads **one file** (`context-pack.md`) instead of five references.
 
 ### 4.2 `harness gate`
 
-**Purpose:** Deterministic preflight before edits.
+**Purpose:** Deterministic plan and scope precondition before edits.
 
 ```bash
-harness gate
-harness gate --phase implement --json
+harness gate --phase implement --plan docs/plans/<plan>.md --json
 ```
 
 | Check | implement phase |
 |-------|-----------------|
 | `docs/plans/*.md` active | required |
+| explicit unique `--plan` | required in CI and governed work |
 | `plan_lock: true` | required |
 | `status` not `blocked-capability` | required |
-| Overview, AC, Activity | required |
-| Waiver flag in session | optional bypass |
+| schema v1 and required sections | required |
+| unresolved hard gap | blocked unless the plan records a waiver |
 
 Exit codes: `0` pass, `1` fail, `2` warn (amber — proceed with log).
 
-### 4.3 `harness recall`
+### 4.3 `harness verify`
+
+**Purpose:** Run trusted argv-only named checks, compare the changed-file diff to
+`## Impacted Files`, validate required reviews/gaps/tasks, and persist an evidence
+artifact with outcome `passed`, `failed`, or `inconclusive`.
+
+```bash
+harness verify --plan docs/plans/<plan>.md --base <git-ref> --json
+```
+
+Only `passed` permits a completion claim or compounding. Timeouts, missing tools,
+or unavailable required checks are `inconclusive`, never success.
+
+### 4.4 `harness recall`
 
 **Purpose:** Standalone recall (debug) or called by `orient`.
 
@@ -166,7 +170,7 @@ v1: token overlap on manifest fields (fallback).
 v1.5 (0.4.0): pure-JS BM25 on `.harness-index/postings.json` — see [`lexical-retrieval-v2.md`](lexical-retrieval-v2.md).  
 v3 (deferred): `--semantic` if local embedding index exists.
 
-### 4.4 `harness index`
+### 4.5 `harness index`
 
 **Purpose:** Rebuild derived indexes from L1 files.
 
@@ -175,13 +179,12 @@ harness index
 harness index --semantic   # optional, offline embeddings
 ```
 
-### 4.5 `harness compound`
+### 4.6 `harness compound`
 
-**Purpose:** Wrap index + solution write gates (calls existing auto-compound rules).
+**Purpose:** Consume passed post-edit evidence, classify verified learning, update
+skill outcome telemetry, and run the knowledge index path when applicable.
 
-Future: single command after verify pass.
-
-### 4.6 `harness events`
+### 4.7 `harness events`
 
 **Purpose:** Inspect local structural outcomes from harness commands. This is observability for setup, validation, and agent-internal workflow tooling, not prompt capture.
 
@@ -213,7 +216,9 @@ Events append to `.harness/events.jsonl` unless `--no-events` or `HARNESS_NO_EVE
 |-------|---------------------|
 | **CLI exit codes** | Model instructed: gate exit 1 → stop |
 | **`.harness/context-pack.md`** | Lists `gateStatus` and `blockedReason` |
-| **CI** (`harness gate` on PR) | **Hard** for teams |
+| **Pre-edit hook** | Requires a fresh explicit plan gate for trackable edits |
+| **Completion hook** | Requires passed post-edit verification evidence |
+| **CI** (explicit plan + diff verification) | **Hard** in enforce mode |
 | **PR template** | Link plan path |
 | **`strict` profile** | Human approval on amber |
 
@@ -239,22 +244,24 @@ This is the maximum robustness available without Copilot hooks — **comparable 
 
 | File | Change |
 |------|--------|
-| `engineer.agent.md` | **Tool-first** checklist: orient → read pack → gate → work |
-| `engineer-autopilot/SKILL.md` | Replace prose steps with harness commands |
-| `references/tool-native-loop.md` | SSOT for turn contract |
-| `capture-gate.md` | Point to `harness gate` |
-| `/recall` skill | Deprecate manual steps → `harness recall` / `orient` |
+| `engineer.agent.md` | Sole normative accountable loop |
+| `references/tool-native-loop.md` | Thin command adapter, not a second loop |
+| `capture-gate.md` | Points to explicit `harness gate --plan` |
+| `work-on-task` | Executes an explicit locked plan only |
+| `auto-compound` | Consumes passed evidence and classifies learning |
 
 ---
 
 ## 9. CI (real enforcement)
 
 ```yaml
-- run: harness gate --workspace . --json
-- run: harness validate-plan --workspace . --json
+- run: harness validate-plan --plan "$PLAN" --workspace . --json
+- run: harness gate --plan "$PLAN" --phase implement --workspace . --json
+- run: harness verify --plan "$PLAN" --base "$BASE" --workspace . --json
 ```
 
-Fail PR if trackable code changed without `plan_lock` plan linked in PR body or `docs/plans/` updated.
+The workflow template resolves exactly one changed plan, passes it explicitly,
+and validates the PR diff against `## Impacted Files`.
 
 ---
 
@@ -270,6 +277,7 @@ Fail PR if trackable code changed without `plan_lock` plan linked in PR body or 
 | **T6** | Keyword ranker tests (vitest) | Planned |
 | **T7** | `index --semantic` optional dep (`vectra`) | Spike |
 | **T8** | `harness compound` one-shot | Done (0.3.1) |
+| **T9** | `harness verify`, hooks, explicit-plan CI, policy modes | Done |
 
 ---
 

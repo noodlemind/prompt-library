@@ -1,5 +1,6 @@
 import fs from 'fs';
 import path from 'path';
+import YAML from 'yaml';
 
 export function listPlanRels(workspace) {
   const plansDir = path.join(workspace, 'docs', 'plans');
@@ -13,65 +14,83 @@ export function listPlanRels(workspace) {
 export function parsePlanFrontmatter(text) {
   const m = text.match(/^---\r?\n([\s\S]*?)\r?\n---/);
   if (!m) return {};
-  const out = {};
-  for (const line of m[1].split('\n')) {
-    const kv = line.match(/^([\w-]+):\s*(.*)$/);
-    if (kv) out[kv[1]] = parseFrontmatterValue(kv[2]);
-  }
-  return out;
-}
-
-function stripQuotes(value) {
-  const trimmed = value.trim();
-  if (
-    (trimmed.startsWith('"') && trimmed.endsWith('"')) ||
-    (trimmed.startsWith("'") && trimmed.endsWith("'"))
-  ) {
-    return trimmed.slice(1, -1);
-  }
-  return trimmed;
-}
-
-function parseInlineArray(value) {
-  const inner = value.trim().slice(1, -1).trim();
-  if (!inner) return [];
-  return inner
-    .split(',')
-    .map((item) => stripQuotes(item))
-    .filter((item) => item.length > 0);
-}
-
-function parseFrontmatterValue(value) {
-  const trimmed = value.trim();
-  if (trimmed.startsWith('[') && trimmed.endsWith(']')) return parseInlineArray(trimmed);
-  return stripQuotes(trimmed);
+  const parsed = YAML.parse(m[1], { maxAliasCount: 50 });
+  return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
 }
 
 export function loadPlan(workspace, relPath) {
-  const full = path.isAbsolute(relPath) ? relPath : path.join(workspace, relPath);
+  const normalized = normalizePlanRel(workspace, relPath);
+  if (!normalized) return null;
+  const full = path.join(workspace, normalized);
   if (!fs.existsSync(full)) return null;
   const text = fs.readFileSync(full, 'utf8');
-  const fm = parsePlanFrontmatter(text);
+  let fm;
+  try {
+    fm = parsePlanFrontmatter(text);
+  } catch (error) {
+    fm = { __parseError: error.message };
+  }
   const sections = {
     overview: /## Overview/i.test(text),
     acceptance: /## Acceptance Criteria/i.test(text),
+    acceptanceText: extractSection(text, 'Acceptance Criteria'),
     activity: /## Activity/i.test(text),
     activityText: extractSection(text, 'Activity'),
     verificationPlan: extractSection(text, 'Verification Plan'),
     memoryCards: extractSection(text, 'Memory Cards'),
+    impactedFiles: extractSection(text, 'Impacted Files'),
+    plan: extractSection(text, 'Plan'),
+    reviewFindings: extractSection(text, 'Review Findings'),
   };
   return {
-    path: relPath.replace(/\\/g, '/'),
+    path: normalized,
     fullPath: full,
     text,
     title: fm.title || path.basename(full, '.md'),
     status: fm.status || 'unknown',
     plan_lock: fm.plan_lock === 'true' || fm.plan_lock === true,
-    phase: fm.phase || '0',
+    phase: fm.phase ?? 0,
     risk: fm.risk || 'green',
     sections,
     fm,
   };
+}
+
+export function normalizePlanRel(workspace, planPath) {
+  if (!planPath || typeof planPath !== 'string') return null;
+  const root = path.resolve(workspace);
+  const full = path.resolve(root, planPath);
+  const plansRoot = path.join(root, 'docs', 'plans');
+  if (full !== plansRoot && !full.startsWith(`${plansRoot}${path.sep}`)) return null;
+  const rel = path.relative(root, full).replace(/\\/g, '/');
+  return rel.endsWith('.md') ? rel : null;
+}
+
+export function selectPlan(workspace, { planPath = null, session = null, requireUnique = false } = {}) {
+  if (planPath) {
+    const plan = loadPlan(workspace, planPath);
+    return plan
+      ? { plan, error: null }
+      : { plan: null, error: `Plan not found or outside docs/plans/: ${planPath}` };
+  }
+
+  if (session?.activePlan) {
+    const plan = loadPlan(workspace, session.activePlan);
+    if (plan) return { plan, error: null };
+  }
+
+  const candidates = listPlanRels(workspace)
+    .map((rel) => loadPlan(workspace, rel))
+    .filter((plan) => plan && plan.plan_lock && ['planned', 'in-progress', 'review'].includes(plan.status));
+
+  if (candidates.length === 1) return { plan: candidates[0], error: null };
+  if (candidates.length > 1 && requireUnique) {
+    return {
+      plan: null,
+      error: `Plan selection is ambiguous (${candidates.length} locked active plans); pass --plan explicitly`,
+    };
+  }
+  return { plan: candidates.sort((a, b) => planPriority(b) - planPriority(a))[0] || null, error: null };
 }
 
 export function extractSection(text, name) {

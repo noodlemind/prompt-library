@@ -1,5 +1,11 @@
 # Composer-Style Gap Fulfillment Loop
 
+> Historical gap-design exploration. Universal intake preflight was superseded
+> by on-demand gap handling in
+> [`engineer-operating-model.md`](engineer-operating-model.md) and the governed
+> lifecycle in [`capability-lifecycle.md`](capability-lifecycle.md). The examples
+> below are non-normative decision history.
+
 How **Cursor** or **Windsurf** engineering teams would implement **blocking capability gaps**: detect early, **fulfill before execute**, promote to the team via **hydrate** — not “notify and hope.”
 
 Related: [`enterprise-capability-expansion.md`](enterprise-capability-expansion.md), [`composer-style-autonomous-harness-proposal.md`](composer-style-autonomous-harness-proposal.md).

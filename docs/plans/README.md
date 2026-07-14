@@ -15,6 +15,6 @@ Files here are **historical implementation and feature plans** for the prompt-li
 
 Track active issues under **`docs/plans/` in each product repo**, not in this prompt-library repo.
 
-Plans should carry both human-readable sections and machine-readable frontmatter for `intent`, `expected_outputs`, `success_criteria`, `verification_commands`, and `org_objectives` when those are known.
+New plans use `plan_schema: 1` and carry machine-readable `intent`, `expected_outputs`, stable acceptance-criterion IDs, named `verification.required` checks with criterion mappings, review state, capability gaps, and `skills_used`. Executable commands live only in trusted `.github/harness/checks.yaml`; plans never supply shell strings to the verifier.
 
 Do not treat dated `2026-*-plan.md` files in this folder as instructions for current behavior unless explicitly referenced by an open initiative.

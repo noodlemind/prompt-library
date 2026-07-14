@@ -8,7 +8,7 @@ The `@engineer` is a **real engineer persona**, not a generic chatbot:
 - **Learns** by compounding verified fixes into global knowledge and repo conventions.
 - **Grows capability** by proposing new skills, agents, instructions, or checks through human-approved `/create-primitive`.
 - **Expands specialist reach** by routing to more reviewers/researchers as risk and domain require—and by adding agents to the registry when gaps repeat.
-- **Lives by rules**: capture-before-code, recall-before-investigate, evidence-before-done, approval-before-risk.
+- **Lives by rules**: inspect before changing, plan trackable work, verify before completion, and ask before material risk.
 
 Irrespective of model size, **structure enforces behavior**; prompts alone do not.
 
@@ -21,43 +21,36 @@ Irrespective of model size, **structure enforces behavior**; prompts alone do no
 | Rules & principles | `engineer-principles.md`, `capture-gate.md`, `copilot-instructions.md`, scoped instructions | Implemented |
 | Working memory (issues) | Product `docs/plans/` + `## Memory Cards` | Implemented |
 | Long-term knowledge | Global `knowledge/solutions/` + `manifest.yaml` | Implemented (needs content over time) |
-| Recall before work | `/recall`, engineer Phase 0 | Implemented |
-| Capture before code | `capture-gate.md`, engineer Phase 1c | Implemented |
+| Relevant recall | `/recall`, `harness orient`, plan memory cards | Implemented |
+| Plan before trackable edits | `capture-gate.md`, `harness gate` | Implemented |
 | Compound learnings | `/compound-learnings` → global solutions | Implemented |
-| Learn new skills | `capability-gap-proposal` → `/create-primitive` → registry update | Implemented |
+| Learn new skills | verified reuse → capability-gap proposal → `/create-primitive` → registry update | Implemented |
 | Expand specialists | New agent + engineer `agents:` allowlist update (manual, approved) | Partial (documented) |
 | User preferences | `knowledge/profile.md` | Implemented |
-| Skill usage tracking | `knowledge/skill-usage.yaml` | Implemented (template) |
+| Skill usage tracking | `knowledge/skill-usage.yaml` outcome telemetry | Implemented |
 | Model-proof checklist | `engineer-session-checklist.md` | Implemented |
+| Adaptive task modes | Answer and Investigate stay read-only; Deliver owns mutation and verification | Implemented |
 | Semantic memory (v2) | MCP / embeddings | Planned |
 
 ## Growth loop (closed cycle)
 
 ```mermaid
 flowchart LR
-  subgraph session ["Per issue"]
-    R["/recall"]
-    C["/capture-issue"]
-    P["/plan-issue"]
-    W["/work-on-task"]
-    V["Verify"]
-  end
-  subgraph grow ["Over time"]
-    CL["/compound-learnings"]
-    IM["/index-memory"]
-    KS["knowledge/solutions"]
-    CG["capability-gap"]
-    CP["/create-primitive"]
-    REG["capability-registry"]
-  end
-  R --> C --> P --> W --> V
-  V --> CL --> IM --> KS
-  W --> CG
-  CG --> CP --> REG
-  KS --> R
+  V["Verified task outcome"] --> C["Classify learning"]
+  C --> K["Knowledge solution"]
+  C --> T["Usage and outcome telemetry"]
+  T --> R{"Repeated, generalizable, valuable?"}
+  R -->|No| P["Keep as plan-local evidence"]
+  R -->|Yes| G["Capability-gap proposal"]
+  G --> A["Human approval"]
+  A --> N["/create-primitive"]
+  N --> E["Trigger and outcome evals"]
+  E --> REG["Registry lifecycle update"]
 ```
 
-**Execute** → **Capture** → **Plan** → **Work** → **Verify** → **Compound** → **Index** → future **Recall**.
+This is the capability-growth lifecycle after a verified result. It does not
+restate the Engineer delivery lifecycle, whose only normative definition is
+`.github/agents/engineer.agent.md`.
 
 Hermes-style **skill extraction** maps to: repeated successful use of a workflow → capability-gap proposal → new skill. Hermes auto-writes skills after N tool calls; we require **human approval** for governance in enterprise teams.
 
@@ -137,7 +130,7 @@ Hermes-style **skill extraction** maps to: repeated successful use of a workflow
 | Gap | Fix |
 |-----|-----|
 | 17 KB engineer prompt | Slim agent (~4 KB) with **inlined checklist** |
-| “Read five references” | `engineer-runtime.md`, `context-budget.md` on demand only |
+| “Read five references” | Task-specific skills and `context-budget.md` on demand only |
 | Unbounded recall | Top-3 manifest, 1200-char memory cards |
 | `copilot-instructions` engineer duplication | Engineer rules only in agent file |
 | Unclear product positioning | `composer-parity-review.md` |
@@ -146,37 +139,43 @@ Hermes-style **skill extraction** maps to: repeated successful use of a workflow
 
 - Semantic index over `knowledge/solutions/` (Composer-class retrieval).
 - Host hooks for automatic memory card injection.
-- Structured `.harness/events.jsonl` for cross-repo observability.
+
+### Pass 9 — Adaptive-lifecycle research correction
+
+| Gap | Fix |
+|-----|-----|
+| Nine steps appeared mandatory for every interaction | Classify Answer, Investigate, Deliver, or Review; apply the lifecycle only to Deliver |
+| Completion hook blocked read-only turns | Enforce only a newly recorded edit and mark successfully completed edits |
+| `/btw` lacked core trigger coverage | Add positive, negative, outcome, transition, and host evals |
+- Cross-repo aggregation of the implemented structured harness telemetry.
 
 ### Pass 9 — Runtime contract tightening
 
 | Theme | Fit | Change |
 |-------|-----|--------|
 | Bounded multi-agent teams | Strong | Delegation guidance now defaults to 3-5 active agents per workstream. |
-| Spec-driven intent | Strong / partial | Plan template now has machine-readable intent, outputs, success criteria, verification commands, and organizational objectives. |
+| Spec-driven intent | Strong / partial | Plan template now has machine-readable intent, outputs, success criteria, trusted named checks, and organizational objectives. |
 | Agent journaling | Partial | Plan template now includes `## Agent Journal` for uncertainty, blocked states, escalations, and strategy changes. |
 | Structured monitoring | Partial | CLI JSON, session files, and `.harness/events.jsonl` now capture structural outcomes. |
 | Organizational alignment | Strong / partial | Plan template now tracks `org_objectives` when known. |
 
-## Model-robustness contract
+## Model-robustness assertions
 
-Every `@engineer` session on trackable work must be able to answer **yes** to:
+The structural contract tests and harness enforcement assert that trackable
+edits have one explicit locked plan, changed files stay within declared scope,
+consultations receive bounded context when used, and completion has a passed
+post-edit evidence artifact. Compounding consumes only passed evidence. Optional
+capability gaps do not block ordinary work; unresolved safety-critical gaps
+block only their affected scope unless waived.
 
-1. Did I run **Phase 0 Recall** (or `/recall`)?
-2. Did **`/capture-issue`** create the plan (`status: open`)?
-3. Did **`/plan-issue`** lock the plan before implementation?
-4. Are **Memory Cards** updated with `source:` paths?
-5. Did I use **subagent packets** for delegations?
-6. Did I suggest **`/compound-learnings`** + **`/index-memory`** when done?
-
-If any answer is no, **stop** and fix before claiming completion.
-
-See `.github/skills/references/engineer-session-checklist.md`.
+See `.github/agents/engineer.agent.md` for the runtime loop and
+`.github/skills/references/engineer-session-checklist.md` for its compact mirror.
 
 ## Related docs
 
 - `composer-parity-review.md` — would Cursor/Windsurf approve; what we fixed
 - `engineer-memory-system.md` — tiers and token model
 - `context-budget.md` — top-k and character caps
-- `adaptive-engineer-harness.md` — runtime loop
+- `engineer-operating-model.md` — ownership boundaries and modes
+- `.github/agents/engineer.agent.md` — sole normative runtime loop
 - `knowledge/capability-registry.yaml` — starter kit and growth inventory

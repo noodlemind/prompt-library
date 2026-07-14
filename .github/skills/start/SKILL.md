@@ -46,7 +46,7 @@ Before classifying, scan for existing work that matches the user's prompt:
 - Ask: resume this work, or start fresh?
 - If resume: route based on the file's status:
   - Brainstorm doc → `/brainstorming` (resume)
-  - Plan with `status: planned` or `in-progress` → **`@engineer`** (continue autopilot on that plan)
+  - Plan with `status: planned` or `in-progress` → **`@engineer`** (continue accountable delivery on that plan)
   - Plan with `status: review` → `/code-review`
 
 **If no match found:** proceed to Step 2.
@@ -88,17 +88,21 @@ Extract signals from the user's prompt across three dimensions:
 
 ### Step 3: Route to Target Skill
 
-Map classification to the appropriate skill. **Default trackable engineering work to `@engineer`** — it runs capture, plan, gate, implement, verify, and compound internally. Use individual pipeline skills only when the user wants manual pipeline mode or debugging.
+Map classification to the appropriate skill. **Default trackable engineering
+work to `@engineer`** — it owns end-to-end delivery using its canonical lifecycle.
+Use individual pipeline skills only when the user wants manual pipeline mode or
+debugging.
 
 | Classification | Route | Reason |
 |---------------|-------|--------|
-| Trivial + Bug + Clear | `/tdd-fix` or **`@engineer`** | Isolated bug — TDD skill or full autopilot |
+| Trivial + Bug + Clear | `/tdd-fix` or **`@engineer`** | Isolated bug — focused TDD skill or full delivery |
 | Standard + Feature + Unclear | `/brainstorming` | Needs requirements exploration first |
-| Standard + Feature + Clear | **`@engineer`** | Autopilot captures and plans internally |
+| Standard + Feature + Clear | **`@engineer`** | Engineer establishes the needed plan internally |
 | Standard + Compound | **`@engineer`** | Multiple concerns — engineer handles compound scope |
-| Deep + any | **`@engineer`** | Formal planning via ensure-plan inside autopilot |
+| Deep + any | **`@engineer`** | Formal planning through the accountable Engineer |
 | Deep + Unclear | `/brainstorming` | Needs exploration before capture |
-| Investigation/Debug | **`@engineer`** | Autonomous investigation needed |
+| Investigation/Debug + answer only | **`@engineer`** Investigate mode | Evidence-heavy diagnosis without edits or delivery ceremony |
+| Investigation/Debug + requested fix | **`@engineer`** Deliver mode | Investigation must transition before editing |
 | Q&A | `/btw` | Quick answer without plan or file edits |
 | Documentation + README | `/project-readme` | Update project-level README documentation |
 | Java domain + focused | `/java` or **`@engineer`** | Domain skill for narrow tasks; engineer for full delivery |
@@ -106,8 +110,8 @@ Map classification to the appropriate skill. **Default trackable engineering wor
 | SQL domain + focused | `/sql` or **`@engineer`** | Same |
 | AWS domain + focused | `/aws` or **`@engineer`** | Same |
 | Exploration | `/brainstorming` | Exploring ideas |
-| Refactor + Clear | **`@engineer`** | Track scope and implement via autopilot |
-| Refactor + Trivial | `/tdd-fix` or **`@engineer`** | Small refactors may use TDD; otherwise autopilot |
+| Refactor + Clear | **`@engineer`** | Track scope and deliver through the accountable Engineer |
+| Refactor + Trivial | `/tdd-fix` or **`@engineer`** | Small refactors may use focused TDD; otherwise use the Engineer |
 | Refactor + Unclear | `/brainstorming` | Scope exploration needed before refactor plan |
 | Manual pipeline (explicit) | `/capture-issue` | User asked for step-by-step pipeline control |
 
@@ -127,7 +131,9 @@ Map classification to the appropriate skill. **Default trackable engineering wor
 
 When invoking the target skill, pass the user's original prompt so the target skill has full context without re-asking.
 
-If the target skill supports standalone mode, note that no plan file context is being passed — the target skill will operate in standalone mode.
+If the target skill supports an explicitly documented standalone mode, note
+that no plan context is being passed. `/work-on-task` is never standalone and
+always requires an explicit locked plan.
 
 ## Error Handling
 

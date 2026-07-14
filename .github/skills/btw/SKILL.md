@@ -10,6 +10,8 @@ argument-hint: "[question]"
 
 Lightweight question-answering lane. Use this skill when the user wants a quick answer, explanation, or repository orientation without creating a plan, changing files, or entering the engineering pipeline.
 
+This is a portable skill lane: it may perform bounded repository reads, and its answer remains in conversation history unless the host independently supports ephemeral side questions.
+
 ## When to Use
 
 Activate when the user asks:

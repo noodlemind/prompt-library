@@ -11,6 +11,7 @@ import {
   cmdIndex,
   cmdOrient,
   cmdGate,
+  cmdVerify,
   cmdRecall,
   cmdEvents,
   cmdValidatePlan,
@@ -35,6 +36,7 @@ Usage:
   harness index [options]
   harness orient [options] [--query "task summary"]
   harness gate [options] [--phase implement|verify]
+  harness verify [options] --plan docs/plans/file.md
   harness recall "search terms" [options]
   harness get [options] [--docid id | --path rel/path]
   harness validate-plan [options] [--plan docs/plans/file.md]
@@ -73,7 +75,9 @@ Options:
   --path <rel>           get: relative file path
   --lines <n>            get: max lines (default 40)
   --max-bytes <n>        get: max excerpt bytes (default 2048)
-  --plan <path>          validate-plan: specific plan file
+  --plan <path>          gate/verify/validate-plan/compound: explicit plan file
+  --base <git-ref>       verify: compare changed files to this git ref
+  --enforcement <mode>   observe | warn | enforce (default enforce)
   --no-events            Do not write .harness/events.jsonl
 
 Docs: docs/architecture/tool-native-harness-design.md
@@ -111,6 +115,9 @@ async function main() {
         break;
       case 'gate':
         code = await cmdGate(args);
+        break;
+      case 'verify':
+        code = await cmdVerify(args);
         break;
       case 'recall':
         code = await cmdRecall(args);

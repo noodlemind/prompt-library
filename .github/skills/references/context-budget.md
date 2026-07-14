@@ -6,7 +6,7 @@ Keep retrieved context **small and frozen per turn**. Full procedures live in sk
 
 | Tier | Max size | Contents | When loaded |
 |------|----------|----------|-------------|
-| **F0 Frozen** | ~600 tokens | Session checklist + active plan path + 3 memory cards | Every `@engineer` turn |
+| **F0 Frozen** | 600–900 tokens | Stable Engineer identity, task modes, nine-step delivery lifecycle, guardrails, and core tool actions | Every `@engineer` turn |
 | **F1 Recall** | ~800 tokens | ≤3 manifest entries (title, symptom, path, 1-line summary each) | Phase 0 |
 | **F2 Plan slice** | ~1500 tokens | `## Memory Cards` + `## Acceptance Criteria` + current phase tasks | Before implement |
 | **F3 On demand** | skill-defined | `capture-gate`, `subagent-context-packet`, delegation matrix | Only when delegating or gating |

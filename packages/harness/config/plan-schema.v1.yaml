@@ -1,0 +1,26 @@
+version: 1
+required_frontmatter:
+  - plan_schema
+  - title
+  - type
+  - status
+  - plan_lock
+  - phase
+  - risk
+  - intent
+  - expected_outputs
+  - success_criteria
+  - verification
+  - reviews
+  - capability_gaps
+statuses: [open, planned, in-progress, review, done, blocked-capability, needs-info]
+risks: [green, amber, red]
+required_sections:
+  - Overview
+  - Intent Contract
+  - Acceptance Criteria
+  - Plan
+  - Impacted Files
+  - Verification Plan
+  - Risk & Review Routing
+  - Activity

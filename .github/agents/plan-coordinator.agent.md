@@ -59,7 +59,7 @@ Combine all research findings into a structured plan:
 - Include best practices with source attribution
 - Note framework constraints with version references
 - Flag open questions that need resolution
-- Identify verification commands or manual checks
+- Select trusted named checks from `.github/harness/checks.yaml` plus any manual evidence
 - Identify risk-aware review routing for security, performance, architecture, data integrity, language-specific, or document-review needs
 
 ### 5. Write Plan File
@@ -69,29 +69,45 @@ Write the plan to `docs/plans/YYYY-MM-DD-<type>-<descriptive-name>-plan.md` with
 **YAML frontmatter:**
 ```yaml
 ---
+plan_schema: 1
 title: "<type>: <descriptive title>"
 type: feat|fix|refactor
 status: planned
 plan_lock: true
-date: YYYY-MM-DD
 phase: 1
+risk: green|amber|red
+autonomy: full|balanced|strict
 intent: "<one sentence goal>"
 expected_outputs: ["<artifact or behavior>"]
 success_criteria: ["<testable outcome>"]
-verification_commands: ["<command or manual check>"]
+verification:
+  required: ["<trusted-check-id>"]
+  criteria:
+    AC1: ["<trusted-check-id>"]
+reviews:
+  required: []
+  completed: []
+  critical_open: []
+skills_used: []
 org_objectives: []
+domains: []
+specialists: []
+capability_gaps: []
+created: YYYY-MM-DD
+updated: YYYY-MM-DD
 ---
 ```
 
 **Required sections:**
 - `## Overview` — problem statement / feature description
 - `## Context` — task-scoped facts, constraints, user intent, relevant code paths, and assumptions
-- `## Intent Contract` — goal, expected outputs, success criteria, verification commands, and known org objective
+- `## Intent Contract` — goal, expected outputs, success criteria, trusted named checks, and known org objective
 - Implementation phases with tasks
 - `## Acceptance Criteria`
 - `## Impacted Files` — allowlist of files expected to change
 - `## Research Notes` — all findings from research agents, file paths discovered, patterns to follow, anti-patterns to avoid
 - `## Verification Plan` — concrete checks that prove the work
+- `## Verification Evidence` — empty until `harness verify` writes an artifact
 - `## Risk & Review Routing` — specialist review needs by risk area
 - `## Activity` — initialized as append-only log
 
@@ -111,17 +127,32 @@ Include in Research Notes:
 
 ```markdown
 ---
+plan_schema: 1
 title: "<type>: <title>"
 type: feat|fix|refactor
 status: planned
 plan_lock: true
-date: YYYY-MM-DD
 phase: 1
+risk: green|amber|red
+autonomy: full|balanced|strict
 intent: "<one sentence goal>"
 expected_outputs: ["<artifact or behavior>"]
 success_criteria: ["<testable outcome>"]
-verification_commands: ["<command or manual check>"]
+verification:
+  required: ["<trusted-check-id>"]
+  criteria:
+    AC1: ["<trusted-check-id>"]
+reviews:
+  required: []
+  completed: []
+  critical_open: []
+skills_used: []
 org_objectives: []
+domains: []
+specialists: []
+capability_gaps: []
+created: YYYY-MM-DD
+updated: YYYY-MM-DD
 ---
 
 # <Title>
@@ -133,7 +164,7 @@ org_objectives: []
 [Facts, constraints, user intent, related artifacts, assumptions]
 
 ## Intent Contract
-[Goal, expected outputs, success criteria, verification commands, org objective if known]
+[Goal, expected outputs, success criteria, trusted named checks, org objective if known]
 
 ## Implementation Phases
 
@@ -155,8 +186,11 @@ org_objectives: []
 [Findings from research agents — this section persists context for /work-on-task]
 
 ## Verification Plan
-- `[command]` — [what this proves]
+- `<trusted-check-id>` — [what this proves]
 - Manual check: [what to inspect]
+
+## Verification Evidence
+[Filled by `harness verify`; only `passed` permits completion]
 
 ## Risk & Review Routing
 - Security: [required/not applicable and why]

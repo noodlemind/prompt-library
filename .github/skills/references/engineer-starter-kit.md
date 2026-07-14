@@ -33,8 +33,8 @@ Full list: `knowledge/capability-registry.yaml`
 | Growth type | Path |
 |-------------|------|
 | New pattern learned | `/compound-learnings` → `knowledge/solutions/` |
-| New workflow | capability-gap → `/create-primitive` → new skill |
+| New workflow | verified repeated use → compound classification → promotion evidence + evals → `/create-primitive` |
 | New specialist | capability-gap → new agent → update `engineer.agents:` + registry |
 | New convention | scoped instruction or repo `agent-context.md` |
 
-After adding skills/agents in this repo, run **`npm run build:assets`** in `packages/harness`, publish **`@dev-kit/harness`**, and update `knowledge/capability-registry.yaml`.
+After adding, deprecating, or retiring skills/agents, update ownership/lifecycle in `knowledge/capability-registry.yaml`, run **`npm run build:assets`** in `packages/harness`, and verify the package before publishing **`@dev-kit/harness`**.

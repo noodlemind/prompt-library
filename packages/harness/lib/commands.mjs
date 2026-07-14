@@ -22,6 +22,8 @@ import { readEvents, summarizeEvents, writeEvent } from './events.mjs';
 import { installHarnessBin } from './install-harness-bin.mjs';
 import { resolveHarnessBin, agentHarnessCommand } from './resolve-harness-bin.mjs';
 import { installGlobalHarnessShim, configureShellPath, globalHarnessShimPath } from './global-bin.mjs';
+import { readSession, writeSession } from './session.mjs';
+import { loadPolicy } from './policy.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const pkgRoot = pkgRootFromImportMeta(import.meta.url);
@@ -274,12 +276,29 @@ export async function cmdGate(argv) {
   const workspace = path.resolve(flags.workspace);
   const query = parseQueryFromArgv(argv, flags);
   const result = runGate({ workspace, flags, query });
+  const policy = loadPolicy(workspace, flags.enforcement);
+  const policyExitCode = policy.enforcement === 'enforce' ? result.exitCode : 0;
+  result.enforcement = policy.enforcement;
+  result.policyExitCode = policyExitCode;
+  const previous = readSession(workspace) || {};
+  writeSession(
+    workspace,
+    {
+      ...previous,
+      activePlan: result.plan?.path || previous.activePlan || null,
+      gatedPlan: result.plan?.path || null,
+      lastGateAt: new Date().toISOString(),
+      gateStatus: result.pass && result.exitCode === 0 ? 'pass' : policy.enforcement === 'enforce' && !result.pass ? 'blocked' : 'warn',
+      blockedReason: result.blockedReason,
+    },
+    flags.dryRun
+  );
   writeEvent(workspace, flags, {
     type: 'gate',
     command: 'gate',
     plan: result.plan?.path || null,
     phase: result.phase,
-    exitCode: result.exitCode,
+    exitCode: policyExitCode,
     checks: result.checks,
     blockedReason: result.blockedReason,
   });
@@ -294,7 +313,43 @@ export async function cmdGate(argv) {
     console.log('');
     console.log(result.pass ? 'harness gate: pass' : 'harness gate: FAIL — stop before editFiles');
   }
-  return result.exitCode;
+  return policyExitCode;
+}
+
+export async function cmdVerify(argv) {
+  const { runVerify, exitCodeForOutcome } = await import('./verify.mjs');
+  const flags = parseFlags(argv);
+  const workspace = path.resolve(flags.workspace);
+  const result = runVerify({ workspace, flags });
+  const exitCode = exitCodeForOutcome(result.outcome, result.enforcement);
+  const previous = readSession(workspace) || {};
+  writeSession(
+    workspace,
+    {
+      ...previous,
+      activePlan: result.plan || previous.activePlan || null,
+      lastVerifyAt: new Date().toISOString(),
+      lastVerifyOutcome: result.outcome,
+      lastEvidencePath: result.evidencePath,
+    },
+    flags.dryRun
+  );
+  writeEvent(workspace, flags, {
+    type: 'verify',
+    command: 'verify',
+    plan: result.plan,
+    exitCode,
+    result: result.outcome === 'passed' ? 'pass' : result.outcome === 'failed' ? 'fail' : 'warn',
+    checks: result.checks,
+    blockedReason: result.outcome === 'passed' ? null : `${result.outcome} verification`,
+  });
+
+  if (flags.json) console.log(JSON.stringify(result, null, 2));
+  else {
+    for (const check of result.checks) console.log(`${check.status.toUpperCase()}  ${check.id}  ${check.message}`);
+    console.log(`\nharness verify: ${result.outcome} — ${result.evidencePath}`);
+  }
+  return exitCode;
 }
 
 export async function cmdRecall(argv) {
@@ -348,11 +403,15 @@ export async function cmdValidatePlan(argv) {
   const flags = parseFlags(argv);
   const workspace = path.resolve(flags.workspace);
   const result = runValidatePlan({ workspace, flags, planPath: flags.plan });
+  const policy = loadPolicy(workspace, flags.enforcement);
+  const policyExitCode = policy.enforcement === 'enforce' ? result.exitCode : 0;
+  result.enforcement = policy.enforcement;
+  result.policyExitCode = policyExitCode;
   writeEvent(workspace, flags, {
     type: 'validate_plan',
     command: 'validate-plan',
     plan: result.plan?.path || null,
-    exitCode: result.exitCode,
+    exitCode: policyExitCode,
     checks: result.checks,
     blockedReason: result.blockedReason,
   });
@@ -367,7 +426,7 @@ export async function cmdValidatePlan(argv) {
     console.log('');
     console.log(result.pass ? 'harness validate-plan: pass' : 'harness validate-plan: FAIL');
   }
-  return result.exitCode;
+  return policyExitCode;
 }
 
 export async function cmdCompound(argv) {

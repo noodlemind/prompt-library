@@ -1,8 +1,11 @@
 import fs from 'fs';
 import path from 'path';
+import { createRequire } from 'node:module';
 
-const COPY_DIRS = ['bin', 'lib'];
+const require = createRequire(import.meta.url);
+const COPY_DIRS = ['bin', 'lib', 'config'];
 const COPY_FILES = ['package.json', 'retired.json'];
+const RUNTIME_DEPENDENCIES = ['yaml'];
 
 /**
  * Copy harness CLI into ~/.copilot/.harness-bin so agents can run without npx.
@@ -34,7 +37,27 @@ export function installHarnessBin(pkgRoot, copilotHome, flags, log) {
     copyFile(src, dest, rel, flags, log, stats);
   }
 
+  for (const dependency of RUNTIME_DEPENDENCIES) {
+    const src = resolveDependencyRoot(dependency);
+    const dest = path.join(destRoot, 'node_modules', dependency);
+    copyDirRecursive(src, dest, destRoot, flags, log, stats);
+  }
+
   return stats;
+}
+
+function resolveDependencyRoot(name) {
+  let current = path.dirname(require.resolve(name));
+  while (true) {
+    const manifest = path.join(current, 'package.json');
+    if (fs.existsSync(manifest)) {
+      const pkg = JSON.parse(fs.readFileSync(manifest, 'utf8'));
+      if (pkg.name === name) return current;
+    }
+    const parent = path.dirname(current);
+    if (parent === current) throw new Error(`Unable to locate runtime dependency: ${name}`);
+    current = parent;
+  }
 }
 
 function copyDirRecursive(srcDir, destDir, destRoot, flags, log, stats) {

@@ -1,0 +1,89 @@
+name: Harness plan verification
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  workflow_dispatch:
+    inputs:
+      enforcement:
+        description: observe, warn, or enforce
+        required: false
+        default: enforce
+
+permissions:
+  contents: read
+
+jobs:
+  harness-verification:
+    name: Harness verification (required when enforced)
+    runs-on: ubuntu-latest
+    env:
+      HARNESS_ENFORCEMENT: ${{ inputs.enforcement || vars.HARNESS_ENFORCEMENT || 'warn' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install pinned harness
+        run: npm install --global "@dev-kit/harness@${HARNESS_VERSION:-latest}"
+        env:
+          HARNESS_VERSION: ${{ vars.HARNESS_VERSION }}
+
+      - name: Resolve exactly one linked plan for product changes
+        id: plan
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          mapfile -t changed < <(git diff --name-only "${BASE_SHA}" "${HEAD_SHA}")
+          mapfile -t product < <(printf '%s\n' "${changed[@]}" | grep -Ev '^(docs/plans/|docs/|\.github/)' || true)
+          if [[ ${#product[@]} -eq 0 ]]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "No product files changed; plan verification is not required."
+            exit 0
+          fi
+          mapfile -t plans < <(printf '%s\n' "${changed[@]}" | grep -E '^docs/plans/[^/]+\.md$' || true)
+          if [[ ${#plans[@]} -ne 1 ]]; then
+            message="Product changes must resolve exactly one linked plan; found ${#plans[@]}."
+            if [[ "$HARNESS_ENFORCEMENT" == "enforce" ]]; then
+              echo "$message" >&2
+              exit 1
+            fi
+            echo "::warning::$message"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+          echo "path=${plans[0]}" >> "$GITHUB_OUTPUT"
+
+      - name: Validate explicit plan and implement gate
+        if: steps.plan.outputs.skip != 'true'
+        shell: bash
+        env:
+          PLAN: ${{ steps.plan.outputs.path }}
+        run: |
+          set -euo pipefail
+          harness validate-plan --plan "$PLAN" --enforcement "$HARNESS_ENFORCEMENT" --workspace . --json
+          harness gate --phase implement --plan "$PLAN" --enforcement "$HARNESS_ENFORCEMENT" --workspace . --json
+
+      - name: Run named checks and plan-to-diff verification
+        if: steps.plan.outputs.skip != 'true'
+        shell: bash
+        env:
+          PLAN: ${{ steps.plan.outputs.path }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: harness verify --plan "$PLAN" --base "$BASE_SHA" --enforcement "$HARNESS_ENFORCEMENT" --workspace . --json
+
+      - name: Upload verification evidence
+        if: always() && steps.plan.outputs.skip != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: harness-verification-evidence
+          path: .harness/evidence/*.json
+          if-no-files-found: error

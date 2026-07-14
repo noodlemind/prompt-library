@@ -17,11 +17,28 @@ _Add project-specific notes here._
 - Run \`harness doctor\` after global harness install.
 `;
 
+const CHECKS_STUB = `version: 1
+checks: {}
+# Add trusted argv arrays, for example:
+#   unit-tests:
+#     command: ["npm", "test"]
+#     timeout_seconds: 600
+`;
+
+const POLICY_STUB = `version: 1
+enforcement: observe
+gate_ttl_minutes: 30
+evidence_ttl_hours: 24
+exemptions: []
+waivers: []
+`;
+
 export function runInitRepo({ workspace, flags, log }) {
   const stats = { created: [] };
   const plansDir = path.join(workspace, 'docs', 'plans');
   const agentCtx = path.join(workspace, 'docs', 'agent-context.md');
   const knowledgeDir = path.join(workspace, 'knowledge');
+  const harnessConfigDir = path.join(workspace, '.github', 'harness');
 
   if (!flags.dryRun) fs.mkdirSync(plansDir, { recursive: true });
   const gitkeep = path.join(plansDir, '.gitkeep');
@@ -56,6 +73,21 @@ export function runInitRepo({ workspace, flags, log }) {
     log('updated .harness/run.mjs (refreshed stale runner)');
   } else {
     log('skip .harness/run.mjs (exists)');
+  }
+
+  for (const [name, content] of [
+    ['checks.yaml', CHECKS_STUB],
+    ['policy.yaml', POLICY_STUB],
+  ]) {
+    const configPath = path.join(harnessConfigDir, name);
+    if (!fs.existsSync(configPath)) {
+      if (!flags.dryRun) {
+        fs.mkdirSync(harnessConfigDir, { recursive: true });
+        fs.writeFileSync(configPath, content, 'utf8');
+      }
+      stats.created.push(`.github/harness/${name}`);
+      log(`created .github/harness/${name}`);
+    }
   }
 
   const manifest = path.join(knowledgeDir, 'manifest.yaml');

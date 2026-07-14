@@ -63,17 +63,30 @@ This is intentionally a plan file from the start, even while `status: open`. `/p
 **Frontmatter** (the state machine):
 ```yaml
 ---
+plan_schema: 1
 title: "<short, imperative title>"
 type: feat|fix|docs|refactor|chore
 status: open
 plan_lock: false
 phase: 0
 priority: P0|P1|P2|P3
+risk: green|amber|red
+autonomy: full|balanced|strict
 intent: ""
 expected_outputs: []
 success_criteria: []
-verification_commands: []
+verification:
+  required: []
+  criteria: {}
+reviews:
+  required: []
+  completed: []
+  critical_open: []
+skills_used: []
 org_objectives: []
+domains: []
+specialists: []
+capability_gaps: []
 created: YYYY-MM-DD
 updated: YYYY-MM-DD
 ---
@@ -86,6 +99,10 @@ updated: YYYY-MM-DD
 - `## Memory Cards` — optional; run `/recall` first and copy matching global/local bullets
 - `## Acceptance Criteria` — measurable checklist of requirements
 - `## Technical Notes` — implementation hints, constraints, dependencies
+- `## Plan` — state that phased tasks are pending `/plan-issue`
+- `## Impacted Files` — state that the allowlist is pending planning
+- `## Verification Plan` — state that named checks are pending; never add plan-authored command strings
+- `## Risk & Review Routing` — initial risk and expected review needs
 - `## Activity` — append-only lifecycle log, initialized with capture timestamp
 
 For bugs, add:
@@ -94,7 +111,9 @@ For bugs, add:
 
 ### 4. Validate Definition of Ready
 
-Required sections: **Overview**, **Acceptance Criteria**.
+Validate the file against plan schema v1. Definition of Ready still requires
+substantive **Overview** and **Acceptance Criteria** content; initialize every
+other schema-required section with a concise pending-planning marker.
 If any required information is missing, set `status: needs-info` and add a `## Missing` section with focused questions.
 
 ### 5. Print Summary

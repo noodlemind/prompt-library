@@ -1,4 +1,5 @@
 ---
+plan_schema: 1
 title: "<short, imperative title>"
 type: feat|fix|docs|refactor|chore
 status: open
@@ -11,7 +12,14 @@ autonomy: balanced
 intent: ""
 expected_outputs: []
 success_criteria: []
-verification_commands: []
+verification:
+  required: []
+  criteria: {}
+reviews:
+  required: []
+  completed: []
+  critical_open: []
+skills_used: []
 org_objectives: []
 domains: []
 specialists: []
@@ -39,7 +47,7 @@ Problem facts, constraints, related paths, prior art.
 - **Goal:**
 - **Expected outputs:**
 - **Success criteria:**
-- **Verification commands:**
+- **Verification checks:** Named checks from `.github/harness/checks.yaml`; never model-authored shell strings.
 - **Organizational objective:**
 
 ## Memory Cards
@@ -48,8 +56,8 @@ Compact recall bullets with `source:` paths (global `knowledge/solutions/...` or
 
 ## Acceptance Criteria
 
-- [ ] Measurable outcome 1
-- [ ] Measurable outcome 2
+- [ ] **AC1** Measurable outcome 1
+- [ ] **AC2** Measurable outcome 2
 
 ## Technical Notes
 
@@ -65,7 +73,7 @@ Bugs only.
 
 ## Plan
 
-Filled by `/plan-issue`: phased tasks with checkboxes.
+Filled by `/plan-issue`: phased tasks with checkboxes. Every acceptance-criterion ID maps to one or more names under `verification.criteria`.
 
 ## Research Notes
 
@@ -77,7 +85,11 @@ Allowlist of paths expected to change.
 
 ## Verification Plan
 
-Commands, tests, or checks that prove done.
+Trusted named checks that prove done. Commands live only in `.github/harness/checks.yaml` as argv arrays. Approved one-off commands run through the host's explicit tool approval and are recorded as external evidence; harness never executes command strings from this plan.
+
+## Verification Evidence
+
+Filled by `harness verify --plan <path>` with the evidence artifact path and outcome. Only `passed` permits completion.
 
 ## Risk & Review Routing
 

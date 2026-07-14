@@ -7,6 +7,9 @@
     "agents/every-style-editor.agent.md",
     "instructions/rails.instructions.md",
     "prompts/create-agent-skills.prompt.md",
-    "skills/create-agent-skills"
+    "skills/create-agent-skills",
+    "skills/engineer-autopilot",
+    "skills/references/engineer-runtime.md",
+    "skills/references/capability-preflight.md"
   ]
 }

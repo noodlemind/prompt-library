@@ -1,5 +1,11 @@
 # Harness Pre-Implementation Review
 
+> Historical review of the earlier proposal. Its universal capability preflight
+> and duplicated loop are superseded by
+> [`engineer-operating-model.md`](engineer-operating-model.md), deterministic
+> [`harness-enforcement.md`](harness-enforcement.md), and the task-mode boundary
+> plus sole normative delivery lifecycle in `.github/agents/engineer.agent.md`.
+
 **Purpose:** Explain how the proposed optimized harness works in plain terms, what is already in the repo vs still planned, and **gaps to close** before implementation — so the result is **usable by anyone in the enterprise** and **delivers faster** without silent failure modes.
 
 **Audience:** Reviewers signing off on [`composer-style-autonomous-harness-proposal.md`](composer-style-autonomous-harness-proposal.md).

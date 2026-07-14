@@ -1,9 +1,10 @@
 import fs from 'fs';
 import path from 'path';
 import { readSession } from './session.mjs';
-import { pickActivePlan, listPlanRels, parsePlanFrontmatter } from './plan-parse.mjs';
+import { loadPlan, pickActivePlan, listPlanRels, parsePlanFrontmatter } from './plan-parse.mjs';
 import { findMatchingPlans } from './recall-rank.mjs';
 import { intentContractHasContent } from './plan-goal.mjs';
+import { readEvidence } from './evidence.mjs';
 
 export function runGate({ workspace, flags, query = '' }) {
   const session = readSession(workspace);
@@ -14,7 +15,9 @@ export function runGate({ workspace, flags, query = '' }) {
 
   const planPaths = listPlanRels(workspace);
   const matches = query ? findMatchingPlans(workspace, query, 5) : [];
-  const plan = pickActivePlan(workspace, session, matches, planPaths);
+  const plan = flags.plan
+    ? loadPlan(workspace, flags.plan)
+    : pickActivePlan(workspace, session, matches, planPaths);
 
   if (!plan && planPaths.length === 0) {
     checks.push({
@@ -127,20 +130,19 @@ export function runGate({ workspace, flags, query = '' }) {
     }
 
     if (phase === 'verify') {
-      const activityEvidence = plan.sections.activityText || '';
-      const tests =
-        /npm test|pytest|mvn test|gradle test|go test|cargo test|vitest|jest/i.test(activityEvidence) &&
-        /(pass|passed|green|succeeded|success|ok|complete|completed)/i.test(activityEvidence);
-      if (!tests) {
+      const evidence = readEvidence(workspace, plan.path);
+      if (evidence?.outcome !== 'passed') {
         checks.push({
           id: 'V1',
           pass: false,
-          message: 'No verification evidence in plan (Verification Plan or Activity)',
+          message: evidence
+            ? `Latest harness verify outcome is ${evidence.outcome}`
+            : 'No harness verify evidence artifact for this plan',
           severity: 'warn',
         });
         exitCode = Math.max(exitCode, 2);
       } else {
-        checks.push({ id: 'V1', pass: true, message: 'Verification evidence found', severity: 'ok' });
+        checks.push({ id: 'V1', pass: true, message: `Passed verification evidence: ${evidence.evidencePath}`, severity: 'ok' });
       }
     }
   }
@@ -165,8 +167,10 @@ export function runGate({ workspace, flags, query = '' }) {
     nextTools: pass
       ? phase === 'verify'
         ? ['harness compound', '/auto-compound']
-        : ['editFiles (scoped)', 'harness gate --phase verify']
-      : ['harness orient', '/ensure-plan', '/ensure-capability'],
+        : ['editFiles (scoped)', `harness verify --plan ${plan?.path || '<path>'}`]
+      : plan?.status === 'blocked-capability'
+        ? ['read ensure-capability/SKILL.md']
+        : ['harness orient', '/ensure-plan'],
   };
 
   return result;
@@ -178,7 +182,7 @@ export function scanPlansForGate(workspace) {
     const full = path.join(workspace, rel);
     const text = fs.readFileSync(full, 'utf8');
     const fm = parsePlanFrontmatter(text);
-    if (fm.plan_lock === 'true') return rel;
+    if (fm.plan_lock === 'true' || fm.plan_lock === true) return rel;
   }
   return null;
 }

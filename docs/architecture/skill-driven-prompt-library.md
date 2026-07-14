@@ -15,7 +15,7 @@ The current library already has a strong compound-engineering base:
 - A local-first pipeline: `/capture-issue` -> `/plan-issue` -> `/work-on-task` -> `/code-review` -> `/compound-learnings`
 - Plan files in `docs/plans/` that preserve state, research notes, implementation notes, activity logs, and review findings
 - Specialist agents with bounded responsibilities and coordinator agents for planning and review
-- Skills using progressive disclosure, trigger examples, references, assets, and standalone/pipeline modes
+- Skills using progressive disclosure, trigger examples, references, assets, and explicit execution boundaries
 - Bundled review checks under skill references, optional product checks under `.github/checks/`, and durable learnings under `docs/solutions/`
 
 The main gap is presentation and governance. The repo historically explains itself as an agent collection with supporting skills. The standardized model should be the inverse: **skills are the primary reusable contract; agents, instructions, prompt wrappers, checks, plans, and solution docs support those skills.**
@@ -45,7 +45,7 @@ The practical rule is: global instructions carry broad behavior, scoped instruct
 | Review check | `.github/skills/code-review/references/checks/*.md` for library-managed checks; product repos may add `.github/checks/*.md` | Review criterion discovered by `/code-review` | A team wants a small, repeatable review rule without editing core agents |
 | Reference | `.github/skills/**/references/*.md` or `.github/skills/**/assets/*` | Supporting material loaded only by the owning skill | A skill needs dense examples, schemas, templates, or criteria without loading them every time |
 | Plan file | `docs/plans/*.md` | Local spec, state machine, context pack, and execution ledger | Work needs capture, planning, phased execution, review, and continuity |
-| Solution doc | `docs/solutions/**/*.md` | Verified learning that should be reusable in future work | A completed fix reveals a durable pattern, gotcha, or prevention rule |
+| Solution doc | `knowledge/solutions/**/*.md` (or product-private `docs/solutions/**/*.md`) | Verified learning that should be reusable in future work | A completed fix reveals a durable pattern, gotcha, or prevention rule |
 
 This library implements all standardization primitives needed for the current target: agents, skills, instructions, prompt wrappers, checks, references/assets, local plans, solution docs, and global install guidance. Checks are intentionally a prompt-library convention rather than a native Copilot customization type.
 
@@ -70,7 +70,17 @@ Keep **prompt wrappers** thin. They should route to skills and declare host tool
 
 ## Adaptive Capability Expansion
 
-When a repeated workflow, review need, convention, or supporting artifact appears missing, do not create a primitive directly. First document the gap with `.github/skills/references/capability-gap-proposal.md`, including overlap checks against existing skills, agents, instructions, prompt wrappers, checks, references, and solution docs.
+Capability gaps are handled on demand. The Engineer resolves explicit or
+safety-critical prerequisites early; otherwise it attempts ordinary work with
+existing tools and records a gap only when the task actually exposes one.
+Missing optional capability does not block unrelated work.
+
+Do not create a primitive for one unfamiliar task. A promotion candidate needs
+verified reuse evidence, generalizability, expected future value, and a reason
+an existing primitive cannot own the procedure. Then document the gap with
+`.github/skills/references/capability-gap-proposal.md`, including overlap checks
+against existing skills, agents, instructions, prompt wrappers, checks,
+references, and solution docs.
 
 Primitive creation or substantial primitive changes require human approval before `/create-primitive` proceeds. Use `.github/skills/references/human-approval-policy.md` for approval gates and record the decision in the proposal or active plan.
 
@@ -98,7 +108,7 @@ This repo does not need a separate runtime context-pack format to get most of th
 - `## Acceptance Criteria` — measurable outcomes
 - `## Research Notes` — local patterns, prior solution docs, external references, and open questions
 - `## Impacted Files` — allowlist of expected file changes
-- `## Verification Plan` — exact checks, commands, screenshots, or review gates that prove completion
+- `## Verification Plan` — trusted named checks, screenshots, or review gates that prove completion
 - `## Risk & Review Routing` — risks and which specialist review agents or checks should run
 - `## Implementation Notes` — decisions and deviations from work sessions
 - `## Review Findings` — synthesized review output and resolution notes
@@ -142,20 +152,27 @@ Agents should not store long reference material. Put reusable procedures in skil
 
 ## Standard Workflow
 
+Intake first separates fast read-only work from delivery. `/btw` answers quick questions; `@engineer` Investigate mode handles deeper evidence-only diagnosis; only Deliver mode enters the plan, mutation, verification, and compounding path. A read-only mode must transition to Deliver before editing.
+
 ```mermaid
 flowchart TD
   A["Raw request or issue"] --> B["/start or selected skill"]
   B --> C{"Known workflow?"}
+  C -->|Quick answer| Q["/btw"]
+  C -->|Deep read-only investigation| R["@engineer Investigate"]
   C -->|Explore| D["/brainstorming"]
   C -->|Capture| E["/capture-issue"]
   C -->|Plan| F["/plan-issue"]
-  C -->|Work| G["/work-on-task or /engineer"]
+  C -->|Ordinary work| G["@engineer Deliver"]
+  C -->|Execute locked plan| W["/work-on-task"]
   D --> E
   E --> F
   F --> H["/deepen-plan or /document-review when useful"]
-  H --> G
-  F --> G
-  G --> I["Verification evidence"]
+  H --> W
+  F --> W
+  G --> I
+  W --> I
+  I["Verification evidence"]
   I --> J["/code-review"]
   J --> K{"Accepted and verified?"}
   K -->|Yes| L["/compound-learnings"]
@@ -165,7 +182,7 @@ flowchart TD
 ## Governance
 
 - Treat skills, agents, instructions, prompt wrappers, hooks, checks, scripts, and MCP metadata as executable governance artifacts.
-- **Harness vs skill scripts:** Cross-repo deterministic agent tools live in **`@dev-kit/harness`** (`orient`, `gate`, `recall`, `index`, `compound`, `validate-plan`). Skills are thin orchestration that invoke harness with `--json`. Skill-local `scripts/` is allowed only for narrow, read-only validators tied to one skill — see [`.github/skills/references/harness-tool-contract.md`](../.github/skills/references/harness-tool-contract.md).
+- **Harness vs skill scripts:** Cross-repo deterministic agent tools live in **`@dev-kit/harness`** (`orient`, `gate`, `verify`, `recall`, `index`, `compound`, `validate-plan`). Skills are thin orchestration that invoke harness with `--json`. Skill-local `scripts/` is allowed only for narrow, read-only validators tied to one skill — see [`.github/skills/references/harness-tool-contract.md`](../../.github/skills/references/harness-tool-contract.md).
 - Do not pre-approve shell or network access in community or shared artifacts without local review.
 - Keep permissions minimal in agent frontmatter and prompt wrappers.
 - Prefer read-only specialist agents for review and research.

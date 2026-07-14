@@ -38,7 +38,7 @@ export function writeSession(workspace, session, dryRun) {
 export function ensureHarnessDir(workspace, dryRun) {
   const dir = harnessDir(workspace);
   const gitignore = path.join(dir, '.gitignore');
-  const content = '# Ephemeral per-turn artifacts\ncontext-pack.md\nevents.jsonl\n';
+  const content = '# Ephemeral per-turn artifacts\ncontext-pack.md\nevents.jsonl\nevidence/\n';
   if (!fs.existsSync(gitignore)) {
     if (!dryRun) {
       fs.mkdirSync(dir, { recursive: true });
@@ -46,7 +46,7 @@ export function ensureHarnessDir(workspace, dryRun) {
     }
   } else if (!dryRun) {
     const current = fs.readFileSync(gitignore, 'utf8');
-    const missing = ['context-pack.md', 'events.jsonl'].filter((entry) => !current.includes(entry));
+    const missing = ['context-pack.md', 'events.jsonl', 'evidence/'].filter((entry) => !current.includes(entry));
     if (missing.length) fs.appendFileSync(gitignore, `${missing.join('\n')}\n`, 'utf8');
   }
   return dir;

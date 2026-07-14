@@ -1,4 +1,11 @@
-# Composer-Style Autonomous Harness — Optimization Proposal
+# Thin Engineer, Distributed Harness
+
+> Historical optimization proposal. The current normative ownership and runtime
+> modes are defined in [`engineer-operating-model.md`](engineer-operating-model.md).
+> References below to a universal capability preflight, `engineer-autopilot`, or
+> `engineer-runtime`, plus every-turn recall/orientation, are superseded and
+> retained only as decision history. Current Answer and Investigate modes stay
+> read-only; only Deliver enters the delivery lifecycle.
 
 How to restructure the Adaptive Engineer Harness the way **Cursor Composer** or **Windsurf** engineers would: **one autonomous loop**, **automatic memory**, **retrieval not ceremony**, and **human consent only when risk warrants it** — while keeping the **document-based** foundation.
 

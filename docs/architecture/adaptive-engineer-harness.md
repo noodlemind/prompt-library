@@ -8,20 +8,20 @@ The goal is not to make one prompt know everything. The goal is to make `@engine
 
 ## Runtime Model
 
-`@engineer` owns the main loop:
+The task-mode boundary and sole normative nine-step delivery lifecycle live in
+`.github/agents/engineer.agent.md`. Answer and Investigate remain read-only;
+only Deliver enters the lifecycle. This document defines supporting
+architecture, not another execution checklist. Ownership, runtime modes, and
+the duplicate-contract inventory live in `engineer-operating-model.md`.
 
-1. **Recall** team and repo knowledge (`/recall`; global `knowledge/manifest.yaml` + local plans).
-2. Understand the user request and local context.
-3. Route to the best existing skill or pipeline step.
-4. Pass the **capture gate** on trackable work (`/capture-issue` before code edits; see `.github/skills/references/capture-gate.md`).
-5. Identify whether specialist judgment is needed.
-6. Package delegated work with a subagent context packet.
-7. Ask the human for approval before risky decisions or capability expansion.
-8. Implement or orchestrate implementation.
-9. Verify with evidence.
-10. Suggest **`/compound-learnings`** and **`/index-memory`** to publish cross-repo learnings.
+At integration points, deterministic harness commands enforce the plan gate,
+scope, named checks, and completion evidence. Skills are loaded only when the
+current task needs their procedure. Missing optional capability does not block
+ordinary engineering; explicit or safety-critical gaps are resolved at the
+affected step and can block only that work unless waived.
 
-See `docs/architecture/engineer-memory-system.md` for tiers (user / global / product).
+See `engineer-memory-system.md` for memory tiers and
+`harness-enforcement.md` for runtime enforcement.
 
 Expansion uses `/create-primitive` across all primitive types:
 
@@ -74,17 +74,14 @@ User input:
 
 > I noticed that transactions are facing a race condition even though we implemented `saveAndFlush`. Can you investigate and fix it?
 
-Expected engineer behavior:
+Illustrative decisions within the canonical Engineer loop:
 
-1. **Understand**: Restate the symptom, affected flow, data invariants, and current assumption: `saveAndFlush` flushes the persistence context but does not serialize concurrent transactions.
-2. **Route**: Treat it as a high-risk data-integrity/concurrency bug. Use `/tdd-fix` if the failure is isolated and reproducible; otherwise capture and plan it with Java, SQL/data-integrity, and performance review routing.
-3. **Recall + capture**: Run `/recall` for similar team solutions; if multi-file or data-sensitive, invoke `/capture-issue` then `/plan-issue` — do not create plans inline.
-4. **Reproduce first**: Require a failing concurrent reproduction before implementation.
-5. **Investigate**: Inspect transaction boundaries, database constraints, idempotency keys, lock use, atomic updates, isolation level, retries, and error handling.
-6. **Delegate**: Package Java, SQL/data-integrity, and performance review requests with subagent context packets when separate judgment is useful.
-7. **Approval gate**: Ask the human before choosing idempotency, uniqueness constraints, optimistic locking, pessimistic locking, atomic updates, or isolation changes.
-8. **Implement**: Apply the approved strategy with minimal scope and tests.
-9. **Verify**: Run repeated concurrent tests, normal-path tests, and relevant review checks.
-10. **Present**: Report root cause, chosen strategy, why alternatives were not selected, evidence from repeated concurrent runs, and remaining risk.
+- Establish the symptom, affected flow, data invariants, and the important distinction that `saveAndFlush` does not serialize concurrent transactions.
+- Treat the issue as data-integrity risk, retrieve relevant knowledge, and ensure a locked plan before edits.
+- Reproduce the race with a failing concurrent test before changing behavior.
+- Inspect transaction boundaries, database constraints, idempotency, locks, atomic updates, isolation, retries, and error handling.
+- Consult Java, SQL/data-integrity, or performance specialists only when separate judgment materially improves the decision; pass a bounded context packet and integrate the evidence.
+- Obtain approval before a risky persistence strategy change, apply the smallest approved fix, and run repeated concurrent and normal-path checks.
+- Report the root cause, selected tradeoff, deterministic verification evidence, and remaining risk.
 
 If the engineer encounters this class of issue repeatedly and existing skills are not sufficient, it should prepare a capability-gap proposal and ask the human whether to create a dedicated primitive. The sample does not imply that a transaction-concurrency skill ships by default.

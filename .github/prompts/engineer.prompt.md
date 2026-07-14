@@ -1,19 +1,9 @@
 ---
-description: Adaptive Engineer — recall, capture gate, skill-first execution
+description: Route an end-to-end engineering outcome to the accountable Engineer
 agent: engineer
 tools: ["agent", "codebase", "search", "read", "editFiles", "changes", "execute", "terminalLastCommand", "awaitTerminal", "problems", "usages", "fetch", "githubRepo"]
 ---
 
 ${input}
 
-**Mandatory before any work:** Read [engineer-autopilot skill](../skills/engineer-autopilot/SKILL.md) and follow its loop exactly.
-
-**Harness CLI (global — after `harness install`):** Run via **`execute`** tool:
-```bash
-harness orient --query "<task summary>" --workspace . --json
-harness gate --phase implement --workspace . --json
-```
-
-Not on PATH? Use `node ~/.copilot/bin/harness …` or run `harness install --configure-path`.
-
-**Skill contract:** Before each autopilot phase, **read** the corresponding `SKILL.md` (ensure-capability, ensure-plan, work-on-task, auto-compound) — do not improvise workflow steps.
+Select the appropriate task mode in the routed `@engineer` agent. Use the canonical delivery lifecycle only when files will change; a read-only investigation reports evidence without plan or verification ceremony. Load a detailed skill only when its reusable procedure is relevant. For trackable delivery, use an explicit plan and deterministic `harness verify` evidence before completion.

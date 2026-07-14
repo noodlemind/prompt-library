@@ -33,7 +33,7 @@ Would engineers who built **Cursor Composer** or **Windsurf Cascade** approve th
 
 | Gap | Why it fails | Fix |
 |-----|--------------|-----|
-| 17 KB `engineer.agent.md` | Buries checklist; weak models skip tail | Slim agent + `engineer-runtime.md` on demand |
+| 17 KB `engineer.agent.md` | Buries checklist; weak models skip tail | Thin accountable agent + task-specific skills on demand |
 | “Read 4 references each session” | Models do not reliably load external refs | Inline checklist + 12-line recall procedure |
 | Keyword-only `manifest.yaml` | Poor recall vs embeddings | Top-k + tag scoring; v2 embeddings documented |
 | Duplicate capture/rules prose | Conflicts and drift | Single gate in checklist |
@@ -67,11 +67,11 @@ Would engineers who built **Cursor Composer** or **Windsurf Cascade** approve th
 
 ## Implementation checklist (maintainers)
 
-- [ ] `engineer.agent.md` under ~8 KB; checklist **inlined**
-- [ ] `context-budget.md` enforced in recall + memory cards
-- [ ] No second full copy of capture gate in agent body
-- [ ] `copilot-instructions.md` under ~4 KB for non-engineer agents
-- [ ] Every pipeline skill points to `knowledge-locations.md` only
+- [x] `engineer.agent.md` within the frozen 600–900-token budget
+- [x] `context-budget.md` enforced in recall + memory cards
+- [x] No second normative Engineer loop
+- [x] `copilot-instructions.md` remains thin for non-engineer agents
+- [x] Every pipeline skill points to `knowledge-locations.md` only
 
 ## v2 (parity with Composer index)
 

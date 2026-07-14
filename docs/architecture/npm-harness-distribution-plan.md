@@ -167,7 +167,7 @@ See `packages/harness/package.json` and [`nexus-registry-setup.md`](../onboardin
 
 | Package | Contents | When to use |
 |---------|----------|-------------|
-| **Core** (`@dev-kit/harness`) | All base skills, agents, knowledge templates, internal autopilot skills | Everyone |
+| **Core** (`@dev-kit/harness`) | Base skills, agents, hooks, trusted-check templates, policy, and knowledge templates | Everyone |
 | **`@dev-kit/harness-enterprise`** | Splunk/Terraform agents, corp instructions, `capability-registry.enterprise.yaml` | Corp overlay only |
 | **`@dev-kit/harness-knowledge`** | Pre-built `solutions/` + `manifest.yaml` (semver team memory) | Platform publishes after compounding milestones |
 | **Git release** (alt) | `harness knowledge pull --tag v1.2.0` | Simpler for fast-moving solutions |
@@ -193,10 +193,11 @@ Declare in `peerDependencies` and verify in `aeh doctor`.
 | **`harness doctor`** | Health checks (replaces `/harness-doctor` file checks + paths) |
 | **`harness index`** | Rebuild `knowledge/manifest.yaml` |
 | **`harness orient`** | Recall + context-pack for `@engineer` |
-| **`harness gate`** | Pre-edit / verify enforcement (exit codes) |
+| **`harness gate`** | Explicit-plan pre-edit enforcement |
+| **`harness verify`** | Trusted named checks, diff scope, and evidence outcome |
 | **`harness validate-plan`** | Read-only plan template compliance |
-| **`harness compound`** | Post-verify index + session close-out |
-| **`harness init-repo`** | Create `docs/plans/`, stub `docs/agent-context.md`, optional `knowledge/` fallback |
+| **`harness compound`** | Passed-evidence learning classification, telemetry, and index close-out |
+| **`harness init-repo`** | Create plan, trusted-check, policy, and local context scaffolding |
 | **`harness status`** | Print installed version, paths, last sync time |
 | **`harness uninstall`** | Remove only files listed in `.harness-lock.json` (never delete whole `~/.copilot`) |
 

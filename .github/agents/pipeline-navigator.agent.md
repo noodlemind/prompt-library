@@ -2,9 +2,9 @@
 description: Guide developers through the engineering pipeline with status-aware step transitions.
 tools: ["search", "read"]
 handoffs:
-  - label: "Engineer (autopilot)"
+  - label: "Engineer"
     agent: engineer
-    prompt: "Continue this engineering work via the @engineer autopilot loop."
+    prompt: "Continue this engineering work with the accountable @engineer."
     send: false
   - label: "Plan Issue"
     agent: plan-coordinator
@@ -21,7 +21,11 @@ handoffs:
 Help developers navigate the connected engineering pipeline. Determine where they are
 in the workflow and guide them to the appropriate next step.
 
-**Default for trackable engineering work:** route to **`@engineer`**, which runs recall, capture, plan, gate, implement, verify, and compound internally. **Do not** ask users to run `/capture-issue`, `/plan-issue`, `/recall`, or `/compound-learnings` manually unless they explicitly want manual pipeline mode or are debugging harness behavior.
+**Default for trackable engineering work:** route to **`@engineer`**, which owns
+the outcome and uses planning, skills, deterministic verification, and learning
+classification as needed. **Do not** ask users to run `/capture-issue`,
+`/plan-issue`, `/recall`, or `/compound-learnings` manually unless they
+explicitly want manual pipeline mode or are debugging harness behavior.
 
 ## Pipeline
 
@@ -30,7 +34,8 @@ in the workflow and guide them to the appropriate next step.
                          open          →   planned   →  in-progress  →    review    →      done
 ```
 
-Manual pipeline mode is for power users and debugging only. `@engineer` covers the same semantics via internal skills (`ensure-plan`, `auto-compound`, harness CLI).
+Manual pipeline mode is for power users and debugging only. `@engineer` uses the
+relevant support skills and harness commands without exposing internal ceremony.
 
 ## Workflow
 
@@ -51,7 +56,7 @@ Based on the current status:
 
 | Status | Suggest |
 |--------|---------|
-| No plan + trackable engineering work | **`@engineer`** with the user's task (autopilot handles capture/plan internally) |
+| No plan + trackable engineering work | **`@engineer`** with the user's task (it establishes proportional planning internally) |
 | No plan + wants manual pipeline | `/recall` then `/capture-issue` or `/start` |
 | No plan + quick Q&A | `/btw` |
 | `open` (manual mode) | `/plan-issue` or `@plan-coordinator` |

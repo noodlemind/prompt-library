@@ -6,7 +6,7 @@ This file contains accumulated knowledge about the codebase, discovered by agent
 
 This repository is a skill-driven prompt library containing AI agent systems:
 - `.github/agents/` — 24 agents (19 specialists + 1 engineer + 1 implementer + 3 coordinators, judgment-criteria style)
-- `.github/skills/` — 31 skills including Composer-style autopilot (`ensure-plan`, `ensure-capability`, `auto-compound`, `engineer-autopilot`)
+- `.github/skills/` — 30 skills including internal planning (`ensure-plan`), on-demand gap resolution (`ensure-capability`), and verified learning (`auto-compound`)
 - `enterprise/` — optional corp overlay (skills, agents, capability-gaps) hydrated to `~/.copilot/enterprise/`
 - `harness index` — deterministic manifest rebuild (replaces manual index steps; `@dev-kit/harness` is only the npm package name)
 - `docs/onboarding/harness-quickstart.md` — enterprise onboarding
@@ -33,7 +33,7 @@ This repository is a skill-driven prompt library containing AI agent systems:
 - Skills follow progressive disclosure (frontmatter → body → references)
 - The connected pipeline: `/brainstorming` (optional) → `/capture-issue` → `/plan-issue` → `/deepen-plan` (optional) → `/work-on-task` → `/code-review` → `/compound-learnings`. `/btw` is quick Q&A outside the pipeline. `/project-readme` is documentation maintenance outside implementation planning. `/create-primitive` is the canonical primitive creator for skills, agents, instructions, checks, wrappers, references, and solution docs. `/java`, `/python`, `/sql`, and `/aws` are reusable domain workflow skills that pair with scoped instructions and specialist reviewers.
 - State machine: `status` (open/planned/in-progress/review/done/blocked-capability), `plan_lock`, `phase`, `domains`, `capability_gaps`
-- `@engineer` runs autonomous loop per `engineer-autopilot` — do not ask users to run capture/plan/recall/compound manually
+- `@engineer` owns the sole normative nine-step delivery lifecycle in `engineer.agent.md`; quick Answer and read-only Investigate modes stay outside it, skills load on demand, and users are not asked to run internal support steps manually
 - Activity logs in plan files provide session continuity
 - Plan files are the local context pack. Standard sections include `## Context`, `## Acceptance Criteria`, `## Research Notes`, `## Impacted Files`, `## Verification Plan`, `## Risk & Review Routing`, `## Implementation Notes`, `## Review Findings`, and `## Activity`.
 
@@ -62,8 +62,8 @@ The `/code-review` skill uses persona-based review with structured JSON findings
 ### Document Review as Quality Gate
 The `/document-review` skill uses 4 personas (design, scope, coherence, feasibility) with per-document-type criteria. Available between brainstorm→plan and plan→work as a quality gate. Evaluation criteria in `references/review-criteria.md`. P1 findings block proceeding; P2/P3 auto-applied in non-interactive mode.
 
-### Standalone + Pipeline Mode
-Pipeline skills (capture-issue, plan-issue, work-on-task, code-review, compound-learnings) support two modes. Pipeline mode: plan file with `status:` field → enforce state machine. Standalone mode: no plan file or no state fields → skip validation, do the core job directly. Mode detection is at the top of each skill's workflow.
+### Explicit execution boundary
+`work-on-task` executes or resumes an explicit locked plan only. `@engineer` owns ordinary end-to-end work, while planning, review, and compounding retain their dedicated procedures.
 
 ### Verification Before Completion
 `/work-on-task` and `/engineer` run evidence-based verification before claiming completion: tests pass (actual output reported), files match plan scope, all phase tasks checked, clean working state. Verification results logged in activity entries. Failed verification blocks completion claims.
@@ -78,7 +78,7 @@ Five orchestrating skills (code-review, plan-issue, deepen-plan, work-on-task, e
 `.github/skills/references/knowledge-locations.md` — single list of read/write paths; do not duplicate in other primitives.
 
 ### Engineer Agent
-Slim orchestrator with **inlined session checklist** (~4 KB agent body). Loop: Recall → Gate → Investigate → Plan → Implement → Verify. Context caps: `context-budget.md`. Composer parity: `docs/architecture/composer-parity-review.md`. Entry: `@engineer` or `/engineer`.
+Thin accountable orchestrator within a 600–900 estimated-token frozen budget. It classifies Answer, Investigate, Deliver, or Review; its nine-step delivery lifecycle is the only normative change-making sequence. Context caps: `context-budget.md`; operating model: `docs/architecture/engineer-operating-model.md`. Entry: `@engineer` or `/engineer`.
 
 ### Engineer Memory System
 `docs/architecture/engineer-memory-system.md` defines three tiers: product `docs/plans/` (local), global `knowledge/solutions/` (hydrated team-wide), optional `profile.md` (user preferences). `/recall` runs before investigate; `/compound-learnings` publishes globally; `/index-memory` rebuilds `manifest.yaml`. Capture gate: `.github/skills/references/capture-gate.md`.

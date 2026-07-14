@@ -1,6 +1,6 @@
 # Domain Routing
 
-Engineer intake merges `knowledge/capability-registry.yaml` + `enterprise/capability-registry.enterprise.yaml` (`domain_routing` section).
+Use domain routing when the task or changed files make domain procedure or judgment relevant. Do not merge and read the entire registry at session start; consult the base or enterprise registry on demand when discovery is needed.
 
 ## Base library
 
@@ -18,11 +18,11 @@ Engineer intake merges `knowledge/capability-registry.yaml` + `enterprise/capabi
 | terraform, `.tf`, HCL | `terraform` | `terraform-reviewer` |
 | splunk, SPL, `index=` | — | `splunk-reviewer` |
 
-## Missing skill
+## Missing capability encountered
 
-- Log `capability_gaps` on plan
-- **soft** (default): proceed with `best-practices-researcher` / `framework-docs-researcher`
-- **hard**: `/ensure-capability` blocks execute
+- Missing optional skill: inspect repository conventions and authoritative docs; proceed with ordinary low-risk work.
+- Unresolved uncertainty: invoke `/ensure-capability` for the affected criterion.
+- Safety-critical or explicitly required missing capability: block only the affected operation until fulfilled, bridged, or explicitly waived.
 
 ## Allowlist
 

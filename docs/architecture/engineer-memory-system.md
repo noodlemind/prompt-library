@@ -5,9 +5,9 @@ How the Adaptive Engineer Harness combines **local plan memory** (product repos)
 ## Design goals
 
 1. **Capture before code** — reusable `docs/plans/` artifacts (see `capture-gate.md`).
-2. **Recall before investigate** — top-k manifest + memory cards only (`context-budget.md`).
+2. **Recall proportionally** — top-k manifest + memory cards for substantial investigation and delivery, not quick answers (`context-budget.md`).
 3. **Compound after verify** — publish patterns every team repo can reuse.
-4. **Bounded prompts** — frozen checklist in `@engineer`; details on demand (`engineer-runtime.md`).
+4. **Bounded prompts** — the frozen loop stays in `@engineer`; task-specific details load on demand (`context-budget.md`).
 5. **Host portability** — files + hydrate; no dependency on a single IDE memory API.
 
 **Composer parity bar:** `composer-parity-review.md`.
@@ -74,7 +74,11 @@ Return **memory cards** (bullets with `source:` paths) — not full file dumps.
 
 ## Engineer integration
 
-`@engineer` workflow: **Recall (0) → Understand → Route → Capture Gate → Investigate → Plan → Implement → Verify → Compound suggestion**.
+`@engineer` owns the task-mode boundary and canonical delivery lifecycle in
+`.github/agents/engineer.agent.md`. Memory participates proportionally: minimal
+reads for Answer, relevant recall for substantial Investigate or Deliver,
+plan/activity updates during governed delivery, and classification after passed
+verification. This is a memory contract, not a second runtime sequence.
 
 Context paths: `.github/skills/references/knowledge-locations.md`. Vision and growth: `engineer-vision-and-growth-loop.md`.
 
