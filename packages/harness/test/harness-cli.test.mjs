@@ -784,6 +784,42 @@ test('compound blocks when passed harness evidence is absent', () => {
   assert.equal(body.exitCode, 2);
 });
 
+test('compound preserves malformed telemetry and still records session state', () => {
+  const workspace = tempDir('harness-workspace-');
+  const copilotHome = tempDir('harness-copilot-');
+  const plan = writeVersionedPlan(workspace);
+  writeChecks(workspace, {
+    'unit-tests': { command: [process.execPath, '-e', 'process.exit(0)'] },
+  });
+  initGit(workspace);
+  const verify = runHarness(['verify', '--plan', plan, '--base', 'HEAD', '--workspace', workspace, '--json']);
+  assert.equal(verify.status, 0, verify.stderr);
+
+  const knowledge = path.join(copilotHome, 'knowledge');
+  const usagePath = path.join(knowledge, 'skill-usage.yaml');
+  fs.mkdirSync(knowledge, { recursive: true });
+  fs.writeFileSync(usagePath, 'skills: [unterminated', 'utf8');
+
+  const result = runHarness([
+    'compound',
+    '--plan',
+    plan,
+    '--workspace',
+    workspace,
+    '--copilot-home',
+    copilotHome,
+    '--json',
+  ]);
+
+  assert.equal(result.status, 0, result.stderr);
+  const body = JSON.parse(result.stdout);
+  assert.equal(body.pass, true);
+  assert.deepEqual(body.telemetry.updated, []);
+  assert.match(body.telemetry.error, /invalid skill usage telemetry/i);
+  assert.equal(fs.readFileSync(usagePath, 'utf8'), 'skills: [unterminated');
+  assert.ok(JSON.parse(fs.readFileSync(path.join(workspace, '.harness', 'session.json'), 'utf8')).lastCompoundAt);
+});
+
 test('gate and compound reject evidence after the plan or scoped workspace changes', () => {
   for (const mutation of ['plan', 'workspace']) {
     const workspace = tempDir('harness-workspace-');
@@ -825,26 +861,24 @@ test('telemetry preserves malformed history instead of overwriting it', () => {
   fs.mkdirSync(knowledge, { recursive: true });
   fs.writeFileSync(usagePath, 'skills: [unterminated', 'utf8');
 
-  assert.throws(
-    () => recordSkillUsage({
-      copilotHome,
-      plan: { path: 'docs/plans/x.md', fm: { skills_used: ['engineer'] } },
-      evidence: { outcome: 'passed' },
-    }),
-    /invalid skill usage telemetry/i
-  );
+  const invalidYaml = recordSkillUsage({
+    copilotHome,
+    plan: { path: 'docs/plans/x.md', fm: { skills_used: ['engineer'] } },
+    evidence: { outcome: 'passed' },
+  });
+  assert.deepEqual(invalidYaml.updated, []);
+  assert.match(invalidYaml.error, /invalid skill usage telemetry/i);
   assert.equal(fs.readFileSync(usagePath, 'utf8'), 'skills: [unterminated');
 
   const malformedEntry = 'skills:\n  engineer:\n    usage_count: many\n    outcomes: passed\n';
   fs.writeFileSync(usagePath, malformedEntry, 'utf8');
-  assert.throws(
-    () => recordSkillUsage({
-      copilotHome,
-      plan: { path: 'docs/plans/x.md', fm: { skills_used: ['engineer'] } },
-      evidence: { outcome: 'passed' },
-    }),
-    /invalid skill usage telemetry/i
-  );
+  const invalidEntry = recordSkillUsage({
+    copilotHome,
+    plan: { path: 'docs/plans/x.md', fm: { skills_used: ['engineer'] } },
+    evidence: { outcome: 'passed' },
+  });
+  assert.deepEqual(invalidEntry.updated, []);
+  assert.match(invalidEntry.error, /invalid skill usage telemetry/i);
   assert.equal(fs.readFileSync(usagePath, 'utf8'), malformedEntry);
 });
 

@@ -43,8 +43,10 @@ Use `subagent-context-packet.md` only when bounded expertise, isolation, or inde
 When the phase tasks are checked, run the plan's deterministic verifier:
 
 ```bash
-harness verify --plan <path> --workspace . --json
+harness verify --plan <path> --base <base-ref> --workspace . --json
 ```
+
+Use the PR target branch or CI base SHA as `<base-ref>` so local scope evidence matches the merge diff.
 
 - `passed`: record the evidence path, append a timestamped Activity entry, and advance `phase` or set `status: review` when all phases are complete.
 - `failed`: record the failed checks and continue working; do not advance.

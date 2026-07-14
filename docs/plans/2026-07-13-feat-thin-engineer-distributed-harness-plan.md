@@ -37,8 +37,8 @@ verification:
     AC17: [harness-tests, prompt-contracts]
     AC18: [prompt-contracts]
 reviews:
-  required: ["CodeRabbit full-diff review"]
-  completed: ["CodeRabbit full-diff review"]
+  required: ["CodeRabbit full-diff review", "CodeRabbit incremental review"]
+  completed: ["CodeRabbit full-diff review", "CodeRabbit incremental review"]
   critical_open: []
 skills_used:
   - engineer
@@ -292,7 +292,7 @@ Implement the attached Adaptive Engineer plan as the prompt library's runtime an
 
 - **Outcome:** passed
 - **Artifact:** `.harness/evidence/2026-07-13-feat-thin-engineer-distributed-harness-plan-ea4eb10ef887.json`
-- **Named checks:** `harness-tests` (87/87), `prompt-contracts` (13/13), `host-contracts` (2/2), and `build-assets` passed.
+- **Named checks:** `harness-tests` (88/88), `prompt-contracts` (13/13), `host-contracts` (2/2), and `build-assets` passed.
 - **Structural checks:** schema/state, all phase tasks, all 18 criterion mappings, changed-file scope, reviews, hard gaps, and critical findings passed.
 
 ## Risk & Review Routing
@@ -377,6 +377,14 @@ Implement the attached Adaptive Engineer plan as the prompt library's runtime an
 - The fresh full-diff review completed normally with three findings: one major and two minor.
 - Addressed both valid minor findings by normalizing Windows plan paths and making Git subprocess error handling null-safe; added a completion-hook portability regression.
 - Declined the major suggestion to remove `Review` task mode because it contradicts the canonical four-mode definitions in `docs/architecture/engineer-harness.md`, `AGENTS.md`, and `.github/agents/engineer.agent.md`.
+- **Disposition:** all applicable findings resolved; no open critical findings.
+
+### CodeRabbit pass 9
+
+- The delayed incremental review reported one valid major telemetry finding, one valid minor phase-verification finding, and two nitpicks.
+- Made telemetry failure best-effort so malformed history or lock contention cannot abort compounding before session state is saved; added an end-to-end regression.
+- Added the explicit PR/CI base ref to phase verification and the required state fields to plan guidance.
+- Declined package-level YAML parsing in hydrated hooks because product repositories cannot assume the harness package dependency is installed; the standalone parser intentionally fails to safe defaults.
 - **Disposition:** all applicable findings resolved; no open critical findings.
 
 ## Agent Journal
@@ -517,3 +525,16 @@ Implement the attached Adaptive Engineer plan as the prompt library's runtime an
 - JavaScript syntax, plan schema, diff integrity, hydrated asset build, and npm package dry-run all passed on the final commit candidate.
 - **Evidence:** `.harness/evidence/2026-07-13-feat-thin-engineer-distributed-harness-plan-ea4eb10ef887.json`, bound to `main`, the plan contract, changed-file set, and workspace contents.
 - **Status:** review, Phase 9; ready for cleanup commit and PR update.
+
+### 2026-07-14 13:12 — Incremental review fix implemented
+
+- Preserved telemetry as non-blocking observability: invalid history remains untouched and returns structured error context while compounding and session bookkeeping succeed.
+- Aligned local phase verification with the PR base and completed the plan contract inventory in `docs/plans/README.md`.
+- Focused telemetry, compounding, and prompt-contract regressions passed; full evidence refresh follows before the review-fix commit.
+- **Status:** review, Phase 9.
+
+### 2026-07-14 13:15 — Incremental review fix verified
+
+- Enforce-mode verification passed 88/88 harness tests, 13/13 prompt contracts, 2/2 host contracts, asset build, all acceptance criteria, exact scope, review, gap, and critical-finding gates.
+- JavaScript syntax, plan schema, and diff integrity checks passed; evidence was refreshed against `main`.
+- **Status:** review, Phase 9; ready for the review-fix commit.

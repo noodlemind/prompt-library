@@ -22,6 +22,6 @@ This prompt-library repository should normally contain no dated plans. An open p
 
 Track active issues under **`docs/plans/` in each product repo** while they are open. Apply the same promote-then-delete rule after merge.
 
-New plans use `plan_schema: 1` and carry machine-readable `intent`, `expected_outputs`, stable acceptance-criterion IDs, named `verification.required` checks with criterion mappings, review state, capability gaps, and `skills_used`. Executable commands live only in trusted `.github/harness/checks.yaml`; plans never supply shell strings to the verifier.
+New plans use `plan_schema: 1` and carry machine-readable `status`, `plan_lock`, `phase`, `intent`, `expected_outputs`, stable acceptance-criterion IDs, named `verification.required` checks with criterion mappings, review state, capability gaps, and `skills_used`. Executable commands live only in trusted `.github/harness/checks.yaml`; plans never supply shell strings to the verifier.
 
 Never use a completed plan as current guidance; durable contracts belong in the locations above.

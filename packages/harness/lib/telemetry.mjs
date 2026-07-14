@@ -102,14 +102,18 @@ export function recordSkillUsage({ copilotHome, plan, evidence, dryRun = false }
   const skills = Array.isArray(plan?.fm?.skills_used)
     ? [...new Set(plan.fm.skills_used.filter((skill) => typeof skill === 'string' && SKILL_NAME.test(skill)))]
     : [];
-  if (skills.length === 0) return { path: null, updated: [] };
+  if (skills.length === 0) return { path: null, updated: [], error: null };
 
   const knowledgeRoot = path.join(copilotHome, 'knowledge');
   const file = path.join(knowledgeRoot, 'skill-usage.yaml');
-  if (dryRun) updateUsage(file, skills, plan, evidence, false);
-  else {
-    fs.mkdirSync(knowledgeRoot, { recursive: true });
-    withFileLock(file, () => updateUsage(file, skills, plan, evidence, true));
+  try {
+    if (dryRun) updateUsage(file, skills, plan, evidence, false);
+    else {
+      fs.mkdirSync(knowledgeRoot, { recursive: true });
+      withFileLock(file, () => updateUsage(file, skills, plan, evidence, true));
+    }
+  } catch (error) {
+    return { path: file, updated: [], error: error.message };
   }
-  return { path: file, updated: skills };
+  return { path: file, updated: skills, error: null };
 }

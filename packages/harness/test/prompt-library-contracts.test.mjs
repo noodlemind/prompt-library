@@ -189,6 +189,7 @@ test('prompt-library retains at most one non-terminal PR plan and documents clea
   const policy = read('docs/plans/README.md');
   assert.match(policy, /transient/i);
   assert.match(policy, /after[^\n]*merge[^\n]*(?:remove|delete)/i);
+  assert.match(policy, /status.*plan_lock.*phase/i);
 });
 
 test('core and confusable skills have trigger and outcome eval coverage', () => {
@@ -383,6 +384,7 @@ test('review fixes preserve thin wrappers, complete skill metadata, and CI pinni
   const transitionIndex = work.indexOf('set `planned` to `in-progress`');
   assert.ok(gateIndex >= 0 && transitionIndex > gateIndex, 'work-on-task must gate before changing plan state');
   assert.match(work, /failed gate[^\n]*no plan edits/i);
+  assert.match(work, /harness verify[^\n]*--base <base-ref>/);
   assert.match(work, /Scope: passed\|amended/);
   assert.match(work, /evidencePath copied from harness verify --json/);
 
