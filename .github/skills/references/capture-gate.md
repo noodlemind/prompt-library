@@ -6,7 +6,7 @@ Mandatory checkpoint for `@engineer` and any full-cycle agent that can edit prod
 
 **Do not use `editFiles`, delegate to `code-implementer`, or change product code until the capture gate passes.**
 
-Read-only tools are allowed before the gate for classify, recall, preflight, and ensure-plan.
+Read-only tools are allowed before the gate for classification, recall, investigation, on-demand gap resolution, and ensure-plan.
 
 ## When the gate applies
 
@@ -39,11 +39,13 @@ Read-only tools are allowed before the gate for classify, recall, preflight, and
 ## Autonomous path (`@engineer`)
 
 ```
-harness orient → read context-pack → /ensure-capability → /ensure-plan (if needed)
-→ harness gate (exit 0) → investigate → implement
+harness orient → read context-pack → /ensure-plan (if needed)
+→ harness gate --phase implement --plan <path> (exit 0) → investigate → implement
 ```
 
-CLI maps C1–C4: `harness gate --phase implement`. See `tool-native-loop.md`.
+`/ensure-capability` is not a universal gate step. Invoke it only for an explicit specialized requirement, high-risk capability assurance, or a gap encountered during investigation.
+
+CLI maps C1–C4: `harness gate --phase implement --plan <path>`. See `tool-native-loop.md`.
 
 Engineer **must not** ask the user to run `/capture-issue` or `/plan-issue` manually. Internal skills apply capture/plan **logic** with canonical template.
 

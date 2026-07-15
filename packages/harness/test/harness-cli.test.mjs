@@ -2,16 +2,21 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
+import { spawn, spawnSync } from 'node:child_process';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { test } from 'node:test';
 import { applyRetired, syncAssetsToTarget } from '../lib/sync.mjs';
 import { parsePlanFrontmatter } from '../lib/plan-parse.mjs';
+import { scanPlansForGate } from '../lib/gate.mjs';
 import { CONTEXT_PACK_MAX_BYTES, buildContextPack } from '../lib/context-pack.mjs';
 import { extractGoalFromPlan } from '../lib/plan-goal.mjs';
 import { loadPlan } from '../lib/plan-parse.mjs';
+import { createEvidenceBinding, readEvidence, validateEvidence, writeEvidence } from '../lib/evidence.mjs';
+import { ensureHarnessDir } from '../lib/session.mjs';
 import { installGlobalHarnessShim, globalHarnessShimPath } from '../lib/global-bin.mjs';
 import { installHarnessBin } from '../lib/install-harness-bin.mjs';
+import { recordSkillUsage } from '../lib/telemetry.mjs';
+import YAML from 'yaml';
 
 const packageRoot = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -134,6 +139,121 @@ org_objectives: ["platform reliability"]
   assert.deepEqual(fm.org_objectives, ['platform reliability']);
 });
 
+test('validate-plan reports malformed YAML frontmatter as a schema failure', () => {
+  const workspace = tempDir('harness-workspace-');
+  const plan = writeVersionedPlan(workspace);
+  const full = path.join(workspace, plan);
+  fs.writeFileSync(full, fs.readFileSync(full, 'utf8').replace('title: "Verify example"', 'title: [unterminated'));
+
+  const result = runHarness(['validate-plan', '--plan', plan, '--workspace', workspace, '--json']);
+
+  assert.equal(result.status, 1, result.stderr);
+  const body = JSON.parse(result.stdout);
+  assert.equal(body.pass, false);
+  assert.match(body.checks.find((check) => check.id === 'P-schema')?.message || '', /Invalid YAML frontmatter/i);
+});
+
+test('gate rejects malformed policy files and invalid enforcement overrides', () => {
+  const workspace = tempDir('harness-workspace-');
+  const configDir = path.join(workspace, '.github', 'harness');
+  fs.mkdirSync(configDir, { recursive: true });
+  fs.writeFileSync(path.join(configDir, 'policy.yaml'), 'version: 1\nenforcement: [unterminated\n', 'utf8');
+
+  const malformed = runHarness(['gate', '--workspace', workspace, '--json']);
+  assert.equal(malformed.status, 1);
+  assert.match(malformed.stderr, /Invalid harness policy/i);
+
+  fs.writeFileSync(path.join(configDir, 'policy.yaml'), 'enforcement: enforce\n', 'utf8');
+  const missingVersion = runHarness(['gate', '--workspace', workspace, '--json']);
+  assert.equal(missingVersion.status, 1);
+  assert.match(missingVersion.stderr, /expected version 1/i);
+
+  fs.writeFileSync(path.join(configDir, 'policy.yaml'), 'version: 1\nenforcement: enforce\n', 'utf8');
+  const invalidOverride = runHarness(['gate', '--enforcement=warn=typo', '--workspace', workspace, '--json']);
+  assert.equal(invalidOverride.status, 1);
+  assert.match(invalidOverride.stderr, /Invalid enforcement mode: warn=typo/i);
+});
+
+test('gate scan skips malformed plan frontmatter and continues to a locked plan', () => {
+  const workspace = tempDir('harness-workspace-');
+  const plansDir = path.join(workspace, 'docs', 'plans');
+  fs.mkdirSync(plansDir, { recursive: true });
+  fs.writeFileSync(path.join(plansDir, 'a-malformed.md'), '---\ntitle: [unterminated\n---\n', 'utf8');
+  fs.writeFileSync(path.join(plansDir, 'b-locked.md'), '---\nplan_lock: true\n---\n', 'utf8');
+
+  assert.equal(scanPlansForGate(workspace), 'docs/plans/b-locked.md');
+});
+
+test('harness artifact paths do not collide for same-named plans in different directories', () => {
+  const workspace = tempDir('harness-workspace-');
+  const first = writeEvidence(workspace, { plan: 'docs/plans/team-a/change.md', outcome: 'passed', checks: [] });
+  const second = writeEvidence(workspace, { plan: 'docs/plans/team-b/change.md', outcome: 'failed', checks: [] });
+
+  assert.notEqual(first, second);
+  assert.equal(readEvidence(workspace, 'docs/plans/team-a/change.md')?.outcome, 'passed');
+  assert.equal(readEvidence(workspace, 'docs/plans/team-b/change.md')?.outcome, 'failed');
+});
+
+test('evidence metadata is authoritative and malformed hashed evidence falls back to legacy', () => {
+  const workspace = tempDir('harness-workspace-');
+  const plan = 'docs/plans/change.md';
+  const rel = writeEvidence(workspace, {
+    version: 999,
+    verifiedAt: '2000-01-01T00:00:00.000Z',
+    evidencePath: 'caller-controlled.json',
+    plan,
+    outcome: 'passed',
+    checks: [],
+  });
+  const generated = JSON.parse(fs.readFileSync(path.join(workspace, rel), 'utf8'));
+  assert.equal(generated.version, 2);
+  assert.notEqual(generated.verifiedAt, '2000-01-01T00:00:00.000Z');
+  assert.equal(generated.evidencePath, rel);
+
+  fs.writeFileSync(path.join(workspace, rel), '{malformed', 'utf8');
+  const legacy = path.join(workspace, '.harness', 'evidence', 'change.json');
+  fs.writeFileSync(legacy, JSON.stringify({ plan, outcome: 'failed' }), 'utf8');
+  assert.equal(readEvidence(workspace, plan)?.outcome, 'failed');
+});
+
+test('malformed evidence bindings fail closed without crashing validation', () => {
+  const workspace = tempDir('harness-workspace-');
+  const planPath = writeVersionedPlan(workspace);
+  initGit(workspace);
+  const plan = loadPlan(workspace, planPath);
+  const binding = createEvidenceBinding({ workspace, plan, base: 'HEAD', changedFiles: [] });
+  binding.changedFiles = 'not-an-array';
+
+  const result = validateEvidence({
+    workspace,
+    plan,
+    evidence: {
+      version: 2,
+      plan: planPath,
+      outcome: 'passed',
+      verifiedAt: new Date().toISOString(),
+      binding,
+    },
+  });
+
+  assert.equal(result.pass, false);
+  assert.match(result.message, /not bound|binding.*invalid/i);
+});
+
+test('harness gitignore matching uses complete lines and preserves missing newline boundaries', () => {
+  const workspace = tempDir('harness-workspace-');
+  const harnessDir = path.join(workspace, '.harness');
+  fs.mkdirSync(harnessDir, { recursive: true });
+  fs.writeFileSync(path.join(harnessDir, '.gitignore'), '# evidence/ is documented here\ncontext-pack.md', 'utf8');
+
+  ensureHarnessDir(workspace, false);
+
+  const lines = fs.readFileSync(path.join(harnessDir, '.gitignore'), 'utf8').split(/\r?\n/);
+  assert.ok(lines.includes('context-pack.md'));
+  assert.ok(lines.includes('events.jsonl'));
+  assert.ok(lines.includes('evidence/'));
+});
+
 test('verify gate requires executed verification evidence, not just a plan heading', () => {
   const workspace = tempDir('harness-workspace-');
   const plansDir = path.join(workspace, 'docs', 'plans');
@@ -180,60 +300,52 @@ Run the relevant test command.
     '--json',
   ]);
 
-  assert.equal(result.status, 2, result.stderr);
+  assert.equal(result.status, 1, result.stderr);
   const body = JSON.parse(result.stdout);
-  assert.equal(body.pass, true);
-  assert.equal(body.exitCode, 2);
+  assert.equal(body.pass, false);
+  assert.equal(body.exitCode, 1);
   assert.equal(body.checks.find((check) => check.id === 'V1')?.pass, false);
+  assert.equal(body.nextTools.includes('harness compound'), false);
 });
 
-test('verify gate accepts executed verification evidence in activity', () => {
+test('gate rejects unsupported phases instead of bypassing lifecycle checks', () => {
   const workspace = tempDir('harness-workspace-');
-  const plansDir = path.join(workspace, 'docs', 'plans');
-  fs.mkdirSync(plansDir, { recursive: true });
-  fs.writeFileSync(
-    path.join(plansDir, '2026-05-22-fix-example-plan.md'),
-    `---
-title: "Fix example"
-status: in-progress
-plan_lock: true
-phase: 1
-intent: "Fix example safely"
-expected_outputs: ["code change"]
-success_criteria: ["tests pass"]
----
+  const plan = writeVersionedPlan(workspace);
 
-# Fix example
+  const result = runHarness(['gate', '--phase', 'typo', '--plan', plan, '--workspace', workspace, '--json']);
 
-## Overview
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /invalid --phase/i);
+});
 
-Do the work.
+test('implement gate rejects a terminal explicit plan', () => {
+  const workspace = tempDir('harness-workspace-');
+  const plan = writeVersionedPlan(workspace);
+  const full = path.join(workspace, plan);
+  fs.writeFileSync(full, fs.readFileSync(full, 'utf8').replace('status: in-progress', 'status: done'), 'utf8');
 
-## Intent Contract
+  const result = runHarness(['gate', '--phase', 'implement', '--plan', plan, '--workspace', workspace, '--json']);
 
-- **Goal:** Fix example safely
-- **Expected outputs:** code change
-- **Success criteria:** tests pass
+  assert.equal(result.status, 1, result.stderr);
+  assert.match(JSON.parse(result.stdout).blockedReason, /not implementable/i);
+});
 
-## Acceptance Criteria
-
-- [x] Example is fixed.
-
-## Verification Plan
-
-Run the relevant test command.
-
-## Activity
-
-- Verification: npm test passed.
-`,
-    'utf8'
-  );
+test('verify gate accepts passed harness evidence, not activity prose', () => {
+  const workspace = tempDir('harness-workspace-');
+  const plan = writeVersionedPlan(workspace);
+  writeChecks(workspace, {
+    'unit-tests': { command: [process.execPath, '-e', 'process.exit(0)'] },
+  });
+  initGit(workspace);
+  const verify = runHarness(['verify', '--plan', plan, '--base', 'HEAD', '--workspace', workspace, '--json']);
+  assert.equal(verify.status, 0, verify.stderr);
 
   const result = runHarness([
     'gate',
     '--phase',
     'verify',
+    '--plan',
+    plan,
     '--workspace',
     workspace,
     '--json',
@@ -610,17 +722,15 @@ Only overview.
   assert.equal(result.status, 1, result.stderr);
   const body = JSON.parse(result.stdout);
   assert.equal(body.pass, false);
+  assert.equal(body.checks.find((c) => c.id === 'P-schema')?.pass, false);
   assert.equal(body.checks.find((c) => c.id === 'S2')?.pass, false);
 });
 
-test('validate-plan passes complete locked plan', () => {
+test('validate-plan passes a complete versioned locked plan', () => {
   const workspace = tempDir('harness-workspace-');
-  writePlan(workspace, {
-    frontmatter:
-      'intent: "Fix example safely"\nexpected_outputs: ["code change"]\nsuccess_criteria: ["tests pass"]\n',
-  });
+  const plan = writeVersionedPlan(workspace);
 
-  const result = runHarness(['validate-plan', '--workspace', workspace, '--json']);
+  const result = runHarness(['validate-plan', '--plan', plan, '--workspace', workspace, '--json']);
 
   assert.equal(result.status, 0, result.stderr);
   const body = JSON.parse(result.stdout);
@@ -628,17 +738,21 @@ test('validate-plan passes complete locked plan', () => {
   assert.equal(body.checks.find((c) => c.id === 'S4')?.pass, true);
 });
 
-test('compound indexes after verify gate passes', () => {
+test('compound indexes only after harness verify passes', () => {
   const workspace = tempDir('harness-workspace-');
   const copilotHome = tempDir('harness-copilot-');
-  writePlan(workspace, {
-    frontmatter:
-      'intent: "Fix example safely"\nexpected_outputs: ["code change"]\nsuccess_criteria: ["tests pass"]\n',
-    activity: '- Verification: npm test passed.',
+  const plan = writeVersionedPlan(workspace);
+  writeChecks(workspace, {
+    'unit-tests': { command: [process.execPath, '-e', 'process.exit(0)'] },
   });
+  initGit(workspace);
+  const verify = runHarness(['verify', '--plan', plan, '--base', 'HEAD', '--workspace', workspace, '--json']);
+  assert.equal(verify.status, 0, verify.stderr);
 
   const result = runHarness([
     'compound',
+    '--plan',
+    plan,
     '--workspace',
     workspace,
     '--copilot-home',
@@ -650,23 +764,152 @@ test('compound indexes after verify gate passes', () => {
   const body = JSON.parse(result.stdout);
   assert.equal(body.pass, true);
   assert.ok(body.indexed);
+  const usagePath = path.join(copilotHome, 'knowledge', 'skill-usage.yaml');
+  assert.equal(fs.existsSync(usagePath), true);
+  const usage = YAML.parse(fs.readFileSync(usagePath, 'utf8'));
+  assert.equal(usage.skills.engineer.usage_count, 1);
+  assert.equal(usage.skills.engineer.outcomes.passed, 1);
   assert.equal(readEvents(workspace).some((e) => e.type === 'compound'), true);
 });
 
-test('compound fails when verify gate not satisfied', () => {
+test('compound blocks when passed harness evidence is absent', () => {
   const workspace = tempDir('harness-workspace-');
-  writePlan(workspace, {
-    frontmatter:
-      'intent: "Fix example safely"\nexpected_outputs: ["code change"]\nsuccess_criteria: ["tests pass"]\n',
-    activity: '- Plan created only.',
-  });
+  const plan = writeVersionedPlan(workspace);
 
-  const result = runHarness(['compound', '--workspace', workspace, '--json']);
+  const result = runHarness(['compound', '--plan', plan, '--workspace', workspace, '--json']);
 
   assert.equal(result.status, 2, result.stderr);
   const body = JSON.parse(result.stdout);
-  assert.equal(body.pass, true);
+  assert.equal(body.pass, false);
   assert.equal(body.exitCode, 2);
+});
+
+test('compound preserves malformed telemetry and still records session state', () => {
+  const workspace = tempDir('harness-workspace-');
+  const copilotHome = tempDir('harness-copilot-');
+  const plan = writeVersionedPlan(workspace);
+  writeChecks(workspace, {
+    'unit-tests': { command: [process.execPath, '-e', 'process.exit(0)'] },
+  });
+  initGit(workspace);
+  const verify = runHarness(['verify', '--plan', plan, '--base', 'HEAD', '--workspace', workspace, '--json']);
+  assert.equal(verify.status, 0, verify.stderr);
+
+  const knowledge = path.join(copilotHome, 'knowledge');
+  const usagePath = path.join(knowledge, 'skill-usage.yaml');
+  fs.mkdirSync(knowledge, { recursive: true });
+  fs.writeFileSync(usagePath, 'skills: [unterminated', 'utf8');
+
+  const result = runHarness([
+    'compound',
+    '--plan',
+    plan,
+    '--workspace',
+    workspace,
+    '--copilot-home',
+    copilotHome,
+    '--json',
+  ]);
+
+  assert.equal(result.status, 0, result.stderr);
+  const body = JSON.parse(result.stdout);
+  assert.equal(body.pass, true);
+  assert.deepEqual(body.telemetry.updated, []);
+  assert.match(body.telemetry.error, /invalid skill usage telemetry/i);
+  assert.equal(fs.readFileSync(usagePath, 'utf8'), 'skills: [unterminated');
+  assert.ok(JSON.parse(fs.readFileSync(path.join(workspace, '.harness', 'session.json'), 'utf8')).lastCompoundAt);
+});
+
+test('gate and compound reject evidence after the plan or scoped workspace changes', () => {
+  for (const mutation of ['plan', 'workspace']) {
+    const workspace = tempDir('harness-workspace-');
+    const copilotHome = tempDir('harness-copilot-');
+    const plan = writeVersionedPlan(workspace);
+    writeChecks(workspace, {
+      'unit-tests': { command: [process.execPath, '-e', 'process.exit(0)'] },
+    });
+    initGit(workspace);
+    fs.writeFileSync(path.join(workspace, 'src', 'example.js'), 'export const value = 2;\n');
+    assert.equal(runHarness(['verify', '--plan', plan, '--base', 'HEAD', '--workspace', workspace, '--json']).status, 0);
+
+    const target = mutation === 'plan' ? path.join(workspace, plan) : path.join(workspace, 'src', 'example.js');
+    fs.appendFileSync(target, `\n// ${mutation} changed after verification\n`, 'utf8');
+
+    const gate = runHarness(['gate', '--phase', 'verify', '--plan', plan, '--workspace', workspace, '--json']);
+    assert.equal(gate.status, 1, gate.stderr);
+    assert.equal(JSON.parse(gate.stdout).pass, false);
+
+    const compound = runHarness([
+      'compound',
+      '--plan',
+      plan,
+      '--workspace',
+      workspace,
+      '--copilot-home',
+      copilotHome,
+      '--json',
+    ]);
+    assert.notEqual(compound.status, 0, compound.stderr);
+    assert.equal(JSON.parse(compound.stdout).pass, false);
+  }
+});
+
+test('telemetry preserves malformed history instead of overwriting it', () => {
+  const copilotHome = tempDir('harness-copilot-');
+  const knowledge = path.join(copilotHome, 'knowledge');
+  const usagePath = path.join(knowledge, 'skill-usage.yaml');
+  fs.mkdirSync(knowledge, { recursive: true });
+  fs.writeFileSync(usagePath, 'skills: [unterminated', 'utf8');
+
+  const invalidYaml = recordSkillUsage({
+    copilotHome,
+    plan: { path: 'docs/plans/x.md', fm: { skills_used: ['engineer'] } },
+    evidence: { outcome: 'passed' },
+  });
+  assert.deepEqual(invalidYaml.updated, []);
+  assert.match(invalidYaml.error, /invalid skill usage telemetry/i);
+  assert.equal(fs.readFileSync(usagePath, 'utf8'), 'skills: [unterminated');
+
+  const malformedEntry = 'skills:\n  engineer:\n    usage_count: many\n    outcomes: passed\n';
+  fs.writeFileSync(usagePath, malformedEntry, 'utf8');
+  const invalidEntry = recordSkillUsage({
+    copilotHome,
+    plan: { path: 'docs/plans/x.md', fm: { skills_used: ['engineer'] } },
+    evidence: { outcome: 'passed' },
+  });
+  assert.deepEqual(invalidEntry.updated, []);
+  assert.match(invalidEntry.error, /invalid skill usage telemetry/i);
+  assert.equal(fs.readFileSync(usagePath, 'utf8'), malformedEntry);
+});
+
+test('telemetry serializes concurrent updates without losing counts', async () => {
+  const copilotHome = tempDir('harness-copilot-');
+  const moduleUrl = pathToFileURL(path.join(packageRoot, 'lib', 'telemetry.mjs')).href;
+  const script = `
+    import { recordSkillUsage } from ${JSON.stringify(moduleUrl)};
+    recordSkillUsage({
+      copilotHome: process.argv[1],
+      plan: { path: 'docs/plans/x.md', fm: { skills_used: ['engineer'] } },
+      evidence: { outcome: 'passed' }
+    });
+  `;
+  const runs = Array.from({ length: 6 }, () => new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, ['--input-type=module', '-e', script, copilotHome], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let stderr = '';
+    child.stderr.on('data', (chunk) => { stderr += chunk; });
+    child.on('error', reject);
+    child.on('exit', (code) => (code === 0 ? resolve() : reject(new Error(stderr || `child exited ${code}`))));
+  }));
+
+  await Promise.all(runs);
+  const usagePath = path.join(copilotHome, 'knowledge', 'skill-usage.yaml');
+  const usage = YAML.parse(fs.readFileSync(usagePath, 'utf8'));
+  assert.equal(usage.skills.engineer.usage_count, 6);
+  assert.equal(usage.skills.engineer.outcomes.passed, 6);
+  assert.equal(fs.existsSync(`${usagePath}.lock`), false);
 });
 
 function writeKnowledgeSolution(copilotHome, {
@@ -931,6 +1174,8 @@ test('recall falls back to overlap ranker when postings index missing', () => {
 
 test('install creates global harness shim', () => {
   const copilotHome = tempDir('harness-copilot-');
+  const workspace = tempDir('harness-workspace-');
+  const plan = writeVersionedPlan(workspace);
   installHarnessBin(packageRoot, copilotHome, { dryRun: false, verbose: false }, () => {});
   installGlobalHarnessShim(copilotHome, { dryRun: false, verbose: false }, () => {});
   const shim = globalHarnessShimPath(copilotHome);
@@ -940,6 +1185,16 @@ test('install creates global harness shim', () => {
     env: { ...process.env, COPILOT_HOME: copilotHome },
   });
   assert.equal(result.status, 0, result.stderr);
+  const validate = spawnSync(
+    process.execPath,
+    [shim, 'validate-plan', '--plan', plan, '--workspace', workspace, '--json'],
+    {
+      encoding: 'utf8',
+      env: { ...process.env, COPILOT_HOME: copilotHome },
+    }
+  );
+  assert.equal(validate.status, 0, validate.stderr);
+  assert.equal(JSON.parse(validate.stdout).pass, true);
 });
 
 test('resolve finds monorepo harness bin', () => {
@@ -957,10 +1212,684 @@ test('init-repo creates harness runner', () => {
   assert.equal(result.status, 0, result.stderr);
   const runner = path.join(workspace, '.harness', 'run.mjs');
   assert.ok(fs.existsSync(runner));
+  assert.ok(fs.existsSync(path.join(workspace, '.github', 'harness', 'checks.yaml')));
+  assert.ok(fs.existsSync(path.join(workspace, '.github', 'harness', 'policy.yaml')));
   const runResult = spawnSync(process.execPath, [runner, 'resolve', '--json'], {
     cwd: workspace,
     encoding: 'utf8',
     env: { ...process.env, HARNESS_BIN: binPath },
   });
   assert.equal(runResult.status, 0, runResult.stderr);
+});
+
+function writeChecks(workspace, checks) {
+  const configDir = path.join(workspace, '.github', 'harness');
+  fs.mkdirSync(configDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(configDir, 'checks.yaml'),
+    `version: 1\nchecks:\n${Object.entries(checks)
+      .map(
+        ([name, check]) => {
+          const timeout = check.timeout_seconds === undefined ? '' : `\n    timeout_seconds: ${check.timeout_seconds}`;
+          return `  ${name}:\n    command: ${JSON.stringify(check.command)}${timeout}`;
+        }
+      )
+      .join('\n')}\n`,
+    'utf8'
+  );
+}
+
+function writeVersionedPlan(workspace, {
+  name = '2026-07-13-feat-verify-plan.md',
+  required = ['unit-tests'],
+  criteria = { AC1: ['unit-tests'] },
+  impacted = ['src/example.js'],
+  extraFrontmatter = '',
+  taskChecked = true,
+} = {}) {
+  const plansDir = path.join(workspace, 'docs', 'plans');
+  fs.mkdirSync(plansDir, { recursive: true });
+  const rel = `docs/plans/${name}`;
+  const criterionYaml = Object.entries(criteria)
+    .map(([id, checks]) => `    ${id}: ${JSON.stringify(checks)}`)
+    .join('\n');
+  fs.writeFileSync(
+    path.join(workspace, rel),
+    `---
+plan_schema: 1
+title: "Verify example"
+type: feat
+status: in-progress
+plan_lock: true
+phase: 1
+risk: green
+intent: "Verify safely"
+expected_outputs:
+  - "verified change"
+success_criteria:
+  - "AC1 Example works"
+verification:
+  required: ${JSON.stringify(required)}
+  criteria:
+${criterionYaml}
+reviews:
+  required: []
+  completed: []
+  critical_open: []
+capability_gaps: []
+skills_used: [engineer]
+${extraFrontmatter}---
+
+# Verify example
+
+## Overview
+
+Verify the example.
+
+## Intent Contract
+
+- **Goal:** Verify safely.
+- **Expected outputs:** verified change.
+- **Success criteria:** AC1 passes.
+
+## Acceptance Criteria
+
+- [x] **AC1** Example works.
+
+## Plan
+
+### Phase 1 — Implement
+
+- [${taskChecked ? 'x' : ' '}] Implement the example.
+
+## Impacted Files
+
+${impacted.map((file) => `- \`${file}\``).join('\n')}
+
+## Verification Plan
+
+Run trusted named checks.
+
+## Risk & Review Routing
+
+No required specialist review.
+
+## Review Findings
+
+No open findings.
+
+## Activity
+
+- Work recorded.
+`,
+    'utf8'
+  );
+  return rel;
+}
+
+function initGit(workspace) {
+  const run = (args) =>
+    spawnSync('git', args, { cwd: workspace, encoding: 'utf8' });
+  assert.equal(run(['init', '-q']).status, 0);
+  assert.equal(run(['config', 'user.email', 'harness@example.test']).status, 0);
+  assert.equal(run(['config', 'user.name', 'Harness Test']).status, 0);
+  fs.mkdirSync(path.join(workspace, 'src'), { recursive: true });
+  fs.writeFileSync(path.join(workspace, 'src', 'example.js'), 'export const value = 1;\n');
+  assert.equal(run(['add', '.']).status, 0);
+  assert.equal(run(['commit', '-qm', 'baseline']).status, 0);
+}
+
+test('plan parser uses YAML semantics for block arrays and nested mappings', () => {
+  const fm = parsePlanFrontmatter(`---
+plan_schema: 1
+expected_outputs:
+  - first output
+  - second output
+verification:
+  required:
+    - unit-tests
+  criteria:
+    AC1: [unit-tests]
+---
+`);
+
+  assert.equal(fm.plan_schema, 1);
+  assert.deepEqual(fm.expected_outputs, ['first output', 'second output']);
+  assert.deepEqual(fm.verification.required, ['unit-tests']);
+  assert.deepEqual(fm.verification.criteria.AC1, ['unit-tests']);
+});
+
+test('harness verify passes named checks, validates scope, and writes evidence', () => {
+  const workspace = tempDir('harness-workspace-');
+  const plan = writeVersionedPlan(workspace);
+  writeChecks(workspace, {
+    'unit-tests': { command: [process.execPath, '-e', 'process.exit(0)'] },
+  });
+  initGit(workspace);
+  fs.writeFileSync(path.join(workspace, 'src', 'example.js'), 'export const value = 2;\n');
+
+  const result = runHarness([
+    'verify',
+    '--plan',
+    plan,
+    '--base',
+    'HEAD',
+    '--workspace',
+    workspace,
+    '--json',
+  ]);
+
+  assert.equal(result.status, 0, result.stderr);
+  const body = JSON.parse(result.stdout);
+  assert.equal(body.outcome, 'passed');
+  assert.equal(body.plan, plan);
+  assert.deepEqual(body.unverifiedCriteria, []);
+  assert.deepEqual(body.scopeViolations, []);
+  assert.deepEqual(body.openHardGaps, []);
+  assert.deepEqual(body.requiredReviews, []);
+  assert.ok(body.evidencePath);
+  assert.equal(fs.existsSync(path.join(workspace, body.evidencePath)), true);
+});
+
+test('harness verify checks only tasks in the current plan phase', () => {
+  const workspace = tempDir('harness-workspace-');
+  const plan = writeVersionedPlan(workspace);
+  const full = path.join(workspace, plan);
+  fs.writeFileSync(
+    full,
+    fs.readFileSync(full, 'utf8').replace(
+      '## Impacted Files',
+      '### Phase 2 — Follow-up\n\n- [ ] Future task that is not active.\n\n## Impacted Files'
+    ),
+    'utf8'
+  );
+  writeChecks(workspace, {
+    'unit-tests': { command: [process.execPath, '-e', 'process.exit(0)'] },
+  });
+  initGit(workspace);
+
+  const result = runHarness(['verify', '--plan', plan, '--base', 'HEAD', '--workspace', workspace, '--json']);
+
+  assert.equal(result.status, 0, result.stderr);
+  const phaseTasks = JSON.parse(result.stdout).checks.find((check) => check.id === 'phase-tasks');
+  assert.equal(phaseTasks.status, 'passed');
+  assert.deepEqual(phaseTasks.openTasks, []);
+});
+
+test('harness verify rejects array-shaped criterion mappings', () => {
+  const workspace = tempDir('harness-workspace-');
+  const plan = writeVersionedPlan(workspace);
+  const full = path.join(workspace, plan);
+  fs.writeFileSync(
+    full,
+    fs.readFileSync(full, 'utf8').replace('  criteria:\n    AC1: ["unit-tests"]', '  criteria: ["unit-tests"]'),
+    'utf8'
+  );
+  writeChecks(workspace, {
+    'unit-tests': { command: [process.execPath, '-e', 'process.exit(0)'] },
+  });
+  initGit(workspace);
+
+  const result = runHarness(['verify', '--plan', plan, '--base', 'HEAD', '--workspace', workspace, '--json']);
+
+  assert.equal(result.status, 1, result.stderr);
+  const planSchema = JSON.parse(result.stdout).checks.find((check) => check.id === 'plan-schema');
+  assert.equal(planSchema.status, 'failed');
+  assert.match(planSchema.message, /criterion mappings/i);
+});
+
+test('harness verify rejects empty named checks and duplicate acceptance IDs', () => {
+  const workspace = tempDir('harness-workspace-');
+  const plan = writeVersionedPlan(workspace, { required: [], criteria: {} });
+  const full = path.join(workspace, plan);
+  fs.writeFileSync(
+    full,
+    fs.readFileSync(full, 'utf8').replace(
+      '- [x] **AC1** Example works.',
+      '- [x] **AC1** Example works.\n- [x] **AC1** Duplicate identifier.'
+    ),
+    'utf8'
+  );
+  writeChecks(workspace, {});
+  initGit(workspace);
+
+  const result = runHarness(['verify', '--plan', plan, '--base', 'HEAD', '--workspace', workspace, '--json']);
+
+  assert.equal(result.status, 1, result.stderr);
+  const message = JSON.parse(result.stdout).checks.find((check) => check.id === 'plan-schema')?.message || '';
+  assert.match(message, /non-empty|unique/i);
+});
+
+test('harness verify rejects empty intent arrays on locked plans', () => {
+  const workspace = tempDir('harness-workspace-');
+  const plan = writeVersionedPlan(workspace);
+  const full = path.join(workspace, plan);
+  fs.writeFileSync(
+    full,
+    fs.readFileSync(full, 'utf8')
+      .replace('expected_outputs:\n  - "verified change"', 'expected_outputs: []')
+      .replace('success_criteria:\n  - "AC1 Example works"', 'success_criteria: []'),
+    'utf8'
+  );
+  writeChecks(workspace, {
+    'unit-tests': { command: [process.execPath, '-e', 'process.exit(0)'] },
+  });
+  initGit(workspace);
+
+  const result = runHarness(['verify', '--plan', plan, '--base', 'HEAD', '--workspace', workspace, '--json']);
+
+  assert.equal(result.status, 1, result.stderr);
+  const message = JSON.parse(result.stdout).checks.find((check) => check.id === 'plan-schema')?.message || '';
+  assert.match(message, /expected_outputs|success_criteria/i);
+});
+
+test('harness verify returns failed when a required named check fails', () => {
+  const workspace = tempDir('harness-workspace-');
+  const plan = writeVersionedPlan(workspace);
+  writeChecks(workspace, {
+    'unit-tests': { command: [process.execPath, '-e', 'process.exit(7)'] },
+  });
+  initGit(workspace);
+
+  const result = runHarness(['verify', '--plan', plan, '--base', 'HEAD', '--workspace', workspace, '--json']);
+
+  assert.equal(result.status, 1, result.stderr);
+  const body = JSON.parse(result.stdout);
+  assert.equal(body.outcome, 'failed');
+  assert.equal(body.checks.find((check) => check.id === 'unit-tests')?.status, 'failed');
+});
+
+test('harness verify returns inconclusive for timeout and records it', () => {
+  const workspace = tempDir('harness-workspace-');
+  const plan = writeVersionedPlan(workspace);
+  writeChecks(workspace, {
+    'unit-tests': {
+      command: [process.execPath, '-e', 'setTimeout(() => {}, 5000)'],
+      timeout_seconds: 1,
+    },
+  });
+  initGit(workspace);
+
+  const result = runHarness(['verify', '--plan', plan, '--base', 'HEAD', '--workspace', workspace, '--json']);
+
+  assert.equal(result.status, 2, result.stderr);
+  const body = JSON.parse(result.stdout);
+  assert.equal(body.outcome, 'inconclusive');
+  assert.equal(body.checks.find((check) => check.id === 'unit-tests')?.status, 'timeout');
+});
+
+test('harness verify is inconclusive when plan selection is ambiguous', () => {
+  const workspace = tempDir('harness-workspace-');
+  writeVersionedPlan(workspace, { name: 'first-plan.md' });
+  writeVersionedPlan(workspace, { name: 'second-plan.md' });
+  writeChecks(workspace, {
+    'unit-tests': { command: [process.execPath, '-e', 'process.exit(0)'] },
+  });
+
+  const result = runHarness(['verify', '--workspace', workspace, '--json']);
+
+  assert.equal(result.status, 2, result.stderr);
+  const body = JSON.parse(result.stdout);
+  assert.equal(body.outcome, 'inconclusive');
+  assert.match(body.checks.find((check) => check.id === 'plan-selection')?.message, /ambiguous/i);
+});
+
+test('harness verify never executes commands authored in a plan', () => {
+  const workspace = tempDir('harness-workspace-');
+  const marker = path.join(workspace, 'plan-command-ran');
+  const markerBase64 = Buffer.from(marker).toString('base64');
+  const malicious = `${process.execPath} -e "require('fs').writeFileSync(Buffer.from('${markerBase64}', 'base64'), 'bad')"`;
+  const plan = writeVersionedPlan(workspace, {
+    extraFrontmatter: `verification_commands:\n  - ${JSON.stringify(malicious)}\n`,
+  });
+  writeChecks(workspace, {
+    'unit-tests': { command: [process.execPath, '-e', 'process.exit(0)'] },
+  });
+  initGit(workspace);
+
+  const result = runHarness(['verify', '--plan', plan, '--base', 'HEAD', '--workspace', workspace, '--json']);
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(JSON.parse(result.stdout).outcome, 'passed');
+  assert.equal(fs.existsSync(marker), false);
+});
+
+test('gate honors an explicit plan instead of stale session state', () => {
+  const workspace = tempDir('harness-workspace-');
+  const first = writeVersionedPlan(workspace, { name: 'first-plan.md' });
+  const second = writeVersionedPlan(workspace, { name: 'second-plan.md' });
+  fs.mkdirSync(path.join(workspace, '.harness'), { recursive: true });
+  fs.writeFileSync(path.join(workspace, '.harness', 'session.json'), JSON.stringify({ activePlan: first }));
+
+  const result = runHarness(['gate', '--plan', second, '--workspace', workspace, '--json']);
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(JSON.parse(result.stdout).plan.path, second);
+});
+
+test('automatic plan selection ignores terminal session state', () => {
+  const workspace = tempDir('harness-workspace-');
+  const stale = writeVersionedPlan(workspace, { name: 'a-stale-plan.md' });
+  const active = writeVersionedPlan(workspace, { name: 'z-active-plan.md' });
+  const stalePath = path.join(workspace, stale);
+  fs.writeFileSync(stalePath, fs.readFileSync(stalePath, 'utf8').replace('status: in-progress', 'status: done'), 'utf8');
+  const activePath = path.join(workspace, active);
+  fs.writeFileSync(activePath, fs.readFileSync(activePath, 'utf8').replace('status: in-progress', 'status: review'), 'utf8');
+  fs.mkdirSync(path.join(workspace, '.harness'), { recursive: true });
+  fs.writeFileSync(path.join(workspace, '.harness', 'session.json'), JSON.stringify({ activePlan: stale }), 'utf8');
+
+  const result = runHarness(['validate-plan', '--workspace', workspace, '--json']);
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(JSON.parse(result.stdout).plan.path, active);
+});
+
+test('plan loading rejects symlinks that escape docs/plans', () => {
+  const workspace = tempDir('harness-workspace-');
+  const outside = path.join(workspace, 'outside-plan.md');
+  fs.writeFileSync(outside, '# outside\n', 'utf8');
+  const plans = path.join(workspace, 'docs', 'plans');
+  fs.mkdirSync(plans, { recursive: true });
+  fs.symlinkSync(outside, path.join(plans, 'escape.md'));
+
+  assert.equal(loadPlan(workspace, 'docs/plans/escape.md'), null);
+
+  fs.mkdirSync(path.join(plans, 'directory.md'));
+  assert.equal(loadPlan(workspace, 'docs/plans/directory.md'), null);
+});
+
+test('harness verify fails files outside the plan-to-diff scope', () => {
+  const workspace = tempDir('harness-workspace-');
+  const plan = writeVersionedPlan(workspace);
+  writeChecks(workspace, {
+    'unit-tests': { command: [process.execPath, '-e', 'process.exit(0)'] },
+  });
+  initGit(workspace);
+  fs.writeFileSync(path.join(workspace, 'outside.js'), 'export const outside = true;\n');
+
+  const result = runHarness(['verify', '--plan', plan, '--base', 'HEAD', '--workspace', workspace, '--json']);
+
+  assert.equal(result.status, 1, result.stderr);
+  const body = JSON.parse(result.stdout);
+  assert.equal(body.outcome, 'failed');
+  assert.deepEqual(body.scopeViolations, ['outside.js']);
+});
+
+test('warn and observe enforcement preserve failed outcome without blocking rollout', () => {
+  for (const enforcement of ['warn', 'observe']) {
+    const workspace = tempDir('harness-workspace-');
+    const plan = writeVersionedPlan(workspace);
+    writeChecks(workspace, {
+      'unit-tests': { command: [process.execPath, '-e', 'process.exit(9)'] },
+    });
+    initGit(workspace);
+
+    const result = runHarness([
+      'verify',
+      '--plan',
+      plan,
+      '--base',
+      'HEAD',
+      '--enforcement',
+      enforcement,
+      '--workspace',
+      workspace,
+      '--json',
+    ]);
+
+    assert.equal(result.status, 0, result.stderr);
+    const body = JSON.parse(result.stdout);
+    assert.equal(body.outcome, 'failed');
+    assert.equal(body.enforcement, enforcement);
+  }
+});
+
+test('warn and observe enforcement preserve gate and plan-validation failures without blocking rollout', () => {
+  for (const enforcement of ['warn', 'observe']) {
+    const workspace = tempDir('harness-workspace-');
+    const gate = runHarness(['gate', '--enforcement', enforcement, '--workspace', workspace, '--json']);
+    assert.equal(gate.status, 0, gate.stderr);
+    const gateBody = JSON.parse(gate.stdout);
+    assert.equal(gateBody.pass, false);
+    assert.equal(gateBody.enforcement, enforcement);
+
+    const validate = runHarness(['validate-plan', '--enforcement', enforcement, '--workspace', workspace, '--json']);
+    assert.equal(validate.status, 0, validate.stderr);
+    const validateBody = JSON.parse(validate.stdout);
+    assert.equal(validateBody.pass, false);
+    assert.equal(validateBody.enforcement, enforcement);
+  }
+});
+
+function runHook(name, workspace, toolInput = {}) {
+  return spawnSync(process.execPath, [path.join(packageRoot, '../../.github/hooks', name)], {
+    cwd: workspace,
+    input: JSON.stringify({ workspace, tool_input: toolInput }),
+    encoding: 'utf8',
+    env: { ...process.env, HARNESS_ENFORCEMENT: 'enforce' },
+  });
+}
+
+function runHookWithPolicy(name, workspace, toolInput = {}) {
+  const env = { ...process.env };
+  delete env.HARNESS_ENFORCEMENT;
+  return spawnSync(process.execPath, [path.join(packageRoot, '../../.github/hooks', name)], {
+    cwd: workspace,
+    input: JSON.stringify({ workspace, tool_input: toolInput }),
+    encoding: 'utf8',
+    env,
+  });
+}
+
+test('pre-edit hook fails closed on malformed input payloads', () => {
+  const workspace = tempDir('harness-workspace-');
+  const result = spawnSync(process.execPath, [path.join(packageRoot, '../../.github/hooks', 'require-plan-gate.mjs')], {
+    cwd: workspace,
+    input: '{not-json',
+    encoding: 'utf8',
+    env: { ...process.env, HARNESS_ENFORCEMENT: 'enforce' },
+  });
+
+  assert.equal(result.status, 2);
+  assert.match(result.stderr, /payload/i);
+});
+
+test('hooks honor repository enforcement and freshness policy', () => {
+  const workspace = tempDir('harness-workspace-');
+  const configDir = path.join(workspace, '.github', 'harness');
+  fs.mkdirSync(configDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(configDir, 'policy.yaml'),
+    'version: 1\nenforcement: warn\ngate_ttl_minutes: 1\nevidence_ttl_hours: 1\n',
+    'utf8'
+  );
+
+  const warning = runHookWithPolicy('require-plan-gate.mjs', workspace, { file_path: 'src/example.js' });
+  assert.equal(warning.status, 0, warning.stderr);
+  assert.match(warning.stderr, /no harness session/i);
+
+  const plan = writeVersionedPlan(workspace);
+  assert.equal(runHarness(['gate', '--plan', plan, '--workspace', workspace, '--json']).status, 0);
+  const sessionPath = path.join(workspace, '.harness', 'session.json');
+  const session = JSON.parse(fs.readFileSync(sessionPath, 'utf8'));
+  session.lastGateAt = new Date(Date.now() - 2 * 60 * 1000).toISOString();
+  fs.writeFileSync(sessionPath, JSON.stringify(session));
+  fs.writeFileSync(
+    path.join(configDir, 'policy.yaml'),
+    'version: 1\nenforcement: enforce\ngate_ttl_minutes: 1\nevidence_ttl_hours: 1\n',
+    'utf8'
+  );
+
+  const stale = runHookWithPolicy('require-plan-gate.mjs', workspace, { file_path: 'src/example.js' });
+  assert.equal(stale.status, 2);
+  assert.match(stale.stderr, /stale/i);
+});
+
+test('pre-edit hook requires an explicit passed gate and planned scope', () => {
+  const workspace = tempDir('harness-workspace-');
+  const plan = writeVersionedPlan(workspace);
+
+  const blocked = runHook('require-plan-gate.mjs', workspace, { file_path: 'src/example.js' });
+  assert.equal(blocked.status, 2);
+
+  const gate = runHarness(['gate', '--phase', 'implement', '--plan', plan, '--workspace', workspace, '--json']);
+  assert.equal(gate.status, 0, gate.stderr);
+  const allowed = runHook('require-plan-gate.mjs', workspace, { file_path: 'src/example.js' });
+  assert.equal(allowed.status, 0, allowed.stderr);
+  const outside = runHook('require-plan-gate.mjs', workspace, { file_path: 'src/outside.js' });
+  assert.equal(outside.status, 2);
+
+  const sessionPath = path.join(workspace, '.harness', 'session.json');
+  const session = JSON.parse(fs.readFileSync(sessionPath, 'utf8'));
+  session.lastGateAt = 'not-a-date';
+  fs.writeFileSync(sessionPath, JSON.stringify(session), 'utf8');
+  const invalidTimestamp = runHook('require-plan-gate.mjs', workspace, { file_path: 'src/example.js' });
+  assert.equal(invalidTimestamp.status, 2);
+  assert.match(invalidTimestamp.stderr, /timestamp/i);
+});
+
+test('Bash file mutations require planned scope and create pending verification state', () => {
+  const workspace = tempDir('harness-workspace-');
+  const plan = writeVersionedPlan(workspace);
+
+  const readOnly = runHook('require-plan-gate.mjs', workspace, { command: 'rg -n TODO src' });
+  assert.equal(readOnly.status, 0, readOnly.stderr);
+
+  const blocked = runHook('require-plan-gate.mjs', workspace, { command: 'printf changed > src/example.js' });
+  assert.equal(blocked.status, 2);
+  assert.match(blocked.stderr, /no harness session/i);
+
+  assert.equal(runHarness(['gate', '--phase', 'implement', '--plan', plan, '--workspace', workspace, '--json']).status, 0);
+  const outside = runHook('require-plan-gate.mjs', workspace, { command: 'printf changed > src/outside.js' });
+  assert.equal(outside.status, 2);
+  assert.match(outside.stderr, /outside the plan/i);
+
+  const hiddenOutside = runHook('require-plan-gate.mjs', workspace, {
+    command: 'cp src/example.js src/outside.js > src/example.js',
+  });
+  assert.equal(hiddenOutside.status, 2);
+  assert.match(hiddenOutside.stderr, /src\/outside\.js/);
+
+  for (const command of [
+    'mv src/outside.js src/example.js',
+    'ln src/outside.js src/example.js',
+    'git -C . checkout -- src/outside.js',
+    'sed --in-place s/old/new/ src/outside.js',
+    'git reset --hard HEAD',
+    'git stash pop',
+  ]) {
+    const scoped = runHook('require-plan-gate.mjs', workspace, { command });
+    assert.equal(scoped.status, 2, `${command}: ${scoped.stderr}`);
+    assert.match(scoped.stderr, /src\/outside\.js|target could not be resolved/i);
+  }
+
+  const allowed = runHook('require-plan-gate.mjs', workspace, { command: 'printf changed > src/example.js' });
+  assert.equal(allowed.status, 0, allowed.stderr);
+  const pending = runHook('require-verification.mjs', workspace);
+  assert.equal(pending.status, 2);
+  assert.match(pending.stderr, /verify has not run/i);
+});
+
+test('completion hook bypasses read-only work and enforces each new recorded edit', () => {
+  const readOnlyWorkspace = tempDir('harness-workspace-');
+  assert.equal(runHook('require-verification.mjs', readOnlyWorkspace).status, 0);
+
+  const workspace = tempDir('harness-workspace-');
+  const plan = writeVersionedPlan(workspace);
+  writeChecks(workspace, {
+    'unit-tests': { command: [process.execPath, '-e', 'process.exit(0)'] },
+  });
+  initGit(workspace);
+  assert.equal(runHarness(['gate', '--plan', plan, '--workspace', workspace, '--json']).status, 0);
+  assert.equal(runHook('require-verification.mjs', workspace).status, 0, 'a gated but unedited session is read-only');
+
+  assert.equal(runHook('require-plan-gate.mjs', workspace, { file_path: 'src/example.js' }).status, 0);
+  const unverified = runHook('require-verification.mjs', workspace);
+  assert.equal(unverified.status, 2);
+  assert.match(unverified.stderr, /verify has not run/i);
+
+  assert.equal(runHarness(['verify', '--plan', plan, '--base', 'HEAD', '--workspace', workspace, '--json']).status, 0);
+  const sessionPath = path.join(workspace, '.harness', 'session.json');
+  let session = JSON.parse(fs.readFileSync(sessionPath, 'utf8'));
+  const evidencePath = path.join(workspace, session.lastEvidencePath);
+  const evidence = JSON.parse(fs.readFileSync(evidencePath, 'utf8'));
+  const originalVerifiedAt = evidence.verifiedAt;
+  evidence.verifiedAt = new Date(Date.parse(session.lastEditAt) - 1000).toISOString();
+  fs.writeFileSync(evidencePath, JSON.stringify(evidence));
+  const evidenceBeforeEdit = runHook('require-verification.mjs', workspace);
+  assert.equal(evidenceBeforeEdit.status, 2);
+  assert.match(evidenceBeforeEdit.stderr, /changed after/i);
+  evidence.verifiedAt = originalVerifiedAt;
+  fs.writeFileSync(evidencePath, JSON.stringify(evidence));
+
+  const originalLastVerifyAt = session.lastVerifyAt;
+  session.lastVerifyAt = 'invalid';
+  fs.writeFileSync(sessionPath, JSON.stringify(session));
+  const invalidSessionTimestamp = runHook('require-verification.mjs', workspace);
+  assert.equal(invalidSessionTimestamp.status, 2);
+  assert.match(invalidSessionTimestamp.stderr, /timestamp.*invalid/i);
+  session.lastVerifyAt = originalLastVerifyAt;
+  fs.writeFileSync(sessionPath, JSON.stringify(session));
+
+  assert.equal(runHook('require-verification.mjs', workspace).status, 0);
+  session = JSON.parse(fs.readFileSync(sessionPath, 'utf8'));
+  assert.equal(session.lastCompletedEditAt, session.lastEditAt);
+  assert.equal(runHook('require-verification.mjs', workspace).status, 0, 'later read-only stops reuse the completed marker');
+
+  assert.equal(runHook('require-plan-gate.mjs', workspace, { file_path: 'src/example.js' }).status, 0);
+  session = JSON.parse(fs.readFileSync(sessionPath, 'utf8'));
+  session.lastEditAt = new Date(Date.parse(session.lastCompletedEditAt) + 1000).toISOString();
+  fs.writeFileSync(sessionPath, JSON.stringify(session));
+  const changedAfter = runHook('require-verification.mjs', workspace);
+  assert.equal(changedAfter.status, 2);
+  assert.match(changedAfter.stderr, /changed after/i);
+});
+
+test('completion hook rejects failed and inconclusive evidence for a pending edit', () => {
+  const workspace = tempDir('harness-workspace-');
+  const plan = writeVersionedPlan(workspace);
+  writeChecks(workspace, {
+    'unit-tests': { command: [process.execPath, '-e', 'process.exit(1)'] },
+  });
+  initGit(workspace);
+  assert.equal(runHarness(['gate', '--plan', plan, '--workspace', workspace, '--json']).status, 0);
+  assert.equal(runHook('require-plan-gate.mjs', workspace, { file_path: 'src/example.js' }).status, 0);
+  assert.equal(runHarness(['verify', '--plan', plan, '--base', 'HEAD', '--workspace', workspace, '--json']).status, 1);
+
+  const failed = runHook('require-verification.mjs', workspace);
+  assert.equal(failed.status, 2);
+  assert.match(failed.stderr, /outcome is failed/i);
+
+  const session = JSON.parse(fs.readFileSync(path.join(workspace, '.harness', 'session.json'), 'utf8'));
+  const evidencePath = path.join(workspace, session.lastEvidencePath);
+  const evidence = JSON.parse(fs.readFileSync(evidencePath, 'utf8'));
+  evidence.outcome = 'inconclusive';
+  fs.writeFileSync(evidencePath, JSON.stringify(evidence));
+  const inconclusive = runHook('require-verification.mjs', workspace);
+  assert.equal(inconclusive.status, 2);
+  assert.match(inconclusive.stderr, /outcome is inconclusive/i);
+});
+
+test('completion hook normalizes Windows-style plan paths', () => {
+  const workspace = tempDir('harness-workspace-');
+  const plan = writeVersionedPlan(workspace);
+  writeChecks(workspace, {
+    'unit-tests': { command: [process.execPath, '-e', 'process.exit(0)'] },
+  });
+  initGit(workspace);
+  assert.equal(runHarness(['gate', '--plan', plan, '--workspace', workspace, '--json']).status, 0);
+  assert.equal(runHook('require-plan-gate.mjs', workspace, { file_path: 'src/example.js' }).status, 0);
+  assert.equal(runHarness(['verify', '--plan', plan, '--base', 'HEAD', '--workspace', workspace, '--json']).status, 0);
+
+  const sessionPath = path.join(workspace, '.harness', 'session.json');
+  const session = JSON.parse(fs.readFileSync(sessionPath, 'utf8'));
+  const evidencePath = path.join(workspace, session.lastEvidencePath);
+  const evidence = JSON.parse(fs.readFileSync(evidencePath, 'utf8'));
+  session.activePlan = session.activePlan.replace(/\//g, '\\');
+  evidence.plan = evidence.plan.replace(/\//g, '\\');
+  fs.writeFileSync(sessionPath, JSON.stringify(session));
+  fs.writeFileSync(evidencePath, JSON.stringify(evidence));
+
+  const completion = runHook('require-verification.mjs', workspace);
+  assert.equal(completion.status, 0, completion.stderr);
 });

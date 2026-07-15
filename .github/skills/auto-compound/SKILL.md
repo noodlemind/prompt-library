@@ -1,50 +1,82 @@
 ---
 name: auto-compound
-description: Internal — after verified success, compound learnings and rebuild manifest. Used by @engineer autopilot.
+description: Internal post-success learning classifier. Use only after harness verify passes to route durable learning and recommend, but never directly create, reusable primitives.
 user-invocable: false
 ---
 
-# Auto Compound (internal)
+# Auto Compound
 
-Runs after **Verify** passes. Chains **`/compound-learnings`** + harness index/compound.
+## Trigger Examples
 
-## Gates (all required)
+**Should trigger:**
 
-1. Plan verification evidence in `## Activity` or `## Verification Plan`
-2. Tests executed with reported outcome
-3. No open **hard** `capability_gaps` with `fulfillment: pending`
+- "Verification passed; classify what this task taught us."
+- "Route the durable learning from this completed plan."
+- "Record post-success learning and decide whether promotion is warranted."
 
-If gates fail → skip; log in Activity.
+**Should not trigger:**
 
-## Steps
+- "Verification failed; summarize what happened." → fix verification first
+- "Create a new reusable skill now." → use `/create-primitive` after approval
+- "Review this implementation." → use `/code-review`
 
-### 1. Verify gate
+## Confusable Boundaries
+
+- `/auto-compound` is the Engineer's internal, automatic post-success classifier and recorder.
+- `/compound-learnings` is the manual, user-invoked learning publication workflow.
+- `/create-primitive` governs approved primitive creation; classification never creates one directly.
+- `/code-review` evaluates work before learning is compounded.
+
+## Gate
+
+Require explicit passed evidence:
 
 ```bash
-harness gate --phase verify --workspace . --json
+harness verify --plan <path> --workspace . --json
 ```
 
-Exit 0 required before compound (exit 2 = warn only — do not compound until resolved).
+Do not run on `failed` or `inconclusive`, with open hard gaps, or before required review is satisfied.
 
-### 2. Compound learnings
+## Classify the learning
 
-Execute **`/compound-learnings`** — write solution md (global `knowledge/solutions/` or product `docs/solutions/`).
+| Learning | Destination |
+|---|---|
+| Task-specific implementation detail | Plan Implementation Notes |
+| Reusable fact or gotcha | Knowledge solution |
+| Repository convention | Instruction or agent context candidate |
+| Repeatable multi-step procedure | Skill candidate |
+| Deterministic invariant | Check, hook, or CI candidate |
+| Need for independent expertise | Specialist-agent candidate |
+| External executable capability | Tool/integration candidate |
 
-### 3. Index + close-out
+Append a structured recommendation to the plan:
+
+```yaml
+learning:
+  destination: knowledge
+  recurrence: possible
+  candidate_primitive: skill
+  candidate_name: spring-boot-jackson-migration
+  evidence:
+    - verification outcome passed
+    - migration completed in one repository
+  recommendation: record-now-promote-after-next-use
+```
+
+Fields `destination`, `recurrence`, `candidate_primitive`, `candidate_name`, `evidence`, and `recommendation` are required. Use `candidate_primitive: null` when no promotion is warranted.
+
+## Promotion test
+
+Recommend primitive creation only when at least one is evidenced: the procedure succeeded more than once; organizational strategy adopted it; multiple repositories need it; high risk warrants standardization; or repeated fragile steps are commonly missed. A one-time unfamiliar API, simple task, adequate upstream documentation, or overlap with an existing skill is not promotion evidence.
+
+Every promoted skill must have 8–10 positive trigger evals, 8–10 negative/confusable evals, outcome assertions, and supported-host coverage. Primitive creation is a separate governed `/create-primitive` action.
+
+## Persist
+
+Write the selected plan/knowledge destination, then run:
 
 ```bash
-harness compound --workspace . --json
+harness compound --plan <path> --workspace . --json
 ```
 
-Or after solution write only: `harness index --workspace . --json`
-
-### 4. Memory cards
-
-Append 1–3 bullets to plan `## Memory Cards` with `source:` paths.
-
-## Autonomy
-
-| Profile | Behavior |
-|---------|----------|
-| full / balanced | Auto write global solution + index |
-| strict | Ask before global publish |
+The command consumes passed evidence, indexes knowledge, and records skill usage/outcome telemetry. Add 1–3 bounded Memory Cards with source paths. Report the evidence path, learning destination, and promotion recommendation.

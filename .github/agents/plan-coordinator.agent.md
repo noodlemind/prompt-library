@@ -59,7 +59,7 @@ Combine all research findings into a structured plan:
 - Include best practices with source attribution
 - Note framework constraints with version references
 - Flag open questions that need resolution
-- Identify verification commands or manual checks
+- Select trusted named checks from `.github/harness/checks.yaml` plus any manual evidence
 - Identify risk-aware review routing for security, performance, architecture, data integrity, language-specific, or document-review needs
 
 ### 5. Write Plan File
@@ -69,30 +69,50 @@ Write the plan to `docs/plans/YYYY-MM-DD-<type>-<descriptive-name>-plan.md` with
 **YAML frontmatter:**
 ```yaml
 ---
+plan_schema: 1
 title: "<type>: <descriptive title>"
-type: feat|fix|refactor
+type: feat|fix|docs|refactor|chore
 status: planned
 plan_lock: true
-date: YYYY-MM-DD
 phase: 1
+priority: P0|P1|P2|P3
+risk: green|amber|red
+autonomy: full|balanced|strict
 intent: "<one sentence goal>"
 expected_outputs: ["<artifact or behavior>"]
 success_criteria: ["<testable outcome>"]
-verification_commands: ["<command or manual check>"]
+verification:
+  required: ["<trusted-check-id>"]
+  criteria:
+    AC1: ["<trusted-check-id>"]
+reviews:
+  required: []
+  completed: []
+  critical_open: []
+skills_used: []
 org_objectives: []
+domains: []
+specialists: []
+capability_gaps: []
+created: YYYY-MM-DD
+updated: YYYY-MM-DD
 ---
 ```
 
 **Required sections:**
 - `## Overview` — problem statement / feature description
 - `## Context` — task-scoped facts, constraints, user intent, relevant code paths, and assumptions
-- `## Intent Contract` — goal, expected outputs, success criteria, verification commands, and known org objective
+- `## Intent Contract` — goal, expected outputs, success criteria, trusted named checks, and known org objective
+- `## Memory Cards` — bounded `/recall` findings with source paths, or an explicit no-match marker
 - Implementation phases with tasks
 - `## Acceptance Criteria`
 - `## Impacted Files` — allowlist of files expected to change
 - `## Research Notes` — all findings from research agents, file paths discovered, patterns to follow, anti-patterns to avoid
 - `## Verification Plan` — concrete checks that prove the work
+- `## Verification Evidence` — reserve this heading; `harness verify` returns `evidencePath` and records evidence, session, and events, but does not populate the plan section; `/work-on-task` updates it explicitly when plan-local evidence is desired
 - `## Risk & Review Routing` — specialist review needs by risk area
+- `## Implementation Notes` — initialized for `/work-on-task` decisions and deviations
+- `## Review Findings` — initialized for `/code-review` handoff findings
 - `## Activity` — initialized as append-only log
 
 ### 6. Persist Research Context
@@ -111,17 +131,33 @@ Include in Research Notes:
 
 ```markdown
 ---
+plan_schema: 1
 title: "<type>: <title>"
-type: feat|fix|refactor
+type: feat|fix|docs|refactor|chore
 status: planned
 plan_lock: true
-date: YYYY-MM-DD
 phase: 1
+priority: P0|P1|P2|P3
+risk: green|amber|red
+autonomy: full|balanced|strict
 intent: "<one sentence goal>"
 expected_outputs: ["<artifact or behavior>"]
 success_criteria: ["<testable outcome>"]
-verification_commands: ["<command or manual check>"]
+verification:
+  required: ["<trusted-check-id>"]
+  criteria:
+    AC1: ["<trusted-check-id>"]
+reviews:
+  required: []
+  completed: []
+  critical_open: []
+skills_used: []
 org_objectives: []
+domains: []
+specialists: []
+capability_gaps: []
+created: YYYY-MM-DD
+updated: YYYY-MM-DD
 ---
 
 # <Title>
@@ -133,7 +169,10 @@ org_objectives: []
 [Facts, constraints, user intent, related artifacts, assumptions]
 
 ## Intent Contract
-[Goal, expected outputs, success criteria, verification commands, org objective if known]
+[Goal, expected outputs, success criteria, trusted named checks, org objective if known]
+
+## Memory Cards
+[Bounded `/recall` findings with source paths, or no relevant cards found]
 
 ## Implementation Phases
 
@@ -155,14 +194,23 @@ org_objectives: []
 [Findings from research agents — this section persists context for /work-on-task]
 
 ## Verification Plan
-- `[command]` — [what this proves]
+- `<trusted-check-id>` — [what this proves]
 - Manual check: [what to inspect]
+
+## Verification Evidence
+[Updated explicitly by `/work-on-task` from the verifier's returned `evidencePath`; only `passed` permits completion]
 
 ## Risk & Review Routing
 - Security: [required/not applicable and why]
 - Performance: [required/not applicable and why]
 - Architecture: [required/not applicable and why]
 - Data integrity: [required/not applicable and why]
+
+## Implementation Notes
+[Filled by `/work-on-task` with decisions, deviations, and follow-up context]
+
+## Review Findings
+[Filled by `/code-review` with findings and dispositions]
 
 ## Activity
 ### YYYY-MM-DD HH:MM — Plan created

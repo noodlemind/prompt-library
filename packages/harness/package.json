@@ -13,6 +13,7 @@
   "files": [
     "bin",
     "lib",
+    "config",
     "assets",
     "retired.json",
     "README.md"

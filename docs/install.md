@@ -4,7 +4,7 @@ This prompt library is **source material**, not an IDE extension. Policy:
 
 **Prompts, agents, skills, and instructions are installed globally only** — not copied into product repositories.
 
-Install and upgrade use the **`harness`** CLI. The npm package is named **`@dev-kit/harness`** for registry uniqueness, but daily commands should use `harness` ([Nexus setup](./onboarding/nexus-registry-setup.md), [distribution plan](./architecture/npm-harness-distribution-plan.md)).
+Install and upgrade use the **`harness`** CLI. The npm package is named **`@dev-kit/harness`** for registry uniqueness, but daily commands should use `harness` ([Nexus setup](./onboarding/nexus-registry-setup.md), [architecture](./architecture/engineer-harness.md)).
 
 ## Quick install
 
@@ -119,5 +119,5 @@ Creates `docs/plans/` and `docs/agent-context.md`.
 ## More detail
 
 - [Harness quickstart](./onboarding/harness-quickstart.md)
-- [Memory system](./architecture/engineer-memory-system.md)
+- [Engineer harness architecture](./architecture/engineer-harness.md)
 - [Skill-driven standard](./architecture/skill-driven-prompt-library.md)

@@ -1,79 +1,178 @@
-# Adaptive Engineer Harness — capability inventory (starter kit + growth)
-# Update via /create-primitive after human-approved capability-gap proposals.
-version: 1
-updated: 2026-05-21
+# Discoverable capability inventory. Skill metadata remains the primary trigger surface.
+version: 2
+updated: 2026-07-13
+lifecycle_states: [candidate, experimental, active, deprecated, retired]
 
 engineer:
   entry_agent: engineer
   entry_skill: engineer
-  workflow: recall → capture-issue → plan-issue → work-on-task → code-review → compound-learnings
+  architecture: docs/architecture/engineer-harness.md
+  workflow: orient → establish intent → investigate → work → handle gaps → verify → review → compound → report
 
-starter_skills:
-  pipeline:
-    - start
-    - capture-issue
-    - plan-issue
-    - work-on-task
-    - code-review
-    - compound-learnings
-    - recall
-    - index-memory
-  internal_autopilot:
-    - ensure-plan
-    - ensure-capability
-    - auto-compound
-    - engineer-autopilot
-    - auto-skill-draft
-  engineering:
-    - engineer
-    - harness-doctor
-    - tdd-fix
-    - brainstorming
-    - deepen-plan
-    - document-review
-  domain:
-    - java
-    - python
-    - sql
-    - aws
-  utilities:
-    - btw
-    - analyze-and-plan
-    - codebase-context
-    - review-guardrails
-    - triage-issues
-    - create-primitive
-    - import-conventions
-    - project-readme
+capabilities:
+  analyze-and-plan: {type: skill, status: active, owner: developer-experience, version: 1, origin: starter}
+  auto-compound:
+    type: skill
+    status: active
+    owner: developer-experience
+    version: 2
+    origin: starter
+    triggers: [verified success, compound learning, promotion recommendation]
+    eval_suite: evals/skill-trigger-evals.yaml#auto-compound
+    usage_count: 0
+  auto-skill-draft: {type: skill, status: experimental, owner: developer-experience, version: 1, origin: starter}
+  aws: {type: skill, status: active, owner: cloud-platform, version: 1, origin: starter}
+  brainstorming: {type: skill, status: active, owner: developer-experience, version: 1, origin: starter}
+  btw:
+    type: skill
+    status: active
+    owner: developer-experience
+    version: 2
+    origin: starter
+    triggers: [quick question, repository orientation, answer only]
+    eval_suite: evals/skill-trigger-evals.yaml#btw
+    overlaps: [engineer]
+    usage_count: 0
+  capture-issue: {type: skill, status: active, owner: developer-experience, version: 1, origin: starter}
+  code-review:
+    type: skill
+    status: active
+    owner: developer-experience
+    version: 2
+    origin: starter
+    triggers: [review diff, independent code review, PR findings]
+    eval_suite: evals/skill-trigger-evals.yaml#code-review
+    usage_count: 0
+  codebase-context: {type: skill, status: active, owner: developer-experience, version: 1, origin: starter}
+  compound-learnings:
+    type: skill
+    status: active
+    owner: developer-experience
+    version: 2
+    origin: starter
+    triggers: [publish verified solution, team knowledge]
+    eval_suite: evals/skill-trigger-evals.yaml#compound-learnings
+    usage_count: 0
+  create-primitive:
+    type: skill
+    status: active
+    owner: developer-experience
+    version: 2
+    origin: starter
+    triggers: [create skill, create agent, promote procedure, retire capability]
+    eval_suite: evals/skill-trigger-evals.yaml#create-primitive
+    usage_count: 0
+  deepen-plan: {type: skill, status: active, owner: developer-experience, version: 1, origin: starter}
+  document-review: {type: skill, status: active, owner: developer-experience, version: 1, origin: starter}
+  engineer-skill:
+    name: engineer
+    type: skill
+    status: active
+    owner: developer-experience
+    version: 2
+    origin: starter
+    triggers: [substantial investigation, end-to-end engineering, own delivery]
+    eval_suite: evals/skill-trigger-evals.yaml#engineer
+    usage_count: 0
+  ensure-capability:
+    type: skill
+    status: active
+    owner: developer-experience
+    version: 2
+    origin: starter
+    triggers: [explicit missing capability, high-risk assurance, encountered blocker]
+    eval_suite: evals/skill-trigger-evals.yaml#ensure-capability
+    usage_count: 0
+  ensure-plan:
+    type: skill
+    status: active
+    owner: developer-experience
+    version: 2
+    origin: starter
+    triggers: [missing plan, unlocked plan, implement gate C1 C3]
+    eval_suite: evals/skill-trigger-evals.yaml#ensure-plan
+    usage_count: 0
+  harness-doctor: {type: skill, status: active, owner: developer-experience, version: 1, origin: starter}
+  import-conventions: {type: skill, status: active, owner: developer-experience, version: 1, origin: starter}
+  index-memory: {type: skill, status: active, owner: developer-experience, version: 1, origin: starter}
+  java: {type: skill, status: active, owner: application-platform, version: 1, origin: starter}
+  plan-issue:
+    type: skill
+    status: active
+    owner: developer-experience
+    version: 2
+    origin: starter
+    triggers: [plan captured issue, phased implementation plan]
+    eval_suite: evals/skill-trigger-evals.yaml#plan-issue
+    usage_count: 0
+  project-readme: {type: skill, status: active, owner: developer-experience, version: 1, origin: starter}
+  python: {type: skill, status: active, owner: application-platform, version: 1, origin: starter}
+  recall: {type: skill, status: active, owner: developer-experience, version: 1, origin: starter}
+  review-guardrails: {type: skill, status: active, owner: developer-experience, version: 1, origin: starter}
+  sql: {type: skill, status: active, owner: data-platform, version: 1, origin: starter}
+  start: {type: skill, status: active, owner: developer-experience, version: 1, origin: starter}
+  tdd-fix:
+    type: skill
+    status: active
+    owner: developer-experience
+    version: 2
+    origin: starter
+    triggers: [isolated bug, failing regression test]
+    eval_suite: evals/skill-trigger-evals.yaml#tdd-fix
+    usage_count: 0
+  triage-issues: {type: skill, status: active, owner: developer-experience, version: 1, origin: starter}
+  work-on-task:
+    type: skill
+    status: active
+    owner: developer-experience
+    version: 2
+    origin: starter
+    triggers: [resume locked plan, execute current phase]
+    eval_suite: evals/skill-trigger-evals.yaml#work-on-task
+    usage_count: 0
 
-starter_agents:
-  coordinators:
-    - plan-coordinator
-    - code-review-coordinator
-    - pipeline-navigator
-  implementation:
-    - code-implementer
-  research:
-    - repo-research-analyst
-    - best-practices-researcher
-    - framework-docs-researcher
-    - git-history-analyzer
-  review:
-    - architecture-strategist
-    - security-sentinel
-    - performance-oracle
-    - java-reviewer
-    - python-reviewer
-    - sql-reviewer
-    - aws-reviewer
-    - code-simplicity-reviewer
-    - pattern-recognition-specialist
-    - data-integrity-guardian
-    - compounding-typescript-reviewer
-    - spec-flow-analyzer
+  architecture-strategist: {type: agent, status: active, owner: architecture, version: 1, origin: starter}
+  aws-reviewer: {type: agent, status: active, owner: cloud-platform, version: 1, origin: starter}
+  best-practices-researcher: {type: agent, status: active, owner: developer-experience, version: 1, origin: starter}
+  bug-reproduction-validator: {type: agent, status: active, owner: quality-engineering, version: 1, origin: starter}
+  code-implementer: {type: agent, status: active, owner: developer-experience, version: 1, origin: starter}
+  code-review-coordinator: {type: agent, status: active, owner: developer-experience, version: 1, origin: starter}
+  code-simplicity-reviewer: {type: agent, status: active, owner: developer-experience, version: 1, origin: starter}
+  compounding-typescript-reviewer: {type: agent, status: active, owner: application-platform, version: 1, origin: starter}
+  data-integrity-guardian: {type: agent, status: active, owner: data-platform, version: 1, origin: starter}
+  engineer-agent:
+    name: engineer
+    type: agent
+    status: active
+    owner: developer-experience
+    version: 2
+    origin: starter
+  feedback-codifier: {type: agent, status: active, owner: developer-experience, version: 1, origin: starter}
+  framework-docs-researcher: {type: agent, status: active, owner: developer-experience, version: 1, origin: starter}
+  git-history-analyzer: {type: agent, status: active, owner: developer-experience, version: 1, origin: starter}
+  java-reviewer: {type: agent, status: active, owner: application-platform, version: 1, origin: starter}
+  pattern-recognition-specialist: {type: agent, status: active, owner: architecture, version: 1, origin: starter}
+  performance-oracle: {type: agent, status: active, owner: reliability-engineering, version: 1, origin: starter}
+  pipeline-navigator: {type: agent, status: active, owner: developer-experience, version: 1, origin: starter}
+  plan-coordinator: {type: agent, status: active, owner: developer-experience, version: 1, origin: starter}
+  pr-comment-resolver: {type: agent, status: active, owner: developer-experience, version: 1, origin: starter}
+  python-reviewer: {type: agent, status: active, owner: application-platform, version: 1, origin: starter}
+  repo-research-analyst: {type: agent, status: active, owner: developer-experience, version: 1, origin: starter}
+  security-sentinel: {type: agent, status: active, owner: application-security, version: 1, origin: starter}
+  spec-flow-analyzer: {type: agent, status: active, owner: product-engineering, version: 1, origin: starter}
+  sql-reviewer: {type: agent, status: active, owner: data-platform, version: 1, origin: starter}
+
+  engineer-autopilot:
+    type: skill
+    status: retired
+    owner: developer-experience
+    version: 1
+    origin: starter
+    retired_on: 2026-07-13
+    replacement: engineer-agent
+    reason: Duplicated the normative Engineer runtime loop.
 
 engineer_allowlist:
-  # Must match engineer.agent.md frontmatter agents: array when adding reviewers
   - code-implementer
   - code-review-coordinator
   - plan-coordinator
@@ -91,20 +190,11 @@ engineer_allowlist:
   - aws-reviewer
 
 growth:
-  new_skill: capability-gap-proposal → human approval → create-primitive → append starter_skills or new category
-  new_agent: capability-gap-proposal → human approval → create-primitive → append starter_agents + engineer_allowlist in engineer.agent.md
-  new_learning: compound-learnings → knowledge/solutions → index-memory
+  discovery: skill metadata → registry lookup when a gap is encountered
+  promotion: verified use → learning classification → evidence review → evals → governed creation
+  retirement: deprecate → warn and migrate → remove source → retain registry tombstone
 
 references:
-  principles: .github/skills/references/engineer-principles.md
-  autonomy: .github/skills/references/autonomy-policy.md
-  capture_gate: .github/skills/references/capture-gate.md
-  capability_preflight: .github/skills/references/capability-preflight.md
-  domain_routing: .github/skills/references/domain-routing.md
-  context_budget: .github/skills/references/context-budget.md
-  session_checklist: .github/skills/references/engineer-session-checklist.md
-  starter_kit: .github/skills/references/engineer-starter-kit.md
-  quickstart: docs/onboarding/harness-quickstart.md
-  gap_fulfillment: docs/architecture/composer-gap-fulfillment-loop.md
-  autonomous_proposal: docs/architecture/composer-style-autonomous-harness-proposal.md
-  vision: docs/architecture/engineer-vision-and-growth-loop.md
+  architecture: docs/architecture/engineer-harness.md
+  trigger_evals: evals/skill-trigger-evals.yaml
+  harness_contract: .github/skills/references/harness-tool-contract.md

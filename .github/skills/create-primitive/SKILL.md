@@ -1,6 +1,6 @@
 ---
 name: create-primitive
-description: Decide and create the right prompt-library primitive: skill, agent, instruction, check, prompt wrapper, reference, or solution doc. Not for importing external repos — use /import-conventions.
+description: "Decide and create the right prompt-library primitive: skill, agent, instruction, check, prompt wrapper, reference, or solution doc. Not for importing external repos — use /import-conventions."
 ---
 
 # Create Primitive
@@ -79,18 +79,32 @@ Before writing files:
 4. **Define triggers and negative triggers** for discovery when the primitive is user/model selectable.
 5. **Declare permissions/tool needs** using the smallest sufficient tool set.
 6. **Define outputs and verification**: generated files, state changes, review criteria, or acceptance checks.
-7. **Add eval scenarios**: at least 3 should-trigger and 3 should-not examples for skills/agents, or good/bad examples for checks/instructions.
+7. **Add eval scenarios**: for promoted or core/confusable skills, add 8–10 should-trigger prompts, 8–10 should-not/confusable prompts, outcome assertions, and supported-host coverage. Checks and instructions need good/bad examples.
 8. **Update docs** listed in the validation checklist.
 9. **Update growth inventory** when adding a skill or agent in this repo:
    - Append to `knowledge/capability-registry.yaml` under `starter_skills` or `starter_agents`.
    - If new agent is delegatable from `@engineer`, add to `engineer_allowlist` and `engineer.agent.md` frontmatter `agents:` (human-approved).
-   - Document in `docs/architecture/engineer-vision-and-growth-loop.md` if primitive boundaries changed.
+   - Update `docs/architecture/engineer-harness.md` if runtime or capability boundaries changed.
 
 ## Capability Expansion Mode
 
 When invoked because `@engineer` or another skill found a missing capability, require `.github/skills/references/capability-gap-proposal.md` before creating or substantially changing primitives. Follow the steps in that template's `## Usage Workflow`.
 
 Do not create primitives in non-interactive mode unless prior human approval is already recorded.
+
+### Promotion evidence
+
+Before creating or substantially expanding a skill, record the verified real-task evidence and satisfy at least one criterion:
+
+- the procedure has succeeded more than once;
+- the organization has strategically adopted the technology;
+- multiple repositories need the workflow;
+- the procedure is high-risk and benefits from standardization; or
+- the procedure has fragile steps models repeatedly miss.
+
+The evidence record must link passed verification artifacts, prior uses or strategic adoption, overlap analysis, an owner, proposed lifecycle state, a trigger eval suite, and an outcome eval suite. One unfamiliar API, a simple one-off task, adequate upstream documentation, or duplication of an existing skill is insufficient promotion evidence.
+
+Primitive creation remains separate from learning classification. `/auto-compound` may recommend a candidate but must not create it.
 
 ## Primitive Creation Paths
 
@@ -350,6 +364,7 @@ After creating an agent, skill, or instruction, verify:
 - [ ] "What NOT to Report" section present (for reviewers)
 - [ ] File in correct directory with correct naming
 - [ ] For skills: inputs, outputs, mode behavior, gates, verification, error handling, and trigger examples are present
+- [ ] Promoted skills include recorded promotion evidence, 8–10 positive trigger evals, 8–10 negative/confusable trigger evals, outcome eval assertions, owner, and lifecycle state
 - [ ] For instructions: `applyTo` glob pattern matches target files, conventions are specific and actionable
 - [ ] For prompt wrappers: body routes to the matching skill instead of duplicating workflow logic
 - [ ] For checks: follows `.github/checks/README.md` format, lives in the correct bundled or product-owned location, and stays focused on one concern

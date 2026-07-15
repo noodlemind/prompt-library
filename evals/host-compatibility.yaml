@@ -1,0 +1,59 @@
+version: 1
+evaluated: 2026-07-13
+hosts:
+  github-copilot-vscode:
+    full:
+      mechanism: hydrated agents, skills, prompts, instructions, and global harness CLI
+      assertions:
+        - engineer agent is discoverable and owns the only normative delivery lifecycle
+        - Answer and Investigate modes stay read-only without plan or verification ceremony
+        - prompt wrapper preserves the Engineer tool allowlist
+        - explicit gate and verify commands work from the repository terminal
+        - named checks and evidence use repository-relative paths
+    degraded:
+      mechanism: no lifecycle-hook support or optional specialist unavailable
+      assertions:
+        - ordinary work continues without an exact domain skill
+        - required verification remains explicit through the CLI and CI
+        - safety-critical missing capability blocks only the affected operation
+  github-copilot-cli:
+    full:
+      mechanism: hydrated agents, skills, hooks, knowledge, and harness CLI
+      assertions:
+        - pre-edit hook requires recent explicit plan gate and scope
+        - completion hook bypasses sessions with no recorded edit
+        - completion hook requires passed evidence after every new recorded edit
+        - destructive and sensitive-path hooks remain active
+        - compound consumes passed evidence and records telemetry
+    degraded:
+      mechanism: hooks unsupported or disabled
+      assertions:
+        - explicit gate and verify commands retain the same contract
+        - required CI provides independent completion enforcement
+        - hook absence is disclosed rather than treated as verified
+  github-copilot-intellij:
+    full:
+      mechanism: hydrated global agents, skills, prompts, merged instructions, and harness CLI
+      assertions:
+        - skill and agent frontmatter remains host-neutral
+        - merged global instructions do not require bulk skill reads
+        - terminal harness commands use explicit plans and evidence
+    degraded:
+      mechanism: partial custom-agent or hook feature availability
+      assertions:
+        - skills degrade to documented procedures with host-native tools
+        - deterministic CLI and CI remain authoritative
+        - unavailable optional integrations do not block ordinary work
+  portable-agent-skills:
+    full:
+      mechanism: agentskills.io-compatible skill discovery plus repository CLI
+      assertions:
+        - every skill has name and discovery description frontmatter
+        - procedures avoid provider-specific model pinning
+        - host tool fallbacks are documented
+    degraded:
+      mechanism: skills available without custom agents, hooks, or harness installation
+      assertions:
+        - Engineer operating model remains readable as repository guidance
+        - direct tests can be reported while governance is labeled unavailable
+        - missing required checks produce inconclusive rather than passed

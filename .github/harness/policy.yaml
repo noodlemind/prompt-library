@@ -1,0 +1,6 @@
+version: 1
+enforcement: warn
+gate_ttl_minutes: 30
+evidence_ttl_hours: 24
+exemptions: []
+waivers: []

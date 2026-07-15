@@ -1,44 +1,43 @@
 import fs from 'fs';
 import path from 'path';
-import { runGate } from './gate.mjs';
 import { runIndexKnowledge } from './index-knowledge.mjs';
 import { readSession, writeSession } from './session.mjs';
+import { readEvidence, validateEvidence } from './evidence.mjs';
+import { selectPlan } from './plan-parse.mjs';
+import { loadPolicy } from './policy.mjs';
+import { recordSkillUsage } from './telemetry.mjs';
 
 export function runCompound({ workspace, copilotHome, flags, log = () => {} }) {
-  const verifyGate = runGate({
-    workspace,
-    flags: { ...flags, phase: 'verify' },
-    query: '',
-  });
-
-  if (!verifyGate.pass) {
+  const session = readSession(workspace);
+  const selected = selectPlan(workspace, { planPath: flags.plan, session, requireUnique: true });
+  if (!selected.plan) {
     return {
       pass: false,
-      exitCode: 1,
-      verifyGate: {
-        pass: verifyGate.pass,
-        exitCode: verifyGate.exitCode,
-        blockedReason: verifyGate.blockedReason,
-      },
+      exitCode: 2,
+      plan: null,
+      verificationEvidence: null,
       indexed: null,
-      blockedReason: verifyGate.blockedReason || 'verify gate failed — run tests and update Activity',
-      nextTools: ['harness gate --phase verify', '/auto-compound'],
+      blockedReason: selected.error || 'No unambiguous plan; pass --plan explicitly',
+      nextTools: ['harness verify --plan <path>', '/auto-compound'],
     };
   }
 
-  if (verifyGate.exitCode === 2) {
+  const evidence = readEvidence(workspace, selected.plan.path);
+  const freshness = validateEvidence({
+    workspace,
+    plan: selected.plan,
+    evidence,
+    maxAgeHours: loadPolicy(workspace, flags.enforcement).evidenceTtlHours,
+  });
+  if (!freshness.pass) {
     return {
-      pass: true,
-      exitCode: 2,
-      verifyGate: {
-        pass: verifyGate.pass,
-        exitCode: verifyGate.exitCode,
-        checks: verifyGate.checks?.filter((c) => c.id === 'V1') || [],
-        blockedReason: verifyGate.blockedReason,
-      },
+      pass: false,
+      exitCode: evidence?.outcome === 'failed' ? 1 : 2,
+      plan: selected.plan.path,
+      verificationEvidence: evidence,
       indexed: null,
-      blockedReason: verifyGate.blockedReason || 'verify gate warning — complete verification before compound',
-      nextTools: ['harness gate --phase verify', '/auto-compound'],
+      blockedReason: freshness.message,
+      nextTools: [`harness verify --plan ${selected.plan.path}`, '/auto-compound'],
     };
   }
 
@@ -54,27 +53,31 @@ export function runCompound({ workspace, copilotHome, flags, log = () => {} }) {
     log,
   });
 
-  const session = readSession(workspace) || {};
+  const telemetry = recordSkillUsage({
+    copilotHome,
+    plan: selected.plan,
+    evidence,
+    dryRun: flags.dryRun,
+  });
+
+  const sessionState = readSession(workspace) || {};
   writeSession(
     workspace,
     {
-      ...session,
+      ...sessionState,
       lastCompoundAt: new Date().toISOString(),
       lastIndexEntries: indexed.entries,
     },
     flags.dryRun
   );
 
-  const exitCode = verifyGate.exitCode === 2 ? 2 : 0;
-
   return {
     pass: true,
-    exitCode,
-    verifyGate: {
-      pass: verifyGate.pass,
-      exitCode: verifyGate.exitCode,
-      checks: verifyGate.checks?.filter((c) => c.id === 'V1') || [],
-    },
+    exitCode: 0,
+    plan: selected.plan.path,
+    verificationEvidence: evidence,
+    learning: selected.plan.fm.learning || null,
+    telemetry,
     indexed,
     blockedReason: null,
     nextTools: ['/compound-learnings', '/auto-compound'],

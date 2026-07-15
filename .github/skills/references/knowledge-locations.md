@@ -27,4 +27,4 @@ Where agents and skills load context. Do not duplicate this list elsewhere — l
 
 - Compounded learnings: `knowledge/solutions/` (not `docs/solutions/` — that path is for product repos only)
 - Capability inventory: `knowledge/capability-registry.yaml`
-- Architecture: `docs/architecture/engineer-vision-and-growth-loop.md`, `engineer-memory-system.md`
+- Architecture: `docs/architecture/engineer-harness.md`

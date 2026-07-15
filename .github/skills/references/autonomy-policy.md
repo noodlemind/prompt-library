@@ -1,6 +1,6 @@
 # Autonomy Policy
 
-Default: **run the pipeline autonomously**. Human consent is for **Tier 3** only. See `docs/architecture/composer-style-autonomous-harness-proposal.md`.
+Default: **run the pipeline autonomously**. Human consent is for **Tier 3** only.
 
 Profiles in `~/.copilot/knowledge/profile.md`:
 

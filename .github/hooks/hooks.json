@@ -16,11 +16,16 @@
     ],
     "PreToolUse": [
       {
-        "matcher": "Edit|Write|MultiEdit",
+        "matcher": "Edit|Write|MultiEdit|edit|editFiles|apply_patch|create_file|replace_string_in_file",
         "hooks": [
           {
             "type": "command",
             "command": "node guard-critical-files.mjs",
+            "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "node require-plan-gate.mjs",
             "timeout": 5
           }
         ]
@@ -31,6 +36,11 @@
           {
             "type": "command",
             "command": "node block-destructive-commands.mjs",
+            "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "node require-plan-gate.mjs",
             "timeout": 5
           }
         ]
@@ -44,6 +54,18 @@
             "type": "command",
             "command": "node preserve-context.mjs",
             "timeout": 10
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node require-verification.mjs",
+            "timeout": 5
           }
         ]
       }

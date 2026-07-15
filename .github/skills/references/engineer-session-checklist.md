@@ -1,31 +1,20 @@
-# Engineer Session Checklist
+# Engineer session assertions
 
-Binary checks for `@engineer` on trackable work.
+Non-normative binary assertions tested against the canonical delivery lifecycle in `engineer.agent.md`. They apply only after Deliver mode is selected; Answer and Investigate modes make no edits and do not require a plan or completion evidence.
 
-## Before investigation or `editFiles`
+## Before edits
 
-- [ ] **R0** Recall (Phase 0)
-- [ ] **P0** `/ensure-capability` — no pending **hard** gaps (or Tier 3 waiver logged)
-- [ ] **C1** Plan under `docs/plans/`
-- [ ] **C2** Plan via `/ensure-plan` or `/capture-issue` template
-- [ ] **C3** `plan_lock: true` before implement
-- [ ] **C4** Route in Activity
+- [ ] **O1** Bounded orientation completed.
+- [ ] **I1** Goal, outputs, criteria, constraints, and risk are explicit.
+- [ ] **G1** Trackable work has an explicit locked plan and passed implement gate.
+- [ ] **S1** Intended edits are within planned scope.
+- [ ] **H1** Any safety-critical capability gap is resolved or explicitly waived.
 
-**Fail C1–C4 → `/ensure-plan` and STOP edits.**
+## Before completion
 
-## During work
+- [ ] **V1** `harness verify --plan <path>` outcome is `passed`.
+- [ ] **V2** Required checks, scope, tasks, reviews, and hard gaps are accounted for in evidence.
+- [ ] **L1** Durable learning is classified; primitive promotion is separate and evidence-gated.
+- [ ] **R1** Outcome, evidence, decisions, risks, and artifacts are reported.
 
-- [ ] **W1** Scope = `## Impacted Files`
-- [ ] **W2** Read `## Memory Cards` before long sections
-- [ ] **W3** Subagent packet used
-- [ ] **W4** Tier 3 per `human-approval-policy.md`
-
-## Before done
-
-- [ ] **D1** Verification evidence
-- [ ] **D2** Tests reported
-- [ ] **D3** `/auto-compound` (or `/compound-learnings` + `/index-memory`)
-
-## Exemptions
-
-`/tdd-fix`, review-only, `/btw`, locked-plan resume, quoted capture waiver.
+The contract test fails if this checklist becomes a second numbered runtime procedure.

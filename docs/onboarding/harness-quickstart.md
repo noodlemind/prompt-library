@@ -4,7 +4,7 @@ Get from zero to **`@engineer`** delivering work in any enterprise product repo.
 
 ## 1. Install once (per machine)
 
-**Recommended:** every install method ends with a global `harness` CLI at `~/.copilot/bin/harness`. The scoped npm name is `@dev-kit/harness`; daily commands use `harness`. See [`nexus-registry-setup.md`](./nexus-registry-setup.md) and [`npm-harness-distribution-plan.md`](../architecture/npm-harness-distribution-plan.md).
+**Recommended:** every install method ends with a global `harness` CLI at `~/.copilot/bin/harness`. The scoped npm name is `@dev-kit/harness`; daily commands use `harness`. See [`nexus-registry-setup.md`](./nexus-registry-setup.md) and [Engineer Harness Architecture](../architecture/engineer-harness.md).
 
 | Method | Commands |
 |--------|----------|
@@ -52,7 +52,8 @@ harness init-repo
 
 ```text
 docs/plans/             # plans + state machine
-.harness/               # session.json, context-pack.md (gitignored)
+.github/harness/        # trusted checks + enforcement policy (tracked)
+.harness/               # session, context pack, evidence (gitignored)
 docs/agent-context.md   # optional thin conventions
 .harness-version        # optional pin, e.g. 0.4.0
 ```
@@ -64,23 +65,38 @@ Pin harness in `package.json` `devDependencies` or `.harness-version` for CI rep
 In Copilot Chat:
 
 ```text
+BTW, where is orders API authentication configured?
+@engineer Investigate the intermittent orders timeout and report evidence only
 @engineer Fix the timeout on the orders API under load
 ```
 
-`@engineer` runs harness tools via terminal (you do not prompt the CLI):
+Quick Answer mode routes to `/btw`; deeper Investigate mode remains read-only.
+Neither creates a delivery plan or requires completion evidence. When files
+will change, `@engineer` enters Deliver mode and runs harness tools via terminal;
+users do not need to prompt the CLI. The agent uses bounded recall as needed,
+passes an explicit locked plan to the pre-edit gate, and runs deterministic
+verification before completion. Compounding consumes only passed post-edit
+evidence.
 
-1. `harness orient` → read `.harness/context-pack.md`
-2. `harness gate` before edits
-3. implement → verify → `harness compound` or `/auto-compound`
+The relevant integration commands are:
+
+```bash
+harness gate --plan docs/plans/<plan>.md --phase implement --workspace . --json
+harness verify --plan docs/plans/<plan>.md --base <git-ref> --workspace . --json
+harness compound --plan docs/plans/<plan>.md --workspace . --json
+```
 
 You do **not** need `/capture-issue`, `/plan-issue`, `/recall`, or `/compound-learnings` unless debugging.
 
-## 5. CI (optional hard gate)
+## 5. CI enforcement
 
-```yaml
-- run: harness gate --workspace . --json
-- run: harness validate-plan --workspace . --json
-```
+The supplied `.github/workflow-templates/harness-plan-verification.yml` is a
+GitHub workflow template, not an automatically active workflow. Enable it through
+GitHub's workflow-template picker or copy it into `.github/workflows/` in the
+product repository. It resolves exactly one plan changed by the PR, validates
+it, passes it explicitly to the gate and verifier, and checks the PR diff against
+`## Impacted Files`. Select `observe`, `warn`, or `enforce` in
+`.github/harness/policy.yaml`.
 
 ## 6. Health check
 
@@ -90,18 +106,16 @@ You do **not** need `/capture-issue`, `/plan-issue`, `/recall`, or `/compound-le
 
 Fix any FAIL before blaming the model.
 
-## 6. Enterprise overlay (platform team)
+## 7. Enterprise overlay (platform team)
 
 Add corp skills/agents under `enterprise/` in your overlay git repo, register in `capability-registry.enterprise.yaml`, re-hydrate. See `enterprise/README.md`.
 
-## 7. Cloud / Linux agents
+## 8. Cloud / Linux agents
 
 If `~/.copilot/knowledge/` is unavailable, keep `knowledge/` in the product repo clone or symlink from prompt-library.
 
 ## Docs
 
 - Tool contract: `.github/skills/references/harness-tool-contract.md`
-- Autonomous loop: `docs/architecture/composer-style-autonomous-harness-proposal.md`
-- Memory: `docs/architecture/engineer-memory-system.md`
-- Enterprise capability: `docs/architecture/enterprise-capability-expansion.md`
-- Gap fulfillment: `docs/architecture/composer-gap-fulfillment-loop.md`
+- Runtime, memory, capability lifecycle, and host modes: `docs/architecture/engineer-harness.md`
+- Primitive boundaries: `docs/architecture/skill-driven-prompt-library.md`

@@ -1,0 +1,6 @@
+{
+  "name": "Harness plan verification",
+  "description": "Bind product changes to one explicit plan, run trusted named checks, validate scope, and upload verification evidence.",
+  "iconName": "shield-check",
+  "categories": ["Continuous integration", "Code review"]
+}

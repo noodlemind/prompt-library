@@ -2,7 +2,7 @@
 
 **SSOT** for harness agent-runtime commands. Skills and `@engineer` **call harness**; harness does not invoke skills. `@dev-kit/harness` is the npm package name; `harness` is the command name.
 
-Design: [`docs/architecture/tool-native-harness-design.md`](../../../docs/architecture/tool-native-harness-design.md) · Budget: [`context-budget.md`](context-budget.md)
+Budget: [`context-budget.md`](context-budget.md)
 
 ## Two-tier boundary
 
@@ -66,11 +66,12 @@ Installed to `~/.copilot/bin/harness` on every `harness install`. Add to PATH wi
 |---------|-----------------|-------------|--------------|
 | `orient --query "<task>"` | Codebase search + task context | **F1** — writes ≤2 KB `.harness/context-pack.md` (goal from plan Intent Contract) | session.json, events.jsonl |
 | `recall "<query>"` | Standalone search / debug | F1 paths only | events |
-| `gate [--phase implement\|verify]` | Pre-edit lint / task guard | F3 on fail | events |
+| `gate --phase implement --plan <path>` | Pre-edit plan/state guard | F3 on fail | session + events |
+| `verify --plan <path> [--base ref] [--enforcement mode]` | Named checks, schema/state, tasks, scope, reviews, gaps, findings, evidence | no prompt context | evidence + session + events |
 | `validate-plan [--plan path]` | Spec/schema lint | read-only | none |
 | `index` | Rebuild search index | none in chat | manifest.yaml, `.harness-index/`, events |
 | `get [--docid id \| --path rel]` | Fetch bounded doc excerpt | F2 on demand | none |
-| `compound` | Post-verify index + close-out | after verify gate | index + session, events |
+| `compound --plan <path>` | Consume passed evidence, index, classify learning, record telemetry | after verify | index + session + telemetry + events |
 | `events` | Audit / stuck debugging | read-only | none |
 
 ### JSON shapes (stable fields)
@@ -107,6 +108,29 @@ Installed to `~/.copilot/bin/harness` on every `harness install`. Add to PATH wi
 }
 ```
 
+**verify**
+```json
+{
+  "outcome": "passed",
+  "plan": "docs/plans/example-plan.md",
+  "checks": [],
+  "unverifiedCriteria": [],
+  "scopeViolations": [],
+  "openHardGaps": [],
+  "requiredReviews": [],
+  "enforcement": "enforce",
+  "binding": {
+    "base": "<git-ref>",
+    "planDigest": "<sha256>",
+    "changedFiles": ["src/example.ts"],
+    "workspaceDigest": "<sha256>"
+  },
+  "evidencePath": ".harness/evidence/example-plan.json"
+}
+```
+
+Allowed outcomes are `passed`, `failed`, and `inconclusive`. Only fresh `passed` evidence bound to the current plan contract, base ref, changed-file set, and workspace contents permits a delivery completion claim or compound. Plan Activity entries are excluded from the contract digest so the append-only ledger can record the returned evidence path. Read-only Answer and Investigate modes do not run delivery verification. Plan frontmatter names checks; executable argv arrays come only from `.github/harness/checks.yaml` and run without a shell. Approved one-off commands run outside harness through explicit host tool approval and are recorded as external evidence.
+
 **recall**
 ```json
 { "query": "...", "recall": [{ "docid": "...", "path": "...", "title": "...", "score": 0.5, "snippet": "...", "ranker": "bm25|overlap" }], "plans": [] }
@@ -123,7 +147,8 @@ Installed to `~/.copilot/bin/harness` on every `harness install`. Add to PATH wi
   "pass": true,
   "exitCode": 0,
   "indexed": { "entries": 12, "manifestPath": "..." },
-  "verifyGate": { "pass": true, "exitCode": 0 },
+  "verificationEvidence": { "outcome": "passed", "evidencePath": "..." },
+  "telemetry": { "updated": ["engineer"] },
   "nextTools": ["/auto-compound", "/compound-learnings"]
 }
 ```
@@ -132,7 +157,7 @@ Installed to `~/.copilot/bin/harness` on every `harness install`. Add to PATH wi
 
 | Tier | Max | Harness enforcement |
 |------|-----|---------------------|
-| F0 Frozen | ~600 tokens | Slim `engineer.agent.md` — no manual recall prose |
+| F0 Frozen | 600–900 tokens | Thin `engineer.agent.md` — identity, task modes, canonical delivery lifecycle, guardrails, core actions |
 | F1 Recall | ~800 tokens | `orient` → read **only** `context-pack.md` (2048 byte cap) |
 | F2 Plan slice | ~1500 tokens | Read plan sections from `activePlan.path` on demand |
 | F3 On demand | skill-defined | Load gate/delegation refs when `gate` fails |
@@ -143,17 +168,19 @@ After orient: `read` ≤3 solution paths, ≤30 lines each per [`context-budget.
 
 | Skill | Harness command(s) |
 |-------|-------------------|
-| `@engineer` / autopilot | `orient` → read pack → `gate` → work → `gate --phase verify` → `compound` or `/auto-compound` |
+| `@engineer` Deliver mode | proportional `orient` → read pack → explicit `gate` → work → explicit `verify` → `compound` or `/auto-compound` |
+| `@engineer` Answer/Investigate modes | minimal reads → evidence-backed report; no delivery gate, verification, or compound |
 | `/recall` | `orient` or `recall` (`-c`, `--min-score`) |
 | `/index-memory` | `index` (manifest + BM25 postings) |
-| `/auto-compound` | `/compound-learnings` (write solution) then `compound` or `index` |
+| `/auto-compound` | classify learning, write selected destination, then explicit `compound` |
 | `/review-guardrails` | `validate-plan`, `gate` |
 
 ## CI examples
 
 ```yaml
-- run: harness gate --workspace . --json
-- run: harness validate-plan --workspace . --json
+- run: harness validate-plan --plan "$PLAN" --workspace . --json
+- run: harness gate --phase implement --plan "$PLAN" --workspace . --json
+- run: harness verify --plan "$PLAN" --base "$BASE_SHA" --enforcement enforce --workspace . --json
 ```
 
 ## Related

@@ -1,174 +1,82 @@
 ---
 name: work-on-task
 user-invocable: false
-description: Execute the current phase of a planned issue using TDD with scope control and session logging. Use when implementing planned changes or resuming a session. Not without a plan — run /plan-issue first.
-argument-hint: "[path to plan file]"
+description: Execute or resume the current phase of an explicit locked plan with TDD, scope control, activity logging, and harness verification. Not for unplanned work, planning, or review.
+argument-hint: "[docs/plans/<plan>.md]"
 ---
 
 # Work on Task
 
-## Pipeline Role
+## Contract
 
-**Step 3** of the connected pipeline: Capture → Plan → **Work** → Review → Compound.
+This skill owns locked-plan execution and resumption only. Input is one explicit plan under `docs/plans/`; output is completed phase tasks, scoped code changes, test evidence, implementation notes, and updated activity. Unplanned end-to-end work belongs to `@engineer`; plan creation belongs to `/ensure-plan` or `/plan-issue`.
 
-This skill executes the current phase of a locked plan, tracks progress with checkboxes, and appends timestamped activity entries so the next session can resume automatically.
+## Entry gate
 
-## Mode Detection
+1. Read the explicit plan and its `## Intent Contract`, Memory Cards, current phase, last two Activity entries, Impacted Files, Verification Plan, and Risk & Review Routing.
+2. Require `plan_lock: true` and `status: planned|in-progress`.
+3. Run:
 
-**Pipeline mode:** If a plan file is provided as argument AND the file contains `status:` in YAML frontmatter, enforce pipeline state validation (`plan_lock` required, status checks, phase tracking, activity log entries).
+```bash
+harness gate --phase implement --plan <path> --workspace . --json
+```
 
-**Standalone mode:** If no plan file is provided or the file lacks state machine fields, skip `plan_lock` check, status validation, and activity log entries. Work on the user's described task directly using TDD.
+4. Only after the gate passes, set `planned` to `in-progress`; leave an already `in-progress` plan unchanged.
 
-## When to Use
+A failed gate makes no plan edits. A missing or unlocked plan routes to `/ensure-plan`; `review` or `done` routes out of this skill.
 
-Activate when the user wants to:
-- Implement code changes for a planned issue
-- Continue work from a previous session
-- Execute a specific phase of a development plan
+## Phase execution
 
-## Trigger Examples
+Resume at the first unchecked task in the current phase. For each task:
 
-**Should trigger:**
-- "Start working on Phase 1"
-- "Continue implementing the plan"
-- "Resume where I left off"
+1. Trace it to an acceptance criterion, planned file, and named verification check.
+2. Inspect the exact repository evidence that justifies the change.
+3. Write a failing test or deterministic contract check first.
+4. Implement the smallest coherent change and make the test pass.
+5. Keep every edited path inside `## Impacted Files`; amend the plan before scope expands.
+6. Mark the task checked and append decisions or deviations to Implementation Notes.
 
-**Should not trigger:**
-- "Plan this feature" → use /plan-issue
-- "Fix this quick bug" → use /tdd-fix
-- "Review my changes" → use /code-review
+Use `subagent-context-packet.md` only when bounded expertise, isolation, or independent review materially helps. Approval-gated concurrency, data, schema, security, destructive, public-contract, and broad-refactor decisions follow `human-approval-policy.md`.
 
-## Session Pickup Sequence
+## Phase verification
 
-When invoked, follow this exact sequence:
+When the phase tasks are checked, run the plan's deterministic verifier:
 
-1. **Read the plan file**
-2. **Check `status`**:
-   - `open` → "No plan yet. Run `/plan-issue` first."
-   - `needs-info` → Attempt to resolve from context; if still missing, stop.
-   - `planned` → Set `status: in-progress`, proceed to phase execution.
-   - `in-progress` → Resume at current phase (check `## Activity` for progress).
-   - `review` or `done` → "This issue is past the work phase."
-3. **Check `plan_lock`**: If `false` → "Plan is not locked. Run `/plan-issue` first."
-4. **Read the local context pack**: `## Memory Cards` first, then `## Intent Contract` (goal), `## Context`, `## Acceptance Criteria`, `## Research Notes`, `## Impacted Files`, `## Verification Plan`, and `## Risk & Review Routing`. Run `/recall` if cards are empty. Global team context lives in hydrated `~/.copilot/knowledge/`.
-5. **Read `phase`**: Determine current phase number.
-6. **Read `## Activity`**: Understand what was already done in this phase.
-7. **Read plan checkboxes**: Find unchecked `- [ ]` items for the current phase.
-8. **Resume from first unchecked item**.
+```bash
+harness verify --plan <path> --base <base-ref> --workspace . --json
+```
 
-## Execution Loop
+Use the PR target branch or CI base SHA as `<base-ref>` so local scope evidence matches the merge diff.
 
-For each task in the current phase:
+- `passed`: record the evidence path, append a timestamped Activity entry, and advance `phase` or set `status: review` when all phases are complete.
+- `failed`: record the failed checks and continue working; do not advance.
+- `inconclusive`: record missing evidence or unavailable checks; do not advance or report completion.
 
-### 1. Verify Before Coding
+Never substitute prose such as “tests passed” for the evidence artifact.
 
-List the exact files, symbols, and lines that justify the planned change. Confirm the task is within `## Impacted Files`, traces to `## Intent Contract` / acceptance criteria, and has a matching verification item. If key evidence is missing, set `status: needs-info` with one focused question and stop.
+## Activity entry
 
-If the next step requires a risky strategy choice, follow `.github/skills/references/human-approval-policy.md` before coding. This includes concurrency fixes, schema/data changes, destructive operations, security-sensitive work, public contract changes, broad refactors, and primitive creation.
-
-### 2. Implement with TDD
-
-- Write a failing test first (or test outline for the pattern)
-- Write the minimal code to make it pass
-- Run tests using the best available tool:
-  - **VS Code**: Run in terminal, read output with `terminalLastCommand`
-  - **CLI/Claude Code**: Run test commands directly via `run_command` or `Bash`
-- Clean up while tests are green
-- Keep diffs surgical — change only what the task requires
-
-For delegated implementation or specialist review, use `.github/skills/references/subagent-context-packet.md` so the subagent receives the task objective, plan context, impacted files, constraints, approval dependencies, and expected response.
-
-### 3. Scope Guard
-
-- Only touch files listed in `## Impacted Files`
-- If a change requires a file not in the allowlist, stop and ask to update the plan
-- If the change feels too large for the phase, stop and ask to split
-- If a missing reusable capability is discovered, fill out `.github/skills/references/capability-gap-proposal.md` and ask for approval before invoking `/create-primitive`
-
-### 4. Check Off and Log
-
-After completing each task:
-- Mark the checkbox: `- [x] task`
-- Continue to the next unchecked task
-
-## Phase Completion
-
-When all tasks in the current phase are checked:
-
-1. **Run verification** — execute relevant checks from `## Verification Plan`; all required checks must pass
-2. **Increment `phase`** in frontmatter
-3. **Append to `## Activity`**:
+Append only:
 
 ```markdown
-### YYYY-MM-DD HH:MM — Phase [N] completed ([M] tasks)
-- [x] [Task 1 summary] (`path/to/file`)
-- [x] [Task 2 summary] (`path/to/file`)
-- **Result:** Phase [N] complete, all tests passing
-- **Next:** Phase [N+1] — [brief description]
+### YYYY-MM-DD HH:MM — Phase N verification
+- Tasks: N/N checked
+- Scope: passed|amended
+- Verification: passed|failed|inconclusive — `<evidencePath copied from harness verify --json>`
+- Decisions: <implementation notes or none>
+- Next: <next phase, remediation, or review>
 ```
 
-4. **Write `## Implementation Notes`** (append, do not overwrite):
-   Key decisions made, trade-offs chosen, gotchas encountered, and deviations from the plan.
-   This section persists context for `/code-review`.
-5. **Check if all phases are done**:
-   - If yes → set `status: review` and suggest: "All phases complete. Run `/code-review` to review changes."
-   - If no → suggest: "Phase [N] complete. Run `/work-on-task` again for Phase [N+1]."
+## Trigger examples
 
-## Verification Before Completion
+Should trigger: “Resume Phase 3 from this locked plan”; “execute the next unchecked plan task”; “continue `docs/plans/x.md`.”
 
-Before marking a phase complete, run verification and report evidence:
-
-1. **Tests pass**: Run the project's test suite. Report the actual test output, not just "tests pass."
-2. **Verification plan satisfied**: Run or explicitly account for each applicable item in `## Verification Plan`.
-3. **Risk routing satisfied**: If `## Risk & Review Routing` names specialist checks for touched areas, run them or document why they are deferred to `/code-review`.
-4. **Files match plan**: Compare modified files against `## Impacted Files` in the plan. Flag any files modified that aren't listed (ask user to update plan or revert).
-5. **Phase tasks checked**: All checkboxes in the current phase must be checked.
-6. **Clean working state**: No uncommitted changes that should be committed. Ignore expected untracked files (.env, lockfiles, generated files). Use git status + gitignore awareness to distinguish.
-
-Report verification results as evidence in the activity log:
-```
-### Verification — Phase [N]
-- Tests: [PASS/FAIL] — [summary of test output]
-- Verification plan: [PASS/FAIL] — [items run or deferred]
-- Risk routing: [completed/deferred/not applicable] — [specialist checks]
-- Scope: [N] files modified, all within Impacted Files [or: file X not in scope]
-- Tasks: [N/N] checked
-- Working state: clean [or: uncommitted changes in X]
-```
-
-DO NOT claim completion if any check fails. Report the failure and stop.
-
-## Activity Log Rules
-
-1. **Append-only** — never modify previous entries
-2. **Timestamped** — each entry starts with date/time
-3. **Phase-scoped** — each entry tracks a single phase
-4. **File references** — include paths of created/modified files
-5. **Blockers noted** — record blockers and decisions explicitly
-6. **Status summary** — end with current state and what's next
-
-## Error Handling
-
-### Skill-Specific Errors
-
-- **`plan_lock` not set** → "Plan is not locked. Run `/plan-issue` to generate and lock a plan first."
-- **Phase already complete** → "All tasks in Phase [N] are checked. Advance to the next phase or run `/code-review`."
-- **Test failure during verification** → Report specific test failures with the actual test output. Do not claim completion. Log the failure in `## Activity` and stop.
-- **Verification plan missing** → Generate a minimal verification plan from acceptance criteria and touched files, append it to the plan, and continue only after it is explicit.
-- **Risk routing missing** → Add a short `## Risk & Review Routing` section before implementation continues.
-- **File outside `## Impacted Files` scope** → Stop immediately. Report the file path and why it needs to change. Ask the user to update the plan's `## Impacted Files` section or revert the change.
-- **Approval gate hit in non-interactive mode** → Choose the lowest-risk reversible action (prefer analysis, test writing, or documentation). Log the assumption in `## Activity`. Do not proceed with the gated change. See `.github/skills/references/human-approval-policy.md` Non-Interactive Mode.
-
-### Common Errors
-
-For subagent failure, tool unavailability, file-not-found, and timeout recovery, follow the shared patterns in `.github/skills/references/error-handling-patterns.md`.
+Should not trigger: “plan this feature” (`/plan-issue`); “fix this without a plan” (`@engineer` or `/tdd-fix`); “review the diff” (`/code-review`).
 
 ## Guardrails
 
-- Never start without `plan_lock: true`.
-- Never touch files outside `## Impacted Files` without updating the plan.
-- Never skip the test step — TDD is mandatory.
-- Never modify previous `## Activity` entries.
-- If blocked, document the blocker in the activity log and stop.
-- Never claim phase completion without running verification. Evidence before assertions.
-- Never choose a risky concurrency, data, schema, security, destructive, broad-refactor, or primitive-expansion strategy without the required approval.
+- Require an explicit plan path and `plan_lock: true`.
+- TDD or an equivalent failing deterministic contract is mandatory.
+- Do not modify prior Activity entries.
+- Do not advance on failed or inconclusive verification.
+- Do not create a reusable primitive from one unfamiliar task; record learning first and use promotion evidence.

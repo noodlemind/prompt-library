@@ -10,6 +10,6 @@ Classify and route this request: ${input}
 
 Follow [start skill](../skills/start/SKILL.md) exactly.
 
-- For trackable engineering work → recommend **`@engineer`** (autopilot loop).
+- For trackable engineering work → recommend the accountable **`@engineer`**.
 - For quick Q&A → `/btw`
 - Do not implement product code in this step.

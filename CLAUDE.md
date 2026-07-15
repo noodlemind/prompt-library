@@ -8,7 +8,7 @@ This is a skill-driven prompt library for software development teams. The primar
 
 ### Architecture: Skill-First Primitives
 
-- **Skills** (`.github/skills/*/SKILL.md`): 31 workflows (primary entry `@engineer` autopilot; internal pipeline steps; `/harness-doctor`, `/btw`, `/code-review`, domain and utility skills). The connected pipeline `/capture-issue` → `/plan-issue` → `/work-on-task` → `/code-review` → `/compound-learnings` is the core engineering loop. `/btw` handles quick Q&A. `/project-readme` creates or updates project README files. `/create-primitive` decides and creates the right primitive type. Domain skills include `/java`, `/python`, `/sql`, and `/aws`.
+- **Skills** (`.github/skills/*/SKILL.md`): 30 workflows total, including four internal workflows (`ensure-plan`, `ensure-capability`, `auto-compound`, and experimental `auto-skill-draft`). The primary entry is `@engineer`; `/harness-doctor`, `/btw`, `/code-review`, domain, pipeline, and utility skills remain available. The connected manual pipeline `/capture-issue` → `/plan-issue` → `/work-on-task` → `/code-review` → `/compound-learnings` is the power-user engineering loop, while `/auto-compound` is the Engineer's automatic post-success delivery path. `/btw` handles quick Q&A. `/project-readme` creates or updates project README files. `/create-primitive` decides and creates the right primitive type. Domain skills include `/java`, `/python`, `/sql`, and `/aws`.
 - **Agents** (`.github/agents/*.agent.md`): 24 agents — 19 stateless domain experts using judgment-criteria design, 1 engineer, 1 code-implementer, plus 3 coordinator/navigation agents. Agents exist for separate judgment, tool authority, runtime profile, isolation, or accountability. Active Java, Python, SQL, and AWS reviewers are included.
 - **Instructions** (`.github/instructions/*.instructions.md`): Scoped context that activates based on file patterns (TypeScript, Python, Java, Spring Boot, PostgreSQL, AWS SDK).
 - **Prompt wrappers** (`.github/prompts/*.prompt.md`): Thin host-facing adapters that route to skills and declare host tools.
@@ -37,7 +37,7 @@ Plan files live in `docs/plans/`. Activity logs in `## Activity` sections provid
 ```
 .github/
   agents/              — 24 agent definitions (19 specialists + 1 engineer + 1 implementer + 3 coordinators)
-  skills/              — 23 skill directories with SKILL.md
+  skills/              — 30 skill directories with SKILL.md
   instructions/        — scoped instructions (TypeScript, Python, Java, Spring Boot, PostgreSQL, AWS SDK)
   prompts/             — thin prompt wrappers that route to skills
   checks/              — optional product-specific review check examples
@@ -46,7 +46,7 @@ Plan files live in `docs/plans/`. Activity logs in `## Activity` sections provid
 .vscode/
   mcp.json             — MCP server configuration (Context7)
 docs/
-  architecture/        — skill-driven standard and architecture notes
+  architecture/        — canonical Engineer Harness architecture and primitive standard
   plans/               — issue and plan files with state tracking
   solutions/           — documented learnings from solved problems
   brainstorms/         — brainstorm documents from /brainstorming skill
@@ -91,7 +91,7 @@ CLAUDE.md              — optional compatibility guidance
 23. **plan-coordinator**: Delegates to research agents in parallel with isolated context
 24. **pipeline-navigator**: Guides pipeline transitions via handoff buttons, not subagent dispatch
 
-## Available Skills (25 total)
+## Available Skills (30 total)
 
 ### Connected Pipeline
 1. **/capture-issue**: Create initial plan file under `docs/plans/` from bug/feature/task
@@ -115,7 +115,7 @@ CLAUDE.md              — optional compatibility guidance
 15. **/aws**: AWS SDK, IAM, messaging, reliability, and observability workflow
 
 ### Full-Cycle Engineering
-16. **/engineer**: Full-cycle software engineering — understand, debug, implement, verify with user steering
+16. **/engineer**: Substantial read-only investigation or full-cycle delivery with gated edits and verification
 
 ### Intake
 17. **/start**: Intelligent intake — classify work and route to the right pipeline entry point
@@ -130,6 +130,13 @@ CLAUDE.md              — optional compatibility guidance
 24. **/recall**: Recall global knowledge manifest and local plans before engineering work
 25. **/index-memory**: Rebuild team knowledge manifest from solution files
 
+### Harness Operations and Internal Workflows
+26. **/harness-doctor**: Diagnose hydration, policy, knowledge, and harness health without product edits
+27. **/ensure-plan**: Internally capture, research, and lock a plan for trackable Engineer work
+28. **/ensure-capability**: Resolve capability gaps on demand when encountered
+29. **/auto-compound**: Automatically classify and persist learning after passed Engineer verification
+30. **/auto-skill-draft**: Draft an experimental skill candidate without promoting it to active use
+
 ## Key Design Decisions
 
 - **Judgment-criteria agents**: Define what to look for, not what commands to run
@@ -138,7 +145,7 @@ CLAUDE.md              — optional compatibility guidance
 - **GitHub Copilot-first**: VS Code discovers globally hydrated agents, skills, prompts, and instructions from `%USERPROFILE%\.copilot`; IntelliJ IDEA discovers hydrated customizations from `%LOCALAPPDATA%\github-copilot\intellij` when the current plugin features are enabled
 - **Knowledge compounding**: `knowledge/solutions/` + `/index-memory` + repository `docs/agent-context.md` make the system smarter over time
 - **Confidence-gated review**: Code review uses persona synthesis with 0.0-1.0 confidence scores, merge/dedup, and action routing
-- **Standalone + pipeline mode**: Pipeline skills work both standalone (ad-hoc) and in pipeline mode (state machine enforced)
+- **Explicit execution boundary**: `/work-on-task` requires a locked plan; `@engineer` owns ordinary unplanned end-to-end work
 - **Skill-specific error recovery**: Each orchestrating skill handles its own failure modes, not generic boilerplate
 
 ## Conventions

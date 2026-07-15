@@ -1,9 +1,11 @@
 import fs from 'fs';
 import path from 'path';
 import { readSession } from './session.mjs';
-import { pickActivePlan, listPlanRels, parsePlanFrontmatter } from './plan-parse.mjs';
+import { loadPlan, pickActivePlan, listPlanRels, parsePlanFrontmatter } from './plan-parse.mjs';
 import { findMatchingPlans } from './recall-rank.mjs';
 import { intentContractHasContent } from './plan-goal.mjs';
+import { readEvidence, validateEvidence } from './evidence.mjs';
+import { loadPolicy } from './policy.mjs';
 
 export function runGate({ workspace, flags, query = '' }) {
   const session = readSession(workspace);
@@ -14,7 +16,9 @@ export function runGate({ workspace, flags, query = '' }) {
 
   const planPaths = listPlanRels(workspace);
   const matches = query ? findMatchingPlans(workspace, query, 5) : [];
-  const plan = pickActivePlan(workspace, session, matches, planPaths);
+  const plan = flags.plan
+    ? loadPlan(workspace, flags.plan)
+    : pickActivePlan(workspace, session, matches, planPaths);
 
   if (!plan && planPaths.length === 0) {
     checks.push({
@@ -112,7 +116,18 @@ export function runGate({ workspace, flags, query = '' }) {
       pass = false;
     }
 
-    if (phase === 'implement' || phase === 'default') {
+    if (phase === 'implement') {
+      if (!['planned', 'in-progress', 'review'].includes(plan.status)) {
+        checks.push({
+          id: 'C2',
+          pass: false,
+          message: `Plan status is not implementable: ${plan.status}`,
+          severity: 'fail',
+        });
+        pass = false;
+      } else {
+        checks.push({ id: 'C2', pass: true, message: `Implementable status: ${plan.status}`, severity: 'ok' });
+      }
       if (!plan.plan_lock) {
         checks.push({
           id: 'C3',
@@ -127,20 +142,23 @@ export function runGate({ workspace, flags, query = '' }) {
     }
 
     if (phase === 'verify') {
-      const activityEvidence = plan.sections.activityText || '';
-      const tests =
-        /npm test|pytest|mvn test|gradle test|go test|cargo test|vitest|jest/i.test(activityEvidence) &&
-        /(pass|passed|green|succeeded|success|ok|complete|completed)/i.test(activityEvidence);
-      if (!tests) {
+      const evidence = readEvidence(workspace, plan.path);
+      const freshness = validateEvidence({
+        workspace,
+        plan,
+        evidence,
+        maxAgeHours: loadPolicy(workspace, flags.enforcement).evidenceTtlHours,
+      });
+      if (!freshness.pass) {
+        pass = false;
         checks.push({
           id: 'V1',
           pass: false,
-          message: 'No verification evidence in plan (Verification Plan or Activity)',
-          severity: 'warn',
+          message: freshness.message,
+          severity: 'fail',
         });
-        exitCode = Math.max(exitCode, 2);
       } else {
-        checks.push({ id: 'V1', pass: true, message: 'Verification evidence found', severity: 'ok' });
+        checks.push({ id: 'V1', pass: true, message: freshness.message, severity: 'ok' });
       }
     }
   }
@@ -165,8 +183,10 @@ export function runGate({ workspace, flags, query = '' }) {
     nextTools: pass
       ? phase === 'verify'
         ? ['harness compound', '/auto-compound']
-        : ['editFiles (scoped)', 'harness gate --phase verify']
-      : ['harness orient', '/ensure-plan', '/ensure-capability'],
+        : ['editFiles (scoped)', `harness verify --plan ${plan?.path || '<path>'}`]
+      : plan?.status === 'blocked-capability'
+        ? ['read ensure-capability/SKILL.md']
+        : ['harness orient', '/ensure-plan'],
   };
 
   return result;
@@ -176,9 +196,13 @@ export function runGate({ workspace, flags, query = '' }) {
 export function scanPlansForGate(workspace) {
   for (const rel of listPlanRels(workspace)) {
     const full = path.join(workspace, rel);
-    const text = fs.readFileSync(full, 'utf8');
-    const fm = parsePlanFrontmatter(text);
-    if (fm.plan_lock === 'true') return rel;
+    try {
+      const text = fs.readFileSync(full, 'utf8');
+      const fm = parsePlanFrontmatter(text);
+      if (fm.plan_lock === 'true' || fm.plan_lock === true) return rel;
+    } catch {
+      // A malformed plan must not prevent scanning the remaining candidates.
+    }
   }
   return null;
 }

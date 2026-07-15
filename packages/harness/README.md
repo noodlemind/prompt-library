@@ -51,9 +51,12 @@ harness init-repo
 
 Use pinned version in CI:
 
+`$PLAN` is the single plan resolved from the PR; `$BASE_SHA` is the PR base SHA. The supplied workflow template sets both values.
+
 ```yaml
-- run: harness gate --workspace . --json
-- run: harness validate-plan --workspace . --json
+- run: harness validate-plan --plan "$PLAN" --workspace . --json
+- run: harness gate --phase implement --plan "$PLAN" --workspace . --json
+- run: harness verify --plan "$PLAN" --base "$BASE_SHA" --enforcement enforce --workspace . --json
 ```
 
 ## Commands
@@ -66,25 +69,33 @@ Use pinned version in CI:
 | `upgrade` | Same as install + retire removed paths from lock file |
 | `doctor` | Health checks |
 | `status` | Installed version and lock file |
-| `init-repo` | Create `docs/plans/`, `.harness/`, `docs/agent-context.md` |
+| `init-repo` | Create plan/session paths plus trusted checks and rollout policy stubs |
 | `uninstall` | Remove files tracked in `.harness-lock.json` only |
 
 ### Agent runtime (`@engineer` invokes these)
 
+These commands govern Deliver mode. Quick Answer and read-only Investigate
+modes use minimal repository reads and do not create harness verification
+evidence. If either mode becomes change-making work, the Engineer transitions
+to Deliver before editing.
+
 | Command | Description |
 |---------|-------------|
-| `orient` | Recall + plan match → `.harness/context-pack.md` (≤2 KB) |
-| `gate` | Preflight before `editFiles` (exit 0/1/2) |
+| `orient` | Substantial-work recall + plan match → `.harness/context-pack.md` (≤2 KB) |
+| `gate` | Explicit-plan precondition guard before edits |
+| `verify` | Run trusted named checks, plan/schema/task/scope/review/gap validation, and write evidence |
 | `recall` | BM25 manifest search (`-c`, `--min-score`) |
 | `get` | Bounded doc excerpt by `--docid` or `--path` |
 | `validate-plan` | Read-only plan template / intent compliance |
 | `index` | Rebuild `knowledge/manifest.yaml` + `.harness-index/` |
-| `compound` | Post-verify index + session close-out |
+| `compound` | Consume passed evidence, index learning, and record usage/outcome telemetry |
 | `events` | Inspect `.harness/events.jsonl` |
 
 ### Options
 
-`--dry-run`, `--verbose`, `--json`, `--workspace <path>`, `--copilot-home <path>`, `--query <text>`, `--phase implement|verify`, `--plan <path>`, `--strict-intent`, `--no-events`, `--limit <n>`, `-c <collection>`, `--min-score <n>`, `--docid <id>`, `--path <rel>`, `--lines <n>`, `--max-bytes <n>`
+`--dry-run`, `--verbose`, `--json`, `--workspace <path>`, `--copilot-home <path>`, `--query <text>`, `--phase implement|verify`, `--plan <path>`, `--base <git-ref>`, `--enforcement observe|warn|enforce`, `--strict-intent`, `--no-events`, `--limit <n>`, `-c <collection>`, `--min-score <n>`, `--docid <id>`, `--path <rel>`, `--lines <n>`, `--max-bytes <n>`
+
+Plans use `plan_schema: 1` and name checks under `verification.required`; commands are trusted argv arrays in `.github/harness/checks.yaml`. `verify` outcomes are `passed`, `failed`, or `inconclusive`. Observe/warn change rollout exit behavior only, never the recorded outcome.
 
 **Enterprise Nexus:** v0.4.0 uses pure-JS BM25 — no `minisearch` or `better-sqlite3` required.
 
@@ -110,7 +121,8 @@ harness install --configure-vscode
 ```text
 packages/harness/
   bin/harness.mjs
-  lib/                  # install, orient, gate, compound, validate-plan, …
+  config/               # versioned plan schemas
+  lib/                  # install, orient, gate, verify, compound, validate-plan, …
   test/
   assets/               # build output (in npm tarball)
 ```

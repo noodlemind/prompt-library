@@ -1,49 +1,38 @@
 ---
 name: engineer
-description: "Full-cycle software engineering — autonomous loop with plan, memory, and capability routing. Use @engineer in chat. Not for locked-plan-only execution — /work-on-task."
-argument-hint: "[describe what you need built, fixed, or investigated]"
+description: "Route substantial investigation or end-to-end software delivery to @engineer. Use for evidence-heavy diagnosis or implementation and verification; not quick Q&A, review-only, or locked-plan-only execution."
+argument-hint: "[describe the engineering outcome]"
 ---
 
-# Engineer
+# Engineer entry adapter
 
-## When to Use
+Route the user's outcome and any explicit plan path to `@engineer`. The agent selects Answer, Investigate, Deliver, or Review mode; its nine-step lifecycle is canonical only for Deliver mode. It loads detailed skills only when their procedure is needed.
 
-- Fix bugs, build features, investigate issues end-to-end
-- Continue work on a plan in `docs/plans/`
+## Trigger Examples
 
-## User experience (Composer-style)
+**Should trigger:**
 
-Type **`@engineer`** with your goal. The agent runs the full loop internally:
+- "Diagnose why this service is intermittently timing out."
+- "Implement the approved checkout retry behavior end to end."
+- "Own this feature from investigation through verified delivery."
 
-**Recall → capability preflight → ensure plan → implement → verify → auto-compound**
+**Should not trigger:**
 
-Do **not** ask users to run `/capture-issue`, `/plan-issue`, `/recall`, or `/compound-learnings` unless debugging.
+- "By the way, what does this config flag mean?" → use `/btw`
+- "Run the locked plan at docs/plans/example.md." → use `/work-on-task`
+- "Review this diff only." → use `/code-review`
 
-Optional: **`/harness-doctor`** for setup health.
+## Confusable Boundaries
 
-## Routing (internal)
+- `/engineer` routes substantial investigation or full-cycle delivery to the accountable agent.
+- `/btw` owns quick read-only answers without ceremony.
+- `/work-on-task` owns execution of an explicit locked plan.
+- `/code-review` owns review-only requests.
 
-| Signal | Route |
-|--------|-------|
-| Trackable work | Autopilot (`engineer-autopilot` skill) |
-| Locked plan path | `/work-on-task` |
-| Isolated bug | `/tdd-fix` |
-| Review only | `/code-review` |
-| Missing capability | `/ensure-capability` → `/create-primitive` |
-| Ambiguous intake | `/start` |
+- Locked-plan execution only → `/work-on-task`
+- Review only → `/code-review`
+- Quick answer without edits → `/btw`
+- Substantial evidence-only diagnosis → `@engineer` Investigate mode
+- Setup diagnosis → `/harness-doctor`
 
-Domain skills (`/java`, `/aws`, enterprise `/terraform`) apply automatically per `domain-routing.md`.
-
-## Pipeline
-
-Works with `docs/plans/` state machine. Updates `status`, `phase`, Activity, Implementation Notes. Transitions to `review` then **`/auto-compound`** on success.
-
-## Invocation
-
-Route to **`@engineer`** agent. Provide a task description or plan path.
-
-References: `capture-gate.md`, `knowledge-locations.md`, `docs/onboarding/harness-quickstart.md`.
-
-## Capability growth
-
-Repeated gaps → `capability-gap-proposal.md` → `/create-primitive` → enterprise overlay + hydrate.
+Do not duplicate runtime steps here. Contract: `@engineer` and `../references/harness-tool-contract.md`.

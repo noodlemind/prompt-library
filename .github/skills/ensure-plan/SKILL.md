@@ -1,12 +1,33 @@
 ---
 name: ensure-plan
-description: Internal — ensure docs/plans file exists and is locked before implementation. Used by @engineer autopilot. Not for direct user invocation.
+description: Internal plan creation and locking procedure for trackable work. Use when no suitable explicit plan exists or a matched plan is unlocked; not for execution, review, or capability discovery.
 user-invocable: false
 ---
 
 # Ensure Plan (internal)
 
-Composer-style autopilot step: apply **`/capture-issue`** and **`/plan-issue`** logic without asking the user to run slash commands.
+Apply `/capture-issue` and `/plan-issue` logic without asking the user to run slash commands. This skill owns detailed planning; it does not own the Engineer runtime loop.
+
+## Trigger Examples
+
+**Should trigger:**
+
+- "Implement this feature" when no matching plan exists.
+- "Continue this task" when the matched plan is still open and unlocked.
+- "Make these trackable changes" when the implement capture gate would fail.
+
+**Should not trigger:**
+
+- "Log this issue for later." → use `/capture-issue`
+- "Research and lock this captured issue." → use `/plan-issue`
+- "Execute this already locked plan." → use `/work-on-task`
+
+## Confusable Boundaries
+
+- `/ensure-plan` is the internal autonomous bridge across capture and planning.
+- `/capture-issue` only creates an open, unlocked issue shell.
+- `/plan-issue` researches and locks a captured issue as an explicit power-user step.
+- `/work-on-task` executes a locked plan; `/ensure-capability` resolves encountered capability gaps.
 
 ## When to invoke
 
@@ -27,8 +48,11 @@ List `docs/plans/*.md`. Fuzzy-match titles/Overview against the user request. If
 Follow **`/capture-issue`** exactly:
 
 - Path: `docs/plans/YYYY-MM-DD-<type>-<slug>-plan.md`
-- Frontmatter: `status: open`, `plan_lock: false`, `phase: 0`, `risk`, `intent` when known, `expected_outputs: []`, `success_criteria: []`, `verification_commands: []`, `org_objectives: []`, `domains`, `specialists`, `capability_gaps` from intake
-- Body minimum: `## Overview`, `## Context`, `## Intent Contract` (goal stub from user message), `## Acceptance Criteria`, `## Activity`
+- Frontmatter: `plan_schema: 1`, `status: open`, `plan_lock: false`, `phase: 0`, `risk`, `intent` when known, `expected_outputs: []`, `success_criteria: []`, `verification`, `reviews`, `skills_used`, `org_objectives: []`, `domains`, `specialists`, and encountered `capability_gaps`
+- Body minimum (create every heading; use pending markers for planning-owned content):
+  - `## Overview`, `## Context`, `## Intent Contract` (goal stub from user message), `## Memory Cards`
+  - `## Acceptance Criteria`, `## Technical Notes`, `## Plan`, `## Research Notes`, `## Impacted Files`
+  - `## Verification Plan`, `## Risk & Review Routing`, `## Implementation Notes`, `## Review Findings`, `## Activity`
 - Append Activity: `YYYY-MM-DD — ensure-plan: captured (autonomous)`
 
 Do **not** set `plan_lock: true` in this step.
@@ -39,7 +63,7 @@ Follow **`/plan-issue`** for that path:
 
 - Research as needed (delegate `plan-coordinator` when `agent` tool available)
 - Fill `## Intent Contract` as the durable goal (from user message), `## Research Notes`, `## Impacted Files`, `## Verification Plan`, `## Risk & Review Routing`, phased tasks
-- Populate frontmatter `intent`, `expected_outputs`, `success_criteria`, and `verification_commands`; leave `org_objectives: []` unless an objective is known
+- Populate frontmatter `intent`, `expected_outputs`, `success_criteria`, and named `verification.required` plus criterion mappings; never store executable shell strings in the plan
 - Set `status: planned`, `plan_lock: true`, `phase: 1`
 - Append Activity: `YYYY-MM-DD — ensure-plan: planned and locked (autonomous)`
 
