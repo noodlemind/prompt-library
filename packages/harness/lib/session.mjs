@@ -1,5 +1,6 @@
 import fs from 'fs';
 import path from 'path';
+import crypto from 'node:crypto';
 
 export const SESSION_DIR = '.harness';
 export const SESSION_FILE = 'session.json';
@@ -28,8 +29,9 @@ export function writeSession(workspace, session, dryRun) {
   const p = sessionPath(workspace);
   const payload = {
     version: 1,
-    updatedAt: new Date().toISOString(),
     ...session,
+    sessionId: session.sessionId || crypto.randomUUID(),
+    updatedAt: new Date().toISOString(),
   };
   if (!dryRun) fs.writeFileSync(p, JSON.stringify(payload, null, 2) + '\n', 'utf8');
   return payload;
@@ -38,7 +40,7 @@ export function writeSession(workspace, session, dryRun) {
 export function ensureHarnessDir(workspace, dryRun) {
   const dir = harnessDir(workspace);
   const gitignore = path.join(dir, '.gitignore');
-  const content = '# Ephemeral per-turn artifacts\ncontext-pack.md\nevents.jsonl\nevidence/\n';
+  const content = '# Ephemeral per-turn artifacts\nsession.json\ncontext-pack.md\nevents.jsonl\nevidence/\n';
   if (!fs.existsSync(gitignore)) {
     if (!dryRun) {
       fs.mkdirSync(dir, { recursive: true });
@@ -47,7 +49,7 @@ export function ensureHarnessDir(workspace, dryRun) {
   } else if (!dryRun) {
     const current = fs.readFileSync(gitignore, 'utf8');
     const lines = current.split(/\r?\n/);
-    const missing = ['context-pack.md', 'events.jsonl', 'evidence/'].filter((entry) => !lines.includes(entry));
+    const missing = ['session.json', 'context-pack.md', 'events.jsonl', 'evidence/'].filter((entry) => !lines.includes(entry));
     if (missing.length) {
       const separator = current.length > 0 && !current.endsWith('\n') ? '\n' : '';
       fs.appendFileSync(gitignore, `${separator}${missing.join('\n')}\n`, 'utf8');

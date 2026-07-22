@@ -42,11 +42,17 @@ Activate when the user wants to:
 
 ### 1. Gather Information
 
-Ask the user for:
-- **What**: What happened (bug) or what is needed (feature/task)
-- **Why**: Motivation, impact, or business context
-- **Scope**: Expected size — small fix, medium feature, or large initiative
-- **Priority**: P0 (drop everything), P1 (this sprint), P2 (next sprint), P3 (backlog)
+Accept a structured finding packet from Engineer with:
+
+- **Title**
+- **Observed behavior**
+- **Expected invariant**
+- **Evidence paths**
+- **Impact**
+- **Confidence**
+- **Recommended direction**
+
+When the packet is sufficient, do not ask the user to repeat what happened, why it matters, scope, or technical context. Ask only for genuinely missing information. For an unstructured request, derive these fields where possible and ask focused questions only for information required to produce a useful capture; priority defaults to P2 when it is not material or supplied.
 
 If the user provides a code selection or error output, extract context automatically.
 

@@ -33,6 +33,21 @@ function fileHash(filePath) {
   return crypto.createHash('sha256').update(buf).digest('hex');
 }
 
+function renderTargetAsset(src, rel, targetRoot) {
+  if (rel !== 'hooks/hooks.json') return null;
+  const config = JSON.parse(fs.readFileSync(src, 'utf8'));
+  for (const entries of Object.values(config.hooks || {})) {
+    if (!Array.isArray(entries)) continue;
+    for (const entry of entries) {
+      const commands = Array.isArray(entry.hooks) ? entry.hooks : [entry];
+      for (const command of commands) {
+        if (command?.cwd === '.github/hooks') command.cwd = path.join(targetRoot, 'hooks');
+      }
+    }
+  }
+  return Buffer.from(`${JSON.stringify(config, null, 2)}\n`, 'utf8');
+}
+
 function walkFiles(dir, base = dir) {
   const out = [];
   if (!fs.existsSync(dir)) return out;
@@ -91,6 +106,7 @@ export function syncAssetsToTarget(assetsRoot, targetRoot, flags, log) {
       const dest = path.join(targetRoot, rel);
       const destDir = path.dirname(dest);
       const relPosix = rel.replace(/\\/g, '/');
+      const rendered = renderTargetAsset(src, relPosix, targetRoot);
 
       if (shouldSkipDest(relPosix, flags, fs.existsSync(dest))) {
         stats.skipped++;
@@ -101,9 +117,9 @@ export function syncAssetsToTarget(assetsRoot, targetRoot, flags, log) {
       let action = 'create';
       if (fs.existsSync(dest)) {
         try {
-          const same =
-            fs.statSync(src).size === fs.statSync(dest).size &&
-            fileHash(src) === fileHash(dest);
+          const same = rendered
+            ? fs.readFileSync(dest).equals(rendered)
+            : fs.statSync(src).size === fs.statSync(dest).size && fileHash(src) === fileHash(dest);
           if (same) {
             stats.unchanged++;
             stats.files.push(relPosix);
@@ -124,7 +140,8 @@ export function syncAssetsToTarget(assetsRoot, targetRoot, flags, log) {
       }
 
       fs.mkdirSync(destDir, { recursive: true });
-      fs.copyFileSync(src, dest);
+      if (rendered) fs.writeFileSync(dest, rendered);
+      else fs.copyFileSync(src, dest);
       stats[action === 'create' ? 'created' : 'updated']++;
       stats.files.push(relPosix);
       if (flags.verbose) log(`${action}: ${relPosix}`);

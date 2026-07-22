@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "description": "Copilot CLI lifecycle hooks — synced to ~/.copilot/hooks/ on harness install. Commands run with cwd = hooks directory.",
+  "description": "GitHub Copilot lifecycle hooks for VS Code and CLI; install rewrites command cwd to the hydrated user hook directory.",
   "hooks": {
     "SessionStart": [
       {
@@ -9,6 +9,7 @@
           {
             "type": "command",
             "command": "node load-context.mjs",
+            "cwd": ".github/hooks",
             "timeout": 10
           }
         ]
@@ -16,31 +17,54 @@
     ],
     "PreToolUse": [
       {
-        "matcher": "Edit|Write|MultiEdit|edit|editFiles|apply_patch|create_file|replace_string_in_file",
+        "matcher": "Edit|Write|MultiEdit|edit|editFiles|multi_replace_string_in_file|replace_string_in_file|apply_patch|create_file|createFile",
         "hooks": [
           {
             "type": "command",
             "command": "node guard-critical-files.mjs",
+            "cwd": ".github/hooks",
             "timeout": 5
           },
           {
             "type": "command",
             "command": "node require-plan-gate.mjs",
+            "cwd": ".github/hooks",
             "timeout": 5
           }
         ]
       },
       {
-        "matcher": "Bash",
+        "matcher": "run_in_terminal|runTerminalCommand|execute|Bash",
         "hooks": [
           {
             "type": "command",
+            "command": "node guard-critical-files.mjs",
+            "cwd": ".github/hooks",
+            "timeout": 5
+          },
+          {
+            "type": "command",
             "command": "node block-destructive-commands.mjs",
+            "cwd": ".github/hooks",
             "timeout": 5
           },
           {
             "type": "command",
             "command": "node require-plan-gate.mjs",
+            "cwd": ".github/hooks",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node record-successful-edit.mjs",
+            "cwd": ".github/hooks",
             "timeout": 5
           }
         ]
@@ -53,6 +77,7 @@
           {
             "type": "command",
             "command": "node preserve-context.mjs",
+            "cwd": ".github/hooks",
             "timeout": 10
           }
         ]
@@ -65,6 +90,7 @@
           {
             "type": "command",
             "command": "node require-verification.mjs",
+            "cwd": ".github/hooks",
             "timeout": 5
           }
         ]

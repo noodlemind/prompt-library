@@ -71,6 +71,14 @@ Do not claim feature parity across hosts. When a host lacks a primitive, documen
 
 ## Creator Workflow
 
+Changes under `.github/skills/`, `.github/agents/`, `.github/instructions/`, `.github/prompts/`, `.github/checks/`, `knowledge/capability-registry.yaml`, or `enterprise/skills/` are governed primitive work. Before editing, use this sequence: classify primitive → check overlap → decide minimal artifact structure → record the change rationale and, before creating or substantially expanding a skill, promotion evidence → create or reuse a plan → gate → edit → run primitive verification → report evidence.
+
+Activation means this `SKILL.md` was actually loaded in the current chat session. Do not claim activation by only adding `create-primitive` to `skills_used`.
+
+For a Java/Spring/AWS migration request, explicitly compare: Existing /java skill; Existing /aws skill; Reference under /java; Reference under /aws; New cross-domain migration skill. Select the smallest justified reusable option. Dense migration guidance belongs in a reference rather than bloating `SKILL.md`.
+
+Inspect both repository-owned capabilities and the installed `~/.copilot/skills/java/SKILL.md` and `~/.copilot/skills/aws/SKILL.md` when those installed paths exist. State what was inspected and why reuse, a reference, or a new cross-domain skill is the smallest justified choice before editing.
+
 Before writing files:
 
 1. **Classify the primitive** using the decision rules above.
@@ -85,6 +93,8 @@ Before writing files:
    - Append to `knowledge/capability-registry.yaml` under `starter_skills` or `starter_agents`.
    - If new agent is delegatable from `@engineer`, add to `engineer_allowlist` and `engineer.agent.md` frontmatter `agents:` (human-approved).
    - Update `docs/architecture/engineer-harness.md` if runtime or capability boundaries changed.
+
+Before the first full `harness verify`, map every acceptance criterion to trusted checks from `.github/harness/checks.yaml`, complete only the tasks and criteria actually proven, and include `prompt-contracts`, `host-contracts`, and `build-assets` when those standard primitive checks are configured. Inspect candidate commands/assertions: a specialized check for another output (such as `schema-validation` with no schema artifact) is forbidden. In a product repo where standard primitive checks are absent, use only the generic or strongest relevant local named check and state that prompt-library registry/eval/build surfaces are not present; do not invent check names, run unrelated optional checks, repair their failures, widen scope for them, or fake registry updates.
 
 ## Capability Expansion Mode
 
@@ -364,7 +374,7 @@ After creating an agent, skill, or instruction, verify:
 - [ ] "What NOT to Report" section present (for reviewers)
 - [ ] File in correct directory with correct naming
 - [ ] For skills: inputs, outputs, mode behavior, gates, verification, error handling, and trigger examples are present
-- [ ] Promoted skills include recorded promotion evidence, 8–10 positive trigger evals, 8–10 negative/confusable trigger evals, outcome eval assertions, owner, and lifecycle state
+- [ ] New or substantially expanded skills include recorded promotion or strategic evidence, 8–10 positive trigger evals, 8–10 negative/confusable trigger evals, outcome eval assertions, owner, and lifecycle state
 - [ ] For instructions: `applyTo` glob pattern matches target files, conventions are specific and actionable
 - [ ] For prompt wrappers: body routes to the matching skill instead of duplicating workflow logic
 - [ ] For checks: follows `.github/checks/README.md` format, lives in the correct bundled or product-owned location, and stays focused on one concern

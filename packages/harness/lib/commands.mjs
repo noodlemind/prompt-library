@@ -287,6 +287,7 @@ export async function cmdGate(argv) {
       ...previous,
       activePlan: result.plan?.path || previous.activePlan || null,
       gatedPlan: result.plan?.path || null,
+      gatedPlanDigest: result.pass && result.exitCode === 0 ? result.plan?.digest || null : null,
       lastGateAt: new Date().toISOString(),
       gateStatus: result.pass && result.exitCode === 0 ? 'pass' : policy.enforcement === 'enforce' && !result.pass ? 'blocked' : 'warn',
       blockedReason: result.blockedReason,
@@ -384,11 +385,18 @@ export async function cmdRecall(argv) {
 export async function cmdEvents(argv) {
   const flags = parseFlags(argv);
   const workspace = path.resolve(flags.workspace);
-  const events = readEvents(workspace, flags.limit || 20);
+  const hasLimit = argv.some((arg) => arg === '--limit' || arg.startsWith('--limit='));
+  const events = readEvents(workspace, {
+    limit: hasLimit ? flags.limit : 20,
+    session: flags.session,
+    failures: flags.failures,
+  });
   const summary = summarizeEvents(events);
 
   if (flags.json) {
-    console.log(JSON.stringify({ count: events.length, summary, events }, null, 2));
+    const body = { count: events.length, summary };
+    if (!flags.summary) body.events = events;
+    console.log(JSON.stringify(body, null, 2));
   } else {
     console.log(`[harness] events: ${events.length}`);
     console.log(`  pass=${summary.pass} warn=${summary.warn} fail=${summary.fail}`);

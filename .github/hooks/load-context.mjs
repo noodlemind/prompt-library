@@ -5,6 +5,7 @@
  */
 import fs from 'fs';
 import path from 'path';
+import { resolveHookWorkspace } from './lib/tool-payload.mjs';
 
 function readStdin() {
   try {
@@ -74,12 +75,17 @@ const raw = readStdin();
 let workspace = process.cwd();
 try {
   const payload = raw ? JSON.parse(raw) : {};
-  workspace = payload.workspace || payload.cwd || workspace;
+  workspace = resolveHookWorkspace(payload);
 } catch {
   /* use cwd */
 }
 
-const parts = [];
+const parts = [
+  'When @engineer is active, start with Mode: Answer|Investigate|Review|Deliver. In Investigate, non-atomic check/action/mark is a confirmed race/retry defect unless atomicity is proven; separate check → side effect → mark remains non-atomic even when each store method is thread-safe. Report evidence, impact, confidence, recommendation, and Capture for Later / Plan and Fix / Leave in Chat.',
+  'When a Deliver mutation is denied missing-implement-gate, read ~/.copilot/skills/ensure-plan/SKILL.md; create or lock only the canonical plan in a standalone mutation with no product paths, pass the standalone implement gate, then retry the product mutation and verify.',
+  'Before planning or editing a skill, agent, instruction, prompt, check, reference, or solution, read ~/.copilot/skills/create-primitive/SKILL.md and follow it. A plan label is not skill activation.',
+  'During Deliver verification, run only checks named in the plan verification.required list. Report unrelated check failures; do not repair them or expand Impacted Files for them.',
+];
 const pack = path.join(workspace, '.harness', 'context-pack.md');
 if (fs.existsSync(pack)) {
   parts.push(`Read harness context pack: .harness/context-pack.md`);
@@ -92,8 +98,6 @@ const agentCtx = path.join(workspace, 'docs', 'agent-context.md');
 if (fs.existsSync(agentCtx)) {
   parts.push(`Project conventions: docs/agent-context.md`);
 }
-
-if (parts.length === 0) process.exit(0);
 
 const message = `[harness hooks] Session context:\n- ${parts.join('\n- ')}`;
 console.log(JSON.stringify({ additionalContext: message }));

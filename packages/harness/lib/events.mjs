@@ -1,9 +1,19 @@
 import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
-import { ensureHarnessDir } from './session.mjs';
+import { ensureHarnessDir, readSession } from './session.mjs';
 
 export const EVENTS_FILE = 'events.jsonl';
+export const EVENT_TYPES = new Set([
+  'session_start',
+  'orient',
+  'gate',
+  'pre_tool',
+  'post_tool',
+  'verify',
+  'compound',
+  'session_end',
+]);
 
 function shouldSkipEvents(flags = {}) {
   return flags.dryRun || flags.noEvents || process.env.HARNESS_NO_EVENTS === '1';
@@ -35,11 +45,13 @@ export function eventPath(workspace) {
 
 export function writeEvent(workspace, flags, payload) {
   if (shouldSkipEvents(flags)) return null;
+  if (!EVENT_TYPES.has(payload.type)) return null;
   ensureHarnessDir(workspace, false);
 
   const checks = safeChecks(payload.checks);
+  const session = readSession(workspace);
   const event = {
-    version: 1,
+    version: 2,
     id: eventId(),
     ts: new Date().toISOString(),
     type: payload.type,
@@ -49,14 +61,21 @@ export function writeEvent(workspace, flags, payload) {
     result: eventResult({ result: payload.result, exitCode: payload.exitCode, checks }),
     exitCode: payload.exitCode ?? 0,
     checks,
+    session: payload.session || session?.sessionId || null,
+    host: payload.host || flags.host || process.env.HARNESS_HOST || 'harness-cli',
+    agent: payload.agent || process.env.HARNESS_AGENT || null,
   };
   if (payload.blockedReason) event.blockedReason = payload.blockedReason;
+  for (const field of ['tool', 'mutation', 'targets', 'targetResolved', 'gate', 'decision', 'durationMs', 'success']) {
+    if (payload[field] !== undefined) event[field] = payload[field];
+  }
 
   fs.appendFileSync(eventPath(workspace), JSON.stringify(event) + '\n', 'utf8');
   return event;
 }
 
-export function readEvents(workspace, limit = 20) {
+export function readEvents(workspace, options = 20) {
+  const config = typeof options === 'number' ? { limit: options } : options || {};
   const file = eventPath(workspace);
   if (!fs.existsSync(file)) return [];
   const events = fs
@@ -71,7 +90,12 @@ export function readEvents(workspace, limit = 20) {
       }
     })
     .filter(Boolean);
-  return limit ? events.slice(-limit) : events;
+  const filtered = events.filter((event) => {
+    if (config.session && event.session !== config.session) return false;
+    if (config.failures && event.result !== 'fail' && event.decision !== 'block' && !event.blockedReason) return false;
+    return true;
+  });
+  return config.limit ? filtered.slice(-config.limit) : filtered;
 }
 
 export function summarizeEvents(events) {

@@ -12,6 +12,10 @@ flowchart LR
   E --> M{"Task mode"}
   M -->|"Answer"| B["/btw"]
   M -->|"Investigate"| I["Evidence-only investigation"]
+  I --> D{"Confirmed finding"}
+  D -->|"Capture for Later"| O["Open unlocked issue"]
+  D -->|"Plan and Fix"| P
+  D -->|"Leave in Chat"| CHAT["Conversation only"]
   M -->|"Review"| R["/code-review"]
   M -->|"Deliver"| P["Locked plan"]
   P --> G["harness gate"]
@@ -38,11 +42,11 @@ The Engineer classifies the request before acting.
 | Mode | Use | Contract |
 |---|---|---|
 | Answer | Quick repository or general question | Route to `/btw`, read only the minimum context, and answer without a delivery plan |
-| Investigate | Evidence-heavy diagnosis or research with no requested change | Inspect proportionally and report evidence and uncertainty without edits |
+| Investigate | Evidence-heavy diagnosis or research with no requested change | Inspect proportionally; report evidence, impact, confidence, and recommendations without edits |
 | Deliver | Any requested file or implementation change | Enter the canonical delivery lifecycle, pass the plan gate, and produce fresh passed evidence |
 | Review | Independent assessment of completed changes | Route to `/code-review` without assuming implementation ownership |
 
-Answer and Investigate must transition to Deliver before the first requested mutation. This is why “by the way” questions remain fast even though changed work is governed.
+Answer and Investigate must transition to Deliver before the first requested mutation. When Investigate confirms an actionable defect, Engineer offers **Capture for Later** (an open, unlocked phase-zero issue), **Plan and Fix** (transition to Deliver), or **Leave in Chat** (no repository mutation). Merely discovering a defect never creates solution knowledge.
 
 ## Engineer accountability
 
@@ -72,6 +76,8 @@ The retired `engineer-autopilot` skill and `engineer-runtime.md` reference dupli
 
 Deliver mode uses a versioned plan as both a specification and a local context pack. A plan declares intent, expected outputs, stable acceptance criteria, impacted files, named verification checks, review state, capability gaps, and append-only activity. It never supplies executable command strings.
 
+Low-risk work still uses this schema. When one or two known product files can be changed in one session without architecture, compatibility, security, concurrency, data, infrastructure, destructive, migration, or public-contract risk, `/ensure-plan` produces a concise one-phase plan with focused named verification. New affected files, risk, architectural choices, or unclear verification escalate to normal planning. There is no micro-task schema.
+
 The deterministic boundary is:
 
 ```text
@@ -81,9 +87,15 @@ locked plan → harness gate → scoped edits → harness verify → evidence �
 - `harness gate --phase implement --plan <path>` checks the explicit plan, intent, state, lock, and activity before edits.
 - `harness verify --plan <path>` validates schema and current-phase tasks, runs trusted argv-only checks from `.github/harness/checks.yaml`, compares the diff to `## Impacted Files`, checks reviews and hard gaps, and writes evidence.
 - Verification outcomes are `passed`, `failed`, or `inconclusive`; only `passed` is terminal success.
-- Pre-tool hooks apply the plan gate to supported file editors and mutation-capable shell commands.
-- The completion hook requires fresh passed evidence after the latest recorded edit, while sessions with no edit exit without ceremony.
+- `PreToolUse` normalizes supported VS Code/CLI editor and terminal payloads, fails closed when a mutation target is unresolved, blocks direct mutation of `.harness/` runtime state, and requires the target to be within the gated plan. The implement gate binds a SHA-256 plan digest; editing the plan invalidates later product mutations until the gate is rerun.
+- `PostToolUse` records `lastEditAt` only after a recognized governed mutation succeeds; an attempted or failed edit never creates pending verification state. It also records successful on-demand skill reads separately so primitive activation can be bound to the current host session without treating reads as edits.
+- `Stop` requires fresh passed evidence after the latest successful edit, while sessions with no successful mutation exit without ceremony.
+- A missing-gate block is recoverable: Engineer invokes `/ensure-plan`, passes the implement gate, and retries the original mutation.
 - CI resolves exactly one plan, binds verification to the PR base SHA, and acts as the cross-host backstop.
+
+Primitive paths (`.github/skills/`, agents, instructions, prompts, checks, the capability registry, and enterprise skills) add a stricter boundary. Before mutation, `create-primitive` must have been successfully loaded in the current host session; a `skills_used` label alone is insufficient. The plan must record the applicable classification, overlap, structure, trigger, verification, registry, and documentation decisions. Verification requires the standard primitive asset and contract checks when configured, or the repository's strongest configured local named evidence when those prompt-library surfaces are absent.
+
+Hook and lifecycle events use schema version 2 in the local `.harness/events.jsonl`. They retain session and host identifiers plus tool, resolved targets, gate, decision, result, and duration, but never prompt content. A `skill_activation` event records only the loaded skill name and current session binding. `harness events --session <id>`, `--failures`, and `--summary` provide bounded diagnosis without introducing a trace database or dashboard.
 
 Repository rollout policy is defined in `.github/harness/policy.yaml`:
 
@@ -159,15 +171,17 @@ The host has the Engineer primitives but the product repository has not adopted 
 
 ### Degraded mode
 
-An optional skill, specialist, hook, or host integration is unavailable. Ordinary low-risk work continues with repository evidence, authoritative documentation, and explicit harness commands where available. Missing required verification produces `inconclusive`; a missing safety-critical capability blocks only the affected operation unless waived.
+An optional skill, specialist, hook, or host integration is unavailable. Ordinary low-risk work continues with repository evidence, authoritative documentation, and explicit `harness gate`/`verify` commands where available. The agent discloses that native mutation or completion enforcement was unavailable; it never treats explicit CLI use as proof that a missing hook ran. Missing required verification produces `inconclusive`; a missing safety-critical capability blocks only the affected operation unless waived.
 
 ### Governed mode
 
-The repository supplies schema-versioned plans, trusted named checks, policy, supported hooks, and required CI. The explicit gate controls the mutation boundary, verification binds checks and diff scope to the plan, and compounding consumes only passed evidence.
+The repository supplies schema-versioned plans, trusted named checks, policy, supported hooks, and required CI. Plan readiness validates unchecked planned work, complete criterion mappings, configured checks, and output/check relevance; the implement gate repeats those checks. The explicit gate controls the mutation boundary, terminal hooks keep named-check execution within `verification.required`, verification binds checks and diff scope to the plan, and compounding consumes only passed evidence.
 
 ## Distribution and host validation
 
-The prompt library is the authoring source. `scripts/build-harness-assets.mjs` builds ignored package assets, and the `@dev-kit/harness` npm package installs versioned agents, skills, prompts, instructions, hooks, schemas, and knowledge scaffolding into global Copilot locations. Upgrades preserve user-authored profiles and compounded solutions and remove only harness-owned paths tracked by the lock file or retirement manifest.
+The prompt library is the authoring source. `scripts/build-harness-assets.mjs` builds ignored package assets, and the `@dev-kit/harness` npm package installs versioned agents, skills, prompts, instructions, hooks, schemas, and knowledge scaffolding into global Copilot locations. Hook commands are hydrated with a deterministic absolute working directory. `install --configure-vscode` merges `chat.hookFilesLocations` for `~/.copilot/hooks` into VS Code user settings. Upgrades preserve user-authored profiles and compounded solutions and remove only harness-owned paths tracked by the lock file or retirement manifest.
+
+`harness doctor --host vscode` checks the installed bundle, command resolution, user hook discovery, known payload recognition, ungated denial, gated allow, successful post-tool recording, unverified Stop denial, and verified Stop allow in an isolated fixture. It diagnoses the installed runtime rather than passing from package-source files alone.
 
 Operational setup belongs in the [Install Guide](../install.md), [Harness Quickstart](../onboarding/harness-quickstart.md), and [Nexus Registry Setup](../onboarding/nexus-registry-setup.md), rather than in additional architecture proposals.
 
@@ -175,7 +189,7 @@ Automated evidence covers the supported surfaces:
 
 | Surface | Evidence |
 |---|---|
-| GitHub Copilot in VS Code | Hydrated agents, skills, prompts, instructions, frozen Engineer budget, task-mode contracts, and CLI tests |
+| GitHub Copilot in VS Code | Hydrated agents, skills, prompts, instructions, discovered user hooks, frozen Engineer budget, task-mode contracts, and executable V1–V9 doctor probes |
 | GitHub Copilot CLI | Hydrated hooks plus executable read-only bypass, pre-edit, completion, gate, verify, and compound tests |
 | GitHub Copilot in IntelliJ IDEA | Host-neutral sources, merged instruction contract, terminal CLI behavior, and no provider-specific model pinning |
 | Portable Agent Skills hosts | Standard skill frontmatter, host-native fallbacks, and explicit degraded behavior |

@@ -1,11 +1,14 @@
 import fs from 'fs';
 import path from 'path';
+import crypto from 'node:crypto';
 import { readSession } from './session.mjs';
 import { loadPlan, pickActivePlan, listPlanRels, parsePlanFrontmatter } from './plan-parse.mjs';
 import { findMatchingPlans } from './recall-rank.mjs';
 import { intentContractHasContent } from './plan-goal.mjs';
 import { readEvidence, validateEvidence } from './evidence.mjs';
 import { loadPolicy } from './policy.mjs';
+import { primitivePlanGovernance } from './primitive-governance.mjs';
+import { validatePlanReadiness } from './plan-readiness.mjs';
 
 export function runGate({ workspace, flags, query = '' }) {
   const session = readSession(workspace);
@@ -13,6 +16,7 @@ export function runGate({ workspace, flags, query = '' }) {
   const checks = [];
   let pass = true;
   let exitCode = 0;
+  let primitiveGovernanceFailed = false;
 
   const planPaths = listPlanRels(workspace);
   const matches = query ? findMatchingPlans(workspace, query, 5) : [];
@@ -38,6 +42,17 @@ export function runGate({ workspace, flags, query = '' }) {
     pass = false;
   } else {
     checks.push({ id: 'C1', pass: true, message: `Plan: ${plan.path}`, severity: 'ok' });
+
+    const readiness = validatePlanReadiness(workspace, plan);
+    for (const check of readiness.checks) {
+      checks.push({
+        id: `C-${check.id}`,
+        pass: check.pass,
+        message: check.message,
+        severity: check.pass ? 'ok' : 'fail',
+      });
+    }
+    if (!readiness.pass) pass = false;
 
     if (!plan.sections.overview) {
       checks.push({ id: 'C1a', pass: false, message: 'Missing ## Overview', severity: 'fail' });
@@ -139,6 +154,14 @@ export function runGate({ workspace, flags, query = '' }) {
       } else {
         checks.push({ id: 'C3', pass: true, message: 'plan_lock: true', severity: 'ok' });
       }
+      const primitive = primitivePlanGovernance(plan);
+      if (primitive.required) {
+        checks.push(...primitive.checks);
+        if (primitive.checks.some((check) => !check.pass)) {
+          pass = false;
+          primitiveGovernanceFailed = true;
+        }
+      }
     }
 
     if (phase === 'verify') {
@@ -177,16 +200,35 @@ export function runGate({ workspace, flags, query = '' }) {
     pass,
     phase,
     exitCode: pass ? exitCode : 1,
-    plan: plan ? { path: plan.path, status: plan.status, plan_lock: plan.plan_lock } : null,
+    plan: plan
+      ? {
+          path: plan.path,
+          status: plan.status,
+          plan_lock: plan.plan_lock,
+          digest: crypto.createHash('sha256').update(plan.text).digest('hex'),
+        }
+      : null,
     checks,
     blockedReason: pass ? null : checks.filter((c) => !c.pass).map((c) => c.message).join('; '),
     nextTools: pass
       ? phase === 'verify'
         ? ['harness compound', '/auto-compound']
-        : ['editFiles (scoped)', `harness verify --plan ${plan?.path || '<path>'}`]
+        : plan?.status === 'planned'
+          ? [
+              `set ${plan.path} status to in-progress`,
+              `harness gate --phase implement --plan ${plan.path}`,
+              'editFiles (scoped) only after the fresh gate passes',
+            ]
+          : ['editFiles (scoped)', `harness verify --plan ${plan?.path || '<path>'}`]
       : plan?.status === 'blocked-capability'
         ? ['read ensure-capability/SKILL.md']
-        : ['harness orient', '/ensure-plan'],
+        : primitiveGovernanceFailed
+          ? [
+              'read ~/.copilot/skills/create-primitive/SKILL.md and follow it',
+              `update ${plan?.path || '<plan>'} with the create-primitive decision and evidence contract`,
+              `harness gate --phase implement --plan ${plan?.path || '<plan>'}`,
+            ]
+          : ['harness orient', '/ensure-plan'],
   };
 
   return result;

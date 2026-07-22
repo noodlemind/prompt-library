@@ -55,6 +55,10 @@ export function parseFlags(argv) {
     path: null,
     lines: 40,
     maxBytes: 2048,
+    host: null,
+    session: null,
+    summary: false,
+    failures: false,
   };
 
   for (let i = 0; i < argv.length; i++) {
@@ -67,6 +71,8 @@ export function parseFlags(argv) {
     else if (a === '--include-plans') flags.includePlans = true;
     else if (a === '--strict-intent') flags.strictIntent = true;
     else if (a === '--no-events') flags.noEvents = true;
+    else if (a === '--summary') flags.summary = true;
+    else if (a === '--failures') flags.failures = true;
     else if (a.startsWith('--query=')) flags.query = a.split('=').slice(1).join('=');
     else if (a === '--query') flags.query = argv[++i];
     else if (a.startsWith('--phase=')) flags.phase = parsePhase(a.split('=')[1]);
@@ -106,6 +112,10 @@ export function parseFlags(argv) {
     else if (a === '--lines') flags.lines = parsePositiveInt(argv[++i], '--lines');
     else if (a.startsWith('--max-bytes=')) flags.maxBytes = parsePositiveInt(a.split('=')[1], '--max-bytes');
     else if (a === '--max-bytes') flags.maxBytes = parsePositiveInt(argv[++i], '--max-bytes');
+    else if (a.startsWith('--host=')) flags.host = a.split('=').slice(1).join('=');
+    else if (a === '--host') flags.host = argv[++i];
+    else if (a.startsWith('--session=')) flags.session = a.split('=').slice(1).join('=');
+    else if (a === '--session') flags.session = argv[++i];
   }
 
   return flags;

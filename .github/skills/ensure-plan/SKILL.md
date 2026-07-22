@@ -8,6 +8,15 @@ user-invocable: false
 
 Apply `/capture-issue` and `/plan-issue` logic without asking the user to run slash commands. This skill owns detailed planning; it does not own the Engineer runtime loop.
 
+## Non-negotiable output contract
+
+- Never run the implement gate until the referenced plan exists and `harness validate-plan --plan <path> --workspace . --json` has accepted its schema.
+- Never write a header-only or ad-hoc plan. A locked plan requires YAML frontmatter plus every canonical section below; if you cannot produce that plan, stop without a product edit.
+- New paths use `docs/plans/YYYY-MM-DD-<type>-<slug>-plan.md`; do not invent an undated shortcut path.
+- Before populating `verification.required`, read `.github/harness/checks.yaml`; never invent a check. Inspect each candidate command/assertion and choose only a trusted check relevant to the expected outputs; for example, `schema-validation` is forbidden when no schema output is planned. If no check exercises a documentation/primitive artifact and adding one is unjustified, use the generic product smoke check and record that limitation. New acceptance criteria and phase tasks start unchecked.
+- Create or lock the canonical plan in a standalone mutation that targets only that plan file. Never batch plan bootstrap with product files, directories, checks, or scripts. After a blocked compound attempt, retry with a plan-only edit.
+- Run the implement gate as a standalone terminal tool call with no file mutation in the same command. Wait for its explicit pass, then retry the original mutation in a later tool call.
+
 ## Trigger Examples
 
 **Should trigger:**
@@ -38,6 +47,70 @@ Apply `/capture-issue` and `/plan-issue` logic without asking the user to run sl
 - Capture gate C1–C3 would fail
 
 ## Steps
+
+### Proportional fast path
+
+Use the same canonical plan schema with concise content when all are true: one or two intended product files; completion is expected in one session; the user supplied the target or reference pattern; no architectural choice; no security, concurrency, data-integrity, infrastructure, destructive, migration, breaking-contract risk; and a focused trusted verification check exists.
+
+A fast plan has concise intent, one phase, one or two impacted paths, measurable acceptance criteria, and focused named checks. Use no specialist unless a gap appears, no external research unless needed, no broad repository scan, and no compounding when nothing durable was learned.
+
+Escalate to normal planning if investigation finds more affected files, compatibility or required-field risk, a data migration, security or concurrency implications, an architectural decision, or unclear verification. Never create another schema for fast plans.
+
+For a fast plan, instantiate this existing-schema shape with task-specific values and a trusted check from `.github/harness/checks.yaml`:
+
+```markdown
+---
+plan_schema: 1
+title: "<task>"
+type: feat
+status: planned
+plan_lock: true
+phase: 1
+risk: green
+intent: "<durable goal>"
+expected_outputs: ["<artifact>"]
+success_criteria: ["<measurable result>"]
+verification:
+  required: [<named-check>]
+  criteria: {AC1: [<named-check>]}
+reviews: {required: [], completed: [], critical_open: []}
+skills_used: [engineer, ensure-plan]
+org_objectives: []
+domains: [<domain>]
+specialists: []
+capability_gaps: []
+---
+
+# <Task>
+
+## Overview
+<scope>
+
+## Intent Contract
+- Goal: <durable goal>
+
+## Acceptance Criteria
+- [ ] **AC1** <measurable result>
+
+## Plan
+### Phase 1
+- [ ] <smallest implementation and verification step>
+
+## Impacted Files
+- `<exact product path>`
+
+## Verification Plan
+- `<named-check>` validates AC1.
+
+## Risk & Review Routing
+- Green; no specialist unless a gap appears.
+
+## Review Findings
+- None.
+
+## Activity
+- YYYY-MM-DD — ensure-plan: captured, planned, and locked (autonomous).
+```
 
 ### 1. Dedupe
 
@@ -72,6 +145,8 @@ Respect `autonomy-policy.md`: red `risk` may require Tier 3 before lock under `s
 ### 4. Return
 
 Output the canonical plan path and frontmatter snapshot. Engineer proceeds to Investigate/Implement only when `plan_lock: true` (or documented exemption).
+
+Engineer continuation is ordered: run the initial implement gate alone; change `status: planned` to `status: in-progress`; rerun the implement gate alone and wait for its pass; make the product mutation; run only the checks named in `verification.required`; only then mark completed criteria/tasks; finally run `harness verify`. Do not repair an unrelated optional check or add its files to scope. If a later plan edit precedes another product correction, rerun the implement gate before that correction.
 
 ## Guardrails
 

@@ -22,6 +22,7 @@ harness gate --phase implement --plan <path> --workspace . --json
 ```
 
 4. Only after the gate passes, set `planned` to `in-progress`; leave an already `in-progress` plan unchanged.
+5. When step 4 changed the plan, rerun the same implement gate as a standalone call and wait for its pass before any product mutation. This refreshes the gated plan digest.
 
 A failed gate makes no plan edits. A missing or unlocked plan routes to `/ensure-plan`; `review` or `done` routes out of this skill.
 

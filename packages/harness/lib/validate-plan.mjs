@@ -2,6 +2,7 @@ import { readSession } from './session.mjs';
 import { loadPlan, pickActivePlan, listPlanRels } from './plan-parse.mjs';
 import { intentContractHasContent } from './plan-goal.mjs';
 import { validatePlanSchema } from './plan-schema.mjs';
+import { validatePlanReadiness } from './plan-readiness.mjs';
 
 function hasValue(value) {
   if (Array.isArray(value)) return value.length > 0;
@@ -52,6 +53,17 @@ export function runValidatePlan({ workspace, flags, planPath = null }) {
     severity: 'fail',
   });
   if (!schema.pass) pass = false;
+
+  const readiness = validatePlanReadiness(workspace, plan);
+  for (const check of readiness.checks) {
+    addCheck(checks, {
+      id: `P-${check.id}`,
+      pass: check.pass,
+      message: check.message,
+      severity: 'fail',
+    });
+  }
+  if (!readiness.pass) pass = false;
 
   const sectionChecks = [
     { id: 'S1', ok: plan.sections.overview, label: '## Overview' },

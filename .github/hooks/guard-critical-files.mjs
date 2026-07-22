@@ -1,44 +1,41 @@
 #!/usr/bin/env node
-/**
- * PreToolUse (Edit/Write) — block edits to secrets and harness-owned global files.
- */
-import fs from 'fs';
+/** PreToolUse mutation guard: block secrets and Harness-owned global files. */
+import fs from 'node:fs';
+import { normalizeToolPayload } from './lib/tool-payload.mjs';
 
 const BLOCKED = [
-  /^\.env/i,
+  /(?:^|\/)\.env(?:\.|$)/i,
   /(?:^|\/)[._]?credentials(?:\.|$)/i,
   /\.pem$/i,
   /\.key$/i,
   /node_modules\//,
-  // Hydrated harness home only — not arbitrary paths containing `.copilot` as a substring
-  /^(?:\/Users\/[^/]+\/\.copilot\/|\/home\/[^/]+\/\.copilot\/|[A-Za-z]:\/Users\/[^/]+\/\.copilot\/)/,
+  /(?:^|\/)\.harness(?:\/|$)/,
+  /(?:^|\/)\.copilot\//,
 ];
 
-function readStdin() {
-  try {
-    return fs.readFileSync(0, 'utf8');
-  } catch {
-    return '';
-  }
-}
-
-const raw = readStdin();
-let filePath = '';
+let payload;
 try {
-  const payload = raw ? JSON.parse(raw) : {};
-  filePath = payload.tool_input?.file_path || payload.file_path || payload.path || '';
+  payload = JSON.parse(fs.readFileSync(0, 'utf8') || '{}');
 } catch {
   process.exit(0);
 }
 
-if (!filePath) process.exit(0);
-
-const norm = filePath.replace(/\\/g, '/');
-for (const pattern of BLOCKED) {
-  if (pattern.test(norm)) {
-    console.error(`[harness hook] Blocked edit to sensitive or out-of-scope path: ${filePath}`);
-    process.exit(2);
-  }
+const mutation = normalizeToolPayload(payload);
+if (!mutation.mutation) {
+  console.log(JSON.stringify({ continue: true }));
+  process.exit(0);
+}
+for (const target of mutation.targets) {
+  const normalized = target.replace(/\\/g, '/');
+  if (!BLOCKED.some((pattern) => pattern.test(normalized))) continue;
+  console.log(JSON.stringify({
+    hookSpecificOutput: {
+      hookEventName: 'PreToolUse',
+      permissionDecision: 'deny',
+      permissionDecisionReason: `sensitive-path: ${target}`,
+    },
+  }));
+  process.exit(0);
 }
 
-process.exit(0);
+console.log(JSON.stringify({ continue: true }));

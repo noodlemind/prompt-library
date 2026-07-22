@@ -55,8 +55,8 @@ Installed to `~/.copilot/bin/harness` on every `harness install`. Add to PATH wi
 
 | Command | Purpose |
 |---------|---------|
-| `install` / `upgrade` | Sync skills, agents, knowledge to `~/.copilot/` |
-| `doctor` | Health checks |
+| `install` / `upgrade` | Sync skills, agents, hooks, and knowledge to `~/.copilot/`; `--configure-vscode` enables user-hook discovery |
+| `doctor [--host vscode]` | Health checks; VS Code mode executes installed-hook discovery and lifecycle probes |
 | `init-repo` | Scaffold `docs/plans/`, `.harness/` |
 | `status` / `uninstall` | Lock file introspection / safe remove |
 
@@ -72,7 +72,7 @@ Installed to `~/.copilot/bin/harness` on every `harness install`. Add to PATH wi
 | `index` | Rebuild search index | none in chat | manifest.yaml, `.harness-index/`, events |
 | `get [--docid id \| --path rel]` | Fetch bounded doc excerpt | F2 on demand | none |
 | `compound --plan <path>` | Consume passed evidence, index, classify learning, record telemetry | after verify | index + session + telemetry + events |
-| `events` | Audit / stuck debugging | read-only | none |
+| `events [--session id] [--failures] [--summary]` | Schema-v2 audit / stuck debugging | read-only | none |
 
 ### JSON shapes (stable fields)
 
@@ -107,6 +107,8 @@ Installed to `~/.copilot/bin/harness` on every `harness install`. Add to PATH wi
   "nextTools": []
 }
 ```
+
+For locked plans, both commands enforce criterion-to-check mappings and configured-check relevance. A `planned` plan must leave new criteria and tasks unchecked, and a schema-focused check cannot satisfy outputs that contain no schema artifact. The implement gate repeats these readiness checks so skipping `validate-plan` cannot bypass them, and `verify` refuses to execute named checks when readiness fails.
 
 **verify**
 ```json
@@ -152,6 +154,25 @@ Allowed outcomes are `passed`, `failed`, and `inconclusive`. Only fresh `passed`
   "nextTools": ["/auto-compound", "/compound-learnings"]
 }
 ```
+
+**events**
+```json
+{
+  "count": 2,
+  "summary": { "total": 2, "pass": 1, "warn": 0, "fail": 1, "lastActivePlan": "docs/plans/example-plan.md", "latestBlockedReason": "..." },
+  "events": [{ "version": 2, "type": "pre_tool", "session": "...", "host": "vscode", "tool": "replace_string_in_file", "targets": ["src/example.ts"], "gate": "missing", "decision": "block", "durationMs": 4 }]
+}
+```
+
+Lifecycle events are limited to `session_start`, `orient`, `gate`, `pre_tool`, `post_tool`, `skill_activation`, `verify`, `compound`, and `session_end`. They never store prompt or query content; `skill_activation` stores only the skill and session binding.
+
+## Host hook boundary
+
+- VS Code user hooks are installed under `~/.copilot/hooks`; `--configure-vscode` merges `chat.hookFilesLocations` without replacing unrelated settings.
+- `PreToolUse` recognizes supported editor and terminal payload variants, requires a fresh explicit implement gate, blocks direct `.harness/` state mutation, fails closed on unresolved mutation targets, and returns structured `permissionDecision: deny` output when blocked. The gate records a SHA-256 digest of the plan, so a later plan edit requires rerunning the gate before product mutation.
+- `PostToolUse` records `lastEditAt` only for a successful governed mutation and separately records successful on-demand skill activation. Primitive mutation requires `create-primitive` activation in the current session; plan metadata alone cannot satisfy it.
+- `Stop` returns a structured block until fresh passed evidence is bound after the latest successful mutation. Read-only sessions remain free of completion ceremony.
+- `harness doctor --host vscode` proves the installed V1–V9 lifecycle in an isolated fixture. If hooks are unavailable, explicit CLI gate/verify is degraded evidence and must not be described as native hook enforcement.
 
 ## Context budget mapping
 

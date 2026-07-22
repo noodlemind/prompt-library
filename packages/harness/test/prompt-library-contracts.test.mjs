@@ -97,6 +97,92 @@ test('engineer agent is frozen, thin, and owns the only normative nine-step deli
   assert.doesNotMatch(read('.github/skills/references/tool-native-loop.md'), /1\. Orient[\s\S]*9\. Report/i);
 });
 
+test('engineer recovers blocked mutations, routes primitives, and exposes finding disposition', () => {
+  const engineer = read('.github/agents/engineer.agent.md');
+  const globalWorkflow = read('.github/instructions/prompt-library-global.instructions.md');
+  const frontmatter = YAML.parse(engineer.match(/^---\n([\s\S]*?)\n---/)?.[1] || '');
+  const handoffs = new Map((frontmatter.handoffs || []).map((handoff) => [handoff.label, handoff]));
+
+  assert.match(engineer, /requested file mutation enters Deliver before the first edit/i);
+  assert.match(engineer, /blocked[\s\S]{0,180}ensure-plan[\s\S]{0,180}implement gate[\s\S]{0,180}retry/i);
+  assert.match(engineer, /only checks named in `verification\.required`[\s\S]{0,160}unrelated failures[\s\S]{0,120}expanding scope/i);
+  assert.match(engineer, /skill, agent, instruction, prompt, check, reference, or solution[\s\S]{0,100}create-primitive/i);
+  assert.match(engineer, /read `~\/\.copilot\/skills\/create-primitive\/SKILL\.md`[\s\S]{0,180}not activation/i);
+  assert.match(engineer, /Capture for Later[\s\S]{0,120}Plan and Fix[\s\S]{0,120}Leave in Chat/i);
+  assert.match(engineer, /Name the mode first/i);
+  assert.match(engineer, /check\/action\/mark[\s\S]{0,100}confirmed race\/retry defect[\s\S]{0,100}atomicity is proven/i);
+  assert.match(engineer, /check\/action\/mark[\s\S]{0,160}thread-safe/i);
+  assert.match(engineer, /evidence, impact, confidence, and recommendation/i);
+  assert.equal(handoffs.get('Capture for Later')?.send, false);
+  assert.match(handoffs.get('Capture for Later')?.prompt || '', /open, unlocked issue/i);
+  assert.equal(handoffs.get('Plan and Fix')?.send, false);
+  assert.match(handoffs.get('Plan and Fix')?.prompt || '', /proportional plan/i);
+  assert.match(globalWorkflow, /@engineer[\s\S]{0,160}name the mode first/i);
+  assert.match(globalWorkflow, /check\/action\/mark[\s\S]{0,100}confirmed race\/retry defect/i);
+});
+
+test('existing skills own structured findings, proportional plans, and primitive governance', () => {
+  const capture = read('.github/skills/capture-issue/SKILL.md');
+  for (const field of [
+    'Title',
+    'Observed behavior',
+    'Expected invariant',
+    'Evidence paths',
+    'Impact',
+    'Confidence',
+    'Recommended direction',
+  ]) assert.match(capture, new RegExp(field, 'i'), `capture packet missing ${field}`);
+  assert.match(capture, /packet is sufficient[\s\S]{0,220}do not ask/i);
+  assert.match(capture, /status:\s*open[\s\S]{0,80}plan_lock:\s*false[\s\S]{0,80}phase:\s*0/i);
+
+  const ensure = read('.github/skills/ensure-plan/SKILL.md');
+  for (const phrase of [
+    'one or two intended product files',
+    'one session',
+    'no architectural choice',
+    'focused trusted verification',
+    'one phase',
+    'no broad repository scan',
+    'data migration',
+    'security or concurrency',
+    'unclear verification',
+  ]) assert.match(ensure, new RegExp(phrase, 'i'), `fast plan missing ${phrase}`);
+  assert.match(ensure, /Never write a header-only or ad-hoc plan/i);
+  assert.match(ensure, /harness validate-plan --plan <path>/i);
+  assert.match(ensure, /docs\/plans\/YYYY-MM-DD-<type>-<slug>-plan\.md/i);
+  assert.match(ensure, /plan_schema: 1[\s\S]*verification:[\s\S]*## Overview[\s\S]*## Activity/i);
+  assert.match(ensure, /read `.github\/harness\/checks\.yaml`[\s\S]{0,180}never invent/i);
+  assert.match(ensure, /schema-validation[\s\S]{0,100}no schema output/i);
+  assert.match(ensure, /implement gate as a standalone terminal tool call[\s\S]{0,180}later tool call/i);
+  assert.match(ensure, /initial implement gate[\s\S]{0,180}status: planned[\s\S]{0,100}status: in-progress[\s\S]{0,160}rerun the implement gate/i);
+
+  const primitive = read('.github/skills/create-primitive/SKILL.md');
+  for (const governed of ['.github/skills/', '.github/agents/', '.github/instructions/', '.github/prompts/', '.github/checks/', 'enterprise/skills/']) {
+    assert.ok(primitive.includes(governed), `primitive path missing ${governed}`);
+  }
+  for (const option of ['Existing /java skill', 'Existing /aws skill', 'Reference under /java', 'Reference under /aws', 'New cross-domain migration skill']) {
+    assert.match(primitive, new RegExp(option.replaceAll('/', '\\/'), 'i'), `migration decision missing ${option}`);
+  }
+  assert.match(primitive, /actually loaded in the current chat session[\s\S]{0,180}not claim activation/i);
+  assert.match(primitive, /~\/\.copilot\/skills\/java\/SKILL\.md[\s\S]{0,120}~\/\.copilot\/skills\/aws\/SKILL\.md/i);
+  assert.match(primitive, /map every acceptance criterion/i);
+  assert.match(primitive, /do not invent check names/i);
+});
+
+test('host evaluation contains the three executable golden behavior contracts', () => {
+  const matrix = YAML.parse(read('evals/host-compatibility.yaml'));
+  const scenarios = new Map((matrix.golden_scenarios || []).map((scenario) => [scenario.id, scenario]));
+  assert.deepEqual([...scenarios.keys()], ['scenario-a-investigate', 'scenario-b-schema-change', 'scenario-c-migration-primitive']);
+  for (const scenario of scenarios.values()) {
+    assert.match(scenario.prompt, /\S/);
+    assert.ok(scenario.required?.length >= 5, `${scenario.id} required behavior`);
+    assert.ok(scenario.forbidden?.length >= 2, `${scenario.id} forbidden behavior`);
+  }
+  assert.ok(scenarios.get('scenario-a-investigate').required.includes('Capture for Later handoff'));
+  assert.ok(scenarios.get('scenario-b-schema-change').required.includes('ungated mutation blocked'));
+  assert.ok(scenarios.get('scenario-c-migration-primitive').required.includes('create-primitive activated'));
+});
+
 test('engineer loads capabilities on demand and owns bounded consultations', () => {
   const surfaces = [
     read('.github/agents/engineer.agent.md'),
@@ -230,30 +316,40 @@ test('hooks and CI enforce explicit plans and passed verification evidence', () 
   const hooks = JSON.parse(read('.github/hooks/hooks.json'));
   const preEditCommands = hooks.hooks.PreToolUse.flatMap((entry) => entry.hooks.map((hook) => hook.command));
   assert.ok(preEditCommands.includes('node require-plan-gate.mjs'));
-  const bashHooks = hooks.hooks.PreToolUse.find((entry) => entry.matcher === 'Bash')?.hooks || [];
-  assert.ok(bashHooks.some((hook) => hook.command === 'node require-plan-gate.mjs'));
+  const bashHooks = hooks.hooks.PreToolUse.find((entry) => entry.matcher.split('|').includes('Bash'))?.hooks || [];
+  const bashCriticalIndex = bashHooks.findIndex((hook) => hook.command === 'node guard-critical-files.mjs');
+  const bashDestructiveIndex = bashHooks.findIndex((hook) => hook.command === 'node block-destructive-commands.mjs');
+  const bashGateIndex = bashHooks.findIndex((hook) => hook.command === 'node require-plan-gate.mjs');
+  assert.notEqual(bashCriticalIndex, -1, 'terminal mutations require the critical-file guard');
+  assert.notEqual(bashDestructiveIndex, -1, 'terminal commands require the destructive-command blocker');
+  assert.notEqual(bashGateIndex, -1, 'terminal mutations require the plan gate');
   assert.ok(
-    bashHooks.findIndex((hook) => hook.command === 'node block-destructive-commands.mjs') <
-      bashHooks.findIndex((hook) => hook.command === 'node require-plan-gate.mjs'),
-    'destructive-command blocker must run before the plan gate records an edit'
+    bashCriticalIndex < bashDestructiveIndex && bashDestructiveIndex < bashGateIndex,
+    'terminal safety guards must run before the plan gate'
   );
   const editHooks = hooks.hooks.PreToolUse.find((entry) => entry.matcher.startsWith('Edit|'))?.hooks || [];
+  const editCriticalIndex = editHooks.findIndex((hook) => hook.command === 'node guard-critical-files.mjs');
+  const editGateIndex = editHooks.findIndex((hook) => hook.command === 'node require-plan-gate.mjs');
+  assert.notEqual(editCriticalIndex, -1, 'edit mutations require the critical-file guard');
+  assert.notEqual(editGateIndex, -1, 'edit mutations require the plan gate');
   assert.ok(
-    editHooks.findIndex((hook) => hook.command === 'node guard-critical-files.mjs') <
-      editHooks.findIndex((hook) => hook.command === 'node require-plan-gate.mjs'),
-    'critical-file guard must run before the plan gate records an edit'
+    editCriticalIndex < editGateIndex,
+    'critical-file guard must run before the plan gate'
   );
+  const postEditCommands = (hooks.hooks.PostToolUse || []).flatMap((entry) => entry.hooks.map((hook) => hook.command));
+  assert.ok(postEditCommands.includes('node record-successful-edit.mjs'));
   const stopCommands = (hooks.hooks.Stop || []).flatMap((entry) => entry.hooks.map((hook) => hook.command));
   assert.ok(stopCommands.includes('node require-verification.mjs'));
 
   const planGate = read('.github/hooks/require-plan-gate.mjs');
   assert.match(planGate, /gatedPlan/);
+  assert.match(planGate, /gatedPlanDigest/);
   assert.match(planGate, /gateStatus/);
   assert.match(planGate, /Impacted Files/);
 
   const completion = read('.github/hooks/require-verification.mjs');
   assert.match(completion, /outcome\s*!==\s*['"]passed['"]/);
-  assert.match(completion, /if \(!session\.lastEditAt\) process\.exit\(0\)/);
+  assert.match(completion, /if \(!session\.lastEditAt\) allow/);
   assert.match(completion, /lastCompletedEditAt/);
   assert.match(completion, /validateEvidenceBinding/);
 

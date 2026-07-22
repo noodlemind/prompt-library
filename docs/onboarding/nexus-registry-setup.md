@@ -76,7 +76,7 @@ harness doctor
 Pin version in internal docs:
 
 ```bash
-npm install -g @dev-kit/harness@0.4.0
+npm install -g @dev-kit/harness@0.5.0
 harness install --autonomy balanced --configure-path
 ```
 
@@ -84,8 +84,8 @@ harness install --autonomy balanced --configure-path
 
 | Scenario | Approach |
 |----------|----------|
-| **CI doctor check** | `npm install -g @dev-kit/harness@0.4.0 && harness doctor --json` with registry auth in pipeline |
-| **Air-gapped** | Download `.tgz` from Nexus UI → `npm install -g ./dev-kit-harness-0.4.0.tgz` → `harness install --offline` (Phase 1+) |
+| **CI doctor check** | `npm install -g @dev-kit/harness@0.5.0 && harness doctor --host vscode --json` with registry auth in pipeline |
+| **Air-gapped** | Download `.tgz` from Nexus UI → `npm install -g ./dev-kit-harness-0.5.0.tgz` → `harness install --offline` (Phase 1+) |
 | **Proxy** | Set `npm_config_registry` only for `@dev-kit` scope, not public npm |
 
 ## Versioning policy

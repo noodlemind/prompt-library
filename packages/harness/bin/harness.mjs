@@ -79,6 +79,10 @@ Options:
   --base <git-ref>       verify: compare changed files to this git ref
   --enforcement <mode>   observe | warn | enforce (default enforce)
   --no-events            Do not write .harness/events.jsonl
+  --host <name>           doctor: run host-specific checks (vscode)
+  --session <id>          events: filter by host session ID
+  --summary               events: print aggregate summary only
+  --failures              events: show failed or blocked events only
 
 Docs: @dev-kit/harness README and the hydrated harness-tool-contract.md reference
 `.trim();
