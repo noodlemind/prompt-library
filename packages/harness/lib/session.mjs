@@ -33,7 +33,11 @@ export function writeSession(workspace, session, dryRun) {
     sessionId: session.sessionId || crypto.randomUUID(),
     updatedAt: new Date().toISOString(),
   };
-  if (!dryRun) fs.writeFileSync(p, JSON.stringify(payload, null, 2) + '\n', 'utf8');
+  if (!dryRun) {
+    const temporary = `${p}.${process.pid}-${crypto.randomBytes(4).toString('hex')}.tmp`;
+    fs.writeFileSync(temporary, JSON.stringify(payload, null, 2) + '\n', 'utf8');
+    fs.renameSync(temporary, p);
+  }
   return payload;
 }
 

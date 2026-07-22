@@ -3,9 +3,11 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { planContractText } from './lib/evidence-binding.mjs';
 import { writeHookEvent } from './lib/events.mjs';
+import { preToolDenyOutput } from './lib/hook-output.mjs';
 import { loadHookPolicy } from './lib/policy.mjs';
-import { isPrimitivePath, normalizeToolPayload, planUsesCreatePrimitive } from './lib/tool-payload.mjs';
+import { isPrimitivePath, normalizeToolPayload, planUsesCreatePrimitive, tokenizeShell } from './lib/tool-payload.mjs';
 
 const startedAt = Date.now();
 let payload = {};
@@ -46,13 +48,7 @@ function deny(reason, message, gate = 'missing') {
     process.exit(0);
   }
   record({ gate, decision: 'block', blockedReason: detail, result: 'fail' });
-  output({
-    hookSpecificOutput: {
-      hookEventName: 'PreToolUse',
-      permissionDecision: 'deny',
-      permissionDecisionReason: detail,
-    },
-  });
+  output(preToolDenyOutput(detail));
   process.exit(0);
 }
 
@@ -81,9 +77,14 @@ function isPlannedAncestor(file, entries) {
   });
 }
 
-function sessionActivatedSkill(session, skill, sessionId) {
+function sessionActivatedSkill(session, skill, sessionId, ttlMinutes) {
   const activation = session?.activatedSkills?.[skill];
-  return Boolean(sessionId && activation?.sessionId === sessionId && activation?.activatedAt);
+  if (!activation?.activatedAt) return false;
+  if (sessionId) return activation.sessionId === sessionId;
+  // Hosts may omit session_id; accept only a fresh activation so a stale
+  // record from an earlier chat cannot satisfy the governance gate.
+  const activatedAt = Date.parse(activation.activatedAt);
+  return Number.isFinite(activatedAt) && Date.now() - activatedAt <= ttlMinutes * 60 * 1000;
 }
 
 function targetEscapesWorkspace(workspace, target) {
@@ -160,12 +161,6 @@ function configuredCheckCommands(workspace) {
   return commands;
 }
 
-function shellTokens(segment) {
-  return [...String(segment).matchAll(/"(?:\\.|[^"\\])*"|'[^']*'|[^\s]+/g)].map((match) =>
-    match[0].replace(/^['"]|['"]$/g, '')
-  );
-}
-
 function commandMatches(actual, expected) {
   if (actual.length < expected.length) return false;
   return expected.every((part, index) => {
@@ -178,7 +173,7 @@ function unplannedNamedChecks(workspace, command, planText) {
   const required = new Set(requiredChecks(planText));
   const segments = String(command || '')
     .split(/(?:&&|\|\||[;|\n])/)
-    .map(shellTokens)
+    .map((segment) => tokenizeShell(String(segment)))
     .filter((tokens) => tokens.length > 0);
   return configuredCheckCommands(workspace)
     .filter(({ name, argv }) => !required.has(name) && segments.some((segment) => commandMatches(segment, argv)))
@@ -218,13 +213,13 @@ if (!normalized.mutation) {
   process.exit(0);
 }
 if (!normalized.targetResolved) {
-  deny('unresolved-mutation-target', 'Mutation target could not be resolved for scope validation', 'unresolved');
+  deny('unresolved-mutation-target', 'Mutation target could not be resolved for scope validation; next: retry the edit with an explicit file path, or read ~/.copilot/skills/ensure-plan/SKILL.md', 'unresolved');
 }
 
 const relatives = normalized.targets.map((target) => {
   const relative = path.relative(normalized.workspace, path.resolve(normalized.workspace, target)).replace(/\\/g, '/');
   if (relative.startsWith('../') || path.isAbsolute(relative) || targetEscapesWorkspace(normalized.workspace, target)) {
-    deny('outside-workspace', `Edit target is outside workspace: ${target}`, 'invalid');
+    deny('outside-workspace', `Edit target is outside workspace: ${target}; next: edit only files inside the workspace`, 'invalid');
   }
   return relative;
 });
@@ -267,7 +262,7 @@ let session;
 try {
   session = JSON.parse(fs.readFileSync(sessionPath, 'utf8'));
 } catch {
-  deny('missing-implement-gate', 'Harness session is unreadable', 'invalid');
+  deny('missing-implement-gate', 'Harness session is unreadable; next: rerun `harness gate --phase implement --plan <plan> --workspace . --json`', 'invalid');
 }
 if (session.gateStatus !== 'pass' || !session.gatedPlan || !session.lastGateAt) {
   deny('missing-implement-gate', RECOVER_MISSING_GATE);
@@ -290,10 +285,12 @@ try {
 } catch {
   // The fail-closed check below reports the missing or escaping plan.
 }
-if (!planPath) deny('invalid-implement-gate', 'Gated plan is missing or outside docs/plans', 'invalid');
+if (!planPath) deny('invalid-implement-gate', 'Gated plan is missing or outside docs/plans; next: rerun `harness gate --phase implement --plan <plan> --workspace . --json`', 'invalid');
 
 const planText = fs.readFileSync(planPath, 'utf8');
-const planDigest = crypto.createHash('sha256').update(planText).digest('hex');
+// Digest the Activity-stripped contract text so routine session logging does
+// not invalidate the gate; this must match the evidence-binding digest rule.
+const planDigest = crypto.createHash('sha256').update(planContractText(planText)).digest('hex');
 if (!session.gatedPlanDigest || session.gatedPlanDigest !== planDigest) {
   deny('changed-implement-plan', 'Plan changed after the implement gate; rerun the gate', 'invalid');
 }
@@ -306,10 +303,16 @@ if (planStatus === 'planned') {
   );
 }
 const allowed = impactedFiles(planText);
-const createsDirectories = normalized.toolName && /\bmkdir(?:\s|$)/.test(normalized.command || '');
+// The planned-ancestor exception applies only to paths mkdir itself creates,
+// not to every target of a compound command that happens to include mkdir.
+const mkdirRelatives = new Set(
+  normalized.mkdirTargets.map((target) =>
+    path.relative(normalized.workspace, path.resolve(normalized.workspace, target)).replace(/\\/g, '/')
+  )
+);
 for (const relative of governed) {
-  if (!inScope(relative, allowed) && !(createsDirectories && isPlannedAncestor(relative, allowed))) {
-    deny('out-of-plan-scope', `File is outside the plan's ## Impacted Files: ${relative}`, 'passed');
+  if (!inScope(relative, allowed) && !(mkdirRelatives.has(relative) && isPlannedAncestor(relative, allowed))) {
+    deny('out-of-plan-scope', `File is outside the plan's ## Impacted Files: ${relative}; next: add it to ## Impacted Files and rerun the gate, or edit only planned files`, 'passed');
   }
 }
 if (governed.some(isPrimitivePath)) {
@@ -320,7 +323,7 @@ if (governed.some(isPrimitivePath)) {
       'passed'
     );
   }
-  if (!sessionActivatedSkill(session, 'create-primitive', normalized.sessionId)) {
+  if (!sessionActivatedSkill(session, 'create-primitive', normalized.sessionId, policy.ttl)) {
     deny(
       'missing-create-primitive-activation',
       'Read ~/.copilot/skills/create-primitive/SKILL.md now and follow it; naming create-primitive in skills_used is not activation, so retry this mutation only after the successful skill read is recorded for this chat session',

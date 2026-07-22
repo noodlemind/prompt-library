@@ -1,16 +1,16 @@
 ---
 plan_schema: 1
-title: "Harden the Minimal Engineer Loop"
+title: "Harden, Optimize, and Instrument the Minimal Engineer Loop"
 type: fix
 status: in-progress
 plan_lock: true
-phase: 6
+phase: 15
 priority: P0
 risk: amber
 autonomy: balanced
 intent: "Make the existing Thin Engineer and Distributed Harness lifecycle reliable in real GitHub Copilot VS Code sessions while preserving one minimal, LLM-first delivery path."
-expected_outputs: ["Reliable VS Code mutation and completion hooks", "Explicit investigation-finding disposition and automatic gate recovery", "Proportional plans in the existing schema", "Primitive-path governance through create-primitive", "Versioned Harness events, VS Code doctor probes, and executable behavioral regressions"]
-success_criteria: ["All 23 acceptance criteria pass with current-state evidence", "All three golden scenarios demonstrate the required behavior", "No new intelligence layer, persistent artifact type, top-level command, agent, or skill is introduced", "Supported-host assets remain synchronized"]
+expected_outputs: ["Reliable VS Code mutation and completion hooks", "Explicit investigation-finding disposition and automatic gate recovery", "Proportional plans in the existing schema", "Primitive-path governance through create-primitive", "Versioned Harness events, VS Code doctor probes, and executable behavioral regressions", "Per-command token telemetry and a budget regression check", "Bounded plan view and answer-first CLI output", "Recovery-recipe denials and cache-stable, phase-gated context", "Read-only harness report over token telemetry with improvement flags", "Global ~/.harness telemetry store and a host-usage seam", "Compound wired into the engineer and a CI budget gate"]
+success_criteria: ["All 39 acceptance criteria pass with current-state evidence", "All three golden scenarios demonstrate the required behavior", "No new intelligence layer, persistent artifact type, agent, or skill, and no top-level command beyond the read-only report command, is introduced", "Supported-host assets remain synchronized", "The largest token sinks are bounded, measured, and reportable", "The measure-and-learn loop is closed: telemetry is readable, compounding is default, and budgets fail CI"]
 verification:
   required:
     - harness-tests
@@ -41,6 +41,22 @@ verification:
     AC21: [host-contracts]
     AC22: [build-assets, host-contracts]
     AC23: [prompt-contracts]
+    AC24: [harness-tests]
+    AC25: [harness-tests, prompt-contracts]
+    AC26: [harness-tests]
+    AC27: [harness-tests]
+    AC28: [harness-tests]
+    AC29: [harness-tests]
+    AC30: [harness-tests, prompt-contracts]
+    AC31: [harness-tests]
+    AC32: [prompt-contracts, build-assets]
+    AC33: [harness-tests]
+    AC34: [harness-tests]
+    AC35: [harness-tests]
+    AC36: [harness-tests, host-contracts]
+    AC37: [prompt-contracts, build-assets]
+    AC38: [prompt-contracts]
+    AC39: [harness-tests, build-assets]
 reviews:
   required: ["CodeRabbit full-diff review", "CodeRabbit incremental review"]
   completed: ["CodeRabbit full-diff review", "CodeRabbit incremental review"]
@@ -56,7 +72,7 @@ domains: [prompt-engineering, harness-cli, governance, vscode]
 specialists: []
 capability_gaps: []
 created: 2026-07-20
-updated: 2026-07-21
+updated: 2026-07-22
 ---
 
 # Harden the Minimal Engineer Loop
@@ -72,9 +88,13 @@ Harden the existing Thin Engineer and Distributed Harness so native GitHub Copil
 - The current hook configuration targets Copilot CLI conventions; Phase 0 must determine VS Code discovery, registration, tool names, and payload shape before hook behavior changes.
 - The merged predecessor plan is removed because `docs/plans/README.md` permits exactly one live PR plan and retains completed execution history in Git.
 
+## Optimization Scope (Phases 7–11)
+
+Phases 7–11 extend this plan with token and tool efficiency for the harness CLI, the backbone of the Engineer agent. This work rides the same PR because `docs/plans/README.md` permits exactly one live linked plan, so the optimization criteria join this file rather than a second plan. It reshapes existing artifacts and CLI output only — no new intelligence layer, retrieval index, MCP adapter, or persistent artifact type — preserving AC14, AC15, and AC23. Grounding baseline (chars/4 estimate): plan re-reads ~7.0k tokens and growing, `create-primitive` ~5.6k, a gate recovery cycle ~2.5k over 4–5 round trips; industry evidence: deferred loading −85% definition tokens, code-side filtering up to −98.7%, cached input at ~0.1× (Anthropic; Manus; Aider 1k-token repo-map budget).
+
 ## Intent Contract
 
-- **Goal:** Make the current Thin Engineer and Distributed Harness design reliable in real GitHub Copilot VS Code sessions without expanding the architecture.
+- **Goal:** Make the current Thin Engineer and Distributed Harness design reliable in real GitHub Copilot VS Code sessions without expanding the architecture, and make what the harness feeds and demands of the agent token-efficient and measurable.
 - **Expected outputs:** Hardened hooks; Engineer recovery/disposition; proportional existing-schema plans; primitive governance; event v2 diagnostics; `doctor --host vscode`; golden regressions; synchronized host assets and documentation.
 - **Success criteria:** Every AC below is proven by the named checks and required scenario evidence; no forbidden architecture is added.
 - **Verification checks:** `harness-tests`, `prompt-contracts`, `host-contracts`, and `build-assets` from `.github/harness/checks.yaml`.
@@ -101,7 +121,7 @@ Harden the existing Thin Engineer and Distributed Harness so native GitHub Copil
 - [x] **AC11** Primitive-path mutations require `create-primitive` in the active plan.
 - [x] **AC12** New skills require overlap analysis and applicable lifecycle, eval, registry, and documentation evidence.
 - [x] **AC13** Low-risk mechanical changes use a concise one-phase plan in the existing schema.
-- [x] **AC14** No additional top-level Harness command is introduced.
+- [x] **AC14** No additional top-level Harness command is introduced, except the read-only `report` command added in Phase 12 (amended 2026-07-22; `report` never mutates product files and writes only under `~/.harness/` with `--sync`).
 - [x] **AC15** No additional persistent artifact type is introduced.
 - [x] **AC16** Events capture host, session, tool, targets, gate, decision, and duration with schema version 2.
 - [x] **AC17** `harness doctor --host vscode` detects hook installation, parsing, recognition, gate, post-tool, and completion failures.
@@ -111,6 +131,28 @@ Harden the existing Thin Engineer and Distributed Harness so native GitHub Copil
 - [x] **AC21** Degraded-mode behavior remains truthful when hooks are unavailable.
 - [x] **AC22** Built assets remain synchronized across supported hosts.
 - [x] **AC23** No code index, semantic-search layer, language-pack system, MCP adapter, trace database, telemetry dashboard, or specialist agent is added.
+
+### Optimization criteria (Phases 7–11)
+
+- [x] **AC24** Lifecycle events carry a deterministic per-command token estimate under `gen_ai.usage`-style fields (input and output), recorded in the existing `.harness/events.jsonl` without a new artifact type.
+- [x] **AC25** A token-budget regression check fails when a tracked surface exceeds its cap: the Engineer agent > 900 tokens, the context pack over its byte budget, or any `SKILL.md` body over the line cap.
+- [x] **AC26** The existing `orient` context pack includes a bounded plan view (Intent Contract, current phase, open tasks, latest Review Findings) under its byte budget, so the agent reads it instead of the full plan file — no new top-level command (AC14) or artifact type (AC15).
+- [x] **AC27** The context pack excludes `## Activity` and `## Verification Evidence` bodies so re-reads stay flat as those sections grow.
+- [x] **AC28** Human `gate`/`verify`/`doctor` output is answer-first: a one-line verdict plus only failing checks, with full detail behind `--verbose`.
+- [x] **AC29** `events` output is bounded; the unbounded full-history dump (`--limit=0`) is removed in favor of a capped default and explicit paging.
+- [x] **AC30** Every enforcement denial names the literal next command, and every command success ends with the expected next command, so recovery is one step.
+- [x] **AC31** The injected context pack orders static policy content first and volatile fields (query, timestamps, session id) last, preserving host prefix-cache stability.
+- [x] **AC32** Domain instructions do not triple-stack on one file (`**/*.java` no longer activates three files) and no `SKILL.md` body exceeds the line cap; oversized skills split into `references/`.
+
+### Instrumentation criteria (Phases 12–15)
+
+- [x] **AC33** `harness report` prints an answer-first terminal report ranking token sinks by event type from `.harness/events.jsonl`, with a compact `--json` form; it is read-only except `--sync` writes under `~/.harness/`.
+- [x] **AC34** The report flags improvement signals from the same telemetry: budget breaches (agent > 900 tokens, any `SKILL.md` > 300 lines, context pack near cap), recovery-loop waste (repeated block→retry per session with an estimated tokens-burned figure), and tokens-per-session trend regression (degrades gracefully with fewer than two sessions).
+- [x] **AC35** `--sync` copies workspace events into `~/.harness/telemetry/<project-slug>.jsonl`, deduped by event id and size-capped; `--global` reports across projects. This reuses the existing event-log artifact type — no new persistent artifact type (AC15 preserved) and no telemetry dashboard/server (AC23 preserved).
+- [x] **AC36** A host-telemetry seam `collectHostUsage({workspace, host})` exists with a best-effort VS Code adapter that ingests real `gen_ai.usage.*` when GHCP logs expose it and returns an empty set (report degrades to estimates) when they do not; IntelliJ and Copilot-CLI adapters are present as safe stubs. Host-real usage overrides estimates per session when both exist.
+- [x] **AC37** `harness compound` is the Engineer's default post-pass step 8 action, closing the measure-and-learn loop, within the frozen agent token budget.
+- [x] **AC38** AC14 is amended to permit the read-only `report` command and the change is internally consistent across the plan.
+- [x] **AC39** A `harness report --check` mode exits non-zero on any budget breach and is wired into the harness verification workflow so budget regressions fail CI without requiring telemetry history.
 
 ## Technical Notes
 
@@ -167,6 +209,62 @@ Harden the existing Thin Engineer and Distributed Harness so native GitHub Copil
 - [x] Record lifecycle compliance, correctness, verification quality, and efficiency results.
 - [x] Complete full-diff and incremental review, resolve findings, and refresh verification evidence.
 
+### Phase 7 — Token telemetry foundation (AC24, AC25)
+
+- [x] Add `packages/harness/lib/token-meter.mjs` with `estimateTokens(text)` (chars/4 baseline, pluggable) and `usageFields({ input, output })` returning `gen_ai.usage`-style keys.
+- [x] Stamp an estimated `usage` object onto lifecycle event payloads in `packages/harness/lib/commands.mjs` `writeEvent` calls (input = command args + injected pack; output = stdout the agent reads); extend `writeEvent` in `packages/harness/lib/events.mjs` to persist it.
+- [x] Add a `summarizeEvents` token roll-up and surface it in `cmdEvents` (`--summary` shows per-type token totals).
+- [x] Add a budget-regression test (Engineer agent ≤ 900 tokens, context pack ≤ `CONTEXT_PACK_MAX_BYTES`, every `SKILL.md` body ≤ line cap) under `prompt-library-contracts.test.mjs`; wire the estimator tests under `harness-cli.test.mjs`.
+
+### Phase 8 — Bounded plan view in the context pack (AC26, AC27)
+
+- [x] Add a `plan-view.mjs` helper (internal module, not a CLI command — respects AC14) that extracts Intent Contract, current-phase open tasks, and the latest `## Review Findings` entry from a plan, capped to a token budget, reusing `plan-goal.mjs`/`plan-parse.mjs` and explicitly dropping `## Activity` and `## Verification Evidence`.
+- [x] Fold the plan view into `buildContextPack` (`context-pack.mjs`) so `orient` writes it into the existing `.harness/context-pack.md` (no new artifact — respects AC15); keep the 2KB cap.
+- [x] Point `engineer.agent.md` and `work-on-task` guidance at the context pack instead of a full plan read; confirm the harness still reads the full plan for enforcement (gate/verify unchanged).
+- [x] Add tests asserting the pack's plan view is under budget and omits Activity/Evidence text.
+
+### Phase 9 — Terse-by-default CLI output (AC28, AC29)
+
+- [x] Make `gate`, `verify`, and `doctor` human output answer-first in `commands.mjs`: one-line `PASS/FAIL (n checks)` verdict, then only failing checks; full check list behind `flags.verbose`.
+- [x] Emit compact single-line JSON by default for `--json`; pretty-print only under `--json --verbose`.
+- [x] Replace the `events --limit=0` unbounded dump with a capped default and a paging hint; update `readEvents` in `events.mjs` so a non-positive limit clamps to the cap.
+- [x] Add tests pinning the answer-first shape and the bounded events output.
+
+### Phase 10 — Recovery-recipe UX (AC30)
+
+- [x] Audit every denial reason in `.github/hooks/require-plan-gate.mjs` and `require-verification.mjs` so each ends with the literal next command; add a contract test asserting denial reasons contain an actionable command token.
+- [x] Append an expected-next-command footer to `gate`/`verify`/`orient` success output (reuse the existing `nextTools`).
+- [x] Add a test asserting successful command output ends with a next-command hint.
+
+### Phase 11 — Cache-stable, phase-gated context (AC31, AC32)
+
+- [x] Reorder `buildContextPack` in `context-pack.mjs` so static policy/goal content precedes volatile fields (query, timestamps, session id); add a stability test comparing two packs that differ only in volatile fields.
+- [x] Consolidate `aws-sdk`/`spring-boot` guidance into `java.instructions.md` (or narrow their `applyTo`) so `**/*.java` activates one file; keep TypeScript/Python/SQL scoping intact.
+- [x] Enforce a `SKILL.md` line cap with a `prompt-contracts` test; split `create-primitive` and `code-review` bodies into `references/` to satisfy it.
+- [x] Rebuild assets and confirm host parity.
+
+### Phase 12 — `harness report` command and improvement flags (AC33, AC34, AC38)
+
+- [x] Add `packages/harness/lib/report.mjs` building a ranked-token-sinks view from events via `summarizeUsage`, plus improvement analyzers (budget breaches, recovery-loop waste, trend regression) that degrade gracefully.
+- [x] Add `cmdReport` (thin) in `commands.mjs`, `case 'report'` in `bin/harness.mjs`, and `report` in help; answer-first terminal output with Unicode bars and compact `--json`.
+- [x] Amend AC14 wording and keep the plan internally consistent; add `report` tests.
+
+### Phase 13 — Global telemetry store (AC35)
+
+- [x] Add `packages/harness/lib/telemetry-store.mjs` and a `harnessGlobalHome()` path helper for `~/.harness`; implement `--sync` (dedup by event id, size cap/rotate) writing `~/.harness/telemetry/<project-slug>.jsonl` and `--global` merge.
+- [x] Reuse the existing event-log shape (no new artifact type); add sync/global tests.
+
+### Phase 14 — Host-telemetry seam (AC36)
+
+- [x] Add `packages/harness/lib/host-telemetry/{index,vscode,intellij,copilot-cli}.mjs` with `collectHostUsage({workspace, host})`; the VS Code adapter parses GHCP logs best-effort and returns `[]` safely; IntelliJ/CLI are stubs.
+- [x] Merge host-real usage over estimates per session in the report; add degrade-safe tests.
+
+### Phase 15 — Close the loop and enforce (AC37, AC39)
+
+- [x] Wire `harness compound` into the Engineer agent's step 8 net-neutral against the 900-byte/4 budget.
+- [x] Add `harness report --check` (non-zero exit on any budget breach) and reference it in `.github/workflow-templates/harness-plan-verification.yml`; add tests.
+- [x] Rebuild assets, run all four named checks, and record the roadmap.
+
 ## Research Notes
 
 - **Host facts:** VS Code 1.128.0 and GitHub Copilot Chat 0.43.0 are installed. Current official VS Code documentation says workspace hooks are discovered from `.github/hooks/*.json`, user hooks from `~/.copilot/hooks`, and custom locations from `chat.hookFilesLocations`. It documents `tool_name`, camelCase `tool_input` values, `session_id`, `PreToolUse`, successful-only `PostToolUse`, and `Stop` with structured hook-specific output.
@@ -215,6 +313,27 @@ Harden the existing Thin Engineer and Distributed Harness so native GitHub Copil
 - `docs/onboarding/nexus-registry-setup.md`
 - `scripts/build-harness-assets.mjs`
 - `packages/harness/assets/**`
+- `packages/harness/lib/token-meter.mjs`
+- `packages/harness/lib/plan-view.mjs`
+- `packages/harness/lib/context-pack.mjs`
+- `packages/harness/lib/orient.mjs`
+- `packages/harness/lib/plan-goal.mjs`
+- `.github/instructions/java.instructions.md`
+- `.github/instructions/aws-sdk.instructions.md`
+- `.github/instructions/spring-boot.instructions.md`
+- `.github/skills/create-primitive/**`
+- `.github/skills/code-review/**`
+- `.github/skills/work-on-task/SKILL.md`
+- `.github/skills/java/**`
+- `.github/skills/aws/**`
+- `CLAUDE.md`
+- `AGENTS.md`
+- `README.md`
+- `packages/harness/lib/report.mjs`
+- `packages/harness/lib/telemetry-store.mjs`
+- `packages/harness/lib/host-telemetry/**`
+- `packages/harness/lib/paths.mjs`
+- `.github/workflow-templates/harness-plan-verification.yml`
 
 ## Verification Plan
 
@@ -223,6 +342,7 @@ Harden the existing Thin Engineer and Distributed Harness so native GitHub Copil
 - `host-contracts`: hook discovery/configuration, full/degraded behavior, payload fixtures, and built-host parity.
 - `build-assets`: regenerate and verify all supported host assets.
 - Manual evidence: VS Code debug/runtime capture for Phase 0 and five-run Scenario B benchmark after correctness is restored.
+- Optimization (Phases 7–11): `harness-tests` covers the token estimator, bounded plan view, terse output, capped events, denial/next-command shape, and cache-stable pack ordering; `prompt-contracts` covers the budget-regression check (agent/pack/SKILL caps), denial actionability, and instruction de-stacking; `build-assets` proves host parity after instruction/skill edits. No new named check is added — the four existing checks gate the new criteria. A before/after token estimate for the top sinks (plan re-read, `create-primitive`, gate recovery) is recorded as optimization evidence.
 
 ## Verification Evidence
 
@@ -239,6 +359,16 @@ Harden the existing Thin Engineer and Distributed Harness so native GitHub Copil
 - Efficiency limitation: deterministic probes use no model requests, repository searches, or Copilot credits. The installed host did not expose a model/tool/credit export suitable for comparison to the 31.49-credit baseline, so no substitute efficiency values are claimed; manual correctness and lifecycle evidence are recorded by exact session instead.
 - Final strict evidence: `.harness/evidence/2026-07-20-fix-harden-minimal-engineer-loop-plan-34c895a10220.json` records outcome `passed` after all three manual scenarios and the five-run Scenario B benchmark closed; all 131 Harness tests, four named checks, 23 criterion mappings, current-phase tasks, scope, primitive governance, required reviews, hard gaps, and critical findings passed in enforce mode.
 
+## Instrumentation Roadmap (not built in this plan)
+
+Deferred by explicit decision; recorded so prioritization is deliberate. None are required for the measure-and-learn loop this plan closes.
+
+1. **npx-style skill installer** (lowest priority): a skill source resolver (registry/git/local) with install-time `create-primitive` governance, lifecycle registration, and eval scaffolding. Only worth it for a shareable cross-team skill ecosystem.
+2. **Tool-use evals** (τ-bench style): tool-call accuracy/telemetry evals built on the history this plan starts generating.
+3. **Semantic retrieval**: deferred by architecture until measured recall misses justify the dependency; report data is the justification signal.
+4. **Programmatic orient→gate consolidation**: largely served today by orient's built-in gate preview; revisit only if round-trips surface in telemetry.
+5. **Formalized `harness handoff`**: a dense resume packet for long sessions.
+
 ## Risk & Review Routing
 
 - **Risk:** Amber. This changes mutation/completion enforcement and could fail open, fail closed incorrectly, or break degraded hosts.
@@ -254,6 +384,42 @@ Phases 1–5 are implemented test-first. Shared hook normalization now handles o
 Local full-diff review found and resolved: no-space shell redirection bypass; missing PostToolUse session state that could let Stop bypass; lexical-only symlink containment; a final-block-list primitive parser edge; force-push coverage regression; overbroad credential-path matching; JSONC settings parsing; and enterprise-skill evidence parity. CodeRabbit full and incremental passes then found and resolved nested skill-evidence coverage, autonomy-aware recovery, short force flags, terminal critical-file enforcement, hook/Git timeouts, hook-order assertions, routine-edit promotion wording, VS Code doctor documentation/tests, Harness state protection, and stale plan metadata. The Scenario A/C contract suggestions and removal of `solution` primitive routing were rejected because they conflict with the approved specification. Blanket `docs/plans/**` blocking was rejected because it would break pre-gate plan creation; gated plan SHA-256 binding now closes the integrity gap while preserving `/ensure-plan` recovery. Expanding the fast-plan risk list was rejected in favor of the approved Section 7.1 predicate, and the deleted predecessor remains allowlisted because base-relative scope verification treats deletions as changed files. The primitive checklist now matches the approved evidence requirement for new or substantially expanded skills. Regression tests cover each applicable fix, and no critical finding remains open.
 
 ## Activity
+
+### 2026-07-22 — Instrumentation scope added (Phases 12–15)
+
+- Brainstormed and scoped a telemetry reporting loop after confirming the harness fully drives orient→gate→verify but leaves the measure-and-learn half unwired (events are write-only; compounding is on-demand).
+- Decisions: telemetry-first with a host-log seam; `report` on this branch with AC14 amended; terminal-only output; explicit `--sync` to a global `~/.harness` store; improvement flags included (sinks + budget breaches + recovery-loop + trend).
+- Added AC33–AC39 mapped to the four existing named checks. Preserved AC15 (reuses the event-log artifact type) and AC23 (a read-only terminal report, not a dashboard/server). Recorded a five-item roadmap; the npx skill installer is explicitly lowest priority.
+- **Status:** in-progress
+- **Phase:** 15
+
+### 2026-07-22 — Phases 7–11 implemented and verified
+
+- **Phase 7 (AC24, AC25):** added `token-meter.mjs` (`estimateTokens`, `usageFields`, `summarizeUsage`); orient/gate/verify events now carry `gen_ai.usage.*` estimates; `events --summary` rolls up per-type tokens; budget-regression test guards the agent (897 ≤ 900) and context-pack byte cap.
+- **Phase 8 (AC26, AC27):** `plan-view.mjs` folds Intent Contract + current-phase open tasks + latest finding into the existing `.harness/context-pack.md`, excluding Activity/Evidence; Engineer agent and work-on-task now read the pack instead of full plans. No new command or artifact (AC14/AC15 preserved).
+- **Phase 9 (AC28, AC29):** gate/verify/doctor are answer-first (verdict + failing checks only unless `--verbose`); `--json` is compact by default; `readEvents` is always bounded (default 20, hard cap 200) — the `--limit=0` full dump is gone.
+- **Phase 10 (AC30):** every enforcement denial and command success ends with a literal next command; Stop denials carry a `harness verify` recipe.
+- **Phase 11 (AC31, AC32):** context pack orders static content first and volatile fields last (cache-stable); the two extra `**/*.java` instructions were relocated to on-demand `/java` and `/aws` skill references so only `java.instructions.md` auto-applies; `create-primitive` SKILL split 381 → 201 lines with detail in `references/creation-details.md`; SKILL line cap (300) enforced by test.
+- **Verification:** harness-tests 162/162, prompt-contracts 19/19, host-contracts 2/2, build-assets rebuilt. All four named checks green.
+- **Status:** in-progress
+- **Phase:** 11
+
+### 2026-07-22 — Optimization scope added (Phases 7–11)
+
+- Extended this plan with token/tool efficiency work for the harness CLI, driven by research (Anthropic, Manus, Amp, Aider, OTel) and a chars/4 baseline audit of the repo. Kept it in this file because the repo permits exactly one live linked plan.
+- Added AC24–AC32 mapped to the four existing named checks; no new named check, top-level command (AC14), artifact type (AC15), agent, or skill. Phase 8's plan view rides the existing `orient` context pack; Phase 7 telemetry rides the existing `.harness/events.jsonl`.
+- Phases: 7 token telemetry + budget check, 8 bounded plan view in the context pack, 9 answer-first/terse CLI output, 10 recovery-recipe denials + next-command hints, 11 cache-stable pack ordering + instruction de-stacking + SKILL.md caps.
+- **Status:** in-progress
+- **Phase:** 7
+
+### 2026-07-22 — Multi-model pre-landing review hardening
+
+- A five-source review (Claude structured, testing/maintainability/security specialists, Claude adversarial, Codex adversarial) found a mutation-detection fail-open class that defeated the gate this plan builds. Fixed on-branch and covered by regressions.
+- Enforcement fixes: unrecognized tool names carrying a file target now fail closed as mutations; PreToolUse uses a single wildcard chain so no host tool name escapes; shell analyzer now catches `>|` clobber redirects, `dd of=`, nested `sh -c`/`bash -lc`, `env`/`nohup` wrappers, and PowerShell writers (`Set-Content`, `Out-File`, `Remove-Item`, `New-Item`); `apply_patch` `Move to:` destinations are scoped; the `mkdir` planned-ancestor exception is limited to paths mkdir alone creates.
+- Guard fixes: hook denials now emit both the VS Code nested and Copilot CLI top-level decision shapes; `guard-critical-files` and `block-destructive-commands` fail closed on malformed payloads and resolve symlinks before matching; `.envrc` restored to the secret set; force-push regex no longer overblocks `--ff-only`/`--follow-tags` and now catches `+main`/`:main` refspec pushes.
+- Integrity fixes: gate/doctor/evidence share one `planDigest` (Activity-stripped) so routine session logging no longer invalidates the gate; `verify` adds a bind-before/after `workspace-stability` check; session writes are atomic (temp+rename); create-primitive activation without a host session id is accepted only while fresh.
+- Hygiene: PostToolUse records honest `record-ungated` decisions instead of false `block`; `EVENT_TYPES` includes `skill_activation`; shared `session-state`, `hook-output`, and `tokenizeShell` helpers remove hook/CLI duplication; test/git isolation via `GIT_CONFIG_GLOBAL/SYSTEM=/dev/null` and workspace-local skill fixtures; added `checks.yaml` error-branch and hook/CLI parity coverage.
+- Verification: 143/143 Harness tests pass; assets rebuilt; `git diff --check` clean.
 
 ### 2026-07-20 — ensure-plan: captured (autonomous)
 

@@ -3,6 +3,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { writeHookEvent } from './lib/events.mjs';
+import { readSessionState, writeSessionState } from './lib/session-state.mjs';
 import { activatedSkillFromPayload, normalizeToolPayload, toolMutationSucceeded } from './lib/tool-payload.mjs';
 
 const startedAt = Date.now();
@@ -15,7 +16,9 @@ let payload;
 try {
   payload = JSON.parse(fs.readFileSync(0, 'utf8') || '{}');
 } catch (error) {
-  output({ decision: 'block', reason: `invalid-hook-payload: ${error.message}` });
+  // The mutation already ran; PostToolUse cannot block it. Surface the parse
+  // failure so the session is diagnosable instead of pretending to deny.
+  output({ continue: true, systemMessage: `[harness hook] invalid-hook-payload: ${error.message}` });
   process.exit(0);
 }
 
@@ -23,15 +26,9 @@ const normalized = normalizeToolPayload(payload);
 const success = toolMutationSucceeded(payload);
 const activatedSkill = activatedSkillFromPayload(payload);
 if (success && activatedSkill) {
-  const sessionPath = path.join(normalized.workspace, '.harness', 'session.json');
-  let session = {};
-  try {
-    if (fs.existsSync(sessionPath)) session = JSON.parse(fs.readFileSync(sessionPath, 'utf8'));
-  } catch {
-    session = {};
-  }
+  const session = readSessionState(normalized.workspace) || {};
   const activatedAt = new Date().toISOString();
-  session = {
+  writeSessionState(normalized.workspace, {
     version: 1,
     ...session,
     sessionId: session.sessionId || normalized.sessionId || null,
@@ -43,9 +40,7 @@ if (success && activatedSkill) {
         activatedAt,
       },
     },
-  };
-  fs.mkdirSync(path.dirname(sessionPath), { recursive: true });
-  fs.writeFileSync(sessionPath, `${JSON.stringify(session, null, 2)}\n`, 'utf8');
+  });
   writeHookEvent(normalized.workspace, payload, {
     type: 'skill_activation',
     tool: normalized.toolName,
@@ -73,13 +68,7 @@ const governed = relatives.filter(
     !relative.startsWith('docs/plans/') &&
     !relative.startsWith('.harness/')
 );
-const sessionPath = path.join(normalized.workspace, '.harness', 'session.json');
-let session = null;
-try {
-  if (fs.existsSync(sessionPath)) session = JSON.parse(fs.readFileSync(sessionPath, 'utf8'));
-} catch {
-  // The block below reports the unreadable session after a successful mutation.
-}
+let session = readSessionState(normalized.workspace);
 
 if (success && governed.length > 0) {
   if (!session) {
@@ -94,8 +83,7 @@ if (success && governed.length > 0) {
       lastEditTargets: governed,
       lastEditSession: normalized.sessionId,
     };
-    fs.mkdirSync(path.dirname(sessionPath), { recursive: true });
-    fs.writeFileSync(sessionPath, `${JSON.stringify(session, null, 2)}\n`, 'utf8');
+    writeSessionState(normalized.workspace, session);
     writeHookEvent(normalized.workspace, payload, {
       type: 'post_tool',
       tool: normalized.toolName,
@@ -103,8 +91,9 @@ if (success && governed.length > 0) {
       targets: relatives,
       targetResolved: normalized.targetResolved,
       gate: 'missing',
-      decision: 'block',
+      decision: 'record-ungated',
       success: true,
+      result: 'warn',
       blockedReason: 'successful mutation could not be bound to a Harness session',
       durationMs: Date.now() - startedAt,
     });
@@ -118,7 +107,7 @@ if (success && governed.length > 0) {
   session.lastEditTool = normalized.toolName;
   session.lastEditTargets = governed;
   session.lastEditSession = normalized.sessionId || session.sessionId || null;
-  fs.writeFileSync(sessionPath, `${JSON.stringify(session, null, 2)}\n`, 'utf8');
+  writeSessionState(normalized.workspace, session);
 }
 
 writeHookEvent(normalized.workspace, payload, {

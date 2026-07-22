@@ -165,6 +165,17 @@ export function runVerify({ workspace, flags }) {
   const openTasks = [...taskBody.matchAll(/^-\s*\[ \]\s+(.+)$/gm)].map((match) => match[1]);
   checks.push(resultCheck('phase-tasks', openTasks.length ? 'failed' : 'passed', openTasks.length ? `${openTasks.length} current phase tasks remain open` : 'All current phase tasks are complete', { openTasks }));
 
+  // Bind-before-check snapshot: the workspace digest captured here must match
+  // the digest captured after checks run, or the evidence would certify
+  // content the checks never saw.
+  const preScope = validatePlanScope({ workspace, plan, base: flags.base });
+  const preBinding = createEvidenceBinding({
+    workspace,
+    plan,
+    base: flags.base,
+    changedFiles: preScope.changedFiles,
+  });
+
   const named = loadNamedChecks(workspace);
   const required = Array.isArray(plan.fm.verification?.required) ? plan.fm.verification.required : [];
   const namedResults = required.map((name) => {
@@ -219,6 +230,24 @@ export function runVerify({ workspace, flags }) {
   const criticalOpen = plan.fm.reviews?.critical_open || [];
   checks.push(resultCheck('critical-findings', criticalOpen.length ? 'failed' : 'passed', criticalOpen.length ? `${criticalOpen.length} critical findings remain open` : 'No open critical review findings'));
 
+  const binding = createEvidenceBinding({
+    workspace,
+    plan,
+    base: flags.base,
+    changedFiles: scope.changedFiles,
+  });
+  const stable =
+    preBinding.workspaceDigest === binding.workspaceDigest && preBinding.planDigest === binding.planDigest;
+  checks.push(
+    resultCheck(
+      'workspace-stability',
+      stable ? 'passed' : 'failed',
+      stable
+        ? 'Workspace did not change while checks ran'
+        : 'Workspace or plan changed while verification checks were running; rerun harness verify'
+    )
+  );
+
   return finalize(workspace, flags, {
     plan: plan.path,
     checks,
@@ -226,12 +255,7 @@ export function runVerify({ workspace, flags }) {
     scopeViolations: scope.violations,
     openHardGaps,
     requiredReviews,
-    binding: createEvidenceBinding({
-      workspace,
-      plan,
-      base: flags.base,
-      changedFiles: scope.changedFiles,
-    }),
+    binding,
   });
 }
 

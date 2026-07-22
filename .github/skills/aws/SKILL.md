@@ -24,7 +24,7 @@ Apply AWS engineering guidance as an on-demand skill. Use this for AWS SDK usage
 
 ## Workflow
 
-1. **Load scoped conventions**: Apply the globally hydrated `aws-sdk.instructions.md` for Java AWS SDK work. Also apply language-specific instructions for the implementation language.
+1. **Load scoped conventions**: Read this skill's `references/aws-sdk.md` for Java AWS SDK work (on-demand, so it does not stack on every Java file). Also apply language-specific instructions for the implementation language.
 2. **Classify risk**:
    - SDK call or local test change -> proceed with focused verification.
    - IAM, production infrastructure, queue/topic topology, encryption, or data movement -> require a plan through `/capture-issue` and `/plan-issue`.

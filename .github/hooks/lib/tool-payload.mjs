@@ -10,9 +10,14 @@ export const FILE_MUTATION_TOOLS = new Set([
   'editFiles',
   'multi_replace_string_in_file',
   'replace_string_in_file',
+  'insert_edit_into_file',
+  'edit_notebook_file',
+  'create_new_jupyter_notebook',
   'apply_patch',
   'create_file',
   'createFile',
+  'create_new_file',
+  'create_directory',
 ]);
 
 export const TERMINAL_TOOLS = new Set([
@@ -30,6 +35,35 @@ const SKILL_READ_TOOLS = new Set([
   'copilot_readFile',
   'read_skill',
   'readSkill',
+]);
+
+// Known read-only tools may carry file paths without being governed mutations.
+// Any other tool that names a concrete file target is treated as a mutation so
+// unrecognized or future host edit tools fail closed instead of bypassing gates.
+export const READ_ONLY_TOOLS = new Set([
+  ...SKILL_READ_TOOLS,
+  'grep_search',
+  'file_search',
+  'list_dir',
+  'semantic_search',
+  'list_code_usages',
+  'get_errors',
+  'get_changed_files',
+  'get_search_view_results',
+  'test_search',
+  'github_repo',
+  'fetch_webpage',
+  'open_file',
+  'open_simple_browser',
+  'codebase',
+  'search',
+  'usages',
+  'changes',
+  'problems',
+  'terminalLastCommand',
+  'get_terminal_output',
+  'think',
+  'todos',
 ]);
 
 const PRIMITIVE_PREFIXES = [
@@ -51,18 +85,18 @@ function cleanShellToken(value) {
   return token;
 }
 
-function tokenizeShell(segment) {
+export function tokenizeShell(segment) {
   return [...segment.matchAll(/"(?:\\.|[^"\\])*"|'[^']*'|[^\s]+/g)].map((match) => cleanShellToken(match[0]));
 }
 
 function withoutRedirections(args) {
   const result = [];
   for (let i = 0; i < args.length; i++) {
-    if (/^(?:\d*>>?|&>)$/.test(args[i])) {
+    if (/^(?:\d*>>?\|?|&>>?)$/.test(args[i])) {
       i += 1;
       continue;
     }
-    if (/^(?:\d*>>?|&>).+/.test(args[i])) continue;
+    if (/^(?:\d*>>?\|?|&>>?).+/.test(args[i])) continue;
     result.push(args[i]);
   }
   return result;
@@ -130,12 +164,28 @@ function withoutHeredocBodies(commandText) {
     .join('\n');
 }
 
+const POWERSHELL_WRITERS = new Set([
+  'set-content',
+  'add-content',
+  'clear-content',
+  'out-file',
+  'new-item',
+  'copy-item',
+  'move-item',
+  'rename-item',
+  'remove-item',
+  'tee-object',
+]);
+
+const POWERSHELL_PATH_PARAMS = /^-(?:path|literalpath|filepath|destination|newname|outfile)$/i;
+
 export function analyzeShellMutation(command) {
   const targets = [];
+  const mkdirCreated = [];
   let mutation = false;
   const commandText = String(command || '');
   const shellControlText = withoutHeredocBodies(commandText);
-  const redirection = /(?<![<>])(?:\d*>>?|&>)\s*("(?:\\.|[^"\\])*"|'[^']*'|[^\s;&|]+)/g;
+  const redirection = /(?<![<>])(?:\d*>>?\|?|&>>?)\s*("(?:\\.|[^"\\])*"|'[^']*'|[^\s;&|]+)/g;
   for (const match of shellControlText.matchAll(redirection)) {
     const target = cleanShellToken(match[1]);
     if (target.startsWith('&') || /^\/dev\/(?:null|stdout|stderr)$/.test(target)) continue;
@@ -157,14 +207,87 @@ export function analyzeShellMutation(command) {
 
   for (const segment of shellControlText.split(/(?:&&|\|\||[;|\n])/)) {
     const tokens = tokenizeShell(segment);
-    while (tokens[0]?.includes('=') && !tokens[0].startsWith('=')) tokens.shift();
-    const executable = path.basename(tokens[0] || '');
+    let unwrapped = true;
+    while (unwrapped) {
+      unwrapped = false;
+      while (tokens[0]?.includes('=') && !tokens[0].startsWith('=')) tokens.shift();
+      if (['env', 'command', 'nohup'].includes(path.basename(tokens[0] || ''))) {
+        tokens.shift();
+        while (tokens[0]?.startsWith('-')) tokens.shift();
+        unwrapped = true;
+      }
+    }
+    const executable = path.basename(tokens[0] || '').toLowerCase();
     const args = withoutRedirections(tokens.slice(1));
     const positional = args.filter((arg) => !arg.startsWith('-'));
 
-    if (['touch', 'mkdir', 'rm', 'rmdir', 'unlink', 'truncate'].includes(executable)) {
+    if (['sh', 'bash', 'zsh', 'dash', 'ksh'].includes(executable)) {
+      const flagIndex = tokens.findIndex((token, index) => index > 0 && /^-[A-Za-z]*c$/.test(token));
+      const nestedCommand = flagIndex > 0 ? tokens[flagIndex + 1] : null;
+      if (nestedCommand) {
+        const nested = analyzeShellMutation(nestedCommand);
+        if (nested.mutation) mutation = true;
+        targets.push(...nested.targets);
+        mkdirCreated.push(...nested.mkdirTargets);
+      }
+      continue;
+    }
+    if (['powershell', 'powershell.exe', 'pwsh', 'pwsh.exe'].includes(executable)) {
+      const flagIndex = tokens.findIndex((token, index) => index > 0 && /^-c(?:ommand)?$/i.test(token));
+      const nestedCommand = flagIndex > 0 ? tokens[flagIndex + 1] : null;
+      if (nestedCommand) {
+        const nested = analyzeShellMutation(nestedCommand);
+        if (nested.mutation) mutation = true;
+        targets.push(...nested.targets);
+        mkdirCreated.push(...nested.mkdirTargets);
+      }
+      continue;
+    }
+    if (POWERSHELL_WRITERS.has(executable)) {
+      mutation = true;
+      const named = [];
+      const bare = [];
+      const valueParams = /^-(?:value|itemtype|encoding|name)$/i;
+      for (let index = 0; index < args.length; index += 1) {
+        if (POWERSHELL_PATH_PARAMS.test(args[index])) {
+          if (args[index + 1] && !args[index + 1].startsWith('-')) named.push(args[index + 1]);
+          index += 1;
+        } else if (valueParams.test(args[index])) {
+          index += 1;
+        } else if (!args[index].startsWith('-')) {
+          bare.push(args[index]);
+        }
+      }
+      // Positional form is `Set-Content <path> <value>`; only the first operand
+      // is a path, and none are once -Path/-LiteralPath is given explicitly.
+      const positionalPaths = ['set-content', 'add-content'].includes(executable)
+        ? named.length
+          ? []
+          : bare.slice(0, 1)
+        : bare;
+      const cmdletTargets = [...named, ...positionalPaths];
+      targets.push(...cmdletTargets);
+      if (executable === 'new-item' && args.some((arg, index) => /^-itemtype$/i.test(arg) && /^dir/i.test(args[index + 1] || ''))) {
+        mkdirCreated.push(...cmdletTargets);
+      }
+      continue;
+    }
+
+    if (['touch', 'rm', 'rmdir', 'unlink', 'truncate', 'del', 'erase', 'rd'].includes(executable)) {
       mutation = true;
       targets.push(...positional);
+    } else if (executable === 'mkdir' || executable === 'md') {
+      mutation = true;
+      targets.push(...positional);
+      mkdirCreated.push(...positional);
+    } else if (executable === 'dd') {
+      for (const arg of args) {
+        const output = arg.match(/^of=(.+)$/);
+        if (output) {
+          mutation = true;
+          targets.push(cleanShellToken(output[1]));
+        }
+      }
     } else if (['cp', 'install'].includes(executable)) {
       mutation = true;
       if (positional.length) targets.push(positional.at(-1));
@@ -201,7 +324,18 @@ export function analyzeShellMutation(command) {
     }
   }
 
-  return { mutation, targets };
+  // The planned-ancestor exception is only safe for paths that mkdir alone
+  // touches: a compound command that also mutates the same path (for example
+  // `mkdir -p src && rm -rf src`) gets no exception for it.
+  const mkdirOnly = new Set(mkdirCreated);
+  for (const target of targets) {
+    let occurrences = 0;
+    for (const candidate of targets) if (candidate === target) occurrences += 1;
+    let created = 0;
+    for (const candidate of mkdirCreated) if (candidate === target) created += 1;
+    if (occurrences > created) mkdirOnly.delete(target);
+  }
+  return { mutation, targets, mkdirTargets: [...mkdirOnly] };
 }
 
 function addPath(targets, value) {
@@ -305,19 +439,22 @@ export function normalizeToolPayload(payload = {}) {
   }
 
   const patchText = input.patch || input.input || '';
-  for (const match of String(patchText).matchAll(/^\*\*\* (?:Add|Update|Delete) File:\s+(.+)$/gm)) {
+  for (const match of String(patchText).matchAll(/^\*\*\* (?:(?:Add|Update|Delete) File|Move to):\s+(.+)$/gm)) {
     addPath(targets, match[1]);
   }
 
   const command = input.command || payload.command || '';
   const shell = TERMINAL_TOOLS.has(toolName) || command
     ? analyzeShellMutation(command)
-    : { mutation: false, targets: [] };
+    : { mutation: false, targets: [], mkdirTargets: [] };
   targets.push(...shell.targets);
   const uniqueTargets = [...new Set(targets)];
+  // Fail closed on unrecognized tools: any payload naming a concrete file
+  // target is a mutation unless the tool is a known read-only or terminal tool
+  // (terminal mutations are decided by shell analysis above).
   const mutation = FILE_MUTATION_TOOLS.has(toolName)
     || shell.mutation
-    || (!toolName && uniqueTargets.length > 0);
+    || (uniqueTargets.length > 0 && !READ_ONLY_TOOLS.has(toolName) && !TERMINAL_TOOLS.has(toolName));
   const workspace = resolveHookWorkspace(payload, uniqueTargets);
 
   return {
@@ -326,6 +463,7 @@ export function normalizeToolPayload(payload = {}) {
     command,
     mutation,
     targets: uniqueTargets,
+    mkdirTargets: [...new Set(shell.mkdirTargets)],
     targetResolved: !mutation || uniqueTargets.length > 0,
     sessionId: payload.session_id || payload.sessionId || null,
     hookEvent: payload.hook_event_name || payload.hookEventName || null,

@@ -40,7 +40,7 @@ export function parseFlags(argv) {
     workspace: process.cwd(),
     query: null,
     phase: 'implement',
-    limit: 3,
+    limit: null,
     refresh: false,
     semantic: false,
     includePlans: false,
@@ -59,6 +59,9 @@ export function parseFlags(argv) {
     session: null,
     summary: false,
     failures: false,
+    sync: false,
+    global: false,
+    check: false,
   };
 
   for (let i = 0; i < argv.length; i++) {
@@ -73,6 +76,9 @@ export function parseFlags(argv) {
     else if (a === '--no-events') flags.noEvents = true;
     else if (a === '--summary') flags.summary = true;
     else if (a === '--failures') flags.failures = true;
+    else if (a === '--sync') flags.sync = true;
+    else if (a === '--global') flags.global = true;
+    else if (a === '--check') flags.check = true;
     else if (a.startsWith('--query=')) flags.query = a.split('=').slice(1).join('=');
     else if (a === '--query') flags.query = argv[++i];
     else if (a.startsWith('--phase=')) flags.phase = parsePhase(a.split('=')[1]);

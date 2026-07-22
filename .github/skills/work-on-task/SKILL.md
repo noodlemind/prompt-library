@@ -13,7 +13,7 @@ This skill owns locked-plan execution and resumption only. Input is one explicit
 
 ## Entry gate
 
-1. Read the explicit plan and its `## Intent Contract`, Memory Cards, current phase, last two Activity entries, Impacted Files, Verification Plan, and Risk & Review Routing.
+1. Prefer the bounded `.harness/context-pack.md` (Intent Contract, current-phase open tasks, latest findings) for the working view; open the full plan only for the Impacted Files allowlist, Verification Plan, and Risk & Review Routing. Skip the `## Activity` and `## Verification Evidence` bodies unless debugging history.
 2. Require `plan_lock: true` and `status: planned|in-progress`.
 3. Run:
 

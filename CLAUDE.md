@@ -10,7 +10,7 @@ This is a skill-driven prompt library for software development teams. The primar
 
 - **Skills** (`.github/skills/*/SKILL.md`): 30 workflows total, including four internal workflows (`ensure-plan`, `ensure-capability`, `auto-compound`, and experimental `auto-skill-draft`). The primary entry is `@engineer`; `/harness-doctor`, `/btw`, `/code-review`, domain, pipeline, and utility skills remain available. The connected manual pipeline `/capture-issue` → `/plan-issue` → `/work-on-task` → `/code-review` → `/compound-learnings` is the power-user engineering loop, while `/auto-compound` is the Engineer's automatic post-success delivery path. `/btw` handles quick Q&A. `/project-readme` creates or updates project README files. `/create-primitive` decides and creates the right primitive type. Domain skills include `/java`, `/python`, `/sql`, and `/aws`.
 - **Agents** (`.github/agents/*.agent.md`): 24 agents — 19 stateless domain experts using judgment-criteria design, 1 engineer, 1 code-implementer, plus 3 coordinator/navigation agents. Agents exist for separate judgment, tool authority, runtime profile, isolation, or accountability. Active Java, Python, SQL, and AWS reviewers are included.
-- **Instructions** (`.github/instructions/*.instructions.md`): Scoped context that activates based on file patterns (TypeScript, Python, Java, Spring Boot, PostgreSQL, AWS SDK).
+- **Instructions** (`.github/instructions/*.instructions.md`): Scoped context that activates based on file patterns (TypeScript, Python, Java, PostgreSQL). Spring Boot and AWS SDK guidance loads on demand via the `/java` and `/aws` skill references, so a single `.java` file no longer stacks three always-on instructions.
 - **Prompt wrappers** (`.github/prompts/*.prompt.md`): Thin host-facing adapters that route to skills and declare host tools.
 - **Review checks** (`.github/skills/code-review/references/checks/*.md`, optional product `.github/checks/*.md`): Bundled and project-specific criteria discovered by `/code-review`.
 
@@ -38,7 +38,7 @@ Plan files live in `docs/plans/`. Activity logs in `## Activity` sections provid
 .github/
   agents/              — 24 agent definitions (19 specialists + 1 engineer + 1 implementer + 3 coordinators)
   skills/              — 30 skill directories with SKILL.md
-  instructions/        — scoped instructions (TypeScript, Python, Java, Spring Boot, PostgreSQL, AWS SDK)
+  instructions/        — scoped always-on instructions (TypeScript, Python, Java, PostgreSQL); Spring Boot and AWS SDK are on-demand skill references
   prompts/             — thin prompt wrappers that route to skills
   checks/              — optional product-specific review check examples
   copilot-instructions.md — shared context for all agents

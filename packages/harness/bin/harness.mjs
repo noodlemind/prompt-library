@@ -19,6 +19,7 @@ import {
   cmdGet,
   cmdUninstall,
   cmdResolve,
+  cmdReport,
 } from '../lib/commands.mjs';
 
 const [, , command = 'help', ...args] = process.argv;
@@ -42,6 +43,7 @@ Usage:
   harness validate-plan [options] [--plan docs/plans/file.md]
   harness compound [options]
   harness events [options]
+  harness report [--sync] [--global] [--check] [--json]   Token-efficiency report from telemetry
   harness init-repo [options]
   harness resolve [options]   Print resolved harness CLI path for agents
   harness uninstall [options]
@@ -137,6 +139,9 @@ async function main() {
         break;
       case 'events':
         code = await cmdEvents(args);
+        break;
+      case 'report':
+        code = await cmdReport(args);
         break;
       case 'uninstall':
         code = await cmdUninstall(args);

@@ -1,8 +1,5 @@
----
-name: 'AWS SDK v2 Conventions'
-description: 'AWS SDK for Java v2 patterns, SNS/SQS messaging, and cloud-native best practices'
-applyTo: '**/*.java'
----
+<!-- On-demand reference for the /aws skill. Loaded for AWS SDK for Java work; not an always-on instruction. -->
+
 
 # AWS SDK v2 Conventions
 
@@ -11,10 +8,10 @@ _For AWS SDK for Java v2 (`software.amazon.awssdk`). Do NOT use v1 (`com.amazona
 ## Client Setup
 - Use the builder pattern: `SqsClient.builder().region(Region.US_EAST_1).build()`.
 - Create clients as singletons (one per service per region). Inject via Spring `@Bean` configuration. Never create clients per request.
-- Use `DefaultCredentialsProvider` (auto-resolves from env vars → system properties → IAM role → profile). Never hardcode credentials.
+- Use `DefaultCredentialsProvider` (resolves in order: Java system properties → environment variables → web identity token → shared profile → ECS container credentials → EC2 instance role). Never hardcode credentials.
 - Set `region()` explicitly. Don't rely on `AWS_REGION` env var being set in all environments.
 - Close clients in shutdown hooks or use try-with-resources for short-lived scripts.
-- Use `SdkHttpClient` configuration for connection pooling: `maxConcurrency`, `connectionTimeout`, `socketTimeout`.
+- Configure connection pooling on the concrete HTTP client: async uses `NettyNioAsyncHttpClient.builder().maxConcurrency(...)`; sync uses `ApacheHttpClient.builder().maxConnections(...).connectionTimeout(...).socketTimeout(...)`.
 
 ## Async vs Sync
 - Prefer async clients (`SqsAsyncClient`, `SnsAsyncClient`) for high-throughput services. They return `CompletableFuture`.

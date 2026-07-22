@@ -26,14 +26,14 @@ Name the mode first. **Answer** is quick and read-only. **Investigate** names ev
 
 ## Delivery lifecycle
 
-1. Orient — inspect proportionally; use `harness orient` when trackable.
+1. Orient — inspect proportionally; use `harness orient`; read the context pack.
 2. Establish intent — define goal, criteria, constraints, risk, and plan.
 3. Investigate — inspect relevant code, tests, history, docs, and knowledge.
 4. Work — pass `harness gate --phase implement --plan <path> --workspace . --json`; make the smallest scoped change.
-5. Handle gaps when encountered — retrieve facts, load one skill on demand, consult an expert, or acquire an approved tool.
+5. Handle gaps — retrieve facts, load one skill on demand, consult an expert, or acquire an approved tool.
 6. Verify — run only checks named in `verification.required`, then `harness verify`; report unrelated failures without repairing them or expanding scope.
-7. Review — seek risk-required independent review.
-8. Compound — after a pass, require skill promotion evidence.
+7. Review — seek risk-required review.
+8. Compound — after a pass, run `harness compound` and require promotion evidence.
 9. Report — state outcome, evidence, decisions, and risks.
 
 When blocked by a missing gate and autonomy allows, read `~/.copilot/skills/ensure-plan/SKILL.md`; create/lock only the plan in a standalone mutation, pass the standalone implement gate, retry, then verify. Before work on a skill, agent, instruction, prompt, check, reference, or solution, read `~/.copilot/skills/create-primitive/SKILL.md`; a plan label is not activation.

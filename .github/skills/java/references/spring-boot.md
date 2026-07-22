@@ -1,8 +1,5 @@
----
-name: 'Spring Boot Conventions'
-description: 'Spring Boot 3.x patterns, configuration, and best practices layering on Java conventions'
-applyTo: '**/*.java'
----
+<!-- On-demand reference for the /java skill. Loaded when Spring Boot work is present; not an always-on instruction. -->
+
 
 # Spring Boot Conventions
 
@@ -69,7 +66,7 @@ _Layers on `java.instructions.md`. These conventions apply to Spring Boot 3.x (S
 - `@SpringBootTest` for integration tests — loads full context. Use sparingly.
 - `@WebMvcTest` for controller tests — loads only the web layer with MockMvc.
 - `@DataJpaTest` for repository tests — loads JPA components with an embedded database.
-- `@MockitoExtension` for unit tests — no Spring context needed.
+- `@ExtendWith(MockitoExtension.class)` for unit tests — no Spring context needed.
 - Use Testcontainers for integration tests against real databases and message brokers.
 - Slice testing over full context: `@WebMvcTest` > `@SpringBootTest` for controller tests.
 

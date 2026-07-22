@@ -3,6 +3,7 @@ import path from 'path';
 import { rankRecall, findMatchingPlans } from './recall-rank.mjs';
 import { runGate } from './gate.mjs';
 import { buildContextPack } from './context-pack.mjs';
+import { buildPlanView } from './plan-view.mjs';
 import { extractGoalFromPlan } from './plan-goal.mjs';
 import { ensureHarnessDir, readSession, writeSession } from './session.mjs';
 import { pickActivePlan, listPlanRels } from './plan-parse.mjs';
@@ -39,6 +40,7 @@ export function runOrient({ workspace, copilotHome, flags, query }) {
   const session = readSession(workspace) || {};
   const active = pickActivePlan(workspace, session, plans, listPlanRels(workspace));
   const planGoal = active ? extractGoalFromPlan(active) : null;
+  const planView = active ? buildPlanView(active) : null;
 
   let memoryExcerpt = '';
   if (active) {
@@ -74,6 +76,7 @@ export function runOrient({ workspace, copilotHome, flags, query }) {
         }
       : null,
     planGoal,
+    planView,
     gatePreview: { pass: gatePreview.pass, blockedReason: gatePreview.blockedReason },
     nextTools,
   });

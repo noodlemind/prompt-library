@@ -73,6 +73,7 @@ Installed to `~/.copilot/bin/harness` on every `harness install`. Add to PATH wi
 | `get [--docid id \| --path rel]` | Fetch bounded doc excerpt | F2 on demand | none |
 | `compound --plan <path>` | Consume passed evidence, index, classify learning, record telemetry | after verify | index + session + telemetry + events |
 | `events [--session id] [--failures] [--summary]` | Schema-v2 audit / stuck debugging | read-only | none |
+| `report [--sync] [--global] [--check] [--json]` | Token-efficiency report over telemetry: ranked sinks + improvement flags | read-only, except `--sync` writes `~/.harness/telemetry/` | none in workspace |
 
 ### JSON shapes (stable fields)
 

@@ -1,10 +1,12 @@
 #!/usr/bin/env node
 /** PreToolUse mutation guard: block secrets and Harness-owned global files. */
 import fs from 'node:fs';
+import path from 'node:path';
+import { preToolDenyOutput } from './lib/hook-output.mjs';
 import { normalizeToolPayload } from './lib/tool-payload.mjs';
 
 const BLOCKED = [
-  /(?:^|\/)\.env(?:\.|$)/i,
+  /(?:^|\/)\.env(?:rc$|\.|$)/i,
   /(?:^|\/)[._]?credentials(?:\.|$)/i,
   /\.pem$/i,
   /\.key$/i,
@@ -13,29 +15,64 @@ const BLOCKED = [
   /(?:^|\/)\.copilot\//,
 ];
 
+function output(value) {
+  console.log(JSON.stringify(value));
+}
+
+function enforcement() {
+  return process.env.HARNESS_ENFORCEMENT || 'enforce';
+}
+
+function deny(reason) {
+  if (enforcement() !== 'enforce') {
+    output({ continue: true, systemMessage: `[harness hook] ${reason}` });
+    process.exit(0);
+  }
+  output(preToolDenyOutput(reason));
+  process.exit(0);
+}
+
+/** Resolve symlinks through the nearest existing ancestor so a link inside the
+ * workspace cannot smuggle a write into a protected path. */
+function resolvedTarget(workspace, target) {
+  try {
+    let cursor = path.resolve(workspace, target);
+    const missing = [];
+    while (!fs.existsSync(cursor)) {
+      missing.unshift(path.basename(cursor));
+      const parent = path.dirname(cursor);
+      if (parent === cursor) return null;
+      cursor = parent;
+    }
+    return path.join(fs.realpathSync(cursor), ...missing);
+  } catch {
+    return null;
+  }
+}
+
 let payload;
 try {
-  payload = JSON.parse(fs.readFileSync(0, 'utf8') || '{}');
-} catch {
-  process.exit(0);
+  const raw = fs.readFileSync(0, 'utf8');
+  if (!raw.trim()) throw new Error('payload is empty');
+  payload = JSON.parse(raw);
+} catch (error) {
+  deny(`invalid-hook-payload: ${error.message}`);
 }
 
 const mutation = normalizeToolPayload(payload);
 if (!mutation.mutation) {
-  console.log(JSON.stringify({ continue: true }));
+  output({ continue: true });
   process.exit(0);
 }
 for (const target of mutation.targets) {
-  const normalized = target.replace(/\\/g, '/');
-  if (!BLOCKED.some((pattern) => pattern.test(normalized))) continue;
-  console.log(JSON.stringify({
-    hookSpecificOutput: {
-      hookEventName: 'PreToolUse',
-      permissionDecision: 'deny',
-      permissionDecisionReason: `sensitive-path: ${target}`,
-    },
-  }));
-  process.exit(0);
+  const candidates = [target, resolvedTarget(mutation.workspace, target)]
+    .filter(Boolean)
+    .map((value) => value.replace(/\\/g, '/'));
+  for (const candidate of candidates) {
+    if (BLOCKED.some((pattern) => pattern.test(candidate))) {
+      deny(`sensitive-path: ${target}`);
+    }
+  }
 }
 
-console.log(JSON.stringify({ continue: true }));
+output({ continue: true });

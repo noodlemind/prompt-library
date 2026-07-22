@@ -2,14 +2,18 @@ import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import { ensureHarnessDir, readSession } from './session.mjs';
+import { summarizeUsage } from './token-meter.mjs';
 
 export const EVENTS_FILE = 'events.jsonl';
+export const EVENTS_DEFAULT_LIMIT = 20;
+export const EVENTS_MAX_LIMIT = 200;
 export const EVENT_TYPES = new Set([
   'session_start',
   'orient',
   'gate',
   'pre_tool',
   'post_tool',
+  'skill_activation',
   'verify',
   'compound',
   'session_end',
@@ -66,6 +70,7 @@ export function writeEvent(workspace, flags, payload) {
     agent: payload.agent || process.env.HARNESS_AGENT || null,
   };
   if (payload.blockedReason) event.blockedReason = payload.blockedReason;
+  if (payload.usage) event.usage = payload.usage;
   for (const field of ['tool', 'mutation', 'targets', 'targetResolved', 'gate', 'decision', 'durationMs', 'success']) {
     if (payload[field] !== undefined) event[field] = payload[field];
   }
@@ -95,7 +100,13 @@ export function readEvents(workspace, options = 20) {
     if (config.failures && event.result !== 'fail' && event.decision !== 'block' && !event.blockedReason) return false;
     return true;
   });
-  return config.limit ? filtered.slice(-config.limit) : filtered;
+  // Always bounded: a non-positive or missing limit clamps to the default, and
+  // no request may exceed EVENTS_MAX_LIMIT, so there is no full-history dump.
+  const requested = Number.isFinite(config.limit) && config.limit > 0 ? config.limit : EVENTS_DEFAULT_LIMIT;
+  const cap = Math.min(requested, EVENTS_MAX_LIMIT);
+  const result = filtered.slice(-cap);
+  result.totalMatched = filtered.length;
+  return result;
 }
 
 export function summarizeEvents(events) {
@@ -106,6 +117,7 @@ export function summarizeEvents(events) {
     fail: 0,
     lastActivePlan: null,
     latestBlockedReason: null,
+    usage: summarizeUsage(events),
   };
   for (const event of events) {
     if (event.result === 'pass') summary.pass++;

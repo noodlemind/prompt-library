@@ -450,6 +450,82 @@ test('lifecycle commands append schema-v2 events and omit non-lifecycle commands
   }
 });
 
+test('lifecycle events carry gen_ai.usage token estimates and events --summary rolls them up', () => {
+  const workspace = tempDir('harness-usage-');
+  const copilotHome = tempDir('harness-copilot-');
+  writePlan(workspace, {
+    frontmatter:
+      'intent: "Fix example safely"\nexpected_outputs: ["code change"]\nsuccess_criteria: ["tests pass"]\n',
+  });
+  assert.equal(
+    runHarness(['orient', '--query', 'orders timeout', '--workspace', workspace, '--copilot-home', copilotHome]).status,
+    0
+  );
+  assert.equal(runHarness(['gate', '--workspace', workspace]).status, 0);
+
+  const events = readEvents(workspace);
+  const orient = events.find((e) => e.type === 'orient');
+  assert.ok(orient?.usage, 'orient event must carry usage');
+  assert.ok(Number.isInteger(orient.usage['gen_ai.usage.input_tokens']));
+  assert.ok(orient.usage['gen_ai.usage.output_tokens'] > 0, 'orient output tokens reflect the context pack');
+  assert.equal(orient.usage.estimated, true);
+
+  const summary = runHarness(['events', '--summary', '--workspace', workspace]);
+  assert.equal(summary.status, 0);
+  assert.match(summary.stdout, /tokens \(est\): in=\d+ out=\d+ total=\d+/);
+  assert.match(summary.stdout, /orient: \d+/);
+});
+
+test('gate human output is answer-first and hides passing checks unless verbose', () => {
+  const workspace = tempDir('harness-terse-');
+  writePlan(workspace, {
+    frontmatter:
+      'intent: "Fix example safely"\nexpected_outputs: ["code change"]\nsuccess_criteria: ["tests pass"]\n',
+  });
+  const terse = runHarness(['gate', '--workspace', workspace]);
+  assert.equal(terse.status, 0, terse.stderr);
+  const lines = terse.stdout.trim().split('\n');
+  assert.match(lines[0], /^harness gate: (PASS|FAIL)/);
+  assert.ok(!/^PASS {2}C1/m.test(terse.stdout), 'passing checks are hidden by default');
+  assert.match(terse.stdout, /^next: /m);
+
+  const verbose = runHarness(['gate', '--workspace', workspace, '--verbose']);
+  assert.match(verbose.stdout, /PASS {2}C1/);
+});
+
+test('json output is compact by default and pretty only with --verbose', () => {
+  const workspace = tempDir('harness-json-');
+  writePlan(workspace, {
+    frontmatter:
+      'intent: "Fix example safely"\nexpected_outputs: ["code change"]\nsuccess_criteria: ["tests pass"]\n',
+  });
+  const compact = runHarness(['gate', '--workspace', workspace, '--json']);
+  assert.equal(compact.stdout.trim().split('\n').length, 1, 'compact json is a single line');
+  assert.equal(JSON.parse(compact.stdout).pass, true);
+
+  const pretty = runHarness(['gate', '--workspace', workspace, '--json', '--verbose']);
+  assert.ok(pretty.stdout.trim().split('\n').length > 1, 'verbose json is pretty-printed');
+  assert.equal(JSON.parse(pretty.stdout).pass, true);
+});
+
+test('events output is bounded and never dumps full history', () => {
+  const workspace = tempDir('harness-bounded-');
+  const eventDir = path.join(workspace, '.harness');
+  fs.mkdirSync(eventDir, { recursive: true });
+  const many = Array.from({ length: 60 }, (_, i) => ({ version: 2, type: 'gate', session: 's', result: 'pass' }));
+  fs.writeFileSync(path.join(eventDir, 'events.jsonl'), `${many.map(JSON.stringify).join('\n')}\n`);
+
+  const dflt = JSON.parse(runHarness(['events', '--workspace', workspace, '--json']).stdout);
+  assert.equal(dflt.count, 20, 'default caps at 20');
+  assert.equal(dflt.totalMatched, 60);
+
+  const zero = JSON.parse(runHarness(['events', '--workspace', workspace, '--limit=0', '--json']).stdout);
+  assert.equal(zero.count, 20, '--limit=0 no longer dumps everything');
+
+  const huge = JSON.parse(runHarness(['events', '--workspace', workspace, '--limit=99999', '--json']).stdout);
+  assert.ok(huge.count <= 200, 'a huge limit is capped at the hard ceiling');
+});
+
 test('event logging can be disabled', () => {
   const workspace = tempDir('harness-workspace-');
   const copilotHome = tempDir('harness-copilot-');
@@ -1523,9 +1599,42 @@ No open findings.
   return rel;
 }
 
+
+test('plan readiness surfaces configured-check errors instead of running named checks', async () => {
+  const { validatePlanReadiness } = await import('../lib/plan-readiness.mjs');
+  const { loadPlan } = await import('../lib/plan-parse.mjs');
+  const workspace = tempDir('harness-readiness-');
+  writePlan(workspace, {
+    frontmatter:
+      'intent: "Fix example safely"\nexpected_outputs: ["code change"]\nsuccess_criteria: ["tests pass"]\n',
+  });
+  const plan = loadPlan(workspace, 'docs/plans/2026-05-22-fix-example-plan.md');
+  fs.mkdirSync(path.join(workspace, '.github', 'harness'), { recursive: true });
+
+  fs.writeFileSync(path.join(workspace, '.github', 'harness', 'checks.yaml'), 'version: 2\nchecks: {}\n');
+  const wrongVersion = validatePlanReadiness(workspace, plan);
+  assert.equal(wrongVersion.pass, false);
+  assert.ok(
+    wrongVersion.checks.some((check) => !check.pass && /must declare version: 1/.test(check.message)),
+    JSON.stringify(wrongVersion.checks)
+  );
+
+  fs.writeFileSync(path.join(workspace, '.github', 'harness', 'checks.yaml'), 'version: 1\nchecks: [not: {valid\n');
+  const unparseable = validatePlanReadiness(workspace, plan);
+  assert.equal(unparseable.pass, false);
+  assert.ok(
+    unparseable.checks.some((check) => !check.pass && /Invalid \.github\/harness\/checks\.yaml/.test(check.message)),
+    JSON.stringify(unparseable.checks)
+  );
+});
+
 function initGit(workspace) {
   const run = (args) =>
-    spawnSync('git', args, { cwd: workspace, encoding: 'utf8' });
+    spawnSync('git', args, {
+      cwd: workspace,
+      encoding: 'utf8',
+      env: { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_SYSTEM: '/dev/null' },
+    });
   assert.equal(run(['init', '-q']).status, 0);
   assert.equal(run(['config', 'user.email', 'harness@example.test']).status, 0);
   assert.equal(run(['config', 'user.name', 'Harness Test']).status, 0);
@@ -1722,6 +1831,11 @@ test('harness verify passes named checks, validates scope, and writes evidence',
   assert.deepEqual(body.requiredReviews, []);
   assert.ok(body.evidencePath);
   assert.equal(fs.existsSync(path.join(workspace, body.evidencePath)), true);
+
+  // Human output ends with an actionable next command on success (AC30).
+  const human = runHarness(['verify', '--plan', plan, '--base', 'HEAD', '--workspace', workspace]);
+  assert.match(human.stdout, /^harness verify: PASSED/m);
+  assert.match(human.stdout, /^next: harness compound/m);
 });
 
 test('harness verify checks only tasks in the current plan phase', () => {

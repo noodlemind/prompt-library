@@ -4,8 +4,15 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 import YAML from 'yaml';
+import { estimateTokens } from '../lib/token-meter.mjs';
+import { CONTEXT_PACK_MAX_BYTES } from '../lib/context-pack.mjs';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
+
+// Token/tool efficiency budgets (AC25, AC32). A tracked surface over its cap
+// fails CI so a regression is caught before it lands.
+const ENGINEER_AGENT_MAX_TOKENS = 900;
+const SKILL_BODY_MAX_LINES = 300;
 const architecturePath = 'docs/architecture/engineer-harness.md';
 const supersededArchitectureDocs = [
   'adaptive-engineer-harness.md',
@@ -78,7 +85,7 @@ test('engineer agent is frozen, thin, and owns the only normative nine-step deli
     '2. Establish intent',
     '3. Investigate',
     '4. Work',
-    '5. Handle gaps when encountered',
+    '5. Handle gaps',
     '6. Verify',
     '7. Review',
     '8. Compound',
@@ -316,25 +323,21 @@ test('hooks and CI enforce explicit plans and passed verification evidence', () 
   const hooks = JSON.parse(read('.github/hooks/hooks.json'));
   const preEditCommands = hooks.hooks.PreToolUse.flatMap((entry) => entry.hooks.map((hook) => hook.command));
   assert.ok(preEditCommands.includes('node require-plan-gate.mjs'));
-  const bashHooks = hooks.hooks.PreToolUse.find((entry) => entry.matcher.split('|').includes('Bash'))?.hooks || [];
-  const bashCriticalIndex = bashHooks.findIndex((hook) => hook.command === 'node guard-critical-files.mjs');
-  const bashDestructiveIndex = bashHooks.findIndex((hook) => hook.command === 'node block-destructive-commands.mjs');
-  const bashGateIndex = bashHooks.findIndex((hook) => hook.command === 'node require-plan-gate.mjs');
-  assert.notEqual(bashCriticalIndex, -1, 'terminal mutations require the critical-file guard');
-  assert.notEqual(bashDestructiveIndex, -1, 'terminal commands require the destructive-command blocker');
-  assert.notEqual(bashGateIndex, -1, 'terminal mutations require the plan gate');
+  // Every tool call funnels through one wildcard PreToolUse chain so
+  // unrecognized or future host tool names cannot bypass the guards.
+  assert.equal(hooks.hooks.PreToolUse.length, 1, 'PreToolUse must be a single wildcard chain');
+  const preEntry = hooks.hooks.PreToolUse[0];
+  assert.equal(preEntry.matcher, '*', 'PreToolUse must match every tool');
+  const preHooks = preEntry.hooks;
+  const criticalIndex = preHooks.findIndex((hook) => hook.command === 'node guard-critical-files.mjs');
+  const destructiveIndex = preHooks.findIndex((hook) => hook.command === 'node block-destructive-commands.mjs');
+  const gateIndex = preHooks.findIndex((hook) => hook.command === 'node require-plan-gate.mjs');
+  assert.notEqual(criticalIndex, -1, 'mutations require the critical-file guard');
+  assert.notEqual(destructiveIndex, -1, 'terminal commands require the destructive-command blocker');
+  assert.notEqual(gateIndex, -1, 'mutations require the plan gate');
   assert.ok(
-    bashCriticalIndex < bashDestructiveIndex && bashDestructiveIndex < bashGateIndex,
-    'terminal safety guards must run before the plan gate'
-  );
-  const editHooks = hooks.hooks.PreToolUse.find((entry) => entry.matcher.startsWith('Edit|'))?.hooks || [];
-  const editCriticalIndex = editHooks.findIndex((hook) => hook.command === 'node guard-critical-files.mjs');
-  const editGateIndex = editHooks.findIndex((hook) => hook.command === 'node require-plan-gate.mjs');
-  assert.notEqual(editCriticalIndex, -1, 'edit mutations require the critical-file guard');
-  assert.notEqual(editGateIndex, -1, 'edit mutations require the plan gate');
-  assert.ok(
-    editCriticalIndex < editGateIndex,
-    'critical-file guard must run before the plan gate'
+    criticalIndex < destructiveIndex && destructiveIndex < gateIndex,
+    'safety guards must run before the plan gate'
   );
   const postEditCommands = (hooks.hooks.PostToolUse || []).flatMap((entry) => entry.hooks.map((hook) => hook.command));
   assert.ok(postEditCommands.includes('node record-successful-edit.mjs'));
@@ -370,6 +373,68 @@ test('hooks and CI enforce explicit plans and passed verification evidence', () 
   assert.ok(['observe', 'warn', 'enforce'].includes(policy.enforcement));
   assert.ok(Array.isArray(policy.exemptions));
   assert.ok(Array.isArray(policy.waivers));
+});
+
+test('token budget: engineer agent and context pack stay within their caps', () => {
+  const agent = read('.github/agents/engineer.agent.md');
+  const agentTokens = estimateTokens(agent);
+  assert.ok(
+    agentTokens <= ENGINEER_AGENT_MAX_TOKENS,
+    `engineer.agent.md is ~${agentTokens} tokens, over the ${ENGINEER_AGENT_MAX_TOKENS} budget`
+  );
+
+  // The context pack has a hard byte cap; assert the constant is enforced and small.
+  assert.ok(CONTEXT_PACK_MAX_BYTES <= 4096, 'context pack byte budget must stay small');
+});
+
+test('engineer step 8 runs harness compound to close the learn loop', () => {
+  const engineer = read('.github/agents/engineer.agent.md');
+  assert.match(engineer, /8\.\s*Compound[^\n]*harness compound/i, 'step 8 must invoke harness compound');
+  // The CI budget gate must reference the read-only check.
+  const workflow = read('.github/workflow-templates/harness-plan-verification.yml');
+  assert.match(workflow, /harness report --check/, 'CI must run the budget gate');
+});
+
+test('read-only report command is registered and AC14 amendment is consistent', () => {
+  const bin = read('packages/harness/bin/harness.mjs');
+  assert.match(bin, /case 'report':/, 'report command must be registered');
+  assert.match(bin, /harness report \[--sync\] \[--global\] \[--check\] \[--json\]/, 'help documents report');
+  assert.match(bin, /cmdReport/, 'report handler imported');
+  // report must not write session/plan state — it only reads telemetry (and syncs under ~/.harness).
+  const commands = read('packages/harness/lib/commands.mjs');
+  const reportFn = commands.slice(commands.indexOf('export async function cmdReport'), commands.indexOf('export async function cmdValidatePlan'));
+  assert.doesNotMatch(reportFn, /writeSession\(/, 'report must not mutate session state');
+  assert.doesNotMatch(reportFn, /writeEvent\(/, 'report must not emit lifecycle events');
+});
+
+test('token budget: no SKILL.md body exceeds the line cap', () => {
+  const skillsDir = path.join(repoRoot, '.github', 'skills');
+  const oversized = fs
+    .readdirSync(skillsDir, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory() && exists(`.github/skills/${entry.name}/SKILL.md`))
+    .map((entry) => ({ name: entry.name, lines: read(`.github/skills/${entry.name}/SKILL.md`).split('\n').length }))
+    .filter((s) => s.lines > SKILL_BODY_MAX_LINES);
+  assert.deepEqual(
+    oversized,
+    [],
+    `SKILL.md over ${SKILL_BODY_MAX_LINES} lines (split dense content into references/): ${oversized.map((s) => `${s.name}=${s.lines}`).join(', ')}`
+  );
+});
+
+test('domain instructions do not triple-stack on a single Java file', () => {
+  const instrDir = path.join(repoRoot, '.github', 'instructions');
+  const javaScoped = fs
+    .readdirSync(instrDir)
+    .filter((name) => name.endsWith('.instructions.md'))
+    .filter((name) => /applyTo:\s*['"]\*\*\/\*\.java['"]/.test(read(`.github/instructions/${name}`)));
+  assert.deepEqual(
+    javaScoped,
+    ['java.instructions.md'],
+    `exactly one always-on instruction may match **/*.java; found: ${javaScoped.join(', ')}`
+  );
+  // The relocated deep guides live as on-demand skill references.
+  assert.ok(exists('.github/skills/java/references/spring-boot.md'), 'Spring Boot guide moved to /java references');
+  assert.ok(exists('.github/skills/aws/references/aws-sdk.md'), 'AWS SDK guide moved to /aws references');
 });
 
 test('capability registry inventories every current primitive with ownership and lifecycle', () => {

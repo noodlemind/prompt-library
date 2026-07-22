@@ -1,11 +1,10 @@
 import fs from 'fs';
 import path from 'path';
-import crypto from 'node:crypto';
 import { readSession } from './session.mjs';
 import { loadPlan, pickActivePlan, listPlanRels, parsePlanFrontmatter } from './plan-parse.mjs';
 import { findMatchingPlans } from './recall-rank.mjs';
 import { intentContractHasContent } from './plan-goal.mjs';
-import { readEvidence, validateEvidence } from './evidence.mjs';
+import { planDigest, readEvidence, validateEvidence } from './evidence.mjs';
 import { loadPolicy } from './policy.mjs';
 import { primitivePlanGovernance } from './primitive-governance.mjs';
 import { validatePlanReadiness } from './plan-readiness.mjs';
@@ -205,7 +204,7 @@ export function runGate({ workspace, flags, query = '' }) {
           path: plan.path,
           status: plan.status,
           plan_lock: plan.plan_lock,
-          digest: crypto.createHash('sha256').update(plan.text).digest('hex'),
+          digest: planDigest(plan.text),
         }
       : null,
     checks,
@@ -222,7 +221,9 @@ export function runGate({ workspace, flags, query = '' }) {
           : ['editFiles (scoped)', `harness verify --plan ${plan?.path || '<path>'}`]
       : plan?.status === 'blocked-capability'
         ? ['read ensure-capability/SKILL.md']
-        : primitiveGovernanceFailed
+        : // Lock the plan before primitive governance: an unlocked plan must
+          // recover through /ensure-plan even if primitive checks also fail.
+          plan && plan.plan_lock && primitiveGovernanceFailed
           ? [
               'read ~/.copilot/skills/create-primitive/SKILL.md and follow it',
               `update ${plan?.path || '<plan>'} with the create-primitive decision and evidence contract`,

@@ -1,13 +1,13 @@
 import fs from 'fs';
 import path from 'path';
 import os from 'node:os';
-import crypto from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { createRequire } from 'module';
 import { resolveIndexDir } from './recall-config.mjs';
 import { isIndexStale } from './postings-index.mjs';
 import { resolveHarnessBin } from './resolve-harness-bin.mjs';
 import { globalHarnessShimPath, findHarnessOnPath } from './global-bin.mjs';
+import { planDigest } from './evidence.mjs';
 import { loadPlan } from './plan-parse.mjs';
 import { runVerify } from './verify.mjs';
 import { readSession, writeSession } from './session.mjs';
@@ -166,7 +166,11 @@ function hookBlocked(result, event) {
   try {
     const line = result.stdout.trim().split(/\r?\n/).filter(Boolean).at(-1);
     const output = line ? JSON.parse(line) : {};
-    if (event === 'PreToolUse') return output.hookSpecificOutput?.permissionDecision === 'deny';
+    if (event === 'PreToolUse') {
+      return (
+        output.hookSpecificOutput?.permissionDecision === 'deny' || output.permissionDecision === 'deny'
+      );
+    }
     return output.hookSpecificOutput?.decision === 'block' || output.decision === 'block';
   } catch {
     return false;
@@ -198,7 +202,13 @@ function runVSCodeHookProbe(hookRoot) {
       path.join(workspace, '.github', 'harness', 'checks.yaml'),
       `version: 1\nchecks:\n  hook-probe:\n    command: ${JSON.stringify([process.execPath, '-e', 'process.exit(0)'])}\n`
     );
-    const git = (args) => spawnSync('git', args, { cwd: workspace, encoding: 'utf8', timeout: 10_000 });
+    const git = (args) =>
+      spawnSync('git', args, {
+        cwd: workspace,
+        encoding: 'utf8',
+        timeout: 10_000,
+        env: { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_SYSTEM: '/dev/null' },
+      });
     if (git(['init', '-q']).status !== 0) return result;
     git(['config', 'user.email', 'harness@example.test']);
     git(['config', 'user.name', 'Harness Doctor']);
@@ -227,10 +237,7 @@ function runVSCodeHookProbe(hookRoot) {
       sessionId: 'doctor-vscode-session',
       activePlan: planRel,
       gatedPlan: planRel,
-      gatedPlanDigest: crypto
-        .createHash('sha256')
-        .update(fs.readFileSync(path.join(workspace, planRel), 'utf8'))
-        .digest('hex'),
+      gatedPlanDigest: planDigest(fs.readFileSync(path.join(workspace, planRel), 'utf8')),
       gateStatus: 'pass',
       lastGateAt: new Date().toISOString(),
     });

@@ -4,7 +4,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { validateEvidenceBinding } from './lib/evidence-binding.mjs';
 import { writeHookEvent } from './lib/events.mjs';
+import { stopBlockOutput } from './lib/hook-output.mjs';
 import { loadHookPolicy } from './lib/policy.mjs';
+import { writeSessionState } from './lib/session-state.mjs';
 import { resolveHookWorkspace } from './lib/tool-payload.mjs';
 
 const startedAt = Date.now();
@@ -41,9 +43,12 @@ function event(fields) {
 }
 
 function deny(message) {
-  const reason = input.stop_hook_active
+  const planFlag = session?.activePlan ? ` --plan ${session.activePlan}` : '';
+  const recipe = `; next: run \`harness verify${planFlag} --workspace . --json\` after the edit is complete, then stop`;
+  const base = input.stop_hook_active
     ? `${message}; verification is still pending after the prior Stop block`
     : message;
+  const reason = `${base}${recipe}`;
   console.error(`[harness hook] Completion blocked: ${reason}`);
   if (policy.enforcement !== 'enforce') {
     event({ decision: 'warn', result: 'warn', blockedReason: reason });
@@ -51,13 +56,7 @@ function deny(message) {
     process.exit(0);
   }
   event({ decision: 'block', result: 'fail', blockedReason: reason });
-  output({
-    hookSpecificOutput: {
-      hookEventName: 'Stop',
-      decision: 'block',
-      reason,
-    },
-  });
+  output(stopBlockOutput(reason));
   process.exit(0);
 }
 
@@ -121,7 +120,7 @@ if (lastVerifyAt < lastEditAt || evidenceVerifiedAt < lastEditAt) {
 session.lastCompletedEditAt = session.lastEditAt;
 session.lastCompletionAt = new Date().toISOString();
 try {
-  fs.writeFileSync(sessionPath, `${JSON.stringify(session, null, 2)}\n`, 'utf8');
+  writeSessionState(workspace, session);
 } catch (error) {
   deny(`verification passed, but completion bookkeeping failed: ${error.message}`);
 }

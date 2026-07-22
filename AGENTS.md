@@ -39,7 +39,7 @@ Plan files in `docs/plans/` (product repos only) track state via YAML frontmatte
 .github/
   agents/          — 24 agent definitions (19 specialists + 1 engineer + 1 implementer + 3 coordinators)
   skills/          — 30 skill directories with SKILL.md
-  instructions/    — scoped instructions (TypeScript, Python, Java, Spring Boot, PostgreSQL, AWS SDK)
+  instructions/    — scoped always-on instructions (TypeScript, Python, Java, PostgreSQL); Spring Boot and AWS SDK load on demand via /java and /aws skill references
   prompts/         — thin prompt wrappers that route to skills
   checks/          — optional product-specific review check examples
   copilot-instructions.md — shared context for all agents

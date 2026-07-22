@@ -6,8 +6,10 @@ import crypto from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
+import { planContractText } from '../../../.github/hooks/lib/evidence-binding.mjs';
 import {
   activatedSkillFromPayload,
+  analyzeShellMutation,
   normalizeToolPayload,
   planUsesCreatePrimitive,
   toolMutationSucceeded,
@@ -115,12 +117,21 @@ function writePassedGate(workspace, plan) {
       gatedPlan: plan,
       gatedPlanDigest: crypto
         .createHash('sha256')
-        .update(fs.readFileSync(path.join(workspace, plan), 'utf8'))
+        .update(planContractText(fs.readFileSync(path.join(workspace, plan), 'utf8')))
         .digest('hex'),
       gateStatus: 'pass',
       lastGateAt: new Date().toISOString(),
     })
   );
+}
+
+/** Workspace-local stand-in for ~/.copilot/skills/<name>/SKILL.md so
+ * target-based workspace resolution can never land on the real $HOME. */
+function skillFixturePath(workspace, skill) {
+  const full = path.join(workspace, 'copilot-home', 'skills', skill, 'SKILL.md');
+  fs.mkdirSync(path.dirname(full), { recursive: true });
+  if (!fs.existsSync(full)) fs.writeFileSync(full, `# ${skill}\n`, 'utf8');
+  return full;
 }
 
 function runHook(name, workspace, payload) {
@@ -214,9 +225,10 @@ test('non-mutation VS Code tools remain read-only even when their payload includ
 });
 
 test('recognizes successful native skill reads without treating them as mutations', () => {
+  const workspace = tempWorkspace();
   const payload = {
     tool_name: 'read_file',
-    tool_input: { filePath: path.join(os.homedir(), '.copilot', 'skills', 'create-primitive', 'SKILL.md') },
+    tool_input: { filePath: skillFixturePath(workspace, 'create-primitive') },
   };
   assert.equal(activatedSkillFromPayload(payload), 'create-primitive');
   assert.equal(normalizeToolPayload(payload).mutation, false);
@@ -384,7 +396,7 @@ test('passed gate allows scoped mutation and primitive target requires current-s
   const activation = runHook('record-successful-edit.mjs', workspace, {
     hook_event_name: 'PostToolUse',
     tool_name: 'read_file',
-    tool_input: { filePath: path.join(os.homedir(), '.copilot', 'skills', 'create-primitive', 'SKILL.md') },
+    tool_input: { filePath: skillFixturePath(workspace, 'create-primitive') },
     tool_response: 'Skill loaded',
   });
   assert.equal(activation.status, 0, activation.stderr);
@@ -405,7 +417,7 @@ test('scoped shell creation permits only ancestor directories of planned files',
   runHook('record-successful-edit.mjs', workspace, {
     hook_event_name: 'PostToolUse',
     tool_name: 'read_file',
-    tool_input: { filePath: path.join(os.homedir(), '.copilot', 'skills', 'create-primitive', 'SKILL.md') },
+    tool_input: { filePath: skillFixturePath(workspace, 'create-primitive') },
     tool_response: 'Skill loaded',
   });
 
@@ -461,6 +473,7 @@ test('passed gate rejects a lexically scoped symlink that escapes the workspace'
 });
 
 test('safety guards preserve force-push coverage without overblocking ordinary credential names', () => {
+  const workspace = tempWorkspace();
   for (const command of [
     'git push --force-with-lease origin main',
     'git push origin main --force',
@@ -489,7 +502,7 @@ test('safety guards preserve force-push coverage without overblocking ordinary c
 
   const recoverySkillRead = runHook('guard-critical-files.mjs', process.cwd(), {
     tool_name: 'read_file',
-    tool_input: { filePath: path.join(os.homedir(), '.copilot', 'skills', 'ensure-plan', 'SKILL.md') },
+    tool_input: { filePath: skillFixturePath(workspace, 'ensure-plan') },
   });
   assert.notEqual(outputJson(recoverySkillRead).hookSpecificOutput?.permissionDecision, 'deny');
 
@@ -516,8 +529,17 @@ test('plan edits require a fresh implement gate before product mutation', () => 
   const workspace = tempWorkspace();
   const plan = writePlan(workspace);
   writePassedGate(workspace, plan);
-  fs.appendFileSync(path.join(workspace, plan), '\n<!-- scope changed -->\n');
 
+  // Routine Activity logging is part of the workflow and must not invalidate
+  // the gate: the digest covers the Activity-stripped contract text only.
+  fs.appendFileSync(path.join(workspace, plan), '\n### Session log\n\n- Activity appended mid-phase.\n');
+  const activityAllowed = runHook('require-plan-gate.mjs', workspace, {
+    tool_name: 'replace_string_in_file',
+    tool_input: { filePath: 'src/schema.json' },
+  });
+  assert.notEqual(outputJson(activityAllowed).hookSpecificOutput?.permissionDecision, 'deny');
+
+  fs.appendFileSync(path.join(workspace, plan), '\n## Extra Scope\n\n- `src/other.json`\n');
   const result = runHook('require-plan-gate.mjs', workspace, {
     tool_name: 'replace_string_in_file',
     tool_input: { filePath: 'src/schema.json' },
@@ -654,4 +676,304 @@ test('SessionStart runtime context reinforces the critical Engineer Investigate 
   assert.match(output.additionalContext, /@engineer[\s\S]{0,100}Mode: Answer\|Investigate\|Review\|Deliver/i);
   assert.match(output.additionalContext, /check\/action\/mark[\s\S]{0,100}confirmed race\/retry defect/i);
   assert.match(output.additionalContext, /missing-implement-gate[\s\S]{0,160}ensure-plan\/SKILL\.md/i);
+});
+
+test('shell analyzer catches clobber redirects, dd, nested shells, and PowerShell writers', () => {
+  const cases = [
+    ['echo x >| .harness/session.json', ['.harness/session.json']],
+    ['echo x 1>| .env', ['.env']],
+    ['dd if=/dev/zero of=.env bs=1 count=1', ['.env']],
+    ['sh -c "rm -rf docs"', ['docs']],
+    ['bash -lc "touch src/a.json"', ['src/a.json']],
+    ['env FOO=1 touch src/a.json', ['src/a.json']],
+    ['echo x | tee src/a.json', ['src/a.json']],
+    ["python3 -c \"open('src/a.json', 'w').write('x')\"", ['src/a.json']],
+    ['Set-Content .env secret', ['.env']],
+    ['Add-Content -Path .env secret', ['.env']],
+    ['Out-File -FilePath src/a.json', ['src/a.json']],
+    ['Remove-Item -Recurse -Force src', ['src']],
+    ['powershell -Command "Set-Content .env secret"', ['.env']],
+  ];
+  for (const [command, targets] of cases) {
+    const analyzed = analyzeShellMutation(command);
+    assert.equal(analyzed.mutation, true, command);
+    assert.deepEqual(analyzed.targets, targets, command);
+  }
+});
+
+test('mkdir ancestor exception applies only to paths mkdir alone creates', () => {
+  const compound = analyzeShellMutation('mkdir -p src && rm -rf src');
+  assert.equal(compound.mutation, true);
+  assert.deepEqual(compound.mkdirTargets, []);
+  const benign = analyzeShellMutation('mkdir -p src/generated && touch src/generated/a.json');
+  assert.deepEqual(benign.mkdirTargets, ['src/generated']);
+
+  const workspace = tempWorkspace();
+  const plan = writePlan(workspace);
+  writePassedGate(workspace, plan);
+  const denied = runHook('require-plan-gate.mjs', workspace, {
+    tool_name: 'run_in_terminal',
+    tool_input: { command: 'mkdir -p src && rm -rf src' },
+  });
+  assert.equal(outputJson(denied).hookSpecificOutput?.permissionDecision, 'deny');
+});
+
+test('unrecognized tools carrying file targets fail closed as mutations', () => {
+  const normalized = normalizeToolPayload({
+    tool_name: 'future_edit_tool',
+    tool_input: { filePath: 'src/a.json' },
+  });
+  assert.equal(normalized.mutation, true);
+  assert.deepEqual(normalized.targets, ['src/a.json']);
+
+  for (const toolName of ['insert_edit_into_file', 'edit_notebook_file', 'create_directory']) {
+    assert.equal(
+      normalizeToolPayload({ tool_name: toolName, tool_input: { filePath: 'src/a.json' } }).mutation,
+      true,
+      toolName
+    );
+  }
+
+  const workspace = tempWorkspace();
+  const denied = runHook('require-plan-gate.mjs', workspace, {
+    tool_name: 'future_edit_tool',
+    tool_input: { filePath: 'src/a.json' },
+  });
+  assert.equal(outputJson(denied).hookSpecificOutput?.permissionDecision, 'deny');
+
+  const pending = runHook('record-successful-edit.mjs', workspace, {
+    hook_event_name: 'PostToolUse',
+    tool_name: 'future_edit_tool',
+    tool_input: { filePath: 'src/a.json' },
+    tool_response: 'File edited successfully',
+  });
+  assert.equal(pending.status, 0, pending.stderr);
+  const session = JSON.parse(fs.readFileSync(path.join(workspace, '.harness', 'session.json'), 'utf8'));
+  assert.ok(session.lastEditAt, 'unknown edit tools must still create pending verification state');
+});
+
+test('apply_patch move destinations are scoped targets', () => {
+  const normalized = normalizeToolPayload({
+    tool_name: 'apply_patch',
+    tool_input: {
+      patch: '*** Begin Patch\n*** Update File: src/a.json\n*** Move to: src/renamed.json\n*** End Patch',
+    },
+  });
+  assert.deepEqual(normalized.targets, ['src/a.json', 'src/renamed.json']);
+});
+
+test('hook denials expose both VS Code and Copilot CLI decision shapes', () => {
+  const workspace = tempWorkspace();
+  const denied = runHook('require-plan-gate.mjs', workspace, {
+    tool_name: 'replace_string_in_file',
+    tool_input: { filePath: 'src/a.json' },
+  });
+  const output = outputJson(denied);
+  assert.equal(output.permissionDecision, 'deny');
+  assert.equal(output.hookSpecificOutput.permissionDecision, 'deny');
+  assert.equal(output.permissionDecisionReason, output.hookSpecificOutput.permissionDecisionReason);
+
+  writePassedGate(workspace, writePlan(workspace));
+  runHook('record-successful-edit.mjs', workspace, {
+    hook_event_name: 'PostToolUse',
+    tool_name: 'replace_string_in_file',
+    tool_input: { filePath: 'src/schema.json' },
+    tool_response: 'File edited successfully',
+  });
+  const stop = runHook('require-verification.mjs', workspace, { hook_event_name: 'Stop', stop_hook_active: false });
+  const stopOutput = outputJson(stop);
+  assert.equal(stopOutput.decision, 'block');
+  assert.equal(stopOutput.hookSpecificOutput.decision, 'block');
+});
+
+test('safety guards fail closed on malformed payloads', () => {
+  for (const hook of ['guard-critical-files.mjs', 'block-destructive-commands.mjs']) {
+    const result = spawnSync(process.execPath, [path.join(hooksRoot, hook)], {
+      cwd: tempWorkspace(),
+      input: '{not-json',
+      encoding: 'utf8',
+      env: { ...process.env, HARNESS_ENFORCEMENT: 'enforce' },
+    });
+    assert.equal(result.status, 0, result.stderr);
+    const output = outputJson(result);
+    assert.equal(output.hookSpecificOutput?.permissionDecision, 'deny', hook);
+    assert.match(output.hookSpecificOutput?.permissionDecisionReason || '', /invalid-hook-payload/, hook);
+  }
+
+  const recorder = spawnSync(process.execPath, [path.join(hooksRoot, 'record-successful-edit.mjs')], {
+    cwd: tempWorkspace(),
+    input: '{not-json',
+    encoding: 'utf8',
+  });
+  assert.equal(recorder.status, 0, recorder.stderr);
+  const recorderOutput = outputJson(recorder);
+  assert.equal(recorderOutput.continue, true);
+  assert.match(recorderOutput.systemMessage || '', /invalid-hook-payload/);
+});
+
+test('destructive push guard blocks refspec force pushes without overblocking benign flags', () => {
+  const workspace = tempWorkspace();
+  for (const command of ['git push origin +main', 'git push origin +HEAD:main', 'git push origin :main']) {
+    const blocked = runHook('block-destructive-commands.mjs', workspace, {
+      tool_name: 'Bash',
+      tool_input: { command },
+    });
+    assert.equal(outputJson(blocked).hookSpecificOutput?.permissionDecision, 'deny', command);
+  }
+  for (const command of [
+    'git push --ff-only origin main',
+    'git push --follow-tags origin main',
+    'git push origin main',
+    'git push origin HEAD:main',
+  ]) {
+    const allowed = runHook('block-destructive-commands.mjs', workspace, {
+      tool_name: 'Bash',
+      tool_input: { command },
+    });
+    assert.notEqual(outputJson(allowed).hookSpecificOutput?.permissionDecision, 'deny', command);
+  }
+});
+
+test('critical-file guard blocks .envrc and symlinked sensitive paths', () => {
+  const workspace = tempWorkspace();
+  const envrc = runHook('guard-critical-files.mjs', workspace, {
+    tool_name: 'replace_string_in_file',
+    tool_input: { filePath: '.envrc' },
+  });
+  assert.equal(outputJson(envrc).hookSpecificOutput?.permissionDecision, 'deny');
+
+  fs.writeFileSync(path.join(workspace, '.env'), 'SECRET=1\n');
+  fs.symlinkSync(path.join(workspace, '.env'), path.join(workspace, 'config.txt'));
+  const symlinked = runHook('guard-critical-files.mjs', workspace, {
+    tool_name: 'replace_string_in_file',
+    tool_input: { filePath: 'config.txt' },
+  });
+  assert.equal(outputJson(symlinked).hookSpecificOutput?.permissionDecision, 'deny');
+});
+
+test('out-of-plan verification enforcement parses block-list verification.required', () => {
+  const workspace = tempWorkspace();
+  const plan = writePlan(workspace);
+  const planPath = path.join(workspace, plan);
+  const blockList = fs
+    .readFileSync(planPath, 'utf8')
+    .replace(
+      'required: [harness-tests, prompt-contracts, host-contracts, build-assets]',
+      'required:\n    - harness-tests\n    - prompt-contracts\n    - host-contracts\n    - build-assets'
+    );
+  fs.writeFileSync(planPath, blockList);
+  fs.writeFileSync(
+    path.join(workspace, '.github', 'harness', 'checks.yaml'),
+    'version: 1\nchecks:\n  harness-tests:\n    command: ["node", "scripts/run-harness-tests.mjs"]\n  schema-validation:\n    command: ["node", "scripts/validate-schema.mjs"]\n',
+    'utf8'
+  );
+  writePassedGate(workspace, plan);
+  const denied = runHook('require-plan-gate.mjs', workspace, {
+    tool_name: 'run_in_terminal',
+    tool_input: { command: 'node scripts/validate-schema.mjs' },
+  });
+  assert.equal(outputJson(denied).hookSpecificOutput?.permissionDecision, 'deny');
+  assert.match(outputJson(denied).hookSpecificOutput?.permissionDecisionReason || '', /out-of-plan-verification/);
+});
+
+test('primitive activation without a host session id is accepted only while fresh', () => {
+  const workspace = tempWorkspace();
+  const plan = writePlan(workspace, { createPrimitive: true });
+  writePassedGate(workspace, plan);
+  const session = JSON.parse(fs.readFileSync(path.join(workspace, '.harness', 'session.json'), 'utf8'));
+  session.activatedSkills = {
+    'create-primitive': { sessionId: null, activatedAt: new Date().toISOString() },
+  };
+  fs.writeFileSync(path.join(workspace, '.harness', 'session.json'), JSON.stringify(session));
+
+  const noSession = spawnSync(process.execPath, [path.join(hooksRoot, 'require-plan-gate.mjs')], {
+    cwd: workspace,
+    input: JSON.stringify({
+      cwd: workspace,
+      hook_event_name: 'PreToolUse',
+      tool_name: 'replace_string_in_file',
+      tool_input: { filePath: '.github/skills/example/SKILL.md' },
+    }),
+    encoding: 'utf8',
+    env: { ...process.env, HARNESS_ENFORCEMENT: 'enforce' },
+  });
+  assert.notEqual(outputJson(noSession).hookSpecificOutput?.permissionDecision, 'deny', noSession.stdout);
+
+  session.activatedSkills['create-primitive'].activatedAt = new Date(Date.now() - 8 * 60 * 60 * 1000).toISOString();
+  fs.writeFileSync(path.join(workspace, '.harness', 'session.json'), JSON.stringify(session));
+  const stale = spawnSync(process.execPath, [path.join(hooksRoot, 'require-plan-gate.mjs')], {
+    cwd: workspace,
+    input: JSON.stringify({
+      cwd: workspace,
+      hook_event_name: 'PreToolUse',
+      tool_name: 'replace_string_in_file',
+      tool_input: { filePath: '.github/skills/example/SKILL.md' },
+    }),
+    encoding: 'utf8',
+    env: { ...process.env, HARNESS_ENFORCEMENT: 'enforce' },
+  });
+  assert.equal(outputJson(stale).hookSpecificOutput?.permissionDecision, 'deny');
+});
+
+test('hook and CLI primitive path rules and plan digests stay in parity', async () => {
+  const cliGovernance = await import('../lib/primitive-governance.mjs');
+  const cliEvidence = await import('../lib/evidence.mjs');
+  const hookPayload = await import('../../../.github/hooks/lib/tool-payload.mjs');
+  const samples = [
+    '.github/skills/example/SKILL.md',
+    '.github/agents/engineer.agent.md',
+    '.github/instructions/global.instructions.md',
+    '.github/prompts/example.prompt.md',
+    '.github/checks/example.md',
+    'enterprise/skills/example/SKILL.md',
+    'knowledge/capability-registry.yaml',
+    'src/app.js',
+    'docs/plans/example-plan.md',
+    '.github/workflows/ci.yml',
+  ];
+  for (const sample of samples) {
+    assert.equal(
+      cliGovernance.isPrimitivePath(sample),
+      hookPayload.isPrimitivePath(sample),
+      `primitive-path divergence: ${sample}`
+    );
+  }
+
+  const fixture = '---\ntitle: X\n---\n\n## Overview\n\nBody.\n\n## Activity\n\n- Logged.\n';
+  const hookDigest = crypto.createHash('sha256').update(planContractText(fixture)).digest('hex');
+  assert.equal(cliEvidence.planDigest(fixture), hookDigest, 'plan digest algorithms diverged');
+});
+
+test('every enforcement denial names an actionable next command', () => {
+  const workspace = tempWorkspace();
+  // Missing-gate denial (PreToolUse)
+  const missing = runHook('require-plan-gate.mjs', workspace, {
+    tool_name: 'replace_string_in_file',
+    tool_input: { filePath: 'src/a.json' },
+  });
+  const missingReason = outputJson(missing).hookSpecificOutput?.permissionDecisionReason || '';
+  assert.match(missingReason, /ensure-plan\/SKILL\.md|harness gate|Read ~/, 'gate denial must carry a recipe');
+
+  // Out-of-plan-scope denial
+  const plan = writePlan(workspace);
+  writePassedGate(workspace, plan);
+  const outOfScope = runHook('require-plan-gate.mjs', workspace, {
+    tool_name: 'replace_string_in_file',
+    tool_input: { filePath: 'src/unplanned-file.json' },
+  });
+  assert.match(
+    outputJson(outOfScope).hookSpecificOutput?.permissionDecisionReason || '',
+    /next: add it to ## Impacted Files/,
+    'scope denial must tell the agent how to recover'
+  );
+
+  // Stop-hook denial carries a verify recipe
+  runHook('record-successful-edit.mjs', workspace, {
+    hook_event_name: 'PostToolUse',
+    tool_name: 'replace_string_in_file',
+    tool_input: { filePath: 'src/schema.json' },
+    tool_response: 'File edited successfully',
+  });
+  const stop = runHook('require-verification.mjs', workspace, { hook_event_name: 'Stop', stop_hook_active: false });
+  assert.match(outputJson(stop).hookSpecificOutput?.reason || '', /next: run `harness verify/, 'Stop denial must carry a verify recipe');
 });
