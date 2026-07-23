@@ -12,7 +12,7 @@ autonomy: full   # full | balanced | strict
 |---------|---------------|-----------------|---------------|----------------|
 | **full** | All green + amber | Same | Enabled | red + new agents |
 | **balanced** | green | amber + compound | limited | same as full Tier 3 |
-| **strict** | `/tdd-fix`, `/btw` only | — | — | capture, plan, implement, primitives |
+| **strict** | Answer mode + direct TDD fixes only | — | — | capture, plan, implement, primitives |
 
 ## Tier 0 — Autonomous (no ask)
 

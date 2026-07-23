@@ -23,7 +23,7 @@ Activate when the user wants to:
 
 **Should not trigger:**
 - "Plan this specific issue" → use /plan-issue
-- "Fix this bug" → use /tdd-fix
+- "Fix this bug" → use @engineer Deliver mode
 - "Create a new issue" → use /capture-issue
 
 ## Steps

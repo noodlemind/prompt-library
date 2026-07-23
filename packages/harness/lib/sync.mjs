@@ -2,7 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
 
-const SYNC_TOP_LEVEL = ['skills', 'agents', 'instructions', 'prompts', 'hooks', 'knowledge', 'enterprise'];
+const SYNC_TOP_LEVEL = ['skills', 'agents', 'instructions', 'hooks', 'knowledge', 'enterprise'];
 
 const KNOWLEDGE_PRESERVE_PREFIXES = ['knowledge/solutions/'];
 const KNOWLEDGE_NEVER_OVERWRITE = ['knowledge/profile.md'];

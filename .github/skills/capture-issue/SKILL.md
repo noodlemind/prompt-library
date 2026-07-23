@@ -35,7 +35,7 @@ Activate when the user wants to:
 
 **Should not trigger:**
 - "Plan how to fix this" → use /plan-issue
-- "Fix this bug now" → use /tdd-fix
+- "Fix this bug now" → use @engineer Deliver mode
 - "Brainstorm solutions" → use /brainstorming
 
 ## Steps

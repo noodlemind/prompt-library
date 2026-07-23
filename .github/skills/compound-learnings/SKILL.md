@@ -2,6 +2,7 @@
 name: compound-learnings
 description: Document a recently solved problem as a reusable solution. Use after completing work to capture problem, root cause, fix, and prevention. Not for planning or implementation — use after the fix is verified.
 argument-hint: "[path to completed issue or description of solved problem]"
+user-invocable: false
 ---
 
 # Compound Learnings
@@ -35,8 +36,8 @@ Read `assets/solution-template.md` for the solution document template and taggin
 If an issue file is provided, read it thoroughly — including all accumulated sections from prior pipeline steps:
 - `## Context` — initial problem analysis (from /capture-issue)
 - `## Research Notes` — findings, patterns, constraints (from /plan-issue)
-- `## Implementation Notes` — decisions, trade-offs, gotchas (from /work-on-task)
-- `## Activity` — timestamped session logs (from /work-on-task)
+- `## Implementation Notes` — decisions, trade-offs, gotchas (from Engineer Deliver mode)
+- `## Activity` — timestamped session logs (from Engineer Deliver mode)
 
 These sections contain the full history of the issue lifecycle. Use them to extract learnings.
 
@@ -144,7 +145,7 @@ Confirm: "Learning documented at `knowledge/solutions/<path>` (team-wide after h
 **Should not trigger:**
 - "Plan this feature" → /plan-issue
 - "Review this code" → /code-review
-- "Fix this bug" → /tdd-fix
+- "Fix this bug" → @engineer Deliver mode
 
 ## Guardrails
 

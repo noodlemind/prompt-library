@@ -60,15 +60,15 @@ Read skill-template.md for the complete skill template with all sections.
 
 ## Cross-Tool Frontmatter Compatibility
 
-This library targets GitHub Copilot in VS Code and IntelliJ IDEA. VS Code reads specific frontmatter fields from globally hydrated `%USERPROFILE%\.copilot` customizations. IntelliJ IDEA reads global customizations from `%LOCALAPPDATA%\github-copilot\intellij` when the current plugin features are enabled. Keep host-specific behavior in prompt wrappers and shared behavior in skills.
+This library targets GitHub Copilot in VS Code and IntelliJ IDEA. VS Code reads specific frontmatter fields from globally hydrated `%USERPROFILE%\.copilot` customizations. IntelliJ IDEA reads global customizations from `%LOCALAPPDATA%\github-copilot\intellij` when the current plugin features are enabled. Keep shared behavior in skills; hosts select agents such as the Engineer directly from the agent dropdown.
 
 **VS Code 1.109 frontmatter (primary — always use these):**
 
 | Field | Used by | Purpose |
 |-------|---------|---------|
-| `name` | Skills, prompts | Display name in `/` menu |
+| `name` | Skills | Display name in `/` menu |
 | `description` | Agents, skills | Discovery matching — the search index |
-| `tools` | Agents, prompts | Tool whitelist (omit for all tools) |
+| `tools` | Agents | Tool whitelist (omit for all tools) |
 | `user-invocable` | Agents | Show/hide in `@` menu |
 | `agents` | Agents | Subagent allowlist |
 | `applyTo` | Instructions | Glob pattern for activation |
@@ -112,7 +112,7 @@ Five patterns for structuring SKILL.md content ([source](https://lavinigam.com/p
 | **Generator** | Producing structured output from templates | `assets/` for templates + `references/` for style guides | `/capture-issue`, `/compound-learnings` |
 | **Reviewer** | Evaluating against checklists with severity scoring | `references/` for checklists | `/code-review` |
 | **Inversion** | Gathering requirements before acting (interview-first) | `assets/` for output templates | `/brainstorming` |
-| **Pipeline** | Sequential workflows with gate conditions | `references/` + `assets/` | `/work-on-task`, connected pipeline |
+| **Pipeline** | Sequential workflows with gate conditions | `references/` + `assets/` | Connected pipeline (`/capture-issue` → `/plan-issue` → Engineer Deliver) |
 
 **Key principles:**
 - The `description` field is the skill's search index — be specific about WHAT and WHEN, include negative triggers for confusable skills
@@ -120,15 +120,6 @@ Five patterns for structuring SKILL.md content ([source](https://lavinigam.com/p
 - Use gate conditions ("DO NOT proceed to Step N until...") to prevent agents from skipping validation
 - Skills teach agents when and how to use tools — they are not tools themselves
 - Keep SKILL.md under 500 lines; extract dense content to `references/`
-
-## Prompt Wrapper Creation
-
-Prompt wrappers in `.github/prompts/` should be thin:
-
-- Frontmatter declares `name`, `description`, `argument-hint`, `agent`, and `tools`
-- Body should point to the matching skill and shared context
-- Do not duplicate workflow steps from `SKILL.md`
-- If the prompt needs more than routing and tool declarations, move that logic into the skill
 
 ## Review Check Creation
 

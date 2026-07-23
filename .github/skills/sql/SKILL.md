@@ -2,6 +2,7 @@
 name: sql
 description: SQL and PostgreSQL workflow for schema design, migrations, query changes, performance, and data integrity review preparation.
 argument-hint: "[describe the SQL, schema, migration, or query task]"
+user-invocable: false
 ---
 
 # SQL

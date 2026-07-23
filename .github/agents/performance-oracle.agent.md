@@ -1,6 +1,6 @@
 ---
 description: Analyze code for performance bottlenecks, algorithmic complexity, and scalability.
-tools: ["codebase", "search", "read", "usages", "changes", "problems", "terminalLastCommand"]
+tools: ["search/codebase", "search", "read", "search/usages", "search/changes", "read/problems", "read/terminalLastCommand"]
 user-invocable: false
 agents: []
 ---

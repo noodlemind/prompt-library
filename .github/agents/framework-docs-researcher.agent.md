@@ -1,6 +1,6 @@
 ---
 description: Research framework documentation, APIs, and version-specific capabilities.
-tools: ["codebase", "search", "read", "fetch", "problems", "terminalLastCommand"]
+tools: ["search/codebase", "search", "read", "web/fetch", "read/problems", "read/terminalLastCommand"]
 user-invocable: false
 agents: []
 ---

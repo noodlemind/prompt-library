@@ -27,7 +27,7 @@ Section in plan files:
 |------|-----------------|
 | `/recall` | Global manifest matches, local plans |
 | `/plan-issue` | Research synthesis |
-| `/work-on-task` | Implementation gotchas |
+| `@engineer` Deliver mode | Implementation gotchas |
 | `/code-review` | Critical findings (if still open) |
 | `/compound-learnings` | Final distilled facts before `status: done` |
 

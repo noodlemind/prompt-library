@@ -1,16 +1,17 @@
 ---
 description: Coordinate issue planning by delegating to research agents and synthesizing structured plans.
-tools: ["agent", "codebase", "search", "read", "editFiles", "fetch", "terminalLastCommand", "problems"]
+tools: ["agent", "search/codebase", "search", "read", "edit/editFiles", "web/fetch", "read/terminalLastCommand", "read/problems"]
 agents: ["repo-research-analyst", "best-practices-researcher", "framework-docs-researcher", "git-history-analyzer", "spec-flow-analyzer"]
 handoffs:
   - label: "Start Implementation"
-    agent: pipeline-navigator
-    prompt: "The plan is ready. Help me start working on the plan discussed above."
+    agent: engineer
+    prompt: "The plan is ready. Enter Deliver mode and execute the locked plan discussed above."
     send: false
   - label: "Deepen Plan"
     agent: plan-coordinator
     prompt: "Enhance this plan with deeper research on each section."
     send: false
+user-invocable: false
 ---
 
 ## Mission
@@ -126,6 +127,11 @@ Include in Research Notes:
 - Framework version constraints
 - Patterns to follow and anti-patterns to avoid
 - External documentation references
+
+## Dispatch Rules and Failure Contract
+
+- Dispatch `git-history-analyzer` only when plan context depends on how the code evolved (regressions, churn hotspots, prior attempts); dispatch `spec-flow-analyzer` only when requirements completeness or edge-case gaps block planning. Do not dispatch either by default.
+- If a subagent fails (no output), name it and continue with the successful results. If it returns partial output, include what was returned and mark it partial. Retry a failed subagent at most once. Never block plan delivery on an optional researcher.
 
 ## Output Format
 

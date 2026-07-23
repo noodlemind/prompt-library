@@ -10,7 +10,15 @@ engineer:
   workflow: orient → establish intent → investigate → work → handle gaps → verify → review → compound → report
 
 capabilities:
-  analyze-and-plan: {type: skill, status: active, owner: developer-experience, version: 1, origin: starter}
+  analyze-and-plan:
+    type: skill
+    status: retired
+    owner: developer-experience
+    version: 1
+    origin: starter
+    retired_on: 2026-07-24
+    replacement: plan-issue and deepen-plan
+    reason: Duplicated plan enrichment owned by plan-issue/deepen-plan.
   auto-compound:
     type: skill
     status: active
@@ -25,7 +33,7 @@ capabilities:
   brainstorming: {type: skill, status: active, owner: developer-experience, version: 1, origin: starter}
   btw:
     type: skill
-    status: active
+    status: retired
     owner: developer-experience
     version: 2
     origin: starter
@@ -33,6 +41,9 @@ capabilities:
     eval_suite: evals/skill-trigger-evals.yaml#btw
     overlaps: [engineer]
     usage_count: 0
+    retired_on: 2026-07-24
+    replacement: engineer-agent Answer mode
+    reason: Ceremony-free Answer mode made a separate quick-Q&A entry redundant.
   capture-issue: {type: skill, status: active, owner: developer-experience, version: 1, origin: starter}
   code-review:
     type: skill
@@ -108,28 +119,50 @@ capabilities:
   project-readme: {type: skill, status: active, owner: developer-experience, version: 1, origin: starter}
   python: {type: skill, status: active, owner: application-platform, version: 1, origin: starter}
   recall: {type: skill, status: active, owner: developer-experience, version: 1, origin: starter}
-  review-guardrails: {type: skill, status: active, owner: developer-experience, version: 1, origin: starter}
+  review-guardrails:
+    type: skill
+    status: retired
+    owner: developer-experience
+    version: 1
+    origin: starter
+    retired_on: 2026-07-24
+    replacement: code-review
+    reason: Plan-compliance audit is a code-review concern.
   sql: {type: skill, status: active, owner: data-platform, version: 1, origin: starter}
-  start: {type: skill, status: active, owner: developer-experience, version: 1, origin: starter}
+  start:
+    type: skill
+    status: retired
+    owner: developer-experience
+    version: 1
+    origin: starter
+    retired_on: 2026-07-24
+    replacement: engineer-agent mode selection
+    reason: The Engineer mode contract is the intake router; a routing skill duplicated it.
   tdd-fix:
     type: skill
-    status: active
+    status: retired
     owner: developer-experience
     version: 2
     origin: starter
     triggers: [isolated bug, failing regression test]
     eval_suite: evals/skill-trigger-evals.yaml#tdd-fix
     usage_count: 0
+    retired_on: 2026-07-24
+    replacement: engineer-agent Deliver mode with code-implementer
+    reason: Duplicated the Engineer TDD delivery lifecycle.
   triage-issues: {type: skill, status: active, owner: developer-experience, version: 1, origin: starter}
   work-on-task:
     type: skill
-    status: active
+    status: retired
     owner: developer-experience
     version: 2
     origin: starter
     triggers: [resume locked plan, execute current phase]
     eval_suite: evals/skill-trigger-evals.yaml#work-on-task
     usage_count: 0
+    retired_on: 2026-07-24
+    replacement: engineer-agent Deliver mode
+    reason: Phase execution is owned by the Engineer delivery lifecycle.
 
   architecture-strategist: {type: agent, status: active, owner: architecture, version: 1, origin: starter}
   aws-reviewer: {type: agent, status: active, owner: cloud-platform, version: 1, origin: starter}
@@ -147,15 +180,39 @@ capabilities:
     owner: developer-experience
     version: 2
     origin: starter
-  feedback-codifier: {type: agent, status: active, owner: developer-experience, version: 1, origin: starter}
+  feedback-codifier:
+    type: agent
+    status: retired
+    owner: developer-experience
+    version: 1
+    origin: starter
+    retired_on: 2026-07-24
+    replacement: compound-learnings
+    reason: Unreachable after starter-kit retirement; codification belongs to compounding.
   framework-docs-researcher: {type: agent, status: active, owner: developer-experience, version: 1, origin: starter}
   git-history-analyzer: {type: agent, status: active, owner: developer-experience, version: 1, origin: starter}
   java-reviewer: {type: agent, status: active, owner: application-platform, version: 1, origin: starter}
   pattern-recognition-specialist: {type: agent, status: active, owner: architecture, version: 1, origin: starter}
   performance-oracle: {type: agent, status: active, owner: reliability-engineering, version: 1, origin: starter}
-  pipeline-navigator: {type: agent, status: active, owner: developer-experience, version: 1, origin: starter}
+  pipeline-navigator:
+    type: agent
+    status: retired
+    owner: developer-experience
+    version: 1
+    origin: starter
+    retired_on: 2026-07-24
+    replacement: engineer-agent mode selection
+    reason: User-facing routing contradicts the single-entry Engineer.
   plan-coordinator: {type: agent, status: active, owner: developer-experience, version: 1, origin: starter}
-  pr-comment-resolver: {type: agent, status: active, owner: developer-experience, version: 1, origin: starter}
+  pr-comment-resolver:
+    type: agent
+    status: retired
+    owner: developer-experience
+    version: 1
+    origin: starter
+    retired_on: 2026-07-24
+    replacement: engineer-agent Deliver mode
+    reason: Unreachable; PR feedback resolution is ordinary Engineer delivery.
   python-reviewer: {type: agent, status: active, owner: application-platform, version: 1, origin: starter}
   repo-research-analyst: {type: agent, status: active, owner: developer-experience, version: 1, origin: starter}
   security-sentinel: {type: agent, status: active, owner: application-security, version: 1, origin: starter}

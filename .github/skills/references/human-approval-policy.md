@@ -10,7 +10,7 @@ Agents may investigate and recommend freely; they must pause for explicit approv
 
 Ask the human before:
 
-- Creating, deleting, or substantially changing a skill, agent, instruction, prompt wrapper, review check, reference template, or solution template.
+- Creating, deleting, or substantially changing a skill, agent, instruction, review check, reference template, or solution template.
 - Choosing a concurrency strategy such as idempotency keys, uniqueness constraints, optimistic locking, pessimistic locking, atomic updates, retries, or isolation-level changes.
 - Making schema, migration, backfill, production data, retention, or data repair changes.
 - Touching auth, permissions, secrets, tenant isolation, encryption, or public API contracts.

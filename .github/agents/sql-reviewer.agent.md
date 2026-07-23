@@ -1,6 +1,6 @@
 ---
 description: Review SQL, schema, migrations, and data-access changes for correctness, safety, performance, and integrity.
-tools: ["codebase", "search", "read", "usages", "changes", "problems", "terminalLastCommand"]
+tools: ["search/codebase", "search", "read", "search/usages", "search/changes", "read/problems", "read/terminalLastCommand"]
 user-invocable: false
 agents: []
 ---

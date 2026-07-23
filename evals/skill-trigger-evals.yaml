@@ -36,52 +36,6 @@ skills:
       - {prompt: "Investigate this SQS defect without editing", assertions: ["confirmed finding packet", "Capture for Later and Plan and Fix offered", "Leave in Chat available", "no durable knowledge"]}
       - {prompt: "Edit this schema even though no gate exists yet", assertions: ["blocked mutation", "ensure-plan recovery", "implement gate passed", "original edit retried", "fresh verification"]}
 
-  btw:
-    hosts: *supported_hosts
-    positive:
-      - {prompt: "BTW, where is authentication configured?", assertions: ["activate btw", "minimal repo lookup"]}
-      - {prompt: "Quick question: what test command should I run?", assertions: ["activate btw", "concise answer"]}
-      - {prompt: "What does this repository do?", assertions: ["activate btw", "no plan"]}
-      - {prompt: "Explain what plan_lock means without changing anything", assertions: ["activate btw", "no edits"]}
-      - {prompt: "Where are environment variables documented?", assertions: ["activate btw", "cite repository evidence"]}
-      - {prompt: "Compare these two small approaches and answer only", assertions: ["activate btw", "read-only recommendation"]}
-      - {prompt: "What does this function return?", assertions: ["activate btw", "bounded file read"]}
-      - {prompt: "How does the review pipeline work?", assertions: ["activate btw", "stop when supported"]}
-    negative:
-      - {prompt: "Investigate the intermittent timeout across the repository", assertions: ["do not activate btw", "route engineer Investigate"]}
-      - {prompt: "Fix the authentication bug", assertions: ["do not activate btw", "route engineer Deliver"]}
-      - {prompt: "Update the README", assertions: ["do not activate btw", "route project-readme"]}
-      - {prompt: "Create a plan for this feature", assertions: ["do not activate btw", "route plan-issue"]}
-      - {prompt: "Review this finished diff", assertions: ["do not activate btw", "route code-review"]}
-      - {prompt: "Run the full test suite and diagnose failures", assertions: ["do not activate btw", "route engineer Investigate"]}
-      - {prompt: "Implement the approach you just explained", assertions: ["do not activate btw", "transition to engineer Deliver"]}
-      - {prompt: "Compound the learning from this completed task", assertions: ["do not activate btw", "route compound-learnings"]}
-    outcomes:
-      - {prompt: "BTW, what does the harness Stop hook do?", assertions: ["concise evidence-backed answer", "no file changes", "no plan", "no delivery verification"]}
-
-  work-on-task:
-    hosts: *supported_hosts
-    positive:
-      - {prompt: "Resume docs/plans/orders-plan.md at its current phase", assertions: ["activate work-on-task", "require locked plan"]}
-      - {prompt: "Continue Phase 3 of the locked migration plan", assertions: ["activate work-on-task", "resume first unchecked task"]}
-      - {prompt: "Execute the next task in this in-progress plan", assertions: ["activate work-on-task", "preserve scope"]}
-      - {prompt: "Pick up the explicit plan where the last session stopped", assertions: ["activate work-on-task", "read recent activity"]}
-      - {prompt: "Implement Phase 2 from docs/plans/auth-plan.md", assertions: ["activate work-on-task", "run implement gate"]}
-      - {prompt: "Finish the unchecked items in the current locked phase", assertions: ["activate work-on-task", "use TDD"]}
-      - {prompt: "Work only on the phase named in this plan file", assertions: ["activate work-on-task", "do not expand scope"]}
-      - {prompt: "Resume plan execution and update its activity log", assertions: ["activate work-on-task", "append activity"]}
-    negative:
-      - {prompt: "Implement this feature; there is no plan yet", assertions: ["do not activate work-on-task", "route engineer"]}
-      - {prompt: "Plan the new billing feature", assertions: ["do not activate work-on-task", "route plan-issue"]}
-      - {prompt: "Review the changes from the completed phase", assertions: ["do not activate work-on-task", "route code-review"]}
-      - {prompt: "Fix this isolated typo with a test", assertions: ["do not activate work-on-task", "route tdd-fix"]}
-      - {prompt: "Explain the active plan", assertions: ["do not activate work-on-task", "no edits"]}
-      - {prompt: "Unlock this draft plan", assertions: ["do not activate work-on-task", "route ensure-plan"]}
-      - {prompt: "Create a skill based on the completed work", assertions: ["do not activate work-on-task", "route create-primitive"]}
-      - {prompt: "Run verification only for this plan", assertions: ["do not activate work-on-task", "use harness verify"]}
-    outcomes:
-      - {prompt: "Resume the locked plan and finish Phase 1", assertions: ["phase tasks checked", "evidence outcome passed", "activity appended", "scope preserved"]}
-
   ensure-plan:
     hosts: *supported_hosts
     positive:
@@ -222,29 +176,6 @@ skills:
       - {prompt: "Explain this existing solution", assertions: ["do not activate compound-learnings", "answer only"]}
     outcomes:
       - {prompt: "Publish the verified timeout fix", assertions: ["solution uses template", "evidence and prevention recorded", "manifest indexed"]}
-
-  tdd-fix:
-    hosts: *supported_hosts
-    positive:
-      - {prompt: "Fix this isolated failing unit test with TDD", assertions: ["activate tdd-fix", "red green cleanup"]}
-      - {prompt: "Reproduce and repair this small regression", assertions: ["activate tdd-fix", "failing test first"]}
-      - {prompt: "Correct this parser edge case and add a regression test", assertions: ["activate tdd-fix", "minimal change"]}
-      - {prompt: "This one function returns the wrong value; test and fix it", assertions: ["activate tdd-fix", "bounded scope"]}
-      - {prompt: "Fix the off-by-one bug in this helper", assertions: ["activate tdd-fix", "run targeted tests"]}
-      - {prompt: "Add a failing test for this reported bug, then make it pass", assertions: ["activate tdd-fix", "preserve behavior"]}
-      - {prompt: "Repair this isolated validation bug", assertions: ["activate tdd-fix", "verify regression"]}
-      - {prompt: "Make this deterministic test failure green with the smallest fix", assertions: ["activate tdd-fix", "avoid broad refactor"]}
-    negative:
-      - {prompt: "Build a multi-service feature end to end", assertions: ["do not activate tdd-fix", "route engineer"]}
-      - {prompt: "Resume the locked implementation plan", assertions: ["do not activate tdd-fix", "route work-on-task"]}
-      - {prompt: "Investigate an unknown production incident", assertions: ["do not activate tdd-fix", "route engineer"]}
-      - {prompt: "Plan this bug fix", assertions: ["do not activate tdd-fix", "route plan-issue"]}
-      - {prompt: "Review the existing fix", assertions: ["do not activate tdd-fix", "route code-review"]}
-      - {prompt: "Fix a schema race condition", assertions: ["do not activate tdd-fix", "high-risk planning required"]}
-      - {prompt: "Explain why the test fails", assertions: ["do not activate tdd-fix", "no edits requested"]}
-      - {prompt: "Create a reusable testing skill", assertions: ["do not activate tdd-fix", "route create-primitive"]}
-    outcomes:
-      - {prompt: "Fix the isolated date parsing regression", assertions: ["reproduction test failed first", "minimal fix", "targeted suite passed"]}
 
   code-review:
     hosts: *supported_hosts

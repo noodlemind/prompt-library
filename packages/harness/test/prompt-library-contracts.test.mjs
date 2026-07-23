@@ -193,7 +193,6 @@ test('host evaluation contains the three executable golden behavior contracts', 
 test('engineer loads capabilities on demand and owns bounded consultations', () => {
   const surfaces = [
     read('.github/agents/engineer.agent.md'),
-    read('.github/prompts/engineer.prompt.md'),
     read('.github/instructions/prompt-library-global.instructions.md'),
   ].join('\n');
 
@@ -211,9 +210,7 @@ test('engineer loads capabilities on demand and owns bounded consultations', () 
 test('active entry points use the accountable Engineer vocabulary', () => {
   const activeEntryPoints = [
     'README.md',
-    '.github/agents/pipeline-navigator.agent.md',
-    '.github/skills/start/SKILL.md',
-    '.github/prompts/start.prompt.md',
+    '.github/agents/engineer.agent.md',
     'docs/onboarding/harness-quickstart.md',
   ];
   for (const rel of activeEntryPoints) {
@@ -224,11 +221,11 @@ test('active entry points use the accountable Engineer vocabulary', () => {
 });
 
 test('execution, gap resolution, and compounding skills have distinct boundaries', () => {
-  const work = read('.github/skills/work-on-task/SKILL.md');
-  assert.match(work, /locked plan/i);
-  assert.match(work, /plan_lock:\s*true/i);
-  assert.match(work, /harness verify --plan/i);
-  assert.doesNotMatch(work, /Standalone mode/i);
+  // Phase execution is owned by the Engineer's Deliver lifecycle (work-on-task retired).
+  const engineerContract = read('.github/agents/engineer.agent.md');
+  assert.match(engineerContract, /Deliver\*{0,2} owns mutation lifecycle/i);
+  assert.match(engineerContract, /pass `harness gate --phase implement/);
+  assert.match(engineerContract, /require passed `harness verify`/i);
 
   const gaps = read('.github/skills/ensure-capability/SKILL.md');
   assert.match(gaps, /on-demand/i);
@@ -290,15 +287,12 @@ test('core and confusable skills have trigger and outcome eval coverage', () => 
   assert.equal(suite.version, 1);
   const expectedSkills = [
     'engineer',
-    'btw',
-    'work-on-task',
     'ensure-plan',
     'plan-issue',
     'ensure-capability',
     'create-primitive',
     'auto-compound',
     'compound-learnings',
-    'tdd-fix',
     'code-review',
   ];
 
@@ -373,6 +367,82 @@ test('hooks and CI enforce explicit plans and passed verification evidence', () 
   assert.ok(['observe', 'warn', 'enforce'].includes(policy.enforcement));
   assert.ok(Array.isArray(policy.exemptions));
   assert.ok(Array.isArray(policy.waivers));
+});
+
+test('single-entry: the engineer is the only user-invocable agent', () => {
+  const agentsDir = path.join(repoRoot, '.github', 'agents');
+  const invocable = fs
+    .readdirSync(agentsDir)
+    .filter((name) => name.endsWith('.agent.md'))
+    .filter((name) => {
+      const fm = read(`.github/agents/${name}`).match(/^---\n([\s\S]*?)\n---/)?.[1] || '';
+      return !/^user-invocable:\s*false\s*$/m.test(fm);
+    })
+    .map((name) => name.replace(/\.agent\.md$/, ''));
+  assert.deepEqual(invocable, ['engineer'], `@ menu must expose only the engineer, found: ${invocable.join(', ')}`);
+  // Retired routing surfaces stay gone.
+  for (const gone of [
+    '.github/agents/pipeline-navigator.agent.md',
+    '.github/agents/feedback-codifier.agent.md',
+    '.github/agents/pr-comment-resolver.agent.md',
+    '.github/skills/btw',
+    '.github/skills/start',
+    '.github/skills/analyze-and-plan',
+    '.github/skills/tdd-fix',
+    '.github/skills/review-guardrails',
+    '.github/skills/work-on-task',
+    '.github/prompts',
+  ]) {
+    assert.ok(!exists(gone), `${gone} is retired and must not exist`);
+  }
+});
+
+test('single-entry: the / menu is pinned to the approved skill set', () => {
+  const skillsDir = path.join(repoRoot, '.github', 'skills');
+  const invocable = fs
+    .readdirSync(skillsDir, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory() && exists(`.github/skills/${entry.name}/SKILL.md`))
+    .filter((entry) => {
+      const fm = read(`.github/skills/${entry.name}/SKILL.md`).match(/^---\n([\s\S]*?)\n---/)?.[1] || '';
+      return !/^user-invocable:\s*false\s*$/m.test(fm);
+    })
+    .map((entry) => entry.name)
+    .sort();
+  assert.deepEqual(invocable, ['engineer', 'harness-doctor', 'project-readme', 'triage-issues']);
+});
+
+test('single-entry: retired primitives carry registry tombstones', () => {
+  const registry = YAML.parse(read('knowledge/capability-registry.yaml'));
+  for (const name of ['btw', 'start', 'analyze-and-plan', 'tdd-fix', 'review-guardrails', 'work-on-task', 'pipeline-navigator', 'feedback-codifier', 'pr-comment-resolver']) {
+    const entry = registry.capabilities[name];
+    assert.ok(entry, `registry missing tombstone for ${name}`);
+    assert.equal(entry.status, 'retired', `${name} must be retired`);
+    assert.match(entry.replacement || '', /\S/, `${name} tombstone needs a replacement`);
+    assert.match(entry.reason || '', /\S/, `${name} tombstone needs a reason`);
+  }
+});
+
+test('agent tool identifiers are pinned to the current VS Code taxonomy', () => {
+  const canonical = new Set([
+    'agent', 'agent/runSubagent',
+    'edit', 'edit/createDirectory', 'edit/createFile', 'edit/editFiles', 'edit/editNotebook',
+    'execute', 'execute/createAndRunTask', 'execute/getTerminalOutput', 'execute/runInTerminal',
+    'execute/runNotebookCell', 'execute/testFailure',
+    'read', 'read/getNotebookSummary', 'read/problems', 'read/readFile',
+    'read/readNotebookCellOutput', 'read/terminalLastCommand', 'read/terminalSelection',
+    'search', 'search/changes', 'search/codebase', 'search/fileSearch', 'search/listDirectory',
+    'search/textSearch', 'search/usages',
+    'web', 'web/fetch',
+    'githubRepo', 'githubTextSearch', 'todos',
+  ]);
+  const agentsDir = path.join(repoRoot, '.github', 'agents');
+  for (const name of fs.readdirSync(agentsDir).filter((n) => n.endsWith('.agent.md'))) {
+    const m = read(`.github/agents/${name}`).match(/^tools: \[(.*)\]$/m);
+    if (!m) continue;
+    for (const tool of m[1].split(',').map((t) => t.trim().replace(/^"|"$/g, ''))) {
+      assert.ok(canonical.has(tool), `${name} declares unknown tool id "${tool}" — update the canonical allowlist deliberately if the host renamed it`);
+    }
+  }
 });
 
 test('token budget: engineer agent and context pack stay within their caps', () => {
@@ -501,9 +571,10 @@ test('canonical architecture defines capability promotion through retirement', (
 });
 
 test('review fixes preserve thin wrappers, complete skill metadata, and CI pinning', () => {
-  const prompt = read('.github/prompts/engineer.prompt.md');
-  assert.match(prompt, /\$\{input\}/);
-  assert.doesNotMatch(prompt, /Select the appropriate task mode/i);
+  // Prompt wrappers are retired: the directory is gone and upgrades purge hydrated copies.
+  assert.ok(!exists('.github/prompts'), 'prompt wrappers must not exist');
+  const retired = JSON.parse(read('packages/harness/retired.json'));
+  assert.ok(retired.retired.includes('prompts'), 'retired.json must purge hydrated prompts');
 
   for (const rel of [
     '.github/skills/engineer/SKILL.md',
@@ -553,15 +624,6 @@ test('review fixes preserve thin wrappers, complete skill metadata, and CI pinni
     assert.match(ensureCapture, new RegExp(`## ${section}`), `ensure-plan missing ${section}`);
   }
 
-  const work = read('.github/skills/work-on-task/SKILL.md');
-  const gateIndex = work.indexOf('harness gate --phase implement');
-  const transitionIndex = work.indexOf('set `planned` to `in-progress`');
-  assert.ok(gateIndex >= 0 && transitionIndex > gateIndex, 'work-on-task must gate before changing plan state');
-  assert.match(work, /failed gate[^\n]*no plan edits/i);
-  assert.match(work, /harness verify[^\n]*--base <base-ref>/);
-  assert.match(work, /Scope: passed\|amended/);
-  assert.match(work, /evidencePath copied from harness verify --json/);
-
   assert.match(read('.github/skills/harness-doctor/SKILL.md'), /H7[^\n]*auto-skill-draft/);
 
   const enforcementDoc = read(architecturePath);
@@ -578,7 +640,6 @@ test('review fixes preserve thin wrappers, complete skill metadata, and CI pinni
   assert.match(packageReadme, /\$BASE_SHA[^\n]*PR base SHA/i);
 
   assert.match(read('.github/skills/references/harness-tool-contract.md'), /verify --plan <path> \[--base ref\] \[--enforcement mode\]/);
-  assert.match(read('.github/skills/references/engineer-starter-kit.md'), /docs\/architecture\/skill-driven-prompt-library\.md/);
   assert.match(read(architecturePath), /bounded delegation/i);
 
   const agents = read('AGENTS.md');

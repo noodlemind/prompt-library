@@ -10,7 +10,7 @@ The system keeps the accountable Engineer small and moves reusable procedure, du
 flowchart LR
   U["Developer request"] --> E["@engineer"]
   E --> M{"Task mode"}
-  M -->|"Answer"| B["/btw"]
+  M -->|"Answer"| B["Ceremony-free answer"]
   M -->|"Investigate"| I["Evidence-only investigation"]
   I --> D{"Confirmed finding"}
   D -->|"Capture for Later"| O["Open unlocked issue"]
@@ -41,7 +41,7 @@ The Engineer classifies the request before acting.
 
 | Mode | Use | Contract |
 |---|---|---|
-| Answer | Quick repository or general question | Route to `/btw`, read only the minimum context, and answer without a delivery plan |
+| Answer | Quick repository or general question | Answer ceremony-free: read only the minimum context and reply without a delivery plan |
 | Investigate | Evidence-heavy diagnosis or research with no requested change | Inspect proportionally; report evidence, impact, confidence, and recommendations without edits |
 | Deliver | Any requested file or implementation change | Enter the canonical delivery lifecycle, pass the plan gate, and produce fresh passed evidence |
 | Review | Independent assessment of completed changes | Route to `/code-review` without assuming implementation ownership |
@@ -70,7 +70,7 @@ Only a fresh `harness verify` outcome of `passed` permits changed work to be rep
 | This document | Runtime architecture and rationale, without another execution loop |
 | `skill-driven-prompt-library.md` | Primitive boundaries and authoring standard |
 
-The retired `engineer-autopilot` skill and `engineer-runtime.md` reference duplicated the Engineer loop. They remain only as retirement history where needed; they are not active alternate runtimes. Thin prompt and skill adapters remain because host discovery is a distinct responsibility.
+The retired `engineer-autopilot` skill and `engineer-runtime.md` reference duplicated the Engineer loop. They remain only as retirement history where needed; they are not active alternate runtimes. Thin skill adapters remain because host discovery is a distinct responsibility; prompt wrappers were retired 2026-07-24 in favor of selecting the Engineer directly from the host's agent dropdown.
 
 ## Plans and enforcement
 
@@ -93,7 +93,7 @@ locked plan → harness gate → scoped edits → harness verify → evidence �
 - A missing-gate block is recoverable: Engineer invokes `/ensure-plan`, passes the implement gate, and retries the original mutation.
 - CI resolves exactly one plan, binds verification to the PR base SHA, and acts as the cross-host backstop.
 
-Primitive paths (`.github/skills/`, agents, instructions, prompts, checks, the capability registry, and enterprise skills) add a stricter boundary. Before mutation, `create-primitive` must have been successfully loaded in the current host session; a `skills_used` label alone is insufficient. The plan must record the applicable classification, overlap, structure, trigger, verification, registry, and documentation decisions. Verification requires the standard primitive asset and contract checks when configured, or the repository's strongest configured local named evidence when those prompt-library surfaces are absent.
+Primitive paths (`.github/skills/`, agents, instructions, checks, the capability registry, and enterprise skills) add a stricter boundary. Before mutation, `create-primitive` must have been successfully loaded in the current host session; a `skills_used` label alone is insufficient. The plan must record the applicable classification, overlap, structure, trigger, verification, registry, and documentation decisions. Verification requires the standard primitive asset and contract checks when configured, or the repository's strongest configured local named evidence when those prompt-library surfaces are absent.
 
 Hook and lifecycle events use schema version 2 in the local `.harness/events.jsonl`. They retain session and host identifiers plus tool, resolved targets, gate, decision, result, and duration, but never prompt content. A `skill_activation` event records only the loaded skill name and current session binding. `harness events --session <id>`, `--failures`, and `--summary` provide bounded diagnosis without introducing a trace database or dashboard.
 
@@ -179,7 +179,7 @@ The repository supplies schema-versioned plans, trusted named checks, policy, su
 
 ## Distribution and host validation
 
-The prompt library is the authoring source. `scripts/build-harness-assets.mjs` builds ignored package assets, and the `@dev-kit/harness` npm package installs versioned agents, skills, prompts, instructions, hooks, schemas, and knowledge scaffolding into global Copilot locations. Hook commands are hydrated with a deterministic absolute working directory. `install --configure-vscode` merges `chat.hookFilesLocations` for `~/.copilot/hooks` into VS Code user settings. Upgrades preserve user-authored profiles and compounded solutions and remove only harness-owned paths tracked by the lock file or retirement manifest.
+The prompt library is the authoring source. `scripts/build-harness-assets.mjs` builds ignored package assets, and the `@dev-kit/harness` npm package installs versioned agents, skills, instructions, hooks, schemas, and knowledge scaffolding into global Copilot locations. Hook commands are hydrated with a deterministic absolute working directory. `install --configure-vscode` merges `chat.hookFilesLocations` for `~/.copilot/hooks` into VS Code user settings. Upgrades preserve user-authored profiles and compounded solutions and remove only harness-owned paths tracked by the lock file or retirement manifest.
 
 `harness doctor --host vscode` checks the installed bundle, command resolution, user hook discovery, known payload recognition, ungated denial, gated allow, successful post-tool recording, unverified Stop denial, and verified Stop allow in an isolated fixture. It diagnoses the installed runtime rather than passing from package-source files alone.
 
@@ -189,7 +189,7 @@ Automated evidence covers the supported surfaces:
 
 | Surface | Evidence |
 |---|---|
-| GitHub Copilot in VS Code | Hydrated agents, skills, prompts, instructions, discovered user hooks, frozen Engineer budget, task-mode contracts, and executable V1–V9 doctor probes |
+| GitHub Copilot in VS Code | Hydrated agents, skills, instructions, discovered user hooks, frozen Engineer budget, task-mode contracts, and executable V1–V9 doctor probes |
 | GitHub Copilot CLI | Hydrated hooks plus executable read-only bypass, pre-edit, completion, gate, verify, and compound tests |
 | GitHub Copilot in IntelliJ IDEA | Host-neutral sources, merged instruction contract, terminal CLI behavior, and no provider-specific model pinning |
 | Portable Agent Skills hosts | Standard skill frontmatter, host-native fallbacks, and explicit degraded behavior |

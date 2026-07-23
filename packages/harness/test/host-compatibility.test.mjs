@@ -73,6 +73,10 @@ test('portable sources and built assets preserve the thin runtime contract', () 
   assert.match(assetEngineer, /9\. Report/i);
   assert.doesNotMatch(assetEngineer, /Skill-first contract \(mandatory\)/i);
   assert.equal(exists('packages/harness/assets/skills/engineer-autopilot/SKILL.md'), false);
-  assert.match(read('packages/harness/assets/skills/work-on-task/SKILL.md'), /harness verify --plan/i);
+  // Single-entry consolidation: retired surfaces must not ship in assets.
+  for (const gone of ['skills/work-on-task', 'skills/btw', 'skills/start', 'prompts', 'agents/pipeline-navigator.agent.md']) {
+    assert.equal(exists(`packages/harness/assets/${gone}`), false, `${gone} must not ship`);
+  }
+  assert.match(read('packages/harness/assets/skills/auto-compound/SKILL.md'), /harness verify --plan/i);
   assert.match(read('packages/harness/assets/hooks/hooks.json'), /require-verification\.mjs/);
 });

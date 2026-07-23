@@ -1,6 +1,6 @@
 ---
 description: Review Java code for correctness, API design, concurrency, testing, maintainability, and modern Java conventions.
-tools: ["codebase", "search", "read", "usages", "changes", "problems", "terminalLastCommand"]
+tools: ["search/codebase", "search", "read", "search/usages", "search/changes", "read/problems", "read/terminalLastCommand"]
 user-invocable: false
 agents: []
 ---

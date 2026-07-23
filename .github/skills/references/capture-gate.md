@@ -21,8 +21,8 @@ Read-only tools are allowed before the gate for classification, recall, investig
 |-----------|--------|
 | Existing plan with `plan_lock: true` | Resume implement |
 | Review-only | `/code-review` |
-| Pure Q&A | `/btw` |
-| Isolated bug | `/tdd-fix` |
+| Pure Q&A | `@engineer` Answer mode |
+| Isolated bug | `@engineer` Deliver mode (direct TDD fix) |
 | User waived capture **this turn** (quoted) | Log waiver |
 
 ## Gate checklist (C1–C4)
@@ -52,7 +52,7 @@ Engineer **must not** ask the user to run `/capture-issue` or `/plan-issue` manu
 ## Forbidden
 
 - Ad-hoc `docs/plans/*.md` with `plan_lock: true` without plan steps
-- `/analyze-and-plan` as substitute for capture on new work
+- Ad-hoc quick planning as substitute for capture on new work — use `/ensure-plan` or `/capture-issue` → `/plan-issue`
 - Implement before C3 (unless exemption)
 
 ## Template

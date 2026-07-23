@@ -1,6 +1,7 @@
 ---
 name: codebase-context
 description: Generate a codebase snapshot with architecture diagrams and write it to docs/codebase-snapshot.md. Use when starting on an unfamiliar codebase, onboarding, or refreshing project context. Not for code review — use /code-review.
+user-invocable: false
 ---
 
 # Codebase Context

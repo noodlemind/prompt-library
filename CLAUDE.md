@@ -4,14 +4,14 @@ This file is optional compatibility guidance. The primary consumption platforms 
 
 ## Repository Overview
 
-This is a skill-driven prompt library for software development teams. The primary system uses GitHub Copilot in VS Code and IntelliJ IDEA on Windows. Teams hydrate prompts, agents, skills, and instructions globally from this repo; product repositories should not receive prompt-library source artifacts.
+This is a skill-driven prompt library for software development teams. The primary system uses GitHub Copilot in VS Code and IntelliJ IDEA on Windows. Teams hydrate agents, skills, and instructions globally from this repo; product repositories should not receive prompt-library source artifacts.
 
 ### Architecture: Skill-First Primitives
 
-- **Skills** (`.github/skills/*/SKILL.md`): 30 workflows total, including four internal workflows (`ensure-plan`, `ensure-capability`, `auto-compound`, and experimental `auto-skill-draft`). The primary entry is `@engineer`; `/harness-doctor`, `/btw`, `/code-review`, domain, pipeline, and utility skills remain available. The connected manual pipeline `/capture-issue` → `/plan-issue` → `/work-on-task` → `/code-review` → `/compound-learnings` is the power-user engineering loop, while `/auto-compound` is the Engineer's automatic post-success delivery path. `/btw` handles quick Q&A. `/project-readme` creates or updates project README files. `/create-primitive` decides and creates the right primitive type. Domain skills include `/java`, `/python`, `/sql`, and `/aws`.
-- **Agents** (`.github/agents/*.agent.md`): 24 agents — 19 stateless domain experts using judgment-criteria design, 1 engineer, 1 code-implementer, plus 3 coordinator/navigation agents. Agents exist for separate judgment, tool authority, runtime profile, isolation, or accountability. Active Java, Python, SQL, and AWS reviewers are included.
+- **Skills** (`.github/skills/*/SKILL.md`): 24 workflows total, including four internal workflows (`ensure-plan`, `ensure-capability`, `auto-compound`, and experimental `auto-skill-draft`). The single entry is `@engineer`; the only user-invocable skills are `/engineer`, `/harness-doctor`, `/project-readme`, and `/triage-issues` — every other surviving skill is engineer-internal (`user-invocable: false`), loaded on demand by the Engineer. The connected pipeline `/capture-issue` → `/plan-issue` → Engineer Deliver mode → `/code-review` → `/compound-learnings` is the engineering loop, while `/auto-compound` is the Engineer's automatic post-success delivery path. Quick Q&A is `@engineer` Answer mode (ceremony-free). `/project-readme` creates or updates project README files. `/create-primitive` decides and creates the right primitive type. Domain skills include `/java`, `/python`, `/sql`, and `/aws`.
+- **Agents** (`.github/agents/*.agent.md`): 21 agents — 17 stateless domain experts using judgment-criteria design, 1 engineer, 1 code-implementer, plus 2 internal coordinator agents (`code-review-coordinator`, `plan-coordinator`) dispatched by `@engineer`. Agents exist for separate judgment, tool authority, runtime profile, isolation, or accountability. Active Java, Python, SQL, and AWS reviewers are included.
 - **Instructions** (`.github/instructions/*.instructions.md`): Scoped context that activates based on file patterns (TypeScript, Python, Java, PostgreSQL). Spring Boot and AWS SDK guidance loads on demand via the `/java` and `/aws` skill references, so a single `.java` file no longer stacks three always-on instructions.
-- **Prompt wrappers** (`.github/prompts/*.prompt.md`): Thin host-facing adapters that route to skills and declare host tools.
+- **Prompt wrappers**: Retired. `.github/prompts/` no longer exists — users select `@engineer` from the agent dropdown, and `harness upgrade` purges previously hydrated wrappers via `retired.json`.
 - **Review checks** (`.github/skills/code-review/references/checks/*.md`, optional product `.github/checks/*.md`): Bundled and project-specific criteria discovered by `/code-review`.
 
 ### Connected Pipeline
@@ -19,8 +19,8 @@ This is a skill-driven prompt library for software development teams. The primar
 Issues flow through a state machine tracked in YAML frontmatter:
 
 ```
-/brainstorming (optional) → /capture-issue → /plan-issue → /deepen-plan (optional) → /work-on-task → /code-review → /compound-learnings
-                                  open      →   planned   →                          in-progress   →    review    →      done
+/brainstorming (optional) → /capture-issue → /plan-issue → /deepen-plan (optional) → Engineer Deliver mode → /code-review → /compound-learnings
+                                  open      →   planned   →                          in-progress          →    review    →      done
 ```
 
 Key fields: `status`, `plan_lock` (must be `true` before coding), `phase` (current phase number).
@@ -36,10 +36,9 @@ Plan files live in `docs/plans/`. Activity logs in `## Activity` sections provid
 
 ```
 .github/
-  agents/              — 24 agent definitions (19 specialists + 1 engineer + 1 implementer + 3 coordinators)
-  skills/              — 30 skill directories with SKILL.md
+  agents/              — 21 agent definitions (17 specialists + 1 engineer + 1 implementer + 2 coordinators)
+  skills/              — 24 skill directories with SKILL.md
   instructions/        — scoped always-on instructions (TypeScript, Python, Java, PostgreSQL); Spring Boot and AWS SDK are on-demand skill references
-  prompts/             — thin prompt wrappers that route to skills
   checks/              — optional product-specific review check examples
   copilot-instructions.md — shared context for all agents
   agent-context.md     — prompt-library repo knowledge
@@ -55,7 +54,9 @@ AGENTS.md              — primary cross-host guidance
 CLAUDE.md              — optional compatibility guidance
 ```
 
-## Available Agents (24 total)
+## Available Agents (21 total)
+
+Only `@engineer` is user-invocable; all other agents are internal and dispatched as subagents.
 
 ### Reviewers (read-only analysis, tools: codebase/search/read/usages/changes/problems/terminalLastCommand)
 1. **architecture-strategist**: Architectural compliance, design patterns, SOLID
@@ -80,72 +81,61 @@ CLAUDE.md              — optional compatibility guidance
 ### Actors (can modify code)
 17. **bug-reproduction-validator**: Systematic bug reproduction and classification
 18. **code-implementer**: Execute coding tasks with TDD — engineer's implementation subagent
-19. **feedback-codifier**: Codify review feedback into reusable standards
-20. **pr-comment-resolver**: Address PR comments with code changes
 
 ### Engineers (full-cycle: understand + investigate + implement + delegate)
-21. **engineer**: Full-cycle software engineer and Adaptive Engineer Harness coordinator — understands requirements, debugs, plans, implements, delegates, and routes capability expansion through capability-gap proposals and `/create-primitive` with user approval
+19. **engineer**: Full-cycle software engineer and Adaptive Engineer Harness coordinator — understands requirements, debugs, plans, implements, delegates, and routes capability expansion through capability-gap proposals and `/create-primitive` with user approval
 
-### Coordinators and Navigation
-22. **code-review-coordinator**: Delegates to specialist reviewers in parallel batches with isolated context
-23. **plan-coordinator**: Delegates to research agents in parallel with isolated context
-24. **pipeline-navigator**: Guides pipeline transitions via handoff buttons, not subagent dispatch
+### Coordinators (internal — dispatched by `@engineer` for merge isolation, not user-invoked)
+20. **code-review-coordinator**: Thin dispatcher of the `/code-review` skill (the skill owns all criteria, confidence scoring, and checks) — delegates to specialist reviewers in parallel batches with isolated context
+21. **plan-coordinator**: Delegates to research agents in parallel with isolated context
 
-## Available Skills (30 total)
+## Available Skills (24 total)
 
-### Connected Pipeline
-1. **/capture-issue**: Create initial plan file under `docs/plans/` from bug/feature/task
-2. **/plan-issue**: Generate phased implementation plan with research
-3. **/work-on-task**: Execute current phase with TDD and session logging
-4. **/code-review**: Confidence-scored, persona-based code review with action routing
-5. **/compound-learnings**: Document solved problems with tagged solution templates
+### User-Invocable
+1. **/engineer**: Substantial read-only investigation or full-cycle delivery with gated edits and verification
+2. **/harness-doctor**: Diagnose hydration, policy, knowledge, and harness health without product edits
+3. **/project-readme**: Create or update project README.md
+4. **/triage-issues**: Analyze and prioritize backlog
 
-### Pipeline Extensions (optional steps)
-6. **/brainstorming**: Collaborative requirements exploration before planning
-7. **/deepen-plan**: Interactive plan deepening with user-steered research integration
-8. **/document-review**: Multi-persona quality gate (design, scope, coherence, feasibility)
-9. **/create-primitive**: Decide and create the right primitive: skill, agent, instruction, check, wrapper, reference, or solution doc
-10. **/import-conventions**: Generate instructions and skills from external repos and frameworks
-11. **/project-readme**: Create or update project README.md
+### Engineer-Internal (loaded on demand) — Connected Pipeline
+5. **/capture-issue**: Create initial plan file under `docs/plans/` from bug/feature/task
+6. **/plan-issue**: Generate phased implementation plan with research
+7. **/code-review**: Confidence-scored, persona-based code review with action routing
+8. **/compound-learnings**: Document solved problems with tagged solution templates
 
-### Domain Skills
-12. **/java**: Java and Spring Boot engineering workflow
-13. **/python**: Python engineering workflow with typing, tests, and async checks
-14. **/sql**: SQL/PostgreSQL query, schema, migration, and data workflow
-15. **/aws**: AWS SDK, IAM, messaging, reliability, and observability workflow
+### Engineer-Internal (loaded on demand) — Pipeline Extensions
+9. **/brainstorming**: Collaborative requirements exploration before planning
+10. **/deepen-plan**: Interactive plan deepening with user-steered research integration
+11. **/document-review**: Multi-persona quality gate (design, scope, coherence, feasibility)
+12. **/create-primitive**: Decide and create the right primitive: skill, agent, instruction, check, reference, or solution doc
+13. **/import-conventions**: Generate instructions and skills from external repos and frameworks
 
-### Full-Cycle Engineering
-16. **/engineer**: Substantial read-only investigation or full-cycle delivery with gated edits and verification
+### Engineer-Internal (loaded on demand) — Domain Skills
+14. **/java**: Java and Spring Boot engineering workflow
+15. **/python**: Python engineering workflow with typing, tests, and async checks
+16. **/sql**: SQL/PostgreSQL query, schema, migration, and data workflow
+17. **/aws**: AWS SDK, IAM, messaging, reliability, and observability workflow
 
-### Intake
-17. **/start**: Intelligent intake — classify work and route to the right pipeline entry point
-
-### Utilities
-18. **/btw**: Quick repository or general Q&A without plans or edits
-19. **/analyze-and-plan**: Quick planning without external research
+### Engineer-Internal (loaded on demand) — Memory and Utilities
+18. **/recall**: Recall global knowledge manifest and local plans before engineering work
+19. **/index-memory**: Rebuild team knowledge manifest from solution files
 20. **/codebase-context**: Generate codebase snapshot with architecture diagrams to docs/codebase-snapshot.md
-21. **/review-guardrails**: Read-only plan compliance audit
-22. **/tdd-fix**: Test-driven bug fixing
-23. **/triage-issues**: Analyze and prioritize backlog
-24. **/recall**: Recall global knowledge manifest and local plans before engineering work
-25. **/index-memory**: Rebuild team knowledge manifest from solution files
 
-### Harness Operations and Internal Workflows
-26. **/harness-doctor**: Diagnose hydration, policy, knowledge, and harness health without product edits
-27. **/ensure-plan**: Internally capture, research, and lock a plan for trackable Engineer work
-28. **/ensure-capability**: Resolve capability gaps on demand when encountered
-29. **/auto-compound**: Automatically classify and persist learning after passed Engineer verification
-30. **/auto-skill-draft**: Draft an experimental skill candidate without promoting it to active use
+### Engineer-Internal (loaded on demand) — Internal Workflows
+21. **/ensure-plan**: Internally capture, research, and lock a plan for trackable Engineer work
+22. **/ensure-capability**: Resolve capability gaps on demand when encountered
+23. **/auto-compound**: Automatically classify and persist learning after passed Engineer verification
+24. **/auto-skill-draft**: Draft an experimental skill candidate without promoting it to active use
 
 ## Key Design Decisions
 
 - **Judgment-criteria agents**: Define what to look for, not what commands to run
 - **Progressive disclosure**: Skills load in 3 levels (frontmatter → body → references)
-- **Skill-first primitive boundaries**: Default repeated procedures to skills; create agents only for distinct judgment, authority, isolation, or evaluation standards; keep prompt wrappers thin
-- **GitHub Copilot-first**: VS Code discovers globally hydrated agents, skills, prompts, and instructions from `%USERPROFILE%\.copilot`; IntelliJ IDEA discovers hydrated customizations from `%LOCALAPPDATA%\github-copilot\intellij` when the current plugin features are enabled
+- **Skill-first primitive boundaries**: Default repeated procedures to skills; create agents only for distinct judgment, authority, isolation, or evaluation standards; prompt wrappers are retired
+- **GitHub Copilot-first**: VS Code discovers globally hydrated agents, skills, and instructions from `%USERPROFILE%\.copilot`; IntelliJ IDEA discovers hydrated customizations from `%LOCALAPPDATA%\github-copilot\intellij` when the current plugin features are enabled
 - **Knowledge compounding**: `knowledge/solutions/` + `/index-memory` + repository `docs/agent-context.md` make the system smarter over time
 - **Confidence-gated review**: Code review uses persona synthesis with 0.0-1.0 confidence scores, merge/dedup, and action routing
-- **Explicit execution boundary**: `/work-on-task` requires a locked plan; `@engineer` owns ordinary unplanned end-to-end work
+- **Explicit execution boundary**: Engineer Deliver mode owns execution; trackable work still requires a locked plan (via `/ensure-plan`) before coding
 - **Skill-specific error recovery**: Each orchestrating skill handles its own failure modes, not generic boilerplate
 
 ## Conventions
@@ -169,10 +159,10 @@ Update these files to keep everything synchronized:
 
 ## Testing
 
-Test agents in GitHub Copilot Chat for VS Code 1.109+:
+Test the harness in GitHub Copilot Chat for VS Code 1.109+:
 1. Open Copilot Chat
-2. Type `@` to see agents, `/` to see skills
-3. Invoke with `@agent-name` or `/skill-name`
+2. Select `@engineer` from the agent dropdown (the only user-invocable agent)
+3. Type `/` to see the four user-invocable skills: `/engineer`, `/harness-doctor`, `/project-readme`, `/triage-issues`
 
 Subagent orchestration (coordinators dispatching specialists) works natively in VS Code 1.109+ without experimental settings.
 

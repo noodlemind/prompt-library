@@ -10,6 +10,20 @@
     "skills/create-agent-skills",
     "skills/engineer-autopilot",
     "skills/references/engineer-runtime.md",
-    "skills/references/capability-preflight.md"
+    "skills/references/capability-preflight.md",
+    "prompts",
+    "skills/btw",
+    "skills/start",
+    "skills/analyze-and-plan",
+    "skills/tdd-fix",
+    "skills/review-guardrails",
+    "skills/work-on-task",
+    "agents/pipeline-navigator.agent.md",
+    "agents/feedback-codifier.agent.md",
+    "agents/pr-comment-resolver.agent.md",
+    "skills/references/domain-routing.md",
+    "skills/references/engineer-principles.md",
+    "skills/references/engineer-session-checklist.md",
+    "skills/references/engineer-starter-kit.md"
   ]
 }

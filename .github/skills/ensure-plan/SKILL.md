@@ -29,14 +29,14 @@ Apply `/capture-issue` and `/plan-issue` logic without asking the user to run sl
 
 - "Log this issue for later." → use `/capture-issue`
 - "Research and lock this captured issue." → use `/plan-issue`
-- "Execute this already locked plan." → use `/work-on-task`
+- "Execute this already locked plan." → hand to `@engineer` Deliver mode
 
 ## Confusable Boundaries
 
 - `/ensure-plan` is the internal autonomous bridge across capture and planning.
 - `/capture-issue` only creates an open, unlocked issue shell.
 - `/plan-issue` researches and locks a captured issue as an explicit power-user step.
-- `/work-on-task` executes a locked plan; `/ensure-capability` resolves encountered capability gaps.
+- Engineer Deliver mode executes a locked plan; `/ensure-capability` resolves encountered capability gaps.
 
 ## When to invoke
 

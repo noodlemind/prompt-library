@@ -2,6 +2,7 @@
 name: aws
 description: AWS engineering workflow for SDK usage, IAM, queues, topics, configuration, reliability, observability, and review preparation.
 argument-hint: "[describe the AWS integration, service, or configuration task]"
+user-invocable: false
 ---
 
 # AWS

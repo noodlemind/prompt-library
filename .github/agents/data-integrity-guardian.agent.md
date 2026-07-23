@@ -1,6 +1,6 @@
 ---
 description: Review migrations, schema changes, and data operations for safety and correctness.
-tools: ["codebase", "search", "read", "usages", "changes", "problems", "terminalLastCommand"]
+tools: ["search/codebase", "search", "read", "search/usages", "search/changes", "read/problems", "read/terminalLastCommand"]
 user-invocable: false
 agents: []
 ---

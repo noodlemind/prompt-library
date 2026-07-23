@@ -195,7 +195,7 @@ After orient: `read` ≤3 solution paths, ≤30 lines each per [`context-budget.
 | `/recall` | `orient` or `recall` (`-c`, `--min-score`) |
 | `/index-memory` | `index` (manifest + BM25 postings) |
 | `/auto-compound` | classify learning, write selected destination, then explicit `compound` |
-| `/review-guardrails` | `validate-plan`, `gate` |
+| `/code-review` plan-compliance audit | `validate-plan`, `gate` |
 
 ## CI examples
 

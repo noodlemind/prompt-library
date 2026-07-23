@@ -2,6 +2,7 @@
 name: java
 description: Java engineering workflow for implementation, debugging, refactoring, testing, and review preparation. Use for Java or Spring Boot code work.
 argument-hint: "[describe the Java task, file, or failure]"
+user-invocable: false
 ---
 
 # Java
@@ -20,7 +21,7 @@ Apply Java engineering guidance as an on-demand skill. Use this inside the norma
 **Should not trigger:**
 - "Review AWS IAM permissions" -> use `/aws` or `@aws-reviewer`
 - "Tune this SQL query" -> use `/sql`
-- "What does this repository do?" -> use `/btw`
+- "What does this repository do?" -> use `@engineer` Answer mode
 
 ## Workflow
 

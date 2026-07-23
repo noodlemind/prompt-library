@@ -3,11 +3,11 @@ evaluated: 2026-07-13
 hosts:
   github-copilot-vscode:
     full:
-      mechanism: hydrated agents, skills, prompts, instructions, and global harness CLI
+      mechanism: hydrated agents, skills, instructions, and global harness CLI
       assertions:
         - engineer agent is discoverable and owns the only normative delivery lifecycle
         - Answer and Investigate modes stay read-only without plan or verification ceremony
-        - prompt wrapper preserves the Engineer tool allowlist
+        - engineer agent selected from the agent dropdown retains its full tool allowlist
         - explicit gate and verify commands work from the repository terminal
         - named checks and evidence use repository-relative paths
     degraded:
@@ -33,7 +33,7 @@ hosts:
         - hook absence is disclosed rather than treated as verified
   github-copilot-intellij:
     full:
-      mechanism: hydrated global agents, skills, prompts, merged instructions, and harness CLI
+      mechanism: hydrated global agents, skills, merged instructions, and harness CLI
       assertions:
         - skill and agent frontmatter remains host-neutral
         - merged global instructions do not require bulk skill reads

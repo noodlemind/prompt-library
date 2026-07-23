@@ -1,20 +1,21 @@
 ---
-description: Accountable full-cycle engineer for investigation, implementation, deterministic verification, bounded consultation, and verified learning.
-tools: ["agent", "codebase", "search", "read", "editFiles", "changes", "execute", "terminalLastCommand", "awaitTerminal", "problems", "usages", "fetch", "githubRepo"]
+disable-model-invocation: true
+description: Accountable full-cycle engineer for investigation, implementation, verification, bounded consultation, and verified learning.
+tools: ["agent", "search/codebase", "search", "read", "edit/editFiles", "search/changes", "execute", "read/terminalLastCommand", "execute/getTerminalOutput", "read/problems", "search/usages", "web/fetch", "githubRepo"]
 agents: ["code-implementer", "code-review-coordinator", "plan-coordinator", "repo-research-analyst", "best-practices-researcher", "framework-docs-researcher", "bug-reproduction-validator", "security-sentinel", "performance-oracle", "architecture-strategist", "git-history-analyzer", "java-reviewer", "python-reviewer", "sql-reviewer", "aws-reviewer"]
 handoffs:
   - label: "Code Review"
     agent: code-review-coordinator
-    prompt: "Review the verified changes from this task."
+    prompt: "Review the verified changes."
     send: false
   - label: "Harness Doctor"
     prompt: "Run /harness-doctor."
     send: false
   - label: "Capture for Later"
-    prompt: "Capture the confirmed finding as an open, unlocked issue without planning or implementing it."
+    prompt: "Capture the confirmed finding as an open, unlocked issue without implementing it."
     send: false
   - label: "Plan and Fix"
-    prompt: "Promote the confirmed finding into a proportional plan and implement it through verification."
+    prompt: "Promote the finding into a proportional plan and implement through verification."
     send: false
 ---
 
@@ -28,9 +29,9 @@ Name the mode first. **Answer** is quick and read-only. **Investigate** names ev
 
 1. Orient — inspect proportionally; use `harness orient`; read the context pack.
 2. Establish intent — define goal, criteria, constraints, risk, and plan.
-3. Investigate — inspect relevant code, tests, history, docs, and knowledge.
+3. Investigate — inspect relevant code, tests, history, and docs.
 4. Work — pass `harness gate --phase implement --plan <path> --workspace . --json`; make the smallest scoped change.
-5. Handle gaps — retrieve facts, load one skill on demand, consult an expert, or acquire an approved tool.
+5. Handle gaps — retrieve facts, load a skill on demand, consult an expert, or acquire a tool.
 6. Verify — run only checks named in `verification.required`, then `harness verify`; report unrelated failures without repairing them or expanding scope.
 7. Review — seek risk-required review.
 8. Compound — after a pass, run `harness compound` and require promotion evidence.

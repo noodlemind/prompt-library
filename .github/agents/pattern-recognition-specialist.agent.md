@@ -1,6 +1,6 @@
 ---
 description: Analyze code for design patterns, anti-patterns, naming consistency, and duplication.
-tools: ["codebase", "search", "read", "usages", "changes", "problems", "terminalLastCommand"]
+tools: ["search/codebase", "search", "read", "search/usages", "search/changes", "read/problems", "read/terminalLastCommand"]
 user-invocable: false
 agents: []
 ---

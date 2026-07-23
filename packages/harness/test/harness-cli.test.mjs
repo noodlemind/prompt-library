@@ -2349,3 +2349,27 @@ test('completion hook normalizes Windows-style plan paths', () => {
   const completion = runHook('require-verification.mjs', workspace);
   assert.equal(completion.status, 0, completion.stderr);
 });
+
+test('upgrade purges retired prompt wrappers and single-entry retirements from hydrated homes', async () => {
+  const { loadRetired, applyRetired } = await import('../lib/sync.mjs');
+  const pkgRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+  const retired = loadRetired(pkgRoot);
+  for (const expected of ['prompts', 'skills/btw', 'skills/start', 'skills/work-on-task', 'agents/pipeline-navigator.agent.md']) {
+    assert.ok(retired.includes(expected), `retired.json missing ${expected}`);
+  }
+
+  // Old hydrated home: wrappers + retired skill + retired agent present and lock-tracked.
+  const home = tempDir('harness-old-home-');
+  const oldFiles = ['prompts/engineer.prompt.md', 'skills/btw/SKILL.md', 'agents/pipeline-navigator.agent.md'];
+  for (const rel of oldFiles) {
+    const full = path.join(home, rel);
+    fs.mkdirSync(path.dirname(full), { recursive: true });
+    fs.writeFileSync(full, 'legacy\n');
+  }
+  const previousLock = { files: ['prompts', ...oldFiles, 'skills/btw', 'agents/pipeline-navigator.agent.md'] };
+  const stats = applyRetired(home, retired, previousLock, {}, () => {});
+  assert.ok(stats.removed >= 3, `expected purge, removed=${stats.removed}`);
+  assert.equal(fs.existsSync(path.join(home, 'prompts')), false, 'hydrated prompts dir must be purged');
+  assert.equal(fs.existsSync(path.join(home, 'skills', 'btw')), false);
+  assert.equal(fs.existsSync(path.join(home, 'agents', 'pipeline-navigator.agent.md')), false);
+});

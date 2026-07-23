@@ -10,10 +10,8 @@ Use the globally hydrated prompt-library customizations as the default engineeri
 
 ## Entry Points
 
-- Use `/btw` for quick repository or general questions without file edits.
-- Use `/start` when the user is unsure which workflow applies.
-- **`@engineer`** for substantial investigation or hands-on engineering. It uses a read-only investigation mode or owns delivery from proportional orientation through deterministic verification and learning. **Do not** ask users to run internal pipeline steps manually.
-- Power-user pipeline (debugging only): `/capture-issue` → `/plan-issue` → `/work-on-task` → `/code-review` → `/compound-learnings`.
+- **`@engineer`** is the single entry point: its mode selection (Answer / Investigate / Review / Deliver) routes the work. Answer mode handles quick repository or general questions without ceremony; Investigate is read-only diagnosis; Deliver owns delivery from proportional orientation through deterministic verification and learning. **Do not** ask users to run internal pipeline steps manually.
+- Power-user pipeline (debugging only): `/capture-issue` → `/plan-issue` → `@engineer` Deliver mode → `/code-review` → `/compound-learnings`.
 - Use `/project-readme` for project-level README creation or refresh.
 - Use `/java`, `/python`, `/sql`, and `/aws` for focused domain work.
 - Use `/harness-doctor` when harness or `@engineer` misbehaves.

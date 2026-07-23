@@ -1,16 +1,16 @@
 ---
 plan_schema: 1
-title: "Harden, Optimize, Instrument, and Evaluate the Minimal Engineer Loop"
+title: "Harden, Optimize, Instrument, Evaluate, and Consolidate the Minimal Engineer Loop"
 type: fix
 status: in-progress
 plan_lock: true
-phase: 16
+phase: 20
 priority: P0
 risk: amber
 autonomy: balanced
 intent: "Make the existing Thin Engineer and Distributed Harness lifecycle reliable in real GitHub Copilot VS Code sessions while preserving one minimal, LLM-first delivery path."
 expected_outputs: ["Reliable VS Code mutation and completion hooks", "Explicit investigation-finding disposition and automatic gate recovery", "Proportional plans in the existing schema", "Primitive-path governance through create-primitive", "Versioned Harness events, VS Code doctor probes, and executable behavioral regressions", "Per-command token telemetry and a budget regression check", "Bounded plan view and answer-first CLI output", "Recovery-recipe denials and cache-stable, phase-gated context", "Read-only harness report over token telemetry with improvement flags", "Global ~/.harness telemetry store and a host-usage seam", "Compound wired into the engineer and a CI budget gate"]
-success_criteria: ["All 43 acceptance criteria pass with current-state evidence", "All three golden scenarios demonstrate the required behavior", "No new intelligence layer, persistent artifact type, agent, or skill, and no top-level command beyond the read-only report command, is introduced", "Supported-host assets remain synchronized", "The largest token sinks are bounded, measured, and reportable", "The measure-and-learn loop is closed: telemetry is readable, compounding is default, and budgets fail CI"]
+success_criteria: ["All 53 acceptance criteria pass with current-state evidence", "All three golden scenarios demonstrate the required behavior", "No new intelligence layer, persistent artifact type, agent, or skill, and no top-level command beyond the read-only report command, is introduced", "Supported-host assets remain synchronized", "The largest token sinks are bounded, measured, and reportable", "The measure-and-learn loop is closed: telemetry is readable, compounding is default, and budgets fail CI"]
 verification:
   required:
     - harness-tests
@@ -61,6 +61,16 @@ verification:
     AC41: [harness-tests]
     AC42: [harness-tests]
     AC43: [harness-tests, prompt-contracts]
+    AC44: [prompt-contracts]
+    AC45: [prompt-contracts, build-assets]
+    AC46: [harness-tests, build-assets]
+    AC47: [prompt-contracts]
+    AC48: [prompt-contracts]
+    AC49: [harness-tests, prompt-contracts]
+    AC50: [harness-tests, build-assets]
+    AC51: [prompt-contracts, host-contracts, build-assets]
+    AC52: [prompt-contracts, build-assets]
+    AC53: [prompt-contracts]
 reviews:
   required: ["CodeRabbit full-diff review", "CodeRabbit incremental review"]
   completed: ["CodeRabbit full-diff review", "CodeRabbit incremental review"]
@@ -76,7 +86,7 @@ domains: [prompt-engineering, harness-cli, governance, vscode]
 specialists: []
 capability_gaps: []
 created: 2026-07-20
-updated: 2026-07-22
+updated: 2026-07-23
 ---
 
 # Harden the Minimal Engineer Loop
@@ -164,6 +174,19 @@ Phases 7–11 extend this plan with token and tool efficiency for the harness CL
 - [x] **AC41** Each task's verifier is self-tested against a pass fixture and a fail fixture before the target runs; a verifier that misgrades either fixture yields an infrastructure error and the real target run is skipped.
 - [x] **AC42** Two deterministic tasks drive the real harness hook/gate/verify lifecycle over isolated fixture workspaces and grade only on harness-observed evidence (events, exit codes, session state), requiring no model provider so CI gets real signal with zero secrets.
 - [x] **AC43** A key-gated LLM-judge seam (`judge(prompt, rubric)` with a fetch-based provider adapter, no new dependency) exists; the semantic investigate task is wired as an explicitly labeled reconstruction and skips cleanly when no provider key is set. Wrong target work scores reward 0 with a `completed` status; build, verifier, or judge failures are `infrastructure_error` with no score.
+
+### Consolidation criteria (Phases 17–20)
+
+- [x] **AC44** The Engineer is the only user-invocable agent: coordinators set `user-invocable: false`, `pipeline-navigator` is retired, and a contract test asserts exactly one invocable agent.
+- [x] **AC45** `/btw`, `/start`, `analyze-and-plan`, `tdd-fix`, `review-guardrails`, `work-on-task`, `pipeline-navigator`, `feedback-codifier`, and `pr-comment-resolver` are retired through the registry lifecycle with tombstones (rationale + replacement = Engineer modes or surviving skills); their files and eval sections are removed and cross-references cleaned.
+- [x] **AC46** All prompt wrappers are removed: `.github/prompts/` deleted, `prompts` dropped from build/sync targets, `retired.json` entries added so `harness upgrade` purges previously hydrated wrappers and retired primitives, proven by an upgrade-over-old-home test.
+- [x] **AC47** `code-review-coordinator` is a thin dispatcher of `/code-review` (criteria, confidence gating, and check discovery come from the skill — no divergent copies) and `plan-coordinator` carries an error/timeout/partial-result contract; both are internal-only.
+- [x] **AC48** The `/` menu is exactly `engineer`, `harness-doctor`, `project-readme`, `triage-issues`; every surviving workflow/domain skill is `user-invocable: false`; a contract test pins the invocable set.
+- [x] **AC49** Every agent `tools:` list uses the current namespaced VS Code identifiers (`search/codebase`, `read/problems`, `edit/editFiles`, `web/fetch`, `execute/getTerminalOutput` replacing `awaitTerminal`, …) and a contract test pins all declared tool IDs to a canonical allowlist so future host renames fail CI instead of silently stripping tools.
+- [x] **AC50** Entangled tests and evals are rewritten (expectedSkills, wrapper assertions, registry inventory, trigger routing) and the four named checks plus `node evals/run.mjs` pass.
+- [x] **AC51** Documentation and counts are synchronized (CLAUDE.md, AGENTS.md, copilot-instructions.md, agent-context.md including the stale instructions line, README.md, architecture docs) with assets rebuilt and host parity confirmed.
+- [x] **AC52** The four orphaned engineer references (`domain-routing`, `engineer-principles`, `engineer-session-checklist`, `engineer-starter-kit`) are removed with their unique content folded into surviving owners where needed, and `retired.json` purges their hydrated copies.
+- [x] **AC53** The Engineer is not bloated by consolidation: `engineer.agent.md` stays within the frozen 600–900-token budget with capability loading on-demand, and the existing budget contract test passes unchanged.
 
 ## Technical Notes
 
@@ -282,6 +305,27 @@ Phases 7–11 extend this plan with token and tool efficiency for the harness CL
 - [x] Add two deterministic tasks (`gate-blocks-ungated-mutation`, `stop-requires-fresh-verification`) that drive the real hooks/gate/verify over temp fixture workspaces and grade on harness-observed evidence.
 - [x] Add the key-gated LLM-judge seam and the labeled reconstruction `investigate-readonly-disposition` semantic task that skips without a provider key.
 - [x] Add `packages/harness/test/eval-runner.test.mjs` (folds into `harness-tests`) and a prompt-contracts assertion for the reconstruction label; wire an `npm run eval` script.
+
+### Phase 17 — Retire competing entrances (AC44, AC45, AC46, AC52)
+
+- [x] Retire skills `btw`, `start`, `analyze-and-plan`, `tdd-fix`, `review-guardrails`, `work-on-task` and agents `pipeline-navigator`, `feedback-codifier`, `pr-comment-resolver` with registry tombstones (`retired_on`, `replacement`, `reason`); delete files and the four orphaned engineer references.
+- [x] Delete `.github/prompts/`; drop `prompts` from `scripts/build-harness-assets.mjs` and `SYNC_TOP_LEVEL`; add all retired paths to `packages/harness/retired.json` for upgrade purge.
+- [x] Clean every cross-reference to retired primitives in surviving skills, hooks, instructions, and docs.
+
+### Phase 18 — Demote and thin (AC44, AC47, AC48)
+
+- [x] Set `user-invocable: false` on both coordinators; add `disable-model-invocation: true` to the engineer; thin `code-review-coordinator` into a `/code-review` dispatcher; add error/timeout/partial-result contract to `plan-coordinator`.
+- [x] Demote surviving workflow/domain skills to `user-invocable: false`, keeping `engineer`, `harness-doctor`, `project-readme`, `triage-issues` invocable.
+
+### Phase 19 — Frontmatter modernization (AC49, AC53)
+
+- [x] Rewrite all agent `tools:` lists to namespaced identifiers; replace `awaitTerminal` with `execute/getTerminalOutput`.
+- [x] Add contract tests: single invocable agent, invocable-skill-set pin, canonical tool-ID allowlist pin; keep the engineer within budget.
+
+### Phase 20 — Synchronize and prove (AC50, AC51)
+
+- [x] Rewrite entangled tests and `evals/skill-trigger-evals.yaml`; add the upgrade-purge convergence test.
+- [x] Six-file doc sync with new counts; fix stale `agent-context.md` line; rebuild assets; run four named checks + `node evals/run.mjs`.
 
 ## Research Notes
 
@@ -406,6 +450,14 @@ Phases 1–5 are implemented test-first. Shared hook normalization now handles o
 Local full-diff review found and resolved: no-space shell redirection bypass; missing PostToolUse session state that could let Stop bypass; lexical-only symlink containment; a final-block-list primitive parser edge; force-push coverage regression; overbroad credential-path matching; JSONC settings parsing; and enterprise-skill evidence parity. CodeRabbit full and incremental passes then found and resolved nested skill-evidence coverage, autonomy-aware recovery, short force flags, terminal critical-file enforcement, hook/Git timeouts, hook-order assertions, routine-edit promotion wording, VS Code doctor documentation/tests, Harness state protection, and stale plan metadata. The Scenario A/C contract suggestions and removal of `solution` primitive routing were rejected because they conflict with the approved specification. Blanket `docs/plans/**` blocking was rejected because it would break pre-gate plan creation; gated plan SHA-256 binding now closes the integrity gap while preserving `/ensure-plan` recovery. Expanding the fast-plan risk list was rejected in favor of the approved Section 7.1 predicate, and the deleted predecessor remains allowlisted because base-relative scope verification treats deletions as changed files. The primitive checklist now matches the approved evidence requirement for new or substantially expanded skills. Regression tests cover each applicable fix, and no critical finding remains open.
 
 ## Activity
+
+### 2026-07-23 — Phases 17–20: single-entry consolidation implemented
+
+- Retired six skills (`btw`, `start`, `analyze-and-plan`, `tdd-fix`, `review-guardrails`, `work-on-task`) and three agents (`pipeline-navigator`, `feedback-codifier`, `pr-comment-resolver`) with registry tombstones; removed all prompt wrappers and the four orphaned engineer references; `retired.json` now purges every hydrated copy on `harness upgrade` (proven by test). `spec-flow-analyzer` was kept — the audit showed it reachable via `/code-review` personas.
+- Entry surface is now: one `@` agent (engineer, with `disable-model-invocation: true`) and four `/` skills (`harness-doctor`, `project-readme`, `triage-issues`, `engineer`); all surviving workflow/domain skills are engineer-internal. Coordinators are internal-only; `code-review-coordinator` is a thin dispatcher of `/code-review`; `plan-coordinator` gained dispatch rules and a failure contract; the connected pipeline runs `/capture-issue` → `/plan-issue` → Engineer Deliver → `/code-review` → `/compound-learnings`.
+- Modernized all agent `tools:` to the namespaced VS Code taxonomy (`search/codebase`, `read/problems`, `edit/editFiles`, `web/fetch`, `execute/getTerminalOutput` for `awaitTerminal`, …) with a contract test pinning declared IDs to a canonical allowlist. Engineer stayed at 899–900 of its 900-byte/4 budget throughout (AC53).
+- Rewrote entangled contract tests and trigger evals (8 surviving eval sections), synchronized CLAUDE.md/AGENTS.md/README.md/copilot-instructions/agent-context/architecture docs to 21 agents / 24 skills, and kept `.github/prompts/` as a governed-retired prefix so wrapper reintroduction requires create-primitive.
+- Verification: 193/193 harness-tests, 26/26 prompt-contracts, 3/3 host-contracts, assets rebuilt, `node evals/run.mjs` 2/3 pass + 1 key-gated skip, `git diff --check` clean.
 
 ### 2026-07-23 — Phase 16: native eval runner implemented
 
