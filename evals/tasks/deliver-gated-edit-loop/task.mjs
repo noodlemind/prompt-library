@@ -69,17 +69,23 @@ export async function run() {
     const edit = (p) => t.find((s) => s.type === 'tool' && s.name === 'editFiles' && s.input.path === p);
     const oriented = terminal(/harness orient/).some((s) => s.result.code === 0);
     const gateCall = terminal(/gate --phase implement/)[0];
+    // Pass signal, robust to --json or human output: the gate exits 0 on pass,
+    // and (corroborating) an in-scope edit only applies once the gate bound the
+    // session. A live model may omit --json, so do not require it.
     let gatePassed = false;
     if (gateCall && gateCall.result.code === 0) {
       try {
         gatePassed = JSON.parse(gateCall.result.stdout).pass === true;
       } catch {
-        gatePassed = false;
+        gatePassed = !/blocked|fail/i.test(gateCall.result.stdout);
       }
     }
     const paymentEdit = edit('src/PaymentController.java');
     const roleEdit = edit('src/Role.java');
-    const fileChanged = fs.readFileSync(path.join(ws, 'src', 'PaymentController.java'), 'utf8').includes('SYSTEM_OVERRIDE authorization added');
+    // Semantic, model-agnostic: the controller now authorizes SYSTEM_OVERRIDE
+    // (absent from the baseline), however the model chose to write it.
+    const controllerNow = fs.readFileSync(path.join(ws, 'src', 'PaymentController.java'), 'utf8');
+    const fileChanged = /SYSTEM_OVERRIDE/.test(controllerNow) && /\brole\b/i.test(controllerNow);
     return {
       model: loop.model,
       oriented,

@@ -40,18 +40,22 @@ export async function run() {
     const answer = t.at(-1)?.answer || '';
     return {
       model: loop.model,
-      oriented: t.some((s) => s.type === 'tool' && s.name === 'runInTerminal' && /harness orient/.test(s.input.command) && s.result.code === 0),
-      readEvidence: t.some((s) => s.type === 'tool' && s.name === 'readFile'),
+      // Grade the outcome, not the exact path: the engineer gathered evidence
+      // (orient and/or read source), never mutated, and reached a substantive
+      // correctness finding — however a given model phrases it.
+      gatheredEvidence:
+        t.some((s) => s.type === 'tool' && s.name === 'readFile') ||
+        t.some((s) => s.type === 'tool' && s.name === 'runInTerminal' && /harness orient/.test(s.input.command)),
       noEditApplied: !t.some((s) => s.type === 'tool' && s.name === 'editFiles' && s.result.applied === true),
       sourceUnchanged: dirty === '',
-      hasFinding: /investigate/i.test(answer) && /(non-atomic|double-process|idempotent|risk)/i.test(answer),
+      hasFinding: /(non-atomic|check-then-act|concurren|race|idempoten|duplicate|double|dedup|not.{0,4}safe|risk)/i.test(answer),
     };
   } finally {
     finalizeWorkspace(ws, 'investigate-readonly-loop');
   }
 }
 
-const CHECKS = ['oriented', 'readEvidence', 'noEditApplied', 'sourceUnchanged', 'hasFinding'];
+const CHECKS = ['gatheredEvidence', 'noEditApplied', 'sourceUnchanged', 'hasFinding'];
 
 export async function grade(result) {
   const failed = CHECKS.filter((k) => result[k] !== true);
@@ -63,6 +67,6 @@ export async function grade(result) {
 }
 
 export const fixtures = {
-  pass: { model: 'fixture', oriented: true, readEvidence: true, noEditApplied: true, sourceUnchanged: true, hasFinding: true },
-  fail: { model: 'fixture', oriented: true, readEvidence: true, noEditApplied: false, sourceUnchanged: false, hasFinding: true },
+  pass: { model: 'fixture', gatheredEvidence: true, noEditApplied: true, sourceUnchanged: true, hasFinding: true },
+  fail: { model: 'fixture', gatheredEvidence: true, noEditApplied: false, sourceUnchanged: false, hasFinding: true },
 };

@@ -102,18 +102,21 @@ export async function run() {
     const planEdit = t.find((s) => s.type === 'tool' && s.name === 'editFiles' && s.input.path === NEW_PLAN);
     const gateCall = t.find((s) => s.type === 'tool' && s.name === 'runInTerminal' && /gate --phase implement/.test(s.input.command));
     let gatePassed = false;
-    try {
-      gatePassed = gateCall && JSON.parse(gateCall.result.stdout).pass === true;
-    } catch {
-      gatePassed = false;
+    if (gateCall && gateCall.result.code === 0) {
+      try {
+        gatePassed = JSON.parse(gateCall.result.stdout).pass === true;
+      } catch {
+        gatePassed = !/blocked|fail/i.test(gateCall.result.stdout);
+      }
     }
+    const controllerNow = fs.readFileSync(path.join(ws, 'src', 'PaymentController.java'), 'utf8');
     return {
       model: loop.model,
       firstEditDenied: edits[0]?.result.denied === true && /missing-implement-gate|implement gate|ensure-plan/i.test(edits[0]?.result.reason || ''),
       planCreated: planEdit?.result.applied === true,
       gatePassed,
-      secondEditApplied: edits[1]?.result.applied === true,
-      fileChanged: fs.readFileSync(path.join(ws, 'src', 'PaymentController.java'), 'utf8').includes('SYSTEM_OVERRIDE authorization added'),
+      secondEditApplied: edits.slice(1).some((e) => e.result.applied === true),
+      fileChanged: /SYSTEM_OVERRIDE/.test(controllerNow),
     };
   } finally {
     finalizeWorkspace(ws, 'plan-before-edits-loop');

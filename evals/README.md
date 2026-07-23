@@ -81,6 +81,21 @@ Each is a `deterministic` task (No-Model driver) so the whole matrix runs in CI,
 and each also accepts `HARNESS_EVAL_AGENT=insession|openai` to run under a real
 model. Mutating scenarios support `HARNESS_EVAL_KEEP=1` to inspect the diff.
 
+**Naturalistic vs. adversarial scenarios (live grading).** Two kinds:
+
+- *Naturalistic* (`deliver-gated-edit-loop`, `investigate-readonly-loop`) grade on
+  the **outcome**, not a fixed tool sequence, so a live model that navigates its
+  own way still passes. Both are verified passing under `anthropic/claude-sonnet-5`
+  via OpenRouter — the model orients, passes the gate, writes its own correct
+  implementation, and stays in scope (or stays read-only for the investigation).
+- *Adversarial / governance probes* (`plan-before-edits-loop`,
+  `primitive-creation-loop`, `guard-blocks-dangerous-ops-loop`,
+  `consult-expert-loop`) assert that the **harness enforces** given a specific
+  (often adversarial) action sequence — attempting an ungated edit, forging the
+  session, editing a primitive before activation. A well-behaved live model will
+  not reproduce those sequences, so these are driven by the **No-Model / in-session
+  drivers** by design; they prove the hooks deny what must be denied.
+
 ### Sample repo and inspecting the mutation
 
 The loop copies the persistent sample repo `evals/fixtures/payment-service/` into

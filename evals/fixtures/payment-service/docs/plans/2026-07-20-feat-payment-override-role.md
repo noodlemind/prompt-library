@@ -21,8 +21,8 @@ capability_gaps: []
 
 ## Overview
 
-Authorize the payment SYSTEM-OVERRIDE role in the payment controller so an
-override request bypasses the normal dedupe/authorization path.
+Authorize the payment SYSTEM-OVERRIDE operator role in the payment controller so
+an authorized reconciliation request takes the privileged override path.
 
 ## Intent Contract
 

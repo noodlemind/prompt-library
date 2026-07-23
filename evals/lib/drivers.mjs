@@ -26,13 +26,40 @@ export function replayDriver(actions, { name = 'replay', model = 'scripted' } = 
 }
 
 /** Live model via an OpenAI-compatible chat/completions tool-use endpoint. */
-export function openAiToolDriver({ url, apiKey, model, fetchImpl = globalThis.fetch, maxTokens = 1024 } = {}) {
+export function openAiToolDriver({ url, apiKey, model, fetchImpl = globalThis.fetch, maxTokens = 2048 } = {}) {
   if (!url || !apiKey || !model) return null; // caller skips cleanly
   const tools = [];
   let messages = [];
+  let pending = []; // tool_calls from the current assistant turn, not yet answered
 
   function toOpenAiTools(schemas) {
     return schemas.map((t) => ({ type: 'function', function: { name: t.name, description: t.description, parameters: t.parameters } }));
+  }
+
+  async function callApi() {
+    let res;
+    try {
+      res = await fetchImpl(url, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${apiKey}` },
+        body: JSON.stringify({ model, messages, tools, tool_choice: 'auto', max_tokens: maxTokens, temperature: 0 }),
+      });
+    } catch (err) {
+      throw new Error(`provider request failed: ${err.message}`);
+    }
+    if (!res.ok) throw new Error(`provider http ${res.status}`);
+    return res.json();
+  }
+
+  function actionFor(call) {
+    let input = {};
+    try {
+      input = JSON.parse(call.function.arguments || '{}');
+    } catch {
+      input = {};
+    }
+    if (call.function.name === 'finish') return { type: 'finish', answer: input.answer || '', _id: call.id };
+    return { type: 'tool', name: call.function.name, input, _id: call.id };
   }
 
   return {
@@ -45,44 +72,27 @@ export function openAiToolDriver({ url, apiKey, model, fetchImpl = globalThis.fe
         { role: 'system', content: system },
         { role: 'user', content: instruction },
       ];
+      pending = [];
     },
     async next() {
-      let res;
-      try {
-        res = await fetchImpl(url, {
-          method: 'POST',
-          headers: { 'content-type': 'application/json', authorization: `Bearer ${apiKey}` },
-          body: JSON.stringify({ model, messages, tools, tool_choice: 'auto', max_tokens: maxTokens, temperature: 0 }),
-        });
-      } catch (err) {
-        throw new Error(`provider request failed: ${err.message}`);
-      }
-      if (!res.ok) throw new Error(`provider http ${res.status}`);
-      const data = await res.json();
+      // Drain any tool_calls the assistant already emitted this turn before
+      // asking for another turn — OpenAI requires a tool result per tool_call.
+      if (pending.length) return actionFor(pending.shift());
+      const data = await callApi();
       const msg = data?.choices?.[0]?.message || {};
       messages.push(msg);
-      const call = msg.tool_calls?.[0];
-      if (call) {
-        let input = {};
-        try {
-          input = JSON.parse(call.function.arguments || '{}');
-        } catch {
-          input = {};
-        }
-        this._lastCallId = call.id;
-        this._lastName = call.function.name;
-        if (call.function.name === 'finish') return { type: 'finish', answer: input.answer || '' };
-        return { type: 'tool', name: call.function.name, input };
-      }
-      // No tool call → treat the assistant text as the final answer.
-      return { type: 'finish', answer: msg.content || '' };
+      const calls = msg.tool_calls || [];
+      if (!calls.length) return { type: 'finish', answer: msg.content || '' }; // no tool call → done
+      pending = calls.slice();
+      return actionFor(pending.shift());
     },
     observe(action, result) {
-      // Feed the tool result back as an OpenAI tool message so the model can react.
+      // Every tool_call needs a matching tool message keyed by its id, or the
+      // next turn is malformed and the model loses the thread.
       messages.push({
         role: 'tool',
-        tool_call_id: this._lastCallId || 'call_0',
-        name: this._lastName || action.name,
+        tool_call_id: action._id || 'call_0',
+        name: action.name || 'finish',
         content: JSON.stringify(result).slice(0, 4000),
       });
     },

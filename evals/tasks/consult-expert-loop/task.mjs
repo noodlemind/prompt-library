@@ -45,11 +45,14 @@ export async function run() {
     const consult = t.find((s) => s.type === 'tool' && s.name === 'runSubagent');
     const agentId = consult?.input?.agent;
     const answer = t.at(-1)?.answer || '';
+    // A real expert was consulted iff the returned analysis is the configured
+    // reviewer verdict (java-reviewer's concurrency finding), not the benign stub.
+    const expertVerdictReturned = /java-reviewer.*non-atomic|check-then-act|double-cancel/i.test(consult?.result?.analysis || '');
     return {
       model: loop.model,
-      consultedExpert: !!consult && consult.result.consulted === true,
+      consultedExpert: expertVerdictReturned,
       expertIsReal: !!agentId && fs.existsSync(path.join(repoRoot, '.github', 'agents', `${agentId}.agent.md`)),
-      incorporatedVerdict: /concurren|non-atomic|idempoten|double-process/i.test(answer),
+      incorporatedVerdict: /concurren|non-atomic|idempoten|double-process|double-cancel/i.test(answer),
       noMutation: !t.some((s) => s.type === 'tool' && s.name === 'editFiles' && s.result.applied === true),
     };
   } finally {

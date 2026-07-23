@@ -11,6 +11,7 @@
  * real model. Grading is on the trajectory and end state, not on final prose.
  */
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -18,6 +19,19 @@ import { fileURLToPath } from 'node:url';
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const hooksRoot = path.join(repoRoot, '.github', 'hooks');
 const harnessBin = path.join(repoRoot, 'packages', 'harness', 'bin', 'harness.mjs');
+
+// A `harness` shim on PATH lets the eval terminal run real host-style commands,
+// including pipes and redirects (`harness orient --query x --json | head`), the
+// way a live model naturally emits them.
+let shimDir = null;
+function ensureShim() {
+  if (shimDir) return shimDir;
+  shimDir = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-shim-'));
+  const shim = path.join(shimDir, 'harness');
+  fs.writeFileSync(shim, `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(harnessBin)} "$@"\n`);
+  fs.chmodSync(shim, 0o755);
+  return shimDir;
+}
 
 const HOOK_MAP = JSON.parse(fs.readFileSync(path.join(hooksRoot, 'hooks.json'), 'utf8')).hooks;
 
@@ -107,21 +121,26 @@ function readSafe(workspace, rel) {
   }
 }
 
+// Safe leading commands for each pipeline segment. The PreToolUse guards
+// (block-destructive-commands) already ran before this; this is defense in depth
+// so the eval terminal stays a read/inspect surface plus `harness`, not a shell.
+const SAFE_CMDS = new Set([
+  'harness', 'git', 'ls', 'cat', 'grep', 'head', 'tail', 'find', 'wc', 'pwd', 'echo', 'sed', 'awk', 'sort', 'uniq', 'tr', 'cut', 'true',
+]);
+
 function runTerminal(workspace, command) {
   const trimmed = String(command || '').trim();
-  // Translate the host-visible `harness ...` command to the local bin, and only
-  // allow harness + read-only git — the eval terminal is not a general shell.
-  let argv;
-  if (trimmed.startsWith('harness ')) {
-    argv = [harnessBin, ...trimmed.slice('harness '.length).split(/\s+/).filter(Boolean)];
-  } else if (/^git\s+(status|diff|ls-files|log|rev-parse|show)\b/.test(trimmed)) {
-    argv = null; // run git directly
-  } else {
+  const segments = trimmed.split(/&&|\|\||[;|\n]/).map((s) => s.trim()).filter(Boolean);
+  const leads = segments.map((s) => path.basename(s.split(/\s+/)[0] || ''));
+  if (!leads.length || !leads.every((c) => SAFE_CMDS.has(c))) {
     return { code: 126, stdout: '', stderr: `command not permitted in eval terminal: ${trimmed}` };
   }
-  const res = argv
-    ? spawnSync(process.execPath, argv, { cwd: workspace, encoding: 'utf8' })
-    : spawnSync('git', trimmed.split(/\s+/).slice(1), { cwd: workspace, encoding: 'utf8' });
+  const res = spawnSync('sh', ['-c', trimmed], {
+    cwd: workspace,
+    encoding: 'utf8',
+    timeout: 30_000,
+    env: { ...process.env, PATH: `${ensureShim()}${path.delimiter}${process.env.PATH}` },
+  });
   return { code: res.status ?? 0, stdout: (res.stdout || '').slice(0, 6000), stderr: (res.stderr || '').slice(0, 2000) };
 }
 
@@ -150,8 +169,15 @@ function execTool(workspace, action, subagents) {
     // The harness owns the expert's content; the model's job is to decide to
     // consult. Deterministic scenarios supply a canned expert response.
     const responder = subagents?.[input.agent];
-    const analysis = typeof responder === 'function' ? responder(input.prompt || '') : responder ?? `(${input.agent}: no expert configured)`;
-    return { runSubagent: input.agent, consulted: !!responder, analysis };
+    // A configured responder gives a real expert verdict; otherwise return a
+    // benign non-blocking result so a live model isn't dead-ended by a scenario
+    // that did not wire an expert. The result is what the model sees, so it
+    // carries only {agent, analysis} — no internal flags to misread.
+    const analysis =
+      typeof responder === 'function'
+        ? responder(input.prompt || '')
+        : responder ?? `${input.agent} reviewed: no blocking concerns — proceed per the locked plan.`;
+    return { runSubagent: input.agent, analysis };
   }
   if (name === 'runInTerminal') {
     // PreToolUse fires on terminal calls too (destructive-command guard etc.).
@@ -179,7 +205,7 @@ function execTool(workspace, action, subagents) {
  *   async next() -> { type:'tool', name, input } | { type:'finish', answer }
  *   observe(action, result)                (optional)
  */
-export async function runAgentLoop({ workspace, system, instruction, driver, subagents = {}, maxSteps = 16 }) {
+export async function runAgentLoop({ workspace, system, instruction, driver, subagents = {}, maxSteps = 24 }) {
   driver.reset?.({ system, instruction, tools: TOOL_SCHEMAS });
   const trajectory = [];
   let finalAnswer = null;
