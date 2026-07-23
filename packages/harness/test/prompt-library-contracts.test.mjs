@@ -387,6 +387,19 @@ test('token budget: engineer agent and context pack stay within their caps', () 
   assert.ok(CONTEXT_PACK_MAX_BYTES <= 4096, 'context pack byte budget must stay small');
 });
 
+test('native eval runner is dev tooling with labeled reconstructions, not a harness command', () => {
+  // The eval runner must NOT be a shipped harness CLI command (keeps AC14/surface intact).
+  const bin = read('packages/harness/bin/harness.mjs');
+  assert.doesNotMatch(bin, /case 'eval'/, 'eval must not be a harness CLI command');
+  assert.ok(exists('evals/run.mjs'), 'eval runner entry exists');
+  // Deterministic tasks need no provider; the semantic task is a labeled reconstruction.
+  assert.ok(exists('evals/tasks/gate-blocks-ungated-mutation/task.mjs'));
+  assert.ok(exists('evals/tasks/fail-closed-mutation-detection/task.mjs'));
+  const semantic = read('evals/tasks/investigate-readonly-disposition/task.mjs');
+  assert.match(semantic, /runtime:\s*'reconstruction'/, 'semantic task must be labeled a reconstruction');
+  assert.match(semantic, /does NOT preserve/i, 'reconstruction limitation stated');
+});
+
 test('engineer step 8 runs harness compound to close the learn loop', () => {
   const engineer = read('.github/agents/engineer.agent.md');
   assert.match(engineer, /8\.\s*Compound[^\n]*harness compound/i, 'step 8 must invoke harness compound');

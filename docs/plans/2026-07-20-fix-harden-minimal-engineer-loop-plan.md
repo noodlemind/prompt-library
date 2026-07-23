@@ -1,16 +1,16 @@
 ---
 plan_schema: 1
-title: "Harden, Optimize, and Instrument the Minimal Engineer Loop"
+title: "Harden, Optimize, Instrument, and Evaluate the Minimal Engineer Loop"
 type: fix
 status: in-progress
 plan_lock: true
-phase: 15
+phase: 16
 priority: P0
 risk: amber
 autonomy: balanced
 intent: "Make the existing Thin Engineer and Distributed Harness lifecycle reliable in real GitHub Copilot VS Code sessions while preserving one minimal, LLM-first delivery path."
 expected_outputs: ["Reliable VS Code mutation and completion hooks", "Explicit investigation-finding disposition and automatic gate recovery", "Proportional plans in the existing schema", "Primitive-path governance through create-primitive", "Versioned Harness events, VS Code doctor probes, and executable behavioral regressions", "Per-command token telemetry and a budget regression check", "Bounded plan view and answer-first CLI output", "Recovery-recipe denials and cache-stable, phase-gated context", "Read-only harness report over token telemetry with improvement flags", "Global ~/.harness telemetry store and a host-usage seam", "Compound wired into the engineer and a CI budget gate"]
-success_criteria: ["All 39 acceptance criteria pass with current-state evidence", "All three golden scenarios demonstrate the required behavior", "No new intelligence layer, persistent artifact type, agent, or skill, and no top-level command beyond the read-only report command, is introduced", "Supported-host assets remain synchronized", "The largest token sinks are bounded, measured, and reportable", "The measure-and-learn loop is closed: telemetry is readable, compounding is default, and budgets fail CI"]
+success_criteria: ["All 43 acceptance criteria pass with current-state evidence", "All three golden scenarios demonstrate the required behavior", "No new intelligence layer, persistent artifact type, agent, or skill, and no top-level command beyond the read-only report command, is introduced", "Supported-host assets remain synchronized", "The largest token sinks are bounded, measured, and reportable", "The measure-and-learn loop is closed: telemetry is readable, compounding is default, and budgets fail CI"]
 verification:
   required:
     - harness-tests
@@ -57,6 +57,10 @@ verification:
     AC37: [prompt-contracts, build-assets]
     AC38: [prompt-contracts]
     AC39: [harness-tests, build-assets]
+    AC40: [harness-tests]
+    AC41: [harness-tests]
+    AC42: [harness-tests]
+    AC43: [harness-tests, prompt-contracts]
 reviews:
   required: ["CodeRabbit full-diff review", "CodeRabbit incremental review"]
   completed: ["CodeRabbit full-diff review", "CodeRabbit incremental review"]
@@ -153,6 +157,13 @@ Phases 7–11 extend this plan with token and tool efficiency for the harness CL
 - [x] **AC37** `harness compound` is the Engineer's default post-pass step 8 action, closing the measure-and-learn loop, within the frozen agent token budget.
 - [x] **AC38** AC14 is amended to permit the read-only `report` command and the change is internally consistent across the plan.
 - [x] **AC39** A `harness report --check` mode exits non-zero on any budget breach and is wired into the harness verification workflow so budget regressions fail CI without requiring telemetry history.
+
+### Evaluation criteria (Phase 16)
+
+- [x] **AC40** A dev/CI eval runner under `evals/` (not a shipped `harness` command, so the CLI surface and AC14 are unchanged) discovers task directories, runs each, and reports per-task verdict, reward, and reason with a `--json` form; job evidence is written under gitignored `evals/jobs/`.
+- [x] **AC41** Each task's verifier is self-tested against a pass fixture and a fail fixture before the target runs; a verifier that misgrades either fixture yields an infrastructure error and the real target run is skipped.
+- [x] **AC42** Two deterministic tasks drive the real harness hook/gate/verify lifecycle over isolated fixture workspaces and grade only on harness-observed evidence (events, exit codes, session state), requiring no model provider so CI gets real signal with zero secrets.
+- [x] **AC43** A key-gated LLM-judge seam (`judge(prompt, rubric)` with a fetch-based provider adapter, no new dependency) exists; the semantic investigate task is wired as an explicitly labeled reconstruction and skips cleanly when no provider key is set. Wrong target work scores reward 0 with a `completed` status; build, verifier, or judge failures are `infrastructure_error` with no score.
 
 ## Technical Notes
 
@@ -265,6 +276,13 @@ Phases 7–11 extend this plan with token and tool efficiency for the harness CL
 - [x] Add `harness report --check` (non-zero exit on any budget breach) and reference it in `.github/workflow-templates/harness-plan-verification.yml`; add tests.
 - [x] Rebuild assets, run all four named checks, and record the roadmap.
 
+### Phase 16 — Native eval runner (AC40–AC43)
+
+- [x] Add `evals/run.mjs` (CLI + exported `runEvals`) and `evals/lib/{runner,judge,deterministic}.mjs`; discover `evals/tasks/<id>/`, self-test each verifier against pass/fail fixtures, run the target, grade, reset, and report; gitignore `evals/jobs/`.
+- [x] Add two deterministic tasks (`gate-blocks-ungated-mutation`, `stop-requires-fresh-verification`) that drive the real hooks/gate/verify over temp fixture workspaces and grade on harness-observed evidence.
+- [x] Add the key-gated LLM-judge seam and the labeled reconstruction `investigate-readonly-disposition` semantic task that skips without a provider key.
+- [x] Add `packages/harness/test/eval-runner.test.mjs` (folds into `harness-tests`) and a prompt-contracts assertion for the reconstruction label; wire an `npm run eval` script.
+
 ## Research Notes
 
 - **Host facts:** VS Code 1.128.0 and GitHub Copilot Chat 0.43.0 are installed. Current official VS Code documentation says workspace hooks are discovered from `.github/hooks/*.json`, user hooks from `~/.copilot/hooks`, and custom locations from `chat.hookFilesLocations`. It documents `tool_name`, camelCase `tool_input` values, `session_id`, `PreToolUse`, successful-only `PostToolUse`, and `Stop` with structured hook-specific output.
@@ -334,6 +352,10 @@ Phases 7–11 extend this plan with token and tool efficiency for the harness CL
 - `packages/harness/lib/host-telemetry/**`
 - `packages/harness/lib/paths.mjs`
 - `.github/workflow-templates/harness-plan-verification.yml`
+- `evals/**`
+- `packages/harness/test/eval-runner.test.mjs`
+- `packages/harness/package.json`
+- `.gitignore`
 
 ## Verification Plan
 
@@ -384,6 +406,15 @@ Phases 1–5 are implemented test-first. Shared hook normalization now handles o
 Local full-diff review found and resolved: no-space shell redirection bypass; missing PostToolUse session state that could let Stop bypass; lexical-only symlink containment; a final-block-list primitive parser edge; force-push coverage regression; overbroad credential-path matching; JSONC settings parsing; and enterprise-skill evidence parity. CodeRabbit full and incremental passes then found and resolved nested skill-evidence coverage, autonomy-aware recovery, short force flags, terminal critical-file enforcement, hook/Git timeouts, hook-order assertions, routine-edit promotion wording, VS Code doctor documentation/tests, Harness state protection, and stale plan metadata. The Scenario A/C contract suggestions and removal of `solution` primitive routing were rejected because they conflict with the approved specification. Blanket `docs/plans/**` blocking was rejected because it would break pre-gate plan creation; gated plan SHA-256 binding now closes the integrity gap while preserving `/ensure-plan` recovery. Expanding the fast-plan risk list was rejected in favor of the approved Section 7.1 predicate, and the deleted predecessor remains allowlisted because base-relative scope verification treats deletions as changed files. The primitive checklist now matches the approved evidence requirement for new or substantially expanded skills. Regression tests cover each applicable fix, and no critical finding remains open.
 
 ## Activity
+
+### 2026-07-23 — Phase 16: native eval runner implemented
+
+- Built a thin, dependency-free Node eval runner under `evals/` (dev/CI tooling, not a shipped `harness` command — AC14 and the CLI surface unchanged), borrowing the design of LangChain's eval-engineering skill without Harbor/Docker/Python: four-line task contract, verifier self-test before the real run, deterministic-gates-vs-LLM-judge split, harness-observed evidence, honest reconstruction labeling, and infra-error-vs-wrong-answer semantics.
+- Two deterministic tasks drive the real hooks and pass with no provider: `gate-blocks-ungated-mutation` (deny ungated, allow gated in-scope) and `fail-closed-mutation-detection` (unknown tool, `>|` clobber, PowerShell secret write all denied). One semantic task, `investigate-readonly-disposition`, is a labeled single-turn reconstruction of the frozen engineer contract with an LLM-judge rubric; it skips cleanly without a provider key and runs end-to-end against a mock provider in tests.
+- Added `evals/lib/{runner,judge,deterministic}.mjs`, `evals/run.mjs` (+`npm run eval`), `packages/harness/test/eval-runner.test.mjs`, a prompt-contracts assertion, and gitignored `evals/jobs/`.
+- Verification: 188/188 harness-tests, prompt-contracts and host-contracts green, assets rebuilt. `node evals/run.mjs` → 2/3 pass, 1 skipped (reconstruction, no key).
+- **Status:** in-progress
+- **Phase:** 16
 
 ### 2026-07-22 — Instrumentation scope added (Phases 12–15)
 

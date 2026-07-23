@@ -26,7 +26,8 @@
     "doctor": "node ./bin/harness.mjs doctor",
     "install:local": "node ./bin/harness.mjs install --configure-vscode --configure-path",
     "install:global": "npm run build:assets && npm install -g .",
-    "test": "node --test ./test/*.test.mjs"
+    "test": "node --test ./test/*.test.mjs",
+    "eval": "node ../../evals/run.mjs"
   },
   "publishConfig": {
     "registry": "https://your-nexus.example/repository/npm-hosted/",
