@@ -74,6 +74,7 @@ same executor + real hooks, graded on trajectory and end state:
 | `plan-before-edits-loop` | Plan before edits | ungated product edit denied → create+lock the dated plan (plan-only mutation) → gate → edit allowed |
 | `primitive-creation-loop` | Primitive creation | `.github/skills/**` edit denied until a create-primitive plan (with governance sections) **and** a live skill-read activation |
 | `consult-expert-loop` | Consulting an expert | `runSubagent(java-reviewer)` dispatched before concluding; verdict incorporated |
+| `capability-gap-to-primitive-loop` | Capability gap → primitive | `blocked-capability` blocks the work; the primitive is proposed + created via create-primitive governance; fulfilling the gap unblocks and delivers the work |
 | `verify-completion-loop` | Completion gate | Stop hook (`require-verification`) blocks a premature finish while the mutation is unverified |
 | `guard-blocks-dangerous-ops-loop` | Dangerous ops | destructive git command + `.harness` session-forge both denied by the PreToolUse guards |
 
@@ -89,12 +90,17 @@ model. Mutating scenarios support `HARNESS_EVAL_KEEP=1` to inspect the diff.
   via OpenRouter — the model orients, passes the gate, writes its own correct
   implementation, and stays in scope (or stays read-only for the investigation).
 - *Adversarial / governance probes* (`plan-before-edits-loop`,
-  `primitive-creation-loop`, `guard-blocks-dangerous-ops-loop`,
-  `consult-expert-loop`) assert that the **harness enforces** given a specific
-  (often adversarial) action sequence — attempting an ungated edit, forging the
-  session, editing a primitive before activation. A well-behaved live model will
-  not reproduce those sequences, so these are driven by the **No-Model / in-session
-  drivers** by design; they prove the hooks deny what must be denied.
+  `primitive-creation-loop`, `capability-gap-to-primitive-loop`,
+  `guard-blocks-dangerous-ops-loop`, `consult-expert-loop`) assert that the
+  **harness enforces** given a specific action sequence — an ungated edit, a
+  session forge, a primitive edited before activation, a capability gap that must
+  be fulfilled before the work proceeds. These encode exact harness conventions
+  (e.g. `blocked-capability` status, `capability_gaps` object shape, the
+  `PR2–PR7` governance labels) that the real engineer learns from the loaded
+  `ensure-plan` / `create-primitive` skills. A live model handed only the agent
+  contract will not reproduce that ceremony, so these are driven by the
+  **No-Model / in-session drivers** by design; they prove the hooks and gate
+  enforce the lifecycle deterministically.
 
 ### Sample repo and inspecting the mutation
 
