@@ -1,16 +1,16 @@
 ---
 plan_schema: 1
-title: "Harden, Optimize, Instrument, Evaluate, and Consolidate the Minimal Engineer Loop"
+title: "Harden, Optimize, Instrument, Evaluate, Consolidate, and Orient the Minimal Engineer Loop"
 type: fix
 status: in-progress
 plan_lock: true
-phase: 20
+phase: 25
 priority: P0
 risk: amber
 autonomy: balanced
 intent: "Make the existing Thin Engineer and Distributed Harness lifecycle reliable in real GitHub Copilot VS Code sessions while preserving one minimal, LLM-first delivery path."
 expected_outputs: ["Reliable VS Code mutation and completion hooks", "Explicit investigation-finding disposition and automatic gate recovery", "Proportional plans in the existing schema", "Primitive-path governance through create-primitive", "Versioned Harness events, VS Code doctor probes, and executable behavioral regressions", "Per-command token telemetry and a budget regression check", "Bounded plan view and answer-first CLI output", "Recovery-recipe denials and cache-stable, phase-gated context", "Read-only harness report over token telemetry with improvement flags", "Global ~/.harness telemetry store and a host-usage seam", "Compound wired into the engineer and a CI budget gate"]
-success_criteria: ["All 53 acceptance criteria pass with current-state evidence", "All three golden scenarios demonstrate the required behavior", "No new intelligence layer, persistent artifact type, agent, or skill, and no top-level command beyond the read-only report command, is introduced", "Supported-host assets remain synchronized", "The largest token sinks are bounded, measured, and reportable", "The measure-and-learn loop is closed: telemetry is readable, compounding is default, and budgets fail CI"]
+success_criteria: ["All 64 acceptance criteria pass with current-state evidence", "All three golden scenarios demonstrate the required behavior", "No new intelligence layer, persistent artifact type, agent, or skill, and no top-level command beyond the read-only report command, is introduced", "Supported-host assets remain synchronized", "The largest token sinks are bounded, measured, and reportable", "The measure-and-learn loop is closed: telemetry is readable, compounding is default, and budgets fail CI"]
 verification:
   required:
     - harness-tests
@@ -71,6 +71,17 @@ verification:
     AC51: [prompt-contracts, host-contracts, build-assets]
     AC52: [prompt-contracts, build-assets]
     AC53: [prompt-contracts]
+    AC54: [harness-tests]
+    AC55: [harness-tests]
+    AC56: [prompt-contracts, build-assets]
+    AC57: [harness-tests]
+    AC58: [harness-tests, prompt-contracts]
+    AC59: [harness-tests]
+    AC60: [harness-tests]
+    AC61: [prompt-contracts, build-assets]
+    AC62: [prompt-contracts]
+    AC63: [harness-tests]
+    AC64: [prompt-contracts]
 reviews:
   required: ["CodeRabbit full-diff review", "CodeRabbit incremental review"]
   completed: ["CodeRabbit full-diff review", "CodeRabbit incremental review"]
@@ -187,6 +198,20 @@ Phases 7–11 extend this plan with token and tool efficiency for the harness CL
 - [x] **AC51** Documentation and counts are synchronized (CLAUDE.md, AGENTS.md, copilot-instructions.md, agent-context.md including the stale instructions line, README.md, architecture docs) with assets rebuilt and host parity confirmed.
 - [x] **AC52** The four orphaned engineer references (`domain-routing`, `engineer-principles`, `engineer-session-checklist`, `engineer-starter-kit`) are removed with their unique content folded into surviving owners where needed, and `retired.json` purges their hydrated copies.
 - [x] **AC53** The Engineer is not bloated by consolidation: `engineer.agent.md` stays within the frozen 600–900-token budget with capability loading on-demand, and the existing budget contract test passes unchanged.
+
+### Orientation criteria (Phases 21–25)
+
+- [x] **AC54** `tokenize()` normalizes deterministically — light stemming plus identifier splitting (camelCase, snake_case, kebab-case emit both the whole token and its parts) — applied to indexing and querying alike; existing recall tests pass and term variants collapse.
+- [x] **AC55** A deterministic phrasing-stability eval task feeds several phrasings of one intent and asserts the target ranks in the top-N for every phrasing, with no model in the loop.
+- [x] **AC56** The Engineer/orient query contract instructs passing the user's salient nouns and identifiers verbatim (not a paraphrase); a prompt-contract test pins it.
+- [x] **AC57** A lexical repo map (tracked files ranked by import-degree and symbol density, top symbols per file, import edges) is produced behind an `extract(file) → {symbols, imports}` seam with a lexical extractor; it is token-budget-capped and pinned by a test.
+- [x] **AC58** The repo map is written to `.harness/repo-map.md` (gitignored, derived, always rebuildable — the ephemeral class of the context pack, so no new persistent artifact type) and referenced from orientation within budget.
+- [x] **AC59** Repo-map/orientation ranks files by relevance to the orient query so orientation is code-relevant, keyed on the normalized tokenizer; enforcement stays query-independent.
+- [x] **AC60** A deterministic `harness index --status` reports staleness (commits and files changed since the last-indexed HEAD, stamped into index meta); `orient` surfaces a "refresh recommended" next-hint when stale. Zero model cost.
+- [x] **AC61** `harness init-repo` documents the manual refresh (`harness index`) and the staleness check in the per-repo setup contract.
+- [x] **AC62** The extractor seam admits a tree-sitter tier: interface and language-selection are present with a lexical fallback for languages without precise grammars (SQL, HCL); symbol-aware lookup (`refs`/`def`/`callers`) is specified and gated to build on measured evidence, not shipped blind.
+- [x] **AC63** A staleness-or-intent-triggered maintenance refresh runs a deterministic index/map rebuild plus an OPTIONAL cheap, non-reasoning model pass (reusing `/codebase-context`) and promotes generalizable learnings to global knowledge; it never runs per-turn and the deterministic rebuild works with no provider.
+- [x] **AC64** Deterministic-first invariant: retrieval, ranking, staleness, and map generation require no model; no enforcement path depends on a non-deterministic query; asserted by contract tests.
 
 ## Technical Notes
 
@@ -400,6 +425,11 @@ Phases 7–11 extend this plan with token and tool efficiency for the harness CL
 - `packages/harness/test/eval-runner.test.mjs`
 - `packages/harness/package.json`
 - `.gitignore`
+- `packages/harness/lib/tokenize.mjs`
+- `packages/harness/lib/repo-map/**`
+- `packages/harness/lib/postings-index.mjs`
+- `packages/harness/lib/orient.mjs`
+- `packages/harness/lib/recall-rank.mjs`
 
 ## Verification Plan
 
@@ -424,6 +454,29 @@ Phases 7–11 extend this plan with token and tool efficiency for the harness CL
 - Deterministic plan readiness now rejects pre-completed `planned` work, incomplete criterion mappings, unconfigured checks, and schema-only checks for non-schema outputs at both `validate-plan` and `gate`. Terminal hooks block explicit configured checks outside `verification.required`.
 - Efficiency limitation: deterministic probes use no model requests, repository searches, or Copilot credits. The installed host did not expose a model/tool/credit export suitable for comparison to the 31.49-credit baseline, so no substitute efficiency values are claimed; manual correctness and lifecycle evidence are recorded by exact session instead.
 - Final strict evidence: `.harness/evidence/2026-07-20-fix-harden-minimal-engineer-loop-plan-34c895a10220.json` records outcome `passed` after all three manual scenarios and the five-run Scenario B benchmark closed; all 131 Harness tests, four named checks, 23 criterion mappings, current-phase tasks, scope, primitive governance, required reviews, hard gaps, and critical findings passed in enforce mode.
+
+
+### Phase 21 — Deterministic retrieval robustness (AC54, AC55, AC56)
+
+- [x] Add stemming + identifier splitting to `tokenize.mjs`; re-index; confirm recall tests pass and variants collapse.
+- [x] Add the phrasing-stability eval task; add the verbatim-terms query instruction with a prompt-contract test.
+
+### Phase 22 — Lexical repo map behind an extractor seam (AC57, AC58, AC59)
+
+- [x] Add `packages/harness/lib/repo-map/{index,lexical-extractor}.mjs`: rank tracked files by import-degree + symbol density, extract top symbols and import edges, query-aware relevance, budget cap.
+- [x] Generate `.harness/repo-map.md` in `orient`; reference it from the context pack; gitignore it.
+
+### Phase 23 — Freshness signal and refresh contract (AC60, AC61)
+
+- [x] Stamp last-indexed HEAD into index meta; add `harness index --status`; surface the `orient` staleness next-hint; document manual refresh in `init-repo`.
+
+### Phase 24 — Tree-sitter tier design (AC62)
+
+- [x] Define the tree-sitter extractor interface behind the seam (WASM, lazy grammars, lexical fallback for SQL/HCL) and the `refs`/`def`/`callers` shapes, shipped as the interface with a lexical default and an evidence gate — not the grammars themselves.
+
+### Phase 25 — Maintenance refresh and invariant (AC63, AC64)
+
+- [x] Add the staleness-or-intent maintenance refresh (deterministic rebuild + optional cheap-model seam + generalizable-learning promotion) and assert the deterministic-first invariant; rebuild assets; run the four checks and `node evals/run.mjs`.
 
 ## Instrumentation Roadmap (not built in this plan)
 
@@ -571,3 +624,10 @@ Local full-diff review found and resolved: no-space shell redirection bypass; mi
 - Fresh VS Code Engineer session `0d4e03cf-f983-4d58-a81b-e4ff9e119444` stayed read-only, inspected the authoritative Java handler, and produced the required investigation mode, two-path explanation, diagram, confirmed cancellation defect, impact/confidence/recommendation, and all three dispositions.
 - Fixture status remained clean; only search/read tools ran; no implement gate, verification command, session artifact, or evidence artifact was created; Stop allowed read-only completion.
 - **AC18:** passed. All Scenario A/B/C host gates and the five-run Scenario B benchmark are complete.
+
+### 2026-07-23 — Deterministic orientation landed (Phases 21–25, AC54–64)
+
+- Rewrote `tokenize.mjs` with stemming + identifier splitting (camelCase/snake_case/kebab-case emit whole token plus parts), shared symmetrically by index and query; added the `retrieval-phrasing-stability` eval task and the verbatim-terms query contract.
+- Added the lexical repo map (`lib/repo-map/{index,lexical-extractor}.mjs`) behind an `extract(file) → {symbols, imports}` seam ranked by import-degree + symbol density + query relevance and budget-capped to ~1k tokens; `orient` writes `.harness/repo-map.md` (ephemeral, gitignored) and the context pack points to it.
+- Added deterministic `harness index --status` (commits/files changed since the last-indexed HEAD, stamped into index meta) with an `orient` staleness next-hint; `init-repo` documents the manual refresh; the maintenance-refresh flow (deterministic rebuild + optional cheap `/codebase-context` pass + global-knowledge promotion, never per turn) and the tree-sitter tier are documented in the tool contract.
+- Pinned the deterministic-first invariant: retrieval/map/tokenizer/staleness modules carry no provider, and verify/evidence never read the free-text query. Harness suite 200/200 green; `evals/run.mjs` 3/4 pass + 1 skipped (LLM-judge, no API key).

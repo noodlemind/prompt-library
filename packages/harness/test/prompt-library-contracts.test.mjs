@@ -437,9 +437,9 @@ test('agent tool identifiers are pinned to the current VS Code taxonomy', () => 
   ]);
   const agentsDir = path.join(repoRoot, '.github', 'agents');
   for (const name of fs.readdirSync(agentsDir).filter((n) => n.endsWith('.agent.md'))) {
-    const m = read(`.github/agents/${name}`).match(/^tools: \[(.*)\]$/m);
-    if (!m) continue;
-    for (const tool of m[1].split(',').map((t) => t.trim().replace(/^"|"$/g, ''))) {
+    const frontmatter = read(`.github/agents/${name}`).match(/^---\n([\s\S]*?)\n---/)?.[1] || '';
+    const tools = YAML.parse(frontmatter)?.tools || [];
+    for (const tool of tools) {
       assert.ok(canonical.has(tool), `${name} declares unknown tool id "${tool}" — update the canonical allowlist deliberately if the host renamed it`);
     }
   }
@@ -455,6 +455,43 @@ test('token budget: engineer agent and context pack stay within their caps', () 
 
   // The context pack has a hard byte cap; assert the constant is enforced and small.
   assert.ok(CONTEXT_PACK_MAX_BYTES <= 4096, 'context pack byte budget must stay small');
+});
+
+test('deterministic retrieval: repo map, tokenizer, and staleness require no model', () => {
+  // The retrieval/orientation pipeline must be model-free (AC64).
+  for (const rel of [
+    'packages/harness/lib/tokenize.mjs',
+    'packages/harness/lib/repo-map/index.mjs',
+    'packages/harness/lib/repo-map/lexical-extractor.mjs',
+    'packages/harness/lib/index-status.mjs',
+  ]) {
+    const src = read(rel);
+    assert.doesNotMatch(src, /api\.anthropic\.com|openai|fetch\(|getProvider|ANTHROPIC_API_KEY/, `${rel} must be model-free`);
+  }
+  // The verbatim-query discipline (AC56) is documented in the tool contract.
+  assert.match(read('.github/skills/references/harness-tool-contract.md'), /salient nouns and identifiers \*{0,2}verbatim/i);
+  // The extractor is a seam with a documented tree-sitter tier (AC62).
+  assert.match(read('packages/harness/lib/repo-map/lexical-extractor.mjs'), /tree-sitter tier/i);
+  assert.match(read('.github/skills/references/harness-tool-contract.md'), /lexical fallback for SQL\/HCL|SQL and HCL/i);
+  // init-repo documents the manual refresh + staleness check (AC61).
+  const commands = read('packages/harness/lib/commands.mjs');
+  assert.match(commands, /run `harness index`[\s\S]{0,140}harness index --status/i);
+});
+
+test('enforcement is query-independent (deterministic-first invariant)', () => {
+  // Verification — the completion gate and evidence binding — must never read
+  // the free-text query. (The implement gate may use the query only to *rank*
+  // candidate plans via findMatchingPlans; its pass/fail checks are plan-based.)
+  const verify = read('packages/harness/lib/verify.mjs');
+  const binding = read('packages/harness/lib/evidence.mjs');
+  assert.doesNotMatch(verify, /\bquery\b/, 'verify must not read the query');
+  assert.doesNotMatch(binding, /\bquery\b/, 'evidence binding must not read the query');
+  // In gate, the only query use is plan ranking, not a check decision.
+  const gate = read('packages/harness/lib/gate.mjs');
+  const gateQueryLines = gate.split('\n').filter((l) => /\bquery\b/.test(l));
+  for (const line of gateQueryLines) {
+    assert.match(line, /query = ''|findMatchingPlans|const matches/, `gate query use must be plan-ranking only: ${line.trim()}`);
+  }
 });
 
 test('native eval runner is dev tooling with labeled reconstructions, not a harness command', () => {

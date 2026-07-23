@@ -58,6 +58,19 @@ function log(flags, msg) {
   console.log(`[harness] ${msg}`);
 }
 
+function spawnSyncHead(workspace) {
+  const r = execSyncSafe('git rev-parse HEAD', workspace);
+  return r ? r.trim() : null;
+}
+
+function execSyncSafe(cmd, cwd) {
+  try {
+    return execSync(cmd, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+  } catch {
+    return null;
+  }
+}
+
 // Compact JSON by default (fewer tokens for the agent to read); pretty-print
 // only under --verbose. Both are valid JSON for machine consumers.
 function emitJson(flags, obj) {
@@ -240,7 +253,10 @@ export async function cmdInitRepo(argv) {
     result: 'pass',
     exitCode: 0,
   });
-  if (!flags.json) console.log('[harness] init-repo done.');
+  if (!flags.json) {
+    console.log('[harness] init-repo done.');
+    console.log('  setup: run `harness index` to build the knowledge index and repo map; re-run after a major pull from main or a docs rewrite. Check drift anytime with `harness index --status`.');
+  }
   return 0;
 }
 
@@ -250,11 +266,26 @@ export async function cmdIndex(argv) {
   const knowledgeRoot = path.join(copilotHome, 'knowledge');
   const workspace = path.resolve(flags.workspace);
   const logger = (m) => log(flags, m);
+
+  // Read-only freshness report — never rebuilds, zero model cost.
+  if (argv.includes('--status')) {
+    const { indexStatus } = await import('./index-status.mjs');
+    const status = indexStatus({ workspace, copilotHome });
+    if (flags.json) emitJson(flags, status);
+    else {
+      console.log(`harness index: ${status.indexed ? (status.stale ? 'STALE' : 'current') : 'not built'}`);
+      console.log(`  ${status.recommendation}`);
+    }
+    return 0;
+  }
+
+  // Stamp the current git HEAD so `index --status` can measure drift later.
+  const head = spawnSyncHead(workspace);
   runIndexKnowledge({
     knowledgeRoot: fs.existsSync(knowledgeRoot) ? knowledgeRoot : null,
     workspace,
     copilotHome,
-    flags,
+    flags: { ...flags, headSha: head },
     log: logger,
   });
   writeEvent(workspace, flags, {

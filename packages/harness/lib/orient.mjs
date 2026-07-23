@@ -4,6 +4,8 @@ import { rankRecall, findMatchingPlans } from './recall-rank.mjs';
 import { runGate } from './gate.mjs';
 import { buildContextPack } from './context-pack.mjs';
 import { buildPlanView } from './plan-view.mjs';
+import { buildRepoMap } from './repo-map/index.mjs';
+import { indexStatus } from './index-status.mjs';
 import { extractGoalFromPlan } from './plan-goal.mjs';
 import { ensureHarnessDir, readSession, writeSession } from './session.mjs';
 import { pickActivePlan, listPlanRels } from './plan-parse.mjs';
@@ -58,9 +60,32 @@ export function runOrient({ workspace, copilotHome, flags, query }) {
     query: q,
   });
 
+  // Deterministic, query-ranked code orientation written alongside the pack.
+  // Advisory only — never block orientation if map generation or the write fails.
+  let repoMapRef = null;
+  try {
+    const repoMapRel = '.harness/repo-map.md';
+    const repoMap = buildRepoMap({ workspace, query: q });
+    if (!repoMap.empty) {
+      if (!flags.dryRun) fs.writeFileSync(path.join(workspace, repoMapRel), repoMap.body, 'utf8');
+      repoMapRef = { path: repoMapRel, files: repoMap.files.length, totalFiles: repoMap.totalFiles };
+    }
+  } catch {
+    // Repo map is advisory context; never fail orientation on it.
+  }
+
   const nextTools = gatePreview.pass
     ? [`harness gate --phase implement --plan ${active?.path || '<path>'}`, 'read plan ## Impacted Files']
     : [`harness gate --plan ${active?.path || '<path>'}`, 'read ensure-plan/SKILL.md'];
+
+  // Deterministic staleness hint: if the knowledge index has drifted far from
+  // HEAD (a major pull), recommend a manual refresh. Zero model cost.
+  try {
+    const status = indexStatus({ workspace, copilotHome });
+    if (status.stale) nextTools.push('harness index  # knowledge index is behind HEAD — refresh');
+  } catch {
+    // Staleness is advisory; never block orientation on it.
+  }
 
   const packBody = buildContextPack({
     query: q,
@@ -77,6 +102,7 @@ export function runOrient({ workspace, copilotHome, flags, query }) {
       : null,
     planGoal,
     planView,
+    repoMapRef,
     gatePreview: { pass: gatePreview.pass, blockedReason: gatePreview.blockedReason },
     nextTools,
   });
@@ -110,6 +136,7 @@ export function runOrient({ workspace, copilotHome, flags, query }) {
         }
       : null,
     contextPack: packRel,
+    repoMap: repoMapRef,
     gateStatus: newSession.gateStatus,
     blockedReason: newSession.blockedReason,
     nextTools,

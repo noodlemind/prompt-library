@@ -64,16 +64,21 @@ Installed to `~/.copilot/bin/harness` on every `harness install`. Add to PATH wi
 
 | Command | Cursor analogue | Budget tier | Side effects |
 |---------|-----------------|-------------|--------------|
-| `orient --query "<task>"` | Codebase search + task context | **F1** — writes ≤2 KB `.harness/context-pack.md` (goal from plan Intent Contract) | session.json, events.jsonl |
+| `orient --query "<task>"` | Codebase search + task context | **F1** — writes ≤2 KB `.harness/context-pack.md` plus a query-ranked `.harness/repo-map.md` (code orientation, regenerated every turn from live git — never stale); surfaces a `harness index` staleness hint when the knowledge index has drifted | session.json, events.jsonl, repo-map.md |
 | `recall "<query>"` | Standalone search / debug | F1 paths only | events |
 | `gate --phase implement --plan <path>` | Pre-edit plan/state guard | F3 on fail | session + events |
 | `verify --plan <path> [--base ref] [--enforcement mode]` | Named checks, schema/state, tasks, scope, reviews, gaps, findings, evidence | no prompt context | evidence + session + events |
 | `validate-plan [--plan path]` | Spec/schema lint | read-only | none |
-| `index` | Rebuild search index | none in chat | manifest.yaml, `.harness-index/`, events |
+| `index` | Rebuild knowledge index; stamps current HEAD into index meta | none in chat | manifest.yaml, `.harness-index/`, events |
+| `index --status` | Deterministic freshness: commits + files changed since the last-indexed HEAD (read-only, zero model) | none | none |
 | `get [--docid id \| --path rel]` | Fetch bounded doc excerpt | F2 on demand | none |
 | `compound --plan <path>` | Consume passed evidence, index, classify learning, record telemetry | after verify | index + session + telemetry + events |
 | `events [--session id] [--failures] [--summary]` | Schema-v2 audit / stuck debugging | read-only | none |
 | `report [--sync] [--global] [--check] [--json]` | Token-efficiency report over telemetry: ranked sinks + improvement flags | read-only, except `--sync` writes `~/.harness/telemetry/` | none in workspace |
+
+**Query construction (deterministic-retrieval discipline):** build `--query` from the user's salient nouns and identifiers **verbatim** (e.g. `SYSTEM-OVERRIDE`, `payment`, `token`) — do not paraphrase intent into synonyms. The retrieval tokenizer normalizes identifier formats and morphology, but it cannot recover a term the query never contained. Passing the literal request terms is what keeps recall stable across phrasings.
+
+**Repo map & knowledge freshness (deterministic-first).** `orient` regenerates `.harness/repo-map.md` every turn from `git ls-files` + a lexical symbol/import extractor — so code orientation is always current and never depends on a model. The `.harness/repo-map.md` (like `.harness/context-pack.md`) is an ephemeral derived artifact, not a persistent type. The knowledge index is refreshed manually (`harness index`) — run it after a major pull from main or a docs rewrite; `index --status` and the `orient` next-hint tell you when it has drifted. A staleness-or-intent maintenance refresh may additionally re-derive conventions via `/codebase-context` (an optional, cheap, non-reasoning model pass) and promote generalizable learnings to the global `~/.copilot/knowledge` store — never per turn. The extractor is a seam: a tree-sitter tier (WASM, lazy-loaded grammars, lexical fallback for SQL/HCL) can implement the same `extract` shape to power symbol-accurate `refs`/`def`/`callers`, built only when telemetry shows the lexical map misleads the agent.
 
 ### JSON shapes (stable fields)
 

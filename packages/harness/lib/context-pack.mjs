@@ -9,6 +9,7 @@ export function buildContextPack({
   activePlan,
   planGoal,
   planView,
+  repoMapRef,
   gatePreview,
   nextTools,
 }) {
@@ -53,6 +54,14 @@ export function buildContextPack({
   if (gatePreview) {
     lines.push(`- pass: ${gatePreview.pass}`);
     if (gatePreview.blockedReason) lines.push(`- blocked: ${gatePreview.blockedReason}`);
+  }
+
+  if (repoMapRef) {
+    lines.push(
+      '',
+      '## Repo map (code orientation)',
+      `- Read \`${repoMapRef.path}\` — ${repoMapRef.files} of ${repoMapRef.totalFiles} source files, ranked for this query. Start there instead of searching the tree.`
+    );
   }
 
   lines.push('', '## Next tools', ...(nextTools || []).map((t) => `- \`${t}\``));

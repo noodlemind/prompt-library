@@ -34,7 +34,8 @@ Usage:
   harness upgrade [options]
   harness doctor [options]
   harness status [options]
-  harness index [options]
+  harness index [options]           Rebuild knowledge index (stamps HEAD)
+  harness index --status            Report knowledge-index freshness vs HEAD (read-only)
   harness orient [options] [--query "task summary"]
   harness gate [options] [--phase implement|verify]
   harness verify [options] --plan docs/plans/file.md
