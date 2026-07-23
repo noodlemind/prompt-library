@@ -62,6 +62,25 @@ in-scope edit applied, any out-of-scope edit denied in-loop, and the file change
 The live model can navigate the harness any way it likes — the grade is on the
 trajectory and end state, not on wording.
 
+### Scenario coverage
+
+All loop scenarios run over the one `payment-service` sample repo, through the
+same executor + real hooks, graded on trajectory and end state:
+
+| Task | Scenario | Real mechanic exercised |
+| --- | --- | --- |
+| `investigate-readonly-loop` | Lookup without edits | Investigate mode: orient/read for evidence, finding + dispositions, **zero mutations** (tree byte-identical to baseline) |
+| `deliver-gated-edit-loop` | Mutation | orient → implement gate → in-scope edit applied, out-of-scope edit denied in-loop |
+| `plan-before-edits-loop` | Plan before edits | ungated product edit denied → create+lock the dated plan (plan-only mutation) → gate → edit allowed |
+| `primitive-creation-loop` | Primitive creation | `.github/skills/**` edit denied until a create-primitive plan (with governance sections) **and** a live skill-read activation |
+| `consult-expert-loop` | Consulting an expert | `runSubagent(java-reviewer)` dispatched before concluding; verdict incorporated |
+| `verify-completion-loop` | Completion gate | Stop hook (`require-verification`) blocks a premature finish while the mutation is unverified |
+| `guard-blocks-dangerous-ops-loop` | Dangerous ops | destructive git command + `.harness` session-forge both denied by the PreToolUse guards |
+
+Each is a `deterministic` task (No-Model driver) so the whole matrix runs in CI,
+and each also accepts `HARNESS_EVAL_AGENT=insession|openai` to run under a real
+model. Mutating scenarios support `HARNESS_EVAL_KEEP=1` to inspect the diff.
+
 ### Sample repo and inspecting the mutation
 
 The loop copies the persistent sample repo `evals/fixtures/payment-service/` into

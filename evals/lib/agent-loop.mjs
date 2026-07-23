@@ -48,6 +48,15 @@ export const TOOL_SCHEMAS = [
       required: ['path', 'content'],
     },
   },
+  {
+    name: 'runSubagent',
+    description: 'Consult a read-only expert agent (e.g. java-reviewer, security-sentinel, sql-reviewer) for a domain judgment.',
+    parameters: {
+      type: 'object',
+      properties: { agent: { type: 'string' }, prompt: { type: 'string' } },
+      required: ['agent'],
+    },
+  },
   { name: 'finish', description: 'End the task with a final answer.', parameters: { type: 'object', properties: { answer: { type: 'string' } }, required: ['answer'] } },
 ];
 
@@ -116,9 +125,20 @@ function runTerminal(workspace, command) {
   return { code: res.status ?? 0, stdout: (res.stdout || '').slice(0, 6000), stderr: (res.stderr || '').slice(0, 2000) };
 }
 
-function execTool(workspace, action) {
+// PostToolUse fires after every successful tool call in a real host — it is how
+// skill-read activation (create-primitive) and edit-recording (verification
+// tracking) get persisted to the session. Firing it broadly keeps that faithful.
+function firePost(workspace, toolName, toolInput) {
+  runHookChain('PostToolUse', workspace, { tool_name: toolName, tool_input: toolInput, tool_response: { success: true } });
+}
+
+function execTool(workspace, action, subagents) {
   const { name, input = {} } = action;
-  if (name === 'readFile') return { readFile: input.path, content: readSafe(workspace, input.path) };
+  if (name === 'readFile') {
+    const result = { readFile: input.path, content: readSafe(workspace, input.path) };
+    firePost(workspace, 'readFile', { filePath: input.path });
+    return result;
+  }
   if (name === 'listDir') {
     try {
       return { listDir: input.path, entries: fs.readdirSync(path.join(workspace, input.path || '.')) };
@@ -126,14 +146,20 @@ function execTool(workspace, action) {
       return { listDir: input.path, error: err.message };
     }
   }
+  if (name === 'runSubagent') {
+    // The harness owns the expert's content; the model's job is to decide to
+    // consult. Deterministic scenarios supply a canned expert response.
+    const responder = subagents?.[input.agent];
+    const analysis = typeof responder === 'function' ? responder(input.prompt || '') : responder ?? `(${input.agent}: no expert configured)`;
+    return { runSubagent: input.agent, consulted: !!responder, analysis };
+  }
   if (name === 'runInTerminal') {
     // PreToolUse fires on terminal calls too (destructive-command guard etc.).
-    const pre = runHookChain('PreToolUse', workspace, {
-      tool_name: 'run_in_terminal',
-      tool_input: { command: input.command },
-    });
+    const pre = runHookChain('PreToolUse', workspace, { tool_name: 'run_in_terminal', tool_input: { command: input.command } });
     if (pre.denied) return { runInTerminal: input.command, denied: true, reason: pre.reason };
-    return { runInTerminal: input.command, ...runTerminal(workspace, input.command) };
+    const result = runTerminal(workspace, input.command);
+    firePost(workspace, 'run_in_terminal', { command: input.command });
+    return { runInTerminal: input.command, ...result };
   }
   if (name === 'editFiles') {
     const payload = { tool_name: 'editFiles', tool_input: { filePath: input.path } };
@@ -141,7 +167,7 @@ function execTool(workspace, action) {
     if (pre.denied) return { editFiles: input.path, applied: false, denied: true, reason: pre.reason };
     fs.mkdirSync(path.dirname(path.join(workspace, input.path)), { recursive: true });
     fs.writeFileSync(path.join(workspace, input.path), input.content ?? '', 'utf8');
-    runHookChain('PostToolUse', workspace, { ...payload, tool_response: { success: true } });
+    firePost(workspace, 'editFiles', { filePath: input.path });
     return { editFiles: input.path, applied: true };
   }
   return { error: `unknown tool: ${name}` };
@@ -153,7 +179,7 @@ function execTool(workspace, action) {
  *   async next() -> { type:'tool', name, input } | { type:'finish', answer }
  *   observe(action, result)                (optional)
  */
-export async function runAgentLoop({ workspace, system, instruction, driver, maxSteps = 16 }) {
+export async function runAgentLoop({ workspace, system, instruction, driver, subagents = {}, maxSteps = 16 }) {
   driver.reset?.({ system, instruction, tools: TOOL_SCHEMAS });
   const trajectory = [];
   let finalAnswer = null;
@@ -167,7 +193,7 @@ export async function runAgentLoop({ workspace, system, instruction, driver, max
       trajectory.push({ type: 'finish', answer: finalAnswer, stopBlocked: stop.denied, stopReason: stop.reason || '' });
       break;
     }
-    const result = execTool(workspace, action);
+    const result = execTool(workspace, action, subagents);
     driver.observe?.(action, result);
     trajectory.push({ type: 'tool', name: action.name, input: action.input, result });
   }
