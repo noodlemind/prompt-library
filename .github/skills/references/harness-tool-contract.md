@@ -69,6 +69,7 @@ Installed to `~/.copilot/bin/harness` on every `harness install`. Add to PATH wi
 | `gate --phase implement --plan <path>` | Pre-edit plan/state guard | F3 on fail | session + events |
 | `verify --plan <path> [--base ref] [--enforcement mode]` | Named checks, schema/state, tasks, scope, reviews, gaps, findings, evidence | no prompt context | evidence + session + events |
 | `validate-plan [--plan path]` | Spec/schema lint | read-only | none |
+| `plan-new --type <t> --slug <s> --intent "..."` | Scaffold a valid, gate-ready plan (dated path, frontmatter, all canonical sections); `--gap <id>:<path>` sets blocked-capability + the gap entry; a primitive Impacted File auto-adds `## Primitive Governance` + create-primitive | none (plan-only) | writes the plan file |
 | `index` | Rebuild knowledge index; stamps current HEAD into index meta | none in chat | manifest.yaml, `.harness-index/`, events |
 | `index --status` | Deterministic freshness: commits + files changed since the last-indexed HEAD (read-only, zero model) | none | none |
 | `get [--docid id \| --path rel]` | Fetch bounded doc excerpt | F2 on demand | none |
