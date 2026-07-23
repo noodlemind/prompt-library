@@ -1,0 +1,4 @@
+version: 1
+enforcement: enforce
+gate_ttl_minutes: 30
+evidence_ttl_hours: 24

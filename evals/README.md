@@ -62,6 +62,22 @@ in-scope edit applied, any out-of-scope edit denied in-loop, and the file change
 The live model can navigate the harness any way it likes — the grade is on the
 trajectory and end state, not on wording.
 
+### Sample repo and inspecting the mutation
+
+The loop copies the persistent sample repo `evals/fixtures/payment-service/` into
+an isolated temp git workspace and commits a clean baseline, so every run's edits
+diff against a known-good tree. `src/PaymentController.java` is the plan's only
+Impacted File; `src/Role.java` and `src/OrderStore.java` are out of scope.
+
+Set `HARNESS_EVAL_KEEP=1` to preserve the workspace after a run and print its
+`git status` + `git diff` — the human-validatable proof of the mutation:
+
+```bash
+HARNESS_EVAL_KEEP=1 node evals/run.mjs --filter deliver-gated-edit-loop
+# → only src/PaymentController.java is modified; Role.java/OrderStore.java are
+#   untouched because the out-of-scope edit was denied by the gate in-loop.
+```
+
 ## Semantic judge / cheap-model seam
 
 `evals/lib/judge.mjs` is the Anthropic-wire provider for semantic reconstruction

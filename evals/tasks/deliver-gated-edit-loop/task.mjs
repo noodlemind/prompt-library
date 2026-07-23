@@ -1,10 +1,9 @@
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { spawnSync } from 'node:child_process';
 import { runAgentLoop } from '../../lib/agent-loop.mjs';
 import { replayDriver, openAiToolDriver } from '../../lib/drivers.mjs';
+import { materializeFixture, finalizeWorkspace } from '../../lib/fixture.mjs';
 import { EvalInfraError } from '../../lib/judge.mjs';
 
 // Capability: an agentic host loop uses the harness to deliver a scoped edit —
@@ -24,96 +23,8 @@ export const meta = {
 const here = path.dirname(fileURLToPath(import.meta.url));
 const engineerContract = fs.readFileSync(path.resolve(here, '..', '..', '..', '.github', 'agents', 'engineer.agent.md'), 'utf8');
 const PLAN = 'docs/plans/2026-07-20-feat-payment-override-role.md';
-const PATCHED = 'package a;\nimport a.Role;\npublic class PaymentController {\n public void handle(){}\n // SYSTEM_OVERRIDE authorization added per plan\n public boolean isOverride(Role r){ return r == Role.SYSTEM_OVERRIDE; }\n}\n';
-
-function git(ws, args) {
-  return spawnSync('git', args, {
-    cwd: ws,
-    encoding: 'utf8',
-    env: { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_SYSTEM: '/dev/null' },
-  });
-}
-
-function makeFixture() {
-  const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-loop-'));
-  fs.mkdirSync(path.join(ws, '.github', 'harness'), { recursive: true });
-  fs.writeFileSync(
-    path.join(ws, '.github', 'harness', 'policy.yaml'),
-    'version: 1\nenforcement: enforce\ngate_ttl_minutes: 30\nevidence_ttl_hours: 24\n'
-  );
-  fs.mkdirSync(path.join(ws, 'src'), { recursive: true });
-  fs.writeFileSync(path.join(ws, 'src', 'PaymentController.java'), 'package a;\nimport a.Role;\npublic class PaymentController {\n public void handle(){}\n}\n');
-  fs.writeFileSync(path.join(ws, 'src', 'Role.java'), 'package a;\npublic enum Role { SYSTEM_OVERRIDE, USER }\n');
-  fs.mkdirSync(path.join(ws, path.dirname(PLAN)), { recursive: true });
-  fs.writeFileSync(
-    path.join(ws, PLAN),
-    `---
-plan_schema: 1
-title: "Payment SYSTEM-OVERRIDE role handling"
-type: feat
-status: in-progress
-plan_lock: true
-phase: 1
-risk: green
-intent: "Authorize the payment SYSTEM-OVERRIDE role in the payment controller"
-expected_outputs: ["override role check"]
-success_criteria: ["override role authorized"]
-verification:
-  required: [harness-tests]
-  criteria: {AC1: [harness-tests]}
-reviews: {required: [], completed: [], critical_open: []}
-skills_used: [engineer]
-capability_gaps: []
----
-
-# Payment SYSTEM-OVERRIDE role handling
-
-## Overview
-
-Authorize the payment SYSTEM-OVERRIDE role in the payment controller.
-
-## Intent Contract
-
-- Goal: Authorize the payment SYSTEM-OVERRIDE role.
-
-## Acceptance Criteria
-
-- [ ] **AC1** The payment controller authorizes the SYSTEM_OVERRIDE role.
-
-## Plan
-
-### Phase 1
-
-- [ ] Add the override role check to PaymentController.
-
-## Impacted Files
-
-- \`src/PaymentController.java\`
-
-## Verification Plan
-
-- Run the harness tests.
-
-## Risk & Review Routing
-
-- Green.
-
-## Review Findings
-
-- None.
-
-## Activity
-
-- Fixture created.
-`
-  );
-  git(ws, ['init', '-q']);
-  git(ws, ['config', 'user.email', 'e@x.test']);
-  git(ws, ['config', 'user.name', 'T']);
-  git(ws, ['add', '.']);
-  git(ws, ['commit', '-qm', 'fixture']);
-  return ws;
-}
+const PATCHED =
+  'package example;\n\n/** Authorizes and routes payment operations for incoming orders. */\npublic class PaymentController {\n\n  private final OrderStore store;\n\n  public PaymentController(OrderStore store) {\n    this.store = store;\n  }\n\n  public void handle(String orderId, Role role) {\n    // SYSTEM_OVERRIDE authorization added per plan\n    if (role == Role.SYSTEM_OVERRIDE) {\n      store.placeOrder(orderId);\n      store.markProcessed(orderId);\n      return;\n    }\n    if (store.wasProcessed(orderId)) {\n      return; // dedupe: already handled\n    }\n    store.placeOrder(orderId);\n    store.markProcessed(orderId);\n  }\n}\n';
 
 // The canonical trajectory a competent host model would produce: orient, read,
 // pass the implement gate, edit the in-scope file, attempt the out-of-scope edit
@@ -149,7 +60,7 @@ function selectDriver() {
 }
 
 export async function run() {
-  const ws = makeFixture();
+  const ws = materializeFixture('payment-service');
   try {
     const driver = selectDriver();
     const loop = await runAgentLoop({ workspace: ws, system: engineerContract, instruction: fs.readFileSync(path.join(here, 'instruction.md'), 'utf8'), driver });
@@ -179,7 +90,7 @@ export async function run() {
       finished: t.at(-1)?.type === 'finish',
     };
   } finally {
-    fs.rmSync(ws, { recursive: true, force: true });
+    finalizeWorkspace(ws, 'deliver-gated-edit-loop');
   }
 }
 
