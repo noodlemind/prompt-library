@@ -12,6 +12,18 @@ import { EvalInfraError } from './judge.mjs';
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 export const engineerContract = fs.readFileSync(path.join(repoRoot, '.github', 'agents', 'engineer.agent.md'), 'utf8');
 
+/** Assemble the real loaded-skill guidance a live engineer session would have. */
+export function buildGuidance(skills = ['ensure-plan', 'create-primitive']) {
+  const parts = [];
+  for (const name of skills) {
+    const file = path.join(repoRoot, '.github', 'skills', name, 'SKILL.md');
+    if (fs.existsSync(file)) parts.push(`## Skill: ${name}\n\n${fs.readFileSync(file, 'utf8')}`);
+    const details = path.join(repoRoot, '.github', 'skills', name, 'references', 'creation-details.md');
+    if (fs.existsSync(details)) parts.push(`## Reference: ${name}/creation-details\n\n${fs.readFileSync(details, 'utf8')}`);
+  }
+  return parts.join('\n\n---\n\n');
+}
+
 export function pickDriver(canonicalTrajectory, { transcriptFile } = {}) {
   const which = process.env.HARNESS_EVAL_AGENT || 'scripted';
   if (which === 'scripted') return replayDriver(canonicalTrajectory, { name: 'no-model', model: 'scripted' });

@@ -118,6 +118,32 @@ HARNESS_EVAL_KEEP=1 node evals/run.mjs --filter deliver-gated-edit-loop
 #   untouched because the out-of-scope edit was denied by the gate in-loop.
 ```
 
+## Guided-live governance measurement
+
+`evals/guided-live.mjs` (live-only, not part of `node evals/run.mjs`) answers a
+harder question: can a real model navigate the governance ceremony when it has
+the loaded-skill guidance a real engineer session gets? It injects the actual
+`ensure-plan` + `create-primitive` skill text into the system prompt and runs the
+governance instructions against a live model, grading on outcomes — and because
+the PreToolUse hook is the gatekeeper, a new primitive on disk proves the model
+satisfied plan + governance + activation (the hook would have denied it otherwise).
+
+```bash
+source ~/.openrouter.env
+HARNESS_EVAL_AGENT_URL=https://openrouter.ai/api/v1/chat/completions \
+HARNESS_EVAL_AGENT_MODEL=anthropic/claude-sonnet-5 \
+HARNESS_EVAL_AGENT_KEY="$OPENROUTER_API_KEY" \
+  node evals/guided-live.mjs
+```
+
+Findings (claude-sonnet-5, guidance ≈29KB): guided single-primitive creation
+**passes** — the model authored `.github/skills/payment-check/SKILL.md` end to
+end, and the harness **denied its wrong attempts 7 times** before allowing it once
+governance was satisfied. The two-plan `blocked-capability` lifecycle is still not
+completed in one live pass — evidence that that ceremony would benefit from more
+harness scaffolding (e.g. a plan-skeleton generator) rather than being authored
+freehand. Enforcement held in every case: no gate was ever bypassed.
+
 ## Semantic judge / cheap-model seam
 
 `evals/lib/judge.mjs` is the Anthropic-wire provider for semantic reconstruction

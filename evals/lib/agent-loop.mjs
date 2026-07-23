@@ -205,8 +205,12 @@ function execTool(workspace, action, subagents) {
  *   async next() -> { type:'tool', name, input } | { type:'finish', answer }
  *   observe(action, result)                (optional)
  */
-export async function runAgentLoop({ workspace, system, instruction, driver, subagents = {}, maxSteps = 24 }) {
-  driver.reset?.({ system, instruction, tools: TOOL_SCHEMAS });
+export async function runAgentLoop({ workspace, system, instruction, driver, subagents = {}, guidance = '', maxSteps = 24 }) {
+  // Guidance is the loaded-skill text a real engineer session gets (ensure-plan,
+  // create-primitive, …). Appending it lets a live model learn the exact harness
+  // ceremony it would otherwise have to guess.
+  const fullSystem = guidance ? `${system}\n\n# Loaded skills — follow these exactly\n\n${guidance}` : system;
+  driver.reset?.({ system: fullSystem, instruction, tools: TOOL_SCHEMAS });
   const trajectory = [];
   let finalAnswer = null;
   let stop = null;
