@@ -28,6 +28,7 @@ Read-only diagnostics. **No** product code edits.
 | H14 | Lifecycle hooks bundle | `~/.copilot/hooks/hooks.json` (optional) |
 | H15 | Global harness shim | `~/.copilot/bin/harness` (optional when H12 passes via monorepo) |
 | H16 | harness on PATH | `which harness` succeeds (optional) |
+| H17 | No stale orphaned primitives | No hydrated agent/skill/instruction/prompt/hook remains that current assets no longer ship and `retired.json` does not cover; the hint lists any to tombstone or delete (optional) |
 
 With `harness doctor --host vscode`, also require:
 

@@ -14,6 +14,40 @@ export function loadRetired(pkgRoot) {
   return data.retired || [];
 }
 
+// Primitive directories that accumulate orphans across versions. Knowledge and
+// enterprise are excluded: they hold user- and enterprise-owned content, not
+// harness-shipped primitives, so their extra files are not orphans.
+const ORPHAN_SCAN_DIRS = ['skills', 'agents', 'instructions', 'prompts', 'hooks'];
+
+/**
+ * Stale orphans: files hydrated in the Copilot home that current assets no
+ * longer ship AND retired.json does not cover — i.e. leftovers from an older
+ * harness that upgrade will not clean because nobody tombstoned them. Returns
+ * the sorted relative paths so `doctor` can flag them for retirement.
+ */
+export function findStaleOrphans(copilotHome, assetsRoot, retiredList = []) {
+  const current = new Set();
+  for (const top of SYNC_TOP_LEVEL) {
+    for (const f of walkFiles(path.join(assetsRoot, top))) current.add(`${top}/${f}`);
+  }
+  const retiredCovered = (rel) =>
+    retiredList.some((r) => {
+      const base = String(r).replace(/\/$/, '');
+      return rel === base || rel.startsWith(`${base}/`);
+    });
+
+  const orphans = [];
+  for (const top of ORPHAN_SCAN_DIRS) {
+    for (const f of walkFiles(path.join(copilotHome, top))) {
+      const rel = `${top}/${f}`;
+      if (current.has(rel)) continue; // still shipped
+      if (retiredCovered(rel)) continue; // explicitly retired — upgrade removes it
+      orphans.push(rel);
+    }
+  }
+  return orphans.sort();
+}
+
 export function resolveContainedPath(root, rel) {
   if (!rel || typeof rel !== 'string') return null;
   if (path.isAbsolute(rel) || path.win32.isAbsolute(rel)) return null;

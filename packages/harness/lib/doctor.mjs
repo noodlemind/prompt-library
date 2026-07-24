@@ -13,6 +13,7 @@ import { runVerify } from './verify.mjs';
 import { readSession, writeSession } from './session.mjs';
 import { parseVSCodeSettings } from './vscode-settings.mjs';
 import { resolveVSCodeSettingsPaths } from './paths.mjs';
+import { loadRetired, findStaleOrphans } from './sync.mjs';
 
 const require = createRequire(import.meta.url);
 
@@ -464,6 +465,17 @@ export function runDoctor({ copilotHome, assetsRoot, pkgRoot, flags, vscodeSetti
     name: 'harness on PATH',
     pass: onPath,
     hint: 'Run: harness install --configure-path  (or add ~/.copilot/bin to PATH)',
+    optional: true,
+  });
+
+  const orphans = pkgRoot ? findStaleOrphans(copilotHome, assetsRoot, loadRetired(pkgRoot)) : [];
+  checks.push({
+    id: 'H17',
+    name: 'No stale orphaned primitives',
+    pass: orphans.length === 0,
+    hint: orphans.length
+      ? `Hydrated but no longer shipped and not retired (${orphans.length}): ${orphans.join(', ')}. Add each to packages/harness/retired.json so upgrade purges it, or delete it from ${copilotHome}.`
+      : 'No orphaned agents/skills/instructions/prompts/hooks in the Copilot home',
     optional: true,
   });
 
