@@ -1,6 +1,6 @@
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
+import { resolveCopilotHome } from '../paths.mjs';
 import { collectSessionState } from './session-state.mjs';
 
 /**
@@ -20,10 +20,10 @@ import { collectSessionState } from './session-state.mjs';
  * back to harness estimates.
  */
 
-function candidateLogs() {
+function candidateLogs(copilotHome) {
   const paths = [];
   if (process.env.HARNESS_VSCODE_USAGE_LOG) paths.push(process.env.HARNESS_VSCODE_USAGE_LOG);
-  paths.push(path.join(os.homedir(), '.copilot', 'host-usage', 'vscode.jsonl'));
+  paths.push(path.join(resolveCopilotHome(copilotHome), 'host-usage', 'vscode.jsonl'));
   return paths.filter((p) => {
     try {
       return fs.existsSync(p) && fs.statSync(p).isFile();
@@ -59,9 +59,9 @@ function normalizeRecord(record) {
   };
 }
 
-function collectNormalizedLog() {
+function collectNormalizedLog(copilotHome) {
   const events = [];
-  for (const file of candidateLogs()) {
+  for (const file of candidateLogs(copilotHome)) {
     try {
       const lines = fs.readFileSync(file, 'utf8').split('\n').filter(Boolean);
       for (const line of lines) {
@@ -82,7 +82,7 @@ function collectNormalizedLog() {
 }
 
 export function collect({ workspace, copilotHome } = {}) {
-  const normalized = collectNormalizedLog();
+  const normalized = collectNormalizedLog(copilotHome);
   const overridden = new Set(normalized.map((e) => e.session).filter(Boolean));
   const sessionState = collectSessionState({ workspace, copilotHome }).filter(
     (e) => !overridden.has(e.session)

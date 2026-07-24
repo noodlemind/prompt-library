@@ -123,3 +123,21 @@ test('report surfaces per-session performance from host metrics', () => {
   assert.match(text, /gpt-5\.4/);
   assert.match(text, /75%/); // cache ratio rendered as percent
 });
+
+test('session token ranking uses input+output when total is absent (matches roll-up)', () => {
+  const events = [
+    { type: 'host_session', session: 'a', source: 'host', ts: '2026-01-01T00:00:00Z',
+      usage: { 'gen_ai.usage.input_tokens': 300, 'gen_ai.usage.output_tokens': 100 }, // no total
+      metrics: { model: 'gpt-5.4', premiumRequests: 1, turns: 2 } },
+    { type: 'host_session', session: 'b', source: 'host', ts: '2026-01-01T00:01:00Z',
+      usage: { 'gen_ai.usage.input_tokens': 50, 'gen_ai.usage.output_tokens': 10, 'gen_ai.usage.total_tokens': 999 },
+      metrics: { model: 'gpt-5.4', premiumRequests: 1, turns: 1 } },
+  ];
+  const report = buildReport({ workspace: os.tmpdir(), copilotHome: path.join(os.tmpdir(), 'none'), events });
+  // 'a' has no total → 400 from input+output; 'b' has explicit 999 → ranks first.
+  assert.equal(report.sessions[0].session, 'b');
+  assert.equal(report.sessions[1].tokens, 400);
+  // Roll-up total = 400 + 999; row tokens sum to the same.
+  assert.equal(report.totals.tokens, 1399);
+  assert.equal(report.sessionTotals.tokens, 1399);
+});

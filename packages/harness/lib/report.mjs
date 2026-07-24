@@ -151,6 +151,16 @@ export function trendRegression(events) {
 // How many per-session performance rows the report shows (highest-token first).
 const SESSION_PERF_CAP = 10;
 
+/** Tokens for an event, matching summarizeUsage: explicit total, else input +
+ * output, else 0 — so session rankings track the report roll-ups. */
+function eventTokens(event) {
+  const usage = event.usage;
+  if (!usage) return 0;
+  const recorded = usage['gen_ai.usage.total_tokens'];
+  if (Number.isFinite(recorded)) return recorded;
+  return (usage['gen_ai.usage.input_tokens'] || 0) + (usage['gen_ai.usage.output_tokens'] || 0);
+}
+
 /** Per-session performance rows and roll-up, from host events carrying metrics. */
 export function sessionPerformance(events) {
   const rows = events
@@ -158,7 +168,7 @@ export function sessionPerformance(events) {
     .map((e) => ({
       session: e.session || '(no session)',
       ts: e.ts || null,
-      tokens: e.usage?.['gen_ai.usage.total_tokens'] || 0,
+      tokens: eventTokens(e),
       ...e.metrics,
     }));
   rows.sort((a, b) => b.tokens - a.tokens);

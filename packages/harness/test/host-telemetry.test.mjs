@@ -56,6 +56,24 @@ function writeSessionStore(copilotHome, sessions) {
   }
 }
 
+test('normalized log resolves under the copilotHome override, not just ~/.copilot', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-home-'));
+  const logDir = path.join(home, 'host-usage');
+  fs.mkdirSync(logDir, { recursive: true });
+  fs.writeFileSync(path.join(logDir, 'vscode.jsonl'), `${JSON.stringify({ sessionId: 'norm-1', ts: '2026-01-01T00:00:00Z', inputTokens: 40, outputTokens: 10 })}\n`);
+  const prev = process.env.HARNESS_VSCODE_USAGE_LOG;
+  delete process.env.HARNESS_VSCODE_USAGE_LOG; // force the default <copilotHome>/host-usage/vscode.jsonl path
+  try {
+    const events = collectHostUsage({ workspace: os.tmpdir(), host: 'vscode', copilotHome: home });
+    assert.equal(events.length, 1);
+    assert.equal(events[0].session, 'norm-1');
+    assert.equal(events[0].usage['gen_ai.usage.total_tokens'], 50);
+  } finally {
+    if (prev === undefined) delete process.env.HARNESS_VSCODE_USAGE_LOG;
+    else process.env.HARNESS_VSCODE_USAGE_LOG = prev;
+  }
+});
+
 test('session-state adapter sums real usage incl. cache + reasoning into the total', () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-ss-'));
   const ws = '/Users/dev/repo';
