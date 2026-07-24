@@ -233,8 +233,8 @@ export function mergeIntelliJInstructions(assetsRoot, intellijRoot, flags, log) 
     .readdirSync(instrDir)
     .filter((f) => f.endsWith('.instructions.md'))
     .sort((a, b) => {
-      if (a === 'prompt-library-global.instructions.md') return -1;
-      if (b === 'prompt-library-global.instructions.md') return 1;
+      if (a === 'harness-global.instructions.md') return -1;
+      if (b === 'harness-global.instructions.md') return 1;
       return a.localeCompare(b);
     });
   const parts = [];

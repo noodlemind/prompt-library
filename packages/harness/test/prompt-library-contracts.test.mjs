@@ -106,7 +106,7 @@ test('engineer agent is frozen, thin, and owns the only normative nine-step deli
 
 test('engineer recovers blocked mutations, routes primitives, and exposes finding disposition', () => {
   const engineer = read('.github/agents/engineer.agent.md');
-  const globalWorkflow = read('.github/instructions/prompt-library-global.instructions.md');
+  const globalWorkflow = read('.github/instructions/harness-global.instructions.md');
   const frontmatter = YAML.parse(engineer.match(/^---\n([\s\S]*?)\n---/)?.[1] || '');
   const handoffs = new Map((frontmatter.handoffs || []).map((handoff) => [handoff.label, handoff]));
 
@@ -193,7 +193,7 @@ test('host evaluation contains the three executable golden behavior contracts', 
 test('engineer loads capabilities on demand and owns bounded consultations', () => {
   const surfaces = [
     read('.github/agents/engineer.agent.md'),
-    read('.github/instructions/prompt-library-global.instructions.md'),
+    read('.github/instructions/harness-global.instructions.md'),
   ].join('\n');
 
   assert.doesNotMatch(surfaces, /mandatory before any work.*read/i);

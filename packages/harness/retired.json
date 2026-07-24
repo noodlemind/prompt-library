@@ -24,6 +24,7 @@
     "skills/references/domain-routing.md",
     "skills/references/engineer-principles.md",
     "skills/references/engineer-session-checklist.md",
-    "skills/references/engineer-starter-kit.md"
+    "skills/references/engineer-starter-kit.md",
+    "instructions/prompt-library-global.instructions.md"
   ]
 }

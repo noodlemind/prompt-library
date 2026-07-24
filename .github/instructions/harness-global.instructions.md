@@ -1,10 +1,10 @@
 ---
-name: Prompt Library Global Workflow
-description: Global prompt-library workflow guidance for GitHub Copilot users.
+name: Harness Global Workflow
+description: Global Engineer Harness workflow guidance for GitHub Copilot users.
 applyTo: "**"
 ---
 
-# Prompt Library Global Workflow
+# Harness Global Workflow
 
 Use the globally hydrated prompt-library customizations as the default engineering workflow.
 
