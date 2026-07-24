@@ -128,6 +128,29 @@ test('engineer recovers blocked mutations, routes primitives, and exposes findin
   assert.match(globalWorkflow, /check\/action\/mark[\s\S]{0,100}confirmed race\/retry defect/i);
 });
 
+test('every agent handoff declares a target agent that exists', () => {
+  const agentsDir = path.join(repoRoot, '.github/agents');
+  const agentFiles = fs.readdirSync(agentsDir).filter((file) => file.endsWith('.agent.md'));
+  const agentNames = new Set(agentFiles.map((file) => file.replace(/\.agent\.md$/, '')));
+
+  for (const file of agentFiles) {
+    const source = read(path.join('.github/agents', file));
+    const match = source.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/);
+    assert.ok(match, `${file}: invalid or missing YAML frontmatter`);
+    const frontmatter = YAML.parse(match[1]);
+    for (const handoff of frontmatter?.handoffs || []) {
+      assert.ok(
+        typeof handoff.agent === 'string' && handoff.agent.length > 0,
+        `${file}: handoff "${handoff.label}" is missing the required agent property`,
+      );
+      assert.ok(
+        agentNames.has(handoff.agent),
+        `${file}: handoff "${handoff.label}" targets unknown agent "${handoff.agent}"`,
+      );
+    }
+  }
+});
+
 test('existing skills own structured findings, proportional plans, and primitive governance', () => {
   const capture = read('.github/skills/capture-issue/SKILL.md');
   for (const field of [
