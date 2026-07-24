@@ -4,18 +4,19 @@ description: Accountable full-cycle engineer for investigation, implementation, 
 tools: ["agent", "search/codebase", "search", "read", "edit/editFiles", "search/changes", "execute", "read/terminalLastCommand", "execute/getTerminalOutput", "read/problems", "search/usages", "web/fetch", "githubRepo"]
 agents: ["code-implementer", "code-review-coordinator", "plan-coordinator", "repo-research-analyst", "best-practices-researcher", "framework-docs-researcher", "bug-reproduction-validator", "security-sentinel", "performance-oracle", "architecture-strategist", "git-history-analyzer", "java-reviewer", "python-reviewer", "sql-reviewer", "aws-reviewer"]
 handoffs:
-  - label: "Code Review"
+  - label: Code Review
     agent: code-review-coordinator
-    prompt: "Review the verified changes."
+    prompt: Review the verified changes.
+  - label: Harness Doctor
+    agent: engineer
+    prompt: Run /harness-doctor.
+  - label: Capture for Later
+    agent: engineer
+    prompt: Capture the finding as an open, unlocked issue without implementing it.
     send: false
-  - label: "Harness Doctor"
-    prompt: "Run /harness-doctor."
-    send: false
-  - label: "Capture for Later"
-    prompt: "Capture the confirmed finding as an open, unlocked issue without implementing it."
-    send: false
-  - label: "Plan and Fix"
-    prompt: "Promote the finding into a proportional plan and implement through verification."
+  - label: Plan and Fix
+    agent: engineer
+    prompt: Promote the finding into a proportional plan, implement, and verify.
     send: false
 ---
 
