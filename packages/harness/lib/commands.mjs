@@ -511,7 +511,7 @@ export async function cmdReport(argv) {
   if (base === null) base = loadReportEvents({ workspace });
 
   // Overlay real host usage (if any adapter has it) on top of harness estimates.
-  const merged = mergeHostUsage(base, collectHostUsage({ workspace, host: flags.host }));
+  const merged = mergeHostUsage(base, collectHostUsage({ workspace, host: flags.host, copilotHome }));
   const report = buildReport({ workspace, copilotHome, events: merged });
 
   if (flags.check) {

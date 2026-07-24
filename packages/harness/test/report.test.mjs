@@ -100,3 +100,26 @@ test('harness report --check exits non-zero on a budget breach', () => {
   assert.equal(check.status, 1, check.stdout);
   assert.match(check.stdout, /FAIL — budget breaches/);
 });
+
+test('report surfaces per-session performance from host metrics', () => {
+  const events = [
+    {
+      type: 'host_session', session: 'sess1234abcd', source: 'host', ts: '2026-01-02T00:00:00Z',
+      usage: { 'gen_ai.usage.input_tokens': 1000, 'gen_ai.usage.output_tokens': 200, 'gen_ai.usage.total_tokens': 4250 },
+      metrics: {
+        model: 'gpt-5.4', premiumRequests: 3, apiRequests: 8, apiDurationMs: 42000, wallMs: 60000,
+        turns: 4, toolCalls: 6, toolFailures: 1, skills: 2, skillNames: ['engineer', 'code-review'],
+        contextTokens: 55000, cacheReadRatio: 0.75, tokensPerTurn: 1063, linesAdded: 12, linesRemoved: 3, filesModified: 2,
+      },
+    },
+  ];
+  const report = buildReport({ workspace: os.tmpdir(), copilotHome: path.join(os.tmpdir(), 'none'), events });
+  assert.equal(report.sessions.length, 1);
+  assert.equal(report.sessionTotals.premiumRequests, 3);
+  assert.equal(report.sessionTotals.apiDurationMs, 42000);
+  const text = renderReport(report);
+  assert.match(text, /Local session performance/);
+  assert.match(text, /sess1234/); // truncated session id
+  assert.match(text, /gpt-5\.4/);
+  assert.match(text, /75%/); // cache ratio rendered as percent
+});

@@ -17,18 +17,18 @@ const ADAPTERS = {
  * With no host specified, every adapter is tried (each returns [] when it has
  * nothing), so the report opportunistically picks up whatever real data exists.
  */
-export function collectHostUsage({ workspace, host } = {}) {
+export function collectHostUsage({ workspace, host, copilotHome } = {}) {
   try {
     if (host) {
       const adapter = ADAPTERS[host];
-      return adapter ? adapter.collect({ workspace }) || [] : [];
+      return adapter ? adapter.collect({ workspace, copilotHome }) || [] : [];
     }
     const seen = new Set();
     const events = [];
     for (const adapter of Object.values(ADAPTERS)) {
       if (seen.has(adapter)) continue;
       seen.add(adapter);
-      events.push(...(adapter.collect({ workspace }) || []));
+      events.push(...(adapter.collect({ workspace, copilotHome }) || []));
     }
     return events;
   } catch {

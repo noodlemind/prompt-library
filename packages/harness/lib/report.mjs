@@ -148,6 +148,39 @@ export function trendRegression(events) {
   };
 }
 
+// How many per-session performance rows the report shows (highest-token first).
+const SESSION_PERF_CAP = 10;
+
+/** Per-session performance rows and roll-up, from host events carrying metrics. */
+export function sessionPerformance(events) {
+  const rows = events
+    .filter((e) => e.metrics)
+    .map((e) => ({
+      session: e.session || '(no session)',
+      ts: e.ts || null,
+      tokens: e.usage?.['gen_ai.usage.total_tokens'] || 0,
+      ...e.metrics,
+    }));
+  rows.sort((a, b) => b.tokens - a.tokens);
+  const totals = rows.reduce(
+    (acc, r) => {
+      acc.sessions += 1;
+      acc.tokens += r.tokens || 0;
+      acc.premiumRequests += r.premiumRequests || 0;
+      acc.apiRequests += r.apiRequests || 0;
+      acc.apiDurationMs += r.apiDurationMs || 0;
+      acc.turns += r.turns || 0;
+      acc.toolCalls += r.toolCalls || 0;
+      acc.toolFailures += r.toolFailures || 0;
+      acc.linesAdded += r.linesAdded || 0;
+      acc.linesRemoved += r.linesRemoved || 0;
+      return acc;
+    },
+    { sessions: 0, tokens: 0, premiumRequests: 0, apiRequests: 0, apiDurationMs: 0, turns: 0, toolCalls: 0, toolFailures: 0, linesAdded: 0, linesRemoved: 0 }
+  );
+  return { rows: rows.slice(0, SESSION_PERF_CAP), totals };
+}
+
 export function buildReport({ workspace, copilotHome, events }) {
   const all = loadReportEvents({ workspace, events });
   const usage = summarizeUsage(all);
@@ -158,12 +191,15 @@ export function buildReport({ workspace, copilotHome, events }) {
     sessions: new Set(all.map((e) => e.session).filter(Boolean)).size,
   };
   const hostBacked = all.some((e) => e.source === 'host');
+  const performance = sessionPerformance(all);
   return {
     totals: { tokens: usage.totalTokens, input: usage.inputTokens, output: usage.outputTokens, events: all.length, measured: withUsage.length },
     span,
     hostBacked,
     sinks: rankSinks(all),
     topSessions: topSessions(all),
+    sessions: performance.rows,
+    sessionTotals: performance.totals,
     flags: {
       budgetBreaches: budgetBreaches({ workspace, copilotHome }),
       recoveryLoops: recoveryLoops(all),
@@ -176,6 +212,56 @@ function bar(value, max, width = 24) {
   if (!max) return '';
   const full = Math.round((value / max) * width);
   return '█'.repeat(full) + '·'.repeat(Math.max(0, width - full));
+}
+
+function fmtDuration(ms) {
+  if (!ms) return '-';
+  const s = Math.round(ms / 1000);
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  return `${m}m${String(s % 60).padStart(2, '0')}s`;
+}
+
+function fmtPct(r) {
+  return r == null ? '-' : `${Math.round(r * 100)}%`;
+}
+
+function fmtTokens(n) {
+  if (n == null) return '-';
+  if (n >= 1000) return `${(n / 1000).toFixed(n >= 10000 ? 0 : 1)}k`;
+  return String(n);
+}
+
+/** Compact per-session performance table (local session metrics). */
+function renderSessionPerformance(report) {
+  const rows = report.sessions || [];
+  if (!rows.length) return [];
+  const tt = report.sessionTotals || {};
+  const out = [
+    '',
+    `Local session performance — ${tt.sessions} session(s), ${tt.premiumRequests} premium req, ` +
+      `${fmtDuration(tt.apiDurationMs)} API, ${tt.turns} turns, ${tt.toolCalls} tools (${tt.toolFailures} failed), ` +
+      `+${tt.linesAdded}/-${tt.linesRemoved} lines:`,
+  ];
+  const header = ['session', 'model', 'tokens', 'prem', 'turns', 'tools(f)', 'skills', 'API', 'cache', 'ctx', 'lines'];
+  const table = rows.map((r) => [
+    String(r.session).slice(0, 8),
+    r.model || '-',
+    fmtTokens(r.tokens),
+    String(r.premiumRequests ?? '-'),
+    String(r.turns ?? '-'),
+    `${r.toolCalls ?? 0}(${r.toolFailures ?? 0})`,
+    String(r.skills ?? 0),
+    fmtDuration(r.apiDurationMs),
+    fmtPct(r.cacheReadRatio),
+    fmtTokens(r.contextTokens),
+    `+${r.linesAdded ?? 0}/-${r.linesRemoved ?? 0}`,
+  ]);
+  const widths = header.map((h, i) => Math.max(h.length, ...table.map((row) => row[i].length)));
+  const fmtRow = (row) => '  ' + row.map((cell, i) => cell.padEnd(widths[i])).join('  ').trimEnd();
+  out.push(fmtRow(header));
+  for (const row of table) out.push(fmtRow(row));
+  return out;
 }
 
 export function renderReport(report) {
@@ -197,6 +283,8 @@ export function renderReport(report) {
       lines.push(`  ${s.type.padEnd(pad)}  ${String(s.tokens).padStart(7)}  ${bar(s.tokens, max)}  n=${s.count} avg=${s.avg}`);
     }
   }
+
+  lines.push(...renderSessionPerformance(report));
 
   const f = report.flags;
   const flagLines = [];

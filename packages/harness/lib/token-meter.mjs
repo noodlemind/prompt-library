@@ -44,13 +44,18 @@ export function summarizeUsage(events = []) {
     if (!usage) continue;
     const input = usage['gen_ai.usage.input_tokens'] || 0;
     const output = usage['gen_ai.usage.output_tokens'] || 0;
+    // Honor an explicit total when present: real host usage folds cache and
+    // reasoning tokens into the total, which input + output alone would miss.
+    // Estimates set total === input + output, so this stays correct for them.
+    const recorded = usage['gen_ai.usage.total_tokens'];
+    const total = Number.isFinite(recorded) ? recorded : input + output;
     summary.inputTokens += input;
     summary.outputTokens += output;
-    summary.totalTokens += input + output;
+    summary.totalTokens += total;
     const bucket = (summary.byType[event.type] ||= { inputTokens: 0, outputTokens: 0, totalTokens: 0 });
     bucket.inputTokens += input;
     bucket.outputTokens += output;
-    bucket.totalTokens += input + output;
+    bucket.totalTokens += total;
   }
   return summary;
 }
