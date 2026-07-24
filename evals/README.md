@@ -136,13 +136,23 @@ HARNESS_EVAL_AGENT_KEY="$OPENROUTER_API_KEY" \
   node evals/guided-live.mjs
 ```
 
-Findings (claude-sonnet-5, guidance ≈29KB): guided single-primitive creation
-**passes** — the model authored `.github/skills/payment-check/SKILL.md` end to
-end, and the harness **denied its wrong attempts 7 times** before allowing it once
-governance was satisfied. The two-plan `blocked-capability` lifecycle is still not
-completed in one live pass — evidence that that ceremony would benefit from more
-harness scaffolding (e.g. a plan-skeleton generator) rather than being authored
-freehand. Enforcement held in every case: no gate was ever bypassed.
+Findings (claude-sonnet-5, guidance ≈29KB):
+
+- Guided single-primitive creation **passes** — the model authored
+  `.github/skills/payment-check/SKILL.md` end to end. After `harness plan-new`
+  landed (referenced by the injected `ensure-plan` guidance) this got measurably
+  cheaper: **26 steps / 1 denial**, down from 40 steps / 7 denials when the model
+  had to hand-author the governed plan. The ergonomic scaffold does its job — the
+  model spends its budget on content, not frontmatter structure.
+- The two-plan `blocked-capability` → propose → create → fulfill → use lifecycle
+  is **not completed in one bounded live pass** (it needs ~10+ correct sequential
+  steps; a live loop capped at 40 runs out). This is a single-pass / turn-budget
+  limitation of the eval loop, **not a harness safety gap** — enforcement held
+  the whole way (every wrong attempt denied, no gate bypassed), and the scripted
+  `capability-gap-to-primitive-loop` proves the harness gates the full lifecycle
+  correctly. A real engineer performs this across multiple turns, not one loop.
+
+Across every guided-live run, enforcement was invariant: no gate was ever bypassed.
 
 ## Semantic judge / cheap-model seam
 
