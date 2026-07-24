@@ -19,7 +19,9 @@ import {
   cmdGet,
   cmdUninstall,
   cmdResolve,
+  cmdReport,
 } from '../lib/commands.mjs';
+import { cmdPlanNew } from '../lib/plan-new.mjs';
 
 const [, , command = 'help', ...args] = process.argv;
 
@@ -33,7 +35,9 @@ Usage:
   harness upgrade [options]
   harness doctor [options]
   harness status [options]
-  harness index [options]
+  harness index [options]           Rebuild knowledge index (stamps HEAD)
+  harness index --status            Report knowledge-index freshness vs HEAD (read-only)
+  harness plan-new --type feat --slug <slug> --intent "..." [options]   Scaffold a gate-ready plan
   harness orient [options] [--query "task summary"]
   harness gate [options] [--phase implement|verify]
   harness verify [options] --plan docs/plans/file.md
@@ -42,6 +46,7 @@ Usage:
   harness validate-plan [options] [--plan docs/plans/file.md]
   harness compound [options]
   harness events [options]
+  harness report [--sync] [--global] [--check] [--json]   Token-efficiency report from telemetry
   harness init-repo [options]
   harness resolve [options]   Print resolved harness CLI path for agents
   harness uninstall [options]
@@ -65,6 +70,13 @@ Options:
   --force-knowledge-reset  Overwrite knowledge/solutions (danger)
   --workspace <path>     Repo root (default: cwd)
   --query <text>         Agent/internal task summary for orient
+  --type <t>             plan-new: feat|fix|docs|refactor|chore
+  --slug <s>             plan-new: lowercase-hyphen slug
+  --intent <text>        plan-new: one-line intent
+  --impacted <a,b>       plan-new: comma-separated Impacted Files
+  --criteria <text>      plan-new: an acceptance criterion (repeatable)
+  --gap <id>:<path>      plan-new: capability gap → blocked-capability + governed primitive plan
+  --stdout               plan-new: print the plan instead of writing it
   --phase <name>         gate: implement | verify
   --strict-intent        gate: fail locked plans missing intent fields
   --limit <n>            recall/orient result count (default 3)
@@ -79,6 +91,10 @@ Options:
   --base <git-ref>       verify: compare changed files to this git ref
   --enforcement <mode>   observe | warn | enforce (default enforce)
   --no-events            Do not write .harness/events.jsonl
+  --host <name>           doctor: run host-specific checks (vscode)
+  --session <id>          events: filter by host session ID
+  --summary               events: print aggregate summary only
+  --failures              events: show failed or blocked events only
 
 Docs: @dev-kit/harness README and the hydrated harness-tool-contract.md reference
 `.trim();
@@ -110,6 +126,9 @@ async function main() {
       case 'index':
         code = await cmdIndex(args);
         break;
+      case 'plan-new':
+        code = await cmdPlanNew(args);
+        break;
       case 'orient':
         code = await cmdOrient(args);
         break;
@@ -133,6 +152,9 @@ async function main() {
         break;
       case 'events':
         code = await cmdEvents(args);
+        break;
+      case 'report':
+        code = await cmdReport(args);
         break;
       case 'uninstall':
         code = await cmdUninstall(args);

@@ -51,3 +51,9 @@ export function resolveVSCodeSettingsPaths() {
 export function pkgRootFromImportMeta(metaUrl) {
   return path.resolve(path.dirname(fileURLToPath(metaUrl)), '..');
 }
+
+/** Global harness home for cross-project telemetry. HARNESS_HOME overrides for tests. */
+export function harnessGlobalHome() {
+  if (process.env.HARNESS_HOME) return path.resolve(process.env.HARNESS_HOME);
+  return path.join(os.homedir(), '.harness');
+}

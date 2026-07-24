@@ -2,13 +2,14 @@
 name: deepen-plan
 description: Enhance a plan with parallel research agents and interactive finding review per section. Use after /plan-issue to add depth, best practices, and implementation details. Not for initial planning — use /plan-issue first.
 argument-hint: "[path to plan file]"
+user-invocable: false
 ---
 
 # Deepen Plan
 
 ## Pipeline Role
 
-**Optional post-plan step**. Slots between `/plan-issue` and `/work-on-task` to enhance plans with research-backed depth. User reviews findings per section before integration.
+**Optional post-plan step**. Slots between `/plan-issue` and Engineer Deliver-mode execution to enhance plans with research-backed depth. User reviews findings per section before integration.
 
 ## When to Use
 
@@ -26,7 +27,7 @@ argument-hint: "[path to plan file]"
 **Should not trigger:**
 - "Plan this issue" → use /plan-issue (this is initial planning, not deepening)
 - "Review this plan for quality" → use /document-review
-- "Start working on this plan" → use /work-on-task
+- "Start working on this plan" → hand to @engineer Deliver mode
 
 ## Workflow
 
@@ -120,7 +121,7 @@ Enhanced on [YYYY-MM-DD] by [N] research agents across [M] sections.
 
 Offer the user next steps:
 - **Run `/document-review`** — Quality-check the enhanced plan before implementation
-- **Start `/work-on-task`** — Begin implementation of Phase 1
+- **Hand off to `@engineer` Deliver mode** — Begin implementation of Phase 1
 - **Deepen further** — Run again targeting specific sections for additional research
 - **Run `/code-review`** — Get multi-agent review of the enhanced plan
 

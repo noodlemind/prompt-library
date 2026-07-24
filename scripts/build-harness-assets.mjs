@@ -14,7 +14,6 @@ const copies = [
   { from: '.github/skills', to: 'skills' },
   { from: '.github/agents', to: 'agents' },
   { from: '.github/instructions', to: 'instructions' },
-  { from: '.github/prompts', to: 'prompts' },
   { from: '.github/hooks', to: 'hooks' },
   { from: 'knowledge', to: 'knowledge' },
   { from: 'enterprise', to: 'enterprise' },

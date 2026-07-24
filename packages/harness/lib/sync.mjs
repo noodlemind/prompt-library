@@ -2,7 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
 
-const SYNC_TOP_LEVEL = ['skills', 'agents', 'instructions', 'prompts', 'hooks', 'knowledge', 'enterprise'];
+const SYNC_TOP_LEVEL = ['skills', 'agents', 'instructions', 'hooks', 'knowledge', 'enterprise'];
 
 const KNOWLEDGE_PRESERVE_PREFIXES = ['knowledge/solutions/'];
 const KNOWLEDGE_NEVER_OVERWRITE = ['knowledge/profile.md'];
@@ -12,6 +12,40 @@ export function loadRetired(pkgRoot) {
   if (!fs.existsSync(p)) return [];
   const data = JSON.parse(fs.readFileSync(p, 'utf8'));
   return data.retired || [];
+}
+
+// Primitive directories that accumulate orphans across versions. Knowledge and
+// enterprise are excluded: they hold user- and enterprise-owned content, not
+// harness-shipped primitives, so their extra files are not orphans.
+const ORPHAN_SCAN_DIRS = ['skills', 'agents', 'instructions', 'prompts', 'hooks'];
+
+/**
+ * Stale orphans: files hydrated in the Copilot home that current assets no
+ * longer ship AND retired.json does not cover — i.e. leftovers from an older
+ * harness that upgrade will not clean because nobody tombstoned them. Returns
+ * the sorted relative paths so `doctor` can flag them for retirement.
+ */
+export function findStaleOrphans(copilotHome, assetsRoot, retiredList = []) {
+  const current = new Set();
+  for (const top of SYNC_TOP_LEVEL) {
+    for (const f of walkFiles(path.join(assetsRoot, top))) current.add(`${top}/${f}`);
+  }
+  const retiredCovered = (rel) =>
+    retiredList.some((r) => {
+      const base = String(r).replace(/\/$/, '');
+      return rel === base || rel.startsWith(`${base}/`);
+    });
+
+  const orphans = [];
+  for (const top of ORPHAN_SCAN_DIRS) {
+    for (const f of walkFiles(path.join(copilotHome, top))) {
+      const rel = `${top}/${f}`;
+      if (current.has(rel)) continue; // still shipped
+      if (retiredCovered(rel)) continue; // explicitly retired — upgrade removes it
+      orphans.push(rel);
+    }
+  }
+  return orphans.sort();
 }
 
 export function resolveContainedPath(root, rel) {
@@ -31,6 +65,21 @@ export function resolveContainedPath(root, rel) {
 function fileHash(filePath) {
   const buf = fs.readFileSync(filePath);
   return crypto.createHash('sha256').update(buf).digest('hex');
+}
+
+function renderTargetAsset(src, rel, targetRoot) {
+  if (rel !== 'hooks/hooks.json') return null;
+  const config = JSON.parse(fs.readFileSync(src, 'utf8'));
+  for (const entries of Object.values(config.hooks || {})) {
+    if (!Array.isArray(entries)) continue;
+    for (const entry of entries) {
+      const commands = Array.isArray(entry.hooks) ? entry.hooks : [entry];
+      for (const command of commands) {
+        if (command?.cwd === '.github/hooks') command.cwd = path.join(targetRoot, 'hooks');
+      }
+    }
+  }
+  return Buffer.from(`${JSON.stringify(config, null, 2)}\n`, 'utf8');
 }
 
 function walkFiles(dir, base = dir) {
@@ -91,6 +140,7 @@ export function syncAssetsToTarget(assetsRoot, targetRoot, flags, log) {
       const dest = path.join(targetRoot, rel);
       const destDir = path.dirname(dest);
       const relPosix = rel.replace(/\\/g, '/');
+      const rendered = renderTargetAsset(src, relPosix, targetRoot);
 
       if (shouldSkipDest(relPosix, flags, fs.existsSync(dest))) {
         stats.skipped++;
@@ -101,9 +151,9 @@ export function syncAssetsToTarget(assetsRoot, targetRoot, flags, log) {
       let action = 'create';
       if (fs.existsSync(dest)) {
         try {
-          const same =
-            fs.statSync(src).size === fs.statSync(dest).size &&
-            fileHash(src) === fileHash(dest);
+          const same = rendered
+            ? fs.readFileSync(dest).equals(rendered)
+            : fs.statSync(src).size === fs.statSync(dest).size && fileHash(src) === fileHash(dest);
           if (same) {
             stats.unchanged++;
             stats.files.push(relPosix);
@@ -124,7 +174,8 @@ export function syncAssetsToTarget(assetsRoot, targetRoot, flags, log) {
       }
 
       fs.mkdirSync(destDir, { recursive: true });
-      fs.copyFileSync(src, dest);
+      if (rendered) fs.writeFileSync(dest, rendered);
+      else fs.copyFileSync(src, dest);
       stats[action === 'create' ? 'created' : 'updated']++;
       stats.files.push(relPosix);
       if (flags.verbose) log(`${action}: ${relPosix}`);
@@ -182,8 +233,8 @@ export function mergeIntelliJInstructions(assetsRoot, intellijRoot, flags, log) 
     .readdirSync(instrDir)
     .filter((f) => f.endsWith('.instructions.md'))
     .sort((a, b) => {
-      if (a === 'prompt-library-global.instructions.md') return -1;
-      if (b === 'prompt-library-global.instructions.md') return 1;
+      if (a === 'harness-global.instructions.md') return -1;
+      if (b === 'harness-global.instructions.md') return 1;
       return a.localeCompare(b);
     });
   const parts = [];

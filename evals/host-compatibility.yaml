@@ -3,11 +3,11 @@ evaluated: 2026-07-13
 hosts:
   github-copilot-vscode:
     full:
-      mechanism: hydrated agents, skills, prompts, instructions, and global harness CLI
+      mechanism: hydrated agents, skills, instructions, and global harness CLI
       assertions:
         - engineer agent is discoverable and owns the only normative delivery lifecycle
         - Answer and Investigate modes stay read-only without plan or verification ceremony
-        - prompt wrapper preserves the Engineer tool allowlist
+        - engineer agent selected from the agent dropdown retains its full tool allowlist
         - explicit gate and verify commands work from the repository terminal
         - named checks and evidence use repository-relative paths
     degraded:
@@ -33,7 +33,7 @@ hosts:
         - hook absence is disclosed rather than treated as verified
   github-copilot-intellij:
     full:
-      mechanism: hydrated global agents, skills, prompts, merged instructions, and harness CLI
+      mechanism: hydrated global agents, skills, merged instructions, and harness CLI
       assertions:
         - skill and agent frontmatter remains host-neutral
         - merged global instructions do not require bulk skill reads
@@ -57,3 +57,48 @@ hosts:
         - Engineer operating model remains readable as repository guidance
         - direct tests can be reported while governance is labeled unavailable
         - missing required checks produce inconclusive rather than passed
+
+golden_scenarios:
+  - id: scenario-a-investigate
+    prompt: Explain how the two incoming SQS notification types are handled, including deduplication, and provide a diagrammatic flow.
+    required:
+      - Investigate mode
+      - no product-file mutation
+      - evidence-backed flow explanation and diagram
+      - confirmed defect includes impact, confidence, and recommendation
+      - Capture for Later handoff
+      - Plan and Fix handoff
+      - no delivery verification ceremony
+    forbidden:
+      - automatic implementation
+      - automatic locked plan creation
+      - durable solution knowledge before verification
+  - id: scenario-b-schema-change
+    prompt: Using the currently open JSON schema file, add attributes A, B and C using attribute X as the reference.
+    required:
+      - Deliver mode
+      - ungated mutation blocked
+      - ensure-plan recovery
+      - concise one-phase canonical plan
+      - implement gate before mutation
+      - exactly the intended schema file changed
+      - focused schema validation and passed harness verify evidence
+    forbidden:
+      - direct native edit without gate
+      - broad repository research after target and reference are known
+      - editor diagnostics treated as Harness verification
+  - id: scenario-c-migration-primitive
+    prompt: Create a Java/Spring/AWS upgrade migration guide and a reusable skill.
+    required:
+      - Deliver mode
+      - create-primitive activated
+      - existing Java and AWS capabilities checked for overlap
+      - primitive classification before editing
+      - minimal artifact structure selected
+      - plan and implement gate used
+      - primitive verification passed
+    forbidden:
+      - direct skill creation
+      - unjustified duplication of existing Java or AWS procedures
+      - complete migration guide placed inside SKILL.md
+      - completion without verification

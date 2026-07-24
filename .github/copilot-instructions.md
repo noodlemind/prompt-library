@@ -4,7 +4,7 @@ Shared context loaded into every agent and skill session.
 
 ## Project
 
-Skill-driven prompt library for software development using GitHub Copilot in VS Code and IntelliJ IDEA on Windows. Teams hydrate prompts, agents, skills, and instructions globally from this repo; product repositories should not receive prompt-library source artifacts.
+Skill-driven prompt library for software development using GitHub Copilot in VS Code and IntelliJ IDEA on Windows. Teams hydrate agents, skills, and instructions globally from this repo; product repositories should not receive prompt-library source artifacts.
 
 ## Primitives
 
@@ -21,24 +21,24 @@ Skills = workflows. Agents = isolated judgment. Instructions = file-pattern rule
 ## Conventions
 
 - Follow existing patterns. Consistency over preference.
-- Keep primitive boundaries clear: workflows belong in skills, role-specific judgment belongs in agents, file-scoped conventions belong in instructions, host routing belongs in prompt wrappers, bundled review checks belong in the owning skill's references, and narrow product-specific review rules belong in product `.github/checks`.
+- Keep primitive boundaries clear: workflows belong in skills, role-specific judgment belongs in agents, file-scoped conventions belong in instructions, bundled review checks belong in the owning skill's references, and narrow product-specific review rules belong in product `.github/checks`.
 - TDD: failing test → minimal fix → cleanup.
 - Surgical diffs only. No drive-by refactoring. Three similar lines > premature abstraction.
 - Never commit secrets or credentials. Validate input at boundaries. Parameterized queries.
 
 ## Orchestration
 
-The engineer selects the skill/flow first, then delegates only when separate judgment, authority, or isolation improves the result. Coordinators delegate to specialist subagents via `tools: ['agent']`. Subagents run in isolated context — include all necessary context in the task prompt. `/plan-issue` and `/code-review` prompt wrappers route to their coordinators via the `agent:` field (prompt tools override agent tools). Coordinators use `agents:` allowlists to restrict which specialists they can invoke. Coordinators dispatch subagents in parallel batches (3-4 at a time) rather than sequentially.
+The engineer selects the skill/flow first, then delegates only when separate judgment, authority, or isolation improves the result. Coordinators delegate to specialist subagents via `tools: ['agent']`. Subagents run in isolated context — include all necessary context in the task prompt. `/plan-issue` and `/code-review` delegate to their coordinators (`plan-coordinator`, `code-review-coordinator`) when the `agent` tool is available. Coordinators use `agents:` allowlists to restrict which specialists they can invoke. Coordinators dispatch subagents in parallel batches (3-4 at a time) rather than sequentially.
 
 Engineer harness: `@engineer` agent file owns the only normative delivery lifecycle; read-only modes stay outside it. Runtime details: `harness-tool-contract.md`. Delegation: `subagent-context-packet.md`. Risky work: `human-approval-policy.md`.
 
 ## Standardization
 
-Read `docs/architecture/skill-driven-prompt-library.md` before adding or substantially changing agents, skills, instructions, prompt wrappers, checks, plan structure, or solution templates.
+Read `docs/architecture/skill-driven-prompt-library.md` before adding or substantially changing agents, skills, instructions, checks, plan structure, or solution templates.
 
 ## Cross-Environment Tool Compatibility
 
-This library primarily targets GitHub Copilot in VS Code and IntelliJ IDEA. Prompt wrappers declare VS Code tool names. When a tool is unavailable in another host, use the closest host-native equivalent:
+This library primarily targets GitHub Copilot in VS Code and IntelliJ IDEA. Agent frontmatter declares VS Code tool names. When a tool is unavailable in another host, use the closest host-native equivalent:
 
 | VS Code Tool | Fallback |
 |-------------|----------|
@@ -67,5 +67,3 @@ Skills that reference `changes`, `terminalLastCommand`, or `githubRepo` include 
 - Use the `problems` tool to read workspace diagnostics (includes all extension findings)
 - Run extension-provided commands via terminal when available (e.g., `sonar-scanner`, `eslint --fix`)
 - Extension tools are NOT discoverable via `tools:` frontmatter — they work through the diagnostics system
-
-**Prompt wrapper tool override:** In VS Code, prompt wrapper `tools:` arrays override the routed agent's tools. If an agent needs a tool and the prompt wrapper doesn't list it, the agent won't have access. Ensure prompt wrappers include all tools their routed agent requires.

@@ -1,6 +1,6 @@
 ---
 description: Research industry best practices and implementation examples for any technology.
-tools: ["codebase", "search", "read", "fetch", "problems", "terminalLastCommand"]
+tools: ["search/codebase", "search", "read", "web/fetch", "read/problems", "read/terminalLastCommand"]
 user-invocable: false
 agents: []
 ---

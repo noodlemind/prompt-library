@@ -1,6 +1,6 @@
 ---
 description: Review TypeScript code for type safety, modern patterns, and maintainability.
-tools: ["codebase", "search", "read", "usages", "changes", "problems", "terminalLastCommand"]
+tools: ["search/codebase", "search", "read", "search/usages", "search/changes", "read/problems", "read/terminalLastCommand"]
 user-invocable: false
 agents: []
 ---

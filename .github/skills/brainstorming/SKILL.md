@@ -1,6 +1,7 @@
 ---
 name: brainstorming
 description: Explore requirements and approaches through collaborative dialogue before planning. Use when a feature request has multiple valid interpretations or approaches. Not for planning implementation — use /plan-issue after brainstorming.
+user-invocable: false
 ---
 
 # Brainstorming
@@ -25,7 +26,7 @@ description: Explore requirements and approaches through collaborative dialogue 
 
 **Should not trigger:**
 - "Plan this feature" → use /plan-issue
-- "Implement this" → use /work-on-task
+- "Implement this" → use @engineer Deliver mode
 - "Review this document" → use /document-review
 
 ## Workflow

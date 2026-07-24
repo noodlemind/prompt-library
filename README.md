@@ -1,6 +1,6 @@
 # Prompt Library
 
-Skill-driven software engineering prompt library with **30 skills**, **24 agents**, scoped instructions, review checks, and a three-tier memory model (product plans, global knowledge, user profile). Primary platforms: GitHub Copilot in VS Code and IntelliJ IDEA.
+Skill-driven software engineering prompt library with **24 skills**, **21 agents**, scoped instructions, review checks, and a three-tier memory model (product plans, global knowledge, user profile). Primary platforms: GitHub Copilot in VS Code and IntelliJ IDEA.
 
 ## Quick Start
 
@@ -9,7 +9,7 @@ Skill-driven software engineering prompt library with **30 skills**, **24 agents
 3. Install harness: **`npm install -g @dev-kit/harness@latest && harness install`** from Nexus ([setup](docs/onboarding/nexus-registry-setup.md)) — or **`npm install -g ./packages/harness && harness install`** from this repo before publishing
 4. Open a **product** repository (no prompt-library files copied into it); ensure `docs/plans/` exists
 5. **`@engineer`** — request substantial investigation or delivery; only change-making work enters plan, implement, verify, and compound
-6. Optional: **`/harness-doctor`** — health check; **`/btw`** — Q&A; **`/code-review`** — review pass
+6. Optional: **`/harness-doctor`** — health check; **`/project-readme`** — README upkeep; **`/triage-issues`** — backlog triage
 
 See [Harness Quickstart](docs/onboarding/harness-quickstart.md).
 
@@ -33,45 +33,41 @@ Standards: [Engineer Harness Architecture](docs/architecture/engineer-harness.md
 ## Connected Pipeline
 
 ```text
-@engineer: Answer → /btw; Investigate → evidence-backed read-only report
+@engineer: Answer → direct, ceremony-free reply; Investigate → evidence-backed read-only report
            Deliver → orient → establish intent → investigate → work → on-demand gaps → verify → review → compound → report
                      open → planned → in-progress → review → done  (or blocked-capability)
 ```
 
-Power-user pipeline steps (`/capture-issue`, `/plan-issue`, …) remain available but are **internal** to `@engineer` by default. Optional: `/brainstorming`, `/deepen-plan`, `/document-review`. Plan files are the per-issue context pack. See `docs/plans/_plan-template.md` and `capture-gate.md`.
+Pipeline steps (`/capture-issue`, `/plan-issue`, …) are **engineer-internal** (`user-invocable: false`), loaded on demand by `@engineer`. Optional: `/brainstorming`, `/deepen-plan`, `/document-review`. Plan files are the per-issue context pack. See `docs/plans/_plan-template.md` and `capture-gate.md`.
 
-## Skills (30)
+## Skills (24)
 
-| Skill | Type | Purpose |
-|-------|------|---------|
-| `/recall` | Memory | Team + repo knowledge before work |
-| `/index-memory` | Memory | Rebuild `knowledge/manifest.yaml` |
-| `/capture-issue` | Pipeline | Create product plan file |
-| `/plan-issue` | Pipeline | Research and lock plan |
-| `/work-on-task` | Pipeline | TDD execution with scope control |
-| `/code-review` | Pipeline | Confidence-scored review |
-| `/compound-learnings` | Pipeline | Publish to global `knowledge/solutions/` |
-| `/brainstorming` | Extension | Requirements exploration |
-| `/deepen-plan` | Extension | Interactive plan deepening |
-| `/document-review` | Extension | Document quality gate |
-| `/create-primitive` | Extension | Approved primitive creation |
-| `/import-conventions` | Extension | Import external conventions |
-| `/project-readme` | Documentation | README maintenance |
-| `/java`, `/python`, `/sql`, `/aws` | Domain | Domain workflows |
-| `/engineer` | Engineering | Accountable full-cycle coordinator |
-| `/harness-doctor` | Utility | Hydrate and harness health check |
-| `/ensure-plan`, `/ensure-capability`, `/auto-compound`, `/auto-skill-draft` | Internal | Planning, on-demand gap resolution, automatic post-success learning, and experimental skill drafting |
-| `/start` | Intake | Route ambiguous work |
-| `/btw` | Q&A | Quick answers, no plans |
-| `/analyze-and-plan` | Utility | Enrich **existing** captured plan only |
-| `/codebase-context` | Utility | Architecture snapshot |
-| `/review-guardrails` | Utility | Plan compliance audit |
-| `/tdd-fix` | Utility | Isolated test-driven fix |
-| `/triage-issues` | Utility | Backlog prioritization |
+User-invocable: `/engineer`, `/harness-doctor`, `/project-readme`, `/triage-issues`. All other skills are engineer-internal, loaded on demand by `@engineer`.
 
-## Agents (24)
+| Skill | Type | Access | Purpose |
+|-------|------|--------|---------|
+| `/engineer` | Engineering | User | Accountable full-cycle coordinator |
+| `/harness-doctor` | Utility | User | Hydrate and harness health check |
+| `/project-readme` | Documentation | User | README maintenance |
+| `/triage-issues` | Utility | User | Backlog prioritization |
+| `/recall` | Memory | Internal | Team + repo knowledge before work |
+| `/index-memory` | Memory | Internal | Rebuild `knowledge/manifest.yaml` |
+| `/capture-issue` | Pipeline | Internal | Create product plan file |
+| `/plan-issue` | Pipeline | Internal | Research and lock plan |
+| `/code-review` | Pipeline | Internal | Confidence-scored review |
+| `/compound-learnings` | Pipeline | Internal | Publish to global `knowledge/solutions/` |
+| `/brainstorming` | Extension | Internal | Requirements exploration |
+| `/deepen-plan` | Extension | Internal | Interactive plan deepening |
+| `/document-review` | Extension | Internal | Document quality gate |
+| `/create-primitive` | Extension | Internal | Approved primitive creation |
+| `/import-conventions` | Extension | Internal | Import external conventions |
+| `/java`, `/python`, `/sql`, `/aws` | Domain | Internal | Domain workflows |
+| `/codebase-context` | Utility | Internal | Architecture snapshot |
+| `/ensure-plan`, `/ensure-capability`, `/auto-compound`, `/auto-skill-draft` | Internal | Internal | Planning, on-demand gap resolution, automatic post-success learning, and experimental skill drafting |
 
-19 specialists + `@engineer` + `@code-implementer` + 3 coordinators (`plan-coordinator`, `code-review-coordinator`, `pipeline-navigator`). Inventory: `CLAUDE.md` or `knowledge/capability-registry.yaml`.
+## Agents (21)
+
+17 specialists + `@engineer` + `@code-implementer` + 2 coordinators (`plan-coordinator`, `code-review-coordinator`). Only `@engineer` is user-invocable; coordinators are internal, dispatched by `@engineer`. Inventory: `CLAUDE.md` or `knowledge/capability-registry.yaml`.
 
 ## Knowledge compounding
 
@@ -87,7 +83,7 @@ Context lookup order: `.github/skills/references/knowledge-locations.md`.
 ## Directory structure
 
 ```
-.github/          agents, skills, instructions, prompts, copilot-instructions.md
+.github/          agents, skills, instructions, copilot-instructions.md
 knowledge/        team solutions, manifest, capability-registry (hydrated globally)
 docs/architecture/  canonical harness architecture and primitive standard
 docs/plans/       template + at most one live PR plan (see docs/plans/README.md)

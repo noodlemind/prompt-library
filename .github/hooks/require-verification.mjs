@@ -1,11 +1,17 @@
 #!/usr/bin/env node
-/** Stop/completion gate: require passed evidence only for a newly recorded edit. */
+/** Stop gate: require fresh passed evidence after every successful governed mutation. */
 import fs from 'node:fs';
 import path from 'node:path';
 import { validateEvidenceBinding } from './lib/evidence-binding.mjs';
-import { enforcementExitCode, loadHookPolicy } from './lib/policy.mjs';
+import { writeHookEvent } from './lib/events.mjs';
+import { stopBlockOutput } from './lib/hook-output.mjs';
+import { loadHookPolicy } from './lib/policy.mjs';
+import { writeSessionState } from './lib/session-state.mjs';
+import { resolveHookWorkspace } from './lib/tool-payload.mjs';
 
-function payload() {
+const startedAt = Date.now();
+
+function readPayload() {
   try {
     return JSON.parse(fs.readFileSync(0, 'utf8') || '{}');
   } catch {
@@ -13,35 +19,73 @@ function payload() {
   }
 }
 
-let activePolicy = { enforcement: 'enforce', evidenceTtlHours: 24 };
+const input = readPayload();
+const workspace = resolveHookWorkspace(input);
+const policy = loadHookPolicy(workspace, { ttlKey: 'evidence_ttl_hours', ttlDefault: 24 });
+const sessionPath = path.join(workspace, '.harness', 'session.json');
+let session = null;
 
-function deny(message) {
-  console.error(`[harness hook] Completion blocked: ${message}`);
-  process.exit(enforcementExitCode(activePolicy.enforcement));
+function output(value) {
+  console.log(JSON.stringify(value));
 }
 
-const input = payload();
-const workspace = path.resolve(input.workspace || input.cwd || process.cwd());
-const policy = loadHookPolicy(workspace, { ttlKey: 'evidence_ttl_hours', ttlDefault: 24 });
-activePolicy = { enforcement: policy.enforcement, evidenceTtlHours: policy.ttl };
-const sessionPath = path.join(workspace, '.harness', 'session.json');
-// Read-only answers and investigations never enter the delivery lifecycle. The
-// pre-edit hook requires a session before supported file mutations, so no
-// session means there is no hook-recorded edit to verify.
-if (!fs.existsSync(sessionPath)) process.exit(0);
+function event(fields) {
+  writeHookEvent(workspace, input, {
+    type: 'session_end',
+    mutation: Boolean(session?.lastEditAt),
+    targets: session?.lastEditTargets || [],
+    targetResolved: true,
+    plan: session?.activePlan || null,
+    gate: session?.gateStatus || null,
+    durationMs: Date.now() - startedAt,
+    ...fields,
+  });
+}
 
-let session;
+function deny(message) {
+  const planFlag = session?.activePlan ? ` --plan ${session.activePlan}` : '';
+  const recipe = `; next: run \`harness verify${planFlag} --workspace . --json\` after the edit is complete, then stop`;
+  const base = input.stop_hook_active
+    ? `${message}; verification is still pending after the prior Stop block`
+    : message;
+  const reason = `${base}${recipe}`;
+  console.error(`[harness hook] Completion blocked: ${reason}`);
+  if (policy.enforcement !== 'enforce') {
+    event({ decision: 'warn', result: 'warn', blockedReason: reason });
+    output({ continue: true, systemMessage: `[harness hook] Completion evidence unavailable: ${reason}` });
+    process.exit(0);
+  }
+  event({ decision: 'block', result: 'fail', blockedReason: reason });
+  output(stopBlockOutput(reason));
+  process.exit(0);
+}
+
+function allow(reason) {
+  event({ decision: 'allow', result: 'pass' });
+  output({ continue: true, systemMessage: reason });
+  process.exit(0);
+}
+
+// Read-only answers and investigations do not create a Harness session and
+// therefore remain free of delivery ceremony.
+if (!fs.existsSync(sessionPath)) {
+  output({ continue: true });
+  process.exit(0);
+}
+
 try {
   session = JSON.parse(fs.readFileSync(sessionPath, 'utf8'));
 } catch {
   deny('session is unreadable');
 }
 
-if (!session.lastEditAt) process.exit(0);
+if (!session.lastEditAt) allow('No successful governed mutation requires verification.');
 const lastEditAt = Date.parse(session.lastEditAt);
 if (!Number.isFinite(lastEditAt)) deny('last edit timestamp is missing or invalid');
 const lastCompletedEditAt = Date.parse(session.lastCompletedEditAt || '');
-if (Number.isFinite(lastCompletedEditAt) && lastCompletedEditAt >= lastEditAt) process.exit(0);
+if (Number.isFinite(lastCompletedEditAt) && lastCompletedEditAt >= lastEditAt) {
+  allow('Latest successful mutation already has completion evidence.');
+}
 
 if (!session.lastEvidencePath || !session.lastVerifyAt) deny('harness verify has not run');
 const evidencePath = path.resolve(workspace, session.lastEvidencePath);
@@ -64,7 +108,7 @@ const bindingError = validateEvidenceBinding({
   workspace,
   planPath: evidence.plan,
   evidence,
-  maxAgeHours: activePolicy.evidenceTtlHours,
+  maxAgeHours: policy.ttl,
 });
 if (bindingError) deny(bindingError);
 const lastVerifyAt = Date.parse(session.lastVerifyAt);
@@ -76,8 +120,8 @@ if (lastVerifyAt < lastEditAt || evidenceVerifiedAt < lastEditAt) {
 session.lastCompletedEditAt = session.lastEditAt;
 session.lastCompletionAt = new Date().toISOString();
 try {
-  fs.writeFileSync(sessionPath, `${JSON.stringify(session, null, 2)}\n`, 'utf8');
+  writeSessionState(workspace, session);
 } catch (error) {
-  console.error(`[harness hook] Verification passed, but completion bookkeeping could not be saved: ${error.message}`);
+  deny(`verification passed, but completion bookkeeping failed: ${error.message}`);
 }
-process.exit(0);
+allow('Fresh passed Harness verification permits completion.');

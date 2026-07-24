@@ -5,3 +5,6 @@ packages/harness/assets/
 *.vsix
 .DS_Store
 .compound-engineering-plugin-analysis/
+
+# Generated eval run evidence
+evals/jobs/

@@ -1,44 +1,78 @@
 #!/usr/bin/env node
-/**
- * PreToolUse (Edit/Write) — block edits to secrets and harness-owned global files.
- */
-import fs from 'fs';
+/** PreToolUse mutation guard: block secrets and Harness-owned global files. */
+import fs from 'node:fs';
+import path from 'node:path';
+import { preToolDenyOutput } from './lib/hook-output.mjs';
+import { normalizeToolPayload } from './lib/tool-payload.mjs';
 
 const BLOCKED = [
-  /^\.env/i,
+  /(?:^|\/)\.env(?:rc$|\.|$)/i,
   /(?:^|\/)[._]?credentials(?:\.|$)/i,
   /\.pem$/i,
   /\.key$/i,
   /node_modules\//,
-  // Hydrated harness home only — not arbitrary paths containing `.copilot` as a substring
-  /^(?:\/Users\/[^/]+\/\.copilot\/|\/home\/[^/]+\/\.copilot\/|[A-Za-z]:\/Users\/[^/]+\/\.copilot\/)/,
+  /(?:^|\/)\.harness(?:\/|$)/,
+  /(?:^|\/)\.copilot\//,
 ];
 
-function readStdin() {
-  try {
-    return fs.readFileSync(0, 'utf8');
-  } catch {
-    return '';
-  }
+function output(value) {
+  console.log(JSON.stringify(value));
 }
 
-const raw = readStdin();
-let filePath = '';
-try {
-  const payload = raw ? JSON.parse(raw) : {};
-  filePath = payload.tool_input?.file_path || payload.file_path || payload.path || '';
-} catch {
+function enforcement() {
+  return process.env.HARNESS_ENFORCEMENT || 'enforce';
+}
+
+function deny(reason) {
+  if (enforcement() !== 'enforce') {
+    output({ continue: true, systemMessage: `[harness hook] ${reason}` });
+    process.exit(0);
+  }
+  output(preToolDenyOutput(reason));
   process.exit(0);
 }
 
-if (!filePath) process.exit(0);
-
-const norm = filePath.replace(/\\/g, '/');
-for (const pattern of BLOCKED) {
-  if (pattern.test(norm)) {
-    console.error(`[harness hook] Blocked edit to sensitive or out-of-scope path: ${filePath}`);
-    process.exit(2);
+/** Resolve symlinks through the nearest existing ancestor so a link inside the
+ * workspace cannot smuggle a write into a protected path. */
+function resolvedTarget(workspace, target) {
+  try {
+    let cursor = path.resolve(workspace, target);
+    const missing = [];
+    while (!fs.existsSync(cursor)) {
+      missing.unshift(path.basename(cursor));
+      const parent = path.dirname(cursor);
+      if (parent === cursor) return null;
+      cursor = parent;
+    }
+    return path.join(fs.realpathSync(cursor), ...missing);
+  } catch {
+    return null;
   }
 }
 
-process.exit(0);
+let payload;
+try {
+  const raw = fs.readFileSync(0, 'utf8');
+  if (!raw.trim()) throw new Error('payload is empty');
+  payload = JSON.parse(raw);
+} catch (error) {
+  deny(`invalid-hook-payload: ${error.message}`);
+}
+
+const mutation = normalizeToolPayload(payload);
+if (!mutation.mutation) {
+  output({ continue: true });
+  process.exit(0);
+}
+for (const target of mutation.targets) {
+  const candidates = [target, resolvedTarget(mutation.workspace, target)]
+    .filter(Boolean)
+    .map((value) => value.replace(/\\/g, '/'));
+  for (const candidate of candidates) {
+    if (BLOCKED.some((pattern) => pattern.test(candidate))) {
+      deny(`sensitive-path: ${target}`);
+    }
+  }
+}
+
+output({ continue: true });

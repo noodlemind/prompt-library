@@ -7,7 +7,7 @@ function digest(value) {
   return createHash('sha256').update(value).digest('hex');
 }
 
-function planContractText(text) {
+export function planContractText(text) {
   return String(text || '').replace(/\n## Activity\s*\n[\s\S]*?(?=\n## |$)/gi, '');
 }
 

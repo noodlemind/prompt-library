@@ -55,8 +55,8 @@ Installed to `~/.copilot/bin/harness` on every `harness install`. Add to PATH wi
 
 | Command | Purpose |
 |---------|---------|
-| `install` / `upgrade` | Sync skills, agents, knowledge to `~/.copilot/` |
-| `doctor` | Health checks |
+| `install` / `upgrade` | Sync skills, agents, hooks, and knowledge to `~/.copilot/`; `--configure-vscode` enables user-hook discovery |
+| `doctor [--host vscode]` | Health checks; VS Code mode executes installed-hook discovery and lifecycle probes |
 | `init-repo` | Scaffold `docs/plans/`, `.harness/` |
 | `status` / `uninstall` | Lock file introspection / safe remove |
 
@@ -64,15 +64,22 @@ Installed to `~/.copilot/bin/harness` on every `harness install`. Add to PATH wi
 
 | Command | Cursor analogue | Budget tier | Side effects |
 |---------|-----------------|-------------|--------------|
-| `orient --query "<task>"` | Codebase search + task context | **F1** — writes ≤2 KB `.harness/context-pack.md` (goal from plan Intent Contract) | session.json, events.jsonl |
+| `orient --query "<task>"` | Codebase search + task context | **F1** — writes ≤2 KB `.harness/context-pack.md` plus a query-ranked `.harness/repo-map.md` (code orientation, regenerated every turn from live git — never stale); surfaces a `harness index` staleness hint when the knowledge index has drifted | session.json, events.jsonl, repo-map.md |
 | `recall "<query>"` | Standalone search / debug | F1 paths only | events |
 | `gate --phase implement --plan <path>` | Pre-edit plan/state guard | F3 on fail | session + events |
 | `verify --plan <path> [--base ref] [--enforcement mode]` | Named checks, schema/state, tasks, scope, reviews, gaps, findings, evidence | no prompt context | evidence + session + events |
 | `validate-plan [--plan path]` | Spec/schema lint | read-only | none |
-| `index` | Rebuild search index | none in chat | manifest.yaml, `.harness-index/`, events |
+| `plan-new --type <t> --slug <s> --intent "..."` | Scaffold a valid, gate-ready plan (dated path, frontmatter, all canonical sections); `--gap <id>:<path>` sets blocked-capability + the gap entry; a primitive Impacted File auto-adds `## Primitive Governance` + create-primitive | none (plan-only) | writes the plan file |
+| `index` | Rebuild knowledge index; stamps current HEAD into index meta | none in chat | manifest.yaml, `.harness-index/`, events |
+| `index --status` | Deterministic freshness: commits + files changed since the last-indexed HEAD (read-only, zero model) | none | none |
 | `get [--docid id \| --path rel]` | Fetch bounded doc excerpt | F2 on demand | none |
 | `compound --plan <path>` | Consume passed evidence, index, classify learning, record telemetry | after verify | index + session + telemetry + events |
-| `events` | Audit / stuck debugging | read-only | none |
+| `events [--session id] [--failures] [--summary]` | Schema-v2 audit / stuck debugging | read-only | none |
+| `report [--sync] [--global] [--check] [--json]` | Token-efficiency report over telemetry: ranked sinks + improvement flags | read-only, except `--sync` writes `~/.harness/telemetry/` | none in workspace |
+
+**Query construction (deterministic-retrieval discipline):** build `--query` from the user's salient nouns and identifiers **verbatim** (e.g. `SYSTEM-OVERRIDE`, `payment`, `token`) — do not paraphrase intent into synonyms. The retrieval tokenizer normalizes identifier formats and morphology, but it cannot recover a term the query never contained. Passing the literal request terms is what keeps recall stable across phrasings.
+
+**Repo map & knowledge freshness (deterministic-first).** `orient` regenerates `.harness/repo-map.md` every turn from `git ls-files` + a lexical symbol/import extractor — so code orientation is always current and never depends on a model. The `.harness/repo-map.md` (like `.harness/context-pack.md`) is an ephemeral derived artifact, not a persistent type. The knowledge index is refreshed manually (`harness index`) — run it after a major pull from main or a docs rewrite; `index --status` and the `orient` next-hint tell you when it has drifted. A staleness-or-intent maintenance refresh may additionally re-derive conventions via `/codebase-context` (an optional, cheap, non-reasoning model pass) and promote generalizable learnings to the global `~/.copilot/knowledge` store — never per turn. The extractor is a seam: a tree-sitter tier (WASM, lazy-loaded grammars, lexical fallback for SQL/HCL) can implement the same `extract` shape to power symbol-accurate `refs`/`def`/`callers`, built only when telemetry shows the lexical map misleads the agent.
 
 ### JSON shapes (stable fields)
 
@@ -107,6 +114,8 @@ Installed to `~/.copilot/bin/harness` on every `harness install`. Add to PATH wi
   "nextTools": []
 }
 ```
+
+For locked plans, both commands enforce criterion-to-check mappings and configured-check relevance. A `planned` plan must leave new criteria and tasks unchecked, and a schema-focused check cannot satisfy outputs that contain no schema artifact. The implement gate repeats these readiness checks so skipping `validate-plan` cannot bypass them, and `verify` refuses to execute named checks when readiness fails.
 
 **verify**
 ```json
@@ -153,6 +162,25 @@ Allowed outcomes are `passed`, `failed`, and `inconclusive`. Only fresh `passed`
 }
 ```
 
+**events**
+```json
+{
+  "count": 2,
+  "summary": { "total": 2, "pass": 1, "warn": 0, "fail": 1, "lastActivePlan": "docs/plans/example-plan.md", "latestBlockedReason": "..." },
+  "events": [{ "version": 2, "type": "pre_tool", "session": "...", "host": "vscode", "tool": "replace_string_in_file", "targets": ["src/example.ts"], "gate": "missing", "decision": "block", "durationMs": 4 }]
+}
+```
+
+Lifecycle events are limited to `session_start`, `orient`, `gate`, `pre_tool`, `post_tool`, `skill_activation`, `verify`, `compound`, and `session_end`. They never store prompt or query content; `skill_activation` stores only the skill and session binding.
+
+## Host hook boundary
+
+- VS Code user hooks are installed under `~/.copilot/hooks`; `--configure-vscode` merges `chat.hookFilesLocations` without replacing unrelated settings.
+- `PreToolUse` recognizes supported editor and terminal payload variants, requires a fresh explicit implement gate, blocks direct `.harness/` state mutation, fails closed on unresolved mutation targets, and returns structured `permissionDecision: deny` output when blocked. The gate records a SHA-256 digest of the plan, so a later plan edit requires rerunning the gate before product mutation.
+- `PostToolUse` records `lastEditAt` only for a successful governed mutation and separately records successful on-demand skill activation. Primitive mutation requires `create-primitive` activation in the current session; plan metadata alone cannot satisfy it.
+- `Stop` returns a structured block until fresh passed evidence is bound after the latest successful mutation. Read-only sessions remain free of completion ceremony.
+- `harness doctor --host vscode` proves the installed V1–V9 lifecycle in an isolated fixture. If hooks are unavailable, explicit CLI gate/verify is degraded evidence and must not be described as native hook enforcement.
+
 ## Context budget mapping
 
 | Tier | Max | Harness enforcement |
@@ -173,7 +201,7 @@ After orient: `read` ≤3 solution paths, ≤30 lines each per [`context-budget.
 | `/recall` | `orient` or `recall` (`-c`, `--min-score`) |
 | `/index-memory` | `index` (manifest + BM25 postings) |
 | `/auto-compound` | classify learning, write selected destination, then explicit `compound` |
-| `/review-guardrails` | `validate-plan`, `gate` |
+| `/code-review` plan-compliance audit | `validate-plan`, `gate` |
 
 ## CI examples
 

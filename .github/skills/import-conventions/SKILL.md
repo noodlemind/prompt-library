@@ -2,6 +2,7 @@
 name: import-conventions
 description: Generate instructions and skills from a custom framework, library, or repo. Use when onboarding a new dependency, capturing team conventions, or creating a Tool Wrapper from an existing codebase. Not for creating primitives from scratch — use /create-primitive.
 argument-hint: "[repo URL, path, or framework name]"
+user-invocable: false
 ---
 
 # Import Conventions

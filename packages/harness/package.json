@@ -1,6 +1,6 @@
 {
   "name": "@dev-kit/harness",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Adaptive Engineer Harness — install and upgrade GitHub Copilot skills, agents, and team knowledge globally",
   "license": "UNLICENSED",
   "type": "module",
@@ -26,7 +26,8 @@
     "doctor": "node ./bin/harness.mjs doctor",
     "install:local": "node ./bin/harness.mjs install --configure-vscode --configure-path",
     "install:global": "npm run build:assets && npm install -g .",
-    "test": "node --test ./test/*.test.mjs"
+    "test": "node --test ./test/*.test.mjs",
+    "eval": "node ../../evals/run.mjs"
   },
   "publishConfig": {
     "registry": "https://your-nexus.example/repository/npm-hosted/",

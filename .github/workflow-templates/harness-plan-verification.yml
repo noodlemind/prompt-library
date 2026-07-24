@@ -39,6 +39,15 @@ jobs:
         env:
           HARNESS_VERSION: ${{ vars.HARNESS_VERSION }}
 
+      - name: Token budget gate (fails on cap regressions)
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Read-only: exits non-zero if a tracked surface (engineer agent,
+          # any SKILL.md, context pack) exceeds its budget. No telemetry
+          # history required; degrades to a pass when no artifacts are present.
+          harness report --check --workspace .
+
       - name: Resolve exactly one linked plan for product changes
         id: plan
         shell: bash

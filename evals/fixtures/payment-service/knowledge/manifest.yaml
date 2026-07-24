@@ -1,0 +1,19 @@
+version: 1
+updated: 2026-07-20
+entries:
+  - id: payment-override-role
+    path: knowledge/solutions/payment-override-role.md
+    title: "Payment SYSTEM_OVERRIDE role handling"
+    summary: "How the payment controller authorizes the SYSTEM_OVERRIDE role"
+    symptom: "payment override role access denied"
+    scope: global
+    kind: solution
+    date: 2026-07-01
+  - id: notification-retry-backoff
+    path: knowledge/solutions/notification-retry-backoff.md
+    title: "Notification retry backoff"
+    summary: "Retry backoff for the notification handler"
+    symptom: "notification retry storm"
+    scope: global
+    kind: solution
+    date: 2026-07-01

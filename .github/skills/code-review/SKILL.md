@@ -1,6 +1,7 @@
 ---
 name: code-review
 description: Multi-agent code review with confidence-scored findings, persona synthesis, and action routing. Use when reviewing PRs, changes, or branches. Not for single-domain review — delegate to the specialist directly.
+user-invocable: false
 ---
 
 # Code Review

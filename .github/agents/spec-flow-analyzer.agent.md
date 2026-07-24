@@ -1,6 +1,6 @@
 ---
 description: Analyze specifications for flow completeness, edge cases, and gap identification.
-tools: ["search", "read", "problems", "terminalLastCommand"]
+tools: ["search", "read", "read/problems", "read/terminalLastCommand"]
 user-invocable: false
 agents: []
 ---

@@ -1,6 +1,6 @@
 ---
 description: Analyze code for architectural compliance, design patterns, and structural integrity.
-tools: ["codebase", "search", "read", "usages", "changes", "problems", "terminalLastCommand"]
+tools: ["search/codebase", "search", "read", "search/usages", "search/changes", "read/problems", "read/terminalLastCommand"]
 user-invocable: false
 agents: []
 ---

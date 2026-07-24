@@ -103,6 +103,7 @@ export function runBuildPostingsIndex({ entries, indexDir, manifestUpdated, flag
     updated: manifestUpdated,
     entryCount: entries.length,
     algorithm: 'bm25',
+    headSha: flags?.headSha || null,
   };
 
   writePostingsIndex(indexDir, postings, meta, flags);

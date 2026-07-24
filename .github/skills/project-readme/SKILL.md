@@ -1,6 +1,6 @@
 ---
 name: project-readme
-description: Create or update the project README.md with overview, standards, workflows, components, data, and integrations. Not for quick questions -- use /btw.
+description: Create or update the project README.md with overview, standards, workflows, components, data, and integrations. Not for quick questions -- @engineer Answer mode handles those.
 argument-hint: "[optional project focus, README path, or update request]"
 ---
 
@@ -26,7 +26,7 @@ Activate when the user wants to:
 - "Document our components, workflows, data, and integrations"
 
 **Should not trigger:**
-- "What does this repo do?" -> use /btw for quick Q&A
+- "What does this repo do?" -> use @engineer Answer mode for quick Q&A
 - "Generate a plan for this feature" -> use /plan-issue
 - "Document a solved bug" -> use /compound-learnings
 

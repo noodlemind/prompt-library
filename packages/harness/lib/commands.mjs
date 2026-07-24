@@ -19,6 +19,7 @@ import { runIndexKnowledge } from './index-knowledge.mjs';
 import { configureVSCodeSettings } from './vscode-settings.mjs';
 import { parseQueryFromArgv } from './argv.mjs';
 import { readEvents, summarizeEvents, writeEvent } from './events.mjs';
+import { usageFields } from './token-meter.mjs';
 import { installHarnessBin } from './install-harness-bin.mjs';
 import { resolveHarnessBin, agentHarnessCommand } from './resolve-harness-bin.mjs';
 import { installGlobalHarnessShim, configureShellPath, globalHarnessShimPath } from './global-bin.mjs';
@@ -55,6 +56,35 @@ export function getAssetsRoot() {
 function log(flags, msg) {
   if (flags.json) return;
   console.log(`[harness] ${msg}`);
+}
+
+function spawnSyncHead(workspace) {
+  const r = execSyncSafe('git rev-parse HEAD', workspace);
+  return r ? r.trim() : null;
+}
+
+function execSyncSafe(cmd, cwd) {
+  try {
+    return execSync(cmd, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+  } catch {
+    return null;
+  }
+}
+
+// Compact JSON by default (fewer tokens for the agent to read); pretty-print
+// only under --verbose. Both are valid JSON for machine consumers.
+function emitJson(flags, obj) {
+  console.log(flags.verbose ? JSON.stringify(obj, null, 2) : JSON.stringify(obj));
+}
+
+// Answer-first: a one-line verdict, then only the checks that did not pass,
+// unless --verbose asks for the full list.
+function printChecks(flags, checks, isPass = (c) => c.pass) {
+  const shown = flags.verbose ? checks : checks.filter((c) => !isPass(c));
+  for (const c of shown) {
+    const mark = c.pass ?? isPass(c) ? 'PASS' : c.severity === 'warn' || c.status === 'warn' ? 'WARN' : 'FAIL';
+    console.log(`${mark}  ${c.id}  ${c.message}`);
+  }
 }
 
 export async function cmdInstallOrUpgrade(command, argv) {
@@ -173,15 +203,20 @@ export async function cmdDoctor(argv) {
   });
 
   if (flags.json) {
-    console.log(JSON.stringify({ pass, checks }, null, 2));
+    emitJson(flags, { pass, checks });
   } else {
+    const failed = checks.filter((c) => !c.pass && !c.optional).length;
+    console.log(
+      pass
+        ? `Harness doctor: PASS (${checks.length} checks)`
+        : `Harness doctor: FAIL (${failed} required) — fix items below`
+    );
     for (const c of checks) {
+      if (!flags.verbose && c.pass) continue;
       const mark = c.pass ? 'PASS' : c.optional ? 'WARN' : 'FAIL';
       console.log(`${mark}  ${c.id}  ${c.name}`);
       if (!c.pass && c.hint) console.log(`       → ${c.hint}`);
     }
-    console.log('');
-    console.log(pass ? 'Harness doctor: all required checks passed.' : 'Harness doctor: fix FAIL items above.');
   }
   return pass ? 0 : 1;
 }
@@ -193,7 +228,7 @@ export async function cmdStatus(argv) {
   const version = readPkgVersion();
 
   if (flags.json) {
-    console.log(JSON.stringify({ packageVersion: version, copilotHome, lock }, null, 2));
+    emitJson(flags, { packageVersion: version, copilotHome, lock });
   } else {
     console.log(`harness CLI ${version}`);
     console.log(`Copilot home: ${copilotHome}`);
@@ -218,7 +253,10 @@ export async function cmdInitRepo(argv) {
     result: 'pass',
     exitCode: 0,
   });
-  if (!flags.json) console.log('[harness] init-repo done.');
+  if (!flags.json) {
+    console.log('[harness] init-repo done.');
+    console.log('  setup: run `harness index` to build the knowledge index and repo map; re-run after a major pull from main or a docs rewrite. Check drift anytime with `harness index --status`.');
+  }
   return 0;
 }
 
@@ -228,11 +266,26 @@ export async function cmdIndex(argv) {
   const knowledgeRoot = path.join(copilotHome, 'knowledge');
   const workspace = path.resolve(flags.workspace);
   const logger = (m) => log(flags, m);
+
+  // Read-only freshness report — never rebuilds, zero model cost.
+  if (argv.includes('--status')) {
+    const { indexStatus } = await import('./index-status.mjs');
+    const status = indexStatus({ workspace, copilotHome });
+    if (flags.json) emitJson(flags, status);
+    else {
+      console.log(`harness index: ${status.indexed ? (status.stale ? 'STALE' : 'current') : 'not built'}`);
+      console.log(`  ${status.recommendation}`);
+    }
+    return 0;
+  }
+
+  // Stamp the current git HEAD so `index --status` can measure drift later.
+  const head = spawnSyncHead(workspace);
   runIndexKnowledge({
     knowledgeRoot: fs.existsSync(knowledgeRoot) ? knowledgeRoot : null,
     workspace,
     copilotHome,
-    flags,
+    flags: { ...flags, headSha: head },
     log: logger,
   });
   writeEvent(workspace, flags, {
@@ -251,6 +304,13 @@ export async function cmdOrient(argv) {
   const copilotHome = resolveCopilotHome(flags.copilotHome);
   const query = parseQueryFromArgv(argv, flags);
   const result = runOrient({ workspace, copilotHome, flags, query });
+  const orientPack = (() => {
+    try {
+      return fs.readFileSync(path.join(workspace, result.contextPack), 'utf8');
+    } catch {
+      return '';
+    }
+  })();
   writeEvent(workspace, flags, {
     type: 'orient',
     command: 'orient',
@@ -258,14 +318,16 @@ export async function cmdOrient(argv) {
     result: result.gateStatus === 'pass' ? 'pass' : 'fail',
     exitCode: 0,
     blockedReason: result.blockedReason,
+    usage: usageFields({ input: query, output: orientPack }),
   });
 
   if (flags.json) {
-    console.log(JSON.stringify(result, null, 2));
+    emitJson(flags, result);
   } else {
     console.log(`[harness] orient: context pack → ${result.contextPack}`);
     console.log(`  recall: ${result.recall.length} | plans: ${result.plans.length} | gate: ${result.gateStatus}`);
     if (result.blockedReason) console.log(`  blocked: ${result.blockedReason}`);
+    if (result.nextTools?.[0]) console.log(`  next: ${result.nextTools[0]}`);
   }
   return 0;
 }
@@ -287,6 +349,7 @@ export async function cmdGate(argv) {
       ...previous,
       activePlan: result.plan?.path || previous.activePlan || null,
       gatedPlan: result.plan?.path || null,
+      gatedPlanDigest: result.pass && result.exitCode === 0 ? result.plan?.digest || null : null,
       lastGateAt: new Date().toISOString(),
       gateStatus: result.pass && result.exitCode === 0 ? 'pass' : policy.enforcement === 'enforce' && !result.pass ? 'blocked' : 'warn',
       blockedReason: result.blockedReason,
@@ -301,17 +364,21 @@ export async function cmdGate(argv) {
     exitCode: policyExitCode,
     checks: result.checks,
     blockedReason: result.blockedReason,
+    usage: usageFields({ input: query, output: result.checks.map((c) => c.message).join('\n') }),
   });
 
   if (flags.json) {
-    console.log(JSON.stringify(result, null, 2));
+    emitJson(flags, result);
   } else {
-    for (const c of result.checks) {
-      const mark = c.pass ? 'PASS' : c.severity === 'warn' ? 'WARN' : 'FAIL';
-      console.log(`${mark}  ${c.id}  ${c.message}`);
-    }
-    console.log('');
-    console.log(result.pass ? 'harness gate: pass' : 'harness gate: FAIL — stop before editFiles');
+    const failed = result.checks.filter((c) => !c.pass).length;
+    console.log(
+      result.pass
+        ? `harness gate: PASS (${result.checks.length} checks)`
+        : `harness gate: FAIL (${failed}/${result.checks.length}) — stop before editFiles`
+    );
+    printChecks(flags, result.checks);
+    const next = result.nextTools?.[0];
+    if (next) console.log(`next: ${next}`);
   }
   return policyExitCode;
 }
@@ -342,12 +409,20 @@ export async function cmdVerify(argv) {
     result: result.outcome === 'passed' ? 'pass' : result.outcome === 'failed' ? 'fail' : 'warn',
     checks: result.checks,
     blockedReason: result.outcome === 'passed' ? null : `${result.outcome} verification`,
+    usage: usageFields({ input: result.plan || '', output: result.checks.map((c) => c.message).join('\n') }),
   });
 
-  if (flags.json) console.log(JSON.stringify(result, null, 2));
+  if (flags.json) emitJson(flags, result);
   else {
-    for (const check of result.checks) console.log(`${check.status.toUpperCase()}  ${check.id}  ${check.message}`);
-    console.log(`\nharness verify: ${result.outcome} — ${result.evidencePath}`);
+    const failed = result.checks.filter((c) => c.status !== 'passed').length;
+    console.log(`harness verify: ${result.outcome.toUpperCase()} (${failed}/${result.checks.length} checks not passed) — ${result.evidencePath}`);
+    printChecks(flags, result.checks, (c) => c.status === 'passed');
+    if (result.outcome === 'passed') {
+      console.log('next: harness compound (or /auto-compound) to record the learning, then stop');
+    } else {
+      const firstFail = result.checks.find((c) => c.status !== 'passed');
+      if (firstFail) console.log(`next: fix ${firstFail.id} (${firstFail.message.slice(0, 100)})`);
+    }
   }
   return exitCode;
 }
@@ -367,7 +442,7 @@ export async function cmdRecall(argv) {
   });
 
   if (flags.json) {
-    console.log(JSON.stringify(result, null, 2));
+    emitJson(flags, result);
   } else {
     console.log(`[harness] recall: "${result.query}"`);
     for (const r of result.recall) {
@@ -384,17 +459,77 @@ export async function cmdRecall(argv) {
 export async function cmdEvents(argv) {
   const flags = parseFlags(argv);
   const workspace = path.resolve(flags.workspace);
-  const events = readEvents(workspace, flags.limit || 20);
+  const events = readEvents(workspace, {
+    limit: Number.isFinite(flags.limit) ? flags.limit : 20,
+    session: flags.session,
+    failures: flags.failures,
+  });
   const summary = summarizeEvents(events);
+  const totalMatched = events.totalMatched ?? events.length;
 
   if (flags.json) {
-    console.log(JSON.stringify({ count: events.length, summary, events }, null, 2));
+    const body = { count: events.length, totalMatched, summary };
+    if (!flags.summary) body.events = [...events];
+    emitJson(flags, body);
   } else {
-    console.log(`[harness] events: ${events.length}`);
+    console.log(`[harness] events: ${events.length}${totalMatched > events.length ? ` of ${totalMatched}` : ''}`);
+    if (totalMatched > events.length) console.log(`  (showing latest ${events.length}; narrow with --session/--failures or raise --limit)`);
     console.log(`  pass=${summary.pass} warn=${summary.warn} fail=${summary.fail}`);
+    const u = summary.usage;
+    if (u && u.totalTokens) {
+      console.log(`  tokens (est): in=${u.inputTokens} out=${u.outputTokens} total=${u.totalTokens}`);
+      if (flags.summary) {
+        for (const [type, bucket] of Object.entries(u.byType).sort((a, b) => b[1].totalTokens - a[1].totalTokens)) {
+          console.log(`    ${type}: ${bucket.totalTokens}`);
+        }
+      }
+    }
     if (summary.lastActivePlan) console.log(`  last plan: ${summary.lastActivePlan}`);
     if (summary.latestBlockedReason) console.log(`  blocked: ${summary.latestBlockedReason}`);
   }
+  return 0;
+}
+
+export async function cmdReport(argv) {
+  const { buildReport, renderReport, hasBudgetBreach } = await import('./report.mjs');
+  const flags = parseFlags(argv);
+  const workspace = path.resolve(flags.workspace);
+  const copilotHome = resolveCopilotHome(flags.copilotHome);
+
+  const { loadReportEvents } = await import('./report.mjs');
+  const { collectHostUsage, mergeHostUsage } = await import('./host-telemetry/index.mjs');
+
+  let base = null;
+  if (flags.sync || flags.global) {
+    const store = await import('./telemetry-store.mjs');
+    if (flags.sync) {
+      const synced = store.syncWorkspaceEvents({ workspace });
+      if (!flags.json) console.log(`[harness] report: synced ${synced.added} new event(s) → ${synced.file}`);
+    }
+    if (flags.global) base = store.readGlobalEvents();
+  }
+  if (base === null) base = loadReportEvents({ workspace });
+
+  // Overlay real host usage (if any adapter has it) on top of harness estimates.
+  const merged = mergeHostUsage(base, collectHostUsage({ workspace, host: flags.host }));
+  const report = buildReport({ workspace, copilotHome, events: merged });
+
+  if (flags.check) {
+    if (hasBudgetBreach(report)) {
+      if (flags.json) emitJson(flags, { pass: false, breaches: report.flags.budgetBreaches });
+      else {
+        console.log('harness report --check: FAIL — budget breaches');
+        for (const b of report.flags.budgetBreaches) console.log(`  ${b.kind} ${b.target} = ${b.value} > cap ${b.cap}`);
+      }
+      return 1;
+    }
+    if (flags.json) emitJson(flags, { pass: true, breaches: [] });
+    else console.log('harness report --check: PASS — no budget breaches');
+    return 0;
+  }
+
+  if (flags.json) emitJson(flags, report);
+  else console.log(renderReport(report));
   return 0;
 }
 
@@ -417,7 +552,7 @@ export async function cmdValidatePlan(argv) {
   });
 
   if (flags.json) {
-    console.log(JSON.stringify(result, null, 2));
+    emitJson(flags, result);
   } else {
     for (const c of result.checks) {
       const mark = c.pass ? 'PASS' : c.severity === 'warn' ? 'WARN' : 'FAIL';
@@ -445,7 +580,7 @@ export async function cmdCompound(argv) {
   });
 
   if (flags.json) {
-    console.log(JSON.stringify(result, null, 2));
+    emitJson(flags, result);
   } else {
     if (result.pass) {
       console.log(`[harness] compound: indexed ${result.indexed?.entries ?? 0} entries`);
@@ -465,7 +600,7 @@ export async function cmdGet(argv) {
   const result = runGet({ workspace, copilotHome, flags });
 
   if (flags.json) {
-    console.log(JSON.stringify(result, null, 2));
+    emitJson(flags, result);
   } else {
     console.log(`[harness] get: ${result.docid || result.path}`);
     console.log(result.excerpt);
@@ -523,7 +658,7 @@ export async function cmdResolve(argv) {
   };
 
   if (flags.json) {
-    console.log(JSON.stringify(payload, null, 2));
+    emitJson(flags, payload);
   } else {
     if (payload.agentCommand) {
       console.log(`[harness] resolved (${resolved.source}): ${resolved.bin}`);

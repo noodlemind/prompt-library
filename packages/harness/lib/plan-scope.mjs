@@ -61,10 +61,12 @@ export function validatePlanScope({ workspace, plan, base = null }) {
   const allowed = parseImpactedFiles(plan);
   const changed = collectChangedFiles(workspace, base);
   if (changed.error) return { status: 'inconclusive', allowed, changedFiles: [], violations: [], message: changed.error };
+  const activePlan = String(plan.path || '').replace(/\\/g, '/');
+  const governedFiles = changed.files.filter((file) => file !== activePlan);
   if (allowed.length === 0) {
-    return { status: 'failed', allowed, changedFiles: changed.files, violations: changed.files, message: 'No Impacted Files allowlist' };
+    return { status: 'failed', allowed, changedFiles: changed.files, violations: governedFiles, message: 'No Impacted Files allowlist' };
   }
-  const violations = changed.files.filter((file) => !matchesScope(file, allowed));
+  const violations = governedFiles.filter((file) => !matchesScope(file, allowed));
   return {
     status: violations.length ? 'failed' : 'passed',
     allowed,

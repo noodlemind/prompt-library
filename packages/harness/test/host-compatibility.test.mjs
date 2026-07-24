@@ -32,6 +32,24 @@ test('host matrix covers full and degraded target operation', () => {
   assert.match(read('docs/architecture/engineer-harness.md'), /automated evidence/i);
 });
 
+test('host-telemetry seam covers every supported host and degrades safely', async () => {
+  const { collectHostUsage } = await import('../lib/host-telemetry/index.mjs');
+  // Every supported host resolves to an adapter that returns a safe array.
+  for (const host of ['github-copilot-vscode', 'github-copilot-intellij', 'github-copilot-cli']) {
+    const result = collectHostUsage({ workspace: repoRoot, host });
+    assert.ok(Array.isArray(result), `${host} adapter returns an array`);
+  }
+  // Adapter files exist for the multi-platform structure.
+  for (const rel of [
+    'packages/harness/lib/host-telemetry/index.mjs',
+    'packages/harness/lib/host-telemetry/vscode.mjs',
+    'packages/harness/lib/host-telemetry/intellij.mjs',
+    'packages/harness/lib/host-telemetry/copilot-cli.mjs',
+  ]) {
+    assert.ok(exists(rel), `missing ${rel}`);
+  }
+});
+
 test('portable sources and built assets preserve the thin runtime contract', () => {
   const build = spawnSync(process.execPath, ['scripts/build-harness-assets.mjs'], {
     cwd: repoRoot,
@@ -55,6 +73,10 @@ test('portable sources and built assets preserve the thin runtime contract', () 
   assert.match(assetEngineer, /9\. Report/i);
   assert.doesNotMatch(assetEngineer, /Skill-first contract \(mandatory\)/i);
   assert.equal(exists('packages/harness/assets/skills/engineer-autopilot/SKILL.md'), false);
-  assert.match(read('packages/harness/assets/skills/work-on-task/SKILL.md'), /harness verify --plan/i);
+  // Single-entry consolidation: retired surfaces must not ship in assets.
+  for (const gone of ['skills/work-on-task', 'skills/btw', 'skills/start', 'prompts', 'agents/pipeline-navigator.agent.md']) {
+    assert.equal(exists(`packages/harness/assets/${gone}`), false, `${gone} must not ship`);
+  }
+  assert.match(read('packages/harness/assets/skills/auto-compound/SKILL.md'), /harness verify --plan/i);
   assert.match(read('packages/harness/assets/hooks/hooks.json'), /require-verification\.mjs/);
 });

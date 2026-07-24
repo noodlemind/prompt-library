@@ -8,6 +8,8 @@ import { extractAcceptanceCriteria, validatePlanSchema } from './plan-schema.mjs
 import { validatePlanScope } from './plan-scope.mjs';
 import { createEvidenceBinding, writeEvidence } from './evidence.mjs';
 import { enforcementExitCode, loadPolicy } from './policy.mjs';
+import { verifyPrimitiveGovernance } from './primitive-governance.mjs';
+import { validatePlanReadiness } from './plan-readiness.mjs';
 
 const CHECKS_REL = '.github/harness/checks.yaml';
 
@@ -144,6 +146,18 @@ export function runVerify({ workspace, flags }) {
     )
   );
 
+  const readiness = validatePlanReadiness(workspace, plan);
+  checks.push(
+    resultCheck(
+      'plan-readiness',
+      readiness.pass ? 'passed' : 'failed',
+      readiness.pass
+        ? 'Plan verification contract is ready'
+        : readiness.checks.filter((check) => !check.pass).map((check) => check.message).join('; '),
+      { details: readiness.checks }
+    )
+  );
+
   const statePass = plan.plan_lock && ['in-progress', 'review', 'done'].includes(plan.status);
   checks.push(resultCheck('plan-state', statePass ? 'passed' : 'failed', statePass ? 'Plan is locked in a verifiable state' : `Invalid verify state: ${plan.status}, plan_lock=${plan.plan_lock}`));
 
@@ -151,9 +165,21 @@ export function runVerify({ workspace, flags }) {
   const openTasks = [...taskBody.matchAll(/^-\s*\[ \]\s+(.+)$/gm)].map((match) => match[1]);
   checks.push(resultCheck('phase-tasks', openTasks.length ? 'failed' : 'passed', openTasks.length ? `${openTasks.length} current phase tasks remain open` : 'All current phase tasks are complete', { openTasks }));
 
+  // Bind-before-check snapshot: the workspace digest captured here must match
+  // the digest captured after checks run, or the evidence would certify
+  // content the checks never saw.
+  const preScope = validatePlanScope({ workspace, plan, base: flags.base });
+  const preBinding = createEvidenceBinding({
+    workspace,
+    plan,
+    base: flags.base,
+    changedFiles: preScope.changedFiles,
+  });
+
   const named = loadNamedChecks(workspace);
   const required = Array.isArray(plan.fm.verification?.required) ? plan.fm.verification.required : [];
   const namedResults = required.map((name) => {
+    if (!readiness.pass) return resultCheck(name, 'inconclusive', 'Not run because plan readiness failed');
     if (named.error) return resultCheck(name, 'unavailable', named.error);
     if (!Object.hasOwn(named.checks, name)) return resultCheck(name, 'unavailable', `Named check is not configured: ${name}`);
     return runNamedCheck(workspace, name, named.checks[name]);
@@ -177,6 +203,22 @@ export function runVerify({ workspace, flags }) {
   const scope = validatePlanScope({ workspace, plan, base: flags.base });
   checks.push(resultCheck('scope', scope.status, scope.message, { changedFiles: scope.changedFiles, allowed: scope.allowed }));
 
+  const primitive = verifyPrimitiveGovernance(plan, scope.changedFiles, Object.keys(named.checks || {}));
+  if (primitive.required) {
+    checks.push(
+      resultCheck(
+        'primitive-evidence',
+        primitive.pass ? 'passed' : 'failed',
+        primitive.message,
+        {
+          changedPrimitives: primitive.changedPrimitives,
+          missingPlan: primitive.missingPlan,
+          missingEvidence: primitive.missingEvidence,
+        }
+      )
+    );
+  }
+
   const requiredReviews = (plan.fm.reviews?.required || []).filter((review) => !(plan.fm.reviews?.completed || []).includes(review));
   checks.push(resultCheck('required-reviews', requiredReviews.length ? 'failed' : 'passed', requiredReviews.length ? `Missing required reviews: ${requiredReviews.join(', ')}` : 'Required reviews satisfied'));
 
@@ -188,6 +230,24 @@ export function runVerify({ workspace, flags }) {
   const criticalOpen = plan.fm.reviews?.critical_open || [];
   checks.push(resultCheck('critical-findings', criticalOpen.length ? 'failed' : 'passed', criticalOpen.length ? `${criticalOpen.length} critical findings remain open` : 'No open critical review findings'));
 
+  const binding = createEvidenceBinding({
+    workspace,
+    plan,
+    base: flags.base,
+    changedFiles: scope.changedFiles,
+  });
+  const stable =
+    preBinding.workspaceDigest === binding.workspaceDigest && preBinding.planDigest === binding.planDigest;
+  checks.push(
+    resultCheck(
+      'workspace-stability',
+      stable ? 'passed' : 'failed',
+      stable
+        ? 'Workspace did not change while checks ran'
+        : 'Workspace or plan changed while verification checks were running; rerun harness verify'
+    )
+  );
+
   return finalize(workspace, flags, {
     plan: plan.path,
     checks,
@@ -195,12 +255,7 @@ export function runVerify({ workspace, flags }) {
     scopeViolations: scope.violations,
     openHardGaps,
     requiredReviews,
-    binding: createEvidenceBinding({
-      workspace,
-      plan,
-      base: flags.base,
-      changedFiles: scope.changedFiles,
-    }),
+    binding,
   });
 }
 

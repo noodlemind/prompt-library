@@ -12,13 +12,13 @@ The diagram shows the recommended usage web: users enter through GitHub Copilot 
 
 The current library already has a strong compound-engineering base:
 
-- A local-first pipeline: `/capture-issue` -> `/plan-issue` -> `/work-on-task` -> `/code-review` -> `/compound-learnings`
+- A local-first pipeline: `/capture-issue` -> `/plan-issue` -> `@engineer` Deliver mode -> `/code-review` -> `/compound-learnings`
 - Plan files in `docs/plans/` that preserve state, research notes, implementation notes, activity logs, and review findings
 - Specialist agents with bounded responsibilities and coordinator agents for planning and review
 - Skills using progressive disclosure, trigger examples, references, assets, and explicit execution boundaries
 - Bundled review checks under skill references, optional product checks under `.github/checks/`, and team-wide durable learnings under `knowledge/solutions/`
 
-The main gap is presentation and governance. The repo historically explains itself as an agent collection with supporting skills. The standardized model should be the inverse: **skills are the primary reusable contract; agents, instructions, prompt wrappers, checks, plans, and solution docs support those skills.**
+The main gap is presentation and governance. The repo historically explains itself as an agent collection with supporting skills. The standardized model should be the inverse: **skills are the primary reusable contract; agents, instructions, checks, plans, and solution docs support those skills.**
 
 ## External Tool Alignment
 
@@ -27,7 +27,7 @@ The global install and primitive boundaries mirror current agentic IDE patterns 
 - [VS Code Copilot settings](https://code.visualstudio.com/docs/copilot/reference/copilot-settings) support user-level custom locations for agents, instructions, prompts, and skills. This supports global team standards plus scoped language/framework standards.
 - [GitHub Copilot for JetBrains global instructions](https://docs.github.com/en/copilot/how-tos/configure-custom-instructions-in-your-ide/add-repository-instructions-in-your-ide?tool=jetbrains) reliably supports a local `global-copilot-instructions.md` file under `%LOCALAPPDATA%\github-copilot\intellij`, so the hydrate task compiles all instruction standards into that single IntelliJ path.
 - [GitHub Copilot for JetBrains Agent Skills](https://github.blog/changelog/2026-02-13-new-features-and-improvements-in-github-copilot-in-jetbrains-ides-2/) are available in Agent Mode when enabled in the JetBrains Copilot settings.
-- [GitHub Copilot for JetBrains agentic capabilities](https://github.blog/changelog/2026-03-11-major-agentic-capabilities-improvements-in-github-copilot-for-jetbrains-ides/) now include custom agents, sub-agents, global agent instruction files, and related customization settings; the hydrate task mirrors agents, skills, instructions, and prompts into the IntelliJ global root rather than requiring product-repo copies.
+- [GitHub Copilot for JetBrains agentic capabilities](https://github.blog/changelog/2026-03-11-major-agentic-capabilities-improvements-in-github-copilot-for-jetbrains-ides/) now include custom agents, sub-agents, global agent instruction files, and related customization settings; the hydrate task mirrors agents, skills, and instructions into the IntelliJ global root rather than requiring product-repo copies.
 - [Cline Rules](https://docs.cline.bot/customization/cline-rules), [Cursor Rules](https://docs.cursor.com/en/context), and [Windsurf Rules](https://docs.windsurf.com/windsurf/cascade/memories) all separate global/user rules from workspace/project rules. Product repositories can add their own product-owned overlays, but prompt-library source artifacts stay global.
 - [Windsurf Skills and Workflows](https://docs.windsurf.com/windsurf/cascade/memories) and [Continue prompts](https://docs.continue.dev/customize/prompts) treat repeatable task behavior and specialist review guidance as reusable procedural assets, which matches this repo's skill-first model.
 - [Plandex context management](https://docs.plandex.ai/core-concepts/context-management/) keeps context associated with plans and loads only relevant context per step. This maps to `docs/plans/` acting as the local context pack for capture -> plan -> work -> review.
@@ -41,13 +41,13 @@ The practical rule is: global instructions carry broad behavior, scoped instruct
 | Skill | `.github/skills/<name>/SKILL.md` | Reusable workflow or procedure the engineer can invoke on demand | The team repeats a process, checklist, generation pattern, review method, or delivery workflow |
 | Agent | `.github/agents/*.agent.md` | Isolated role with separate judgment, tool budget, runtime profile, or accountability | Work needs a distinct reviewer, researcher, actor, coordinator, or full-cycle engineer |
 | Instruction | `.github/instructions/*.instructions.md` | Scoped coding conventions activated by file pattern | A language, framework, or team convention should apply automatically to matching files |
-| Prompt wrapper | `.github/prompts/*.prompt.md` | Host-facing slash-command adapter that points at a skill | A host needs explicit prompt files or extra tool routing for a skill |
+| Prompt wrapper (retired 2026-07-24) | formerly `.github/prompts/*.prompt.md` | Host-facing slash-command adapter that pointed at a skill | Retired — replaced by direct agent selection from the host's agent dropdown; do not create new wrappers |
 | Review check | `.github/skills/code-review/references/checks/*.md` for library-managed checks; product repos may add `.github/checks/*.md` | Review criterion discovered by `/code-review` | A team wants a small, repeatable review rule without editing core agents |
 | Reference | `.github/skills/**/references/*.md` or `.github/skills/**/assets/*` | Supporting material loaded only by the owning skill | A skill needs dense examples, schemas, templates, or criteria without loading them every time |
 | Plan file | `docs/plans/*.md` | Local spec, state machine, context pack, and execution ledger | Work needs capture, planning, phased execution, review, and continuity |
 | Solution doc | `knowledge/solutions/**/*.md` (or product-private `docs/solutions/**/*.md`) | Verified learning that should be reusable in future work | A completed fix reveals a durable pattern, gotcha, or prevention rule |
 
-This library implements all standardization primitives needed for the current target: agents, skills, instructions, prompt wrappers, checks, references/assets, local plans, solution docs, and global install guidance. Checks are intentionally a prompt-library convention rather than a native Copilot customization type.
+This library implements all standardization primitives needed for the current target: agents, skills, instructions, checks, references/assets, local plans, solution docs, and global install guidance. Checks are intentionally a prompt-library convention rather than a native Copilot customization type.
 
 Use `/create-primitive` as the single creator workflow for new or changed primitives. It must classify the request first, state why the selected primitive is correct, and then create the smallest artifact that satisfies the need.
 
@@ -66,7 +66,7 @@ Create an **instruction** when the rule should load automatically by file patter
 
 Create a **review check** when the concern is narrow, project-specific, and can be evaluated during `/code-review`.
 
-Keep **prompt wrappers** thin. They should route to skills and declare host tools; they should not become a second implementation of the workflow.
+**Prompt wrappers** are retired (2026-07-24, replaced by direct agent selection). Hosts select `@engineer` and other agents from the agent dropdown; do not reintroduce wrapper prompt files or let any host adapter become a second implementation of a workflow.
 
 ## Adaptive Capability Expansion
 
@@ -79,7 +79,7 @@ Do not create a primitive for one unfamiliar task. A promotion candidate needs
 verified reuse evidence, generalizability, expected future value, and a reason
 an existing primitive cannot own the procedure. Then document the gap with
 `.github/skills/references/capability-gap-proposal.md`, including overlap checks
-against existing skills, agents, instructions, prompt wrappers, checks,
+against existing skills, agents, instructions, checks,
 references, and solution docs.
 
 Primitive creation or substantial primitive changes require human approval before `/create-primitive` proceeds. Use `.github/skills/references/human-approval-policy.md` for approval gates and record the decision in the proposal or active plan.
@@ -98,7 +98,7 @@ The engineer remains the default accountable actor, but routing should be skill-
 6. Verify with evidence before claiming completion.
 7. Compound verified learnings into the smallest durable layer.
 
-Use a specialist agent as primary only when the task is predominantly that specialty, such as a security audit, plan review, repository research pass, or PR comment resolution.
+Use a specialist agent as primary only when the task is predominantly that specialty, such as a security audit, plan review, or repository research pass. PR feedback resolution is ordinary `@engineer` Deliver work.
 
 ## Local-First Context Pack
 
@@ -164,26 +164,24 @@ Agents should not store long reference material. Put reusable procedures in skil
 
 ## Standard Workflow
 
-Intake first separates fast read-only work from delivery. `/btw` answers quick questions; `@engineer` Investigate mode handles deeper evidence-only diagnosis; only Deliver mode enters the plan, mutation, verification, and compounding path. A read-only mode must transition to Deliver before editing.
+Intake first separates fast read-only work from delivery. `@engineer` mode selection (Answer / Investigate / Review / Deliver) is the intake router: Answer mode handles quick questions ceremony-free; Investigate mode handles deeper evidence-only diagnosis; only Deliver mode enters the plan, mutation, verification, and compounding path. A read-only mode must transition to Deliver before editing.
 
 ```mermaid
 flowchart TD
-  A["Raw request or issue"] --> B["/start or selected skill"]
+  A["Raw request or issue"] --> B["@engineer mode selection or selected skill"]
   B --> C{"Known workflow?"}
-  C -->|Quick answer| Q["/btw"]
+  C -->|Quick answer| Q["@engineer Answer"]
   C -->|Deep read-only investigation| R["@engineer Investigate"]
   C -->|Explore| D["/brainstorming"]
   C -->|Capture| E["/capture-issue"]
   C -->|Plan| F["/plan-issue"]
-  C -->|Ordinary work| G["@engineer Deliver"]
-  C -->|Execute locked plan| W["/work-on-task"]
+  C -->|Ordinary work or locked plan| G["@engineer Deliver"]
   D --> E
   E --> F
   F --> H["/deepen-plan or /document-review when useful"]
-  H --> W
-  F --> W
+  H --> G
+  F --> G
   G --> I
-  W --> I
   I["Verification evidence"]
   I --> J["/code-review"]
   J --> K{"Accepted and verified?"}
@@ -193,16 +191,16 @@ flowchart TD
 
 ## Governance
 
-- Treat skills, agents, instructions, prompt wrappers, hooks, checks, scripts, and MCP metadata as executable governance artifacts.
+- Treat skills, agents, instructions, hooks, checks, scripts, and MCP metadata as executable governance artifacts.
 - **Harness vs skill scripts:** Cross-repo deterministic agent tools live in **`@dev-kit/harness`** (`orient`, `gate`, `verify`, `recall`, `index`, `compound`, `validate-plan`). Skills are thin orchestration that invoke harness with `--json`. Skill-local `scripts/` is allowed only for narrow, read-only validators tied to one skill — see [`.github/skills/references/harness-tool-contract.md`](../../.github/skills/references/harness-tool-contract.md).
 - Do not pre-approve shell or network access in community or shared artifacts without local review.
-- Keep permissions minimal in agent frontmatter and prompt wrappers.
+- Keep permissions minimal in agent frontmatter.
 - Prefer read-only specialist agents for review and research.
 - Add or update at least one trigger example, review check, test scenario, or validation checklist item when changing a primitive.
 - Compound patterns only after verification and user acceptance. Cross-repo fixes belong in `knowledge/solutions/`; repo-private fixes may use product `docs/solutions/`. Broad conventions graduate to a skill or scoped instruction; repo-specific one-liners belong in product `docs/agent-context.md`.
 
 ## Team Adoption
 
-Teams adapting this library should start by hydrating the global skills, agents, prompts, and instructions. Do not copy prompt-library artifacts into product repositories. New agents are the last resort, not the first customization point.
+Teams adapting this library should start by hydrating the global skills, agents, and instructions. Do not copy prompt-library artifacts into product repositories. New agents are the last resort, not the first customization point.
 
 For the current target teams, assume Windows workstations with GitHub Copilot in VS Code and IntelliJ IDEA. Use **`@dev-kit/harness`** as the supported install path. See [Install and Sync Guide](../install.md).

@@ -1,6 +1,6 @@
 ---
 name: plan-issue
-description: Generate a phased implementation plan with research and acceptance criteria. Power-user step; @engineer uses /ensure-plan. Not for quick fixes — use /tdd-fix or /analyze-and-plan.
+description: Generate a phased implementation plan with research and acceptance criteria. Power-user step; @engineer uses /ensure-plan. Not for quick fixes — @engineer Deliver mode handles those directly.
 argument-hint: "[path to issue file]"
 user-invocable: false
 ---
@@ -34,9 +34,8 @@ Activate when the user wants to:
 - "Plan the approach for this feature"
 
 **Should not trigger:**
-- "Just fix the bug" → use /tdd-fix
-- "Start coding" → use /work-on-task
-- "Quick plan without research" → use /analyze-and-plan
+- "Just fix the bug" → use @engineer Deliver mode
+- "Start coding" → use @engineer Deliver mode
 
 ## Prerequisites
 
@@ -48,7 +47,7 @@ Activate when the user wants to:
 ### 1. Read and Validate Issue
 
 Read the issue file. Check:
-- If `status: planned` or later → inform user: "This issue already has a plan. Run `/work-on-task` to execute it."
+- If `status: planned` or later → inform user: "This issue already has a plan. Hand it to `@engineer` Deliver mode to execute it."
 - If `status: needs-info` → attempt to resolve missing info from codebase context; if still missing, stop.
 - If `plan_lock: true` → inform user: "Plan is already locked."
 
@@ -130,7 +129,7 @@ updated: YYYY-MM-DD
 ### 5. Print Summary
 
 Confirm: "Plan generated with [N] phases and [M] tasks. Plan is locked."
-Suggest next step: "Run `/work-on-task docs/plans/<filename>.md` to start Phase 1."
+Suggest next step: "Hand `docs/plans/<filename>.md` to `@engineer` Deliver mode to start Phase 1."
 
 ## Error Handling
 
@@ -138,7 +137,7 @@ Suggest next step: "Run `/work-on-task docs/plans/<filename>.md` to start Phase 
 
 - **Missing issue file** → "Issue file not found at `[path]`. Create one with `/capture-issue` first."
 - **Research agent returns no results** → Proceed with codebase-only analysis. Note the gap in `## Research Notes` so downstream skills know which areas lack external validation.
-- **Plan file already exists with `plan_lock: true`** → "A locked plan already exists. Run `/work-on-task` to execute it, or unlock to re-plan."
+- **Plan file already exists with `plan_lock: true`** → "A locked plan already exists. Hand it to `@engineer` Deliver mode to execute it, or unlock to re-plan."
 - **Issue has `status: needs-info`** → Attempt to resolve from codebase context (search for related files, patterns, prior solutions). If still missing, stop and report exactly what information is needed.
 
 ### Common Errors
@@ -151,5 +150,5 @@ For subagent failure, tool unavailability, file-not-found, and timeout recovery,
 - Do **not** start execution. Lock the plan and stop.
 - Include realistic phase scoping — each phase should be completable in one session.
 - Every task must reference a specific file in `## Impacted Files`.
-- Every plan must include `## Verification Plan` and `## Risk & Review Routing` so `/work-on-task` and `/code-review` know how to prove and review the work.
+- Every plan must include `## Verification Plan` and `## Risk & Review Routing` so Engineer Deliver mode and `/code-review` know how to prove and review the work.
 - Every plan with risky strategy choices must include explicit human approval checkpoints from `.github/skills/references/human-approval-policy.md`.

@@ -27,7 +27,7 @@ Do not scan or load the full registry before ordinary work. Missing optional cap
 **Should not trigger:**
 
 - A routine low-risk change can proceed with current repository patterns and tests.
-- A quick read-only question needs `/btw`, not capability acquisition.
+- A quick read-only question needs `@engineer` Answer mode, not capability acquisition.
 - A one-off unfamiliar API can be resolved from authoritative documentation without creating or importing a primitive.
 
 ### Confusable boundaries

@@ -79,8 +79,14 @@ function validBinding(binding) {
   );
 }
 
-function planContractText(text) {
+export function planContractText(text) {
   return String(text || '').replace(/\n## Activity\s*\n[\s\S]*?(?=\n## |$)/gi, '');
+}
+
+/** Canonical plan digest: SHA-256 of the Activity-stripped contract text.
+ * Gate, doctor, evidence, and the installed hooks must all agree on this. */
+export function planDigest(text) {
+  return digest(planContractText(text));
 }
 
 function containedPath(workspace, rel) {

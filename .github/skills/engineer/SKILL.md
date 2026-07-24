@@ -1,6 +1,6 @@
 ---
 name: engineer
-description: "Route substantial investigation or end-to-end software delivery to @engineer. Use for evidence-heavy diagnosis or implementation and verification; not quick Q&A, review-only, or locked-plan-only execution."
+description: "Route questions, substantial investigation, or end-to-end software delivery to @engineer, which selects Answer, Investigate, Review, or Deliver mode. Not for review-only requests — use /code-review."
 argument-hint: "[describe the engineering outcome]"
 ---
 
@@ -15,23 +15,23 @@ Route the user's outcome and any explicit plan path to `@engineer`. The agent se
 - "Diagnose why this service is intermittently timing out."
 - "Implement the approved checkout retry behavior end to end."
 - "Own this feature from investigation through verified delivery."
+- "By the way, what does this config flag mean?" (Answer mode, ceremony-free)
+- "Run the locked plan at docs/plans/example.md." (Deliver mode)
 
 **Should not trigger:**
 
-- "By the way, what does this config flag mean?" → use `/btw`
-- "Run the locked plan at docs/plans/example.md." → use `/work-on-task`
 - "Review this diff only." → use `/code-review`
 
 ## Confusable Boundaries
 
-- `/engineer` routes substantial investigation or full-cycle delivery to the accountable agent.
-- `/btw` owns quick read-only answers without ceremony.
-- `/work-on-task` owns execution of an explicit locked plan.
+- `/engineer` routes questions, substantial investigation, or full-cycle delivery to the accountable agent.
+- `@engineer` Answer mode owns quick read-only answers without ceremony.
+- `@engineer` Deliver mode owns execution of an explicit locked plan.
 - `/code-review` owns review-only requests.
 
-- Locked-plan execution only → `/work-on-task`
+- Locked-plan execution → `@engineer` Deliver mode
 - Review only → `/code-review`
-- Quick answer without edits → `/btw`
+- Quick answer without edits → `@engineer` Answer mode
 - Substantial evidence-only diagnosis → `@engineer` Investigate mode
 - Setup diagnosis → `/harness-doctor`
 

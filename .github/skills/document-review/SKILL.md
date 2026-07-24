@@ -1,6 +1,7 @@
 ---
 name: document-review
 description: Multi-persona document review with severity-scored findings. Use as a quality gate between brainstorm and plan, or between plan and work. Not for code review — use /code-review.
+user-invocable: false
 ---
 
 # Document Review
@@ -9,7 +10,7 @@ description: Multi-persona document review with severity-scored findings. Use as
 
 **Optional quality gate** between pipeline stages:
 - Between `/brainstorming` → `/plan-issue` (validate requirements before planning)
-- Between `/plan-issue` → `/work-on-task` (validate plan before implementation)
+- Between `/plan-issue` → Engineer Deliver mode (validate plan before implementation)
 - Standalone review of any brainstorm, plan, or spec document
 
 ## When to Use
@@ -121,7 +122,7 @@ Merge findings across personas:
 ### 6. Offer Next Action
 
 After improvements:
-- **Proceed to next step** — `/plan-issue` (for brainstorms) or `/work-on-task` (for plans)
+- **Proceed to next step** — `/plan-issue` (for brainstorms) or `@engineer` Deliver mode (for plans)
 - **Review again** — another pass for further refinement
 - **Done** — return to user
 

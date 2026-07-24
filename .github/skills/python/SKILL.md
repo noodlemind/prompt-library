@@ -2,6 +2,7 @@
 name: python
 description: Python engineering workflow for implementation, debugging, refactoring, testing, typing, and review preparation.
 argument-hint: "[describe the Python task, file, or failure]"
+user-invocable: false
 ---
 
 # Python
@@ -20,7 +21,7 @@ Apply Python engineering guidance as an on-demand skill. Use this inside the nor
 **Should not trigger:**
 - "Tune this database index" -> use `/sql`
 - "Review AWS queue configuration" -> use `/aws`
-- "Answer a quick repo question" -> use `/btw`
+- "Answer a quick repo question" -> use `@engineer` Answer mode
 
 ## Workflow
 
