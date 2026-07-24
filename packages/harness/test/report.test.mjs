@@ -100,3 +100,44 @@ test('harness report --check exits non-zero on a budget breach', () => {
   assert.equal(check.status, 1, check.stdout);
   assert.match(check.stdout, /FAIL — budget breaches/);
 });
+
+test('report surfaces per-session performance from host metrics', () => {
+  const events = [
+    {
+      type: 'host_session', session: 'sess1234abcd', source: 'host', ts: '2026-01-02T00:00:00Z',
+      usage: { 'gen_ai.usage.input_tokens': 1000, 'gen_ai.usage.output_tokens': 200, 'gen_ai.usage.total_tokens': 4250 },
+      metrics: {
+        model: 'gpt-5.4', premiumRequests: 3, apiRequests: 8, apiDurationMs: 42000, wallMs: 60000,
+        turns: 4, toolCalls: 6, toolFailures: 1, skills: 2, skillNames: ['engineer', 'code-review'],
+        contextTokens: 55000, cacheReadRatio: 0.75, tokensPerTurn: 1063, linesAdded: 12, linesRemoved: 3, filesModified: 2,
+      },
+    },
+  ];
+  const report = buildReport({ workspace: os.tmpdir(), copilotHome: path.join(os.tmpdir(), 'none'), events });
+  assert.equal(report.sessions.length, 1);
+  assert.equal(report.sessionTotals.premiumRequests, 3);
+  assert.equal(report.sessionTotals.apiDurationMs, 42000);
+  const text = renderReport(report);
+  assert.match(text, /Local session performance/);
+  assert.match(text, /sess1234/); // truncated session id
+  assert.match(text, /gpt-5\.4/);
+  assert.match(text, /75%/); // cache ratio rendered as percent
+});
+
+test('session token ranking uses input+output when total is absent (matches roll-up)', () => {
+  const events = [
+    { type: 'host_session', session: 'a', source: 'host', ts: '2026-01-01T00:00:00Z',
+      usage: { 'gen_ai.usage.input_tokens': 300, 'gen_ai.usage.output_tokens': 100 }, // no total
+      metrics: { model: 'gpt-5.4', premiumRequests: 1, turns: 2 } },
+    { type: 'host_session', session: 'b', source: 'host', ts: '2026-01-01T00:01:00Z',
+      usage: { 'gen_ai.usage.input_tokens': 50, 'gen_ai.usage.output_tokens': 10, 'gen_ai.usage.total_tokens': 999 },
+      metrics: { model: 'gpt-5.4', premiumRequests: 1, turns: 1 } },
+  ];
+  const report = buildReport({ workspace: os.tmpdir(), copilotHome: path.join(os.tmpdir(), 'none'), events });
+  // 'a' has no total → 400 from input+output; 'b' has explicit 999 → ranks first.
+  assert.equal(report.sessions[0].session, 'b');
+  assert.equal(report.sessions[1].tokens, 400);
+  // Roll-up total = 400 + 999; row tokens sum to the same.
+  assert.equal(report.totals.tokens, 1399);
+  assert.equal(report.sessionTotals.tokens, 1399);
+});

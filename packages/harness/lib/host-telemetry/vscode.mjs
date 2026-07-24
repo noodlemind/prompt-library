@@ -1,22 +1,29 @@
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
+import { resolveCopilotHome } from '../paths.mjs';
+import { collectSessionState } from './session-state.mjs';
 
 /**
- * Best-effort VS Code / GitHub Copilot Chat host-usage adapter.
+ * VS Code / GitHub Copilot Chat host-usage adapter.
  *
- * GHCP does not officially expose per-request token usage, and the debug-log
- * format is version-specific, so this adapter is deliberately conservative:
- * it reads a normalized usage log if one is present (HARNESS_VSCODE_USAGE_LOG,
- * or `~/.copilot/host-usage/vscode.jsonl`), recognizes a couple of known
- * token-count shapes, and returns [] otherwise. It never throws — a missing or
- * unparseable log simply means the report falls back to harness estimates.
+ * Two sources, most-authoritative first:
+ *  1. The Copilot session-state store (`<copilotHome>/session-state/<id>/
+ *     events.jsonl`), which carries real per-session token totals including
+ *     cache and reasoning tokens — see session-state.mjs.
+ *  2. A normalized usage log (HARNESS_VSCODE_USAGE_LOG, or
+ *     `~/.copilot/host-usage/vscode.jsonl`) for hosts or workflows that emit
+ *     their own token counts.
+ *
+ * The normalized log overrides the session-state event for the same session so
+ * a session is never double-counted. Both are marked `source: host` /
+ * `estimated: false`. It never throws — with no usable source the report falls
+ * back to harness estimates.
  */
 
-function candidateLogs() {
+function candidateLogs(copilotHome) {
   const paths = [];
   if (process.env.HARNESS_VSCODE_USAGE_LOG) paths.push(process.env.HARNESS_VSCODE_USAGE_LOG);
-  paths.push(path.join(os.homedir(), '.copilot', 'host-usage', 'vscode.jsonl'));
+  paths.push(path.join(resolveCopilotHome(copilotHome), 'host-usage', 'vscode.jsonl'));
   return paths.filter((p) => {
     try {
       return fs.existsSync(p) && fs.statSync(p).isFile();
@@ -52,9 +59,9 @@ function normalizeRecord(record) {
   };
 }
 
-export function collect() {
+function collectNormalizedLog(copilotHome) {
   const events = [];
-  for (const file of candidateLogs()) {
+  for (const file of candidateLogs(copilotHome)) {
     try {
       const lines = fs.readFileSync(file, 'utf8').split('\n').filter(Boolean);
       for (const line of lines) {
@@ -72,4 +79,13 @@ export function collect() {
     }
   }
   return events;
+}
+
+export function collect({ workspace, copilotHome } = {}) {
+  const normalized = collectNormalizedLog(copilotHome);
+  const overridden = new Set(normalized.map((e) => e.session).filter(Boolean));
+  const sessionState = collectSessionState({ workspace, copilotHome }).filter(
+    (e) => !overridden.has(e.session)
+  );
+  return [...normalized, ...sessionState];
 }

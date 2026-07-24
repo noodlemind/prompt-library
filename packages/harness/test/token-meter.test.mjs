@@ -50,3 +50,21 @@ test('summarizeUsage rolls up totals per event type', () => {
   assert.equal(summary.byType.gate.totalTokens, 30);
   assert.ok(!summary.byType.verify);
 });
+
+test('summarizeUsage honors an explicit total (cache + reasoning beyond in/out)', () => {
+  const events = [
+    {
+      type: 'host_session',
+      usage: {
+        'gen_ai.usage.input_tokens': 1000,
+        'gen_ai.usage.output_tokens': 200,
+        'gen_ai.usage.total_tokens': 5000, // folds in cache + reasoning
+      },
+    },
+  ];
+  const summary = summarizeUsage(events);
+  assert.equal(summary.inputTokens, 1000);
+  assert.equal(summary.outputTokens, 200);
+  assert.equal(summary.totalTokens, 5000, 'total is not recomputed as input + output');
+  assert.equal(summary.byType.host_session.totalTokens, 5000);
+});
