@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert';
-import { createStyle, EXIT } from '../lib/style.mjs';
+import { createStyle, clampNote, EXIT } from '../lib/style.mjs';
 
 const ttyStream = { isTTY: true };
 const pipeStream = { isTTY: false };
@@ -113,4 +113,12 @@ test('exit code registry matches the agent contract', () => {
 test('stripAnsi removes paint for width math', () => {
   const s = style();
   assert.equal(s.stripAnsi(s.paint('info', 'field')), 'field');
+});
+
+test('clampNote keeps short notes and truncates long ones toward --verbose', () => {
+  assert.equal(clampNote('harness install'), 'harness install');
+  const long = 'x'.repeat(500);
+  const clamped = clampNote(long);
+  assert.ok(clamped.length < 200);
+  assert.match(clamped, /… \(--verbose for full\)$/);
 });

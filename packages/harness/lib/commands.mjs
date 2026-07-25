@@ -25,7 +25,7 @@ import { resolveHarnessBin, agentHarnessCommand } from './resolve-harness-bin.mj
 import { installGlobalHarnessShim, configureShellPath, globalHarnessShimPath } from './global-bin.mjs';
 import { readSession, writeSession } from './session.mjs';
 import { loadPolicy } from './policy.mjs';
-import { createStyle, keyWidthFor, EXIT } from './style.mjs';
+import { createStyle, keyWidthFor, clampNote, EXIT } from './style.mjs';
 
 // One renderer per process, bound to stdout's real capabilities.
 // --no-color / NO_COLOR / non-TTY all degrade to the ascii surface.
@@ -242,12 +242,15 @@ export async function cmdDoctor(argv) {
     if (shown.length) {
       const keyWidth = keyWidthFor(shown.map((c) => c.id));
       for (const c of shown) {
+        // The arrow already says "do this" — drop a redundant Run: prefix,
+        // and keep the pointer to one glance unless --verbose asks for all.
+        const hint = c.pass ? undefined : String(c.hint ?? '').replace(/^Run:\s*/i, '');
         console.log(
           ui.line({
             state: c.pass ? 'ok' : c.optional ? 'warn' : 'error',
             key: c.id,
             value: c.name,
-            next: c.pass ? undefined : c.hint,
+            next: hint && !flags.verbose ? clampNote(hint) : hint,
             keyWidth,
           })
         );

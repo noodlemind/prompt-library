@@ -145,3 +145,13 @@ export function createStyle({
 export function keyWidthFor(keys, min = 10) {
   return Math.max(min, ...[...keys].map((k) => String(k).length));
 }
+
+/**
+ * A row's note or next is one glance, not a report. Clamp long tails and
+ * point at --verbose for the rest; verbose surfaces render the full text.
+ */
+export function clampNote(text, max = 160) {
+  const s = String(text ?? '');
+  if (s.length <= max) return s;
+  return `${s.slice(0, max - 1).trimEnd()}… (--verbose for full)`;
+}
