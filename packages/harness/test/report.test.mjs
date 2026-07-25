@@ -31,8 +31,8 @@ test('report ranks token sinks by event type descending', () => {
 test('renderReport is answer-first and lists sinks', () => {
   const report = buildReport({ workspace: os.tmpdir(), events: [ev('orient', 's1', 400)] });
   const text = renderReport(report);
-  assert.match(text.split('\n')[0], /^harness report: ~\d+ tokens/);
-  assert.match(text, /Top token sinks/);
+  assert.match(text.split('\n')[0], /^report\s+~[\d,]+ tokens/);
+  assert.match(text, /^sinks\s+\d+ event type/m);
   assert.match(text, /orient/);
 });
 
@@ -81,7 +81,7 @@ test('harness report CLI prints answer-first text and --json is compact', () => 
 
   const human = spawnSync(process.execPath, [binPath, 'report', '--workspace', workspace], { encoding: 'utf8' });
   assert.equal(human.status, 0, human.stderr);
-  assert.match(human.stdout, /^harness report: ~\d+ tokens/m);
+  assert.match(human.stdout, /^report\s+~[\d,]+ tokens/m);
 
   const json = spawnSync(process.execPath, [binPath, 'report', '--workspace', workspace, '--json'], { encoding: 'utf8' });
   assert.equal(json.stdout.trim().split('\n').length, 1, 'json is compact');
@@ -118,7 +118,7 @@ test('report surfaces per-session performance from host metrics', () => {
   assert.equal(report.sessionTotals.premiumRequests, 3);
   assert.equal(report.sessionTotals.apiDurationMs, 42000);
   const text = renderReport(report);
-  assert.match(text, /Local session performance/);
+  assert.match(text, /^sessions\s+\d+ · /m);
   assert.match(text, /sess1234/); // truncated session id
   assert.match(text, /gpt-5\.4/);
   assert.match(text, /75%/); // cache ratio rendered as percent

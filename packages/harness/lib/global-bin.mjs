@@ -32,8 +32,10 @@ const COPILOT_HOME = process.env.COPILOT_HOME || path.join(os.homedir(), '.copil
 const bin = path.join(COPILOT_HOME, '.harness-bin', 'bin', 'harness.mjs');
 
 if (!fs.existsSync(bin)) {
-  console.error('[harness] Global harness runtime missing at ' + bin);
-  console.error('Fix: run harness install  (npx @dev-kit/harness install, npm install -g @dev-kit/harness, or local: node packages/harness/bin/harness.mjs install)');
+  console.error('[x] E_NO_RUNTIME');
+  console.error('  global harness runtime missing at ' + bin);
+  console.error('  -> fix   harness install  (npx @dev-kit/harness install | npm install -g @dev-kit/harness | local: node packages/harness/bin/harness.mjs install)');
+  console.error('  exit 1');
   process.exit(1);
 }
 

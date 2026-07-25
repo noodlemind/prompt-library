@@ -121,8 +121,10 @@ function resolveTarget() {
 
 const target = resolveTarget();
 if (!target) {
-  console.error('[harness] Global harness not installed.');
-  console.error('Fix: harness install  (npx @dev-kit/harness install | npm install -g @dev-kit/harness | local node packages/harness/bin/harness.mjs install)');
+  console.error('[x] E_NO_HARNESS_BIN');
+  console.error('  global harness not installed');
+  console.error('  -> fix   harness install  (npx @dev-kit/harness install | npm install -g @dev-kit/harness | local: node packages/harness/bin/harness.mjs install)');
+  console.error('  exit 1');
   process.exit(1);
 }
 

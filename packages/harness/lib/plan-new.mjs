@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { createStyle } from './style.mjs';
 
 const TYPES = ['feat', 'fix', 'docs', 'refactor', 'chore'];
 const RISKS = ['green', 'amber', 'red'];
@@ -170,6 +171,10 @@ export async function cmdPlanNew(argv) {
     fs.writeFileSync(full, content, 'utf8');
   }
   if (json) console.log(JSON.stringify({ path: rel, created: !dryRun }));
-  else console.log(`${dryRun ? 'would create' : 'created'} ${rel}\n  next: harness gate --phase implement --plan ${rel} --json`);
+  else {
+    const ui = createStyle();
+    console.log(ui.line({ state: 'ok', key: 'plan-new', value: dryRun ? `would create ${rel}` : rel }));
+    console.log(ui.paint('muted', `${ui.arrow} harness gate --phase implement --plan ${rel} --json`));
+  }
   return 0;
 }
