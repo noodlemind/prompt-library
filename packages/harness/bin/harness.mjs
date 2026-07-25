@@ -22,7 +22,7 @@ import {
   cmdReport,
 } from '../lib/commands.mjs';
 import { cmdPlanNew } from '../lib/plan-new.mjs';
-import { createStyle, EXIT } from '../lib/style.mjs';
+import { createStyle, keyWidthFor, EXIT } from '../lib/style.mjs';
 
 const [, , command = 'help', ...args] = process.argv;
 // This renderer only writes error blocks, which go to stderr — detect there.
@@ -166,31 +166,32 @@ const CATALOG = [
 
 const ALL_COMMANDS = CATALOG.flatMap((g) => g.commands);
 
-// Help is the front door: the same ledger grammar as every command.
-// The overview names every job; `harness help <command>` holds the detail.
+// Help is the front door: the same ledger grammar as every command, and it
+// fits in a glance. One row per group; `harness help <command>` holds the
+// job, usage, and options of each command.
 function renderHelp() {
   const lines = [];
   lines.push(`harness ${out.paint('muted', '— Adaptive Engineer Harness for GitHub Copilot')}`);
   lines.push(out.paint('muted', '@dev-kit/harness · VS Code · CLI · IntelliJ'));
   lines.push('');
   lines.push(`Usage: harness ${out.paint('muted', '<command> [options]')}`);
-  const cmdWidth = Math.max(...ALL_COMMANDS.map((c) => c.name.length));
+  lines.push('');
+  const keyWidth = keyWidthFor([...CATALOG.map((g) => g.group), 'options'], 8);
   for (const { group, commands } of CATALOG) {
-    lines.push('');
-    lines.push(out.paint('muted', group));
-    for (const c of commands) {
-      lines.push(`  ${out.line({ key: c.name, value: c.desc, keyWidth: cmdWidth })}`);
-    }
+    lines.push(
+      out.line({ key: group, value: commands.map((c) => c.name).join(' · '), keyWidth })
+    );
   }
+  lines.push(
+    out.line({
+      key: 'options',
+      value: GLOBAL_OPTIONS.map(([o]) => o.split(/[, ]/)[0]).join(' · '),
+      keyWidth,
+    })
+  );
   lines.push('');
-  lines.push(out.paint('muted', 'options — global'));
-  const optWidth = Math.max(...GLOBAL_OPTIONS.map(([o]) => o.length));
-  for (const [opt, desc] of GLOBAL_OPTIONS) {
-    lines.push(`  ${opt.padEnd(optWidth)}  ${out.paint('muted', desc)}`);
-  }
-  lines.push('');
-  lines.push(out.paint('muted', `${out.arrow} harness help <command>   usage and options for one command`));
-  lines.push(out.paint('muted', `${out.arrow} docs   @dev-kit/harness README · harness-tool-contract.md · npm install -g @dev-kit/harness@latest`));
+  lines.push(out.paint('muted', `${out.arrow} harness help <command>   job, usage, and options for one command`));
+  lines.push(out.paint('muted', `${out.arrow} docs   @dev-kit/harness README · harness-tool-contract.md`));
   return lines.join('\n');
 }
 
