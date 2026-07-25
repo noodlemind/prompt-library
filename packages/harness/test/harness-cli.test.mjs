@@ -472,8 +472,8 @@ test('lifecycle events carry gen_ai.usage token estimates and events --summary r
 
   const summary = runHarness(['events', '--summary', '--workspace', workspace]);
   assert.equal(summary.status, 0);
-  assert.match(summary.stdout, /tokens \(est\): in=\d+ out=\d+ total=\d+/);
-  assert.match(summary.stdout, /orient: \d+/);
+  assert.match(summary.stdout, /tokens\s+in=\d+ out=\d+ total=\d+ · est/);
+  assert.match(summary.stdout, /orient\s+\d+/);
 });
 
 test('gate human output is answer-first and hides passing checks unless verbose', () => {
@@ -485,12 +485,13 @@ test('gate human output is answer-first and hides passing checks unless verbose'
   const terse = runHarness(['gate', '--workspace', workspace]);
   assert.equal(terse.status, 0, terse.stderr);
   const lines = terse.stdout.trim().split('\n');
-  assert.match(lines[0], /^harness gate: (PASS|FAIL)/);
-  assert.ok(!/^PASS {2}C1/m.test(terse.stdout), 'passing checks are hidden by default');
-  assert.match(terse.stdout, /^next: /m);
+  // Piped output degrades to the ascii surface: [ok]/[x] glyph, -> arrow.
+  assert.match(lines[0], /^(\[ok\]|\[x\])\s+gate\s+(pass|blocked)/);
+  assert.ok(!/^\[ok\]\s+C1/m.test(terse.stdout), 'passing checks are hidden by default');
+  assert.match(terse.stdout, /^-> /m);
 
   const verbose = runHarness(['gate', '--workspace', workspace, '--verbose']);
-  assert.match(verbose.stdout, /PASS {2}C1/);
+  assert.match(verbose.stdout, /^\[ok\]\s+C1/m);
 });
 
 test('json output is compact by default and pretty only with --verbose', () => {
@@ -1834,8 +1835,8 @@ test('harness verify passes named checks, validates scope, and writes evidence',
 
   // Human output ends with an actionable next command on success (AC30).
   const human = runHarness(['verify', '--plan', plan, '--base', 'HEAD', '--workspace', workspace]);
-  assert.match(human.stdout, /^harness verify: PASSED/m);
-  assert.match(human.stdout, /^next: harness compound/m);
+  assert.match(human.stdout, /^\[ok\]\s+verify\s+passed/m);
+  assert.match(human.stdout, /^-> harness compound/m);
 });
 
 test('harness verify checks only tasks in the current plan phase', () => {

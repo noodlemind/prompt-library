@@ -93,7 +93,21 @@ to Deliver before editing.
 
 ### Options
 
-`--dry-run`, `--verbose`, `--json`, `--workspace <path>`, `--copilot-home <path>`, `--query <text>`, `--phase implement|verify`, `--plan <path>`, `--base <git-ref>`, `--enforcement observe|warn|enforce`, `--strict-intent`, `--no-events`, `--host vscode`, `--session <id>`, `--summary`, `--failures`, `--limit <n>`, `-c <collection>`, `--min-score <n>`, `--docid <id>`, `--path <rel>`, `--lines <n>`, `--max-bytes <n>`
+`--dry-run`, `--verbose`, `--json`, `--no-color`, `--workspace <path>`, `--copilot-home <path>`, `--query <text>`, `--phase implement|verify`, `--plan <path>`, `--base <git-ref>`, `--enforcement observe|warn|enforce`, `--strict-intent`, `--no-events`, `--host vscode`, `--session <id>`, `--summary`, `--failures`, `--limit <n>`, `-c <collection>`, `--min-score <n>`, `--docid <id>`, `--path <rel>`, `--lines <n>`, `--max-bytes <n>`
+
+### Output grammar (one grammar, two readers)
+
+Every human-facing line is a column-stable ledger row — `glyph key value · note → next` —
+so it reads as a table to the eye and splits on whitespace for a parser. States:
+`✓` ok, `!` warn, `✗` error (`[ok]`/`[!]`/`[x]` when piped or under `NO_COLOR`/`--no-color`;
+`→` degrades to `->`). Color carries meaning only (green ok, amber warn, red error, muted
+notes); everything nominal is plain ink. Commands close with a tally
+(`2 ok · 1 warn · 1 err → exit 6`), and failures render an error block:
+code, message, one `→ fix`, and the exit. `--json` output is unstyled and unchanged.
+
+Stable exit codes: `0` ok · `2` usage · `3` not initialized · `4` needs approval ·
+`5` sync conflict · `6` doctor failed · `7` network · `130` interrupted.
+(Gate/verify/compound keep their documented policy-driven exit behavior.)
 
 Plans use `plan_schema: 1` and name checks under `verification.required`; commands are trusted argv arrays in `.github/harness/checks.yaml`. Plan validation and the implement gate reject missing criterion mappings, pre-completed `planned` work, and obvious output/check mismatches such as schema validation for documentation-only outputs. `verify` repeats readiness and does not execute named checks when it fails. Verification outcomes are `passed`, `failed`, or `inconclusive`. Observe/warn change rollout exit behavior only, never the recorded outcome.
 

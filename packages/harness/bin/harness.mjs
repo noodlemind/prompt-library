@@ -22,8 +22,11 @@ import {
   cmdReport,
 } from '../lib/commands.mjs';
 import { cmdPlanNew } from '../lib/plan-new.mjs';
+import { createStyle, EXIT } from '../lib/style.mjs';
 
 const [, , command = 'help', ...args] = process.argv;
+// This renderer only writes error blocks, which go to stderr — detect there.
+const ui = createStyle({ argv: args, stream: process.stderr });
 
 const HELP = `
 harness — Adaptive Engineer Harness for GitHub Copilot (VS Code, CLI, IntelliJ)
@@ -61,6 +64,7 @@ Options:
   --dry-run              Print actions without writing
   --verbose, -v          Per-file logging
   --json                 JSON output
+  --no-color             Plain ascii output (also honors NO_COLOR; auto when piped)
   --copilot-home <path>  Override ~/.copilot
   --target vscode,cli,intellij
   --autonomy full|balanced|strict
@@ -162,15 +166,44 @@ async function main() {
       case 'resolve':
         code = await cmdResolve(args);
         break;
-      default:
-        console.error(`Unknown command: ${command}\n`);
-        console.log(HELP);
-        code = 1;
+      default: {
+        const error = {
+          code: 'E_USAGE',
+          message: `unknown command: ${command}`,
+          hint: 'harness help',
+          exit: EXIT.usage,
+        };
+        if (args.includes('--json')) {
+          console.error(JSON.stringify({ ok: false, error }));
+        } else {
+          for (const l of ui.errorBlock({ ...error, fix: error.hint })) {
+            console.error(l);
+          }
+        }
+        code = EXIT.usage;
+      }
     }
   } catch (err) {
-    console.error(`[harness] ${err.message}`);
+    const exit = Number.isInteger(err.exit) ? err.exit : 1;
+    if (args.includes('--json')) {
+      console.error(
+        JSON.stringify({
+          ok: false,
+          error: { code: err.code || 'E_UNEXPECTED', message: err.message, hint: err.hint, exit },
+        })
+      );
+    } else {
+      for (const l of ui.errorBlock({
+        code: err.code || 'E_UNEXPECTED',
+        message: err.message,
+        fix: err.hint,
+        exit,
+      })) {
+        console.error(l);
+      }
+    }
     if (process.env.HARNESS_DEBUG) console.error(err);
-    code = 1;
+    code = exit;
   }
   process.exit(code);
 }

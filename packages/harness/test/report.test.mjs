@@ -98,7 +98,7 @@ test('harness report --check exits non-zero on a budget breach', () => {
     env: { ...process.env, COPILOT_HOME: path.join(workspace, 'no-copilot-home') },
   });
   assert.equal(check.status, 1, check.stdout);
-  assert.match(check.stdout, /FAIL — budget breaches/);
+  assert.match(check.stdout, /^\[x\]\s+report\s+budget breach/m);
 });
 
 test('report surfaces per-session performance from host metrics', () => {
