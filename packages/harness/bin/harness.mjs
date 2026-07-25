@@ -27,81 +27,102 @@ import { createStyle, EXIT } from '../lib/style.mjs';
 const [, , command = 'help', ...args] = process.argv;
 // This renderer only writes error blocks, which go to stderr — detect there.
 const ui = createStyle({ argv: args, stream: process.stderr });
+// Help writes to stdout — its own capability detection.
+const out = createStyle({ argv: args });
 
-const HELP = `
-harness — Adaptive Engineer Harness for GitHub Copilot (VS Code, CLI, IntelliJ)
+const COMMANDS = [
+  ['install', '[options]', 'hydrate skills, agents, and team knowledge globally'],
+  ['upgrade', '[options]', 're-hydrate and purge retired primitives'],
+  ['doctor', '[options]', 'health checks · --host vscode adds installed-hook probes'],
+  ['status', '[options]', 'installed version, home, tracked files'],
+  ['index', '[options]', 'rebuild knowledge index (stamps HEAD) · --status reports drift'],
+  ['plan-new', '--type feat --slug <slug> --intent "..."', 'scaffold a gate-ready plan'],
+  ['orient', '[--query "task summary"]', 'context pack for a task'],
+  ['gate', '[--phase implement|verify]', 'edit preconditions before editFiles'],
+  ['verify', '--plan docs/plans/file.md', 'run trusted named checks and capture evidence'],
+  ['recall', '"search terms" [options]', 'search team knowledge'],
+  ['get', '[--docid id | --path rel/path]', 'bounded doc excerpt'],
+  ['validate-plan', '[--plan docs/plans/file.md]', 'plan readiness checks'],
+  ['compound', '[options]', 'record learning from passed evidence'],
+  ['events', '[options]', 'session telemetry'],
+  // AC14: harness report [--sync] [--global] [--check] [--json] stays documented.
+  ['report', '[--sync] [--global] [--check] [--json]', 'token-efficiency report from telemetry'],
+  ['init-repo', '[options]', 'seed the .harness workspace in a product repo'],
+  ['resolve', '[options]', 'print the resolved harness CLI path for agents'],
+  ['uninstall', '[options]', 'remove hydrated files tracked by the lock'],
+];
 
-Package name: @dev-kit/harness. Command name: harness.
+const OPTIONS = [
+  ['--dry-run', 'print actions without writing'],
+  ['--verbose, -v', 'per-file logging'],
+  ['--json', 'JSON output'],
+  ['--no-color', 'plain ascii output (also honors NO_COLOR; auto when piped)'],
+  ['--copilot-home <path>', 'override ~/.copilot'],
+  ['--target <t,..>', 'vscode,cli,intellij'],
+  ['--autonomy <mode>', 'full | balanced | strict'],
+  ['--configure-vscode', 'merge VS Code chat.* discovery settings'],
+  ['--configure-path', 'append ~/.copilot/bin to shell PATH (~/.zshrc, ~/.bashrc)'],
+  ['--force-profile', 'overwrite knowledge/profile.md'],
+  ['--force-knowledge-reset', 'overwrite knowledge/solutions (danger)'],
+  ['--workspace <path>', 'repo root (default: cwd)'],
+  ['--query <text>', 'agent/internal task summary for orient'],
+  ['--type <t>', 'plan-new: feat|fix|docs|refactor|chore'],
+  ['--slug <s>', 'plan-new: lowercase-hyphen slug'],
+  ['--intent <text>', 'plan-new: one-line intent'],
+  ['--impacted <a,b>', 'plan-new: comma-separated Impacted Files'],
+  ['--criteria <text>', 'plan-new: an acceptance criterion (repeatable)'],
+  ['--gap <id>:<path>', 'plan-new: capability gap → blocked-capability + governed primitive plan'],
+  ['--stdout', 'plan-new: print the plan instead of writing it'],
+  ['--phase <name>', 'gate: implement | verify'],
+  ['--strict-intent', 'gate: fail locked plans missing intent fields'],
+  ['--limit <n>', 'recall/orient result count (default 3)'],
+  ['-c, --collection <name>', 'recall/orient: filter by knowledge/collections.yaml'],
+  ['--min-score <n>', 'recall/orient minimum score (default 0.15)'],
+  ['--include-plans', 'recall: include matching plans'],
+  ['--docid <id>', 'get: manifest doc id'],
+  ['--path <rel>', 'get: relative file path'],
+  ['--lines <n>', 'get: max lines (default 40)'],
+  ['--max-bytes <n>', 'get: max excerpt bytes (default 2048)'],
+  ['--plan <path>', 'gate/verify/validate-plan/compound: explicit plan file'],
+  ['--base <git-ref>', 'verify: compare changed files to this git ref'],
+  ['--enforcement <mode>', 'observe | warn | enforce (default enforce)'],
+  ['--no-events', 'do not write .harness/events.jsonl'],
+  ['--host <name>', 'doctor: run host-specific checks (vscode)'],
+  ['--session <id>', 'events: filter by host session ID'],
+  ['--summary', 'events: print aggregate summary only'],
+  ['--failures', 'events: show failed or blocked events only'],
+];
 
-Usage:
-  harness install [options]
-  harness upgrade [options]
-  harness doctor [options]
-  harness status [options]
-  harness index [options]           Rebuild knowledge index (stamps HEAD)
-  harness index --status            Report knowledge-index freshness vs HEAD (read-only)
-  harness plan-new --type feat --slug <slug> --intent "..." [options]   Scaffold a gate-ready plan
-  harness orient [options] [--query "task summary"]
-  harness gate [options] [--phase implement|verify]
-  harness verify [options] --plan docs/plans/file.md
-  harness recall "search terms" [options]
-  harness get [options] [--docid id | --path rel/path]
-  harness validate-plan [options] [--plan docs/plans/file.md]
-  harness compound [options]
-  harness events [options]
-  harness report [--sync] [--global] [--check] [--json]   Token-efficiency report from telemetry
-  harness init-repo [options]
-  harness resolve [options]   Print resolved harness CLI path for agents
-  harness uninstall [options]
-
-Install the command:
-  npm install -g @dev-kit/harness@latest
-  # or from a prompt-library clone before publishing:
-  npm install -g ./packages/harness
-  # shim at ~/.copilot/bin/harness after harness install; add PATH: harness install --configure-path
-
-Options:
-  --dry-run              Print actions without writing
-  --verbose, -v          Per-file logging
-  --json                 JSON output
-  --no-color             Plain ascii output (also honors NO_COLOR; auto when piped)
-  --copilot-home <path>  Override ~/.copilot
-  --target vscode,cli,intellij
-  --autonomy full|balanced|strict
-  --configure-vscode     Merge VS Code chat.* discovery settings
-  --configure-path       Append ~/.copilot/bin to shell PATH (~/.zshrc, ~/.bashrc)
-  --force-profile        Overwrite knowledge/profile.md
-  --force-knowledge-reset  Overwrite knowledge/solutions (danger)
-  --workspace <path>     Repo root (default: cwd)
-  --query <text>         Agent/internal task summary for orient
-  --type <t>             plan-new: feat|fix|docs|refactor|chore
-  --slug <s>             plan-new: lowercase-hyphen slug
-  --intent <text>        plan-new: one-line intent
-  --impacted <a,b>       plan-new: comma-separated Impacted Files
-  --criteria <text>      plan-new: an acceptance criterion (repeatable)
-  --gap <id>:<path>      plan-new: capability gap → blocked-capability + governed primitive plan
-  --stdout               plan-new: print the plan instead of writing it
-  --phase <name>         gate: implement | verify
-  --strict-intent        gate: fail locked plans missing intent fields
-  --limit <n>            recall/orient result count (default 3)
-  -c, --collection <name>  recall/orient: filter by knowledge/collections.yaml
-  --min-score <n>        recall/orient minimum score (default 0.15)
-  --include-plans        recall: include matching plans
-  --docid <id>           get: manifest doc id
-  --path <rel>           get: relative file path
-  --lines <n>            get: max lines (default 40)
-  --max-bytes <n>        get: max excerpt bytes (default 2048)
-  --plan <path>          gate/verify/validate-plan/compound: explicit plan file
-  --base <git-ref>       verify: compare changed files to this git ref
-  --enforcement <mode>   observe | warn | enforce (default enforce)
-  --no-events            Do not write .harness/events.jsonl
-  --host <name>           doctor: run host-specific checks (vscode)
-  --session <id>          events: filter by host session ID
-  --summary               events: print aggregate summary only
-  --failures              events: show failed or blocked events only
-
-Docs: @dev-kit/harness README and the hydrated harness-tool-contract.md reference
-`.trim();
+// Help is the front door: the same ledger grammar as every command.
+// Names in ink, signatures and descriptions muted, sections a hairline apart.
+function renderHelp() {
+  const lines = [];
+  const section = (label) => {
+    lines.push('');
+    lines.push(out.paint('muted', label.toUpperCase()));
+  };
+  lines.push(`harness ${out.paint('muted', '— Adaptive Engineer Harness for GitHub Copilot (VS Code, CLI, IntelliJ)')}`);
+  lines.push(out.paint('muted', 'Package name: @dev-kit/harness. Command name: harness.'));
+  lines.push('');
+  lines.push(`Usage: harness ${out.paint('muted', '<command> [options]')}`);
+  section('commands');
+  const cmdWidth = Math.max(...COMMANDS.map(([c]) => c.length));
+  for (const [cmd, sig, desc] of COMMANDS) {
+    lines.push(out.line({ key: cmd, value: desc, note: sig, keyWidth: cmdWidth }).replace(/^/, '  '));
+  }
+  section('options');
+  const optWidth = Math.max(...OPTIONS.map(([o]) => o.length));
+  for (const [opt, desc] of OPTIONS) {
+    lines.push(`  ${opt.padEnd(optWidth)}  ${out.paint('muted', desc)}`);
+  }
+  section('install the command');
+  lines.push('  npm install -g @dev-kit/harness@latest');
+  lines.push(out.paint('muted', '  from a prompt-library clone: npm install -g ./packages/harness'));
+  lines.push(out.paint('muted', '  shim at ~/.copilot/bin/harness after harness install · PATH: harness install --configure-path'));
+  lines.push('');
+  lines.push(out.paint('muted', `${out.arrow} docs  @dev-kit/harness README and the hydrated harness-tool-contract.md reference`));
+  return lines.join('\n');
+}
 
 // Single error surface for both readers: the JSON envelope under --json,
 // the styled error block otherwise. Keeps the two failure paths from drifting.
@@ -120,7 +141,7 @@ async function main() {
       case 'help':
       case '--help':
       case '-h':
-        console.log(HELP);
+        console.log(renderHelp());
         break;
       case 'install':
         code = await cmdInstallOrUpgrade('install', args);
