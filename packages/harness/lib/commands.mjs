@@ -733,13 +733,13 @@ export async function cmdUninstall(argv) {
   const copilotHome = resolveCopilotHome(flags.copilotHome);
   const lock = readLock(copilotHome);
   if (!lock?.files?.length) {
-    for (const l of ui.errorBlock({
-      code: 'E_NOT_INSTALLED',
-      message: 'no lock file — nothing to uninstall',
-      fix: 'harness install',
-      exit: 1,
-    })) {
-      console.error(l);
+    const code = 'E_NOT_INSTALLED';
+    const message = 'no lock file — nothing to uninstall';
+    const hint = 'harness install';
+    if (flags.json) {
+      console.error(JSON.stringify({ ok: false, error: { code, message, hint, exit: 1 } }));
+    } else {
+      for (const l of ui.errorBlock({ code, message, fix: hint, exit: 1 })) console.error(l);
     }
     return 1;
   }

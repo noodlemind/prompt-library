@@ -103,9 +103,12 @@ so it reads as a table to the eye and splits on whitespace for a parser. States:
 `→` degrades to `->`). Color carries meaning only (green ok, amber warn, red error, muted
 notes); everything nominal is plain ink. Commands close with a tally
 (`2 ok · 1 warn · 1 err → exit 6`), and failures render an error block:
-code, message, one `→ fix`, and the exit. `--json` output is unstyled and unchanged.
+code, message, one `→ fix`, and the exit. `--json` output is unstyled; payload shapes are
+unchanged except `doctor --json`, which gains an additive `exit` field, and CLI failures,
+which emit `{ "ok": false, "error": { "code", "message", "hint", "exit" } }` on stderr.
 
-Stable exit codes: `0` ok · `2` usage · `3` not initialized · `4` needs approval ·
+Stable exit codes: `0` ok · `1` generic command failure (budget breach, uninstall/resolve
+errors, unexpected faults) · `2` usage · `3` not initialized · `4` needs approval ·
 `5` sync conflict · `6` doctor failed · `7` network · `130` interrupted.
 (Gate/verify/compound keep their documented policy-driven exit behavior.)
 

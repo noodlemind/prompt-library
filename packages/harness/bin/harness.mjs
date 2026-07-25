@@ -103,6 +103,16 @@ Options:
 Docs: @dev-kit/harness README and the hydrated harness-tool-contract.md reference
 `.trim();
 
+// Single error surface for both readers: the JSON envelope under --json,
+// the styled error block otherwise. Keeps the two failure paths from drifting.
+function emitError({ code, message, fix, exit }) {
+  if (args.includes('--json')) {
+    console.error(JSON.stringify({ ok: false, error: { code, message, hint: fix, exit } }));
+  } else {
+    for (const l of ui.errorBlock({ code, message, fix, exit })) console.error(l);
+  }
+}
+
 async function main() {
   let code = 0;
   try {
@@ -166,42 +176,18 @@ async function main() {
       case 'resolve':
         code = await cmdResolve(args);
         break;
-      default: {
-        const error = {
+      default:
+        emitError({
           code: 'E_USAGE',
           message: `unknown command: ${command}`,
-          hint: 'harness help',
+          fix: 'harness help',
           exit: EXIT.usage,
-        };
-        if (args.includes('--json')) {
-          console.error(JSON.stringify({ ok: false, error }));
-        } else {
-          for (const l of ui.errorBlock({ ...error, fix: error.hint })) {
-            console.error(l);
-          }
-        }
+        });
         code = EXIT.usage;
-      }
     }
   } catch (err) {
     const exit = Number.isInteger(err.exit) ? err.exit : 1;
-    if (args.includes('--json')) {
-      console.error(
-        JSON.stringify({
-          ok: false,
-          error: { code: err.code || 'E_UNEXPECTED', message: err.message, hint: err.hint, exit },
-        })
-      );
-    } else {
-      for (const l of ui.errorBlock({
-        code: err.code || 'E_UNEXPECTED',
-        message: err.message,
-        fix: err.hint,
-        exit,
-      })) {
-        console.error(l);
-      }
-    }
+    emitError({ code: err.code || 'E_UNEXPECTED', message: err.message, fix: err.hint, exit });
     if (process.env.HARNESS_DEBUG) console.error(err);
     code = exit;
   }
