@@ -39,8 +39,9 @@ export function finalizeWorkspace(ws, label = 'run') {
   }
   const diff = spawnSync('git', ['-C', ws, 'diff'], { encoding: 'utf8' }).stdout || '';
   const status = spawnSync('git', ['-C', ws, 'status', '--short'], { encoding: 'utf8' }).stdout || '';
-  console.log(`\n[keep] ${label} workspace: ${ws}`);
-  console.log(`[keep] git status:\n${status || '  (clean)'}`);
-  console.log(`[keep] git diff (validated mutation):\n${diff || '  (no tracked-file changes)'}`);
+  // Debug-only surface (HARNESS_EVAL_KEEP): ledger label rows, raw git payloads.
+  console.log(`\nkeep        ${label} workspace · ${ws}`);
+  console.log(`git status\n${status || '  (clean)'}`);
+  console.log(`git diff    (validated mutation)\n${diff || '  (no tracked-file changes)'}`);
   return ws;
 }

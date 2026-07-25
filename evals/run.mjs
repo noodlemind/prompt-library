@@ -23,17 +23,39 @@ const summary = summarize(results);
 if (json) {
   console.log(JSON.stringify({ summary, results }, null, 2));
 } else {
+  const { createStyle, keyWidthFor } = await import('../packages/harness/lib/style.mjs');
+  const ui = createStyle();
+  const allPass = !summary.failed && !summary.infrastructureErrors;
   console.log(
-    `evals: ${summary.passed}/${summary.total} pass` +
-      (summary.failed ? `, ${summary.failed} fail` : '') +
-      (summary.skipped ? `, ${summary.skipped} skipped` : '') +
-      (summary.infrastructureErrors ? `, ${summary.infrastructureErrors} infra-error` : '')
+    ui.line({
+      state: allPass ? 'ok' : 'error',
+      key: 'evals',
+      value:
+        `${summary.passed}/${summary.total} pass` +
+        (summary.failed ? ` · ${summary.failed} fail` : '') +
+        (summary.skipped ? ` · ${summary.skipped} skipped` : '') +
+        (summary.infrastructureErrors ? ` · ${summary.infrastructureErrors} infra-error` : ''),
+    })
   );
+  const keyWidth = keyWidthFor(results.map((r) => r.id));
   for (const r of results) {
-    const mark =
-      r.status === 'skipped' ? 'SKIP' : r.status === 'infrastructure_error' ? 'INFRA' : r.verdict === 'pass' ? 'PASS' : 'FAIL';
-    const label = r.reconstruction ? `${r.id} (reconstruction)` : r.id;
-    console.log(`  ${mark}  ${label}${r.reason ? ` — ${r.reason}` : ''}`);
+    const state =
+      r.status === 'skipped'
+        ? 'pending'
+        : r.status === 'infrastructure_error'
+          ? 'warn'
+          : r.verdict === 'pass'
+            ? 'ok'
+            : 'error';
+    console.log(
+      ui.line({
+        state,
+        key: r.id,
+        value: r.reconstruction ? 'reconstruction' : '',
+        note: r.reason,
+        keyWidth,
+      })
+    );
   }
 }
 
