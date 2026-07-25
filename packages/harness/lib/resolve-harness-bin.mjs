@@ -1,7 +1,7 @@
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { findHarnessOnPath, globalHarnessShimPath } from './global-bin.mjs';
+import { findHarnessOnPath, globalHarnessShimPath, INSTALL_FIX_HINT } from './global-bin.mjs';
 
 const HARNESS_REL = path.join('packages', 'harness', 'bin', 'harness.mjs');
 const NM_REL = path.join('node_modules', '@dev-kit', 'harness', 'bin', 'harness.mjs');
@@ -123,7 +123,7 @@ const target = resolveTarget();
 if (!target) {
   console.error('[x] E_NO_HARNESS_BIN');
   console.error('  global harness not installed');
-  console.error('  -> fix   harness install  (npx @dev-kit/harness install | npm install -g @dev-kit/harness | local: node packages/harness/bin/harness.mjs install)');
+  console.error('  -> fix   ${INSTALL_FIX_HINT}');
   console.error('  exit 1');
   process.exit(1);
 }

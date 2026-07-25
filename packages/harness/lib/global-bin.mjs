@@ -6,6 +6,11 @@ import { spawnSync } from 'child_process';
 const PATH_MARKER = '# @dev-kit/harness global bin';
 const PATH_EXPORT = 'export PATH="$HOME/.copilot/bin:$PATH"';
 
+// One fix hint for every generated standalone script (shim, workspace runner),
+// interpolated at generation time so the two surfaces cannot drift.
+export const INSTALL_FIX_HINT =
+  'harness install  (npx @dev-kit/harness install | npm install -g @dev-kit/harness | local: node packages/harness/bin/harness.mjs install)';
+
 export function globalBinDir(copilotHome) {
   return path.join(copilotHome, 'bin');
 }
@@ -34,7 +39,7 @@ const bin = path.join(COPILOT_HOME, '.harness-bin', 'bin', 'harness.mjs');
 if (!fs.existsSync(bin)) {
   console.error('[x] E_NO_RUNTIME');
   console.error('  global harness runtime missing at ' + bin);
-  console.error('  -> fix   harness install  (npx @dev-kit/harness install | npm install -g @dev-kit/harness | local: node packages/harness/bin/harness.mjs install)');
+  console.error('  -> fix   ${INSTALL_FIX_HINT}');
   console.error('  exit 1');
   process.exit(1);
 }

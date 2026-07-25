@@ -26,6 +26,7 @@ if (json) {
   const { createStyle, keyWidthFor } = await import('../packages/harness/lib/style.mjs');
   const ui = createStyle();
   const allPass = !summary.failed && !summary.infrastructureErrors;
+  const keyWidth = keyWidthFor(['evals', ...results.map((r) => r.id)]);
   console.log(
     ui.line({
       state: allPass ? 'ok' : 'error',
@@ -35,9 +36,9 @@ if (json) {
         (summary.failed ? ` · ${summary.failed} fail` : '') +
         (summary.skipped ? ` · ${summary.skipped} skipped` : '') +
         (summary.infrastructureErrors ? ` · ${summary.infrastructureErrors} infra-error` : ''),
+      keyWidth,
     })
   );
-  const keyWidth = keyWidthFor(results.map((r) => r.id));
   for (const r of results) {
     const state =
       r.status === 'skipped'
