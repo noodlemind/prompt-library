@@ -331,7 +331,7 @@ export async function cmdIndex(argv) {
 
   // Stamp the current git HEAD so `index --status` can measure drift later.
   const head = spawnSyncHead(workspace);
-  runIndexKnowledge({
+  const result = runIndexKnowledge({
     knowledgeRoot: fs.existsSync(knowledgeRoot) ? knowledgeRoot : null,
     workspace,
     copilotHome,
@@ -344,6 +344,20 @@ export async function cmdIndex(argv) {
     result: 'pass',
     exitCode: 0,
   });
+  if (flags.json) {
+    emitJson(flags, result);
+  } else {
+    const empty = result.entries === 0;
+    console.log(
+      ui.line({
+        state: 'ok',
+        key: 'index',
+        value: `${result.entries} entries · ${result.indexEntries ?? result.entries} postings`,
+        note: empty ? 'no solution docs under knowledge/solutions or docs/solutions yet' : undefined,
+        next: empty ? 'harness compound records the first learning' : undefined,
+      })
+    );
+  }
   return 0;
 }
 
