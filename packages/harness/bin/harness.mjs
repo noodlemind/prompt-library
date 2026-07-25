@@ -30,97 +30,186 @@ const ui = createStyle({ argv: args, stream: process.stderr });
 // Help writes to stdout — its own capability detection.
 const out = createStyle({ argv: args });
 
-const COMMANDS = [
-  ['install', '[options]', 'hydrate skills, agents, and team knowledge globally'],
-  ['upgrade', '[options]', 're-hydrate and purge retired primitives'],
-  ['doctor', '[options]', 'health checks · --host vscode adds installed-hook probes'],
-  ['status', '[options]', 'installed version, home, tracked files'],
-  ['index', '[options]', 'rebuild knowledge index (stamps HEAD) · --status reports drift'],
-  ['plan-new', '--type feat --slug <slug> --intent "..."', 'scaffold a gate-ready plan'],
-  ['orient', '[--query "task summary"]', 'context pack for a task'],
-  ['gate', '[--phase implement|verify]', 'edit preconditions before editFiles'],
-  ['verify', '--plan docs/plans/file.md', 'run trusted named checks and capture evidence'],
-  ['recall', '"search terms" [options]', 'search team knowledge'],
-  ['get', '[--docid id | --path rel/path]', 'bounded doc excerpt'],
-  ['validate-plan', '[--plan docs/plans/file.md]', 'plan readiness checks'],
-  ['compound', '[options]', 'record learning from passed evidence'],
-  ['events', '[options]', 'session telemetry'],
-  // AC14: harness report [--sync] [--global] [--check] [--json] stays documented.
-  ['report', '[--sync] [--global] [--check] [--json]', 'token-efficiency report from telemetry'],
-  ['init-repo', '[options]', 'seed the .harness workspace in a product repo'],
-  ['resolve', '[options]', 'print the resolved harness CLI path for agents'],
-  ['uninstall', '[options]', 'remove hydrated files tracked by the lock'],
+// The catalog: every command with its group, one-line job, usage signature,
+// and its own options. The overview shows groups and jobs; signatures and
+// options disclose progressively via `harness help <command>`.
+const GLOBAL_OPTIONS = [
+  ['--json', 'JSON output for machine readers'],
+  ['--dry-run', 'print actions without writing'],
+  ['--verbose, -v', 'full detail: per-file logging, all checks, unclamped hints'],
+  ['--no-color', 'plain ascii output (also honors NO_COLOR; auto when piped)'],
+  ['--workspace <path>', 'repo root (default: cwd)'],
+  ['--copilot-home <path>', 'override ~/.copilot'],
+  ['--no-events', 'do not write .harness/events.jsonl'],
 ];
 
-const OPTIONS = [
-  ['--dry-run', 'print actions without writing'],
-  ['--verbose, -v', 'per-file logging'],
-  ['--json', 'JSON output'],
-  ['--no-color', 'plain ascii output (also honors NO_COLOR; auto when piped)'],
-  ['--copilot-home <path>', 'override ~/.copilot'],
-  ['--target <t,..>', 'vscode,cli,intellij'],
-  ['--autonomy <mode>', 'full | balanced | strict'],
-  ['--configure-vscode', 'merge VS Code chat.* discovery settings'],
-  ['--configure-path', 'append ~/.copilot/bin to shell PATH (~/.zshrc, ~/.bashrc)'],
-  ['--force-profile', 'overwrite knowledge/profile.md'],
-  ['--force-knowledge-reset', 'overwrite knowledge/solutions (danger)'],
-  ['--workspace <path>', 'repo root (default: cwd)'],
-  ['--query <text>', 'agent/internal task summary for orient'],
-  ['--type <t>', 'plan-new: feat|fix|docs|refactor|chore'],
-  ['--slug <s>', 'plan-new: lowercase-hyphen slug'],
-  ['--intent <text>', 'plan-new: one-line intent'],
-  ['--impacted <a,b>', 'plan-new: comma-separated Impacted Files'],
-  ['--criteria <text>', 'plan-new: an acceptance criterion (repeatable)'],
-  ['--gap <id>:<path>', 'plan-new: capability gap → blocked-capability + governed primitive plan'],
-  ['--stdout', 'plan-new: print the plan instead of writing it'],
-  ['--phase <name>', 'gate: implement | verify'],
-  ['--strict-intent', 'gate: fail locked plans missing intent fields'],
-  ['--limit <n>', 'recall/orient result count (default 3)'],
-  ['-c, --collection <name>', 'recall/orient: filter by knowledge/collections.yaml'],
-  ['--min-score <n>', 'recall/orient minimum score (default 0.15)'],
-  ['--include-plans', 'recall: include matching plans'],
-  ['--docid <id>', 'get: manifest doc id'],
-  ['--path <rel>', 'get: relative file path'],
-  ['--lines <n>', 'get: max lines (default 40)'],
-  ['--max-bytes <n>', 'get: max excerpt bytes (default 2048)'],
-  ['--plan <path>', 'gate/verify/validate-plan/compound: explicit plan file'],
-  ['--base <git-ref>', 'verify: compare changed files to this git ref'],
-  ['--enforcement <mode>', 'observe | warn | enforce (default enforce)'],
-  ['--no-events', 'do not write .harness/events.jsonl'],
-  ['--host <name>', 'doctor: run host-specific checks (vscode)'],
-  ['--session <id>', 'events: filter by host session ID'],
-  ['--summary', 'events: print aggregate summary only'],
-  ['--failures', 'events: show failed or blocked events only'],
+const CATALOG = [
+  {
+    group: 'setup',
+    commands: [
+      { name: 'install', desc: 'hydrate skills, agents, and team knowledge globally',
+        sig: '[--configure-vscode] [--configure-path] [--target vscode,cli,intellij]',
+        options: [
+          ['--target <t,..>', 'vscode,cli,intellij'],
+          ['--autonomy <mode>', 'full | balanced | strict'],
+          ['--configure-vscode', 'merge VS Code chat.* discovery settings'],
+          ['--configure-path', 'append ~/.copilot/bin to shell PATH (~/.zshrc, ~/.bashrc)'],
+          ['--force-profile', 'overwrite knowledge/profile.md'],
+          ['--force-knowledge-reset', 'overwrite knowledge/solutions (danger)'],
+        ] },
+      { name: 'upgrade', desc: 're-hydrate and purge retired primitives',
+        sig: '[same options as install]',
+        options: [] },
+      { name: 'doctor', desc: 'health checks for install, hooks, and knowledge',
+        sig: '[--host vscode]',
+        options: [['--host <name>', 'run host-specific checks (vscode executes installed-hook probes)']] },
+      { name: 'status', desc: 'installed version, home, tracked files', sig: '', options: [] },
+      { name: 'uninstall', desc: 'remove hydrated files tracked by the lock', sig: '', options: [] },
+    ],
+  },
+  {
+    group: 'workspace',
+    commands: [
+      { name: 'init-repo', desc: 'seed the .harness workspace in a product repo', sig: '', options: [] },
+      { name: 'index', desc: 'rebuild knowledge index · --status reports drift',
+        sig: '[--status]',
+        options: [['--status', 'read-only freshness report vs HEAD (never rebuilds)']] },
+      { name: 'plan-new', desc: 'scaffold a gate-ready plan',
+        sig: '--type feat --slug <slug> --intent "..."',
+        options: [
+          ['--type <t>', 'feat|fix|docs|refactor|chore'],
+          ['--slug <s>', 'lowercase-hyphen slug'],
+          ['--intent <text>', 'one-line intent'],
+          ['--impacted <a,b>', 'comma-separated Impacted Files'],
+          ['--criteria <text>', 'an acceptance criterion (repeatable)'],
+          ['--gap <id>:<path>', 'capability gap → blocked-capability + governed primitive plan'],
+          ['--stdout', 'print the plan instead of writing it'],
+        ] },
+    ],
+  },
+  {
+    group: 'engineer loop',
+    commands: [
+      { name: 'orient', desc: 'context pack for a task',
+        sig: '[--query "task summary"]',
+        options: [
+          ['--query <text>', 'agent/internal task summary'],
+          ['--limit <n>', 'recall result count (default 3)'],
+          ['-c, --collection <name>', 'filter by knowledge/collections.yaml'],
+          ['--min-score <n>', 'minimum score (default 0.15)'],
+        ] },
+      { name: 'gate', desc: 'edit preconditions before editFiles',
+        sig: '[--phase implement|verify] [--plan <path>]',
+        options: [
+          ['--phase <name>', 'implement | verify'],
+          ['--plan <path>', 'explicit plan file'],
+          ['--strict-intent', 'fail locked plans missing intent fields'],
+          ['--enforcement <mode>', 'observe | warn | enforce (default enforce)'],
+        ] },
+      { name: 'verify', desc: 'run trusted named checks and capture evidence',
+        sig: '--plan docs/plans/file.md',
+        options: [
+          ['--plan <path>', 'plan file whose named checks run'],
+          ['--base <git-ref>', 'compare changed files to this git ref'],
+          ['--enforcement <mode>', 'observe | warn | enforce (default enforce)'],
+        ] },
+      { name: 'validate-plan', desc: 'plan readiness checks',
+        sig: '[--plan docs/plans/file.md]',
+        options: [
+          ['--plan <path>', 'explicit plan file'],
+          ['--enforcement <mode>', 'observe | warn | enforce (default enforce)'],
+        ] },
+      { name: 'compound', desc: 'record learning from passed evidence',
+        sig: '[--plan <path>]',
+        options: [['--plan <path>', 'explicit plan file']] },
+      { name: 'recall', desc: 'search team knowledge',
+        sig: '"search terms" [--limit <n>] [--include-plans]',
+        options: [
+          ['--limit <n>', 'result count (default 3)'],
+          ['-c, --collection <name>', 'filter by knowledge/collections.yaml'],
+          ['--min-score <n>', 'minimum score (default 0.15)'],
+          ['--include-plans', 'include matching plans'],
+        ] },
+      { name: 'get', desc: 'bounded doc excerpt',
+        sig: '[--docid <id> | --path <rel>]',
+        options: [
+          ['--docid <id>', 'manifest doc id'],
+          ['--path <rel>', 'relative file path'],
+          ['--lines <n>', 'max lines (default 40)'],
+          ['--max-bytes <n>', 'max excerpt bytes (default 2048)'],
+        ] },
+      { name: 'events', desc: 'session telemetry',
+        sig: '[--summary] [--failures] [--session <id>]',
+        options: [
+          ['--session <id>', 'filter by host session ID'],
+          ['--summary', 'aggregate summary only'],
+          ['--failures', 'failed or blocked events only'],
+          ['--limit <n>', 'event count (default 20)'],
+        ] },
+      { name: 'report', desc: 'token-efficiency report from telemetry',
+        // AC14: harness report [--sync] [--global] [--check] [--json] stays documented.
+        sig: '[--sync] [--global] [--check] [--json]',
+        options: [
+          ['--sync', 'merge workspace events into the global store first'],
+          ['--global', 'report across all synced workspaces'],
+          ['--check', 'exit non-zero on a budget breach (CI)'],
+        ] },
+    ],
+  },
+  {
+    group: 'utility',
+    commands: [
+      { name: 'resolve', desc: 'print the resolved harness CLI path for agents', sig: '', options: [] },
+    ],
+  },
 ];
+
+const ALL_COMMANDS = CATALOG.flatMap((g) => g.commands);
 
 // Help is the front door: the same ledger grammar as every command.
-// Names in ink, signatures and descriptions muted, sections a hairline apart.
+// The overview names every job; `harness help <command>` holds the detail.
 function renderHelp() {
   const lines = [];
-  const section = (label) => {
-    lines.push('');
-    lines.push(out.paint('muted', label.toUpperCase()));
-  };
-  lines.push(`harness ${out.paint('muted', '— Adaptive Engineer Harness for GitHub Copilot (VS Code, CLI, IntelliJ)')}`);
-  lines.push(out.paint('muted', 'Package name: @dev-kit/harness. Command name: harness.'));
+  lines.push(`harness ${out.paint('muted', '— Adaptive Engineer Harness for GitHub Copilot')}`);
+  lines.push(out.paint('muted', '@dev-kit/harness · VS Code · CLI · IntelliJ'));
   lines.push('');
   lines.push(`Usage: harness ${out.paint('muted', '<command> [options]')}`);
-  section('commands');
-  const cmdWidth = Math.max(...COMMANDS.map(([c]) => c.length));
-  for (const [cmd, sig, desc] of COMMANDS) {
-    lines.push(out.line({ key: cmd, value: desc, note: sig, keyWidth: cmdWidth }).replace(/^/, '  '));
+  const cmdWidth = Math.max(...ALL_COMMANDS.map((c) => c.name.length));
+  for (const { group, commands } of CATALOG) {
+    lines.push('');
+    lines.push(out.paint('muted', group));
+    for (const c of commands) {
+      lines.push(`  ${out.line({ key: c.name, value: c.desc, keyWidth: cmdWidth })}`);
+    }
   }
-  section('options');
-  const optWidth = Math.max(...OPTIONS.map(([o]) => o.length));
-  for (const [opt, desc] of OPTIONS) {
+  lines.push('');
+  lines.push(out.paint('muted', 'options — global'));
+  const optWidth = Math.max(...GLOBAL_OPTIONS.map(([o]) => o.length));
+  for (const [opt, desc] of GLOBAL_OPTIONS) {
     lines.push(`  ${opt.padEnd(optWidth)}  ${out.paint('muted', desc)}`);
   }
-  section('install the command');
-  lines.push('  npm install -g @dev-kit/harness@latest');
-  lines.push(out.paint('muted', '  from a prompt-library clone: npm install -g ./packages/harness'));
-  lines.push(out.paint('muted', '  shim at ~/.copilot/bin/harness after harness install · PATH: harness install --configure-path'));
   lines.push('');
-  lines.push(out.paint('muted', `${out.arrow} docs  @dev-kit/harness README and the hydrated harness-tool-contract.md reference`));
+  lines.push(out.paint('muted', `${out.arrow} harness help <command>   usage and options for one command`));
+  lines.push(out.paint('muted', `${out.arrow} docs   @dev-kit/harness README · harness-tool-contract.md · npm install -g @dev-kit/harness@latest`));
+  return lines.join('\n');
+}
+
+function renderCommandHelp(name) {
+  const c = ALL_COMMANDS.find((x) => x.name === name);
+  if (!c) return null;
+  const lines = [];
+  lines.push(`${c.name} ${out.paint('muted', `— ${c.desc}`)}`);
+  lines.push('');
+  lines.push(`Usage: harness ${c.name}${c.sig ? ` ${out.paint('muted', c.sig)}` : ''}`);
+  if (c.options.length) {
+    lines.push('');
+    const optWidth = Math.max(...c.options.map(([o]) => o.length));
+    for (const [opt, desc] of c.options) {
+      lines.push(`  ${opt.padEnd(optWidth)}  ${out.paint('muted', desc)}`);
+    }
+  }
+  lines.push('');
+  lines.push(out.paint('muted', `${out.arrow} global options   harness help`));
   return lines.join('\n');
 }
 
@@ -140,9 +229,26 @@ async function main() {
     switch (command) {
       case 'help':
       case '--help':
-      case '-h':
-        console.log(renderHelp());
+      case '-h': {
+        const topic = args.find((a) => !a.startsWith('-'));
+        if (topic) {
+          const detail = renderCommandHelp(topic);
+          if (detail) {
+            console.log(detail);
+          } else {
+            emitError({
+              code: 'E_USAGE',
+              message: `unknown command: ${topic}`,
+              fix: 'harness help',
+              exit: EXIT.usage,
+            });
+            code = EXIT.usage;
+          }
+        } else {
+          console.log(renderHelp());
+        }
         break;
+      }
       case 'install':
         code = await cmdInstallOrUpgrade('install', args);
         break;

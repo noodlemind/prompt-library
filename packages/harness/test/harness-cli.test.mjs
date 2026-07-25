@@ -102,7 +102,8 @@ test('help works from a clean repo checkout without installed package deps', () 
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /Usage:/);
   assert.match(result.stdout, /^  install\s/m);
-  assert.match(result.stdout, /Package name: @dev-kit\/harness\. Command name: harness\./);
+  assert.match(result.stdout, /@dev-kit\/harness/);
+  assert.match(result.stdout, /^harness /);
 });
 
 test('recall positional query excludes option values', () => {
