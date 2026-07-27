@@ -338,6 +338,17 @@ export async function cmdIndex(argv) {
     flags: { ...flags, headSha: head },
     log: logger,
   });
+  // Refresh the committed codebase map alongside the knowledge index.
+  try {
+    const { writeCodebaseMap } = await import('./repo-map/index.mjs');
+    const map = writeCodebaseMap({ workspace, dryRun: flags.dryRun });
+    if (map) {
+      result.codebaseMap = map;
+      logger(`wrote ${map.path} (~${map.tokens} tokens)`);
+    }
+  } catch {
+    // Advisory: never fail index on map generation.
+  }
   writeEvent(workspace, flags, {
     type: 'index',
     command: 'index',

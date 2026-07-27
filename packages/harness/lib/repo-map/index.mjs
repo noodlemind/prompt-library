@@ -37,7 +37,7 @@ function readFileSafe(workspace, rel) {
  * density, and — when a query is given — boosted by normalized-token overlap
  * with the path and symbols, so orientation is code-relevant to the task.
  */
-export function buildRepoMap({ workspace, query = '', maxTokens = DEFAULT_MAX_TOKENS, extract = lexicalExtract } = {}) {
+export function buildRepoMap({ workspace, query = '', maxTokens = DEFAULT_MAX_TOKENS, extract = lexicalExtract, title = 'Repo Map' } = {}) {
   const { files, total } = trackedSourceFiles(workspace);
   if (!files.length) return { files: [], body: '', tokens: 0, empty: true };
 
@@ -75,7 +75,7 @@ export function buildRepoMap({ workspace, query = '', maxTokens = DEFAULT_MAX_TO
   scored.sort((a, b) => b.score - a.score || a.rel.localeCompare(b.rel));
 
   const lines = [
-    '# Repo Map',
+    `# ${title}`,
     '',
     `> Deterministic lexical map of ${total} tracked source files${total > files.length ? ` (top ${files.length} scanned)` : ''}.${query ? ` Ranked for: "${query}".` : ''}`,
     '',
@@ -91,4 +91,20 @@ export function buildRepoMap({ workspace, query = '', maxTokens = DEFAULT_MAX_TO
 
   const body = lines.join('\n');
   return { files: selected, body, tokens: estimateTokens(body), empty: false, totalFiles: total };
+}
+
+/**
+ * Write the committed, query-less codebase map to docs/codebase-map.md.
+ * Deterministic and timestamp-free so the committed file only changes when
+ * the code structure changes — a durable cold-start orientation for agents.
+ */
+export function writeCodebaseMap({ workspace, dryRun = false, maxTokens = 2500 }) {
+  const map = buildRepoMap({ workspace, query: '', maxTokens, title: 'Codebase Map' });
+  if (map.empty) return null;
+  const rel = path.join('docs', 'codebase-map.md');
+  if (!dryRun) {
+    fs.mkdirSync(path.join(workspace, 'docs'), { recursive: true });
+    fs.writeFileSync(path.join(workspace, rel), map.body + '\n', 'utf8');
+  }
+  return { path: rel.split(path.sep).join('/'), tokens: map.tokens, files: map.files.length };
 }

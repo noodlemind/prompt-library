@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { ensureHarnessDir } from './session.mjs';
 import { writeHarnessRunner } from './resolve-harness-bin.mjs';
+import { writeCodebaseMap } from './repo-map/index.mjs';
 
 const AGENT_CONTEXT_STUB = `# Agent Context
 
@@ -88,6 +89,17 @@ export function runInitRepo({ workspace, flags, log }) {
       stats.created.push(`.github/harness/${name}`);
       log(`created .github/harness/${name}`);
     }
+  }
+
+  // Committed cold-start orientation — advisory: never fail init on it.
+  try {
+    const map = writeCodebaseMap({ workspace, dryRun: flags.dryRun });
+    if (map) {
+      stats.created.push(map.path);
+      log(`wrote ${map.path} (committed orientation map, ~${map.tokens} tokens)`);
+    }
+  } catch {
+    log('skip docs/codebase-map.md (map generation failed)');
   }
 
   const manifest = path.join(knowledgeDir, 'manifest.yaml');
