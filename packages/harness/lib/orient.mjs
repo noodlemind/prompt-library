@@ -10,6 +10,7 @@ import { extractGoalFromPlan } from './plan-goal.mjs';
 import { ensureHarnessDir, readSession, writeSession } from './session.mjs';
 import { pickActivePlan, listPlanRels } from './plan-parse.mjs';
 import { parseQueryFromArgv } from './argv.mjs';
+import { rankLearnings } from './knowledge/retrieve.mjs';
 
 export function runOrient({ workspace, copilotHome, flags, query }) {
   const q = query || flags.query || '';
@@ -61,6 +62,15 @@ export function runOrient({ workspace, copilotHome, flags, query }) {
     query: q,
   });
 
+  // Learnings (semantic memory): read-only, advisory, deterministic. Never
+  // block orientation on the knowledge store.
+  let learnings = [];
+  try {
+    learnings = rankLearnings({ workspace, query: q, limit: 3 });
+  } catch {
+    learnings = [];
+  }
+
   // Deterministic, query-ranked code orientation written alongside the pack.
   // Advisory only — never block orientation if map generation or the write fails.
   let repoMapRef = null;
@@ -91,6 +101,7 @@ export function runOrient({ workspace, copilotHome, flags, query }) {
   const packBody = buildContextPack({
     query: q,
     recall,
+    learnings,
     plans,
     activePlan: active
       ? {
@@ -125,6 +136,7 @@ export function runOrient({ workspace, copilotHome, flags, query }) {
 
   return {
     recall,
+    learnings,
     plans,
     activePlan: active ? { path: active.path, status: active.status, plan_lock: active.plan_lock } : null,
     planGoal: planGoal

@@ -5,6 +5,7 @@ export const CONTEXT_PACK_MAX_BYTES = MAX_BYTES;
 export function buildContextPack({
   query,
   recall,
+  learnings,
   plans,
   activePlan,
   planGoal,
@@ -62,6 +63,17 @@ export function buildContextPack({
       '## Repo map (code orientation)',
       `- Read \`${repoMapRef.path}\` — ${repoMapRef.files} of ${repoMapRef.totalFiles} source files, ranked for this query. Start there instead of searching the tree.`
     );
+  }
+
+  // Semantic memory: attributed by id so behavior driven by a learning is
+  // always traceable; insight-derived claims carry the advisory fence.
+  if (learnings?.length) {
+    lines.push('', '## Learnings (memory)');
+    lines.push(`Applied learnings: ${learnings.map((l) => l.id).join(', ')}`);
+    for (const l of learnings) {
+      const fence = l.advisory ? ' [unverified memory — advisory]' : '';
+      lines.push(`- [${l.id}]${fence} ${l.trigger} → ${l.claimLine}`);
+    }
   }
 
   lines.push('', '## Next tools', ...(nextTools || []).map((t) => `- \`${t}\``));
