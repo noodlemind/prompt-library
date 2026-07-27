@@ -16,6 +16,7 @@ import {
   cmdEvents,
   cmdValidatePlan,
   cmdCompound,
+  cmdConsolidate,
   cmdGet,
   cmdUninstall,
   cmdResolve,
@@ -167,6 +168,18 @@ const CATALOG = [
     ],
   },
   {
+    group: 'knowledge',
+    commands: [
+      { name: 'consolidate', desc: 'episode→learning debt, work packet, and validated apply',
+        sig: '[--status | --candidates | --apply --ops <path>]',
+        options: [
+          ['--status', 'debt vs threshold, quarantine, promotion candidates (default)'],
+          ['--candidates', 'deterministic work packet for the consolidation skill'],
+          ['--apply --ops <path>', 'validate and apply an ops JSON (sole writer)'],
+        ] },
+    ],
+  },
+  {
     group: 'utility',
     commands: [
       { name: 'resolve', desc: 'print the resolved harness CLI path for agents', sig: '', options: [] },
@@ -301,6 +314,9 @@ async function main() {
         break;
       case 'compound':
         code = await cmdCompound(args);
+        break;
+      case 'consolidate':
+        code = await cmdConsolidate(args);
         break;
       case 'events':
         code = await cmdEvents(args);

@@ -16,6 +16,7 @@ export const EVENT_TYPES = new Set([
   'skill_activation',
   'verify',
   'compound',
+  'consolidate',
   'session_end',
 ]);
 

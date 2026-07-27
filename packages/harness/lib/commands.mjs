@@ -751,6 +751,91 @@ export async function cmdCompound(argv) {
   return result.exitCode;
 }
 
+export async function cmdConsolidate(argv) {
+  const flags = parseFlags(argv);
+  const workspace = path.resolve(flags.workspace);
+  const copilotHome = resolveCopilotHome(flags.copilotHome);
+
+  if (argv.includes('--apply')) {
+    const { applyOps } = await import('./knowledge/apply.mjs');
+    if (!flags.ops) {
+      throw Object.assign(new Error('--apply requires --ops <path> (the skill-emitted operations JSON)'), {
+        code: 'E_USAGE',
+        hint: 'harness consolidate --apply --ops ops.json',
+        exit: EXIT.usage,
+      });
+    }
+    const result = applyOps({ workspace, opsPath: path.resolve(flags.ops), dryRun: flags.dryRun });
+    writeEvent(workspace, flags, {
+      type: 'consolidate',
+      command: 'consolidate',
+      result: result.exitCode === 0 ? 'pass' : 'fail',
+      exitCode: result.exitCode,
+      blockedReason: result.rejected?.[0]?.reason || null,
+    });
+    if (flags.json) {
+      emitJson(flags, result);
+    } else if (result.exitCode === 0) {
+      console.log(
+        ui.line({
+          state: 'ok',
+          key: 'apply',
+          value: result.applied.map((a) => `${a.op.toLowerCase()} ${a.id || ''}`.trim()).join(' · ') || 'no ops',
+          note: result.committed ? 'committed to knowledge store' : undefined,
+        })
+      );
+    } else {
+      console.log(
+        ui.line({
+          state: 'error',
+          key: 'apply',
+          value: `rejected · ${result.rejected?.[0]?.reason || 'invalid ops'}`,
+        })
+      );
+    }
+    return result.exitCode;
+  }
+
+  if (argv.includes('--candidates')) {
+    const { consolidateCandidates } = await import('./knowledge/consolidate.mjs');
+    const packet = consolidateCandidates({ workspace, copilotHome });
+    writeEvent(workspace, flags, { type: 'consolidate', command: 'consolidate', result: 'pass', exitCode: 0 });
+    if (flags.json) {
+      emitJson(flags, packet);
+    } else {
+      console.log(
+        ui.line({
+          state: 'ok',
+          key: 'candidates',
+          value: `${packet.clusters.length} clusters · ${packet.learnings.length} active learnings`,
+          note: 'JSON packet is the contract — use --json for the skill',
+        })
+      );
+      printNext('emit ops JSON, then harness consolidate --apply --ops <path>');
+    }
+    return 0;
+  }
+
+  // Default: --status (deterministic debt gauge, zero model cost).
+  const { consolidateStatus } = await import('./knowledge/consolidate.mjs');
+  const status = consolidateStatus({ workspace, copilotHome });
+  writeEvent(workspace, flags, { type: 'consolidate', command: 'consolidate', result: 'pass', exitCode: 0 });
+  if (flags.json) {
+    emitJson(flags, status);
+  } else {
+    console.log(
+      ui.line({
+        state: status.due ? 'warn' : 'ok',
+        key: 'consolidate',
+        value: `debt ${status.debt}/${status.threshold}`,
+        note: `${status.learnings.active} active learnings${status.promotionCandidates.length ? ` · ${status.promotionCandidates.length} promotion candidate${status.promotionCandidates.length === 1 ? '' : 's'}` : ''}`,
+      })
+    );
+    printNext(status.nextTools?.[0]);
+  }
+  return 0;
+}
+
 export async function cmdGet(argv) {
   const { runGet } = await import('./get-cmd.mjs');
   const flags = parseFlags(argv);
