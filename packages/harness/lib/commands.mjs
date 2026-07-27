@@ -542,7 +542,8 @@ export async function cmdRecall(argv) {
       })
     );
     for (const r of result.recall) {
-      console.log(ui.line({ key: String(r.score), value: r.path, note: r.title, keyWidth: 6 }));
+      const label = r.kind === 'insight' ? ' [insight]' : '';
+      console.log(ui.line({ key: String(r.score), value: r.path, note: `${r.title}${label}`, keyWidth: 6 }));
     }
     for (const p of result.plans ?? []) {
       console.log(ui.line({ key: 'plan', value: p.path, note: p.status, keyWidth: 6 }));

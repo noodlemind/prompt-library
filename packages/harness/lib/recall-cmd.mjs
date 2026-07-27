@@ -21,6 +21,7 @@ export function runRecall({ workspace, copilotHome, flags, argv }) {
     summary: e.summary || '',
     snippet: e.snippet || '',
     scope: e.scope,
+    kind: e.kind || 'solution',
     ranker: e.ranker || 'overlap',
   }));
 

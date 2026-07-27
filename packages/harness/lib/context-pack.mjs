@@ -72,7 +72,8 @@ export function buildContextPack({
   } else {
     for (const r of recall) {
       const docid = r.docid || r.id;
-      lines.push(`- **${r.title || docid}** (\`${r.path}\`, docid \`${docid}\`, score ${r.score.toFixed(2)})`);
+      const label = r.kind === 'insight' ? ' [insight]' : '';
+      lines.push(`- **${r.title || docid}**${label} (\`${r.path}\`, docid \`${docid}\`, score ${r.score.toFixed(2)})`);
       if (r.snippet) lines.push(`  - ${r.snippet.slice(0, 120)}`);
       else if (r.summary) lines.push(`  - ${r.summary.slice(0, 120)}`);
     }

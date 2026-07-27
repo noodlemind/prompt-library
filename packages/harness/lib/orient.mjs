@@ -29,6 +29,7 @@ export function runOrient({ workspace, copilotHome, flags, query }) {
     summary: e.summary || '',
     snippet: e.snippet || '',
     scope: e.scope,
+    kind: e.kind || 'solution',
     ranker: e.ranker || 'overlap',
   }));
 

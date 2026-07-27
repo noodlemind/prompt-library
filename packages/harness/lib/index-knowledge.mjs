@@ -55,7 +55,7 @@ function collectSolutions(dir, scope, base) {
       entries.push({
         id: entryId,
         docid: entryId,
-        kind: 'solution',
+        kind: fm.kind === 'insight' ? 'insight' : 'solution',
         scope,
         path: rel,
         title: fm.title || slug,
@@ -63,6 +63,8 @@ function collectSolutions(dir, scope, base) {
         tags: fm.tags ? fm.tags.split(',').map((t) => t.trim()) : [],
         module: fm.module || '',
         symptom: fm.symptom || '',
+        trigger: fm.trigger || '',
+        claim: fm.claim || '',
         summary: summaryFromBody(text),
         excerpt: excerptFromBody(text),
         date: fm.date || fm.updated || '',
@@ -121,6 +123,8 @@ export function runIndexKnowledge({ knowledgeRoot, workspace, copilotHome, flags
     if (e.tags?.length) lines.push(`    tags: [${e.tags.map((t) => yamlQuote(t)).join(', ')}]`);
     if (e.module) lines.push(`    module: ${yamlQuote(e.module)}`);
     if (e.symptom) lines.push(`    symptom: ${yamlQuote(e.symptom)}`);
+    if (e.trigger) lines.push(`    trigger: ${yamlQuote(e.trigger)}`);
+    if (e.claim) lines.push(`    claim: ${yamlQuote(e.claim)}`);
     if (e.date) lines.push(`    date: ${e.date}`);
     if (e.summary) lines.push(`    summary: ${yamlQuote(e.summary)}`);
     if (e.excerpt) lines.push(`    excerpt: ${yamlQuote(e.excerpt)}`);

@@ -95,7 +95,9 @@ function rankWithBm25(queryTokens, index, entriesById, minScore) {
   for (const [docId, score] of normalized) {
     const entry = entriesById.get(docId) || index.entries?.[docId];
     if (!entry) continue;
-    const withRecency = score * 0.85 + recencyBoost(entry) * 0.15;
+    // Insights are unverified — rank below verified fixes at equal relevance.
+    const kindPenalty = entry.kind === 'insight' ? 0.7 : 1;
+    const withRecency = (score * 0.85 + recencyBoost(entry) * 0.15) * kindPenalty;
     if (withRecency < minScore) continue;
     results.push({
       ...entry,
@@ -115,7 +117,7 @@ function rankWithOverlap(queryTokens, entries, minScore) {
     .map((e) => ({
       ...e,
       docid: e.docid || e.id,
-      score: weightedOverlapScore(queryTokens, e),
+      score: weightedOverlapScore(queryTokens, e) * (e.kind === 'insight' ? 0.7 : 1),
       snippet: bestSnippet(e, queryTokens),
       ranker: 'overlap',
     }))
