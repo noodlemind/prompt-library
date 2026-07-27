@@ -105,7 +105,12 @@ export function buildContextPack({
 
   let body = lines.join('\n');
   if (Buffer.byteLength(body, 'utf8') > MAX_BYTES) {
-    body = body.slice(0, MAX_BYTES - 80) + '\n\n…(truncated to 2KB budget)\n';
+    // Truncate in UTF-8 bytes (the budget's unit), backing off to a valid
+    // character boundary rather than slicing UTF-16 code units.
+    const budget = MAX_BYTES - 80;
+    let buf = Buffer.from(body, 'utf8').subarray(0, budget);
+    while (buf.length && (buf[buf.length - 1] & 0xc0) === 0x80) buf = buf.subarray(0, buf.length - 1);
+    body = buf.toString('utf8') + '\n\n…(truncated to 2KB budget)\n';
   }
   return body;
 }

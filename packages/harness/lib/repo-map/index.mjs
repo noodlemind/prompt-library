@@ -24,7 +24,10 @@ function trackedSourceFiles(workspace) {
 function readFileSafe(workspace, rel) {
   try {
     const full = path.join(workspace, rel);
-    if (fs.statSync(full).size > MAX_FILE_BYTES) return '';
+    // Never follow symlinks: a tracked link pointing outside the workspace
+    // must not leak external content into a committed map.
+    const stat = fs.lstatSync(full);
+    if (stat.isSymbolicLink() || stat.size > MAX_FILE_BYTES) return '';
     return fs.readFileSync(full, 'utf8');
   } catch {
     return '';
@@ -72,7 +75,9 @@ export function buildRepoMap({ workspace, query = '', maxTokens = DEFAULT_MAX_TO
     const structural = f.importedBy * 2 + Math.min(f.symbols.length, 12);
     return { ...f, score: queryScore * 5 + structural };
   });
-  scored.sort((a, b) => b.score - a.score || a.rel.localeCompare(b.rel));
+  // Locale-independent tie-break: the committed map must be byte-identical
+  // across hosts for the same tree.
+  scored.sort((a, b) => b.score - a.score || (a.rel < b.rel ? -1 : a.rel > b.rel ? 1 : 0));
 
   const lines = [
     `# ${title}`,

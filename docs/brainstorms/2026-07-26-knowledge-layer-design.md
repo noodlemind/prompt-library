@@ -14,7 +14,7 @@ A curated, auditable, verification-gated memory for the Engineer Harness — eve
 - Second pillar: distillation as attention hygiene — condensed claims fight context distraction, not just context budget.
 - Constitution honored throughout: minimal dependencies (Node CLI + markdown + git; no DBs, no embeddings, no daemons), deterministic CLI does mechanical work / model skills do reasoning, zero mandatory user discipline, everything git-auditable.
 
-**Public trust gradient (exact docs wording):** episodes never leave the machine; learnings live in a local, never-pushed store; the only knowledge that reaches a shared repository is a primitive that passed a human PR — *unless a team explicitly opts into learnings commit mode, which is documented as an exception with best-effort secret screening.*
+**Public trust gradient (exact docs wording):** episodes are never transmitted by the harness — repo-private `docs/solutions/` travels only inside the product repo's own git history, and global episodes stay on the machine; learnings live in a local, never-pushed store; the only knowledge that reaches a shared repository through the harness is a primitive that passed a human PR — *unless a team explicitly opts into learnings commit mode, which is documented as an exception with best-effort secret screening.*
 
 ## 2. Three tiers
 
@@ -94,7 +94,7 @@ debt check (session START and session end; count ≥5, debounced while active pl
 - The imperative/quarantine lint runs at ops-emission (before any diff/digest is shown to a human) **and** at `--apply` (board condition — Amodei).
 - `--apply` validator ships with adversarial fixtures (schema smuggling, cap evasion, lint bypass, path escape) alongside the classifier's 30–50 golden cluster→decision fixtures and `consolidate --eval`.
 - Seed consolidation is **armed at init, executed at first session start**: the CLI has no model access, ever — `harness init`/`upgrade` scans existing `docs/solutions/`, marks them as unconsolidated debt in the ledger, and prints a next-hint; the actual 🧠 consolidation runs via the session-start debt drain inside the first agent session, in suggest mode for the seed run. (General rule, stated for adopters: every model step in this design executes inside a host agent session; the CLI only detects, queues, validates, and applies.)
-- `harness consolidate --rebuild`: full T2 regeneration from T1 (slow/manual in v1; the model-upgrade path).
+- `harness consolidate --rebuild`: full T2 regeneration from T1 (the model-upgrade path). Ships in Milestone 2; the re-derivability invariant it depends on — every learning backed by episodes — is enforced from Milestone 1.
 
 ## 6. Gating: veto-over-approve
 

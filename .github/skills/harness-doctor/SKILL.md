@@ -46,7 +46,7 @@ With `harness doctor --host vscode`, also require:
 
 ## Output
 
-Run `harness doctor --host vscode` after install or upgrade. Output is a ledger of failing checks — `✓/!/✗` glyphs on a TTY, `[ok]/[!]/[x]` when piped — each with a focused `→ fix` hint, closed by a tally line (`N ok · N warn · N err → exit N`; exit 6 on failure). V1–V9 use an isolated temporary Git fixture and the installed hook scripts; package source cannot substitute for a missing installed bundle.
+Run `harness doctor --host vscode` after install or upgrade. Output is a ledger of checks — `✓/!/✗` glyphs on a TTY, `[ok]/[!]/[x]` when piped — each with a focused `→ fix` hint, closed by a tally line (`N ok · N warn · N err → exit N`; exit 6 on failure). V1–V9 use an isolated temporary Git fixture and the installed hook scripts; package source cannot substitute for a missing installed bundle.
 
 If the host cannot run hooks, report degraded operation truthfully: explicit `harness gate` and `harness verify` remain available, but native edit/completion enforcement was not proven.
 

@@ -71,6 +71,33 @@ test('compound --insight reads body from --body-file and indexes the doc', () =>
   assert.match(manifest, /retry-storms-need-jitter/);
 });
 
+test('same-day same-title insights never overwrite — deterministic suffix', () => {
+  const ws = tempDir('insight-dup-');
+  const home = tempDir('insight-duph-');
+  const args = [
+    'compound', '--insight', '--title', 'Duplicate lesson', '--body', 'First observation.',
+    '--workspace', ws, '--copilot-home', home, '--json',
+  ];
+  const first = JSON.parse(run(args).stdout);
+  const second = JSON.parse(run(args).stdout);
+  assert.notEqual(first.path, second.path);
+  assert.match(second.path, /-2\.md$/);
+  assert.ok(fs.existsSync(path.join(ws, first.path)));
+  assert.ok(fs.existsSync(path.join(ws, second.path)));
+});
+
+test('category input is confined to one safe path segment', () => {
+  const ws = tempDir('insight-cat-');
+  const res = run([
+    'compound', '--insight', '--title', 'Escape attempt', '--body', 'body text',
+    '--category', '../../outside', '--workspace', ws, '--copilot-home', tempDir('insight-cath-'), '--json',
+  ]);
+  assert.equal(res.status, 0, res.stderr || res.stdout);
+  const out = JSON.parse(res.stdout);
+  assert.match(out.path, /^docs\/solutions\/outside\//);
+  assert.ok(!fs.existsSync(path.join(path.dirname(ws), 'outside')));
+});
+
 test('verified compound lane still requires a plan (unchanged)', () => {
   const ws = tempDir('insight-vl-');
   const res = run([

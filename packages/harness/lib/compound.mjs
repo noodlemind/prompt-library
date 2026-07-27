@@ -42,10 +42,17 @@ export function runInsightCompound({ workspace, copilotHome, flags, log = () => 
     };
   }
   const date = new Date().toISOString().slice(0, 10);
-  const category = flags.category || 'insights';
-  const rel = path.join('docs', 'solutions', category, `${date}-${slugify(flags.title)}.md`);
+  // Category is one safe path segment — never a traversal vector.
+  const category = slugify(flags.category || 'insights');
+  const tags = flags.tags
+    ? flags.tags
+        .split(',')
+        .map((t) => t.replace(/[^\w. -]/g, '').trim())
+        .filter(Boolean)
+        .join(',')
+    : '';
   const fmLines = [`title: ${yamlQuote(flags.title)}`, 'kind: insight', `date: ${date}`];
-  if (flags.tags) fmLines.push(`tags: ${flags.tags}`);
+  if (tags) fmLines.push(`tags: ${tags}`);
   if (flags.trigger) fmLines.push(`trigger: ${yamlQuote(flags.trigger)}`);
   if (flags.claim) fmLines.push(`claim: ${yamlQuote(flags.claim)}`);
   const doc = `---\n${fmLines.join('\n')}\n---\n\n${body.trim()}\n`;
@@ -62,6 +69,16 @@ export function runInsightCompound({ workspace, copilotHome, flags, log = () => 
         .join(', ')}`,
       nextTools: ['redact the credential and re-run'],
     };
+  }
+  // Never silently overwrite an earlier capture: same-day same-title collisions
+  // get a deterministic numeric suffix.
+  const base = `${date}-${slugify(flags.title)}`;
+  const dirRel = path.join('docs', 'solutions', category);
+  let rel = path.join(dirRel, `${base}.md`);
+  let n = 2;
+  while (fs.existsSync(path.join(workspace, rel))) {
+    rel = path.join(dirRel, `${base}-${n}.md`);
+    n += 1;
   }
   const full = path.join(workspace, rel);
   if (!flags.dryRun) {

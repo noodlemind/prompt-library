@@ -50,6 +50,10 @@ function weightedOverlapScore(queryTokens, entry) {
     { text: entry.module, weight: FIELD_BOOSTS.module },
     { text: entry.summary, weight: FIELD_BOOSTS.summary },
     { text: entry.excerpt, weight: FIELD_BOOSTS.excerpt },
+    // Knowledge-layer fields: the applicability condition and claim are often
+    // the only place query terms appear (fallback ranker parity with BM25).
+    { text: entry.trigger, weight: FIELD_BOOSTS.symptom },
+    { text: entry.claim, weight: FIELD_BOOSTS.summary },
   ];
 
   let weightedHits = 0;

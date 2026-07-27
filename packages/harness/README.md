@@ -102,15 +102,17 @@ bytes — stored in a CLI-managed local git repo at `~/.harness/knowledge/<repo-
 nothing; `consolidate --apply` is the sole writer and enforces the ≤5-file delta
 contract, byte cap, secret scan, and imperative lint. `orient` injects the top-3
 matching learnings inside the existing 2 KB pack, attributed by id; insight-derived
-claims carry an `[unverified memory — advisory]` fence. Trust gradient: episodes
-never leave the machine → learnings live in the local never-pushed store → the only
-knowledge reaching a shared repository is a primitive that passed a human PR.
+claims carry an `[unverified memory — advisory]` fence. Trust gradient: the harness
+never transmits episodes (repo-private `docs/solutions/` travels only inside the
+product repo's own git history) → learnings live in the local never-pushed store →
+the only knowledge the harness sends to a shared repository is a primitive that
+passed a human PR.
 `init-repo`/`index` also write a committed `docs/codebase-map.md` (deterministic,
 timestamp-free) for cold-start orientation.
 
 ### Options
 
-`--dry-run`, `--verbose`, `--json`, `--no-color`, `--workspace <path>`, `--copilot-home <path>`, `--query <text>`, `--phase implement|verify`, `--plan <path>`, `--base <git-ref>`, `--enforcement observe|warn|enforce`, `--strict-intent`, `--no-events`, `--host vscode`, `--session <id>`, `--summary`, `--failures`, `--limit <n>`, `-c <collection>`, `--min-score <n>`, `--docid <id>`, `--path <rel>`, `--lines <n>`, `--max-bytes <n>`, `--insight`, `--title <t>`, `--body <text>`, `--body-file <path>`, `--category <c>`, `--tags <a,b>`, `--trigger <t>`, `--claim <t>`, `--status`, `--candidates`, `--apply`, `--ops <path>`
+`--dry-run`, `--verbose`, `--json`, `--no-color`, `--workspace <path>`, `--copilot-home <path>`, `--query <text>`, `--phase implement|verify`, `--plan <path>`, `--base <git-ref>`, `--enforcement observe|warn|enforce`, `--strict-intent`, `--no-events`, `--host vscode`, `--session <id>`, `--summary`, `--failures`, `--limit <n>`, `-c <collection>`, `--min-score <n>`, `--docid <id>`, `--path <rel>`, `--lines <n>`, `--max-bytes <n>`, `--sync`, `--global`, `--check`, `--insight`, `--title <t>`, `--body <text>`, `--body-file <path>`, `--category <c>`, `--tags <a,b>`, `--trigger <t>`, `--claim <t>`, `--status`, `--candidates`, `--apply`, `--ops <path>`
 
 ### Output grammar (one grammar, two readers)
 
