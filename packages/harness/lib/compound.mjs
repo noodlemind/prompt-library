@@ -28,13 +28,13 @@ function yamlQuote(value) {
  * gate on the verified lane is untouched — insights are a separate episode
  * kind, ranked below verified fixes and barred from promotion.
  */
-export function runInsightCompound({ workspace, copilotHome, flags, log = () => {} }) {
+export function runInsightCompound({ workspace, copilotHome, flags, log = () => {}, kind = 'insight' }) {
   const body = flags.body || (flags.bodyFile ? fs.readFileSync(path.resolve(flags.bodyFile), 'utf8') : '');
   if (!flags.title || !body.trim()) {
     return {
       pass: false,
       exitCode: 2,
-      kind: 'insight',
+      kind,
       path: null,
       indexed: null,
       blockedReason: 'insight capture needs --title and --body (or --body-file)',
@@ -51,7 +51,7 @@ export function runInsightCompound({ workspace, copilotHome, flags, log = () => 
         .filter(Boolean)
         .join(',')
     : '';
-  const fmLines = [`title: ${yamlQuote(flags.title)}`, 'kind: insight', `date: ${date}`];
+  const fmLines = [`title: ${yamlQuote(flags.title)}`, `kind: ${kind}`, `date: ${date}`];
   if (tags) fmLines.push(`tags: ${tags}`);
   if (flags.trigger) fmLines.push(`trigger: ${yamlQuote(flags.trigger)}`);
   if (flags.claim) fmLines.push(`claim: ${yamlQuote(flags.claim)}`);
@@ -61,7 +61,7 @@ export function runInsightCompound({ workspace, copilotHome, flags, log = () => 
     return {
       pass: false,
       exitCode: 1,
-      kind: 'insight',
+      kind,
       path: null,
       indexed: null,
       blockedReason: `secret-shaped content blocked capture: ${secrets
@@ -93,7 +93,7 @@ export function runInsightCompound({ workspace, copilotHome, flags, log = () => 
   return {
     pass: true,
     exitCode: 0,
-    kind: 'insight',
+    kind,
     path: rel.split(path.sep).join('/'),
     indexed,
     blockedReason: null,

@@ -836,6 +836,48 @@ export async function cmdConsolidate(argv) {
   return 0;
 }
 
+export async function cmdRemember(argv) {
+  const { runRemember } = await import('./knowledge/remember.mjs');
+  const flags = parseFlags(argv);
+  const workspace = path.resolve(flags.workspace);
+  const copilotHome = resolveCopilotHome(flags.copilotHome);
+  const logger = (m) => log(flags, m);
+  const result = runRemember({ workspace, copilotHome, flags, argv, log: logger });
+  writeEvent(workspace, flags, {
+    type: 'remember',
+    command: 'remember',
+    result: result.pass ? 'pass' : 'fail',
+    exitCode: result.exitCode,
+    blockedReason: result.blockedReason,
+  });
+
+  if (flags.json) {
+    emitJson(flags, result);
+  } else if (result.pass) {
+    console.log(
+      ui.line({
+        state: 'ok',
+        key: 'remember',
+        value: result.learningId,
+        note: `source: human · episode ${result.episodePath}`,
+      })
+    );
+    printNext(result.nextTools?.[0]);
+  } else if (result.exitCode === EXIT.usage) {
+    for (const l of ui.errorBlock({
+      code: 'E_USAGE',
+      message: result.blockedReason,
+      fix: result.nextTools?.[0],
+      exit: EXIT.usage,
+    })) {
+      console.error(l);
+    }
+  } else {
+    console.log(ui.line({ state: 'error', key: 'remember', value: `blocked · ${result.blockedReason}` }));
+  }
+  return result.exitCode;
+}
+
 export async function cmdGet(argv) {
   const { runGet } = await import('./get-cmd.mjs');
   const flags = parseFlags(argv);

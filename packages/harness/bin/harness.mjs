@@ -17,6 +17,7 @@ import {
   cmdValidatePlan,
   cmdCompound,
   cmdConsolidate,
+  cmdRemember,
   cmdGet,
   cmdUninstall,
   cmdResolve,
@@ -177,6 +178,12 @@ const CATALOG = [
           ['--candidates', 'deterministic work packet for the consolidation skill'],
           ['--apply --ops <path>', 'validate and apply an ops JSON (sole writer)'],
         ] },
+      { name: 'remember', desc: 'teach the harness a durable claim (human-teaching episode + learning)',
+        sig: '"<claim>" --trigger "<t>" [--domain <d>]',
+        options: [
+          ['--trigger <t>', 'applicability condition (required)'],
+          ['--domain <d>', 'learning domain directory (default general)'],
+        ] },
     ],
   },
   {
@@ -317,6 +324,9 @@ async function main() {
         break;
       case 'consolidate':
         code = await cmdConsolidate(args);
+        break;
+      case 'remember':
+        code = await cmdRemember(args);
         break;
       case 'events':
         code = await cmdEvents(args);

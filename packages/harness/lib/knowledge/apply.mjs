@@ -165,13 +165,19 @@ export function applyOps({ workspace, opsPath, dryRun = false, home }) {
     const domain = normalizeSlug(op.domain);
     const slug = normalizeSlug(op.slug);
     const id = `${domain}/${slug}`;
+    // A direct human statement outranks statistics: episodes made entirely of
+    // human-teaching evidence land active with source: human — no provisional
+    // damping for teachings (design §6). Anything else (including a mix) is
+    // the standard auto/provisional lane.
+    const source = op.episodes.length && op.episodes.every((e) => e.kind === 'human-teaching') ? 'human' : 'auto';
+    const status = source === 'human' ? 'active' : 'provisional';
     const content = renderLearning({
       trigger: op.trigger,
       body: op.body,
       episodes: op.episodes,
       origin,
-      status: 'provisional',
-      source: 'auto',
+      status,
+      source,
       supersededBy: null,
       mergedFrom: op.merged_from,
     });

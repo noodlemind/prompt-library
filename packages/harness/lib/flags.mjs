@@ -71,6 +71,7 @@ export function parseFlags(argv) {
     body: null,
     bodyFile: null,
     ops: null,
+    domain: null,
   };
 
   for (let i = 0; i < argv.length; i++) {
@@ -148,6 +149,8 @@ export function parseFlags(argv) {
     else if (a === '--body-file') flags.bodyFile = argv[++i];
     else if (a.startsWith('--ops=')) flags.ops = a.split('=').slice(1).join('=');
     else if (a === '--ops') flags.ops = argv[++i];
+    else if (a.startsWith('--domain=')) flags.domain = a.split('=').slice(1).join('=');
+    else if (a === '--domain') flags.domain = argv[++i];
   }
 
   return flags;
