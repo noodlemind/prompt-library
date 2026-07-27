@@ -550,6 +550,19 @@ test('read-only report command is registered and AC14 amendment is consistent', 
   assert.doesNotMatch(reportFn, /writeEvent\(/, 'report must not emit lifecycle events');
 });
 
+test('knowledge layer surface: consolidate command and insight lane stay documented', () => {
+  const bin = read('packages/harness/bin/harness.mjs');
+  // The knowledge group and its three modes are the M1 public contract.
+  assert.match(bin, /group: 'knowledge'/, 'CATALOG has a knowledge group');
+  assert.match(bin, /case 'consolidate':/, 'consolidate command registered');
+  assert.match(bin, /'\[--status \| --candidates \| --apply --ops <path>\]'/, 'help documents consolidate modes');
+  assert.match(bin, /--insight/, 'compound help documents the insight lane');
+  // The skill never writes learnings directly — apply is the sole writer.
+  const apply = read('packages/harness/lib/knowledge/apply.mjs');
+  assert.match(apply, /MAX_OPS_PER_RUN/, 'delta contract enforced in apply');
+  assert.match(apply, /scanSecrets/, 'secret scan runs at the write boundary');
+});
+
 test('token budget: no SKILL.md body exceeds the line cap', () => {
   const skillsDir = path.join(repoRoot, '.github', 'skills');
   const oversized = fs

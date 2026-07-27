@@ -89,11 +89,28 @@ to Deliver before editing.
 | `validate-plan` | Read-only plan template / intent compliance |
 | `index` | Rebuild `knowledge/manifest.yaml` + `.harness-index/` |
 | `compound` | Consume passed evidence, index learning, and record usage/outcome telemetry |
+| `compound --insight` | Evidence-free capture of investigation learnings (`kind: insight`, secret-scanned, ranked below verified fixes, never promotable) |
+| `consolidate` | Knowledge loop: `--status` debt gauge · `--candidates` deterministic work packet · `--apply --ops <path>` validated sole writer of learnings |
 | `events` | Inspect schema-v2 `.harness/events.jsonl`; filter by session/failure or summarize |
+
+### Knowledge (semantic memory)
+
+Episodes (solution docs) consolidate into **learnings** — one claim per file, ≤1,200
+bytes — stored in a CLI-managed local git repo at `~/.harness/knowledge/<repo-id>/`
+(outside the working tree: survives `git clean`/re-clones, shared across worktrees,
+**never pushed**). The consolidation skill emits an operations JSON and writes
+nothing; `consolidate --apply` is the sole writer and enforces the ≤5-file delta
+contract, byte cap, secret scan, and imperative lint. `orient` injects the top-3
+matching learnings inside the existing 2 KB pack, attributed by id; insight-derived
+claims carry an `[unverified memory — advisory]` fence. Trust gradient: episodes
+never leave the machine → learnings live in the local never-pushed store → the only
+knowledge reaching a shared repository is a primitive that passed a human PR.
+`init-repo`/`index` also write a committed `docs/codebase-map.md` (deterministic,
+timestamp-free) for cold-start orientation.
 
 ### Options
 
-`--dry-run`, `--verbose`, `--json`, `--no-color`, `--workspace <path>`, `--copilot-home <path>`, `--query <text>`, `--phase implement|verify`, `--plan <path>`, `--base <git-ref>`, `--enforcement observe|warn|enforce`, `--strict-intent`, `--no-events`, `--host vscode`, `--session <id>`, `--summary`, `--failures`, `--limit <n>`, `-c <collection>`, `--min-score <n>`, `--docid <id>`, `--path <rel>`, `--lines <n>`, `--max-bytes <n>`
+`--dry-run`, `--verbose`, `--json`, `--no-color`, `--workspace <path>`, `--copilot-home <path>`, `--query <text>`, `--phase implement|verify`, `--plan <path>`, `--base <git-ref>`, `--enforcement observe|warn|enforce`, `--strict-intent`, `--no-events`, `--host vscode`, `--session <id>`, `--summary`, `--failures`, `--limit <n>`, `-c <collection>`, `--min-score <n>`, `--docid <id>`, `--path <rel>`, `--lines <n>`, `--max-bytes <n>`, `--insight`, `--title <t>`, `--body <text>`, `--body-file <path>`, `--category <c>`, `--tags <a,b>`, `--trigger <t>`, `--claim <t>`, `--status`, `--candidates`, `--apply`, `--ops <path>`
 
 ### Output grammar (one grammar, two readers)
 
