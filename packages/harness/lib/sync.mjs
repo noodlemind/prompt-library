@@ -42,6 +42,9 @@ export function findStaleOrphans(copilotHome, assetsRoot, retiredList = []) {
       const rel = `${top}/${f}`;
       if (current.has(rel)) continue; // still shipped
       if (retiredCovered(rel)) continue; // explicitly retired — upgrade removes it
+      // `.harness/` under a scan dir is runtime state written by hooks at
+      // execution time — never a shipped primitive, so never an orphan.
+      if (/(^|\/)\.harness\//.test(rel)) continue;
       orphans.push(rel);
     }
   }

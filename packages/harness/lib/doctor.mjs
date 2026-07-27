@@ -468,14 +468,20 @@ export function runDoctor({ copilotHome, assetsRoot, pkgRoot, flags, vscodeSetti
     optional: true,
   });
 
-  const orphans = pkgRoot ? findStaleOrphans(copilotHome, assetsRoot, loadRetired(pkgRoot)) : [];
+  // Degrade honestly: without the shipped asset bundle there is no ship list
+  // to compare against, so never claim orphans that cannot be verified.
+  const assetsAvailable = fs.existsSync(path.join(assetsRoot, 'skills', 'engineer', 'SKILL.md'));
+  const orphans =
+    pkgRoot && assetsAvailable ? findStaleOrphans(copilotHome, assetsRoot, loadRetired(pkgRoot)) : [];
   checks.push({
     id: 'H17',
     name: 'No stale orphaned primitives',
-    pass: orphans.length === 0,
-    hint: orphans.length
-      ? `Hydrated but no longer shipped and not retired (${orphans.length}): ${orphans.join(', ')}. Add each to packages/harness/retired.json so upgrade purges it, or delete it from ${copilotHome}.`
-      : 'No orphaned agents/skills/instructions/prompts/hooks in the Copilot home',
+    pass: assetsAvailable && orphans.length === 0,
+    hint: !assetsAvailable
+      ? 'cannot verify — this runtime has no asset bundle; re-run: harness install (refreshes ~/.copilot/.harness-bin with assets), then harness doctor'
+      : orphans.length
+        ? `Hydrated but no longer shipped and not retired (${orphans.length}): ${orphans.join(', ')}. Add each to packages/harness/retired.json so upgrade purges it, or delete it from ${copilotHome}.`
+        : 'No orphaned agents/skills/instructions/prompts/hooks in the Copilot home',
     optional: true,
   });
 

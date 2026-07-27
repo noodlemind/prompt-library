@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { eventPath } from './events.mjs';
 import { summarizeUsage } from './token-meter.mjs';
+import { createStyle, keyWidthFor } from './style.mjs';
 
 // A report reads more history than the bounded `events` view, but is still
 // capped so a runaway log cannot blow up memory or output.
@@ -218,10 +219,16 @@ export function buildReport({ workspace, copilotHome, events }) {
   };
 }
 
-function bar(value, max, width = 24) {
+function bar(value, max, ui, width = 24) {
   if (!max) return '';
   const full = Math.round((value / max) * width);
-  return '█'.repeat(full) + '·'.repeat(Math.max(0, width - full));
+  const [on, off] = ui.unicode ? ['█', '░'] : ['#', '-'];
+  return ui.paint('muted', on.repeat(full) + off.repeat(Math.max(0, width - full)));
+}
+
+/** Group digits for the human surface only ("4,641,293"); JSON stays raw. */
+function fmtGroup(n) {
+  return n == null ? '-' : String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
 }
 
 function fmtDuration(ms) {
@@ -243,15 +250,18 @@ function fmtTokens(n) {
 }
 
 /** Compact per-session performance table (local session metrics). */
-function renderSessionPerformance(report) {
+function renderSessionPerformance(report, ui, keyWidth) {
   const rows = report.sessions || [];
   if (!rows.length) return [];
   const tt = report.sessionTotals || {};
   const out = [
     '',
-    `Local session performance — ${tt.sessions} session(s), ${tt.premiumRequests} premium req, ` +
-      `${fmtDuration(tt.apiDurationMs)} API, ${tt.turns} turns, ${tt.toolCalls} tools (${tt.toolFailures} failed), ` +
-      `+${tt.linesAdded}/-${tt.linesRemoved} lines:`,
+    ui.line({
+      key: 'sessions',
+      value: `${tt.sessions} · ${tt.premiumRequests} premium · ${fmtDuration(tt.apiDurationMs)} API · ${tt.turns} turns · ${tt.toolCalls} tools (${tt.toolFailures} failed)`,
+      note: `+${tt.linesAdded}/-${tt.linesRemoved} lines`,
+      keyWidth,
+    }),
   ];
   const header = ['session', 'model', 'tokens', 'prem', 'turns', 'tools(f)', 'skills', 'API', 'cache', 'ctx', 'lines'];
   const table = rows.map((r) => [
@@ -269,46 +279,82 @@ function renderSessionPerformance(report) {
   ]);
   const widths = header.map((h, i) => Math.max(h.length, ...table.map((row) => row[i].length)));
   const fmtRow = (row) => '  ' + row.map((cell, i) => cell.padEnd(widths[i])).join('  ').trimEnd();
-  out.push(fmtRow(header));
+  out.push(ui.paint('muted', fmtRow(header)));
   for (const row of table) out.push(fmtRow(row));
   return out;
 }
 
-export function renderReport(report) {
+export function renderReport(report, ui = createStyle()) {
   const lines = [];
   const t = report.totals;
+  const keyWidth = keyWidthFor(['report', 'span', 'sinks', 'sessions', 'flags'], 8);
   const src = report.hostBacked ? 'host-backed + estimated' : 'estimated (chars/4)';
   lines.push(
-    `harness report: ~${t.tokens} tokens across ${t.events} events, ${report.span.sessions} session(s) — ${src}`
+    ui.line({
+      key: 'report',
+      value: `~${fmtGroup(t.tokens)} tokens`,
+      note: `${t.events} events · ${report.span.sessions} session(s) · ${src}`,
+      keyWidth,
+    })
   );
-  if (report.span.from) lines.push(`  span: ${report.span.from} → ${report.span.to}`);
+  if (report.span.from) {
+    lines.push(
+      ui.line({ key: 'span', value: `${report.span.from} ${ui.arrow} ${report.span.to}`, keyWidth })
+    );
+  }
 
-  lines.push('', 'Top token sinks (by event type):');
+  lines.push('');
   if (!report.sinks.length) {
-    lines.push('  (no token usage recorded yet — run some harness commands, then report)');
+    lines.push(
+      ui.line({ key: 'sinks', value: 'none yet', note: 'run some harness commands, then report', keyWidth })
+    );
   } else {
+    lines.push(ui.line({ key: 'sinks', value: `${report.sinks.length} event type(s)`, keyWidth }));
     const max = report.sinks[0].tokens;
     const pad = Math.max(...report.sinks.map((s) => s.type.length));
+    const numPad = Math.max(...report.sinks.map((s) => fmtGroup(s.tokens).length));
     for (const s of report.sinks) {
-      lines.push(`  ${s.type.padEnd(pad)}  ${String(s.tokens).padStart(7)}  ${bar(s.tokens, max)}  n=${s.count} avg=${s.avg}`);
+      lines.push(
+        `  ${s.type.padEnd(pad)}  ${fmtGroup(s.tokens).padStart(numPad)}  ${bar(s.tokens, max, ui)}  ` +
+          ui.paint('muted', `n=${s.count} avg=${fmtGroup(s.avg)}`)
+      );
     }
   }
 
-  lines.push(...renderSessionPerformance(report));
+  lines.push(...renderSessionPerformance(report, ui, keyWidth));
 
   const f = report.flags;
   const flagLines = [];
   for (const b of f.budgetBreaches) {
-    flagLines.push(`  [budget] ${b.kind} ${b.target} = ${b.value} > cap ${b.cap}`);
+    flagLines.push(
+      ui.line({ state: 'warn', key: 'budget', value: `${b.kind} ${b.target} = ${b.value}`, note: `cap ${b.cap}`, keyWidth })
+    );
   }
   for (const loop of f.recoveryLoops) {
-    flagLines.push(`  [recovery-loop] session ${loop.session}: ${loop.blocks} blocks, ~${loop.burned} tokens burned`);
+    flagLines.push(
+      ui.line({
+        state: 'warn',
+        key: 'recovery',
+        value: `session ${loop.session} · ${loop.blocks} blocks`,
+        note: `~${fmtGroup(loop.burned)} tokens burned`,
+        keyWidth,
+      })
+    );
   }
   if (f.trend?.regressed) {
-    flagLines.push(`  [trend] tokens/session rising: ${f.trend.earlier} → ${f.trend.recent} (${f.trend.ratio}×, ${f.trend.sessions} sessions)`);
+    flagLines.push(
+      ui.line({
+        state: 'warn',
+        key: 'trend',
+        value: `tokens/session rising · ${fmtGroup(f.trend.earlier)} ${ui.arrow} ${fmtGroup(f.trend.recent)}`,
+        note: `${f.trend.ratio}× over ${f.trend.sessions} sessions`,
+        keyWidth,
+      })
+    );
   }
-  lines.push('', flagLines.length ? 'Improvement flags:' : 'Improvement flags: none');
-  lines.push(...flagLines);
+  lines.push('');
+  if (flagLines.length) lines.push(...flagLines);
+  else lines.push(ui.line({ key: 'flags', value: 'none', keyWidth }));
   return lines.join('\n');
 }
 
