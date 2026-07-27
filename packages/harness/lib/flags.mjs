@@ -62,6 +62,15 @@ export function parseFlags(argv) {
     sync: false,
     global: false,
     check: false,
+    insight: false,
+    title: null,
+    category: null,
+    tags: null,
+    trigger: null,
+    claim: null,
+    body: null,
+    bodyFile: null,
+    ops: null,
   };
 
   for (let i = 0; i < argv.length; i++) {
@@ -122,6 +131,23 @@ export function parseFlags(argv) {
     else if (a === '--host') flags.host = argv[++i];
     else if (a.startsWith('--session=')) flags.session = a.split('=').slice(1).join('=');
     else if (a === '--session') flags.session = argv[++i];
+    else if (a === '--insight') flags.insight = true;
+    else if (a.startsWith('--title=')) flags.title = a.split('=').slice(1).join('=');
+    else if (a === '--title') flags.title = argv[++i];
+    else if (a.startsWith('--category=')) flags.category = a.split('=').slice(1).join('=');
+    else if (a === '--category') flags.category = argv[++i];
+    else if (a.startsWith('--tags=')) flags.tags = a.split('=').slice(1).join('=');
+    else if (a === '--tags') flags.tags = argv[++i];
+    else if (a.startsWith('--trigger=')) flags.trigger = a.split('=').slice(1).join('=');
+    else if (a === '--trigger') flags.trigger = argv[++i];
+    else if (a.startsWith('--claim=')) flags.claim = a.split('=').slice(1).join('=');
+    else if (a === '--claim') flags.claim = argv[++i];
+    else if (a.startsWith('--body=')) flags.body = a.split('=').slice(1).join('=');
+    else if (a === '--body') flags.body = argv[++i];
+    else if (a.startsWith('--body-file=')) flags.bodyFile = a.split('=').slice(1).join('=');
+    else if (a === '--body-file') flags.bodyFile = argv[++i];
+    else if (a.startsWith('--ops=')) flags.ops = a.split('=').slice(1).join('=');
+    else if (a === '--ops') flags.ops = argv[++i];
   }
 
   return flags;

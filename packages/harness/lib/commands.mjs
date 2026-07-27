@@ -713,7 +713,17 @@ export async function cmdCompound(argv) {
   if (flags.json) {
     emitJson(flags, result);
   } else {
-    if (result.pass) {
+    if (result.pass && result.kind === 'insight') {
+      console.log(
+        ui.line({
+          state: 'ok',
+          key: 'insight',
+          value: result.path,
+          note: `indexed ${result.indexed?.entries ?? 0} entries`,
+        })
+      );
+      printNext(result.nextTools?.[0]);
+    } else if (result.pass) {
       console.log(
         ui.line({
           state: result.exitCode === 2 ? 'warn' : 'ok',

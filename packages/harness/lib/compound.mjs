@@ -6,8 +6,86 @@ import { readEvidence, validateEvidence } from './evidence.mjs';
 import { selectPlan } from './plan-parse.mjs';
 import { loadPolicy } from './policy.mjs';
 import { recordSkillUsage } from './telemetry.mjs';
+import { scanSecrets } from './secret-scan.mjs';
+
+function slugify(text) {
+  return (
+    String(text)
+      .toLowerCase()
+      .normalize('NFC')
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 60) || 'insight'
+  );
+}
+
+function yamlQuote(value) {
+  return `"${String(value).replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+}
+
+/**
+ * Insight lane: evidence-free capture of investigation learnings. The quality
+ * gate on the verified lane is untouched — insights are a separate episode
+ * kind, ranked below verified fixes and barred from promotion.
+ */
+export function runInsightCompound({ workspace, copilotHome, flags, log = () => {} }) {
+  const body = flags.body || (flags.bodyFile ? fs.readFileSync(path.resolve(flags.bodyFile), 'utf8') : '');
+  if (!flags.title || !body.trim()) {
+    return {
+      pass: false,
+      exitCode: 2,
+      kind: 'insight',
+      path: null,
+      indexed: null,
+      blockedReason: 'insight capture needs --title and --body (or --body-file)',
+      nextTools: ['harness compound --insight --title "..." --body "..."'],
+    };
+  }
+  const date = new Date().toISOString().slice(0, 10);
+  const category = flags.category || 'insights';
+  const rel = path.join('docs', 'solutions', category, `${date}-${slugify(flags.title)}.md`);
+  const fmLines = [`title: ${yamlQuote(flags.title)}`, 'kind: insight', `date: ${date}`];
+  if (flags.tags) fmLines.push(`tags: ${flags.tags}`);
+  if (flags.trigger) fmLines.push(`trigger: ${yamlQuote(flags.trigger)}`);
+  if (flags.claim) fmLines.push(`claim: ${yamlQuote(flags.claim)}`);
+  const doc = `---\n${fmLines.join('\n')}\n---\n\n${body.trim()}\n`;
+  const secrets = scanSecrets(doc);
+  if (secrets.length) {
+    return {
+      pass: false,
+      exitCode: 1,
+      kind: 'insight',
+      path: null,
+      indexed: null,
+      blockedReason: `secret-shaped content blocked capture: ${secrets
+        .map((s) => `${s.id}@${s.line}`)
+        .join(', ')}`,
+      nextTools: ['redact the credential and re-run'],
+    };
+  }
+  const full = path.join(workspace, rel);
+  if (!flags.dryRun) {
+    fs.mkdirSync(path.dirname(full), { recursive: true });
+    fs.writeFileSync(full, doc, 'utf8');
+  }
+  log(`wrote ${rel}`);
+  const knowledgeRoot = fs.existsSync(path.join(copilotHome, 'knowledge'))
+    ? path.join(copilotHome, 'knowledge')
+    : null;
+  const indexed = runIndexKnowledge({ knowledgeRoot, workspace, copilotHome, flags, log });
+  return {
+    pass: true,
+    exitCode: 0,
+    kind: 'insight',
+    path: rel.split(path.sep).join('/'),
+    indexed,
+    blockedReason: null,
+    nextTools: ['harness consolidate --status'],
+  };
+}
 
 export function runCompound({ workspace, copilotHome, flags, log = () => {} }) {
+  if (flags.insight) return runInsightCompound({ workspace, copilotHome, flags, log });
   const session = readSession(workspace);
   const selected = selectPlan(workspace, { planPath: flags.plan, session, requireUnique: true });
   if (!selected.plan) {
