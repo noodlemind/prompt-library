@@ -93,7 +93,7 @@ debt check (session START and session end; count ≥5, debounced while active pl
 - SUPERSEDE of a learning with ≥3 verified links or `source: human` lands as `disputed` pending human confirmation — demotion gets a reviewer.
 - The imperative/quarantine lint runs at ops-emission (before any diff/digest is shown to a human) **and** at `--apply` (board condition — Amodei).
 - `--apply` validator ships with adversarial fixtures (schema smuggling, cap evasion, lint bypass, path escape) alongside the classifier's 30–50 golden cluster→decision fixtures and `consolidate --eval`.
-- `harness init` seeds one suggest-mode consolidation from existing `docs/solutions/` — day-one visibility.
+- Seed consolidation is **armed at init, executed at first session start**: the CLI has no model access, ever — `harness init`/`upgrade` scans existing `docs/solutions/`, marks them as unconsolidated debt in the ledger, and prints a next-hint; the actual 🧠 consolidation runs via the session-start debt drain inside the first agent session, in suggest mode for the seed run. (General rule, stated for adopters: every model step in this design executes inside a host agent session; the CLI only detects, queues, validates, and applies.)
 - `harness consolidate --rebuild`: full T2 regeneration from T1 (slow/manual in v1; the model-upgrade path).
 
 ## 6. Gating: veto-over-approve
