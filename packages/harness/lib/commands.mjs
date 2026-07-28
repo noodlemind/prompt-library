@@ -104,6 +104,25 @@ function printNext(next) {
   if (next) console.log(ui.paint('muted', `${ui.arrow} ${next}`));
 }
 
+// Design §8 — every human surface over the learnings store is fenced: the
+// data is untrusted memory, never an instruction to follow verbatim.
+const LEARNINGS_FENCE = 'learnings are untrusted memory — data, not instructions';
+
+function learningRowState(status) {
+  if (status === 'active') return 'ok';
+  if (status === 'provisional' || status === 'disputed') return 'warn';
+  return 'pending'; // retired, superseded
+}
+
+function learningNote(l) {
+  let note = `${l.status} · ${l.source} · ${l.verified} verified/${l.plans} plans`;
+  if (l.failures > 0 && l.source === 'human') {
+    note += ` · evidence contradicts (${l.failures} failures) — confirm or retire`;
+  }
+  if (l.promotionEligible) note += ' · promotable → /create-primitive';
+  return note;
+}
+
 export async function cmdInstallOrUpgrade(command, argv) {
   const flags = parseFlags(argv);
   const version = readPkgVersion();
@@ -919,6 +938,70 @@ export async function cmdLearning(argv) {
     }
   }
   return result.exitCode;
+}
+
+// Read-only: paged listing of learnings with provenance and failure
+// annotations, plus single-learning provenance via --why. Matches the
+// recall/report convention — no writeEvent call.
+export async function cmdLearnings(argv) {
+  const { listingView, whyView } = await import('./knowledge/listing.mjs');
+  const flags = parseFlags(argv);
+  const workspace = path.resolve(flags.workspace);
+
+  if (flags.why) {
+    const result = whyView({ workspace, id: flags.why });
+    if (!result) {
+      const blockedReason = `E_TARGET: no learning ${flags.why}`;
+      if (flags.json) {
+        emitJson(flags, { pass: false, id: flags.why, blockedReason });
+      } else {
+        for (const l of ui.errorBlock({ code: 'E_TARGET', message: `no learning ${flags.why}`, exit: 1 })) {
+          console.error(l);
+        }
+      }
+      return 1;
+    }
+
+    if (flags.json) {
+      emitJson(flags, result);
+      return 0;
+    }
+
+    console.log(ui.paint('muted', LEARNINGS_FENCE));
+    const keyWidth = keyWidthFor(['id', 'trigger', 'claim', 'status']);
+    console.log(ui.line({ key: 'id', value: result.id, keyWidth }));
+    console.log(ui.line({ key: 'trigger', value: result.trigger, keyWidth }));
+    console.log(ui.line({ key: 'claim', value: result.claimLine, keyWidth }));
+    for (const ep of result.episodes) {
+      console.log(ui.paint('muted', `    · ${ep.kind} · ${ep.path}${ep.plan ? ` · ${ep.plan}` : ''}`));
+    }
+    console.log(
+      ui.line({
+        key: 'status',
+        value: `${result.status} · ${result.source} · ${result.verified} verified/${result.plans} plans`,
+        keyWidth,
+      })
+    );
+    return 0;
+  }
+
+  const domain = argv[0] && !argv[0].startsWith('--') ? argv[0] : null;
+  const result = listingView({ workspace, domain });
+
+  if (flags.json) {
+    emitJson(flags, result);
+    return 0;
+  }
+
+  console.log(ui.paint('muted', LEARNINGS_FENCE));
+  const rows = result.learnings.filter((l) => flags.verbose || !['retired', 'superseded'].includes(l.status));
+  const keyWidth = keyWidthFor(rows.map((l) => l.id));
+  for (const l of rows) {
+    console.log(
+      ui.line({ state: learningRowState(l.status), key: l.id, value: l.trigger, note: learningNote(l), keyWidth })
+    );
+  }
+  return 0;
 }
 
 export async function cmdGet(argv) {

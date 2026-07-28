@@ -19,6 +19,7 @@ import {
   cmdConsolidate,
   cmdRemember,
   cmdLearning,
+  cmdLearnings,
   cmdGet,
   cmdUninstall,
   cmdResolve,
@@ -190,6 +191,11 @@ const CATALOG = [
         options: [
           ['--reason <r>', 'required for retire/dispute; recorded in the store commit'],
         ] },
+      { name: 'learnings', desc: 'paged listing of learnings with provenance and failure annotations',
+        sig: '[domain] [--why <id>]',
+        options: [
+          ['--why <id>', 'full provenance chain for one learning'],
+        ] },
     ],
   },
   {
@@ -336,6 +342,9 @@ async function main() {
         break;
       case 'learning':
         code = await cmdLearning(args);
+        break;
+      case 'learnings':
+        code = await cmdLearnings(args);
         break;
       case 'events':
         code = await cmdEvents(args);
