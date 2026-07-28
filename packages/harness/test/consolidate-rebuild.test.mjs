@@ -136,6 +136,27 @@ test('consolidate --rebuild on a workspace with no knowledge store yet stays sto
   assert.equal(withYesOut.debt, 0);
 });
 
+test('consolidate --rebuild --yes threads copilotHome so fresh debt includes global episodes, not just product-local ones', () => {
+  const c = ctx();
+  seedAutoLearning(c); // one product-local episode, consolidated (debt 0 before rebuild)
+
+  // A second, unconsolidated episode under the GLOBAL copilot home — must be
+  // picked up by the post-rebuild debt count alongside the product-local one.
+  const globalDir = path.join(c.home, 'knowledge', 'solutions', 'perf');
+  fs.mkdirSync(globalDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(globalDir, 'global-fix.md'),
+    '---\ntitle: "global fix"\ndate: 2026-07-01\n---\n\n## Problem\n\nglobal fix details.\n'
+  );
+
+  const res = run(c, ['consolidate', '--rebuild', '--yes']);
+  assert.equal(res.status, 0, res.stderr || res.stdout);
+  const out = JSON.parse(res.stdout);
+  assert.equal(out.pass, true);
+  assert.equal(out.archived, 1);
+  assert.equal(out.debt, 2, 'debt must include the global copilot-home episode, not just the product-local one');
+});
+
 test('consolidate --rebuild is mode-gated: mode !== on blocks with E_MODE-style reason, exit 2', () => {
   const c = ctx();
   seedTwoLearnings(c);

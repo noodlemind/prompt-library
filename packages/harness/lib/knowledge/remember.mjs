@@ -4,7 +4,7 @@ import path from 'node:path';
 import { runInsightCompound } from '../compound.mjs';
 import { runIndexKnowledge } from '../index-knowledge.mjs';
 import { applyOps } from './apply.mjs';
-import { normalizeSlug, readStoreConfig } from './store.mjs';
+import { normalizeSlug, readStoreConfig, storeDir, listLearnings } from './store.mjs';
 
 /**
  * The human teaching lane: a direct claim from a person, captured as a
@@ -74,19 +74,21 @@ export function runRemember({ workspace, copilotHome, flags, argv, log = () => {
 
   const text = fs.readFileSync(path.join(workspace, episode.path), 'utf8');
   const sha256 = crypto.createHash('sha256').update(text).digest('hex');
-  const ops = {
-    schema: 1,
-    ops: [
-      {
-        op: 'ADD',
-        domain,
-        slug,
-        trigger: flags.trigger,
-        body: claim,
-        episodes: [{ path: episode.path, sha256, kind: 'human-teaching', plan: null }],
-      },
-    ],
-  };
+
+  // Non-creating read: does this trigger/domain already have a learning?
+  // applyOps rejects a colliding ADD outright (E_EXISTS) to stop a dedup
+  // miss from silently overwriting an existing claim — a human re-teaching
+  // the same trigger is not a dedup miss, it's deliberate, so it goes
+  // through SUPERSEDE with the same domain/slug (target === new id), which
+  // applyOps treats as an in-place replacement: fresh episode, source human,
+  // status active, no superseded_by pointing at itself.
+  const dir = storeDir(workspace, { home });
+  const learningExists = fs.existsSync(dir) && listLearnings(dir).some((l) => l.id === learningId);
+  const newEpisode = { path: episode.path, sha256, kind: 'human-teaching', plan: null };
+  const op = learningExists
+    ? { op: 'SUPERSEDE', target: learningId, domain, slug, trigger: flags.trigger, body: claim, episodes: [newEpisode] }
+    : { op: 'ADD', domain, slug, trigger: flags.trigger, body: claim, episodes: [newEpisode] };
+  const ops = { schema: 1, ops: [op] };
   const opsDir = path.join(workspace, '.harness');
   fs.mkdirSync(opsDir, { recursive: true });
   const opsPath = path.join(opsDir, 'remember-ops.json');

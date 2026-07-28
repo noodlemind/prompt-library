@@ -5,7 +5,8 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
-import { ensureStore, listLearnings, readLedger } from '../lib/knowledge/store.mjs';
+import { ensureStore, listLearnings, readLedger, writeStoreConfig } from '../lib/knowledge/store.mjs';
+import { applyOps } from '../lib/knowledge/apply.mjs';
 
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const binPath = path.join(packageRoot, 'bin', 'harness.mjs');
@@ -103,6 +104,89 @@ test('secret-shaped content is rejected', () => {
   const res = run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [ADD({ body: 'key=AKIAIOSFODNN7EXAMPLE' })])]);
   assert.equal(res.status, 1);
   assert.match(res.stdout + res.stderr, /secret/i);
+});
+
+test('a mid-apply throw rolls back all writes atomically (git reset+clean), not just the failing op', () => {
+  const c = ctx();
+  // Seed a real commit at a pristine, empty store baseline — the store tree
+  // is committed-clean before every apply (single-commit invariant) — so the
+  // rollback below has a checkpoint to reset back to.
+  writeStoreConfig(c.ws, { home: c.harnessHome, mode: 'on' });
+  const { dir } = ensureStore(c.ws, { home: c.harnessHome });
+  const indexBefore = fs.readFileSync(path.join(dir, 'INDEX.md'), 'utf8');
+  assert.equal(readLedger(dir).length, 0, 'precondition: empty ledger before the failing apply');
+
+  // Poison the second op's domain: a regular FILE named exactly like the
+  // directory the second op's write needs, so its mkdir throws mid-loop.
+  fs.mkdirSync(path.join(dir, 'learnings'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'learnings', 'domain2'), 'blocks mkdir for this domain\n');
+
+  const ops = [
+    ADD({ domain: 'domain1', slug: 'ok-learning' }),
+    ADD({
+      domain: 'domain2',
+      slug: 'poisoned-learning',
+      episodes: [EP({ path: 'docs/solutions/perf/y.md', sha256: 'b'.repeat(64) })],
+    }),
+  ];
+  const res = applyOps({ workspace: c.ws, opsPath: writeOps(c.ws, ops), home: c.harnessHome });
+
+  assert.equal(res.exitCode, 1, JSON.stringify(res));
+  assert.equal(res.committed, false);
+  assert.deepEqual(res.applied, []);
+  assert.equal(res.rejected[0].code, 'E_APPLY_FAILED');
+
+  assert.ok(!fs.existsSync(path.join(dir, 'learnings', 'domain1', 'ok-learning.md')), 'domain1 write rolled back');
+  assert.equal(readLedger(dir).length, 0, 'ledger rolled back to empty');
+  assert.equal(fs.readFileSync(path.join(dir, 'INDEX.md'), 'utf8'), indexBefore, 'INDEX.md rolled back unchanged');
+});
+
+test('a colliding ADD (same domain/slug already exists) is rejected with E_EXISTS, store unchanged', () => {
+  const c = ctx();
+  assert.equal(run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [ADD()])]).status, 0);
+  const { dir } = ensureStore(c.ws, { home: c.harnessHome });
+  const before = listLearnings(dir);
+
+  const collide = ADD({
+    body: 'A different claim body for the same domain/slug id.',
+    episodes: [EP({ path: 'docs/solutions/perf/y.md', sha256: 'b'.repeat(64) })],
+  });
+  const res = run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [collide])]);
+  assert.equal(res.status, 1, res.stderr || res.stdout);
+  assert.match(res.stdout + res.stderr, /E_EXISTS/);
+  assert.match(res.stdout + res.stderr, /STRENGTHEN.*SUPERSEDE/);
+
+  const after = listLearnings(dir);
+  assert.deepEqual(after.map((l) => l.body), before.map((l) => l.body), 'store content unchanged after a rejected colliding ADD');
+  assert.equal(readLedger(dir).length, 1, 'ledger not appended by the rejected op');
+});
+
+test('a model SUPERSEDE (fix-kind episodes) on a source: human target still lands disputed', () => {
+  const c = ctx();
+  const humanAdd = ADD({
+    slug: 'human-taught-claim',
+    episodes: [EP({ kind: 'human-teaching', plan: null })],
+  });
+  assert.equal(run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [humanAdd])]).status, 0);
+  const { dir } = ensureStore(c.ws, { home: c.harnessHome });
+  const seeded = listLearnings(dir).find((l) => l.id === 'sql/human-taught-claim');
+  assert.equal(seeded.fm.source, 'human');
+
+  const modelSupersede = {
+    op: 'SUPERSEDE',
+    target: 'sql/human-taught-claim',
+    domain: 'sql',
+    slug: 'human-taught-claim-v2',
+    trigger: 'a model-proposed replacement trigger',
+    body: 'a model-proposed replacement body text',
+    episodes: [EP({ path: 'docs/solutions/perf/model.md', sha256: 'f'.repeat(64), kind: 'fix' })],
+  };
+  const res = run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [modelSupersede])]);
+  assert.equal(res.status, 0, res.stderr || res.stdout);
+  const out = JSON.parse(res.stdout);
+  assert.equal(out.rejected[0].reason, 'disputed-pending-human');
+  const after = listLearnings(dir).find((l) => l.id === 'sql/human-taught-claim');
+  assert.equal(after.fm.status, 'disputed');
 });
 
 test('STRENGTHEN on a missing target rejects the run', () => {

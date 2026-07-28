@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
 import {
   ensureStore,
   appendLedger,
@@ -151,7 +152,7 @@ export function applyOps({ workspace, opsPath, dryRun = false, home }) {
     return { applied: [], rejected: [fail('E_SCHEMA', 'ops file must be { schema: 1, ops: [...] }')], committed: false, exitCode: 1 };
   }
 
-  const { dir } = ensureStore(workspace, { home, dryRun });
+  const { dir, git } = ensureStore(workspace, { home, dryRun });
   const origin = repoId(workspace);
   const existing = new Map(listLearnings(dir).map((l) => [l.id, l]));
 
@@ -192,6 +193,21 @@ export function applyOps({ workspace, opsPath, dryRun = false, home }) {
       if (!op.domain || !op.slug || !op.trigger || !op.body) {
         return { applied: [], rejected: [fail('E_SCHEMA', `op ${i}: ${op.op} needs domain, slug, trigger, body`)], committed: false, exitCode: 1 };
       }
+      if (op.op === 'ADD') {
+        // Dedup-miss protection: an ADD whose id already exists must never
+        // silently overwrite the existing learning — reject the whole run
+        // and route the caller to STRENGTHEN (more evidence) or SUPERSEDE
+        // (replace the claim) instead.
+        const addId = `${normalizeSlug(op.domain)}/${normalizeSlug(op.slug)}`;
+        if (existing.has(addId)) {
+          return {
+            applied: [],
+            rejected: [fail('E_EXISTS', `op ${i}: ${addId} already exists — use STRENGTHEN (more evidence) or SUPERSEDE (replace the claim)`)],
+            committed: false,
+            exitCode: 1,
+          };
+        }
+      }
       const secrets = scanSecrets(`${op.trigger}\n${op.body}`);
       if (secrets.length) {
         return { applied: [], rejected: [fail('E_SECRET', `op ${i}: secret-shaped content (${secrets.map((s) => s.id).join(', ')})`)], committed: false, exitCode: 1 };
@@ -204,7 +220,14 @@ export function applyOps({ workspace, opsPath, dryRun = false, home }) {
 
     if (op.op === 'SUPERSEDE') {
       const target = existing.get(op.target);
-      if (verifiedFixLinks(target.fm) >= DISPUTED_FIX_THRESHOLD || target.fm.source === 'human') {
+      // A human directly re-teaching (every new episode is human-teaching)
+      // supersedes with full authority — direct human authority, consistent
+      // with the source-derivation rule. A model can't fake this without
+      // fabricating human-teaching episode files, which the episode files on
+      // disk would contradict — so only skip the demotion for this exact
+      // shape, never for a mix or an all-fix run.
+      const allHumanTeaching = op.episodes.length > 0 && op.episodes.every((e) => e.kind === 'human-teaching');
+      if (!allHumanTeaching && (verifiedFixLinks(target.fm) >= DISPUTED_FIX_THRESHOLD || target.fm.source === 'human')) {
         // Demotion of well-evidenced or human-taught knowledge gets a human
         // reviewer: mark disputed, never silently supersede.
         disputes.push({ index: i, target: op.target });
@@ -272,40 +295,69 @@ export function applyOps({ workspace, opsPath, dryRun = false, home }) {
   const ledgerEntries = [];
   const at = todayClamped();
   try {
-    for (const { op, id, domain, slug, content } of writes) {
-      const file = path.join(dir, 'learnings', domain, `${slug}.md`);
-      fs.mkdirSync(path.dirname(file), { recursive: true });
-      fs.writeFileSync(file, content, 'utf8');
-      applied.push({ op: op.op, id });
-      for (const e of op.episodes) ledgerEntries.push({ path: e.path, sha256: e.sha256, learning: id, at });
-      if (op.op === 'SUPERSEDE') {
-        const target = existing.get(op.target);
-        updateFrontmatterField(target.file, 'superseded_by', id);
+    try {
+      for (const { op, id, domain, slug, content } of writes) {
+        const file = path.join(dir, 'learnings', domain, `${slug}.md`);
+        fs.mkdirSync(path.dirname(file), { recursive: true });
+        fs.writeFileSync(file, content, 'utf8');
+        applied.push({ op: op.op, id });
+        for (const e of op.episodes) ledgerEntries.push({ path: e.path, sha256: e.sha256, learning: id, at });
+        // A SUPERSEDE whose target is the SAME id as the file just written
+        // (human re-teaching the same trigger/domain) is an in-place
+        // replacement, not a tombstone-and-replace: `file` above already IS
+        // the target's file, freshly overwritten with the new claim and
+        // `superseded_by: null` (renderLearning always writes null for a new
+        // write). Stamping superseded_by onto it here would point the new
+        // content at itself, so that step only runs when target !== id.
+        if (op.op === 'SUPERSEDE' && op.target !== id) {
+          const target = existing.get(op.target);
+          updateFrontmatterField(target.file, 'superseded_by', id);
+        }
       }
-    }
 
-    for (const op of planned) {
-      if (op.op === 'STRENGTHEN') {
-        const target = existing.get(op.target);
-        strengthenLearning(target, op.episodes, workspace);
-        applied.push({ op: 'STRENGTHEN', id: op.target });
-        for (const e of op.episodes) ledgerEntries.push({ path: e.path, sha256: e.sha256, learning: op.target, at });
-      } else if (op.op === 'NOOP') {
-        applied.push({ op: 'NOOP', id: op.reason || null });
-        for (const e of op.episodes) ledgerEntries.push({ path: e.path, sha256: e.sha256, learning: null, at });
+      for (const op of planned) {
+        if (op.op === 'STRENGTHEN') {
+          const target = existing.get(op.target);
+          strengthenLearning(target, op.episodes, workspace);
+          applied.push({ op: 'STRENGTHEN', id: op.target });
+          for (const e of op.episodes) ledgerEntries.push({ path: e.path, sha256: e.sha256, learning: op.target, at });
+        } else if (op.op === 'NOOP') {
+          applied.push({ op: 'NOOP', id: op.reason || null });
+          for (const e of op.episodes) ledgerEntries.push({ path: e.path, sha256: e.sha256, learning: null, at });
+        }
       }
-    }
 
-    for (const d of disputes) {
-      const target = existing.get(d.target);
-      updateFrontmatterField(target.file, 'status', 'disputed');
-      rejected.push({ ...fail('E_DISPUTED', 'disputed-pending-human'), reason: 'disputed-pending-human', target: d.target });
-    }
+      for (const d of disputes) {
+        const target = existing.get(d.target);
+        updateFrontmatterField(target.file, 'status', 'disputed');
+        rejected.push({ ...fail('E_DISPUTED', 'disputed-pending-human'), reason: 'disputed-pending-human', target: d.target });
+      }
 
-    if (ledgerEntries.length) appendLedger(dir, ledgerEntries);
-    rebuildIndex(dir);
+      if (ledgerEntries.length) appendLedger(dir, ledgerEntries);
+      rebuildIndex(dir);
+    } catch (err) {
+      // Atomic apply: the mutation phase (learning files → target
+      // frontmatter → ledger append → INDEX rebuild) can throw mid-way,
+      // leaving partial state. The store tree is committed-clean before
+      // every apply (single-commit invariant), so a hard reset + clean fully
+      // undoes any partial writes — same git-invocation style as
+      // commitStore. Best effort only: a store with no git (ensureStore
+      // degraded) has nothing to restore to, so we skip and still fail.
+      if (git) {
+        spawnSync('git', ['reset', '--hard'], { cwd: dir, encoding: 'utf8' });
+        spawnSync('git', ['clean', '-fd'], { cwd: dir, encoding: 'utf8' });
+      }
+      return {
+        applied: [],
+        rejected: [fail('E_APPLY_FAILED', err.message)],
+        committed: false,
+        exitCode: 1,
+      };
+    }
   } finally {
-    fs.rmdirSync(lockPath);
+    // The rollback above may have already removed the untracked .lock
+    // directory via `git clean -fd` — tolerate that instead of throwing.
+    fs.rmSync(lockPath, { recursive: true, force: true });
   }
 
   const summary = applied.map((a) => `${a.op.toLowerCase()}${a.id ? ` ${a.id}` : ''}`).join(' · ') || 'noop';

@@ -882,7 +882,7 @@ export async function cmdConsolidate(argv) {
   if (argv.includes('--rebuild')) {
     const { rebuildStore } = await import('./knowledge/admin.mjs');
     const { CONSOLIDATION_THRESHOLD } = await import('./knowledge/consolidate.mjs');
-    const result = rebuildStore({ workspace, yes: flags.yes });
+    const result = rebuildStore({ workspace, yes: flags.yes, copilotHome });
     writeEvent(workspace, flags, {
       type: 'consolidate',
       command: 'consolidate',

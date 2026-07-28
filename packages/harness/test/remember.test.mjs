@@ -35,6 +35,35 @@ test('remember writes a human-teaching episode and an active source: human learn
   assert.ok(readLedger(dir).some((e) => e.learning === out.learningId), 'episode consumed in ledger');
 });
 
+test('remember twice with the same trigger/domain supersedes in place: new claim wins, status active, source human, both episodes consumed', () => {
+  const c = ctx();
+  const first = run(c, ['remember', 'First claim: always two-step ALTER.', '--trigger', 'a re-teach trigger', '--domain', 'sql']);
+  assert.equal(first.status, 0, first.stderr + first.stdout);
+  const firstOut = JSON.parse(first.stdout);
+
+  const second = run(c, ['remember', 'Second claim: actually just backfill first.', '--trigger', 'a re-teach trigger', '--domain', 'sql']);
+  assert.equal(second.status, 0, second.stderr + second.stdout);
+  const secondOut = JSON.parse(second.stdout);
+
+  assert.equal(firstOut.learningId, secondOut.learningId, 'same trigger/domain yields the same learning id both times');
+  assert.notEqual(firstOut.episodePath, secondOut.episodePath, 'two distinct (dedup-suffixed) episode files');
+
+  const { dir } = ensureStore(c.ws, { home: c.harnessHome });
+  const learnings = listLearnings(dir).filter((l) => l.id === firstOut.learningId);
+  assert.equal(learnings.length, 1, 'exactly one learning file — in-place replacement, not a tombstone+replacement pair');
+  const learning = learnings[0];
+  assert.match(learning.body, /Second claim/);
+  assert.doesNotMatch(learning.body, /First claim/);
+  assert.equal(learning.fm.status, 'active');
+  assert.equal(learning.fm.source, 'human');
+  assert.equal(learning.fm.superseded_by, null, 'in-place re-teach must not point superseded_by at itself');
+  assert.equal(learning.fm.episodes.length, 1, 'fresh episodes list — only the new teaching episode');
+
+  const ledger = readLedger(dir);
+  assert.ok(ledger.some((e) => e.path === firstOut.episodePath), 'first episode consumed in the ledger');
+  assert.ok(ledger.some((e) => e.path === secondOut.episodePath), 'second episode consumed in the ledger');
+});
+
 test('remember requires --trigger and a claim positional', () => {
   const c = ctx();
   assert.equal(run(c, ['remember', '--trigger', 'x']).status, 2);

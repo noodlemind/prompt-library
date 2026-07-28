@@ -101,13 +101,56 @@ export function purgeEpisode({ workspace, target, home }) {
       blockedReason: 'purge target escapes the workspace',
     };
   }
+  const episodeFull = path.join(workspace, target);
+  const episodeExistsOnDisk = fs.existsSync(episodeFull);
+
+  // Non-creating gate: a storeless workspace must never be materialized just
+  // to discover there's nothing in it to purge. The workspace episode FILE
+  // is a separate concern from the store, though — deleting it (if present)
+  // is the human's explicit intent even with no store at all, so that still
+  // runs; every store-side stage below is skipped entirely.
+  const storePath = storeDir(workspace, { home });
+  if (!fs.existsSync(storePath)) {
+    if (episodeExistsOnDisk) {
+      fs.rmSync(episodeFull, { force: true });
+      return {
+        pass: true,
+        exitCode: 0,
+        removed: { episode: target, learnings: [], links: [], ledger: 0 },
+        blockedReason: null,
+      };
+    }
+    return {
+      pass: false,
+      exitCode: 2,
+      removed: null,
+      blockedReason: `nothing references ${target} — nothing to purge`,
+    };
+  }
+
   const { dir } = ensureStore(workspace, { home });
+
+  // Read-only discovery pass first: decide whether anything actually
+  // references `target` before mutating anything, so a no-match purge can
+  // bail with zero side effects (no commit) instead of reporting a false
+  // "pass" for a target nothing ever cited.
+  const matchingLearnings = listLearnings(dir).filter((l) => (l.fm.episodes || []).some((e) => e.path === target));
+  const ledger = readLedger(dir);
+  const ledgerHits = ledger.filter((e) => e.path === target).length;
+
+  if (!episodeExistsOnDisk && matchingLearnings.length === 0 && ledgerHits === 0) {
+    return {
+      pass: false,
+      exitCode: 2,
+      removed: null,
+      blockedReason: `nothing references ${target} — nothing to purge`,
+    };
+  }
 
   const removedLearnings = [];
   const removedLinks = [];
-  for (const l of listLearnings(dir)) {
+  for (const l of matchingLearnings) {
     const episodes = l.fm.episodes || [];
-    if (!episodes.some((e) => e.path === target)) continue;
     // Decide by the post-filter count, not the pre-filter episode count: a
     // learning can cite the same path twice with different sha256 values
     // (ADD then STRENGTHEN after the episode file was edited), so "one
@@ -125,7 +168,6 @@ export function purgeEpisode({ workspace, target, home }) {
     }
   }
 
-  const ledger = readLedger(dir);
   const keptLedger = ledger.filter((e) => e.path !== target);
   fs.writeFileSync(
     path.join(dir, 'consolidated.jsonl'),
@@ -134,8 +176,7 @@ export function purgeEpisode({ workspace, target, home }) {
   );
 
   let episodeRemoved = false;
-  const episodeFull = path.join(workspace, target);
-  if (fs.existsSync(episodeFull)) {
+  if (episodeExistsOnDisk) {
     fs.rmSync(episodeFull, { force: true });
     episodeRemoved = true;
   }
@@ -163,6 +204,17 @@ export function purgeEpisode({ workspace, target, home }) {
  * next `consolidate --status`.
  */
 export function purgeAll({ workspace, home }) {
+  // Non-creating gate: a storeless workspace has nothing to purge — must
+  // never be materialized by --all just to discover that.
+  const storePath = storeDir(workspace, { home });
+  if (!fs.existsSync(storePath)) {
+    return {
+      pass: false,
+      exitCode: 2,
+      removed: null,
+      blockedReason: 'nothing to purge — no knowledge store yet',
+    };
+  }
   const { dir } = ensureStore(workspace, { home });
   const learningsDir = path.join(dir, 'learnings');
   let n = 0;
@@ -191,7 +243,7 @@ export function purgeAll({ workspace, home }) {
  * Mode-gated like every other knowledge write — human purge is the only
  * always-on path.
  */
-export function rebuildStore({ workspace, home, yes }) {
+export function rebuildStore({ workspace, home, yes, copilotHome }) {
   const { mode } = readStoreConfig(workspace, { home });
   if (mode !== 'on') {
     return {
@@ -204,13 +256,13 @@ export function rebuildStore({ workspace, home, yes }) {
     };
   }
 
-  // Non-creating read: a workspace/home with no store yet must never be
-  // materialized by a blocked (no --yes) call — "no mutation" has to hold
-  // even for the store's own existence, not just its contents.
-  const storePath = storeDir(workspace, { home });
-  const archivedPreview = fs.existsSync(storePath) ? listLearnings(storePath).length : 0;
-
   if (!yes) {
+    // Non-creating read: a workspace/home with no store yet must never be
+    // materialized by a blocked (no --yes) call — "no mutation" has to hold
+    // even for the store's own existence, not just its contents. listLearnings
+    // only runs on this (preview) path, once.
+    const storePath = storeDir(workspace, { home });
+    const archivedPreview = fs.existsSync(storePath) ? listLearnings(storePath).length : 0;
     return {
       pass: false,
       exitCode: 2,
@@ -222,7 +274,8 @@ export function rebuildStore({ workspace, home, yes }) {
   }
 
   // Mutation branch only: creating the store here (if absent) is expected —
-  // --yes is an explicit go-ahead, unlike the preview above.
+  // --yes is an explicit go-ahead, unlike the preview above. listLearnings
+  // only runs on this (mutation) path, once.
   const { dir } = ensureStore(workspace, { home });
   const archived = listLearnings(dir).length;
 
@@ -238,7 +291,10 @@ export function rebuildStore({ workspace, home, yes }) {
   fs.rmSync(path.join(dir, 'stale.json'), { force: true });
   commitStore(dir, `consolidate: rebuild reset (${archived} learnings archived to git history)`);
 
-  const { debt } = consolidateStatus({ workspace, home });
+  // copilotHome must be threaded through so the fresh debt count includes
+  // global episodes (docs/solutions under the copilot home), not just
+  // product-local ones — otherwise a rebuild under-reports debt.
+  const { debt } = consolidateStatus({ workspace, home, copilotHome });
   return {
     pass: true,
     exitCode: 0,

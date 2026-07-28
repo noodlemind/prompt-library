@@ -390,6 +390,104 @@ test('knowledge purge --all empties the learnings store while episodes remain as
   assert.equal(after.debt, 5, 'episodes re-enter debt once the ledger is reset');
 });
 
+test('purge on a target nothing references is blocked honestly: exit 2, no commit, no removed payload', () => {
+  const c = ctx();
+  seedLearning(c);
+  const { dir } = ensureStore(c.ws, { home: c.harnessHome });
+  const logBefore = spawnSync('git', ['log', '--oneline'], { cwd: dir, encoding: 'utf8' }).stdout;
+
+  const res = run(c, ['knowledge', 'purge', 'docs/solutions/perf/never-referenced.md']);
+  assert.equal(res.status, 2, res.stderr || res.stdout);
+  const out = JSON.parse(res.stdout);
+  assert.equal(out.pass, false);
+  assert.equal(out.removed, null);
+  assert.match(out.blockedReason, /nothing references .*never-referenced\.md.*nothing to purge/);
+
+  const logAfter = spawnSync('git', ['log', '--oneline'], { cwd: dir, encoding: 'utf8' }).stdout;
+  assert.equal(logAfter, logBefore, 'a no-match purge must not create a commit');
+});
+
+test('storeless purge of an existing episode file deletes the file and never creates a store', () => {
+  const c = ctx();
+  const targetPath = 'docs/solutions/perf/orphan.md';
+  fs.mkdirSync(path.join(c.ws, 'docs', 'solutions', 'perf'), { recursive: true });
+  fs.writeFileSync(path.join(c.ws, targetPath), 'an orphan episode file with no store yet\n');
+
+  const dir = storeDir(c.ws, { home: c.harnessHome });
+  assert.equal(fs.existsSync(dir), false, 'precondition: no store yet');
+
+  const res = run(c, ['knowledge', 'purge', targetPath]);
+  assert.equal(res.status, 0, res.stderr || res.stdout);
+  const out = JSON.parse(res.stdout);
+  assert.equal(out.removed.episode, targetPath);
+  assert.deepEqual(out.removed.learnings, []);
+  assert.deepEqual(out.removed.links, []);
+  assert.equal(out.removed.ledger, 0);
+
+  assert.ok(!fs.existsSync(path.join(c.ws, targetPath)), 'episode file deleted');
+  assert.equal(fs.existsSync(dir), false, 'a storeless purge must not create a store');
+});
+
+test('purge --all on a storeless workspace is blocked and does not create a store', () => {
+  const c = ctx();
+  const dir = storeDir(c.ws, { home: c.harnessHome });
+  assert.equal(fs.existsSync(dir), false, 'precondition: no store yet');
+
+  const res = run(c, ['knowledge', 'purge', '--all']);
+  assert.equal(res.status, 2, res.stderr || res.stdout);
+  const out = JSON.parse(res.stdout);
+  assert.equal(out.pass, false);
+  assert.equal(out.removed, null);
+
+  assert.equal(fs.existsSync(dir), false, 'a storeless purge --all must not create a store');
+});
+
+test('anchors populated at ADD survive a purge-unlink round trip byte-identical', () => {
+  const c = ctx();
+  const targetPath = 'docs/solutions/perf/anchor-target.md';
+  const otherPath = 'docs/solutions/perf/anchor-other.md';
+  fs.mkdirSync(path.join(c.ws, 'docs', 'solutions', 'perf'), { recursive: true });
+  fs.writeFileSync(path.join(c.ws, targetPath), 'target episode body\n');
+  // otherPath's own body references targetPath — a real workspace file — so
+  // extractAnchors (apply.mjs) picks up a real, non-empty anchor at ADD time.
+  fs.writeFileSync(path.join(c.ws, otherPath), `other episode body referencing ${targetPath}\n`);
+
+  const shared = {
+    op: 'ADD',
+    domain: 'sql',
+    slug: 'anchor-round-trip',
+    trigger: 'anchor round trip trigger',
+    body: 'anchor round trip body text',
+    episodes: [
+      { path: targetPath, sha256: 'a'.repeat(64), kind: 'fix', plan: 'docs/plans/p1.md' },
+      { path: otherPath, sha256: 'b'.repeat(64), kind: 'fix', plan: 'docs/plans/p2.md' },
+    ],
+  };
+  assert.equal(applyOps({ workspace: c.ws, opsPath: writeOps(c.ws, [shared]), home: c.harnessHome }).exitCode, 0);
+
+  const { dir } = ensureStore(c.ws, { home: c.harnessHome });
+  const learning = listLearnings(dir).find((l) => l.id === 'sql/anchor-round-trip');
+  assert.ok(learning, 'learning written');
+  assert.deepEqual(learning.fm.anchors, [targetPath], 'ADD populates a non-empty anchors list');
+
+  const anchorsBlock = (text) => text.match(/anchors:\n((?:  - .+\n)*)/)[0];
+  const before = anchorsBlock(fs.readFileSync(learning.file, 'utf8'));
+
+  // Purge one of the two episode paths (not targetPath's anchor role, its
+  // role as one of two evidence links) — the learning survives with the
+  // other episode, exercising removeEpisodeLink's populated-anchors branch.
+  const res = run(c, ['knowledge', 'purge', otherPath]);
+  assert.equal(res.status, 0, res.stderr || res.stdout);
+  const out = JSON.parse(res.stdout);
+  assert.deepEqual(out.removed.links, ['sql/anchor-round-trip']);
+
+  const after = listLearnings(dir).find((l) => l.id === 'sql/anchor-round-trip');
+  assert.ok(after, 'learning survives the unlink (still has the targetPath episode)');
+  const afterBlock = anchorsBlock(fs.readFileSync(after.file, 'utf8'));
+  assert.equal(afterBlock, before, 'anchors block byte-identical after the purge-unlink rewrite');
+  assert.deepEqual(after.fm.anchors, [targetPath]);
+});
+
 test('knowledge <bogus> exits 2 with a usage error', () => {
   const c = ctx();
   const res = run(c, ['knowledge', 'bogus']);
