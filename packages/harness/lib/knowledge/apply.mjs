@@ -30,7 +30,12 @@ function fail(code, reason) {
 }
 
 function yamlQuote(v) {
-  return `"${String(v).replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+  return `"${String(v)
+    .replace(/\\/g, '\\\\')
+    .replace(/"/g, '\\"')
+    .replace(/\n/g, '\\n')
+    .replace(/\r/g, '\\r')
+    .replace(/\t/g, '\\t')}"`;
 }
 
 export function todayClamped() {

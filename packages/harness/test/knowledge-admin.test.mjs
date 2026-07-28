@@ -171,6 +171,77 @@ test('knowledge purge <episode> cascades: sole-evidence learning removed, shared
   assert.ok(fs.existsSync(path.join(c.ws, otherPath)), 'unrelated episode file untouched');
 });
 
+// Mirrors yamlQuote's inner escaping (apply.mjs and admin.mjs both apply this
+// same transform to whatever string they're given — including a value that
+// was already escaped by a previous write cycle, since the line-oriented
+// parser only strips wrapping quotes and never un-escapes).
+function yamlEscapeLike(v) {
+  return v
+    .replace(/\\/g, '\\\\')
+    .replace(/\n/g, '\\n')
+    .replace(/\r/g, '\\r')
+    .replace(/\t/g, '\\t');
+}
+
+test('an embedded newline in an ADD trigger survives both the initial write (apply.mjs) and a later purge-unlink rewrite (admin.mjs)', () => {
+  const c = ctx();
+  const targetPath = 'docs/solutions/perf/target-nl.md';
+  const otherPath = 'docs/solutions/perf/other-nl.md';
+  fs.mkdirSync(path.join(c.ws, 'docs', 'solutions', 'perf'), { recursive: true });
+  fs.writeFileSync(path.join(c.ws, targetPath), 'target episode body\n');
+  fs.writeFileSync(path.join(c.ws, otherPath), 'other episode body\n');
+
+  const trigger = 'trigger line one\nline two: fake-key';
+  const shared = {
+    op: 'ADD',
+    domain: 'sql',
+    slug: 'shared-newline-trigger',
+    trigger,
+    body: 'shared evidence body text',
+    episodes: [
+      { path: targetPath, sha256: 'a'.repeat(64), kind: 'fix', plan: 'docs/plans/p1.md' },
+      { path: otherPath, sha256: 'b'.repeat(64), kind: 'fix', plan: 'docs/plans/p2.md' },
+    ],
+  };
+  assert.equal(applyOps({ workspace: c.ws, opsPath: writeOps(c.ws, [shared]), home: c.harnessHome }).exitCode, 0);
+
+  const { dir } = ensureStore(c.ws, { home: c.harnessHome });
+
+  // Stage 1: the initial ADD write (apply.mjs's renderLearning/yamlQuote) —
+  // the frontmatter must stay one line per key, and the parsed trigger must
+  // round-trip through the same parser the store uses everywhere. The
+  // line-oriented parser only strips quotes, it never un-escapes, so the
+  // parsed value is the escaped text, not the original raw newline.
+  const escapedOnce = yamlEscapeLike(trigger);
+  let learning = listLearnings(dir).find((l) => l.id === 'sql/shared-newline-trigger');
+  assert.ok(learning, 'learning written');
+  let raw = fs.readFileSync(learning.file, 'utf8');
+  let triggerLines = raw.match(/^---\n([\s\S]*?)\n---/)[1].split('\n').filter((l) => /^trigger:/.test(l));
+  assert.equal(triggerLines.length, 1, 'trigger stays one line after the initial ADD write');
+  assert.equal(learning.fm.trigger, escapedOnce);
+
+  // Stage 2: a purge-unlink on one of two episodes rewrites the file through
+  // admin.mjs's removeEpisodeLink/yamlQuote. It re-escapes whatever it reads
+  // (already-escaped text from stage 1), so the on-disk value gains another
+  // escaping pass — expected given this format's one-way escape, not a bug.
+  // The invariant that matters is the one this fix protects: the frontmatter
+  // must still be exactly one line per key, and the original content must
+  // still be recoverable (not truncated or dropped) after the rewrite.
+  const res = run(c, ['knowledge', 'purge', targetPath]);
+  assert.equal(res.status, 0, res.stderr || res.stdout);
+  const out = JSON.parse(res.stdout);
+  assert.deepEqual(out.removed.links, ['sql/shared-newline-trigger']);
+
+  learning = listLearnings(dir).find((l) => l.id === 'sql/shared-newline-trigger');
+  assert.ok(learning, 'learning survives the unlink rewrite');
+  raw = fs.readFileSync(learning.file, 'utf8');
+  triggerLines = raw.match(/^---\n([\s\S]*?)\n---/)[1].split('\n').filter((l) => /^trigger:/.test(l));
+  assert.equal(triggerLines.length, 1, 'trigger still one line after admin.mjs rewrites the file');
+  const escapedTwice = yamlEscapeLike(escapedOnce);
+  assert.equal(learning.fm.trigger, escapedTwice, 'trigger content preserved (re-escaped, not corrupted or lost)');
+  assert.match(learning.fm.trigger, /trigger line one.*line two: fake-key/, 'original text still recoverable');
+});
+
 test('knowledge purge preserves last_confirmed on the remaining learning instead of stamping it to today', () => {
   const c = ctx();
   const targetPath = 'docs/solutions/perf/target.md';
