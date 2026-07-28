@@ -45,6 +45,29 @@ export function runRemember({ workspace, copilotHome, flags, argv, log = () => {
       nextTools: ['harness remember "<claim>" --trigger "<when it applies>"'],
     };
   }
+
+  const domain = normalizeSlug(flags.domain || 'general');
+  const slug = normalizeSlug(flags.trigger);
+  const learningId = `${domain}/${slug}`;
+
+  // A promoted learning's behavior now lives in a primitive (design §10) —
+  // re-teaching the same trigger/domain would silently resurrect knowledge
+  // the primitive already supersedes. Checked BEFORE runInsightCompound
+  // below writes the episode file, so a block here never leaves an orphan
+  // to roll back.
+  const dir = storeDir(workspace, { home });
+  const existingLearning = fs.existsSync(dir) ? listLearnings(dir).find((l) => l.id === learningId) : null;
+  if (existingLearning?.fm.promoted_to) {
+    return {
+      pass: false,
+      exitCode: 2,
+      episodePath: null,
+      learningId,
+      blockedReason: `this claim was promoted to ${existingLearning.fm.promoted_to} — update that primitive, or re-teach under a different --trigger/--domain`,
+      nextTools: [`harness learnings --why ${learningId}`],
+    };
+  }
+
   const teachFlags = {
     ...flags,
     title: claim.slice(0, 80),
@@ -63,10 +86,6 @@ export function runRemember({ workspace, copilotHome, flags, argv, log = () => {
       nextTools: episode.nextTools,
     };
   }
-
-  const domain = normalizeSlug(flags.domain || 'general');
-  const slug = normalizeSlug(flags.trigger);
-  const learningId = `${domain}/${slug}`;
 
   // Dry run: --dry-run means runInsightCompound reports a would-be path
   // without writing it, so reading/hashing/applying it would crash on a
@@ -92,11 +111,13 @@ export function runRemember({ workspace, copilotHome, flags, argv, log = () => {
   // the same trigger is not a dedup miss, it's deliberate, so it goes
   // through SUPERSEDE with the same domain/slug (target === new id), which
   // applyOps treats as an in-place replacement: fresh episode, source human,
-  // status active, no superseded_by pointing at itself.
-  const dir = storeDir(workspace, { home });
-  const learningExists = fs.existsSync(dir) && listLearnings(dir).some((l) => l.id === learningId);
+  // status active, no superseded_by pointing at itself. Reuses the
+  // `existingLearning` read above (runInsightCompound only writes an episode
+  // doc, never the learnings store, so re-reading here would see the same
+  // thing) — and applyOps' own STRENGTHEN/SUPERSEDE promoted-target check is
+  // a second, defense-in-depth gate behind the early return above.
   const newEpisode = { path: episode.path, sha256, kind: 'human-teaching', plan: null };
-  const op = learningExists
+  const op = existingLearning
     ? { op: 'SUPERSEDE', target: learningId, domain, slug, trigger: flags.trigger, body: claim, episodes: [newEpisode] }
     : { op: 'ADD', domain, slug, trigger: flags.trigger, body: claim, episodes: [newEpisode] };
   const ops = { schema: 1, ops: [op] };

@@ -70,6 +70,32 @@ function fail(code, reason) {
   return { code, reason };
 }
 
+/**
+ * A promoted learning's behavior now lives in a primitive (design §10) — a
+ * STRENGTHEN/SUPERSEDE/MERGE writing over it would let the learning drift
+ * from the primitive that superseded it, with nothing to catch the
+ * divergence. Rejected unconditionally, both lanes, no human-teaching
+ * reteach exemption: a human refining a promoted claim should update the
+ * primitive, not resurrect the learning. This is a content-shape rejection
+ * (E_TARGET) but deliberately NOT routed through rejectOp/
+ * recordContentFailure — the offered episodes aren't defective, the op's
+ * choice of target is, so a model repeatedly aiming at a promoted id must
+ * never accumulate toward quarantine for it.
+ */
+function promotedTargetRejection(i, id, promotedTo) {
+  return {
+    applied: [],
+    rejected: [
+      fail(
+        'E_TARGET',
+        `op ${i}: target ${id} is promoted — behavior supersedes knowledge; update the primitive (${promotedTo}) or choose a new slug`
+      ),
+    ],
+    committed: false,
+    exitCode: 1,
+  };
+}
+
 function yamlQuote(v) {
   return `"${String(v)
     .replace(/\\/g, '\\\\')
@@ -353,6 +379,13 @@ export function applyOps({ workspace, opsPath, dryRun = false, home, approve = f
       if (!op.target || !existing.has(op.target)) {
         return rejectOp('E_TARGET', `op ${i}: target ${op.target || '(none)'} does not exist`, op.episodes);
       }
+      // Checked before the consumed-target check and before any of
+      // SUPERSEDE's own reteach/dispute logic further below — a promoted
+      // target is rejected unconditionally, never conditionally exempted.
+      const promotedTo = existing.get(op.target).fm.promoted_to;
+      if (promotedTo) {
+        return promotedTargetRejection(i, op.target, promotedTo);
+      }
       if (consumedTargets.has(op.target)) {
         return rejectOp('E_TARGET', `op ${i}: target ${op.target} already consumed by an earlier op in this run`, op.episodes);
       }
@@ -365,6 +398,12 @@ export function applyOps({ workspace, opsPath, dryRun = false, home, approve = f
       for (const t of op.targets) {
         if (!existing.has(t)) {
           return rejectOp('E_TARGET', `op ${i}: target ${t} does not exist`, op.episodes);
+        }
+      }
+      for (const t of op.targets) {
+        const promotedTo = existing.get(t).fm.promoted_to;
+        if (promotedTo) {
+          return promotedTargetRejection(i, t, promotedTo);
         }
       }
       for (const t of op.targets) {

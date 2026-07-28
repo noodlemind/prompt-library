@@ -5,8 +5,10 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
-import { storeDir, listLearnings } from '../lib/knowledge/store.mjs';
+import { storeDir, listLearnings, readLedger } from '../lib/knowledge/store.mjs';
 import { rankLearnings } from '../lib/knowledge/retrieve.mjs';
+
+const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const binPath = path.join(packageRoot, 'bin', 'harness.mjs');
@@ -162,4 +164,107 @@ test('learning promote --to a primitive path that does not exist exits 1 with E_
   const res = run(c, ['learning', 'promote', id, '--to', '.github/instructions/does-not-exist.instructions.md']);
   assert.equal(res.status, 1, res.stderr || res.stdout);
   assert.match(res.stdout + res.stderr, /E_TARGET/);
+});
+
+test('a model-lane same-id SUPERSEDE against a promoted learning is rejected, promoted_to survives, ranking stays empty, and no strike is recorded', () => {
+  const c = ctx();
+  const id = seedPromotable(c);
+  const to = primitivePath(c.ws);
+
+  const promoteRes = run(c, ['learning', 'promote', id, '--to', to]);
+  assert.equal(promoteRes.status, 0, promoteRes.stderr || promoteRes.stdout);
+
+  const dir = storeDir(c.ws, { home: c.harnessHome });
+  const ledgerBefore = readLedger(dir).length;
+
+  // A model-lane re-derivation: same domain/slug (in-place SUPERSEDE shape),
+  // fresh fix-kind episodes, no human-teaching assertion at all.
+  const supersedeOp = {
+    op: 'SUPERSEDE',
+    target: id,
+    domain: 'sql',
+    slug: 'not-null-large-tables',
+    trigger: 'adding NOT NULL columns to large hot tables, revised',
+    body: 'A model-proposed rewrite of the same claim.',
+    episodes: [{ path: 'docs/solutions/perf/w.md', sha256: 'e'.repeat(64), kind: 'fix', plan: 'docs/plans/p3.md' }],
+  };
+  const res = run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [supersedeOp])]);
+  assert.equal(res.status, 1, res.stderr || res.stdout);
+  const out = JSON.parse(res.stdout);
+  assert.match(out.rejected[0].reason, /is promoted/);
+  assert.match(out.rejected[0].reason, new RegExp(escapeRe(to)));
+  assert.equal(out.rejected[0].code, 'E_TARGET');
+
+  const learning = listLearnings(dir).find((l) => l.id === id);
+  assert.equal(learning.fm.promoted_to, to, 'promoted_to must survive the rejected SUPERSEDE');
+  assert.equal(learning.body.trim(), 'Use two-step default+backfill; a direct ALTER takes an exclusive lock.', 'body untouched');
+
+  const ranked = rankLearnings({
+    workspace: c.ws, query: 'adding NOT NULL columns to large hot tables', limit: 10, home: c.harnessHome,
+  });
+  assert.ok(!ranked.some((r) => r.id === id), 'still absent from ranking after the rejected SUPERSEDE');
+
+  assert.equal(readLedger(dir).length, ledgerBefore, 'rejecting a promoted target must record no quarantine strike');
+});
+
+test('learning promote then remember with the same trigger/domain exits 2 with the primitive-path message and writes no episode file', () => {
+  const c = ctx();
+  const rememberRes = run(c, [
+    'remember',
+    'Use two-step default+backfill for NOT NULL adds; direct ALTER takes an exclusive lock.',
+    '--trigger', 'adding NOT NULL columns to hot tables',
+    '--domain', 'sql',
+  ]);
+  assert.equal(rememberRes.status, 0, rememberRes.stderr || rememberRes.stdout);
+  const learningId = JSON.parse(rememberRes.stdout).learningId;
+
+  const to = primitivePath(c.ws);
+  const promoteRes = run(c, ['learning', 'promote', learningId, '--to', to]);
+  assert.equal(promoteRes.status, 0, promoteRes.stderr || promoteRes.stdout);
+
+  const teachDir = path.join(c.ws, 'docs', 'solutions', 'teachings');
+  const before = fs.existsSync(teachDir) ? fs.readdirSync(teachDir).sort() : [];
+
+  const reteachRes = run(c, [
+    'remember',
+    'A refined claim about NOT NULL adds.',
+    '--trigger', 'adding NOT NULL columns to hot tables',
+    '--domain', 'sql',
+  ]);
+  assert.equal(reteachRes.status, 2, reteachRes.stderr || reteachRes.stdout);
+  const out = JSON.parse(reteachRes.stdout);
+  assert.match(out.blockedReason || '', /this claim was promoted to/);
+  assert.match(out.blockedReason || '', new RegExp(escapeRe(to)));
+
+  const after = fs.existsSync(teachDir) ? fs.readdirSync(teachDir).sort() : [];
+  assert.deepEqual(after, before, 'no new episode file written for the blocked re-teach');
+});
+
+test('a STRENGTHEN targeting a promoted learning is rejected and records no strike', () => {
+  const c = ctx();
+  const id = seedPromotable(c);
+  const to = primitivePath(c.ws);
+
+  const promoteRes = run(c, ['learning', 'promote', id, '--to', to]);
+  assert.equal(promoteRes.status, 0, promoteRes.stderr || promoteRes.stdout);
+
+  const dir = storeDir(c.ws, { home: c.harnessHome });
+  const ledgerBefore = readLedger(dir).length;
+
+  const strengthenOp = {
+    op: 'STRENGTHEN',
+    target: id,
+    episodes: [{ path: 'docs/solutions/perf/v.md', sha256: 'f'.repeat(64), kind: 'fix', plan: 'docs/plans/p4.md' }],
+  };
+  const res = run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [strengthenOp])]);
+  assert.equal(res.status, 1, res.stderr || res.stdout);
+  const out = JSON.parse(res.stdout);
+  assert.match(out.rejected[0].reason, /is promoted/);
+  assert.equal(out.rejected[0].code, 'E_TARGET');
+
+  const learning = listLearnings(dir).find((l) => l.id === id);
+  assert.equal(learning.fm.promoted_to, to);
+  assert.equal(learning.fm.episodes.length, 3, 'STRENGTHEN must not have added the new episode');
+
+  assert.equal(readLedger(dir).length, ledgerBefore, 'rejecting a promoted STRENGTHEN target must record no quarantine strike');
 });
