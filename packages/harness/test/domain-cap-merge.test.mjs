@@ -489,35 +489,90 @@ test('Gap 2: a later SUPERSEDE targeting a learning an earlier MERGE already con
   assert.ok(!listLearnings(dir).some((l) => l.id === 'perf/merged-ab'));
   assert.ok(!listLearnings(dir).some((l) => l.id === 'perf/a-renamed'));
   assert.ok(!listLearnings(dir).some((l) => l.id === 'perf/gap2-new'));
+  // Composition rejection (a SIBLING op's MERGE already consumed this
+  // target, not a defect in the SUPERSEDE op's own episodes) — no strike
+  // recorded for the rejected SUPERSEDE's episode.
+  assert.equal(readLedger(dir).length, 0, 'same-run composition rejection records no strike');
 });
 
 // Same-run consumption also closes the plain two-ADDs-same-id case: without
 // plannedIds tracking, both would pass independently and the second write
-// would silently clobber the first at the same file path.
-test('two ADDs writing the same id in one run are rejected with E_EXISTS (silent-overwrite regression)', () => {
+// would silently clobber the first at the same file path. Reproduced per the
+// milestone review: retried 3x, this must never quarantine the second op's
+// perfectly valid episode — the defect is the op-SET (two ops raced for the
+// same id), not either op's episodes.
+test('two ADDs writing the same id in one run are rejected with E_EXISTS (silent-overwrite regression), and the ledger stays empty even retried 3x', () => {
   const c = ctx();
   const { dir } = ensureStore(c.ws, { home: c.harnessHome });
-  const ops = [
-    ADD({
-      domain: 'sql',
-      slug: 'dup-id',
-      body: 'first body for the duplicate id.',
-      episodes: [EP({ path: 'docs/solutions/perf/dup-1.md', sha256: '5'.repeat(64) })],
-    }),
-    ADD({
-      domain: 'sql',
-      slug: 'dup-id',
-      body: 'second, different body for the same duplicate id.',
-      episodes: [EP({ path: 'docs/solutions/perf/dup-2.md', sha256: '6'.repeat(64) })],
-    }),
-  ];
-  const res = run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, ops)]);
-  assert.equal(res.status, 1, res.stderr || res.stdout);
-  const out = JSON.parse(res.stdout);
-  assert.equal(out.rejected[0].code, 'E_EXISTS');
-  assert.match(out.rejected[0].reason, /already introduced by an earlier op in this run/);
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const ops = [
+      ADD({
+        domain: 'sql',
+        slug: 'dup-id',
+        body: 'first body for the duplicate id.',
+        episodes: [EP({ path: `docs/solutions/perf/dup-1-${attempt}.md`, sha256: `5${attempt}`.padEnd(64, '0') })],
+      }),
+      ADD({
+        domain: 'sql',
+        slug: 'dup-id',
+        body: 'second, different body for the same duplicate id.',
+        episodes: [EP({ path: `docs/solutions/perf/dup-2-${attempt}.md`, sha256: `6${attempt}`.padEnd(64, '0') })],
+      }),
+    ];
+    const res = run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, ops)]);
+    assert.equal(res.status, 1, res.stderr || res.stdout);
+    const out = JSON.parse(res.stdout);
+    assert.equal(out.rejected[0].code, 'E_EXISTS');
+    assert.match(out.rejected[0].reason, /already introduced by an earlier op in this run/);
+  }
 
   assert.equal(listLearnings(dir).length, 0, 'nothing written — no silent overwrite');
+  // The reviewer's reproduction: 3 retries of a same-run collision must
+  // never accumulate strikes against the second op's (perfectly valid, on
+  // its own) episode — the ledger must stay completely empty, not just
+  // under the 3-strike quarantine threshold.
+  assert.equal(readLedger(dir).length, 0, 'same-run composition rejections record no strikes across repeated attempts');
+});
+
+// A MERGE reusing a target an earlier op in the same run already consumed
+// (via MERGE's OWN consumedTargets loop, distinct from Gap 2's
+// STRENGTHEN/SUPERSEDE branch) is the same composition defect — no strike
+// against the MERGE's own (perfectly valid) episode. A rename-shape
+// SUPERSEDE consumes sql/t1 first (weight 1); the MERGE (weight 1+2=3) stays
+// within the 5-file-touch delta contract at a combined weight of 4.
+test('a MERGE reusing a target an earlier SUPERSEDE already consumed this run is rejected with no strike', () => {
+  const c = ctx();
+  const { dir } = ensureStore(c.ws, { home: c.harnessHome });
+  seedLearning(dir, 'sql', 't1');
+  seedLearning(dir, 'sql', 't2');
+  rebuildIndex(dir);
+
+  const supersedeOp = {
+    op: 'SUPERSEDE',
+    target: 'sql/t1',
+    domain: 'sql',
+    slug: 'renamed-t1',
+    trigger: 'a rename supersede consuming t1 first',
+    body: 'body text for the renaming supersede.',
+    episodes: [EP({ path: 'docs/solutions/perf/supersede-t1.md', sha256: '7'.repeat(64) })],
+  };
+  const mergeOp = {
+    op: 'MERGE',
+    targets: ['sql/t1', 'sql/t2'],
+    domain: 'sql',
+    slug: 'merged-attempt',
+    trigger: 'a merge trying to reuse the already-consumed t1',
+    body: 'body text for the merge that collides.',
+    episodes: [EP({ path: 'docs/solutions/perf/merge-attempt.md', sha256: '8'.repeat(64) })],
+  };
+  const res = run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [supersedeOp, mergeOp])]);
+  assert.equal(res.status, 1, res.stderr || res.stdout);
+  const out = JSON.parse(res.stdout);
+  assert.equal(out.rejected[0].code, 'E_TARGET');
+  assert.match(out.rejected[0].reason, /sql\/t1 already consumed by an earlier op in this run/);
+
+  assert.equal(listLearnings(dir).length, 2, 'all-or-nothing — nothing new written');
+  assert.equal(readLedger(dir).length, 0, 'same-run composition rejection records no strike');
 });
 
 // A legitimate multi-op run must still apply cleanly: a same-domain MERGE

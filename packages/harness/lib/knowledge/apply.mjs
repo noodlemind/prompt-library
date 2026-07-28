@@ -27,12 +27,21 @@ import { absorbHandEdits, mirrorLearnings } from './admin.mjs';
 const FILE_TOUCHING = new Set(['ADD', 'STRENGTHEN', 'SUPERSEDE', 'MERGE']);
 const DISPUTED_FIX_THRESHOLD = 3;
 // Codes that indicate the CONTENT of a specific op was rejected (bad shape,
-// secret-shaped, imperative lint, over the byte cap, a dedup/rename
-// collision, or a missing target) — as opposed to run-level or lock-level
-// rejections (E_MODE, E_DELTA_CONTRACT, E_LOCKED, E_APPLY_FAILED) that say
-// nothing about any one op's episodes and must never record a strike.
-// E_DOMAIN_CAP is deliberately excluded too — cap pressure is a run-level
-// resource limit, not a defect in the episodes that produced the op.
+// secret-shaped, imperative lint, over the byte cap, a dedup/rename collision
+// against an ON-DISK learning, or a missing target) — as opposed to two other
+// rejection classes that must NEVER record a strike:
+//   - run-level/lock-level rejections (E_MODE, E_DELTA_CONTRACT, E_LOCKED,
+//     E_APPLY_FAILED, E_DOMAIN_CAP): say nothing about any one op's
+//     episodes. E_DOMAIN_CAP in particular is cap pressure, a run-level
+//     resource limit, not a defect in the episodes that produced the op.
+//   - composition rejections: an op colliding with a SIBLING op earlier in
+//     the SAME run — "target already consumed by an earlier op in this run"
+//     (E_TARGET) and "already introduced by an earlier op in this run"
+//     (E_EXISTS). These say the op-SET was malformed (two ops raced for the
+//     same id/target), not that either op's offered episodes were bad, so
+//     the branches producing them return a plain fail(...) below instead of
+//     calling rejectOp — they never touch this set despite sharing an
+//     E_EXISTS/E_TARGET code with a real, strike-worthy on-disk variant.
 const CONTENT_FAILURE_CODES = new Set(['E_SCHEMA', 'E_SECRET', 'E_LINT', 'E_BYTE_CAP', 'E_EXISTS', 'E_TARGET']);
 
 /**
@@ -387,7 +396,14 @@ export function applyOps({ workspace, opsPath, dryRun = false, home, approve = f
         return promotedTargetRejection(i, op.target, promotedTo);
       }
       if (consumedTargets.has(op.target)) {
-        return rejectOp('E_TARGET', `op ${i}: target ${op.target} already consumed by an earlier op in this run`, op.episodes);
+        // Composition rejection (sibling op raced for this target this same
+        // run) — plain fail, never a strike against this op's episodes.
+        return {
+          applied: [],
+          rejected: [fail('E_TARGET', `op ${i}: target ${op.target} already consumed by an earlier op in this run`)],
+          committed: false,
+          exitCode: 1,
+        };
       }
     }
 
@@ -408,7 +424,14 @@ export function applyOps({ workspace, opsPath, dryRun = false, home, approve = f
       }
       for (const t of op.targets) {
         if (consumedTargets.has(t)) {
-          return rejectOp('E_TARGET', `op ${i}: target ${t} already consumed by an earlier op in this run`, op.episodes);
+          // Composition rejection (sibling op raced for this target this
+          // same run) — plain fail, never a strike against this op's episodes.
+          return {
+            applied: [],
+            rejected: [fail('E_TARGET', `op ${i}: target ${t} already consumed by an earlier op in this run`)],
+            committed: false,
+            exitCode: 1,
+          };
         }
       }
       for (const t of op.targets) {
@@ -431,13 +454,22 @@ export function applyOps({ workspace, opsPath, dryRun = false, home, approve = f
         // and route the caller to STRENGTHEN (more evidence) or SUPERSEDE
         // (replace the claim) instead.
         if (idTaken(newId)) {
-          return rejectOp(
-            'E_EXISTS',
-            existing.has(newId)
-              ? `op ${i}: ${newId} already exists — use STRENGTHEN (more evidence) or SUPERSEDE (replace the claim)`
-              : `op ${i}: ${newId} was already introduced by an earlier op in this run`,
-            op.episodes
-          );
+          if (existing.has(newId)) {
+            // Real on-disk dedup miss — a content-failure strike is warranted.
+            return rejectOp(
+              'E_EXISTS',
+              `op ${i}: ${newId} already exists — use STRENGTHEN (more evidence) or SUPERSEDE (replace the claim)`,
+              op.episodes
+            );
+          }
+          // Composition rejection (a sibling op already claimed this id this
+          // same run) — plain fail, never a strike against this op's episodes.
+          return {
+            applied: [],
+            rejected: [fail('E_EXISTS', `op ${i}: ${newId} was already introduced by an earlier op in this run`)],
+            committed: false,
+            exitCode: 1,
+          };
         }
         // Domain write cap (design §9): an ADD into a domain already at
         // DOMAIN_ACTIVE_CAP active learnings is a plain run-level rejection,
@@ -460,13 +492,22 @@ export function applyOps({ workspace, opsPath, dryRun = false, home, approve = f
         plannedIds.add(newId);
       }
       if (op.op === 'MERGE' && idTaken(newId)) {
-        return rejectOp(
-          'E_EXISTS',
-          existing.has(newId)
-            ? `op ${i}: ${newId} already exists — merging onto an existing id is not supported, SUPERSEDE it as a target instead`
-            : `op ${i}: ${newId} was already introduced by an earlier op in this run`,
-          op.episodes
-        );
+        if (existing.has(newId)) {
+          // Real on-disk dedup miss — a content-failure strike is warranted.
+          return rejectOp(
+            'E_EXISTS',
+            `op ${i}: ${newId} already exists — merging onto an existing id is not supported, SUPERSEDE it as a target instead`,
+            op.episodes
+          );
+        }
+        // Composition rejection (a sibling op already claimed this id this
+        // same run) — plain fail, never a strike against this op's episodes.
+        return {
+          applied: [],
+          rejected: [fail('E_EXISTS', `op ${i}: ${newId} was already introduced by an earlier op in this run`)],
+          committed: false,
+          exitCode: 1,
+        };
       }
       const secrets = scanSecrets(`${op.trigger}\n${op.body}`);
       if (secrets.length) {
@@ -526,13 +567,22 @@ export function applyOps({ workspace, opsPath, dryRun = false, home, approve = f
       // it. Only the in-place shape (new id === the op's own target) is
       // allowed to "collide" — that's a replacement, not a collision.
       if (newId !== op.target && idTaken(newId)) {
-        return rejectOp(
-          'E_EXISTS',
-          existing.has(newId)
-            ? `op ${i}: ${newId} already exists — choose a different slug or SUPERSEDE it directly instead of ${op.target}`
-            : `op ${i}: ${newId} was already introduced by an earlier op in this run`,
-          op.episodes
-        );
+        if (existing.has(newId)) {
+          // Real on-disk dedup miss — a content-failure strike is warranted.
+          return rejectOp(
+            'E_EXISTS',
+            `op ${i}: ${newId} already exists — choose a different slug or SUPERSEDE it directly instead of ${op.target}`,
+            op.episodes
+          );
+        }
+        // Composition rejection (a sibling op already claimed this id this
+        // same run) — plain fail, never a strike against this op's episodes.
+        return {
+          applied: [],
+          rejected: [fail('E_EXISTS', `op ${i}: ${newId} was already introduced by an earlier op in this run`)],
+          committed: false,
+          exitCode: 1,
+        };
       }
 
       // The human-teaching disputed-demotion exemption applies ONLY to the

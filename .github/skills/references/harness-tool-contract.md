@@ -94,6 +94,9 @@ Installed to `~/.copilot/bin/harness` on every `harness install`. Add to PATH wi
 ```json
 {
   "recall": [{ "docid": "...", "path": "...", "title": "...", "score": 0.82, "summary": "...", "snippet": "...", "ranker": "bm25" }],
+  "learnings": [{ "id": "domain/slug", "trigger": "...", "claimLine": "...", "status": "provisional", "advisory": false, "score": 0.42 }],
+  "explain": null,
+  "learningsBytes": 0,
   "plans": [{ "path": "docs/plans/...", "status": "planned", "plan_lock": true, "score": 0.67 }],
   "activePlan": { "path": "...", "status": "...", "plan_lock": true },
   "planGoal": {

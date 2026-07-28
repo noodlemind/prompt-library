@@ -6,6 +6,7 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 import { ensureStore, listLearnings, readLedger, storeDir } from '../lib/knowledge/store.mjs';
+import { consolidateStatus } from '../lib/knowledge/consolidate.mjs';
 import { runRemember } from '../lib/knowledge/remember.mjs';
 
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -148,6 +149,35 @@ test('remember rollback also reindexes so the manifest does not dangle a referen
     /docs\/solutions\/teachings\//,
     'rolled-back episode must not remain referenced in the manifest'
   );
+});
+
+test('3 same-day over-cap remember attempts leave no ledger entries for the rolled-back path, zero quarantined, doctor K2 passing', () => {
+  const c = ctx();
+  const args = ['remember', 'x'.repeat(2000), '--trigger', 'an oversized claim that blows the learning byte cap'];
+
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const res = run(c, args);
+    assert.equal(res.status, 1, res.stderr + res.stdout);
+    const out = JSON.parse(res.stdout);
+    assert.equal(out.episodePath, null);
+  }
+
+  const { dir } = ensureStore(c.ws, { home: c.harnessHome });
+  const ledger = readLedger(dir);
+  assert.deepEqual(
+    ledger.filter((e) => e.path && e.path.startsWith('docs/solutions/teachings/')),
+    [],
+    'rollback must clear every failure/quarantine ledger entry for the deleted teachings episode path'
+  );
+
+  const status = consolidateStatus({ workspace: c.ws, copilotHome: c.home, home: c.harnessHome });
+  assert.equal(status.quarantined.length, 0, 'consolidate --status must show zero quarantined');
+
+  const doctorRes = run(c, ['doctor']);
+  const doc = JSON.parse(doctorRes.stdout);
+  const k2 = doc.checks.find((check) => check.id === 'K2');
+  assert.ok(k2, 'K2 present');
+  assert.equal(k2.pass, true, 'doctor K2 must pass — no phantom quarantine from the rolled-back episode');
 });
 
 test('remember --json on a secret-blocked claim returns exactly the documented contract keys', () => {

@@ -149,7 +149,7 @@ test('learning retire --reason x <id> (flag before the id positional) yields a u
   const res = run(c, ['learning', 'retire', '--reason', 'x', autoId]);
   assert.equal(res.status, 2, res.stderr || res.stdout);
   const out = JSON.parse(res.stdout);
-  assert.match(out.blockedReason || '', /usage: harness learning <retire\|dispute\|confirm>/);
+  assert.match(out.blockedReason || '', /usage: harness learning <retire\|dispute\|confirm\|promote>/);
 });
 
 test('learning explode some/id --reason x exits usage for an unknown action', () => {
@@ -158,7 +158,7 @@ test('learning explode some/id --reason x exits usage for an unknown action', ()
   const res = run(c, ['learning', 'explode', 'some/id', '--reason', 'x']);
   assert.equal(res.status, 2, res.stderr || res.stdout);
   const out = JSON.parse(res.stdout);
-  assert.match(out.blockedReason || '', /usage: harness learning <retire\|dispute\|confirm>/);
+  assert.match(out.blockedReason || '', /usage: harness learning <retire\|dispute\|confirm\|promote>/);
 });
 
 test('learning retire on a storeless workspace exits 1 with E_TARGET and never materializes the store', () => {

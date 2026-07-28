@@ -4,7 +4,7 @@ import path from 'node:path';
 import { runInsightCompound } from '../compound.mjs';
 import { runIndexKnowledge } from '../index-knowledge.mjs';
 import { applyOps } from './apply.mjs';
-import { normalizeSlug, readStoreConfig, storeDir, listLearnings } from './store.mjs';
+import { normalizeSlug, readStoreConfig, storeDir, listLearnings, ensureStore, readLedger, commitStore } from './store.mjs';
 import { absorbHandEdits } from './admin.mjs';
 
 /**
@@ -138,6 +138,30 @@ export function runRemember({ workspace, copilotHome, flags, argv, log = () => {
     // All-or-nothing: never leave an orphaned episode file behind on
     // rejection — a retry must not pile up dedup-suffixed episodes.
     fs.rmSync(path.join(workspace, episode.path), { force: true });
+    // applyOps already recorded a failure (and possibly a quarantine) strike
+    // against this episode's path before returning a non-zero exitCode
+    // (recordContentFailure runs inside applyOps itself, ahead of the check
+    // above) — with the episode file now rolled back, those ledger entries
+    // would point at a path that no longer exists, phantom-quarantining a
+    // path a human never gets to retry. Same path-filter idiom purgeEpisode
+    // uses (admin.mjs): drop every ledger entry for this path and rewrite
+    // consolidated.jsonl, committing the rewrite when the store has git.
+    // Best effort — a cleanup failure must never mask the original rejection.
+    try {
+      const { dir, git } = ensureStore(workspace, { home });
+      const ledger = readLedger(dir);
+      const keptLedger = ledger.filter((e) => e.path !== episode.path);
+      if (keptLedger.length !== ledger.length) {
+        fs.writeFileSync(
+          path.join(dir, 'consolidated.jsonl'),
+          keptLedger.length ? keptLedger.map((e) => JSON.stringify(e)).join('\n') + '\n' : '',
+          'utf8'
+        );
+        if (git) commitStore(dir, `remember: clear failure bookkeeping for ${episode.path}`);
+      }
+    } catch {
+      // best effort — a ledger-cleanup failure must never mask the original rejection.
+    }
     // The pre-apply runInsightCompound call above already indexed the episode
     // into the manifest/postings; without a reindex here the rolled-back file
     // would keep dangling in the manifest until the next rebuild. Same call

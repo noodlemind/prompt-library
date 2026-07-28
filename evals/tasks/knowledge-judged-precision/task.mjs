@@ -2,7 +2,6 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { fileURLToPath } from 'node:url';
 import { materializeFixture, finalizeWorkspace } from '../../lib/fixture.mjs';
 import { applyOps } from '../../../packages/harness/lib/knowledge/apply.mjs';
 import { rankLearnings } from '../../../packages/harness/lib/knowledge/retrieve.mjs';

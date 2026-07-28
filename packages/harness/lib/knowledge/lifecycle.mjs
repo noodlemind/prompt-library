@@ -19,7 +19,7 @@ const TARGET_STATUS = { retire: 'retired', dispute: 'disputed', confirm: 'active
 export function setLearningStatus({ workspace, id, action, reason, to, home }) {
   if (!ACTIONS.has(action) || !id) {
     return { pass: false, exitCode: 2, id: id || null, status: null,
-      blockedReason: 'usage: harness learning <retire|dispute|confirm> <id> --reason "<r>"' };
+      blockedReason: 'usage: harness learning <retire|dispute|confirm|promote> <id> --reason "<r>" | --to <path>' };
   }
   if (action !== 'confirm' && action !== 'promote' && !reason) {
     return { pass: false, exitCode: 2, id, status: null, blockedReason: `${action} requires --reason` };
