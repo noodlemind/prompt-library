@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { ensureStore, readLedger, listLearnings, readStoreConfig } from './store.mjs';
+import { storeDir, readLedger, listLearnings, readStoreConfig } from './store.mjs';
 
 export const CONSOLIDATION_THRESHOLD = 5;
 export const MAX_OPS_PER_RUN = 5;
@@ -90,7 +90,9 @@ export function promotionCandidates(learnings) {
 }
 
 export function consolidateStatus({ workspace, copilotHome, home }) {
-  const { dir } = ensureStore(workspace, { home });
+  // Non-creating read: --status must never materialize a store that isn't
+  // there yet — an absent store just reports empty ledger/learnings.
+  const dir = storeDir(workspace, { home });
   const { mode } = readStoreConfig(workspace, { home });
   const episodes = collectEpisodes({ workspace, copilotHome });
   const { consumed, quarantined } = splitLedger(readLedger(dir));
@@ -141,7 +143,9 @@ export function consolidateCandidates({ workspace, copilotHome, home }) {
     });
   }
 
-  const { dir } = ensureStore(workspace, { home });
+  // Non-creating read: --candidates must never materialize a store either —
+  // an absent store just means no active learnings to report.
+  const dir = storeDir(workspace, { home });
   const active = activeLearnings(listLearnings(dir));
   const totalBytes = active.reduce((n, l) => n + l.bytes, 0);
   const includeBodies = totalBytes <= LEARNING_BODY_BUDGET_BYTES;

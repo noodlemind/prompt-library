@@ -106,8 +106,9 @@ claims carry an `[unverified memory — advisory]` fence. Trust gradient: the ha
 never transmits episodes (repo-private `docs/solutions/` travels only inside the
 product repo's own git history) → learnings live in the local never-pushed store →
 the only knowledge the harness sends to a shared repository is a primitive that
-passed a human PR — unless a team explicitly opts into `knowledge.commit: repo`,
-documented as an exception with best-effort secret screening.
+passed a human PR. (`knowledge.commit: repo` — an opt-in mode that would additionally
+commit learnings into the product repo, documented as a future exception with
+best-effort secret screening — is Milestone-3 deferred and not available today.)
 `init-repo`/`index` also write a committed `docs/codebase-map.md` (deterministic,
 timestamp-free) for cold-start orientation.
 
@@ -120,8 +121,9 @@ timestamp-free) for cold-start orientation.
 | `learnings [domain] [--why <id>]` | Paged listing with provenance chain; `--why` shows full provenance and failure annotations |
 | `eval-knowledge [--json]` | Deterministic retrieval proxy — hit/false-surface/token cost per ranking arm on a temporally held-out split; **not** the model-graded net-benefit number, which is deferred — publishes no benefit claim |
 
-`learnings` and `eval-knowledge` are read-only and never write events; `remember`,
-`learning`, and `knowledge` (including its own `--status`) each write one event and end
+`learnings` and `eval-knowledge` are read-only and never write events. `knowledge --status`
+(and bare `knowledge`) writes one event but is otherwise read-only — no store commit.
+`remember`, `learning`, and `knowledge` mode changes/`purge` each write one event and end
 in a knowledge-store git commit.
 
 ### Options

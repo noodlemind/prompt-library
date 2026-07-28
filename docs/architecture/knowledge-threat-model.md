@@ -15,7 +15,7 @@ flowchart LR
         EP[(solution docs)]
     end
     EP --> CAND["consolidate --candidates<br/>deterministic clusters, zero model cost"]
-    CAND --> SKILL["/consolidate skill<br/>model reasoning — writes nothing"]
+    CAND --> SKILL["/consolidate skill<br/>model reasoning — writes only<br/>.harness/consolidate-ops.json"]
     SKILL -- "ops JSON, untrusted proposal" --> B1{{"trust boundary<br/>ops validation"}}
     B1 --> APPLY["consolidate --apply<br/>sole writer: schema, ≤5 files, byte cap,<br/>secret scan, imperative lint"]
     APPLY --> T2[(T2 learnings store<br/>local, never pushed)]
@@ -25,10 +25,11 @@ flowchart LR
 ```
 
 Everything left of **ops validation** is untrusted proposal text — including model output
-from `/consolidate` — and cannot mutate the store directly. Everything right of the
-**advisory fence** is presented to a reader as data, never as directives. Both boundaries
-are enforced mechanically (`consolidate --apply`'s validator; the fence-and-lint pipeline
-on every rendering surface), not by asking the model to behave.
+from `/consolidate`, which writes only the reviewable `.harness/consolidate-ops.json`
+proposal and never touches the T2 store directly — and cannot mutate the store directly.
+Everything right of the **advisory fence** is presented to a reader as data, never as
+directives. Both boundaries are enforced mechanically (`consolidate --apply`'s validator;
+the fence-and-lint pipeline on every rendering surface), not by asking the model to behave.
 
 ## Canonical residual risk: declarative deception through the insight lane
 
@@ -46,9 +47,11 @@ It is bounded, not eliminated, by four independent controls:
 1. **Advisory fence** — every insight-derived learning renders inside
    `[unverified memory — advisory]`; a reader is told explicitly not to treat it as
    verified.
-2. **Provisional damping** — new learnings enter `status: provisional`, rank-damped until
-   3 uses or one verified confirmation; a bad claim must survive repeated exposure before
-   it gains retrieval weight.
+2. **Provisional damping** — new insight/auto-derived learnings enter `status: provisional`,
+   rank-damped until 3 uses or one verified confirmation; a bad claim must survive repeated
+   exposure before it gains retrieval weight. `source: human` learnings (written directly
+   by `harness remember`) are the one exception: a direct human statement outranks
+   statistics, so they enter `status: active` immediately, with no provisional damping.
 3. **Never-promotes** — insight-only learnings can never reach T2→T3 promotion
    eligibility; a declaratively deceptive claim cannot become committed behavior through
    `/create-primitive`.

@@ -34,8 +34,9 @@ function yamlQuote(v) {
 }
 
 export function todayClamped() {
-  // Clock clamp: never write a future date (a skewed clock would rank-pin).
-  return new Date(Math.min(Date.now(), Date.now())).toISOString().slice(0, 10);
+  // Today's date, ISO-truncated to the day. (Not actually clamped against
+  // anything — a real clock-skew guard would need an external reference.)
+  return new Date().toISOString().slice(0, 10);
 }
 
 /**

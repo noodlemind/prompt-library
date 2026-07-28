@@ -310,9 +310,10 @@ function vscodeChecks({ copilotHome, settingsPaths }) {
 // Knowledge-layer health (design §2, §3, §12). All three are optional/advisory
 // and each independently try/catch-guarded — a store or event-read failure
 // degrades to "skip that check", never to a doctor crash. K2's consolidateStatus
-// call touches the store via ensureStore, so — like orient.mjs — it is only
-// made once storeDir already exists; doctor must never materialize a store.
-function knowledgeChecks({ workspace }) {
+// call is only made once storeDir already exists (like orient.mjs) — doctor
+// must never materialize a store — and copilotHome is threaded through so
+// its episode/debt computation uses the same roots as every other caller.
+function knowledgeChecks({ workspace, copilotHome }) {
   const checks = [];
 
   try {
@@ -332,7 +333,7 @@ function knowledgeChecks({ workspace }) {
 
   try {
     const storeExists = fs.existsSync(storeDir(workspace));
-    const quarantined = storeExists ? consolidateStatus({ workspace }).quarantined.length : 0;
+    const quarantined = storeExists ? consolidateStatus({ workspace, copilotHome }).quarantined.length : 0;
     checks.push({
       id: 'K2',
       name: 'No quarantined episode clusters',
@@ -542,7 +543,7 @@ export function runDoctor({ copilotHome, assetsRoot, pkgRoot, flags, vscodeSetti
     optional: true,
   });
 
-  checks.push(...knowledgeChecks({ workspace }));
+  checks.push(...knowledgeChecks({ workspace, copilotHome }));
 
   if (flags.host === 'vscode') {
     checks.push(

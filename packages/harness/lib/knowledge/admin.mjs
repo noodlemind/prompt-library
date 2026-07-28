@@ -84,9 +84,11 @@ export function purgeEpisode({ workspace, target, home }) {
   // `../../file.md`) must never reach the deletion below — checked before
   // any store access or filesystem mutation. Learnings/ledger matching still
   // uses the repo-relative `target` string as-is; only this resolved check
-  // differs.
-  const full = path.resolve(workspace, target);
-  if (full !== workspace && !full.startsWith(workspace + path.sep)) {
+  // differs. The workspace itself is resolved first so a non-normalized or
+  // trailing-slash `workspace` can't produce a false negative.
+  const root = path.resolve(workspace);
+  const full = path.resolve(root, target);
+  if (full !== root && !full.startsWith(root + path.sep)) {
     return {
       pass: false,
       exitCode: 2,

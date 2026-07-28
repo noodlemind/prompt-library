@@ -5,7 +5,8 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
-import { ensureStore, listLearnings, readLedger } from '../lib/knowledge/store.mjs';
+import { ensureStore, listLearnings, readLedger, storeDir } from '../lib/knowledge/store.mjs';
+import { runRemember } from '../lib/knowledge/remember.mjs';
 
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const binPath = path.join(packageRoot, 'bin', 'harness.mjs');
@@ -58,6 +59,40 @@ test('remember --dry-run writes neither episode nor learning', () => {
   assert.ok(!fs.existsSync(path.join(c.ws, 'docs', 'solutions')), 'dry-run must not write the episode file');
   const { dir } = ensureStore(c.ws, { home: c.harnessHome });
   assert.equal(listLearnings(dir).length, 0, 'dry-run must not write a learning');
+});
+
+test('runRemember (direct lib import) threads its own home into every store write, not the ambient HARNESS_HOME', () => {
+  const ws = tempDir('rem-direct-ws-');
+  const copilotHome = tempDir('rem-direct-home-');
+  const explicitHome = tempDir('rem-direct-hh-');
+  const decoyHome = tempDir('rem-direct-decoy-'); // stands in for a stale/unrelated ambient HARNESS_HOME
+  const prevHarnessHome = process.env.HARNESS_HOME;
+  process.env.HARNESS_HOME = decoyHome;
+  try {
+    const result = runRemember({
+      workspace: ws,
+      copilotHome,
+      flags: { trigger: 'a direct-import trigger', domain: 'sql' },
+      argv: ['a direct-import claim'],
+      home: explicitHome,
+    });
+    assert.equal(result.exitCode, 0, JSON.stringify(result));
+    assert.ok(result.learningId, 'learning id returned');
+
+    const explicitDir = storeDir(ws, { home: explicitHome });
+    const landed = listLearnings(explicitDir).find((l) => l.id === result.learningId);
+    assert.ok(landed, 'learning materialized under the explicit home passed to runRemember');
+    assert.ok(readLedger(explicitDir).some((e) => e.learning === result.learningId), 'ledger entry under the explicit home');
+
+    const decoyDir = storeDir(ws, { home: decoyHome });
+    assert.ok(
+      !listLearnings(decoyDir).some((l) => l.id === result.learningId),
+      'the ambient HARNESS_HOME store must not receive the write'
+    );
+  } finally {
+    if (prevHarnessHome === undefined) delete process.env.HARNESS_HOME;
+    else process.env.HARNESS_HOME = prevHarnessHome;
+  }
 });
 
 test('remember rolls back the episode file when applyOps rejects it (byte cap)', () => {

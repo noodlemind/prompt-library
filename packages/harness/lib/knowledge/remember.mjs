@@ -41,7 +41,7 @@ export function runRemember({ workspace, copilotHome, flags, argv, log = () => {
     claim,
     insight: true,
   };
-  const episode = runInsightCompound({ workspace, copilotHome, flags: teachFlags, log, kind: 'human-teaching' });
+  const episode = runInsightCompound({ workspace, copilotHome, flags: teachFlags, log, kind: 'human-teaching', home });
   if (!episode.pass) return { ...episode, episodePath: episode.path, learningId: null };
 
   const domain = normalizeSlug(flags.domain || 'general');
@@ -82,7 +82,7 @@ export function runRemember({ workspace, copilotHome, flags, argv, log = () => {
   fs.mkdirSync(opsDir, { recursive: true });
   const opsPath = path.join(opsDir, 'remember-ops.json');
   fs.writeFileSync(opsPath, JSON.stringify(ops), 'utf8');
-  const applied = applyOps({ workspace, opsPath });
+  const applied = applyOps({ workspace, opsPath, dryRun: flags.dryRun, home });
   if (applied.exitCode !== 0) {
     // All-or-nothing: never leave an orphaned episode file behind on
     // rejection — a retry must not pile up dedup-suffixed episodes.

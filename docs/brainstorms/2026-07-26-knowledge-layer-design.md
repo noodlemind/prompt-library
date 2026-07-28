@@ -247,6 +247,6 @@ stateDiagram-v2
 
 ```mermaid
 flowchart LR
-    A["T1 episodes<br/>never leave the machine"] --> B["T2 learnings<br/>local never-pushed repo<br/>(opt-in commit = documented exception)"]
+    A["T1 episodes<br/>global: stay on the machine<br/>repo-private: travel only in the product repo's git history"] --> B["T2 learnings<br/>local never-pushed repo<br/>(opt-in commit = documented exception)"]
     B --> C["T3 primitives<br/>shared repo — only via human PR"]
 ```

@@ -5,6 +5,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
+import { collectEpisodes } from '../lib/knowledge/consolidate.mjs';
 
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const binPath = path.join(packageRoot, 'bin', 'harness.mjs');
@@ -96,6 +97,33 @@ test('category input is confined to one safe path segment', () => {
   const out = JSON.parse(res.stdout);
   assert.match(out.path, /^docs\/solutions\/outside\//);
   assert.ok(!fs.existsSync(path.join(path.dirname(ws), 'outside')));
+});
+
+test('an embedded newline in the title cannot break the line-oriented frontmatter', () => {
+  const ws = tempDir('insight-nl-');
+  const home = tempDir('insight-nlh-');
+  const res = run([
+    'compound', '--insight', '--title', 'Title line one\nline two: fake-key',
+    '--body', 'Body text.', '--workspace', ws, '--copilot-home', home, '--json',
+  ]);
+  assert.equal(res.status, 0, res.stderr || res.stdout);
+  const out = JSON.parse(res.stdout);
+  const doc = fs.readFileSync(path.join(ws, out.path), 'utf8');
+
+  // The embedded newline must be escaped, not literal: the frontmatter block
+  // stays exactly one line per key.
+  const fmBlock = doc.match(/^---\n([\s\S]*?)\n---/)[1];
+  const fmLines = fmBlock.split('\n');
+  assert.equal(fmLines.length, 3, 'title/kind/date — no extra line injected');
+  assert.ok(fmLines.every((l) => /^[\w-]+:/.test(l)), 'every frontmatter line is still a key: value line');
+  assert.match(doc, /title: "Title line one\\nline two: fake-key"/);
+
+  // Round-trips cleanly through the same frontmatter parser consolidate uses
+  // to discover episodes — the escaped value is recovered intact.
+  const episodes = collectEpisodes({ workspace: ws, copilotHome: home });
+  const episode = episodes.find((e) => e.path === out.path);
+  assert.ok(episode, 'episode discoverable after round-trip');
+  assert.equal(episode.title, 'Title line one\\nline two: fake-key');
 });
 
 test('verified compound lane still requires a plan (unchanged)', () => {
