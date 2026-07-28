@@ -5,7 +5,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
-import { ensureStore, listLearnings } from '../lib/knowledge/store.mjs';
+import { ensureStore, listLearnings, storeDir } from '../lib/knowledge/store.mjs';
 
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const binPath = path.join(packageRoot, 'bin', 'harness.mjs');
@@ -138,4 +138,19 @@ test('(e) a learning with anchors: [] is never excluded, even after unrelated fi
   assert.equal(idx.status, 0, idx.stderr || idx.stdout);
   assert.equal(JSON.parse(idx.stdout).staleLearnings, 0);
   assert.ok(orientLearningIds(c, otherTrigger).includes('perf/plain-claim'));
+});
+
+test('index on a workspace with no knowledge store yet stays store-read-only', () => {
+  const c = ctx();
+  // No consolidate/remember has ever run here — the learnings store must not
+  // exist yet under this HARNESS_HOME.
+  const dir = storeDir(c.ws, { home: c.harnessHome });
+  assert.equal(fs.existsSync(dir), false, 'precondition: no store yet');
+
+  const idx = run(c, ['index']);
+  assert.equal(idx.status, 0, idx.stderr || idx.stdout);
+  const out = JSON.parse(idx.stdout);
+  assert.equal('staleLearnings' in out, false, 'no store to recompute stale exclusions from');
+
+  assert.equal(fs.existsSync(dir), false, 'harness index must not materialize a knowledge store');
 });

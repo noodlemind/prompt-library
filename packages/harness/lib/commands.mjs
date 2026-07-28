@@ -373,19 +373,25 @@ export async function cmdIndex(argv) {
   // learning is excluded from retrieval until the anchor resolves again.
   // Mechanical CLI state, not mode-gated — never on --status (returned
   // above), never on dry-run, and never allowed to fail `index` itself.
+  // Store-read-only when no store exists yet: a non-creating storeDir lookup
+  // gates the pass so a plain `harness index` never materializes a knowledge
+  // store (and its git repo) under HARNESS_HOME for a workspace that has
+  // never run consolidate/remember.
   if (!flags.dryRun) {
     try {
-      const { ensureStore, listLearnings, writeStaleExclusions } = await import('./knowledge/store.mjs');
-      const { dir } = ensureStore(workspace);
-      const excluded = {};
-      for (const l of listLearnings(dir)) {
-        const anchors = l.fm.anchors || [];
-        if (!anchors.length) continue;
-        const missing = anchors.filter((a) => !fs.existsSync(path.join(workspace, a)));
-        if (missing.length) excluded[l.id] = missing;
+      const { storeDir, listLearnings, writeStaleExclusions } = await import('./knowledge/store.mjs');
+      const dir = storeDir(workspace);
+      if (fs.existsSync(dir)) {
+        const excluded = {};
+        for (const l of listLearnings(dir)) {
+          const anchors = l.fm.anchors || [];
+          if (!anchors.length) continue;
+          const missing = anchors.filter((a) => !fs.existsSync(path.join(workspace, a)));
+          if (missing.length) excluded[l.id] = missing;
+        }
+        writeStaleExclusions(dir, { excluded });
+        result.staleLearnings = Object.keys(excluded).length;
       }
-      writeStaleExclusions(dir, { excluded });
-      result.staleLearnings = Object.keys(excluded).length;
     } catch {
       // Advisory: never fail index because the knowledge store is unreadable.
     }
