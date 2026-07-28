@@ -228,7 +228,15 @@ export async function cmdInstallOrUpgrade(command, argv) {
       );
     }
     if (flags.dryRun) console.log(ui.paint('muted', '  dry-run — no files written'));
-    else printNext('harness doctor');
+    else {
+      printNext('harness doctor');
+      // Global-home scoped command — never mutates the workspace, just
+      // nudges an upgrade that finds pre-existing solution docs toward
+      // arming them as consolidation debt.
+      if (command === 'upgrade' && fs.existsSync(path.join(process.cwd(), 'docs', 'solutions'))) {
+        printNext('harness init-repo  # arm existing docs/solutions as consolidation debt');
+      }
+    }
   }
 
   return 0;
@@ -307,8 +315,9 @@ export async function cmdStatus(argv) {
 export async function cmdInitRepo(argv) {
   const flags = parseFlags(argv);
   const workspace = path.resolve(flags.workspace);
+  const copilotHome = resolveCopilotHome(flags.copilotHome);
   const logger = (m) => log(flags, m);
-  runInitRepo({ workspace, flags, log: logger });
+  runInitRepo({ workspace, flags, log: logger, copilotHome });
   writeEvent(workspace, flags, {
     type: 'init_repo',
     command: 'init-repo',
