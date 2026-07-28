@@ -27,6 +27,17 @@ function writeEpisode(ws, category, name) {
   );
 }
 
+/** Team-global solution doc under <copilot-home>/knowledge/solutions/<cat>/ —
+ *  the other of collectEpisodes' two debt roots (design: dual-root scan). */
+function writeGlobalEpisode(copilotHome, category, name) {
+  const dir = path.join(copilotHome, 'knowledge', 'solutions', category);
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(
+    path.join(dir, `${name}.md`),
+    `---\ntitle: "${name} lesson"\ndate: 2026-07-01\n---\n\n## Problem\n\n${name} details.\n`
+  );
+}
+
 const ctx = () => ({ ws: gitWorkspace(), home: tempDir('seed-home-'), harnessHome: tempDir('seed-hh-') });
 
 // Deliberately not --json: the arming log line only prints on the human
@@ -58,6 +69,29 @@ test('init-repo arms pre-existing solution docs as consolidation debt', () => {
   const status = JSON.parse(runConsolidateStatus(c).stdout);
   assert.equal(status.debt, 6);
   assert.equal(status.due, true);
+});
+
+// Documents intended behavior (controller ruling): collectEpisodes' dual-root
+// scan — workspace docs/solutions AND <copilot-home>/knowledge/solutions — is
+// the established debt definition consolidateStatus uses everywhere (orient's
+// session-start drain surfaces the same debt), so a workspace with zero local
+// docs but a hydrated global copilot-home still arms real debt. This is not a
+// leak: --copilot-home is sandboxed to a temp dir here precisely so this test
+// (and every other init-repo call in the suite) can never resolve to a
+// developer's real ~/.copilot regardless of machine state.
+test('init-repo arms global copilot-home solutions even with no local docs/solutions', () => {
+  const c = ctx();
+  writeGlobalEpisode(c.home, 'perf', 'global-fix');
+
+  const res = runInitRepo(c);
+  assert.equal(res.status, 0, res.stderr || res.stdout);
+  assert.match(res.stdout, /armed 1/);
+
+  const dir = storeDir(c.ws, { home: c.harnessHome });
+  assert.ok(fs.existsSync(dir), 'init-repo created the knowledge store for global-only debt');
+
+  const status = JSON.parse(runConsolidateStatus(c).stdout);
+  assert.equal(status.debt, 1);
 });
 
 test('a workspace with no solution docs arms nothing and creates no store', () => {

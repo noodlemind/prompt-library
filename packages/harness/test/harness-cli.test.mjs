@@ -1475,7 +1475,11 @@ test('resolve finds monorepo harness bin', () => {
 
 test('init-repo creates harness runner', () => {
   const workspace = tempDir('harness-workspace-');
-  const result = runHarness(['init-repo', '--workspace', workspace]);
+  const copilotHome = tempDir('harness-copilot-home-');
+  const harnessHome = tempDir('harness-home-');
+  const result = runHarness(['init-repo', '--workspace', workspace, '--copilot-home', copilotHome], {
+    env: { HARNESS_HOME: harnessHome },
+  });
   assert.equal(result.status, 0, result.stderr);
   const runner = path.join(workspace, '.harness', 'run.mjs');
   assert.ok(fs.existsSync(runner));
