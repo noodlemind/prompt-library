@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -187,6 +188,148 @@ test('a model SUPERSEDE (fix-kind episodes) on a source: human target still land
   assert.equal(out.rejected[0].reason, 'disputed-pending-human');
   const after = listLearnings(dir).find((l) => l.id === 'sql/human-taught-claim');
   assert.equal(after.fm.status, 'disputed');
+});
+
+test('a fabricated human-teaching kind for a NONEXISTENT episode file does not exempt a SUPERSEDE from disputed demotion', () => {
+  const c = ctx();
+  const humanAdd = ADD({
+    slug: 'human-taught-claim-fab-1',
+    episodes: [EP({ kind: 'human-teaching', plan: null })],
+  });
+  assert.equal(run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [humanAdd])]).status, 0);
+  const { dir } = ensureStore(c.ws, { home: c.harnessHome });
+  const before = listLearnings(dir).find((l) => l.id === 'sql/human-taught-claim-fab-1');
+
+  const fakeSupersede = {
+    op: 'SUPERSEDE',
+    target: 'sql/human-taught-claim-fab-1',
+    domain: 'sql',
+    slug: 'human-taught-claim-fab-1', // same id — the only shape the exemption considers
+    trigger: 'a fabricated re-teach trigger',
+    body: 'a fabricated replacement body claiming human authority',
+    episodes: [{ path: 'docs/solutions/teachings/does-not-exist.md', sha256: 'f'.repeat(64), kind: 'human-teaching', plan: null }],
+  };
+  const res = run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [fakeSupersede])]);
+  assert.equal(res.status, 0, res.stderr || res.stdout);
+  const out = JSON.parse(res.stdout);
+  assert.equal(out.rejected[0].reason, 'disputed-pending-human');
+
+  const after = listLearnings(dir).find((l) => l.id === 'sql/human-taught-claim-fab-1');
+  assert.equal(after.fm.status, 'disputed');
+  assert.equal(after.body, before.body, 'a fabricated SUPERSEDE for a nonexistent file must not replace the target body');
+});
+
+test('a human-teaching kind assertion for a real file whose actual frontmatter kind is fix does not exempt a SUPERSEDE', () => {
+  const c = ctx();
+  const humanAdd = ADD({
+    slug: 'human-taught-claim-fab-2',
+    episodes: [EP({ kind: 'human-teaching', plan: null })],
+  });
+  assert.equal(run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [humanAdd])]).status, 0);
+
+  const episodeRel = 'docs/solutions/perf/actually-a-fix.md';
+  const episodeText = '---\ntitle: "actually a fix"\nkind: fix\ndate: 2026-07-01\n---\n\n## Problem\n\nan actual fix, not a human teaching.\n';
+  fs.mkdirSync(path.join(c.ws, 'docs', 'solutions', 'perf'), { recursive: true });
+  fs.writeFileSync(path.join(c.ws, episodeRel), episodeText);
+  const realSha = crypto.createHash('sha256').update(episodeText).digest('hex');
+
+  const before = (() => {
+    const { dir } = ensureStore(c.ws, { home: c.harnessHome });
+    return listLearnings(dir).find((l) => l.id === 'sql/human-taught-claim-fab-2');
+  })();
+
+  const fakeSupersede = {
+    op: 'SUPERSEDE',
+    target: 'sql/human-taught-claim-fab-2',
+    domain: 'sql',
+    slug: 'human-taught-claim-fab-2',
+    trigger: 'a mislabeled re-teach trigger',
+    body: 'a mislabeled replacement body claiming human authority',
+    episodes: [{ path: episodeRel, sha256: realSha, kind: 'human-teaching', plan: null }],
+  };
+  const res = run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [fakeSupersede])]);
+  assert.equal(res.status, 0, res.stderr || res.stdout);
+  const out = JSON.parse(res.stdout);
+  assert.equal(out.rejected[0].reason, 'disputed-pending-human');
+
+  const { dir } = ensureStore(c.ws, { home: c.harnessHome });
+  const after = listLearnings(dir).find((l) => l.id === 'sql/human-taught-claim-fab-2');
+  assert.equal(after.fm.status, 'disputed');
+  assert.equal(after.body, before.body, 'a mislabeled-kind SUPERSEDE must not replace the target body');
+});
+
+test('a rename-shape SUPERSEDE (target !== new id) with genuine human-teaching episodes is still disputed, not exempted', () => {
+  const c = ctx();
+  const humanAdd = ADD({
+    slug: 'human-taught-claim-fab-3',
+    episodes: [EP({ kind: 'human-teaching', plan: null })],
+  });
+  assert.equal(run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [humanAdd])]).status, 0);
+
+  const episodeRel = 'docs/solutions/teachings/genuine-reteach.md';
+  const episodeText = '---\ntitle: "genuine reteach"\nkind: human-teaching\ndate: 2026-07-01\n---\n\ngenuinely taught by a human.\n';
+  fs.mkdirSync(path.join(c.ws, 'docs', 'solutions', 'teachings'), { recursive: true });
+  fs.writeFileSync(path.join(c.ws, episodeRel), episodeText);
+  const realSha = crypto.createHash('sha256').update(episodeText).digest('hex');
+
+  const renameSupersede = {
+    op: 'SUPERSEDE',
+    target: 'sql/human-taught-claim-fab-3',
+    domain: 'sql',
+    slug: 'human-taught-claim-fab-3-renamed', // different slug => different id
+    trigger: 'a genuinely re-taught but renamed trigger',
+    body: 'a genuinely re-taught but renamed body text',
+    episodes: [{ path: episodeRel, sha256: realSha, kind: 'human-teaching', plan: null }],
+  };
+  const res = run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [renameSupersede])]);
+  assert.equal(res.status, 0, res.stderr || res.stdout);
+  const out = JSON.parse(res.stdout);
+  assert.equal(out.rejected[0].reason, 'disputed-pending-human');
+
+  const { dir } = ensureStore(c.ws, { home: c.harnessHome });
+  const after = listLearnings(dir).find((l) => l.id === 'sql/human-taught-claim-fab-3');
+  assert.equal(after.fm.status, 'disputed');
+  assert.ok(
+    !listLearnings(dir).some((l) => l.id === 'sql/human-taught-claim-fab-3-renamed'),
+    'the renamed learning must not be created for a disputed op'
+  );
+});
+
+test('a SUPERSEDE rename colliding with an unrelated existing learning is rejected with E_EXISTS, victim untouched', () => {
+  const c = ctx();
+  const weak = ADD({ slug: 'weak' });
+  assert.equal(run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [weak])]).status, 0);
+
+  const victimAdd = ADD({
+    slug: 'victim',
+    episodes: [EP({ kind: 'human-teaching', plan: null })], // source: human
+  });
+  assert.equal(run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [victimAdd])]).status, 0);
+
+  const { dir } = ensureStore(c.ws, { home: c.harnessHome });
+  const victimBefore = listLearnings(dir).find((l) => l.id === 'sql/victim');
+  assert.ok(victimBefore);
+  const weakBefore = listLearnings(dir).find((l) => l.id === 'sql/weak');
+  assert.ok(weakBefore);
+
+  const collideSupersede = {
+    op: 'SUPERSEDE',
+    target: 'sql/weak',
+    domain: 'sql',
+    slug: 'victim', // collides with an existing, DIFFERENT learning
+    trigger: 'a colliding rename trigger',
+    body: 'a colliding rename body text',
+    episodes: [EP({ path: 'docs/solutions/perf/collide.md', sha256: 'e'.repeat(64) })],
+  };
+  const res = run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [collideSupersede])]);
+  assert.equal(res.status, 1, res.stderr || res.stdout);
+  assert.match(res.stdout + res.stderr, /E_EXISTS/);
+
+  const victimAfter = listLearnings(dir).find((l) => l.id === 'sql/victim');
+  assert.deepEqual(victimAfter.fm, victimBefore.fm, 'victim learning frontmatter unchanged');
+  assert.equal(victimAfter.body, victimBefore.body, 'victim learning body unchanged');
+  const weakAfter = listLearnings(dir).find((l) => l.id === 'sql/weak');
+  assert.deepEqual(weakAfter.fm, weakBefore.fm, 'weak (the actual target) also untouched — whole run rejected');
 });
 
 test('STRENGTHEN on a missing target rejects the run', () => {

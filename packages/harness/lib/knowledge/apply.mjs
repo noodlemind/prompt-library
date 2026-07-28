@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import crypto from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import {
   ensureStore,
@@ -129,6 +130,34 @@ function verifiedFixLinks(fm) {
   return (fm.episodes || []).filter((e) => e.kind === 'fix').length;
 }
 
+/**
+ * Verify a SUPERSEDE op's asserted human-teaching episode against disk. The
+ * op JSON's `episodes[].kind` field is just an assertion — model- or
+ * human-authored text that nothing else validates — so trusting it to grant
+ * the disputed-demotion exemption would let anyone claim human-teaching for
+ * an episode that was never taught by a human. An episode only counts if:
+ * its file exists under the workspace, the file's CURRENT content hashes to
+ * the asserted sha256 (not stale/edited since), and the file's OWN
+ * frontmatter independently says `kind: human-teaching` (not just the op's
+ * claim). Any mismatch fails closed (false) — never throws, so a
+ * missing/unreadable file simply falls through to normal disputed handling.
+ */
+function verifyHumanTeachingEpisode(workspace, e) {
+  if (e.kind !== 'human-teaching' || !e.path || !e.sha256) return false;
+  let text;
+  try {
+    text = fs.readFileSync(path.join(workspace, e.path), 'utf8');
+  } catch {
+    return false;
+  }
+  if (crypto.createHash('sha256').update(text).digest('hex') !== e.sha256) return false;
+  const m = text.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+  if (!m) return false;
+  const kindLine = m[1].split('\n').find((l) => /^kind:\s*/.test(l));
+  const kind = kindLine ? kindLine.replace(/^kind:\s*/, '').replace(/^["']|["']$/g, '').trim() : null;
+  return kind === 'human-teaching';
+}
+
 export function applyOps({ workspace, opsPath, dryRun = false, home }) {
   // Kill switch: consolidate is a write path gated to mode 'on' only — checked
   // first, before the ops file is even parsed, and before the lockfile below.
@@ -220,13 +249,31 @@ export function applyOps({ workspace, opsPath, dryRun = false, home }) {
 
     if (op.op === 'SUPERSEDE') {
       const target = existing.get(op.target);
-      // A human directly re-teaching (every new episode is human-teaching)
-      // supersedes with full authority — direct human authority, consistent
-      // with the source-derivation rule. A model can't fake this without
-      // fabricating human-teaching episode files, which the episode files on
-      // disk would contradict — so only skip the demotion for this exact
-      // shape, never for a mix or an all-fix run.
-      const allHumanTeaching = op.episodes.length > 0 && op.episodes.every((e) => e.kind === 'human-teaching');
+      const newId = `${normalizeSlug(op.domain)}/${normalizeSlug(op.slug)}`;
+
+      // Rename-collision guard: a SUPERSEDE writing to an id that already
+      // belongs to a DIFFERENT existing learning must never silently
+      // clobber it. Only the in-place shape (new id === the op's own
+      // target) is allowed to "collide" — that's a replacement, not a
+      // collision.
+      if (newId !== op.target && existing.has(newId)) {
+        return {
+          applied: [],
+          rejected: [fail('E_EXISTS', `op ${i}: ${newId} already exists — choose a different slug or SUPERSEDE it directly instead of ${op.target}`)],
+          committed: false,
+          exitCode: 1,
+        };
+      }
+
+      // The human-teaching disputed-demotion exemption applies ONLY to the
+      // in-place re-teach shape `remember` emits (new id === target — a
+      // human re-teaching the SAME trigger/domain, never a rename) AND only
+      // once every asserted human-teaching episode is verified against disk
+      // (see verifyHumanTeachingEpisode) — the op's own `kind` field is not
+      // itself proof of anything.
+      const isReteachShape = newId === op.target;
+      const allHumanTeaching =
+        isReteachShape && op.episodes.length > 0 && op.episodes.every((e) => verifyHumanTeachingEpisode(workspace, e));
       if (!allHumanTeaching && (verifiedFixLinks(target.fm) >= DISPUTED_FIX_THRESHOLD || target.fm.source === 'human')) {
         // Demotion of well-evidenced or human-taught knowledge gets a human
         // reviewer: mark disputed, never silently supersede.
@@ -338,11 +385,17 @@ export function applyOps({ workspace, opsPath, dryRun = false, home }) {
     } catch (err) {
       // Atomic apply: the mutation phase (learning files → target
       // frontmatter → ledger append → INDEX rebuild) can throw mid-way,
-      // leaving partial state. The store tree is committed-clean before
-      // every apply (single-commit invariant), so a hard reset + clean fully
-      // undoes any partial writes — same git-invocation style as
-      // commitStore. Best effort only: a store with no git (ensureStore
-      // degraded) has nothing to restore to, so we skip and still fail.
+      // leaving partial state. Most of the time the store tree is
+      // committed-clean before this call (every successful apply ends in a
+      // commit), so a hard reset + clean fully undoes the partial writes —
+      // same git-invocation style as commitStore. Best effort beyond that:
+      // if the store has never committed yet (no HEAD), `reset --hard` is a
+      // no-op, but `clean -fd` still sweeps the untracked partial writes, so
+      // atomicity still holds — the never-committed baseline stub files
+      // (INDEX.md, empty ledger) get swept up too, but those self-heal via
+      // ensureStore/rebuildIndex on the next call. If the store has no git
+      // at all (ensureStore degraded), there's nothing to run, so we skip
+      // restore entirely and just fail.
       if (git) {
         spawnSync('git', ['reset', '--hard'], { cwd: dir, encoding: 'utf8' });
         spawnSync('git', ['clean', '-fd'], { cwd: dir, encoding: 'utf8' });
