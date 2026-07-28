@@ -1,5 +1,5 @@
 import { ensureStore, listLearnings } from './store.mjs';
-import { readEvents } from '../events.mjs';
+import { readEvents, EVENTS_MAX_LIMIT } from '../events.mjs';
 
 /**
  * Read-only fenced listing and single-learning provenance view over the
@@ -21,11 +21,19 @@ function isPromotionEligible(verified, plans) {
   return verified >= PROMOTION_FIX_THRESHOLD && plans >= PROMOTION_PLAN_THRESHOLD;
 }
 
-/** id → count of workspace verify-fail events that named it. Tolerates a missing/corrupt events file. */
+/**
+ * id → count of workspace verify-fail events that named it. Tolerates a
+ * missing/corrupt events file. Pre-filters to failures (readEvents' own
+ * `failures` predicate: result === 'fail' || decision === 'block' ||
+ * blockedReason) before applying the max window, so unrelated event types
+ * (orient, gate, pre_tool, ...) can never dilute a verify-fail out of the
+ * window the way the plain default (unfiltered, 20-event) window would —
+ * same pre-filter-then-slice pattern as cmdEvents (commands.mjs).
+ */
 function failureCounts(workspace) {
   const counts = new Map();
   try {
-    for (const e of readEvents(workspace)) {
+    for (const e of readEvents(workspace, { failures: true, limit: EVENTS_MAX_LIMIT })) {
       if (e.type === 'verify' && e.result === 'fail' && Array.isArray(e.learnings)) {
         for (const id of e.learnings) counts.set(id, (counts.get(id) || 0) + 1);
       }

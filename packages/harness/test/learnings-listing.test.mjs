@@ -145,3 +145,22 @@ test('learnings --why missing/id exits 1', () => {
   const res = run(c, ['learnings', '--why', 'missing/id']);
   assert.equal(res.status, 1, res.stdout);
 });
+
+test('failure count survives more than 20 unrelated events written after the verify-fail', () => {
+  const c = ctx();
+  const { humanId } = seed(c);
+
+  // seed() already appended one verify-fail event naming humanId. Append 25
+  // filler events of another type after it — enough to push the verify-fail
+  // past readEvents' plain default 20-event window if failures weren't
+  // pre-filtered before the window was applied.
+  const eventsPath = path.join(c.ws, '.harness', 'events.jsonl');
+  const filler = Array.from({ length: 25 }, () => JSON.stringify({ version: 2, type: 'orient', result: 'pass' }));
+  fs.appendFileSync(eventsPath, `${filler.join('\n')}\n`);
+
+  const res = run(c, ['learnings']);
+  assert.equal(res.status, 0, res.stderr || res.stdout);
+  const out = JSON.parse(res.stdout);
+  const human = out.learnings.find((l) => l.id === humanId);
+  assert.equal(human.failures, 1, 'verify-fail event must still be counted past a 20-event window of unrelated events');
+});
