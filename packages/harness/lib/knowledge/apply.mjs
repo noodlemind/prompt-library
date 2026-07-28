@@ -58,6 +58,11 @@ function activeCountInDomain(existing, domain) {
   }
   return n;
 }
+
+/** The normalized `domain/slug` id an ADD/SUPERSEDE/MERGE op would write to. */
+function newIdFor(op) {
+  return `${normalizeSlug(op.domain)}/${normalizeSlug(op.slug)}`;
+}
 const ANCHOR_RE = /\b[\w][\w./-]*\.(?:mjs|js|ts|tsx|py|java|sql|md|ya?ml|json)\b/g;
 const ANCHOR_CAP = 8;
 
@@ -313,6 +318,19 @@ export function applyOps({ workspace, opsPath, dryRun = false, home, approve = f
     domainProjection.set(domain, projectedActive(domain) + delta);
   }
 
+  // Same-run consumption tracking. Validation otherwise only ever reads the
+  // static `existing` snapshot taken before the loop started, so without
+  // this a later op could target a learning an EARLIER op in this same run
+  // already tombstoned (silently orphaning it, double-crediting the domain
+  // projection) or introduce the exact id an earlier op already claimed
+  // (silently clobbering it at write time, since both would resolve to the
+  // same file path).
+  const consumedTargets = new Set(); // SUPERSEDE/MERGE targets already spoken for this run
+  const plannedIds = new Set(); // new ids (ADD/SUPERSEDE-rename/MERGE) already claimed this run
+  function idTaken(id) {
+    return existing.has(id) || plannedIds.has(id);
+  }
+
   // Validate every op before writing anything — all-or-nothing runs.
   const planned = [];
   const disputes = [];
@@ -334,6 +352,9 @@ export function applyOps({ workspace, opsPath, dryRun = false, home, approve = f
       if (!op.target || !existing.has(op.target)) {
         return rejectOp('E_TARGET', `op ${i}: target ${op.target || '(none)'} does not exist`, op.episodes);
       }
+      if (consumedTargets.has(op.target)) {
+        return rejectOp('E_TARGET', `op ${i}: target ${op.target} already consumed by an earlier op in this run`, op.episodes);
+      }
     }
 
     if (op.op === 'MERGE') {
@@ -343,6 +364,11 @@ export function applyOps({ workspace, opsPath, dryRun = false, home, approve = f
       for (const t of op.targets) {
         if (!existing.has(t)) {
           return rejectOp('E_TARGET', `op ${i}: target ${t} does not exist`, op.episodes);
+        }
+      }
+      for (const t of op.targets) {
+        if (consumedTargets.has(t)) {
+          return rejectOp('E_TARGET', `op ${i}: target ${t} already consumed by an earlier op in this run`, op.episodes);
         }
       }
       for (const t of op.targets) {
@@ -356,16 +382,20 @@ export function applyOps({ workspace, opsPath, dryRun = false, home, approve = f
       if (!op.domain || !op.slug || !op.trigger || !op.body) {
         return rejectOp('E_SCHEMA', `op ${i}: ${op.op} needs domain, slug, trigger, body`, op.episodes);
       }
-      const newId = `${normalizeSlug(op.domain)}/${normalizeSlug(op.slug)}`;
+      const newId = newIdFor(op);
       if (op.op === 'ADD') {
-        // Dedup-miss protection: an ADD whose id already exists must never
-        // silently overwrite the existing learning — reject the whole run
+        // Dedup-miss protection: an ADD whose id already exists — on disk OR
+        // already claimed by an EARLIER op in this same run — must never
+        // silently overwrite that learning (or that other op's write, once
+        // both would resolve to the same file path) — reject the whole run
         // and route the caller to STRENGTHEN (more evidence) or SUPERSEDE
         // (replace the claim) instead.
-        if (existing.has(newId)) {
+        if (idTaken(newId)) {
           return rejectOp(
             'E_EXISTS',
-            `op ${i}: ${newId} already exists — use STRENGTHEN (more evidence) or SUPERSEDE (replace the claim)`,
+            existing.has(newId)
+              ? `op ${i}: ${newId} already exists — use STRENGTHEN (more evidence) or SUPERSEDE (replace the claim)`
+              : `op ${i}: ${newId} was already introduced by an earlier op in this run`,
             op.episodes
           );
         }
@@ -387,11 +417,14 @@ export function applyOps({ workspace, opsPath, dryRun = false, home, approve = f
           };
         }
         bumpProjectedActive(domain, 1);
+        plannedIds.add(newId);
       }
-      if (op.op === 'MERGE' && existing.has(newId)) {
+      if (op.op === 'MERGE' && idTaken(newId)) {
         return rejectOp(
           'E_EXISTS',
-          `op ${i}: ${newId} already exists — merging onto an existing id is not supported, SUPERSEDE it as a target instead`,
+          existing.has(newId)
+            ? `op ${i}: ${newId} already exists — merging onto an existing id is not supported, SUPERSEDE it as a target instead`
+            : `op ${i}: ${newId} was already introduced by an earlier op in this run`,
           op.episodes
         );
       }
@@ -416,30 +449,48 @@ export function applyOps({ workspace, opsPath, dryRun = false, home, approve = f
         continue;
       }
 
-      // MERGE is exempt from the cap check on its OWN new id (it always
-      // tombstones >= 2 targets while adding 1, net negative) — but its
-      // effect on the running projection still has to be recorded so a
-      // LATER op in this same run (an ADD into the same domain, say) sees
-      // the room this MERGE actually freed, not more and not less.
+      // MERGE is exempt from the cap check ONLY as a NET effect: its own
+      // targets' removal is credited to the running projection FIRST — if
+      // every target lives in the destination domain, that removal always
+      // outweighs the merge's own +1 and the check below never trips. But
+      // when a target lives in a DIFFERENT domain than the destination (or
+      // an earlier op in this same run already used up the room the targets
+      // would have freed), the destination domain gets a bare, uncredited
+      // +1 — exactly like an ADD — so it has to pass the same cap check.
       for (const t of op.targets) {
         bumpProjectedActive(existing.get(t).domain, -1);
       }
-      bumpProjectedActive(normalizeSlug(op.domain), 1);
+      const domain = normalizeSlug(op.domain);
+      if (projectedActive(domain) >= DOMAIN_ACTIVE_CAP) {
+        return {
+          applied: [],
+          rejected: [
+            fail('E_DOMAIN_CAP', `domain ${domain} at cap (${DOMAIN_ACTIVE_CAP} active) — MERGE existing learnings or retire first`),
+          ],
+          committed: false,
+          exitCode: 1,
+        };
+      }
+      bumpProjectedActive(domain, 1);
+      plannedIds.add(newIdFor(op));
+      for (const t of op.targets) consumedTargets.add(t);
     }
 
     if (op.op === 'SUPERSEDE') {
       const target = existing.get(op.target);
-      const newId = `${normalizeSlug(op.domain)}/${normalizeSlug(op.slug)}`;
+      const newId = newIdFor(op);
 
       // Rename-collision guard: a SUPERSEDE writing to an id that already
-      // belongs to a DIFFERENT existing learning must never silently
-      // clobber it. Only the in-place shape (new id === the op's own
-      // target) is allowed to "collide" — that's a replacement, not a
-      // collision.
-      if (newId !== op.target && existing.has(newId)) {
+      // belongs to a DIFFERENT existing learning — on disk OR already
+      // claimed by an earlier op in this run — must never silently clobber
+      // it. Only the in-place shape (new id === the op's own target) is
+      // allowed to "collide" — that's a replacement, not a collision.
+      if (newId !== op.target && idTaken(newId)) {
         return rejectOp(
           'E_EXISTS',
-          `op ${i}: ${newId} already exists — choose a different slug or SUPERSEDE it directly instead of ${op.target}`,
+          existing.has(newId)
+            ? `op ${i}: ${newId} already exists — choose a different slug or SUPERSEDE it directly instead of ${op.target}`
+            : `op ${i}: ${newId} was already introduced by an earlier op in this run`,
           op.episodes
         );
       }
@@ -481,7 +532,9 @@ export function applyOps({ workspace, opsPath, dryRun = false, home, approve = f
           };
         }
         bumpProjectedActive(domain, 1);
+        plannedIds.add(newId);
       }
+      consumedTargets.add(op.target);
     }
     planned.push({ ...op, index: i });
   }

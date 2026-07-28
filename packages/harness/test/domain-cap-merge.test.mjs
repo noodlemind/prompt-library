@@ -108,6 +108,14 @@ function activeCount(dir) {
   return listLearnings(dir).filter((l) => !l.fm.superseded_by && !['retired', 'disputed'].includes(l.fm.status)).length;
 }
 
+// Per-domain version of the same ground truth — needed once scenarios span
+// more than one domain (a MERGE's targets in domain A/B landing in domain C).
+function domainActiveCount(dir, domain) {
+  return listLearnings(dir).filter(
+    (l) => l.domain === domain && !l.fm.superseded_by && !['retired', 'disputed'].includes(l.fm.status)
+  ).length;
+}
+
 // (a) ADD #26 into an at-cap domain rejects E_DOMAIN_CAP, no strike recorded.
 test('an ADD into a domain at 25 active learnings is rejected with E_DOMAIN_CAP and records no strike', () => {
   const c = ctx();
@@ -384,4 +392,167 @@ test('a MERGE plus exactly one ADD against a 25-active domain applies — the me
   assert.ok(listLearnings(dir).some((l) => l.id === 'perf/order-merge-fits'));
   assert.ok(listLearnings(dir).some((l) => l.id === 'perf/order-add-only'));
   assert.equal(activeCount(dir), 25, '25 - 2 (merged targets) + 1 (merge) + 1 (add) = 25, exactly at cap');
+});
+
+/**
+ * Round 2 regression coverage — two more ways the cap was breached, both
+ * present since the domain-cap feature landed:
+ *
+ * Gap 1: the MERGE branch bumped its destination domain's projection by +1
+ * but never compared it to DOMAIN_ACTIVE_CAP (ADD and SUPERSEDE-new-id both
+ * did). A merge whose targets live in OTHER domains than the destination
+ * gave the destination a bare, uncredited +1 that could push it over the
+ * cap undetected.
+ *
+ * Gap 2: validation only ever read the static `existing` snapshot, so a
+ * later op in the same run could still target a learning an EARLIER op in
+ * that same run had already tombstoned (or introduce an id an earlier op
+ * had already claimed) — silently overwriting it at write time and
+ * double-crediting the domain projection along the way.
+ */
+
+// Gap 1, reproduced verbatim: a merge whose targets live in domains OTHER
+// than its destination must still respect the destination's own cap.
+test('Gap 1: a MERGE whose targets live in other domains still respects its destination domain cap', () => {
+  const c = ctx();
+  const dir = seedDomainAtCap(c, 'gamma', 25);
+  seedLearning(dir, 'alpha', 'a1');
+  seedLearning(dir, 'beta', 'b1');
+  rebuildIndex(dir);
+
+  const mergeOp = {
+    op: 'MERGE',
+    targets: ['alpha/a1', 'beta/b1'],
+    domain: 'gamma',
+    slug: 'merged',
+    trigger: 'a cross-domain merge landing in an already at-cap domain',
+    body: 'Re-derived merged claim body from both cross-domain targets.',
+    episodes: [EP({ path: 'docs/solutions/perf/gap1-evidence.md', sha256: '1'.repeat(64) })],
+  };
+  const res = run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [mergeOp])]);
+  assert.equal(res.status, 1, res.stderr || res.stdout);
+  const out = JSON.parse(res.stdout);
+  assert.equal(out.rejected[0].code, 'E_DOMAIN_CAP');
+  assert.match(out.rejected[0].reason, /domain gamma at cap \(25 active\)/);
+
+  // All-or-nothing: the rejected run leaves every domain involved unchanged.
+  assert.equal(domainActiveCount(dir, 'gamma'), 25, 'destination domain unchanged');
+  const byId = Object.fromEntries(listLearnings(dir).map((l) => [l.id, l]));
+  assert.equal(byId['alpha/a1'].fm.superseded_by, null, 'target untouched by the rejected merge');
+  assert.equal(byId['beta/b1'].fm.superseded_by, null, 'target untouched by the rejected merge');
+  assert.ok(!listLearnings(dir).some((l) => l.id === 'gamma/merged'), 'no new learning written');
+});
+
+// Gap 2, reproduced verbatim: a later SUPERSEDE targeting a learning an
+// earlier MERGE in the same run already consumed must be rejected, not
+// silently overwrite the merge's own tombstone stamp.
+test('Gap 2: a later SUPERSEDE targeting a learning an earlier MERGE already consumed this run is rejected', () => {
+  const c = ctx();
+  const dir = seedDomainAtCap(c, 'perf', 25);
+
+  const mergeOp = {
+    op: 'MERGE',
+    targets: ['perf/seed-0', 'perf/seed-1'],
+    domain: 'perf',
+    slug: 'merged-ab',
+    trigger: 'a merge for the same-run consumption regression',
+    body: 'Re-derived merged claim body from both targets episodes.',
+    episodes: [EP({ path: 'docs/solutions/perf/gap2-merge-evidence.md', sha256: '2'.repeat(64) })],
+  };
+  const supersedeOp = {
+    op: 'SUPERSEDE',
+    target: 'perf/seed-0',
+    domain: 'perf',
+    slug: 'a-renamed',
+    trigger: 'a supersede trying to reuse an already-merged target',
+    body: 'a replacement body for the already-consumed target.',
+    episodes: [EP({ path: 'docs/solutions/perf/gap2-supersede-evidence.md', sha256: '3'.repeat(64) })],
+  };
+  const addOp = ADD({
+    domain: 'perf',
+    slug: 'gap2-new',
+    episodes: [EP({ path: 'docs/solutions/perf/gap2-add-evidence.md', sha256: '4'.repeat(64) })],
+  });
+
+  const res = run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [mergeOp, supersedeOp, addOp])]);
+  assert.equal(res.status, 1, res.stderr || res.stdout);
+  const out = JSON.parse(res.stdout);
+  assert.equal(out.rejected[0].code, 'E_TARGET');
+  assert.match(out.rejected[0].reason, /perf\/seed-0 already consumed by an earlier op in this run/);
+
+  // All-or-nothing: nothing from this run is written — not even the MERGE
+  // that would otherwise have been perfectly fine on its own.
+  assert.equal(domainActiveCount(dir, 'perf'), 25, 'unchanged — the whole run rejected');
+  const byId = Object.fromEntries(listLearnings(dir).map((l) => [l.id, l]));
+  assert.equal(byId['perf/seed-0'].fm.superseded_by, null);
+  assert.equal(byId['perf/seed-1'].fm.superseded_by, null);
+  assert.ok(!listLearnings(dir).some((l) => l.id === 'perf/merged-ab'));
+  assert.ok(!listLearnings(dir).some((l) => l.id === 'perf/a-renamed'));
+  assert.ok(!listLearnings(dir).some((l) => l.id === 'perf/gap2-new'));
+});
+
+// Same-run consumption also closes the plain two-ADDs-same-id case: without
+// plannedIds tracking, both would pass independently and the second write
+// would silently clobber the first at the same file path.
+test('two ADDs writing the same id in one run are rejected with E_EXISTS (silent-overwrite regression)', () => {
+  const c = ctx();
+  const { dir } = ensureStore(c.ws, { home: c.harnessHome });
+  const ops = [
+    ADD({
+      domain: 'sql',
+      slug: 'dup-id',
+      body: 'first body for the duplicate id.',
+      episodes: [EP({ path: 'docs/solutions/perf/dup-1.md', sha256: '5'.repeat(64) })],
+    }),
+    ADD({
+      domain: 'sql',
+      slug: 'dup-id',
+      body: 'second, different body for the same duplicate id.',
+      episodes: [EP({ path: 'docs/solutions/perf/dup-2.md', sha256: '6'.repeat(64) })],
+    }),
+  ];
+  const res = run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, ops)]);
+  assert.equal(res.status, 1, res.stderr || res.stdout);
+  const out = JSON.parse(res.stdout);
+  assert.equal(out.rejected[0].code, 'E_EXISTS');
+  assert.match(out.rejected[0].reason, /already introduced by an earlier op in this run/);
+
+  assert.equal(listLearnings(dir).length, 0, 'nothing written — no silent overwrite');
+});
+
+// A legitimate multi-op run must still apply cleanly: a same-domain MERGE
+// plus an unrelated ADD in a totally different domain, neither anywhere
+// near the cap. Every domain's final count is asserted to stay <= cap.
+test('a legitimate MERGE plus an unrelated ADD in a different domain both apply, final counts stay at or under the cap', () => {
+  const c = ctx();
+  const { dir } = ensureStore(c.ws, { home: c.harnessHome });
+  seedLearning(dir, 'alpha', 'a1');
+  seedLearning(dir, 'alpha', 'a2');
+  seedLearning(dir, 'delta', 'd1');
+  rebuildIndex(dir);
+
+  const mergeOp = {
+    op: 'MERGE',
+    targets: ['alpha/a1', 'alpha/a2'],
+    domain: 'alpha',
+    slug: 'alpha-merged',
+    trigger: 'a legitimate same-domain merge',
+    body: 'Re-derived merged claim body from both targets episodes.',
+    episodes: [EP({ path: 'docs/solutions/perf/legit-merge-evidence.md', sha256: '7'.repeat(64) })],
+  };
+  const addOp = ADD({
+    domain: 'delta',
+    slug: 'delta-new',
+    episodes: [EP({ path: 'docs/solutions/perf/legit-add-evidence.md', sha256: '8'.repeat(64) })],
+  });
+
+  const res = run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [mergeOp, addOp])]);
+  assert.equal(res.status, 0, res.stderr || res.stdout);
+
+  assert.ok(domainActiveCount(dir, 'alpha') <= 25);
+  assert.ok(domainActiveCount(dir, 'delta') <= 25);
+  assert.equal(domainActiveCount(dir, 'alpha'), 1, '2 targets tombstoned + 1 merged = 1');
+  assert.equal(domainActiveCount(dir, 'delta'), 2, '1 pre-existing + 1 added = 2');
+  assert.ok(listLearnings(dir).some((l) => l.id === 'alpha/alpha-merged'));
+  assert.ok(listLearnings(dir).some((l) => l.id === 'delta/delta-new'));
 });
