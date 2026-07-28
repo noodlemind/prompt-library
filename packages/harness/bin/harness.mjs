@@ -182,11 +182,12 @@ const CATALOG = [
           ['purge --all', 'reset the learnings store (episodes remain, become debt)'],
         ] },
       { name: 'consolidate', desc: 'episode→learning debt, work packet, and validated apply',
-        sig: '[--status | --candidates | --apply --ops <path>]',
+        sig: '[--status | --candidates | --apply --ops <path> | --rebuild --yes]',
         options: [
           ['--status', 'debt vs threshold, quarantine, promotion candidates (default)'],
           ['--candidates', 'deterministic work packet for the consolidation skill'],
           ['--apply --ops <path>', 'validate and apply an ops JSON (sole writer)'],
+          ['--rebuild --yes', 'T2 reset for model-upgrade regeneration (git history retains learnings)'],
         ] },
       { name: 'remember', desc: 'teach the harness a durable claim (human-teaching episode + learning)',
         sig: '"<claim>" --trigger "<t>" [--domain <d>]',

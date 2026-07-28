@@ -1,7 +1,15 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { ensureStore, listLearnings, readLedger, commitStore, parseLearningFrontmatter } from './store.mjs';
+import {
+  ensureStore,
+  listLearnings,
+  readLedger,
+  commitStore,
+  parseLearningFrontmatter,
+  readStoreConfig,
+} from './store.mjs';
 import { rebuildIndex, todayClamped } from './apply.mjs';
+import { consolidateStatus } from './consolidate.mjs';
 
 /**
  * Human deletion always wins: purge is never mode-gated — it runs in every
@@ -145,4 +153,65 @@ export function purgeAll({ workspace, home }) {
   rebuildIndex(dir);
   commitStore(dir, 'purge: --all (store reset)');
   return { pass: true, exitCode: 0, removed: { learnings: n }, blockedReason: null };
+}
+
+/**
+ * T2 reset for model-upgrade regeneration (design §2's re-derivability
+ * invariant): every learning is discarded — git history in the store repo
+ * still holds them, `--yes` is the only undo — and every episode, including
+ * `kind: human-teaching` ones written by `remember`, re-enters consolidation
+ * debt so `source: human` learnings regenerate with full authority. Unlike
+ * `purgeAll`, rebuild also drops `stale.json`: a fresh model gets a clean
+ * stale-anchor slate rather than exclusions computed against the old corpus.
+ * Mode-gated like every other knowledge write — human purge is the only
+ * always-on path.
+ */
+export function rebuildStore({ workspace, home, yes }) {
+  const { mode } = readStoreConfig(workspace, { home });
+  if (mode !== 'on') {
+    return {
+      pass: false,
+      exitCode: 2,
+      archived: null,
+      debt: null,
+      blockedReason: `knowledge mode is ${mode} — run: harness knowledge on`,
+      nextTools: ['harness knowledge on'],
+    };
+  }
+
+  const { dir } = ensureStore(workspace, { home });
+  const archived = listLearnings(dir).length;
+
+  if (!yes) {
+    return {
+      pass: false,
+      exitCode: 2,
+      archived: null,
+      debt: null,
+      blockedReason: `rebuild resets ${archived} learnings (git history retains them) — re-run with --yes`,
+      nextTools: ['harness consolidate --rebuild --yes'],
+    };
+  }
+
+  const learningsDir = path.join(dir, 'learnings');
+  if (fs.existsSync(learningsDir)) {
+    for (const domain of fs.readdirSync(learningsDir, { withFileTypes: true })) {
+      if (!domain.isDirectory()) continue;
+      fs.rmSync(path.join(learningsDir, domain.name), { recursive: true, force: true });
+    }
+  }
+  fs.writeFileSync(path.join(dir, 'consolidated.jsonl'), '', 'utf8');
+  rebuildIndex(dir);
+  fs.rmSync(path.join(dir, 'stale.json'), { force: true });
+  commitStore(dir, `consolidate: rebuild reset (${archived} learnings archived to git history)`);
+
+  const { debt } = consolidateStatus({ workspace, home });
+  return {
+    pass: true,
+    exitCode: 0,
+    archived,
+    debt,
+    blockedReason: null,
+    nextTools: ['harness consolidate --candidates'],
+  };
 }

@@ -866,6 +866,36 @@ export async function cmdConsolidate(argv) {
     return 0;
   }
 
+  if (argv.includes('--rebuild')) {
+    const { rebuildStore } = await import('./knowledge/admin.mjs');
+    const { CONSOLIDATION_THRESHOLD } = await import('./knowledge/consolidate.mjs');
+    const result = rebuildStore({ workspace, yes: flags.yes });
+    writeEvent(workspace, flags, {
+      type: 'consolidate',
+      command: 'consolidate',
+      decision: 'rebuild',
+      result: result.pass ? 'pass' : 'fail',
+      exitCode: result.exitCode,
+    });
+    if (flags.json) {
+      emitJson(flags, result);
+    } else if (!result.pass) {
+      for (const l of ui.errorBlock({ code: 'E_USAGE', message: result.blockedReason, exit: result.exitCode })) {
+        console.error(l);
+      }
+    } else {
+      console.log(
+        ui.line({
+          state: 'warn',
+          key: 'rebuild',
+          value: `archived ${result.archived} · debt ${result.debt}/${CONSOLIDATION_THRESHOLD}`,
+        })
+      );
+      printNext(result.nextTools?.[0]);
+    }
+    return result.exitCode;
+  }
+
   // Default: --status (deterministic debt gauge, zero model cost).
   const { consolidateStatus } = await import('./knowledge/consolidate.mjs');
   const status = consolidateStatus({ workspace, copilotHome });

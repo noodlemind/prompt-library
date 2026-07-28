@@ -555,7 +555,7 @@ test('knowledge layer surface: consolidate command and insight lane stay documen
   // The knowledge group and its three modes are the M1 public contract.
   assert.match(bin, /group: 'knowledge'/, 'CATALOG has a knowledge group');
   assert.match(bin, /case 'consolidate':/, 'consolidate command registered');
-  assert.match(bin, /'\[--status \| --candidates \| --apply --ops <path>\]'/, 'help documents consolidate modes');
+  assert.match(bin, /'\[--status \| --candidates \| --apply --ops <path> \| --rebuild --yes\]'/, 'help documents consolidate modes');
   assert.match(bin, /--insight/, 'compound help documents the insight lane');
   // The skill never writes learnings directly — apply is the sole writer.
   const apply = read('packages/harness/lib/knowledge/apply.mjs');
