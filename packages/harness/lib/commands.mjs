@@ -1159,7 +1159,7 @@ export async function cmdKnowledge(argv) {
   const workspace = path.resolve(flags.workspace);
   const subcommand = argv[0] && !argv[0].startsWith('--') ? argv[0] : null;
   // Single definition (store.mjs) — commands.mjs no longer keeps its own copy.
-  const { KNOWLEDGE_MODES, writeStoreConfig, readStoreConfig } = await import('./knowledge/store.mjs');
+  const { KNOWLEDGE_MODES, KNOWLEDGE_COMMIT_MODES, writeStoreConfig, readStoreConfig } = await import('./knowledge/store.mjs');
 
   if (subcommand === 'purge') {
     const { purgeEpisode, purgeAll } = await import('./knowledge/admin.mjs');
@@ -1206,6 +1206,48 @@ export async function cmdKnowledge(argv) {
     return result.exitCode;
   }
 
+  // commit <none|repo> is checked BEFORE the mode-set branch below — 'commit'
+  // itself is never a member of KNOWLEDGE_MODES, so there's no ambiguity, but
+  // ordering matches the brief's explicit branch order (purge → commit →
+  // mode-set → bare status → E_USAGE).
+  if (subcommand === 'commit') {
+    const commitValue = argv[1];
+    if (!KNOWLEDGE_COMMIT_MODES.has(commitValue)) {
+      writeEvent(workspace, flags, {
+        type: 'knowledge',
+        command: 'knowledge',
+        decision: 'commit',
+        result: 'fail',
+        exitCode: EXIT.usage,
+      });
+      for (const l of ui.errorBlock({
+        code: 'E_USAGE',
+        message: `unknown commit mode: ${commitValue || '(none)'}`,
+        fix: 'harness knowledge commit <none|repo>',
+        exit: EXIT.usage,
+      })) {
+        console.error(l);
+      }
+      return EXIT.usage;
+    }
+    writeStoreConfig(workspace, { commit: commitValue });
+    writeEvent(workspace, flags, {
+      type: 'knowledge',
+      command: 'knowledge',
+      decision: `commit ${commitValue}`,
+      result: 'pass',
+      exitCode: 0,
+    });
+    if (flags.json) {
+      emitJson(flags, { pass: true, commit: commitValue });
+    } else {
+      console.log(
+        ui.line({ state: commitValue === 'repo' ? 'ok' : 'warn', key: 'knowledge', value: `commit ${commitValue}` })
+      );
+    }
+    return 0;
+  }
+
   if (subcommand && KNOWLEDGE_MODES.has(subcommand)) {
     writeStoreConfig(workspace, { mode: subcommand });
     writeEvent(workspace, flags, {
@@ -1226,7 +1268,7 @@ export async function cmdKnowledge(argv) {
   }
 
   if (!subcommand) {
-    const { mode } = readStoreConfig(workspace);
+    const { mode, commit } = readStoreConfig(workspace);
     writeEvent(workspace, flags, {
       type: 'knowledge',
       command: 'knowledge',
@@ -1235,9 +1277,11 @@ export async function cmdKnowledge(argv) {
       exitCode: 0,
     });
     if (flags.json) {
-      emitJson(flags, { mode });
+      emitJson(flags, { mode, commit });
     } else {
-      console.log(ui.line({ state: mode === 'on' ? 'ok' : 'warn', key: 'knowledge', value: `mode ${mode}` }));
+      console.log(
+        ui.line({ state: mode === 'on' ? 'ok' : 'warn', key: 'knowledge', value: `mode ${mode} · commit ${commit}` })
+      );
     }
     return 0;
   }
@@ -1252,7 +1296,7 @@ export async function cmdKnowledge(argv) {
   for (const l of ui.errorBlock({
     code: 'E_USAGE',
     message: `unknown knowledge mode: ${subcommand}`,
-    fix: 'harness knowledge <on|suggest|off|freeze|capture-only> | --status | purge <file|--all>',
+    fix: 'harness knowledge <on|suggest|off|freeze|capture-only> | --status | purge <file|--all> | commit <none|repo>',
     exit: EXIT.usage,
   })) {
     console.error(l);

@@ -15,7 +15,7 @@ import {
 } from './store.mjs';
 import { MAX_OPS_PER_RUN, LEARNING_BYTE_CAP, QUARANTINE_THRESHOLD, DOMAIN_ACTIVE_CAP, isActiveFm } from './consolidate.mjs';
 import { scanSecrets } from '../secret-scan.mjs';
-import { absorbHandEdits } from './admin.mjs';
+import { absorbHandEdits, mirrorLearnings } from './admin.mjs';
 
 /**
  * The SOLE writer of the learnings store. The consolidation skill emits an
@@ -231,7 +231,7 @@ function verifyHumanTeachingEpisode(workspace, e) {
   return kind === 'human-teaching';
 }
 
-export function applyOps({ workspace, opsPath, dryRun = false, home, approve = false }) {
+export function applyOps({ workspace, opsPath, dryRun = false, home, approve = false, log = () => {} }) {
   // Absorb any hand edit sitting in the store BEFORE anything else — even
   // before the mode gate. The failure path below can `git reset --hard` the
   // store tree; a dirty hand edit caught in that reset would be destroyed
@@ -716,6 +716,11 @@ export function applyOps({ workspace, opsPath, dryRun = false, home, approve = f
 
   const summary = applied.map((a) => `${a.op.toLowerCase()}${a.id ? ` ${a.id}` : ''}`).join(' · ') || 'noop';
   const { committed } = commitStore(dir, `consolidate: ${summary}`);
+  try {
+    mirrorLearnings({ workspace, home, log });
+  } catch {
+    // best effort — a mirror failure must never block applyOps.
+  }
   return { applied, rejected, committed, exitCode: 0, storeDir: dir, indexPath: path.join(dir, 'INDEX.md') };
 }
 

@@ -78,27 +78,54 @@ export function ensureStore(workspace, { home, dryRun = false } = {}) {
 export const KNOWLEDGE_MODES = new Set(['on', 'suggest', 'off', 'freeze', 'capture-only']);
 
 /**
- * Kill-switch mode for the knowledge layer, read from <store>/config.json.
- * Read-only — never creates the store. Tolerant of an absent or corrupt
- * config (missing file, unreadable JSON, unrecognized mode): default is 'on'
- * so a fresh or damaged store never silently blocks the whole layer.
+ * Opt-in commit mode (Milestone 3 Task 6): 'none' (default — no mirroring)
+ * or 'repo' (mirror ACTIVE learnings verbatim into
+ * <workspace>/docs/knowledge/learnings/, see admin.mjs's mirrorLearnings).
+ * Independent of KNOWLEDGE_MODES — the two fields persist side by side in
+ * config.json, each read-modify-write preserving the other (writeStoreConfig
+ * below): `knowledge freeze` must not reset commit, `knowledge commit repo`
+ * must not reset mode.
+ */
+export const KNOWLEDGE_COMMIT_MODES = new Set(['none', 'repo']);
+
+/**
+ * Kill-switch mode (and opt-in commit mode) for the knowledge layer, read
+ * from <store>/config.json. Read-only — never creates the store. Tolerant of
+ * an absent or corrupt config (missing file, unreadable JSON, unrecognized
+ * mode/commit): default mode is 'on' and default commit is 'none', so a
+ * fresh or damaged store never silently blocks the whole layer nor silently
+ * starts mirroring into the product repo.
  */
 export function readStoreConfig(workspace, { home } = {}) {
   const dir = storeDir(workspace, { home });
+  let mode = 'on';
+  let commit = 'none';
   try {
     const parsed = JSON.parse(fs.readFileSync(path.join(dir, 'config.json'), 'utf8'));
-    if (parsed && KNOWLEDGE_MODES.has(parsed.mode)) return { mode: parsed.mode };
+    if (parsed && KNOWLEDGE_MODES.has(parsed.mode)) mode = parsed.mode;
+    if (parsed && KNOWLEDGE_COMMIT_MODES.has(parsed.commit)) commit = parsed.commit;
   } catch {
-    // absent, unreadable, or corrupt — default mode is 'on'
+    // absent, unreadable, or corrupt — defaults above hold
   }
-  return { mode: 'on' };
+  return { mode, commit };
 }
 
-export function writeStoreConfig(workspace, { home, mode } = {}) {
+/**
+ * Read-modify-write: only the field(s) actually passed (`mode` and/or
+ * `commit`) change — whichever one this call omits is preserved from the
+ * current config exactly as-is, so `knowledge freeze` and `knowledge commit
+ * repo` can never stomp on each other. The commit message names whichever
+ * field this call changed.
+ */
+export function writeStoreConfig(workspace, { home, mode, commit } = {}) {
   const { dir } = ensureStore(workspace, { home });
-  fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify({ mode }) + '\n', 'utf8');
-  const { committed } = commitStore(dir, `knowledge: mode ${mode}`);
-  return { mode, committed };
+  const current = readStoreConfig(workspace, { home });
+  const nextMode = mode !== undefined ? mode : current.mode;
+  const nextCommit = commit !== undefined ? commit : current.commit;
+  fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify({ mode: nextMode, commit: nextCommit }) + '\n', 'utf8');
+  const message = mode !== undefined ? `knowledge: mode ${nextMode}` : `knowledge: commit ${nextCommit}`;
+  const { committed } = commitStore(dir, message);
+  return { mode: nextMode, commit: nextCommit, committed };
 }
 
 /** Append-only episode-consumption ledger. Torn tail lines are tolerated. */

@@ -176,11 +176,12 @@ const CATALOG = [
     group: 'knowledge',
     commands: [
       { name: 'knowledge', desc: 'knowledge layer mode switch and purge (human deletion always wins)',
-        sig: '<on|suggest|off|freeze|capture-only> | --status | purge <file|--all>',
+        sig: '<on|suggest|off|freeze|capture-only> | --status | purge <file|--all> | commit <none|repo>',
         options: [
           ['--status', 'show the active mode (default)'],
           ['purge <file>', 'cascade-delete an episode and dependent learnings'],
           ['purge --all', 'reset the learnings store (episodes remain, become debt)'],
+          ['commit <none|repo>', 'repo mirrors ACTIVE learnings into docs/knowledge/learnings (opt-in, never git-commits the product repo); none is the default'],
         ] },
       { name: 'consolidate', desc: 'episode→learning debt, work packet, and validated apply',
         sig: '[--status | --candidates | --apply --ops <path> | --rebuild --yes]',

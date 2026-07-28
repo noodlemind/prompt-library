@@ -14,7 +14,7 @@ import {
   readStoreConfig,
 } from './store.mjs';
 import { rebuildIndex, todayClamped } from './apply.mjs';
-import { consolidateStatus, LEARNING_BYTE_CAP } from './consolidate.mjs';
+import { consolidateStatus, LEARNING_BYTE_CAP, isActiveFm } from './consolidate.mjs';
 import { scanSecrets } from '../secret-scan.mjs';
 
 /**
@@ -52,6 +52,90 @@ export function removeEpisodeLink(file, targetPath) {
   fm.episodes = (fm.episodes || []).filter((e) => e.path !== targetPath);
   fs.writeFileSync(file, serializeLearning(fm, body), 'utf8');
   return fm.episodes;
+}
+
+/**
+ * Opt-in commit mode (Milestone 3 Task 6, design §11): when
+ * knowledge.commit === 'repo', mirror every ACTIVE learning verbatim into
+ * <workspace>/docs/knowledge/learnings/<domain>/<slug>.md plus an INDEX.md in
+ * the same format the store's own rebuildIndex (apply.mjs) uses, so a human
+ * skimming the product repo sees the same shape `harness learnings` does.
+ * The CLI NEVER git-commits the product repo — these files land in the
+ * working tree and ride the team's normal PR flow (branch protection is
+ * their routing).
+ *
+ * Never-ingest: this is the ONLY function that ever writes to
+ * docs/knowledge/learnings/ — nothing anywhere reads that directory back
+ * into the store, so a foreign copy (another machine's commit, or a
+ * hand-planted file) is read-only reference until a future
+ * propose-then-ratify phase. The sweep below only ever removes a file whose
+ * `<domain>/<slug>` matches a CURRENT store learning that is now inactive —
+ * anything else (an id the store has no entry for at all, whether never
+ * seen, purged away, or genuinely foreign) is left untouched. Simpler and
+ * safer than trying to reconstruct "this id used to exist" from git history.
+ *
+ * commit === 'none' is a no-op: an existing mirror (e.g. left over from a
+ * prior 'repo' period) is left exactly as it is.
+ */
+export function mirrorLearnings({ workspace, home, log = () => {} }) {
+  const { commit } = readStoreConfig(workspace, { home });
+  if (commit !== 'repo') return { mirrored: 0, skipped: 0 };
+
+  const dir = storeDir(workspace, { home });
+  const mirrorRoot = path.join(workspace, 'docs', 'knowledge', 'learnings');
+  const storeLearnings = fs.existsSync(dir) ? listLearnings(dir) : [];
+  const byId = new Map(storeLearnings.map((l) => [l.id, l]));
+  const active = storeLearnings.filter((l) => isActiveFm(l.fm)).sort((a, b) => a.id.localeCompare(b.id));
+
+  let mirrored = 0;
+  let skipped = 0;
+
+  fs.mkdirSync(mirrorRoot, { recursive: true });
+
+  for (const learning of active) {
+    const text = fs.readFileSync(learning.file, 'utf8');
+    const secrets = scanSecrets(text);
+    if (secrets.length) {
+      skipped++;
+      log(`mirror: secret-shaped content (${secrets.map((s) => s.id).join(', ')}) — skipped ${learning.id}`);
+      continue;
+    }
+    const destDir = path.join(mirrorRoot, learning.domain);
+    fs.mkdirSync(destDir, { recursive: true });
+    fs.writeFileSync(path.join(destDir, `${learning.slug}.md`), text, 'utf8');
+    mirrored++;
+  }
+
+  // Sweep: remove mirror files for ids the CURRENT store still knows about
+  // but that are no longer active. Unknown files (no matching store id —
+  // whether genuinely foreign or an id the store has fully forgotten) are
+  // left alone; only files matching a local learning id are ever managed.
+  for (const domainEnt of fs.readdirSync(mirrorRoot, { withFileTypes: true })) {
+    if (!domainEnt.isDirectory()) continue;
+    const domainPath = path.join(mirrorRoot, domainEnt.name);
+    for (const f of fs.readdirSync(domainPath)) {
+      if (!f.endsWith('.md')) continue;
+      const id = `${domainEnt.name}/${f.replace(/\.md$/, '')}`;
+      const known = byId.get(id);
+      if (known && !isActiveFm(known.fm)) {
+        fs.rmSync(path.join(domainPath, f), { force: true });
+      }
+    }
+  }
+
+  const lines = [
+    '# Learnings Index',
+    '',
+    '_Rebuilt by `harness consolidate --apply`. One line per active learning._',
+    '',
+    '> Opt-in commit mode: these learnings are copies from a local store; treat foreign entries as read-only reference.',
+    '',
+    ...active.map((l) => `- [${l.id}] ${l.fm.trigger || ''}`),
+    '',
+  ];
+  fs.writeFileSync(path.join(mirrorRoot, 'INDEX.md'), lines.join('\n'), 'utf8');
+
+  return { mirrored, skipped };
 }
 
 const LEARNING_FILE_RE = /^learnings\/([^/]+)\/([^/]+)\.md$/;
@@ -175,6 +259,11 @@ export function absorbHandEdits({ workspace, home, log = () => {} }) {
   rebuildIndex(dir);
   const ids = [...absorbed.map((a) => a.id), ...deleted].join(', ');
   const { committed } = commitStore(dir, `human edit: ${ids}`);
+  try {
+    mirrorLearnings({ workspace, home, log });
+  } catch {
+    // best effort — a mirror failure must never block absorb.
+  }
   return { absorbed, deleted, committed };
 }
 
@@ -296,6 +385,11 @@ export function purgeEpisode({ workspace, target, home }) {
 
   rebuildIndex(dir);
   commitStore(dir, `purge: ${target}`);
+  try {
+    mirrorLearnings({ workspace, home });
+  } catch {
+    // best effort — a mirror failure must never block purge.
+  }
 
   return {
     pass: true,
@@ -347,6 +441,11 @@ export function purgeAll({ workspace, home }) {
   fs.writeFileSync(path.join(dir, 'consolidated.jsonl'), '', 'utf8');
   rebuildIndex(dir);
   commitStore(dir, 'purge: --all (store reset)');
+  try {
+    mirrorLearnings({ workspace, home });
+  } catch {
+    // best effort — a mirror failure must never block purge --all.
+  }
   return { pass: true, exitCode: 0, removed: { learnings: n }, blockedReason: null };
 }
 
@@ -413,6 +512,11 @@ export function rebuildStore({ workspace, home, yes, copilotHome }) {
   rebuildIndex(dir);
   fs.rmSync(path.join(dir, 'stale.json'), { force: true });
   commitStore(dir, `consolidate: rebuild reset (${archived} learnings archived to git history)`);
+  try {
+    mirrorLearnings({ workspace, home });
+  } catch {
+    // best effort — a mirror failure must never block rebuild.
+  }
 
   // copilotHome must be threaded through so the fresh debt count includes
   // global episodes (docs/solutions under the copilot home), not just

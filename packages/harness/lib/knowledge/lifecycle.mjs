@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { storeDir, listLearnings, commitStore, serializeLearning } from './store.mjs';
 import { updateFrontmatterField, todayClamped, rebuildIndex } from './apply.mjs';
-import { absorbHandEdits } from './admin.mjs';
+import { absorbHandEdits, mirrorLearnings } from './admin.mjs';
 
 /**
  * One-command human authority over a single learning: retire, dispute,
@@ -78,6 +78,11 @@ export function setLearningStatus({ workspace, id, action, reason, to, home }) {
     // the next consolidate --apply.
     rebuildIndex(dir);
     commitStore(dir, `promote ${id}: ${to}`);
+    try {
+      mirrorLearnings({ workspace, home });
+    } catch {
+      // best effort — a mirror failure must never block promote.
+    }
     return { pass: true, exitCode: 0, id, status: 'promoted', blockedReason: null };
   }
 
@@ -85,5 +90,10 @@ export function setLearningStatus({ workspace, id, action, reason, to, home }) {
   if (action === 'confirm') updateFrontmatterField(learning.file, 'last_confirmed', todayClamped());
   rebuildIndex(dir);
   commitStore(dir, `${action} ${id}: ${reason || 'human confirm'}`);
+  try {
+    mirrorLearnings({ workspace, home });
+  } catch {
+    // best effort — a mirror failure must never block a lifecycle action.
+  }
   return { pass: true, exitCode: 0, id, status: TARGET_STATUS[action], blockedReason: null };
 }
