@@ -68,16 +68,25 @@ export function removeEpisodeLink(file, targetPath) {
  * docs/knowledge/learnings/ — nothing anywhere reads that directory back
  * into the store, so a foreign copy (another machine's commit, or a
  * hand-planted file) is read-only reference until a future
- * propose-then-ratify phase. The sweep below only ever removes a file whose
- * `<domain>/<slug>` matches a CURRENT store learning that is now inactive —
- * anything else (an id the store has no entry for at all, whether never
- * seen, purged away, or genuinely foreign) is left untouched. Simpler and
- * safer than trying to reconstruct "this id used to exist" from git history.
+ * propose-then-ratify phase. The sweep below removes a file whose
+ * `<domain>/<slug>` matches EITHER a CURRENT store learning that is now
+ * inactive OR an id the caller explicitly names via `retiredIds` — full-reset
+ * callers (`purge --all`, `rebuild --yes`) capture the store's id list BEFORE
+ * wiping it and pass it here, since after the wipe those ids no longer exist
+ * anywhere for the "current store" half of the check to match. Anything else
+ * (an id neither list names — genuinely foreign, or simply never mirrored)
+ * is left untouched.
+ *
+ * Every learning slated for the mirror (verbatim text or INDEX entry) is
+ * secret-scanned first: a hit is excluded from BOTH the `.md` write and the
+ * INDEX entry list entirely — a skipped learning is invisible in the mirror,
+ * not just missing its file body — and counted in `skipped` with a logged
+ * warning (best-effort screening per design §11).
  *
  * commit === 'none' is a no-op: an existing mirror (e.g. left over from a
  * prior 'repo' period) is left exactly as it is.
  */
-export function mirrorLearnings({ workspace, home, log = () => {} }) {
+export function mirrorLearnings({ workspace, home, log = () => {}, retiredIds = [] }) {
   const { commit } = readStoreConfig(workspace, { home });
   if (commit !== 'repo') return { mirrored: 0, skipped: 0 };
 
@@ -86,9 +95,11 @@ export function mirrorLearnings({ workspace, home, log = () => {} }) {
   const storeLearnings = fs.existsSync(dir) ? listLearnings(dir) : [];
   const byId = new Map(storeLearnings.map((l) => [l.id, l]));
   const active = storeLearnings.filter((l) => isActiveFm(l.fm)).sort((a, b) => a.id.localeCompare(b.id));
+  const retiredIdSet = new Set(retiredIds);
 
   let mirrored = 0;
   let skipped = 0;
+  const skippedIds = new Set();
 
   fs.mkdirSync(mirrorRoot, { recursive: true });
 
@@ -97,6 +108,7 @@ export function mirrorLearnings({ workspace, home, log = () => {} }) {
     const secrets = scanSecrets(text);
     if (secrets.length) {
       skipped++;
+      skippedIds.add(learning.id);
       log(`mirror: secret-shaped content (${secrets.map((s) => s.id).join(', ')}) — skipped ${learning.id}`);
       continue;
     }
@@ -107,9 +119,9 @@ export function mirrorLearnings({ workspace, home, log = () => {} }) {
   }
 
   // Sweep: remove mirror files for ids the CURRENT store still knows about
-  // but that are no longer active. Unknown files (no matching store id —
-  // whether genuinely foreign or an id the store has fully forgotten) are
-  // left alone; only files matching a local learning id are ever managed.
+  // but that are no longer active, OR ids the caller names via retiredIds
+  // (see the doc comment above). Anything else is left alone; only files
+  // matching a managed id are ever removed.
   for (const domainEnt of fs.readdirSync(mirrorRoot, { withFileTypes: true })) {
     if (!domainEnt.isDirectory()) continue;
     const domainPath = path.join(mirrorRoot, domainEnt.name);
@@ -117,12 +129,16 @@ export function mirrorLearnings({ workspace, home, log = () => {} }) {
       if (!f.endsWith('.md')) continue;
       const id = `${domainEnt.name}/${f.replace(/\.md$/, '')}`;
       const known = byId.get(id);
-      if (known && !isActiveFm(known.fm)) {
+      const isKnownInactive = known && !isActiveFm(known.fm);
+      if (isKnownInactive || retiredIdSet.has(id)) {
         fs.rmSync(path.join(domainPath, f), { force: true });
       }
     }
   }
 
+  // Skipped (secret-shaped) learnings are excluded from the INDEX entirely —
+  // no id, no trigger — not just missing their .md file.
+  const indexEntries = active.filter((l) => !skippedIds.has(l.id));
   const lines = [
     '# Learnings Index',
     '',
@@ -130,7 +146,7 @@ export function mirrorLearnings({ workspace, home, log = () => {} }) {
     '',
     '> Opt-in commit mode: these learnings are copies from a local store; treat foreign entries as read-only reference.',
     '',
-    ...active.map((l) => `- [${l.id}] ${l.fm.trigger || ''}`),
+    ...indexEntries.map((l) => `- [${l.id}] ${l.fm.trigger || ''}`),
     '',
   ];
   fs.writeFileSync(path.join(mirrorRoot, 'INDEX.md'), lines.join('\n'), 'utf8');
@@ -428,6 +444,11 @@ export function purgeAll({ workspace, home }) {
   } catch {
     // best effort — a hand-edit absorb failure must never block purge --all.
   }
+  // Captured BEFORE the wipe below: a full reset (design-controller ruling)
+  // must still clear the mirror for exactly these ids, but by the time
+  // mirrorLearnings runs the store no longer has any record of them — pass
+  // them explicitly via retiredIds so its sweep can still match them.
+  const idsBeforeReset = listLearnings(dir).map((l) => l.id);
   const learningsDir = path.join(dir, 'learnings');
   let n = 0;
   if (fs.existsSync(learningsDir)) {
@@ -442,7 +463,7 @@ export function purgeAll({ workspace, home }) {
   rebuildIndex(dir);
   commitStore(dir, 'purge: --all (store reset)');
   try {
-    mirrorLearnings({ workspace, home });
+    mirrorLearnings({ workspace, home, retiredIds: idsBeforeReset });
   } catch {
     // best effort — a mirror failure must never block purge --all.
   }
@@ -499,7 +520,11 @@ export function rebuildStore({ workspace, home, yes, copilotHome }) {
   } catch {
     // best effort — a hand-edit absorb failure must never block rebuild.
   }
-  const archived = listLearnings(dir).length;
+  // Captured BEFORE the wipe below — same reasoning as purgeAll's
+  // idsBeforeReset: mirrorLearnings needs these ids named explicitly via
+  // retiredIds since the store itself forgets them the instant the wipe runs.
+  const archivedLearnings = listLearnings(dir);
+  const archived = archivedLearnings.length;
 
   const learningsDir = path.join(dir, 'learnings');
   if (fs.existsSync(learningsDir)) {
@@ -513,7 +538,7 @@ export function rebuildStore({ workspace, home, yes, copilotHome }) {
   fs.rmSync(path.join(dir, 'stale.json'), { force: true });
   commitStore(dir, `consolidate: rebuild reset (${archived} learnings archived to git history)`);
   try {
-    mirrorLearnings({ workspace, home });
+    mirrorLearnings({ workspace, home, retiredIds: archivedLearnings.map((l) => l.id) });
   } catch {
     // best effort — a mirror failure must never block rebuild.
   }

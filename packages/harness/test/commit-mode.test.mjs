@@ -5,7 +5,8 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
-import { ensureStore, listLearnings } from '../lib/knowledge/store.mjs';
+import { ensureStore, listLearnings, writeStoreConfig } from '../lib/knowledge/store.mjs';
+import { mirrorLearnings } from '../lib/knowledge/admin.mjs';
 
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const binPath = path.join(packageRoot, 'bin', 'harness.mjs');
@@ -135,4 +136,144 @@ test('bare knowledge --status defaults commit to none on a fresh store', () => {
   const status = JSON.parse(run(c, ['knowledge', '--status']).stdout);
   assert.equal(status.mode, 'on');
   assert.equal(status.commit, 'none');
+});
+
+function learningFile({ trigger, body, sha256, episodePath }) {
+  return `---
+schema: 1
+trigger: "${trigger}"
+status: active
+source: auto
+episodes:
+  - path: ${episodePath}
+    sha256: "${sha256}"
+    kind: fix
+    plan: docs/plans/p1.md
+anchors: []
+superseded_by: null
+last_confirmed: 2026-07-20
+origin: test-origin
+---
+
+${body}
+`;
+}
+
+test('mirrorLearnings keeps secret-shaped learnings (trigger or body) out of both the .md mirror and INDEX.md, while a clean sibling still mirrors', () => {
+  const c = ctx();
+  const { dir } = ensureStore(c.ws, { home: c.harnessHome });
+  writeStoreConfig(c.ws, { home: c.harnessHome, commit: 'repo' });
+
+  const domainDir = path.join(dir, 'learnings', 'sql');
+  fs.mkdirSync(domainDir, { recursive: true });
+
+  const secretPattern = 'AKIA1234567890ABCDEF'; // matches the aws-access-key scanSecrets pattern
+
+  fs.writeFileSync(
+    path.join(domainDir, 'clean-learning.md'),
+    learningFile({
+      trigger: 'a perfectly clean trigger',
+      body: 'Clean body, nothing secret here.',
+      sha256: 'a'.repeat(64),
+      episodePath: 'docs/solutions/perf/clean.md',
+    }),
+    'utf8'
+  );
+  fs.writeFileSync(
+    path.join(domainDir, 'secret-trigger-learning.md'),
+    learningFile({
+      trigger: `trigger leaking ${secretPattern} in the wild`,
+      body: 'Clean body for the secret-trigger learning.',
+      sha256: 'b'.repeat(64),
+      episodePath: 'docs/solutions/perf/secret-trigger.md',
+    }),
+    'utf8'
+  );
+  fs.writeFileSync(
+    path.join(domainDir, 'secret-body-learning.md'),
+    learningFile({
+      trigger: 'a clean trigger for the secret-body learning',
+      body: `Body leaking ${secretPattern} right here.`,
+      sha256: 'c'.repeat(64),
+      episodePath: 'docs/solutions/perf/secret-body.md',
+    }),
+    'utf8'
+  );
+
+  const result = mirrorLearnings({ workspace: c.ws, home: c.harnessHome });
+  assert.equal(result.mirrored, 1, 'only the clean learning mirrors');
+  assert.equal(result.skipped, 2, 'both secret-shaped learnings (trigger and body) are skipped');
+
+  const mirrorDomainDir = path.join(mirrorRoot(c.ws), 'sql');
+  assert.ok(fs.existsSync(path.join(mirrorDomainDir, 'clean-learning.md')), 'clean sibling still mirrors');
+  assert.ok(
+    !fs.existsSync(path.join(mirrorDomainDir, 'secret-trigger-learning.md')),
+    'secret-shaped-trigger learning is never mirrored'
+  );
+  assert.ok(
+    !fs.existsSync(path.join(mirrorDomainDir, 'secret-body-learning.md')),
+    'secret-shaped-body learning is never mirrored'
+  );
+
+  const index = fs.readFileSync(path.join(mirrorRoot(c.ws), 'INDEX.md'), 'utf8');
+  assert.match(index, /sql\/clean-learning/, 'clean learning appears in the INDEX');
+  assert.doesNotMatch(index, /sql\/secret-trigger-learning/, 'secret-trigger learning id never appears in the INDEX');
+  assert.doesNotMatch(index, /sql\/secret-body-learning/, 'secret-body learning id never appears in the INDEX');
+  assert.doesNotMatch(
+    index,
+    new RegExp(secretPattern),
+    'the secret pattern itself never lands in the INDEX (a skipped learning is invisible, not just missing its .md file)'
+  );
+});
+
+test('rebuild --yes and purge --all fully clear the mirror for the ids they wipe, leave a foreign file untouched, and reset INDEX.md to header-only', () => {
+  const c = ctx();
+  assert.equal(run(c, ['knowledge', 'commit', 'repo']).status, 0);
+
+  const one = run(c, ['remember', 'one claim body', '--trigger', 'one trigger']);
+  assert.equal(one.status, 0, one.stderr || one.stdout);
+  const two = run(c, ['remember', 'two claim body', '--trigger', 'two trigger']);
+  assert.equal(two.status, 0, two.stderr || two.stdout);
+
+  const oneMirror = path.join(mirrorRoot(c.ws), 'general', 'one-trigger.md');
+  const twoMirror = path.join(mirrorRoot(c.ws), 'general', 'two-trigger.md');
+  assert.ok(fs.existsSync(oneMirror) && fs.existsSync(twoMirror), 'precondition: both learnings mirrored');
+
+  const foreignDir = path.join(mirrorRoot(c.ws), 'other');
+  fs.mkdirSync(foreignDir, { recursive: true });
+  const foreignPath = path.join(foreignDir, 'foreign.md');
+  const foreignContent = 'foreign content from another machine\n';
+  fs.writeFileSync(foreignPath, foreignContent, 'utf8');
+
+  const rebuild = run(c, ['consolidate', '--rebuild', '--yes']);
+  assert.equal(rebuild.status, 0, rebuild.stderr || rebuild.stdout);
+
+  assert.ok(!fs.existsSync(oneMirror), 'rebuild --yes clears the mirror for a wiped learning');
+  assert.ok(!fs.existsSync(twoMirror), 'rebuild --yes clears the mirror for a wiped learning');
+  assert.ok(fs.existsSync(foreignPath), 'foreign file survives rebuild --yes');
+  assert.equal(fs.readFileSync(foreignPath, 'utf8'), foreignContent, 'foreign file content is untouched');
+  const indexAfterRebuild = fs.readFileSync(path.join(mirrorRoot(c.ws), 'INDEX.md'), 'utf8');
+  assert.doesNotMatch(indexAfterRebuild, /general\//, 'INDEX.md is header-only after rebuild --yes');
+  assert.match(indexAfterRebuild, /Opt-in commit mode/, 'INDEX.md still carries the header');
+
+  // Re-seed for the purge --all half of this scenario (rebuild --yes leaves
+  // mode/commit untouched, so remember still works and still mirrors).
+  const three = run(c, ['remember', 'three claim body', '--trigger', 'three trigger']);
+  assert.equal(three.status, 0, three.stderr || three.stdout);
+  const four = run(c, ['remember', 'four claim body', '--trigger', 'four trigger']);
+  assert.equal(four.status, 0, four.stderr || four.stdout);
+  const threeMirror = path.join(mirrorRoot(c.ws), 'general', 'three-trigger.md');
+  const fourMirror = path.join(mirrorRoot(c.ws), 'general', 'four-trigger.md');
+  assert.ok(fs.existsSync(threeMirror) && fs.existsSync(fourMirror), 'precondition: both re-seeded learnings mirrored');
+
+  const purgeAll = run(c, ['knowledge', 'purge', '--all']);
+  assert.equal(purgeAll.status, 0, purgeAll.stderr || purgeAll.stdout);
+
+  assert.ok(!fs.existsSync(threeMirror), 'purge --all clears the mirror for a wiped learning');
+  assert.ok(!fs.existsSync(fourMirror), 'purge --all clears the mirror for a wiped learning');
+  assert.ok(fs.existsSync(foreignPath), 'foreign file still survives purge --all');
+  assert.equal(fs.readFileSync(foreignPath, 'utf8'), foreignContent, 'foreign file content is still untouched');
+  const indexAfterPurgeAll = fs.readFileSync(path.join(mirrorRoot(c.ws), 'INDEX.md'), 'utf8');
+  assert.doesNotMatch(indexAfterPurgeAll, /general\//, 'INDEX.md is header-only after purge --all');
+  assert.match(indexAfterPurgeAll, /Opt-in commit mode/, 'INDEX.md still carries the header');
 });
