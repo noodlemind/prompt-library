@@ -102,6 +102,12 @@ function seedDomainAtCap(c, domain, count = 25) {
   return dir;
 }
 
+// Active count read straight off disk, independent of anything applyOps
+// tracks in memory — the ground truth every scenario below asserts against.
+function activeCount(dir) {
+  return listLearnings(dir).filter((l) => !l.fm.superseded_by && !['retired', 'disputed'].includes(l.fm.status)).length;
+}
+
 // (a) ADD #26 into an at-cap domain rejects E_DOMAIN_CAP, no strike recorded.
 test('an ADD into a domain at 25 active learnings is rejected with E_DOMAIN_CAP and records no strike', () => {
   const c = ctx();
@@ -261,4 +267,121 @@ test('--candidates --json reports a domain at cap, and the plain-text status not
 
   const plain = runPlain(c, ['consolidate']);
   assert.match(plain.stdout, /java at cap/);
+});
+
+/**
+ * Regression coverage: the cap check must project a RUNNING per-domain
+ * count as ops are planned in file order, not check each op independently
+ * against the static pre-run snapshot. A per-op check against the snapshot
+ * alone lets N ops each pass a test that is true individually but false
+ * collectively (e.g. three same-domain ADDs from 23 active: each one checked
+ * against a snapshot of 23 would pass, but the domain would land at 26).
+ */
+
+// (a) The reproduced bug: three same-domain ADDs in one run from 23 active
+// must be rejected as a whole — the third one is the one that actually
+// crosses the cap once the first two are accounted for.
+test('three same-domain ADDs in one run stack against the running cap and reject as a whole (regression)', () => {
+  const c = ctx();
+  const dir = seedDomainAtCap(c, 'perf', 23);
+  const ops = [
+    ADD({ domain: 'perf', slug: 'stack-1', episodes: [EP({ path: 'docs/solutions/perf/stack-1.md', sha256: '1'.repeat(64) })] }),
+    ADD({ domain: 'perf', slug: 'stack-2', episodes: [EP({ path: 'docs/solutions/perf/stack-2.md', sha256: '2'.repeat(64) })] }),
+    ADD({ domain: 'perf', slug: 'stack-3', episodes: [EP({ path: 'docs/solutions/perf/stack-3.md', sha256: '3'.repeat(64) })] }),
+  ];
+  const res = run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, ops)]);
+  assert.equal(res.status, 1, res.stderr || res.stdout);
+  const out = JSON.parse(res.stdout);
+  assert.equal(out.rejected[0].code, 'E_DOMAIN_CAP');
+
+  assert.equal(listLearnings(dir).length, 23, 'all-or-nothing: nothing from the rejected run is written');
+  assert.equal(activeCount(dir), 23, 'final state unchanged, well under the cap');
+});
+
+// (b) The non-overflowing sibling of (a): two same-domain ADDs from 23
+// active land exactly at the cap and the whole run applies.
+test('two same-domain ADDs in one run from 23 active land exactly at the cap and apply', () => {
+  const c = ctx();
+  const dir = seedDomainAtCap(c, 'perf', 23);
+  const ops = [
+    ADD({ domain: 'perf', slug: 'fit-1', episodes: [EP({ path: 'docs/solutions/perf/fit-1.md', sha256: '4'.repeat(64) })] }),
+    ADD({ domain: 'perf', slug: 'fit-2', episodes: [EP({ path: 'docs/solutions/perf/fit-2.md', sha256: '5'.repeat(64) })] }),
+  ];
+  const res = run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, ops)]);
+  assert.equal(res.status, 0, res.stderr || res.stdout);
+
+  assert.ok(listLearnings(dir).some((l) => l.id === 'perf/fit-1'));
+  assert.ok(listLearnings(dir).some((l) => l.id === 'perf/fit-2'));
+  assert.equal(activeCount(dir), 25, 'lands exactly at the cap');
+});
+
+// (c) Order-dependence sanity: a MERGE (2 targets, same domain) followed by
+// two ADDs, all in one run against a domain already at 25 active.
+//
+// Ops are evaluated in file order: MERGE first frees a net 1 slot in the
+// running projection (25 - 2 + 1 = 24); the running projection then admits
+// exactly one more ADD (24 -> 25) but not a second one (25 -> would be 26).
+// So this exact 3-op combination must be rejected as a whole — the naive
+// "MERGE always frees room" read undercounts by exactly the merge's own new
+// learning, which correctly still occupies a slot in the domain it lands in.
+test('a MERGE plus two ADDs against a 25-active domain rejects — the merge frees only a net one slot, not two', () => {
+  const c = ctx();
+  const dir = seedDomainAtCap(c, 'perf', 25);
+  const mergeOp = {
+    op: 'MERGE',
+    targets: ['perf/seed-0', 'perf/seed-1'],
+    domain: 'perf',
+    slug: 'order-merge',
+    trigger: 'a merge for the order-dependence regression case',
+    body: 'Re-derived merged claim body from both targets episodes.',
+    episodes: [EP({ path: 'docs/solutions/perf/order-merge-evidence.md', sha256: '6'.repeat(64) })],
+  };
+  const addA = ADD({ domain: 'perf', slug: 'order-add-a', episodes: [EP({ path: 'docs/solutions/perf/order-a.md', sha256: '7'.repeat(64) })] });
+  const addB = ADD({ domain: 'perf', slug: 'order-add-b', episodes: [EP({ path: 'docs/solutions/perf/order-b.md', sha256: '8'.repeat(64) })] });
+
+  const res = run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [mergeOp, addA, addB])]);
+  assert.equal(res.status, 1, res.stderr || res.stdout);
+  const out = JSON.parse(res.stdout);
+  assert.equal(out.rejected[0].code, 'E_DOMAIN_CAP');
+
+  // All-or-nothing: the rejected run (merge included) leaves the domain
+  // completely unchanged — the invariant that must hold for every accepted
+  // OR rejected run is that the final active count never exceeds the cap.
+  assert.equal(activeCount(dir), 25, 'final state never exceeds the cap');
+  assert.ok(!listLearnings(dir).some((l) => l.id === 'perf/order-merge'), 'no partial write from the rejected run');
+  assert.equal(
+    listLearnings(dir).find((l) => l.id === 'perf/seed-0').fm.superseded_by,
+    null,
+    'the merge itself did not partially apply either'
+  );
+});
+
+// (d) The non-overflowing sibling of (c): a MERGE plus exactly ONE ADD
+// (not two) against the same 25-active domain applies — proving the merge's
+// own +1 is what's being correctly counted against the running projection,
+// not double-subtracted or ignored.
+test('a MERGE plus exactly one ADD against a 25-active domain applies — the merge\'s own +1 counts for the following op', () => {
+  const c = ctx();
+  const dir = seedDomainAtCap(c, 'perf', 25);
+  const mergeOp = {
+    op: 'MERGE',
+    targets: ['perf/seed-2', 'perf/seed-3'],
+    domain: 'perf',
+    slug: 'order-merge-fits',
+    trigger: 'a merge for the positive order-dependence case',
+    body: 'Re-derived merged claim body from both targets episodes.',
+    episodes: [EP({ path: 'docs/solutions/perf/order-merge-fits-evidence.md', sha256: '9'.repeat(64) })],
+  };
+  const addOnly = ADD({
+    domain: 'perf',
+    slug: 'order-add-only',
+    episodes: [EP({ path: 'docs/solutions/perf/order-add-only.md', sha256: '0'.repeat(64) })],
+  });
+
+  const res = run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [mergeOp, addOnly])]);
+  assert.equal(res.status, 0, res.stderr || res.stdout);
+
+  assert.ok(listLearnings(dir).some((l) => l.id === 'perf/order-merge-fits'));
+  assert.ok(listLearnings(dir).some((l) => l.id === 'perf/order-add-only'));
+  assert.equal(activeCount(dir), 25, '25 - 2 (merged targets) + 1 (merge) + 1 (add) = 25, exactly at cap');
 });

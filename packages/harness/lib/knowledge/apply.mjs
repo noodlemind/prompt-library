@@ -58,33 +58,6 @@ function activeCountInDomain(existing, domain) {
   }
   return n;
 }
-
-/**
- * Per-domain count of targets THIS run will actually tombstone — a SUPERSEDE
- * introducing a new id, or any MERGE target — excluding targets that will
- * instead land disputed (no tombstone happens for those). Computed once
- * up front so a domain-cap check on one op can credit another op's
- * same-run tombstones in the same domain (design §9: MERGE/SUPERSEDE that
- * free room should not be blocked by their own reduction).
- */
-function tombstonesByDomain(ops, existing) {
-  const counts = new Map();
-  const bump = (domain) => counts.set(domain, (counts.get(domain) || 0) + 1);
-  for (const op of ops) {
-    if (op.op === 'SUPERSEDE' && op.target && existing.has(op.target) && op.domain && op.slug) {
-      const newId = `${normalizeSlug(op.domain)}/${normalizeSlug(op.slug)}`;
-      if (newId === op.target) continue; // in-place reteach — no new id, nothing to credit
-      const target = existing.get(op.target);
-      if (!isDisputedTargetFm(target.fm)) bump(target.domain);
-    } else if (op.op === 'MERGE' && Array.isArray(op.targets)) {
-      for (const t of op.targets) {
-        const target = existing.get(t);
-        if (target && !isDisputedTargetFm(target.fm)) bump(target.domain);
-      }
-    }
-  }
-  return counts;
-}
 const ANCHOR_RE = /\b[\w][\w./-]*\.(?:mjs|js|ts|tsx|py|java|sql|md|ya?ml|json)\b/g;
 const ANCHOR_CAP = 8;
 
@@ -321,10 +294,24 @@ export function applyOps({ workspace, opsPath, dryRun = false, home, approve = f
     };
   }
 
-  // Same-run tombstone credit for the domain cap check below (a MERGE or
-  // SUPERSEDE that frees room in a domain shouldn't be blocked by its own
-  // reduction) — computed once up front from the run's raw ops.
-  const tombstoneCredits = tombstonesByDomain(parsed.ops, existing);
+  // Running per-domain active-count projection for the cap check below.
+  // Seeded lazily from the on-disk snapshot the first time a domain is
+  // touched, then updated AS ops are planned, IN FILE ORDER — this is what
+  // makes a multi-op run (e.g. three same-domain ADDs) stack correctly
+  // against the cap: each op's check sees every earlier op's effect in this
+  // same run, not just the pre-run snapshot (a per-op check against the
+  // static snapshot alone would let N ops each pass a test that's true
+  // individually but false collectively).
+  const domainProjection = new Map();
+  function projectedActive(domain) {
+    if (!domainProjection.has(domain)) {
+      domainProjection.set(domain, activeCountInDomain(existing, domain));
+    }
+    return domainProjection.get(domain);
+  }
+  function bumpProjectedActive(domain, delta) {
+    domainProjection.set(domain, projectedActive(domain) + delta);
+  }
 
   // Validate every op before writing anything — all-or-nothing runs.
   const planned = [];
@@ -385,11 +372,11 @@ export function applyOps({ workspace, opsPath, dryRun = false, home, approve = f
         // Domain write cap (design §9): an ADD into a domain already at
         // DOMAIN_ACTIVE_CAP active learnings is a plain run-level rejection,
         // never a content-failure strike — cap pressure is not an episode
-        // defect. Credit any same-run tombstones landing in this domain
-        // (see tombstonesByDomain) before comparing against the cap.
+        // defect. Checked against the RUNNING projection (not a static
+        // snapshot) so earlier same-run ADD/SUPERSEDE/MERGE ops in this same
+        // domain are already reflected.
         const domain = normalizeSlug(op.domain);
-        const projectedActive = activeCountInDomain(existing, domain) - (tombstoneCredits.get(domain) || 0);
-        if (projectedActive >= DOMAIN_ACTIVE_CAP) {
+        if (projectedActive(domain) >= DOMAIN_ACTIVE_CAP) {
           return {
             applied: [],
             rejected: [
@@ -399,6 +386,7 @@ export function applyOps({ workspace, opsPath, dryRun = false, home, approve = f
             exitCode: 1,
           };
         }
+        bumpProjectedActive(domain, 1);
       }
       if (op.op === 'MERGE' && existing.has(newId)) {
         return rejectOp(
@@ -427,6 +415,16 @@ export function applyOps({ workspace, opsPath, dryRun = false, home, approve = f
         for (const t of disputedTargets) disputes.push({ index: i, target: t });
         continue;
       }
+
+      // MERGE is exempt from the cap check on its OWN new id (it always
+      // tombstones >= 2 targets while adding 1, net negative) — but its
+      // effect on the running projection still has to be recorded so a
+      // LATER op in this same run (an ADD into the same domain, say) sees
+      // the room this MERGE actually freed, not more and not less.
+      for (const t of op.targets) {
+        bumpProjectedActive(existing.get(t).domain, -1);
+      }
+      bumpProjectedActive(normalizeSlug(op.domain), 1);
     }
 
     if (op.op === 'SUPERSEDE') {
@@ -464,11 +462,15 @@ export function applyOps({ workspace, opsPath, dryRun = false, home, approve = f
 
       // Domain write cap: only a SUPERSEDE introducing a NEW id can grow a
       // domain's active count — the in-place reteach shape replaces the same
-      // file, net zero. Same credit-for-same-run-tombstones logic as ADD.
+      // file, net zero. This op's OWN tombstone is credited first (against
+      // the running projection, so it can always net-zero-replace itself
+      // even at exactly the cap), then the new id's domain is checked —
+      // against the running projection, so earlier same-run ops already
+      // count.
       if (newId !== op.target) {
+        bumpProjectedActive(target.domain, -1);
         const domain = normalizeSlug(op.domain);
-        const projectedActive = activeCountInDomain(existing, domain) - (tombstoneCredits.get(domain) || 0);
-        if (projectedActive >= DOMAIN_ACTIVE_CAP) {
+        if (projectedActive(domain) >= DOMAIN_ACTIVE_CAP) {
           return {
             applied: [],
             rejected: [
@@ -478,6 +480,7 @@ export function applyOps({ workspace, opsPath, dryRun = false, home, approve = f
             exitCode: 1,
           };
         }
+        bumpProjectedActive(domain, 1);
       }
     }
     planned.push({ ...op, index: i });
