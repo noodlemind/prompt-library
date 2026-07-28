@@ -7,7 +7,7 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 import { applyOps } from '../lib/knowledge/apply.mjs';
-import { ensureStore, listLearnings, readLedger } from '../lib/knowledge/store.mjs';
+import { ensureStore, listLearnings, readLedger, storeDir } from '../lib/knowledge/store.mjs';
 
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const binPath = path.join(packageRoot, 'bin', 'harness.mjs');
@@ -111,6 +111,29 @@ test('consolidate --rebuild --yes on an empty store: exit 0, archived 0', () => 
   const out = JSON.parse(res.stdout);
   assert.equal(out.pass, true);
   assert.equal(out.archived, 0);
+});
+
+test('consolidate --rebuild on a workspace with no knowledge store yet stays store-read-only without --yes; --yes may create it', () => {
+  const c = ctx();
+  // No consolidate/remember has ever run here — the learnings store must not
+  // exist yet under this HARNESS_HOME.
+  const dir = storeDir(c.ws, { home: c.harnessHome });
+  assert.equal(fs.existsSync(dir), false, 'precondition: no store yet');
+
+  const blocked = run(c, ['consolidate', '--rebuild']);
+  assert.equal(blocked.status, 2);
+  const blockedOut = JSON.parse(blocked.stdout);
+  assert.equal(blockedOut.pass, false);
+  assert.match(blockedOut.blockedReason, /rebuild resets 0 learnings.*re-run with --yes/);
+  assert.equal(fs.existsSync(dir), false, 'a blocked (no --yes) rebuild must not materialize a knowledge store');
+
+  // --yes is the mutation branch: creating a store here (if absent) is fine.
+  const withYes = run(c, ['consolidate', '--rebuild', '--yes']);
+  assert.equal(withYes.status, 0, withYes.stderr || withYes.stdout);
+  const withYesOut = JSON.parse(withYes.stdout);
+  assert.equal(withYesOut.pass, true);
+  assert.equal(withYesOut.archived, 0);
+  assert.equal(withYesOut.debt, 0);
 });
 
 test('consolidate --rebuild is mode-gated: mode !== on blocks with E_MODE-style reason, exit 2', () => {

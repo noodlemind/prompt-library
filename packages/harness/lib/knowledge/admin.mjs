@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {
   ensureStore,
+  storeDir,
   listLearnings,
   readLedger,
   commitStore,
@@ -179,8 +180,11 @@ export function rebuildStore({ workspace, home, yes }) {
     };
   }
 
-  const { dir } = ensureStore(workspace, { home });
-  const archived = listLearnings(dir).length;
+  // Non-creating read: a workspace/home with no store yet must never be
+  // materialized by a blocked (no --yes) call — "no mutation" has to hold
+  // even for the store's own existence, not just its contents.
+  const storePath = storeDir(workspace, { home });
+  const archivedPreview = fs.existsSync(storePath) ? listLearnings(storePath).length : 0;
 
   if (!yes) {
     return {
@@ -188,10 +192,15 @@ export function rebuildStore({ workspace, home, yes }) {
       exitCode: 2,
       archived: null,
       debt: null,
-      blockedReason: `rebuild resets ${archived} learnings (git history retains them) — re-run with --yes`,
+      blockedReason: `rebuild resets ${archivedPreview} learnings (git history retains them) — re-run with --yes`,
       nextTools: ['harness consolidate --rebuild --yes'],
     };
   }
+
+  // Mutation branch only: creating the store here (if absent) is expected —
+  // --yes is an explicit go-ahead, unlike the preview above.
+  const { dir } = ensureStore(workspace, { home });
+  const archived = listLearnings(dir).length;
 
   const learningsDir = path.join(dir, 'learnings');
   if (fs.existsSync(learningsDir)) {
