@@ -6,6 +6,10 @@ import { storeDir, readLedger, listLearnings, readStoreConfig } from './store.mj
 export const CONSOLIDATION_THRESHOLD = 5;
 export const MAX_OPS_PER_RUN = 5;
 export const LEARNING_BYTE_CAP = 1200;
+// Three strikes: a content-failure code raised by the same op episode
+// (path@sha256) three times quarantines it (apply.mjs) — surfaced here and
+// excluded from future debt/candidates (design §3).
+export const QUARANTINE_THRESHOLD = 3;
 const LEARNING_BODY_BUDGET_BYTES = 30_000;
 export const PROMOTION_FIX_THRESHOLD = 3;
 export const PROMOTION_PLAN_THRESHOLD = 2;
@@ -62,12 +66,26 @@ export function collectEpisodes({ workspace, copilotHome }) {
   return episodes;
 }
 
+/**
+ * Split the ledger into: entries that fully consume an episode (it was
+ * either given a learning outcome — including NOOP's explicit `learning:
+ * null` — or quarantined after three strikes) and the quarantined subset,
+ * surfaced separately for `--status`/`--candidates`/doctor K2. A pure failure
+ * entry (`{ path, sha256, failure, at }` — no `learning` key, not yet
+ * quarantined) must NOT consume the episode: the point of recording strikes
+ * is that the episode keeps counting as debt until either it's fixed
+ * (consolidated normally) or it hits the 3rd strike and gets quarantined.
+ */
 function splitLedger(ledger) {
   const consumed = new Set();
   const quarantined = [];
   for (const e of ledger) {
-    if (e.quarantined) quarantined.push(e);
-    consumed.add(`${e.path}@${e.sha256}`);
+    if (e.quarantined) {
+      quarantined.push(e);
+      consumed.add(`${e.path}@${e.sha256}`);
+    } else if ('learning' in e) {
+      consumed.add(`${e.path}@${e.sha256}`);
+    }
   }
   return { consumed, quarantined };
 }

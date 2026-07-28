@@ -5,6 +5,7 @@ import { spawnSync } from 'node:child_process';
 import {
   ensureStore,
   appendLedger,
+  readLedger,
   listLearnings,
   commitStore,
   normalizeSlug,
@@ -12,7 +13,7 @@ import {
   parseLearningFrontmatter,
   readStoreConfig,
 } from './store.mjs';
-import { MAX_OPS_PER_RUN, LEARNING_BYTE_CAP } from './consolidate.mjs';
+import { MAX_OPS_PER_RUN, LEARNING_BYTE_CAP, QUARANTINE_THRESHOLD } from './consolidate.mjs';
 import { scanSecrets } from '../secret-scan.mjs';
 
 /**
@@ -24,6 +25,12 @@ import { scanSecrets } from '../secret-scan.mjs';
 
 const FILE_TOUCHING = new Set(['ADD', 'STRENGTHEN', 'SUPERSEDE']);
 const DISPUTED_FIX_THRESHOLD = 3;
+// Codes that indicate the CONTENT of a specific op was rejected (bad shape,
+// secret-shaped, imperative lint, over the byte cap, a dedup/rename
+// collision, or a missing target) — as opposed to run-level or lock-level
+// rejections (E_MODE, E_DELTA_CONTRACT, E_LOCKED, E_APPLY_FAILED) that say
+// nothing about any one op's episodes and must never record a strike.
+const CONTENT_FAILURE_CODES = new Set(['E_SCHEMA', 'E_SECRET', 'E_LINT', 'E_BYTE_CAP', 'E_EXISTS', 'E_TARGET']);
 const ANCHOR_RE = /\b[\w][\w./-]*\.(?:mjs|js|ts|tsx|py|java|sql|md|ya?ml|json)\b/g;
 const ANCHOR_CAP = 8;
 
@@ -192,6 +199,43 @@ export function applyOps({ workspace, opsPath, dryRun = false, home }) {
   const origin = repoId(workspace);
   const existing = new Map(listLearnings(dir).map((l) => [l.id, l]));
 
+  /**
+   * Three-strikes bookkeeping (design §3): a content-failure code raised by a
+   * SPECIFIC op records one failure entry per episode of that op — never for
+   * codes outside CONTENT_FAILURE_CODES, and never on dryRun or when the
+   * store has no git (best effort, mirrors the rest of the store's degraded
+   * modes). Episodes without a structurally valid path+sha256 are skipped —
+   * there is nothing reliable to key a strike on. On an episode's 3rd
+   * accumulated failure, the SAME append also writes the quarantine marker.
+   * Never throws: a bookkeeping error must never mask the real rejection.
+   */
+  function recordContentFailure(code, episodes) {
+    if (dryRun || !git || !CONTENT_FAILURE_CODES.has(code)) return;
+    const eps = (episodes || []).filter((e) => e && e.path && /^[0-9a-f]{64}$/.test(e.sha256 || ''));
+    if (!eps.length) return;
+    try {
+      const ledger = readLedger(dir);
+      const at = todayClamped();
+      const entries = [];
+      for (const e of eps) {
+        const priorFailures = ledger.filter((le) => le.failure && le.path === e.path && le.sha256 === e.sha256).length;
+        entries.push({ path: e.path, sha256: e.sha256, failure: code, at });
+        if (priorFailures + 1 >= QUARANTINE_THRESHOLD) {
+          entries.push({ path: e.path, sha256: e.sha256, quarantined: true, learning: null, at });
+        }
+      }
+      appendLedger(dir, entries);
+      commitStore(dir, `consolidate: record failure ${code}`);
+    } catch {
+      // Best effort — failure recording must never mask the original rejection.
+    }
+  }
+
+  function rejectOp(code, reason, episodes) {
+    recordContentFailure(code, episodes);
+    return { applied: [], rejected: [fail(code, reason)], committed: false, exitCode: 1 };
+  }
+
   const fileTouching = parsed.ops.filter((o) => FILE_TOUCHING.has(o.op));
   if (fileTouching.length > MAX_OPS_PER_RUN) {
     return {
@@ -209,25 +253,25 @@ export function applyOps({ workspace, opsPath, dryRun = false, home }) {
     const op = parsed.ops[i];
     if (op.op === 'NOOP') {
       const bad = validateEpisodes(op.episodes, i);
-      if (bad) return { applied: [], rejected: [bad], committed: false, exitCode: 1 };
+      if (bad) return rejectOp(bad.code, bad.reason, op.episodes);
       planned.push({ ...op });
       continue;
     }
     if (!FILE_TOUCHING.has(op.op)) {
-      return { applied: [], rejected: [fail('E_SCHEMA', `op ${i}: unknown op ${op.op}`)], committed: false, exitCode: 1 };
+      return rejectOp('E_SCHEMA', `op ${i}: unknown op ${op.op}`, op.episodes);
     }
     const bad = validateEpisodes(op.episodes, i);
-    if (bad) return { applied: [], rejected: [bad], committed: false, exitCode: 1 };
+    if (bad) return rejectOp(bad.code, bad.reason, op.episodes);
 
     if (op.op === 'STRENGTHEN' || op.op === 'SUPERSEDE') {
       if (!op.target || !existing.has(op.target)) {
-        return { applied: [], rejected: [fail('E_TARGET', `op ${i}: target ${op.target || '(none)'} does not exist`)], committed: false, exitCode: 1 };
+        return rejectOp('E_TARGET', `op ${i}: target ${op.target || '(none)'} does not exist`, op.episodes);
       }
     }
 
     if (op.op === 'ADD' || op.op === 'SUPERSEDE') {
       if (!op.domain || !op.slug || !op.trigger || !op.body) {
-        return { applied: [], rejected: [fail('E_SCHEMA', `op ${i}: ${op.op} needs domain, slug, trigger, body`)], committed: false, exitCode: 1 };
+        return rejectOp('E_SCHEMA', `op ${i}: ${op.op} needs domain, slug, trigger, body`, op.episodes);
       }
       if (op.op === 'ADD') {
         // Dedup-miss protection: an ADD whose id already exists must never
@@ -236,21 +280,20 @@ export function applyOps({ workspace, opsPath, dryRun = false, home }) {
         // (replace the claim) instead.
         const addId = `${normalizeSlug(op.domain)}/${normalizeSlug(op.slug)}`;
         if (existing.has(addId)) {
-          return {
-            applied: [],
-            rejected: [fail('E_EXISTS', `op ${i}: ${addId} already exists — use STRENGTHEN (more evidence) or SUPERSEDE (replace the claim)`)],
-            committed: false,
-            exitCode: 1,
-          };
+          return rejectOp(
+            'E_EXISTS',
+            `op ${i}: ${addId} already exists — use STRENGTHEN (more evidence) or SUPERSEDE (replace the claim)`,
+            op.episodes
+          );
         }
       }
       const secrets = scanSecrets(`${op.trigger}\n${op.body}`);
       if (secrets.length) {
-        return { applied: [], rejected: [fail('E_SECRET', `op ${i}: secret-shaped content (${secrets.map((s) => s.id).join(', ')})`)], committed: false, exitCode: 1 };
+        return rejectOp('E_SECRET', `op ${i}: secret-shaped content (${secrets.map((s) => s.id).join(', ')})`, op.episodes);
       }
       const lint = lintImperative(op);
       if (lint) {
-        return { applied: [], rejected: [fail('E_LINT', `op ${i}: ${lint}`)], committed: false, exitCode: 1 };
+        return rejectOp('E_LINT', `op ${i}: ${lint}`, op.episodes);
       }
     }
 
@@ -264,12 +307,11 @@ export function applyOps({ workspace, opsPath, dryRun = false, home }) {
       // target) is allowed to "collide" — that's a replacement, not a
       // collision.
       if (newId !== op.target && existing.has(newId)) {
-        return {
-          applied: [],
-          rejected: [fail('E_EXISTS', `op ${i}: ${newId} already exists — choose a different slug or SUPERSEDE it directly instead of ${op.target}`)],
-          committed: false,
-          exitCode: 1,
-        };
+        return rejectOp(
+          'E_EXISTS',
+          `op ${i}: ${newId} already exists — choose a different slug or SUPERSEDE it directly instead of ${op.target}`,
+          op.episodes
+        );
       }
 
       // The human-teaching disputed-demotion exemption applies ONLY to the
@@ -319,12 +361,7 @@ export function applyOps({ workspace, opsPath, dryRun = false, home }) {
       mergedFrom: op.merged_from,
     });
     if (Buffer.byteLength(content, 'utf8') > LEARNING_BYTE_CAP) {
-      return {
-        applied: [],
-        rejected: [fail('E_BYTE_CAP', `${id} exceeds ${LEARNING_BYTE_CAP} bytes — split into two claims`)],
-        committed: false,
-        exitCode: 1,
-      };
+      return rejectOp('E_BYTE_CAP', `${id} exceeds ${LEARNING_BYTE_CAP} bytes — split into two claims`, op.episodes);
     }
     writes.push({ op, id, domain, slug, content });
   }

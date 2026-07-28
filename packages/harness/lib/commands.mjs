@@ -921,7 +921,7 @@ export async function cmdConsolidate(argv) {
         state: status.due ? 'warn' : 'ok',
         key: 'consolidate',
         value: `debt ${status.debt}/${status.threshold}`,
-        note: `${status.learnings.active} active learnings${status.promotionCandidates.length ? ` · ${status.promotionCandidates.length} promotion candidate${status.promotionCandidates.length === 1 ? '' : 's'}` : ''}`,
+        note: `${status.learnings.active} active learnings${status.promotionCandidates.length ? ` · ${status.promotionCandidates.length} promotion candidate${status.promotionCandidates.length === 1 ? '' : 's'}` : ''}${status.quarantined.length ? ` · ${status.quarantined.length} quarantined` : ''}`,
       })
     );
     printNext(status.nextTools?.[0]);

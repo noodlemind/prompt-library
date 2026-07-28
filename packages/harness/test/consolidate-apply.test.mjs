@@ -182,7 +182,14 @@ test('a colliding ADD (same domain/slug already exists) is rejected with E_EXIST
 
   const after = listLearnings(dir);
   assert.deepEqual(after.map((l) => l.body), before.map((l) => l.body), 'store content unchanged after a rejected colliding ADD');
-  assert.equal(readLedger(dir).length, 1, 'ledger not appended by the rejected op');
+  // The learning files are untouched, but E_EXISTS is a content-failure code
+  // (three-strikes quarantine tracking, milestone 3) — the rejected collide's
+  // own episode records one failure entry alongside the first run's success.
+  const ledger = readLedger(dir);
+  assert.equal(ledger.length, 2, 'the first ADD success entry plus one failure entry for the rejected collide');
+  assert.equal(ledger[1].failure, 'E_EXISTS');
+  assert.equal(ledger[1].path, 'docs/solutions/perf/y.md');
+  assert.equal(ledger[1].sha256, 'b'.repeat(64));
 });
 
 test('a model SUPERSEDE (fix-kind episodes) on a source: human target still lands disputed', () => {
