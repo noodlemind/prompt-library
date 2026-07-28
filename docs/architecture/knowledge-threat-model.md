@@ -88,19 +88,36 @@ product messaging must not imply that a single purge command satisfies a hard-de
 requirement (a legal takedown, for example); it satisfies "stop using this and stop
 serving it," not "never existed."
 
-## Prompt-injection stance
+## Prompt-injection stance (current position)
 
 Every human-facing surface that renders learning or episode text — the session-start
-digest, the suggest-mode diff, `harness learnings [--why]`, `INDEX.md` — renders that text
-inside the same advisory fence, and only after the imperative-content lint has already run
-twice: once at ops-emission (before any diff or digest reaches a human) and again at
-`--apply`. The fence's job is to keep stored text from being read as instructions by the
-model or the host: it is presented as data, never as directives to follow. Content
-originating from an episode, an insight, or a compromised upstream source cannot use the
-fence to issue commands to the agent reading it — the fence is the injection defense
-itself, not a formatting convenience layered on top of one. Insight claims that contain
-URLs or shell commands are quarantined for human review rather than surfaced automatically,
-and a config toggle can exclude insights from retrieval entirely.
+digest, `harness learnings [--why]`, `INDEX.md`, and the reviewable ops diff a human sees
+whenever knowledge mode is anything other than `on` (`.harness/consolidate-ops.json`, per the
+`/consolidate` skill; there is no separate "suggest mode" — `--apply` itself would reject
+with `E_MODE` in that state, so presenting the diff instead of applying is the actual stop
+point) — renders that text inside the same advisory fence. The fence's job is to keep stored
+text from being read as instructions by the model or the host: it is presented as data,
+never as directives to follow. Content originating from an episode, an insight, or a
+compromised upstream source cannot use the fence to issue commands to the agent reading it —
+the fence is the injection defense itself, not a formatting convenience layered on top of
+one.
+
+Insight claims that contain URLs or shell commands do not reach the store at all:
+`lintImperative` (`knowledge/apply.mjs`) rejects them outright with `E_LINT` at the
+`--apply` write boundary, before a learning is ever written. This is a hard rejection, not a
+review queue — the `/consolidate` skill asks the model to self-check the same rules while
+drafting ops, but that is guidance for avoiding the rejection, not a second mechanical gate;
+`--apply` is the only place a violation is actually enforced. A quarantine *surface* that
+routes rejected content somewhere a human can review it, rather than simply bouncing it, is
+part of the Milestone 3 design and does not exist yet — the only piece built today is a
+reader (`consolidateStatus`'s `quarantined` list, surfaced via `harness consolidate --status`
+and the doctor check), and it tracks unclustered episode groups from consolidation, not
+`E_LINT`-rejected insight ops; nothing in the current write path populates a quarantine
+record for insight-lint rejections. There is likewise no per-lane config toggle that excludes
+insights from retrieval specifically — the only kill switch is the store-wide
+`harness knowledge <on|off|freeze|capture-only>` mode, which gates writes (and, in `off`
+mode, retrieval) for the whole store together; turning off insight-derived learnings alone
+while leaving fix-derived ones active is not a capability that exists.
 
 ## Residual risks (mirrored from the approved design, §14)
 

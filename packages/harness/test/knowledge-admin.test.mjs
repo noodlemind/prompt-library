@@ -6,8 +6,8 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
-import { applyOps } from '../lib/knowledge/apply.mjs';
-import { ensureStore, listLearnings, readLedger } from '../lib/knowledge/store.mjs';
+import { applyOps, updateFrontmatterField } from '../lib/knowledge/apply.mjs';
+import { ensureStore, storeDir, listLearnings, readLedger } from '../lib/knowledge/store.mjs';
 
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const binPath = path.join(packageRoot, 'bin', 'harness.mjs');
@@ -169,6 +169,68 @@ test('knowledge purge <episode> cascades: sole-evidence learning removed, shared
 
   assert.ok(!fs.existsSync(path.join(c.ws, targetPath)), 'episode file deleted from workspace');
   assert.ok(fs.existsSync(path.join(c.ws, otherPath)), 'unrelated episode file untouched');
+});
+
+test('knowledge purge preserves last_confirmed on the remaining learning instead of stamping it to today', () => {
+  const c = ctx();
+  const targetPath = 'docs/solutions/perf/target.md';
+  const otherPath = 'docs/solutions/perf/other.md';
+  fs.mkdirSync(path.join(c.ws, 'docs', 'solutions', 'perf'), { recursive: true });
+  fs.writeFileSync(path.join(c.ws, targetPath), 'target episode body\n');
+  fs.writeFileSync(path.join(c.ws, otherPath), 'other episode body\n');
+
+  const shared = {
+    op: 'ADD',
+    domain: 'sql',
+    slug: 'shared-evidence-past-confirm',
+    trigger: 'shared evidence past confirm trigger',
+    body: 'shared evidence past confirm body text',
+    episodes: [
+      { path: targetPath, sha256: 'a'.repeat(64), kind: 'fix', plan: 'docs/plans/p1.md' },
+      { path: otherPath, sha256: 'b'.repeat(64), kind: 'fix', plan: 'docs/plans/p2.md' },
+    ],
+  };
+  const applyRes = applyOps({ workspace: c.ws, opsPath: writeOps(c.ws, [shared]), home: c.harnessHome });
+  assert.equal(applyRes.exitCode, 0, JSON.stringify(applyRes.rejected));
+
+  const { dir } = ensureStore(c.ws, { home: c.harnessHome });
+  const seeded = listLearnings(dir).find((l) => l.id === 'sql/shared-evidence-past-confirm');
+  const pastDate = '2020-01-01';
+  updateFrontmatterField(seeded.file, 'last_confirmed', pastDate);
+  assert.equal(
+    listLearnings(dir).find((l) => l.id === 'sql/shared-evidence-past-confirm').fm.last_confirmed,
+    pastDate,
+    'precondition: last_confirmed patched to a past date'
+  );
+
+  const res = run(c, ['knowledge', 'purge', targetPath]);
+  assert.equal(res.status, 0, res.stderr || res.stdout);
+  const out = JSON.parse(res.stdout);
+  assert.deepEqual(out.removed.links, ['sql/shared-evidence-past-confirm']);
+
+  const after = listLearnings(dir).find((l) => l.id === 'sql/shared-evidence-past-confirm');
+  assert.ok(after, 'learning survives with its remaining episode');
+  assert.equal(after.fm.last_confirmed, pastDate, 'last_confirmed must not be refreshed by a purge');
+});
+
+test('knowledge purge with a target that escapes the workspace exits 2, deletes nothing, and never creates the store', () => {
+  const c = ctx();
+  const outsideDir = tempDir('kadm-outside-');
+  const outsideFile = path.join(outsideDir, 'outside.md');
+  fs.writeFileSync(outsideFile, 'must survive a blocked purge attempt\n');
+  const relTarget = path.join('..', path.basename(outsideDir), 'outside.md');
+
+  const res = run(c, ['knowledge', 'purge', relTarget]);
+  assert.equal(res.status, 2, res.stderr || res.stdout);
+  const out = JSON.parse(res.stdout);
+  assert.equal(out.pass, false);
+  assert.match(out.blockedReason, /escapes the workspace/);
+  assert.equal(out.removed, null);
+
+  assert.ok(fs.existsSync(outsideFile), 'file outside the workspace must survive a blocked purge');
+
+  const dir = storeDir(c.ws, { home: c.harnessHome });
+  assert.equal(fs.existsSync(dir), false, 'a blocked purge must not materialize a knowledge store');
 });
 
 test('knowledge purge deletes a learning left with zero episodes after removing all links to a re-strengthened path', () => {

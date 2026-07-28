@@ -54,7 +54,10 @@ export function removeEpisodeLink(file, targetPath) {
     lines.push('anchors: []');
   }
   lines.push(`superseded_by: ${fm.superseded_by || 'null'}`);
-  lines.push(`last_confirmed: ${todayClamped()}`);
+  // Preserve the parsed value — a purge is a negative event on this
+  // learning's remaining evidence, not a fresh human confirmation, so it must
+  // never refresh the last_confirmed trust signal.
+  lines.push(`last_confirmed: ${fm.last_confirmed || todayClamped()}`);
   if (fm.merged_from) lines.push(`merged_from: ${fm.merged_from}`);
   lines.push(`origin: ${fm.origin || 'unknown'}`);
   lines.push('---', '', body.trim(), '');
@@ -75,6 +78,20 @@ export function purgeEpisode({ workspace, target, home }) {
       exitCode: 2,
       removed: null,
       blockedReason: 'purge needs a target file path or --all',
+    };
+  }
+  // Containment guard: a target that escapes the workspace (e.g.
+  // `../../file.md`) must never reach the deletion below — checked before
+  // any store access or filesystem mutation. Learnings/ledger matching still
+  // uses the repo-relative `target` string as-is; only this resolved check
+  // differs.
+  const full = path.resolve(workspace, target);
+  if (full !== workspace && !full.startsWith(workspace + path.sep)) {
+    return {
+      pass: false,
+      exitCode: 2,
+      removed: null,
+      blockedReason: 'purge target escapes the workspace',
     };
   }
   const { dir } = ensureStore(workspace, { home });

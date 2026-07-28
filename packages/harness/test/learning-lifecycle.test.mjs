@@ -5,7 +5,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
-import { ensureStore, listLearnings } from '../lib/knowledge/store.mjs';
+import { ensureStore, storeDir, listLearnings } from '../lib/knowledge/store.mjs';
 import { rankLearnings } from '../lib/knowledge/retrieve.mjs';
 
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -115,4 +115,16 @@ test('learning retire on an unknown id exits 1 with an E_TARGET error', () => {
   const res = run(c, ['learning', 'retire', 'missing/id', '--reason', 'x']);
   assert.equal(res.status, 1);
   assert.match(res.stdout + res.stderr, /E_TARGET/);
+});
+
+test('learning retire on a storeless workspace exits 1 with E_TARGET and never materializes the store', () => {
+  const c = ctx();
+  const dir = storeDir(c.ws, { home: c.harnessHome });
+  assert.equal(fs.existsSync(dir), false, 'precondition: no store yet');
+
+  const res = run(c, ['learning', 'retire', 'missing/id', '--reason', 'x']);
+  assert.equal(res.status, 1);
+  assert.match(res.stdout + res.stderr, /E_TARGET/);
+
+  assert.equal(fs.existsSync(dir), false, 'harness learning retire must not materialize a knowledge store');
 });

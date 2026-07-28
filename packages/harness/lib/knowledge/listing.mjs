@@ -1,4 +1,5 @@
-import { ensureStore, listLearnings } from './store.mjs';
+import fs from 'node:fs';
+import { storeDir, listLearnings } from './store.mjs';
 import { readEvents, EVENTS_MAX_LIMIT } from '../events.mjs';
 
 /**
@@ -65,7 +66,10 @@ function parseMergedFrom(raw) {
 }
 
 export function listingView({ workspace, domain, home }) {
-  const { dir } = ensureStore(workspace, { home });
+  const dir = storeDir(workspace, { home });
+  // Read-only: a storeless workspace must never be materialized by a listing
+  // call — an absent store just means nothing to list yet.
+  if (!fs.existsSync(dir)) return { learnings: [], counts: { active: 0, total: 0 } };
   const all = listLearnings(dir);
   const scoped = domain ? all.filter((l) => l.domain === domain) : all;
   const failures = failureCounts(workspace);
@@ -91,7 +95,10 @@ export function listingView({ workspace, domain, home }) {
 }
 
 export function whyView({ workspace, id, home }) {
-  const { dir } = ensureStore(workspace, { home });
+  const dir = storeDir(workspace, { home });
+  // Read-only: a storeless workspace must never be materialized by a --why
+  // lookup — an absent store just means the target can't exist either.
+  if (!fs.existsSync(dir)) return null;
   const learning = listLearnings(dir).find((l) => l.id === id);
   if (!learning) return null;
 

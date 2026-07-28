@@ -5,6 +5,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
+import { storeDir } from '../lib/knowledge/store.mjs';
 
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const binPath = path.join(packageRoot, 'bin', 'harness.mjs');
@@ -144,6 +145,31 @@ test('learnings --why missing/id exits 1', () => {
 
   const res = run(c, ['learnings', '--why', 'missing/id']);
   assert.equal(res.status, 1, res.stdout);
+});
+
+test('learnings on a storeless workspace exits 0 with an empty listing and never materializes the store', () => {
+  const c = ctx();
+  const dir = storeDir(c.ws, { home: c.harnessHome });
+  assert.equal(fs.existsSync(dir), false, 'precondition: no store yet');
+
+  const res = run(c, ['learnings']);
+  assert.equal(res.status, 0, res.stderr || res.stdout);
+  const out = JSON.parse(res.stdout);
+  assert.deepEqual(out, { learnings: [], counts: { active: 0, total: 0 } });
+
+  assert.equal(fs.existsSync(dir), false, 'harness learnings must not materialize a knowledge store');
+});
+
+test('learnings --why on a storeless workspace exits 1 and never materializes the store', () => {
+  const c = ctx();
+  const dir = storeDir(c.ws, { home: c.harnessHome });
+  assert.equal(fs.existsSync(dir), false, 'precondition: no store yet');
+
+  const res = run(c, ['learnings', '--why', 'sql/missing']);
+  assert.equal(res.status, 1, res.stdout);
+  assert.match(res.stdout + res.stderr, /E_TARGET/);
+
+  assert.equal(fs.existsSync(dir), false, 'harness learnings --why must not materialize a knowledge store');
 });
 
 test('failure count survives more than 20 unrelated events written after the verify-fail', () => {
