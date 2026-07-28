@@ -128,7 +128,7 @@ in a knowledge-store git commit.
 
 ### Options
 
-`--dry-run`, `--verbose`, `--json`, `--no-color`, `--workspace <path>`, `--copilot-home <path>`, `--query <text>`, `--phase implement|verify`, `--plan <path>`, `--base <git-ref>`, `--enforcement observe|warn|enforce`, `--strict-intent`, `--no-events`, `--host vscode`, `--session <id>`, `--summary`, `--failures`, `--limit <n>`, `-c <collection>`, `--min-score <n>`, `--docid <id>`, `--path <rel>`, `--lines <n>`, `--max-bytes <n>`, `--sync`, `--global`, `--check`, `--insight`, `--title <t>`, `--body <text>`, `--body-file <path>`, `--category <c>`, `--tags <a,b>`, `--trigger <t>`, `--claim <t>`, `--status`, `--candidates`, `--apply`, `--ops <path>`
+`--dry-run`, `--verbose`, `--json`, `--no-color`, `--workspace <path>`, `--copilot-home <path>`, `--query <text>`, `--phase implement|verify`, `--plan <path>`, `--base <git-ref>`, `--enforcement observe|warn|enforce`, `--strict-intent`, `--no-events`, `--host vscode`, `--session <id>`, `--summary`, `--failures`, `--limit <n>`, `-c <collection>`, `--min-score <n>`, `--docid <id>`, `--path <rel>`, `--lines <n>`, `--max-bytes <n>`, `--sync`, `--global`, `--check`, `--insight`, `--title <t>`, `--body <text>`, `--body-file <path>`, `--category <c>`, `--tags <a,b>`, `--trigger <t>`, `--claim <t>`, `--domain <d>`, `--status`, `--candidates`, `--apply`, `--ops <path>`, `--rebuild`, `--yes`, `--reason <r>`, `--why <id>`, `--learnings <ids>`
 
 ### Output grammar (one grammar, two readers)
 

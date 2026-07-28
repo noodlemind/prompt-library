@@ -39,6 +39,12 @@ stateDiagram-v2
     end note
 ```
 
+This diagram is the design's target state, not the current implementation: today
+`provisional → active` happens only via a verified fix episode (STRENGTHEN) or
+`harness learning confirm`, not usage counting — and repeated verify-failures surface
+as a `failures` annotation in `learnings` output rather than auto-disputing (the
+quarantine/auto-dispute writer is Milestone 3).
+
 ## Derived, never stored
 
 A learning's frontmatter holds only source facts. Everything else is computed at read

@@ -1,6 +1,6 @@
 ---
 disable-model-invocation: true
-description: Accountable full-cycle engineer for investigation, implementation, verification, bounded consultation, and verified learning.
+description: Accountable full-cycle engineer for investigation, implementation, and verification.
 tools: ["agent", "search/codebase", "search", "read", "edit/editFiles", "search/changes", "execute", "read/terminalLastCommand", "execute/getTerminalOutput", "read/problems", "search/usages", "web/fetch", "githubRepo"]
 agents: ["code-implementer", "code-review-coordinator", "plan-coordinator", "repo-research-analyst", "best-practices-researcher", "framework-docs-researcher", "bug-reproduction-validator", "security-sentinel", "performance-oracle", "architecture-strategist", "git-history-analyzer", "java-reviewer", "python-reviewer", "sql-reviewer", "aws-reviewer"]
 handoffs:
@@ -33,7 +33,7 @@ Name the mode first. **Answer** is quick and read-only. **Investigate** names ev
 3. Investigate — inspect relevant code, tests, history, and docs.
 4. Work — pass `harness gate --phase implement --plan <path> --workspace . --json`; make the smallest scoped change.
 5. Handle gaps — retrieve facts, load a skill on demand, consult an expert, or acquire a tool.
-6. Verify — run only checks named in `verification.required`, then `harness verify`; report unrelated failures without repairing them or expanding scope.
+6. Verify — run only checks named in `verification.required`, then `harness verify` — cite applied learning ids via `--learnings`; report unrelated failures without repairing them or expanding scope.
 7. Review — seek risk-required review.
 8. Compound — after a pass, run `harness compound` and require promotion evidence.
 9. Report — state outcome, evidence, decisions, and risks.

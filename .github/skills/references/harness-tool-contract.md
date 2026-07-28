@@ -180,7 +180,7 @@ Allowed outcomes are `passed`, `failed`, and `inconclusive`. Only fresh `passed`
 }
 ```
 
-**consolidate** (`--status` default shown; `--candidates` returns `{ clusters, learnings }`; `--apply` returns `{ pass, exitCode, applied, rejected, committed }`; `--rebuild --yes` returns `{ pass, exitCode, archived, debt, nextTools }`)
+**consolidate** (`--status` default shown; `--candidates` returns `{ clusters, learnings }`; `--apply` returns `{ applied, rejected, committed, exitCode }`; `--rebuild --yes` returns `{ pass, exitCode, archived, debt, nextTools }`)
 ```json
 {
   "mode": "on",
@@ -188,7 +188,7 @@ Allowed outcomes are `passed`, `failed`, and `inconclusive`. Only fresh `passed`
   "debt": 6,
   "threshold": 5,
   "learnings": { "active": 12, "total": 14 },
-  "promotionCandidates": ["sql/adding-not-null-columns-to-hot-tables"],
+  "promotionCandidates": [{ "id": "sql/adding-not-null-columns-to-hot-tables", "verified": 3, "plans": 2 }],
   "quarantined": [],
   "nextTools": ["harness consolidate --candidates"]
 }
