@@ -20,6 +20,7 @@ import {
   cmdRemember,
   cmdLearning,
   cmdLearnings,
+  cmdEvalKnowledge,
   cmdKnowledge,
   cmdGet,
   cmdUninstall,
@@ -205,6 +206,9 @@ const CATALOG = [
         options: [
           ['--why <id>', 'full provenance chain for one learning'],
         ] },
+      { name: 'eval-knowledge', desc: 'deterministic retrieval eval — hit/false-surface/token cost per arm (proxy, not net-benefit)',
+        sig: '[--json]',
+        options: [] },
     ],
   },
   {
@@ -354,6 +358,9 @@ async function main() {
         break;
       case 'learnings':
         code = await cmdLearnings(args);
+        break;
+      case 'eval-knowledge':
+        code = await cmdEvalKnowledge(args);
         break;
       case 'knowledge':
         code = await cmdKnowledge(args);

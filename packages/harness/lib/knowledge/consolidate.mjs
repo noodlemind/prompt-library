@@ -52,6 +52,7 @@ export function collectEpisodes({ workspace, copilotHome }) {
           title: fm.title || f.replace(/\.md$/, ''),
           tags: fm.tags ? fm.tags.split(',').map((t) => t.trim()) : [],
           excerpt: excerpt(text),
+          date: fm.date || null,
         });
       }
     }

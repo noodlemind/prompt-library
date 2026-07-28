@@ -1078,6 +1078,60 @@ export async function cmdLearnings(argv) {
   return 0;
 }
 
+// Deterministic retrieval PROXY, not the model-graded net-benefit number
+// (design §12, deferred) — hit/false-surface/token cost per ranking arm on a
+// temporally held-out split. Read-only: never creates the store (recall/report
+// convention — no writeEvent call).
+export async function cmdEvalKnowledge(argv) {
+  const { evalKnowledge, DEFAULT_NEGATIVE_QUERIES } = await import('./knowledge/eval.mjs');
+  const flags = parseFlags(argv);
+  const workspace = path.resolve(flags.workspace);
+  const copilotHome = resolveCopilotHome(flags.copilotHome);
+  const result = evalKnowledge({ workspace, copilotHome, negativeQueries: DEFAULT_NEGATIVE_QUERIES });
+
+  if (flags.json) {
+    emitJson(flags, result);
+    return result.exitCode;
+  }
+
+  if (!result.pass) {
+    for (const l of ui.errorBlock({ code: 'E_TARGET', message: result.blockedReason, exit: result.exitCode })) {
+      console.error(l);
+    }
+    return result.exitCode;
+  }
+
+  const armKeys = Object.keys(result.arms);
+  const keyWidth = keyWidthFor(['eval-knowledge', ...armKeys, 'recommendation']);
+  console.log(
+    ui.line({
+      state: 'ok',
+      key: 'eval-knowledge',
+      value: `${result.split.train} train · ${result.split.heldOut} held-out · cutoff ${result.split.cutoff}`,
+      note: result.split.unscorable ? `${result.split.unscorable} held-out unscorable` : undefined,
+      keyWidth,
+    })
+  );
+  for (const arm of armKeys) {
+    const stats = result.arms[arm];
+    console.log(
+      ui.line({
+        key: arm,
+        value: `hit ${Math.round(stats.hitRate * 100)}% · false ${Math.round(stats.falseSurfaceRate * 100)}% · ~${stats.injectedTokens} tok`,
+        keyWidth,
+      })
+    );
+  }
+  console.log(ui.line({ key: 'recommendation', value: result.recommendation, keyWidth }));
+  console.log(
+    ui.paint(
+      'muted',
+      '  deterministic retrieval proxy — hit/false-surface/token cost per arm; model-graded net-benefit is deferred, not measured here'
+    )
+  );
+  return 0;
+}
+
 const KNOWLEDGE_MODES = new Set(['on', 'off', 'freeze', 'capture-only']);
 
 // The kill switch and purge cascade. Mode-switching and --status read/write
