@@ -202,6 +202,51 @@ test('a hand edit survives an applyOps validation failure (byte-cap) — absorbe
   assert.doesNotMatch(after.body.replace(/\s+/g, ' '), /x{100,}/, 'the rejected over-cap op never touched the store');
 });
 
+test('a hand edit survives a genuine POST-LOCK mid-mutation throw (git reset --hard lands on the absorb commit, not before it)', () => {
+  const c = ctx();
+  const learningId = seedLearning(c);
+  const { dir } = ensureStore(c.ws, { home: c.harnessHome });
+  const learning = listLearnings(dir).find((l) => l.id === learningId);
+  handEditBody(learning.file, 'A human edited this claim; this must survive a mid-write rollback.');
+
+  const dirty = spawnSync('git', ['status', '--porcelain'], { cwd: dir, encoding: 'utf8' }).stdout.trim();
+  assert.ok(dirty.length > 0, 'precondition: dirty tree before the failing apply');
+
+  // Mirror consolidate-apply.test.mjs's mid-apply-throw fixture: a regular
+  // FILE named exactly like the directory this op's write needs, so the
+  // write-phase mkdir throws AFTER the lock is acquired — past the compose
+  // phase's own validation, deep inside the mutation try/catch that runs
+  // `git reset --hard` + `git clean -fd` on failure.
+  fs.mkdirSync(path.join(dir, 'learnings'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'learnings', 'poisoned-domain'), 'blocks mkdir for this domain\n');
+  const poisonedOp = {
+    op: 'ADD',
+    domain: 'poisoned-domain',
+    slug: 'never-lands',
+    trigger: 'a trigger that never lands',
+    body: 'this write throws mid-mutation',
+    episodes: [EP({ path: 'docs/solutions/perf/y.md', sha256: 'b'.repeat(64) })],
+  };
+  const res = applyOps({ workspace: c.ws, opsPath: writeOps(c.ws, [poisonedOp]), home: c.harnessHome });
+  assert.equal(res.exitCode, 1, JSON.stringify(res));
+  assert.equal(res.committed, false);
+  assert.equal(res.rejected?.[0]?.code, 'E_APPLY_FAILED', 'a genuine post-lock throw, not a validation rejection');
+
+  // The reset target IS the absorb commit (the tree was already clean and
+  // committed by the time the write phase acquired the lock), so the hand
+  // edit is untouched by the rollback.
+  const log = gitLog(dir);
+  assert.match(log[log.length - 1], new RegExp(`human edit: ${learningId.replace('/', '\\/')}$`), 'HEAD sits at the absorb commit — no dangling or reverted state');
+
+  const after = listLearnings(dir).find((l) => l.id === learningId);
+  assert.ok(after, 'the learning still exists after the rollback');
+  assert.equal(after.fm.source, 'human', 'source: human survives the rollback');
+  assert.match(after.body, /must survive a mid-write rollback/, 'the hand-edited body survives the rollback');
+  const snapshotEpisode = after.fm.episodes.find((e) => e.path.includes('hand-edit'));
+  assert.ok(snapshotEpisode, 'the human-teaching snapshot episode ref survives the rollback');
+  assert.ok(fs.existsSync(path.join(c.ws, snapshotEpisode.path)), 'the snapshot file itself survives (outside the store, unaffected by its git reset anyway)');
+});
+
 test('absorbHandEdits on a clean tree absorbs nothing and creates no commit', () => {
   const c = ctx();
   seedLearning(c);
@@ -323,4 +368,56 @@ test('removeEpisodeLink still delegates to serializeLearning and round-trips the
   assert.deepEqual(remaining, []);
   const after = parseLearningFrontmatter(fs.readFileSync(learning.file, 'utf8'));
   assert.deepEqual(after.fm.episodes, []);
+});
+
+test('an ADD → hand-edit → absorb → STRENGTHEN cycle keeps the absorbed state and layers the new fix episode on top', () => {
+  const c = ctx();
+  const learningId = seedLearning(c, {
+    slug: 'cycle-learning',
+    trigger: 'cycle learning trigger',
+    body: 'original cycle body text.',
+    episodes: [EP({ path: 'docs/solutions/perf/orig.md', sha256: 'a'.repeat(64) })],
+  });
+  const { dir } = ensureStore(c.ws, { home: c.harnessHome });
+  const learning = listLearnings(dir).find((l) => l.id === learningId);
+  handEditBody(learning.file, 'A human edited this claim directly on disk during the cycle test.');
+
+  // Trigger absorb on its own first (any mutation entry point does this —
+  // calling the exported primitive directly keeps this step unambiguous).
+  const firstAbsorb = absorbHandEdits({ workspace: c.ws, home: c.harnessHome });
+  assert.equal(firstAbsorb.absorbed.length, 1);
+  assert.equal(firstAbsorb.absorbed[0].id, learningId);
+  assert.equal(firstAbsorb.committed, true);
+
+  // STRENGTHEN the same id with a new fix episode — a separate mutation on
+  // top of the already-absorbed state.
+  const strengthenOp = {
+    op: 'STRENGTHEN',
+    target: learningId,
+    episodes: [{ path: 'docs/solutions/perf/new-fix.md', sha256: 'c'.repeat(64), kind: 'fix', plan: 'docs/plans/p2.md' }],
+  };
+  const res = applyOps({ workspace: c.ws, opsPath: writeOps(c.ws, [strengthenOp]), home: c.harnessHome });
+  assert.equal(res.exitCode, 0, JSON.stringify(res.rejected));
+
+  const after = listLearnings(dir).find((l) => l.id === learningId);
+  assert.match(after.body, /A human edited this claim directly on disk during the cycle test/, 'the edited body survives STRENGTHEN');
+  assert.equal(after.fm.source, 'human', 'source: human survives STRENGTHEN');
+
+  const snapshotEpisode = after.fm.episodes.find((e) => e.path.includes('hand-edit'));
+  assert.ok(snapshotEpisode, 'the human-teaching snapshot ref from absorb is retained');
+  assert.equal(snapshotEpisode.kind, 'human-teaching');
+
+  const newFixEpisode = after.fm.episodes.find((e) => e.path === 'docs/solutions/perf/new-fix.md');
+  assert.ok(newFixEpisode, 'STRENGTHEN layered the new fix episode on top');
+  assert.equal(newFixEpisode.kind, 'fix');
+
+  const origEpisode = after.fm.episodes.find((e) => e.path === 'docs/solutions/perf/orig.md');
+  assert.ok(origEpisode, 'the original ADD episode is still present — STRENGTHEN merges, never replaces');
+
+  // A second absorb pass on the now-clean tree (STRENGTHEN's own applyOps
+  // call already committed everything) commits nothing.
+  const before = gitLog(dir).length;
+  const secondAbsorb = absorbHandEdits({ workspace: c.ws, home: c.harnessHome });
+  assert.deepEqual(secondAbsorb, { absorbed: [], deleted: [], committed: false });
+  assert.equal(gitLog(dir).length, before, 'no commit from the second, clean-tree absorb pass');
 });
