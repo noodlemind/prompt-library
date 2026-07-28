@@ -51,6 +51,29 @@ const ADD = (over = {}) => ({
   ...over,
 });
 
+// A REAL episode file on disk with its own frontmatter `kind:` — since
+// verifyHumanTeachingEpisode (apply.mjs) now requires disk proof (existence +
+// sha256 match + real frontmatter kind) before granting source: human /
+// status: active, a "human-taught" seed learning needs a genuine file, not
+// just an op asserting kind: human-teaching.
+function writeRealEpisode(ws, rel, kind = 'human-teaching') {
+  const full = path.join(ws, rel);
+  fs.mkdirSync(path.dirname(full), { recursive: true });
+  const text = `---\ntitle: "${rel}"\nkind: ${kind}\ndate: 2026-07-01\n---\n\nepisode body for ${rel}.\n`;
+  fs.writeFileSync(full, text, 'utf8');
+  return { path: rel, sha256: crypto.createHash('sha256').update(text).digest('hex') };
+}
+
+// Seeds a genuinely-verified source: human learning at sql/<slug> via ADD
+// with one real human-teaching episode file.
+function seedHumanLearning(c, slug) {
+  const ep = writeRealEpisode(c.ws, `docs/solutions/teachings/${slug}.md`);
+  const op = ADD({ slug, episodes: [{ ...ep, kind: 'human-teaching', plan: null }] });
+  const res = run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [op])]);
+  assert.equal(res.status, 0, res.stderr || res.stdout);
+  return `sql/${slug}`;
+}
+
 test('valid ADD writes a provisional learning, consumes the ledger, and commits', () => {
   const c = ctx();
   const opsPath = writeOps(c.ws, [ADD()]);
@@ -164,11 +187,7 @@ test('a colliding ADD (same domain/slug already exists) is rejected with E_EXIST
 
 test('a model SUPERSEDE (fix-kind episodes) on a source: human target still lands disputed', () => {
   const c = ctx();
-  const humanAdd = ADD({
-    slug: 'human-taught-claim',
-    episodes: [EP({ kind: 'human-teaching', plan: null })],
-  });
-  assert.equal(run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [humanAdd])]).status, 0);
+  seedHumanLearning(c, 'human-taught-claim');
   const { dir } = ensureStore(c.ws, { home: c.harnessHome });
   const seeded = listLearnings(dir).find((l) => l.id === 'sql/human-taught-claim');
   assert.equal(seeded.fm.source, 'human');
@@ -192,13 +211,10 @@ test('a model SUPERSEDE (fix-kind episodes) on a source: human target still land
 
 test('a fabricated human-teaching kind for a NONEXISTENT episode file does not exempt a SUPERSEDE from disputed demotion', () => {
   const c = ctx();
-  const humanAdd = ADD({
-    slug: 'human-taught-claim-fab-1',
-    episodes: [EP({ kind: 'human-teaching', plan: null })],
-  });
-  assert.equal(run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [humanAdd])]).status, 0);
+  seedHumanLearning(c, 'human-taught-claim-fab-1');
   const { dir } = ensureStore(c.ws, { home: c.harnessHome });
   const before = listLearnings(dir).find((l) => l.id === 'sql/human-taught-claim-fab-1');
+  assert.equal(before.fm.source, 'human');
 
   const fakeSupersede = {
     op: 'SUPERSEDE',
@@ -221,11 +237,7 @@ test('a fabricated human-teaching kind for a NONEXISTENT episode file does not e
 
 test('a human-teaching kind assertion for a real file whose actual frontmatter kind is fix does not exempt a SUPERSEDE', () => {
   const c = ctx();
-  const humanAdd = ADD({
-    slug: 'human-taught-claim-fab-2',
-    episodes: [EP({ kind: 'human-teaching', plan: null })],
-  });
-  assert.equal(run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [humanAdd])]).status, 0);
+  seedHumanLearning(c, 'human-taught-claim-fab-2');
 
   const episodeRel = 'docs/solutions/perf/actually-a-fix.md';
   const episodeText = '---\ntitle: "actually a fix"\nkind: fix\ndate: 2026-07-01\n---\n\n## Problem\n\nan actual fix, not a human teaching.\n';
@@ -260,11 +272,7 @@ test('a human-teaching kind assertion for a real file whose actual frontmatter k
 
 test('a rename-shape SUPERSEDE (target !== new id) with genuine human-teaching episodes is still disputed, not exempted', () => {
   const c = ctx();
-  const humanAdd = ADD({
-    slug: 'human-taught-claim-fab-3',
-    episodes: [EP({ kind: 'human-teaching', plan: null })],
-  });
-  assert.equal(run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [humanAdd])]).status, 0);
+  seedHumanLearning(c, 'human-taught-claim-fab-3');
 
   const episodeRel = 'docs/solutions/teachings/genuine-reteach.md';
   const episodeText = '---\ntitle: "genuine reteach"\nkind: human-teaching\ndate: 2026-07-01\n---\n\ngenuinely taught by a human.\n';
@@ -300,11 +308,7 @@ test('a SUPERSEDE rename colliding with an unrelated existing learning is reject
   const weak = ADD({ slug: 'weak' });
   assert.equal(run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [weak])]).status, 0);
 
-  const victimAdd = ADD({
-    slug: 'victim',
-    episodes: [EP({ kind: 'human-teaching', plan: null })], // source: human
-  });
-  assert.equal(run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [victimAdd])]).status, 0);
+  seedHumanLearning(c, 'victim'); // a genuinely-verified source: human learning
 
   const { dir } = ensureStore(c.ws, { home: c.harnessHome });
   const victimBefore = listLearnings(dir).find((l) => l.id === 'sql/victim');
@@ -330,6 +334,49 @@ test('a SUPERSEDE rename colliding with an unrelated existing learning is reject
   assert.equal(victimAfter.body, victimBefore.body, 'victim learning body unchanged');
   const weakAfter = listLearnings(dir).find((l) => l.id === 'sql/weak');
   assert.deepEqual(weakAfter.fm, weakBefore.fm, 'weak (the actual target) also untouched — whole run rejected');
+});
+
+test('an ADD asserting a fabricated human-teaching episode (nonexistent file) derives source: auto, status: provisional — not human/active', () => {
+  const c = ctx();
+  const op = ADD({
+    slug: 'fabricated-human-add',
+    episodes: [{ path: 'docs/solutions/teachings/never-written.md', sha256: 'f'.repeat(64), kind: 'human-teaching', plan: null }],
+  });
+  const res = run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [op])]);
+  assert.equal(res.status, 0, res.stderr || res.stdout);
+  const out = JSON.parse(res.stdout);
+  assert.equal(out.applied.length, 1, 'the op still applies — fabricated evidence just fails to earn elevated standing');
+
+  const { dir } = ensureStore(c.ws, { home: c.harnessHome });
+  const learning = listLearnings(dir).find((l) => l.id === 'sql/fabricated-human-add');
+  assert.ok(learning);
+  assert.equal(learning.fm.source, 'auto', 'unverifiable human-teaching kind must not earn source: human');
+  assert.equal(learning.fm.status, 'provisional', 'unverifiable human-teaching kind must not earn status: active');
+});
+
+test('an ADD episode path that escapes the workspace fails verification and derives source: auto', () => {
+  const c = ctx();
+  // A real file OUTSIDE the workspace with matching content/sha and a genuine
+  // human-teaching frontmatter kind — verification must still fail purely on
+  // the path escaping containment, before any file is even read.
+  const outsideDir = tempDir('apply-outside-');
+  const outsideText = '---\ntitle: "outside"\nkind: human-teaching\ndate: 2026-07-01\n---\n\noutside the workspace.\n';
+  fs.writeFileSync(path.join(outsideDir, 'outside.md'), outsideText);
+  const outsideSha = crypto.createHash('sha256').update(outsideText).digest('hex');
+  const relTarget = path.join('..', path.basename(outsideDir), 'outside.md');
+
+  const op = ADD({
+    slug: 'traversal-human-add',
+    episodes: [{ path: relTarget, sha256: outsideSha, kind: 'human-teaching', plan: null }],
+  });
+  const res = run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [op])]);
+  assert.equal(res.status, 0, res.stderr || res.stdout);
+
+  const { dir } = ensureStore(c.ws, { home: c.harnessHome });
+  const learning = listLearnings(dir).find((l) => l.id === 'sql/traversal-human-add');
+  assert.ok(learning);
+  assert.equal(learning.fm.source, 'auto', 'an escaping episode path must never be read, let alone earn source: human');
+  assert.equal(learning.fm.status, 'provisional');
 });
 
 test('STRENGTHEN on a missing target rejects the run', () => {

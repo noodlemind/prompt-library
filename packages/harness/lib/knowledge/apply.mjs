@@ -131,22 +131,29 @@ function verifiedFixLinks(fm) {
 }
 
 /**
- * Verify a SUPERSEDE op's asserted human-teaching episode against disk. The
- * op JSON's `episodes[].kind` field is just an assertion — model- or
- * human-authored text that nothing else validates — so trusting it to grant
- * the disputed-demotion exemption would let anyone claim human-teaching for
- * an episode that was never taught by a human. An episode only counts if:
- * its file exists under the workspace, the file's CURRENT content hashes to
- * the asserted sha256 (not stale/edited since), and the file's OWN
+ * Verify an asserted human-teaching episode against disk. Used both for the
+ * SUPERSEDE disputed-demotion exemption and for `source`/`status` derivation
+ * on ADD/SUPERSEDE writes — in both cases the op JSON's `episodes[].kind`
+ * field is just an assertion (model- or human-authored text that nothing
+ * else validates), so trusting it to grant elevated standing would let
+ * anyone claim human-teaching for an episode that was never taught by a
+ * human. An episode only counts if: its path resolves inside the workspace
+ * (no `../` escape), its file exists there, the file's CURRENT content
+ * hashes to the asserted sha256 (not stale/edited since), and the file's OWN
  * frontmatter independently says `kind: human-teaching` (not just the op's
  * claim). Any mismatch fails closed (false) — never throws, so a
- * missing/unreadable file simply falls through to normal disputed handling.
+ * missing/unreadable/escaping file simply falls back to the non-human lane.
  */
 function verifyHumanTeachingEpisode(workspace, e) {
   if (e.kind !== 'human-teaching' || !e.path || !e.sha256) return false;
+  // Containment guard: same root/startsWith idiom purge uses — an episode
+  // path that escapes the workspace must never even be read.
+  const root = path.resolve(workspace);
+  const full = path.resolve(root, e.path);
+  if (full !== root && !full.startsWith(root + path.sep)) return false;
   let text;
   try {
-    text = fs.readFileSync(path.join(workspace, e.path), 'utf8');
+    text = fs.readFileSync(full, 'utf8');
   } catch {
     return false;
   }
@@ -292,10 +299,13 @@ export function applyOps({ workspace, opsPath, dryRun = false, home }) {
     const slug = normalizeSlug(op.slug);
     const id = `${domain}/${slug}`;
     // A direct human statement outranks statistics: episodes made entirely of
-    // human-teaching evidence land active with source: human — no provisional
-    // damping for teachings (design §6). Anything else (including a mix) is
-    // the standard auto/provisional lane.
-    const source = op.episodes.length && op.episodes.every((e) => e.kind === 'human-teaching') ? 'human' : 'auto';
+    // VERIFIED human-teaching evidence (see verifyHumanTeachingEpisode) land
+    // active with source: human — no provisional damping for teachings
+    // (design §6). An asserted-but-unverifiable human-teaching kind (a
+    // fabricated or nonexistent episode) fails toward the standard
+    // auto/provisional lane instead — this derivation never throws or
+    // rejects the op, it just withholds the elevated standing.
+    const source = op.episodes.length && op.episodes.every((e) => verifyHumanTeachingEpisode(workspace, e)) ? 'human' : 'auto';
     const status = source === 'human' ? 'active' : 'provisional';
     const content = renderLearning({
       trigger: op.trigger,
