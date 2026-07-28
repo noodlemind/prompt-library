@@ -171,6 +171,51 @@ test('knowledge purge <episode> cascades: sole-evidence learning removed, shared
   assert.ok(fs.existsSync(path.join(c.ws, otherPath)), 'unrelated episode file untouched');
 });
 
+test('knowledge purge deletes a learning left with zero episodes after removing all links to a re-strengthened path', () => {
+  const c = ctx();
+  const targetPath = 'docs/solutions/perf/restrengthened.md';
+  fs.mkdirSync(path.join(c.ws, 'docs', 'solutions', 'perf'), { recursive: true });
+  fs.writeFileSync(path.join(c.ws, targetPath), 'episode body v1\n');
+
+  const add = {
+    op: 'ADD',
+    domain: 'sql',
+    slug: 're-strengthened',
+    trigger: 're-strengthened trigger',
+    body: 're-strengthened body text',
+    episodes: [{ path: targetPath, sha256: 'a'.repeat(64), kind: 'fix', plan: 'docs/plans/p1.md' }],
+  };
+  assert.equal(applyOps({ workspace: c.ws, opsPath: writeOps(c.ws, [add]), home: c.harnessHome }).exitCode, 0);
+
+  // The episode file is later edited; STRENGTHEN re-cites the same path with
+  // a new sha256. apply.mjs's dedup key is `path@sha256`, so this appends a
+  // second episode entry for the same path instead of merging it away — the
+  // designed re-strengthening path.
+  const strengthen = {
+    op: 'STRENGTHEN',
+    target: 'sql/re-strengthened',
+    episodes: [{ path: targetPath, sha256: 'b'.repeat(64), kind: 'fix', plan: 'docs/plans/p2.md' }],
+  };
+  assert.equal(applyOps({ workspace: c.ws, opsPath: writeOps(c.ws, [strengthen]), home: c.harnessHome }).exitCode, 0);
+
+  const { dir } = ensureStore(c.ws, { home: c.harnessHome });
+  const seeded = listLearnings(dir).find((l) => l.id === 'sql/re-strengthened');
+  assert.equal(seeded.fm.episodes.length, 2, 'two sha256-distinct episodes citing the same path are present');
+  assert.ok(seeded.fm.episodes.every((e) => e.path === targetPath));
+
+  const res = run(c, ['knowledge', 'purge', targetPath]);
+  assert.equal(res.status, 0, res.stderr || res.stdout);
+  const out = JSON.parse(res.stdout);
+  assert.deepEqual(out.removed.learnings, ['sql/re-strengthened']);
+  assert.deepEqual(out.removed.links, []);
+
+  const learnings = listLearnings(dir);
+  assert.ok(!learnings.some((l) => l.id === 'sql/re-strengthened'), 'evidence-less learning is deleted, not left empty');
+  assert.ok(!fs.existsSync(seeded.file), 'learning file physically removed');
+  const index = fs.readFileSync(path.join(dir, 'INDEX.md'), 'utf8');
+  assert.doesNotMatch(index, /sql\/re-strengthened/);
+});
+
 test('knowledge purge --all empties the learnings store while episodes remain as debt', () => {
   const c = ctx();
   const catDir = path.join(c.ws, 'docs', 'solutions', 'perf');

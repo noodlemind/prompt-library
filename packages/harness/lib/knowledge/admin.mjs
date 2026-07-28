@@ -68,8 +68,15 @@ export function purgeEpisode({ workspace, target, home }) {
   for (const l of listLearnings(dir)) {
     const episodes = l.fm.episodes || [];
     if (!episodes.some((e) => e.path === target)) continue;
-    if (episodes.length === 1) {
-      // Sole evidence: the learning has nothing left to stand on.
+    // Decide by the post-filter count, not the pre-filter episode count: a
+    // learning can cite the same path twice with different sha256 values
+    // (ADD then STRENGTHEN after the episode file was edited), so "one
+    // episode total" is not the same thing as "one episode after this path
+    // is removed" — removeEpisodeLink strips every link to `target`
+    // regardless of sha256, so this must match that filter exactly.
+    const remaining = episodes.filter((e) => e.path !== target);
+    if (remaining.length === 0) {
+      // No evidence left once every link to this path is gone.
       fs.rmSync(l.file, { force: true });
       removedLearnings.push(l.id);
     } else {
