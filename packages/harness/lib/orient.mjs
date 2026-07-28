@@ -2,7 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { rankRecall, findMatchingPlans } from './recall-rank.mjs';
 import { runGate } from './gate.mjs';
-import { buildContextPack, buildLearningsLines } from './context-pack.mjs';
+import { buildContextPack, learningsSectionBytes } from './context-pack.mjs';
 import { buildPlanView } from './plan-view.mjs';
 import { buildRepoMap } from './repo-map/index.mjs';
 import { indexStatus } from './index-status.mjs';
@@ -84,16 +84,6 @@ export function runOrient({ workspace, copilotHome, flags, query }) {
     explain = null;
   }
 
-  // Injected-token ledger: bytes of the "## Learnings (memory)" section as
-  // buildContextPack would render it for these `learnings`, via the same
-  // line-builder (buildLearningsLines) — measured BEFORE the pack's 2KB
-  // truncation, so this is what orient attempted to inject, not necessarily
-  // every byte that survives truncation in an already-full pack. That is the
-  // cost side of the token ledger only; no benefit/"tokens saved" claim.
-  const learningsBytes = learnings.length
-    ? Buffer.byteLength(buildLearningsLines(learnings).join('\n'), 'utf8')
-    : 0;
-
   // Deterministic, query-ranked code orientation written alongside the pack.
   // Advisory only — never block orientation if map generation or the write fails.
   let repoMapRef = null;
@@ -163,6 +153,16 @@ export function runOrient({ workspace, copilotHome, flags, query }) {
     gatePreview: { pass: gatePreview.pass, blockedReason: gatePreview.blockedReason },
     nextTools,
   });
+
+  // Injected-token ledger: bytes of the "## Learnings (memory)" section as it
+  // ACTUALLY exists in this packBody — measured AFTER buildContextPack has
+  // already applied its 2KB truncation, via the single shared helper
+  // (learningsSectionBytes) so orient never re-derives the pack's section
+  // format itself. A large plan/goal/gate/repo-map preamble can push the
+  // whole learnings section past the cap, in which case this is 0 — the
+  // cost side of the token ledger reflects what the pack truly carries, not
+  // what orient merely attempted to inject. No benefit/"tokens saved" claim.
+  const learningsBytes = learningsSectionBytes(packBody);
 
   const packRel = '.harness/context-pack.md';
   const packFull = path.join(workspace, packRel);

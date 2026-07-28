@@ -205,3 +205,143 @@ test('orient records learningsBytes on the event, and report tallies an injected
   const plainReport = runPlain(c, ['report']);
   assert.match(plainReport.stdout, /tok injected across 2 orients · 0 consolidations/);
 });
+
+// --- learningsBytes must measure the pack that actually shipped, not what
+// orient merely attempted to inject before the 2KB truncation ran. ---
+
+/** A minimal single-learning fixture (distinct from seededContext's four-
+ * learning explain fixture) whose exact untruncated pack size is a known,
+ * stable constant for this trigger/body/episode — used as the control
+ * ("full section") value the truncation tests below compare against. */
+function singleLearningContext() {
+  const ws = tempDir('oeb-ws-');
+  const home = tempDir('oeb-home-');
+  const harnessHome = tempDir('oeb-hh-');
+  const opsPath = path.join(ws, 'ops.json');
+  fs.writeFileSync(
+    opsPath,
+    JSON.stringify({
+      schema: 1,
+      ops: [
+        {
+          op: 'ADD', domain: 'repro', slug: 'big-plan', trigger: TRIGGER,
+          body: 'Drain the queue before it backs up, and do not stop until the backlog is fully cleared out.',
+          episodes: [{ path: 'docs/solutions/a/x.md', sha256: 'a'.repeat(64), kind: 'fix', plan: 'docs/plans/p1.md' }],
+        },
+      ],
+    })
+  );
+  const applied = applyOps({ workspace: ws, opsPath, home: harnessHome });
+  assert.equal(applied.exitCode, 0, JSON.stringify(applied.rejected));
+  return { ws, home, harnessHome };
+}
+
+/** Writes a real active plan (status in-progress, plan_lock true, phase 1)
+ * whose "## Memory Cards" section is a single `n`-character unbroken line
+ * (orient's 12-line memoryExcerpt slice keeps it whole, since it has no
+ * embedded newlines). Padding this shifts how many pack bytes are spent
+ * BEFORE the "## Learnings (memory)" section is ever reached — the lever
+ * needed to push that section past the 2KB truncation cap, or land the cut
+ * point inside it. */
+function writePaddedActivePlan(ws, n) {
+  const plansDir = path.join(ws, 'docs', 'plans');
+  fs.mkdirSync(plansDir, { recursive: true });
+  const planPath = path.join(plansDir, '2026-05-22-fix-example-plan.md');
+  fs.writeFileSync(
+    planPath,
+    `---\ntitle: "Fix example"\nstatus: in-progress\nplan_lock: true\nphase: 1\n---\n\n# Fix example\n\n## Overview\n\nDo the work.\n\n## Memory Cards\n\n${'x'.repeat(n)}\n\n## Intent Contract\n\n- **Goal:** Fix example\n- **Expected outputs:** code change\n- **Success criteria:** tests pass\n\n## Acceptance Criteria\n\n- [ ] Example is fixed.\n\n## Verification Plan\n\nRun the relevant test command.\n\n## Impacted Files\n\n- src/example.ts\n\n## Activity\n\n- Plan created.\n`,
+    'utf8'
+  );
+  return planPath;
+}
+
+function lastOrientEvent(ws) {
+  const events = fs
+    .readFileSync(path.join(ws, '.harness', 'events.jsonl'), 'utf8')
+    .trim()
+    .split('\n')
+    .filter(Boolean)
+    .map((l) => JSON.parse(l));
+  return events.filter((e) => e.type === 'orient').at(-1);
+}
+
+/** Independently locates the "## Learnings (memory)" section inside a raw
+ * pack string — from the header to the next "## " heading, the truncation
+ * marker, or end of string, whichever comes first. Deliberately does NOT
+ * call the implementation's own context-pack.mjs helper: this re-derives
+ * the same contract from scratch so the assertions below are a real
+ * black-box check, not a tautology against the code under test. */
+function locateLearningsSectionBytes(pack) {
+  const start = pack.indexOf('## Learnings (memory)');
+  if (start === -1) return 0;
+  const boundaries = [pack.indexOf('\n## ', start), pack.indexOf('…(truncated', start)].filter((i) => i !== -1);
+  const end = boundaries.length ? Math.min(...boundaries) : pack.length;
+  return Buffer.byteLength(pack.slice(start, end), 'utf8');
+}
+
+test('learningsBytes equals the actual section bytes persisted in context-pack.md (untruncated pack)', () => {
+  const c = singleLearningContext();
+  const res = run(c, ['orient', '--query', QUERY]);
+  assert.equal(res.status, 0, res.stderr || res.stdout);
+  const out = JSON.parse(res.stdout);
+  assert.equal(out.learnings.length, 1);
+
+  const pack = fs.readFileSync(path.join(c.ws, '.harness', 'context-pack.md'), 'utf8');
+  assert.match(pack, /## Learnings \(memory\)/);
+  assert.doesNotMatch(pack, /truncated to 2KB budget/);
+
+  const expected = locateLearningsSectionBytes(pack);
+  assert.ok(expected > 0);
+  assert.equal(out.learningsBytes, expected);
+});
+
+test('a large plan body pushes the learnings section past the 2KB cap: learningsBytes reports 0, matching the pack that actually shipped', () => {
+  // Reproduces the coordinator's finding: a large plan body earlier in the
+  // pack can consume the whole 2KB budget before the learnings section is
+  // ever reached, so the section never survives into the written pack even
+  // though `learnings` was genuinely ranked and non-empty.
+  const c = singleLearningContext();
+  writePaddedActivePlan(c.ws, 2500);
+
+  const res = run(c, ['orient', '--query', QUERY]);
+  assert.equal(res.status, 0, res.stderr || res.stdout);
+  const out = JSON.parse(res.stdout);
+  assert.equal(out.learnings.length, 1, 'learnings are still ranked/surfaced in the JSON result');
+
+  const pack = fs.readFileSync(path.join(c.ws, '.harness', 'context-pack.md'), 'utf8');
+  assert.doesNotMatch(pack, /## Learnings \(memory\)/, 'the learnings section must not survive this pack');
+  assert.match(pack, /truncated to 2KB budget/);
+  assert.equal(out.learningsBytes, 0);
+
+  const event = lastOrientEvent(c.ws);
+  assert.equal(event.learningsBytes, 0, JSON.stringify(event));
+});
+
+test('a mid-section truncation cut: learningsBytes reports only the bytes that actually survived, not the full section', () => {
+  // Control: this exact fixture's full, untruncated section size.
+  const control = singleLearningContext();
+  const controlRes = run(control, ['orient', '--query', QUERY]);
+  assert.equal(controlRes.status, 0, controlRes.stderr || controlRes.stdout);
+  const fullBytes = JSON.parse(controlRes.stdout).learningsBytes;
+  assert.ok(fullBytes > 0);
+
+  // n=1200 is an empirically-tuned pad against this exact fixture: large
+  // enough to trigger the 2KB truncation, small enough that the cut lands
+  // INSIDE the learnings section — the header survives, "## Next tools"
+  // never appears, and only part of the section's content makes it through.
+  const c = singleLearningContext();
+  writePaddedActivePlan(c.ws, 1200);
+  const res = run(c, ['orient', '--query', QUERY]);
+  assert.equal(res.status, 0, res.stderr || res.stdout);
+  const out = JSON.parse(res.stdout);
+
+  const pack = fs.readFileSync(path.join(c.ws, '.harness', 'context-pack.md'), 'utf8');
+  assert.match(pack, /## Learnings \(memory\)/, 'the section header itself must survive for this to be a partial-cut case');
+  assert.doesNotMatch(pack, /## Next tools/, 'the next section must NOT survive, or this is not a partial cut');
+  assert.match(pack, /truncated to 2KB budget/);
+
+  const expected = locateLearningsSectionBytes(pack);
+  assert.ok(expected > 0, 'sanity: some bytes of the section did survive');
+  assert.equal(out.learningsBytes, expected);
+  assert.ok(out.learningsBytes < fullBytes, `expected a partial section smaller than the full ${fullBytes} bytes, got ${out.learningsBytes}`);
+});

@@ -20,6 +20,35 @@ export function buildLearningsLines(learnings) {
   return lines;
 }
 
+const LEARNINGS_HEADER = '## Learnings (memory)';
+const TRUNCATION_MARKER = '…(truncated to 2KB budget)';
+
+/**
+ * Measure the byte length of the "## Learnings (memory)" section as it
+ * ACTUALLY survives in a built pack body — from the section header up to
+ * whichever comes first: the next "## " heading, the truncation marker, or
+ * the end of the string. Returns 0 when the header is absent entirely,
+ * which covers both "no learnings were ranked" and "the section was
+ * truncated away before the final byte slice ever reached it" — a large
+ * plan body earlier in the pack can push the whole learnings section past
+ * the 2 KB cap, in which case it must cost 0, not the bytes it would have
+ * cost had it fit.
+ *
+ * This must be called on the REAL pack body a caller is about to write, not
+ * on buildLearningsLines' pre-truncation output — that output only tells you
+ * what orient attempted to inject, not what the pack actually carries.
+ */
+export function learningsSectionBytes(packBody) {
+  const start = packBody.indexOf(LEARNINGS_HEADER);
+  if (start === -1) return 0;
+  const searchFrom = start + LEARNINGS_HEADER.length;
+  const nextHeader = packBody.indexOf('\n## ', searchFrom);
+  const truncation = packBody.indexOf(TRUNCATION_MARKER, searchFrom);
+  const boundaries = [nextHeader, truncation].filter((i) => i !== -1);
+  const end = boundaries.length ? Math.min(...boundaries) : packBody.length;
+  return Buffer.byteLength(packBody.slice(start, end), 'utf8');
+}
+
 export function buildContextPack({
   query,
   recall,
