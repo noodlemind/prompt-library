@@ -96,10 +96,12 @@ function splitLedger(ledger) {
   return { consumed, quarantined };
 }
 
-// Task 5 adds a `promoted` status to this exclusion list — deliberately not
-// pre-added here since no writer sets that status yet.
+// A learning with `promoted_to` set has been recorded as promoted — it drops
+// out of every active-learning surface (cap counts, promotion candidates,
+// ranking, rebuild) exactly like retired/disputed/superseded, even though
+// `promote` leaves its own `status` field untouched.
 export function isActiveFm(fm) {
-  return !fm.superseded_by && !['retired', 'disputed'].includes(fm.status);
+  return !fm.superseded_by && !fm.promoted_to && !['retired', 'disputed'].includes(fm.status);
 }
 
 export function activeLearnings(learnings) {

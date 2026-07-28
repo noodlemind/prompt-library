@@ -196,10 +196,11 @@ const CATALOG = [
           ['--trigger <t>', 'applicability condition (required)'],
           ['--domain <d>', 'learning domain directory (default general)'],
         ] },
-      { name: 'learning', desc: 'human authority over one learning: retire, dispute, or confirm',
-        sig: '<retire|dispute|confirm> <id> --reason "<r>"',
+      { name: 'learning', desc: 'human authority over one learning: retire, dispute, confirm, or promote',
+        sig: '<retire|dispute|confirm|promote> <id> [--reason "<r>"] [--to <path>]',
         options: [
           ['--reason <r>', 'required for retire/dispute; recorded in the store commit'],
+          ['--to <path>', 'primitive path recorded on promote (behavior supersedes knowledge)'],
         ] },
       { name: 'learnings', desc: 'paged listing of learnings with provenance and failure annotations',
         sig: '[domain] [--why <id>]',

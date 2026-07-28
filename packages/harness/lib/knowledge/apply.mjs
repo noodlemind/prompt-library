@@ -114,7 +114,7 @@ function extractAnchors({ workspace, episodes }) {
   return [...found].sort().slice(0, ANCHOR_CAP);
 }
 
-function renderLearning({ trigger, body, episodes, anchors = [], origin, status, source, supersededBy, mergedFrom }) {
+function renderLearning({ trigger, body, episodes, anchors = [], origin, status, source, supersededBy, mergedFrom, promotedTo }) {
   const lines = [
     '---',
     'schema: 1',
@@ -138,6 +138,7 @@ function renderLearning({ trigger, body, episodes, anchors = [], origin, status,
   lines.push(`superseded_by: ${supersededBy || 'null'}`);
   lines.push(`last_confirmed: ${todayClamped()}`);
   if (mergedFrom?.length) lines.push(`merged_from: [${mergedFrom.join(', ')}]`);
+  if (promotedTo) lines.push(`promoted_to: ${promotedTo}`);
   lines.push(`origin: ${origin}`);
   lines.push('---', '', body.trim(), '');
   return lines.join('\n');
@@ -711,14 +712,17 @@ function strengthenLearning(target, episodes, workspace) {
     source: fm.source || 'auto',
     supersededBy: fm.superseded_by || null,
     mergedFrom: null,
+    // A promoted learning that later gains more evidence must not have its
+    // promotion silently erased — STRENGTHEN carries the existing
+    // promoted_to (if any) forward, unlike a fresh ADD/SUPERSEDE/MERGE write
+    // which never starts out already promoted.
+    promotedTo: fm.promoted_to || null,
   });
   fs.writeFileSync(target.file, content, 'utf8');
 }
 
 export function rebuildIndex(dir) {
-  const active = listLearnings(dir).filter(
-    (l) => !l.fm.superseded_by && !['retired', 'disputed'].includes(l.fm.status)
-  );
+  const active = listLearnings(dir).filter((l) => isActiveFm(l.fm));
   const lines = [
     '# Learnings Index',
     '',

@@ -42,6 +42,7 @@ function failureCounts(workspace) {
 // carries a single status field and the render step needs it to fence pending rows.
 function effectiveStatus(fm) {
   if (fm.superseded_by) return 'superseded';
+  if (fm.promoted_to) return 'promoted';
   return fm.status || 'active';
 }
 
@@ -82,7 +83,7 @@ export function listingView({ workspace, domain, home }) {
     })
     .sort((a, b) => a.id.localeCompare(b.id));
 
-  const active = learnings.filter((l) => !['retired', 'disputed', 'superseded'].includes(l.status)).length;
+  const active = learnings.filter((l) => !['retired', 'disputed', 'superseded', 'promoted'].includes(l.status)).length;
   return { learnings, counts: { active, total: learnings.length } };
 }
 
@@ -107,6 +108,7 @@ export function whyView({ workspace, id, home }) {
     source: fm.source || 'auto',
     lastConfirmed: fm.last_confirmed || null,
     supersededBy: fm.superseded_by || null,
+    promotedTo: fm.promoted_to || null,
     mergedFrom: parseMergedFrom(fm.merged_from),
     episodes: (fm.episodes || []).map((e) => ({ path: e.path, kind: e.kind, plan: e.plan || null })),
     verified,

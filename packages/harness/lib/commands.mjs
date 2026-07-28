@@ -981,7 +981,7 @@ export async function cmdLearning(argv) {
   const workspace = path.resolve(flags.workspace);
   const action = argv[0] && !argv[0].startsWith('--') ? argv[0] : null;
   const id = argv[1] && !argv[1].startsWith('--') ? argv[1] : null;
-  const result = setLearningStatus({ workspace, id, action, reason: flags.reason });
+  const result = setLearningStatus({ workspace, id, action, reason: flags.reason, to: flags.to });
   writeEvent(workspace, flags, {
     type: 'learning',
     command: 'learning',
@@ -994,14 +994,13 @@ export async function cmdLearning(argv) {
   if (flags.json) {
     emitJson(flags, result);
   } else if (result.pass) {
-    console.log(
-      ui.line({ state: action === 'retire' ? 'warn' : 'ok', key: 'learning', value: `${id} → ${result.status}` })
-    );
+    const value = action === 'promote' ? `${id} → promoted (${flags.to})` : `${id} → ${result.status}`;
+    console.log(ui.line({ state: action === 'retire' ? 'warn' : 'ok', key: 'learning', value }));
   } else if (result.exitCode === EXIT.usage) {
     for (const l of ui.errorBlock({
       code: 'E_USAGE',
       message: result.blockedReason,
-      fix: 'harness learning <retire|dispute|confirm> <id> --reason "<r>"',
+      fix: 'harness learning <retire|dispute|confirm|promote> <id> [--reason "<r>"] [--to <path>]',
       exit: EXIT.usage,
     })) {
       console.error(l);

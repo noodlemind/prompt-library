@@ -25,6 +25,7 @@ export function rankLearnings({ workspace, query, limit = 3, home, include }) {
   const results = [];
   for (const l of learnings) {
     if (l.fm.superseded_by) continue;
+    if (l.fm.promoted_to) continue;
     if (['retired', 'disputed'].includes(l.fm.status)) continue;
     if (staleExcluded[l.id]) continue;
     // Optional caller-supplied predicate (e.g. the knowledge eval's temporal

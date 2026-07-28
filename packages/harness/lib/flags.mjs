@@ -74,6 +74,7 @@ export function parseFlags(argv) {
     ops: null,
     domain: null,
     reason: null,
+    to: null,
     why: null,
     yes: false,
   };
@@ -159,6 +160,8 @@ export function parseFlags(argv) {
     else if (a === '--domain') flags.domain = argv[++i];
     else if (a.startsWith('--reason=')) flags.reason = a.split('=').slice(1).join('=');
     else if (a === '--reason') flags.reason = argv[++i];
+    else if (a.startsWith('--to=')) flags.to = a.split('=').slice(1).join('=');
+    else if (a === '--to') flags.to = argv[++i];
     else if (a.startsWith('--why=')) flags.why = a.split('=').slice(1).join('=');
     else if (a === '--why') flags.why = argv[++i];
     else if (a === '--yes') flags.yes = true;
