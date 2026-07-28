@@ -11,7 +11,8 @@ import { ensureHarnessDir, readSession, writeSession } from './session.mjs';
 import { pickActivePlan, listPlanRels } from './plan-parse.mjs';
 import { parseQueryFromArgv } from './argv.mjs';
 import { rankLearnings } from './knowledge/retrieve.mjs';
-import { readStoreConfig } from './knowledge/store.mjs';
+import { readStoreConfig, storeDir } from './knowledge/store.mjs';
+import { consolidateStatus } from './knowledge/consolidate.mjs';
 
 export function runOrient({ workspace, copilotHome, flags, query }) {
   const q = query || flags.query || '';
@@ -103,6 +104,28 @@ export function runOrient({ workspace, copilotHome, flags, query }) {
     // Staleness is advisory; never block orientation on it.
   }
 
+  // Session-start debt drain: nudge toward `harness consolidate --candidates`
+  // when unconsolidated episodes have piled up. consolidateStatus touches the
+  // store via ensureStore, so it is only called once the store already
+  // exists — orient (a passive, every-session command) must never
+  // materialize a knowledge store for a workspace that never opted in.
+  let knowledgeDebt = null;
+  try {
+    if (fs.existsSync(storeDir(workspace))) {
+      const debt = consolidateStatus({ workspace, copilotHome });
+      if (debt.mode === 'on') {
+        knowledgeDebt = { debt: debt.debt, threshold: debt.threshold, due: debt.due };
+        // Debounce: suppress the hint while an active plan has phases in
+        // flight so the nudge doesn't interrupt work already underway.
+        if (debt.due && !active) {
+          nextTools.push(`harness consolidate --candidates  # knowledge debt ${debt.debt}/${debt.threshold}`);
+        }
+      }
+    }
+  } catch {
+    // Advisory; never block orientation on it.
+  }
+
   const packBody = buildContextPack({
     query: q,
     recall,
@@ -155,6 +178,7 @@ export function runOrient({ workspace, copilotHome, flags, query }) {
       : null,
     contextPack: packRel,
     repoMap: repoMapRef,
+    knowledgeDebt,
     gateStatus: newSession.gateStatus,
     blockedReason: newSession.blockedReason,
     nextTools,

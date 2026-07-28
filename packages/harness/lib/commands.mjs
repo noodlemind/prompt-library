@@ -453,6 +453,7 @@ export async function cmdOrient(argv) {
     exitCode: 0,
     blockedReason: result.blockedReason,
     usage: usageFields({ input: query, output: orientPack }),
+    learnings: (result.learnings || []).map((l) => l.id),
   });
 
   if (flags.json) {
