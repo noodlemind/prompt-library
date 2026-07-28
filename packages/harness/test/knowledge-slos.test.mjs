@@ -49,6 +49,9 @@ test('knowledgeSlos computes cited/surfaced utilization and consolidation engage
   assert.equal(slos.cited, 1);
   assert.equal(slos.citedSurfaced, 1);
   assert.equal(slos.utilization, 0.33);
+  assert.equal(slos.surfacedOccurrences, 3);
+  assert.equal(slos.citedOccurrences, 1);
+  assert.equal(slos.utilizationWeighted, 0.33);
   assert.equal(slos.consolidations, 2);
   assert.equal(slos.humanActions, 3);
   assert.equal(slos.engagement, 1.5);
@@ -60,6 +63,9 @@ test('knowledgeSlos is null-safe with no surfaced learnings or consolidations', 
     cited: 0,
     citedSurfaced: 0,
     utilization: null,
+    surfacedOccurrences: 0,
+    citedOccurrences: 0,
+    utilizationWeighted: null,
     consolidations: 0,
     humanActions: 0,
     engagement: null,
@@ -79,6 +85,40 @@ test('knowledgeSlos separates cited-but-never-surfaced ids from the surfaced int
   assert.equal(slos.cited, 2);
   assert.equal(slos.citedSurfaced, 1);
   assert.equal(slos.utilization, 1);
+  assert.equal(slos.surfacedOccurrences, 1);
+  assert.equal(slos.citedOccurrences, 2);
+  assert.equal(slos.utilizationWeighted, 2);
+});
+
+test('knowledgeSlos weights citation by occurrence: one learning surfaced repeatedly without repeat citation scores low despite 100% unique utilization', () => {
+  const events = [
+    ...Array.from({ length: 25 }, () => ({ type: 'orient', learnings: ['x'] })),
+    { type: 'verify', learnings: ['x'] },
+  ];
+  const slos = knowledgeSlos(events);
+  assert.equal(slos.surfaced, 1);
+  assert.equal(slos.cited, 1);
+  assert.equal(slos.citedSurfaced, 1);
+  assert.equal(slos.utilization, 1);
+  assert.equal(slos.surfacedOccurrences, 25);
+  assert.equal(slos.citedOccurrences, 1);
+  assert.equal(slos.utilizationWeighted, 0.04);
+});
+
+test('knowledgeSlos stays healthy for small surfaced/cited counts even when the ratio is imperfect', () => {
+  const events = [
+    { type: 'orient', learnings: ['a'] },
+    { type: 'orient', learnings: ['b'] },
+    { type: 'orient', learnings: ['c'] },
+    { type: 'verify', learnings: ['a', 'b'] },
+  ];
+  const slos = knowledgeSlos(events);
+  assert.equal(slos.surfaced, 3);
+  assert.equal(slos.cited, 2);
+  assert.equal(slos.citedSurfaced, 2);
+  assert.equal(slos.surfacedOccurrences, 3);
+  assert.equal(slos.citedOccurrences, 2);
+  assert.equal(slos.utilizationWeighted, 0.67);
 });
 
 test('buildReport attaches slos.knowledge computed from the same event window', () => {
@@ -98,7 +138,7 @@ test('renderReport renders an ok knowledge line when utilization clears the nois
   ];
   const report = buildReport({ workspace: os.tmpdir(), events });
   const text = renderReport(report, pipeUi);
-  assert.match(text, /\[ok\]\s+knowledge\s+utilization 100% \(1\/1 surfaced\)/);
+  assert.match(text, /\[ok\]\s+knowledge\s+utilization 100% unique · 100% weighted \(1\/1 surfaced\)/);
   assert.match(text, /engagement 0 human actions\/1 consolidations/);
 });
 
@@ -106,8 +146,9 @@ test('renderReport flags knowledge utilization as warn under 15% once surfaced >
   const events = Array.from({ length: 20 }, (_, i) => ({ type: 'orient', learnings: [`id${i}`] }));
   const report = buildReport({ workspace: os.tmpdir(), events });
   assert.equal(report.slos.knowledge.utilization, 0);
+  assert.equal(report.slos.knowledge.utilizationWeighted, 0);
   const text = renderReport(report, pipeUi);
-  assert.match(text, /\[!\]\s+knowledge\s+utilization 0% \(0\/20 surfaced\)/);
+  assert.match(text, /\[!\]\s+knowledge\s+utilization 0% unique · 0% weighted \(0\/20 surfaced\)/);
 });
 
 test('renderReport shows the cited/surfaced intersection, not raw cited, when a cited id was never surfaced', () => {
@@ -117,7 +158,17 @@ test('renderReport shows the cited/surfaced intersection, not raw cited, when a 
   ];
   const report = buildReport({ workspace: os.tmpdir(), events });
   const text = renderReport(report, pipeUi);
-  assert.match(text, /\[ok\]\s+knowledge\s+utilization 100% \(1\/1 surfaced\)/);
+  assert.match(text, /\[ok\]\s+knowledge\s+utilization 100% unique · 200% weighted \(1\/1 surfaced\)/);
+});
+
+test('renderReport warns on low weighted utilization even when unique utilization is 100%', () => {
+  const events = [
+    ...Array.from({ length: 25 }, () => ({ type: 'orient', learnings: ['x'] })),
+    { type: 'verify', learnings: ['x'] },
+  ];
+  const report = buildReport({ workspace: os.tmpdir(), events });
+  const text = renderReport(report, pipeUi);
+  assert.match(text, /\[!\]\s+knowledge\s+utilization 100% unique · 4% weighted \(1\/1 surfaced\)/);
 });
 
 test('renderReport skips the knowledge section entirely with no surfaced learnings or consolidations', () => {
@@ -150,6 +201,9 @@ test('harness report --json surfaces slos.knowledge cited-over-surfaced utilizat
     cited: 1,
     citedSurfaced: 1,
     utilization: 0.33,
+    surfacedOccurrences: 3,
+    citedOccurrences: 1,
+    utilizationWeighted: 0.33,
     consolidations: 2,
     humanActions: 3,
     engagement: 1.5,
@@ -165,7 +219,7 @@ test('plain harness report renders a knowledge line', () => {
 
   const res = run(c, ['report'], { json: false });
   assert.equal(res.status, 0, res.stderr || res.stdout);
-  assert.match(res.stdout, /\[ok\]\s+knowledge\s+utilization 100% \(1\/1 surfaced\)/);
+  assert.match(res.stdout, /\[ok\]\s+knowledge\s+utilization 100% unique · 100% weighted \(1\/1 surfaced\)/);
 });
 
 test('harness doctor K1 fails (optional) when consolidate events exist but the knowledge store is missing', () => {
@@ -210,6 +264,33 @@ test('harness doctor K3 fails (optional) when utilization is under 15% with 20+ 
 test('harness doctor K3 passes below the 20-surfaced floor even with 0% utilization', () => {
   const c = ctx();
   writeEvents(c.ws, [{ version: 2, type: 'orient', session: 's1', learnings: ['a'] }]);
+
+  const res = run(c, ['doctor']);
+  const doc = JSON.parse(res.stdout);
+  const k3 = doc.checks.find((check) => check.id === 'K3');
+  assert.ok(k3, 'K3 present');
+  assert.equal(k3.pass, true);
+});
+
+test('harness doctor K3 fails (optional) when weighted utilization is under 15% despite 100% unique utilization', () => {
+  const c = ctx();
+  const events = Array.from({ length: 25 }, () => ({
+    version: 2, type: 'orient', session: 's1', learnings: ['x'],
+  })).concat([{ version: 2, type: 'verify', session: 's1', learnings: ['x'] }]);
+  writeEvents(c.ws, events);
+
+  const res = run(c, ['doctor', '--verbose'], { json: false });
+  assert.match(res.stdout, /\[!\]\s+K3\b/);
+});
+
+test('harness doctor K3 passes when weighted utilization is healthy for small surfaced/cited counts', () => {
+  const c = ctx();
+  writeEvents(c.ws, [
+    { version: 2, type: 'orient', session: 's1', learnings: ['a'] },
+    { version: 2, type: 'orient', session: 's1', learnings: ['b'] },
+    { version: 2, type: 'orient', session: 's1', learnings: ['c'] },
+    { version: 2, type: 'verify', session: 's1', learnings: ['a', 'b'] },
+  ]);
 
   const res = run(c, ['doctor']);
   const doc = JSON.parse(res.stdout);

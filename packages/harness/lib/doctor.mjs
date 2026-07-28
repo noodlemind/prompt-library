@@ -347,7 +347,7 @@ function knowledgeChecks({ workspace, copilotHome }) {
 
   try {
     const slos = knowledgeSlos(loadReportEvents({ workspace }));
-    const noisy = slos.utilization !== null && slos.utilization < 0.15 && slos.surfaced >= 20;
+    const noisy = slos.utilizationWeighted !== null && slos.utilizationWeighted < 0.15 && slos.surfacedOccurrences >= 20;
     checks.push({
       id: 'K3',
       name: 'Knowledge utilization above noise threshold',

@@ -152,19 +152,34 @@ export function trendRegression(events) {
 /** Knowledge-layer SLOs: cited/surfaced utilization and consolidation engagement.
  * Surfaced = learning ids `orient` injected into a pack; cited = learning ids
  * `verify --learnings` reports as actually applied. Engagement pairs human
- * `remember`/`learning` actions against applied `consolidate` decisions. */
+ * `remember`/`learning` actions against applied `consolidate` decisions.
+ *
+ * `utilization` is unique-id based (definition stability: does citation ever
+ * happen for a given learning at all). `utilizationWeighted` counts raw
+ * occurrences instead — the same learning surfaced 25 times and cited once
+ * scores 1.0 unique but 0.04 weighted — so repeated surfacing without
+ * citation (noise) is visible even when every distinct id was cited once. */
 export function knowledgeSlos(events) {
   const surfaced = new Set(); const cited = new Set();
+  let surfacedOccurrences = 0; let citedOccurrences = 0;
   let consolidations = 0; let humanActions = 0;
   for (const e of events) {
-    if (e.type === 'orient' && Array.isArray(e.learnings)) e.learnings.forEach((id) => surfaced.add(id));
-    if (e.type === 'verify' && Array.isArray(e.learnings)) e.learnings.forEach((id) => cited.add(id));
+    if (e.type === 'orient' && Array.isArray(e.learnings)) {
+      e.learnings.forEach((id) => surfaced.add(id));
+      surfacedOccurrences += e.learnings.length;
+    }
+    if (e.type === 'verify' && Array.isArray(e.learnings)) {
+      e.learnings.forEach((id) => cited.add(id));
+      citedOccurrences += e.learnings.length;
+    }
     if (e.type === 'consolidate' && e.decision === 'apply' && e.result === 'pass') consolidations += 1;
     if (e.type === 'remember' || e.type === 'learning') humanActions += 1;
   }
   const citedSurfaced = [...cited].filter((id) => surfaced.has(id)).length;
   return { surfaced: surfaced.size, cited: cited.size, citedSurfaced,
     utilization: surfaced.size ? Number((citedSurfaced / surfaced.size).toFixed(2)) : null,
+    surfacedOccurrences, citedOccurrences,
+    utilizationWeighted: surfacedOccurrences ? Number((citedOccurrences / surfacedOccurrences).toFixed(2)) : null,
     consolidations, humanActions,
     engagement: consolidations ? Number((humanActions / consolidations).toFixed(2)) : null };
 }
@@ -371,9 +386,9 @@ export function renderReport(report, ui = createStyle()) {
     lines.push('');
     lines.push(
       ui.line({
-        state: k.utilization !== null && k.utilization < 0.15 && k.surfaced >= 20 ? 'warn' : 'ok',
+        state: k.utilizationWeighted !== null && k.utilizationWeighted < 0.15 && k.surfacedOccurrences >= 20 ? 'warn' : 'ok',
         key: 'knowledge',
-        value: `utilization ${fmtPct(k.utilization)} (${k.citedSurfaced}/${k.surfaced} surfaced)`,
+        value: `utilization ${fmtPct(k.utilization)} unique · ${fmtPct(k.utilizationWeighted)} weighted (${k.citedSurfaced}/${k.surfaced} surfaced)`,
         note: `engagement ${k.engagement ?? '-'} human actions/${k.consolidations} consolidations`,
         keyWidth,
       })
