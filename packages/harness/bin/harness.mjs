@@ -103,6 +103,7 @@ const CATALOG = [
           ['--limit <n>', 'recall result count (default 3)'],
           ['-c, --collection <name>', 'filter by knowledge/collections.yaml'],
           ['--min-score <n>', 'minimum score (default 0.15)'],
+          ['--explain', 'decompose learning ranking (deterministic)'],
         ] },
       { name: 'gate', desc: 'edit preconditions before editFiles',
         sig: '[--phase implement|verify] [--plan <path>]',

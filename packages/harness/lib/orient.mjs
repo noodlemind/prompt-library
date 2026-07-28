@@ -2,7 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { rankRecall, findMatchingPlans } from './recall-rank.mjs';
 import { runGate } from './gate.mjs';
-import { buildContextPack } from './context-pack.mjs';
+import { buildContextPack, buildLearningsLines } from './context-pack.mjs';
 import { buildPlanView } from './plan-view.mjs';
 import { buildRepoMap } from './repo-map/index.mjs';
 import { indexStatus } from './index-status.mjs';
@@ -10,7 +10,7 @@ import { extractGoalFromPlan } from './plan-goal.mjs';
 import { ensureHarnessDir, readSession, writeSession } from './session.mjs';
 import { pickActivePlan, listPlanRels } from './plan-parse.mjs';
 import { parseQueryFromArgv } from './argv.mjs';
-import { rankLearnings } from './knowledge/retrieve.mjs';
+import { rankLearnings, explainLearnings } from './knowledge/retrieve.mjs';
 import { readStoreConfig, storeDir } from './knowledge/store.mjs';
 import { consolidateStatus } from './knowledge/consolidate.mjs';
 
@@ -67,15 +67,32 @@ export function runOrient({ workspace, copilotHome, flags, query }) {
   // Learnings (semantic memory): read-only, advisory, deterministic. Never
   // block orientation on the knowledge store. Kill switch: 'off' and
   // 'capture-only' both suppress injection; 'on' and 'freeze' keep it.
+  // --explain shares this try/catch: it decomposes the same ranking call,
+  // so it must be gated identically and never throw into orientation either.
   let learnings = [];
+  let explain = null;
   try {
     const { mode } = readStoreConfig(workspace, {});
     if (mode !== 'off' && mode !== 'capture-only') {
       learnings = rankLearnings({ workspace, query: q, limit: 3 });
+      if (flags.explain) {
+        explain = explainLearnings({ workspace, query: q });
+      }
     }
   } catch {
     learnings = [];
+    explain = null;
   }
+
+  // Injected-token ledger: bytes of the "## Learnings (memory)" section as
+  // buildContextPack would render it for these `learnings`, via the same
+  // line-builder (buildLearningsLines) — measured BEFORE the pack's 2KB
+  // truncation, so this is what orient attempted to inject, not necessarily
+  // every byte that survives truncation in an already-full pack. That is the
+  // cost side of the token ledger only; no benefit/"tokens saved" claim.
+  const learningsBytes = learnings.length
+    ? Buffer.byteLength(buildLearningsLines(learnings).join('\n'), 'utf8')
+    : 0;
 
   // Deterministic, query-ranked code orientation written alongside the pack.
   // Advisory only — never block orientation if map generation or the write fails.
@@ -165,6 +182,8 @@ export function runOrient({ workspace, copilotHome, flags, query }) {
   return {
     recall,
     learnings,
+    explain,
+    learningsBytes,
     plans,
     activePlan: active ? { path: active.path, status: active.status, plan_lock: active.plan_lock } : null,
     planGoal: planGoal

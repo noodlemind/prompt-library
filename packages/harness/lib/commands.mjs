@@ -455,6 +455,7 @@ export async function cmdOrient(argv) {
     blockedReason: result.blockedReason,
     usage: usageFields({ input: query, output: orientPack }),
     learnings: (result.learnings || []).map((l) => l.id),
+    learningsBytes: result.learningsBytes,
   });
 
   if (flags.json) {
@@ -468,6 +469,15 @@ export async function cmdOrient(argv) {
         note: `recall ${result.recall.length} · learnings ${result.learnings?.length ?? 0} · plans ${result.plans.length} · gate ${result.gateStatus}`,
       })
     );
+    if (result.explain) {
+      const qt = result.explain.queryTokens.length;
+      for (const c of result.explain.candidates) {
+        const decomposition = c.excluded
+          ? `excluded: ${c.excluded}`
+          : `hits ${c.hits}/${qt} × damping ${c.damping} = ${c.score}`;
+        console.log(ui.paint('muted', `  ${c.id} ${decomposition}`));
+      }
+    }
     if (result.blockedReason) {
       console.log(ui.line({ state: 'error', key: 'blocked', value: result.blockedReason }));
     }

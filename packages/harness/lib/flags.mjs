@@ -39,6 +39,7 @@ export function parseFlags(argv) {
     targets: new Set(['vscode', 'cli', 'intellij']),
     workspace: process.cwd(),
     query: null,
+    explain: false,
     phase: 'implement',
     limit: null,
     refresh: false,
@@ -84,6 +85,7 @@ export function parseFlags(argv) {
     if (a === '--dry-run') flags.dryRun = true;
     else if (a === '--verbose' || a === '-v') flags.verbose = true;
     else if (a === '--json') flags.json = true;
+    else if (a === '--explain') flags.explain = true;
     else if (a === '--refresh') flags.refresh = true;
     else if (a === '--semantic') flags.semantic = true;
     else if (a === '--include-plans') flags.includePlans = true;

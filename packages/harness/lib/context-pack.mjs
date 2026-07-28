@@ -2,6 +2,24 @@ const MAX_BYTES = 2048;
 
 export const CONTEXT_PACK_MAX_BYTES = MAX_BYTES;
 
+/**
+ * The exact lines buildContextPack injects for the "## Learnings (memory)"
+ * section — factored out so callers (orient's token ledger) can measure the
+ * section's byte cost without re-deriving the pack's line format themselves.
+ * Empty array when there is nothing to inject (mirrors the `if (learnings?.length)`
+ * gate below).
+ */
+export function buildLearningsLines(learnings) {
+  if (!learnings?.length) return [];
+  const lines = ['', '## Learnings (memory)'];
+  lines.push(`Applied learnings: ${learnings.map((l) => l.id).join(', ')}`);
+  for (const l of learnings) {
+    const fence = l.advisory ? ' [unverified memory — advisory]' : '';
+    lines.push(`- [${l.id}]${fence} ${l.trigger} → ${l.claimLine}`);
+  }
+  return lines;
+}
+
 export function buildContextPack({
   query,
   recall,
@@ -67,14 +85,7 @@ export function buildContextPack({
 
   // Semantic memory: attributed by id so behavior driven by a learning is
   // always traceable; insight-derived claims carry the advisory fence.
-  if (learnings?.length) {
-    lines.push('', '## Learnings (memory)');
-    lines.push(`Applied learnings: ${learnings.map((l) => l.id).join(', ')}`);
-    for (const l of learnings) {
-      const fence = l.advisory ? ' [unverified memory — advisory]' : '';
-      lines.push(`- [${l.id}]${fence} ${l.trigger} → ${l.claimLine}`);
-    }
-  }
+  lines.push(...buildLearningsLines(learnings));
 
   lines.push('', '## Next tools', ...(nextTools || []).map((t) => `- \`${t}\``));
 

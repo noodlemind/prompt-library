@@ -169,6 +169,28 @@ export function knowledgeSlos(events) {
     engagement: consolidations ? Number((humanActions / consolidations).toFixed(2)) : null };
 }
 
+/** Injected-token ledger: the COST side of the knowledge layer's accounting.
+ * `injectedTokens` is a rough chars/4 estimate (same heuristic used
+ * elsewhere in this file) over every `orient` event's `learningsBytes` —
+ * bytes of the "## Learnings (memory)" pack section that orient actually
+ * attempted to inject. This is spend, not savings: whether an injected
+ * learning ever changed an agent's behavior for the better is unmeasured,
+ * so there is no "tokens saved" figure here or anywhere in this module —
+ * see the knowledge-layer honesty contract. */
+export function knowledgeTokenLedger(events) {
+  let bytes = 0;
+  let orientsWithLearnings = 0;
+  let consolidations = 0;
+  for (const e of events) {
+    if (e.type === 'orient' && e.learningsBytes) {
+      bytes += e.learningsBytes;
+      orientsWithLearnings += 1;
+    }
+    if (e.type === 'consolidate' && e.decision === 'apply' && e.result === 'pass') consolidations += 1;
+  }
+  return { injectedTokens: Math.ceil(bytes / 4), orientsWithLearnings, consolidations };
+}
+
 // How many per-session performance rows the report shows (highest-token first).
 const SESSION_PERF_CAP = 10;
 
@@ -236,7 +258,7 @@ export function buildReport({ workspace, copilotHome, events }) {
       recoveryLoops: recoveryLoops(all),
       trend: trendRegression(all),
     },
-    slos: { knowledge: knowledgeSlos(all) },
+    slos: { knowledge: knowledgeSlos(all), knowledgeTokens: knowledgeTokenLedger(all) },
   };
 }
 
@@ -356,6 +378,15 @@ export function renderReport(report, ui = createStyle()) {
         keyWidth,
       })
     );
+    const kt = report.slos?.knowledgeTokens;
+    if (kt && !(kt.injectedTokens === 0 && kt.orientsWithLearnings === 0 && kt.consolidations === 0)) {
+      lines.push(
+        ui.paint(
+          'muted',
+          `  ~${fmtGroup(kt.injectedTokens)} tok injected across ${kt.orientsWithLearnings} orients · ${kt.consolidations} consolidations`
+        )
+      );
+    }
   }
 
   const f = report.flags;
