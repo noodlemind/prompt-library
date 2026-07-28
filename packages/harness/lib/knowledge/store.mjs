@@ -75,7 +75,7 @@ export function ensureStore(workspace, { home, dryRun = false } = {}) {
   return { dir, created, git: gitOk };
 }
 
-const KNOWLEDGE_MODES = new Set(['on', 'off', 'freeze', 'capture-only']);
+export const KNOWLEDGE_MODES = new Set(['on', 'suggest', 'off', 'freeze', 'capture-only']);
 
 /**
  * Kill-switch mode for the knowledge layer, read from <store>/config.json.

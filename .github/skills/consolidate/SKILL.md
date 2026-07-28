@@ -86,21 +86,31 @@ Write `{ "schema": 1, "ops": [...] }` to `.harness/consolidate-ops.json`. This s
 
 `ADD`/`SUPERSEDE` require `domain`, `slug`, `trigger`, `body` (plus `target` for `SUPERSEDE`); `STRENGTHEN`/`SUPERSEDE` require `target` (an existing learning id); `NOOP` needs only `episodes` and an optional `reason`. Every op's `episodes` array is required and non-empty.
 
-### 4. Check mode, then apply or present
+### 4. Check mode, then apply, present, or stop
 
 ```bash
 harness consolidate --status --json
 ```
 
-Read `mode`. Modes are `on | off | freeze | capture-only` — there is no `suggest` mode today, so treat **any mode other than `on`** as the stop condition: present `.harness/consolidate-ops.json` as a reviewable diff for the human instead of applying (`--apply` would itself reject with `E_MODE`).
+Read `mode`. Modes are `on | suggest | off | freeze | capture-only`:
 
-When mode is `on`:
+- **`on`** — apply directly:
 
-```bash
-harness consolidate --apply --ops .harness/consolidate-ops.json --json
-```
+  ```bash
+  harness consolidate --apply --ops .harness/consolidate-ops.json --json
+  ```
 
-Report the ledger line (applied ops and their ids). Report any `E_DISPUTED` rejection verbatim — a disputed target needs a human decision, not a retry.
+  Report the ledger line (applied ops and their ids). Report any `E_DISPUTED` rejection verbatim — a disputed target needs a human decision, not a retry.
+
+- **`suggest`** — never call `--apply` without `--yes`; a bare `--apply` rejects with `E_MODE` on purpose. Present `.harness/consolidate-ops.json` as a reviewable diff (per-op: `ADD`/`STRENGTHEN`/`SUPERSEDE`/`NOOP`, target, trigger/body) and ask the human to approve it in-conversation. Only after that explicit approval, run:
+
+  ```bash
+  harness consolidate --apply --ops .harness/consolidate-ops.json --yes --json
+  ```
+
+  If the human does not approve, stop — leave the ops file for a later run rather than applying unapproved.
+
+- **any other mode** (`off`, `freeze`, `capture-only`) — stop entirely. Present `.harness/consolidate-ops.json` as a reviewable diff for the human; do not attempt `--apply` at all (it would reject with `E_MODE` and there is no `--yes` path out of these modes).
 
 ### 5. Retry once on failure, then quarantine
 
@@ -119,4 +129,4 @@ A cluster that fails twice is left for quarantine — do not attempt a third fix
 
 - Read-only through step 3; the only mutation these steps perform is writing `.harness/consolidate-ops.json`.
 - Never hand-edit a file under the learnings store — `consolidate --apply` alone writes it.
-- The mode gate is authoritative: a non-`on` mode always stops before `--apply`, even mid-session.
+- The mode gate is authoritative: a non-`on`/`suggest` mode always stops before `--apply`, even mid-session; `suggest` stops too unless the human has explicitly approved and `--yes` is passed.

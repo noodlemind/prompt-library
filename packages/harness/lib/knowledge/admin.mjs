@@ -363,7 +363,7 @@ export function purgeAll({ workspace, home }) {
  */
 export function rebuildStore({ workspace, home, yes, copilotHome }) {
   const { mode } = readStoreConfig(workspace, { home });
-  if (mode !== 'on') {
+  if (!['on', 'suggest'].includes(mode)) {
     return {
       pass: false,
       exitCode: 2,

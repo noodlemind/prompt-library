@@ -176,7 +176,7 @@ const CATALOG = [
     group: 'knowledge',
     commands: [
       { name: 'knowledge', desc: 'knowledge layer mode switch and purge (human deletion always wins)',
-        sig: '<on|off|freeze|capture-only> | --status | purge <file|--all>',
+        sig: '<on|suggest|off|freeze|capture-only> | --status | purge <file|--all>',
         options: [
           ['--status', 'show the active mode (default)'],
           ['purge <file>', 'cascade-delete an episode and dependent learnings'],
@@ -187,7 +187,7 @@ const CATALOG = [
         options: [
           ['--status', 'debt vs threshold, quarantine, promotion candidates (default)'],
           ['--candidates', 'deterministic work packet for the consolidation skill'],
-          ['--apply --ops <path>', 'validate and apply an ops JSON (sole writer)'],
+          ['--apply --ops <path>', 'validate and apply an ops JSON (sole writer); suggest mode requires --yes'],
           ['--rebuild --yes', 'T2 reset for model-upgrade regeneration (git history retains learnings)'],
         ] },
       { name: 'remember', desc: 'teach the harness a durable claim (human-teaching episode + learning)',

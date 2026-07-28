@@ -113,7 +113,7 @@ export function runOrient({ workspace, copilotHome, flags, query }) {
   try {
     if (fs.existsSync(storeDir(workspace))) {
       const debt = consolidateStatus({ workspace, copilotHome });
-      if (debt.mode === 'on') {
+      if (['on', 'suggest'].includes(debt.mode)) {
         knowledgeDebt = { debt: debt.debt, threshold: debt.threshold, due: debt.due };
         // Debounce: suppress the hint while an active plan has phases in
         // flight so the nudge doesn't interrupt work already underway.

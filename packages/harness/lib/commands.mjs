@@ -827,7 +827,7 @@ export async function cmdConsolidate(argv) {
         exit: EXIT.usage,
       });
     }
-    const result = applyOps({ workspace, opsPath: path.resolve(flags.ops), dryRun: flags.dryRun });
+    const result = applyOps({ workspace, opsPath: path.resolve(flags.ops), dryRun: flags.dryRun, approve: flags.yes });
     writeEvent(workspace, flags, {
       type: 'consolidate',
       command: 'consolidate',
@@ -1151,8 +1151,6 @@ export async function cmdEvalKnowledge(argv) {
   return 0;
 }
 
-const KNOWLEDGE_MODES = new Set(['on', 'off', 'freeze', 'capture-only']);
-
 // The kill switch and purge cascade. Mode-switching and --status read/write
 // store.mjs's config.json directly; purge is never mode-gated — human
 // deletion always wins — and delegates to knowledge/admin.mjs.
@@ -1160,6 +1158,8 @@ export async function cmdKnowledge(argv) {
   const flags = parseFlags(argv);
   const workspace = path.resolve(flags.workspace);
   const subcommand = argv[0] && !argv[0].startsWith('--') ? argv[0] : null;
+  // Single definition (store.mjs) — commands.mjs no longer keeps its own copy.
+  const { KNOWLEDGE_MODES, writeStoreConfig, readStoreConfig } = await import('./knowledge/store.mjs');
 
   if (subcommand === 'purge') {
     const { purgeEpisode, purgeAll } = await import('./knowledge/admin.mjs');
@@ -1207,7 +1207,6 @@ export async function cmdKnowledge(argv) {
   }
 
   if (subcommand && KNOWLEDGE_MODES.has(subcommand)) {
-    const { writeStoreConfig } = await import('./knowledge/store.mjs');
     writeStoreConfig(workspace, { mode: subcommand });
     writeEvent(workspace, flags, {
       type: 'knowledge',
@@ -1227,7 +1226,6 @@ export async function cmdKnowledge(argv) {
   }
 
   if (!subcommand) {
-    const { readStoreConfig } = await import('./knowledge/store.mjs');
     const { mode } = readStoreConfig(workspace);
     writeEvent(workspace, flags, {
       type: 'knowledge',
@@ -1254,7 +1252,7 @@ export async function cmdKnowledge(argv) {
   for (const l of ui.errorBlock({
     code: 'E_USAGE',
     message: `unknown knowledge mode: ${subcommand}`,
-    fix: 'harness knowledge <on|off|freeze|capture-only> | --status | purge <file|--all>',
+    fix: 'harness knowledge <on|suggest|off|freeze|capture-only> | --status | purge <file|--all>',
     exit: EXIT.usage,
   })) {
     console.error(l);

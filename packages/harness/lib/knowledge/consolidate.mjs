@@ -136,9 +136,9 @@ export function consolidateStatus({ workspace, copilotHome, home }) {
   const learnings = listLearnings(dir);
   const active = activeLearnings(learnings);
   const debt = unconsolidated.length;
-  // Consolidation writes (hints toward --apply) are gated to mode 'on' — a
-  // non-on mode never reports due, however large the debt has grown.
-  const due = mode === 'on' && debt >= CONSOLIDATION_THRESHOLD;
+  // Consolidation writes (hints toward --apply) are gated to 'on'/'suggest' —
+  // any other mode never reports due, however large the debt has grown.
+  const due = ['on', 'suggest'].includes(mode) && debt >= CONSOLIDATION_THRESHOLD;
   return {
     mode,
     debt,

@@ -13,8 +13,10 @@ import { absorbHandEdits } from './admin.mjs';
  * the sole-writer applyOps transaction — the same path consolidate uses.
  */
 export function runRemember({ workspace, copilotHome, flags, argv, log = () => {}, home }) {
+  // remember is human-direct: the human IS the approver, so 'suggest' behaves
+  // like 'on' here (no --yes needed) — only off/freeze/capture-only block it.
   const { mode } = readStoreConfig(workspace, { home });
-  if (mode !== 'on') {
+  if (!['on', 'suggest'].includes(mode)) {
     return {
       pass: false,
       exitCode: 2,
@@ -107,7 +109,7 @@ export function runRemember({ workspace, copilotHome, flags, argv, log = () => {
   fs.writeFileSync(opsPath, JSON.stringify(ops), 'utf8');
   let applied;
   try {
-    applied = applyOps({ workspace, opsPath, dryRun: flags.dryRun, home });
+    applied = applyOps({ workspace, opsPath, dryRun: flags.dryRun, home, approve: true });
   } finally {
     fs.rmSync(opsPath, { force: true });
   }

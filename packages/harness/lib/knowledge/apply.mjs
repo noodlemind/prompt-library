@@ -173,7 +173,7 @@ function verifyHumanTeachingEpisode(workspace, e) {
   return kind === 'human-teaching';
 }
 
-export function applyOps({ workspace, opsPath, dryRun = false, home }) {
+export function applyOps({ workspace, opsPath, dryRun = false, home, approve = false }) {
   // Absorb any hand edit sitting in the store BEFORE anything else — even
   // before the mode gate. The failure path below can `git reset --hard` the
   // store tree; a dirty hand edit caught in that reset would be destroyed
@@ -188,13 +188,20 @@ export function applyOps({ workspace, opsPath, dryRun = false, home }) {
     }
   }
 
-  // Kill switch: consolidate is a write path gated to mode 'on' only — checked
+  // Kill switch: consolidate is a write path gated to mode 'on' — checked
   // first, before the ops file is even parsed, and before the lockfile below.
+  // 'suggest' is a conditional exception: it only proceeds when the caller
+  // passes approve (set by a human re-running with --yes after reviewing the
+  // ops JSON) — every other non-'on' mode rejects regardless of approve.
   const { mode } = readStoreConfig(workspace, { home });
-  if (mode !== 'on') {
+  if (mode !== 'on' && !(mode === 'suggest' && approve)) {
+    const reason =
+      mode === 'suggest'
+        ? 'knowledge mode is suggest — review the ops JSON, then re-run apply with --yes'
+        : `knowledge mode is ${mode} — run: harness knowledge on`;
     return {
       applied: [],
-      rejected: [{ code: 'E_MODE', reason: `knowledge mode is ${mode} — run: harness knowledge on` }],
+      rejected: [{ code: 'E_MODE', reason }],
       committed: false,
       exitCode: 2,
     };
