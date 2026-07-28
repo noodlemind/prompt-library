@@ -33,10 +33,27 @@ export function runRemember({ workspace, copilotHome, flags, argv, log = () => {
   const episode = runInsightCompound({ workspace, copilotHome, flags: teachFlags, log, kind: 'human-teaching' });
   if (!episode.pass) return { ...episode, episodePath: episode.path, learningId: null };
 
-  const text = fs.readFileSync(path.join(workspace, episode.path), 'utf8');
-  const sha256 = crypto.createHash('sha256').update(text).digest('hex');
   const domain = normalizeSlug(flags.domain || 'general');
   const slug = normalizeSlug(flags.trigger);
+  const learningId = `${domain}/${slug}`;
+
+  // Dry run: --dry-run means runInsightCompound reports a would-be path
+  // without writing it, so reading/hashing/applying it would crash on a
+  // missing file. Stop here with a well-formed, unstyled-crash-free result.
+  if (flags.dryRun) {
+    return {
+      pass: true,
+      exitCode: 0,
+      episodePath: episode.path,
+      learningId,
+      blockedReason: null,
+      dryRun: true,
+      nextTools: ['re-run without --dry-run to write the episode and learning'],
+    };
+  }
+
+  const text = fs.readFileSync(path.join(workspace, episode.path), 'utf8');
+  const sha256 = crypto.createHash('sha256').update(text).digest('hex');
   const ops = {
     schema: 1,
     ops: [
@@ -54,12 +71,15 @@ export function runRemember({ workspace, copilotHome, flags, argv, log = () => {
   fs.mkdirSync(opsDir, { recursive: true });
   const opsPath = path.join(opsDir, 'remember-ops.json');
   fs.writeFileSync(opsPath, JSON.stringify(ops), 'utf8');
-  const applied = applyOps({ workspace, opsPath, dryRun: flags.dryRun });
+  const applied = applyOps({ workspace, opsPath });
   if (applied.exitCode !== 0) {
+    // All-or-nothing: never leave an orphaned episode file behind on
+    // rejection — a retry must not pile up dedup-suffixed episodes.
+    fs.rmSync(path.join(workspace, episode.path), { force: true });
     return {
       pass: false,
       exitCode: applied.exitCode,
-      episodePath: episode.path,
+      episodePath: null,
       learningId: null,
       blockedReason: applied.rejected?.[0]?.reason || 'apply failed',
       nextTools: ['shorten the claim (1,200-byte learning cap) and re-run'],
@@ -69,7 +89,7 @@ export function runRemember({ workspace, copilotHome, flags, argv, log = () => {
     pass: true,
     exitCode: 0,
     episodePath: episode.path,
-    learningId: `${domain}/${slug}`,
+    learningId,
     blockedReason: null,
     nextTools: ['harness learnings ' + domain],
   };

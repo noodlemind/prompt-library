@@ -46,3 +46,28 @@ test('remember refuses secret-shaped claims', () => {
   assert.equal(res.status, 1);
   assert.match(res.stdout + res.stderr, /secret/i);
 });
+
+test('remember --dry-run writes neither episode nor learning', () => {
+  const c = ctx();
+  const res = run(c, ['remember', 'Use two-step default+backfill for NOT NULL adds.',
+    '--trigger', 'adding NOT NULL columns to hot tables', '--domain', 'sql', '--dry-run']);
+  assert.equal(res.status, 0, res.stderr + res.stdout);
+  const out = JSON.parse(res.stdout);
+  assert.equal(out.dryRun, true);
+  assert.equal(out.learningId, 'sql/adding-not-null-columns-to-hot-tables');
+  assert.ok(!fs.existsSync(path.join(c.ws, 'docs', 'solutions')), 'dry-run must not write the episode file');
+  const { dir } = ensureStore(c.ws, { home: c.harnessHome });
+  assert.equal(listLearnings(dir).length, 0, 'dry-run must not write a learning');
+});
+
+test('remember rolls back the episode file when applyOps rejects it (byte cap)', () => {
+  const c = ctx();
+  const res = run(c, ['remember', 'x'.repeat(2000), '--trigger', 'an oversized claim that blows the learning byte cap']);
+  assert.equal(res.status, 1, res.stderr + res.stdout);
+  const out = JSON.parse(res.stdout);
+  assert.equal(out.episodePath, null);
+  assert.match(res.stdout + res.stderr, /byte|split/i);
+  const teachingsDir = path.join(c.ws, 'docs', 'solutions', 'teachings');
+  const remaining = fs.existsSync(teachingsDir) ? fs.readdirSync(teachingsDir) : [];
+  assert.deepEqual(remaining, [], 'rejected apply must not leave an orphaned episode file');
+});
