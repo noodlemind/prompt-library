@@ -64,14 +64,7 @@ capabilities:
     triggers: [publish verified solution, team knowledge]
     eval_suite: evals/skill-trigger-evals.yaml#compound-learnings
     usage_count: 0
-  consolidate:
-    type: skill
-    status: active
-    owner: developer-experience
-    version: 1
-    origin: starter
-    triggers: [knowledge debt due, session-start drain, session-end drain]
-    usage_count: 0
+  consolidate: {type: skill, status: active, owner: developer-experience, version: 1, origin: starter}
   create-primitive:
     type: skill
     status: active
