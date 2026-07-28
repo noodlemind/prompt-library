@@ -7,6 +7,7 @@ import { selectPlan } from './plan-parse.mjs';
 import { loadPolicy } from './policy.mjs';
 import { recordSkillUsage } from './telemetry.mjs';
 import { scanSecrets } from './secret-scan.mjs';
+import { readStoreConfig } from './knowledge/store.mjs';
 
 function slugify(text) {
   return (
@@ -28,7 +29,21 @@ function yamlQuote(value) {
  * gate on the verified lane is untouched — insights are a separate episode
  * kind, ranked below verified fixes and barred from promotion.
  */
-export function runInsightCompound({ workspace, copilotHome, flags, log = () => {}, kind = 'insight' }) {
+export function runInsightCompound({ workspace, copilotHome, flags, log = () => {}, kind = 'insight', home }) {
+  // Kill switch: only the fully-off mode blocks insight capture — freeze and
+  // capture-only both keep this lane open (the mode matrix, Task 4).
+  const { mode } = readStoreConfig(workspace, { home });
+  if (mode === 'off') {
+    return {
+      pass: false,
+      exitCode: 2,
+      kind,
+      path: null,
+      indexed: null,
+      blockedReason: `knowledge mode is ${mode} — run: harness knowledge on`,
+      nextTools: ['harness knowledge on'],
+    };
+  }
   const body = flags.body || (flags.bodyFile ? fs.readFileSync(path.resolve(flags.bodyFile), 'utf8') : '');
   if (!flags.title || !body.trim()) {
     return {

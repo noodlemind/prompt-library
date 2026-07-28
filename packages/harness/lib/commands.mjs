@@ -1004,6 +1004,117 @@ export async function cmdLearnings(argv) {
   return 0;
 }
 
+const KNOWLEDGE_MODES = new Set(['on', 'off', 'freeze', 'capture-only']);
+
+// The kill switch and purge cascade. Mode-switching and --status read/write
+// store.mjs's config.json directly; purge is never mode-gated — human
+// deletion always wins — and delegates to knowledge/admin.mjs.
+export async function cmdKnowledge(argv) {
+  const flags = parseFlags(argv);
+  const workspace = path.resolve(flags.workspace);
+  const subcommand = argv[0] && !argv[0].startsWith('--') ? argv[0] : null;
+
+  if (subcommand === 'purge') {
+    const { purgeEpisode, purgeAll } = await import('./knowledge/admin.mjs');
+    const rawTarget = argv[1];
+    const isAll = rawTarget === '--all';
+    // A missing target must never fall through to the next global flag
+    // (e.g. `harness knowledge purge --workspace <dir>`) — anything shaped
+    // like an option is treated as absent, not as a filename.
+    const target = !isAll && rawTarget && !rawTarget.startsWith('--') ? rawTarget : null;
+    const result = isAll ? purgeAll({ workspace }) : purgeEpisode({ workspace, target });
+    writeEvent(workspace, flags, {
+      type: 'knowledge',
+      command: 'knowledge',
+      decision: 'purge',
+      result: result.pass ? 'pass' : 'fail',
+      exitCode: result.exitCode,
+      blockedReason: result.blockedReason,
+    });
+    if (flags.json) {
+      emitJson(flags, result);
+    } else if (!result.pass) {
+      for (const l of ui.errorBlock({ code: 'E_USAGE', message: result.blockedReason, exit: result.exitCode })) {
+        console.error(l);
+      }
+    } else if (isAll) {
+      console.log(
+        ui.line({
+          state: 'warn',
+          key: 'purge',
+          value: `--all · ${result.removed.learnings} learning${result.removed.learnings === 1 ? '' : 's'} removed`,
+          note: 'episodes remain on disk — they will re-appear as debt',
+        })
+      );
+    } else {
+      console.log(
+        ui.line({
+          state: 'warn',
+          key: 'purge',
+          value: target,
+          note: `${result.removed.learnings.length} learning(s) deleted · ${result.removed.links.length} link(s) unlinked`,
+        })
+      );
+    }
+    return result.exitCode;
+  }
+
+  if (subcommand && KNOWLEDGE_MODES.has(subcommand)) {
+    const { writeStoreConfig } = await import('./knowledge/store.mjs');
+    writeStoreConfig(workspace, { mode: subcommand });
+    writeEvent(workspace, flags, {
+      type: 'knowledge',
+      command: 'knowledge',
+      decision: subcommand,
+      result: 'pass',
+      exitCode: 0,
+    });
+    if (flags.json) {
+      emitJson(flags, { pass: true, mode: subcommand });
+    } else {
+      console.log(
+        ui.line({ state: subcommand === 'on' ? 'ok' : 'warn', key: 'knowledge', value: `mode ${subcommand}` })
+      );
+    }
+    return 0;
+  }
+
+  if (!subcommand) {
+    const { readStoreConfig } = await import('./knowledge/store.mjs');
+    const { mode } = readStoreConfig(workspace);
+    writeEvent(workspace, flags, {
+      type: 'knowledge',
+      command: 'knowledge',
+      decision: 'status',
+      result: 'pass',
+      exitCode: 0,
+    });
+    if (flags.json) {
+      emitJson(flags, { mode });
+    } else {
+      console.log(ui.line({ state: mode === 'on' ? 'ok' : 'warn', key: 'knowledge', value: `mode ${mode}` }));
+    }
+    return 0;
+  }
+
+  writeEvent(workspace, flags, {
+    type: 'knowledge',
+    command: 'knowledge',
+    decision: subcommand,
+    result: 'fail',
+    exitCode: EXIT.usage,
+  });
+  for (const l of ui.errorBlock({
+    code: 'E_USAGE',
+    message: `unknown knowledge mode: ${subcommand}`,
+    fix: 'harness knowledge <on|off|freeze|capture-only> | --status | purge <file|--all>',
+    exit: EXIT.usage,
+  })) {
+    console.error(l);
+  }
+  return EXIT.usage;
+}
+
 export async function cmdGet(argv) {
   const { runGet } = await import('./get-cmd.mjs');
   const flags = parseFlags(argv);

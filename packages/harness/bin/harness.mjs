@@ -20,6 +20,7 @@ import {
   cmdRemember,
   cmdLearning,
   cmdLearnings,
+  cmdKnowledge,
   cmdGet,
   cmdUninstall,
   cmdResolve,
@@ -173,6 +174,13 @@ const CATALOG = [
   {
     group: 'knowledge',
     commands: [
+      { name: 'knowledge', desc: 'knowledge layer mode switch and purge (human deletion always wins)',
+        sig: '<on|off|freeze|capture-only> | --status | purge <file|--all>',
+        options: [
+          ['--status', 'show the active mode (default)'],
+          ['purge <file>', 'cascade-delete an episode and dependent learnings'],
+          ['purge --all', 'reset the learnings store (episodes remain, become debt)'],
+        ] },
       { name: 'consolidate', desc: 'episode→learning debt, work packet, and validated apply',
         sig: '[--status | --candidates | --apply --ops <path>]',
         options: [
@@ -345,6 +353,9 @@ async function main() {
         break;
       case 'learnings':
         code = await cmdLearnings(args);
+        break;
+      case 'knowledge':
+        code = await cmdKnowledge(args);
         break;
       case 'events':
         code = await cmdEvents(args);

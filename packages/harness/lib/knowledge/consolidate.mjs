@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { ensureStore, readLedger, listLearnings } from './store.mjs';
+import { ensureStore, readLedger, listLearnings, readStoreConfig } from './store.mjs';
 
 export const CONSOLIDATION_THRESHOLD = 5;
 export const MAX_OPS_PER_RUN = 5;
@@ -90,6 +90,7 @@ export function promotionCandidates(learnings) {
 
 export function consolidateStatus({ workspace, copilotHome, home }) {
   const { dir } = ensureStore(workspace, { home });
+  const { mode } = readStoreConfig(workspace, { home });
   const episodes = collectEpisodes({ workspace, copilotHome });
   const { consumed, quarantined } = splitLedger(readLedger(dir));
   const unconsolidated = episodes
@@ -98,8 +99,11 @@ export function consolidateStatus({ workspace, copilotHome, home }) {
   const learnings = listLearnings(dir);
   const active = activeLearnings(learnings);
   const debt = unconsolidated.length;
-  const due = debt >= CONSOLIDATION_THRESHOLD;
+  // Consolidation writes (hints toward --apply) are gated to mode 'on' — a
+  // non-on mode never reports due, however large the debt has grown.
+  const due = mode === 'on' && debt >= CONSOLIDATION_THRESHOLD;
   return {
+    mode,
     debt,
     threshold: CONSOLIDATION_THRESHOLD,
     due,

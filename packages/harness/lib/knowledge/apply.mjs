@@ -8,6 +8,7 @@ import {
   normalizeSlug,
   repoId,
   parseLearningFrontmatter,
+  readStoreConfig,
 } from './store.mjs';
 import { MAX_OPS_PER_RUN, LEARNING_BYTE_CAP } from './consolidate.mjs';
 import { scanSecrets } from '../secret-scan.mjs';
@@ -85,6 +86,18 @@ function verifiedFixLinks(fm) {
 }
 
 export function applyOps({ workspace, opsPath, dryRun = false, home }) {
+  // Kill switch: consolidate is a write path gated to mode 'on' only — checked
+  // first, before the ops file is even parsed, and before the lockfile below.
+  const { mode } = readStoreConfig(workspace, { home });
+  if (mode !== 'on') {
+    return {
+      applied: [],
+      rejected: [{ code: 'E_MODE', reason: `knowledge mode is ${mode} — run: harness knowledge on` }],
+      committed: false,
+      exitCode: 2,
+    };
+  }
+
   let parsed;
   try {
     parsed = JSON.parse(fs.readFileSync(opsPath, 'utf8'));
@@ -291,7 +304,7 @@ function strengthenLearning(target, episodes) {
   fs.writeFileSync(target.file, content, 'utf8');
 }
 
-function rebuildIndex(dir) {
+export function rebuildIndex(dir) {
   const active = listLearnings(dir).filter(
     (l) => !l.fm.superseded_by && !['retired', 'disputed'].includes(l.fm.status)
   );

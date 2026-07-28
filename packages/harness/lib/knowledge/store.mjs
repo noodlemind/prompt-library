@@ -65,6 +65,32 @@ export function ensureStore(workspace, { home, dryRun = false } = {}) {
   return { dir, created, git: gitOk };
 }
 
+const KNOWLEDGE_MODES = new Set(['on', 'off', 'freeze', 'capture-only']);
+
+/**
+ * Kill-switch mode for the knowledge layer, read from <store>/config.json.
+ * Read-only — never creates the store. Tolerant of an absent or corrupt
+ * config (missing file, unreadable JSON, unrecognized mode): default is 'on'
+ * so a fresh or damaged store never silently blocks the whole layer.
+ */
+export function readStoreConfig(workspace, { home } = {}) {
+  const dir = storeDir(workspace, { home });
+  try {
+    const parsed = JSON.parse(fs.readFileSync(path.join(dir, 'config.json'), 'utf8'));
+    if (parsed && KNOWLEDGE_MODES.has(parsed.mode)) return { mode: parsed.mode };
+  } catch {
+    // absent, unreadable, or corrupt — default mode is 'on'
+  }
+  return { mode: 'on' };
+}
+
+export function writeStoreConfig(workspace, { home, mode } = {}) {
+  const { dir } = ensureStore(workspace, { home });
+  fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify({ mode }) + '\n', 'utf8');
+  const { committed } = commitStore(dir, `knowledge: mode ${mode}`);
+  return { mode, committed };
+}
+
 /** Append-only episode-consumption ledger. Torn tail lines are tolerated. */
 export function readLedger(dir) {
   const ledgerPath = path.join(dir, 'consolidated.jsonl');

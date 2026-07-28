@@ -11,6 +11,7 @@ import { ensureHarnessDir, readSession, writeSession } from './session.mjs';
 import { pickActivePlan, listPlanRels } from './plan-parse.mjs';
 import { parseQueryFromArgv } from './argv.mjs';
 import { rankLearnings } from './knowledge/retrieve.mjs';
+import { readStoreConfig } from './knowledge/store.mjs';
 
 export function runOrient({ workspace, copilotHome, flags, query }) {
   const q = query || flags.query || '';
@@ -63,10 +64,14 @@ export function runOrient({ workspace, copilotHome, flags, query }) {
   });
 
   // Learnings (semantic memory): read-only, advisory, deterministic. Never
-  // block orientation on the knowledge store.
+  // block orientation on the knowledge store. Kill switch: 'off' and
+  // 'capture-only' both suppress injection; 'on' and 'freeze' keep it.
   let learnings = [];
   try {
-    learnings = rankLearnings({ workspace, query: q, limit: 3 });
+    const { mode } = readStoreConfig(workspace, {});
+    if (mode !== 'off' && mode !== 'capture-only') {
+      learnings = rankLearnings({ workspace, query: q, limit: 3 });
+    }
   } catch {
     learnings = [];
   }

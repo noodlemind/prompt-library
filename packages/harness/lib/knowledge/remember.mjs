@@ -3,14 +3,25 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { runInsightCompound } from '../compound.mjs';
 import { applyOps } from './apply.mjs';
-import { normalizeSlug } from './store.mjs';
+import { normalizeSlug, readStoreConfig } from './store.mjs';
 
 /**
  * The human teaching lane: a direct claim from a person, captured as a
  * human-teaching episode and materialized into an active learning through
  * the sole-writer applyOps transaction — the same path consolidate uses.
  */
-export function runRemember({ workspace, copilotHome, flags, argv, log = () => {} }) {
+export function runRemember({ workspace, copilotHome, flags, argv, log = () => {}, home }) {
+  const { mode } = readStoreConfig(workspace, { home });
+  if (mode !== 'on') {
+    return {
+      pass: false,
+      exitCode: 2,
+      episodePath: null,
+      learningId: null,
+      blockedReason: `knowledge mode is ${mode} — run: harness knowledge on`,
+      nextTools: ['harness knowledge on'],
+    };
+  }
   const claim = argv[0] && !argv[0].startsWith('--') ? argv[0] : null;
   if (!claim || !flags.trigger) {
     return {

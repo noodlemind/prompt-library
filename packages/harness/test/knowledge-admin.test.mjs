@@ -1,0 +1,229 @@
+import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import { test } from 'node:test';
+import { applyOps } from '../lib/knowledge/apply.mjs';
+import { ensureStore, listLearnings, readLedger } from '../lib/knowledge/store.mjs';
+
+const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const binPath = path.join(packageRoot, 'bin', 'harness.mjs');
+const tempDir = (p) => fs.mkdtempSync(path.join(os.tmpdir(), p));
+
+const ctx = () => ({ ws: tempDir('kadm-ws-'), home: tempDir('kadm-home-'), harnessHome: tempDir('kadm-hh-') });
+
+const run = ({ ws, home, harnessHome }, args) =>
+  spawnSync(process.execPath, [binPath, ...args, '--workspace', ws, '--copilot-home', home, '--json'], {
+    encoding: 'utf8',
+    env: { ...process.env, HARNESS_HOME: harnessHome },
+  });
+
+function writeOps(dir, ops) {
+  const p = path.join(dir, 'ops.json');
+  fs.writeFileSync(p, JSON.stringify({ schema: 1, ops }));
+  return p;
+}
+
+const EP = (over = {}) => ({
+  path: 'docs/solutions/perf/x.md',
+  sha256: 'a'.repeat(64),
+  kind: 'fix',
+  plan: 'docs/plans/p1.md',
+  ...over,
+});
+
+function seedLearning(c) {
+  const op = {
+    op: 'ADD',
+    domain: 'sql',
+    slug: 'not-null-hot-tables',
+    trigger: 'adding NOT NULL columns to hot tables',
+    body: 'Use two-step default+backfill; a direct ALTER takes an exclusive lock.',
+    episodes: [EP()],
+  };
+  const res = applyOps({ workspace: c.ws, opsPath: writeOps(c.ws, [op]), home: c.harnessHome });
+  assert.equal(res.exitCode, 0, JSON.stringify(res.rejected));
+  return res;
+}
+
+test('knowledge off blocks orient injection and insight capture', () => {
+  const c = ctx();
+  seedLearning(c);
+
+  assert.equal(run(c, ['knowledge', 'off']).status, 0);
+
+  const orientOff = run(c, ['orient', '--query', 'adding NOT NULL columns to hot tables']);
+  assert.equal(orientOff.status, 0, orientOff.stderr || orientOff.stdout);
+  assert.deepEqual(JSON.parse(orientOff.stdout).learnings, []);
+
+  const insightOff = run(c, ['compound', '--insight', '--title', 'blocked', '--body', 'body text']);
+  assert.equal(insightOff.status, 2);
+  assert.match(insightOff.stdout + insightOff.stderr, /mode is off/);
+});
+
+test('knowledge freeze keeps orient injection but blocks remember and consolidate --apply', () => {
+  const c = ctx();
+  seedLearning(c);
+
+  assert.equal(run(c, ['knowledge', 'freeze']).status, 0);
+
+  const orientFreeze = run(c, ['orient', '--query', 'adding NOT NULL columns to hot tables']);
+  assert.equal(orientFreeze.status, 0, orientFreeze.stderr || orientFreeze.stdout);
+  const learnings = JSON.parse(orientFreeze.stdout).learnings;
+  assert.ok(learnings.length > 0, 'freeze still injects learnings');
+
+  const rememberFreeze = run(c, ['remember', 'a durable claim', '--trigger', 'a trigger']);
+  assert.equal(rememberFreeze.status, 2);
+  assert.match(rememberFreeze.stdout + rememberFreeze.stderr, /mode is freeze/);
+
+  const opsPath = writeOps(c.ws, [
+    {
+      op: 'ADD',
+      domain: 'other',
+      slug: 'other-learning',
+      trigger: 'some other trigger',
+      body: 'some other body text',
+      episodes: [EP({ path: 'docs/solutions/perf/z.md', sha256: 'b'.repeat(64) })],
+    },
+  ]);
+  const applyFreeze = run(c, ['consolidate', '--apply', '--ops', opsPath]);
+  assert.equal(applyFreeze.status, 2);
+  assert.match(applyFreeze.stdout + applyFreeze.stderr, /E_MODE/);
+});
+
+test('knowledge on restores full mode', () => {
+  const c = ctx();
+  assert.equal(run(c, ['knowledge', 'off']).status, 0);
+  assert.equal(run(c, ['knowledge', 'on']).status, 0);
+
+  const status = JSON.parse(run(c, ['knowledge', '--status']).stdout);
+  assert.equal(status.mode, 'on');
+
+  const opsPath = writeOps(c.ws, [
+    {
+      op: 'ADD',
+      domain: 'sql',
+      slug: 'restored',
+      trigger: 'a trigger restored',
+      body: 'a body restored after mode on',
+      episodes: [EP({ path: 'docs/solutions/perf/z2.md', sha256: 'c'.repeat(64) })],
+    },
+  ]);
+  assert.equal(run(c, ['consolidate', '--apply', '--ops', opsPath]).status, 0);
+
+  const rememberOn = run(c, ['remember', 'restored claim', '--trigger', 'restored trigger']);
+  assert.equal(rememberOn.status, 0, rememberOn.stderr || rememberOn.stdout);
+});
+
+test('knowledge purge <episode> cascades: sole-evidence learning removed, shared learning unlinked, ledger and INDEX updated, episode file deleted', () => {
+  const c = ctx();
+  const targetPath = 'docs/solutions/perf/target.md';
+  const otherPath = 'docs/solutions/perf/other.md';
+  fs.mkdirSync(path.join(c.ws, 'docs', 'solutions', 'perf'), { recursive: true });
+  fs.writeFileSync(path.join(c.ws, targetPath), 'target episode body\n');
+  fs.writeFileSync(path.join(c.ws, otherPath), 'other episode body\n');
+
+  const sole = {
+    op: 'ADD',
+    domain: 'sql',
+    slug: 'sole-evidence',
+    trigger: 'sole evidence trigger',
+    body: 'sole evidence body text',
+    episodes: [{ path: targetPath, sha256: 'a'.repeat(64), kind: 'fix', plan: 'docs/plans/p1.md' }],
+  };
+  const shared = {
+    op: 'ADD',
+    domain: 'sql',
+    slug: 'shared-evidence',
+    trigger: 'shared evidence trigger',
+    body: 'shared evidence body text',
+    episodes: [
+      { path: targetPath, sha256: 'a'.repeat(64), kind: 'fix', plan: 'docs/plans/p1.md' },
+      { path: otherPath, sha256: 'b'.repeat(64), kind: 'fix', plan: 'docs/plans/p2.md' },
+    ],
+  };
+  assert.equal(applyOps({ workspace: c.ws, opsPath: writeOps(c.ws, [sole]), home: c.harnessHome }).exitCode, 0);
+  assert.equal(applyOps({ workspace: c.ws, opsPath: writeOps(c.ws, [shared]), home: c.harnessHome }).exitCode, 0);
+
+  const res = run(c, ['knowledge', 'purge', targetPath]);
+  assert.equal(res.status, 0, res.stderr || res.stdout);
+  const out = JSON.parse(res.stdout);
+  assert.deepEqual(out.removed.learnings, ['sql/sole-evidence']);
+  assert.deepEqual(out.removed.links, ['sql/shared-evidence']);
+  assert.equal(out.removed.episode, targetPath);
+
+  const { dir } = ensureStore(c.ws, { home: c.harnessHome });
+  const learnings = listLearnings(dir);
+  assert.ok(!learnings.some((l) => l.id === 'sql/sole-evidence'), 'sole-evidence learning removed');
+  const shared2 = learnings.find((l) => l.id === 'sql/shared-evidence');
+  assert.ok(shared2, 'shared-evidence learning kept');
+  assert.equal(shared2.fm.episodes.length, 1);
+  assert.equal(shared2.fm.episodes[0].path, otherPath);
+
+  assert.ok(!readLedger(dir).some((e) => e.path === targetPath), 'ledger has no entry for the purged path');
+  const index = fs.readFileSync(path.join(dir, 'INDEX.md'), 'utf8');
+  assert.doesNotMatch(index, /sql\/sole-evidence/);
+
+  assert.ok(!fs.existsSync(path.join(c.ws, targetPath)), 'episode file deleted from workspace');
+  assert.ok(fs.existsSync(path.join(c.ws, otherPath)), 'unrelated episode file untouched');
+});
+
+test('knowledge purge --all empties the learnings store while episodes remain as debt', () => {
+  const c = ctx();
+  const catDir = path.join(c.ws, 'docs', 'solutions', 'perf');
+  fs.mkdirSync(catDir, { recursive: true });
+  const episodes = [];
+  for (let i = 0; i < 5; i++) {
+    const text = `---\ntitle: "fix ${i}"\ndate: 2026-07-01\n---\n\n## Problem\n\nfix ${i} details.\n`;
+    fs.writeFileSync(path.join(catDir, `fix-${i}.md`), text);
+    episodes.push({
+      path: `docs/solutions/perf/fix-${i}.md`,
+      sha256: crypto.createHash('sha256').update(text).digest('hex'),
+    });
+  }
+  for (let i = 0; i < episodes.length; i++) {
+    const op = {
+      op: 'ADD',
+      domain: 'sql',
+      slug: `learning-${i}`,
+      trigger: `trigger ${i}`,
+      body: `body text for learning ${i}`,
+      episodes: [{ path: episodes[i].path, sha256: episodes[i].sha256, kind: 'fix', plan: 'docs/plans/p1.md' }],
+    };
+    assert.equal(applyOps({ workspace: c.ws, opsPath: writeOps(c.ws, [op]), home: c.harnessHome }).exitCode, 0);
+  }
+
+  const before = JSON.parse(run(c, ['consolidate', '--status']).stdout);
+  assert.equal(before.debt, 0, 'all episodes consolidated before purge');
+
+  const res = run(c, ['knowledge', 'purge', '--all']);
+  assert.equal(res.status, 0, res.stderr || res.stdout);
+  const out = JSON.parse(res.stdout);
+  assert.equal(out.removed.learnings, 5);
+
+  const { dir } = ensureStore(c.ws, { home: c.harnessHome });
+  assert.equal(listLearnings(dir).length, 0);
+  assert.equal(readLedger(dir).length, 0);
+
+  const after = JSON.parse(run(c, ['consolidate', '--status']).stdout);
+  assert.equal(after.debt, 5, 'episodes re-enter debt once the ledger is reset');
+});
+
+test('knowledge <bogus> exits 2 with a usage error', () => {
+  const c = ctx();
+  const res = run(c, ['knowledge', 'bogus']);
+  assert.equal(res.status, 2);
+  assert.match(res.stdout + res.stderr, /unknown knowledge mode/i);
+});
+
+test('bare knowledge and knowledge --status both report the active mode', () => {
+  const c = ctx();
+  const bare = JSON.parse(run(c, ['knowledge']).stdout);
+  assert.equal(bare.mode, 'on');
+  assert.equal(run(c, ['knowledge', 'capture-only']).status, 0);
+  const status = JSON.parse(run(c, ['knowledge', '--status']).stdout);
+  assert.equal(status.mode, 'capture-only');
+});
