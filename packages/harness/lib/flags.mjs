@@ -72,6 +72,7 @@ export function parseFlags(argv) {
     bodyFile: null,
     ops: null,
     domain: null,
+    reason: null,
   };
 
   for (let i = 0; i < argv.length; i++) {
@@ -151,6 +152,8 @@ export function parseFlags(argv) {
     else if (a === '--ops') flags.ops = argv[++i];
     else if (a.startsWith('--domain=')) flags.domain = a.split('=').slice(1).join('=');
     else if (a === '--domain') flags.domain = argv[++i];
+    else if (a.startsWith('--reason=')) flags.reason = a.split('=').slice(1).join('=');
+    else if (a === '--reason') flags.reason = argv[++i];
   }
 
   return flags;

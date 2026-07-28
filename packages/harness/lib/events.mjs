@@ -18,6 +18,7 @@ export const EVENT_TYPES = new Set([
   'compound',
   'consolidate',
   'remember',
+  'learning',
   'session_end',
 ]);
 

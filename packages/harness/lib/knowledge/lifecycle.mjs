@@ -1,0 +1,30 @@
+import { ensureStore, listLearnings, commitStore } from './store.mjs';
+import { updateFrontmatterField, todayClamped } from './apply.mjs';
+
+/**
+ * One-command human authority over a single learning: retire, dispute, or
+ * confirm. The only writer here besides applyOps — a targeted frontmatter
+ * mutation plus one store commit, never a rewrite of the learning body.
+ */
+
+const ACTIONS = new Set(['retire', 'dispute', 'confirm']);
+const TARGET_STATUS = { retire: 'retired', dispute: 'disputed', confirm: 'active' };
+
+export function setLearningStatus({ workspace, id, action, reason, home }) {
+  if (!ACTIONS.has(action) || !id) {
+    return { pass: false, exitCode: 2, id: id || null, status: null,
+      blockedReason: 'usage: harness learning <retire|dispute|confirm> <id> --reason "<r>"' };
+  }
+  if (action !== 'confirm' && !reason) {
+    return { pass: false, exitCode: 2, id, status: null, blockedReason: `${action} requires --reason` };
+  }
+  const { dir } = ensureStore(workspace, { home });
+  const learning = listLearnings(dir).find((l) => l.id === id);
+  if (!learning) {
+    return { pass: false, exitCode: 1, id, status: null, blockedReason: `E_TARGET: no learning ${id}` };
+  }
+  updateFrontmatterField(learning.file, 'status', TARGET_STATUS[action]);
+  if (action === 'confirm') updateFrontmatterField(learning.file, 'last_confirmed', todayClamped());
+  commitStore(dir, `${action} ${id}: ${reason || 'human confirm'}`);
+  return { pass: true, exitCode: 0, id, status: TARGET_STATUS[action], blockedReason: null };
+}

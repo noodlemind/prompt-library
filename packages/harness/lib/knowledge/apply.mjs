@@ -30,7 +30,7 @@ function yamlQuote(v) {
   return `"${String(v).replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
 }
 
-function todayClamped() {
+export function todayClamped() {
   // Clock clamp: never write a future date (a skewed clock would rank-pin).
   return new Date(Math.min(Date.now(), Date.now())).toISOString().slice(0, 10);
 }
@@ -256,7 +256,7 @@ export function applyOps({ workspace, opsPath, dryRun = false, home }) {
   return { applied, rejected, committed, exitCode: 0, storeDir: dir, indexPath: path.join(dir, 'INDEX.md') };
 }
 
-function updateFrontmatterField(file, field, value) {
+export function updateFrontmatterField(file, field, value) {
   const text = fs.readFileSync(file, 'utf8');
   const re = new RegExp(`^${field}:.*$`, 'm');
   const next = re.test(text)

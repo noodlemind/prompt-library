@@ -878,6 +878,49 @@ export async function cmdRemember(argv) {
   return result.exitCode;
 }
 
+export async function cmdLearning(argv) {
+  const { setLearningStatus } = await import('./knowledge/lifecycle.mjs');
+  const flags = parseFlags(argv);
+  const workspace = path.resolve(flags.workspace);
+  const action = argv[0];
+  const id = argv[1];
+  const result = setLearningStatus({ workspace, id, action, reason: flags.reason });
+  writeEvent(workspace, flags, {
+    type: 'learning',
+    command: 'learning',
+    decision: action,
+    result: result.pass ? 'pass' : 'fail',
+    exitCode: result.exitCode,
+    blockedReason: result.blockedReason,
+  });
+
+  if (flags.json) {
+    emitJson(flags, result);
+  } else if (result.pass) {
+    console.log(
+      ui.line({ state: action === 'retire' ? 'warn' : 'ok', key: 'learning', value: `${id} → ${result.status}` })
+    );
+  } else if (result.exitCode === EXIT.usage) {
+    for (const l of ui.errorBlock({
+      code: 'E_USAGE',
+      message: result.blockedReason,
+      fix: 'harness learning <retire|dispute|confirm> <id> --reason "<r>"',
+      exit: EXIT.usage,
+    })) {
+      console.error(l);
+    }
+  } else {
+    for (const l of ui.errorBlock({
+      code: 'E_TARGET',
+      message: result.blockedReason,
+      exit: result.exitCode,
+    })) {
+      console.error(l);
+    }
+  }
+  return result.exitCode;
+}
+
 export async function cmdGet(argv) {
   const { runGet } = await import('./get-cmd.mjs');
   const flags = parseFlags(argv);

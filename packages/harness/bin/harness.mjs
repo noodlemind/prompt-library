@@ -18,6 +18,7 @@ import {
   cmdCompound,
   cmdConsolidate,
   cmdRemember,
+  cmdLearning,
   cmdGet,
   cmdUninstall,
   cmdResolve,
@@ -184,6 +185,11 @@ const CATALOG = [
           ['--trigger <t>', 'applicability condition (required)'],
           ['--domain <d>', 'learning domain directory (default general)'],
         ] },
+      { name: 'learning', desc: 'human authority over one learning: retire, dispute, or confirm',
+        sig: '<retire|dispute|confirm> <id> --reason "<r>"',
+        options: [
+          ['--reason <r>', 'required for retire/dispute; recorded in the store commit'],
+        ] },
     ],
   },
   {
@@ -327,6 +333,9 @@ async function main() {
         break;
       case 'remember':
         code = await cmdRemember(args);
+        break;
+      case 'learning':
+        code = await cmdLearning(args);
         break;
       case 'events':
         code = await cmdEvents(args);
