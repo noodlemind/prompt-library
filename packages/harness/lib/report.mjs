@@ -163,7 +163,7 @@ export function knowledgeSlos(events) {
     if (e.type === 'remember' || e.type === 'learning') humanActions += 1;
   }
   const citedSurfaced = [...cited].filter((id) => surfaced.has(id)).length;
-  return { surfaced: surfaced.size, cited: cited.size,
+  return { surfaced: surfaced.size, cited: cited.size, citedSurfaced,
     utilization: surfaced.size ? Number((citedSurfaced / surfaced.size).toFixed(2)) : null,
     consolidations, humanActions,
     engagement: consolidations ? Number((humanActions / consolidations).toFixed(2)) : null };
@@ -351,7 +351,7 @@ export function renderReport(report, ui = createStyle()) {
       ui.line({
         state: k.utilization !== null && k.utilization < 0.15 && k.surfaced >= 20 ? 'warn' : 'ok',
         key: 'knowledge',
-        value: `utilization ${fmtPct(k.utilization)} (${k.cited}/${k.surfaced} surfaced)`,
+        value: `utilization ${fmtPct(k.utilization)} (${k.citedSurfaced}/${k.surfaced} surfaced)`,
         note: `engagement ${k.engagement ?? '-'} human actions/${k.consolidations} consolidations`,
         keyWidth,
       })

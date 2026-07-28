@@ -156,6 +156,40 @@ test('knowledge off: knowledgeDebt is null and no hint', () => {
   );
 });
 
+test('knowledge freeze: injection stays on but knowledgeDebt is null (debt gate requires mode "on")', () => {
+  const c = ctx();
+  seedStoreWithDebt(c);
+  assert.equal(run(c, ['knowledge', 'freeze']).status, 0);
+
+  const res = run(c, ['orient', '--query', TRIGGER]);
+  assert.equal(res.status, 0, res.stderr || res.stdout);
+  const out = JSON.parse(res.stdout);
+
+  assert.equal(out.learnings.length, 1, 'freeze keeps learnings injection on');
+  assert.equal(out.knowledgeDebt, null, 'freeze is not mode "on" so debt is not reported');
+  assert.ok(
+    !out.nextTools.some((t) => t.includes('consolidate --candidates')),
+    JSON.stringify(out.nextTools)
+  );
+});
+
+test('knowledge capture-only: no injection and knowledgeDebt is null', () => {
+  const c = ctx();
+  seedStoreWithDebt(c);
+  assert.equal(run(c, ['knowledge', 'capture-only']).status, 0);
+
+  const res = run(c, ['orient', '--query', TRIGGER]);
+  assert.equal(res.status, 0, res.stderr || res.stdout);
+  const out = JSON.parse(res.stdout);
+
+  assert.equal(out.learnings.length, 0, 'capture-only suppresses injection');
+  assert.equal(out.knowledgeDebt, null, 'capture-only is not mode "on" so debt is not reported');
+  assert.ok(
+    !out.nextTools.some((t) => t.includes('consolidate --candidates')),
+    JSON.stringify(out.nextTools)
+  );
+});
+
 test('orient on a workspace with no knowledge store yet stays store-read-only', () => {
   const c = ctx();
   const res = run(c, ['orient', '--query', 'anything at all']);

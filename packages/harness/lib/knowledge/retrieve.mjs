@@ -7,7 +7,7 @@ import { tokenize } from '../tokenize.mjs';
  * the store, never throws into orientation. Deterministic given identical
  * store contents — no per-machine ranking state.
  */
-export function rankLearnings({ workspace, query, limit = 3, home }) {
+export function rankLearnings({ workspace, query, limit = 3, home, include }) {
   let learnings = [];
   let staleExcluded = {};
   try {
@@ -27,6 +27,10 @@ export function rankLearnings({ workspace, query, limit = 3, home }) {
     if (l.fm.superseded_by) continue;
     if (['retired', 'disputed'].includes(l.fm.status)) continue;
     if (staleExcluded[l.id]) continue;
+    // Optional caller-supplied predicate (e.g. the knowledge eval's temporal
+    // pre-cutoff filter), applied after the standard status/stale filters and
+    // before scoring — additive, default undefined means no extra filtering.
+    if (include && !include(l)) continue;
     const claimLine = (l.body.split('\n').find((x) => x.trim()) || '').trim();
     const hay = new Set(tokenize(`${l.fm.trigger || ''} ${claimLine}`));
     let hits = 0;

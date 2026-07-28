@@ -78,6 +78,31 @@ test('learning retire marks an auto learning retired, commits, and drops it from
   assert.ok(!ranked.some((r) => r.id === autoId), 'retired learning must not rank');
 });
 
+test('rankLearnings honors an optional include predicate, applied after status/stale filtering', () => {
+  const c = ctx();
+  const { autoId, humanId } = seed(c);
+
+  const unfiltered = rankLearnings({
+    workspace: c.ws, query: 'adding NOT NULL columns to hot tables', limit: 10, home: c.harnessHome,
+  });
+  assert.ok(unfiltered.some((r) => r.id === autoId), JSON.stringify(unfiltered));
+  assert.ok(unfiltered.some((r) => r.id === humanId), JSON.stringify(unfiltered));
+
+  const filtered = rankLearnings({
+    workspace: c.ws, query: 'adding NOT NULL columns to hot tables', limit: 10, home: c.harnessHome,
+    include: (l) => l.id !== autoId,
+  });
+  assert.ok(!filtered.some((r) => r.id === autoId), 'include predicate must exclude the filtered id');
+  assert.ok(filtered.some((r) => r.id === humanId), 'include predicate must not affect other ids');
+
+  // Default (no include) never filters anything beyond the existing
+  // status/stale rules — additive, opt-in only.
+  const noPredicate = rankLearnings({
+    workspace: c.ws, query: 'adding NOT NULL columns to hot tables', limit: 10, home: c.harnessHome, include: undefined,
+  });
+  assert.deepEqual(noPredicate.map((r) => r.id).sort(), unfiltered.map((r) => r.id).sort());
+});
+
 test('learning dispute requires --reason', () => {
   const c = ctx();
   const { humanId } = seed(c);

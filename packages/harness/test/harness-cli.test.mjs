@@ -1844,6 +1844,74 @@ test('harness verify passes named checks, validates scope, and writes evidence',
   assert.match(human.stdout, /^-> harness compound/m);
 });
 
+test('harness verify --learnings threads cited learning ids onto the verify event', () => {
+  const workspace = tempDir('harness-workspace-');
+  const plan = writeVersionedPlan(workspace);
+  writeChecks(workspace, {
+    'unit-tests': { command: [process.execPath, '-e', 'process.exit(0)'] },
+  });
+  initGit(workspace);
+  fs.writeFileSync(path.join(workspace, 'src', 'example.js'), 'export const value = 2;\n');
+
+  const result = runHarness([
+    'verify',
+    '--plan',
+    plan,
+    '--base',
+    'HEAD',
+    '--workspace',
+    workspace,
+    '--learnings',
+    'a/b,c/d',
+    '--json',
+  ]);
+  assert.equal(result.status, 0, result.stderr);
+
+  const events = fs
+    .readFileSync(path.join(workspace, '.harness', 'events.jsonl'), 'utf8')
+    .trim()
+    .split('\n')
+    .filter(Boolean)
+    .map((line) => JSON.parse(line));
+  const verifyEvent = events.find((e) => e.type === 'verify');
+  assert.ok(verifyEvent, JSON.stringify(events));
+  assert.deepEqual(verifyEvent.learnings, ['a/b', 'c/d']);
+});
+
+test('harness verify --learnings drops empty csv entries into a clean array', () => {
+  const workspace = tempDir('harness-workspace-');
+  const plan = writeVersionedPlan(workspace);
+  writeChecks(workspace, {
+    'unit-tests': { command: [process.execPath, '-e', 'process.exit(0)'] },
+  });
+  initGit(workspace);
+  fs.writeFileSync(path.join(workspace, 'src', 'example.js'), 'export const value = 2;\n');
+
+  const result = runHarness([
+    'verify',
+    '--plan',
+    plan,
+    '--base',
+    'HEAD',
+    '--workspace',
+    workspace,
+    '--learnings',
+    'a/b,,c/d,',
+    '--json',
+  ]);
+  assert.equal(result.status, 0, result.stderr);
+
+  const events = fs
+    .readFileSync(path.join(workspace, '.harness', 'events.jsonl'), 'utf8')
+    .trim()
+    .split('\n')
+    .filter(Boolean)
+    .map((line) => JSON.parse(line));
+  const verifyEvent = events.find((e) => e.type === 'verify');
+  assert.ok(verifyEvent, JSON.stringify(events));
+  assert.deepEqual(verifyEvent.learnings, ['a/b', 'c/d']);
+});
+
 test('harness verify checks only tasks in the current plan phase', () => {
   const workspace = tempDir('harness-workspace-');
   const plan = writeVersionedPlan(workspace);

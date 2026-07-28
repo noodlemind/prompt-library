@@ -113,8 +113,28 @@ export function evalKnowledge({ workspace, copilotHome, home, negativeQueries = 
     learningCategories.get(entry.learning).add(ep.category);
   }
 
+  // Pre-cutoff learning set (temporal contamination guard): a learning is
+  // eligible for ranking/counting in this eval only if EVERY episode it is
+  // linked to (via its own frontmatter episodes list) is dated on/before the
+  // cutoff. A learning with any post-cutoff or undatable link was derived
+  // from information that would not have existed yet at eval time, so it
+  // must never be surfaced, counted as ground truth, or billed for tokens —
+  // otherwise the eval leaks held-out (future) knowledge back into itself.
+  const episodesByPath = new Map(episodes.map((e) => [e.path, e]));
+  function isPreCutoff(learning) {
+    const links = learning.fm.episodes || [];
+    if (!links.length) return false;
+    return links.every((link) => {
+      const ep = episodesByPath.get(link.path);
+      return Boolean(ep && ep.date && ep.date <= cutoff);
+    });
+  }
+  const preCutoffActive = active.filter(isPreCutoff);
+  const preCutoffIds = new Set(preCutoffActive.map((l) => l.id));
+  const preCutoffOnly = (l) => preCutoffIds.has(l.id);
+
   function relevantLearningsFor(ho) {
-    return active.filter((l) => learningCategories.get(l.id)?.has(ho.category));
+    return active.filter((l) => preCutoffIds.has(l.id) && learningCategories.get(l.id)?.has(ho.category));
   }
 
   const scorable = heldOut.filter((ho) => relevantLearningsFor(ho).length > 0);
@@ -141,31 +161,39 @@ export function evalKnowledge({ workspace, copilotHome, home, negativeQueries = 
     injectedTokens: Math.ceil(fmTotalBytes / BYTES_PER_TOKEN),
   };
 
-  // --- wholeIndex: every active learning's trigger line injected, unconditionally. ---
-  // A relevant learning that exists in the active set is, by construction,
-  // always included — the arm's real cost is the token bill, not ranking.
-  const wiTotalBytes = active.reduce((n, l) => n + Buffer.byteLength(l.fm.trigger || '', 'utf8'), 0);
+  // --- wholeIndex: every pre-cutoff active learning's trigger line injected,
+  // unconditionally. A relevant learning in the pre-cutoff set is, by
+  // construction, always included — the arm's real cost is the token bill,
+  // not ranking. Post-cutoff-derived learnings are excluded from both the
+  // hit determination and the byte bill (temporal contamination guard).
+  const wiTotalBytes = preCutoffActive.reduce((n, l) => n + Buffer.byteLength(l.fm.trigger || '', 'utf8'), 0);
   const wholeIndex = {
     hitRate: scorable.length ? 1 : 0,
     falseSurfaceRate: round3(
       falseSurfaceRateFor(negativeQueries, (q) => {
-        const results = rankLearnings({ workspace, query: q, limit: Math.max(active.length, 1), home });
+        const results = rankLearnings({
+          workspace, query: q, limit: Math.max(preCutoffActive.length, 1), home, include: preCutoffOnly,
+        });
         return results.length ? results[0].score : 0;
       })
     ),
     injectedTokens: Math.ceil(wiTotalBytes / BYTES_PER_TOKEN),
   };
 
-  // --- bm25: rankLearnings top-3, the store's real retrieval path. ---
+  // --- bm25: rankLearnings top-3, the store's real retrieval path. One
+  // ranking call per held-out query (not two) — reused for both the hit-rate
+  // and injected-token-cost passes. `include: preCutoffOnly` keeps
+  // post-cutoff-derived learnings out of the results entirely, so they can
+  // never be surfaced or billed for tokens.
+  const scorableSet = new Set(scorable);
   let bmHits = 0;
-  for (const ho of scorable) {
-    const results = rankLearnings({ workspace, query: episodeQuery(ho), limit: 3, home });
-    const relevant = new Set(relevantLearningsFor(ho).map((l) => l.id));
-    if (results.some((r) => relevant.has(r.id))) bmHits++;
-  }
   let bmTotalBytes = 0;
   for (const ho of heldOut) {
-    const results = rankLearnings({ workspace, query: episodeQuery(ho), limit: 3, home });
+    const results = rankLearnings({ workspace, query: episodeQuery(ho), limit: 3, home, include: preCutoffOnly });
+    if (scorableSet.has(ho)) {
+      const relevant = new Set(relevantLearningsFor(ho).map((l) => l.id));
+      if (results.some((r) => relevant.has(r.id))) bmHits++;
+    }
     for (const r of results) bmTotalBytes += Buffer.byteLength(`${r.trigger} ${r.claimLine}`, 'utf8');
   }
   const bmAvgBytes = heldOut.length ? bmTotalBytes / heldOut.length : 0;
@@ -173,7 +201,7 @@ export function evalKnowledge({ workspace, copilotHome, home, negativeQueries = 
     hitRate: scorable.length ? round3(bmHits / scorable.length) : 0,
     falseSurfaceRate: round3(
       falseSurfaceRateFor(negativeQueries, (q) => {
-        const results = rankLearnings({ workspace, query: q, limit: 3, home });
+        const results = rankLearnings({ workspace, query: q, limit: 3, home, include: preCutoffOnly });
         return results.length ? results[0].score : 0;
       })
     ),

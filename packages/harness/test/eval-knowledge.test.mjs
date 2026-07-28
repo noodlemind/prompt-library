@@ -121,6 +121,129 @@ test('evalKnowledge splits 4 train / 2 held-out, scores bm25 a clean hit, and st
   assert.ok(['whole-index', 'bm25-top3'].includes(result.recommendation));
 });
 
+/**
+ * Temporal contamination guard: a learning derived ONLY from a held-out
+ * (post-cutoff) episode must never be surfaced or billed by any arm, even
+ * when its trigger is engineered to dominate a held-out query's ranking.
+ * 4 train episodes (same category, dated on/before the cutoff) + 2 held-out
+ * episodes (post-cutoff); one clean learning linked only to a train episode,
+ * one "leak" learning linked only to a held-out episode.
+ */
+function seedContaminationFixture() {
+  const ws = tempDir('evalk-leak-ws-');
+  const home = tempDir('evalk-leak-home-');
+
+  const train1 = writeEpisode(ws, 'auth', 'auth-1', { title: 'Auth token refresh race condition', tags: ['auth', 'token'], date: '2026-01-01' });
+  writeEpisode(ws, 'auth', 'auth-2', { title: 'Auth cookie domain mismatch', tags: ['auth', 'cookie'], date: '2026-01-02' });
+  writeEpisode(ws, 'auth', 'auth-3', { title: 'Auth scope validation gap', tags: ['auth', 'scope'], date: '2026-01-03' });
+  writeEpisode(ws, 'auth', 'auth-4', { title: 'Auth redirect allowlist bug', tags: ['auth', 'redirect'], date: '2026-01-04' });
+  const heldOut1 = writeEpisode(ws, 'auth', 'auth-5', {
+    title: 'Auth token refresh regression leak marker',
+    tags: ['auth', 'token', 'leak', 'marker'],
+    date: '2026-03-01',
+  });
+  writeEpisode(ws, 'auth', 'auth-6', { title: 'Auth billing rotation issue', tags: ['auth', 'rotation'], date: '2026-03-02' });
+
+  ensureStore(ws, { home });
+  const cleanTrigger = 'auth token refresh race condition';
+  const cleanBody = 'Retry the token refresh exactly once behind a per-session lock.';
+  // The leak trigger/body are engineered to overlap heavily with the
+  // auth-5 held-out query and are padded (within the learning byte cap) so,
+  // if it leaked into an arm's results, it would dominate that arm's
+  // injected-token bill.
+  const leakTrigger = `auth token refresh regression leak marker ${'padding '.repeat(60)}`.trim();
+  const leakBody = 'This must never surface.';
+
+  const opsPath = writeOps(ws, [
+    {
+      op: 'ADD',
+      domain: 'auth',
+      slug: 'token-refresh-clean',
+      trigger: cleanTrigger,
+      body: cleanBody,
+      episodes: [{ path: train1.path, sha256: train1.sha256, kind: 'fix', plan: 'docs/plans/p1.md' }],
+    },
+    {
+      op: 'ADD',
+      domain: 'auth',
+      slug: 'token-refresh-leak',
+      trigger: leakTrigger,
+      body: leakBody,
+      episodes: [{ path: heldOut1.path, sha256: heldOut1.sha256, kind: 'fix', plan: 'docs/plans/p1.md' }],
+    },
+  ]);
+  const applied = applyOps({ workspace: ws, opsPath, home });
+  assert.equal(applied.exitCode, 0, JSON.stringify(applied.rejected));
+
+  return { ws, home, cleanTrigger };
+}
+
+test('evalKnowledge never surfaces or bills a learning linked only to a held-out episode', () => {
+  const { ws, home, cleanTrigger } = seedContaminationFixture();
+  const result = evalKnowledge({ workspace: ws, copilotHome: ws, home, negativeQueries: DEFAULT_NEGATIVE_QUERIES });
+
+  assert.equal(result.pass, true);
+  assert.equal(result.split.train, 4);
+  assert.equal(result.split.heldOut, 2);
+
+  // The clean, pre-cutoff learning still surfaces normally — the fix must
+  // not collaterally suppress legitimate ranking.
+  assert.equal(result.arms.bm25.hitRate, 1);
+  assert.equal(result.arms.wholeIndex.hitRate, 1);
+
+  // wholeIndex bills only the pre-cutoff learning's trigger bytes — the
+  // leak learning's (much larger) trigger must contribute nothing.
+  const expectedWholeIndexTokens = Math.ceil(Buffer.byteLength(cleanTrigger, 'utf8') / 4);
+  assert.equal(result.arms.wholeIndex.injectedTokens, expectedWholeIndexTokens);
+
+  // bm25's per-query byte bill stays small — if the leak learning (padded
+  // to hundreds of bytes) had surfaced for even one held-out query, this
+  // would blow well past a small bound.
+  assert.ok(
+    result.arms.bm25.injectedTokens < 60,
+    `expected bm25 injectedTokens to reflect only the clean learning, got ${result.arms.bm25.injectedTokens}`
+  );
+});
+
+test('bm25 arm reports a nonzero falseSurfaceRate when a negative query genuinely overlaps a learning trigger', () => {
+  const ws = tempDir('evalk-false-ws-');
+  const home = tempDir('evalk-false-home-');
+
+  const e1 = writeEpisode(ws, 'infra', 'infra-1', {
+    title: 'Database connection pool exhaustion timeout',
+    tags: ['infra', 'database'],
+    date: '2026-01-01',
+  });
+  writeEpisode(ws, 'infra', 'infra-2', { title: 'Infra disk usage alert', tags: ['infra'], date: '2026-01-02' });
+  writeEpisode(ws, 'infra', 'infra-3', { title: 'Infra log rotation gap', tags: ['infra'], date: '2026-01-03' });
+  writeEpisode(ws, 'infra', 'infra-4', { title: 'Infra deploy rollback delay', tags: ['infra'], date: '2026-01-04' });
+
+  ensureStore(ws, { home });
+  const trigger = 'database connection pool exhaustion timeout';
+  const opsPath = writeOps(ws, [
+    {
+      op: 'ADD',
+      domain: 'infra',
+      slug: 'connection-pool-exhaustion',
+      trigger,
+      body: 'Cap pool size and add a queue timeout so callers fail fast instead of piling up.',
+      episodes: [{ path: e1.path, sha256: e1.sha256, kind: 'fix', plan: 'docs/plans/p1.md' }],
+    },
+  ]);
+  const applied = applyOps({ workspace: ws, opsPath, home });
+  assert.equal(applied.exitCode, 0, JSON.stringify(applied.rejected));
+
+  // Crafted to score well above MIN_SCORE (0.15): every token overlaps the
+  // learning's own trigger, so this "unrelated topic" negative query is in
+  // fact a genuine (if contrived) trigger match — the real scoring branch,
+  // not a synthetic override.
+  const negativeQuery = 'database connection pool exhaustion timeout';
+  const result = evalKnowledge({ workspace: ws, copilotHome: ws, home, negativeQueries: [negativeQuery] });
+
+  assert.equal(result.pass, true);
+  assert.ok(result.arms.bm25.falseSurfaceRate > 0, JSON.stringify(result.arms));
+});
+
 test('evalKnowledge blocks with exit 2 when fewer than 4 dated episodes exist', () => {
   const ws = tempDir('evalk-few-ws-');
   const home = tempDir('evalk-few-home-');

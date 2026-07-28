@@ -47,6 +47,7 @@ test('knowledgeSlos computes cited/surfaced utilization and consolidation engage
   const slos = knowledgeSlos(events);
   assert.equal(slos.surfaced, 3);
   assert.equal(slos.cited, 1);
+  assert.equal(slos.citedSurfaced, 1);
   assert.equal(slos.utilization, 0.33);
   assert.equal(slos.consolidations, 2);
   assert.equal(slos.humanActions, 3);
@@ -57,11 +58,27 @@ test('knowledgeSlos is null-safe with no surfaced learnings or consolidations', 
   assert.deepEqual(knowledgeSlos([]), {
     surfaced: 0,
     cited: 0,
+    citedSurfaced: 0,
     utilization: null,
     consolidations: 0,
     humanActions: 0,
     engagement: null,
   });
+});
+
+test('knowledgeSlos separates cited-but-never-surfaced ids from the surfaced intersection', () => {
+  // "z" is cited (verify --learnings reported it applied) but was never
+  // surfaced by orient — the displayed fraction must use the intersection,
+  // not the raw cited count, or it will contradict the percent shown.
+  const events = [
+    { type: 'orient', learnings: ['a'] },
+    { type: 'verify', learnings: ['a', 'z'] },
+  ];
+  const slos = knowledgeSlos(events);
+  assert.equal(slos.surfaced, 1);
+  assert.equal(slos.cited, 2);
+  assert.equal(slos.citedSurfaced, 1);
+  assert.equal(slos.utilization, 1);
 });
 
 test('buildReport attaches slos.knowledge computed from the same event window', () => {
@@ -93,6 +110,16 @@ test('renderReport flags knowledge utilization as warn under 15% once surfaced >
   assert.match(text, /\[!\]\s+knowledge\s+utilization 0% \(0\/20 surfaced\)/);
 });
 
+test('renderReport shows the cited/surfaced intersection, not raw cited, when a cited id was never surfaced', () => {
+  const events = [
+    { type: 'orient', learnings: ['a'] },
+    { type: 'verify', learnings: ['a', 'z'] },
+  ];
+  const report = buildReport({ workspace: os.tmpdir(), events });
+  const text = renderReport(report, pipeUi);
+  assert.match(text, /\[ok\]\s+knowledge\s+utilization 100% \(1\/1 surfaced\)/);
+});
+
 test('renderReport skips the knowledge section entirely with no surfaced learnings or consolidations', () => {
   const report = buildReport({ workspace: os.tmpdir(), events: [{ type: 'gate', result: 'pass' }] });
   assert.equal(report.slos.knowledge.surfaced, 0);
@@ -121,6 +148,7 @@ test('harness report --json surfaces slos.knowledge cited-over-surfaced utilizat
   assert.deepEqual(out.slos.knowledge, {
     surfaced: 3,
     cited: 1,
+    citedSurfaced: 1,
     utilization: 0.33,
     consolidations: 2,
     humanActions: 3,
