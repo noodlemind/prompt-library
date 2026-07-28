@@ -276,7 +276,11 @@ export function absorbHandEdits({ workspace, home, log = () => {} }) {
   const ids = [...absorbed.map((a) => a.id), ...deleted].join(', ');
   const { committed } = commitStore(dir, `human edit: ${ids}`);
   try {
-    mirrorLearnings({ workspace, home, log });
+    // `deleted` names the ids a human removed directly (git status "D") —
+    // human deletion must win in the mirror too, so those ids are named via
+    // retiredIds even though the store itself has already forgotten them by
+    // the time this runs (same reasoning as purgeAll/rebuildStore).
+    mirrorLearnings({ workspace, home, log, retiredIds: deleted });
   } catch {
     // best effort — a mirror failure must never block absorb.
   }
@@ -402,7 +406,11 @@ export function purgeEpisode({ workspace, target, home }) {
   rebuildIndex(dir);
   commitStore(dir, `purge: ${target}`);
   try {
-    mirrorLearnings({ workspace, home });
+    // removedLearnings names only the learnings this cascade FULLY DELETED
+    // (as opposed to removedLinks, which were merely delinked and still
+    // exist) — human deletion must win in the mirror too, so those ids are
+    // named via retiredIds even though the store has already forgotten them.
+    mirrorLearnings({ workspace, home, retiredIds: removedLearnings });
   } catch {
     // best effort — a mirror failure must never block purge.
   }

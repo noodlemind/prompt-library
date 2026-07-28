@@ -277,3 +277,62 @@ test('rebuild --yes and purge --all fully clear the mirror for the ids they wipe
   assert.doesNotMatch(indexAfterPurgeAll, /general\//, 'INDEX.md is header-only after purge --all');
   assert.match(indexAfterPurgeAll, /Opt-in commit mode/, 'INDEX.md still carries the header');
 });
+
+test('knowledge purge <sole episode> cascade-deletes the learning AND removes its mirror file (human deletion wins in the mirror too)', () => {
+  const c = ctx();
+  assert.equal(run(c, ['knowledge', 'commit', 'repo']).status, 0);
+
+  const remembered = run(c, ['remember', 'sole evidence claim body', '--trigger', 'sole evidence trigger']);
+  assert.equal(remembered.status, 0, remembered.stderr || remembered.stdout);
+  const { learningId, episodePath } = JSON.parse(remembered.stdout);
+  assert.equal(learningId, 'general/sole-evidence-trigger');
+
+  const mirrorFile = path.join(mirrorRoot(c.ws), 'general', 'sole-evidence-trigger.md');
+  assert.ok(fs.existsSync(mirrorFile), 'precondition: the learning is mirrored');
+  const indexBefore = fs.readFileSync(path.join(mirrorRoot(c.ws), 'INDEX.md'), 'utf8');
+  assert.match(indexBefore, /general\/sole-evidence-trigger/, 'precondition: INDEX lists the learning');
+
+  // Hand-plant a foreign file to prove the cascade-delete sweep doesn't over-reach.
+  const foreignDir = path.join(mirrorRoot(c.ws), 'other');
+  fs.mkdirSync(foreignDir, { recursive: true });
+  const foreignPath = path.join(foreignDir, 'foreign.md');
+  const foreignContent = 'foreign content from another machine\n';
+  fs.writeFileSync(foreignPath, foreignContent, 'utf8');
+
+  const purge = run(c, ['knowledge', 'purge', episodePath]);
+  assert.equal(purge.status, 0, purge.stderr || purge.stdout);
+  const out = JSON.parse(purge.stdout);
+  assert.deepEqual(out.removed.learnings, [learningId], 'the sole-evidence learning is cascade-deleted from the store');
+
+  assert.ok(!fs.existsSync(mirrorFile), 'the mirror file is removed on the same purge that cascade-deletes the learning');
+  const indexAfter = fs.readFileSync(path.join(mirrorRoot(c.ws), 'INDEX.md'), 'utf8');
+  assert.doesNotMatch(indexAfter, /general\/sole-evidence-trigger/, 'INDEX.md drops the cascade-deleted learning');
+  assert.ok(fs.existsSync(foreignPath), 'the foreign file still survives the cascade-delete sweep');
+  assert.equal(fs.readFileSync(foreignPath, 'utf8'), foreignContent, 'foreign file content is untouched');
+});
+
+test('hand-deleting a mirrored learning file in the store removes its mirror copy on the next absorb (human deletion wins)', () => {
+  const c = ctx();
+  assert.equal(run(c, ['knowledge', 'commit', 'repo']).status, 0);
+
+  const remembered = run(c, ['remember', 'hand deleted claim body', '--trigger', 'hand deleted trigger']);
+  assert.equal(remembered.status, 0, remembered.stderr || remembered.stdout);
+  const { learningId } = JSON.parse(remembered.stdout);
+  assert.equal(learningId, 'general/hand-deleted-trigger');
+
+  const mirrorFile = path.join(mirrorRoot(c.ws), 'general', 'hand-deleted-trigger.md');
+  assert.ok(fs.existsSync(mirrorFile), 'precondition: the learning is mirrored');
+
+  const { dir } = ensureStore(c.ws, { home: c.harnessHome });
+  const storeLearning = listLearnings(dir).find((l) => l.id === learningId);
+  assert.ok(storeLearning, 'precondition: the learning exists in the store');
+  fs.rmSync(storeLearning.file, { force: true }); // human deletes the store file directly, bypassing the CLI entirely
+
+  // Any mutation command absorbs the hand edit first — runRemember calls
+  // absorbHandEdits before writing its own new learning.
+  const another = run(c, ['remember', 'another claim body', '--trigger', 'another trigger']);
+  assert.equal(another.status, 0, another.stderr || another.stdout);
+
+  assert.ok(!fs.existsSync(mirrorFile), 'the mirror copy is removed once the hand deletion is absorbed');
+  assert.ok(!listLearnings(dir).some((l) => l.id === learningId), 'the learning is gone from the store too');
+});
