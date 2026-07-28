@@ -156,7 +156,7 @@ test('knowledge off: knowledgeDebt is null and no hint', () => {
   );
 });
 
-test('knowledge freeze: injection stays on but knowledgeDebt is null (debt gate requires mode "on")', () => {
+test('knowledge freeze: injection stays on but knowledgeDebt is null (debt gate requires mode "on"|"suggest")', () => {
   const c = ctx();
   seedStoreWithDebt(c);
   assert.equal(run(c, ['knowledge', 'freeze']).status, 0);
@@ -166,7 +166,7 @@ test('knowledge freeze: injection stays on but knowledgeDebt is null (debt gate 
   const out = JSON.parse(res.stdout);
 
   assert.equal(out.learnings.length, 1, 'freeze keeps learnings injection on');
-  assert.equal(out.knowledgeDebt, null, 'freeze is not mode "on" so debt is not reported');
+  assert.equal(out.knowledgeDebt, null, 'freeze is not mode "on"/"suggest" so debt is not reported');
   assert.ok(
     !out.nextTools.some((t) => t.includes('consolidate --candidates')),
     JSON.stringify(out.nextTools)

@@ -64,7 +64,7 @@ Installed to `~/.copilot/bin/harness` on every `harness install`. Add to PATH wi
 
 | Command | Cursor analogue | Budget tier | Side effects |
 |---------|-----------------|-------------|--------------|
-| `orient --query "<task>"` | Codebase search + task context | **F1** — writes ≤2 KB `.harness/context-pack.md` plus a query-ranked `.harness/repo-map.md` (code orientation, regenerated every turn from live git — never stale); surfaces a `harness index` staleness hint when the knowledge index has drifted | session.json, events.jsonl, repo-map.md |
+| `orient --query "<task>" [--explain]` | Codebase search + task context | **F1** — writes ≤2 KB `.harness/context-pack.md` plus a query-ranked `.harness/repo-map.md` (code orientation, regenerated every turn from live git — never stale); surfaces a `harness index` staleness hint when the knowledge index has drifted; `--explain` decomposes the learning ranking score for every candidate (deterministic, no store access beyond `learnings`) | session.json, events.jsonl, repo-map.md |
 | `recall "<query>"` | Standalone search / debug | F1 paths only | events |
 | `gate --phase implement --plan <path>` | Pre-edit plan/state guard | F3 on fail | session + events |
 | `verify --plan <path> [--base ref] [--enforcement mode] [--learnings <id1,id2>]` | Named checks, schema/state, tasks, scope, reviews, gaps, findings, evidence | no prompt context | evidence + session + events |
@@ -75,11 +75,11 @@ Installed to `~/.copilot/bin/harness` on every `harness install`. Add to PATH wi
 | `get [--docid id \| --path rel]` | Fetch bounded doc excerpt | F2 on demand | none |
 | `compound --plan <path>` | Consume passed evidence, index, classify learning, record telemetry | after verify | index + session + telemetry + events |
 | `compound --insight --title "..." --body "..."` | Evidence-free capture of investigation learnings (`kind: insight`, secret-scanned, ranked below verified fixes, never promotable) | no plan/evidence needed | solution doc + index + events |
-| `consolidate [--status \| --candidates \| --apply --ops <path> \| --rebuild --yes]` | Knowledge loop: deterministic debt gauge, work packet for the consolidation skill, the validated sole writer of learnings (≤5 files/run, 1,200-byte cap, secret scan, imperative lint), and `--rebuild --yes` full T2 regeneration from T1 (the model-upgrade path — git history in the store retains prior learnings) | `--status`/`--candidates` read-only | learnings store (local, never pushed) + events |
+| `consolidate [--status \| --candidates \| --apply --ops <path> \| --rebuild --yes]` | Knowledge loop: deterministic debt gauge (quarantine + at-cap domains surfaced), work packet for the consolidation skill, the validated sole writer of learnings via ADD/STRENGTHEN/SUPERSEDE/MERGE/NOOP ops (≤5 files/run — MERGE counts `1 + targets.length`, 1,200-byte cap, secret scan, imperative lint, 25-active-per-domain cap enforced as `E_DOMAIN_CAP`, three content-failure strikes on the same episode quarantine it), and `--rebuild --yes` full T2 regeneration from T1 (the model-upgrade path — git history in the store retains prior learnings); `knowledge.mode: suggest` requires `--apply --yes` after a human reviews the ops JSON | `--status`/`--candidates` read-only | learnings store (local, never pushed) + events |
 | `remember "<claim>" --trigger "<t>" [--domain <d>]` | Manual "remember this" — human teaching lane | on human correction in chat | human-teaching episode + an active `source: human` learning, one sole-writer transaction + session + events |
-| `learning <retire\|dispute\|confirm> <id> --reason "<r>"` | Manual memory veto — the engineer skill MUST invoke this when a human corrects a learning in conversation | on human correction in chat | frontmatter status mutation + store commit + events |
+| `learning <retire\|dispute\|confirm\|promote> <id> --reason "<r>" \| --to <path>` | Manual memory veto (retire/dispute/confirm — the engineer skill MUST invoke this when a human corrects a learning in conversation), or recording that a learning's behavior now lives in a T3 primitive (`promote`, after that primitive's own PR merges) | on human correction, or post-merge | frontmatter status/`promoted_to` mutation + store commit + events |
 | `learnings [domain] [--why <id>]` | Memory browser — provenance chain and failure annotations | read-only | none |
-| `knowledge <on\|off\|freeze\|capture-only> \| --status \| purge <file\|--all>` | Kill switch and cascade-delete; human deletion always wins over "never deleted" | on demand | config.json write, or cascade delete, + store commit + events (including `--status`) |
+| `knowledge <on\|suggest\|off\|freeze\|capture-only> \| --status \| purge <file\|--all> \| commit <none\|repo>` | Kill switch (`suggest` = human-approval gate on `consolidate --apply`), cascade-delete, and opt-in mirroring of active learnings into `docs/knowledge/learnings/` in the product repo; human deletion always wins over "never deleted" | on demand | config.json write (`{ mode, commit }`), cascade delete, or product-repo mirror + store commit + events (including `--status`) |
 | `eval-knowledge [--json]` | Deterministic retrieval proxy per ranking arm on a temporally held-out split — not the model-graded net-benefit number, which is deferred | read-only, CI/audit not per-turn | none |
 | `events [--session id] [--failures] [--summary]` | Schema-v2 audit / stuck debugging | read-only | none |
 | `report [--sync] [--global] [--check] [--json]` | Token-efficiency report over telemetry: ranked sinks + improvement flags | read-only, except `--sync` writes `~/.harness/telemetry/` | none in workspace |
@@ -147,7 +147,7 @@ For locked plans, both commands enforce criterion-to-check mappings and configur
 
 Allowed outcomes are `passed`, `failed`, and `inconclusive`. Only fresh `passed` evidence bound to the current plan contract, base ref, changed-file set, and workspace contents permits a delivery completion claim or compound. Plan Activity entries are excluded from the contract digest so the append-only ledger can record the returned evidence path. Read-only Answer and Investigate modes do not run delivery verification. Plan frontmatter names checks; executable argv arrays come only from `.github/harness/checks.yaml` and run without a shell. Approved one-off commands run outside harness through explicit host tool approval and are recorded as external evidence.
 
-**Learning attribution (cited half).** `orient` records the learning ids it surfaced in a session; `verify --learnings <id1,id2>` closes the loop by recording the ids the skill actually applied while doing the work — pass only ids that materially changed an action, not every id the pack mentioned. `harness report` derives knowledge-layer utilization from cited ÷ surfaced across the event log, and `harness doctor` warns when utilization stays under 15% with 20+ surfaced learnings.
+**Learning attribution (cited half).** `orient` records the learning ids it surfaced in a session; `verify --learnings <id1,id2>` closes the loop by recording the ids the skill actually applied while doing the work — pass only ids that materially changed an action, not every id the pack mentioned. `orient` also records `learningsBytes` on its own event — the post-truncation byte size of the "## Learnings (memory)" section actually injected into the pack — which `harness report`'s token ledger sums into an approximate injected-token count (`slos.knowledgeTokens`), a cost figure only, never a "tokens saved" claim. `harness report` derives knowledge-layer utilization from cited ÷ surfaced across the event log (both a unique-id rate and an occurrence-weighted rate), and `harness doctor` warns when the weighted utilization stays under 15% with 20+ surfaced occurrences.
 
 **recall**
 ```json
@@ -180,7 +180,7 @@ Allowed outcomes are `passed`, `failed`, and `inconclusive`. Only fresh `passed`
 }
 ```
 
-**consolidate** (`--status` default shown; `--candidates` returns `{ clusters, learnings }`; `--apply` returns `{ applied, rejected, committed, exitCode }`; `--rebuild --yes` returns `{ pass, exitCode, archived, debt, nextTools }`)
+**consolidate** (`--status` default shown; `--candidates` returns `{ schema, contract, clusters, learnings, domains, storeDir }`; `--apply` returns `{ applied, rejected, committed, exitCode }` — `applied[].op` includes `MERGE`, `rejected[].code` includes `E_DOMAIN_CAP`; `--rebuild --yes` returns `{ pass, exitCode, archived, debt, nextTools }`)
 ```json
 {
   "mode": "on",
@@ -188,6 +188,7 @@ Allowed outcomes are `passed`, `failed`, and `inconclusive`. Only fresh `passed`
   "debt": 6,
   "threshold": 5,
   "learnings": { "active": 12, "total": 14 },
+  "domains": [{ "domain": "sql", "active": 12, "cap": 25, "atCap": false }],
   "promotionCandidates": [{ "id": "sql/adding-not-null-columns-to-hot-tables", "verified": 3, "plans": 2 }],
   "quarantined": [],
   "nextTools": ["harness consolidate --candidates"]
@@ -206,12 +207,12 @@ Allowed outcomes are `passed`, `failed`, and `inconclusive`. Only fresh `passed`
 }
 ```
 
-**learning**
+**learning** (`<retire|dispute|confirm>` shown; `promote <id> --to <path>` returns the same shape with `status: "promoted"`)
 ```json
 { "pass": true, "exitCode": 0, "id": "sql/adding-not-null-columns-to-hot-tables", "status": "retired", "blockedReason": null }
 ```
 
-**learnings** (default listing; `--why <id>` returns the single-learning provenance shape shown second)
+**learnings** (default listing; `--why <id>` returns the single-learning provenance shape shown second; `status` can be `active|provisional|disputed|retired|superseded|promoted`)
 ```json
 {
   "learnings": [{ "id": "sql/adding-not-null-columns-to-hot-tables", "status": "active", "source": "human", "trigger": "...", "verified": 3, "plans": 2, "promotionEligible": true, "failures": 0 }],
@@ -227,6 +228,7 @@ Allowed outcomes are `passed`, `failed`, and `inconclusive`. Only fresh `passed`
   "source": "human",
   "lastConfirmed": "2026-07-20",
   "supersededBy": null,
+  "promotedTo": null,
   "mergedFrom": null,
   "episodes": [{ "path": "docs/solutions/...", "kind": "fix", "plan": "docs/plans/..." }],
   "verified": 3,
@@ -236,9 +238,9 @@ Allowed outcomes are `passed`, `failed`, and `inconclusive`. Only fresh `passed`
 }
 ```
 
-**knowledge** (`--status`/default shown; `<on|off|freeze|capture-only>` returns `{ pass, mode }`; `purge` returns the shape below)
+**knowledge** (`--status`/default shown, returns `{ mode, commit }`; `<on|suggest|off|freeze|capture-only>` returns `{ pass, mode }`; `commit <none|repo>` returns `{ pass, commit }`; `purge` returns the shape below)
 ```json
-{ "mode": "on" }
+{ "mode": "on", "commit": "none" }
 ```
 ```json
 { "pass": true, "exitCode": 0, "removed": { "episode": "docs/solutions/...", "learnings": ["..."], "links": ["..."], "ledger": 1 }, "blockedReason": null }

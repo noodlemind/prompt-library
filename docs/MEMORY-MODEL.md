@@ -41,9 +41,13 @@ stateDiagram-v2
 
 This diagram is the design's target state, not the current implementation: today
 `provisional → active` happens only via a verified fix episode (STRENGTHEN) or
-`harness learning confirm`, not usage counting — and repeated verify-failures surface
-as a `failures` annotation in `learnings` output rather than auto-disputing (the
-quarantine/auto-dispute writer is Milestone 3).
+`harness learning confirm`, not usage counting. A separate quarantine writer does ship:
+three recorded content-failure strikes against the same episode (`path@sha256`) —
+schema, secret, imperative-lint, byte-cap, dedup, or target rejections at
+`consolidate --apply` — quarantine it, surfaced by `harness consolidate --status` and
+`harness learnings`. Auto-dispute of an *existing* learning still does not exist:
+repeated verify-failures against a published learning surface only as a `failures`
+annotation in `learnings` output; a human reads that signal and retires or disputes it.
 
 ## Derived, never stored
 
@@ -57,6 +61,20 @@ time, never persisted as a field:
 - **promotion eligibility** = ≥3 verified (`kind: fix`) evidence links across ≥2 distinct
   plans — computed and displayed by `harness learnings --why` / `consolidate --status`,
   never written as a status field.
+
+## Caps
+
+- **Injection**: top-3 learnings in the orient pack (token safety).
+- **Storage**: 25 active learnings per domain (`DOMAIN_ACTIVE_CAP`). Superseded, retired,
+  disputed, and **promoted** learnings are excluded from both the cap count and retrieval.
+  An `ADD` (or a `SUPERSEDE`/`MERGE` introducing a new id) into a domain already at cap is
+  rejected (`E_DOMAIN_CAP`) — cap pressure is a run-level resource limit, not a defect in
+  the episodes behind it, so it never records a quarantine strike. The model must instead
+  `MERGE` two or more existing learnings that genuinely restate one claim — re-deriving the
+  merged body from their raw episodes and recording `merged_from` on the new learning while
+  every target is tombstoned (`superseded_by`) — or a human retires one first. When no
+  legitimate merge exists, the consolidation skill degrades to warn-and-review (a `NOOP` plus
+  a report of the cap pressure to the human) rather than forcing a lossy merge.
 
 ## Trust gradient
 
@@ -77,7 +95,10 @@ in the knowledge store:
 | Teach | `harness remember "<claim>" --trigger "<applicability>" [--domain <d>]` |
 | Inspect | `harness learnings [domain] [--why <id>]` |
 | Veto (retire / dispute / confirm) | `harness learning <retire\|dispute\|confirm> <id> --reason "<r>"` |
+| Promote (record behavior → primitive) | `harness learning promote <id> --to <path>` |
+| Approve-before-write | `harness knowledge suggest` (see mode matrix below) |
 | Kill switch | `harness knowledge <off\|freeze\|capture-only>` |
+| Opt-in product-repo mirror | `harness knowledge commit <none\|repo>` |
 | Delete | `harness knowledge purge <file\|--all>` |
 | Reset (model-upgrade regeneration) | `harness consolidate --rebuild --yes` |
 
@@ -87,15 +108,48 @@ auto-retired, and enter as `status: active` immediately — no provisional dampi
 the learning it produces is the only lane that sets `source: human`.
 `harness learning retire|dispute|confirm` is a separate authority — it mutates an existing
 learning's frontmatter only (`status`, and `last_confirmed` on confirm). It never creates an
-episode and never changes `source`.
+episode and never changes `source`. `harness learning promote --to <path>` is narrower still:
+it only records that a learning's behavior now lives in a primitive (after that primitive's
+own PR merges) and retires the learning from ranking; insight-only learnings (no `fix` or
+`human-teaching` episode) can never promote.
 
-## Hand-editability (current position)
+### Knowledge modes
 
-**Hand-edit auto-commit semantics are Milestone 3, not shipped yet.** The design's target
-behavior — detecting a non-CLI edit to a learning file via `git status`/`diff`, committing
-it as a human edit, and snapshotting it as a `kind: human-teaching` episode so
-`consolidate --rebuild` preserves it — does not exist today. Until it ships, do not
-hand-edit files under `~/.harness/knowledge/<repo-id>/learnings/`: such edits are not
-detected, not snapshotted as an episode, and will be silently discarded by the next
-`consolidate --rebuild`. Use `harness remember` to add or correct a claim, and
-`harness learning retire|dispute|confirm` to change a learning's status.
+| Mode | Orient injects + debt hint | `compound --insight` | `remember` | `consolidate --apply` |
+|------|-----------------------------|-----------------------|------------|------------------------|
+| `on` | yes | yes | yes | yes |
+| `suggest` | yes | yes | yes | only with `--yes`, after a human reviews the ops JSON |
+| `freeze` | yes | yes | no | no |
+| `capture-only` | no | yes | no | no |
+| `off` | no | no | no | no |
+
+`suggest` is the one approve-before-write control: `consolidate --apply` still validates
+the ops file the same way, but stops at `E_MODE` unless the human re-runs it with `--yes`
+after reading `.harness/consolidate-ops.json`. Every other mode transition is a plain kill
+switch — `harness knowledge purge` still runs in every mode, including `off`, because human
+deletion always wins.
+
+## Hand-editability
+
+A direct, non-CLI edit to a file under `~/.harness/knowledge/<repo-id>/learnings/` is
+absorbed automatically — every mutation entry point (`consolidate --apply`, `remember`,
+`learning retire|dispute|confirm|promote`, `knowledge purge`, `consolidate --rebuild --yes`)
+runs `git status --porcelain` in the store first and commits any dirty edit as its own
+`human edit: <id>` commit, landing before that entry point's own commit.
+
+- **A modified learning file** is snapshotted verbatim as a `kind: human-teaching` episode
+  at `docs/solutions/teachings/<date>-hand-edit-<slug>.md` (secret-scanned; a hit skips the
+  snapshot but still absorbs the edit), linked into the learning's `episodes`, and given
+  `source: human` — so `consolidate --rebuild` re-derives the hand-taught claim from disk
+  instead of discarding it.
+- **A hand-deleted learning file** is absorbed as a deletion: human deletion always wins,
+  exactly like `harness knowledge purge`, and (under `knowledge commit repo`) the mirrored
+  product-repo copy is removed too.
+- The absorbed content may exceed the 1,200-byte learning cap — human authority overrides
+  the cap for hand edits (logged, not rejected; the cap binds only the sole writer's own
+  ops).
+
+Use `harness remember` to add a new claim and `harness learning retire|dispute|confirm` to
+change a learning's status when a CLI command is more convenient than a direct edit — both
+remain first-class paths; hand-editing is no longer a discouraged shortcut, it is absorbed
+with full provenance either way.

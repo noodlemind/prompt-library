@@ -70,10 +70,8 @@ or anything that doesn't match a known pattern can pass through undetected. The 
 backstop is architectural, not the scanner: the learnings store lives outside the working
 tree at `~/.harness/knowledge/<repo-id>/` and is never pushed by the harness, so a missed
 secret in a learning stays on the developer's machine rather than reaching a shared
-remote. `knowledge.commit: repo` opt-in mode is the documented exception — it copies
-learnings into the product repo for teams that want them versioned together, and in doing
-so knowingly re-opens that exposure; it routes through branch protection / PR and the same
-best-effort scan, and is never the default.
+remote. `knowledge.commit: repo` is the one opt-in mode that knowingly re-opens that
+exposure — see [Commit mode](#commit-mode-opt-in-the-documented-exception) below.
 
 ## Purge vs. git history honesty
 
@@ -91,14 +89,59 @@ product messaging must not imply that a single purge command satisfies a hard-de
 requirement (a legal takedown, for example); it satisfies "stop using this and stop
 serving it," not "never existed."
 
+## Commit mode (opt-in, the documented exception)
+
+`knowledge.commit: repo` (`harness knowledge commit repo`; default `none`) is the one path
+by which the harness knowingly re-opens the trust gradient described in
+[`docs/MEMORY-MODEL.md`](../MEMORY-MODEL.md#trust-gradient) — *unless a team explicitly
+opts into learnings commit mode, which is documented as an exception with best-effort
+secret screening* (design §1/§11, the exact public trust-gradient clause). It copies
+every ACTIVE learning verbatim into `<workspace>/docs/knowledge/learnings/<domain>/<slug>.md`
+plus an `INDEX.md`, on every subsequent store mutation (`consolidate --apply`, `remember`,
+`learning retire|dispute|confirm|promote`, `knowledge purge`, a hand edit absorbed from the
+store, `consolidate --rebuild --yes`) — not on the `commit repo` toggle itself, so switching
+it on does not retroactively back-fill the mirror until the next mutation touches the store.
+
+Conditions (design §11):
+
+- **Best-effort secret screening at mirror time.** Every learning slated for the mirror is
+  re-scanned with the same `scanSecrets` regexes used at the T2 write boundary; a hit
+  excludes that learning from BOTH its `.md` file and the `INDEX.md` entry list entirely —
+  not just its body — and is counted and logged as skipped. This is the same regex-grade
+  screening described above, not a stronger guarantee.
+- **Never-ingest of foreign copies.** Nothing in the harness ever reads
+  `docs/knowledge/learnings/` back into the local store. A learning committed there by
+  another machine (or hand-planted) is read-only reference the moment it lands in the
+  product repo, never trusted memory, until a future Phase 2 propose-then-ratify design
+  exists — enforced by the absence of any reader, and the mirror's own `INDEX.md` carries a
+  header line stating this explicitly for a human reader.
+- **PR-flow routing.** The CLI never git-commits the product repo itself; mirrored files
+  land in the working tree and ride the team's normal PR flow — branch protection is the
+  routing mechanism, not the harness.
+- **Deletion stays consistent with the store.** A full reset (`knowledge purge --all`,
+  `consolidate --rebuild --yes`), a cascade delete (`knowledge purge <file>`), and a hand
+  deletion absorbed from the store repo all clear the matching mirror files in the same
+  sweep — human deletion (and reset) wins in the mirror exactly as it does in T2.
+
+## Suggest mode (the approve-before-write control)
+
+`knowledge.mode: suggest` is the formal approve-before-write control: every other human
+authority in this design is veto-after-write (retire/dispute/confirm act on learnings that
+already exist); `suggest` moves the checkpoint earlier for teams that want it. `consolidate
+--apply` still validates the ops file exactly as in `on` mode, but stops with `E_MODE`
+unless the caller re-runs it with `--yes` after a human has read
+`.harness/consolidate-ops.json` — the review happens before anything is written, not after.
+`remember` (a direct human-authored claim) and orient's injection/debt hint are unaffected
+by `suggest` — the checkpoint gates only the sole writer's own auto-derived ops.
+
 ## Prompt-injection stance (current position)
 
 Every human-facing surface that renders learning or episode text — the session-start
 digest, `harness learnings [--why]`, `INDEX.md`, and the reviewable ops diff a human sees
-whenever knowledge mode is anything other than `on` (`.harness/consolidate-ops.json`, per the
-`/consolidate` skill; there is no separate "suggest mode" — `--apply` itself would reject
-with `E_MODE` in that state, so presenting the diff instead of applying is the actual stop
-point) — renders that text inside the same advisory fence. The fence's job is to keep stored
+under `knowledge.mode: suggest` (`.harness/consolidate-ops.json`, per the `/consolidate`
+skill; see Suggest mode above — `--apply` writes only after the human re-runs it with
+`--yes`, otherwise it rejects with `E_MODE`) — renders that text inside the same advisory
+fence. The fence's job is to keep stored
 text from being read as instructions by the model or the host: it is presented as data,
 never as directives to follow. Content originating from an episode, an insight, or a
 compromised upstream source cannot use the fence to issue commands to the agent reading it —
@@ -107,20 +150,33 @@ one.
 
 Insight claims that contain URLs or shell commands do not reach the store at all:
 `lintImperative` (`knowledge/apply.mjs`) rejects them outright with `E_LINT` at the
-`--apply` write boundary, before a learning is ever written. This is a hard rejection, not a
-review queue — the `/consolidate` skill asks the model to self-check the same rules while
-drafting ops, but that is guidance for avoiding the rejection, not a second mechanical gate;
-`--apply` is the only place a violation is actually enforced. A quarantine *surface* that
-routes rejected content somewhere a human can review it, rather than simply bouncing it, is
-part of the Milestone 3 design and does not exist yet — the only piece built today is a
-reader (`consolidateStatus`'s `quarantined` list, surfaced via `harness consolidate --status`
-and the doctor check), and it tracks unclustered episode groups from consolidation, not
-`E_LINT`-rejected insight ops; nothing in the current write path populates a quarantine
-record for insight-lint rejections. There is likewise no per-lane config toggle that excludes
-insights from retrieval specifically — the only kill switch is the store-wide
-`harness knowledge <on|off|freeze|capture-only>` mode, which gates writes (and, in `off`
-mode, retrieval) for the whole store together; turning off insight-derived learnings alone
-while leaving fix-derived ones active is not a capability that exists.
+`--apply` write boundary, before a learning is ever written. This is a hard rejection at the
+moment it happens, not a review queue — the `/consolidate` skill asks the model to
+self-check the same rules while drafting ops, but that is guidance for avoiding the
+rejection, not a second mechanical gate; `--apply` is the only place a violation is
+actually enforced.
+
+The rejection is not the end of the story, though: the writer now exists. Every
+content-failure code (`E_SCHEMA`, `E_SECRET`, `E_LINT`, `E_BYTE_CAP`, `E_EXISTS`,
+`E_TARGET` — never a run-level rejection such as `E_MODE`/`E_DELTA_CONTRACT`/`E_LOCKED`/
+`E_APPLY_FAILED`, and never `E_DOMAIN_CAP`, which is cap pressure rather than a defect in
+the episode) records one failure entry per rejected episode, keyed on `path@sha256`, in
+the store's ledger. On an episode's third recorded failure — an `E_LINT`-rejected insight
+op included — the same append also writes a `quarantined: true` marker: the episode stops
+re-triggering consolidation debt and is surfaced in the `quarantined` list returned by
+`harness consolidate --status` and `harness learnings`, and checked by doctor's K2. This is
+a review surface, not a publish path: quarantine only ever removes an episode from further
+automatic consolidation attempts and flags it for a human to look at (edit the episode,
+`harness knowledge purge` it, or otherwise resolve it) — nothing quarantined is ever
+auto-applied, and there is still no separate lane that reviews and republishes quarantined
+content on its own.
+
+There is likewise no per-lane config toggle that excludes insights from retrieval
+specifically — the only kill switch is the store-wide `harness knowledge
+<on|suggest|off|freeze|capture-only>` mode (`suggest` gates writes behind human approval
+rather than excluding a single content lane — see Suggest mode above), which gates writes
+(and, in `off` mode, retrieval) for the whole store together; turning off insight-derived
+learnings alone while leaving fix-derived ones active is not a capability that exists.
 
 ## Residual risks (mirrored from the approved design, §14)
 

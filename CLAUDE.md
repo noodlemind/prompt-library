@@ -120,7 +120,7 @@ Only `@engineer` is user-invocable; all other agents are internal and dispatched
 18. **/recall**: Recall global knowledge manifest and local plans before engineering work
 19. **/index-memory**: Rebuild team knowledge manifest from solution files
 20. **/codebase-context**: Generate codebase snapshot with architecture diagrams to docs/codebase-snapshot.md
-21. **/consolidate**: Convert unconsolidated learning episodes into ADD/STRENGTHEN/SUPERSEDE/NOOP ops and apply them via `harness consolidate`
+21. **/consolidate**: Convert unconsolidated learning episodes into ADD/STRENGTHEN/SUPERSEDE/MERGE/NOOP ops and apply them via `harness consolidate`
 
 ### Engineer-Internal (loaded on demand) — Internal Workflows
 22. **/ensure-plan**: Internally capture, research, and lock a plan for trackable Engineer work

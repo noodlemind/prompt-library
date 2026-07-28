@@ -563,18 +563,39 @@ test('knowledge layer surface: consolidate command and insight lane stay documen
   assert.match(bin, /case 'learnings':/, 'learnings command registered');
   assert.match(bin, /case 'knowledge':/, 'knowledge command registered');
   assert.match(bin, /case 'eval-knowledge':/, 'eval-knowledge command registered');
+  // The M3 surfaces (suggest mode, commit mode, promote, MERGE/domain cap) are
+  // now the same public contract — CATALOG's knowledge sig names every mode.
+  assert.match(
+    bin,
+    /'<on\|suggest\|off\|freeze\|capture-only> \| --status \| purge <file\|--all> \| commit <none\|repo>'/,
+    'help documents the knowledge suggest mode and opt-in commit mode'
+  );
+  assert.match(bin, /'<retire\|dispute\|confirm\|promote> <id> \[--reason "<r>"\] \[--to <path>\]'/, 'help documents learning promote');
   // The skill never writes learnings directly — apply is the sole writer.
   const apply = read('packages/harness/lib/knowledge/apply.mjs');
   assert.match(apply, /MAX_OPS_PER_RUN/, 'delta contract enforced in apply');
   assert.match(apply, /scanSecrets/, 'secret scan runs at the write boundary');
+  assert.match(apply, /'MERGE'/, 'apply.mjs recognizes the MERGE op');
+  assert.match(apply, /E_DOMAIN_CAP/, 'apply.mjs enforces the domain cap with E_DOMAIN_CAP');
   // The new human-authority commands must emit real lifecycle events, not silently drop.
   const events = read('packages/harness/lib/events.mjs');
   assert.match(events, /'remember'/, 'EVENT_TYPES includes remember');
   assert.match(events, /'learning'/, 'EVENT_TYPES includes learning');
   assert.match(events, /'knowledge'/, 'EVENT_TYPES includes knowledge');
+  // KNOWLEDGE_MODES is single-sourced in store.mjs and includes suggest;
+  // commands.mjs must import it rather than keep its own copy.
+  const store = read('packages/harness/lib/knowledge/store.mjs');
+  assert.match(store, /KNOWLEDGE_MODES = new Set\(\[[^\]]*'suggest'[^\]]*\]\)/, 'store.mjs KNOWLEDGE_MODES includes suggest');
+  const commands = read('packages/harness/lib/commands.mjs');
+  assert.doesNotMatch(commands, /const KNOWLEDGE_MODES\s*=\s*new Set/, 'commands.mjs must not keep its own copy of KNOWLEDGE_MODES');
+  assert.match(commands, /KNOWLEDGE_MODES[^=]*=[\s\S]*?await import\('\.\/knowledge\/store\.mjs'\)/, 'commands.mjs imports KNOWLEDGE_MODES from store.mjs');
   // MEMORY-MODEL.md is the one-page human register + lifecycle diagram.
   assert.ok(exists('docs/MEMORY-MODEL.md'), 'docs/MEMORY-MODEL.md exists');
-  assert.match(read('docs/MEMORY-MODEL.md'), /stateDiagram/, 'MEMORY-MODEL.md includes the lifecycle stateDiagram');
+  const memoryModel = read('docs/MEMORY-MODEL.md');
+  assert.match(memoryModel, /stateDiagram/, 'MEMORY-MODEL.md includes the lifecycle stateDiagram');
+  assert.match(memoryModel, /promote/, 'MEMORY-MODEL.md documents learning promote');
+  // packages/harness/README.md documents the opt-in commit mode.
+  assert.match(read('packages/harness/README.md'), /knowledge commit/, 'README documents knowledge commit');
 });
 
 test('token budget: no SKILL.md body exceeds the line cap', () => {
