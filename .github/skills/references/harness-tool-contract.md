@@ -75,7 +75,12 @@ Installed to `~/.copilot/bin/harness` on every `harness install`. Add to PATH wi
 | `get [--docid id \| --path rel]` | Fetch bounded doc excerpt | F2 on demand | none |
 | `compound --plan <path>` | Consume passed evidence, index, classify learning, record telemetry | after verify | index + session + telemetry + events |
 | `compound --insight --title "..." --body "..."` | Evidence-free capture of investigation learnings (`kind: insight`, secret-scanned, ranked below verified fixes, never promotable) | no plan/evidence needed | solution doc + index + events |
-| `consolidate [--status \| --candidates \| --apply --ops <path>]` | Knowledge loop: deterministic debt gauge, work packet for the consolidation skill, and the validated sole writer of learnings (≤5 files/run, 1,200-byte cap, secret scan, imperative lint) | `--status`/`--candidates` read-only | learnings store (local, never pushed) + events |
+| `consolidate [--status \| --candidates \| --apply --ops <path> \| --rebuild --yes]` | Knowledge loop: deterministic debt gauge, work packet for the consolidation skill, the validated sole writer of learnings (≤5 files/run, 1,200-byte cap, secret scan, imperative lint), and `--rebuild --yes` full T2 regeneration from T1 (the model-upgrade path — git history in the store retains prior learnings) | `--status`/`--candidates` read-only | learnings store (local, never pushed) + events |
+| `remember "<claim>" --trigger "<t>" [--domain <d>]` | Manual "remember this" — human teaching lane | on human correction in chat | human-teaching episode + an active `source: human` learning, one sole-writer transaction + session + events |
+| `learning <retire\|dispute\|confirm> <id> --reason "<r>"` | Manual memory veto — the engineer skill MUST invoke this when a human corrects a learning in conversation | on human correction in chat | frontmatter status mutation + store commit + events |
+| `learnings [domain] [--why <id>]` | Memory browser — provenance chain and failure annotations | read-only | none |
+| `knowledge <on\|off\|freeze\|capture-only> \| --status \| purge <file\|--all>` | Kill switch and cascade-delete; human deletion always wins over "never deleted" | on demand | config.json write, or cascade delete, + store commit + events (including `--status`) |
+| `eval-knowledge [--json]` | Deterministic retrieval proxy per ranking arm on a temporally held-out split — not the model-graded net-benefit number, which is deferred | read-only, CI/audit not per-turn | none |
 | `events [--session id] [--failures] [--summary]` | Schema-v2 audit / stuck debugging | read-only | none |
 | `report [--sync] [--global] [--check] [--json]` | Token-efficiency report over telemetry: ranked sinks + improvement flags | read-only, except `--sync` writes `~/.harness/telemetry/` | none in workspace |
 
@@ -175,7 +180,87 @@ Allowed outcomes are `passed`, `failed`, and `inconclusive`. Only fresh `passed`
 }
 ```
 
-Lifecycle events are limited to `session_start`, `orient`, `gate`, `pre_tool`, `post_tool`, `skill_activation`, `verify`, `compound`, `consolidate`, and `session_end`. Non-lifecycle commands (`recall`, `index`, `get`, `report`) never append events by design. They never store prompt or query content; `skill_activation` stores only the skill and session binding.
+**consolidate** (`--status` default shown; `--candidates` returns `{ clusters, learnings }`; `--apply` returns `{ pass, exitCode, applied, rejected, committed }`; `--rebuild --yes` returns `{ pass, exitCode, archived, debt, nextTools }`)
+```json
+{
+  "mode": "on",
+  "due": true,
+  "debt": 6,
+  "threshold": 5,
+  "learnings": { "active": 12, "total": 14 },
+  "promotionCandidates": ["sql/adding-not-null-columns-to-hot-tables"],
+  "quarantined": [],
+  "nextTools": ["harness consolidate --candidates"]
+}
+```
+
+**remember**
+```json
+{
+  "pass": true,
+  "exitCode": 0,
+  "episodePath": "docs/solutions/teachings/2026-07-27-adding-not-null-columns-to-hot-tables.md",
+  "learningId": "sql/adding-not-null-columns-to-hot-tables",
+  "blockedReason": null,
+  "nextTools": ["harness learnings sql"]
+}
+```
+
+**learning**
+```json
+{ "pass": true, "exitCode": 0, "id": "sql/adding-not-null-columns-to-hot-tables", "status": "retired", "blockedReason": null }
+```
+
+**learnings** (default listing; `--why <id>` returns the single-learning provenance shape shown second)
+```json
+{
+  "learnings": [{ "id": "sql/adding-not-null-columns-to-hot-tables", "status": "active", "source": "human", "trigger": "...", "verified": 3, "plans": 2, "promotionEligible": true, "failures": 0 }],
+  "counts": { "active": 12, "total": 14 }
+}
+```
+```json
+{
+  "id": "sql/adding-not-null-columns-to-hot-tables",
+  "trigger": "...",
+  "claimLine": "...",
+  "status": "active",
+  "source": "human",
+  "lastConfirmed": "2026-07-20",
+  "supersededBy": null,
+  "mergedFrom": null,
+  "episodes": [{ "path": "docs/solutions/...", "kind": "fix", "plan": "docs/plans/..." }],
+  "verified": 3,
+  "plans": 2,
+  "promotionEligible": true,
+  "failures": 0
+}
+```
+
+**knowledge** (`--status`/default shown; `<on|off|freeze|capture-only>` returns `{ pass, mode }`; `purge` returns the shape below)
+```json
+{ "mode": "on" }
+```
+```json
+{ "pass": true, "exitCode": 0, "removed": { "episode": "docs/solutions/...", "learnings": ["..."], "links": ["..."], "ledger": 1 }, "blockedReason": null }
+```
+
+**eval-knowledge** — deterministic retrieval PROXY (hit/false-surface/token cost per arm on a temporally held-out split); never a model-graded net-benefit number, and no benefit claim is published from it
+```json
+{
+  "pass": true,
+  "exitCode": 0,
+  "split": { "train": 8, "heldOut": 4, "cutoff": "2026-07-10", "undated": 0, "unscorable": 1 },
+  "arms": {
+    "none": { "hitRate": 0, "falseSurfaceRate": 0, "injectedTokens": 0 },
+    "frontmatter": { "hitRate": 0.5, "falseSurfaceRate": 0, "injectedTokens": 140 },
+    "wholeIndex": { "hitRate": 1, "falseSurfaceRate": 0.083, "injectedTokens": 260 },
+    "bm25": { "hitRate": 0.75, "falseSurfaceRate": 0, "injectedTokens": 90 }
+  },
+  "recommendation": "whole-index"
+}
+```
+
+Lifecycle events are limited to `session_start`, `orient`, `gate`, `pre_tool`, `post_tool`, `skill_activation`, `verify`, `compound`, `consolidate`, `remember`, `learning`, `knowledge`, and `session_end`. Non-lifecycle commands (`recall`, `index`, `get`, `report`, `learnings`, `eval-knowledge`) never append events by design. They never store prompt or query content; `skill_activation` stores only the skill and session binding.
 
 ## Host hook boundary
 

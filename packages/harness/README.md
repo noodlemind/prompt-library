@@ -106,9 +106,23 @@ claims carry an `[unverified memory — advisory]` fence. Trust gradient: the ha
 never transmits episodes (repo-private `docs/solutions/` travels only inside the
 product repo's own git history) → learnings live in the local never-pushed store →
 the only knowledge the harness sends to a shared repository is a primitive that
-passed a human PR.
+passed a human PR — unless a team explicitly opts into `knowledge.commit: repo`,
+documented as an exception with best-effort secret screening.
 `init-repo`/`index` also write a committed `docs/codebase-map.md` (deterministic,
 timestamp-free) for cold-start orientation.
+
+| Command | Description |
+|---------|-------------|
+| `knowledge <on\|off\|freeze\|capture-only>` / `--status` / `purge <file\|--all>` | Kill switch and cascade-delete; human deletion always wins over "never deleted" |
+| `consolidate --rebuild --yes` | Full T2 regeneration from T1 raw episodes — the model-upgrade path (git history in the store retains prior learnings) |
+| `remember "<claim>" --trigger "<t>" [--domain <d>]` | Human teaching lane: writes a `kind: human-teaching` episode, then materializes an active `source: human` learning through the same sole-writer transaction |
+| `learning <retire\|dispute\|confirm> <id> --reason "<r>"` | One-command human authority over a single learning's status |
+| `learnings [domain] [--why <id>]` | Paged listing with provenance chain; `--why` shows full provenance and failure annotations |
+| `eval-knowledge [--json]` | Deterministic retrieval proxy — hit/false-surface/token cost per ranking arm on a temporally held-out split; **not** the model-graded net-benefit number, which is deferred — publishes no benefit claim |
+
+`learnings` and `eval-knowledge` are read-only and never write events; `remember`,
+`learning`, and `knowledge` (including its own `--status`) each write one event and end
+in a knowledge-store git commit.
 
 ### Options
 

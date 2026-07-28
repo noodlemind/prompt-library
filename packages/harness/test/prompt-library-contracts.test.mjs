@@ -68,7 +68,7 @@ test('canonical architecture replaces superseded harness architecture fragments'
     .readdirSync(path.join(repoRoot, 'docs', 'architecture'))
     .filter((name) => name.endsWith('.md'))
     .sort();
-  assert.deepEqual(architectureDocs, ['engineer-harness.md', 'skill-driven-prompt-library.md']);
+  assert.deepEqual(architectureDocs, ['engineer-harness.md', 'knowledge-threat-model.md', 'skill-driven-prompt-library.md']);
   for (const name of supersededArchitectureDocs) {
     assert.equal(exists(`docs/architecture/${name}`), false, `${name} should be removed`);
   }
@@ -557,10 +557,24 @@ test('knowledge layer surface: consolidate command and insight lane stay documen
   assert.match(bin, /case 'consolidate':/, 'consolidate command registered');
   assert.match(bin, /'\[--status \| --candidates \| --apply --ops <path> \| --rebuild --yes\]'/, 'help documents consolidate modes');
   assert.match(bin, /--insight/, 'compound help documents the insight lane');
+  // The M2 human-authority and read-only surfaces are the same public contract.
+  assert.match(bin, /case 'remember':/, 'remember command registered');
+  assert.match(bin, /case 'learning':/, 'learning command registered');
+  assert.match(bin, /case 'learnings':/, 'learnings command registered');
+  assert.match(bin, /case 'knowledge':/, 'knowledge command registered');
+  assert.match(bin, /case 'eval-knowledge':/, 'eval-knowledge command registered');
   // The skill never writes learnings directly — apply is the sole writer.
   const apply = read('packages/harness/lib/knowledge/apply.mjs');
   assert.match(apply, /MAX_OPS_PER_RUN/, 'delta contract enforced in apply');
   assert.match(apply, /scanSecrets/, 'secret scan runs at the write boundary');
+  // The new human-authority commands must emit real lifecycle events, not silently drop.
+  const events = read('packages/harness/lib/events.mjs');
+  assert.match(events, /'remember'/, 'EVENT_TYPES includes remember');
+  assert.match(events, /'learning'/, 'EVENT_TYPES includes learning');
+  assert.match(events, /'knowledge'/, 'EVENT_TYPES includes knowledge');
+  // MEMORY-MODEL.md is the one-page human register + lifecycle diagram.
+  assert.ok(exists('docs/MEMORY-MODEL.md'), 'docs/MEMORY-MODEL.md exists');
+  assert.match(read('docs/MEMORY-MODEL.md'), /stateDiagram/, 'MEMORY-MODEL.md includes the lifecycle stateDiagram');
 });
 
 test('token budget: no SKILL.md body exceeds the line cap', () => {
