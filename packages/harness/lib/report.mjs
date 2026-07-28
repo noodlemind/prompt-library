@@ -149,6 +149,26 @@ export function trendRegression(events) {
   };
 }
 
+/** Knowledge-layer SLOs: cited/surfaced utilization and consolidation engagement.
+ * Surfaced = learning ids `orient` injected into a pack; cited = learning ids
+ * `verify --learnings` reports as actually applied. Engagement pairs human
+ * `remember`/`learning` actions against applied `consolidate` decisions. */
+export function knowledgeSlos(events) {
+  const surfaced = new Set(); const cited = new Set();
+  let consolidations = 0; let humanActions = 0;
+  for (const e of events) {
+    if (e.type === 'orient' && Array.isArray(e.learnings)) e.learnings.forEach((id) => surfaced.add(id));
+    if (e.type === 'verify' && Array.isArray(e.learnings)) e.learnings.forEach((id) => cited.add(id));
+    if (e.type === 'consolidate' && e.decision === 'apply' && e.result === 'pass') consolidations += 1;
+    if (e.type === 'remember' || e.type === 'learning') humanActions += 1;
+  }
+  const citedSurfaced = [...cited].filter((id) => surfaced.has(id)).length;
+  return { surfaced: surfaced.size, cited: cited.size,
+    utilization: surfaced.size ? Number((citedSurfaced / surfaced.size).toFixed(2)) : null,
+    consolidations, humanActions,
+    engagement: consolidations ? Number((humanActions / consolidations).toFixed(2)) : null };
+}
+
 // How many per-session performance rows the report shows (highest-token first).
 const SESSION_PERF_CAP = 10;
 
@@ -216,6 +236,7 @@ export function buildReport({ workspace, copilotHome, events }) {
       recoveryLoops: recoveryLoops(all),
       trend: trendRegression(all),
     },
+    slos: { knowledge: knowledgeSlos(all) },
   };
 }
 
@@ -287,7 +308,7 @@ function renderSessionPerformance(report, ui, keyWidth) {
 export function renderReport(report, ui = createStyle()) {
   const lines = [];
   const t = report.totals;
-  const keyWidth = keyWidthFor(['report', 'span', 'sinks', 'sessions', 'flags'], 8);
+  const keyWidth = keyWidthFor(['report', 'span', 'sinks', 'sessions', 'flags', 'knowledge'], 8);
   const src = report.hostBacked ? 'host-backed + estimated' : 'estimated (chars/4)';
   lines.push(
     ui.line({
@@ -322,6 +343,20 @@ export function renderReport(report, ui = createStyle()) {
   }
 
   lines.push(...renderSessionPerformance(report, ui, keyWidth));
+
+  const k = report.slos?.knowledge;
+  if (k && !(k.surfaced === 0 && k.consolidations === 0)) {
+    lines.push('');
+    lines.push(
+      ui.line({
+        state: k.utilization !== null && k.utilization < 0.15 && k.surfaced >= 20 ? 'warn' : 'ok',
+        key: 'knowledge',
+        value: `utilization ${fmtPct(k.utilization)} (${k.cited}/${k.surfaced} surfaced)`,
+        note: `engagement ${k.engagement ?? '-'} human actions/${k.consolidations} consolidations`,
+        keyWidth,
+      })
+    );
+  }
 
   const f = report.flags;
   const flagLines = [];

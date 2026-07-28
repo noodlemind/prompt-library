@@ -67,7 +67,7 @@ Installed to `~/.copilot/bin/harness` on every `harness install`. Add to PATH wi
 | `orient --query "<task>"` | Codebase search + task context | **F1** — writes ≤2 KB `.harness/context-pack.md` plus a query-ranked `.harness/repo-map.md` (code orientation, regenerated every turn from live git — never stale); surfaces a `harness index` staleness hint when the knowledge index has drifted | session.json, events.jsonl, repo-map.md |
 | `recall "<query>"` | Standalone search / debug | F1 paths only | events |
 | `gate --phase implement --plan <path>` | Pre-edit plan/state guard | F3 on fail | session + events |
-| `verify --plan <path> [--base ref] [--enforcement mode]` | Named checks, schema/state, tasks, scope, reviews, gaps, findings, evidence | no prompt context | evidence + session + events |
+| `verify --plan <path> [--base ref] [--enforcement mode] [--learnings <id1,id2>]` | Named checks, schema/state, tasks, scope, reviews, gaps, findings, evidence | no prompt context | evidence + session + events |
 | `validate-plan [--plan path]` | Spec/schema lint | read-only | none |
 | `plan-new --type <t> --slug <s> --intent "..."` | Scaffold a valid, gate-ready plan (dated path, frontmatter, all canonical sections); `--gap <id>:<path>` sets blocked-capability + the gap entry; a primitive Impacted File auto-adds `## Primitive Governance` + create-primitive | none (plan-only) | writes the plan file |
 | `index` | Rebuild knowledge index; stamps current HEAD into index meta | none in chat | manifest.yaml, `.harness-index/`, events |
@@ -141,6 +141,8 @@ For locked plans, both commands enforce criterion-to-check mappings and configur
 ```
 
 Allowed outcomes are `passed`, `failed`, and `inconclusive`. Only fresh `passed` evidence bound to the current plan contract, base ref, changed-file set, and workspace contents permits a delivery completion claim or compound. Plan Activity entries are excluded from the contract digest so the append-only ledger can record the returned evidence path. Read-only Answer and Investigate modes do not run delivery verification. Plan frontmatter names checks; executable argv arrays come only from `.github/harness/checks.yaml` and run without a shell. Approved one-off commands run outside harness through explicit host tool approval and are recorded as external evidence.
+
+**Learning attribution (cited half).** `orient` records the learning ids it surfaced in a session; `verify --learnings <id1,id2>` closes the loop by recording the ids the skill actually applied while doing the work — pass only ids that materially changed an action, not every id the pack mentioned. `harness report` derives knowledge-layer utilization from cited ÷ surfaced across the event log, and `harness doctor` warns when utilization stays under 15% with 20+ surfaced learnings.
 
 **recall**
 ```json

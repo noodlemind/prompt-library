@@ -256,6 +256,7 @@ export async function cmdDoctor(argv) {
     assetsRoot: assets,
     pkgRoot,
     flags,
+    workspace: path.resolve(flags.workspace),
   });
 
   const exitCode = pass ? EXIT.ok : EXIT.doctorFailed;
@@ -557,6 +558,7 @@ export async function cmdVerify(argv) {
     checks: result.checks,
     blockedReason: result.outcome === 'passed' ? null : `${result.outcome} verification`,
     usage: usageFields({ input: result.plan || '', output: result.checks.map((c) => c.message).join('\n') }),
+    learnings: flags.learnings ? flags.learnings.split(',').map((s) => s.trim()).filter(Boolean) : undefined,
   });
 
   if (flags.json) emitJson(flags, result);
@@ -829,6 +831,7 @@ export async function cmdConsolidate(argv) {
     writeEvent(workspace, flags, {
       type: 'consolidate',
       command: 'consolidate',
+      decision: 'apply',
       result: result.exitCode === 0 ? 'pass' : 'fail',
       exitCode: result.exitCode,
       blockedReason: result.rejected?.[0]?.reason || null,

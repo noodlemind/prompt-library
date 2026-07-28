@@ -14,6 +14,9 @@ import { readSession, writeSession } from './session.mjs';
 import { parseVSCodeSettings } from './vscode-settings.mjs';
 import { resolveVSCodeSettingsPaths } from './paths.mjs';
 import { loadRetired, findStaleOrphans } from './sync.mjs';
+import { storeDir } from './knowledge/store.mjs';
+import { consolidateStatus } from './knowledge/consolidate.mjs';
+import { loadReportEvents, knowledgeSlos } from './report.mjs';
 
 const require = createRequire(import.meta.url);
 
@@ -304,7 +307,61 @@ function vscodeChecks({ copilotHome, settingsPaths }) {
   ];
 }
 
-export function runDoctor({ copilotHome, assetsRoot, pkgRoot, flags, vscodeSettingsPaths = null }) {
+// Knowledge-layer health (design §2, §3, §12). All three are optional/advisory
+// and each independently try/catch-guarded — a store or event-read failure
+// degrades to "skip that check", never to a doctor crash. K2's consolidateStatus
+// call touches the store via ensureStore, so — like orient.mjs — it is only
+// made once storeDir already exists; doctor must never materialize a store.
+function knowledgeChecks({ workspace }) {
+  const checks = [];
+
+  try {
+    const events = loadReportEvents({ workspace });
+    const hasConsolidateEvent = events.some((e) => e.type === 'consolidate');
+    const storeExists = fs.existsSync(storeDir(workspace));
+    checks.push({
+      id: 'K1',
+      name: 'Knowledge store present for consolidated history',
+      pass: !hasConsolidateEvent || storeExists,
+      hint: 'knowledge store missing — restore from backup or run: harness consolidate --rebuild --yes after re-arming',
+      optional: true,
+    });
+  } catch {
+    // Advisory; never fail doctor on a knowledge-check error.
+  }
+
+  try {
+    const storeExists = fs.existsSync(storeDir(workspace));
+    const quarantined = storeExists ? consolidateStatus({ workspace }).quarantined.length : 0;
+    checks.push({
+      id: 'K2',
+      name: 'No quarantined episode clusters',
+      pass: quarantined === 0,
+      hint: 'quarantined episode cluster(s) — inspect with harness consolidate --status',
+      optional: true,
+    });
+  } catch {
+    // Advisory; never fail doctor on a knowledge-check error.
+  }
+
+  try {
+    const slos = knowledgeSlos(loadReportEvents({ workspace }));
+    const noisy = slos.utilization !== null && slos.utilization < 0.15 && slos.surfaced >= 20;
+    checks.push({
+      id: 'K3',
+      name: 'Knowledge utilization above noise threshold',
+      pass: !noisy,
+      hint: 'knowledge layer is noise (<15% utilization) — consider: harness knowledge off',
+      optional: true,
+    });
+  } catch {
+    // Advisory; never fail doctor on a knowledge-check error.
+  }
+
+  return checks;
+}
+
+export function runDoctor({ copilotHome, assetsRoot, pkgRoot, flags, vscodeSettingsPaths = null, workspace = flags.workspace }) {
   const checks = [];
 
   const manifest = path.join(copilotHome, 'knowledge', 'manifest.yaml');
@@ -484,6 +541,8 @@ export function runDoctor({ copilotHome, assetsRoot, pkgRoot, flags, vscodeSetti
         : 'No orphaned agents/skills/instructions/prompts/hooks in the Copilot home',
     optional: true,
   });
+
+  checks.push(...knowledgeChecks({ workspace }));
 
   if (flags.host === 'vscode') {
     checks.push(
