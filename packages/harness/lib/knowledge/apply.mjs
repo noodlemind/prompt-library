@@ -15,6 +15,7 @@ import {
 } from './store.mjs';
 import { MAX_OPS_PER_RUN, LEARNING_BYTE_CAP, QUARANTINE_THRESHOLD } from './consolidate.mjs';
 import { scanSecrets } from '../secret-scan.mjs';
+import { absorbHandEdits } from './admin.mjs';
 
 /**
  * The SOLE writer of the learnings store. The consolidation skill emits an
@@ -173,6 +174,20 @@ function verifyHumanTeachingEpisode(workspace, e) {
 }
 
 export function applyOps({ workspace, opsPath, dryRun = false, home }) {
+  // Absorb any hand edit sitting in the store BEFORE anything else — even
+  // before the mode gate. The failure path below can `git reset --hard` the
+  // store tree; a dirty hand edit caught in that reset would be destroyed
+  // along with the partial op-write it's cleaning up, so it must be
+  // committed on its own first. Advisory: never blocks the run it guards.
+  // Skipped on dryRun — a preview must never leave a real commit behind.
+  if (!dryRun) {
+    try {
+      absorbHandEdits({ workspace, home });
+    } catch {
+      // best effort — a hand-edit absorb failure must never block applyOps.
+    }
+  }
+
   // Kill switch: consolidate is a write path gated to mode 'on' only — checked
   // first, before the ops file is even parsed, and before the lockfile below.
   const { mode } = readStoreConfig(workspace, { home });

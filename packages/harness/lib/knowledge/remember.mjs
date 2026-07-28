@@ -5,6 +5,7 @@ import { runInsightCompound } from '../compound.mjs';
 import { runIndexKnowledge } from '../index-knowledge.mjs';
 import { applyOps } from './apply.mjs';
 import { normalizeSlug, readStoreConfig, storeDir, listLearnings } from './store.mjs';
+import { absorbHandEdits } from './admin.mjs';
 
 /**
  * The human teaching lane: a direct claim from a person, captured as a
@@ -22,6 +23,14 @@ export function runRemember({ workspace, copilotHome, flags, argv, log = () => {
       blockedReason: `knowledge mode is ${mode} — run: harness knowledge on`,
       nextTools: ['harness knowledge on'],
     };
+  }
+  // Absorb any hand edit before this teaching writes — so a re-teach
+  // (SUPERSEDE, same trigger/domain) always builds on the absorbed state.
+  // Advisory: never blocks remember.
+  try {
+    absorbHandEdits({ workspace, home, log });
+  } catch {
+    // best effort
   }
   const claim = argv[0] && !argv[0].startsWith('--') ? argv[0] : null;
   if (!claim || !flags.trigger) {

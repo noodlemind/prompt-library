@@ -205,6 +205,60 @@ function unquote(v) {
   return s.replace(/^["']|["']$/g, '');
 }
 
+function yamlQuote(v) {
+  return `"${String(v)
+    .replace(/\\/g, '\\\\')
+    .replace(/"/g, '\\"')
+    .replace(/\n/g, '\\n')
+    .replace(/\r/g, '\\r')
+    .replace(/\t/g, '\\t')}"`;
+}
+
+/**
+ * Render a parsed `{ fm, body }` pair (as `parseLearningFrontmatter` above
+ * hands back) to the canonical on-disk learning text — same field order and
+ * escaping the sole writer's `renderLearning` (apply.mjs) uses for a fresh
+ * ADD/SUPERSEDE/STRENGTHEN write, so a parse → mutate fm → serializeLearning
+ * round trip stays byte-shape-compatible with a from-scratch write. Every
+ * scalar is written straight from `fm` as parsed, with no re-interpretation —
+ * e.g. `fm.merged_from` is already the raw bracketed string this module's own
+ * parser hands back, not an array, so it's written verbatim rather than
+ * re-joined. `renderLearning` itself builds from discrete op arguments (an
+ * array `mergedFrom`, a freshly-stamped `last_confirmed`) rather than a
+ * parsed `fm`, so it is intentionally NOT rebased on this function — that
+ * would require normalizing shapes it doesn't own; see apply.mjs.
+ */
+export function serializeLearning(fm, body) {
+  const lines = [
+    '---',
+    'schema: 1',
+    `trigger: ${yamlQuote(fm.trigger || '')}`,
+    `status: ${fm.status || 'active'}`,
+    `source: ${fm.source || 'auto'}`,
+    'episodes:',
+  ];
+  for (const e of fm.episodes || []) {
+    lines.push(`  - path: ${e.path}`);
+    lines.push(`    sha256: ${yamlQuote(e.sha256)}`);
+    lines.push(`    kind: ${e.kind}`);
+    lines.push(`    plan: ${e.plan || ''}`);
+  }
+  const anchors = fm.anchors || [];
+  if (anchors.length) {
+    lines.push('anchors:');
+    for (const a of anchors) lines.push(`  - ${a}`);
+  } else {
+    lines.push('anchors: []');
+  }
+  lines.push(`superseded_by: ${fm.superseded_by || 'null'}`);
+  lines.push(`last_confirmed: ${fm.last_confirmed || 'null'}`);
+  if (fm.merged_from) lines.push(`merged_from: ${fm.merged_from}`);
+  if (fm.promoted_to) lines.push(`promoted_to: ${fm.promoted_to}`);
+  lines.push(`origin: ${fm.origin || 'unknown'}`);
+  lines.push('---', '', body.trim(), '');
+  return lines.join('\n');
+}
+
 export function listLearnings(dir) {
   const root = path.join(dir, 'learnings');
   const out = [];

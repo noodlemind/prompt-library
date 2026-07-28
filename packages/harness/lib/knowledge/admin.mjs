@@ -1,16 +1,21 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import crypto from 'node:crypto';
+import { spawnSync } from 'node:child_process';
 import {
   ensureStore,
   storeDir,
   listLearnings,
   readLedger,
+  appendLedger,
   commitStore,
   parseLearningFrontmatter,
+  serializeLearning,
   readStoreConfig,
 } from './store.mjs';
 import { rebuildIndex, todayClamped } from './apply.mjs';
-import { consolidateStatus } from './consolidate.mjs';
+import { consolidateStatus, LEARNING_BYTE_CAP } from './consolidate.mjs';
+import { scanSecrets } from '../secret-scan.mjs';
 
 /**
  * Human deletion always wins: purge is never mode-gated — it runs in every
@@ -19,6 +24,10 @@ import { consolidateStatus } from './consolidate.mjs';
  * reaching in directly, so it always executes.
  */
 
+// Episode-header quoting (docs/solutions/<category>/*.md frontmatter) — the
+// same escaping shape as compound.mjs's own local yamlQuote, kept separate
+// from store.mjs's learning-file yamlQuote since the two are different file
+// formats with independent schemas.
 function yamlQuote(v) {
   return `"${String(v)
     .replace(/\\/g, '\\\\')
@@ -30,44 +39,143 @@ function yamlQuote(v) {
 
 /**
  * Rewrite one learning file dropping its link to `targetPath`, preserving
- * every other field in the exact order `renderLearning` (apply.mjs) writes
- * so the file stays byte-shape-compatible with the sole-writer's output.
+ * every other field via `serializeLearning` (store.mjs) so the file stays
+ * byte-shape-compatible with the sole-writer's output.
  */
 export function removeEpisodeLink(file, targetPath) {
   const text = fs.readFileSync(file, 'utf8');
   const { fm, body } = parseLearningFrontmatter(text);
-  const episodes = (fm.episodes || []).filter((e) => e.path !== targetPath);
-  const anchors = fm.anchors || [];
-  const lines = [
-    '---',
-    'schema: 1',
-    `trigger: ${yamlQuote(fm.trigger || '')}`,
-    `status: ${fm.status || 'active'}`,
-    `source: ${fm.source || 'auto'}`,
-    'episodes:',
-  ];
-  for (const e of episodes) {
-    lines.push(`  - path: ${e.path}`);
-    lines.push(`    sha256: ${yamlQuote(e.sha256)}`);
-    lines.push(`    kind: ${e.kind}`);
-    lines.push(`    plan: ${e.plan || ''}`);
+  // Preserve every other field, including last_confirmed as parsed — a purge
+  // is a negative event on this learning's remaining evidence, not a fresh
+  // human confirmation, so it must never refresh the last_confirmed trust
+  // signal.
+  fm.episodes = (fm.episodes || []).filter((e) => e.path !== targetPath);
+  fs.writeFileSync(file, serializeLearning(fm, body), 'utf8');
+  return fm.episodes;
+}
+
+const LEARNING_FILE_RE = /^learnings\/([^/]+)\/([^/]+)\.md$/;
+
+/** Parse one `git status --porcelain` line into its status code and path. */
+function parsePorcelainLine(line) {
+  const status = line.slice(0, 2);
+  let rest = line.slice(3);
+  const arrow = rest.indexOf(' -> ');
+  if (arrow !== -1) rest = rest.slice(arrow + 4); // rename/copy: use the new path
+  if (rest.startsWith('"') && rest.endsWith('"')) {
+    rest = rest.slice(1, -1).replace(/\\(.)/g, '$1'); // git-quoted path (rare)
   }
-  if (anchors.length) {
-    lines.push('anchors:');
-    for (const a of anchors) lines.push(`  - ${a}`);
-  } else {
-    lines.push('anchors: []');
+  return { status, path: rest };
+}
+
+/**
+ * Absorb hand edits to the learnings store: a human can edit or delete a
+ * `learnings/<domain>/<slug>.md` file directly in the store repo, bypassing
+ * every CLI write path entirely. Every mutation entry point calls this FIRST
+ * (advisory, best effort — see each call site's try/catch) so a human's edit
+ * is captured and given its own `human edit: <ids>` commit before the entry
+ * point's own mutation runs. The motivation is applyOps's failure-path
+ * `git reset --hard`: without absorbing first, a dirty tree sitting through
+ * that reset would silently destroy an uncommitted hand edit along with the
+ * partial op-write it's cleaning up.
+ *
+ * Non-creating: a storeless workspace or a store with no git repo returns the
+ * same empty result as an already-clean tree — this function never
+ * materializes the store. Only `learnings/<domain>/<slug>.md` entries are
+ * absorbed; untracked/modified non-learning store files (config.json,
+ * stale.json, INDEX.md) are left alone for the next normal commit's own
+ * `git add -A` to pick up.
+ */
+export function absorbHandEdits({ workspace, home, log = () => {} }) {
+  const empty = { absorbed: [], deleted: [], committed: false };
+  const dir = storeDir(workspace, { home });
+  if (!fs.existsSync(dir) || !fs.existsSync(path.join(dir, '.git'))) return empty;
+
+  const status = spawnSync('git', ['status', '--porcelain'], { cwd: dir, encoding: 'utf8' });
+  const lines = (status.status === 0 ? status.stdout : '').split('\n').filter(Boolean);
+  if (!lines.length) return empty;
+
+  const at = todayClamped();
+  const absorbed = [];
+  const deleted = [];
+  const ledgerEntries = [];
+
+  for (const line of lines) {
+    const { status: code, path: rel } = parsePorcelainLine(line);
+    const m = LEARNING_FILE_RE.exec(rel);
+    if (!m) continue; // non-learning file — left for the normal commit
+    const [, domain, slug] = m;
+    const id = `${domain}/${slug}`;
+
+    if (code.includes('D')) {
+      // Human deletion always wins — nothing left to parse or re-render.
+      deleted.push(id);
+      continue;
+    }
+    if (!code.includes('M')) continue; // untracked/other — out of absorb scope
+
+    const file = path.join(dir, rel);
+    let text;
+    try {
+      text = fs.readFileSync(file, 'utf8');
+    } catch {
+      continue; // vanished between status and read — nothing to absorb
+    }
+    const { fm, body } = parseLearningFrontmatter(text);
+
+    // Human-teaching snapshot: captures the edited body verbatim, so a later
+    // `--rebuild` re-derives the same human authority from disk instead of
+    // trusting the learning file's own (now human) source label alone.
+    const trigger = fm.trigger || '';
+    const fmLines = [
+      `title: ${yamlQuote(`hand edit: ${id}`)}`,
+      'kind: human-teaching',
+      `date: ${at}`,
+      `trigger: ${yamlQuote(trigger)}`,
+    ];
+    const doc = `---\n${fmLines.join('\n')}\n---\n\n${body.trim()}\n`;
+
+    let snapshot = null;
+    const secrets = scanSecrets(doc);
+    if (secrets.length) {
+      log(
+        `hand-edit absorb: secret-shaped content (${secrets.map((s) => s.id).join(', ')}) — skipped snapshot for ${id}, still absorbing`
+      );
+    } else {
+      const teachDirRel = path.join('docs', 'solutions', 'teachings');
+      let snapRel = path.join(teachDirRel, `${at}-hand-edit-${slug}.md`);
+      let n = 2;
+      while (fs.existsSync(path.join(workspace, snapRel))) {
+        snapRel = path.join(teachDirRel, `${at}-hand-edit-${slug}-${n}.md`);
+        n += 1;
+      }
+      snapshot = snapRel.split(path.sep).join('/');
+      fs.mkdirSync(path.join(workspace, teachDirRel), { recursive: true });
+      fs.writeFileSync(path.join(workspace, snapshot), doc, 'utf8');
+      const sha256 = crypto.createHash('sha256').update(doc).digest('hex');
+      fm.episodes = [...(fm.episodes || []), { path: snapshot, sha256, kind: 'human-teaching', plan: null }];
+      ledgerEntries.push({ path: snapshot, sha256, learning: id, at });
+    }
+
+    fm.source = 'human';
+    const content = serializeLearning(fm, body);
+    // Byte-cap note: the cap binds the sole writer's ops (apply.mjs), not a
+    // human hand-editing the file directly — human authority overrides it,
+    // logged rather than rejected.
+    if (Buffer.byteLength(content, 'utf8') > LEARNING_BYTE_CAP) {
+      log(`hand-edit absorb: ${id} exceeds ${LEARNING_BYTE_CAP} bytes after absorb — kept anyway (human authority)`);
+    }
+    fs.writeFileSync(file, content, 'utf8');
+    absorbed.push({ id, snapshot });
   }
-  lines.push(`superseded_by: ${fm.superseded_by || 'null'}`);
-  // Preserve the parsed value — a purge is a negative event on this
-  // learning's remaining evidence, not a fresh human confirmation, so it must
-  // never refresh the last_confirmed trust signal.
-  lines.push(`last_confirmed: ${fm.last_confirmed || todayClamped()}`);
-  if (fm.merged_from) lines.push(`merged_from: ${fm.merged_from}`);
-  lines.push(`origin: ${fm.origin || 'unknown'}`);
-  lines.push('---', '', body.trim(), '');
-  fs.writeFileSync(file, lines.join('\n'), 'utf8');
-  return episodes;
+
+  if (!absorbed.length && !deleted.length) return empty;
+
+  if (ledgerEntries.length) appendLedger(dir, ledgerEntries);
+  rebuildIndex(dir);
+  const ids = [...absorbed.map((a) => a.id), ...deleted].join(', ');
+  const { committed } = commitStore(dir, `human edit: ${ids}`);
+  return { absorbed, deleted, committed };
 }
 
 /**
@@ -129,6 +237,11 @@ export function purgeEpisode({ workspace, target, home }) {
   }
 
   const { dir } = ensureStore(workspace, { home });
+  try {
+    absorbHandEdits({ workspace, home });
+  } catch {
+    // best effort — a hand-edit absorb failure must never block purge.
+  }
 
   // Read-only discovery pass first: decide whether anything actually
   // references `target` before mutating anything, so a no-match purge can
@@ -216,6 +329,11 @@ export function purgeAll({ workspace, home }) {
     };
   }
   const { dir } = ensureStore(workspace, { home });
+  try {
+    absorbHandEdits({ workspace, home });
+  } catch {
+    // best effort — a hand-edit absorb failure must never block purge --all.
+  }
   const learningsDir = path.join(dir, 'learnings');
   let n = 0;
   if (fs.existsSync(learningsDir)) {
@@ -277,6 +395,11 @@ export function rebuildStore({ workspace, home, yes, copilotHome }) {
   // --yes is an explicit go-ahead, unlike the preview above. listLearnings
   // only runs on this (mutation) path, once.
   const { dir } = ensureStore(workspace, { home });
+  try {
+    absorbHandEdits({ workspace, home });
+  } catch {
+    // best effort — a hand-edit absorb failure must never block rebuild.
+  }
   const archived = listLearnings(dir).length;
 
   const learningsDir = path.join(dir, 'learnings');

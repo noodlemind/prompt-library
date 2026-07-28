@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import { storeDir, listLearnings, commitStore } from './store.mjs';
 import { updateFrontmatterField, todayClamped } from './apply.mjs';
+import { absorbHandEdits } from './admin.mjs';
 
 /**
  * One-command human authority over a single learning: retire, dispute, or
@@ -19,6 +20,14 @@ export function setLearningStatus({ workspace, id, action, reason, home }) {
   }
   if (action !== 'confirm' && !reason) {
     return { pass: false, exitCode: 2, id, status: null, blockedReason: `${action} requires --reason` };
+  }
+  // Absorb any hand edit before this mutation reads the target — so a
+  // retire/dispute/confirm always acts on the absorbed (human-authored)
+  // state, not a stale in-tree edit. Advisory: never blocks the command.
+  try {
+    absorbHandEdits({ workspace, home });
+  } catch {
+    // best effort
   }
   const dir = storeDir(workspace, { home });
   // Read-only until the target is confirmed to exist — a storeless workspace
