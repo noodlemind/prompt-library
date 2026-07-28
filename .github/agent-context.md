@@ -6,7 +6,7 @@ This file contains accumulated knowledge about the codebase, discovered by agent
 
 This repository is a skill-driven prompt library containing AI agent systems:
 - `.github/agents/` — 21 agents (17 specialists + 1 engineer + 1 implementer + 2 coordinators, judgment-criteria style)
-- `.github/skills/` — 24 skills including internal planning (`ensure-plan`), on-demand gap resolution (`ensure-capability`), and verified learning (`auto-compound`)
+- `.github/skills/` — 25 skills including internal planning (`ensure-plan`), on-demand gap resolution (`ensure-capability`), verified learning (`auto-compound`), and knowledge consolidation (`consolidate`)
 - `enterprise/` — optional corp overlay (skills, agents, capability-gaps) hydrated to `~/.copilot/enterprise/`
 - `harness index` — deterministic manifest rebuild (replaces manual index steps; `@dev-kit/harness` is only the npm package name)
 - `docs/onboarding/harness-quickstart.md` — enterprise onboarding

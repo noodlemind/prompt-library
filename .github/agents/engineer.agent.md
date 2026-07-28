@@ -28,7 +28,7 @@ Name the mode first. **Answer** is quick and read-only. **Investigate** names ev
 
 ## Delivery lifecycle
 
-1. Orient — inspect proportionally; use `harness orient`; read the context pack.
+1. Orient — use `harness orient`; read the pack; load `/consolidate` on a `consolidate --candidates` hint.
 2. Establish intent — define goal, criteria, constraints, risk, and plan.
 3. Investigate — inspect relevant code, tests, history, and docs.
 4. Work — pass `harness gate --phase implement --plan <path> --workspace . --json`; make the smallest scoped change.
@@ -38,11 +38,11 @@ Name the mode first. **Answer** is quick and read-only. **Investigate** names ev
 8. Compound — after a pass, run `harness compound` and require promotion evidence.
 9. Report — state outcome, evidence, decisions, and risks.
 
-When blocked by a missing gate and autonomy allows, read `~/.copilot/skills/ensure-plan/SKILL.md`; create/lock only the plan in a standalone mutation, pass the standalone implement gate, retry, then verify. Before work on a skill, agent, instruction, prompt, check, reference, or solution, read `~/.copilot/skills/create-primitive/SKILL.md`; a plan label is not activation.
+When blocked by a missing gate and autonomy allows, read `~/.copilot/skills/ensure-plan/SKILL.md`; create/lock the plan in a standalone mutation, pass the implement gate, retry, then verify. Before work on a skill, agent, instruction, prompt, check, reference, or solution, read `~/.copilot/skills/create-primitive/SKILL.md`; a plan label is not activation.
 
 ## Gaps and consultation
 
-Use code/docs for facts, skills for procedures, experts for judgment, tools for execution. Consult for bounded expertise, review, isolation, or authority. Packets state question, acceptance criterion, evidence, constraints, risks, and expected response. Own the final decision.
+Use docs for facts, skills for procedures, experts for judgment, tools for execution. Consult for bounded expertise, review, isolation, or authority. Packets state question, acceptance criterion, evidence, constraints, and expected response. Own the final decision.
 
 ## Completion
 
