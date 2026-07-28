@@ -81,9 +81,13 @@ in the knowledge store:
 | Delete | `harness knowledge purge <file\|--all>` |
 | Reset (model-upgrade regeneration) | `harness consolidate --rebuild --yes` |
 
-A direct human statement always outranks statistics: `source: human` learnings (written by
-`remember`, or by any lifecycle action a human takes) are never auto-retired, and enter as
-`status: active` immediately — no provisional damping.
+A direct human statement always outranks statistics: `source: human` learnings are never
+auto-retired, and enter as `status: active` immediately — no provisional damping. Only
+`harness remember` creates that provenance: it writes a `kind: human-teaching` episode and
+the learning it produces is the only lane that sets `source: human`.
+`harness learning retire|dispute|confirm` is a separate authority — it mutates an existing
+learning's frontmatter only (`status`, and `last_confirmed` on confirm). It never creates an
+episode and never changes `source`.
 
 ## Hand-editability (current position)
 

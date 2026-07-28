@@ -20,19 +20,29 @@ function gitOut(cwd, args) {
   return res.status === 0 ? res.stdout.trim() : null;
 }
 
-/** Normalize any origin-remote form (ssh/https/scp) to one stable id. */
+/**
+ * Normalize any origin-remote form (ssh/https/scp) to one stable id. The
+ * human-readable slug alone is lossy — `github.com/org-a/repo-b` and
+ * `github.com/org-a-repo/b` both collapse to the same slug once `/` and `-`
+ * are folded together — so a short hash of the pre-lossy canonical string is
+ * appended to disambiguate. Equivalent ssh/https/scp forms of the same
+ * remote still share one canonical string, so they still share one id.
+ */
 export function repoId(workspace) {
   const remote = gitOut(workspace, ['remote', 'get-url', 'origin']);
   if (remote) {
-    const cleaned = remote
+    const canonical = remote
       .trim()
       .replace(/\.git$/, '')
       .replace(/^[a-z+]+:\/\//i, '') // https://, ssh://, git://
       .replace(/^[^@/]+@/, '') // user@
       .replace(/:/g, '/') // scp form host:path
       .toLowerCase();
-    const id = cleaned.replace(/[^a-z0-9.]+/g, '-').replace(/^-+|-+$/g, '');
-    if (id) return id;
+    const slug = canonical.replace(/[^a-z0-9.]+/g, '-').replace(/^-+|-+$/g, '');
+    if (slug) {
+      const suffix = crypto.createHash('sha256').update(canonical).digest('hex').slice(0, 8);
+      return `${slug}-${suffix}`;
+    }
   }
   // No remote: stable path-keyed fallback (documented limitation — memory is
   // per-path until a remote is added).
@@ -175,8 +185,24 @@ export function parseLearningFrontmatter(text) {
   return { fm, body };
 }
 
+const ESCAPE_MAP = { n: '\n', r: '\r', t: '\t', '"': '"', '\\': '\\' };
+
+/**
+ * Reverse what `yamlQuote` does at write time: wrap in double quotes, then
+ * escape `\`, `"`, and control chars. Only a value surrounded by
+ * double quotes on both ends went through that escaping, so only that shape
+ * gets unescaped — a single-pass regex so a real backslash (encoded as
+ * `\\`) is never re-interpreted as the start of a second escape sequence.
+ * Anything else (bare scalars, single-quoted legacy values) is only
+ * quote-stripped, exactly as before.
+ */
 function unquote(v) {
-  return String(v ?? '').replace(/^["']|["']$/g, '').trim();
+  const s = String(v ?? '').trim();
+  const m = /^"([\s\S]*)"$/.exec(s);
+  if (m) {
+    return m[1].replace(/\\(.)/g, (_, ch) => ESCAPE_MAP[ch] ?? ch);
+  }
+  return s.replace(/^["']|["']$/g, '');
 }
 
 export function listLearnings(dir) {

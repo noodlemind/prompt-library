@@ -106,11 +106,27 @@ export function buildContextPack({
   let body = lines.join('\n');
   if (Buffer.byteLength(body, 'utf8') > MAX_BYTES) {
     // Truncate in UTF-8 bytes (the budget's unit), backing off to a valid
-    // character boundary rather than slicing UTF-16 code units.
+    // character boundary rather than slicing UTF-16 code units — a naive
+    // byte slice can land inside a multibyte character (é/✓/€/emoji),
+    // which Buffer#toString('utf8') would otherwise render as U+FFFD.
     const budget = MAX_BYTES - 80;
-    let buf = Buffer.from(body, 'utf8').subarray(0, budget);
-    while (buf.length && (buf[buf.length - 1] & 0xc0) === 0x80) buf = buf.subarray(0, buf.length - 1);
-    body = buf.toString('utf8') + '\n\n…(truncated to 2KB budget)\n';
+    const buf = Buffer.from(body, 'utf8').subarray(0, budget);
+    // Walk back over continuation bytes (10xxxxxx) to find the start of the
+    // last character in the slice.
+    let leadIdx = buf.length - 1;
+    while (leadIdx >= 0 && (buf[leadIdx] & 0xc0) === 0x80) leadIdx--;
+    let end = buf.length;
+    if (leadIdx >= 0 && leadIdx < buf.length) {
+      const lead = buf[leadIdx];
+      // Expected total sequence length from the lead byte's high bits (1 for
+      // plain ASCII, 2/3/4 for multibyte lead bytes).
+      const seqLen =
+        (lead & 0x80) === 0x00 ? 1 : (lead & 0xe0) === 0xc0 ? 2 : (lead & 0xf0) === 0xe0 ? 3 : (lead & 0xf8) === 0xf0 ? 4 : 1;
+      // If the lead byte's full sequence didn't fit inside the slice, drop
+      // the whole (orphaned) character rather than leaving a lone lead byte.
+      if (leadIdx + seqLen > buf.length) end = leadIdx;
+    }
+    body = buf.subarray(0, end).toString('utf8') + '\n\n…(truncated to 2KB budget)\n';
   }
   return body;
 }

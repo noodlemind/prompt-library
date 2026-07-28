@@ -91,9 +91,17 @@ export function runRemember({ workspace, copilotHome, flags, argv, log = () => {
   const ops = { schema: 1, ops: [op] };
   const opsDir = path.join(workspace, '.harness');
   fs.mkdirSync(opsDir, { recursive: true });
-  const opsPath = path.join(opsDir, 'remember-ops.json');
+  // Unique per invocation: a fixed path here would let two concurrent
+  // `remember` calls clobber each other's ops file before either reaches
+  // applyOps's single-writer lock.
+  const opsPath = path.join(opsDir, `remember-ops-${process.pid}-${crypto.randomUUID()}.json`);
   fs.writeFileSync(opsPath, JSON.stringify(ops), 'utf8');
-  const applied = applyOps({ workspace, opsPath, dryRun: flags.dryRun, home });
+  let applied;
+  try {
+    applied = applyOps({ workspace, opsPath, dryRun: flags.dryRun, home });
+  } finally {
+    fs.rmSync(opsPath, { force: true });
+  }
   if (applied.exitCode !== 0) {
     // All-or-nothing: never leave an orphaned episode file behind on
     // rejection — a retry must not pile up dedup-suffixed episodes.

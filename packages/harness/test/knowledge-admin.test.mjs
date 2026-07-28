@@ -171,75 +171,81 @@ test('knowledge purge <episode> cascades: sole-evidence learning removed, shared
   assert.ok(fs.existsSync(path.join(c.ws, otherPath)), 'unrelated episode file untouched');
 });
 
-// Mirrors yamlQuote's inner escaping (apply.mjs and admin.mjs both apply this
-// same transform to whatever string they're given — including a value that
-// was already escaped by a previous write cycle, since the line-oriented
-// parser only strips wrapping quotes and never un-escapes).
-function yamlEscapeLike(v) {
-  return v
-    .replace(/\\/g, '\\\\')
-    .replace(/\n/g, '\\n')
-    .replace(/\r/g, '\\r')
-    .replace(/\t/g, '\\t');
-}
-
-test('an embedded newline in an ADD trigger survives both the initial write (apply.mjs) and a later purge-unlink rewrite (admin.mjs)', () => {
+test('a trigger with a quote, a backslash, and an embedded newline survives TWO successive purge-unlinks byte-identical', () => {
   const c = ctx();
-  const targetPath = 'docs/solutions/perf/target-nl.md';
-  const otherPath = 'docs/solutions/perf/other-nl.md';
+  const targetPath1 = 'docs/solutions/perf/target-nl-1.md';
+  const targetPath2 = 'docs/solutions/perf/target-nl-2.md';
+  const keepPath = 'docs/solutions/perf/keep-nl.md';
   fs.mkdirSync(path.join(c.ws, 'docs', 'solutions', 'perf'), { recursive: true });
-  fs.writeFileSync(path.join(c.ws, targetPath), 'target episode body\n');
-  fs.writeFileSync(path.join(c.ws, otherPath), 'other episode body\n');
+  fs.writeFileSync(path.join(c.ws, targetPath1), 'target episode body one\n');
+  fs.writeFileSync(path.join(c.ws, targetPath2), 'target episode body two\n');
+  fs.writeFileSync(path.join(c.ws, keepPath), 'kept episode body\n');
 
-  const trigger = 'trigger line one\nline two: fake-key';
-  const shared = {
+  // Exactly the characters yamlQuote escapes at write time: a double quote,
+  // a backslash, and a real embedded newline.
+  const trigger = 'trigger with a "quoted" word, a \\backslash\\, and\nline two: fake-key';
+  const op = {
     op: 'ADD',
     domain: 'sql',
-    slug: 'shared-newline-trigger',
+    slug: 'escape-round-trip',
     trigger,
-    body: 'shared evidence body text',
+    body: 'escape round trip body text',
     episodes: [
-      { path: targetPath, sha256: 'a'.repeat(64), kind: 'fix', plan: 'docs/plans/p1.md' },
-      { path: otherPath, sha256: 'b'.repeat(64), kind: 'fix', plan: 'docs/plans/p2.md' },
+      { path: targetPath1, sha256: 'a'.repeat(64), kind: 'fix', plan: 'docs/plans/p1.md' },
+      { path: targetPath2, sha256: 'b'.repeat(64), kind: 'fix', plan: 'docs/plans/p2.md' },
+      { path: keepPath, sha256: 'c'.repeat(64), kind: 'fix', plan: 'docs/plans/p3.md' },
     ],
   };
-  assert.equal(applyOps({ workspace: c.ws, opsPath: writeOps(c.ws, [shared]), home: c.harnessHome }).exitCode, 0);
+  assert.equal(applyOps({ workspace: c.ws, opsPath: writeOps(c.ws, [op]), home: c.harnessHome }).exitCode, 0);
 
   const { dir } = ensureStore(c.ws, { home: c.harnessHome });
 
-  // Stage 1: the initial ADD write (apply.mjs's renderLearning/yamlQuote) —
-  // the frontmatter must stay one line per key, and the parsed trigger must
-  // round-trip through the same parser the store uses everywhere. The
-  // line-oriented parser only strips quotes, it never un-escapes, so the
-  // parsed value is the escaped text, not the original raw newline.
-  const escapedOnce = yamlEscapeLike(trigger);
-  let learning = listLearnings(dir).find((l) => l.id === 'sql/shared-newline-trigger');
+  const triggerLine = (file) => {
+    const raw = fs.readFileSync(file, 'utf8');
+    const lines = raw.match(/^---\n([\s\S]*?)\n---/)[1].split('\n').filter((l) => /^trigger:/.test(l));
+    assert.equal(lines.length, 1, 'trigger stays one line');
+    return lines[0];
+  };
+
+  // Stage 0: the initial ADD write (apply.mjs's renderLearning/yamlQuote).
+  // The parser must un-escape what it strips quotes from — the parsed
+  // trigger is the exact raw text, never the escaped on-disk form.
+  let learning = listLearnings(dir).find((l) => l.id === 'sql/escape-round-trip');
   assert.ok(learning, 'learning written');
-  let raw = fs.readFileSync(learning.file, 'utf8');
-  let triggerLines = raw.match(/^---\n([\s\S]*?)\n---/)[1].split('\n').filter((l) => /^trigger:/.test(l));
-  assert.equal(triggerLines.length, 1, 'trigger stays one line after the initial ADD write');
-  assert.equal(learning.fm.trigger, escapedOnce);
+  assert.equal(learning.fm.trigger, trigger, 'raw trigger recovered after the initial ADD write');
+  const lineAfterAdd = triggerLine(learning.file);
 
-  // Stage 2: a purge-unlink on one of two episodes rewrites the file through
-  // admin.mjs's removeEpisodeLink/yamlQuote. It re-escapes whatever it reads
-  // (already-escaped text from stage 1), so the on-disk value gains another
-  // escaping pass — expected given this format's one-way escape, not a bug.
-  // The invariant that matters is the one this fix protects: the frontmatter
-  // must still be exactly one line per key, and the original content must
-  // still be recoverable (not truncated or dropped) after the rewrite.
-  const res = run(c, ['knowledge', 'purge', targetPath]);
+  // Stage 1: purge-unlink one of three episodes (admin.mjs's
+  // removeEpisodeLink) re-serializes the PARSED trigger through yamlQuote
+  // again. Since the parser now hands back raw text, this rewrite must be
+  // byte-identical to the original ADD write — not a second escaping pass.
+  let res = run(c, ['knowledge', 'purge', targetPath1]);
   assert.equal(res.status, 0, res.stderr || res.stdout);
-  const out = JSON.parse(res.stdout);
-  assert.deepEqual(out.removed.links, ['sql/shared-newline-trigger']);
+  assert.deepEqual(JSON.parse(res.stdout).removed.links, ['sql/escape-round-trip']);
 
-  learning = listLearnings(dir).find((l) => l.id === 'sql/shared-newline-trigger');
-  assert.ok(learning, 'learning survives the unlink rewrite');
-  raw = fs.readFileSync(learning.file, 'utf8');
-  triggerLines = raw.match(/^---\n([\s\S]*?)\n---/)[1].split('\n').filter((l) => /^trigger:/.test(l));
-  assert.equal(triggerLines.length, 1, 'trigger still one line after admin.mjs rewrites the file');
-  const escapedTwice = yamlEscapeLike(escapedOnce);
-  assert.equal(learning.fm.trigger, escapedTwice, 'trigger content preserved (re-escaped, not corrupted or lost)');
-  assert.match(learning.fm.trigger, /trigger line one.*line two: fake-key/, 'original text still recoverable');
+  learning = listLearnings(dir).find((l) => l.id === 'sql/escape-round-trip');
+  assert.ok(learning, 'learning survives the first unlink');
+  assert.equal(learning.fm.trigger, trigger, 'raw trigger still recovered after the first purge-unlink');
+  assert.equal(triggerLine(learning.file), lineAfterAdd, 'trigger line byte-identical after the first purge-unlink');
+
+  // Stage 2: a SECOND purge-unlink must still produce the same byte-exact
+  // line — proving the escaping does not compound across repeated rewrites.
+  res = run(c, ['knowledge', 'purge', targetPath2]);
+  assert.equal(res.status, 0, res.stderr || res.stdout);
+  assert.deepEqual(JSON.parse(res.stdout).removed.links, ['sql/escape-round-trip']);
+
+  learning = listLearnings(dir).find((l) => l.id === 'sql/escape-round-trip');
+  assert.ok(learning, 'learning survives the second unlink');
+  assert.equal(learning.fm.trigger, trigger, 'raw trigger still recovered after the second purge-unlink');
+  assert.equal(triggerLine(learning.file), lineAfterAdd, 'trigger line byte-identical after the second purge-unlink');
+
+  // Every consumer of the parsed trigger (retrieve tokenize, listing render,
+  // eval) expects raw text — `learnings --json` must show it raw too.
+  const listRes = run(c, ['learnings']);
+  assert.equal(listRes.status, 0, listRes.stderr || listRes.stdout);
+  const listed = JSON.parse(listRes.stdout).learnings.find((l) => l.id === 'sql/escape-round-trip');
+  assert.ok(listed, 'learning appears in the listing');
+  assert.equal(listed.trigger, trigger, 'learnings --json shows the raw trigger, not the escaped form');
 });
 
 test('knowledge purge preserves last_confirmed on the remaining learning instead of stamping it to today', () => {

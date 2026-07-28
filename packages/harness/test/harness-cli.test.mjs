@@ -901,6 +901,27 @@ test('context pack stays within byte budget cap', () => {
   assert.match(body, /truncated to 2KB budget/);
 });
 
+test('context pack truncation never splits a multibyte character, whatever the cut point', () => {
+  // é is 2 bytes, ✓ and € are 3 bytes, 🎉 is 4 bytes (a surrogate pair in
+  // UTF-16) — a long run of each so the fixed truncation cut point (a
+  // constant byte offset from the top of the pack) is guaranteed to fall
+  // somewhere inside this block once the query is long enough to force
+  // truncation, regardless of how many bytes precede it.
+  const multibyte = 'é'.repeat(300) + '✓'.repeat(300) + '€'.repeat(300) + '🎉'.repeat(300);
+  // Shifting the block by 1..16 leading ASCII bytes walks the fixed cut
+  // point through every possible sub-character byte offset (mod 2, 3, and
+  // 4), so across this range every multibyte width gets cut mid-character
+  // at least once.
+  for (let pad = 0; pad < 16; pad++) {
+    const body = buildContextPack({ query: 'a'.repeat(pad) + multibyte, recall: [], plans: [], learnings: [] });
+    assert.ok(
+      Buffer.byteLength(body, 'utf8') <= CONTEXT_PACK_MAX_BYTES,
+      `pad=${pad}: byte length must stay within the budget`
+    );
+    assert.ok(!body.includes('�'), `pad=${pad}: no replacement character from a split multibyte sequence`);
+  }
+});
+
 test('validate-plan fails when required sections missing', () => {
   const workspace = tempDir('harness-workspace-');
   const plansDir = path.join(workspace, 'docs', 'plans');

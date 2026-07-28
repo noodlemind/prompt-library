@@ -29,7 +29,16 @@ test('repoId normalizes ssh and https forms of the same remote to one id', () =>
   const a = gitWorkspace('git@github.com:noodlemind/prompt-library.git');
   const b = gitWorkspace('https://github.com/noodlemind/prompt-library.git');
   assert.equal(repoId(a), repoId(b));
-  assert.match(repoId(a), /^github\.com-noodlemind-prompt-library$/);
+  assert.match(repoId(a), /^github\.com-noodlemind-prompt-library-[0-9a-f]{8}$/);
+});
+
+test('repoId disambiguates remotes whose lossy slugs would otherwise collide', () => {
+  // "org-a/repo-b" and "org-a-repo/b" both collapse to the same slug once
+  // '/' and '-' fold together in the lossy replace — the hash suffix (over
+  // the pre-lossy canonical string) must still tell them apart.
+  const a = gitWorkspace('https://github.com/org-a/repo-b.git');
+  const b = gitWorkspace('https://github.com/org-a-repo/b.git');
+  assert.notEqual(repoId(a), repoId(b));
 });
 
 test('repoId falls back to a stable path-keyed id without a remote', () => {
