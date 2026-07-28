@@ -1,0 +1,141 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import { test } from 'node:test';
+import { ensureStore, listLearnings } from '../lib/knowledge/store.mjs';
+
+const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const binPath = path.join(packageRoot, 'bin', 'harness.mjs');
+const tempDir = (p) => fs.mkdtempSync(path.join(os.tmpdir(), p));
+
+function ctx() {
+  return { ws: tempDir('anchor-ws-'), home: tempDir('anchor-home-'), harnessHome: tempDir('anchor-hh-') };
+}
+
+function run({ ws, home, harnessHome }, args) {
+  return spawnSync(process.execPath, [binPath, ...args, '--workspace', ws, '--copilot-home', home, '--json'], {
+    encoding: 'utf8',
+    env: { ...process.env, HARNESS_HOME: harnessHome },
+  });
+}
+
+function writeOps(dir, ops) {
+  const p = path.join(dir, 'ops.json');
+  fs.writeFileSync(p, JSON.stringify({ schema: 1, ops }));
+  return p;
+}
+
+function writeFile(ws, rel, body) {
+  const full = path.join(ws, rel);
+  fs.mkdirSync(path.dirname(full), { recursive: true });
+  fs.writeFileSync(full, body, 'utf8');
+}
+
+const TRIGGER = 'orders endpoint timing out under load';
+
+function seedAnchoredLearning(c) {
+  // The anchor target: a real source file the episode doc talks about.
+  writeFile(c.ws, 'src/orders.mjs', 'export function listOrders() {}\n');
+  // The episode doc (the evidence file cited by the op) mentions that path.
+  writeFile(
+    c.ws,
+    'docs/solutions/perf/orders-fix.md',
+    '---\ntitle: "orders endpoint timing out"\ndate: 2026-07-27\n---\n\n## Problem\n\nFixed by adding an index; see src/orders.mjs for the query.\n'
+  );
+  const op = {
+    op: 'ADD',
+    domain: 'perf',
+    slug: 'orders-endpoint',
+    trigger: TRIGGER,
+    body: 'Add a covering index for the orders query; see src/orders.mjs.',
+    episodes: [{ path: 'docs/solutions/perf/orders-fix.md', sha256: 'a'.repeat(64), kind: 'fix', plan: 'docs/plans/p1.md' }],
+  };
+  const res = run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [op])]);
+  assert.equal(res.status, 0, res.stderr || res.stdout);
+  return 'perf/orders-endpoint';
+}
+
+function orientLearningIds(c, query) {
+  const res = run(c, ['orient', '--query', query]);
+  assert.equal(res.status, 0, res.stderr || res.stdout);
+  const out = JSON.parse(res.stdout);
+  return (out.learnings || []).map((l) => l.id);
+}
+
+test('(a) consolidate --apply writes anchors extracted from episode text', () => {
+  const c = ctx();
+  const id = seedAnchoredLearning(c);
+  const { dir } = ensureStore(c.ws, { home: c.harnessHome });
+  const learning = listLearnings(dir).find((l) => l.id === id);
+  assert.ok(learning, 'learning materialized');
+  assert.deepEqual(learning.fm.anchors, ['src/orders.mjs']);
+  const raw = fs.readFileSync(learning.file, 'utf8');
+  assert.match(raw, /^anchors:\n {2}- src\/orders\.mjs$/m);
+});
+
+test('(b) orient surfaces a freshly anchored learning', () => {
+  const c = ctx();
+  seedAnchoredLearning(c);
+  const ids = orientLearningIds(c, TRIGGER);
+  assert.ok(ids.includes('perf/orders-endpoint'), JSON.stringify(ids));
+});
+
+test('(c) deleting an anchor target excludes the learning at the next index', () => {
+  const c = ctx();
+  seedAnchoredLearning(c);
+  fs.rmSync(path.join(c.ws, 'src/orders.mjs'), { force: true });
+
+  const idx = run(c, ['index']);
+  assert.equal(idx.status, 0, idx.stderr || idx.stdout);
+  const idxOut = JSON.parse(idx.stdout);
+  assert.equal(idxOut.staleLearnings, 1);
+
+  const ids = orientLearningIds(c, TRIGGER);
+  assert.ok(!ids.includes('perf/orders-endpoint'), JSON.stringify(ids));
+});
+
+test('(d) restoring the anchor target re-includes the learning at the next index', () => {
+  const c = ctx();
+  seedAnchoredLearning(c);
+  const target = path.join(c.ws, 'src/orders.mjs');
+  fs.rmSync(target, { force: true });
+  assert.equal(JSON.parse(run(c, ['index']).stdout).staleLearnings, 1);
+  assert.ok(!orientLearningIds(c, TRIGGER).includes('perf/orders-endpoint'));
+
+  fs.writeFileSync(target, 'export function listOrders() {}\n', 'utf8');
+  const idx = run(c, ['index']);
+  assert.equal(idx.status, 0, idx.stderr || idx.stdout);
+  assert.equal(JSON.parse(idx.stdout).staleLearnings, 0);
+
+  const ids = orientLearningIds(c, TRIGGER);
+  assert.ok(ids.includes('perf/orders-endpoint'), JSON.stringify(ids));
+});
+
+test('(e) a learning with anchors: [] is never excluded, even after unrelated files disappear', () => {
+  const c = ctx();
+  const otherTrigger = 'plain claim without file references';
+  writeFile(c.ws, 'docs/solutions/perf/plain.md', '---\ntitle: "plain"\ndate: 2026-07-27\n---\n\n## Problem\n\nJust prose, no paths.\n');
+  const op = {
+    op: 'ADD',
+    domain: 'perf',
+    slug: 'plain-claim',
+    trigger: otherTrigger,
+    body: 'A claim with no file anchors at all.',
+    episodes: [{ path: 'docs/solutions/perf/plain.md', sha256: 'b'.repeat(64), kind: 'fix', plan: '' }],
+  };
+  assert.equal(run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [op])]).status, 0);
+
+  const { dir } = ensureStore(c.ws, { home: c.harnessHome });
+  const learning = listLearnings(dir).find((l) => l.id === 'perf/plain-claim');
+  assert.deepEqual(learning.fm.anchors, []);
+
+  // Deleting an unrelated file (not an anchor of anything) must not exclude it.
+  fs.rmSync(path.join(c.ws, 'docs/solutions/perf/plain.md'), { force: true });
+  const idx = run(c, ['index']);
+  assert.equal(idx.status, 0, idx.stderr || idx.stdout);
+  assert.equal(JSON.parse(idx.stdout).staleLearnings, 0);
+  assert.ok(orientLearningIds(c, otherTrigger).includes('perf/plain-claim'));
+});

@@ -114,32 +114,58 @@ export function appendLedger(dir, entries) {
   fs.appendFileSync(ledgerPath, prefix + entries.map((e) => JSON.stringify(e)).join('\n') + '\n');
 }
 
-/** Parse learning frontmatter including the structured episodes block. */
+/**
+ * Parse learning frontmatter including the structured episodes block and the
+ * flat anchors list. Only one list can be "open" at a time — episodes and
+ * anchors items look similar (both start `  - `) so we track which block
+ * we're inside and only apply that block's item shape.
+ */
 export function parseLearningFrontmatter(text) {
   const m = text.match(/^---\r?\n([\s\S]*?)\r?\n---/);
   if (!m) return { fm: {}, body: text.trim() };
-  const fm = { episodes: [] };
-  let inEpisodes = false;
+  const fm = { episodes: [], anchors: [] };
+  let openList = null; // 'episodes' | 'anchors' | null
   let current = null;
   for (const line of m[1].split('\n')) {
     if (/^episodes:\s*$/.test(line)) {
-      inEpisodes = true;
+      openList = 'episodes';
+      current = null;
       continue;
     }
-    const item = line.match(/^\s{2}- (\w+):\s*(.*)$/);
-    const sub = line.match(/^\s{4}(\w+):\s*(.*)$/);
-    if (inEpisodes && item) {
-      current = { [item[1]]: unquote(item[2]) };
-      fm.episodes.push(current);
+    if (/^anchors:\s*\[\]\s*$/.test(line)) {
+      openList = null;
+      current = null;
+      fm.anchors = [];
       continue;
     }
-    if (inEpisodes && sub && current) {
-      current[sub[1]] = unquote(sub[2]);
+    if (/^anchors:\s*$/.test(line)) {
+      openList = 'anchors';
+      current = null;
       continue;
+    }
+    if (openList === 'episodes') {
+      const item = line.match(/^\s{2}- (\w+):\s*(.*)$/);
+      const sub = line.match(/^\s{4}(\w+):\s*(.*)$/);
+      if (item) {
+        current = { [item[1]]: unquote(item[2]) };
+        fm.episodes.push(current);
+        continue;
+      }
+      if (sub && current) {
+        current[sub[1]] = unquote(sub[2]);
+        continue;
+      }
+    }
+    if (openList === 'anchors') {
+      const anchorItem = line.match(/^\s{2}- (.+)$/);
+      if (anchorItem) {
+        fm.anchors.push(unquote(anchorItem[1]));
+        continue;
+      }
     }
     const kv = line.match(/^([\w-]+):\s*(.*)$/);
     if (kv) {
-      inEpisodes = false;
+      openList = null;
       current = null;
       const value = unquote(kv[2]);
       fm[kv[1]] = value === 'null' || value === '' ? (value === '' ? '' : null) : value;
@@ -202,4 +228,25 @@ export function normalizeSlug(text) {
       .replace(/^-+|-+$/g, '')
       .slice(0, 60) || 'learning'
   );
+}
+
+/**
+ * Stale-anchor exclusions: CLI state recomputed by `harness index`, not a
+ * learning write. Tolerant of an absent or corrupt file — a fresh or damaged
+ * store never blocks retrieval.
+ */
+export function readStaleExclusions(dir) {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(path.join(dir, 'stale.json'), 'utf8'));
+    if (parsed && parsed.excluded && typeof parsed.excluded === 'object') {
+      return { excluded: parsed.excluded };
+    }
+  } catch {
+    // absent, unreadable, or corrupt — tolerant default
+  }
+  return { excluded: {} };
+}
+
+export function writeStaleExclusions(dir, data) {
+  fs.writeFileSync(path.join(dir, 'stale.json'), JSON.stringify(data) + '\n', 'utf8');
 }

@@ -368,6 +368,28 @@ export async function cmdIndex(argv) {
   } catch {
     // Advisory: never fail index on map generation.
   }
+  // Recompute stale-anchor exclusions: anchors are file paths cited by a
+  // learning's evidence at write time; if one no longer exists on disk, the
+  // learning is excluded from retrieval until the anchor resolves again.
+  // Mechanical CLI state, not mode-gated — never on --status (returned
+  // above), never on dry-run, and never allowed to fail `index` itself.
+  if (!flags.dryRun) {
+    try {
+      const { ensureStore, listLearnings, writeStaleExclusions } = await import('./knowledge/store.mjs');
+      const { dir } = ensureStore(workspace);
+      const excluded = {};
+      for (const l of listLearnings(dir)) {
+        const anchors = l.fm.anchors || [];
+        if (!anchors.length) continue;
+        const missing = anchors.filter((a) => !fs.existsSync(path.join(workspace, a)));
+        if (missing.length) excluded[l.id] = missing;
+      }
+      writeStaleExclusions(dir, { excluded });
+      result.staleLearnings = Object.keys(excluded).length;
+    } catch {
+      // Advisory: never fail index because the knowledge store is unreadable.
+    }
+  }
   writeEvent(workspace, flags, {
     type: 'index',
     command: 'index',
@@ -378,12 +400,15 @@ export async function cmdIndex(argv) {
     emitJson(flags, result);
   } else {
     const empty = result.entries === 0;
+    const noteParts = [];
+    if (empty) noteParts.push('no solution docs under knowledge/solutions or docs/solutions yet');
+    if (result.staleLearnings) noteParts.push(`learnings excluded ${result.staleLearnings} (stale anchors)`);
     console.log(
       ui.line({
         state: 'ok',
         key: 'index',
         value: `${result.entries} entries · ${result.indexEntries ?? result.entries} postings`,
-        note: empty ? 'no solution docs under knowledge/solutions or docs/solutions yet' : undefined,
+        note: noteParts.length ? noteParts.join(' · ') : undefined,
         next: empty ? 'harness compound records the first learning' : undefined,
       })
     );

@@ -23,6 +23,7 @@ export function removeEpisodeLink(file, targetPath) {
   const text = fs.readFileSync(file, 'utf8');
   const { fm, body } = parseLearningFrontmatter(text);
   const episodes = (fm.episodes || []).filter((e) => e.path !== targetPath);
+  const anchors = fm.anchors || [];
   const lines = [
     '---',
     'schema: 1',
@@ -36,6 +37,12 @@ export function removeEpisodeLink(file, targetPath) {
     lines.push(`    sha256: ${yamlQuote(e.sha256)}`);
     lines.push(`    kind: ${e.kind}`);
     lines.push(`    plan: ${e.plan || ''}`);
+  }
+  if (anchors.length) {
+    lines.push('anchors:');
+    for (const a of anchors) lines.push(`  - ${a}`);
+  } else {
+    lines.push('anchors: []');
   }
   lines.push(`superseded_by: ${fm.superseded_by || 'null'}`);
   lines.push(`last_confirmed: ${todayClamped()}`);

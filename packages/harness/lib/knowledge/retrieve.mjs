@@ -1,5 +1,5 @@
 import fs from 'node:fs';
-import { storeDir, listLearnings } from './store.mjs';
+import { storeDir, listLearnings, readStaleExclusions } from './store.mjs';
 import { tokenize } from '../tokenize.mjs';
 
 /**
@@ -9,10 +9,12 @@ import { tokenize } from '../tokenize.mjs';
  */
 export function rankLearnings({ workspace, query, limit = 3, home }) {
   let learnings = [];
+  let staleExcluded = {};
   try {
     const dir = storeDir(workspace, { home });
     if (!fs.existsSync(dir)) return [];
     learnings = listLearnings(dir);
+    staleExcluded = readStaleExclusions(dir).excluded;
   } catch {
     return [];
   }
@@ -24,6 +26,7 @@ export function rankLearnings({ workspace, query, limit = 3, home }) {
   for (const l of learnings) {
     if (l.fm.superseded_by) continue;
     if (['retired', 'disputed'].includes(l.fm.status)) continue;
+    if (staleExcluded[l.id]) continue;
     const claimLine = (l.body.split('\n').find((x) => x.trim()) || '').trim();
     const hay = new Set(tokenize(`${l.fm.trigger || ''} ${claimLine}`));
     let hits = 0;

@@ -22,6 +22,8 @@ import { scanSecrets } from '../secret-scan.mjs';
 
 const FILE_TOUCHING = new Set(['ADD', 'STRENGTHEN', 'SUPERSEDE']);
 const DISPUTED_FIX_THRESHOLD = 3;
+const ANCHOR_RE = /\b[\w][\w./-]*\.(?:mjs|js|ts|tsx|py|java|sql|md|ya?ml|json)\b/g;
+const ANCHOR_CAP = 8;
 
 function fail(code, reason) {
   return { code, reason };
@@ -36,7 +38,36 @@ export function todayClamped() {
   return new Date(Math.min(Date.now(), Date.now())).toISOString().slice(0, 10);
 }
 
-function renderLearning({ trigger, body, episodes, origin, status, source, supersededBy, mergedFrom }) {
+/**
+ * Deterministic anchor extraction: for every episode whose own file exists
+ * under the workspace, scan its text for repo-relative paths and keep the
+ * ones that resolve to real files — excluding the episode's own path so a
+ * doc doesn't anchor itself. Dedupe, sort, cap at 8 (module-private; only
+ * `renderLearning` writes the result).
+ */
+function extractAnchors({ workspace, episodes }) {
+  const found = new Set();
+  for (const e of episodes || []) {
+    if (!e.path) continue;
+    const full = path.join(workspace, e.path);
+    if (!fs.existsSync(full)) continue;
+    let text;
+    try {
+      text = fs.readFileSync(full, 'utf8');
+    } catch {
+      continue;
+    }
+    const matches = text.match(ANCHOR_RE) || [];
+    for (const m of matches) {
+      if (m === e.path) continue;
+      if (!fs.existsSync(path.join(workspace, m))) continue;
+      found.add(m);
+    }
+  }
+  return [...found].sort().slice(0, ANCHOR_CAP);
+}
+
+function renderLearning({ trigger, body, episodes, anchors = [], origin, status, source, supersededBy, mergedFrom }) {
   const lines = [
     '---',
     'schema: 1',
@@ -50,6 +81,12 @@ function renderLearning({ trigger, body, episodes, origin, status, source, super
     lines.push(`    sha256: ${yamlQuote(e.sha256)}`);
     lines.push(`    kind: ${e.kind === 'insight' ? 'insight' : e.kind === 'human-teaching' ? 'human-teaching' : 'fix'}`);
     lines.push(`    plan: ${e.plan || ''}`);
+  }
+  if (anchors.length) {
+    lines.push('anchors:');
+    for (const a of anchors) lines.push(`  - ${a}`);
+  } else {
+    lines.push('anchors: []');
   }
   lines.push(`superseded_by: ${supersededBy || 'null'}`);
   lines.push(`last_confirmed: ${todayClamped()}`);
@@ -188,6 +225,7 @@ export function applyOps({ workspace, opsPath, dryRun = false, home }) {
       trigger: op.trigger,
       body: op.body,
       episodes: op.episodes,
+      anchors: extractAnchors({ workspace, episodes: op.episodes }),
       origin,
       status,
       source,
@@ -243,7 +281,7 @@ export function applyOps({ workspace, opsPath, dryRun = false, home }) {
     for (const op of planned) {
       if (op.op === 'STRENGTHEN') {
         const target = existing.get(op.target);
-        strengthenLearning(target, op.episodes);
+        strengthenLearning(target, op.episodes, workspace);
         applied.push({ op: 'STRENGTHEN', id: op.target });
         for (const e of op.episodes) ledgerEntries.push({ path: e.path, sha256: e.sha256, learning: op.target, at });
       } else if (op.op === 'NOOP') {
@@ -278,7 +316,7 @@ export function updateFrontmatterField(file, field, value) {
   fs.writeFileSync(file, next, 'utf8');
 }
 
-function strengthenLearning(target, episodes) {
+function strengthenLearning(target, episodes, workspace) {
   const text = fs.readFileSync(target.file, 'utf8');
   const { fm, body } = parseLearningFrontmatter(text);
   const seen = new Set((fm.episodes || []).map((e) => `${e.path}@${e.sha256}`));
@@ -295,6 +333,7 @@ function strengthenLearning(target, episodes) {
     trigger: fm.trigger || '',
     body,
     episodes: merged,
+    anchors: extractAnchors({ workspace, episodes: merged }),
     origin: fm.origin || 'unknown',
     status,
     source: fm.source || 'auto',

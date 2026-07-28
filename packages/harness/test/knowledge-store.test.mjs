@@ -89,6 +89,9 @@ episodes:
     sha256: "def456"
     kind: insight
     plan: ""
+anchors:
+  - src/db/migrate.mjs
+  - src/db/schema.sql
 superseded_by: null
 last_confirmed: 2026-07-20
 origin: github.com-x-list
@@ -106,8 +109,61 @@ Use two-step default+backfill; a direct ALTER takes an exclusive lock.
   assert.equal(l.fm.episodes.length, 2);
   assert.equal(l.fm.episodes[0].kind, 'fix');
   assert.equal(l.fm.episodes[0].plan, 'docs/plans/p1.md');
+  assert.deepEqual(l.fm.anchors, ['src/db/migrate.mjs', 'src/db/schema.sql']);
   assert.match(l.body, /two-step default\+backfill/);
   assert.ok(l.bytes > 0);
+});
+
+test('parseLearningFrontmatter defaults anchors to [] when the field is absent, and round-trips anchors: []', () => {
+  const home = tempDir('kstore-anchors-empty-');
+  const ws = gitWorkspace('https://github.com/x/anchors-empty.git');
+  const { dir } = ensureStore(ws, { home });
+  const lDir = path.join(dir, 'learnings', 'sql');
+  fs.mkdirSync(lDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(lDir, 'no-anchors-field.md'),
+    `---
+schema: 1
+trigger: "legacy learning written before anchors existed"
+status: active
+source: auto
+episodes:
+  - path: docs/solutions/perf/z.md
+    sha256: "abc123"
+    kind: fix
+    plan: docs/plans/p1.md
+superseded_by: null
+last_confirmed: 2026-07-20
+origin: github.com-x-anchors-empty
+---
+
+Legacy learning with no anchors: field at all.
+`
+  );
+  fs.writeFileSync(
+    path.join(lDir, 'empty-anchors.md'),
+    `---
+schema: 1
+trigger: "a claim with no linkable files"
+status: active
+source: auto
+episodes:
+  - path: docs/solutions/perf/w.md
+    sha256: "abc123"
+    kind: fix
+    plan: docs/plans/p1.md
+anchors: []
+superseded_by: null
+last_confirmed: 2026-07-20
+origin: github.com-x-anchors-empty
+---
+
+A claim with no file anchors.
+`
+  );
+  const byId = Object.fromEntries(listLearnings(dir).map((l) => [l.id, l]));
+  assert.deepEqual(byId['sql/no-anchors-field'].fm.anchors, []);
+  assert.deepEqual(byId['sql/empty-anchors'].fm.anchors, []);
 });
 
 test('commitStore commits changes and reports clean trees', () => {
