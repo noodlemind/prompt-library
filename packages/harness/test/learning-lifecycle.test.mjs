@@ -117,6 +117,25 @@ test('learning retire on an unknown id exits 1 with an E_TARGET error', () => {
   assert.match(res.stdout + res.stderr, /E_TARGET/);
 });
 
+test('learning retire --reason x <id> (flag before the id positional) yields a usage error, not a confusing E_TARGET', () => {
+  const c = ctx();
+  const { autoId } = seed(c);
+
+  const res = run(c, ['learning', 'retire', '--reason', 'x', autoId]);
+  assert.equal(res.status, 2, res.stderr || res.stdout);
+  const out = JSON.parse(res.stdout);
+  assert.match(out.blockedReason || '', /usage: harness learning <retire\|dispute\|confirm>/);
+});
+
+test('learning explode some/id --reason x exits usage for an unknown action', () => {
+  const c = ctx();
+
+  const res = run(c, ['learning', 'explode', 'some/id', '--reason', 'x']);
+  assert.equal(res.status, 2, res.stderr || res.stdout);
+  const out = JSON.parse(res.stdout);
+  assert.match(out.blockedReason || '', /usage: harness learning <retire\|dispute\|confirm>/);
+});
+
 test('learning retire on a storeless workspace exits 1 with E_TARGET and never materializes the store', () => {
   const c = ctx();
   const dir = storeDir(c.ws, { home: c.harnessHome });

@@ -4,8 +4,9 @@ import { updateFrontmatterField, todayClamped } from './apply.mjs';
 
 /**
  * One-command human authority over a single learning: retire, dispute, or
- * confirm. The only writer here besides applyOps — a targeted frontmatter
- * mutation plus one store commit, never a rewrite of the learning body.
+ * confirm. The only writer here besides applyOps — one or two targeted
+ * frontmatter field writes (confirm also stamps last_confirmed) plus one
+ * store commit, never a rewrite of the learning body.
  */
 
 const ACTIONS = new Set(['retire', 'dispute', 'confirm']);

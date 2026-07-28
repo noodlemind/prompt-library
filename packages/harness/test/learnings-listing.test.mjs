@@ -69,6 +69,38 @@ function seed(c) {
   return { autoId, humanId };
 }
 
+// A modest auto learning (single fix link, non-human) — light enough that a
+// SUPERSEDE against it lands cleanly instead of disputed (verifiedFixLinks <
+// 3 and source !== human — see apply.mjs's DISPUTED_FIX_THRESHOLD rule).
+function seedLegacyAndSupersede(c) {
+  const legacyOp = {
+    op: 'ADD',
+    domain: 'sql',
+    slug: 'legacy-claim',
+    trigger: 'a legacy trigger',
+    body: 'The original claim body.',
+    episodes: [{ path: 'docs/solutions/perf/legacy.md', sha256: 'e'.repeat(64), kind: 'fix', plan: 'docs/plans/p10.md' }],
+  };
+  const legacyRes = run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [legacyOp])]);
+  assert.equal(legacyRes.status, 0, legacyRes.stderr || legacyRes.stdout);
+  const oldId = JSON.parse(legacyRes.stdout).applied[0].id;
+
+  const supersedeOp = {
+    op: 'SUPERSEDE',
+    target: oldId,
+    domain: 'sql',
+    slug: 'legacy-claim-v2',
+    trigger: 'a legacy trigger, v2',
+    body: 'The replacement claim body.',
+    episodes: [{ path: 'docs/solutions/perf/legacy-v2.md', sha256: 'f'.repeat(64), kind: 'fix', plan: 'docs/plans/p11.md' }],
+  };
+  const supersedeRes = run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [supersedeOp])]);
+  assert.equal(supersedeRes.status, 0, supersedeRes.stderr || supersedeRes.stdout);
+  const newId = JSON.parse(supersedeRes.stdout).applied[0].id;
+
+  return { oldId, newId };
+}
+
 test('learnings --json lists both learnings with verified/plans/promotionEligible/failures', () => {
   const c = ctx();
   const { autoId, humanId } = seed(c);
@@ -145,6 +177,75 @@ test('learnings --why missing/id exits 1', () => {
 
   const res = run(c, ['learnings', '--why', 'missing/id']);
   assert.equal(res.status, 1, res.stdout);
+});
+
+test('plain --why output includes failures and promotionEligible annotations like the listing view', () => {
+  const c = ctx();
+  const { autoId, humanId } = seed(c);
+
+  const autoRes = run(c, ['learnings', '--why', autoId], { json: false });
+  assert.equal(autoRes.status, 0, autoRes.stderr || autoRes.stdout);
+  assert.match(autoRes.stdout, /promotable → \/create-primitive/);
+
+  const humanRes = run(c, ['learnings', '--why', humanId], { json: false });
+  assert.equal(humanRes.status, 0, humanRes.stderr || humanRes.stdout);
+  assert.match(humanRes.stdout, /evidence contradicts \(1 failures\)/);
+});
+
+test('learnings --why on a superseded learning synthesizes status: superseded, matching the listing view', () => {
+  const c = ctx();
+  const { oldId, newId } = seedLegacyAndSupersede(c);
+
+  const res = run(c, ['learnings', '--why', oldId]);
+  assert.equal(res.status, 0, res.stderr || res.stdout);
+  const out = JSON.parse(res.stdout);
+  assert.equal(out.status, 'superseded');
+  assert.equal(out.supersededBy, newId);
+});
+
+test('learnings --why exposes lastConfirmed, supersededBy, mergedFrom, and claimLine', () => {
+  const c = ctx();
+  const { oldId, newId } = seedLegacyAndSupersede(c);
+
+  const mergedOp = {
+    op: 'ADD',
+    domain: 'sql',
+    slug: 'merged-claim',
+    trigger: 'a merged trigger',
+    body: 'The merged claim body.',
+    episodes: [{ path: 'docs/solutions/perf/merged.md', sha256: 'a1'.repeat(32), kind: 'fix', plan: 'docs/plans/p12.md' }],
+    merged_from: ['sql/legacy-claim-alt'],
+  };
+  const mergedRes = run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [mergedOp])]);
+  assert.equal(mergedRes.status, 0, mergedRes.stderr || mergedRes.stdout);
+  const mergedId = JSON.parse(mergedRes.stdout).applied[0].id;
+
+  const confirmRes = run(c, ['learning', 'confirm', mergedId]);
+  assert.equal(confirmRes.status, 0, confirmRes.stderr || confirmRes.stdout);
+  const today = new Date().toISOString().slice(0, 10);
+
+  const whyOld = JSON.parse(run(c, ['learnings', '--why', oldId]).stdout);
+  assert.equal(whyOld.supersededBy, newId);
+  assert.equal(whyOld.claimLine, 'The original claim body.');
+
+  const whyMerged = JSON.parse(run(c, ['learnings', '--why', mergedId]).stdout);
+  assert.equal(whyMerged.lastConfirmed, today);
+  assert.deepEqual(whyMerged.mergedFrom, ['sql/legacy-claim-alt']);
+  assert.equal(whyMerged.claimLine, 'The merged claim body.');
+});
+
+test('trailing bare --why (last arg, no value) exits usage instead of silently falling through to the full listing', () => {
+  const c = ctx();
+  seed(c);
+
+  const res = spawnSync(
+    process.execPath,
+    [binPath, 'learnings', '--workspace', c.ws, '--copilot-home', c.home, '--json', '--why'],
+    { encoding: 'utf8', env: { ...process.env, HARNESS_HOME: c.harnessHome } }
+  );
+  assert.equal(res.status, 2, res.stderr || res.stdout);
+  const out = JSON.parse(res.stdout);
+  assert.match(out.blockedReason || '', /usage/i);
 });
 
 test('learnings on a storeless workspace exits 0 with an empty listing and never materializes the store', () => {

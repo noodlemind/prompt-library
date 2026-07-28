@@ -106,3 +106,47 @@ test('remember rolls back the episode file when applyOps rejects it (byte cap)',
   const remaining = fs.existsSync(teachingsDir) ? fs.readdirSync(teachingsDir) : [];
   assert.deepEqual(remaining, [], 'rejected apply must not leave an orphaned episode file');
 });
+
+test('remember rollback also reindexes so the manifest does not dangle a reference to the deleted episode', () => {
+  const c = ctx();
+  const res = run(c, ['remember', 'x'.repeat(2000), '--trigger', 'an oversized claim that blows the learning byte cap']);
+  assert.equal(res.status, 1, res.stderr + res.stdout);
+  const manifestPath = path.join(c.ws, 'knowledge', 'manifest.yaml');
+  assert.ok(fs.existsSync(manifestPath), 'manifest.yaml must exist (written by the pre-rollback index)');
+  const manifest = fs.readFileSync(manifestPath, 'utf8');
+  assert.doesNotMatch(
+    manifest,
+    /docs\/solutions\/teachings\//,
+    'rolled-back episode must not remain referenced in the manifest'
+  );
+});
+
+test('remember --json on a secret-blocked claim returns exactly the documented contract keys', () => {
+  const c = ctx();
+  const res = run(c, ['remember', 'key=AKIAIOSFODNN7EXAMPLE', '--trigger', 'aws keys']);
+  assert.equal(res.status, 1);
+  const out = JSON.parse(res.stdout);
+  assert.deepEqual(
+    Object.keys(out).sort(),
+    ['blockedReason', 'episodePath', 'exitCode', 'learningId', 'nextTools', 'pass'].sort(),
+    'failure result must carry only the documented contract fields, no leaked path/kind/indexed'
+  );
+  assert.equal(out.episodePath, null);
+  assert.equal(out.learningId, null);
+});
+
+test('remember --dry-run plain output notes that nothing was written', () => {
+  const c = ctx();
+  const res = spawnSync(
+    process.execPath,
+    [
+      binPath, 'remember', 'Use two-step default+backfill for NOT NULL adds.',
+      '--trigger', 'adding NOT NULL columns to hot tables', '--domain', 'sql', '--dry-run',
+      '--workspace', c.ws, '--copilot-home', c.home,
+    ],
+    { encoding: 'utf8', env: { ...process.env, HARNESS_HOME: c.harnessHome } }
+  );
+  assert.equal(res.status, 0, res.stderr + res.stdout);
+  assert.match(res.stdout, /dry-run/);
+  assert.match(res.stdout, /nothing written/);
+});

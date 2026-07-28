@@ -1,26 +1,18 @@
 import fs from 'node:fs';
 import { storeDir, listLearnings } from './store.mjs';
 import { readEvents, EVENTS_MAX_LIMIT } from '../events.mjs';
+import { verifiedAndPlans, isPromotionEligible } from './consolidate.mjs';
 
 /**
  * Read-only fenced listing and single-learning provenance view over the
  * knowledge store. Never writes — no events, no store mutation; matches the
  * recall/report convention (harness-tool-contract.md:176).
+ *
+ * The promotion signal (≥3 fix-kind episode links across ≥2 distinct plans)
+ * is defined once in consolidate.mjs (verifiedAndPlans/isPromotionEligible)
+ * and shared with promotionCandidates there, so the thresholds never drift
+ * between the two surfaces.
  */
-
-const PROMOTION_FIX_THRESHOLD = 3;
-const PROMOTION_PLAN_THRESHOLD = 2;
-
-/** ≥3 fix-kind episode links across ≥2 distinct plans — mirrors promotionCandidates (consolidate.mjs). */
-function verifiedAndPlans(fm) {
-  const fixes = (fm.episodes || []).filter((e) => e.kind === 'fix');
-  const plans = new Set(fixes.map((e) => e.plan).filter(Boolean));
-  return { verified: fixes.length, plans: plans.size };
-}
-
-function isPromotionEligible(verified, plans) {
-  return verified >= PROMOTION_FIX_THRESHOLD && plans >= PROMOTION_PLAN_THRESHOLD;
-}
 
 /**
  * id → count of workspace verify-fail events that named it. Tolerates a
@@ -111,7 +103,7 @@ export function whyView({ workspace, id, home }) {
     id,
     trigger: fm.trigger || '',
     claimLine,
-    status: fm.status || 'active',
+    status: effectiveStatus(fm),
     source: fm.source || 'auto',
     lastConfirmed: fm.last_confirmed || null,
     supersededBy: fm.superseded_by || null,

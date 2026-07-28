@@ -952,7 +952,9 @@ export async function cmdRemember(argv) {
         state: 'ok',
         key: 'remember',
         value: result.learningId,
-        note: `source: human · episode ${result.episodePath}`,
+        note: result.dryRun
+          ? `dry-run — nothing written (would-be episode ${result.episodePath})`
+          : `source: human · episode ${result.episodePath}`,
       })
     );
     printNext(result.nextTools?.[0]);
@@ -967,6 +969,7 @@ export async function cmdRemember(argv) {
     }
   } else {
     console.log(ui.line({ state: 'error', key: 'remember', value: `blocked · ${result.blockedReason}` }));
+    printNext(result.nextTools?.[0]);
   }
   return result.exitCode;
 }
@@ -975,8 +978,8 @@ export async function cmdLearning(argv) {
   const { setLearningStatus } = await import('./knowledge/lifecycle.mjs');
   const flags = parseFlags(argv);
   const workspace = path.resolve(flags.workspace);
-  const action = argv[0];
-  const id = argv[1];
+  const action = argv[0] && !argv[0].startsWith('--') ? argv[0] : null;
+  const id = argv[1] && !argv[1].startsWith('--') ? argv[1] : null;
   const result = setLearningStatus({ workspace, id, action, reason: flags.reason });
   writeEvent(workspace, flags, {
     type: 'learning',
@@ -1022,6 +1025,21 @@ export async function cmdLearnings(argv) {
   const flags = parseFlags(argv);
   const workspace = path.resolve(flags.workspace);
 
+  // A trailing bare --why (no id following it) must never silently fall
+  // through to the full listing below — parseFlags leaves flags.why unset
+  // when there's no next token to consume.
+  if (argv.includes('--why') && !flags.why) {
+    const blockedReason = 'usage: harness learnings --why <id>';
+    if (flags.json) {
+      emitJson(flags, { pass: false, blockedReason });
+    } else {
+      for (const l of ui.errorBlock({ code: 'E_USAGE', message: blockedReason, exit: EXIT.usage })) {
+        console.error(l);
+      }
+    }
+    return EXIT.usage;
+  }
+
   if (flags.why) {
     const result = whyView({ workspace, id: flags.why });
     if (!result) {
@@ -1052,7 +1070,8 @@ export async function cmdLearnings(argv) {
     console.log(
       ui.line({
         key: 'status',
-        value: `${result.status} · ${result.source} · ${result.verified} verified/${result.plans} plans`,
+        // Same note idiom as the listing view — carries failures/promotionEligible too.
+        value: learningNote(result),
         keyWidth,
       })
     );

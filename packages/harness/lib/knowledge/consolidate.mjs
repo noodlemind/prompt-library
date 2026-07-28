@@ -7,6 +7,8 @@ export const CONSOLIDATION_THRESHOLD = 5;
 export const MAX_OPS_PER_RUN = 5;
 export const LEARNING_BYTE_CAP = 1200;
 const LEARNING_BODY_BUDGET_BYTES = 30_000;
+export const PROMOTION_FIX_THRESHOLD = 3;
+export const PROMOTION_PLAN_THRESHOLD = 2;
 
 function parseFrontmatter(text) {
   const m = text.match(/^---\r?\n([\s\S]*?)\r?\n---/);
@@ -76,14 +78,28 @@ function activeLearnings(learnings) {
   );
 }
 
+/**
+ * ≥3 fix-kind episode links across ≥2 distinct plans — the single source of
+ * truth for the promotion signal, shared by promotionCandidates below and the
+ * learnings listing (listing.mjs) so the thresholds are defined once.
+ */
+export function verifiedAndPlans(fm) {
+  const fixes = (fm.episodes || []).filter((e) => e.kind === 'fix');
+  const plans = new Set(fixes.map((e) => e.plan).filter(Boolean));
+  return { verified: fixes.length, plans: plans.size };
+}
+
+export function isPromotionEligible(verified, plans) {
+  return verified >= PROMOTION_FIX_THRESHOLD && plans >= PROMOTION_PLAN_THRESHOLD;
+}
+
 /** Computed, never stored: ≥3 fix links across ≥2 distinct plans. */
 export function promotionCandidates(learnings) {
   const out = [];
   for (const l of activeLearnings(learnings)) {
-    const fixes = (l.fm.episodes || []).filter((e) => e.kind === 'fix');
-    const plans = new Set(fixes.map((e) => e.plan).filter(Boolean));
-    if (fixes.length >= 3 && plans.size >= 2) {
-      out.push({ id: l.id, verified: fixes.length, plans: plans.size });
+    const { verified, plans } = verifiedAndPlans(l.fm);
+    if (isPromotionEligible(verified, plans)) {
+      out.push({ id: l.id, verified, plans });
     }
   }
   return out;

@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { runInsightCompound } from '../compound.mjs';
+import { runIndexKnowledge } from '../index-knowledge.mjs';
 import { applyOps } from './apply.mjs';
 import { normalizeSlug, readStoreConfig } from './store.mjs';
 
@@ -39,10 +40,18 @@ export function runRemember({ workspace, copilotHome, flags, argv, log = () => {
     body: claim,
     category: flags.category || 'teachings',
     claim,
-    insight: true,
   };
   const episode = runInsightCompound({ workspace, copilotHome, flags: teachFlags, log, kind: 'human-teaching', home });
-  if (!episode.pass) return { ...episode, episodePath: episode.path, learningId: null };
+  if (!episode.pass) {
+    return {
+      pass: false,
+      exitCode: episode.exitCode,
+      episodePath: null,
+      learningId: null,
+      blockedReason: episode.blockedReason,
+      nextTools: episode.nextTools,
+    };
+  }
 
   const domain = normalizeSlug(flags.domain || 'general');
   const slug = normalizeSlug(flags.trigger);
@@ -87,6 +96,19 @@ export function runRemember({ workspace, copilotHome, flags, argv, log = () => {
     // All-or-nothing: never leave an orphaned episode file behind on
     // rejection — a retry must not pile up dedup-suffixed episodes.
     fs.rmSync(path.join(workspace, episode.path), { force: true });
+    // The pre-apply runInsightCompound call above already indexed the episode
+    // into the manifest/postings; without a reindex here the rolled-back file
+    // would keep dangling in the manifest until the next rebuild. Same call
+    // shape runInsightCompound uses — advisory only, a failed reindex must
+    // never turn a clean rollback into a hard failure.
+    try {
+      const knowledgeRoot = fs.existsSync(path.join(copilotHome, 'knowledge'))
+        ? path.join(copilotHome, 'knowledge')
+        : null;
+      runIndexKnowledge({ knowledgeRoot, workspace, copilotHome, flags, log });
+    } catch {
+      // advisory reindex — the rollback itself already succeeded
+    }
     return {
       pass: false,
       exitCode: applied.exitCode,
