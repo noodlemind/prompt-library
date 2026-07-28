@@ -916,12 +916,13 @@ export async function cmdConsolidate(argv) {
   if (flags.json) {
     emitJson(flags, status);
   } else {
+    const atCapDomains = (status.domains || []).filter((d) => d.atCap).map((d) => d.domain);
     console.log(
       ui.line({
         state: status.due ? 'warn' : 'ok',
         key: 'consolidate',
         value: `debt ${status.debt}/${status.threshold}`,
-        note: `${status.learnings.active} active learnings${status.promotionCandidates.length ? ` · ${status.promotionCandidates.length} promotion candidate${status.promotionCandidates.length === 1 ? '' : 's'}` : ''}${status.quarantined.length ? ` · ${status.quarantined.length} quarantined` : ''}`,
+        note: `${status.learnings.active} active learnings${status.promotionCandidates.length ? ` · ${status.promotionCandidates.length} promotion candidate${status.promotionCandidates.length === 1 ? '' : 's'}` : ''}${status.quarantined.length ? ` · ${status.quarantined.length} quarantined` : ''}${atCapDomains.length ? ` · ${atCapDomains.join(', ')} at cap` : ''}`,
       })
     );
     printNext(status.nextTools?.[0]);

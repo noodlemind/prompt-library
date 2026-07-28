@@ -13,7 +13,7 @@ import {
   parseLearningFrontmatter,
   readStoreConfig,
 } from './store.mjs';
-import { MAX_OPS_PER_RUN, LEARNING_BYTE_CAP, QUARANTINE_THRESHOLD } from './consolidate.mjs';
+import { MAX_OPS_PER_RUN, LEARNING_BYTE_CAP, QUARANTINE_THRESHOLD, DOMAIN_ACTIVE_CAP, isActiveFm } from './consolidate.mjs';
 import { scanSecrets } from '../secret-scan.mjs';
 import { absorbHandEdits } from './admin.mjs';
 
@@ -24,14 +24,67 @@ import { absorbHandEdits } from './admin.mjs';
  * anti-collapse guarantees hold even on hosts without hooks.
  */
 
-const FILE_TOUCHING = new Set(['ADD', 'STRENGTHEN', 'SUPERSEDE']);
+const FILE_TOUCHING = new Set(['ADD', 'STRENGTHEN', 'SUPERSEDE', 'MERGE']);
 const DISPUTED_FIX_THRESHOLD = 3;
 // Codes that indicate the CONTENT of a specific op was rejected (bad shape,
 // secret-shaped, imperative lint, over the byte cap, a dedup/rename
 // collision, or a missing target) — as opposed to run-level or lock-level
 // rejections (E_MODE, E_DELTA_CONTRACT, E_LOCKED, E_APPLY_FAILED) that say
 // nothing about any one op's episodes and must never record a strike.
+// E_DOMAIN_CAP is deliberately excluded too — cap pressure is a run-level
+// resource limit, not a defect in the episodes that produced the op.
 const CONTENT_FAILURE_CODES = new Set(['E_SCHEMA', 'E_SECRET', 'E_LINT', 'E_BYTE_CAP', 'E_EXISTS', 'E_TARGET']);
+
+/**
+ * How many file-touches an op counts toward MAX_OPS_PER_RUN. A MERGE writes
+ * one new learning AND tombstones every target, so it counts as
+ * `1 + targets.length` — a 2-target MERGE is as expensive as 3 plain ADDs.
+ */
+function opWeight(op) {
+  if (op.op === 'MERGE') return 1 + (Array.isArray(op.targets) ? op.targets.length : 0);
+  return FILE_TOUCHING.has(op.op) ? 1 : 0;
+}
+
+/** A target too well-evidenced or human-taught to demote without a human. */
+function isDisputedTargetFm(fm) {
+  return verifiedFixLinks(fm) >= DISPUTED_FIX_THRESHOLD || fm.source === 'human';
+}
+
+/** Count of active (not superseded/retired/disputed) learnings in a domain. */
+function activeCountInDomain(existing, domain) {
+  let n = 0;
+  for (const l of existing.values()) {
+    if (l.domain === domain && isActiveFm(l.fm)) n++;
+  }
+  return n;
+}
+
+/**
+ * Per-domain count of targets THIS run will actually tombstone — a SUPERSEDE
+ * introducing a new id, or any MERGE target — excluding targets that will
+ * instead land disputed (no tombstone happens for those). Computed once
+ * up front so a domain-cap check on one op can credit another op's
+ * same-run tombstones in the same domain (design §9: MERGE/SUPERSEDE that
+ * free room should not be blocked by their own reduction).
+ */
+function tombstonesByDomain(ops, existing) {
+  const counts = new Map();
+  const bump = (domain) => counts.set(domain, (counts.get(domain) || 0) + 1);
+  for (const op of ops) {
+    if (op.op === 'SUPERSEDE' && op.target && existing.has(op.target) && op.domain && op.slug) {
+      const newId = `${normalizeSlug(op.domain)}/${normalizeSlug(op.slug)}`;
+      if (newId === op.target) continue; // in-place reteach — no new id, nothing to credit
+      const target = existing.get(op.target);
+      if (!isDisputedTargetFm(target.fm)) bump(target.domain);
+    } else if (op.op === 'MERGE' && Array.isArray(op.targets)) {
+      for (const t of op.targets) {
+        const target = existing.get(t);
+        if (target && !isDisputedTargetFm(target.fm)) bump(target.domain);
+      }
+    }
+  }
+  return counts;
+}
 const ANCHOR_RE = /\b[\w][\w./-]*\.(?:mjs|js|ts|tsx|py|java|sql|md|ya?ml|json)\b/g;
 const ANCHOR_CAP = 8;
 
@@ -258,15 +311,20 @@ export function applyOps({ workspace, opsPath, dryRun = false, home, approve = f
     return { applied: [], rejected: [fail(code, reason)], committed: false, exitCode: 1 };
   }
 
-  const fileTouching = parsed.ops.filter((o) => FILE_TOUCHING.has(o.op));
-  if (fileTouching.length > MAX_OPS_PER_RUN) {
+  const fileTouchCount = parsed.ops.reduce((n, o) => n + opWeight(o), 0);
+  if (fileTouchCount > MAX_OPS_PER_RUN) {
     return {
       applied: [],
-      rejected: [fail('E_DELTA_CONTRACT', `run touches ${fileTouching.length} files — max ${MAX_OPS_PER_RUN} (anti-collapse contract)`)],
+      rejected: [fail('E_DELTA_CONTRACT', `run touches ${fileTouchCount} files — max ${MAX_OPS_PER_RUN} (anti-collapse contract)`)],
       committed: false,
       exitCode: 1,
     };
   }
+
+  // Same-run tombstone credit for the domain cap check below (a MERGE or
+  // SUPERSEDE that frees room in a domain shouldn't be blocked by its own
+  // reduction) — computed once up front from the run's raw ops.
+  const tombstoneCredits = tombstonesByDomain(parsed.ops, existing);
 
   // Validate every op before writing anything — all-or-nothing runs.
   const planned = [];
@@ -291,23 +349,63 @@ export function applyOps({ workspace, opsPath, dryRun = false, home, approve = f
       }
     }
 
-    if (op.op === 'ADD' || op.op === 'SUPERSEDE') {
+    if (op.op === 'MERGE') {
+      if (!Array.isArray(op.targets) || op.targets.length < 2) {
+        return rejectOp('E_SCHEMA', `op ${i}: MERGE needs targets (>= 2 existing active learning ids)`, op.episodes);
+      }
+      for (const t of op.targets) {
+        if (!existing.has(t)) {
+          return rejectOp('E_TARGET', `op ${i}: target ${t} does not exist`, op.episodes);
+        }
+      }
+      for (const t of op.targets) {
+        if (!isActiveFm(existing.get(t).fm)) {
+          return rejectOp('E_TARGET', `op ${i}: target ${t} is not active (already superseded/retired/disputed)`, op.episodes);
+        }
+      }
+    }
+
+    if (op.op === 'ADD' || op.op === 'SUPERSEDE' || op.op === 'MERGE') {
       if (!op.domain || !op.slug || !op.trigger || !op.body) {
         return rejectOp('E_SCHEMA', `op ${i}: ${op.op} needs domain, slug, trigger, body`, op.episodes);
       }
+      const newId = `${normalizeSlug(op.domain)}/${normalizeSlug(op.slug)}`;
       if (op.op === 'ADD') {
         // Dedup-miss protection: an ADD whose id already exists must never
         // silently overwrite the existing learning — reject the whole run
         // and route the caller to STRENGTHEN (more evidence) or SUPERSEDE
         // (replace the claim) instead.
-        const addId = `${normalizeSlug(op.domain)}/${normalizeSlug(op.slug)}`;
-        if (existing.has(addId)) {
+        if (existing.has(newId)) {
           return rejectOp(
             'E_EXISTS',
-            `op ${i}: ${addId} already exists — use STRENGTHEN (more evidence) or SUPERSEDE (replace the claim)`,
+            `op ${i}: ${newId} already exists — use STRENGTHEN (more evidence) or SUPERSEDE (replace the claim)`,
             op.episodes
           );
         }
+        // Domain write cap (design §9): an ADD into a domain already at
+        // DOMAIN_ACTIVE_CAP active learnings is a plain run-level rejection,
+        // never a content-failure strike — cap pressure is not an episode
+        // defect. Credit any same-run tombstones landing in this domain
+        // (see tombstonesByDomain) before comparing against the cap.
+        const domain = normalizeSlug(op.domain);
+        const projectedActive = activeCountInDomain(existing, domain) - (tombstoneCredits.get(domain) || 0);
+        if (projectedActive >= DOMAIN_ACTIVE_CAP) {
+          return {
+            applied: [],
+            rejected: [
+              fail('E_DOMAIN_CAP', `domain ${domain} at cap (${DOMAIN_ACTIVE_CAP} active) — MERGE existing learnings or retire first`),
+            ],
+            committed: false,
+            exitCode: 1,
+          };
+        }
+      }
+      if (op.op === 'MERGE' && existing.has(newId)) {
+        return rejectOp(
+          'E_EXISTS',
+          `op ${i}: ${newId} already exists — merging onto an existing id is not supported, SUPERSEDE it as a target instead`,
+          op.episodes
+        );
       }
       const secrets = scanSecrets(`${op.trigger}\n${op.body}`);
       if (secrets.length) {
@@ -316,6 +414,18 @@ export function applyOps({ workspace, opsPath, dryRun = false, home, approve = f
       const lint = lintImperative(op);
       if (lint) {
         return rejectOp('E_LINT', `op ${i}: ${lint}`, op.episodes);
+      }
+    }
+
+    if (op.op === 'MERGE') {
+      const disputedTargets = op.targets.filter((t) => isDisputedTargetFm(existing.get(t).fm));
+      if (disputedTargets.length) {
+        // Demotion of well-evidenced or human-taught knowledge gets a human
+        // reviewer: the whole MERGE is rejected (no new file written) and
+        // each offending target is marked disputed — untouched targets stay
+        // exactly as they were, same one-op granularity as SUPERSEDE.
+        for (const t of disputedTargets) disputes.push({ index: i, target: t });
+        continue;
       }
     }
 
@@ -345,20 +455,38 @@ export function applyOps({ workspace, opsPath, dryRun = false, home, approve = f
       const isReteachShape = newId === op.target;
       const allHumanTeaching =
         isReteachShape && op.episodes.length > 0 && op.episodes.every((e) => verifyHumanTeachingEpisode(workspace, e));
-      if (!allHumanTeaching && (verifiedFixLinks(target.fm) >= DISPUTED_FIX_THRESHOLD || target.fm.source === 'human')) {
+      if (!allHumanTeaching && isDisputedTargetFm(target.fm)) {
         // Demotion of well-evidenced or human-taught knowledge gets a human
         // reviewer: mark disputed, never silently supersede.
         disputes.push({ index: i, target: op.target });
         continue;
       }
+
+      // Domain write cap: only a SUPERSEDE introducing a NEW id can grow a
+      // domain's active count — the in-place reteach shape replaces the same
+      // file, net zero. Same credit-for-same-run-tombstones logic as ADD.
+      if (newId !== op.target) {
+        const domain = normalizeSlug(op.domain);
+        const projectedActive = activeCountInDomain(existing, domain) - (tombstoneCredits.get(domain) || 0);
+        if (projectedActive >= DOMAIN_ACTIVE_CAP) {
+          return {
+            applied: [],
+            rejected: [
+              fail('E_DOMAIN_CAP', `domain ${domain} at cap (${DOMAIN_ACTIVE_CAP} active) — MERGE existing learnings or retire first`),
+            ],
+            committed: false,
+            exitCode: 1,
+          };
+        }
+      }
     }
     planned.push({ ...op, index: i });
   }
 
-  // Compose ADD/SUPERSEDE files and enforce the byte cap before writing.
+  // Compose ADD/SUPERSEDE/MERGE files and enforce the byte cap before writing.
   const writes = [];
   for (const op of planned) {
-    if (op.op !== 'ADD' && op.op !== 'SUPERSEDE') continue;
+    if (op.op !== 'ADD' && op.op !== 'SUPERSEDE' && op.op !== 'MERGE') continue;
     const domain = normalizeSlug(op.domain);
     const slug = normalizeSlug(op.slug);
     const id = `${domain}/${slug}`;
@@ -380,7 +508,7 @@ export function applyOps({ workspace, opsPath, dryRun = false, home, approve = f
       status,
       source,
       supersededBy: null,
-      mergedFrom: op.merged_from,
+      mergedFrom: op.op === 'MERGE' ? op.targets : op.merged_from,
     });
     if (Buffer.byteLength(content, 'utf8') > LEARNING_BYTE_CAP) {
       return rejectOp('E_BYTE_CAP', `${id} exceeds ${LEARNING_BYTE_CAP} bytes — split into two claims`, op.episodes);
@@ -428,6 +556,14 @@ export function applyOps({ workspace, opsPath, dryRun = false, home, approve = f
         if (op.op === 'SUPERSEDE' && op.target !== id) {
           const target = existing.get(op.target);
           updateFrontmatterField(target.file, 'superseded_by', id);
+        }
+        // A MERGE tombstones EVERY target it consolidates into the new id —
+        // none of them can equal `id` (MERGE always writes a brand-new id).
+        if (op.op === 'MERGE') {
+          for (const t of op.targets) {
+            const target = existing.get(t);
+            updateFrontmatterField(target.file, 'superseded_by', id);
+          }
         }
       }
 

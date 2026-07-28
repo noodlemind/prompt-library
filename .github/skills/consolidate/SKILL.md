@@ -1,6 +1,6 @@
 ---
 name: consolidate
-description: Internal knowledge consolidation loop. Converts unconsolidated learning episodes into ADD/STRENGTHEN/SUPERSEDE/NOOP ops and applies them through the sole learnings-store writer. Use when a debt drain is due (session-start or session-end hint from consolidate --status); not for direct episode capture or manual learning edits.
+description: Internal knowledge consolidation loop. Converts unconsolidated learning episodes into ADD/STRENGTHEN/SUPERSEDE/MERGE/NOOP ops and applies them through the sole learnings-store writer. Use when a debt drain is due (session-start or session-end hint from consolidate --status); not for direct episode capture or manual learning edits.
 user-invocable: false
 ---
 
@@ -36,16 +36,17 @@ Design §5 write path. Contract: [`harness-tool-contract.md`](../references/harn
 harness consolidate --candidates --json
 ```
 
-Read the packet: episode `clusters` plus every active learning's `id`/`trigger` (full `body` included while the corpus is small, per the returned `contract`). Do not paste the raw JSON into chat.
+Read the packet: episode `clusters`, every active learning's `id`/`trigger` (full `body` included while the corpus is small, per the returned `contract`), and `domains` — each domain's active count against the `contract.domainCap` (25). Do not paste the raw JSON into chat.
 
 ### 2. Decide per cluster
 
-For each cluster choose exactly one op: `ADD | STRENGTHEN | SUPERSEDE | NOOP`.
+For each cluster choose exactly one op: `ADD | STRENGTHEN | SUPERSEDE | MERGE | NOOP`.
 
 - **Dedup first, corpus-wide.** An `ADD` op must record in its `reason` which nearest existing learnings were checked and why none match — never add a near-duplicate.
 - **STRENGTHEN / SUPERSEDE** re-read the raw episode files named in the cluster; never paraphrase or invent from the existing learning's own text.
 - **NOOP** any claim a repo map or code read could derive on demand — consolidation is for knowledge that is not mechanically re-derivable.
-- Before emitting an `ADD` or `SUPERSEDE` body sourced from insight-only episodes, run the imperative lint mentally: no shell fences (```sh```/```bash```/```shell```/```zsh```), no `curl`/`wget`, no bare URLs. The apply step rejects these with `E_LINT` — catch it first.
+- **At-cap domains (`packet.domains[].atCap`)**: an `ADD`, or a `SUPERSEDE`/`MERGE` introducing a new id, into a domain already at cap is rejected with `E_DOMAIN_CAP`. Only emit `MERGE` when two or more of that domain's existing learnings genuinely restate one claim — re-read the RAW episode files behind every target (never the existing learnings' own prose) and re-derive the merged body from that evidence. If no legitimate merge exists, do not force one: emit `NOOP` for that cluster instead and report the cap pressure to the human (which domain, how many active, that a retire or a real merge is needed) rather than inventing a lossy consolidation.
+- Before emitting an `ADD`/`SUPERSEDE`/`MERGE` body sourced from insight-only episodes, run the imperative lint mentally: no shell fences (```sh```/```bash```/```shell```/```zsh```), no `curl`/`wget`, no bare URLs. The apply step rejects these with `E_LINT` — catch it first.
 
 ### 3. Write the ops file
 
@@ -74,6 +75,17 @@ Write `{ "schema": 1, "ops": [...] }` to `.harness/consolidate-ops.json`. This s
       ]
     },
     {
+      "op": "MERGE",
+      "targets": ["java/jackson-lazy-init", "java/jackson-singleton-mapper"],
+      "domain": "java",
+      "slug": "jackson-mapper-lifecycle",
+      "trigger": "Jackson ObjectMapper lifecycle and thread-safety",
+      "body": "Configure one thread-safe singleton ObjectMapper at startup; never construct one per request or per thread.",
+      "episodes": [
+        { "path": "docs/solutions/java/mapper-consolidation-review.md", "sha256": "1e2a3f4b5c6d7e8f9012345678901234567890abcdef1234567890abcdef1234", "kind": "insight" }
+      ]
+    },
+    {
       "op": "NOOP",
       "reason": "derivable from a repo-map read — no durable claim beyond what code inspection already shows",
       "episodes": [
@@ -84,7 +96,15 @@ Write `{ "schema": 1, "ops": [...] }` to `.harness/consolidate-ops.json`. This s
 }
 ```
 
-`ADD`/`SUPERSEDE` require `domain`, `slug`, `trigger`, `body` (plus `target` for `SUPERSEDE`); `STRENGTHEN`/`SUPERSEDE` require `target` (an existing learning id); `NOOP` needs only `episodes` and an optional `reason`. Every op's `episodes` array is required and non-empty.
+| Op | Required fields | Notes |
+|---|---|---|
+| `ADD` | `domain`, `slug`, `trigger`, `body`, `episodes[]` | Rejects `E_EXISTS` if the id already exists; rejects `E_DOMAIN_CAP` if the domain is already at 25 active learnings. |
+| `STRENGTHEN` | `target`, `episodes[]` | `target` must be an existing learning id. |
+| `SUPERSEDE` | `target`, `domain`, `slug`, `trigger`, `body`, `episodes[]` | Same id as `target` = in-place re-teach; a different id is a rename (checked against `E_DOMAIN_CAP` and rename-collision). |
+| `MERGE` | `targets[]` (>= 2 existing active ids), `domain`, `slug`, `trigger`, `body`, `episodes[]` | Writes a new id with `merged_from: targets`; tombstones every target. `episodes[]` here is the supporting evidence for the merge itself, not the targets' own episodes — re-derive `body` from the targets' RAW episode files, never their existing prose. Exempt from `E_DOMAIN_CAP` (it always nets the domain's active count down). Counts `1 + targets.length` toward the 5-file delta contract. |
+| `NOOP` | `episodes[]` | `reason` optional but encouraged. |
+
+Every op's `episodes` array is required and non-empty. Field names above match `apply.mjs` exactly — a misnamed field fails closed with `E_SCHEMA`, not a silent default.
 
 ### 4. Check mode, then apply, present, or stop
 

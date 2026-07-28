@@ -10,6 +10,12 @@ export const LEARNING_BYTE_CAP = 1200;
 // (path@sha256) three times quarantines it (apply.mjs) — surfaced here and
 // excluded from future debt/candidates (design §3).
 export const QUARANTINE_THRESHOLD = 3;
+// Per-domain write cap (design §9, milestone 3): a domain at or over this many
+// active learnings blocks a plain ADD/SUPERSEDE(-new-id) — the model must
+// MERGE existing learnings (re-deriving from their episodes) or a human must
+// retire one first. Enforced in apply.mjs; surfaced here for --status/
+// --candidates so the skill can see cap pressure before proposing ops.
+export const DOMAIN_ACTIVE_CAP = 25;
 const LEARNING_BODY_BUDGET_BYTES = 30_000;
 export const PROMOTION_FIX_THRESHOLD = 3;
 export const PROMOTION_PLAN_THRESHOLD = 2;
@@ -90,10 +96,29 @@ function splitLedger(ledger) {
   return { consumed, quarantined };
 }
 
-function activeLearnings(learnings) {
-  return learnings.filter(
-    (l) => !l.fm.superseded_by && !['retired', 'disputed'].includes(l.fm.status)
-  );
+// Task 5 adds a `promoted` status to this exclusion list — deliberately not
+// pre-added here since no writer sets that status yet.
+export function isActiveFm(fm) {
+  return !fm.superseded_by && !['retired', 'disputed'].includes(fm.status);
+}
+
+export function activeLearnings(learnings) {
+  return learnings.filter((l) => isActiveFm(l.fm));
+}
+
+/**
+ * Per-domain active-learning count against DOMAIN_ACTIVE_CAP. Shared by
+ * `--status` (compact cap-pressure note) and `--candidates` (full packet) so
+ * the skill and the human-facing CLI agree on which domains are at cap.
+ */
+function domainPressure(learnings) {
+  const counts = new Map();
+  for (const l of activeLearnings(learnings)) {
+    counts.set(l.domain, (counts.get(l.domain) || 0) + 1);
+  }
+  return [...counts.entries()]
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .map(([domain, active]) => ({ domain, active, cap: DOMAIN_ACTIVE_CAP, atCap: active >= DOMAIN_ACTIVE_CAP }));
 }
 
 /**
@@ -147,6 +172,7 @@ export function consolidateStatus({ workspace, copilotHome, home }) {
     unconsolidated,
     quarantined,
     learnings: { active: active.length, total: learnings.length },
+    domains: domainPressure(learnings),
     promotionCandidates: promotionCandidates(learnings),
     storeDir: dir,
     nextTools: due ? ['harness consolidate --candidates'] : [],
@@ -193,9 +219,15 @@ export function consolidateCandidates({ workspace, copilotHome, home }) {
 
   return {
     schema: 1,
-    contract: { maxOps: MAX_OPS_PER_RUN, byteCap: LEARNING_BYTE_CAP, threshold: CONSOLIDATION_THRESHOLD },
+    contract: {
+      maxOps: MAX_OPS_PER_RUN,
+      byteCap: LEARNING_BYTE_CAP,
+      threshold: CONSOLIDATION_THRESHOLD,
+      domainCap: DOMAIN_ACTIVE_CAP,
+    },
     clusters: [...clusters.entries()].map(([id, eps]) => ({ id, episodes: eps })),
     learnings,
+    domains: status.domains,
     storeDir: dir,
   };
 }
