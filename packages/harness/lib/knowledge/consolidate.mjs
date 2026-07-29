@@ -59,7 +59,7 @@ export function collectEpisodes({ workspace, copilotHome }) {
         episodes.push({
           path: path.relative(base, full).split(path.sep).join('/'),
           sha256: crypto.createHash('sha256').update(text).digest('hex'),
-          kind: fm.kind === 'insight' ? 'insight' : 'fix',
+          kind: fm.kind === 'insight' ? 'insight' : fm.kind === 'human-teaching' ? 'human-teaching' : 'fix',
           category: cat.name,
           title: fm.title || f.replace(/\.md$/, ''),
           tags: fm.tags ? fm.tags.split(',').map((t) => t.trim()) : [],

@@ -7,6 +7,7 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 import { ensureStore, appendLedger } from '../lib/knowledge/store.mjs';
+import { verifiedAndPlans } from '../lib/knowledge/consolidate.mjs';
 
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const binPath = path.join(packageRoot, 'bin', 'harness.mjs');
@@ -20,7 +21,8 @@ const run = (args, env = {}) =>
 function writeEpisode(ws, category, name, kind) {
   const dir = path.join(ws, 'docs', 'solutions', category);
   fs.mkdirSync(dir, { recursive: true });
-  const text = `---\ntitle: "${name} lesson"\n${kind === 'insight' ? 'kind: insight\n' : ''}date: 2026-07-01\n---\n\n## Problem\n\n${name} details.\n`;
+  const kindLine = kind === 'insight' || kind === 'human-teaching' ? `kind: ${kind}\n` : '';
+  const text = `---\ntitle: "${name} lesson"\n${kindLine}date: 2026-07-01\n---\n\n## Problem\n\n${name} details.\n`;
   fs.writeFileSync(path.join(dir, `${name}.md`), text);
   return { rel: `docs/solutions/${category}/${name}.md`, sha256: crypto.createHash('sha256').update(text).digest('hex') };
 }
@@ -103,4 +105,36 @@ test('a changed episode body re-enters the debt (hash-keyed ledger)', () => {
   );
   assert.equal(out.debt, 1);
   assert.equal(out.unconsolidated[0].path, episodes[0].rel);
+});
+
+test('a human-teaching episode appears in --candidates --json with kind: human-teaching, not flattened to fix', () => {
+  const ws = tempDir('consol5-ws-');
+  const home = tempDir('consol5-h-');
+  const harnessHome = tempDir('consol5-hh-');
+  writeEpisode(ws, 'teachings', 'hand-taught-0', 'human-teaching');
+  const res = run(['consolidate', '--candidates', '--workspace', ws, '--copilot-home', home, '--json'], {
+    HARNESS_HOME: harnessHome,
+  });
+  assert.equal(res.status, 0, res.stderr || res.stdout);
+  const out = JSON.parse(res.stdout);
+  const allEpisodes = out.clusters.flatMap((c) => c.episodes);
+  const teaching = allEpisodes.find((e) => e.path.endsWith('hand-taught-0.md'));
+  assert.ok(teaching, 'the teaching episode is present in the candidates packet');
+  assert.equal(teaching.kind, 'human-teaching');
+});
+
+// No-regression pin (Task 3): verifiedAndPlans counts fix-kind links only —
+// this task fixes episode-collection labeling, not the promotion signal
+// itself. A teaching link must never inflate verified/plans.
+test('verifiedAndPlans counts fix links only — a human-teaching link never inflates verified/plans', () => {
+  const fm = {
+    episodes: [
+      { path: 'docs/solutions/perf/a.md', kind: 'fix', plan: 'docs/plans/p1.md' },
+      { path: 'docs/solutions/perf/b.md', kind: 'fix', plan: 'docs/plans/p2.md' },
+      { path: 'docs/solutions/teachings/c.md', kind: 'human-teaching', plan: null },
+    ],
+  };
+  const { verified, plans } = verifiedAndPlans(fm);
+  assert.equal(verified, 2, 'only the 2 fix-kind links count as verified');
+  assert.equal(plans, 2);
 });

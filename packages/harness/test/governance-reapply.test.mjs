@@ -265,6 +265,51 @@ test('(e) a mid-mutation throw during a re-teach override rolls back the governa
   assert.equal(listLearnings(dir).length, 0, 'the regenerated learning file was rolled back, never landed');
 });
 
+// Task 3 (Milestone 4): a remembered teaching episode's kind must survive
+// through collectEpisodes' candidates packet as 'human-teaching' (previously
+// flattened to 'fix') so a rebuild-regenerated ADD that copies the packet's
+// kind field verbatim re-derives full human authority via
+// verifyHumanTeachingEpisode, closing the re-derivability gap for hand-taught
+// claims.
+test('a remember -> rebuild --yes -> ADD built from the candidates packet (kind copied verbatim) regenerates source: human, status: active', () => {
+  const c = ctx();
+  const domain = 'sql';
+  const trigger = 'a teaching trigger for kind fidelity';
+  const claim = 'Use two-step default+backfill for NOT NULL adds on hot tables.';
+  const dir = storeDir(c.ws, { home: c.harnessHome });
+
+  const rememberRes = run(c, ['remember', claim, '--trigger', trigger, '--domain', domain]);
+  assert.equal(rememberRes.status, 0, rememberRes.stderr || rememberRes.stdout);
+  const { learningId, episodePath } = JSON.parse(rememberRes.stdout);
+  const slug = learningId.split('/')[1];
+
+  assert.equal(run(c, ['consolidate', '--rebuild', '--yes']).status, 0);
+  assert.equal(listLearnings(dir).length, 0, 'precondition: rebuild wiped the learning');
+  assert.equal(readGovernance(dir).size, 0, 'precondition: a plain remember never wrote a governance record');
+
+  const packet = JSON.parse(run(c, ['consolidate', '--candidates']).stdout);
+  const allEpisodes = packet.clusters.flatMap((cl) => cl.episodes);
+  const packetEntry = allEpisodes.find((e) => e.path === episodePath);
+  assert.ok(packetEntry, 'the teaching episode re-enters candidates after rebuild');
+  assert.equal(packetEntry.kind, 'human-teaching', 'the packet must label it human-teaching, not fix');
+
+  const op = {
+    op: 'ADD',
+    domain,
+    slug,
+    trigger,
+    body: claim,
+    episodes: [{ path: packetEntry.path, sha256: packetEntry.sha256, kind: packetEntry.kind, plan: null }],
+  };
+  const res = run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [op])]);
+  assert.equal(res.status, 0, res.stderr || res.stdout);
+
+  const learning = listLearnings(dir).find((l) => l.id === learningId);
+  assert.ok(learning, 'the regenerated learning lands on disk');
+  assert.equal(learning.fm.source, 'human');
+  assert.equal(learning.fm.status, 'active');
+});
+
 // (f) a confirm-only governance record never reapplies.
 test('(f) a confirm-only governance record never reapplies — the regenerated learning stays provisional', () => {
   const c = ctx();

@@ -51,7 +51,7 @@ For each cluster choose exactly one op: `ADD | STRENGTHEN | SUPERSEDE | MERGE | 
 
 ### 3. Write the ops file
 
-Write `{ "schema": 1, "ops": [...] }` to `.harness/consolidate-ops.json`. This skill writes **nothing else** — `harness consolidate --apply` is the sole writer of the learnings store. Every `episodes[]` entry must copy `path` and `sha256` verbatim from the step 1 packet (`sha256` is the raw 64-hex digest, not re-derived). Field names below match `apply.mjs` exactly — a misnamed field fails closed with `E_SCHEMA`, not a silent default.
+Write `{ "schema": 1, "ops": [...] }` to `.harness/consolidate-ops.json`. This skill writes **nothing else** — `harness consolidate --apply` is the sole writer of the learnings store. Every `episodes[]` entry must copy `path`, `sha256`, and `kind` verbatim from the step 1 packet (`sha256` is the raw 64-hex digest, not re-derived; `kind` may be `fix`, `insight`, or `human-teaching` — never normalize a `human-teaching` episode to `fix`, since apply re-verifies it against the episode file's own frontmatter to grant `source: human`). Field names below match `apply.mjs` exactly — a misnamed field fails closed with `E_SCHEMA`, not a silent default.
 
 ```json
 {
