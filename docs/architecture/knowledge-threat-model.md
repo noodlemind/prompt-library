@@ -89,6 +89,52 @@ product messaging must not imply that a single purge command satisfies a hard-de
 requirement (a legal takedown, for example); it satisfies "stop using this and stop
 serving it," not "never existed."
 
+## Governance ledger
+
+Human retire/dispute/confirm/promote decisions persist in an append-only
+`governance.jsonl` inside the knowledge store, replayed latest-entry-per-id
+(`store.mjs`'s `readGovernance`/`appendGovernance`). The sole writer
+(`consolidate --apply`) reapplies a standing retire/dispute/promote decision
+mechanically — no model judgment involved, no re-review of the fresh op's content — the
+moment a fresh ADD/SUPERSEDE/MERGE regenerates a learning file at a governed id, typically
+after `consolidate --rebuild --yes` wiped the corpus. Reapplication runs inside the exact
+same rollback window as the rest of the write transaction (single-writer lock via `.lock`,
+`git reset --hard && git clean -fd` on any mid-transaction throw): a governance
+reapplication either lands together with the write it's attached to, or neither does —
+same all-or-nothing guarantee as every other `applyOps` mutation.
+
+The one override is bounded the same way the insight lane's declarative-deception risk is
+bounded (see above): a verified human re-teach requires on-disk proof, not an op's own
+claim — the same anti-fabrication gate as source derivation. `verifyHumanTeachingEpisode`
+(`apply.mjs`) checks that the episode path resolves inside the workspace, the file exists
+there, its CURRENT content hashes to the asserted sha256 (not stale or edited since), and
+the file's OWN frontmatter independently says `kind: human-teaching` — every check must
+pass, or the override never fires and the standing governance record (and, separately, the
+target-activeness gate that blocks writing over a disputed/retired target) is enforced as
+usual. A model can never fabricate this path into existence: it only ever exists because a
+human already wrote a `kind: human-teaching` episode to disk first, through `harness
+remember` or a hand-edit absorption.
+
+`harness knowledge purge` is the one path that does not leave a governance record to
+reapply: it deletes the episodes, the consumption ledger entries, and the governance record
+for that id in the same cascade — permanent removal, not a decision surviving for a future
+rebuild to honor.
+
+## Dispute blast radius (MERGE inherits SUPERSEDE semantics, wider)
+
+A `SUPERSEDE` aimed at a disputed or human-sourced-and-well-evidenced target is rejected
+and marks that ONE target `disputed` rather than silently demoting it — a human-reviewer
+gate, not a hard block (see Suggest mode below for the write-side analogue). `MERGE`
+inherits the identical rule but at N-target width: a MERGE's `targets` array can name
+several existing learnings at once, so a single model-emitted MERGE op that touches ANY
+protected target (well-evidenced or human-sourced) rejects the WHOLE op and disputes EVERY
+one of its named targets pending human confirm, not only the offending one — untouched
+learnings elsewhere in the run are unaffected, but a MERGE's own blast radius is
+intentionally wider than a SUPERSEDE's. This is bounded, not unbounded: the ≤5-file delta
+contract (`MAX_OPS_PER_RUN`; MERGE counts `1 + targets.length`) caps how many targets a
+single MERGE can ever name in one run, so the worst case is a handful of learnings marked
+disputed-pending-human-confirm in one run, never a store-wide sweep.
+
 ## Commit mode (opt-in, the documented exception)
 
 `knowledge.commit: repo` (`harness knowledge commit repo`; default `none`) is the one path

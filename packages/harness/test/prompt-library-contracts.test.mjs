@@ -596,6 +596,20 @@ test('knowledge layer surface: consolidate command and insight lane stay documen
   assert.match(memoryModel, /promote/, 'MEMORY-MODEL.md documents learning promote');
   // packages/harness/README.md documents the opt-in commit mode.
   assert.match(read('packages/harness/README.md'), /knowledge commit/, 'README documents knowledge commit');
+  // Milestone 4: the governance ledger (retire/dispute/confirm/promote persist
+  // across `consolidate --rebuild --yes` and are mechanically reapplied) is
+  // now the same public contract.
+  assert.match(store, /export function readGovernance/, 'store.mjs exports readGovernance');
+  assert.match(apply, /governed/, 'apply.mjs tracks governed reapplication');
+  assert.match(memoryModel, /governance/i, 'MEMORY-MODEL.md documents the governance ledger');
+  // The learnings quarantine line (surfaced by cmdLearnings) is pinned the
+  // same way the CATALOG strings above are — a verbatim match against the
+  // string a human actually sees, not just a loose keyword.
+  assert.match(
+    commands,
+    /quarantined episode\(s\) — inspect with harness consolidate --status, clear with knowledge purge <path>/,
+    'commands.mjs renders the learnings quarantine line'
+  );
 });
 
 test('token budget: no SKILL.md body exceeds the line cap', () => {

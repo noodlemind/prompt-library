@@ -90,7 +90,7 @@ to Deliver before editing.
 | `index` | Rebuild `knowledge/manifest.yaml` + `.harness-index/` |
 | `compound` | Consume passed evidence, index learning, and record usage/outcome telemetry |
 | `compound --insight` | Evidence-free capture of investigation learnings (`kind: insight`, secret-scanned, ranked below verified fixes, never promotable) |
-| `consolidate` | Knowledge loop: `--status` debt gauge (quarantine + at-cap domains surfaced) · `--candidates` deterministic work packet · `--apply --ops <path>` validated sole writer of learnings via ADD/STRENGTHEN/SUPERSEDE/MERGE/NOOP ops (`suggest` mode requires `--yes`) |
+| `consolidate` | Knowledge loop: `--status` debt gauge (quarantine + at-cap domains surfaced) · `--candidates` deterministic work packet, plus any id a human already retired/disputed/promoted (`governed`) so the skill doesn't waste an op re-deriving it · `--apply --ops <path>` validated sole writer of learnings via ADD/STRENGTHEN/SUPERSEDE/MERGE/NOOP ops (`suggest` mode requires `--yes`); mechanically reapplies a standing governance decision when a regenerated id matches one, returning `governed` |
 | `events` | Inspect schema-v2 `.harness/events.jsonl`; filter by session/failure or summarize |
 
 ### Knowledge (semantic memory)
@@ -125,10 +125,10 @@ screening. `init-repo`/`index` also write a committed `docs/codebase-map.md`
 | Command | Description |
 |---------|-------------|
 | `knowledge <on\|suggest\|off\|freeze\|capture-only>` / `--status` / `purge <file\|--all>` / `commit <none\|repo>` | Kill switch (`suggest` = human-approval gate on apply), cascade-delete, and opt-in mirroring of active learnings into the product repo; human deletion always wins over "never deleted" |
-| `consolidate --rebuild --yes` | Full T2 regeneration from T1 raw episodes — the model-upgrade path (git history in the store retains prior learnings) |
+| `consolidate --rebuild --yes` | Full T2 regeneration from T1 raw episodes — the model-upgrade path (git history in the store retains prior learnings); the governance ledger survives the wipe and is mechanically reapplied to any id it regenerates |
 | `remember "<claim>" --trigger "<t>" [--domain <d>]` | Human teaching lane: writes a `kind: human-teaching` episode, then materializes an active `source: human` learning through the same sole-writer transaction |
-| `learning <retire\|dispute\|confirm\|promote> <id> --reason "<r>" \| --to <path>` | One-command human authority over a single learning's status, or recording its promotion to a T3 primitive |
-| `learnings [domain] [--why <id>]` | Paged listing with provenance chain; `--why` shows full provenance and failure annotations |
+| `learning <retire\|dispute\|confirm\|promote> <id> --reason "<r>" \| --to <path>` | One-command human authority over a single learning's status, or recording its promotion to a T3 primitive; each decision also appends to a governance ledger that survives `consolidate --rebuild --yes` — only `knowledge purge` erases it |
+| `learnings [domain] [--why <id>]` | Paged listing with provenance chain and quarantined-episode count; `--why` shows full provenance and failure annotations |
 | `eval-knowledge [--json]` | Deterministic retrieval proxy — hit/false-surface/token cost per ranking arm on a temporally held-out split; **not** the model-graded net-benefit number, which is deferred — publishes no benefit claim |
 
 `learnings` and `eval-knowledge` are read-only and never write events. `knowledge --status`

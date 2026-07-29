@@ -15,19 +15,43 @@ Scope: Phase 1, local-only. Team sync is a future phase, deferred by design.
 | T2 | Semantic ("learnings") | `~/.harness/knowledge/<repo-id>/` — CLI-managed local git repo, outside the working tree, never pushed | `harness consolidate --apply` only | Condensed, one-claim-per-file knowledge. A regenerable view of T1 — never the asset. |
 | T3 | Behavioral | `.github/` instructions / skills / checks | `/create-primitive` + human PR | Knowledge become behavior. |
 
-T2 is a pure function of (T1, current model): every learning is backed by episodes, so
-`harness consolidate --rebuild` can regenerate the entire T2 corpus from raw episodes with
-a stronger model — the upgrade path, not a threat.
+T2 is a pure function of (T1, current model, the governance ledger below): every learning
+is backed by episodes, so `harness consolidate --rebuild` can regenerate the entire T2
+corpus from raw episodes with a stronger model — the upgrade path, not a threat — while a
+separate append-only ledger keeps the human decisions layered onto the CLAIM afterward.
 
-That purity has a real edge: rebuild regenerates learnings strictly from episodes — it
-re-derives the CLAIM, never the human governance decisions layered onto it afterward.
-`retire`/`dispute`/`confirm`/`promote` mutate only a learning's frontmatter (see Human
-register below); they never touch its backing episodes. So a learning a human retired still
-has live episodes in T1, and `consolidate --rebuild --yes` can regenerate it fresh and
-active, silently undoing the human's veto. This differs from `harness knowledge purge`,
-which deletes the episodes and their ledger entries outright and so is not resurrected by a
-rebuild. For a decision that must survive a rebuild, use `purge`, not `retire` — a governance
-overlay that outlives rebuild is a future direction, not implemented here.
+## Governance ledger
+
+`retire`/`dispute`/`confirm`/`promote` mutate a learning's frontmatter (see Human register
+below) AND append one record — `{ id, action, reason, to, at }` — to
+`~/.harness/knowledge/<repo-id>/governance.jsonl`, replayed latest-entry-per-id. That ledger
+survives `consolidate --rebuild --yes`: rebuild wipes every learning file and re-derives the
+CLAIM fresh from raw episodes, but the moment a fresh ADD/SUPERSEDE/MERGE regenerates a file
+at an id the ledger already governs, `consolidate --apply` mechanically reapplies the
+standing retire/dispute/promote decision inside the same write transaction — the
+regenerated learning lands `retired`/`disputed`/`promoted` instead of silently reverting to
+whatever the fresh op claims. `confirm` is deliberately excluded — it is not a demotion to
+restore, so a confirm-only record never reapplies; the fresh write simply stands on its own.
+The apply/candidates response surfaces this as `governed: [{ id, action }]`.
+
+Because governance is carried by the **id**, not the claim, a genuinely new claim should
+take a new slug — reusing an old id to dodge a standing decision only triggers
+reapplication instead of escaping it. The one override is a **verified** human re-teach:
+`harness remember` reusing the exact trigger/domain, backed by on-disk `kind:
+human-teaching` evidence (never just an op's own assertion), outranks both the stored
+governance record and the activeness gate that would otherwise block writing over a
+disputed/retired target. A verified re-teach lands the learning `active`, `source: human`,
+and appends a fresh `confirm` entry (never rewriting history) instead of being blocked or
+silently reapplying the old veto — the same anti-fabrication discipline as the threat
+model's insight-lane checks: a model cannot fabricate this exemption, only a human's own
+prior writing to disk can satisfy it.
+
+`harness knowledge purge <file>` / `purge --all` differ in kind, not degree: purge erases
+the episodes, the consumption ledger entries, AND the governance record for that id
+outright — permanent removal, not a decision waiting to be reapplied, so there is nothing
+left for a future rebuild to honor. Use `retire`/`dispute` when a decision should persist
+alongside surviving evidence (the common case, and rebuild-safe); reserve `purge` for
+erasing the evidence itself.
 
 ## Learning lifecycle
 
@@ -37,9 +61,10 @@ stateDiagram-v2
     provisional --> active : 3 uses or 1 verified confirmation
     provisional --> retired : human veto
     active --> disputed : SUPERSEDE on ≥3-verified or human-sourced<br/>or repeated verify-failures
-    disputed --> active : human confirms
+    disputed --> active : human confirms or verified re-teach
     disputed --> retired : human retires
     active --> retired : superseded_by set / human retire
+    retired --> active : verified re-teach (remember, same trigger/domain)
     retired --> [*] : excluded from retrieval and cap<br/>(file + git history remain)
 
     note right of active
@@ -58,6 +83,10 @@ schema, secret, imperative-lint, byte-cap, dedup, or target rejections at
 `harness learnings`. Auto-dispute of an *existing* learning still does not exist:
 repeated verify-failures against a published learning surface only as a `failures`
 annotation in `learnings` output; a human reads that signal and retires or disputes it.
+A verified human re-teach (see Governance ledger above) is a second, disk-verified path
+into `active` from `disputed` or `retired`, alongside `harness learning confirm`: it
+overrides the stored governance record instead of being blocked by it, landing a fresh
+`source: human`, `status: active` learning and appending a `confirm` entry to the ledger.
 
 ## Derived, never stored
 
@@ -120,8 +149,9 @@ each writes (or reuses) a `kind: human-teaching` episode as evidence — `rememb
 capture, or a verbatim snapshot of the edit — and the learning it produces or updates carries
 `source: human`.
 `harness learning retire|dispute|confirm` is a separate authority — it mutates an existing
-learning's frontmatter only (`status`, and `last_confirmed` on confirm). It never creates an
-episode and never changes `source`. `harness learning promote --to <path>` is narrower still:
+learning's frontmatter only (`status`, and `last_confirmed` on confirm) and appends one
+record to the governance ledger (see above). It never creates an episode and never changes
+`source`. `harness learning promote --to <path>` is narrower still:
 it only records that a learning's behavior now lives in a primitive (after that primitive's
 own PR merges) and retires the learning from ranking; insight-only learnings (no `fix` or
 `human-teaching` episode) can never promote.
@@ -155,9 +185,14 @@ runs `git status --porcelain` in the store first and commits any dirty edit as i
   snapshot but still absorbs the edit), linked into the learning's `episodes`, and given
   `source: human` — so `consolidate --rebuild` re-derives the hand-taught claim from disk
   instead of discarding it.
-- **A hand-deleted learning file** is absorbed as a deletion: human deletion always wins,
-  exactly like `harness knowledge purge`, and (under `knowledge commit repo`) the mirrored
-  product-repo copy is removed too.
+- **A hand-deleted learning file** is absorbed as a governance `retire`, not a purge: the
+  working file, `INDEX.md` entry, and (under `knowledge commit repo`) the mirrored
+  product-repo copy are removed immediately — human deletion always wins, same immediacy as
+  `harness knowledge purge` — but the id's governance record persists as `action: retire`
+  rather than being erased. If the backing episodes ever regenerate this id again (a
+  `consolidate --rebuild --yes` later re-derives it fresh from T1), the governance ledger
+  reapplies retire instead of silently resurrecting it. Use `knowledge purge` instead when
+  the episodes themselves — not just this one learning — must stop existing.
 - The absorbed content may exceed the 1,200-byte learning cap — human authority overrides
   the cap for hand edits (logged, not rejected; the cap binds only the sole writer's own
   ops).
