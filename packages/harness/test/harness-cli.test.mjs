@@ -1486,6 +1486,33 @@ test('install creates global harness shim', () => {
   assert.equal(JSON.parse(validate.stdout).pass, true);
 });
 
+// The generated global harness shim (harnessShimSource, global-bin.mjs) has
+// the identical INSTALL_FIX_HINT interpolation pattern the workspace runner
+// had — same raw-interpolation-into-a-single-quoted-string risk, same
+// JSON.stringify fix.
+test('global harness shim embeds INSTALL_FIX_HINT via JSON.stringify, keeping the generated shim syntactically valid', () => {
+  const copilotHome = tempDir('shim-quoting-home-');
+  installGlobalHarnessShim(copilotHome, { dryRun: false, verbose: false }, () => {});
+  const shim = globalHarnessShimPath(copilotHome);
+  const src = fs.readFileSync(shim, 'utf8');
+  assert.ok(
+    src.includes(`' + ${JSON.stringify(INSTALL_FIX_HINT)});`),
+    'the fix-hint line must be embedded via JSON.stringify concatenation, not raw ${...} interpolation into a single-quoted string'
+  );
+  const check = spawnSync(process.execPath, ['--check', shim], { encoding: 'utf8' });
+  assert.equal(check.status, 0, check.stderr);
+
+  // No global runtime installed at this copilotHome — exercises the
+  // E_NO_RUNTIME error path that actually renders the fix-hint line.
+  const result = spawnSync(process.execPath, [shim, 'help'], {
+    encoding: 'utf8',
+    env: { ...process.env, COPILOT_HOME: copilotHome },
+  });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /E_NO_RUNTIME/);
+  assert.match(result.stderr, /harness install/);
+});
+
 test('resolve finds monorepo harness bin', () => {
   const repoRoot = path.resolve(packageRoot, '../..');
   const result = runHarness(['resolve', '--workspace', repoRoot, '--json']);

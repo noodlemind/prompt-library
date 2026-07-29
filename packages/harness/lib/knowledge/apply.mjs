@@ -12,6 +12,7 @@ import {
   repoId,
   parseLearningFrontmatter,
   readStoreConfig,
+  episodeLines,
 } from './store.mjs';
 import { MAX_OPS_PER_RUN, LEARNING_BYTE_CAP, QUARANTINE_THRESHOLD, DOMAIN_ACTIVE_CAP, isActiveFm } from './consolidate.mjs';
 import { scanSecrets } from '../secret-scan.mjs';
@@ -29,8 +30,8 @@ const FILE_TOUCHING = new Set(['ADD', 'STRENGTHEN', 'SUPERSEDE', 'MERGE']);
 const DISPUTED_FIX_THRESHOLD = 3;
 // Codes that indicate the CONTENT of a specific op was rejected (bad shape,
 // secret-shaped, imperative lint, over the byte cap, a dedup/rename collision
-// against an ON-DISK learning, or a missing target) — as opposed to two other
-// rejection classes that must NEVER record a strike:
+// against an ON-DISK learning, or a missing target) — as opposed to THREE
+// other rejection classes that must NEVER record a strike:
 //   - run-level/lock-level rejections (E_MODE, E_DELTA_CONTRACT, E_LOCKED,
 //     E_APPLY_FAILED, E_DOMAIN_CAP): say nothing about any one op's
 //     episodes. E_DOMAIN_CAP in particular is cap pressure, a run-level
@@ -44,6 +45,12 @@ const DISPUTED_FIX_THRESHOLD = 3;
 //     the branches producing them return a plain fail(...) below instead of
 //     calling rejectOp — they never touch this set despite sharing an
 //     E_EXISTS/E_TARGET code with a real, strike-worthy on-disk variant.
+//   - promoted-target rejections (promotedTargetRejection, below): a
+//     STRENGTHEN/SUPERSEDE/MERGE aimed at a learning already promoted to a
+//     primitive. Also E_TARGET, also never routed through rejectOp — the
+//     offered episodes aren't defective, the op's CHOICE of target is, so a
+//     model repeatedly aiming at a promoted id must never accumulate toward
+//     quarantine for it.
 const CONTENT_FAILURE_CODES = new Set(['E_SCHEMA', 'E_SECRET', 'E_LINT', 'E_BYTE_CAP', 'E_EXISTS', 'E_TARGET']);
 
 /**
@@ -159,13 +166,13 @@ function renderLearning({ trigger, body, episodes, anchors = [], origin, status,
     `status: ${status}`,
     `source: ${source}`,
     'episodes:',
+    // Shared with store.mjs's serializeLearning (episodeLines) — a pathless
+    // episode is dropped and a missing/unrecognized kind defaults to 'fix',
+    // so a STRENGTHEN re-render of a store file carrying a pre-existing
+    // malformed episode entry (a hand edit, or stale on-disk record) never
+    // regresses to emitting a literal `path: undefined` / `kind: undefined`.
+    ...episodeLines(episodes),
   ];
-  for (const e of episodes) {
-    lines.push(`  - path: ${e.path}`);
-    lines.push(`    sha256: ${yamlQuote(e.sha256)}`);
-    lines.push(`    kind: ${e.kind === 'insight' ? 'insight' : e.kind === 'human-teaching' ? 'human-teaching' : 'fix'}`);
-    lines.push(`    plan: ${e.plan || ''}`);
-  }
   if (anchors.length) {
     lines.push('anchors:');
     for (const a of anchors) lines.push(`  - ${a}`);

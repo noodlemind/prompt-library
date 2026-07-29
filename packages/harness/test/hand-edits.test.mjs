@@ -178,6 +178,71 @@ test('absorbHandEdits: a hand-edited learning with an incomplete episode entry r
   assert.doesNotMatch(after, new RegExp('c'.repeat(64)), 'the pathless episode is dropped entirely');
 });
 
+// renderLearning (apply.mjs) is the SECOND writer of a learning file —
+// serializeLearning's guard alone doesn't cover it. STRENGTHEN reads the
+// on-disk episodes, merges in new ones, and re-renders through
+// renderLearning — a pre-existing pathless episode already sitting on disk
+// (a stale pre-fix record, or an old hand edit) must not resurrect a literal
+// `path: undefined` on that re-render. The malformed record is COMMITTED
+// (not left as a dirty working-tree edit) so applyOps' own hand-edit absorb
+// step — which already runs serializeLearning and would otherwise mask this
+// exact bug by cleaning the record before STRENGTHEN ever sees it — is a
+// no-op here (clean tree, nothing to absorb), isolating renderLearning's own
+// guard as the only thing standing between this input and "undefined".
+test('a STRENGTHEN re-render (renderLearning) drops a pre-existing pathless episode and never emits literal "undefined"', () => {
+  const c = ctx();
+  const id = seedLearning(c);
+  const { dir } = ensureStore(c.ws, { home: c.harnessHome });
+  const file = path.join(dir, 'learnings', 'sql', 'not-null-hot-tables.md');
+
+  // A pre-existing malformed record, committed directly (not a dirty hand
+  // edit) — alongside the original valid episode seedLearning wrote.
+  const rewritten = `---
+schema: 1
+trigger: "adding NOT NULL columns to hot tables"
+status: provisional
+source: auto
+episodes:
+  - path: docs/solutions/perf/x.md
+    sha256: "${'a'.repeat(64)}"
+    kind: fix
+    plan: docs/plans/p1.md
+  - sha256: "${'c'.repeat(64)}"
+    kind: fix
+    plan: docs/plans/p9.md
+anchors: []
+superseded_by: null
+last_confirmed: 2026-07-01
+origin: test-origin
+---
+
+Use two-step default+backfill; a direct ALTER takes an exclusive lock.
+`;
+  fs.writeFileSync(file, rewritten, 'utf8');
+  spawnSync('git', ['add', '-A'], { cwd: dir, encoding: 'utf8' });
+  spawnSync('git', ['-c', 'user.name=harness', '-c', 'user.email=harness@local', 'commit', '-q', '-m', 'test: pre-existing malformed record'], {
+    cwd: dir,
+    encoding: 'utf8',
+  });
+  const cleanBefore = spawnSync('git', ['status', '--porcelain'], { cwd: dir, encoding: 'utf8' }).stdout;
+  assert.equal(cleanBefore, '', 'precondition: the malformed record is committed, not a dirty hand edit — absorb has nothing to do');
+
+  const before = parseLearningFrontmatter(fs.readFileSync(file, 'utf8'));
+  assert.ok(before.fm.episodes.some((e) => !e.path), 'precondition: a pathless episode exists on disk');
+
+  const strengthen = {
+    op: 'STRENGTHEN',
+    target: id,
+    episodes: [EP({ path: 'docs/solutions/perf/y.md', sha256: 'b'.repeat(64) })],
+  };
+  const res = applyOps({ workspace: c.ws, opsPath: writeOps(c.ws, [strengthen]), home: c.harnessHome });
+  assert.equal(res.exitCode, 0, JSON.stringify(res.rejected));
+
+  const after = fs.readFileSync(file, 'utf8');
+  assert.doesNotMatch(after, /undefined/, 'no literal "undefined" anywhere after the STRENGTHEN re-render');
+  assert.doesNotMatch(after, new RegExp('c'.repeat(64)), 'the pathless episode is dropped entirely, not carried through renderLearning');
+});
+
 test('a hand-edited learning body is absorbed as human authority with a human-teaching snapshot, committed before the next mutation', () => {
   const c = ctx();
   const remembered = run(c, ['remember', 'writes must be batched in groups of two hundred', '--trigger', 'batching writes for perf']);

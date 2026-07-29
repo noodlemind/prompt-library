@@ -63,9 +63,15 @@ export function setLearningStatus({ workspace, id, action, reason, to, home }) {
     }
     // Insight-only learnings never promote (design §10) — promotion asserts
     // the claim was proven by a real fix or a verified human teaching, never
-    // just an unconfirmed observation.
+    // just an unconfirmed observation. A qualifying episode needs a path AS
+    // WELL AS a qualifying kind: a pathless `kind: fix` entry (a malformed
+    // record — a hand edit or stale on-disk data) is dropped by every
+    // serializer (episodeLines, store.mjs/apply.mjs) on the very next
+    // re-render, so counting it here would let a learning promote on
+    // evidence that vanishes the moment the file is touched again, leaving a
+    // promoted learning with ZERO recorded evidence.
     const hasQualifyingEpisode = (learning.fm.episodes || []).some(
-      (e) => e.kind === 'fix' || e.kind === 'human-teaching'
+      (e) => e.path && (e.kind === 'fix' || e.kind === 'human-teaching')
     );
     if (!hasQualifyingEpisode) {
       return {

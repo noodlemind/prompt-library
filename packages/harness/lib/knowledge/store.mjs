@@ -242,6 +242,30 @@ function yamlQuote(v) {
 }
 
 /**
+ * Render one learning's `episodes:` block lines. Shared by this module's own
+ * `serializeLearning` (a parse → mutate → re-render round trip) AND
+ * apply.mjs's `renderLearning` (a from-scratch ADD/SUPERSEDE/STRENGTHEN/MERGE
+ * write) — the two sole writers of a learning file — so a malformed episode
+ * entry (missing `path` or an unrecognized/missing `kind`, the shape a
+ * hand-edited file or a stale on-disk record can carry) is normalized
+ * IDENTICALLY by both instead of one of them drifting back to emitting a
+ * literal `path: undefined` / `kind: undefined`. A pathless entry is dropped
+ * outright — a link with nothing to link to is meaningless, not valid YAML
+ * worth keeping. A missing/unrecognized kind defaults to 'fix'.
+ */
+export function episodeLines(episodes) {
+  const lines = [];
+  for (const e of episodes || []) {
+    if (!e.path) continue;
+    lines.push(`  - path: ${e.path}`);
+    lines.push(`    sha256: ${yamlQuote(e.sha256)}`);
+    lines.push(`    kind: ${e.kind === 'insight' ? 'insight' : e.kind === 'human-teaching' ? 'human-teaching' : 'fix'}`);
+    lines.push(`    plan: ${e.plan || ''}`);
+  }
+  return lines;
+}
+
+/**
  * Render a parsed `{ fm, body }` pair (as `parseLearningFrontmatter` above
  * hands back) to the canonical on-disk learning text — same field order and
  * escaping the sole writer's `renderLearning` (apply.mjs) uses for a fresh
@@ -263,21 +287,8 @@ export function serializeLearning(fm, body) {
     `status: ${fm.status || 'active'}`,
     `source: ${fm.source || 'auto'}`,
     'episodes:',
+    ...episodeLines(fm.episodes),
   ];
-  for (const e of fm.episodes || []) {
-    // A hand-edited learning can carry an incomplete episode entry. A path
-    // is the only thing an episode link actually means — without one there's
-    // nothing to link to, so the entry is dropped rather than round-tripped
-    // as invalid YAML (a bare `- path: undefined` line). A missing/
-    // unrecognized kind defaults to 'fix', mirroring renderLearning's own
-    // normalization (apply.mjs) so both writers agree on the same three kinds
-    // instead of one of them emitting a literal `kind: undefined`.
-    if (!e.path) continue;
-    lines.push(`  - path: ${e.path}`);
-    lines.push(`    sha256: ${yamlQuote(e.sha256)}`);
-    lines.push(`    kind: ${e.kind === 'insight' ? 'insight' : e.kind === 'human-teaching' ? 'human-teaching' : 'fix'}`);
-    lines.push(`    plan: ${e.plan || ''}`);
-  }
   const anchors = fm.anchors || [];
   if (anchors.length) {
     lines.push('anchors:');

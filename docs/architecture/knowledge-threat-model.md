@@ -157,7 +157,7 @@ rejection, not a second mechanical gate; `--apply` is the only place a violation
 actually enforced.
 
 The rejection is not the end of the story, though: the writer now exists. Rejections split
-into three classes, mirrored from `apply.mjs`'s own `CONTENT_FAILURE_CODES` comment:
+into four classes, mirrored from `apply.mjs`'s own `CONTENT_FAILURE_CODES` comment:
 
 - **Content-strike** — `E_SCHEMA`, `E_SECRET`, `E_LINT`, `E_BYTE_CAP` always strike, and
   `E_EXISTS`/`E_TARGET` strike when they fire against a genuine ON-DISK collision: a dedup
@@ -173,6 +173,10 @@ into three classes, mirrored from `apply.mjs`'s own `CONTENT_FAILURE_CODES` comm
   op-SET was malformed (two ops raced for the same id/target), not either op's own episodes,
   so the codepath returns a plain rejection instead of recording a failure, despite sharing an
   E_EXISTS/E_TARGET code with a real, strike-worthy on-disk variant above.
+- **Promoted-target** — also `E_TARGET`, raised whenever a `STRENGTHEN`/`SUPERSEDE`/`MERGE`
+  aims at a learning already promoted to a primitive: never strikes, since the offered
+  episodes aren't defective, only the op's choice of target is, so a model repeatedly aiming
+  at a promoted id must never accumulate toward quarantine for it.
 
 On an episode's third recorded (content-strike) failure — an `E_LINT`-rejected insight op
 included — the same append also writes a `quarantined: true` marker: the episode stops
