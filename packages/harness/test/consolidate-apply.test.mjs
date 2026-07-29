@@ -900,3 +900,107 @@ test('a fresh .lock (real contention) still rejects E_LOCKED and is left untouch
   assert.equal(res.rejected[0].code, 'E_LOCKED');
   assert.ok(fs.existsSync(lockPath), 'a live lock must never be removed by a contending run');
 });
+
+// Global-root episode evidence (M4 review, critical finding): collectEpisodes
+// (consolidate.mjs) scans BOTH workspace docs/solutions AND
+// copilotHome/knowledge/solutions, emitting global paths relative to
+// copilotHome/knowledge (e.g. solutions/perf/team-fix.md) — but the
+// admission-time evidence gate only ever resolved episode paths against the
+// workspace, so a genuinely-real global episode the skill copied verbatim
+// from --candidates would fail verification, strike three times, and
+// quarantine an innocent team episode. verifyEpisodeKind/episodeDate now try
+// the workspace root first, then copilotHome/knowledge.
+test('a global-root episode (real file under copilotHome/knowledge) verifies and applies cleanly, with no strikes', () => {
+  const c = ctx();
+  const globalRel = 'solutions/perf/team-fix.md';
+  const globalFull = path.join(c.home, 'knowledge', globalRel);
+  fs.mkdirSync(path.dirname(globalFull), { recursive: true });
+  const text = 'a real global team fix, collected from ~/.copilot/knowledge/solutions.\n';
+  fs.writeFileSync(globalFull, text);
+  const sha256 = crypto.createHash('sha256').update(text).digest('hex');
+
+  const op = {
+    op: 'ADD',
+    domain: 'perf',
+    slug: 'global-team-fix',
+    trigger: 'a globally-shared perf fix',
+    body: 'Re-derived claim from the global team episode.',
+    episodes: [{ path: globalRel, sha256, kind: 'fix', plan: null }],
+  };
+  const res = run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [op])]);
+  assert.equal(res.status, 0, res.stderr || res.stdout);
+  const out = JSON.parse(res.stdout);
+  assert.equal(out.applied.length, 1);
+
+  const { dir } = ensureStore(c.ws, { home: c.harnessHome });
+  const learning = listLearnings(dir).find((l) => l.id === 'perf/global-team-fix');
+  assert.ok(learning, 'the global-root episode must verify and the learning must be written');
+  assert.equal(readLedger(dir).some((e) => e.failure), false, 'no strike recorded for a genuinely-global episode');
+});
+
+test('an episode missing from BOTH the workspace and the global root is rejected with E_SCHEMA and still records a strike', () => {
+  const c = ctx();
+  const op = {
+    op: 'ADD',
+    domain: 'perf',
+    slug: 'nowhere-fix',
+    trigger: 'a fix that exists in neither root',
+    body: 'This evidence does not exist anywhere.',
+    episodes: [{ path: 'solutions/perf/nowhere.md', sha256: 'a'.repeat(64), kind: 'fix', plan: null }],
+  };
+  const res = run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [op])]);
+  assert.equal(res.status, 1, res.stderr || res.stdout);
+  const out = JSON.parse(res.stdout);
+  assert.equal(out.rejected[0].code, 'E_SCHEMA');
+
+  const { dir } = ensureStore(c.ws, { home: c.harnessHome });
+  const ledger = readLedger(dir);
+  assert.ok(
+    ledger.some((e) => e.failure === 'E_SCHEMA' && e.path === 'solutions/perf/nowhere.md'),
+    'a strike is still recorded when the episode verifies in neither root'
+  );
+});
+
+// Stale-lock takeover race (M4 review, Important 1): two post-crash
+// processes can both observe the same stale lock and both attempt takeover.
+// The fix claims the stale lock via an ATOMIC renameSync (not an idempotent
+// rmSync) so only one caller's rename can ever succeed against that exact
+// directory entry — the loser must see its renameSync throw (ENOENT, since
+// the winner already moved the entry away) and fall straight through to
+// E_LOCKED WITHOUT attempting its own mkdirSync recovery, which would
+// otherwise race against — and could steal — the winner's freshly
+// recreated live lock. Simulated deterministically by stubbing
+// fs.renameSync to throw exactly once, standing in for "another process's
+// rename already won."
+test('a concurrent stale-lock takeover race: the loser (whose claim loses to another renamer) rejects E_LOCKED, never double-acquiring', () => {
+  const c = ctx();
+  const { dir } = ensureStore(c.ws, { home: c.harnessHome });
+  const lockPath = path.join(dir, '.lock');
+  fs.mkdirSync(lockPath);
+  const old = new Date(Date.now() - 11 * 60 * 1000);
+  fs.utimesSync(lockPath, old, old);
+
+  const originalRename = fs.renameSync;
+  let intercepted = false;
+  fs.renameSync = (src, dest) => {
+    if (!intercepted && src === lockPath) {
+      intercepted = true;
+      const err = new Error('ENOENT: no such file or directory, rename');
+      err.code = 'ENOENT';
+      throw err;
+    }
+    return originalRename(src, dest);
+  };
+  try {
+    const res = applyOps({ workspace: c.ws, opsPath: writeOps(c.ws, [ADD(c.ws)]), home: c.harnessHome });
+    assert.equal(res.exitCode, 1);
+    assert.equal(res.rejected[0].code, 'E_LOCKED');
+    assert.ok(intercepted, 'the stubbed renameSync must have been exercised by the takeover attempt');
+    // The loser never attempted mkdirSync recovery of its own — the stale
+    // lock our stub refused to rename away is still sitting exactly where
+    // it was, proving nothing was double-acquired.
+    assert.ok(fs.existsSync(lockPath), 'the lock directory is left exactly as the failed rename left it');
+  } finally {
+    fs.renameSync = originalRename;
+  }
+});

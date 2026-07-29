@@ -52,6 +52,11 @@ function writeRealEpisode(ws, rel, content) {
   return { path: rel, sha256: crypto.createHash('sha256').update(text).digest('hex') };
 }
 
+// Deliberately fabricated (unlike writeRealEpisode above): every remaining
+// use of EP() targets a mode gate (E_MODE) that applyOps checks BEFORE it
+// ever parses the ops file, let alone reaches per-op evidence verification —
+// the episode is never read, so real evidence would add nothing and a
+// fabricated one proves the mode gate short-circuits ahead of it.
 const EP = (over = {}) => ({
   path: 'docs/solutions/perf/x.md',
   sha256: 'a'.repeat(64),

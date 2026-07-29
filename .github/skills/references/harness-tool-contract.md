@@ -57,15 +57,15 @@ This table tracks only what differs in runtime character across commands — whi
 |---------|------|--------|-------|
 | `install` / `upgrade` | human/CI | none | mutates `~/.copilot/` |
 | `doctor` | human/CI | none | read-only (`--host vscode` runs an isolated hook-lifecycle fixture) |
-| `init-repo` | human/CI | none | mutates workspace (`.harness/`, `docs/plans/`, `docs/codebase-map.md`) |
+| `init-repo` | human/CI | none¹ | mutates workspace (`.harness/`, `docs/plans/`, `docs/codebase-map.md`) |
 | `status` / `uninstall` | human/CI | none | read-only / mutates `~/.copilot/` (uninstall removes hydrated files) |
 | `orient` | agent-runtime | writes | mutates `.harness/` (context-pack, repo-map, session) |
-| `recall` | agent-runtime | none | read-only |
+| `recall` | agent-runtime | none¹ | read-only |
 | `gate` | agent-runtime | writes | mutates session state |
 | `verify` | agent-runtime | writes | mutates (evidence file + session) |
-| `validate-plan` | agent-runtime | none | read-only |
+| `validate-plan` | agent-runtime | none¹ | read-only |
 | `plan-new` | agent-runtime | none | mutates workspace (writes the plan; `--stdout` prints instead) |
-| `index` | agent-runtime | none | mutates the knowledge index (`--status` read-only) |
+| `index` | agent-runtime | none¹ | mutates the knowledge index (`--status` read-only) |
 | `get` | agent-runtime | none | read-only |
 | `compound` | agent-runtime | writes | mutates (index + solution doc + telemetry) |
 | `consolidate` | agent-runtime | writes | read-only (`--status`/`--candidates`); mutates the learnings store (`--apply`/`--rebuild --yes`) |
@@ -76,6 +76,8 @@ This table tracks only what differs in runtime character across commands — whi
 | `eval-knowledge` | agent-runtime | none | read-only |
 | `events` | agent-runtime | none | read-only |
 | `report` | agent-runtime | none | read-only (`--sync` writes `~/.harness/telemetry/`) |
+
+¹ `init-repo`/`recall`/`validate-plan`/`index` each call `writeEvent` (types `init_repo`/`recall`/`validate_plan`/`index`), but none of those four type strings is in the `EVENT_TYPES` allow-list (`events.mjs`) — `writeEvent` silently no-ops for an unlisted type, so the call exists in code yet nothing actually lands in `events.jsonl`; "none" is the ledger truth, not a simplification.
 
 **Query construction (deterministic-retrieval discipline):** build `--query` from the user's salient nouns and identifiers **verbatim** (e.g. `SYSTEM-OVERRIDE`, `payment`, `token`) — do not paraphrase intent into synonyms. The retrieval tokenizer normalizes identifier formats and morphology, but it cannot recover a term the query never contained. Passing the literal request terms is what keeps recall stable across phrasings.
 
@@ -259,7 +261,7 @@ Allowed outcomes are `passed`, `failed`, and `inconclusive`. Only fresh `passed`
 }
 ```
 
-Lifecycle events are limited to `session_start`, `orient`, `gate`, `pre_tool`, `post_tool`, `skill_activation`, `verify`, `compound`, `consolidate`, `remember`, `learning`, `knowledge`, and `session_end`. Non-lifecycle commands (`recall`, `index`, `get`, `report`, `learnings`, `eval-knowledge`) never append events by design. They never store prompt or query content; `skill_activation` stores only the skill and session binding.
+Lifecycle events are limited to `session_start`, `orient`, `gate`, `pre_tool`, `post_tool`, `skill_activation`, `verify`, `compound`, `consolidate`, `remember`, `learning`, `knowledge`, and `session_end`. Non-lifecycle commands (`recall`, `index`, `get`, `report`, `learnings`, `eval-knowledge`) never append events by design — they never call `writeEvent` at all. `init-repo` and `validate-plan` also never append events, but not by that same deliberate omission: both DO call `writeEvent` (types `init_repo`/`validate_plan`), and both types are simply absent from the allow-list above, so the call silently no-ops — see the Command catalog table's footnote. Every append-attempting command never stores prompt or query content; `skill_activation` stores only the skill and session binding.
 
 ## Host hook boundary
 

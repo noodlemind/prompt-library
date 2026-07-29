@@ -838,7 +838,14 @@ export async function cmdConsolidate(argv) {
         exit: EXIT.usage,
       });
     }
-    const result = applyOps({ workspace, opsPath: path.resolve(flags.ops), dryRun: flags.dryRun, approve: flags.yes, log: logger });
+    const result = applyOps({
+      workspace,
+      opsPath: path.resolve(flags.ops),
+      dryRun: flags.dryRun,
+      approve: flags.yes,
+      log: logger,
+      copilotHome,
+    });
     writeEvent(workspace, flags, {
       type: 'consolidate',
       command: 'consolidate',

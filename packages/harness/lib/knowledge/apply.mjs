@@ -143,27 +143,73 @@ export function todayClamped() {
 }
 
 /**
- * Deterministic anchor extraction: for every episode whose own file exists
- * under the workspace, scan its text for repo-relative paths and keep the
- * ones that resolve to real files — excluding the episode's own path so a
- * doc doesn't anchor itself. Dedupe, sort, cap at 8 (module-private; only
- * `renderLearning` writes the result).
+ * Every containment-valid candidate full path for an episode's declared
+ * relative path — workspace root FIRST, then (when a copilotHome is given)
+ * `copilotHome/knowledge` SECOND. These are the exact same two roots
+ * consolidate.mjs's `collectEpisodes` scans (product-repo-private
+ * `docs/solutions/` and the global `~/.copilot/knowledge/solutions/`), so a
+ * global episode's candidates-emitted path (relative to
+ * `copilotHome/knowledge`, e.g. `solutions/perf/team-fix.md`) resolves the
+ * same way it was collected from — a model asserting the path verbatim (as
+ * instructed) must not have its evidence rejected purely because apply.mjs
+ * only ever checked the workspace root. Each root gets its OWN containment
+ * guard: a path escaping ONE root (a `../` climb out of it) is simply
+ * excluded from the candidate list for THAT root — it is never allowed to
+ * "borrow" containment from the other root. Returns an empty array when `p`
+ * is falsy or escapes every configured root. Existence is NOT checked here —
+ * callers try each candidate in order (workspace first) and decide what
+ * "exists" means for their own read (readFileSync, fs.existsSync, ...).
  */
-function extractAnchors({ workspace, episodes }) {
+function resolveEpisodeFile(workspace, copilotHome, p) {
+  if (!p) return [];
+  const roots = [path.resolve(workspace)];
+  if (copilotHome) roots.push(path.resolve(copilotHome, 'knowledge'));
+  const candidates = [];
+  for (const root of roots) {
+    const full = path.resolve(root, p);
+    if (full === root || full.startsWith(root + path.sep)) candidates.push(full);
+  }
+  return candidates;
+}
+
+/** The first candidate (workspace root first, then the global root) that
+ * actually exists on disk, or null if the path escapes every root or exists
+ * in none of them. */
+function firstExistingEpisodeFile(workspace, copilotHome, p) {
+  for (const full of resolveEpisodeFile(workspace, copilotHome, p)) {
+    if (fs.existsSync(full)) return full;
+  }
+  return null;
+}
+
+/**
+ * Deterministic anchor extraction: for every episode whose own file exists
+ * under the workspace OR the global knowledge root, scan its text for
+ * repo-relative paths and keep the ones that resolve to real WORKSPACE files
+ * — excluding the episode's own path so a doc doesn't anchor itself. A
+ * global episode's evidence can still anchor a learning to product code (the
+ * outer read tries both roots), but the anchor TARGETS extracted from its
+ * text are always resolved against the workspace only: an anchor is a
+ * pointer into the product repo an agent can go read, never into another
+ * machine's `~/.copilot`, so scanning a global episode's text for workspace
+ * files is still workspace-anchored, not two-rooted. Dedupe, sort, cap at 8
+ * (module-private; only `renderLearning` writes the result).
+ */
+function extractAnchors({ workspace, copilotHome, episodes }) {
   const found = new Set();
   const root = path.resolve(workspace);
   // Containment guard (same root/startsWith idiom this module uses
-  // elsewhere, e.g. verifyEpisodeKind): an episode's own path is op-JSON
-  // controlled, so a `../` escape must never even be read, let alone have
-  // its content scanned for anchor-shaped strings.
-  const contains = (rel) => {
+  // elsewhere, e.g. verifyEpisodeKind) — workspace-only, deliberately: see
+  // the doc comment above on why anchor TARGETS never cross into the global
+  // root even when the episode itself does.
+  const containsWorkspace = (rel) => {
     const full = path.resolve(root, rel);
     return full === root || full.startsWith(root + path.sep) ? full : null;
   };
   for (const e of episodes || []) {
     if (!e.path) continue;
-    const full = contains(e.path);
-    if (!full || !fs.existsSync(full)) continue;
+    const full = firstExistingEpisodeFile(workspace, copilotHome, e.path);
+    if (!full) continue;
     let text;
     try {
       text = fs.readFileSync(full, 'utf8');
@@ -173,7 +219,7 @@ function extractAnchors({ workspace, episodes }) {
     const matches = text.match(ANCHOR_RE) || [];
     for (const m of matches) {
       if (m === e.path) continue;
-      const mFull = contains(m);
+      const mFull = containsWorkspace(m);
       if (!mFull || !fs.existsSync(mFull)) continue;
       found.add(m);
     }
@@ -266,29 +312,32 @@ function verifiedFixLinks(fm) {
  *     only requires the file NOT to be impersonating one of the elevated
  *     kinds — no frontmatter, or any kind other than insight/human-teaching,
  *     is a legitimate fix episode.
- * Fails closed (false) on any escape/missing/unreadable/mismatched case —
- * never throws.
+ * Resolved against BOTH knowledge roots (resolveEpisodeFile) — workspace
+ * first, then `copilotHome/knowledge` — since `collectEpisodes` proposes
+ * candidates from either one and the consolidation skill copies the offered
+ * path/sha256 verbatim; a global-root episode must verify exactly as
+ * readily as a workspace one. Succeeds if EITHER root fully verifies (exists
+ * + sha256 match + kind agreement). Fails closed (false) only when every
+ * candidate fails — never throws.
  */
-function verifyEpisodeKind(workspace, e) {
+function verifyEpisodeKind(workspace, copilotHome, e) {
   if (!e || !e.path || !e.sha256) return false;
-  // Containment guard: same root/startsWith idiom purge uses — an episode
-  // path that escapes the workspace must never even be read.
-  const root = path.resolve(workspace);
-  const full = path.resolve(root, e.path);
-  if (full !== root && !full.startsWith(root + path.sep)) return false;
-  let text;
-  try {
-    text = fs.readFileSync(full, 'utf8');
-  } catch {
-    return false;
+  for (const full of resolveEpisodeFile(workspace, copilotHome, e.path)) {
+    let text;
+    try {
+      text = fs.readFileSync(full, 'utf8');
+    } catch {
+      continue;
+    }
+    if (crypto.createHash('sha256').update(text).digest('hex') !== e.sha256) continue;
+    const m = text.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+    const kindLine = m ? m[1].split('\n').find((l) => /^kind:\s*/.test(l)) : null;
+    const fileKind = kindLine ? kindLine.replace(/^kind:\s*/, '').replace(/^["']|["']$/g, '').trim() : null;
+    const asserted = e.kind === 'insight' ? 'insight' : e.kind === 'human-teaching' ? 'human-teaching' : 'fix';
+    const kindOk = asserted === 'fix' ? fileKind !== 'insight' && fileKind !== 'human-teaching' : fileKind === asserted;
+    if (kindOk) return true;
   }
-  if (crypto.createHash('sha256').update(text).digest('hex') !== e.sha256) return false;
-  const m = text.match(/^---\r?\n([\s\S]*?)\r?\n---/);
-  const kindLine = m ? m[1].split('\n').find((l) => /^kind:\s*/.test(l)) : null;
-  const fileKind = kindLine ? kindLine.replace(/^kind:\s*/, '').replace(/^["']|["']$/g, '').trim() : null;
-  const asserted = e.kind === 'insight' ? 'insight' : e.kind === 'human-teaching' ? 'human-teaching' : 'fix';
-  if (asserted === 'fix') return fileKind !== 'insight' && fileKind !== 'human-teaching';
-  return fileKind === asserted;
+  return false;
 }
 
 /** Thin wrapper over verifyEpisodeKind: true only when the episode BOTH
@@ -297,15 +346,17 @@ function verifyEpisodeKind(workspace, e) {
  * specific question answered, not "does this episode verify as whatever it
  * claims", so a non-human-teaching assertion still short-circuits to false
  * without touching disk. */
-function verifyHumanTeachingEpisode(workspace, e) {
-  return Boolean(e) && e.kind === 'human-teaching' && verifyEpisodeKind(workspace, e);
+function verifyHumanTeachingEpisode(workspace, copilotHome, e) {
+  return Boolean(e) && e.kind === 'human-teaching' && verifyEpisodeKind(workspace, copilotHome, e);
 }
 
 /**
  * Admission-time evidence check (op validation, before anything is written):
  * every `fix`-kind (or kind-omitted, defaulting to fix) and `insight`-kind
- * episode an op offers must verify against disk via verifyEpisodeKind — a
- * mismatch or nonexistent file is an evidence defect (content-failure class,
+ * episode an op offers must verify against disk via verifyEpisodeKind (tried
+ * against both the workspace and, when given, the global copilotHome
+ * knowledge root) — a mismatch or nonexistent-in-either-root file is an
+ * evidence defect (content-failure class,
  * routed through rejectOp so it strikes toward quarantine like any other
  * malformed episode). `human-teaching` assertions are deliberately exempt
  * here: that lane already has its own disk verification at the point
@@ -315,10 +366,10 @@ function verifyHumanTeachingEpisode(workspace, e) {
  * fabricated human-teaching kind still applies, just without the elevated
  * standing, so it must never reject here.
  */
-function verifyAdmittedEpisodeKinds(workspace, episodes, opIndex) {
+function verifyAdmittedEpisodeKinds(workspace, copilotHome, episodes, opIndex) {
   for (const e of episodes) {
     if (e.kind === 'human-teaching') continue;
-    if (!verifyEpisodeKind(workspace, e)) {
+    if (!verifyEpisodeKind(workspace, copilotHome, e)) {
       const asserted = e.kind === 'insight' ? 'insight' : 'fix';
       return fail(
         'E_SCHEMA',
@@ -334,27 +385,28 @@ function verifyAdmittedEpisodeKinds(workspace, episodes, opIndex) {
  * `collectEpisodes` (consolidate.mjs) derives it (`fm.date`), from the
  * episode file's CURRENT on-disk content, never from anything the op JSON
  * asserts (an op's episode entries carry no date field of their own). Used
- * only by the recency gate below. Same containment guard and fail-closed
- * shape as verifyHumanTeachingEpisode (null on any escape/missing/
- * unreadable/unparsable case) — a shared reader isn't worth factoring out
- * for two short, independently-failing checks.
+ * only by the recency gate below. Same two-root resolution and fail-closed
+ * shape as verifyEpisodeKind (null when every candidate — workspace then
+ * copilotHome/knowledge — is escaping/missing/unreadable/unparsable) — a
+ * shared reader isn't worth factoring out for two short, independently-
+ * failing checks.
  */
-function episodeDate(workspace, e) {
+function episodeDate(workspace, copilotHome, e) {
   if (!e.path) return null;
-  const root = path.resolve(workspace);
-  const full = path.resolve(root, e.path);
-  if (full !== root && !full.startsWith(root + path.sep)) return null;
-  let text;
-  try {
-    text = fs.readFileSync(full, 'utf8');
-  } catch {
-    return null;
+  for (const full of resolveEpisodeFile(workspace, copilotHome, e.path)) {
+    let text;
+    try {
+      text = fs.readFileSync(full, 'utf8');
+    } catch {
+      continue;
+    }
+    const m = text.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+    if (!m) continue;
+    const dateLine = m[1].split('\n').find((l) => /^date:\s*/.test(l));
+    const date = dateLine ? dateLine.replace(/^date:\s*/, '').replace(/^["']|["']$/g, '').trim() : null;
+    if (date) return date;
   }
-  const m = text.match(/^---\r?\n([\s\S]*?)\r?\n---/);
-  if (!m) return null;
-  const dateLine = m[1].split('\n').find((l) => /^date:\s*/.test(l));
-  const date = dateLine ? dateLine.replace(/^date:\s*/, '').replace(/^["']|["']$/g, '').trim() : null;
-  return date || null;
+  return null;
 }
 
 /**
@@ -374,15 +426,15 @@ function episodeDate(workspace, e) {
  * An episode with no parseable date fails closed — never counts as recent
  * enough to override a recorded human decision.
  */
-function overridesGovernanceRecency(workspace, episodes, record) {
+function overridesGovernanceRecency(workspace, copilotHome, episodes, record) {
   if (!record) return true;
   return episodes.every((e) => {
-    const d = episodeDate(workspace, e);
+    const d = episodeDate(workspace, copilotHome, e);
     return d != null && d >= record.at;
   });
 }
 
-export function applyOps({ workspace, opsPath, dryRun = false, home, approve = false, log = () => {} }) {
+export function applyOps({ workspace, opsPath, dryRun = false, home, approve = false, log = () => {}, copilotHome = null }) {
   // Absorb any hand edit sitting in the store BEFORE anything else — even
   // before the mode gate. The failure path below can `git reset --hard` the
   // store tree; a dirty hand edit caught in that reset would be destroyed
@@ -572,7 +624,7 @@ export function applyOps({ workspace, opsPath, dryRun = false, home, approve = f
     // Evidence-defect gate (see verifyAdmittedEpisodeKinds doc comment): a
     // fix/insight-kind assertion must disk-verify before anything downstream
     // (gainedFix, verifiedFixLinks, promotion math) ever trusts it.
-    const badKind = verifyAdmittedEpisodeKinds(workspace, op.episodes, i);
+    const badKind = verifyAdmittedEpisodeKinds(workspace, copilotHome, op.episodes, i);
     if (badKind) return rejectOp(badKind.code, badKind.reason, op.episodes);
     // merged_from is only ever a MERGE-derived (op.targets) or ADD/SUPERSEDE-
     // carried-forward field — an op JSON asserting it directly must be an
@@ -615,13 +667,13 @@ export function applyOps({ workspace, opsPath, dryRun = false, home, approve = f
       allHumanTeaching =
         isReteachShape &&
         op.episodes.length > 0 &&
-        op.episodes.every((e) => verifyHumanTeachingEpisode(workspace, e)) &&
+        op.episodes.every((e) => verifyHumanTeachingEpisode(workspace, copilotHome, e)) &&
         // Recency gate (see overridesGovernanceRecency doc comment): the
         // op's own claim of human authorship isn't enough if a governance
         // record already exists for this exact target/id and the evidence
         // offered predates it — a stale teaching episode must never resurrect
         // a NEWER human retire/dispute/promote decision.
-        overridesGovernanceRecency(workspace, op.episodes, governance.get(op.target));
+        overridesGovernanceRecency(workspace, copilotHome, op.episodes, governance.get(op.target));
       // Cross-run target-activeness (MERGE already required this — see the
       // isActiveFm check in its own branch below): a target already
       // superseded/retired/disputed ON DISK from a PRIOR run must never
@@ -957,13 +1009,13 @@ export function applyOps({ workspace, opsPath, dryRun = false, home, approve = f
     // fabricated or nonexistent episode) fails toward the standard
     // auto/provisional lane instead — this derivation never throws or
     // rejects the op, it just withholds the elevated standing.
-    const source = op.episodes.length && op.episodes.every((e) => verifyHumanTeachingEpisode(workspace, e)) ? 'human' : 'auto';
+    const source = op.episodes.length && op.episodes.every((e) => verifyHumanTeachingEpisode(workspace, copilotHome, e)) ? 'human' : 'auto';
     const status = source === 'human' ? 'active' : 'provisional';
     const content = renderLearning({
       trigger: op.trigger,
       body: op.body,
       episodes: op.episodes,
-      anchors: extractAnchors({ workspace, episodes: op.episodes }),
+      anchors: extractAnchors({ workspace, copilotHome, episodes: op.episodes }),
       origin,
       status,
       source,
@@ -992,9 +1044,18 @@ export function applyOps({ workspace, opsPath, dryRun = false, home, approve = f
   // Single-writer lock. A killed process can leave `.lock` behind forever
   // (nothing ever runs to remove it), wedging the store shut for every
   // future run. On contention, check the lock's age before giving up: past
-  // STALE_LOCK_MS, assume its owner is dead, remove it, and retry
-  // acquisition exactly once — a live owner racing the same removal simply
-  // wins the retry and this run still fails E_LOCKED, same as today.
+  // STALE_LOCK_MS, assume its owner is dead and take it over via an ATOMIC
+  // rename (not an idempotent `rmSync`) — two post-crash processes can both
+  // observe the same stale lock and both attempt takeover, and a filesystem
+  // rename either succeeds or fails atomically, so at most ONE renameSync
+  // call can succeed against that exact directory entry. The loser gets
+  // ENOENT (the entry is already gone) and must fall straight through to
+  // E_LOCKED without attempting its own mkdirSync — an `rmSync({force:true})`
+  // here instead would "succeed" silently for BOTH processes (deleting
+  // nothing is not an error), then race them both on mkdirSync with no way
+  // to tell winner from loser, which is exactly how a slow loser can end up
+  // deleting the WINNER's freshly re-created live lock and mutating
+  // concurrently with it.
   const lockPath = path.join(dir, '.lock');
   let staleLockNote = null;
   try {
@@ -1009,13 +1070,29 @@ export function applyOps({ workspace, opsPath, dryRun = false, home, approve = f
     const ageMs = stat ? Date.now() - stat.mtimeMs : 0;
     let recovered = false;
     if (stat && ageMs > STALE_LOCK_MS) {
+      const tombstone = `${lockPath}.stale-${process.pid}-${Date.now()}`;
+      let claimed = false;
       try {
-        fs.rmSync(lockPath, { recursive: true, force: true });
-        fs.mkdirSync(lockPath);
-        staleLockNote = `stale lock (${Math.round(ageMs / 60000)}m old) removed`;
-        recovered = true;
+        fs.renameSync(lockPath, tombstone);
+        claimed = true;
       } catch {
-        recovered = false;
+        claimed = false; // another process already won the takeover race
+      }
+      if (claimed) {
+        try {
+          fs.mkdirSync(lockPath);
+          staleLockNote = `stale lock (${Math.round(ageMs / 60000)}m old) removed`;
+          recovered = true;
+        } catch {
+          recovered = false;
+        }
+        // Best effort, never allowed to undo a successful takeover above —
+        // an orphaned tombstone directory is harmless disk debris either way.
+        try {
+          fs.rmSync(tombstone, { recursive: true, force: true });
+        } catch {
+          // ignored
+        }
       }
     }
     if (!recovered) {
@@ -1081,8 +1158,8 @@ export function applyOps({ workspace, opsPath, dryRun = false, home, approve = f
         if (!entry || !['retire', 'dispute', 'promote'].includes(entry.action)) continue;
         const isReteach =
           op.episodes.length > 0 &&
-          op.episodes.every((e) => verifyHumanTeachingEpisode(workspace, e)) &&
-          overridesGovernanceRecency(workspace, op.episodes, entry);
+          op.episodes.every((e) => verifyHumanTeachingEpisode(workspace, copilotHome, e)) &&
+          overridesGovernanceRecency(workspace, copilotHome, op.episodes, entry);
         if (isReteach) {
           appendGovernance(dir, { id, action: 'confirm', reason: 'superseded by re-teach', to: null, at });
           continue;
@@ -1120,7 +1197,7 @@ export function applyOps({ workspace, opsPath, dryRun = false, home, approve = f
       for (const op of planned) {
         if (op.op === 'STRENGTHEN') {
           const target = existing.get(op.target);
-          strengthenLearning(target, op.episodes, workspace);
+          strengthenLearning(target, op.episodes, workspace, copilotHome);
           applied.push({ op: 'STRENGTHEN', id: op.target });
           for (const e of op.episodes) ledgerEntries.push({ path: e.path, sha256: e.sha256, learning: op.target, at });
         } else if (op.op === 'NOOP') {
@@ -1212,7 +1289,7 @@ export function updateFrontmatterField(file, field, value) {
   fs.writeFileSync(file, next, 'utf8');
 }
 
-function strengthenLearning(target, episodes, workspace) {
+function strengthenLearning(target, episodes, workspace, copilotHome) {
   const text = fs.readFileSync(target.file, 'utf8');
   const { fm, body } = parseLearningFrontmatter(text);
   const seen = new Set((fm.episodes || []).map((e) => `${e.path}@${e.sha256}`));
@@ -1229,7 +1306,7 @@ function strengthenLearning(target, episodes, workspace) {
     trigger: fm.trigger || '',
     body,
     episodes: merged,
-    anchors: extractAnchors({ workspace, episodes: merged }),
+    anchors: extractAnchors({ workspace, copilotHome, episodes: merged }),
     origin: fm.origin || 'unknown',
     status,
     source: fm.source || 'auto',

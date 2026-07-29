@@ -158,7 +158,12 @@ export function trendRegression(events) {
  * happen for a given learning at all). `utilizationWeighted` counts raw
  * occurrences instead — the same learning surfaced 25 times and cited once
  * scores 1.0 unique but 0.04 weighted — so repeated surfacing without
- * citation (noise) is visible even when every distinct id was cited once. */
+ * citation (noise) is visible even when every distinct id was cited once.
+ * `citedOccurrences` excludes only citations of an id `orient` never
+ * surfaced at all (noise, not utilization) — it does NOT cap citations of an
+ * id that WAS surfaced at that id's own surfaced count, so repeatedly citing
+ * an already-surfaced learning is deliberate reuse signal and can still push
+ * `utilizationWeighted` past 1.0 (100%); that is expected, not a bug. */
 export function knowledgeSlos(events) {
   const surfaced = new Set(); const cited = new Set();
   let surfacedOccurrences = 0;

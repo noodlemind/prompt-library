@@ -134,7 +134,7 @@ export function runRemember({ workspace, copilotHome, flags, argv, log = () => {
   fs.writeFileSync(opsPath, JSON.stringify(ops), 'utf8');
   let applied;
   try {
-    applied = applyOps({ workspace, opsPath, dryRun: flags.dryRun, home, approve: true, log });
+    applied = applyOps({ workspace, opsPath, dryRun: flags.dryRun, home, approve: true, log, copilotHome });
   } finally {
     fs.rmSync(opsPath, { force: true });
   }
