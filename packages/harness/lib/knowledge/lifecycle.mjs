@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { storeDir, listLearnings, commitStore, serializeLearning } from './store.mjs';
+import { storeDir, listLearnings, commitStore, serializeLearning, appendGovernance } from './store.mjs';
 import { updateFrontmatterField, todayClamped, rebuildIndex } from './apply.mjs';
 import { absorbHandEdits, mirrorLearnings } from './admin.mjs';
 
@@ -96,6 +96,11 @@ export function setLearningStatus({ workspace, id, action, reason, to, home }) {
     // learning drops out of the index immediately rather than waiting for
     // the next consolidate --apply.
     rebuildIndex(dir);
+    // Governance record (Milestone 4): appended BEFORE commitStore so the
+    // one commit below carries both the frontmatter write and the ledger
+    // entry — this is the persistence half of the state a `consolidate
+    // --rebuild` wipe must never resurrect.
+    appendGovernance(dir, { id, action: 'promote', reason: reason || null, to: promotedTo, at: todayClamped() });
     commitStore(dir, `promote ${id}: ${promotedTo}`);
     try {
       mirrorLearnings({ workspace, home });
@@ -108,6 +113,9 @@ export function setLearningStatus({ workspace, id, action, reason, to, home }) {
   updateFrontmatterField(learning.file, 'status', TARGET_STATUS[action]);
   if (action === 'confirm') updateFrontmatterField(learning.file, 'last_confirmed', todayClamped());
   rebuildIndex(dir);
+  // Governance record (Milestone 4): appended BEFORE commitStore, same
+  // reasoning as the promote branch above — one commit carries both.
+  appendGovernance(dir, { id, action, reason: reason || null, to: null, at: todayClamped() });
   commitStore(dir, `${action} ${id}: ${reason || 'human confirm'}`);
   try {
     mirrorLearnings({ workspace, home });

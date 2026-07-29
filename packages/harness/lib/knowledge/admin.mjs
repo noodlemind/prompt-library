@@ -12,6 +12,8 @@ import {
   parseLearningFrontmatter,
   serializeLearning,
   readStoreConfig,
+  appendGovernance,
+  rewriteGovernance,
 } from './store.mjs';
 import { rebuildIndex, todayClamped } from './apply.mjs';
 import { consolidateStatus, LEARNING_BYTE_CAP, isActiveFm } from './consolidate.mjs';
@@ -280,6 +282,13 @@ export function absorbHandEdits({ workspace, home, log = () => {} }) {
   if (!absorbed.length && !deleted.length) return empty;
 
   if (ledgerEntries.length) appendLedger(dir, ledgerEntries);
+  // Governance record (Milestone 4): a human deleting a learning file
+  // directly is a retirement just as much as `learning retire` — recorded
+  // here so it survives a later `consolidate --rebuild`. Appended before the
+  // single commit below so both land together.
+  for (const id of deleted) {
+    appendGovernance(dir, { id, action: 'retire', reason: 'hand deletion (absorbed)', to: null, at });
+  }
   rebuildIndex(dir);
   const ids = [...absorbed.map((a) => a.id), ...deleted].join(', ');
   const { committed } = commitStore(dir, `human edit: ${ids}`);
@@ -405,6 +414,15 @@ export function purgeEpisode({ workspace, target, home }) {
     'utf8'
   );
 
+  // Governance record (Milestone 4): a fully cascade-deleted learning's
+  // history is dropped too — nothing left for those records to govern —
+  // while a merely delinked (removedLinks) learning's governance history is
+  // untouched, since the learning itself still exists.
+  if (removedLearnings.length) {
+    const removedIds = new Set(removedLearnings);
+    rewriteGovernance(dir, (e) => !removedIds.has(e.id));
+  }
+
   let episodeRemoved = false;
   if (episodeExistsOnDisk) {
     fs.rmSync(episodeFull, { force: true });
@@ -438,9 +456,11 @@ export function purgeEpisode({ workspace, target, home }) {
 
 /**
  * Reset T2 (the learnings store) to empty: consolidated learnings and the
- * ledger are wiped, config.json (the mode) is kept. Episode files on disk
- * are untouched — they simply re-enter the consolidation debt count on the
- * next `consolidate --status`.
+ * ledger are wiped, config.json (the mode) is kept. Unlike a `--rebuild`
+ * (see rebuildStore below), governance.jsonl is wiped too — purge --all is a
+ * human erasing everything, so there is no id left for any governance record
+ * to still govern. Episode files on disk are untouched — they simply
+ * re-enter the consolidation debt count on the next `consolidate --status`.
  */
 export function purgeAll({ workspace, home }) {
   // Non-creating gate: a storeless workspace has nothing to purge — must
@@ -476,6 +496,10 @@ export function purgeAll({ workspace, home }) {
     }
   }
   fs.writeFileSync(path.join(dir, 'consolidated.jsonl'), '', 'utf8');
+  // Truncate rather than rewriteGovernance(dir, () => false): purge --all
+  // erases the entire store, so there is no surviving id left for a
+  // predicate to filter against — a full truncate is equivalent and simpler.
+  fs.writeFileSync(path.join(dir, 'governance.jsonl'), '', 'utf8');
   rebuildIndex(dir);
   commitStore(dir, 'purge: --all (store reset)');
   try {
@@ -494,8 +518,11 @@ export function purgeAll({ workspace, home }) {
  * debt so `source: human` learnings regenerate with full authority. Unlike
  * `purgeAll`, rebuild also drops `stale.json`: a fresh model gets a clean
  * stale-anchor slate rather than exclusions computed against the old corpus.
- * Mode-gated like every other knowledge write — human purge is the only
- * always-on path.
+ * config.json (the mode/commit) and governance.jsonl (Milestone 4's human
+ * decision ledger) both survive untouched — the regenerated learnings must
+ * still honor any standing retire/dispute/confirm/promote a human already
+ * made, which Task 2 reapplies against the fresh corpus. Mode-gated like
+ * every other knowledge write — human purge is the only always-on path.
  */
 export function rebuildStore({ workspace, home, yes, copilotHome }) {
   const { mode } = readStoreConfig(workspace, { home });

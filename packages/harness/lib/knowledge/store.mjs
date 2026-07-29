@@ -152,6 +152,67 @@ export function appendLedger(dir, entries) {
 }
 
 /**
+ * Raw, in-order governance entries — every line, one per human lifecycle
+ * decision, torn/corrupt lines skipped (same tolerance as readLedger). This
+ * is the shared parse used by both readGovernance (replayed into a
+ * latest-per-id Map) and rewriteGovernance (filtered and rewritten as-is,
+ * still one line per historical decision) — so the two never drift apart on
+ * what counts as a well-formed line.
+ */
+function readGovernanceEntries(dir) {
+  const govPath = path.join(dir, 'governance.jsonl');
+  if (!fs.existsSync(govPath)) return [];
+  const entries = [];
+  for (const line of fs.readFileSync(govPath, 'utf8').split('\n')) {
+    if (!line.trim()) continue;
+    try {
+      entries.push(JSON.parse(line));
+    } catch {
+      // torn/corrupt line — skip, never fail reads on it
+    }
+  }
+  return entries;
+}
+
+/**
+ * Human governance ledger (Milestone 4): append-only record of retire/
+ * dispute/confirm/promote decisions a person made on a learning — the half
+ * of a learning's state a `consolidate --rebuild` wipe must never resurrect.
+ * Replayed in file order, latest entry per id wins, so a dispute followed by
+ * a confirm on the same id resolves to the confirm. Missing file → empty Map,
+ * same as a fresh store with no decisions yet.
+ */
+export function readGovernance(dir) {
+  const map = new Map();
+  for (const entry of readGovernanceEntries(dir)) {
+    if (entry && entry.id) map.set(entry.id, entry);
+  }
+  return map;
+}
+
+/** Append one governance decision. Same newline-guard idiom as appendLedger. */
+export function appendGovernance(dir, entry) {
+  const govPath = path.join(dir, 'governance.jsonl');
+  const existing = fs.existsSync(govPath) ? fs.readFileSync(govPath, 'utf8') : '';
+  const prefix = existing && !existing.endsWith('\n') ? '\n' : '';
+  fs.appendFileSync(govPath, prefix + JSON.stringify(entry) + '\n');
+}
+
+/**
+ * Rewrite governance.jsonl keeping only entries where `keepPredicate(entry)`
+ * is true — used by purgeEpisode (admin.mjs) to drop every historical record
+ * for an id whose learning was just fully cascade-deleted. No-op when the
+ * file is absent: a purge on a store that never recorded a governance
+ * decision must never materialize the file.
+ */
+export function rewriteGovernance(dir, keepPredicate) {
+  const govPath = path.join(dir, 'governance.jsonl');
+  if (!fs.existsSync(govPath)) return;
+  const kept = readGovernanceEntries(dir).filter(keepPredicate);
+  fs.writeFileSync(govPath, kept.length ? kept.map((e) => JSON.stringify(e)).join('\n') + '\n' : '', 'utf8');
+}
+
+/**
  * Parse learning frontmatter including the structured episodes block and the
  * flat anchors list. Only one list can be "open" at a time — episodes and
  * anchors items look similar (both start `  - `) so we track which block
