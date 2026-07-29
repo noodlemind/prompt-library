@@ -51,24 +51,40 @@ function quarantineEpisode(c) {
   return ep;
 }
 
+// A REAL fix-kind episode file — verifyAdmittedEpisodeKinds (apply.mjs) now
+// disk-verifies every fix/insight-kind episode an ADD/STRENGTHEN/SUPERSEDE/
+// MERGE op offers (existence + sha256 match + no elevated-kind frontmatter)
+// before admitting it, so a fabricated sha256 pointing at a file that was
+// never written is rejected with E_SCHEMA. No frontmatter is required for
+// `fix` — plain content is legitimate evidence.
+function writeFixEpisode(ws, rel) {
+  const full = path.join(ws, rel);
+  fs.mkdirSync(path.dirname(full), { recursive: true });
+  const text = `episode body for ${rel}.\n`;
+  fs.writeFileSync(full, text, 'utf8');
+  return { path: rel, sha256: crypto.createHash('sha256').update(text).digest('hex') };
+}
+
 // Three fix-kind episode links across two distinct plans — promotion-eligible
 // (verified >= 3 && plans >= 2), mirroring promotionCandidates in consolidate.mjs.
-const ADD_PROMOTABLE = {
-  op: 'ADD',
-  domain: 'sql',
-  slug: 'not-null-large-tables',
-  trigger: 'adding NOT NULL columns to large/hot tables',
-  body: 'Use two-step default+backfill; a direct ALTER takes an exclusive lock.',
-  episodes: [
-    { path: 'docs/solutions/perf/x.md', sha256: 'a'.repeat(64), kind: 'fix', plan: 'docs/plans/p1.md' },
-    { path: 'docs/solutions/perf/y.md', sha256: 'b'.repeat(64), kind: 'fix', plan: 'docs/plans/p2.md' },
-    { path: 'docs/solutions/perf/z.md', sha256: 'c'.repeat(64), kind: 'fix', plan: 'docs/plans/p2.md' },
-  ],
-};
+function buildAddPromotable(ws) {
+  return {
+    op: 'ADD',
+    domain: 'sql',
+    slug: 'not-null-large-tables',
+    trigger: 'adding NOT NULL columns to large/hot tables',
+    body: 'Use two-step default+backfill; a direct ALTER takes an exclusive lock.',
+    episodes: [
+      { ...writeFixEpisode(ws, 'docs/solutions/perf/x.md'), kind: 'fix', plan: 'docs/plans/p1.md' },
+      { ...writeFixEpisode(ws, 'docs/solutions/perf/y.md'), kind: 'fix', plan: 'docs/plans/p2.md' },
+      { ...writeFixEpisode(ws, 'docs/solutions/perf/z.md'), kind: 'fix', plan: 'docs/plans/p2.md' },
+    ],
+  };
+}
 
 function seed(c) {
   // Auto learning via a Task-1-style consolidate --apply ops file — promotion-eligible.
-  const opsPath = writeOps(c.ws, [ADD_PROMOTABLE]);
+  const opsPath = writeOps(c.ws, [buildAddPromotable(c.ws)]);
   const applyRes = run(c, ['consolidate', '--apply', '--ops', opsPath]);
   assert.equal(applyRes.status, 0, applyRes.stderr || applyRes.stdout);
   const autoId = JSON.parse(applyRes.stdout).applied[0].id;
@@ -104,7 +120,7 @@ function seedLegacyAndSupersede(c) {
     slug: 'legacy-claim',
     trigger: 'a legacy trigger',
     body: 'The original claim body.',
-    episodes: [{ path: 'docs/solutions/perf/legacy.md', sha256: 'e'.repeat(64), kind: 'fix', plan: 'docs/plans/p10.md' }],
+    episodes: [{ ...writeFixEpisode(c.ws, 'docs/solutions/perf/legacy.md'), kind: 'fix', plan: 'docs/plans/p10.md' }],
   };
   const legacyRes = run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [legacyOp])]);
   assert.equal(legacyRes.status, 0, legacyRes.stderr || legacyRes.stdout);
@@ -117,7 +133,7 @@ function seedLegacyAndSupersede(c) {
     slug: 'legacy-claim-v2',
     trigger: 'a legacy trigger, v2',
     body: 'The replacement claim body.',
-    episodes: [{ path: 'docs/solutions/perf/legacy-v2.md', sha256: 'f'.repeat(64), kind: 'fix', plan: 'docs/plans/p11.md' }],
+    episodes: [{ ...writeFixEpisode(c.ws, 'docs/solutions/perf/legacy-v2.md'), kind: 'fix', plan: 'docs/plans/p11.md' }],
   };
   const supersedeRes = run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [supersedeOp])]);
   assert.equal(supersedeRes.status, 0, supersedeRes.stderr || supersedeRes.stdout);
@@ -161,7 +177,7 @@ test('learnings <domain> --json filters to that domain', () => {
       slug: 'async-context-managers',
       trigger: 'using async context managers',
       body: 'Prefer async with over manual __aenter__/__aexit__ calls.',
-      episodes: [{ path: 'docs/solutions/py/a.md', sha256: 'd'.repeat(64), kind: 'fix', plan: 'docs/plans/p3.md' }],
+      episodes: [{ ...writeFixEpisode(c.ws, 'docs/solutions/py/a.md'), kind: 'fix', plan: 'docs/plans/p3.md' }],
     },
   ]);
   const applyRes = run(c, ['consolidate', '--apply', '--ops', opsPath]);
@@ -274,7 +290,7 @@ test('learnings --why exposes lastConfirmed, supersededBy, mergedFrom, and claim
     slug: 'merged-claim',
     trigger: 'a merged trigger',
     body: 'The merged claim body.',
-    episodes: [{ path: 'docs/solutions/perf/merged.md', sha256: 'a1'.repeat(32), kind: 'fix', plan: 'docs/plans/p12.md' }],
+    episodes: [{ ...writeFixEpisode(c.ws, 'docs/solutions/perf/merged.md'), kind: 'fix', plan: 'docs/plans/p12.md' }],
     merged_from: ['sql/legacy-claim-alt'],
   };
   const mergedRes = run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [mergedOp])]);
@@ -305,6 +321,26 @@ test('trailing bare --why (last arg, no value) exits usage instead of silently f
     { encoding: 'utf8', env: { ...process.env, HARNESS_HOME: c.harnessHome } }
   );
   assert.equal(res.status, 2, res.stderr || res.stdout);
+  const out = JSON.parse(res.stdout);
+  assert.match(out.blockedReason || '', /usage/i);
+});
+
+test('--why immediately followed by another flag treats the flag as a missing value, not as an id', () => {
+  const c = ctx();
+  seed(c);
+
+  // --json sits right after --why — a naive parser consumes it as --why's
+  // value (and silently skips past it, so --json itself never takes
+  // effect). A --prefixed next token must be treated as a missing value
+  // instead, same as the trailing-bare---why case above.
+  const res = spawnSync(
+    process.execPath,
+    [binPath, 'learnings', '--why', '--json', '--workspace', c.ws, '--copilot-home', c.home],
+    { encoding: 'utf8', env: { ...process.env, HARNESS_HOME: c.harnessHome } }
+  );
+  assert.equal(res.status, 2, res.stderr || res.stdout);
+  // --json must still have taken effect (not swallowed as --why's value) —
+  // the usage error itself is emitted as JSON, not a plain-text error block.
   const out = JSON.parse(res.stdout);
   assert.match(out.blockedReason || '', /usage/i);
 });

@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -34,21 +35,32 @@ function writeOps(dir, ops) {
   return p;
 }
 
-const EP = (over = {}) => ({
-  path: 'docs/solutions/perf/x.md',
-  sha256: 'a'.repeat(64),
-  kind: 'fix',
-  plan: 'docs/plans/p1.md',
-  ...over,
-});
+// Writes a real fix-evidence file into the workspace at `rel` and returns an
+// episode object whose sha256 actually matches the file's on-disk content —
+// verifyAdmittedEpisodeKinds (apply.mjs) hashes the file at admission time,
+// so a fabricated sha256 rejects the whole op with E_SCHEMA.
+function EP(ws, over = {}) {
+  const rel = over.path || 'docs/solutions/perf/x.md';
+  const full = path.join(ws, rel);
+  fs.mkdirSync(path.dirname(full), { recursive: true });
+  const content = `fix evidence body for ${rel}.\n`;
+  fs.writeFileSync(full, content, 'utf8');
+  return {
+    path: rel,
+    sha256: crypto.createHash('sha256').update(content).digest('hex'),
+    kind: 'fix',
+    plan: 'docs/plans/p1.md',
+    ...over,
+  };
+}
 
-const ADD = (over = {}) => ({
+const ADD = (ws, over = {}) => ({
   op: 'ADD',
   domain: 'sql',
   slug: 'not-null-large-tables',
   trigger: 'adding NOT NULL columns to large hot tables',
   body: 'Use two-step default+backfill; a direct ALTER takes an exclusive lock.',
-  episodes: [EP()],
+  episodes: [EP(ws)],
   ...over,
 });
 
@@ -56,7 +68,7 @@ const ADD = (over = {}) => ({
 // `b` via `remember` (human-direct, kind: human-teaching — qualifies for
 // promote without any extra fixture work).
 function seed(c) {
-  const opsPath = writeOps(c.ws, [ADD()]);
+  const opsPath = writeOps(c.ws, [ADD(c.ws)]);
   const applyRes = run(c, ['consolidate', '--apply', '--ops', opsPath]);
   assert.equal(applyRes.status, 0, applyRes.stderr || applyRes.stdout);
   const aId = JSON.parse(applyRes.stdout).applied[0].id;

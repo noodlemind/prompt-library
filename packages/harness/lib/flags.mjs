@@ -165,7 +165,16 @@ export function parseFlags(argv) {
     else if (a.startsWith('--to=')) flags.to = a.split('=').slice(1).join('=');
     else if (a === '--to') flags.to = argv[++i];
     else if (a.startsWith('--why=')) flags.why = a.split('=').slice(1).join('=');
-    else if (a === '--why') flags.why = argv[++i];
+    else if (a === '--why') {
+      // A next token that looks like another flag (or a trailing --why with
+      // nothing after it) is a missing value, not an id — must not be
+      // silently swallowed as one (which would also skip that flag's own
+      // effect, since consuming it here advances past it). Left unset so the
+      // caller's own bare-`--why` usage check (cmdLearnings) catches this
+      // exactly like the already-handled trailing case.
+      const next = argv[i + 1];
+      if (next !== undefined && !next.startsWith('--')) flags.why = argv[++i];
+    }
     else if (a === '--yes') flags.yes = true;
   }
 

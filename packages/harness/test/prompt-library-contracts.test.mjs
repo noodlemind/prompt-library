@@ -762,7 +762,7 @@ test('review fixes preserve thin wrappers, complete skill metadata, and CI pinni
   assert.match(packageReadme, /\$PLAN[^\n]*single plan resolved from the PR/i);
   assert.match(packageReadme, /\$BASE_SHA[^\n]*PR base SHA/i);
 
-  assert.match(read('.github/skills/references/harness-tool-contract.md'), /verify --plan <path> \[--base ref\] \[--enforcement mode\]/);
+  assert.match(read('.github/skills/references/harness-tool-contract.md'), /harness help <command>/);
   assert.match(read(architecturePath), /bounded delegation/i);
 
   const agents = read('AGENTS.md');

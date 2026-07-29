@@ -187,9 +187,15 @@ test('an E_MODE rejection records no failure', () => {
 test('a mixed run records failures only for the failing op\'s episodes', () => {
   const c = ctx();
   const epA = writeEpisode(c.ws, 'perf', 'op-a');
+  // Real evidence for op-b too: this op is meant to fail with E_TARGET (its
+  // STRENGTHEN target doesn't exist), not with the fix-evidence gate — a
+  // fabricated episode here would reject with E_SCHEMA before the E_TARGET
+  // check is ever reached (verifyAdmittedEpisodeKinds runs before the
+  // target-existence check in apply.mjs's per-op validation).
+  const epB = writeEpisode(c.ws, 'perf', 'op-b');
   const ops = [
     ADD({ slug: 'op-a-learning', episodes: [{ ...epA, kind: 'fix', plan: 'docs/plans/p1.md' }] }),
-    { op: 'STRENGTHEN', target: 'sql/does-not-exist', episodes: [EP({ path: 'docs/solutions/perf/op-b.md', sha256: 'b'.repeat(64) })] },
+    { op: 'STRENGTHEN', target: 'sql/does-not-exist', episodes: [{ ...epB, kind: 'fix', plan: 'docs/plans/p1.md' }] },
   ];
   const opsPath = writeOps(c.ws, ops);
   const res = run(c, ['consolidate', '--apply', '--ops', opsPath]);

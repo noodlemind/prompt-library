@@ -27,6 +27,20 @@ function writeOps(dir, ops) {
   return p;
 }
 
+// verifyAdmittedEpisodeKinds (apply.mjs) now requires every fix-kind (or
+// kind-omitted) episode an ADD/STRENGTHEN/SUPERSEDE/MERGE op offers to
+// disk-verify: the path must resolve inside the workspace, the file must
+// exist, and its CURRENT content must hash to the asserted sha256. This
+// helper writes a real file and returns its real sha256, so fixtures never
+// assert fabricated evidence for evidence expected to be admitted.
+function writeRealEpisode(ws, rel, content) {
+  const full = path.join(ws, rel);
+  fs.mkdirSync(path.dirname(full), { recursive: true });
+  const text = content ?? `episode body for ${rel}.\n`;
+  fs.writeFileSync(full, text, 'utf8');
+  return { path: rel, sha256: crypto.createHash('sha256').update(text).digest('hex') };
+}
+
 const EP = (over = {}) => ({
   path: 'docs/solutions/perf/x.md',
   sha256: 'a'.repeat(64),
@@ -36,13 +50,14 @@ const EP = (over = {}) => ({
 });
 
 function seedLearning(c) {
+  const ep = writeRealEpisode(c.ws, 'docs/solutions/perf/x.md');
   const op = {
     op: 'ADD',
     domain: 'sql',
     slug: 'not-null-hot-tables',
     trigger: 'adding NOT NULL columns to hot tables',
     body: 'Use two-step default+backfill; a direct ALTER takes an exclusive lock.',
-    episodes: [EP()],
+    episodes: [{ ...ep, kind: 'fix', plan: 'docs/plans/p1.md' }],
   };
   const res = applyOps({ workspace: c.ws, opsPath: writeOps(c.ws, [op]), home: c.harnessHome });
   assert.equal(res.exitCode, 0, JSON.stringify(res.rejected));
@@ -102,6 +117,7 @@ test('knowledge on restores full mode', () => {
   const status = JSON.parse(run(c, ['knowledge', '--status']).stdout);
   assert.equal(status.mode, 'on');
 
+  const ep = writeRealEpisode(c.ws, 'docs/solutions/perf/z2.md');
   const opsPath = writeOps(c.ws, [
     {
       op: 'ADD',
@@ -109,7 +125,7 @@ test('knowledge on restores full mode', () => {
       slug: 'restored',
       trigger: 'a trigger restored',
       body: 'a body restored after mode on',
-      episodes: [EP({ path: 'docs/solutions/perf/z2.md', sha256: 'c'.repeat(64) })],
+      episodes: [{ ...ep, kind: 'fix', plan: 'docs/plans/p1.md' }],
     },
   ]);
   assert.equal(run(c, ['consolidate', '--apply', '--ops', opsPath]).status, 0);
@@ -122,9 +138,8 @@ test('knowledge purge <episode> cascades: sole-evidence learning removed, shared
   const c = ctx();
   const targetPath = 'docs/solutions/perf/target.md';
   const otherPath = 'docs/solutions/perf/other.md';
-  fs.mkdirSync(path.join(c.ws, 'docs', 'solutions', 'perf'), { recursive: true });
-  fs.writeFileSync(path.join(c.ws, targetPath), 'target episode body\n');
-  fs.writeFileSync(path.join(c.ws, otherPath), 'other episode body\n');
+  const target = writeRealEpisode(c.ws, targetPath, 'target episode body\n');
+  const other = writeRealEpisode(c.ws, otherPath, 'other episode body\n');
 
   const sole = {
     op: 'ADD',
@@ -132,7 +147,7 @@ test('knowledge purge <episode> cascades: sole-evidence learning removed, shared
     slug: 'sole-evidence',
     trigger: 'sole evidence trigger',
     body: 'sole evidence body text',
-    episodes: [{ path: targetPath, sha256: 'a'.repeat(64), kind: 'fix', plan: 'docs/plans/p1.md' }],
+    episodes: [{ ...target, kind: 'fix', plan: 'docs/plans/p1.md' }],
   };
   const shared = {
     op: 'ADD',
@@ -141,8 +156,8 @@ test('knowledge purge <episode> cascades: sole-evidence learning removed, shared
     trigger: 'shared evidence trigger',
     body: 'shared evidence body text',
     episodes: [
-      { path: targetPath, sha256: 'a'.repeat(64), kind: 'fix', plan: 'docs/plans/p1.md' },
-      { path: otherPath, sha256: 'b'.repeat(64), kind: 'fix', plan: 'docs/plans/p2.md' },
+      { ...target, kind: 'fix', plan: 'docs/plans/p1.md' },
+      { ...other, kind: 'fix', plan: 'docs/plans/p2.md' },
     ],
   };
   assert.equal(applyOps({ workspace: c.ws, opsPath: writeOps(c.ws, [sole]), home: c.harnessHome }).exitCode, 0);
@@ -176,10 +191,9 @@ test('a trigger with a quote, a backslash, and an embedded newline survives TWO 
   const targetPath1 = 'docs/solutions/perf/target-nl-1.md';
   const targetPath2 = 'docs/solutions/perf/target-nl-2.md';
   const keepPath = 'docs/solutions/perf/keep-nl.md';
-  fs.mkdirSync(path.join(c.ws, 'docs', 'solutions', 'perf'), { recursive: true });
-  fs.writeFileSync(path.join(c.ws, targetPath1), 'target episode body one\n');
-  fs.writeFileSync(path.join(c.ws, targetPath2), 'target episode body two\n');
-  fs.writeFileSync(path.join(c.ws, keepPath), 'kept episode body\n');
+  const ep1 = writeRealEpisode(c.ws, targetPath1, 'target episode body one\n');
+  const ep2 = writeRealEpisode(c.ws, targetPath2, 'target episode body two\n');
+  const epKeep = writeRealEpisode(c.ws, keepPath, 'kept episode body\n');
 
   // Exactly the characters yamlQuote escapes at write time: a double quote,
   // a backslash, and a real embedded newline.
@@ -191,9 +205,9 @@ test('a trigger with a quote, a backslash, and an embedded newline survives TWO 
     trigger,
     body: 'escape round trip body text',
     episodes: [
-      { path: targetPath1, sha256: 'a'.repeat(64), kind: 'fix', plan: 'docs/plans/p1.md' },
-      { path: targetPath2, sha256: 'b'.repeat(64), kind: 'fix', plan: 'docs/plans/p2.md' },
-      { path: keepPath, sha256: 'c'.repeat(64), kind: 'fix', plan: 'docs/plans/p3.md' },
+      { ...ep1, kind: 'fix', plan: 'docs/plans/p1.md' },
+      { ...ep2, kind: 'fix', plan: 'docs/plans/p2.md' },
+      { ...epKeep, kind: 'fix', plan: 'docs/plans/p3.md' },
     ],
   };
   assert.equal(applyOps({ workspace: c.ws, opsPath: writeOps(c.ws, [op]), home: c.harnessHome }).exitCode, 0);
@@ -252,9 +266,8 @@ test('knowledge purge preserves last_confirmed on the remaining learning instead
   const c = ctx();
   const targetPath = 'docs/solutions/perf/target.md';
   const otherPath = 'docs/solutions/perf/other.md';
-  fs.mkdirSync(path.join(c.ws, 'docs', 'solutions', 'perf'), { recursive: true });
-  fs.writeFileSync(path.join(c.ws, targetPath), 'target episode body\n');
-  fs.writeFileSync(path.join(c.ws, otherPath), 'other episode body\n');
+  const target = writeRealEpisode(c.ws, targetPath, 'target episode body\n');
+  const other = writeRealEpisode(c.ws, otherPath, 'other episode body\n');
 
   const shared = {
     op: 'ADD',
@@ -263,8 +276,8 @@ test('knowledge purge preserves last_confirmed on the remaining learning instead
     trigger: 'shared evidence past confirm trigger',
     body: 'shared evidence past confirm body text',
     episodes: [
-      { path: targetPath, sha256: 'a'.repeat(64), kind: 'fix', plan: 'docs/plans/p1.md' },
-      { path: otherPath, sha256: 'b'.repeat(64), kind: 'fix', plan: 'docs/plans/p2.md' },
+      { ...target, kind: 'fix', plan: 'docs/plans/p1.md' },
+      { ...other, kind: 'fix', plan: 'docs/plans/p2.md' },
     ],
   };
   const applyRes = applyOps({ workspace: c.ws, opsPath: writeOps(c.ws, [shared]), home: c.harnessHome });
@@ -313,8 +326,7 @@ test('knowledge purge with a target that escapes the workspace exits 2, deletes 
 test('knowledge purge deletes a learning left with zero episodes after removing all links to a re-strengthened path', () => {
   const c = ctx();
   const targetPath = 'docs/solutions/perf/restrengthened.md';
-  fs.mkdirSync(path.join(c.ws, 'docs', 'solutions', 'perf'), { recursive: true });
-  fs.writeFileSync(path.join(c.ws, targetPath), 'episode body v1\n');
+  const v1 = writeRealEpisode(c.ws, targetPath, 'episode body v1\n');
 
   const add = {
     op: 'ADD',
@@ -322,18 +334,19 @@ test('knowledge purge deletes a learning left with zero episodes after removing 
     slug: 're-strengthened',
     trigger: 're-strengthened trigger',
     body: 're-strengthened body text',
-    episodes: [{ path: targetPath, sha256: 'a'.repeat(64), kind: 'fix', plan: 'docs/plans/p1.md' }],
+    episodes: [{ ...v1, kind: 'fix', plan: 'docs/plans/p1.md' }],
   };
   assert.equal(applyOps({ workspace: c.ws, opsPath: writeOps(c.ws, [add]), home: c.harnessHome }).exitCode, 0);
 
-  // The episode file is later edited; STRENGTHEN re-cites the same path with
-  // a new sha256. apply.mjs's dedup key is `path@sha256`, so this appends a
-  // second episode entry for the same path instead of merging it away — the
-  // designed re-strengthening path.
+  // The episode file is actually edited on disk; STRENGTHEN re-cites the
+  // same path with the NEW real sha256. apply.mjs's dedup key is
+  // `path@sha256`, so this appends a second episode entry for the same path
+  // instead of merging it away — the designed re-strengthening path.
+  const v2 = writeRealEpisode(c.ws, targetPath, 'episode body v2\n');
   const strengthen = {
     op: 'STRENGTHEN',
     target: 'sql/re-strengthened',
-    episodes: [{ path: targetPath, sha256: 'b'.repeat(64), kind: 'fix', plan: 'docs/plans/p2.md' }],
+    episodes: [{ ...v2, kind: 'fix', plan: 'docs/plans/p2.md' }],
   };
   assert.equal(applyOps({ workspace: c.ws, opsPath: writeOps(c.ws, [strengthen]), home: c.harnessHome }).exitCode, 0);
 
@@ -452,11 +465,10 @@ test('anchors populated at ADD survive a purge-unlink round trip byte-identical'
   const c = ctx();
   const targetPath = 'docs/solutions/perf/anchor-target.md';
   const otherPath = 'docs/solutions/perf/anchor-other.md';
-  fs.mkdirSync(path.join(c.ws, 'docs', 'solutions', 'perf'), { recursive: true });
-  fs.writeFileSync(path.join(c.ws, targetPath), 'target episode body\n');
+  const target = writeRealEpisode(c.ws, targetPath, 'target episode body\n');
   // otherPath's own body references targetPath — a real workspace file — so
   // extractAnchors (apply.mjs) picks up a real, non-empty anchor at ADD time.
-  fs.writeFileSync(path.join(c.ws, otherPath), `other episode body referencing ${targetPath}\n`);
+  const other = writeRealEpisode(c.ws, otherPath, `other episode body referencing ${targetPath}\n`);
 
   const shared = {
     op: 'ADD',
@@ -465,8 +477,8 @@ test('anchors populated at ADD survive a purge-unlink round trip byte-identical'
     trigger: 'anchor round trip trigger',
     body: 'anchor round trip body text',
     episodes: [
-      { path: targetPath, sha256: 'a'.repeat(64), kind: 'fix', plan: 'docs/plans/p1.md' },
-      { path: otherPath, sha256: 'b'.repeat(64), kind: 'fix', plan: 'docs/plans/p2.md' },
+      { ...target, kind: 'fix', plan: 'docs/plans/p1.md' },
+      { ...other, kind: 'fix', plan: 'docs/plans/p2.md' },
     ],
   };
   assert.equal(applyOps({ workspace: c.ws, opsPath: writeOps(c.ws, [shared]), home: c.harnessHome }).exitCode, 0);

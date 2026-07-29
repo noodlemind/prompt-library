@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -48,21 +49,34 @@ function writeOps(dir, ops) {
   return p;
 }
 
-const EP = (over = {}) => ({
-  path: 'docs/solutions/perf/x.md',
-  sha256: 'a'.repeat(64),
-  kind: 'fix',
-  plan: 'docs/plans/p1.md',
-  ...over,
-});
+// Writes a REAL file into the test workspace and returns an episode object
+// whose sha256 is the genuine hash of that exact content —
+// verifyAdmittedEpisodeKinds (lib/knowledge/apply.mjs) now disk-verifies
+// every fix/insight-kind episode an admitted op offers, so a fabricated
+// sha256 pointing at a file that was never written is rejected with
+// E_SCHEMA before any of this file's own scenarios (domain cap, MERGE,
+// composition) are ever reached.
+function realEpisode(ws, over = {}) {
+  const rel = over.path || 'docs/solutions/perf/x.md';
+  const full = path.join(ws, rel);
+  fs.mkdirSync(path.dirname(full), { recursive: true });
+  const text = `real evidence for ${rel}\n`;
+  fs.writeFileSync(full, text, 'utf8');
+  return {
+    path: rel,
+    sha256: crypto.createHash('sha256').update(text).digest('hex'),
+    kind: over.kind || 'fix',
+    plan: over.plan || 'docs/plans/p1.md',
+  };
+}
 
-const ADD = (over = {}) => ({
+const ADD = (ws, over = {}) => ({
   op: 'ADD',
   domain: 'sql',
   slug: 'not-null-large-tables',
   trigger: 'adding NOT NULL columns to large/hot tables',
   body: 'Use two-step default+backfill; a direct ALTER takes an exclusive lock.',
-  episodes: [EP()],
+  episodes: [realEpisode(ws)],
   ...over,
 });
 
@@ -122,7 +136,7 @@ test('an ADD into a domain at 25 active learnings is rejected with E_DOMAIN_CAP 
   const dir = seedDomainAtCap(c, 'perf', 25);
   assert.equal(listLearnings(dir).length, 25);
 
-  const op = ADD({ domain: 'perf', slug: 'twenty-sixth', episodes: [EP()] });
+  const op = ADD(c.ws, { domain: 'perf', slug: 'twenty-sixth', episodes: [realEpisode(c.ws)] });
   const res = run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [op])]);
   assert.equal(res.status, 1, res.stderr || res.stdout);
   const out = JSON.parse(res.stdout);
@@ -146,7 +160,7 @@ test('a MERGE writes merged_from, tombstones both targets, and nets the domain a
     slug: 'merged-claim',
     trigger: 'a merged trigger restating seed-0 and seed-1',
     body: 'Re-derived merged claim body from both targets episodes.',
-    episodes: [EP({ path: 'docs/solutions/perf/merge-evidence.md', sha256: 'b'.repeat(64) })],
+    episodes: [realEpisode(c.ws, { path: 'docs/solutions/perf/merge-evidence.md' })],
   };
   const res = run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [mergeOp])]);
   assert.equal(res.status, 0, res.stderr || res.stdout);
@@ -186,7 +200,7 @@ test('a MERGE with a source: human target lands disputed for that target, no new
     slug: 'attempted-merge',
     trigger: 'attempted merge trigger',
     body: 'attempted merge body text.',
-    episodes: [EP({ path: 'docs/solutions/perf/attempt.md', sha256: 'c'.repeat(64) })],
+    episodes: [realEpisode(c.ws, { path: 'docs/solutions/perf/attempt.md' })],
   };
   const res = run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [mergeOp])]);
   assert.equal(res.status, 0, res.stderr || res.stdout);
@@ -217,7 +231,7 @@ test('a MERGE whose new id already exists is rejected with E_EXISTS, targets unt
     slug: 'already-exists',
     trigger: 'a merge trying to land on a taken id',
     body: 'body text for the merge that collides.',
-    episodes: [EP()],
+    episodes: [realEpisode(c.ws)],
   };
   const res = run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [mergeOp])]);
   assert.equal(res.status, 1);
@@ -258,7 +272,7 @@ test('a MERGE targeting a promoted learning is rejected with the promoted E_TARG
     slug: 'attempted-merge-promoted',
     trigger: 'a merge trying to consume a promoted target',
     body: 'attempted merge body text.',
-    episodes: [EP({ path: 'docs/solutions/perf/attempt-promoted.md', sha256: 'd'.repeat(64) })],
+    episodes: [realEpisode(c.ws, { path: 'docs/solutions/perf/attempt-promoted.md' })],
   };
   const res = run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [mergeOp])]);
   assert.equal(res.status, 1, res.stderr || res.stdout);
@@ -295,7 +309,7 @@ test('a MERGE naming an already-disputed target (prior run) is rejected E_TARGET
     slug: 'attempted-merge-inactive',
     trigger: 'a merge trying to consume an already-disputed target',
     body: 'attempted merge body text.',
-    episodes: [EP({ path: 'docs/solutions/perf/attempt-inactive.md', sha256: 'e'.repeat(64) })],
+    episodes: [realEpisode(c.ws, { path: 'docs/solutions/perf/attempt-inactive.md' })],
   };
   const res = run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [mergeOp])]);
   assert.equal(res.status, 1, res.stderr || res.stdout);
@@ -324,9 +338,9 @@ test('a 4-target MERGE (5 file touches) alone passes the delta contract but comb
     slug: 'big-merge',
     trigger: 'a merge consolidating four restatements',
     body: 'big merge body re-deriving the shared claim.',
-    episodes: [EP()],
+    episodes: [realEpisode(c.ws)],
   };
-  const addOp = ADD({ domain: 'sql', slug: 'extra-add' });
+  const addOp = ADD(c.ws, { domain: 'sql', slug: 'extra-add' });
 
   // Combined: MERGE (weight 5) + ADD (weight 1) = 6 > MAX_OPS_PER_RUN (5).
   const combinedRes = run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [mergeOp, addOp])]);
@@ -375,9 +389,9 @@ test('three same-domain ADDs in one run stack against the running cap and reject
   const c = ctx();
   const dir = seedDomainAtCap(c, 'perf', 23);
   const ops = [
-    ADD({ domain: 'perf', slug: 'stack-1', episodes: [EP({ path: 'docs/solutions/perf/stack-1.md', sha256: '1'.repeat(64) })] }),
-    ADD({ domain: 'perf', slug: 'stack-2', episodes: [EP({ path: 'docs/solutions/perf/stack-2.md', sha256: '2'.repeat(64) })] }),
-    ADD({ domain: 'perf', slug: 'stack-3', episodes: [EP({ path: 'docs/solutions/perf/stack-3.md', sha256: '3'.repeat(64) })] }),
+    ADD(c.ws, { domain: 'perf', slug: 'stack-1', episodes: [realEpisode(c.ws, { path: 'docs/solutions/perf/stack-1.md' })] }),
+    ADD(c.ws, { domain: 'perf', slug: 'stack-2', episodes: [realEpisode(c.ws, { path: 'docs/solutions/perf/stack-2.md' })] }),
+    ADD(c.ws, { domain: 'perf', slug: 'stack-3', episodes: [realEpisode(c.ws, { path: 'docs/solutions/perf/stack-3.md' })] }),
   ];
   const res = run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, ops)]);
   assert.equal(res.status, 1, res.stderr || res.stdout);
@@ -394,8 +408,8 @@ test('two same-domain ADDs in one run from 23 active land exactly at the cap and
   const c = ctx();
   const dir = seedDomainAtCap(c, 'perf', 23);
   const ops = [
-    ADD({ domain: 'perf', slug: 'fit-1', episodes: [EP({ path: 'docs/solutions/perf/fit-1.md', sha256: '4'.repeat(64) })] }),
-    ADD({ domain: 'perf', slug: 'fit-2', episodes: [EP({ path: 'docs/solutions/perf/fit-2.md', sha256: '5'.repeat(64) })] }),
+    ADD(c.ws, { domain: 'perf', slug: 'fit-1', episodes: [realEpisode(c.ws, { path: 'docs/solutions/perf/fit-1.md' })] }),
+    ADD(c.ws, { domain: 'perf', slug: 'fit-2', episodes: [realEpisode(c.ws, { path: 'docs/solutions/perf/fit-2.md' })] }),
   ];
   const res = run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, ops)]);
   assert.equal(res.status, 0, res.stderr || res.stdout);
@@ -424,10 +438,10 @@ test('a MERGE plus two ADDs against a 25-active domain rejects — the merge fre
     slug: 'order-merge',
     trigger: 'a merge for the order-dependence regression case',
     body: 'Re-derived merged claim body from both targets episodes.',
-    episodes: [EP({ path: 'docs/solutions/perf/order-merge-evidence.md', sha256: '6'.repeat(64) })],
+    episodes: [realEpisode(c.ws, { path: 'docs/solutions/perf/order-merge-evidence.md' })],
   };
-  const addA = ADD({ domain: 'perf', slug: 'order-add-a', episodes: [EP({ path: 'docs/solutions/perf/order-a.md', sha256: '7'.repeat(64) })] });
-  const addB = ADD({ domain: 'perf', slug: 'order-add-b', episodes: [EP({ path: 'docs/solutions/perf/order-b.md', sha256: '8'.repeat(64) })] });
+  const addA = ADD(c.ws, { domain: 'perf', slug: 'order-add-a', episodes: [realEpisode(c.ws, { path: 'docs/solutions/perf/order-a.md' })] });
+  const addB = ADD(c.ws, { domain: 'perf', slug: 'order-add-b', episodes: [realEpisode(c.ws, { path: 'docs/solutions/perf/order-b.md' })] });
 
   const res = run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [mergeOp, addA, addB])]);
   assert.equal(res.status, 1, res.stderr || res.stdout);
@@ -460,12 +474,12 @@ test('a MERGE plus exactly one ADD against a 25-active domain applies — the me
     slug: 'order-merge-fits',
     trigger: 'a merge for the positive order-dependence case',
     body: 'Re-derived merged claim body from both targets episodes.',
-    episodes: [EP({ path: 'docs/solutions/perf/order-merge-fits-evidence.md', sha256: '9'.repeat(64) })],
+    episodes: [realEpisode(c.ws, { path: 'docs/solutions/perf/order-merge-fits-evidence.md' })],
   };
-  const addOnly = ADD({
+  const addOnly = ADD(c.ws, {
     domain: 'perf',
     slug: 'order-add-only',
-    episodes: [EP({ path: 'docs/solutions/perf/order-add-only.md', sha256: '0'.repeat(64) })],
+    episodes: [realEpisode(c.ws, { path: 'docs/solutions/perf/order-add-only.md' })],
   });
 
   const res = run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [mergeOp, addOnly])]);
@@ -509,7 +523,7 @@ test('Gap 1: a MERGE whose targets live in other domains still respects its dest
     slug: 'merged',
     trigger: 'a cross-domain merge landing in an already at-cap domain',
     body: 'Re-derived merged claim body from both cross-domain targets.',
-    episodes: [EP({ path: 'docs/solutions/perf/gap1-evidence.md', sha256: '1'.repeat(64) })],
+    episodes: [realEpisode(c.ws, { path: 'docs/solutions/perf/gap1-evidence.md' })],
   };
   const res = run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [mergeOp])]);
   assert.equal(res.status, 1, res.stderr || res.stdout);
@@ -539,7 +553,7 @@ test('Gap 2: a later SUPERSEDE targeting a learning an earlier MERGE already con
     slug: 'merged-ab',
     trigger: 'a merge for the same-run consumption regression',
     body: 'Re-derived merged claim body from both targets episodes.',
-    episodes: [EP({ path: 'docs/solutions/perf/gap2-merge-evidence.md', sha256: '2'.repeat(64) })],
+    episodes: [realEpisode(c.ws, { path: 'docs/solutions/perf/gap2-merge-evidence.md' })],
   };
   const supersedeOp = {
     op: 'SUPERSEDE',
@@ -548,12 +562,12 @@ test('Gap 2: a later SUPERSEDE targeting a learning an earlier MERGE already con
     slug: 'a-renamed',
     trigger: 'a supersede trying to reuse an already-merged target',
     body: 'a replacement body for the already-consumed target.',
-    episodes: [EP({ path: 'docs/solutions/perf/gap2-supersede-evidence.md', sha256: '3'.repeat(64) })],
+    episodes: [realEpisode(c.ws, { path: 'docs/solutions/perf/gap2-supersede-evidence.md' })],
   };
-  const addOp = ADD({
+  const addOp = ADD(c.ws, {
     domain: 'perf',
     slug: 'gap2-new',
-    episodes: [EP({ path: 'docs/solutions/perf/gap2-add-evidence.md', sha256: '4'.repeat(64) })],
+    episodes: [realEpisode(c.ws, { path: 'docs/solutions/perf/gap2-add-evidence.md' })],
   });
 
   const res = run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [mergeOp, supersedeOp, addOp])]);
@@ -588,17 +602,17 @@ test('two ADDs writing the same id in one run are rejected with E_EXISTS (silent
   const { dir } = ensureStore(c.ws, { home: c.harnessHome });
   for (let attempt = 0; attempt < 3; attempt++) {
     const ops = [
-      ADD({
+      ADD(c.ws, {
         domain: 'sql',
         slug: 'dup-id',
         body: 'first body for the duplicate id.',
-        episodes: [EP({ path: `docs/solutions/perf/dup-1-${attempt}.md`, sha256: `5${attempt}`.padEnd(64, '0') })],
+        episodes: [realEpisode(c.ws, { path: `docs/solutions/perf/dup-1-${attempt}.md` })],
       }),
-      ADD({
+      ADD(c.ws, {
         domain: 'sql',
         slug: 'dup-id',
         body: 'second, different body for the same duplicate id.',
-        episodes: [EP({ path: `docs/solutions/perf/dup-2-${attempt}.md`, sha256: `6${attempt}`.padEnd(64, '0') })],
+        episodes: [realEpisode(c.ws, { path: `docs/solutions/perf/dup-2-${attempt}.md` })],
       }),
     ];
     const res = run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, ops)]);
@@ -636,7 +650,7 @@ test('a MERGE reusing a target an earlier SUPERSEDE already consumed this run is
     slug: 'renamed-t1',
     trigger: 'a rename supersede consuming t1 first',
     body: 'body text for the renaming supersede.',
-    episodes: [EP({ path: 'docs/solutions/perf/supersede-t1.md', sha256: '7'.repeat(64) })],
+    episodes: [realEpisode(c.ws, { path: 'docs/solutions/perf/supersede-t1.md' })],
   };
   const mergeOp = {
     op: 'MERGE',
@@ -645,7 +659,7 @@ test('a MERGE reusing a target an earlier SUPERSEDE already consumed this run is
     slug: 'merged-attempt',
     trigger: 'a merge trying to reuse the already-consumed t1',
     body: 'body text for the merge that collides.',
-    episodes: [EP({ path: 'docs/solutions/perf/merge-attempt.md', sha256: '8'.repeat(64) })],
+    episodes: [realEpisode(c.ws, { path: 'docs/solutions/perf/merge-attempt.md' })],
   };
   const res = run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [supersedeOp, mergeOp])]);
   assert.equal(res.status, 1, res.stderr || res.stdout);
@@ -675,12 +689,12 @@ test('a legitimate MERGE plus an unrelated ADD in a different domain both apply,
     slug: 'alpha-merged',
     trigger: 'a legitimate same-domain merge',
     body: 'Re-derived merged claim body from both targets episodes.',
-    episodes: [EP({ path: 'docs/solutions/perf/legit-merge-evidence.md', sha256: '7'.repeat(64) })],
+    episodes: [realEpisode(c.ws, { path: 'docs/solutions/perf/legit-merge-evidence.md' })],
   };
-  const addOp = ADD({
+  const addOp = ADD(c.ws, {
     domain: 'delta',
     slug: 'delta-new',
-    episodes: [EP({ path: 'docs/solutions/perf/legit-add-evidence.md', sha256: '8'.repeat(64) })],
+    episodes: [realEpisode(c.ws, { path: 'docs/solutions/perf/legit-add-evidence.md' })],
   });
 
   const res = run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [mergeOp, addOp])]);

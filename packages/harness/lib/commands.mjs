@@ -853,6 +853,7 @@ export async function cmdConsolidate(argv) {
       const noteParts = [];
       if (result.committed) noteParts.push('committed to knowledge store');
       if (result.governed?.length) noteParts.push(`${result.governed.length} re-governed`);
+      if (result.staleLockRemoved) noteParts.push(result.staleLockRemoved);
       console.log(
         ui.line({
           state: 'ok',

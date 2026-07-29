@@ -51,38 +51,31 @@ Installed to `~/.copilot/bin/harness` on every `harness install`. Add to PATH wi
 
 ## Command catalog
 
-### Install / setup (human or CI)
+This table tracks only what differs in runtime character across commands — which turn a command runs on, whether it writes a lifecycle event, whether it mutates anything. Sigs and flags: `harness help <command>` (the CLI CATALOG is the single source of truth).
 
-| Command | Purpose |
-|---------|---------|
-| `install` / `upgrade` | Sync skills, agents, hooks, and knowledge to `~/.copilot/`; `--configure-vscode` enables user-hook discovery |
-| `doctor [--host vscode]` | Health checks; VS Code mode executes installed-hook discovery and lifecycle probes |
-| `init-repo` | Scaffold `docs/plans/`, `.harness/` |
-| `status` / `uninstall` | Lock file introspection / safe remove |
-
-### Agent runtime (every `@engineer` trackable turn)
-
-| Command | Cursor analogue | Budget tier | Side effects |
-|---------|-----------------|-------------|--------------|
-| `orient --query "<task>" [--explain]` | Codebase search + task context | **F1** — writes ≤2 KB `.harness/context-pack.md` plus a query-ranked `.harness/repo-map.md` (code orientation, regenerated every turn from live git — never stale); surfaces a `harness index` staleness hint when the knowledge index has drifted; `--explain` decomposes the learning ranking score for every candidate (deterministic, no store access beyond `learnings`) | session.json, events.jsonl, repo-map.md |
-| `recall "<query>"` | Standalone search / debug | F1 paths only | events |
-| `gate --phase implement --plan <path>` | Pre-edit plan/state guard | F3 on fail | session + events |
-| `verify --plan <path> [--base ref] [--enforcement mode] [--learnings <id1,id2>]` | Named checks, schema/state, tasks, scope, reviews, gaps, findings, evidence | no prompt context | evidence + session + events |
-| `validate-plan [--plan path]` | Spec/schema lint | read-only | none |
-| `plan-new --type <t> --slug <s> --intent "..."` | Scaffold a valid, gate-ready plan (dated path, frontmatter, all canonical sections); `--gap <id>:<path>` sets blocked-capability + the gap entry; a primitive Impacted File auto-adds `## Primitive Governance` + create-primitive | none (plan-only) | writes the plan file |
-| `index` | Rebuild knowledge index; stamps current HEAD into index meta | none in chat | manifest.yaml, `.harness-index/`, events |
-| `index --status` | Deterministic freshness: commits + files changed since the last-indexed HEAD (read-only, zero model) | none | none |
-| `get [--docid id \| --path rel]` | Fetch bounded doc excerpt | F2 on demand | none |
-| `compound --plan <path>` | Consume passed evidence, index, classify learning, record telemetry | after verify | index + session + telemetry + events |
-| `compound --insight --title "..." --body "..."` | Evidence-free capture of investigation learnings (`kind: insight`, secret-scanned, ranked below verified fixes, never promotable) | no plan/evidence needed | solution doc + index + events |
-| `consolidate [--status \| --candidates \| --apply --ops <path> \| --rebuild --yes]` | Knowledge loop: deterministic debt gauge (quarantine + at-cap domains surfaced), work packet for the consolidation skill (including any id a human already governed, so the skill never proposes an op a governed write would just overwrite), the validated sole writer of learnings via ADD/STRENGTHEN/SUPERSEDE/MERGE/NOOP ops (≤5 files/run — MERGE counts `1 + targets.length`, 1,200-byte cap, secret scan, imperative lint, 25-active-per-domain cap enforced as `E_DOMAIN_CAP`, three content-failure strikes on the same episode quarantine it; a regenerated id honors any standing human retire/dispute/promote decision, mechanically reapplied inside the same write transaction), and `--rebuild --yes` full T2 regeneration from T1 (the model-upgrade path — git history in the store retains prior learnings; the governance ledger of human decisions survives the wipe untouched); `knowledge.mode: suggest` requires `--apply --yes` after a human reviews the ops JSON | `--status`/`--candidates` read-only | learnings store (local, never pushed) + events |
-| `remember "<claim>" --trigger "<t>" [--domain <d>]` | Manual "remember this" — human teaching lane; reusing an existing trigger/domain is a verified in-place re-teach (on-disk `kind: human-teaching` evidence, not just the op's own claim) that overrides a standing retire/dispute governance record and the target-activeness gate — a promoted target is the one exception, never overridden | on human correction in chat | human-teaching episode + an active `source: human` learning, one sole-writer transaction + session + events |
-| `learning <retire\|dispute\|confirm\|promote> <id> --reason "<r>" \| --to <path>` | Manual memory veto (retire/dispute/confirm — the engineer skill MUST invoke this when a human corrects a learning in conversation), or recording that a learning's behavior now lives in a T3 primitive (`promote`, after that primitive's own PR merges); every decision also appends to a governance ledger that survives `consolidate --rebuild --yes` — only `knowledge purge` erases it | on human correction, or post-merge | frontmatter status/`promoted_to` mutation + governance ledger append + store commit + events |
-| `learnings [domain] [--why <id>]` | Memory browser — provenance chain, failure annotations, and quarantined-episode count | read-only | none |
-| `knowledge <on\|suggest\|off\|freeze\|capture-only> \| --status \| purge <file\|--all> \| commit <none\|repo>` | Kill switch (`suggest` = human-approval gate on `consolidate --apply`), cascade-delete (episodes, ledger, and any governance record for the id — nothing left to reapply on a future rebuild), and opt-in mirroring of active learnings into `docs/knowledge/learnings/` in the product repo; human deletion always wins over "never deleted" | on demand | config.json write (`{ mode, commit }`), cascade delete, or product-repo mirror + store commit + events (including `--status`) |
-| `eval-knowledge [--json]` | Deterministic retrieval proxy per ranking arm on a temporally held-out split — not the model-graded net-benefit number, which is deferred | read-only, CI/audit not per-turn | none |
-| `events [--session id] [--failures] [--summary]` | Schema-v2 audit / stuck debugging | read-only | none |
-| `report [--sync] [--global] [--check] [--json]` | Token-efficiency report over telemetry: ranked sinks + improvement flags | read-only, except `--sync` writes `~/.harness/telemetry/` | none in workspace |
+| Command | Tier | Events | Store |
+|---------|------|--------|-------|
+| `install` / `upgrade` | human/CI | none | mutates `~/.copilot/` |
+| `doctor` | human/CI | none | read-only (`--host vscode` runs an isolated hook-lifecycle fixture) |
+| `init-repo` | human/CI | none | mutates workspace (`.harness/`, `docs/plans/`, `docs/codebase-map.md`) |
+| `status` / `uninstall` | human/CI | none | read-only / mutates `~/.copilot/` (uninstall removes hydrated files) |
+| `orient` | agent-runtime | writes | mutates `.harness/` (context-pack, repo-map, session) |
+| `recall` | agent-runtime | none | read-only |
+| `gate` | agent-runtime | writes | mutates session state |
+| `verify` | agent-runtime | writes | mutates (evidence file + session) |
+| `validate-plan` | agent-runtime | none | read-only |
+| `plan-new` | agent-runtime | none | mutates workspace (writes the plan; `--stdout` prints instead) |
+| `index` | agent-runtime | none | mutates the knowledge index (`--status` read-only) |
+| `get` | agent-runtime | none | read-only |
+| `compound` | agent-runtime | writes | mutates (index + solution doc + telemetry) |
+| `consolidate` | agent-runtime | writes | read-only (`--status`/`--candidates`); mutates the learnings store (`--apply`/`--rebuild --yes`) |
+| `remember` | agent-runtime | writes | mutates the learnings store |
+| `learning` | agent-runtime | writes | mutates the learnings store + governance ledger |
+| `learnings` | agent-runtime | none | read-only |
+| `knowledge` | agent-runtime | writes | mutates `config.json`, cascade-deletes, or mirrors to the product repo |
+| `eval-knowledge` | agent-runtime | none | read-only |
+| `events` | agent-runtime | none | read-only |
+| `report` | agent-runtime | none | read-only (`--sync` writes `~/.harness/telemetry/`) |
 
 **Query construction (deterministic-retrieval discipline):** build `--query` from the user's salient nouns and identifiers **verbatim** (e.g. `SYSTEM-OVERRIDE`, `payment`, `token`) — do not paraphrase intent into synonyms. The retrieval tokenizer normalizes identifier formats and morphology, but it cannot recover a term the query never contained. Passing the literal request terms is what keeps recall stable across phrasings.
 

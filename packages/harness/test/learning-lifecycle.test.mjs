@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -23,13 +24,19 @@ function writeOps(dir, ops) {
   return p;
 }
 
-const EP = (over = {}) => ({
-  path: 'docs/solutions/perf/x.md',
-  sha256: 'a'.repeat(64),
-  kind: 'fix',
-  plan: 'docs/plans/p1.md',
-  ...over,
-});
+// verifyAdmittedEpisodeKinds (apply.mjs) requires every fix-kind (or
+// kind-omitted) episode an ADD/STRENGTHEN/SUPERSEDE/MERGE op offers to
+// disk-verify: the path must resolve inside the workspace, the file must
+// exist, and its CURRENT content must hash to the asserted sha256. This
+// helper writes a real file and returns its real sha256, so seeded fixtures
+// never assert fabricated evidence.
+function writeRealEpisode(ws, rel, content) {
+  const full = path.join(ws, rel);
+  fs.mkdirSync(path.dirname(full), { recursive: true });
+  const text = content ?? `episode body for ${rel}.\n`;
+  fs.writeFileSync(full, text, 'utf8');
+  return { path: rel, sha256: crypto.createHash('sha256').update(text).digest('hex') };
+}
 
 const ADD = (over = {}) => ({
   op: 'ADD',
@@ -37,13 +44,13 @@ const ADD = (over = {}) => ({
   slug: 'not-null-large-tables',
   trigger: 'adding NOT NULL columns to large/hot tables',
   body: 'Use two-step default+backfill; a direct ALTER takes an exclusive lock.',
-  episodes: [EP()],
   ...over,
 });
 
 function seed(c) {
   // Auto learning via a Task-1-style consolidate --apply ops file.
-  const opsPath = writeOps(c.ws, [ADD()]);
+  const ep = writeRealEpisode(c.ws, 'docs/solutions/perf/x.md');
+  const opsPath = writeOps(c.ws, [ADD({ episodes: [{ ...ep, kind: 'fix', plan: 'docs/plans/p1.md' }] })]);
   const applyRes = run(c, ['consolidate', '--apply', '--ops', opsPath]);
   assert.equal(applyRes.status, 0, applyRes.stderr || applyRes.stdout);
   const autoId = JSON.parse(applyRes.stdout).applied[0].id;

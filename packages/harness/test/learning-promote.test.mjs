@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -27,39 +28,68 @@ function writeOps(dir, ops) {
   return p;
 }
 
+// A REAL fix-kind episode file — verifyAdmittedEpisodeKinds (apply.mjs) now
+// disk-verifies every fix/insight-kind episode an ADD/STRENGTHEN/SUPERSEDE/
+// MERGE op offers (existence + sha256 match + no elevated-kind frontmatter)
+// before admitting it, so a fabricated sha256 pointing at a file that was
+// never written is rejected with E_SCHEMA. No frontmatter is required for
+// `fix` — plain content is legitimate evidence.
+function writeFixEpisode(ws, rel) {
+  const full = path.join(ws, rel);
+  fs.mkdirSync(path.dirname(full), { recursive: true });
+  const text = `episode body for ${rel}.\n`;
+  fs.writeFileSync(full, text, 'utf8');
+  return { path: rel, sha256: crypto.createHash('sha256').update(text).digest('hex') };
+}
+
+// A REAL insight-kind episode file — verifyEpisodeKind requires the file's
+// OWN frontmatter to literally say `kind: insight` for an insight assertion
+// to verify.
+function writeInsightEpisode(ws, rel) {
+  const full = path.join(ws, rel);
+  fs.mkdirSync(path.dirname(full), { recursive: true });
+  const text = `---\ntitle: "${rel}"\nkind: insight\ndate: 2026-07-01\n---\n\nepisode body for ${rel}.\n`;
+  fs.writeFileSync(full, text, 'utf8');
+  return { path: rel, sha256: crypto.createHash('sha256').update(text).digest('hex') };
+}
+
 // Three fix-kind episode links across two distinct plans — promotion-eligible
 // (verified >= 3 && plans >= 2), the same fixture shape learnings-listing.test.mjs uses.
-const ADD_PROMOTABLE = {
-  op: 'ADD',
-  domain: 'sql',
-  slug: 'not-null-large-tables',
-  trigger: 'adding NOT NULL columns to large hot tables',
-  body: 'Use two-step default+backfill; a direct ALTER takes an exclusive lock.',
-  episodes: [
-    { path: 'docs/solutions/perf/x.md', sha256: 'a'.repeat(64), kind: 'fix', plan: 'docs/plans/p1.md' },
-    { path: 'docs/solutions/perf/y.md', sha256: 'b'.repeat(64), kind: 'fix', plan: 'docs/plans/p2.md' },
-    { path: 'docs/solutions/perf/z.md', sha256: 'c'.repeat(64), kind: 'fix', plan: 'docs/plans/p2.md' },
-  ],
-};
+function buildAddPromotable(ws) {
+  return {
+    op: 'ADD',
+    domain: 'sql',
+    slug: 'not-null-large-tables',
+    trigger: 'adding NOT NULL columns to large hot tables',
+    body: 'Use two-step default+backfill; a direct ALTER takes an exclusive lock.',
+    episodes: [
+      { ...writeFixEpisode(ws, 'docs/solutions/perf/x.md'), kind: 'fix', plan: 'docs/plans/p1.md' },
+      { ...writeFixEpisode(ws, 'docs/solutions/perf/y.md'), kind: 'fix', plan: 'docs/plans/p2.md' },
+      { ...writeFixEpisode(ws, 'docs/solutions/perf/z.md'), kind: 'fix', plan: 'docs/plans/p2.md' },
+    ],
+  };
+}
 
 // Zero fix/human-teaching episode links — must never promote (design §10).
-const ADD_INSIGHT_ONLY = {
-  op: 'ADD',
-  domain: 'sql',
-  slug: 'insight-only-claim',
-  trigger: 'observing a slow query plan',
-  body: 'Sequential scans on a large table are often a missing index, not a query bug.',
-  episodes: [{ path: 'docs/solutions/perf/insight.md', sha256: 'd'.repeat(64), kind: 'insight', plan: '' }],
-};
+function buildAddInsightOnly(ws) {
+  return {
+    op: 'ADD',
+    domain: 'sql',
+    slug: 'insight-only-claim',
+    trigger: 'observing a slow query plan',
+    body: 'Sequential scans on a large table are often a missing index, not a query bug.',
+    episodes: [{ ...writeInsightEpisode(ws, 'docs/solutions/perf/insight.md'), kind: 'insight', plan: '' }],
+  };
+}
 
 function seedPromotable(c) {
-  const applyRes = run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [ADD_PROMOTABLE])]);
+  const applyRes = run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [buildAddPromotable(c.ws)])]);
   assert.equal(applyRes.status, 0, applyRes.stderr || applyRes.stdout);
   return JSON.parse(applyRes.stdout).applied[0].id;
 }
 
 function seedInsightOnly(c) {
-  const applyRes = run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [ADD_INSIGHT_ONLY])]);
+  const applyRes = run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [buildAddInsightOnly(c.ws)])]);
   assert.equal(applyRes.status, 0, applyRes.stderr || applyRes.stdout);
   return JSON.parse(applyRes.stdout).applied[0].id;
 }
@@ -120,7 +150,7 @@ test('cap-after-promote: promoting one of 25 active learnings frees room for a n
     slug: 'cap-fill-new',
     trigger: 'a new claim after promoting one out of the domain',
     body: 'A fresh claim that should fit now that promotion freed a slot.',
-    episodes: [{ path: 'docs/solutions/perf/cap-fill-new.md', sha256: 'b'.repeat(64), kind: 'fix', plan: 'docs/plans/p1.md' }],
+    episodes: [{ ...writeFixEpisode(c.ws, 'docs/solutions/perf/cap-fill-new.md'), kind: 'fix', plan: 'docs/plans/p1.md' }],
   };
   const addRes = run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [op])]);
   assert.equal(addRes.status, 0, addRes.stderr || addRes.stdout);
@@ -358,7 +388,7 @@ test('a model-lane same-id SUPERSEDE against a promoted learning is rejected, pr
     slug: 'not-null-large-tables',
     trigger: 'adding NOT NULL columns to large hot tables, revised',
     body: 'A model-proposed rewrite of the same claim.',
-    episodes: [{ path: 'docs/solutions/perf/w.md', sha256: 'e'.repeat(64), kind: 'fix', plan: 'docs/plans/p3.md' }],
+    episodes: [{ ...writeFixEpisode(c.ws, 'docs/solutions/perf/w.md'), kind: 'fix', plan: 'docs/plans/p3.md' }],
   };
   const res = run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [supersedeOp])]);
   assert.equal(res.status, 1, res.stderr || res.stdout);
@@ -426,7 +456,7 @@ test('a STRENGTHEN targeting a promoted learning is rejected and records no stri
   const strengthenOp = {
     op: 'STRENGTHEN',
     target: id,
-    episodes: [{ path: 'docs/solutions/perf/v.md', sha256: 'f'.repeat(64), kind: 'fix', plan: 'docs/plans/p4.md' }],
+    episodes: [{ ...writeFixEpisode(c.ws, 'docs/solutions/perf/v.md'), kind: 'fix', plan: 'docs/plans/p4.md' }],
   };
   const res = run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [strengthenOp])]);
   assert.equal(res.status, 1, res.stderr || res.stdout);

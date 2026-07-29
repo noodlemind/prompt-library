@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -11,6 +12,18 @@ import { ensureStore } from '../lib/knowledge/store.mjs';
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const binPath = path.join(packageRoot, 'bin', 'harness.mjs');
 const tempDir = (p) => fs.mkdtempSync(path.join(os.tmpdir(), p));
+
+/** Writes a real episode file inside `ws` at `rel` and returns the op-JSON
+ * episode object (path + real sha256) so `verifyAdmittedEpisodeKinds` admits
+ * it — a fabricated hardcoded sha256 is rejected with E_SCHEMA. For
+ * `kind: 'insight'` the body must carry real frontmatter `kind: insight`
+ * matching the assertion; `fix` needs no frontmatter at all. */
+function writeRealEpisode(ws, rel, body) {
+  const full = path.join(ws, rel);
+  fs.mkdirSync(path.dirname(full), { recursive: true });
+  fs.writeFileSync(full, body, 'utf8');
+  return { path: rel, sha256: crypto.createHash('sha256').update(body).digest('hex') };
+}
 
 function seededContext() {
   const ws = tempDir('ol-ws-');
@@ -28,7 +41,10 @@ function seededContext() {
           slug: 'not-null-large-tables',
           trigger: 'adding NOT NULL columns to large hot tables',
           body: 'Use two-step default+backfill; a direct ALTER takes an exclusive lock.',
-          episodes: [{ path: 'docs/solutions/perf/x.md', sha256: 'a'.repeat(64), kind: 'fix', plan: 'docs/plans/p1.md' }],
+          episodes: [{
+            ...writeRealEpisode(ws, 'docs/solutions/perf/x.md', 'Two-step default+backfill episode for large hot tables.\n'),
+            kind: 'fix', plan: 'docs/plans/p1.md',
+          }],
         },
         {
           op: 'ADD',
@@ -36,7 +52,14 @@ function seededContext() {
           slug: 'retry-jitter',
           trigger: 'retrying rate limited requests',
           body: 'Retry storms amplify rate limiting when jitter is missing from backoff.',
-          episodes: [{ path: 'docs/solutions/debugging/h.md', sha256: 'b'.repeat(64), kind: 'insight', plan: '' }],
+          episodes: [{
+            ...writeRealEpisode(
+              ws,
+              'docs/solutions/debugging/h.md',
+              '---\ntitle: "retry jitter insight"\nkind: insight\ndate: 2026-07-01\n---\n\nRetry storms amplify rate limiting when jitter is missing from backoff.\n'
+            ),
+            kind: 'insight', plan: '',
+          }],
         },
       ],
     })

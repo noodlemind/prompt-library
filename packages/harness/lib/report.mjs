@@ -161,7 +161,11 @@ export function trendRegression(events) {
  * citation (noise) is visible even when every distinct id was cited once. */
 export function knowledgeSlos(events) {
   const surfaced = new Set(); const cited = new Set();
-  let surfacedOccurrences = 0; let citedOccurrences = 0;
+  let surfacedOccurrences = 0;
+  // Raw per-occurrence citations, filtered against `surfaced` only once the
+  // full set is known (below) — a citation for an id `orient` never surfaced
+  // is noise, not utilization, so it must not inflate the weighted rate.
+  const citedIdOccurrences = [];
   let consolidations = 0; let humanActions = 0;
   for (const e of events) {
     if (e.type === 'orient' && Array.isArray(e.learnings)) {
@@ -170,12 +174,13 @@ export function knowledgeSlos(events) {
     }
     if (e.type === 'verify' && Array.isArray(e.learnings)) {
       e.learnings.forEach((id) => cited.add(id));
-      citedOccurrences += e.learnings.length;
+      citedIdOccurrences.push(...e.learnings);
     }
     if (e.type === 'consolidate' && e.decision === 'apply' && e.result === 'pass') consolidations += 1;
     if (e.type === 'remember' || e.type === 'learning') humanActions += 1;
   }
   const citedSurfaced = [...cited].filter((id) => surfaced.has(id)).length;
+  const citedOccurrences = citedIdOccurrences.filter((id) => surfaced.has(id)).length;
   return { surfaced: surfaced.size, cited: cited.size, citedSurfaced,
     utilization: surfaced.size ? Number((citedSurfaced / surfaced.size).toFixed(2)) : null,
     surfacedOccurrences, citedOccurrences,

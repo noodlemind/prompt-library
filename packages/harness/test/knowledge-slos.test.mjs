@@ -75,7 +75,10 @@ test('knowledgeSlos is null-safe with no surfaced learnings or consolidations', 
 test('knowledgeSlos separates cited-but-never-surfaced ids from the surfaced intersection', () => {
   // "z" is cited (verify --learnings reported it applied) but was never
   // surfaced by orient — the displayed fraction must use the intersection,
-  // not the raw cited count, or it will contradict the percent shown.
+  // not the raw cited count, or it will contradict the percent shown. The
+  // weighted occurrence count applies the same intersection: a citation for
+  // an id that was never surfaced is noise, not utilization, so it must not
+  // inflate utilizationWeighted past 1.0.
   const events = [
     { type: 'orient', learnings: ['a'] },
     { type: 'verify', learnings: ['a', 'z'] },
@@ -86,8 +89,8 @@ test('knowledgeSlos separates cited-but-never-surfaced ids from the surfaced int
   assert.equal(slos.citedSurfaced, 1);
   assert.equal(slos.utilization, 1);
   assert.equal(slos.surfacedOccurrences, 1);
-  assert.equal(slos.citedOccurrences, 2);
-  assert.equal(slos.utilizationWeighted, 2);
+  assert.equal(slos.citedOccurrences, 1);
+  assert.equal(slos.utilizationWeighted, 1);
 });
 
 test('knowledgeSlos weights citation by occurrence: one learning surfaced repeatedly without repeat citation scores low despite 100% unique utilization', () => {
@@ -158,7 +161,7 @@ test('renderReport shows the cited/surfaced intersection, not raw cited, when a 
   ];
   const report = buildReport({ workspace: os.tmpdir(), events });
   const text = renderReport(report, pipeUi);
-  assert.match(text, /\[ok\]\s+knowledge\s+utilization 100% unique · 200% weighted \(1\/1 surfaced\)/);
+  assert.match(text, /\[ok\]\s+knowledge\s+utilization 100% unique · 100% weighted \(1\/1 surfaced\)/);
 });
 
 test('renderReport warns on low weighted utilization even when unique utilization is 100%', () => {

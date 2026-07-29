@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -34,24 +35,26 @@ function writeFile(ws, rel, body) {
   fs.writeFileSync(full, body, 'utf8');
 }
 
+function sha256Of(text) {
+  return crypto.createHash('sha256').update(text).digest('hex');
+}
+
 const TRIGGER = 'orders endpoint timing out under load';
 
 function seedAnchoredLearning(c) {
   // The anchor target: a real source file the episode doc talks about.
   writeFile(c.ws, 'src/orders.mjs', 'export function listOrders() {}\n');
   // The episode doc (the evidence file cited by the op) mentions that path.
-  writeFile(
-    c.ws,
-    'docs/solutions/perf/orders-fix.md',
-    '---\ntitle: "orders endpoint timing out"\ndate: 2026-07-27\n---\n\n## Problem\n\nFixed by adding an index; see src/orders.mjs for the query.\n'
-  );
+  const episodeBody =
+    '---\ntitle: "orders endpoint timing out"\ndate: 2026-07-27\n---\n\n## Problem\n\nFixed by adding an index; see src/orders.mjs for the query.\n';
+  writeFile(c.ws, 'docs/solutions/perf/orders-fix.md', episodeBody);
   const op = {
     op: 'ADD',
     domain: 'perf',
     slug: 'orders-endpoint',
     trigger: TRIGGER,
     body: 'Add a covering index for the orders query; see src/orders.mjs.',
-    episodes: [{ path: 'docs/solutions/perf/orders-fix.md', sha256: 'a'.repeat(64), kind: 'fix', plan: 'docs/plans/p1.md' }],
+    episodes: [{ path: 'docs/solutions/perf/orders-fix.md', sha256: sha256Of(episodeBody), kind: 'fix', plan: 'docs/plans/p1.md' }],
   };
   const res = run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [op])]);
   assert.equal(res.status, 0, res.stderr || res.stdout);
@@ -117,14 +120,15 @@ test('(d) restoring the anchor target re-includes the learning at the next index
 test('(e) a learning with anchors: [] is never excluded, even after unrelated files disappear', () => {
   const c = ctx();
   const otherTrigger = 'plain claim without file references';
-  writeFile(c.ws, 'docs/solutions/perf/plain.md', '---\ntitle: "plain"\ndate: 2026-07-27\n---\n\n## Problem\n\nJust prose, no paths.\n');
+  const plainBody = '---\ntitle: "plain"\ndate: 2026-07-27\n---\n\n## Problem\n\nJust prose, no paths.\n';
+  writeFile(c.ws, 'docs/solutions/perf/plain.md', plainBody);
   const op = {
     op: 'ADD',
     domain: 'perf',
     slug: 'plain-claim',
     trigger: otherTrigger,
     body: 'A claim with no file anchors at all.',
-    episodes: [{ path: 'docs/solutions/perf/plain.md', sha256: 'b'.repeat(64), kind: 'fix', plan: '' }],
+    episodes: [{ path: 'docs/solutions/perf/plain.md', sha256: sha256Of(plainBody), kind: 'fix', plan: '' }],
   };
   assert.equal(run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [op])]).status, 0);
 

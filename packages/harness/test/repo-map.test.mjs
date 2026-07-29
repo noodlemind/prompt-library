@@ -6,7 +6,7 @@ import { spawnSync } from 'node:child_process';
 import { test } from 'node:test';
 import { tokenize } from '../lib/tokenize.mjs';
 import { extract } from '../lib/repo-map/lexical-extractor.mjs';
-import { buildRepoMap } from '../lib/repo-map/index.mjs';
+import { buildRepoMap, writeCodebaseMap } from '../lib/repo-map/index.mjs';
 import { indexStatus } from '../lib/index-status.mjs';
 import { resolveIndexDir } from '../lib/recall-config.mjs';
 import { runBuildPostingsIndex, loadPostingsIndex } from '../lib/postings-index.mjs';
@@ -98,6 +98,44 @@ test('index --status reports drift deterministically', () => {
 
   fs.rmSync(ws, { recursive: true, force: true });
   fs.rmSync(home, { recursive: true, force: true });
+});
+
+test('writeCodebaseMap refuses to write through a symlinked docs/ directory', () => {
+  const { ws } = gitRepo({ 'a.js': 'export const a = 1;' });
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-repomap-outside-'));
+  // A symlinked `docs/` pointing outside the workspace — a naive
+  // mkdir(recursive)+write would follow it and write the map there instead.
+  fs.symlinkSync(outside, path.join(ws, 'docs'));
+
+  const result = writeCodebaseMap({ workspace: ws });
+  assert.equal(result, null, 'a symlinked docs/ must refuse the write, not follow it');
+  assert.ok(!fs.existsSync(path.join(outside, 'codebase-map.md')), 'nothing written through the symlink');
+
+  fs.rmSync(ws, { recursive: true, force: true });
+  fs.rmSync(outside, { recursive: true, force: true });
+});
+
+test('writeCodebaseMap refuses to write when the target itself is a pre-existing symlink', () => {
+  const { ws } = gitRepo({ 'a.js': 'export const a = 1;' });
+  const outsideFile = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'harness-repomap-target-')), 'elsewhere.md');
+  fs.writeFileSync(outsideFile, 'pre-existing content\n');
+  fs.mkdirSync(path.join(ws, 'docs'), { recursive: true });
+  fs.symlinkSync(outsideFile, path.join(ws, 'docs', 'codebase-map.md'));
+
+  const result = writeCodebaseMap({ workspace: ws });
+  assert.equal(result, null, 'a pre-existing symlink at the target must refuse the write, not follow it');
+  assert.equal(fs.readFileSync(outsideFile, 'utf8'), 'pre-existing content\n', 'the symlink target is untouched');
+
+  fs.rmSync(ws, { recursive: true, force: true });
+});
+
+test('writeCodebaseMap writes normally when docs/ is a plain directory', () => {
+  const { ws } = gitRepo({ 'a.js': 'export const a = 1;' });
+  const result = writeCodebaseMap({ workspace: ws });
+  assert.ok(result);
+  assert.equal(result.path, 'docs/codebase-map.md');
+  assert.ok(fs.existsSync(path.join(ws, 'docs', 'codebase-map.md')));
+  fs.rmSync(ws, { recursive: true, force: true });
 });
 
 test('maintenance refresh: deterministic index rebuild works with no provider (AC63)', () => {

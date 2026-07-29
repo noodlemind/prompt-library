@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -35,13 +36,27 @@ function writeOps(dir, ops) {
   return p;
 }
 
-const EP = (over = {}) => ({
-  path: 'docs/solutions/perf/x.md',
-  sha256: 'a'.repeat(64),
-  kind: 'fix',
-  plan: 'docs/plans/p1.md',
-  ...over,
-});
+// Writes a real fix-evidence file into the workspace at the episode's path
+// and returns an episode object whose sha256 actually matches the file's
+// on-disk content — verifyAdmittedEpisodeKinds (apply.mjs) hashes the file
+// at admission time, so a fabricated sha256 rejects the whole op with
+// E_SCHEMA. Any caller-supplied `sha256` is intentionally ignored (never
+// trusted) in favor of the real, freshly-computed hash of what was written.
+function EP(ws, over = {}) {
+  const { path: relOverride, sha256: _ignoredFakeSha256, ...rest } = over;
+  const rel = relOverride || 'docs/solutions/perf/x.md';
+  const full = path.join(ws, rel);
+  fs.mkdirSync(path.dirname(full), { recursive: true });
+  const content = `fix evidence body for ${rel}.\n`;
+  fs.writeFileSync(full, content, 'utf8');
+  return {
+    path: rel,
+    sha256: crypto.createHash('sha256').update(content).digest('hex'),
+    kind: 'fix',
+    plan: 'docs/plans/p1.md',
+    ...rest,
+  };
+}
 
 function seedLearning(c, over = {}) {
   const op = {
@@ -50,7 +65,7 @@ function seedLearning(c, over = {}) {
     slug: 'not-null-hot-tables',
     trigger: 'adding NOT NULL columns to hot tables',
     body: 'Use two-step default+backfill; a direct ALTER takes an exclusive lock.',
-    episodes: [EP()],
+    episodes: [EP(c.ws)],
     ...over,
   };
   const res = applyOps({ workspace: c.ws, opsPath: writeOps(c.ws, [op]), home: c.harnessHome });
@@ -241,7 +256,7 @@ Use two-step default+backfill; a direct ALTER takes an exclusive lock.
   const strengthen = {
     op: 'STRENGTHEN',
     target: id,
-    episodes: [EP({ path: 'docs/solutions/perf/y.md', sha256: 'b'.repeat(64) })],
+    episodes: [EP(c.ws, { path: 'docs/solutions/perf/y.md' })],
   };
   const res = applyOps({ workspace: c.ws, opsPath: writeOps(c.ws, [strengthen]), home: c.harnessHome });
   assert.equal(res.exitCode, 0, JSON.stringify(res.rejected));
@@ -331,7 +346,7 @@ test('a hand edit survives an applyOps validation failure (byte-cap) — absorbe
     slug: 'too-big',
     trigger: 'a trigger for an over-cap learning',
     body: 'x'.repeat(1300),
-    episodes: [EP({ path: 'docs/solutions/perf/y.md', sha256: 'b'.repeat(64) })],
+    episodes: [EP(c.ws, { path: 'docs/solutions/perf/y.md' })],
   };
   const res = applyOps({ workspace: c.ws, opsPath: writeOps(c.ws, [overCapOp]), home: c.harnessHome });
   assert.equal(res.exitCode, 1);
@@ -368,7 +383,7 @@ test('a hand edit survives a genuine POST-LOCK mid-mutation throw (git reset --h
     slug: 'never-lands',
     trigger: 'a trigger that never lands',
     body: 'this write throws mid-mutation',
-    episodes: [EP({ path: 'docs/solutions/perf/y.md', sha256: 'b'.repeat(64) })],
+    episodes: [EP(c.ws, { path: 'docs/solutions/perf/y.md' })],
   };
   const res = applyOps({ workspace: c.ws, opsPath: writeOps(c.ws, [poisonedOp]), home: c.harnessHome });
   assert.equal(res.exitCode, 1, JSON.stringify(res));
@@ -524,11 +539,9 @@ test('untracked/modified non-learning store files (config.json, stale.json, INDE
 test('removeEpisodeLink still delegates to serializeLearning and round-trips the same shape', () => {
   const c = ctx();
   const targetPath = 'docs/solutions/perf/re.md';
-  fs.mkdirSync(path.join(c.ws, 'docs', 'solutions', 'perf'), { recursive: true });
-  fs.writeFileSync(path.join(c.ws, targetPath), 'episode body\n');
   const learningId = seedLearning(c, {
     slug: 'unlink-target',
-    episodes: [{ path: targetPath, sha256: 'a'.repeat(64), kind: 'fix', plan: 'docs/plans/p1.md' }],
+    episodes: [EP(c.ws, { path: targetPath })],
     trigger: 'unlink target trigger',
   });
   const { dir } = ensureStore(c.ws, { home: c.harnessHome });
@@ -545,7 +558,7 @@ test('an ADD → hand-edit → absorb → STRENGTHEN cycle keeps the absorbed st
     slug: 'cycle-learning',
     trigger: 'cycle learning trigger',
     body: 'original cycle body text.',
-    episodes: [EP({ path: 'docs/solutions/perf/orig.md', sha256: 'a'.repeat(64) })],
+    episodes: [EP(c.ws, { path: 'docs/solutions/perf/orig.md' })],
   });
   const { dir } = ensureStore(c.ws, { home: c.harnessHome });
   const learning = listLearnings(dir).find((l) => l.id === learningId);
@@ -563,7 +576,7 @@ test('an ADD → hand-edit → absorb → STRENGTHEN cycle keeps the absorbed st
   const strengthenOp = {
     op: 'STRENGTHEN',
     target: learningId,
-    episodes: [{ path: 'docs/solutions/perf/new-fix.md', sha256: 'c'.repeat(64), kind: 'fix', plan: 'docs/plans/p2.md' }],
+    episodes: [EP(c.ws, { path: 'docs/solutions/perf/new-fix.md' })],
   };
   const res = applyOps({ workspace: c.ws, opsPath: writeOps(c.ws, [strengthenOp]), home: c.harnessHome });
   assert.equal(res.exitCode, 0, JSON.stringify(res.rejected));

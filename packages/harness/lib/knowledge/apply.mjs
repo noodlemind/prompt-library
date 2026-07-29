@@ -31,6 +31,10 @@ import { parseMergedFrom } from './listing.mjs';
 
 const FILE_TOUCHING = new Set(['ADD', 'STRENGTHEN', 'SUPERSEDE', 'MERGE']);
 const DISPUTED_FIX_THRESHOLD = 3;
+// A killed consolidation process leaves `.lock` behind forever — nothing
+// ever removes it on a crash. Past this age, assume its owner is dead rather
+// than wedging the store for every future run.
+const STALE_LOCK_MS = 10 * 60 * 1000;
 // Codes that indicate the CONTENT of a specific op was rejected (bad shape,
 // secret-shaped, imperative lint, over the byte cap, a dedup/rename collision
 // against an ON-DISK learning, or a missing target) — as opposed to FOUR
@@ -147,10 +151,19 @@ export function todayClamped() {
  */
 function extractAnchors({ workspace, episodes }) {
   const found = new Set();
+  const root = path.resolve(workspace);
+  // Containment guard (same root/startsWith idiom this module uses
+  // elsewhere, e.g. verifyEpisodeKind): an episode's own path is op-JSON
+  // controlled, so a `../` escape must never even be read, let alone have
+  // its content scanned for anchor-shaped strings.
+  const contains = (rel) => {
+    const full = path.resolve(root, rel);
+    return full === root || full.startsWith(root + path.sep) ? full : null;
+  };
   for (const e of episodes || []) {
     if (!e.path) continue;
-    const full = path.join(workspace, e.path);
-    if (!fs.existsSync(full)) continue;
+    const full = contains(e.path);
+    if (!full || !fs.existsSync(full)) continue;
     let text;
     try {
       text = fs.readFileSync(full, 'utf8');
@@ -160,7 +173,8 @@ function extractAnchors({ workspace, episodes }) {
     const matches = text.match(ANCHOR_RE) || [];
     for (const m of matches) {
       if (m === e.path) continue;
-      if (!fs.existsSync(path.join(workspace, m))) continue;
+      const mFull = contains(m);
+      if (!mFull || !fs.existsSync(mFull)) continue;
       found.add(m);
     }
   }
@@ -212,7 +226,14 @@ function validateEpisodes(episodes, opIndex) {
     return fail('E_SCHEMA', `op ${opIndex}: episodes must be a non-empty array`);
   }
   for (const e of episodes) {
-    if (!e.path || !/^[0-9a-f]{64}$/.test(e.sha256 || '')) {
+    if (
+      !e ||
+      typeof e !== 'object' ||
+      typeof e.path !== 'string' ||
+      !e.path ||
+      typeof e.sha256 !== 'string' ||
+      !/^[0-9a-f]{64}$/.test(e.sha256)
+    ) {
       return fail('E_SCHEMA', `op ${opIndex}: each episode needs path + sha256`);
     }
   }
@@ -224,21 +245,32 @@ function verifiedFixLinks(fm) {
 }
 
 /**
- * Verify an asserted human-teaching episode against disk. Used both for the
- * SUPERSEDE disputed-demotion exemption and for `source`/`status` derivation
- * on ADD/SUPERSEDE writes — in both cases the op JSON's `episodes[].kind`
- * field is just an assertion (model- or human-authored text that nothing
- * else validates), so trusting it to grant elevated standing would let
- * anyone claim human-teaching for an episode that was never taught by a
- * human. An episode only counts if: its path resolves inside the workspace
- * (no `../` escape), its file exists there, the file's CURRENT content
- * hashes to the asserted sha256 (not stale/edited since), and the file's OWN
- * frontmatter independently says `kind: human-teaching` (not just the op's
- * claim). Any mismatch fails closed (false) — never throws, so a
- * missing/unreadable/escaping file simply falls back to the non-human lane.
+ * Verify an asserted episode kind against disk. Used for: the SUPERSEDE
+ * disputed-demotion exemption and `source`/`status` derivation on ADD/
+ * SUPERSEDE writes (human-teaching assertions), and — closing the symmetric
+ * gap — admission of every `fix`/`insight`-kind episode an ADD/STRENGTHEN/
+ * SUPERSEDE/MERGE op offers, before its kind is ever trusted downstream by
+ * `gainedFix` (strengthenLearning), `verifiedFixLinks`, or promotion math
+ * (consolidate.mjs's verifiedAndPlans). In every case the op JSON's
+ * `episodes[].kind` field is just an assertion (model- or human-authored
+ * text nothing else validates) — trusting it lets anyone claim evidence for
+ * a fix that was never actually verified, or human-teaching for an episode
+ * never taught by a human. An episode verifies when: its path resolves
+ * inside the workspace (no `../` escape), its file exists there, the file's
+ * CURRENT content hashes to the asserted sha256 (not stale/edited since),
+ * and the file's OWN frontmatter agrees with the asserted category:
+ *   - `human-teaching` / `insight` assertions require the file's own
+ *     frontmatter `kind` to literally match — an elevated-standing claim
+ *     proves nothing on its own.
+ *   - `fix` (or an omitted kind — the same default every serializer uses)
+ *     only requires the file NOT to be impersonating one of the elevated
+ *     kinds — no frontmatter, or any kind other than insight/human-teaching,
+ *     is a legitimate fix episode.
+ * Fails closed (false) on any escape/missing/unreadable/mismatched case —
+ * never throws.
  */
-function verifyHumanTeachingEpisode(workspace, e) {
-  if (e.kind !== 'human-teaching' || !e.path || !e.sha256) return false;
+function verifyEpisodeKind(workspace, e) {
+  if (!e || !e.path || !e.sha256) return false;
   // Containment guard: same root/startsWith idiom purge uses — an episode
   // path that escapes the workspace must never even be read.
   const root = path.resolve(workspace);
@@ -252,10 +284,49 @@ function verifyHumanTeachingEpisode(workspace, e) {
   }
   if (crypto.createHash('sha256').update(text).digest('hex') !== e.sha256) return false;
   const m = text.match(/^---\r?\n([\s\S]*?)\r?\n---/);
-  if (!m) return false;
-  const kindLine = m[1].split('\n').find((l) => /^kind:\s*/.test(l));
-  const kind = kindLine ? kindLine.replace(/^kind:\s*/, '').replace(/^["']|["']$/g, '').trim() : null;
-  return kind === 'human-teaching';
+  const kindLine = m ? m[1].split('\n').find((l) => /^kind:\s*/.test(l)) : null;
+  const fileKind = kindLine ? kindLine.replace(/^kind:\s*/, '').replace(/^["']|["']$/g, '').trim() : null;
+  const asserted = e.kind === 'insight' ? 'insight' : e.kind === 'human-teaching' ? 'human-teaching' : 'fix';
+  if (asserted === 'fix') return fileKind !== 'insight' && fileKind !== 'human-teaching';
+  return fileKind === asserted;
+}
+
+/** Thin wrapper over verifyEpisodeKind: true only when the episode BOTH
+ * asserts AND disk-verifies human-teaching — every existing call site
+ * (the SUPERSEDE re-teach exemption, source/status derivation) needs this
+ * specific question answered, not "does this episode verify as whatever it
+ * claims", so a non-human-teaching assertion still short-circuits to false
+ * without touching disk. */
+function verifyHumanTeachingEpisode(workspace, e) {
+  return Boolean(e) && e.kind === 'human-teaching' && verifyEpisodeKind(workspace, e);
+}
+
+/**
+ * Admission-time evidence check (op validation, before anything is written):
+ * every `fix`-kind (or kind-omitted, defaulting to fix) and `insight`-kind
+ * episode an op offers must verify against disk via verifyEpisodeKind — a
+ * mismatch or nonexistent file is an evidence defect (content-failure class,
+ * routed through rejectOp so it strikes toward quarantine like any other
+ * malformed episode). `human-teaching` assertions are deliberately exempt
+ * here: that lane already has its own disk verification at the point
+ * elevated standing is actually GRANTED (verifyHumanTeachingEpisode, used by
+ * source/status derivation and the reteach exemption), with an intentional,
+ * separately-tested tolerant fallback when unverifiable — an op asserting a
+ * fabricated human-teaching kind still applies, just without the elevated
+ * standing, so it must never reject here.
+ */
+function verifyAdmittedEpisodeKinds(workspace, episodes, opIndex) {
+  for (const e of episodes) {
+    if (e.kind === 'human-teaching') continue;
+    if (!verifyEpisodeKind(workspace, e)) {
+      const asserted = e.kind === 'insight' ? 'insight' : 'fix';
+      return fail(
+        'E_SCHEMA',
+        `op ${opIndex}: episode ${e.path} does not verify as kind ${asserted} — file missing, sha256 mismatch, or its own frontmatter kind disagrees`
+      );
+    }
+  }
+  return null;
 }
 
 /**
@@ -354,6 +425,17 @@ export function applyOps({ workspace, opsPath, dryRun = false, home, approve = f
   }
   if (parsed.schema !== 1 || !Array.isArray(parsed.ops)) {
     return { applied: [], governed: [], rejected: [fail('E_SCHEMA', 'ops file must be { schema: 1, ops: [...] }')], committed: false, exitCode: 1 };
+  }
+  // Non-object entries (null, a bare string, a number, ...) must never reach
+  // an `op.op` deref — checked over the WHOLE array up front, before
+  // anything else (including the file-touch-count reduce below, which derefs
+  // `op.op` on every entry) ever touches an individual op, so a null entry
+  // can never throw instead of failing closed with a controlled E_SCHEMA.
+  for (let i = 0; i < parsed.ops.length; i++) {
+    const op = parsed.ops[i];
+    if (!op || typeof op !== 'object' || Array.isArray(op)) {
+      return { applied: [], governed: [], rejected: [fail('E_SCHEMA', `op ${i}: op must be an object`)], committed: false, exitCode: 1 };
+    }
   }
 
   const { dir, git } = ensureStore(workspace, { home, dryRun });
@@ -487,6 +569,18 @@ export function applyOps({ workspace, opsPath, dryRun = false, home, approve = f
     }
     const bad = validateEpisodes(op.episodes, i);
     if (bad) return rejectOp(bad.code, bad.reason, op.episodes);
+    // Evidence-defect gate (see verifyAdmittedEpisodeKinds doc comment): a
+    // fix/insight-kind assertion must disk-verify before anything downstream
+    // (gainedFix, verifiedFixLinks, promotion math) ever trusts it.
+    const badKind = verifyAdmittedEpisodeKinds(workspace, op.episodes, i);
+    if (badKind) return rejectOp(badKind.code, badKind.reason, op.episodes);
+    // merged_from is only ever a MERGE-derived (op.targets) or ADD/SUPERSEDE-
+    // carried-forward field — an op JSON asserting it directly must be an
+    // array of strings, or renderLearning's `mergedFrom.join(', ')` throws on
+    // a non-array (e.g. a string) instead of failing closed.
+    if (op.merged_from !== undefined && (!Array.isArray(op.merged_from) || !op.merged_from.every((v) => typeof v === 'string'))) {
+      return rejectOp('E_SCHEMA', `op ${i}: merged_from must be an array of strings`, op.episodes);
+    }
 
     // Shared between the inactive-target exemption (below) and the
     // disputed-demotion exemption (further down, SUPERSEDE-only) — computed
@@ -895,12 +989,38 @@ export function applyOps({ workspace, opsPath, dryRun = false, home, approve = f
     };
   }
 
-  // Single-writer lock.
+  // Single-writer lock. A killed process can leave `.lock` behind forever
+  // (nothing ever runs to remove it), wedging the store shut for every
+  // future run. On contention, check the lock's age before giving up: past
+  // STALE_LOCK_MS, assume its owner is dead, remove it, and retry
+  // acquisition exactly once — a live owner racing the same removal simply
+  // wins the retry and this run still fails E_LOCKED, same as today.
   const lockPath = path.join(dir, '.lock');
+  let staleLockNote = null;
   try {
     fs.mkdirSync(lockPath);
   } catch {
-    return { applied: [], governed: [], rejected: [fail('E_LOCKED', 'another consolidation holds the store lock')], committed: false, exitCode: 1 };
+    let stat;
+    try {
+      stat = fs.statSync(lockPath);
+    } catch {
+      stat = null;
+    }
+    const ageMs = stat ? Date.now() - stat.mtimeMs : 0;
+    let recovered = false;
+    if (stat && ageMs > STALE_LOCK_MS) {
+      try {
+        fs.rmSync(lockPath, { recursive: true, force: true });
+        fs.mkdirSync(lockPath);
+        staleLockNote = `stale lock (${Math.round(ageMs / 60000)}m old) removed`;
+        recovered = true;
+      } catch {
+        recovered = false;
+      }
+    }
+    if (!recovered) {
+      return { applied: [], governed: [], rejected: [fail('E_LOCKED', 'another consolidation holds the store lock')], committed: false, exitCode: 1 };
+    }
   }
 
   const applied = [];
@@ -1066,15 +1186,29 @@ export function applyOps({ workspace, opsPath, dryRun = false, home, approve = f
   } catch {
     // best effort — a mirror failure must never block applyOps.
   }
-  return { applied, rejected, committed, exitCode: 0, storeDir: dir, indexPath: path.join(dir, 'INDEX.md'), governed };
+  return {
+    applied,
+    rejected,
+    committed,
+    exitCode: 0,
+    storeDir: dir,
+    indexPath: path.join(dir, 'INDEX.md'),
+    governed,
+    ...(staleLockNote ? { staleLockRemoved: staleLockNote } : {}),
+  };
 }
 
 export function updateFrontmatterField(file, field, value) {
   const text = fs.readFileSync(file, 'utf8');
   const re = new RegExp(`^${field}:.*$`, 'm');
+  // The insertion fallback (field absent from frontmatter) must tolerate a
+  // CRLF-terminated leading `---` — an LF-only regex silently no-ops on a
+  // CRLF learning file instead of inserting the field, since neither branch
+  // matches. Capture the line ending actually used and reuse it so a fresh
+  // insertion doesn't mix newline styles.
   const next = re.test(text)
     ? text.replace(re, `${field}: ${value}`)
-    : text.replace(/^---\n/, `---\n${field}: ${value}\n`);
+    : text.replace(/^---(\r?\n)/, (_, nl) => `---${nl}${field}: ${value}${nl}`);
   fs.writeFileSync(file, next, 'utf8');
 }
 

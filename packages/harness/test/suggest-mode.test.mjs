@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -37,6 +38,20 @@ function writeOps(dir, ops) {
   return p;
 }
 
+// verifyAdmittedEpisodeKinds (apply.mjs) requires every fix-kind (or
+// kind-omitted) episode an ADD/STRENGTHEN/SUPERSEDE/MERGE op offers to
+// disk-verify: the path must resolve inside the workspace, the file must
+// exist, and its CURRENT content must hash to the asserted sha256. This
+// helper writes a real file and returns its real sha256, so fixtures never
+// assert fabricated evidence for evidence expected to be admitted.
+function writeRealEpisode(ws, rel, content) {
+  const full = path.join(ws, rel);
+  fs.mkdirSync(path.dirname(full), { recursive: true });
+  const text = content ?? `episode body for ${rel}.\n`;
+  fs.writeFileSync(full, text, 'utf8');
+  return { path: rel, sha256: crypto.createHash('sha256').update(text).digest('hex') };
+}
+
 const EP = (over = {}) => ({
   path: 'docs/solutions/perf/x.md',
   sha256: 'a'.repeat(64),
@@ -46,13 +61,14 @@ const EP = (over = {}) => ({
 });
 
 function seedLearning(c) {
+  const ep = writeRealEpisode(c.ws, 'docs/solutions/perf/x.md');
   const op = {
     op: 'ADD',
     domain: 'sql',
     slug: 'not-null-hot-tables',
     trigger: TRIGGER,
     body: 'Use two-step default+backfill; a direct ALTER takes an exclusive lock.',
-    episodes: [EP()],
+    episodes: [{ ...ep, kind: 'fix', plan: 'docs/plans/p1.md' }],
   };
   const res = applyOps({ workspace: c.ws, opsPath: writeOps(c.ws, [op]), home: c.harnessHome });
   assert.equal(res.exitCode, 0, JSON.stringify(res.rejected));
@@ -156,6 +172,7 @@ test('suggest mode: consolidate --apply --yes applies (human approved)', () => {
   assert.equal(run(c, ['knowledge', 'suggest']).status, 0);
   const dir = storeDir(c.ws, { home: c.harnessHome });
 
+  const ep = writeRealEpisode(c.ws, 'docs/solutions/perf/approved.md');
   const opsPath = writeOps(c.ws, [
     {
       op: 'ADD',
@@ -163,7 +180,7 @@ test('suggest mode: consolidate --apply --yes applies (human approved)', () => {
       slug: 'suggest-approved',
       trigger: 'a trigger approved in suggest mode',
       body: 'a body written after --yes approval',
-      episodes: [EP({ path: 'docs/solutions/perf/approved.md', sha256: 'c'.repeat(64) })],
+      episodes: [{ ...ep, kind: 'fix', plan: 'docs/plans/p1.md' }],
     },
   ]);
 

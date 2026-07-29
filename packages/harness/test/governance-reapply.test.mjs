@@ -45,21 +45,34 @@ function writeOps(dir, ops) {
   return p;
 }
 
-const EP = (over = {}) => ({
-  path: 'docs/solutions/perf/x.md',
-  sha256: 'a'.repeat(64),
-  kind: 'fix',
-  plan: 'docs/plans/p1.md',
-  ...over,
-});
+// Writes a REAL file into the test workspace and returns an episode object
+// whose sha256 is the genuine hash of that exact content —
+// verifyAdmittedEpisodeKinds (lib/knowledge/apply.mjs) now disk-verifies
+// every fix/insight-kind episode an admitted op offers, so a fabricated
+// sha256 pointing at a file that was never written is rejected with
+// E_SCHEMA before any governance-reapplication scenario in this file is
+// ever reached.
+function realEpisode(ws, over = {}) {
+  const rel = over.path || 'docs/solutions/perf/x.md';
+  const full = path.join(ws, rel);
+  fs.mkdirSync(path.dirname(full), { recursive: true });
+  const text = `real evidence for ${rel}\n`;
+  fs.writeFileSync(full, text, 'utf8');
+  return {
+    path: rel,
+    sha256: crypto.createHash('sha256').update(text).digest('hex'),
+    kind: over.kind || 'fix',
+    plan: over.plan || 'docs/plans/p1.md',
+  };
+}
 
-const ADD = (over = {}) => ({
+const ADD = (ws, over = {}) => ({
   op: 'ADD',
   domain: 'sql',
   slug: 'not-null-large-tables',
   trigger: 'adding NOT NULL columns to large/hot tables',
   body: 'Use two-step default+backfill; a direct ALTER takes an exclusive lock.',
-  episodes: [EP()],
+  episodes: [realEpisode(ws)],
   ...over,
 });
 
@@ -90,12 +103,12 @@ test('(a) an ADD regenerating a previously retired id reapplies retire: governed
   const id = `sql/${slug}`;
   const dir = storeDir(c.ws, { home: c.harnessHome });
 
-  assert.equal(run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [ADD({ slug })])]).status, 0);
+  assert.equal(run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [ADD(c.ws, { slug })])]).status, 0);
   assert.equal(run(c, ['learning', 'retire', id, '--reason', 'stale']).status, 0);
   assert.equal(run(c, ['consolidate', '--rebuild', '--yes']).status, 0);
   assert.equal(listLearnings(dir).length, 0, 'precondition: rebuild wiped the learning');
 
-  const res = run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [ADD({ slug })])]);
+  const res = run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [ADD(c.ws, { slug })])]);
   assert.equal(res.status, 0, res.stderr || res.stdout);
   const out = JSON.parse(res.stdout);
   assert.deepEqual(out.governed, [{ id, action: 'retire' }]);
@@ -128,7 +141,7 @@ test('(a-recency) an ADD built from a STALE (pre-retire) teaching episode still 
   // writeRealEpisode's fixed `date: 2026-07-01` — genuinely human-taught,
   // disk-verified, but older than the retire's governance record `at`.
   const ep = writeRealEpisode(c.ws, `docs/solutions/teachings/${slug}.md`);
-  const seedOp = ADD({ slug, episodes: [{ ...ep, kind: 'human-teaching', plan: null }] });
+  const seedOp = ADD(c.ws, { slug, episodes: [{ ...ep, kind: 'human-teaching', plan: null }] });
   assert.equal(run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [seedOp])]).status, 0);
 
   assert.equal(run(c, ['learning', 'retire', id, '--reason', 'stale']).status, 0);
@@ -141,7 +154,7 @@ test('(a-recency) an ADD built from a STALE (pre-retire) teaching episode still 
   assert.ok(packetEntry, 'the stale teaching episode re-enters candidates after rebuild');
   assert.equal(packetEntry.kind, 'human-teaching', 'the packet still labels it human-teaching, by design');
 
-  const regenOp = ADD({ slug, episodes: [{ path: packetEntry.path, sha256: packetEntry.sha256, kind: packetEntry.kind, plan: null }] });
+  const regenOp = ADD(c.ws, { slug, episodes: [{ path: packetEntry.path, sha256: packetEntry.sha256, kind: packetEntry.kind, plan: null }] });
   const res = run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [regenOp])]);
   assert.equal(res.status, 0, res.stderr || res.stdout);
   const out = JSON.parse(res.stdout);
@@ -163,11 +176,11 @@ test('(a) the apply note (non-JSON render) reports N re-governed', () => {
   const slug = 'a-note-scenario';
   const id = `sql/${slug}`;
 
-  assert.equal(run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [ADD({ slug })])]).status, 0);
+  assert.equal(run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [ADD(c.ws, { slug })])]).status, 0);
   assert.equal(run(c, ['learning', 'retire', id, '--reason', 'stale']).status, 0);
   assert.equal(run(c, ['consolidate', '--rebuild', '--yes']).status, 0);
 
-  const res = runText(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [ADD({ slug })])]);
+  const res = runText(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [ADD(c.ws, { slug })])]);
   assert.equal(res.status, 0, res.stderr || res.stdout);
   assert.match(res.stdout, /re-governed/);
 });
@@ -180,12 +193,12 @@ test('(b) an ADD regenerating a previously promoted id reapplies promote: promot
   const dir = storeDir(c.ws, { home: c.harnessHome });
   const to = primitivePath(c.ws, 'sql');
 
-  assert.equal(run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [ADD({ slug })])]).status, 0);
+  assert.equal(run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [ADD(c.ws, { slug })])]).status, 0);
   assert.equal(run(c, ['learning', 'promote', id, '--to', to]).status, 0);
   assert.equal(run(c, ['consolidate', '--rebuild', '--yes']).status, 0);
   assert.equal(listLearnings(dir).length, 0, 'precondition: rebuild wiped the learning');
 
-  const res = run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [ADD({ slug })])]);
+  const res = run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [ADD(c.ws, { slug })])]);
   assert.equal(res.status, 0, res.stderr || res.stdout);
   const out = JSON.parse(res.stdout);
   assert.deepEqual(out.governed, [{ id, action: 'promote' }]);
@@ -204,7 +217,7 @@ test('(b) an ADD regenerating a previously promoted id reapplies promote: promot
     slug: `${slug}-v2`,
     trigger: 'a follow-up replacement trigger',
     body: 'a follow-up replacement body',
-    episodes: [EP({ path: 'docs/solutions/perf/follow-up.md', sha256: 'b'.repeat(64) })],
+    episodes: [realEpisode(c.ws, { path: 'docs/solutions/perf/follow-up.md' })],
   };
   const supRes = run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [followUpSupersede])]);
   assert.equal(supRes.status, 1, 'a promoted id rejects a follow-up SUPERSEDE');
@@ -226,7 +239,7 @@ test('(b-hardening) a hand-poisoned promote record with an escaping `to` is re-v
   const id = `sql/${slug}`;
   const dir = storeDir(c.ws, { home: c.harnessHome });
 
-  assert.equal(run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [ADD({ slug })])]).status, 0);
+  assert.equal(run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [ADD(c.ws, { slug })])]).status, 0);
 
   // Hand-poison governance.jsonl directly — bypassing `learning promote`'s
   // own containment check, the same way a direct file edit could.
@@ -238,7 +251,7 @@ test('(b-hardening) a hand-poisoned promote record with an escaping `to` is re-v
   assert.equal(run(c, ['consolidate', '--rebuild', '--yes']).status, 0);
   assert.equal(listLearnings(dir).length, 0, 'precondition: rebuild wiped the learning');
 
-  const res = run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [ADD({ slug })])]);
+  const res = run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [ADD(c.ws, { slug })])]);
   assert.equal(res.status, 0, res.stderr || res.stdout, 'the escaping governance record must never crash the run');
   const out = JSON.parse(res.stdout);
   assert.deepEqual(out.governed, [], 'the unsafe promote target is skipped, not reapplied');
@@ -288,7 +301,7 @@ test('(d) consolidate --candidates --json lists a retired id under governed', ()
   const slug = 'd-scenario';
   const id = `sql/${slug}`;
 
-  assert.equal(run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [ADD({ slug })])]).status, 0);
+  assert.equal(run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [ADD(c.ws, { slug })])]).status, 0);
   assert.equal(run(c, ['learning', 'retire', id, '--reason', 'stale']).status, 0);
 
   const res = run(c, ['consolidate', '--candidates']);
@@ -305,7 +318,7 @@ test('(e) a mid-mutation throw during a re-teach override rolls back the governa
   const slug = 'e-scenario';
   const id = `${domain}/${slug}`;
 
-  assert.equal(run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [ADD({ slug })])]).status, 0);
+  assert.equal(run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [ADD(c.ws, { slug })])]).status, 0);
   assert.equal(run(c, ['learning', 'retire', id, '--reason', 'stale']).status, 0);
   assert.equal(run(c, ['consolidate', '--rebuild', '--yes']).status, 0);
 
@@ -400,13 +413,13 @@ test('(f) a confirm-only governance record never reapplies — the regenerated l
   const id = `sql/${slug}`;
   const dir = storeDir(c.ws, { home: c.harnessHome });
 
-  assert.equal(run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [ADD({ slug })])]).status, 0);
+  assert.equal(run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [ADD(c.ws, { slug })])]).status, 0);
   assert.equal(run(c, ['learning', 'confirm', id]).status, 0);
   assert.equal(readGovernance(dir).get(id).action, 'confirm', 'precondition: confirm on record');
 
   assert.equal(run(c, ['consolidate', '--rebuild', '--yes']).status, 0);
 
-  const res = run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [ADD({ slug })])]);
+  const res = run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [ADD(c.ws, { slug })])]);
   assert.equal(res.status, 0, res.stderr || res.stdout);
   const out = JSON.parse(res.stdout);
   assert.deepEqual(out.governed, [], 'confirm is not a demotion to restore — it never reapplies');

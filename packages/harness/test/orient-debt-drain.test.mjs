@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -32,13 +33,20 @@ function writeEpisode(ws, category, name) {
 /** Seeds a knowledge store (via applyOps) with one learning matching TRIGGER,
  * then adds `count` real, never-consolidated fix episodes so debt accrues. */
 function seedStoreWithDebt(c, { count = 5 } = {}) {
+  const seedRel = 'docs/solutions/perf/seed.md';
+  const seedFull = path.join(c.ws, seedRel);
+  fs.mkdirSync(path.dirname(seedFull), { recursive: true });
+  const seedText = `---\ntitle: "seed lesson"\ndate: 2026-07-01\n---\n\n## Problem\n\nseed details.\n`;
+  fs.writeFileSync(seedFull, seedText);
+  const seedSha256 = crypto.createHash('sha256').update(seedText).digest('hex');
+
   const op = {
     op: 'ADD',
     domain: 'sql',
     slug: 'not-null-hot-tables',
     trigger: TRIGGER,
     body: 'Use two-step default+backfill; a direct ALTER takes an exclusive lock.',
-    episodes: [{ path: 'docs/solutions/perf/seed.md', sha256: 'a'.repeat(64), kind: 'fix', plan: 'docs/plans/p1.md' }],
+    episodes: [{ path: seedRel, sha256: seedSha256, kind: 'fix', plan: 'docs/plans/p1.md' }],
   };
   const opsPath = path.join(c.ws, 'ops.json');
   fs.writeFileSync(opsPath, JSON.stringify({ schema: 1, ops: [op] }));

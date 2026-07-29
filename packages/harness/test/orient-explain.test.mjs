@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -23,6 +24,16 @@ function writeFile(ws, rel, body) {
   const full = path.join(ws, rel);
   fs.mkdirSync(path.dirname(full), { recursive: true });
   fs.writeFileSync(full, body, 'utf8');
+}
+
+/** Writes a real fix-episode file at `rel` inside `ws` and returns the
+ * op-JSON episode object (path + real sha256) so `verifyAdmittedEpisodeKinds`
+ * admits it — a fabricated hardcoded sha256 is rejected with E_SCHEMA. */
+function writeRealFixEpisode(ws, rel, body) {
+  const full = path.join(ws, rel);
+  fs.mkdirSync(path.dirname(full), { recursive: true });
+  fs.writeFileSync(full, body, 'utf8');
+  return { path: rel, sha256: crypto.createHash('sha256').update(body).digest('hex') };
 }
 
 function learningFile(harnessHome, ws, id) {
@@ -56,11 +67,10 @@ function seededContext() {
   // episode doc that mentions it (so consolidate --apply extracts it as an
   // anchor) — mirrors test/stale-anchors.test.mjs.
   writeFile(ws, 'src/widgetd.mjs', 'export function drainQueue() {}\n');
-  writeFile(
-    ws,
-    'docs/solutions/widgetd/queue-backlog.md',
-    '---\ntitle: "widget queue backlog spike"\ndate: 2026-07-20\n---\n\n## Problem\n\nFixed by draining; see src/widgetd.mjs.\n'
-  );
+  const staleAnchorEpisodeBody =
+    '---\ntitle: "widget queue backlog spike"\ndate: 2026-07-20\n---\n\n## Problem\n\nFixed by draining; see src/widgetd.mjs.\n';
+  writeFile(ws, 'docs/solutions/widgetd/queue-backlog.md', staleAnchorEpisodeBody);
+  const staleAnchorEpisodeSha256 = crypto.createHash('sha256').update(staleAnchorEpisodeBody).digest('hex');
 
   const opsPath = path.join(ws, 'ops.json');
   fs.writeFileSync(
@@ -71,22 +81,31 @@ function seededContext() {
         {
           op: 'ADD', domain: 'widgeta', slug: 'active-one', trigger: TRIGGER,
           body: 'Active claim: drain the queue before it backs up.',
-          episodes: [{ path: 'docs/solutions/a/x.md', sha256: 'a'.repeat(64), kind: 'fix', plan: 'docs/plans/p1.md' }],
+          episodes: [{
+            ...writeRealFixEpisode(ws, 'docs/solutions/a/x.md', 'Active-one episode: drained the queue before it backed up.\n'),
+            kind: 'fix', plan: 'docs/plans/p1.md',
+          }],
         },
         {
           op: 'ADD', domain: 'widgetb', slug: 'provisional-one', trigger: TRIGGER,
           body: 'Provisional claim: drain the queue before it backs up.',
-          episodes: [{ path: 'docs/solutions/b/x.md', sha256: 'b'.repeat(64), kind: 'fix', plan: 'docs/plans/p1.md' }],
+          episodes: [{
+            ...writeRealFixEpisode(ws, 'docs/solutions/b/x.md', 'Provisional-one episode: drained the queue before it backed up.\n'),
+            kind: 'fix', plan: 'docs/plans/p1.md',
+          }],
         },
         {
           op: 'ADD', domain: 'widgetc', slug: 'retired-one', trigger: TRIGGER,
           body: 'Retired claim: drain the queue before it backs up.',
-          episodes: [{ path: 'docs/solutions/c/x.md', sha256: 'c'.repeat(64), kind: 'fix', plan: 'docs/plans/p1.md' }],
+          episodes: [{
+            ...writeRealFixEpisode(ws, 'docs/solutions/c/x.md', 'Retired-one episode: drained the queue before it backed up.\n'),
+            kind: 'fix', plan: 'docs/plans/p1.md',
+          }],
         },
         {
           op: 'ADD', domain: 'widgetd', slug: 'stale-one', trigger: TRIGGER,
           body: 'Stale-anchored claim: drain the queue before it backs up.',
-          episodes: [{ path: 'docs/solutions/widgetd/queue-backlog.md', sha256: 'd'.repeat(64), kind: 'fix', plan: 'docs/plans/p1.md' }],
+          episodes: [{ path: 'docs/solutions/widgetd/queue-backlog.md', sha256: staleAnchorEpisodeSha256, kind: 'fix', plan: 'docs/plans/p1.md' }],
         },
       ],
     })
@@ -226,7 +245,10 @@ function singleLearningContext() {
         {
           op: 'ADD', domain: 'repro', slug: 'big-plan', trigger: TRIGGER,
           body: 'Drain the queue before it backs up, and do not stop until the backlog is fully cleared out.',
-          episodes: [{ path: 'docs/solutions/a/x.md', sha256: 'a'.repeat(64), kind: 'fix', plan: 'docs/plans/p1.md' }],
+          episodes: [{
+            ...writeRealFixEpisode(ws, 'docs/solutions/a/x.md', 'Big-plan episode: drained the queue before it backed up.\n'),
+            kind: 'fix', plan: 'docs/plans/p1.md',
+          }],
         },
       ],
     })
