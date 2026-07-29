@@ -261,7 +261,7 @@ Allowed outcomes are `passed`, `failed`, and `inconclusive`. Only fresh `passed`
 }
 ```
 
-Lifecycle events are limited to `session_start`, `orient`, `gate`, `pre_tool`, `post_tool`, `skill_activation`, `verify`, `compound`, `consolidate`, `remember`, `learning`, `knowledge`, and `session_end`. Non-lifecycle commands (`recall`, `index`, `get`, `report`, `learnings`, `eval-knowledge`) never append events by design — they never call `writeEvent` at all. `init-repo` and `validate-plan` also never append events, but not by that same deliberate omission: both DO call `writeEvent` (types `init_repo`/`validate_plan`), and both types are simply absent from the allow-list above, so the call silently no-ops — see the Command catalog table's footnote. Every append-attempting command never stores prompt or query content; `skill_activation` stores only the skill and session binding.
+Lifecycle events are limited to `session_start`, `orient`, `gate`, `pre_tool`, `post_tool`, `skill_activation`, `verify`, `compound`, `consolidate`, `remember`, `learning`, `knowledge`, and `session_end`. Non-lifecycle commands `get`, `report`, `learnings`, and `eval-knowledge` never append events by design — they never call `writeEvent` at all. `init-repo`, `recall`, `validate-plan`, and `index` also never append events, but not by that same deliberate omission: all four DO call `writeEvent` (types `init_repo`/`recall`/`validate_plan`/`index`), and those types are simply absent from the allow-list above, so the calls silently no-op — see the Command catalog table's footnote. Every append-attempting command never stores prompt or query content; `skill_activation` stores only the skill and session binding.
 
 ## Host hook boundary
 
