@@ -12,6 +12,11 @@ import { applyOps } from '../lib/knowledge/apply.mjs';
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const binPath = path.join(packageRoot, 'bin', 'harness.mjs');
 const tempDir = (p) => fs.mkdtempSync(path.join(os.tmpdir(), p));
+// Same-day as `learning retire|dispute|promote`'s own todayClamped() stamp —
+// a re-teach episode dated today always clears the recency gate (a same-day
+// tie favors the override), so tests that need the override to legitimately
+// fire use this instead of writeRealEpisode's fixed-past default date.
+const today = new Date().toISOString().slice(0, 10);
 
 function ctx() {
   const ws = tempDir('apply-ws-');
@@ -55,11 +60,14 @@ const ADD = (over = {}) => ({
 // verifyHumanTeachingEpisode (apply.mjs) now requires disk proof (existence +
 // sha256 match + real frontmatter kind) before granting source: human /
 // status: active, a "human-taught" seed learning needs a genuine file, not
-// just an op asserting kind: human-teaching.
-function writeRealEpisode(ws, rel, kind = 'human-teaching') {
+// just an op asserting kind: human-teaching. `date` defaults to a fixed past
+// date — fine for every caller that isn't itself re-teaching over a standing
+// governance record (M4 review item 1's recency gate only compares dates
+// when a governance record exists for the target id).
+function writeRealEpisode(ws, rel, kind = 'human-teaching', date = '2026-07-01') {
   const full = path.join(ws, rel);
   fs.mkdirSync(path.dirname(full), { recursive: true });
-  const text = `---\ntitle: "${rel}"\nkind: ${kind}\ndate: 2026-07-01\n---\n\nepisode body for ${rel}.\n`;
+  const text = `---\ntitle: "${rel}"\nkind: ${kind}\ndate: ${date}\n---\n\nepisode body for ${rel}.\n`;
   fs.writeFileSync(full, text, 'utf8');
   return { path: rel, sha256: crypto.createHash('sha256').update(text).digest('hex') };
 }
@@ -316,7 +324,9 @@ test('a verified human-teaching in-place SUPERSEDE on an already-disputed target
   assert.equal(run(c, ['learning', 'dispute', 'sql/not-null-large-tables', '--reason', 'contested']).status, 0);
   const { dir } = ensureStore(c.ws, { home: c.harnessHome });
 
-  const ep = writeRealEpisode(c.ws, 'docs/solutions/teachings/reteach-disputed.md');
+  // Dated today so it clears the M4 review recency gate (overridesGovernanceRecency,
+  // apply.mjs) — evidence must be at least as new as the standing dispute record.
+  const ep = writeRealEpisode(c.ws, 'docs/solutions/teachings/reteach-disputed.md', 'human-teaching', today);
   const reteach = {
     op: 'SUPERSEDE',
     target: 'sql/not-null-large-tables',
@@ -336,6 +346,44 @@ test('a verified human-teaching in-place SUPERSEDE on an already-disputed target
   assert.equal(learning.fm.status, 'active', 'the verified re-teach overrides the disputed status');
   assert.equal(learning.fm.source, 'human');
   assert.match(learning.body, /A corrected human-verified claim/);
+});
+
+// M4 whole-milestone review, item 1(b): the recency gate withholds the
+// override on a genuinely-verified-but-STALE re-teach — the SAME pre-retire
+// episode a retired target was originally seeded on, cited again after the
+// retire, must not resurrect it. verifyHumanTeachingEpisode still passes
+// (authentic evidence); overridesGovernanceRecency is what withholds it
+// here (the episode's date predates the retire's governance record).
+test('an in-place SUPERSEDE citing only the OLD (pre-retire) episode on a retired target is rejected — the recency gate withholds the override', () => {
+  const c = ctx();
+  const targetId = seedHumanLearning(c, 'stale-reteach-retired');
+  assert.equal(run(c, ['learning', 'retire', targetId, '--reason', 'stale']).status, 0);
+  const { dir } = ensureStore(c.ws, { home: c.harnessHome });
+  const ledgerBefore = readLedger(dir).length;
+
+  // The exact same episode file seedHumanLearning used — genuinely
+  // human-teaching, disk-verified, but dated (writeRealEpisode's fixed
+  // 2026-07-01 default) before the retire's governance record `at`.
+  const ep = writeRealEpisode(c.ws, 'docs/solutions/teachings/stale-reteach-retired.md');
+  const reteach = {
+    op: 'SUPERSEDE',
+    target: targetId,
+    domain: 'sql',
+    slug: 'stale-reteach-retired', // in-place shape — same id as target
+    trigger: 'adding NOT NULL columns to large/hot tables',
+    body: 'A claim that would replace the retired one, if stale evidence were allowed to override.',
+    episodes: [{ ...ep, kind: 'human-teaching', plan: null }],
+  };
+  const res = run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [reteach])]);
+  assert.equal(res.status, 1, res.stderr || res.stdout);
+  const out = JSON.parse(res.stdout);
+  assert.equal(out.rejected[0].code, 'E_TARGET');
+  assert.match(out.rejected[0].reason, /is not active/);
+
+  assert.equal(readLedger(dir).length, ledgerBefore, 'inactive-target rejection records no strike');
+  const learning = listLearnings(dir).find((l) => l.id === targetId);
+  assert.equal(learning.fm.status, 'retired', 'target frontmatter untouched — stale evidence never exempts');
+  assert.doesNotMatch(learning.body, /would replace the retired one/);
 });
 
 // The negative counterpart: model-lane (fix-kind, unverifiable as human

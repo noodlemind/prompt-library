@@ -110,6 +110,53 @@ test('(a) an ADD regenerating a previously retired id reapplies retire: governed
   assert.ok(!ranked.some((r) => r.id === id), 'retired id excluded from rankLearnings');
 });
 
+// (a-recency) M4 whole-milestone review, item 1 (critical): the re-teach
+// override must never fire on evidence STALER than the governance decision
+// it would overturn. Reproduces the exact flow the review found: a
+// human-taught learning is retired, `--rebuild --yes` wipes the corpus, and
+// the candidates packet re-offers the SAME (pre-retire, now-stale) teaching
+// episode with kind human-teaching — by design, nothing purges it. A
+// consolidation skill copying that kind verbatim into a fresh ADD must NOT
+// resurrect the learning past the retire, and must NOT fabricate a `confirm`
+// record implying the human re-affirmed something they never saw.
+test('(a-recency) an ADD built from a STALE (pre-retire) teaching episode still reapplies the retire, appends no confirm, and stays out of ranking', () => {
+  const c = ctx();
+  const slug = 'a-recency-scenario';
+  const id = `sql/${slug}`;
+  const dir = storeDir(c.ws, { home: c.harnessHome });
+
+  // writeRealEpisode's fixed `date: 2026-07-01` — genuinely human-taught,
+  // disk-verified, but older than the retire's governance record `at`.
+  const ep = writeRealEpisode(c.ws, `docs/solutions/teachings/${slug}.md`);
+  const seedOp = ADD({ slug, episodes: [{ ...ep, kind: 'human-teaching', plan: null }] });
+  assert.equal(run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [seedOp])]).status, 0);
+
+  assert.equal(run(c, ['learning', 'retire', id, '--reason', 'stale']).status, 0);
+  assert.equal(run(c, ['consolidate', '--rebuild', '--yes']).status, 0);
+  assert.equal(listLearnings(dir).length, 0, 'precondition: rebuild wiped the learning');
+  assert.equal(readGovernance(dir).get(id).action, 'retire', 'precondition: retire on record');
+
+  const packet = JSON.parse(run(c, ['consolidate', '--candidates']).stdout);
+  const packetEntry = packet.clusters.flatMap((cl) => cl.episodes).find((e) => e.path === ep.path);
+  assert.ok(packetEntry, 'the stale teaching episode re-enters candidates after rebuild');
+  assert.equal(packetEntry.kind, 'human-teaching', 'the packet still labels it human-teaching, by design');
+
+  const regenOp = ADD({ slug, episodes: [{ path: packetEntry.path, sha256: packetEntry.sha256, kind: packetEntry.kind, plan: null }] });
+  const res = run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [regenOp])]);
+  assert.equal(res.status, 0, res.stderr || res.stdout);
+  const out = JSON.parse(res.stdout);
+  assert.deepEqual(out.governed, [{ id, action: 'retire' }], 'the standing retire reapplies — stale evidence never overrides it');
+
+  const learning = listLearnings(dir).find((l) => l.id === id);
+  assert.ok(learning, 'the regenerated file still lands on disk');
+  assert.equal(learning.fm.status, 'retired');
+
+  assert.equal(readGovernance(dir).get(id).action, 'retire', 'no fabricated confirm record — retire remains the latest governance entry');
+
+  const ranked = rankLearnings({ workspace: c.ws, query: 'not null large hot tables', home: c.harnessHome });
+  assert.ok(!ranked.some((r) => r.id === id), 'retired id stays excluded from rankLearnings');
+});
+
 // (a, continued) the human-readable apply note surfaces the re-governed count.
 test('(a) the apply note (non-JSON render) reports N re-governed', () => {
   const c = ctx();
@@ -163,6 +210,42 @@ test('(b) an ADD regenerating a previously promoted id reapplies promote: promot
   assert.equal(supRes.status, 1, 'a promoted id rejects a follow-up SUPERSEDE');
   assert.match(supRes.stdout + supRes.stderr, /E_TARGET/);
   assert.match(supRes.stdout + supRes.stderr, /promoted/);
+});
+
+// (b-hardening) M4 whole-milestone review, item 4 (defense in depth):
+// governance reapplication must never trust a promote record's `to` field
+// verbatim at REPLAY time — `lifecycle.mjs`'s own promote command validates
+// containment at RECORD time, but governance.jsonl is a plain file outside
+// applyOps' own write path (a hand edit to it isn't absorbed/scanned the way
+// a learning file is), so a poisoned or tampered entry must be re-validated
+// on the way back in. A violation must skip the reapply for that id, never
+// throw and never write the unsafe path into the regenerated file.
+test('(b-hardening) a hand-poisoned promote record with an escaping `to` is re-validated at reapply: regenerated file lands WITHOUT promoted_to, no crash', () => {
+  const c = ctx();
+  const slug = 'poisoned-promote-target';
+  const id = `sql/${slug}`;
+  const dir = storeDir(c.ws, { home: c.harnessHome });
+
+  assert.equal(run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [ADD({ slug })])]).status, 0);
+
+  // Hand-poison governance.jsonl directly — bypassing `learning promote`'s
+  // own containment check, the same way a direct file edit could.
+  fs.appendFileSync(
+    path.join(dir, 'governance.jsonl'),
+    `${JSON.stringify({ id, action: 'promote', reason: 'poisoned', to: '../../../etc/passwd', at: '2026-07-01' })}\n`
+  );
+
+  assert.equal(run(c, ['consolidate', '--rebuild', '--yes']).status, 0);
+  assert.equal(listLearnings(dir).length, 0, 'precondition: rebuild wiped the learning');
+
+  const res = run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [ADD({ slug })])]);
+  assert.equal(res.status, 0, res.stderr || res.stdout, 'the escaping governance record must never crash the run');
+  const out = JSON.parse(res.stdout);
+  assert.deepEqual(out.governed, [], 'the unsafe promote target is skipped, not reapplied');
+
+  const learning = listLearnings(dir).find((l) => l.id === id);
+  assert.ok(learning, 'the regenerated file still lands on disk');
+  assert.equal(learning.fm.promoted_to, undefined, 'no promoted_to written from the escaping governance record');
 });
 
 // (c) human re-teach override: retire, rebuild, then remember the same

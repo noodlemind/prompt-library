@@ -105,15 +105,22 @@ same all-or-nothing guarantee as every other `applyOps` mutation.
 
 The one override is bounded the same way the insight lane's declarative-deception risk is
 bounded (see above): a verified human re-teach requires on-disk proof, not an op's own
-claim — the same anti-fabrication gate as source derivation. `verifyHumanTeachingEpisode`
-(`apply.mjs`) checks that the episode path resolves inside the workspace, the file exists
-there, its CURRENT content hashes to the asserted sha256 (not stale or edited since), and
-the file's OWN frontmatter independently says `kind: human-teaching` — every check must
-pass, or the override never fires and the standing governance record (and, separately, the
-target-activeness gate that blocks writing over a disputed/retired target) is enforced as
-usual. A model can never fabricate this path into existence: it only ever exists because a
-human already wrote a `kind: human-teaching` episode to disk first, through `harness
-remember` or a hand-edit absorption.
+claim — the same anti-fabrication gate as source derivation — AND evidence at least as new
+as the recorded decision it would override. `verifyHumanTeachingEpisode` (`apply.mjs`)
+checks that the episode path resolves inside the workspace, the file exists there, its
+CURRENT content hashes to the asserted sha256 (not stale or edited since), and the file's
+OWN frontmatter independently says `kind: human-teaching`. That alone proves authenticity,
+not recency: a genuinely human-taught episode written BEFORE a later retire/dispute/promote
+would otherwise resurrect a decision it never saw. `overridesGovernanceRecency` closes that
+gap — when a governance record already exists for the id, every verifying episode's own
+frontmatter `date` must be `>=` that record's `at` (plain string compare; a same-day tie
+favors the override, which is what lets a same-day `remember` re-teach still win). Every
+check must pass, or the override never fires and the standing governance record (and,
+separately, the target-activeness gate that blocks writing over a disputed/retired target)
+is enforced as usual. A model can never fabricate this path into existence: it only ever
+exists because a human already wrote a `kind: human-teaching` episode to disk first, through
+`harness remember` or a hand-edit absorption, dated at least as recently as the decision it
+overrides.
 
 `harness knowledge purge` is the one path that does not leave a governance record to
 reapply: it deletes the episodes, the consumption ledger entries, and the governance record
@@ -122,10 +129,14 @@ rebuild to honor.
 
 ## Dispute blast radius (MERGE inherits SUPERSEDE semantics, wider)
 
-A `SUPERSEDE` aimed at a disputed or human-sourced-and-well-evidenced target is rejected
-and marks that ONE target `disputed` rather than silently demoting it — a human-reviewer
-gate, not a hard block (see Suggest mode below for the write-side analogue). `MERGE`
-inherits the identical rule but at N-target width: a MERGE's `targets` array can name
+A `SUPERSEDE` aimed at a target that is already `disputed` (or retired/superseded) ON DISK
+from a prior run takes the cross-run target-activeness rejection instead — it is already
+marked, so there is no re-marking. A `SUPERSEDE` aimed at an *active* target that meets the
+protected predicate — `>= 3` verified `fix` episodes OR `source: human` (a disjunction:
+either alone qualifies, not both required) — is rejected and marks that ONE target
+`disputed` rather than silently demoting it — a human-reviewer gate, not a hard block (see
+Suggest mode below for the write-side analogue). `MERGE` inherits the identical rule but at
+N-target width: a MERGE's `targets` array can name
 several existing learnings at once, and `apply.mjs` filters that array down to the
 protected subset (`disputedTargets = op.targets.filter(isDisputedTargetFm)`) — if that
 subset is non-empty, the WHOLE op is rejected (`E_DISPUTED`, no merged learning is ever

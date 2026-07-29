@@ -273,6 +273,43 @@ test('a MERGE targeting a promoted learning is rejected with the promoted E_TARG
   assert.ok(!byId['sql/attempted-merge-promoted'], 'no new learning written');
 });
 
+// M4 whole-milestone review, item 2: a MERGE naming a target already
+// disputed/retired/superseded ON DISK from a PRIOR run must be the same
+// never-strike class as the STRENGTHEN/SUPERSEDE inactive-target checks
+// (consolidate-apply.test.mjs) — plain fail, never rejectOp. The op's own
+// episodes aren't defective; its choice of an already-inactive target is —
+// recording a strike here would quarantine innocent episodes on a
+// retry-after-dispute.
+test('a MERGE naming an already-disputed target (prior run) is rejected E_TARGET (not active), ledger unchanged', () => {
+  const c = ctx();
+  const { dir } = ensureStore(c.ws, { home: c.harnessHome });
+  seedLearning(dir, 'sql', 'disputed-merge-target', { status: 'disputed' });
+  seedLearning(dir, 'sql', 'active-merge-target');
+  rebuildIndex(dir);
+
+  const ledgerBefore = readLedger(dir).length;
+  const mergeOp = {
+    op: 'MERGE',
+    targets: ['sql/disputed-merge-target', 'sql/active-merge-target'],
+    domain: 'sql',
+    slug: 'attempted-merge-inactive',
+    trigger: 'a merge trying to consume an already-disputed target',
+    body: 'attempted merge body text.',
+    episodes: [EP({ path: 'docs/solutions/perf/attempt-inactive.md', sha256: 'e'.repeat(64) })],
+  };
+  const res = run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [mergeOp])]);
+  assert.equal(res.status, 1, res.stderr || res.stdout);
+  const out = JSON.parse(res.stdout);
+  assert.equal(out.rejected[0].code, 'E_TARGET');
+  assert.match(out.rejected[0].reason, /is not active/);
+
+  assert.equal(readLedger(dir).length, ledgerBefore, 'inactive-target rejection records no strike — ledger unchanged');
+  const byId = Object.fromEntries(listLearnings(dir).map((l) => [l.id, l]));
+  assert.equal(byId['sql/disputed-merge-target'].fm.status, 'disputed', 'target untouched');
+  assert.equal(byId['sql/active-merge-target'].fm.superseded_by, null, 'the active target is untouched — whole run rejected');
+  assert.ok(!byId['sql/attempted-merge-inactive'], 'no new learning written');
+});
+
 // (e) MERGE weight (1 + targets.length) toward MAX_OPS_PER_RUN.
 test('a 4-target MERGE (5 file touches) alone passes the delta contract but combined with an ADD fails it', () => {
   const c = ctx();

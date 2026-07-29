@@ -36,15 +36,19 @@ The apply/candidates response surfaces this as `governed: [{ id, action }]`.
 
 Because governance is carried by the **id**, not the claim, a genuinely new claim should
 take a new slug — reusing an old id to dodge a standing decision only triggers
-reapplication instead of escaping it. The one override is a **verified** human re-teach:
-`harness remember` reusing the exact trigger/domain, backed by on-disk `kind:
-human-teaching` evidence (never just an op's own assertion), outranks both the stored
-governance record and the activeness gate that would otherwise block writing over a
-disputed/retired target. A verified re-teach lands the learning `active`, `source: human`,
-and appends a fresh `confirm` entry (never rewriting history) instead of being blocked or
-silently reapplying the old veto — the same anti-fabrication discipline as the threat
-model's insight-lane checks: a model cannot fabricate this exemption, only a human's own
-prior writing to disk can satisfy it.
+reapplication instead of escaping it. The one override is a **verified and at-least-as-new**
+human re-teach: `harness remember` reusing the exact trigger/domain, backed by on-disk
+`kind: human-teaching` evidence (never just an op's own assertion) whose own episode date is
+`>=` the governance record's date, outranks both the stored governance record and the
+activeness gate that would otherwise block writing over a disputed/retired target. Verified
+alone is not enough — a genuinely human-taught episode written BEFORE a later retire/
+dispute/promote must never resurrect a decision it predates, so the override also checks
+recency (a same-day re-teach still wins; an older one does not). A verified, sufficiently
+recent re-teach lands the learning `active`, `source: human`, and appends a fresh `confirm`
+entry (never rewriting history) instead of being blocked or silently reapplying the old
+veto — the same anti-fabrication discipline as the threat model's insight-lane checks: a
+model cannot fabricate this exemption, only a human's own prior writing to disk, dated
+recently enough, can satisfy it.
 
 `harness knowledge purge <file>` / `purge --all` differ in kind, not degree: purge erases
 the episodes, the consumption ledger entries, AND the governance record for that id
@@ -184,7 +188,14 @@ runs `git status --porcelain` in the store first and commits any dirty edit as i
   at `docs/solutions/teachings/<date>-hand-edit-<slug>.md` (secret-scanned; a hit skips the
   snapshot but still absorbs the edit), linked into the learning's `episodes`, and given
   `source: human` — so `consolidate --rebuild` re-derives the hand-taught claim from disk
-  instead of discarding it.
+  instead of discarding it. This is asymmetric with the governance ledger: absorbing a
+  modified file never touches `governance.jsonl`, so hand-editing a retired/disputed
+  learning's `status` back to `active` reactivates it on disk but does NOT neutralize a
+  standing `retire`/`dispute` record — a later `consolidate --rebuild --yes` still finds that
+  record and re-applies it, silently reverting the hand edit. To durably reverse a retire or
+  dispute, run `harness learning confirm <id>` or re-teach it (`harness remember`, same
+  trigger/domain, at least as recent as the record) — either records a fresh governance
+  entry; a hand edit alone never does.
 - **A hand-deleted learning file** is absorbed as a governance `retire`, not a purge: the
   working file, `INDEX.md` entry, and (under `knowledge commit repo`) the mirrored
   product-repo copy are removed immediately — human deletion always wins, same immediacy as

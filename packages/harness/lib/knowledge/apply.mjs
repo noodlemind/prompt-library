@@ -54,9 +54,9 @@ const DISPUTED_FIX_THRESHOLD = 3;
 //     offered episodes aren't defective, the op's CHOICE of target is, so a
 //     model repeatedly aiming at a promoted id must never accumulate toward
 //     quarantine for it.
-//   - inactive-target rejections: a STRENGTHEN/SUPERSEDE aimed at a target
-//     already superseded/retired/disputed ON DISK from a PRIOR run (also
-//     E_TARGET, also a plain fail, never rejectOp — same reasoning as
+//   - inactive-target rejections: a STRENGTHEN/SUPERSEDE/MERGE aimed at a
+//     target already superseded/retired/disputed ON DISK from a PRIOR run
+//     (also E_TARGET, also a plain fail, never rejectOp — same reasoning as
 //     promoted-target: the op's episodes aren't defective, its choice of a
 //     dead target is).
 const CONTENT_FAILURE_CODES = new Set(['E_SCHEMA', 'E_SECRET', 'E_LINT', 'E_BYTE_CAP', 'E_EXISTS', 'E_TARGET']);
@@ -258,6 +258,59 @@ function verifyHumanTeachingEpisode(workspace, e) {
   return kind === 'human-teaching';
 }
 
+/**
+ * The `date` recorded in an episode's OWN frontmatter — read the same way
+ * `collectEpisodes` (consolidate.mjs) derives it (`fm.date`), from the
+ * episode file's CURRENT on-disk content, never from anything the op JSON
+ * asserts (an op's episode entries carry no date field of their own). Used
+ * only by the recency gate below. Same containment guard and fail-closed
+ * shape as verifyHumanTeachingEpisode (null on any escape/missing/
+ * unreadable/unparsable case) — a shared reader isn't worth factoring out
+ * for two short, independently-failing checks.
+ */
+function episodeDate(workspace, e) {
+  if (!e.path) return null;
+  const root = path.resolve(workspace);
+  const full = path.resolve(root, e.path);
+  if (full !== root && !full.startsWith(root + path.sep)) return null;
+  let text;
+  try {
+    text = fs.readFileSync(full, 'utf8');
+  } catch {
+    return null;
+  }
+  const m = text.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+  if (!m) return null;
+  const dateLine = m[1].split('\n').find((l) => /^date:\s*/.test(l));
+  const date = dateLine ? dateLine.replace(/^date:\s*/, '').replace(/^["']|["']$/g, '').trim() : null;
+  return date || null;
+}
+
+/**
+ * Recency gate on the human re-teach override (design correction, M4 whole-
+ * milestone review, item 1): verifying an episode is human-teaching proves
+ * AUTHENTICITY, never RECENCY — without this, a STALE human-teaching episode
+ * (e.g. a `remember` from before a LATER `learning retire`/`dispute`/
+ * `promote`) could resurrect a newer human governance decision on the same
+ * id, including fabricating a `confirm` record that makes it look like the
+ * human re-affirmed something they never saw. Applied ONLY when a governance
+ * record exists for the id — nothing stale to guard against otherwise, so an
+ * id with no standing decision is unaffected. Every verifying episode's own
+ * frontmatter `date` must be >= record.at (plain YYYY-MM-DD string compare —
+ * safe for this format). A same-day tie favors the override (date ===
+ * record.at passes): this is what keeps a same-day `remember` re-teach
+ * (which always stamps today's date) overriding a same-day retire/dispute.
+ * An episode with no parseable date fails closed — never counts as recent
+ * enough to override a recorded human decision.
+ */
+function overridesGovernanceRecency(workspace, episodes, record) {
+  if (!record) return true;
+  return episodes.every((e) => {
+    const d = episodeDate(workspace, e);
+    return d != null && d >= record.at;
+  });
+}
+
 export function applyOps({ workspace, opsPath, dryRun = false, home, approve = false, log = () => {} }) {
   // Absorb any hand edit sitting in the store BEFORE anything else — even
   // before the mode gate. The failure path below can `git reset --hard` the
@@ -412,6 +465,12 @@ export function applyOps({ workspace, opsPath, dryRun = false, home, approve = f
     return existing.has(id) || plannedIds.has(id);
   }
 
+  // Read once, reused by both the validation-time re-teach gate below and
+  // the governance reapplication block further down — no governance write
+  // happens between here and either read, so a single read is both safe and
+  // exactly what keeps the two gates from ever seeing different states.
+  const governance = readGovernance(dir);
+
   // Validate every op before writing anything — all-or-nothing runs.
   const planned = [];
   const disputes = [];
@@ -460,7 +519,15 @@ export function applyOps({ workspace, opsPath, dryRun = false, home, approve = f
       // domain/slug) never reaches it.
       isReteachShape = op.op === 'SUPERSEDE' && newIdFor(op) === op.target;
       allHumanTeaching =
-        isReteachShape && op.episodes.length > 0 && op.episodes.every((e) => verifyHumanTeachingEpisode(workspace, e));
+        isReteachShape &&
+        op.episodes.length > 0 &&
+        op.episodes.every((e) => verifyHumanTeachingEpisode(workspace, e)) &&
+        // Recency gate (see overridesGovernanceRecency doc comment): the
+        // op's own claim of human authorship isn't enough if a governance
+        // record already exists for this exact target/id and the evidence
+        // offered predates it — a stale teaching episode must never resurrect
+        // a NEWER human retire/dispute/promote decision.
+        overridesGovernanceRecency(workspace, op.episodes, governance.get(op.target));
       // Cross-run target-activeness (MERGE already required this — see the
       // isActiveFm check in its own branch below): a target already
       // superseded/retired/disputed ON DISK from a PRIOR run must never
@@ -570,8 +637,20 @@ export function applyOps({ workspace, opsPath, dryRun = false, home, approve = f
         }
       }
       for (const t of op.targets) {
+        // Inactive-target rejection (M4 review, item 2): same never-strike
+        // class as the STRENGTHEN/SUPERSEDE inactive-target checks above —
+        // the op's own episodes aren't defective, its choice of an already
+        // superseded/retired/disputed target is, so this is a plain fail,
+        // never rejectOp. Recording a strike here would quarantine innocent
+        // episodes on a retry-after-dispute.
         if (!isActiveFm(existing.get(t).fm)) {
-          return rejectOp('E_TARGET', `op ${i}: target ${t} is not active (already superseded/retired/disputed)`, op.episodes);
+          return {
+            applied: [],
+            governed: [],
+            rejected: [fail('E_TARGET', `op ${i}: target ${t} is not active (already superseded/retired/disputed)`)],
+            committed: false,
+            exitCode: 1,
+          };
         }
       }
     }
@@ -868,16 +947,22 @@ export function applyOps({ workspace, opsPath, dryRun = false, home, approve = f
       // fresh op claims. `confirm` is deliberately excluded — it is not a
       // demotion to restore, so it never reapplies. EXCEPTION: an op whose
       // EVERY episode verifies as human-teaching (verifyHumanTeachingEpisode)
-      // is the human retracting their own earlier call by re-teaching the
-      // same trigger/domain — the standing decision is overridden instead of
-      // enforced, and a fresh `confirm` record (never overwriting the
-      // history, always appended) supersedes it via readGovernance's
-      // latest-per-id replay.
-      const governance = readGovernance(dir);
+      // AND is at least as recent as this governance record
+      // (overridesGovernanceRecency) is the human retracting their own
+      // earlier call by re-teaching the same trigger/domain — the standing
+      // decision is overridden instead of enforced, and a fresh `confirm`
+      // record (never overwriting the history, always appended) supersedes
+      // it via readGovernance's latest-per-id replay. `governance` was
+      // already read once above (before validation) — reused here, not
+      // re-read, since nothing writes to governance.jsonl between that read
+      // and this loop.
       for (const { op, id, domain, slug } of writes) {
         const entry = governance.get(id);
         if (!entry || !['retire', 'dispute', 'promote'].includes(entry.action)) continue;
-        const isReteach = op.episodes.length > 0 && op.episodes.every((e) => verifyHumanTeachingEpisode(workspace, e));
+        const isReteach =
+          op.episodes.length > 0 &&
+          op.episodes.every((e) => verifyHumanTeachingEpisode(workspace, e)) &&
+          overridesGovernanceRecency(workspace, op.episodes, entry);
         if (isReteach) {
           appendGovernance(dir, { id, action: 'confirm', reason: 'superseded by re-teach', to: null, at });
           continue;
@@ -887,7 +972,22 @@ export function applyOps({ workspace, opsPath, dryRun = false, home, approve = f
           // promoted_to may be entirely absent from the just-written file —
           // the same parse -> mutate fm -> serializeLearning re-render
           // lifecycle.mjs's own promote branch uses, not
-          // updateFrontmatterField's regex-insert.
+          // updateFrontmatterField's regex-insert. Re-validated here with the
+          // exact same containment idiom lifecycle.mjs's promote branch
+          // enforces at RECORD time — entry.to is read back from
+          // governance.jsonl, a file outside applyOps' own write path (a hand
+          // edit to it is not absorbed/scanned the way a learning file is),
+          // so a poisoned or hand-edited entry must never be trusted verbatim
+          // at REPLAY time. A violation skips the reapply for this id
+          // entirely (the freshly written file is left exactly as the write
+          // loop above produced it, no promoted_to added) and logs it —
+          // fail-closed, never a throw.
+          const root = path.resolve(workspace);
+          const toFull = path.resolve(root, entry.to || '');
+          if (!entry.to || (toFull !== root && !toFull.startsWith(root + path.sep))) {
+            log(`consolidate: governance record for ${id} has an unsafe promote target (${entry.to}) — skipped reapply`);
+            continue;
+          }
           const text = fs.readFileSync(file, 'utf8');
           const { fm, body } = parseLearningFrontmatter(text);
           fs.writeFileSync(file, serializeLearning({ ...fm, promoted_to: entry.to }, body), 'utf8');
