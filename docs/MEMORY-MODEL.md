@@ -2,9 +2,9 @@
 
 The Adaptive Engineer Harness's memory is three tiers, each with a single writer and a
 narrower role than the one before it. Every change — including forgetting — is a git
-commit. This page is the human-facing summary; the full design lives in
-[`docs/brainstorms/2026-07-26-knowledge-layer-design.md`](brainstorms/2026-07-26-knowledge-layer-design.md)
-and the threat model in [`docs/architecture/knowledge-threat-model.md`](architecture/knowledge-threat-model.md).
+commit. This page is the human-facing summary (the approved 2026-07-26 design document
+was pruned after implementation and remains in git history); the threat model lives in
+[`docs/architecture/knowledge-threat-model.md`](architecture/knowledge-threat-model.md).
 Scope: Phase 1, local-only. Team sync is a future phase, deferred by design.
 
 ## Three tiers

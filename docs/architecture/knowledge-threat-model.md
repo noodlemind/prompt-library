@@ -3,9 +3,8 @@
 Scope: the T2 semantic memory layer (learnings) and its write path — the surface that
 takes text derived from episodes and model reasoning and turns it into content an agent
 or a human later reads as memory. See [`docs/MEMORY-MODEL.md`](../MEMORY-MODEL.md) for the
-tier and lifecycle summary, and
-[`docs/brainstorms/2026-07-26-knowledge-layer-design.md`](../brainstorms/2026-07-26-knowledge-layer-design.md)
-for the full approved design this threat model mirrors (§14, residual risks).
+tier and lifecycle summary. The full approved design this threat model mirrors (§14,
+residual risks) was pruned after implementation and remains in git history.
 
 ## Data flow and trust boundaries
 
@@ -290,5 +289,4 @@ learnings alone while leaving fix-derived ones active is not a capability that e
 ## Related
 
 - [`docs/MEMORY-MODEL.md`](../MEMORY-MODEL.md)
-- [`docs/brainstorms/2026-07-26-knowledge-layer-design.md`](../brainstorms/2026-07-26-knowledge-layer-design.md)
 - [`.github/skills/references/harness-tool-contract.md`](../../.github/skills/references/harness-tool-contract.md)
