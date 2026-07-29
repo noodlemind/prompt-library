@@ -126,14 +126,18 @@ A `SUPERSEDE` aimed at a disputed or human-sourced-and-well-evidenced target is 
 and marks that ONE target `disputed` rather than silently demoting it — a human-reviewer
 gate, not a hard block (see Suggest mode below for the write-side analogue). `MERGE`
 inherits the identical rule but at N-target width: a MERGE's `targets` array can name
-several existing learnings at once, so a single model-emitted MERGE op that touches ANY
-protected target (well-evidenced or human-sourced) rejects the WHOLE op and disputes EVERY
-one of its named targets pending human confirm, not only the offending one — untouched
-learnings elsewhere in the run are unaffected, but a MERGE's own blast radius is
-intentionally wider than a SUPERSEDE's. This is bounded, not unbounded: the ≤5-file delta
-contract (`MAX_OPS_PER_RUN`; MERGE counts `1 + targets.length`) caps how many targets a
-single MERGE can ever name in one run, so the worst case is a handful of learnings marked
-disputed-pending-human-confirm in one run, never a store-wide sweep.
+several existing learnings at once, and `apply.mjs` filters that array down to the
+protected subset (`disputedTargets = op.targets.filter(isDisputedTargetFm)`) — if that
+subset is non-empty, the WHOLE op is rejected (`E_DISPUTED`, no merged learning is ever
+written) and EACH PROTECTED target in the subset is marked `disputed` pending human
+confirm; any non-protected target named in the same `targets` array is left completely
+untouched, still active. The widened radius versus a SUPERSEDE is that a single MERGE op
+can dispute up to N protected targets in one shot, not that it disputes every target it
+names — a MERGE mixing one protected and several ordinary targets disputes only the
+protected one. This is bounded, not unbounded: the ≤5-file delta contract
+(`MAX_OPS_PER_RUN`; MERGE counts `1 + targets.length`) caps how many targets a single
+MERGE can ever name in one run, so the worst case is a handful of protected learnings
+marked disputed-pending-human-confirm in one run, never a store-wide sweep.
 
 ## Commit mode (opt-in, the documented exception)
 
