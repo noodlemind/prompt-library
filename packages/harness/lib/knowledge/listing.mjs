@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import { storeDir, listLearnings } from './store.mjs';
 import { readEvents, EVENTS_MAX_LIMIT } from '../events.mjs';
-import { verifiedAndPlans, isPromotionEligible } from './consolidate.mjs';
+import { verifiedAndPlans, isPromotionEligible, consolidateStatus } from './consolidate.mjs';
 
 /**
  * Read-only fenced listing and single-learning provenance view over the
@@ -61,11 +61,11 @@ export function parseMergedFrom(raw) {
   return items.length ? items : null;
 }
 
-export function listingView({ workspace, domain, home }) {
+export function listingView({ workspace, copilotHome, domain, home }) {
   const dir = storeDir(workspace, { home });
   // Read-only: a storeless workspace must never be materialized by a listing
   // call — an absent store just means nothing to list yet.
-  if (!fs.existsSync(dir)) return { learnings: [], counts: { active: 0, total: 0 } };
+  if (!fs.existsSync(dir)) return { learnings: [], counts: { active: 0, total: 0 }, quarantined: [] };
   const all = listLearnings(dir);
   const scoped = domain ? all.filter((l) => l.domain === domain) : all;
   const failures = failureCounts(workspace);
@@ -87,7 +87,13 @@ export function listingView({ workspace, domain, home }) {
     .sort((a, b) => a.id.localeCompare(b.id));
 
   const active = learnings.filter((l) => !['retired', 'disputed', 'superseded', 'promoted'].includes(l.status)).length;
-  return { learnings, counts: { active, total: learnings.length } };
+  // Same source of truth consolidateStatus/doctor K2 use — non-creating, the
+  // store already exists per the guard above, so this never materializes it.
+  const quarantined = consolidateStatus({ workspace, copilotHome, home }).quarantined.map((q) => ({
+    path: q.path,
+    sha256: q.sha256,
+  }));
+  return { learnings, counts: { active, total: learnings.length }, quarantined };
 }
 
 export function whyView({ workspace, id, home }) {

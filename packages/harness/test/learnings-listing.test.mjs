@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -24,6 +25,30 @@ function writeOps(dir, ops) {
   const p = path.join(dir, 'ops.json');
   fs.writeFileSync(p, JSON.stringify({ schema: 1, ops }));
   return p;
+}
+
+// Quarantine an episode via 3 byte-cap strikes through apply — same idiom as
+// quarantine.test.mjs's three-strikes test.
+function quarantineEpisode(c) {
+  const dir = path.join(c.ws, 'docs', 'solutions', 'perf');
+  fs.mkdirSync(dir, { recursive: true });
+  const text = '---\ntitle: "big claim lesson"\ndate: 2026-07-01\n---\n\n## Problem\n\nbig claim details.\n';
+  fs.writeFileSync(path.join(dir, 'big-claim.md'), text);
+  const ep = { path: 'docs/solutions/perf/big-claim.md', sha256: crypto.createHash('sha256').update(text).digest('hex') };
+  const op = {
+    op: 'ADD',
+    domain: 'sql',
+    slug: 'big-claim',
+    trigger: 'a quarantine trigger',
+    body: 'x'.repeat(1300),
+    episodes: [{ path: ep.path, sha256: ep.sha256, kind: 'fix', plan: 'docs/plans/p1.md' }],
+  };
+  const opsPath = writeOps(c.ws, [op]);
+  for (let i = 0; i < 3; i++) {
+    const res = run(c, ['consolidate', '--apply', '--ops', opsPath]);
+    assert.equal(res.status, 1, res.stderr || res.stdout);
+  }
+  return ep;
 }
 
 // Three fix-kind episode links across two distinct plans — promotion-eligible
@@ -149,6 +174,42 @@ test('learnings <domain> --json filters to that domain', () => {
   assert.ok(out.learnings.every((l) => l.id.startsWith('sql/')));
 });
 
+test('learnings --json carries quarantined episodes as { path, sha256 }', () => {
+  const c = ctx();
+  seed(c);
+  const ep = quarantineEpisode(c);
+
+  const res = run(c, ['learnings']);
+  assert.equal(res.status, 0, res.stderr || res.stdout);
+  const out = JSON.parse(res.stdout);
+  assert.deepEqual(out.quarantined, [{ path: ep.path, sha256: ep.sha256 }]);
+});
+
+test('plain learnings output renders a muted quarantine line when episodes are quarantined', () => {
+  const c = ctx();
+  seed(c);
+  quarantineEpisode(c);
+
+  const res = run(c, ['learnings'], { json: false });
+  assert.equal(res.status, 0, res.stderr || res.stdout);
+  assert.match(
+    res.stdout,
+    /1 quarantined episode\(s\) — inspect with harness consolidate --status, clear with knowledge purge <path>/
+  );
+});
+
+test('learnings with no quarantined episodes: empty array in JSON, no quarantine line in plain output', () => {
+  const c = ctx();
+  seed(c);
+
+  const out = JSON.parse(run(c, ['learnings']).stdout);
+  assert.deepEqual(out.quarantined, []);
+
+  const plain = run(c, ['learnings'], { json: false });
+  assert.equal(plain.status, 0, plain.stderr || plain.stdout);
+  assert.doesNotMatch(plain.stdout, /quarantined episode/);
+});
+
 test('plain learnings output is fenced and annotates contradicted evidence', () => {
   const c = ctx();
   seed(c);
@@ -256,7 +317,7 @@ test('learnings on a storeless workspace exits 0 with an empty listing and never
   const res = run(c, ['learnings']);
   assert.equal(res.status, 0, res.stderr || res.stdout);
   const out = JSON.parse(res.stdout);
-  assert.deepEqual(out, { learnings: [], counts: { active: 0, total: 0 } });
+  assert.deepEqual(out, { learnings: [], counts: { active: 0, total: 0 }, quarantined: [] });
 
   assert.equal(fs.existsSync(dir), false, 'harness learnings must not materialize a knowledge store');
 });

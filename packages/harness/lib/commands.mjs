@@ -1037,6 +1037,7 @@ export async function cmdLearnings(argv) {
   const { listingView, whyView } = await import('./knowledge/listing.mjs');
   const flags = parseFlags(argv);
   const workspace = path.resolve(flags.workspace);
+  const copilotHome = resolveCopilotHome(flags.copilotHome);
 
   // A trailing bare --why (no id following it) must never silently fall
   // through to the full listing below — parseFlags leaves flags.why unset
@@ -1092,7 +1093,7 @@ export async function cmdLearnings(argv) {
   }
 
   const domain = argv[0] && !argv[0].startsWith('--') ? argv[0] : null;
-  const result = listingView({ workspace, domain });
+  const result = listingView({ workspace, copilotHome, domain });
 
   if (flags.json) {
     emitJson(flags, result);
@@ -1105,6 +1106,14 @@ export async function cmdLearnings(argv) {
   for (const l of rows) {
     console.log(
       ui.line({ state: learningRowState(l.status), key: l.id, value: l.trigger, note: learningNote(l), keyWidth })
+    );
+  }
+  if (result.quarantined.length > 0) {
+    console.log(
+      ui.paint(
+        'muted',
+        `${result.quarantined.length} quarantined episode(s) — inspect with harness consolidate --status, clear with knowledge purge <path>`
+      )
     );
   }
   return 0;
