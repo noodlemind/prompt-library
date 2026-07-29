@@ -265,9 +265,17 @@ export function serializeLearning(fm, body) {
     'episodes:',
   ];
   for (const e of fm.episodes || []) {
+    // A hand-edited learning can carry an incomplete episode entry. A path
+    // is the only thing an episode link actually means — without one there's
+    // nothing to link to, so the entry is dropped rather than round-tripped
+    // as invalid YAML (a bare `- path: undefined` line). A missing/
+    // unrecognized kind defaults to 'fix', mirroring renderLearning's own
+    // normalization (apply.mjs) so both writers agree on the same three kinds
+    // instead of one of them emitting a literal `kind: undefined`.
+    if (!e.path) continue;
     lines.push(`  - path: ${e.path}`);
     lines.push(`    sha256: ${yamlQuote(e.sha256)}`);
-    lines.push(`    kind: ${e.kind}`);
+    lines.push(`    kind: ${e.kind === 'insight' ? 'insight' : e.kind === 'human-teaching' ? 'human-teaching' : 'fix'}`);
     lines.push(`    plan: ${e.plan || ''}`);
   }
   const anchors = fm.anchors || [];

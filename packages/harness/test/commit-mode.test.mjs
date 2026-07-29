@@ -226,6 +226,63 @@ test('mirrorLearnings keeps secret-shaped learnings (trigger or body) out of bot
   );
 });
 
+// An ACTIVE learning that becomes secret-shaped is excluded from the write
+// and the INDEX on the pass that discovers it, but without also sweeping its
+// PREVIOUS clean mirror copy, that stale file would linger forever —
+// out of sync with both the write and the INDEX.
+test('mirror sweep removes the stale mirror copy of a learning that turns secret-shaped on a later pass', () => {
+  const c = ctx();
+  const { dir } = ensureStore(c.ws, { home: c.harnessHome });
+  writeStoreConfig(c.ws, { home: c.harnessHome, commit: 'repo' });
+
+  const domainDir = path.join(dir, 'learnings', 'sql');
+  fs.mkdirSync(domainDir, { recursive: true });
+  const learningPath = path.join(domainDir, 'turns-secret.md');
+
+  fs.writeFileSync(
+    learningPath,
+    learningFile({
+      trigger: 'a perfectly clean trigger before it turns secret',
+      body: 'Clean body, nothing secret here yet.',
+      sha256: 'd'.repeat(64),
+      episodePath: 'docs/solutions/perf/turns-secret.md',
+    }),
+    'utf8'
+  );
+
+  const firstPass = mirrorLearnings({ workspace: c.ws, home: c.harnessHome });
+  assert.equal(firstPass.mirrored, 1, 'precondition: the learning mirrors cleanly the first time');
+  assert.equal(firstPass.skipped, 0);
+
+  const mirrorFile = path.join(mirrorRoot(c.ws), 'sql', 'turns-secret.md');
+  assert.ok(fs.existsSync(mirrorFile), 'precondition: the clean mirror copy exists');
+  const indexBefore = fs.readFileSync(path.join(mirrorRoot(c.ws), 'INDEX.md'), 'utf8');
+  assert.match(indexBefore, /sql\/turns-secret/, 'precondition: INDEX lists the learning');
+
+  // The store learning turns secret-shaped — a hand edit directly on the
+  // store's learning file, bypassing every CLI write path (or equally, a
+  // fresh `consolidate --apply`/absorb write of secret-shaped content).
+  const secretPattern = 'AKIA1234567890ABCDEF';
+  fs.writeFileSync(
+    learningPath,
+    learningFile({
+      trigger: 'a perfectly clean trigger before it turns secret',
+      body: `Body now leaking ${secretPattern} right here.`,
+      sha256: 'd'.repeat(64),
+      episodePath: 'docs/solutions/perf/turns-secret.md',
+    }),
+    'utf8'
+  );
+
+  const secondPass = mirrorLearnings({ workspace: c.ws, home: c.harnessHome });
+  assert.equal(secondPass.mirrored, 0, 'the now-secret-shaped learning does not mirror');
+  assert.equal(secondPass.skipped, 1);
+
+  assert.ok(!fs.existsSync(mirrorFile), 'the sweep removes the stale clean copy once the learning turns secret-shaped');
+  const indexAfter = fs.readFileSync(path.join(mirrorRoot(c.ws), 'INDEX.md'), 'utf8');
+  assert.doesNotMatch(indexAfter, /sql\/turns-secret/, 'INDEX excludes the now-secret-shaped learning');
+});
+
 test('rebuild --yes and purge --all fully clear the mirror for the ids they wipe, leave a foreign file untouched, and reset INDEX.md to header-only', () => {
   const c = ctx();
   assert.equal(run(c, ['knowledge', 'commit', 'repo']).status, 0);

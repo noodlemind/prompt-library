@@ -19,6 +19,16 @@ T2 is a pure function of (T1, current model): every learning is backed by episod
 `harness consolidate --rebuild` can regenerate the entire T2 corpus from raw episodes with
 a stronger model — the upgrade path, not a threat.
 
+That purity has a real edge: rebuild regenerates learnings strictly from episodes — it
+re-derives the CLAIM, never the human governance decisions layered onto it afterward.
+`retire`/`dispute`/`confirm`/`promote` mutate only a learning's frontmatter (see Human
+register below); they never touch its backing episodes. So a learning a human retired still
+has live episodes in T1, and `consolidate --rebuild --yes` can regenerate it fresh and
+active, silently undoing the human's veto. This differs from `harness knowledge purge`,
+which deletes the episodes and their ledger entries outright and so is not resurrected by a
+rebuild. For a decision that must survive a rebuild, use `purge`, not `retire` — a governance
+overlay that outlives rebuild is a future direction, not implemented here.
+
 ## Learning lifecycle
 
 ```mermaid
@@ -103,9 +113,12 @@ in the knowledge store:
 | Reset (model-upgrade regeneration) | `harness consolidate --rebuild --yes` |
 
 A direct human statement always outranks statistics: `source: human` learnings are never
-auto-retired, and enter as `status: active` immediately — no provisional damping. Only
-`harness remember` creates that provenance: it writes a `kind: human-teaching` episode and
-the learning it produces is the only lane that sets `source: human`.
+auto-retired, and enter as `status: active` immediately — no provisional damping.
+`harness remember` and a hand-edited learning absorbed from the store (see
+[Hand-editability](#hand-editability) below) are the two paths that create that provenance:
+each writes (or reuses) a `kind: human-teaching` episode as evidence — `remember`'s own
+capture, or a verbatim snapshot of the edit — and the learning it produces or updates carries
+`source: human`.
 `harness learning retire|dispute|confirm` is a separate authority — it mutates an existing
 learning's frontmatter only (`status`, and `last_confirmed` on confirm). It never creates an
 episode and never changes `source`. `harness learning promote --to <path>` is narrower still:

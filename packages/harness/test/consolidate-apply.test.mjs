@@ -407,6 +407,121 @@ test('STRENGTHEN with a verified episode activates a provisional learning', () =
   assert.equal(l.fm.episodes.length, 2);
 });
 
+// Same-run consumption tracking (milestone 3 review): STRENGTHEN never
+// registered its own target, so a same-run STRENGTHEN-before-SUPERSEDE let
+// the SUPERSEDE tombstone the target and then the STRENGTHEN would land its
+// evidence on the just-replaced file — non-corrupting but incoherent.
+test('a STRENGTHEN before a SUPERSEDE on the same target in one run is rejected (composition, no strike)', () => {
+  const c = ctx();
+  assert.equal(run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [ADD()])]).status, 0);
+  const { dir } = ensureStore(c.ws, { home: c.harnessHome });
+  const ledgerBefore = readLedger(dir).length;
+
+  const strengthen = {
+    op: 'STRENGTHEN',
+    target: 'sql/not-null-large-tables',
+    episodes: [EP({ path: 'docs/solutions/perf/y.md', sha256: 'b'.repeat(64) })],
+  };
+  const supersede = {
+    op: 'SUPERSEDE',
+    target: 'sql/not-null-large-tables',
+    domain: 'sql',
+    slug: 'not-null-two-step',
+    trigger: 'adding NOT NULL columns to large/hot tables',
+    body: 'Two-step default+backfill, then validate constraint separately.',
+    episodes: [EP({ path: 'docs/solutions/perf/z.md', sha256: 'c'.repeat(64) })],
+  };
+  const res = run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [strengthen, supersede])]);
+  assert.equal(res.status, 1, res.stderr || res.stdout);
+  const out = JSON.parse(res.stdout);
+  assert.equal(out.rejected[0].code, 'E_TARGET');
+  assert.match(out.rejected[0].reason, /sql\/not-null-large-tables already strengthened by an earlier op in this run/);
+
+  // All-or-nothing: neither op's effect landed.
+  const learnings = listLearnings(dir);
+  assert.equal(learnings.length, 1);
+  assert.equal(learnings[0].fm.episodes.length, 1, 'STRENGTHEN never applied');
+  assert.equal(learnings[0].fm.superseded_by, null, 'SUPERSEDE never applied');
+  // Composition rejection — the same-run collision is a malformed op-SET,
+  // not a defect in either op's own (perfectly valid) episodes.
+  assert.equal(readLedger(dir).length, ledgerBefore, 'same-run composition rejection records no strike');
+});
+
+// The mirror-image order was already correctly rejected before this fix
+// (SUPERSEDE registers consumedTargets, and STRENGTHEN already checked it) —
+// locked in here so it stays green.
+test('a SUPERSEDE before a STRENGTHEN on the same target in one run is already rejected (composition, no strike)', () => {
+  const c = ctx();
+  assert.equal(run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [ADD()])]).status, 0);
+  const { dir } = ensureStore(c.ws, { home: c.harnessHome });
+  const ledgerBefore = readLedger(dir).length;
+
+  const supersede = {
+    op: 'SUPERSEDE',
+    target: 'sql/not-null-large-tables',
+    domain: 'sql',
+    slug: 'not-null-two-step',
+    trigger: 'adding NOT NULL columns to large/hot tables',
+    body: 'Two-step default+backfill, then validate constraint separately.',
+    episodes: [EP({ path: 'docs/solutions/perf/z.md', sha256: 'c'.repeat(64) })],
+  };
+  const strengthen = {
+    op: 'STRENGTHEN',
+    target: 'sql/not-null-large-tables',
+    episodes: [EP({ path: 'docs/solutions/perf/y.md', sha256: 'b'.repeat(64) })],
+  };
+  const res = run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [supersede, strengthen])]);
+  assert.equal(res.status, 1, res.stderr || res.stdout);
+  const out = JSON.parse(res.stdout);
+  assert.equal(out.rejected[0].code, 'E_TARGET');
+  assert.match(out.rejected[0].reason, /sql\/not-null-large-tables already consumed by an earlier op in this run/);
+
+  const learnings = listLearnings(dir);
+  assert.equal(learnings.length, 1);
+  assert.equal(learnings[0].fm.episodes.length, 1, 'STRENGTHEN never applied');
+  assert.equal(learnings[0].fm.superseded_by, null, 'SUPERSEDE never applied');
+  assert.equal(readLedger(dir).length, ledgerBefore, 'same-run composition rejection records no strike');
+});
+
+// strengthenLearning dropped merged_from (passed null to renderLearning): a
+// STRENGTHEN on a MERGE result silently lost the merge provenance.
+test('MERGE then STRENGTHEN the merged learning preserves merged_from', () => {
+  const c = ctx();
+  const seedA = ADD({ slug: 'merge-src-a', episodes: [EP({ path: 'docs/solutions/perf/merge-src-a.md', sha256: '1'.repeat(64) })] });
+  const seedB = ADD({ slug: 'merge-src-b', episodes: [EP({ path: 'docs/solutions/perf/merge-src-b.md', sha256: '2'.repeat(64) })] });
+  assert.equal(run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [seedA])]).status, 0);
+  assert.equal(run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [seedB])]).status, 0);
+
+  const mergeOp = {
+    op: 'MERGE',
+    targets: ['sql/merge-src-a', 'sql/merge-src-b'],
+    domain: 'sql',
+    slug: 'merged-strengthen-target',
+    trigger: 'a merged trigger restating both sources',
+    body: 'Re-derived merged claim body from both targets.',
+    episodes: [EP({ path: 'docs/solutions/perf/merge-evidence.md', sha256: '3'.repeat(64) })],
+  };
+  assert.equal(run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [mergeOp])]).status, 0);
+
+  const { dir } = ensureStore(c.ws, { home: c.harnessHome });
+  const beforeStrengthen = listLearnings(dir).find((l) => l.id === 'sql/merged-strengthen-target');
+  assert.match(beforeStrengthen.fm.merged_from, /sql\/merge-src-a/);
+  assert.match(beforeStrengthen.fm.merged_from, /sql\/merge-src-b/);
+
+  const strengthen = {
+    op: 'STRENGTHEN',
+    target: 'sql/merged-strengthen-target',
+    episodes: [EP({ path: 'docs/solutions/perf/merge-strengthen.md', sha256: '4'.repeat(64) })],
+  };
+  const res = run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [strengthen])]);
+  assert.equal(res.status, 0, res.stderr || res.stdout);
+
+  const after = listLearnings(dir).find((l) => l.id === 'sql/merged-strengthen-target');
+  assert.match(after.fm.merged_from, /sql\/merge-src-a/, 'merged_from must survive STRENGTHEN');
+  assert.match(after.fm.merged_from, /sql\/merge-src-b/, 'merged_from must survive STRENGTHEN');
+  assert.equal(after.fm.episodes.length, 2, 'STRENGTHEN adds the new episode on top of the merge evidence');
+});
+
 test('SUPERSEDE on a well-evidenced target lands as disputed, not silent demotion', () => {
   const c = ctx();
   const seeded = ADD({

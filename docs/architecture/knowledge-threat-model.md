@@ -156,13 +156,26 @@ self-check the same rules while drafting ops, but that is guidance for avoiding 
 rejection, not a second mechanical gate; `--apply` is the only place a violation is
 actually enforced.
 
-The rejection is not the end of the story, though: the writer now exists. Every
-content-failure code (`E_SCHEMA`, `E_SECRET`, `E_LINT`, `E_BYTE_CAP`, `E_EXISTS`,
-`E_TARGET` — never a run-level rejection such as `E_MODE`/`E_DELTA_CONTRACT`/`E_LOCKED`/
-`E_APPLY_FAILED`, and never `E_DOMAIN_CAP`, which is cap pressure rather than a defect in
-the episode) records one failure entry per rejected episode, keyed on `path@sha256`, in
-the store's ledger. On an episode's third recorded failure — an `E_LINT`-rejected insight
-op included — the same append also writes a `quarantined: true` marker: the episode stops
+The rejection is not the end of the story, though: the writer now exists. Rejections split
+into three classes, mirrored from `apply.mjs`'s own `CONTENT_FAILURE_CODES` comment:
+
+- **Content-strike** — `E_SCHEMA`, `E_SECRET`, `E_LINT`, `E_BYTE_CAP` always strike, and
+  `E_EXISTS`/`E_TARGET` strike when they fire against a genuine ON-DISK collision: a dedup
+  miss (an `ADD`/`MERGE` id that already exists), a target that does not exist, or a `MERGE`
+  target that is not active. Each records one failure entry per rejected episode, keyed on
+  `path@sha256`, in the store's ledger.
+- **Run-level** — `E_MODE`, `E_DELTA_CONTRACT`, `E_LOCKED`, `E_APPLY_FAILED` never strike:
+  they say nothing about any one op's episodes. Neither does `E_DOMAIN_CAP` — cap pressure is
+  a run-level resource limit, not a defect in the episodes behind it.
+- **Composition** — the SAME `E_EXISTS`/`E_TARGET` codes, raised instead when a SIBLING op
+  earlier in the SAME run already claimed the id/target — including a `SUPERSEDE`/`MERGE`
+  reusing a target an earlier `STRENGTHEN` in this run already touched — never strike. The
+  op-SET was malformed (two ops raced for the same id/target), not either op's own episodes,
+  so the codepath returns a plain rejection instead of recording a failure, despite sharing an
+  E_EXISTS/E_TARGET code with a real, strike-worthy on-disk variant above.
+
+On an episode's third recorded (content-strike) failure — an `E_LINT`-rejected insight op
+included — the same append also writes a `quarantined: true` marker: the episode stops
 re-triggering consolidation debt and is surfaced in the `quarantined` list returned by
 `harness consolidate --status` and `harness learnings`, and checked by doctor's K2. This is
 a review surface, not a publish path: quarantine only ever removes an episode from further

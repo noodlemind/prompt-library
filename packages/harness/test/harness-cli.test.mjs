@@ -13,7 +13,8 @@ import { extractGoalFromPlan } from '../lib/plan-goal.mjs';
 import { loadPlan } from '../lib/plan-parse.mjs';
 import { createEvidenceBinding, readEvidence, validateEvidence, writeEvidence } from '../lib/evidence.mjs';
 import { ensureHarnessDir } from '../lib/session.mjs';
-import { installGlobalHarnessShim, globalHarnessShimPath } from '../lib/global-bin.mjs';
+import { installGlobalHarnessShim, globalHarnessShimPath, INSTALL_FIX_HINT } from '../lib/global-bin.mjs';
+import { harnessRunnerSource, RUNNER_VERSION, writeHarnessRunner } from '../lib/resolve-harness-bin.mjs';
 import { installHarnessBin } from '../lib/install-harness-bin.mjs';
 import { recordSkillUsage } from '../lib/telemetry.mjs';
 import { mergeVSCodeSettings, parseVSCodeSettings } from '../lib/vscode-settings.mjs';
@@ -1512,6 +1513,44 @@ test('init-repo creates harness runner', () => {
     env: { ...process.env, HARNESS_BIN: binPath },
   });
   assert.equal(runResult.status, 0, runResult.stderr);
+});
+
+// The generated `.harness/run.mjs` source interpolates INSTALL_FIX_HINT
+// (global-bin.mjs) into an already-single-quoted JS string literal. An
+// apostrophe or backslash in the hint would break the GENERATED runner's
+// syntax unless it's embedded via JSON.stringify instead of raw
+// interpolation.
+test('harnessRunnerSource embeds INSTALL_FIX_HINT via JSON.stringify, keeping the generated runner syntactically valid', () => {
+  const src = harnessRunnerSource();
+  assert.ok(
+    src.includes(`' + ${JSON.stringify(INSTALL_FIX_HINT)});`),
+    'the fix-hint line must be embedded via JSON.stringify concatenation, not raw ${...} interpolation into a single-quoted string'
+  );
+  const dir = tempDir('runner-syntax-');
+  const runnerPath = path.join(dir, 'run.mjs');
+  fs.writeFileSync(runnerPath, src);
+  const check = spawnSync(process.execPath, ['--check', runnerPath], { encoding: 'utf8' });
+  assert.equal(check.status, 0, check.stderr);
+});
+
+test('writeHarnessRunner regenerates a runner stamped with an older @harness-runner-version', () => {
+  // Pinned to the pre-fix runner version (2): the JSON.stringify quoting fix
+  // above must ship with a version bump, or every already-hydrated
+  // `.harness/run.mjs` written before this fix would silently keep the old,
+  // unsafe interpolation forever.
+  assert.ok(RUNNER_VERSION > 2, 'RUNNER_VERSION must be bumped past the pre-fix value so existing runners regenerate');
+
+  const workspace = tempDir('runner-version-ws-');
+  const runnerDir = path.join(workspace, '.harness');
+  fs.mkdirSync(runnerDir, { recursive: true });
+  const runnerPath = path.join(runnerDir, 'run.mjs');
+  fs.writeFileSync(runnerPath, `#!/usr/bin/env node\n/**\n * @harness-runner-version 2\n */\nconsole.log('stale runner stub');\n`);
+
+  const result = writeHarnessRunner(workspace, false);
+  assert.equal(result.updated, true, 'a runner pinned to version 2 must be regenerated, not left stale');
+  const regenerated = fs.readFileSync(runnerPath, 'utf8');
+  assert.match(regenerated, new RegExp(`@harness-runner-version ${RUNNER_VERSION}\\b`));
+  assert.doesNotMatch(regenerated, /stale runner stub/);
 });
 
 function writeChecks(workspace, checks) {

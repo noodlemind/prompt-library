@@ -46,10 +46,18 @@ export function setLearningStatus({ workspace, id, action, reason, to, home }) {
   }
 
   if (action === 'promote') {
+    // Containment guard: same root/startsWith idiom purge uses (admin.mjs's
+    // purgeEpisode) — a --to path that escapes the workspace (`../`) or
+    // resolves to an absolute path outside it must never be recorded, let
+    // alone read from disk.
+    const root = path.resolve(workspace);
+    const primitiveFull = path.resolve(root, to);
+    if (primitiveFull !== root && !primitiveFull.startsWith(root + path.sep)) {
+      return { pass: false, exitCode: 2, id, status: null, blockedReason: `promote --to escapes the workspace: ${to}` };
+    }
     // Promotion records where the behavior now lives — it never creates the
     // primitive itself (a human PR does that); the recorded path must
     // already exist on disk by the time the CLI is run.
-    const primitiveFull = path.resolve(workspace, to);
     if (!fs.existsSync(primitiveFull)) {
       return { pass: false, exitCode: 1, id, status: null, blockedReason: `E_TARGET: ${to} does not exist` };
     }
@@ -65,19 +73,24 @@ export function setLearningStatus({ workspace, id, action, reason, to, home }) {
         blockedReason: 'insight-only learnings never promote (design §10)',
       };
     }
+    // Stored as a normalized, workspace-relative POSIX path — never the raw
+    // `to` string a caller passed (which may carry OS separators or `./`
+    // noise) — so promoted_to stays portable and directly comparable across
+    // platforms.
+    const promotedTo = path.relative(root, primitiveFull).split(path.sep).join('/');
     // Re-render via serializeLearning rather than updateFrontmatterField's
     // regex-insert: promoted_to may be entirely absent from the on-disk
     // file, and a parse → mutate fm → serializeLearning round trip is the
     // safe route to add it in its canonical position. status is left
     // untouched — promotion never overwrites the learning's own status.
-    const nextFm = { ...learning.fm, promoted_to: to };
+    const nextFm = { ...learning.fm, promoted_to: promotedTo };
     fs.writeFileSync(learning.file, serializeLearning(nextFm, learning.body), 'utf8');
     // Same as every other store writer (applyOps, absorbHandEdits, purge):
     // rebuild INDEX.md in the same commit as the mutation, so a promoted
     // learning drops out of the index immediately rather than waiting for
     // the next consolidate --apply.
     rebuildIndex(dir);
-    commitStore(dir, `promote ${id}: ${to}`);
+    commitStore(dir, `promote ${id}: ${promotedTo}`);
     try {
       mirrorLearnings({ workspace, home });
     } catch {

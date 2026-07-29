@@ -157,6 +157,56 @@ test('learning promote on a missing id exits 1 with E_TARGET', () => {
   assert.match(res.stdout + res.stderr, /E_TARGET/);
 });
 
+test('learning promote --to ../outside.md (relative escape) exits 2, learning untouched', () => {
+  const c = ctx();
+  const id = seedPromotable(c);
+  // The containment guard fires before the "does not exist" check, so this
+  // must reject even though nothing named outside.md exists anywhere.
+
+  const res = run(c, ['learning', 'promote', id, '--to', '../outside.md']);
+  assert.equal(res.status, 2, res.stderr || res.stdout);
+  const out = JSON.parse(res.stdout);
+  assert.match(out.blockedReason || '', /escapes the workspace/);
+
+  const dir = storeDir(c.ws, { home: c.harnessHome });
+  const learning = listLearnings(dir).find((l) => l.id === id);
+  assert.equal(learning.fm.promoted_to, undefined, 'a rejected --to must never be recorded');
+  assert.equal(learning.fm.status, 'provisional', 'a rejected promote must not touch status either');
+});
+
+test('learning promote --to an absolute path outside the workspace exits 2', () => {
+  const c = ctx();
+  const id = seedPromotable(c);
+  const outsideDir = tempDir('pr-outside-');
+  const outsideFile = path.join(outsideDir, 'outside.md');
+  fs.writeFileSync(outsideFile, '# outside\n');
+
+  const res = run(c, ['learning', 'promote', id, '--to', outsideFile]);
+  assert.equal(res.status, 2, res.stderr || res.stdout);
+  const out = JSON.parse(res.stdout);
+  assert.match(out.blockedReason || '', /escapes the workspace/);
+
+  const dir = storeDir(c.ws, { home: c.harnessHome });
+  const learning = listLearnings(dir).find((l) => l.id === id);
+  assert.equal(learning.fm.promoted_to, undefined);
+});
+
+test('learning promote --to a ./-prefixed relative path normalizes to a clean workspace-relative POSIX path', () => {
+  const c = ctx();
+  const id = seedPromotable(c);
+  const rel = '.github/instructions/sql.instructions.md';
+  const full = path.join(c.ws, rel);
+  fs.mkdirSync(path.dirname(full), { recursive: true });
+  fs.writeFileSync(full, '# sql instructions\n');
+
+  const res = run(c, ['learning', 'promote', id, '--to', `./${rel}`]);
+  assert.equal(res.status, 0, res.stderr || res.stdout);
+
+  const dir = storeDir(c.ws, { home: c.harnessHome });
+  const learning = listLearnings(dir).find((l) => l.id === id);
+  assert.equal(learning.fm.promoted_to, rel, 'promoted_to is normalized — no leading ./ noise, POSIX separators');
+});
+
 test('learning promote --to a primitive path that does not exist exits 1 with E_TARGET', () => {
   const c = ctx();
   const id = seedPromotable(c);

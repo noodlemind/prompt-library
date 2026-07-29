@@ -69,13 +69,17 @@ export function removeEpisodeLink(file, targetPath) {
  * into the store, so a foreign copy (another machine's commit, or a
  * hand-planted file) is read-only reference until a future
  * propose-then-ratify phase. The sweep below removes a file whose
- * `<domain>/<slug>` matches EITHER a CURRENT store learning that is now
- * inactive OR an id the caller explicitly names via `retiredIds` — full-reset
- * callers (`purge --all`, `rebuild --yes`) capture the store's id list BEFORE
- * wiping it and pass it here, since after the wipe those ids no longer exist
- * anywhere for the "current store" half of the check to match. Anything else
- * (an id neither list names — genuinely foreign, or simply never mirrored)
- * is left untouched.
+ * `<domain>/<slug>` matches ANY of three things: a CURRENT store learning
+ * that is now inactive, an id the caller explicitly names via `retiredIds` —
+ * full-reset callers (`purge --all`, `rebuild --yes`) capture the store's id
+ * list BEFORE wiping it and pass it here, since after the wipe those ids no
+ * longer exist anywhere for the "current store" half of the check to match —
+ * or an id THIS pass just excluded as secret-shaped (`skippedIds`, below): an
+ * ACTIVE learning that turns secret-shaped is excluded from the write and the
+ * INDEX, and without also sweeping it here its previous clean mirror copy
+ * would linger forever, out of sync with both. Anything else (an id none of
+ * the three lists names — genuinely foreign, or simply never mirrored) is
+ * left untouched.
  *
  * Every learning slated for the mirror (verbatim text or INDEX entry) is
  * secret-scanned first: a hit is excluded from BOTH the `.md` write and the
@@ -119,9 +123,13 @@ export function mirrorLearnings({ workspace, home, log = () => {}, retiredIds = 
   }
 
   // Sweep: remove mirror files for ids the CURRENT store still knows about
-  // but that are no longer active, OR ids the caller names via retiredIds
-  // (see the doc comment above). Anything else is left alone; only files
-  // matching a managed id are ever removed.
+  // but that are no longer active, ids the caller names via retiredIds (see
+  // the doc comment above), OR ids THIS pass just excluded as secret-shaped
+  // (skippedIds) — an ACTIVE learning that becomes secret-shaped is excluded
+  // from the write above and from the INDEX below, but without this its
+  // previous clean mirror copy would otherwise never be swept and would
+  // linger forever, out of sync with both the write and the INDEX. Anything
+  // else is left alone; only files matching a managed id are ever removed.
   for (const domainEnt of fs.readdirSync(mirrorRoot, { withFileTypes: true })) {
     if (!domainEnt.isDirectory()) continue;
     const domainPath = path.join(mirrorRoot, domainEnt.name);
@@ -130,7 +138,7 @@ export function mirrorLearnings({ workspace, home, log = () => {}, retiredIds = 
       const id = `${domainEnt.name}/${f.replace(/\.md$/, '')}`;
       const known = byId.get(id);
       const isKnownInactive = known && !isActiveFm(known.fm);
-      if (isKnownInactive || retiredIdSet.has(id)) {
+      if (isKnownInactive || retiredIdSet.has(id) || skippedIds.has(id)) {
         fs.rmSync(path.join(domainPath, f), { force: true });
       }
     }

@@ -16,6 +16,7 @@ import {
 import { MAX_OPS_PER_RUN, LEARNING_BYTE_CAP, QUARANTINE_THRESHOLD, DOMAIN_ACTIVE_CAP, isActiveFm } from './consolidate.mjs';
 import { scanSecrets } from '../secret-scan.mjs';
 import { absorbHandEdits, mirrorLearnings } from './admin.mjs';
+import { parseMergedFrom } from './listing.mjs';
 
 /**
  * The SOLE writer of the learnings store. The consolidation skill emits an
@@ -35,8 +36,9 @@ const DISPUTED_FIX_THRESHOLD = 3;
 //     episodes. E_DOMAIN_CAP in particular is cap pressure, a run-level
 //     resource limit, not a defect in the episodes that produced the op.
 //   - composition rejections: an op colliding with a SIBLING op earlier in
-//     the SAME run — "target already consumed by an earlier op in this run"
-//     (E_TARGET) and "already introduced by an earlier op in this run"
+//     the SAME run — "target already consumed by an earlier op in this run",
+//     "target already strengthened by an earlier op in this run" (both
+//     E_TARGET), and "already introduced by an earlier op in this run"
 //     (E_EXISTS). These say the op-SET was malformed (two ops raced for the
 //     same id/target), not that either op's offered episodes were bad, so
 //     the branches producing them return a plain fail(...) below instead of
@@ -362,6 +364,18 @@ export function applyOps({ workspace, opsPath, dryRun = false, home, approve = f
   // (silently clobbering it at write time, since both would resolve to the
   // same file path).
   const consumedTargets = new Set(); // SUPERSEDE/MERGE targets already spoken for this run
+  // STRENGTHEN targets already spoken for this run, tracked SEPARATELY from
+  // consumedTargets: a STRENGTHEN doesn't tombstone its target (it's still
+  // the same live learning afterward), so a later STRENGTHEN on the same
+  // target is not itself a conflict — only a later SUPERSEDE/MERGE reusing a
+  // strengthened target is, since applyOps runs every SUPERSEDE/MERGE/ADD
+  // write (first loop) BEFORE any STRENGTHEN executes (second loop below),
+  // so without this a same-run STRENGTHEN-before-SUPERSEDE would still let
+  // the SUPERSEDE's write land first and the STRENGTHEN would then apply the
+  // OLD claim's evidence onto the just-tombstoned file — non-corrupting but
+  // incoherent, since that evidence was meant for the claim the SUPERSEDE
+  // just replaced.
+  const strengthenedTargets = new Set();
   const plannedIds = new Set(); // new ids (ADD/SUPERSEDE-rename/MERGE) already claimed this run
   function idTaken(id) {
     return existing.has(id) || plannedIds.has(id);
@@ -405,6 +419,25 @@ export function applyOps({ workspace, opsPath, dryRun = false, home, approve = f
           exitCode: 1,
         };
       }
+      // A SUPERSEDE reusing a target an earlier STRENGTHEN in this same run
+      // already claimed: composition rejection, same reasoning as the
+      // consumedTargets check above — plain fail, never a strike. STRENGTHEN
+      // itself is exempt (a later STRENGTHEN on its own earlier target is not
+      // a conflict — see strengthenedTargets' declaration above).
+      if (op.op === 'SUPERSEDE' && strengthenedTargets.has(op.target)) {
+        return {
+          applied: [],
+          rejected: [
+            fail('E_TARGET', `op ${i}: target ${op.target} already strengthened by an earlier op in this run — combine into one op`),
+          ],
+          committed: false,
+          exitCode: 1,
+        };
+      }
+    }
+
+    if (op.op === 'STRENGTHEN') {
+      strengthenedTargets.add(op.target);
     }
 
     if (op.op === 'MERGE') {
@@ -429,6 +462,19 @@ export function applyOps({ workspace, opsPath, dryRun = false, home, approve = f
           return {
             applied: [],
             rejected: [fail('E_TARGET', `op ${i}: target ${t} already consumed by an earlier op in this run`)],
+            committed: false,
+            exitCode: 1,
+          };
+        }
+        // A MERGE reusing a target an earlier STRENGTHEN this same run
+        // already claimed — same composition reasoning as the consumedTargets
+        // check above.
+        if (strengthenedTargets.has(t)) {
+          return {
+            applied: [],
+            rejected: [
+              fail('E_TARGET', `op ${i}: target ${t} already strengthened by an earlier op in this run — combine into one op`),
+            ],
             committed: false,
             exitCode: 1,
           };
@@ -805,7 +851,13 @@ function strengthenLearning(target, episodes, workspace) {
     status,
     source: fm.source || 'auto',
     supersededBy: fm.superseded_by || null,
-    mergedFrom: null,
+    // fm.merged_from is the raw bracketed string this same module's
+    // renderLearning wrote (`merged_from: [id1, id2]`), parsed back by
+    // store.mjs's parseLearningFrontmatter as a literal scalar — never the
+    // array renderLearning itself expects. Without unwrapping it here, a
+    // STRENGTHEN on a merged learning would pass null through and silently
+    // drop its merged_from provenance on every re-render.
+    mergedFrom: parseMergedFrom(fm.merged_from),
     // A promoted learning that later gains more evidence must not have its
     // promotion silently erased — STRENGTHEN carries the existing
     // promoted_to (if any) forward, unlike a fresh ADD/SUPERSEDE/MERGE write

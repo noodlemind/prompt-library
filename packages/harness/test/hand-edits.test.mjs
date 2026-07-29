@@ -108,6 +108,76 @@ test('serializeLearning omits promoted_to when absent — the field 5 concept st
   assert.doesNotMatch(content, /promoted_to:/);
 });
 
+test('serializeLearning drops a pathless episode entry and defaults a kindless one to fix — never emits literal "undefined"', () => {
+  // Unit-level: a bare malformed fm.episodes array, the shape a hand-edited
+  // file with an incomplete episode entry parses into.
+  const fm = {
+    trigger: 't',
+    status: 'active',
+    source: 'auto',
+    episodes: [
+      { path: 'docs/solutions/perf/kindless.md', sha256: 'b'.repeat(64), plan: 'docs/plans/p2.md' }, // missing kind
+      { sha256: 'c'.repeat(64), kind: 'fix', plan: 'docs/plans/p3.md' }, // missing path
+    ],
+    anchors: [],
+    superseded_by: null,
+    last_confirmed: '2026-07-01',
+    origin: 'origin-x',
+  };
+  const content = serializeLearning(fm, 'body');
+  assert.doesNotMatch(content, /undefined/, 'no literal "undefined" anywhere in the serialized output');
+  assert.match(content, /path: docs\/solutions\/perf\/kindless\.md\n\s*sha256:[^\n]*\n\s*kind: fix/, 'kindless episode defaults to kind: fix');
+  assert.doesNotMatch(content, new RegExp('c'.repeat(64)), 'the pathless episode is dropped entirely, not just missing a path line');
+});
+
+test('absorbHandEdits: a hand-edited learning with an incomplete episode entry round-trips as valid YAML, not literal "undefined"', () => {
+  const c = ctx();
+  const id = seedLearning(c);
+  const { dir } = ensureStore(c.ws, { home: c.harnessHome });
+  const file = path.join(dir, 'learnings', 'sql', 'not-null-hot-tables.md');
+  const { fm, body } = parseLearningFrontmatter(fs.readFileSync(file, 'utf8'));
+
+  // Simulate a human hand-editing the episodes block directly in a text
+  // editor: one entry missing `kind`, one missing `path` entirely —
+  // malformed shapes the sole writer never itself emits.
+  const malformedEpisodes =
+    `  - path: docs/solutions/perf/kindless.md\n` +
+    `    sha256: "${'b'.repeat(64)}"\n` +
+    `    plan: docs/plans/p2.md\n` +
+    `  - sha256: "${'c'.repeat(64)}"\n` +
+    `    kind: fix\n` +
+    `    plan: docs/plans/p3.md`;
+  const rewritten = [
+    '---',
+    'schema: 1',
+    `trigger: "${fm.trigger}"`,
+    `status: ${fm.status}`,
+    `source: ${fm.source}`,
+    'episodes:',
+    malformedEpisodes,
+    'anchors: []',
+    `superseded_by: ${fm.superseded_by || 'null'}`,
+    `last_confirmed: ${fm.last_confirmed}`,
+    `origin: ${fm.origin}`,
+    '---',
+    '',
+    body.trim(),
+    '',
+  ].join('\n');
+  fs.writeFileSync(file, rewritten, 'utf8');
+
+  const dirty = spawnSync('git', ['status', '--porcelain'], { cwd: dir, encoding: 'utf8' }).stdout;
+  assert.match(dirty, /M\s+learnings\/sql\/not-null-hot-tables\.md/, 'precondition: hand edit is a tracked modification');
+
+  const result = absorbHandEdits({ workspace: c.ws, home: c.harnessHome });
+  assert.ok(result.absorbed.some((a) => a.id === id), 'the hand edit was absorbed');
+
+  const after = fs.readFileSync(file, 'utf8');
+  assert.doesNotMatch(after, /undefined/, 'no literal "undefined" anywhere in the absorbed, re-serialized file');
+  assert.match(after, /path: docs\/solutions\/perf\/kindless\.md\n\s*sha256:[^\n]*\n\s*kind: fix/, 'the kindless episode defaults to kind: fix');
+  assert.doesNotMatch(after, new RegExp('c'.repeat(64)), 'the pathless episode is dropped entirely');
+});
+
 test('a hand-edited learning body is absorbed as human authority with a human-teaching snapshot, committed before the next mutation', () => {
   const c = ctx();
   const remembered = run(c, ['remember', 'writes must be batched in groups of two hundred', '--trigger', 'batching writes for perf']);

@@ -28,11 +28,15 @@ export function runRemember({ workspace, copilotHome, flags, argv, log = () => {
   }
   // Absorb any hand edit before this teaching writes — so a re-teach
   // (SUPERSEDE, same trigger/domain) always builds on the absorbed state.
-  // Advisory: never blocks remember.
-  try {
-    absorbHandEdits({ workspace, home, log });
-  } catch {
-    // best effort
+  // Advisory: never blocks remember. Skipped on dryRun — same reasoning as
+  // applyOps' own absorb gate: a preview must never leave a real store
+  // commit behind.
+  if (!flags.dryRun) {
+    try {
+      absorbHandEdits({ workspace, home, log });
+    } catch {
+      // best effort
+    }
   }
   const claim = argv[0] && !argv[0].startsWith('--') ? argv[0] : null;
   if (!claim || !flags.trigger) {

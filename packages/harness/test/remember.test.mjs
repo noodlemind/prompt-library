@@ -91,6 +91,38 @@ test('remember --dry-run writes neither episode nor learning', () => {
   assert.equal(listLearnings(dir).length, 0, 'dry-run must not write a learning');
 });
 
+test('remember --dry-run does not absorb a dirty store hand edit (no new store commit)', () => {
+  const c = ctx();
+  // Seed a real learning through the sole writer so the store exists with
+  // git history to compare against.
+  const seedRes = run(c, [
+    'remember', 'Seed claim for the dry-run absorb regression.',
+    '--trigger', 'a dry-run absorb regression trigger', '--domain', 'sql',
+  ]);
+  assert.equal(seedRes.status, 0, seedRes.stderr + seedRes.stdout);
+  const seedOut = JSON.parse(seedRes.stdout);
+
+  const { dir } = ensureStore(c.ws, { home: c.harnessHome });
+  const learning = listLearnings(dir).find((l) => l.id === seedOut.learningId);
+  // Hand-edit the learning file directly in the store repo — bypassing
+  // every CLI write path — leaving the store tree dirty.
+  fs.appendFileSync(learning.file, '\nA direct hand edit.\n');
+  const headBefore = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: dir, encoding: 'utf8' }).stdout.trim();
+  const dirtyBefore = spawnSync('git', ['status', '--porcelain'], { cwd: dir, encoding: 'utf8' }).stdout;
+  assert.notEqual(dirtyBefore.trim(), '', 'precondition: store tree is dirty before the dry-run');
+
+  const dryRes = run(c, [
+    'remember', 'A different claim, dry-run only.',
+    '--trigger', 'a second, unrelated trigger', '--domain', 'sql', '--dry-run',
+  ]);
+  assert.equal(dryRes.status, 0, dryRes.stderr + dryRes.stdout);
+
+  const headAfter = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: dir, encoding: 'utf8' }).stdout.trim();
+  assert.equal(headAfter, headBefore, 'dry-run must not create a store commit, including an absorb commit');
+  const dirtyAfter = spawnSync('git', ['status', '--porcelain'], { cwd: dir, encoding: 'utf8' }).stdout;
+  assert.equal(dirtyAfter, dirtyBefore, 'dry-run must not absorb the hand edit at all — tree stays exactly as dirty as before');
+});
+
 test('runRemember (direct lib import) threads its own home into every store write, not the ambient HARNESS_HOME', () => {
   const ws = tempDir('rem-direct-ws-');
   const copilotHome = tempDir('rem-direct-home-');

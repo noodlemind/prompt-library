@@ -46,7 +46,10 @@ function effectiveStatus(fm) {
   return fm.status || 'active';
 }
 
-function parseMergedFrom(raw) {
+// Exported so apply.mjs's own STRENGTHEN path (the only other place that
+// reads a persisted, already-rendered `merged_from` string back off disk) can
+// reuse this exact parse instead of drifting a second implementation.
+export function parseMergedFrom(raw) {
   if (!raw) return null;
   const items = String(raw)
     .trim()
