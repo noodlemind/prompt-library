@@ -230,6 +230,19 @@ test('harness doctor K1 fails (optional) when consolidate events exist but the k
   assert.match(res.stdout, /\[!\]\s+K1\b/);
 });
 
+test('harness doctor K1 passes when the only consolidate event is a non-creating status check', () => {
+  const c = ctx();
+  // Matches what `consolidate --status` actually writes: no `decision` field.
+  writeEvents(c.ws, [{ version: 2, type: 'consolidate', command: 'consolidate', result: 'pass', exitCode: 0 }]);
+
+  const res = run(c, ['doctor']);
+  const doc = JSON.parse(res.stdout);
+  const k1 = doc.checks.find((check) => check.id === 'K1');
+  assert.ok(k1, 'K1 present');
+  assert.equal(k1.pass, true);
+  assert.equal(k1.optional, true);
+});
+
 test('harness doctor K1 passes when no consolidate events have ever been recorded', () => {
   const c = ctx();
 

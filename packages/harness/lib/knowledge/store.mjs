@@ -145,6 +145,7 @@ export function readLedger(dir) {
 }
 
 export function appendLedger(dir, entries) {
+  if (!entries || !entries.length) return;
   const ledgerPath = path.join(dir, 'consolidated.jsonl');
   const existing = fs.existsSync(ledgerPath) ? fs.readFileSync(ledgerPath, 'utf8') : '';
   const prefix = existing && !existing.endsWith('\n') ? '\n' : '';
@@ -399,7 +400,7 @@ export function commitStore(dir, message) {
   const res = spawnSync(
     'git',
     ['-c', 'user.name=harness', '-c', 'user.email=harness@local', 'commit', '-q', '-m', message],
-    { cwd: dir, encoding: 'utf8' }
+    { cwd: dir, encoding: 'utf8', timeout: 15000 }
   );
   return { committed: res.status === 0 };
 }

@@ -318,7 +318,9 @@ function knowledgeChecks({ workspace, copilotHome }) {
 
   try {
     const events = loadReportEvents({ workspace });
-    const hasConsolidateEvent = events.some((e) => e.type === 'consolidate');
+    const hasConsolidateEvent = events.some(
+      (e) => e.type === 'consolidate' && e.decision === 'apply' && e.result === 'pass'
+    );
     const storeExists = fs.existsSync(storeDir(workspace));
     checks.push({
       id: 'K1',

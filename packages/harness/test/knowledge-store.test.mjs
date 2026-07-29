@@ -76,6 +76,17 @@ test('ledger round-trips entries and tolerates a torn tail line', () => {
   assert.equal(entries[0].learning, 'sql/x');
 });
 
+test('appendLedger with empty entries leaves the ledger file byte-identical', () => {
+  const home = tempDir('kstore-empty-ledger-');
+  const ws = gitWorkspace('https://github.com/x/empty-ledger.git');
+  const { dir } = ensureStore(ws, { home });
+  const ledgerPath = path.join(dir, 'consolidated.jsonl');
+  const before = fs.readFileSync(ledgerPath, 'utf8');
+  appendLedger(dir, []);
+  const after = fs.readFileSync(ledgerPath, 'utf8');
+  assert.equal(after, before);
+});
+
 test('listLearnings parses frontmatter including structured episodes', () => {
   const home = tempDir('kstore-list-');
   const ws = gitWorkspace('https://github.com/x/list.git');

@@ -27,9 +27,18 @@ flowchart LR
 Everything left of **ops validation** is untrusted proposal text — including model output
 from `/consolidate`, which writes only the reviewable `.harness/consolidate-ops.json`
 proposal and never touches the T2 store directly — and cannot mutate the store directly.
-Everything right of the **advisory fence** is presented to a reader as data, never as
-directives. Both boundaries are enforced mechanically (`consolidate --apply`'s validator;
-the fence-and-lint pipeline on every rendering surface), not by asking the model to behave.
+That boundary is enforced mechanically: `consolidate --apply`'s validator (schema, byte cap,
+secret scan, imperative lint) is the sole writer and rejects anything malformed regardless
+of what the model intended.
+
+Everything right of the **advisory fence** is *presented* to a reader as data, not as
+directives — but the fence is a rendering convention, not a mechanical gate. Whether a
+reader actually treats fenced text as inert data depends on the model or host respecting
+that convention; a host or model that ignores the fence can still read fenced content as
+instructions (residual risk #2, below). `lintImperative` at the write boundary is the one
+mechanical control on this side — it keeps imperative content (URLs, shell commands) out of
+the store before it is ever rendered — but it says nothing about how a downstream reader
+interprets whatever text does make it through the fence.
 
 ## Canonical residual risk: declarative deception through the insight lane
 
@@ -202,12 +211,13 @@ digest, `harness learnings [--why]`, `INDEX.md`, and the reviewable ops diff a h
 under `knowledge.mode: suggest` (`.harness/consolidate-ops.json`, per the `/consolidate`
 skill; see Suggest mode above — `--apply` writes only after the human re-runs it with
 `--yes`, otherwise it rejects with `E_MODE`) — renders that text inside the same advisory
-fence. The fence's job is to keep stored
-text from being read as instructions by the model or the host: it is presented as data,
-never as directives to follow. Content originating from an episode, an insight, or a
-compromised upstream source cannot use the fence to issue commands to the agent reading it —
-the fence is the injection defense itself, not a formatting convenience layered on top of
-one.
+fence. The fence's intent is to mark stored text as data rather than directives for a
+compliant reader — but that is a mitigation, not a mechanical boundary: it depends on the
+model or host actually honoring the fence (residual risk #2). Content originating from an
+episode, an insight, or a compromised upstream source is *labeled* as non-instructional by
+the fence, but a model or host that disregards the label can still read it as commands —
+the fence alone cannot stop that. The mechanical backstop is upstream of rendering: keeping
+imperative content out of the store in the first place.
 
 Insight claims that contain URLs or shell commands do not reach the store at all:
 `lintImperative` (`knowledge/apply.mjs`) rejects them outright with `E_LINT` at the
