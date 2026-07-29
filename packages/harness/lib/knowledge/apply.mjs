@@ -429,31 +429,66 @@ export function applyOps({ workspace, opsPath, dryRun = false, home, approve = f
     const bad = validateEpisodes(op.episodes, i);
     if (bad) return rejectOp(bad.code, bad.reason, op.episodes);
 
+    // Shared between the inactive-target exemption (below) and the
+    // disputed-demotion exemption (further down, SUPERSEDE-only) — computed
+    // once per op so the two gates can never drift on what counts as a
+    // verified human re-teach. Stays false for every op that isn't a
+    // SUPERSEDE (STRENGTHEN has no re-teach shape — it never introduces or
+    // replaces an id).
+    let isReteachShape = false;
+    let allHumanTeaching = false;
+
     if (op.op === 'STRENGTHEN' || op.op === 'SUPERSEDE') {
       if (!op.target || !existing.has(op.target)) {
         return rejectOp('E_TARGET', `op ${i}: target ${op.target || '(none)'} does not exist`, op.episodes);
       }
       // Checked before the consumed-target check and before any of
       // SUPERSEDE's own reteach/dispute logic further below — a promoted
-      // target is rejected unconditionally, never conditionally exempted.
+      // target is rejected unconditionally, never conditionally exempted —
+      // no re-teach exemption exists for a promoted target (see the doc
+      // comment on promotedTargetRejection above): a human refining a
+      // promoted claim updates the primitive, not the learning.
       const promotedTo = existing.get(op.target).fm.promoted_to;
       if (promotedTo) {
         return promotedTargetRejection(i, op.target, promotedTo);
       }
+      // The verified in-place human re-teach shape: new id === target (never
+      // a rename) AND every asserted human-teaching episode verifies against
+      // disk (verifyHumanTeachingEpisode) — the op's own `kind` field alone
+      // is not proof of anything. `op.op === 'SUPERSEDE'` short-circuits
+      // before newIdFor(op) runs, so a STRENGTHEN op (which carries no
+      // domain/slug) never reaches it.
+      isReteachShape = op.op === 'SUPERSEDE' && newIdFor(op) === op.target;
+      allHumanTeaching =
+        isReteachShape && op.episodes.length > 0 && op.episodes.every((e) => verifyHumanTeachingEpisode(workspace, e));
       // Cross-run target-activeness (MERGE already required this — see the
       // isActiveFm check in its own branch below): a target already
       // superseded/retired/disputed ON DISK from a PRIOR run must never
       // accept a fresh STRENGTHEN/SUPERSEDE — that would let a model silently
       // resurrect or overwrite a demoted learning without a human's
-      // dispute -> confirm round trip. Composition-class plain fail (like the
-      // consumedTargets/strengthenedTargets checks below) — an inactive
-      // target is not a defect in this op's own episodes, so no strike.
-      if (!isActiveFm(existing.get(op.target).fm)) {
+      // dispute -> confirm round trip. EXEMPTION: a verified in-place human
+      // re-teach (allHumanTeaching) overrides an inactive target — design
+      // precedence rule: a direct, disk-verified human statement outranks
+      // stored state, so a human correcting a disputed/retired claim under
+      // the SAME trigger/domain must succeed without a separate confirm
+      // round trip first. A model can never fabricate this exemption (the
+      // evidence is verified against disk, not just asserted in the op
+      // JSON). Promoted targets are NOT exempted — rejected unconditionally
+      // above, before this point is ever reached. Composition-class plain
+      // fail (like the consumedTargets/strengthenedTargets checks below) —
+      // an inactive target is not a defect in this op's own episodes, so no
+      // strike.
+      if (!allHumanTeaching && !isActiveFm(existing.get(op.target).fm)) {
         return {
           applied: [],
           governed: [],
           rejected: [
-            fail('E_TARGET', `op ${i}: target ${op.target} is not active — SUPERSEDE an active learning or choose a new slug`),
+            fail(
+              'E_TARGET',
+              op.op === 'SUPERSEDE'
+                ? `op ${i}: target ${op.target} is not active — SUPERSEDE an active learning or choose a new slug`
+                : `op ${i}: target ${op.target} is not active — STRENGTHEN requires an active target`
+            ),
           ],
           committed: false,
           exitCode: 1,
@@ -695,10 +730,10 @@ export function applyOps({ workspace, opsPath, dryRun = false, home, approve = f
       // human re-teaching the SAME trigger/domain, never a rename) AND only
       // once every asserted human-teaching episode is verified against disk
       // (see verifyHumanTeachingEpisode) — the op's own `kind` field is not
-      // itself proof of anything.
-      const isReteachShape = newId === op.target;
-      const allHumanTeaching =
-        isReteachShape && op.episodes.length > 0 && op.episodes.every((e) => verifyHumanTeachingEpisode(workspace, e));
+      // itself proof of anything. isReteachShape/allHumanTeaching were
+      // already computed above (shared with the inactive-target exemption) —
+      // reused here rather than recomputed so the two gates can never drift
+      // apart on what counts as a verified re-teach.
       if (!allHumanTeaching && isDisputedTargetFm(target.fm)) {
         // Demotion of well-evidenced or human-taught knowledge gets a human
         // reviewer: mark disputed, never silently supersede.

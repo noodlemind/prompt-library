@@ -5,9 +5,28 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
-import { ensureStore, listLearnings, readLedger, storeDir } from '../lib/knowledge/store.mjs';
+import { ensureStore, listLearnings, readLedger, readGovernance, storeDir } from '../lib/knowledge/store.mjs';
 import { consolidateStatus } from '../lib/knowledge/consolidate.mjs';
 import { runRemember } from '../lib/knowledge/remember.mjs';
+import { rebuildIndex } from '../lib/knowledge/apply.mjs';
+
+// Direct-write fixture (same shape domain-cap-merge.test.mjs's own
+// seedLearning uses) — fills a domain to DOMAIN_ACTIVE_CAP (25) active
+// learnings without 25 separate CLI round trips.
+function seedActiveLearning(dir, domain, slug) {
+  const lines = [
+    '---', 'schema: 1', `trigger: "seed trigger for ${slug}"`, 'status: active', 'source: auto', 'episodes:',
+    `  - path: docs/solutions/perf/${slug}-0.md`,
+    `    sha256: "${'a'.repeat(64)}"`,
+    '    kind: fix',
+    '    plan: docs/plans/seed.md',
+    'anchors: []', 'superseded_by: null', 'last_confirmed: 2026-07-01', 'origin: unknown',
+    '---', '', `Seed body for ${slug}.`, '',
+  ];
+  const file = path.join(dir, 'learnings', domain, `${slug}.md`);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, lines.join('\n'), 'utf8');
+}
 
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const binPath = path.join(packageRoot, 'bin', 'harness.mjs');
@@ -63,6 +82,98 @@ test('remember twice with the same trigger/domain supersedes in place: new claim
   const ledger = readLedger(dir);
   assert.ok(ledger.some((e) => e.path === firstOut.episodePath), 'first episode consumed in the ledger');
   assert.ok(ledger.some((e) => e.path === secondOut.episodePath), 'second episode consumed in the ledger');
+});
+
+// Controller ruling (post Task 5 review): a direct human statement outranks
+// stored state — a human re-teaching the SAME trigger/domain after a target
+// was disputed/retired must succeed, not get blocked by the cross-run
+// inactive-target gate item 3 added. The verified in-place re-teach shape
+// (new id === target, every episode disk-verified human-teaching) is exempt
+// from that gate; promoted targets are NOT (see the separate test below).
+test('remember re-teaching a DISPUTED learning under the same trigger overrides the dispute: active, source human, new body, governance confirm recorded', () => {
+  const c = ctx();
+  const first = run(c, [
+    'remember', 'First claim: always two-step ALTER.', '--trigger', 'a disputed re-teach trigger', '--domain', 'sql',
+  ]);
+  assert.equal(first.status, 0, first.stderr + first.stdout);
+  const learningId = JSON.parse(first.stdout).learningId;
+
+  const disputeRes = run(c, ['learning', 'dispute', learningId, '--reason', 'needs re-verification']);
+  assert.equal(disputeRes.status, 0, disputeRes.stderr + disputeRes.stdout);
+  const { dir } = ensureStore(c.ws, { home: c.harnessHome });
+  assert.equal(listLearnings(dir).find((l) => l.id === learningId).fm.status, 'disputed', 'precondition: disputed');
+
+  const reteach = run(c, [
+    'remember', 'Corrected claim: actually just backfill first.', '--trigger', 'a disputed re-teach trigger', '--domain', 'sql',
+  ]);
+  assert.equal(reteach.status, 0, reteach.stderr + reteach.stdout);
+  assert.equal(JSON.parse(reteach.stdout).learningId, learningId);
+
+  const learning = listLearnings(dir).find((l) => l.id === learningId);
+  assert.equal(learning.fm.status, 'active', 'verified re-teach overrides the disputed status');
+  assert.equal(learning.fm.source, 'human');
+  assert.match(learning.body, /Corrected claim/);
+  assert.doesNotMatch(learning.body, /First claim/);
+
+  // Governance interplay: Task 2's re-teach override must fire automatically
+  // (same allHumanTeaching evidence gates both) — the standing dispute
+  // record is neutralized by a fresh confirm, not left dangling for a future
+  // rebuild to reapply.
+  const gov = readGovernance(dir);
+  assert.equal(gov.get(learningId).action, 'confirm', 'the re-teach override records a confirm over the standing dispute');
+  assert.equal(gov.get(learningId).reason, 'superseded by re-teach');
+});
+
+test('remember re-teaching a RETIRED learning under the same trigger overrides the retire: active, source human, new body, governance confirm recorded', () => {
+  const c = ctx();
+  const first = run(c, [
+    'remember', 'First claim: always two-step ALTER.', '--trigger', 'a retired re-teach trigger', '--domain', 'sql',
+  ]);
+  assert.equal(first.status, 0, first.stderr + first.stdout);
+  const learningId = JSON.parse(first.stdout).learningId;
+
+  const retireRes = run(c, ['learning', 'retire', learningId, '--reason', 'stale']);
+  assert.equal(retireRes.status, 0, retireRes.stderr + retireRes.stdout);
+  const { dir } = ensureStore(c.ws, { home: c.harnessHome });
+  assert.equal(listLearnings(dir).find((l) => l.id === learningId).fm.status, 'retired', 'precondition: retired');
+
+  const reteach = run(c, [
+    'remember', 'Corrected claim: actually just backfill first.', '--trigger', 'a retired re-teach trigger', '--domain', 'sql',
+  ]);
+  assert.equal(reteach.status, 0, reteach.stderr + reteach.stdout);
+
+  const learning = listLearnings(dir).find((l) => l.id === learningId);
+  assert.equal(learning.fm.status, 'active', 'verified re-teach overrides the retired status');
+  assert.equal(learning.fm.source, 'human');
+  assert.match(learning.body, /Corrected claim/);
+
+  const gov = readGovernance(dir);
+  assert.equal(gov.get(learningId).action, 'confirm');
+  assert.equal(gov.get(learningId).reason, 'superseded by re-teach');
+});
+
+// Promoted targets are explicitly NOT exempted — the promoted-target
+// rejection in remember.mjs (before applyOps is even invoked) is unchanged
+// by the inactive-target exemption, which only lives inside applyOps' own
+// SUPERSEDE/STRENGTHEN validation.
+test('remember re-teaching a PROMOTED learning under the same trigger still exits 2 with the primitive-path message', () => {
+  const c = ctx();
+  const first = run(c, [
+    'remember', 'First claim: always two-step ALTER.', '--trigger', 'a promoted re-teach trigger', '--domain', 'sql',
+  ]);
+  assert.equal(first.status, 0, first.stderr + first.stdout);
+  const learningId = JSON.parse(first.stdout).learningId;
+
+  const primitiveRel = '.github/instructions/sql.instructions.md';
+  fs.mkdirSync(path.dirname(path.join(c.ws, primitiveRel)), { recursive: true });
+  fs.writeFileSync(path.join(c.ws, primitiveRel), '# sql instructions\n');
+  const promoteRes = run(c, ['learning', 'promote', learningId, '--to', primitiveRel]);
+  assert.equal(promoteRes.status, 0, promoteRes.stderr + promoteRes.stdout);
+
+  const reteach = run(c, ['remember', 'A refined claim.', '--trigger', 'a promoted re-teach trigger', '--domain', 'sql']);
+  assert.equal(reteach.status, 2, reteach.stderr + reteach.stdout);
+  const out = JSON.parse(reteach.stdout);
+  assert.match(out.blockedReason || '', /this claim was promoted to/);
 });
 
 test('remember requires --trigger and a claim positional', () => {
@@ -164,9 +275,32 @@ test('remember rolls back the episode file when applyOps rejects it (byte cap)',
   const out = JSON.parse(res.stdout);
   assert.equal(out.episodePath, null);
   assert.match(res.stdout + res.stderr, /byte|split/i);
+  assert.deepEqual(out.nextTools, ['shorten the claim (1,200-byte learning cap) and re-run'], 'the byte-cap hint still renders for an actual byte-cap rejection');
   const teachingsDir = path.join(c.ws, 'docs', 'solutions', 'teachings');
   const remaining = fs.existsSync(teachingsDir) ? fs.readdirSync(teachingsDir) : [];
   assert.deepEqual(remaining, [], 'rejected apply must not leave an orphaned episode file');
+});
+
+// Controller ruling: the byte-cap nextTools hint was hardcoded regardless of
+// the actual applyOps rejection reason. A domain-cap rejection is a genuine
+// non-byte-cap applyOps-level failure reachable through remember (a brand
+// new trigger/domain — an ADD — into an already-full domain), unlike a
+// disputed/retired-target rejection which the re-teach exemption above now
+// avoids entirely for a genuine remember call.
+test('remember on a domain-cap rejection surfaces the real reason, not the misleading byte-cap hint', () => {
+  const c = ctx();
+  const { dir } = ensureStore(c.ws, { home: c.harnessHome });
+  for (let i = 0; i < 25; i++) seedActiveLearning(dir, 'sql', `cap-fill-${i}`);
+  rebuildIndex(dir);
+
+  const res = run(c, [
+    'remember', 'A brand-new claim into an already-full domain.',
+    '--trigger', 'a domain-cap rejection trigger', '--domain', 'sql',
+  ]);
+  assert.equal(res.status, 1, res.stderr + res.stdout);
+  const out = JSON.parse(res.stdout);
+  assert.match(out.blockedReason || '', /at cap/, 'the real domain-cap reason must surface');
+  assert.deepEqual(out.nextTools, [], 'no misleading byte-cap hint for a non-byte-cap rejection');
 });
 
 test('remember rollback also reindexes so the manifest does not dangle a reference to the deleted episode', () => {

@@ -179,13 +179,20 @@ export function runRemember({ workspace, copilotHome, flags, argv, log = () => {
     } catch {
       // advisory reindex — the rollback itself already succeeded
     }
+    // The byte-cap hint is only correct for a byte-cap rejection — every
+    // other applyOps rejection (a disputed/inactive/promoted target, a
+    // secret-shaped or lint-rejected claim, ...) already surfaces its own
+    // real reason via blockedReason above, so a hardcoded byte-cap nextTools
+    // hint would be actively misleading there. Only render it when the
+    // rejection actually was the byte cap.
     return {
       pass: false,
       exitCode: applied.exitCode,
       episodePath: null,
       learningId: null,
       blockedReason: applied.rejected?.[0]?.reason || 'apply failed',
-      nextTools: ['shorten the claim (1,200-byte learning cap) and re-run'],
+      nextTools:
+        applied.rejected?.[0]?.code === 'E_BYTE_CAP' ? ['shorten the claim (1,200-byte learning cap) and re-run'] : [],
     };
   }
   return {

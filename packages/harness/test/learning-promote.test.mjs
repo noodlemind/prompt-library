@@ -222,6 +222,9 @@ test('learning promote <id> --to <path> records promoted_to, commits, and retire
   const whyOut = JSON.parse(whyRes.stdout);
   assert.equal(whyOut.promotedTo, to);
   assert.equal(whyOut.status, 'promoted');
+  // Review follow-up: whyView must carry the same promoted guard listingView
+  // got — a promoted row is never eligible for promotion again.
+  assert.equal(whyOut.promotionEligible, false);
 
   // consolidate --status --json: promotionCandidates no longer lists it.
   const statusRes = run(c, ['consolidate', '--status']);

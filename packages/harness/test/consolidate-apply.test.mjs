@@ -271,6 +271,7 @@ test('a SUPERSEDE targeting an already-retired target (prior run) is rejected E_
   const out = JSON.parse(res.stdout);
   assert.equal(out.rejected[0].code, 'E_TARGET');
   assert.match(out.rejected[0].reason, /sql\/not-null-large-tables is not active/);
+  assert.match(out.rejected[0].reason, /SUPERSEDE an active learning/, 'SUPERSEDE keeps its own wording');
 
   assert.equal(readLedger(dir).length, ledgerBefore, 'inactive-target rejection records no strike');
   const learnings = listLearnings(dir);
@@ -295,10 +296,77 @@ test('a STRENGTHEN targeting an already-disputed target (prior run) is rejected 
   const out = JSON.parse(res.stdout);
   assert.equal(out.rejected[0].code, 'E_TARGET');
   assert.match(out.rejected[0].reason, /sql\/not-null-large-tables is not active/);
+  assert.match(out.rejected[0].reason, /STRENGTHEN requires an active target/, 'STRENGTHEN drops the off-context SUPERSEDE wording');
+  assert.doesNotMatch(out.rejected[0].reason, /SUPERSEDE an active learning/);
 
   assert.equal(readLedger(dir).length, ledgerBefore, 'inactive-target rejection records no strike');
   const learnings = listLearnings(dir);
   assert.equal(learnings[0].fm.episodes.length, 1, 'STRENGTHEN must not have added the new episode');
+});
+
+// Controller ruling (post-review): a direct, disk-verified human statement
+// outranks stored state — the in-place re-teach shape (new id === target,
+// every episode verified human-teaching) must be exempt from the
+// inactive-target gate, overriding a disputed/retired status. This is the
+// low-level (direct op JSON) mirror of remember.test.mjs's end-to-end
+// coverage of the same rule.
+test('a verified human-teaching in-place SUPERSEDE on an already-disputed target succeeds, overriding the disputed status', () => {
+  const c = ctx();
+  assert.equal(run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [ADD()])]).status, 0);
+  assert.equal(run(c, ['learning', 'dispute', 'sql/not-null-large-tables', '--reason', 'contested']).status, 0);
+  const { dir } = ensureStore(c.ws, { home: c.harnessHome });
+
+  const ep = writeRealEpisode(c.ws, 'docs/solutions/teachings/reteach-disputed.md');
+  const reteach = {
+    op: 'SUPERSEDE',
+    target: 'sql/not-null-large-tables',
+    domain: 'sql',
+    slug: 'not-null-large-tables', // in-place shape — same id as target
+    trigger: 'adding NOT NULL columns to large/hot tables',
+    body: 'A corrected human-verified claim replacing the disputed one.',
+    episodes: [{ ...ep, kind: 'human-teaching', plan: null }],
+  };
+  const res = run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [reteach])]);
+  assert.equal(res.status, 0, res.stderr || res.stdout);
+  const out = JSON.parse(res.stdout);
+  assert.equal(out.applied[0].op, 'SUPERSEDE');
+  assert.equal(out.applied[0].id, 'sql/not-null-large-tables');
+
+  const learning = listLearnings(dir).find((l) => l.id === 'sql/not-null-large-tables');
+  assert.equal(learning.fm.status, 'active', 'the verified re-teach overrides the disputed status');
+  assert.equal(learning.fm.source, 'human');
+  assert.match(learning.body, /A corrected human-verified claim/);
+});
+
+// The negative counterpart: model-lane (fix-kind, unverifiable as human
+// authorship) evidence must NEVER earn the exemption, even in the identical
+// in-place shape.
+test('a model-lane (fix-kind) in-place SUPERSEDE on an already-disputed target is still rejected — the re-teach exemption never applies to unverified evidence', () => {
+  const c = ctx();
+  assert.equal(run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [ADD()])]).status, 0);
+  assert.equal(run(c, ['learning', 'dispute', 'sql/not-null-large-tables', '--reason', 'contested']).status, 0);
+  const { dir } = ensureStore(c.ws, { home: c.harnessHome });
+  const ledgerBefore = readLedger(dir).length;
+
+  const modelSupersede = {
+    op: 'SUPERSEDE',
+    target: 'sql/not-null-large-tables',
+    domain: 'sql',
+    slug: 'not-null-large-tables', // same in-place shape, but NOT human-teaching
+    trigger: 'adding NOT NULL columns to large/hot tables',
+    body: 'a model-proposed replacement body text',
+    episodes: [EP({ path: 'docs/solutions/perf/model-disputed.md', sha256: 'f'.repeat(64), kind: 'fix' })],
+  };
+  const res = run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [modelSupersede])]);
+  assert.equal(res.status, 1, res.stderr || res.stdout);
+  const out = JSON.parse(res.stdout);
+  assert.equal(out.rejected[0].code, 'E_TARGET');
+  assert.match(out.rejected[0].reason, /sql\/not-null-large-tables is not active/);
+
+  assert.equal(readLedger(dir).length, ledgerBefore, 'inactive-target rejection records no strike');
+  const learning = listLearnings(dir).find((l) => l.id === 'sql/not-null-large-tables');
+  assert.equal(learning.fm.status, 'disputed', 'target frontmatter untouched — model-lane evidence never exempts');
+  assert.doesNotMatch(learning.body, /model-proposed/);
 });
 
 test('a fabricated human-teaching kind for a NONEXISTENT episode file does not exempt a SUPERSEDE from disputed demotion', () => {

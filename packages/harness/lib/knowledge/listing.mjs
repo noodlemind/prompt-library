@@ -125,7 +125,9 @@ export function whyView({ workspace, id, home }) {
     episodes: (fm.episodes || []).map((e) => ({ path: e.path, kind: e.kind, plan: e.plan || null })),
     verified,
     plans,
-    promotionEligible: isPromotionEligible(verified, plans),
+    // Same guard as listingView: a promoted learning is never eligible for
+    // promotion again, regardless of link counts.
+    promotionEligible: fm.promoted_to ? false : isPromotionEligible(verified, plans),
     failures,
   };
 }
