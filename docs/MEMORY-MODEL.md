@@ -2,10 +2,10 @@
 
 The Adaptive Engineer Harness's memory is three tiers, each with a single writer and a
 narrower role than the one before it. Every change — including forgetting — is a git
-commit. This page is the human-facing summary (the approved 2026-07-26 design document
-was pruned after implementation and remains in git history); the threat model lives in
-[`docs/architecture/knowledge-threat-model.md`](architecture/knowledge-threat-model.md).
-Scope: Phase 1, local-only. Team sync is a future phase, deferred by design.
+commit. This is the canonical page for both the memory model and its threat model (the
+approved 2026-07-26 design document this page mirrors, including its residual-risks
+section §14, was pruned after implementation and remains in git history). Scope: Phase 1,
+local-only. Team sync is a future phase, deferred by design.
 
 ## Three tiers
 
@@ -15,47 +15,24 @@ Scope: Phase 1, local-only. Team sync is a future phase, deferred by design.
 | T2 | Semantic ("learnings") | `~/.harness/knowledge/<repo-id>/` — CLI-managed local git repo, outside the working tree, never pushed | `harness consolidate --apply` only | Condensed, one-claim-per-file knowledge. A regenerable view of T1 — never the asset. |
 | T3 | Behavioral | `.github/` instructions / skills / checks | `/create-primitive` + human PR | Knowledge become behavior. |
 
-T2 is a pure function of (T1, current model, the governance ledger below): every learning
-is backed by episodes, so `harness consolidate --rebuild` can regenerate the entire T2
-corpus from raw episodes with a stronger model — the upgrade path, not a threat — while a
-separate append-only ledger keeps the human decisions layered onto the CLAIM afterward.
+Since the governance ledger shipped (M4), T2 is **not** a pure function of `(T1, current
+model)` alone. Every learning is backed by episodes, so `harness consolidate --rebuild`
+regenerates the entire T2 corpus from raw episodes with the current model — that upgrade
+path is real, not a threat — but the governance ledger is a deliberate third input:
+recorded human decisions in `governance.jsonl` are mechanically reapplied on top of that
+regeneration for every id they govern, so a rebuild reproduces the corpus **and** keeps
+human authority durable across it. T2 is `f(T1, model, governance ledger)`, never
+`f(T1, model)` in isolation; see [Governance ledger](#governance-ledger) below for the
+reapplication mechanics.
 
-## Governance ledger
+## Trust gradient
 
-`retire`/`dispute`/`confirm`/`promote` mutate a learning's frontmatter (see Human register
-below) AND append one record — `{ id, action, reason, to, at }` — to
-`~/.harness/knowledge/<repo-id>/governance.jsonl`, replayed latest-entry-per-id. That ledger
-survives `consolidate --rebuild --yes`: rebuild wipes every learning file and re-derives the
-CLAIM fresh from raw episodes, but the moment a fresh ADD/SUPERSEDE/MERGE regenerates a file
-at an id the ledger already governs, `consolidate --apply` mechanically reapplies the
-standing retire/dispute/promote decision inside the same write transaction — the
-regenerated learning lands `retired`/`disputed`/`promoted` instead of silently reverting to
-whatever the fresh op claims. `confirm` is deliberately excluded — it is not a demotion to
-restore, so a confirm-only record never reapplies; the fresh write simply stands on its own.
-The apply/candidates response surfaces this as `governed: [{ id, action }]`.
-
-Because governance is carried by the **id**, not the claim, a genuinely new claim should
-take a new slug — reusing an old id to dodge a standing decision only triggers
-reapplication instead of escaping it. The one override is a **verified and at-least-as-new**
-human re-teach: `harness remember` reusing the exact trigger/domain, backed by on-disk
-`kind: human-teaching` evidence (never just an op's own assertion) whose own episode date is
-`>=` the governance record's date, outranks both the stored governance record and the
-activeness gate that would otherwise block writing over a disputed/retired target. Verified
-alone is not enough — a genuinely human-taught episode written BEFORE a later retire/
-dispute/promote must never resurrect a decision it predates, so the override also checks
-recency (a same-day re-teach still wins; an older one does not). A verified, sufficiently
-recent re-teach lands the learning `active`, `source: human`, and appends a fresh `confirm`
-entry (never rewriting history) instead of being blocked or silently reapplying the old
-veto — the same anti-fabrication discipline as the threat model's insight-lane checks: a
-model cannot fabricate this exemption, only a human's own prior writing to disk, dated
-recently enough, can satisfy it.
-
-`harness knowledge purge <file>` / `purge --all` differ in kind, not degree: purge erases
-the episodes, the consumption ledger entries, AND the governance record for that id
-outright — permanent removal, not a decision waiting to be reapplied, so there is nothing
-left for a future rebuild to honor. Use `retire`/`dispute` when a decision should persist
-alongside surviving evidence (the common case, and rebuild-safe); reserve `purge` for
-erasing the evidence itself.
+Episodes are never transmitted by the harness — repo-private `docs/solutions/` travels
+only inside the product repo's own git history, and global episodes stay on the machine;
+learnings live in a local, never-pushed store; the only knowledge that reaches a shared
+repository through the harness is a primitive that passed a human PR — unless a team
+explicitly opts into learnings commit mode, which is documented as an exception with
+best-effort secret screening.
 
 ## Learning lifecycle
 
@@ -87,10 +64,11 @@ schema, secret, imperative-lint, byte-cap, dedup, or target rejections at
 `harness learnings`. Auto-dispute of an *existing* learning still does not exist:
 repeated verify-failures against a published learning surface only as a `failures`
 annotation in `learnings` output; a human reads that signal and retires or disputes it.
-A verified human re-teach (see Governance ledger above) is a second, disk-verified path
-into `active` from `disputed` or `retired`, alongside `harness learning confirm`: it
-overrides the stored governance record instead of being blocked by it, landing a fresh
-`source: human`, `status: active` learning and appending a `confirm` entry to the ledger.
+A verified human re-teach (see [Governance ledger](#governance-ledger) below) is a second,
+disk-verified path into `active` from `disputed` or `retired`, alongside
+`harness learning confirm`: it overrides the stored governance record instead of being
+blocked by it, landing a fresh `source: human`, `status: active` learning and appending a
+`confirm` entry to the ledger.
 
 ## Derived, never stored
 
@@ -104,29 +82,6 @@ time, never persisted as a field:
 - **promotion eligibility** = ≥3 verified (`kind: fix`) evidence links across ≥2 distinct
   plans — computed and displayed by `harness learnings --why` / `consolidate --status`,
   never written as a status field.
-
-## Caps
-
-- **Injection**: top-3 learnings in the orient pack (token safety).
-- **Storage**: 25 active learnings per domain (`DOMAIN_ACTIVE_CAP`). Superseded, retired,
-  disputed, and **promoted** learnings are excluded from both the cap count and retrieval.
-  An `ADD` (or a `SUPERSEDE`/`MERGE` introducing a new id) into a domain already at cap is
-  rejected (`E_DOMAIN_CAP`) — cap pressure is a run-level resource limit, not a defect in
-  the episodes behind it, so it never records a quarantine strike. The model must instead
-  `MERGE` two or more existing learnings that genuinely restate one claim — re-deriving the
-  merged body from their raw episodes and recording `merged_from` on the new learning while
-  every target is tombstoned (`superseded_by`) — or a human retires one first. When no
-  legitimate merge exists, the consolidation skill degrades to warn-and-review (a `NOOP` plus
-  a report of the cap pressure to the human) rather than forcing a lossy merge.
-
-## Trust gradient
-
-Episodes are never transmitted by the harness — repo-private `docs/solutions/` travels
-only inside the product repo's own git history, and global episodes stay on the machine;
-learnings live in a local, never-pushed store; the only knowledge that reaches a shared
-repository through the harness is a primitive that passed a human PR — unless a team
-explicitly opts into learnings commit mode, which is documented as an exception with
-best-effort secret screening.
 
 ## Human register
 
@@ -154,11 +109,11 @@ capture, or a verbatim snapshot of the edit — and the learning it produces or 
 `source: human`.
 `harness learning retire|dispute|confirm` is a separate authority — it mutates an existing
 learning's frontmatter only (`status`, and `last_confirmed` on confirm) and appends one
-record to the governance ledger (see above). It never creates an episode and never changes
-`source`. `harness learning promote --to <path>` is narrower still:
-it only records that a learning's behavior now lives in a primitive (after that primitive's
-own PR merges) and retires the learning from ranking; insight-only learnings (no `fix` or
-`human-teaching` episode) can never promote.
+record to the governance ledger (see [Governance ledger](#governance-ledger) below). It
+never creates an episode and never changes `source`. `harness learning promote --to <path>`
+is narrower still: it only records that a learning's behavior now lives in a primitive
+(after that primitive's own PR merges) and retires the learning from ranking; insight-only
+learnings (no `fix` or `human-teaching` episode) can never promote.
 
 ### Knowledge modes
 
@@ -170,11 +125,331 @@ own PR merges) and retires the learning from ranking; insight-only learnings (no
 | `capture-only` | no | yes | no | no |
 | `off` | no | no | no | no |
 
-`suggest` is the one approve-before-write control: `consolidate --apply` still validates
-the ops file the same way, but stops at `E_MODE` unless the human re-runs it with `--yes`
-after reading `.harness/consolidate-ops.json`. Every other mode transition is a plain kill
-switch — `harness knowledge purge` still runs in every mode, including `off`, because human
-deletion always wins.
+`suggest` is the formal approve-before-write control — every other human authority in this
+register is veto-after-write (retire/dispute/confirm act on learnings that already exist);
+`suggest` moves the checkpoint earlier for teams that want it. `consolidate --apply` still
+validates the ops file exactly as it does in `on` mode, but stops with `E_MODE` unless the
+human re-runs it with `--yes` after reading `.harness/consolidate-ops.json` — the review
+happens before anything is written, not after. `remember` (a direct human-authored claim)
+and orient's injection/debt hint are unaffected by `suggest`: the checkpoint gates only the
+sole writer's own auto-derived ops. Every other mode transition is a plain kill switch —
+`harness knowledge purge` still runs in every mode, including `off`, because human deletion
+always wins.
+
+## Governance ledger
+
+`retire`/`dispute`/`confirm`/`promote` mutate a learning's frontmatter (`status`, and
+`last_confirmed` on confirm — see [Human register](#human-register) above) AND append one
+append-only record — `{ id, action, reason, to, at }` — to
+`~/.harness/knowledge/<repo-id>/governance.jsonl`, replayed latest-entry-per-id
+(`readGovernance`/`appendGovernance` in `store.mjs`). That ledger survives
+`consolidate --rebuild --yes`: rebuild wipes every learning file and re-derives the CLAIM
+fresh from raw episodes, but the moment a fresh ADD/SUPERSEDE/MERGE regenerates a file at
+an id the ledger already governs, `consolidate --apply` mechanically reapplies the standing
+decision — no model judgment involved, no re-review of the fresh op's content — inside the
+exact same rollback window as the rest of the write transaction (single-writer lock via
+`.lock`; `git reset --hard && git clean -fd` on any mid-transaction throw): a governance
+reapplication either lands together with the write it's attached to, or neither does, the
+same all-or-nothing guarantee as every other `applyOps` mutation. The regenerated learning
+lands `retired`/`disputed`/`promoted` instead of silently reverting to whatever the fresh op
+claims. `confirm` is deliberately excluded — it is not a demotion to restore, so a
+confirm-only record never reapplies; the fresh write simply stands on its own. The
+apply/candidates response surfaces this as `governed: [{ id, action }]`.
+
+Because governance is carried by the **id**, not the claim, a genuinely new claim should
+take a new slug — reusing an old id to dodge a standing decision only triggers
+reapplication instead of escaping it.
+
+The one override — bounded the same way the insight lane's declarative-deception risk is
+bounded (see [Canonical residual risk](#canonical-residual-risk-declarative-deception-through-the-insight-lane)
+below) — is a **verified and at-least-as-new** human re-teach: `harness remember` reusing
+the exact trigger/domain, backed by on-disk `kind: human-teaching` evidence, outranks both
+the stored governance record and the activeness gate that would otherwise block writing
+over a disputed/retired target. `verifyHumanTeachingEpisode` (`apply.mjs`) proves
+authenticity — never just an op's own assertion — by checking that the episode path
+resolves inside the workspace, the file exists there, its CURRENT content hashes to the
+asserted sha256 (not stale or edited since), and the file's OWN frontmatter independently
+says `kind: human-teaching`. That alone proves authenticity, not recency: a genuinely
+human-taught episode written BEFORE a later retire/dispute/promote must never resurrect a
+decision it predates. `overridesGovernanceRecency` closes that gap — when a governance
+record already exists for the id, every verifying episode's own frontmatter `date` must be
+`>=` that record's `at` (plain string compare; a same-day tie favors the override, which is
+what lets a same-day `remember` re-teach still win). Every check must pass, or the override
+never fires and the standing governance record (and, separately, the target-activeness gate
+that blocks writing over a disputed/retired target) is enforced as usual. A verified,
+sufficiently recent re-teach lands the learning `active`, `source: human`, and appends a
+fresh `confirm` entry (never rewriting history) instead of being blocked or silently
+reapplying the old veto. A model can never fabricate this path into existence: it only ever
+exists because a human already wrote a `kind: human-teaching` episode to disk first, through
+`harness remember` or a hand-edit absorption, dated at least as recently as the decision it
+overrides — the same anti-fabrication discipline as the insight lane's checks.
+
+`harness knowledge purge <file>` / `purge --all` differ from `retire`/`dispute` in kind, not
+degree: purge deletes the episodes, the consumption ledger entries, AND the governance
+record for that id outright, in the same cascade (see
+[Purge vs. git history](#purge-vs-git-history) below for the full cascade mechanics) —
+permanent removal, not a decision waiting to be reapplied, so there is nothing left for a
+future rebuild to honor. Use `retire`/`dispute` when a decision should persist alongside
+surviving evidence (the common case, and rebuild-safe); reserve `purge` for erasing the
+evidence itself.
+
+## Caps, quarantine, and rejection classes
+
+- **Injection**: top-3 learnings in the orient pack (token safety).
+- **Storage**: 25 active learnings per domain (`DOMAIN_ACTIVE_CAP`). Superseded, retired,
+  disputed, and **promoted** learnings are excluded from both the cap count and retrieval.
+  An `ADD` (or a `SUPERSEDE`/`MERGE` introducing a new id) into a domain already at cap is
+  rejected (`E_DOMAIN_CAP`) — cap pressure is a run-level resource limit, not a defect in
+  the episodes behind it, so it never records a quarantine strike. The model must instead
+  `MERGE` two or more existing learnings that genuinely restate one claim — re-deriving the
+  merged body from their raw episodes and recording `merged_from` on the new learning while
+  every target is tombstoned (`superseded_by`) — or a human retires one first. When no
+  legitimate merge exists, the consolidation skill degrades to warn-and-review (a `NOOP` plus
+  a report of the cap pressure to the human) rather than forcing a lossy merge.
+
+### Dispute blast radius (MERGE inherits SUPERSEDE semantics, wider)
+
+A `SUPERSEDE` aimed at a target that is already `disputed` (or retired/superseded) ON DISK
+from a prior run takes the cross-run target-activeness rejection instead — it is already
+marked, so there is no re-marking. A `SUPERSEDE` aimed at an *active* target that meets the
+protected predicate — `>= 3` verified `fix` episodes OR `source: human` (a disjunction:
+either alone qualifies, not both required) — is rejected and marks that ONE target
+`disputed` rather than silently demoting it — a human-reviewer gate, not a hard block (the
+write-side analogue of `suggest` mode's review-before-write checkpoint; see
+[Human register](#human-register) above). `MERGE` inherits the identical rule but at
+N-target width: a MERGE's `targets` array can name several existing learnings at once, and
+`apply.mjs` filters that array down to the protected subset
+(`disputedTargets = op.targets.filter(isDisputedTargetFm)`) — if that subset is non-empty,
+the WHOLE op is rejected (`E_DISPUTED`, no merged learning is ever written) and EACH
+PROTECTED target in the subset is marked `disputed` pending human confirm; any non-protected
+target named in the same `targets` array is left completely untouched, still active. The
+widened radius versus a SUPERSEDE is width, not scope — a MERGE mixing one protected and
+several ordinary targets disputes only the protected one, just at up to N-target width in a
+single op. This is bounded, not unbounded: the ≤5-file delta contract (`MAX_OPS_PER_RUN`;
+MERGE counts `1 + targets.length`)
+caps how many targets a single MERGE can ever name in one run, so the worst case is a
+handful of protected learnings marked disputed-pending-human-confirm in one run, never a
+store-wide sweep.
+
+### Rejection classes
+
+Insight claims that contain URLs or shell commands do not reach the store at all:
+`lintImperative` (`knowledge/apply.mjs`) rejects them outright with `E_LINT` at the
+`--apply` write boundary, before a learning is ever written. This is a hard rejection at the
+moment it happens, not a review queue — the `/consolidate` skill asks the model to
+self-check the same rules while drafting ops, but that is guidance for avoiding the
+rejection, not a second mechanical gate; `--apply` is the only place a violation is actually
+enforced.
+
+Rejections split into four classes, mirrored from `apply.mjs`'s own `CONTENT_FAILURE_CODES`
+comment:
+
+- **Content-strike** — `E_SCHEMA`, `E_SECRET`, `E_LINT`, `E_BYTE_CAP` always strike, and
+  `E_EXISTS`/`E_TARGET` strike when they fire against a genuine ON-DISK collision: a dedup
+  miss (an `ADD`/`MERGE` id that already exists), a target that does not exist, or a `MERGE`
+  target that is not active. Each records one failure entry per rejected episode, keyed on
+  `path@sha256`, in the store's ledger.
+- **Run-level** — `E_MODE`, `E_DELTA_CONTRACT`, `E_LOCKED`, `E_APPLY_FAILED` never strike:
+  they say nothing about any one op's episodes. Neither does `E_DOMAIN_CAP` — cap pressure is
+  a run-level resource limit, not a defect in the episodes behind it.
+- **Composition** — the SAME `E_EXISTS`/`E_TARGET` codes, raised instead when a SIBLING op
+  earlier in the SAME run already claimed the id/target — including a `SUPERSEDE`/`MERGE`
+  reusing a target an earlier `STRENGTHEN` in this run already touched — never strike. The
+  op-SET was malformed (two ops raced for the same id/target), not either op's own episodes,
+  so the codepath returns a plain rejection instead of recording a failure, despite sharing an
+  E_EXISTS/E_TARGET code with a real, strike-worthy on-disk variant above.
+- **Promoted-target** — also `E_TARGET`, raised whenever a `STRENGTHEN`/`SUPERSEDE`/`MERGE`
+  aims at a learning already promoted to a primitive: never strikes, since the offered
+  episodes aren't defective, only the op's choice of target is, so a model repeatedly aiming
+  at a promoted id must never accumulate toward quarantine for it.
+
+On an episode's third recorded (content-strike) failure — an `E_LINT`-rejected insight op
+included — the same append also writes a `quarantined: true` marker: the episode stops
+re-triggering consolidation debt and is surfaced in the `quarantined` list returned by
+`harness consolidate --status` and `harness learnings`, and checked by doctor's K2. This is
+a review surface, not a publish path: quarantine only ever removes an episode from further
+automatic consolidation attempts and flags it for a human to look at (edit the episode,
+`harness knowledge purge` it, or otherwise resolve it) — nothing quarantined is ever
+auto-applied, and there is still no separate lane that reviews and republishes quarantined
+content on its own.
+
+There is likewise no per-lane config toggle that excludes insights from retrieval
+specifically — the only kill switch is the store-wide `harness knowledge
+<on|suggest|off|freeze|capture-only>` mode (`suggest` gates writes behind human approval
+rather than excluding a single content lane), which gates writes (and, in `off` mode,
+retrieval) for the whole store together; turning off insight-derived learnings alone while
+leaving fix-derived ones active is not a capability that exists.
+
+## Threat model
+
+Scope: the T2 semantic memory layer (learnings) and its write path — the surface that
+takes text derived from episodes and model reasoning and turns it into content an agent
+or a human later reads as memory.
+
+### Data flow and trust boundaries
+
+```mermaid
+flowchart LR
+    subgraph T1["T1 episodic — product repo, secret-scanned at capture"]
+        EP[(solution docs)]
+    end
+    EP --> CAND["consolidate --candidates<br/>deterministic clusters, zero model cost"]
+    CAND --> SKILL["/consolidate skill<br/>model reasoning — writes only<br/>.harness/consolidate-ops.json"]
+    SKILL -- "ops JSON, untrusted proposal" --> B1{{"trust boundary<br/>ops validation"}}
+    B1 --> APPLY["consolidate --apply<br/>sole writer: schema, ≤5 files, byte cap,<br/>secret scan, imperative lint"]
+    APPLY --> T2[(T2 learnings store<br/>local, never pushed)]
+    T2 --> ORIENT["harness orient<br/>top-3 injection, attributed"]
+    ORIENT --> B2{{"trust boundary<br/>advisory fence"}}
+    B2 --> READER["agent / human<br/>reads fenced text as data, not instructions"]
+```
+
+Everything left of **ops validation** is untrusted proposal text — including model output
+from `/consolidate`, which writes only the reviewable `.harness/consolidate-ops.json`
+proposal and never touches the T2 store directly — and cannot mutate the store directly.
+That boundary is enforced mechanically: `consolidate --apply`'s validator (schema, byte cap,
+secret scan, imperative lint) is the sole writer and rejects anything malformed regardless
+of what the model intended.
+
+Everything right of the **advisory fence** is *presented* to a reader as data, not as
+directives — but the fence is a rendering convention, not a mechanical gate. Whether a
+reader actually treats fenced text as inert data depends on the model or host respecting
+that convention; a host or model that ignores the fence can still read fenced content as
+instructions (residual risk #2, below). `lintImperative` at the write boundary is the one
+mechanical control on this side — it keeps imperative content (URLs, shell commands) out of
+the store before it is ever rendered (see [Rejection classes](#rejection-classes) above) —
+but it says nothing about how a downstream reader interprets whatever text does make it
+through the fence.
+
+### Canonical residual risk: declarative deception through the insight lane
+
+The insight lane (`compound --insight` for investigation captures, `harness remember` for
+human teaching) accepts an unverified declarative claim. A confidently false claim ("X
+always causes Y") passes every mechanical check — schema, candidate-set membership, the
+≤5-file delta cap, the byte cap, the secret scan, the imperative-content lint — by
+construction, because none of those checks can evaluate whether a claim is *true*, only
+whether it is well-formed and non-instructional. This is the canonical residual: no lint
+layer in this design can distinguish a true unverified claim from a false one dressed the
+same way.
+
+It is bounded, not eliminated, by four independent controls:
+
+1. **Advisory fence** — every insight-derived learning renders inside
+   `[unverified memory — advisory]`; a reader is told explicitly not to treat it as
+   verified.
+2. **Provisional damping** — new insight/auto-derived learnings enter `status: provisional`,
+   rank-damped until 3 uses or one verified confirmation; a bad claim must survive repeated
+   exposure before it gains retrieval weight. `source: human` learnings (written directly
+   by `harness remember`) are the one exception: a direct human statement outranks
+   statistics, so they enter `status: active` immediately, with no provisional damping.
+3. **Never-promotes** — insight-only learnings can never reach T2→T3 promotion
+   eligibility; a declaratively deceptive claim cannot become committed behavior through
+   `/create-primitive`.
+4. **One-command retire** — `harness learning retire <id> --reason "..."` removes it from
+   retrieval and the domain cap the moment a human notices, with no ceremony required.
+
+### Secret scanning
+
+`scanSecrets` (gitleaks-style, dependency-free regexes) runs at two write boundaries: T1
+episode capture (`compound.mjs`) and the T2 write boundary inside `consolidate --apply`
+(`knowledge/apply.mjs`, against the op's trigger + body before it is ever committed).
+
+This is regex-grade screening — pattern matching against known secret shapes (AWS-style
+keys, private-key headers, and similar) — not a guarantee. Novel formats, split secrets,
+or anything that doesn't match a known pattern can pass through undetected. The real
+backstop is architectural, not the scanner: the learnings store lives outside the working
+tree at `~/.harness/knowledge/<repo-id>/` and is never pushed by the harness, so a missed
+secret in a learning stays on the developer's machine rather than reaching a shared
+remote. `knowledge.commit: repo` is the one opt-in mode that knowingly re-opens that
+exposure — see [Commit mode](#commit-mode-opt-in-the-documented-exception) below.
+
+### Purge vs. git history
+
+`harness knowledge purge <file>` and `purge --all` are cascade deletes: the working copy
+of dependent learning file(s), the `consolidated.jsonl` ledger entries, the governance
+record for that id, and (only under commit mode) the product-repo copies are removed,
+ending in one store commit that records the purge. Human deletion always wins — purge is
+never mode-gated.
+
+Purge does **not** rewrite git history. The knowledge store itself is a git repo, and
+prior commits in that store still contain the purged content in its history; telemetry
+likewise retains prior references to a purged id. True removal from history requires an
+explicit, separate history rewrite (`git filter-repo` or equivalent) run by a human
+against the knowledge store repo — the CLI does not do this automatically. Docs and
+product messaging must not imply that a single purge command satisfies a hard-deletion
+requirement (a legal takedown, for example); it satisfies "stop using this and stop
+serving it," not "never existed."
+
+### Commit mode (opt-in, the documented exception)
+
+`knowledge.commit: repo` (`harness knowledge commit repo`; default `none`) is the one path
+by which the harness knowingly re-opens the [trust gradient](#trust-gradient) described
+above — *unless a team explicitly opts into learnings commit mode, which is documented as
+an exception with best-effort secret screening* (design §1/§11, the exact public
+trust-gradient clause). It copies every ACTIVE learning verbatim into
+`<workspace>/docs/knowledge/learnings/<domain>/<slug>.md` plus an `INDEX.md`, on every
+subsequent store mutation (`consolidate --apply`, `remember`,
+`learning retire|dispute|confirm|promote`, `knowledge purge`, a hand edit absorbed from the
+store, `consolidate --rebuild --yes`) — not on the `commit repo` toggle itself, so switching
+it on does not retroactively back-fill the mirror until the next mutation touches the store.
+
+Conditions (design §11):
+
+- **Best-effort secret screening at mirror time.** Every learning slated for the mirror is
+  re-scanned with the same `scanSecrets` regexes used at the T2 write boundary; a hit
+  excludes that learning from BOTH its `.md` file and the `INDEX.md` entry list entirely —
+  not just its body — and is counted and logged as skipped. This is the same regex-grade
+  screening described above, not a stronger guarantee.
+- **Never-ingest of foreign copies.** Nothing in the harness ever reads
+  `docs/knowledge/learnings/` back into the local store. A learning committed there by
+  another machine (or hand-planted) is read-only reference the moment it lands in the
+  product repo, never trusted memory, until a future Phase 2 propose-then-ratify design
+  exists — enforced by the absence of any reader, and the mirror's own `INDEX.md` carries a
+  header line stating this explicitly for a human reader.
+- **PR-flow routing.** The CLI never git-commits the product repo itself; mirrored files
+  land in the working tree and ride the team's normal PR flow — branch protection is the
+  routing mechanism, not the harness.
+- **Deletion stays consistent with the store.** A full reset (`knowledge purge --all`,
+  `consolidate --rebuild --yes`), a cascade delete (`knowledge purge <file>`), and a hand
+  deletion absorbed from the store repo all clear the matching mirror files in the same
+  sweep — human deletion (and reset) wins in the mirror exactly as it does in T2.
+
+### Prompt-injection stance (current position)
+
+Every human-facing surface that renders learning or episode text — the session-start
+digest, `harness learnings [--why]`, `INDEX.md`, and the reviewable ops diff a human sees
+under `knowledge.mode: suggest` (`.harness/consolidate-ops.json`, per the `/consolidate`
+skill; see [Knowledge modes](#knowledge-modes) above — `--apply` writes only after the
+human re-runs it with `--yes`, otherwise it rejects with `E_MODE`) — renders that text
+inside the same advisory fence. The fence's intent is to mark stored text as data rather
+than directives for a compliant reader — but that is a mitigation, not a mechanical
+boundary: it depends on the model or host actually honoring the fence (residual risk #2).
+Content originating from an episode, an insight, or a compromised upstream source is
+*labeled* as non-instructional by the fence, but a model or host that disregards the label
+can still read it as commands — the fence alone cannot stop that. The mechanical backstop
+is upstream of rendering: keeping imperative content out of the store in the first place —
+`lintImperative` and the resulting rejection/quarantine taxonomy are detailed in
+[Rejection classes](#rejection-classes) above.
+
+### Residual risks (mirrored from the approved design, §14)
+
+1. Free-text trigger matching is the load-bearing model judgment for dedup; a dedup miss
+   corrupts more permanently than a retrieval miss.
+2. Attribution and fencing depend on model/host compliance — a host or model that ignores
+   the fence defeats the injection defense described above.
+3. The value curve is back-loaded despite init seeding; some adopters will judge the layer
+   before enough telemetry exists to defend it.
+4. Zero-discipline vs. human authority is managed (damping + never-promote + the
+   human-engagement SLO), not resolved outright.
+5. Secret scanning is regex-grade; the out-of-tree, never-pushed default is the real
+   backstop; commit mode re-opens exposure knowingly.
+6. Declarative-deception insights pass every lint by construction — the canonical residual,
+   detailed above.
+7. Local-only knowledge (this phase) means teams re-learn independently across machines
+   until a future team-sync phase ships.
+8. Knowledge cannot rescue weak execution — the layer compounds whatever competence
+   already exists; it does not create competence.
+9. T2 is flat; at cap the system merges rather than abstracts. Hierarchical schemas are a
+   future direction, not this version.
 
 ## Hand-editability
 
@@ -212,3 +487,7 @@ Use `harness remember` to add a new claim and `harness learning retire|dispute|c
 change a learning's status when a CLI command is more convenient than a direct edit — both
 remain first-class paths; hand-editing is no longer a discouraged shortcut, it is absorbed
 with full provenance either way.
+
+## Related
+
+- [`.github/skills/references/harness-tool-contract.md`](../.github/skills/references/harness-tool-contract.md)

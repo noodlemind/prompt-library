@@ -68,7 +68,7 @@ test('canonical architecture replaces superseded harness architecture fragments'
     .readdirSync(path.join(repoRoot, 'docs', 'architecture'))
     .filter((name) => name.endsWith('.md'))
     .sort();
-  assert.deepEqual(architectureDocs, ['engineer-harness.md', 'knowledge-threat-model.md', 'skill-driven-prompt-library.md']);
+  assert.deepEqual(architectureDocs, ['engineer-harness.md', 'skill-driven-prompt-library.md']);
   for (const name of supersededArchitectureDocs) {
     assert.equal(exists(`docs/architecture/${name}`), false, `${name} should be removed`);
   }
@@ -589,7 +589,8 @@ test('knowledge layer surface: consolidate command and insight lane stay documen
   const commands = read('packages/harness/lib/commands.mjs');
   assert.doesNotMatch(commands, /const KNOWLEDGE_MODES\s*=\s*new Set/, 'commands.mjs must not keep its own copy of KNOWLEDGE_MODES');
   assert.match(commands, /KNOWLEDGE_MODES[^=]*=[\s\S]*?await import\('\.\/knowledge\/store\.mjs'\)/, 'commands.mjs imports KNOWLEDGE_MODES from store.mjs');
-  // MEMORY-MODEL.md is the one-page human register + lifecycle diagram.
+  // MEMORY-MODEL.md is the canonical memory model + threat model page (human
+  // register, lifecycle diagram, and governance ledger).
   assert.ok(exists('docs/MEMORY-MODEL.md'), 'docs/MEMORY-MODEL.md exists');
   const memoryModel = read('docs/MEMORY-MODEL.md');
   assert.match(memoryModel, /stateDiagram/, 'MEMORY-MODEL.md includes the lifecycle stateDiagram');
