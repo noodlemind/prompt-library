@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { storeDir, readLedger, listLearnings, readStoreConfig } from './store.mjs';
+import { storeDir, readLedger, listLearnings, readStoreConfig, readGovernance } from './store.mjs';
 
 export const CONSOLIDATION_THRESHOLD = 5;
 export const MAX_OPS_PER_RUN = 5;
@@ -219,6 +219,16 @@ export function consolidateCandidates({ workspace, copilotHome, home }) {
     ...(includeBodies ? { body: l.body } : {}),
   }));
 
+  // Every id a human already decided retire/dispute/promote on (Milestone 4
+  // Task 2) — surfaced so the skill never proposes an ADD/SUPERSEDE/MERGE
+  // into one of these ids without knowing apply will immediately re-govern
+  // it back to the recorded state. `confirm` is excluded — it isn't a
+  // standing decision applyOps reapplies, so it carries no such warning.
+  // Non-creating read, same as everything else in this function.
+  const governed = [...readGovernance(dir).values()]
+    .filter((e) => ['retire', 'dispute', 'promote'].includes(e.action))
+    .map((e) => ({ id: e.id, action: e.action }));
+
   return {
     schema: 1,
     contract: {
@@ -230,6 +240,7 @@ export function consolidateCandidates({ workspace, copilotHome, home }) {
     clusters: [...clusters.entries()].map(([id, eps]) => ({ id, episodes: eps })),
     learnings,
     domains: status.domains,
+    governed,
     storeDir: dir,
   };
 }

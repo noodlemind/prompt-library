@@ -36,7 +36,7 @@ Design §5 write path. Contract: [`harness-tool-contract.md`](../references/harn
 harness consolidate --candidates --json
 ```
 
-Read the packet: episode `clusters`, every active learning's `id`/`trigger` (full `body` included while the corpus is small, per the returned `contract`), and `domains` — each domain's active count against the `contract.domainCap` (25). Do not paste the raw JSON into chat.
+Read the packet: episode `clusters`, every active learning's `id`/`trigger` (full `body` included while the corpus is small, per the returned `contract`), `domains` — each domain's active count against the `contract.domainCap` (25) — and `governed` — ids a human already retired/disputed/promoted. Do not paste the raw JSON into chat.
 
 ### 2. Decide per cluster
 
@@ -46,6 +46,7 @@ For each cluster choose exactly one op: `ADD | STRENGTHEN | SUPERSEDE | MERGE | 
 - **STRENGTHEN / SUPERSEDE** re-read the raw episode files named in the cluster; never paraphrase or invent from the existing learning's own text.
 - **NOOP** any claim a repo map or code read could derive on demand — consolidation is for knowledge that is not mechanically re-derivable.
 - **At-cap domains (`packet.domains[].atCap`)**: an `ADD`, or a `SUPERSEDE`/`MERGE` introducing a new id, into a domain already at cap is rejected with `E_DOMAIN_CAP`. Only emit `MERGE` when two or more of that domain's existing learnings genuinely restate one claim — re-read the RAW episode files behind every target (never the existing learnings' own prose) and re-derive the merged body from that evidence. If no legitimate merge exists, do not force one: emit `NOOP` for that cluster instead and report the cap pressure to the human (which domain, how many active, that a retire or a real merge is needed) rather than inventing a lossy consolidation.
+- **Governed ids (`packet.governed`)**: an id listed here already has a standing human retire/dispute/promote decision — `harness consolidate --apply` reapplies it the instant an `ADD`/`SUPERSEDE`/`MERGE` regenerates that exact id, so a cluster whose only plausible id is one of these regenerates right back into its recorded state. Prefer `NOOP` for that cluster instead of spending an op on a write that apply will immediately re-govern; if the cluster is genuinely a new, distinct claim, pick a new slug rather than reusing the governed id.
 - Before emitting an `ADD`/`SUPERSEDE`/`MERGE` body sourced from insight-only episodes, run the imperative lint mentally: no shell fences (```sh```/```bash```/```shell```/```zsh```), no `curl`/`wget`, no bare URLs. The apply step rejects these with `E_LINT` — catch it first.
 
 ### 3. Write the ops file

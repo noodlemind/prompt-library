@@ -849,12 +849,15 @@ export async function cmdConsolidate(argv) {
     if (flags.json) {
       emitJson(flags, result);
     } else if (result.exitCode === 0) {
+      const noteParts = [];
+      if (result.committed) noteParts.push('committed to knowledge store');
+      if (result.governed?.length) noteParts.push(`${result.governed.length} re-governed`);
       console.log(
         ui.line({
           state: 'ok',
           key: 'apply',
           value: result.applied.map((a) => `${a.op.toLowerCase()} ${a.id || ''}`.trim()).join(' · ') || 'no ops',
-          note: result.committed ? 'committed to knowledge store' : undefined,
+          note: noteParts.length ? noteParts.join(' · ') : undefined,
         })
       );
     } else {

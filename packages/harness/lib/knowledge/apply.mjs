@@ -13,6 +13,9 @@ import {
   parseLearningFrontmatter,
   readStoreConfig,
   episodeLines,
+  readGovernance,
+  appendGovernance,
+  serializeLearning,
 } from './store.mjs';
 import { MAX_OPS_PER_RUN, LEARNING_BYTE_CAP, QUARANTINE_THRESHOLD, DOMAIN_ACTIVE_CAP, isActiveFm } from './consolidate.mjs';
 import { scanSecrets } from '../secret-scan.mjs';
@@ -103,6 +106,7 @@ function fail(code, reason) {
 function promotedTargetRejection(i, id, promotedTo) {
   return {
     applied: [],
+    governed: [],
     rejected: [
       fail(
         'E_TARGET',
@@ -277,6 +281,7 @@ export function applyOps({ workspace, opsPath, dryRun = false, home, approve = f
         : `knowledge mode is ${mode} — run: harness knowledge on`;
     return {
       applied: [],
+      governed: [],
       rejected: [{ code: 'E_MODE', reason }],
       committed: false,
       exitCode: 2,
@@ -287,10 +292,10 @@ export function applyOps({ workspace, opsPath, dryRun = false, home, approve = f
   try {
     parsed = JSON.parse(fs.readFileSync(opsPath, 'utf8'));
   } catch (err) {
-    return { applied: [], rejected: [fail('E_SCHEMA', `unreadable ops file: ${err.message}`)], committed: false, exitCode: 1 };
+    return { applied: [], governed: [], rejected: [fail('E_SCHEMA', `unreadable ops file: ${err.message}`)], committed: false, exitCode: 1 };
   }
   if (parsed.schema !== 1 || !Array.isArray(parsed.ops)) {
-    return { applied: [], rejected: [fail('E_SCHEMA', 'ops file must be { schema: 1, ops: [...] }')], committed: false, exitCode: 1 };
+    return { applied: [], governed: [], rejected: [fail('E_SCHEMA', 'ops file must be { schema: 1, ops: [...] }')], committed: false, exitCode: 1 };
   }
 
   const { dir, git } = ensureStore(workspace, { home, dryRun });
@@ -331,13 +336,14 @@ export function applyOps({ workspace, opsPath, dryRun = false, home, approve = f
 
   function rejectOp(code, reason, episodes) {
     recordContentFailure(code, episodes);
-    return { applied: [], rejected: [fail(code, reason)], committed: false, exitCode: 1 };
+    return { applied: [], governed: [], rejected: [fail(code, reason)], committed: false, exitCode: 1 };
   }
 
   const fileTouchCount = parsed.ops.reduce((n, o) => n + opWeight(o), 0);
   if (fileTouchCount > MAX_OPS_PER_RUN) {
     return {
       applied: [],
+      governed: [],
       rejected: [fail('E_DELTA_CONTRACT', `run touches ${fileTouchCount} files — max ${MAX_OPS_PER_RUN} (anti-collapse contract)`)],
       committed: false,
       exitCode: 1,
@@ -421,6 +427,7 @@ export function applyOps({ workspace, opsPath, dryRun = false, home, approve = f
         // run) — plain fail, never a strike against this op's episodes.
         return {
           applied: [],
+          governed: [],
           rejected: [fail('E_TARGET', `op ${i}: target ${op.target} already consumed by an earlier op in this run`)],
           committed: false,
           exitCode: 1,
@@ -434,6 +441,7 @@ export function applyOps({ workspace, opsPath, dryRun = false, home, approve = f
       if (op.op === 'SUPERSEDE' && strengthenedTargets.has(op.target)) {
         return {
           applied: [],
+          governed: [],
           rejected: [
             fail('E_TARGET', `op ${i}: target ${op.target} already strengthened by an earlier op in this run — combine into one op`),
           ],
@@ -468,6 +476,7 @@ export function applyOps({ workspace, opsPath, dryRun = false, home, approve = f
           // same run) — plain fail, never a strike against this op's episodes.
           return {
             applied: [],
+            governed: [],
             rejected: [fail('E_TARGET', `op ${i}: target ${t} already consumed by an earlier op in this run`)],
             committed: false,
             exitCode: 1,
@@ -479,6 +488,7 @@ export function applyOps({ workspace, opsPath, dryRun = false, home, approve = f
         if (strengthenedTargets.has(t)) {
           return {
             applied: [],
+            governed: [],
             rejected: [
               fail('E_TARGET', `op ${i}: target ${t} already strengthened by an earlier op in this run — combine into one op`),
             ],
@@ -519,6 +529,7 @@ export function applyOps({ workspace, opsPath, dryRun = false, home, approve = f
           // same run) — plain fail, never a strike against this op's episodes.
           return {
             applied: [],
+            governed: [],
             rejected: [fail('E_EXISTS', `op ${i}: ${newId} was already introduced by an earlier op in this run`)],
             committed: false,
             exitCode: 1,
@@ -534,6 +545,7 @@ export function applyOps({ workspace, opsPath, dryRun = false, home, approve = f
         if (projectedActive(domain) >= DOMAIN_ACTIVE_CAP) {
           return {
             applied: [],
+            governed: [],
             rejected: [
               fail('E_DOMAIN_CAP', `domain ${domain} at cap (${DOMAIN_ACTIVE_CAP} active) — MERGE existing learnings or retire first`),
             ],
@@ -557,6 +569,7 @@ export function applyOps({ workspace, opsPath, dryRun = false, home, approve = f
         // same run) — plain fail, never a strike against this op's episodes.
         return {
           applied: [],
+          governed: [],
           rejected: [fail('E_EXISTS', `op ${i}: ${newId} was already introduced by an earlier op in this run`)],
           committed: false,
           exitCode: 1,
@@ -598,6 +611,7 @@ export function applyOps({ workspace, opsPath, dryRun = false, home, approve = f
       if (projectedActive(domain) >= DOMAIN_ACTIVE_CAP) {
         return {
           applied: [],
+          governed: [],
           rejected: [
             fail('E_DOMAIN_CAP', `domain ${domain} at cap (${DOMAIN_ACTIVE_CAP} active) — MERGE existing learnings or retire first`),
           ],
@@ -632,6 +646,7 @@ export function applyOps({ workspace, opsPath, dryRun = false, home, approve = f
         // same run) — plain fail, never a strike against this op's episodes.
         return {
           applied: [],
+          governed: [],
           rejected: [fail('E_EXISTS', `op ${i}: ${newId} was already introduced by an earlier op in this run`)],
           committed: false,
           exitCode: 1,
@@ -667,6 +682,7 @@ export function applyOps({ workspace, opsPath, dryRun = false, home, approve = f
         if (projectedActive(domain) >= DOMAIN_ACTIVE_CAP) {
           return {
             applied: [],
+            governed: [],
             rejected: [
               fail('E_DOMAIN_CAP', `domain ${domain} at cap (${DOMAIN_ACTIVE_CAP} active) — MERGE existing learnings or retire first`),
             ],
@@ -722,6 +738,9 @@ export function applyOps({ workspace, opsPath, dryRun = false, home, approve = f
       committed: false,
       exitCode: 0,
       dryRun: true,
+      // A preview never touches the store, so governance reapplication never
+      // runs — always empty, same as every other pre-mutation return below.
+      governed: [],
     };
   }
 
@@ -730,12 +749,13 @@ export function applyOps({ workspace, opsPath, dryRun = false, home, approve = f
   try {
     fs.mkdirSync(lockPath);
   } catch {
-    return { applied: [], rejected: [fail('E_LOCKED', 'another consolidation holds the store lock')], committed: false, exitCode: 1 };
+    return { applied: [], governed: [], rejected: [fail('E_LOCKED', 'another consolidation holds the store lock')], committed: false, exitCode: 1 };
   }
 
   const applied = [];
   const rejected = [];
   const ledgerEntries = [];
+  const governed = [];
   const at = todayClamped();
   try {
     try {
@@ -764,6 +784,45 @@ export function applyOps({ workspace, opsPath, dryRun = false, home, approve = f
             updateFrontmatterField(target.file, 'superseded_by', id);
           }
         }
+      }
+
+      // Governance reapplication (Milestone 4 Task 2): every id the write
+      // loop above just (re)wrote — a fresh ADD/SUPERSEDE/MERGE file, never a
+      // STRENGTHEN (that only ever touches an EXISTING file) — may already
+      // carry a standing human retire/dispute/promote decision from BEFORE a
+      // `consolidate --rebuild` wiped the corpus. Reapply it here, inside
+      // this same rollback window, so the regenerated learning honors what a
+      // human already decided instead of silently reverting to whatever the
+      // fresh op claims. `confirm` is deliberately excluded — it is not a
+      // demotion to restore, so it never reapplies. EXCEPTION: an op whose
+      // EVERY episode verifies as human-teaching (verifyHumanTeachingEpisode)
+      // is the human retracting their own earlier call by re-teaching the
+      // same trigger/domain — the standing decision is overridden instead of
+      // enforced, and a fresh `confirm` record (never overwriting the
+      // history, always appended) supersedes it via readGovernance's
+      // latest-per-id replay.
+      const governance = readGovernance(dir);
+      for (const { op, id, domain, slug } of writes) {
+        const entry = governance.get(id);
+        if (!entry || !['retire', 'dispute', 'promote'].includes(entry.action)) continue;
+        const isReteach = op.episodes.length > 0 && op.episodes.every((e) => verifyHumanTeachingEpisode(workspace, e));
+        if (isReteach) {
+          appendGovernance(dir, { id, action: 'confirm', reason: 'superseded by re-teach', to: null, at });
+          continue;
+        }
+        const file = path.join(dir, 'learnings', domain, `${slug}.md`);
+        if (entry.action === 'promote') {
+          // promoted_to may be entirely absent from the just-written file —
+          // the same parse -> mutate fm -> serializeLearning re-render
+          // lifecycle.mjs's own promote branch uses, not
+          // updateFrontmatterField's regex-insert.
+          const text = fs.readFileSync(file, 'utf8');
+          const { fm, body } = parseLearningFrontmatter(text);
+          fs.writeFileSync(file, serializeLearning({ ...fm, promoted_to: entry.to }, body), 'utf8');
+        } else {
+          updateFrontmatterField(file, 'status', entry.action === 'retire' ? 'retired' : 'disputed');
+        }
+        governed.push({ id, action: entry.action });
       }
 
       for (const op of planned) {
@@ -806,6 +865,7 @@ export function applyOps({ workspace, opsPath, dryRun = false, home, approve = f
       }
       return {
         applied: [],
+        governed: [],
         rejected: [fail('E_APPLY_FAILED', err.message)],
         committed: false,
         exitCode: 1,
@@ -824,7 +884,7 @@ export function applyOps({ workspace, opsPath, dryRun = false, home, approve = f
   } catch {
     // best effort — a mirror failure must never block applyOps.
   }
-  return { applied, rejected, committed, exitCode: 0, storeDir: dir, indexPath: path.join(dir, 'INDEX.md') };
+  return { applied, rejected, committed, exitCode: 0, storeDir: dir, indexPath: path.join(dir, 'INDEX.md'), governed };
 }
 
 export function updateFrontmatterField(file, field, value) {
