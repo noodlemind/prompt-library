@@ -21,6 +21,14 @@ const run = ({ ws, home, harnessHome }, args) =>
     env: { ...process.env, HARNESS_HOME: harnessHome },
   });
 
+// Same CLI invocation, minus --json — needed only where the assertion is on
+// the human-readable log() line, which is a no-op under --json.
+const runPlain = ({ ws, home, harnessHome }, args) =>
+  spawnSync(process.execPath, [binPath, ...args, '--workspace', ws, '--copilot-home', home], {
+    encoding: 'utf8',
+    env: { ...process.env, HARNESS_HOME: harnessHome },
+  });
+
 function writeOps(dir, ops) {
   const p = path.join(dir, 'ops.json');
   fs.writeFileSync(p, JSON.stringify({ schema: 1, ops }));
@@ -464,6 +472,32 @@ test('a secret-shaped hand edit still absorbs (source: human) but skips the snap
   const teachDir = path.join(c.ws, 'docs', 'solutions', 'teachings');
   const files = fs.existsSync(teachDir) ? fs.readdirSync(teachDir) : [];
   assert.ok(!files.some((f) => f.includes('hand-edit')), 'no snapshot file was written for the secret hit');
+});
+
+// Milestone 4 Task 5 item 4: absorbHandEdits already accepted a `log` option
+// (the test above calls it directly) — the gap was that every CLI mutation
+// entry point that ALSO calls absorbHandEdits (applyOps, setLearningStatus,
+// purgeEpisode, purgeAll, rebuildStore) silently defaulted it to a no-op
+// instead of threading through the real cmd-handler logger. Proven end-to-end
+// through the actual CLI surface (`harness learning confirm`), not just the
+// direct lib call above.
+test('a secret-skip during absorb triggered via `harness learning confirm` surfaces the warning line in CLI output', () => {
+  const c = ctx();
+  const learningId = seedLearning(c);
+  const { dir } = ensureStore(c.ws, { home: c.harnessHome });
+  const learning = listLearnings(dir).find((l) => l.id === learningId);
+  handEditBody(learning.file, 'Rotate the key AKIA1234567890ABCDEF before shipping.');
+
+  const dirty = spawnSync('git', ['status', '--porcelain'], { cwd: dir, encoding: 'utf8' }).stdout.trim();
+  assert.ok(dirty.length > 0, 'precondition: dirty tree before the confirm command runs');
+
+  const res = runPlain(c, ['learning', 'confirm', learningId]);
+  assert.equal(res.status, 0, res.stderr || res.stdout);
+  assert.match(
+    res.stdout,
+    /secret-shaped/,
+    'the absorb secret-skip warning must surface in CLI output, not be swallowed by a no-op logger'
+  );
 });
 
 test('untracked/modified non-learning store files (config.json, stale.json, INDEX.md) are left for the normal commit, not absorbed', () => {

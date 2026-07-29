@@ -16,7 +16,7 @@ import { absorbHandEdits, mirrorLearnings } from './admin.mjs';
 const ACTIONS = new Set(['retire', 'dispute', 'confirm', 'promote']);
 const TARGET_STATUS = { retire: 'retired', dispute: 'disputed', confirm: 'active' };
 
-export function setLearningStatus({ workspace, id, action, reason, to, home }) {
+export function setLearningStatus({ workspace, id, action, reason, to, home, log = () => {} }) {
   if (!ACTIONS.has(action) || !id) {
     return { pass: false, exitCode: 2, id: id || null, status: null,
       blockedReason: 'usage: harness learning <retire|dispute|confirm|promote> <id> --reason "<r>" | --to <path>' };
@@ -32,7 +32,7 @@ export function setLearningStatus({ workspace, id, action, reason, to, home }) {
   // (human-authored) state, not a stale in-tree edit. Advisory: never blocks
   // the command.
   try {
-    absorbHandEdits({ workspace, home });
+    absorbHandEdits({ workspace, home, log });
   } catch {
     // best effort
   }

@@ -33,7 +33,7 @@ const FILE_TOUCHING = new Set(['ADD', 'STRENGTHEN', 'SUPERSEDE', 'MERGE']);
 const DISPUTED_FIX_THRESHOLD = 3;
 // Codes that indicate the CONTENT of a specific op was rejected (bad shape,
 // secret-shaped, imperative lint, over the byte cap, a dedup/rename collision
-// against an ON-DISK learning, or a missing target) — as opposed to THREE
+// against an ON-DISK learning, or a missing target) — as opposed to FOUR
 // other rejection classes that must NEVER record a strike:
 //   - run-level/lock-level rejections (E_MODE, E_DELTA_CONTRACT, E_LOCKED,
 //     E_APPLY_FAILED, E_DOMAIN_CAP): say nothing about any one op's
@@ -54,6 +54,11 @@ const DISPUTED_FIX_THRESHOLD = 3;
 //     offered episodes aren't defective, the op's CHOICE of target is, so a
 //     model repeatedly aiming at a promoted id must never accumulate toward
 //     quarantine for it.
+//   - inactive-target rejections: a STRENGTHEN/SUPERSEDE aimed at a target
+//     already superseded/retired/disputed ON DISK from a PRIOR run (also
+//     E_TARGET, also a plain fail, never rejectOp — same reasoning as
+//     promoted-target: the op's episodes aren't defective, its choice of a
+//     dead target is).
 const CONTENT_FAILURE_CODES = new Set(['E_SCHEMA', 'E_SECRET', 'E_LINT', 'E_BYTE_CAP', 'E_EXISTS', 'E_TARGET']);
 
 /**
@@ -262,7 +267,7 @@ export function applyOps({ workspace, opsPath, dryRun = false, home, approve = f
   // Skipped on dryRun — a preview must never leave a real commit behind.
   if (!dryRun) {
     try {
-      absorbHandEdits({ workspace, home });
+      absorbHandEdits({ workspace, home, log });
     } catch {
       // best effort — a hand-edit absorb failure must never block applyOps.
     }
@@ -314,7 +319,20 @@ export function applyOps({ workspace, opsPath, dryRun = false, home, approve = f
    */
   function recordContentFailure(code, episodes) {
     if (dryRun || !git || !CONTENT_FAILURE_CODES.has(code)) return;
-    const eps = (episodes || []).filter((e) => e && e.path && /^[0-9a-f]{64}$/.test(e.sha256 || ''));
+    // Dedupe by path@sha256 before recording: an op citing the same episode
+    // twice (a malformed or duplicated op JSON, not two distinct pieces of
+    // evidence) must record ONE strike per run, not one per reference — a
+    // duplicate reference would otherwise double-count toward the 3-strike
+    // quarantine threshold within a single run.
+    const seenKeys = new Set();
+    const eps = (episodes || [])
+      .filter((e) => e && e.path && /^[0-9a-f]{64}$/.test(e.sha256 || ''))
+      .filter((e) => {
+        const key = `${e.path}@${e.sha256}`;
+        if (seenKeys.has(key)) return false;
+        seenKeys.add(key);
+        return true;
+      });
     if (!eps.length) return;
     try {
       const ledger = readLedger(dir);
@@ -421,6 +439,25 @@ export function applyOps({ workspace, opsPath, dryRun = false, home, approve = f
       const promotedTo = existing.get(op.target).fm.promoted_to;
       if (promotedTo) {
         return promotedTargetRejection(i, op.target, promotedTo);
+      }
+      // Cross-run target-activeness (MERGE already required this — see the
+      // isActiveFm check in its own branch below): a target already
+      // superseded/retired/disputed ON DISK from a PRIOR run must never
+      // accept a fresh STRENGTHEN/SUPERSEDE — that would let a model silently
+      // resurrect or overwrite a demoted learning without a human's
+      // dispute -> confirm round trip. Composition-class plain fail (like the
+      // consumedTargets/strengthenedTargets checks below) — an inactive
+      // target is not a defect in this op's own episodes, so no strike.
+      if (!isActiveFm(existing.get(op.target).fm)) {
+        return {
+          applied: [],
+          governed: [],
+          rejected: [
+            fail('E_TARGET', `op ${i}: target ${op.target} is not active — SUPERSEDE an active learning or choose a new slug`),
+          ],
+          committed: false,
+          exitCode: 1,
+        };
       }
       if (consumedTargets.has(op.target)) {
         // Composition rejection (sibling op raced for this target this same
@@ -877,7 +914,17 @@ export function applyOps({ workspace, opsPath, dryRun = false, home, approve = f
     fs.rmSync(lockPath, { recursive: true, force: true });
   }
 
-  const summary = applied.map((a) => `${a.op.toLowerCase()}${a.id ? ` ${a.id}` : ''}`).join(' · ') || 'noop';
+  // An apply run whose only effect was disputing targets (no ADD/STRENGTHEN/
+  // SUPERSEDE/MERGE/NOOP actually applied) must not commit as "noop" — that
+  // erases the one real thing this run DID do (mark targets disputed) from
+  // the store's own git history. Only reached when applied is genuinely
+  // empty — a run that both applies something AND disputes something else
+  // still summarizes by what applied.
+  const summary = applied.length
+    ? applied.map((a) => `${a.op.toLowerCase()}${a.id ? ` ${a.id}` : ''}`).join(' · ')
+    : disputes.length
+      ? `dispute ${disputes.map((d) => d.target).join(', ')}`
+      : 'noop';
   const { committed } = commitStore(dir, `consolidate: ${summary}`);
   try {
     mirrorLearnings({ workspace, home, log });

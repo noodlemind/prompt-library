@@ -827,6 +827,7 @@ export async function cmdConsolidate(argv) {
   const flags = parseFlags(argv);
   const workspace = path.resolve(flags.workspace);
   const copilotHome = resolveCopilotHome(flags.copilotHome);
+  const logger = (m) => log(flags, m);
 
   if (argv.includes('--apply')) {
     const { applyOps } = await import('./knowledge/apply.mjs');
@@ -837,7 +838,7 @@ export async function cmdConsolidate(argv) {
         exit: EXIT.usage,
       });
     }
-    const result = applyOps({ workspace, opsPath: path.resolve(flags.ops), dryRun: flags.dryRun, approve: flags.yes });
+    const result = applyOps({ workspace, opsPath: path.resolve(flags.ops), dryRun: flags.dryRun, approve: flags.yes, log: logger });
     writeEvent(workspace, flags, {
       type: 'consolidate',
       command: 'consolidate',
@@ -895,7 +896,7 @@ export async function cmdConsolidate(argv) {
   if (argv.includes('--rebuild')) {
     const { rebuildStore } = await import('./knowledge/admin.mjs');
     const { CONSOLIDATION_THRESHOLD } = await import('./knowledge/consolidate.mjs');
-    const result = rebuildStore({ workspace, yes: flags.yes, copilotHome });
+    const result = rebuildStore({ workspace, yes: flags.yes, copilotHome, log: logger });
     writeEvent(workspace, flags, {
       type: 'consolidate',
       command: 'consolidate',
@@ -994,7 +995,8 @@ export async function cmdLearning(argv) {
   const workspace = path.resolve(flags.workspace);
   const action = argv[0] && !argv[0].startsWith('--') ? argv[0] : null;
   const id = argv[1] && !argv[1].startsWith('--') ? argv[1] : null;
-  const result = setLearningStatus({ workspace, id, action, reason: flags.reason, to: flags.to });
+  const logger = (m) => log(flags, m);
+  const result = setLearningStatus({ workspace, id, action, reason: flags.reason, to: flags.to, log: logger });
   writeEvent(workspace, flags, {
     type: 'learning',
     command: 'learning',
@@ -1191,7 +1193,8 @@ export async function cmdKnowledge(argv) {
     // (e.g. `harness knowledge purge --workspace <dir>`) — anything shaped
     // like an option is treated as absent, not as a filename.
     const target = !isAll && rawTarget && !rawTarget.startsWith('--') ? rawTarget : null;
-    const result = isAll ? purgeAll({ workspace }) : purgeEpisode({ workspace, target });
+    const logger = (m) => log(flags, m);
+    const result = isAll ? purgeAll({ workspace, log: logger }) : purgeEpisode({ workspace, target, log: logger });
     writeEvent(workspace, flags, {
       type: 'knowledge',
       command: 'knowledge',

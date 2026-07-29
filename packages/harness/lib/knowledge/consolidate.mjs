@@ -81,8 +81,13 @@ export function collectEpisodes({ workspace, copilotHome }) {
  * quarantined) must NOT consume the episode: the point of recording strikes
  * is that the episode keeps counting as debt until either it's fixed
  * (consolidated normally) or it hits the 3rd strike and gets quarantined.
+ *
+ * Exported so init-repo.mjs's dry-run debt preview can reuse the exact same
+ * consumed-semantics instead of keeping its own (looser) copy that treats
+ * every ledger entry as consumed — a failure entry alone must never count an
+ * episode as debt-free.
  */
-function splitLedger(ledger) {
+export function splitLedger(ledger) {
   const consumed = new Set();
   const quarantined = [];
   for (const e of ledger) {

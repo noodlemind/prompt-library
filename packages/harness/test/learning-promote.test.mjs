@@ -7,6 +7,8 @@ import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 import { storeDir, listLearnings, readLedger, ensureStore } from '../lib/knowledge/store.mjs';
 import { rankLearnings } from '../lib/knowledge/retrieve.mjs';
+import { rebuildIndex } from '../lib/knowledge/apply.mjs';
+import { isActiveFm } from '../lib/knowledge/consolidate.mjs';
 
 const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
@@ -71,6 +73,62 @@ function primitivePath(ws) {
   fs.writeFileSync(full, '# sql instructions\n');
   return rel;
 }
+
+// Direct-write fixture (same shape domain-cap-merge.test.mjs's own
+// seedLearning uses): seeding 25 active learnings through 5 real
+// `consolidate --apply` runs (the delta contract caps a run at 5
+// file-touches) would take many CLI round trips just to reach the cap.
+// Writing the learning files straight to the store — in the exact shape
+// renderLearning produces, with one qualifying fix episode each so `learning
+// promote` accepts them — plus a rebuildIndex call is an equivalent end
+// state and keeps this regression test fast.
+function seedActiveLearning(dir, domain, slug) {
+  const lines = [
+    '---', 'schema: 1', `trigger: "seed trigger for ${slug}"`, 'status: active', 'source: auto', 'episodes:',
+    `  - path: docs/solutions/perf/${slug}-0.md`,
+    `    sha256: "${'a'.repeat(64)}"`,
+    '    kind: fix',
+    '    plan: docs/plans/seed.md',
+    'anchors: []', 'superseded_by: null', 'last_confirmed: 2026-07-01', 'origin: unknown',
+    '---', '', `Seed body for ${slug}.`, '',
+  ];
+  const file = path.join(dir, 'learnings', domain, `${slug}.md`);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, lines.join('\n'), 'utf8');
+}
+
+// Milestone 4 Task 5 item 7(a): a domain filled to DOMAIN_ACTIVE_CAP (25)
+// active learnings blocks a plain ADD — but promoting one of the 25 drops it
+// out of every active-learning surface (isActiveFm excludes promoted_to),
+// freeing exactly one slot for a fresh ADD. This pins the hand-verified
+// interaction between promotion and the domain cap.
+test('cap-after-promote: promoting one of 25 active learnings frees room for a new ADD (final active <= 25)', () => {
+  const c = ctx();
+  const { dir } = ensureStore(c.ws, { home: c.harnessHome });
+  for (let i = 0; i < 25; i++) seedActiveLearning(dir, 'sql', `cap-fill-${i}`);
+  rebuildIndex(dir);
+  assert.equal(listLearnings(dir).filter((l) => isActiveFm(l.fm)).length, 25, 'precondition: domain at cap');
+
+  const to = primitivePath(c.ws);
+  const promoteRes = run(c, ['learning', 'promote', 'sql/cap-fill-0', '--to', to]);
+  assert.equal(promoteRes.status, 0, promoteRes.stderr || promoteRes.stdout);
+  assert.equal(listLearnings(dir).filter((l) => isActiveFm(l.fm)).length, 24, 'promotion frees exactly one slot');
+
+  const op = {
+    op: 'ADD',
+    domain: 'sql',
+    slug: 'cap-fill-new',
+    trigger: 'a new claim after promoting one out of the domain',
+    body: 'A fresh claim that should fit now that promotion freed a slot.',
+    episodes: [{ path: 'docs/solutions/perf/cap-fill-new.md', sha256: 'b'.repeat(64), kind: 'fix', plan: 'docs/plans/p1.md' }],
+  };
+  const addRes = run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [op])]);
+  assert.equal(addRes.status, 0, addRes.stderr || addRes.stdout);
+
+  const finalActive = listLearnings(dir).filter((l) => isActiveFm(l.fm)).length;
+  assert.ok(finalActive <= 25, `final active count ${finalActive} must not exceed the domain cap`);
+  assert.equal(finalActive, 25, '24 remaining + 1 new = exactly at the cap');
+});
 
 // A learning whose ONLY kind: fix episode is pathless — a shape validateEpisodes
 // (apply.mjs) never lets an op create, but a malformed on-disk record (a hand
@@ -152,6 +210,11 @@ test('learning promote <id> --to <path> records promoted_to, commits, and retire
   const row = listOut.learnings.find((l) => l.id === id);
   assert.equal(row.status, 'promoted');
   assert.equal(listOut.counts.active, 0);
+  // Milestone 4 Task 5 item 5: a promoted row must never read
+  // promotionEligible: true again — its link counts still satisfy the
+  // threshold (3 fix links, 2 plans), but the behavior already lives in the
+  // primitive.
+  assert.equal(row.promotionEligible, false);
 
   // --why shows promotedTo.
   const whyRes = run(c, ['learnings', '--why', id]);

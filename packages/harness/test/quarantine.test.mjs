@@ -137,6 +137,42 @@ test('a byte-cap rejection records one failure entry per run; the 3rd strike qua
   assert.match(doctorRes.stdout, /\[!\]\s+K2\b/);
 });
 
+// Milestone 4 Task 5 item 1: an op citing the SAME episode twice (a
+// duplicated/malformed op JSON, not two distinct pieces of evidence) must
+// still record only ONE failure entry per run — without dedup, each
+// duplicate reference would append its own entry AND its own priorFailures
+// count against the same static ledger snapshot, so a single run with two
+// duplicate refs would double-count toward the 3-strike threshold and
+// quarantine a run early (on the 2nd run instead of the 3rd).
+test('an op citing the same episode twice records one failure entry per run (dedup); quarantines on the 3rd run, not earlier', () => {
+  const c = ctx();
+  const ep = writeEpisode(c.ws, 'perf', 'dup-claim');
+  const op = ADD({
+    slug: 'dup-claim',
+    body: 'x'.repeat(1300),
+    episodes: [
+      { ...ep, kind: 'fix', plan: 'docs/plans/p1.md' },
+      { ...ep, kind: 'fix', plan: 'docs/plans/p1.md' },
+    ],
+  });
+  const opsPath = writeOps(c.ws, [op]);
+  const { dir } = ensureStore(c.ws, { home: c.harnessHome });
+
+  for (let i = 0; i < 2; i++) {
+    const res = run(c, ['consolidate', '--apply', '--ops', opsPath]);
+    assert.equal(res.status, 1, res.stderr || res.stdout);
+  }
+  let ledger = readLedger(dir);
+  assert.equal(ledger.length, 2, 'one failure entry per run — the duplicate episode ref must not double-count');
+  assert.ok(ledger.every((e) => e.failure === 'E_BYTE_CAP' && !e.quarantined), 'not quarantined after only 2 runs');
+
+  const res3 = run(c, ['consolidate', '--apply', '--ops', opsPath]);
+  assert.equal(res3.status, 1, res3.stderr || res3.stdout);
+  ledger = readLedger(dir);
+  assert.equal(ledger.length, 4, '3 failure entries + 1 quarantine marker');
+  assert.equal(ledger.filter((e) => e.quarantined).length, 1, 'quarantines on exactly the 3rd run');
+});
+
 test('an E_MODE rejection records no failure', () => {
   const c = ctx();
   writeStoreConfig(c.ws, { home: c.harnessHome, mode: 'off' });

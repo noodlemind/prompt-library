@@ -80,7 +80,10 @@ export function listingView({ workspace, copilotHome, domain, home }) {
         trigger: l.fm.trigger || '',
         verified,
         plans,
-        promotionEligible: isPromotionEligible(verified, plans),
+        // A promoted learning is never eligible for promotion again — its
+        // behavior already lives in a primitive — regardless of how many fix
+        // links/plans it has on record.
+        promotionEligible: l.fm.promoted_to ? false : isPromotionEligible(verified, plans),
         failures: failures.get(l.id) || 0,
       };
     })

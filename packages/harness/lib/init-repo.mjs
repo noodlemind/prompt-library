@@ -4,7 +4,7 @@ import { ensureHarnessDir } from './session.mjs';
 import { writeHarnessRunner } from './resolve-harness-bin.mjs';
 import { writeCodebaseMap } from './repo-map/index.mjs';
 import { ensureStore, storeDir, readLedger } from './knowledge/store.mjs';
-import { collectEpisodes, consolidateStatus } from './knowledge/consolidate.mjs';
+import { collectEpisodes, consolidateStatus, splitLedger } from './knowledge/consolidate.mjs';
 
 const AGENT_CONTEXT_STUB = `# Agent Context
 
@@ -130,7 +130,11 @@ export function runInitRepo({ workspace, flags, log, copilotHome }) {
     const episodes = collectEpisodes({ workspace, copilotHome });
     if (episodes.length > 0) {
       if (flags.dryRun) {
-        const consumed = new Set(readLedger(storeDir(workspace)).map((e) => `${e.path}@${e.sha256}`));
+        // Reuse splitLedger's consumed semantics (consolidate.mjs) — a pure
+        // failure entry (three-strikes bookkeeping, no `learning` outcome
+        // yet) must still count as debt, matching what consolidateStatus
+        // reports for the non-dry-run path below.
+        const { consumed } = splitLedger(readLedger(storeDir(workspace)));
         const debt = episodes.filter((e) => !consumed.has(`${e.path}@${e.sha256}`)).length;
         if (debt > 0) {
           log(`armed ${debt} existing solution doc(s) as consolidation debt — drains at first session start`);

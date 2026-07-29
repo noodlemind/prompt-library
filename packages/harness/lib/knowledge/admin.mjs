@@ -310,7 +310,7 @@ export function absorbHandEdits({ workspace, home, log = () => {} }) {
  * cite it alongside other evidence. Ledger entries for the path are dropped
  * and INDEX.md is rebuilt so nothing dangling survives the purge.
  */
-export function purgeEpisode({ workspace, target, home }) {
+export function purgeEpisode({ workspace, target, home, log = () => {} }) {
   if (!target) {
     return {
       pass: false,
@@ -364,7 +364,7 @@ export function purgeEpisode({ workspace, target, home }) {
 
   const { dir } = ensureStore(workspace, { home });
   try {
-    absorbHandEdits({ workspace, home });
+    absorbHandEdits({ workspace, home, log });
   } catch {
     // best effort — a hand-edit absorb failure must never block purge.
   }
@@ -462,7 +462,7 @@ export function purgeEpisode({ workspace, target, home }) {
  * to still govern. Episode files on disk are untouched — they simply
  * re-enter the consolidation debt count on the next `consolidate --status`.
  */
-export function purgeAll({ workspace, home }) {
+export function purgeAll({ workspace, home, log = () => {} }) {
   // Non-creating gate: a storeless workspace has nothing to purge — must
   // never be materialized by --all just to discover that.
   const storePath = storeDir(workspace, { home });
@@ -476,7 +476,7 @@ export function purgeAll({ workspace, home }) {
   }
   const { dir } = ensureStore(workspace, { home });
   try {
-    absorbHandEdits({ workspace, home });
+    absorbHandEdits({ workspace, home, log });
   } catch {
     // best effort — a hand-edit absorb failure must never block purge --all.
   }
@@ -524,7 +524,7 @@ export function purgeAll({ workspace, home }) {
  * made, which Task 2 reapplies against the fresh corpus. Mode-gated like
  * every other knowledge write — human purge is the only always-on path.
  */
-export function rebuildStore({ workspace, home, yes, copilotHome }) {
+export function rebuildStore({ workspace, home, yes, copilotHome, log = () => {} }) {
   const { mode } = readStoreConfig(workspace, { home });
   if (!['on', 'suggest'].includes(mode)) {
     return {
@@ -559,7 +559,7 @@ export function rebuildStore({ workspace, home, yes, copilotHome }) {
   // only runs on this (mutation) path, once.
   const { dir } = ensureStore(workspace, { home });
   try {
-    absorbHandEdits({ workspace, home });
+    absorbHandEdits({ workspace, home, log });
   } catch {
     // best effort — a hand-edit absorb failure must never block rebuild.
   }

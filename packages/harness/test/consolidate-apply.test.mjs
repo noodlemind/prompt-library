@@ -216,6 +216,91 @@ test('a model SUPERSEDE (fix-kind episodes) on a source: human target still land
   assert.equal(after.fm.status, 'disputed');
 });
 
+// Milestone 4 Task 5 item 2: an apply run whose ONLY effect is disputing
+// targets (nothing else applied) must not commit as "consolidate: noop" —
+// that would erase from the store's own git history the one real thing the
+// run did do.
+test('a dispute-only apply run (nothing else applied) commits "consolidate: dispute <ids>", not noop', () => {
+  const c = ctx();
+  seedHumanLearning(c, 'dispute-only-target');
+  const { dir } = ensureStore(c.ws, { home: c.harnessHome });
+
+  const modelSupersede = {
+    op: 'SUPERSEDE',
+    target: 'sql/dispute-only-target',
+    domain: 'sql',
+    slug: 'dispute-only-target-v2',
+    trigger: 'a model-proposed replacement trigger',
+    body: 'a model-proposed replacement body text',
+    episodes: [EP({ path: 'docs/solutions/perf/dispute-only.md', sha256: 'f'.repeat(64), kind: 'fix' })],
+  };
+  const res = run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [modelSupersede])]);
+  assert.equal(res.status, 0, res.stderr || res.stdout);
+  const out = JSON.parse(res.stdout);
+  assert.equal(out.applied.length, 0, 'nothing applied — the SUPERSEDE was disputed, not written');
+
+  const log = spawnSync('git', ['log', '--oneline', '-1'], { cwd: dir, encoding: 'utf8' }).stdout;
+  assert.match(log, /consolidate: dispute /);
+  assert.match(log, /sql\/dispute-only-target/);
+});
+
+// Milestone 4 Task 5 item 3: STRENGTHEN/SUPERSEDE must reject a target that
+// is already inactive (superseded/retired/disputed) ON DISK from a PRIOR
+// run — MERGE already enforced this; STRENGTHEN/SUPERSEDE previously only
+// checked existing.has(target), so either could silently act on a demoted
+// target without a human's dispute -> confirm round trip. Composition-class
+// rejection: no strike recorded.
+test('a SUPERSEDE targeting an already-retired target (prior run) is rejected E_TARGET (not active), no strike', () => {
+  const c = ctx();
+  assert.equal(run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [ADD()])]).status, 0);
+  assert.equal(run(c, ['learning', 'retire', 'sql/not-null-large-tables', '--reason', 'stale']).status, 0);
+  const { dir } = ensureStore(c.ws, { home: c.harnessHome });
+  const ledgerBefore = readLedger(dir).length;
+
+  const supersede = {
+    op: 'SUPERSEDE',
+    target: 'sql/not-null-large-tables',
+    domain: 'sql',
+    slug: 'not-null-two-step',
+    trigger: 'adding NOT NULL columns to large/hot tables',
+    body: 'Two-step default+backfill, then validate constraint separately.',
+    episodes: [EP({ path: 'docs/solutions/perf/retired-target.md', sha256: 'e'.repeat(64) })],
+  };
+  const res = run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [supersede])]);
+  assert.equal(res.status, 1, res.stderr || res.stdout);
+  const out = JSON.parse(res.stdout);
+  assert.equal(out.rejected[0].code, 'E_TARGET');
+  assert.match(out.rejected[0].reason, /sql\/not-null-large-tables is not active/);
+
+  assert.equal(readLedger(dir).length, ledgerBefore, 'inactive-target rejection records no strike');
+  const learnings = listLearnings(dir);
+  assert.equal(learnings.length, 1, 'no new learning written');
+  assert.equal(learnings[0].fm.status, 'retired', 'target frontmatter untouched');
+});
+
+test('a STRENGTHEN targeting an already-disputed target (prior run) is rejected E_TARGET (not active), no strike', () => {
+  const c = ctx();
+  assert.equal(run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [ADD()])]).status, 0);
+  assert.equal(run(c, ['learning', 'dispute', 'sql/not-null-large-tables', '--reason', 'contested']).status, 0);
+  const { dir } = ensureStore(c.ws, { home: c.harnessHome });
+  const ledgerBefore = readLedger(dir).length;
+
+  const strengthen = {
+    op: 'STRENGTHEN',
+    target: 'sql/not-null-large-tables',
+    episodes: [EP({ path: 'docs/solutions/perf/disputed-target.md', sha256: 'f'.repeat(64) })],
+  };
+  const res = run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [strengthen])]);
+  assert.equal(res.status, 1, res.stderr || res.stdout);
+  const out = JSON.parse(res.stdout);
+  assert.equal(out.rejected[0].code, 'E_TARGET');
+  assert.match(out.rejected[0].reason, /sql\/not-null-large-tables is not active/);
+
+  assert.equal(readLedger(dir).length, ledgerBefore, 'inactive-target rejection records no strike');
+  const learnings = listLearnings(dir);
+  assert.equal(learnings[0].fm.episodes.length, 1, 'STRENGTHEN must not have added the new episode');
+});
+
 test('a fabricated human-teaching kind for a NONEXISTENT episode file does not exempt a SUPERSEDE from disputed demotion', () => {
   const c = ctx();
   seedHumanLearning(c, 'human-taught-claim-fab-1');

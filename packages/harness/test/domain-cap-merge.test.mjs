@@ -228,6 +228,51 @@ test('a MERGE whose new id already exists is rejected with E_EXISTS, targets unt
   assert.equal(byId['sql/target-b'].fm.superseded_by, null);
 });
 
+// Milestone 4 Task 5 item 7(b): MERGE already checks each target for
+// promoted_to BEFORE the consumedTargets/active checks (apply.mjs) — a MERGE
+// naming a promoted target must reject with the promoted E_TARGET rejection,
+// write nothing, and record no strike. Pins this hand-verified behavior.
+test('a MERGE targeting a promoted learning is rejected with the promoted E_TARGET rejection, nothing written, no strike', () => {
+  const c = ctx();
+  const { dir } = ensureStore(c.ws, { home: c.harnessHome });
+  seedLearning(dir, 'sql', 'promoted-target');
+  seedLearning(dir, 'sql', 'active-target');
+  rebuildIndex(dir);
+
+  // Promote one target directly on disk — same field `learning promote`
+  // itself writes (serializeLearning's promoted_to line).
+  const promotedFile = path.join(dir, 'learnings', 'sql', 'promoted-target.md');
+  const text = fs.readFileSync(promotedFile, 'utf8');
+  fs.writeFileSync(
+    promotedFile,
+    text.replace('superseded_by: null', 'superseded_by: null\npromoted_to: .github/instructions/sql.instructions.md'),
+    'utf8'
+  );
+  rebuildIndex(dir);
+
+  const ledgerBefore = readLedger(dir).length;
+  const mergeOp = {
+    op: 'MERGE',
+    targets: ['sql/promoted-target', 'sql/active-target'],
+    domain: 'sql',
+    slug: 'attempted-merge-promoted',
+    trigger: 'a merge trying to consume a promoted target',
+    body: 'attempted merge body text.',
+    episodes: [EP({ path: 'docs/solutions/perf/attempt-promoted.md', sha256: 'd'.repeat(64) })],
+  };
+  const res = run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [mergeOp])]);
+  assert.equal(res.status, 1, res.stderr || res.stdout);
+  const out = JSON.parse(res.stdout);
+  assert.equal(out.rejected[0].code, 'E_TARGET');
+  assert.match(out.rejected[0].reason, /is promoted/);
+
+  assert.equal(readLedger(dir).length, ledgerBefore, 'a promoted-target rejection records no strike');
+  const byId = Object.fromEntries(listLearnings(dir).map((l) => [l.id, l]));
+  assert.equal(byId['sql/promoted-target'].fm.superseded_by, null, 'target untouched');
+  assert.equal(byId['sql/active-target'].fm.superseded_by, null, 'target untouched');
+  assert.ok(!byId['sql/attempted-merge-promoted'], 'no new learning written');
+});
+
 // (e) MERGE weight (1 + targets.length) toward MAX_OPS_PER_RUN.
 test('a 4-target MERGE (5 file touches) alone passes the delta contract but combined with an ADD fails it', () => {
   const c = ctx();

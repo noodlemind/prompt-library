@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
-import { storeDir } from '../lib/knowledge/store.mjs';
+import { storeDir, ensureStore, appendLedger } from '../lib/knowledge/store.mjs';
 
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const binPath = path.join(packageRoot, 'bin', 'harness.mjs');
@@ -115,6 +116,32 @@ test('init-repo --dry-run reports what would be armed without creating the store
 
   const dir = storeDir(c.ws, { home: c.harnessHome });
   assert.ok(!fs.existsSync(dir), 'dry-run must not create the knowledge store');
+});
+
+// Milestone 4 Task 5 item 6: the dry-run debt preview previously treated
+// EVERY ledger entry as consumed, including pure failure entries (no
+// `learning` outcome yet) — under-counting debt versus consolidateStatus's
+// splitLedger-based semantics (the non-dry-run path just below it). A ledger
+// with one genuinely-consumed entry and one failure-only entry must report
+// the failure episode as debt.
+test('init-repo --dry-run counts a failure ledger entry as debt (splitLedger semantics), not as consumed', () => {
+  const c = ctx();
+  writeEpisode(c.ws, 'perf', 'consumed-ep');
+  writeEpisode(c.ws, 'perf', 'failed-ep');
+
+  const { dir } = ensureStore(c.ws, { home: c.harnessHome });
+  const consumedText = fs.readFileSync(path.join(c.ws, 'docs/solutions/perf/consumed-ep.md'), 'utf8');
+  const consumedSha = crypto.createHash('sha256').update(consumedText).digest('hex');
+  const failedText = fs.readFileSync(path.join(c.ws, 'docs/solutions/perf/failed-ep.md'), 'utf8');
+  const failedSha = crypto.createHash('sha256').update(failedText).digest('hex');
+  appendLedger(dir, [
+    { path: 'docs/solutions/perf/consumed-ep.md', sha256: consumedSha, learning: 'perf/seed', at: '2026-07-01' },
+    { path: 'docs/solutions/perf/failed-ep.md', sha256: failedSha, failure: 'E_EXISTS', at: '2026-07-01' },
+  ]);
+
+  const res = runInitRepo(c, ['--dry-run']);
+  assert.equal(res.status, 0, res.stderr || res.stdout);
+  assert.match(res.stdout, /armed 1/, 'only the failure-only episode counts as debt — the consumed one does not');
 });
 
 test('upgrade prints an init-repo arming hint when docs/solutions exists under cwd', () => {
