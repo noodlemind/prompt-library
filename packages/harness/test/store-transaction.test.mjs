@@ -110,6 +110,29 @@ function installFailingCommitHook(dir) {
   return hookPath;
 }
 
+/**
+ * A hook that permits the first `allowedCommits` commits to succeed, then
+ * fails every commit after — deterministic, cross-platform-safe (a plain
+ * counter file, no external state), and the shape needed to reproduce "the
+ * absorb sub-commit lands, then the main mutation's own commit fails."
+ */
+function installIntermittentCommitHook(dir, allowedCommits) {
+  const hooksDir = path.join(dir, '.git', 'hooks');
+  fs.mkdirSync(hooksDir, { recursive: true });
+  const counterFile = path.join(os.tmpdir(), `stx-counter-${process.pid}-${crypto.randomUUID()}`);
+  fs.writeFileSync(counterFile, '0');
+  fs.writeFileSync(
+    path.join(hooksDir, 'pre-commit'),
+    `#!/bin/sh
+N=$(cat "${counterFile}")
+N=$((N+1))
+echo $N > "${counterFile}"
+if [ "$N" -le ${allowedCommits} ]; then exit 0; else exit 1; fi
+`,
+    { mode: 0o755 }
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Lock semantics: every adopter returns E_LOCKED instead of proceeding.
 // ---------------------------------------------------------------------------
@@ -503,4 +526,78 @@ test('a strike-recording commit failure surfaces the ORIGINAL content rejection,
   // for the same underlying git reason).
   assert.equal(gitPorcelainStatus(dir).trim(), '', 'the tree is clean — the strike-recording rollback ran');
   assert.equal(fs.existsSync(path.join(dir, '.lock')), false);
+});
+
+// ---------------------------------------------------------------------------
+// Checkpoint-sha rollback (hardening batch A, third pass): a rollback must
+// land on the last successful INTRA-TRANSACTION commit, not on whether some
+// dirty path merely "looks like" protected content. The dirty-content guard
+// this replaced broke exactly here: an in-place human-teaching reteach
+// legitimately re-writes the SAME file an earlier absorb sub-commit just
+// captured, so after a later commit failure the file is dirty again for a
+// reason that has nothing to do with the original hand edit — the old guard
+// mistook that for "still protected" and skipped the rollback entirely,
+// leaving the failed mutation's content fully readable (a phantom apply)
+// with the store reporting failure. Resetting to the actual last-known-good
+// commit sha has no such failure mode.
+// ---------------------------------------------------------------------------
+
+test('a commit hook that allows the absorb but blocks the reteach rolls back to the absorb commit, not past it — no phantom apply', () => {
+  const c = ctx();
+  const id = seedLearning(c);
+  const { dir } = ensureStore(c.ws, { home: c.harnessHome });
+  const learning = listLearnings(dir).find((l) => l.id === id);
+
+  handEditBody(learning.file, 'A human edit that must survive.');
+  const dirtyBefore = gitPorcelainStatus(dir);
+  assert.match(dirtyBefore, /learnings\/sql\/not-null-hot-tables\.md/, 'precondition: dirty tracked file');
+
+  // Commit #1 (the absorb sub-commit) succeeds; every commit after fails —
+  // specifically the main mutation's own finalize commit below.
+  installIntermittentCommitHook(dir, 1);
+
+  // A verified in-place human-teaching reteach: same domain/slug as the
+  // target (new id === target), with a real human-teaching-kind episode
+  // whose own frontmatter says so — this is what applyOps treats as an
+  // in-place replacement, REWRITING THE SAME FILE absorb just committed.
+  const teachRel = 'docs/solutions/teachings/manual-reteach.md';
+  const teachFull = path.join(c.ws, teachRel);
+  fs.mkdirSync(path.dirname(teachFull), { recursive: true });
+  const teachText =
+    '---\ntitle: "manual reteach"\nkind: human-teaching\ndate: 2026-07-01\ntrigger: "adding NOT NULL columns to hot tables"\n---\n\nUpdated claim from a human, in-place reteach.\n';
+  fs.writeFileSync(teachFull, teachText, 'utf8');
+  const teachSha = crypto.createHash('sha256').update(teachText).digest('hex');
+
+  const reteachOp = {
+    op: 'SUPERSEDE',
+    target: id,
+    domain: 'sql',
+    slug: 'not-null-hot-tables',
+    trigger: 'adding NOT NULL columns to hot tables',
+    body: 'Updated claim from a human, in-place reteach.',
+    episodes: [{ path: teachRel, sha256: teachSha, kind: 'human-teaching', plan: null }],
+  };
+
+  const res = applyOps({ workspace: c.ws, opsPath: writeOps(c.ws, [reteachOp]), home: c.harnessHome });
+
+  assert.equal(res.exitCode, 1);
+  assert.equal(res.committed, false);
+
+  // The tree is fully clean — the failed reteach was rolled back, not left
+  // dirty-but-protected.
+  assert.equal(gitPorcelainStatus(dir).trim(), '', 'no phantom mutation left dirty in the tree');
+
+  // HEAD sits exactly at the absorb commit.
+  const log = spawnSync('git', ['log', '--oneline'], { cwd: dir, encoding: 'utf8' }).stdout.trim().split('\n');
+  assert.match(log[0], /^\S+ human edit: /, 'HEAD is the absorb commit');
+  assert.equal(log.length, 2, 'exactly the seed commit plus the absorb commit — the failed reteach never landed');
+
+  // The hand edit survives (readable via the commit); the failed reteach's
+  // content is NOT visible anywhere — not a phantom apply.
+  const after = listLearnings(dir).find((l) => l.id === id);
+  assert.match(after.body, /A human edit that must survive\./, 'the absorbed hand edit is the visible state');
+  assert.doesNotMatch(after.body, /in-place reteach/, 'the failed reteach content must never be visible');
+  assert.equal(after.fm.source, 'human');
+
+  assert.equal(fs.existsSync(path.join(dir, '.lock')), false, 'the lock is released');
 });

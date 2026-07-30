@@ -320,8 +320,18 @@ export function absorbHandEdits({ workspace, home, log = () => {} }) {
  * try/catch (which must re-throw it, not swallow it — see the adopters
  * below) and out to withStoreTransaction's catch, which recognizes it and
  * skips the rollback.
+ *
+ * `recordCheckpoint` is `fn`'s withStoreTransaction context callback
+ * (store.mjs) — called here on a SUCCESSFUL absorb commit so the
+ * transaction's rollback floor advances past it: a later failure (this
+ * function's own caller mutating further, or the transaction's own finalize
+ * commit) then rolls back to the absorb commit rather than before it,
+ * exactly the batch-A "lands on the absorb commit" invariant, now
+ * checkpoint-based rather than dirty-content-guessed. Defaults to a no-op so
+ * a direct (non-transactional) caller of absorbOrAbort — none exist today,
+ * but the parameter is optional the same way `log` is — never has to pass one.
  */
-export function absorbOrAbort({ workspace, home, log = () => {} }) {
+export function absorbOrAbort({ workspace, home, log = () => {}, recordCheckpoint = () => {} }) {
   const result = absorbHandEdits({ workspace, home, log });
   if (result.ok === false) {
     throw new StoreTransactionAbort(
@@ -329,6 +339,7 @@ export function absorbOrAbort({ workspace, home, log = () => {} }) {
       { stderr: result.stderr }
     );
   }
+  if (result.committed) recordCheckpoint();
   return result;
 }
 
@@ -396,9 +407,9 @@ export function purgeEpisode({ workspace, target, home, log = () => {} }) {
   // committed successfully (P1-8): if the store-side cascade fails or rolls
   // back, the episode file is never touched, so a failed purge never loses
   // evidence with nothing left to point at it.
-  const tx = withStoreTransaction(workspace, { home, label: `purge: ${target}` }, ({ dir }) => {
+  const tx = withStoreTransaction(workspace, { home, label: `purge: ${target}` }, ({ dir, recordCheckpoint }) => {
     try {
-      absorbOrAbort({ workspace, home, log });
+      absorbOrAbort({ workspace, home, log, recordCheckpoint });
     } catch (err) {
       // A REAL absorb-commit failure must propagate as-is (never swallowed)
       // so withStoreTransaction can skip the rollback and protect the
@@ -561,9 +572,9 @@ export function purgeAll({ workspace, home, log = () => {} }) {
     };
   }
 
-  const tx = withStoreTransaction(workspace, { home, label: 'purge: --all (store reset)' }, ({ dir }) => {
+  const tx = withStoreTransaction(workspace, { home, label: 'purge: --all (store reset)' }, ({ dir, recordCheckpoint }) => {
     try {
-      absorbOrAbort({ workspace, home, log });
+      absorbOrAbort({ workspace, home, log, recordCheckpoint });
     } catch (err) {
       // A REAL absorb-commit failure must propagate as-is (never swallowed)
       // so withStoreTransaction can skip the rollback and protect the
@@ -670,9 +681,9 @@ export function rebuildStore({ workspace, home, yes, copilotHome, log = () => {}
   // --yes is an explicit go-ahead, unlike the preview above. listLearnings
   // only runs on this (mutation) path, once, inside the transaction (fresh,
   // under the lock, rather than before it existed).
-  const tx = withStoreTransaction(workspace, { home, label: 'consolidate: rebuild reset' }, ({ dir }) => {
+  const tx = withStoreTransaction(workspace, { home, label: 'consolidate: rebuild reset' }, ({ dir, recordCheckpoint }) => {
     try {
-      absorbOrAbort({ workspace, home, log });
+      absorbOrAbort({ workspace, home, log, recordCheckpoint });
     } catch (err) {
       // A REAL absorb-commit failure must propagate as-is (never swallowed)
       // so withStoreTransaction can skip the rollback and protect the

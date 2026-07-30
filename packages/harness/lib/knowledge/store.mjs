@@ -456,35 +456,38 @@ export function commitStore(dir, message) {
 // wedging the store for every future writer.
 const STALE_LOCK_MS = 10 * 60 * 1000;
 
-/** Roll back the store's working tree to its last commit: `git reset --hard`
- * undoes tracked changes, `git clean -fd` sweeps untracked files/dirs. Used
- * on any transaction failure (fn threw, or the final stage+commit itself
- * failed) — one implementation, shared by every adopter via
- * withStoreTransaction, replacing what used to be duplicated inline in
- * apply.mjs. Exported so a `fn` body that itself makes an intermediate
- * sub-commit (e.g. apply.mjs's recordContentFailure) can discard JUST that
- * partial write on its own sub-commit failure, keeping the tree clean before
- * returning — otherwise withStoreTransaction's own finalize step would
- * inherit the dirt and risk masking the real rejection behind a generic
- * commit-failure error. */
-export function rollbackStore(dir) {
-  spawnSync('git', ['reset', '--hard'], { cwd: dir, encoding: 'utf8' });
+/**
+ * Roll back the store's working tree: `git reset --hard [targetSha]` undoes
+ * tracked changes back to `targetSha` (or plain current HEAD when omitted —
+ * the store's ordinary "discard everything uncommitted" shape), `git clean
+ * -fd` sweeps untracked files/dirs. One implementation, shared by every
+ * adopter via withStoreTransaction, replacing what used to be duplicated
+ * inline in apply.mjs. Exported so a `fn` body that itself makes an
+ * intermediate sub-commit (e.g. apply.mjs's recordContentFailure) can
+ * discard JUST that partial write on its own sub-commit failure (calling
+ * this with no target, since it only ever needs to undo its OWN attempt),
+ * keeping the tree clean before returning — otherwise withStoreTransaction's
+ * own finalize step would inherit the dirt and risk masking the real
+ * rejection behind a generic commit-failure error.
+ */
+export function rollbackStore(dir, targetSha) {
+  spawnSync('git', targetSha ? ['reset', '--hard', targetSha] : ['reset', '--hard'], { cwd: dir, encoding: 'utf8' });
   spawnSync('git', ['clean', '-fd'], { cwd: dir, encoding: 'utf8' });
 }
 
 /**
- * The exact shape absorbHandEdits (admin.mjs) treats as an absorbable hand
- * edit: a `learnings/<domain>/<slug>.md` path. Exported so admin.mjs's own
- * porcelain scan and withStoreTransaction's rollback guard (below) share ONE
- * definition of "this dirty path is protectable content, not incidental
- * debris" — the two must never drift apart, since the guard's whole job is
- * to protect exactly what absorb would have protected.
+ * `learnings/<domain>/<slug>.md` — the shape absorbHandEdits (admin.mjs)
+ * treats as an absorbable hand edit. Exported for admin.mjs's own porcelain
+ * scan; no longer used by store.mjs itself (an earlier version of the
+ * rollback guard here matched dirty paths against it, which incorrectly
+ * protected a path a transaction's OWN legitimate mutation re-dirtied after
+ * an earlier absorb commit already captured it — see withStoreTransaction's
+ * checkpoint-based design below, which replaced that approach entirely).
  */
 export const LEARNING_FILE_RE = /^learnings\/([^/]+)\/([^/]+)\.md$/;
 
 /** Parse one `git status --porcelain` line into its status code and path —
- * shared by admin.mjs's absorbHandEdits scan and dirtyLearningFilePaths
- * below (same rename-arrow and git-quoting handling either way). */
+ * shared by admin.mjs's absorbHandEdits scan. */
 export function parsePorcelainLine(line) {
   const status = line.slice(0, 2);
   let rest = line.slice(3);
@@ -496,28 +499,11 @@ export function parsePorcelainLine(line) {
   return { status, path: rest };
 }
 
-/**
- * The set of currently-dirty paths that LOOK like a learning file
- * absorbHandEdits would treat as an absorbable hand edit — used by
- * withStoreTransaction's rollback guard (below) to tell "content a
- * StoreTransactionAbort is protecting" apart from ordinary dirt (this
- * transaction's own fresh mutation writes, or unrelated debris like a test
- * fixture) that a rollback is always safe to discard. Deliberately narrow:
- * matching the SAME shape absorb itself would absorb, nothing broader —
- * a plain "was the tree dirty at all" check would also protect things that
- * were never at risk (a colliding non-.md file, an unrelated stray write),
- * which is exactly precise enough to be wrong.
- */
-function dirtyLearningFilePaths(dir) {
-  const res = spawnSync('git', ['status', '--porcelain'], { cwd: dir, encoding: 'utf8' });
-  if (res.status !== 0 || !res.stdout.trim()) return new Set();
-  const paths = new Set();
-  for (const line of res.stdout.split('\n')) {
-    if (!line.trim()) continue;
-    const { path: rel } = parsePorcelainLine(line);
-    if (LEARNING_FILE_RE.test(rel)) paths.add(rel);
-  }
-  return paths;
+/** The store's current HEAD commit sha, or null on a store with no commits
+ * yet (`git rev-parse HEAD` fails closed rather than throwing). */
+function currentHeadSha(dir) {
+  const res = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: dir, encoding: 'utf8' });
+  return res.status === 0 ? res.stdout.trim() : null;
 }
 
 /**
@@ -573,25 +559,48 @@ export class StoreTransactionAbort extends Error {
  *
  * Acquires `.lock` (mkdir + stale-takeover-via-rename — moved here from
  * apply.mjs so there is exactly one implementation) BEFORE calling
- * `fn({ dir, git })`. `fn` is expected to mutate the store directly and
- * return a plain result value describing what happened; it may perform its
- * OWN sub-commits when it needs more than one checkpoint inside this same
- * lock (e.g. absorbHandEdits's self-contained "human edit: <ids>" commit,
- * simply invoked from inside `fn` now instead of before the lock existed —
- * that earlier sub-commit is what a later rollback in this same transaction
- * lands on, never before it).
+ * `fn({ dir, git, recordCheckpoint })`. `fn` is expected to mutate the store
+ * directly and return a plain result value describing what happened; it may
+ * perform its OWN sub-commits when it needs more than one checkpoint inside
+ * this same lock (e.g. absorbHandEdits's self-contained "human edit: <ids>"
+ * commit, simply invoked from inside `fn` now instead of before the lock
+ * existed).
+ *
+ * Rollback target — the checkpoint, not a dirty-content guess: a
+ * `checkpointSha` is captured at entry (current HEAD, or null on a store
+ * with no commits yet) and advances every time `fn` calls `recordCheckpoint`
+ * after landing an intra-transaction commit of its own (absorbOrAbort calls
+ * it after a successful absorb sub-commit; apply.mjs's recordContentFailure
+ * calls it after a successful strike sub-commit — ANY intra-transaction
+ * commit should). On failure, `git reset --hard <checkpointSha>` (or plain
+ * `git reset --hard` when checkpointSha is null) discards everything AFTER
+ * that point and nothing before it — this is what makes "lands on the
+ * absorb commit, not before it" correct BY CONSTRUCTION rather than by
+ * inspecting what's currently dirty: an EARLIER version of this guard tried
+ * to protect dirty paths that "looked like" an absorbed hand edit, which
+ * incorrectly protected a path a transaction's OWN legitimate mutation
+ * re-dirtied AFTER an absorb commit already captured it (an in-place
+ * human-teaching reteach rewriting the SAME file absorb had just committed),
+ * leaving a failed mutation's content visible to readers with nothing
+ * rolled back. Resetting to the actual last-known-good commit sha has no
+ * such failure mode: the reteach's failed rewrite is simply everything after
+ * `checkpointSha`, discarded regardless of which path it touched.
  *
  * On `fn` returning normally: stage + commit whatever `fn` left uncommitted,
  * using `(result && result.commitMessage) || label` as the message. A real
- * git failure at either step triggers rollback and is reported as
- * `ok: false, rolledBack: true`. A store with no git (`ensureStore` degraded)
- * skips staging entirely and reports `committed: false` — the same tolerant
- * default the rest of the store's degraded modes use.
+ * git failure at either step triggers rollback to `checkpointSha` and is
+ * reported as `ok: false, rolledBack: true`. A store with no git
+ * (`ensureStore` degraded) skips staging entirely and reports
+ * `committed: false` — the same tolerant default the rest of the store's
+ * degraded modes use.
  *
- * On `fn` throwing: rollback, then report `ok: false, rolledBack: true,
- * error` — UNLESS the thrown value is a StoreTransactionAbort, in which case
- * rollback is skipped entirely and `rolledBack: false` (see the class doc
- * comment above).
+ * On `fn` throwing: rollback to `checkpointSha`, then report
+ * `ok: false, rolledBack: true, error` — UNLESS the thrown value is a
+ * StoreTransactionAbort, in which case rollback is skipped entirely and
+ * `rolledBack: false` (see the class doc comment above) — that path exists
+ * for exactly the one case a checkpoint can't help with: absorb ITSELF
+ * couldn't commit, so there's no fresh checkpoint to fall back to and the
+ * dirty, uncommitted edit must be left exactly where it is.
  *
  * The lock is released in `finally`, AFTER the commit or rollback above
  * completes — never before.
@@ -643,55 +652,27 @@ export function withStoreTransaction(workspace, { home, label } = {}, fn) {
     }
   }
 
-  // Snapshot BEFORE calling fn: which dirty paths already looked like an
-  // absorbable hand edit? Both the fn-throw catch AND the finalize-commit-
-  // failure branch below funnel through guardedRollback, which uses this
-  // snapshot to decide whether a rollback is even safe. This is not only
-  // about a REAL absorb-commit failure inside THIS SAME transaction (a
-  // StoreTransactionAbort, already handled by its own short-circuit below) —
-  // a SEPARATE, LATER transaction (e.g. remember.mjs's post-failure ledger
-  // cleanup) can start with that same pre-existing, still-uncommitted hand
-  // edit sitting in the tree, inherited from an EARLIER transaction's
-  // aborted absorb, without its own `fn` ever touching it.
-  const entryProtectedPaths = git ? dirtyLearningFilePaths(dir) : new Set();
+  // The rollback floor: entry HEAD, advanced by recordCheckpoint() whenever
+  // an intra-transaction commit lands. Re-queried from git (not a
+  // hand-incremented counter) so a caller that forgets to call
+  // recordCheckpoint after a commit it made only delays when checkpointSha
+  // catches up — it can never make checkpointSha wrong the way a
+  // hand-maintained value could.
+  let checkpointSha = git ? currentHeadSha(dir) : null;
+  function recordCheckpoint() {
+    if (git) checkpointSha = currentHeadSha(dir);
+  }
 
-  /**
-   * Roll back UNLESS doing so would discard content this transaction did
-   * not itself author or safely capture. `git reset --hard` always discards
-   * every uncommitted change regardless of which ref it targets — there is
-   * no "safer target" that resets history while also preserving dirty
-   * working-tree content — so the only way to protect pre-existing dirt is
-   * to skip the reset (and the paired `clean -fd`) entirely.
-   *
-   * Protection applies precisely when at least one path that was ALREADY
-   * dirty-and-learning-file-shaped before `fn` ran is STILL dirty right now.
-   * Deliberately path-scoped, not a blanket "was the tree dirty at entry":
-   * that broader check would also protect content that was never actually
-   * at risk — e.g. a fixture's unrelated stray file sitting in the store dir
-   * — which is imprecise in exactly the wrong direction. "Still dirty" is
-   * what tells success from danger for a path that WAS in this set: if `fn`
-   * (or the finalize commit) captured it in a commit (e.g. absorb
-   * succeeded), it no longer shows up as dirty and a normal
-   * `git reset --hard` is safe — it lands on that commit, not before it (the
-   * batch-A "lands on the absorb commit" invariant, unchanged). Only a path
-   * that's STILL dirty was never captured by any commit at all, and must be
-   * left exactly where it is.
-   */
   function guardedRollback() {
     if (!git) return false;
-    if (entryProtectedPaths.size > 0) {
-      const stillDirty = dirtyLearningFilePaths(dir);
-      const stillProtected = [...entryProtectedPaths].some((p) => stillDirty.has(p));
-      if (stillProtected) return false;
-    }
-    rollbackStore(dir);
+    rollbackStore(dir, checkpointSha);
     return true;
   }
 
   try {
     let result;
     try {
-      result = fn({ dir, git });
+      result = fn({ dir, git, recordCheckpoint });
     } catch (err) {
       const isAbort = err instanceof StoreTransactionAbort;
       const rolledBack = isAbort ? false : guardedRollback();

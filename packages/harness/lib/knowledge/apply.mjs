@@ -509,7 +509,7 @@ export function applyOps({ workspace, opsPath, dryRun = false, home, approve = f
    * which propagates as a thrown exception instead and lets
    * withStoreTransaction perform the rollback.
    */
-  function runOnce({ dir, git }) {
+  function runOnce({ dir, git, recordCheckpoint = () => {} }) {
     const existing = new Map(listLearnings(dir).map((l) => [l.id, l]));
 
     /**
@@ -533,7 +533,9 @@ export function applyOps({ workspace, opsPath, dryRun = false, home, approve = f
      * so a real failure here is rolled back on the spot (the tree is
      * otherwise clean at this point: any absorb sub-commit already landed or
      * aborted the whole transaction before runOnce ever started), keeping
-     * the ledger append's own partial write from ever reaching finalize.
+     * the ledger append's own partial write from ever reaching finalize. On
+     * SUCCESS, recordCheckpoint() advances the transaction's rollback floor
+     * past this strike commit — same reasoning as absorbOrAbort's own call.
      */
     function recordContentFailure(code, episodes) {
       if (dryRun || !git || !CONTENT_FAILURE_CODES.has(code)) return null;
@@ -569,6 +571,7 @@ export function applyOps({ workspace, opsPath, dryRun = false, home, approve = f
           rollbackStore(dir);
           return `strike recording failed to commit: ${commitRes.stderr || 'git commit failed'}`;
         }
+        recordCheckpoint();
       } catch {
         // Best effort — failure recording must never mask the original rejection.
       }
@@ -1233,19 +1236,24 @@ export function applyOps({ workspace, opsPath, dryRun = false, home, approve = f
   // other store writer (setLearningStatus, purgeEpisode, purgeAll,
   // rebuildStore's --yes path, writeStoreConfig) takes the SAME lock via the
   // SAME withStoreTransaction, so none of them can bypass it either.
-  const tx = withStoreTransaction(workspace, { home, label: 'consolidate: apply' }, ({ dir, git }) => {
+  const tx = withStoreTransaction(workspace, { home, label: 'consolidate: apply' }, ({ dir, git, recordCheckpoint }) => {
     // Absorb any hand edit sitting in the store BEFORE anything else reads or
     // mutates it — still its own self-contained commit (absorbHandEdits calls
     // commitStore itself), now made WHILE the lock is held instead of before
-    // it existed. That absorb commit is the checkpoint a later rollback in
-    // this same transaction lands on, so a hand edit always survives a
-    // mid-mutation throw. Advisory: never blocks the run it guards — EXCEPT
-    // when the absorb's own sub-commit fails for a real reason (not "nothing
-    // to absorb"), which absorbOrAbort turns into a StoreTransactionAbort:
-    // that must propagate, not be swallowed here, so withStoreTransaction can
-    // skip the standard rollback and leave the uncommitted hand edit intact.
+    // it existed. That absorb commit is the transaction's rollback checkpoint
+    // (recordCheckpoint, via absorbOrAbort), so a hand edit always survives a
+    // mid-mutation throw — including one caused by a LEGITIMATE later
+    // mutation re-touching the SAME file the absorb just committed (an
+    // in-place human-teaching reteach): the checkpoint reset discards
+    // everything after that commit regardless of which path it touched,
+    // rather than trying to infer "is this dirty path still protected" from
+    // content alone. Advisory: never blocks the run it guards — EXCEPT when
+    // the absorb's own sub-commit fails for a real reason (not "nothing to
+    // absorb"), which absorbOrAbort turns into a StoreTransactionAbort: that
+    // must propagate, not be swallowed here, so withStoreTransaction can skip
+    // the standard rollback and leave the uncommitted hand edit intact.
     try {
-      absorbOrAbort({ workspace, home, log });
+      absorbOrAbort({ workspace, home, log, recordCheckpoint });
     } catch (err) {
       if (err instanceof StoreTransactionAbort) throw err;
       // best effort — any OTHER hand-edit absorb failure must never block applyOps.
@@ -1261,7 +1269,7 @@ export function applyOps({ workspace, opsPath, dryRun = false, home, approve = f
           : `knowledge mode is ${freshMode} — run: harness knowledge on`;
       return { kind: 'reject', applied: [], governed: [], rejected: [{ code: 'E_MODE', reason }], committed: false, exitCode: 2 };
     }
-    return runOnce({ dir, git });
+    return runOnce({ dir, git, recordCheckpoint });
   });
 
   if (!tx.ok) {

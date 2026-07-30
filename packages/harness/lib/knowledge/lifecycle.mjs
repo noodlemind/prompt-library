@@ -43,13 +43,13 @@ export function setLearningStatus({ workspace, id, action, reason, to, home, log
     return { pass: false, exitCode: 1, id, status: null, blockedReason: `E_TARGET: no learning ${id}` };
   }
 
-  const tx = withStoreTransaction(workspace, { home, label: `${action} ${id}` }, ({ dir }) => {
+  const tx = withStoreTransaction(workspace, { home, label: `${action} ${id}` }, ({ dir, recordCheckpoint }) => {
     // Absorb any hand edit before this mutation reads the target — so a
     // retire/dispute/confirm/promote always acts on the absorbed
     // (human-authored) state, not a stale in-tree edit. Advisory: never
     // blocks the command.
     try {
-      absorbOrAbort({ workspace, home, log });
+      absorbOrAbort({ workspace, home, log, recordCheckpoint });
     } catch (err) {
       // A REAL absorb-commit failure must propagate as-is (never swallowed)
       // so withStoreTransaction can skip the rollback and protect the

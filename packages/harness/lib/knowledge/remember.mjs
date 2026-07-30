@@ -168,17 +168,15 @@ export function runRemember({ workspace, copilotHome, flags, argv, log = () => {
     // have hit a REAL absorb-commit failure of its OWN (a StoreTransactionAbort,
     // correctly left uncommitted rather than rolled back — see admin.mjs),
     // which leaves that hand edit sitting dirty in the tree for THIS
-    // transaction to inherit. Without this check, this transaction's own fn
-    // would ignore that dirt entirely, its finalize commit would try (and
-    // fail, for the same underlying reason) to commit it anyway, and
-    // withStoreTransaction's rollback guard would have to fall back to its
-    // own entry-dirty detection to avoid destroying it. Checking here first
-    // means the SAME failure is caught earlier and reported consistently
-    // with every other adopter, rather than relying on that guard alone.
+    // transaction to inherit. Checking here first means the SAME failure is
+    // caught earlier and reported consistently with every other adopter,
+    // rather than relying solely on withStoreTransaction's own checkpoint-sha
+    // rollback (store.mjs) to leave it untouched if this cleanup's own
+    // finalize commit later fails too.
     try {
-      withStoreTransaction(workspace, { home, label: `remember: clear failure bookkeeping for ${episode.path}` }, ({ dir }) => {
+      withStoreTransaction(workspace, { home, label: `remember: clear failure bookkeeping for ${episode.path}` }, ({ dir, recordCheckpoint }) => {
         try {
-          absorbOrAbort({ workspace, home, log });
+          absorbOrAbort({ workspace, home, log, recordCheckpoint });
         } catch (err) {
           if (err instanceof StoreTransactionAbort) throw err;
           // best effort — any OTHER hand-edit absorb failure must never block this cleanup.
