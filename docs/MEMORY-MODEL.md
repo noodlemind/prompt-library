@@ -175,8 +175,12 @@ always wins.
 
 ## Governance ledger
 
-`retire`/`dispute`/`confirm`/`promote` mutate a learning's frontmatter (`status`, and
-`last_confirmed` on confirm — see [Human register](#human-register) above) AND append one
+`retire`/`dispute`/`confirm` mutate a learning's `status` frontmatter (to
+`retired`/`disputed`/`active` respectively, plus `last_confirmed` on confirm — see
+[Human register](#human-register) above); `promote` is different — it leaves `status`
+untouched and instead stamps the `promoted_to` field (retrieval then excludes the learning
+by that field, not by any `promoted` status value; `promoted` is only a derived/effective
+status the listing view computes from `promoted_to`). All four append one
 append-only record — `{ id, action, reason, to, at }` — to
 `~/.harness/knowledge/<repo-id>/governance.jsonl`, replayed latest-entry-per-id
 (`readGovernance`/`appendGovernance` in `store.mjs`). That ledger survives
@@ -188,8 +192,10 @@ exact same rollback window as the rest of the write transaction (single-writer l
 `.lock`; `git reset --hard && git clean -fd` on any mid-transaction throw): a governance
 reapplication either lands together with the write it's attached to, or neither does, the
 same all-or-nothing guarantee as every other `applyOps` mutation. The regenerated learning
-lands `retired`/`disputed`/`promoted` instead of silently reverting to whatever the fresh op
-claims. `confirm` is deliberately excluded — it is not a demotion to restore, so a
+lands `retired` or `disputed` as a re-applied stored `status` — or, for a promotion, gets its
+`promoted_to` field re-stamped so it again reads as the derived/effective `promoted` status
+(the stored `status` stays as written) — instead of silently reverting to whatever the fresh
+op claims. `confirm` is deliberately excluded — it is not a demotion to restore, so a
 confirm-only record never reapplies; the fresh write simply stands on its own. The
 apply/candidates response surfaces this as `governed: [{ id, action }]`.
 

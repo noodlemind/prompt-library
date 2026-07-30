@@ -135,9 +135,9 @@ Read `mode`. Modes are `on | suggest | off | freeze | capture-only`:
 
 - **any other mode** (`off`, `freeze`, `capture-only`) — stop entirely. Present `.harness/consolidate-ops.json` as a reviewable diff for the human; do not attempt `--apply` at all (it would reject with `E_MODE` and there is no `--yes` path out of these modes).
 
-### 5. Retry once on failure, then quarantine
+### 5. Retry only the four recoverable codes; stop on terminal codes
 
-On a rejected apply, fix the ops per the error code and retry **once**:
+A rejected apply splits into two classes. **Only the four codes below are recoverable** — fix the ops per the code and retry the apply **once**:
 
 | Code | Fix |
 |---|---|
@@ -146,7 +146,14 @@ On a rejected apply, fix the ops per the error code and retry **once**:
 | `E_DELTA_CONTRACT` | Drop the lowest-value file-touching ops until the run touches ≤5 files. |
 | `E_LINT` | Change that cluster's op to `NOOP`. |
 
-A cluster that fails twice is left for quarantine — do not attempt a third fix in this session.
+A cluster that fails twice on a recoverable code is left for quarantine — do not attempt a third fix in this session. Any rejection code NOT in this table (including `E_EXISTS`/`E_TARGET` collisions) is not retryable — leave the op and report it.
+
+**Terminal codes are never retried — stop and report to the human:**
+
+- `E_SECRET` — the op body carries secret-shaped content; retrying only pushes malicious content one strike closer to quarantine. Report the op and the flagged pattern; never re-submit it.
+- `E_MODE` — the mode gate refused the write (kill-switch mode, or `suggest` without `--yes`). A retry cannot change the mode — resolve it through step 4, not here.
+- `E_DISPUTED` — a target is disputed-pending-human. Report it verbatim; a disputed target needs a human decision, not a retry.
+- `E_DOMAIN_CAP` — the domain is already at its active cap; the same `ADD` re-rejects on retry. Report the cap pressure (which domain, that a retire or a real `MERGE` is needed) per step 2 rather than retrying.
 
 The codes above are this skill's apply-specific errors. For subagent failure, tool unavailability, file-not-found, and timeout recovery, follow the shared patterns in `.github/skills/references/error-handling-patterns.md`.
 
