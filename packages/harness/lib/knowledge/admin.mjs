@@ -469,7 +469,12 @@ function purgeTempSiblings(safe) {
   } catch {
     return [];
   }
-  return names.filter((n) => n.startsWith(`${base}.purge-`)).map((n) => path.join(d, n));
+  // Match ONLY the exact shape this module stages — `<base>.purge-<pid>-<ts>`
+  // with a numeric pid and timestamp — so a coincidentally-named unrelated
+  // sibling (e.g. `report.md.purge-notes.md`) is never swept.
+  const escaped = base.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const debrisRe = new RegExp(`^${escaped}\\.purge-\\d+-\\d+$`);
+  return names.filter((n) => debrisRe.test(n)).map((n) => path.join(d, n));
 }
 
 /**

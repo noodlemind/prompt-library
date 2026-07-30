@@ -467,6 +467,29 @@ test('purge re-run after a crash BEFORE commit removes both the store learning a
   assert.ok(!listLearnings(dir).some((l) => l.id === 'sql/leak-purge'), 'the store learning is removed too');
 });
 
+test('purge debris sweep matches only the numeric `.purge-<pid>-<ts>` shape — an unrelated `.purge-notes.md` sibling survives', () => {
+  const c = ctx();
+  const targetPath = 'docs/solutions/perf/glob-target.md';
+  const target = writeRealEpisode(c.ws, targetPath, 'glob body\n');
+  const op = {
+    op: 'ADD', domain: 'sql', slug: 'glob-purge', trigger: 'glob purge trigger', body: 'glob purge body',
+    episodes: [{ ...target, kind: 'fix', plan: 'docs/plans/p1.md' }],
+  };
+  assert.equal(applyOps({ workspace: c.ws, opsPath: writeOps(c.ws, [op]), home: c.harnessHome }).exitCode, 0);
+
+  const perfDir = path.join(c.ws, 'docs', 'solutions', 'perf');
+  // A coincidentally-named sibling that must NOT be swept, and a real debris file that must be.
+  const unrelated = path.join(perfDir, 'glob-target.md.purge-notes.md');
+  const realDebris = path.join(perfDir, 'glob-target.md.purge-1234-1699999999999');
+  fs.writeFileSync(unrelated, 'human notes, not debris\n');
+  fs.writeFileSync(realDebris, 'glob body\n');
+
+  const res = purgeEpisode({ workspace: c.ws, target: targetPath, home: c.harnessHome });
+  assert.equal(res.pass, true, res.blockedReason);
+  assert.ok(fs.existsSync(unrelated), 'a non-matching `.purge-notes.md` sibling must survive the purge');
+  assert.equal(fs.existsSync(realDebris), false, 'a real numeric `.purge-<pid>-<ts>` debris file is swept');
+});
+
 test('purge --all: a store-transaction failure leaves every learning and the ledger untouched', () => {
   const c = ctx();
   seedLearning(c, { slug: 'keep-me' });

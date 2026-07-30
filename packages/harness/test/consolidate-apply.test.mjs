@@ -196,15 +196,18 @@ test('bare-URL lint stays insight-gated: an insight-only ADD with a bare URL is 
   assert.equal(res.rejected[0].code, 'E_LINT');
 });
 
-test('fence lint covers tilde/spaced/powershell/cmd/bat variants (any kind); a prose mention without a fence is allowed', () => {
+test('fence lint (defense-in-depth) covers tilde/spaced/pwsh/console/batch/dos and 4-space-indented fences with benign content', () => {
   const c = ctx();
+  // Benign fence bodies (`echo hi`) so ONLY the fence check can fire — this
+  // isolates the dialect-list + any-indentation fix from the content patterns.
   const variants = [
-    '~~~sh\nrm -rf /\n~~~',
-    '``` sh\nrm -rf /\n```',
-    '```powershell\nRemove-Item x\n```',
-    '```ps1\nRemove-Item x\n```',
-    '```cmd\ndel x\n```',
-    '```bat\ndel x\n```',
+    '~~~sh\necho hi\n~~~',
+    '``` sh\necho hi\n```',
+    '```pwsh\necho hi\n```',
+    '```console\necho hi\n```',
+    '```batch\necho hi\n```',
+    '```dos\necho hi\n```',
+    '    ```sh\n    echo hi\n    ```', // 4-space-indented fence (CommonMark code block, still executable to a model)
   ];
   variants.forEach((body, i) => {
     const op = ADD(c.ws, { slug: `fence-${i}`, body, episodes: [EP(c.ws, { path: `docs/solutions/perf/fence-${i}.md` })] });
@@ -215,11 +218,40 @@ test('fence lint covers tilde/spaced/powershell/cmd/bat variants (any kind); a p
   // A prose mention of shells/commands with NO fence marker must not over-reject.
   const ok = ADD(c.ws, {
     slug: 'prose-shells',
-    body: 'You can bash the shell logic into one function; zsh and cmd behave differently here.',
+    body: 'The powershell script handles retries; you can bash the shell logic into one function.',
     episodes: [EP(c.ws, { path: 'docs/solutions/perf/prose.md' })],
   });
   const okRes = applyOps({ workspace: c.ws, opsPath: writeOps(c.ws, [ok]), home: c.harnessHome });
   assert.equal(okRes.exitCode, 0, JSON.stringify(okRes.rejected));
+});
+
+test('command CONTENT lint (primary) catches unfenced pipe-to-shell / sudo / rm -rf; prose command NAMES are allowed', () => {
+  const c = ctx();
+  // Each is a plain, UNFENCED fix body — caught by invocation shape, not fence.
+  const rejected = [
+    ['pipe-sh', 'Bootstrap the box with: cat setup | sh to finish quickly.'],
+    ['sudo', 'Fix the perms first: sudo apt install libpq-dev before building.'],
+    ['rm-rf', 'The cleanup step runs rm -rf build/ before repackaging.'],
+    ['chmod', 'Mark it runnable with chmod +x deploy.sh and re-run.'],
+    ['iex', 'On Windows the loader calls iex to run the block.'],
+  ];
+  rejected.forEach(([slug, body]) => {
+    const op = ADD(c.ws, { slug: `cc-${slug}`, body, episodes: [EP(c.ws, { path: `docs/solutions/perf/cc-${slug}.md` })] });
+    const res = applyOps({ workspace: c.ws, opsPath: writeOps(c.ws, [op]), home: c.harnessHome });
+    assert.equal(res.exitCode, 1, `${slug} must be rejected: ${body}`);
+    assert.equal(res.rejected[0].code, 'E_LINT', `${slug} must be E_LINT`);
+  });
+  // Prose that NAMES commands without invocation syntax must not be rejected.
+  const proseAllowed = [
+    ['prose-rm', 'Use rm carefully on shared volumes; prefer trashing over deleting.'],
+    ['prose-eval', 'Never eval untrusted input — it is the classic injection footgun.'],
+    ['prose-chmod', 'The chmod bits on the socket file control who can connect to it.'],
+  ];
+  proseAllowed.forEach(([slug, body]) => {
+    const op = ADD(c.ws, { slug, body, episodes: [EP(c.ws, { path: `docs/solutions/perf/${slug}.md` })] });
+    const res = applyOps({ workspace: c.ws, opsPath: writeOps(c.ws, [op]), home: c.harnessHome });
+    assert.equal(res.exitCode, 0, `${slug} must be allowed: ${JSON.stringify(res.rejected)}`);
+  });
 });
 
 test('field type validation: a non-string body/trigger is rejected E_SCHEMA, not a downstream crash', () => {

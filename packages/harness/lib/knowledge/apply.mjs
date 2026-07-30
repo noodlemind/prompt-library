@@ -263,25 +263,48 @@ function renderLearning({ trigger, body, episodes, anchors = [], origin, status,
   return lines.join('\n');
 }
 
+// PRIMARY injection control — command CONTENT, matched by invocation SHAPE, not
+// by dialect name or fence label. A curated learning is read verbatim into the
+// orient pack a model acts on, so a body carrying an executable command is a
+// prompt-injection surface no matter what fence (or none) wraps it. Applied to
+// trigger+body of EVERY learning regardless of episode kind. Each pattern
+// targets an invocation shape, never a prose mention — "use rm carefully",
+// "never eval untrusted input", "the powershell script handles retries" do not
+// match, but the executable forms do. This is the durable half: new fence
+// labels can't route around a `| sh` or `curl … | bash` payload.
+const COMMAND_CONTENT_PATTERNS = [
+  [/\b(curl|wget)\s/i, 'download command (curl/wget)'],
+  // Pipe INTO a shell interpreter — the classic `curl … | sh`. Negative
+  // lookahead for a trailing `|` so a markdown table cell (`| sh |`) is not
+  // mistaken for a pipeline; a real pipe-to-shell never has a following pipe.
+  [/\|\s*(sh|bash|zsh|ksh|csh|dash|ash|pwsh|powershell)\b(?!\s*\|)/i, 'pipe-to-shell'],
+  [/\bsudo\s/i, 'sudo invocation'],
+  [/\brm\s+-[a-z]*[rf]/i, 'rm -rf / -f'],
+  [/\bchmod\s+(\+[rwxa]+|[0-7]{3,4})\b/i, 'chmod +x / octal'],
+  [/\b(bash|sh|zsh|ksh)\s+-c\b/i, 'shell -c invocation'],
+  // eval as an INVOCATION (followed by a quote/paren/dollar/backtick), never
+  // the bare word — so "never eval untrusted input" prose is not rejected.
+  [/\beval\s*[("'`$]/i, 'eval invocation'],
+  [/\b(iex|Invoke-Expression)\b/i, 'PowerShell Invoke-Expression'],
+];
+
+// DEFENSE-IN-DEPTH — a fenced code block in a language that renders as an
+// executable snippet to a model. Backtick AND tilde fences, an optional space
+// before the info string, and ANY indentation (CommonMark treats a ≥4-space
+// indent as a code block rather than a fence, but such a fence still reads as
+// executable to a model, so this security check matches at any indent). The
+// dialect list is deliberately broad; the CONTENT patterns above are the real
+// guarantee, this only catches an empty-but-labeled or otherwise content-light
+// fenced block.
+const SHELL_FENCE_PATTERN =
+  /(^|\n)[ \t]*(`{3,}|~{3,})[ \t]*(sh|bash|shell|zsh|fish|ksh|csh|dash|ash|sh-session|shell-session|shellsession|console|terminal|powershell|pwsh|ps|ps1|cmd|bat|batch|dos)\b/i;
+
 function lintImperative({ body, trigger, episodes }) {
   const text = `${trigger}\n${body}`;
-  // UNIVERSAL executable-command control (prompt-injection surface): a curated
-  // learning is read verbatim into the orient pack a model acts on, so
-  // executable command content is rejected from EVERY learning
-  // (ADD/SUPERSEDE/MERGE) regardless of episode kind — a `curl … | sh` body in
-  // a FIX-backed or MIXED learning is exactly as dangerous as in an
-  // insight-only one, and gating this on `episodes.every(kind==='insight')`
-  // let it render UNFENCED and UNLINTED. Scoped tightly (shell code fences and
-  // curl/wget command patterns) so a legitimate fix learning is never
-  // over-rejected.
-  // Cover every equivalent fence a Windows-primary threat model must treat as
-  // executable: backtick AND tilde fences, an optional space before the info
-  // string, and sh/bash/shell/zsh/powershell/ps1/cmd/bat. Requires a real
-  // fence marker first, so a prose mention ("bash the shell") is never
-  // over-rejected.
-  if (/(^|\n)\s{0,3}(`{3,}|~{3,})[ \t]*(sh|bash|shell|zsh|powershell|ps1|cmd|bat)\b/i.test(text))
-    return 'shell command fence in learning';
-  if (/\b(curl|wget)\s/i.test(text)) return 'download command (curl/wget) in learning';
+  for (const [re, label] of COMMAND_CONTENT_PATTERNS) {
+    if (re.test(text)) return `executable command content (${label}) in learning`;
+  }
+  if (SHELL_FENCE_PATTERN.test(text)) return 'shell command fence in learning';
   // BARE-URL check stays insight-gated: a fix learning legitimately citing a
   // doc URL must not be rejected, but an insight-only claim has no verified
   // evidence — the advisory fence is a labeling choice, not the injection
