@@ -8,6 +8,7 @@ import { loadPolicy } from './policy.mjs';
 import { recordSkillUsage } from './telemetry.mjs';
 import { scanSecrets } from './secret-scan.mjs';
 import { readStoreConfig } from './knowledge/store.mjs';
+import { assertNoSymlinkAncestors, writeFileContained } from './fs-safe.mjs';
 
 function slugify(text) {
   return (
@@ -94,16 +95,48 @@ export function runInsightCompound({ workspace, copilotHome, flags, log = () => 
   // get a deterministic numeric suffix.
   const base = `${date}-${slugify(flags.title)}`;
   const dirRel = path.join('docs', 'solutions', category);
+  // Physical containment (sweep-completeness finding, probe C): this is the
+  // PRIMARY episode write path for both `harness compound --insight` and
+  // `harness remember` (remember.mjs calls this with kind: 'human-teaching')
+  // — a symlinked docs/solutions (or category) directory must never let it
+  // land outside the workspace. Checked BEFORE the collision-avoidance loop
+  // below even probes existence through it, and fails loudly (a blocked
+  // result, not a silent no-op) rather than writing outside — unlike
+  // admin.mjs's absorb-snapshot writer (a best-effort side channel that can
+  // afford to skip), this IS the write the caller asked for.
+  if (!assertNoSymlinkAncestors(workspace, dirRel)) {
+    return {
+      pass: false,
+      exitCode: 1,
+      kind,
+      path: null,
+      indexed: null,
+      blockedReason: 'episode path escapes the workspace (symlinked docs/solutions?)',
+      nextTools: ['remove or replace the symlinked docs/solutions directory and re-run'],
+    };
+  }
   let rel = path.join(dirRel, `${base}.md`);
   let n = 2;
   while (fs.existsSync(path.join(workspace, rel))) {
     rel = path.join(dirRel, `${base}-${n}.md`);
     n += 1;
   }
-  const full = path.join(workspace, rel);
   if (!flags.dryRun) {
-    fs.mkdirSync(path.dirname(full), { recursive: true });
-    fs.writeFileSync(full, doc, 'utf8');
+    // writeFileContained re-validates containment (TOCTOU-safe) and writes
+    // atomically (tmp + rename) — the SAME helper admin.mjs's mirror/absorb
+    // writers and repo-map's writeCodebaseMap already use.
+    const written = writeFileContained(workspace, rel, doc);
+    if (!written) {
+      return {
+        pass: false,
+        exitCode: 1,
+        kind,
+        path: null,
+        indexed: null,
+        blockedReason: 'episode path escapes the workspace (symlinked docs/solutions?)',
+        nextTools: ['remove or replace the symlinked docs/solutions directory and re-run'],
+      };
+    }
   }
   log(`wrote ${rel}`);
   const knowledgeRoot = fs.existsSync(path.join(copilotHome, 'knowledge'))
