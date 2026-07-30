@@ -4,11 +4,21 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 import { applyOps } from '../lib/knowledge/apply.mjs';
 import { setLearningStatus } from '../lib/knowledge/lifecycle.mjs';
+import { runRemember } from '../lib/knowledge/remember.mjs';
 import { purgeEpisode, purgeAll, rebuildStore } from '../lib/knowledge/admin.mjs';
 import { ensureStore, storeDir, listLearnings, writeStoreConfig } from '../lib/knowledge/store.mjs';
+
+const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const binPath = path.join(packageRoot, 'bin', 'harness.mjs');
+const runCli = (c, args) =>
+  spawnSync(process.execPath, [binPath, ...args, '--workspace', c.ws, '--copilot-home', c.home, '--json'], {
+    encoding: 'utf8',
+    env: { ...process.env, HARNESS_HOME: c.harnessHome },
+  });
 
 /**
  * Hardening batch A — store transactionality (P1-6/7/8 from the external
@@ -148,6 +158,7 @@ test('every store adopter (apply/lifecycle/purge/rebuild/config) returns E_LOCKE
   // knowledge mode/commit config writes
   const configRes = writeStoreConfig(c.ws, { home: c.harnessHome, mode: 'off' });
   assert.equal(configRes.pass, false);
+  assert.equal(configRes.code, 'E_LOCKED');
   assert.match(configRes.blockedReason, /E_LOCKED/);
 
   // The live lock must be left exactly as it was — no adopter is allowed to
@@ -158,6 +169,23 @@ test('every store adopter (apply/lifecycle/purge/rebuild/config) returns E_LOCKE
   fs.rmSync(lockPath, { recursive: true, force: true });
   const after = listLearnings(dir).map((l) => l.id).sort();
   assert.deepEqual(after, before, 'no contended call mutated the store');
+});
+
+test('the writeStoreConfig lock-failure CLI path (`harness knowledge on`) renders the E_LOCKED code, not a hardcoded E_USAGE', () => {
+  const c = ctx();
+  seedLearning(c);
+  const { dir } = ensureStore(c.ws, { home: c.harnessHome });
+  const lockPath = path.join(dir, '.lock');
+  fs.mkdirSync(lockPath);
+
+  const res = runCli(c, ['knowledge', 'on']);
+  assert.equal(res.status, 1, res.stderr || res.stdout);
+  const out = JSON.parse(res.stdout);
+  assert.equal(out.pass, false);
+  assert.equal(out.code, 'E_LOCKED');
+  assert.match(out.blockedReason, /E_LOCKED/);
+
+  fs.rmSync(lockPath, { recursive: true, force: true });
 });
 
 // ---------------------------------------------------------------------------
@@ -384,6 +412,60 @@ test('a real absorb-commit failure (setLearningStatus) also protects the uncommi
   const onDisk = fs.readFileSync(learning.file, 'utf8');
   assert.match(onDisk, /Another hand edit that must survive a blocked absorb commit/, 'the hand edit survives, uncommitted but intact');
   assert.doesNotMatch(onDisk, /status: retired/, 'the retire action never landed — absorbOrAbort rejected before the mutation ran');
+});
+
+// A regression this file previously missed: applyOps' own absorb-commit
+// failure correctly protects the hand edit (StoreTransactionAbort, no
+// rollback) — but `remember` then ran a SEPARATE, SECOND withStoreTransaction
+// (its post-failure ledger-cleanup) that neither absorbed nor was
+// abort-aware. That second transaction's own finalize commit ALSO failed
+// (same persistently broken hook), and its finalize-failure branch called
+// the standard rollback unconditionally, wiping the still-uncommitted hand
+// edit the FIRST transaction had just protected. Fixed at two layers:
+// remember's cleanup transaction now runs absorbOrAbort first (matching
+// every other adopter), and withStoreTransaction's own rollback is now
+// guarded against destroying pre-existing dirt no intra-transaction commit
+// ever captured, regardless of which transaction (or how many transactions
+// deep) is asking.
+test('remember: a persistently broken git commit protects the hand edit across BOTH the absorb failure and its own ledger-cleanup transaction', () => {
+  const c = ctx();
+  const id = seedLearning(c);
+  const { dir } = ensureStore(c.ws, { home: c.harnessHome });
+  const learning = listLearnings(dir).find((l) => l.id === id);
+
+  handEditBody(learning.file, 'A human edit that must survive.');
+  const dirtyBefore = gitPorcelainStatus(dir);
+  assert.match(dirtyBefore, /learnings\/sql\/not-null-hot-tables\.md/, 'precondition: dirty tracked file');
+
+  // A PERSISTENTLY failing hook — every commit in this store fails from here
+  // on, so BOTH applyOps' absorb attempt AND remember's own ledger-cleanup
+  // transaction (should it even attempt one) hit the same broken commit.
+  installFailingCommitHook(dir);
+
+  const logBefore = spawnSync('git', ['log', '--oneline'], { cwd: dir, encoding: 'utf8' }).stdout.trim().split('\n');
+
+  const result = runRemember({
+    workspace: c.ws,
+    copilotHome: c.home,
+    flags: { trigger: 'a brand new trigger', domain: 'sql' },
+    argv: ['a brand new claim'],
+    home: c.harnessHome,
+  });
+
+  assert.equal(result.pass, false);
+  assert.notEqual(result.exitCode, 0);
+
+  // The hand edit survives, byte-intact, uncommitted — neither transaction
+  // (applyOps' absorb, nor remember's own cleanup) was allowed to roll it
+  // back.
+  const afterText = fs.readFileSync(learning.file, 'utf8');
+  assert.match(afterText, /A human edit that must survive\./, 'the hand edit must still be present after remember fails');
+
+  // No new commit landed either — history is exactly what it was before.
+  const logAfter = spawnSync('git', ['log', '--oneline'], { cwd: dir, encoding: 'utf8' }).stdout.trim().split('\n');
+  assert.deepEqual(logAfter, logBefore, 'git history is unchanged — nothing spuriously committed');
+
+  assert.equal(fs.existsSync(path.join(dir, '.lock')), false, 'the lock is released');
 });
 
 // ---------------------------------------------------------------------------

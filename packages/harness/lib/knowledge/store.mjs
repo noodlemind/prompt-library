@@ -473,6 +473,54 @@ export function rollbackStore(dir) {
 }
 
 /**
+ * The exact shape absorbHandEdits (admin.mjs) treats as an absorbable hand
+ * edit: a `learnings/<domain>/<slug>.md` path. Exported so admin.mjs's own
+ * porcelain scan and withStoreTransaction's rollback guard (below) share ONE
+ * definition of "this dirty path is protectable content, not incidental
+ * debris" — the two must never drift apart, since the guard's whole job is
+ * to protect exactly what absorb would have protected.
+ */
+export const LEARNING_FILE_RE = /^learnings\/([^/]+)\/([^/]+)\.md$/;
+
+/** Parse one `git status --porcelain` line into its status code and path —
+ * shared by admin.mjs's absorbHandEdits scan and dirtyLearningFilePaths
+ * below (same rename-arrow and git-quoting handling either way). */
+export function parsePorcelainLine(line) {
+  const status = line.slice(0, 2);
+  let rest = line.slice(3);
+  const arrow = rest.indexOf(' -> ');
+  if (arrow !== -1) rest = rest.slice(arrow + 4); // rename/copy: use the new path
+  if (rest.startsWith('"') && rest.endsWith('"')) {
+    rest = rest.slice(1, -1).replace(/\\(.)/g, '$1'); // git-quoted path (rare)
+  }
+  return { status, path: rest };
+}
+
+/**
+ * The set of currently-dirty paths that LOOK like a learning file
+ * absorbHandEdits would treat as an absorbable hand edit — used by
+ * withStoreTransaction's rollback guard (below) to tell "content a
+ * StoreTransactionAbort is protecting" apart from ordinary dirt (this
+ * transaction's own fresh mutation writes, or unrelated debris like a test
+ * fixture) that a rollback is always safe to discard. Deliberately narrow:
+ * matching the SAME shape absorb itself would absorb, nothing broader —
+ * a plain "was the tree dirty at all" check would also protect things that
+ * were never at risk (a colliding non-.md file, an unrelated stray write),
+ * which is exactly precise enough to be wrong.
+ */
+function dirtyLearningFilePaths(dir) {
+  const res = spawnSync('git', ['status', '--porcelain'], { cwd: dir, encoding: 'utf8' });
+  if (res.status !== 0 || !res.stdout.trim()) return new Set();
+  const paths = new Set();
+  for (const line of res.stdout.split('\n')) {
+    if (!line.trim()) continue;
+    const { path: rel } = parsePorcelainLine(line);
+    if (LEARNING_FILE_RE.test(rel)) paths.add(rel);
+  }
+  return paths;
+}
+
+/**
  * Thrown by a withStoreTransaction `fn` to signal a failure that must NOT
  * trigger the standard rollback (git reset --hard + clean -fd). Reserved for
  * exactly one situation today: absorbHandEdits' own sub-commit failed for a
@@ -495,12 +543,21 @@ export class StoreTransactionAbort extends Error {
 /**
  * The single-writer transaction every store mutator (applyOps,
  * setLearningStatus, purgeEpisode, purgeAll, rebuildStore's --yes path,
- * writeStoreConfig — six adopters total) runs inside. Closes three race
- * windows a security review found in the pre-transaction design: the lock
- * started too late (state was read and validated before the lock existed),
- * ended too early (released before the final commit, so a losing writer
- * could interleave with an in-flight commit), and several writers never
- * took it at all.
+ * writeStoreConfig — six primary adopters, each with exactly one call site)
+ * runs inside. remember.mjs adds a 7th call site — its own best-effort
+ * post-failure ledger-cleanup transaction — which is not a new mutating
+ * capability of its own (remember's real write goes through applyOps like
+ * every other caller) but still follows the SAME absorb-first invariant
+ * (via absorbOrAbort, admin.mjs) as the six primary adopters, for exactly
+ * the reason every adopter needs it: it can inherit a dirty, uncommitted
+ * hand edit left behind by an EARLIER transaction's aborted absorb, and
+ * must not silently ignore it.
+ *
+ * Closes three race windows a security review found in the pre-transaction
+ * design: the lock started too late (state was read and validated before
+ * the lock existed), ended too early (released before the final commit, so
+ * a losing writer could interleave with an in-flight commit), and several
+ * writers never took it at all.
  *
  * Deliberately OUTSIDE this transaction (by design, not oversight):
  *   - orient/consolidate --status/--candidates/learnings reads: pure reads
@@ -586,25 +643,70 @@ export function withStoreTransaction(workspace, { home, label } = {}, fn) {
     }
   }
 
+  // Snapshot BEFORE calling fn: which dirty paths already looked like an
+  // absorbable hand edit? Both the fn-throw catch AND the finalize-commit-
+  // failure branch below funnel through guardedRollback, which uses this
+  // snapshot to decide whether a rollback is even safe. This is not only
+  // about a REAL absorb-commit failure inside THIS SAME transaction (a
+  // StoreTransactionAbort, already handled by its own short-circuit below) —
+  // a SEPARATE, LATER transaction (e.g. remember.mjs's post-failure ledger
+  // cleanup) can start with that same pre-existing, still-uncommitted hand
+  // edit sitting in the tree, inherited from an EARLIER transaction's
+  // aborted absorb, without its own `fn` ever touching it.
+  const entryProtectedPaths = git ? dirtyLearningFilePaths(dir) : new Set();
+
+  /**
+   * Roll back UNLESS doing so would discard content this transaction did
+   * not itself author or safely capture. `git reset --hard` always discards
+   * every uncommitted change regardless of which ref it targets — there is
+   * no "safer target" that resets history while also preserving dirty
+   * working-tree content — so the only way to protect pre-existing dirt is
+   * to skip the reset (and the paired `clean -fd`) entirely.
+   *
+   * Protection applies precisely when at least one path that was ALREADY
+   * dirty-and-learning-file-shaped before `fn` ran is STILL dirty right now.
+   * Deliberately path-scoped, not a blanket "was the tree dirty at entry":
+   * that broader check would also protect content that was never actually
+   * at risk — e.g. a fixture's unrelated stray file sitting in the store dir
+   * — which is imprecise in exactly the wrong direction. "Still dirty" is
+   * what tells success from danger for a path that WAS in this set: if `fn`
+   * (or the finalize commit) captured it in a commit (e.g. absorb
+   * succeeded), it no longer shows up as dirty and a normal
+   * `git reset --hard` is safe — it lands on that commit, not before it (the
+   * batch-A "lands on the absorb commit" invariant, unchanged). Only a path
+   * that's STILL dirty was never captured by any commit at all, and must be
+   * left exactly where it is.
+   */
+  function guardedRollback() {
+    if (!git) return false;
+    if (entryProtectedPaths.size > 0) {
+      const stillDirty = dirtyLearningFilePaths(dir);
+      const stillProtected = [...entryProtectedPaths].some((p) => stillDirty.has(p));
+      if (stillProtected) return false;
+    }
+    rollbackStore(dir);
+    return true;
+  }
+
   try {
     let result;
     try {
       result = fn({ dir, git });
     } catch (err) {
       const isAbort = err instanceof StoreTransactionAbort;
-      if (git && !isAbort) rollbackStore(dir);
-      return { ok: false, locked: false, rolledBack: !isAbort, error: err, committed: false, result: null, dir, git, staleLockNote };
+      const rolledBack = isAbort ? false : guardedRollback();
+      return { ok: false, locked: false, rolledBack, error: err, committed: false, result: null, dir, git, staleLockNote };
     }
     let commitRes = { committed: false, ok: true };
     if (git) {
       commitRes = commitStore(dir, (result && result.commitMessage) || label || 'harness: update store');
     }
     if (!commitRes.ok) {
-      rollbackStore(dir);
+      const rolledBack = guardedRollback();
       return {
         ok: false,
         locked: false,
-        rolledBack: true,
+        rolledBack,
         error: new Error(commitRes.stderr || 'git commit failed'),
         committed: false,
         result: null,

@@ -5,6 +5,8 @@ import { spawnSync } from 'node:child_process';
 import {
   withStoreTransaction,
   StoreTransactionAbort,
+  LEARNING_FILE_RE,
+  parsePorcelainLine,
   storeDir,
   listLearnings,
   readLedger,
@@ -163,20 +165,6 @@ export function mirrorLearnings({ workspace, home, log = () => {}, retiredIds = 
   fs.writeFileSync(path.join(mirrorRoot, 'INDEX.md'), lines.join('\n'), 'utf8');
 
   return { mirrored, skipped };
-}
-
-const LEARNING_FILE_RE = /^learnings\/([^/]+)\/([^/]+)\.md$/;
-
-/** Parse one `git status --porcelain` line into its status code and path. */
-function parsePorcelainLine(line) {
-  const status = line.slice(0, 2);
-  let rest = line.slice(3);
-  const arrow = rest.indexOf(' -> ');
-  if (arrow !== -1) rest = rest.slice(arrow + 4); // rename/copy: use the new path
-  if (rest.startsWith('"') && rest.endsWith('"')) {
-    rest = rest.slice(1, -1).replace(/\\(.)/g, '$1'); // git-quoted path (rare)
-  }
-  return { status, path: rest };
 }
 
 /**

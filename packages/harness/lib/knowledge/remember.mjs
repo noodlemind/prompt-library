@@ -4,7 +4,8 @@ import path from 'node:path';
 import { runInsightCompound } from '../compound.mjs';
 import { runIndexKnowledge } from '../index-knowledge.mjs';
 import { applyOps } from './apply.mjs';
-import { normalizeSlug, readStoreConfig, storeDir, listLearnings, withStoreTransaction, readLedger } from './store.mjs';
+import { normalizeSlug, readStoreConfig, storeDir, listLearnings, withStoreTransaction, StoreTransactionAbort, readLedger } from './store.mjs';
+import { absorbOrAbort } from './admin.mjs';
 
 /**
  * The human teaching lane: a direct claim from a person, captured as a
@@ -160,8 +161,28 @@ export function runRemember({ workspace, copilotHome, flags, argv, log = () => {
     // surrounding try/catch guards only against a genuine thrown exception
     // (e.g. a filesystem error) — a cleanup failure of any kind must never
     // mask the original rejection this function is about to return below.
+    //
+    // absorbOrAbort runs FIRST, same as every other withStoreTransaction
+    // adopter — not because this cleanup ever intends to absorb anything
+    // itself, but for defense in depth: the applyOps call just above may
+    // have hit a REAL absorb-commit failure of its OWN (a StoreTransactionAbort,
+    // correctly left uncommitted rather than rolled back — see admin.mjs),
+    // which leaves that hand edit sitting dirty in the tree for THIS
+    // transaction to inherit. Without this check, this transaction's own fn
+    // would ignore that dirt entirely, its finalize commit would try (and
+    // fail, for the same underlying reason) to commit it anyway, and
+    // withStoreTransaction's rollback guard would have to fall back to its
+    // own entry-dirty detection to avoid destroying it. Checking here first
+    // means the SAME failure is caught earlier and reported consistently
+    // with every other adopter, rather than relying on that guard alone.
     try {
       withStoreTransaction(workspace, { home, label: `remember: clear failure bookkeeping for ${episode.path}` }, ({ dir }) => {
+        try {
+          absorbOrAbort({ workspace, home, log });
+        } catch (err) {
+          if (err instanceof StoreTransactionAbort) throw err;
+          // best effort — any OTHER hand-edit absorb failure must never block this cleanup.
+        }
         const ledger = readLedger(dir);
         const keptLedger = ledger.filter((e) => e.path !== episode.path);
         if (keptLedger.length === ledger.length) {
@@ -204,6 +225,7 @@ export function runRemember({ workspace, copilotHome, flags, argv, log = () => {
       blockedReason: applied.rejected?.[0]?.reason || 'apply failed',
       nextTools:
         applied.rejected?.[0]?.code === 'E_BYTE_CAP' ? ['shorten the claim (1,200-byte learning cap) and re-run'] : [],
+      ...(applied.staleLockRemoved ? { staleLockRemoved: applied.staleLockRemoved } : {}),
     };
   }
   return {
@@ -213,5 +235,6 @@ export function runRemember({ workspace, copilotHome, flags, argv, log = () => {
     learningId,
     blockedReason: null,
     nextTools: ['harness learnings ' + domain],
+    ...(applied.staleLockRemoved ? { staleLockRemoved: applied.staleLockRemoved } : {}),
   };
 }

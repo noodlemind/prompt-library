@@ -385,8 +385,9 @@ test('hand-deleting a mirrored learning file in the store removes its mirror cop
   assert.ok(storeLearning, 'precondition: the learning exists in the store');
   fs.rmSync(storeLearning.file, { force: true }); // human deletes the store file directly, bypassing the CLI entirely
 
-  // Any mutation command absorbs the hand edit first — runRemember calls
-  // absorbHandEdits before writing its own new learning.
+  // Any mutation command absorbs the hand edit first — `remember` drives
+  // applyOps, which absorbs it under its own lock (absorbOrAbort) as the
+  // first step of its transaction, before writing its own new learning.
   const another = run(c, ['remember', 'another claim body', '--trigger', 'another trigger']);
   assert.equal(another.status, 0, another.stderr || another.stdout);
 

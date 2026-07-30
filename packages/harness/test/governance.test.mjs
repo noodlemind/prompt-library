@@ -172,8 +172,9 @@ test('hand-deleting a learning file and absorbing it appends a governance retire
   assert.ok(learning, 'precondition: the learning exists in the store');
   fs.rmSync(learning.file, { force: true }); // human deletes the store file directly, bypassing the CLI entirely
 
-  // Any mutation command absorbs the hand edit first (remember calls
-  // absorbHandEdits before writing its own new learning).
+  // Any mutation command absorbs the hand edit first — `remember` drives
+  // applyOps, which absorbs it under its own lock (absorbOrAbort) as the
+  // first step of its transaction, before writing its own new learning.
   const another = run(c, ['remember', 'another claim body', '--trigger', 'another trigger']);
   assert.equal(another.status, 0, another.stderr || another.stdout);
 
