@@ -162,27 +162,43 @@ reapplication instead of escaping it.
 
 The one override — bounded the same way the insight lane's declarative-deception risk is
 bounded (see [Canonical residual risk](#canonical-residual-risk-declarative-deception-through-the-insight-lane)
-below) — is a **verified and at-least-as-new** human re-teach: `harness remember` reusing
-the exact trigger/domain, backed by on-disk `kind: human-teaching` evidence, outranks both
-the stored governance record and the activeness gate that would otherwise block writing
-over a disputed/retired target. `verifyHumanTeachingEpisode` (`apply.mjs`) proves
-authenticity — never just an op's own assertion — by checking that the episode path
-resolves inside the workspace, the file exists there, its CURRENT content hashes to the
-asserted sha256 (not stale or edited since), and the file's OWN frontmatter independently
-says `kind: human-teaching`. That alone proves authenticity, not recency: a genuinely
+below) — is a **verified and at-least-as-new** human re-teach: reusing the exact
+trigger/domain, backed by on-disk `kind: human-teaching` evidence, outranks both the stored
+governance record and the activeness gate that would otherwise block writing over a
+disputed/retired target. `verifyHumanTeachingEpisode` (`apply.mjs`) proves authenticity —
+never just an op's own assertion — by checking that the episode path resolves inside the
+workspace, the file exists there, its CURRENT content hashes to the asserted sha256 (not
+stale or edited since), and the file's OWN frontmatter independently says
+`kind: human-teaching`. That alone proves authenticity, not recency: a genuinely
 human-taught episode written BEFORE a later retire/dispute/promote must never resurrect a
-decision it predates. `overridesGovernanceRecency` closes that gap — when a governance
-record already exists for the id, every verifying episode's own frontmatter `date` must be
-`>=` that record's `at` (plain string compare; a same-day tie favors the override, which is
-what lets a same-day `remember` re-teach still win). Every check must pass, or the override
-never fires and the standing governance record (and, separately, the target-activeness gate
-that blocks writing over a disputed/retired target) is enforced as usual. A verified,
-sufficiently recent re-teach lands the learning `active`, `source: human`, and appends a
-fresh `confirm` entry (never rewriting history) instead of being blocked or silently
-reapplying the old veto. A model can never fabricate this path into existence: it only ever
-exists because a human already wrote a `kind: human-teaching` episode to disk first, through
-`harness remember` or a hand-edit absorption, dated at least as recently as the decision it
-overrides — the same anti-fabrication discipline as the insight lane's checks.
+decision it predates. `overridesGovernanceRecency` closes that gap, and treats two lanes
+differently:
+
+- **Live human lane (`harness remember`).** The person acting right now IS the authority —
+  `runRemember` passes an internal `humanPresent: true` to `applyOps` (never derived from
+  anything the ops JSON itself claims, the same trust plane as `--yes`'s `approve`), which
+  bypasses the recency comparison entirely. A same-day (or same-minute) `remember` re-teach
+  always wins, regardless of when the standing governance record was written.
+- **Model lane (`consolidate --apply` against an ops JSON, unattended or hand-run).**
+  Governance entries stamp a full ISO-8601 UTC timestamp (`new Date().toISOString()`;
+  readers stay tolerant of a legacy plain-date value too), but an episode's own frontmatter
+  `date` is day-granular — so this lane cannot prove it happened later than a same-day
+  record, only that it happened on a genuinely LATER calendar day. Every verifying episode's
+  `date` must be **strictly greater** than the record's day (`episode day > record day`
+  passes; `episode day == record day` now fails — no more same-day tie). A same-day replay
+  of stale-but-authentic evidence through this lane can no longer overturn a same-day veto.
+
+Every check must pass, or the override never fires and the standing governance record (and,
+separately, the target-activeness gate that blocks writing over a disputed/retired target)
+is enforced as usual — this applies to both lanes alike; only the recency comparison itself
+differs between them. The promoted-target block is absolute regardless of lane: neither
+override ever applies to it. A verified, qualifying re-teach lands the learning `active`,
+`source: human`, and appends a fresh `confirm` entry (never rewriting history) instead of
+being blocked or silently reapplying the old veto. A model can never fabricate either lane
+into existence: the live-human lane only exists inside `harness remember` itself, and the
+model lane still requires a human already having written a genuine `kind: human-teaching`
+episode to disk, through `harness remember` or a hand-edit absorption — the same
+anti-fabrication discipline as the insight lane's checks.
 
 `harness knowledge purge <file>` / `purge --all` differ from `retire`/`dispute` in kind, not
 degree: purge deletes the episodes, the consumption ledger entries, AND the governance
@@ -429,6 +445,17 @@ can still read it as commands — the fence alone cannot stop that. The mechanic
 is upstream of rendering: keeping imperative content out of the store in the first place —
 `lintImperative` and the resulting rejection/quarantine taxonomy are detailed in
 [Rejection classes](#rejection-classes) above.
+
+A second, distinct injection vector is *structural*, not imperative: a trigger carrying an
+embedded control character (most importantly a newline) can inject fake headings or extra
+bullets into what looks like a single learning line, widening what a reader trusts as one
+entry into several. This is bounded on both ends (P1-9-adjacent hardening): admission
+(`applyOps`) rejects a control character in a fresh `trigger` outright (`E_SCHEMA`), and
+every surface that interpolates trigger/claim text into structured markdown — the context
+pack, `harness learnings [--why]`, and `INDEX.md` — runs it through a shared `inertLine`
+helper (`store.mjs`) that collapses any control character to a single space, so even a
+legacy or hand-edited file written before the admission gate existed still renders as one
+line everywhere.
 
 ### Residual risks (mirrored from the approved design, §14)
 

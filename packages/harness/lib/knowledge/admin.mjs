@@ -17,10 +17,12 @@ import {
   readStoreConfig,
   appendGovernance,
   rewriteGovernance,
+  inertLine,
 } from './store.mjs';
 import { rebuildIndex, todayClamped } from './apply.mjs';
 import { consolidateStatus, LEARNING_BYTE_CAP, isActiveFm } from './consolidate.mjs';
 import { scanSecrets } from '../secret-scan.mjs';
+import { assertNoSymlinkAncestors, writeFileContained } from '../fs-safe.mjs';
 
 /**
  * Human deletion always wins: purge is never mode-gated — it runs in every
@@ -100,7 +102,8 @@ export function mirrorLearnings({ workspace, home, log = () => {}, retiredIds = 
   if (commit !== 'repo') return { mirrored: 0, skipped: 0 };
 
   const dir = storeDir(workspace, { home });
-  const mirrorRoot = path.join(workspace, 'docs', 'knowledge', 'learnings');
+  const mirrorRootRel = path.join('docs', 'knowledge', 'learnings');
+  const mirrorRoot = path.join(workspace, mirrorRootRel);
   const storeLearnings = fs.existsSync(dir) ? listLearnings(dir) : [];
   const byId = new Map(storeLearnings.map((l) => [l.id, l]));
   const active = storeLearnings.filter((l) => isActiveFm(l.fm)).sort((a, b) => a.id.localeCompare(b.id));
@@ -109,8 +112,6 @@ export function mirrorLearnings({ workspace, home, log = () => {}, retiredIds = 
   let mirrored = 0;
   let skipped = 0;
   const skippedIds = new Set();
-
-  fs.mkdirSync(mirrorRoot, { recursive: true });
 
   for (const learning of active) {
     const text = fs.readFileSync(learning.file, 'utf8');
@@ -121,36 +122,58 @@ export function mirrorLearnings({ workspace, home, log = () => {}, retiredIds = 
       log(`mirror: secret-shaped content (${secrets.map((s) => s.id).join(', ')}) — skipped ${learning.id}`);
       continue;
     }
-    const destDir = path.join(mirrorRoot, learning.domain);
-    fs.mkdirSync(destDir, { recursive: true });
-    fs.writeFileSync(path.join(destDir, `${learning.slug}.md`), text, 'utf8');
+    // Contained, atomic write (P1-3): refuses when any component of
+    // docs/knowledge/learnings/<domain>/<slug>.md — including a symlinked
+    // domain directory — already exists as a symlink, rather than the old
+    // lexical mkdir+write, which would silently follow it and write outside
+    // the workspace entirely.
+    const rel = path.join(mirrorRootRel, learning.domain, `${learning.slug}.md`);
+    const written = writeFileContained(workspace, rel, text);
+    if (!written) {
+      skipped++;
+      skippedIds.add(learning.id);
+      log(`mirror: symlinked destination under ${mirrorRootRel}/${learning.domain}/ — skipped ${learning.id}`);
+      continue;
+    }
     mirrored++;
   }
 
   // Sweep: remove mirror files for ids the CURRENT store still knows about
   // but that are no longer active, ids the caller names via retiredIds (see
   // the doc comment above), OR ids THIS pass just excluded as secret-shaped
-  // (skippedIds) — an ACTIVE learning that becomes secret-shaped is excluded
-  // from the write above and from the INDEX below, but without this its
-  // previous clean mirror copy would otherwise never be swept and would
-  // linger forever, out of sync with both the write and the INDEX. Anything
-  // else is left alone; only files matching a managed id are ever removed.
-  for (const domainEnt of fs.readdirSync(mirrorRoot, { withFileTypes: true })) {
-    if (!domainEnt.isDirectory()) continue;
-    const domainPath = path.join(mirrorRoot, domainEnt.name);
-    for (const f of fs.readdirSync(domainPath)) {
-      if (!f.endsWith('.md')) continue;
-      const id = `${domainEnt.name}/${f.replace(/\.md$/, '')}`;
-      const known = byId.get(id);
-      const isKnownInactive = known && !isActiveFm(known.fm);
-      if (isKnownInactive || retiredIdSet.has(id) || skippedIds.has(id)) {
-        fs.rmSync(path.join(domainPath, f), { force: true });
+  // or symlink-refused (skippedIds) — an ACTIVE learning that becomes
+  // secret-shaped (or whose destination is symlinked) is excluded from the
+  // write above and from the INDEX below, but without this its previous
+  // clean mirror copy would otherwise never be swept and would linger
+  // forever, out of sync with both the write and the INDEX. Anything else is
+  // left alone; only files matching a managed id are ever removed. Guarded
+  // by the same containment check the writes above use: a symlinked
+  // mirrorRoot (or an ancestor of it) must never be traversed for deletion
+  // either — that would read (and then rm) through the symlink's target
+  // instead of this workspace's own mirror.
+  if (fs.existsSync(mirrorRoot) && assertNoSymlinkAncestors(workspace, mirrorRootRel)) {
+    for (const domainEnt of fs.readdirSync(mirrorRoot, { withFileTypes: true })) {
+      if (!domainEnt.isDirectory()) continue;
+      const domainRel = path.join(mirrorRootRel, domainEnt.name);
+      // Skip a symlinked domain directory outright — never descend into it
+      // for deletion, even one the write loop above never touched this pass.
+      if (!assertNoSymlinkAncestors(workspace, domainRel)) continue;
+      const domainPath = path.join(mirrorRoot, domainEnt.name);
+      for (const f of fs.readdirSync(domainPath)) {
+        if (!f.endsWith('.md')) continue;
+        const id = `${domainEnt.name}/${f.replace(/\.md$/, '')}`;
+        const known = byId.get(id);
+        const isKnownInactive = known && !isActiveFm(known.fm);
+        if (isKnownInactive || retiredIdSet.has(id) || skippedIds.has(id)) {
+          const target = assertNoSymlinkAncestors(workspace, path.join(domainRel, f));
+          if (target) fs.rmSync(target, { force: true });
+        }
       }
     }
   }
 
-  // Skipped (secret-shaped) learnings are excluded from the INDEX entirely —
-  // no id, no trigger — not just missing their .md file.
+  // Skipped (secret-shaped or symlink-refused) learnings are excluded from
+  // the INDEX entirely — no id, no trigger — not just missing their .md file.
   const indexEntries = active.filter((l) => !skippedIds.has(l.id));
   const lines = [
     '# Learnings Index',
@@ -159,10 +182,11 @@ export function mirrorLearnings({ workspace, home, log = () => {}, retiredIds = 
     '',
     '> Opt-in commit mode: these learnings are copies from a local store; treat foreign entries as read-only reference.',
     '',
-    ...indexEntries.map((l) => `- [${l.id}] ${l.fm.trigger || ''}`),
+    // inertLine: same render-side normalization as rebuildIndex (apply.mjs).
+    ...indexEntries.map((l) => `- [${l.id}] ${inertLine(l.fm.trigger || '')}`),
     '',
   ];
-  fs.writeFileSync(path.join(mirrorRoot, 'INDEX.md'), lines.join('\n'), 'utf8');
+  writeFileContained(workspace, path.join(mirrorRootRel, 'INDEX.md'), lines.join('\n'));
 
   return { mirrored, skipped };
 }
@@ -274,9 +298,14 @@ export function absorbHandEdits({ workspace, home, log = () => {} }) {
   // Governance record (Milestone 4): a human deleting a learning file
   // directly is a retirement just as much as `learning retire` — recorded
   // here so it survives a later `consolidate --rebuild`. Appended before the
-  // single commit below so both land together.
+  // single commit below so both land together. `at` is a full ISO-8601 UTC
+  // timestamp (P1-9) — distinct from the day-only `at` above (used for the
+  // snapshot filename, ledger entries, and the snapshot's own frontmatter
+  // date) — the model-lane recency gate (overridesGovernanceRecency,
+  // apply.mjs) needs finer-than-a-day resolution.
+  const governanceAt = new Date().toISOString();
   for (const id of deleted) {
-    appendGovernance(dir, { id, action: 'retire', reason: 'hand deletion (absorbed)', to: null, at });
+    appendGovernance(dir, { id, action: 'retire', reason: 'hand deletion (absorbed)', to: null, at: governanceAt });
   }
   rebuildIndex(dir);
   const ids = [...absorbed.map((a) => a.id), ...deleted].join(', ');
@@ -349,7 +378,7 @@ export function absorbOrAbort({ workspace, home, log = () => {}, recordCheckpoin
  * cite it alongside other evidence. Ledger entries for the path are dropped
  * and INDEX.md is rebuilt so nothing dangling survives the purge.
  */
-export function purgeEpisode({ workspace, target, home, log = () => {} }) {
+export function purgeEpisode({ workspace, target, copilotHome, home, log = () => {} }) {
   if (!target) {
     return {
       pass: false,
@@ -358,34 +387,78 @@ export function purgeEpisode({ workspace, target, home, log = () => {} }) {
       blockedReason: 'purge needs a target file path or --all',
     };
   }
-  // Containment guard: a target that escapes the workspace (e.g.
-  // `../../file.md`) must never reach the deletion below — checked before
-  // any store access or filesystem mutation. Learnings/ledger matching still
-  // uses the repo-relative `target` string as-is; only this resolved check
-  // differs. The workspace itself is resolved first so a non-normalized or
-  // trailing-slash `workspace` can't produce a false negative.
-  const root = path.resolve(workspace);
-  const full = path.resolve(root, target);
-  if (full !== root && !full.startsWith(root + path.sep)) {
+  // Resolve the target against the SAME two roots `collectEpisodes`
+  // (consolidate.mjs) scans — workspace first, then copilotHome/knowledge
+  // (P2) — so a global episode's ledger-emitted path (relative to
+  // copilotHome/knowledge) can be purged exactly as readily as a
+  // product-repo-local one, instead of silently leaving its source file on
+  // disk as permanent debt. Each root gets its OWN PHYSICAL containment
+  // check (assertNoSymlinkAncestors, fs-safe.mjs) — a lexical resolve+
+  // startsWith check alone (the prior implementation) passes when an
+  // ancestor directory (e.g. a symlinked docs/solutions) is itself a
+  // symlink pointing outside the root, letting the delete below land on an
+  // arbitrary external file (P1-4). Learnings/ledger matching still uses the
+  // repo-relative `target` string as-is, independent of which root it
+  // resolves against on this machine.
+  const candidateRoots = [{ label: 'workspace', dir: path.resolve(workspace) }];
+  if (copilotHome) candidateRoots.push({ label: 'copilotHome/knowledge', dir: path.resolve(copilotHome, 'knowledge') });
+
+  const resolved = [];
+  for (const { label, dir } of candidateRoots) {
+    const full = assertNoSymlinkAncestors(dir, target);
+    if (!full) continue; // escapes this root lexically, or a symlink ancestor — never a candidate
+    resolved.push({ label, dir, full, existsOnDisk: fs.existsSync(full) });
+  }
+
+  if (!resolved.length) {
     return {
       pass: false,
       exitCode: 2,
       removed: null,
-      blockedReason: 'purge target escapes the workspace',
+      blockedReason: `purge target escapes every configured root or resolves through a symlink: ${target}`,
     };
   }
-  const episodeFull = path.join(workspace, target);
-  const episodeExistsOnDisk = fs.existsSync(episodeFull);
+
+  const existingIn = resolved.filter((r) => r.existsOnDisk);
+  if (existingIn.length > 1) {
+    // Ambiguous: the same relative path exists under more than one root —
+    // never guess which one the human meant.
+    return {
+      pass: false,
+      exitCode: 2,
+      removed: null,
+      blockedReason: `${target} exists under both ${existingIn.map((r) => r.label).join(' and ')} — ambiguous; pass an explicit prefix or delete the unwanted copy directly`,
+    };
+  }
+
+  // Prefer the root the file actually exists in; when it exists in neither
+  // (already deleted, or this purge is purely a store-side cascade for a
+  // ledger/learnings-only reference), default to the first configured root
+  // (workspace) — same fall-through behavior as before this fix.
+  const chosen = existingIn[0] || resolved[0];
+  const episodeRoot = chosen.dir;
+  const episodeExistsOnDisk = chosen.existsOnDisk;
 
   // Non-creating gate: a storeless workspace must never be materialized just
-  // to discover there's nothing in it to purge. The workspace episode FILE
-  // is a separate concern from the store, though — deleting it (if present)
-  // is the human's explicit intent even with no store at all, so that still
+  // to discover there's nothing in it to purge. The episode FILE is a
+  // separate concern from the store, though — deleting it (if present) is
+  // the human's explicit intent even with no store at all, so that still
   // runs; every store-side stage below is skipped entirely.
   const storePath = storeDir(workspace, { home });
   if (!fs.existsSync(storePath)) {
     if (episodeExistsOnDisk) {
-      fs.rmSync(episodeFull, { force: true });
+      // TOCTOU re-check (P1-4): re-validate physical containment
+      // immediately before the actual delete, not just at the check above.
+      const safe = assertNoSymlinkAncestors(episodeRoot, target);
+      if (!safe) {
+        return {
+          pass: false,
+          exitCode: 1,
+          removed: null,
+          blockedReason: `purge target no longer resolves safely (symlink introduced) — refusing to delete: ${target}`,
+        };
+      }
+      fs.rmSync(safe, { force: true });
       return {
         pass: true,
         exitCode: 0,
@@ -517,12 +590,21 @@ export function purgeEpisode({ workspace, target, home, log = () => {} }) {
   let episodeRemoved = false;
   let partialReason = null;
   if (episodeExistsOnDisk) {
-    try {
-      fs.rmSync(episodeFull, { force: true });
-      episodeRemoved = true;
-    } catch (err) {
-      partialReason = `store purge committed, but the episode file could not be deleted: ${err.message}`;
+    // TOCTOU re-check (P1-4): the store-side transaction above took real
+    // time (lock, absorb, commit) — re-validate physical containment right
+    // before this delete rather than trusting the check from before it.
+    const safe = assertNoSymlinkAncestors(episodeRoot, target);
+    if (!safe) {
+      partialReason = `store purge committed, but the episode target no longer resolves safely (symlink introduced) — not deleted: ${target}`;
       log(partialReason);
+    } else {
+      try {
+        fs.rmSync(safe, { force: true });
+        episodeRemoved = true;
+      } catch (err) {
+        partialReason = `store purge committed, but the episode file could not be deleted: ${err.message}`;
+        log(partialReason);
+      }
     }
   }
 

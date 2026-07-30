@@ -323,6 +323,30 @@ function yamlQuote(v) {
 }
 
 /**
+ * Render-side normalization (P1-5), shared by every surface that interpolates
+ * a learning's trigger or claim/body-derived text into structured markdown —
+ * the context pack (context-pack.mjs), `harness learnings` / `--why`
+ * (listing.mjs), and INDEX.md (apply.mjs's rebuildIndex, and admin.mjs's
+ * mirrorLearnings INDEX write). `yamlQuote` escapes a raw
+ * control char (including `\n`) into a literal two-character sequence at
+ * write time, but `unquote` (above) decodes that sequence back into the REAL
+ * control character when a file is parsed back off disk — correct for
+ * round-tripping arbitrary text, but it means a trigger or claim line can
+ * carry an embedded newline in memory even though admission (applyOps)
+ * rejects one in a FRESH trigger. A legacy learning file written before that
+ * admission gate existed, or one hand-edited directly in the store, can
+ * still carry an embedded control char — without this, interpolating it
+ * into a single-line markdown bullet (`- [id] trigger → claim`) would inject
+ * extra "lines" — fake headings, extra bullets, anything — into what is
+ * otherwise a trusted context surface. Collapses every C0 control char
+ * (0x00-0x1F) and DEL (0x7F) to a single space so the text always renders as
+ * ONE line, wherever it's interpolated.
+ */
+export function inertLine(text) {
+  return String(text ?? '').replace(/[\x00-\x1f\x7f]/g, ' ');
+}
+
+/**
  * Render one learning's `episodes:` block lines. Shared by this module's own
  * `serializeLearning` (a parse → mutate → re-render round trip) AND
  * apply.mjs's `renderLearning` (a from-scratch ADD/SUPERSEDE/STRENGTHEN/MERGE

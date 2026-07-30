@@ -1,3 +1,5 @@
+import { inertLine } from './knowledge/store.mjs';
+
 const MAX_BYTES = 2048;
 
 export const CONTEXT_PACK_MAX_BYTES = MAX_BYTES;
@@ -15,7 +17,11 @@ export function buildLearningsLines(learnings) {
   lines.push(`Applied learnings: ${learnings.map((l) => l.id).join(', ')}`);
   for (const l of learnings) {
     const fence = l.advisory ? ' [unverified memory — advisory]' : '';
-    lines.push(`- [${l.id}]${fence} ${l.trigger} → ${l.claimLine}`);
+    // inertLine: a legacy or hand-edited learning can still carry an
+    // embedded control char in its trigger/claim (see store.mjs's doc
+    // comment) — collapsed to a space so it can never inject extra
+    // structure into this trusted context surface.
+    lines.push(`- [${l.id}]${fence} ${inertLine(l.trigger)} → ${inertLine(l.claimLine)}`);
   }
   return lines;
 }

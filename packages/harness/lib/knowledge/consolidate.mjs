@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { storeDir, readLedger, listLearnings, readStoreConfig, readGovernance } from './store.mjs';
+import { readFileNoFollow } from '../fs-safe.mjs';
 
 export const CONSOLIDATION_THRESHOLD = 5;
 export const MAX_OPS_PER_RUN = 5;
@@ -36,7 +37,16 @@ function excerpt(text) {
   return body.replace(/\s+/g, ' ').slice(0, 240);
 }
 
-/** Collect episodes from the same roots the knowledge index scans. */
+/**
+ * Collect episodes from the same roots the knowledge index scans. Every
+ * candidate file is lstat'd first (never followed) and its realpath is
+ * confirmed to still resolve inside the SCANNED root before it is ever
+ * opened — a symlink planted under docs/solutions (or a symlinked category
+ * directory above it) must never let its target's content — potentially
+ * anything readable on the machine — be read into an episode's excerpt and
+ * fed into the candidates packet. A rejected symlink is simply skipped, the
+ * same as a file that failed to read for any other reason.
+ */
 export function collectEpisodes({ workspace, copilotHome }) {
   const roots = [];
   const globalSol = copilotHome ? path.join(copilotHome, 'knowledge', 'solutions') : null;
@@ -48,13 +58,44 @@ export function collectEpisodes({ workspace, copilotHome }) {
 
   const episodes = [];
   for (const { dir, base } of roots) {
+    let realDir;
+    try {
+      realDir = fs.realpathSync(dir);
+    } catch {
+      continue; // vanished between the existsSync check above and here
+    }
     for (const cat of fs.readdirSync(dir, { withFileTypes: true })) {
       if (!cat.isDirectory()) continue;
       const catPath = path.join(dir, cat.name);
       for (const f of fs.readdirSync(catPath)) {
         if (!f.endsWith('.md') || f === 'README.md') continue;
         const full = path.join(catPath, f);
-        const text = fs.readFileSync(full, 'utf8');
+        let lst;
+        try {
+          lst = fs.lstatSync(full);
+        } catch {
+          continue;
+        }
+        if (lst.isSymbolicLink()) continue; // never follow — reject, skip
+        // Containment against the SCANNED root's real path — catches a
+        // symlinked ancestor (e.g. the category directory itself) even on a
+        // filesystem where readdirSync's dirent type falls back to a
+        // following stat and reports a symlinked dir as a plain directory.
+        let real;
+        try {
+          real = fs.realpathSync(full);
+        } catch {
+          continue;
+        }
+        // NOT a literal `real !== full` equality check: `dir` itself may sit
+        // behind an ordinary, non-attacker system symlink (e.g. macOS's
+        // `/tmp` -> `/private/tmp`), which realDir already resolved through
+        // — a legitimate file's realpath will differ from its unresolved
+        // `full` path in exactly that same way without being an attack.
+        // Containment against realDir is the correct (and sufficient) check.
+        if (real !== realDir && !real.startsWith(realDir + path.sep)) continue;
+        const text = readFileNoFollow(full);
+        if (text === null) continue;
         const fm = parseFrontmatter(text);
         episodes.push({
           path: path.relative(base, full).split(path.sep).join('/'),

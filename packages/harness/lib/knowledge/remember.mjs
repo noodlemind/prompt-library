@@ -132,7 +132,12 @@ export function runRemember({ workspace, copilotHome, flags, argv, log = () => {
   fs.writeFileSync(opsPath, JSON.stringify(ops), 'utf8');
   let applied;
   try {
-    applied = applyOps({ workspace, opsPath, dryRun: flags.dryRun, home, approve: true, log, copilotHome });
+    // humanPresent: true (P1-9) — remember is the LIVE human lane: the
+    // person acting right now IS the authority, so a re-teach here bypasses
+    // the day-granularity recency gate entirely (overridesGovernanceRecency,
+    // apply.mjs) rather than depending on a same-day tie. Same trust plane
+    // as `approve` — never derived from anything the ops JSON itself claims.
+    applied = applyOps({ workspace, opsPath, dryRun: flags.dryRun, home, approve: true, log, copilotHome, humanPresent: true });
   } finally {
     fs.rmSync(opsPath, { force: true });
   }
@@ -215,14 +220,22 @@ export function runRemember({ workspace, copilotHome, flags, argv, log = () => {
     // real reason via blockedReason above, so a hardcoded byte-cap nextTools
     // hint would be actively misleading there. Only render it when the
     // rejection actually was the byte cap.
+    const rejectedCode = applied.rejected?.[0]?.code;
+    const rejectedReason = applied.rejected?.[0]?.reason;
+    // remember inherits applyOps' trigger control-char rejection (P1-5)
+    // as-is — the raw E_SCHEMA wording names "op 0", which means nothing to
+    // a human who never saw an ops JSON. A friendlier message and hint here,
+    // same shape as the byte-cap case above.
+    const isTriggerControlChar = rejectedCode === 'E_SCHEMA' && /trigger must not contain control characters/.test(rejectedReason || '');
     return {
       pass: false,
       exitCode: applied.exitCode,
       episodePath: null,
       learningId: null,
-      blockedReason: applied.rejected?.[0]?.reason || 'apply failed',
-      nextTools:
-        applied.rejected?.[0]?.code === 'E_BYTE_CAP' ? ['shorten the claim (1,200-byte learning cap) and re-run'] : [],
+      blockedReason: isTriggerControlChar
+        ? '--trigger contains control characters (a line break, tab, etc.) — remove them and re-run'
+        : rejectedReason || 'apply failed',
+      nextTools: rejectedCode === 'E_BYTE_CAP' ? ['shorten the claim (1,200-byte learning cap) and re-run'] : [],
       ...(applied.staleLockRemoved ? { staleLockRemoved: applied.staleLockRemoved } : {}),
     };
   }

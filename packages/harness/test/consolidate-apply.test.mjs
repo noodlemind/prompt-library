@@ -12,11 +12,16 @@ import { applyOps, updateFrontmatterField } from '../lib/knowledge/apply.mjs';
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const binPath = path.join(packageRoot, 'bin', 'harness.mjs');
 const tempDir = (p) => fs.mkdtempSync(path.join(os.tmpdir(), p));
-// Same-day as `learning retire|dispute|promote`'s own todayClamped() stamp —
-// a re-teach episode dated today always clears the recency gate (a same-day
-// tie favors the override), so tests that need the override to legitimately
-// fire use this instead of writeRealEpisode's fixed-past default date.
+// Same calendar day as `learning retire|dispute|promote`'s own governance
+// timestamp (P1-9: a full ISO-8601 `at`, day-sliced for the model-lane
+// comparison) — used by tests proving a SAME-DAY model-lane re-teach no
+// longer overrides (the strictly-newer rule), replacing the old same-day-tie
+// allowance.
 const today = new Date().toISOString().slice(0, 10);
+// One calendar day after `today` — genuinely, strictly newer for the
+// model-lane recency gate (overridesGovernanceRecency, apply.mjs), used by
+// tests proving a re-teach with EVIDENCE FROM A LATER DAY still overrides.
+const tomorrow = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
 
 function ctx() {
   const ws = tempDir('apply-ws-');
@@ -341,16 +346,21 @@ test('a STRENGTHEN targeting an already-disputed target (prior run) is rejected 
 // every episode verified human-teaching) must be exempt from the
 // inactive-target gate, overriding a disputed/retired status. This is the
 // low-level (direct op JSON) mirror of remember.test.mjs's end-to-end
-// coverage of the same rule.
-test('a verified human-teaching in-place SUPERSEDE on an already-disputed target succeeds, overriding the disputed status', () => {
+// coverage of the same rule. P1-9 tightened the model-lane recency gate to
+// require evidence STRICTLY newer than the governance record it would
+// override — a same-day tie no longer qualifies (see the sibling test right
+// below) — so this test now dates its evidence `tomorrow`, genuinely a later
+// calendar day than the dispute recorded today.
+test('a verified human-teaching in-place SUPERSEDE on an already-disputed target, dated a genuinely later day, succeeds and overrides the disputed status', () => {
   const c = ctx();
   assert.equal(run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [ADD(c.ws)])]).status, 0);
   assert.equal(run(c, ['learning', 'dispute', 'sql/not-null-large-tables', '--reason', 'contested']).status, 0);
   const { dir } = ensureStore(c.ws, { home: c.harnessHome });
 
-  // Dated today so it clears the M4 review recency gate (overridesGovernanceRecency,
-  // apply.mjs) — evidence must be at least as new as the standing dispute record.
-  const ep = writeRealEpisode(c.ws, 'docs/solutions/teachings/reteach-disputed.md', 'human-teaching', today);
+  // Dated a genuinely later calendar day than the dispute so it clears the
+  // strictly-newer model-lane recency gate (overridesGovernanceRecency,
+  // apply.mjs, P1-9).
+  const ep = writeRealEpisode(c.ws, 'docs/solutions/teachings/reteach-disputed.md', 'human-teaching', tomorrow);
   const reteach = {
     op: 'SUPERSEDE',
     target: 'sql/not-null-large-tables',
@@ -370,6 +380,41 @@ test('a verified human-teaching in-place SUPERSEDE on an already-disputed target
   assert.equal(learning.fm.status, 'active', 'the verified re-teach overrides the disputed status');
   assert.equal(learning.fm.source, 'human');
   assert.match(learning.body, /A corrected human-verified claim/);
+});
+
+// P1-9: the model lane (a direct `consolidate --apply`, never `remember`'s
+// live-human bypass) can no longer win a same-day tie — an episode dated the
+// SAME calendar day as the standing dispute record must still fail, since a
+// day-granular date can never prove it happened after the record was
+// written within that same day. This replaces the old same-day-tie-favors
+// override behavior the test above used to exercise.
+test('a verified human-teaching in-place SUPERSEDE dated the SAME day as the dispute is rejected — the model lane no longer wins a same-day tie', () => {
+  const c = ctx();
+  assert.equal(run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [ADD(c.ws)])]).status, 0);
+  assert.equal(run(c, ['learning', 'dispute', 'sql/not-null-large-tables', '--reason', 'contested']).status, 0);
+  const { dir } = ensureStore(c.ws, { home: c.harnessHome });
+  const ledgerBefore = readLedger(dir).length;
+
+  const ep = writeRealEpisode(c.ws, 'docs/solutions/teachings/reteach-disputed-sameday.md', 'human-teaching', today);
+  const reteach = {
+    op: 'SUPERSEDE',
+    target: 'sql/not-null-large-tables',
+    domain: 'sql',
+    slug: 'not-null-large-tables', // in-place shape — same id as target
+    trigger: 'adding NOT NULL columns to large/hot tables',
+    body: 'A same-day claim that must NOT override the same-day dispute.',
+    episodes: [{ ...ep, kind: 'human-teaching', plan: null }],
+  };
+  const res = run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [reteach])]);
+  assert.equal(res.status, 1, res.stderr || res.stdout);
+  const out = JSON.parse(res.stdout);
+  assert.equal(out.rejected[0].code, 'E_TARGET');
+  assert.match(out.rejected[0].reason, /sql\/not-null-large-tables is not active/);
+
+  assert.equal(readLedger(dir).length, ledgerBefore, 'inactive-target rejection records no strike');
+  const learning = listLearnings(dir).find((l) => l.id === 'sql/not-null-large-tables');
+  assert.equal(learning.fm.status, 'disputed', 'the same-day veto holds — the model lane never overrides it');
+  assert.doesNotMatch(learning.body, /must NOT override/);
 });
 
 // M4 whole-milestone review, item 1(b): the recency gate withholds the

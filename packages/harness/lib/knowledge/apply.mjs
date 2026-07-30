@@ -18,11 +18,13 @@ import {
   readGovernance,
   appendGovernance,
   serializeLearning,
+  inertLine,
 } from './store.mjs';
 import { MAX_OPS_PER_RUN, LEARNING_BYTE_CAP, QUARANTINE_THRESHOLD, DOMAIN_ACTIVE_CAP, isActiveFm } from './consolidate.mjs';
 import { scanSecrets } from '../secret-scan.mjs';
 import { absorbOrAbort, mirrorLearnings } from './admin.mjs';
 import { parseMergedFrom } from './listing.mjs';
+import { readFileNoFollow } from '../fs-safe.mjs';
 
 /**
  * The SOLE writer of the learnings store. The consolidation skill emits an
@@ -209,12 +211,10 @@ function extractAnchors({ workspace, copilotHome, episodes }) {
     if (!e.path) continue;
     const full = firstExistingEpisodeFile(workspace, copilotHome, e.path);
     if (!full) continue;
-    let text;
-    try {
-      text = fs.readFileSync(full, 'utf8');
-    } catch {
-      continue;
-    }
+    // Never follow a symlinked episode file — its target's content must
+    // never be scanned for anchor text either.
+    const text = readFileNoFollow(full);
+    if (text === null) continue;
     const matches = text.match(ANCHOR_RE) || [];
     for (const m of matches) {
       if (m === e.path) continue;
@@ -266,6 +266,35 @@ function lintImperative({ body, trigger, episodes }) {
   return null;
 }
 
+// C0 control chars (0x00-0x1F) plus DEL (0x7F) — the same set `inertLine`
+// (store.mjs) collapses at render time. Admission rejects them outright
+// rather than silently sanitizing, so a rejected op gets a clear E_SCHEMA
+// instead of the model discovering its trigger/plan was silently mangled.
+const CONTROL_CHAR_RE = /[\x00-\x1f\x7f]/;
+
+/**
+ * Episode `plan` values feed promotion eligibility (consolidate.mjs's
+ * verifiedAndPlans: a distinct-plans count) as pure assertions — nothing on
+ * the read path verifies a `plan` points at a real plan file; it remains an
+ * assertion feeding only human-gated displays (`harness learnings --why`,
+ * `consolidate --status`), never an automated decision on its own (P1-1,
+ * documented in docs/MEMORY-MODEL.md). Still admitted with a shape check:
+ * when present, must be a short, single-line, workspace-relative-LOOKING
+ * string — never a vehicle for a control-char injection (inertLine's doc
+ * comment covers the render-side half of that same defense) or a `..`
+ * traversal segment that could mislead a human reading it later. Absent,
+ * null, or empty is fine — `plan` is optional.
+ */
+function validPlanField(plan) {
+  if (plan === undefined || plan === null || plan === '') return true;
+  if (typeof plan !== 'string') return false;
+  if (plan.length > 200) return false;
+  if (CONTROL_CHAR_RE.test(plan)) return false;
+  if (path.isAbsolute(plan)) return false;
+  if (plan.split(/[\\/]+/).some((seg) => seg === '..')) return false;
+  return true;
+}
+
 function validateEpisodes(episodes, opIndex) {
   if (!Array.isArray(episodes) || !episodes.length) {
     return fail('E_SCHEMA', `op ${opIndex}: episodes must be a non-empty array`);
@@ -280,6 +309,12 @@ function validateEpisodes(episodes, opIndex) {
       !/^[0-9a-f]{64}$/.test(e.sha256)
     ) {
       return fail('E_SCHEMA', `op ${opIndex}: each episode needs path + sha256`);
+    }
+    if (!validPlanField(e.plan)) {
+      return fail(
+        'E_SCHEMA',
+        `op ${opIndex}: episode plan must be a short (<=200 char), single-line, workspace-relative path with no ".." segments`
+      );
     }
   }
   return null;
@@ -322,12 +357,10 @@ function verifiedFixLinks(fm) {
 function verifyEpisodeKind(workspace, copilotHome, e) {
   if (!e || !e.path || !e.sha256) return false;
   for (const full of resolveEpisodeFile(workspace, copilotHome, e.path)) {
-    let text;
-    try {
-      text = fs.readFileSync(full, 'utf8');
-    } catch {
-      continue;
-    }
+    // Never follow a symlinked candidate — a symlink's target content must
+    // never verify (or hash-match) as this episode's evidence.
+    const text = readFileNoFollow(full);
+    if (text === null) continue;
     if (crypto.createHash('sha256').update(text).digest('hex') !== e.sha256) continue;
     const m = text.match(/^---\r?\n([\s\S]*?)\r?\n---/);
     const kindLine = m ? m[1].split('\n').find((l) => /^kind:\s*/.test(l)) : null;
@@ -393,12 +426,10 @@ function verifyAdmittedEpisodeKinds(workspace, copilotHome, episodes, opIndex) {
 function episodeDate(workspace, copilotHome, e) {
   if (!e.path) return null;
   for (const full of resolveEpisodeFile(workspace, copilotHome, e.path)) {
-    let text;
-    try {
-      text = fs.readFileSync(full, 'utf8');
-    } catch {
-      continue;
-    }
+    // Never follow a symlinked candidate here either — same reasoning as
+    // verifyEpisodeKind above.
+    const text = readFileNoFollow(full);
+    if (text === null) continue;
     const m = text.match(/^---\r?\n([\s\S]*?)\r?\n---/);
     if (!m) continue;
     const dateLine = m[1].split('\n').find((l) => /^date:\s*/.test(l));
@@ -410,30 +441,66 @@ function episodeDate(workspace, copilotHome, e) {
 
 /**
  * Recency gate on the human re-teach override (design correction, M4 whole-
- * milestone review, item 1): verifying an episode is human-teaching proves
- * AUTHENTICITY, never RECENCY — without this, a STALE human-teaching episode
- * (e.g. a `remember` from before a LATER `learning retire`/`dispute`/
- * `promote`) could resurrect a newer human governance decision on the same
- * id, including fabricating a `confirm` record that makes it look like the
- * human re-affirmed something they never saw. Applied ONLY when a governance
- * record exists for the id — nothing stale to guard against otherwise, so an
- * id with no standing decision is unaffected. Every verifying episode's own
- * frontmatter `date` must be >= record.at (plain YYYY-MM-DD string compare —
- * safe for this format). A same-day tie favors the override (date ===
- * record.at passes): this is what keeps a same-day `remember` re-teach
- * (which always stamps today's date) overriding a same-day retire/dispute.
- * An episode with no parseable date fails closed — never counts as recent
- * enough to override a recorded human decision.
+ * milestone review, item 1; tightened again, P1-9): verifying an episode is
+ * human-teaching proves AUTHENTICITY, never RECENCY — without this, a STALE
+ * human-teaching episode (e.g. a `remember` from before a LATER
+ * `learning retire`/`dispute`/`promote`) could resurrect a newer human
+ * governance decision on the same id, including fabricating a `confirm`
+ * record that makes it look like the human re-affirmed something they never
+ * saw. Applied ONLY when a governance record exists for the id — nothing
+ * stale to guard against otherwise, so an id with no standing decision is
+ * unaffected.
+ *
+ * Two lanes, deliberately different:
+ *   - LIVE human lane (`humanPresent: true`, set only by `runRemember` —
+ *     remember.mjs): bypasses this gate ENTIRELY, same trust plane as
+ *     `approve`. The human acting right now IS the authority; there is
+ *     nothing to prove recent against — they are the live source of the
+ *     decision. This does NOT touch the promoted-target block, which stays
+ *     absolute regardless (checked unconditionally, before any reteach logic
+ *     ever runs).
+ *   - MODEL lane (an unattended `consolidate --apply` — a model copying a
+ *     candidates-packet episode verbatim, or a human running the CLI
+ *     directly against an ops JSON): episode `date` is day-granular
+ *     (YYYY-MM-DD, an episode file's own frontmatter), but a governance
+ *     record's `at` is now a full ISO-8601 timestamp (see
+ *     lifecycle.mjs/apply.mjs/admin.mjs's appendGovernance call sites) — a
+ *     day-granular episode can prove it happened on a LATER calendar day
+ *     than the record, but can never prove it happened later WITHIN the same
+ *     day the record was written (readGovernance also tolerates a legacy
+ *     plain-date `at`, in which case the same day-string comparison still
+ *     applies). So the model lane requires the episode's day to be STRICTLY
+ *     newer than the record's day: `episode day > record day` passes,
+ *     `episode day === record day` now FAILS (previously a same-day tie
+ *     favored the override — that same-day allowance is what let a
+ *     same-day, unattended re-application of stale-but-authentic evidence
+ *     silently overturn a same-day veto). An episode with no parseable date
+ *     fails closed either way — never counts as recent enough to override a
+ *     recorded human decision.
  */
-function overridesGovernanceRecency(workspace, copilotHome, episodes, record) {
+function overridesGovernanceRecency(workspace, copilotHome, episodes, record, { humanPresent = false } = {}) {
+  if (humanPresent) return true;
   if (!record) return true;
+  const recordDay = String(record.at).slice(0, 10);
   return episodes.every((e) => {
     const d = episodeDate(workspace, copilotHome, e);
-    return d != null && d >= record.at;
+    return d != null && d > recordDay;
   });
 }
 
-export function applyOps({ workspace, opsPath, dryRun = false, home, approve = false, log = () => {}, copilotHome = null }) {
+export function applyOps({
+  workspace,
+  opsPath,
+  dryRun = false,
+  home,
+  approve = false,
+  log = () => {},
+  copilotHome = null,
+  // Internal only — set by runRemember (remember.mjs) for the LIVE human
+  // lane. Never derived from anything in the ops JSON itself: a model can
+  // never grant this to itself by asserting a field.
+  humanPresent = false,
+}) {
   // Kill switch: consolidate is a write path gated to mode 'on' — checked
   // first, before the ops file is even parsed, and before any lock. This is a
   // cheap, no-lock pre-check (unchanged from before); the real (non-dryRun)
@@ -707,8 +774,10 @@ export function applyOps({ workspace, opsPath, dryRun = false, home, approve = f
           // op's own claim of human authorship isn't enough if a governance
           // record already exists for this exact target/id and the evidence
           // offered predates it — a stale teaching episode must never resurrect
-          // a NEWER human retire/dispute/promote decision.
-          overridesGovernanceRecency(workspace, copilotHome, op.episodes, governance.get(op.target));
+          // a NEWER human retire/dispute/promote decision. humanPresent (set
+          // only by runRemember) bypasses the day-granularity comparison
+          // entirely — the live human lane's trust plane, same as `approve`.
+          overridesGovernanceRecency(workspace, copilotHome, op.episodes, governance.get(op.target), { humanPresent });
         // Cross-run target-activeness (MERGE already required this — see the
         // isActiveFm check in its own branch below): a target already
         // superseded/retired/disputed ON DISK from a PRIOR run must never
@@ -845,6 +914,18 @@ export function applyOps({ workspace, opsPath, dryRun = false, home, approve = f
       if (op.op === 'ADD' || op.op === 'SUPERSEDE' || op.op === 'MERGE') {
         if (!op.domain || !op.slug || !op.trigger || !op.body) {
           return rejectOp('E_SCHEMA', `op ${i}: ${op.op} needs domain, slug, trigger, body`, op.episodes);
+        }
+        // P1-5: a trigger carrying a raw control char (most importantly a
+        // newline) would otherwise round-trip through yamlQuote/unquote
+        // (store.mjs) and later interpolate into structured markdown
+        // (context pack, listing, INDEX.md) as extra "lines" — fake
+        // headings, extra bullets — inside a trusted surface. Rejected
+        // outright at admission; `body` legitimately contains newlines (a
+        // multi-line claim), so this check is scoped to `trigger` only.
+        // inertLine (store.mjs) is the render-side backstop for content that
+        // predates this gate (a legacy or hand-edited file).
+        if (CONTROL_CHAR_RE.test(op.trigger)) {
+          return rejectOp('E_SCHEMA', `op ${i}: trigger must not contain control characters (newlines, tabs, etc.)`, op.episodes);
         }
         const newId = newIdFor(op);
         if (op.op === 'ADD') {
@@ -1098,6 +1179,11 @@ export function applyOps({ workspace, opsPath, dryRun = false, home, approve = f
     const ledgerEntries = [];
     const governed = [];
     const at = todayClamped();
+    // Governance entries (P1-9) get a full ISO-8601 UTC timestamp, distinct
+    // from the day-only `at` above (ledger entries/episode dates stay
+    // day-granular) — see overridesGovernanceRecency's doc comment for why
+    // day-granularity alone can't support the model-lane strictly-newer rule.
+    const governanceAt = new Date().toISOString();
 
     for (const { op, id, domain, slug, content } of writes) {
       const file = path.join(dir, 'learnings', domain, `${slug}.md`);
@@ -1151,9 +1237,9 @@ export function applyOps({ workspace, opsPath, dryRun = false, home, approve = f
       const isReteach =
         op.episodes.length > 0 &&
         op.episodes.every((e) => verifyHumanTeachingEpisode(workspace, copilotHome, e)) &&
-        overridesGovernanceRecency(workspace, copilotHome, op.episodes, entry);
+        overridesGovernanceRecency(workspace, copilotHome, op.episodes, entry, { humanPresent });
       if (isReteach) {
-        appendGovernance(dir, { id, action: 'confirm', reason: 'superseded by re-teach', to: null, at });
+        appendGovernance(dir, { id, action: 'confirm', reason: 'superseded by re-teach', to: null, at: governanceAt });
         continue;
       }
       const file = path.join(dir, 'learnings', domain, `${slug}.md`);
@@ -1367,7 +1453,10 @@ export function rebuildIndex(dir) {
     '',
     '_Rebuilt by `harness consolidate --apply`. One line per active learning._',
     '',
-    ...active.map((l) => `- [${l.id}] ${l.fm.trigger || ''}`),
+    // inertLine: a legacy/hand-edited trigger can still carry an embedded
+    // control char (store.mjs's doc comment) — collapsed to a space so every
+    // INDEX.md row always renders as one line.
+    ...active.map((l) => `- [${l.id}] ${inertLine(l.fm.trigger || '')}`),
     '',
   ];
   fs.writeFileSync(path.join(dir, 'INDEX.md'), lines.join('\n'), 'utf8');

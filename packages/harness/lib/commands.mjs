@@ -1189,6 +1189,7 @@ export async function cmdEvalKnowledge(argv) {
 export async function cmdKnowledge(argv) {
   const flags = parseFlags(argv);
   const workspace = path.resolve(flags.workspace);
+  const copilotHome = resolveCopilotHome(flags.copilotHome);
   const subcommand = argv[0] && !argv[0].startsWith('--') ? argv[0] : null;
   // Single definition (store.mjs) — commands.mjs no longer keeps its own copy.
   const { KNOWLEDGE_MODES, KNOWLEDGE_COMMIT_MODES, writeStoreConfig, readStoreConfig } = await import('./knowledge/store.mjs');
@@ -1202,7 +1203,10 @@ export async function cmdKnowledge(argv) {
     // like an option is treated as absent, not as a filename.
     const target = !isAll && rawTarget && !rawTarget.startsWith('--') ? rawTarget : null;
     const logger = (m) => log(flags, m);
-    const result = isAll ? purgeAll({ workspace, log: logger }) : purgeEpisode({ workspace, target, log: logger });
+    // copilotHome threaded through (P2) so a global episode (resolved under
+    // copilotHome/knowledge, the same root `collectEpisodes` scans) can be
+    // purged exactly as readily as a product-repo-local one.
+    const result = isAll ? purgeAll({ workspace, log: logger }) : purgeEpisode({ workspace, target, copilotHome, log: logger });
     writeEvent(workspace, flags, {
       type: 'knowledge',
       command: 'knowledge',

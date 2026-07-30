@@ -191,7 +191,7 @@ test('knowledge purge <episode> cascades: sole-evidence learning removed, shared
   assert.ok(fs.existsSync(path.join(c.ws, otherPath)), 'unrelated episode file untouched');
 });
 
-test('a trigger with a quote, a backslash, and an embedded newline survives TWO successive purge-unlinks byte-identical', () => {
+test('a trigger with a quote and a backslash survives TWO successive purge-unlinks byte-identical', () => {
   const c = ctx();
   const targetPath1 = 'docs/solutions/perf/target-nl-1.md';
   const targetPath2 = 'docs/solutions/perf/target-nl-2.md';
@@ -200,9 +200,13 @@ test('a trigger with a quote, a backslash, and an embedded newline survives TWO 
   const ep2 = writeRealEpisode(c.ws, targetPath2, 'target episode body two\n');
   const epKeep = writeRealEpisode(c.ws, keepPath, 'kept episode body\n');
 
-  // Exactly the characters yamlQuote escapes at write time: a double quote,
-  // a backslash, and a real embedded newline.
-  const trigger = 'trigger with a "quoted" word, a \\backslash\\, and\nline two: fake-key';
+  // Exactly two of the characters yamlQuote escapes at write time: a double
+  // quote and a backslash. NOT a real embedded newline — P1-5 hardening now
+  // rejects a control character in a fresh trigger at admission outright
+  // (see knowledge-injection-and-plan.test.mjs for the dedicated rejection
+  // coverage); this test only proves the quote/backslash escaping round trip
+  // stays byte-identical across repeated rewrites.
+  const trigger = 'trigger with a "quoted" word, a \\backslash\\, and a second clause: fake-key';
   const op = {
     op: 'ADD',
     domain: 'sql',
@@ -319,7 +323,10 @@ test('knowledge purge with a target that escapes the workspace exits 2, deletes 
   assert.equal(res.status, 2, res.stderr || res.stdout);
   const out = JSON.parse(res.stdout);
   assert.equal(out.pass, false);
-  assert.match(out.blockedReason, /escapes the workspace/);
+  // P2: purge now resolves against every configured root (workspace, and
+  // copilotHome/knowledge when given) — the message names both instead of
+  // just "the workspace".
+  assert.match(out.blockedReason, /escapes every configured root/);
   assert.equal(out.removed, null);
 
   assert.ok(fs.existsSync(outsideFile), 'file outside the workspace must survive a blocked purge');

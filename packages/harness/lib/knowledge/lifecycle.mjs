@@ -115,8 +115,14 @@ export function setLearningStatus({ workspace, id, action, reason, to, home, log
       rebuildIndex(dir);
       // Governance record (Milestone 4): appended BEFORE the transaction's
       // own commit, same idea as before — one commit carries both the
-      // frontmatter write and the governance entry.
-      appendGovernance(dir, { id, action: 'promote', reason: reason || null, to: promotedTo, at: todayClamped() });
+      // frontmatter write and the governance entry. `at` is a full ISO-8601
+      // UTC timestamp (P1-9), not the day-only todayClamped() stamp used for
+      // last_confirmed above — the model-lane recency gate
+      // (overridesGovernanceRecency, apply.mjs) needs finer-than-a-day
+      // resolution to tell a same-day override apart from a genuinely later
+      // one; readGovernance's readers stay tolerant of a legacy plain-date
+      // value too.
+      appendGovernance(dir, { id, action: 'promote', reason: reason || null, to: promotedTo, at: new Date().toISOString() });
       return { kind: 'success', commitMessage: `promote ${id}: ${promotedTo}`, status: 'promoted' };
     }
 
@@ -125,8 +131,9 @@ export function setLearningStatus({ workspace, id, action, reason, to, home, log
     rebuildIndex(dir);
     // Governance record (Milestone 4): appended BEFORE the transaction's own
     // commit, same reasoning as the promote branch above — one commit
-    // carries both.
-    appendGovernance(dir, { id, action, reason: reason || null, to: null, at: todayClamped() });
+    // carries both. `at` is a full ISO-8601 UTC timestamp (P1-9) — see the
+    // promote branch above for why.
+    appendGovernance(dir, { id, action, reason: reason || null, to: null, at: new Date().toISOString() });
     return { kind: 'success', commitMessage: `${action} ${id}: ${reason || 'human confirm'}`, status: TARGET_STATUS[action] };
   });
 

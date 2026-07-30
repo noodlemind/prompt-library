@@ -120,7 +120,11 @@ test('learning retire <id> --reason x appends a governance retire entry in the s
   assert.equal(entry.action, 'retire');
   assert.equal(entry.reason, 'x');
   assert.equal(entry.to, null);
-  assert.match(entry.at, /^\d{4}-\d{2}-\d{2}$/);
+  // P1-9: governance entries now stamp a full ISO-8601 UTC timestamp (not a
+  // day-only date) — needed for the model-lane recency gate's
+  // strictly-newer-than-the-record comparison (overridesGovernanceRecency,
+  // apply.mjs).
+  assert.match(entry.at, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/);
 });
 
 // (b) dispute then confirm on the same id → latest entry (replay semantics) is the confirm.
