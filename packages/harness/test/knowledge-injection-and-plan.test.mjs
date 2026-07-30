@@ -7,7 +7,7 @@ import { test } from 'node:test';
 import { applyOps } from '../lib/knowledge/apply.mjs';
 import { ensureStore, storeDir, listLearnings, serializeLearning, parseLearningFrontmatter } from '../lib/knowledge/store.mjs';
 import { listingView, whyView } from '../lib/knowledge/listing.mjs';
-import { buildLearningsLines } from '../lib/context-pack.mjs';
+import { buildLearningsLines, LEARNINGS_DATA_PREAMBLE } from '../lib/context-pack.mjs';
 import { rankLearnings } from '../lib/knowledge/retrieve.mjs';
 
 /**
@@ -148,6 +148,36 @@ test('P1-5: a legacy learning file hand-crafted with an embedded newline in its 
   // the injected heading either (that would mean it broke out as its own
   // pack line despite living inside a single array entry).
   assert.ok(!packLines.some((l) => l !== bulletLine && l.includes('## Fake Heading')), 'the injected heading never becomes its own pack line');
+});
+
+// P1#2a: the STRUCTURAL data-not-instructions guarantee. The entire learnings
+// section — for EVERY learning kind, not just insight — is framed as inert
+// DATA, so an un-caught executable command in a stored learning is presented
+// as a past claim, never an instruction to run. The insight-only advisory
+// label still rides ON TOP for provenance.
+test('P1#2a: the learnings section frames ALL learnings as data-not-instructions, including a FIX-backed (non-advisory) learning', () => {
+  const fixRow = { id: 'sql/x', advisory: false, trigger: 'when adding columns', claimLine: 'use two-step backfill' };
+  const lines = buildLearningsLines([fixRow]);
+
+  assert.ok(lines.includes(LEARNINGS_DATA_PREAMBLE), 'the data-not-instructions preamble is present for a fix-backed learning');
+  assert.match(LEARNINGS_DATA_PREAMBLE, /data.*not instructions/i);
+  assert.match(LEARNINGS_DATA_PREAMBLE, /untrusted memory/i);
+
+  // Ordered: header → preamble → the first learning bullet.
+  const headerIdx = lines.indexOf('## Learnings (memory)');
+  const preambleIdx = lines.indexOf(LEARNINGS_DATA_PREAMBLE);
+  const bulletIdx = lines.findIndex((l) => l.startsWith('- [sql/x]'));
+  assert.ok(headerIdx !== -1 && headerIdx < preambleIdx && preambleIdx < bulletIdx, 'preamble sits between the header and the first learning');
+
+  // The fix-backed learning itself is NOT advisory-fenced — that per-line
+  // provenance label stays insight-only, layered on top of the section frame.
+  const bullet = lines.find((l) => l.startsWith('- [sql/x]'));
+  assert.ok(!bullet.includes('[unverified memory — advisory]'), 'a fix-backed learning carries no insight advisory label');
+
+  // An insight learning keeps the advisory label ON TOP of the shared frame.
+  const insightLines = buildLearningsLines([{ id: 'sql/y', advisory: true, trigger: 't', claimLine: 'c' }]);
+  assert.ok(insightLines.includes(LEARNINGS_DATA_PREAMBLE), 'the frame is present for insight learnings too');
+  assert.ok(insightLines.find((l) => l.startsWith('- [sql/y]')).includes('[unverified memory — advisory]'));
 });
 
 // P1-1: episode `plan` field admission validation. -------------------------

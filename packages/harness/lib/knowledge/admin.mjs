@@ -221,7 +221,18 @@ export function absorbHandEdits({ workspace, home, log = () => {} }) {
   if (!fs.existsSync(dir) || !fs.existsSync(path.join(dir, '.git'))) return empty;
 
   const status = spawnSync('git', ['status', '--porcelain'], { cwd: dir, encoding: 'utf8' });
-  const lines = (status.status === 0 ? status.stdout : '').split('\n').filter(Boolean);
+  // Fail CLOSED (P2): a spawn error or a non-zero `git status` exit used to be
+  // coerced to an empty string — read as "tree is clean" — so a later
+  // transaction rollback (git reset --hard + clean -fd) could silently destroy
+  // an unabsorbed hand edit this function never got to see. Surface it as a
+  // failure-shaped result (`ok: false`) so absorbOrAbort turns it into a
+  // StoreTransactionAbort and the transaction aborts WITHOUT rolling back over
+  // the unprotected edit, exactly like a failed absorb sub-commit.
+  if (status.error || status.status !== 0) {
+    const detail = status.error ? status.error.message : status.stderr || `git status exited ${status.status}`;
+    return { absorbed: [], deleted: [], committed: false, ok: false, stderr: `git status failed: ${detail}` };
+  }
+  const lines = status.stdout.split('\n').filter(Boolean);
   if (!lines.length) return empty;
 
   const at = todayClamped();
@@ -795,21 +806,47 @@ export function purgeEpisode({ workspace, target, copilotHome, home, log = () =>
   // are already gone from their real paths, so a sweep failure only leaves
   // identifiable, same-directory debris — never resurrected content — and is
   // reported as a partial, not a failure.
-  let episodeRemoved = episodeExistsOnDisk || debrisBefore.length > 0;
-  let partialReason = null;
-  const undeleted = [];
   for (const sibling of safePaths.flatMap(purgeTempSiblings)) {
     try {
       fs.rmSync(sibling, { force: true });
     } catch {
-      undeleted.push(sibling);
+      // Re-scanned below — a throw here just means this sibling still remains,
+      // which the post-state check turns into an outright failure.
     }
   }
   stagedTemp = null; // swept above (or attempted); no separate finalize owns it now
-  if (undeleted.length) {
-    partialReason = `store purge committed and the episode was removed, but staging debris could not be cleaned up: ${undeleted.join(', ')}`;
-    log(partialReason);
+
+  // Completion is judged from the ACTUAL POST-STATE, never the pre-state (P2):
+  // the real episode path must be ABSENT and ZERO `.purge-*` staging siblings
+  // may remain. A surviving temp still holds the live episode content, so its
+  // presence is a FAILED purge — the content the human asked to delete is
+  // still on disk — not a cosmetic partial the CLI can hide. The prior code
+  // derived `episodeRemoved` from pre-state and only set a soft `partialReason`
+  // (which the CLI renderer never surfaced) while returning pass:true.
+  const debrisAfter = safePaths.flatMap(purgeTempSiblings);
+  const realPathPresent = safePaths.some((p) => fs.existsSync(p));
+  if (debrisAfter.length > 0 || realPathPresent) {
+    const blockedReason = realPathPresent
+      ? `store purge committed but the episode is still present on disk: ${target} — re-run purge`
+      : `store purge committed but staging debris still holds the episode content and could not be removed: ${debrisAfter.join(', ')} — re-run purge or delete these files manually`;
+    log(blockedReason);
+    return {
+      pass: false,
+      exitCode: 1,
+      removed: {
+        // The content is NOT gone (a staging copy or the file itself remains).
+        episode: null,
+        learnings: inner.removedLearnings,
+        links: inner.removedLinks,
+        ledger: inner.ledgerRemoved,
+      },
+      blockedReason,
+      ...(tx.staleLockNote ? { staleLockRemoved: tx.staleLockNote } : {}),
+    };
   }
+
+  // Post-state confirms the episode content is genuinely gone.
+  const episodeRemoved = episodeExistsOnDisk || debrisBefore.length > 0;
 
   // The mirror already ran inside afterCommit (above), under the held lock on
   // the committed cascade — never here after the lock released (P2).
@@ -817,13 +854,9 @@ export function purgeEpisode({ workspace, target, copilotHome, home, log = () =>
   // Recall-state cascade (refreshRecallAfterPurge): rebuild the manifest and
   // postings index so rankRecall stops serving the purged episode. NOT best
   // effort — a purge whose target can still be recalled must never report
-  // pass: true. Enforced only when the episode file is actually gone now
-  // (deleted above, or it never existed on disk): when the delete itself
-  // failed, the file legitimately still exists, the manifest listing it is
-  // accurate, and that partial outcome is already reported via partialReason.
-  const episodeGone = episodeRemoved || !episodeExistsOnDisk;
+  // pass: true.
   const recall = refreshRecallAfterPurge({ workspace, copilotHome, target, log });
-  if (episodeGone && !recall.ok) {
+  if (!recall.ok) {
     return {
       pass: false,
       exitCode: 1,
@@ -834,7 +867,6 @@ export function purgeEpisode({ workspace, target, copilotHome, home, log = () =>
         ledger: inner.ledgerRemoved,
       },
       blockedReason: `store purge committed, but recall retrieval state still serves the purged episode: ${recall.reason}`,
-      ...(partialReason ? { partialReason } : {}),
       ...(tx.staleLockNote ? { staleLockRemoved: tx.staleLockNote } : {}),
     };
   }
@@ -849,7 +881,6 @@ export function purgeEpisode({ workspace, target, copilotHome, home, log = () =>
       ledger: inner.ledgerRemoved,
     },
     blockedReason: null,
-    ...(partialReason ? { partialReason } : {}),
     ...(tx.staleLockNote ? { staleLockRemoved: tx.staleLockNote } : {}),
   };
 }

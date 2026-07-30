@@ -7,6 +7,7 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 import { applyOps, updateFrontmatterField } from '../lib/knowledge/apply.mjs';
+import { purgeEpisode } from '../lib/knowledge/admin.mjs';
 import { ensureStore, storeDir, listLearnings, readLedger } from '../lib/knowledge/store.mjs';
 
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -165,8 +166,12 @@ test('knowledge purge <episode> cascades: sole-evidence learning removed, shared
       { ...other, kind: 'fix', plan: 'docs/plans/p2.md' },
     ],
   };
-  assert.equal(applyOps({ workspace: c.ws, opsPath: writeOps(c.ws, [sole]), home: c.harnessHome }).exitCode, 0);
-  assert.equal(applyOps({ workspace: c.ws, opsPath: writeOps(c.ws, [shared]), home: c.harnessHome }).exitCode, 0);
+  // Both ADDs share the `target` episode as evidence — allowed only within a
+  // SINGLE apply run (P1#3 forbids re-citing an episode ALREADY consumed by a
+  // prior run, but the ledger is not updated mid-run, so two ops in one run
+  // may both cite the still-unconsolidated target). This still sets up the
+  // sole/shared cascade the purge below exercises.
+  assert.equal(applyOps({ workspace: c.ws, opsPath: writeOps(c.ws, [sole, shared]), home: c.harnessHome }).exitCode, 0);
 
   const res = run(c, ['knowledge', 'purge', targetPath]);
   assert.equal(res.status, 0, res.stderr || res.stdout);
@@ -189,6 +194,53 @@ test('knowledge purge <episode> cascades: sole-evidence learning removed, shared
 
   assert.ok(!fs.existsSync(path.join(c.ws, targetPath)), 'episode file deleted from workspace');
   assert.ok(fs.existsSync(path.join(c.ws, otherPath)), 'unrelated episode file untouched');
+});
+
+// P2 (purge debris = failure): un-sweepable `.purge-*` staging debris still
+// holds the live episode content, so a purge that cannot remove it must fail
+// (pass:false / non-zero) and surface WHY — never report a hidden partial
+// while returning pass:true. Completion is judged from the ACTUAL post-state
+// (real path absent AND zero staging siblings remain), not the pre-state.
+test('P2: purge that cannot sweep its staging debris fails pass:false and names the residue, not a hidden partial', () => {
+  const c = ctx();
+  const targetPath = 'docs/solutions/perf/debris.md';
+  const ep = writeRealEpisode(c.ws, targetPath, 'debris episode body\n');
+  const op = {
+    op: 'ADD',
+    domain: 'sql',
+    slug: 'debris-evidence',
+    trigger: 'debris trigger',
+    body: 'debris body text',
+    episodes: [{ ...ep, kind: 'fix', plan: 'docs/plans/p1.md' }],
+  };
+  assert.equal(applyOps({ workspace: c.ws, opsPath: writeOps(c.ws, [op]), home: c.harnessHome }).exitCode, 0);
+
+  // Stub fs.rmSync so any `.purge-*` staging sibling is un-removable (EACCES),
+  // standing in for a filesystem the sweep cannot clean — every other rmSync
+  // (the store cascade's own learning-file deletes) passes through untouched.
+  const origRm = fs.rmSync;
+  fs.rmSync = (p, opts) => {
+    if (String(p).includes('.purge-')) {
+      const e = new Error('EACCES: permission denied');
+      e.code = 'EACCES';
+      throw e;
+    }
+    return origRm(p, opts);
+  };
+  let res;
+  try {
+    res = purgeEpisode({ workspace: c.ws, target: targetPath, copilotHome: c.home, home: c.harnessHome });
+  } finally {
+    fs.rmSync = origRm;
+  }
+
+  assert.equal(res.pass, false, 'a purge that leaves staging debris must not report success');
+  assert.equal(res.exitCode, 1);
+  assert.match(res.blockedReason, /debris|still/i);
+  assert.equal(res.removed.episode, null, 'the episode content is NOT reported as removed while a staging copy remains');
+  // The staging copy the sweep could not remove still holds the episode content.
+  const remaining = fs.readdirSync(path.join(c.ws, 'docs', 'solutions', 'perf')).filter((f) => f.includes('.purge-'));
+  assert.ok(remaining.length > 0, 'the un-sweepable staging copy is still on disk (the content is not gone)');
 });
 
 // P1: purge must cascade into the recall retrieval state too — the team

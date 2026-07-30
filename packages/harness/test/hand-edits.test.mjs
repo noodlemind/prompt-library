@@ -7,8 +7,8 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 import { applyOps } from '../lib/knowledge/apply.mjs';
-import { absorbHandEdits, removeEpisodeLink } from '../lib/knowledge/admin.mjs';
-import { ensureStore, storeDir, listLearnings, readLedger, parseLearningFrontmatter, serializeLearning } from '../lib/knowledge/store.mjs';
+import { absorbHandEdits, absorbOrAbort, removeEpisodeLink } from '../lib/knowledge/admin.mjs';
+import { ensureStore, storeDir, listLearnings, readLedger, parseLearningFrontmatter, serializeLearning, StoreTransactionAbort } from '../lib/knowledge/store.mjs';
 
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const binPath = path.join(packageRoot, 'bin', 'harness.mjs');
@@ -59,14 +59,20 @@ function EP(ws, over = {}) {
 }
 
 function seedLearning(c, over = {}) {
+  const { slug = 'not-null-hot-tables', episodes, ...rest } = over;
   const op = {
     op: 'ADD',
     domain: 'sql',
-    slug: 'not-null-hot-tables',
+    slug,
     trigger: 'adding NOT NULL columns to hot tables',
     body: 'Use two-step default+backfill; a direct ALTER takes an exclusive lock.',
-    episodes: [EP(c.ws)],
-    ...over,
+    // Unique evidence per seeded learning (P1#3): an episode consumed by one
+    // ADD is no longer a current candidate for another ADD in a LATER run, so
+    // seeding two learnings that each defaulted to the same episode file would
+    // now fail candidacy on the second. Derive the default episode path from
+    // the slug so every seed cites its own fresh, unconsumed episode.
+    episodes: episodes || [EP(c.ws, { path: `docs/solutions/perf/${slug}.md` })],
+    ...rest,
   };
   const res = applyOps({ workspace: c.ws, opsPath: writeOps(c.ws, [op]), home: c.harnessHome });
   assert.equal(res.exitCode, 0, JSON.stringify(res.rejected));
@@ -602,4 +608,35 @@ test('an ADD → hand-edit → absorb → STRENGTHEN cycle keeps the absorbed st
   const secondAbsorb = absorbHandEdits({ workspace: c.ws, home: c.harnessHome });
   assert.deepEqual(secondAbsorb, { absorbed: [], deleted: [], committed: false });
   assert.equal(gitLog(dir).length, before, 'no commit from the second, clean-tree absorb pass');
+});
+
+// P2 (git-status fail-closed): a `git status --porcelain` spawn error / non-zero
+// exit used to coerce to an empty string — read as "tree is clean" — so a later
+// transaction rollback could destroy an unabsorbed hand edit the function never
+// saw. It must instead surface a failure-shaped result (ok:false) so
+// absorbOrAbort fails CLOSED (StoreTransactionAbort → the transaction aborts
+// WITHOUT a rollback over the unprotected edit).
+test('P2: a git status failure makes absorbHandEdits fail closed (ok:false), not report a clean tree', () => {
+  const c = ctx();
+  seedLearning(c);
+  const { dir } = ensureStore(c.ws, { home: c.harnessHome });
+
+  // Break the repo so `git status` exits non-zero while a `.git` entry still
+  // exists (the existsSync guard passes) — a garbage `.git` gitfile stands in
+  // for a corrupt repo / spawn failure without touching any store content.
+  fs.rmSync(path.join(dir, '.git'), { recursive: true, force: true });
+  fs.writeFileSync(path.join(dir, '.git'), 'not a valid gitfile\n');
+
+  const result = absorbHandEdits({ workspace: c.ws, home: c.harnessHome });
+  assert.equal(result.ok, false, 'a git status failure must be a failure, never a silent clean tree');
+  assert.match(result.stderr, /git status failed/);
+
+  // absorbOrAbort turns that failure-shape into a StoreTransactionAbort — the
+  // signal withStoreTransaction uses to skip the rollback and preserve the
+  // (unabsorbed) working-tree edit rather than destroy it.
+  assert.throws(
+    () => absorbOrAbort({ workspace: c.ws, home: c.harnessHome }),
+    (err) => err instanceof StoreTransactionAbort && /git status failed/.test(err.message),
+    'absorbOrAbort must fail closed on a git status failure'
+  );
 });

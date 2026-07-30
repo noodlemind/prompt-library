@@ -20,7 +20,7 @@ import {
   serializeLearning,
   inertLine,
 } from './store.mjs';
-import { MAX_OPS_PER_RUN, LEARNING_BYTE_CAP, QUARANTINE_THRESHOLD, DOMAIN_ACTIVE_CAP, isActiveFm } from './consolidate.mjs';
+import { MAX_OPS_PER_RUN, LEARNING_BYTE_CAP, QUARANTINE_THRESHOLD, DOMAIN_ACTIVE_CAP, isActiveFm, collectEpisodes, splitLedger } from './consolidate.mjs';
 import { scanSecrets } from '../secret-scan.mjs';
 import { absorbOrAbort, mirrorLearnings } from './admin.mjs';
 import { parseMergedFrom } from './listing.mjs';
@@ -282,6 +282,16 @@ const COMMAND_CONTENT_PATTERNS = [
   [/\brm\s+-[a-z]*[rf]/i, 'rm -rf / -f'],
   [/\bchmod\s+(\+[rwxa]+|[0-7]{3,4})\b/i, 'chmod +x / octal'],
   [/\b(bash|sh|zsh|ksh)\s+-c\b/i, 'shell -c invocation'],
+  // Interpreter inline-exec shapes (P1#2b) — a language runtime handed code to
+  // run on the command line (`node -e "process.exit(1)"`, `python -c ...`).
+  // BEST-EFFORT defense-in-depth, never a completeness claim: each requires
+  // the exec flag as invocation syntax, so a prose mention of "node"/"python"
+  // never matches. `<interp> -e|--eval` for the JS runtimes; `<interp> -c|-e`
+  // for the -c/-e family (python/perl/ruby/php).
+  [/\b(?:node|deno|bun)\s+(?:--eval\b|-e\b)/i, 'node -e / --eval'],
+  [/\b(?:python3?|perl|ruby|php)\s+-[ce]\b/i, 'interpreter -c/-e exec'],
+  // cmd /c (and cmd.exe /c) — the Windows shell handed an inline command.
+  [/\bcmd(?:\.exe)?\s+\/c\b/i, 'cmd /c invocation'],
   // eval as an INVOCATION (followed by a quote/paren/dollar/backtick), never
   // the bare word — so "never eval untrusted input" prose is not rejected.
   [/\beval\s*[("'`$]/i, 'eval invocation'],
@@ -461,6 +471,38 @@ function verifyAdmittedEpisodeKinds(workspace, copilotHome, episodes, opIndex) {
       return fail(
         'E_SCHEMA',
         `op ${opIndex}: episode ${e.path} does not verify as kind ${asserted} — file missing, sha256 mismatch, or its own frontmatter kind disagrees`
+      );
+    }
+  }
+  return null;
+}
+
+/**
+ * Disk-verify an episode by EXISTENCE + sha256 only, ignoring kind — the
+ * NOOP admission check (P1#3). A NOOP writes no learning, so an asserted kind
+ * is moot, but it still CONSUMES the episode (a `learning: null` ledger entry
+ * that clears the episode's consolidation debt), so it must never be able to
+ * clear debt for a fabricated or mislabeled file. Tried against both
+ * knowledge roots (resolveEpisodeFile) and never follows a symlinked
+ * candidate — true only when some contained candidate exists and its CURRENT
+ * content hashes to the asserted sha256. Fails closed (false); never throws.
+ */
+function episodeShaVerifies(workspace, copilotHome, e) {
+  if (!e || !e.path || !e.sha256) return false;
+  for (const full of resolveEpisodeFile(workspace, copilotHome, e.path)) {
+    const text = readFileNoFollow(full);
+    if (text === null) continue;
+    if (crypto.createHash('sha256').update(text).digest('hex') === e.sha256) return true;
+  }
+  return false;
+}
+
+function verifyNoopEpisodes(workspace, copilotHome, episodes, opIndex) {
+  for (const e of episodes) {
+    if (!episodeShaVerifies(workspace, copilotHome, e)) {
+      return fail(
+        'E_SCHEMA',
+        `op ${opIndex}: NOOP episode ${e.path} does not exist on disk or its sha256 does not match — cannot clear debt for a fabricated or edited episode`
       );
     }
   }
@@ -774,6 +816,53 @@ export function applyOps({
     // exactly what keeps the two gates from ever seeing different states.
     const governance = readGovernance(dir);
 
+    // Current unconsolidated candidate set (P1#3), built UNDER THE STORE LOCK
+    // — for a real apply this whole function runs inside withStoreTransaction's
+    // lock, so the on-disk episodes and the ledger are read as one consistent
+    // snapshot. Key = `path@sha256` of every on-disk episode (both knowledge
+    // roots, exactly what collectEpisodes scans) MINUS the ledger-consumed
+    // ones (splitLedger's `consumed`, which includes NOOP's `learning: null`
+    // and quarantines but NOT bare failure strikes). An ADD may only cite
+    // episodes IN this set — otherwise a single episode could be re-cited
+    // after it was already consolidated and mint a SECOND learning from spent
+    // evidence. STRENGTHEN/SUPERSEDE/MERGE legitimately re-cite their target's
+    // OWN existing evidence, so those episodes are exempt; only a genuinely-NEW
+    // episode such an op introduces must also be a current candidate.
+    const candidateKeys = new Set();
+    {
+      const onDisk = collectEpisodes({ workspace, copilotHome });
+      const { consumed } = splitLedger(readLedger(dir));
+      for (const e of onDisk) {
+        const key = `${e.path}@${e.sha256}`;
+        if (!consumed.has(key)) candidateKeys.add(key);
+      }
+    }
+    // Episodes a FILE_TOUCHING op offers that must be a current candidate: ALL
+    // of them for ADD (no target to re-cite from); for STRENGTHEN/SUPERSEDE/
+    // MERGE, only the ones NOT already backing the target(s) — the target's own
+    // consolidated evidence is exempt (the D1 re-cite invariant).
+    function episodesNeedingCandidacy(op) {
+      if (op.op === 'ADD') return op.episodes || [];
+      const exempt = new Set();
+      const targets = op.op === 'MERGE' ? op.targets || [] : op.target ? [op.target] : [];
+      for (const t of targets) {
+        const l = existing.get(t);
+        if (l) for (const e of l.fm.episodes || []) exempt.add(`${e.path}@${e.sha256}`);
+      }
+      return (op.episodes || []).filter((e) => !exempt.has(`${e.path}@${e.sha256}`));
+    }
+    function assertCandidacy(op, opIndex) {
+      for (const e of episodesNeedingCandidacy(op)) {
+        if (!candidateKeys.has(`${e.path}@${e.sha256}`)) {
+          return fail(
+            'E_SCHEMA',
+            `op ${opIndex}: episode ${e.path} is not a current unconsolidated candidate — already consolidated or absent`
+          );
+        }
+      }
+      return null;
+    }
+
     // Validate every op before writing anything — all-or-nothing runs.
     const planned = [];
     const disputes = [];
@@ -782,6 +871,12 @@ export function applyOps({
       if (op.op === 'NOOP') {
         const bad = validateEpisodes(op.episodes, i);
         if (bad) return rejectOp(bad.code, bad.reason, op.episodes);
+        // Disk verification (P1#3): a NOOP consumes every cited episode
+        // (clears its debt) but only shape-checked it before — so a NOOP
+        // could clear debt for a nonexistent or mislabeled file. Require
+        // existence + sha256 match (kind is moot — nothing is stored).
+        const badNoop = verifyNoopEpisodes(workspace, copilotHome, op.episodes, i);
+        if (badNoop) return rejectOp(badNoop.code, badNoop.reason, op.episodes);
         planned.push({ ...op });
         continue;
       }
@@ -796,6 +891,14 @@ export function applyOps({
       // promotion math, source/status derivation) ever trusts it.
       const badKind = verifyAdmittedEpisodeKinds(workspace, copilotHome, op.episodes, i);
       if (badKind) return rejectOp(badKind.code, badKind.reason, op.episodes);
+      // Candidate-set evidence gate (P1#3): the cited evidence must be a
+      // CURRENT unconsolidated candidate — not an episode already consumed by
+      // a prior consolidation (which would let an ADD mint a second learning
+      // from spent evidence). A STRENGTHEN/SUPERSEDE/MERGE re-citing its
+      // target's own already-consolidated evidence is exempt
+      // (episodesNeedingCandidacy); only its genuinely-new episodes are gated.
+      const notCandidate = assertCandidacy(op, i);
+      if (notCandidate) return rejectOp(notCandidate.code, notCandidate.reason, op.episodes);
       // merged_from is only ever a MERGE-derived (op.targets) or ADD/SUPERSEDE-
       // carried-forward field — an op JSON asserting it directly must be an
       // array of strings, or renderLearning's `mergedFrom.join(', ')` throws on

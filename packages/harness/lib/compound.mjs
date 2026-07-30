@@ -9,7 +9,7 @@ import { loadPolicy } from './policy.mjs';
 import { recordSkillUsage } from './telemetry.mjs';
 import { scanSecrets } from './secret-scan.mjs';
 import { readStoreConfig } from './knowledge/store.mjs';
-import { assertNoSymlinkAncestors, writeFileContained } from './fs-safe.mjs';
+import { assertNoSymlinkAncestors } from './fs-safe.mjs';
 
 // Byte-exact snapshot/restore of a single retrieval-state file, used to roll
 // back the manifest + postings when indexing throws mid-write. Read as a raw
@@ -29,6 +29,61 @@ function restoreFile(p, snap) {
   } catch {
     // best effort — `harness index` reconciles retrieval state on the next run
   }
+}
+
+// Verify a rollback postcondition (P2): after restoreFile, does the file on
+// disk actually match the snapshot again? A null snapshot means "was absent",
+// so the file must be gone; a Buffer snapshot means the bytes must round-trip.
+// Never throws — an unreadable/racing file just reports "not restored".
+function snapshotRestored(p, snap) {
+  try {
+    if (snap === null) return !fs.existsSync(p);
+    return fs.readFileSync(p).equals(snap);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Atomically reserve a unique episode filename and write it (P1#1). The prior
+ * check-then-write loop (`existsSync` to pick a suffix, THEN write) let two
+ * concurrent `compound --insight` / `remember` commands both observe the same
+ * suffix as free and both write it — one silently overwriting the other, since
+ * episodes land in the WORKSPACE (docs/solutions), OUTSIDE the store lock.
+ * Here each suffix is claimed with an EXCLUSIVE create (`writeFileSync` flag
+ * `'wx'` = O_CREAT|O_EXCL): whichever process loses the race gets EEXIST and
+ * moves to the next suffix, so two processes can never both claim one name.
+ * Containment is re-validated (assertNoSymlinkAncestors, the same fs-safe
+ * guard writeFileContained uses) BEFORE every exclusive create, and O_EXCL
+ * itself refuses to follow a pre-planted symlink at the leaf. Returns
+ * `{ ok: true, rel }` on success, or `{ ok: false, error? }` when containment
+ * fails (no error) or the write fails for a non-EEXIST reason (error set).
+ */
+function reserveEpisodePath(workspace, dirRel, base, doc) {
+  const dirFull = assertNoSymlinkAncestors(workspace, dirRel);
+  if (!dirFull) return { ok: false };
+  fs.mkdirSync(dirFull, { recursive: true });
+  let candidate = `${base}.md`;
+  let n = 2;
+  // Bounded so a pathological filesystem that repeats EEXIST forever can never
+  // wedge the process — 100k same-title captures in one day is not a real case.
+  for (let attempt = 0; attempt < 100000; attempt++) {
+    const rel = path.join(dirRel, candidate);
+    const full = assertNoSymlinkAncestors(workspace, rel);
+    if (!full) return { ok: false };
+    try {
+      fs.writeFileSync(full, doc, { flag: 'wx' });
+      return { ok: true, rel };
+    } catch (err) {
+      if (err.code === 'EEXIST') {
+        candidate = `${base}-${n}.md`;
+        n += 1;
+        continue;
+      }
+      return { ok: false, error: err };
+    }
+  }
+  return { ok: false };
 }
 
 function slugify(text) {
@@ -136,28 +191,35 @@ export function runInsightCompound({ workspace, copilotHome, flags, log = () => 
       nextTools: ['remove or replace the symlinked docs/solutions directory and re-run'],
     };
   }
-  let rel = path.join(dirRel, `${base}.md`);
-  let n = 2;
-  while (fs.existsSync(path.join(workspace, rel))) {
-    rel = path.join(dirRel, `${base}-${n}.md`);
-    n += 1;
-  }
-  if (!flags.dryRun) {
-    // writeFileContained re-validates containment (TOCTOU-safe) and writes
-    // atomically (tmp + rename) — the SAME helper admin.mjs's mirror/absorb
-    // writers and repo-map's writeCodebaseMap already use.
-    const written = writeFileContained(workspace, rel, doc);
-    if (!written) {
+  let rel;
+  if (flags.dryRun) {
+    // Dry run writes nothing, so a plain existence probe is enough to report a
+    // representative would-be name (no reservation, no file created).
+    rel = path.join(dirRel, `${base}.md`);
+    let n = 2;
+    while (fs.existsSync(path.join(workspace, rel))) {
+      rel = path.join(dirRel, `${base}-${n}.md`);
+      n += 1;
+    }
+  } else {
+    // Atomic exclusive-create reservation (P1#1): claims a unique suffix with
+    // O_EXCL so concurrent captures of the same title can never overwrite each
+    // other. Containment is re-validated before each create.
+    const reserved = reserveEpisodePath(workspace, dirRel, base, doc);
+    if (!reserved.ok) {
       return {
         pass: false,
         exitCode: 1,
         kind,
         path: null,
         indexed: null,
-        blockedReason: 'episode path escapes the workspace (symlinked docs/solutions?)',
+        blockedReason: reserved.error
+          ? `could not write episode file: ${reserved.error.message}`
+          : 'episode path escapes the workspace (symlinked docs/solutions?)',
         nextTools: ['remove or replace the symlinked docs/solutions directory and re-run'],
       };
     }
+    rel = reserved.rel;
   }
   // Under dryRun nothing was actually written (the write above is skipped), so
   // the log line must not claim otherwise.
@@ -185,15 +247,37 @@ export function runInsightCompound({ workspace, copilotHome, flags, log = () => 
   try {
     indexed = runIndexKnowledge({ knowledgeRoot, workspace, copilotHome, flags, log });
   } catch (err) {
+    // Rollback WITH verified postconditions (P2): the prior code swallowed
+    // every recovery error yet always reported "episode rolled back" /
+    // `path: null` — so a rollback that left the episode on disk or failed to
+    // restore retrieval state was indistinguishable from a clean one. Now each
+    // step is verified against disk and any residue is named in the result.
+    const episodeFull = path.join(workspace, rel);
+    let episodeRemains = false;
+    const unrestored = [];
     if (!flags.dryRun) {
       try {
-        fs.rmSync(path.join(workspace, rel), { force: true });
+        fs.rmSync(episodeFull, { force: true });
       } catch {
-        // best effort — a re-run reconciles the orphan
+        // best effort — verified below regardless of whether rmSync threw
       }
+      episodeRemains = fs.existsSync(episodeFull);
       // Restore manifest + postings + meta to exactly pre-write (write back the
-      // snapshot, or delete if it was absent). `harness index` reconciles too.
-      for (const [p, snap] of snapshots) restoreFile(p, snap);
+      // snapshot, or delete if it was absent), then confirm each landed.
+      for (const [p, snap] of snapshots) {
+        restoreFile(p, snap);
+        if (!snapshotRestored(p, snap)) unrestored.push(p);
+      }
+    }
+    const recovered = !episodeRemains && unrestored.length === 0;
+    let blockedReason;
+    if (recovered) {
+      blockedReason = `knowledge index rebuild failed, episode rolled back: ${err.message}`;
+    } else {
+      const residue = [];
+      if (episodeRemains) residue.push(`episode still on disk at ${rel.split(path.sep).join('/')}`);
+      if (unrestored.length) residue.push(`retrieval state not restored: ${unrestored.join(', ')}`);
+      blockedReason = `knowledge index rebuild failed AND rollback incomplete (${residue.join('; ')}) — run: harness index. Original error: ${err.message}`;
     }
     return {
       pass: false,
@@ -201,7 +285,10 @@ export function runInsightCompound({ workspace, copilotHome, flags, log = () => 
       kind,
       path: null,
       indexed: null,
-      blockedReason: `knowledge index rebuild failed, episode rolled back: ${err.message}`,
+      blockedReason,
+      // Name the residue explicitly so a caller never treats a partial
+      // recovery as a clean one.
+      ...(recovered ? {} : { partialRecovery: { episodeRemains, unrestored } }),
       nextTools: ['harness index'],
     };
   }

@@ -1227,3 +1227,151 @@ test('a concurrent stale-lock takeover race: the loser (whose claim loses to ano
     fs.renameSync = originalRename;
   }
 });
+
+// P1#3 (candidate-set evidence checks). ------------------------------------
+
+// (i) An episode already consolidated by a PRIOR run is no longer a current
+// candidate, so a second, different ADD can't re-cite it to mint a second
+// learning from spent evidence.
+test('P1#3: an ADD re-citing an episode already consolidated by a prior run is rejected E_SCHEMA (not a current candidate)', () => {
+  const c = ctx();
+  const ep = EP(c.ws, { path: 'docs/solutions/perf/reused.md' });
+  const first = ADD(c.ws, { slug: 'first-claim', episodes: [ep] });
+  assert.equal(run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [first])]).status, 0);
+
+  const second = ADD(c.ws, { slug: 'second-claim', episodes: [ep] });
+  const res = run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [second])]);
+  assert.equal(res.status, 1, res.stderr || res.stdout);
+  const out = JSON.parse(res.stdout);
+  assert.equal(out.rejected[0].code, 'E_SCHEMA');
+  assert.match(out.rejected[0].reason, /not a current unconsolidated candidate/);
+
+  const { dir } = ensureStore(c.ws, { home: c.harnessHome });
+  assert.ok(!listLearnings(dir).some((l) => l.id === 'sql/second-claim'), 'no second learning minted from spent evidence');
+});
+
+// The re-cite exemption that must SURVIVE (D1 invariant): a STRENGTHEN
+// re-citing its target's OWN already-consolidated evidence is exempt from the
+// candidate gate — without the exemption it would be wrongly rejected as
+// "already consolidated."
+test('P1#3: a STRENGTHEN re-citing its target\'s OWN already-consolidated episode still succeeds (exempt from candidacy)', () => {
+  const c = ctx();
+  const ep = EP(c.ws, { path: 'docs/solutions/perf/recite.md' });
+  assert.equal(run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [ADD(c.ws, { episodes: [ep] })])]).status, 0);
+
+  const strengthen = {
+    op: 'STRENGTHEN',
+    target: 'sql/not-null-large-tables',
+    episodes: [{ path: ep.path, sha256: ep.sha256, kind: 'fix', plan: 'docs/plans/p1.md' }],
+  };
+  const res = run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [strengthen])]);
+  assert.equal(res.status, 0, res.stderr || res.stdout);
+});
+
+// A genuinely-new episode in a STRENGTHEN still must be a current candidate —
+// re-citing a DIFFERENT learning's spent evidence via STRENGTHEN is closed too.
+test('P1#3: a STRENGTHEN citing a NEW episode that is another learning\'s spent evidence is rejected E_SCHEMA', () => {
+  const c = ctx();
+  const spent = EP(c.ws, { path: 'docs/solutions/perf/spent.md' });
+  assert.equal(run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [ADD(c.ws, { slug: 'owner', episodes: [spent] })])]).status, 0);
+  // A different learning to strengthen.
+  assert.equal(run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [ADD(c.ws, { slug: 'strengthen-me' })])]).status, 0);
+
+  const strengthen = {
+    op: 'STRENGTHEN',
+    target: 'sql/strengthen-me',
+    episodes: [{ path: spent.path, sha256: spent.sha256, kind: 'fix', plan: 'docs/plans/p1.md' }],
+  };
+  const res = run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [strengthen])]);
+  assert.equal(res.status, 1, res.stderr || res.stdout);
+  const out = JSON.parse(res.stdout);
+  assert.equal(out.rejected[0].code, 'E_SCHEMA');
+  assert.match(out.rejected[0].reason, /not a current unconsolidated candidate/);
+});
+
+// (ii) NOOP disk-verification: a NOOP CONSUMES the cited episode (clears its
+// debt), so it must verify existence + sha256 first — it can't clear debt for
+// a fabricated or edited file.
+test('P1#3: a NOOP citing a nonexistent episode is rejected E_SCHEMA and consumes nothing', () => {
+  const c = ctx();
+  const noop = {
+    op: 'NOOP',
+    reason: 'reviewed, nothing to learn',
+    episodes: [{ path: 'docs/solutions/perf/ghost.md', sha256: 'a'.repeat(64), kind: 'fix', plan: null }],
+  };
+  const res = run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [noop])]);
+  assert.equal(res.status, 1, res.stderr || res.stdout);
+  const out = JSON.parse(res.stdout);
+  assert.equal(out.rejected[0].code, 'E_SCHEMA');
+  assert.match(out.rejected[0].reason, /NOOP episode .* does not exist on disk or its sha256 does not match/);
+
+  const { dir } = ensureStore(c.ws, { home: c.harnessHome });
+  // A rejection may record a failure STRIKE, but must never CONSUME (a
+  // consuming entry has a `learning` key; a strike does not).
+  assert.ok(
+    !readLedger(dir).some((e) => e.path === 'docs/solutions/perf/ghost.md' && 'learning' in e),
+    'a fabricated NOOP episode is never consumed / debt-cleared'
+  );
+});
+
+test('P1#3: a NOOP citing a real episode with a mismatched sha256 is rejected E_SCHEMA (disk verification)', () => {
+  const c = ctx();
+  const ep = EP(c.ws, { path: 'docs/solutions/perf/real-noop.md' });
+  const noop = {
+    op: 'NOOP',
+    reason: 'reviewed',
+    episodes: [{ path: ep.path, sha256: 'b'.repeat(64), kind: ep.kind, plan: null }],
+  };
+  const res = run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [noop])]);
+  assert.equal(res.status, 1, res.stderr || res.stdout);
+  const out = JSON.parse(res.stdout);
+  assert.equal(out.rejected[0].code, 'E_SCHEMA');
+});
+
+test('P1#3: a NOOP citing a real current-candidate episode succeeds and consumes it (clears its debt)', () => {
+  const c = ctx();
+  const ep = EP(c.ws, { path: 'docs/solutions/perf/noop-ok.md' });
+  const noop = {
+    op: 'NOOP',
+    reason: 'reviewed, nothing worth a learning',
+    episodes: [{ path: ep.path, sha256: ep.sha256, kind: ep.kind, plan: null }],
+  };
+  const res = run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [noop])]);
+  assert.equal(res.status, 0, res.stderr || res.stdout);
+  const { dir } = ensureStore(c.ws, { home: c.harnessHome });
+  assert.ok(
+    readLedger(dir).some((e) => e.path === ep.path && e.learning === null),
+    'a genuine reviewed episode is consumed with a learning: null ledger entry'
+  );
+});
+
+// P1#2b (broadened best-effort command lint). ------------------------------
+
+test('P1#2b: interpreter inline-exec bodies (node -e / python -c / cmd /c / …) are lint-rejected E_LINT; prose names are allowed', () => {
+  const c = ctx();
+  const rejected = [
+    ['node-e', 'To reproduce, run node -e "process.exit(1)" and watch it bail.'],
+    ['python-c', 'Quick check: python -c "import sys; sys.exit(1)" reproduces it.'],
+    ['python3-c', 'Or python3 -c "print(1)" on the CI box.'],
+    ['perl-e', 'Legacy path calls perl -e "print 1" during bootstrap.'],
+    ['ruby-e', 'The hook runs ruby -e "puts 1" before deploy.'],
+    ['cmd-c', 'On Windows the launcher does cmd /c echo hi to warm up.'],
+    ['node-eval', 'CI shims it with node --eval "1+1" on start.'],
+  ];
+  rejected.forEach(([slug, body], i) => {
+    const op = ADD(c.ws, { slug: `iexec-${slug}`, body, episodes: [EP(c.ws, { path: `docs/solutions/perf/iexec-${i}.md` })] });
+    const res = applyOps({ workspace: c.ws, opsPath: writeOps(c.ws, [op]), home: c.harnessHome });
+    assert.equal(res.exitCode, 1, `${slug} must be rejected: ${body}`);
+    assert.equal(res.rejected[0].code, 'E_LINT', `${slug} must be E_LINT: ${JSON.stringify(res.rejected)}`);
+  });
+  // Prose that NAMES an interpreter with NO invocation syntax must not over-reject.
+  const proseAllowed = [
+    ['prose-node', 'The node process handles retries; python workers pick up the rest.'],
+    ['prose-cmd', 'Document the cmd usage in the runbook before shipping.'],
+  ];
+  proseAllowed.forEach(([slug, body]) => {
+    const op = ADD(c.ws, { slug, body, episodes: [EP(c.ws, { path: `docs/solutions/perf/${slug}.md` })] });
+    const res = applyOps({ workspace: c.ws, opsPath: writeOps(c.ws, [op]), home: c.harnessHome });
+    assert.equal(res.exitCode, 0, `${slug} must be allowed: ${JSON.stringify(res.rejected)}`);
+  });
+});
