@@ -12,6 +12,7 @@ import {
 } from './recall-config.mjs';
 import { loadPostingsIndex, isIndexStale } from './postings-index.mjs';
 import { safeResolveUnderRoot } from './path-safe.mjs';
+import { readFileNoFollow, assertNoSymlinkAncestors } from './fs-safe.mjs';
 
 const require = createRequire(import.meta.url);
 
@@ -165,15 +166,26 @@ export function rankRecall(query, { copilotHome, workspace, limit = 3, collectio
 }
 
 export function findMatchingPlans(workspace, query, limit = 3) {
-  const plansDir = path.join(workspace, 'docs', 'plans');
+  const plansDirRel = path.join('docs', 'plans');
+  // Physical containment (adversarial-review sweep, same class as
+  // collectEpisodes/collectSolutions): docs/plans is scanned and read the
+  // same way docs/solutions is — a symlinked plans directory (or a
+  // symlinked plan file) must never let its target's content be read into
+  // the orient pack's "Plans" recall section.
+  if (!assertNoSymlinkAncestors(workspace, plansDirRel)) return [];
+  const plansDir = path.join(workspace, plansDirRel);
   if (!fs.existsSync(plansDir)) return [];
   const queryTokens = new Set(tokenize(query));
   const results = [];
 
   for (const f of fs.readdirSync(plansDir)) {
     if (!f.endsWith('.md')) continue;
-    const full = path.join(plansDir, f);
-    const text = fs.readFileSync(full, 'utf8').slice(0, 4000);
+    const fileRel = path.join(plansDirRel, f);
+    const full = assertNoSymlinkAncestors(workspace, fileRel);
+    if (!full) continue; // symlinked leaf — never follow
+    const raw = readFileNoFollow(full);
+    if (raw === null) continue; // missing/oversized — skip, same as before
+    const text = raw.slice(0, 4000);
     const fm = text.match(/^---\r?\n([\s\S]*?)\r?\n---/);
     let status = 'unknown';
     let plan_lock = false;

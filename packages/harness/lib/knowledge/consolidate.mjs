@@ -238,8 +238,11 @@ export function consolidateCandidates({ workspace, copilotHome, home }) {
       path: full.path,
       sha256: full.sha256,
       kind: full.kind,
-      title: full.title,
-      tags: full.tags,
+      // inertLine (round 2, adversarial review): title/tags are episode
+      // frontmatter assertions, same untrusted-content class as trigger —
+      // never normalized before, even though excerpt already was.
+      title: inertLine(full.title),
+      tags: (full.tags || []).map(inertLine),
       excerpt: full.excerpt,
     });
   }
@@ -260,7 +263,12 @@ export function consolidateCandidates({ workspace, copilotHome, home }) {
     trigger: inertLine(l.fm.trigger || ''),
     status: l.fm.status || 'active',
     bytes: l.bytes,
-    ...(includeBodies ? { body: l.body } : {}),
+    // body is multi-line BY DESIGN (a learning's markdown claim) — unlike
+    // trigger, it is never flattened to one line; inertLine runs PER LINE
+    // (split -> map -> join) so a legacy/hand-edited body's embedded control
+    // char (a NUL, an ESC, ...) is neutralized without collapsing the
+    // legitimate line structure.
+    ...(includeBodies ? { body: l.body.split('\n').map(inertLine).join('\n') } : {}),
   }));
 
   // Every id a human already decided retire/dispute/promote on (Milestone 4

@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { runBuildPostingsIndex } from './postings-index.mjs';
 import { resolveIndexDir } from './recall-config.mjs';
+import { readFileNoFollow, assertNoSymlinkAncestors } from './fs-safe.mjs';
 
 function parseFrontmatter(text) {
   const m = text.match(/^---\r?\n([\s\S]*?)\r?\n---/);
@@ -38,18 +39,37 @@ function yamlQuote(value) {
   return `"${String(value || '').replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
 }
 
+/**
+ * Same physical-containment pattern collectEpisodes (consolidate.mjs) uses:
+ * every candidate — the scanned root directory itself, each category
+ * directory, and each file — is validated with assertNoSymlinkAncestors
+ * (fs-safe.mjs) against `base`, never trusted merely because it was
+ * lexically reachable under `dir`. This manifest builder reads the SAME
+ * docs/solutions trees collectEpisodes scans and feeds title/summary/
+ * excerpt straight into recall's manifest — a symlinked docs/solutions (or a
+ * symlinked category directory) previously had no containment check at all
+ * here, not even a lexical one, and would leak outside file content into the
+ * manifest the same way collectEpisodes did before it was hardened.
+ */
 function collectSolutions(dir, scope, base) {
   const entries = [];
   if (!fs.existsSync(dir)) return entries;
+  const dirRel = path.relative(base, dir);
+  if (!assertNoSymlinkAncestors(base, dirRel)) return entries;
   for (const cat of fs.readdirSync(dir, { withFileTypes: true })) {
     if (!cat.isDirectory()) continue;
+    const catRel = path.join(dirRel, cat.name);
+    if (!assertNoSymlinkAncestors(base, catRel)) continue; // symlinked category directory
     const catPath = path.join(dir, cat.name);
     for (const f of fs.readdirSync(catPath)) {
       if (!f.endsWith('.md') || f === 'README.md') continue;
-      const full = path.join(catPath, f);
-      const text = fs.readFileSync(full, 'utf8');
+      const fileRel = path.join(catRel, f);
+      const full = assertNoSymlinkAncestors(base, fileRel);
+      if (!full) continue; // symlinked leaf (or any ancestor) — never follow
+      const text = readFileNoFollow(full);
+      if (text === null) continue;
       const fm = parseFrontmatter(text);
-      const rel = path.relative(base, full).split(path.sep).join('/');
+      const rel = fileRel.split(path.sep).join('/');
       const slug = f.replace(/\.md$/, '');
       const entryId = `${scope}-${cat.name}-${slug}`;
       entries.push({

@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { findEntryByDocid, resolveDocPath } from './recall-rank.mjs';
 import { safeResolveUnderRoot } from './path-safe.mjs';
+import { readFileNoFollow } from './fs-safe.mjs';
 
 function truncateUtf8(text, maxBytes) {
   let buf = Buffer.from(text, 'utf8');
@@ -46,7 +47,14 @@ export function runGet({ workspace, copilotHome, flags }) {
     throw new Error(`file not found for ${docid || relPath}`);
   }
 
-  const raw = fs.readFileSync(fullPath, 'utf8');
+  // readFileNoFollow (not fs.readFileSync): no TOCTOU window between
+  // safeResolveUnderRoot's symlink check above and this read — fullPath was
+  // already confirmed non-symlink at every ancestor level, but the O_NOFOLLOW
+  // open re-confirms the leaf atomically rather than trusting a check from a
+  // moment earlier. No maxBytes override here — `flags.maxBytes` governs the
+  // EXCERPT's truncation below, not what's admissible to read at all.
+  const raw = readFileNoFollow(fullPath);
+  if (raw === null) throw new Error(`file not found for ${docid || relPath}`);
   const lines = raw.split(/\r?\n/).slice(0, maxLines);
   let excerpt = lines.join('\n');
   if (Buffer.byteLength(excerpt, 'utf8') > maxBytes) {
