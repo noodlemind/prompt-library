@@ -550,6 +550,13 @@ test('read-only report command is registered and AC14 amendment is consistent', 
   assert.doesNotMatch(reportFn, /writeEvent\(/, 'report must not emit lifecycle events');
 });
 
+test('consolidate skill treats a cluster as a category group the skill may split into multiple ops', () => {
+  const skill = read('.github/skills/consolidate/SKILL.md');
+  assert.doesNotMatch(skill, /choose exactly one op/i, 'the one-op-per-cluster mandate must be removed');
+  assert.match(skill, /category group/i, 'a cluster is documented as a category group');
+  assert.match(skill, /multiple ops/i, 'the skill may emit multiple ops for one category group');
+});
+
 test('knowledge layer surface: consolidate command and insight lane stay documented', () => {
   const bin = read('packages/harness/bin/harness.mjs');
   // The knowledge group and its three modes are the M1 public contract.

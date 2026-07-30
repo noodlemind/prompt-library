@@ -32,12 +32,29 @@ function loadLearnings({ workspace, home }) {
  * same trigger/claim token overlap. Callers (and `orient --explain`'s
  * render) must never imply otherwise.
  */
+/**
+ * The production retrieval eligibility gate — the standard status/stale
+ * filters below, returned as the exclusion REASON (or null when eligible), so
+ * `scoreLearning` here and the knowledge eval (eval.mjs) share ONE encoding
+ * and can never drift. The eval previously kept its own looser active-set that
+ * omitted `promoted_to` and stale-anchor exclusions and could therefore score
+ * hits on content a real orient would never surface.
+ *
+ * Filter order (first match wins, historical order from rankLearnings):
+ * superseded_by → promoted_to → retired → disputed → stale-anchor exclusion.
+ */
+export function retrievalExclusion(l, staleExcluded = {}) {
+  if (l.fm.superseded_by) return 'superseded';
+  if (l.fm.promoted_to) return 'promoted';
+  if (l.fm.status === 'retired') return 'retired';
+  if (l.fm.status === 'disputed') return 'disputed';
+  if (staleExcluded[l.id]) return 'stale-anchor';
+  return null;
+}
+
 function scoreLearning(l, { queryTokens, staleExcluded, include }) {
-  if (l.fm.superseded_by) return { excluded: 'superseded' };
-  if (l.fm.promoted_to) return { excluded: 'promoted' };
-  if (l.fm.status === 'retired') return { excluded: 'retired' };
-  if (l.fm.status === 'disputed') return { excluded: 'disputed' };
-  if (staleExcluded[l.id]) return { excluded: 'stale-anchor' };
+  const gate = retrievalExclusion(l, staleExcluded);
+  if (gate) return { excluded: gate };
   // Optional caller-supplied predicate (e.g. the knowledge eval's temporal
   // pre-cutoff filter), applied after the standard status/stale filters and
   // before scoring — additive, default undefined means no extra filtering.

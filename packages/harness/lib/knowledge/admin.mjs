@@ -566,12 +566,59 @@ export function purgeEpisode({ workspace, target, copilotHome, home, log = () =>
     };
   }
 
-  // Store-side cascade (learnings, links, ledger, governance) runs inside the
-  // single-writer transaction. The workspace episode FILE itself is
-  // deliberately deleted OUTSIDE and AFTER this transaction, only once it has
-  // committed successfully (P1-8): if the store-side cascade fails or rolls
-  // back, the episode file is never touched, so a failed purge never loses
-  // evidence with nothing left to point at it.
+  // Atomicity (P2, tightening P1-8): stage the T1 workspace episode via a
+  // reversible, same-filesystem RENAME to a temp path BEFORE the store cascade
+  // (T2) commits, so the two are as close to atomic as a git store plus a
+  // plain workspace file allow. On ANY failure through the commit, the episode
+  // is renamed back — never lost, preserving P1-8's "a failed purge never
+  // loses evidence". The temp is deleted only once the cascade has committed.
+  // A TOCTOU containment re-check runs immediately before the rename; because
+  // the file is renamed away before the transaction even starts, no
+  // post-commit symlink race can redirect the finalizing delete.
+  //
+  // Recall reindex (refreshRecallAfterPurge, below) stays POST-COMMIT by
+  // necessity: it rewrites WORKSPACE files (knowledge/manifest.yaml + postings),
+  // not store files, so it cannot live inside the store's git transaction. Its
+  // partial is loud and recoverable/idempotent — a still-served target yields
+  // pass:false with "run: harness index", and re-running purge on the
+  // already-deleted episode (or `harness index`) converges.
+  let stagedFrom = null;
+  let stagedTemp = null;
+  if (episodeExistsOnDisk) {
+    const safe = assertNoSymlinkAncestors(episodeRoot, target);
+    if (!safe) {
+      return {
+        pass: false,
+        exitCode: 1,
+        removed: null,
+        blockedReason: `purge target no longer resolves safely (symlink introduced) — refusing to delete: ${target}`,
+      };
+    }
+    const temp = `${safe}.purge-${process.pid}-${Date.now()}`;
+    try {
+      fs.renameSync(safe, temp);
+      stagedFrom = safe;
+      stagedTemp = temp;
+    } catch (err) {
+      return {
+        pass: false,
+        exitCode: 1,
+        removed: null,
+        blockedReason: `could not stage the episode file for deletion: ${err.message}`,
+      };
+    }
+  }
+  const restoreStaged = () => {
+    if (stagedTemp && stagedFrom) {
+      try {
+        fs.renameSync(stagedTemp, stagedFrom);
+      } catch {
+        // best effort — the staged temp is same-directory debris either way
+      }
+      stagedTemp = null;
+    }
+  };
+
   const tx = withStoreTransaction(workspace, { home, label: `purge: ${target}` }, ({ dir, recordCheckpoint }) => {
     try {
       absorbOrAbort({ workspace, home, log, recordCheckpoint });
@@ -652,6 +699,9 @@ export function purgeEpisode({ workspace, target, copilotHome, home, log = () =>
   });
 
   if (!tx.ok) {
+    // Cascade failed or was contended — restore the staged episode so a failed
+    // purge never loses evidence (P1-8), exactly as if it had never been touched.
+    restoreStaged();
     return {
       pass: false,
       exitCode: 1,
@@ -665,6 +715,11 @@ export function purgeEpisode({ workspace, target, copilotHome, home, log = () =>
 
   const inner = tx.result;
   if (inner.kind === 'reject') {
+    // Nothing was purged (a no-match discovery bail) — restore the staged
+    // episode. In practice staging only happens when the episode existed, and
+    // an existing episode can never hit this reject branch, but restoring here
+    // keeps the invariant unconditional.
+    restoreStaged();
     return {
       pass: inner.pass,
       exitCode: inner.exitCode,
@@ -674,30 +729,21 @@ export function purgeEpisode({ workspace, target, copilotHome, home, log = () =>
     };
   }
 
-  // The workspace episode file is deleted LAST, only now that the store-side
-  // cascade above has committed successfully (P1-8). If deletion itself
-  // fails here (e.g. a permission error), the store-side purge already
-  // committed — there is nothing left to roll back, so this reports a
-  // partial outcome rather than a failure.
+  // The cascade committed — finalize the staged deletion by removing the temp.
+  // The episode is ALREADY gone from its real path (renamed away before the
+  // commit), so a temp-cleanup failure only leaves identifiable, same-directory
+  // debris — never a resurrected episode — and is reported as a partial, not a
+  // failure.
   let episodeRemoved = false;
   let partialReason = null;
-  if (episodeExistsOnDisk) {
-    // TOCTOU re-check (P1-4): the store-side transaction above took real
-    // time (lock, absorb, commit) — re-validate physical containment right
-    // before this delete rather than trusting the check from before it.
-    const safe = assertNoSymlinkAncestors(episodeRoot, target);
-    if (!safe) {
-      partialReason = `store purge committed, but the episode target no longer resolves safely (symlink introduced) — not deleted: ${target}`;
+  if (stagedTemp) {
+    try {
+      fs.rmSync(stagedTemp, { force: true });
+    } catch (err) {
+      partialReason = `store purge committed and the episode was removed, but its staged temp copy could not be cleaned up: ${err.message}`;
       log(partialReason);
-    } else {
-      try {
-        fs.rmSync(safe, { force: true });
-        episodeRemoved = true;
-      } catch (err) {
-        partialReason = `store purge committed, but the episode file could not be deleted: ${err.message}`;
-        log(partialReason);
-      }
     }
+    episodeRemoved = true;
   }
 
   try {
@@ -1099,15 +1145,6 @@ export function migrateStrandedStore({ workspace, home, log = () => {} }) {
       ...(staleLockNote ? { staleLockRemoved: staleLockNote } : {}),
     };
   } catch (err) {
-    // The lock may still be sitting in legacyDir if the move itself never
-    // completed — clean it up so a retry isn't stuck E_LOCKED against this
-    // failed attempt's own lock. Best effort: a cleanup failure here must
-    // never mask the real error below.
-    try {
-      fs.rmSync(lockPath, { recursive: true, force: true });
-    } catch {
-      // ignored
-    }
     return {
       pass: false,
       exitCode: 1,
@@ -1115,5 +1152,18 @@ export function migrateStrandedStore({ workspace, home, log = () => {} }) {
       blockedReason: `migration failed: ${err.message}`,
       ...(staleLockNote ? { staleLockRemoved: staleLockNote } : {}),
     };
+  } finally {
+    // Release the legacy-store lock on EVERY exit path — including the
+    // collision recheck's early `return` from inside the try above, which
+    // previously bypassed the catch-only cleanup and leaked the `.lock` until
+    // stale takeover. On the success path legacyDir has been renamed away, so
+    // this is a harmless no-op (ENOENT swallowed by force) — the MOVED lock at
+    // targetDir/.lock is cleared separately above. Best effort: a cleanup
+    // failure must never mask the real result.
+    try {
+      fs.rmSync(lockPath, { recursive: true, force: true });
+    } catch {
+      // ignored — a leftover lock is taken over as stale on the next attempt
+    }
   }
 }

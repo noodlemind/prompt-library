@@ -264,12 +264,24 @@ function renderLearning({ trigger, body, episodes, anchors = [], origin, status,
 }
 
 function lintImperative({ body, trigger, episodes }) {
-  const allInsight = episodes.length > 0 && episodes.every((e) => e.kind === 'insight');
-  if (!allInsight) return null;
   const text = `${trigger}\n${body}`;
-  if (/```(sh|bash|shell|zsh)/.test(text)) return 'imperative shell fence in insight-only learning';
-  if (/\b(curl|wget)\s/i.test(text)) return 'imperative download command in insight-only learning';
-  if (/https?:\/\//i.test(text)) return 'bare URL in insight-only learning';
+  // UNIVERSAL executable-command control (prompt-injection surface): a curated
+  // learning is read verbatim into the orient pack a model acts on, so
+  // executable command content is rejected from EVERY learning
+  // (ADD/SUPERSEDE/MERGE) regardless of episode kind — a `curl … | sh` body in
+  // a FIX-backed or MIXED learning is exactly as dangerous as in an
+  // insight-only one, and gating this on `episodes.every(kind==='insight')`
+  // let it render UNFENCED and UNLINTED. Scoped tightly (shell code fences and
+  // curl/wget command patterns) so a legitimate fix learning is never
+  // over-rejected.
+  if (/```(sh|bash|shell|zsh)/.test(text)) return 'shell command fence in learning';
+  if (/\b(curl|wget)\s/i.test(text)) return 'download command (curl/wget) in learning';
+  // BARE-URL check stays insight-gated: a fix learning legitimately citing a
+  // doc URL must not be rejected, but an insight-only claim has no verified
+  // evidence — the advisory fence is a labeling choice, not the injection
+  // control, so a bare URL in an insight-only learning stays disallowed here.
+  const allInsight = episodes.length > 0 && episodes.every((e) => e.kind === 'insight');
+  if (allInsight && /https?:\/\//i.test(text)) return 'bare URL in insight-only learning';
   return null;
 }
 
@@ -939,8 +951,18 @@ export function applyOps({
       }
 
       if (op.op === 'ADD' || op.op === 'SUPERSEDE' || op.op === 'MERGE') {
-        if (!op.domain || !op.slug || !op.trigger || !op.body) {
-          return rejectOp('E_SCHEMA', `op ${i}: ${op.op} needs domain, slug, trigger, body`, op.episodes);
+        // Type + presence: these four must be non-empty STRINGS. A truthiness-
+        // only check let an object/array `body` (or trigger/domain/slug) sail
+        // through to `body.trim()`/regex/render and surface as E_APPLY_FAILED
+        // instead of the promised E_SCHEMA — validated here, before any
+        // regex/secret-scan/render touches them.
+        if (
+          typeof op.domain !== 'string' || !op.domain ||
+          typeof op.slug !== 'string' || !op.slug ||
+          typeof op.trigger !== 'string' || !op.trigger ||
+          typeof op.body !== 'string' || !op.body
+        ) {
+          return rejectOp('E_SCHEMA', `op ${i}: ${op.op} needs domain, slug, trigger, body as non-empty strings`, op.episodes);
         }
         // P1-5: a trigger carrying a raw control char (most importantly a
         // newline) would otherwise round-trip through yamlQuote/unquote
@@ -1384,7 +1406,22 @@ export function applyOps({
   // other store writer (setLearningStatus, purgeEpisode, purgeAll,
   // rebuildStore's --yes path, writeStoreConfig) takes the SAME lock via the
   // SAME withStoreTransaction, so none of them can bypass it either.
-  const tx = withStoreTransaction(workspace, { home, label: 'consolidate: apply' }, ({ dir, git, recordCheckpoint }) => {
+  const tx = withStoreTransaction(
+    workspace,
+    {
+      home,
+      label: 'consolidate: apply',
+      // Mirror a COMMITTED snapshot (P2): the workspace mirror runs inside this
+      // transaction's own lock, right after the commit lands, so the store
+      // working tree it re-reads is clean-and-committed and no concurrent
+      // writer can expose dirty mutations it would mirror then roll back. Skip
+      // on a reject result — a strike/no-op run publishes nothing new.
+      afterCommit: ({ result }) => {
+        if (result?.kind === 'reject') return;
+        mirrorLearnings({ workspace, home, log });
+      },
+    },
+    ({ dir, git, recordCheckpoint }) => {
     // Absorb any hand edit sitting in the store BEFORE anything else reads or
     // mutates it — still its own self-contained commit (absorbHandEdits calls
     // commitStore itself), now made WHILE the lock is held instead of before
@@ -1440,11 +1477,10 @@ export function applyOps({
     return { applied: inner.applied, governed: inner.governed, rejected: inner.rejected, committed: false, exitCode: inner.exitCode, ...staleExtra };
   }
 
-  try {
-    mirrorLearnings({ workspace, home, log });
-  } catch {
-    // best effort — a mirror failure must never block applyOps.
-  }
+  // The workspace mirror already ran inside the transaction's afterCommit hook
+  // (above), under the still-held lock on the committed tree — never here,
+  // after the lock released, where a concurrent writer's dirty state could
+  // leak into it (P2).
   return {
     applied: inner.applied,
     rejected: inner.rejected,

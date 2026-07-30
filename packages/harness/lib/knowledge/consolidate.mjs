@@ -29,6 +29,16 @@ const LEARNING_BODY_BUDGET_BYTES = 30_000;
 // subsequent `--candidates` calls as earlier episodes get consolidated (see
 // consolidateCandidates below).
 const CANDIDATE_EPISODE_BUDGET_BYTES = 30_000;
+// Per-ENTRY rendered-field caps (P2): the packet's byte-budget loop always
+// admits the FIRST entry (so a single big episode can't wedge the drain), but
+// title/tags are episode-frontmatter lines that can approach the 10MB read
+// limit — so an oversized first entry could still balloon the "bounded" packet
+// to megabytes. Capping each rendered field keeps every entry — including the
+// always-admitted first — small (excerpt is already sliced to ~240 in
+// excerpt()). Defensible caps; the skill only needs enough to identify and
+// re-read the real episode file.
+const CANDIDATE_TITLE_CAP = 200;
+const CANDIDATE_TAGS_TOTAL_CAP = 500;
 export const PROMOTION_FIX_THRESHOLD = 3;
 export const PROMOTION_PLAN_THRESHOLD = 2;
 
@@ -39,6 +49,23 @@ function parseFrontmatter(text) {
   for (const line of m[1].split('\n')) {
     const kv = line.match(/^([\w-]+):\s*(.*)$/);
     if (kv) out[kv[1]] = kv[2].replace(/^["']|["']$/g, '').trim();
+  }
+  return out;
+}
+
+// Bound the rendered `tags` array to a total character budget so even the
+// always-admitted first packet entry can never balloon from a pathological
+// frontmatter `tags:` line. Each tag is inertLine-normalized (control chars →
+// spaces) as before; admission stops once the running total would exceed the
+// cap.
+function capTags(tags, totalCap) {
+  const out = [];
+  let used = 0;
+  for (const t of tags || []) {
+    const clean = inertLine(t);
+    if (used + clean.length > totalCap) break;
+    out.push(clean);
+    used += clean.length;
   }
   return out;
 }
@@ -276,9 +303,12 @@ export function consolidateCandidates({ workspace, copilotHome, home }) {
       kind: full.kind,
       // inertLine (round 2, adversarial review): title/tags are episode
       // frontmatter assertions, same untrusted-content class as trigger —
-      // never normalized before, even though excerpt already was.
-      title: inertLine(full.title),
-      tags: (full.tags || []).map(inertLine),
+      // never normalized before, even though excerpt already was. Capped
+      // (CANDIDATE_TITLE_CAP / CANDIDATE_TAGS_TOTAL_CAP) so a huge title/tags
+      // line can't defeat the packet byte budget via the always-admitted
+      // first entry.
+      title: inertLine(full.title).slice(0, CANDIDATE_TITLE_CAP),
+      tags: capTags(full.tags, CANDIDATE_TAGS_TOTAL_CAP),
       excerpt: full.excerpt,
     };
     const entryBytes = Buffer.byteLength(JSON.stringify(entry), 'utf8');
@@ -289,6 +319,13 @@ export function consolidateCandidates({ workspace, copilotHome, home }) {
   const truncated = includedEntries.length < fullUnconsolidated.length;
   const remaining = fullUnconsolidated.length - includedEntries.length;
 
+  // Each cluster is a category GROUP, not a one-op unit. Grouping episodes by
+  // category is a deterministic, embedding-free HINT (constitution-safe: no
+  // similarity model) — a category can hold two entirely unrelated episodes,
+  // so the /consolidate skill MAY split one category group into MULTIPLE ops
+  // by its own judgment (or collapse none of them). The field stays named
+  // `clusters` for stability; its semantics are "category groups to consider",
+  // never "exactly one op per group".
   const clusters = new Map();
   for (const { category, entry } of includedEntries) {
     if (!clusters.has(category)) clusters.set(category, []);

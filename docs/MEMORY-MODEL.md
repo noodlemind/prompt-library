@@ -281,7 +281,13 @@ evidence itself.
   packet, so a large accumulated debt could otherwise exceed model/transport limits in one
   response. Episodes are added in deterministic `(category, date, path)` order — never
   filesystem enumeration order — until the next one would exceed the budget; a packet that
-  had to stop short carries `truncated: true` and `remaining: <N>`. There is no stateful
+  had to stop short carries `truncated: true` and `remaining: <N>`. Because the loop always
+  admits the FIRST entry (so a single big episode can't wedge the drain), each entry's
+  rendered fields are ALSO capped individually — title ≤200 chars, tags ≤500 chars total,
+  excerpt ~240 — so even the always-admitted first entry stays bounded rather than ballooning
+  from a pathological frontmatter `title:`/`tags:` line. Each `cluster` is a category GROUP,
+  a grouping HINT: the `/consolidate` skill MAY split one group into multiple ops (unrelated
+  episodes can share a category), never forced to one op per group. There is no stateful
   cursor file: the deterministic ordering IS the cursor — consolidating the included batch
   (via a normal `--apply` run) naturally advances the next `--candidates` call to the next
   slice, so the `/consolidate` skill drains iteratively (call `--candidates`, apply, repeat
@@ -313,9 +319,15 @@ store-wide sweep.
 
 ### Rejection classes
 
-Insight claims that contain URLs or shell commands do not reach the store at all:
-`lintImperative` (`knowledge/apply.mjs`) rejects them outright with `E_LINT` at the
-`--apply` write boundary, before a learning is ever written. This is a hard rejection at the
+Executable command content does not reach the store at all, regardless of episode kind:
+`lintImperative` (`knowledge/apply.mjs`) rejects shell code fences (```` ```sh ````/`bash`/`shell`/`zsh`)
+and `curl`/`wget` command patterns in ANY learning (ADD/SUPERSEDE/MERGE) with `E_LINT` — a
+curated learning is read verbatim into the orient pack a model acts on, so a `curl … | sh`
+body is a prompt-injection surface whether its episodes are fix-, insight-, or mixed-kind.
+Bare URLs are rejected only from **insight-only** learnings (a fix learning may legitimately
+cite a documentation URL). The command lint — not the advisory fence, which is a labeling
+choice — is the injection control. All of this is enforced at the `--apply` write boundary,
+before a learning is ever written. This is a hard rejection at the
 moment it happens, not a review queue — the `/consolidate` skill asks the model to
 self-check the same rules while drafting ops, but that is guidance for avoiding the
 rejection, not a second mechanical gate; `--apply` is the only place a violation is actually
@@ -449,6 +461,15 @@ of dependent learning file(s), the `consolidated.jsonl` ledger entries, the gove
 record for that id, and (only under commit mode) the product-repo copies are removed,
 ending in one store commit that records the purge. Human deletion always wins — purge is
 never mode-gated.
+
+The T1 workspace episode file and the T2 store cascade are made atomic-ish: the episode is
+staged via a reversible, same-filesystem RENAME to a temp path BEFORE the cascade commits,
+restored on any failure through the commit (so a failed purge never loses evidence), and its
+temp deleted only once the commit lands. The recall reindex (manifest + postings) stays
+post-commit because it rewrites WORKSPACE files, not store files, so it cannot join the
+store's git transaction — but its partial is loud and idempotent: a target that can still be
+recalled yields `pass: false` with `run: harness index`, and re-running purge on the
+already-deleted episode (or `harness index`) converges.
 
 Purge does **not** rewrite git history. The knowledge store itself is a git repo, and
 prior commits in that store still contain the purged content in its history; telemetry

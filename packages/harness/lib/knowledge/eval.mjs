@@ -1,7 +1,7 @@
 import fs from 'node:fs';
-import { storeDir, listLearnings, readLedger } from './store.mjs';
+import { storeDir, listLearnings, readLedger, readStaleExclusions } from './store.mjs';
 import { collectEpisodes } from './consolidate.mjs';
-import { rankLearnings } from './retrieve.mjs';
+import { rankLearnings, retrievalExclusion } from './retrieve.mjs';
 import { tokenize } from '../tokenize.mjs';
 
 /**
@@ -29,10 +29,6 @@ export const DEFAULT_NEGATIVE_QUERIES = [
   'oauth device code grant flow',
   'redis cluster resharding',
 ];
-
-function activeLearnings(learnings) {
-  return learnings.filter((l) => !l.fm.superseded_by && !['retired', 'disputed'].includes(l.fm.status));
-}
 
 /** Fraction of query tokens present in the candidate's token set — same shape rankLearnings uses. */
 function overlapScore(queryTokens, hayTokens) {
@@ -98,7 +94,13 @@ export function evalKnowledge({ workspace, copilotHome, home, negativeQueries = 
   const heldOut = dated.filter((e) => e.date > cutoff);
 
   const learnings = listLearnings(dir);
-  const active = activeLearnings(learnings);
+  // Share the PRODUCTION retrieval eligibility gate (retrievalExclusion,
+  // retrieve.mjs) so the eval measures only learnings a real orient could
+  // actually surface — excluding promoted/superseded/retired/disputed AND
+  // stale-anchor-excluded ids. A local active-set that omitted promoted_to and
+  // stale exclusions could otherwise score hits on content users never receive.
+  const staleExcluded = readStaleExclusions(dir).excluded;
+  const active = learnings.filter((l) => !retrievalExclusion(l, staleExcluded));
   const ledger = readLedger(dir);
   const bySha = new Map(episodes.map((e) => [`${e.path}@${e.sha256}`, e]));
 

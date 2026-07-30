@@ -464,7 +464,10 @@ export async function cmdOrient(argv) {
     exitCode: 0,
     blockedReason: result.blockedReason,
     usage: usageFields({ input: query, output: orientPack }),
-    learnings: (result.learnings || []).map((l) => l.id),
+    // Only the ids that actually SURVIVED into the 2KB pack (some/all bullets
+    // can be truncated away) — never the full ranked set — so SLO utilization
+    // credits only delivered learnings.
+    learnings: result.deliveredLearnings || (result.learnings || []).map((l) => l.id),
     learningsBytes: result.learningsBytes,
   });
 

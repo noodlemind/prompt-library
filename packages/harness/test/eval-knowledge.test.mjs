@@ -205,6 +205,42 @@ test('evalKnowledge never surfaces or bills a learning linked only to a held-out
   );
 });
 
+test('evalKnowledge excludes a promoted learning from its arms (shares the production eligibility gate)', () => {
+  const ws = tempDir('evalk-promoted-ws-');
+  const home = tempDir('evalk-promoted-home-');
+
+  const train1 = writeEpisode(ws, 'auth', 'auth-1', { title: 'Auth token refresh race condition', tags: ['auth', 'token'], date: '2026-01-01' });
+  const train2 = writeEpisode(ws, 'auth', 'auth-2', { title: 'Auth cookie domain mismatch', tags: ['auth', 'cookie'], date: '2026-01-02' });
+  writeEpisode(ws, 'auth', 'auth-3', { title: 'Auth scope validation gap', tags: ['auth', 'scope'], date: '2026-01-03' });
+  writeEpisode(ws, 'auth', 'auth-4', { title: 'Auth redirect allowlist bug', tags: ['auth', 'redirect'], date: '2026-01-04' });
+  writeEpisode(ws, 'auth', 'auth-5', { title: 'Auth token refresh regression', tags: ['auth', 'token'], date: '2026-03-01' });
+  writeEpisode(ws, 'auth', 'auth-6', { title: 'Auth billing rotation issue', tags: ['auth', 'rotation'], date: '2026-03-02' });
+
+  const cleanTrigger = 'auth token refresh race condition';
+  // The promoted learning's trigger is padded (within the byte cap) so, if it
+  // were counted, it would visibly dominate wholeIndex's token bill.
+  const promotedTrigger = `auth token cookie session ${'padding '.repeat(50)}`.trim();
+
+  const { dir } = ensureStore(ws, { home });
+  const opsPath = writeOps(ws, [
+    { op: 'ADD', domain: 'auth', slug: 'token-refresh-clean', trigger: cleanTrigger, body: 'Retry the token refresh exactly once behind a per-session lock.', episodes: [{ path: train1.path, sha256: train1.sha256, kind: 'fix', plan: 'docs/plans/p1.md' }] },
+    { op: 'ADD', domain: 'auth', slug: 'cookie-promoted', trigger: promotedTrigger, body: 'This claim was promoted into a primitive.', episodes: [{ path: train2.path, sha256: train2.sha256, kind: 'fix', plan: 'docs/plans/p1.md' }] },
+  ]);
+  assert.equal(applyOps({ workspace: ws, opsPath, home }).exitCode, 0);
+
+  // Record the second learning as promoted — production rankLearnings excludes
+  // it, so the eval (sharing retrievalExclusion) must exclude it too.
+  const promotedFile = path.join(dir, 'learnings', 'auth', 'cookie-promoted.md');
+  const before = fs.readFileSync(promotedFile, 'utf8');
+  fs.writeFileSync(promotedFile, before.replace(/^---\n/, '---\npromoted_to: auth/cookie-primitive\n'), 'utf8');
+
+  const result = evalKnowledge({ workspace: ws, copilotHome: ws, home, negativeQueries: DEFAULT_NEGATIVE_QUERIES });
+  assert.equal(result.pass, true);
+  // wholeIndex bills only the non-promoted learning's trigger bytes.
+  const expected = Math.ceil(Buffer.byteLength(cleanTrigger, 'utf8') / 4);
+  assert.equal(result.arms.wholeIndex.injectedTokens, expected, 'a promoted learning must not be counted or billed by eval');
+});
+
 test('bm25 arm reports a nonzero falseSurfaceRate when a negative query genuinely overlaps a learning trigger', () => {
   const ws = tempDir('evalk-false-ws-');
   const home = tempDir('evalk-false-home-');

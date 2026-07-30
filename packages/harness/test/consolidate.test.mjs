@@ -7,7 +7,7 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 import { ensureStore, appendLedger } from '../lib/knowledge/store.mjs';
-import { verifiedAndPlans } from '../lib/knowledge/consolidate.mjs';
+import { verifiedAndPlans, consolidateCandidates } from '../lib/knowledge/consolidate.mjs';
 
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const binPath = path.join(packageRoot, 'bin', 'harness.mjs');
@@ -83,6 +83,49 @@ test('ledger-consumed and quarantined episodes leave the debt', () => {
   assert.equal(out.debt, 1);
   assert.equal(out.due, false);
   assert.equal(out.quarantined.length, 1);
+});
+
+// A pathological episode whose frontmatter `title:` is enormous — the field
+// the packet's byte-budget loop always admits (first entry) but never bounded
+// per-field before, so a single 1MB title could balloon the "bounded" packet.
+function writeHugeTitleEpisode(ws, category, name, titleLen) {
+  const dir = path.join(ws, 'docs', 'solutions', category);
+  fs.mkdirSync(dir, { recursive: true });
+  const text = `---\ntitle: "${'T'.repeat(titleLen)}"\ndate: 2026-07-01\n---\n\n## Problem\n\n${name} details.\n`;
+  fs.writeFileSync(path.join(dir, `${name}.md`), text);
+}
+
+test('consolidate --candidates caps each entry\'s rendered title so a 1MB-title episode cannot balloon the packet', () => {
+  const ws = tempDir('consol-hugetitle-');
+  const home = tempDir('consol-ht-h-');
+  const harnessHome = tempDir('consol-ht-hh-');
+  // 'a-huge' sorts first within perf → it is the always-admitted first entry.
+  writeHugeTitleEpisode(ws, 'perf', 'a-huge', 1_000_000);
+  for (let i = 0; i < 3; i++) writeEpisode(ws, 'perf', `p-${i}`, 'fix');
+
+  const packet = consolidateCandidates({ workspace: ws, copilotHome: home, home: harnessHome });
+  const entries = packet.clusters.flatMap((c) => c.episodes);
+  assert.ok(entries.length >= 1, 'the always-admitted first entry is present');
+  assert.equal(entries[0].path, 'docs/solutions/perf/a-huge.md', 'the huge-title episode is the first (always-admitted) entry');
+  for (const e of entries) assert.ok(e.title.length <= 200, `each rendered title is bounded, got ${e.title.length}`);
+  const totalBytes = Buffer.byteLength(JSON.stringify(packet), 'utf8');
+  assert.ok(totalBytes < 100_000, `the packet stays bounded despite the 1MB title, got ${totalBytes} bytes`);
+  // A small packet is under budget — truncated/remaining are correctly absent.
+  assert.equal('truncated' in packet, false);
+  assert.equal('remaining' in packet, false);
+});
+
+test('consolidate --candidates groups two unrelated episodes in one category cluster (a hint the skill may split)', () => {
+  const ws = tempDir('consol-group-');
+  const home = tempDir('consol-g-h-');
+  const harnessHome = tempDir('consol-g-hh-');
+  writeEpisode(ws, 'perf', 'unrelated-a', 'fix');
+  writeEpisode(ws, 'perf', 'unrelated-b', 'fix');
+
+  const packet = consolidateCandidates({ workspace: ws, copilotHome: home, home: harnessHome });
+  const perf = packet.clusters.find((c) => c.id === 'perf');
+  assert.ok(perf, 'the perf category group is present');
+  assert.equal(perf.episodes.length, 2, 'both unrelated episodes are emitted, grouped by category — the skill may split them');
 });
 
 test('consolidate --candidates emits the deterministic work packet', () => {

@@ -164,6 +164,14 @@ export function runOrient({ workspace, copilotHome, flags, query }) {
   // what orient merely attempted to inject. No benefit/"tokens saved" claim.
   const learningsBytes = learningsSectionBytes(packBody);
 
+  // Utilization honesty (P2): the 2KB cap can truncate some or all learning
+  // bullets out of the pack, so only the ids whose bullet line DEMONSTRABLY
+  // SURVIVED in the final body were actually delivered to the model. The SLO's
+  // utilization credit must be based on this delivered set, never the full
+  // ranked set — buildLearningsLines renders each as `- [<id>]…`, so a
+  // surviving bullet is exactly that marker present in packBody.
+  const deliveredLearnings = learnings.filter((l) => packBody.includes(`- [${l.id}]`)).map((l) => l.id);
+
   const packRel = '.harness/context-pack.md';
   const packFull = path.join(workspace, packRel);
   if (!flags.dryRun) fs.writeFileSync(packFull, packBody, 'utf8');
@@ -182,6 +190,7 @@ export function runOrient({ workspace, copilotHome, flags, query }) {
   return {
     recall,
     learnings,
+    deliveredLearnings,
     explain,
     learningsBytes,
     plans,

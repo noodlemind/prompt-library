@@ -6,6 +6,7 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 import { collectEpisodes } from '../lib/knowledge/consolidate.mjs';
+import { runInsightCompound } from '../lib/compound.mjs';
 
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const binPath = path.join(packageRoot, 'bin', 'harness.mjs');
@@ -33,6 +34,53 @@ test('compound --insight writes a kind: insight doc without any plan or evidence
   assert.match(doc, /kind: insight/);
   assert.match(doc, /title: "Orders pool exhaustion under bulk load"/);
   assert.match(doc, /Connection pool exhausts/);
+});
+
+test('runInsightCompound rolls back the just-written episode (no orphan) and reports a clean recoverable failure when indexing throws', () => {
+  const ws = tempDir('insight-idxfail-ws-');
+  const copilotHome = tempDir('insight-idxfail-ch-');
+  const home = tempDir('insight-idxfail-hh-');
+  // Force runIndexKnowledge to throw deterministically (root-safe): make the
+  // manifest path a DIRECTORY so its writeFileSync fails EISDIR. copilotHome
+  // has no knowledge/ subdir, so the manifest resolves to
+  // workspace/knowledge/manifest.yaml.
+  fs.mkdirSync(path.join(ws, 'knowledge', 'manifest.yaml'), { recursive: true });
+
+  const res = runInsightCompound({
+    workspace: ws,
+    copilotHome,
+    home,
+    kind: 'insight',
+    flags: { title: 'Index throw rollback', body: 'This episode must not orphan when indexing throws.' },
+  });
+
+  assert.equal(res.pass, false);
+  assert.equal(res.exitCode, 1);
+  assert.match(res.blockedReason, /index/i);
+  const insightsDir = path.join(ws, 'docs', 'solutions', 'insights');
+  const md = fs.existsSync(insightsDir) ? fs.readdirSync(insightsDir).filter((f) => f.endsWith('.md')) : [];
+  assert.deepEqual(md, [], 'the just-written episode must be deleted after an index-failure rollback');
+});
+
+test('runInsightCompound --dry-run logs "would write" (never "wrote") and creates no file', () => {
+  const ws = tempDir('insight-dry-ws-');
+  const copilotHome = tempDir('insight-dry-ch-');
+  const home = tempDir('insight-dry-hh-');
+  const logs = [];
+  const res = runInsightCompound({
+    workspace: ws,
+    copilotHome,
+    home,
+    kind: 'insight',
+    flags: { title: 'Dry run wording', body: 'Body text', dryRun: true },
+    log: (m) => logs.push(m),
+  });
+  assert.equal(res.pass, true);
+  const episodeLog = logs.find((m) => m.includes(res.path));
+  assert.ok(episodeLog, 'an episode-path log line is emitted under dry-run');
+  assert.match(episodeLog, /would write/);
+  assert.doesNotMatch(episodeLog, /^wrote /);
+  assert.equal(fs.existsSync(path.join(ws, res.path)), false, 'dry-run must not write the episode file');
 });
 
 test('compound --insight refuses to write when the body contains a secret', () => {

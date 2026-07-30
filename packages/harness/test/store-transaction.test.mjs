@@ -10,7 +10,7 @@ import { applyOps } from '../lib/knowledge/apply.mjs';
 import { setLearningStatus } from '../lib/knowledge/lifecycle.mjs';
 import { runRemember } from '../lib/knowledge/remember.mjs';
 import { purgeEpisode, purgeAll, rebuildStore } from '../lib/knowledge/admin.mjs';
-import { ensureStore, storeDir, listLearnings, writeStoreConfig } from '../lib/knowledge/store.mjs';
+import { ensureStore, storeDir, listLearnings, writeStoreConfig, withStoreTransaction } from '../lib/knowledge/store.mjs';
 
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const binPath = path.join(packageRoot, 'bin', 'harness.mjs');
@@ -353,6 +353,70 @@ test('purge atomicity: a mid-purge store-transaction failure leaves the T1 episo
   assert.ok(learning.fm.episodes.some((e) => e.path === targetPath), 'the learning still cites the target episode');
 
   assert.equal(fs.existsSync(path.join(dir, '.lock')), false, 'the lock is released even after a purge failure');
+});
+
+// ---------------------------------------------------------------------------
+// Committed-snapshot mirror (P2): the workspace mirror must reflect only
+// COMMITTED store state. withStoreTransaction now runs it via afterCommit —
+// under the still-held lock, on the clean just-committed tree — so a
+// concurrent writer can never expose a dirty-then-rolled-back mutation to it.
+// ---------------------------------------------------------------------------
+test('withStoreTransaction runs afterCommit under the still-held lock on a clean, committed tree', () => {
+  const c = ctx();
+  seedLearning(c);
+  const { dir } = ensureStore(c.ws, { home: c.harnessHome });
+
+  let lockHeldDuringHook = null;
+  let treeCleanDuringHook = null;
+  let sawResult = null;
+  const tx = withStoreTransaction(
+    c.ws,
+    {
+      home: c.harnessHome,
+      label: 'test: afterCommit invariant',
+      afterCommit: ({ result }) => {
+        sawResult = result;
+        lockHeldDuringHook = fs.existsSync(path.join(dir, '.lock'));
+        const st = spawnSync('git', ['status', '--porcelain'], { cwd: dir, encoding: 'utf8' });
+        treeCleanDuringHook = st.status === 0 && st.stdout.trim() === '';
+      },
+    },
+    ({ dir: d }) => {
+      // A mutation the transaction will commit before afterCommit fires.
+      fs.writeFileSync(path.join(d, 'aftercommit-marker.txt'), 'committed content\n');
+      return { kind: 'success' };
+    }
+  );
+
+  assert.equal(tx.ok, true);
+  assert.equal(sawResult?.kind, 'success', 'afterCommit receives the fn result (so a reject can be skipped)');
+  assert.equal(lockHeldDuringHook, true, 'the lock must still be held while afterCommit (the mirror) runs');
+  assert.equal(treeCleanDuringHook, true, 'afterCommit runs after the commit — the working tree is clean/committed');
+  assert.equal(fs.existsSync(path.join(dir, '.lock')), false, 'the lock is released only after afterCommit returns');
+});
+
+test('purge stages the T1 episode via a reversible rename: a successful purge deletes it and leaves no temp debris', () => {
+  const c = ctx();
+  const targetPath = 'docs/solutions/perf/staged-target.md';
+  const target = writeRealEpisode(c.ws, targetPath, 'staged target body\n');
+  const op = {
+    op: 'ADD',
+    domain: 'sql',
+    slug: 'staged-purge',
+    trigger: 'staged purge trigger',
+    body: 'staged purge body text',
+    episodes: [{ ...target, kind: 'fix', plan: 'docs/plans/p1.md' }],
+  };
+  assert.equal(applyOps({ workspace: c.ws, opsPath: writeOps(c.ws, [op]), home: c.harnessHome }).exitCode, 0);
+
+  const res = purgeEpisode({ workspace: c.ws, target: targetPath, home: c.harnessHome });
+  assert.equal(res.pass, true, res.blockedReason);
+  assert.equal(fs.existsSync(path.join(c.ws, targetPath)), false, 'the episode file is deleted on a successful purge');
+  // The staged temp (renamed-away copy) must have been finalized (deleted),
+  // never left as `<slug>.md.purge-*` debris.
+  const perfDir = path.join(c.ws, 'docs', 'solutions', 'perf');
+  const debris = fs.readdirSync(perfDir).filter((f) => f.includes('.purge-'));
+  assert.deepEqual(debris, [], 'no staged temp file is left behind after a committed purge');
 });
 
 test('purge --all: a store-transaction failure leaves every learning and the ledger untouched', () => {

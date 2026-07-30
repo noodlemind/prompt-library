@@ -138,11 +138,53 @@ export function runInsightCompound({ workspace, copilotHome, flags, log = () => 
       };
     }
   }
-  log(`wrote ${rel}`);
+  // Under dryRun nothing was actually written (the write above is skipped), so
+  // the log line must not claim otherwise.
+  log(`${flags.dryRun ? 'would write' : 'wrote'} ${rel}`);
   const knowledgeRoot = fs.existsSync(path.join(copilotHome, 'knowledge'))
     ? path.join(copilotHome, 'knowledge')
     : null;
-  const indexed = runIndexKnowledge({ knowledgeRoot, workspace, copilotHome, flags, log });
+  // runIndexKnowledge can throw (a duplicate manifest id, an fs error). An
+  // unhandled throw here would leave the episode we JUST wrote orphaned on disk
+  // and, for the `remember` caller, skip its rollback path entirely (the throw
+  // never reaches `if (!episode.pass)`). Snapshot the manifest, and on any
+  // index failure: delete the just-written episode and restore the prior
+  // manifest so retrieval state is exactly pre-write, then return a clean,
+  // recoverable failure the caller's normal not-pass path handles.
+  const manifestPath = path.join(knowledgeRoot || path.join(workspace, 'knowledge'), 'manifest.yaml');
+  let manifestBefore = null;
+  try {
+    manifestBefore = fs.readFileSync(manifestPath, 'utf8');
+  } catch {
+    manifestBefore = null; // absent or unreadable — restore = delete
+  }
+  let indexed;
+  try {
+    indexed = runIndexKnowledge({ knowledgeRoot, workspace, copilotHome, flags, log });
+  } catch (err) {
+    if (!flags.dryRun) {
+      try {
+        fs.rmSync(path.join(workspace, rel), { force: true });
+      } catch {
+        // best effort — a re-run reconciles the orphan
+      }
+      try {
+        if (manifestBefore === null) fs.rmSync(manifestPath, { force: true });
+        else fs.writeFileSync(manifestPath, manifestBefore, 'utf8');
+      } catch {
+        // best effort — `harness index` reconciles the manifest/postings
+      }
+    }
+    return {
+      pass: false,
+      exitCode: 1,
+      kind,
+      path: null,
+      indexed: null,
+      blockedReason: `knowledge index rebuild failed, episode rolled back: ${err.message}`,
+      nextTools: ['harness index'],
+    };
+  }
   return {
     pass: true,
     exitCode: 0,

@@ -185,7 +185,7 @@ skills:
       - {prompt: "Run the knowledge consolidation loop now", assertions: ["activate consolidate", "read work packet"]}
     negative:
       - {prompt: "Record this fix as a learning", assertions: ["do not activate consolidate", "route harness compound / auto-compound"]}
-      - {prompt: "Edit this learning file directly", assertions: ["do not activate consolidate", "learnings are never hand-edited"]}
+      - {prompt: "Edit this learning file directly", assertions: ["do not activate consolidate", "hand edits are absorbed with source: human, not a consolidate trigger"]}
       - {prompt: "Document this verified fix as a reusable solution for the team", assertions: ["do not activate consolidate", "route compound-learnings"]}
       - {prompt: "Rebuild the knowledge manifest over solution docs", assertions: ["do not activate consolidate", "route index-memory"]}
       - {prompt: "Recall prior knowledge before starting this task", assertions: ["do not activate consolidate", "route recall"]}

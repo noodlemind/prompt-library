@@ -217,6 +217,55 @@ test('migrate-store takes over a stale lock left in the legacy store instead of 
   assert.equal(fs.existsSync(path.join(currentDir, '.lock')), false, 'no leftover lock at the new location');
 });
 
+// P2 (review hardening): the collision recheck INSIDE the try previously
+// `return`ed without releasing the legacy-store lock (the cleanup lived only in
+// the catch), leaking `.lock` until stale takeover. It must now release on
+// every exit path.
+test('migrate-store releases the legacy lock when the collision recheck fires mid-move (no leaked .lock)', () => {
+  const ws = tempDir('stmig-toctou-ws-');
+  const home = tempDir('stmig-toctou-home-');
+  git(ws, ['init', '-q']);
+
+  const { dir: legacyDir } = ensureStore(ws, { home });
+  fs.writeFileSync(path.join(legacyDir, 'consolidated.jsonl'), '');
+
+  git(ws, ['remote', 'add', 'origin', 'https://github.com/acme/toctou.git']);
+  const targetDir = storeDirForId(repoId(ws), { home });
+  // An EMPTY target dir: existsSync is true, so isNonEmptyDir's emptiness is
+  // decided purely by readdirSync — which the patch below controls.
+  fs.mkdirSync(targetDir, { recursive: true });
+
+  // Force the TOCTOU race deterministically: isNonEmptyDir(targetDir) reads
+  // empty at the pre-lock check but non-empty at the recheck INSIDE the try,
+  // hitting the collision early-return. Patch readdirSync for targetDir only:
+  // [] first, ['ghost'] second; everything else delegates to the real impl.
+  const realReaddir = fs.readdirSync;
+  let targetReads = 0;
+  fs.readdirSync = (p, opts) => {
+    if (path.resolve(p) === path.resolve(targetDir)) {
+      targetReads += 1;
+      return targetReads === 1 ? [] : ['ghost'];
+    }
+    return realReaddir(p, opts);
+  };
+
+  let result;
+  try {
+    result = migrateStrandedStore({ workspace: ws, home });
+  } finally {
+    fs.readdirSync = realReaddir;
+  }
+
+  assert.equal(result.migrated, false);
+  assert.match(result.blockedReason, /already exists and is non-empty/);
+  assert.equal(targetReads, 2, 'precondition: the collision recheck inside the try actually fired');
+  assert.equal(
+    fs.existsSync(path.join(legacyDir, '.lock')),
+    false,
+    'the legacy .lock must be released on the collision-recheck return, not leaked'
+  );
+});
+
 test('migrate-store on a workspace with no origin remote exits 2 — nothing to migrate', () => {
   const c = ctx();
   git(c.ws, ['init', '-q']);

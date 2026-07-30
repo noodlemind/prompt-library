@@ -686,9 +686,12 @@ export class StoreTransactionAbort extends Error {
  *     latency-sensitive path against every writer for no safety benefit.
  *   - index's stale.json write: recomputed CLI-local cache state, not
  *     store-of-record content — safe to race, self-heals on the next index run.
- *   - mirrorLearnings: runs AFTER a transaction's own commit succeeds, never
- *     inside it — it writes into the WORKSPACE (docs/knowledge/learnings/),
- *     not the store, so it was never store state the lock needed to cover.
+ *   - mirrorLearnings: writes into the WORKSPACE (docs/knowledge/learnings/),
+ *     not the store, so it was never store state the lock needed to protect.
+ *     It runs after the commit succeeds, but now via the `afterCommit` hook
+ *     BELOW — i.e. still under this transaction's lock, on the clean committed
+ *     tree — so it can only ever mirror COMMITTED learnings, never a
+ *     concurrent writer's dirty-then-rolled-back mutation (P2).
  *
  * Acquires `.lock` (mkdir + stale-takeover-via-rename — moved here from
  * apply.mjs so there is exactly one implementation) BEFORE calling
@@ -741,7 +744,7 @@ export class StoreTransactionAbort extends Error {
  * Non-reentrant by design: `fn` must never call withStoreTransaction again
  * (it would simply E_LOCKED against its own held lock).
  */
-export function withStoreTransaction(workspace, { home, label } = {}, fn) {
+export function withStoreTransaction(workspace, { home, label, afterCommit } = {}, fn) {
   const { dir, git } = ensureStore(workspace, { home });
   const lockPath = path.join(dir, '.lock');
   const lock = acquireStoreLock(lockPath);
@@ -793,6 +796,21 @@ export function withStoreTransaction(workspace, { home, label } = {}, fn) {
         git,
         staleLockNote,
       };
+    }
+    // Post-commit hook run WHILE THE LOCK IS STILL HELD (released only by the
+    // finally below), on the clean, just-committed working tree. This is where
+    // a caller that mirrors committed store state into the workspace
+    // (apply.mjs's mirrorLearnings) belongs: running it here — rather than
+    // after the lock is released — means no concurrent writer can interleave a
+    // dirty mutation the mirror would re-read and then have rolled back (P2).
+    // Best effort: a hook failure must never turn an already-committed
+    // transaction into a failure.
+    if (afterCommit) {
+      try {
+        afterCommit({ dir, git, committed: commitRes.committed, result });
+      } catch {
+        // swallow — the commit already landed; a mirror/side-effect failure is not a transaction failure
+      }
     }
     return { ok: true, locked: false, rolledBack: false, error: null, committed: commitRes.committed, result, dir, git, staleLockNote };
   } finally {
