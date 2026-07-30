@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { scanSecrets } from '../lib/secret-scan.mjs';
+import { scanSecrets, redactSecrets } from '../lib/secret-scan.mjs';
 
 test('scanSecrets flags common credential shapes with line numbers', () => {
   const text = ['title: ok', 'key=AKIAIOSFODNN7EXAMPLE', 'token: ghp_' + 'a'.repeat(36)].join('\n');
@@ -37,4 +37,18 @@ test('scanSecrets flags generic api key assignments but not prose about keys', (
 test('scanSecrets handles empty and non-string input', () => {
   assert.deepEqual(scanSecrets(''), []);
   assert.deepEqual(scanSecrets(null), []);
+});
+
+test('redactSecrets (sweep P3): replaces a secret-shaped field with a pattern-named marker, and passes clean/empty text through unchanged', () => {
+  const aws = 'AKIAIOSFODNN7EXAMPLE';
+  const out = redactSecrets(`leaked ${aws} here`);
+  assert.ok(!out.includes(aws), 'the raw secret is never returned');
+  assert.equal(out, '[redacted: aws-access-key]');
+  // Multiple distinct patterns on one line are named once each, de-duplicated.
+  const multi = redactSecrets(`${aws} and ghp_${'a'.repeat(36)}`);
+  assert.equal(multi, '[redacted: aws-access-key, github-token]');
+  // No false redaction of benign content, and null/empty are safe passthroughs.
+  assert.equal(redactSecrets('a normal recall title'), 'a normal recall title');
+  assert.equal(redactSecrets(''), '');
+  assert.equal(redactSecrets(null), '');
 });

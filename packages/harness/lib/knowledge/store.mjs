@@ -3,6 +3,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { harnessGlobalHome } from '../paths.mjs';
+import { DEFAULT_MAX_BYTES } from '../fs-safe.mjs';
 
 /**
  * The local knowledge store: a CLI-managed git repo OUTSIDE the working tree
@@ -466,6 +467,16 @@ export function listLearnings(dir) {
     for (const f of fs.readdirSync(dPath)) {
       if (!f.endsWith('.md')) continue;
       const file = path.join(dPath, f);
+      // Read-size cap (sweep P3 DoS): CLI writes byte-cap a learning file, but a
+      // hand-planted over-cap file in the local store would otherwise be read
+      // whole on every listing/rank. Skip it — never read whole.
+      let size;
+      try {
+        size = fs.statSync(file).size;
+      } catch {
+        continue;
+      }
+      if (size > DEFAULT_MAX_BYTES) continue;
       const text = fs.readFileSync(file, 'utf8');
       const { fm, body } = parseLearningFrontmatter(text);
       const slug = f.replace(/\.md$/, '');

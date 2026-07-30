@@ -12,7 +12,7 @@ import {
 } from './recall-config.mjs';
 import { loadPostingsIndex, isIndexStale } from './postings-index.mjs';
 import { safeResolveUnderRoot } from './path-safe.mjs';
-import { readFileNoFollow, assertNoSymlinkAncestors } from './fs-safe.mjs';
+import { readFileNoFollow, assertNoSymlinkAncestors, DEFAULT_MAX_BYTES } from './fs-safe.mjs';
 
 const require = createRequire(import.meta.url);
 
@@ -82,6 +82,15 @@ export function loadManifest(copilotHome, workspace) {
   for (const p of paths) {
     if (!fs.existsSync(p)) continue;
     try {
+      // Read-size cap (sweep P3 DoS): a crafted multi-hundred-MB manifest would
+      // otherwise be read whole + yaml.parsed on every `harness orient`. Skip an
+      // over-cap file with a note (never sets `path`, so rankRecall does not
+      // throw on it) and recall degrades to empty rather than OOM/stalling.
+      const size = fs.statSync(p).size;
+      if (size > DEFAULT_MAX_BYTES) {
+        lastError = `manifest exceeds ${DEFAULT_MAX_BYTES}-byte read cap (${size}) — skipped`;
+        continue;
+      }
       const yaml = require('yaml');
       const doc = yaml.parse(fs.readFileSync(p, 'utf8'));
       return { entries: doc.entries || [], path: p, updated: doc.updated || null, error: null };

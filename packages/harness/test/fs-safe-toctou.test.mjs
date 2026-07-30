@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
-import { readFileNoFollow, writeFileContained, assertRealpathContained } from '../lib/fs-safe.mjs';
+import { readFileNoFollow, writeFileContained, assertRealpathContained, realpathParentContained } from '../lib/fs-safe.mjs';
 
 /**
  * Canonicalize-after-acquire: proof that the symlink-ANCESTOR TOCTOU window
@@ -126,6 +126,31 @@ test('delete/rename guard: assertRealpathContained refuses a symlinked-ancestor 
 
   // A non-existent target has nothing safe to act on → null (realpath refuses).
   assert.equal(assertRealpathContained(ws, path.join('docs', 'real', 'missing.md')), null);
+});
+
+test('symmetry: realpathParentContained refuses a file whose parent resolves OUTSIDE the root (the post-create verify reserveEpisodePath and writeFileContained now share), and passes a genuinely contained one', () => {
+  const ws = tmp('rpc-ws-');
+  const outside = tmp('rpc-outside-');
+  fs.mkdirSync(path.join(ws, 'docs'), { recursive: true });
+  // docs/solutions is a symlink OUT of the workspace — the ancestor an attacker
+  // swaps in after a scan-time walk. A file created "under" it physically lands
+  // in `outside`, so its realpath-parent is outside ws. This is the same
+  // deterministic stand-in for "the swap already happened" the read/write tests
+  // above use: reserveEpisodePath's O_EXCL create + pre-create walk cannot see
+  // it, so the post-create realpath verify is the load-bearing guard.
+  fs.symlinkSync(outside, path.join(ws, 'docs', 'solutions'));
+  const escaped = path.join(ws, 'docs', 'solutions', 'ep.md');
+  fs.writeFileSync(escaped, 'landed outside via the symlinked ancestor\n');
+
+  // FAIL-BEFORE (no post-create check): the exclusive create alone accepts this
+  // just-created file. PASS-AFTER: the shared containment verify refuses it.
+  assert.equal(realpathParentContained(ws, escaped), false, 'a parent resolving outside the root is refused');
+  assert.ok(fs.existsSync(path.join(outside, 'ep.md')), 'precondition: the file really did land outside via the symlink');
+
+  const inside = path.join(ws, 'docs', 'real', 'ep.md');
+  fs.mkdirSync(path.dirname(inside), { recursive: true });
+  fs.writeFileSync(inside, 'contained\n');
+  assert.equal(realpathParentContained(ws, inside), true, 'a genuinely contained parent passes — no false refusal');
 });
 
 test('Windows posture: O_NOFOLLOW is feature-detected — POSIX takes the atomic leaf-open branch, win32 falls back to lstat+realpath+inode (inspection-verified only)', () => {

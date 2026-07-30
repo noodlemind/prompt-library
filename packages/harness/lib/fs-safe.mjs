@@ -32,7 +32,12 @@ import path from 'node:path';
 // Windows) — feature-checked so the read path below can degrade gracefully
 // instead of throwing on an unsupported flag.
 const O_NOFOLLOW = typeof fs.constants.O_NOFOLLOW === 'number' ? fs.constants.O_NOFOLLOW : null;
-const DEFAULT_MAX_BYTES = 10_000_000;
+// The one read-size cap for every less-trusted read. Exported (sweep P3) so the
+// two readers that DON'T go through readFileNoFollow — loadManifest
+// (recall-rank.mjs) and listLearnings (store.mjs) — enforce the SAME cap
+// uniformly, skipping an over-cap manifest/learning file instead of reading a
+// crafted multi-hundred-MB file whole on every session (DoS surface).
+export const DEFAULT_MAX_BYTES = 10_000_000;
 
 /**
  * Canonicalize `root` (fully resolving every symlink) to compare canonical
@@ -273,6 +278,32 @@ export function readFileNoFollow(full, { maxBytes = DEFAULT_MAX_BYTES, root = nu
 }
 
 /**
+ * Post-acquire parent-containment verify for a file that was JUST created IN
+ * PLACE — an exclusive `wx`/O_EXCL create, as compound.mjs's reserveEpisodePath
+ * does, NOT a temp+rename. realpath the file's PARENT (which follows every
+ * symlink, including an ancestor swapped in AFTER a scan-time
+ * assertNoSymlinkAncestors walk) and require it inside realpath(root). This is
+ * writeFileContained's step-3 check factored out (canonicalize-after-acquire),
+ * so the exclusive-create episode writer shares the EXACT same guard instead of
+ * stopping at the scan-time walk + O_EXCL leaf guard — neither of which can see
+ * an ancestor redirected out of the root between the walk and the create.
+ * Returns true only when the parent canonically resolves inside the root; false
+ * on an unresolvable root/parent or an escape, so the caller can unlink the
+ * just-created file and refuse.
+ */
+export function realpathParentContained(root, full) {
+  const realRoot = canonicalRoot(root);
+  if (realRoot === null) return false;
+  let realParent;
+  try {
+    realParent = fs.realpathSync(path.dirname(full));
+  } catch {
+    return false;
+  }
+  return containedUnder(realParent, realRoot);
+}
+
+/**
  * Contained, atomic write via canonicalize-after-acquire. The sequence is
  * create-THEN-verify so the containment check inspects a file that PHYSICALLY
  * exists rather than a path that might be redirected a moment later:
@@ -313,17 +344,10 @@ export function writeFileContained(root, rel, content) {
       /* best effort — a swapped-away temp is not ours to chase */
     }
   };
-  // Post-create containment: the file now exists, so realpath resolves through
-  // any ancestor a racing process swapped for a symlink after step 1.
-  const realRoot = canonicalRoot(rootFull);
-  let realParent;
-  try {
-    realParent = fs.realpathSync(parent);
-  } catch {
-    cleanup();
-    return null;
-  }
-  if (realRoot === null || !containedUnder(realParent, realRoot)) {
+  // Post-create containment (shared with reserveEpisodePath): the file now
+  // exists, so realpath resolves through any ancestor a racing process swapped
+  // for a symlink after step 1.
+  if (!realpathParentContained(rootFull, full)) {
     cleanup();
     return null;
   }

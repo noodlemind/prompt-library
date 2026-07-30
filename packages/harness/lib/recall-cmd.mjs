@@ -1,5 +1,6 @@
 import { rankRecall, findMatchingPlans } from './recall-rank.mjs';
 import { parseQueryFromArgv } from './argv.mjs';
+import { redactSecrets } from './secret-scan.mjs';
 
 export function runRecall({ workspace, copilotHome, flags, argv }) {
   const query = parseQueryFromArgv(argv, flags);
@@ -16,10 +17,14 @@ export function runRecall({ workspace, copilotHome, flags, argv }) {
   }).map((e) => ({
     docid: e.docid || e.id,
     path: e.path,
-    title: e.title || e.id,
+    // Best-effort secret screen on the `harness recall` surface (sweep P3):
+    // the same recall/manifest content the context pack now screens also
+    // surfaces here (rendered title + --json snippet/summary), so a
+    // secret-shaped title/snippet is redacted before it leaves this boundary.
+    title: redactSecrets(e.title || e.id),
     score: Number(e.score.toFixed(3)),
-    summary: e.summary || '',
-    snippet: e.snippet || '',
+    summary: redactSecrets(e.summary || ''),
+    snippet: redactSecrets(e.snippet || ''),
     scope: e.scope,
     kind: e.kind || 'solution',
     ranker: e.ranker || 'overlap',

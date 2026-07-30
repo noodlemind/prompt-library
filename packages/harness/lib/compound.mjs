@@ -9,7 +9,7 @@ import { loadPolicy } from './policy.mjs';
 import { recordSkillUsage } from './telemetry.mjs';
 import { scanSecrets } from './secret-scan.mjs';
 import { readStoreConfig } from './knowledge/store.mjs';
-import { assertNoSymlinkAncestors } from './fs-safe.mjs';
+import { assertNoSymlinkAncestors, realpathParentContained } from './fs-safe.mjs';
 
 // Byte-exact snapshot/restore of a single retrieval-state file, used to roll
 // back the manifest + postings when indexing throws mid-write. Read as a raw
@@ -73,6 +73,20 @@ function reserveEpisodePath(workspace, dirRel, base, doc) {
     if (!full) return { ok: false };
     try {
       fs.writeFileSync(full, doc, { flag: 'wx' });
+      // Post-create containment verify (symmetry with writeFileContained's
+      // canonicalize-after-acquire step 3): the pre-create ancestor walk and the
+      // O_EXCL leaf create are both scan-time, so an ancestor swapped for a
+      // symlink AFTER the walk could make this leaf land OUTSIDE the workspace.
+      // realpath the created file's parent; on an escape, unlink and refuse so
+      // nothing is ever published outside the workspace root.
+      if (!realpathParentContained(workspace, full)) {
+        try {
+          fs.unlinkSync(full);
+        } catch {
+          // best effort — a swapped-away leaf is not ours to chase
+        }
+        return { ok: false };
+      }
       return { ok: true, rel };
     } catch (err) {
       if (err.code === 'EEXIST') {

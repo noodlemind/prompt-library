@@ -28,3 +28,20 @@ export function scanSecrets(text) {
   }
   return hits;
 }
+
+/**
+ * Best-effort secret screen for a single rendered field (sweep P3): the recall/
+ * manifest ingestion path never ran scanSecrets, so a credential committed into
+ * a manifest title/snippet or a hand-authored solution doc could surface
+ * verbatim on the agent-facing context pack and `harness recall`. On any hit,
+ * return a marker naming the matched pattern(s) INSTEAD of the field's content,
+ * so the secret is never rendered. Same regex-grade caveat as scanSecrets
+ * itself — screening, not prevention; the never-pushed out-of-tree store stays
+ * the real backstop (documented residual #5).
+ */
+export function redactSecrets(text) {
+  const s = String(text ?? '');
+  const hits = scanSecrets(s);
+  if (!hits.length) return s;
+  return `[redacted: ${[...new Set(hits.map((h) => h.id))].join(', ')}]`;
+}
