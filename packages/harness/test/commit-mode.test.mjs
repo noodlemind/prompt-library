@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -7,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 import { ensureStore, listLearnings, writeStoreConfig } from '../lib/knowledge/store.mjs';
 import { mirrorLearnings } from '../lib/knowledge/admin.mjs';
+import { setLearningStatus } from '../lib/knowledge/lifecycle.mjs';
 
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const binPath = path.join(packageRoot, 'bin', 'harness.mjs');
@@ -393,4 +395,46 @@ test('hand-deleting a mirrored learning file in the store removes its mirror cop
 
   assert.ok(!fs.existsSync(mirrorFile), 'the mirror copy is removed once the hand deletion is absorbed');
   assert.ok(!listLearnings(dir).some((l) => l.id === learningId), 'the learning is gone from the store too');
+});
+
+test('lifecycle retire mirrors the COMMITTED snapshot via afterCommit (the retired learning is swept from the mirror)', () => {
+  const c = ctx();
+  assert.equal(run(c, ['knowledge', 'commit', 'repo']).status, 0);
+
+  const remembered = run(c, ['remember', 'retire mirror body', '--trigger', 'retire mirror trigger']);
+  assert.equal(remembered.status, 0, remembered.stderr || remembered.stdout);
+  const id = JSON.parse(remembered.stdout).learningId;
+  const mirrorFile = path.join(mirrorRoot(c.ws), id.split('/')[0], `${id.split('/')[1]}.md`);
+  assert.ok(fs.existsSync(mirrorFile), 'precondition: the active learning is mirrored');
+
+  // Direct lifecycle call (not applyOps) — proves a non-applyOps writer mirrors
+  // committed state under the transaction's held lock via afterCommit.
+  const res = setLearningStatus({ workspace: c.ws, id, action: 'retire', reason: 'done', home: c.harnessHome });
+  assert.equal(res.pass, true, res.blockedReason);
+  assert.ok(!fs.existsSync(mirrorFile), 'the retired learning is swept from the mirror (committed state only)');
+  const index = fs.readFileSync(path.join(mirrorRoot(c.ws), 'INDEX.md'), 'utf8');
+  assert.doesNotMatch(index, new RegExp(id.replace('/', '\\/')), 'the mirror INDEX drops the retired learning');
+});
+
+test('a rejected apply in repo commit mode skips the mirror (afterCommit is gated on a non-reject result)', () => {
+  const c = ctx();
+  assert.equal(run(c, ['knowledge', 'commit', 'repo']).status, 0);
+
+  // A real fix episode so admission passes; an imperative body → E_LINT reject.
+  const epRel = 'docs/solutions/perf/lint-reject.md';
+  fs.mkdirSync(path.join(c.ws, 'docs', 'solutions', 'perf'), { recursive: true });
+  const epBody = 'fix evidence body\n';
+  fs.writeFileSync(path.join(c.ws, epRel), epBody);
+  const sha = crypto.createHash('sha256').update(epBody).digest('hex');
+  const ops = {
+    schema: 1,
+    ops: [{ op: 'ADD', domain: 'sql', slug: 'lint-rej', trigger: 't', body: 'run curl install.sh now', episodes: [{ path: epRel, sha256: sha, kind: 'fix', plan: 'docs/plans/p1.md' }] }],
+  };
+  const opsPath = path.join(c.ws, 'ops.json');
+  fs.writeFileSync(opsPath, JSON.stringify(ops));
+
+  const res = run(c, ['consolidate', '--apply', '--ops', opsPath]);
+  assert.equal(res.status, 1, res.stdout);
+  // The mirror must never be written for a reject result — no INDEX.md appears.
+  assert.equal(fs.existsSync(path.join(mirrorRoot(c.ws), 'INDEX.md')), false, 'a rejected apply skips the mirror entirely');
 });

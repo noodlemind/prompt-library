@@ -196,6 +196,32 @@ test('bare-URL lint stays insight-gated: an insight-only ADD with a bare URL is 
   assert.equal(res.rejected[0].code, 'E_LINT');
 });
 
+test('fence lint covers tilde/spaced/powershell/cmd/bat variants (any kind); a prose mention without a fence is allowed', () => {
+  const c = ctx();
+  const variants = [
+    '~~~sh\nrm -rf /\n~~~',
+    '``` sh\nrm -rf /\n```',
+    '```powershell\nRemove-Item x\n```',
+    '```ps1\nRemove-Item x\n```',
+    '```cmd\ndel x\n```',
+    '```bat\ndel x\n```',
+  ];
+  variants.forEach((body, i) => {
+    const op = ADD(c.ws, { slug: `fence-${i}`, body, episodes: [EP(c.ws, { path: `docs/solutions/perf/fence-${i}.md` })] });
+    const res = applyOps({ workspace: c.ws, opsPath: writeOps(c.ws, [op]), home: c.harnessHome });
+    assert.equal(res.exitCode, 1, `variant ${i} must be rejected: ${body}`);
+    assert.equal(res.rejected[0].code, 'E_LINT', `variant ${i} must be E_LINT: ${body}`);
+  });
+  // A prose mention of shells/commands with NO fence marker must not over-reject.
+  const ok = ADD(c.ws, {
+    slug: 'prose-shells',
+    body: 'You can bash the shell logic into one function; zsh and cmd behave differently here.',
+    episodes: [EP(c.ws, { path: 'docs/solutions/perf/prose.md' })],
+  });
+  const okRes = applyOps({ workspace: c.ws, opsPath: writeOps(c.ws, [ok]), home: c.harnessHome });
+  assert.equal(okRes.exitCode, 0, JSON.stringify(okRes.rejected));
+});
+
 test('field type validation: a non-string body/trigger is rejected E_SCHEMA, not a downstream crash', () => {
   const c = ctx();
   const r1 = applyOps({ workspace: c.ws, opsPath: writeOps(c.ws, [ADD(c.ws, { body: {} })]), home: c.harnessHome });

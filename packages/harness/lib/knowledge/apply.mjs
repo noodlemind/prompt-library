@@ -274,7 +274,13 @@ function lintImperative({ body, trigger, episodes }) {
   // let it render UNFENCED and UNLINTED. Scoped tightly (shell code fences and
   // curl/wget command patterns) so a legitimate fix learning is never
   // over-rejected.
-  if (/```(sh|bash|shell|zsh)/.test(text)) return 'shell command fence in learning';
+  // Cover every equivalent fence a Windows-primary threat model must treat as
+  // executable: backtick AND tilde fences, an optional space before the info
+  // string, and sh/bash/shell/zsh/powershell/ps1/cmd/bat. Requires a real
+  // fence marker first, so a prose mention ("bash the shell") is never
+  // over-rejected.
+  if (/(^|\n)\s{0,3}(`{3,}|~{3,})[ \t]*(sh|bash|shell|zsh|powershell|ps1|cmd|bat)\b/i.test(text))
+    return 'shell command fence in learning';
   if (/\b(curl|wget)\s/i.test(text)) return 'download command (curl/wget) in learning';
   // BARE-URL check stays insight-gated: a fix learning legitimately citing a
   // doc URL must not be rejected, but an insight-only claim has no verified

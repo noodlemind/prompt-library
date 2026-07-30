@@ -419,6 +419,54 @@ test('purge stages the T1 episode via a reversible rename: a successful purge de
   assert.deepEqual(debris, [], 'no staged temp file is left behind after a committed purge');
 });
 
+test('purge sweeps stranded `.purge-*` debris from a crash AFTER commit — a re-run finding only debris removes the content, never a false no-op', () => {
+  const c = ctx();
+  const targetPath = 'docs/solutions/perf/crash-after.md';
+  const target = writeRealEpisode(c.ws, targetPath, 'crash-after body\n');
+  const op = {
+    op: 'ADD', domain: 'sql', slug: 'crash-after', trigger: 'crash after trigger', body: 'crash after body',
+    episodes: [{ ...target, kind: 'fix', plan: 'docs/plans/p1.md' }],
+  };
+  assert.equal(applyOps({ workspace: c.ws, opsPath: writeOps(c.ws, [op]), home: c.harnessHome }).exitCode, 0);
+  // A normal purge completes T2, so the store no longer references the target.
+  assert.equal(purgeEpisode({ workspace: c.ws, target: targetPath, home: c.harnessHome }).pass, true);
+
+  // Simulate the crash-after-commit debris: staging temp left behind, real path absent.
+  const perfDir = path.join(c.ws, 'docs', 'solutions', 'perf');
+  const debris = path.join(perfDir, 'crash-after.md.purge-99999-1');
+  fs.writeFileSync(debris, 'crash-after body\n');
+  assert.equal(fs.existsSync(path.join(c.ws, targetPath)), false, 'precondition: real path absent');
+
+  const rerun = purgeEpisode({ workspace: c.ws, target: targetPath, home: c.harnessHome });
+  assert.equal(fs.existsSync(debris), false, 'the stranded debris is swept — content genuinely removed');
+  assert.equal(rerun.pass, true, 'completing an interrupted purge reports success, not a no-op');
+  assert.notEqual(rerun.exitCode, 2, 'must not report "nothing to purge" while debris (content) sat on disk');
+});
+
+test('purge re-run after a crash BEFORE commit removes both the store learning and the stranded content (no leak)', () => {
+  const c = ctx();
+  const targetPath = 'docs/solutions/perf/leak-target.md';
+  const target = writeRealEpisode(c.ws, targetPath, 'leak body\n');
+  const op = {
+    op: 'ADD', domain: 'sql', slug: 'leak-purge', trigger: 'leak purge trigger', body: 'leak purge body',
+    episodes: [{ ...target, kind: 'fix', plan: 'docs/plans/p1.md' }],
+  };
+  assert.equal(applyOps({ workspace: c.ws, opsPath: writeOps(c.ws, [op]), home: c.harnessHome }).exitCode, 0);
+
+  // Crash BETWEEN the staging rename and the T2 commit: content sits in a
+  // `.purge-*` sibling, real path absent, and the store STILL references it.
+  const perfDir = path.join(c.ws, 'docs', 'solutions', 'perf');
+  const debris = path.join(perfDir, 'leak-target.md.purge-88888-1');
+  fs.renameSync(path.join(c.ws, targetPath), debris);
+
+  const rerun = purgeEpisode({ workspace: c.ws, target: targetPath, home: c.harnessHome });
+  assert.equal(rerun.pass, true, rerun.blockedReason);
+  assert.equal(fs.existsSync(debris), false, 'the stranded content must be swept — no leak while reporting pass:true');
+  assert.equal(fs.existsSync(path.join(c.ws, targetPath)), false, 'real path stays gone');
+  const { dir } = ensureStore(c.ws, { home: c.harnessHome });
+  assert.ok(!listLearnings(dir).some((l) => l.id === 'sql/leak-purge'), 'the store learning is removed too');
+});
+
 test('purge --all: a store-transaction failure leaves every learning and the ledger untouched', () => {
   const c = ctx();
   seedLearning(c, { slug: 'keep-me' });

@@ -43,7 +43,19 @@ export function setLearningStatus({ workspace, id, action, reason, to, home, log
     return { pass: false, exitCode: 1, id, status: null, blockedReason: `E_TARGET: no learning ${id}` };
   }
 
-  const tx = withStoreTransaction(workspace, { home, label: `${action} ${id}` }, ({ dir, recordCheckpoint }) => {
+  const tx = withStoreTransaction(
+    workspace,
+    {
+      home,
+      label: `${action} ${id}`,
+      // Mirror a COMMITTED snapshot under the still-held lock (P2), never after
+      // the lock releases where a concurrent writer's dirty state could leak in.
+      afterCommit: ({ result }) => {
+        if (result?.kind === 'reject') return;
+        mirrorLearnings({ workspace, home });
+      },
+    },
+    ({ dir, recordCheckpoint }) => {
     // Absorb any hand edit before this mutation reads the target — so a
     // retire/dispute/confirm/promote always acts on the absorbed
     // (human-authored) state, not a stale in-tree edit. Advisory: never
@@ -186,11 +198,9 @@ export function setLearningStatus({ workspace, id, action, reason, to, home, log
     };
   }
 
-  try {
-    mirrorLearnings({ workspace, home });
-  } catch {
-    // best effort — a mirror failure must never block a lifecycle action.
-  }
+  // The workspace mirror already ran inside the transaction's afterCommit hook
+  // (above), under the still-held lock on the committed tree — never here after
+  // the lock released (P2).
   return {
     pass: true,
     exitCode: 0,

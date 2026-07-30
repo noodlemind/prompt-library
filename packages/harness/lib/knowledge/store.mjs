@@ -688,9 +688,10 @@ export class StoreTransactionAbort extends Error {
  *     store-of-record content — safe to race, self-heals on the next index run.
  *   - mirrorLearnings: writes into the WORKSPACE (docs/knowledge/learnings/),
  *     not the store, so it was never store state the lock needed to protect.
- *     It runs after the commit succeeds, but now via the `afterCommit` hook
- *     BELOW — i.e. still under this transaction's lock, on the clean committed
- *     tree — so it can only ever mirror COMMITTED learnings, never a
+ *     EVERY store writer that mirrors (applyOps, setLearningStatus,
+ *     purgeEpisode, purgeAll, rebuildStore) now runs it via the `afterCommit`
+ *     hook BELOW — i.e. still under this transaction's lock, on the clean
+ *     committed tree — so it can only ever mirror COMMITTED learnings, never a
  *     concurrent writer's dirty-then-rolled-back mutation (P2).
  *
  * Acquires `.lock` (mkdir + stale-takeover-via-rename — moved here from

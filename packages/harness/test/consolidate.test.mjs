@@ -115,6 +115,24 @@ test('consolidate --candidates caps each entry\'s rendered title so a 1MB-title 
   assert.equal('remaining' in packet, false);
 });
 
+test('consolidate --candidates caps an entry\'s total rendered tags length', () => {
+  const ws = tempDir('consol-tagcap-');
+  const home = tempDir('consol-tc-h-');
+  const harnessHome = tempDir('consol-tc-hh-');
+  const dir = path.join(ws, 'docs', 'solutions', 'perf');
+  fs.mkdirSync(dir, { recursive: true });
+  // A pathological frontmatter `tags:` line — hundreds of tags, far past the cap.
+  const tags = Array.from({ length: 500 }, (_, i) => `tag${i}`).join(', ');
+  const text = `---\ntitle: "tagcap lesson"\ntags: ${tags}\ndate: 2026-07-01\n---\n\n## Problem\n\ntagcap details.\n`;
+  fs.writeFileSync(path.join(dir, 'tagcap.md'), text);
+
+  const packet = consolidateCandidates({ workspace: ws, copilotHome: home, home: harnessHome });
+  const entry = packet.clusters.flatMap((c) => c.episodes)[0];
+  const totalLen = entry.tags.join('').length;
+  assert.ok(totalLen <= 500, `total rendered tags length bounded to <=500, got ${totalLen}`);
+  assert.ok(entry.tags.length < 500, 'the tag list is truncated when it exceeds the budget');
+});
+
 test('consolidate --candidates groups two unrelated episodes in one category cluster (a hint the skill may split)', () => {
   const ws = tempDir('consol-group-');
   const home = tempDir('consol-g-h-');

@@ -451,6 +451,28 @@ function refreshRecallAfterPurge({ workspace, copilotHome, target, log = () => {
 }
 
 /**
+ * Every `<basename>.purge-<pid>-<ts>` staging sibling of `safe` in its own
+ * directory. Purge stages the T1 episode via a rename to such a temp before
+ * committing T2 (see below); if the process dies between the rename and the
+ * commit, that temp is stranded with the still-live episode content in it and
+ * nothing else would ever sweep it. Enumerating the siblings lets a later
+ * purge (or the same one's finalize) COMPLETE the interrupted deletion — a
+ * re-run that finds only debris must genuinely remove the content, never
+ * report a clean/no-op success while the content persists on disk.
+ */
+function purgeTempSiblings(safe) {
+  const d = path.dirname(safe);
+  const base = path.basename(safe);
+  let names;
+  try {
+    names = fs.readdirSync(d);
+  } catch {
+    return [];
+  }
+  return names.filter((n) => n.startsWith(`${base}.purge-`)).map((n) => path.join(d, n));
+}
+
+/**
  * Cascade-delete one episode (design §3): the episode file itself, every
  * learning it was the sole evidence for, its link inside learnings that
  * cite it alongside other evidence, AND the recall retrieval state (team
@@ -582,6 +604,16 @@ export function purgeEpisode({ workspace, target, copilotHome, home, log = () =>
   // partial is loud and recoverable/idempotent — a still-served target yields
   // pass:false with "run: harness index", and re-running purge on the
   // already-deleted episode (or `harness index`) converges.
+  // Resolved (containment-checked) target path under every candidate root —
+  // used to stage the live episode AND to sweep `.purge-*` staging debris a
+  // crashed prior purge may have stranded across either root.
+  const safePaths = resolved.map((r) => r.full).filter(Boolean);
+  // Debris a PRIOR interrupted purge left behind (rename landed, T2 commit
+  // never did): its content is exactly the still-to-be-purged episode, so it
+  // must count as "something to purge" and be swept on finalize — otherwise a
+  // re-run silently reports "nothing to purge" while the content persists.
+  const debrisBefore = safePaths.flatMap(purgeTempSiblings);
+
   let stagedFrom = null;
   let stagedTemp = null;
   if (episodeExistsOnDisk) {
@@ -608,18 +640,35 @@ export function purgeEpisode({ workspace, target, copilotHome, home, log = () =>
       };
     }
   }
+  // Restore the staged episode to its real path. Returns a human-recoverable
+  // note (naming the temp path) when the restore rename itself fails, so a
+  // caller can surface WHERE the content is instead of losing it silently.
   const restoreStaged = () => {
-    if (stagedTemp && stagedFrom) {
-      try {
-        fs.renameSync(stagedTemp, stagedFrom);
-      } catch {
-        // best effort — the staged temp is same-directory debris either way
-      }
-      stagedTemp = null;
+    if (!stagedTemp || !stagedFrom) return null;
+    const temp = stagedTemp;
+    stagedTemp = null;
+    try {
+      fs.renameSync(temp, stagedFrom);
+      return null;
+    } catch (err) {
+      return ` — the episode could not be restored to ${stagedFrom} and is preserved at ${temp} (move it back manually): ${err.message}`;
     }
   };
 
-  const tx = withStoreTransaction(workspace, { home, label: `purge: ${target}` }, ({ dir, recordCheckpoint }) => {
+  const tx = withStoreTransaction(
+    workspace,
+    {
+      home,
+      label: `purge: ${target}`,
+      // Mirror the committed cascade under the still-held lock (P2); the
+      // fully-deleted ids are named via retiredIds so their mirror copies are
+      // swept even though the store has already forgotten them.
+      afterCommit: ({ result }) => {
+        if (result?.kind === 'reject') return;
+        mirrorLearnings({ workspace, home, log, retiredIds: result.removedLearnings || [] });
+      },
+    },
+    ({ dir, recordCheckpoint }) => {
     try {
       absorbOrAbort({ workspace, home, log, recordCheckpoint });
     } catch (err) {
@@ -640,7 +689,11 @@ export function purgeEpisode({ workspace, target, copilotHome, home, log = () =>
     const ledger = readLedger(dir);
     const ledgerHits = ledger.filter((e) => e.path === target).length;
 
-    if (!episodeExistsOnDisk && matchingLearnings.length === 0 && ledgerHits === 0) {
+    // Debris (a prior crash's stranded staging temp) also counts as "something
+    // to purge": bailing here would leave that content on disk while reporting
+    // "nothing to purge". With debris present we fall through so the post-commit
+    // finalize sweeps it and the purge genuinely removes the content.
+    if (!episodeExistsOnDisk && matchingLearnings.length === 0 && ledgerHits === 0 && debrisBefore.length === 0) {
       return {
         kind: 'reject',
         pass: false,
@@ -701,14 +754,15 @@ export function purgeEpisode({ workspace, target, copilotHome, home, log = () =>
   if (!tx.ok) {
     // Cascade failed or was contended — restore the staged episode so a failed
     // purge never loses evidence (P1-8), exactly as if it had never been touched.
-    restoreStaged();
+    const restoreNote = restoreStaged();
     return {
       pass: false,
       exitCode: 1,
       removed: null,
-      blockedReason: tx.locked
-        ? 'E_LOCKED: another operation holds the store lock'
-        : `purge failed: ${tx.error?.message || 'store transaction failed'}`,
+      blockedReason:
+        (tx.locked
+          ? 'E_LOCKED: another operation holds the store lock'
+          : `purge failed: ${tx.error?.message || 'store transaction failed'}`) + (restoreNote || ''),
       ...(tx.staleLockNote ? { staleLockRemoved: tx.staleLockNote } : {}),
     };
   }
@@ -719,42 +773,41 @@ export function purgeEpisode({ workspace, target, copilotHome, home, log = () =>
     // episode. In practice staging only happens when the episode existed, and
     // an existing episode can never hit this reject branch, but restoring here
     // keeps the invariant unconditional.
-    restoreStaged();
+    const restoreNote = restoreStaged();
     return {
       pass: inner.pass,
       exitCode: inner.exitCode,
       removed: inner.removed,
-      blockedReason: inner.blockedReason,
+      blockedReason: (inner.blockedReason || '') + (restoreNote || ''),
       ...(tx.staleLockNote ? { staleLockRemoved: tx.staleLockNote } : {}),
     };
   }
 
-  // The cascade committed — finalize the staged deletion by removing the temp.
-  // The episode is ALREADY gone from its real path (renamed away before the
-  // commit), so a temp-cleanup failure only leaves identifiable, same-directory
-  // debris — never a resurrected episode — and is reported as a partial, not a
-  // failure.
-  let episodeRemoved = false;
+  // The cascade committed — finalize by sweeping EVERY `.purge-*` staging
+  // sibling: this run's own staged temp AND any debris a crashed prior purge
+  // stranded (that completes the interrupted deletion so the content is
+  // genuinely gone, never left behind while we report success). The episodes
+  // are already gone from their real paths, so a sweep failure only leaves
+  // identifiable, same-directory debris — never resurrected content — and is
+  // reported as a partial, not a failure.
+  let episodeRemoved = episodeExistsOnDisk || debrisBefore.length > 0;
   let partialReason = null;
-  if (stagedTemp) {
+  const undeleted = [];
+  for (const sibling of safePaths.flatMap(purgeTempSiblings)) {
     try {
-      fs.rmSync(stagedTemp, { force: true });
-    } catch (err) {
-      partialReason = `store purge committed and the episode was removed, but its staged temp copy could not be cleaned up: ${err.message}`;
-      log(partialReason);
+      fs.rmSync(sibling, { force: true });
+    } catch {
+      undeleted.push(sibling);
     }
-    episodeRemoved = true;
+  }
+  stagedTemp = null; // swept above (or attempted); no separate finalize owns it now
+  if (undeleted.length) {
+    partialReason = `store purge committed and the episode was removed, but staging debris could not be cleaned up: ${undeleted.join(', ')}`;
+    log(partialReason);
   }
 
-  try {
-    // removedLearnings names only the learnings this cascade FULLY DELETED
-    // (as opposed to removedLinks, which were merely delinked and still
-    // exist) — human deletion must win in the mirror too, so those ids are
-    // named via retiredIds even though the store has already forgotten them.
-    mirrorLearnings({ workspace, home, retiredIds: inner.removedLearnings });
-  } catch {
-    // best effort — a mirror failure must never block purge.
-  }
+  // The mirror already ran inside afterCommit (above), under the held lock on
+  // the committed cascade — never here after the lock released (P2).
 
   // Recall-state cascade (refreshRecallAfterPurge): rebuild the manifest and
   // postings index so rankRecall stops serving the purged episode. NOT best
@@ -817,7 +870,19 @@ export function purgeAll({ workspace, home, log = () => {} }) {
     };
   }
 
-  const tx = withStoreTransaction(workspace, { home, label: 'purge: --all (store reset)' }, ({ dir, recordCheckpoint }) => {
+  const tx = withStoreTransaction(
+    workspace,
+    {
+      home,
+      label: 'purge: --all (store reset)',
+      // Mirror the committed reset under the still-held lock (P2), with the
+      // pre-wipe ids plumbed through so the sweep can still match them.
+      afterCommit: ({ result }) => {
+        if (result?.kind === 'reject') return;
+        mirrorLearnings({ workspace, home, retiredIds: result.idsBeforeReset || [] });
+      },
+    },
+    ({ dir, recordCheckpoint }) => {
     try {
       absorbOrAbort({ workspace, home, log, recordCheckpoint });
     } catch (err) {
@@ -849,7 +914,8 @@ export function purgeAll({ workspace, home, log = () => {} }) {
     fs.writeFileSync(path.join(dir, 'governance.jsonl'), '', 'utf8');
     rebuildIndex(dir);
     return { kind: 'success', commitMessage: 'purge: --all (store reset)', removedCount: n, idsBeforeReset };
-  });
+    }
+  );
 
   if (!tx.ok) {
     return {
@@ -864,11 +930,8 @@ export function purgeAll({ workspace, home, log = () => {} }) {
   }
 
   const inner = tx.result;
-  try {
-    mirrorLearnings({ workspace, home, retiredIds: inner.idsBeforeReset });
-  } catch {
-    // best effort — a mirror failure must never block purge --all.
-  }
+  // The mirror already ran inside afterCommit (above), under the held lock on
+  // the committed reset — never here after the lock released (P2).
   return {
     pass: true,
     exitCode: 0,
@@ -926,7 +989,19 @@ export function rebuildStore({ workspace, home, yes, copilotHome, log = () => {}
   // --yes is an explicit go-ahead, unlike the preview above. listLearnings
   // only runs on this (mutation) path, once, inside the transaction (fresh,
   // under the lock, rather than before it existed).
-  const tx = withStoreTransaction(workspace, { home, label: 'consolidate: rebuild reset' }, ({ dir, recordCheckpoint }) => {
+  const tx = withStoreTransaction(
+    workspace,
+    {
+      home,
+      label: 'consolidate: rebuild reset',
+      // Mirror the committed rebuild under the still-held lock (P2), with the
+      // archived ids plumbed through so the sweep clears their mirror copies.
+      afterCommit: ({ result }) => {
+        if (result?.kind === 'reject') return;
+        mirrorLearnings({ workspace, home, retiredIds: result.archivedIds || [] });
+      },
+    },
+    ({ dir, recordCheckpoint }) => {
     try {
       absorbOrAbort({ workspace, home, log, recordCheckpoint });
     } catch (err) {
@@ -958,7 +1033,8 @@ export function rebuildStore({ workspace, home, yes, copilotHome, log = () => {}
       archived,
       archivedIds: archivedLearnings.map((l) => l.id),
     };
-  });
+    }
+  );
 
   if (!tx.ok) {
     return {
@@ -975,11 +1051,8 @@ export function rebuildStore({ workspace, home, yes, copilotHome, log = () => {}
   }
 
   const inner = tx.result;
-  try {
-    mirrorLearnings({ workspace, home, retiredIds: inner.archivedIds });
-  } catch {
-    // best effort — a mirror failure must never block rebuild.
-  }
+  // The mirror already ran inside afterCommit (above), under the held lock on
+  // the committed rebuild — never here after the lock released (P2).
 
   // copilotHome must be threaded through so the fresh debt count includes
   // global episodes (docs/solutions under the copilot home), not just

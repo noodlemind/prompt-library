@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { runIndexKnowledge } from './index-knowledge.mjs';
+import { resolveIndexDir } from './recall-config.mjs';
 import { readSession, writeSession } from './session.mjs';
 import { readEvidence, validateEvidence } from './evidence.mjs';
 import { selectPlan } from './plan-parse.mjs';
@@ -9,6 +10,26 @@ import { recordSkillUsage } from './telemetry.mjs';
 import { scanSecrets } from './secret-scan.mjs';
 import { readStoreConfig } from './knowledge/store.mjs';
 import { assertNoSymlinkAncestors, writeFileContained } from './fs-safe.mjs';
+
+// Byte-exact snapshot/restore of a single retrieval-state file, used to roll
+// back the manifest + postings when indexing throws mid-write. Read as a raw
+// Buffer so bytes round-trip verbatim; null means "was absent" → restore
+// deletes it.
+function snapshotFile(p) {
+  try {
+    return fs.readFileSync(p);
+  } catch {
+    return null;
+  }
+}
+function restoreFile(p, snap) {
+  try {
+    if (snap === null) fs.rmSync(p, { force: true });
+    else fs.writeFileSync(p, snap);
+  } catch {
+    // best effort — `harness index` reconciles retrieval state on the next run
+  }
+}
 
 function slugify(text) {
   return (
@@ -147,17 +168,19 @@ export function runInsightCompound({ workspace, copilotHome, flags, log = () => 
   // runIndexKnowledge can throw (a duplicate manifest id, an fs error). An
   // unhandled throw here would leave the episode we JUST wrote orphaned on disk
   // and, for the `remember` caller, skip its rollback path entirely (the throw
-  // never reaches `if (!episode.pass)`). Snapshot the manifest, and on any
-  // index failure: delete the just-written episode and restore the prior
-  // manifest so retrieval state is exactly pre-write, then return a clean,
-  // recoverable failure the caller's normal not-pass path handles.
+  // never reaches `if (!episode.pass)`). Snapshot the ENTIRE retrieval state it
+  // writes — the manifest AND the postings (index-knowledge writes manifest
+  // then postings.json/meta.json, so a throw between them can leave postings
+  // referencing the rolled-back episode) — and on any index failure delete the
+  // just-written episode and restore all of it so retrieval state is exactly
+  // pre-write, then return a clean, recoverable failure the caller handles.
   const manifestPath = path.join(knowledgeRoot || path.join(workspace, 'knowledge'), 'manifest.yaml');
-  let manifestBefore = null;
-  try {
-    manifestBefore = fs.readFileSync(manifestPath, 'utf8');
-  } catch {
-    manifestBefore = null; // absent or unreadable — restore = delete
-  }
+  const indexDir = resolveIndexDir(copilotHome || '', workspace);
+  const snapshots = [
+    [manifestPath, snapshotFile(manifestPath)],
+    [path.join(indexDir, 'postings.json'), snapshotFile(path.join(indexDir, 'postings.json'))],
+    [path.join(indexDir, 'meta.json'), snapshotFile(path.join(indexDir, 'meta.json'))],
+  ];
   let indexed;
   try {
     indexed = runIndexKnowledge({ knowledgeRoot, workspace, copilotHome, flags, log });
@@ -168,12 +191,9 @@ export function runInsightCompound({ workspace, copilotHome, flags, log = () => 
       } catch {
         // best effort — a re-run reconciles the orphan
       }
-      try {
-        if (manifestBefore === null) fs.rmSync(manifestPath, { force: true });
-        else fs.writeFileSync(manifestPath, manifestBefore, 'utf8');
-      } catch {
-        // best effort — `harness index` reconciles the manifest/postings
-      }
+      // Restore manifest + postings + meta to exactly pre-write (write back the
+      // snapshot, or delete if it was absent). `harness index` reconciles too.
+      for (const [p, snap] of snapshots) restoreFile(p, snap);
     }
     return {
       pass: false,
