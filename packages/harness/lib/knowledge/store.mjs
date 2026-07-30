@@ -132,10 +132,19 @@ export function writeStoreConfig(workspace, { home, mode, commit } = {}) {
       commit: commit !== undefined ? commit : null,
       committed: false,
       pass: false,
+      code: tx.locked ? 'E_LOCKED' : 'E_STORE_TRANSACTION_FAILED',
       blockedReason: tx.locked ? 'E_LOCKED: another operation holds the store lock' : `store transaction failed: ${tx.error?.message || 'unknown error'}`,
+      ...(tx.staleLockNote ? { staleLockRemoved: tx.staleLockNote } : {}),
     };
   }
-  return { mode: tx.result.nextMode, commit: tx.result.nextCommit, committed: tx.committed, pass: true, blockedReason: null };
+  return {
+    mode: tx.result.nextMode,
+    commit: tx.result.nextCommit,
+    committed: tx.committed,
+    pass: true,
+    blockedReason: null,
+    ...(tx.staleLockNote ? { staleLockRemoved: tx.staleLockNote } : {}),
+  };
 }
 
 /** Append-only episode-consumption ledger. Torn tail lines are tolerated. */
@@ -452,20 +461,58 @@ const STALE_LOCK_MS = 10 * 60 * 1000;
  * on any transaction failure (fn threw, or the final stage+commit itself
  * failed) — one implementation, shared by every adopter via
  * withStoreTransaction, replacing what used to be duplicated inline in
- * apply.mjs. */
-function rollbackStore(dir) {
+ * apply.mjs. Exported so a `fn` body that itself makes an intermediate
+ * sub-commit (e.g. apply.mjs's recordContentFailure) can discard JUST that
+ * partial write on its own sub-commit failure, keeping the tree clean before
+ * returning — otherwise withStoreTransaction's own finalize step would
+ * inherit the dirt and risk masking the real rejection behind a generic
+ * commit-failure error. */
+export function rollbackStore(dir) {
   spawnSync('git', ['reset', '--hard'], { cwd: dir, encoding: 'utf8' });
   spawnSync('git', ['clean', '-fd'], { cwd: dir, encoding: 'utf8' });
 }
 
 /**
+ * Thrown by a withStoreTransaction `fn` to signal a failure that must NOT
+ * trigger the standard rollback (git reset --hard + clean -fd). Reserved for
+ * exactly one situation today: absorbHandEdits' own sub-commit failed for a
+ * REAL reason (see admin.mjs's absorbOrAbort) — at that point the working
+ * tree holds a legitimate, uncommitted human edit that absorbHandEdits
+ * itself already wrote. The standard rollback would destroy it outright,
+ * with nothing left recording the edit ever happened. withStoreTransaction's
+ * catch recognizes this type and skips both the stage/commit attempt AND the
+ * rollback: the lock is still released, the failure still reported with
+ * `ok: false`, but the tree is left exactly as `fn` last touched it.
+ */
+export class StoreTransactionAbort extends Error {
+  constructor(message, { stderr } = {}) {
+    super(message);
+    this.name = 'StoreTransactionAbort';
+    this.stderr = stderr || null;
+  }
+}
+
+/**
  * The single-writer transaction every store mutator (applyOps,
  * setLearningStatus, purgeEpisode, purgeAll, rebuildStore's --yes path,
- * writeStoreConfig) runs inside. Closes three race windows a security review
- * found in the pre-transaction design: the lock started too late (state was
- * read and validated before the lock existed), ended too early (released
- * before the final commit, so a losing writer could interleave with an
- * in-flight commit), and several writers never took it at all.
+ * writeStoreConfig — six adopters total) runs inside. Closes three race
+ * windows a security review found in the pre-transaction design: the lock
+ * started too late (state was read and validated before the lock existed),
+ * ended too early (released before the final commit, so a losing writer
+ * could interleave with an in-flight commit), and several writers never
+ * took it at all.
+ *
+ * Deliberately OUTSIDE this transaction (by design, not oversight):
+ *   - orient/consolidate --status/--candidates/learnings reads: pure reads
+ *     never need the lock — a stale read is harmless (the caller doesn't act
+ *     on it under an assumption of freshness the way a writer's validation
+ *     does), and locking every read would serialize the CLI's most common,
+ *     latency-sensitive path against every writer for no safety benefit.
+ *   - index's stale.json write: recomputed CLI-local cache state, not
+ *     store-of-record content — safe to race, self-heals on the next index run.
+ *   - mirrorLearnings: runs AFTER a transaction's own commit succeeds, never
+ *     inside it — it writes into the WORKSPACE (docs/knowledge/learnings/),
+ *     not the store, so it was never store state the lock needed to cover.
  *
  * Acquires `.lock` (mkdir + stale-takeover-via-rename — moved here from
  * apply.mjs so there is exactly one implementation) BEFORE calling
@@ -485,7 +532,9 @@ function rollbackStore(dir) {
  * default the rest of the store's degraded modes use.
  *
  * On `fn` throwing: rollback, then report `ok: false, rolledBack: true,
- * error`.
+ * error` — UNLESS the thrown value is a StoreTransactionAbort, in which case
+ * rollback is skipped entirely and `rolledBack: false` (see the class doc
+ * comment above).
  *
  * The lock is released in `finally`, AFTER the commit or rollback above
  * completes — never before.
@@ -542,8 +591,9 @@ export function withStoreTransaction(workspace, { home, label } = {}, fn) {
     try {
       result = fn({ dir, git });
     } catch (err) {
-      if (git) rollbackStore(dir);
-      return { ok: false, locked: false, rolledBack: true, error: err, committed: false, result: null, dir, git, staleLockNote };
+      const isAbort = err instanceof StoreTransactionAbort;
+      if (git && !isAbort) rollbackStore(dir);
+      return { ok: false, locked: false, rolledBack: !isAbort, error: err, committed: false, result: null, dir, git, staleLockNote };
     }
     let commitRes = { committed: false, ok: true };
     if (git) {

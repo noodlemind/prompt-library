@@ -4,6 +4,8 @@ import crypto from 'node:crypto';
 import {
   ensureStore,
   withStoreTransaction,
+  StoreTransactionAbort,
+  rollbackStore,
   appendLedger,
   readLedger,
   listLearnings,
@@ -19,7 +21,7 @@ import {
 } from './store.mjs';
 import { MAX_OPS_PER_RUN, LEARNING_BYTE_CAP, QUARANTINE_THRESHOLD, DOMAIN_ACTIVE_CAP, isActiveFm } from './consolidate.mjs';
 import { scanSecrets } from '../secret-scan.mjs';
-import { absorbHandEdits, mirrorLearnings } from './admin.mjs';
+import { absorbOrAbort, mirrorLearnings } from './admin.mjs';
 import { parseMergedFrom } from './listing.mjs';
 
 /**
@@ -519,9 +521,22 @@ export function applyOps({ workspace, opsPath, dryRun = false, home, approve = f
      * there is nothing reliable to key a strike on. On an episode's 3rd
      * accumulated failure, the SAME append also writes the quarantine marker.
      * Never throws: a bookkeeping error must never mask the real rejection.
+     *
+     * Returns a short note string when the strike's OWN sub-commit fails for
+     * a real reason (rejectOp folds it into the original rejection's reason)
+     * or null otherwise. A failure here must never surface as the ORIGINAL
+     * content rejection's code changing to something else: if the failed
+     * strike-commit's dirt were left sitting in the tree, the transaction's
+     * own later finalize (withStoreTransaction) would inherit it, retry the
+     * commit, likely fail again for the same underlying git reason, and mask
+     * the real E_SECRET/E_LINT/etc. behind a generic transaction failure —
+     * so a real failure here is rolled back on the spot (the tree is
+     * otherwise clean at this point: any absorb sub-commit already landed or
+     * aborted the whole transaction before runOnce ever started), keeping
+     * the ledger append's own partial write from ever reaching finalize.
      */
     function recordContentFailure(code, episodes) {
-      if (dryRun || !git || !CONTENT_FAILURE_CODES.has(code)) return;
+      if (dryRun || !git || !CONTENT_FAILURE_CODES.has(code)) return null;
       // Dedupe by path@sha256 before recording: an op citing the same episode
       // twice (a malformed or duplicated op JSON, not two distinct pieces of
       // evidence) must record ONE strike per run, not one per reference — a
@@ -536,7 +551,7 @@ export function applyOps({ workspace, opsPath, dryRun = false, home, approve = f
           seenKeys.add(key);
           return true;
         });
-      if (!eps.length) return;
+      if (!eps.length) return null;
       try {
         const ledger = readLedger(dir);
         const at = todayClamped();
@@ -549,15 +564,27 @@ export function applyOps({ workspace, opsPath, dryRun = false, home, approve = f
           }
         }
         appendLedger(dir, entries);
-        commitStore(dir, `consolidate: record failure ${code}`);
+        const commitRes = commitStore(dir, `consolidate: record failure ${code}`);
+        if (!commitRes.ok) {
+          rollbackStore(dir);
+          return `strike recording failed to commit: ${commitRes.stderr || 'git commit failed'}`;
+        }
       } catch {
         // Best effort — failure recording must never mask the original rejection.
       }
+      return null;
     }
 
     function rejectOp(code, reason, episodes) {
-      recordContentFailure(code, episodes);
-      return { kind: 'reject', applied: [], governed: [], rejected: [fail(code, reason)], committed: false, exitCode: 1 };
+      const strikeNote = recordContentFailure(code, episodes);
+      return {
+        kind: 'reject',
+        applied: [],
+        governed: [],
+        rejected: [fail(code, strikeNote ? `${reason} (${strikeNote})` : reason)],
+        committed: false,
+        exitCode: 1,
+      };
     }
 
     // Running per-domain active-count projection for the cap check below.
@@ -1212,11 +1239,16 @@ export function applyOps({ workspace, opsPath, dryRun = false, home, approve = f
     // commitStore itself), now made WHILE the lock is held instead of before
     // it existed. That absorb commit is the checkpoint a later rollback in
     // this same transaction lands on, so a hand edit always survives a
-    // mid-mutation throw. Advisory: never blocks the run it guards.
+    // mid-mutation throw. Advisory: never blocks the run it guards — EXCEPT
+    // when the absorb's own sub-commit fails for a real reason (not "nothing
+    // to absorb"), which absorbOrAbort turns into a StoreTransactionAbort:
+    // that must propagate, not be swallowed here, so withStoreTransaction can
+    // skip the standard rollback and leave the uncommitted hand edit intact.
     try {
-      absorbHandEdits({ workspace, home, log });
-    } catch {
-      // best effort — a hand-edit absorb failure must never block applyOps.
+      absorbOrAbort({ workspace, home, log });
+    } catch (err) {
+      if (err instanceof StoreTransactionAbort) throw err;
+      // best effort — any OTHER hand-edit absorb failure must never block applyOps.
     }
     // Fresh, lock-held re-check of the mode gate: closes the window between
     // the pre-lock check above and lock acquisition where another writer

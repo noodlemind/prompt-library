@@ -320,3 +320,105 @@ test('purge --all: a store-transaction failure leaves every learning and the led
   assert.deepEqual(after, before, 'purge --all must not have wiped anything on a failed transaction');
   assert.equal(fs.existsSync(path.join(dir, '.lock')), false);
 });
+
+// ---------------------------------------------------------------------------
+// Hand-edit protection (hardening batch A follow-up, Important finding): a
+// REAL absorb-commit failure must never let the standard rollback run —
+// that would destroy a legitimate, uncommitted human edit absorbHandEdits
+// itself just wrote. absorbOrAbort (admin.mjs) turns this into a
+// StoreTransactionAbort that withStoreTransaction recognizes and treats
+// specially: no rollback, no further mutation, just a nonzero report with
+// the tree left exactly as absorb last touched it.
+// ---------------------------------------------------------------------------
+
+test('a real absorb-commit failure protects the uncommitted hand edit: no rollback, no mutation, the edit stays in the tree', () => {
+  const c = ctx();
+  const id = seedLearning(c);
+  const { dir } = ensureStore(c.ws, { home: c.harnessHome });
+  const learning = listLearnings(dir).find((l) => l.id === id);
+
+  handEditBody(learning.file, 'A human edit that must survive an absorb-commit failure, uncommitted but intact.');
+  const dirtyBefore = gitPorcelainStatus(dir);
+  assert.match(dirtyBefore, /learnings\/sql\/not-null-hot-tables\.md/, 'precondition: dirty tracked file');
+
+  // Block EVERY commit from here on, including absorb's own sub-commit.
+  installFailingCommitHook(dir);
+
+  const res = applyOps({
+    workspace: c.ws,
+    opsPath: writeOps(c.ws, [ADD(c.ws, { slug: 'should-never-land', episodePath: 'docs/solutions/perf/should-never-land.md' })]),
+    home: c.harnessHome,
+  });
+
+  assert.equal(res.exitCode, 1);
+  assert.equal(res.committed, false);
+
+  assert.equal(fs.existsSync(path.join(dir, '.lock')), false, 'the lock is released even after an absorb-commit failure');
+
+  // No rollback happened: the hand edit is still sitting in the tree,
+  // uncommitted but byte-intact — not reverted to the pre-edit committed state.
+  const dirtyAfter = gitPorcelainStatus(dir);
+  assert.match(dirtyAfter, /learnings\/sql\/not-null-hot-tables\.md/, 'the dirty tracked file survives — no rollback ran');
+  const onDisk = fs.readFileSync(learning.file, 'utf8');
+  assert.match(onDisk, /A human edit that must survive an absorb-commit failure/, 'the hand-edited body is still on disk, byte-intact');
+
+  // And the intended mutation never happened — absorbOrAbort threw BEFORE
+  // the main mutation (runOnce) ever ran.
+  assert.ok(!listLearnings(dir).some((l) => l.id === 'sql/should-never-land'), 'the intended mutation never landed');
+});
+
+test('a real absorb-commit failure (setLearningStatus) also protects the uncommitted hand edit', () => {
+  const c = ctx();
+  const id = seedLearning(c);
+  const { dir } = ensureStore(c.ws, { home: c.harnessHome });
+  const learning = listLearnings(dir).find((l) => l.id === id);
+
+  handEditBody(learning.file, 'Another hand edit that must survive a blocked absorb commit.');
+  installFailingCommitHook(dir);
+
+  const res = setLearningStatus({ workspace: c.ws, id, action: 'retire', reason: 'should not land', home: c.harnessHome });
+  assert.equal(res.pass, false);
+  assert.equal(res.exitCode, 1);
+
+  assert.equal(fs.existsSync(path.join(dir, '.lock')), false);
+  const onDisk = fs.readFileSync(learning.file, 'utf8');
+  assert.match(onDisk, /Another hand edit that must survive a blocked absorb commit/, 'the hand edit survives, uncommitted but intact');
+  assert.doesNotMatch(onDisk, /status: retired/, 'the retire action never landed — absorbOrAbort rejected before the mutation ran');
+});
+
+// ---------------------------------------------------------------------------
+// Rejection masking (hardening batch A follow-up, Rider 1): when the
+// three-strikes bookkeeping's own sub-commit fails, the ORIGINAL content
+// rejection (E_SECRET/E_LINT/...) must still surface — never collapsed into
+// a generic E_APPLY_FAILED.
+// ---------------------------------------------------------------------------
+
+test('a strike-recording commit failure surfaces the ORIGINAL content rejection, not a masked E_APPLY_FAILED', () => {
+  const c = ctx();
+  seedLearning(c);
+  const { dir } = ensureStore(c.ws, { home: c.harnessHome });
+  installFailingCommitHook(dir);
+
+  const secretOp = {
+    op: 'ADD',
+    domain: 'sql',
+    slug: 'secret-shaped',
+    trigger: 'a trigger for a secret-shaped claim',
+    body: 'Rotate the key AKIA1234567890ABCDEF before shipping.',
+    episodes: [{ ...writeRealEpisode(c.ws, 'docs/solutions/perf/secret-ev.md'), kind: 'fix', plan: 'docs/plans/p1.md' }],
+  };
+
+  const res = applyOps({ workspace: c.ws, opsPath: writeOps(c.ws, [secretOp]), home: c.harnessHome });
+
+  assert.equal(res.exitCode, 1);
+  assert.equal(res.rejected?.[0]?.code, 'E_SECRET', 'the original content rejection code must survive, not collapse to E_APPLY_FAILED');
+  assert.match(res.rejected[0].reason, /secret-shaped/);
+  assert.match(res.rejected[0].reason, /strike recording failed/);
+
+  // The failed strike-commit's own partial write was rolled back on the
+  // spot — the tree is clean again, so the transaction's own finalize never
+  // had anything dirty to inherit (and never risked failing a second time
+  // for the same underlying git reason).
+  assert.equal(gitPorcelainStatus(dir).trim(), '', 'the tree is clean — the strike-recording rollback ran');
+  assert.equal(fs.existsSync(path.join(dir, '.lock')), false);
+});

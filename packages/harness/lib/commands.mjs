@@ -1276,7 +1276,7 @@ export async function cmdKnowledge(argv) {
       if (flags.json) {
         emitJson(flags, commitResult);
       } else {
-        for (const l of ui.errorBlock({ code: 'E_USAGE', message: commitResult.blockedReason, exit: 1 })) {
+        for (const l of ui.errorBlock({ code: commitResult.code || 'E_USAGE', message: commitResult.blockedReason, exit: 1 })) {
           console.error(l);
         }
       }
@@ -1306,7 +1306,7 @@ export async function cmdKnowledge(argv) {
       if (flags.json) {
         emitJson(flags, modeResult);
       } else {
-        for (const l of ui.errorBlock({ code: 'E_USAGE', message: modeResult.blockedReason, exit: 1 })) {
+        for (const l of ui.errorBlock({ code: modeResult.code || 'E_USAGE', message: modeResult.blockedReason, exit: 1 })) {
           console.error(l);
         }
       }

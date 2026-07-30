@@ -4,6 +4,7 @@ import crypto from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import {
   withStoreTransaction,
+  StoreTransactionAbort,
   storeDir,
   listLearnings,
   readLedger,
@@ -291,7 +292,20 @@ export function absorbHandEdits({ workspace, home, log = () => {} }) {
   }
   rebuildIndex(dir);
   const ids = [...absorbed.map((a) => a.id), ...deleted].join(', ');
-  const { committed } = commitStore(dir, `human edit: ${ids}`);
+  const commitRes = commitStore(dir, `human edit: ${ids}`);
+  if (!commitRes.ok) {
+    // A REAL git failure (never "nothing to commit" — the writes above
+    // always dirty the tree first, since absorbed.length || deleted.length
+    // is what got us here): the absorbed content is sitting uncommitted in
+    // the working tree right now. Surfaced via `ok`/`stderr` rather than
+    // thrown here — absorbHandEdits itself stays a plain data-returning
+    // function, called both standalone (advisory, unlocked) and inside a
+    // withStoreTransaction. Every transaction caller runs it through
+    // absorbOrAbort (below), which turns this into a StoreTransactionAbort
+    // so a later rollback can never destroy it. Mirroring is skipped too —
+    // the store-side change never actually landed.
+    return { absorbed, deleted, committed: false, ok: false, stderr: commitRes.stderr };
+  }
   try {
     // `deleted` names the ids a human removed directly (git status "D") —
     // human deletion must win in the mirror too, so those ids are named via
@@ -301,7 +315,33 @@ export function absorbHandEdits({ workspace, home, log = () => {} }) {
   } catch {
     // best effort — a mirror failure must never block absorb.
   }
-  return { absorbed, deleted, committed };
+  return { absorbed, deleted, committed: commitRes.committed };
+}
+
+/**
+ * Run absorbHandEdits, then fail closed if its own sub-commit failed for a
+ * REAL reason (not simply "nothing to absorb" — see absorbHandEdits' own
+ * `ok` doc comment above): a real failure here means the absorb's writes are
+ * sitting uncommitted in the working tree right now. Proceeding to the
+ * caller's own mutation — or letting a LATER failure trigger the standard
+ * rollback — would either compound onto unprotected state or destroy the
+ * human's edit outright with no commit to fall back to. Every
+ * withStoreTransaction adopter that calls absorbHandEdits calls this
+ * instead, as the very first thing inside its transaction `fn`; the
+ * StoreTransactionAbort it throws propagates through the adopter's own
+ * try/catch (which must re-throw it, not swallow it — see the adopters
+ * below) and out to withStoreTransaction's catch, which recognizes it and
+ * skips the rollback.
+ */
+export function absorbOrAbort({ workspace, home, log = () => {} }) {
+  const result = absorbHandEdits({ workspace, home, log });
+  if (result.ok === false) {
+    throw new StoreTransactionAbort(
+      `absorbing a hand edit failed to commit: ${result.stderr || 'git commit failed'}`,
+      { stderr: result.stderr }
+    );
+  }
+  return result;
 }
 
 /**
@@ -370,9 +410,13 @@ export function purgeEpisode({ workspace, target, home, log = () => {} }) {
   // evidence with nothing left to point at it.
   const tx = withStoreTransaction(workspace, { home, label: `purge: ${target}` }, ({ dir }) => {
     try {
-      absorbHandEdits({ workspace, home, log });
-    } catch {
-      // best effort — a hand-edit absorb failure must never block purge.
+      absorbOrAbort({ workspace, home, log });
+    } catch (err) {
+      // A REAL absorb-commit failure must propagate as-is (never swallowed)
+      // so withStoreTransaction can skip the rollback and protect the
+      // uncommitted hand edit sitting in the tree — any OTHER absorb hiccup
+      // stays best effort, exactly as before.
+      if (err instanceof StoreTransactionAbort) throw err;
     }
 
     // Read-only discovery pass first: decide whether anything actually
@@ -451,12 +495,19 @@ export function purgeEpisode({ workspace, target, home, log = () => {} }) {
       blockedReason: tx.locked
         ? 'E_LOCKED: another operation holds the store lock'
         : `purge failed: ${tx.error?.message || 'store transaction failed'}`,
+      ...(tx.staleLockNote ? { staleLockRemoved: tx.staleLockNote } : {}),
     };
   }
 
   const inner = tx.result;
   if (inner.kind === 'reject') {
-    return { pass: inner.pass, exitCode: inner.exitCode, removed: inner.removed, blockedReason: inner.blockedReason };
+    return {
+      pass: inner.pass,
+      exitCode: inner.exitCode,
+      removed: inner.removed,
+      blockedReason: inner.blockedReason,
+      ...(tx.staleLockNote ? { staleLockRemoved: tx.staleLockNote } : {}),
+    };
   }
 
   // The workspace episode file is deleted LAST, only now that the store-side
@@ -497,6 +548,7 @@ export function purgeEpisode({ workspace, target, home, log = () => {} }) {
     },
     blockedReason: null,
     ...(partialReason ? { partialReason } : {}),
+    ...(tx.staleLockNote ? { staleLockRemoved: tx.staleLockNote } : {}),
   };
 }
 
@@ -523,9 +575,13 @@ export function purgeAll({ workspace, home, log = () => {} }) {
 
   const tx = withStoreTransaction(workspace, { home, label: 'purge: --all (store reset)' }, ({ dir }) => {
     try {
-      absorbHandEdits({ workspace, home, log });
-    } catch {
-      // best effort — a hand-edit absorb failure must never block purge --all.
+      absorbOrAbort({ workspace, home, log });
+    } catch (err) {
+      // A REAL absorb-commit failure must propagate as-is (never swallowed)
+      // so withStoreTransaction can skip the rollback and protect the
+      // uncommitted hand edit sitting in the tree — any OTHER absorb hiccup
+      // stays best effort, exactly as before.
+      if (err instanceof StoreTransactionAbort) throw err;
     }
     // Captured BEFORE the wipe below: a full reset (design-controller ruling)
     // must still clear the mirror for exactly these ids, but by the time
@@ -559,6 +615,7 @@ export function purgeAll({ workspace, home, log = () => {} }) {
       blockedReason: tx.locked
         ? 'E_LOCKED: another operation holds the store lock'
         : `purge --all failed: ${tx.error?.message || 'store transaction failed'}`,
+      ...(tx.staleLockNote ? { staleLockRemoved: tx.staleLockNote } : {}),
     };
   }
 
@@ -568,7 +625,13 @@ export function purgeAll({ workspace, home, log = () => {} }) {
   } catch {
     // best effort — a mirror failure must never block purge --all.
   }
-  return { pass: true, exitCode: 0, removed: { learnings: inner.removedCount }, blockedReason: null };
+  return {
+    pass: true,
+    exitCode: 0,
+    removed: { learnings: inner.removedCount },
+    blockedReason: null,
+    ...(tx.staleLockNote ? { staleLockRemoved: tx.staleLockNote } : {}),
+  };
 }
 
 /**
@@ -621,9 +684,13 @@ export function rebuildStore({ workspace, home, yes, copilotHome, log = () => {}
   // under the lock, rather than before it existed).
   const tx = withStoreTransaction(workspace, { home, label: 'consolidate: rebuild reset' }, ({ dir }) => {
     try {
-      absorbHandEdits({ workspace, home, log });
-    } catch {
-      // best effort — a hand-edit absorb failure must never block rebuild.
+      absorbOrAbort({ workspace, home, log });
+    } catch (err) {
+      // A REAL absorb-commit failure must propagate as-is (never swallowed)
+      // so withStoreTransaction can skip the rollback and protect the
+      // uncommitted hand edit sitting in the tree — any OTHER absorb hiccup
+      // stays best effort, exactly as before.
+      if (err instanceof StoreTransactionAbort) throw err;
     }
     // Captured BEFORE the wipe below — same reasoning as purgeAll's
     // idsBeforeReset: mirrorLearnings needs these ids named explicitly via
@@ -659,6 +726,7 @@ export function rebuildStore({ workspace, home, yes, copilotHome, log = () => {}
         ? 'E_LOCKED: another operation holds the store lock'
         : `rebuild failed: ${tx.error?.message || 'store transaction failed'}`,
       nextTools: [],
+      ...(tx.staleLockNote ? { staleLockRemoved: tx.staleLockNote } : {}),
     };
   }
 
@@ -680,5 +748,6 @@ export function rebuildStore({ workspace, home, yes, copilotHome, log = () => {}
     debt,
     blockedReason: null,
     nextTools: ['harness consolidate --candidates'],
+    ...(tx.staleLockNote ? { staleLockRemoved: tx.staleLockNote } : {}),
   };
 }

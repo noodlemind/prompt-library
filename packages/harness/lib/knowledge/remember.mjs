@@ -4,8 +4,7 @@ import path from 'node:path';
 import { runInsightCompound } from '../compound.mjs';
 import { runIndexKnowledge } from '../index-knowledge.mjs';
 import { applyOps } from './apply.mjs';
-import { normalizeSlug, readStoreConfig, storeDir, listLearnings, ensureStore, readLedger, commitStore } from './store.mjs';
-import { absorbHandEdits } from './admin.mjs';
+import { normalizeSlug, readStoreConfig, storeDir, listLearnings, withStoreTransaction, readLedger } from './store.mjs';
 
 /**
  * The human teaching lane: a direct claim from a person, captured as a
@@ -26,18 +25,16 @@ export function runRemember({ workspace, copilotHome, flags, argv, log = () => {
       nextTools: ['harness knowledge on'],
     };
   }
-  // Absorb any hand edit before this teaching writes — so a re-teach
-  // (SUPERSEDE, same trigger/domain) always builds on the absorbed state.
-  // Advisory: never blocks remember. Skipped on dryRun — same reasoning as
-  // applyOps' own absorb gate: a preview must never leave a real store
-  // commit behind.
-  if (!flags.dryRun) {
-    try {
-      absorbHandEdits({ workspace, home, log });
-    } catch {
-      // best effort
-    }
-  }
+  // No pre-absorb here: applyOps below absorbs any hand edit itself, INSIDE
+  // its own single-writer lock — an unlocked absorb here (as this used to
+  // be) could commit while another writer held the lock, potentially
+  // committing that writer's own partial state and moving its rollback
+  // baseline mid-flight. The `existingLearning` read just below can go stale
+  // in the window between here and applyOps' lock, but that's safe: applyOps
+  // re-validates fresh, under the lock, and fails closed either way (a stale
+  // "no learning yet" read building an ADD gets E_EXISTS if one now exists;
+  // a stale "learning exists" read building a SUPERSEDE gets E_TARGET if it
+  // was deleted, or the promoted-target rejection if it was promoted since).
   const claim = argv[0] && !argv[0].startsWith('--') ? argv[0] : null;
   if (!claim || !flags.trigger) {
     return {
@@ -149,20 +146,34 @@ export function runRemember({ workspace, copilotHome, flags, argv, log = () => {
     // would point at a path that no longer exists, phantom-quarantining a
     // path a human never gets to retry. Same path-filter idiom purgeEpisode
     // uses (admin.mjs): drop every ledger entry for this path and rewrite
-    // consolidated.jsonl, committing the rewrite when the store has git.
-    // Best effort — a cleanup failure must never mask the original rejection.
+    // consolidated.jsonl. Routed through withStoreTransaction (its own SHORT
+    // lock, released well before this function returns) rather than a bare
+    // ensureStore + commitStore call — this is still a real store write and
+    // must not race a concurrent writer either. The return value is
+    // intentionally never inspected: withStoreTransaction reports E_LOCKED
+    // (and any other transaction failure) as a normal `{ ok: false, ... }`
+    // return, not a throw, so simply not checking it already means "skip
+    // silently on contention or failure" — no explicit E_LOCKED branch
+    // needed. This is pure bookkeeping (a stale failure/quarantine ledger
+    // entry for a path that no longer exists), so a skipped cleanup just
+    // means the next purge or absorb sweep reconciles it naturally. The
+    // surrounding try/catch guards only against a genuine thrown exception
+    // (e.g. a filesystem error) — a cleanup failure of any kind must never
+    // mask the original rejection this function is about to return below.
     try {
-      const { dir, git } = ensureStore(workspace, { home });
-      const ledger = readLedger(dir);
-      const keptLedger = ledger.filter((e) => e.path !== episode.path);
-      if (keptLedger.length !== ledger.length) {
+      withStoreTransaction(workspace, { home, label: `remember: clear failure bookkeeping for ${episode.path}` }, ({ dir }) => {
+        const ledger = readLedger(dir);
+        const keptLedger = ledger.filter((e) => e.path !== episode.path);
+        if (keptLedger.length === ledger.length) {
+          return { kind: 'success', commitMessage: null };
+        }
         fs.writeFileSync(
           path.join(dir, 'consolidated.jsonl'),
           keptLedger.length ? keptLedger.map((e) => JSON.stringify(e)).join('\n') + '\n' : '',
           'utf8'
         );
-        if (git) commitStore(dir, `remember: clear failure bookkeeping for ${episode.path}`);
-      }
+        return { kind: 'success', commitMessage: `remember: clear failure bookkeeping for ${episode.path}` };
+      });
     } catch {
       // best effort — a ledger-cleanup failure must never mask the original rejection.
     }

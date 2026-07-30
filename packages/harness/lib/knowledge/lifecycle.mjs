@@ -1,8 +1,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { storeDir, withStoreTransaction, listLearnings, serializeLearning, appendGovernance } from './store.mjs';
+import { storeDir, withStoreTransaction, StoreTransactionAbort, listLearnings, serializeLearning, appendGovernance } from './store.mjs';
 import { updateFrontmatterField, todayClamped, rebuildIndex } from './apply.mjs';
-import { absorbHandEdits, mirrorLearnings } from './admin.mjs';
+import { absorbOrAbort, mirrorLearnings } from './admin.mjs';
 
 /**
  * One-command human authority over a single learning: retire, dispute,
@@ -49,9 +49,13 @@ export function setLearningStatus({ workspace, id, action, reason, to, home, log
     // (human-authored) state, not a stale in-tree edit. Advisory: never
     // blocks the command.
     try {
-      absorbHandEdits({ workspace, home, log });
-    } catch {
-      // best effort
+      absorbOrAbort({ workspace, home, log });
+    } catch (err) {
+      // A REAL absorb-commit failure must propagate as-is (never swallowed)
+      // so withStoreTransaction can skip the rollback and protect the
+      // uncommitted hand edit sitting in the tree — any OTHER absorb hiccup
+      // stays best effort, exactly as before.
+      if (err instanceof StoreTransactionAbort) throw err;
     }
     const learning = listLearnings(dir).find((l) => l.id === id);
     if (!learning) {
@@ -135,12 +139,20 @@ export function setLearningStatus({ workspace, id, action, reason, to, home, log
       blockedReason: tx.locked
         ? 'E_LOCKED: another operation holds the store lock'
         : `${action} failed: ${tx.error?.message || 'store transaction failed'}`,
+      ...(tx.staleLockNote ? { staleLockRemoved: tx.staleLockNote } : {}),
     };
   }
 
   const inner = tx.result;
   if (inner.kind === 'reject') {
-    return { pass: inner.pass, exitCode: inner.exitCode, id: inner.id, status: inner.status, blockedReason: inner.blockedReason };
+    return {
+      pass: inner.pass,
+      exitCode: inner.exitCode,
+      id: inner.id,
+      status: inner.status,
+      blockedReason: inner.blockedReason,
+      ...(tx.staleLockNote ? { staleLockRemoved: tx.staleLockNote } : {}),
+    };
   }
 
   try {
@@ -148,5 +160,12 @@ export function setLearningStatus({ workspace, id, action, reason, to, home, log
   } catch {
     // best effort — a mirror failure must never block a lifecycle action.
   }
-  return { pass: true, exitCode: 0, id, status: inner.status, blockedReason: null };
+  return {
+    pass: true,
+    exitCode: 0,
+    id,
+    status: inner.status,
+    blockedReason: null,
+    ...(tx.staleLockNote ? { staleLockRemoved: tx.staleLockNote } : {}),
+  };
 }
