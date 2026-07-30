@@ -106,6 +106,59 @@ test('write: writeFileContained refuses a symlinked ancestor redirecting outside
   assert.equal(fs.readFileSync(ok, 'utf8'), 'good\n');
 });
 
+test('write: the POST-CREATE verify branch refuses, cleans up, and NEVER lands content — proven by observing the temp is still empty at verify time (content-never-lands)', (t) => {
+  // The symlinked-ANCESTOR write test above actually refuses at the SCAN-TIME
+  // assertNoSymlinkAncestors pre-walk, so it never reaches writeFileContained's
+  // post-create realpathParentContained branch — that branch only fires under
+  // the real ancestor-SWAP race (an ancestor turned into a symlink AFTER the
+  // pre-walk but BEFORE the create). We reproduce that race deterministically by
+  // forcing the parent's realpath to resolve OUTSIDE the root for the single
+  // verify call, while the create still lands a real, empty file inside the root.
+  const ws = tmp('toctou-postverify-ws-');
+  const outside = tmp('toctou-postverify-outside-');
+  const rel = path.join('docs', 'real', 'ep.md');
+  const full = path.join(ws, rel);
+  const parentDir = path.dirname(full);
+  const CONTENT = 'CONTENT_BYTES_THAT_MUST_NEVER_LAND_BEFORE_VERIFY\n';
+
+  const realRealpath = fs.realpathSync;
+  let tmpSizeAtVerify = null; // temp file size observed at the instant of the verify
+  let tmpsAtVerify = null;
+  // Mock ONLY the parent-resolution realpath call writeFileContained makes
+  // during the post-create verify; delegate everything else (including the
+  // root canonicalization) to the real implementation.
+  t.mock.method(fs, 'realpathSync', (p, ...rest) => {
+    if (path.resolve(p) === path.resolve(parentDir)) {
+      // The empty temp already exists here — capture its state, then force the
+      // containment check to see an escape. Do NOT throw: realpathParentContained
+      // swallows throws (returns false), which would hide an assertion failure.
+      // readdirSync/statSync are unmocked, so they observe the real filesystem.
+      tmpsAtVerify = fs.readdirSync(parentDir).filter((f) => f.startsWith('.tmp-'));
+      if (tmpsAtVerify.length === 1) tmpSizeAtVerify = fs.statSync(path.join(parentDir, tmpsAtVerify[0])).size;
+      return outside; // parent "resolves" outside the root → containment fails
+    }
+    return realRealpath(p, ...rest);
+  });
+
+  const result = writeFileContained(ws, rel, CONTENT);
+
+  assert.equal(result, null, 'post-create verify failure refuses the write');
+  assert.equal(tmpsAtVerify.length, 1, 'exactly one temp file existed before the verify ran');
+  assert.equal(tmpSizeAtVerify, 0, 'the temp was still EMPTY at verify time — content never landed before containment passed');
+  // Cleanup: the refused temp is unlinked, the final file was never created,
+  // and no content byte exists anywhere on disk.
+  assert.equal(fs.readdirSync(parentDir).filter((f) => f.startsWith('.tmp-')).length, 0, 'the empty temp was cleaned up');
+  assert.ok(!fs.existsSync(full), 'the final file was never published');
+  for (const dir of [parentDir, outside]) {
+    for (const f of fs.readdirSync(dir)) {
+      const fp = path.join(dir, f);
+      if (fs.statSync(fp).isFile()) {
+        assert.ok(!fs.readFileSync(fp, 'utf8').includes('CONTENT_BYTES_THAT_MUST_NEVER_LAND'), `no content bytes written to ${fp}`);
+      }
+    }
+  }
+});
+
 test('delete/rename guard: assertRealpathContained refuses a symlinked-ancestor target, accepts a real contained target, and refuses a missing one', () => {
   const ws = tmp('toctou-del-ws-');
   const outside = tmp('toctou-del-outside-');

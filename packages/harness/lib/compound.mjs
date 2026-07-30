@@ -72,20 +72,35 @@ function reserveEpisodePath(workspace, dirRel, base, doc) {
     const full = assertNoSymlinkAncestors(workspace, rel);
     if (!full) return { ok: false };
     try {
-      fs.writeFileSync(full, doc, { flag: 'wx' });
+      // Exclusively create the leaf EMPTY first (O_CREAT|O_EXCL via 'wx'): the
+      // race loser still gets EEXIST, and O_EXCL still refuses a pre-planted
+      // symlink at the leaf — but no content byte lands until the verify below
+      // passes, so an ancestor-swap race can only ever expose a zero-byte file.
+      const fd = fs.openSync(full, 'wx');
       // Post-create containment verify (symmetry with writeFileContained's
       // canonicalize-after-acquire step 3): the pre-create ancestor walk and the
       // O_EXCL leaf create are both scan-time, so an ancestor swapped for a
       // symlink AFTER the walk could make this leaf land OUTSIDE the workspace.
-      // realpath the created file's parent; on an escape, unlink and refuse so
-      // nothing is ever published outside the workspace root.
+      // realpath the created (still EMPTY) file's parent; on an escape, close,
+      // unlink, and refuse so no content is ever published outside the workspace.
       if (!realpathParentContained(workspace, full)) {
+        try {
+          fs.closeSync(fd);
+        } catch {
+          // fd may already be gone if the leaf was swapped away
+        }
         try {
           fs.unlinkSync(full);
         } catch {
           // best effort — a swapped-away leaf is not ours to chase
         }
         return { ok: false };
+      }
+      // Verify passed: write the content THROUGH the verified descriptor.
+      try {
+        fs.writeFileSync(fd, doc);
+      } finally {
+        fs.closeSync(fd);
       }
       return { ok: true, rel };
     } catch (err) {

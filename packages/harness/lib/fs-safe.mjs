@@ -305,21 +305,25 @@ export function realpathParentContained(root, full) {
 
 /**
  * Contained, atomic write via canonicalize-after-acquire. The sequence is
- * create-THEN-verify so the containment check inspects a file that PHYSICALLY
- * exists rather than a path that might be redirected a moment later:
+ * create-EMPTY → verify → write-through-fd → rename, so no content byte is ever
+ * placed at a path that has not already passed the containment check — even for
+ * the instant before a failing verify unlinks it:
  *   1. assertNoSymlinkAncestors — cheap lexical + ancestor-symlink pre-filter.
- *   2. mkdir the parent, then exclusively create the temp file with flag 'wx'
- *      (O_CREAT|O_EXCL): O_EXCL refuses to follow/overwrite a pre-planted
- *      symlink at the temp leaf, atomically.
- *   3. Now that the file exists, realpath its PARENT and require it inside
- *      realpath(root). A symlinked ANCESTOR swapped in after step 1 makes the
- *      temp land outside and realpath(parent) resolve outside realRoot →
- *      UNLINK the just-created temp and refuse, so nothing is ever published
- *      outside the root.
- *   4. rename the verified temp onto the final name IN THE SAME directory, so
- *      a concurrent reader never observes a partial write.
+ *   2. mkdir the parent, then exclusively create the temp file EMPTY with flag
+ *      'wx' (O_CREAT|O_EXCL): O_EXCL refuses to follow/overwrite a pre-planted
+ *      symlink at the temp leaf, atomically, and creating zero bytes means an
+ *      ancestor-swap race can only ever expose an EMPTY file, never content.
+ *   3. Now that the (empty) file exists, realpath its PARENT and require it
+ *      inside realpath(root). A symlinked ANCESTOR swapped in after step 1
+ *      makes the temp land outside and realpath(parent) resolve outside
+ *      realRoot → close the fd, UNLINK the just-created empty temp and refuse.
+ *   4. Only AFTER the verify passes, write the content THROUGH the verified
+ *      descriptor (so the bytes land in the exact object just proven contained,
+ *      not a re-opened path), close it, then rename the temp onto the final
+ *      name IN THE SAME directory so a concurrent reader never sees a partial
+ *      write.
  * The rename is not atomic with the realpath check (Node has no openat), but
- * because the file is created and verified in place before it is published,
+ * because the file is created empty, verified in place, and only THEN filled,
  * the only residual is the same inode-preserving parent swap the module note
  * documents — which cannot redirect the write's content out of the root.
  * Returns the written absolute path, or null when the write was refused.
@@ -331,9 +335,11 @@ export function writeFileContained(root, rel, content) {
   const parent = path.dirname(full);
   fs.mkdirSync(parent, { recursive: true });
   const tmp = path.join(parent, `.tmp-${path.basename(full)}-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+  let fd;
   try {
-    // Exclusive create: never follows/overwrites an existing leaf.
-    fs.writeFileSync(tmp, content, { encoding: 'utf8', flag: 'wx' });
+    // Exclusive create, EMPTY (zero bytes): O_CREAT|O_EXCL never
+    // follows/overwrites an existing leaf, and no content exists yet.
+    fd = fs.openSync(tmp, 'wx');
   } catch {
     return null;
   }
@@ -344,10 +350,29 @@ export function writeFileContained(root, rel, content) {
       /* best effort — a swapped-away temp is not ours to chase */
     }
   };
-  // Post-create containment (shared with reserveEpisodePath): the file now
-  // exists, so realpath resolves through any ancestor a racing process swapped
-  // for a symlink after step 1.
+  // Post-create containment (shared with reserveEpisodePath): the empty file
+  // now exists, so realpath resolves through any ancestor a racing process
+  // swapped for a symlink after step 1. On an escape, only a zero-byte file was
+  // ever exposed — no content bytes — before it is closed and unlinked here.
   if (!realpathParentContained(rootFull, full)) {
+    try {
+      fs.closeSync(fd);
+    } catch {
+      /* fd may already be gone if the leaf was swapped away */
+    }
+    cleanup();
+    return null;
+  }
+  // Verify passed: write content THROUGH the verified descriptor, then close.
+  try {
+    fs.writeFileSync(fd, content, { encoding: 'utf8' });
+    fs.closeSync(fd);
+  } catch {
+    try {
+      fs.closeSync(fd);
+    } catch {
+      /* already closed / gone */
+    }
     cleanup();
     return null;
   }
