@@ -118,14 +118,24 @@ export function readStoreConfig(workspace, { home } = {}) {
  * field this call changed.
  */
 export function writeStoreConfig(workspace, { home, mode, commit } = {}) {
-  const { dir } = ensureStore(workspace, { home });
-  const current = readStoreConfig(workspace, { home });
-  const nextMode = mode !== undefined ? mode : current.mode;
-  const nextCommit = commit !== undefined ? commit : current.commit;
-  fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify({ mode: nextMode, commit: nextCommit }) + '\n', 'utf8');
-  const message = mode !== undefined ? `knowledge: mode ${nextMode}` : `knowledge: commit ${nextCommit}`;
-  const { committed } = commitStore(dir, message);
-  return { mode: nextMode, commit: nextCommit, committed };
+  const tx = withStoreTransaction(workspace, { home }, ({ dir }) => {
+    const current = readStoreConfig(workspace, { home });
+    const nextMode = mode !== undefined ? mode : current.mode;
+    const nextCommit = commit !== undefined ? commit : current.commit;
+    fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify({ mode: nextMode, commit: nextCommit }) + '\n', 'utf8');
+    const message = mode !== undefined ? `knowledge: mode ${nextMode}` : `knowledge: commit ${nextCommit}`;
+    return { nextMode, nextCommit, commitMessage: message };
+  });
+  if (!tx.ok) {
+    return {
+      mode: mode !== undefined ? mode : null,
+      commit: commit !== undefined ? commit : null,
+      committed: false,
+      pass: false,
+      blockedReason: tx.locked ? 'E_LOCKED: another operation holds the store lock' : `store transaction failed: ${tx.error?.message || 'unknown error'}`,
+    };
+  }
+  return { mode: tx.result.nextMode, commit: tx.result.nextCommit, committed: tx.committed, pass: true, blockedReason: null };
 }
 
 /** Append-only episode-consumption ledger. Torn tail lines are tolerated. */
@@ -394,15 +404,171 @@ export function listLearnings(dir) {
   return out.sort((a, b) => a.id.localeCompare(b.id));
 }
 
-/** Commit everything in the store; false when the tree is clean. */
+/**
+ * Stage and commit everything in the store. `committed` is the long-standing
+ * boolean contract every caller destructures (true on a real commit, false on
+ * a clean tree) — unchanged. `ok`/`stderr` are additive: a REAL git failure
+ * (as opposed to "nothing to commit") now surfaces distinctly instead of
+ * being silently folded into `committed: false` (P1-7 — a failed `git add`
+ * or `git commit` used to be indistinguishable from a legitimate no-op, so
+ * callers reported success on a git failure and left dirty CLI-authored
+ * state a later absorb could misclassify as a human edit).
+ *
+ * The clean-tree signal is `git status --porcelain` emptiness, never a git
+ * exit code or message string: `git commit` also exits nonzero for a clean
+ * tree, and its "nothing to commit" text is locale-dependent — porcelain
+ * output is neither.
+ */
 export function commitStore(dir, message) {
-  spawnSync('git', ['add', '-A'], { cwd: dir, encoding: 'utf8' });
-  const res = spawnSync(
+  const addRes = spawnSync('git', ['add', '-A'], { cwd: dir, encoding: 'utf8' });
+  if (addRes.status !== 0) {
+    return { committed: false, ok: false, stderr: addRes.stderr || `git add exited ${addRes.status}` };
+  }
+  const statusRes = spawnSync('git', ['status', '--porcelain'], { cwd: dir, encoding: 'utf8' });
+  if (statusRes.status !== 0) {
+    return { committed: false, ok: false, stderr: statusRes.stderr || `git status exited ${statusRes.status}` };
+  }
+  if (!statusRes.stdout.trim()) {
+    return { committed: false, ok: true };
+  }
+  const commitRes = spawnSync(
     'git',
     ['-c', 'user.name=harness', '-c', 'user.email=harness@local', 'commit', '-q', '-m', message],
     { cwd: dir, encoding: 'utf8', timeout: 15000 }
   );
-  return { committed: res.status === 0 };
+  if (commitRes.status !== 0) {
+    return { committed: false, ok: false, stderr: commitRes.stderr || `git commit exited ${commitRes.status}` };
+  }
+  return { committed: true, ok: true };
+}
+
+// A killed transaction holder leaves `.lock` behind forever — nothing ever
+// removes it on a crash. Past this age, assume its owner is dead rather than
+// wedging the store for every future writer.
+const STALE_LOCK_MS = 10 * 60 * 1000;
+
+/** Roll back the store's working tree to its last commit: `git reset --hard`
+ * undoes tracked changes, `git clean -fd` sweeps untracked files/dirs. Used
+ * on any transaction failure (fn threw, or the final stage+commit itself
+ * failed) — one implementation, shared by every adopter via
+ * withStoreTransaction, replacing what used to be duplicated inline in
+ * apply.mjs. */
+function rollbackStore(dir) {
+  spawnSync('git', ['reset', '--hard'], { cwd: dir, encoding: 'utf8' });
+  spawnSync('git', ['clean', '-fd'], { cwd: dir, encoding: 'utf8' });
+}
+
+/**
+ * The single-writer transaction every store mutator (applyOps,
+ * setLearningStatus, purgeEpisode, purgeAll, rebuildStore's --yes path,
+ * writeStoreConfig) runs inside. Closes three race windows a security review
+ * found in the pre-transaction design: the lock started too late (state was
+ * read and validated before the lock existed), ended too early (released
+ * before the final commit, so a losing writer could interleave with an
+ * in-flight commit), and several writers never took it at all.
+ *
+ * Acquires `.lock` (mkdir + stale-takeover-via-rename — moved here from
+ * apply.mjs so there is exactly one implementation) BEFORE calling
+ * `fn({ dir, git })`. `fn` is expected to mutate the store directly and
+ * return a plain result value describing what happened; it may perform its
+ * OWN sub-commits when it needs more than one checkpoint inside this same
+ * lock (e.g. absorbHandEdits's self-contained "human edit: <ids>" commit,
+ * simply invoked from inside `fn` now instead of before the lock existed —
+ * that earlier sub-commit is what a later rollback in this same transaction
+ * lands on, never before it).
+ *
+ * On `fn` returning normally: stage + commit whatever `fn` left uncommitted,
+ * using `(result && result.commitMessage) || label` as the message. A real
+ * git failure at either step triggers rollback and is reported as
+ * `ok: false, rolledBack: true`. A store with no git (`ensureStore` degraded)
+ * skips staging entirely and reports `committed: false` — the same tolerant
+ * default the rest of the store's degraded modes use.
+ *
+ * On `fn` throwing: rollback, then report `ok: false, rolledBack: true,
+ * error`.
+ *
+ * The lock is released in `finally`, AFTER the commit or rollback above
+ * completes — never before.
+ *
+ * Non-reentrant by design: `fn` must never call withStoreTransaction again
+ * (it would simply E_LOCKED against its own held lock).
+ */
+export function withStoreTransaction(workspace, { home, label } = {}, fn) {
+  const { dir, git } = ensureStore(workspace, { home });
+  const lockPath = path.join(dir, '.lock');
+  let staleLockNote = null;
+  try {
+    fs.mkdirSync(lockPath);
+  } catch {
+    let stat;
+    try {
+      stat = fs.statSync(lockPath);
+    } catch {
+      stat = null;
+    }
+    const ageMs = stat ? Date.now() - stat.mtimeMs : 0;
+    let recovered = false;
+    if (stat && ageMs > STALE_LOCK_MS) {
+      const tombstone = `${lockPath}.stale-${process.pid}-${Date.now()}`;
+      let claimed = false;
+      try {
+        fs.renameSync(lockPath, tombstone);
+        claimed = true;
+      } catch {
+        claimed = false; // another process already won the takeover race
+      }
+      if (claimed) {
+        try {
+          fs.mkdirSync(lockPath);
+          staleLockNote = `stale lock (${Math.round(ageMs / 60000)}m old) removed`;
+          recovered = true;
+        } catch {
+          recovered = false;
+        }
+        try {
+          fs.rmSync(tombstone, { recursive: true, force: true });
+        } catch {
+          // ignored — an orphaned tombstone is harmless disk debris either way
+        }
+      }
+    }
+    if (!recovered) {
+      return { ok: false, locked: true, rolledBack: false, error: null, committed: false, result: null, dir, git, staleLockNote: null };
+    }
+  }
+
+  try {
+    let result;
+    try {
+      result = fn({ dir, git });
+    } catch (err) {
+      if (git) rollbackStore(dir);
+      return { ok: false, locked: false, rolledBack: true, error: err, committed: false, result: null, dir, git, staleLockNote };
+    }
+    let commitRes = { committed: false, ok: true };
+    if (git) {
+      commitRes = commitStore(dir, (result && result.commitMessage) || label || 'harness: update store');
+    }
+    if (!commitRes.ok) {
+      rollbackStore(dir);
+      return {
+        ok: false,
+        locked: false,
+        rolledBack: true,
+        error: new Error(commitRes.stderr || 'git commit failed'),
+        committed: false,
+        result: null,
+        dir,
+        git,
+        staleLockNote,
+      };
+    }
+    return { ok: true, locked: false, rolledBack: false, error: null, committed: commitRes.committed, result, dir, git, staleLockNote };
+  } finally {
+    // The rollback above may have already removed the untracked .lock
+    // directory via `git clean -fd` — tolerate that instead of throwing.
+    fs.rmSync(lockPath, { recursive: true, force: true });
+  }
 }
 
 /** Lowercase, diacritic-stripped, [a-z0-9-] slugs — case-insensitive-FS safe. */

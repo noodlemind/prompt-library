@@ -1263,14 +1263,25 @@ export async function cmdKnowledge(argv) {
       }
       return EXIT.usage;
     }
-    writeStoreConfig(workspace, { commit: commitValue });
+    const commitResult = writeStoreConfig(workspace, { commit: commitValue });
     writeEvent(workspace, flags, {
       type: 'knowledge',
       command: 'knowledge',
       decision: `commit ${commitValue}`,
-      result: 'pass',
-      exitCode: 0,
+      result: commitResult.pass ? 'pass' : 'fail',
+      exitCode: commitResult.pass ? 0 : 1,
+      blockedReason: commitResult.blockedReason,
     });
+    if (!commitResult.pass) {
+      if (flags.json) {
+        emitJson(flags, commitResult);
+      } else {
+        for (const l of ui.errorBlock({ code: 'E_USAGE', message: commitResult.blockedReason, exit: 1 })) {
+          console.error(l);
+        }
+      }
+      return 1;
+    }
     if (flags.json) {
       emitJson(flags, { pass: true, commit: commitValue });
     } else {
@@ -1282,14 +1293,25 @@ export async function cmdKnowledge(argv) {
   }
 
   if (subcommand && KNOWLEDGE_MODES.has(subcommand)) {
-    writeStoreConfig(workspace, { mode: subcommand });
+    const modeResult = writeStoreConfig(workspace, { mode: subcommand });
     writeEvent(workspace, flags, {
       type: 'knowledge',
       command: 'knowledge',
       decision: subcommand,
-      result: 'pass',
-      exitCode: 0,
+      result: modeResult.pass ? 'pass' : 'fail',
+      exitCode: modeResult.pass ? 0 : 1,
+      blockedReason: modeResult.blockedReason,
     });
+    if (!modeResult.pass) {
+      if (flags.json) {
+        emitJson(flags, modeResult);
+      } else {
+        for (const l of ui.errorBlock({ code: 'E_USAGE', message: modeResult.blockedReason, exit: 1 })) {
+          console.error(l);
+        }
+      }
+      return 1;
+    }
     if (flags.json) {
       emitJson(flags, { pass: true, mode: subcommand });
     } else {

@@ -1,9 +1,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { spawnSync } from 'node:child_process';
 import {
   ensureStore,
+  withStoreTransaction,
   appendLedger,
   readLedger,
   listLearnings,
@@ -31,10 +31,6 @@ import { parseMergedFrom } from './listing.mjs';
 
 const FILE_TOUCHING = new Set(['ADD', 'STRENGTHEN', 'SUPERSEDE', 'MERGE']);
 const DISPUTED_FIX_THRESHOLD = 3;
-// A killed consolidation process leaves `.lock` behind forever — nothing
-// ever removes it on a crash. Past this age, assume its owner is dead rather
-// than wedging the store for every future run.
-const STALE_LOCK_MS = 10 * 60 * 1000;
 // Codes that indicate the CONTENT of a specific op was rejected (bad shape,
 // secret-shaped, imperative lint, over the byte cap, a dedup/rename collision
 // against an ON-DISK learning, or a missing target) — as opposed to FOUR
@@ -114,6 +110,7 @@ function fail(code, reason) {
  */
 function promotedTargetRejection(i, id, promotedTo) {
   return {
+    kind: 'reject',
     applied: [],
     governed: [],
     rejected: [
@@ -435,25 +432,15 @@ function overridesGovernanceRecency(workspace, copilotHome, episodes, record) {
 }
 
 export function applyOps({ workspace, opsPath, dryRun = false, home, approve = false, log = () => {}, copilotHome = null }) {
-  // Absorb any hand edit sitting in the store BEFORE anything else — even
-  // before the mode gate. The failure path below can `git reset --hard` the
-  // store tree; a dirty hand edit caught in that reset would be destroyed
-  // along with the partial op-write it's cleaning up, so it must be
-  // committed on its own first. Advisory: never blocks the run it guards.
-  // Skipped on dryRun — a preview must never leave a real commit behind.
-  if (!dryRun) {
-    try {
-      absorbHandEdits({ workspace, home, log });
-    } catch {
-      // best effort — a hand-edit absorb failure must never block applyOps.
-    }
-  }
-
   // Kill switch: consolidate is a write path gated to mode 'on' — checked
-  // first, before the ops file is even parsed, and before the lockfile below.
-  // 'suggest' is a conditional exception: it only proceeds when the caller
-  // passes approve (set by a human re-running with --yes after reviewing the
-  // ops JSON) — every other non-'on' mode rejects regardless of approve.
+  // first, before the ops file is even parsed, and before any lock. This is a
+  // cheap, no-lock pre-check (unchanged from before); the real (non-dryRun)
+  // mutation path below ALSO re-checks mode fresh, under the lock, closing
+  // the window where mode could change between this check and lock
+  // acquisition. 'suggest' is a conditional exception: it only proceeds when
+  // the caller passes approve (set by a human re-running with --yes after
+  // reviewing the ops JSON) — every other non-'on' mode rejects regardless of
+  // approve.
   const { mode } = readStoreConfig(workspace, { home });
   if (mode !== 'on' && !(mode === 'suggest' && approve)) {
     const reason =
@@ -490,60 +477,6 @@ export function applyOps({ workspace, opsPath, dryRun = false, home, approve = f
     }
   }
 
-  const { dir, git } = ensureStore(workspace, { home, dryRun });
-  const origin = repoId(workspace);
-  const existing = new Map(listLearnings(dir).map((l) => [l.id, l]));
-
-  /**
-   * Three-strikes bookkeeping (design §3): a content-failure code raised by a
-   * SPECIFIC op records one failure entry per episode of that op — never for
-   * codes outside CONTENT_FAILURE_CODES, and never on dryRun or when the
-   * store has no git (best effort, mirrors the rest of the store's degraded
-   * modes). Episodes without a structurally valid path+sha256 are skipped —
-   * there is nothing reliable to key a strike on. On an episode's 3rd
-   * accumulated failure, the SAME append also writes the quarantine marker.
-   * Never throws: a bookkeeping error must never mask the real rejection.
-   */
-  function recordContentFailure(code, episodes) {
-    if (dryRun || !git || !CONTENT_FAILURE_CODES.has(code)) return;
-    // Dedupe by path@sha256 before recording: an op citing the same episode
-    // twice (a malformed or duplicated op JSON, not two distinct pieces of
-    // evidence) must record ONE strike per run, not one per reference — a
-    // duplicate reference would otherwise double-count toward the 3-strike
-    // quarantine threshold within a single run.
-    const seenKeys = new Set();
-    const eps = (episodes || [])
-      .filter((e) => e && e.path && /^[0-9a-f]{64}$/.test(e.sha256 || ''))
-      .filter((e) => {
-        const key = `${e.path}@${e.sha256}`;
-        if (seenKeys.has(key)) return false;
-        seenKeys.add(key);
-        return true;
-      });
-    if (!eps.length) return;
-    try {
-      const ledger = readLedger(dir);
-      const at = todayClamped();
-      const entries = [];
-      for (const e of eps) {
-        const priorFailures = ledger.filter((le) => le.failure && le.path === e.path && le.sha256 === e.sha256).length;
-        entries.push({ path: e.path, sha256: e.sha256, failure: code, at });
-        if (priorFailures + 1 >= QUARANTINE_THRESHOLD) {
-          entries.push({ path: e.path, sha256: e.sha256, quarantined: true, learning: null, at });
-        }
-      }
-      appendLedger(dir, entries);
-      commitStore(dir, `consolidate: record failure ${code}`);
-    } catch {
-      // Best effort — failure recording must never mask the original rejection.
-    }
-  }
-
-  function rejectOp(code, reason, episodes) {
-    recordContentFailure(code, episodes);
-    return { applied: [], governed: [], rejected: [fail(code, reason)], committed: false, exitCode: 1 };
-  }
-
   const fileTouchCount = parsed.ops.reduce((n, o) => n + opWeight(o), 0);
   if (fileTouchCount > MAX_OPS_PER_RUN) {
     return {
@@ -555,276 +488,397 @@ export function applyOps({ workspace, opsPath, dryRun = false, home, approve = f
     };
   }
 
-  // Running per-domain active-count projection for the cap check below.
-  // Seeded lazily from the on-disk snapshot the first time a domain is
-  // touched, then updated AS ops are planned, IN FILE ORDER — this is what
-  // makes a multi-op run (e.g. three same-domain ADDs) stack correctly
-  // against the cap: each op's check sees every earlier op's effect in this
-  // same run, not just the pre-run snapshot (a per-op check against the
-  // static snapshot alone would let N ops each pass a test that's true
-  // individually but false collectively).
-  const domainProjection = new Map();
-  function projectedActive(domain) {
-    if (!domainProjection.has(domain)) {
-      domainProjection.set(domain, activeCountInDomain(existing, domain));
+  const origin = repoId(workspace);
+
+  /**
+   * Everything from the store-state snapshot through the mutation phase,
+   * factored into one function so it can run either:
+   *  (a) once, read-only, lock-free, against a non-creating ensureStore
+   *      preview snapshot, when dryRun — or
+   *  (b) once, inside withStoreTransaction's lock, against a freshly-created/
+   *      freshly-read store snapshot, for a real apply.
+   * Reading `existing`/`governance` HERE (rather than before any lock
+   * existed) is what closes the P1-6 race: a real apply's snapshot is always
+   * taken AFTER the lock is held, immediately before validating against it —
+   * two concurrent applyOps runs can no longer validate against a stale
+   * snapshot and cross-commit. Every early return below is tagged
+   * `kind: 'reject'` (a clean, deliberate rejection — never a thrown error)
+   * so the caller can tell it apart from a genuine mutation-phase failure,
+   * which propagates as a thrown exception instead and lets
+   * withStoreTransaction perform the rollback.
+   */
+  function runOnce({ dir, git }) {
+    const existing = new Map(listLearnings(dir).map((l) => [l.id, l]));
+
+    /**
+     * Three-strikes bookkeeping (design §3): a content-failure code raised by a
+     * SPECIFIC op records one failure entry per episode of that op — never for
+     * codes outside CONTENT_FAILURE_CODES, and never on dryRun or when the
+     * store has no git (best effort, mirrors the rest of the store's degraded
+     * modes). Episodes without a structurally valid path+sha256 are skipped —
+     * there is nothing reliable to key a strike on. On an episode's 3rd
+     * accumulated failure, the SAME append also writes the quarantine marker.
+     * Never throws: a bookkeeping error must never mask the real rejection.
+     */
+    function recordContentFailure(code, episodes) {
+      if (dryRun || !git || !CONTENT_FAILURE_CODES.has(code)) return;
+      // Dedupe by path@sha256 before recording: an op citing the same episode
+      // twice (a malformed or duplicated op JSON, not two distinct pieces of
+      // evidence) must record ONE strike per run, not one per reference — a
+      // duplicate reference would otherwise double-count toward the 3-strike
+      // quarantine threshold within a single run.
+      const seenKeys = new Set();
+      const eps = (episodes || [])
+        .filter((e) => e && e.path && /^[0-9a-f]{64}$/.test(e.sha256 || ''))
+        .filter((e) => {
+          const key = `${e.path}@${e.sha256}`;
+          if (seenKeys.has(key)) return false;
+          seenKeys.add(key);
+          return true;
+        });
+      if (!eps.length) return;
+      try {
+        const ledger = readLedger(dir);
+        const at = todayClamped();
+        const entries = [];
+        for (const e of eps) {
+          const priorFailures = ledger.filter((le) => le.failure && le.path === e.path && le.sha256 === e.sha256).length;
+          entries.push({ path: e.path, sha256: e.sha256, failure: code, at });
+          if (priorFailures + 1 >= QUARANTINE_THRESHOLD) {
+            entries.push({ path: e.path, sha256: e.sha256, quarantined: true, learning: null, at });
+          }
+        }
+        appendLedger(dir, entries);
+        commitStore(dir, `consolidate: record failure ${code}`);
+      } catch {
+        // Best effort — failure recording must never mask the original rejection.
+      }
     }
-    return domainProjection.get(domain);
-  }
-  function bumpProjectedActive(domain, delta) {
-    domainProjection.set(domain, projectedActive(domain) + delta);
-  }
 
-  // Same-run consumption tracking. Validation otherwise only ever reads the
-  // static `existing` snapshot taken before the loop started, so without
-  // this a later op could target a learning an EARLIER op in this same run
-  // already tombstoned (silently orphaning it, double-crediting the domain
-  // projection) or introduce the exact id an earlier op already claimed
-  // (silently clobbering it at write time, since both would resolve to the
-  // same file path).
-  const consumedTargets = new Set(); // SUPERSEDE/MERGE targets already spoken for this run
-  // STRENGTHEN targets already spoken for this run, tracked SEPARATELY from
-  // consumedTargets: a STRENGTHEN doesn't tombstone its target (it's still
-  // the same live learning afterward), so a later STRENGTHEN on the same
-  // target is not itself a conflict — only a later SUPERSEDE/MERGE reusing a
-  // strengthened target is, since applyOps runs every SUPERSEDE/MERGE/ADD
-  // write (first loop) BEFORE any STRENGTHEN executes (second loop below),
-  // so without this a same-run STRENGTHEN-before-SUPERSEDE would still let
-  // the SUPERSEDE's write land first and the STRENGTHEN would then apply the
-  // OLD claim's evidence onto the just-tombstoned file — non-corrupting but
-  // incoherent, since that evidence was meant for the claim the SUPERSEDE
-  // just replaced.
-  const strengthenedTargets = new Set();
-  const plannedIds = new Set(); // new ids (ADD/SUPERSEDE-rename/MERGE) already claimed this run
-  function idTaken(id) {
-    return existing.has(id) || plannedIds.has(id);
-  }
+    function rejectOp(code, reason, episodes) {
+      recordContentFailure(code, episodes);
+      return { kind: 'reject', applied: [], governed: [], rejected: [fail(code, reason)], committed: false, exitCode: 1 };
+    }
 
-  // Read once, reused by both the validation-time re-teach gate below and
-  // the governance reapplication block further down — no governance write
-  // happens between here and either read, so a single read is both safe and
-  // exactly what keeps the two gates from ever seeing different states.
-  const governance = readGovernance(dir);
+    // Running per-domain active-count projection for the cap check below.
+    // Seeded lazily from the on-disk snapshot the first time a domain is
+    // touched, then updated AS ops are planned, IN FILE ORDER — this is what
+    // makes a multi-op run (e.g. three same-domain ADDs) stack correctly
+    // against the cap: each op's check sees every earlier op's effect in this
+    // same run, not just the pre-run snapshot (a per-op check against the
+    // static snapshot alone would let N ops each pass a test that's true
+    // individually but false collectively).
+    const domainProjection = new Map();
+    function projectedActive(domain) {
+      if (!domainProjection.has(domain)) {
+        domainProjection.set(domain, activeCountInDomain(existing, domain));
+      }
+      return domainProjection.get(domain);
+    }
+    function bumpProjectedActive(domain, delta) {
+      domainProjection.set(domain, projectedActive(domain) + delta);
+    }
 
-  // Validate every op before writing anything — all-or-nothing runs.
-  const planned = [];
-  const disputes = [];
-  for (let i = 0; i < parsed.ops.length; i++) {
-    const op = parsed.ops[i];
-    if (op.op === 'NOOP') {
+    // Same-run consumption tracking. Validation otherwise only ever reads the
+    // static `existing` snapshot taken before the loop started, so without
+    // this a later op could target a learning an EARLIER op in this same run
+    // already tombstoned (silently orphaning it, double-crediting the domain
+    // projection) or introduce the exact id an earlier op already claimed
+    // (silently clobbering it at write time, since both would resolve to the
+    // same file path).
+    const consumedTargets = new Set(); // SUPERSEDE/MERGE targets already spoken for this run
+    // STRENGTHEN targets already spoken for this run, tracked SEPARATELY from
+    // consumedTargets: a STRENGTHEN doesn't tombstone its target (it's still
+    // the same live learning afterward), so a later STRENGTHEN on the same
+    // target is not itself a conflict — only a later SUPERSEDE/MERGE reusing a
+    // strengthened target is, since applyOps runs every SUPERSEDE/MERGE/ADD
+    // write (first loop) BEFORE any STRENGTHEN executes (second loop below),
+    // so without this a same-run STRENGTHEN-before-SUPERSEDE would still let
+    // the SUPERSEDE's write land first and the STRENGTHEN would then apply the
+    // OLD claim's evidence onto the just-tombstoned file — non-corrupting but
+    // incoherent, since that evidence was meant for the claim the SUPERSEDE
+    // just replaced.
+    const strengthenedTargets = new Set();
+    const plannedIds = new Set(); // new ids (ADD/SUPERSEDE-rename/MERGE) already claimed this run
+    function idTaken(id) {
+      return existing.has(id) || plannedIds.has(id);
+    }
+
+    // Read once, reused by both the validation-time re-teach gate below and
+    // the governance reapplication block further down — no governance write
+    // happens between here and either read, so a single read is both safe and
+    // exactly what keeps the two gates from ever seeing different states.
+    const governance = readGovernance(dir);
+
+    // Validate every op before writing anything — all-or-nothing runs.
+    const planned = [];
+    const disputes = [];
+    for (let i = 0; i < parsed.ops.length; i++) {
+      const op = parsed.ops[i];
+      if (op.op === 'NOOP') {
+        const bad = validateEpisodes(op.episodes, i);
+        if (bad) return rejectOp(bad.code, bad.reason, op.episodes);
+        planned.push({ ...op });
+        continue;
+      }
+      if (!FILE_TOUCHING.has(op.op)) {
+        return rejectOp('E_SCHEMA', `op ${i}: unknown op ${op.op}`, op.episodes);
+      }
       const bad = validateEpisodes(op.episodes, i);
       if (bad) return rejectOp(bad.code, bad.reason, op.episodes);
-      planned.push({ ...op });
-      continue;
-    }
-    if (!FILE_TOUCHING.has(op.op)) {
-      return rejectOp('E_SCHEMA', `op ${i}: unknown op ${op.op}`, op.episodes);
-    }
-    const bad = validateEpisodes(op.episodes, i);
-    if (bad) return rejectOp(bad.code, bad.reason, op.episodes);
-    // Evidence-defect gate (see verifyAdmittedEpisodeKinds doc comment): a
-    // fix/insight-kind assertion must disk-verify before anything downstream
-    // (gainedFix, verifiedFixLinks, promotion math) ever trusts it.
-    const badKind = verifyAdmittedEpisodeKinds(workspace, copilotHome, op.episodes, i);
-    if (badKind) return rejectOp(badKind.code, badKind.reason, op.episodes);
-    // merged_from is only ever a MERGE-derived (op.targets) or ADD/SUPERSEDE-
-    // carried-forward field — an op JSON asserting it directly must be an
-    // array of strings, or renderLearning's `mergedFrom.join(', ')` throws on
-    // a non-array (e.g. a string) instead of failing closed.
-    if (op.merged_from !== undefined && (!Array.isArray(op.merged_from) || !op.merged_from.every((v) => typeof v === 'string'))) {
-      return rejectOp('E_SCHEMA', `op ${i}: merged_from must be an array of strings`, op.episodes);
-    }
+      // Evidence-defect gate (see verifyAdmittedEpisodeKinds doc comment): a
+      // fix/insight-kind assertion must disk-verify before anything downstream
+      // (gainedFix, verifiedFixLinks, promotion math) ever trusts it.
+      const badKind = verifyAdmittedEpisodeKinds(workspace, copilotHome, op.episodes, i);
+      if (badKind) return rejectOp(badKind.code, badKind.reason, op.episodes);
+      // merged_from is only ever a MERGE-derived (op.targets) or ADD/SUPERSEDE-
+      // carried-forward field — an op JSON asserting it directly must be an
+      // array of strings, or renderLearning's `mergedFrom.join(', ')` throws on
+      // a non-array (e.g. a string) instead of failing closed.
+      if (op.merged_from !== undefined && (!Array.isArray(op.merged_from) || !op.merged_from.every((v) => typeof v === 'string'))) {
+        return rejectOp('E_SCHEMA', `op ${i}: merged_from must be an array of strings`, op.episodes);
+      }
 
-    // Shared between the inactive-target exemption (below) and the
-    // disputed-demotion exemption (further down, SUPERSEDE-only) — computed
-    // once per op so the two gates can never drift on what counts as a
-    // verified human re-teach. Stays false for every op that isn't a
-    // SUPERSEDE (STRENGTHEN has no re-teach shape — it never introduces or
-    // replaces an id).
-    let isReteachShape = false;
-    let allHumanTeaching = false;
+      // Shared between the inactive-target exemption (below) and the
+      // disputed-demotion exemption (further down, SUPERSEDE-only) — computed
+      // once per op so the two gates can never drift on what counts as a
+      // verified human re-teach. Stays false for every op that isn't a
+      // SUPERSEDE (STRENGTHEN has no re-teach shape — it never introduces or
+      // replaces an id).
+      let isReteachShape = false;
+      let allHumanTeaching = false;
 
-    if (op.op === 'STRENGTHEN' || op.op === 'SUPERSEDE') {
-      if (!op.target || !existing.has(op.target)) {
-        return rejectOp('E_TARGET', `op ${i}: target ${op.target || '(none)'} does not exist`, op.episodes);
-      }
-      // Checked before the consumed-target check and before any of
-      // SUPERSEDE's own reteach/dispute logic further below — a promoted
-      // target is rejected unconditionally, never conditionally exempted —
-      // no re-teach exemption exists for a promoted target (see the doc
-      // comment on promotedTargetRejection above): a human refining a
-      // promoted claim updates the primitive, not the learning.
-      const promotedTo = existing.get(op.target).fm.promoted_to;
-      if (promotedTo) {
-        return promotedTargetRejection(i, op.target, promotedTo);
-      }
-      // The verified in-place human re-teach shape: new id === target (never
-      // a rename) AND every asserted human-teaching episode verifies against
-      // disk (verifyHumanTeachingEpisode) — the op's own `kind` field alone
-      // is not proof of anything. `op.op === 'SUPERSEDE'` short-circuits
-      // before newIdFor(op) runs, so a STRENGTHEN op (which carries no
-      // domain/slug) never reaches it.
-      isReteachShape = op.op === 'SUPERSEDE' && newIdFor(op) === op.target;
-      allHumanTeaching =
-        isReteachShape &&
-        op.episodes.length > 0 &&
-        op.episodes.every((e) => verifyHumanTeachingEpisode(workspace, copilotHome, e)) &&
-        // Recency gate (see overridesGovernanceRecency doc comment): the
-        // op's own claim of human authorship isn't enough if a governance
-        // record already exists for this exact target/id and the evidence
-        // offered predates it — a stale teaching episode must never resurrect
-        // a NEWER human retire/dispute/promote decision.
-        overridesGovernanceRecency(workspace, copilotHome, op.episodes, governance.get(op.target));
-      // Cross-run target-activeness (MERGE already required this — see the
-      // isActiveFm check in its own branch below): a target already
-      // superseded/retired/disputed ON DISK from a PRIOR run must never
-      // accept a fresh STRENGTHEN/SUPERSEDE — that would let a model silently
-      // resurrect or overwrite a demoted learning without a human's
-      // dispute -> confirm round trip. EXEMPTION: a verified in-place human
-      // re-teach (allHumanTeaching) overrides an inactive target — design
-      // precedence rule: a direct, disk-verified human statement outranks
-      // stored state, so a human correcting a disputed/retired claim under
-      // the SAME trigger/domain must succeed without a separate confirm
-      // round trip first. A model can never fabricate this exemption (the
-      // evidence is verified against disk, not just asserted in the op
-      // JSON). Promoted targets are NOT exempted — rejected unconditionally
-      // above, before this point is ever reached. Composition-class plain
-      // fail (like the consumedTargets/strengthenedTargets checks below) —
-      // an inactive target is not a defect in this op's own episodes, so no
-      // strike.
-      if (!allHumanTeaching && !isActiveFm(existing.get(op.target).fm)) {
-        return {
-          applied: [],
-          governed: [],
-          rejected: [
-            fail(
-              'E_TARGET',
-              op.op === 'SUPERSEDE'
-                ? `op ${i}: target ${op.target} is not active — SUPERSEDE an active learning or choose a new slug`
-                : `op ${i}: target ${op.target} is not active — STRENGTHEN requires an active target`
-            ),
-          ],
-          committed: false,
-          exitCode: 1,
-        };
-      }
-      if (consumedTargets.has(op.target)) {
-        // Composition rejection (sibling op raced for this target this same
-        // run) — plain fail, never a strike against this op's episodes.
-        return {
-          applied: [],
-          governed: [],
-          rejected: [fail('E_TARGET', `op ${i}: target ${op.target} already consumed by an earlier op in this run`)],
-          committed: false,
-          exitCode: 1,
-        };
-      }
-      // A SUPERSEDE reusing a target an earlier STRENGTHEN in this same run
-      // already claimed: composition rejection, same reasoning as the
-      // consumedTargets check above — plain fail, never a strike. STRENGTHEN
-      // itself is exempt (a later STRENGTHEN on its own earlier target is not
-      // a conflict — see strengthenedTargets' declaration above).
-      if (op.op === 'SUPERSEDE' && strengthenedTargets.has(op.target)) {
-        return {
-          applied: [],
-          governed: [],
-          rejected: [
-            fail('E_TARGET', `op ${i}: target ${op.target} already strengthened by an earlier op in this run — combine into one op`),
-          ],
-          committed: false,
-          exitCode: 1,
-        };
-      }
-    }
-
-    if (op.op === 'STRENGTHEN') {
-      strengthenedTargets.add(op.target);
-    }
-
-    if (op.op === 'MERGE') {
-      if (!Array.isArray(op.targets) || op.targets.length < 2) {
-        return rejectOp('E_SCHEMA', `op ${i}: MERGE needs targets (>= 2 existing active learning ids)`, op.episodes);
-      }
-      for (const t of op.targets) {
-        if (!existing.has(t)) {
-          return rejectOp('E_TARGET', `op ${i}: target ${t} does not exist`, op.episodes);
+      if (op.op === 'STRENGTHEN' || op.op === 'SUPERSEDE') {
+        if (!op.target || !existing.has(op.target)) {
+          return rejectOp('E_TARGET', `op ${i}: target ${op.target || '(none)'} does not exist`, op.episodes);
         }
-      }
-      for (const t of op.targets) {
-        const promotedTo = existing.get(t).fm.promoted_to;
+        // Checked before the consumed-target check and before any of
+        // SUPERSEDE's own reteach/dispute logic further below — a promoted
+        // target is rejected unconditionally, never conditionally exempted —
+        // no re-teach exemption exists for a promoted target (see the doc
+        // comment on promotedTargetRejection above): a human refining a
+        // promoted claim updates the primitive, not the learning.
+        const promotedTo = existing.get(op.target).fm.promoted_to;
         if (promotedTo) {
-          return promotedTargetRejection(i, t, promotedTo);
+          return promotedTargetRejection(i, op.target, promotedTo);
         }
-      }
-      for (const t of op.targets) {
-        if (consumedTargets.has(t)) {
-          // Composition rejection (sibling op raced for this target this
-          // same run) — plain fail, never a strike against this op's episodes.
+        // The verified in-place human re-teach shape: new id === target (never
+        // a rename) AND every asserted human-teaching episode verifies against
+        // disk (verifyHumanTeachingEpisode) — the op's own `kind` field alone
+        // is not proof of anything. `op.op === 'SUPERSEDE'` short-circuits
+        // before newIdFor(op) runs, so a STRENGTHEN op (which carries no
+        // domain/slug) never reaches it.
+        isReteachShape = op.op === 'SUPERSEDE' && newIdFor(op) === op.target;
+        allHumanTeaching =
+          isReteachShape &&
+          op.episodes.length > 0 &&
+          op.episodes.every((e) => verifyHumanTeachingEpisode(workspace, copilotHome, e)) &&
+          // Recency gate (see overridesGovernanceRecency doc comment): the
+          // op's own claim of human authorship isn't enough if a governance
+          // record already exists for this exact target/id and the evidence
+          // offered predates it — a stale teaching episode must never resurrect
+          // a NEWER human retire/dispute/promote decision.
+          overridesGovernanceRecency(workspace, copilotHome, op.episodes, governance.get(op.target));
+        // Cross-run target-activeness (MERGE already required this — see the
+        // isActiveFm check in its own branch below): a target already
+        // superseded/retired/disputed ON DISK from a PRIOR run must never
+        // accept a fresh STRENGTHEN/SUPERSEDE — that would let a model silently
+        // resurrect or overwrite a demoted learning without a human's
+        // dispute -> confirm round trip. EXEMPTION: a verified in-place human
+        // re-teach (allHumanTeaching) overrides an inactive target — design
+        // precedence rule: a direct, disk-verified human statement outranks
+        // stored state, so a human correcting a disputed/retired claim under
+        // the SAME trigger/domain must succeed without a separate confirm
+        // round trip first. A model can never fabricate this exemption (the
+        // evidence is verified against disk, not just asserted in the op
+        // JSON). Promoted targets are NOT exempted — rejected unconditionally
+        // above, before this point is ever reached. Composition-class plain
+        // fail (like the consumedTargets/strengthenedTargets checks below) —
+        // an inactive target is not a defect in this op's own episodes, so no
+        // strike.
+        if (!allHumanTeaching && !isActiveFm(existing.get(op.target).fm)) {
           return {
+            kind: 'reject',
             applied: [],
             governed: [],
-            rejected: [fail('E_TARGET', `op ${i}: target ${t} already consumed by an earlier op in this run`)],
+            rejected: [
+              fail(
+                'E_TARGET',
+                op.op === 'SUPERSEDE'
+                  ? `op ${i}: target ${op.target} is not active — SUPERSEDE an active learning or choose a new slug`
+                  : `op ${i}: target ${op.target} is not active — STRENGTHEN requires an active target`
+              ),
+            ],
             committed: false,
             exitCode: 1,
           };
         }
-        // A MERGE reusing a target an earlier STRENGTHEN this same run
-        // already claimed — same composition reasoning as the consumedTargets
-        // check above.
-        if (strengthenedTargets.has(t)) {
+        if (consumedTargets.has(op.target)) {
+          // Composition rejection (sibling op raced for this target this same
+          // run) — plain fail, never a strike against this op's episodes.
           return {
+            kind: 'reject',
+            applied: [],
+            governed: [],
+            rejected: [fail('E_TARGET', `op ${i}: target ${op.target} already consumed by an earlier op in this run`)],
+            committed: false,
+            exitCode: 1,
+          };
+        }
+        // A SUPERSEDE reusing a target an earlier STRENGTHEN in this same run
+        // already claimed: composition rejection, same reasoning as the
+        // consumedTargets check above — plain fail, never a strike. STRENGTHEN
+        // itself is exempt (a later STRENGTHEN on its own earlier target is not
+        // a conflict — see strengthenedTargets' declaration above).
+        if (op.op === 'SUPERSEDE' && strengthenedTargets.has(op.target)) {
+          return {
+            kind: 'reject',
             applied: [],
             governed: [],
             rejected: [
-              fail('E_TARGET', `op ${i}: target ${t} already strengthened by an earlier op in this run — combine into one op`),
+              fail('E_TARGET', `op ${i}: target ${op.target} already strengthened by an earlier op in this run — combine into one op`),
             ],
             committed: false,
             exitCode: 1,
           };
         }
       }
-      for (const t of op.targets) {
-        // Inactive-target rejection (M4 review, item 2): same never-strike
-        // class as the STRENGTHEN/SUPERSEDE inactive-target checks above —
-        // the op's own episodes aren't defective, its choice of an already
-        // superseded/retired/disputed target is, so this is a plain fail,
-        // never rejectOp. Recording a strike here would quarantine innocent
-        // episodes on a retry-after-dispute.
-        if (!isActiveFm(existing.get(t).fm)) {
-          return {
-            applied: [],
-            governed: [],
-            rejected: [fail('E_TARGET', `op ${i}: target ${t} is not active (already superseded/retired/disputed)`)],
-            committed: false,
-            exitCode: 1,
-          };
+
+      if (op.op === 'STRENGTHEN') {
+        strengthenedTargets.add(op.target);
+      }
+
+      if (op.op === 'MERGE') {
+        if (!Array.isArray(op.targets) || op.targets.length < 2) {
+          return rejectOp('E_SCHEMA', `op ${i}: MERGE needs targets (>= 2 existing active learning ids)`, op.episodes);
+        }
+        for (const t of op.targets) {
+          if (!existing.has(t)) {
+            return rejectOp('E_TARGET', `op ${i}: target ${t} does not exist`, op.episodes);
+          }
+        }
+        for (const t of op.targets) {
+          const promotedTo = existing.get(t).fm.promoted_to;
+          if (promotedTo) {
+            return promotedTargetRejection(i, t, promotedTo);
+          }
+        }
+        for (const t of op.targets) {
+          if (consumedTargets.has(t)) {
+            // Composition rejection (sibling op raced for this target this
+            // same run) — plain fail, never a strike against this op's episodes.
+            return {
+              kind: 'reject',
+              applied: [],
+              governed: [],
+              rejected: [fail('E_TARGET', `op ${i}: target ${t} already consumed by an earlier op in this run`)],
+              committed: false,
+              exitCode: 1,
+            };
+          }
+          // A MERGE reusing a target an earlier STRENGTHEN this same run
+          // already claimed — same composition reasoning as the consumedTargets
+          // check above.
+          if (strengthenedTargets.has(t)) {
+            return {
+              kind: 'reject',
+              applied: [],
+              governed: [],
+              rejected: [
+                fail('E_TARGET', `op ${i}: target ${t} already strengthened by an earlier op in this run — combine into one op`),
+              ],
+              committed: false,
+              exitCode: 1,
+            };
+          }
+        }
+        for (const t of op.targets) {
+          // Inactive-target rejection (M4 review, item 2): same never-strike
+          // class as the STRENGTHEN/SUPERSEDE inactive-target checks above —
+          // the op's own episodes aren't defective, its choice of an already
+          // superseded/retired/disputed target is, so this is a plain fail,
+          // never rejectOp. Recording a strike here would quarantine innocent
+          // episodes on a retry-after-dispute.
+          if (!isActiveFm(existing.get(t).fm)) {
+            return {
+              kind: 'reject',
+              applied: [],
+              governed: [],
+              rejected: [fail('E_TARGET', `op ${i}: target ${t} is not active (already superseded/retired/disputed)`)],
+              committed: false,
+              exitCode: 1,
+            };
+          }
         }
       }
-    }
 
-    if (op.op === 'ADD' || op.op === 'SUPERSEDE' || op.op === 'MERGE') {
-      if (!op.domain || !op.slug || !op.trigger || !op.body) {
-        return rejectOp('E_SCHEMA', `op ${i}: ${op.op} needs domain, slug, trigger, body`, op.episodes);
-      }
-      const newId = newIdFor(op);
-      if (op.op === 'ADD') {
-        // Dedup-miss protection: an ADD whose id already exists — on disk OR
-        // already claimed by an EARLIER op in this same run — must never
-        // silently overwrite that learning (or that other op's write, once
-        // both would resolve to the same file path) — reject the whole run
-        // and route the caller to STRENGTHEN (more evidence) or SUPERSEDE
-        // (replace the claim) instead.
-        if (idTaken(newId)) {
+      if (op.op === 'ADD' || op.op === 'SUPERSEDE' || op.op === 'MERGE') {
+        if (!op.domain || !op.slug || !op.trigger || !op.body) {
+          return rejectOp('E_SCHEMA', `op ${i}: ${op.op} needs domain, slug, trigger, body`, op.episodes);
+        }
+        const newId = newIdFor(op);
+        if (op.op === 'ADD') {
+          // Dedup-miss protection: an ADD whose id already exists — on disk OR
+          // already claimed by an EARLIER op in this same run — must never
+          // silently overwrite that learning (or that other op's write, once
+          // both would resolve to the same file path) — reject the whole run
+          // and route the caller to STRENGTHEN (more evidence) or SUPERSEDE
+          // (replace the claim) instead.
+          if (idTaken(newId)) {
+            if (existing.has(newId)) {
+              // Real on-disk dedup miss — a content-failure strike is warranted.
+              return rejectOp(
+                'E_EXISTS',
+                `op ${i}: ${newId} already exists — use STRENGTHEN (more evidence) or SUPERSEDE (replace the claim)`,
+                op.episodes
+              );
+            }
+            // Composition rejection (a sibling op already claimed this id this
+            // same run) — plain fail, never a strike against this op's episodes.
+            return {
+              kind: 'reject',
+              applied: [],
+              governed: [],
+              rejected: [fail('E_EXISTS', `op ${i}: ${newId} was already introduced by an earlier op in this run`)],
+              committed: false,
+              exitCode: 1,
+            };
+          }
+          // Domain write cap (design §9): an ADD into a domain already at
+          // DOMAIN_ACTIVE_CAP active learnings is a plain run-level rejection,
+          // never a content-failure strike — cap pressure is not an episode
+          // defect. Checked against the RUNNING projection (not a static
+          // snapshot) so earlier same-run ADD/SUPERSEDE/MERGE ops in this same
+          // domain are already reflected.
+          const domain = normalizeSlug(op.domain);
+          if (projectedActive(domain) >= DOMAIN_ACTIVE_CAP) {
+            return {
+              kind: 'reject',
+              applied: [],
+              governed: [],
+              rejected: [
+                fail('E_DOMAIN_CAP', `domain ${domain} at cap (${DOMAIN_ACTIVE_CAP} active) — MERGE existing learnings or retire first`),
+              ],
+              committed: false,
+              exitCode: 1,
+            };
+          }
+          bumpProjectedActive(domain, 1);
+          plannedIds.add(newId);
+        }
+        if (op.op === 'MERGE' && idTaken(newId)) {
           if (existing.has(newId)) {
             // Real on-disk dedup miss — a content-failure strike is warranted.
             return rejectOp(
               'E_EXISTS',
-              `op ${i}: ${newId} already exists — use STRENGTHEN (more evidence) or SUPERSEDE (replace the claim)`,
+              `op ${i}: ${newId} already exists — merging onto an existing id is not supported, SUPERSEDE it as a target instead`,
               op.episodes
             );
           }
           // Composition rejection (a sibling op already claimed this id this
           // same run) — plain fail, never a strike against this op's episodes.
           return {
+            kind: 'reject',
             applied: [],
             governed: [],
             rejected: [fail('E_EXISTS', `op ${i}: ${newId} was already introduced by an earlier op in this run`)],
@@ -832,15 +886,42 @@ export function applyOps({ workspace, opsPath, dryRun = false, home, approve = f
             exitCode: 1,
           };
         }
-        // Domain write cap (design §9): an ADD into a domain already at
-        // DOMAIN_ACTIVE_CAP active learnings is a plain run-level rejection,
-        // never a content-failure strike — cap pressure is not an episode
-        // defect. Checked against the RUNNING projection (not a static
-        // snapshot) so earlier same-run ADD/SUPERSEDE/MERGE ops in this same
-        // domain are already reflected.
+        const secrets = scanSecrets(`${op.trigger}\n${op.body}`);
+        if (secrets.length) {
+          return rejectOp('E_SECRET', `op ${i}: secret-shaped content (${secrets.map((s) => s.id).join(', ')})`, op.episodes);
+        }
+        const lint = lintImperative(op);
+        if (lint) {
+          return rejectOp('E_LINT', `op ${i}: ${lint}`, op.episodes);
+        }
+      }
+
+      if (op.op === 'MERGE') {
+        const disputedTargets = op.targets.filter((t) => isDisputedTargetFm(existing.get(t).fm));
+        if (disputedTargets.length) {
+          // Demotion of well-evidenced or human-taught knowledge gets a human
+          // reviewer: the whole MERGE is rejected (no new file written) and
+          // each offending target is marked disputed — untouched targets stay
+          // exactly as they were, same one-op granularity as SUPERSEDE.
+          for (const t of disputedTargets) disputes.push({ index: i, target: t });
+          continue;
+        }
+
+        // MERGE is exempt from the cap check ONLY as a NET effect: its own
+        // targets' removal is credited to the running projection FIRST — if
+        // every target lives in the destination domain, that removal always
+        // outweighs the merge's own +1 and the check below never trips. But
+        // when a target lives in a DIFFERENT domain than the destination (or
+        // an earlier op in this same run already used up the room the targets
+        // would have freed), the destination domain gets a bare, uncredited
+        // +1 — exactly like an ADD — so it has to pass the same cap check.
+        for (const t of op.targets) {
+          bumpProjectedActive(existing.get(t).domain, -1);
+        }
         const domain = normalizeSlug(op.domain);
         if (projectedActive(domain) >= DOMAIN_ACTIVE_CAP) {
           return {
+            kind: 'reject',
             applied: [],
             governed: [],
             rejected: [
@@ -851,430 +932,342 @@ export function applyOps({ workspace, opsPath, dryRun = false, home, approve = f
           };
         }
         bumpProjectedActive(domain, 1);
-        plannedIds.add(newId);
+        plannedIds.add(newIdFor(op));
+        for (const t of op.targets) consumedTargets.add(t);
       }
-      if (op.op === 'MERGE' && idTaken(newId)) {
-        if (existing.has(newId)) {
-          // Real on-disk dedup miss — a content-failure strike is warranted.
-          return rejectOp(
-            'E_EXISTS',
-            `op ${i}: ${newId} already exists — merging onto an existing id is not supported, SUPERSEDE it as a target instead`,
-            op.episodes
-          );
+
+      if (op.op === 'SUPERSEDE') {
+        const target = existing.get(op.target);
+        const newId = newIdFor(op);
+
+        // Rename-collision guard: a SUPERSEDE writing to an id that already
+        // belongs to a DIFFERENT existing learning — on disk OR already
+        // claimed by an earlier op in this run — must never silently clobber
+        // it. Only the in-place shape (new id === the op's own target) is
+        // allowed to "collide" — that's a replacement, not a collision.
+        if (newId !== op.target && idTaken(newId)) {
+          if (existing.has(newId)) {
+            // Real on-disk dedup miss — a content-failure strike is warranted.
+            return rejectOp(
+              'E_EXISTS',
+              `op ${i}: ${newId} already exists — choose a different slug or SUPERSEDE it directly instead of ${op.target}`,
+              op.episodes
+            );
+          }
+          // Composition rejection (a sibling op already claimed this id this
+          // same run) — plain fail, never a strike against this op's episodes.
+          return {
+            kind: 'reject',
+            applied: [],
+            governed: [],
+            rejected: [fail('E_EXISTS', `op ${i}: ${newId} was already introduced by an earlier op in this run`)],
+            committed: false,
+            exitCode: 1,
+          };
         }
-        // Composition rejection (a sibling op already claimed this id this
-        // same run) — plain fail, never a strike against this op's episodes.
-        return {
-          applied: [],
-          governed: [],
-          rejected: [fail('E_EXISTS', `op ${i}: ${newId} was already introduced by an earlier op in this run`)],
-          committed: false,
-          exitCode: 1,
-        };
+
+        // The human-teaching disputed-demotion exemption applies ONLY to the
+        // in-place re-teach shape `remember` emits (new id === target — a
+        // human re-teaching the SAME trigger/domain, never a rename) AND only
+        // once every asserted human-teaching episode is verified against disk
+        // (see verifyHumanTeachingEpisode) — the op's own `kind` field is not
+        // itself proof of anything. isReteachShape/allHumanTeaching were
+        // already computed above (shared with the inactive-target exemption) —
+        // reused here rather than recomputed so the two gates can never drift
+        // apart on what counts as a verified re-teach.
+        if (!allHumanTeaching && isDisputedTargetFm(target.fm)) {
+          // Demotion of well-evidenced or human-taught knowledge gets a human
+          // reviewer: mark disputed, never silently supersede.
+          disputes.push({ index: i, target: op.target });
+          continue;
+        }
+
+        // Domain write cap: only a SUPERSEDE introducing a NEW id can grow a
+        // domain's active count — the in-place reteach shape replaces the same
+        // file, net zero. This op's OWN tombstone is credited first (against
+        // the running projection, so it can always net-zero-replace itself
+        // even at exactly the cap), then the new id's domain is checked —
+        // against the running projection, so earlier same-run ops already
+        // count.
+        if (newId !== op.target) {
+          bumpProjectedActive(target.domain, -1);
+          const domain = normalizeSlug(op.domain);
+          if (projectedActive(domain) >= DOMAIN_ACTIVE_CAP) {
+            return {
+              kind: 'reject',
+              applied: [],
+              governed: [],
+              rejected: [
+                fail('E_DOMAIN_CAP', `domain ${domain} at cap (${DOMAIN_ACTIVE_CAP} active) — MERGE existing learnings or retire first`),
+              ],
+              committed: false,
+              exitCode: 1,
+            };
+          }
+          bumpProjectedActive(domain, 1);
+          plannedIds.add(newId);
+        }
+        consumedTargets.add(op.target);
       }
-      const secrets = scanSecrets(`${op.trigger}\n${op.body}`);
-      if (secrets.length) {
-        return rejectOp('E_SECRET', `op ${i}: secret-shaped content (${secrets.map((s) => s.id).join(', ')})`, op.episodes);
-      }
-      const lint = lintImperative(op);
-      if (lint) {
-        return rejectOp('E_LINT', `op ${i}: ${lint}`, op.episodes);
-      }
+      planned.push({ ...op, index: i });
     }
 
-    if (op.op === 'MERGE') {
-      const disputedTargets = op.targets.filter((t) => isDisputedTargetFm(existing.get(t).fm));
-      if (disputedTargets.length) {
-        // Demotion of well-evidenced or human-taught knowledge gets a human
-        // reviewer: the whole MERGE is rejected (no new file written) and
-        // each offending target is marked disputed — untouched targets stay
-        // exactly as they were, same one-op granularity as SUPERSEDE.
-        for (const t of disputedTargets) disputes.push({ index: i, target: t });
-        continue;
-      }
-
-      // MERGE is exempt from the cap check ONLY as a NET effect: its own
-      // targets' removal is credited to the running projection FIRST — if
-      // every target lives in the destination domain, that removal always
-      // outweighs the merge's own +1 and the check below never trips. But
-      // when a target lives in a DIFFERENT domain than the destination (or
-      // an earlier op in this same run already used up the room the targets
-      // would have freed), the destination domain gets a bare, uncredited
-      // +1 — exactly like an ADD — so it has to pass the same cap check.
-      for (const t of op.targets) {
-        bumpProjectedActive(existing.get(t).domain, -1);
-      }
+    // Compose ADD/SUPERSEDE/MERGE files and enforce the byte cap before writing.
+    const writes = [];
+    for (const op of planned) {
+      if (op.op !== 'ADD' && op.op !== 'SUPERSEDE' && op.op !== 'MERGE') continue;
       const domain = normalizeSlug(op.domain);
-      if (projectedActive(domain) >= DOMAIN_ACTIVE_CAP) {
-        return {
-          applied: [],
-          governed: [],
-          rejected: [
-            fail('E_DOMAIN_CAP', `domain ${domain} at cap (${DOMAIN_ACTIVE_CAP} active) — MERGE existing learnings or retire first`),
-          ],
-          committed: false,
-          exitCode: 1,
-        };
+      const slug = normalizeSlug(op.slug);
+      const id = `${domain}/${slug}`;
+      // A direct human statement outranks statistics: episodes made entirely of
+      // VERIFIED human-teaching evidence (see verifyHumanTeachingEpisode) land
+      // active with source: human — no provisional damping for teachings
+      // (design §6). An asserted-but-unverifiable human-teaching kind (a
+      // fabricated or nonexistent episode) fails toward the standard
+      // auto/provisional lane instead — this derivation never throws or
+      // rejects the op, it just withholds the elevated standing.
+      const source = op.episodes.length && op.episodes.every((e) => verifyHumanTeachingEpisode(workspace, copilotHome, e)) ? 'human' : 'auto';
+      const status = source === 'human' ? 'active' : 'provisional';
+      const content = renderLearning({
+        trigger: op.trigger,
+        body: op.body,
+        episodes: op.episodes,
+        anchors: extractAnchors({ workspace, copilotHome, episodes: op.episodes }),
+        origin,
+        status,
+        source,
+        supersededBy: null,
+        mergedFrom: op.op === 'MERGE' ? op.targets : op.merged_from,
+      });
+      if (Buffer.byteLength(content, 'utf8') > LEARNING_BYTE_CAP) {
+        return rejectOp('E_BYTE_CAP', `${id} exceeds ${LEARNING_BYTE_CAP} bytes — split into two claims`, op.episodes);
       }
-      bumpProjectedActive(domain, 1);
-      plannedIds.add(newIdFor(op));
-      for (const t of op.targets) consumedTargets.add(t);
+      writes.push({ op, id, domain, slug, content });
     }
 
-    if (op.op === 'SUPERSEDE') {
-      const target = existing.get(op.target);
-      const newId = newIdFor(op);
+    if (dryRun) {
+      return {
+        kind: 'preview',
+        applied: planned.map((o) => ({ op: o.op, id: o.target || (o.domain && `${normalizeSlug(o.domain)}/${normalizeSlug(o.slug)}`) || null })),
+        rejected: disputes.map((d) => ({ ...fail('E_DISPUTED', 'disputed-pending-human'), reason: 'disputed-pending-human', target: d.target })),
+        // A preview never touches the store, so governance reapplication never
+        // runs — always empty, same as every other pre-mutation return above.
+        governed: [],
+      };
+    }
 
-      // Rename-collision guard: a SUPERSEDE writing to an id that already
-      // belongs to a DIFFERENT existing learning — on disk OR already
-      // claimed by an earlier op in this run — must never silently clobber
-      // it. Only the in-place shape (new id === the op's own target) is
-      // allowed to "collide" — that's a replacement, not a collision.
-      if (newId !== op.target && idTaken(newId)) {
-        if (existing.has(newId)) {
-          // Real on-disk dedup miss — a content-failure strike is warranted.
-          return rejectOp(
-            'E_EXISTS',
-            `op ${i}: ${newId} already exists — choose a different slug or SUPERSEDE it directly instead of ${op.target}`,
-            op.episodes
-          );
-        }
-        // Composition rejection (a sibling op already claimed this id this
-        // same run) — plain fail, never a strike against this op's episodes.
-        return {
-          applied: [],
-          governed: [],
-          rejected: [fail('E_EXISTS', `op ${i}: ${newId} was already introduced by an earlier op in this run`)],
-          committed: false,
-          exitCode: 1,
-        };
+    // Mutation phase. No manual try/catch + git reset here any more — a
+    // throw from anywhere below propagates straight out of runOnce, out of
+    // withStoreTransaction's own fn callback, where the SAME rollback
+    // (git reset --hard + clean -fd) now happens once, in one place, for
+    // every adopter, followed by lock release. This lands on whatever the
+    // last commit was — the absorb sub-commit `withStoreTransaction`'s caller
+    // already made inside this same lock, never before it.
+    const applied = [];
+    const rejected = [];
+    const ledgerEntries = [];
+    const governed = [];
+    const at = todayClamped();
+
+    for (const { op, id, domain, slug, content } of writes) {
+      const file = path.join(dir, 'learnings', domain, `${slug}.md`);
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, content, 'utf8');
+      applied.push({ op: op.op, id });
+      for (const e of op.episodes) ledgerEntries.push({ path: e.path, sha256: e.sha256, learning: id, at });
+      // A SUPERSEDE whose target is the SAME id as the file just written
+      // (human re-teaching the same trigger/domain) is an in-place
+      // replacement, not a tombstone-and-replace: `file` above already IS
+      // the target's file, freshly overwritten with the new claim and
+      // `superseded_by: null` (renderLearning always writes null for a new
+      // write). Stamping superseded_by onto it here would point the new
+      // content at itself, so that step only runs when target !== id.
+      if (op.op === 'SUPERSEDE' && op.target !== id) {
+        const target = existing.get(op.target);
+        updateFrontmatterField(target.file, 'superseded_by', id);
       }
+      // A MERGE tombstones EVERY target it consolidates into the new id —
+      // none of them can equal `id` (MERGE always writes a brand-new id).
+      if (op.op === 'MERGE') {
+        for (const t of op.targets) {
+          const target = existing.get(t);
+          updateFrontmatterField(target.file, 'superseded_by', id);
+        }
+      }
+    }
 
-      // The human-teaching disputed-demotion exemption applies ONLY to the
-      // in-place re-teach shape `remember` emits (new id === target — a
-      // human re-teaching the SAME trigger/domain, never a rename) AND only
-      // once every asserted human-teaching episode is verified against disk
-      // (see verifyHumanTeachingEpisode) — the op's own `kind` field is not
-      // itself proof of anything. isReteachShape/allHumanTeaching were
-      // already computed above (shared with the inactive-target exemption) —
-      // reused here rather than recomputed so the two gates can never drift
-      // apart on what counts as a verified re-teach.
-      if (!allHumanTeaching && isDisputedTargetFm(target.fm)) {
-        // Demotion of well-evidenced or human-taught knowledge gets a human
-        // reviewer: mark disputed, never silently supersede.
-        disputes.push({ index: i, target: op.target });
+    // Governance reapplication (Milestone 4 Task 2): every id the write
+    // loop above just (re)wrote — a fresh ADD/SUPERSEDE/MERGE file, never a
+    // STRENGTHEN (that only ever touches an EXISTING file) — may already
+    // carry a standing human retire/dispute/promote decision from BEFORE a
+    // `consolidate --rebuild` wiped the corpus. Reapply it here, inside
+    // this same rollback window, so the regenerated learning honors what a
+    // human already decided instead of silently reverting to whatever the
+    // fresh op claims. `confirm` is deliberately excluded — it is not a
+    // demotion to restore, so it never reapplies. EXCEPTION: an op whose
+    // EVERY episode verifies as human-teaching (verifyHumanTeachingEpisode)
+    // AND is at least as recent as this governance record
+    // (overridesGovernanceRecency) is the human retracting their own
+    // earlier call by re-teaching the same trigger/domain — the standing
+    // decision is overridden instead of enforced, and a fresh `confirm`
+    // record (never overwriting the history, always appended) supersedes
+    // it via readGovernance's latest-per-id replay. `governance` was
+    // already read once above (before validation) — reused here, not
+    // re-read, since nothing writes to governance.jsonl between that read
+    // and this loop.
+    for (const { op, id, domain, slug } of writes) {
+      const entry = governance.get(id);
+      if (!entry || !['retire', 'dispute', 'promote'].includes(entry.action)) continue;
+      const isReteach =
+        op.episodes.length > 0 &&
+        op.episodes.every((e) => verifyHumanTeachingEpisode(workspace, copilotHome, e)) &&
+        overridesGovernanceRecency(workspace, copilotHome, op.episodes, entry);
+      if (isReteach) {
+        appendGovernance(dir, { id, action: 'confirm', reason: 'superseded by re-teach', to: null, at });
         continue;
       }
-
-      // Domain write cap: only a SUPERSEDE introducing a NEW id can grow a
-      // domain's active count — the in-place reteach shape replaces the same
-      // file, net zero. This op's OWN tombstone is credited first (against
-      // the running projection, so it can always net-zero-replace itself
-      // even at exactly the cap), then the new id's domain is checked —
-      // against the running projection, so earlier same-run ops already
-      // count.
-      if (newId !== op.target) {
-        bumpProjectedActive(target.domain, -1);
-        const domain = normalizeSlug(op.domain);
-        if (projectedActive(domain) >= DOMAIN_ACTIVE_CAP) {
-          return {
-            applied: [],
-            governed: [],
-            rejected: [
-              fail('E_DOMAIN_CAP', `domain ${domain} at cap (${DOMAIN_ACTIVE_CAP} active) — MERGE existing learnings or retire first`),
-            ],
-            committed: false,
-            exitCode: 1,
-          };
+      const file = path.join(dir, 'learnings', domain, `${slug}.md`);
+      if (entry.action === 'promote') {
+        // promoted_to may be entirely absent from the just-written file —
+        // the same parse -> mutate fm -> serializeLearning re-render
+        // lifecycle.mjs's own promote branch uses, not
+        // updateFrontmatterField's regex-insert. Re-validated here with the
+        // exact same containment idiom lifecycle.mjs's promote branch
+        // enforces at RECORD time — entry.to is read back from
+        // governance.jsonl, a file outside applyOps' own write path (a hand
+        // edit to it is not absorbed/scanned the way a learning file is),
+        // so a poisoned or hand-edited entry must never be trusted verbatim
+        // at REPLAY time. A violation skips the reapply for this id
+        // entirely (the freshly written file is left exactly as the write
+        // loop above produced it, no promoted_to added) and logs it —
+        // fail-closed, never a throw.
+        const root = path.resolve(workspace);
+        const toFull = path.resolve(root, entry.to || '');
+        if (!entry.to || (toFull !== root && !toFull.startsWith(root + path.sep))) {
+          log(`consolidate: governance record for ${id} has an unsafe promote target (${entry.to}) — skipped reapply`);
+          continue;
         }
-        bumpProjectedActive(domain, 1);
-        plannedIds.add(newId);
+        const text = fs.readFileSync(file, 'utf8');
+        const { fm, body } = parseLearningFrontmatter(text);
+        fs.writeFileSync(file, serializeLearning({ ...fm, promoted_to: entry.to }, body), 'utf8');
+      } else {
+        updateFrontmatterField(file, 'status', entry.action === 'retire' ? 'retired' : 'disputed');
       }
-      consumedTargets.add(op.target);
+      governed.push({ id, action: entry.action });
     }
-    planned.push({ ...op, index: i });
-  }
 
-  // Compose ADD/SUPERSEDE/MERGE files and enforce the byte cap before writing.
-  const writes = [];
-  for (const op of planned) {
-    if (op.op !== 'ADD' && op.op !== 'SUPERSEDE' && op.op !== 'MERGE') continue;
-    const domain = normalizeSlug(op.domain);
-    const slug = normalizeSlug(op.slug);
-    const id = `${domain}/${slug}`;
-    // A direct human statement outranks statistics: episodes made entirely of
-    // VERIFIED human-teaching evidence (see verifyHumanTeachingEpisode) land
-    // active with source: human — no provisional damping for teachings
-    // (design §6). An asserted-but-unverifiable human-teaching kind (a
-    // fabricated or nonexistent episode) fails toward the standard
-    // auto/provisional lane instead — this derivation never throws or
-    // rejects the op, it just withholds the elevated standing.
-    const source = op.episodes.length && op.episodes.every((e) => verifyHumanTeachingEpisode(workspace, copilotHome, e)) ? 'human' : 'auto';
-    const status = source === 'human' ? 'active' : 'provisional';
-    const content = renderLearning({
-      trigger: op.trigger,
-      body: op.body,
-      episodes: op.episodes,
-      anchors: extractAnchors({ workspace, copilotHome, episodes: op.episodes }),
-      origin,
-      status,
-      source,
-      supersededBy: null,
-      mergedFrom: op.op === 'MERGE' ? op.targets : op.merged_from,
-    });
-    if (Buffer.byteLength(content, 'utf8') > LEARNING_BYTE_CAP) {
-      return rejectOp('E_BYTE_CAP', `${id} exceeds ${LEARNING_BYTE_CAP} bytes — split into two claims`, op.episodes);
+    for (const op of planned) {
+      if (op.op === 'STRENGTHEN') {
+        const target = existing.get(op.target);
+        strengthenLearning(target, op.episodes, workspace, copilotHome);
+        applied.push({ op: 'STRENGTHEN', id: op.target });
+        for (const e of op.episodes) ledgerEntries.push({ path: e.path, sha256: e.sha256, learning: op.target, at });
+      } else if (op.op === 'NOOP') {
+        applied.push({ op: 'NOOP', id: op.reason || null });
+        for (const e of op.episodes) ledgerEntries.push({ path: e.path, sha256: e.sha256, learning: null, at });
+      }
     }
-    writes.push({ op, id, domain, slug, content });
+
+    for (const d of disputes) {
+      const target = existing.get(d.target);
+      updateFrontmatterField(target.file, 'status', 'disputed');
+      rejected.push({ ...fail('E_DISPUTED', 'disputed-pending-human'), reason: 'disputed-pending-human', target: d.target });
+    }
+
+    if (ledgerEntries.length) appendLedger(dir, ledgerEntries);
+    rebuildIndex(dir);
+
+    // An apply run whose only effect was disputing targets (no ADD/STRENGTHEN/
+    // SUPERSEDE/MERGE/NOOP actually applied) must not commit as "noop" — that
+    // erases the one real thing this run DID do (mark targets disputed) from
+    // the store's own git history. Only reached when applied is genuinely
+    // empty — a run that both applies something AND disputes something else
+    // still summarizes by what applied.
+    const summary = applied.length
+      ? applied.map((a) => `${a.op.toLowerCase()}${a.id ? ` ${a.id}` : ''}`).join(' · ')
+      : disputes.length
+        ? `dispute ${disputes.map((d) => d.target).join(', ')}`
+        : 'noop';
+    return { kind: 'success', applied, rejected, governed, commitMessage: `consolidate: ${summary}` };
   }
 
   if (dryRun) {
+    const { dir, git } = ensureStore(workspace, { home, dryRun: true });
+    const result = runOnce({ dir, git });
+    if (result.kind === 'reject') {
+      return { applied: result.applied, governed: result.governed, rejected: result.rejected, committed: false, exitCode: result.exitCode };
+    }
+    return { applied: result.applied, rejected: result.rejected, committed: false, exitCode: 0, dryRun: true, governed: result.governed };
+  }
+
+  // Real apply: absorb + mode re-check + validate + mutate + commit all run
+  // inside ONE locked transaction (P1-6) — the lock now wraps everything from
+  // before the first read of store state through the final commit, and every
+  // other store writer (setLearningStatus, purgeEpisode, purgeAll,
+  // rebuildStore's --yes path, writeStoreConfig) takes the SAME lock via the
+  // SAME withStoreTransaction, so none of them can bypass it either.
+  const tx = withStoreTransaction(workspace, { home, label: 'consolidate: apply' }, ({ dir, git }) => {
+    // Absorb any hand edit sitting in the store BEFORE anything else reads or
+    // mutates it — still its own self-contained commit (absorbHandEdits calls
+    // commitStore itself), now made WHILE the lock is held instead of before
+    // it existed. That absorb commit is the checkpoint a later rollback in
+    // this same transaction lands on, so a hand edit always survives a
+    // mid-mutation throw. Advisory: never blocks the run it guards.
+    try {
+      absorbHandEdits({ workspace, home, log });
+    } catch {
+      // best effort — a hand-edit absorb failure must never block applyOps.
+    }
+    // Fresh, lock-held re-check of the mode gate: closes the window between
+    // the pre-lock check above and lock acquisition where another writer
+    // could have flipped the mode.
+    const { mode: freshMode } = readStoreConfig(workspace, { home });
+    if (freshMode !== 'on' && !(freshMode === 'suggest' && approve)) {
+      const reason =
+        freshMode === 'suggest'
+          ? 'knowledge mode is suggest — review the ops JSON, then re-run apply with --yes'
+          : `knowledge mode is ${freshMode} — run: harness knowledge on`;
+      return { kind: 'reject', applied: [], governed: [], rejected: [{ code: 'E_MODE', reason }], committed: false, exitCode: 2 };
+    }
+    return runOnce({ dir, git });
+  });
+
+  if (!tx.ok) {
+    if (tx.locked) {
+      return { applied: [], governed: [], rejected: [fail('E_LOCKED', 'another consolidation holds the store lock')], committed: false, exitCode: 1 };
+    }
     return {
-      applied: planned.map((o) => ({ op: o.op, id: o.target || (o.domain && `${normalizeSlug(o.domain)}/${normalizeSlug(o.slug)}`) || null })),
-      rejected: disputes.map((d) => ({ ...fail('E_DISPUTED', 'disputed-pending-human'), reason: 'disputed-pending-human', target: d.target })),
-      committed: false,
-      exitCode: 0,
-      dryRun: true,
-      // A preview never touches the store, so governance reapplication never
-      // runs — always empty, same as every other pre-mutation return below.
+      applied: [],
       governed: [],
+      rejected: [fail('E_APPLY_FAILED', tx.error?.message || 'store transaction failed')],
+      committed: false,
+      exitCode: 1,
+      ...(tx.staleLockNote ? { staleLockRemoved: tx.staleLockNote } : {}),
     };
   }
 
-  // Single-writer lock. A killed process can leave `.lock` behind forever
-  // (nothing ever runs to remove it), wedging the store shut for every
-  // future run. On contention, check the lock's age before giving up: past
-  // STALE_LOCK_MS, assume its owner is dead and take it over via an ATOMIC
-  // rename (not an idempotent `rmSync`) — two post-crash processes can both
-  // observe the same stale lock and both attempt takeover, and a filesystem
-  // rename either succeeds or fails atomically, so at most ONE renameSync
-  // call can succeed against that exact directory entry. The loser gets
-  // ENOENT (the entry is already gone) and must fall straight through to
-  // E_LOCKED without attempting its own mkdirSync — an `rmSync({force:true})`
-  // here instead would "succeed" silently for BOTH processes (deleting
-  // nothing is not an error), then race them both on mkdirSync with no way
-  // to tell winner from loser, which is exactly how a slow loser can end up
-  // deleting the WINNER's freshly re-created live lock and mutating
-  // concurrently with it.
-  const lockPath = path.join(dir, '.lock');
-  let staleLockNote = null;
-  try {
-    fs.mkdirSync(lockPath);
-  } catch {
-    let stat;
-    try {
-      stat = fs.statSync(lockPath);
-    } catch {
-      stat = null;
-    }
-    const ageMs = stat ? Date.now() - stat.mtimeMs : 0;
-    let recovered = false;
-    if (stat && ageMs > STALE_LOCK_MS) {
-      const tombstone = `${lockPath}.stale-${process.pid}-${Date.now()}`;
-      let claimed = false;
-      try {
-        fs.renameSync(lockPath, tombstone);
-        claimed = true;
-      } catch {
-        claimed = false; // another process already won the takeover race
-      }
-      if (claimed) {
-        try {
-          fs.mkdirSync(lockPath);
-          staleLockNote = `stale lock (${Math.round(ageMs / 60000)}m old) removed`;
-          recovered = true;
-        } catch {
-          recovered = false;
-        }
-        // Best effort, never allowed to undo a successful takeover above —
-        // an orphaned tombstone directory is harmless disk debris either way.
-        try {
-          fs.rmSync(tombstone, { recursive: true, force: true });
-        } catch {
-          // ignored
-        }
-      }
-    }
-    if (!recovered) {
-      return { applied: [], governed: [], rejected: [fail('E_LOCKED', 'another consolidation holds the store lock')], committed: false, exitCode: 1 };
-    }
+  const staleExtra = tx.staleLockNote ? { staleLockRemoved: tx.staleLockNote } : {};
+  const inner = tx.result;
+  if (inner.kind === 'reject') {
+    return { applied: inner.applied, governed: inner.governed, rejected: inner.rejected, committed: false, exitCode: inner.exitCode, ...staleExtra };
   }
 
-  const applied = [];
-  const rejected = [];
-  const ledgerEntries = [];
-  const governed = [];
-  const at = todayClamped();
-  try {
-    try {
-      for (const { op, id, domain, slug, content } of writes) {
-        const file = path.join(dir, 'learnings', domain, `${slug}.md`);
-        fs.mkdirSync(path.dirname(file), { recursive: true });
-        fs.writeFileSync(file, content, 'utf8');
-        applied.push({ op: op.op, id });
-        for (const e of op.episodes) ledgerEntries.push({ path: e.path, sha256: e.sha256, learning: id, at });
-        // A SUPERSEDE whose target is the SAME id as the file just written
-        // (human re-teaching the same trigger/domain) is an in-place
-        // replacement, not a tombstone-and-replace: `file` above already IS
-        // the target's file, freshly overwritten with the new claim and
-        // `superseded_by: null` (renderLearning always writes null for a new
-        // write). Stamping superseded_by onto it here would point the new
-        // content at itself, so that step only runs when target !== id.
-        if (op.op === 'SUPERSEDE' && op.target !== id) {
-          const target = existing.get(op.target);
-          updateFrontmatterField(target.file, 'superseded_by', id);
-        }
-        // A MERGE tombstones EVERY target it consolidates into the new id —
-        // none of them can equal `id` (MERGE always writes a brand-new id).
-        if (op.op === 'MERGE') {
-          for (const t of op.targets) {
-            const target = existing.get(t);
-            updateFrontmatterField(target.file, 'superseded_by', id);
-          }
-        }
-      }
-
-      // Governance reapplication (Milestone 4 Task 2): every id the write
-      // loop above just (re)wrote — a fresh ADD/SUPERSEDE/MERGE file, never a
-      // STRENGTHEN (that only ever touches an EXISTING file) — may already
-      // carry a standing human retire/dispute/promote decision from BEFORE a
-      // `consolidate --rebuild` wiped the corpus. Reapply it here, inside
-      // this same rollback window, so the regenerated learning honors what a
-      // human already decided instead of silently reverting to whatever the
-      // fresh op claims. `confirm` is deliberately excluded — it is not a
-      // demotion to restore, so it never reapplies. EXCEPTION: an op whose
-      // EVERY episode verifies as human-teaching (verifyHumanTeachingEpisode)
-      // AND is at least as recent as this governance record
-      // (overridesGovernanceRecency) is the human retracting their own
-      // earlier call by re-teaching the same trigger/domain — the standing
-      // decision is overridden instead of enforced, and a fresh `confirm`
-      // record (never overwriting the history, always appended) supersedes
-      // it via readGovernance's latest-per-id replay. `governance` was
-      // already read once above (before validation) — reused here, not
-      // re-read, since nothing writes to governance.jsonl between that read
-      // and this loop.
-      for (const { op, id, domain, slug } of writes) {
-        const entry = governance.get(id);
-        if (!entry || !['retire', 'dispute', 'promote'].includes(entry.action)) continue;
-        const isReteach =
-          op.episodes.length > 0 &&
-          op.episodes.every((e) => verifyHumanTeachingEpisode(workspace, copilotHome, e)) &&
-          overridesGovernanceRecency(workspace, copilotHome, op.episodes, entry);
-        if (isReteach) {
-          appendGovernance(dir, { id, action: 'confirm', reason: 'superseded by re-teach', to: null, at });
-          continue;
-        }
-        const file = path.join(dir, 'learnings', domain, `${slug}.md`);
-        if (entry.action === 'promote') {
-          // promoted_to may be entirely absent from the just-written file —
-          // the same parse -> mutate fm -> serializeLearning re-render
-          // lifecycle.mjs's own promote branch uses, not
-          // updateFrontmatterField's regex-insert. Re-validated here with the
-          // exact same containment idiom lifecycle.mjs's promote branch
-          // enforces at RECORD time — entry.to is read back from
-          // governance.jsonl, a file outside applyOps' own write path (a hand
-          // edit to it is not absorbed/scanned the way a learning file is),
-          // so a poisoned or hand-edited entry must never be trusted verbatim
-          // at REPLAY time. A violation skips the reapply for this id
-          // entirely (the freshly written file is left exactly as the write
-          // loop above produced it, no promoted_to added) and logs it —
-          // fail-closed, never a throw.
-          const root = path.resolve(workspace);
-          const toFull = path.resolve(root, entry.to || '');
-          if (!entry.to || (toFull !== root && !toFull.startsWith(root + path.sep))) {
-            log(`consolidate: governance record for ${id} has an unsafe promote target (${entry.to}) — skipped reapply`);
-            continue;
-          }
-          const text = fs.readFileSync(file, 'utf8');
-          const { fm, body } = parseLearningFrontmatter(text);
-          fs.writeFileSync(file, serializeLearning({ ...fm, promoted_to: entry.to }, body), 'utf8');
-        } else {
-          updateFrontmatterField(file, 'status', entry.action === 'retire' ? 'retired' : 'disputed');
-        }
-        governed.push({ id, action: entry.action });
-      }
-
-      for (const op of planned) {
-        if (op.op === 'STRENGTHEN') {
-          const target = existing.get(op.target);
-          strengthenLearning(target, op.episodes, workspace, copilotHome);
-          applied.push({ op: 'STRENGTHEN', id: op.target });
-          for (const e of op.episodes) ledgerEntries.push({ path: e.path, sha256: e.sha256, learning: op.target, at });
-        } else if (op.op === 'NOOP') {
-          applied.push({ op: 'NOOP', id: op.reason || null });
-          for (const e of op.episodes) ledgerEntries.push({ path: e.path, sha256: e.sha256, learning: null, at });
-        }
-      }
-
-      for (const d of disputes) {
-        const target = existing.get(d.target);
-        updateFrontmatterField(target.file, 'status', 'disputed');
-        rejected.push({ ...fail('E_DISPUTED', 'disputed-pending-human'), reason: 'disputed-pending-human', target: d.target });
-      }
-
-      if (ledgerEntries.length) appendLedger(dir, ledgerEntries);
-      rebuildIndex(dir);
-    } catch (err) {
-      // Atomic apply: the mutation phase (learning files → target
-      // frontmatter → ledger append → INDEX rebuild) can throw mid-way,
-      // leaving partial state. Most of the time the store tree is
-      // committed-clean before this call (every successful apply ends in a
-      // commit), so a hard reset + clean fully undoes the partial writes —
-      // same git-invocation style as commitStore. Best effort beyond that:
-      // if the store has never committed yet (no HEAD), `reset --hard` is a
-      // no-op, but `clean -fd` still sweeps the untracked partial writes, so
-      // atomicity still holds — the never-committed baseline stub files
-      // (INDEX.md, empty ledger) get swept up too, but those self-heal via
-      // ensureStore/rebuildIndex on the next call. If the store has no git
-      // at all (ensureStore degraded), there's nothing to run, so we skip
-      // restore entirely and just fail.
-      if (git) {
-        spawnSync('git', ['reset', '--hard'], { cwd: dir, encoding: 'utf8' });
-        spawnSync('git', ['clean', '-fd'], { cwd: dir, encoding: 'utf8' });
-      }
-      return {
-        applied: [],
-        governed: [],
-        rejected: [fail('E_APPLY_FAILED', err.message)],
-        committed: false,
-        exitCode: 1,
-      };
-    }
-  } finally {
-    // The rollback above may have already removed the untracked .lock
-    // directory via `git clean -fd` — tolerate that instead of throwing.
-    fs.rmSync(lockPath, { recursive: true, force: true });
-  }
-
-  // An apply run whose only effect was disputing targets (no ADD/STRENGTHEN/
-  // SUPERSEDE/MERGE/NOOP actually applied) must not commit as "noop" — that
-  // erases the one real thing this run DID do (mark targets disputed) from
-  // the store's own git history. Only reached when applied is genuinely
-  // empty — a run that both applies something AND disputes something else
-  // still summarizes by what applied.
-  const summary = applied.length
-    ? applied.map((a) => `${a.op.toLowerCase()}${a.id ? ` ${a.id}` : ''}`).join(' · ')
-    : disputes.length
-      ? `dispute ${disputes.map((d) => d.target).join(', ')}`
-      : 'noop';
-  const { committed } = commitStore(dir, `consolidate: ${summary}`);
   try {
     mirrorLearnings({ workspace, home, log });
   } catch {
     // best effort — a mirror failure must never block applyOps.
   }
   return {
-    applied,
-    rejected,
-    committed,
+    applied: inner.applied,
+    rejected: inner.rejected,
+    committed: tx.committed,
     exitCode: 0,
-    storeDir: dir,
-    indexPath: path.join(dir, 'INDEX.md'),
-    governed,
-    ...(staleLockNote ? { staleLockRemoved: staleLockNote } : {}),
+    storeDir: tx.dir,
+    indexPath: path.join(tx.dir, 'INDEX.md'),
+    governed: inner.governed,
+    ...staleExtra,
   };
 }
-
 export function updateFrontmatterField(file, field, value) {
   const text = fs.readFileSync(file, 'utf8');
   const re = new RegExp(`^${field}:.*$`, 'm');

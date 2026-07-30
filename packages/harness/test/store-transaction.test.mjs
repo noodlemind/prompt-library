@@ -1,0 +1,322 @@
+import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { test } from 'node:test';
+import { applyOps } from '../lib/knowledge/apply.mjs';
+import { setLearningStatus } from '../lib/knowledge/lifecycle.mjs';
+import { purgeEpisode, purgeAll, rebuildStore } from '../lib/knowledge/admin.mjs';
+import { ensureStore, storeDir, listLearnings, writeStoreConfig } from '../lib/knowledge/store.mjs';
+
+/**
+ * Hardening batch A — store transactionality (P1-6/7/8 from the external
+ * security review): every store writer now runs inside ONE single-writer
+ * lock via withStoreTransaction (store.mjs), the lock spans validation
+ * through the final commit (not just the mutation phase), and a real git
+ * failure at add/commit time rolls back and surfaces as a failure instead of
+ * a silently-swallowed "committed: false" success.
+ *
+ * This file covers the review's missing-coverage list:
+ *  - lock semantics: every adopter (apply/lifecycle/purge/rebuild/config)
+ *    returns E_LOCKED instead of proceeding while another writer holds the
+ *    lock (deterministic — a live lock is held via direct mkdir, no process
+ *    spawning or timing races).
+ *  - kill/restart: a stale lock + a dirty (uncommitted, tracked) store tree
+ *    left behind by a "crashed" writer is taken over cleanly by the next
+ *    transaction — the dirty tree is absorbed as a hand edit, not destroyed.
+ *  - git fault injection: a REAL git commit failure (not a clean tree) is
+ *    distinguished from success and triggers a rollback + nonzero exit.
+ *  - purge atomicity: a mid-purge store-transaction failure leaves the T1
+ *    (workspace) episode file completely untouched — it is only ever
+ *    deleted AFTER the store-side commit has succeeded.
+ */
+
+const tempDir = (p) => fs.mkdtempSync(path.join(os.tmpdir(), p));
+
+const ctx = () => ({ ws: tempDir('stx-ws-'), home: tempDir('stx-home-'), harnessHome: tempDir('stx-hh-') });
+
+function writeOps(dir, ops) {
+  const p = path.join(dir, 'ops.json');
+  fs.writeFileSync(p, JSON.stringify({ schema: 1, ops }));
+  return p;
+}
+
+function writeRealEpisode(ws, rel, content) {
+  const full = path.join(ws, rel);
+  fs.mkdirSync(path.dirname(full), { recursive: true });
+  const text = content ?? `episode body for ${rel}.\n`;
+  fs.writeFileSync(full, text, 'utf8');
+  return { path: rel, sha256: crypto.createHash('sha256').update(text).digest('hex') };
+}
+
+function ADD(ws, over = {}) {
+  const ep = writeRealEpisode(ws, over.episodePath || 'docs/solutions/perf/x.md');
+  return {
+    op: 'ADD',
+    domain: 'sql',
+    slug: 'not-null-hot-tables',
+    trigger: 'adding NOT NULL columns to hot tables',
+    body: 'Use two-step default+backfill; a direct ALTER takes an exclusive lock.',
+    episodes: [{ ...ep, kind: 'fix', plan: 'docs/plans/p1.md' }],
+    ...over,
+  };
+}
+
+function seedLearning(c, over = {}) {
+  const op = ADD(c.ws, over);
+  const res = applyOps({ workspace: c.ws, opsPath: writeOps(c.ws, [op]), home: c.harnessHome });
+  assert.equal(res.exitCode, 0, JSON.stringify(res.rejected));
+  return `${op.domain}/${op.slug}`;
+}
+
+/** Simulate a human editing a learning file directly with a text editor: keep
+ * the frontmatter block byte-for-byte, replace only the body underneath. */
+function handEditBody(file, newBody) {
+  const text = fs.readFileSync(file, 'utf8');
+  const next = text.replace(/(---\r?\n[\s\S]*?\r?\n---\r?\n\r?\n)[\s\S]*$/, (_m, fm) => `${fm}${newBody}\n`);
+  assert.notEqual(next, text, 'precondition: hand edit must actually change the file');
+  fs.writeFileSync(file, next, 'utf8');
+}
+
+/**
+ * Deterministic, cross-platform-safe git fault injection: a `pre-commit`
+ * hook that always exits 1. This blocks ONLY `git commit` — `git add`,
+ * `git reset --hard`, and `git clean -fd` are all untouched by hooks — so
+ * the failure surfaces exactly where P1-7 says it must (the commit step)
+ * without also wedging withStoreTransaction's own rollback (which itself
+ * runs `reset --hard` + `clean -fd`). An alternative method (planting
+ * `.git/index.lock` to fail `git add`) was tried and rejected: it ALSO blocks
+ * the rollback's own `git reset --hard`, which would leave the newly-written
+ * (uncommitted) file sitting in the working tree and make "store state
+ * unchanged" assertions fail for a reason unrelated to the code under test.
+ */
+function installFailingCommitHook(dir) {
+  const hooksDir = path.join(dir, '.git', 'hooks');
+  fs.mkdirSync(hooksDir, { recursive: true });
+  const hookPath = path.join(hooksDir, 'pre-commit');
+  fs.writeFileSync(hookPath, '#!/bin/sh\nexit 1\n', { mode: 0o755 });
+  return hookPath;
+}
+
+// ---------------------------------------------------------------------------
+// Lock semantics: every adopter returns E_LOCKED instead of proceeding.
+// ---------------------------------------------------------------------------
+
+test('every store adopter (apply/lifecycle/purge/rebuild/config) returns E_LOCKED while another writer holds the lock', () => {
+  const c = ctx();
+  const targetPath = 'docs/solutions/perf/x.md';
+  const id = seedLearning(c, { episodePath: targetPath });
+  const { dir } = ensureStore(c.ws, { home: c.harnessHome });
+  const lockPath = path.join(dir, '.lock');
+
+  // A fresh (live) lock, as if another writer is mid-transaction right now.
+  fs.mkdirSync(lockPath);
+
+  const before = listLearnings(dir).map((l) => l.id).sort();
+
+  // apply
+  const applyRes = applyOps({
+    workspace: c.ws,
+    opsPath: writeOps(c.ws, [ADD(c.ws, { slug: 'locked-add', episodePath: 'docs/solutions/perf/locked.md' })]),
+    home: c.harnessHome,
+  });
+  assert.equal(applyRes.exitCode, 1);
+  assert.equal(applyRes.rejected[0].code, 'E_LOCKED');
+
+  // lifecycle
+  const retireRes = setLearningStatus({ workspace: c.ws, id, action: 'retire', reason: 'x', home: c.harnessHome });
+  assert.equal(retireRes.exitCode, 1);
+  assert.match(retireRes.blockedReason, /E_LOCKED/);
+
+  // purge (single episode)
+  const purgeRes = purgeEpisode({ workspace: c.ws, target: targetPath, home: c.harnessHome });
+  assert.equal(purgeRes.exitCode, 1);
+  assert.match(purgeRes.blockedReason, /E_LOCKED/);
+
+  // purge --all
+  const purgeAllRes = purgeAll({ workspace: c.ws, home: c.harnessHome });
+  assert.equal(purgeAllRes.exitCode, 1);
+  assert.match(purgeAllRes.blockedReason, /E_LOCKED/);
+
+  // rebuild --yes
+  const rebuildRes = rebuildStore({ workspace: c.ws, home: c.harnessHome, yes: true });
+  assert.equal(rebuildRes.exitCode, 1);
+  assert.match(rebuildRes.blockedReason, /E_LOCKED/);
+
+  // knowledge mode/commit config writes
+  const configRes = writeStoreConfig(c.ws, { home: c.harnessHome, mode: 'off' });
+  assert.equal(configRes.pass, false);
+  assert.match(configRes.blockedReason, /E_LOCKED/);
+
+  // The live lock must be left exactly as it was — no adopter is allowed to
+  // remove or steal a fresh, contended lock.
+  assert.ok(fs.existsSync(lockPath), 'a live lock must never be removed by a contending writer');
+
+  // Nothing any of the six calls above attempted actually landed.
+  fs.rmSync(lockPath, { recursive: true, force: true });
+  const after = listLearnings(dir).map((l) => l.id).sort();
+  assert.deepEqual(after, before, 'no contended call mutated the store');
+});
+
+// ---------------------------------------------------------------------------
+// Kill/restart: a stale lock + dirty tree from a "crashed" writer.
+// ---------------------------------------------------------------------------
+
+test('a crashed writer (stale lock + an uncommitted hand edit) is taken over cleanly: the hand edit is absorbed, not destroyed', () => {
+  const c = ctx();
+  const id = seedLearning(c);
+  const { dir } = ensureStore(c.ws, { home: c.harnessHome });
+  const learning = listLearnings(dir).find((l) => l.id === id);
+
+  // The "crashed" process hand-edited the learning file (or absorbed
+  // someone else's hand edit) but died before it could commit — leaving the
+  // tracked file dirty in the working tree.
+  handEditBody(learning.file, 'A crash-recovered hand edit that must survive takeover.');
+  const dirty = gitPorcelainStatus(dir);
+  assert.match(dirty, /M\s+learnings\/sql\/not-null-hot-tables\.md/, 'precondition: dirty tracked file');
+
+  // ...and its own `.lock` directory, now stale (old mtime — past the
+  // takeover threshold).
+  const lockPath = path.join(dir, '.lock');
+  fs.mkdirSync(lockPath);
+  const old = new Date(Date.now() - 11 * 60 * 1000);
+  fs.utimesSync(lockPath, old, old);
+
+  // The next transaction (any adopter — applyOps here) takes the stale lock
+  // over and proceeds.
+  const res = applyOps({
+    workspace: c.ws,
+    opsPath: writeOps(c.ws, [ADD(c.ws, { slug: 'after-crash', episodePath: 'docs/solutions/perf/after-crash.md' })]),
+    home: c.harnessHome,
+  });
+  assert.equal(res.exitCode, 0, JSON.stringify(res));
+  assert.match(res.staleLockRemoved || '', /stale lock/);
+  assert.equal(fs.existsSync(lockPath), false, 'the lock is released again after takeover');
+
+  // The crash-recovered hand edit was absorbed as human authority, not wiped
+  // by any rollback — proving the takeover ran absorb-before-mutation inside
+  // the SAME lock the new op then used.
+  const after = listLearnings(dir).find((l) => l.id === id);
+  assert.equal(after.fm.source, 'human');
+  assert.match(after.body, /crash-recovered hand edit/);
+
+  // And the new op landed too.
+  assert.ok(listLearnings(dir).some((l) => l.id === 'sql/after-crash'));
+});
+
+function gitPorcelainStatus(dir) {
+  return spawnSync('git', ['status', '--porcelain'], { cwd: dir, encoding: 'utf8' }).stdout;
+}
+
+// ---------------------------------------------------------------------------
+// Git fault injection: a real commit failure rolls back and reports nonzero.
+// ---------------------------------------------------------------------------
+
+test('a real git commit failure (applyOps) rolls back the store, reports nonzero, and releases the lock', () => {
+  const c = ctx();
+  seedLearning(c);
+  const { dir } = ensureStore(c.ws, { home: c.harnessHome });
+  installFailingCommitHook(dir);
+
+  const before = listLearnings(dir).map((l) => l.id).sort();
+  const res = applyOps({
+    workspace: c.ws,
+    opsPath: writeOps(c.ws, [ADD(c.ws, { slug: 'should-roll-back', episodePath: 'docs/solutions/perf/should-roll-back.md' })]),
+    home: c.harnessHome,
+  });
+
+  assert.equal(res.exitCode, 1);
+  assert.equal(res.committed, false);
+  assert.equal(res.rejected?.[0]?.code, 'E_APPLY_FAILED');
+  assert.ok(res.rejected[0].reason && res.rejected[0].reason.length > 0, 'the failure carries a real reason/stderr detail');
+
+  assert.equal(fs.existsSync(path.join(dir, '.lock')), false, 'the lock is released even after a commit failure');
+  const after = listLearnings(dir).map((l) => l.id).sort();
+  assert.deepEqual(after, before, 'the rejected op never landed — rolled back to the last real commit');
+});
+
+test('a real git commit failure (setLearningStatus) rolls back and reports nonzero, lock released', () => {
+  const c = ctx();
+  const id = seedLearning(c);
+  const { dir } = ensureStore(c.ws, { home: c.harnessHome });
+  // A plain ADD (not `remember`) lands as source: auto, status: provisional —
+  // captured here rather than hardcoding 'active' so this assertion pins
+  // "unchanged by the rolled-back dispute", not a specific seeded shape.
+  const statusBefore = listLearnings(dir).find((l) => l.id === id).fm.status;
+  installFailingCommitHook(dir);
+
+  const res = setLearningStatus({ workspace: c.ws, id, action: 'dispute', reason: 'should not land', home: c.harnessHome });
+  assert.equal(res.pass, false);
+  assert.equal(res.exitCode, 1);
+  assert.ok(res.blockedReason && res.blockedReason.length > 0);
+
+  assert.equal(fs.existsSync(path.join(dir, '.lock')), false, 'the lock is released even after a commit failure');
+  const learning = listLearnings(dir).find((l) => l.id === id);
+  assert.equal(learning.fm.status, statusBefore, 'the dispute never landed — rolled back');
+});
+
+// ---------------------------------------------------------------------------
+// Purge atomicity (P1-8): a mid-purge transaction failure leaves the T1
+// (workspace) episode file completely untouched.
+// ---------------------------------------------------------------------------
+
+test('purge atomicity: a mid-purge store-transaction failure leaves the T1 episode file and store state unchanged', () => {
+  const c = ctx();
+  const targetPath = 'docs/solutions/perf/atomic-target.md';
+  const target = writeRealEpisode(c.ws, targetPath, 'atomic target body\n');
+  const op = {
+    op: 'ADD',
+    domain: 'sql',
+    slug: 'atomic-purge',
+    trigger: 'atomic purge trigger',
+    body: 'atomic purge body text',
+    episodes: [{ ...target, kind: 'fix', plan: 'docs/plans/p1.md' }],
+  };
+  assert.equal(applyOps({ workspace: c.ws, opsPath: writeOps(c.ws, [op]), home: c.harnessHome }).exitCode, 0);
+
+  const { dir } = ensureStore(c.ws, { home: c.harnessHome });
+  const learningsBefore = listLearnings(dir).map((l) => l.id).sort();
+
+  installFailingCommitHook(dir);
+
+  const res = purgeEpisode({ workspace: c.ws, target: targetPath, home: c.harnessHome });
+  assert.equal(res.pass, false);
+  assert.equal(res.exitCode, 1);
+  assert.ok(res.blockedReason && res.blockedReason.length > 0);
+
+  // The episode file is deleted LAST, only after a successful store commit —
+  // the store transaction here failed BEFORE that point, so the file must
+  // still be exactly where it was.
+  assert.ok(fs.existsSync(path.join(c.ws, targetPath)), 'the T1 episode file must survive a failed purge transaction');
+  const survivingText = fs.readFileSync(path.join(c.ws, targetPath), 'utf8');
+  assert.equal(survivingText, 'atomic target body\n', 'the episode file content is untouched, not partially written');
+
+  // Store state (learnings, still citing the target) is unchanged — the
+  // cascade was rolled back, not partially applied.
+  const learningsAfter = listLearnings(dir).map((l) => l.id).sort();
+  assert.deepEqual(learningsAfter, learningsBefore);
+  const learning = listLearnings(dir).find((l) => l.id === 'sql/atomic-purge');
+  assert.ok(learning, 'the learning still exists — the cascade never removed it');
+  assert.ok(learning.fm.episodes.some((e) => e.path === targetPath), 'the learning still cites the target episode');
+
+  assert.equal(fs.existsSync(path.join(dir, '.lock')), false, 'the lock is released even after a purge failure');
+});
+
+test('purge --all: a store-transaction failure leaves every learning and the ledger untouched', () => {
+  const c = ctx();
+  seedLearning(c, { slug: 'keep-me' });
+  const { dir } = ensureStore(c.ws, { home: c.harnessHome });
+  const before = listLearnings(dir).map((l) => l.id).sort();
+
+  installFailingCommitHook(dir);
+
+  const res = purgeAll({ workspace: c.ws, home: c.harnessHome });
+  assert.equal(res.pass, false);
+  assert.equal(res.exitCode, 1);
+
+  const after = listLearnings(dir).map((l) => l.id).sort();
+  assert.deepEqual(after, before, 'purge --all must not have wiped anything on a failed transaction');
+  assert.equal(fs.existsSync(path.join(dir, '.lock')), false);
+});

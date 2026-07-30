@@ -3,7 +3,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import {
-  ensureStore,
+  withStoreTransaction,
   storeDir,
   listLearnings,
   readLedger,
@@ -362,81 +362,126 @@ export function purgeEpisode({ workspace, target, home, log = () => {} }) {
     };
   }
 
-  const { dir } = ensureStore(workspace, { home });
-  try {
-    absorbHandEdits({ workspace, home, log });
-  } catch {
-    // best effort — a hand-edit absorb failure must never block purge.
-  }
+  // Store-side cascade (learnings, links, ledger, governance) runs inside the
+  // single-writer transaction. The workspace episode FILE itself is
+  // deliberately deleted OUTSIDE and AFTER this transaction, only once it has
+  // committed successfully (P1-8): if the store-side cascade fails or rolls
+  // back, the episode file is never touched, so a failed purge never loses
+  // evidence with nothing left to point at it.
+  const tx = withStoreTransaction(workspace, { home, label: `purge: ${target}` }, ({ dir }) => {
+    try {
+      absorbHandEdits({ workspace, home, log });
+    } catch {
+      // best effort — a hand-edit absorb failure must never block purge.
+    }
 
-  // Read-only discovery pass first: decide whether anything actually
-  // references `target` before mutating anything, so a no-match purge can
-  // bail with zero side effects (no commit) instead of reporting a false
-  // "pass" for a target nothing ever cited.
-  const matchingLearnings = listLearnings(dir).filter((l) => (l.fm.episodes || []).some((e) => e.path === target));
-  const ledger = readLedger(dir);
-  const ledgerHits = ledger.filter((e) => e.path === target).length;
+    // Read-only discovery pass first: decide whether anything actually
+    // references `target` before mutating anything, so a no-match purge can
+    // bail with zero side effects (no commit) instead of reporting a false
+    // "pass" for a target nothing ever cited. Read fresh, under the lock —
+    // not before it — so this can never validate against a stale snapshot
+    // another writer has since moved past.
+    const matchingLearnings = listLearnings(dir).filter((l) => (l.fm.episodes || []).some((e) => e.path === target));
+    const ledger = readLedger(dir);
+    const ledgerHits = ledger.filter((e) => e.path === target).length;
 
-  if (!episodeExistsOnDisk && matchingLearnings.length === 0 && ledgerHits === 0) {
+    if (!episodeExistsOnDisk && matchingLearnings.length === 0 && ledgerHits === 0) {
+      return {
+        kind: 'reject',
+        pass: false,
+        exitCode: 2,
+        removed: null,
+        blockedReason: `nothing references ${target} — nothing to purge`,
+      };
+    }
+
+    const removedLearnings = [];
+    const removedLinks = [];
+    for (const l of matchingLearnings) {
+      const episodes = l.fm.episodes || [];
+      // Decide by the post-filter count, not the pre-filter episode count: a
+      // learning can cite the same path twice with different sha256 values
+      // (ADD then STRENGTHEN after the episode file was edited), so "one
+      // episode total" is not the same thing as "one episode after this path
+      // is removed" — removeEpisodeLink strips every link to `target`
+      // regardless of sha256, so this must match that filter exactly.
+      const remaining = episodes.filter((e) => e.path !== target);
+      if (remaining.length === 0) {
+        // No evidence left once every link to this path is gone.
+        fs.rmSync(l.file, { force: true });
+        removedLearnings.push(l.id);
+      } else {
+        removeEpisodeLink(l.file, target);
+        removedLinks.push(l.id);
+      }
+    }
+
+    const keptLedger = ledger.filter((e) => e.path !== target);
+    fs.writeFileSync(
+      path.join(dir, 'consolidated.jsonl'),
+      keptLedger.length ? keptLedger.map((e) => JSON.stringify(e)).join('\n') + '\n' : '',
+      'utf8'
+    );
+
+    // Governance record (Milestone 4): a fully cascade-deleted learning's
+    // history is dropped too — nothing left for those records to govern —
+    // while a merely delinked (removedLinks) learning's governance history is
+    // untouched, since the learning itself still exists.
+    if (removedLearnings.length) {
+      const removedIds = new Set(removedLearnings);
+      rewriteGovernance(dir, (e) => !removedIds.has(e.id));
+    }
+
+    rebuildIndex(dir);
+
+    return {
+      kind: 'success',
+      commitMessage: `purge: ${target}`,
+      removedLearnings,
+      removedLinks,
+      ledgerRemoved: ledger.length - keptLedger.length,
+    };
+  });
+
+  if (!tx.ok) {
     return {
       pass: false,
-      exitCode: 2,
+      exitCode: 1,
       removed: null,
-      blockedReason: `nothing references ${target} — nothing to purge`,
+      blockedReason: tx.locked
+        ? 'E_LOCKED: another operation holds the store lock'
+        : `purge failed: ${tx.error?.message || 'store transaction failed'}`,
     };
   }
 
-  const removedLearnings = [];
-  const removedLinks = [];
-  for (const l of matchingLearnings) {
-    const episodes = l.fm.episodes || [];
-    // Decide by the post-filter count, not the pre-filter episode count: a
-    // learning can cite the same path twice with different sha256 values
-    // (ADD then STRENGTHEN after the episode file was edited), so "one
-    // episode total" is not the same thing as "one episode after this path
-    // is removed" — removeEpisodeLink strips every link to `target`
-    // regardless of sha256, so this must match that filter exactly.
-    const remaining = episodes.filter((e) => e.path !== target);
-    if (remaining.length === 0) {
-      // No evidence left once every link to this path is gone.
-      fs.rmSync(l.file, { force: true });
-      removedLearnings.push(l.id);
-    } else {
-      removeEpisodeLink(l.file, target);
-      removedLinks.push(l.id);
+  const inner = tx.result;
+  if (inner.kind === 'reject') {
+    return { pass: inner.pass, exitCode: inner.exitCode, removed: inner.removed, blockedReason: inner.blockedReason };
+  }
+
+  // The workspace episode file is deleted LAST, only now that the store-side
+  // cascade above has committed successfully (P1-8). If deletion itself
+  // fails here (e.g. a permission error), the store-side purge already
+  // committed — there is nothing left to roll back, so this reports a
+  // partial outcome rather than a failure.
+  let episodeRemoved = false;
+  let partialReason = null;
+  if (episodeExistsOnDisk) {
+    try {
+      fs.rmSync(episodeFull, { force: true });
+      episodeRemoved = true;
+    } catch (err) {
+      partialReason = `store purge committed, but the episode file could not be deleted: ${err.message}`;
+      log(partialReason);
     }
   }
 
-  const keptLedger = ledger.filter((e) => e.path !== target);
-  fs.writeFileSync(
-    path.join(dir, 'consolidated.jsonl'),
-    keptLedger.length ? keptLedger.map((e) => JSON.stringify(e)).join('\n') + '\n' : '',
-    'utf8'
-  );
-
-  // Governance record (Milestone 4): a fully cascade-deleted learning's
-  // history is dropped too — nothing left for those records to govern —
-  // while a merely delinked (removedLinks) learning's governance history is
-  // untouched, since the learning itself still exists.
-  if (removedLearnings.length) {
-    const removedIds = new Set(removedLearnings);
-    rewriteGovernance(dir, (e) => !removedIds.has(e.id));
-  }
-
-  let episodeRemoved = false;
-  if (episodeExistsOnDisk) {
-    fs.rmSync(episodeFull, { force: true });
-    episodeRemoved = true;
-  }
-
-  rebuildIndex(dir);
-  commitStore(dir, `purge: ${target}`);
   try {
     // removedLearnings names only the learnings this cascade FULLY DELETED
     // (as opposed to removedLinks, which were merely delinked and still
     // exist) — human deletion must win in the mirror too, so those ids are
     // named via retiredIds even though the store has already forgotten them.
-    mirrorLearnings({ workspace, home, retiredIds: removedLearnings });
+    mirrorLearnings({ workspace, home, retiredIds: inner.removedLearnings });
   } catch {
     // best effort — a mirror failure must never block purge.
   }
@@ -446,11 +491,12 @@ export function purgeEpisode({ workspace, target, home, log = () => {} }) {
     exitCode: 0,
     removed: {
       episode: episodeRemoved ? target : null,
-      learnings: removedLearnings,
-      links: removedLinks,
-      ledger: ledger.length - keptLedger.length,
+      learnings: inner.removedLearnings,
+      links: inner.removedLinks,
+      ledger: inner.ledgerRemoved,
     },
     blockedReason: null,
+    ...(partialReason ? { partialReason } : {}),
   };
 }
 
@@ -474,40 +520,55 @@ export function purgeAll({ workspace, home, log = () => {} }) {
       blockedReason: 'nothing to purge — no knowledge store yet',
     };
   }
-  const { dir } = ensureStore(workspace, { home });
-  try {
-    absorbHandEdits({ workspace, home, log });
-  } catch {
-    // best effort — a hand-edit absorb failure must never block purge --all.
-  }
-  // Captured BEFORE the wipe below: a full reset (design-controller ruling)
-  // must still clear the mirror for exactly these ids, but by the time
-  // mirrorLearnings runs the store no longer has any record of them — pass
-  // them explicitly via retiredIds so its sweep can still match them.
-  const idsBeforeReset = listLearnings(dir).map((l) => l.id);
-  const learningsDir = path.join(dir, 'learnings');
-  let n = 0;
-  if (fs.existsSync(learningsDir)) {
-    for (const domain of fs.readdirSync(learningsDir, { withFileTypes: true })) {
-      if (!domain.isDirectory()) continue;
-      const dPath = path.join(learningsDir, domain.name);
-      n += fs.readdirSync(dPath).filter((f) => f.endsWith('.md')).length;
-      fs.rmSync(dPath, { recursive: true, force: true });
+
+  const tx = withStoreTransaction(workspace, { home, label: 'purge: --all (store reset)' }, ({ dir }) => {
+    try {
+      absorbHandEdits({ workspace, home, log });
+    } catch {
+      // best effort — a hand-edit absorb failure must never block purge --all.
     }
+    // Captured BEFORE the wipe below: a full reset (design-controller ruling)
+    // must still clear the mirror for exactly these ids, but by the time
+    // mirrorLearnings runs the store no longer has any record of them — pass
+    // them explicitly via retiredIds so its sweep can still match them.
+    const idsBeforeReset = listLearnings(dir).map((l) => l.id);
+    const learningsDir = path.join(dir, 'learnings');
+    let n = 0;
+    if (fs.existsSync(learningsDir)) {
+      for (const domain of fs.readdirSync(learningsDir, { withFileTypes: true })) {
+        if (!domain.isDirectory()) continue;
+        const dPath = path.join(learningsDir, domain.name);
+        n += fs.readdirSync(dPath).filter((f) => f.endsWith('.md')).length;
+        fs.rmSync(dPath, { recursive: true, force: true });
+      }
+    }
+    fs.writeFileSync(path.join(dir, 'consolidated.jsonl'), '', 'utf8');
+    // Truncate rather than rewriteGovernance(dir, () => false): purge --all
+    // erases the entire store, so there is no surviving id left for a
+    // predicate to filter against — a full truncate is equivalent and simpler.
+    fs.writeFileSync(path.join(dir, 'governance.jsonl'), '', 'utf8');
+    rebuildIndex(dir);
+    return { kind: 'success', commitMessage: 'purge: --all (store reset)', removedCount: n, idsBeforeReset };
+  });
+
+  if (!tx.ok) {
+    return {
+      pass: false,
+      exitCode: 1,
+      removed: null,
+      blockedReason: tx.locked
+        ? 'E_LOCKED: another operation holds the store lock'
+        : `purge --all failed: ${tx.error?.message || 'store transaction failed'}`,
+    };
   }
-  fs.writeFileSync(path.join(dir, 'consolidated.jsonl'), '', 'utf8');
-  // Truncate rather than rewriteGovernance(dir, () => false): purge --all
-  // erases the entire store, so there is no surviving id left for a
-  // predicate to filter against — a full truncate is equivalent and simpler.
-  fs.writeFileSync(path.join(dir, 'governance.jsonl'), '', 'utf8');
-  rebuildIndex(dir);
-  commitStore(dir, 'purge: --all (store reset)');
+
+  const inner = tx.result;
   try {
-    mirrorLearnings({ workspace, home, retiredIds: idsBeforeReset });
+    mirrorLearnings({ workspace, home, retiredIds: inner.idsBeforeReset });
   } catch {
     // best effort — a mirror failure must never block purge --all.
   }
-  return { pass: true, exitCode: 0, removed: { learnings: n }, blockedReason: null };
+  return { pass: true, exitCode: 0, removed: { learnings: inner.removedCount }, blockedReason: null };
 }
 
 /**
@@ -556,32 +617,54 @@ export function rebuildStore({ workspace, home, yes, copilotHome, log = () => {}
 
   // Mutation branch only: creating the store here (if absent) is expected —
   // --yes is an explicit go-ahead, unlike the preview above. listLearnings
-  // only runs on this (mutation) path, once.
-  const { dir } = ensureStore(workspace, { home });
-  try {
-    absorbHandEdits({ workspace, home, log });
-  } catch {
-    // best effort — a hand-edit absorb failure must never block rebuild.
-  }
-  // Captured BEFORE the wipe below — same reasoning as purgeAll's
-  // idsBeforeReset: mirrorLearnings needs these ids named explicitly via
-  // retiredIds since the store itself forgets them the instant the wipe runs.
-  const archivedLearnings = listLearnings(dir);
-  const archived = archivedLearnings.length;
-
-  const learningsDir = path.join(dir, 'learnings');
-  if (fs.existsSync(learningsDir)) {
-    for (const domain of fs.readdirSync(learningsDir, { withFileTypes: true })) {
-      if (!domain.isDirectory()) continue;
-      fs.rmSync(path.join(learningsDir, domain.name), { recursive: true, force: true });
+  // only runs on this (mutation) path, once, inside the transaction (fresh,
+  // under the lock, rather than before it existed).
+  const tx = withStoreTransaction(workspace, { home, label: 'consolidate: rebuild reset' }, ({ dir }) => {
+    try {
+      absorbHandEdits({ workspace, home, log });
+    } catch {
+      // best effort — a hand-edit absorb failure must never block rebuild.
     }
+    // Captured BEFORE the wipe below — same reasoning as purgeAll's
+    // idsBeforeReset: mirrorLearnings needs these ids named explicitly via
+    // retiredIds since the store itself forgets them the instant the wipe runs.
+    const archivedLearnings = listLearnings(dir);
+    const archived = archivedLearnings.length;
+
+    const learningsDir = path.join(dir, 'learnings');
+    if (fs.existsSync(learningsDir)) {
+      for (const domain of fs.readdirSync(learningsDir, { withFileTypes: true })) {
+        if (!domain.isDirectory()) continue;
+        fs.rmSync(path.join(learningsDir, domain.name), { recursive: true, force: true });
+      }
+    }
+    fs.writeFileSync(path.join(dir, 'consolidated.jsonl'), '', 'utf8');
+    rebuildIndex(dir);
+    fs.rmSync(path.join(dir, 'stale.json'), { force: true });
+    return {
+      kind: 'success',
+      commitMessage: `consolidate: rebuild reset (${archived} learnings archived to git history)`,
+      archived,
+      archivedIds: archivedLearnings.map((l) => l.id),
+    };
+  });
+
+  if (!tx.ok) {
+    return {
+      pass: false,
+      exitCode: 1,
+      archived: null,
+      debt: null,
+      blockedReason: tx.locked
+        ? 'E_LOCKED: another operation holds the store lock'
+        : `rebuild failed: ${tx.error?.message || 'store transaction failed'}`,
+      nextTools: [],
+    };
   }
-  fs.writeFileSync(path.join(dir, 'consolidated.jsonl'), '', 'utf8');
-  rebuildIndex(dir);
-  fs.rmSync(path.join(dir, 'stale.json'), { force: true });
-  commitStore(dir, `consolidate: rebuild reset (${archived} learnings archived to git history)`);
+
+  const inner = tx.result;
   try {
-    mirrorLearnings({ workspace, home, retiredIds: archivedLearnings.map((l) => l.id) });
+    mirrorLearnings({ workspace, home, retiredIds: inner.archivedIds });
   } catch {
     // best effort — a mirror failure must never block rebuild.
   }
@@ -593,7 +676,7 @@ export function rebuildStore({ workspace, home, yes, copilotHome, log = () => {}
   return {
     pass: true,
     exitCode: 0,
-    archived,
+    archived: inner.archived,
     debt,
     blockedReason: null,
     nextTools: ['harness consolidate --candidates'],
