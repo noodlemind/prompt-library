@@ -13,6 +13,7 @@ import { parseQueryFromArgv } from './argv.mjs';
 import { rankLearnings, explainLearnings } from './knowledge/retrieve.mjs';
 import { readStoreConfig, storeDir } from './knowledge/store.mjs';
 import { consolidateStatus } from './knowledge/consolidate.mjs';
+import { redactRecallEntry } from './secret-scan.mjs';
 
 export function runOrient({ workspace, copilotHome, flags, query }) {
   const q = query || flags.query || '';
@@ -24,7 +25,10 @@ export function runOrient({ workspace, copilotHome, flags, query }) {
     limit: flags.limit || 3,
     collection: flags.collection,
     minScore: flags.minScore ?? 0.15,
-  }).map((e) => ({
+    // Redact secrets at the DATA boundary (not just the render boundary), so
+    // BOTH the context pack AND `harness orient --json` (which emits this raw
+    // recall array) carry redacted `path`/`docid`/`title`/`summary`/`snippet`.
+  }).map((e) => redactRecallEntry({
     docid: e.docid || e.id,
     path: e.path,
     title: e.title,

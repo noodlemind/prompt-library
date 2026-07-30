@@ -45,3 +45,26 @@ export function redactSecrets(text) {
   if (!hits.length) return s;
   return `[redacted: ${[...new Set(hits.map((h) => h.id))].join(', ')}]`;
 }
+
+// The untrusted, repo/manifest-derived free-text fields of a built recall
+// entry. Each can carry a pasted credential — a `path` with an embedded
+// connection string, a secret-shaped `docid`, or a secret in `title`/
+// `summary`/`snippet` prose. Redacting them HERE, at the DATA boundary where
+// the recall result object is constructed, is the single guarantee that
+// reaches EVERY consumer at once: the rendered context pack, `harness recall`,
+// AND their `--json` siblings. A render-boundary-only screen missed both the
+// raw `--json` emit and the `path`/`docid` fields entirely (reproduced leaks).
+// `scope`/`kind`/`ranker`/`score` are code-set classification/enum/number
+// tokens, not free-text credential carriers, so they are left untouched — and
+// a legitimate path (no `://` connection string or AWS-key shape) never
+// matches, so this cannot corrupt normal paths.
+const RECALL_UNTRUSTED_STRING_FIELDS = ['docid', 'path', 'title', 'summary', 'snippet'];
+
+export function redactRecallEntry(entry) {
+  const redacted = { ...entry };
+  for (const field of RECALL_UNTRUSTED_STRING_FIELDS) {
+    const value = redacted[field];
+    if (typeof value === 'string' && value) redacted[field] = redactSecrets(value);
+  }
+  return redacted;
+}
