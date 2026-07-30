@@ -37,7 +37,10 @@ function trackedSourceFiles(workspace) {
 function readFileSafe(workspace, rel) {
   const full = assertNoSymlinkAncestors(workspace, rel);
   if (!full) return '';
-  return readFileNoFollow(full, { maxBytes: MAX_FILE_BYTES }) ?? '';
+  // `root: workspace` → readFileNoFollow verifies (canonicalize-after-acquire)
+  // the opened inode's realpath is contained under the real workspace, closing
+  // the ancestor-swap window between the walk above and the leaf open.
+  return readFileNoFollow(full, { maxBytes: MAX_FILE_BYTES, root: workspace }) ?? '';
 }
 
 /**

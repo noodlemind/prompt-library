@@ -26,7 +26,7 @@ import {
 import { rebuildIndex, todayClamped } from './apply.mjs';
 import { consolidateStatus, LEARNING_BYTE_CAP, isActiveFm } from './consolidate.mjs';
 import { scanSecrets } from '../secret-scan.mjs';
-import { assertNoSymlinkAncestors, writeFileContained } from '../fs-safe.mjs';
+import { assertNoSymlinkAncestors, assertRealpathContained, writeFileContained } from '../fs-safe.mjs';
 import { runIndexKnowledge } from '../index-knowledge.mjs';
 import { loadManifest } from '../recall-rank.mjs';
 
@@ -565,9 +565,12 @@ export function purgeEpisode({ workspace, target, copilotHome, home, log = () =>
   const storePath = storeDir(workspace, { home });
   if (!fs.existsSync(storePath)) {
     if (episodeExistsOnDisk) {
-      // TOCTOU re-check (P1-4): re-validate physical containment
-      // immediately before the actual delete, not just at the check above.
-      const safe = assertNoSymlinkAncestors(episodeRoot, target);
+      // TOCTOU re-check (P1-4): re-validate physical containment immediately
+      // before the actual delete, not just at the check above. realpath-based
+      // (assertRealpathContained) so a symlinked ANCESTOR swapped in after the
+      // earlier walk — which resolves the delete target outside the root — is
+      // caught here, not just a symlinked leaf.
+      const safe = assertRealpathContained(episodeRoot, target);
       if (!safe) {
         return {
           pass: false,
@@ -633,7 +636,11 @@ export function purgeEpisode({ workspace, target, copilotHome, home, log = () =>
   let stagedFrom = null;
   let stagedTemp = null;
   if (episodeExistsOnDisk) {
-    const safe = assertNoSymlinkAncestors(episodeRoot, target);
+    // realpath-based re-check (assertRealpathContained): the rename source must
+    // resolve — through every ancestor — inside the root, so an ancestor
+    // swapped for an outside symlink after the earlier walk cannot redirect the
+    // staging rename onto an external file.
+    const safe = assertRealpathContained(episodeRoot, target);
     if (!safe) {
       return {
         pass: false,

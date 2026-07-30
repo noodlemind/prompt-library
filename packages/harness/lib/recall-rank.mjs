@@ -183,7 +183,9 @@ export function findMatchingPlans(workspace, query, limit = 3) {
     const fileRel = path.join(plansDirRel, f);
     const full = assertNoSymlinkAncestors(workspace, fileRel);
     if (!full) continue; // symlinked leaf — never follow
-    const raw = readFileNoFollow(full);
+    // `root: workspace` → canonicalize-after-acquire containment verify closes
+    // the ancestor-swap window between the walk above and this read.
+    const raw = readFileNoFollow(full, { root: workspace });
     if (raw === null) continue; // missing/oversized — skip, same as before
     const text = raw.slice(0, 4000);
     const fm = text.match(/^---\r?\n([\s\S]*?)\r?\n---/);
@@ -220,7 +222,10 @@ export function resolveDocPath(copilotHome, workspace, entry) {
   ];
   for (const root of knowledgeRoots) {
     const full = safeResolveUnderRoot(root, entry.path);
-    if (full && fs.existsSync(full)) return full;
+    // Return the matched root alongside the path so the caller can hand it to
+    // readFileNoFollow for a canonicalize-after-acquire containment verify —
+    // the read must be checked against the SAME root the path resolved under.
+    if (full && fs.existsSync(full)) return { full, root };
   }
   return null;
 }

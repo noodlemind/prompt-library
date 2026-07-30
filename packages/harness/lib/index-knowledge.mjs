@@ -66,7 +66,10 @@ function collectSolutions(dir, scope, base) {
       const fileRel = path.join(catRel, f);
       const full = assertNoSymlinkAncestors(base, fileRel);
       if (!full) continue; // symlinked leaf (or any ancestor) — never follow
-      const text = readFileNoFollow(full);
+      // `root: base` → readFileNoFollow verifies the opened inode's realpath
+      // is contained under the real base (canonicalize-after-acquire), closing
+      // the ancestor-swap window between the walk above and this read.
+      const text = readFileNoFollow(full, { root: base });
       if (text === null) continue;
       const fm = parseFrontmatter(text);
       const rel = fileRel.split(path.sep).join('/');

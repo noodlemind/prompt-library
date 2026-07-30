@@ -166,7 +166,10 @@ export function todayClamped() {
  * Returns an empty array when `p` is falsy or escapes/is unsafe under every
  * configured root. Existence is NOT checked here — callers try each
  * candidate in order (workspace first) and decide what "exists" means for
- * their own read (readFileNoFollow, fs.existsSync, ...).
+ * their own read (readFileNoFollow, fs.existsSync, ...). Each candidate
+ * carries the `root` it resolved under so the reader can hand that exact root
+ * to readFileNoFollow for a canonicalize-after-acquire containment verify —
+ * the read must be checked against the SAME root the candidate came from.
  */
 function resolveEpisodeFile(workspace, copilotHome, p) {
   if (!p) return [];
@@ -175,17 +178,18 @@ function resolveEpisodeFile(workspace, copilotHome, p) {
   const candidates = [];
   for (const root of roots) {
     const full = assertNoSymlinkAncestors(root, p);
-    if (full) candidates.push(full);
+    if (full) candidates.push({ full, root });
   }
   return candidates;
 }
 
 /** The first candidate (workspace root first, then the global root) that
- * actually exists on disk, or null if the path escapes every root or exists
- * in none of them. */
+ * actually exists on disk — as a `{ full, root }` pair so the caller can
+ * containment-verify the read against the matched root — or null if the path
+ * escapes every root or exists in none of them. */
 function firstExistingEpisodeFile(workspace, copilotHome, p) {
-  for (const full of resolveEpisodeFile(workspace, copilotHome, p)) {
-    if (fs.existsSync(full)) return full;
+  for (const { full, root } of resolveEpisodeFile(workspace, copilotHome, p)) {
+    if (fs.existsSync(full)) return { full, root };
   }
   return null;
 }
@@ -216,11 +220,12 @@ function extractAnchors({ workspace, copilotHome, episodes }) {
   };
   for (const e of episodes || []) {
     if (!e.path) continue;
-    const full = firstExistingEpisodeFile(workspace, copilotHome, e.path);
-    if (!full) continue;
+    const hit = firstExistingEpisodeFile(workspace, copilotHome, e.path);
+    if (!hit) continue;
     // Never follow a symlinked episode file — its target's content must
-    // never be scanned for anchor text either.
-    const text = readFileNoFollow(full);
+    // never be scanned for anchor text either. `root: hit.root` runs the
+    // canonicalize-after-acquire containment verify against the matched root.
+    const text = readFileNoFollow(hit.full, { root: hit.root });
     if (text === null) continue;
     const matches = text.match(ANCHOR_RE) || [];
     for (const m of matches) {
@@ -414,10 +419,11 @@ function verifiedFixLinks(fm) {
  */
 function verifyEpisodeKind(workspace, copilotHome, e) {
   if (!e || !e.path || !e.sha256) return false;
-  for (const full of resolveEpisodeFile(workspace, copilotHome, e.path)) {
+  for (const { full, root } of resolveEpisodeFile(workspace, copilotHome, e.path)) {
     // Never follow a symlinked candidate — a symlink's target content must
-    // never verify (or hash-match) as this episode's evidence.
-    const text = readFileNoFollow(full);
+    // never verify (or hash-match) as this episode's evidence. `root` runs the
+    // canonicalize-after-acquire containment verify against the matched root.
+    const text = readFileNoFollow(full, { root });
     if (text === null) continue;
     if (crypto.createHash('sha256').update(text).digest('hex') !== e.sha256) continue;
     const m = text.match(/^---\r?\n([\s\S]*?)\r?\n---/);
@@ -489,8 +495,8 @@ function verifyAdmittedEpisodeKinds(workspace, copilotHome, episodes, opIndex) {
  */
 function episodeShaVerifies(workspace, copilotHome, e) {
   if (!e || !e.path || !e.sha256) return false;
-  for (const full of resolveEpisodeFile(workspace, copilotHome, e.path)) {
-    const text = readFileNoFollow(full);
+  for (const { full, root } of resolveEpisodeFile(workspace, copilotHome, e.path)) {
+    const text = readFileNoFollow(full, { root });
     if (text === null) continue;
     if (crypto.createHash('sha256').update(text).digest('hex') === e.sha256) return true;
   }
@@ -522,10 +528,10 @@ function verifyNoopEpisodes(workspace, copilotHome, episodes, opIndex) {
  */
 function episodeDate(workspace, copilotHome, e) {
   if (!e.path) return null;
-  for (const full of resolveEpisodeFile(workspace, copilotHome, e.path)) {
+  for (const { full, root } of resolveEpisodeFile(workspace, copilotHome, e.path)) {
     // Never follow a symlinked candidate here either — same reasoning as
-    // verifyEpisodeKind above.
-    const text = readFileNoFollow(full);
+    // verifyEpisodeKind above; `root` runs the containment verify.
+    const text = readFileNoFollow(full, { root });
     if (text === null) continue;
     const m = text.match(/^---\r?\n([\s\S]*?)\r?\n---/);
     if (!m) continue;

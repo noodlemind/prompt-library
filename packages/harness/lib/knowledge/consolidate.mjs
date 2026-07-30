@@ -125,7 +125,11 @@ export function collectEpisodes({ workspace, copilotHome }) {
         const fileRel = path.join(catRel, f);
         const full = assertNoSymlinkAncestors(base, fileRel);
         if (!full) continue; // symlinked leaf (or any ancestor) — never follow
-        const text = readFileNoFollow(full);
+        // Pass `base` so readFileNoFollow canonicalize-after-acquire verifies
+        // the opened inode's realpath is contained under the real base — an
+        // ancestor swapped to an outside symlink after the walk above is
+        // caught at read time, not trusted from this scan.
+        const text = readFileNoFollow(full, { root: base });
         if (text === null) continue;
         const fm = parseFrontmatter(text);
         episodes.push({
