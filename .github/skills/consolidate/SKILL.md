@@ -19,7 +19,7 @@ Design §5 write path. Contract: [`harness-tool-contract.md`](../references/harn
 **Should not trigger:**
 
 - "Record this fix as a learning." → `harness compound --plan <path>` or `--insight` captures the episode; consolidation clusters episodes later.
-- "Edit this learning file directly." → learnings are never hand-edited; only `consolidate --apply` writes the store.
+- "Edit this learning file directly." → a human hand edit is a supported path the store absorbs with `source: human` provenance on the next mutation (`docs/MEMORY-MODEL.md`, Hand-editability) — it is a user action, not a consolidation trigger; this skill itself never edits store files.
 - `consolidate --status` reports `due: false` and no human asked.
 
 ## Confusable Boundaries
@@ -47,7 +47,7 @@ For each cluster choose exactly one op: `ADD | STRENGTHEN | SUPERSEDE | MERGE | 
 - **Dedup first, corpus-wide.** An `ADD` op must record in its `reason` which nearest existing learnings were checked and why none match — never add a near-duplicate.
 - **STRENGTHEN / SUPERSEDE** re-read the raw episode files named in the cluster; never paraphrase or invent from the existing learning's own text.
 - **NOOP** any claim a repo map or code read could derive on demand — consolidation is for knowledge that is not mechanically re-derivable.
-- **At-cap domains (`packet.domains[].atCap`)**: an `ADD`, or a `SUPERSEDE`/`MERGE` introducing a new id, into a domain already at cap is rejected with `E_DOMAIN_CAP`. Only emit `MERGE` when two or more of that domain's existing learnings genuinely restate one claim — re-read the RAW episode files behind every target (never the existing learnings' own prose) and re-derive the merged body from that evidence. If no legitimate merge exists, do not force one: emit `NOOP` for that cluster instead and report the cap pressure to the human (which domain, how many active, that a retire or a real merge is needed) rather than inventing a lossy consolidation.
+- **At-cap domains (`packet.domains[].atCap`)**: an `ADD` into a domain already at cap is rejected with `E_DOMAIN_CAP`. `MERGE` and a `SUPERSEDE`-rename credit their targets' removal to the running projection FIRST, so a same-domain merge nets the domain's active count down (and a same-domain rename nets zero) and is allowed even at cap; only a destination that takes an uncredited +1 — targets in a different domain than the new id, or earlier same-run ops already consumed the freed room — still rejects with `E_DOMAIN_CAP`. Only emit `MERGE` when two or more of that domain's existing learnings genuinely restate one claim — re-read the RAW episode files behind every target (never the existing learnings' own prose) and re-derive the merged body from that evidence. If no legitimate merge exists, do not force one: emit `NOOP` for that cluster instead and report the cap pressure to the human (which domain, how many active, that a retire or a real merge is needed) rather than inventing a lossy consolidation.
 - **Governed ids (`packet.governed`)**: an id listed here already has a standing human retire/dispute/promote decision — `harness consolidate --apply` reapplies it the instant an `ADD`/`SUPERSEDE`/`MERGE` regenerates that exact id, so a cluster whose only plausible id is one of these regenerates right back into its recorded state. (The one exception: an in-place `SUPERSEDE`/`ADD` whose episodes are ALL genuinely `kind: human-teaching` AND at least as new as the governed decision overrides it instead — apply re-verifies both against disk, so this can never be forced by copying a `kind` field verbatim from an older, already-superseded episode.) Prefer `NOOP` for that cluster instead of spending an op on a write that apply will immediately re-govern; if the cluster is genuinely a new, distinct claim, pick a new slug rather than reusing the governed id.
 - Before emitting an `ADD`/`SUPERSEDE`/`MERGE` body sourced from insight-only episodes, run the imperative lint mentally: no shell fences (```sh```/```bash```/```shell```/```zsh```), no `curl`/`wget`, no bare URLs. The apply step rejects these with `E_LINT` — catch it first.
 
@@ -104,7 +104,7 @@ Write `{ "schema": 1, "ops": [...] }` to `.harness/consolidate-ops.json`. This s
 | `ADD` | `domain`, `slug`, `trigger`, `body`, `episodes[]` | Rejects `E_EXISTS` if the id already exists; rejects `E_DOMAIN_CAP` if the domain is already at 25 active learnings. |
 | `STRENGTHEN` | `target`, `episodes[]` | `target` must be an existing learning id. |
 | `SUPERSEDE` | `target`, `domain`, `slug`, `trigger`, `body`, `episodes[]` | Same id as `target` = in-place re-teach; a different id is a rename (checked against `E_DOMAIN_CAP` and rename-collision). |
-| `MERGE` | `targets[]` (>= 2 existing active ids), `domain`, `slug`, `trigger`, `body`, `episodes[]` | Writes a new id with `merged_from: targets`; tombstones every target. `episodes[]` here is the supporting evidence for the merge itself, not the targets' own episodes — re-derive `body` from the targets' RAW episode files, never their existing prose. Exempt from `E_DOMAIN_CAP` (it always nets the domain's active count down). Counts `1 + targets.length` toward the 5-file delta contract. |
+| `MERGE` | `targets[]` (>= 2 existing active ids), `domain`, `slug`, `trigger`, `body`, `episodes[]` | Writes a new id with `merged_from: targets`; tombstones every target. `episodes[]` here is the supporting evidence for the merge itself, not the targets' own episodes — re-derive `body` from the targets' RAW episode files, never their existing prose. Exempt from `E_DOMAIN_CAP` only as a NET effect: targets' removal is credited first, so a same-domain merge always fits; a cross-domain destination takes an uncredited +1 and is cap-checked like an `ADD`. Counts `1 + targets.length` toward the 5-file delta contract. |
 | `NOOP` | `episodes[]` | `reason` optional but encouraged. |
 
 Every op's `episodes` array is required and non-empty. Field names above match `apply.mjs` exactly — a misnamed field fails closed with `E_SCHEMA`, not a silent default.
@@ -148,8 +148,10 @@ On a rejected apply, fix the ops per the error code and retry **once**:
 
 A cluster that fails twice is left for quarantine — do not attempt a third fix in this session.
 
+The codes above are this skill's apply-specific errors. For subagent failure, tool unavailability, file-not-found, and timeout recovery, follow the shared patterns in `.github/skills/references/error-handling-patterns.md`.
+
 ## Guardrails
 
 - Read-only through step 3; the only mutation these steps perform is writing `.harness/consolidate-ops.json`.
-- Never hand-edit a file under the learnings store — `consolidate --apply` alone writes it.
+- This skill never edits a file under the learnings store — `consolidate --apply` alone writes learning content on its behalf. Direct human hand edits to the store are a separate, supported path (absorbed with `source: human` provenance on the next mutation — `docs/MEMORY-MODEL.md`, Hand-editability), not something this skill performs, replicates, or reverts.
 - The mode gate is authoritative: a non-`on`/`suggest` mode always stops before `--apply`, even mid-session; `suggest` stops too unless the human has explicitly approved and `--yes` is passed.

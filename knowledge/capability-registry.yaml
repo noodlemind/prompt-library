@@ -70,7 +70,7 @@ capabilities:
     owner: developer-experience
     version: 1
     origin: starter
-    # approved by repo owner, 2026-07-29, via directed milestone review
+    proposal: knowledge/proposals/consolidate.md
     triggers: [debt drain due, session-start consolidation hint, session-end consolidation hint]
     eval_suite: evals/skill-trigger-evals.yaml#consolidate
     usage_count: 0
