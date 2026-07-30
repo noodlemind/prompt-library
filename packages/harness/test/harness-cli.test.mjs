@@ -13,7 +13,8 @@ import { extractGoalFromPlan } from '../lib/plan-goal.mjs';
 import { loadPlan } from '../lib/plan-parse.mjs';
 import { createEvidenceBinding, readEvidence, validateEvidence, writeEvidence } from '../lib/evidence.mjs';
 import { ensureHarnessDir } from '../lib/session.mjs';
-import { installGlobalHarnessShim, globalHarnessShimPath } from '../lib/global-bin.mjs';
+import { installGlobalHarnessShim, globalHarnessShimPath, INSTALL_FIX_HINT } from '../lib/global-bin.mjs';
+import { harnessRunnerSource, RUNNER_VERSION, writeHarnessRunner } from '../lib/resolve-harness-bin.mjs';
 import { installHarnessBin } from '../lib/install-harness-bin.mjs';
 import { recordSkillUsage } from '../lib/telemetry.mjs';
 import { mergeVSCodeSettings, parseVSCodeSettings } from '../lib/vscode-settings.mjs';
@@ -901,6 +902,27 @@ test('context pack stays within byte budget cap', () => {
   assert.match(body, /truncated to 2KB budget/);
 });
 
+test('context pack truncation never splits a multibyte character, whatever the cut point', () => {
+  // é is 2 bytes, ✓ and € are 3 bytes, 🎉 is 4 bytes (a surrogate pair in
+  // UTF-16) — a long run of each so the fixed truncation cut point (a
+  // constant byte offset from the top of the pack) is guaranteed to fall
+  // somewhere inside this block once the query is long enough to force
+  // truncation, regardless of how many bytes precede it.
+  const multibyte = 'é'.repeat(300) + '✓'.repeat(300) + '€'.repeat(300) + '🎉'.repeat(300);
+  // Shifting the block by 1..16 leading ASCII bytes walks the fixed cut
+  // point through every possible sub-character byte offset (mod 2, 3, and
+  // 4), so across this range every multibyte width gets cut mid-character
+  // at least once.
+  for (let pad = 0; pad < 16; pad++) {
+    const body = buildContextPack({ query: 'a'.repeat(pad) + multibyte, recall: [], plans: [], learnings: [] });
+    assert.ok(
+      Buffer.byteLength(body, 'utf8') <= CONTEXT_PACK_MAX_BYTES,
+      `pad=${pad}: byte length must stay within the budget`
+    );
+    assert.ok(!body.includes('�'), `pad=${pad}: no replacement character from a split multibyte sequence`);
+  }
+});
+
 test('validate-plan fails when required sections missing', () => {
   const workspace = tempDir('harness-workspace-');
   const plansDir = path.join(workspace, 'docs', 'plans');
@@ -1464,6 +1486,33 @@ test('install creates global harness shim', () => {
   assert.equal(JSON.parse(validate.stdout).pass, true);
 });
 
+// The generated global harness shim (harnessShimSource, global-bin.mjs) has
+// the identical INSTALL_FIX_HINT interpolation pattern the workspace runner
+// had — same raw-interpolation-into-a-single-quoted-string risk, same
+// JSON.stringify fix.
+test('global harness shim embeds INSTALL_FIX_HINT via JSON.stringify, keeping the generated shim syntactically valid', () => {
+  const copilotHome = tempDir('shim-quoting-home-');
+  installGlobalHarnessShim(copilotHome, { dryRun: false, verbose: false }, () => {});
+  const shim = globalHarnessShimPath(copilotHome);
+  const src = fs.readFileSync(shim, 'utf8');
+  assert.ok(
+    src.includes(`' + ${JSON.stringify(INSTALL_FIX_HINT)});`),
+    'the fix-hint line must be embedded via JSON.stringify concatenation, not raw ${...} interpolation into a single-quoted string'
+  );
+  const check = spawnSync(process.execPath, ['--check', shim], { encoding: 'utf8' });
+  assert.equal(check.status, 0, check.stderr);
+
+  // No global runtime installed at this copilotHome — exercises the
+  // E_NO_RUNTIME error path that actually renders the fix-hint line.
+  const result = spawnSync(process.execPath, [shim, 'help'], {
+    encoding: 'utf8',
+    env: { ...process.env, COPILOT_HOME: copilotHome },
+  });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /E_NO_RUNTIME/);
+  assert.match(result.stderr, /harness install/);
+});
+
 test('resolve finds monorepo harness bin', () => {
   const repoRoot = path.resolve(packageRoot, '../..');
   const result = runHarness(['resolve', '--workspace', repoRoot, '--json']);
@@ -1475,7 +1524,11 @@ test('resolve finds monorepo harness bin', () => {
 
 test('init-repo creates harness runner', () => {
   const workspace = tempDir('harness-workspace-');
-  const result = runHarness(['init-repo', '--workspace', workspace]);
+  const copilotHome = tempDir('harness-copilot-home-');
+  const harnessHome = tempDir('harness-home-');
+  const result = runHarness(['init-repo', '--workspace', workspace, '--copilot-home', copilotHome], {
+    env: { HARNESS_HOME: harnessHome },
+  });
   assert.equal(result.status, 0, result.stderr);
   const runner = path.join(workspace, '.harness', 'run.mjs');
   assert.ok(fs.existsSync(runner));
@@ -1487,6 +1540,44 @@ test('init-repo creates harness runner', () => {
     env: { ...process.env, HARNESS_BIN: binPath },
   });
   assert.equal(runResult.status, 0, runResult.stderr);
+});
+
+// The generated `.harness/run.mjs` source interpolates INSTALL_FIX_HINT
+// (global-bin.mjs) into an already-single-quoted JS string literal. An
+// apostrophe or backslash in the hint would break the GENERATED runner's
+// syntax unless it's embedded via JSON.stringify instead of raw
+// interpolation.
+test('harnessRunnerSource embeds INSTALL_FIX_HINT via JSON.stringify, keeping the generated runner syntactically valid', () => {
+  const src = harnessRunnerSource();
+  assert.ok(
+    src.includes(`' + ${JSON.stringify(INSTALL_FIX_HINT)});`),
+    'the fix-hint line must be embedded via JSON.stringify concatenation, not raw ${...} interpolation into a single-quoted string'
+  );
+  const dir = tempDir('runner-syntax-');
+  const runnerPath = path.join(dir, 'run.mjs');
+  fs.writeFileSync(runnerPath, src);
+  const check = spawnSync(process.execPath, ['--check', runnerPath], { encoding: 'utf8' });
+  assert.equal(check.status, 0, check.stderr);
+});
+
+test('writeHarnessRunner regenerates a runner stamped with an older @harness-runner-version', () => {
+  // Pinned to the pre-fix runner version (2): the JSON.stringify quoting fix
+  // above must ship with a version bump, or every already-hydrated
+  // `.harness/run.mjs` written before this fix would silently keep the old,
+  // unsafe interpolation forever.
+  assert.ok(RUNNER_VERSION > 2, 'RUNNER_VERSION must be bumped past the pre-fix value so existing runners regenerate');
+
+  const workspace = tempDir('runner-version-ws-');
+  const runnerDir = path.join(workspace, '.harness');
+  fs.mkdirSync(runnerDir, { recursive: true });
+  const runnerPath = path.join(runnerDir, 'run.mjs');
+  fs.writeFileSync(runnerPath, `#!/usr/bin/env node\n/**\n * @harness-runner-version 2\n */\nconsole.log('stale runner stub');\n`);
+
+  const result = writeHarnessRunner(workspace, false);
+  assert.equal(result.updated, true, 'a runner pinned to version 2 must be regenerated, not left stale');
+  const regenerated = fs.readFileSync(runnerPath, 'utf8');
+  assert.match(regenerated, new RegExp(`@harness-runner-version ${RUNNER_VERSION}\\b`));
+  assert.doesNotMatch(regenerated, /stale runner stub/);
 });
 
 function writeChecks(workspace, checks) {
@@ -1838,6 +1929,74 @@ test('harness verify passes named checks, validates scope, and writes evidence',
   const human = runHarness(['verify', '--plan', plan, '--base', 'HEAD', '--workspace', workspace]);
   assert.match(human.stdout, /^\[ok\]\s+verify\s+passed/m);
   assert.match(human.stdout, /^-> harness compound/m);
+});
+
+test('harness verify --learnings threads cited learning ids onto the verify event', () => {
+  const workspace = tempDir('harness-workspace-');
+  const plan = writeVersionedPlan(workspace);
+  writeChecks(workspace, {
+    'unit-tests': { command: [process.execPath, '-e', 'process.exit(0)'] },
+  });
+  initGit(workspace);
+  fs.writeFileSync(path.join(workspace, 'src', 'example.js'), 'export const value = 2;\n');
+
+  const result = runHarness([
+    'verify',
+    '--plan',
+    plan,
+    '--base',
+    'HEAD',
+    '--workspace',
+    workspace,
+    '--learnings',
+    'a/b,c/d',
+    '--json',
+  ]);
+  assert.equal(result.status, 0, result.stderr);
+
+  const events = fs
+    .readFileSync(path.join(workspace, '.harness', 'events.jsonl'), 'utf8')
+    .trim()
+    .split('\n')
+    .filter(Boolean)
+    .map((line) => JSON.parse(line));
+  const verifyEvent = events.find((e) => e.type === 'verify');
+  assert.ok(verifyEvent, JSON.stringify(events));
+  assert.deepEqual(verifyEvent.learnings, ['a/b', 'c/d']);
+});
+
+test('harness verify --learnings drops empty csv entries into a clean array', () => {
+  const workspace = tempDir('harness-workspace-');
+  const plan = writeVersionedPlan(workspace);
+  writeChecks(workspace, {
+    'unit-tests': { command: [process.execPath, '-e', 'process.exit(0)'] },
+  });
+  initGit(workspace);
+  fs.writeFileSync(path.join(workspace, 'src', 'example.js'), 'export const value = 2;\n');
+
+  const result = runHarness([
+    'verify',
+    '--plan',
+    plan,
+    '--base',
+    'HEAD',
+    '--workspace',
+    workspace,
+    '--learnings',
+    'a/b,,c/d,',
+    '--json',
+  ]);
+  assert.equal(result.status, 0, result.stderr);
+
+  const events = fs
+    .readFileSync(path.join(workspace, '.harness', 'events.jsonl'), 'utf8')
+    .trim()
+    .split('\n')
+    .filter(Boolean)
+    .map((line) => JSON.parse(line));
+  const verifyEvent = events.find((e) => e.type === 'verify');
+  assert.ok(verifyEvent, JSON.stringify(events));
+  assert.deepEqual(verifyEvent.learnings, ['a/b', 'c/d']);
 });
 
 test('harness verify checks only tasks in the current plan phase', () => {

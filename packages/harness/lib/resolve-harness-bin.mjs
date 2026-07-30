@@ -80,7 +80,7 @@ export function agentHarnessCommand(resolved) {
   return `node "${resolved.bin}"`;
 }
 
-export const RUNNER_VERSION = 2;
+export const RUNNER_VERSION = 3;
 
 export function harnessRunnerSource() {
   const home = os.homedir().replace(/\\/g, '/');
@@ -123,7 +123,7 @@ const target = resolveTarget();
 if (!target) {
   console.error('[x] E_NO_HARNESS_BIN');
   console.error('  global harness not installed');
-  console.error('  -> fix   ${INSTALL_FIX_HINT}');
+  console.error('  -> fix   ' + ${JSON.stringify(INSTALL_FIX_HINT)});
   console.error('  exit 1');
   process.exit(1);
 }

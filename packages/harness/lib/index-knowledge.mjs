@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { runBuildPostingsIndex } from './postings-index.mjs';
 import { resolveIndexDir } from './recall-config.mjs';
+import { readFileNoFollow, assertNoSymlinkAncestors } from './fs-safe.mjs';
 
 function parseFrontmatter(text) {
   const m = text.match(/^---\r?\n([\s\S]*?)\r?\n---/);
@@ -38,24 +39,46 @@ function yamlQuote(value) {
   return `"${String(value || '').replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
 }
 
+/**
+ * Same physical-containment pattern collectEpisodes (consolidate.mjs) uses:
+ * every candidate — the scanned root directory itself, each category
+ * directory, and each file — is validated with assertNoSymlinkAncestors
+ * (fs-safe.mjs) against `base`, never trusted merely because it was
+ * lexically reachable under `dir`. This manifest builder reads the SAME
+ * docs/solutions trees collectEpisodes scans and feeds title/summary/
+ * excerpt straight into recall's manifest — a symlinked docs/solutions (or a
+ * symlinked category directory) previously had no containment check at all
+ * here, not even a lexical one, and would leak outside file content into the
+ * manifest the same way collectEpisodes did before it was hardened.
+ */
 function collectSolutions(dir, scope, base) {
   const entries = [];
   if (!fs.existsSync(dir)) return entries;
+  const dirRel = path.relative(base, dir);
+  if (!assertNoSymlinkAncestors(base, dirRel)) return entries;
   for (const cat of fs.readdirSync(dir, { withFileTypes: true })) {
     if (!cat.isDirectory()) continue;
+    const catRel = path.join(dirRel, cat.name);
+    if (!assertNoSymlinkAncestors(base, catRel)) continue; // symlinked category directory
     const catPath = path.join(dir, cat.name);
     for (const f of fs.readdirSync(catPath)) {
       if (!f.endsWith('.md') || f === 'README.md') continue;
-      const full = path.join(catPath, f);
-      const text = fs.readFileSync(full, 'utf8');
+      const fileRel = path.join(catRel, f);
+      const full = assertNoSymlinkAncestors(base, fileRel);
+      if (!full) continue; // symlinked leaf (or any ancestor) — never follow
+      // `root: base` → readFileNoFollow verifies the opened inode's realpath
+      // is contained under the real base (canonicalize-after-acquire), closing
+      // the ancestor-swap window between the walk above and this read.
+      const text = readFileNoFollow(full, { root: base });
+      if (text === null) continue;
       const fm = parseFrontmatter(text);
-      const rel = path.relative(base, full).split(path.sep).join('/');
+      const rel = fileRel.split(path.sep).join('/');
       const slug = f.replace(/\.md$/, '');
       const entryId = `${scope}-${cat.name}-${slug}`;
       entries.push({
         id: entryId,
         docid: entryId,
-        kind: 'solution',
+        kind: fm.kind === 'insight' ? 'insight' : 'solution',
         scope,
         path: rel,
         title: fm.title || slug,
@@ -63,6 +86,8 @@ function collectSolutions(dir, scope, base) {
         tags: fm.tags ? fm.tags.split(',').map((t) => t.trim()) : [],
         module: fm.module || '',
         symptom: fm.symptom || '',
+        trigger: fm.trigger || '',
+        claim: fm.claim || '',
         summary: summaryFromBody(text),
         excerpt: excerptFromBody(text),
         date: fm.date || fm.updated || '',
@@ -121,6 +146,8 @@ export function runIndexKnowledge({ knowledgeRoot, workspace, copilotHome, flags
     if (e.tags?.length) lines.push(`    tags: [${e.tags.map((t) => yamlQuote(t)).join(', ')}]`);
     if (e.module) lines.push(`    module: ${yamlQuote(e.module)}`);
     if (e.symptom) lines.push(`    symptom: ${yamlQuote(e.symptom)}`);
+    if (e.trigger) lines.push(`    trigger: ${yamlQuote(e.trigger)}`);
+    if (e.claim) lines.push(`    claim: ${yamlQuote(e.claim)}`);
     if (e.date) lines.push(`    date: ${e.date}`);
     if (e.summary) lines.push(`    summary: ${yamlQuote(e.summary)}`);
     if (e.excerpt) lines.push(`    excerpt: ${yamlQuote(e.excerpt)}`);

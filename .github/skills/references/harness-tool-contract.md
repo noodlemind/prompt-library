@@ -51,35 +51,37 @@ Installed to `~/.copilot/bin/harness` on every `harness install`. Add to PATH wi
 
 ## Command catalog
 
-### Install / setup (human or CI)
+This table tracks only what differs in runtime character across commands — which turn a command runs on, whether it writes a lifecycle event, whether it mutates anything. Sigs and flags: `harness help <command>` (the CLI CATALOG is the single source of truth).
 
-| Command | Purpose |
-|---------|---------|
-| `install` / `upgrade` | Sync skills, agents, hooks, and knowledge to `~/.copilot/`; `--configure-vscode` enables user-hook discovery |
-| `doctor [--host vscode]` | Health checks; VS Code mode executes installed-hook discovery and lifecycle probes |
-| `init-repo` | Scaffold `docs/plans/`, `.harness/` |
-| `status` / `uninstall` | Lock file introspection / safe remove |
+| Command | Tier | Events | Store |
+|---------|------|--------|-------|
+| `install` / `upgrade` | human/CI | none | mutates `~/.copilot/` |
+| `doctor` | human/CI | none | read-only (`--host vscode` runs an isolated hook-lifecycle fixture) |
+| `init-repo` | human/CI | none¹ | mutates workspace (`.harness/`, `docs/plans/`, `docs/codebase-map.md`) |
+| `status` / `uninstall` | human/CI | none | read-only / mutates `~/.copilot/` (uninstall removes hydrated files) |
+| `orient` | agent-runtime | writes | mutates `.harness/` (context-pack, repo-map, session) |
+| `recall` | agent-runtime | none¹ | read-only |
+| `gate` | agent-runtime | writes | mutates session state |
+| `verify` | agent-runtime | writes | mutates (evidence file + session) |
+| `validate-plan` | agent-runtime | none¹ | read-only |
+| `plan-new` | agent-runtime | none | mutates workspace (writes the plan; `--stdout` prints instead) |
+| `index` | agent-runtime | none¹ | mutates the knowledge index (`--status` read-only) |
+| `get` | agent-runtime | none | read-only |
+| `compound` | agent-runtime | writes | mutates (index + solution doc + telemetry) |
+| `consolidate` | agent-runtime | writes | read-only (`--status`/`--candidates`); mutates the learnings store (`--apply`/`--rebuild --yes`) |
+| `remember` | agent-runtime | writes | mutates the learnings store |
+| `learning` | agent-runtime | writes | mutates the learnings store + governance ledger |
+| `learnings` | agent-runtime | none | read-only |
+| `knowledge` | agent-runtime | writes | mutates `config.json`, cascade-deletes, or mirrors to the product repo |
+| `eval-knowledge` | agent-runtime | none | read-only |
+| `events` | agent-runtime | none | read-only |
+| `report` | agent-runtime | none | read-only (`--sync` writes `~/.harness/telemetry/`) |
 
-### Agent runtime (every `@engineer` trackable turn)
-
-| Command | Cursor analogue | Budget tier | Side effects |
-|---------|-----------------|-------------|--------------|
-| `orient --query "<task>"` | Codebase search + task context | **F1** — writes ≤2 KB `.harness/context-pack.md` plus a query-ranked `.harness/repo-map.md` (code orientation, regenerated every turn from live git — never stale); surfaces a `harness index` staleness hint when the knowledge index has drifted | session.json, events.jsonl, repo-map.md |
-| `recall "<query>"` | Standalone search / debug | F1 paths only | events |
-| `gate --phase implement --plan <path>` | Pre-edit plan/state guard | F3 on fail | session + events |
-| `verify --plan <path> [--base ref] [--enforcement mode]` | Named checks, schema/state, tasks, scope, reviews, gaps, findings, evidence | no prompt context | evidence + session + events |
-| `validate-plan [--plan path]` | Spec/schema lint | read-only | none |
-| `plan-new --type <t> --slug <s> --intent "..."` | Scaffold a valid, gate-ready plan (dated path, frontmatter, all canonical sections); `--gap <id>:<path>` sets blocked-capability + the gap entry; a primitive Impacted File auto-adds `## Primitive Governance` + create-primitive | none (plan-only) | writes the plan file |
-| `index` | Rebuild knowledge index; stamps current HEAD into index meta | none in chat | manifest.yaml, `.harness-index/`, events |
-| `index --status` | Deterministic freshness: commits + files changed since the last-indexed HEAD (read-only, zero model) | none | none |
-| `get [--docid id \| --path rel]` | Fetch bounded doc excerpt | F2 on demand | none |
-| `compound --plan <path>` | Consume passed evidence, index, classify learning, record telemetry | after verify | index + session + telemetry + events |
-| `events [--session id] [--failures] [--summary]` | Schema-v2 audit / stuck debugging | read-only | none |
-| `report [--sync] [--global] [--check] [--json]` | Token-efficiency report over telemetry: ranked sinks + improvement flags | read-only, except `--sync` writes `~/.harness/telemetry/` | none in workspace |
+¹ `init-repo`/`recall`/`validate-plan`/`index` each call `writeEvent` (types `init_repo`/`recall`/`validate_plan`/`index`), but none of those four type strings is in the `EVENT_TYPES` allow-list (`events.mjs`) — `writeEvent` silently no-ops for an unlisted type, so the call exists in code yet nothing actually lands in `events.jsonl`; "none" is the ledger truth, not a simplification.
 
 **Query construction (deterministic-retrieval discipline):** build `--query` from the user's salient nouns and identifiers **verbatim** (e.g. `SYSTEM-OVERRIDE`, `payment`, `token`) — do not paraphrase intent into synonyms. The retrieval tokenizer normalizes identifier formats and morphology, but it cannot recover a term the query never contained. Passing the literal request terms is what keeps recall stable across phrasings.
 
-**Repo map & knowledge freshness (deterministic-first).** `orient` regenerates `.harness/repo-map.md` every turn from `git ls-files` + a lexical symbol/import extractor — so code orientation is always current and never depends on a model. The `.harness/repo-map.md` (like `.harness/context-pack.md`) is an ephemeral derived artifact, not a persistent type. The knowledge index is refreshed manually (`harness index`) — run it after a major pull from main or a docs rewrite; `index --status` and the `orient` next-hint tell you when it has drifted. A staleness-or-intent maintenance refresh may additionally re-derive conventions via `/codebase-context` (an optional, cheap, non-reasoning model pass) and promote generalizable learnings to the global `~/.copilot/knowledge` store — never per turn. The extractor is a seam: a tree-sitter tier (WASM, lazy-loaded grammars, lexical fallback for SQL/HCL) can implement the same `extract` shape to power symbol-accurate `refs`/`def`/`callers`, built only when telemetry shows the lexical map misleads the agent.
+**Repo map & knowledge freshness (deterministic-first).** `orient` regenerates `.harness/repo-map.md` every turn from `git ls-files` + a lexical symbol/import extractor — so code orientation is always current and never depends on a model. `init-repo` and `index` additionally write a committed, timestamp-free `docs/codebase-map.md` (~2.5k-token budget, query-less) so cold-start agents read one durable orientation file instead of exploring. Learnings (semantic memory) live in a local never-pushed git store at `~/.harness/knowledge/<repo-id>/`; `orient` injects the top-3 trigger-matched learnings inside the existing 2 KB pack, attributed by id, with insight-derived claims fenced `[unverified memory — advisory]`. The `.harness/repo-map.md` (like `.harness/context-pack.md`) is an ephemeral derived artifact, not a persistent type. The knowledge index is refreshed manually (`harness index`) — run it after a major pull from main or a docs rewrite; `index --status` and the `orient` next-hint tell you when it has drifted. A staleness-or-intent maintenance refresh may additionally re-derive conventions via `/codebase-context` (an optional, cheap, non-reasoning model pass) and promote generalizable solution docs to the global `~/.copilot/knowledge` store (episodes only — never the learnings store, whose sole writer is `consolidate --apply`) — never per turn. The extractor is a seam: a tree-sitter tier (WASM, lazy-loaded grammars, lexical fallback for SQL/HCL) can implement the same `extract` shape to power symbol-accurate `refs`/`def`/`callers`, built only when telemetry shows the lexical map misleads the agent.
 
 ### JSON shapes (stable fields)
 
@@ -87,6 +89,9 @@ Installed to `~/.copilot/bin/harness` on every `harness install`. Add to PATH wi
 ```json
 {
   "recall": [{ "docid": "...", "path": "...", "title": "...", "score": 0.82, "summary": "...", "snippet": "...", "ranker": "bm25" }],
+  "learnings": [{ "id": "domain/slug", "trigger": "...", "claimLine": "...", "status": "provisional", "advisory": false, "score": 0.42 }],
+  "explain": null,
+  "learningsBytes": 0,
   "plans": [{ "path": "docs/plans/...", "status": "planned", "plan_lock": true, "score": 0.67 }],
   "activePlan": { "path": "...", "status": "...", "plan_lock": true },
   "planGoal": {
@@ -140,6 +145,8 @@ For locked plans, both commands enforce criterion-to-check mappings and configur
 
 Allowed outcomes are `passed`, `failed`, and `inconclusive`. Only fresh `passed` evidence bound to the current plan contract, base ref, changed-file set, and workspace contents permits a delivery completion claim or compound. Plan Activity entries are excluded from the contract digest so the append-only ledger can record the returned evidence path. Read-only Answer and Investigate modes do not run delivery verification. Plan frontmatter names checks; executable argv arrays come only from `.github/harness/checks.yaml` and run without a shell. Approved one-off commands run outside harness through explicit host tool approval and are recorded as external evidence.
 
+**Learning attribution (cited half).** `orient` records the learning ids it surfaced in a session; `verify --learnings <id1,id2>` closes the loop by recording the ids the skill actually applied while doing the work — pass only ids that materially changed an action, not every id the pack mentioned. `orient` also records `learningsBytes` on its own event — the post-truncation byte size of the "## Learnings (memory)" section actually injected into the pack — which `harness report`'s token ledger sums into an approximate injected-token count (`slos.knowledgeTokens`), a cost figure only, never a "tokens saved" claim. `harness report` derives knowledge-layer utilization from cited ÷ surfaced across the event log (both a unique-id rate and an occurrence-weighted rate), and `harness doctor` warns when the weighted utilization stays under 15% with 20+ surfaced occurrences.
+
 **recall**
 ```json
 { "query": "...", "recall": [{ "docid": "...", "path": "...", "title": "...", "score": 0.5, "snippet": "...", "ranker": "bm25|overlap" }], "plans": [] }
@@ -171,7 +178,90 @@ Allowed outcomes are `passed`, `failed`, and `inconclusive`. Only fresh `passed`
 }
 ```
 
-Lifecycle events are limited to `session_start`, `orient`, `gate`, `pre_tool`, `post_tool`, `skill_activation`, `verify`, `compound`, and `session_end`. They never store prompt or query content; `skill_activation` stores only the skill and session binding.
+**consolidate** (`--status` default shown; `--candidates` returns `{ schema, contract, clusters, learnings, domains, governed, storeDir }` — `governed: [{ id, action }]` lists every id a human already retired/disputed/promoted so the skill doesn't propose an op a governed write would just reapply over, and each cluster episode carries its raw `kind` (`fix`/`insight`/`human-teaching`), never flattened, so a rebuild-regenerated op can re-derive `source: human`; `--apply` returns `{ applied, rejected, committed, exitCode, governed }` — `applied[].op` includes `MERGE`, `rejected[].code` includes `E_DOMAIN_CAP`, `governed: [{ id, action }]` lists ids whose regenerated write just reapplied a standing retire/dispute/promote decision (always `[]` on a dry run); `--rebuild --yes` returns `{ pass, exitCode, archived, debt, nextTools }`)
+```json
+{
+  "mode": "on",
+  "due": true,
+  "debt": 6,
+  "threshold": 5,
+  "learnings": { "active": 12, "total": 14 },
+  "domains": [{ "domain": "sql", "active": 12, "cap": 25, "atCap": false }],
+  "promotionCandidates": [{ "id": "sql/adding-not-null-columns-to-hot-tables", "verified": 3, "plans": 2 }],
+  "quarantined": [],
+  "nextTools": ["harness consolidate --candidates"]
+}
+```
+
+**remember**
+```json
+{
+  "pass": true,
+  "exitCode": 0,
+  "episodePath": "docs/solutions/teachings/2026-07-27-adding-not-null-columns-to-hot-tables.md",
+  "learningId": "sql/adding-not-null-columns-to-hot-tables",
+  "blockedReason": null,
+  "nextTools": ["harness learnings sql"]
+}
+```
+
+**learning** (`<retire|dispute|confirm>` shown; `promote <id> --to <path>` returns the same shape with `status: "promoted"`)
+```json
+{ "pass": true, "exitCode": 0, "id": "sql/adding-not-null-columns-to-hot-tables", "status": "retired", "blockedReason": null }
+```
+
+**learnings** (default listing; `--why <id>` returns the single-learning provenance shape shown second; `status` can be `active|provisional|disputed|retired|superseded|promoted`)
+```json
+{
+  "learnings": [{ "id": "sql/adding-not-null-columns-to-hot-tables", "status": "active", "source": "human", "trigger": "...", "verified": 3, "plans": 2, "promotionEligible": true, "failures": 0 }],
+  "counts": { "active": 12, "total": 14 },
+  "quarantined": [{ "path": "docs/solutions/...", "sha256": "..." }]
+}
+```
+```json
+{
+  "id": "sql/adding-not-null-columns-to-hot-tables",
+  "trigger": "...",
+  "claimLine": "...",
+  "status": "active",
+  "source": "human",
+  "lastConfirmed": "2026-07-20",
+  "supersededBy": null,
+  "promotedTo": null,
+  "mergedFrom": null,
+  "episodes": [{ "path": "docs/solutions/...", "kind": "fix", "plan": "docs/plans/..." }],
+  "verified": 3,
+  "plans": 2,
+  "promotionEligible": true,
+  "failures": 0
+}
+```
+
+**knowledge** (`--status`/default shown, returns `{ mode, commit }`; `<on|suggest|off|freeze|capture-only>` returns `{ pass, mode }`; `commit <none|repo>` returns `{ pass, commit }`; `purge` returns the shape below)
+```json
+{ "mode": "on", "commit": "none" }
+```
+```json
+{ "pass": true, "exitCode": 0, "removed": { "episode": "docs/solutions/...", "learnings": ["..."], "links": ["..."], "ledger": 1 }, "blockedReason": null }
+```
+
+**eval-knowledge** — deterministic retrieval PROXY (hit/false-surface/token cost per arm on a temporally held-out split); never a model-graded net-benefit number, and no benefit claim is published from it
+```json
+{
+  "pass": true,
+  "exitCode": 0,
+  "split": { "train": 8, "heldOut": 4, "cutoff": "2026-07-10", "undated": 0, "unscorable": 1 },
+  "arms": {
+    "none": { "hitRate": 0, "falseSurfaceRate": 0, "injectedTokens": 0 },
+    "frontmatter": { "hitRate": 0.5, "falseSurfaceRate": 0, "injectedTokens": 140 },
+    "wholeIndex": { "hitRate": 1, "falseSurfaceRate": 0.083, "injectedTokens": 260 },
+    "bm25": { "hitRate": 0.75, "falseSurfaceRate": 0, "injectedTokens": 90 }
+  },
+  "recommendation": "whole-index"
+}
+```
+
+Lifecycle events are limited to `session_start`, `orient`, `gate`, `pre_tool`, `post_tool`, `skill_activation`, `verify`, `compound`, `consolidate`, `remember`, `learning`, `knowledge`, and `session_end`. Non-lifecycle commands `get`, `report`, `learnings`, and `eval-knowledge` never append events by design — they never call `writeEvent` at all. `init-repo`, `recall`, `validate-plan`, and `index` also never append events, but not by that same deliberate omission: all four DO call `writeEvent` (types `init_repo`/`recall`/`validate_plan`/`index`), and those types are simply absent from the allow-list above, so the calls silently no-op — see the Command catalog table's footnote. Every append-attempting command never stores prompt or query content; `skill_activation` stores only the skill and session binding.
 
 ## Host hook boundary
 
@@ -196,7 +286,7 @@ After orient: `read` ≤3 solution paths, ≤30 lines each per [`context-budget.
 
 | Skill | Harness command(s) |
 |-------|-------------------|
-| `@engineer` Deliver mode | proportional `orient` → read pack → explicit `gate` → work → explicit `verify` → `compound` or `/auto-compound` |
+| `@engineer` Deliver mode | proportional `orient` → read pack → explicit `gate` → work → explicit `verify [--learnings <ids>]` (cite the orient-surfaced learning ids that materially shaped the change) → `compound` or `/auto-compound` |
 | `@engineer` Answer/Investigate modes | minimal reads → evidence-backed report; no delivery gate, verification, or compound |
 | `/recall` | `orient` or `recall` (`-c`, `--min-score`) |
 | `/index-memory` | `index` (manifest + BM25 postings) |

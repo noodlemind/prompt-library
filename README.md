@@ -1,6 +1,6 @@
 # Prompt Library
 
-Skill-driven software engineering prompt library with **24 skills**, **21 agents**, scoped instructions, review checks, and a three-tier memory model (product plans, global knowledge, user profile). Primary platforms: GitHub Copilot in VS Code and IntelliJ IDEA.
+Skill-driven software engineering prompt library with **25 skills**, **21 agents**, scoped instructions, review checks, and a three-tier memory model (product plans, global knowledge, user profile). Primary platforms: GitHub Copilot in VS Code and IntelliJ IDEA.
 
 ## Quick Start
 
@@ -40,7 +40,7 @@ Standards: [Engineer Harness Architecture](docs/architecture/engineer-harness.md
 
 Pipeline steps (`/capture-issue`, `/plan-issue`, …) are **engineer-internal** (`user-invocable: false`), loaded on demand by `@engineer`. Optional: `/brainstorming`, `/deepen-plan`, `/document-review`. Plan files are the per-issue context pack. See `docs/plans/_plan-template.md` and `capture-gate.md`.
 
-## Skills (24)
+## Skills (25)
 
 User-invocable: `/engineer`, `/harness-doctor`, `/project-readme`, `/triage-issues`. All other skills are engineer-internal, loaded on demand by `@engineer`.
 
@@ -52,6 +52,7 @@ User-invocable: `/engineer`, `/harness-doctor`, `/project-readme`, `/triage-issu
 | `/triage-issues` | Utility | User | Backlog prioritization |
 | `/recall` | Memory | Internal | Team + repo knowledge before work |
 | `/index-memory` | Memory | Internal | Rebuild `knowledge/manifest.yaml` |
+| `/consolidate` | Memory | Internal | Convert unconsolidated episodes into learnings via `harness consolidate` |
 | `/capture-issue` | Pipeline | Internal | Create product plan file |
 | `/plan-issue` | Pipeline | Internal | Research and lock plan |
 | `/code-review` | Pipeline | Internal | Confidence-scored review |

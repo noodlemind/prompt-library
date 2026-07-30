@@ -550,6 +550,76 @@ test('read-only report command is registered and AC14 amendment is consistent', 
   assert.doesNotMatch(reportFn, /writeEvent\(/, 'report must not emit lifecycle events');
 });
 
+test('consolidate skill treats a cluster as a category group the skill may split into multiple ops', () => {
+  const skill = read('.github/skills/consolidate/SKILL.md');
+  assert.doesNotMatch(skill, /choose exactly one op/i, 'the one-op-per-cluster mandate must be removed');
+  assert.match(skill, /category group/i, 'a cluster is documented as a category group');
+  assert.match(skill, /multiple ops/i, 'the skill may emit multiple ops for one category group');
+});
+
+test('knowledge layer surface: consolidate command and insight lane stay documented', () => {
+  const bin = read('packages/harness/bin/harness.mjs');
+  // The knowledge group and its three modes are the M1 public contract.
+  assert.match(bin, /group: 'knowledge'/, 'CATALOG has a knowledge group');
+  assert.match(bin, /case 'consolidate':/, 'consolidate command registered');
+  assert.match(bin, /'\[--status \| --candidates \| --apply --ops <path> \| --rebuild --yes\]'/, 'help documents consolidate modes');
+  assert.match(bin, /--insight/, 'compound help documents the insight lane');
+  // The M2 human-authority and read-only surfaces are the same public contract.
+  assert.match(bin, /case 'remember':/, 'remember command registered');
+  assert.match(bin, /case 'learning':/, 'learning command registered');
+  assert.match(bin, /case 'learnings':/, 'learnings command registered');
+  assert.match(bin, /case 'knowledge':/, 'knowledge command registered');
+  assert.match(bin, /case 'eval-knowledge':/, 'eval-knowledge command registered');
+  // The M3 surfaces (suggest mode, commit mode, promote, MERGE/domain cap) are
+  // now the same public contract — CATALOG's knowledge sig names every mode.
+  assert.match(
+    bin,
+    /'<on\|suggest\|off\|freeze\|capture-only> \| --status \| purge <file\|--all> \| commit <none\|repo> \| migrate-store'/,
+    'help documents the knowledge suggest mode, opt-in commit mode, and stranded-store migration'
+  );
+  assert.match(bin, /'<retire\|dispute\|confirm\|promote> <id> \[--reason "<r>"\] \[--to <path>\]'/, 'help documents learning promote');
+  // The skill never writes learnings directly — apply is the sole writer.
+  const apply = read('packages/harness/lib/knowledge/apply.mjs');
+  assert.match(apply, /MAX_OPS_PER_RUN/, 'delta contract enforced in apply');
+  assert.match(apply, /scanSecrets/, 'secret scan runs at the write boundary');
+  assert.match(apply, /'MERGE'/, 'apply.mjs recognizes the MERGE op');
+  assert.match(apply, /E_DOMAIN_CAP/, 'apply.mjs enforces the domain cap with E_DOMAIN_CAP');
+  // The new human-authority commands must emit real lifecycle events, not silently drop.
+  const events = read('packages/harness/lib/events.mjs');
+  assert.match(events, /'remember'/, 'EVENT_TYPES includes remember');
+  assert.match(events, /'learning'/, 'EVENT_TYPES includes learning');
+  assert.match(events, /'knowledge'/, 'EVENT_TYPES includes knowledge');
+  // KNOWLEDGE_MODES is single-sourced in store.mjs and includes suggest;
+  // commands.mjs must import it rather than keep its own copy.
+  const store = read('packages/harness/lib/knowledge/store.mjs');
+  assert.match(store, /KNOWLEDGE_MODES = new Set\(\[[^\]]*'suggest'[^\]]*\]\)/, 'store.mjs KNOWLEDGE_MODES includes suggest');
+  const commands = read('packages/harness/lib/commands.mjs');
+  assert.doesNotMatch(commands, /const KNOWLEDGE_MODES\s*=\s*new Set/, 'commands.mjs must not keep its own copy of KNOWLEDGE_MODES');
+  assert.match(commands, /KNOWLEDGE_MODES[^=]*=[\s\S]*?await import\('\.\/knowledge\/store\.mjs'\)/, 'commands.mjs imports KNOWLEDGE_MODES from store.mjs');
+  // MEMORY-MODEL.md is the canonical memory model + threat model page (human
+  // register, lifecycle diagram, and governance ledger).
+  assert.ok(exists('docs/MEMORY-MODEL.md'), 'docs/MEMORY-MODEL.md exists');
+  const memoryModel = read('docs/MEMORY-MODEL.md');
+  assert.match(memoryModel, /stateDiagram/, 'MEMORY-MODEL.md includes the lifecycle stateDiagram');
+  assert.match(memoryModel, /promote/, 'MEMORY-MODEL.md documents learning promote');
+  // packages/harness/README.md documents the opt-in commit mode.
+  assert.match(read('packages/harness/README.md'), /knowledge commit/, 'README documents knowledge commit');
+  // Milestone 4: the governance ledger (retire/dispute/confirm/promote persist
+  // across `consolidate --rebuild --yes` and are mechanically reapplied) is
+  // now the same public contract.
+  assert.match(store, /export function readGovernance/, 'store.mjs exports readGovernance');
+  assert.match(apply, /governed/, 'apply.mjs tracks governed reapplication');
+  assert.match(memoryModel, /governance/i, 'MEMORY-MODEL.md documents the governance ledger');
+  // The learnings quarantine line (surfaced by cmdLearnings) is pinned the
+  // same way the CATALOG strings above are — a verbatim match against the
+  // string a human actually sees, not just a loose keyword.
+  assert.match(
+    commands,
+    /quarantined episode\(s\) — inspect with harness consolidate --status, clear with knowledge purge <path>/,
+    'commands.mjs renders the learnings quarantine line'
+  );
+});
+
 test('token budget: no SKILL.md body exceeds the line cap', () => {
   const skillsDir = path.join(repoRoot, '.github', 'skills');
   const oversized = fs
@@ -699,7 +769,7 @@ test('review fixes preserve thin wrappers, complete skill metadata, and CI pinni
   assert.match(packageReadme, /\$PLAN[^\n]*single plan resolved from the PR/i);
   assert.match(packageReadme, /\$BASE_SHA[^\n]*PR base SHA/i);
 
-  assert.match(read('.github/skills/references/harness-tool-contract.md'), /verify --plan <path> \[--base ref\] \[--enforcement mode\]/);
+  assert.match(read('.github/skills/references/harness-tool-contract.md'), /harness help <command>/);
   assert.match(read(architecturePath), /bounded delegation/i);
 
   const agents = read('AGENTS.md');

@@ -17,7 +17,7 @@ argument-hint: "[task description]"
 harness orient --query "<task keywords>" --workspace . --json
 ```
 
-Read **only** `.harness/context-pack.md` (≤2 KB). Do not paste CLI stdout into chat.
+Read **only** `.harness/context-pack.md` (≤2 KB) — it also carries the top-3 trigger-matched learnings, attributed by id, with insight-derived claims fenced `[unverified memory — advisory]`. Do not paste CLI stdout into chat.
 
 ### 2. Or standalone recall
 

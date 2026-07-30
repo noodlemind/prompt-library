@@ -16,6 +16,12 @@ import {
   cmdEvents,
   cmdValidatePlan,
   cmdCompound,
+  cmdConsolidate,
+  cmdRemember,
+  cmdLearning,
+  cmdLearnings,
+  cmdEvalKnowledge,
+  cmdKnowledge,
   cmdGet,
   cmdUninstall,
   cmdResolve,
@@ -97,6 +103,7 @@ const CATALOG = [
           ['--limit <n>', 'recall result count (default 3)'],
           ['-c, --collection <name>', 'filter by knowledge/collections.yaml'],
           ['--min-score <n>', 'minimum score (default 0.15)'],
+          ['--explain', 'decompose learning ranking (deterministic)'],
         ] },
       { name: 'gate', desc: 'edit preconditions before editFiles',
         sig: '[--phase implement|verify] [--plan <path>]',
@@ -119,9 +126,19 @@ const CATALOG = [
           ['--plan <path>', 'explicit plan file'],
           ['--enforcement <mode>', 'observe | warn | enforce (default enforce)'],
         ] },
-      { name: 'compound', desc: 'record learning from passed evidence',
-        sig: '[--plan <path>]',
-        options: [['--plan <path>', 'explicit plan file']] },
+      { name: 'compound', desc: 'record learning from passed evidence · --insight captures without evidence',
+        sig: '[--plan <path>] [--insight --title "..." --body "..."]',
+        options: [
+          ['--plan <path>', 'explicit plan file'],
+          ['--insight', 'evidence-free investigation capture (kind: insight, secret-scanned)'],
+          ['--title <t>', 'insight title (required with --insight)'],
+          ['--body <text>', 'insight body text'],
+          ['--body-file <path>', 'read insight body from a file'],
+          ['--category <c>', 'docs/solutions/<category>/ (default insights)'],
+          ['--tags <a,b>', 'comma-separated tags'],
+          ['--trigger <t>', 'applicability condition frontmatter'],
+          ['--claim <t>', 'one-line claim frontmatter'],
+        ] },
       { name: 'recall', desc: 'search team knowledge',
         sig: '"search terms" [--limit <n>] [--include-plans]',
         options: [
@@ -154,6 +171,48 @@ const CATALOG = [
           ['--global', 'report across all synced workspaces'],
           ['--check', 'exit non-zero on a budget breach (CI)'],
         ] },
+    ],
+  },
+  {
+    group: 'knowledge',
+    commands: [
+      { name: 'knowledge', desc: 'knowledge layer mode switch and purge (human deletion always wins)',
+        sig: '<on|suggest|off|freeze|capture-only> | --status | purge <file|--all> | commit <none|repo> | migrate-store',
+        options: [
+          ['--status', 'show the active mode (default)'],
+          ['purge <file>', 'cascade-delete an episode and dependent learnings'],
+          ['purge --all', 'reset the learnings store (episodes remain, become debt)'],
+          ['commit <none|repo>', 'repo mirrors ACTIVE learnings into docs/knowledge/learnings (opt-in, never git-commits the product repo); none is the default'],
+          ['migrate-store', 'move a stranded path-keyed store to this workspace\'s current (remote-keyed) store id; refuses if the target already exists'],
+        ] },
+      { name: 'consolidate', desc: 'episode→learning debt, work packet, and validated apply',
+        sig: '[--status | --candidates | --apply --ops <path> | --rebuild --yes]',
+        options: [
+          ['--status', 'debt vs threshold, quarantine, promotion candidates (default)'],
+          ['--candidates', 'deterministic work packet for the consolidation skill'],
+          ['--apply --ops <path>', 'validate and apply an ops JSON (sole writer); suggest mode requires --yes'],
+          ['--rebuild --yes', 'T2 reset for model-upgrade regeneration (git history retains learnings)'],
+        ] },
+      { name: 'remember', desc: 'teach the harness a durable claim (human-teaching episode + learning)',
+        sig: '"<claim>" --trigger "<t>" [--domain <d>]',
+        options: [
+          ['--trigger <t>', 'applicability condition (required)'],
+          ['--domain <d>', 'learning domain directory (default general)'],
+        ] },
+      { name: 'learning', desc: 'human authority over one learning: retire, dispute, confirm, or promote',
+        sig: '<retire|dispute|confirm|promote> <id> [--reason "<r>"] [--to <path>]',
+        options: [
+          ['--reason <r>', 'required for retire/dispute; recorded in the store commit'],
+          ['--to <path>', 'primitive path recorded on promote (behavior supersedes knowledge)'],
+        ] },
+      { name: 'learnings', desc: 'paged listing of learnings with provenance and failure annotations',
+        sig: '[domain] [--why <id>]',
+        options: [
+          ['--why <id>', 'full provenance chain for one learning'],
+        ] },
+      { name: 'eval-knowledge', desc: 'deterministic retrieval eval — hit/false-surface/token cost per arm (proxy, not net-benefit)',
+        sig: '[--json]',
+        options: [] },
     ],
   },
   {
@@ -291,6 +350,24 @@ async function main() {
         break;
       case 'compound':
         code = await cmdCompound(args);
+        break;
+      case 'consolidate':
+        code = await cmdConsolidate(args);
+        break;
+      case 'remember':
+        code = await cmdRemember(args);
+        break;
+      case 'learning':
+        code = await cmdLearning(args);
+        break;
+      case 'learnings':
+        code = await cmdLearnings(args);
+        break;
+      case 'eval-knowledge':
+        code = await cmdEvalKnowledge(args);
+        break;
+      case 'knowledge':
+        code = await cmdKnowledge(args);
         break;
       case 'events':
         code = await cmdEvents(args);

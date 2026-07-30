@@ -81,7 +81,7 @@ to Deliver before editing.
 
 | Command | Description |
 |---------|-------------|
-| `orient` | Substantial-work recall + plan match → `.harness/context-pack.md` (≤2 KB) |
+| `orient [--explain]` | Substantial-work recall + plan match → `.harness/context-pack.md` (≤2 KB); `--explain` decomposes the learning ranking score for every candidate (deterministic) |
 | `gate` | Explicit-plan precondition guard before edits |
 | `verify` | Run trusted named checks, plan/schema/task/scope/review/gap validation, and write evidence |
 | `recall` | BM25 manifest search (`-c`, `--min-score`) |
@@ -89,11 +89,58 @@ to Deliver before editing.
 | `validate-plan` | Read-only plan template / intent compliance |
 | `index` | Rebuild `knowledge/manifest.yaml` + `.harness-index/` |
 | `compound` | Consume passed evidence, index learning, and record usage/outcome telemetry |
+| `compound --insight` | Evidence-free capture of investigation learnings (`kind: insight`, secret-scanned, ranked below verified fixes, never promotable) |
+| `consolidate` | Knowledge loop: `--status` debt gauge (quarantine + at-cap domains surfaced) · `--candidates` deterministic work packet, plus any id a human already retired/disputed/promoted (`governed`) so the skill doesn't waste an op re-deriving it · `--apply --ops <path>` validated sole writer of learnings via ADD/STRENGTHEN/SUPERSEDE/MERGE/NOOP ops (`suggest` mode requires `--yes`); mechanically reapplies a standing governance decision when a regenerated id matches one, returning `governed` |
 | `events` | Inspect schema-v2 `.harness/events.jsonl`; filter by session/failure or summarize |
+
+### Knowledge (semantic memory)
+
+Episodes (solution docs) consolidate into **learnings** — one claim per file, ≤1,200
+bytes, ≤25 active per domain (`DOMAIN_ACTIVE_CAP`; at cap, `ADD` rejects with
+`E_DOMAIN_CAP` and the skill must `MERGE` two or more existing learnings, re-deriving
+the merged claim from their raw episodes and recording `merged_from`, or a human retires
+one first) — stored in a CLI-managed local git repo at `~/.harness/knowledge/<repo-id>/`
+(outside the working tree: survives `git clean`/re-clones, shared across worktrees,
+**never pushed**). The consolidation skill emits an operations JSON and writes
+nothing; `consolidate --apply` is the sole writer and enforces the ≤5-file delta
+contract (MERGE counts `1 + targets.length`), byte cap, secret scan, and imperative
+lint; a content-failure code raised three times against the same episode quarantines
+it (`consolidate --status` / `harness learnings` surface the quarantined list; doctor's
+K2 checks it), so it stops re-triggering debt. `knowledge.mode: suggest` is the
+approve-before-write control: `--apply` validates and stops at `E_MODE` unless the
+caller re-runs it with `--yes` after a human reviews the ops JSON. `orient` injects the
+top-3 matching learnings inside the existing 2 KB pack, attributed by id (`--explain`
+decomposes the ranking score for every candidate); insight-derived claims carry an
+`[unverified memory — advisory]` fence. A learning with ≥3 verified links across ≥2
+plans is promotion-eligible; `harness learning promote <id> --to <path>` records that
+its behavior now lives in a T3 primitive (after that primitive's own PR merges) and
+retires the learning from ranking. Trust gradient: the harness never transmits episodes
+(repo-private `docs/solutions/` travels only inside the product repo's own git history)
+→ learnings live in the local never-pushed store → the only knowledge the harness sends
+to a shared repository is a primitive that passed a human PR — unless a team opts into
+`knowledge commit repo` (below), the documented exception with best-effort secret
+screening. `init-repo`/`index` also write a committed `docs/codebase-map.md`
+(deterministic, timestamp-free) for cold-start orientation.
+
+| Command | Description |
+|---------|-------------|
+| `knowledge <on\|suggest\|off\|freeze\|capture-only>` / `--status` / `purge <file\|--all>` / `commit <none\|repo>` | Kill switch (`suggest` = human-approval gate on apply), cascade-delete, and opt-in mirroring of active learnings into the product repo; human deletion always wins over "never deleted" |
+| `consolidate --rebuild --yes` | Full T2 regeneration from T1 raw episodes — the model-upgrade path (git history in the store retains prior learnings); the governance ledger survives the wipe and is mechanically reapplied to any id it regenerates |
+| `remember "<claim>" --trigger "<t>" [--domain <d>]` | Human teaching lane: writes a `kind: human-teaching` episode, then materializes an active `source: human` learning through the same sole-writer transaction |
+| `learning <retire\|dispute\|confirm\|promote> <id> --reason "<r>" \| --to <path>` | One-command human authority over a single learning's status, or recording its promotion to a T3 primitive; each decision also appends to a governance ledger that survives `consolidate --rebuild --yes` — only `knowledge purge` erases it |
+| `learnings [domain] [--why <id>]` | Paged listing with provenance chain and quarantined-episode count; `--why` shows full provenance and failure annotations |
+| `eval-knowledge [--json]` | Deterministic retrieval proxy — hit/false-surface/token cost per ranking arm on a temporally held-out split; **not** the model-graded net-benefit number, which is deferred — publishes no benefit claim |
+
+`learnings` and `eval-knowledge` are read-only and never write events. `knowledge --status`
+(and bare `knowledge`) writes one event but is otherwise read-only — no store commit.
+`remember`, `learning`, and `knowledge` mode/`commit` changes/`purge` each write one event
+and end in a knowledge-store git commit (`commit repo` mirrors active learnings into
+`docs/knowledge/learnings/` on every subsequent store mutation — enabling it does not by
+itself back-fill the mirror until the next mutation runs).
 
 ### Options
 
-`--dry-run`, `--verbose`, `--json`, `--no-color`, `--workspace <path>`, `--copilot-home <path>`, `--query <text>`, `--phase implement|verify`, `--plan <path>`, `--base <git-ref>`, `--enforcement observe|warn|enforce`, `--strict-intent`, `--no-events`, `--host vscode`, `--session <id>`, `--summary`, `--failures`, `--limit <n>`, `-c <collection>`, `--min-score <n>`, `--docid <id>`, `--path <rel>`, `--lines <n>`, `--max-bytes <n>`
+`--dry-run`, `--verbose`, `--json`, `--no-color`, `--workspace <path>`, `--copilot-home <path>`, `--query <text>`, `--explain`, `--phase implement|verify`, `--plan <path>`, `--base <git-ref>`, `--enforcement observe|warn|enforce`, `--strict-intent`, `--no-events`, `--host vscode`, `--session <id>`, `--summary`, `--failures`, `--limit <n>`, `-c <collection>`, `--min-score <n>`, `--docid <id>`, `--path <rel>`, `--lines <n>`, `--max-bytes <n>`, `--sync`, `--global`, `--check`, `--insight`, `--title <t>`, `--body <text>`, `--body-file <path>`, `--category <c>`, `--tags <a,b>`, `--trigger <t>`, `--claim <t>`, `--domain <d>`, `--status`, `--candidates`, `--apply`, `--ops <path>`, `--rebuild`, `--yes`, `--reason <r>`, `--to <path>`, `--why <id>`, `--learnings <ids>`
 
 ### Output grammar (one grammar, two readers)
 

@@ -115,6 +115,17 @@ The evidence record must link passed verification artifacts, prior uses or strat
 
 Primitive creation remains separate from learning classification. `/auto-compound` may recommend a candidate but must not create it.
 
+#### Learning-sourced evidence
+
+When the evidence for the promotion originates from the knowledge layer rather than ad hoc observation:
+
+1. Find candidates via `harness consolidate --status --json` (`promotionCandidates`) or `harness learnings --json` (`promotionEligible`).
+2. Pull the full claim and provenance for one candidate via `harness learnings --why <id> --json`.
+3. Use that evidence in the promotion evidence record above, then create the primitive and open its PR through the normal creator workflow.
+4. Only after the primitive's PR merges, record the promotion: `harness learning promote <id> --to <path>`. This leaves the learning's `status` untouched and stamps only `promoted_to`, which retires it from ranking, cap counts, and future promotion candidates.
+
+Promotion is never automatic — the CLI only records history after a human has merged the PR; it never creates or approves the primitive itself.
+
 ## Primitive Creation Paths
 
 ### Skill

@@ -80,3 +80,13 @@ harness compound --plan <path> --workspace . --json
 ```
 
 The command consumes passed evidence, indexes knowledge, and records skill usage/outcome telemetry. Add 1–3 bounded Memory Cards with source paths. Report the evidence path, learning destination, and promotion recommendation.
+
+## Debt check (session-end drain)
+
+After persisting, run:
+
+```bash
+harness consolidate --status --json
+```
+
+When the packet reports `due: true`, invoke `/consolidate` before ending the session.

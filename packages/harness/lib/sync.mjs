@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
+import { assertNoSymlinkAncestors } from './fs-safe.mjs';
 
 const SYNC_TOP_LEVEL = ['skills', 'agents', 'instructions', 'hooks', 'knowledge', 'enterprise'];
 
@@ -62,7 +63,11 @@ export function resolveContainedPath(root, rel) {
   const dest = path.resolve(rootResolved, ...parts.filter(Boolean));
   const relative = path.relative(rootResolved, dest);
   if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) return null;
-  return dest;
+  // Physical containment (adversarial-review sweep): applyRetired below
+  // deletes through this resolved path — a symlinked ancestor under `root`
+  // (a tampered/compromised copilotHome) must never let that delete land
+  // outside it.
+  return assertNoSymlinkAncestors(rootResolved, relative);
 }
 
 function fileHash(filePath) {

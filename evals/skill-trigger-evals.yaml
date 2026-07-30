@@ -177,6 +177,21 @@ skills:
     outcomes:
       - {prompt: "Publish the verified timeout fix", assertions: ["solution uses template", "evidence and prevention recorded", "manifest indexed"]}
 
+  consolidate:
+    hosts: *supported_hosts
+    positive:
+      - {prompt: "consolidate --status --json reports due: true after /auto-compound just persisted a learning", assertions: ["activate consolidate", "session-end drain"]}
+      - {prompt: "Orient's context pack shows a consolidate --candidates next-hint at session start", assertions: ["activate consolidate", "session-start drain"]}
+      - {prompt: "Run the knowledge consolidation loop now", assertions: ["activate consolidate", "read work packet"]}
+    negative:
+      - {prompt: "Record this fix as a learning", assertions: ["do not activate consolidate", "route harness compound / auto-compound"]}
+      - {prompt: "Edit this learning file directly", assertions: ["do not activate consolidate", "hand edits are absorbed with source: human, not a consolidate trigger"]}
+      - {prompt: "Document this verified fix as a reusable solution for the team", assertions: ["do not activate consolidate", "route compound-learnings"]}
+      - {prompt: "Rebuild the knowledge manifest over solution docs", assertions: ["do not activate consolidate", "route index-memory"]}
+      - {prompt: "Recall prior knowledge before starting this task", assertions: ["do not activate consolidate", "route recall"]}
+    outcomes:
+      - {prompt: "Consolidate the due episode clusters", assertions: ["ops file written, not the store", "apply is sole writer of content", "governed ids reapplied"]}
+
   code-review:
     hosts: *supported_hosts
     positive:

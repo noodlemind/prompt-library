@@ -4,6 +4,7 @@ import { spawnSync } from 'node:child_process';
 import { tokenize } from '../tokenize.mjs';
 import { estimateTokens } from '../token-meter.mjs';
 import { extract as lexicalExtract, SOURCE_EXTENSIONS } from './lexical-extractor.mjs';
+import { readFileNoFollow, writeFileContained, assertNoSymlinkAncestors } from '../fs-safe.mjs';
 
 const DEFAULT_MAX_TOKENS = 1000;
 const MAX_FILES_SCANNED = 4000;
@@ -21,14 +22,25 @@ function trackedSourceFiles(workspace) {
   return { files: all.slice(0, MAX_FILES_SCANNED), total: all.length };
 }
 
+/**
+ * Read a tracked file with the shared fs-safe defenses: EVERY ancestor
+ * component of the tracked path is validated against the workspace root
+ * first (assertNoSymlinkAncestors — a tracked file can still be listed by
+ * `git ls-files` after `src/` itself was swapped for a symlink pointing
+ * outside the workspace, and readFileNoFollow's O_NOFOLLOW only guards the
+ * FINAL component, so without the ancestor walk the kernel happily follows
+ * the symlinked directory and outside file content leaks into a committed
+ * map), then the leaf itself is opened no-follow (readFileNoFollow) — the
+ * same two-layer defense the episode readers use. Never throws; an
+ * escaping/symlinked/missing/oversized file reads as empty, same as before.
+ */
 function readFileSafe(workspace, rel) {
-  try {
-    const full = path.join(workspace, rel);
-    if (fs.statSync(full).size > MAX_FILE_BYTES) return '';
-    return fs.readFileSync(full, 'utf8');
-  } catch {
-    return '';
-  }
+  const full = assertNoSymlinkAncestors(workspace, rel);
+  if (!full) return '';
+  // `root: workspace` → readFileNoFollow verifies (canonicalize-after-acquire)
+  // the opened inode's realpath is contained under the real workspace, closing
+  // the ancestor-swap window between the walk above and the leaf open.
+  return readFileNoFollow(full, { maxBytes: MAX_FILE_BYTES, root: workspace }) ?? '';
 }
 
 /**
@@ -37,7 +49,7 @@ function readFileSafe(workspace, rel) {
  * density, and — when a query is given — boosted by normalized-token overlap
  * with the path and symbols, so orientation is code-relevant to the task.
  */
-export function buildRepoMap({ workspace, query = '', maxTokens = DEFAULT_MAX_TOKENS, extract = lexicalExtract } = {}) {
+export function buildRepoMap({ workspace, query = '', maxTokens = DEFAULT_MAX_TOKENS, extract = lexicalExtract, title = 'Repo Map' } = {}) {
   const { files, total } = trackedSourceFiles(workspace);
   if (!files.length) return { files: [], body: '', tokens: 0, empty: true };
 
@@ -72,10 +84,12 @@ export function buildRepoMap({ workspace, query = '', maxTokens = DEFAULT_MAX_TO
     const structural = f.importedBy * 2 + Math.min(f.symbols.length, 12);
     return { ...f, score: queryScore * 5 + structural };
   });
-  scored.sort((a, b) => b.score - a.score || a.rel.localeCompare(b.rel));
+  // Locale-independent tie-break: the committed map must be byte-identical
+  // across hosts for the same tree.
+  scored.sort((a, b) => b.score - a.score || (a.rel < b.rel ? -1 : a.rel > b.rel ? 1 : 0));
 
   const lines = [
-    '# Repo Map',
+    `# ${title}`,
     '',
     `> Deterministic lexical map of ${total} tracked source files${total > files.length ? ` (top ${files.length} scanned)` : ''}.${query ? ` Ranked for: "${query}".` : ''}`,
     '',
@@ -91,4 +105,25 @@ export function buildRepoMap({ workspace, query = '', maxTokens = DEFAULT_MAX_TO
 
   const body = lines.join('\n');
   return { files: selected, body, tokens: estimateTokens(body), empty: false, totalFiles: total };
+}
+
+/**
+ * Write the committed, query-less codebase map to docs/codebase-map.md.
+ * Deterministic and timestamp-free so the committed file only changes when
+ * the code structure changes — a durable cold-start orientation for agents.
+ */
+export function writeCodebaseMap({ workspace, dryRun = false, maxTokens = 2500 }) {
+  const map = buildRepoMap({ workspace, query: '', maxTokens, title: 'Codebase Map' });
+  if (map.empty) return null;
+  const rel = path.join('docs', 'codebase-map.md');
+  if (!dryRun) {
+    // Refuse to write through a symlinked `docs/` (or a pre-planted symlink
+    // at the target itself) — a naive mkdir+write would otherwise follow
+    // either straight out of the workspace. writeFileContained also writes
+    // atomically (tmp + rename), so a concurrent reader never observes a
+    // partial map.
+    const full = writeFileContained(workspace, rel, map.body + '\n');
+    if (!full) return null;
+  }
+  return { path: rel.split(path.sep).join('/'), tokens: map.tokens, files: map.files.length };
 }

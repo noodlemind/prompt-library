@@ -2,6 +2,9 @@ import fs from 'fs';
 import path from 'path';
 import { ensureHarnessDir } from './session.mjs';
 import { writeHarnessRunner } from './resolve-harness-bin.mjs';
+import { writeCodebaseMap } from './repo-map/index.mjs';
+import { ensureStore, storeDir, readLedger } from './knowledge/store.mjs';
+import { collectEpisodes, consolidateStatus, splitLedger } from './knowledge/consolidate.mjs';
 
 const AGENT_CONTEXT_STUB = `# Agent Context
 
@@ -33,7 +36,7 @@ exemptions: []
 waivers: []
 `;
 
-export function runInitRepo({ workspace, flags, log }) {
+export function runInitRepo({ workspace, flags, log, copilotHome }) {
   const stats = { created: [] };
   const plansDir = path.join(workspace, 'docs', 'plans');
   const agentCtx = path.join(workspace, 'docs', 'agent-context.md');
@@ -90,6 +93,17 @@ export function runInitRepo({ workspace, flags, log }) {
     }
   }
 
+  // Committed cold-start orientation — advisory: never fail init on it.
+  try {
+    const map = writeCodebaseMap({ workspace, dryRun: flags.dryRun });
+    if (map) {
+      stats.created.push(map.path);
+      log(`wrote ${map.path} (committed orientation map, ~${map.tokens} tokens)`);
+    }
+  } catch {
+    log('skip docs/codebase-map.md (map generation failed)');
+  }
+
   const manifest = path.join(knowledgeDir, 'manifest.yaml');
   if (!fs.existsSync(manifest)) {
     if (!flags.dryRun) {
@@ -104,6 +118,38 @@ export function runInitRepo({ workspace, flags, log }) {
     }
     stats.created.push('knowledge/manifest.yaml');
     log('created knowledge/manifest.yaml (optional fallback)');
+  }
+
+  // Arm pre-existing solution docs as consolidation debt (design §5): armed
+  // at init, drained at first session start (Task 8 does the draining).
+  // Advisory — never fails init — and never materializes an empty knowledge
+  // store for a workspace with no solution docs to arm: the store is only
+  // created once there is at least one episode to arm, and dry-run never
+  // creates it at all.
+  try {
+    const episodes = collectEpisodes({ workspace, copilotHome });
+    if (episodes.length > 0) {
+      if (flags.dryRun) {
+        // Reuse splitLedger's consumed semantics (consolidate.mjs) — a pure
+        // failure entry (three-strikes bookkeeping, no `learning` outcome
+        // yet) must still count as debt, matching what consolidateStatus
+        // reports for the non-dry-run path below.
+        const { consumed } = splitLedger(readLedger(storeDir(workspace)));
+        const debt = episodes.filter((e) => !consumed.has(`${e.path}@${e.sha256}`)).length;
+        if (debt > 0) {
+          log(`armed ${debt} existing solution doc(s) as consolidation debt — drains at first session start`);
+        }
+      } else {
+        const store = ensureStore(workspace);
+        const { debt } = consolidateStatus({ workspace, copilotHome });
+        if (debt > 0) {
+          if (store.created) stats.created.push('knowledge store');
+          log(`armed ${debt} existing solution doc(s) as consolidation debt — drains at first session start`);
+        }
+      }
+    }
+  } catch {
+    log('skip knowledge store arming (failed)');
   }
 
   return stats;

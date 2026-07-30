@@ -6,7 +6,7 @@ import { spawnSync } from 'node:child_process';
 import { test } from 'node:test';
 import { tokenize } from '../lib/tokenize.mjs';
 import { extract } from '../lib/repo-map/lexical-extractor.mjs';
-import { buildRepoMap } from '../lib/repo-map/index.mjs';
+import { buildRepoMap, writeCodebaseMap } from '../lib/repo-map/index.mjs';
 import { indexStatus } from '../lib/index-status.mjs';
 import { resolveIndexDir } from '../lib/recall-config.mjs';
 import { runBuildPostingsIndex, loadPostingsIndex } from '../lib/postings-index.mjs';
@@ -75,6 +75,33 @@ test('repo map is query-ranked, budgeted, and code-relevant', () => {
   fs.rmSync(ws, { recursive: true, force: true });
 });
 
+// P1: `git ls-files` keeps listing a tracked path from the INDEX even after
+// its parent directory was swapped on disk for a symlink pointing outside
+// the workspace — and readFileNoFollow's O_NOFOLLOW only refuses a symlink
+// at the FINAL component, so the kernel happily followed the symlinked
+// ancestor and outside file content leaked into the generated map.
+// readFileSafe now validates every ancestor (assertNoSymlinkAncestors)
+// before each tracked read.
+test('a symlinked ancestor (src/ swapped for an outside symlink) never leaks outside content into the map; real files still mapped', () => {
+  const { ws } = gitRepo({
+    'src/payments.mjs': 'export function insidePayments() {}',
+    'lib/other.mjs': 'export function realTrackedSymbol() {}',
+  });
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-mapout-'));
+  fs.writeFileSync(path.join(outside, 'payments.mjs'), 'export function leakedOutsideSecret() {}\n');
+  // Swap the tracked directory itself — the ancestor, not the leaf.
+  fs.rmSync(path.join(ws, 'src'), { recursive: true, force: true });
+  fs.symlinkSync(outside, path.join(ws, 'src'));
+
+  const map = buildRepoMap({ workspace: ws, maxTokens: 500 });
+  assert.equal(map.empty, false);
+  assert.ok(!map.body.includes('leakedOutsideSecret'), 'outside file content must never appear in the map');
+  assert.ok(map.files.includes('lib/other.mjs'), 'genuinely tracked files are still mapped');
+  assert.match(map.body, /realTrackedSymbol/, 'real tracked symbols still extracted');
+  fs.rmSync(ws, { recursive: true, force: true });
+  fs.rmSync(outside, { recursive: true, force: true });
+});
+
 test('index --status reports drift deterministically', () => {
   const { ws, git } = gitRepo({ 'a.js': 'export const a = 1;' });
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-idx-'));
@@ -98,6 +125,44 @@ test('index --status reports drift deterministically', () => {
 
   fs.rmSync(ws, { recursive: true, force: true });
   fs.rmSync(home, { recursive: true, force: true });
+});
+
+test('writeCodebaseMap refuses to write through a symlinked docs/ directory', () => {
+  const { ws } = gitRepo({ 'a.js': 'export const a = 1;' });
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-repomap-outside-'));
+  // A symlinked `docs/` pointing outside the workspace — a naive
+  // mkdir(recursive)+write would follow it and write the map there instead.
+  fs.symlinkSync(outside, path.join(ws, 'docs'));
+
+  const result = writeCodebaseMap({ workspace: ws });
+  assert.equal(result, null, 'a symlinked docs/ must refuse the write, not follow it');
+  assert.ok(!fs.existsSync(path.join(outside, 'codebase-map.md')), 'nothing written through the symlink');
+
+  fs.rmSync(ws, { recursive: true, force: true });
+  fs.rmSync(outside, { recursive: true, force: true });
+});
+
+test('writeCodebaseMap refuses to write when the target itself is a pre-existing symlink', () => {
+  const { ws } = gitRepo({ 'a.js': 'export const a = 1;' });
+  const outsideFile = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'harness-repomap-target-')), 'elsewhere.md');
+  fs.writeFileSync(outsideFile, 'pre-existing content\n');
+  fs.mkdirSync(path.join(ws, 'docs'), { recursive: true });
+  fs.symlinkSync(outsideFile, path.join(ws, 'docs', 'codebase-map.md'));
+
+  const result = writeCodebaseMap({ workspace: ws });
+  assert.equal(result, null, 'a pre-existing symlink at the target must refuse the write, not follow it');
+  assert.equal(fs.readFileSync(outsideFile, 'utf8'), 'pre-existing content\n', 'the symlink target is untouched');
+
+  fs.rmSync(ws, { recursive: true, force: true });
+});
+
+test('writeCodebaseMap writes normally when docs/ is a plain directory', () => {
+  const { ws } = gitRepo({ 'a.js': 'export const a = 1;' });
+  const result = writeCodebaseMap({ workspace: ws });
+  assert.ok(result);
+  assert.equal(result.path, 'docs/codebase-map.md');
+  assert.ok(fs.existsSync(path.join(ws, 'docs', 'codebase-map.md')));
+  fs.rmSync(ws, { recursive: true, force: true });
 });
 
 test('maintenance refresh: deterministic index rebuild works with no provider (AC63)', () => {

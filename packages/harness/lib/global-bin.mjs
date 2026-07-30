@@ -39,7 +39,7 @@ const bin = path.join(COPILOT_HOME, '.harness-bin', 'bin', 'harness.mjs');
 if (!fs.existsSync(bin)) {
   console.error('[x] E_NO_RUNTIME');
   console.error('  global harness runtime missing at ' + bin);
-  console.error('  -> fix   ${INSTALL_FIX_HINT}');
+  console.error('  -> fix   ' + ${JSON.stringify(INSTALL_FIX_HINT)});
   console.error('  exit 1');
   process.exit(1);
 }

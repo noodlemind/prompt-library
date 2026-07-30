@@ -1,13 +1,339 @@
 import fs from 'fs';
 import path from 'path';
 import { runIndexKnowledge } from './index-knowledge.mjs';
+import { resolveIndexDir } from './recall-config.mjs';
 import { readSession, writeSession } from './session.mjs';
 import { readEvidence, validateEvidence } from './evidence.mjs';
 import { selectPlan } from './plan-parse.mjs';
 import { loadPolicy } from './policy.mjs';
 import { recordSkillUsage } from './telemetry.mjs';
+import { scanSecrets } from './secret-scan.mjs';
+import { readStoreConfig } from './knowledge/store.mjs';
+import { assertNoSymlinkAncestors, realpathParentContained } from './fs-safe.mjs';
+
+// Byte-exact snapshot/restore of a single retrieval-state file, used to roll
+// back the manifest + postings when indexing throws mid-write. Read as a raw
+// Buffer so bytes round-trip verbatim; null means "was absent" → restore
+// deletes it.
+function snapshotFile(p) {
+  try {
+    return fs.readFileSync(p);
+  } catch {
+    return null;
+  }
+}
+function restoreFile(p, snap) {
+  try {
+    if (snap === null) fs.rmSync(p, { force: true });
+    else fs.writeFileSync(p, snap);
+  } catch {
+    // best effort — `harness index` reconciles retrieval state on the next run
+  }
+}
+
+// Verify a rollback postcondition (P2): after restoreFile, does the file on
+// disk actually match the snapshot again? A null snapshot means "was absent",
+// so the file must be gone; a Buffer snapshot means the bytes must round-trip.
+// Never throws — an unreadable/racing file just reports "not restored".
+function snapshotRestored(p, snap) {
+  try {
+    if (snap === null) return !fs.existsSync(p);
+    return fs.readFileSync(p).equals(snap);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Atomically reserve a unique episode filename and write it (P1#1). The prior
+ * check-then-write loop (`existsSync` to pick a suffix, THEN write) let two
+ * concurrent `compound --insight` / `remember` commands both observe the same
+ * suffix as free and both write it — one silently overwriting the other, since
+ * episodes land in the WORKSPACE (docs/solutions), OUTSIDE the store lock.
+ * Here each suffix is claimed with an EXCLUSIVE create (`writeFileSync` flag
+ * `'wx'` = O_CREAT|O_EXCL): whichever process loses the race gets EEXIST and
+ * moves to the next suffix, so two processes can never both claim one name.
+ * Containment is re-validated (assertNoSymlinkAncestors, the same fs-safe
+ * guard writeFileContained uses) BEFORE every exclusive create, and O_EXCL
+ * itself refuses to follow a pre-planted symlink at the leaf. Returns
+ * `{ ok: true, rel }` on success, or `{ ok: false, error? }` when containment
+ * fails (no error) or the write fails for a non-EEXIST reason (error set).
+ */
+function reserveEpisodePath(workspace, dirRel, base, doc) {
+  const dirFull = assertNoSymlinkAncestors(workspace, dirRel);
+  if (!dirFull) return { ok: false };
+  fs.mkdirSync(dirFull, { recursive: true });
+  let candidate = `${base}.md`;
+  let n = 2;
+  // Bounded so a pathological filesystem that repeats EEXIST forever can never
+  // wedge the process — 100k same-title captures in one day is not a real case.
+  for (let attempt = 0; attempt < 100000; attempt++) {
+    const rel = path.join(dirRel, candidate);
+    const full = assertNoSymlinkAncestors(workspace, rel);
+    if (!full) return { ok: false };
+    try {
+      // Exclusively create the leaf EMPTY first (O_CREAT|O_EXCL via 'wx'): the
+      // race loser still gets EEXIST, and O_EXCL still refuses a pre-planted
+      // symlink at the leaf — but no content byte lands until the verify below
+      // passes, so an ancestor-swap race can only ever expose a zero-byte file.
+      const fd = fs.openSync(full, 'wx');
+      // Post-create containment verify (symmetry with writeFileContained's
+      // canonicalize-after-acquire step 3): the pre-create ancestor walk and the
+      // O_EXCL leaf create are both scan-time, so an ancestor swapped for a
+      // symlink AFTER the walk could make this leaf land OUTSIDE the workspace.
+      // realpath the created (still EMPTY) file's parent; on an escape, close,
+      // unlink, and refuse so no content is ever published outside the workspace.
+      if (!realpathParentContained(workspace, full)) {
+        try {
+          fs.closeSync(fd);
+        } catch {
+          // fd may already be gone if the leaf was swapped away
+        }
+        try {
+          fs.unlinkSync(full);
+        } catch {
+          // best effort — a swapped-away leaf is not ours to chase
+        }
+        return { ok: false };
+      }
+      // Verify passed: write the content THROUGH the verified descriptor.
+      try {
+        fs.writeFileSync(fd, doc);
+      } finally {
+        fs.closeSync(fd);
+      }
+      return { ok: true, rel };
+    } catch (err) {
+      if (err.code === 'EEXIST') {
+        candidate = `${base}-${n}.md`;
+        n += 1;
+        continue;
+      }
+      return { ok: false, error: err };
+    }
+  }
+  return { ok: false };
+}
+
+function slugify(text) {
+  return (
+    String(text)
+      .toLowerCase()
+      .normalize('NFC')
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 60) || 'insight'
+  );
+}
+
+function yamlQuote(value) {
+  return `"${String(value)
+    .replace(/\\/g, '\\\\')
+    .replace(/"/g, '\\"')
+    .replace(/\n/g, '\\n')
+    .replace(/\r/g, '\\r')
+    .replace(/\t/g, '\\t')}"`;
+}
+
+/**
+ * Insight lane: evidence-free capture of investigation learnings. The quality
+ * gate on the verified lane is untouched — insights are a separate episode
+ * kind, ranked below verified fixes and barred from promotion.
+ */
+export function runInsightCompound({ workspace, copilotHome, flags, log = () => {}, kind = 'insight', home }) {
+  // Kill switch: only the fully-off mode blocks insight capture — freeze and
+  // capture-only both keep this lane open (the mode matrix, Task 4).
+  const { mode } = readStoreConfig(workspace, { home });
+  if (mode === 'off') {
+    return {
+      pass: false,
+      exitCode: 2,
+      kind,
+      path: null,
+      indexed: null,
+      blockedReason: `knowledge mode is ${mode} — run: harness knowledge on`,
+      nextTools: ['harness knowledge on'],
+    };
+  }
+  const body = flags.body || (flags.bodyFile ? fs.readFileSync(path.resolve(flags.bodyFile), 'utf8') : '');
+  if (!flags.title || !body.trim()) {
+    return {
+      pass: false,
+      exitCode: 2,
+      kind,
+      path: null,
+      indexed: null,
+      blockedReason: 'insight capture needs --title and --body (or --body-file)',
+      nextTools: ['harness compound --insight --title "..." --body "..."'],
+    };
+  }
+  const date = new Date().toISOString().slice(0, 10);
+  // Category is one safe path segment — never a traversal vector.
+  const category = slugify(flags.category || 'insights');
+  const tags = flags.tags
+    ? flags.tags
+        .split(',')
+        .map((t) => t.replace(/[^\w. -]/g, '').trim())
+        .filter(Boolean)
+        .join(',')
+    : '';
+  const fmLines = [`title: ${yamlQuote(flags.title)}`, `kind: ${kind}`, `date: ${date}`];
+  if (tags) fmLines.push(`tags: ${tags}`);
+  if (flags.trigger) fmLines.push(`trigger: ${yamlQuote(flags.trigger)}`);
+  if (flags.claim) fmLines.push(`claim: ${yamlQuote(flags.claim)}`);
+  const doc = `---\n${fmLines.join('\n')}\n---\n\n${body.trim()}\n`;
+  const secrets = scanSecrets(doc);
+  if (secrets.length) {
+    return {
+      pass: false,
+      exitCode: 1,
+      kind,
+      path: null,
+      indexed: null,
+      blockedReason: `secret-shaped content blocked capture: ${secrets
+        .map((s) => `${s.id}@${s.line}`)
+        .join(', ')}`,
+      nextTools: ['redact the credential and re-run'],
+    };
+  }
+  // Never silently overwrite an earlier capture: same-day same-title collisions
+  // get a deterministic numeric suffix.
+  const base = `${date}-${slugify(flags.title)}`;
+  const dirRel = path.join('docs', 'solutions', category);
+  // Physical containment (sweep-completeness finding, probe C): this is the
+  // PRIMARY episode write path for both `harness compound --insight` and
+  // `harness remember` (remember.mjs calls this with kind: 'human-teaching')
+  // — a symlinked docs/solutions (or category) directory must never let it
+  // land outside the workspace. Checked BEFORE the collision-avoidance loop
+  // below even probes existence through it, and fails loudly (a blocked
+  // result, not a silent no-op) rather than writing outside — unlike
+  // admin.mjs's absorb-snapshot writer (a best-effort side channel that can
+  // afford to skip), this IS the write the caller asked for.
+  if (!assertNoSymlinkAncestors(workspace, dirRel)) {
+    return {
+      pass: false,
+      exitCode: 1,
+      kind,
+      path: null,
+      indexed: null,
+      blockedReason: 'episode path escapes the workspace (symlinked docs/solutions?)',
+      nextTools: ['remove or replace the symlinked docs/solutions directory and re-run'],
+    };
+  }
+  let rel;
+  if (flags.dryRun) {
+    // Dry run writes nothing, so a plain existence probe is enough to report a
+    // representative would-be name (no reservation, no file created).
+    rel = path.join(dirRel, `${base}.md`);
+    let n = 2;
+    while (fs.existsSync(path.join(workspace, rel))) {
+      rel = path.join(dirRel, `${base}-${n}.md`);
+      n += 1;
+    }
+  } else {
+    // Atomic exclusive-create reservation (P1#1): claims a unique suffix with
+    // O_EXCL so concurrent captures of the same title can never overwrite each
+    // other. Containment is re-validated before each create.
+    const reserved = reserveEpisodePath(workspace, dirRel, base, doc);
+    if (!reserved.ok) {
+      return {
+        pass: false,
+        exitCode: 1,
+        kind,
+        path: null,
+        indexed: null,
+        blockedReason: reserved.error
+          ? `could not write episode file: ${reserved.error.message}`
+          : 'episode path escapes the workspace (symlinked docs/solutions?)',
+        nextTools: ['remove or replace the symlinked docs/solutions directory and re-run'],
+      };
+    }
+    rel = reserved.rel;
+  }
+  // Under dryRun nothing was actually written (the write above is skipped), so
+  // the log line must not claim otherwise.
+  log(`${flags.dryRun ? 'would write' : 'wrote'} ${rel}`);
+  const knowledgeRoot = fs.existsSync(path.join(copilotHome, 'knowledge'))
+    ? path.join(copilotHome, 'knowledge')
+    : null;
+  // runIndexKnowledge can throw (a duplicate manifest id, an fs error). An
+  // unhandled throw here would leave the episode we JUST wrote orphaned on disk
+  // and, for the `remember` caller, skip its rollback path entirely (the throw
+  // never reaches `if (!episode.pass)`). Snapshot the ENTIRE retrieval state it
+  // writes — the manifest AND the postings (index-knowledge writes manifest
+  // then postings.json/meta.json, so a throw between them can leave postings
+  // referencing the rolled-back episode) — and on any index failure delete the
+  // just-written episode and restore all of it so retrieval state is exactly
+  // pre-write, then return a clean, recoverable failure the caller handles.
+  const manifestPath = path.join(knowledgeRoot || path.join(workspace, 'knowledge'), 'manifest.yaml');
+  const indexDir = resolveIndexDir(copilotHome || '', workspace);
+  const snapshots = [
+    [manifestPath, snapshotFile(manifestPath)],
+    [path.join(indexDir, 'postings.json'), snapshotFile(path.join(indexDir, 'postings.json'))],
+    [path.join(indexDir, 'meta.json'), snapshotFile(path.join(indexDir, 'meta.json'))],
+  ];
+  let indexed;
+  try {
+    indexed = runIndexKnowledge({ knowledgeRoot, workspace, copilotHome, flags, log });
+  } catch (err) {
+    // Rollback WITH verified postconditions (P2): the prior code swallowed
+    // every recovery error yet always reported "episode rolled back" /
+    // `path: null` — so a rollback that left the episode on disk or failed to
+    // restore retrieval state was indistinguishable from a clean one. Now each
+    // step is verified against disk and any residue is named in the result.
+    const episodeFull = path.join(workspace, rel);
+    let episodeRemains = false;
+    const unrestored = [];
+    if (!flags.dryRun) {
+      try {
+        fs.rmSync(episodeFull, { force: true });
+      } catch {
+        // best effort — verified below regardless of whether rmSync threw
+      }
+      episodeRemains = fs.existsSync(episodeFull);
+      // Restore manifest + postings + meta to exactly pre-write (write back the
+      // snapshot, or delete if it was absent), then confirm each landed.
+      for (const [p, snap] of snapshots) {
+        restoreFile(p, snap);
+        if (!snapshotRestored(p, snap)) unrestored.push(p);
+      }
+    }
+    const recovered = !episodeRemains && unrestored.length === 0;
+    let blockedReason;
+    if (recovered) {
+      blockedReason = `knowledge index rebuild failed, episode rolled back: ${err.message}`;
+    } else {
+      const residue = [];
+      if (episodeRemains) residue.push(`episode still on disk at ${rel.split(path.sep).join('/')}`);
+      if (unrestored.length) residue.push(`retrieval state not restored: ${unrestored.join(', ')}`);
+      blockedReason = `knowledge index rebuild failed AND rollback incomplete (${residue.join('; ')}) — run: harness index. Original error: ${err.message}`;
+    }
+    return {
+      pass: false,
+      exitCode: 1,
+      kind,
+      path: null,
+      indexed: null,
+      blockedReason,
+      // Name the residue explicitly so a caller never treats a partial
+      // recovery as a clean one.
+      ...(recovered ? {} : { partialRecovery: { episodeRemains, unrestored } }),
+      nextTools: ['harness index'],
+    };
+  }
+  return {
+    pass: true,
+    exitCode: 0,
+    kind,
+    path: rel.split(path.sep).join('/'),
+    indexed,
+    blockedReason: null,
+    nextTools: ['harness consolidate --status'],
+  };
+}
 
 export function runCompound({ workspace, copilotHome, flags, log = () => {} }) {
+  if (flags.insight) return runInsightCompound({ workspace, copilotHome, flags, log });
   const session = readSession(workspace);
   const selected = selectPlan(workspace, { planPath: flags.plan, session, requireUnique: true });
   if (!selected.plan) {

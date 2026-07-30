@@ -16,6 +16,10 @@ export const EVENT_TYPES = new Set([
   'skill_activation',
   'verify',
   'compound',
+  'consolidate',
+  'remember',
+  'learning',
+  'knowledge',
   'session_end',
 ]);
 
@@ -71,7 +75,7 @@ export function writeEvent(workspace, flags, payload) {
   };
   if (payload.blockedReason) event.blockedReason = payload.blockedReason;
   if (payload.usage) event.usage = payload.usage;
-  for (const field of ['tool', 'mutation', 'targets', 'targetResolved', 'gate', 'decision', 'durationMs', 'success']) {
+  for (const field of ['tool', 'mutation', 'targets', 'targetResolved', 'gate', 'decision', 'durationMs', 'success', 'learnings', 'learningsBytes']) {
     if (payload[field] !== undefined) event[field] = payload[field];
   }
 

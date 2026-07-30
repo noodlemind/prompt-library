@@ -14,6 +14,9 @@ import { readSession, writeSession } from './session.mjs';
 import { parseVSCodeSettings } from './vscode-settings.mjs';
 import { resolveVSCodeSettingsPaths } from './paths.mjs';
 import { loadRetired, findStaleOrphans } from './sync.mjs';
+import { storeDir, storeDirForId, repoId, localRepoId } from './knowledge/store.mjs';
+import { consolidateStatus } from './knowledge/consolidate.mjs';
+import { loadReportEvents, knowledgeSlos } from './report.mjs';
 
 const require = createRequire(import.meta.url);
 
@@ -304,7 +307,113 @@ function vscodeChecks({ copilotHome, settingsPaths }) {
   ];
 }
 
-export function runDoctor({ copilotHome, assetsRoot, pkgRoot, flags, vscodeSettingsPaths = null }) {
+// Knowledge-layer health (design §2, §3, §12). All three are optional/advisory
+// and each independently try/catch-guarded — a store or event-read failure
+// degrades to "skip that check", never to a doctor crash. K2's consolidateStatus
+// call is only made once storeDir already exists (like orient.mjs) — doctor
+// must never materialize a store — and copilotHome is threaded through so
+// its episode/debt computation uses the same roots as every other caller.
+function knowledgeChecks({ workspace, copilotHome }) {
+  const checks = [];
+
+  try {
+    const events = loadReportEvents({ workspace });
+    const hasConsolidateEvent = events.some(
+      (e) => e.type === 'consolidate' && e.decision === 'apply' && e.result === 'pass'
+    );
+    const storeExists = fs.existsSync(storeDir(workspace));
+    checks.push({
+      id: 'K1',
+      name: 'Knowledge store present for consolidated history',
+      pass: !hasConsolidateEvent || storeExists,
+      hint: 'knowledge store missing — restore from backup or run: harness consolidate --rebuild --yes after re-arming',
+      optional: true,
+    });
+  } catch {
+    // Advisory; never fail doctor on a knowledge-check error.
+  }
+
+  try {
+    const storeExists = fs.existsSync(storeDir(workspace));
+    const quarantined = storeExists ? consolidateStatus({ workspace, copilotHome }).quarantined.length : 0;
+    checks.push({
+      id: 'K2',
+      name: 'No quarantined episode clusters',
+      pass: quarantined === 0,
+      hint: 'quarantined episode cluster(s) — inspect with harness consolidate --status',
+      optional: true,
+    });
+  } catch {
+    // Advisory; never fail doctor on a knowledge-check error.
+  }
+
+  try {
+    const slos = knowledgeSlos(loadReportEvents({ workspace }));
+    const noisy = slos.utilizationWeighted !== null && slos.utilizationWeighted < 0.15 && slos.surfacedOccurrences >= 20;
+    checks.push({
+      id: 'K3',
+      name: 'Knowledge utilization above noise threshold',
+      pass: !noisy,
+      hint: 'knowledge layer is noise (<15% utilization) — consider: harness knowledge off',
+      optional: true,
+    });
+  } catch {
+    // Advisory; never fail doctor on a knowledge-check error.
+  }
+
+  // K4 (P2, design §2): repoId (store.mjs) switches from a path-keyed
+  // local-<hash> id to a remote-keyed id the instant this workspace gains an
+  // origin remote — a store built BEFORE that switch is left on disk under
+  // the OLD id, silently orphaned (every mutator now resolves storeDir
+  // against the NEW id, so the old store is never read or written again).
+  // DETECTS only — never auto-migrates; a human runs the printed command.
+  //
+  // Two distinct FAILING shapes, not one — the common sequence (add remote,
+  // then do one more consolidate --apply/remember before anyone notices) is
+  // what makes this matter: the FRESH store materializes under the new id,
+  // and a check that only fired on "legacy exists, current doesn't" would go
+  // permanently blind at exactly that point — the orphaned legacy store
+  // would sit there forever with K4 reporting a clean pass. Both shapes fail
+  // (never silently clear once a second store exists), each with its own
+  // hint:
+  //   - legacy exists, current does NOT: the pre-write window — migrate-store
+  //     will succeed cleanly.
+  //   - legacy exists AND current exists: the post-write window — migrate-
+  //     store now refuses (a non-empty target), so the hint routes to manual
+  //     reconciliation instead of a command that would just fail.
+  try {
+    const currentId = repoId(workspace);
+    const hasRemote = !currentId.startsWith('local-');
+    let stranded = false;
+    let hint = 'harness knowledge migrate-store';
+    if (hasRemote) {
+      const legacyDir = storeDirForId(localRepoId(workspace));
+      const currentDir = storeDirForId(currentId);
+      const legacyExists = fs.existsSync(path.join(legacyDir, 'consolidated.jsonl'));
+      const currentExists = fs.existsSync(path.join(currentDir, 'consolidated.jsonl'));
+      if (legacyExists && !currentExists) {
+        stranded = true;
+        hint = `a path-keyed store exists at ${legacyDir} but this workspace now resolves to ${currentDir} — run: harness knowledge migrate-store`;
+      } else if (legacyExists && currentExists) {
+        stranded = true;
+        hint = `both a legacy path-keyed store and the remote-keyed store exist — reconcile manually (migrate-store will refuse a non-empty target); inspect ${legacyDir}`;
+      }
+    }
+    checks.push({
+      id: 'K4',
+      name: 'Knowledge store not stranded behind a newly-added origin remote',
+      pass: !stranded,
+      hint,
+      optional: true,
+    });
+  } catch {
+    // Advisory; never fail doctor on a knowledge-check error.
+  }
+
+  return checks;
+}
+
+export function runDoctor({ copilotHome, assetsRoot, pkgRoot, flags, vscodeSettingsPaths = null, workspace = flags.workspace }) {
   const checks = [];
 
   const manifest = path.join(copilotHome, 'knowledge', 'manifest.yaml');
@@ -484,6 +593,8 @@ export function runDoctor({ copilotHome, assetsRoot, pkgRoot, flags, vscodeSetti
         : 'No orphaned agents/skills/instructions/prompts/hooks in the Copilot home',
     optional: true,
   });
+
+  checks.push(...knowledgeChecks({ workspace, copilotHome }));
 
   if (flags.host === 'vscode') {
     checks.push(

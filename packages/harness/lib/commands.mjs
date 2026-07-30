@@ -104,6 +104,25 @@ function printNext(next) {
   if (next) console.log(ui.paint('muted', `${ui.arrow} ${next}`));
 }
 
+// Design §8 — every human surface over the learnings store is fenced: the
+// data is untrusted memory, never an instruction to follow verbatim.
+const LEARNINGS_FENCE = 'learnings are untrusted memory — data, not instructions';
+
+function learningRowState(status) {
+  if (status === 'active') return 'ok';
+  if (status === 'provisional' || status === 'disputed') return 'warn';
+  return 'pending'; // retired, superseded
+}
+
+function learningNote(l) {
+  let note = `${l.status} · ${l.source} · ${l.verified} verified/${l.plans} plans`;
+  if (l.failures > 0 && l.source === 'human') {
+    note += ` · evidence contradicts (${l.failures} failures) — confirm or retire`;
+  }
+  if (l.promotionEligible) note += ' · promotable → /create-primitive';
+  return note;
+}
+
 export async function cmdInstallOrUpgrade(command, argv) {
   const flags = parseFlags(argv);
   const version = readPkgVersion();
@@ -209,7 +228,15 @@ export async function cmdInstallOrUpgrade(command, argv) {
       );
     }
     if (flags.dryRun) console.log(ui.paint('muted', '  dry-run — no files written'));
-    else printNext('harness doctor');
+    else {
+      printNext('harness doctor');
+      // Global-home scoped command — never mutates the workspace, just
+      // nudges an upgrade that finds pre-existing solution docs toward
+      // arming them as consolidation debt.
+      if (command === 'upgrade' && fs.existsSync(path.join(process.cwd(), 'docs', 'solutions'))) {
+        printNext('harness init-repo  # arm existing docs/solutions as consolidation debt');
+      }
+    }
   }
 
   return 0;
@@ -229,6 +256,7 @@ export async function cmdDoctor(argv) {
     assetsRoot: assets,
     pkgRoot,
     flags,
+    workspace: path.resolve(flags.workspace),
   });
 
   const exitCode = pass ? EXIT.ok : EXIT.doctorFailed;
@@ -288,8 +316,9 @@ export async function cmdStatus(argv) {
 export async function cmdInitRepo(argv) {
   const flags = parseFlags(argv);
   const workspace = path.resolve(flags.workspace);
+  const copilotHome = resolveCopilotHome(flags.copilotHome);
   const logger = (m) => log(flags, m);
-  runInitRepo({ workspace, flags, log: logger });
+  runInitRepo({ workspace, flags, log: logger, copilotHome });
   writeEvent(workspace, flags, {
     type: 'init_repo',
     command: 'init-repo',
@@ -338,6 +367,55 @@ export async function cmdIndex(argv) {
     flags: { ...flags, headSha: head },
     log: logger,
   });
+  // Refresh the committed codebase map alongside the knowledge index.
+  try {
+    const { writeCodebaseMap } = await import('./repo-map/index.mjs');
+    const map = writeCodebaseMap({ workspace, dryRun: flags.dryRun });
+    if (map) {
+      result.codebaseMap = map;
+      logger(`wrote ${map.path} (~${map.tokens} tokens)`);
+    }
+  } catch {
+    // Advisory: never fail index on map generation.
+  }
+  // Recompute stale-anchor exclusions: anchors are file paths cited by a
+  // learning's evidence at write time; if one no longer exists on disk, the
+  // learning is excluded from retrieval until the anchor resolves again.
+  // Mechanical CLI state, not mode-gated — never on --status (returned
+  // above), never on dry-run, and never allowed to fail `index` itself.
+  // Store-read-only when no store exists yet: a non-creating storeDir lookup
+  // gates the pass so a plain `harness index` never materializes a knowledge
+  // store (and its git repo) under HARNESS_HOME for a workspace that has
+  // never run consolidate/remember.
+  if (!flags.dryRun) {
+    try {
+      const { storeDir, listLearnings, writeStaleExclusions } = await import('./knowledge/store.mjs');
+      const { assertNoSymlinkAncestors } = await import('./fs-safe.mjs');
+      const dir = storeDir(workspace);
+      if (fs.existsSync(dir)) {
+        const excluded = {};
+        for (const l of listLearnings(dir)) {
+          const anchors = l.fm.anchors || [];
+          if (!anchors.length) continue;
+          // An anchor is only ever a workspace-relative pointer written by
+          // extractAnchors (apply.mjs) — but learning files can be
+          // hand-edited, so an anchor carrying `..` (or an absolute path, or
+          // a symlinked ancestor) must be rejected BEFORE existsSync: an
+          // escaping anchor is unresolvable, treated as missing (stale),
+          // and the scan never stats anything outside the workspace.
+          const missing = anchors.filter((a) => {
+            const full = assertNoSymlinkAncestors(workspace, a);
+            return !full || !fs.existsSync(full);
+          });
+          if (missing.length) excluded[l.id] = missing;
+        }
+        writeStaleExclusions(dir, { excluded });
+        result.staleLearnings = Object.keys(excluded).length;
+      }
+    } catch {
+      // Advisory: never fail index because the knowledge store is unreadable.
+    }
+  }
   writeEvent(workspace, flags, {
     type: 'index',
     command: 'index',
@@ -348,12 +426,15 @@ export async function cmdIndex(argv) {
     emitJson(flags, result);
   } else {
     const empty = result.entries === 0;
+    const noteParts = [];
+    if (empty) noteParts.push('no solution docs under knowledge/solutions or docs/solutions yet');
+    if (result.staleLearnings) noteParts.push(`learnings excluded ${result.staleLearnings} (stale anchors)`);
     console.log(
       ui.line({
         state: 'ok',
         key: 'index',
         value: `${result.entries} entries · ${result.indexEntries ?? result.entries} postings`,
-        note: empty ? 'no solution docs under knowledge/solutions or docs/solutions yet' : undefined,
+        note: noteParts.length ? noteParts.join(' · ') : undefined,
         next: empty ? 'harness compound records the first learning' : undefined,
       })
     );
@@ -383,6 +464,11 @@ export async function cmdOrient(argv) {
     exitCode: 0,
     blockedReason: result.blockedReason,
     usage: usageFields({ input: query, output: orientPack }),
+    // Only the ids that actually SURVIVED into the 2KB pack (some/all bullets
+    // can be truncated away) — never the full ranked set — so SLO utilization
+    // credits only delivered learnings.
+    learnings: result.deliveredLearnings || (result.learnings || []).map((l) => l.id),
+    learningsBytes: result.learningsBytes,
   });
 
   if (flags.json) {
@@ -393,9 +479,18 @@ export async function cmdOrient(argv) {
         state: result.gateStatus === 'pass' ? 'ok' : 'warn',
         key: 'orient',
         value: result.contextPack,
-        note: `recall ${result.recall.length} · plans ${result.plans.length} · gate ${result.gateStatus}`,
+        note: `recall ${result.recall.length} · learnings ${result.learnings?.length ?? 0} · plans ${result.plans.length} · gate ${result.gateStatus}`,
       })
     );
+    if (result.explain) {
+      const qt = result.explain.queryTokens.length;
+      for (const c of result.explain.candidates) {
+        const decomposition = c.excluded
+          ? `excluded: ${c.excluded}`
+          : `hits ${c.hits}/${qt} × damping ${c.damping} = ${c.score}`;
+        console.log(ui.paint('muted', `  ${c.id} ${decomposition}`));
+      }
+    }
     if (result.blockedReason) {
       console.log(ui.line({ state: 'error', key: 'blocked', value: result.blockedReason }));
     }
@@ -486,6 +581,7 @@ export async function cmdVerify(argv) {
     checks: result.checks,
     blockedReason: result.outcome === 'passed' ? null : `${result.outcome} verification`,
     usage: usageFields({ input: result.plan || '', output: result.checks.map((c) => c.message).join('\n') }),
+    learnings: flags.learnings ? flags.learnings.split(',').map((s) => s.trim()).filter(Boolean) : undefined,
   });
 
   if (flags.json) emitJson(flags, result);
@@ -542,7 +638,8 @@ export async function cmdRecall(argv) {
       })
     );
     for (const r of result.recall) {
-      console.log(ui.line({ key: String(r.score), value: r.path, note: r.title, keyWidth: 6 }));
+      const label = r.kind === 'insight' ? ' [insight]' : '';
+      console.log(ui.line({ key: String(r.score), value: r.path, note: `${r.title}${label}`, keyWidth: 6 }));
     }
     for (const p of result.plans ?? []) {
       console.log(ui.line({ key: 'plan', value: p.path, note: p.status, keyWidth: 6 }));
@@ -713,7 +810,17 @@ export async function cmdCompound(argv) {
   if (flags.json) {
     emitJson(flags, result);
   } else {
-    if (result.pass) {
+    if (result.pass && result.kind === 'insight') {
+      console.log(
+        ui.line({
+          state: 'ok',
+          key: 'insight',
+          value: result.path,
+          note: `indexed ${result.indexed?.entries ?? 0} entries`,
+        })
+      );
+      printNext(result.nextTools?.[0]);
+    } else if (result.pass) {
       console.log(
         ui.line({
           state: result.exitCode === 2 ? 'warn' : 'ok',
@@ -729,8 +836,580 @@ export async function cmdCompound(argv) {
   return result.exitCode;
 }
 
+export async function cmdConsolidate(argv) {
+  const flags = parseFlags(argv);
+  const workspace = path.resolve(flags.workspace);
+  const copilotHome = resolveCopilotHome(flags.copilotHome);
+  const logger = (m) => log(flags, m);
+
+  if (argv.includes('--apply')) {
+    const { applyOps } = await import('./knowledge/apply.mjs');
+    if (!flags.ops) {
+      throw Object.assign(new Error('--apply requires --ops <path> (the skill-emitted operations JSON)'), {
+        code: 'E_USAGE',
+        hint: 'harness consolidate --apply --ops ops.json',
+        exit: EXIT.usage,
+      });
+    }
+    const result = applyOps({
+      workspace,
+      opsPath: path.resolve(flags.ops),
+      dryRun: flags.dryRun,
+      approve: flags.yes,
+      log: logger,
+      copilotHome,
+    });
+    writeEvent(workspace, flags, {
+      type: 'consolidate',
+      command: 'consolidate',
+      decision: 'apply',
+      result: result.exitCode === 0 ? 'pass' : 'fail',
+      exitCode: result.exitCode,
+      blockedReason: result.rejected?.[0]?.reason || null,
+    });
+    if (flags.json) {
+      emitJson(flags, result);
+    } else if (result.exitCode === 0) {
+      const noteParts = [];
+      if (result.committed) noteParts.push('committed to knowledge store');
+      if (result.governed?.length) noteParts.push(`${result.governed.length} re-governed`);
+      if (result.staleLockRemoved) noteParts.push(result.staleLockRemoved);
+      console.log(
+        ui.line({
+          state: 'ok',
+          key: 'apply',
+          value: result.applied.map((a) => `${a.op.toLowerCase()} ${a.id || ''}`.trim()).join(' · ') || 'no ops',
+          note: noteParts.length ? noteParts.join(' · ') : undefined,
+        })
+      );
+    } else {
+      console.log(
+        ui.line({
+          state: 'error',
+          key: 'apply',
+          value: `rejected · ${result.rejected?.[0]?.reason || 'invalid ops'}`,
+        })
+      );
+    }
+    return result.exitCode;
+  }
+
+  if (argv.includes('--candidates')) {
+    const { consolidateCandidates } = await import('./knowledge/consolidate.mjs');
+    const packet = consolidateCandidates({ workspace, copilotHome });
+    writeEvent(workspace, flags, { type: 'consolidate', command: 'consolidate', result: 'pass', exitCode: 0 });
+    if (flags.json) {
+      emitJson(flags, packet);
+    } else {
+      console.log(
+        ui.line({
+          state: 'ok',
+          key: 'candidates',
+          value: `${packet.clusters.length} clusters · ${packet.learnings.length} active learnings`,
+          note: 'JSON packet is the contract — use --json for the skill',
+        })
+      );
+      printNext('emit ops JSON, then harness consolidate --apply --ops <path>');
+    }
+    return 0;
+  }
+
+  if (argv.includes('--rebuild')) {
+    const { rebuildStore } = await import('./knowledge/admin.mjs');
+    const { CONSOLIDATION_THRESHOLD } = await import('./knowledge/consolidate.mjs');
+    const result = rebuildStore({ workspace, yes: flags.yes, copilotHome, log: logger });
+    writeEvent(workspace, flags, {
+      type: 'consolidate',
+      command: 'consolidate',
+      decision: 'rebuild',
+      result: result.pass ? 'pass' : 'fail',
+      exitCode: result.exitCode,
+    });
+    if (flags.json) {
+      emitJson(flags, result);
+    } else if (!result.pass) {
+      for (const l of ui.errorBlock({ code: 'E_USAGE', message: result.blockedReason, exit: result.exitCode })) {
+        console.error(l);
+      }
+    } else {
+      console.log(
+        ui.line({
+          state: 'warn',
+          key: 'rebuild',
+          value: `archived ${result.archived} · debt ${result.debt}/${CONSOLIDATION_THRESHOLD}`,
+        })
+      );
+      printNext(result.nextTools?.[0]);
+    }
+    return result.exitCode;
+  }
+
+  // Default: --status (deterministic debt gauge, zero model cost).
+  const { consolidateStatus } = await import('./knowledge/consolidate.mjs');
+  const status = consolidateStatus({ workspace, copilotHome });
+  writeEvent(workspace, flags, { type: 'consolidate', command: 'consolidate', result: 'pass', exitCode: 0 });
+  if (flags.json) {
+    emitJson(flags, status);
+  } else {
+    const atCapDomains = (status.domains || []).filter((d) => d.atCap).map((d) => d.domain);
+    console.log(
+      ui.line({
+        state: status.due ? 'warn' : 'ok',
+        key: 'consolidate',
+        value: `debt ${status.debt}/${status.threshold}`,
+        note: `${status.learnings.active} active learnings${status.promotionCandidates.length ? ` · ${status.promotionCandidates.length} promotion candidate${status.promotionCandidates.length === 1 ? '' : 's'}` : ''}${status.quarantined.length ? ` · ${status.quarantined.length} quarantined` : ''}${atCapDomains.length ? ` · ${atCapDomains.join(', ')} at cap` : ''}`,
+      })
+    );
+    printNext(status.nextTools?.[0]);
+  }
+  return 0;
+}
+
+export async function cmdRemember(argv) {
+  const { runRemember } = await import('./knowledge/remember.mjs');
+  const flags = parseFlags(argv);
+  const workspace = path.resolve(flags.workspace);
+  const copilotHome = resolveCopilotHome(flags.copilotHome);
+  const logger = (m) => log(flags, m);
+  const result = runRemember({ workspace, copilotHome, flags, argv, log: logger });
+  writeEvent(workspace, flags, {
+    type: 'remember',
+    command: 'remember',
+    result: result.pass ? 'pass' : 'fail',
+    exitCode: result.exitCode,
+    blockedReason: result.blockedReason,
+  });
+
+  if (flags.json) {
+    emitJson(flags, result);
+  } else if (result.pass) {
+    console.log(
+      ui.line({
+        state: 'ok',
+        key: 'remember',
+        value: result.learningId,
+        note: result.dryRun
+          ? `dry-run — nothing written (would-be episode ${result.episodePath})`
+          : `source: human · episode ${result.episodePath}`,
+      })
+    );
+    printNext(result.nextTools?.[0]);
+  } else if (result.exitCode === EXIT.usage) {
+    for (const l of ui.errorBlock({
+      code: 'E_USAGE',
+      message: result.blockedReason,
+      fix: result.nextTools?.[0],
+      exit: EXIT.usage,
+    })) {
+      console.error(l);
+    }
+  } else {
+    console.log(ui.line({ state: 'error', key: 'remember', value: `blocked · ${result.blockedReason}` }));
+    printNext(result.nextTools?.[0]);
+  }
+  return result.exitCode;
+}
+
+export async function cmdLearning(argv) {
+  const { setLearningStatus } = await import('./knowledge/lifecycle.mjs');
+  const flags = parseFlags(argv);
+  const workspace = path.resolve(flags.workspace);
+  const action = argv[0] && !argv[0].startsWith('--') ? argv[0] : null;
+  const id = argv[1] && !argv[1].startsWith('--') ? argv[1] : null;
+  const logger = (m) => log(flags, m);
+  const result = setLearningStatus({ workspace, id, action, reason: flags.reason, to: flags.to, log: logger });
+  writeEvent(workspace, flags, {
+    type: 'learning',
+    command: 'learning',
+    decision: action,
+    result: result.pass ? 'pass' : 'fail',
+    exitCode: result.exitCode,
+    blockedReason: result.blockedReason,
+  });
+
+  if (flags.json) {
+    emitJson(flags, result);
+  } else if (result.pass) {
+    const value = action === 'promote' ? `${id} → promoted (${flags.to})` : `${id} → ${result.status}`;
+    console.log(ui.line({ state: action === 'retire' ? 'warn' : 'ok', key: 'learning', value }));
+  } else if (result.exitCode === EXIT.usage) {
+    for (const l of ui.errorBlock({
+      code: 'E_USAGE',
+      message: result.blockedReason,
+      fix: 'harness learning <retire|dispute|confirm|promote> <id> [--reason "<r>"] [--to <path>]',
+      exit: EXIT.usage,
+    })) {
+      console.error(l);
+    }
+  } else {
+    for (const l of ui.errorBlock({
+      code: 'E_TARGET',
+      message: result.blockedReason,
+      exit: result.exitCode,
+    })) {
+      console.error(l);
+    }
+  }
+  return result.exitCode;
+}
+
+// Read-only: paged listing of learnings with provenance and failure
+// annotations, plus single-learning provenance via --why. Matches the
+// recall/report convention — no writeEvent call.
+export async function cmdLearnings(argv) {
+  const { listingView, whyView } = await import('./knowledge/listing.mjs');
+  const flags = parseFlags(argv);
+  const workspace = path.resolve(flags.workspace);
+  const copilotHome = resolveCopilotHome(flags.copilotHome);
+
+  // A trailing bare --why (no id following it) must never silently fall
+  // through to the full listing below — parseFlags leaves flags.why unset
+  // when there's no next token to consume.
+  if (argv.includes('--why') && !flags.why) {
+    const blockedReason = 'usage: harness learnings --why <id>';
+    if (flags.json) {
+      emitJson(flags, { pass: false, blockedReason });
+    } else {
+      for (const l of ui.errorBlock({ code: 'E_USAGE', message: blockedReason, exit: EXIT.usage })) {
+        console.error(l);
+      }
+    }
+    return EXIT.usage;
+  }
+
+  if (flags.why) {
+    const result = whyView({ workspace, id: flags.why });
+    if (!result) {
+      const blockedReason = `E_TARGET: no learning ${flags.why}`;
+      if (flags.json) {
+        emitJson(flags, { pass: false, id: flags.why, blockedReason });
+      } else {
+        for (const l of ui.errorBlock({ code: 'E_TARGET', message: `no learning ${flags.why}`, exit: 1 })) {
+          console.error(l);
+        }
+      }
+      return 1;
+    }
+
+    if (flags.json) {
+      emitJson(flags, result);
+      return 0;
+    }
+
+    console.log(ui.paint('muted', LEARNINGS_FENCE));
+    const keyWidth = keyWidthFor(['id', 'trigger', 'claim', 'status']);
+    console.log(ui.line({ key: 'id', value: result.id, keyWidth }));
+    console.log(ui.line({ key: 'trigger', value: result.trigger, keyWidth }));
+    console.log(ui.line({ key: 'claim', value: result.claimLine, keyWidth }));
+    for (const ep of result.episodes) {
+      console.log(ui.paint('muted', `    · ${ep.kind} · ${ep.path}${ep.plan ? ` · ${ep.plan}` : ''}`));
+    }
+    console.log(
+      ui.line({
+        key: 'status',
+        // Same note idiom as the listing view — carries failures/promotionEligible too.
+        value: learningNote(result),
+        keyWidth,
+      })
+    );
+    return 0;
+  }
+
+  const domain = argv[0] && !argv[0].startsWith('--') ? argv[0] : null;
+  const result = listingView({ workspace, copilotHome, domain });
+
+  if (flags.json) {
+    emitJson(flags, result);
+    return 0;
+  }
+
+  console.log(ui.paint('muted', LEARNINGS_FENCE));
+  const rows = result.learnings.filter((l) => flags.verbose || !['retired', 'superseded'].includes(l.status));
+  const keyWidth = keyWidthFor(rows.map((l) => l.id));
+  for (const l of rows) {
+    console.log(
+      ui.line({ state: learningRowState(l.status), key: l.id, value: l.trigger, note: learningNote(l), keyWidth })
+    );
+  }
+  if (result.quarantined.length > 0) {
+    console.log(
+      ui.paint(
+        'muted',
+        `${result.quarantined.length} quarantined episode(s) — inspect with harness consolidate --status, clear with knowledge purge <path>`
+      )
+    );
+  }
+  return 0;
+}
+
+// Deterministic retrieval PROXY, not the model-graded net-benefit number
+// (design §12, deferred) — hit/false-surface/token cost per ranking arm on a
+// temporally held-out split. Read-only: never creates the store (recall/report
+// convention — no writeEvent call).
+export async function cmdEvalKnowledge(argv) {
+  const { evalKnowledge, DEFAULT_NEGATIVE_QUERIES } = await import('./knowledge/eval.mjs');
+  const flags = parseFlags(argv);
+  const workspace = path.resolve(flags.workspace);
+  const copilotHome = resolveCopilotHome(flags.copilotHome);
+  const result = evalKnowledge({ workspace, copilotHome, negativeQueries: DEFAULT_NEGATIVE_QUERIES });
+
+  if (flags.json) {
+    emitJson(flags, result);
+    return result.exitCode;
+  }
+
+  if (!result.pass) {
+    for (const l of ui.errorBlock({ code: 'E_TARGET', message: result.blockedReason, exit: result.exitCode })) {
+      console.error(l);
+    }
+    return result.exitCode;
+  }
+
+  const armKeys = Object.keys(result.arms);
+  const keyWidth = keyWidthFor(['eval-knowledge', ...armKeys, 'recommendation']);
+  console.log(
+    ui.line({
+      state: 'ok',
+      key: 'eval-knowledge',
+      value: `${result.split.train} train · ${result.split.heldOut} held-out · cutoff ${result.split.cutoff}`,
+      note: result.split.unscorable ? `${result.split.unscorable} held-out unscorable` : undefined,
+      keyWidth,
+    })
+  );
+  for (const arm of armKeys) {
+    const stats = result.arms[arm];
+    console.log(
+      ui.line({
+        key: arm,
+        value: `hit ${Math.round(stats.hitRate * 100)}% · false ${Math.round(stats.falseSurfaceRate * 100)}% · ~${stats.injectedTokens} tok`,
+        keyWidth,
+      })
+    );
+  }
+  console.log(ui.line({ key: 'recommendation', value: result.recommendation, keyWidth }));
+  console.log(
+    ui.paint(
+      'muted',
+      '  deterministic retrieval proxy — hit/false-surface/token cost per arm; model-graded net-benefit is deferred, not measured here'
+    )
+  );
+  return 0;
+}
+
+// The kill switch and purge cascade. Mode-switching and --status read/write
+// store.mjs's config.json directly; purge is never mode-gated — human
+// deletion always wins — and delegates to knowledge/admin.mjs.
+export async function cmdKnowledge(argv) {
+  const flags = parseFlags(argv);
+  const workspace = path.resolve(flags.workspace);
+  const copilotHome = resolveCopilotHome(flags.copilotHome);
+  const subcommand = argv[0] && !argv[0].startsWith('--') ? argv[0] : null;
+  // Single definition (store.mjs) — commands.mjs no longer keeps its own copy.
+  const { KNOWLEDGE_MODES, KNOWLEDGE_COMMIT_MODES, writeStoreConfig, readStoreConfig } = await import('./knowledge/store.mjs');
+
+  if (subcommand === 'purge') {
+    const { purgeEpisode, purgeAll } = await import('./knowledge/admin.mjs');
+    const rawTarget = argv[1];
+    const isAll = rawTarget === '--all';
+    // A missing target must never fall through to the next global flag
+    // (e.g. `harness knowledge purge --workspace <dir>`) — anything shaped
+    // like an option is treated as absent, not as a filename.
+    const target = !isAll && rawTarget && !rawTarget.startsWith('--') ? rawTarget : null;
+    const logger = (m) => log(flags, m);
+    // copilotHome threaded through (P2) so a global episode (resolved under
+    // copilotHome/knowledge, the same root `collectEpisodes` scans) can be
+    // purged exactly as readily as a product-repo-local one.
+    const result = isAll ? purgeAll({ workspace, log: logger }) : purgeEpisode({ workspace, target, copilotHome, log: logger });
+    writeEvent(workspace, flags, {
+      type: 'knowledge',
+      command: 'knowledge',
+      decision: 'purge',
+      result: result.pass ? 'pass' : 'fail',
+      exitCode: result.exitCode,
+      blockedReason: result.blockedReason,
+    });
+    if (flags.json) {
+      emitJson(flags, result);
+    } else if (!result.pass) {
+      for (const l of ui.errorBlock({ code: 'E_USAGE', message: result.blockedReason, exit: result.exitCode })) {
+        console.error(l);
+      }
+    } else if (isAll) {
+      console.log(
+        ui.line({
+          state: 'warn',
+          key: 'purge',
+          value: `--all · ${result.removed.learnings} learning${result.removed.learnings === 1 ? '' : 's'} removed`,
+          note: 'episodes remain on disk — they will re-appear as debt',
+        })
+      );
+    } else {
+      console.log(
+        ui.line({
+          state: 'warn',
+          key: 'purge',
+          value: target,
+          note: `${result.removed.learnings.length} learning(s) deleted · ${result.removed.links.length} link(s) unlinked`,
+        })
+      );
+    }
+    return result.exitCode;
+  }
+
+  // Explicit, human-run migration for a stranded store (P2, design §2) —
+  // never automatic; `harness doctor`'s K4 check only detects and prints
+  // this exact command. Checked before the mode-set branch below for the
+  // same reason `purge` is: 'migrate-store' is never a member of
+  // KNOWLEDGE_MODES, so there's no ambiguity either way, but keeping every
+  // non-mode subcommand branch together above the mode-set branch matches
+  // the existing purge → commit → mode-set → bare status → E_USAGE order.
+  if (subcommand === 'migrate-store') {
+    const { migrateStrandedStore } = await import('./knowledge/admin.mjs');
+    const logger = (m) => log(flags, m);
+    const result = migrateStrandedStore({ workspace, log: logger });
+    writeEvent(workspace, flags, {
+      type: 'knowledge',
+      command: 'knowledge',
+      decision: 'migrate-store',
+      result: result.pass ? 'pass' : 'fail',
+      exitCode: result.exitCode,
+      blockedReason: result.blockedReason,
+    });
+    if (flags.json) {
+      emitJson(flags, result);
+    } else if (!result.pass) {
+      for (const l of ui.errorBlock({ code: 'E_USAGE', message: result.blockedReason, exit: result.exitCode })) {
+        console.error(l);
+      }
+    } else {
+      console.log(ui.line({ state: 'ok', key: 'migrate-store', value: `${result.from} -> ${result.to}` }));
+    }
+    return result.exitCode;
+  }
+
+  // commit <none|repo> is checked BEFORE the mode-set branch below — 'commit'
+  // itself is never a member of KNOWLEDGE_MODES, so there's no ambiguity, but
+  // ordering matches the brief's explicit branch order (purge → commit →
+  // mode-set → bare status → E_USAGE).
+  if (subcommand === 'commit') {
+    const commitValue = argv[1];
+    if (!KNOWLEDGE_COMMIT_MODES.has(commitValue)) {
+      writeEvent(workspace, flags, {
+        type: 'knowledge',
+        command: 'knowledge',
+        decision: 'commit',
+        result: 'fail',
+        exitCode: EXIT.usage,
+      });
+      for (const l of ui.errorBlock({
+        code: 'E_USAGE',
+        message: `unknown commit mode: ${commitValue || '(none)'}`,
+        fix: 'harness knowledge commit <none|repo>',
+        exit: EXIT.usage,
+      })) {
+        console.error(l);
+      }
+      return EXIT.usage;
+    }
+    const commitResult = writeStoreConfig(workspace, { commit: commitValue });
+    writeEvent(workspace, flags, {
+      type: 'knowledge',
+      command: 'knowledge',
+      decision: `commit ${commitValue}`,
+      result: commitResult.pass ? 'pass' : 'fail',
+      exitCode: commitResult.pass ? 0 : 1,
+      blockedReason: commitResult.blockedReason,
+    });
+    if (!commitResult.pass) {
+      if (flags.json) {
+        emitJson(flags, commitResult);
+      } else {
+        for (const l of ui.errorBlock({ code: commitResult.code || 'E_USAGE', message: commitResult.blockedReason, exit: 1 })) {
+          console.error(l);
+        }
+      }
+      return 1;
+    }
+    if (flags.json) {
+      emitJson(flags, { pass: true, commit: commitValue });
+    } else {
+      console.log(
+        ui.line({ state: commitValue === 'repo' ? 'ok' : 'warn', key: 'knowledge', value: `commit ${commitValue}` })
+      );
+    }
+    return 0;
+  }
+
+  if (subcommand && KNOWLEDGE_MODES.has(subcommand)) {
+    const modeResult = writeStoreConfig(workspace, { mode: subcommand });
+    writeEvent(workspace, flags, {
+      type: 'knowledge',
+      command: 'knowledge',
+      decision: subcommand,
+      result: modeResult.pass ? 'pass' : 'fail',
+      exitCode: modeResult.pass ? 0 : 1,
+      blockedReason: modeResult.blockedReason,
+    });
+    if (!modeResult.pass) {
+      if (flags.json) {
+        emitJson(flags, modeResult);
+      } else {
+        for (const l of ui.errorBlock({ code: modeResult.code || 'E_USAGE', message: modeResult.blockedReason, exit: 1 })) {
+          console.error(l);
+        }
+      }
+      return 1;
+    }
+    if (flags.json) {
+      emitJson(flags, { pass: true, mode: subcommand });
+    } else {
+      console.log(
+        ui.line({ state: subcommand === 'on' ? 'ok' : 'warn', key: 'knowledge', value: `mode ${subcommand}` })
+      );
+    }
+    return 0;
+  }
+
+  if (!subcommand) {
+    const { mode, commit } = readStoreConfig(workspace);
+    writeEvent(workspace, flags, {
+      type: 'knowledge',
+      command: 'knowledge',
+      decision: 'status',
+      result: 'pass',
+      exitCode: 0,
+    });
+    if (flags.json) {
+      emitJson(flags, { mode, commit });
+    } else {
+      console.log(
+        ui.line({ state: mode === 'on' ? 'ok' : 'warn', key: 'knowledge', value: `mode ${mode} · commit ${commit}` })
+      );
+    }
+    return 0;
+  }
+
+  writeEvent(workspace, flags, {
+    type: 'knowledge',
+    command: 'knowledge',
+    decision: subcommand,
+    result: 'fail',
+    exitCode: EXIT.usage,
+  });
+  for (const l of ui.errorBlock({
+    code: 'E_USAGE',
+    message: `unknown knowledge mode: ${subcommand}`,
+    fix: 'harness knowledge <on|suggest|off|freeze|capture-only> | --status | purge <file|--all> | commit <none|repo> | migrate-store',
+    exit: EXIT.usage,
+  })) {
+    console.error(l);
+  }
+  return EXIT.usage;
+}
+
 export async function cmdGet(argv) {
   const { runGet } = await import('./get-cmd.mjs');
+  const { inertLine } = await import('./knowledge/store.mjs');
   const flags = parseFlags(argv);
   const workspace = path.resolve(flags.workspace);
   const copilotHome = resolveCopilotHome(flags.copilotHome);
@@ -740,7 +1419,14 @@ export async function cmdGet(argv) {
     emitJson(flags, result);
   } else {
     console.log(ui.line({ key: 'get', value: result.docid || result.path, keyWidth: 3 }));
-    console.log(result.excerpt);
+    // inertLine, applied PER LINE (minor #4, adversarial review): a raw file
+    // excerpt is printed straight to the terminal, so an embedded ANSI
+    // escape (ESC, 0x1B) or other control char could manipulate the
+    // terminal itself — inertLine collapses those to a space. Split/rejoin
+    // on '\n' first so the excerpt's genuine multi-line formatting (up to
+    // 40 real lines) survives; only PLAIN JSON output (emitJson above) ever
+    // needs the raw, un-scrubbed excerpt.
+    console.log(result.excerpt.split('\n').map(inertLine).join('\n'));
   }
   return 0;
 }

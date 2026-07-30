@@ -109,19 +109,20 @@ Policy `exemptions` and `waivers` are arrays. Exemptions describe approved path 
 
 ## Memory and retrieval
 
-The harness separates durable knowledge from bounded working context:
+The harness separates durable knowledge from bounded working context. The canonical model — episodic (T1), semantic (T2), and behavioral (T3) tiers, single-writer ownership per tier, the governance ledger, and the full threat model — lives in [Memory Model](../MEMORY-MODEL.md); this section covers only what the runtime loop touches.
 
 | Tier | Source | Use |
 |---|---|---|
 | Product memory | Active `docs/plans/`, optional `docs/solutions/`, and product context | Current goal, decisions, scope, and repo-private learning |
 | Team memory | Hydrated `knowledge/solutions/` plus `manifest.yaml` | Verified patterns reusable across repositories |
+| Consolidated learnings | `~/.harness/knowledge/<repo-id>/` — local, never-pushed learnings store; `consolidate --apply` is its sole content writer, with a governance ledger recording human retire/dispute/confirm/promote decisions | Condensed, one-claim-per-file knowledge injected into orient |
 | User memory | Optional `~/.copilot/knowledge/profile.md` | Small preference and autonomy profile |
 
-`harness orient` combines plan matching and recall into `.harness/context-pack.md`, capped at 2 KB. The Engineer reads only the bounded pack and retrieves full source excerpts on demand. The detailed lookup and write order is owned by [Knowledge Locations](../../.github/skills/references/knowledge-locations.md).
+`harness orient` combines plan matching and recall into `.harness/context-pack.md`, capped at 2 KB, including the top-3 trigger-matched learnings from the T2 store. The Engineer reads only the bounded pack and retrieves full source excerpts on demand. The detailed lookup and write order is owned by [Knowledge Locations](../../.github/skills/references/knowledge-locations.md).
 
 Current retrieval uses a pure-JavaScript BM25 index under `.harness-index/`, with manifest token overlap as fallback. The index is derived and can always be rebuilt with `harness index`. Direct repository search remains the fallback when no index is available. Semantic embeddings are deliberately deferred; adopt them only when measured recall misses justify the added dependency and operational cost.
 
-Compounding happens only after passed verification. `/auto-compound` classifies whether the result belongs in the active plan, a solution document, a convention, or a promotion candidate; `/compound-learnings` and `harness index` persist accepted learning.
+Compounding happens only after passed verification. `/auto-compound` classifies whether the result belongs in the active plan, a solution document, a convention, or a promotion candidate; `/compound-learnings` persists an episode, `/consolidate` clusters episodes into the T2 learnings store, and `harness index` rebuilds the retrieval manifest.
 
 ## Gap classification and bounded delegation
 
@@ -216,6 +217,7 @@ The verification suite checks the thin Engineer contract, plan and policy schema
 ## Related sources
 
 - [Skill-Driven Prompt Library Standard](./skill-driven-prompt-library.md)
+- [Memory Model](../MEMORY-MODEL.md)
 - [Harness Tool Contract](../../.github/skills/references/harness-tool-contract.md)
 - [Knowledge Locations](../../.github/skills/references/knowledge-locations.md)
 - [Capability Registry](../../knowledge/capability-registry.yaml)

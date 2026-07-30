@@ -3,6 +3,7 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { ensureHarnessDir } from './session.mjs';
 import { collectChangedFiles } from './plan-scope.mjs';
+import { assertNoSymlinkAncestors } from './fs-safe.mjs';
 
 const EVIDENCE_VERSION = 2;
 
@@ -95,6 +96,17 @@ function containedPath(workspace, rel) {
   const relative = path.relative(root, full);
   if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) {
     throw new Error(`Evidence path escapes workspace: ${rel}`);
+  }
+  // Physical containment for every ANCESTOR directory (adversarial-review
+  // sweep) — deliberately NOT the leaf itself: workspaceDigest below already
+  // has an intentional, correct answer for a symlinked LEAF (hash its link
+  // target, never dereference it — see the isSymbolicLink() branch), so
+  // rejecting the leaf here would fight that existing behavior. A symlinked
+  // ANCESTOR directory is the actual gap: it would let the read below
+  // resolve outside the workspace despite passing the lexical check above.
+  const parentRel = path.dirname(relative);
+  if (parentRel !== '.' && !assertNoSymlinkAncestors(root, parentRel)) {
+    throw new Error(`Evidence path resolves through a symlinked ancestor: ${rel}`);
   }
   return full;
 }
