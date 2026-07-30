@@ -1,6 +1,6 @@
 ---
 name: consolidate
-description: Internal knowledge consolidation loop. Converts unconsolidated learning episodes into ADD/STRENGTHEN/SUPERSEDE/MERGE/NOOP ops and applies them through the sole learnings-store writer. Use when a debt drain is due (session-start or session-end hint from consolidate --status); not for direct episode capture or manual learning edits.
+description: Internal knowledge consolidation loop. Clusters learning episodes into an ops JSON; consolidate --apply is the learnings store's sole content writer. Use when a debt drain is due; not episode capture or manual edits.
 user-invocable: false
 ---
 
@@ -51,7 +51,7 @@ For each cluster choose exactly one op: `ADD | STRENGTHEN | SUPERSEDE | MERGE | 
 
 ### 3. Write the ops file
 
-Write `{ "schema": 1, "ops": [...] }` to `.harness/consolidate-ops.json`. This skill writes **nothing else** — `harness consolidate --apply` is the sole writer of the learnings store. Every `episodes[]` entry must copy `path`, `sha256`, and `kind` verbatim from the step 1 packet (`sha256` is the raw 64-hex digest, not re-derived; `kind` may be `fix`, `insight`, or `human-teaching` — never normalize a `human-teaching` episode to `fix`, since apply re-verifies it against the episode file's own frontmatter to grant `source: human`). Field names below match `apply.mjs` exactly — a misnamed field fails closed with `E_SCHEMA`, not a silent default.
+Write `{ "schema": 1, "ops": [...] }` to `.harness/consolidate-ops.json`. This skill writes **nothing else** — `harness consolidate --apply` is the sole writer of learning content; other store mutations (status, records, resets) go through the same locked store transaction. Every `episodes[]` entry must copy `path`, `sha256`, and `kind` verbatim from the step 1 packet (`sha256` is the raw 64-hex digest, not re-derived; `kind` may be `fix`, `insight`, or `human-teaching` — never normalize a `human-teaching` episode to `fix`, since apply re-verifies it against the episode file's own frontmatter to grant `source: human`). Field names below match `apply.mjs` exactly — a misnamed field fails closed with `E_SCHEMA`, not a silent default.
 
 ```json
 {
