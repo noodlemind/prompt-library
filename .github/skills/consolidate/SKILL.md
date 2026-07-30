@@ -38,6 +38,8 @@ harness consolidate --candidates --json
 
 Read the packet: episode `clusters`, every active learning's `id`/`trigger` (full `body` included while the corpus is small, per the returned `contract`), `domains` — each domain's active count against the `contract.domainCap` (25) — and `governed` — ids a human already retired/disputed/promoted. Do not paste the raw JSON into chat.
 
+Large accumulated debt can exceed the packet's episode budget. When it does, the packet carries `truncated: true` and `remaining: <N>` — process the clusters present exactly as normal; do not treat `truncated` as an error or wait for a complete set. Episodes are ordered deterministically (category, then date, then path), so once this batch is consolidated (its clusters get an `ADD`/`STRENGTHEN`/`SUPERSEDE`/`MERGE`/`NOOP` op applied), the next `--candidates` call naturally advances to the next slice — no separate cursor to track or pass. Drain iteratively: run `--candidates` again after applying, and repeat until a packet comes back without `truncated`.
+
 ### 2. Decide per cluster
 
 For each cluster choose exactly one op: `ADD | STRENGTHEN | SUPERSEDE | MERGE | NOOP`.

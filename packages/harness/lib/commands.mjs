@@ -1243,6 +1243,37 @@ export async function cmdKnowledge(argv) {
     return result.exitCode;
   }
 
+  // Explicit, human-run migration for a stranded store (P2, design §2) —
+  // never automatic; `harness doctor`'s K4 check only detects and prints
+  // this exact command. Checked before the mode-set branch below for the
+  // same reason `purge` is: 'migrate-store' is never a member of
+  // KNOWLEDGE_MODES, so there's no ambiguity either way, but keeping every
+  // non-mode subcommand branch together above the mode-set branch matches
+  // the existing purge → commit → mode-set → bare status → E_USAGE order.
+  if (subcommand === 'migrate-store') {
+    const { migrateStrandedStore } = await import('./knowledge/admin.mjs');
+    const logger = (m) => log(flags, m);
+    const result = migrateStrandedStore({ workspace, log: logger });
+    writeEvent(workspace, flags, {
+      type: 'knowledge',
+      command: 'knowledge',
+      decision: 'migrate-store',
+      result: result.pass ? 'pass' : 'fail',
+      exitCode: result.exitCode,
+      blockedReason: result.blockedReason,
+    });
+    if (flags.json) {
+      emitJson(flags, result);
+    } else if (!result.pass) {
+      for (const l of ui.errorBlock({ code: 'E_USAGE', message: result.blockedReason, exit: result.exitCode })) {
+        console.error(l);
+      }
+    } else {
+      console.log(ui.line({ state: 'ok', key: 'migrate-store', value: `${result.from} -> ${result.to}` }));
+    }
+    return result.exitCode;
+  }
+
   // commit <none|repo> is checked BEFORE the mode-set branch below — 'commit'
   // itself is never a member of KNOWLEDGE_MODES, so there's no ambiguity, but
   // ordering matches the brief's explicit branch order (purge → commit →
@@ -1355,7 +1386,7 @@ export async function cmdKnowledge(argv) {
   for (const l of ui.errorBlock({
     code: 'E_USAGE',
     message: `unknown knowledge mode: ${subcommand}`,
-    fix: 'harness knowledge <on|suggest|off|freeze|capture-only> | --status | purge <file|--all> | commit <none|repo>',
+    fix: 'harness knowledge <on|suggest|off|freeze|capture-only> | --status | purge <file|--all> | commit <none|repo> | migrate-store',
     exit: EXIT.usage,
   })) {
     console.error(l);

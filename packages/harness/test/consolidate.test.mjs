@@ -27,6 +27,20 @@ function writeEpisode(ws, category, name, kind) {
   return { rel: `docs/solutions/${category}/${name}.md`, sha256: crypto.createHash('sha256').update(text).digest('hex') };
 }
 
+// A large-excerpt episode: excerpt() (consolidate.mjs) collapses whitespace
+// and slices to 240 chars, so a long filler body reliably produces a
+// near-240-char excerpt regardless of exact wording — used to make the
+// candidates packet's per-episode JSON size predictable enough to exceed
+// CANDIDATE_EPISODE_BUDGET_BYTES with a known episode count.
+function writeBigEpisode(ws, category, name) {
+  const dir = path.join(ws, 'docs', 'solutions', category);
+  fs.mkdirSync(dir, { recursive: true });
+  const filler = 'x'.repeat(300);
+  const text = `---\ntitle: "${name} lesson"\ndate: 2026-07-01\n---\n\n## Problem\n\n${name} details. ${filler}\n`;
+  fs.writeFileSync(path.join(dir, `${name}.md`), text);
+  return { rel: `docs/solutions/${category}/${name}.md`, sha256: crypto.createHash('sha256').update(text).digest('hex') };
+}
+
 function seedWorkspace() {
   const ws = tempDir('consol-ws-');
   const episodes = [];
@@ -121,6 +135,58 @@ test('a human-teaching episode appears in --candidates --json with kind: human-t
   const teaching = allEpisodes.find((e) => e.path.endsWith('hand-taught-0.md'));
   assert.ok(teaching, 'the teaching episode is present in the candidates packet');
   assert.equal(teaching.kind, 'human-teaching');
+});
+
+// P2: the candidates packet's episode section was unbounded — every
+// unconsolidated episode landed in one packet regardless of accumulated
+// debt. 90 large-excerpt episodes comfortably exceed the packet's byte
+// budget, so the packet must stop short, report `truncated`/`remaining`, and
+// — since inclusion is decided by a deterministic (category, date, path)
+// sort, not filesystem enumeration order — return the identical included
+// set, in the identical order, on a second call against the same unchanged
+// debt.
+test('consolidate --candidates bounds the episode packet, reports truncated/remaining, and orders deterministically across runs', () => {
+  const ws = tempDir('consol6-ws-');
+  const home = tempDir('consol6-h-');
+  const harnessHome = tempDir('consol6-hh-');
+  const N = 90;
+  for (let i = 0; i < N; i++) writeBigEpisode(ws, 'perf', `big-${String(i).padStart(3, '0')}`);
+
+  const runOnce = () =>
+    JSON.parse(
+      run(['consolidate', '--candidates', '--workspace', ws, '--copilot-home', home, '--json'], {
+        HARNESS_HOME: harnessHome,
+      }).stdout
+    );
+
+  const out1 = runOnce();
+  const paths1 = out1.clusters.flatMap((c) => c.episodes).map((e) => e.path);
+  assert.ok(paths1.length < N, 'the packet must not include every episode once the byte budget is exceeded');
+  assert.equal(out1.truncated, true);
+  assert.equal(out1.remaining, N - paths1.length);
+  assert.ok(out1.remaining > 0);
+
+  const out2 = runOnce();
+  const paths2 = out2.clusters.flatMap((c) => c.episodes).map((e) => e.path);
+  assert.deepEqual(paths2, paths1, 'a repeat call against unchanged debt must include the same episodes in the same order');
+
+  // Single category here, so (category, date, path) ordering reduces to path
+  // order — pins that inclusion order is the sort, not incidental
+  // filesystem enumeration order.
+  assert.deepEqual(paths1, [...paths1].sort());
+});
+
+test('consolidate --candidates omits truncated/remaining entirely when the packet is under budget', () => {
+  const { ws } = seedWorkspace();
+  const home = tempDir('consol7-h-');
+  const harnessHome = tempDir('consol7-hh-');
+  const out = JSON.parse(
+    run(['consolidate', '--candidates', '--workspace', ws, '--copilot-home', home, '--json'], {
+      HARNESS_HOME: harnessHome,
+    }).stdout
+  );
+  assert.equal('truncated' in out, false);
+  assert.equal('remaining' in out, false);
 });
 
 // No-regression pin (Task 3): verifiedAndPlans counts fix-kind links only —

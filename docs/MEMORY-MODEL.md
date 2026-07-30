@@ -25,6 +25,21 @@ human authority durable across it. T2 is `f(T1, model, governance ledger)`, neve
 `f(T1, model)` in isolation; see [Governance ledger](#governance-ledger) below for the
 reapplication mechanics.
 
+### Store identity and stranded stores
+
+`<repo-id>` (`repoId`, `store.mjs`) is derived from the workspace's origin remote when one is
+configured, falling back to a stable path-keyed `local-<hash>` id (`localRepoId`) only when
+there isn't one. This means a workspace's store identity can **change**: a repo cloned or
+initialized without a remote accumulates a T2 store under its path-keyed id, and the moment
+someone adds an `origin` remote, every subsequent read/write resolves against the new
+remote-keyed id instead — the old path-keyed store is left exactly where it was, on disk,
+but nothing ever looks there again (P2, design §2). `harness doctor`'s **K4** check detects
+this stranded-store condition (a legacy path-keyed store exists, nothing exists yet under
+the current id) and prints the exact fix; it never migrates anything on its own.
+`harness knowledge migrate-store` is the explicit, human-run remedy: a single, atomic
+directory rename from the legacy id to the current id, refusing outright (collision-safe)
+when a store already exists non-empty at the destination.
+
 ## Trust gradient
 
 Episodes are never transmitted by the harness — repo-private `docs/solutions/` travels
@@ -200,6 +215,15 @@ model lane still requires a human already having written a genuine `kind: human-
 episode to disk, through `harness remember` or a hand-edit absorption — the same
 anti-fabrication discipline as the insight lane's checks.
 
+Promoted is terminal, not just for the write path above: `harness learning retire|dispute|
+confirm` (`lifecycle.mjs`) also reject unconditionally against a `promoted_to` learning,
+before any of the three mutates its frontmatter or appends a governance entry. Without this,
+a `confirm` on a promoted learning would append a NEWER governance entry than the standing
+`promote` record, and `readGovernance`'s latest-entry-per-id replay would forget the
+promotion on the very next `consolidate --rebuild --yes`. There is no `unpromote` action —
+if reversal is ever needed it would be a new, explicit command, not a side effect of retire/
+dispute/confirm; today promoted simply has no way back through the lifecycle command.
+
 `harness knowledge purge <file>` / `purge --all` differ from `retire`/`dispute` in kind, not
 degree: purge deletes the episodes, the consumption ledger entries, AND the governance
 record for that id outright, in the same cascade (see
@@ -222,6 +246,17 @@ evidence itself.
   every target is tombstoned (`superseded_by`) — or a human retires one first. When no
   legitimate merge exists, the consolidation skill degrades to warn-and-review (a `NOOP` plus
   a report of the cap pressure to the human) rather than forcing a lossy merge.
+- **Packet**: `consolidate --candidates`' episode clusters are bounded to a byte budget
+  (mirroring the packet's own 30KB learning-body-budget precedent), not just `maxOps` —
+  `maxOps` only ever bounded the OUTPUT (an apply run's file-touch count), never the INPUT
+  packet, so a large accumulated debt could otherwise exceed model/transport limits in one
+  response. Episodes are added in deterministic `(category, date, path)` order — never
+  filesystem enumeration order — until the next one would exceed the budget; a packet that
+  had to stop short carries `truncated: true` and `remaining: <N>`. There is no stateful
+  cursor file: the deterministic ordering IS the cursor — consolidating the included batch
+  (via a normal `--apply` run) naturally advances the next `--candidates` call to the next
+  slice, so the `/consolidate` skill drains iteratively (call `--candidates`, apply, repeat
+  until a packet comes back without `truncated`) rather than waiting for one complete packet.
 
 ### Dispute blast radius (MERGE inherits SUPERSEDE semantics, wider)
 

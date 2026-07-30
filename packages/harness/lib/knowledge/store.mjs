@@ -21,6 +21,28 @@ function gitOut(cwd, args) {
 }
 
 /**
+ * The path-keyed store id — a stable hash of the workspace's real path,
+ * independent of whatever remote (if any) is currently configured. This is
+ * exactly what `repoId` below falls back to when there's no origin remote.
+ * Exported separately (P2) so a caller can compute what the store id WAS (or
+ * would be) for this workspace WITHOUT a remote, regardless of whether one
+ * is configured now — the doctor stranded-store check and
+ * `harness knowledge migrate-store` (admin.mjs) both need this: once a
+ * workspace gains an origin remote, `repoId` switches to the remote-keyed id
+ * and a store built under the OLD path-keyed id silently stops being read or
+ * written by anything, with nothing surfacing that it still exists on disk.
+ */
+export function localRepoId(workspace) {
+  let real = workspace;
+  try {
+    real = fs.realpathSync(workspace);
+  } catch {
+    // keep the given path
+  }
+  return `local-${crypto.createHash('sha256').update(real).digest('hex').slice(0, 12)}`;
+}
+
+/**
  * Normalize any origin-remote form (ssh/https/scp) to one stable id. The
  * human-readable slug alone is lossy — `github.com/org-a/repo-b` and
  * `github.com/org-a-repo/b` both collapse to the same slug once `/` and `-`
@@ -46,17 +68,22 @@ export function repoId(workspace) {
   }
   // No remote: stable path-keyed fallback (documented limitation — memory is
   // per-path until a remote is added).
-  let real = workspace;
-  try {
-    real = fs.realpathSync(workspace);
-  } catch {
-    // keep the given path
-  }
-  return `local-${crypto.createHash('sha256').update(real).digest('hex').slice(0, 12)}`;
+  return localRepoId(workspace);
+}
+
+/** `<home>/knowledge/<id>` for an ALREADY-COMPUTED store id — the shared
+ * join `storeDir` below uses for the current `repoId(workspace)`, exported
+ * separately so a caller that already has (or wants) a DIFFERENT id — the
+ * doctor stranded-store check and `harness knowledge migrate-store`
+ * (admin.mjs), both working with `localRepoId`'s path-keyed id alongside the
+ * current `repoId` — can resolve either one to a directory without
+ * duplicating this join. */
+export function storeDirForId(id, { home } = {}) {
+  return path.join(home || harnessGlobalHome(), 'knowledge', id);
 }
 
 export function storeDir(workspace, { home } = {}) {
-  return path.join(home || harnessGlobalHome(), 'knowledge', repoId(workspace));
+  return storeDirForId(repoId(workspace), { home });
 }
 
 export function ensureStore(workspace, { home, dryRun = false } = {}) {

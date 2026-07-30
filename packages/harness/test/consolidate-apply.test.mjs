@@ -677,6 +677,37 @@ test('STRENGTHEN with a verified episode activates a provisional learning', () =
   assert.equal(l.fm.episodes.length, 2);
 });
 
+// P2: STRENGTHEN previously accumulated every evidence link with no byte-cap
+// enforcement at all (unlike ADD/SUPERSEDE/MERGE, which always composed and
+// checked their content against LEARNING_BYTE_CAP before writing) — repeated
+// strengthening could grow a learning unbounded. Piling on enough real
+// evidence links in one STRENGTHEN op now rejects the whole run with
+// E_BYTE_CAP, exactly like an oversized ADD, and the learning file is left
+// byte-for-byte unchanged.
+test('STRENGTHEN that would push a learning past the byte cap is rejected with E_BYTE_CAP, learning unchanged', () => {
+  const c = ctx();
+  assert.equal(run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [ADD(c.ws)])]).status, 0);
+  const { dir } = ensureStore(c.ws, { home: c.harnessHome });
+  const file = path.join(dir, 'learnings', 'sql', 'not-null-large-tables.md');
+  const before = fs.readFileSync(file, 'utf8');
+  assert.ok(Buffer.byteLength(before, 'utf8') < 1200, 'precondition: seed learning is under the byte cap');
+  const ledgerBefore = readLedger(dir).length;
+
+  const padEpisodes = Array.from({ length: 12 }, (_, i) =>
+    EP(c.ws, { path: `docs/solutions/perf/pad-${i}.md`, plan: `docs/plans/pad-${i}.md` })
+  );
+  const strengthen = { op: 'STRENGTHEN', target: 'sql/not-null-large-tables', episodes: padEpisodes };
+  const res = run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [strengthen])]);
+  assert.equal(res.status, 1, res.stderr || res.stdout);
+  const out = JSON.parse(res.stdout);
+  assert.equal(out.rejected[0].code, 'E_BYTE_CAP');
+  assert.match(out.rejected[0].reason, /split into two claims or supersede/);
+
+  const after = fs.readFileSync(file, 'utf8');
+  assert.equal(after, before, 'a rejected STRENGTHEN must leave the learning file byte-for-byte unchanged');
+  assert.equal(readLedger(dir).length, ledgerBefore + padEpisodes.length, 'E_BYTE_CAP strikes one ledger entry per offered episode');
+});
+
 // Same-run consumption tracking (milestone 3 review): STRENGTHEN never
 // registered its own target, so a same-run STRENGTHEN-before-SUPERSEDE let
 // the SUPERSEDE tombstone the target and then the STRENGTHEN would land its

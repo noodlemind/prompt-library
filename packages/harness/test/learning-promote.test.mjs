@@ -6,7 +6,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
-import { storeDir, listLearnings, readLedger, ensureStore } from '../lib/knowledge/store.mjs';
+import { storeDir, listLearnings, readLedger, readGovernance, ensureStore } from '../lib/knowledge/store.mjs';
 import { rankLearnings } from '../lib/knowledge/retrieve.mjs';
 import { rebuildIndex } from '../lib/knowledge/apply.mjs';
 import { isActiveFm } from '../lib/knowledge/consolidate.mjs';
@@ -469,4 +469,44 @@ test('a STRENGTHEN targeting a promoted learning is rejected and records no stri
   assert.equal(learning.fm.episodes.length, 3, 'STRENGTHEN must not have added the new episode');
 
   assert.equal(readLedger(dir).length, ledgerBefore, 'rejecting a promoted STRENGTHEN target must record no quarantine strike');
+});
+
+// Promoted is terminal for retire/dispute/confirm: none of the three may act
+// on a learning whose behavior already lives in a primitive. Without this
+// guard, a confirm would append a NEWER governance entry than the standing
+// `promote` record, and the next rebuild would forget the promotion entirely
+// (latest-entry-per-id replay).
+test('confirm/retire/dispute on a promoted learning all exit 2, promotion survives, and no governance entry is appended', () => {
+  const c = ctx();
+  const id = seedPromotable(c);
+  const to = primitivePath(c.ws);
+
+  const promoteRes = run(c, ['learning', 'promote', id, '--to', to]);
+  assert.equal(promoteRes.status, 0, promoteRes.stderr || promoteRes.stdout);
+
+  const dir = storeDir(c.ws, { home: c.harnessHome });
+  const fileBefore = fs.readFileSync(listLearnings(dir).find((l) => l.id === id).file, 'utf8');
+  const governanceBefore = [...readGovernance(dir).values()];
+  assert.equal(governanceBefore.length, 1, 'precondition: only the promote record exists');
+  assert.equal(governanceBefore[0].action, 'promote');
+
+  for (const [action, extraArgs] of [
+    ['confirm', []],
+    ['retire', ['--reason', 'x']],
+    ['dispute', ['--reason', 'x']],
+  ]) {
+    const res = run(c, ['learning', action, id, ...extraArgs]);
+    assert.equal(res.status, 2, `${action}: ${res.stderr || res.stdout}`);
+    const out = JSON.parse(res.stdout);
+    assert.match(out.blockedReason || '', /is promoted/);
+    assert.match(out.blockedReason || '', new RegExp(escapeRe(to)));
+    assert.match(out.blockedReason || '', /lifecycle actions don't apply/);
+  }
+
+  const fileAfter = fs.readFileSync(listLearnings(dir).find((l) => l.id === id).file, 'utf8');
+  assert.equal(fileAfter, fileBefore, 'promotion, status, and body must be byte-for-byte untouched');
+
+  const governanceAfter = [...readGovernance(dir).values()];
+  assert.equal(governanceAfter.length, 1, 'no confirm/retire/dispute record was appended');
+  assert.equal(governanceAfter[0].action, 'promote');
 });

@@ -8,6 +8,9 @@ import {
   LEARNING_FILE_RE,
   parsePorcelainLine,
   storeDir,
+  storeDirForId,
+  repoId,
+  localRepoId,
   listLearnings,
   readLedger,
   appendLedger,
@@ -842,4 +845,131 @@ export function rebuildStore({ workspace, home, yes, copilotHome, log = () => {}
     nextTools: ['harness consolidate --candidates'],
     ...(tx.staleLockNote ? { staleLockRemoved: tx.staleLockNote } : {}),
   };
+}
+
+/** True when `dir` exists and has at least one entry — used by
+ * migrateStrandedStore's collision check below (a bare empty directory,
+ * e.g. left over from a prior aborted attempt, is not "a real store already
+ * lives there"). */
+function isNonEmptyDir(dir) {
+  return fs.existsSync(dir) && fs.readdirSync(dir).length > 0;
+}
+
+/**
+ * Explicit, collision-safe, transactional migration for a stranded store
+ * (P2, design §2). `repoId` (store.mjs) switches from the path-keyed
+ * `local-<hash>` id to a remote-keyed id the instant a workspace gains an
+ * origin remote — every store mutator resolves `storeDir` fresh from the
+ * CURRENT `repoId`, so a store built BEFORE that switch keeps existing on
+ * disk under the old id but is never read or written again: nothing
+ * surfaces that it still exists, and a fresh (empty) store silently starts
+ * accumulating under the new id instead. This never runs automatically —
+ * `harness doctor`'s K4 check only DETECTS and reports the stranded state
+ * (see doctor.mjs); a human runs this explicitly to move it.
+ *
+ * Collision-safe: refuses when the destination already exists and is
+ * non-empty (a real store already lives there — migrating over it would
+ * silently merge or clobber two independent histories; the caller is left
+ * to reconcile by hand). Transactional: the move is a single
+ * `fs.renameSync` of the whole directory (including its own `.git`), which
+ * is atomic on the same filesystem — there is no copy-then-delete window
+ * where a crash could leave the content duplicated or half-moved. Both
+ * directories live under the same `<home>/knowledge/` parent, so they are
+ * always on the same filesystem in every normal install; the one fallback
+ * (a cross-device rename, `EXDEV`) copies the tree, verifies the copy
+ * landed, THEN removes the source — never the reverse order, so a failure
+ * mid-copy leaves the original store untouched rather than lost.
+ */
+export function migrateStrandedStore({ workspace, home, log = () => {} }) {
+  const currentId = repoId(workspace);
+  if (currentId.startsWith('local-')) {
+    return {
+      pass: false,
+      exitCode: 2,
+      migrated: false,
+      blockedReason: 'this workspace has no origin remote configured — repoId is already path-keyed, nothing to migrate',
+    };
+  }
+  const legacyId = localRepoId(workspace);
+  const legacyDir = storeDirForId(legacyId, { home });
+  const targetDir = storeDirForId(currentId, { home });
+
+  // Non-creating gate: a workspace with no legacy path-keyed store on disk
+  // must never be materialized by this command just to discover that.
+  if (!fs.existsSync(path.join(legacyDir, 'consolidated.jsonl'))) {
+    return {
+      pass: false,
+      exitCode: 2,
+      migrated: false,
+      blockedReason: `no legacy path-keyed store found at ${legacyDir} — nothing to migrate`,
+    };
+  }
+
+  if (isNonEmptyDir(targetDir)) {
+    return {
+      pass: false,
+      exitCode: 1,
+      migrated: false,
+      blockedReason: `migration target already exists and is non-empty: ${targetDir} — refusing to overwrite; resolve manually`,
+    };
+  }
+
+  // Lock the legacy store for the duration of the move: protects against a
+  // concurrent migrate-store invocation racing this one. (Nothing else can
+  // newly target legacyDir once repoId has switched — every store mutator
+  // resolves storeDir fresh from the CURRENT repoId — but the lock costs
+  // nothing and closes the window regardless.)
+  const lockPath = path.join(legacyDir, '.lock');
+  try {
+    fs.mkdirSync(lockPath);
+  } catch {
+    return { pass: false, exitCode: 1, migrated: false, blockedReason: 'E_LOCKED: another operation holds the legacy store lock' };
+  }
+
+  try {
+    // TOCTOU re-check immediately before the move, under the lock — same
+    // idiom as purgeEpisode's own re-check-under-lock above.
+    if (isNonEmptyDir(targetDir)) {
+      return {
+        pass: false,
+        exitCode: 1,
+        migrated: false,
+        blockedReason: `migration target already exists and is non-empty: ${targetDir} — refusing to overwrite; resolve manually`,
+      };
+    }
+    fs.mkdirSync(path.dirname(targetDir), { recursive: true });
+    try {
+      fs.renameSync(legacyDir, targetDir);
+    } catch (err) {
+      if (err.code !== 'EXDEV') throw err;
+      fs.cpSync(legacyDir, targetDir, { recursive: true });
+      if (!fs.existsSync(path.join(targetDir, 'consolidated.jsonl'))) {
+        // The copy did not land correctly — leave the original untouched
+        // and fail closed rather than remove a source we can't confirm was
+        // actually duplicated.
+        fs.rmSync(targetDir, { recursive: true, force: true });
+        throw new Error('cross-device copy did not verify — legacy store left untouched');
+      }
+      fs.rmSync(legacyDir, { recursive: true, force: true });
+    }
+    // The lock directory moved WITH the tree (rename) or was copied then the
+    // source removed (EXDEV fallback) — either way it is sitting at the new
+    // location now; clear it so a normal withStoreTransaction against the
+    // freshly migrated store is never blocked by a lock this function
+    // itself created.
+    fs.rmSync(path.join(targetDir, '.lock'), { recursive: true, force: true });
+    log(`migrated stranded store: ${legacyDir} -> ${targetDir}`);
+    return { pass: true, exitCode: 0, migrated: true, from: legacyDir, to: targetDir, blockedReason: null };
+  } catch (err) {
+    // The lock may still be sitting in legacyDir if the move itself never
+    // completed — clean it up so a retry isn't stuck E_LOCKED against this
+    // failed attempt's own lock. Best effort: a cleanup failure here must
+    // never mask the real error below.
+    try {
+      fs.rmSync(lockPath, { recursive: true, force: true });
+    } catch {
+      // ignored
+    }
+    return { pass: false, exitCode: 1, migrated: false, blockedReason: `migration failed: ${err.message}` };
+  }
 }

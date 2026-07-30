@@ -567,8 +567,8 @@ test('knowledge layer surface: consolidate command and insight lane stay documen
   // now the same public contract — CATALOG's knowledge sig names every mode.
   assert.match(
     bin,
-    /'<on\|suggest\|off\|freeze\|capture-only> \| --status \| purge <file\|--all> \| commit <none\|repo>'/,
-    'help documents the knowledge suggest mode and opt-in commit mode'
+    /'<on\|suggest\|off\|freeze\|capture-only> \| --status \| purge <file\|--all> \| commit <none\|repo> \| migrate-store'/,
+    'help documents the knowledge suggest mode, opt-in commit mode, and stranded-store migration'
   );
   assert.match(bin, /'<retire\|dispute\|confirm\|promote> <id> \[--reason "<r>"\] \[--to <path>\]'/, 'help documents learning promote');
   // The skill never writes learnings directly — apply is the sole writer.

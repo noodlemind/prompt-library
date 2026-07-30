@@ -62,6 +62,30 @@ export function setLearningStatus({ workspace, id, action, reason, to, home, log
       return { kind: 'reject', pass: false, exitCode: 1, id, status: null, blockedReason: `E_TARGET: no learning ${id}` };
     }
 
+    // Promoted is terminal for retire/dispute/confirm (design correction): a
+    // learning's behavior already lives in a primitive (promoted_to set), so
+    // a later confirm/retire/dispute here would append a NEWER governance
+    // entry than the standing `promote` record — readGovernance's
+    // latest-entry-per-id replay would then forget the promotion on the very
+    // next `consolidate --rebuild --yes`, regenerating the learning WITHOUT
+    // promoted_to even though the primitive it names is still the live
+    // behavior. Rejected unconditionally, before any of the three actions'
+    // own mutation logic runs, and before any governance entry is appended —
+    // apply.mjs's ops path already can never reach a promoted target this way
+    // (promotedTargetRejection fires before any write), so this is the one
+    // remaining CLI-driven path that could otherwise sneak a later
+    // retire/dispute/confirm record in over a promotion. `promote` itself is
+    // deliberately exempt from this check (out of scope here; re-promoting
+    // an already-promoted learning is unchanged behavior) — reversal, if
+    // ever wanted, needs its own explicit `unpromote` action, not added here
+    // (YAGNI): promoted simply has no way back through this command.
+    if (action !== 'promote' && learning.fm.promoted_to) {
+      return {
+        kind: 'reject', pass: false, exitCode: 2, id, status: null,
+        blockedReason: `${id} is promoted (behavior lives in ${learning.fm.promoted_to}) — lifecycle actions don't apply; edit the primitive or purge`,
+      };
+    }
+
     if (action === 'promote') {
       // Containment guard: same root/startsWith idiom purge uses (admin.mjs's
       // purgeEpisode) — a --to path that escapes the workspace (`../`) or

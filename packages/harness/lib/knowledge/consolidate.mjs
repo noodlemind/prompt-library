@@ -18,6 +18,17 @@ export const QUARANTINE_THRESHOLD = 3;
 // --candidates so the skill can see cap pressure before proposing ops.
 export const DOMAIN_ACTIVE_CAP = 25;
 const LEARNING_BODY_BUDGET_BYTES = 30_000;
+// P2: the candidates packet's episode clusters were unbounded — every
+// unconsolidated episode (with its excerpt) was returned in one packet
+// regardless of how much debt had accumulated, so a large backlog could
+// exceed model/transport limits. Mirrors LEARNING_BODY_BUDGET_BYTES's
+// reasoning (a defensible byte budget for the packet's other large,
+// unbounded-by-`maxOps` section) — episodes are added to the packet in
+// deterministic order until this budget would be exceeded, then the packet
+// is marked `truncated: true` with `remaining: N`; the REST drain on
+// subsequent `--candidates` calls as earlier episodes get consolidated (see
+// consolidateCandidates below).
+const CANDIDATE_EPISODE_BUDGET_BYTES = 30_000;
 export const PROMOTION_FIX_THRESHOLD = 3;
 export const PROMOTION_PLAN_THRESHOLD = 2;
 
@@ -229,12 +240,37 @@ export function consolidateCandidates({ workspace, copilotHome, home }) {
   const status = consolidateStatus({ workspace, copilotHome, home });
   const episodes = collectEpisodes({ workspace, copilotHome });
   const bySha = new Map(episodes.map((e) => [`${e.path}@${e.sha256}`, e]));
-  const clusters = new Map();
+
+  // Deterministic ordering by (category, date, path) — independent of
+  // whatever order the filesystem happened to hand back (collectEpisodes'
+  // own readdirSync order is not guaranteed) — is what makes truncation
+  // reproducible AND makes the "next call" cursor implicit: once the
+  // episodes included here get consolidated (via a normal --apply run), the
+  // very next --candidates call naturally advances to the next slice in this
+  // same deterministic order. No stateful cursor file is kept; the ordering
+  // itself is the cursor.
+  const fullUnconsolidated = [];
   for (const u of status.unconsolidated) {
     const full = bySha.get(`${u.path}@${u.sha256}`);
-    if (!full) continue;
-    if (!clusters.has(full.category)) clusters.set(full.category, []);
-    clusters.get(full.category).push({
+    if (full) fullUnconsolidated.push(full);
+  }
+  fullUnconsolidated.sort(
+    (a, b) =>
+      a.category.localeCompare(b.category) ||
+      String(a.date || '').localeCompare(String(b.date || '')) ||
+      a.path.localeCompare(b.path)
+  );
+
+  // Bound the packet's episode section to CANDIDATE_EPISODE_BUDGET_BYTES:
+  // walk the deterministically-ordered list, accumulating entries until the
+  // NEXT one would exceed the budget, then stop — always admitting at least
+  // one entry (even if it alone is oversized) so a single huge episode can
+  // never stall the drain entirely. Every excluded entry is counted in
+  // `remaining` and surfaces via `truncated: true` on the returned packet.
+  let usedBytes = 0;
+  const includedEntries = [];
+  for (const full of fullUnconsolidated) {
+    const entry = {
       path: full.path,
       sha256: full.sha256,
       kind: full.kind,
@@ -244,7 +280,19 @@ export function consolidateCandidates({ workspace, copilotHome, home }) {
       title: inertLine(full.title),
       tags: (full.tags || []).map(inertLine),
       excerpt: full.excerpt,
-    });
+    };
+    const entryBytes = Buffer.byteLength(JSON.stringify(entry), 'utf8');
+    if (includedEntries.length > 0 && usedBytes + entryBytes > CANDIDATE_EPISODE_BUDGET_BYTES) break;
+    usedBytes += entryBytes;
+    includedEntries.push({ category: full.category, entry });
+  }
+  const truncated = includedEntries.length < fullUnconsolidated.length;
+  const remaining = fullUnconsolidated.length - includedEntries.length;
+
+  const clusters = new Map();
+  for (const { category, entry } of includedEntries) {
+    if (!clusters.has(category)) clusters.set(category, []);
+    clusters.get(category).push(entry);
   }
 
   // Non-creating read: --candidates must never materialize a store either —
@@ -294,5 +342,9 @@ export function consolidateCandidates({ workspace, copilotHome, home }) {
     domains: status.domains,
     governed,
     storeDir: dir,
+    // Only present when the episode section was actually bounded (P2) — a
+    // packet under budget carries neither field, matching every other
+    // optional-flag shape in this response (e.g. `body` above).
+    ...(truncated ? { truncated: true, remaining } : {}),
   };
 }

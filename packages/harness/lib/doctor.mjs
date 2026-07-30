@@ -14,7 +14,7 @@ import { readSession, writeSession } from './session.mjs';
 import { parseVSCodeSettings } from './vscode-settings.mjs';
 import { resolveVSCodeSettingsPaths } from './paths.mjs';
 import { loadRetired, findStaleOrphans } from './sync.mjs';
-import { storeDir } from './knowledge/store.mjs';
+import { storeDir, storeDirForId, repoId, localRepoId } from './knowledge/store.mjs';
 import { consolidateStatus } from './knowledge/consolidate.mjs';
 import { loadReportEvents, knowledgeSlos } from './report.mjs';
 
@@ -355,6 +355,38 @@ function knowledgeChecks({ workspace, copilotHome }) {
       name: 'Knowledge utilization above noise threshold',
       pass: !noisy,
       hint: 'knowledge layer is noise (<15% utilization) — consider: harness knowledge off',
+      optional: true,
+    });
+  } catch {
+    // Advisory; never fail doctor on a knowledge-check error.
+  }
+
+  // K4 (P2, design §2): repoId (store.mjs) switches from a path-keyed
+  // local-<hash> id to a remote-keyed id the instant this workspace gains an
+  // origin remote — a store built BEFORE that switch is left on disk under
+  // the OLD id, silently orphaned (every mutator now resolves storeDir
+  // against the NEW id, so the old store is never read or written again).
+  // DETECTS only — never auto-migrates; a human runs the printed command.
+  try {
+    const currentId = repoId(workspace);
+    const hasRemote = !currentId.startsWith('local-');
+    let stranded = false;
+    let legacyDir = null;
+    let currentDir = null;
+    if (hasRemote) {
+      legacyDir = storeDirForId(localRepoId(workspace));
+      currentDir = storeDirForId(currentId);
+      const legacyExists = fs.existsSync(path.join(legacyDir, 'consolidated.jsonl'));
+      const currentExists = fs.existsSync(path.join(currentDir, 'consolidated.jsonl'));
+      stranded = legacyExists && !currentExists;
+    }
+    checks.push({
+      id: 'K4',
+      name: 'Knowledge store not stranded behind a newly-added origin remote',
+      pass: !stranded,
+      hint: stranded
+        ? `a path-keyed store exists at ${legacyDir} but this workspace now resolves to ${currentDir} — run: harness knowledge migrate-store`
+        : 'harness knowledge migrate-store',
       optional: true,
     });
   } catch {

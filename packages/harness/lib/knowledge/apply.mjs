@@ -337,7 +337,7 @@ function verifiedFixLinks(fm) {
  * SUPERSEDE writes (human-teaching assertions), and — closing the symmetric
  * gap — admission of every `fix`/`insight`-kind episode an ADD/STRENGTHEN/
  * SUPERSEDE/MERGE op offers, before its kind is ever trusted downstream by
- * `gainedFix` (strengthenLearning), `verifiedFixLinks`, or promotion math
+ * `gainedFix` (composeStrengthenedLearning), `verifiedFixLinks`, or promotion math
  * (consolidate.mjs's verifiedAndPlans). In every case the op JSON's
  * `episodes[].kind` field is just an assertion (model- or human-authored
  * text nothing else validates) — trusting it lets anyone claim evidence for
@@ -1175,6 +1175,36 @@ export function applyOps({
       writes.push({ op, id, domain, slug, content });
     }
 
+    // Compose STRENGTHEN content and enforce the SAME byte cap before writing
+    // (P2): unlike ADD/SUPERSEDE/MERGE above, a STRENGTHEN re-renders an
+    // EXISTING learning with every new evidence link appended — without this
+    // check, repeated strengthening could grow a learning past
+    // LEARNING_BYTE_CAP one episode at a time, since the write further below
+    // (composeStrengthenedLearning) previously had nothing enforcing it. This
+    // runs in the same pre-write validation phase as the ADD/SUPERSEDE/MERGE
+    // byte-cap check above — a rejection here means STRENGTHEN never reaches
+    // its own write loop and this op's rejectOp records a strike exactly like
+    // any other E_BYTE_CAP (same code/shape ADD uses, so it routes through
+    // the same content-failure strike recorder). Computed once here and
+    // reused verbatim at write time below — no target file changes between
+    // this point and that write (a STRENGTHEN's target can never be touched
+    // by a sibling op earlier in the same run; see the consumedTargets/
+    // strengthenedTargets composition checks above).
+    const strengthenWrites = [];
+    for (const op of planned) {
+      if (op.op !== 'STRENGTHEN') continue;
+      const target = existing.get(op.target);
+      const content = composeStrengthenedLearning(target, op.episodes, workspace, copilotHome);
+      if (Buffer.byteLength(content, 'utf8') > LEARNING_BYTE_CAP) {
+        return rejectOp(
+          'E_BYTE_CAP',
+          `${op.target} exceeds ${LEARNING_BYTE_CAP} bytes after strengthening — split into two claims or supersede`,
+          op.episodes
+        );
+      }
+      strengthenWrites.push({ op, target, content });
+    }
+
     if (dryRun) {
       return {
         kind: 'preview',
@@ -1291,13 +1321,17 @@ export function applyOps({
       governed.push({ id, action: entry.action });
     }
 
+    // Writes the content composed (and byte-cap checked) in the validation
+    // phase above verbatim — never recomputed here, so there is exactly one
+    // place that decides a STRENGTHEN's rendered bytes.
+    for (const { op, target, content } of strengthenWrites) {
+      fs.writeFileSync(target.file, content, 'utf8');
+      applied.push({ op: 'STRENGTHEN', id: op.target });
+      for (const e of op.episodes) ledgerEntries.push({ path: e.path, sha256: e.sha256, learning: op.target, at });
+    }
+
     for (const op of planned) {
-      if (op.op === 'STRENGTHEN') {
-        const target = existing.get(op.target);
-        strengthenLearning(target, op.episodes, workspace, copilotHome);
-        applied.push({ op: 'STRENGTHEN', id: op.target });
-        for (const e of op.episodes) ledgerEntries.push({ path: e.path, sha256: e.sha256, learning: op.target, at });
-      } else if (op.op === 'NOOP') {
+      if (op.op === 'NOOP') {
         applied.push({ op: 'NOOP', id: op.reason || null });
         for (const e of op.episodes) ledgerEntries.push({ path: e.path, sha256: e.sha256, learning: null, at });
       }
@@ -1427,7 +1461,13 @@ export function updateFrontmatterField(file, field, value) {
   fs.writeFileSync(file, next, 'utf8');
 }
 
-function strengthenLearning(target, episodes, workspace, copilotHome) {
+// Composes a STRENGTHEN's rendered content WITHOUT writing it — split out of
+// the former strengthenLearning so the validation phase above can byte-cap
+// check the result before anything commits to writing it (P2: STRENGTHEN
+// previously had no byte cap at all). The sole caller of the write itself is
+// the strengthenWrites loop in the mutation phase, which writes this exact
+// string back verbatim.
+function composeStrengthenedLearning(target, episodes, workspace, copilotHome) {
   const text = fs.readFileSync(target.file, 'utf8');
   const { fm, body } = parseLearningFrontmatter(text);
   const seen = new Set((fm.episodes || []).map((e) => `${e.path}@${e.sha256}`));
@@ -1462,7 +1502,7 @@ function strengthenLearning(target, episodes, workspace, copilotHome) {
     // which never starts out already promoted.
     promotedTo: fm.promoted_to || null,
   });
-  fs.writeFileSync(target.file, content, 'utf8');
+  return content;
 }
 
 export function rebuildIndex(dir) {
