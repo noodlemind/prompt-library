@@ -33,12 +33,34 @@ there isn't one. This means a workspace's store identity can **change**: a repo 
 initialized without a remote accumulates a T2 store under its path-keyed id, and the moment
 someone adds an `origin` remote, every subsequent read/write resolves against the new
 remote-keyed id instead — the old path-keyed store is left exactly where it was, on disk,
-but nothing ever looks there again (P2, design §2). `harness doctor`'s **K4** check detects
-this stranded-store condition (a legacy path-keyed store exists, nothing exists yet under
-the current id) and prints the exact fix; it never migrates anything on its own.
-`harness knowledge migrate-store` is the explicit, human-run remedy: a single, atomic
-directory rename from the legacy id to the current id, refusing outright (collision-safe)
-when a store already exists non-empty at the destination.
+but nothing ever looks there again (P2, design §2).
+
+`harness doctor`'s **K4** check detects this — never migrates anything on its own — and fails
+in TWO distinct windows, not one: (a) the legacy store exists and nothing exists yet under the
+current id (the pre-write window — `migrate-store` will succeed cleanly), and (b) the legacy
+store exists AND a store now also exists under the current id (the post-write window — the
+common sequence is add-remote, then one more write before anyone runs `migrate-store`, which
+materializes a fresh store under the new id while the legacy one is still sitting there). K4
+fails in both, with a distinct hint each time, so the orphan can never go permanently blind
+once that second store appears; in window (b) the hint routes to manual reconciliation, since
+`migrate-store` itself now refuses (a non-empty target).
+
+`harness knowledge migrate-store` is the explicit, human-run remedy for window (a): a single,
+atomic directory rename from the legacy id to the current id, refusing outright
+(collision-safe) when a store already exists non-empty at the destination. It acquires the
+legacy store's lock through the same stale-takeover path `withStoreTransaction` uses
+(`acquireStoreLock`, store.mjs) — the legacy dir is otherwise the one place that takeover
+never runs post-switch, since no normal transaction ever touches it again once `repoId` has
+moved on, so a lock left by a killed pre-switch writer would otherwise wedge migration
+permanently.
+
+A `promote` record is also sticky in `readGovernance`'s latest-per-id replay (not just in the
+lifecycle command that writes it — see [Governance ledger](#governance-ledger) below): once an
+id has a promote entry, a LATER entry for that id whose action is anything else is never
+allowed to override it in the replayed map. This heals a governance.jsonl written before the
+`setLearningStatus` terminal guard existed (or hand-edited directly) — a stray post-promote
+confirm/retire/dispute record can no longer cause a `consolidate --rebuild --yes` to
+regenerate a learning WITHOUT `promoted_to`.
 
 ## Trust gradient
 
@@ -215,14 +237,21 @@ model lane still requires a human already having written a genuine `kind: human-
 episode to disk, through `harness remember` or a hand-edit absorption — the same
 anti-fabrication discipline as the insight lane's checks.
 
-Promoted is terminal, not just for the write path above: `harness learning retire|dispute|
-confirm` (`lifecycle.mjs`) also reject unconditionally against a `promoted_to` learning,
-before any of the three mutates its frontmatter or appends a governance entry. Without this,
-a `confirm` on a promoted learning would append a NEWER governance entry than the standing
-`promote` record, and `readGovernance`'s latest-entry-per-id replay would forget the
-promotion on the very next `consolidate --rebuild --yes`. There is no `unpromote` action —
-if reversal is ever needed it would be a new, explicit command, not a side effect of retire/
-dispute/confirm; today promoted simply has no way back through the lifecycle command.
+Promoted is terminal, not just for the write path above, and enforced at two layers.
+`harness learning retire|dispute|confirm` (`lifecycle.mjs`) reject unconditionally against a
+`promoted_to` learning, before any of the three mutates its frontmatter or appends a
+governance entry — the primary guard, closing the write path off at the point a human would
+otherwise create a conflicting record. As defense in depth, `readGovernance` itself
+(`store.mjs`) also treats `promote` as sticky in its latest-entry-per-id replay: once an id has
+a promote record, a LATER entry for that id with any other action is skipped, never
+overriding it in the map. That second layer is what heals a ledger written before the
+lifecycle guard existed, or hand-edited directly (governance.jsonl is a plain file outside
+every CLI write path's absorb/validation) — without it, a stray post-promote confirm/retire/
+dispute record would still win the replay, and `consolidate --rebuild --yes` would regenerate
+the learning WITHOUT `promoted_to`. There is no `unpromote` action — if reversal is ever
+needed it would be a new, explicit command, not a side effect of retire/dispute/confirm; a
+LATER promote entry can still update an earlier one (e.g. correcting `--to`), but nothing else
+can dislodge it.
 
 `harness knowledge purge <file>` / `purge --all` differ from `retire`/`dispute` in kind, not
 degree: purge deletes the episodes, the consumption ledger entries, AND the governance

@@ -128,6 +128,95 @@ test('adding an origin remote after building a local-keyed store strands it: doc
   assert.equal(k4(doctorAfter.stdout).pass, true, 'K4 must pass once the stranded store is migrated');
 });
 
+// Important 1 (review hardening): the COMMON sequence is add-remote, then
+// one more write before anyone runs migrate-store — a fresh store
+// materializes under the new id while the legacy one is still sitting there.
+// A K4 that only ever fired on "legacy exists, current doesn't" would go
+// permanently blind at exactly that point (migrate-store also now refuses,
+// since the target is non-empty) — so K4 must keep failing, with a distinct
+// "reconcile manually" hint, for as long as BOTH stores exist.
+test('doctor K4 keeps failing (distinct hint) once a second store exists under the current id — never silently clears', () => {
+  const c = ctx();
+  git(c.ws, ['init', '-q']);
+
+  const legacyOp = {
+    op: 'ADD', domain: 'sql', slug: 'legacy-claim-k4',
+    trigger: 'a claim from the legacy store',
+    body: 'legacy body',
+    episodes: [realFixEpisode(c.ws, 'docs/solutions/perf/legacy-k4.md')],
+  };
+  assert.equal(run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [legacyOp])]).status, 0);
+  const legacyId = localRepoId(c.ws);
+  const legacyDir = storeDirForId(legacyId, { home: c.harnessHome });
+
+  git(c.ws, ['remote', 'add', 'origin', 'https://github.com/acme/both-exist.git']);
+
+  // The common post-switch sequence: one more write lands before anyone
+  // notices, materializing a FRESH store under the new id.
+  const freshOp = {
+    op: 'ADD', domain: 'sql', slug: 'fresh-claim-k4',
+    trigger: 'a claim written after the remote existed',
+    body: 'fresh body',
+    episodes: [realFixEpisode(c.ws, 'docs/solutions/perf/fresh-k4.md')],
+  };
+  assert.equal(run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [freshOp])]).status, 0);
+
+  const doctorRes = run(c, ['doctor']);
+  const check = k4(doctorRes.stdout);
+  assert.equal(check.pass, false, 'K4 must still fail once a second store exists — never silently clear');
+  assert.match(check.hint, /reconcile manually/);
+  assert.match(check.hint, new RegExp(legacyDir.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+
+  // migrate-store correctly refuses too (a non-empty target) — exactly why
+  // the hint above routes to manual reconciliation, not the command.
+  const migrateRes = run(c, ['knowledge', 'migrate-store']);
+  assert.equal(migrateRes.status, 1);
+  assert.match(JSON.parse(migrateRes.stdout).blockedReason, /already exists and is non-empty/);
+});
+
+// Important 2 (review hardening): the legacy store is the ONE place
+// withStoreTransaction's own stale-takeover never runs post-switch (nothing
+// transacts there again once repoId has moved on) — so a `.lock` left by a
+// killed PRE-SWITCH writer had no takeover path at all before this fix and
+// would wedge migrate-store forever. migrateStrandedStore now reuses the
+// exact same acquireStoreLock (store.mjs) stale-takeover idiom
+// withStoreTransaction uses.
+test('migrate-store takes over a stale lock left in the legacy store instead of wedging forever', () => {
+  const c = ctx();
+  git(c.ws, ['init', '-q']);
+
+  const addOp = {
+    op: 'ADD', domain: 'sql', slug: 'stale-lock-claim',
+    trigger: 'a claim written before the remote existed',
+    body: 'body',
+    episodes: [realFixEpisode(c.ws, 'docs/solutions/perf/stale-lock.md')],
+  };
+  assert.equal(run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [addOp])]).status, 0);
+  const legacyId = localRepoId(c.ws);
+  const legacyDir = storeDirForId(legacyId, { home: c.harnessHome });
+
+  // Simulate a killed pre-switch writer: a `.lock` directory old enough to
+  // count as stale (store.mjs's STALE_LOCK_MS is 10 minutes) — backdated
+  // well past that so this test never races the real threshold.
+  const lockPath = path.join(legacyDir, '.lock');
+  fs.mkdirSync(lockPath);
+  const old = new Date(Date.now() - 20 * 60 * 1000);
+  fs.utimesSync(lockPath, old, old);
+
+  git(c.ws, ['remote', 'add', 'origin', 'https://github.com/acme/stale-lock.git']);
+
+  const migrateRes = run(c, ['knowledge', 'migrate-store']);
+  assert.equal(migrateRes.status, 0, migrateRes.stderr || migrateRes.stdout);
+  const out = JSON.parse(migrateRes.stdout);
+  assert.equal(out.migrated, true);
+  assert.match(out.staleLockRemoved || '', /stale lock/);
+
+  const currentDir = storeDirForId(repoId(c.ws), { home: c.harnessHome });
+  assert.ok(listLearnings(currentDir).some((l) => l.id === 'sql/stale-lock-claim'));
+  assert.equal(fs.existsSync(legacyDir), false);
+  assert.equal(fs.existsSync(path.join(currentDir, '.lock')), false, 'no leftover lock at the new location');
+});
+
 test('migrate-store on a workspace with no origin remote exits 2 — nothing to migrate', () => {
   const c = ctx();
   git(c.ws, ['init', '-q']);

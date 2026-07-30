@@ -261,6 +261,48 @@ test('(b-hardening) a hand-poisoned promote record with an escaping `to` is re-v
   assert.equal(learning.fm.promoted_to, undefined, 'no promoted_to written from the escaping governance record');
 });
 
+// (b-sticky) P2 hardening: promote is sticky in readGovernance's latest-per-id
+// replay — a LATER non-promote record for an already-promoted id (here, a
+// confirm hand-appended directly to governance.jsonl, the shape a
+// pre-terminal-guard ledger or a direct hand edit could carry; lifecycle.mjs
+// itself now refuses to append one via the CLI) must never override the
+// standing promote record. Without this, readGovernance's plain
+// latest-entry-wins replay would resolve to the stray confirm, and rebuild
+// would regenerate the learning WITHOUT promoted_to — silently erasing a
+// promotion the ledger itself still recorded.
+test('(b-sticky) a stray post-promote confirm record hand-appended to governance.jsonl never overrides promote on replay: promoted_to still reapplies after rebuild', () => {
+  const c = ctx();
+  const slug = 'sticky-promote-target';
+  const id = `sql/${slug}`;
+  const dir = storeDir(c.ws, { home: c.harnessHome });
+  const to = primitivePath(c.ws, 'sql');
+
+  assert.equal(run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [ADD(c.ws, { slug })])]).status, 0);
+  assert.equal(run(c, ['learning', 'promote', id, '--to', to]).status, 0);
+
+  // Hand-append a confirm record AFTER the promote — bypassing
+  // lifecycle.mjs's own terminal guard entirely (a direct governance.jsonl
+  // edit, or a ledger written before that guard existed).
+  fs.appendFileSync(
+    path.join(dir, 'governance.jsonl'),
+    `${JSON.stringify({ id, action: 'confirm', reason: 'stray post-promote confirm', to: null, at: '2026-07-02T00:00:00.000Z' })}\n`
+  );
+  const governed = readGovernance(dir);
+  assert.equal(governed.get(id).action, 'promote', 'readGovernance must still resolve this id to promote, not the later confirm');
+
+  assert.equal(run(c, ['consolidate', '--rebuild', '--yes']).status, 0);
+  assert.equal(listLearnings(dir).length, 0, 'precondition: rebuild wiped the learning');
+
+  const res = run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [ADD(c.ws, { slug })])]);
+  assert.equal(res.status, 0, res.stderr || res.stdout);
+  const out = JSON.parse(res.stdout);
+  assert.deepEqual(out.governed, [{ id, action: 'promote' }], 'reapply must still be promote, not confirm');
+
+  const learning = listLearnings(dir).find((l) => l.id === id);
+  assert.ok(learning);
+  assert.equal(learning.fm.promoted_to, to, 'promoted_to must survive despite the stray confirm record');
+});
+
 // (c) human re-teach override: retire, rebuild, then remember the same
 // trigger/domain lands ACTIVE source: human, and governance records confirm.
 test('(c) remember re-teaching a previously retired trigger/domain overrides the retire and records a confirm', () => {

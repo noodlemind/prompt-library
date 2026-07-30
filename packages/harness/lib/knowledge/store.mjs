@@ -228,11 +228,30 @@ function readGovernanceEntries(dir) {
  * Replayed in file order, latest entry per id wins, so a dispute followed by
  * a confirm on the same id resolves to the confirm. Missing file → empty Map,
  * same as a fresh store with no decisions yet.
+ *
+ * EXCEPTION — promote is sticky (mirrors lifecycle.mjs's setLearningStatus,
+ * which rejects retire/dispute/confirm outright against a promoted learning,
+ * P2): once an id has a `promote` entry, a LATER entry for that same id
+ * whose action is anything OTHER than `promote` is skipped here — it never
+ * overrides the standing promote record in the replayed map. Without this, a
+ * governance.jsonl written before that lifecycle guard existed (or hand-
+ * edited directly — governance.jsonl is a plain file outside every CLI write
+ * path's absorb/validation) could still carry a stray post-promote confirm/
+ * retire/dispute record, and `readGovernance`'s plain latest-wins replay
+ * would resolve to THAT instead of the promote — so a later
+ * `consolidate --rebuild --yes` would regenerate the learning WITHOUT
+ * `promoted_to`, silently erasing a promotion the ledger itself still
+ * recorded. A LATER `promote` entry is still allowed to overwrite an earlier
+ * one (e.g. correcting a recorded `--to` path) — only non-promote entries are
+ * blocked from overriding a standing promote; there is no `unpromote`.
  */
 export function readGovernance(dir) {
   const map = new Map();
   for (const entry of readGovernanceEntries(dir)) {
-    if (entry && entry.id) map.set(entry.id, entry);
+    if (!entry || !entry.id) continue;
+    const existing = map.get(entry.id);
+    if (existing && existing.action === 'promote' && entry.action !== 'promote') continue;
+    map.set(entry.id, entry);
   }
   return map;
 }
@@ -508,6 +527,69 @@ export function commitStore(dir, message) {
 const STALE_LOCK_MS = 10 * 60 * 1000;
 
 /**
+ * Acquire a `.lock` directory at `lockPath` (mkdir), taking over a lock
+ * that's been sitting for longer than STALE_LOCK_MS via a rename-to-a-
+ * tombstone-then-reclaim dance. The ONE shared implementation — used by
+ * `withStoreTransaction` below (every normal store mutation) AND by
+ * `migrateStrandedStore` (admin.mjs), which acquires a lock OUTSIDE any
+ * store transaction, against a LEGACY store dir `withStoreTransaction`
+ * itself will never touch again once `repoId` has moved on (P2: without
+ * this shared helper, a lock left behind by a killed pre-switch writer had
+ * no takeover path at all and wedged migration permanently). Extracting one
+ * function is what keeps the two callers from ever drifting on staleness/
+ * takeover behavior.
+ *
+ * Returns `{ acquired: true, staleLockNote }` on success — `staleLockNote`
+ * is a human-readable note ONLY when a genuinely stale lock was just taken
+ * over, else `null` — or `{ acquired: false, ageMs, lockPath }` when a live
+ * lock is genuinely held by someone else right now (`ageMs` is the lock
+ * directory's current age, for a caller that wants to report it).
+ */
+export function acquireStoreLock(lockPath) {
+  try {
+    fs.mkdirSync(lockPath);
+    return { acquired: true, staleLockNote: null };
+  } catch {
+    // fall through to the stale-takeover attempt below
+  }
+  let stat;
+  try {
+    stat = fs.statSync(lockPath);
+  } catch {
+    stat = null;
+  }
+  const ageMs = stat ? Date.now() - stat.mtimeMs : 0;
+  if (stat && ageMs > STALE_LOCK_MS) {
+    const tombstone = `${lockPath}.stale-${process.pid}-${Date.now()}`;
+    let claimed = false;
+    try {
+      fs.renameSync(lockPath, tombstone);
+      claimed = true;
+    } catch {
+      claimed = false; // another process already won the takeover race
+    }
+    if (claimed) {
+      let recovered = false;
+      let staleLockNote = null;
+      try {
+        fs.mkdirSync(lockPath);
+        staleLockNote = `stale lock (${Math.round(ageMs / 60000)}m old) removed`;
+        recovered = true;
+      } catch {
+        recovered = false;
+      }
+      try {
+        fs.rmSync(tombstone, { recursive: true, force: true });
+      } catch {
+        // ignored — an orphaned tombstone is harmless disk debris either way
+      }
+      if (recovered) return { acquired: true, staleLockNote };
+    }
+  }
+  return { acquired: false, ageMs, lockPath };
+}
+
+/**
  * Roll back the store's working tree: `git reset --hard [targetSha]` undoes
  * tracked changes back to `targetSha` (or plain current HEAD when omitted —
  * the store's ordinary "discard everything uncommitted" shape), `git clean
@@ -662,46 +744,11 @@ export class StoreTransactionAbort extends Error {
 export function withStoreTransaction(workspace, { home, label } = {}, fn) {
   const { dir, git } = ensureStore(workspace, { home });
   const lockPath = path.join(dir, '.lock');
-  let staleLockNote = null;
-  try {
-    fs.mkdirSync(lockPath);
-  } catch {
-    let stat;
-    try {
-      stat = fs.statSync(lockPath);
-    } catch {
-      stat = null;
-    }
-    const ageMs = stat ? Date.now() - stat.mtimeMs : 0;
-    let recovered = false;
-    if (stat && ageMs > STALE_LOCK_MS) {
-      const tombstone = `${lockPath}.stale-${process.pid}-${Date.now()}`;
-      let claimed = false;
-      try {
-        fs.renameSync(lockPath, tombstone);
-        claimed = true;
-      } catch {
-        claimed = false; // another process already won the takeover race
-      }
-      if (claimed) {
-        try {
-          fs.mkdirSync(lockPath);
-          staleLockNote = `stale lock (${Math.round(ageMs / 60000)}m old) removed`;
-          recovered = true;
-        } catch {
-          recovered = false;
-        }
-        try {
-          fs.rmSync(tombstone, { recursive: true, force: true });
-        } catch {
-          // ignored — an orphaned tombstone is harmless disk debris either way
-        }
-      }
-    }
-    if (!recovered) {
-      return { ok: false, locked: true, rolledBack: false, error: null, committed: false, result: null, dir, git, staleLockNote: null };
-    }
+  const lock = acquireStoreLock(lockPath);
+  if (!lock.acquired) {
+    return { ok: false, locked: true, rolledBack: false, error: null, committed: false, result: null, dir, git, staleLockNote: null };
   }
+  const staleLockNote = lock.staleLockNote;
 
   // The rollback floor: entry HEAD, advanced by recordCheckpoint() whenever
   // an intra-transaction commit lands. Re-queried from git (not a

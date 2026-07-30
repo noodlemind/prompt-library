@@ -11,6 +11,7 @@ import {
   storeDirForId,
   repoId,
   localRepoId,
+  acquireStoreLock,
   listLearnings,
   readLedger,
   appendLedger,
@@ -914,17 +915,25 @@ export function migrateStrandedStore({ workspace, home, log = () => {} }) {
     };
   }
 
-  // Lock the legacy store for the duration of the move: protects against a
-  // concurrent migrate-store invocation racing this one. (Nothing else can
-  // newly target legacyDir once repoId has switched — every store mutator
-  // resolves storeDir fresh from the CURRENT repoId — but the lock costs
-  // nothing and closes the window regardless.)
+  // Lock the legacy store for the duration of the move via the SAME
+  // stale-takeover-aware acquisition withStoreTransaction uses (store.mjs's
+  // acquireStoreLock) — this is the one lock acquired OUTSIDE a normal store
+  // transaction, against a dir withStoreTransaction itself will never touch
+  // again once repoId has switched, so a lock left behind by a killed
+  // PRE-SWITCH writer would otherwise have no takeover path at all and wedge
+  // migration permanently.
   const lockPath = path.join(legacyDir, '.lock');
-  try {
-    fs.mkdirSync(lockPath);
-  } catch {
-    return { pass: false, exitCode: 1, migrated: false, blockedReason: 'E_LOCKED: another operation holds the legacy store lock' };
+  const lock = acquireStoreLock(lockPath);
+  if (!lock.acquired) {
+    const ageNote = lock.ageMs ? ` (${Math.round(lock.ageMs / 60000)}m old)` : '';
+    return {
+      pass: false,
+      exitCode: 1,
+      migrated: false,
+      blockedReason: `E_LOCKED: another operation holds the legacy store lock at ${lockPath}${ageNote} — if the owning process is confirmed dead, remove that directory manually and retry`,
+    };
   }
+  const staleLockNote = lock.staleLockNote;
 
   try {
     // TOCTOU re-check immediately before the move, under the lock — same
@@ -935,20 +944,39 @@ export function migrateStrandedStore({ workspace, home, log = () => {} }) {
         exitCode: 1,
         migrated: false,
         blockedReason: `migration target already exists and is non-empty: ${targetDir} — refusing to overwrite; resolve manually`,
+        ...(staleLockNote ? { staleLockRemoved: staleLockNote } : {}),
       };
     }
     fs.mkdirSync(path.dirname(targetDir), { recursive: true });
+    // An empty pre-existing target directory (e.g. a leftover empty dir from
+    // some earlier partial attempt) must be removed before the rename: on
+    // Windows (the stated primary platform), renaming a directory onto an
+    // existing one — even an empty one — fails with EPERM, unlike POSIX
+    // rename(2), which can replace an empty target directory atomically.
+    // rmdirSync only ever succeeds on a genuinely empty directory; if a
+    // last-instant race made it non-empty, it throws and this function fails
+    // closed instead of silently clobbering something.
+    if (fs.existsSync(targetDir)) fs.rmdirSync(targetDir);
     try {
       fs.renameSync(legacyDir, targetDir);
     } catch (err) {
       if (err.code !== 'EXDEV') throw err;
-      fs.cpSync(legacyDir, targetDir, { recursive: true });
-      if (!fs.existsSync(path.join(targetDir, 'consolidated.jsonl'))) {
-        // The copy did not land correctly — leave the original untouched
-        // and fail closed rather than remove a source we can't confirm was
-        // actually duplicated.
+      // Cross-device fallback (near-impossible in practice — both dirs share
+      // <home>/knowledge/ — but handled cleanly): copy the whole tree, verify
+      // it landed, THEN remove the source. Any failure in this block —
+      // cpSync itself throwing (e.g. disk full mid-copy) or the post-copy
+      // verification failing — removes whatever partial debris landed at
+      // targetDir before rethrowing, so a retry after a failed copy is
+      // idempotent instead of seeing a bogus "target already exists and is
+      // non-empty" refusal caused by OUR OWN interrupted attempt.
+      try {
+        fs.cpSync(legacyDir, targetDir, { recursive: true });
+        if (!fs.existsSync(path.join(targetDir, 'consolidated.jsonl'))) {
+          throw new Error('cross-device copy did not verify — legacy store left untouched');
+        }
+      } catch (copyErr) {
         fs.rmSync(targetDir, { recursive: true, force: true });
-        throw new Error('cross-device copy did not verify — legacy store left untouched');
+        throw copyErr;
       }
       fs.rmSync(legacyDir, { recursive: true, force: true });
     }
@@ -959,7 +987,15 @@ export function migrateStrandedStore({ workspace, home, log = () => {} }) {
     // itself created.
     fs.rmSync(path.join(targetDir, '.lock'), { recursive: true, force: true });
     log(`migrated stranded store: ${legacyDir} -> ${targetDir}`);
-    return { pass: true, exitCode: 0, migrated: true, from: legacyDir, to: targetDir, blockedReason: null };
+    return {
+      pass: true,
+      exitCode: 0,
+      migrated: true,
+      from: legacyDir,
+      to: targetDir,
+      blockedReason: null,
+      ...(staleLockNote ? { staleLockRemoved: staleLockNote } : {}),
+    };
   } catch (err) {
     // The lock may still be sitting in legacyDir if the move itself never
     // completed — clean it up so a retry isn't stuck E_LOCKED against this
@@ -970,6 +1006,12 @@ export function migrateStrandedStore({ workspace, home, log = () => {} }) {
     } catch {
       // ignored
     }
-    return { pass: false, exitCode: 1, migrated: false, blockedReason: `migration failed: ${err.message}` };
+    return {
+      pass: false,
+      exitCode: 1,
+      migrated: false,
+      blockedReason: `migration failed: ${err.message}`,
+      ...(staleLockNote ? { staleLockRemoved: staleLockNote } : {}),
+    };
   }
 }

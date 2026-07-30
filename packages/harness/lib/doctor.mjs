@@ -367,26 +367,43 @@ function knowledgeChecks({ workspace, copilotHome }) {
   // the OLD id, silently orphaned (every mutator now resolves storeDir
   // against the NEW id, so the old store is never read or written again).
   // DETECTS only — never auto-migrates; a human runs the printed command.
+  //
+  // Two distinct FAILING shapes, not one — the common sequence (add remote,
+  // then do one more consolidate --apply/remember before anyone notices) is
+  // what makes this matter: the FRESH store materializes under the new id,
+  // and a check that only fired on "legacy exists, current doesn't" would go
+  // permanently blind at exactly that point — the orphaned legacy store
+  // would sit there forever with K4 reporting a clean pass. Both shapes fail
+  // (never silently clear once a second store exists), each with its own
+  // hint:
+  //   - legacy exists, current does NOT: the pre-write window — migrate-store
+  //     will succeed cleanly.
+  //   - legacy exists AND current exists: the post-write window — migrate-
+  //     store now refuses (a non-empty target), so the hint routes to manual
+  //     reconciliation instead of a command that would just fail.
   try {
     const currentId = repoId(workspace);
     const hasRemote = !currentId.startsWith('local-');
     let stranded = false;
-    let legacyDir = null;
-    let currentDir = null;
+    let hint = 'harness knowledge migrate-store';
     if (hasRemote) {
-      legacyDir = storeDirForId(localRepoId(workspace));
-      currentDir = storeDirForId(currentId);
+      const legacyDir = storeDirForId(localRepoId(workspace));
+      const currentDir = storeDirForId(currentId);
       const legacyExists = fs.existsSync(path.join(legacyDir, 'consolidated.jsonl'));
       const currentExists = fs.existsSync(path.join(currentDir, 'consolidated.jsonl'));
-      stranded = legacyExists && !currentExists;
+      if (legacyExists && !currentExists) {
+        stranded = true;
+        hint = `a path-keyed store exists at ${legacyDir} but this workspace now resolves to ${currentDir} — run: harness knowledge migrate-store`;
+      } else if (legacyExists && currentExists) {
+        stranded = true;
+        hint = `both a legacy path-keyed store and the remote-keyed store exist — reconcile manually (migrate-store will refuse a non-empty target); inspect ${legacyDir}`;
+      }
     }
     checks.push({
       id: 'K4',
       name: 'Knowledge store not stranded behind a newly-added origin remote',
       pass: !stranded,
-      hint: stranded
-        ? `a path-keyed store exists at ${legacyDir} but this workspace now resolves to ${currentDir} — run: harness knowledge migrate-store`
-        : 'harness knowledge migrate-store',
+      hint,
       optional: true,
     });
   } catch {
