@@ -1365,6 +1365,7 @@ export async function cmdKnowledge(argv) {
 
 export async function cmdGet(argv) {
   const { runGet } = await import('./get-cmd.mjs');
+  const { inertLine } = await import('./knowledge/store.mjs');
   const flags = parseFlags(argv);
   const workspace = path.resolve(flags.workspace);
   const copilotHome = resolveCopilotHome(flags.copilotHome);
@@ -1374,7 +1375,14 @@ export async function cmdGet(argv) {
     emitJson(flags, result);
   } else {
     console.log(ui.line({ key: 'get', value: result.docid || result.path, keyWidth: 3 }));
-    console.log(result.excerpt);
+    // inertLine, applied PER LINE (minor #4, adversarial review): a raw file
+    // excerpt is printed straight to the terminal, so an embedded ANSI
+    // escape (ESC, 0x1B) or other control char could manipulate the
+    // terminal itself — inertLine collapses those to a space. Split/rejoin
+    // on '\n' first so the excerpt's genuine multi-line formatting (up to
+    // 40 real lines) survives; only PLAIN JSON output (emitJson above) ever
+    // needs the raw, un-scrubbed excerpt.
+    console.log(result.excerpt.split('\n').map(inertLine).join('\n'));
   }
   return 0;
 }

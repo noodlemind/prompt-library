@@ -272,12 +272,23 @@ export function absorbHandEdits({ workspace, home, log = () => {} }) {
         snapRel = path.join(teachDirRel, `${at}-hand-edit-${slug}-${n}.md`);
         n += 1;
       }
-      snapshot = snapRel.split(path.sep).join('/');
-      fs.mkdirSync(path.join(workspace, teachDirRel), { recursive: true });
-      fs.writeFileSync(path.join(workspace, snapshot), doc, 'utf8');
-      const sha256 = crypto.createHash('sha256').update(doc).digest('hex');
-      fm.episodes = [...(fm.episodes || []), { path: snapshot, sha256, kind: 'human-teaching', plan: null }];
-      ledgerEntries.push({ path: snapshot, sha256, learning: id, at });
+      // Contained, atomic write (Important #1, adversarial review): a
+      // symlinked docs/solutions/teachings/ (or any ancestor of it) must
+      // never let this snapshot land outside the workspace — the same
+      // writeFileContained (fs-safe.mjs) every other workspace write in this
+      // module already uses. On refusal, skip the snapshot with a log note
+      // and still let the absorb itself proceed — same tolerant shape as the
+      // secret-shaped skip above (fm.episodes/ledgerEntries simply never
+      // gain this snapshot; `snapshot` stays null).
+      const written = writeFileContained(workspace, snapRel, doc);
+      if (!written) {
+        log(`hand-edit absorb: symlinked destination under ${teachDirRel}/ — skipped snapshot for ${id}, still absorbing`);
+      } else {
+        snapshot = snapRel.split(path.sep).join('/');
+        const sha256 = crypto.createHash('sha256').update(doc).digest('hex');
+        fm.episodes = [...(fm.episodes || []), { path: snapshot, sha256, kind: 'human-teaching', plan: null }];
+        ledgerEntries.push({ path: snapshot, sha256, learning: id, at });
+      }
     }
 
     fm.source = 'human';

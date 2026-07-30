@@ -29,9 +29,26 @@ const DEFAULT_MAX_BYTES = 10_000_000;
  * the remainder is treated as safe to create. Returns the resolved absolute
  * path, or null when `rel` escapes `root` lexically OR any existing
  * ancestor component (including the leaf) is a symlink.
+ *
+ * The ROOT ARGUMENT ITSELF is checked too, not just what's appended to it
+ * (adversarial-review finding): every caller treats `root` as the trusted
+ * boundary everything below it is validated against, but a caller-computed
+ * root — `copilotHome/knowledge`, a mirror root under the workspace — is
+ * itself just a path built from a less-trusted base, and can be replaced
+ * with a symlink by anyone with filesystem access to that base. Without
+ * this check, a symlinked `root` would pass containment against ITSELF: the
+ * component walk below only ever inspects what's APPENDED to root, never
+ * root's own final path component. A missing root is fine (nothing to be a
+ * symlink yet) — same tolerance as a missing intermediate component.
  */
 export function assertNoSymlinkAncestors(root, rel) {
   const rootFull = path.resolve(root);
+  try {
+    if (fs.lstatSync(rootFull).isSymbolicLink()) return null;
+  } catch {
+    // root doesn't exist yet — nothing to be a symlink; same tolerance as a
+    // missing intermediate component in the walk below.
+  }
   const full = path.resolve(rootFull, rel);
   const relative = path.relative(rootFull, full);
   if (relative !== '' && (relative.startsWith('..') || path.isAbsolute(relative))) return null;

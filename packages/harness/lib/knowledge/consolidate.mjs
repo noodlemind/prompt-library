@@ -1,8 +1,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { storeDir, readLedger, listLearnings, readStoreConfig, readGovernance } from './store.mjs';
-import { readFileNoFollow } from '../fs-safe.mjs';
+import { storeDir, readLedger, listLearnings, readStoreConfig, readGovernance, inertLine } from './store.mjs';
+import { readFileNoFollow, assertNoSymlinkAncestors } from '../fs-safe.mjs';
 
 export const CONSOLIDATION_THRESHOLD = 5;
 export const MAX_OPS_PER_RUN = 5;
@@ -34,18 +34,31 @@ function parseFrontmatter(text) {
 
 function excerpt(text) {
   const body = text.replace(/^---[\s\S]*?---\n/, '').trim();
-  return body.replace(/\s+/g, ' ').slice(0, 240);
+  // inertLine (store.mjs) runs AFTER the \s+ collapse: \s only covers
+  // whitespace control chars (tab/newline/CR/FF/VT) — a NUL byte or another
+  // non-whitespace C0 control char embedded in the body would otherwise
+  // survive this collapse verbatim (Important #2, adversarial review).
+  return inertLine(body.replace(/\s+/g, ' ').slice(0, 240));
 }
 
 /**
  * Collect episodes from the same roots the knowledge index scans. Every
- * candidate file is lstat'd first (never followed) and its realpath is
- * confirmed to still resolve inside the SCANNED root before it is ever
- * opened — a symlink planted under docs/solutions (or a symlinked category
- * directory above it) must never let its target's content — potentially
- * anything readable on the machine — be read into an episode's excerpt and
- * fed into the candidates packet. A rejected symlink is simply skipped, the
- * same as a file that failed to read for any other reason.
+ * candidate path — the scanned root directory itself, each category
+ * directory, and each file — is validated with `assertNoSymlinkAncestors`
+ * (fs-safe.mjs) against the WORKSPACE or `copilotHome/knowledge` BASE, the
+ * exact same base purge already resolves against — never against a
+ * realpath of the scanned subdir itself. An earlier version of this
+ * function computed containment against `realpathSync(dir)` (the scanned
+ * docs/solutions directory) — but when `dir` itself is a symlink, its
+ * realpath IS the resolved-through target, so every file underneath passed
+ * containment against itself trivially (adversarial review, probe A): a
+ * symlinked `docs/solutions` leaked outside content straight into a
+ * candidate's excerpt, pre-hashed, with zero attacker foreknowledge needed.
+ * Checking from the BASE down (docs -> solutions -> category -> file) is
+ * what actually catches a symlink at ANY of those levels. A rejected
+ * component (or the whole scan root) is simply skipped — for a symlinked
+ * root, skipped BEFORE any directory listing is ever read, so not even a
+ * category/filename can leak through it.
  */
 export function collectEpisodes({ workspace, copilotHome }) {
   const roots = [];
@@ -58,47 +71,27 @@ export function collectEpisodes({ workspace, copilotHome }) {
 
   const episodes = [];
   for (const { dir, base } of roots) {
-    let realDir;
-    try {
-      realDir = fs.realpathSync(dir);
-    } catch {
-      continue; // vanished between the existsSync check above and here
-    }
+    const dirRel = path.relative(base, dir);
+    // The scan root itself must be physically contained — checked BEFORE
+    // ever reading its directory listing, so a symlinked docs/solutions (or
+    // solutions/ under copilotHome/knowledge) is skipped with zero
+    // filesystem reads through it, not just its file contents.
+    if (!assertNoSymlinkAncestors(base, dirRel)) continue;
     for (const cat of fs.readdirSync(dir, { withFileTypes: true })) {
       if (!cat.isDirectory()) continue;
+      const catRel = path.join(dirRel, cat.name);
+      if (!assertNoSymlinkAncestors(base, catRel)) continue; // symlinked category directory
       const catPath = path.join(dir, cat.name);
       for (const f of fs.readdirSync(catPath)) {
         if (!f.endsWith('.md') || f === 'README.md') continue;
-        const full = path.join(catPath, f);
-        let lst;
-        try {
-          lst = fs.lstatSync(full);
-        } catch {
-          continue;
-        }
-        if (lst.isSymbolicLink()) continue; // never follow — reject, skip
-        // Containment against the SCANNED root's real path — catches a
-        // symlinked ancestor (e.g. the category directory itself) even on a
-        // filesystem where readdirSync's dirent type falls back to a
-        // following stat and reports a symlinked dir as a plain directory.
-        let real;
-        try {
-          real = fs.realpathSync(full);
-        } catch {
-          continue;
-        }
-        // NOT a literal `real !== full` equality check: `dir` itself may sit
-        // behind an ordinary, non-attacker system symlink (e.g. macOS's
-        // `/tmp` -> `/private/tmp`), which realDir already resolved through
-        // — a legitimate file's realpath will differ from its unresolved
-        // `full` path in exactly that same way without being an attack.
-        // Containment against realDir is the correct (and sufficient) check.
-        if (real !== realDir && !real.startsWith(realDir + path.sep)) continue;
+        const fileRel = path.join(catRel, f);
+        const full = assertNoSymlinkAncestors(base, fileRel);
+        if (!full) continue; // symlinked leaf (or any ancestor) — never follow
         const text = readFileNoFollow(full);
         if (text === null) continue;
         const fm = parseFrontmatter(text);
         episodes.push({
-          path: path.relative(base, full).split(path.sep).join('/'),
+          path: fileRel.split(path.sep).join('/'),
           sha256: crypto.createHash('sha256').update(text).digest('hex'),
           kind: fm.kind === 'insight' ? 'insight' : fm.kind === 'human-teaching' ? 'human-teaching' : 'fix',
           category: cat.name,
@@ -259,7 +252,12 @@ export function consolidateCandidates({ workspace, copilotHome, home }) {
   const includeBodies = totalBytes <= LEARNING_BODY_BUDGET_BYTES;
   const learnings = active.map((l) => ({
     id: l.id,
-    trigger: l.fm.trigger || '',
+    // inertLine (Important #2, adversarial review): the candidates packet is
+    // read by the consolidation skill and can end up quoted back into
+    // structured output — a legacy/hand-edited trigger carrying an embedded
+    // control char must render as one line here too, same as every other
+    // trigger-interpolating surface (context pack, listing, INDEX.md).
+    trigger: inertLine(l.fm.trigger || ''),
     status: l.fm.status || 'active',
     bytes: l.bytes,
     ...(includeBodies ? { body: l.body } : {}),

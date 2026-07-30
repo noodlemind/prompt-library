@@ -24,7 +24,7 @@ import { MAX_OPS_PER_RUN, LEARNING_BYTE_CAP, QUARANTINE_THRESHOLD, DOMAIN_ACTIVE
 import { scanSecrets } from '../secret-scan.mjs';
 import { absorbOrAbort, mirrorLearnings } from './admin.mjs';
 import { parseMergedFrom } from './listing.mjs';
-import { readFileNoFollow } from '../fs-safe.mjs';
+import { readFileNoFollow, assertNoSymlinkAncestors } from '../fs-safe.mjs';
 
 /**
  * The SOLE writer of the learnings store. The consolidation skill emits an
@@ -153,13 +153,20 @@ export function todayClamped() {
  * `copilotHome/knowledge`, e.g. `solutions/perf/team-fix.md`) resolves the
  * same way it was collected from — a model asserting the path verbatim (as
  * instructed) must not have its evidence rejected purely because apply.mjs
- * only ever checked the workspace root. Each root gets its OWN containment
- * guard: a path escaping ONE root (a `../` climb out of it) is simply
- * excluded from the candidate list for THAT root — it is never allowed to
- * "borrow" containment from the other root. Returns an empty array when `p`
- * is falsy or escapes every configured root. Existence is NOT checked here —
- * callers try each candidate in order (workspace first) and decide what
- * "exists" means for their own read (readFileSync, fs.existsSync, ...).
+ * only ever checked the workspace root. Each root gets its OWN PHYSICAL
+ * containment guard (`assertNoSymlinkAncestors`, fs-safe.mjs — the same
+ * helper purgeEpisode uses, closing the asymmetry an adversarial review
+ * found: a path escaping ONE root lexically (a `../` climb) OR resolving
+ * through a symlinked intermediate directory (e.g. `docs/solutions` itself
+ * being a symlink — probe A2) is simply excluded from the candidate list for
+ * THAT root — it is never allowed to "borrow" containment from the other
+ * root. A plain lexical resolve+startsWith check here previously let a
+ * symlinked `docs/solutions` verify an OUTSIDE file as genuine episode
+ * evidence, since only the leaf was ever checked for being a symlink.
+ * Returns an empty array when `p` is falsy or escapes/is unsafe under every
+ * configured root. Existence is NOT checked here — callers try each
+ * candidate in order (workspace first) and decide what "exists" means for
+ * their own read (readFileNoFollow, fs.existsSync, ...).
  */
 function resolveEpisodeFile(workspace, copilotHome, p) {
   if (!p) return [];
@@ -167,8 +174,8 @@ function resolveEpisodeFile(workspace, copilotHome, p) {
   if (copilotHome) roots.push(path.resolve(copilotHome, 'knowledge'));
   const candidates = [];
   for (const root of roots) {
-    const full = path.resolve(root, p);
-    if (full === root || full.startsWith(root + path.sep)) candidates.push(full);
+    const full = assertNoSymlinkAncestors(root, p);
+    if (full) candidates.push(full);
   }
   return candidates;
 }
@@ -481,7 +488,19 @@ function episodeDate(workspace, copilotHome, e) {
 function overridesGovernanceRecency(workspace, copilotHome, episodes, record, { humanPresent = false } = {}) {
   if (humanPresent) return true;
   if (!record) return true;
-  const recordDay = String(record.at).slice(0, 10);
+  const recordAt = String(record.at ?? '');
+  // Fail CLOSED on a malformed/missing/empty timestamp (minor #5,
+  // adversarial review): governance.jsonl is a plain file outside applyOps'
+  // own write path (see the promote-target reapplication's own re-validation
+  // above for the same reasoning) — a corrupted or hand-poisoned entry with
+  // `at: ''` (or any value that isn't a recognizable date) must never let the
+  // override fire. Without this, `d > recordDay` for an empty recordDay is
+  // true for virtually ANY real episode date (an empty string is a lexical
+  // prefix of, and therefore "less than", almost every non-empty string) —
+  // silently failing OPEN and letting stale evidence override a standing
+  // decision the record was supposed to protect. The veto holds instead.
+  if (!/^\d{4}-\d{2}-\d{2}/.test(recordAt)) return false;
+  const recordDay = recordAt.slice(0, 10);
   return episodes.every((e) => {
     const d = episodeDate(workspace, copilotHome, e);
     return d != null && d > recordDay;
