@@ -191,6 +191,73 @@ test('knowledge purge <episode> cascades: sole-evidence learning removed, shared
   assert.ok(fs.existsSync(path.join(c.ws, otherPath)), 'unrelated episode file untouched');
 });
 
+// P1: purge must cascade into the recall retrieval state too — the team
+// manifest (knowledge/manifest.yaml) and postings index are rebuilt from the
+// same solution trees by `harness index`, and without a rebuild inside the
+// purge cascade, rankRecall kept serving the deleted episode's title/
+// summary/snippet after the file, store links, and ledger were all gone.
+test('purging an indexed episode removes it from recall: the manifest no longer lists it and recall returns nothing for its terms', () => {
+  const c = ctx();
+  const targetPath = 'docs/solutions/perf/zebra-orders-timeout.md';
+  const episodeBody =
+    '---\ntitle: "zebra orders endpoint timeout"\ndate: 2026-07-27\n---\n\n## Problem\n\nThe zebra orders endpoint timed out under load until an index was added.\n';
+  const target = writeRealEpisode(c.ws, targetPath, episodeBody);
+  const op = {
+    op: 'ADD',
+    domain: 'perf',
+    slug: 'zebra-orders-timeout',
+    trigger: 'zebra orders endpoint timing out',
+    body: 'Add a covering index for the zebra orders query.',
+    episodes: [{ ...target, kind: 'fix', plan: 'docs/plans/p1.md' }],
+  };
+  assert.equal(applyOps({ workspace: c.ws, opsPath: writeOps(c.ws, [op]), home: c.harnessHome }).exitCode, 0);
+
+  assert.equal(run(c, ['index']).status, 0);
+  const manifestPath = path.join(c.ws, 'knowledge', 'manifest.yaml');
+  assert.match(fs.readFileSync(manifestPath, 'utf8'), /path: docs\/solutions\/perf\/zebra-orders-timeout\.md/);
+  const before = run(c, ['recall', 'zebra orders endpoint timeout']);
+  assert.equal(before.status, 0, before.stderr || before.stdout);
+  assert.ok(
+    JSON.parse(before.stdout).recall.some((e) => e.path === targetPath),
+    'pre-purge control: recall serves the indexed episode'
+  );
+
+  const purge = run(c, ['knowledge', 'purge', targetPath]);
+  assert.equal(purge.status, 0, purge.stderr || purge.stdout);
+  assert.equal(JSON.parse(purge.stdout).pass, true);
+
+  assert.doesNotMatch(
+    fs.readFileSync(manifestPath, 'utf8'),
+    /zebra-orders-timeout\.md/,
+    'the manifest must no longer list the purged episode'
+  );
+  const after = run(c, ['recall', 'zebra orders endpoint timeout']);
+  assert.equal(after.status, 0, after.stderr || after.stdout);
+  assert.ok(
+    !JSON.parse(after.stdout).recall.some((e) => e.path === targetPath),
+    'recall must not serve a purged episode'
+  );
+});
+
+test('storeless purge of an indexed episode file also removes it from the recall manifest', () => {
+  const c = ctx();
+  const targetPath = 'docs/solutions/perf/quagga-storeless.md';
+  writeRealEpisode(
+    c.ws,
+    targetPath,
+    '---\ntitle: "quagga storeless recall entry"\ndate: 2026-07-27\n---\n\n## Problem\n\nA quagga storeless entry that must vanish from recall on purge.\n'
+  );
+  assert.equal(run(c, ['index']).status, 0);
+  const manifestPath = path.join(c.ws, 'knowledge', 'manifest.yaml');
+  assert.match(fs.readFileSync(manifestPath, 'utf8'), /quagga-storeless\.md/);
+
+  const purge = run(c, ['knowledge', 'purge', targetPath]);
+  assert.equal(purge.status, 0, purge.stderr || purge.stdout);
+  assert.ok(!fs.existsSync(path.join(c.ws, targetPath)), 'episode file deleted');
+  assert.equal(fs.existsSync(storeDir(c.ws, { home: c.harnessHome })), false, 'no store materialized');
+  assert.doesNotMatch(fs.readFileSync(manifestPath, 'utf8'), /quagga-storeless\.md/, 'manifest entry removed');
+});
+
 test('a trigger with a quote and a backslash survives TWO successive purge-unlinks byte-identical', () => {
   const c = ctx();
   const targetPath1 = 'docs/solutions/perf/target-nl-1.md';

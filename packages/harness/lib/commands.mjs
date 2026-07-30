@@ -390,13 +390,23 @@ export async function cmdIndex(argv) {
   if (!flags.dryRun) {
     try {
       const { storeDir, listLearnings, writeStaleExclusions } = await import('./knowledge/store.mjs');
+      const { assertNoSymlinkAncestors } = await import('./fs-safe.mjs');
       const dir = storeDir(workspace);
       if (fs.existsSync(dir)) {
         const excluded = {};
         for (const l of listLearnings(dir)) {
           const anchors = l.fm.anchors || [];
           if (!anchors.length) continue;
-          const missing = anchors.filter((a) => !fs.existsSync(path.join(workspace, a)));
+          // An anchor is only ever a workspace-relative pointer written by
+          // extractAnchors (apply.mjs) — but learning files can be
+          // hand-edited, so an anchor carrying `..` (or an absolute path, or
+          // a symlinked ancestor) must be rejected BEFORE existsSync: an
+          // escaping anchor is unresolvable, treated as missing (stale),
+          // and the scan never stats anything outside the workspace.
+          const missing = anchors.filter((a) => {
+            const full = assertNoSymlinkAncestors(workspace, a);
+            return !full || !fs.existsSync(full);
+          });
           if (missing.length) excluded[l.id] = missing;
         }
         writeStaleExclusions(dir, { excluded });

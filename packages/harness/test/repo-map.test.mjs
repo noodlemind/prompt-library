@@ -75,6 +75,33 @@ test('repo map is query-ranked, budgeted, and code-relevant', () => {
   fs.rmSync(ws, { recursive: true, force: true });
 });
 
+// P1: `git ls-files` keeps listing a tracked path from the INDEX even after
+// its parent directory was swapped on disk for a symlink pointing outside
+// the workspace — and readFileNoFollow's O_NOFOLLOW only refuses a symlink
+// at the FINAL component, so the kernel happily followed the symlinked
+// ancestor and outside file content leaked into the generated map.
+// readFileSafe now validates every ancestor (assertNoSymlinkAncestors)
+// before each tracked read.
+test('a symlinked ancestor (src/ swapped for an outside symlink) never leaks outside content into the map; real files still mapped', () => {
+  const { ws } = gitRepo({
+    'src/payments.mjs': 'export function insidePayments() {}',
+    'lib/other.mjs': 'export function realTrackedSymbol() {}',
+  });
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-mapout-'));
+  fs.writeFileSync(path.join(outside, 'payments.mjs'), 'export function leakedOutsideSecret() {}\n');
+  // Swap the tracked directory itself — the ancestor, not the leaf.
+  fs.rmSync(path.join(ws, 'src'), { recursive: true, force: true });
+  fs.symlinkSync(outside, path.join(ws, 'src'));
+
+  const map = buildRepoMap({ workspace: ws, maxTokens: 500 });
+  assert.equal(map.empty, false);
+  assert.ok(!map.body.includes('leakedOutsideSecret'), 'outside file content must never appear in the map');
+  assert.ok(map.files.includes('lib/other.mjs'), 'genuinely tracked files are still mapped');
+  assert.match(map.body, /realTrackedSymbol/, 'real tracked symbols still extracted');
+  fs.rmSync(ws, { recursive: true, force: true });
+  fs.rmSync(outside, { recursive: true, force: true });
+});
+
 test('index --status reports drift deterministically', () => {
   const { ws, git } = gitRepo({ 'a.js': 'export const a = 1;' });
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-idx-'));

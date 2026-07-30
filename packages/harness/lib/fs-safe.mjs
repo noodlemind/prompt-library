@@ -40,6 +40,18 @@ const DEFAULT_MAX_BYTES = 10_000_000;
  * component walk below only ever inspects what's APPENDED to root, never
  * root's own final path component. A missing root is fine (nothing to be a
  * symlink yet) — same tolerance as a missing intermediate component.
+ *
+ * THREAT-MODEL HONESTY: this is a SCAN-TIME check — an lstat walk, not an
+ * atomic descriptor-relative (openat-style) traversal, which Node does not
+ * portably expose. It reliably catches a symlinked component that exists
+ * when the walk runs (the practical planted-symlink case every caller
+ * guards against), but a local attacker with concurrent filesystem write
+ * access can still swap an ancestor for a symlink in the window between
+ * this walk and the caller's subsequent open/write/delete — a residual
+ * TOCTOU that callers narrow (never fully close) by pairing this with an
+ * O_NOFOLLOW leaf open (readFileNoFollow) or a realpath re-validation
+ * immediately before the mutation (writeFileContained, purgeEpisode's
+ * re-check-before-delete).
  */
 export function assertNoSymlinkAncestors(root, rel) {
   const rootFull = path.resolve(root);
@@ -68,17 +80,23 @@ export function assertNoSymlinkAncestors(root, rel) {
 }
 
 /**
- * Read a file with no TOCTOU window between checking "not a symlink" and
- * opening it: an lstat-then-read guard leaves a gap where the path can be
- * swapped for a symlink between the two calls, so the read would follow it
- * after all. Opening with O_NOFOLLOW instead asks the kernel to refuse the
- * open atomically if the final path component is a symlink — the fd that
- * comes back, if any, is guaranteed to be the real file. Falls back to an
- * lstat-then-read guard on a platform without O_NOFOLLOW (e.g. Windows) —
- * narrows the window there but cannot close it. Returns null (never throws)
- * on a missing file, a symlink, a non-regular file, or anything over
- * `maxBytes` — callers decide what a null means for their own control flow
- * (skip, try the next candidate root, fail closed).
+ * Read a file refusing a symlink at the FINAL path component atomically:
+ * opening with O_NOFOLLOW asks the kernel to fail the open if the leaf is a
+ * symlink — no lstat-then-open gap at the leaf, and the fstat on the
+ * returned fd (regular-file + size checks) inspects the object actually
+ * opened, not the path again. WHAT THIS DOES NOT COVER: O_NOFOLLOW says
+ * nothing about ANCESTOR components — a symlinked parent directory is still
+ * followed by the kernel, so callers must validate the ancestry themselves
+ * (assertNoSymlinkAncestors) before calling this, and even then a
+ * same-instant ancestor swap between that walk and this open remains a
+ * theoretical residual (see assertNoSymlinkAncestors' threat-model note;
+ * Node has no portable openat-style traversal to close it). On a platform
+ * without O_NOFOLLOW (Windows) the leaf guarantee is weaker still: an
+ * lstat-then-read guard, non-atomic even at the leaf — it narrows the
+ * window there but cannot close it. Returns null (never throws) on a
+ * missing file, a symlink, a non-regular file, or anything over `maxBytes`
+ * — callers decide what a null means for their own control flow (skip, try
+ * the next candidate root, fail closed).
  */
 export function readFileNoFollow(full, { maxBytes = DEFAULT_MAX_BYTES } = {}) {
   if (O_NOFOLLOW !== null) {
@@ -114,11 +132,16 @@ export function readFileNoFollow(full, { maxBytes = DEFAULT_MAX_BYTES } = {}) {
  * component along the way (assertNoSymlinkAncestors) is a symlink, then
  * re-validates the REAL parent directory physically sits inside the REAL
  * root (realpath, not just the lexical check above) immediately before
- * writing — closing the window between the ancestor check and this write
+ * writing — narrowing the window between the ancestor check and this write
  * (e.g. the `mkdir` below creating a fresh directory that a racing process
  * then swaps for a symlink) — before writing via a temp-file + rename in the
  * SAME directory so a concurrent reader never observes a partial write.
- * Returns the written absolute path, or null when the write was refused.
+ * The realpath re-check is itself scan-time, not atomic with the rename: a
+ * same-instant parent swap between the re-check and the rename remains the
+ * same theoretical local-attacker residual assertNoSymlinkAncestors
+ * documents — this helper delivers the strongest ordering Node's portable
+ * fs API allows, not an openat-grade guarantee. Returns the written
+ * absolute path, or null when the write was refused.
  */
 export function writeFileContained(root, rel, content) {
   const rootFull = path.resolve(root);

@@ -144,6 +144,37 @@ test('(e) a learning with anchors: [] is never excluded, even after unrelated fi
   assert.ok(orientLearningIds(c, otherTrigger).includes('perf/plain-claim'));
 });
 
+// P3 (anchor traversal): anchors are only ever workspace-relative pointers
+// written by extractAnchors, but a hand-edited learning can carry a `..`
+// anchor — the old `existsSync(path.join(workspace, a))` resolved and
+// statted it OUTSIDE the workspace, and an outside file that happened to
+// exist kept the learning included. An escaping anchor is now rejected
+// before any stat and treated as unresolvable (stale).
+test('(f) an anchor escaping the workspace via `..` is treated as stale — the learning is excluded even though the outside file exists', () => {
+  const c = ctx();
+  const id = seedAnchoredLearning(c);
+
+  // A REAL file outside the workspace at exactly where the escaping anchor
+  // points — under the old join+existsSync scan this "resolved", so the
+  // learning stayed included; unique name so parallel tmpdir tests never collide.
+  const outsideName = `outside-anchor-${path.basename(c.ws)}.md`;
+  fs.writeFileSync(path.join(c.ws, '..', outsideName), 'outside the workspace\n');
+
+  const { dir } = ensureStore(c.ws, { home: c.harnessHome });
+  const learning = listLearnings(dir).find((l) => l.id === id);
+  const raw = fs.readFileSync(learning.file, 'utf8');
+  const edited = raw.replace(/^anchors:\n {2}- src\/orders\.mjs$/m, `anchors:\n  - ../${outsideName}`);
+  assert.notEqual(edited, raw, 'precondition: the anchors block was rewritten to the escaping path');
+  fs.writeFileSync(learning.file, edited, 'utf8');
+
+  const idx = run(c, ['index']);
+  assert.equal(idx.status, 0, idx.stderr || idx.stdout);
+  assert.equal(JSON.parse(idx.stdout).staleLearnings, 1, 'the escaping anchor counts as stale');
+  assert.ok(!orientLearningIds(c, TRIGGER).includes(id), 'the learning is excluded from retrieval');
+
+  fs.rmSync(path.join(c.ws, '..', outsideName), { force: true });
+});
+
 test('index on a workspace with no knowledge store yet stays store-read-only', () => {
   const c = ctx();
   // No consolidate/remember has ever run here — the learnings store must not

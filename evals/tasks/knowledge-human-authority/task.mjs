@@ -11,15 +11,19 @@ import { storeDir, listLearnings, normalizeSlug } from '../../../packages/harnes
 // Capability: authority is derived from VERIFIED evidence, never asserted by
 // an op's own claim. A human `remember` lands active/human. A model-lane ADD
 // that ASSERTS kind: human-teaching for evidence that does not verify against
-// disk (a nonexistent file) fails toward LESS authority (auto/provisional),
-// never toward more. A promoted learning is immutable: it drops out of
-// retrieval and rejects even a fresh, genuinely-verified human SUPERSEDE.
+// disk (a nonexistent file) is REJECTED outright at admission (E_SCHEMA) —
+// evidence existence is universal across every episode kind, so fabricated
+// human-teaching never admits a learning at all (it previously demoted to
+// auto/provisional, which still bypassed the insight-only imperative lint
+// and rendered without the advisory fence). A promoted learning is
+// immutable: it drops out of retrieval and rejects even a fresh,
+// genuinely-verified human SUPERSEDE.
 export const meta = {
   id: 'knowledge-human-authority',
-  capability: 'authority derives from verified evidence; fabrication demotes; promotion is immutable',
+  capability: 'authority derives from verified evidence; fabrication is rejected; promotion is immutable',
   kind: 'deterministic',
   runtime: 'node',
-  success: 'remember lands human/active, a fabricated human-teaching claim is demoted to auto/provisional, and a promoted learning is excluded from retrieval and protected from any further SUPERSEDE',
+  success: 'remember lands human/active, a fabricated human-teaching claim is rejected at admission with no learning written, and a promoted learning is excluded from retrieval and protected from any further SUPERSEDE',
 };
 
 const DOMAIN = 'payments';
@@ -45,9 +49,10 @@ export async function run() {
     const learningAfterRemember = listLearnings(dir).find((l) => l.id === learningId);
 
     // (b) A model-lane ADD asserting kind: human-teaching for a file that
-    // does not exist — verifyHumanTeachingEpisode fails closed (can't read
-    // the file), so authority derivation falls back to auto/provisional
-    // rather than trusting the op's own unverifiable claim.
+    // does not exist — verifyAdmittedEpisodeKinds fails closed (can't read
+    // the file), so the whole op is rejected at admission (E_SCHEMA) and no
+    // learning is written, rather than trusting the op's own unverifiable
+    // claim to any degree.
     const fabricatedPath = 'docs/solutions/fake/does-not-exist.md';
     const fabricatedSha = crypto.createHash('sha256').update('fabricated-content-never-written').digest('hex');
     const fabId = `${domain}/fabricated-claim`;
@@ -126,8 +131,8 @@ export async function run() {
       learningAfterRememberSource: learningAfterRemember ? learningAfterRemember.fm.source : null,
       learningAfterRememberStatus: learningAfterRemember ? learningAfterRemember.fm.status : null,
       fabricatedExitCode: fabricated.exitCode,
-      learningFabricatedSource: learningFabricated ? learningFabricated.fm.source : null,
-      learningFabricatedStatus: learningFabricated ? learningFabricated.fm.status : null,
+      fabricatedRejectedCode: fabricated.rejected?.[0]?.code || null,
+      fabricatedLearningExists: Boolean(learningFabricated),
       promotedPass: promoted.pass,
       learningAfterPromoteTo: learningAfterPromote ? learningAfterPromote.fm.promoted_to : null,
       rankedIds: rankedAfterPromote.map((r) => r.id),
@@ -141,12 +146,13 @@ export async function run() {
   }
 }
 
-const CHECKS = ['rememberHuman', 'fabricationDemoted', 'promotedExcluded', 'promotedProtected'];
+const CHECKS = ['rememberHuman', 'fabricationRejected', 'promotedExcluded', 'promotedProtected'];
 
 function evaluateChecks(result) {
   return {
     rememberHuman: result.rememberedPass === true && result.learningAfterRememberSource === 'human' && result.learningAfterRememberStatus === 'active',
-    fabricationDemoted: result.fabricatedExitCode === 0 && result.learningFabricatedSource === 'auto' && result.learningFabricatedStatus === 'provisional',
+    fabricationRejected:
+      result.fabricatedExitCode !== 0 && result.fabricatedRejectedCode === 'E_SCHEMA' && result.fabricatedLearningExists === false,
     promotedExcluded: result.promotedPass === true && !!result.learningAfterPromoteTo && !result.rankedIds.includes(result.learningId),
     promotedProtected:
       result.supersedeExitCode !== 0 && result.supersedeRejectedCode === 'E_TARGET' && /promoted/.test(result.supersedeRejectedReason),
@@ -160,7 +166,7 @@ export async function grade(result) {
     verdict: failed.length === 0 ? 'pass' : 'fail',
     reason:
       failed.length === 0
-        ? 'remember landed human/active, the fabricated human-teaching claim was demoted to auto/provisional, and the promoted learning was excluded from retrieval and protected from SUPERSEDE'
+        ? 'remember landed human/active, the fabricated human-teaching claim was rejected at admission with no learning written, and the promoted learning was excluded from retrieval and protected from SUPERSEDE'
         : `failed checks: ${failed.join(', ')}`,
     evidence: { result, checks },
   };
@@ -174,9 +180,9 @@ export const fixtures = {
     rememberedPass: true,
     learningAfterRememberSource: 'human',
     learningAfterRememberStatus: 'active',
-    fabricatedExitCode: 0,
-    learningFabricatedSource: 'auto',
-    learningFabricatedStatus: 'provisional',
+    fabricatedExitCode: 1,
+    fabricatedRejectedCode: 'E_SCHEMA',
+    fabricatedLearningExists: false,
     promotedPass: true,
     learningAfterPromoteTo: 'src/PaymentRetryPolicy.md',
     rankedIds: [],
@@ -190,8 +196,8 @@ export const fixtures = {
     learningAfterRememberSource: 'human',
     learningAfterRememberStatus: 'active',
     fabricatedExitCode: 0,
-    learningFabricatedSource: 'human',
-    learningFabricatedStatus: 'active',
+    fabricatedRejectedCode: null,
+    fabricatedLearningExists: true,
     promotedPass: true,
     learningAfterPromoteTo: 'src/PaymentRetryPolicy.md',
     rankedIds: ['payments/payment-retry-backoff-policy'],

@@ -391,25 +391,32 @@ function verifyHumanTeachingEpisode(workspace, copilotHome, e) {
 
 /**
  * Admission-time evidence check (op validation, before anything is written):
- * every `fix`-kind (or kind-omitted, defaulting to fix) and `insight`-kind
- * episode an op offers must verify against disk via verifyEpisodeKind (tried
- * against both the workspace and, when given, the global copilotHome
- * knowledge root) — a mismatch or nonexistent-in-either-root file is an
- * evidence defect (content-failure class,
- * routed through rejectOp so it strikes toward quarantine like any other
- * malformed episode). `human-teaching` assertions are deliberately exempt
- * here: that lane already has its own disk verification at the point
- * elevated standing is actually GRANTED (verifyHumanTeachingEpisode, used by
- * source/status derivation and the reteach exemption), with an intentional,
- * separately-tested tolerant fallback when unverifiable — an op asserting a
- * fabricated human-teaching kind still applies, just without the elevated
- * standing, so it must never reject here.
+ * EVERY episode an op offers — `fix`-kind (or kind-omitted, defaulting to
+ * fix), `insight`-kind, AND `human-teaching`-kind — must verify against disk
+ * via verifyEpisodeKind (tried against both the workspace and, when given,
+ * the global copilotHome knowledge root): contained path, file exists,
+ * current content hashes to the asserted sha256, and the file's own
+ * frontmatter kind agrees with the asserted kind. A mismatch or
+ * nonexistent-in-either-root file is an evidence defect (content-failure
+ * class, routed through rejectOp so it strikes toward quarantine like any
+ * other malformed episode). Evidence EXISTENCE is deliberately universal:
+ * `human-teaching` used to be exempt here (its disk check ran only where
+ * elevated standing was granted, with a tolerant fallback), but that let a
+ * fabricated human-teaching assertion — a nonexistent file, or a real
+ * insight file relabeled — admit a learning that bypassed the insight-only
+ * imperative lint and rendered without the advisory fence. The ONLY
+ * human-teaching-specific bypass that survives is `humanPresent`'s
+ * governance-RECENCY bypass (overridesGovernanceRecency): the live human
+ * acting now outranks a stored decision's timestamp, but never the
+ * requirement that cited evidence actually exists on disk. The legitimate
+ * `remember` lane is unaffected — runInsightCompound writes the
+ * human-teaching episode to disk BEFORE applyOps runs, so it verifies here
+ * like any other genuine episode.
  */
 function verifyAdmittedEpisodeKinds(workspace, copilotHome, episodes, opIndex) {
   for (const e of episodes) {
-    if (e.kind === 'human-teaching') continue;
     if (!verifyEpisodeKind(workspace, copilotHome, e)) {
-      const asserted = e.kind === 'insight' ? 'insight' : 'fix';
+      const asserted = e.kind === 'insight' ? 'insight' : e.kind === 'human-teaching' ? 'human-teaching' : 'fix';
       return fail(
         'E_SCHEMA',
         `op ${opIndex}: episode ${e.path} does not verify as kind ${asserted} — file missing, sha256 mismatch, or its own frontmatter kind disagrees`
@@ -742,9 +749,10 @@ export function applyOps({
       }
       const bad = validateEpisodes(op.episodes, i);
       if (bad) return rejectOp(bad.code, bad.reason, op.episodes);
-      // Evidence-defect gate (see verifyAdmittedEpisodeKinds doc comment): a
-      // fix/insight-kind assertion must disk-verify before anything downstream
-      // (gainedFix, verifiedFixLinks, promotion math) ever trusts it.
+      // Evidence-defect gate (see verifyAdmittedEpisodeKinds doc comment):
+      // every episode assertion — fix, insight, AND human-teaching — must
+      // disk-verify before anything downstream (gainedFix, verifiedFixLinks,
+      // promotion math, source/status derivation) ever trusts it.
       const badKind = verifyAdmittedEpisodeKinds(workspace, copilotHome, op.episodes, i);
       if (badKind) return rejectOp(badKind.code, badKind.reason, op.episodes);
       // merged_from is only ever a MERGE-derived (op.targets) or ADD/SUPERSEDE-
@@ -1152,10 +1160,11 @@ export function applyOps({
       // A direct human statement outranks statistics: episodes made entirely of
       // VERIFIED human-teaching evidence (see verifyHumanTeachingEpisode) land
       // active with source: human — no provisional damping for teachings
-      // (design §6). An asserted-but-unverifiable human-teaching kind (a
-      // fabricated or nonexistent episode) fails toward the standard
-      // auto/provisional lane instead — this derivation never throws or
-      // rejects the op, it just withholds the elevated standing.
+      // (design §6). Admission (verifyAdmittedEpisodeKinds) already rejected
+      // any op citing an unverifiable human-teaching episode with E_SCHEMA,
+      // so by this point every human-teaching assertion re-verifies; the
+      // re-check here is defense in depth (this derivation never throws or
+      // rejects the op, it just withholds the elevated standing).
       const source = op.episodes.length && op.episodes.every((e) => verifyHumanTeachingEpisode(workspace, copilotHome, e)) ? 'human' : 'auto';
       const status = source === 'human' ? 'active' : 'provisional';
       const content = renderLearning({

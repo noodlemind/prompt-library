@@ -4,7 +4,7 @@ import { spawnSync } from 'node:child_process';
 import { tokenize } from '../tokenize.mjs';
 import { estimateTokens } from '../token-meter.mjs';
 import { extract as lexicalExtract, SOURCE_EXTENSIONS } from './lexical-extractor.mjs';
-import { readFileNoFollow, writeFileContained } from '../fs-safe.mjs';
+import { readFileNoFollow, writeFileContained, assertNoSymlinkAncestors } from '../fs-safe.mjs';
 
 const DEFAULT_MAX_TOKENS = 1000;
 const MAX_FILES_SCANNED = 4000;
@@ -23,13 +23,21 @@ function trackedSourceFiles(workspace) {
 }
 
 /**
- * Read a tracked file with no TOCTOU window — thin wrapper over the shared
- * fs-safe reader (readFileNoFollow) so a tracked path swapped for a symlink
- * never leaks external content into a committed map. Never throws; a
- * missing/symlinked/oversized file reads as empty, same as before.
+ * Read a tracked file with the shared fs-safe defenses: EVERY ancestor
+ * component of the tracked path is validated against the workspace root
+ * first (assertNoSymlinkAncestors — a tracked file can still be listed by
+ * `git ls-files` after `src/` itself was swapped for a symlink pointing
+ * outside the workspace, and readFileNoFollow's O_NOFOLLOW only guards the
+ * FINAL component, so without the ancestor walk the kernel happily follows
+ * the symlinked directory and outside file content leaks into a committed
+ * map), then the leaf itself is opened no-follow (readFileNoFollow) — the
+ * same two-layer defense the episode readers use. Never throws; an
+ * escaping/symlinked/missing/oversized file reads as empty, same as before.
  */
 function readFileSafe(workspace, rel) {
-  return readFileNoFollow(path.join(workspace, rel), { maxBytes: MAX_FILE_BYTES }) ?? '';
+  const full = assertNoSymlinkAncestors(workspace, rel);
+  if (!full) return '';
+  return readFileNoFollow(full, { maxBytes: MAX_FILE_BYTES }) ?? '';
 }
 
 /**

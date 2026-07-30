@@ -27,6 +27,8 @@ import { rebuildIndex, todayClamped } from './apply.mjs';
 import { consolidateStatus, LEARNING_BYTE_CAP, isActiveFm } from './consolidate.mjs';
 import { scanSecrets } from '../secret-scan.mjs';
 import { assertNoSymlinkAncestors, writeFileContained } from '../fs-safe.mjs';
+import { runIndexKnowledge } from '../index-knowledge.mjs';
+import { loadManifest } from '../recall-rank.mjs';
 
 /**
  * Human deletion always wins: purge is never mode-gated — it runs in every
@@ -388,10 +390,73 @@ export function absorbOrAbort({ workspace, home, log = () => {}, recordCheckpoin
 }
 
 /**
+ * Recall-state cascade for purge: deleting an episode's T1 file and its T2
+ * store links is not enough — the team recall manifest
+ * (knowledge/manifest.yaml) and the postings index are separate retrieval
+ * state, rebuilt from the same solution trees by `harness index`, and until
+ * they are rebuilt rankRecall keeps serving the purged episode's title/
+ * summary/snippet from the manifest alone, resurrecting content a human
+ * explicitly deleted. Rebuilds both via runIndexKnowledge (the exact
+ * rebuild `harness index` runs, covering every configured root), then
+ * enforces the post-condition directly against DISK — the manifest recall
+ * actually serves (loadManifest) must no longer list the purged path —
+ * rather than trusting the rebuild call's own success. Skipped entirely
+ * when no manifest exists yet:
+ * nothing can be served from retrieval state that was never built, and a
+ * purge must not materialize manifest/postings files as a side effect.
+ * Returns { ok, reason }: ok false means the purged entry may still be
+ * recallable, and the caller must NOT report the purge as fully passed.
+ */
+function refreshRecallAfterPurge({ workspace, copilotHome, target, log = () => {} }) {
+  const posixTarget = String(target).split(/[\\/]+/).join('/');
+  // Same roots resolveKnowledgePaths (recall-config.mjs) serves recall from,
+  // built explicitly so a falsy copilotHome never degrades into a
+  // cwd-relative 'knowledge' lookup.
+  const roots = [];
+  if (copilotHome) roots.push(path.join(copilotHome, 'knowledge'));
+  roots.push(path.join(workspace, 'knowledge'));
+  const manifestsOnDisk = () => roots.map((r) => path.join(r, 'manifest.yaml')).filter((p) => fs.existsSync(p));
+  if (!manifestsOnDisk().length) return { ok: true, refreshed: false, reason: null };
+
+  let rebuildError = null;
+  try {
+    const knowledgeRoot =
+      copilotHome && fs.existsSync(path.join(copilotHome, 'knowledge')) ? path.join(copilotHome, 'knowledge') : null;
+    runIndexKnowledge({ knowledgeRoot, workspace, copilotHome: copilotHome || '', flags: {}, log });
+  } catch (err) {
+    rebuildError = err?.message || 'index rebuild failed';
+  }
+
+  // Post-condition, checked through loadManifest — the EXACT read path
+  // rankRecall serves from (first parseable manifest, copilotHome root
+  // first), not a re-derived approximation of it — so "no longer listed"
+  // here is precisely "no longer servable" there. Checked against disk
+  // AFTER the rebuild rather than trusting the rebuild call's own success.
+  let served;
+  try {
+    served = loadManifest(copilotHome || '', workspace);
+  } catch {
+    // A manifest read/parse crash means nothing provably serves the entry —
+    // rankRecall's own read would fail the same way.
+    return { ok: true, refreshed: !rebuildError, reason: null };
+  }
+  if ((served.entries || []).some((e) => e && e.path === posixTarget)) {
+    return {
+      ok: false,
+      refreshed: !rebuildError,
+      reason: `${served.path} still lists ${posixTarget}${rebuildError ? ` (index rebuild failed: ${rebuildError})` : ''} — run: harness index`,
+    };
+  }
+  return { ok: true, refreshed: !rebuildError, reason: null };
+}
+
+/**
  * Cascade-delete one episode (design §3): the episode file itself, every
- * learning it was the sole evidence for, and its link inside learnings that
- * cite it alongside other evidence. Ledger entries for the path are dropped
- * and INDEX.md is rebuilt so nothing dangling survives the purge.
+ * learning it was the sole evidence for, its link inside learnings that
+ * cite it alongside other evidence, AND the recall retrieval state (team
+ * manifest + postings index) that would otherwise keep serving the deleted
+ * content (see refreshRecallAfterPurge). Ledger entries for the path are
+ * dropped and INDEX.md is rebuilt so nothing dangling survives the purge.
  */
 export function purgeEpisode({ workspace, target, copilotHome, home, log = () => {} }) {
   if (!target) {
@@ -474,6 +539,18 @@ export function purgeEpisode({ workspace, target, copilotHome, home, log = () =>
         };
       }
       fs.rmSync(safe, { force: true });
+      // Even with no store, the recall manifest may list this episode —
+      // deleting the file without updating retrieval state would leave it
+      // recallable (title/summary/snippet) from the manifest alone.
+      const recall = refreshRecallAfterPurge({ workspace, copilotHome, target, log });
+      if (!recall.ok) {
+        return {
+          pass: false,
+          exitCode: 1,
+          removed: { episode: target, learnings: [], links: [], ledger: 0 },
+          blockedReason: `episode file deleted, but recall retrieval state still serves it: ${recall.reason}`,
+        };
+      }
       return {
         pass: true,
         exitCode: 0,
@@ -631,6 +708,31 @@ export function purgeEpisode({ workspace, target, copilotHome, home, log = () =>
     mirrorLearnings({ workspace, home, retiredIds: inner.removedLearnings });
   } catch {
     // best effort — a mirror failure must never block purge.
+  }
+
+  // Recall-state cascade (refreshRecallAfterPurge): rebuild the manifest and
+  // postings index so rankRecall stops serving the purged episode. NOT best
+  // effort — a purge whose target can still be recalled must never report
+  // pass: true. Enforced only when the episode file is actually gone now
+  // (deleted above, or it never existed on disk): when the delete itself
+  // failed, the file legitimately still exists, the manifest listing it is
+  // accurate, and that partial outcome is already reported via partialReason.
+  const episodeGone = episodeRemoved || !episodeExistsOnDisk;
+  const recall = refreshRecallAfterPurge({ workspace, copilotHome, target, log });
+  if (episodeGone && !recall.ok) {
+    return {
+      pass: false,
+      exitCode: 1,
+      removed: {
+        episode: episodeRemoved ? target : null,
+        learnings: inner.removedLearnings,
+        links: inner.removedLinks,
+        ledger: inner.ledgerRemoved,
+      },
+      blockedReason: `store purge committed, but recall retrieval state still serves the purged episode: ${recall.reason}`,
+      ...(partialReason ? { partialReason } : {}),
+      ...(tx.staleLockNote ? { staleLockRemoved: tx.staleLockNote } : {}),
+    };
   }
 
   return {
