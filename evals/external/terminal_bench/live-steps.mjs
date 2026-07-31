@@ -7,8 +7,8 @@
  * remaining allowance), invoke `harbor run` with a deterministic job
  * identity and the mounted harness bundle, then read the official verifier
  * evidence and the bridge's done-file to build a schema-valid eval-run
- * document. Provider-reported cost is the ledger of record — every child
- * charge lands on the release-side budget chain.
+ * document. The larger of pinned local and provider-reported cost is charged —
+ * every child charge lands on the release-side budget chain.
  *
  * Everything external (harbor, filesystem layout, bundle prep) is injected
  * so the whole path is testable without a container or a provider.
@@ -26,7 +26,7 @@ import { buildHarnessCondition } from './harness-condition.mjs';
 import { runtimeBridgeTools } from './agent.mjs';
 import { engineerRuntimeContract, buildGuidance, buildGuidanceCatalog } from '../../lib/scenario.mjs';
 import { createBudget } from '../../lib/budget.mjs';
-import { prepareHarnessBundle, bundleMount } from './provision.mjs';
+import { prepareHarnessBundle, materializePrebuiltBundle } from './provision.mjs';
 
 export const AGENT_REF = 'evals.external.terminal_bench.harbor_agent:StdioBridgeAgent';
 
@@ -52,8 +52,9 @@ const INSTRUCTION_PLACEHOLDER = '(the task instruction is supplied by Harbor at 
 const sha256 = (value) => crypto.createHash('sha256').update(String(value)).digest('hex');
 const stableHash = (value) => sha256(JSON.stringify(value ?? null));
 const shortHash = (value) => stableHash(value).slice(0, 24);
+const normalizeProviderName = (value) => String(value ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
 
-const PROVIDER_EVENT_TYPES = new Set(['request', 'request_attempt', 'response', 'error', 'retry', 'completion_error', 'fallback']);
+const PROVIDER_EVENT_TYPES = new Set(['request', 'request_attempt', 'response', 'error', 'retry', 'completion_error', 'fallback', 'billing_uncertain']);
 const TOOL_EVENT_TYPES = new Set(['tool_call', 'tool_result', 'tool_result_compacted', 'post_verify_tool_suppressed']);
 
 function numericEventTime(event) {
@@ -110,15 +111,29 @@ function harnessEventsOf(done) {
 
 function harnessEventEvidenceOf(done, harnessEvents) {
   const source = done?.harnessEventEvidence;
+  const available = typeof source?.available === 'boolean' ? source.available : Array.isArray(harnessEvents);
+  const sourceTruncated = source?.sourceTruncated === true;
+  const projectionRejectedEvents = Number.isFinite(source?.projectionRejectedEvents)
+    ? Math.max(0, source.projectionRejectedEvents)
+    : 0;
+  const projectionRejectedChecks = Number.isFinite(source?.projectionRejectedChecks)
+    ? Math.max(0, source.projectionRejectedChecks)
+    : 0;
+  const complete = typeof source?.complete === 'boolean'
+    ? source.complete
+    : available && !sourceTruncated && projectionRejectedEvents === 0 && projectionRejectedChecks === 0;
   return {
-    available: typeof source?.available === 'boolean' ? source.available : Array.isArray(harnessEvents),
+    available,
+    complete,
     reason: source?.reason ?? (Array.isArray(harnessEvents) ? null : 'harness-events-not-captured'),
     retainedEvents: Number.isFinite(source?.retainedEvents) ? Math.max(0, source.retainedEvents) : harnessEvents?.length ?? 0,
-    sourceTruncated: source?.sourceTruncated === true,
+    sourceTruncated,
+    projectionRejectedEvents,
+    projectionRejectedChecks,
   };
 }
 
-function deriveHarnessBehavior(condition, telemetryEvents, harnessEvents, done, telemetryLedgerPresent) {
+function deriveHarnessBehavior(condition, telemetryEvents, harnessEvents, harnessEventEvidence, done, telemetryLedgerPresent) {
   const empty = {
     orientInvoked: null,
     planCreatedOrSelected: null,
@@ -135,10 +150,10 @@ function deriveHarnessBehavior(condition, telemetryEvents, harnessEvents, done, 
   };
   if (condition !== 'harness') return empty;
 
-  const capturedHarnessEvents = Array.isArray(harnessEvents);
+  const capturedHarnessEvents = Array.isArray(harnessEvents) && harnessEventEvidence?.complete === true;
   const capturedToolEvents = telemetryLedgerPresent;
   if (!capturedHarnessEvents && !capturedToolEvents) return empty;
-  const events = harnessEvents ?? [];
+  const events = capturedHarnessEvents ? harnessEvents : [];
   const toolCalls = telemetryEvents.filter((event) => event.type === 'tool_call');
   const toolResults = telemetryEvents.filter((event) => event.type === 'tool_result');
   const gateEvents = events.filter((event) => event.type === 'gate');
@@ -264,20 +279,26 @@ function efficiencyOf(done, startedAt, endedAt) {
 
 /**
  * Collapse one condition's repetition documents into one schema-valid view:
- * majority verdict over ALL attempts (a null-reward repetition can never
- * count toward a pass), median reward over valid repetitions, and the median
+ * strict-majority verdict over valid paired attempts, median reward over
+ * valid repetitions, and the median
  * per numeric efficiency field. Budget charging is untouched — every trial charges
  * as it runs; the aggregate represents a typical trial, not the sum.
  */
-export function aggregateRepetitionDocs(docs) {
+export function aggregateRepetitionDocs(docs, { validMask = null } = {}) {
   if (!docs.length) throw new Error('at least one repetition document is required');
+  if (validMask && validMask.length !== docs.length) throw new Error('validMask must align with repetition documents');
   const rawRepetitions = docs.map((doc) => {
     const copy = structuredClone(doc);
     delete copy.repetitions;
     return copy;
   });
-  if (docs.length === 1) {
+  const isValid = (doc, index) =>
+    doc.correctness?.verifierReward != null && (validMask == null || validMask[index] === true);
+  const valid = docs.filter(isValid);
+  if (docs.length === 1 && valid.length === 1) {
     const only = structuredClone(docs[0]);
+    only.validRepetitionCount = 1;
+    only.invalidRepetitionCount = 0;
     only.repetitions = rawRepetitions;
     return only;
   }
@@ -287,17 +308,16 @@ export function aggregateRepetitionDocs(docs) {
     const mid = Math.floor(nums.length / 2);
     return nums.length % 2 ? nums[mid] : (nums[mid - 1] + nums[mid]) / 2;
   };
-  const valid = docs.filter((d) => d.correctness?.verifierReward != null);
-  const passes = docs.filter((d) => d.correctness?.verdict === 'pass').length;
+  const passes = valid.filter((d) => d.correctness?.verdict === 'pass').length;
   const base = structuredClone(valid[0] ?? docs[0]);
   delete base.repetitions;
-  base.correctness.verdict = passes >= Math.ceil(docs.length / 2) ? 'pass' : 'fail';
+  base.correctness.verdict = valid.length > 0 && passes > valid.length / 2 ? 'pass' : 'fail';
   base.correctness.verifierReward = median(valid.map((d) => d.correctness.verifierReward));
-  base.correctness.exitReason = `repetition-aggregate(n=${docs.length})`;
+  base.correctness.exitReason = `repetition-aggregate(n=${docs.length});valid=${valid.length}`;
   base.correctness.completedWithinTimeout = docs.every((d) => d.correctness?.completedWithinTimeout !== false);
   base.correctness.completedWithinBudget = docs.every((d) => d.correctness?.completedWithinBudget !== false);
   for (const key of Object.keys(base.efficiency ?? {})) {
-    base.efficiency[key] = median(docs.map((d) => d.efficiency?.[key]));
+    base.efficiency[key] = median((valid.length ? valid : docs).map((d) => d.efficiency?.[key]));
   }
   // Cost completeness is an all-repetitions invariant, not a typical/median value:
   // one unmetered paid response invalidates the aggregate's spend evidence.
@@ -306,6 +326,7 @@ export function aggregateRepetitionDocs(docs) {
     const values = docs.map((doc) => doc.efficiency?.[key]).filter((value) => typeof value === 'boolean');
     base.efficiency[key] = values.length ? values.length === docs.length && values.every(Boolean) : null;
   }
+  base.efficiency.billingUncertain = docs.some((doc) => doc.efficiency?.billingUncertain === true);
   base.efficiency.missingUsage = docs.reduce(
     (sum, d) => sum + (Number.isFinite(d.efficiency?.missingUsage) ? d.efficiency.missingUsage : 0),
     0
@@ -369,11 +390,26 @@ export function aggregateRepetitionDocs(docs) {
       harnessEvents,
       harnessEventEvidence: {
         available: observed.every((doc) => doc.observability.harnessEventEvidence?.available === true),
+        complete: observed.every((doc) => doc.observability.harnessEventEvidence?.complete === true),
         reason: observed.every((doc) => doc.observability.harnessEventEvidence?.available === true)
-          ? null
+          ? observed.every((doc) => doc.observability.harnessEventEvidence?.complete === true)
+            ? null
+            : 'one-or-more-repetitions-have-incomplete-harness-event-projection'
           : 'one-or-more-repetitions-missing-harness-events',
         retainedEvents: harnessEvents.length,
         sourceTruncated: observed.some((doc) => doc.observability.harnessEventEvidence?.sourceTruncated === true),
+        projectionRejectedEvents: observed.reduce(
+          (total, doc) => total + (Number.isFinite(doc.observability.harnessEventEvidence?.projectionRejectedEvents)
+            ? doc.observability.harnessEventEvidence.projectionRejectedEvents
+            : 0),
+          0
+        ),
+        projectionRejectedChecks: observed.reduce(
+          (total, doc) => total + (Number.isFinite(doc.observability.harnessEventEvidence?.projectionRejectedChecks)
+            ? doc.observability.harnessEventEvidence.projectionRejectedChecks
+            : 0),
+          0
+        ),
       },
       providerAttemptsStarted: sum('providerAttemptsStarted'),
       providerAttemptsClosed: sum('providerAttemptsClosed'),
@@ -389,6 +425,19 @@ export function aggregateRepetitionDocs(docs) {
   base.reproducibility.repetitionIndex = null;
   base.reproducibility.orderIndex = null;
   base.reproducibility.aggregation = 'majority-verdict-median-efficiency';
+  const attributions = docs.map((doc) => doc.reproducibility?.attribution).filter(Boolean);
+  if (attributions.length) {
+    base.reproducibility.attribution = {
+      responseCount: attributions.reduce(
+        (total, attribution) => total + (Number.isFinite(attribution.responseCount) ? attribution.responseCount : 0),
+        0
+      ),
+      complete: attributions.length === docs.length && attributions.every((attribution) => attribution.complete === true),
+      fallbackDetected: attributions.some((attribution) => attribution.fallbackDetected === true),
+    };
+  }
+  base.validRepetitionCount = valid.length;
+  base.invalidRepetitionCount = docs.length - valid.length;
   if (base.observability) {
     base.reproducibility.telemetryHash = stableHash([...base.observability.providerEvents, ...base.observability.toolEvents]);
     base.reproducibility.harnessEventsHash = stableHash(base.observability.harnessEvents);
@@ -420,7 +469,9 @@ export function buildRunDoc({
 }) {
   const telemetryLedgerPresent = Array.isArray(done?.telemetry?.events);
   const telemetryEvents = telemetryLedgerPresent ? done.telemetry.events : [];
-  const lastResponse = telemetryEvents.filter((e) => e.type === 'response').at(-1) ?? null;
+  const telemetryTotals = done?.telemetry?.totals ?? null;
+  const responses = telemetryEvents.filter((event) => event.type === 'response');
+  const lastResponse = responses.at(-1) ?? null;
   const stopReason = done?.stopReason ?? (run.timedOut ? 'timeout' : 'unknown');
   const harnessEvents = harnessEventsOf(done);
   const harnessEventEvidence = harnessEventEvidenceOf(done, harnessEvents);
@@ -449,6 +500,21 @@ export function buildRunDoc({
         })
       )
     : done?.runtime?.toolSchemaHash ?? null;
+  const providerRequestedOrder = Array.isArray(profile.provider?.order) ? profile.provider.order.slice() : [];
+  const normalizedOrder = providerRequestedOrder.map(normalizeProviderName);
+  const attributionComplete =
+    responses.length > 0 &&
+    telemetryTotals?.providerResponses === responses.length &&
+    responses.every((response) =>
+      typeof response.model === 'string' && response.model.length > 0 &&
+      (providerRequestedOrder.length === 0 || (typeof response.provider === 'string' && response.provider.length > 0))
+    );
+  const fallbackDetected =
+    providerEvents.some((event) => event.type === 'fallback') ||
+    responses.some((response) => response.model !== profile.model) ||
+    responses.some((response) =>
+      providerRequestedOrder.length > 0 && !normalizedOrder.includes(normalizeProviderName(response.provider))
+    );
   return {
     schema: 'eval-run.v1',
     reproducibility: {
@@ -461,6 +527,12 @@ export function buildRunDoc({
       modelRequested: profile.model,
       modelResolved: lastResponse?.model ?? null,
       providerResolved: lastResponse?.provider ?? null,
+      providerRequestedOrder,
+      attribution: {
+        responseCount: responses.length,
+        complete: attributionComplete,
+        fallbackDetected,
+      },
       host: hostId,
       reasoningConfig: profile.reasoning,
       runnerVersion: '1',
@@ -493,7 +565,7 @@ export function buildRunDoc({
       completedWithinBudget: stopReason !== 'budget_exhausted',
     },
     efficiency: efficiencyOf(done, startedAt, endedAt),
-    harnessBehavior: deriveHarnessBehavior(condition, telemetryEvents, harnessEvents, done, telemetryLedgerPresent),
+    harnessBehavior: deriveHarnessBehavior(condition, telemetryEvents, harnessEvents, harnessEventEvidence, done, telemetryLedgerPresent),
     enforcementFidelity: enforcementFidelityOf(condition, done, harnessEvents),
     workspaceEvidence,
     observability: {
@@ -523,6 +595,7 @@ export function buildLiveSteps({
   spawnImpl,
   now = () => new Date().toISOString(),
   prepareBundle = prepareHarnessBundle,
+  fetchImpl = globalThis.fetch,
   repetitions = null,
   seeds = null,
   localEnabled = false,
@@ -538,15 +611,131 @@ export function buildLiveSteps({
     maxOutputTokens: profile.maxTokens,
     trialCeilingUsd: profile.trialCeilingUsd,
   });
+  const isPaidProfile = (profile) => {
+    const pricing = profile.pricing ?? {};
+    return [pricing.inputPerM, pricing.cachedInputPerM, pricing.outputPerM].some((value) => Number(value) > 0);
+  };
   let datasetDir = null;
+  let verifiedDatasetDir = null;
   let bundle = null;
+  let paidSchedulingStop = null;
 
-  function environment() {
+  async function providerSpendGuard() {
+    const ceilingUsd = config.budget?.releaseCeilingUsd;
+    const checkedAt = now();
+    if (typeof ceilingUsd !== 'number' || !Number.isFinite(ceilingUsd) || ceilingUsd < 0) {
+      return { ok: true, evidence: { verified: false, required: false, reason: 'release-ceiling-not-configured', checkedAt } };
+    }
+    if (typeof fetchImpl !== 'function') {
+      return { ok: false, reason: 'provider key limit could not be verified', evidence: { verified: false, required: true, ceilingUsd, checkedAt } };
+    }
+    let response;
+    try {
+      response = await fetchImpl('https://openrouter.ai/api/v1/key', {
+        method: 'GET',
+        headers: { authorization: `Bearer ${env.OPENROUTER_API_KEY}` },
+      });
+    } catch {
+      return { ok: false, reason: 'provider key limit lookup failed', evidence: { verified: false, required: true, ceilingUsd, checkedAt } };
+    }
+    if (!response?.ok) {
+      return {
+        ok: false,
+        reason: `provider key limit lookup returned HTTP ${Number.isFinite(response?.status) ? response.status : 'error'}`,
+        evidence: { verified: false, required: true, ceilingUsd, checkedAt },
+      };
+    }
+    let metadata;
+    try {
+      metadata = (await response.json())?.data ?? null;
+    } catch {
+      metadata = null;
+    }
+    const limitUsd = metadata?.limit;
+    const limitRemainingUsd = metadata?.limit_remaining;
+    const reset = metadata?.limit_reset;
+    const finiteLimit = typeof limitUsd === 'number' && Number.isFinite(limitUsd) && limitUsd >= 0;
+    const finiteRemaining = typeof limitRemainingUsd === 'number' && Number.isFinite(limitRemainingUsd) && limitRemainingUsd >= 0;
+    const noReset = reset === null;
+    const limitMatchesCeiling = finiteLimit && limitUsd === ceilingUsd;
+    const allowanceSufficient = finiteRemaining && limitRemainingUsd === ceilingUsd;
+    const evidence = {
+      verified: finiteLimit && finiteRemaining && noReset && limitMatchesCeiling && allowanceSufficient,
+      required: true,
+      limitUsd: finiteLimit ? limitUsd : null,
+      limitRemainingUsd: finiteRemaining ? limitRemainingUsd : null,
+      reset: reset ?? null,
+      ceilingUsd,
+      checkedAt,
+    };
+    if (!evidence.verified) {
+      return {
+        ok: false,
+        reason: 'provider limit must use a fresh dedicated no-reset key capped exactly at the release ceiling',
+        evidence,
+      };
+    }
+    return { ok: true, evidence };
+  }
+
+  async function environment() {
     const missing = [];
     const probe = runHarbor({ args: ['--version'], cwd: workDir, spawnImpl, timeoutMs: 60_000, spawnEnv: harborSpawnEnv(null) });
     if (probe.spawnError || probe.code !== 0) missing.push('harbor CLI');
     missing.push(...kimiHost.validateCredentials().missing);
-    return { ok: missing.length === 0, missing };
+    let providerGuard = { ok: true, evidence: { verified: false, required: false, reason: 'credentials-unavailable' } };
+    if (kimiHost.validateCredentials().ok) {
+      providerGuard = await providerSpendGuard();
+      if (!providerGuard.ok) missing.push(providerGuard.reason);
+    }
+    if (env.HARNESS_EVAL_TB_BUNDLE_DIR) {
+      try {
+        ensureBundle();
+      } catch {
+        missing.push('prebuilt harness bundle failed integrity validation');
+      }
+    }
+    return { ok: missing.length === 0, missing, providerSpendGuard: providerGuard.evidence };
+  }
+
+  function makeSnapshotReadOnly(root) {
+    const visit = (current) => {
+      const stat = fs.lstatSync(current);
+      if (stat.isSymbolicLink()) throw new Error(`verified dataset snapshot cannot contain symlinks: ${path.relative(root, current)}`);
+      if (!stat.isDirectory()) {
+        fs.chmodSync(current, 0o444);
+        return;
+      }
+      for (const name of fs.readdirSync(current)) visit(path.join(current, name));
+      fs.chmodSync(current, 0o555);
+    };
+    visit(root);
+  }
+
+  function snapshotVerifiedTasks() {
+    if (verifiedDatasetDir) {
+      for (const entry of tasksOf(lock)) {
+        const verdict = verifyTaskAgainstLock(path.join(verifiedDatasetDir, entry.task), lock, entry.task);
+        if (!verdict.ok) throw new Error(`verified task snapshot drifted: ${verdict.reason}`);
+      }
+      return verifiedDatasetDir;
+    }
+    const destination = path.join(workDir, 'verified-dataset');
+    if (fs.existsSync(destination)) throw new Error('verified dataset snapshot destination already exists');
+    fs.mkdirSync(destination, { recursive: false, mode: 0o700 });
+    for (const entry of tasksOf(lock)) {
+      fs.cpSync(path.join(datasetDir, entry.task), path.join(destination, entry.task), {
+        recursive: true,
+        dereference: false,
+        errorOnExist: true,
+        force: false,
+      });
+      const verdict = verifyTaskAgainstLock(path.join(destination, entry.task), lock, entry.task);
+      if (!verdict.ok) throw new Error(`copied task failed checksum verification: ${verdict.reason}`);
+    }
+    makeSnapshotReadOnly(destination);
+    verifiedDatasetDir = fs.realpathSync.native(destination);
+    return verifiedDatasetDir;
   }
 
   /** Locate (or download) the pinned dataset and verify EVERY pinned task's bytes BEFORE any paid step. */
@@ -573,6 +762,11 @@ export function buildLiveSteps({
       const verdict = verifyTaskAgainstLock(path.join(datasetDir, entry.task), lock, entry.task);
       if (!verdict.ok) return { ok: false, reason: verdict.reason };
     }
+    try {
+      snapshotVerifiedTasks();
+    } catch (error) {
+      return { ok: false, reason: `task snapshot failed: ${error.message}` };
+    }
     return { ok: true, reason: '' };
   }
 
@@ -598,6 +792,7 @@ export function buildLiveSteps({
       args: buildHarborRunArgs({
         lock,
         task,
+        datasetPath: verifiedDatasetDir,
         agentRef: AGENT_REF,
         model: profile.model,
         envName: env.HARNESS_EVAL_TB_ENV ?? config.execution?.environment ?? 'docker',
@@ -627,18 +822,47 @@ export function buildLiveSteps({
       done = null;
     }
     const totals = done?.telemetry?.totals ?? null;
-    // Provider-reported spend is the ledger of record; locally calculated
-    // cost is the fallback. A missing ledger charges nothing and instead
-    // fails the release through the metered-telemetry gate.
-    const pricing = profile.pricing ?? {};
-    const isPaidProfile = [pricing.inputPerM, pricing.cachedInputPerM, pricing.outputPerM].some((value) => Number(value) > 0);
-    const reconciledCost = isPaidProfile
-      ? totals?.providerCostComplete === true && totals?.providerCostUsd != null
-        ? totals.providerCostUsd
-        : totals?.localCostUsd ?? null
-      : 0;
+    const paidProfile = isPaidProfile(profile);
+    const finiteCost = (value) => typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null;
+    const localCost = finiteCost(totals?.localCostUsd);
+    const providerCost = finiteCost(totals?.providerCostUsd);
+    const reconciledCost = paidProfile ? Math.max(localCost ?? 0, providerCost ?? 0) : 0;
     budget.charge(reconciledCost, `${evalHost.id} ${label}`);
-    const failureKind = classifyFailure({
+    const allocationBreached = paidProfile && budget.breached;
+    const explicitUnknownBilling = Array.isArray(done?.telemetry?.events) &&
+      done.telemetry.events.some((event) => event?.type === 'billing_uncertain' || event?.billingStatus === 'unknown');
+    const billingUncertain = paidProfile && (
+      !done ||
+      !totals ||
+      totals.usageComplete !== true ||
+      totals.providerCostComplete !== true ||
+      totals.billingComplete !== true ||
+      totals.costComplete !== true ||
+      totals.openAttempts !== 0 ||
+      totals.unknownBillingAttempts !== 0 ||
+      localCost == null ||
+      providerCost == null ||
+      explicitUnknownBilling
+    );
+    let reservedUsd = 0;
+    if (billingUncertain) {
+      reservedUsd = budget.remainingUsd();
+      if (reservedUsd > 0) budget.charge(reservedUsd, `${evalHost.id} ${label} uncertain-billing-reserve`);
+      paidSchedulingStop = {
+        task,
+        condition: condition.id,
+        reason: !done ? 'missing-done-telemetry' : 'incomplete-or-unknown-billing',
+        reservedUsd,
+      };
+    } else if (allocationBreached) {
+      paidSchedulingStop = {
+        task,
+        condition: condition.id,
+        reason: 'reconciled-cost-exceeded-trial-allocation',
+        reservedUsd: 0,
+      };
+    }
+    const classifiedFailure = classifyFailure({
       run,
       reward: evidence.reward,
       providerFailure: done?.stopReason === 'provider_error',
@@ -661,7 +885,18 @@ export function buildLiveSteps({
       conditionDocument,
       hostId: evalHost.id,
     });
-    return { doc, failureKind };
+    doc.efficiency.billingUncertain = billingUncertain;
+    if (allocationBreached) doc.correctness.completedWithinBudget = false;
+    doc.billingEvidence = {
+      uncertain: billingUncertain,
+      reconciledCostUsd: reconciledCost,
+      reservedUsd,
+      allocationBreached,
+      policy: billingUncertain ? 'reserve-trial-remainder-and-stop' : 'max-local-provider-reported',
+    };
+    const failureKind = classifiedFailure ?? (billingUncertain ? 'billing' : allocationBreached ? 'budget' : null);
+    doc.trialValidity = { valid: failureKind == null && evidence.reward != null, failureKind };
+    return { doc, failureKind, stopPaidScheduling: billingUncertain || allocationBreached };
   }
 
   function taskPair({ evalHost, task, budget, attempt, trialCeilingUsd, n = repetitionCount }) {
@@ -709,35 +944,58 @@ export function buildLiveSteps({
             attempt,
           },
         });
+        if (results[conditionId].stopPaidScheduling) break;
       }
       const { generic, harness } = results;
-      repetitionRuns.push({ generic, harness });
+      const pairedValid = Boolean(
+        generic?.failureKind == null &&
+        harness?.failureKind == null &&
+        generic?.doc?.correctness?.verifierReward != null &&
+        harness?.doc?.correctness?.verifierReward != null
+      );
+      repetitionRuns.push({ generic: generic ?? null, harness: harness ?? null, pairedValid });
+      if (paidSchedulingStop && isPaidProfile(profile)) break;
     }
-    // A pair is invalid only when a majority of its repetitions failed to
-    // produce a valid trial; otherwise the surviving trials carry the verdict.
-    const kinds = repetitionRuns.map((r) => r.generic.failureKind ?? r.harness.failureKind);
-    const validRepetitions = kinds.filter((k) => !k).length;
+    const kinds = repetitionRuns.map((run) =>
+      run.generic?.failureKind ?? run.harness?.failureKind ?? (run.pairedValid ? null : 'infrastructure')
+    );
+    const validRepetitions = repetitionRuns.filter((run) => run.pairedValid).length;
     let failureKind = null;
-    if (validRepetitions < Math.ceil(kinds.length / 2)) {
+    if (validRepetitions <= n / 2) {
       const counts = {};
       for (const kind of kinds.filter(Boolean)) counts[kind] = (counts[kind] ?? 0) + 1;
       failureKind = Object.entries(counts).sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
     }
+    const aggregateCondition = (conditionId) => {
+      const attempted = repetitionRuns.filter((run) => run[conditionId]?.doc);
+      if (!attempted.length) return null;
+      return aggregateRepetitionDocs(
+        attempted.map((run) => run[conditionId].doc),
+        { validMask: attempted.map((run) => run.pairedValid) }
+      );
+    };
     return {
       host: evalHost.id,
       task,
       pairId,
       repetitionCount: n,
-      generic: aggregateRepetitionDocs(repetitionRuns.map((r) => r.generic.doc)),
-      harness: aggregateRepetitionDocs(repetitionRuns.map((r) => r.harness.doc)),
+      attemptedRepetitionCount: repetitionRuns.length,
+      validRepetitionCount: validRepetitions,
+      invalidRepetitionCount: repetitionRuns.length - validRepetitions,
+      generic: aggregateCondition('generic'),
+      harness: aggregateCondition('harness'),
       failureKind,
+      paidSchedulingStop: paidSchedulingStop ? { ...paidSchedulingStop } : null,
     };
   }
 
   function ensureBundle() {
     // A pre-built bundle (offline releases, tests) short-circuits preparation.
     bundle ??= env.HARNESS_EVAL_TB_BUNDLE_DIR
-      ? { bundleDir: env.HARNESS_EVAL_TB_BUNDLE_DIR, mount: bundleMount(env.HARNESS_EVAL_TB_BUNDLE_DIR) }
+      ? materializePrebuiltBundle(env.HARNESS_EVAL_TB_BUNDLE_DIR, {
+          destination: path.join(workDir, 'materialized-harness-bundle'),
+          expectedManifestHash: env.HARNESS_EVAL_TB_BUNDLE_SHA256,
+        })
       : prepareBundle({ bundleDir: path.join(workDir, 'harness-bundle'), spawnImpl });
   }
 
@@ -751,11 +1009,17 @@ export function buildLiveSteps({
       const tasks = tasksOf(lock);
       const profile = kimiHost.profile;
       const trialCeilingUsd = Math.min(profile.trialCeilingUsd, budget.remainingUsd() / (tasks.length * repetitionCount * 2));
-      return tasks.map((entry) => taskPair({ evalHost: kimiHost, task: entry.task, budget, attempt: 'a', trialCeilingUsd }));
+      const pairs = [];
+      for (const entry of tasks) {
+        if (paidSchedulingStop) break;
+        pairs.push(taskPair({ evalHost: kimiHost, task: entry.task, budget, attempt: 'a', trialCeilingUsd }));
+      }
+      return pairs;
     },
     /** §9 conditional rerun: ONE complete fresh pair for ONE regressed task (never repetition-multiplied). */
     rerunKimiPair: async (budget, task) => {
       if (!kimiHost.validateCredentials().ok) return null;
+      if (paidSchedulingStop) return null;
       ensureBundle();
       const profile = kimiHost.profile;
       const trialCeilingUsd = Math.min(profile.trialCeilingUsd, budget.remainingUsd() / 2);

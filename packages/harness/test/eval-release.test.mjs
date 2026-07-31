@@ -42,6 +42,8 @@ function fullRun(condition, verdict, over = {}) {
       modelRequested: 'moonshotai/kimi-k2.7-code',
       modelResolved: 'moonshotai/kimi-k2.7-code',
       providerResolved: 'Moonshot AI',
+      providerRequestedOrder: ['moonshotai'],
+      attribution: { responseCount: 5, complete: true, fallbackDetected: false },
       host: 'openrouter-kimi',
       reasoningConfig: null,
       runnerVersion: '1',
@@ -135,10 +137,28 @@ function fullRun(condition, verdict, over = {}) {
       reason: null,
     },
     observability: {
-      providerEvents: Array.from({ length: 5 }, (_, index) => ({ type: 'request', requestId: `request-${index + 1}` })),
+      providerEvents: Array.from({ length: 5 }, (_, index) => [
+        { type: 'request', requestId: `request-${index + 1}` },
+        { type: 'request_attempt', requestId: `request-${index + 1}`, attemptId: `attempt-${index + 1}` },
+        {
+          type: 'response',
+          requestId: `request-${index + 1}`,
+          attemptId: `attempt-${index + 1}`,
+          model: 'moonshotai/kimi-k2.7-code',
+          provider: 'Moonshot AI',
+        },
+      ]).flat(),
       toolEvents: [],
       harnessEvents: [],
-      harnessEventEvidence: { available: true, reason: null, retainedEvents: 0, sourceTruncated: false },
+      harnessEventEvidence: {
+        available: true,
+        complete: true,
+        reason: null,
+        retainedEvents: 0,
+        sourceTruncated: false,
+        projectionRejectedEvents: 0,
+        projectionRejectedChecks: 0,
+      },
       providerAttemptsStarted: 5,
       providerAttemptsClosed: 5,
       unclosedProviderAttempts: 0,
@@ -203,7 +223,19 @@ function repeatedRun(condition, verdict, count = 3) {
 function baseSteps(overrides = {}) {
   return {
     deterministic: async () => ({ passed: 17, failed: 0, skipped: 2 }),
-    environment: async () => ({ ok: true, missing: [] }),
+    environment: async () => ({
+      ok: true,
+      missing: [],
+      providerSpendGuard: {
+        verified: true,
+        required: true,
+        limitUsd: 20,
+        limitRemainingUsd: 20,
+        reset: null,
+        ceilingUsd: 20,
+        checkedAt: '2026-07-31T00:00:00.000Z',
+      },
+    }),
     taskLock: async () => ({ ok: true, reason: '' }),
     nativeProducts: async () => [{ host: 'codex-subscription', status: 'pass', telemetryAvailable: false }],
     kimiPair: async () => pairOf('openrouter-kimi', 'pass', 'pass'),
@@ -242,6 +274,7 @@ test('classifyPair precedence: safety bypass, then infrastructure, then budget',
   assert.equal(infra.result, 'infrastructure-invalid');
   const budget = classifyPair(pairOf('h', 'pass', 'fail', { harness: { correctness: { completedWithinBudget: false } } }));
   assert.equal(budget.result, 'inconclusive-budget');
+  assert.equal(classifyPair(pairOf('h', 'pass', 'fail', { failureKind: 'budget' })).result, 'inconclusive-budget');
 });
 
 test('a model or provider fallback is detected from the run documents', () => {
@@ -249,6 +282,48 @@ test('a model or provider fallback is detected from the run documents', () => {
     pairOf('h', 'pass', 'pass', { harness: { reproducibility: { modelResolved: 'moonshotai/kimi-k2-instruct' } } })
   );
   assert.equal(fallback.fallbackDetected, true);
+  assert.equal(fallback.result, 'infrastructure-invalid');
+});
+
+test('fallback contamination in an earlier response or raw repetition invalidates the causal comparison', async () => {
+  const repeated = {
+    host: 'openrouter-kimi',
+    repetitionCount: 3,
+    generic: repeatedRun('generic', 'pass'),
+    harness: repeatedRun('harness', 'pass'),
+    failureKind: null,
+  };
+  const firstResponse = repeated.harness.repetitions[0].observability.providerEvents.find((event) => event.type === 'response');
+  firstResponse.provider = 'DeepInfra';
+  const { report, exitCode } = await runRelease({
+    config: CONFIG,
+    steps: baseSteps({ kimiPair: async () => repeated }),
+    requiredPairs: ['openrouter-kimi'],
+  });
+  const pair = report.pairs.find((entry) => entry.host === 'openrouter-kimi');
+  assert.equal(pair.result, 'infrastructure-invalid');
+  assert.equal(pair.causallyAttributable, false);
+  assert.equal(report.claim.level, 'inconclusive');
+  assert.equal(exitCode, 1);
+});
+
+test('paid required trials require resolved model and provider on every response and the pinned provider order', async () => {
+  for (const mutate of [
+    (doc) => { doc.reproducibility.modelResolved = null; },
+    (doc) => { doc.observability.providerEvents.find((event) => event.type === 'response').provider = null; },
+    (doc) => { doc.observability.providerEvents.find((event) => event.type === 'response').provider = 'DeepInfra'; },
+  ]) {
+    const pair = pairOf('openrouter-kimi', 'pass', 'pass');
+    mutate(pair.harness);
+    const { report, exitCode } = await runRelease({
+      config: CONFIG,
+      steps: baseSteps({ kimiPair: async () => pair }),
+      requiredPairs: ['openrouter-kimi'],
+    });
+    assert.equal(exitCode, 1);
+    assert.equal(report.claim.level, 'inconclusive');
+    assert.equal(report.pairs.find((entry) => entry.host === 'openrouter-kimi').causallyAttributable, false);
+  }
 });
 
 test('allocateReleaseBudgets chains the plan allowances under the release ceiling', () => {
@@ -330,6 +405,43 @@ test('an all-green release produces a schema-valid report and exit code 0', asyn
   assert.ok(!('generic' in report.nativeProducts[0]) && !('harness' in report.nativeProducts[0]));
   assert.equal(report.gate.block, false);
   assert.equal(report.budget.scope, 'provider-api-only');
+  assert.equal(report.budget.providerSpendGuard.verified, true);
+  assert.equal(report.budget.enforcementSemantics, 'provider-key-hard-limit-plus-conservative-scheduler');
+});
+
+test('the report distinguishes a provider-enforced cash limit from a scheduler-only ceiling', async () => {
+  const { report } = await runRelease({
+    config: CONFIG,
+    steps: baseSteps({ environment: async () => ({ ok: true, missing: [] }) }),
+  });
+  assert.equal(report.budget.providerSpendGuard.verified, false);
+  assert.equal(report.budget.enforcementSemantics, 'scheduler-fail-stop-not-atomic-cash-guarantee');
+  assert.ok(report.limitations.some((limitation) => /atomic request|provider.*limit/i.test(limitation)));
+});
+
+test('a required OpenRouter pair is withheld unless the provider key hard limit exactly matches the release ceiling', async () => {
+  for (const providerSpendGuard of [
+    undefined,
+    { verified: true, limitUsd: 10, limitRemainingUsd: 20, reset: null },
+    { verified: true, limitUsd: 20, limitRemainingUsd: 21, reset: null },
+  ]) {
+    let kimiCalled = false;
+    const { report, exitCode } = await runRelease({
+      config: CONFIG,
+      steps: baseSteps({
+        environment: async () => ({ ok: true, missing: [], ...(providerSpendGuard ? { providerSpendGuard } : {}) }),
+        kimiPair: async () => {
+          kimiCalled = true;
+          return pairOf('openrouter-kimi', 'pass', 'pass');
+        },
+      }),
+      requiredPairs: ['openrouter-kimi'],
+    });
+    assert.equal(kimiCalled, false);
+    assert.equal(report.budget.providerSpendGuard.verified, false);
+    assert.equal(exitCode, 1);
+    assert.ok(report.gate.reasons.some((reason) => /dependencies|credentials|openrouter-kimi/i.test(reason)));
+  }
 });
 
 test('required multi-repetition evidence is validated per retained trial instead of comparing medians to summed events', async () => {
@@ -436,6 +548,37 @@ test('an unreproduced kimi regression is flaky-inconclusive and does not block',
   assert.equal(exitCode, 0);
 });
 
+test('an invalid, incomplete, fallback-contaminated, or policy-regressing rerun cannot clear the original regression', async () => {
+  const invalidReruns = [
+    () => pairOf('openrouter-kimi', 'pass', 'pass', { failureKind: 'provider' }),
+    () => {
+      const pair = pairOf('openrouter-kimi', 'pass', 'pass');
+      pair.harness.efficiency.costComplete = false;
+      return pair;
+    },
+    () => {
+      const pair = pairOf('openrouter-kimi', 'pass', 'pass');
+      pair.harness.observability.providerEvents.find((event) => event.type === 'response').provider = 'DeepInfra';
+      return pair;
+    },
+    () => pairOf('openrouter-kimi', 'pass', 'pass', { harness: { efficiency: { promptTokens: 2001 } } }),
+  ];
+  for (const rerun of invalidReruns) {
+    const { report, exitCode } = await runRelease({
+      config: CONFIG,
+      steps: baseSteps({
+        kimiPair: async () => pairOf('openrouter-kimi', 'pass', 'fail'),
+        rerunKimiPair: async () => rerun(),
+      }),
+    });
+    const pair = report.pairs.find((entry) => entry.host === 'openrouter-kimi');
+    assert.equal(pair.result, 'harness-regression');
+    assert.equal(pair.reproduced, null);
+    assert.match(pair.reason, /invalid|unresolved|attribut/i);
+    assert.equal(exitCode, 1);
+  }
+});
+
 test('during calibration a reproduced kimi regression is informational, not blocking', async () => {
   const steps = baseSteps({
     kimiPair: async () => pairOf('openrouter-kimi', 'pass', 'fail'),
@@ -482,6 +625,16 @@ test('a malformed verdict never crashes classification; the schema gate blocks i
   assert.ok(report.gate.reasons.some((r) => /telemetry/i.test(r)));
 });
 
+test('the schema validator rejects counters below their declared minimum', () => {
+  const run = fullRun('harness', 'pass');
+  run.observability.harnessEventEvidence.projectionRejectedChecks = -1;
+
+  const verdict = validateAgainstSchema(run, RUN_SCHEMA);
+
+  assert.equal(verdict.ok, false);
+  assert.ok(verdict.errors.some((error) => /projectionRejectedChecks.*minimum 0/i.test(error)));
+});
+
 test('only the controlled kimi pair draws from the kimi allowance; native products remain a separate reference track', async () => {
   const seen = {};
   const steps = baseSteps({
@@ -514,7 +667,7 @@ test('a rerun that cannot run leaves the regression unresolved, never flaky', as
   assert.equal(kimi.result, 'harness-regression');
   assert.equal(kimi.reproduced, null);
   assert.match(kimi.reason, /rerun|unresolved/i);
-  assert.equal(exitCode, 0, '§9 blocks only a REPRODUCED regression');
+  assert.equal(exitCode, 1, 'an unresolved original regression remains release-blocking');
 });
 
 test('provider and verifier failures are infrastructure-invalid, not model capability results', () => {
@@ -606,6 +759,31 @@ test('a required pair without a closed attempt ledger or real workspace manifest
     assert.equal(exitCode, 1);
     assert.ok(report.gate.reasons.some((reason) => /telemetry/i.test(reason)));
   }
+});
+
+test('incomplete harness-event projection prevents a required causal claim', async () => {
+  const pair = pairOf('openrouter-kimi', 'pass', 'pass', {
+    harness: {
+      observability: {
+        harnessEventEvidence: {
+          available: true,
+          complete: false,
+          reason: 'projection-rejected',
+          retainedEvents: 0,
+          sourceTruncated: false,
+          projectionRejectedEvents: 1,
+          projectionRejectedChecks: 0,
+        },
+      },
+    },
+  });
+  const { report, exitCode } = await runRelease({
+    config: CONFIG,
+    steps: baseSteps({ kimiPair: async () => pair }),
+    requiredPairs: ['openrouter-kimi'],
+  });
+  assert.equal(exitCode, 1);
+  assert.equal(report.claim.level, 'inconclusive');
 });
 
 test('a multi-task pair step yields one report entry per task, each classified independently', async () => {

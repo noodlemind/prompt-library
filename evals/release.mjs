@@ -35,7 +35,7 @@ function typeName(value) {
 
 /**
  * Minimal JSON-Schema subset validator (type incl. null unions, required,
- * properties, items, const, enum) — enough to hold the eval-run/eval-report
+ * properties, items, const, enum, numeric minimum) — enough to hold the eval-run/eval-report
  * contracts without adding a dependency. Returns { ok, errors } with dotted
  * paths.
  */
@@ -54,6 +54,9 @@ export function validateAgainstSchema(value, schema, path = '') {
       errors.push(`${path || '$'}: expected ${allowed.join('|')}, got ${typeName(value)}`);
     }
   }
+  if (typeof value === 'number' && 'minimum' in schema && (!Number.isFinite(value) || value < schema.minimum)) {
+    errors.push(`${path || '$'}: expected minimum ${schema.minimum}, got ${JSON.stringify(value)}`);
+  }
   if (typeName(value) === 'object') {
     for (const key of schema.required ?? []) {
       if (!(key in value)) errors.push(`${at(key)}: missing required field`);
@@ -70,32 +73,100 @@ export function validateAgainstSchema(value, schema, path = '') {
 
 /* ---------------------------------------------------- pair classification -- */
 
-function summarizeRun(doc) {
+function normalizeProviderName(value) {
+  return String(value ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
+function rawTrials(doc) {
+  return Array.isArray(doc?.repetitions) && doc.repetitions.length > 0 ? doc.repetitions : doc ? [doc] : [];
+}
+
+function trialAttribution(doc, { requireProvider = false } = {}) {
+  const reproducibility = doc?.reproducibility ?? {};
+  const responses = (doc?.observability?.providerEvents ?? []).filter((event) => event?.type === 'response');
+  const fallbackEvents = (doc?.observability?.providerEvents ?? []).filter((event) => event?.type === 'fallback');
+  const requestedModel = reproducibility.modelRequested;
+  const requestedProviders = Array.isArray(reproducibility.providerRequestedOrder)
+    ? reproducibility.providerRequestedOrder.map(normalizeProviderName).filter(Boolean)
+    : [];
+  const modelComplete = typeof reproducibility.modelResolved === 'string' && reproducibility.modelResolved.length > 0;
+  const providerComplete = !requireProvider || (
+    typeof reproducibility.providerResolved === 'string' &&
+    reproducibility.providerResolved.length > 0 &&
+    requestedProviders.length > 0
+  );
+  const responseCountComplete =
+    responses.length > 0 &&
+    responses.length === doc?.efficiency?.providerResponses;
+  const responseIdentityComplete = responses.every((response) =>
+    typeof response.model === 'string' && response.model.length > 0 &&
+    (!requireProvider || (typeof response.provider === 'string' && response.provider.length > 0))
+  );
+  const modelMismatch =
+    (modelComplete && reproducibility.modelResolved !== requestedModel) ||
+    responses.some((response) => response.model !== requestedModel);
+  const providerMismatch = requireProvider && (
+    (providerComplete && !requestedProviders.includes(normalizeProviderName(reproducibility.providerResolved))) ||
+    responses.some((response) => !requestedProviders.includes(normalizeProviderName(response.provider)))
+  );
+  const declaredFallback = reproducibility.attribution?.fallbackDetected === true;
+  return {
+    complete:
+      modelComplete &&
+      providerComplete &&
+      responseCountComplete &&
+      responseIdentityComplete &&
+      reproducibility.attribution?.complete !== false,
+    contaminated: declaredFallback || fallbackEvents.length > 0 || modelMismatch || providerMismatch,
+  };
+}
+
+function runAttribution(doc, options) {
+  const trials = rawTrials(doc);
+  const attribution = trials.map((trial) => trialAttribution(trial, options));
+  return {
+    complete: trials.length > 0 && attribution.every((entry) => entry.complete),
+    contaminated: attribution.some((entry) => entry.contaminated),
+  };
+}
+
+function summarizeRun(doc, { requireProvider = false } = {}) {
+  const attribution = runAttribution(doc, { requireProvider });
   return {
     // Anything that is not an explicit pass counts as a fail here; a malformed
     // verdict is additionally caught by schema validation and blocks the gate.
     verdict: doc?.correctness?.verdict === 'pass' ? 'pass' : 'fail',
     budgetExhausted: doc?.correctness?.completedWithinBudget === false,
     safety: doc?.harnessBehavior?.policyBypassAchieved === true,
-    fallback:
-      Boolean(doc?.reproducibility?.modelResolved) &&
-      doc.reproducibility.modelResolved !== doc.reproducibility.modelRequested,
+    fallback: attribution.contaminated,
+    attributionComplete: attribution.complete,
   };
 }
 
 /** The §8 result matrix with its precedence: safety, infrastructure, budget. */
 export function classifyPair(pair) {
-  const generic = summarizeRun(pair.generic);
-  const harness = summarizeRun(pair.harness);
+  const requireProvider = String(pair.host ?? '').startsWith('openrouter');
+  const generic = summarizeRun(pair.generic, { requireProvider });
+  const harness = summarizeRun(pair.harness, { requireProvider });
   const fallbackDetected = generic.fallback || harness.fallback;
-  const base = { safety: false, fallbackDetected };
+  const attributionComplete = generic.attributionComplete && harness.attributionComplete;
+  const base = { safety: false, fallbackDetected, attributionComplete };
   if (generic.safety || harness.safety) {
     return { ...base, safety: true, result: 'harness-regression', reason: 'a harness safety control was bypassed' };
+  }
+  if (pair.failureKind === 'budget') {
+    return { ...base, result: 'inconclusive-budget', reason: 'a reconciled trial cost exceeded its preallocated budget' };
   }
   if (pair.failureKind) {
     // provider and verifier failures are invalid trials too — never "the
     // model wasn't capable".
     return { ...base, result: 'infrastructure-invalid', reason: `${pair.failureKind} failure invalidated the trial` };
+  }
+  if (fallbackDetected) {
+    return { ...base, result: 'infrastructure-invalid', reason: 'model or provider fallback contaminated the comparison' };
+  }
+  if (requireProvider && !attributionComplete) {
+    return { ...base, result: 'infrastructure-invalid', reason: 'model or provider attribution is incomplete' };
   }
   if (generic.budgetExhausted || harness.budgetExhausted) {
     return { ...base, result: 'inconclusive-budget', reason: 'a condition exhausted its budget before completing' };
@@ -230,8 +301,8 @@ export function applyGatePolicy({ deterministic, pairs = [], smokes = [], teleme
         : 'efficiency evidence is incomplete';
       reasons.push(`success parity overhead on ${label} is outside release limits (${detail})`);
     }
-    if (c.result === 'harness-regression' && pair.reproduced === true) {
-      reasons.push(`reproduced harness regression on ${label}`);
+    if (c.result === 'harness-regression' && pair.reproduced !== false) {
+      reasons.push(`${pair.reproduced === true ? 'reproduced' : 'unresolved'} harness regression on ${label}`);
     }
   }
   for (const smoke of smokes) {
@@ -241,7 +312,12 @@ export function applyGatePolicy({ deterministic, pairs = [], smokes = [], teleme
 }
 
 function buildClaim(pairs, telemetryComplete) {
-  const active = pairs.filter((pair) => pair.comparisonTrack === 'controlled-ablation' && pair.gateActive && pair.result !== 'skipped');
+  const active = pairs.filter((pair) =>
+    pair.comparisonTrack === 'controlled-ablation' &&
+    pair.gateActive &&
+    pair.result !== 'skipped' &&
+    pair.causallyAttributable === true
+  );
   const treatmentFidelityModes = [...new Set(active.map((pair) => pair.harness?.enforcementFidelity?.mode).filter(Boolean))].sort();
   const treatmentLabel = treatmentFidelityModes.length === 1
     ? `${treatmentFidelityModes[0]} treatment`
@@ -279,6 +355,69 @@ function gateActiveFor(host, calibrationRelease) {
   return true; // frontier rotation gates when scheduled
 }
 
+const METERED_FIELDS = ['promptTokens', 'outputTokens', 'modelRequests', 'providerAttempts', 'localCostUsd'];
+
+function attributableTrialEvidence(doc, { paid = false } = {}) {
+  const efficiency = doc?.efficiency ?? {};
+  const observability = doc?.observability;
+  const workspace = doc?.workspaceEvidence;
+  if (
+    !observability ||
+    workspace?.available !== true ||
+    !doc?.enforcementFidelity?.mode ||
+    doc?.trialValidity?.valid === false ||
+    doc?.correctness?.verifierReward == null
+  ) return false;
+  if (
+    doc.reproducibility?.condition === 'harness' &&
+    observability.harnessEventEvidence?.complete !== true
+  ) return false;
+  const requestEvents = observability.providerEvents?.filter((event) => event.type === 'request').length;
+  const attribution = trialAttribution(doc, { requireProvider: paid });
+  return (
+    attribution.complete &&
+    !attribution.contaminated &&
+    observability.providerAttemptsStarted === efficiency.providerAttempts &&
+    observability.providerAttemptsClosed === efficiency.providerAttempts &&
+    observability.unclosedProviderAttempts === 0 &&
+    observability.uncorrelatedToolResults === 0 &&
+    requestEvents === efficiency.modelRequests &&
+    Number.isFinite(workspace.changedPathCount) &&
+    workspace.changedPathCount >= workspace.changedPaths.length
+  );
+}
+
+function attributableEvidence(doc, options) {
+  const repetitions = rawTrials(doc);
+  return repetitions.length > 0 && repetitions.every((repetition) => attributableTrialEvidence(repetition, options));
+}
+
+function completePaidEvidence(doc) {
+  const trials = rawTrials(doc);
+  return trials.length > 0 && trials.every((trial) =>
+    validateAgainstSchema(trial, RUN_SCHEMA).ok &&
+    METERED_FIELDS.every((field) => trial.efficiency?.[field] != null) &&
+    trial.efficiency?.usageComplete === true &&
+    trial.efficiency?.providerCostComplete === true &&
+    trial.efficiency?.billingComplete === true &&
+    trial.efficiency?.costComplete === true &&
+    trial.efficiency?.billingUncertain !== true &&
+    trial.efficiency?.unknownBillingAttempts === 0 &&
+    trial.efficiency?.missingUsage === 0 &&
+    trial.correctness?.completedWithinTimeout === true &&
+    trial.correctness?.completedWithinBudget === true &&
+    attributableTrialEvidence(trial, { paid: true })
+  );
+}
+
+function fullyAttributablePair(pair, host) {
+  if (!pair?.generic || !pair?.harness || pair.failureKind) return false;
+  if (String(host).startsWith('openrouter')) {
+    return completePaidEvidence(pair.generic) && completePaidEvidence(pair.harness);
+  }
+  return attributableEvidence(pair.generic) && attributableEvidence(pair.harness);
+}
+
 /**
  * Run the release sequence with injected steps. Steps that are absent or that
  * return null are reported as skipped; paid steps never run after a failed
@@ -290,7 +429,24 @@ export async function runRelease({ config, steps, calibrationRelease = false, re
   const deterministic = await steps.deterministic();
   const environment = steps.environment ? await steps.environment() : { ok: true, missing: [] };
   const taskLock = steps.taskLock ? await steps.taskLock() : { ok: true, reason: '' };
-  const preflightOk = deterministic.failed === 0 && environment.ok !== false && taskLock.ok !== false;
+  const rawProviderSpendGuard = environment?.providerSpendGuard ?? {};
+  const guardLimitUsd = finiteNumber(rawProviderSpendGuard.limitUsd);
+  const guardRemainingUsd = finiteNumber(rawProviderSpendGuard.limitRemainingUsd);
+  const guardVerified =
+    rawProviderSpendGuard.verified === true &&
+    guardLimitUsd != null && guardLimitUsd === budgets.release.ceilingUsd &&
+    guardRemainingUsd != null && guardRemainingUsd === budgets.release.ceilingUsd &&
+    rawProviderSpendGuard.reset === null;
+  const providerSpendGuard = {
+    verified: guardVerified,
+    limitUsd: guardLimitUsd,
+    limitRemainingUsd: guardRemainingUsd,
+    reset: rawProviderSpendGuard.reset ?? null,
+    checkedAt: typeof rawProviderSpendGuard.checkedAt === 'string' ? rawProviderSpendGuard.checkedAt : null,
+  };
+  const providerGuardRequired = requiredPairs.some((host) => String(host).startsWith('openrouter'));
+  const environmentOk = environment.ok !== false && (!providerGuardRequired || providerSpendGuard.verified);
+  const preflightOk = deterministic.failed === 0 && environmentOk && taskLock.ok !== false;
 
   const runDocs = [];
   const pairEntries = [];
@@ -335,14 +491,27 @@ export async function runRelease({ config, steps, calibrationRelease = false, re
           classification = { ...classification, reason: `${classification.reason}; rerun unavailable — regression unresolved` };
         } else {
           collect(second);
-          if (classifyPair(second).result === 'harness-regression') {
+          const rerunClassification = classifyPair(second);
+          const rerunAttributable = fullyAttributablePair(second, host);
+          const rerunEfficiency = efficiencyDelta(second.generic, second.harness, config.efficiencyThresholds);
+          const validNonRegression = rerunAttributable && (
+            rerunClassification.result === 'harness-win' ||
+            (rerunClassification.result === 'parity' && rerunEfficiency.withinThresholds === true)
+          );
+          if (rerunAttributable && rerunClassification.result === 'harness-regression') {
             reproduced = true;
-          } else {
+          } else if (validNonRegression) {
             reproduced = false;
             classification = { ...classification, result: 'flaky-inconclusive', reason: 'regression did not reproduce on a fresh pair' };
+          } else {
+            classification = {
+              ...classification,
+              reason: `${classification.reason}; rerun did not establish a fully attributable policy-compliant non-regression — regression unresolved`,
+            };
           }
         }
       }
+      const causallyAttributable = fullyAttributablePair(pair, host) && classification.fallbackDetected !== true;
       pairEntries.push({
         host,
         comparisonTrack: 'controlled-ablation',
@@ -353,6 +522,7 @@ export async function runRelease({ config, steps, calibrationRelease = false, re
         reason: classification.reason,
         gateActive: gateActiveFor(host, calibrationRelease),
         reproduced,
+        causallyAttributable,
         classification,
         efficiencyDelta: efficiencyDelta(pair.generic, pair.harness, config.efficiencyThresholds),
         generic: pair.generic ?? null,
@@ -383,46 +553,10 @@ export async function runRelease({ config, steps, calibrationRelease = false, re
   // Evidence is complete only when every run document validates AND every
   // required API pair actually metered its spend — an all-null efficiency
   // block is a missing measurement, not a measurement of nothing.
-  const METERED_FIELDS = ['promptTokens', 'outputTokens', 'modelRequests', 'providerAttempts', 'localCostUsd'];
-  const attributableTrialEvidence = (doc) => {
-    const efficiency = doc?.efficiency ?? {};
-    const observability = doc?.observability;
-    const workspace = doc?.workspaceEvidence;
-    if (!observability || workspace?.available !== true || !doc?.enforcementFidelity?.mode) return false;
-    const requestEvents = observability.providerEvents?.filter((event) => event.type === 'request').length;
-    return (
-      observability.providerAttemptsStarted === efficiency.providerAttempts &&
-      observability.providerAttemptsClosed === efficiency.providerAttempts &&
-      observability.unclosedProviderAttempts === 0 &&
-      observability.uncorrelatedToolResults === 0 &&
-      requestEvents === efficiency.modelRequests &&
-      Number.isFinite(workspace.changedPathCount) &&
-      workspace.changedPathCount >= workspace.changedPaths.length
-    );
-  };
-  const attributableEvidence = (doc) => {
-    const repetitions = Array.isArray(doc?.repetitions) ? doc.repetitions : [];
-    // Multi-repetition aggregates intentionally carry medians and keep real
-    // workspace manifests on the raw repetitions. Never compare those medians
-    // to the aggregate (summed) event ledger; validate every retained trial.
-    return repetitions.length > 0
-      ? repetitions.every((repetition) => attributableTrialEvidence(repetition))
-      : attributableTrialEvidence(doc);
-  };
   const meteredOk = pairEntries.every((p) => {
     if (!p.required || p.result === 'skipped') return true;
     if (!p.generic || !p.harness) return false;
-    return [p.generic, p.harness].every(
-      (doc) =>
-        METERED_FIELDS.every((f) => doc.efficiency?.[f] != null) &&
-        doc.efficiency?.usageComplete === true &&
-        doc.efficiency?.providerCostComplete === true &&
-        doc.efficiency?.billingComplete === true &&
-        doc.efficiency?.costComplete === true &&
-        doc.efficiency?.unknownBillingAttempts === 0 &&
-        doc.efficiency?.missingUsage === 0 &&
-        attributableEvidence(doc)
-    );
+    return p.causallyAttributable === true && [p.generic, p.harness].every((doc) => completePaidEvidence(doc));
   });
   const telemetryComplete = meteredOk && runDocs.every((doc) => validateAgainstSchema(doc, RUN_SCHEMA).ok);
   const gate = applyGatePolicy({
@@ -431,13 +565,19 @@ export async function runRelease({ config, steps, calibrationRelease = false, re
     smokes,
     telemetryComplete,
     taskLockOk: taskLock.ok !== false,
-    environmentOk: environment.ok !== false,
+    environmentOk,
     budgetBreached: budgets.release.breached,
     calibrationRelease,
   });
 
   const taskSet = config.task?.taskSet ?? [];
   const claim = buildClaim(pairEntries, telemetryComplete);
+  const billingUncertain = runDocs.some((doc) =>
+    rawTrials(doc).some((trial) => trial?.efficiency?.billingUncertain === true || trial?.billingEvidence?.uncertain === true)
+  );
+  const enforcementSemantics = providerSpendGuard.verified
+    ? 'provider-key-hard-limit-plus-conservative-scheduler'
+    : 'scheduler-fail-stop-not-atomic-cash-guarantee';
 
   const report = {
     schema: 'eval-report.v1',
@@ -462,6 +602,10 @@ export async function runRelease({ config, steps, calibrationRelease = false, re
       breached: budgets.release.breached,
       overrunUsd: budgets.release.overrunUsd(),
       reserveUsed: budgets.reserveUsedReason(),
+      providerSpendGuard,
+      billingUncertain,
+      enforcementSemantics,
+      requestEstimateSemantics: 'utf8-byte-prompt-token-upper-bound-plus-max-output-at-pinned-rates',
       allocations: {
         controlledPairUsd: budgets.kimiPair.ceilingUsd,
         regressionRerunUsd: budgets.rerun.ceilingUsd,
@@ -474,7 +618,10 @@ export async function runRelease({ config, steps, calibrationRelease = false, re
       'The pinned task set is a release canary, not a broad productivity benchmark.',
       'Native product runs (Codex, Claude Code, Pi, and similar agents) are reference evidence only and never substitute for a same-model controlled ablation.',
       'Prompt-and-CLI Terminal-Bench results do not establish the value or safety of mechanical hooks; enforcement fidelity is reported per run.',
-      'The coded cash ceiling covers provider API charges only; Daytona credit consumption, local electricity, and subscription opportunity cost require separate operator accounting.',
+      providerSpendGuard.verified
+        ? 'The provider API cash backstop is a fresh dedicated no-reset key limit; scheduler estimates additionally fail-stop before requests and reconcile the larger local/provider amount.'
+        : 'The scheduler ceiling is not an atomic cash guarantee: one request or provider repricing can reconcile above it unless a dedicated provider-limited key is verified.',
+      'The provider API ceiling does not include Daytona credit consumption, local electricity, or subscription opportunity cost; those require separate operator accounting.',
       'A live paid calibration is still required before publishing measured ratio results from this implementation.',
     ],
   };
@@ -511,6 +658,7 @@ export function buildMarkdownReport(report) {
       ? [`Smokes: ${report.smokes.map((s) => `${s.host} ${s.ok ? 'ok' : `failed (${(s.failed ?? []).join(', ')})`}`).join(' · ')}`, '']
       : []),
     `Incremental provider API spend: $${report.budget.spentUsd.toFixed(2)} of $${report.budget.ceilingUsd.toFixed(2)} ceiling${report.budget.breached ? ` (BREACHED by $${report.budget.overrunUsd.toFixed(2)})` : ''}${report.budget.reserveUsed ? ` (reserve used: ${report.budget.reserveUsed})` : ''}.`,
+    `Cash-control semantics: ${report.budget.enforcementSemantics}${report.budget.billingUncertain ? ' (BILLING UNCERTAIN; remaining trial allowance reserved)' : ''}.`,
     '',
     report.gate.block ? `**Release blocked:** ${report.gate.reasons.join('; ')}` : '**Release not blocked by evaluation gates.**',
     '',
@@ -599,7 +747,7 @@ async function main() {
     const repetitions = calibrationRelease ? repetitionsConfig?.calibration ?? 3 : repetitionsConfig?.routine ?? 1;
     steps = {
       deterministic: deterministicStep,
-      ...buildLiveSteps({ config: raw, lock, workDir, releaseSha, harnessVersion, repetitions, localEnabled: withLocal }),
+      ...buildLiveSteps({ config: { ...raw, budget: config.budget }, lock, workDir, releaseSha, harnessVersion, repetitions, localEnabled: withLocal }),
       nativeProducts: async () => (raw.nativeProductRotation ?? []).map((host) => ({
         host,
         status: 'not-run',

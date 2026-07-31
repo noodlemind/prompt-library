@@ -5,7 +5,7 @@ import path from 'node:path';
 import { test } from 'node:test';
 import { AGENT_REF, buildLiveSteps, aggregateRepetitionDocs, buildRunDoc } from '../../../evals/external/terminal_bench/live-steps.mjs';
 import { BUNDLE_MOUNT_TARGET, harnessWrapperScript, activationCommands } from '../../../evals/external/terminal_bench/provision.mjs';
-import { stampTaskLock } from '../../../evals/external/terminal_bench/harbor-adapter.mjs';
+import { stampTaskLock, verifyTaskAgainstLock } from '../../../evals/external/terminal_bench/harbor-adapter.mjs';
 import { validateAgainstSchema, runRelease } from '../../../evals/release.mjs';
 import { createBudget } from '../../../evals/lib/budget.mjs';
 
@@ -43,7 +43,15 @@ function fixtureTask() {
  * A fake harbor: `--version` succeeds; `run` writes the job's verifier reward
  * and the bridge done-file exactly where the real pipeline would.
  */
-function fakeHarborSpawn({ reward = 1, exitCode = 0, writeTelemetry = true, providerCostUsd = 0.02, providerCostComplete = true } = {}) {
+function fakeHarborSpawn({
+  reward = 1,
+  exitCode = 0,
+  writeTelemetry = true,
+  providerCostUsd = 0.02,
+  providerCostComplete = true,
+  billingComplete = true,
+  unknownBillingAttempts = 0,
+} = {}) {
   const invocations = [];
   return {
     invocations,
@@ -53,6 +61,7 @@ function fakeHarborSpawn({ reward = 1, exitCode = 0, writeTelemetry = true, prov
       if (args[0] !== 'run') return { status: 0, stdout: '', stderr: '' };
       const jobsDir = args[args.indexOf('--jobs-dir') + 1];
       const jobName = args[args.indexOf('--job-name') + 1];
+      const runIndex = invocations.filter((invocation) => invocation.args[0] === 'run').length;
       const agentEnv = {};
       args.forEach((a, i) => {
         if (a === '--ae') {
@@ -63,7 +72,8 @@ function fakeHarborSpawn({ reward = 1, exitCode = 0, writeTelemetry = true, prov
       if (exitCode === 0) {
         const verifierDir = path.join(jobsDir, jobName, 'trial-0', 'verifier');
         fs.mkdirSync(verifierDir, { recursive: true });
-        fs.writeFileSync(path.join(verifierDir, 'reward.json'), JSON.stringify({ reward }));
+        const resolvedReward = typeof reward === 'function' ? reward({ jobName, runIndex }) : reward;
+        fs.writeFileSync(path.join(verifierDir, 'reward.json'), JSON.stringify({ reward: resolvedReward }));
         if (writeTelemetry && agentEnv.HARNESS_EVAL_TB_TELEMETRY_FILE) {
           fs.writeFileSync(
             agentEnv.HARNESS_EVAL_TB_TELEMETRY_FILE,
@@ -81,7 +91,7 @@ function fakeHarborSpawn({ reward = 1, exitCode = 0, writeTelemetry = true, prov
                   providerErrors: 1,
                   retries: 1,
                   openAttempts: 0,
-                  unknownBillingAttempts: 0,
+                  unknownBillingAttempts,
                   missingUsage: 0,
                   promptTokens: 4000,
                   cachedTokens: 1000,
@@ -91,8 +101,8 @@ function fakeHarborSpawn({ reward = 1, exitCode = 0, writeTelemetry = true, prov
                   providerCostUsd,
                   usageComplete: true,
                   providerCostComplete,
-                  billingComplete: true,
-                  costComplete: true,
+                  billingComplete,
+                  costComplete: providerCostComplete && billingComplete && unknownBillingAttempts === 0,
                 },
                 events: [
                   { seq: 0, eventId: 'e0', type: 'request', requestId: 'r1', monotonicMs: 10, payloadChars: 1000 },
@@ -129,7 +139,15 @@ function fakeHarborSpawn({ reward = 1, exitCode = 0, writeTelemetry = true, prov
                 changedPathsTruncated: false,
               },
               harnessEvents: [],
-              harnessEventEvidence: { available: true, reason: null, retainedEvents: 0, sourceTruncated: false },
+              harnessEventEvidence: {
+                available: true,
+                complete: true,
+                reason: null,
+                retainedEvents: 0,
+                sourceTruncated: false,
+                projectionRejectedEvents: 0,
+                projectionRejectedChecks: 0,
+              },
               enforcement: { hooksActive: false, policyBypassAchieved: false, source: 'sandbox-writable-harness-events' },
             })
           );
@@ -140,16 +158,17 @@ function fakeHarborSpawn({ reward = 1, exitCode = 0, writeTelemetry = true, prov
   };
 }
 
-function liveSteps({ datasetDir, taskDir, lock, spawnImpl, apiKey = 'test-key', workDir = tmpdir() }) {
+function liveSteps({ datasetDir, taskDir, lock, spawnImpl, apiKey = 'test-key', workDir = tmpdir(), config = null, fetchImpl = undefined }) {
   let clockTick = 0;
   return buildLiveSteps({
-    config: { execution: { environment: 'docker' } },
+    config: config ?? { execution: { environment: 'docker' } },
     lock,
     workDir,
     env: { OPENROUTER_API_KEY: apiKey, HARNESS_EVAL_TB_DATASET_DIR: datasetDir ?? path.dirname(taskDir) },
     releaseSha: 'sha1',
     harnessVersion: '0.5.0',
     spawnImpl,
+    ...(fetchImpl ? { fetchImpl } : {}),
     now: () => new Date(Date.UTC(2026, 6, 31, 0, 0, clockTick++)).toISOString(),
     prepareBundle: ({ bundleDir }) => ({ bundleDir, mount: { source: bundleDir, target: BUNDLE_MOUNT_TARGET, readOnly: true } }),
   });
@@ -167,14 +186,10 @@ test('the harness wrapper picks the node runtime matching the container architec
   assert.ok(script.includes('"$@"'));
 });
 
-test('activation installs the wrapper PATH-proof and proves the CLI answers with a real command', () => {
+test('activation uses only the immutable read-only bundle CLI', () => {
   const commands = activationCommands();
-  assert.ok(commands.some((c) => c.includes('/usr/local/bin/harness')));
-  assert.ok(commands.some((c) => c.includes('/usr/bin/harness')), 'a /usr/bin link survives minimal exec PATHs');
-  assert.ok(
-    commands.some((c) => /harness help/.test(c)),
-    'the proof command must exist in the harness CLI (--version does not)'
-  );
+  assert.deepEqual(commands, [`${BUNDLE_MOUNT_TARGET}/harness-cli help`]);
+  assert.ok(commands.every((command) => !/\b(?:install|cp|ln)\b/.test(command)), 'activation must not copy or link trusted code into writable paths');
 });
 
 test('the task bytes are verified against the lock before any provider work', async () => {
@@ -186,6 +201,20 @@ test('the task bytes are verified against the lock before any provider work', as
   const tampered = await steps.taskLock();
   assert.equal(tampered.ok, false);
   assert.match(tampered.reason, /checksum/i);
+});
+
+test('Harbor uses a runner-owned verified snapshot even if the configured dataset mutates after preflight', async () => {
+  const { datasetDir, taskDir, lock } = fixtureTask();
+  const { spawnImpl, invocations } = fakeHarborSpawn();
+  const steps = liveSteps({ datasetDir, taskDir, lock, spawnImpl });
+  assert.equal((await steps.taskLock()).ok, true);
+  fs.writeFileSync(path.join(taskDir, 'instruction.md'), 'mutated after verification');
+  await steps.kimiPair(createBudget({ ceilingUsd: 10, label: 'snapshot-race' }));
+  const runs = invocations.filter((invocation) => invocation.args[0] === 'run');
+  const snapshot = runs[0].args[runs[0].args.indexOf('-p') + 1];
+  assert.notEqual(snapshot, datasetDir);
+  assert.equal(fs.readFileSync(path.join(snapshot, 'cobol-modernization', 'instruction.md'), 'utf8'), 'Modernize the COBOL program.');
+  assert.equal(verifyTaskAgainstLock(path.join(snapshot, 'cobol-modernization'), lock, 'cobol-modernization').ok, true);
 });
 
 test('a multi-task lock runs a fresh pair per pinned task with per-task job identities', async () => {
@@ -211,10 +240,19 @@ test('a multi-task lock runs a fresh pair per pinned task with per-task job iden
   assert.equal(runs.length, 4, 'generic+harness per task');
   const jobNames = runs.map((i) => i.args[i.args.indexOf('--job-name') + 1]);
   assert.ok(jobNames.every((n, idx) => n.includes(pairs[Math.floor(idx / 2)].task)), 'job identity carries the task name');
+  assert.ok(runs.every((invocation) => invocation.args.includes('-p')));
+  const datasetSnapshots = new Set(runs.map((invocation) => invocation.args[invocation.args.indexOf('-p') + 1]));
+  assert.equal(datasetSnapshots.size, 1);
+  const [datasetSnapshot] = datasetSnapshots;
+  assert.notEqual(datasetSnapshot, datasetDir, 'the mutable configured source is never the execution path');
+  assert.equal(path.basename(datasetSnapshot), 'verified-dataset');
+  assert.equal(verifyTaskAgainstLock(path.join(datasetSnapshot, 'cobol-modernization'), multiLock, 'cobol-modernization').ok, true);
+  assert.equal(verifyTaskAgainstLock(path.join(datasetSnapshot, 'build-pmars'), multiLock, 'build-pmars').ok, true);
+  assert.ok(runs.every((invocation) => !invocation.args.includes('-d')), 'the registry reference is not re-resolved after verification');
   const conditionPaths = runs.map((i) => i.args[i.args.findIndex((a) => typeof a === 'string' && a.startsWith('HARNESS_EVAL_TB_CONDITION='))]);
   const ceilings = conditionPaths.map((kv) => JSON.parse(fs.readFileSync(kv.split('=')[1], 'utf8')).limits.trialCeilingUsd);
   assert.deepEqual(ceilings, [2.5, 2.5, 2.5, 2.5], 'the initial allowance is preallocated equally across every task and arm');
-  assert.ok(Math.abs(budget.spentUsd() - 0.04) < 1e-12, 'all four trials charge the pair budget');
+  assert.ok(Math.abs(budget.spentUsd() - 0.072) < 1e-12, 'all four trials charge the larger local estimate');
 });
 
 test('a live kimi pair produces two schema-valid run documents and charges provider-reported cost', async () => {
@@ -334,8 +372,111 @@ test('an incomplete provider-cost total never undercharges the release ledger', 
   const steps = liveSteps({ taskDir, lock, spawnImpl });
   await steps.taskLock();
   const budget = createBudget({ ceilingUsd: 10, label: 'kimi-pair' });
+  const [pair] = await steps.kimiPair(budget);
+  assert.equal(pair.failureKind, 'billing');
+  assert.equal(pair.harness, null, 'paid scheduling stops before the second arm after uncertain billing');
+  assert.equal(budget.spentUsd(), 5, 'the first trial allowance is conservatively reserved');
+});
+
+test('missing done telemetry reserves the attempted allowance and fail-stops all later paid arms and tasks', async () => {
+  const { taskDir, lock } = fixtureTask();
+  const datasetDir = path.dirname(taskDir);
+  const secondDir = path.join(datasetDir, 'build-pmars');
+  fs.mkdirSync(secondDir, { recursive: true });
+  fs.writeFileSync(path.join(secondDir, 'instruction.md'), 'Build pMARS.');
+  const multiLock = stampTaskLock(secondDir, lock, 'build-pmars');
+  const { spawnImpl, invocations } = fakeHarborSpawn({ writeTelemetry: false });
+  const steps = liveSteps({ datasetDir, taskDir, lock: multiLock, spawnImpl });
+  await steps.taskLock();
+  const budget = createBudget({ ceilingUsd: 10, label: 'kimi-pair' });
+  const pairs = await steps.kimiPair(budget);
+  assert.equal(invocations.filter((invocation) => invocation.args[0] === 'run').length, 1, 'no later arm or task is scheduled');
+  assert.equal(pairs.length, 1, 'only the partially attempted task is retained');
+  assert.equal(pairs[0].failureKind, 'billing');
+  assert.equal(pairs[0].harness, null);
+  assert.equal(budget.spentUsd(), 2.5, 'the attempted trial\'s fixed allowance is consumed even without a done file');
+});
+
+test('unknown billing in a done ledger also reserves the allowance and fail-stops scheduling', async () => {
+  const { taskDir, lock } = fixtureTask();
+  const { spawnImpl, invocations } = fakeHarborSpawn({ billingComplete: false, unknownBillingAttempts: 1 });
+  const steps = liveSteps({ taskDir, lock, spawnImpl });
+  await steps.taskLock();
+  const budget = createBudget({ ceilingUsd: 10, label: 'kimi-pair' });
+  const [pair] = await steps.kimiPair(budget);
+  assert.equal(invocations.filter((invocation) => invocation.args[0] === 'run').length, 1);
+  assert.equal(pair.failureKind, 'billing');
+  assert.equal(pair.generic.efficiency.billingUncertain, true);
+  assert.equal(budget.spentUsd(), 5);
+});
+
+test('release reconciliation charges the larger of provider and locally calculated cost', async () => {
+  const { taskDir, lock } = fixtureTask();
+  const { spawnImpl } = fakeHarborSpawn({ providerCostUsd: 0.001 });
+  const steps = liveSteps({ taskDir, lock, spawnImpl });
+  await steps.taskLock();
+  const budget = createBudget({ ceilingUsd: 10, label: 'kimi-pair' });
   await steps.kimiPair(budget);
-  assert.ok(Math.abs(budget.spentUsd() - 0.036) < 1e-12, 'both arms charge the complete local estimate instead of a partial provider total');
+  assert.ok(Math.abs(budget.spentUsd() - 0.036) < 1e-12, 'two arms each charge max($0.018 local, $0.001 provider)');
+});
+
+test('a provider reconciliation above one trial allocation stops before another paid arm', async () => {
+  const { taskDir, lock } = fixtureTask();
+  const { spawnImpl, invocations } = fakeHarborSpawn({ providerCostUsd: 6 });
+  const steps = liveSteps({ taskDir, lock, spawnImpl });
+  await steps.taskLock();
+  const budget = createBudget({ ceilingUsd: 10, label: 'kimi-pair' });
+  const [pair] = await steps.kimiPair(budget);
+  assert.equal(invocations.filter((invocation) => invocation.args[0] === 'run').length, 1);
+  assert.equal(pair.failureKind, 'budget');
+  assert.equal(pair.generic.correctness.completedWithinBudget, false);
+  assert.equal(pair.generic.billingEvidence.allocationBreached, true);
+  assert.equal(budget.spentUsd(), 6);
+});
+
+test('paid preflight requires a fresh no-reset provider key limited to the configured release ceiling', async () => {
+  const { taskDir, lock } = fixtureTask();
+  const { spawnImpl } = fakeHarborSpawn();
+  const config = { execution: { environment: 'docker' }, budget: { releaseCeilingUsd: 10 } };
+  const accepted = liveSteps({
+    taskDir,
+    lock,
+    spawnImpl,
+    config,
+    fetchImpl: async () => ({ ok: true, json: async () => ({ data: { limit: 10, limit_remaining: 10, limit_reset: null } }) }),
+  });
+  const good = await accepted.environment();
+  assert.equal(good.ok, true);
+  assert.deepEqual(good.providerSpendGuard, {
+    verified: true,
+    required: true,
+    limitUsd: 10,
+    limitRemainingUsd: 10,
+    reset: null,
+    ceilingUsd: 10,
+    checkedAt: '2026-07-31T00:00:00.000Z',
+  });
+
+  for (const metadata of [
+    { limit: null, limit_remaining: null, limit_reset: null },
+    { limit: '10', limit_remaining: '10', limit_reset: null },
+    { limit: 5, limit_remaining: 5, limit_reset: null },
+    { limit: 20, limit_remaining: 20, limit_reset: null },
+    { limit: 10, limit_remaining: 11, limit_reset: null },
+    { limit: 10, limit_remaining: 9.99, limit_reset: null },
+    { limit: 10, limit_remaining: 10, limit_reset: 'daily' },
+  ]) {
+    const rejected = liveSteps({
+      taskDir,
+      lock,
+      spawnImpl,
+      config,
+      fetchImpl: async () => ({ ok: true, json: async () => ({ data: metadata }) }),
+    });
+    const verdict = await rejected.environment();
+    assert.equal(verdict.ok, false, JSON.stringify(metadata));
+    assert.ok(verdict.missing.some((reason) => /provider.*limit|dedicated.*key|reset/i.test(reason)));
+  }
 });
 
 test('a nonzero harbor exit becomes an infrastructure-invalid pair that blocks an active gate', async () => {
@@ -374,10 +515,10 @@ test('the local model floor is explicit opt-in, anchor-only, secret-free, and ze
     env: {
       OPENROUTER_API_KEY: 'must-not-reach-local-run',
       HARNESS_EVAL_TB_DATASET_DIR: datasetDir ?? path.dirname(taskDir),
-      HARNESS_EVAL_TB_BUNDLE_DIR: tmpdir(),
     },
     spawnImpl,
     localEnabled: true,
+    prepareBundle: ({ bundleDir }) => ({ bundleDir, mount: { source: bundleDir, target: BUNDLE_MOUNT_TARGET, readOnly: true } }),
   });
   assert.equal((await enabled.taskLock()).ok, true);
   const budget = createBudget({ ceilingUsd: 0, label: 'local-floor' });
@@ -398,8 +539,14 @@ test('the local model floor is explicit opt-in, anchor-only, secret-free, and ze
 test('live steps feed runRelease end to end: green pair, valid report, exit 0', async () => {
   const { taskDir, lock } = fixtureTask();
   const { spawnImpl } = fakeHarborSpawn();
-  const steps = liveSteps({ taskDir, lock, spawnImpl });
   const config = { budget: { releaseCeilingUsd: 20, kimiPairUsd: 10, rerunUsd: 8, reserveUsd: 2 }, task: { datasetRef: lock.datasetRef, task: lock.task } };
+  const steps = liveSteps({
+    taskDir,
+    lock,
+    spawnImpl,
+    config: { execution: { environment: 'docker' }, budget: config.budget },
+    fetchImpl: async () => ({ ok: true, json: async () => ({ data: { limit: 20, limit_remaining: 20, limit_reset: null } }) }),
+  });
   const { report, exitCode } = await runRelease({
     config,
     steps: { ...steps, deterministic: async () => ({ passed: 17, failed: 0, skipped: 2 }) },
@@ -438,11 +585,21 @@ test('repetition aggregation uses majority verdict and median efficiency over va
   assert.match(agg.correctness.exitReason, /repetition-aggregate\(n=3\)/);
 });
 
-test('a null-reward repetition can never count toward a pass', () => {
+test('invalid repetitions are excluded from the verdict denominator while raw evidence remains retained', () => {
   const broken = repetitionDoc({ verdict: 'fail', reward: null });
   const agg = aggregateRepetitionDocs([repetitionDoc({ verdict: 'pass' }), broken, broken]);
-  assert.equal(agg.correctness.verdict, 'fail', '1 pass of 3 attempted repetitions is not a majority');
+  assert.equal(agg.correctness.verdict, 'pass', 'the one valid repetition is the verdict denominator');
   assert.equal(agg.correctness.verifierReward, 1, 'median over valid rewards only');
+  assert.equal(agg.repetitions.length, 3, 'invalid trials remain available for audit');
+  assert.match(agg.correctness.exitReason, /valid=1/);
+});
+
+test('repetition verdicts require a strict majority of valid trials', () => {
+  const agg = aggregateRepetitionDocs([
+    repetitionDoc({ verdict: 'pass', reward: 1 }),
+    repetitionDoc({ verdict: 'fail', reward: 0 }),
+  ]);
+  assert.equal(agg.correctness.verdict, 'fail', 'a one-to-one tie is not a majority');
 });
 
 test('repetition aggregation preserves incomplete-cost evidence from any attempted trial', () => {
@@ -661,7 +818,7 @@ test('multiple repetitions run each condition, alternate order, and all charge t
   const conditionPaths = runs.map((i) => i.args[i.args.findIndex((a) => typeof a === 'string' && a.startsWith('HARNESS_EVAL_TB_CONDITION='))]);
   const ceilings = conditionPaths.map((kv) => JSON.parse(fs.readFileSync(kv.split('=')[1], 'utf8')).limits.trialCeilingUsd);
   assert.deepEqual(ceilings, [2.5, 2.5, 2.5, 2.5], 'every repetition arm receives an equal preallocated ceiling');
-  assert.ok(Math.abs(budget.spentUsd() - 0.04) < 1e-12, 'every repetition trial charges the pair budget');
+  assert.ok(Math.abs(budget.spentUsd() - 0.072) < 1e-12, 'every repetition trial charges the larger local estimate');
   assert.equal(pair.generic.correctness.verdict, 'pass');
   assert.match(pair.generic.correctness.exitReason, /repetition-aggregate\(n=2\)/);
   assert.deepEqual(
@@ -669,4 +826,27 @@ test('multiple repetitions run each condition, alternate order, and all charge t
     pair.harness.repetitions.map((run) => run.reproducibility.repetitionId),
     'the two arms share a repetition identity so paired analysis cannot drift'
   );
+});
+
+test('a pair requires a strict majority of scheduled repetitions to have two valid aligned arms', async () => {
+  const { taskDir, lock, datasetDir } = fixtureTask();
+  const { spawnImpl } = fakeHarborSpawn({
+    reward: ({ jobName }) => /-(?:generic|harness)-a1$/.test(jobName) ? 1 : null,
+  });
+  const steps = buildLiveSteps({
+    config: { execution: { environment: 'docker' } },
+    lock,
+    workDir: tmpdir(),
+    env: { OPENROUTER_API_KEY: 'k', HARNESS_EVAL_TB_DATASET_DIR: datasetDir },
+    spawnImpl,
+    repetitions: 3,
+    prepareBundle: ({ bundleDir }) => ({ bundleDir, mount: { source: bundleDir, target: BUNDLE_MOUNT_TARGET, readOnly: true } }),
+  });
+  await steps.taskLock();
+  const [pair] = await steps.kimiPair(createBudget({ ceilingUsd: 10, label: 'strict-pair-validity' }));
+  assert.equal(pair.validRepetitionCount, 1);
+  assert.equal(pair.invalidRepetitionCount, 2);
+  assert.equal(pair.failureKind, 'verifier', 'one valid paired trial out of three scheduled cannot validate the pair');
+  assert.equal(pair.generic.correctness.verdict, 'pass', 'the descriptive verdict is still computed only over the valid paired trial');
+  assert.equal(pair.generic.repetitions.length, 3, 'all attempted evidence remains retained');
 });

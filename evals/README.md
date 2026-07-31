@@ -210,6 +210,13 @@ exercise production hook enforcement. Do not claim that a Terminal-Bench result
 measures mechanical-hook value or safety until the bridge installs host-owned
 hooks and the run reports `mechanical-hooks` from trusted evidence.
 
+The same trust boundary applies to stopping. The generic driver has a tested
+post-verification request ceiling, but the Terminal-Bench bridge does **not**
+promote model-visible `verify` output into that trusted state: a sandbox can
+edit its own plan/evidence. Until Harbor supplies a host-owned verification
+signal, Terminal-Bench records the immutable CLI invocation and official task
+verifier result without claiming a trusted early stop.
+
 ### Commands
 
 ```bash
@@ -236,15 +243,27 @@ Release-candidate prerequisites (all fail closed when absent):
 - the `harbor` CLI on PATH (validated against 0.20.0);
 - `OPENROUTER_API_KEY` for the pinned Kimi profile, delivered only in the host
   process environment and never Harbor argv, `--ae`, condition JSON, or telemetry;
+- a fresh dedicated OpenRouter evaluation key whose provider-side, no-reset
+  spending limit and remaining allowance equal this run's `$10` routine (`$20`
+  exceptional) ceiling;
+  the scheduler ledger prevents additional calls, while the provider limit is
+  the final cash backstop if reported pricing or billing differs;
 - the pinned tasks, downloaded automatically via `harbor download terminal-bench@2.0`
   (or point `HARNESS_EVAL_TB_DATASET_DIR` at an existing download) and **verified
-  byte-for-byte against the committed lock checksum before any provider call**;
+  byte-for-byte against the committed lock checksum before any provider call**.
+  The runner copies only the pinned tasks into a fresh read-only snapshot,
+  verifies the copy again, and passes that snapshot to Harbor with `-p`; it
+  never verifies one export and executes a separately resolved registry copy;
 - a harness bundle for in-container activation: prepared automatically from the
   working tree (set `HARNESS_EVAL_NODE_TARBALL_X64` and/or
   `HARNESS_EVAL_NODE_TARBALL_ARM64` to downloaded Linux Node runtimes), or point
-  `HARNESS_EVAL_TB_BUNDLE_DIR` at a pre-built bundle. Harbor mounts the bundle
-  read-only into BOTH conditions; only the treatment's setup installs the
-  `harness` wrapper on PATH — and setup failure fails the trial closed.
+  `HARNESS_EVAL_TB_BUNDLE_DIR` at a pre-built bundle and set
+  `HARNESS_EVAL_TB_BUNDLE_SHA256` to its separately retained manifest digest.
+  A prebuilt bundle is validated and copied into a fresh runner-owned directory
+  before mounting. Harbor mounts that copy read-only into BOTH conditions; only
+  the treatment invokes `/opt/harness-bundle/harness-cli`, and nothing is copied
+  or symlinked into a sandbox-writable executable path. Setup failure fails the
+  trial closed.
 
 ### What the run records
 
@@ -254,6 +273,8 @@ Release-candidate prerequisites (all fail closed when absent):
 - correlated, redacted tool calls/results with category, exit code, duration,
   byte counts, hashes, timeout/truncation flags, and no raw command/output in
   published telemetry;
+- sandbox command streams drained into finite capture rings before Harbor can
+  buffer them, with smaller model-visible tails and explicit truncation flags;
 - request payload/peak sizes, context compactions, compacted observations,
   checkpoint state, and time to first action/edit/final verification;
 - pair, repetition, order, task, condition, prompt, tool-schema, telemetry, and
@@ -263,10 +284,11 @@ Release-candidate prerequisites (all fail closed when absent):
 - retained Harness events, their collection completeness, evidence-derived
   behavior, and explicit enforcement fidelity.
 
-Unknown is never converted to zero. Every paid attempt must close, usage and
-billing must be complete, tool results must correlate, and a real workspace
-manifest must exist for every retained required trial. Otherwise the release
-blocks even when the verifier passed.
+Unknown is never converted to zero. An unknown-billing attempt consumes the
+remaining trial allowance and immediately stops later paid scheduling. Every
+paid attempt must close, usage and billing must be complete, tool results must
+correlate, and a real workspace manifest must exist for every retained required
+trial. Otherwise the release blocks even when the verifier passed.
 
 ### Cost controls and estimates
 
@@ -280,12 +302,22 @@ The coded ceiling covers **provider API spend only**:
 - exceptional ceiling: **$20 maximum**. `--budget-usd 20` scales the controlled
   pair/rerun allowances to $16/$4 so the extra headroom is usable.
 
-At routine settings the initial per-trial hard share is at most $1.00
+At routine settings the initial per-trial scheduler share is at most $1.00
 ($8 / four tasks / two arms); calibration's 24 trials share the same $8 pair
 allowance. These are caps, not spend forecasts. Actual cost is reconciled from
-provider-reported usage; the pinned local price calculation is the conservative
-fallback, and incomplete billing blocks. Re-verify the pricing in
+the greater of provider-reported and pinned local cost inside the request loop;
+input prechecks use UTF-8 bytes as a tokenizer-independent upper bound plus the
+maximum output allocation. Incomplete billing reserves the remainder and stops.
+The dedicated provider-side key limit makes `$10`/`$20` the cash backstop rather
+than merely an after-the-fact alert. Re-verify the pricing in
 `evals/lib/model-profiles.mjs` against the pinned provider before each release.
+
+Cost control is intentionally sequential. From the configured Harbor timeouts,
+the upper scheduling envelope is about 250 minutes for the four-task routine run
+including one regression rerun, about 650 minutes for a three-repetition
+calibration, and another 80 minutes for the opt-in local anchor pair. Typical
+runs should finish sooner; do not interpret the API ceiling as a wall-time or
+Daytona-credit ceiling.
 
 Ollama adds $0 provider API spend. Existing Codex/Claude/Copilot/Grok
 subscriptions add $0 marginal API spend for these references but consume quota
@@ -333,6 +365,8 @@ A release evaluation is complete only when:
 - deterministic checks and all task-lock checks pass before provider spend;
 - every required task has both fresh arms, official verifier evidence, matching
   requested/resolved model and pinned provider, and no fallback;
+- the provider-side eval-key limit was checked for the selected release ceiling,
+  and the report retains only its non-secret limit/remaining/reset evidence;
 - every retained paid attempt closes with complete usage/billing; tool results
   correlate; workspace and Harness-event collection state is explicit;
 - prompt/cost/wall ratios are within policy for parity, or a win/regression is
@@ -352,8 +386,12 @@ Troubleshooting:
   produced no evidence; a skipped pair can never green a release candidate.
 - `task checksum mismatch` — the downloaded task differs from the committed
   pin; investigate before re-stamping (`stampTaskLock`, then commit the lock).
+- `bundle manifest digest` — the prebuilt bundle is missing its out-of-band
+  digest, was changed after preparation, contains an escaping symlink, or points
+  at an unsafe broad host path; prepare a fresh bundle and retain its digest.
 - Rate-limited or missing provider usage fields are recorded as `null`; on a
-  paid profile unknown billing or an unclosed attempt blocks the release.
+  paid profile unknown billing consumes the trial reservation, stops later paid
+  work, and blocks the release.
 - A local run is absent unless `--with-local` is supplied. Local failure remains
   informational and never masks the required Kimi result.
 - `enforcementFidelity.mode=prompt-and-cli` is expected for the current Harbor

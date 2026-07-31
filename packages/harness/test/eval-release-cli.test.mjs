@@ -6,6 +6,7 @@ import { spawnSync } from 'node:child_process';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { stampTaskLock } from '../../../evals/external/terminal_bench/harbor-adapter.mjs';
+import { prepareHarnessBundle } from '../../../evals/external/terminal_bench/provision.mjs';
 
 /**
  * True end-to-end: `node evals/release.mjs` in release-candidate mode against
@@ -87,7 +88,7 @@ fs.writeFileSync(agentEnv.HARNESS_EVAL_TB_TELEMETRY_FILE, JSON.stringify({
     changedPathsTruncated: false,
   },
   harnessEvents: [],
-  harnessEventEvidence: { available: true, reason: null, retainedEvents: 0, sourceTruncated: false },
+  harnessEventEvidence: { available: true, complete: true, reason: null, retainedEvents: 0, sourceTruncated: false, projectionRejectedEvents: 0, projectionRejectedChecks: 0 },
   enforcement: { hooksActive: false, policyBypassAchieved: false },
   telemetry: {
     totals: { requests: 4, modelRequests: 4, providerAttempts: 4, providerResponses: 4, providerErrors: 0, retries: 0, openAttempts: 0, unknownBillingAttempts: 0, missingUsage: 0, promptTokens: 3000, cachedTokens: 500, reasoningTokens: 0, outputTokens: 700, localCostUsd: 0.015, providerCostUsd: 0.02, usageComplete: true, providerCostComplete: true, billingComplete: true, costComplete: true },
@@ -102,16 +103,48 @@ process.exit(0);
 `
   );
   fs.writeFileSync(path.join(binDir, 'harbor'), `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(fakeHarbor)} "$@"\n`, { mode: 0o755 });
-  return { datasetDir, lockFile, binDir, bundleDir: tmpdir(), auditFile };
+  const fetchPreload = path.join(binDir, 'provider-key-fetch-preload.mjs');
+  fs.writeFileSync(
+    fetchPreload,
+    `globalThis.fetch = async (url) => {
+      if (String(url) !== 'https://openrouter.ai/api/v1/key') throw new Error('unexpected network request');
+      return { ok: true, status: 200, json: async () => ({ data: { limit: 10, limit_remaining: 10, limit_reset: null } }) };
+    };\n`
+  );
+  const bundleFixtureRoot = tmpdir();
+  fs.mkdirSync(path.join(bundleFixtureRoot, 'packages', 'harness', 'bin'), { recursive: true });
+  fs.mkdirSync(path.join(bundleFixtureRoot, 'evals', 'external', 'terminal_bench'), { recursive: true });
+  fs.writeFileSync(path.join(bundleFixtureRoot, 'packages', 'harness', 'package.json'), JSON.stringify({ name: '@fixture/harness' }));
+  fs.writeFileSync(path.join(bundleFixtureRoot, 'packages', 'harness', 'bin', 'harness.mjs'), 'process.stdout.write("ok\\n")');
+  fs.writeFileSync(path.join(bundleFixtureRoot, 'evals', 'external', 'terminal_bench', 'evidence-probe.mjs'), 'process.stdout.write("{}\\n")');
+  fs.writeFileSync(path.join(bundleFixtureRoot, 'evals', 'external', 'terminal_bench', 'bounded-exec.mjs'), 'process.stdout.write("{}\\n")');
+  const bundleDir = path.join(tmpdir(), 'bundle');
+  const prepared = prepareHarnessBundle({
+    bundleDir,
+    repoRoot: bundleFixtureRoot,
+    nodeTarballs: { x64: '/unused/node-x64.tar.gz', arm64: null },
+    spawnImpl: (command, args) => {
+      if (command === 'cp') fs.cpSync(args[1], args[2], { recursive: true });
+      if (command === 'tar') {
+        const destination = args[args.indexOf('-C') + 1];
+        fs.mkdirSync(path.join(destination, 'bin'), { recursive: true });
+        fs.writeFileSync(path.join(destination, 'bin', 'node'), '#!/bin/sh\n', { mode: 0o755 });
+      }
+      return { status: 0, stderr: '' };
+    },
+  });
+  return { datasetDir, lockFile, binDir, bundleDir, bundleHash: prepared.manifestHash, auditFile, fetchPreload };
 }
 
-function runCli({ datasetDir, lockFile, binDir, bundleDir, auditFile, withKey = true }) {
+function runCli({ datasetDir, lockFile, binDir, bundleDir, bundleHash, auditFile, fetchPreload, withKey = true }) {
   const env = {
     ...process.env,
     PATH: `${binDir}${path.delimiter}${process.env.PATH}`,
     HARNESS_EVAL_TB_DATASET_DIR: datasetDir,
     HARNESS_EVAL_TB_BUNDLE_DIR: bundleDir,
+    HARNESS_EVAL_TB_BUNDLE_SHA256: bundleHash,
     HARNESS_EVAL_TEST_AUDIT_FILE: auditFile,
+    NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ''} --import=${fetchPreload}`.trim(),
   };
   if (withKey) env.OPENROUTER_API_KEY = SENTINEL_PROVIDER_KEY;
   else delete env.OPENROUTER_API_KEY;
