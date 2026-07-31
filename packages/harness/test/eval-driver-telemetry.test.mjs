@@ -72,7 +72,7 @@ test('captures usage, local cost, provider cost, and generation/provider identif
   assert.equal(totals.outputTokens, 100);
   assert.ok(Math.abs(totals.localCostUsd - USAGE_LOCAL_COST) < 1e-9);
   assert.ok(Math.abs(totals.providerCostUsd - 0.0012) < 1e-12);
-  assert.ok(Math.abs(budget.spentUsd() - USAGE_LOCAL_COST) < 1e-9);
+  assert.ok(Math.abs(budget.spentUsd() - USAGE.cost) < 1e-9, 'the larger of local and provider cost is charged');
   const response = events.find((e) => e.type === 'response');
   assert.equal(response.generationId, 'gen-1');
   assert.equal(response.provider, 'Moonshot AI');
@@ -81,7 +81,25 @@ test('captures usage, local cost, provider cost, and generation/provider identif
   assert.ok(!events.some((e) => e.type === 'fallback'), 'matching pinned provider must not read as fallback');
 });
 
-test('a paid, budgeted driver stops immediately when usage is unusable — no unmetered spending', async () => {
+test('the provider-reported charge is reconciled inside the driver before another request can be sent', async () => {
+  const expensiveUsage = { ...USAGE, cost: 0.04 };
+  const { driver, calls, budget } = harness(
+    [
+      completion({ message: assistantToolCalls([['runInTerminal', { command: 'ls' }]]), usage: expensiveUsage }),
+      completion({ message: { role: 'assistant', content: 'must not run' }, usage: USAGE, finishReason: 'stop' }),
+    ],
+    { ceilingUsd: 0.04 }
+  );
+  const first = await driver.next();
+  assert.equal(first.type, 'tool');
+  assert.equal(budget.spentUsd(), 0.04, 'the larger provider amount, not the local estimate, is charged immediately');
+  driver.observe(first, { code: 0, stdout: '', stderr: '' });
+  const second = await driver.next();
+  assert.equal(second.stopReason, 'budget_exhausted');
+  assert.equal(calls.length, 1, 'provider reconciliation cannot leave room for another request');
+});
+
+test('a paid, budgeted driver stops immediately when usage is unusable and reserves the remaining allowance', async () => {
   const { driver, telemetry, budget } = harness([
     completion({ message: assistantToolCalls([['runInTerminal', { command: 'ls' }]]), usage: { prompt_tokens: 'lots' } }),
   ]);
@@ -89,7 +107,8 @@ test('a paid, budgeted driver stops immediately when usage is unusable — no un
   const { totals } = telemetry.snapshot();
   assert.equal(totals.missingUsage, 1, 'the unusable response is still counted');
   assert.equal(totals.costComplete, false);
-  assert.equal(budget.spentUsd(), 0, 'nothing is charged and nothing further can be spent');
+  assert.equal(budget.spentUsd(), budget.ceilingUsd, 'unknown billing conservatively reserves the full remaining trial allowance');
+  assert.ok(telemetry.snapshot().events.some((event) => event.type === 'billing_uncertain' && event.reservedUsd > 0));
 });
 
 test('without pricing and budget, unusable usage is recorded but the run may continue', async () => {
@@ -231,6 +250,26 @@ test('tool call and result telemetry is correlated, timed, categorized, and neve
   assert.doesNotMatch(JSON.stringify({ call, result }), new RegExp(secret));
 });
 
+test('immutable harness-cli invocations retain lifecycle categories without matching lookalike commands', async () => {
+  const { driver, telemetry } = harness([
+    completion({
+      message: assistantToolCalls([
+        ['runInTerminal', { command: 'cd /workspace && /opt/harness-bundle/harness-cli verify --json' }],
+        ['runInTerminal', { command: 'evil-harness-cli verify' }],
+      ]),
+      usage: USAGE,
+    }),
+  ]);
+  let action = await driver.next();
+  driver.observe(action, { code: 0, stdout: '', stderr: '' });
+  action = await driver.next();
+  driver.observe(action, { code: 0, stdout: '', stderr: '' });
+  assert.deepEqual(
+    telemetry.snapshot().events.filter((event) => event.type === 'tool_call').map((event) => event.category),
+    ['verify', 'other']
+  );
+});
+
 test('a request that could cross the ceiling is refused before it is sent', async () => {
   const { driver, calls, telemetry, budget } = harness(
     [completion({ message: { role: 'assistant', content: 'never reached' }, usage: USAGE, finishReason: 'stop' })],
@@ -244,8 +283,30 @@ test('a request that could cross the ceiling is refused before it is sent', asyn
   assert.equal(budget.exhausted, true);
 });
 
+test('the pre-send prompt-token bound uses UTF-8 bytes and declares its estimate semantics', async () => {
+  const telemetry = createTelemetry();
+  const budget = createBudget({ ceilingUsd: 0, label: 'utf8-bound' });
+  const driver = openAiToolDriver({
+    profile: KIMI,
+    apiKey: 'k',
+    fetchImpl: async () => {
+      throw new Error('must not send');
+    },
+    budget,
+    telemetry,
+  });
+  driver.reset({ system: '🧪'.repeat(20), instruction: 'i', tools: TOOLS });
+  const result = await driver.next();
+  assert.equal(result.stopReason, 'budget_exhausted');
+  const refusal = telemetry.snapshot().events.find((event) => event.type === 'budget_refusal');
+  assert.equal(refusal.promptTokenUpperBound, refusal.payloadBytes);
+  assert.ok(refusal.payloadBytes > refusal.payloadChars, 'multi-byte prompt text must not be priced by UTF-16 character count');
+  assert.equal(refusal.maxOutputTokens, KIMI.maxTokens);
+  assert.equal(refusal.estimateSemantics, 'utf8-bytes-upper-bound-plus-max-output');
+});
+
 test('a transport failure is unknown-billing and closes its correlated attempt', async () => {
-  const { driver, telemetry } = harness([new Error('socket hang up')]);
+  const { driver, telemetry, budget } = harness([new Error('socket hang up')]);
   await assert.rejects(driver.next(), (err) => err.kind === 'network' && err.billed === null);
   const { totals, events } = telemetry.snapshot();
   assert.equal(totals.providerAttempts, 1);
@@ -255,6 +316,7 @@ test('a transport failure is unknown-billing and closes its correlated attempt',
   const error = events.find((event) => event.type === 'error' && event.kind === 'network');
   assert.ok(error.requestId && error.attemptId);
   assert.equal(error.billingStatus, 'unknown');
+  assert.equal(budget.spentUsd(), budget.ceilingUsd, 'an ambiguous transport outcome consumes the trial allowance');
 });
 
 test('transient provider errors (429) back off and retry within the same request', async () => {
@@ -289,6 +351,26 @@ test('transient provider errors (429) back off and retry within the same request
   const terminals = events.filter((event) => event.type === 'response' || event.type === 'error');
   assert.deepEqual(terminals.map((event) => event.attemptId), attempts.map((event) => event.attemptId));
   assert.ok(terminals.every((event) => event.requestId === attempts[0].requestId));
+  assert.deepEqual(sleeps, [0, 4000], 'an absent Retry-After header uses exponential backoff instead of being parsed as zero');
+});
+
+test('Retry-After is clamped to thirty seconds', async () => {
+  const sleeps = [];
+  let attempts = 0;
+  const driver = openAiToolDriver({
+    profile: KIMI,
+    apiKey: 'k',
+    fetchImpl: async () => {
+      attempts += 1;
+      if (attempts === 1) return { ok: false, status: 429, headers: { get: () => '999' }, json: async () => ({}) };
+      return completion({ message: { role: 'assistant', content: 'done' }, usage: USAGE, finishReason: 'stop' });
+    },
+    transientRetries: 1,
+    sleepImpl: async (ms) => sleeps.push(ms),
+  });
+  driver.reset({ system: 's', instruction: 'i', tools: TOOLS });
+  await driver.next();
+  assert.deepEqual(sleeps, [30_000]);
 });
 
 test('retries exhaust into a classified http failure; terminal statuses never retry', async () => {
@@ -351,22 +433,48 @@ test('heavily reduced durable state remains valid bounded JSON', async () => {
 test('a malformed completion that still reports usage is a billable failure and is charged', async () => {
   const { driver, budget, telemetry } = harness([ok({ id: 'gen-9', model: KIMI.model, usage: USAGE })]);
   await assert.rejects(driver.next(), (err) => err.kind === 'provider' && err.billed === true);
-  assert.ok(Math.abs(budget.spentUsd() - USAGE_LOCAL_COST) < 1e-9, 'billed usage must still be charged');
+  assert.ok(Math.abs(budget.spentUsd() - USAGE.cost) < 1e-9, 'billed usage must still be charged at the reconciled amount');
   assert.equal(telemetry.snapshot().totals.requests, 1);
 });
 
-test('a paid response without provider cost keeps the local ledger but marks provider cost incomplete', async () => {
+test('a paid response without provider cost fail-stops and reserves the remainder after charging the local estimate', async () => {
   const usage = { ...USAGE };
   delete usage.cost;
   const { driver, telemetry } = harness([
     completion({ message: { role: 'assistant', content: 'done' }, usage, finishReason: 'stop' }),
   ]);
-  await driver.next();
+  await assert.rejects(driver.next(), (error) => error.kind === 'billing' && error.billed === null);
   const { totals } = telemetry.snapshot();
   assert.ok(totals.localCostUsd > 0);
   assert.equal(totals.providerCostUsd, null);
   assert.equal(totals.providerCostComplete, false);
+  assert.equal(totals.billingComplete, false);
   assert.equal(totals.costComplete, false);
+  assert.equal(telemetry.snapshot().events.some((event) => event.type === 'billing_uncertain'), true);
+});
+
+test('provider-controlled strings cannot reflect the active API key into telemetry, messages, errors, or actions', async () => {
+  const secret = 'sk-reflected-secret';
+  const response = completion({
+    id: `generation-${secret}`,
+    model: `model-${secret}`,
+    provider: `provider-${secret}`,
+    message: assistantToolCalls([['runInTerminal', { command: `printf ${secret}` }]], { content: secret }),
+    usage: USAGE,
+    finishReason: `finish-${secret}`,
+  });
+  const telemetry = createTelemetry();
+  const driver = openAiToolDriver({
+    profile: KIMI,
+    apiKey: secret,
+    fetchImpl: async () => response,
+    budget: createBudget({ ceilingUsd: 5 }),
+    telemetry,
+  });
+  driver.reset({ system: 's', instruction: 'i', tools: TOOLS });
+  const action = await driver.next();
+  assert.doesNotMatch(JSON.stringify(action), new RegExp(secret));
+  assert.doesNotMatch(JSON.stringify(telemetry.snapshot()), new RegExp(secret));
 });
 
 test('request telemetry records request and payload footprint without retaining message content', async () => {
@@ -485,7 +593,7 @@ test('the budget precheck grows with observed prompt sizes, not just a character
   // assume at least last prompt + last output tokens, so a ceiling with room
   // for only the first call refuses the second even though the payload chars
   // alone would estimate far less.
-  const usage = { prompt_tokens: 1_000_000, completion_tokens: 100_000 };
+  const usage = { prompt_tokens: 1_000_000, completion_tokens: 100_000, cost: 1.35 };
   // First-call cost: (1M * 0.95 + 100k * 4.0) / 1M = 1.35
   const { driver } = harness(
     [

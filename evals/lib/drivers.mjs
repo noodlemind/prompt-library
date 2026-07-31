@@ -4,15 +4,16 @@
  * billing evidence, and the post-verification stop contract.
  */
 import crypto from 'node:crypto';
-import { costOfUsage, estimateRequestCostUsd, estimateTokensForChars } from './budget.mjs';
+import { costOfUsage, estimateRequestCostUsd } from './budget.mjs';
 
 export class ProviderError extends Error {
-  constructor(message, { kind, billed = false, status = null } = {}) {
+  constructor(message, { kind, billed = false, status = null, billingUncertain = false } = {}) {
     super(message);
     this.name = 'ProviderError';
     this.kind = kind;
     this.billed = billed;
     this.status = status;
+    this.billingUncertain = billingUncertain;
   }
 }
 
@@ -37,6 +38,18 @@ function sha256(value) {
   return crypto.createHash('sha256').update(String(value)).digest('hex');
 }
 
+function redactExactSecret(value, secret) {
+  if (!secret || String(secret).length < 8) return structuredClone(value);
+  if (typeof value === 'string') return value.split(secret).join('[REDACTED_SECRET]');
+  if (Array.isArray(value)) return value.map((item) => redactExactSecret(item, secret));
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, item]) => [redactExactSecret(key, secret), redactExactSecret(item, secret)])
+    );
+  }
+  return value;
+}
+
 function roleChars(messages) {
   const totals = {};
   for (const message of messages) {
@@ -48,10 +61,13 @@ function roleChars(messages) {
 
 function commandCategory(command) {
   const text = String(command || '').trim();
-  if (/\bharness\s+orient\b/.test(text)) return 'orient';
-  if (/\bharness\s+(?:plan-new|validate-plan)\b|docs\/plans\//.test(text)) return 'plan';
-  if (/\bharness\s+gate\b/.test(text)) return 'gate';
-  if (/\bharness\s+verify\b/.test(text)) return 'verify';
+  const harnessCommand = '(?:harness|/opt/harness-bundle/harness-cli)';
+  const invokesHarness = (subcommand) =>
+    new RegExp(`(?:^|[\\s;&|()])${harnessCommand}\\s+${subcommand}(?=\\s|$)`).test(text);
+  if (invokesHarness('orient')) return 'orient';
+  if (invokesHarness('(?:plan-new|validate-plan)') || /docs\/plans\//.test(text)) return 'plan';
+  if (invokesHarness('gate')) return 'gate';
+  if (invokesHarness('verify')) return 'verify';
   if (/\b(?:npm|pnpm|yarn|pytest|python\s+-m\s+pytest|go\s+test|cargo\s+test|mvn|gradle)\b[^\n]*(?:test|verify)|\btest\b/.test(text)) return 'test';
   if (/(?:^|\s)(?:>|>>)|\bsed\s+-i\b|\b(?:rm|mv|cp|install|touch|mkdir)\b|\b(?:python|node|perl|ruby)\b[^\n]*(?:write|open\()/.test(text)) return 'edit';
   if (/\b(?:cat|sed|rg|grep|find|ls|pwd|head|tail|wc|git\s+(?:status|diff|log|show))\b/.test(text)) return 'inspect';
@@ -213,14 +229,17 @@ export function openAiToolDriver({
   let stateLedger = null;
   let stateRevision = 0;
   let fallbackDetected = false;
-  let maxPromptTokensPerChar = 0;
+  let maxObservedPromptTokens = 0;
   let requestSeq = 0;
   let verified = null;
   let verifiedAttempted = false;
   let verifiedTerminal = null;
 
   function toOpenAiTools(schemas) {
-    return schemas.map((tool) => ({ type: 'function', function: { name: tool.name, description: tool.description, parameters: tool.parameters } }));
+    return redactExactSecret(
+      schemas.map((tool) => ({ type: 'function', function: { name: tool.name, description: tool.description, parameters: tool.parameters } })),
+      apiKey
+    );
   }
 
   function buildBody({ finishOnly = false } = {}) {
@@ -232,23 +251,41 @@ export function openAiToolDriver({
     return body;
   }
 
-  function captureUsage(data, payloadChars) {
+  function reserveUncertainBilling(reason, data = {}) {
+    const reservedUsd = budget?.remainingUsd() ?? 0;
+    if (reservedUsd > 0) budget.charge(reservedUsd, `uncertain billing reserve: ${reason}`);
+    telemetry?.record('billing_uncertain', {
+      reason,
+      reservedUsd,
+      policy: 'reserve-trial-remainder-and-stop',
+      ...redactExactSecret(data, apiKey),
+    });
+    return reservedUsd;
+  }
+
+  function captureUsage(data) {
     const usage = data?.usage;
     const zeroPricing = { inputPerM: 0, cachedInputPerM: 0, outputPerM: 0 };
     const cost = costOfUsage(usage, effPricing ?? zeroPricing);
-    if (!cost) return { usageRecord: null, meteringError: isPaid && budget };
-    if (payloadChars > 0) maxPromptTokensPerChar = Math.max(maxPromptTokensPerChar, cost.promptTokens / payloadChars);
+    if (!cost) return { usageRecord: null, meteringError: isPaid, billingUncertain: isPaid };
+    maxObservedPromptTokens = Math.max(maxObservedPromptTokens, cost.promptTokens);
     const localCostUsd = effPricing ? cost.usd : 0;
-    budget?.charge(localCostUsd, `response ${data?.id ?? ''}`.trim());
+    const providerCostUsd =
+      typeof usage?.cost === 'number' && Number.isFinite(usage.cost) && usage.cost >= 0 ? usage.cost : undefined;
+    const billingUncertain = isPaid && providerCostUsd == null;
+    const reconciledCostUsd = Math.max(localCostUsd, providerCostUsd ?? 0);
+    budget?.charge(reconciledCostUsd, `response ${data?.id ?? ''}`.trim());
     return {
       meteringError: false,
+      billingUncertain,
       usageRecord: {
         promptTokens: cost.promptTokens,
         cachedTokens: cost.cachedTokens,
         reasoningTokens: usage?.completion_tokens_details?.reasoning_tokens || 0,
         outputTokens: cost.outputTokens,
         localCostUsd,
-        providerCostUsd: typeof usage?.cost === 'number' && Number.isFinite(usage.cost) ? usage.cost : undefined,
+        providerCostUsd,
+        reconciledCostUsd,
       },
     };
   }
@@ -274,12 +311,25 @@ export function openAiToolDriver({
 
   function precheckBudget(payload) {
     if (!budget) return null;
-    const densityEstimate = maxPromptTokensPerChar > 0 ? Math.ceil(payload.length * maxPromptTokensPerChar) : 0;
-    const promptTokens = Math.max(estimateTokensForChars(payload.length), densityEstimate);
-    const estimateUsd = effPricing ? estimateRequestCostUsd({ promptTokens, maxOutputTokens }, effPricing) : 0;
+    // A tokenizer token consumes at least one UTF-8 byte. The serialized
+    // request size is therefore a conservative tokenizer-independent input
+    // bound. Retain a larger observed value for endpoints with hidden framing.
+    const payloadBytes = Buffer.byteLength(payload, 'utf8');
+    const promptTokenUpperBound = Math.max(payloadBytes, maxObservedPromptTokens);
+    const estimateUsd = effPricing
+      ? estimateRequestCostUsd({ promptTokens: promptTokenUpperBound, maxOutputTokens }, effPricing)
+      : 0;
     const verdict = budget.precheck(estimateUsd);
     if (!verdict.allowed) {
-      telemetry?.record('budget_refusal', { reason: verdict.reason, estimateUsd, payloadChars: payload.length });
+      telemetry?.record('budget_refusal', {
+        reason: verdict.reason,
+        estimateUsd,
+        payloadChars: payload.length,
+        payloadBytes,
+        promptTokenUpperBound,
+        maxOutputTokens,
+        estimateSemantics: 'utf8-bytes-upper-bound-plus-max-output',
+      });
       return verdict.reason;
     }
     return null;
@@ -291,6 +341,7 @@ export function openAiToolDriver({
       model: requestedModel,
       messageCount: messages.length,
       payloadChars: payload.length,
+      payloadBytes: Buffer.byteLength(payload, 'utf8'),
       systemChars: JSON.stringify(messages.filter((message) => message.role === 'system')).length,
       toolSchemaChars: JSON.stringify(body.tools).length,
       charsByRole: roleChars(messages),
@@ -330,15 +381,21 @@ export function openAiToolDriver({
             kind,
             ...(kind === 'timeout' ? { timeoutMs: effRequestTimeoutMs } : {}),
           });
-          const message = kind === 'timeout' ? `provider request timed out after ${effRequestTimeoutMs}ms` : `provider request failed: ${error.message}`;
-          throw new ProviderError(message, { kind, billed: null });
+          reserveUncertainBilling(kind, { requestId, attemptId });
+          const safeError = redactExactSecret(String(error?.message ?? error), apiKey);
+          const message = kind === 'timeout' ? `provider request timed out after ${effRequestTimeoutMs}ms` : `provider request failed: ${safeError}`;
+          throw new ProviderError(message, { kind, billed: null, billingUncertain: true });
         }
 
         if (res.status === 429) {
           telemetry?.finishAttempt(attemptId, { type: 'error', billingStatus: 'confirmed_unbilled', kind: 'http', status: 429 });
           if (attempt < allowedRetries) {
-            const retryAfterSec = Number(res.headers?.get?.('retry-after'));
-            const waitMs = Number.isFinite(retryAfterSec) && retryAfterSec >= 0 ? retryAfterSec * 1000 : Math.min(2 ** (attempt + 1) * 1000, 30_000);
+            const rawRetryAfter = res.headers?.get?.('retry-after');
+            const retryAfterSec = rawRetryAfter == null || String(rawRetryAfter).trim() === '' ? Number.NaN : Number(rawRetryAfter);
+            const backoffMs = Math.min(2 ** (attempt + 1) * 1000, 30_000);
+            const waitMs = Number.isFinite(retryAfterSec) && retryAfterSec >= 0
+              ? Math.min(retryAfterSec * 1000, 30_000)
+              : backoffMs;
             telemetry?.recordRetry({ requestId, attemptId, status: 429, attempt: attempt + 1, waitMs });
             await sleepImpl(waitMs);
             continue;
@@ -347,19 +404,25 @@ export function openAiToolDriver({
         }
         if (!res.ok) {
           telemetry?.finishAttempt(attemptId, { type: 'error', billingStatus: 'unknown', kind: 'http', status: res.status });
-          throw new ProviderError(`provider http ${res.status}`, { kind: 'http', billed: null, status: res.status });
+          reserveUncertainBilling(`http_${res.status}`, { requestId, attemptId, status: res.status });
+          throw new ProviderError(`provider http ${res.status}`, { kind: 'http', billed: null, status: res.status, billingUncertain: true });
         }
 
         let data;
         try {
-          data = await res.json();
+          data = redactExactSecret(await res.json(), apiKey);
         } catch (error) {
           telemetry?.finishAttempt(attemptId, { type: 'error', billingStatus: 'unknown', kind: 'provider', reason: 'unparseable_response' });
-          throw new ProviderError(`provider returned unparseable JSON: ${error.message}`, { kind: 'provider', billed: null });
+          reserveUncertainBilling('unparseable_response', { requestId, attemptId });
+          throw new ProviderError(`provider returned unparseable JSON: ${redactExactSecret(String(error?.message ?? error), apiKey)}`, {
+            kind: 'provider',
+            billed: null,
+            billingUncertain: true,
+          });
         }
 
-        const captured = captureUsage(data, payload.length);
-        const billingStatus = captured.usageRecord ? 'reported' : isPaid ? 'unknown' : 'reported';
+        const captured = captureUsage(data);
+        const billingStatus = captured.meteringError || captured.billingUncertain ? 'unknown' : 'reported';
         telemetry?.finishAttempt(attemptId, {
           type: 'response',
           billingStatus,
@@ -371,8 +434,17 @@ export function openAiToolDriver({
           finishReason: data?.choices?.[0]?.finish_reason ?? null,
         });
         detectFallback(data);
-        if (captured.meteringError) {
-          throw new ProviderError('provider usage missing or malformed — paid spend cannot be metered', { kind: 'usage', billed: null });
+        if (captured.meteringError || captured.billingUncertain) {
+          const reason = captured.meteringError ? 'missing_or_malformed_usage' : 'missing_provider_cost';
+          reserveUncertainBilling(reason, { requestId, attemptId, generationId: data?.id ?? null });
+          const message = captured.meteringError
+            ? 'provider usage missing or malformed — paid spend cannot be metered'
+            : 'provider cost missing — paid billing cannot be reconciled';
+          throw new ProviderError(message, {
+            kind: captured.meteringError ? 'usage' : 'billing',
+            billed: null,
+            billingUncertain: true,
+          });
         }
         if (!data?.choices?.[0]?.message) {
           telemetry?.record('completion_error', { requestId, attemptId, kind: 'provider', billed: Boolean(data?.usage) });
@@ -481,21 +553,21 @@ export function openAiToolDriver({
     reset({ system, instruction, tools: schemas }) {
       tools.length = 0;
       tools.push(...toOpenAiTools(schemas));
-      baseSystem = system;
-      baseInstruction = instruction;
+      baseSystem = redactExactSecret(String(system ?? ''), apiKey);
+      baseInstruction = redactExactSecret(String(instruction ?? ''), apiKey);
       messages = [
-        { role: 'system', content: system },
-        { role: 'user', content: instruction },
+        { role: 'system', content: baseSystem },
+        { role: 'user', content: baseInstruction },
       ];
       pending = [];
       pendingRequestId = null;
       fallbackDetected = false;
-      maxPromptTokensPerChar = 0;
+      maxObservedPromptTokens = 0;
       stateRevision = 0;
       stateLedger = {
         schema: 'eval-agent-state.v1',
         revision: 0,
-        goal: instruction,
+        goal: baseInstruction,
         constraints: [],
         files: { inspected: [], changed: [] },
         tests: [],
@@ -510,29 +582,32 @@ export function openAiToolDriver({
     },
     checkpoint(snapshot, { pinnedContext = [] } = {}) {
       stateRevision += 1;
+      const safeSnapshot = redactExactSecret(snapshot || {}, apiKey);
       stateLedger = {
         ...structuredClone(stateLedger),
-        ...structuredClone(snapshot || {}),
+        ...structuredClone(safeSnapshot),
         schema: 'eval-agent-state.v1',
         revision: stateRevision,
-        loadedGuidance: [...new Set([...(snapshot?.loadedGuidance || stateLedger.loadedGuidance || []), ...pinnedContext.map((item) => item.id)])],
+        loadedGuidance: [...new Set([...(safeSnapshot?.loadedGuidance || stateLedger.loadedGuidance || []), ...pinnedContext.map((item) => item.id)])],
       };
       telemetry?.record('checkpoint', { stateRevision, stateHash: sha256(JSON.stringify(stateLedger)) });
     },
     markVerified({ plan = null, evidencePath = null, fallbackAnswer = '' } = {}) {
-      verified = { plan, evidencePath, fallbackAnswer };
+      verified = redactExactSecret({ plan, evidencePath, fallbackAnswer }, apiKey);
+      const safePlan = verified.plan;
+      const safeEvidencePath = verified.evidencePath;
       stateRevision += 1;
       stateLedger = {
         ...stateLedger,
         revision: stateRevision,
-        lifecycle: { ...(stateLedger.lifecycle || {}), phase: 'done', planPath: plan, verify: 'passed' },
+        lifecycle: { ...(stateLedger.lifecycle || {}), phase: 'done', planPath: safePlan, verify: 'passed' },
       };
       for (const call of pending) {
         telemetry?.record('post_verify_tool_suppressed', { toolCallId: call.id, tool: call.function?.name || null });
       }
       pending = [];
       pendingRequestId = null;
-      telemetry?.record('verification_passed', { plan, evidencePath, stateRevision });
+      telemetry?.record('verification_passed', { plan: safePlan, evidencePath: safeEvidencePath, stateRevision });
     },
     async next() {
       if (verifiedTerminal) return verifiedTerminal;
@@ -589,8 +664,9 @@ export function openAiToolDriver({
       return actionFor(pending.shift(), requestId);
     },
     observe(action, result) {
-      const serialized = JSON.stringify(result);
-      const compacted = compactToolResult(result, toolResultLimit);
+      const safeResult = redactExactSecret(result, apiKey);
+      const serialized = JSON.stringify(safeResult);
+      const compacted = compactToolResult(safeResult, toolResultLimit);
       const category = action._category || commandCategory(action.input?.command);
       telemetry?.record('tool_result', {
         requestId: action._requestId ?? null,
@@ -599,8 +675,8 @@ export function openAiToolDriver({
         category,
         exitCode: Number.isFinite(result?.code) ? result.code : null,
         durationMs: Math.max(0, monotonicNow() - (action._startedAtMs ?? monotonicNow())),
-        stdoutChars: String(result?.stdout ?? '').length,
-        stderrChars: String(result?.stderr ?? '').length,
+        stdoutChars: String(safeResult?.stdout ?? '').length,
+        stderrChars: String(safeResult?.stderr ?? '').length,
         resultChars: serialized.length,
         resultHash: sha256(serialized),
         compacted: compacted.compacted,
@@ -614,7 +690,7 @@ export function openAiToolDriver({
         });
       }
 
-      const code = Number.isFinite(result?.code) ? result.code : null;
+      const code = Number.isFinite(safeResult?.code) ? safeResult.code : null;
       if (category === 'edit' && code === 0) {
         stateLedger.files.changed = [...new Set([...(stateLedger.files.changed || []), ...changedPaths(action.input?.command)])].slice(-50);
       }
@@ -627,7 +703,7 @@ export function openAiToolDriver({
       if (code != null && code !== 0) {
         stateLedger.failures = [
           ...(stateLedger.failures || []),
-          { command: commandProgram(action.input?.command) || action.name || 'tool', exitCode: code, summary: `stderr sha256:${sha256(result?.stderr || '').slice(0, 12)}` },
+          { command: commandProgram(action.input?.command) || action.name || 'tool', exitCode: code, summary: `stderr sha256:${sha256(safeResult?.stderr || '').slice(0, 12)}` },
         ].slice(-20);
       }
 
