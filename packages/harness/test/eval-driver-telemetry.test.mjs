@@ -165,7 +165,7 @@ test('reasoning metadata round-trips into the next request', async () => {
 });
 
 test('multiple tool calls in one response drain without extra provider requests', async () => {
-  const { driver, calls } = harness([
+  const { driver, calls, telemetry } = harness([
     completion({ message: assistantToolCalls([['runInTerminal', { command: 'ls' }], ['runInTerminal', { command: 'pwd' }]]), usage: USAGE }),
     completion({ message: { role: 'assistant', content: 'done' }, usage: USAGE, finishReason: 'stop' }),
   ]);
@@ -176,28 +176,59 @@ test('multiple tool calls in one response drain without extra provider requests'
   assert.equal(first.input.command, 'ls');
   assert.equal(second.input.command, 'pwd');
   assert.equal(calls.length, 1, 'both tool calls come from a single response');
+  const toolCalls = telemetry.snapshot().events.filter((event) => event.type === 'tool_call');
+  assert.equal(toolCalls.length, 2);
+  assert.ok(toolCalls[0].requestId);
+  assert.equal(toolCalls[1].requestId, toolCalls[0].requestId, 'every call from one completion retains its provider request identity');
   const finish = await driver.next();
   assert.equal(finish.type, 'finish');
   assert.equal(calls.length, 2);
 });
 
-test('oversized tool results are truncated at the configured limit and the truncation is recorded', async () => {
+test('oversized tool results become valid bounded head/tail JSON and the compaction is recorded', async () => {
   const { driver, calls, telemetry } = harness(
     [
       completion({ message: assistantToolCalls([['runInTerminal', { command: 'cat big' }]]), usage: USAGE }),
       completion({ message: { role: 'assistant', content: 'done' }, usage: USAGE, finishReason: 'stop' }),
     ],
-    { driver: { toolResultLimit: 50 } }
+    { driver: { toolResultLimit: 320 } }
   );
   const action = await driver.next();
-  driver.observe(action, { runInTerminal: 'cat big', stdout: 'x'.repeat(10_000) });
+  driver.observe(action, { code: 7, stdout: `HEAD-${'x'.repeat(10_000)}-TAIL`, stderr: 'important failure' });
   await driver.next();
   const toolMsg = calls[1].body.messages.at(-1);
   assert.equal(toolMsg.role, 'tool');
-  assert.equal(toolMsg.content.length, 50);
-  const truncation = telemetry.snapshot().events.find((e) => e.type === 'tool_result_truncated');
-  assert.equal(truncation.limit, 50);
+  assert.ok(toolMsg.content.length <= 320);
+  const compacted = JSON.parse(toolMsg.content);
+  assert.equal(compacted.code, 7);
+  assert.match(compacted.stderr, /important failure/);
+  assert.match(compacted.stdout, /HEAD-/);
+  assert.match(compacted.stdout, /-TAIL/);
+  assert.ok(compacted._truncated.omittedChars > 0);
+  const truncation = telemetry.snapshot().events.find((e) => e.type === 'tool_result_compacted');
+  assert.equal(truncation.limit, 320);
   assert.ok(truncation.originalChars > 10_000);
+});
+
+test('tool call and result telemetry is correlated, timed, categorized, and never stores raw arguments or output', async () => {
+  const secret = 'sk-live-secret-value';
+  const { driver, telemetry } = harness([
+    completion({ message: assistantToolCalls([['runInTerminal', { command: `printf ${secret} > result.txt` }]]), usage: USAGE }),
+  ]);
+  const action = await driver.next();
+  driver.observe(action, { code: 0, stdout: secret, stderr: '' });
+  const snapshot = telemetry.snapshot();
+  const call = snapshot.events.find((event) => event.type === 'tool_call');
+  const result = snapshot.events.find((event) => event.type === 'tool_result');
+  assert.equal(call.toolCallId, action._id);
+  assert.equal(result.toolCallId, action._id);
+  assert.equal(call.category, 'edit');
+  assert.equal(result.exitCode, 0);
+  assert.ok(result.durationMs >= 0);
+  assert.ok(call.argsHash && result.resultHash);
+  assert.equal(call.argsChars > 0, true);
+  assert.equal(result.stdoutChars, secret.length);
+  assert.doesNotMatch(JSON.stringify({ call, result }), new RegExp(secret));
 });
 
 test('a request that could cross the ceiling is refused before it is sent', async () => {
@@ -213,9 +244,17 @@ test('a request that could cross the ceiling is refused before it is sent', asyn
   assert.equal(budget.exhausted, true);
 });
 
-test('a transport failure is classified as an unbilled network failure', async () => {
-  const { driver } = harness([new Error('socket hang up')]);
-  await assert.rejects(driver.next(), (err) => err.kind === 'network' && err.billed === false);
+test('a transport failure is unknown-billing and closes its correlated attempt', async () => {
+  const { driver, telemetry } = harness([new Error('socket hang up')]);
+  await assert.rejects(driver.next(), (err) => err.kind === 'network' && err.billed === null);
+  const { totals, events } = telemetry.snapshot();
+  assert.equal(totals.providerAttempts, 1);
+  assert.equal(totals.providerErrors, 1);
+  assert.equal(totals.unknownBillingAttempts, 1);
+  assert.equal(totals.costComplete, false);
+  const error = events.find((event) => event.type === 'error' && event.kind === 'network');
+  assert.ok(error.requestId && error.attemptId);
+  assert.equal(error.billingStatus, 'unknown');
 });
 
 test('transient provider errors (429) back off and retry within the same request', async () => {
@@ -226,11 +265,12 @@ test('transient provider errors (429) back off and retry within the same request
   ];
   let i = 0;
   const sleeps = [];
+  const telemetry = createTelemetry();
   const driver = openAiToolDriver({
     profile: KIMI,
     apiKey: 'k',
     fetchImpl: async () => responses[Math.min(i++, responses.length - 1)],
-    telemetry: createTelemetry(),
+    telemetry,
     sleepImpl: async (ms) => sleeps.push(ms),
   });
   driver.reset({ system: 's', instruction: 'i', tools: TOOLS });
@@ -238,6 +278,17 @@ test('transient provider errors (429) back off and retry within the same request
   assert.equal(action.type, 'finish', 'the request succeeds after unbilled retries');
   assert.equal(i, 3, 'two 429s then success');
   assert.equal(sleeps.length, 2, 'each retry waits before re-sending');
+  const { totals, events } = telemetry.snapshot();
+  assert.equal(totals.modelRequests, 1);
+  assert.equal(totals.providerAttempts, 3);
+  assert.equal(totals.providerResponses, 1);
+  assert.equal(totals.providerErrors, 2);
+  assert.equal(totals.retries, 2);
+  assert.equal(totals.billingComplete, true, '429s are the only default confirmed-unbilled retry status');
+  const attempts = events.filter((event) => event.type === 'request_attempt');
+  const terminals = events.filter((event) => event.type === 'response' || event.type === 'error');
+  assert.deepEqual(terminals.map((event) => event.attemptId), attempts.map((event) => event.attemptId));
+  assert.ok(terminals.every((event) => event.requestId === attempts[0].requestId));
 });
 
 test('retries exhaust into a classified http failure; terminal statuses never retry', async () => {
@@ -272,9 +323,29 @@ test('retries exhaust into a classified http failure; terminal statuses never re
   assert.equal(paymentAttempts, 1, 'a 402 is terminal — retrying cannot mint credits');
 });
 
-test('a provider http error is classified as unbilled with its status', async () => {
-  const { driver } = harness([{ ok: false, status: 502, json: async () => ({}) }]);
-  await assert.rejects(driver.next(), (err) => err.kind === 'http' && err.billed === false && err.status === 502);
+test('a provider http error has unknown billing with its status', async () => {
+  const { driver, telemetry } = harness([{ ok: false, status: 502, json: async () => ({}) }]);
+  await assert.rejects(driver.next(), (err) => err.kind === 'http' && err.billed === null && err.status === 502);
+  assert.equal(telemetry.snapshot().totals.billingComplete, false);
+});
+
+test('heavily reduced durable state remains valid bounded JSON', async () => {
+  const { driver, calls } = harness(
+    [
+      completion({ message: assistantToolCalls([['runInTerminal', { command: 'cat large.log' }]]), usage: USAGE }),
+      completion({ message: { role: 'assistant', content: 'done' }, usage: USAGE, finishReason: 'stop' }),
+    ],
+    { driver: { maxPayloadChars: 1200, maxStateChars: 180, retainCompletedTurns: 0 } }
+  );
+  driver.checkpoint({ goal: 'g'.repeat(5000), constraints: Array.from({ length: 30 }, (_, i) => `constraint-${i}-${'x'.repeat(200)}`) });
+  const action = await driver.next();
+  driver.observe(action, { code: 0, stdout: 'x'.repeat(8000), stderr: '' });
+  await driver.next();
+  const stateMessage = calls.at(-1).body.messages.find((message) => String(message.content).startsWith('# Durable eval state\n'));
+  assert.ok(stateMessage);
+  const serializedState = stateMessage.content.slice('# Durable eval state\n'.length);
+  assert.ok(serializedState.length <= 180);
+  assert.doesNotThrow(() => JSON.parse(serializedState));
 });
 
 test('a malformed completion that still reports usage is a billable failure and is charged', async () => {
@@ -282,6 +353,106 @@ test('a malformed completion that still reports usage is a billable failure and 
   await assert.rejects(driver.next(), (err) => err.kind === 'provider' && err.billed === true);
   assert.ok(Math.abs(budget.spentUsd() - USAGE_LOCAL_COST) < 1e-9, 'billed usage must still be charged');
   assert.equal(telemetry.snapshot().totals.requests, 1);
+});
+
+test('a paid response without provider cost keeps the local ledger but marks provider cost incomplete', async () => {
+  const usage = { ...USAGE };
+  delete usage.cost;
+  const { driver, telemetry } = harness([
+    completion({ message: { role: 'assistant', content: 'done' }, usage, finishReason: 'stop' }),
+  ]);
+  await driver.next();
+  const { totals } = telemetry.snapshot();
+  assert.ok(totals.localCostUsd > 0);
+  assert.equal(totals.providerCostUsd, null);
+  assert.equal(totals.providerCostComplete, false);
+  assert.equal(totals.costComplete, false);
+});
+
+test('request telemetry records request and payload footprint without retaining message content', async () => {
+  const { driver, telemetry } = harness([
+    completion({ message: { role: 'assistant', content: 'done' }, usage: USAGE, finishReason: 'stop' }),
+  ]);
+  await driver.next();
+  const request = telemetry.snapshot().events.find((event) => event.type === 'request');
+  assert.ok(request.requestId);
+  assert.ok(request.payloadChars > 0);
+  assert.ok(request.systemChars > 0);
+  assert.ok(request.toolSchemaChars > 0);
+  assert.ok(request.messagesHash);
+  assert.equal('messages' in request, false);
+});
+
+test('deterministic compaction bounds the request and retains durable task state without orphaning tool messages', async () => {
+  const responses = [
+    completion({ message: assistantToolCalls([['runInTerminal', { command: 'cat large.log' }]]), usage: USAGE }),
+    completion({ message: assistantToolCalls([['runInTerminal', { command: 'npm test' }]]), usage: USAGE }),
+    completion({ message: { role: 'assistant', content: 'done' }, usage: USAGE, finishReason: 'stop' }),
+  ];
+  const { driver, calls, telemetry } = harness(responses, {
+    driver: { maxPayloadChars: 1300, toolResultLimit: 500, retainCompletedTurns: 1 },
+  });
+  driver.checkpoint({
+    schema: 'eval-agent-state.v1',
+    goal: 'repair the service',
+    constraints: ['do not change public API'],
+    files: { inspected: ['src/a.js'], changed: ['src/b.js'] },
+    tests: [{ command: 'npm test', status: 'failed', summary: 'one failure' }],
+    failures: [{ command: 'npm test', exitCode: 1, summary: 'assertion' }],
+  });
+  let action = await driver.next();
+  driver.observe(action, { code: 0, stdout: 'x'.repeat(8000), stderr: '' });
+  action = await driver.next();
+  driver.observe(action, { code: 1, stdout: '', stderr: 'failure'.repeat(500) });
+  await driver.next();
+  const last = calls.at(-1).body;
+  assert.ok(JSON.stringify(last).length <= 1300);
+  const text = JSON.stringify(last.messages);
+  for (const retained of ['repair the service', 'do not change public API', 'src/b.js', 'npm test', 'assertion']) {
+    assert.match(text, new RegExp(retained));
+  }
+  const toolIds = new Set(last.messages.filter((message) => message.role === 'tool').map((message) => message.tool_call_id));
+  for (const message of last.messages.filter((item) => item.role === 'assistant' && item.tool_calls)) {
+    assert.ok(message.tool_calls.every((call) => toolIds.has(call.id)), 'no assistant tool call may survive without its tool result');
+  }
+  assert.ok(telemetry.snapshot().events.some((event) => event.type === 'context_compacted'));
+});
+
+test('verified stop permits one final provider attempt and suppresses later tool work', async () => {
+  const { driver, calls, telemetry } = harness([
+    completion({ message: assistantToolCalls([['runInTerminal', { command: 'echo should-not-run' }]]), usage: USAGE }),
+  ]);
+  driver.markVerified({ plan: 'docs/plans/task.md', evidencePath: '.harness/evidence/task.json', fallbackAnswer: 'verified' });
+  const finish = await driver.next();
+  assert.equal(finish.type, 'finish');
+  assert.equal(finish.stopReason, 'verified_stop');
+  assert.equal(finish.answer, 'verified');
+  assert.equal(calls.length, 1);
+  const again = await driver.next();
+  assert.equal(again.stopReason, 'verified_stop');
+  assert.equal(calls.length, 1, 'verified completion never issues a second provider request');
+  assert.ok(telemetry.snapshot().events.some((event) => event.type === 'post_verify_tool_suppressed'));
+});
+
+test('verified stop disables 429 retries and falls back locally on the final attempt', async () => {
+  let attempts = 0;
+  const driver = openAiToolDriver({
+    profile: KIMI,
+    apiKey: 'k',
+    fetchImpl: async () => {
+      attempts += 1;
+      return { ok: false, status: 429, headers: { get: () => '0' }, json: async () => ({}) };
+    },
+    telemetry: createTelemetry(),
+    sleepImpl: async () => {},
+  });
+  driver.reset({ system: 's', instruction: 'i', tools: TOOLS });
+  driver.markVerified({ fallbackAnswer: 'verified locally' });
+  const finish = await driver.next();
+  assert.equal(finish.type, 'finish');
+  assert.equal(finish.stopReason, 'verified_stop');
+  assert.equal(finish.answer, 'verified locally');
+  assert.equal(attempts, 1);
 });
 
 test('a plain text completion finishes with an explicit model_finish stop reason', async () => {
