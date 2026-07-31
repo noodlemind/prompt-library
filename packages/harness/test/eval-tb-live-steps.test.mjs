@@ -16,6 +16,16 @@ function tmpdir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'tb-live-'));
 }
 
+function filesUnder(root) {
+  const files = [];
+  for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
+    const full = path.join(root, entry.name);
+    if (entry.isDirectory()) files.push(...filesUnder(full));
+    else if (entry.isFile()) files.push(full);
+  }
+  return files;
+}
+
 /** A fixture dataset root with the anchor task, plus a lock pinning ONLY it. */
 function fixtureTask() {
   const datasetDir = tmpdir();
@@ -37,8 +47,8 @@ function fakeHarborSpawn({ reward = 1, exitCode = 0, writeTelemetry = true, prov
   const invocations = [];
   return {
     invocations,
-    spawnImpl: (cmd, args) => {
-      invocations.push({ cmd, args });
+    spawnImpl: (cmd, args, opts) => {
+      invocations.push({ cmd, args, opts });
       if (args[0] === '--version') return { status: 0, stdout: '0.20.0', stderr: '' };
       if (args[0] !== 'run') return { status: 0, stdout: '', stderr: '' };
       const jobsDir = args[args.indexOf('--jobs-dir') + 1];
@@ -85,11 +95,11 @@ function fakeHarborSpawn({ reward = 1, exitCode = 0, writeTelemetry = true, prov
   };
 }
 
-function liveSteps({ datasetDir, taskDir, lock, spawnImpl, apiKey = 'test-key' }) {
+function liveSteps({ datasetDir, taskDir, lock, spawnImpl, apiKey = 'test-key', workDir = tmpdir() }) {
   return buildLiveSteps({
     config: { execution: { environment: 'docker' } },
     lock,
-    workDir: tmpdir(),
+    workDir,
     env: { OPENROUTER_API_KEY: apiKey, HARNESS_EVAL_TB_DATASET_DIR: datasetDir ?? path.dirname(taskDir) },
     releaseSha: 'sha1',
     harnessVersion: '0.5.0',
@@ -184,6 +194,29 @@ test('a live kimi pair produces two schema-valid run documents and charges provi
     runs.every((i) => !i.args.some((arg) => typeof arg === 'string' && arg.startsWith('OPENROUTER_API_KEY='))),
     'the provider credential must never be placed in Harbor --ae arguments'
   );
+});
+
+test('the provider credential reaches injected Harbor only through spawn env and is never persisted', async () => {
+  const sentinel = 'sentinel-openrouter-secret-do-not-persist';
+  const { datasetDir, taskDir, lock } = fixtureTask();
+  const workDir = tmpdir();
+  const { spawnImpl, invocations } = fakeHarborSpawn();
+  const steps = liveSteps({ datasetDir, taskDir, lock, spawnImpl, apiKey: sentinel, workDir });
+  assert.equal((await steps.taskLock()).ok, true);
+  const [pair] = await steps.kimiPair(createBudget({ ceilingUsd: 10, label: 'credential-boundary' }));
+
+  const runs = invocations.filter((invocation) => invocation.args[0] === 'run');
+  assert.equal(runs.length, 2);
+  for (const invocation of runs) {
+    assert.equal(invocation.opts.env.OPENROUTER_API_KEY, sentinel, 'injected spawns receive the provider key in env');
+    assert.ok(!JSON.stringify(invocation.args).includes(sentinel), 'the key value must not enter Harbor argv');
+    assert.ok(!invocation.args.some((arg) => String(arg).startsWith('OPENROUTER_API_KEY=')), 'the key must not enter --ae');
+  }
+
+  assert.ok(!JSON.stringify(pair).includes(sentinel), 'run documents and failure summaries must not contain the key');
+  for (const artifact of filesUnder(workDir)) {
+    assert.ok(!fs.readFileSync(artifact, 'utf8').includes(sentinel), `the key must not be persisted in ${path.basename(artifact)}`);
+  }
 });
 
 test('the pair allowance is preallocated equally across both conditions', async () => {

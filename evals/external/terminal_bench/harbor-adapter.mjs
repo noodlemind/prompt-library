@@ -23,6 +23,27 @@ import { spawnSync } from 'node:child_process';
 import { collectVerifierEvidence, hashTree, verdictFromReward } from './verifier.mjs';
 
 const REQUIRED_LOCK_FIELDS = ['lockSchema', 'datasetRef', 'verifier'];
+const ALLOWED_AGENT_ENV_KEYS = new Set([
+  'HARNESS_EVAL_TB_CONDITION',
+  'HARNESS_EVAL_TB_TELEMETRY_FILE',
+  'HARNESS_EVAL_TB_NODE',
+  'HARNESS_EVAL_TB_AGENT_MJS',
+]);
+
+function buildAgentEnvArgs(agentEnv) {
+  const entries = Object.entries(agentEnv);
+  for (const [key, value] of entries) {
+    if (!ALLOWED_AGENT_ENV_KEYS.has(key)) {
+      // Include the rejected key for diagnosis, but never its potentially
+      // secret value. This check runs before the Harbor argv is assembled.
+      throw new Error(`Harbor agent environment key is not allowed: ${key}`);
+    }
+    if (typeof value !== 'string' || value.includes('\0')) {
+      throw new TypeError(`Harbor agent environment value must be a NUL-free string: ${key}`);
+    }
+  }
+  return entries.flatMap(([key, value]) => ['--ae', `${key}=${value}`]);
+}
 
 /** The pinned task list, normalized: legacy single-task locks become one anchor entry. */
 export function tasksOf(lock) {
@@ -87,6 +108,7 @@ export function verifyTaskAgainstLock(taskDir, lock, taskName = tasksOf(lock)[0]
 // -n/--n-concurrent is CONCURRENCY, --job-name/-o/--jobs-dir pin the output
 // identity, -y auto-confirms prompts.
 export function buildHarborRunArgs({ lock, task = tasksOf(lock)[0]?.task, agentRef, model, envName, jobName, jobsDir, attempts = 1, mounts = [], agentEnv = {} }) {
+  const agentEnvArgs = buildAgentEnvArgs(agentEnv);
   return [
     'run',
     '-d',
@@ -107,7 +129,7 @@ export function buildHarborRunArgs({ lock, task = tasksOf(lock)[0]?.task, agentR
     ...(jobName ? ['--job-name', jobName] : []),
     ...(jobsDir ? ['--jobs-dir', jobsDir] : []),
     ...(mounts.length ? ['--mounts', JSON.stringify(mounts)] : []),
-    ...Object.entries(agentEnv).flatMap(([key, value]) => ['--ae', `${key}=${value}`]),
+    ...agentEnvArgs,
   ];
 }
 

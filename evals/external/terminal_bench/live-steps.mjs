@@ -185,7 +185,7 @@ export function buildLiveSteps({
 
   function environment() {
     const missing = [];
-    const probe = runHarbor({ args: ['--version'], cwd: workDir, spawnImpl, timeoutMs: 60_000, spawnEnv: spawnImpl ? undefined : harborSpawnEnv() });
+    const probe = runHarbor({ args: ['--version'], cwd: workDir, spawnImpl, timeoutMs: 60_000, spawnEnv: harborSpawnEnv(null) });
     if (probe.spawnError || probe.code !== 0) missing.push('harbor CLI');
     missing.push(...host.validateCredentials().missing);
     return { ok: missing.length === 0, missing };
@@ -203,7 +203,7 @@ export function buildLiveSteps({
           cwd: workDir,
           spawnImpl,
           timeoutMs: 10 * 60_000,
-          spawnEnv: spawnImpl ? undefined : harborSpawnEnv(null),
+          spawnEnv: harborSpawnEnv(null),
         });
         if (download.spawnError || download.code !== 0) {
           return { ok: false, reason: `task download failed: ${download.spawnError ?? download.stderr}` };
@@ -251,7 +251,7 @@ export function buildLiveSteps({
       cwd: workDir,
       spawnImpl,
       timeoutMs: profile.timeoutMs + 10 * 60_000,
-      spawnEnv: spawnImpl ? undefined : harborSpawnEnv(env.OPENROUTER_API_KEY),
+      spawnEnv: harborSpawnEnv(env.OPENROUTER_API_KEY),
     });
     const endedAt = now();
     const jobDir = jobDirFor({ jobsDir, jobName });

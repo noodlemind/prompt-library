@@ -118,7 +118,7 @@ test('buildHarborRunArgs uses real Harbor flags and anchors the job identity', (
   ]);
 });
 
-test('buildHarborRunArgs can mount the harness bundle and pass agent environment variables', () => {
+test('buildHarborRunArgs can mount the harness bundle and pass only the bridge control variables', () => {
   const args = buildHarborRunArgs({
     lock: LOCK,
     task: 'cobol-modernization',
@@ -128,12 +128,57 @@ test('buildHarborRunArgs can mount the harness bundle and pass agent environment
     jobName: 'j',
     jobsDir: '/w/jobs',
     mounts: [{ source: '/w/harness-bundle', target: '/opt/harness-bundle', readOnly: true }],
-    agentEnv: { HARNESS_EVAL_TB_CONDITION: '/w/generic.json', OPENROUTER_API_KEY: 'k' },
+    agentEnv: {
+      HARNESS_EVAL_TB_CONDITION: '/w/generic.json',
+      HARNESS_EVAL_TB_TELEMETRY_FILE: '/w/generic.done.json',
+      HARNESS_EVAL_TB_NODE: '/opt/node/bin/node',
+      HARNESS_EVAL_TB_AGENT_MJS: '/opt/bridge/agent.mjs',
+    },
   });
   const joined = args.join(' ');
   assert.ok(joined.includes('--mounts'), 'bundle mount must reach harbor');
   assert.ok(args.includes('--ae') && joined.includes('HARNESS_EVAL_TB_CONDITION=/w/generic.json'));
-  assert.ok(joined.includes('OPENROUTER_API_KEY=k'));
+  assert.ok(joined.includes('HARNESS_EVAL_TB_TELEMETRY_FILE=/w/generic.done.json'));
+  assert.ok(joined.includes('HARNESS_EVAL_TB_NODE=/opt/node/bin/node'));
+  assert.ok(joined.includes('HARNESS_EVAL_TB_AGENT_MJS=/opt/bridge/agent.mjs'));
+});
+
+test('buildHarborRunArgs rejects every non-control agent env key without echoing its value', () => {
+  const sentinel = 'sentinel-openrouter-secret-do-not-persist';
+  for (const key of ['OPENROUTER_API_KEY', 'ANTHROPIC_API_KEY', 'SOME_TOKEN', 'PASSWORD', 'HARMLESS_BUT_UNKNOWN']) {
+    assert.throws(
+      () =>
+        buildHarborRunArgs({
+          lock: LOCK,
+          task: 'cobol-modernization',
+          agentRef: 'evals.external.terminal_bench.harbor_agent:StdioBridgeAgent',
+          model: 'moonshotai/kimi-k2.7-code',
+          envName: 'docker',
+          agentEnv: { HARNESS_EVAL_TB_CONDITION: '/w/generic.json', [key]: sentinel },
+        }),
+      (error) => {
+        assert.match(error.message, /agent environment key is not allowed/i);
+        assert.ok(error.message.includes(key));
+        assert.ok(!error.message.includes(sentinel), 'rejection errors must never echo secret values');
+        return true;
+      }
+    );
+  }
+});
+
+test('buildHarborRunArgs rejects malformed control values before argv construction', () => {
+  assert.throws(
+    () =>
+      buildHarborRunArgs({
+        lock: LOCK,
+        task: 'cobol-modernization',
+        agentRef: 'evals.external.terminal_bench.harbor_agent:StdioBridgeAgent',
+        model: 'moonshotai/kimi-k2.7-code',
+        envName: 'docker',
+        agentEnv: { HARNESS_EVAL_TB_CONDITION: '/w/generic.json\0unsafe' },
+      }),
+    /NUL-free string/
+  );
 });
 
 test('jobDirFor is the deterministic job identity — no newest-directory guessing needed', () => {
