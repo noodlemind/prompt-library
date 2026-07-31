@@ -22,6 +22,11 @@ import { fileURLToPath } from 'node:url';
 
 export const BUNDLE_MOUNT_TARGET = '/opt/harness-bundle';
 
+/** The bundle's bind mount in harbor's Docker Compose service-volume format. */
+export function bundleMount(bundleDir) {
+  return { type: 'bind', source: bundleDir, target: BUNDLE_MOUNT_TARGET, read_only: true };
+}
+
 const repoRootDefault = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 
 export function harnessWrapperScript() {
@@ -67,5 +72,5 @@ export function prepareHarnessBundle({
   run('tar', ['-xzf', nodeTarball, '--strip-components=1', '-C', nodeDir]);
   const wrapper = path.join(bundleDir, 'harness-cli');
   fs.writeFileSync(wrapper, harnessWrapperScript(), { mode: 0o755 });
-  return { bundleDir, mount: { source: bundleDir, target: BUNDLE_MOUNT_TARGET, readOnly: true } };
+  return { bundleDir, mount: bundleMount(bundleDir) };
 }

@@ -15,15 +15,24 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { createHost as createKimiHost } from '../../hosts/openrouter-kimi.mjs';
 import { buildHarborRunArgs, jobDirFor, runHarbor, verifyTaskAgainstLock, classifyFailure } from './harbor-adapter.mjs';
 import { collectVerifierEvidence, verdictFromReward } from './verifier.mjs';
 import { buildGenericCondition } from './generic-condition.mjs';
 import { buildHarnessCondition } from './harness-condition.mjs';
 import { engineerContract, buildGuidance } from '../../lib/scenario.mjs';
-import { prepareHarnessBundle } from './provision.mjs';
+import { prepareHarnessBundle, bundleMount } from './provision.mjs';
 
 export const AGENT_REF = 'evals.external.terminal_bench.harbor_agent:StdioBridgeAgent';
+
+// harbor resolves --agent with plain importlib: the repo root must be on
+// PYTHONPATH for evals.external.terminal_bench.harbor_agent to import.
+const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
+const harborSpawnEnv = () => ({
+  ...process.env,
+  PYTHONPATH: process.env.PYTHONPATH ? `${repoRoot}${path.delimiter}${process.env.PYTHONPATH}` : repoRoot,
+});
 
 // Harbor delivers the real instruction to the agent at runtime; the condition
 // object still requires one for prompt assembly parity checks.
@@ -127,7 +136,7 @@ export function buildLiveSteps({
 
   function environment() {
     const missing = [];
-    const probe = runHarbor({ args: ['--version'], cwd: workDir, spawnImpl, timeoutMs: 60_000 });
+    const probe = runHarbor({ args: ['--version'], cwd: workDir, spawnImpl, timeoutMs: 60_000, spawnEnv: spawnImpl ? undefined : harborSpawnEnv() });
     if (probe.spawnError || probe.code !== 0) missing.push('harbor CLI');
     missing.push(...host.validateCredentials().missing);
     return { ok: missing.length === 0, missing };
@@ -145,6 +154,7 @@ export function buildLiveSteps({
           cwd: workDir,
           spawnImpl,
           timeoutMs: 10 * 60_000,
+          spawnEnv: spawnImpl ? undefined : harborSpawnEnv(),
         });
         if (download.spawnError || download.code !== 0) {
           return { ok: false, reason: `task download failed: ${download.spawnError ?? download.stderr}` };
@@ -176,7 +186,7 @@ export function buildLiveSteps({
         lock,
         agentRef: AGENT_REF,
         model: profile.model,
-        envName: config.execution?.environment ?? 'docker',
+        envName: env.HARNESS_EVAL_TB_ENV ?? config.execution?.environment ?? 'docker',
         jobName,
         jobsDir,
         mounts: [bundle.mount],
@@ -189,6 +199,7 @@ export function buildLiveSteps({
       cwd: workDir,
       spawnImpl,
       timeoutMs: profile.timeoutMs + 10 * 60_000,
+      spawnEnv: spawnImpl ? undefined : harborSpawnEnv(),
     });
     const endedAt = now();
     const jobDir = jobDirFor({ jobsDir, jobName });
@@ -221,7 +232,7 @@ export function buildLiveSteps({
     if (!host.validateCredentials().ok) return null;
     // A pre-built bundle (offline releases, tests) short-circuits preparation.
     bundle ??= env.HARNESS_EVAL_TB_BUNDLE_DIR
-      ? { bundleDir: env.HARNESS_EVAL_TB_BUNDLE_DIR, mount: { source: env.HARNESS_EVAL_TB_BUNDLE_DIR, target: '/opt/harness-bundle', readOnly: true } }
+      ? { bundleDir: env.HARNESS_EVAL_TB_BUNDLE_DIR, mount: bundleMount(env.HARNESS_EVAL_TB_BUNDLE_DIR) }
       : prepareBundle({ bundleDir: path.join(workDir, 'harness-bundle'), spawnImpl });
     const generic = runTrial({ condition: buildGenericCondition({ instruction: INSTRUCTION_PLACEHOLDER, limits }), budget, label: `generic-${attempt}` });
     const harness = runTrial({

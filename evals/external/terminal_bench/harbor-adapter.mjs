@@ -92,8 +92,8 @@ export function jobDirFor({ jobsDir, jobName }) {
 }
 
 /** Run the harbor CLI. `spawnImpl` mirrors spawnSync's contract for testability. */
-export function runHarbor({ args, cwd, spawnImpl = spawnSync, timeoutMs }) {
-  const res = spawnImpl('harbor', args, { cwd, encoding: 'utf8', timeout: timeoutMs });
+export function runHarbor({ args, cwd, spawnImpl = spawnSync, timeoutMs, spawnEnv }) {
+  const res = spawnImpl('harbor', args, { cwd, encoding: 'utf8', timeout: timeoutMs, ...(spawnEnv ? { env: spawnEnv } : {}) });
   return {
     code: res.status ?? null,
     stdout: res.stdout || '',

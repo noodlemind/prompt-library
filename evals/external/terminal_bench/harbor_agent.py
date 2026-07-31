@@ -113,20 +113,26 @@ class StdioBridgeAgent(BaseAgent):
         exec_fn = getattr(environment, "exec", None) or getattr(environment, "execute", None)
         if exec_fn is None:
             raise RuntimeError("Harbor environment exposes no exec/execute method")
-        coro = exec_fn(command=command)
-        if timeout_ms:
-            # No Harbor version is pinned here, so honor the bridge's
-            # per-command timeout portably instead of assuming an exec kwarg.
-            try:
-                result = await asyncio.wait_for(coro, timeout=timeout_ms / 1000)
-            except asyncio.TimeoutError:
-                return {
-                    "code": 124,
-                    "stdout": "",
-                    "stderr": f"command timed out after {timeout_ms}ms",
-                }
-        else:
-            result = await coro
+        try:
+            if timeout_ms:
+                # harbor 0.20.0 exec supports timeout_sec natively; fall back
+                # to wait_for on versions whose exec lacks the kwarg.
+                try:
+                    result = await exec_fn(
+                        command=command, timeout_sec=max(1, int(timeout_ms / 1000))
+                    )
+                except TypeError:
+                    result = await asyncio.wait_for(
+                        exec_fn(command=command), timeout=timeout_ms / 1000
+                    )
+            else:
+                result = await exec_fn(command=command)
+        except (asyncio.TimeoutError, TimeoutError):
+            return {
+                "code": 124,
+                "stdout": "",
+                "stderr": f"command timed out after {timeout_ms}ms",
+            }
         code = getattr(result, "return_code", None)
         if code is None:
             code = getattr(result, "exit_code", 0)
