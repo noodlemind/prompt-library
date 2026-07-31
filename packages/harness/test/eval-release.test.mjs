@@ -62,6 +62,8 @@ function fullRun(condition, verdict, over = {}) {
       outputTokens: 400,
       providerReportedCostUsd: null,
       localCostUsd: 0.02,
+      costComplete: true,
+      missingUsage: 0,
     },
     harnessBehavior: {
       orientInvoked: null,
@@ -335,6 +337,17 @@ test('an enabled required pair that is skipped cannot produce a green release', 
   assert.ok(report.gate.reasons.some((r) => /openrouter-kimi.*(skipped|did not run)/i.test(r)));
 });
 
+test('a non-skipped required pair missing either arm cannot produce a green release', async () => {
+  for (const missing of ['generic', 'harness']) {
+    const incomplete = pairOf('openrouter-kimi', 'pass', 'pass');
+    incomplete[missing] = null;
+    const steps = baseSteps({ kimiPair: async () => incomplete });
+    const { report, exitCode } = await runRelease({ config: CONFIG, steps, requiredPairs: ['openrouter-kimi'] });
+    assert.equal(exitCode, 1, `${missing} arm was absent`);
+    assert.ok(report.gate.reasons.some((r) => /telemetry/i.test(r)));
+  }
+});
+
 test('an active pair with an infrastructure-invalid result blocks the release', async () => {
   const steps = baseSteps({
     kimiPair: async () => pairOf('openrouter-kimi', 'pass', 'pass', { failureKind: 'infrastructure' }),
@@ -364,9 +377,20 @@ test('an API pair whose telemetry is entirely null is not complete evidence', as
     outputTokens: null,
     providerReportedCostUsd: null,
     localCostUsd: null,
+    costComplete: null,
+    missingUsage: null,
   };
   const steps = baseSteps({
     kimiPair: async () => pairOf('openrouter-kimi', 'pass', 'pass', { harness: { efficiency: nullEfficiency } }),
+  });
+  const { report, exitCode } = await runRelease({ config: CONFIG, steps, requiredPairs: ['openrouter-kimi'] });
+  assert.equal(exitCode, 1);
+  assert.ok(report.gate.reasons.some((r) => /telemetry/i.test(r)));
+});
+
+test('a required API pair with incomplete paid usage cannot produce a green release', async () => {
+  const steps = baseSteps({
+    kimiPair: async () => pairOf('openrouter-kimi', 'pass', 'pass', { harness: { efficiency: { costComplete: false, missingUsage: 1 } } }),
   });
   const { report, exitCode } = await runRelease({ config: CONFIG, steps, requiredPairs: ['openrouter-kimi'] });
   assert.equal(exitCode, 1);

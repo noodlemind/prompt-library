@@ -72,8 +72,9 @@ class StdioBridgeAgent(BaseAgent):
         instruction_path = pathlib.Path(condition_path).with_suffix(".instruction.txt")
         instruction_path.write_text(instruction)
 
-        # Forward the --ae agent env (API key, telemetry file path) to the
-        # Node bridge — it is not present in this process's os.environ.
+        # Forward non-secret --ae configuration to the Node bridge. Provider
+        # credentials arrive only through this host process's os.environ so
+        # Harbor never scopes them into task-container exec calls.
         bridge_env = {**os.environ, **getattr(self, "_extra_env", {})}
         proc = await asyncio.create_subprocess_exec(
             node,

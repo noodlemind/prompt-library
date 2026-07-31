@@ -51,7 +51,7 @@ function fakeHarborSpawn({ reward = 1, exitCode = 0, writeTelemetry = true, prov
         }
       });
       if (exitCode === 0) {
-        const verifierDir = path.join(jobsDir, jobName, 'trial-0', 'artifacts', 'logs', 'verifier');
+        const verifierDir = path.join(jobsDir, jobName, 'trial-0', 'verifier');
         fs.mkdirSync(verifierDir, { recursive: true });
         fs.writeFileSync(path.join(verifierDir, 'reward.json'), JSON.stringify({ reward }));
         if (writeTelemetry && agentEnv.HARNESS_EVAL_TB_TELEMETRY_FILE) {
@@ -154,6 +154,9 @@ test('a multi-task lock runs a fresh pair per pinned task with per-task job iden
   assert.equal(runs.length, 4, 'generic+harness per task');
   const jobNames = runs.map((i) => i.args[i.args.indexOf('--job-name') + 1]);
   assert.ok(jobNames.every((n, idx) => n.includes(pairs[Math.floor(idx / 2)].task)), 'job identity carries the task name');
+  const conditionPaths = runs.map((i) => i.args[i.args.findIndex((a) => typeof a === 'string' && a.startsWith('HARNESS_EVAL_TB_CONDITION='))]);
+  const ceilings = conditionPaths.map((kv) => JSON.parse(fs.readFileSync(kv.split('=')[1], 'utf8')).limits.trialCeilingUsd);
+  assert.deepEqual(ceilings, [2.5, 2.5, 2.5, 2.5], 'the initial allowance is preallocated equally across every task and arm');
   assert.ok(Math.abs(budget.spentUsd() - 0.04) < 1e-12, 'all four trials charge the pair budget');
 });
 
@@ -169,15 +172,21 @@ test('a live kimi pair produces two schema-valid run documents and charges provi
     assert.deepEqual(validateAgainstSchema(doc, RUN_SCHEMA).errors, []);
     assert.equal(doc.correctness.verdict, 'pass');
     assert.equal(doc.efficiency.promptTokens, 4000, 'metered telemetry must be non-null');
+    assert.equal(doc.efficiency.costComplete, true, 'every paid response was metered');
+    assert.equal(doc.efficiency.missingUsage, 0);
     assert.equal(doc.reproducibility.modelResolved, 'moonshotai/kimi-k2.7-code');
   }
   assert.ok(Math.abs(budget.spentUsd() - 0.04) < 1e-12, 'provider-reported cost is the ledger of record');
   const runs = invocations.filter((i) => i.args[0] === 'run');
   assert.equal(runs.length, 2, 'one fresh sandboxed run per condition');
   assert.ok(runs.every((i) => i.args.includes('--mounts')), 'the harness bundle is mounted in both conditions');
+  assert.ok(
+    runs.every((i) => !i.args.some((arg) => typeof arg === 'string' && arg.startsWith('OPENROUTER_API_KEY='))),
+    'the provider credential must never be placed in Harbor --ae arguments'
+  );
 });
 
-test('the remaining pair allowance caps each trial ceiling written to the bridge', async () => {
+test('the pair allowance is preallocated equally across both conditions', async () => {
   const { taskDir, lock } = fixtureTask();
   const { spawnImpl, invocations } = fakeHarborSpawn({ providerCostUsd: 3 });
   const steps = liveSteps({ taskDir, lock, spawnImpl });
@@ -188,8 +197,7 @@ test('the remaining pair allowance caps each trial ceiling written to the bridge
     .filter((i) => i.args[0] === 'run')
     .map((i) => i.args[i.args.findIndex((a) => typeof a === 'string' && a.startsWith('HARNESS_EVAL_TB_CONDITION=')) ]);
   const ceilings = conditionPaths.map((kv) => JSON.parse(fs.readFileSync(kv.split('=')[1], 'utf8')).limits.trialCeilingUsd);
-  assert.equal(ceilings[0], 5, 'first trial uses the profile ceiling');
-  assert.equal(ceilings[1], 4, 'second trial is capped by what the pair has left ($7 - $3)');
+  assert.deepEqual(ceilings, [3.5, 3.5], 'generic and harness receive identical fixed ceilings');
 });
 
 test('a nonzero harbor exit becomes an infrastructure-invalid pair that blocks an active gate', async () => {
@@ -230,12 +238,12 @@ test('AGENT_REF matches the importable module path', () => {
   assert.equal(AGENT_REF, 'evals.external.terminal_bench.harbor_agent:StdioBridgeAgent');
 });
 
-function seedDoc({ verdict = 'pass', reward = 1, promptTokens = 1000, costUsd = 0.02 } = {}) {
+function seedDoc({ verdict = 'pass', reward = 1, promptTokens = 1000, costUsd = 0.02, costComplete = true, missingUsage = 0 } = {}) {
   return {
     schema: 'eval-run.v1',
     reproducibility: { condition: 'generic', startedAt: '2026-07-31T00:00:00Z', endedAt: '2026-07-31T00:03:00Z' },
     correctness: { verifierReward: reward, verdict, exitReason: 'model_finish', completedWithinTimeout: true, completedWithinBudget: true },
-    efficiency: { promptTokens, outputTokens: 500, modelRequests: 10, localCostUsd: costUsd, providerReportedCostUsd: costUsd, cachedPromptTokens: 0, reasoningTokens: 0 },
+    efficiency: { promptTokens, outputTokens: 500, modelRequests: 10, localCostUsd: costUsd, providerReportedCostUsd: costUsd, cachedPromptTokens: 0, reasoningTokens: 0, costComplete, missingUsage },
     harnessBehavior: {},
     subscription: null,
   };
@@ -260,6 +268,12 @@ test('seed aggregation: a null-reward seed can never count toward a pass', () =>
   assert.equal(agg.correctness.verifierReward, 1, 'median over valid rewards only');
 });
 
+test('seed aggregation preserves incomplete-cost evidence from any attempted seed', () => {
+  const agg = aggregateSeedDocs([seedDoc(), seedDoc({ costComplete: false, missingUsage: 1 }), seedDoc()]);
+  assert.equal(agg.efficiency.costComplete, false);
+  assert.equal(agg.efficiency.missingUsage, 1);
+});
+
 test('seeds > 1 run per condition per task, all charging the pair budget', async () => {
   const { taskDir, lock, datasetDir } = fixtureTask();
   const { spawnImpl, invocations } = fakeHarborSpawn({ providerCostUsd: 0.01 });
@@ -278,7 +292,17 @@ test('seeds > 1 run per condition per task, all charging the pair budget', async
   const budget = createBudget({ ceilingUsd: 10, label: 'kimi-pair' });
   const [pair] = await steps.kimiPair(budget);
   assert.equal(pair.seedCount, 2);
-  assert.equal(invocations.filter((i) => i.args[0] === 'run').length, 4, '2 seeds × 2 conditions');
+  const runs = invocations.filter((i) => i.args[0] === 'run');
+  assert.equal(runs.length, 4, '2 seeds × 2 conditions');
+  const jobNames = runs.map((i) => i.args[i.args.indexOf('--job-name') + 1]);
+  assert.deepEqual(
+    jobNames.map((name) => name.match(/(generic|harness)-a\d$/)?.[1]),
+    ['generic', 'harness', 'harness', 'generic'],
+    'condition order alternates AB then BA across seed repetitions'
+  );
+  const conditionPaths = runs.map((i) => i.args[i.args.findIndex((a) => typeof a === 'string' && a.startsWith('HARNESS_EVAL_TB_CONDITION='))]);
+  const ceilings = conditionPaths.map((kv) => JSON.parse(fs.readFileSync(kv.split('=')[1], 'utf8')).limits.trialCeilingUsd);
+  assert.deepEqual(ceilings, [2.5, 2.5, 2.5, 2.5], 'every seed arm receives an equal preallocated ceiling');
   assert.ok(Math.abs(budget.spentUsd() - 0.04) < 1e-12, 'every seed trial charges the pair budget');
   assert.equal(pair.generic.correctness.verdict, 'pass');
   assert.match(pair.generic.correctness.exitReason, /seed-aggregate\(n=2\)/);

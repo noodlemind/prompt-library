@@ -259,13 +259,16 @@ export async function runRelease({ config, steps, calibrationRelease = false, re
   // required API pair actually metered its spend — an all-null efficiency
   // block is a missing measurement, not a measurement of nothing.
   const METERED_FIELDS = ['promptTokens', 'outputTokens', 'modelRequests', 'localCostUsd'];
-  const meteredOk = pairEntries.every(
-    (p) =>
-      !p.required ||
-      !p.generic ||
-      !p.harness ||
-      [p.generic, p.harness].every((doc) => METERED_FIELDS.every((f) => doc.efficiency?.[f] != null))
-  );
+  const meteredOk = pairEntries.every((p) => {
+    if (!p.required || p.result === 'skipped') return true;
+    if (!p.generic || !p.harness) return false;
+    return [p.generic, p.harness].every(
+      (doc) =>
+        METERED_FIELDS.every((f) => doc.efficiency?.[f] != null) &&
+        doc.efficiency?.costComplete === true &&
+        doc.efficiency?.missingUsage === 0
+    );
+  });
   const telemetryComplete = meteredOk && runDocs.every((doc) => validateAgainstSchema(doc, RUN_SCHEMA).ok);
   const gate = applyGatePolicy({
     deterministic,

@@ -70,7 +70,9 @@
         "reasoningTokens",
         "outputTokens",
         "providerReportedCostUsd",
-        "localCostUsd"
+        "localCostUsd",
+        "costComplete",
+        "missingUsage"
       ],
       "properties": {
         "wallTimeMs": { "type": ["number", "null"] },
@@ -89,7 +91,9 @@
         "reasoningTokens": { "type": ["number", "null"] },
         "outputTokens": { "type": ["number", "null"] },
         "providerReportedCostUsd": { "type": ["number", "null"] },
-        "localCostUsd": { "type": ["number", "null"] }
+        "localCostUsd": { "type": ["number", "null"] },
+        "costComplete": { "type": ["boolean", "null"] },
+        "missingUsage": { "type": ["number", "null"] }
       }
     },
     "harnessBehavior": {

@@ -67,7 +67,7 @@ test('hashTree is deterministic, content-sensitive, and path-sensitive', () => {
 
 test('collectVerifierEvidence prefers reward.json, captures pytest counts, and hashes the tree', () => {
   const trial = tmpdir();
-  const verifierDir = path.join(trial, 'artifacts', 'logs', 'verifier');
+  const verifierDir = path.join(trial, 'logs', 'verifier');
   fs.mkdirSync(verifierDir, { recursive: true });
   fs.writeFileSync(path.join(verifierDir, 'reward.txt'), '0');
   fs.writeFileSync(path.join(verifierDir, 'reward.json'), '{"reward": 1}');
@@ -81,7 +81,7 @@ test('collectVerifierEvidence prefers reward.json, captures pytest counts, and h
 
 test('an ambiguous reward.json falls back to a valid reward.txt', () => {
   const trial = tmpdir();
-  const officialDir = path.join(trial, 'artifacts', 'logs', 'verifier');
+  const officialDir = path.join(trial, 'logs', 'verifier');
   fs.mkdirSync(officialDir, { recursive: true });
   fs.writeFileSync(path.join(officialDir, 'reward.json'), '{"a": 1, "b": 0}');
   fs.writeFileSync(path.join(officialDir, 'reward.txt'), '1');
@@ -112,9 +112,21 @@ test('a verifier-named directory nested in agent artifacts is still not official
   assert.equal(evidence.reward, 0, 'only the trial-root verifier dir (or logs/verifier) counts');
 });
 
+test('logs/verifier nested in the agent workspace cannot spoof official evidence', () => {
+  const trial = tmpdir();
+  fs.mkdirSync(path.join(trial, 'verifier'), { recursive: true });
+  fs.writeFileSync(path.join(trial, 'verifier', 'reward.txt'), '0');
+  const spoof = path.join(trial, 'artifacts', 'workspace', 'logs', 'verifier');
+  fs.mkdirSync(spoof, { recursive: true });
+  fs.writeFileSync(path.join(spoof, 'reward.json'), '{"reward": 1}');
+  const evidence = collectVerifierEvidence(trial);
+  assert.equal(evidence.reward, 0, 'an agent-writable logs/verifier path must be ignored');
+  assert.match(evidence.rewardPath, /verifier[/\\]reward\.txt$/);
+});
+
 test('reward evidence is only trusted from the official logs/verifier directory', () => {
   const trial = tmpdir();
-  const officialDir = path.join(trial, 'artifacts', 'logs', 'verifier');
+  const officialDir = path.join(trial, 'logs', 'verifier');
   fs.mkdirSync(officialDir, { recursive: true });
   fs.writeFileSync(path.join(officialDir, 'reward.txt'), '0');
   // A file the agent (or anything else) dropped elsewhere in the tree must
@@ -125,6 +137,19 @@ test('reward evidence is only trusted from the official logs/verifier directory'
   const evidence = collectVerifierEvidence(trial);
   assert.equal(evidence.reward, 0, 'the spoofed reward.json must be ignored');
   assert.match(evidence.rewardPath, /logs[/\\]verifier[/\\]reward\.txt$/);
+});
+
+test('reward evidence below artifacts is rejected even at an otherwise official layout', () => {
+  const trial = tmpdir();
+  const officialDir = path.join(trial, 'verifier');
+  fs.mkdirSync(officialDir, { recursive: true });
+  fs.writeFileSync(path.join(officialDir, 'reward.txt'), '0');
+  const spoofDir = path.join(trial, 'artifacts', 'logs', 'verifier');
+  fs.mkdirSync(spoofDir, { recursive: true });
+  fs.writeFileSync(path.join(spoofDir, 'reward.json'), '{"reward": 1}');
+  const evidence = collectVerifierEvidence(trial);
+  assert.equal(evidence.reward, 0);
+  assert.match(evidence.rewardPath, /verifier[/\\]reward\.txt$/);
 });
 
 test('collectVerifierEvidence reports a missing reward as null evidence, not zero', () => {

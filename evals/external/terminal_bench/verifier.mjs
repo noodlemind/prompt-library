@@ -87,17 +87,24 @@ export function collectVerifierEvidence(trialDir) {
   const files = walkFiles(trialDir);
   // Reward evidence is trusted ONLY from the official verifier output: the
   // in-container convention (logs/verifier) or harbor 0.20.0's host-side
-  // trial layout (a verifier directory directly under the trial root, at any
-  // depth below jobDir but never nested inside agent artifacts). A
-  // reward-named file anywhere else must never override the real verdict.
-  const logsVerifier = `${path.sep}logs${path.sep}verifier${path.sep}`;
+  // verifier directory. Anything under artifacts is agent-controlled and must
+  // never contribute reward evidence.
+  // `collectVerifierEvidence` accepts either a trial root or its one-level-up
+  // job root, so each exact shape may begin at relative segment 0 or 1. Never
+  // use substring matching: the task workspace is agent-writable and may itself
+  // contain a nested logs/verifier directory.
+  const layouts = [['verifier'], ['logs', 'verifier']];
   const official = files.filter((f) => {
-    if (f.includes(logsVerifier)) return true;
     const rel = path.relative(trialDir, f).split(path.sep);
-    // <trial>/verifier/* or <jobDir>/<trial>/verifier/* — 'verifier' must sit
-    // at most one level below the walk root, not inside artifacts/.
-    const idx = rel.indexOf('verifier');
-    return idx >= 0 && idx <= 1 && rel[0] !== 'artifacts';
+    if (rel[0] === 'artifacts') return false;
+    return [0, 1].some((offset) => {
+      if (offset === 1 && ['workspace', 'logs', 'verifier'].includes(rel[0])) return false;
+      return layouts.some(
+        (layout) =>
+          rel.length > offset + layout.length &&
+          layout.every((segment, index) => rel[offset + index] === segment)
+      );
+    });
   });
   const rewardJson = official.find((f) => path.basename(f) === 'reward.json');
   const rewardTxt = official.find((f) => path.basename(f) === 'reward.txt');

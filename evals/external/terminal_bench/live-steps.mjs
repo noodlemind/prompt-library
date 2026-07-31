@@ -22,6 +22,7 @@ import { collectVerifierEvidence, verdictFromReward } from './verifier.mjs';
 import { buildGenericCondition } from './generic-condition.mjs';
 import { buildHarnessCondition } from './harness-condition.mjs';
 import { engineerContract, buildGuidance } from '../../lib/scenario.mjs';
+import { createBudget } from '../../lib/budget.mjs';
 import { prepareHarnessBundle, bundleMount } from './provision.mjs';
 
 export const AGENT_REF = 'evals.external.terminal_bench.harbor_agent:StdioBridgeAgent';
@@ -29,10 +30,17 @@ export const AGENT_REF = 'evals.external.terminal_bench.harbor_agent:StdioBridge
 // harbor resolves --agent with plain importlib: the repo root must be on
 // PYTHONPATH for evals.external.terminal_bench.harbor_agent to import.
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
-const harborSpawnEnv = () => ({
-  ...process.env,
-  PYTHONPATH: process.env.PYTHONPATH ? `${repoRoot}${path.delimiter}${process.env.PYTHONPATH}` : repoRoot,
-});
+const harborSpawnEnv = (apiKey) => {
+  const spawnEnv = {
+    ...process.env,
+    PYTHONPATH: process.env.PYTHONPATH ? `${repoRoot}${path.delimiter}${process.env.PYTHONPATH}` : repoRoot,
+  };
+  // The key belongs only to the host-side Harbor/Python/Node bridge process.
+  // Passing it through --ae would also scope it into every sandbox exec.
+  if (apiKey == null) delete spawnEnv.OPENROUTER_API_KEY;
+  else spawnEnv.OPENROUTER_API_KEY = apiKey;
+  return spawnEnv;
+};
 
 // Harbor delivers the real instruction to the agent at runtime; the condition
 // object still requires one for prompt assembly parity checks.
@@ -64,6 +72,13 @@ export function aggregateSeedDocs(docs) {
   for (const key of Object.keys(base.efficiency ?? {})) {
     base.efficiency[key] = median(docs.map((d) => d.efficiency?.[key]));
   }
+  // Cost completeness is an all-seeds invariant, not a typical/median value:
+  // one unmetered paid response invalidates the aggregate's spend evidence.
+  base.efficiency.costComplete = docs.every((d) => d.efficiency?.costComplete === true);
+  base.efficiency.missingUsage = docs.reduce(
+    (sum, d) => sum + (Number.isFinite(d.efficiency?.missingUsage) ? d.efficiency.missingUsage : 0),
+    0
+  );
   base.reproducibility.startedAt = docs[0].reproducibility?.startedAt ?? base.reproducibility.startedAt;
   base.reproducibility.endedAt = docs.at(-1).reproducibility?.endedAt ?? base.reproducibility.endedAt;
   return base;
@@ -122,6 +137,8 @@ export function buildRunDoc({ condition, task, evidence, done, run, profile, loc
       outputTokens: totals?.outputTokens ?? null,
       providerReportedCostUsd: totals?.providerCostUsd ?? null,
       localCostUsd: totals?.localCostUsd ?? null,
+      costComplete: totals?.costComplete ?? null,
+      missingUsage: totals?.missingUsage ?? null,
     },
     harnessBehavior: {
       orientInvoked: null,
@@ -186,7 +203,7 @@ export function buildLiveSteps({
           cwd: workDir,
           spawnImpl,
           timeoutMs: 10 * 60_000,
-          spawnEnv: spawnImpl ? undefined : harborSpawnEnv(),
+          spawnEnv: spawnImpl ? undefined : harborSpawnEnv(null),
         });
         if (download.spawnError || download.code !== 0) {
           return { ok: false, reason: `task download failed: ${download.spawnError ?? download.stderr}` };
@@ -229,13 +246,12 @@ export function buildLiveSteps({
         agentEnv: {
           HARNESS_EVAL_TB_CONDITION: conditionPath,
           HARNESS_EVAL_TB_TELEMETRY_FILE: telemetryFile,
-          OPENROUTER_API_KEY: env.OPENROUTER_API_KEY,
         },
       }),
       cwd: workDir,
       spawnImpl,
       timeoutMs: profile.timeoutMs + 10 * 60_000,
-      spawnEnv: spawnImpl ? undefined : harborSpawnEnv(),
+      spawnEnv: spawnImpl ? undefined : harborSpawnEnv(env.OPENROUTER_API_KEY),
     });
     const endedAt = now();
     const jobDir = jobDirFor({ jobsDir, jobName });
@@ -265,17 +281,32 @@ export function buildLiveSteps({
     return { doc, failureKind };
   }
 
-  function taskPair({ task, budget, attempt, n = seeds }) {
+  function taskPair({ task, budget, attempt, trialCeilingUsd, n = seeds }) {
     const seedRuns = [];
     for (let seed = 1; seed <= n; seed += 1) {
       const suffix = n > 1 ? `${attempt}${seed}` : attempt;
-      const generic = runTrial({ condition: buildGenericCondition({ instruction: INSTRUCTION_PLACEHOLDER, limits }), budget, label: `generic-${suffix}`, task });
-      const harness = runTrial({
-        condition: buildHarnessCondition({ instruction: INSTRUCTION_PLACEHOLDER, limits, engineerContract, guidance: buildGuidance() }),
-        budget,
-        label: `harness-${suffix}`,
-        task,
-      });
+      const conditions = {
+        generic: buildGenericCondition({ instruction: INSTRUCTION_PLACEHOLDER, limits }),
+        harness: buildHarnessCondition({ instruction: INSTRUCTION_PLACEHOLDER, limits, engineerContract, guidance: buildGuidance() }),
+      };
+      const results = {};
+      // Primary seeds alternate AB/BA; the one-seed regression rerun reverses
+      // the original order. Fixed per-arm budgets keep either order equivalent.
+      const genericFirst = (seed + (attempt === 'b' ? 1 : 0)) % 2 === 1;
+      for (const conditionId of genericFirst ? ['generic', 'harness'] : ['harness', 'generic']) {
+        const trialBudget = createBudget({
+          ceilingUsd: trialCeilingUsd,
+          label: `${task}-${conditionId}-${suffix}`,
+          parent: budget,
+        });
+        results[conditionId] = runTrial({
+          condition: conditions[conditionId],
+          budget: trialBudget,
+          label: `${conditionId}-${suffix}`,
+          task,
+        });
+      }
+      const { generic, harness } = results;
       seedRuns.push({ generic, harness });
     }
     // A pair is invalid only when a majority of its seeds failed to produce a
@@ -312,13 +343,16 @@ export function buildLiveSteps({
     kimiPair: async (budget) => {
       if (!host.validateCredentials().ok) return null;
       ensureBundle();
-      return tasksOf(lock).map((entry) => taskPair({ task: entry.task, budget, attempt: 'a' }));
+      const tasks = tasksOf(lock);
+      const trialCeilingUsd = Math.min(profile.trialCeilingUsd, budget.remainingUsd() / (tasks.length * seeds * 2));
+      return tasks.map((entry) => taskPair({ task: entry.task, budget, attempt: 'a', trialCeilingUsd }));
     },
     /** §9 conditional rerun: ONE complete fresh pair for ONE regressed task (never seed-multiplied). */
     rerunKimiPair: async (budget, task) => {
       if (!host.validateCredentials().ok) return null;
       ensureBundle();
-      return taskPair({ task: task ?? tasksOf(lock)[0].task, budget, attempt: 'b', n: 1 });
+      const trialCeilingUsd = Math.min(profile.trialCeilingUsd, budget.remainingUsd() / 2);
+      return taskPair({ task: task ?? tasksOf(lock)[0].task, budget, attempt: 'b', trialCeilingUsd, n: 1 });
     },
     frontierPair: null,
     gemmaPair: null,
