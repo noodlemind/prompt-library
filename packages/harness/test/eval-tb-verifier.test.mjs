@@ -1,0 +1,86 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { test } from 'node:test';
+import {
+  parseReward,
+  verdictFromReward,
+  parsePytestSummary,
+  hashTree,
+  collectVerifierEvidence,
+} from '../../../evals/external/terminal-bench/verifier.mjs';
+
+function tmpdir() {
+  return fs.mkdtempSync(path.join(os.tmpdir(), 'tb-verifier-'));
+}
+
+test('parseReward reads harbor reward.json with a reward key', () => {
+  assert.deepEqual(parseReward('{"reward": 1}', 'reward.json'), { reward: 1, metrics: { reward: 1 } });
+  assert.deepEqual(parseReward('{"reward": 0.25}', 'reward.json'), { reward: 0.25, metrics: { reward: 0.25 } });
+});
+
+test('parseReward falls back to a single numeric metric when no reward key exists', () => {
+  assert.deepEqual(parseReward('{"accuracy": 0.5}', 'reward.json'), { reward: 0.5, metrics: { accuracy: 0.5 } });
+  const ambiguous = parseReward('{"a": 1, "b": 0}', 'reward.json');
+  assert.equal(ambiguous.reward, null, 'two metrics with no reward key is ambiguous');
+});
+
+test('parseReward reads reward.txt plain numbers and rejects garbage', () => {
+  assert.equal(parseReward('1\n', 'reward.txt').reward, 1);
+  assert.equal(parseReward('0', 'reward.txt').reward, 0);
+  assert.equal(parseReward('not-a-number', 'reward.txt'), null);
+  assert.equal(parseReward('{invalid json', 'reward.json'), null);
+});
+
+test('verdictFromReward compares against the passing reward', () => {
+  assert.equal(verdictFromReward(1), 'pass');
+  assert.equal(verdictFromReward(0.99), 'fail');
+  assert.equal(verdictFromReward(0.5, { passingReward: 0.5 }), 'pass');
+  assert.equal(verdictFromReward(null), 'fail');
+});
+
+test('parsePytestSummary extracts passed and failed counts', () => {
+  assert.deepEqual(parsePytestSummary('==== 3 passed, 1 failed in 0.52s ===='), { passed: 3, failed: 1 });
+  assert.deepEqual(parsePytestSummary('5 passed in 1.2s'), { passed: 5, failed: 0 });
+  assert.deepEqual(parsePytestSummary('2 failed in 0.1s'), { passed: 0, failed: 2 });
+  assert.equal(parsePytestSummary('no tests ran'), null);
+});
+
+test('hashTree is deterministic, content-sensitive, and path-sensitive', () => {
+  const a = tmpdir();
+  const b = tmpdir();
+  for (const dir of [a, b]) {
+    fs.mkdirSync(path.join(dir, 'sub'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'sub', 'x.txt'), 'hello');
+    fs.writeFileSync(path.join(dir, 'y.txt'), 'world');
+  }
+  assert.equal(hashTree(a), hashTree(b), 'identical trees hash identically');
+  fs.writeFileSync(path.join(b, 'y.txt'), 'world!');
+  assert.notEqual(hashTree(a), hashTree(b), 'content change changes the hash');
+  fs.writeFileSync(path.join(b, 'y.txt'), 'world');
+  fs.renameSync(path.join(b, 'y.txt'), path.join(b, 'z.txt'));
+  assert.notEqual(hashTree(a), hashTree(b), 'path change changes the hash');
+});
+
+test('collectVerifierEvidence prefers reward.json, captures pytest counts, and hashes the tree', () => {
+  const trial = tmpdir();
+  const verifierDir = path.join(trial, 'artifacts', 'logs', 'verifier');
+  fs.mkdirSync(verifierDir, { recursive: true });
+  fs.writeFileSync(path.join(verifierDir, 'reward.txt'), '0');
+  fs.writeFileSync(path.join(verifierDir, 'reward.json'), '{"reward": 1}');
+  fs.writeFileSync(path.join(verifierDir, 'pytest.log'), '==== 4 passed, 2 failed in 1.0s ====');
+  const evidence = collectVerifierEvidence(trial);
+  assert.equal(evidence.reward, 1, 'reward.json wins over reward.txt');
+  assert.match(evidence.rewardPath, /reward\.json$/);
+  assert.deepEqual(evidence.pytest, { passed: 4, failed: 2 });
+  assert.match(evidence.treeHash, /^[0-9a-f]{64}$/);
+});
+
+test('collectVerifierEvidence reports a missing reward as null evidence, not zero', () => {
+  const trial = tmpdir();
+  fs.mkdirSync(path.join(trial, 'artifacts'), { recursive: true });
+  const evidence = collectVerifierEvidence(trial);
+  assert.equal(evidence.reward, null);
+  assert.equal(evidence.rewardPath, null);
+});

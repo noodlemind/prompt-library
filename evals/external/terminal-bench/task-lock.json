@@ -1,0 +1,12 @@
+{
+  "lockSchema": 1,
+  "datasetRef": "terminal-bench@2.0",
+  "task": "cobol-modernization",
+  "registryUrl": "https://www.tbench.ai/benchmarks/terminal-bench-2/cobol-modernization",
+  "lockedAt": "2026-07-30",
+  "taskChecksum": null,
+  "verifier": {
+    "rewardFiles": ["reward.json", "reward.txt"],
+    "passingReward": 1
+  }
+}

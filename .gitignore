@@ -8,3 +8,4 @@ packages/harness/assets/
 
 # Generated eval run evidence
 evals/jobs/
+__pycache__/
