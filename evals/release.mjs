@@ -237,6 +237,7 @@ export async function runRelease({ config, steps, calibrationRelease = false, re
       pairEntries.push({
         host,
         task: pair.task ?? null,
+        seedCount: pair.seedCount ?? null,
         required,
         result: classification.result,
         reason: classification.reason,
@@ -401,9 +402,10 @@ async function main() {
     // harbor, credentials, or task verification blocks — it never greens.
     const { buildLiveSteps } = await import('./external/terminal_bench/live-steps.mjs');
     const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-release-'));
+    const seeds = calibrationRelease ? raw.seeds?.calibration ?? 3 : raw.seeds?.routine ?? 1;
     steps = {
       deterministic: deterministicStep,
-      ...buildLiveSteps({ config: raw, lock, workDir, releaseSha, harnessVersion }),
+      ...buildLiveSteps({ config: raw, lock, workDir, releaseSha, harnessVersion, seeds }),
     };
     requiredPairs = ['openrouter-kimi'];
   }

@@ -9,10 +9,28 @@
       "task": "cobol-modernization",
       "role": "anchor",
       "taskChecksum": "2f6a6312c196794d62305d01d5ea955dda13c88c2b61761df4f52813cad1abc0"
+    },
+    {
+      "task": "cancel-async-tasks",
+      "taskChecksum": "b5fb76c087759dbe29d18cde0331f451f688e91ec557ae2eadc74678e00d7dc2",
+      "role": "candidate"
+    },
+    {
+      "task": "git-leak-recovery",
+      "taskChecksum": "97e1b29bb6ffa5f827b9e9e9f1e246b7f8bc79793c64c700e0d01f581ef23d2f",
+      "role": "candidate"
+    },
+    {
+      "task": "custom-memory-heap-crash",
+      "taskChecksum": "0fbf6a3128751eb081f62748fb1eeb8794d77a8e8fdc1cf0161aca42439d874a",
+      "role": "candidate"
     }
   ],
   "verifier": {
-    "rewardFiles": ["reward.json", "reward.txt"],
+    "rewardFiles": [
+      "reward.json",
+      "reward.txt"
+    ],
     "passingReward": 1
   }
 }

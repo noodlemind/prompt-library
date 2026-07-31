@@ -38,6 +38,37 @@ const harborSpawnEnv = () => ({
 // object still requires one for prompt assembly parity checks.
 const INSTRUCTION_PLACEHOLDER = '(the task instruction is supplied by Harbor at runtime)';
 
+/**
+ * Collapse one condition's seed documents into a single schema-valid document:
+ * majority verdict over ALL attempted seeds (a null-reward seed can never
+ * count toward a pass), median reward over valid seeds, median per numeric
+ * efficiency field. Budget charging is untouched — every seed trial charges
+ * as it runs; the aggregate represents a typical trial, not the sum.
+ */
+export function aggregateSeedDocs(docs) {
+  if (docs.length === 1) return docs[0];
+  const median = (values) => {
+    const nums = values.filter((v) => typeof v === 'number' && Number.isFinite(v)).sort((a, b) => a - b);
+    if (!nums.length) return null;
+    const mid = Math.floor(nums.length / 2);
+    return nums.length % 2 ? nums[mid] : (nums[mid - 1] + nums[mid]) / 2;
+  };
+  const valid = docs.filter((d) => d.correctness?.verifierReward != null);
+  const passes = docs.filter((d) => d.correctness?.verdict === 'pass').length;
+  const base = structuredClone(valid[0] ?? docs[0]);
+  base.correctness.verdict = passes >= Math.ceil(docs.length / 2) ? 'pass' : 'fail';
+  base.correctness.verifierReward = median(valid.map((d) => d.correctness.verifierReward));
+  base.correctness.exitReason = `seed-aggregate(n=${docs.length})`;
+  base.correctness.completedWithinTimeout = docs.every((d) => d.correctness?.completedWithinTimeout !== false);
+  base.correctness.completedWithinBudget = docs.every((d) => d.correctness?.completedWithinBudget !== false);
+  for (const key of Object.keys(base.efficiency ?? {})) {
+    base.efficiency[key] = median(docs.map((d) => d.efficiency?.[key]));
+  }
+  base.reproducibility.startedAt = docs[0].reproducibility?.startedAt ?? base.reproducibility.startedAt;
+  base.reproducibility.endedAt = docs.at(-1).reproducibility?.endedAt ?? base.reproducibility.endedAt;
+  return base;
+}
+
 /** One trial's eval-run.v1 document, from harbor + verifier + bridge evidence. */
 export function buildRunDoc({ condition, task, evidence, done, run, profile, lock, releaseSha, harnessVersion, startedAt, endedAt }) {
   const totals = done?.telemetry?.totals ?? null;
@@ -120,6 +151,7 @@ export function buildLiveSteps({
   spawnImpl,
   now = () => new Date().toISOString(),
   prepareBundle = prepareHarnessBundle,
+  seeds = 1,
 }) {
   // ?? null: an absent key must NOT fall back to the process environment —
   // the injected env is the whole truth for credential decisions here.
@@ -233,15 +265,37 @@ export function buildLiveSteps({
     return { doc, failureKind };
   }
 
-  function taskPair({ task, budget, attempt }) {
-    const generic = runTrial({ condition: buildGenericCondition({ instruction: INSTRUCTION_PLACEHOLDER, limits }), budget, label: `generic-${attempt}`, task });
-    const harness = runTrial({
-      condition: buildHarnessCondition({ instruction: INSTRUCTION_PLACEHOLDER, limits, engineerContract, guidance: buildGuidance() }),
-      budget,
-      label: `harness-${attempt}`,
+  function taskPair({ task, budget, attempt, n = seeds }) {
+    const seedRuns = [];
+    for (let seed = 1; seed <= n; seed += 1) {
+      const suffix = n > 1 ? `${attempt}${seed}` : attempt;
+      const generic = runTrial({ condition: buildGenericCondition({ instruction: INSTRUCTION_PLACEHOLDER, limits }), budget, label: `generic-${suffix}`, task });
+      const harness = runTrial({
+        condition: buildHarnessCondition({ instruction: INSTRUCTION_PLACEHOLDER, limits, engineerContract, guidance: buildGuidance() }),
+        budget,
+        label: `harness-${suffix}`,
+        task,
+      });
+      seedRuns.push({ generic, harness });
+    }
+    // A pair is invalid only when a majority of its seeds failed to produce a
+    // valid trial; otherwise the surviving seeds carry the verdict.
+    const kinds = seedRuns.map((r) => r.generic.failureKind ?? r.harness.failureKind);
+    const validSeeds = kinds.filter((k) => !k).length;
+    let failureKind = null;
+    if (validSeeds < Math.ceil(kinds.length / 2)) {
+      const counts = {};
+      for (const kind of kinds.filter(Boolean)) counts[kind] = (counts[kind] ?? 0) + 1;
+      failureKind = Object.entries(counts).sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
+    }
+    return {
+      host: host.id,
       task,
-    });
-    return { host: host.id, task, generic: generic.doc, harness: harness.doc, failureKind: generic.failureKind ?? harness.failureKind };
+      seedCount: n,
+      generic: aggregateSeedDocs(seedRuns.map((r) => r.generic.doc)),
+      harness: aggregateSeedDocs(seedRuns.map((r) => r.harness.doc)),
+      failureKind,
+    };
   }
 
   function ensureBundle() {
@@ -260,11 +314,11 @@ export function buildLiveSteps({
       ensureBundle();
       return tasksOf(lock).map((entry) => taskPair({ task: entry.task, budget, attempt: 'a' }));
     },
-    /** §9 conditional rerun: one complete fresh pair for ONE regressed task. */
+    /** §9 conditional rerun: ONE complete fresh pair for ONE regressed task (never seed-multiplied). */
     rerunKimiPair: async (budget, task) => {
       if (!host.validateCredentials().ok) return null;
       ensureBundle();
-      return taskPair({ task: task ?? tasksOf(lock)[0].task, budget, attempt: 'b' });
+      return taskPair({ task: task ?? tasksOf(lock)[0].task, budget, attempt: 'b', n: 1 });
     },
     frontierPair: null,
     gemmaPair: null,

@@ -27,7 +27,8 @@ function setupFixture() {
   fs.mkdirSync(taskDir, { recursive: true });
   fs.writeFileSync(path.join(taskDir, 'instruction.md'), 'Modernize the COBOL program.');
   const lockFile = path.join(tmpdir(), 'lock.json');
-  fs.writeFileSync(lockFile, JSON.stringify(stampTaskLock(taskDir, BASE_LOCK, 'cobol-modernization')));
+  const singleTaskLock = { ...BASE_LOCK, tasks: BASE_LOCK.tasks.filter((t) => t.task === 'cobol-modernization') };
+  fs.writeFileSync(lockFile, JSON.stringify(stampTaskLock(taskDir, singleTaskLock, 'cobol-modernization')));
 
   const binDir = tmpdir();
   const fakeHarbor = path.join(binDir, 'fake-harbor.mjs');

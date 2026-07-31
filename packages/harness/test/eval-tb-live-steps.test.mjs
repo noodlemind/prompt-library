@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
-import { AGENT_REF, buildLiveSteps } from '../../../evals/external/terminal_bench/live-steps.mjs';
+import { AGENT_REF, buildLiveSteps, aggregateSeedDocs } from '../../../evals/external/terminal_bench/live-steps.mjs';
 import { BUNDLE_MOUNT_TARGET, harnessWrapperScript, activationCommands } from '../../../evals/external/terminal_bench/provision.mjs';
 import { stampTaskLock } from '../../../evals/external/terminal_bench/harbor-adapter.mjs';
 import { validateAgainstSchema, runRelease } from '../../../evals/release.mjs';
@@ -16,7 +16,7 @@ function tmpdir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'tb-live-'));
 }
 
-/** A fixture dataset root with the anchor task, plus a lock stamped against it. */
+/** A fixture dataset root with the anchor task, plus a lock pinning ONLY it. */
 function fixtureTask() {
   const datasetDir = tmpdir();
   const taskDir = path.join(datasetDir, 'cobol-modernization');
@@ -24,7 +24,9 @@ function fixtureTask() {
   fs.writeFileSync(path.join(taskDir, 'instruction.md'), 'Modernize the COBOL program.');
   fs.mkdirSync(path.join(taskDir, 'tests'));
   fs.writeFileSync(path.join(taskDir, 'tests', 'test.sh'), 'pytest');
-  return { datasetDir, taskDir, lock: stampTaskLock(taskDir, BASE_LOCK, 'cobol-modernization') };
+  // Decouple from however many tasks the committed lock pins.
+  const singleTaskLock = { ...BASE_LOCK, tasks: BASE_LOCK.tasks.filter((t) => t.task === 'cobol-modernization') };
+  return { datasetDir, taskDir, lock: stampTaskLock(taskDir, singleTaskLock, 'cobol-modernization') };
 }
 
 /**
@@ -226,4 +228,58 @@ test('live steps feed runRelease end to end: green pair, valid report, exit 0', 
 
 test('AGENT_REF matches the importable module path', () => {
   assert.equal(AGENT_REF, 'evals.external.terminal_bench.harbor_agent:StdioBridgeAgent');
+});
+
+function seedDoc({ verdict = 'pass', reward = 1, promptTokens = 1000, costUsd = 0.02 } = {}) {
+  return {
+    schema: 'eval-run.v1',
+    reproducibility: { condition: 'generic', startedAt: '2026-07-31T00:00:00Z', endedAt: '2026-07-31T00:03:00Z' },
+    correctness: { verifierReward: reward, verdict, exitReason: 'model_finish', completedWithinTimeout: true, completedWithinBudget: true },
+    efficiency: { promptTokens, outputTokens: 500, modelRequests: 10, localCostUsd: costUsd, providerReportedCostUsd: costUsd, cachedPromptTokens: 0, reasoningTokens: 0 },
+    harnessBehavior: {},
+    subscription: null,
+  };
+}
+
+test('seed aggregation: majority verdict over all seeds, median efficiency over valid ones', () => {
+  const agg = aggregateSeedDocs([
+    seedDoc({ verdict: 'pass', reward: 1, promptTokens: 100, costUsd: 0.01 }),
+    seedDoc({ verdict: 'fail', reward: 0, promptTokens: 200, costUsd: 0.02 }),
+    seedDoc({ verdict: 'pass', reward: 1, promptTokens: 400, costUsd: 0.04 }),
+  ]);
+  assert.equal(agg.correctness.verdict, 'pass', '2/3 passes is a pass');
+  assert.equal(agg.correctness.verifierReward, 1, 'median reward');
+  assert.equal(agg.efficiency.promptTokens, 200, 'median tokens');
+  assert.match(agg.correctness.exitReason, /seed-aggregate\(n=3\)/);
+});
+
+test('seed aggregation: a null-reward seed can never count toward a pass', () => {
+  const broken = seedDoc({ verdict: 'fail', reward: null });
+  const agg = aggregateSeedDocs([seedDoc({ verdict: 'pass' }), broken, broken]);
+  assert.equal(agg.correctness.verdict, 'fail', '1 pass of 3 attempted seeds is not a majority');
+  assert.equal(agg.correctness.verifierReward, 1, 'median over valid rewards only');
+});
+
+test('seeds > 1 run per condition per task, all charging the pair budget', async () => {
+  const { taskDir, lock, datasetDir } = fixtureTask();
+  const { spawnImpl, invocations } = fakeHarborSpawn({ providerCostUsd: 0.01 });
+  const steps = buildLiveSteps({
+    config: { execution: { environment: 'docker' } },
+    lock,
+    workDir: fs.mkdtempSync(path.join(os.tmpdir(), 'tb-seeds-')),
+    env: { OPENROUTER_API_KEY: 'k', HARNESS_EVAL_TB_DATASET_DIR: datasetDir ?? path.dirname(taskDir) },
+    releaseSha: 's',
+    harnessVersion: 'v',
+    spawnImpl,
+    seeds: 2,
+    prepareBundle: ({ bundleDir }) => ({ bundleDir, mount: { source: bundleDir, target: BUNDLE_MOUNT_TARGET, readOnly: true } }),
+  });
+  await steps.taskLock();
+  const budget = createBudget({ ceilingUsd: 10, label: 'kimi-pair' });
+  const [pair] = await steps.kimiPair(budget);
+  assert.equal(pair.seedCount, 2);
+  assert.equal(invocations.filter((i) => i.args[0] === 'run').length, 4, '2 seeds × 2 conditions');
+  assert.ok(Math.abs(budget.spentUsd() - 0.04) < 1e-12, 'every seed trial charges the pair budget');
+  assert.equal(pair.generic.correctness.verdict, 'pass');
+  assert.match(pair.generic.correctness.exitReason, /seed-aggregate\(n=2\)/);
 });

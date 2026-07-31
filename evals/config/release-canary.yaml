@@ -16,6 +16,13 @@ budget:
 # not block, efficiency regressions are report-only, safety always blocks.
 calibrationReleases: 3
 
+# Seeds per condition per task. Calibration uses 3 (majority verdict, median
+# efficiency) to establish variance bands; routine gating uses 1 with the §9
+# rerun-on-regression as the variance control.
+seeds:
+  calibration: 3
+  routine: 1
+
 pairs:
   - host: openrouter-kimi
     enabled: true

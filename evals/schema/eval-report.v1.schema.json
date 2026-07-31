@@ -34,6 +34,7 @@
         "properties": {
           "host": { "type": "string" },
           "task": { "type": ["string", "null"] },
+          "seedCount": { "type": ["number", "null"] },
           "result": {
             "enum": [
               "harness-win",
