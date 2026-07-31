@@ -196,11 +196,14 @@ The pinned `terminal-bench@2.0` canary contains:
 - `custom-memory-heap-crash`.
 
 Kimi runs all four tasks by default. A cost-bounded diagnostic may select one
-pinned task with `--task`; the selected task is the actual validation, budget,
-Harbor execution, coverage, and report scope—not a metadata-only label. Routine
-releases use one independent repetition per condition; a stable release-SHA
-hash balances whether generic or Harness runs first, removing fixed order bias.
-Calibration uses three repetitions and alternates order within the release while
+pinned task with `--task`; only that task is executed, but the report remains a
+`diagnostic-task` against the full committed lock. It is explicitly
+release-ineligible, cannot satisfy full-lock release coverage, and cannot green a
+release or support a Harness-value claim. Routine releases use one independent
+repetition per condition. A stable release-SHA offset plus each locked task's
+ordinal gives the four-task matrix an exact 2/2 AB/BA split on every repetition;
+subsequent repetitions alternate each task's order. A fresh exceptional pair
+reverses that task's original order. Calibration uses three repetitions while
 retaining every raw trial; majority verdict and median efficiency are report
 views, not replacements for the underlying evidence.
 
@@ -222,6 +225,14 @@ criteria, scope, gaps, and required reviews pass. The driver then allows at most
 one final provider request, suppresses tool calls from it, and records
 `verified_stop`.
 
+The bridge also attests what the model actually received. Each completed arm
+records the executed system-prompt hash, tool-schema hash and count, and task
+instruction hash. The host independently derives the expected prompt and tools
+from the condition document and compares them with that runtime attestation.
+Missing or mismatched evidence makes the trial infrastructure-invalid even when
+the official verifier reports success; expected configuration hashes are never
+accepted as proof of executed configuration.
+
 ### Commands
 
 ```bash
@@ -233,8 +244,9 @@ node evals/release.mjs --profile release-canary --deterministic-only
 source ~/.openrouter.env
 node evals/release.mjs --profile release-canary --json
 
-# Cost-bounded one-task diagnostic: execute only this pinned task and scope the
-# Eval Card accordingly. Unknown/unpinned names fail before provider preflight.
+# Cost-bounded one-task diagnostic: execute only this pinned task. The Eval Card
+# records diagnostic scope against the full lock and can never green a release.
+# Unknown/unpinned names fail before provider preflight.
 node evals/release.mjs --profile release-canary --task cobol-modernization --json
 
 # First calibration runs: three repetitions per task/condition under the same cap.
@@ -249,6 +261,9 @@ node evals/release.mjs --profile release-canary --budget-usd 20 --json
 
 Release-candidate prerequisites (all fail closed when absent):
 
+- a clean git working tree, including no staged or untracked files, and the full
+  immutable current `HEAD` SHA. Live `--release-sha`, when supplied, must equal
+  that full SHA; a dirty or ambiguous source tree is rejected before paid work;
 - the `harbor` CLI on PATH (validated against 0.20.0);
 - `OPENROUTER_API_KEY` for the pinned Kimi profile, delivered only in the host
   process environment and never Harbor argv, `--ae`, condition JSON, or telemetry;
@@ -263,31 +278,45 @@ Release-candidate prerequisites (all fail closed when absent):
   The runner copies only the pinned tasks into a fresh read-only snapshot,
   verifies the copy again, and passes that snapshot to Harbor with `-p`; it
   never verifies one export and executes a separately resolved registry copy;
-- a harness bundle for in-container activation: prepared automatically from the
-  working tree (set `HARNESS_EVAL_NODE_TARBALL_X64` and/or
-  `HARNESS_EVAL_NODE_TARBALL_ARM64` to downloaded Linux Node runtimes), or point
+- a harness bundle for in-container activation: prepared automatically from a
+  `git archive` of the evaluated full release SHA, followed by `npm ci` against
+  that committed snapshot—never from mutable working-tree source or dependencies.
+  Set `HARNESS_EVAL_NODE_TARBALL_X64` and/or
+  `HARNESS_EVAL_NODE_TARBALL_ARM64` to downloaded Linux Node runtimes and pin
+  each supplied archive with `HARNESS_EVAL_NODE_TARBALL_X64_SHA256` and/or
+  `HARNESS_EVAL_NODE_TARBALL_ARM64_SHA256`; an unpinned, symlinked, oversized,
+  changing, or digest-mismatched archive is rejected. Alternatively, point
   `HARNESS_EVAL_TB_BUNDLE_DIR` at a pre-built bundle and set
   `HARNESS_EVAL_TB_BUNDLE_SHA256` to its separately retained manifest digest.
-  A prebuilt bundle is validated and copied into a fresh runner-owned directory
-  before mounting. Harbor mounts that copy read-only into BOTH conditions; only
-  the treatment invokes `/opt/harness-bundle/harness-cli`, and nothing is copied
-  or symlinked into a sandbox-writable executable path. Setup failure fails the
-  trial closed.
+  The bundle manifest binds its contents to the evaluated release SHA, Harness
+  version, and verified Node archive digests. A prebuilt bundle must match that
+  expected source identity, is validated against the out-of-band digest, and is
+  copied into a fresh runner-owned directory before mounting. Harbor mounts that
+  copy read-only into BOTH conditions; only the treatment invokes
+  `/opt/harness-bundle/harness-cli`, and nothing is copied or symlinked into a
+  sandbox-writable executable path. Setup failure fails the trial closed.
 
 ### What the run records
 
 - logical model requests separately from physical attempts, retries, responses,
   errors, latency, resolved model/provider, token/cache fields, reported and
-  locally computed cost, and billing completeness;
+  locally computed cost, and billing completeness. Attempt identities are
+  accounted as a one-to-one multiset: every started attempt must have exactly
+  one classified terminal response/error, with no invalid, duplicate,
+  uncorrelated, or unclosed identity;
 - correlated, redacted tool calls/results with category, exit code, duration,
   byte counts, hashes, timeout/truncation flags, and no raw command/output in
-  published telemetry;
+  published telemetry. Tool identities use the same one-to-one accounting, so
+  duplicates, malformed identities, unmatched results, and unclosed calls are
+  explicit integrity failures rather than inflated completion counts;
 - sandbox command streams drained into finite capture rings before Harbor can
   buffer them, with smaller model-visible tails and explicit truncation flags;
 - request payload/peak sizes, context compactions, compacted observations,
   checkpoint state, and time to first action/edit/final verification;
-- pair, repetition, order, task, condition, prompt, tool-schema, telemetry, and
-  Harness-event identities/hashes, plus the exact mounted bundle manifest hash;
+- pair, repetition, order, task, condition, executed prompt, task instruction,
+  tool-schema, telemetry, and Harness-event identities/hashes, plus the exact
+  mounted bundle manifest hash and independently checked runtime-contract
+  evidence;
 - bounded before/after workspace manifests, changed-path count/list, canonical
   diff hash, and a separate verifier-artifact hash;
 - retained Harness events, their collection completeness, evidence-derived
@@ -295,9 +324,10 @@ Release-candidate prerequisites (all fail closed when absent):
 
 Unknown is never converted to zero. An unknown-billing attempt consumes the
 remaining trial allowance and immediately stops later paid scheduling. Every
-paid attempt must close, usage and billing must be complete, tool results must
-correlate, and a real workspace manifest must exist for every retained required
-trial. Otherwise the release blocks even when the verifier passed.
+paid attempt and every tool call/result must satisfy the one-to-one ledger,
+usage and billing must be complete, executed runtime hashes must match the
+expected condition, and a real workspace manifest must exist for every retained
+required trial. Otherwise the release blocks even when the verifier passed.
 
 ### Cost controls and estimates
 
@@ -305,7 +335,9 @@ The coded ceiling covers **provider API spend only**:
 
 - routine ceiling: **$10**;
 - routine controlled-pair allowance: **$8** across four tasks/eight trials;
-- conditional full-pair regression rerun: **$2**;
+- one exceptional fresh same-task pair: **$2**. Primary results are all
+  classified before it is scheduled; a non-safety correctness regression gets
+  priority, otherwise it may confirm one directional one-shot Harness win;
 - reason-gated reserve: **$2**, sharing the same parent ceiling rather than
   adding to it;
 - exceptional ceiling: **$20 maximum**. `--budget-usd 20` scales the controlled
@@ -313,9 +345,10 @@ The coded ceiling covers **provider API spend only**:
 
 At routine settings the initial per-trial scheduler share is at most $1.00
 ($8 / four tasks / two arms); calibration's 24 trials share the same $8 pair
-allowance. A `--task` diagnostic does not inherit the unused multi-task
-allowance: its primary per-arm ceiling is capped at the $1.00 that the full
-conditional rerun can reproduce. Calibration reruns reuse the original lower
+allowance. There is only one exceptional fresh pair per controlled host/run, not
+one per task or finding. A `--task` diagnostic does not inherit the unused
+multi-task allowance: its primary per-arm ceiling is capped at the $1.00 that the full
+exceptional pair can reproduce. Calibration reruns reuse the original lower
 per-arm ceiling rather than changing the experimental condition. These are
 caps, not spend forecasts. Actual cost is reconciled from
 the greater of provider-reported and pinned local cost inside the request loop;
@@ -327,7 +360,7 @@ than merely an after-the-fact alert. Re-verify the pricing in
 
 Cost control is intentionally sequential. From the configured Harbor timeouts,
 the upper scheduling envelope is about 250 minutes for the four-task routine run
-including one regression rerun, about 650 minutes for a three-repetition
+including one exceptional fresh pair, about 650 minutes for a three-repetition
 calibration, and another 80 minutes for the opt-in local anchor pair. Typical
 runs should finish sooner; do not interpret the API ceiling as a wall-time or
 Daytona-credit ceiling.
@@ -358,12 +391,18 @@ Building blocks:
 Result per task: generic fail + treatment pass is a **harness win**; both pass
 is **parity**; generic pass + treatment fail is a **harness regression**; both
 fail is **inconclusive capability**. Infrastructure and budget failures are not
-model-quality results. A regression reruns one full fresh pair for that task;
-only reproduced regressions gate as stable regressions.
+model-quality results. All primary tasks are classified before exceptional
+spend: a non-safety correctness regression has first priority for the single
+full fresh same-task pair; if no primary regression exists, the allowance may
+confirm one one-repetition Harness win. A one-shot win is not demonstrated value
+until that fresh pair reproduces it. A primary win is already confirmed when it
+has at least two independent repetitions; a single unconfirmed or
+non-reproduced win leaves the claim inconclusive.
 
 The Eval Card emits one of four scoped claim levels:
 
-- `demonstrated-value`: at least one active same-model treatment win;
+- `demonstrated-value`: at least one active same-model treatment win confirmed
+  by two or more primary repetitions or by a fully attributable fresh pair;
 - `bounded-overhead`: success parity and prompt ratio <=2.0, cost ratio <=1.5,
   and wall-time ratio <=1.25;
 - `regression`: correctness or active bounded-overhead policy regressed;
@@ -376,17 +415,28 @@ or broad real-world productivity.
 A release evaluation is complete only when:
 
 - deterministic checks and all task-lock checks pass before provider spend;
+- the run is full release scope rather than `--task` diagnostic scope, and
+  required coverage is computed against every task in the committed lock;
 - every required task has both fresh arms, official verifier evidence, matching
-  release/task/bundle/pair/repetition/attempt identity, requested/resolved model,
-  pinned provider policy, complementary order, and no fallback;
-- required coverage contains exactly one controlled pair for every selected
-  pinned task, with no missing, duplicate, or unexpected task;
+  release/task/bundle/pair/repetition/attempt/instruction identity,
+  requested/resolved model, pinned provider policy, complementary order, and no
+  fallback;
+- required coverage contains exactly one controlled pair for every full-lock
+  pinned task, with no missing, duplicate, or unexpected task. Selected-task
+  telemetry completeness is reported separately and cannot substitute for that
+  denominator;
 - the provider-side eval-key limit was checked for the selected release ceiling,
   and the report retains only its non-secret limit/remaining/reset evidence;
-- every retained paid attempt closes with complete usage/billing; tool results
-  correlate; workspace and Harness-event collection state is explicit;
+- every retained paid attempt has exactly one classified terminal event with
+  complete usage/billing; every tool call/result is matched one-to-one; neither
+  ledger contains duplicate, malformed, uncorrelated, or unclosed identities;
+  workspace and Harness-event collection state is explicit;
+- runtime prompt/tool-schema/tool-count/instruction attestation is complete and
+  matches the independently derived condition contract, and the mounted bundle
+  manifest binds the evaluated full SHA, Harness version, and Node pins;
 - prompt/cost/wall ratios are within policy for parity, or a win/regression is
-  classified and any regression rerun is resolved;
+  classified and any exceptional confirmation is resolved. One unconfirmed
+  routine win is insufficient for a value claim;
 - no recorded policy bypass or secret-artifact sentinel is present;
 - provider API spend is <=$10 routinely (<= $20 only with the explicit override),
   with non-API costs disclosed separately;
@@ -402,12 +452,20 @@ Troubleshooting:
   produced no evidence; a skipped pair can never green a release candidate.
 - `task checksum mismatch` — the downloaded task differs from the committed
   pin; investigate before re-stamping (`stampTaskLock`, then commit the lock).
-- `required controlled task coverage is incomplete` — a selected task is
-  missing, duplicated, or unexpected; the report's `coverage` object names the
-  exact host/task discrepancy and the claim remains inconclusive.
+- `required controlled task coverage is incomplete` — a required task is
+  missing, duplicated, or unexpected relative to the full committed lock; the
+  report's `coverage` object names the exact host/task discrepancy and the claim
+  remains inconclusive. A `--task` diagnostic is expected to remain
+  release-ineligible even when its selected-task telemetry is complete.
 - `controlled identity mismatch` / `rerun identity mismatch` — the arms or
   rerun did not preserve the causal task/model/provider/release/bundle identity;
   retain the evidence as infrastructure-invalid and do not compare outcomes.
+- `runtime-attestation-missing-or-malformed` / runtime hash mismatch — the
+  executed prompt, instruction, or tool contract was not proven to match the
+  condition document; do not credit the verifier result to the intended arm.
+- nonzero unclosed/uncorrelated/duplicate/invalid provider or tool identities —
+  the event ledger is not one-to-one; retain it for diagnosis but treat the
+  trial as infrastructure-invalid.
 - `bundle manifest digest` — the prebuilt bundle is missing its out-of-band
   digest, was changed after preparation, contains an escaping symlink, or points
   at an unsafe broad host path; prepare a fresh bundle and retain its digest.

@@ -25,9 +25,11 @@ efficiencyThresholds:
 # not block, efficiency regressions are report-only, safety always blocks.
 calibrationReleases: 3
 
-# Independent repetitions per condition per task. Calibration uses 3 (majority verdict, median
-# efficiency) to establish variance bands; routine gating uses 1 with the §9
-# rerun-on-regression as the variance control.
+# Independent repetitions per condition per task. Calibration uses 3 (majority
+# verdict, median efficiency) to establish variance bands. Routine gating uses
+# 1; one exceptional fresh same-task pair is available for the whole controlled
+# run. Primary regressions get priority; otherwise it may confirm one one-shot
+# win. An unconfirmed one-shot win cannot support demonstrated-value.
 repetitions:
   calibration: 3
   routine: 1
@@ -64,6 +66,9 @@ execution:
     memoryGb: 2
     storageGb: 10
     autoStopMinutes: 45
-  # A stable release-SHA hash chooses AB or BA, removing the fixed generic-first
-  # bias without requiring mutable cross-release state. Repetitions then alternate.
+  # A stable release-SHA offset plus locked-task ordinal gives this four-task
+  # matrix an exact 2/2 AB/BA split per repetition without mutable state.
+  # Repetitions alternate each task; the exceptional fresh pair reverses its
+  # primary order. `--task` remains a non-release diagnostic, so one selected
+  # task is not represented as full-lock order balance.
   conditionOrder: release-hash-balanced
