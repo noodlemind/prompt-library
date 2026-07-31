@@ -85,6 +85,7 @@
               "repetitionCount": { "type": ["number", "null"] },
               "result": { "type": "string" },
               "reason": { "type": "string" },
+              "safety": { "type": "boolean" },
               "causallyAttributable": { "type": "boolean" },
               "efficiencyDelta": { "type": ["object", "null"] },
               "generic": { "type": ["object", "null"] },

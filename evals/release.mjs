@@ -16,6 +16,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { createRequire } from 'node:module';
+import { spawnSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { isDeepStrictEqual } from 'node:util';
 import { createBudget } from './lib/budget.mjs';
@@ -508,6 +509,7 @@ export function applyGatePolicy({ deterministic, pairs = [], smokes = [], teleme
     const c = pair.classification ?? {};
     const label = pair.task ? `${pair.host} (${pair.task})` : pair.host;
     if (c.safety) reasons.push(`harness safety control bypassed on ${label}`);
+    if (pair.rerun?.safety === true) reasons.push(`harness safety control bypassed on rerun for ${label}`);
     // A required pair with no valid evidence is a red release, not a green one.
     if (pair.required && pair.result === 'skipped') {
       reasons.push(`required pair ${label} was skipped and did not run`);
@@ -781,6 +783,7 @@ export async function runRelease({ config, steps, calibrationRelease = false, re
             repetitionCount: second.repetitionCount ?? second.seedCount ?? null,
             result: rerunClassification.result,
             reason: rerunClassification.reason,
+            safety: rerunClassification.safety === true,
             causallyAttributable: rerunAttributable && rerunClassification.fallbackDetected !== true,
             efficiencyDelta: rerunEfficiency,
             generic: second.generic ?? null,
@@ -852,7 +855,13 @@ export async function runRelease({ config, steps, calibrationRelease = false, re
     if (!p.generic || !p.harness) return false;
     return p.causallyAttributable === true && [p.generic, p.harness].every((doc) => completePaidEvidence(doc));
   });
-  const telemetryComplete = coverage.complete && meteredOk && runDocs.every((doc) => validateAgainstSchema(doc, RUN_SCHEMA).ok);
+  const rerunMeteredOk = pairEntries.every((pair) => {
+    if (!pair.rerun || !String(pair.host).startsWith('openrouter')) return true;
+    return pair.rerun.causallyAttributable === true &&
+      [pair.rerun.generic, pair.rerun.harness].every((doc) => doc && completePaidEvidence(doc));
+  });
+  const telemetryComplete = coverage.complete && meteredOk && rerunMeteredOk &&
+    runDocs.every((doc) => validateAgainstSchema(doc, RUN_SCHEMA).ok);
   const gate = applyGatePolicy({
     deterministic,
     pairs: pairEntries,
@@ -975,6 +984,20 @@ function loadYamlConfig(profileName) {
   return YAML.parse(fs.readFileSync(file, 'utf8'));
 }
 
+function currentGitReleaseSha() {
+  const repository = fileURLToPath(new URL('../', import.meta.url));
+  const result = spawnSync('git', ['rev-parse', '--verify', 'HEAD'], {
+    cwd: repository,
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  const sha = result.status === 0 ? result.stdout.trim() : '';
+  if (!/^[a-f0-9]{40,64}$/i.test(sha)) {
+    throw new Error('--release-sha is required when the current git HEAD cannot be resolved');
+  }
+  return sha;
+}
+
 async function main() {
   const argv = process.argv.slice(2);
   const flag = (name, fallback = null) => {
@@ -1028,7 +1051,14 @@ async function main() {
     efficiencyThresholds: raw.efficiencyThresholds ?? DEFAULT_EFFICIENCY_THRESHOLDS,
   };
 
-  const releaseSha = flag('--release-sha', 'workdir');
+  const releaseShaFlagPresent = argv.includes('--release-sha');
+  const explicitReleaseSha = flag('--release-sha', null);
+  if (releaseShaFlagPresent && (
+    typeof explicitReleaseSha !== 'string' || !/^[a-f0-9]{7,64}$/i.test(explicitReleaseSha)
+  )) {
+    throw new Error('--release-sha requires a hexadecimal commit/content identity');
+  }
+  const releaseSha = explicitReleaseSha ?? currentGitReleaseSha();
   const harnessVersion = JSON.parse(fs.readFileSync(new URL('../packages/harness/package.json', import.meta.url), 'utf8')).version;
   const { runEvals, summarize } = await import('./lib/runner.mjs');
   const deterministicStep = async () => {

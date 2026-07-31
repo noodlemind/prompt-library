@@ -197,9 +197,11 @@ The pinned `terminal-bench@2.0` canary contains:
 
 Kimi runs all four tasks by default. A cost-bounded diagnostic may select one
 pinned task with `--task`; the selected task is the actual validation, budget,
-Harbor execution, coverage, and report scope—not a metadata-only label. Routine releases use one independent repetition per
-condition and alternate A/B order. Calibration uses three repetitions and
-retains every raw trial; majority verdict and median efficiency are report
+Harbor execution, coverage, and report scope—not a metadata-only label. Routine
+releases use one independent repetition per condition; a stable release-SHA
+hash balances whether generic or Harness runs first, removing fixed order bias.
+Calibration uses three repetitions and alternates order within the release while
+retaining every raw trial; majority verdict and median efficiency are report
 views, not replacements for the underlying evidence.
 
 ### Enforcement fidelity

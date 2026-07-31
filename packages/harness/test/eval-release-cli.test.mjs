@@ -171,7 +171,10 @@ test('release-candidate mode runs a live kimi pair end to end through the CLI', 
   assert.equal(result.status, 0, result.stderr || result.stdout);
   assert.ok(!`${result.stdout}\n${result.stderr}`.includes(SENTINEL_PROVIDER_KEY), 'CLI output and errors must not echo the provider key');
   const report = JSON.parse(result.stdout);
+  assert.match(report.releaseSha, /^[a-f0-9]{40,64}$/, 'normal live commands derive a real HEAD identity for order balancing');
   const kimi = report.pairs.find((p) => p.host === 'openrouter-kimi');
+  assert.equal(kimi.generic.reproducibility.releaseSha, report.releaseSha);
+  assert.equal(kimi.harness.reproducibility.releaseSha, report.releaseSha);
   assert.equal(kimi.result, 'parity');
   assert.equal(kimi.generic.correctness.verdict, 'pass');
   assert.equal(kimi.harness.correctness.verdict, 'pass');

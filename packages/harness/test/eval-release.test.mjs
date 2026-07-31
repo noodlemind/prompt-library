@@ -797,6 +797,29 @@ test('during calibration a reproduced kimi regression is informational, not bloc
   assert.equal(report.pairs.find((p) => p.host === 'openrouter-kimi').gateActive, false);
 });
 
+test('rerun safety bypass and incomplete paid evidence still block during calibration', async () => {
+  const safetyRerun = rerunPairOf('openrouter-kimi', 'pass', 'pass', {
+    harness: { harnessBehavior: { policyBypassAchieved: true } },
+  });
+  const incompleteRerun = rerunPairOf('openrouter-kimi', 'pass', 'pass', {
+    harness: { efficiency: { billingComplete: false, costComplete: false } },
+  });
+
+  for (const [rerun, reasonPattern] of [[safetyRerun, /safety.*rerun|rerun.*safety/i], [incompleteRerun, /telemetry/i]]) {
+    const { report, exitCode } = await runRelease({
+      config: CONFIG,
+      steps: baseSteps({
+        kimiPair: async () => pairOf('openrouter-kimi', 'pass', 'fail'),
+        rerunKimiPair: async () => rerun,
+      }),
+      calibrationRelease: true,
+      requiredPairs: ['openrouter-kimi'],
+    });
+    assert.equal(exitCode, 1);
+    assert.ok(report.gate.reasons.some((reason) => reasonPattern.test(reason)));
+  }
+});
+
 test('a budget-exhausted treatment is inconclusive and never blocks', async () => {
   const steps = baseSteps({
     kimiPair: async () => pairOf('openrouter-kimi', 'pass', 'fail', { harness: { correctness: { completedWithinBudget: false, exitReason: 'budget_exhausted' } } }),

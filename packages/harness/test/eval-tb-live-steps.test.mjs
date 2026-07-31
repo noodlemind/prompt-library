@@ -158,14 +158,14 @@ function fakeHarborSpawn({
   };
 }
 
-function liveSteps({ datasetDir, taskDir, lock, spawnImpl, apiKey = 'test-key', workDir = tmpdir(), config = null, fetchImpl = undefined, repetitions = null }) {
+function liveSteps({ datasetDir, taskDir, lock, spawnImpl, apiKey = 'test-key', workDir = tmpdir(), config = null, fetchImpl = undefined, repetitions = null, releaseSha = 'sha1' }) {
   let clockTick = 0;
   return buildLiveSteps({
     config: config ?? { execution: { environment: 'docker' } },
     lock,
     workDir,
     env: { OPENROUTER_API_KEY: apiKey, HARNESS_EVAL_TB_DATASET_DIR: datasetDir ?? path.dirname(taskDir) },
-    releaseSha: 'sha1',
+    releaseSha,
     harnessVersion: '0.5.0',
     spawnImpl,
     ...(fetchImpl ? { fetchImpl } : {}),
@@ -894,6 +894,21 @@ test('multiple repetitions run each condition, alternate order, and all charge t
     pair.harness.repetitions.map((run) => run.reproducibility.repetitionId),
     'the two arms share a repetition identity so paired analysis cannot drift'
   );
+});
+
+test('routine primary order alternates deterministically across release identities', async () => {
+  const { taskDir, lock } = fixtureTask();
+  const firstConditions = [];
+  for (const releaseSha of ['abc', 'def']) {
+    const { spawnImpl, invocations } = fakeHarborSpawn({ providerCostUsd: 0.01 });
+    const steps = liveSteps({ taskDir, lock, spawnImpl, releaseSha });
+    await steps.taskLock();
+    await steps.kimiPair(createBudget({ ceilingUsd: 10, label: `order-${releaseSha}` }));
+    const firstJob = invocations.find((invocation) => invocation.args[0] === 'run')
+      .args.find((arg, index, args) => args[index - 1] === '--job-name');
+    firstConditions.push(firstJob.match(/-(generic|harness)-a$/)?.[1]);
+  }
+  assert.deepEqual(firstConditions, ['harness', 'generic']);
 });
 
 test('a pair requires a strict majority of scheduled repetitions to have two valid aligned arms', async () => {

@@ -606,6 +606,10 @@ export function buildLiveSteps({
   localEnabled = false,
 }) {
   const repetitionCount = repetitions ?? seeds ?? 1;
+  const conditionOrderPolicy = config.execution?.conditionOrder ?? 'release-hash-balanced';
+  if (conditionOrderPolicy !== 'release-hash-balanced') {
+    throw new Error(`unsupported condition order policy: ${conditionOrderPolicy}`);
+  }
   // ?? null: an absent key must NOT fall back to the process environment —
   // the injected env is the whole truth for credential decisions here.
   const kimiHost = createKimiHost({ apiKey: env.OPENROUTER_API_KEY ?? null });
@@ -625,6 +629,10 @@ export function buildLiveSteps({
   let bundle = null;
   let paidSchedulingStop = null;
   const primaryTrialCeilingByTask = new Map();
+  const releaseOrderOffset = Number.parseInt(
+    stableHash({ schema: 'eval-condition-order.v1', releaseSha }).slice(0, 8),
+    16
+  ) % 2;
 
   async function providerSpendGuard() {
     const ceilingUsd = config.budget?.releaseCeilingUsd;
@@ -930,7 +938,9 @@ export function buildLiveSteps({
       const results = {};
       // Primary repetitions alternate AB/BA; the one-repetition regression rerun reverses
       // the original order. Fixed per-arm budgets keep either order equivalent.
-      const genericFirst = (repetition + (attempt === 'b' ? 1 : 0)) % 2 === 1;
+      const genericFirst = (
+        (repetition - 1) + releaseOrderOffset + (attempt === 'b' ? 1 : 0)
+      ) % 2 === 0;
       const order = genericFirst ? ['generic', 'harness'] : ['harness', 'generic'];
       for (const [orderOffset, conditionId] of order.entries()) {
         const trialBudget = createBudget({

@@ -64,4 +64,6 @@ execution:
     memoryGb: 2
     storageGb: 10
     autoStopMinutes: 45
-  conditionOrder: alternate-per-release
+  # A stable release-SHA hash chooses AB or BA, removing the fixed generic-first
+  # bias without requiring mutable cross-release state. Repetitions then alternate.
+  conditionOrder: release-hash-balanced
