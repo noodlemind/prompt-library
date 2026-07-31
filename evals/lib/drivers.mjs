@@ -71,6 +71,8 @@ export function openAiToolDriver({
   telemetry = null,
   toolResultLimit = 4000,
   requestTimeoutMs,
+  transientRetries = 4,
+  sleepImpl = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
 } = {}) {
   const endpoint = url ?? profile?.url;
   const requestedModel = model ?? profile?.model;
@@ -182,40 +184,54 @@ export function openAiToolDriver({
     // The abort timer covers the whole request — connection AND body read —
     // so a hung provider becomes a classified failure instead of a stuck
     // trial. Billing for an aborted request is unknowable: billed stays null.
-    const controller = effRequestTimeoutMs ? new AbortController() : null;
-    const timer = controller ? setTimeout(() => controller.abort(), effRequestTimeoutMs) : null;
-    const timedOutError = () => {
-      telemetry?.record('error', { kind: 'timeout', timeoutMs: effRequestTimeoutMs });
-      return new ProviderError(`provider request timed out after ${effRequestTimeoutMs}ms`, { kind: 'timeout', billed: null });
-    };
     let data;
-    try {
-      let res;
+    // Rate limits (429) are confirmed-unbilled transient failures — the plan's
+    // retry policy allows retrying them, with backoff, inside one request.
+    // Everything else (402, 5xx, network) stays terminal and classified.
+    for (let attempt = 0; ; attempt += 1) {
+      const controller = effRequestTimeoutMs ? new AbortController() : null;
+      const timer = controller ? setTimeout(() => controller.abort(), effRequestTimeoutMs) : null;
+      const timedOutError = () => {
+        telemetry?.record('error', { kind: 'timeout', timeoutMs: effRequestTimeoutMs });
+        return new ProviderError(`provider request timed out after ${effRequestTimeoutMs}ms`, { kind: 'timeout', billed: null });
+      };
       try {
-        res = await fetchImpl(endpoint, {
-          method: 'POST',
-          headers: { 'content-type': 'application/json', authorization: `Bearer ${apiKey}` },
-          body: payload,
-          signal: controller?.signal,
-        });
-      } catch (err) {
-        if (controller?.signal.aborted) throw timedOutError();
-        telemetry?.record('error', { kind: 'network', message: err.message });
-        throw new ProviderError(`provider request failed: ${err.message}`, { kind: 'network', billed: false });
+        let res;
+        try {
+          res = await fetchImpl(endpoint, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json', authorization: `Bearer ${apiKey}` },
+            body: payload,
+            signal: controller?.signal,
+          });
+        } catch (err) {
+          if (controller?.signal.aborted) throw timedOutError();
+          telemetry?.record('error', { kind: 'network', message: err.message });
+          throw new ProviderError(`provider request failed: ${err.message}`, { kind: 'network', billed: false });
+        }
+        if (res.status === 429 && attempt < transientRetries) {
+          const retryAfterSec = Number(res.headers?.get?.('retry-after'));
+          const waitMs = Number.isFinite(retryAfterSec) && retryAfterSec >= 0 ? retryAfterSec * 1000 : Math.min(2 ** (attempt + 1) * 1000, 30_000);
+          telemetry?.record('retry', { status: 429, attempt: attempt + 1, waitMs });
+          if (timer) clearTimeout(timer);
+          await sleepImpl(waitMs);
+          continue;
+        }
+        if (!res.ok) {
+          telemetry?.record('error', { kind: 'http', status: res.status });
+          throw new ProviderError(`provider http ${res.status}`, { kind: 'http', billed: false, status: res.status });
+        }
+        try {
+          data = await res.json();
+        } catch (err) {
+          if (controller?.signal.aborted) throw timedOutError();
+          telemetry?.record('error', { kind: 'provider', message: `unparseable response: ${err.message}` });
+          throw new ProviderError(`provider returned unparseable JSON: ${err.message}`, { kind: 'provider', billed: false });
+        }
+        break;
+      } finally {
+        if (timer) clearTimeout(timer);
       }
-      if (!res.ok) {
-        telemetry?.record('error', { kind: 'http', status: res.status });
-        throw new ProviderError(`provider http ${res.status}`, { kind: 'http', billed: false, status: res.status });
-      }
-      try {
-        data = await res.json();
-      } catch (err) {
-        if (controller?.signal.aborted) throw timedOutError();
-        telemetry?.record('error', { kind: 'provider', message: `unparseable response: ${err.message}` });
-        throw new ProviderError(`provider returned unparseable JSON: ${err.message}`, { kind: 'provider', billed: false });
-      }
-    } finally {
-      if (timer) clearTimeout(timer);
     }
 
     // Usage and identifiers are captured even for malformed completions — a

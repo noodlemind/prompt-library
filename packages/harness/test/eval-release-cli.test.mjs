@@ -44,7 +44,7 @@ const jobsDir = args[args.indexOf('--jobs-dir') + 1];
 const jobName = args[args.indexOf('--job-name') + 1];
 const agentEnv = {};
 args.forEach((a, i) => { if (a === '--ae') { const [k, ...r] = args[i + 1].split('='); agentEnv[k] = r.join('='); } });
-const verifierDir = path.join(jobsDir, jobName, 'trial-0', 'artifacts', 'logs', 'verifier');
+const verifierDir = path.join(jobsDir, jobName, 'trial-0', 'verifier');
 fs.mkdirSync(verifierDir, { recursive: true });
 fs.writeFileSync(path.join(verifierDir, 'reward.json'), '{"reward": 1}');
 fs.writeFileSync(agentEnv.HARNESS_EVAL_TB_TELEMETRY_FILE, JSON.stringify({

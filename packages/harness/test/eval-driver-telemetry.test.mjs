@@ -218,6 +218,60 @@ test('a transport failure is classified as an unbilled network failure', async (
   await assert.rejects(driver.next(), (err) => err.kind === 'network' && err.billed === false);
 });
 
+test('transient provider errors (429) back off and retry within the same request', async () => {
+  const responses = [
+    { ok: false, status: 429, headers: { get: () => '0' }, json: async () => ({}) },
+    { ok: false, status: 429, headers: { get: () => null }, json: async () => ({}) },
+    completion({ message: { role: 'assistant', content: 'done' }, usage: USAGE, finishReason: 'stop' }),
+  ];
+  let i = 0;
+  const sleeps = [];
+  const driver = openAiToolDriver({
+    profile: KIMI,
+    apiKey: 'k',
+    fetchImpl: async () => responses[Math.min(i++, responses.length - 1)],
+    telemetry: createTelemetry(),
+    sleepImpl: async (ms) => sleeps.push(ms),
+  });
+  driver.reset({ system: 's', instruction: 'i', tools: TOOLS });
+  const action = await driver.next();
+  assert.equal(action.type, 'finish', 'the request succeeds after unbilled retries');
+  assert.equal(i, 3, 'two 429s then success');
+  assert.equal(sleeps.length, 2, 'each retry waits before re-sending');
+});
+
+test('retries exhaust into a classified http failure; terminal statuses never retry', async () => {
+  const always429 = { ok: false, status: 429, headers: { get: () => null }, json: async () => ({}) };
+  let attempts = 0;
+  const driver = openAiToolDriver({
+    profile: KIMI,
+    apiKey: 'k',
+    fetchImpl: async () => {
+      attempts += 1;
+      return always429;
+    },
+    transientRetries: 2,
+    sleepImpl: async () => {},
+  });
+  driver.reset({ system: 's', instruction: 'i', tools: TOOLS });
+  await assert.rejects(driver.next(), (err) => err.kind === 'http' && err.status === 429 && err.billed === false);
+  assert.equal(attempts, 3, 'initial attempt plus two retries');
+
+  let paymentAttempts = 0;
+  const d402 = openAiToolDriver({
+    profile: KIMI,
+    apiKey: 'k',
+    fetchImpl: async () => {
+      paymentAttempts += 1;
+      return { ok: false, status: 402, json: async () => ({}) };
+    },
+    sleepImpl: async () => {},
+  });
+  d402.reset({ system: 's', instruction: 'i', tools: TOOLS });
+  await assert.rejects(d402.next(), (err) => err.kind === 'http' && err.status === 402);
+  assert.equal(paymentAttempts, 1, 'a 402 is terminal — retrying cannot mint credits');
+});
+
 test('a provider http error is classified as unbilled with its status', async () => {
   const { driver } = harness([{ ok: false, status: 502, json: async () => ({}) }]);
   await assert.rejects(driver.next(), (err) => err.kind === 'http' && err.billed === false && err.status === 502);
