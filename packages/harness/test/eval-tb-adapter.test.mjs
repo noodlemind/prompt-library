@@ -184,6 +184,20 @@ test('classifyFailure distinguishes infrastructure, provider, verifier, and vali
   assert.equal(classifyFailure({ run: { spawnError: null, code: 0, timedOut: false }, reward: 0 }), null, 'reward 0 is a graded fail, not an infrastructure failure');
 });
 
+test('a verified pass survives a trailing provider error; an interrupted fail does not', () => {
+  const run = { spawnError: null, code: 0, timedOut: false };
+  assert.equal(
+    classifyFailure({ run, reward: 1, providerFailure: true, passed: true }),
+    null,
+    'the pass happened before the provider error — it is definitive evidence'
+  );
+  assert.equal(
+    classifyFailure({ run, reward: 0, providerFailure: true, passed: false }),
+    'provider',
+    'a fail cut short by the provider is not a graded fail'
+  );
+});
+
 test('a nonzero harbor exit is classified before any reward is trusted', () => {
   assert.equal(classifyFailure({ run: { spawnError: null, code: 3, timedOut: false }, reward: null }), 'infrastructure');
   assert.equal(

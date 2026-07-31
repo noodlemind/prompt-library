@@ -138,13 +138,16 @@ export function readTrialResult(jobDir, { passingReward = 1 } = {}) {
  * `jobDirCreated: false` means harbor produced no fresh job directory — the
  * run never really happened, whatever the exit code says.
  */
-export function classifyFailure({ run, reward, providerFailure = false, jobDirCreated = true }) {
+export function classifyFailure({ run, reward, providerFailure = false, jobDirCreated = true, passed = false }) {
   if (run.spawnError || run.timedOut) return 'infrastructure';
   if (!jobDirCreated) return 'infrastructure';
   // A nonzero harbor exit is classified before any reward is trusted — a
   // reward file read out of a failed invocation is not evidence.
   if (typeof run.code === 'number' && run.code !== 0) return 'infrastructure';
-  if (providerFailure) return 'provider';
+  // A verifier PASS is definitive even when a provider error ended the loop
+  // afterwards (e.g. credits ran out during post-verification review). A
+  // fail with a provider error is NOT definitive — the agent was cut short.
+  if (providerFailure && !passed) return 'provider';
   if (reward == null) return 'verifier';
   return null;
 }

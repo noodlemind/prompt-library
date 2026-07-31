@@ -223,6 +223,7 @@ export function buildLiveSteps({
       reward: evidence.reward,
       providerFailure: done?.stopReason === 'provider_error',
       jobDirCreated,
+      passed: verdictFromReward(evidence.reward, { passingReward: lock.verifier.passingReward }) === 'pass',
     });
     const doc = buildRunDoc({ condition: condition.id, evidence, done, run, profile, lock, releaseSha, harnessVersion, startedAt, endedAt });
     return { doc, failureKind };
