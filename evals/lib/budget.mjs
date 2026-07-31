@@ -1,0 +1,89 @@
+/**
+ * Cost calculation and budget enforcement for paid eval runs.
+ *
+ * The plan's cost controls, in code: before every provider request the caller
+ * prechecks a worst-case estimate (uncached input + maximum output tokens)
+ * against every ceiling in the budget chain (trial → release); a refusal is
+ * recorded as a `budget_exhausted` event and the request is never sent.
+ * Cost of real usage is computed from provider-reported token counts only —
+ * missing or malformed usage yields `null`, never a silent estimate.
+ *
+ * Pricing units are USD per million tokens ({ inputPerM, cachedInputPerM,
+ * outputPerM }), matching `model-profiles.mjs`.
+ */
+
+const PER_TOKEN = 1 / 1_000_000;
+
+function nonNegativeInt(value) {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0;
+}
+
+/** Provider-reported usage → { usd, promptTokens, cachedTokens, outputTokens } | null. */
+export function costOfUsage(usage, pricing) {
+  if (!usage || !nonNegativeInt(usage.prompt_tokens) || !nonNegativeInt(usage.completion_tokens)) return null;
+  const promptTokens = usage.prompt_tokens;
+  const outputTokens = usage.completion_tokens;
+  const reportedCached = usage.prompt_tokens_details?.cached_tokens;
+  const cachedTokens = nonNegativeInt(reportedCached) ? Math.min(reportedCached, promptTokens) : 0;
+  const usd =
+    (promptTokens - cachedTokens) * pricing.inputPerM * PER_TOKEN +
+    cachedTokens * pricing.cachedInputPerM * PER_TOKEN +
+    outputTokens * pricing.outputPerM * PER_TOKEN;
+  return { usd, promptTokens, cachedTokens, outputTokens };
+}
+
+/** Worst case for the next request: all input uncached, output at its maximum. */
+export function estimateRequestCostUsd({ promptTokens, maxOutputTokens }, pricing) {
+  return promptTokens * pricing.inputPerM * PER_TOKEN + maxOutputTokens * pricing.outputPerM * PER_TOKEN;
+}
+
+/** Conservative prompt-size guess when no tokenizer is available (~4 chars/token). */
+export function estimateTokensForChars(chars) {
+  return Math.ceil(chars / 4);
+}
+
+/**
+ * A ceiling with an audit trail. `parent` chains a trial budget under the
+ * release budget: charges propagate up, and precheck must clear every level.
+ */
+export function createBudget({ ceilingUsd, label = 'budget', parent = null } = {}) {
+  let spent = 0;
+  let exhausted = false;
+  const events = [];
+
+  const budget = {
+    label,
+    ceilingUsd,
+    get exhausted() {
+      return exhausted;
+    },
+    spentUsd: () => spent,
+    remainingUsd: () => Math.max(0, ceilingUsd - spent),
+    events: () => events.slice(),
+    /** Would spending `estimateUsd` cross this ceiling or any parent's? */
+    precheck(estimateUsd) {
+      if (spent + estimateUsd > ceilingUsd) {
+        exhausted = true;
+        const reason = `budget_exhausted: ${label} ceiling $${ceilingUsd} would be crossed (spent $${spent.toFixed(4)}, next up to $${estimateUsd.toFixed(4)})`;
+        events.push({ type: 'budget_exhausted', label, ceilingUsd, spentUsd: spent, estimateUsd });
+        return { allowed: false, reason };
+      }
+      if (parent) {
+        const up = parent.precheck(estimateUsd);
+        if (!up.allowed) return up;
+      }
+      return { allowed: true, reason: '' };
+    },
+    /** Record real spend. `null`/undefined (unusable usage) charges nothing. */
+    charge(usd, note = '') {
+      if (usd == null) return;
+      if (!(typeof usd === 'number' && Number.isFinite(usd)) || usd < 0) {
+        throw new Error(`budget charge must be a non-negative number, got ${usd}`);
+      }
+      spent += usd;
+      events.push({ type: 'charge', label, usd, note, spentUsd: spent });
+      parent?.charge(usd, note);
+    },
+  };
+  return budget;
+}
