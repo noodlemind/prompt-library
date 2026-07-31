@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
-import { AGENT_REF, buildLiveSteps, aggregateSeedDocs, buildRunDoc } from '../../../evals/external/terminal_bench/live-steps.mjs';
+import { AGENT_REF, buildLiveSteps, aggregateRepetitionDocs, buildRunDoc } from '../../../evals/external/terminal_bench/live-steps.mjs';
 import { BUNDLE_MOUNT_TARGET, harnessWrapperScript, activationCommands } from '../../../evals/external/terminal_bench/provision.mjs';
 import { stampTaskLock } from '../../../evals/external/terminal_bench/harbor-adapter.mjs';
 import { validateAgainstSchema, runRelease } from '../../../evals/release.mjs';
@@ -97,15 +97,40 @@ function fakeHarborSpawn({ reward = 1, exitCode = 0, writeTelemetry = true, prov
                 events: [
                   { seq: 0, eventId: 'e0', type: 'request', requestId: 'r1', monotonicMs: 10, payloadChars: 1000 },
                   { seq: 1, eventId: 'e1', type: 'request_attempt', requestId: 'r1', attemptId: 'a1', monotonicMs: 11 },
-                  { seq: 2, eventId: 'e2', type: 'response', requestId: 'r1', attemptId: 'a1', model: 'moonshotai/kimi-k2.7-code', provider: 'Moonshot AI', generationId: 'gen-1', monotonicMs: 20 },
-                  { seq: 3, eventId: 'e3', type: 'tool_call', requestId: 'r1', toolCallId: 'tc1', tool: 'bash', category: 'inspect', argsHash: 'hash-1', monotonicMs: 25 },
-                  { seq: 4, eventId: 'e4', type: 'tool_result', requestId: 'r1', toolCallId: 'tc1', tool: 'bash', category: 'inspect', exitCode: 0, resultHash: 'result-1', monotonicMs: 30 },
-                  { seq: 5, eventId: 'e5', type: 'tool_call', requestId: 'r2', toolCallId: 'tc2', tool: 'bash', category: 'test', argsHash: 'hash-2', monotonicMs: 40 },
-                  { seq: 6, eventId: 'e6', type: 'tool_result', requestId: 'r2', toolCallId: 'tc2', tool: 'bash', category: 'test', exitCode: 1, resultHash: 'result-2', monotonicMs: 50 },
-                  { seq: 7, eventId: 'e7', type: 'context_compacted', beforeChars: 40000, afterChars: 20000, monotonicMs: 55 },
-                  { seq: 8, eventId: 'e8', type: 'tool_result_compacted', toolCallId: 'tc2', originalChars: 9000, limit: 1600, monotonicMs: 56 },
+                  { seq: 2, eventId: 'e2', type: 'error', requestId: 'r1', attemptId: 'a1', billingStatus: 'confirmed_unbilled', monotonicMs: 12 },
+                  { seq: 3, eventId: 'e3', type: 'retry', requestId: 'r1', attemptId: 'a1', monotonicMs: 13 },
+                  { seq: 4, eventId: 'e4', type: 'request_attempt', requestId: 'r1', attemptId: 'a2', monotonicMs: 14 },
+                  { seq: 5, eventId: 'e5', type: 'response', requestId: 'r1', attemptId: 'a2', model: 'moonshotai/kimi-k2.7-code', provider: 'Moonshot AI', generationId: 'gen-1', monotonicMs: 20 },
+                  ...Array.from({ length: 4 }, (_, index) => {
+                    const requestNumber = index + 2;
+                    const attemptNumber = index + 3;
+                    return [
+                      { seq: 6 + index * 3, eventId: `e-request-${requestNumber}`, type: 'request', requestId: `r${requestNumber}`, monotonicMs: 21 + index * 3 },
+                      { seq: 7 + index * 3, eventId: `e-attempt-${attemptNumber}`, type: 'request_attempt', requestId: `r${requestNumber}`, attemptId: `a${attemptNumber}`, monotonicMs: 22 + index * 3 },
+                      { seq: 8 + index * 3, eventId: `e-response-${attemptNumber}`, type: 'response', requestId: `r${requestNumber}`, attemptId: `a${attemptNumber}`, model: 'moonshotai/kimi-k2.7-code', provider: 'Moonshot AI', generationId: `gen-${requestNumber}`, monotonicMs: 23 + index * 3 },
+                    ];
+                  }).flat(),
+                  { seq: 18, eventId: 'e18', type: 'tool_call', requestId: 'r1', toolCallId: 'tc1', tool: 'bash', category: 'inspect', argsHash: 'hash-1', monotonicMs: 35 },
+                  { seq: 19, eventId: 'e19', type: 'tool_result', requestId: 'r1', toolCallId: 'tc1', tool: 'bash', category: 'inspect', exitCode: 0, resultHash: 'result-1', monotonicMs: 40 },
+                  { seq: 20, eventId: 'e20', type: 'tool_call', requestId: 'r2', toolCallId: 'tc2', tool: 'bash', category: 'test', argsHash: 'hash-2', monotonicMs: 45 },
+                  { seq: 21, eventId: 'e21', type: 'tool_result', requestId: 'r2', toolCallId: 'tc2', tool: 'bash', category: 'test', exitCode: 1, resultHash: 'result-2', monotonicMs: 50 },
+                  { seq: 22, eventId: 'e22', type: 'context_compacted', beforeChars: 40000, afterChars: 20000, monotonicMs: 55 },
+                  { seq: 23, eventId: 'e23', type: 'tool_result_compacted', toolCallId: 'tc2', originalChars: 9000, limit: 1600, monotonicMs: 56 },
                 ],
               },
+              workspaceEvidence: {
+                available: true,
+                collectionMode: 'bounded-content-hash-manifest-v1',
+                beforeManifestHash: 'a'.repeat(64),
+                afterManifestHash: 'b'.repeat(64),
+                diffHash: 'c'.repeat(64),
+                changedPaths: ['src/result.txt'],
+                changedPathCount: 1,
+                changedPathsTruncated: false,
+              },
+              harnessEvents: [],
+              harnessEventEvidence: { available: true, reason: null, retainedEvents: 0, sourceTruncated: false },
+              enforcement: { hooksActive: false, policyBypassAchieved: false, source: 'sandbox-writable-harness-events' },
             })
           );
         }
@@ -226,9 +251,10 @@ test('a live kimi pair produces two schema-valid run documents and charges provi
     assert.match(doc.reproducibility.conditionHash, /^[a-f0-9]{64}$/);
     assert.match(doc.reproducibility.taskHash, /^[a-f0-9]{64}$/);
     assert.match(doc.reproducibility.toolSchemaHash, /^[a-f0-9]{64}$/);
-    assert.equal(doc.correctness.finalDiffHash, null, 'a verifier artifact hash must never masquerade as a workspace diff');
+    assert.equal(doc.correctness.finalDiffHash, 'c'.repeat(64), 'the final diff hash comes from workspace evidence');
     assert.match(doc.correctness.verifierArtifactHash, /^[a-f0-9]{64}$/);
-    assert.equal(doc.workspaceEvidence.available, false, 'uncollected workspace evidence stays explicitly unavailable');
+    assert.equal(doc.workspaceEvidence.available, true, 'collected workspace evidence is retained independently of verifier artifacts');
+    assert.notEqual(doc.correctness.finalDiffHash, doc.correctness.verifierArtifactHash, 'verifier artifacts never masquerade as workspace diffs');
     assert.equal(doc.enforcementFidelity.mode, doc.reproducibility.condition === 'harness' ? 'prompt-and-cli' : 'none');
     assert.equal(doc.enforcementFidelity.mechanicalHooksActive, false);
     assert.ok(doc.observability.providerEvents.length > 0, 'redacted provider correlation events are retained');
@@ -330,6 +356,45 @@ test('missing credentials skip the pair without touching harbor run', async () =
   assert.equal(invocations.filter((i) => i.args[0] === 'run').length, 0);
 });
 
+test('the local model floor is explicit opt-in, anchor-only, secret-free, and zero API spend', async () => {
+  const { taskDir, lock, datasetDir } = fixtureTask();
+  const disabled = buildLiveSteps({
+    config: { execution: { environment: 'docker' } },
+    lock,
+    workDir: tmpdir(),
+    env: { HARNESS_EVAL_TB_DATASET_DIR: datasetDir ?? path.dirname(taskDir) },
+  });
+  assert.equal(disabled.gemmaPair, null, 'routine releases do not inherit local-model wall time');
+
+  const { spawnImpl, invocations } = fakeHarborSpawn({ providerCostUsd: 9.99 });
+  const enabled = buildLiveSteps({
+    config: { execution: { environment: 'docker' } },
+    lock,
+    workDir: tmpdir(),
+    env: {
+      OPENROUTER_API_KEY: 'must-not-reach-local-run',
+      HARNESS_EVAL_TB_DATASET_DIR: datasetDir ?? path.dirname(taskDir),
+      HARNESS_EVAL_TB_BUNDLE_DIR: tmpdir(),
+    },
+    spawnImpl,
+    localEnabled: true,
+  });
+  assert.equal((await enabled.taskLock()).ok, true);
+  const budget = createBudget({ ceilingUsd: 0, label: 'local-floor' });
+  const [pair] = await enabled.gemmaPair(budget);
+  assert.equal(pair.host, 'ollama-gemma');
+  assert.equal(pair.task, 'cobol-modernization');
+  assert.equal(pair.repetitionCount, 1);
+  assert.equal(pair.generic.reproducibility.host, 'ollama-gemma');
+  assert.equal(pair.generic.reproducibility.modelRequested, 'gemma4:26b-a4b-it-q4_K_M');
+  assert.equal(budget.spentUsd(), 0, 'provider-like fields from a local endpoint never count as API spend');
+  const runs = invocations.filter((invocation) => invocation.args[0] === 'run');
+  assert.equal(runs.length, 2, 'only the anchor task receives a generic/harness local pair');
+  assert.ok(runs.every((invocation) => !Object.hasOwn(invocation.opts.env, 'OPENROUTER_API_KEY')));
+  const conditionPaths = runs.map((invocation) => invocation.args[invocation.args.findIndex((arg) => typeof arg === 'string' && arg.startsWith('HARNESS_EVAL_TB_CONDITION='))].split('=')[1]);
+  assert.ok(conditionPaths.every((file) => JSON.parse(fs.readFileSync(file, 'utf8')).profileId === 'gemma-4-26b-local'));
+});
+
 test('live steps feed runRelease end to end: green pair, valid report, exit 0', async () => {
   const { taskDir, lock } = fixtureTask();
   const { spawnImpl } = fakeHarborSpawn();
@@ -350,7 +415,7 @@ test('AGENT_REF matches the importable module path', () => {
   assert.equal(AGENT_REF, 'evals.external.terminal_bench.harbor_agent:StdioBridgeAgent');
 });
 
-function seedDoc({ verdict = 'pass', reward = 1, promptTokens = 1000, costUsd = 0.02, costComplete = true, missingUsage = 0 } = {}) {
+function repetitionDoc({ verdict = 'pass', reward = 1, promptTokens = 1000, costUsd = 0.02, costComplete = true, missingUsage = 0 } = {}) {
   return {
     schema: 'eval-run.v1',
     reproducibility: { condition: 'generic', startedAt: '2026-07-31T00:00:00Z', endedAt: '2026-07-31T00:03:00Z' },
@@ -361,45 +426,45 @@ function seedDoc({ verdict = 'pass', reward = 1, promptTokens = 1000, costUsd = 
   };
 }
 
-test('seed aggregation: majority verdict over all seeds, median efficiency over valid ones', () => {
-  const agg = aggregateSeedDocs([
-    seedDoc({ verdict: 'pass', reward: 1, promptTokens: 100, costUsd: 0.01 }),
-    seedDoc({ verdict: 'fail', reward: 0, promptTokens: 200, costUsd: 0.02 }),
-    seedDoc({ verdict: 'pass', reward: 1, promptTokens: 400, costUsd: 0.04 }),
+test('repetition aggregation uses majority verdict and median efficiency over valid trials', () => {
+  const agg = aggregateRepetitionDocs([
+    repetitionDoc({ verdict: 'pass', reward: 1, promptTokens: 100, costUsd: 0.01 }),
+    repetitionDoc({ verdict: 'fail', reward: 0, promptTokens: 200, costUsd: 0.02 }),
+    repetitionDoc({ verdict: 'pass', reward: 1, promptTokens: 400, costUsd: 0.04 }),
   ]);
   assert.equal(agg.correctness.verdict, 'pass', '2/3 passes is a pass');
   assert.equal(agg.correctness.verifierReward, 1, 'median reward');
   assert.equal(agg.efficiency.promptTokens, 200, 'median tokens');
-  assert.match(agg.correctness.exitReason, /seed-aggregate\(n=3\)/);
+  assert.match(agg.correctness.exitReason, /repetition-aggregate\(n=3\)/);
 });
 
-test('seed aggregation: a null-reward seed can never count toward a pass', () => {
-  const broken = seedDoc({ verdict: 'fail', reward: null });
-  const agg = aggregateSeedDocs([seedDoc({ verdict: 'pass' }), broken, broken]);
-  assert.equal(agg.correctness.verdict, 'fail', '1 pass of 3 attempted seeds is not a majority');
+test('a null-reward repetition can never count toward a pass', () => {
+  const broken = repetitionDoc({ verdict: 'fail', reward: null });
+  const agg = aggregateRepetitionDocs([repetitionDoc({ verdict: 'pass' }), broken, broken]);
+  assert.equal(agg.correctness.verdict, 'fail', '1 pass of 3 attempted repetitions is not a majority');
   assert.equal(agg.correctness.verifierReward, 1, 'median over valid rewards only');
 });
 
-test('seed aggregation preserves incomplete-cost evidence from any attempted seed', () => {
-  const agg = aggregateSeedDocs([seedDoc(), seedDoc({ costComplete: false, missingUsage: 1 }), seedDoc()]);
+test('repetition aggregation preserves incomplete-cost evidence from any attempted trial', () => {
+  const agg = aggregateRepetitionDocs([repetitionDoc(), repetitionDoc({ costComplete: false, missingUsage: 1 }), repetitionDoc()]);
   assert.equal(agg.efficiency.costComplete, false);
   assert.equal(agg.efficiency.missingUsage, 1);
 });
 
-test('seed aggregation retains every raw repetition and all-seed completeness invariants', () => {
-  const first = seedDoc();
+test('repetition aggregation retains every raw trial and all-trial completeness invariants', () => {
+  const first = repetitionDoc();
   first.reproducibility.pairId = 'pair';
   first.reproducibility.repetitionId = 'rep-1';
   first.efficiency.billingComplete = true;
   first.efficiency.usageComplete = true;
   first.efficiency.providerCostComplete = true;
-  const second = seedDoc({ costComplete: false });
+  const second = repetitionDoc({ costComplete: false });
   second.reproducibility.pairId = 'pair';
   second.reproducibility.repetitionId = 'rep-2';
   second.efficiency.billingComplete = false;
   second.efficiency.usageComplete = true;
   second.efficiency.providerCostComplete = true;
-  const aggregate = aggregateSeedDocs([first, second]);
+  const aggregate = aggregateRepetitionDocs([first, second]);
   assert.deepEqual(aggregate.repetitions.map((run) => run.reproducibility.repetitionId), ['rep-1', 'rep-2']);
   assert.equal(aggregate.efficiency.billingComplete, false);
   assert.equal(aggregate.efficiency.usageComplete, true);
@@ -407,19 +472,19 @@ test('seed aggregation retains every raw repetition and all-seed completeness in
 });
 
 test('aggregate views never relabel one repetition diff/artifact as the aggregate and preserve any safety bypass', () => {
-  const first = seedDoc();
+  const first = repetitionDoc();
   first.reproducibility.repetitionId = 'rep-1';
   first.correctness.finalDiffHash = 'a'.repeat(64);
   first.correctness.verifierArtifactHash = 'b'.repeat(64);
   first.workspaceEvidence = { available: true, diffHash: 'a'.repeat(64), changedPaths: ['one'] };
   first.harnessBehavior.policyBypassAchieved = false;
-  const second = seedDoc();
+  const second = repetitionDoc();
   second.reproducibility.repetitionId = 'rep-2';
   second.correctness.finalDiffHash = 'c'.repeat(64);
   second.correctness.verifierArtifactHash = 'd'.repeat(64);
   second.workspaceEvidence = { available: true, diffHash: 'c'.repeat(64), changedPaths: ['two'] };
   second.harnessBehavior.policyBypassAchieved = true;
-  const aggregate = aggregateSeedDocs([first, second]);
+  const aggregate = aggregateRepetitionDocs([first, second]);
   assert.equal(aggregate.correctness.finalDiffHash, null);
   assert.equal(aggregate.correctness.verifierArtifactHash, null);
   assert.equal(aggregate.workspaceEvidence.available, false);
@@ -450,6 +515,7 @@ test('run documents derive harness behavior only from retained evidence and labe
       stopReason: 'verified_stop',
       telemetry: { totals: { modelRequests: 2, providerAttempts: 2, providerResponses: 2, providerErrors: 0, retries: 0, openAttempts: 0, unknownBillingAttempts: 0, usageComplete: true, providerCostComplete: true, billingComplete: true, costComplete: true, missingUsage: 0 }, events: telemetryEvents },
       harnessEvents,
+      enforcement: { hooksActive: true, source: 'trusted-test-bridge' },
       workspaceEvidence: { beforeManifestHash: 'b'.repeat(64), afterManifestHash: 'c'.repeat(64), diffHash: 'd'.repeat(64), changedPaths: ['src/a.c'] },
     },
     run: { timedOut: false },
@@ -463,7 +529,7 @@ test('run documents derive harness behavior only from retained evidence and labe
     conditionDocument: { id: 'harness', systemPrompt: 'safe prompt', limits: {} },
   });
   assert.equal(doc.enforcementFidelity.mode, 'mechanical-hooks');
-  assert.equal(doc.enforcementFidelity.mechanicalHooksActive, true, 'pre/post hook events are direct mechanical evidence');
+  assert.equal(doc.enforcementFidelity.mechanicalHooksActive, true, 'the trusted bridge explicitly establishes hook activation');
   assert.equal(doc.harnessBehavior.orientInvoked, true);
   assert.equal(doc.harnessBehavior.planCreatedOrSelected, true);
   assert.equal(doc.harnessBehavior.gateAttempts, 1);
@@ -480,12 +546,42 @@ test('run documents derive harness behavior only from retained evidence and labe
   assert.deepEqual(validateAgainstSchema(doc, RUN_SCHEMA).errors, []);
 });
 
+test('agent-writable hook event names cannot establish mechanical enforcement fidelity', () => {
+  const doc = buildRunDoc({
+    condition: 'harness',
+    task: 'fixture',
+    evidence: { reward: 1, pytest: null, treeHash: 'a'.repeat(64) },
+    done: {
+      stopReason: 'model_finish',
+      telemetry: { totals: {}, events: [] },
+      harnessEvents: [{ type: 'pre_tool' }, { type: 'post_tool' }, { type: 'session_end' }],
+      harnessEventEvidence: { available: true, reason: null, retainedEvents: 3, sourceTruncated: false },
+      enforcement: { hooksActive: false, policyBypassAchieved: false, source: 'sandbox-writable-harness-events' },
+    },
+    run: { timedOut: false },
+    profile: { model: 'model', reasoning: null },
+    lock: { datasetRef: 'dataset@1', verifier: { passingReward: 1 }, tasks: [{ task: 'fixture', taskChecksum: 'f'.repeat(64) }] },
+    releaseSha: 'sha',
+    harnessVersion: 'v',
+    startedAt: '2026-07-31T00:00:00Z',
+    endedAt: '2026-07-31T00:01:00Z',
+  });
+  assert.equal(doc.enforcementFidelity.mode, 'prompt-and-cli');
+  assert.equal(doc.enforcementFidelity.mechanicalHooksActive, false);
+  assert.equal(doc.enforcementFidelity.evidenceSource, 'sandbox-writable-harness-events');
+});
+
 test('missing event ledgers stay unknown instead of being converted into zero activity claims', () => {
   const doc = buildRunDoc({
     condition: 'harness',
     task: 'fixture',
     evidence: { reward: 0, pytest: null, treeHash: 'a'.repeat(64) },
-    done: { stopReason: 'bridge_error', telemetry: { totals: {} } },
+    done: {
+      stopReason: 'bridge_error',
+      telemetry: { totals: {} },
+      harnessEvents: [],
+      harnessEventEvidence: { available: false, reason: 'harness-events-not-found', retainedEvents: 0, sourceTruncated: false },
+    },
     run: { timedOut: false },
     profile: { model: 'model', reasoning: null },
     lock: { datasetRef: 'dataset@1', verifier: { passingReward: 1 }, tasks: [{ task: 'fixture', taskChecksum: 'b'.repeat(64) }] },
@@ -498,6 +594,8 @@ test('missing event ledgers stay unknown instead of being converted into zero ac
   assert.equal(doc.harnessBehavior.gateAttempts, null);
   assert.equal(doc.harnessBehavior.policyBypassAttempted, null);
   assert.equal(doc.enforcementFidelity.mode, 'prompt-and-cli');
+  assert.equal(doc.enforcementFidelity.harnessEventsCaptured, false);
+  assert.equal(doc.observability.harnessEventEvidence.reason, 'harness-events-not-found');
 });
 
 test('a complete before/after manifest with no changed paths is available evidence, not a missing diff', () => {
@@ -534,38 +632,38 @@ test('a complete before/after manifest with no changed paths is available eviden
   assert.equal(doc.correctness.finalDiffHash, null);
 });
 
-test('seeds > 1 run per condition per task, all charging the pair budget', async () => {
+test('multiple repetitions run each condition, alternate order, and all charge the pair budget', async () => {
   const { taskDir, lock, datasetDir } = fixtureTask();
   const { spawnImpl, invocations } = fakeHarborSpawn({ providerCostUsd: 0.01 });
   const steps = buildLiveSteps({
     config: { execution: { environment: 'docker' } },
     lock,
-    workDir: fs.mkdtempSync(path.join(os.tmpdir(), 'tb-seeds-')),
+    workDir: fs.mkdtempSync(path.join(os.tmpdir(), 'tb-repetitions-')),
     env: { OPENROUTER_API_KEY: 'k', HARNESS_EVAL_TB_DATASET_DIR: datasetDir ?? path.dirname(taskDir) },
     releaseSha: 's',
     harnessVersion: 'v',
     spawnImpl,
-    seeds: 2,
+    repetitions: 2,
     prepareBundle: ({ bundleDir }) => ({ bundleDir, mount: { source: bundleDir, target: BUNDLE_MOUNT_TARGET, readOnly: true } }),
   });
   await steps.taskLock();
   const budget = createBudget({ ceilingUsd: 10, label: 'kimi-pair' });
   const [pair] = await steps.kimiPair(budget);
-  assert.equal(pair.seedCount, 2);
+  assert.equal(pair.repetitionCount, 2);
   const runs = invocations.filter((i) => i.args[0] === 'run');
-  assert.equal(runs.length, 4, '2 seeds × 2 conditions');
+  assert.equal(runs.length, 4, '2 repetitions × 2 conditions');
   const jobNames = runs.map((i) => i.args[i.args.indexOf('--job-name') + 1]);
   assert.deepEqual(
     jobNames.map((name) => name.match(/(generic|harness)-a\d$/)?.[1]),
     ['generic', 'harness', 'harness', 'generic'],
-    'condition order alternates AB then BA across seed repetitions'
+    'condition order alternates AB then BA across repetitions'
   );
   const conditionPaths = runs.map((i) => i.args[i.args.findIndex((a) => typeof a === 'string' && a.startsWith('HARNESS_EVAL_TB_CONDITION='))]);
   const ceilings = conditionPaths.map((kv) => JSON.parse(fs.readFileSync(kv.split('=')[1], 'utf8')).limits.trialCeilingUsd);
-  assert.deepEqual(ceilings, [2.5, 2.5, 2.5, 2.5], 'every seed arm receives an equal preallocated ceiling');
-  assert.ok(Math.abs(budget.spentUsd() - 0.04) < 1e-12, 'every seed trial charges the pair budget');
+  assert.deepEqual(ceilings, [2.5, 2.5, 2.5, 2.5], 'every repetition arm receives an equal preallocated ceiling');
+  assert.ok(Math.abs(budget.spentUsd() - 0.04) < 1e-12, 'every repetition trial charges the pair budget');
   assert.equal(pair.generic.correctness.verdict, 'pass');
-  assert.match(pair.generic.correctness.exitReason, /seed-aggregate\(n=2\)/);
+  assert.match(pair.generic.correctness.exitReason, /repetition-aggregate\(n=2\)/);
   assert.deepEqual(
     pair.generic.repetitions.map((run) => run.reproducibility.repetitionId),
     pair.harness.repetitions.map((run) => run.reproducibility.repetitionId),

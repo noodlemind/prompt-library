@@ -2,7 +2,7 @@
   "$id": "eval-run.v1",
   "title": "One eval trial (one condition of one A/B pair)",
   "type": "object",
-  "required": ["schema", "reproducibility", "correctness", "efficiency", "harnessBehavior", "subscription"],
+  "required": ["schema", "reproducibility", "correctness", "efficiency", "harnessBehavior", "enforcementFidelity", "workspaceEvidence", "observability", "repetitions", "subscription"],
   "properties": {
     "schema": { "const": "eval-run.v1" },
     "reproducibility": {
@@ -22,7 +22,19 @@
         "runnerVersion",
         "sandbox",
         "startedAt",
-        "endedAt"
+        "endedAt",
+        "pairId",
+        "repetitionId",
+        "repetitionIndex",
+        "orderIndex",
+        "attempt",
+        "aggregation",
+        "taskHash",
+        "conditionHash",
+        "systemPromptHash",
+        "toolSchemaHash",
+        "telemetryHash",
+        "harnessEventsHash"
       ],
       "properties": {
         "releaseSha": { "type": "string" },
@@ -56,7 +68,7 @@
     },
     "correctness": {
       "type": "object",
-      "required": ["verifierReward", "verdict", "exitReason", "completedWithinTimeout", "completedWithinBudget"],
+      "required": ["verifierReward", "verdict", "finalDiffHash", "verifierArtifactHash", "exitReason", "completedWithinTimeout", "completedWithinBudget"],
       "properties": {
         "verifierReward": { "type": ["number", "null"] },
         "verdict": { "enum": ["pass", "fail"] },
@@ -75,15 +87,28 @@
       "required": [
         "wallTimeMs",
         "modelRequests",
+        "providerAttempts",
+        "providerResponses",
+        "providerErrors",
+        "openProviderAttempts",
+        "unknownBillingAttempts",
         "toolCalls",
         "terminalCommands",
         "failedCommands",
+        "retries",
+        "contextCompactions",
+        "compactedToolResults",
+        "requestPayloadChars",
+        "peakRequestPayloadChars",
         "promptTokens",
         "cachedPromptTokens",
         "reasoningTokens",
         "outputTokens",
         "providerReportedCostUsd",
         "localCostUsd",
+        "usageComplete",
+        "providerCostComplete",
+        "billingComplete",
         "costComplete",
         "missingUsage"
       ],
@@ -181,11 +206,21 @@
     },
     "observability": {
       "type": "object",
-      "required": ["providerEvents", "toolEvents", "harnessEvents", "providerAttemptsStarted", "providerAttemptsClosed", "unclosedProviderAttempts", "correlatedToolResults", "uncorrelatedToolResults", "eventEvidenceHash"],
+      "required": ["providerEvents", "toolEvents", "harnessEvents", "harnessEventEvidence", "providerAttemptsStarted", "providerAttemptsClosed", "unclosedProviderAttempts", "correlatedToolResults", "uncorrelatedToolResults", "eventEvidenceHash"],
       "properties": {
         "providerEvents": { "type": "array", "items": { "type": "object" } },
         "toolEvents": { "type": "array", "items": { "type": "object" } },
         "harnessEvents": { "type": "array", "items": { "type": "object" } },
+        "harnessEventEvidence": {
+          "type": "object",
+          "required": ["available", "reason", "retainedEvents", "sourceTruncated"],
+          "properties": {
+            "available": { "type": "boolean" },
+            "reason": { "type": ["string", "null"] },
+            "retainedEvents": { "type": "number" },
+            "sourceTruncated": { "type": "boolean" }
+          }
+        },
         "providerAttemptsStarted": { "type": "number" },
         "providerAttemptsClosed": { "type": "number" },
         "unclosedProviderAttempts": { "type": "number" },

@@ -18,6 +18,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { createHost as createKimiHost } from '../../hosts/openrouter-kimi.mjs';
+import { createHost as createGemmaHost } from '../../hosts/ollama-gemma.mjs';
 import { buildHarborRunArgs, jobDirFor, runHarbor, verifyTaskAgainstLock, classifyFailure, tasksOf } from './harbor-adapter.mjs';
 import { collectVerifierEvidence, verdictFromReward } from './verifier.mjs';
 import { buildGenericCondition } from './generic-condition.mjs';
@@ -101,9 +102,20 @@ function workspaceEvidenceOf(done) {
 }
 
 function harnessEventsOf(done) {
+  if (done?.harnessEventEvidence?.available === false) return null;
   const source = done?.harnessEvents ?? done?.evidence?.harnessEvents;
   const events = Array.isArray(source) ? source : Array.isArray(source?.events) ? source.events : null;
   return events ? events.filter((event) => event && typeof event === 'object').slice(-200) : null;
+}
+
+function harnessEventEvidenceOf(done, harnessEvents) {
+  const source = done?.harnessEventEvidence;
+  return {
+    available: typeof source?.available === 'boolean' ? source.available : Array.isArray(harnessEvents),
+    reason: source?.reason ?? (Array.isArray(harnessEvents) ? null : 'harness-events-not-captured'),
+    retainedEvents: Number.isFinite(source?.retainedEvents) ? Math.max(0, source.retainedEvents) : harnessEvents?.length ?? 0,
+    sourceTruncated: source?.sourceTruncated === true,
+  };
 }
 
 function deriveHarnessBehavior(condition, telemetryEvents, harnessEvents, done, telemetryLedgerPresent) {
@@ -177,10 +189,10 @@ function deriveHarnessBehavior(condition, telemetryEvents, harnessEvents, done, 
 }
 
 function enforcementFidelityOf(condition, done, harnessEvents) {
-  const mechanicalHooksActive = Boolean(
-    done?.enforcement?.hooksActive === true ||
-      harnessEvents?.some((event) => ['pre_tool', 'post_tool', 'session_end'].includes(event.type))
-  );
+  // Harness event files live in the evaluated workspace and are therefore
+  // agent-writable. Only the trusted bridge's explicit enforcement result can
+  // establish mechanical fidelity; event names alone are behavioral evidence.
+  const mechanicalHooksActive = done?.enforcement?.hooksActive === true;
   return {
     // If hooks unexpectedly appear in the control arm, report that
     // contamination instead of forcing the intended `none` label.
@@ -189,7 +201,7 @@ function enforcementFidelityOf(condition, done, harnessEvents) {
     cliActivated: condition === 'harness' ? Boolean(done) : false,
     mechanicalHooksActive,
     harnessEventsCaptured: Array.isArray(harnessEvents),
-    evidenceSource: mechanicalHooksActive ? 'exported-harness-events' : condition === 'harness' ? 'condition-and-setup' : 'control-condition',
+    evidenceSource: done?.enforcement?.source ?? (mechanicalHooksActive ? 'trusted-bridge' : condition === 'harness' ? 'condition-and-setup' : 'control-condition'),
   };
 }
 
@@ -251,13 +263,13 @@ function efficiencyOf(done, startedAt, endedAt) {
 }
 
 /**
- * Collapse one condition's seed documents into a single schema-valid document:
- * majority verdict over ALL attempted seeds (a null-reward seed can never
- * count toward a pass), median reward over valid seeds, median per numeric
- * efficiency field. Budget charging is untouched — every seed trial charges
+ * Collapse one condition's repetition documents into one schema-valid view:
+ * majority verdict over ALL attempts (a null-reward repetition can never
+ * count toward a pass), median reward over valid repetitions, and the median
+ * per numeric efficiency field. Budget charging is untouched — every trial charges
  * as it runs; the aggregate represents a typical trial, not the sum.
  */
-export function aggregateSeedDocs(docs) {
+export function aggregateRepetitionDocs(docs) {
   if (!docs.length) throw new Error('at least one repetition document is required');
   const rawRepetitions = docs.map((doc) => {
     const copy = structuredClone(doc);
@@ -281,13 +293,13 @@ export function aggregateSeedDocs(docs) {
   delete base.repetitions;
   base.correctness.verdict = passes >= Math.ceil(docs.length / 2) ? 'pass' : 'fail';
   base.correctness.verifierReward = median(valid.map((d) => d.correctness.verifierReward));
-  base.correctness.exitReason = `seed-aggregate(n=${docs.length})`;
+  base.correctness.exitReason = `repetition-aggregate(n=${docs.length})`;
   base.correctness.completedWithinTimeout = docs.every((d) => d.correctness?.completedWithinTimeout !== false);
   base.correctness.completedWithinBudget = docs.every((d) => d.correctness?.completedWithinBudget !== false);
   for (const key of Object.keys(base.efficiency ?? {})) {
     base.efficiency[key] = median(docs.map((d) => d.efficiency?.[key]));
   }
-  // Cost completeness is an all-seeds invariant, not a typical/median value:
+  // Cost completeness is an all-repetitions invariant, not a typical/median value:
   // one unmetered paid response invalidates the aggregate's spend evidence.
   base.efficiency.costComplete = docs.every((d) => d.efficiency?.costComplete === true);
   for (const key of ['usageComplete', 'providerCostComplete', 'billingComplete']) {
@@ -355,6 +367,14 @@ export function aggregateSeedDocs(docs) {
       providerEvents,
       toolEvents,
       harnessEvents,
+      harnessEventEvidence: {
+        available: observed.every((doc) => doc.observability.harnessEventEvidence?.available === true),
+        reason: observed.every((doc) => doc.observability.harnessEventEvidence?.available === true)
+          ? null
+          : 'one-or-more-repetitions-missing-harness-events',
+        retainedEvents: harnessEvents.length,
+        sourceTruncated: observed.some((doc) => doc.observability.harnessEventEvidence?.sourceTruncated === true),
+      },
       providerAttemptsStarted: sum('providerAttemptsStarted'),
       providerAttemptsClosed: sum('providerAttemptsClosed'),
       unclosedProviderAttempts: sum('unclosedProviderAttempts'),
@@ -377,6 +397,10 @@ export function aggregateSeedDocs(docs) {
   return base;
 }
 
+// Compatibility for internal callers created before repetitions were named
+// accurately. No provider seed is sent by this runner.
+export const aggregateSeedDocs = aggregateRepetitionDocs;
+
 /** One trial's eval-run.v1 document, from harbor + verifier + bridge evidence. */
 export function buildRunDoc({
   condition,
@@ -392,12 +416,14 @@ export function buildRunDoc({
   endedAt,
   identity = {},
   conditionDocument = null,
+  hostId = 'openrouter-kimi',
 }) {
   const telemetryLedgerPresent = Array.isArray(done?.telemetry?.events);
   const telemetryEvents = telemetryLedgerPresent ? done.telemetry.events : [];
   const lastResponse = telemetryEvents.filter((e) => e.type === 'response').at(-1) ?? null;
   const stopReason = done?.stopReason ?? (run.timedOut ? 'timeout' : 'unknown');
   const harnessEvents = harnessEventsOf(done);
+  const harnessEventEvidence = harnessEventEvidenceOf(done, harnessEvents);
   const workspaceEvidence = workspaceEvidenceOf(done);
   const providerEvents = telemetryEvents.filter((event) => PROVIDER_EVENT_TYPES.has(event.type));
   const toolEvents = telemetryEvents.filter((event) => TOOL_EVENT_TYPES.has(event.type));
@@ -435,7 +461,7 @@ export function buildRunDoc({
       modelRequested: profile.model,
       modelResolved: lastResponse?.model ?? null,
       providerResolved: lastResponse?.provider ?? null,
-      host: 'openrouter-kimi',
+      host: hostId,
       reasoningConfig: profile.reasoning,
       runnerVersion: '1',
       sandbox: null,
@@ -446,6 +472,7 @@ export function buildRunDoc({
       repetitionIndex: identity.repetitionIndex ?? null,
       orderIndex: identity.orderIndex ?? null,
       attempt: identity.attempt ?? null,
+      aggregation: null,
       taskHash,
       conditionHash,
       systemPromptHash,
@@ -473,6 +500,7 @@ export function buildRunDoc({
       providerEvents,
       toolEvents,
       harnessEvents: harnessEvents ?? [],
+      harnessEventEvidence,
       providerAttemptsStarted: attempts.length,
       providerAttemptsClosed: attempts.filter((event) => terminalAttemptIds.has(event.attemptId)).length,
       unclosedProviderAttempts: attempts.filter((event) => !terminalAttemptIds.has(event.attemptId)).length,
@@ -480,6 +508,7 @@ export function buildRunDoc({
       uncorrelatedToolResults: toolResults.filter((event) => !toolCallKeys.has(`${event.requestId ?? ''}:${event.toolCallId ?? ''}`)).length,
       eventEvidenceHash: stableHash({ providerEvents, toolEvents, harnessEvents: harnessEvents ?? [] }),
     },
+    repetitions: [],
     subscription: null,
   };
 }
@@ -494,18 +523,21 @@ export function buildLiveSteps({
   spawnImpl,
   now = () => new Date().toISOString(),
   prepareBundle = prepareHarnessBundle,
-  seeds = 1,
+  repetitions = null,
+  seeds = null,
+  localEnabled = false,
 }) {
+  const repetitionCount = repetitions ?? seeds ?? 1;
   // ?? null: an absent key must NOT fall back to the process environment —
   // the injected env is the whole truth for credential decisions here.
-  const host = createKimiHost({ apiKey: env.OPENROUTER_API_KEY ?? null });
-  const profile = host.profile;
-  const limits = {
+  const kimiHost = createKimiHost({ apiKey: env.OPENROUTER_API_KEY ?? null });
+  const gemmaHost = createGemmaHost();
+  const limitsFor = (profile) => ({
     maxSteps: 60,
     timeoutMs: profile.timeoutMs,
     maxOutputTokens: profile.maxTokens,
     trialCeilingUsd: profile.trialCeilingUsd,
-  };
+  });
   let datasetDir = null;
   let bundle = null;
 
@@ -513,7 +545,7 @@ export function buildLiveSteps({
     const missing = [];
     const probe = runHarbor({ args: ['--version'], cwd: workDir, spawnImpl, timeoutMs: 60_000, spawnEnv: harborSpawnEnv(null) });
     if (probe.spawnError || probe.code !== 0) missing.push('harbor CLI');
-    missing.push(...host.validateCredentials().missing);
+    missing.push(...kimiHost.validateCredentials().missing);
     return { ok: missing.length === 0, missing };
   }
 
@@ -544,21 +576,22 @@ export function buildLiveSteps({
     return { ok: true, reason: '' };
   }
 
-  function runTrial({ condition, budget, label, task, identity }) {
+  function runTrial({ evalHost, condition, budget, label, task, identity }) {
+    const profile = evalHost.profile;
     const conditionPath = path.join(workDir, `${task}-${label}.condition.json`);
     const telemetryFile = path.join(workDir, `${task}-${label}.done.json`);
     const trialCeilingUsd = Math.min(profile.trialCeilingUsd, budget.remainingUsd());
     const conditionDocument = {
       ...condition,
       profileId: profile.id,
-      apiKeyEnv: 'OPENROUTER_API_KEY',
+      apiKeyEnv: evalHost.id === 'openrouter-kimi' ? 'OPENROUTER_API_KEY' : 'HARNESS_EVAL_LOCAL_API_KEY',
       limits: { ...condition.limits, trialCeilingUsd },
     };
     fs.writeFileSync(
       conditionPath,
       JSON.stringify(conditionDocument, null, 2)
     );
-    const jobName = `kimi-${task}-${label}`;
+    const jobName = `${evalHost.id}-${task}-${label}`;
     const jobsDir = path.join(workDir, 'jobs');
     const startedAt = now();
     const run = runHarbor({
@@ -579,7 +612,7 @@ export function buildLiveSteps({
       cwd: workDir,
       spawnImpl,
       timeoutMs: profile.timeoutMs + 10 * 60_000,
-      spawnEnv: harborSpawnEnv(env.OPENROUTER_API_KEY),
+      spawnEnv: harborSpawnEnv(evalHost.id === 'openrouter-kimi' ? env.OPENROUTER_API_KEY : null),
     });
     const endedAt = now();
     const jobDir = jobDirFor({ jobsDir, jobName });
@@ -597,10 +630,14 @@ export function buildLiveSteps({
     // Provider-reported spend is the ledger of record; locally calculated
     // cost is the fallback. A missing ledger charges nothing and instead
     // fails the release through the metered-telemetry gate.
-    const reconciledCost = totals?.providerCostComplete === true && totals?.providerCostUsd != null
-      ? totals.providerCostUsd
-      : totals?.localCostUsd ?? null;
-    budget.charge(reconciledCost, `kimi ${label}`);
+    const pricing = profile.pricing ?? {};
+    const isPaidProfile = [pricing.inputPerM, pricing.cachedInputPerM, pricing.outputPerM].some((value) => Number(value) > 0);
+    const reconciledCost = isPaidProfile
+      ? totals?.providerCostComplete === true && totals?.providerCostUsd != null
+        ? totals.providerCostUsd
+        : totals?.localCostUsd ?? null
+      : 0;
+    budget.charge(reconciledCost, `${evalHost.id} ${label}`);
     const failureKind = classifyFailure({
       run,
       reward: evidence.reward,
@@ -622,15 +659,18 @@ export function buildLiveSteps({
       endedAt,
       identity,
       conditionDocument,
+      hostId: evalHost.id,
     });
     return { doc, failureKind };
   }
 
-  function taskPair({ task, budget, attempt, trialCeilingUsd, n = seeds }) {
-    const seedRuns = [];
-    const pairId = shortHash({ schema: 'eval-pair.v1', releaseSha, host: host.id, task, attempt });
-    for (let seed = 1; seed <= n; seed += 1) {
-      const suffix = n > 1 ? `${attempt}${seed}` : attempt;
+  function taskPair({ evalHost, task, budget, attempt, trialCeilingUsd, n = repetitionCount }) {
+    const profile = evalHost.profile;
+    const limits = limitsFor(profile);
+    const repetitionRuns = [];
+    const pairId = shortHash({ schema: 'eval-pair.v1', releaseSha, host: evalHost.id, task, attempt });
+    for (let repetition = 1; repetition <= n; repetition += 1) {
+      const suffix = n > 1 ? `${attempt}${repetition}` : attempt;
       const guidanceCatalog = buildGuidanceCatalog();
       const conditions = {
         generic: buildGenericCondition({ instruction: INSTRUCTION_PLACEHOLDER, limits }),
@@ -645,9 +685,9 @@ export function buildLiveSteps({
         },
       };
       const results = {};
-      // Primary seeds alternate AB/BA; the one-seed regression rerun reverses
+      // Primary repetitions alternate AB/BA; the one-repetition regression rerun reverses
       // the original order. Fixed per-arm budgets keep either order equivalent.
-      const genericFirst = (seed + (attempt === 'b' ? 1 : 0)) % 2 === 1;
+      const genericFirst = (repetition + (attempt === 'b' ? 1 : 0)) % 2 === 1;
       const order = genericFirst ? ['generic', 'harness'] : ['harness', 'generic'];
       for (const [orderOffset, conditionId] of order.entries()) {
         const trialBudget = createBudget({
@@ -656,39 +696,40 @@ export function buildLiveSteps({
           parent: budget,
         });
         results[conditionId] = runTrial({
+          evalHost,
           condition: conditions[conditionId],
           budget: trialBudget,
           label: `${conditionId}-${suffix}`,
           task,
           identity: {
             pairId,
-            repetitionId: shortHash({ pairId, seed }),
-            repetitionIndex: seed,
+            repetitionId: shortHash({ pairId, repetition }),
+            repetitionIndex: repetition,
             orderIndex: orderOffset + 1,
             attempt,
           },
         });
       }
       const { generic, harness } = results;
-      seedRuns.push({ generic, harness });
+      repetitionRuns.push({ generic, harness });
     }
-    // A pair is invalid only when a majority of its seeds failed to produce a
-    // valid trial; otherwise the surviving seeds carry the verdict.
-    const kinds = seedRuns.map((r) => r.generic.failureKind ?? r.harness.failureKind);
-    const validSeeds = kinds.filter((k) => !k).length;
+    // A pair is invalid only when a majority of its repetitions failed to
+    // produce a valid trial; otherwise the surviving trials carry the verdict.
+    const kinds = repetitionRuns.map((r) => r.generic.failureKind ?? r.harness.failureKind);
+    const validRepetitions = kinds.filter((k) => !k).length;
     let failureKind = null;
-    if (validSeeds < Math.ceil(kinds.length / 2)) {
+    if (validRepetitions < Math.ceil(kinds.length / 2)) {
       const counts = {};
       for (const kind of kinds.filter(Boolean)) counts[kind] = (counts[kind] ?? 0) + 1;
       failureKind = Object.entries(counts).sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
     }
     return {
-      host: host.id,
+      host: evalHost.id,
       task,
       pairId,
-      seedCount: n,
-      generic: aggregateSeedDocs(seedRuns.map((r) => r.generic.doc)),
-      harness: aggregateSeedDocs(seedRuns.map((r) => r.harness.doc)),
+      repetitionCount: n,
+      generic: aggregateRepetitionDocs(repetitionRuns.map((r) => r.generic.doc)),
+      harness: aggregateRepetitionDocs(repetitionRuns.map((r) => r.harness.doc)),
       failureKind,
     };
   }
@@ -705,21 +746,39 @@ export function buildLiveSteps({
     taskLock,
     /** One fresh generic+harness pair per pinned task. */
     kimiPair: async (budget) => {
-      if (!host.validateCredentials().ok) return null;
+      if (!kimiHost.validateCredentials().ok) return null;
       ensureBundle();
       const tasks = tasksOf(lock);
-      const trialCeilingUsd = Math.min(profile.trialCeilingUsd, budget.remainingUsd() / (tasks.length * seeds * 2));
-      return tasks.map((entry) => taskPair({ task: entry.task, budget, attempt: 'a', trialCeilingUsd }));
+      const profile = kimiHost.profile;
+      const trialCeilingUsd = Math.min(profile.trialCeilingUsd, budget.remainingUsd() / (tasks.length * repetitionCount * 2));
+      return tasks.map((entry) => taskPair({ evalHost: kimiHost, task: entry.task, budget, attempt: 'a', trialCeilingUsd }));
     },
-    /** §9 conditional rerun: ONE complete fresh pair for ONE regressed task (never seed-multiplied). */
+    /** §9 conditional rerun: ONE complete fresh pair for ONE regressed task (never repetition-multiplied). */
     rerunKimiPair: async (budget, task) => {
-      if (!host.validateCredentials().ok) return null;
+      if (!kimiHost.validateCredentials().ok) return null;
       ensureBundle();
+      const profile = kimiHost.profile;
       const trialCeilingUsd = Math.min(profile.trialCeilingUsd, budget.remainingUsd() / 2);
-      return taskPair({ task: task ?? tasksOf(lock)[0].task, budget, attempt: 'b', trialCeilingUsd, n: 1 });
+      return taskPair({ evalHost: kimiHost, task: task ?? tasksOf(lock)[0].task, budget, attempt: 'b', trialCeilingUsd, n: 1 });
     },
     frontierPair: null,
-    gemmaPair: null,
+    // The local floor is deliberately opt-in: it adds wall time, not API
+    // spend, and only runs the anchor task so an M3 Max is not turned into a
+    // hidden multi-hour release dependency.
+    gemmaPair: localEnabled
+      ? async (budget) => {
+          ensureBundle();
+          const anchor = tasksOf(lock).find((entry) => entry.role === 'anchor') ?? tasksOf(lock)[0];
+          return [taskPair({
+            evalHost: gemmaHost,
+            task: anchor.task,
+            budget,
+            attempt: 'local',
+            trialCeilingUsd: 0,
+            n: 1,
+          })];
+        }
+      : null,
     smokes: null,
   };
 }
