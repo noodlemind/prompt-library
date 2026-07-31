@@ -67,7 +67,9 @@ export function validateAgainstSchema(value, schema, path = '') {
 
 function summarizeRun(doc) {
   return {
-    verdict: doc?.correctness?.verdict ?? 'fail',
+    // Anything that is not an explicit pass counts as a fail here; a malformed
+    // verdict is additionally caught by schema validation and blocks the gate.
+    verdict: doc?.correctness?.verdict === 'pass' ? 'pass' : 'fail',
     budgetExhausted: doc?.correctness?.completedWithinBudget === false,
     safety: doc?.harnessBehavior?.policyBypassAchieved === true,
     fallback:
@@ -173,7 +175,7 @@ export async function runRelease({ config, steps, calibrationRelease = false, re
     for (const doc of [pair?.generic, pair?.harness]) if (doc) runDocs.push(doc);
   };
 
-  async function evaluatePair(host, stepFn, rerunFn) {
+  async function evaluatePair(host, stepFn, { rerunFn = null, budget = budgets.release } = {}) {
     if (!stepFn || !preflightOk) {
       pairEntries.push({
         host,
@@ -187,7 +189,7 @@ export async function runRelease({ config, steps, calibrationRelease = false, re
       });
       return;
     }
-    const pair = await stepFn(budgets.kimiPair);
+    const pair = await stepFn(budget);
     if (!pair) {
       pairEntries.push({ host, result: 'skipped', reason: 'dependencies unavailable', gateActive: false, reproduced: null, classification: null, generic: null, harness: null });
       return;
@@ -198,12 +200,18 @@ export async function runRelease({ config, steps, calibrationRelease = false, re
     // §9 conditional rerun: one complete fresh pair, never treatment-only.
     if (classification.result === 'harness-regression' && !classification.safety && rerunFn) {
       const second = await rerunFn(budgets.rerun);
-      collect(second);
-      if (classifyPair(second).result === 'harness-regression') {
-        reproduced = true;
+      if (!second) {
+        // No rerun evidence: the regression stays a regression, unresolved —
+        // it must not silently soften to flaky.
+        classification = { ...classification, reason: `${classification.reason}; rerun unavailable — regression unresolved` };
       } else {
-        reproduced = false;
-        classification = { ...classification, result: 'flaky-inconclusive', reason: 'regression did not reproduce on a fresh pair' };
+        collect(second);
+        if (classifyPair(second).result === 'harness-regression') {
+          reproduced = true;
+        } else {
+          reproduced = false;
+          classification = { ...classification, result: 'flaky-inconclusive', reason: 'regression did not reproduce on a fresh pair' };
+        }
       }
     }
     pairEntries.push({
@@ -219,7 +227,7 @@ export async function runRelease({ config, steps, calibrationRelease = false, re
   }
 
   await evaluatePair('codex-subscription', steps.frontierPair);
-  await evaluatePair('openrouter-kimi', steps.kimiPair, steps.rerunKimiPair);
+  await evaluatePair('openrouter-kimi', steps.kimiPair, { rerunFn: steps.rerunKimiPair, budget: budgets.kimiPair });
   await evaluatePair('ollama-gemma', steps.gemmaPair);
 
   const smokes = preflightOk && steps.smokes ? await steps.smokes() : [];
@@ -309,9 +317,13 @@ async function main() {
   const json = argv.includes('--json');
   const raw = loadYamlConfig(profile);
   const lock = JSON.parse(fs.readFileSync(new URL(`../${raw.task.lockFile}`, import.meta.url), 'utf8'));
+  const budgetUsd = Number(flag('--budget-usd', raw.budget.releaseCeilingUsd));
+  if (!Number.isFinite(budgetUsd) || budgetUsd < 0) {
+    throw new Error(`--budget-usd must be a non-negative number, got: ${flag('--budget-usd')}`);
+  }
   const config = {
     budget: {
-      releaseCeilingUsd: Number(flag('--budget-usd', raw.budget.releaseCeilingUsd)),
+      releaseCeilingUsd: budgetUsd,
       kimiPairUsd: raw.budget.kimiPairUsd,
       rerunUsd: raw.budget.rerunUsd,
       reserveUsd: raw.budget.reserveUsd,
@@ -345,17 +357,19 @@ async function main() {
   }
 
   const releaseSha = flag('--release-sha', 'workdir');
-  const { report, exitCode } = await runRelease({ config, steps, calibrationRelease, releaseSha, harnessVersion: raw.profile });
+  const harnessVersion = JSON.parse(fs.readFileSync(new URL('../packages/harness/package.json', import.meta.url), 'utf8')).version;
+  const { report, exitCode } = await runRelease({ config, steps, calibrationRelease, releaseSha, harnessVersion });
   const reportVerdict = validateAgainstSchema(report, REPORT_SCHEMA);
   if (!reportVerdict.ok) throw new Error(`internal error: report failed its own schema: ${reportVerdict.errors.join('; ')}`);
   if (json) console.log(JSON.stringify(report, null, 2));
   else console.log(buildMarkdownReport(report));
-  process.exit(exitCode);
+  // exitCode (not process.exit) so piped stdout flushes fully before exit.
+  process.exitCode = exitCode;
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   main().catch((err) => {
     console.error(err.message);
-    process.exit(2);
+    process.exitCode = 2;
   });
 }

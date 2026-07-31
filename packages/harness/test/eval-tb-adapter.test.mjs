@@ -114,6 +114,23 @@ test('findLatestJobDir picks the newest job directory', () => {
   assert.equal(findLatestJobDir(path.join(root, 'missing')), null);
 });
 
+test('job discovery anchors to the current run and never grades a stale directory', () => {
+  const root = tmpdir();
+  fs.mkdirSync(path.join(root, 'stale-job'));
+  assert.equal(findLatestJobDir(root, { excludeNames: ['stale-job'] }), null, 'no fresh job means no result');
+  fs.mkdirSync(path.join(root, 'fresh-job'));
+  assert.equal(findLatestJobDir(root, { excludeNames: ['stale-job'] }), path.join(root, 'fresh-job'));
+});
+
+test('a harbor exit without a fresh job directory is an infrastructure failure', () => {
+  assert.equal(classifyFailure({ run: { spawnError: null, code: 3, timedOut: false }, reward: null, jobDirCreated: false }), 'infrastructure');
+  assert.equal(
+    classifyFailure({ run: { spawnError: null, code: 0, timedOut: false }, reward: null, jobDirCreated: false }),
+    'infrastructure',
+    'a clean exit that produced no job still is not a verifier failure'
+  );
+});
+
 test('readTrialResult finds verifier evidence inside the job tree', () => {
   const job = tmpdir();
   const verifierDir = path.join(job, 'trial-0', 'artifacts', 'logs', 'verifier');

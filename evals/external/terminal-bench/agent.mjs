@@ -55,6 +55,7 @@ export async function runStdioAgent({
   const rl = readline.createInterface({ input });
   const pendingLines = [];
   const waiters = [];
+  let streamClosed = false;
   rl.on('line', (line) => {
     let parsed;
     try {
@@ -66,9 +67,18 @@ export async function runStdioAgent({
     if (waiter) waiter(parsed);
     else pendingLines.push(parsed);
   });
+  // If the Python side dies or closes stdin mid-exec, every pending (and
+  // future) wait settles with a sentinel so the loop reports protocol_error
+  // instead of hanging forever with no done message.
+  rl.on('close', () => {
+    streamClosed = true;
+    let waiter;
+    while ((waiter = waiters.shift())) waiter({ type: 'stream_closed' });
+  });
   const nextLine = () =>
     new Promise((resolve) => {
       if (pendingLines.length) resolve(pendingLines.shift());
+      else if (streamClosed) resolve({ type: 'stream_closed' });
       else waiters.push(resolve);
     });
   const send = (msg) => output.write(`${JSON.stringify(msg)}\n`);

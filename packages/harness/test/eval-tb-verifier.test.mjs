@@ -31,6 +31,8 @@ test('parseReward reads reward.txt plain numbers and rejects garbage', () => {
   assert.equal(parseReward('0', 'reward.txt').reward, 0);
   assert.equal(parseReward('not-a-number', 'reward.txt'), null);
   assert.equal(parseReward('{invalid json', 'reward.json'), null);
+  assert.equal(parseReward('1 of 2', 'reward.txt'), null, 'trailing garbage must not grade as a pass');
+  assert.equal(parseReward(' 0.5 ', 'reward.txt').reward, 0.5);
 });
 
 test('verdictFromReward compares against the passing reward', () => {

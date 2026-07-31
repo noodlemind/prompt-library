@@ -27,9 +27,11 @@ export function parseReward(content, filename) {
     // A single numeric metric is unambiguous; anything else needs a human.
     return { reward: numeric.length === 1 ? numeric[0] : null, metrics };
   }
-  const value = Number.parseFloat(String(content).trim());
-  if (!Number.isFinite(value)) return null;
-  return { reward: value, metrics: { reward: value } };
+  // The whole trimmed content must be one number — parseFloat('1 of 2') → 1
+  // would grade a corrupt artifact as a pass.
+  const trimmed = String(content).trim();
+  if (!/^-?\d+(\.\d+)?([eE][+-]?\d+)?$/.test(trimmed)) return null;
+  return { reward: Number(trimmed), metrics: { reward: Number(trimmed) } };
 }
 
 export function verdictFromReward(reward, { passingReward = 1 } = {}) {

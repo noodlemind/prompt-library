@@ -275,6 +275,50 @@ test('a run document missing required telemetry blocks the release', async () =>
   assert.ok(report.gate.reasons.some((r) => /telemetry/i.test(r)));
 });
 
+test('a malformed verdict never crashes classification; the schema gate blocks it instead', async () => {
+  const broken = pairOf('openrouter-kimi', 'pass', 'pass');
+  broken.harness.correctness.verdict = 'error';
+  const steps = baseSteps({ kimiPair: async () => broken });
+  const { report, exitCode } = await runRelease({ config: CONFIG, steps });
+  assert.equal(exitCode, 1);
+  assert.ok(report.gate.reasons.some((r) => /telemetry/i.test(r)));
+});
+
+test('only the kimi pair draws from the kimi allowance; other pairs charge the release budget', async () => {
+  const seen = {};
+  const steps = baseSteps({
+    frontierPair: async (budget) => {
+      seen.frontier = budget?.label;
+      return pairOf('codex-subscription', 'pass', 'pass');
+    },
+    kimiPair: async (budget) => {
+      seen.kimi = budget?.label;
+      return pairOf('openrouter-kimi', 'pass', 'pass');
+    },
+    gemmaPair: async (budget) => {
+      seen.gemma = budget?.label;
+      return pairOf('ollama-gemma', 'pass', 'pass');
+    },
+  });
+  await runRelease({ config: CONFIG, steps });
+  assert.equal(seen.kimi, 'kimi-pair');
+  assert.equal(seen.frontier, 'release');
+  assert.equal(seen.gemma, 'release');
+});
+
+test('a rerun that cannot run leaves the regression unresolved, never flaky', async () => {
+  const steps = baseSteps({
+    kimiPair: async () => pairOf('openrouter-kimi', 'pass', 'fail'),
+    rerunKimiPair: async () => null,
+  });
+  const { report, exitCode } = await runRelease({ config: CONFIG, steps });
+  const kimi = report.pairs.find((p) => p.host === 'openrouter-kimi');
+  assert.equal(kimi.result, 'harness-regression');
+  assert.equal(kimi.reproduced, null);
+  assert.match(kimi.reason, /rerun|unresolved/i);
+  assert.equal(exitCode, 0, '§9 blocks only a REPRODUCED regression');
+});
+
 test('the markdown eval card names the task, verdicts, spend, and the single-task limitation', async () => {
   const { report } = await runRelease({ config: CONFIG, steps: baseSteps(), releaseSha: 'abc123', harnessVersion: '0.5.0' });
   const md = buildMarkdownReport(report);

@@ -102,6 +102,19 @@ test('telemetry snapshot rides along in the done message', async () => {
   assert.equal(done.telemetry.events[0].model, 'kimi');
 });
 
+test('a closed input stream settles the loop as protocol_error instead of hanging forever', async () => {
+  const driver = { next: async () => ({ type: 'tool', name: 'bash', input: { command: 'ls' } }) };
+  const input = new PassThrough();
+  const output = new PassThrough();
+  let buffer = '';
+  output.on('data', (chunk) => {
+    buffer += chunk.toString();
+    if (buffer.includes('"exec"')) input.end(); // the Python side died mid-exec
+  });
+  const done = await runStdioAgent({ driver, input, output, systemPrompt: 's', instruction: 'i' });
+  assert.equal(done.stopReason, 'protocol_error');
+});
+
 test('a malformed result line ends the run as a protocol_error', async () => {
   const driver = { next: async () => ({ type: 'tool', name: 'bash', input: { command: 'ls' } }) };
   const input = new PassThrough();

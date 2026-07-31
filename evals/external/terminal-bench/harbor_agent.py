@@ -43,7 +43,13 @@ class StdioBridgeAgent(BaseAgent):
     async def setup(self, environment) -> None:
         condition = self._load_condition()
         for command in condition.get("setupCommands", []):
-            await self._exec(environment, command)
+            result = await self._exec(environment, command)
+            if result["code"] != 0:
+                # A failed activation must surface as an infrastructure failure,
+                # not run the trial as a silently contaminated treatment arm.
+                raise RuntimeError(
+                    f"setup command failed (exit {result['code']}): {command}\n{result['stderr']}"
+                )
 
     async def run(self, instruction: str, environment, context) -> None:
         condition_path = os.environ["HARNESS_EVAL_TB_CONDITION"]
@@ -73,7 +79,9 @@ class StdioBridgeAgent(BaseAgent):
                     break
                 message = json.loads(line)
                 if message["type"] == "exec":
-                    result = await self._exec(environment, message["command"])
+                    result = await self._exec(
+                        environment, message["command"], timeout_ms=message.get("timeoutMs")
+                    )
                     reply = {"type": "result", "id": message["id"], **result}
                     proc.stdin.write((json.dumps(reply) + "\n").encode())
                     await proc.stdin.drain()
@@ -89,12 +97,25 @@ class StdioBridgeAgent(BaseAgent):
         with open(os.environ["HARNESS_EVAL_TB_CONDITION"]) as fh:
             return json.load(fh)
 
-    async def _exec(self, environment, command: str) -> dict:
+    async def _exec(self, environment, command: str, timeout_ms: int | None = None) -> dict:
         """Execute a command via whichever exec surface this Harbor exposes."""
         exec_fn = getattr(environment, "exec", None) or getattr(environment, "execute", None)
         if exec_fn is None:
             raise RuntimeError("Harbor environment exposes no exec/execute method")
-        result = await exec_fn(command=command)
+        coro = exec_fn(command=command)
+        if timeout_ms:
+            # No Harbor version is pinned here, so honor the bridge's
+            # per-command timeout portably instead of assuming an exec kwarg.
+            try:
+                result = await asyncio.wait_for(coro, timeout=timeout_ms / 1000)
+            except asyncio.TimeoutError:
+                return {
+                    "code": 124,
+                    "stdout": "",
+                    "stderr": f"command timed out after {timeout_ms}ms",
+                }
+        else:
+            result = await coro
         code = getattr(result, "return_code", None)
         if code is None:
             code = getattr(result, "exit_code", 0)

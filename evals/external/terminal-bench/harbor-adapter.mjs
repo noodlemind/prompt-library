@@ -73,16 +73,21 @@ export function runHarbor({ args, cwd, spawnImpl = spawnSync, timeoutMs }) {
   };
 }
 
-/** Newest job directory under `<cwd>/jobs`, by mtime then name. */
-export function findLatestJobDir(jobsRoot) {
+/**
+ * Newest job directory under `<cwd>/jobs`, by mtime then name. Pass the
+ * directory names that existed BEFORE the run as `excludeNames` so a failed
+ * harbor invocation can never be graded against a stale previous job.
+ */
+export function findLatestJobDir(jobsRoot, { excludeNames = [] } = {}) {
   let entries;
   try {
     entries = fs.readdirSync(jobsRoot, { withFileTypes: true });
   } catch {
     return null;
   }
+  const stale = new Set(excludeNames);
   const dirs = entries
-    .filter((e) => e.isDirectory())
+    .filter((e) => e.isDirectory() && !stale.has(e.name))
     .map((e) => {
       const full = path.join(jobsRoot, e.name);
       return { full, name: e.name, mtimeMs: fs.statSync(full).mtimeMs };
@@ -100,9 +105,12 @@ export function readTrialResult(jobDir, { passingReward = 1 } = {}) {
 /**
  * Classify a completed run. Returns the failure kind, or null for a valid
  * graded trial (whose pass/fail comes from the reward, not from here).
+ * `jobDirCreated: false` means harbor produced no fresh job directory — the
+ * run never really happened, whatever the exit code says.
  */
-export function classifyFailure({ run, reward, providerFailure = false }) {
+export function classifyFailure({ run, reward, providerFailure = false, jobDirCreated = true }) {
   if (run.spawnError || run.timedOut) return 'infrastructure';
+  if (!jobDirCreated) return 'infrastructure';
   if (providerFailure) return 'provider';
   if (reward == null) return 'verifier';
   return null;
