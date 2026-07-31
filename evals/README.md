@@ -214,12 +214,13 @@ exercise production hook enforcement. Do not claim that a Terminal-Bench result
 measures mechanical-hook value or safety until the bridge installs host-owned
 hooks and the run reports `mechanical-hooks` from trusted evidence.
 
-The same trust boundary applies to stopping. The generic driver has a tested
-post-verification request ceiling, but the Terminal-Bench bridge does **not**
-promote model-visible `verify` output into that trusted state: a sandbox can
-edit its own plan/evidence. Until Harbor supplies a host-owned verification
-signal, Terminal-Bench records the immutable CLI invocation and official task
-verifier result without claiming a trusted early stop.
+The same trust boundary applies to stopping. Model-selected shell output never
+promotes verification state. The treatment instead exposes `verify_harness`, a
+bridge-owned tool that invokes only the immutable read-only Harness CLI, parses
+its full bounded JSON out of band, and marks the driver verified only when all
+criteria, scope, gaps, and required reviews pass. The driver then allows at most
+one final provider request, suppresses tool calls from it, and records
+`verified_stop`.
 
 ### Commands
 

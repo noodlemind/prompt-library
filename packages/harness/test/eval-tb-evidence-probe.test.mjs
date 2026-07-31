@@ -342,6 +342,17 @@ test('realistic gate and verify checks survive projection while secrets do not',
   });
 });
 
+test('an empty harness event ledger is incomplete rather than evidence of zero behavior', () => {
+  const cwd = workspace();
+  run(cwd, ['snapshot', '--output', '.harness/eval-before.json']);
+  fs.writeFileSync(path.join(cwd, '.harness', 'events.jsonl'), '');
+  const collected = run(cwd, ['collect', '--before', '.harness/eval-before.json']);
+  assert.equal(collected.harnessEventEvidence.available, false);
+  assert.equal(collected.harnessEventEvidence.complete, false);
+  assert.equal(collected.harnessEventEvidence.reason, 'harness-events-empty');
+  assert.deepEqual(collected.harnessEvents, []);
+});
+
 test('event and check projection rejects are counted and make evidence explicitly incomplete', () => {
   const cwd = workspace();
   run(cwd, ['snapshot', '--output', '.harness/eval-before.json']);

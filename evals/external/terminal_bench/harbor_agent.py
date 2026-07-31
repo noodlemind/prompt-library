@@ -32,6 +32,7 @@ import json
 import os
 import pathlib
 import re
+import shlex
 import stat
 import tempfile
 
@@ -44,6 +45,7 @@ except ImportError:  # pragma: no cover - lets CI import-check the module withou
 class StdioBridgeAgent(BaseAgent):
     _EVIDENCE_PROBE = "/opt/harness-bundle/evidence-probe"
     _CAPTURE_RUNNER = "/opt/harness-bundle/bounded-exec"
+    _HARNESS_CLI = "/opt/harness-bundle/harness-cli"
     _EVIDENCE_BEFORE = ".harness/eval-before.json"
     _MAX_PARSED_JSON_BYTES = 2 * 1024 * 1024
     _MAX_DONE_FILE_BYTES = 4 * 1024 * 1024
@@ -220,6 +222,15 @@ class StdioBridgeAgent(BaseAgent):
                     reply = {"type": "result", "id": message["id"], **result}
                     proc.stdin.write((json.dumps(reply) + "\n").encode())
                     await proc.stdin.drain()
+                elif message["type"] == "verify":
+                    result = await self._trusted_verify(environment, message.get("plan"))
+                    reply = {
+                        "type": "verification_result",
+                        "id": message["id"],
+                        **self._redact(result),
+                    }
+                    proc.stdin.write((json.dumps(reply) + "\n").encode())
+                    await proc.stdin.drain()
                 elif message["type"] == "done":
                     saw_done = True
                     if message.get("doneFilePersisted") is True:
@@ -238,6 +249,55 @@ class StdioBridgeAgent(BaseAgent):
             raise RuntimeError(
                 f"stdio bridge exited without a done message (node exit {proc.returncode})"
             )
+
+    async def _trusted_verify(self, environment, plan: str | None) -> dict:
+        """Run only the immutable verifier command and return a bounded attestation."""
+        if plan is not None:
+            if (
+                not isinstance(plan, str)
+                or len(plan) > 500
+                or re.fullmatch(r"docs/plans/[A-Za-z0-9._/-]+\.md", plan) is None
+                or ".." in pathlib.PurePosixPath(plan).parts
+            ):
+                return {
+                    "code": 126,
+                    "stdout": "",
+                    "stderr": "trusted verification plan path is invalid",
+                    "trustedVerification": True,
+                    "passed": False,
+                    "plan": None,
+                    "evidencePath": None,
+                }
+        command = f"{self._HARNESS_CLI} verify --workspace . --json"
+        if plan is not None:
+            command += f" --plan {shlex.quote(plan)}"
+        result = await self._exec(
+            environment,
+            command,
+            timeout_ms=10 * 60_000,
+            parse_json=True,
+        )
+        parsed = result.get("_parsedJson")
+        passed = (
+            result.get("code") == 0
+            and isinstance(parsed, dict)
+            and parsed.get("outcome") == "passed"
+            and parsed.get("unverifiedCriteria") == []
+            and parsed.get("scopeViolations") == []
+            and parsed.get("openHardGaps") == []
+            and parsed.get("requiredReviews") == []
+            and isinstance(parsed.get("plan"), str)
+            and isinstance(parsed.get("evidencePath"), str)
+        )
+        return {
+            "code": result.get("code", 125),
+            "stdout": result.get("stdout", ""),
+            "stderr": result.get("stderr", ""),
+            "trustedVerification": True,
+            "passed": passed,
+            "plan": parsed.get("plan") if passed else None,
+            "evidencePath": parsed.get("evidencePath") if passed else None,
+        }
 
     def _load_persisted_done(self, reference: dict) -> dict:
         """Load the bounded full done ledger named by a small authenticated frame."""
@@ -574,6 +634,7 @@ class StdioBridgeAgent(BaseAgent):
         if not safe_event_evidence["complete"]:
             reported_reason = event_evidence.get("reason") if isinstance(event_evidence, dict) else None
             allowed_reasons = {
+                "harness-events-empty",
                 "harness-events-not-found",
                 "harness-events-unreadable",
                 "harness-events-byte-limit-exceeded",

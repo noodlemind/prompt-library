@@ -355,6 +355,46 @@ asyncio.run(main())
   assert.match(result.message, /command implementation failed/);
 });
 
+test('Python trusted verification executes only the immutable bridge-owned command', () => {
+  const result = runPython(`
+import asyncio, json
+from evals.external.terminal_bench.harbor_agent import StdioBridgeAgent
+
+class Agent(StdioBridgeAgent):
+    def __init__(self): self.calls = []
+    async def _exec(self, environment, command, **kwargs):
+        self.calls.append({"command": command, **kwargs})
+        return {
+            "code": 0,
+            "stdout": "bounded",
+            "stderr": "",
+            "_parsedJson": {
+                "outcome": "passed",
+                "plan": "docs/plans/task.md",
+                "evidencePath": ".harness/evidence/task.json",
+                "unverifiedCriteria": [],
+                "scopeViolations": [],
+                "openHardGaps": [],
+                "requiredReviews": [],
+            },
+        }
+
+async def main():
+    agent = Agent()
+    passed = await agent._trusted_verify(None, "docs/plans/task.md")
+    invalid = await agent._trusted_verify(None, "../../escape.md")
+    print(json.dumps({"passed": passed, "invalid": invalid, "calls": agent.calls}))
+
+asyncio.run(main())
+`);
+  assert.equal(result.passed.passed, true);
+  assert.equal(result.passed.trustedVerification, true);
+  assert.equal(result.invalid.passed, false);
+  assert.equal(result.calls.length, 1, 'an invalid plan never reaches sandbox execution');
+  assert.equal(result.calls[0].command, '/opt/harness-bundle/harness-cli verify --workspace . --json --plan docs/plans/task.md');
+  assert.equal(result.calls[0].parse_json, true);
+});
+
 test('Python bridge preserves every bounded workspace probe failure reason', () => {
   const result = runPython(`
 import json

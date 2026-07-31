@@ -112,11 +112,28 @@ const CHECKPOINT_TOOL = {
   },
 };
 
+const VERIFY_HARNESS_TOOL = {
+  name: 'verify_harness',
+  description: 'Run the immutable Harness verifier through the trusted Harbor bridge and stop tool work when it passes.',
+  parameters: {
+    type: 'object',
+    properties: {
+      plan: { type: 'string', description: 'Optional relative docs/plans/*.md path. Omit to use the active plan.' },
+    },
+    additionalProperties: false,
+  },
+};
+
 /** Keep the generic arm's tool surface unchanged; runtime tools are opt-in. */
-export function runtimeBridgeTools({ guidanceCatalog = null, enableCheckpoint = false } = {}) {
+export function runtimeBridgeTools({ guidanceCatalog = null, enableCheckpoint = false, enableTrustedVerify = false } = {}) {
   const guidanceEnabled = guidanceCatalog != null && Object.keys(guidanceCatalog).length > 0;
-  if (!guidanceEnabled && !enableCheckpoint) return [...BRIDGE_TOOLS];
-  return [...BRIDGE_TOOLS, ...(guidanceEnabled ? [LOAD_GUIDANCE_TOOL] : []), CHECKPOINT_TOOL];
+  if (!guidanceEnabled && !enableCheckpoint && !enableTrustedVerify) return [...BRIDGE_TOOLS];
+  return [
+    ...BRIDGE_TOOLS,
+    ...(guidanceEnabled ? [LOAD_GUIDANCE_TOOL] : []),
+    ...((enableCheckpoint || guidanceEnabled) ? [CHECKPOINT_TOOL] : []),
+    ...(enableTrustedVerify ? [VERIFY_HARNESS_TOOL] : []),
+  ];
 }
 
 const GUIDANCE_PAGE_CHARS = 900;
@@ -202,10 +219,11 @@ export async function runStdioAgent({
   doneFilePath = null,
   guidanceCatalog = null,
   enableCheckpoint = false,
+  enableTrustedVerify = false,
   redactValues = [],
 }) {
   const secrets = activeSecrets(redactValues);
-  const bridgeTools = runtimeBridgeTools({ guidanceCatalog, enableCheckpoint });
+  const bridgeTools = runtimeBridgeTools({ guidanceCatalog, enableCheckpoint, enableTrustedVerify });
   const checkpointEnabled = bridgeTools.some((tool) => tool.name === 'checkpoint');
   const runtime = {
     toolSchemaHash: sha256(JSON.stringify(bridgeTools)),
@@ -330,6 +348,25 @@ export async function runStdioAgent({
       driver.observe?.(action, { code: 0, stdout: JSON.stringify({ checkpointed: true }), stderr: '' });
       continue;
     }
+    if (action.name === 'verify_harness' && enableTrustedVerify) {
+      const id = execId++;
+      const plan = typeof action.input?.plan === 'string' ? action.input.plan : null;
+      send({ type: 'verify', id, plan });
+      const result = redactSecrets(await nextLine(), secrets);
+      if (result.type !== 'verification_result' || result.id !== id) {
+        return finish({ answer: null, stopReason: 'protocol_error', detail: JSON.stringify(result).slice(0, 200) });
+      }
+      const observation = { code: result.code, stdout: result.stdout, stderr: result.stderr };
+      driver.observe?.(action, observation);
+      if (result.trustedVerification === true && result.passed === true) {
+        driver.markVerified?.({
+          plan: result.plan ?? plan,
+          evidencePath: result.evidencePath ?? null,
+          fallbackAnswer: 'Harness verification passed.',
+        });
+      }
+      continue;
+    }
     if (action.name !== 'bash') {
       driver.observe?.(action, { error: `unknown tool: ${action.name}` });
       continue;
@@ -395,6 +432,7 @@ async function main() {
     doneFilePath: process.env.HARNESS_EVAL_TB_TELEMETRY_FILE ?? null,
     guidanceCatalog: condition.runtime?.guidanceCatalog ?? condition.guidanceCatalog ?? null,
     enableCheckpoint: condition.runtime?.checkpoint === true,
+    enableTrustedVerify: condition.runtime?.trustedVerify === true,
     redactValues: activeApiKey ? [activeApiKey] : [],
   });
 }

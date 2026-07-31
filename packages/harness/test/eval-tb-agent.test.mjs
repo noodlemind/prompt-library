@@ -28,8 +28,9 @@ function pump({ resultFor = () => ({ code: 0, stdout: 'ok', stderr: '' }) } = {}
       const line = JSON.parse(buffer.slice(0, idx));
       lines.push(line);
       buffer = buffer.slice(idx + 1);
-      if (line.type === 'exec') {
-        input.write(`${JSON.stringify({ type: 'result', id: line.id, ...resultFor(line) })}\n`);
+      if (line.type === 'exec' || line.type === 'verify') {
+        const responseType = line.type === 'verify' ? 'verification_result' : 'result';
+        input.write(`${JSON.stringify({ type: responseType, id: line.id, ...resultFor(line) })}\n`);
       }
     }
   });
@@ -45,8 +46,8 @@ test('bridge tools expose exactly a terminal and a finish', () => {
 
 test('runtime tools are treatment-only additions to the symmetric bridge baseline', () => {
   assert.deepEqual(
-    runtimeBridgeTools({ guidanceCatalog: { 'ensure-plan': { content: 'plan safely' } } }).map((tool) => tool.name),
-    ['bash', 'finish', 'load_guidance', 'checkpoint']
+    runtimeBridgeTools({ guidanceCatalog: { 'ensure-plan': { content: 'plan safely' } }, enableTrustedVerify: true }).map((tool) => tool.name),
+    ['bash', 'finish', 'load_guidance', 'checkpoint', 'verify_harness']
   );
   assert.deepEqual(runtimeBridgeTools().map((tool) => tool.name), ['bash', 'finish']);
   assert.deepEqual(BRIDGE_TOOLS.map((tool) => tool.name), ['bash', 'finish'], 'the generic arm remains unchanged');
@@ -245,6 +246,46 @@ test('sandbox-authored verify output is observed but never promotes the driver t
   const done = await runStdioAgent({ driver, input, output, systemPrompt: 's', instruction: 'i' });
   assert.equal(done.stopReason, 'model_finish');
   assert.deepEqual(calls, ['observe']);
+});
+
+test('bridge-owned immutable verification promotes verified stop only on a complete attestation', async () => {
+  const calls = [];
+  const driver = {
+    next: (() => {
+      const actions = [
+        { type: 'tool', name: 'verify_harness', input: { plan: 'docs/plans/task.md' }, _id: 'verify-1' },
+        { type: 'finish', answer: 'verified', stopReason: 'verified_stop' },
+      ];
+      let index = 0;
+      return async () => actions[index++];
+    })(),
+    observe: () => calls.push('observe'),
+    markVerified: (detail) => calls.push({ markVerified: detail }),
+  };
+  const { input, output, lines } = pump({ resultFor: (line) => line.type === 'verify' ? ({
+    code: 0,
+    stdout: '{"outcome":"passed"}',
+    stderr: '',
+    trustedVerification: true,
+    passed: true,
+    plan: 'docs/plans/task.md',
+    evidencePath: '.harness/evidence/task.json',
+  }) : ({ code: 0, stdout: 'ok', stderr: '' }) });
+  const done = await runStdioAgent({
+    driver,
+    input,
+    output,
+    systemPrompt: 's',
+    instruction: 'i',
+    enableTrustedVerify: true,
+  });
+  assert.equal(done.stopReason, 'verified_stop');
+  assert.deepEqual(calls, [
+    'observe',
+    { markVerified: { plan: 'docs/plans/task.md', evidencePath: '.harness/evidence/task.json', fallbackAnswer: 'Harness verification passed.' } },
+  ]);
+  assert.equal(lines.filter((line) => line.type === 'verify').length, 1);
+  assert.equal(lines.some((line) => line.type === 'exec'), false, 'trusted verification is not a model-selected shell command');
 });
 
 test('happy path: execs stream out, results stream back into the driver, done carries the answer', async () => {

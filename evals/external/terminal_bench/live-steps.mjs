@@ -33,15 +33,23 @@ export const AGENT_REF = 'evals.external.terminal_bench.harbor_agent:StdioBridge
 // harbor resolves --agent with plain importlib: the repo root must be on
 // PYTHONPATH for evals.external.terminal_bench.harbor_agent to import.
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
-const harborSpawnEnv = (apiKey) => {
-  const spawnEnv = {
-    ...process.env,
-    PYTHONPATH: process.env.PYTHONPATH ? `${repoRoot}${path.delimiter}${process.env.PYTHONPATH}` : repoRoot,
-  };
+const HARBOR_ENV_ALLOWLIST = [
+  'PATH', 'HOME', 'USER', 'LOGNAME', 'SHELL', 'LANG', 'LC_ALL', 'TERM', 'TMPDIR',
+  'XDG_CONFIG_HOME', 'XDG_CACHE_HOME',
+  'DOCKER_HOST', 'DOCKER_CONTEXT', 'DOCKER_CONFIG', 'DOCKER_TLS_VERIFY', 'DOCKER_CERT_PATH',
+  'SSL_CERT_FILE', 'SSL_CERT_DIR',
+];
+const harborSpawnEnv = ({ apiKey = null, daytonaApiKey = null } = {}) => {
+  const spawnEnv = Object.fromEntries(
+    HARBOR_ENV_ALLOWLIST
+      .filter((name) => typeof process.env[name] === 'string')
+      .map((name) => [name, process.env[name]])
+  );
+  spawnEnv.PYTHONPATH = process.env.PYTHONPATH ? `${repoRoot}${path.delimiter}${process.env.PYTHONPATH}` : repoRoot;
   // The key belongs only to the host-side Harbor/Python/Node bridge process.
   // Passing it through --ae would also scope it into every sandbox exec.
-  if (apiKey == null) delete spawnEnv.OPENROUTER_API_KEY;
-  else spawnEnv.OPENROUTER_API_KEY = apiKey;
+  if (apiKey != null) spawnEnv.OPENROUTER_API_KEY = apiKey;
+  if (daytonaApiKey != null) spawnEnv.DAYTONA_API_KEY = daytonaApiKey;
   return spawnEnv;
 };
 
@@ -738,7 +746,7 @@ export function buildLiveSteps({
 
   async function environment() {
     const missing = [];
-    const probe = runHarbor({ args: ['--version'], cwd: workDir, spawnImpl, timeoutMs: 60_000, spawnEnv: harborSpawnEnv(null) });
+    const probe = runHarbor({ args: ['--version'], cwd: workDir, spawnImpl, timeoutMs: 60_000, spawnEnv: harborSpawnEnv() });
     if (probe.spawnError || probe.code !== 0) missing.push('harbor CLI');
     missing.push(...kimiHost.validateCredentials().missing);
     let providerGuard = { ok: true, evidence: { verified: false, required: false, reason: 'credentials-unavailable' } };
@@ -808,7 +816,7 @@ export function buildLiveSteps({
           cwd: workDir,
           spawnImpl,
           timeoutMs: 10 * 60_000,
-          spawnEnv: harborSpawnEnv(null),
+          spawnEnv: harborSpawnEnv(),
         });
         if (download.spawnError || download.code !== 0) {
           return { ok: false, reason: `task download failed: ${download.spawnError ?? download.stderr}` };
@@ -865,7 +873,10 @@ export function buildLiveSteps({
       cwd: workDir,
       spawnImpl,
       timeoutMs: profile.timeoutMs + 10 * 60_000,
-      spawnEnv: harborSpawnEnv(evalHost.id === 'openrouter-kimi' ? env.OPENROUTER_API_KEY : null),
+      spawnEnv: harborSpawnEnv({
+        apiKey: evalHost.id === 'openrouter-kimi' ? env.OPENROUTER_API_KEY : null,
+        daytonaApiKey: config.execution?.environment === 'daytona' ? env.DAYTONA_API_KEY ?? null : null,
+      }),
     });
     const endedAt = now();
     const jobDir = jobDirFor({ jobsDir, jobName });
@@ -976,7 +987,7 @@ export function buildLiveSteps({
             engineerContract: engineerRuntimeContract,
             guidance: buildGuidance(),
           }),
-          runtime: { guidanceCatalog, checkpoint: true },
+          runtime: { guidanceCatalog, checkpoint: true, trustedVerify: true },
         },
       };
       const results = {};

@@ -470,7 +470,7 @@ export function openAiToolDriver({
       return { type: 'finish', answer: input.answer || '', stopReason: 'model_finish', _id: call.id };
     }
     const rawArgs = call.function.arguments || '{}';
-    const category = commandCategory(input.command);
+    const category = call.function.name === 'verify_harness' ? 'verify' : commandCategory(input.command);
     telemetry?.record('tool_call', {
       requestId,
       toolCallId: call.id,

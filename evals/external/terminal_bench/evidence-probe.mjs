@@ -756,12 +756,13 @@ function collectHarnessEvents(root) {
     const retentionTruncated = allProjected.length > MAX_EVENTS;
     const events = allProjected.slice(-MAX_EVENTS);
     const reasons = [];
+    if (allProjected.length === 0) reasons.push('harness-events-empty');
     if (start > 0) reasons.push('harness-events-byte-limit-exceeded');
     if (retentionTruncated) reasons.push('harness-events-retention-limit-exceeded');
     if (projectionRejectedEvents || projectionRejectedChecks) reasons.push('harness-events-projection-rejected');
     const complete = reasons.length === 0;
     return {
-      available: events.length > 0 || projectionRejectedEvents === 0,
+      available: events.length > 0,
       complete,
       reason: complete ? null : reasons.join(';'),
       events,

@@ -63,10 +63,12 @@ const jobName = args[args.indexOf('--job-name') + 1];
 const agentEnv = {};
 args.forEach((a, i) => { if (a === '--ae') { const [k, ...r] = args[i + 1].split('='); agentEnv[k] = r.join('='); } });
 const providerKey = process.env.OPENROUTER_API_KEY;
+const githubTokenPresent = Object.hasOwn(process.env, 'GITHUB_TOKEN');
 const secretInArgv = Boolean(providerKey && args.some((arg) => arg.includes(providerKey)));
 const providerKeyInAgentEnv = Object.hasOwn(agentEnv, 'OPENROUTER_API_KEY');
-fs.appendFileSync(process.env.HARNESS_EVAL_TEST_AUDIT_FILE, JSON.stringify({
+fs.appendFileSync(${JSON.stringify(auditFile)}, JSON.stringify({
   providerKeyPresent: Boolean(providerKey),
+  githubTokenPresent,
   secretInArgv,
   providerKeyInAgentEnv,
   conditionPath: agentEnv.HARNESS_EVAL_TB_CONDITION,
@@ -149,8 +151,8 @@ function runCli({ datasetDir, lockFile, binDir, bundleDir, bundleHash, auditFile
     HARNESS_EVAL_TB_DATASET_DIR: datasetDir,
     HARNESS_EVAL_TB_BUNDLE_DIR: bundleDir,
     HARNESS_EVAL_TB_BUNDLE_SHA256: bundleHash,
-    HARNESS_EVAL_TEST_AUDIT_FILE: auditFile,
     NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ''} --import=${fetchPreload}`.trim(),
+    GITHUB_TOKEN: 'sentinel-unrelated-ci-token',
   };
   if (withKey) env.OPENROUTER_API_KEY = SENTINEL_PROVIDER_KEY;
   else delete env.OPENROUTER_API_KEY;
@@ -190,6 +192,7 @@ test('release-candidate mode runs a live kimi pair end to end through the CLI', 
     .map((line) => JSON.parse(line));
   assert.equal(audits.length, 2, 'generic and harness both reached fake Harbor');
   assert.ok(audits.every((audit) => audit.providerKeyPresent), 'real spawned Harbor receives the key through its process environment');
+  assert.ok(audits.every((audit) => !audit.githubTokenPresent), 'unrelated ambient CI credentials are excluded from Harbor');
   assert.ok(audits.every((audit) => !audit.secretInArgv && !audit.providerKeyInAgentEnv), 'neither argv nor --ae receives the key');
   const artifactRoots = new Set([
     fixture.datasetDir,
