@@ -69,25 +69,42 @@ const child = spawn('/bin/sh', ['-c', command], {
 child.stdout.on('data', (chunk) => appendTail(stdout, chunk));
 child.stderr.on('data', (chunk) => appendTail(stderr, chunk));
 
+let cleanupAttempted = false;
+let cleanupFailure = null;
+function terminateProcessGroup() {
+  if (cleanupAttempted) return;
+  cleanupAttempted = true;
+  try {
+    if (!Number.isInteger(child.pid) || child.pid <= 0) throw Object.assign(new Error('missing child pid'), { code: 'EINVAL' });
+    if (process.platform === 'win32') child.kill('SIGKILL');
+    else process.kill(-child.pid, 'SIGKILL');
+  } catch (error) {
+    // ESRCH proves that no member remains in the detached process group. Any
+    // other failure means descendants may still be able to mutate the task.
+    if (error?.code !== 'ESRCH') cleanupFailure = error?.code ?? 'UNKNOWN';
+  }
+}
+
 let timedOut = false;
 let timer = null;
 if (timeoutMs > 0) {
   timer = setTimeout(() => {
     timedOut = true;
-    try {
-      process.kill(-child.pid, 'SIGKILL');
-    } catch {
-      // The close handler still emits the bounded timeout envelope. Never let
-      // an ESRCH/EPERM race escape from an asynchronous timer callback.
-    }
+    terminateProcessGroup();
   }, timeoutMs);
   timer.unref();
 }
 
 child.on('error', (error) => fail(`command spawn failed: ${error.message}`));
+// A background descendant can inherit the pipes and delay `close` after the
+// command shell exits. Kill the detached group at `exit`; `close` below waits
+// for the streams to drain before publishing the result.
+child.on('exit', terminateProcessGroup);
 child.on('close', (code, signal) => {
   if (timer) clearTimeout(timer);
-  const exitCode = timedOut ? 124 : Number.isInteger(code) ? code : 128 + (signal ? 1 : 0);
+  terminateProcessGroup();
+  if (cleanupFailure) appendTail(stderr, Buffer.from(`\nprocess-group cleanup failed (${cleanupFailure})\n`, 'utf8'));
+  const exitCode = cleanupFailure ? 125 : timedOut ? 124 : Number.isInteger(code) ? code : 128 + (signal ? 1 : 0);
   process.stdout.write(
     JSON.stringify({
       version: 1,
