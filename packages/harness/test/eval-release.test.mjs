@@ -8,6 +8,7 @@ import {
   applyGatePolicy,
   runRelease,
   buildMarkdownReport,
+  efficiencyDelta,
 } from '../../../evals/release.mjs';
 
 const RUN_SCHEMA = JSON.parse(fs.readFileSync(new URL('../../../evals/schema/eval-run.v1.schema.json', import.meta.url), 'utf8'));
@@ -15,7 +16,15 @@ const REPORT_SCHEMA = JSON.parse(fs.readFileSync(new URL('../../../evals/schema/
 
 const CONFIG = {
   budget: { releaseCeilingUsd: 20, kimiPairUsd: 10, rerunUsd: 8, reserveUsd: 2 },
-  task: { datasetRef: 'terminal-bench@2.0', task: 'cobol-modernization' },
+  task: {
+    datasetRef: 'terminal-bench@2.0',
+    task: 'multi-task-canary',
+    taskSet: [
+      { task: 'cobol-modernization', role: 'anchor', taskChecksum: 'a'.repeat(64) },
+      { task: 'build-pmars', role: 'candidate', taskChecksum: 'b'.repeat(64) },
+    ],
+  },
+  efficiencyThresholds: { promptRatio: 2, costRatio: 1.5, wallTimeRatio: 1.25 },
 };
 
 /** A schema-valid eval-run document; `over` shallow-merges per section. */
@@ -53,6 +62,11 @@ function fullRun(condition, verdict, over = {}) {
     efficiency: {
       wallTimeMs: 60000,
       modelRequests: 5,
+      providerAttempts: 5,
+      providerResponses: 5,
+      providerErrors: 0,
+      retries: 0,
+      unknownBillingAttempts: 0,
       toolCalls: 9,
       terminalCommands: 7,
       failedCommands: 1,
@@ -60,8 +74,11 @@ function fullRun(condition, verdict, over = {}) {
       cachedPromptTokens: 200,
       reasoningTokens: 0,
       outputTokens: 400,
-      providerReportedCostUsd: null,
+      providerReportedCostUsd: 0.02,
       localCostUsd: 0.02,
+      usageComplete: true,
+      providerCostComplete: true,
+      billingComplete: true,
       costComplete: true,
       missingUsage: 0,
     },
@@ -101,7 +118,7 @@ function baseSteps(overrides = {}) {
     deterministic: async () => ({ passed: 17, failed: 0, skipped: 2 }),
     environment: async () => ({ ok: true, missing: [] }),
     taskLock: async () => ({ ok: true, reason: '' }),
-    frontierPair: async () => pairOf('codex-subscription', 'pass', 'pass'),
+    nativeProducts: async () => [{ host: 'codex-subscription', status: 'pass', telemetryAvailable: false }],
     kimiPair: async () => pairOf('openrouter-kimi', 'pass', 'pass'),
     gemmaPair: async () => pairOf('ollama-gemma', 'fail', 'fail'),
     smokes: async () => [{ host: 'copilot-smoke', ok: true, failed: [] }],
@@ -156,6 +173,25 @@ test('allocateReleaseBudgets chains the plan allowances under the release ceilin
   assert.equal(budgets.release.spentUsd(), 3);
 });
 
+test('the local release orchestrator can never be configured above the absolute 20 USD cap', () => {
+  assert.throws(() => allocateReleaseBudgets({ ...CONFIG.budget, releaseCeilingUsd: 20.01 }), /20/);
+  assert.equal(allocateReleaseBudgets({ ...CONFIG.budget, releaseCeilingUsd: 10 }).release.ceilingUsd, 10);
+});
+
+test('efficiency deltas use like-for-like evidence and the configured parity thresholds', () => {
+  const generic = fullRun('generic', 'pass');
+  const harness = fullRun('harness', 'pass', {
+    efficiency: { promptTokens: 2000, providerReportedCostUsd: 0.03, localCostUsd: 0.03, wallTimeMs: 75000, providerAttempts: 7 },
+  });
+  const delta = efficiencyDelta(generic, harness, CONFIG.efficiencyThresholds);
+  assert.deepEqual(
+    { prompt: delta.promptRatio, cost: delta.costRatio, wall: delta.wallTimeRatio, attempts: delta.providerAttemptRatio },
+    { prompt: 2, cost: 1.5, wall: 1.25, attempts: 1.4 }
+  );
+  assert.equal(delta.withinThresholds, true, 'threshold boundaries are inclusive');
+  assert.deepEqual(delta.breaches, []);
+});
+
 test('the reserve is unusable without a recorded reason', () => {
   const budgets = allocateReleaseBudgets(CONFIG.budget);
   assert.throws(() => budgets.reserve.use(), /reason/);
@@ -193,7 +229,53 @@ test('an all-green release produces a schema-valid report and exit code 0', asyn
   assert.deepEqual(validateAgainstSchema(report, REPORT_SCHEMA).errors, []);
   const kimi = report.pairs.find((p) => p.host === 'openrouter-kimi');
   assert.equal(kimi.result, 'parity');
+  assert.equal(kimi.comparisonTrack, 'controlled-ablation');
+  assert.equal(report.claim.level, 'bounded-overhead');
+  assert.equal(report.nativeProducts.length, 1);
+  assert.ok(!('generic' in report.nativeProducts[0]) && !('harness' in report.nativeProducts[0]));
   assert.equal(report.gate.block, false);
+});
+
+test('active success parity above an efficiency threshold blocks the release claim', async () => {
+  const expensive = pairOf('openrouter-kimi', 'pass', 'pass', {
+    harness: { efficiency: { promptTokens: 2001 } },
+  });
+  const { report, exitCode } = await runRelease({
+    config: CONFIG,
+    steps: baseSteps({ kimiPair: async () => expensive }),
+    requiredPairs: ['openrouter-kimi'],
+  });
+  const kimi = report.pairs.find((pair) => pair.host === 'openrouter-kimi');
+  assert.equal(kimi.efficiencyDelta.withinThresholds, false);
+  assert.ok(kimi.efficiencyDelta.breaches.includes('promptRatio'));
+  assert.equal(report.claim.level, 'regression');
+  assert.equal(exitCode, 1);
+  assert.ok(report.gate.reasons.some((reason) => /prompt.*ratio|efficiency/i.test(reason)));
+});
+
+test('an actual provider reconciliation above the absolute ceiling is retained and blocks', async () => {
+  const steps = baseSteps({
+    kimiPair: async (budget) => {
+      budget.charge(21, 'unexpected provider reconciliation');
+      return pairOf('openrouter-kimi', 'pass', 'pass');
+    },
+  });
+  const { report, exitCode } = await runRelease({ config: CONFIG, steps, requiredPairs: ['openrouter-kimi'] });
+  assert.equal(report.budget.spentUsd, 21);
+  assert.equal(report.budget.breached, true);
+  assert.equal(report.budget.overrunUsd, 1);
+  assert.equal(exitCode, 1);
+  assert.ok(report.gate.reasons.some((reason) => /budget.*exceeded/i.test(reason)));
+});
+
+test('a harness win produces a demonstrated-value claim without using native references as causal evidence', async () => {
+  const { report } = await runRelease({
+    config: CONFIG,
+    steps: baseSteps({ kimiPair: async () => pairOf('openrouter-kimi', 'fail', 'pass') }),
+  });
+  assert.equal(report.claim.level, 'demonstrated-value');
+  assert.equal(report.claim.controlledWins, 1);
+  assert.equal(report.nativeProducts[0].host, 'codex-subscription');
 });
 
 test('a deterministic regression blocks before any paid step runs', async () => {
@@ -286,12 +368,12 @@ test('a malformed verdict never crashes classification; the schema gate blocks i
   assert.ok(report.gate.reasons.some((r) => /telemetry/i.test(r)));
 });
 
-test('only the kimi pair draws from the kimi allowance; other pairs charge the release budget', async () => {
+test('only the controlled kimi pair draws from the kimi allowance; native products remain a separate reference track', async () => {
   const seen = {};
   const steps = baseSteps({
-    frontierPair: async (budget) => {
-      seen.frontier = budget?.label;
-      return pairOf('codex-subscription', 'pass', 'pass');
+    nativeProducts: async (budget) => {
+      seen.nativeBudget = budget;
+      return [{ host: 'codex-subscription', status: 'pass', telemetryAvailable: false }];
     },
     kimiPair: async (budget) => {
       seen.kimi = budget?.label;
@@ -304,7 +386,7 @@ test('only the kimi pair draws from the kimi allowance; other pairs charge the r
   });
   await runRelease({ config: CONFIG, steps });
   assert.equal(seen.kimi, 'kimi-pair');
-  assert.equal(seen.frontier, 'release');
+  assert.equal(seen.nativeBudget, undefined, 'subscription references do not consume or masquerade as API-pair budgets');
   assert.equal(seen.gemma, 'release');
 });
 
@@ -434,12 +516,15 @@ test('a regression on one task reruns and gates ONLY that task', async () => {
   assert.ok(report.gate.reasons.some((r) => /build-pmars/.test(r)), 'the gate reason names the task');
 });
 
-test('the markdown eval card names the task, verdicts, spend, and the single-task limitation', async () => {
+test('the markdown eval card names the full task set, verdicts, spend, claim, and comparison limitations', async () => {
   const { report } = await runRelease({ config: CONFIG, steps: baseSteps(), releaseSha: 'abc123', harnessVersion: '0.5.0' });
   const md = buildMarkdownReport(report);
   assert.match(md, /cobol-modernization/);
+  assert.match(md, /build-pmars/);
   assert.match(md, /openrouter-kimi/);
   assert.match(md, /parity/);
   assert.match(md, /\$/);
-  assert.match(md, /single (pinned )?task|release canary/i);
+  assert.match(md, /bounded-overhead/i);
+  assert.match(md, /native.*separate|not causal/i);
+  assert.doesNotMatch(md, /single pinned task/i);
 });

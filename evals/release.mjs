@@ -19,6 +19,9 @@ import { createRequire } from 'node:module';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createBudget } from './lib/budget.mjs';
 
+export const MAX_RELEASE_API_USD = 20;
+const DEFAULT_EFFICIENCY_THRESHOLDS = { promptRatio: 2, costRatio: 1.5, wallTimeRatio: 1.25 };
+
 const RUN_SCHEMA = JSON.parse(fs.readFileSync(new URL('./schema/eval-run.v1.schema.json', import.meta.url), 'utf8'));
 const REPORT_SCHEMA = JSON.parse(fs.readFileSync(new URL('./schema/eval-report.v1.schema.json', import.meta.url), 'utf8'));
 
@@ -107,10 +110,60 @@ export function classifyPair(pair) {
   return { ...base, result, reason };
 }
 
+function finiteNumber(value) {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+function ratio(candidate, baseline) {
+  const numerator = finiteNumber(candidate);
+  const denominator = finiteNumber(baseline);
+  if (numerator == null || denominator == null || denominator < 0 || numerator < 0) return null;
+  if (denominator === 0) return numerator === 0 ? 1 : null;
+  return Number((numerator / denominator).toFixed(6));
+}
+
+function comparableCost(doc) {
+  const efficiency = doc?.efficiency;
+  if (!efficiency || efficiency.costComplete !== true) return null;
+  if (efficiency.providerCostComplete === true && finiteNumber(efficiency.providerReportedCostUsd) != null) {
+    return efficiency.providerReportedCostUsd;
+  }
+  return finiteNumber(efficiency.localCostUsd);
+}
+
+/** Like-for-like Harness/baseline efficiency ratios for a controlled pair. */
+export function efficiencyDelta(generic, harness, thresholds = DEFAULT_EFFICIENCY_THRESHOLDS) {
+  const limits = { ...DEFAULT_EFFICIENCY_THRESHOLDS, ...(thresholds ?? {}) };
+  const promptRatio = ratio(harness?.efficiency?.promptTokens, generic?.efficiency?.promptTokens);
+  const costRatio = ratio(comparableCost(harness), comparableCost(generic));
+  const wallTimeRatio = ratio(harness?.efficiency?.wallTimeMs, generic?.efficiency?.wallTimeMs);
+  const modelRequestRatio = ratio(harness?.efficiency?.modelRequests, generic?.efficiency?.modelRequests);
+  const providerAttemptRatio = ratio(harness?.efficiency?.providerAttempts, generic?.efficiency?.providerAttempts);
+  const breaches = [];
+  if (promptRatio != null && promptRatio > limits.promptRatio) breaches.push('promptRatio');
+  if (costRatio != null && costRatio > limits.costRatio) breaches.push('costRatio');
+  if (wallTimeRatio != null && wallTimeRatio > limits.wallTimeRatio) breaches.push('wallTimeRatio');
+  const evidenceComplete = [promptRatio, costRatio, wallTimeRatio].every((value) => value != null);
+  return {
+    promptRatio,
+    costRatio,
+    wallTimeRatio,
+    modelRequestRatio,
+    providerAttemptRatio,
+    thresholds: limits,
+    evidenceComplete,
+    withinThresholds: evidenceComplete && breaches.length === 0,
+    breaches,
+  };
+}
+
 /* ----------------------------------------------------------------- budget -- */
 
 /** §10 in code: chained allowances under one release ceiling, reserve gated on a reason. */
-export function allocateReleaseBudgets({ releaseCeilingUsd = 20, kimiPairUsd = 10, rerunUsd = 8, reserveUsd = 2 } = {}) {
+export function allocateReleaseBudgets({ releaseCeilingUsd = 10, kimiPairUsd = 8, rerunUsd = 2, reserveUsd = 2 } = {}) {
+  if (releaseCeilingUsd > MAX_RELEASE_API_USD) {
+    throw new Error(`release API budget may not exceed the absolute $${MAX_RELEASE_API_USD} ceiling`);
+  }
   const release = createBudget({ ceilingUsd: releaseCeilingUsd, label: 'release' });
   const kimiPair = createBudget({ ceilingUsd: kimiPairUsd, label: 'kimi-pair', parent: release });
   const rerun = createBudget({ ceilingUsd: rerunUsd, label: 'kimi-rerun', parent: release });
@@ -134,12 +187,13 @@ export function allocateReleaseBudgets({ releaseCeilingUsd = 20, kimiPairUsd = 1
 /* ------------------------------------------------------------ gate policy -- */
 
 /** §9: always-blocking rules, with gate-inactive pairs reporting instead of blocking. */
-export function applyGatePolicy({ deterministic, pairs = [], smokes = [], telemetryComplete, taskLockOk, environmentOk, calibrationRelease = false }) {
+export function applyGatePolicy({ deterministic, pairs = [], smokes = [], telemetryComplete, taskLockOk, environmentOk, budgetBreached = false, calibrationRelease = false }) {
   const reasons = [];
   if (deterministic?.failed > 0) reasons.push(`existing deterministic evals regressed (${deterministic.failed} failing)`);
   if (environmentOk === false) reasons.push('required dependencies or credentials are missing');
   if (taskLockOk === false) reasons.push('the pinned task/verifier failed validation');
   if (telemetryComplete === false) reasons.push('required telemetry is missing from at least one run');
+  if (budgetBreached) reasons.push('the absolute release API budget was exceeded during provider reconciliation');
   for (const pair of pairs) {
     const c = pair.classification ?? {};
     const label = pair.task ? `${pair.host} (${pair.task})` : pair.host;
@@ -153,6 +207,12 @@ export function applyGatePolicy({ deterministic, pairs = [], smokes = [], teleme
     }
     if (!pair.gateActive) continue;
     if (c.fallbackDetected) reasons.push(`model or provider fallback invalidated the comparison on ${label}`);
+    if (c.result === 'parity' && pair.efficiencyDelta?.withinThresholds === false) {
+      const detail = pair.efficiencyDelta.evidenceComplete
+        ? `efficiency ratio exceeded: ${pair.efficiencyDelta.breaches.join(', ')}`
+        : 'efficiency evidence is incomplete';
+      reasons.push(`success parity overhead on ${label} is outside release limits (${detail})`);
+    }
     if (c.result === 'harness-regression' && pair.reproduced === true) {
       reasons.push(`reproduced harness regression on ${label}`);
     }
@@ -161,6 +221,31 @@ export function applyGatePolicy({ deterministic, pairs = [], smokes = [], teleme
     if (smoke.ok === false) reasons.push(`compatibility smoke failed: ${smoke.host} (${(smoke.failed ?? []).join(', ')})`);
   }
   return { block: reasons.length > 0, reasons };
+}
+
+function buildClaim(pairs, telemetryComplete) {
+  const active = pairs.filter((pair) => pair.comparisonTrack === 'controlled-ablation' && pair.gateActive && pair.result !== 'skipped');
+  const controlledWins = active.filter((pair) => pair.result === 'harness-win').length;
+  const regressions = active.filter(
+    (pair) => pair.result === 'harness-regression' || (pair.result === 'parity' && pair.efficiencyDelta?.withinThresholds === false)
+  ).length;
+  let level = 'inconclusive';
+  let statement = 'The controlled evidence is not yet sufficient for a Harness value claim.';
+  if (regressions > 0) {
+    level = 'regression';
+    statement = 'At least one active controlled comparison regressed in correctness or bounded-overhead policy.';
+  } else if (telemetryComplete && controlledWins > 0) {
+    level = 'demonstrated-value';
+    statement = 'The Harness improved verified success in at least one active same-model controlled comparison.';
+  } else if (
+    telemetryComplete &&
+    active.length > 0 &&
+    active.every((pair) => pair.result === 'parity' && pair.efficiencyDelta?.withinThresholds === true)
+  ) {
+    level = 'bounded-overhead';
+    statement = 'Verified success was at parity and Harness overhead stayed within the declared release thresholds.';
+  }
+  return { level, statement, controlledPairs: active.length, controlledWins, regressions };
 }
 
 /* ------------------------------------------------------------ orchestrator -- */
@@ -195,6 +280,7 @@ export async function runRelease({ config, steps, calibrationRelease = false, re
     if (!stepFn || !preflightOk) {
       pairEntries.push({
         host,
+        comparisonTrack: 'controlled-ablation',
         required,
         result: 'skipped',
         reason: !stepFn ? 'not scheduled for this release' : 'preflight failed — paid steps withheld',
@@ -208,7 +294,7 @@ export async function runRelease({ config, steps, calibrationRelease = false, re
     }
     const result = await stepFn(budget);
     if (!result || (Array.isArray(result) && !result.length)) {
-      pairEntries.push({ host, task: null, required, result: 'skipped', reason: 'dependencies unavailable', gateActive: false, reproduced: null, classification: null, generic: null, harness: null });
+      pairEntries.push({ host, comparisonTrack: 'controlled-ablation', task: null, required, result: 'skipped', reason: 'dependencies unavailable', gateActive: false, reproduced: null, classification: null, efficiencyDelta: null, generic: null, harness: null });
       return;
     }
     // Multi-task steps return one pair per pinned task; each is classified,
@@ -236,6 +322,7 @@ export async function runRelease({ config, steps, calibrationRelease = false, re
       }
       pairEntries.push({
         host,
+        comparisonTrack: 'controlled-ablation',
         task: pair.task ?? null,
         seedCount: pair.seedCount ?? null,
         required,
@@ -244,28 +331,47 @@ export async function runRelease({ config, steps, calibrationRelease = false, re
         gateActive: gateActiveFor(host, calibrationRelease),
         reproduced,
         classification,
+        efficiencyDelta: efficiencyDelta(pair.generic, pair.harness, config.efficiencyThresholds),
         generic: pair.generic ?? null,
         harness: pair.harness ?? null,
       });
     }
   }
 
-  await evaluatePair('codex-subscription', steps.frontierPair);
   await evaluatePair('openrouter-kimi', steps.kimiPair, { rerunFn: steps.rerunKimiPair, budget: budgets.kimiPair });
   await evaluatePair('ollama-gemma', steps.gemmaPair);
+
+  const rawNativeProducts = preflightOk && steps.nativeProducts ? await steps.nativeProducts() : [];
+  const nativeProducts = (rawNativeProducts ?? []).map((entry) => {
+    const { generic: ignoredGeneric, harness: ignoredHarness, ...safe } = entry ?? {};
+    if (ignoredGeneric != null || ignoredHarness != null) {
+      return {
+        host: String(entry?.host ?? 'unknown-native-product'),
+        comparisonTrack: 'native-product-reference',
+        status: 'invalid',
+        telemetryAvailable: false,
+        reason: 'native product references cannot be represented as controlled generic/harness arms',
+      };
+    }
+    return { ...safe, comparisonTrack: 'native-product-reference' };
+  });
 
   const smokes = preflightOk && steps.smokes ? await steps.smokes() : [];
   // Evidence is complete only when every run document validates AND every
   // required API pair actually metered its spend — an all-null efficiency
   // block is a missing measurement, not a measurement of nothing.
-  const METERED_FIELDS = ['promptTokens', 'outputTokens', 'modelRequests', 'localCostUsd'];
+  const METERED_FIELDS = ['promptTokens', 'outputTokens', 'modelRequests', 'providerAttempts', 'localCostUsd'];
   const meteredOk = pairEntries.every((p) => {
     if (!p.required || p.result === 'skipped') return true;
     if (!p.generic || !p.harness) return false;
     return [p.generic, p.harness].every(
       (doc) =>
         METERED_FIELDS.every((f) => doc.efficiency?.[f] != null) &&
+        doc.efficiency?.usageComplete === true &&
+        doc.efficiency?.providerCostComplete === true &&
+        doc.efficiency?.billingComplete === true &&
         doc.efficiency?.costComplete === true &&
+        doc.efficiency?.unknownBillingAttempts === 0 &&
         doc.efficiency?.missingUsage === 0
     );
   });
@@ -277,8 +383,12 @@ export async function runRelease({ config, steps, calibrationRelease = false, re
     telemetryComplete,
     taskLockOk: taskLock.ok !== false,
     environmentOk: environment.ok !== false,
+    budgetBreached: budgets.release.breached,
     calibrationRelease,
   });
+
+  const taskSet = config.task?.taskSet ?? [];
+  const claim = buildClaim(pairEntries, telemetryComplete);
 
   const report = {
     schema: 'eval-report.v1',
@@ -288,21 +398,27 @@ export async function runRelease({ config, steps, calibrationRelease = false, re
       datasetRef: config.task?.datasetRef ?? 'unknown',
       task: config.task?.task ?? 'unknown',
       taskChecksum: config.task?.taskChecksum ?? null,
+      taskSet,
     },
     calibrationRelease,
     deterministic,
     pairs: pairEntries.map(({ classification, required, ...entry }) => entry),
+    nativeProducts,
     smokes,
     budget: {
       ceilingUsd: budgets.release.ceilingUsd,
       spentUsd: budgets.release.spentUsd(),
       exhausted: budgets.release.exhausted,
+      breached: budgets.release.breached,
+      overrunUsd: budgets.release.overrunUsd(),
       reserveUsed: budgets.reserveUsedReason(),
     },
     gate,
+    claim,
     limitations: [
-      'Single pinned task — this is a release canary, not a broad productivity claim.',
-      'Subscription host results are separate host A/Bs and are never mixed numerically with the neutral API result.',
+      'The pinned task set is a release canary, not a broad productivity benchmark.',
+      'Native product runs (Codex, Claude Code, Pi, and similar agents) are reference evidence only and never substitute for a same-model controlled ablation.',
+      'A live paid calibration is still required before publishing measured ratio results from this implementation.',
     ],
   };
   return { report, exitCode: gate.block ? 1 : 0 };
@@ -312,10 +428,13 @@ export async function runRelease({ config, steps, calibrationRelease = false, re
 
 /** The Eval Card in markdown, from a report object. */
 export function buildMarkdownReport(report) {
+  const taskNames = report.task.taskSet?.length
+    ? report.task.taskSet.map((entry) => `\`${entry.task}\``).join(', ')
+    : `\`${report.task.task}\``;
   const lines = [
     `# Eval Card — Engineer Harness ${report.harnessVersion} (${report.releaseSha})`,
     '',
-    `Task: \`${report.task.task}\` (${report.task.datasetRef})${report.calibrationRelease ? ' — calibration release' : ''}`,
+    `Task set: ${taskNames} (${report.task.datasetRef})${report.calibrationRelease ? ' — calibration release' : ''}`,
     '',
     `Deterministic suite: ${report.deterministic.passed} passed, ${report.deterministic.failed} failed, ${report.deterministic.skipped} skipped.`,
     '',
@@ -323,10 +442,18 @@ export function buildMarkdownReport(report) {
     '|---|---|---|---|',
     ...report.pairs.map((p) => `| ${p.task ? `${p.host} (${p.task})` : p.host} | ${p.result} | ${p.gateActive ? 'active' : 'informational'} | ${p.reason} |`),
     '',
+    `Claim level: **${report.claim.level}** — ${report.claim.statement}`,
+    '',
+    ...(report.nativeProducts?.length
+      ? [
+          `Native product references (separate, not causal): ${report.nativeProducts.map((entry) => `${entry.host} ${entry.status}`).join(' · ')}`,
+          '',
+        ]
+      : []),
     ...(report.smokes.length
       ? [`Smokes: ${report.smokes.map((s) => `${s.host} ${s.ok ? 'ok' : `failed (${(s.failed ?? []).join(', ')})`}`).join(' · ')}`, '']
       : []),
-    `Incremental spend: $${report.budget.spentUsd.toFixed(2)} of $${report.budget.ceilingUsd.toFixed(2)} ceiling${report.budget.reserveUsed ? ` (reserve used: ${report.budget.reserveUsed})` : ''}.`,
+    `Incremental API spend: $${report.budget.spentUsd.toFixed(2)} of $${report.budget.ceilingUsd.toFixed(2)} ceiling${report.budget.breached ? ` (BREACHED by $${report.budget.overrunUsd.toFixed(2)})` : ''}${report.budget.reserveUsed ? ` (reserve used: ${report.budget.reserveUsed})` : ''}.`,
     '',
     report.gate.block ? `**Release blocked:** ${report.gate.reasons.join('; ')}` : '**Release not blocked by evaluation gates.**',
     '',
@@ -361,9 +488,12 @@ async function main() {
     fs.readFileSync(lockFileFlag ? path.resolve(lockFileFlag) : new URL(`../${raw.task.lockFile}`, import.meta.url), 'utf8')
   );
   const budgetUsd = Number(flag('--budget-usd', raw.budget.releaseCeilingUsd));
-  if (!Number.isFinite(budgetUsd) || budgetUsd < 0) {
-    throw new Error(`--budget-usd must be a non-negative number, got: ${flag('--budget-usd')}`);
+  if (!Number.isFinite(budgetUsd) || budgetUsd < 0 || budgetUsd > MAX_RELEASE_API_USD) {
+    throw new Error(`--budget-usd must be between 0 and ${MAX_RELEASE_API_USD}, got: ${flag('--budget-usd')}`);
   }
+  const taskSet = (lock.tasks ?? (lock.task ? [{ task: lock.task, taskChecksum: lock.taskChecksum, role: 'anchor' }] : [])).map(
+    ({ task, taskChecksum = null, role = null }) => ({ task, taskChecksum, role })
+  );
   const config = {
     budget: {
       releaseCeilingUsd: budgetUsd,
@@ -371,7 +501,13 @@ async function main() {
       rerunUsd: raw.budget.rerunUsd,
       reserveUsd: raw.budget.reserveUsd,
     },
-    task: { datasetRef: lock.datasetRef, task: flag('--task', lock.task), taskChecksum: lock.taskChecksum },
+    task: {
+      datasetRef: lock.datasetRef,
+      task: flag('--task', taskSet.length === 1 ? taskSet[0].task : 'multi-task-canary'),
+      taskChecksum: taskSet.length === 1 ? taskSet[0].taskChecksum : null,
+      taskSet,
+    },
+    efficiencyThresholds: raw.efficiencyThresholds ?? DEFAULT_EFFICIENCY_THRESHOLDS,
   };
 
   const releaseSha = flag('--release-sha', 'workdir');
@@ -395,6 +531,7 @@ async function main() {
         return { ok: verdict.ok, reason: verdict.errors.join('; ') };
       },
       frontierPair: null,
+      nativeProducts: null,
       kimiPair: null,
       gemmaPair: null,
       smokes: null,

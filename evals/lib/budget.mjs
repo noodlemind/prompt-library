@@ -53,6 +53,7 @@ export function createBudget({ ceilingUsd, label = 'budget', parent = null } = {
   }
   let spent = 0;
   let exhausted = false;
+  let breached = false;
   const events = [];
 
   const budget = {
@@ -61,7 +62,11 @@ export function createBudget({ ceilingUsd, label = 'budget', parent = null } = {
     get exhausted() {
       return exhausted;
     },
+    get breached() {
+      return breached;
+    },
     spentUsd: () => spent,
+    overrunUsd: () => Number(Math.max(0, spent - ceilingUsd).toFixed(12)),
     remainingUsd: () => Math.max(0, ceilingUsd - spent),
     events: () => events.slice(),
     /** Would spending `estimateUsd` cross this ceiling or any parent's? */
@@ -92,6 +97,18 @@ export function createBudget({ ceilingUsd, label = 'budget', parent = null } = {
       }
       spent += usd;
       events.push({ type: 'charge', label, usd, note, spentUsd: spent });
+      if (spent > ceilingUsd) {
+        breached = true;
+        exhausted = true;
+        events.push({
+          type: 'budget_breach',
+          label,
+          ceilingUsd,
+          spentUsd: spent,
+          overrunUsd: Number((spent - ceilingUsd).toFixed(12)),
+          note,
+        });
+      }
       parent?.charge(usd, note);
     },
   };

@@ -117,3 +117,23 @@ test('charge rejects negative amounts and ignores null cost', () => {
   budget.charge(null, 'unusable usage');
   assert.equal(budget.spentUsd(), 0);
 });
+
+test('an unexpected actual charge above a prechecked ceiling is retained and marked as a blocking breach', () => {
+  const budget = createBudget({ ceilingUsd: 1, label: 'release' });
+  assert.equal(budget.precheck(0.9).allowed, true);
+  budget.charge(1.1, 'provider reconciliation');
+  assert.equal(budget.spentUsd(), 1.1, 'actual provider spend must never be hidden or capped in the ledger');
+  assert.equal(budget.breached, true);
+  assert.equal(budget.exhausted, true);
+  assert.equal(budget.overrunUsd(), 0.1);
+  assert.equal(budget.events().at(-1).type, 'budget_breach');
+});
+
+test('a child overrun also marks its parent release ceiling when applicable', () => {
+  const release = createBudget({ ceilingUsd: 1, label: 'release' });
+  const trial = createBudget({ ceilingUsd: 2, label: 'trial', parent: release });
+  trial.charge(1.2, 'provider reconciliation');
+  assert.equal(trial.breached, false);
+  assert.equal(release.breached, true);
+  assert.equal(release.spentUsd(), 1.2);
+});
