@@ -18,6 +18,14 @@ test('kimi profile carries pricing with cached input cheaper than uncached', () 
   assert.ok(pricing.cachedInputPerM < pricing.inputPerM);
 });
 
+test('kimi pricing matches the pinned Moonshot AI endpoint, not the model-level floor', () => {
+  // OpenRouter bills per endpoint. The profile pins provider order to
+  // moonshotai, whose standard endpoint lists $0.95/M input, $0.19/M cached
+  // input, and $4.00/M output — cost totals, charges, and prechecks must use
+  // the pinned endpoint's rates.
+  assert.deepEqual(getProfile('kimi-k2.7-code').pricing, { inputPerM: 0.95, cachedInputPerM: 0.19, outputPerM: 4.0 });
+});
+
 test('kimi profile enforces the plan trial ceiling and timeout', () => {
   const p = getProfile('kimi-k2.7-code');
   assert.equal(p.trialCeilingUsd, 5);

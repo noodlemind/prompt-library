@@ -27,7 +27,9 @@ const PROFILES = deepFreeze({
     url: 'https://openrouter.ai/api/v1/chat/completions',
     // Pinned routing: one provider, no fallback — a fallback invalidates the A/B.
     provider: { order: ['moonshotai'], allowFallbacks: false },
-    pricing: { inputPerM: 0.73, cachedInputPerM: 0.15, outputPerM: 3.5 },
+    // OpenRouter bills per endpoint: these are the pinned Moonshot AI standard
+    // endpoint rates, not the cheaper model-level floor from unpinned providers.
+    pricing: { inputPerM: 0.95, cachedInputPerM: 0.19, outputPerM: 4.0 },
     maxTokens: 8192,
     temperature: null, // model default, per the evaluation plan
     reasoning: null, // identical (absent) in both conditions

@@ -47,6 +47,10 @@ export function estimateTokensForChars(chars) {
  * release budget: charges propagate up, and precheck must clear every level.
  */
 export function createBudget({ ceilingUsd, label = 'budget', parent = null } = {}) {
+  // A cost cap that fails open is worse than none: refuse to construct.
+  if (!(typeof ceilingUsd === 'number' && Number.isFinite(ceilingUsd)) || ceilingUsd < 0) {
+    throw new Error(`budget ceilingUsd must be a non-negative number, got ${ceilingUsd}`);
+  }
   let spent = 0;
   let exhausted = false;
   const events = [];
@@ -70,7 +74,13 @@ export function createBudget({ ceilingUsd, label = 'budget', parent = null } = {
       }
       if (parent) {
         const up = parent.precheck(estimateUsd);
-        if (!up.allowed) return up;
+        if (!up.allowed) {
+          // The refusal is the parent's, but this budget is done too: flag it
+          // and record the event locally so its own audit trail is complete.
+          exhausted = true;
+          events.push({ type: 'budget_exhausted', label, ceilingUsd, spentUsd: spent, estimateUsd, via: parent.label });
+          return up;
+        }
       }
       return { allowed: true, reason: '' };
     },

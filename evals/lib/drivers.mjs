@@ -70,6 +70,7 @@ export function openAiToolDriver({
   budget = null,
   telemetry = null,
   toolResultLimit = 4000,
+  requestTimeoutMs,
 } = {}) {
   const endpoint = url ?? profile?.url;
   const requestedModel = model ?? profile?.model;
@@ -81,6 +82,7 @@ export function openAiToolDriver({
   const effReasoning = reasoning !== undefined ? reasoning : profile?.reasoning ?? null;
   const effProvider = provider !== undefined ? provider : profile?.provider ?? null;
   const effPricing = pricing ?? profile?.pricing ?? null;
+  const effRequestTimeoutMs = requestTimeoutMs ?? profile?.timeoutMs ?? null;
 
   const tools = [];
   let messages = [];
@@ -158,27 +160,43 @@ export function openAiToolDriver({
   async function callApi(payload) {
     telemetry?.record('request', { model: requestedModel, messageCount: messages.length });
 
-    let res;
-    try {
-      res = await fetchImpl(endpoint, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json', authorization: `Bearer ${apiKey}` },
-        body: payload,
-      });
-    } catch (err) {
-      telemetry?.record('error', { kind: 'network', message: err.message });
-      throw new ProviderError(`provider request failed: ${err.message}`, { kind: 'network', billed: false });
-    }
-    if (!res.ok) {
-      telemetry?.record('error', { kind: 'http', status: res.status });
-      throw new ProviderError(`provider http ${res.status}`, { kind: 'http', billed: false, status: res.status });
-    }
+    // The abort timer covers the whole request — connection AND body read —
+    // so a hung provider becomes a classified failure instead of a stuck
+    // trial. Billing for an aborted request is unknowable: billed stays null.
+    const controller = effRequestTimeoutMs ? new AbortController() : null;
+    const timer = controller ? setTimeout(() => controller.abort(), effRequestTimeoutMs) : null;
+    const timedOutError = () => {
+      telemetry?.record('error', { kind: 'timeout', timeoutMs: effRequestTimeoutMs });
+      return new ProviderError(`provider request timed out after ${effRequestTimeoutMs}ms`, { kind: 'timeout', billed: null });
+    };
     let data;
     try {
-      data = await res.json();
-    } catch (err) {
-      telemetry?.record('error', { kind: 'provider', message: `unparseable response: ${err.message}` });
-      throw new ProviderError(`provider returned unparseable JSON: ${err.message}`, { kind: 'provider', billed: false });
+      let res;
+      try {
+        res = await fetchImpl(endpoint, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', authorization: `Bearer ${apiKey}` },
+          body: payload,
+          signal: controller?.signal,
+        });
+      } catch (err) {
+        if (controller?.signal.aborted) throw timedOutError();
+        telemetry?.record('error', { kind: 'network', message: err.message });
+        throw new ProviderError(`provider request failed: ${err.message}`, { kind: 'network', billed: false });
+      }
+      if (!res.ok) {
+        telemetry?.record('error', { kind: 'http', status: res.status });
+        throw new ProviderError(`provider http ${res.status}`, { kind: 'http', billed: false, status: res.status });
+      }
+      try {
+        data = await res.json();
+      } catch (err) {
+        if (controller?.signal.aborted) throw timedOutError();
+        telemetry?.record('error', { kind: 'provider', message: `unparseable response: ${err.message}` });
+        throw new ProviderError(`provider returned unparseable JSON: ${err.message}`, { kind: 'provider', billed: false });
+      }
+    } finally {
+      if (timer) clearTimeout(timer);
     }
 
     // Usage and identifiers are captured even for malformed completions — a
@@ -229,6 +247,7 @@ export function openAiToolDriver({
         { role: 'user', content: instruction },
       ];
       pending = [];
+      fallbackDetected = false; // a reused driver must not taint a fresh trial
     },
     async next() {
       // Drain any tool_calls the assistant already emitted this turn before

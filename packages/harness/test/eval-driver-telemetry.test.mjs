@@ -39,8 +39,8 @@ const USAGE = {
   completion_tokens_details: { reasoning_tokens: 25 },
   cost: 0.0012,
 };
-// (600 * 0.73 + 400 * 0.15 + 100 * 3.5) / 1e6
-const USAGE_LOCAL_COST = 0.000848;
+// Pinned Moonshot AI endpoint rates: (600 * 0.95 + 400 * 0.19 + 100 * 4.0) / 1e6
+const USAGE_LOCAL_COST = 0.001046;
 
 /** Driver wired to a scripted mock endpoint; returns the driver plus captured requests. */
 function harness(responses, opts = {}) {
@@ -230,6 +230,26 @@ test('an exhausted replay driver reports replay_exhausted', async () => {
   const action = await driver.next();
   assert.equal(action.type, 'finish');
   assert.equal(action.stopReason, 'replay_exhausted');
+});
+
+test('reset clears fallback state so a reused driver cannot taint a fresh trial', async () => {
+  const { driver } = harness([
+    completion({ message: assistantToolCalls([['runInTerminal', { command: 'ls' }]]), usage: USAGE, model: 'moonshotai/kimi-k2-instruct' }),
+  ]);
+  await driver.next();
+  assert.equal(driver.fallbackDetected, true);
+  driver.reset({ system: 's', instruction: 'i', tools: TOOLS });
+  assert.equal(driver.fallbackDetected, false);
+});
+
+test('a hung request aborts at the configured timeout as an unknown-billing timeout failure', async () => {
+  const fetchImpl = (url, init) =>
+    new Promise((resolve, reject) => {
+      init.signal.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')));
+    });
+  const driver = openAiToolDriver({ profile: KIMI, apiKey: 'k', fetchImpl, requestTimeoutMs: 20 });
+  driver.reset({ system: 's', instruction: 'i', tools: TOOLS });
+  await assert.rejects(driver.next(), (err) => err.kind === 'timeout' && err.billed === null);
 });
 
 test('legacy construction without profile, budget, or telemetry still works with model-default temperature', async () => {

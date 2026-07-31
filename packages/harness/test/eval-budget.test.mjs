@@ -95,6 +95,22 @@ test('precheck refuses when the trial fits but the release ceiling would be cros
   assert.match(verdict.reason, /release/);
 });
 
+test('a budget without a valid ceiling refuses to exist rather than failing open', () => {
+  assert.throws(() => createBudget({ label: 'trial' }), /ceilingUsd/);
+  assert.throws(() => createBudget({ ceilingUsd: NaN }), /ceilingUsd/);
+  assert.throws(() => createBudget({ ceilingUsd: -1 }), /ceilingUsd/);
+});
+
+test('a parent refusal marks the child exhausted and lands in its audit trail', () => {
+  const release = createBudget({ ceilingUsd: 3, label: 'release' });
+  const trial = createBudget({ ceilingUsd: 5, label: 'trial', parent: release });
+  trial.charge(2.5, 'prior');
+  const verdict = trial.precheck(1);
+  assert.equal(verdict.allowed, false);
+  assert.equal(trial.exhausted, true, 'the child must not keep re-prechecking forever');
+  assert.equal(trial.events().at(-1).type, 'budget_exhausted');
+});
+
 test('charge rejects negative amounts and ignores null cost', () => {
   const budget = createBudget({ ceilingUsd: 5, label: 'b' });
   assert.throws(() => budget.charge(-1), /negative/);
