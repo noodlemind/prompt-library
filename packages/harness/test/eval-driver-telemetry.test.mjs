@@ -245,6 +245,37 @@ test('an exhausted replay driver reports replay_exhausted', async () => {
   assert.equal(action.stopReason, 'replay_exhausted');
 });
 
+test('a zero-priced local profile with a budget tolerates unusable usage — it is not paid spend', async () => {
+  const gemma = getProfile('gemma-4-26b-local');
+  const fetchImpl = async () =>
+    completion({ message: assistantToolCalls([['runInTerminal', { command: 'ls' }]]), usage: { prompt_tokens: 'junk' }, model: gemma.model });
+  const driver = openAiToolDriver({ profile: gemma, apiKey: 'ollama', fetchImpl, budget: createBudget({ ceilingUsd: 0 }), telemetry: createTelemetry() });
+  driver.reset({ system: 's', instruction: 'i', tools: TOOLS });
+  const action = await driver.next();
+  assert.equal(action.type, 'tool', 'free local runs must not die on missing usage');
+});
+
+test('the budget precheck grows with observed prompt sizes, not just a character guess', async () => {
+  // First response reports a 1M-token prompt. The next request's precheck must
+  // assume at least last prompt + last output tokens, so a ceiling with room
+  // for only the first call refuses the second even though the payload chars
+  // alone would estimate far less.
+  const usage = { prompt_tokens: 1_000_000, completion_tokens: 100_000 };
+  // First-call cost: (1M * 0.95 + 100k * 4.0) / 1M = 1.35
+  const { driver } = harness(
+    [
+      completion({ message: assistantToolCalls([['runInTerminal', { command: 'ls' }]]), usage }),
+      completion({ message: { role: 'assistant', content: 'done' }, usage, finishReason: 'stop' }),
+    ],
+    { ceilingUsd: 2.0 }
+  );
+  const first = await driver.next();
+  driver.observe(first, { code: 0 });
+  const second = await driver.next();
+  assert.equal(second.type, 'finish');
+  assert.equal(second.stopReason, 'budget_exhausted', 'observed usage must inform the worst-case estimate');
+});
+
 test('reset clears fallback state so a reused driver cannot taint a fresh trial', async () => {
   const { driver } = harness([
     completion({ message: assistantToolCalls([['runInTerminal', { command: 'ls' }]]), usage: USAGE, model: 'moonshotai/kimi-k2-instruct' }),

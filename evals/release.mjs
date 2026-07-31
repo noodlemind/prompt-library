@@ -13,6 +13,8 @@
  * Exit code is non-zero only for genuinely blocking results (§9).
  */
 import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { createRequire } from 'node:module';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createBudget } from './lib/budget.mjs';
@@ -87,8 +89,10 @@ export function classifyPair(pair) {
   if (generic.safety || harness.safety) {
     return { ...base, safety: true, result: 'harness-regression', reason: 'a harness safety control was bypassed' };
   }
-  if (pair.failureKind === 'infrastructure') {
-    return { ...base, result: 'infrastructure-invalid', reason: 'infrastructure failure invalidated the trial' };
+  if (pair.failureKind) {
+    // provider and verifier failures are invalid trials too — never "the
+    // model wasn't capable".
+    return { ...base, result: 'infrastructure-invalid', reason: `${pair.failureKind} failure invalidated the trial` };
   }
   if (generic.budgetExhausted || harness.budgetExhausted) {
     return { ...base, result: 'inconclusive-budget', reason: 'a condition exhausted its budget before completing' };
@@ -130,7 +134,7 @@ export function allocateReleaseBudgets({ releaseCeilingUsd = 20, kimiPairUsd = 1
 /* ------------------------------------------------------------ gate policy -- */
 
 /** §9: always-blocking rules, with gate-inactive pairs reporting instead of blocking. */
-export function applyGatePolicy({ deterministic, pairs = [], telemetryComplete, taskLockOk, environmentOk, calibrationRelease = false }) {
+export function applyGatePolicy({ deterministic, pairs = [], smokes = [], telemetryComplete, taskLockOk, environmentOk, calibrationRelease = false }) {
   const reasons = [];
   if (deterministic?.failed > 0) reasons.push(`existing deterministic evals regressed (${deterministic.failed} failing)`);
   if (environmentOk === false) reasons.push('required dependencies or credentials are missing');
@@ -139,11 +143,21 @@ export function applyGatePolicy({ deterministic, pairs = [], telemetryComplete, 
   for (const pair of pairs) {
     const c = pair.classification ?? {};
     if (c.safety) reasons.push(`harness safety control bypassed on ${pair.host}`);
+    // A required pair with no valid evidence is a red release, not a green one.
+    if (pair.required && pair.result === 'skipped') {
+      reasons.push(`required pair ${pair.host} was skipped and did not run`);
+    }
+    if ((pair.gateActive || pair.required) && pair.result === 'infrastructure-invalid') {
+      reasons.push(`pair ${pair.host} produced no valid signal (${pair.reason})`);
+    }
     if (!pair.gateActive) continue;
     if (c.fallbackDetected) reasons.push(`model or provider fallback invalidated the comparison on ${pair.host}`);
     if (c.result === 'harness-regression' && pair.reproduced === true) {
       reasons.push(`reproduced harness regression on ${pair.host}`);
     }
+  }
+  for (const smoke of smokes) {
+    if (smoke.ok === false) reasons.push(`compatibility smoke failed: ${smoke.host} (${(smoke.failed ?? []).join(', ')})`);
   }
   return { block: reasons.length > 0, reasons };
 }
@@ -162,7 +176,7 @@ function gateActiveFor(host, calibrationRelease) {
  * preflight (deterministic regression, missing dependencies, or a bad task
  * pin) — that is the cost-control property, not an optimization.
  */
-export async function runRelease({ config, steps, calibrationRelease = false, releaseSha = 'unknown', harnessVersion = 'unknown' }) {
+export async function runRelease({ config, steps, calibrationRelease = false, releaseSha = 'unknown', harnessVersion = 'unknown', requiredPairs = [] }) {
   const budgets = allocateReleaseBudgets(config.budget ?? {});
   const deterministic = await steps.deterministic();
   const environment = steps.environment ? await steps.environment() : { ok: true, missing: [] };
@@ -176,9 +190,11 @@ export async function runRelease({ config, steps, calibrationRelease = false, re
   };
 
   async function evaluatePair(host, stepFn, { rerunFn = null, budget = budgets.release } = {}) {
+    const required = requiredPairs.includes(host);
     if (!stepFn || !preflightOk) {
       pairEntries.push({
         host,
+        required,
         result: 'skipped',
         reason: !stepFn ? 'not scheduled for this release' : 'preflight failed — paid steps withheld',
         gateActive: false,
@@ -191,7 +207,7 @@ export async function runRelease({ config, steps, calibrationRelease = false, re
     }
     const pair = await stepFn(budget);
     if (!pair) {
-      pairEntries.push({ host, result: 'skipped', reason: 'dependencies unavailable', gateActive: false, reproduced: null, classification: null, generic: null, harness: null });
+      pairEntries.push({ host, required, result: 'skipped', reason: 'dependencies unavailable', gateActive: false, reproduced: null, classification: null, generic: null, harness: null });
       return;
     }
     collect(pair);
@@ -216,6 +232,7 @@ export async function runRelease({ config, steps, calibrationRelease = false, re
     }
     pairEntries.push({
       host,
+      required,
       result: classification.result,
       reason: classification.reason,
       gateActive: gateActiveFor(host, calibrationRelease),
@@ -231,10 +248,22 @@ export async function runRelease({ config, steps, calibrationRelease = false, re
   await evaluatePair('ollama-gemma', steps.gemmaPair);
 
   const smokes = preflightOk && steps.smokes ? await steps.smokes() : [];
-  const telemetryComplete = runDocs.every((doc) => validateAgainstSchema(doc, RUN_SCHEMA).ok);
+  // Evidence is complete only when every run document validates AND every
+  // required API pair actually metered its spend — an all-null efficiency
+  // block is a missing measurement, not a measurement of nothing.
+  const METERED_FIELDS = ['promptTokens', 'outputTokens', 'modelRequests', 'localCostUsd'];
+  const meteredOk = pairEntries.every(
+    (p) =>
+      !p.required ||
+      !p.generic ||
+      !p.harness ||
+      [p.generic, p.harness].every((doc) => METERED_FIELDS.every((f) => doc.efficiency?.[f] != null))
+  );
+  const telemetryComplete = meteredOk && runDocs.every((doc) => validateAgainstSchema(doc, RUN_SCHEMA).ok);
   const gate = applyGatePolicy({
     deterministic,
     pairs: pairEntries,
+    smokes,
     telemetryComplete,
     taskLockOk: taskLock.ok !== false,
     environmentOk: environment.ok !== false,
@@ -252,7 +281,7 @@ export async function runRelease({ config, steps, calibrationRelease = false, re
     },
     calibrationRelease,
     deterministic,
-    pairs: pairEntries.map(({ classification, ...entry }) => entry),
+    pairs: pairEntries.map(({ classification, required, ...entry }) => entry),
     smokes,
     budget: {
       ceilingUsd: budgets.release.ceilingUsd,
@@ -314,9 +343,13 @@ async function main() {
   };
   const profile = flag('--profile', 'release-canary');
   const calibrationRelease = argv.includes('--calibration');
+  const deterministicOnly = argv.includes('--deterministic-only');
   const json = argv.includes('--json');
   const raw = loadYamlConfig(profile);
-  const lock = JSON.parse(fs.readFileSync(new URL(`../${raw.task.lockFile}`, import.meta.url), 'utf8'));
+  const lockFileFlag = flag('--lock-file', null); // bootstrap/test hook; default is the committed lock
+  const lock = JSON.parse(
+    fs.readFileSync(lockFileFlag ? path.resolve(lockFileFlag) : new URL(`../${raw.task.lockFile}`, import.meta.url), 'utf8')
+  );
   const budgetUsd = Number(flag('--budget-usd', raw.budget.releaseCeilingUsd));
   if (!Number.isFinite(budgetUsd) || budgetUsd < 0) {
     throw new Error(`--budget-usd must be a non-negative number, got: ${flag('--budget-usd')}`);
@@ -331,34 +364,45 @@ async function main() {
     task: { datasetRef: lock.datasetRef, task: flag('--task', lock.task), taskChecksum: lock.taskChecksum },
   };
 
-  const { runEvals, summarize } = await import('./lib/runner.mjs');
-  const { validateTaskLock } = await import('./external/terminal_bench/harbor-adapter.mjs');
-
-  const steps = {
-    deterministic: async () => {
-      const summary = summarize(await runEvals({}));
-      return { passed: summary.passed, failed: summary.failed + summary.infrastructureErrors, skipped: summary.skipped };
-    },
-    environment: async () => ({ ok: true, missing: [] }),
-    taskLock: async () => {
-      const verdict = validateTaskLock(lock);
-      return { ok: verdict.ok, reason: verdict.errors.join('; ') };
-    },
-    // Live A/B pairs need the harbor CLI, sandbox credentials, and provider
-    // keys; they are wired at release time (HARNESS_EVAL_LIVE=1) and report
-    // as skipped otherwise so this command stays safe to run anywhere.
-    frontierPair: null,
-    kimiPair: process.env.HARNESS_EVAL_LIVE === '1' ? undefined : null,
-    gemmaPair: null,
-    smokes: null,
-  };
-  if (steps.kimiPair === undefined) {
-    throw new Error('HARNESS_EVAL_LIVE=1: live pair execution requires the release runbook (see evals/README.md)');
-  }
-
   const releaseSha = flag('--release-sha', 'workdir');
   const harnessVersion = JSON.parse(fs.readFileSync(new URL('../packages/harness/package.json', import.meta.url), 'utf8')).version;
-  const { report, exitCode } = await runRelease({ config, steps, calibrationRelease, releaseSha, harnessVersion });
+  const { runEvals, summarize } = await import('./lib/runner.mjs');
+  const deterministicStep = async () => {
+    const summary = summarize(await runEvals({}));
+    return { passed: summary.passed, failed: summary.failed + summary.infrastructureErrors, skipped: summary.skipped };
+  };
+
+  let steps;
+  let requiredPairs;
+  if (deterministicOnly) {
+    // Per-PR mode: free, no pairs scheduled, structural lock validation only.
+    const { validateTaskLock } = await import('./external/terminal_bench/harbor-adapter.mjs');
+    steps = {
+      deterministic: deterministicStep,
+      environment: async () => ({ ok: true, missing: [] }),
+      taskLock: async () => {
+        const verdict = validateTaskLock(lock);
+        return { ok: verdict.ok, reason: verdict.errors.join('; ') };
+      },
+      frontierPair: null,
+      kimiPair: null,
+      gemmaPair: null,
+      smokes: null,
+    };
+    requiredPairs = [];
+  } else {
+    // Release-candidate mode: the live Kimi pair is REQUIRED. Missing
+    // harbor, credentials, or task verification blocks — it never greens.
+    const { buildLiveSteps } = await import('./external/terminal_bench/live-steps.mjs');
+    const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-release-'));
+    steps = {
+      deterministic: deterministicStep,
+      ...buildLiveSteps({ config: raw, lock, workDir, releaseSha, harnessVersion }),
+    };
+    requiredPairs = ['openrouter-kimi'];
+  }
+
+  const { report, exitCode } = await runRelease({ config, steps, calibrationRelease, releaseSha, harnessVersion, requiredPairs });
   const reportVerdict = validateAgainstSchema(report, REPORT_SCHEMA);
   if (!reportVerdict.ok) throw new Error(`internal error: report failed its own schema: ${reportVerdict.errors.join('; ')}`);
   if (json) console.log(JSON.stringify(report, null, 2));

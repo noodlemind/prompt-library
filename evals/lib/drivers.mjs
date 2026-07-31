@@ -84,10 +84,15 @@ export function openAiToolDriver({
   const effPricing = pricing ?? profile?.pricing ?? null;
   const effRequestTimeoutMs = requestTimeoutMs ?? profile?.timeoutMs ?? null;
 
+  // A profile priced at all zeros (local Ollama) is not paid spend — unusable
+  // usage there is a telemetry gap, not a metering emergency.
+  const isPaid = Boolean(effPricing && (effPricing.inputPerM > 0 || effPricing.cachedInputPerM > 0 || effPricing.outputPerM > 0));
+
   const tools = [];
   let messages = [];
   let pending = []; // tool_calls from the current assistant turn, not yet answered
   let fallbackDetected = false;
+  let lastUsage = null; // observed prompt/output tokens from the previous response
 
   function toOpenAiTools(schemas) {
     return schemas.map((t) => ({ type: 'function', function: { name: t.name, description: t.description, parameters: t.parameters } }));
@@ -112,12 +117,13 @@ export function openAiToolDriver({
     const cost = costOfUsage(usage, effPricing ?? zeroPricing);
     if (!cost) {
       telemetry?.addUsage(null);
-      if (effPricing && budget) {
+      if (isPaid && budget) {
         telemetry?.record('error', { kind: 'usage', message: 'provider usage missing or malformed on a paid profile' });
         throw new ProviderError('provider usage missing or malformed — paid spend cannot be metered', { kind: 'usage', billed: null });
       }
       return null;
     }
+    lastUsage = { promptTokens: cost.promptTokens, outputTokens: cost.outputTokens };
     const localCostUsd = effPricing ? cost.usd : 0;
     budget?.charge(localCostUsd, `response ${data?.id ?? ''}`.trim());
     telemetry?.addUsage({
@@ -151,12 +157,17 @@ export function openAiToolDriver({
     }
   }
 
-  /** Worst-case cost gate for the next request; returns a refusal reason or null. */
+  /**
+   * Worst-case cost gate for the next request; returns a refusal reason or
+   * null. The prompt estimate is the larger of the character heuristic and
+   * the previous response's observed prompt + output tokens — the
+   * conversation only grows, so observed usage is a floor, not a guess.
+   */
   function precheckBudget(payload) {
     if (!budget) return null;
-    const estimateUsd = effPricing
-      ? estimateRequestCostUsd({ promptTokens: estimateTokensForChars(payload.length), maxOutputTokens }, effPricing)
-      : 0;
+    const observedFloor = lastUsage ? lastUsage.promptTokens + lastUsage.outputTokens : 0;
+    const promptTokens = Math.max(estimateTokensForChars(payload.length), observedFloor);
+    const estimateUsd = effPricing ? estimateRequestCostUsd({ promptTokens, maxOutputTokens }, effPricing) : 0;
     const verdict = budget.precheck(estimateUsd);
     if (!verdict.allowed) {
       telemetry?.record('budget_refusal', { reason: verdict.reason, estimateUsd });
@@ -256,6 +267,7 @@ export function openAiToolDriver({
       ];
       pending = [];
       fallbackDetected = false; // a reused driver must not taint a fresh trial
+      lastUsage = null;
     },
     async next() {
       // Drain any tool_calls the assistant already emitted this turn before

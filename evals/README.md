@@ -171,10 +171,35 @@ OpenRouter — the controlled experiment), and a local model (Gemma 4 26B via
 Ollama — informational).
 
 ```bash
-node evals/release.mjs --profile release-canary            # markdown eval card
-node evals/release.mjs --profile release-canary --json     # eval-report.v1 JSON
-node evals/release.mjs --profile release-canary --calibration  # first 3 releases
+# Per-PR (free): deterministic suite only, no pairs scheduled, exit 0 on green.
+node evals/release.mjs --profile release-canary --deterministic-only
+
+# Release candidate (default): the live Kimi A/B pair is REQUIRED. Missing
+# harbor, credentials, task verification, or run evidence blocks — never greens.
+OPENROUTER_API_KEY=... node evals/release.mjs --profile release-canary [--json] [--calibration]
 ```
+
+Release-candidate prerequisites (all fail closed when absent):
+
+- the `harbor` CLI on PATH (validated against 0.20.0);
+- `OPENROUTER_API_KEY` for the pinned Kimi profile;
+- the pinned task: downloaded automatically via `harbor download terminal-bench@2.0`
+  (or point `HARNESS_EVAL_TB_TASK_DIR` at an existing download) and **verified
+  byte-for-byte against the committed lock checksum before any provider call**;
+- a harness bundle for in-container activation: prepared automatically from the
+  working tree (needs `HARNESS_EVAL_NODE_TARBALL` pointing at a downloaded
+  Linux Node runtime tarball for the sandbox architecture), or point
+  `HARNESS_EVAL_TB_BUNDLE_DIR` at a pre-built bundle. Harbor mounts the bundle
+  read-only into BOTH conditions; only the treatment's setup installs the
+  `harness` wrapper on PATH — and setup failure fails the trial closed.
+
+Budget flow: the runner writes each trial's ceiling (profile trial ceiling
+capped by the pair's remaining allowance) into the bridge's condition file; the
+in-process driver refuses requests past it; after each trial the runner charges
+**provider-reported cost** (local calculation as fallback) to the pair budget,
+which chains under the $20 release ceiling — cross-process spend lands in the
+report, and a missing cost ledger fails the metered-telemetry gate rather than
+passing silently.
 
 Building blocks:
 
@@ -207,12 +232,16 @@ dependency preflight, or task-lock validation fails. Daytona sandbox spend is
 
 Troubleshooting:
 
-- `skipped (dependencies unavailable)` — the harbor CLI or a provider key is
-  absent; deterministic evals and gates still run.
-- `task lock is not stamped` — run `stampTaskLock` against the downloaded task
-  before the first live release (see `harbor-adapter.mjs`).
-- Rate-limited or missing provider usage fields are recorded as `null` and the
-  release blocks on missing telemetry rather than estimating silently.
+- `required dependencies or credentials are missing` — harbor CLI or
+  `OPENROUTER_API_KEY` absent in release-candidate mode; the release blocks
+  (use `--deterministic-only` for the free per-PR path).
+- `required pair openrouter-kimi was skipped` — an enabled required pair
+  produced no evidence; a skipped pair can never green a release candidate.
+- `task checksum mismatch` — the downloaded task differs from the committed
+  pin; investigate before re-stamping (`stampTaskLock`, then commit the lock).
+- Rate-limited or missing provider usage fields are recorded as `null`; on a
+  paid profile the driver stops immediately (spend that cannot be metered is
+  never continued), and the release blocks on missing metered telemetry.
 - Raw transcripts stay out of the repository: they may contain provider
   metadata, local paths, or secrets printed by tools. Publish only the eval
   card and sanitized `eval-report.v1` JSON.

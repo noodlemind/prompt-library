@@ -79,6 +79,17 @@ test('collectVerifierEvidence prefers reward.json, captures pytest counts, and h
   assert.match(evidence.treeHash, /^[0-9a-f]{64}$/);
 });
 
+test('an ambiguous reward.json falls back to a valid reward.txt', () => {
+  const trial = tmpdir();
+  const officialDir = path.join(trial, 'artifacts', 'logs', 'verifier');
+  fs.mkdirSync(officialDir, { recursive: true });
+  fs.writeFileSync(path.join(officialDir, 'reward.json'), '{"a": 1, "b": 0}');
+  fs.writeFileSync(path.join(officialDir, 'reward.txt'), '1');
+  const evidence = collectVerifierEvidence(trial);
+  assert.equal(evidence.reward, 1, 'a json file without a usable reward must not mask the txt verdict');
+  assert.match(evidence.rewardPath, /reward\.txt$/);
+});
+
 test('reward evidence is only trusted from the official logs/verifier directory', () => {
   const trial = tmpdir();
   const officialDir = path.join(trial, 'artifacts', 'logs', 'verifier');

@@ -1,0 +1,193 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { test } from 'node:test';
+import { AGENT_REF, buildLiveSteps } from '../../../evals/external/terminal_bench/live-steps.mjs';
+import { BUNDLE_MOUNT_TARGET, harnessWrapperScript, activationCommands } from '../../../evals/external/terminal_bench/provision.mjs';
+import { stampTaskLock } from '../../../evals/external/terminal_bench/harbor-adapter.mjs';
+import { validateAgainstSchema, runRelease } from '../../../evals/release.mjs';
+import { createBudget } from '../../../evals/lib/budget.mjs';
+
+const RUN_SCHEMA = JSON.parse(fs.readFileSync(new URL('../../../evals/schema/eval-run.v1.schema.json', import.meta.url), 'utf8'));
+const BASE_LOCK = JSON.parse(fs.readFileSync(new URL('../../../evals/external/terminal_bench/task-lock.json', import.meta.url), 'utf8'));
+
+function tmpdir() {
+  return fs.mkdtempSync(path.join(os.tmpdir(), 'tb-live-'));
+}
+
+/** A fixture task directory plus a lock stamped against it. */
+function fixtureTask() {
+  const taskDir = tmpdir();
+  fs.writeFileSync(path.join(taskDir, 'instruction.md'), 'Modernize the COBOL program.');
+  fs.mkdirSync(path.join(taskDir, 'tests'));
+  fs.writeFileSync(path.join(taskDir, 'tests', 'test.sh'), 'pytest');
+  return { taskDir, lock: stampTaskLock(taskDir, BASE_LOCK) };
+}
+
+/**
+ * A fake harbor: `--version` succeeds; `run` writes the job's verifier reward
+ * and the bridge done-file exactly where the real pipeline would.
+ */
+function fakeHarborSpawn({ reward = 1, exitCode = 0, writeTelemetry = true, providerCostUsd = 0.02 } = {}) {
+  const invocations = [];
+  return {
+    invocations,
+    spawnImpl: (cmd, args) => {
+      invocations.push({ cmd, args });
+      if (args[0] === '--version') return { status: 0, stdout: '0.20.0', stderr: '' };
+      if (args[0] !== 'run') return { status: 0, stdout: '', stderr: '' };
+      const jobsDir = args[args.indexOf('--jobs-dir') + 1];
+      const jobName = args[args.indexOf('--job-name') + 1];
+      const agentEnv = {};
+      args.forEach((a, i) => {
+        if (a === '--ae') {
+          const [k, ...rest] = args[i + 1].split('=');
+          agentEnv[k] = rest.join('=');
+        }
+      });
+      if (exitCode === 0) {
+        const verifierDir = path.join(jobsDir, jobName, 'trial-0', 'artifacts', 'logs', 'verifier');
+        fs.mkdirSync(verifierDir, { recursive: true });
+        fs.writeFileSync(path.join(verifierDir, 'reward.json'), JSON.stringify({ reward }));
+        if (writeTelemetry && agentEnv.HARNESS_EVAL_TB_TELEMETRY_FILE) {
+          fs.writeFileSync(
+            agentEnv.HARNESS_EVAL_TB_TELEMETRY_FILE,
+            JSON.stringify({
+              type: 'done',
+              answer: 'done',
+              stopReason: 'model_finish',
+              steps: 7,
+              telemetry: {
+                totals: {
+                  requests: 5,
+                  missingUsage: 0,
+                  promptTokens: 4000,
+                  cachedTokens: 1000,
+                  reasoningTokens: 0,
+                  outputTokens: 900,
+                  localCostUsd: 0.018,
+                  providerCostUsd,
+                  costComplete: true,
+                },
+                events: [{ seq: 0, type: 'response', model: 'moonshotai/kimi-k2.7-code', provider: 'Moonshot AI', generationId: 'gen-1' }],
+              },
+            })
+          );
+        }
+      }
+      return { status: exitCode, stdout: '', stderr: exitCode ? 'boom' : '' };
+    },
+  };
+}
+
+function liveSteps({ taskDir, lock, spawnImpl, apiKey = 'test-key' }) {
+  return buildLiveSteps({
+    config: { execution: { environment: 'docker' } },
+    lock,
+    workDir: tmpdir(),
+    env: { OPENROUTER_API_KEY: apiKey, HARNESS_EVAL_TB_TASK_DIR: taskDir },
+    releaseSha: 'sha1',
+    harnessVersion: '0.5.0',
+    spawnImpl,
+    prepareBundle: ({ bundleDir }) => ({ bundleDir, mount: { source: bundleDir, target: BUNDLE_MOUNT_TARGET, readOnly: true } }),
+  });
+}
+
+test('the harness wrapper runs the bundled harness through the bundled node runtime', () => {
+  const script = harnessWrapperScript();
+  assert.match(script, /^#!\/bin\/sh/);
+  assert.ok(script.includes(`${BUNDLE_MOUNT_TARGET}/node/bin/node`));
+  assert.ok(script.includes(`${BUNDLE_MOUNT_TARGET}/harness/bin/harness.mjs`));
+  assert.ok(script.includes('"$@"'));
+});
+
+test('activation installs the wrapper and proves the CLI answers inside the container', () => {
+  const commands = activationCommands();
+  assert.ok(commands.some((c) => c.includes('/usr/local/bin/harness')));
+  assert.ok(commands.some((c) => /harness --version/.test(c)));
+});
+
+test('the task bytes are verified against the lock before any provider work', async () => {
+  const { taskDir, lock } = fixtureTask();
+  const { spawnImpl } = fakeHarborSpawn();
+  const steps = liveSteps({ taskDir, lock, spawnImpl });
+  assert.equal((await steps.taskLock()).ok, true);
+  fs.writeFileSync(path.join(taskDir, 'tests', 'test.sh'), 'tampered');
+  const tampered = await steps.taskLock();
+  assert.equal(tampered.ok, false);
+  assert.match(tampered.reason, /checksum/i);
+});
+
+test('a live kimi pair produces two schema-valid run documents and charges provider-reported cost', async () => {
+  const { taskDir, lock } = fixtureTask();
+  const { spawnImpl, invocations } = fakeHarborSpawn({ providerCostUsd: 0.02 });
+  const steps = liveSteps({ taskDir, lock, spawnImpl });
+  assert.equal((await steps.taskLock()).ok, true);
+  const budget = createBudget({ ceilingUsd: 10, label: 'kimi-pair' });
+  const pair = await steps.kimiPair(budget);
+  assert.equal(pair.host, 'openrouter-kimi');
+  for (const doc of [pair.generic, pair.harness]) {
+    assert.deepEqual(validateAgainstSchema(doc, RUN_SCHEMA).errors, []);
+    assert.equal(doc.correctness.verdict, 'pass');
+    assert.equal(doc.efficiency.promptTokens, 4000, 'metered telemetry must be non-null');
+    assert.equal(doc.reproducibility.modelResolved, 'moonshotai/kimi-k2.7-code');
+  }
+  assert.ok(Math.abs(budget.spentUsd() - 0.04) < 1e-12, 'provider-reported cost is the ledger of record');
+  const runs = invocations.filter((i) => i.args[0] === 'run');
+  assert.equal(runs.length, 2, 'one fresh sandboxed run per condition');
+  assert.ok(runs.every((i) => i.args.includes('--mounts')), 'the harness bundle is mounted in both conditions');
+});
+
+test('the remaining pair allowance caps each trial ceiling written to the bridge', async () => {
+  const { taskDir, lock } = fixtureTask();
+  const { spawnImpl, invocations } = fakeHarborSpawn({ providerCostUsd: 3 });
+  const steps = liveSteps({ taskDir, lock, spawnImpl });
+  await steps.taskLock();
+  const budget = createBudget({ ceilingUsd: 7, label: 'kimi-pair' });
+  await steps.kimiPair(budget);
+  const conditionPaths = invocations
+    .filter((i) => i.args[0] === 'run')
+    .map((i) => i.args[i.args.findIndex((a) => typeof a === 'string' && a.startsWith('HARNESS_EVAL_TB_CONDITION=')) ]);
+  const ceilings = conditionPaths.map((kv) => JSON.parse(fs.readFileSync(kv.split('=')[1], 'utf8')).limits.trialCeilingUsd);
+  assert.equal(ceilings[0], 5, 'first trial uses the profile ceiling');
+  assert.equal(ceilings[1], 4, 'second trial is capped by what the pair has left ($7 - $3)');
+});
+
+test('a nonzero harbor exit becomes an infrastructure-invalid pair that blocks an active gate', async () => {
+  const { taskDir, lock } = fixtureTask();
+  const { spawnImpl } = fakeHarborSpawn({ exitCode: 3 });
+  const steps = liveSteps({ taskDir, lock, spawnImpl });
+  await steps.taskLock();
+  const pair = await steps.kimiPair(createBudget({ ceilingUsd: 10, label: 'p' }));
+  assert.equal(pair.failureKind, 'infrastructure');
+});
+
+test('missing credentials skip the pair without touching harbor run', async () => {
+  const { taskDir, lock } = fixtureTask();
+  const { spawnImpl, invocations } = fakeHarborSpawn();
+  const steps = liveSteps({ taskDir, lock, spawnImpl, apiKey: null });
+  const pair = await steps.kimiPair(createBudget({ ceilingUsd: 10, label: 'p' }));
+  assert.equal(pair, null);
+  assert.equal(invocations.filter((i) => i.args[0] === 'run').length, 0);
+});
+
+test('live steps feed runRelease end to end: green pair, valid report, exit 0', async () => {
+  const { taskDir, lock } = fixtureTask();
+  const { spawnImpl } = fakeHarborSpawn();
+  const steps = liveSteps({ taskDir, lock, spawnImpl });
+  const config = { budget: { releaseCeilingUsd: 20, kimiPairUsd: 10, rerunUsd: 8, reserveUsd: 2 }, task: { datasetRef: lock.datasetRef, task: lock.task } };
+  const { report, exitCode } = await runRelease({
+    config,
+    steps: { ...steps, deterministic: async () => ({ passed: 17, failed: 0, skipped: 2 }) },
+    requiredPairs: ['openrouter-kimi'],
+  });
+  assert.equal(exitCode, 0, JSON.stringify(report.gate.reasons));
+  const kimi = report.pairs.find((p) => p.host === 'openrouter-kimi');
+  assert.equal(kimi.result, 'parity');
+  assert.ok(Math.abs(report.budget.spentUsd - 0.04) < 1e-12, 'live child charges reach the release report');
+});
+
+test('AGENT_REF matches the importable module path', () => {
+  assert.equal(AGENT_REF, 'evals.external.terminal_bench.harbor_agent:StdioBridgeAgent');
+});

@@ -98,7 +98,11 @@ export function collectVerifierEvidence(trialDir) {
   for (const candidate of [rewardJson, rewardTxt]) {
     if (!candidate) continue;
     const parsed = parseReward(fs.readFileSync(candidate, 'utf8'), path.basename(candidate));
-    if (parsed) {
+    if (!parsed) continue;
+    metrics ??= parsed.metrics;
+    // An ambiguous reward.json (parseable but no usable reward) must not mask
+    // a valid reward.txt — keep looking until an actual reward appears.
+    if (parsed.reward != null) {
       reward = parsed.reward;
       metrics = parsed.metrics;
       rewardPath = candidate;

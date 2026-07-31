@@ -141,7 +141,7 @@ async function main() {
   });
   const driver = openAiToolDriver({ profile, apiKey, budget, telemetry, maxTokens: condition.limits?.maxOutputTokens });
   if (!driver) throw new Error('driver not configured: check profile and API key environment');
-  await runStdioAgent({
+  const done = await runStdioAgent({
     driver,
     input: process.stdin,
     output: process.stdout,
@@ -150,6 +150,12 @@ async function main() {
     maxSteps: condition.limits?.maxSteps ?? 50,
     telemetry,
   });
+  // The host-side runner reads this file to charge the release budget and
+  // build the eval-run document — it must exist even if Harbor's context
+  // plumbing loses the stdout done line.
+  if (process.env.HARNESS_EVAL_TB_TELEMETRY_FILE) {
+    fs.writeFileSync(process.env.HARNESS_EVAL_TB_TELEMETRY_FILE, JSON.stringify(done));
+  }
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

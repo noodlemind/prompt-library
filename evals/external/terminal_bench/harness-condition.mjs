@@ -8,8 +8,11 @@
  * they are real product overhead.
  */
 import { NEUTRAL_SYSTEM_PROMPT } from './generic-condition.mjs';
+import { activationCommands } from './provision.mjs';
 
-const DEFAULT_ACTIVATION = ['harness install'];
+// The task image has no Node and no Harness; activation installs the mounted
+// bundle's wrapper on PATH and proves the CLI answers (setup fails closed).
+const DEFAULT_ACTIVATION = activationCommands();
 
 export function buildHarnessCondition({ instruction, limits, engineerContract, guidance = '', activationCommands = DEFAULT_ACTIVATION } = {}) {
   if (!instruction) throw new Error('instruction is required');

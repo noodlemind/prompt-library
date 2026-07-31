@@ -319,6 +319,60 @@ test('a rerun that cannot run leaves the regression unresolved, never flaky', as
   assert.equal(exitCode, 0, '§9 blocks only a REPRODUCED regression');
 });
 
+test('provider and verifier failures are infrastructure-invalid, not model capability results', () => {
+  const provider = classifyPair(pairOf('h', 'fail', 'fail', { failureKind: 'provider' }));
+  assert.equal(provider.result, 'infrastructure-invalid');
+  assert.match(provider.reason, /provider/);
+  const verifier = classifyPair(pairOf('h', 'fail', 'fail', { failureKind: 'verifier' }));
+  assert.equal(verifier.result, 'infrastructure-invalid');
+  assert.match(verifier.reason, /verifier/);
+});
+
+test('an enabled required pair that is skipped cannot produce a green release', async () => {
+  const steps = baseSteps({ kimiPair: async () => null });
+  const { report, exitCode } = await runRelease({ config: CONFIG, steps, requiredPairs: ['openrouter-kimi'] });
+  assert.equal(exitCode, 1);
+  assert.ok(report.gate.reasons.some((r) => /openrouter-kimi.*(skipped|did not run)/i.test(r)));
+});
+
+test('an active pair with an infrastructure-invalid result blocks the release', async () => {
+  const steps = baseSteps({
+    kimiPair: async () => pairOf('openrouter-kimi', 'pass', 'pass', { failureKind: 'infrastructure' }),
+  });
+  const { report, exitCode } = await runRelease({ config: CONFIG, steps, requiredPairs: ['openrouter-kimi'] });
+  assert.equal(exitCode, 1);
+  assert.ok(report.gate.reasons.some((r) => /openrouter-kimi.*(no valid signal|infrastructure)/i.test(r)));
+});
+
+test('a failed compatibility smoke blocks the release', async () => {
+  const steps = baseSteps({ smokes: async () => [{ host: 'copilot-smoke', ok: false, failed: ['discovery'] }] });
+  const { report, exitCode } = await runRelease({ config: CONFIG, steps });
+  assert.equal(exitCode, 1);
+  assert.ok(report.gate.reasons.some((r) => /copilot-smoke/.test(r)));
+});
+
+test('an API pair whose telemetry is entirely null is not complete evidence', async () => {
+  const nullEfficiency = {
+    wallTimeMs: null,
+    modelRequests: null,
+    toolCalls: null,
+    terminalCommands: null,
+    failedCommands: null,
+    promptTokens: null,
+    cachedPromptTokens: null,
+    reasoningTokens: null,
+    outputTokens: null,
+    providerReportedCostUsd: null,
+    localCostUsd: null,
+  };
+  const steps = baseSteps({
+    kimiPair: async () => pairOf('openrouter-kimi', 'pass', 'pass', { harness: { efficiency: nullEfficiency } }),
+  });
+  const { report, exitCode } = await runRelease({ config: CONFIG, steps, requiredPairs: ['openrouter-kimi'] });
+  assert.equal(exitCode, 1);
+  assert.ok(report.gate.reasons.some((r) => /telemetry/i.test(r)));
+});
+
 test('the markdown eval card names the task, verdicts, spend, and the single-task limitation', async () => {
   const { report } = await runRelease({ config: CONFIG, steps: baseSteps(), releaseSha: 'abc123', harnessVersion: '0.5.0' });
   const md = buildMarkdownReport(report);

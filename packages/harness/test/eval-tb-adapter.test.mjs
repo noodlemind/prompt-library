@@ -95,6 +95,23 @@ test('buildHarborRunArgs uses real Harbor flags and anchors the job identity', (
   ]);
 });
 
+test('buildHarborRunArgs can mount the harness bundle and pass agent environment variables', () => {
+  const args = buildHarborRunArgs({
+    lock: LOCK,
+    agentRef: 'evals.external.terminal_bench.harbor_agent:StdioBridgeAgent',
+    model: 'moonshotai/kimi-k2.7-code',
+    envName: 'docker',
+    jobName: 'j',
+    jobsDir: '/w/jobs',
+    mounts: [{ source: '/w/harness-bundle', target: '/opt/harness-bundle', readOnly: true }],
+    agentEnv: { HARNESS_EVAL_TB_CONDITION: '/w/generic.json', OPENROUTER_API_KEY: 'k' },
+  });
+  const joined = args.join(' ');
+  assert.ok(joined.includes('--mounts'), 'bundle mount must reach harbor');
+  assert.ok(args.includes('--ae') && joined.includes('HARNESS_EVAL_TB_CONDITION=/w/generic.json'));
+  assert.ok(joined.includes('OPENROUTER_API_KEY=k'));
+});
+
 test('jobDirFor is the deterministic job identity — no newest-directory guessing needed', () => {
   assert.equal(jobDirFor({ jobsDir: '/work/jobs', jobName: 'canary-generic-1' }), path.join('/work/jobs', 'canary-generic-1'));
 });

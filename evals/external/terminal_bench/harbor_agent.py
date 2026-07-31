@@ -75,6 +75,7 @@ class StdioBridgeAgent(BaseAgent):
             stdout=asyncio.subprocess.PIPE,
             env=os.environ.copy(),
         )
+        saw_done = False
         try:
             while True:
                 line = await proc.stdout.readline()
@@ -89,12 +90,19 @@ class StdioBridgeAgent(BaseAgent):
                     proc.stdin.write((json.dumps(reply) + "\n").encode())
                     await proc.stdin.drain()
                 elif message["type"] == "done":
+                    saw_done = True
                     self._populate_context(context, message)
                     break
         finally:
             if proc.returncode is None:
                 proc.terminate()
             await proc.wait()
+        if not saw_done:
+            # A bridge that died without reporting is an infrastructure crash,
+            # not an ordinary task failure — surface it as one.
+            raise RuntimeError(
+                f"stdio bridge exited without a done message (node exit {proc.returncode})"
+            )
 
     def _load_condition(self) -> dict:
         with open(os.environ["HARNESS_EVAL_TB_CONDITION"]) as fh:
@@ -154,7 +162,8 @@ class StdioBridgeAgent(BaseAgent):
         totals = (done.get("telemetry") or {}).get("totals") or {}
         for attr, value in (
             ("n_input_tokens", totals.get("promptTokens")),
-            ("n_cache_read_tokens", totals.get("cachedTokens")),
+            # Harbor 0.20.0 AgentContext names the cached-token field n_cache_tokens.
+            ("n_cache_tokens", totals.get("cachedTokens")),
             ("n_output_tokens", totals.get("outputTokens")),
             ("cost_usd", totals.get("localCostUsd")),
         ):

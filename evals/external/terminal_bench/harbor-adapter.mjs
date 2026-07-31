@@ -61,7 +61,7 @@ export function verifyTaskAgainstLock(taskDir, lock) {
 // -i/--include-task-name filters tasks, -k/--n-attempts is attempts per trial,
 // -n/--n-concurrent is CONCURRENCY, --job-name/-o/--jobs-dir pin the output
 // identity, -y auto-confirms prompts.
-export function buildHarborRunArgs({ lock, agentRef, model, envName, jobName, jobsDir, attempts = 1 }) {
+export function buildHarborRunArgs({ lock, agentRef, model, envName, jobName, jobsDir, attempts = 1, mounts = [], agentEnv = {} }) {
   return [
     'run',
     '-d',
@@ -81,6 +81,8 @@ export function buildHarborRunArgs({ lock, agentRef, model, envName, jobName, jo
     '-y',
     ...(jobName ? ['--job-name', jobName] : []),
     ...(jobsDir ? ['--jobs-dir', jobsDir] : []),
+    ...(mounts.length ? ['--mounts', JSON.stringify(mounts)] : []),
+    ...Object.entries(agentEnv).flatMap(([key, value]) => ['--ae', `${key}=${value}`]),
   ];
 }
 
