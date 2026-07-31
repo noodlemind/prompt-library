@@ -482,6 +482,7 @@ export async function runRelease({ config, steps, calibrationRelease = false, re
       collect(pair);
       let classification = classifyPair(pair);
       let reproduced = null;
+      let rerunEvidence = null;
       // §9 conditional rerun: one complete fresh pair for THIS task, never treatment-only.
       if (classification.result === 'harness-regression' && !classification.safety && rerunFn) {
         const second = await rerunFn(budgets.rerun, pair.task);
@@ -494,6 +495,17 @@ export async function runRelease({ config, steps, calibrationRelease = false, re
           const rerunClassification = classifyPair(second);
           const rerunAttributable = fullyAttributablePair(second, host);
           const rerunEfficiency = efficiencyDelta(second.generic, second.harness, config.efficiencyThresholds);
+          rerunEvidence = {
+            task: second.task ?? pair.task ?? null,
+            pairId: second.pairId ?? null,
+            repetitionCount: second.repetitionCount ?? second.seedCount ?? null,
+            result: rerunClassification.result,
+            reason: rerunClassification.reason,
+            causallyAttributable: rerunAttributable && rerunClassification.fallbackDetected !== true,
+            efficiencyDelta: rerunEfficiency,
+            generic: second.generic ?? null,
+            harness: second.harness ?? null,
+          };
           const validNonRegression = rerunAttributable && (
             rerunClassification.result === 'harness-win' ||
             (rerunClassification.result === 'parity' && rerunEfficiency.withinThresholds === true)
@@ -522,6 +534,7 @@ export async function runRelease({ config, steps, calibrationRelease = false, re
         reason: classification.reason,
         gateActive: gateActiveFor(host, calibrationRelease),
         reproduced,
+        rerun: rerunEvidence,
         causallyAttributable,
         classification,
         efficiencyDelta: efficiencyDelta(pair.generic, pair.harness, config.efficiencyThresholds),

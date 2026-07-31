@@ -63,6 +63,20 @@
           "reason": { "type": "string" },
           "gateActive": { "type": "boolean" },
           "reproduced": { "type": ["boolean", "null"] },
+          "rerun": {
+            "type": ["object", "null"],
+            "properties": {
+              "task": { "type": ["string", "null"] },
+              "pairId": { "type": ["string", "null"] },
+              "repetitionCount": { "type": ["number", "null"] },
+              "result": { "type": "string" },
+              "reason": { "type": "string" },
+              "causallyAttributable": { "type": "boolean" },
+              "efficiencyDelta": { "type": ["object", "null"] },
+              "generic": { "type": ["object", "null"] },
+              "harness": { "type": ["object", "null"] }
+            }
+          },
           "efficiencyDelta": { "type": ["object", "null"] },
           "generic": { "type": ["object", "null"] },
           "harness": { "type": ["object", "null"] }

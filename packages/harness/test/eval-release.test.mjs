@@ -533,6 +533,10 @@ test('a kimi baseline-pass/harness-fail reruns one full fresh pair and blocks wh
   const kimi = report.pairs.find((p) => p.host === 'openrouter-kimi');
   assert.equal(kimi.result, 'harness-regression');
   assert.equal(kimi.reproduced, true);
+  assert.equal(kimi.rerun.result, 'harness-regression');
+  assert.equal(kimi.rerun.causallyAttributable, true);
+  assert.equal(kimi.rerun.generic.correctness.verdict, 'pass');
+  assert.equal(kimi.rerun.harness.correctness.verdict, 'fail');
   assert.equal(exitCode, 1);
 });
 
@@ -545,6 +549,8 @@ test('an unreproduced kimi regression is flaky-inconclusive and does not block',
   const kimi = report.pairs.find((p) => p.host === 'openrouter-kimi');
   assert.equal(kimi.result, 'flaky-inconclusive');
   assert.equal(kimi.reproduced, false);
+  assert.equal(kimi.rerun.result, 'parity');
+  assert.equal(kimi.rerun.causallyAttributable, true);
   assert.equal(exitCode, 0);
 });
 
@@ -574,6 +580,7 @@ test('an invalid, incomplete, fallback-contaminated, or policy-regressing rerun 
     const pair = report.pairs.find((entry) => entry.host === 'openrouter-kimi');
     assert.equal(pair.result, 'harness-regression');
     assert.equal(pair.reproduced, null);
+    assert.ok(pair.rerun?.generic && pair.rerun?.harness, 'invalid rerun evidence remains available for audit');
     assert.match(pair.reason, /invalid|unresolved|attribut/i);
     assert.equal(exitCode, 1);
   }
