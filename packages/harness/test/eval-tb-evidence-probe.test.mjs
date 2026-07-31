@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -400,11 +401,26 @@ test('the evidence probe is bundled behind the same cross-architecture Node sele
   fs.mkdirSync(path.join(root, 'evals', 'external', 'terminal_bench'), { recursive: true });
   fs.writeFileSync(path.join(root, 'evals', 'external', 'terminal_bench', 'evidence-probe.mjs'), 'process.stdout.write("{}\\n")');
   fs.writeFileSync(path.join(root, 'evals', 'external', 'terminal_bench', 'bounded-exec.mjs'), 'process.stdout.write("{}\\n")');
+  const nodeTarball = path.join(root, 'node-v-test-linux-x64.tar.gz');
+  fs.writeFileSync(nodeTarball, 'pinned fixture archive bytes');
   const calls = [];
   prepareHarnessBundle({
     bundleDir,
     repoRoot: root,
-    nodeTarballs: { x64: '/tmp/node-x64.tar.gz', arm64: null },
+    sourceIdentity: { releaseSha: 'a'.repeat(40), harnessVersion: '1.2.3-test' },
+    nodeTarballs: { x64: nodeTarball, arm64: null },
+    nodeTarballHashes: { x64: crypto.createHash('sha256').update(fs.readFileSync(nodeTarball)).digest('hex'), arm64: null },
+    snapshotSource: ({ repoRoot: sourceRoot, destination }) => {
+      fs.mkdirSync(path.join(destination, 'packages'), { recursive: true });
+      fs.mkdirSync(path.join(destination, 'evals', 'external', 'terminal_bench'), { recursive: true });
+      fs.cpSync(path.join(sourceRoot, 'packages', 'harness'), path.join(destination, 'packages', 'harness'), { recursive: true });
+      for (const file of ['evidence-probe.mjs', 'bounded-exec.mjs']) {
+        fs.copyFileSync(
+          path.join(sourceRoot, 'evals', 'external', 'terminal_bench', file),
+          path.join(destination, 'evals', 'external', 'terminal_bench', file)
+        );
+      }
+    },
     spawnImpl: (cmd, args) => {
       calls.push([cmd, args]);
       if (cmd === 'cp') fs.cpSync(args[1], args[2], { recursive: true });

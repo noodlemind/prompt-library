@@ -999,6 +999,21 @@ function currentGitReleaseSha() {
   return sha;
 }
 
+function assertCleanLiveReleaseSource() {
+  const repository = fileURLToPath(new URL('../', import.meta.url));
+  const result = spawnSync('git', ['status', '--porcelain=v1', '--untracked-files=all'], {
+    cwd: repository,
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  if (result.status !== 0) {
+    throw new Error('live release source cleanliness could not be verified');
+  }
+  if (result.stdout.length > 0) {
+    throw new Error('live release evaluation requires a clean git working tree, including no staged or untracked source');
+  }
+}
+
 function makeReleaseTreeRemovable(root) {
   if (!fs.existsSync(root)) return;
   const entry = fs.lstatSync(root);
@@ -1077,7 +1092,23 @@ async function main() {
   )) {
     throw new Error('--release-sha requires a hexadecimal commit/content identity');
   }
-  const releaseSha = explicitReleaseSha ?? currentGitReleaseSha();
+  let releaseSha;
+  if (deterministicOnly) {
+    // Free local/PR checks may intentionally exercise an uncommitted tree and
+    // retain support for an explicit content label. They publish no live
+    // causal claim and never build or accept a release bundle.
+    releaseSha = explicitReleaseSha ?? currentGitReleaseSha();
+  } else {
+    const currentHead = currentGitReleaseSha();
+    if (explicitReleaseSha && (
+      !/^[a-f0-9]{40,64}$/i.test(explicitReleaseSha) ||
+      explicitReleaseSha.toLowerCase() !== currentHead.toLowerCase()
+    )) {
+      throw new Error('--release-sha for a live evaluation must be the full current git HEAD');
+    }
+    assertCleanLiveReleaseSource();
+    releaseSha = currentHead;
+  }
   const harnessVersion = JSON.parse(fs.readFileSync(new URL('../packages/harness/package.json', import.meta.url), 'utf8')).version;
   const { runEvals, summarize } = await import('./lib/runner.mjs');
   const deterministicStep = async () => {

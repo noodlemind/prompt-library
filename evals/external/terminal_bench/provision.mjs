@@ -29,6 +29,7 @@ const MAX_BUNDLE_ENTRIES = 100_000;
 const MAX_BUNDLE_BYTES = 2 * 1024 * 1024 * 1024;
 const MAX_BUNDLE_DEPTH = 64;
 const MAX_MANIFEST_BYTES = 32 * 1024 * 1024;
+const MAX_NODE_TARBALL_BYTES = 1024 * 1024 * 1024;
 const SUPPORTS_NO_FOLLOW = Number.isInteger(fs.constants.O_NOFOLLOW) && fs.constants.O_NOFOLLOW > 0;
 const NO_FOLLOW = fs.constants.O_NOFOLLOW ?? 0;
 const ALLOWED_TOP_LEVEL = new Set([
@@ -48,6 +49,33 @@ export function bundleMount(bundleDir) {
 }
 
 const repoRootDefault = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
+const BUNDLE_SOURCE_PATHS = [
+  'packages/harness',
+  'evals/external/terminal_bench/evidence-probe.mjs',
+  'evals/external/terminal_bench/bounded-exec.mjs',
+];
+
+function snapshotTrackedSource({ repoRoot, releaseSha, destination, run }) {
+  const archive = path.join(path.dirname(destination), `.tracked-source-${crypto.randomUUID()}.tar`);
+  fs.mkdirSync(destination, { recursive: false, mode: 0o700 });
+  try {
+    run('git', [
+      'archive',
+      '--format=tar',
+      `--output=${archive}`,
+      releaseSha,
+      '--',
+      ...BUNDLE_SOURCE_PATHS,
+    ], { cwd: repoRoot });
+    run('tar', ['-xf', archive, '-C', destination]);
+  } finally {
+    try {
+      fs.unlinkSync(archive);
+    } catch (error) {
+      if (error?.code !== 'ENOENT') throw error;
+    }
+  }
+}
 
 function architectureWrapperScript(entrypoint, label) {
   // The container architecture belongs to the task image (the pinned COBOL
@@ -80,6 +108,36 @@ export function boundedExecWrapperScript() {
 
 function sha256(value) {
   return crypto.createHash('sha256').update(value).digest('hex');
+}
+
+function normalizedSourceIdentity(value, label = 'bundle source identity') {
+  if (!value || Array.isArray(value) || typeof value !== 'object') {
+    throw new Error(`${label} is required`);
+  }
+  const releaseSha = String(value.releaseSha ?? '').toLowerCase();
+  const harnessVersion = String(value.harnessVersion ?? '');
+  if (!/^[a-f0-9]{40,64}$/.test(releaseSha)) {
+    throw new Error(`${label}.releaseSha must be a full 40-64 character hexadecimal commit identity`);
+  }
+  if (!harnessVersion || harnessVersion.length > 128 || /[\0\r\n]/.test(harnessVersion)) {
+    throw new Error(`${label}.harnessVersion must be a nonempty bounded string`);
+  }
+  return { releaseSha, harnessVersion };
+}
+
+function normalizedNodeTarballHashes(value, label = 'node tarball hashes') {
+  if (!value || Array.isArray(value) || typeof value !== 'object') {
+    throw new Error(`${label} are required`);
+  }
+  const normalized = {};
+  for (const [arch, digest] of Object.entries(value)) {
+    if (!['x64', 'arm64'].includes(arch)) throw new Error(`${label} contain unsupported architecture: ${arch}`);
+    const candidate = String(digest ?? '').toLowerCase();
+    if (!/^[a-f0-9]{64}$/.test(candidate)) throw new Error(`${label}.${arch} must be a SHA-256 digest`);
+    normalized[arch] = candidate;
+  }
+  if (!Object.keys(normalized).length) throw new Error(`${label} must contain at least one runtime digest`);
+  return normalized;
 }
 
 function bytewiseCompare(left, right) {
@@ -272,11 +330,13 @@ function scanBundle(bundleDir, { maximumEntries: requestedMaximumEntries } = {})
   return { entries, regularBytes };
 }
 
-function manifestDocument(bundleDir, options) {
-  const scanned = scanBundle(bundleDir, options);
+function manifestDocument(bundleDir, { sourceIdentity, nodeTarballHashes, maximumEntries } = {}) {
+  const scanned = scanBundle(bundleDir, { maximumEntries });
   return {
     version: BUNDLE_MANIFEST_VERSION,
     algorithm: 'sha256',
+    sourceIdentity: normalizedSourceIdentity(sourceIdentity),
+    nodeTarballHashes: normalizedNodeTarballHashes(nodeTarballHashes),
     entryCount: scanned.entries.length,
     regularBytes: scanned.regularBytes,
     entriesHash: sha256(JSON.stringify(scanned.entries)),
@@ -284,8 +344,8 @@ function manifestDocument(bundleDir, options) {
   };
 }
 
-function writeBundleManifest(bundleDir) {
-  const manifest = manifestDocument(bundleDir);
+function writeBundleManifest(bundleDir, { sourceIdentity, nodeTarballHashes }) {
+  const manifest = manifestDocument(bundleDir, { sourceIdentity, nodeTarballHashes });
   const bytes = Buffer.from(`${JSON.stringify(manifest, null, 2)}\n`);
   const manifestPath = path.join(bundleDir, BUNDLE_MANIFEST_FILE);
   const temporary = `${manifestPath}.${process.pid}.${crypto.randomUUID()}.tmp`;
@@ -310,7 +370,7 @@ function writeBundleManifest(bundleDir) {
  */
 function inspectPrebuiltBundle(
   bundleDir,
-  { expectedManifestHash, repoRoot = repoRootDefault, maximumEntries } = {}
+  { expectedManifestHash, expectedSourceIdentity, repoRoot = repoRootDefault, maximumEntries } = {}
 ) {
   if (!SUPPORTS_NO_FOLLOW) throw new Error('secure prebuilt bundle validation requires O_NOFOLLOW support');
   if (!/^[a-f0-9]{64}$/.test(String(expectedManifestHash ?? ''))) {
@@ -334,7 +394,20 @@ function inspectPrebuiltBundle(
   if (!recorded || Array.isArray(recorded) || recorded.version !== BUNDLE_MANIFEST_VERSION || recorded.algorithm !== 'sha256') {
     throw new Error(`unsupported bundle manifest version or algorithm`);
   }
-  const current = manifestDocument(canonical, { maximumEntries });
+  const recordedSourceIdentity = normalizedSourceIdentity(recorded.sourceIdentity, 'recorded bundle source identity');
+  const expectedIdentity = normalizedSourceIdentity(expectedSourceIdentity, 'expected bundle source identity');
+  if (!crypto.timingSafeEqual(
+    Buffer.from(sha256(JSON.stringify(recordedSourceIdentity)), 'hex'),
+    Buffer.from(sha256(JSON.stringify(expectedIdentity)), 'hex')
+  )) {
+    throw new Error('bundle source identity does not match the evaluated release');
+  }
+  const recordedNodeTarballHashes = normalizedNodeTarballHashes(recorded.nodeTarballHashes, 'recorded node tarball hashes');
+  const current = manifestDocument(canonical, {
+    maximumEntries,
+    sourceIdentity: recordedSourceIdentity,
+    nodeTarballHashes: recordedNodeTarballHashes,
+  });
   if (recorded.entryCount !== current.entryCount || recorded.regularBytes !== current.regularBytes) {
     throw new Error('bundle contents do not match the trusted manifest totals');
   }
@@ -486,6 +559,7 @@ export function materializePrebuiltBundle(
   {
     destination,
     expectedManifestHash,
+    expectedSourceIdentity,
     repoRoot = repoRootDefault,
     maximumEntries,
     onSourceValidated,
@@ -496,7 +570,12 @@ export function materializePrebuiltBundle(
   if (onSourceValidated !== undefined && typeof onSourceValidated !== 'function') {
     throw new Error('onSourceValidated must be a function when provided');
   }
-  const sourceBundle = inspectPrebuiltBundle(source, { expectedManifestHash, repoRoot, maximumEntries });
+  const sourceBundle = inspectPrebuiltBundle(source, {
+    expectedManifestHash,
+    expectedSourceIdentity,
+    repoRoot,
+    maximumEntries,
+  });
   const resolvedDestination = path.resolve(destination);
   if (fs.existsSync(resolvedDestination)) throw new Error('bundle materialization destination must not already exist');
   onSourceValidated?.({
@@ -508,7 +587,12 @@ export function materializePrebuiltBundle(
     fs.mkdirSync(resolvedDestination, { recursive: false, mode: 0o700 });
     destinationCreated = true;
     copyAttestedInventory(sourceBundle, resolvedDestination);
-    return validatePrebuiltBundle(resolvedDestination, { expectedManifestHash, repoRoot, maximumEntries });
+    return validatePrebuiltBundle(resolvedDestination, {
+      expectedManifestHash,
+      expectedSourceIdentity,
+      repoRoot,
+      maximumEntries,
+    });
   } catch (error) {
     if (destinationCreated) {
       try {
@@ -539,31 +623,55 @@ export function activationCommands() {
 export function prepareHarnessBundle({
   bundleDir,
   repoRoot = repoRootDefault,
+  sourceIdentity,
   nodeTarballs = {
     x64: process.env.HARNESS_EVAL_NODE_TARBALL_X64 ?? null,
     arm64: process.env.HARNESS_EVAL_NODE_TARBALL_ARM64 ?? null,
   },
+  nodeTarballHashes = {
+    x64: process.env.HARNESS_EVAL_NODE_TARBALL_X64_SHA256 ?? null,
+    arm64: process.env.HARNESS_EVAL_NODE_TARBALL_ARM64_SHA256 ?? null,
+  },
+  snapshotSource = snapshotTrackedSource,
   spawnImpl = spawnSync,
 }) {
+  sourceIdentity = normalizedSourceIdentity(sourceIdentity, 'bundle source identity');
+  if (!SUPPORTS_NO_FOLLOW) throw new Error('secure Node runtime verification requires O_NOFOLLOW support');
+  if (typeof snapshotSource !== 'function') throw new Error('snapshotSource must be a function');
   fs.mkdirSync(bundleDir, { recursive: true });
   bundleDir = fs.realpathSync.native(bundleDir);
   const existing = fs.readdirSync(bundleDir);
   if (existing.length) throw new Error(`bundle directory must be empty before preparation: ${bundleDir}`);
   const harnessDir = path.join(bundleDir, 'harness');
+  const trackedSourceDir = path.join(bundleDir, `.tracked-source-${crypto.randomUUID()}`);
   const run = (cmd, args, opts = {}) => {
     const res = spawnImpl(cmd, args, { encoding: 'utf8', ...opts });
     if (res.status !== 0) throw new Error(`bundle step failed: ${cmd} ${args.join(' ')}: ${res.stderr || res.error?.message || res.status}`);
     return res;
   };
-  run('cp', ['-R', path.join(repoRoot, 'packages', 'harness'), harnessDir]);
+  snapshotSource({
+    repoRoot,
+    releaseSha: sourceIdentity.releaseSha,
+    destination: trackedSourceDir,
+    run,
+  });
+  fs.renameSync(path.join(trackedSourceDir, 'packages', 'harness'), harnessDir);
   // --ignore-scripts: the package's prepare hook (build:assets) needs the
-  // full repo tree; the working copy already contains the built assets.
-  run('npm', ['install', '--omit=dev', '--no-audit', '--no-fund', '--ignore-scripts'], { cwd: harnessDir });
+  // full repo tree; the commit snapshot already contains the built assets.
+  // npm ci recreates node_modules strictly from the tracked lockfile, so
+  // ignored working-tree dependencies can never leak into the release bundle.
+  run('npm', ['ci', '--omit=dev', '--no-audit', '--no-fund', '--ignore-scripts'], { cwd: harnessDir });
   // Legacy single-tarball hook: infer its architecture from the filename.
   const legacy = process.env.HARNESS_EVAL_NODE_TARBALL;
+  const legacyHash = process.env.HARNESS_EVAL_NODE_TARBALL_SHA256;
   if (legacy && !nodeTarballs.x64 && !nodeTarballs.arm64) {
-    if (/x64/.test(legacy)) nodeTarballs = { ...nodeTarballs, x64: legacy };
-    else if (/arm64|aarch64/.test(legacy)) nodeTarballs = { ...nodeTarballs, arm64: legacy };
+    if (/x64/.test(legacy)) {
+      nodeTarballs = { ...nodeTarballs, x64: legacy };
+      nodeTarballHashes = { ...nodeTarballHashes, x64: legacyHash };
+    } else if (/arm64|aarch64/.test(legacy)) {
+      nodeTarballs = { ...nodeTarballs, arm64: legacy };
+      nodeTarballHashes = { ...nodeTarballHashes, arm64: legacyHash };
+    }
   }
   const provided = Object.entries(nodeTarballs).filter(([, tarball]) => tarball);
   if (!provided.length) {
@@ -571,25 +679,89 @@ export function prepareHarnessBundle({
       'a Linux Node runtime tarball is required (set HARNESS_EVAL_NODE_TARBALL_X64 and/or HARNESS_EVAL_NODE_TARBALL_ARM64 to downloaded node-vXX-linux-<arch>.tar.gz files)'
     );
   }
+  const suppliedHashes = {};
   for (const [arch, tarball] of provided) {
-    const nodeDir = path.join(bundleDir, `node-${arch}`);
-    fs.mkdirSync(nodeDir, { recursive: true });
-    run('tar', ['-xzf', tarball, '--strip-components=1', '-C', nodeDir]);
+    if (!['x64', 'arm64'].includes(arch)) throw new Error(`unsupported Node runtime architecture: ${arch}`);
+    const expectedHash = String(nodeTarballHashes?.[arch] ?? '').toLowerCase();
+    if (!/^[a-f0-9]{64}$/.test(expectedHash)) {
+      throw new Error(`a SHA-256 pin is required for the ${arch} Linux Node runtime tarball`);
+    }
+    const sourceStat = fs.lstatSync(tarball);
+    if (sourceStat.isSymbolicLink() || !sourceStat.isFile()) {
+      throw new Error(`Node runtime tarball for ${arch} must be a regular non-symlink file`);
+    }
+    const verifiedArchive = path.join(bundleDir, `.verified-node-${arch}-${crypto.randomUUID()}.tar.gz`);
+    let actualHash;
+    try {
+      let sourceHandle;
+      let destinationHandle;
+      try {
+        sourceHandle = fs.openSync(tarball, fs.constants.O_RDONLY | NO_FOLLOW);
+        const before = fs.fstatSync(sourceHandle);
+        if (!before.isFile()) throw new Error(`Node runtime tarball for ${arch} must be a regular file`);
+        if (before.size > MAX_NODE_TARBALL_BYTES) {
+          throw new Error(`Node runtime tarball for ${arch} exceeds ${MAX_NODE_TARBALL_BYTES} bytes`);
+        }
+        destinationHandle = fs.openSync(
+          verifiedArchive,
+          fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | NO_FOLLOW,
+          0o600
+        );
+        const digest = crypto.createHash('sha256');
+        const chunk = Buffer.allocUnsafe(64 * 1024);
+        let position = 0;
+        while (position < before.size) {
+          const count = fs.readSync(sourceHandle, chunk, 0, Math.min(chunk.length, before.size - position), position);
+          if (count === 0) throw new Error(`Node runtime tarball for ${arch} changed while being read`);
+          digest.update(chunk.subarray(0, count));
+          let written = 0;
+          while (written < count) {
+            const writeCount = fs.writeSync(destinationHandle, chunk, written, count - written, position + written);
+            if (writeCount === 0) throw new Error(`verified Node runtime snapshot for ${arch} could not be written`);
+            written += writeCount;
+          }
+          position += count;
+        }
+        const after = fs.fstatSync(sourceHandle);
+        if (!stableOpenFile(before, after)) throw new Error(`Node runtime tarball for ${arch} changed while being read`);
+        actualHash = digest.digest('hex');
+        if (!crypto.timingSafeEqual(Buffer.from(actualHash, 'hex'), Buffer.from(expectedHash, 'hex'))) {
+          throw new Error(`Node runtime tarball digest mismatch for ${arch}: expected ${expectedHash}, got ${actualHash}`);
+        }
+      } finally {
+        if (destinationHandle !== undefined) fs.closeSync(destinationHandle);
+        if (sourceHandle !== undefined) fs.closeSync(sourceHandle);
+      }
+      const nodeDir = path.join(bundleDir, `node-${arch}`);
+      fs.mkdirSync(nodeDir, { recursive: true });
+      run('tar', ['-xzf', verifiedArchive, '--strip-components=1', '-C', nodeDir]);
+      suppliedHashes[arch] = actualHash;
+    } finally {
+      try {
+        fs.unlinkSync(verifiedArchive);
+      } catch (error) {
+        if (error?.code !== 'ENOENT') throw error;
+      }
+    }
   }
   const wrapper = path.join(bundleDir, 'harness-cli');
   fs.writeFileSync(wrapper, harnessWrapperScript(), { mode: 0o755 });
   // Evidence is collected in both conditions, so it is part of the symmetric
   // read-only bundle rather than installed as a treatment-only executable.
   fs.copyFileSync(
-    path.join(repoRoot, 'evals', 'external', 'terminal_bench', 'evidence-probe.mjs'),
+    path.join(trackedSourceDir, 'evals', 'external', 'terminal_bench', 'evidence-probe.mjs'),
     path.join(bundleDir, 'evidence-probe.mjs')
   );
   fs.writeFileSync(path.join(bundleDir, 'evidence-probe'), evidenceProbeWrapperScript(), { mode: 0o755 });
   fs.copyFileSync(
-    path.join(repoRoot, 'evals', 'external', 'terminal_bench', 'bounded-exec.mjs'),
+    path.join(trackedSourceDir, 'evals', 'external', 'terminal_bench', 'bounded-exec.mjs'),
     path.join(bundleDir, 'bounded-exec.mjs')
   );
   fs.writeFileSync(path.join(bundleDir, 'bounded-exec'), boundedExecWrapperScript(), { mode: 0o755 });
-  const { manifestHash } = writeBundleManifest(bundleDir);
+  fs.rmSync(trackedSourceDir, { recursive: true, force: true });
+  const { manifestHash } = writeBundleManifest(bundleDir, {
+    sourceIdentity,
+    nodeTarballHashes: suppliedHashes,
+  });
   return { bundleDir, manifestHash, mount: bundleMount(bundleDir) };
 }

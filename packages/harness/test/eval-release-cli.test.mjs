@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -18,6 +19,7 @@ import { prepareHarnessBundle } from '../../../evals/external/terminal_bench/pro
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const BASE_LOCK = JSON.parse(fs.readFileSync(path.join(repoRoot, 'evals', 'external', 'terminal_bench', 'task-lock.json'), 'utf8'));
 const SENTINEL_PROVIDER_KEY = 'sentinel-openrouter-secret-do-not-persist';
+const harnessVersion = JSON.parse(fs.readFileSync(path.join(repoRoot, 'packages', 'harness', 'package.json'), 'utf8')).version;
 
 function tmpdir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'tb-cli-'));
@@ -33,7 +35,38 @@ function filesUnder(root) {
   return files;
 }
 
+function cleanGitView() {
+  const gitRoot = tmpdir();
+  const gitDir = path.join(gitRoot, '.git');
+  const gitEnv = { ...process.env, GIT_DIR: gitDir, GIT_WORK_TREE: repoRoot };
+  const run = (args, env = gitEnv) => {
+    const result = spawnSync('git', args, { cwd: repoRoot, env, encoding: 'utf8' });
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    return result.stdout.trim();
+  };
+  run(['init', gitRoot], process.env);
+  run(['add', '-A']);
+  run(['-c', 'user.name=Eval Test', '-c', 'user.email=eval-test@example.invalid', 'commit', '-m', 'clean eval source snapshot']);
+  const releaseSha = run(['rev-parse', '--verify', 'HEAD']);
+  assert.match(releaseSha, /^[a-f0-9]{40,64}$/);
+  assert.equal(run(['status', '--porcelain=v1', '--untracked-files=all']), '');
+  return { gitEnv: { GIT_DIR: gitDir, GIT_WORK_TREE: repoRoot }, releaseSha };
+}
+
+function snapshotFixtureSource({ repoRoot: sourceRoot, destination }) {
+  fs.mkdirSync(path.join(destination, 'packages'), { recursive: true });
+  fs.mkdirSync(path.join(destination, 'evals', 'external', 'terminal_bench'), { recursive: true });
+  fs.cpSync(path.join(sourceRoot, 'packages', 'harness'), path.join(destination, 'packages', 'harness'), { recursive: true });
+  for (const file of ['evidence-probe.mjs', 'bounded-exec.mjs']) {
+    fs.copyFileSync(
+      path.join(sourceRoot, 'evals', 'external', 'terminal_bench', file),
+      path.join(destination, 'evals', 'external', 'terminal_bench', file)
+    );
+  }
+}
+
 function setupFixture({ taskNames = ['cobol-modernization'] } = {}) {
+  const { gitEnv, releaseSha } = cleanGitView();
   const datasetDir = tmpdir();
   for (const taskName of taskNames) {
     const taskDir = path.join(datasetDir, taskName);
@@ -126,11 +159,16 @@ process.exit(0);
   fs.writeFileSync(path.join(bundleFixtureRoot, 'packages', 'harness', 'bin', 'harness.mjs'), 'process.stdout.write("ok\\n")');
   fs.writeFileSync(path.join(bundleFixtureRoot, 'evals', 'external', 'terminal_bench', 'evidence-probe.mjs'), 'process.stdout.write("{}\\n")');
   fs.writeFileSync(path.join(bundleFixtureRoot, 'evals', 'external', 'terminal_bench', 'bounded-exec.mjs'), 'process.stdout.write("{}\\n")');
+  const nodeTarball = path.join(bundleFixtureRoot, 'node-v-test-linux-x64.tar.gz');
+  fs.writeFileSync(nodeTarball, 'pinned fixture archive bytes');
   const bundleDir = path.join(tmpdir(), 'bundle');
   const prepared = prepareHarnessBundle({
     bundleDir,
     repoRoot: bundleFixtureRoot,
-    nodeTarballs: { x64: '/unused/node-x64.tar.gz', arm64: null },
+    sourceIdentity: { releaseSha, harnessVersion },
+    nodeTarballs: { x64: nodeTarball, arm64: null },
+    nodeTarballHashes: { x64: crypto.createHash('sha256').update(fs.readFileSync(nodeTarball)).digest('hex'), arm64: null },
+    snapshotSource: snapshotFixtureSource,
     spawnImpl: (command, args) => {
       if (command === 'cp') fs.cpSync(args[1], args[2], { recursive: true });
       if (command === 'tar') {
@@ -141,12 +179,21 @@ process.exit(0);
       return { status: 0, stderr: '' };
     },
   });
-  return { datasetDir, lockFile, binDir, bundleDir, bundleHash: prepared.manifestHash, auditFile, fetchPreload };
+  return { datasetDir, lockFile, binDir, bundleDir, bundleHash: prepared.manifestHash, auditFile, fetchPreload, gitEnv, releaseSha };
 }
 
-function runCli({ datasetDir, lockFile, binDir, bundleDir, bundleHash, auditFile, fetchPreload, withKey = true, task = null, omitTaskValue = false }) {
+function runCli({ datasetDir, lockFile, binDir, bundleDir, bundleHash, auditFile, fetchPreload, gitEnv, withKey = true, task = null, omitTaskValue = false, releaseSha = null, dirtySource = false }) {
+  if (dirtySource) {
+    const dirty = spawnSync('git', ['update-index', '--force-remove', 'evals/release.mjs'], {
+      cwd: repoRoot,
+      env: { ...process.env, ...gitEnv },
+      encoding: 'utf8',
+    });
+    assert.equal(dirty.status, 0, dirty.stderr || dirty.stdout);
+  }
   const env = {
     ...process.env,
+    ...gitEnv,
     PATH: `${binDir}${path.delimiter}${process.env.PATH}`,
     HARNESS_EVAL_TB_DATASET_DIR: datasetDir,
     HARNESS_EVAL_TB_BUNDLE_DIR: bundleDir,
@@ -157,6 +204,7 @@ function runCli({ datasetDir, lockFile, binDir, bundleDir, bundleHash, auditFile
   if (withKey) env.OPENROUTER_API_KEY = SENTINEL_PROVIDER_KEY;
   else delete env.OPENROUTER_API_KEY;
   const args = ['evals/release.mjs', '--profile', 'release-canary', '--json', '--lock-file', lockFile];
+  if (releaseSha !== null) args.push('--release-sha', releaseSha);
   if (omitTaskValue) args.push('--task');
   else if (task !== null) args.push('--task', task);
   return spawnSync(process.execPath, args, {
@@ -218,6 +266,22 @@ test('release-candidate mode without credentials blocks instead of greening', ()
   const report = JSON.parse(result.stdout);
   assert.ok(report.gate.reasons.some((r) => /dependencies or credentials/i.test(r)));
   assert.equal(report.pairs.find((p) => p.host === 'openrouter-kimi').result, 'skipped');
+});
+
+test('live release claims reject a mismatched explicit commit identity before Harbor execution', () => {
+  const fixture = setupFixture();
+  const result = runCli({ ...fixture, releaseSha: 'f'.repeat(40) });
+  assert.equal(result.status, 2);
+  assert.match(result.stderr, /full current git HEAD/i);
+  assert.equal(fs.existsSync(fixture.auditFile), false);
+});
+
+test('live release claims reject a dirty source tree before Harbor execution', () => {
+  const fixture = setupFixture();
+  const result = runCli({ ...fixture, dirtySource: true });
+  assert.equal(result.status, 2);
+  assert.match(result.stderr, /clean git working tree/i);
+  assert.equal(fs.existsSync(fixture.auditFile), false);
 });
 
 test('--task selects exactly one pinned task for metadata, validation, budgeting, and Harbor execution', () => {

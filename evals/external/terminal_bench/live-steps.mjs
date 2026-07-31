@@ -1064,12 +1064,18 @@ export function buildLiveSteps({
 
   function ensureBundle() {
     // A pre-built bundle (offline releases, tests) short-circuits preparation.
+    const sourceIdentity = { releaseSha, harnessVersion };
     bundle ??= env.HARNESS_EVAL_TB_BUNDLE_DIR
       ? materializePrebuiltBundle(env.HARNESS_EVAL_TB_BUNDLE_DIR, {
           destination: path.join(workDir, 'materialized-harness-bundle'),
           expectedManifestHash: env.HARNESS_EVAL_TB_BUNDLE_SHA256,
+          expectedSourceIdentity: sourceIdentity,
         })
-      : prepareBundle({ bundleDir: path.join(workDir, 'harness-bundle'), spawnImpl });
+      : prepareBundle({
+          bundleDir: path.join(workDir, 'harness-bundle'),
+          sourceIdentity,
+          spawnImpl,
+        });
   }
 
   return {

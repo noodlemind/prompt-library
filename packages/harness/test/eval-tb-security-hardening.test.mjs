@@ -17,9 +17,25 @@ import { runStdioAgent } from '../../../evals/external/terminal_bench/agent.mjs'
 
 const repoRoot = fileURLToPath(new URL('../../../', import.meta.url));
 const sha256 = (value) => crypto.createHash('sha256').update(value).digest('hex');
+const SOURCE_IDENTITY = { releaseSha: 'a'.repeat(40), harnessVersion: '1.2.3-test' };
 
 function tmpdir(prefix = 'tb-security-') {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+}
+
+function snapshotFixtureSource({ repoRoot: sourceRoot, destination }) {
+  fs.mkdirSync(path.join(destination, 'packages'), { recursive: true });
+  fs.mkdirSync(path.join(destination, 'evals', 'external', 'terminal_bench'), { recursive: true });
+  fs.cpSync(path.join(sourceRoot, 'packages', 'harness'), path.join(destination, 'packages', 'harness'), {
+    recursive: true,
+    verbatimSymlinks: true,
+  });
+  for (const file of ['evidence-probe.mjs', 'bounded-exec.mjs']) {
+    fs.copyFileSync(
+      path.join(sourceRoot, 'evals', 'external', 'terminal_bench', file),
+      path.join(destination, 'evals', 'external', 'terminal_bench', file)
+    );
+  }
 }
 
 function preparedFixture() {
@@ -32,11 +48,16 @@ function preparedFixture() {
   fs.writeFileSync(path.join(fixtureRoot, 'packages', 'harness', 'bin', 'harness.mjs'), 'process.stdout.write("ok\\n")');
   fs.writeFileSync(path.join(fixtureRoot, 'evals', 'external', 'terminal_bench', 'evidence-probe.mjs'), 'process.stdout.write("{}\\n")');
   fs.writeFileSync(path.join(fixtureRoot, 'evals', 'external', 'terminal_bench', 'bounded-exec.mjs'), 'process.stdout.write("{}\\n")');
+  const nodeTarball = path.join(fixtureRoot, 'node-v-test-linux-x64.tar.gz');
+  fs.writeFileSync(nodeTarball, 'pinned fixture archive bytes');
 
   const prepared = prepareHarnessBundle({
     bundleDir,
     repoRoot: fixtureRoot,
-    nodeTarballs: { x64: '/unused/node-x64.tar.gz', arm64: null },
+    sourceIdentity: SOURCE_IDENTITY,
+    nodeTarballs: { x64: nodeTarball, arm64: null },
+    nodeTarballHashes: { x64: sha256(fs.readFileSync(nodeTarball)), arm64: null },
+    snapshotSource: snapshotFixtureSource,
     spawnImpl: (command, args) => {
       if (command === 'cp') fs.cpSync(args[1], args[2], { recursive: true, verbatimSymlinks: true });
       if (command === 'tar') {
@@ -47,21 +68,116 @@ function preparedFixture() {
       return { status: 0, stderr: '' };
     },
   });
-  return { fixtureRoot, bundleDir, prepared };
+  return { fixtureRoot, bundleDir, prepared, nodeTarball };
 }
+
+const trustBundle = (prepared, extras = {}) => ({
+  expectedManifestHash: prepared.manifestHash,
+  expectedSourceIdentity: SOURCE_IDENTITY,
+  ...extras,
+});
 
 test('prepared bundles require an out-of-bundle digest and validate exact content', () => {
   const { bundleDir, prepared } = preparedFixture();
   assert.match(prepared.manifestHash, /^[a-f0-9]{64}$/);
   assert.equal(fs.existsSync(path.join(bundleDir, BUNDLE_MANIFEST_FILE)), true);
-  assert.equal(validatePrebuiltBundle(bundleDir, { expectedManifestHash: prepared.manifestHash }).manifestHash, prepared.manifestHash);
+  const recorded = JSON.parse(fs.readFileSync(path.join(bundleDir, BUNDLE_MANIFEST_FILE), 'utf8'));
+  assert.deepEqual(recorded.sourceIdentity, SOURCE_IDENTITY);
+  assert.match(recorded.nodeTarballHashes.x64, /^[a-f0-9]{64}$/);
+  assert.equal(validatePrebuiltBundle(bundleDir, trustBundle(prepared)).manifestHash, prepared.manifestHash);
   assert.throws(() => validatePrebuiltBundle(bundleDir), /expected manifest digest/i);
+  assert.throws(
+    () => validatePrebuiltBundle(bundleDir, trustBundle(prepared, {
+      expectedSourceIdentity: { ...SOURCE_IDENTITY, releaseSha: 'b'.repeat(40) },
+    })),
+    /source identity.*evaluated release/i
+  );
 
   fs.writeFileSync(path.join(bundleDir, 'harness', 'unexpected-secret.txt'), 'do not mount me');
   assert.throws(
-    () => validatePrebuiltBundle(bundleDir, { expectedManifestHash: prepared.manifestHash }),
+    () => validatePrebuiltBundle(bundleDir, trustBundle(prepared)),
     /contents|manifest|unexpected/i
   );
+});
+
+test('Node runtime archives require an exact SHA-256 pin and reject symlink inputs', () => {
+  const fixtureRoot = tmpdir('tb-runtime-pin-fixture-');
+  fs.mkdirSync(path.join(fixtureRoot, 'packages', 'harness'), { recursive: true });
+  fs.mkdirSync(path.join(fixtureRoot, 'evals', 'external', 'terminal_bench'), { recursive: true });
+  fs.writeFileSync(path.join(fixtureRoot, 'evals', 'external', 'terminal_bench', 'evidence-probe.mjs'), '');
+  fs.writeFileSync(path.join(fixtureRoot, 'evals', 'external', 'terminal_bench', 'bounded-exec.mjs'), '');
+  const archive = path.join(fixtureRoot, 'node-v-test-linux-x64.tar.gz');
+  fs.writeFileSync(archive, 'trusted runtime archive');
+  const link = path.join(fixtureRoot, 'linked-node-v-test-linux-x64.tar.gz');
+  fs.symlinkSync(archive, link);
+  const spawnImpl = (command, args) => {
+    if (command === 'cp') fs.cpSync(args[1], args[2], { recursive: true });
+    if (command === 'tar') assert.fail('an untrusted runtime archive must never reach tar');
+    return { status: 0, stderr: '' };
+  };
+  const prepare = (tarball, digest) => prepareHarnessBundle({
+    bundleDir: path.join(tmpdir('tb-runtime-pin-output-'), 'bundle'),
+    repoRoot: fixtureRoot,
+    sourceIdentity: SOURCE_IDENTITY,
+    nodeTarballs: { x64: tarball, arm64: null },
+    nodeTarballHashes: { x64: digest, arm64: null },
+    snapshotSource: snapshotFixtureSource,
+    spawnImpl,
+  });
+
+  assert.throws(() => prepare(archive, null), /SHA-256 pin is required/i);
+  assert.throws(() => prepare(archive, '0'.repeat(64)), /digest mismatch/i);
+  assert.throws(() => prepare(link, sha256(fs.readFileSync(archive))), /non-symlink/i);
+});
+
+test('automatic bundle preparation snapshots tracked bytes from the claimed commit', () => {
+  const sourceRoot = tmpdir('tb-commit-source-');
+  fs.mkdirSync(path.join(sourceRoot, 'packages', 'harness'), { recursive: true });
+  fs.mkdirSync(path.join(sourceRoot, 'evals', 'external', 'terminal_bench'), { recursive: true });
+  fs.writeFileSync(path.join(sourceRoot, 'packages', 'harness', 'package.json'), '{"name":"committed-harness"}\n');
+  fs.writeFileSync(path.join(sourceRoot, 'packages', 'harness', 'package-lock.json'), '{"lockfileVersion":3,"packages":{}}\n');
+  fs.writeFileSync(path.join(sourceRoot, 'evals', 'external', 'terminal_bench', 'evidence-probe.mjs'), 'committed probe\n');
+  fs.writeFileSync(path.join(sourceRoot, 'evals', 'external', 'terminal_bench', 'bounded-exec.mjs'), 'committed exec\n');
+  const git = (args) => spawnSync('git', args, { cwd: sourceRoot, encoding: 'utf8' });
+  assert.equal(git(['init']).status, 0);
+  assert.equal(git(['add', '-A']).status, 0);
+  assert.equal(git(['-c', 'user.name=Eval Test', '-c', 'user.email=eval-test@example.invalid', 'commit', '-m', 'source']).status, 0);
+  const releaseSha = git(['rev-parse', '--verify', 'HEAD']).stdout.trim();
+
+  fs.writeFileSync(path.join(sourceRoot, 'packages', 'harness', 'package.json'), '{"name":"dirty-harness"}\n');
+  fs.mkdirSync(path.join(sourceRoot, 'packages', 'harness', 'node_modules'), { recursive: true });
+  fs.writeFileSync(path.join(sourceRoot, 'packages', 'harness', 'node_modules', 'ignored-secret'), 'must not be bundled');
+  const nodeTarball = path.join(sourceRoot, 'node-v-test-linux-x64.tar.gz');
+  fs.writeFileSync(nodeTarball, 'pinned runtime bytes');
+  const bundleDir = path.join(tmpdir('tb-commit-bundle-'), 'bundle');
+  const calls = [];
+  const spawnImpl = (command, args, options) => {
+    calls.push([command, args]);
+    if (command === 'git' || (command === 'tar' && args[0] === '-xf')) {
+      return spawnSync(command, args, { ...options, encoding: 'utf8' });
+    }
+    if (command === 'tar') {
+      const destination = args[args.indexOf('-C') + 1];
+      fs.mkdirSync(path.join(destination, 'bin'), { recursive: true });
+      fs.writeFileSync(path.join(destination, 'bin', 'node'), '#!/bin/sh\n', { mode: 0o755 });
+    }
+    return { status: 0, stderr: '' };
+  };
+
+  prepareHarnessBundle({
+    bundleDir,
+    repoRoot: sourceRoot,
+    sourceIdentity: { releaseSha, harnessVersion: '1.2.3-test' },
+    nodeTarballs: { x64: nodeTarball, arm64: null },
+    nodeTarballHashes: { x64: sha256(fs.readFileSync(nodeTarball)), arm64: null },
+    spawnImpl,
+  });
+
+  assert.equal(fs.readFileSync(path.join(bundleDir, 'harness', 'package.json'), 'utf8'), '{"name":"committed-harness"}\n');
+  assert.equal(fs.existsSync(path.join(bundleDir, 'harness', 'node_modules', 'ignored-secret')), false);
+  assert.equal(fs.readFileSync(path.join(bundleDir, 'evidence-probe.mjs'), 'utf8'), 'committed probe\n');
+  assert.ok(calls.some(([command, args]) => command === 'git' && args[0] === 'archive' && args.includes(releaseSha)));
+  assert.ok(calls.some(([command, args]) => command === 'npm' && args[0] === 'ci'));
 });
 
 test('prebuilt bundles are mounted from a separately validated runner-owned snapshot', () => {
@@ -69,7 +185,7 @@ test('prebuilt bundles are mounted from a separately validated runner-owned snap
   const destination = path.join(tmpdir('tb-materialized-parent-'), 'materialized');
   const materialized = materializePrebuiltBundle(bundleDir, {
     destination,
-    expectedManifestHash: prepared.manifestHash,
+    ...trustBundle(prepared),
   });
   assert.equal(materialized.bundleDir, fs.realpathSync(destination));
   assert.equal(materialized.mount.source, fs.realpathSync(destination));
@@ -77,14 +193,14 @@ test('prebuilt bundles are mounted from a separately validated runner-owned snap
   assert.equal(fs.readlinkSync(path.join(destination, 'harness', 'package-link.json')), 'package.json');
   fs.writeFileSync(path.join(bundleDir, 'harness', 'post-validation-mutation'), 'source changed');
   assert.equal(fs.existsSync(path.join(destination, 'harness', 'post-validation-mutation')), false);
-  assert.equal(validatePrebuiltBundle(destination, { expectedManifestHash: prepared.manifestHash }).manifestHash, prepared.manifestHash);
+  assert.equal(validatePrebuiltBundle(destination, trustBundle(prepared)).manifestHash, prepared.manifestHash);
 });
 
 test('prebuilt validation stops at a caller-tightened entry cap before accepting the inventory', () => {
   const { bundleDir, prepared } = preparedFixture();
   assert.throws(
     () => validatePrebuiltBundle(bundleDir, {
-      expectedManifestHash: prepared.manifestHash,
+      ...trustBundle(prepared),
       maximumEntries: 2,
     }),
     /maximum entry count 2/i
@@ -96,7 +212,7 @@ test('materialization copies only attested entries added after validation', () =
   const destination = path.join(tmpdir('tb-materialized-attested-'), 'materialized');
   const materialized = materializePrebuiltBundle(bundleDir, {
     destination,
-    expectedManifestHash: prepared.manifestHash,
+    ...trustBundle(prepared),
     onSourceValidated: ({ bundleDir: validatedSource }) => {
       fs.writeFileSync(path.join(validatedSource, 'unattested-after-validation'), 'must not be copied');
     },
@@ -113,7 +229,7 @@ test('materialization detects an attested-file mutation and removes its partial 
   assert.throws(
     () => materializePrebuiltBundle(bundleDir, {
       destination,
-      expectedManifestHash: prepared.manifestHash,
+      ...trustBundle(prepared),
       onSourceValidated: ({ bundleDir: validatedSource }) => {
         fs.writeFileSync(path.join(validatedSource, 'harness', 'package.json'), '{"changed":true}\n');
       },
@@ -137,7 +253,7 @@ test('a forged bundle and rewritten local manifest cannot replace the trusted di
 
   assert.notEqual(attackerChosenDigest, prepared.manifestHash);
   assert.throws(
-    () => validatePrebuiltBundle(bundleDir, { expectedManifestHash: prepared.manifestHash }),
+    () => validatePrebuiltBundle(bundleDir, trustBundle(prepared)),
     /manifest digest/i
   );
 });
@@ -146,7 +262,7 @@ test('bundle validation rejects broad paths, symlink roots, and escaping symlink
   const { bundleDir, prepared } = preparedFixture();
   for (const broad of ['/', os.homedir(), repoRoot]) {
     assert.throws(
-      () => validatePrebuiltBundle(broad, { expectedManifestHash: prepared.manifestHash, repoRoot }),
+      () => validatePrebuiltBundle(broad, trustBundle(prepared, { repoRoot })),
       /broad|root|ancestor|home|repository/i,
       broad
     );
@@ -155,7 +271,7 @@ test('bundle validation rejects broad paths, symlink roots, and escaping symlink
   const linked = path.join(tmpdir(), 'linked-bundle');
   fs.symlinkSync(bundleDir, linked, 'dir');
   assert.throws(
-    () => validatePrebuiltBundle(linked, { expectedManifestHash: prepared.manifestHash }),
+    () => validatePrebuiltBundle(linked, trustBundle(prepared)),
     /symlink|canonical/i
   );
 
@@ -163,7 +279,7 @@ test('bundle validation rejects broad paths, symlink roots, and escaping symlink
   fs.unlinkSync(wrapper);
   fs.symlinkSync('/etc/passwd', wrapper);
   assert.throws(
-    () => validatePrebuiltBundle(bundleDir, { expectedManifestHash: prepared.manifestHash }),
+    () => validatePrebuiltBundle(bundleDir, trustBundle(prepared)),
     /symlink|escape|contents|manifest/i
   );
 });
@@ -381,17 +497,15 @@ class Agent(StdioBridgeAgent):
 
 async def main():
     agent = Agent()
-    passed = await agent._trusted_verify(None, "docs/plans/task.md")
-    invalid = await agent._trusted_verify(None, "../../escape.md")
-    print(json.dumps({"passed": passed, "invalid": invalid, "calls": agent.calls}))
+    passed = await agent._trusted_verify(None)
+    print(json.dumps({"passed": passed, "calls": agent.calls}))
 
 asyncio.run(main())
 `);
   assert.equal(result.passed.passed, true);
   assert.equal(result.passed.trustedVerification, true);
-  assert.equal(result.invalid.passed, false);
-  assert.equal(result.calls.length, 1, 'an invalid plan never reaches sandbox execution');
-  assert.equal(result.calls[0].command, '/opt/harness-bundle/harness-cli verify --workspace . --json --plan docs/plans/task.md');
+  assert.equal(result.calls.length, 1);
+  assert.equal(result.calls[0].command, '/opt/harness-bundle/harness-cli verify --workspace . --json');
   assert.equal(result.calls[0].parse_json, true);
 });
 
