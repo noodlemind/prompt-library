@@ -601,11 +601,15 @@ export function buildLiveSteps({
   now = () => new Date().toISOString(),
   prepareBundle = prepareHarnessBundle,
   fetchImpl = globalThis.fetch,
+  providerLookupTimeoutMs = 30_000,
   repetitions = null,
   seeds = null,
   localEnabled = false,
 }) {
   const repetitionCount = repetitions ?? seeds ?? 1;
+  if (!Number.isFinite(providerLookupTimeoutMs) || providerLookupTimeoutMs <= 0) {
+    throw new Error('providerLookupTimeoutMs must be a positive finite number');
+  }
   const conditionOrderPolicy = config.execution?.conditionOrder ?? 'release-hash-balanced';
   if (conditionOrderPolicy !== 'release-hash-balanced') {
     throw new Error(`unsupported condition order policy: ${conditionOrderPolicy}`);
@@ -664,27 +668,46 @@ export function buildLiveSteps({
     if (typeof fetchImpl !== 'function') {
       return { ok: false, reason: 'provider key limit could not be verified', evidence: { verified: false, required: true, ceilingUsd, checkedAt } };
     }
-    let response;
+    let lookup;
+    const controller = new AbortController();
+    let timeoutId;
     try {
-      response = await fetchImpl('https://openrouter.ai/api/v1/key', {
-        method: 'GET',
-        headers: { authorization: `Bearer ${env.OPENROUTER_API_KEY}` },
-      });
+      lookup = await Promise.race([
+        (async () => {
+          const response = await fetchImpl('https://openrouter.ai/api/v1/key', {
+            method: 'GET',
+            headers: { authorization: `Bearer ${env.OPENROUTER_API_KEY}` },
+            signal: controller.signal,
+          });
+          let metadata = null;
+          if (response?.ok) {
+            try {
+              metadata = (await response.json())?.data ?? null;
+            } catch {
+              metadata = null;
+            }
+          }
+          return { response, metadata };
+        })(),
+        new Promise((_, reject) => {
+          timeoutId = setTimeout(() => {
+            controller.abort();
+            reject(new Error('provider key limit lookup timed out'));
+          }, providerLookupTimeoutMs);
+        }),
+      ]);
     } catch {
       return { ok: false, reason: 'provider key limit lookup failed', evidence: { verified: false, required: true, ceilingUsd, checkedAt } };
+    } finally {
+      clearTimeout(timeoutId);
     }
+    const { response, metadata } = lookup;
     if (!response?.ok) {
       return {
         ok: false,
         reason: `provider key limit lookup returned HTTP ${Number.isFinite(response?.status) ? response.status : 'error'}`,
         evidence: { verified: false, required: true, ceilingUsd, checkedAt },
       };
-    }
-    let metadata;
-    try {
-      metadata = (await response.json())?.data ?? null;
-    } catch {
-      metadata = null;
     }
     const limitUsd = metadata?.limit;
     const limitRemainingUsd = metadata?.limit_remaining;

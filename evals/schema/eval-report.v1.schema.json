@@ -135,6 +135,27 @@
         "breached": { "type": "boolean" },
         "overrunUsd": { "type": "number" },
         "reserveUsed": { "type": ["string", "null"] },
+        "providerSpendGuard": {
+          "type": "object",
+          "required": ["verified", "limitUsd", "limitRemainingUsd", "reset", "checkedAt"],
+          "properties": {
+            "verified": { "type": "boolean" },
+            "limitUsd": { "type": ["number", "null"] },
+            "limitRemainingUsd": { "type": ["number", "null"] },
+            "reset": { "type": ["string", "null"] },
+            "checkedAt": { "type": ["string", "null"] }
+          }
+        },
+        "billingUncertain": { "type": "boolean" },
+        "enforcementSemantics": {
+          "enum": [
+            "provider-key-hard-limit-plus-conservative-scheduler",
+            "scheduler-fail-stop-not-atomic-cash-guarantee"
+          ]
+        },
+        "requestEstimateSemantics": {
+          "const": "utf8-byte-prompt-token-upper-bound-plus-max-output-at-pinned-rates"
+        },
         "allocations": {
           "type": "object",
           "required": ["controlledPairUsd", "regressionRerunUsd", "reasonedReserveUsd"],

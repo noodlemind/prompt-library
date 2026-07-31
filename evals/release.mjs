@@ -310,7 +310,7 @@ function trialAttribution(doc, { requireProvider = false } = {}) {
   const modelMismatch =
     (modelComplete && reproducibility.modelResolved !== requestedModel) ||
     responses.some((response) => response.model !== requestedModel);
-  const providerMismatch = requireProvider && (
+  const providerMismatch = requireProvider && requestedProviders.length > 0 && (
     (providerComplete && !requestedProviders.includes(normalizeProviderName(reproducibility.providerResolved))) ||
     responses.some((response) => !requestedProviders.includes(normalizeProviderName(response.provider)))
   );
@@ -641,6 +641,7 @@ function attributableTrialEvidence(doc, { paid = false } = {}) {
     observability.uncorrelatedToolResults === 0 &&
     requestEvents === efficiency.modelRequests &&
     Number.isFinite(workspace.changedPathCount) &&
+    Array.isArray(workspace.changedPaths) &&
     workspace.changedPathCount >= workspace.changedPaths.length
   );
 }
@@ -964,8 +965,8 @@ export function buildMarkdownReport(report) {
     ...(report.smokes.length
       ? [`Smokes: ${report.smokes.map((s) => `${s.host} ${s.ok ? 'ok' : `failed (${(s.failed ?? []).join(', ')})`}`).join(' · ')}`, '']
       : []),
-    `Incremental provider API spend: $${report.budget.spentUsd.toFixed(2)} of $${report.budget.ceilingUsd.toFixed(2)} ceiling${report.budget.breached ? ` (BREACHED by $${report.budget.overrunUsd.toFixed(2)})` : ''}${report.budget.reserveUsed ? ` (reserve used: ${report.budget.reserveUsed})` : ''}.`,
-    `Cash-control semantics: ${report.budget.enforcementSemantics}${report.budget.billingUncertain ? ' (BILLING UNCERTAIN; remaining trial allowance reserved)' : ''}.`,
+    `Incremental provider API spend: $${report.budget.spentUsd.toFixed(2)} of $${report.budget.ceilingUsd.toFixed(2)} ceiling${report.budget.breached === true ? ` (BREACHED by $${Number(report.budget.overrunUsd ?? 0).toFixed(2)})` : ''}${report.budget.reserveUsed ? ` (reserve used: ${report.budget.reserveUsed})` : ''}.`,
+    `Cash-control semantics: ${report.budget.enforcementSemantics ?? 'legacy-unspecified'}${report.budget.billingUncertain === true ? ' (BILLING UNCERTAIN; remaining trial allowance reserved)' : ''}.`,
     '',
     report.gate.block ? `**Release blocked:** ${report.gate.reasons.join('; ')}` : '**Release not blocked by evaluation gates.**',
     '',

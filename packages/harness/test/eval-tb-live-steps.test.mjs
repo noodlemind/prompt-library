@@ -158,7 +158,7 @@ function fakeHarborSpawn({
   };
 }
 
-function liveSteps({ datasetDir, taskDir, lock, spawnImpl, apiKey = 'test-key', workDir = tmpdir(), config = null, fetchImpl = undefined, repetitions = null, releaseSha = 'sha1' }) {
+function liveSteps({ datasetDir, taskDir, lock, spawnImpl, apiKey = 'test-key', workDir = tmpdir(), config = null, fetchImpl = undefined, providerLookupTimeoutMs = undefined, repetitions = null, releaseSha = 'sha1' }) {
   let clockTick = 0;
   return buildLiveSteps({
     config: config ?? { execution: { environment: 'docker' } },
@@ -169,6 +169,7 @@ function liveSteps({ datasetDir, taskDir, lock, spawnImpl, apiKey = 'test-key', 
     harnessVersion: '0.5.0',
     spawnImpl,
     ...(fetchImpl ? { fetchImpl } : {}),
+    ...(providerLookupTimeoutMs != null ? { providerLookupTimeoutMs } : {}),
     ...(repetitions != null ? { repetitions } : {}),
     now: () => new Date(Date.UTC(2026, 6, 31, 0, 0, clockTick++)).toISOString(),
     prepareBundle: ({ bundleDir }) => ({ bundleDir, manifestHash: 'f'.repeat(64), mount: { source: bundleDir, target: BUNDLE_MOUNT_TARGET, readOnly: true } }),
@@ -515,6 +516,29 @@ test('paid preflight requires a fresh no-reset provider key limited to the confi
     const verdict = await rejected.environment();
     assert.equal(verdict.ok, false, JSON.stringify(metadata));
     assert.ok(verdict.missing.some((reason) => /provider.*limit|dedicated.*key|reset/i.test(reason)));
+  }
+});
+
+test('paid preflight times out a hung provider key-limit lookup', async () => {
+  const { taskDir, lock } = fixtureTask();
+  for (const fetchImpl of [
+    async () => new Promise(() => {}),
+    async () => ({ ok: true, json: async () => new Promise(() => {}) }),
+  ]) {
+    const { spawnImpl } = fakeHarborSpawn();
+    const steps = liveSteps({
+      taskDir,
+      lock,
+      spawnImpl,
+      config: { budget: { releaseCeilingUsd: 10 }, execution: { environment: 'docker' } },
+      fetchImpl,
+      providerLookupTimeoutMs: 5,
+    });
+    const startedAt = Date.now();
+    const result = await steps.environment();
+    assert.equal(result.ok, false);
+    assert.ok(result.missing.some((reason) => /provider key limit lookup failed/.test(reason)));
+    assert.ok(Date.now() - startedAt < 1_000, 'environment preflight must not inherit an unbounded provider response');
   }
 });
 

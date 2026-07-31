@@ -365,6 +365,12 @@ test('paid required trials require resolved model and provider on every response
     assert.equal(report.claim.level, 'inconclusive');
     assert.equal(report.pairs.find((entry) => entry.host === 'openrouter-kimi').causallyAttributable, false);
   }
+
+  const incomplete = pairOf('openrouter-kimi', 'pass', 'pass');
+  incomplete.harness.reproducibility.providerRequestedOrder = null;
+  const classification = classifyPair(incomplete);
+  assert.equal(classification.result, 'infrastructure-invalid');
+  assert.equal(classification.fallbackDetected, false, 'missing provider metadata is incomplete evidence, not a false fallback claim');
 });
 
 test('controlled arms are infrastructure-invalid unless every causal identity field aligns', async () => {
@@ -979,6 +985,7 @@ test('a required API pair with incomplete paid usage cannot produce a green rele
 test('a required pair without a closed attempt ledger or real workspace manifest cannot produce a green release', async () => {
   for (const harnessOverride of [
     { workspaceEvidence: { available: false, beforeManifestHash: null, afterManifestHash: null, diffHash: null } },
+    { workspaceEvidence: { changedPaths: undefined, changedPathCount: 1 } },
     { observability: { providerAttemptsClosed: 4, unclosedProviderAttempts: 1 } },
     { observability: { uncorrelatedToolResults: 1 } },
   ]) {
@@ -989,6 +996,27 @@ test('a required pair without a closed attempt ledger or real workspace manifest
     assert.equal(exitCode, 1);
     assert.ok(report.gate.reasons.some((reason) => /telemetry/i.test(reason)));
   }
+});
+
+test('the markdown renderer remains safe for a schema-valid legacy budget', () => {
+  const report = {
+    harnessVersion: '0.1.0',
+    releaseSha: 'abc123',
+    task: { datasetRef: 'terminal-bench@2.0', task: 'legacy-task' },
+    calibrationRelease: false,
+    deterministic: { passed: 1, failed: 0, skipped: 0 },
+    coverage: { complete: true },
+    pairs: [],
+    nativeProducts: [],
+    smokes: [],
+    budget: { ceilingUsd: 10, spentUsd: 1, exhausted: false, reserveUsed: null },
+    claim: { level: 'inconclusive', statement: 'legacy evidence' },
+    gate: { block: false, reasons: [] },
+    limitations: [],
+  };
+  const markdown = buildMarkdownReport(report);
+  assert.match(markdown, /Cash-control semantics: legacy-unspecified/);
+  assert.doesNotMatch(markdown, /BREACHED/);
 });
 
 test('incomplete harness-event projection prevents a required causal claim', async () => {
