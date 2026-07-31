@@ -40,6 +40,37 @@ function sha256(value) {
   return crypto.createHash('sha256').update(String(value)).digest('hex');
 }
 
+const REDACTED_SECRET = '[REDACTED_SECRET]';
+
+function activeSecrets(values) {
+  return [...new Set((values ?? []).filter((value) => typeof value === 'string' && value.length >= 8))].sort(
+    (left, right) => right.length - left.length
+  );
+}
+
+function redactString(value, secrets) {
+  let result = value;
+  for (const secret of secrets) result = result.split(secret).join(REDACTED_SECRET);
+  return result;
+}
+
+/** Recursively redact exact active secret values before any durable boundary. */
+export function redactSecrets(value, values = []) {
+  const secrets = activeSecrets(values);
+  const visit = (candidate, seen) => {
+    if (typeof candidate === 'string') return redactString(candidate, secrets);
+    if (candidate == null || typeof candidate !== 'object') return candidate;
+    if (seen.has(candidate)) return '[REDACTED_CIRCULAR]';
+    seen.add(candidate);
+    const projected = Array.isArray(candidate)
+      ? candidate.map((entry) => visit(entry, seen))
+      : Object.fromEntries(Object.entries(candidate).map(([key, entry]) => [redactString(key, secrets), visit(entry, seen)]));
+    seen.delete(candidate);
+    return projected;
+  };
+  return visit(value, new WeakSet());
+}
+
 const LOAD_GUIDANCE_TOOL = {
   name: 'load_guidance',
   description: 'Load one named Harness procedure from the local guidance catalog when it becomes necessary.',
@@ -139,78 +170,6 @@ function guidanceResult(name, entry, input) {
   };
 }
 
-function standaloneShellWords(command) {
-  const text = String(command ?? '');
-  if (!text.trim() || /[\r\n;&|<>`$()]/.test(text)) return null;
-  const words = [];
-  let word = '';
-  let quote = null;
-  let escaped = false;
-  let active = false;
-  for (const char of text) {
-    if (escaped) {
-      word += char;
-      escaped = false;
-      active = true;
-      continue;
-    }
-    if (char === '\\' && quote !== "'") {
-      escaped = true;
-      active = true;
-      continue;
-    }
-    if (quote) {
-      if (char === quote) quote = null;
-      else word += char;
-      active = true;
-      continue;
-    }
-    if (char === "'" || char === '"') {
-      quote = char;
-      active = true;
-      continue;
-    }
-    if (/\s/.test(char)) {
-      if (active) {
-        words.push(word);
-        word = '';
-        active = false;
-      }
-      continue;
-    }
-    word += char;
-    active = true;
-  }
-  if (escaped || quote) return null;
-  if (active) words.push(word);
-  return words;
-}
-
-/**
- * Return the evidence identity only for an unambiguous, successful Harness
- * verifier invocation. Any shell composition, dry run, malformed/truncated
- * JSON, nonzero exit, or unresolved completion obligation fails closed.
- */
-export function successfulHarnessVerify(command, result) {
-  const words = standaloneShellWords(command);
-  if (!words || words[0] !== 'harness' || words[1] !== 'verify' || !words.includes('--json')) return null;
-  if (words.some((word) => word === '--dry-run' || word.startsWith('--dry-run=') || word === '--help' || word === '-h')) return null;
-  if (result?.code !== 0) return null;
-  let body = result?.parsedStdout;
-  if (body == null) {
-    try {
-      body = JSON.parse(String(result?.stdout ?? '').trim());
-    } catch {
-      return null;
-    }
-  }
-  if (!body || Array.isArray(body) || typeof body !== 'object' || body.outcome !== 'passed') return null;
-  const clearArrays = ['unverifiedCriteria', 'scopeViolations', 'openHardGaps', 'requiredReviews'];
-  if (!clearArrays.every((field) => Array.isArray(body[field]) && body[field].length === 0)) return null;
-  if (typeof body.plan !== 'string' || !body.plan || typeof body.evidencePath !== 'string' || !body.evidencePath) return null;
-  return { plan: body.plan, evidencePath: body.evidencePath };
-}
-
 /**
  * Drive the loop over stdio streams. Returns the final `done` payload; every
  * exit path (finish, provider error, step ceiling, protocol error) reports an
@@ -228,7 +187,9 @@ export async function runStdioAgent({
   doneFilePath = null,
   guidanceCatalog = null,
   enableCheckpoint = false,
+  redactValues = [],
 }) {
+  const secrets = activeSecrets(redactValues);
   const bridgeTools = runtimeBridgeTools({ guidanceCatalog, enableCheckpoint });
   const checkpointEnabled = bridgeTools.some((tool) => tool.name === 'checkpoint');
   const runtime = {
@@ -272,7 +233,10 @@ export async function runStdioAgent({
   let execId = 0;
   let steps = 0;
   const finish = (payload) => {
-    const done = { type: 'done', steps, telemetry: telemetry?.snapshot() ?? null, runtime, ...payload };
+    const done = redactSecrets(
+      { type: 'done', steps, telemetry: telemetry?.snapshot() ?? null, runtime, ...payload },
+      secrets
+    );
     // Persist BEFORE the stdout done line: the harbor side may terminate this
     // process the instant it reads that line, and a truncated telemetry file
     // would cost the trial its metered evidence.
@@ -323,18 +287,28 @@ export async function runStdioAgent({
       driver.observe?.(action, { error: `unknown tool: ${action.name}` });
       continue;
     }
+    const command = String(action.input?.command ?? '');
+    if (secrets.some((secret) => command.includes(secret))) {
+      return finish({
+        answer: null,
+        stopReason: 'secret_reflection_blocked',
+        detail: 'A provider-supplied tool command contained an active credential and was blocked before sandbox execution.',
+      });
+    }
     const id = execId++;
-    send({ type: 'exec', id, command: action.input?.command ?? '', timeoutMs: execTimeoutMs });
-    const result = await nextLine();
+    send({ type: 'exec', id, command, timeoutMs: execTimeoutMs });
+    const result = redactSecrets(await nextLine(), secrets);
     if (result.type !== 'result' || result.id !== id) {
       return finish({ answer: null, stopReason: 'protocol_error', detail: JSON.stringify(result).slice(0, 200) });
     }
-    const observation = { code: result.code, stdout: result.stdout, stderr: result.stderr, ...(result.parsedStdout !== undefined ? { parsedStdout: result.parsedStdout } : {}) };
+    const observation = {
+      code: result.code,
+      stdout: result.stdout,
+      stderr: result.stderr,
+      ...(typeof result.stdoutTruncated === 'boolean' ? { stdoutTruncated: result.stdoutTruncated } : {}),
+      ...(typeof result.stderrTruncated === 'boolean' ? { stderrTruncated: result.stderrTruncated } : {}),
+    };
     driver.observe?.(action, observation);
-    const verification = successfulHarnessVerify(action.input?.command, observation);
-    if (verification) {
-      driver.markVerified?.({ ...verification, fallbackAnswer: 'Verification passed.' });
-    }
   }
   return finish({ answer: null, stopReason: 'max_steps' });
 }
@@ -350,7 +324,9 @@ async function main() {
   const instructionPath = flag('--instruction');
   const instruction = instructionPath ? fs.readFileSync(instructionPath, 'utf8') : condition.instruction;
   const profile = getProfile(condition.profileId ?? 'kimi-k2.7-code');
-  const apiKey = process.env[condition.apiKeyEnv ?? 'OPENROUTER_API_KEY'] ?? 'local';
+  const apiKeyEnv = condition.apiKeyEnv ?? 'OPENROUTER_API_KEY';
+  const activeApiKey = process.env[apiKeyEnv] ?? null;
+  const apiKey = activeApiKey ?? 'local';
   const telemetry = createTelemetry();
   const budget = createBudget({
     ceilingUsd: condition.limits?.trialCeilingUsd ?? profile.trialCeilingUsd,
@@ -372,12 +348,20 @@ async function main() {
     doneFilePath: process.env.HARNESS_EVAL_TB_TELEMETRY_FILE ?? null,
     guidanceCatalog: condition.runtime?.guidanceCatalog ?? condition.guidanceCatalog ?? null,
     enableCheckpoint: condition.runtime?.checkpoint === true,
+    redactValues: activeApiKey ? [activeApiKey] : [],
   });
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   main().catch((err) => {
-    process.stdout.write(`${JSON.stringify({ type: 'done', answer: null, stopReason: 'bridge_error', detail: err.message })}\n`);
+    const activeEnvironmentSecrets = Object.entries(process.env)
+      .filter(([name, value]) => value && /(?:API_KEY|TOKEN|PASSWORD|SECRET)$/i.test(name))
+      .map(([, value]) => value);
+    const done = redactSecrets(
+      { type: 'done', answer: null, stopReason: 'bridge_error', detail: err.message },
+      activeEnvironmentSecrets
+    );
+    process.stdout.write(`${JSON.stringify(done)}\n`);
     process.exit(1);
   });
 }

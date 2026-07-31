@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { buildGenericCondition, NEUTRAL_SYSTEM_PROMPT } from '../../../evals/external/terminal_bench/generic-condition.mjs';
 import { buildHarnessCondition } from '../../../evals/external/terminal_bench/harness-condition.mjs';
+import { BUNDLE_MOUNT_TARGET } from '../../../evals/external/terminal_bench/provision.mjs';
 import {
   buildGuidance,
   buildGuidanceCatalog,
@@ -33,6 +34,8 @@ test('harness condition layers the engineer contract and guidance on the same ba
   assert.ok(condition.systemPrompt.startsWith(NEUTRAL_SYSTEM_PROMPT), 'treatment starts from the same neutral baseline');
   assert.ok(condition.systemPrompt.includes(CONTRACT));
   assert.ok(condition.systemPrompt.includes('## Skill: ensure-plan'));
+  assert.ok(condition.systemPrompt.includes(`${BUNDLE_MOUNT_TARGET}/harness-cli`), 'the model is taught the immutable absolute CLI path');
+  assert.match(condition.systemPrompt, /do not (?:install|copy|symlink)/i);
   assert.ok(condition.setupCommands.length > 0 && condition.setupCommands.every((c) => /harness/.test(c)), 'activation commands run the harness CLI');
 });
 

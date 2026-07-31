@@ -8,7 +8,6 @@ import {
   BRIDGE_TOOLS,
   runtimeBridgeTools,
   runStdioAgent,
-  successfulHarnessVerify,
 } from '../../../evals/external/terminal_bench/agent.mjs';
 import { replayDriver, ProviderError } from '../../../evals/lib/drivers.mjs';
 import { createTelemetry } from '../../../evals/lib/telemetry.mjs';
@@ -181,42 +180,7 @@ test('checkpoint updates durable driver state locally without a terminal executi
   assert.equal(lines.some((line) => line.type === 'exec'), false);
 });
 
-test('successfulHarnessVerify accepts only a complete successful standalone JSON verify', () => {
-  const result = {
-    code: 0,
-    stdout: JSON.stringify({
-      outcome: 'passed',
-      plan: 'docs/plans/task.md',
-      evidencePath: '.harness/evidence/task.json',
-      unverifiedCriteria: [],
-      scopeViolations: [],
-      openHardGaps: [],
-      requiredReviews: [],
-    }),
-    stderr: '',
-  };
-  assert.deepEqual(successfulHarnessVerify('harness verify --plan docs/plans/task.md --workspace . --json', result), {
-    plan: 'docs/plans/task.md',
-    evidencePath: '.harness/evidence/task.json',
-  });
-
-  const rejected = [
-    ['harness verify --plan docs/plans/task.md --json --dry-run', result],
-    ['harness verify --plan docs/plans/task.md --json && echo passed', result],
-    ['echo harness verify --json', result],
-    ['harness verify --json\necho passed', result],
-    ['harness verify --plan docs/plans/task.md', result],
-    ['harness verify --json', { ...result, code: 1 }],
-    ['harness verify --json', { ...result, stdout: `log\n${result.stdout}` }],
-    ['harness verify --json', { ...result, stdout: '{not json}' }],
-    ['harness verify --json', { ...result, stdout: JSON.stringify({ ...JSON.parse(result.stdout), outcome: 'failed' }) }],
-    ['harness verify --json', { ...result, stdout: JSON.stringify({ ...JSON.parse(result.stdout), requiredReviews: ['security-reviewer'] }) }],
-    ['harness verify --json', { ...result, stdout: JSON.stringify({ ...JSON.parse(result.stdout), unverifiedCriteria: ['AC1'] }) }],
-  ];
-  for (const [command, candidate] of rejected) assert.equal(successfulHarnessVerify(command, candidate), null, command);
-});
-
-test('a strict successful harness verify marks the driver verified after observing its evidence', async () => {
+test('sandbox-authored verify output is observed but never promotes the driver to verified', async () => {
   const calls = [];
   const verifyBody = {
     outcome: 'passed',
@@ -230,8 +194,8 @@ test('a strict successful harness verify marks the driver verified after observi
   const driver = {
     next: (() => {
       const actions = [
-        { type: 'tool', name: 'bash', input: { command: 'harness verify --plan docs/plans/task.md --workspace . --json' }, _id: 'verify-1' },
-        { type: 'finish', answer: 'verified', stopReason: 'verified_stop' },
+        { type: 'tool', name: 'bash', input: { command: '/opt/harness-bundle/harness-cli verify --plan docs/plans/task.md --workspace . --json' }, _id: 'verify-1' },
+        { type: 'finish', answer: 'verified', stopReason: 'model_finish' },
       ];
       let index = 0;
       return async () => actions[index++];
@@ -241,11 +205,8 @@ test('a strict successful harness verify marks the driver verified after observi
   };
   const { input, output } = pump({ resultFor: () => ({ code: 0, stdout: JSON.stringify(verifyBody), stderr: '' }) });
   const done = await runStdioAgent({ driver, input, output, systemPrompt: 's', instruction: 'i' });
-  assert.equal(done.stopReason, 'verified_stop');
-  assert.deepEqual(calls, [
-    'observe',
-    { markVerified: { plan: 'docs/plans/task.md', evidencePath: '.harness/evidence/task.json', fallbackAnswer: 'Verification passed.' } },
-  ]);
+  assert.equal(done.stopReason, 'model_finish');
+  assert.deepEqual(calls, ['observe']);
 });
 
 test('happy path: execs stream out, results stream back into the driver, done carries the answer', async () => {

@@ -8,17 +8,22 @@
  * they are real product overhead.
  */
 import { NEUTRAL_SYSTEM_PROMPT } from './generic-condition.mjs';
-import { activationCommands } from './provision.mjs';
+import { activationCommands, BUNDLE_MOUNT_TARGET } from './provision.mjs';
 
 // The task image has no Node and no Harness; activation installs the mounted
 // bundle's wrapper on PATH and proves the CLI answers (setup fails closed).
 const DEFAULT_ACTIVATION = activationCommands();
+const IMMUTABLE_CLI_GUIDANCE = [
+  `The Engineer Harness CLI is available only at ${BUNDLE_MOUNT_TARGET}/harness-cli.`,
+  `Invoke that absolute read-only path for every Harness command (for example, ${BUNDLE_MOUNT_TARGET}/harness-cli verify ...).`,
+  'Do not install, copy, or symlink the Harness CLI into /usr/bin, /usr/local/bin, the workspace, or another writable path.',
+].join(' ');
 
 export function buildHarnessCondition({ instruction, limits, engineerContract, guidance = '', activationCommands = DEFAULT_ACTIVATION } = {}) {
   if (!instruction) throw new Error('instruction is required');
   if (!limits) throw new Error('limits is required');
   if (!engineerContract) throw new Error('engineerContract is required');
-  const sections = [NEUTRAL_SYSTEM_PROMPT, engineerContract];
+  const sections = [NEUTRAL_SYSTEM_PROMPT, engineerContract, IMMUTABLE_CLI_GUIDANCE];
   if (guidance) sections.push(guidance);
   return {
     id: 'harness',
