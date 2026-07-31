@@ -94,18 +94,26 @@ function liveSteps({ taskDir, lock, spawnImpl, apiKey = 'test-key' }) {
   });
 }
 
-test('the harness wrapper runs the bundled harness through the bundled node runtime', () => {
+test('the harness wrapper picks the node runtime matching the container architecture', () => {
   const script = harnessWrapperScript();
   assert.match(script, /^#!\/bin\/sh/);
-  assert.ok(script.includes(`${BUNDLE_MOUNT_TARGET}/node/bin/node`));
+  // The task image arch is the registry's choice (cobol-modernization ships
+  // amd64-only even on arm64 hosts) — the wrapper must decide at runtime.
+  assert.match(script, /uname -m/);
+  assert.ok(script.includes(`${BUNDLE_MOUNT_TARGET}/node-x64/bin/node`));
+  assert.ok(script.includes(`${BUNDLE_MOUNT_TARGET}/node-arm64/bin/node`));
   assert.ok(script.includes(`${BUNDLE_MOUNT_TARGET}/harness/bin/harness.mjs`));
   assert.ok(script.includes('"$@"'));
 });
 
-test('activation installs the wrapper and proves the CLI answers inside the container', () => {
+test('activation installs the wrapper PATH-proof and proves the CLI answers with a real command', () => {
   const commands = activationCommands();
   assert.ok(commands.some((c) => c.includes('/usr/local/bin/harness')));
-  assert.ok(commands.some((c) => /harness --version/.test(c)));
+  assert.ok(commands.some((c) => c.includes('/usr/bin/harness')), 'a /usr/bin link survives minimal exec PATHs');
+  assert.ok(
+    commands.some((c) => /harness help/.test(c)),
+    'the proof command must exist in the harness CLI (--version does not)'
+  );
 });
 
 test('the task bytes are verified against the lock before any provider work', async () => {

@@ -43,6 +43,10 @@ class StdioBridgeAgent(BaseAgent):
     def version(self) -> str | None:
         return "1"
 
+    def _cfg(self, key: str, default: str | None = None) -> str | None:
+        """Config comes from --ae agent env vars (self._extra_env), not os.environ."""
+        return getattr(self, "_extra_env", {}).get(key) or os.environ.get(key, default)
+
     async def setup(self, environment) -> None:
         condition = self._load_condition()
         for command in condition.get("setupCommands", []):
@@ -50,20 +54,27 @@ class StdioBridgeAgent(BaseAgent):
             if result["code"] != 0:
                 # A failed activation must surface as an infrastructure failure,
                 # not run the trial as a silently contaminated treatment arm.
+                # Include both streams: some environments fold stderr into stdout.
                 raise RuntimeError(
-                    f"setup command failed (exit {result['code']}): {command}\n{result['stderr']}"
+                    f"setup command failed (exit {result['code']}): {command}\n"
+                    f"stdout: {result['stdout'][-2000:]}\nstderr: {result['stderr'][-2000:]}"
                 )
 
     async def run(self, instruction: str, environment, context) -> None:
-        condition_path = os.environ["HARNESS_EVAL_TB_CONDITION"]
-        node = os.environ.get("HARNESS_EVAL_TB_NODE", "node")
-        agent_mjs = os.environ.get(
+        condition_path = self._cfg("HARNESS_EVAL_TB_CONDITION")
+        if not condition_path:
+            raise RuntimeError("HARNESS_EVAL_TB_CONDITION is not set (--ae agent env)")
+        node = self._cfg("HARNESS_EVAL_TB_NODE", "node")
+        agent_mjs = self._cfg(
             "HARNESS_EVAL_TB_AGENT_MJS",
             str(pathlib.Path(__file__).with_name("agent.mjs")),
         )
         instruction_path = pathlib.Path(condition_path).with_suffix(".instruction.txt")
         instruction_path.write_text(instruction)
 
+        # Forward the --ae agent env (API key, telemetry file path) to the
+        # Node bridge — it is not present in this process's os.environ.
+        bridge_env = {**os.environ, **getattr(self, "_extra_env", {})}
         proc = await asyncio.create_subprocess_exec(
             node,
             agent_mjs,
@@ -73,7 +84,7 @@ class StdioBridgeAgent(BaseAgent):
             str(instruction_path),
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
-            env=os.environ.copy(),
+            env=bridge_env,
         )
         saw_done = False
         try:
@@ -105,7 +116,10 @@ class StdioBridgeAgent(BaseAgent):
             )
 
     def _load_condition(self) -> dict:
-        with open(os.environ["HARNESS_EVAL_TB_CONDITION"]) as fh:
+        condition_path = self._cfg("HARNESS_EVAL_TB_CONDITION")
+        if not condition_path:
+            raise RuntimeError("HARNESS_EVAL_TB_CONDITION is not set (--ae agent env)")
+        with open(condition_path) as fh:
             return json.load(fh)
 
     async def _exec(self, environment, command: str, timeout_ms: int | None = None) -> dict:

@@ -1,4 +1,7 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { PassThrough } from 'node:stream';
 import { test } from 'node:test';
 import { BRIDGE_TOOLS, runStdioAgent } from '../../../evals/external/terminal_bench/agent.mjs';
@@ -113,6 +116,25 @@ test('a closed input stream settles the loop as protocol_error instead of hangin
   });
   const done = await runStdioAgent({ driver, input, output, systemPrompt: 's', instruction: 'i' });
   assert.equal(done.stopReason, 'protocol_error');
+});
+
+test('the done payload is persisted to doneFilePath BEFORE the done line reaches stdout', async () => {
+  const doneFile = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'tb-done-')), 'done.json');
+  const driver = replayDriver([{ type: 'finish', answer: 'x', stopReason: 'model_finish' }]);
+  const input = new PassThrough();
+  const output = new PassThrough();
+  let fileExistedWhenDoneArrived = null;
+  let buffer = '';
+  output.on('data', (chunk) => {
+    buffer += chunk.toString();
+    if (buffer.includes('"done"') && fileExistedWhenDoneArrived === null) {
+      // The moment the harbor side could terminate us, the file must be safe.
+      fileExistedWhenDoneArrived = fs.existsSync(doneFile) && fs.readFileSync(doneFile, 'utf8').length > 0;
+    }
+  });
+  await runStdioAgent({ driver, input, output, systemPrompt: 's', instruction: 'i', doneFilePath: doneFile });
+  assert.equal(fileExistedWhenDoneArrived, true, 'a terminate() race must never truncate the telemetry file');
+  assert.equal(JSON.parse(fs.readFileSync(doneFile, 'utf8')).stopReason, 'model_finish');
 });
 
 test('a malformed result line ends the run as a protocol_error', async () => {

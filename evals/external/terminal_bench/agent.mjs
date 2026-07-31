@@ -49,6 +49,7 @@ export async function runStdioAgent({
   maxSteps = 50,
   telemetry = null,
   execTimeoutMs = 120_000,
+  doneFilePath = null,
 }) {
   driver.reset?.({ system: systemPrompt, instruction, tools: BRIDGE_TOOLS });
 
@@ -87,6 +88,16 @@ export async function runStdioAgent({
   let steps = 0;
   const finish = (payload) => {
     const done = { type: 'done', steps, telemetry: telemetry?.snapshot() ?? null, ...payload };
+    // Persist BEFORE the stdout done line: the harbor side may terminate this
+    // process the instant it reads that line, and a truncated telemetry file
+    // would cost the trial its metered evidence.
+    if (doneFilePath) {
+      try {
+        fs.writeFileSync(doneFilePath, JSON.stringify(done));
+      } catch {
+        // the done line still carries the payload
+      }
+    }
     send(done);
     rl.close();
     return done;
@@ -141,7 +152,10 @@ async function main() {
   });
   const driver = openAiToolDriver({ profile, apiKey, budget, telemetry, maxTokens: condition.limits?.maxOutputTokens });
   if (!driver) throw new Error('driver not configured: check profile and API key environment');
-  const done = await runStdioAgent({
+  // The runner reads the done file to charge the release budget and build the
+  // eval-run document; runStdioAgent persists it before the stdout done line
+  // so a post-done terminate() cannot truncate it.
+  await runStdioAgent({
     driver,
     input: process.stdin,
     output: process.stdout,
@@ -149,13 +163,8 @@ async function main() {
     instruction,
     maxSteps: condition.limits?.maxSteps ?? 50,
     telemetry,
+    doneFilePath: process.env.HARNESS_EVAL_TB_TELEMETRY_FILE ?? null,
   });
-  // The host-side runner reads this file to charge the release budget and
-  // build the eval-run document — it must exist even if Harbor's context
-  // plumbing loses the stdout done line.
-  if (process.env.HARNESS_EVAL_TB_TELEMETRY_FILE) {
-    fs.writeFileSync(process.env.HARNESS_EVAL_TB_TELEMETRY_FILE, JSON.stringify(done));
-  }
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

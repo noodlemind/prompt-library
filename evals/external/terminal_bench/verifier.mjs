@@ -85,11 +85,20 @@ export function hashTree(dir) {
  */
 export function collectVerifierEvidence(trialDir) {
   const files = walkFiles(trialDir);
-  // Reward evidence is trusted ONLY from the official verifier output
-  // directory — a reward-named file anywhere else in the tree (e.g. dropped
-  // into the workspace by the agent) must never override the real verdict.
-  const officialDir = `${path.sep}logs${path.sep}verifier${path.sep}`;
-  const official = files.filter((f) => f.includes(officialDir));
+  // Reward evidence is trusted ONLY from the official verifier output: the
+  // in-container convention (logs/verifier) or harbor 0.20.0's host-side
+  // trial layout (a verifier directory directly under the trial root, at any
+  // depth below jobDir but never nested inside agent artifacts). A
+  // reward-named file anywhere else must never override the real verdict.
+  const logsVerifier = `${path.sep}logs${path.sep}verifier${path.sep}`;
+  const official = files.filter((f) => {
+    if (f.includes(logsVerifier)) return true;
+    const rel = path.relative(trialDir, f).split(path.sep);
+    // <trial>/verifier/* or <jobDir>/<trial>/verifier/* — 'verifier' must sit
+    // at most one level below the walk root, not inside artifacts/.
+    const idx = rel.indexOf('verifier');
+    return idx >= 0 && idx <= 1 && rel[0] !== 'artifacts';
+  });
   const rewardJson = official.find((f) => path.basename(f) === 'reward.json');
   const rewardTxt = official.find((f) => path.basename(f) === 'reward.txt');
   let reward = null;

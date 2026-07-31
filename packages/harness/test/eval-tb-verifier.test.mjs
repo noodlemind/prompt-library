@@ -90,6 +90,28 @@ test('an ambiguous reward.json falls back to a valid reward.txt', () => {
   assert.match(evidence.rewardPath, /reward\.txt$/);
 });
 
+test("harbor 0.20.0's host-side layout — a direct-child verifier directory — is official evidence", () => {
+  const trial = tmpdir();
+  const verifierDir = path.join(trial, 'verifier');
+  fs.mkdirSync(verifierDir, { recursive: true });
+  fs.writeFileSync(path.join(verifierDir, 'reward.txt'), '1');
+  fs.writeFileSync(path.join(verifierDir, 'test-stdout.txt'), '==== 3 passed in 0.33s ====');
+  const evidence = collectVerifierEvidence(trial);
+  assert.equal(evidence.reward, 1);
+  assert.deepEqual(evidence.pytest, { passed: 3, failed: 0 });
+});
+
+test('a verifier-named directory nested in agent artifacts is still not official', () => {
+  const trial = tmpdir();
+  fs.mkdirSync(path.join(trial, 'verifier'), { recursive: true });
+  fs.writeFileSync(path.join(trial, 'verifier', 'reward.txt'), '0');
+  const spoof = path.join(trial, 'artifacts', 'workspace', 'verifier');
+  fs.mkdirSync(spoof, { recursive: true });
+  fs.writeFileSync(path.join(spoof, 'reward.json'), '{"reward": 1}');
+  const evidence = collectVerifierEvidence(trial);
+  assert.equal(evidence.reward, 0, 'only the trial-root verifier dir (or logs/verifier) counts');
+});
+
 test('reward evidence is only trusted from the official logs/verifier directory', () => {
   const trial = tmpdir();
   const officialDir = path.join(trial, 'artifacts', 'logs', 'verifier');
