@@ -515,6 +515,7 @@ test('deterministic compaction bounds the request and retains durable task state
   await driver.next();
   const last = calls.at(-1).body;
   assert.ok(JSON.stringify(last).length <= 1300);
+  assert.equal(JSON.stringify(last).includes('_evalState'), false, 'internal compaction markers never enter provider messages');
   const text = JSON.stringify(last.messages);
   for (const retained of ['repair the service', 'do not change public API', 'src/b.js', 'npm test', 'assertion']) {
     assert.match(text, new RegExp(retained));
@@ -524,6 +525,19 @@ test('deterministic compaction bounds the request and retains durable task state
     assert.ok(message.tool_calls.every((call) => toolIds.has(call.id)), 'no assistant tool call may survive without its tool result');
   }
   assert.ok(telemetry.snapshot().events.some((event) => event.type === 'context_compacted'));
+});
+
+test('checkpoint normalizes malformed collection shapes before later observations', () => {
+  const { driver } = harness([]);
+  driver.checkpoint({ files: 'not-an-object', tests: { invalid: true }, failures: 'not-an-array' });
+  assert.doesNotThrow(() => driver.observe(
+    { name: 'runInTerminal', input: { command: 'printf updated > src/result.txt' }, _id: 'edit-1', _category: 'edit' },
+    { code: 0, stdout: '', stderr: '' }
+  ));
+  assert.doesNotThrow(() => driver.observe(
+    { name: 'runInTerminal', input: { command: 'npm test' }, _id: 'test-1', _category: 'test' },
+    { code: 1, stdout: '', stderr: 'failed' }
+  ));
 });
 
 test('verified stop permits one final provider attempt and suppresses later tool work', async () => {

@@ -244,7 +244,8 @@ export function openAiToolDriver({
 
   function buildBody({ finishOnly = false } = {}) {
     const selectedTools = finishOnly ? tools.filter((tool) => tool.function.name === 'finish') : tools;
-    const body = { model: requestedModel, messages, tools: selectedTools, tool_choice: 'auto', max_tokens: maxOutputTokens };
+    const requestMessages = messages.map(({ _evalState: internalStateMarker, ...message }) => message);
+    const body = { model: requestedModel, messages: requestMessages, tools: selectedTools, tool_choice: 'auto', max_tokens: maxOutputTokens };
     if (effTemperature != null) body.temperature = effTemperature;
     if (effReasoning != null) body.reasoning = effReasoning;
     if (effProvider != null) body.provider = { order: effProvider.order, allow_fallbacks: effProvider.allowFallbacks };
@@ -582,13 +583,30 @@ export function openAiToolDriver({
     },
     checkpoint(snapshot, { pinnedContext = [] } = {}) {
       stateRevision += 1;
-      const safeSnapshot = redactExactSecret(snapshot || {}, apiKey);
+      const candidate = snapshot && typeof snapshot === 'object' && !Array.isArray(snapshot) ? snapshot : {};
+      const safeSnapshot = redactExactSecret(candidate, apiKey);
+      const safeFiles = safeSnapshot.files && typeof safeSnapshot.files === 'object' && !Array.isArray(safeSnapshot.files)
+        ? safeSnapshot.files
+        : stateLedger.files;
+      const files = {
+        ...structuredClone(safeFiles),
+        inspected: Array.isArray(safeFiles?.inspected) ? structuredClone(safeFiles.inspected) : structuredClone(stateLedger.files.inspected),
+        changed: Array.isArray(safeFiles?.changed) ? structuredClone(safeFiles.changed) : structuredClone(stateLedger.files.changed),
+      };
+      const tests = Array.isArray(safeSnapshot.tests) ? structuredClone(safeSnapshot.tests) : structuredClone(stateLedger.tests);
+      const failures = Array.isArray(safeSnapshot.failures) ? structuredClone(safeSnapshot.failures) : structuredClone(stateLedger.failures);
+      const loadedGuidance = Array.isArray(safeSnapshot.loadedGuidance)
+        ? safeSnapshot.loadedGuidance
+        : stateLedger.loadedGuidance;
       stateLedger = {
         ...structuredClone(stateLedger),
         ...structuredClone(safeSnapshot),
         schema: 'eval-agent-state.v1',
         revision: stateRevision,
-        loadedGuidance: [...new Set([...(safeSnapshot?.loadedGuidance || stateLedger.loadedGuidance || []), ...pinnedContext.map((item) => item.id)])],
+        files,
+        tests,
+        failures,
+        loadedGuidance: [...new Set([...loadedGuidance, ...pinnedContext.map((item) => item.id)])],
       };
       telemetry?.record('checkpoint', { stateRevision, stateHash: sha256(JSON.stringify(stateLedger)) });
     },

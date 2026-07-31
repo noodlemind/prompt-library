@@ -196,13 +196,16 @@ test('release-candidate mode runs a live kimi pair end to end through the CLI', 
     path.dirname(fixture.lockFile),
     fixture.binDir,
     fixture.bundleDir,
-    ...audits.map((audit) => path.dirname(audit.conditionPath)),
   ]);
   for (const root of artifactRoots) {
     for (const artifact of filesUnder(root)) {
       assert.ok(!fs.readFileSync(artifact, 'utf8').includes(SENTINEL_PROVIDER_KEY), `the key must not be persisted in ${path.basename(artifact)}`);
     }
   }
+  assert.ok(
+    audits.every((audit) => !fs.existsSync(path.dirname(audit.conditionPath))),
+    'the release work directory, including read-only verified snapshots, is removed after the run'
+  );
 });
 
 test('release-candidate mode without credentials blocks instead of greening', () => {

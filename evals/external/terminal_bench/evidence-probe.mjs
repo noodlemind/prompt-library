@@ -563,14 +563,21 @@ function writeJsonAtomic(target, value) {
       throw evidenceError('workspace-ancestor-identity-ambiguous');
     }
   } finally {
-    if (handle !== undefined) fs.closeSync(handle);
+    if (handle !== undefined) {
+      try {
+        fs.closeSync(handle);
+      } catch {
+        // Preserve the primary write-path failure.
+      }
+    }
     if (temporaryCreated && !renamed) {
       try {
         assertDirectoryStack(target.stack);
         fs.unlinkSync(temporary);
         assertDirectoryStack(target.stack);
-      } catch (error) {
-        if (error?.code !== 'ENOENT') throw error;
+      } catch {
+        // Preserve the authoritative write/fsync/rename failure. Any leftover
+        // file is a bounded, randomly named 0600 temporary below .harness/.
       }
     }
   }

@@ -999,6 +999,24 @@ function currentGitReleaseSha() {
   return sha;
 }
 
+function makeReleaseTreeRemovable(root) {
+  if (!fs.existsSync(root)) return;
+  const entry = fs.lstatSync(root);
+  if (entry.isSymbolicLink()) return;
+  if (!entry.isDirectory()) {
+    fs.chmodSync(root, 0o600);
+    return;
+  }
+  fs.chmodSync(root, 0o700);
+  for (const name of fs.readdirSync(root)) makeReleaseTreeRemovable(path.join(root, name));
+}
+
+function removeReleaseWorkDir(workDir) {
+  if (!workDir || !fs.existsSync(workDir)) return;
+  makeReleaseTreeRemovable(workDir);
+  fs.rmSync(workDir, { recursive: true, force: true });
+}
+
 async function main() {
   const argv = process.argv.slice(2);
   const flag = (name, fallback = null) => {
@@ -1069,6 +1087,7 @@ async function main() {
 
   let steps;
   let requiredPairs;
+  let releaseWorkDir = null;
   if (deterministicOnly) {
     // Per-PR mode: free, no pairs scheduled, structural lock validation only.
     const { validateTaskLock } = await import('./external/terminal_bench/harbor-adapter.mjs');
@@ -1090,29 +1109,39 @@ async function main() {
     // Release-candidate mode: the live Kimi pair is REQUIRED. Missing
     // harbor, credentials, or task verification blocks — it never greens.
     const { buildLiveSteps } = await import('./external/terminal_bench/live-steps.mjs');
-    const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-release-'));
+    releaseWorkDir = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-release-'));
     const repetitionsConfig = raw.repetitions ?? raw.seeds;
     const repetitions = calibrationRelease ? repetitionsConfig?.calibration ?? 3 : repetitionsConfig?.routine ?? 1;
-    steps = {
-      deterministic: deterministicStep,
-      ...buildLiveSteps({ config: { ...raw, budget: config.budget }, lock, workDir, releaseSha, harnessVersion, repetitions, localEnabled: withLocal }),
-      nativeProducts: async () => (raw.nativeProductRotation ?? []).map((host) => ({
-        host,
-        status: 'not-run',
-        telemetryAvailable: false,
-        reason: 'subscription/native agent references require an explicit separately captured run',
-      })),
-    };
+    try {
+      steps = {
+        deterministic: deterministicStep,
+        ...buildLiveSteps({ config: { ...raw, budget: config.budget }, lock, workDir: releaseWorkDir, releaseSha, harnessVersion, repetitions, localEnabled: withLocal }),
+        nativeProducts: async () => (raw.nativeProductRotation ?? []).map((host) => ({
+          host,
+          status: 'not-run',
+          telemetryAvailable: false,
+          reason: 'subscription/native agent references require an explicit separately captured run',
+        })),
+      };
+    } catch (error) {
+      removeReleaseWorkDir(releaseWorkDir);
+      releaseWorkDir = null;
+      throw error;
+    }
     requiredPairs = ['openrouter-kimi'];
   }
 
-  const { report, exitCode } = await runRelease({ config, steps, calibrationRelease, releaseSha, harnessVersion, requiredPairs });
-  const reportVerdict = validateAgainstSchema(report, REPORT_SCHEMA);
-  if (!reportVerdict.ok) throw new Error(`internal error: report failed its own schema: ${reportVerdict.errors.join('; ')}`);
-  if (json) console.log(JSON.stringify(report, null, 2));
-  else console.log(buildMarkdownReport(report));
-  // exitCode (not process.exit) so piped stdout flushes fully before exit.
-  process.exitCode = exitCode;
+  try {
+    const { report, exitCode } = await runRelease({ config, steps, calibrationRelease, releaseSha, harnessVersion, requiredPairs });
+    const reportVerdict = validateAgainstSchema(report, REPORT_SCHEMA);
+    if (!reportVerdict.ok) throw new Error(`internal error: report failed its own schema: ${reportVerdict.errors.join('; ')}`);
+    if (json) console.log(JSON.stringify(report, null, 2));
+    else console.log(buildMarkdownReport(report));
+    // exitCode (not process.exit) so piped stdout flushes fully before exit.
+    process.exitCode = exitCode;
+  } finally {
+    removeReleaseWorkDir(releaseWorkDir);
+  }
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

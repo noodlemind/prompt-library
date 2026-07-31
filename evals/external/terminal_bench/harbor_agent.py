@@ -27,6 +27,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import hashlib
+import inspect
 import json
 import os
 import pathlib
@@ -53,7 +54,10 @@ class StdioBridgeAgent(BaseAgent):
     _CAPTURE_STDOUT_BYTES = 32 * 1024
     _CAPTURE_STDERR_BYTES = 16 * 1024
     _REDACTED_SECRET = "[REDACTED_SECRET]"
-    _SECRET_NAME = re.compile(r"(?:API_KEY|TOKEN|PASSWORD|SECRET)$", re.IGNORECASE)
+    _SECRET_NAME = re.compile(
+        r"(?:API_?KEY|TOKEN|PASSWORD|PASSWD|PASS|SECRET|CREDENTIALS?|(?:^|_)KEY(?:_|$)|(?:^|_)PAT(?:_|$))",
+        re.IGNORECASE,
+    )
     _EVENT_KEYS = {
         "version", "id", "ts", "type", "result", "exitCode", "plan",
         "phase", "gate", "decision", "blockedReason", "mutation", "success",
@@ -61,10 +65,16 @@ class StdioBridgeAgent(BaseAgent):
     }
     _EVIDENCE_REASONS = {
         "before-manifest-unavailable",
+        "workspace-ancestor-identity-ambiguous",
+        "workspace-depth-limit-exceeded",
+        "workspace-directory-limit-exceeded",
         "workspace-directory-unreadable",
-        "workspace-entry-unreadable",
+        "workspace-entry-changed-during-read",
+        "workspace-entry-not-regular-file",
         "workspace-file-limit-exceeded",
         "workspace-file-byte-limit-exceeded",
+        "workspace-node-limit-exceeded",
+        "workspace-root-unreadable",
         "workspace-total-byte-limit-exceeded",
         "workspace-evidence-unavailable",
     }
@@ -372,13 +382,23 @@ class StdioBridgeAgent(BaseAgent):
                 # process group and emit a bounded timeout envelope.
                 outer_timeout = max(1, int((timeout_ms + 999) / 1000)) + 5
                 try:
-                    result = await exec_fn(
+                    signature = inspect.signature(exec_fn)
+                    parameters = signature.parameters.values()
+                    supports_timeout = "timeout_sec" in signature.parameters or any(
+                        parameter.kind is inspect.Parameter.VAR_KEYWORD
+                        for parameter in parameters
+                    )
+                except (TypeError, ValueError):
+                    supports_timeout = False
+                if supports_timeout:
+                    pending = exec_fn(
                         command=bounded_command, timeout_sec=outer_timeout
                     )
-                except TypeError:
-                    result = await asyncio.wait_for(
+                else:
+                    pending = asyncio.wait_for(
                         exec_fn(command=bounded_command), timeout=outer_timeout
                     )
+                result = await pending
             else:
                 result = await exec_fn(command=bounded_command)
         except (asyncio.TimeoutError, TimeoutError):

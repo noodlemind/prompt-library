@@ -310,6 +310,69 @@ asyncio.run(main())
   assert.match(JSON.stringify(result), /REDACTED_SECRET/);
 });
 
+test('Python redaction recognizes common credential variable-name families', () => {
+  const secrets = {
+    SERVICE_KEY: 'sentinel-service-key-123',
+    DB_PASSWD: 'sentinel-db-passwd-123',
+    LOGIN_PASS: 'sentinel-login-pass-123',
+    CLOUD_CREDENTIAL: 'sentinel-credential-123',
+    CLOUD_CREDENTIALS: 'sentinel-credentials-123',
+    GITHUB_PAT: 'sentinel-github-pat-123',
+  };
+  const result = runPython(`
+import json, os
+from evals.external.terminal_bench.harbor_agent import StdioBridgeAgent
+
+agent = StdioBridgeAgent()
+values = [os.environ[name] for name in ${JSON.stringify(Object.keys(secrets))}]
+print(json.dumps({"redacted": agent._redact("|".join(values)), "count": len(agent._active_secrets())}))
+`, secrets);
+  assert.doesNotMatch(result.redacted, /sentinel-/);
+  assert.ok(result.count >= Object.keys(secrets).length);
+});
+
+test('Python timeout capability detection never retries a command-side TypeError', () => {
+  const result = runPython(`
+import asyncio, json
+from evals.external.terminal_bench.harbor_agent import StdioBridgeAgent
+
+class Environment:
+    def __init__(self): self.calls = 0
+    async def exec(self, command=None, timeout_sec=None):
+        self.calls += 1
+        raise TypeError("command implementation failed")
+
+async def main():
+    environment = Environment()
+    try:
+        await StdioBridgeAgent()._exec(environment, "printf safe", timeout_ms=100)
+    except TypeError as error:
+        print(json.dumps({"calls": environment.calls, "message": str(error)}))
+
+asyncio.run(main())
+`);
+  assert.equal(result.calls, 1);
+  assert.match(result.message, /command implementation failed/);
+});
+
+test('Python bridge preserves every bounded workspace probe failure reason', () => {
+  const result = runPython(`
+import json
+from evals.external.terminal_bench.harbor_agent import StdioBridgeAgent
+print(json.dumps(sorted(StdioBridgeAgent._EVIDENCE_REASONS)))
+`);
+  for (const reason of [
+    'workspace-ancestor-identity-ambiguous',
+    'workspace-depth-limit-exceeded',
+    'workspace-directory-limit-exceeded',
+    'workspace-entry-changed-during-read',
+    'workspace-entry-not-regular-file',
+    'workspace-node-limit-exceeded',
+    'workspace-root-unreadable',
+  ]) assert.ok(result.includes(reason), reason);
+  assert.equal(result.includes('workspace-entry-unreadable'), false);
+});
+
 test('Python bridge resolves a small authenticated frame to a bounded large done ledger', () => {
   const result = runPython(`
 import asyncio, hashlib, json, pathlib, tempfile

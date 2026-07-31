@@ -295,8 +295,9 @@ function writeBundleManifest(bundleDir) {
   } finally {
     try {
       fs.unlinkSync(temporary);
-    } catch (error) {
-      if (error?.code !== 'ENOENT') throw error;
+    } catch {
+      // A cleanup failure must not replace the authoritative write/rename
+      // failure; the temporary name is random and created with mode 0600.
     }
   }
   return { manifest, manifestHash: sha256(bytes) };

@@ -418,12 +418,22 @@ test('the evidence probe is bundled behind the same cross-architecture Node sele
 
 test('the Python Harbor bridge never promotes model-command JSON into parsed protocol data', () => {
   const result = runPython(`
-import asyncio, json
+import asyncio, base64, json
 from evals.external.terminal_bench.harbor_agent import StdioBridgeAgent
+
+payload = json.dumps({"payload": "x" * 9000}).encode()
+envelope = json.dumps({
+    "version": 1,
+    "code": 0,
+    "stdoutB64": base64.b64encode(payload).decode(),
+    "stderrB64": "",
+    "stdoutTruncated": False,
+    "stderrTruncated": False,
+})
 
 class Result:
     return_code = 0
-    output = json.dumps({"payload": "x" * 9000})
+    output = envelope
     stderr = ""
 
 class Environment:
@@ -436,8 +446,8 @@ async def main():
     ordinary = await agent._exec(Environment(), "cat result.json")
     print(json.dumps({
         "stdoutLength": len(result["stdout"]),
-        "verifyExposed": "parsedStdout" in result,
-        "ordinaryExposed": "parsedStdout" in ordinary,
+        "verifyExposed": "_parsedJson" in result,
+        "ordinaryExposed": "_parsedJson" in ordinary,
     }))
 
 asyncio.run(main())

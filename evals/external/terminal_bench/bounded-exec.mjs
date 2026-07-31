@@ -76,8 +76,9 @@ if (timeoutMs > 0) {
     timedOut = true;
     try {
       process.kill(-child.pid, 'SIGKILL');
-    } catch (error) {
-      if (error?.code !== 'ESRCH') throw error;
+    } catch {
+      // The close handler still emits the bounded timeout envelope. Never let
+      // an ESRCH/EPERM race escape from an asynchronous timer callback.
     }
   }, timeoutMs);
   timer.unref();
