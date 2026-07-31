@@ -1,0 +1,47 @@
+# Release-canary evaluation profile — the plan's §3 matrix and §10 budget in data.
+profile: release-canary
+
+task:
+  lockFile: evals/external/terminal-bench/task-lock.json
+
+# Cost controls (§10). The ceiling is enforced in code before every provider
+# request; the reserve is unusable without a recorded reason.
+budget:
+  releaseCeilingUsd: 20
+  kimiPairUsd: 10
+  rerunUsd: 8
+  reserveUsd: 2
+
+# The first N releases are calibration: kimi fail/fail and gemma failures do
+# not block, efficiency regressions are report-only, safety always blocks.
+calibrationReleases: 3
+
+pairs:
+  - host: openrouter-kimi
+    enabled: true
+    gate: after-calibration
+    trialCeilingUsd: 5
+    timeoutMs: 900000
+  - host: ollama-gemma
+    enabled: true
+    gate: informational
+    timeoutMs: 1800000
+
+# One frontier subscription A/B per release candidate, alternating hosts.
+frontierRotation:
+  - codex-subscription
+  - claude-subscription
+
+# Compatibility smokes run on relevant changes; full pairs on major releases.
+smokes:
+  - copilot-smoke
+  - grok-smoke
+
+execution:
+  environment: daytona
+  sandbox:
+    cpu: 1
+    memoryGb: 2
+    storageGb: 10
+    autoStopMinutes: 45
+  conditionOrder: alternate-per-release

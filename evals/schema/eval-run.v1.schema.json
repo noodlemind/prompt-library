@@ -1,0 +1,138 @@
+{
+  "$id": "eval-run.v1",
+  "title": "One eval trial (one condition of one A/B pair)",
+  "type": "object",
+  "required": ["schema", "reproducibility", "correctness", "efficiency", "harnessBehavior", "subscription"],
+  "properties": {
+    "schema": { "const": "eval-run.v1" },
+    "reproducibility": {
+      "type": "object",
+      "required": [
+        "releaseSha",
+        "harnessVersion",
+        "harnessContentHash",
+        "taskId",
+        "taskRevision",
+        "condition",
+        "modelRequested",
+        "modelResolved",
+        "providerResolved",
+        "host",
+        "reasoningConfig",
+        "runnerVersion",
+        "sandbox",
+        "startedAt",
+        "endedAt"
+      ],
+      "properties": {
+        "releaseSha": { "type": "string" },
+        "harnessVersion": { "type": "string" },
+        "harnessContentHash": { "type": ["string", "null"] },
+        "taskId": { "type": "string" },
+        "taskRevision": { "type": ["string", "null"] },
+        "condition": { "enum": ["generic", "harness"] },
+        "modelRequested": { "type": "string" },
+        "modelResolved": { "type": ["string", "null"] },
+        "providerResolved": { "type": ["string", "null"] },
+        "host": { "type": "string" },
+        "reasoningConfig": { "type": ["object", "null"] },
+        "runnerVersion": { "type": "string" },
+        "sandbox": { "type": ["object", "null"] },
+        "startedAt": { "type": "string" },
+        "endedAt": { "type": ["string", "null"] }
+      }
+    },
+    "correctness": {
+      "type": "object",
+      "required": ["verifierReward", "verdict", "exitReason", "completedWithinTimeout", "completedWithinBudget"],
+      "properties": {
+        "verifierReward": { "type": ["number", "null"] },
+        "verdict": { "enum": ["pass", "fail"] },
+        "assertionsPassed": { "type": ["number", "null"] },
+        "assertionsFailed": { "type": ["number", "null"] },
+        "requiredFilesCreated": { "type": ["boolean", "null"] },
+        "finalDiffHash": { "type": ["string", "null"] },
+        "exitReason": { "type": "string" },
+        "completedWithinTimeout": { "type": "boolean" },
+        "completedWithinBudget": { "type": "boolean" }
+      }
+    },
+    "efficiency": {
+      "type": "object",
+      "required": [
+        "wallTimeMs",
+        "modelRequests",
+        "toolCalls",
+        "terminalCommands",
+        "failedCommands",
+        "promptTokens",
+        "cachedPromptTokens",
+        "reasoningTokens",
+        "outputTokens",
+        "providerReportedCostUsd",
+        "localCostUsd"
+      ],
+      "properties": {
+        "wallTimeMs": { "type": ["number", "null"] },
+        "timeToFirstTerminalActionMs": { "type": ["number", "null"] },
+        "timeToFirstEditMs": { "type": ["number", "null"] },
+        "timeFromFinalEditToVerificationMs": { "type": ["number", "null"] },
+        "modelRequests": { "type": ["number", "null"] },
+        "toolCalls": { "type": ["number", "null"] },
+        "terminalCommands": { "type": ["number", "null"] },
+        "failedCommands": { "type": ["number", "null"] },
+        "testExecutions": { "type": ["number", "null"] },
+        "failedTests": { "type": ["number", "null"] },
+        "retries": { "type": ["number", "null"] },
+        "promptTokens": { "type": ["number", "null"] },
+        "cachedPromptTokens": { "type": ["number", "null"] },
+        "reasoningTokens": { "type": ["number", "null"] },
+        "outputTokens": { "type": ["number", "null"] },
+        "providerReportedCostUsd": { "type": ["number", "null"] },
+        "localCostUsd": { "type": ["number", "null"] }
+      }
+    },
+    "harnessBehavior": {
+      "type": "object",
+      "required": [
+        "orientInvoked",
+        "planCreatedOrSelected",
+        "gateAttempts",
+        "gateDenials",
+        "outOfScopeMutationAttempts",
+        "dangerousCommandAttempts",
+        "verificationAfterFinalMutation",
+        "prematureFinishAttempts",
+        "completionBlockedForVerification",
+        "reviewPerformed",
+        "policyBypassAttempted",
+        "policyBypassAchieved"
+      ],
+      "properties": {
+        "orientInvoked": { "type": ["boolean", "null"] },
+        "planCreatedOrSelected": { "type": ["boolean", "null"] },
+        "gateAttempts": { "type": ["number", "null"] },
+        "gateDenials": { "type": ["number", "null"] },
+        "outOfScopeMutationAttempts": { "type": ["number", "null"] },
+        "dangerousCommandAttempts": { "type": ["number", "null"] },
+        "verificationAfterFinalMutation": { "type": ["boolean", "null"] },
+        "prematureFinishAttempts": { "type": ["number", "null"] },
+        "completionBlockedForVerification": { "type": ["boolean", "null"] },
+        "reviewPerformed": { "type": ["boolean", "null"] },
+        "policyBypassAttempted": { "type": ["boolean", "null"] },
+        "policyBypassAchieved": { "type": ["boolean", "null"] }
+      }
+    },
+    "subscription": {
+      "type": ["object", "null"],
+      "properties": {
+        "premiumRequestsConsumed": { "type": ["number", "null"] },
+        "rateLimitEvents": { "type": ["number", "null"] },
+        "hostReportedPromptTokens": { "type": ["number", "null"] },
+        "hostReportedOutputTokens": { "type": ["number", "null"] },
+        "hostReportedModel": { "type": ["string", "null"] },
+        "fallbackObserved": { "type": ["boolean", "null"] }
+      }
+    }
+  }
+}

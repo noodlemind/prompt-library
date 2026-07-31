@@ -160,3 +160,59 @@ Across every guided-live run, enforcement was invariant: no gate was ever bypass
 tasks (`ANTHROPIC_API_KEY` / `HARNESS_EVAL_JUDGE_KEY`). The agentic loop above uses
 its own OpenAI-compatible driver (`evals/lib/drivers.mjs`) so Ollama/OpenRouter can
 drive real tool-use loops without touching the Anthropic judge path.
+
+## Release evaluation (Terminal-Bench canary)
+
+The release gate measures the incremental value of the Engineer Harness with an
+A/B on one pinned Terminal-Bench task (`terminal-bench@2.0` /
+`cobol-modernization`), across three capability levels: a frontier subscription
+(Codex or Claude Code, rotating), an economical API model (Kimi K2.7 Code via
+OpenRouter — the controlled experiment), and a local model (Gemma 4 26B via
+Ollama — informational).
+
+```bash
+node evals/release.mjs --profile release-canary            # markdown eval card
+node evals/release.mjs --profile release-canary --json     # eval-report.v1 JSON
+node evals/release.mjs --profile release-canary --calibration  # first 3 releases
+```
+
+Building blocks:
+
+- `evals/lib/model-profiles.mjs` — pinned endpoints, providers, pricing, limits.
+- `evals/lib/budget.mjs` + `evals/lib/telemetry.mjs` — code-enforced ceilings
+  (release $20 → kimi pair $10 → rerun $8 → $2 reserve gated on a recorded
+  reason) and structured per-trial transcripts/usage.
+- `evals/external/terminal-bench/` — Harbor-based execution: `task-lock.json`
+  pinning with tree checksums, condition builders (`generic` vs `harness`, same
+  instruction and limits), the Node stdio bridge agent, and verifier evidence
+  reading (`reward.json`, pytest counts, artifact-tree hash).
+- `evals/hosts/` — host adapters: controlled Kimi, local Gemma, the manual
+  Codex/Claude subscription A/B contracts (unavailable telemetry recorded as
+  `null`, never estimated), and Copilot/Grok smoke checklists.
+- `evals/schema/` — `eval-run.v1` and `eval-report.v1` contracts; every run
+  document is validated, and missing telemetry blocks the release.
+
+Interpretation (result per pair): baseline fail + harness pass → **harness
+win**; both pass → **parity** (compare cost/efficiency); baseline pass +
+harness fail → **harness regression** (one full fresh pair is rerun; a
+reproduced regression blocks, an unreproduced one is flaky-inconclusive);
+both fail → **inconclusive** (capability limitation); infrastructure failure →
+**infrastructure-invalid**; budget exhaustion → **inconclusive**. A safety
+bypass always blocks, calibration or not.
+
+Costs: a normal release spends ~$1–$4 (kimi pair, cache-dependent); the coded
+ceiling is $20 and paid steps never run when the deterministic suite,
+dependency preflight, or task-lock validation fails. Daytona sandbox spend is
+~$0.08 per pair.
+
+Troubleshooting:
+
+- `skipped (dependencies unavailable)` — the harbor CLI or a provider key is
+  absent; deterministic evals and gates still run.
+- `task lock is not stamped` — run `stampTaskLock` against the downloaded task
+  before the first live release (see `harbor-adapter.mjs`).
+- Rate-limited or missing provider usage fields are recorded as `null` and the
+  release blocks on missing telemetry rather than estimating silently.
+- Raw transcripts stay out of the repository: they may contain provider
+  metadata, local paths, or secrets printed by tools. Publish only the eval
+  card and sanitized `eval-report.v1` JSON.

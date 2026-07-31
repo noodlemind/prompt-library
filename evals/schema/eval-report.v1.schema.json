@@ -1,0 +1,88 @@
+{
+  "$id": "eval-report.v1",
+  "title": "One release evaluation report (the Eval Card's data)",
+  "type": "object",
+  "required": ["schema", "harnessVersion", "releaseSha", "task", "calibrationRelease", "deterministic", "pairs", "smokes", "budget", "gate"],
+  "properties": {
+    "schema": { "const": "eval-report.v1" },
+    "harnessVersion": { "type": "string" },
+    "releaseSha": { "type": "string" },
+    "task": {
+      "type": "object",
+      "required": ["datasetRef", "task"],
+      "properties": {
+        "datasetRef": { "type": "string" },
+        "task": { "type": "string" },
+        "taskChecksum": { "type": ["string", "null"] }
+      }
+    },
+    "calibrationRelease": { "type": "boolean" },
+    "deterministic": {
+      "type": "object",
+      "required": ["passed", "failed", "skipped"],
+      "properties": {
+        "passed": { "type": "number" },
+        "failed": { "type": "number" },
+        "skipped": { "type": "number" }
+      }
+    },
+    "pairs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["host", "result", "reason", "gateActive"],
+        "properties": {
+          "host": { "type": "string" },
+          "result": {
+            "enum": [
+              "harness-win",
+              "parity",
+              "harness-regression",
+              "inconclusive-capability",
+              "infrastructure-invalid",
+              "inconclusive-budget",
+              "flaky-inconclusive",
+              "skipped"
+            ]
+          },
+          "reason": { "type": "string" },
+          "gateActive": { "type": "boolean" },
+          "reproduced": { "type": ["boolean", "null"] },
+          "generic": { "type": ["object", "null"] },
+          "harness": { "type": ["object", "null"] }
+        }
+      }
+    },
+    "smokes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["host", "ok"],
+        "properties": {
+          "host": { "type": "string" },
+          "ok": { "type": ["boolean", "null"] },
+          "failed": { "type": ["array", "null"] }
+        }
+      }
+    },
+    "budget": {
+      "type": "object",
+      "required": ["ceilingUsd", "spentUsd", "exhausted"],
+      "properties": {
+        "ceilingUsd": { "type": "number" },
+        "spentUsd": { "type": "number" },
+        "exhausted": { "type": "boolean" },
+        "reserveUsed": { "type": ["string", "null"] }
+      }
+    },
+    "gate": {
+      "type": "object",
+      "required": ["block", "reasons"],
+      "properties": {
+        "block": { "type": "boolean" },
+        "reasons": { "type": "array" }
+      }
+    },
+    "limitations": { "type": ["array", "null"] }
+  }
+}

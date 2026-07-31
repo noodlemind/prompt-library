@@ -1,0 +1,286 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import { test } from 'node:test';
+import {
+  validateAgainstSchema,
+  classifyPair,
+  allocateReleaseBudgets,
+  applyGatePolicy,
+  runRelease,
+  buildMarkdownReport,
+} from '../../../evals/release.mjs';
+
+const RUN_SCHEMA = JSON.parse(fs.readFileSync(new URL('../../../evals/schema/eval-run.v1.schema.json', import.meta.url), 'utf8'));
+const REPORT_SCHEMA = JSON.parse(fs.readFileSync(new URL('../../../evals/schema/eval-report.v1.schema.json', import.meta.url), 'utf8'));
+
+const CONFIG = {
+  budget: { releaseCeilingUsd: 20, kimiPairUsd: 10, rerunUsd: 8, reserveUsd: 2 },
+  task: { datasetRef: 'terminal-bench@2.0', task: 'cobol-modernization' },
+};
+
+/** A schema-valid eval-run document; `over` shallow-merges per section. */
+function fullRun(condition, verdict, over = {}) {
+  const doc = {
+    schema: 'eval-run.v1',
+    reproducibility: {
+      releaseSha: 'abc123',
+      harnessVersion: '0.5.0',
+      harnessContentHash: null,
+      taskId: 'cobol-modernization',
+      taskRevision: 'terminal-bench@2.0',
+      condition,
+      modelRequested: 'moonshotai/kimi-k2.7-code',
+      modelResolved: 'moonshotai/kimi-k2.7-code',
+      providerResolved: 'Moonshot AI',
+      host: 'openrouter-kimi',
+      reasoningConfig: null,
+      runnerVersion: '1',
+      sandbox: null,
+      startedAt: '2026-07-30T00:00:00Z',
+      endedAt: '2026-07-30T00:10:00Z',
+    },
+    correctness: {
+      verifierReward: verdict === 'pass' ? 1 : 0,
+      verdict,
+      assertionsPassed: null,
+      assertionsFailed: null,
+      requiredFilesCreated: null,
+      finalDiffHash: null,
+      exitReason: 'model_finish',
+      completedWithinTimeout: true,
+      completedWithinBudget: true,
+    },
+    efficiency: {
+      wallTimeMs: 60000,
+      modelRequests: 5,
+      toolCalls: 9,
+      terminalCommands: 7,
+      failedCommands: 1,
+      promptTokens: 1000,
+      cachedPromptTokens: 200,
+      reasoningTokens: 0,
+      outputTokens: 400,
+      providerReportedCostUsd: null,
+      localCostUsd: 0.02,
+    },
+    harnessBehavior: {
+      orientInvoked: null,
+      planCreatedOrSelected: null,
+      gateAttempts: null,
+      gateDenials: null,
+      outOfScopeMutationAttempts: null,
+      dangerousCommandAttempts: null,
+      verificationAfterFinalMutation: null,
+      prematureFinishAttempts: null,
+      completionBlockedForVerification: null,
+      reviewPerformed: null,
+      policyBypassAttempted: null,
+      policyBypassAchieved: false,
+    },
+    subscription: null,
+  };
+  for (const [section, value] of Object.entries(over)) {
+    doc[section] = { ...doc[section], ...value };
+  }
+  return doc;
+}
+
+function pairOf(host, genericVerdict, harnessVerdict, over = {}) {
+  return {
+    host,
+    generic: fullRun('generic', genericVerdict, over.generic ?? {}),
+    harness: fullRun('harness', harnessVerdict, over.harness ?? {}),
+    failureKind: over.failureKind ?? null,
+  };
+}
+
+function baseSteps(overrides = {}) {
+  return {
+    deterministic: async () => ({ passed: 17, failed: 0, skipped: 2 }),
+    environment: async () => ({ ok: true, missing: [] }),
+    taskLock: async () => ({ ok: true, reason: '' }),
+    frontierPair: async () => pairOf('codex-subscription', 'pass', 'pass'),
+    kimiPair: async () => pairOf('openrouter-kimi', 'pass', 'pass'),
+    gemmaPair: async () => pairOf('ollama-gemma', 'fail', 'fail'),
+    smokes: async () => [{ host: 'copilot-smoke', ok: true, failed: [] }],
+    ...overrides,
+  };
+}
+
+test('validateAgainstSchema checks required keys, types, nullability, const, and enum with paths', () => {
+  const good = fullRun('generic', 'pass');
+  assert.deepEqual(validateAgainstSchema(good, RUN_SCHEMA).errors, []);
+  const bad = fullRun('generic', 'pass');
+  delete bad.efficiency.promptTokens;
+  bad.correctness.verdict = 'maybe';
+  bad.reproducibility.releaseSha = null;
+  const verdict = validateAgainstSchema(bad, RUN_SCHEMA);
+  assert.equal(verdict.ok, false);
+  assert.ok(verdict.errors.some((e) => e.includes('efficiency.promptTokens')));
+  assert.ok(verdict.errors.some((e) => e.includes('correctness.verdict')));
+  assert.ok(verdict.errors.some((e) => e.includes('reproducibility.releaseSha')));
+});
+
+test('classifyPair implements the §8 matrix', () => {
+  assert.equal(classifyPair(pairOf('h', 'fail', 'pass')).result, 'harness-win');
+  assert.equal(classifyPair(pairOf('h', 'pass', 'pass')).result, 'parity');
+  assert.equal(classifyPair(pairOf('h', 'pass', 'fail')).result, 'harness-regression');
+  assert.equal(classifyPair(pairOf('h', 'fail', 'fail')).result, 'inconclusive-capability');
+});
+
+test('classifyPair precedence: safety bypass, then infrastructure, then budget', () => {
+  const safety = classifyPair(pairOf('h', 'pass', 'pass', { harness: { harnessBehavior: { policyBypassAchieved: true } } }));
+  assert.equal(safety.result, 'harness-regression');
+  assert.equal(safety.safety, true);
+  const infra = classifyPair(pairOf('h', 'pass', 'pass', { failureKind: 'infrastructure' }));
+  assert.equal(infra.result, 'infrastructure-invalid');
+  const budget = classifyPair(pairOf('h', 'pass', 'fail', { harness: { correctness: { completedWithinBudget: false } } }));
+  assert.equal(budget.result, 'inconclusive-budget');
+});
+
+test('a model or provider fallback is detected from the run documents', () => {
+  const fallback = classifyPair(
+    pairOf('h', 'pass', 'pass', { harness: { reproducibility: { modelResolved: 'moonshotai/kimi-k2-instruct' } } })
+  );
+  assert.equal(fallback.fallbackDetected, true);
+});
+
+test('allocateReleaseBudgets chains the plan allowances under the release ceiling', () => {
+  const budgets = allocateReleaseBudgets(CONFIG.budget);
+  assert.equal(budgets.release.ceilingUsd, 20);
+  assert.equal(budgets.kimiPair.ceilingUsd, 10);
+  assert.equal(budgets.rerun.ceilingUsd, 8);
+  budgets.kimiPair.charge(3, 'pair');
+  assert.equal(budgets.release.spentUsd(), 3);
+});
+
+test('the reserve is unusable without a recorded reason', () => {
+  const budgets = allocateReleaseBudgets(CONFIG.budget);
+  assert.throws(() => budgets.reserve.use(), /reason/);
+  const extra = budgets.reserve.use({ reason: 'billable retry audit' });
+  assert.equal(extra.ceilingUsd, 2);
+  assert.equal(budgets.reserveUsedReason(), 'billable retry audit');
+  extra.charge(1, 'audit');
+  assert.equal(budgets.release.spentUsd(), 1);
+});
+
+test('gate policy blocks on deterministic regressions, safety, telemetry, and pinning', () => {
+  const base = { deterministic: { passed: 17, failed: 0, skipped: 2 }, pairs: [], telemetryComplete: true, taskLockOk: true, environmentOk: true, calibrationRelease: false };
+  assert.equal(applyGatePolicy(base).block, false);
+  assert.equal(applyGatePolicy({ ...base, deterministic: { passed: 16, failed: 1, skipped: 2 } }).block, true);
+  assert.equal(applyGatePolicy({ ...base, telemetryComplete: false }).block, true);
+  assert.equal(applyGatePolicy({ ...base, taskLockOk: false }).block, true);
+  const safetyPair = { host: 'openrouter-kimi', gateActive: false, classification: { result: 'harness-regression', safety: true, fallbackDetected: false }, reproduced: null };
+  assert.equal(applyGatePolicy({ ...base, calibrationRelease: true, pairs: [safetyPair] }).block, true, 'safety blocks even in calibration on an inactive gate');
+});
+
+test('gate policy blocks a reproduced regression and a fallback only on active gates', () => {
+  const base = { deterministic: { passed: 1, failed: 0, skipped: 0 }, telemetryComplete: true, taskLockOk: true, environmentOk: true, calibrationRelease: false };
+  const regression = { host: 'openrouter-kimi', gateActive: true, classification: { result: 'harness-regression', safety: false, fallbackDetected: false }, reproduced: true };
+  assert.equal(applyGatePolicy({ ...base, pairs: [regression] }).block, true);
+  const inactive = { ...regression, gateActive: false };
+  assert.equal(applyGatePolicy({ ...base, pairs: [inactive] }).block, false);
+  const fallback = { host: 'openrouter-kimi', gateActive: true, classification: { result: 'parity', safety: false, fallbackDetected: true }, reproduced: null };
+  assert.equal(applyGatePolicy({ ...base, pairs: [fallback] }).block, true);
+  assert.equal(applyGatePolicy({ ...base, pairs: [{ ...fallback, gateActive: false }] }).block, false);
+});
+
+test('an all-green release produces a schema-valid report and exit code 0', async () => {
+  const { report, exitCode } = await runRelease({ config: CONFIG, steps: baseSteps(), releaseSha: 'abc123', harnessVersion: '0.5.0' });
+  assert.equal(exitCode, 0);
+  assert.deepEqual(validateAgainstSchema(report, REPORT_SCHEMA).errors, []);
+  const kimi = report.pairs.find((p) => p.host === 'openrouter-kimi');
+  assert.equal(kimi.result, 'parity');
+  assert.equal(report.gate.block, false);
+});
+
+test('a deterministic regression blocks before any paid step runs', async () => {
+  let kimiCalled = false;
+  const steps = baseSteps({
+    deterministic: async () => ({ passed: 15, failed: 2, skipped: 2 }),
+    kimiPair: async () => {
+      kimiCalled = true;
+      return pairOf('openrouter-kimi', 'pass', 'pass');
+    },
+  });
+  const { report, exitCode } = await runRelease({ config: CONFIG, steps });
+  assert.equal(exitCode, 1);
+  assert.equal(kimiCalled, false, 'no provider spend after a deterministic failure');
+  assert.equal(report.pairs.find((p) => p.host === 'openrouter-kimi').result, 'skipped');
+});
+
+test('a kimi baseline-pass/harness-fail reruns one full fresh pair and blocks when it reproduces', async () => {
+  let rerunCalls = 0;
+  const steps = baseSteps({
+    kimiPair: async () => pairOf('openrouter-kimi', 'pass', 'fail'),
+    rerunKimiPair: async () => {
+      rerunCalls += 1;
+      return pairOf('openrouter-kimi', 'pass', 'fail');
+    },
+  });
+  const { report, exitCode } = await runRelease({ config: CONFIG, steps });
+  assert.equal(rerunCalls, 1, 'exactly one full-pair rerun, never treatment-only');
+  const kimi = report.pairs.find((p) => p.host === 'openrouter-kimi');
+  assert.equal(kimi.result, 'harness-regression');
+  assert.equal(kimi.reproduced, true);
+  assert.equal(exitCode, 1);
+});
+
+test('an unreproduced kimi regression is flaky-inconclusive and does not block', async () => {
+  const steps = baseSteps({
+    kimiPair: async () => pairOf('openrouter-kimi', 'pass', 'fail'),
+    rerunKimiPair: async () => pairOf('openrouter-kimi', 'pass', 'pass'),
+  });
+  const { report, exitCode } = await runRelease({ config: CONFIG, steps });
+  const kimi = report.pairs.find((p) => p.host === 'openrouter-kimi');
+  assert.equal(kimi.result, 'flaky-inconclusive');
+  assert.equal(kimi.reproduced, false);
+  assert.equal(exitCode, 0);
+});
+
+test('during calibration a reproduced kimi regression is informational, not blocking', async () => {
+  const steps = baseSteps({
+    kimiPair: async () => pairOf('openrouter-kimi', 'pass', 'fail'),
+    rerunKimiPair: async () => pairOf('openrouter-kimi', 'pass', 'fail'),
+  });
+  const { report, exitCode } = await runRelease({ config: CONFIG, steps, calibrationRelease: true });
+  assert.equal(exitCode, 0);
+  assert.equal(report.calibrationRelease, true);
+  assert.equal(report.pairs.find((p) => p.host === 'openrouter-kimi').gateActive, false);
+});
+
+test('a budget-exhausted treatment is inconclusive and never blocks', async () => {
+  const steps = baseSteps({
+    kimiPair: async () => pairOf('openrouter-kimi', 'pass', 'fail', { harness: { correctness: { completedWithinBudget: false, exitReason: 'budget_exhausted' } } }),
+  });
+  const { report, exitCode } = await runRelease({ config: CONFIG, steps });
+  assert.equal(report.pairs.find((p) => p.host === 'openrouter-kimi').result, 'inconclusive-budget');
+  assert.equal(exitCode, 0);
+});
+
+test('a gemma failure stays informational', async () => {
+  const { report, exitCode } = await runRelease({ config: CONFIG, steps: baseSteps() });
+  const gemma = report.pairs.find((p) => p.host === 'ollama-gemma');
+  assert.equal(gemma.result, 'inconclusive-capability');
+  assert.equal(gemma.gateActive, false);
+  assert.equal(exitCode, 0);
+});
+
+test('a run document missing required telemetry blocks the release', async () => {
+  const broken = pairOf('openrouter-kimi', 'pass', 'pass');
+  delete broken.harness.efficiency;
+  const steps = baseSteps({ kimiPair: async () => broken });
+  const { report, exitCode } = await runRelease({ config: CONFIG, steps });
+  assert.equal(exitCode, 1);
+  assert.ok(report.gate.reasons.some((r) => /telemetry/i.test(r)));
+});
+
+test('the markdown eval card names the task, verdicts, spend, and the single-task limitation', async () => {
+  const { report } = await runRelease({ config: CONFIG, steps: baseSteps(), releaseSha: 'abc123', harnessVersion: '0.5.0' });
+  const md = buildMarkdownReport(report);
+  assert.match(md, /cobol-modernization/);
+  assert.match(md, /openrouter-kimi/);
+  assert.match(md, /parity/);
+  assert.match(md, /\$/);
+  assert.match(md, /single (pinned )?task|release canary/i);
+});
