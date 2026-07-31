@@ -26,10 +26,12 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
 import json
 import os
 import pathlib
 import re
+import stat
 import tempfile
 
 try:
@@ -43,6 +45,8 @@ class StdioBridgeAgent(BaseAgent):
     _CAPTURE_RUNNER = "/opt/harness-bundle/bounded-exec"
     _EVIDENCE_BEFORE = ".harness/eval-before.json"
     _MAX_PARSED_JSON_BYTES = 2 * 1024 * 1024
+    _MAX_DONE_FILE_BYTES = 4 * 1024 * 1024
+    _MAX_PROTOCOL_LINE_BYTES = 512 * 1024
     _MAX_COMMAND_BYTES = 64 * 1024
     _MODEL_STDOUT_BYTES = 6_000
     _MODEL_STDERR_BYTES = 2_000
@@ -181,6 +185,7 @@ class StdioBridgeAgent(BaseAgent):
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             env=bridge_env,
+            limit=self._MAX_PROTOCOL_LINE_BYTES,
         )
         saw_done = False
         try:
@@ -207,6 +212,8 @@ class StdioBridgeAgent(BaseAgent):
                     await proc.stdin.drain()
                 elif message["type"] == "done":
                     saw_done = True
+                    if message.get("doneFilePersisted") is True:
+                        message = self._load_persisted_done(message)
                     message = self._redact(message)
                     await self._enrich_done(environment, message)
                     self._populate_context(context, message)
@@ -221,6 +228,58 @@ class StdioBridgeAgent(BaseAgent):
             raise RuntimeError(
                 f"stdio bridge exited without a done message (node exit {proc.returncode})"
             )
+
+    def _load_persisted_done(self, reference: dict) -> dict:
+        """Load the bounded full done ledger named by a small authenticated frame."""
+        destination_value = self._cfg("HARNESS_EVAL_TB_TELEMETRY_FILE")
+        expected_bytes = reference.get("doneBytes")
+        expected_hash = reference.get("doneHash")
+        if (
+            not destination_value
+            or not isinstance(expected_bytes, int)
+            or expected_bytes <= 0
+            or expected_bytes > self._MAX_DONE_FILE_BYTES
+            or not isinstance(expected_hash, str)
+            or re.fullmatch(r"[a-f0-9]{64}", expected_hash) is None
+        ):
+            raise RuntimeError("done reference is invalid or exceeds the bounded artifact limit")
+        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+        descriptor = os.open(destination_value, flags)
+        try:
+            before = os.fstat(descriptor)
+            if not stat.S_ISREG(before.st_mode) or before.st_size != expected_bytes:
+                raise RuntimeError("persisted done artifact is not the referenced regular file")
+            chunks = []
+            remaining = expected_bytes
+            while remaining:
+                chunk = os.read(descriptor, min(64 * 1024, remaining))
+                if not chunk:
+                    raise RuntimeError("persisted done artifact ended before its referenced size")
+                chunks.append(chunk)
+                remaining -= len(chunk)
+            if os.read(descriptor, 1):
+                raise RuntimeError("persisted done artifact exceeds its referenced size")
+            after = os.fstat(descriptor)
+            if (
+                before.st_dev != after.st_dev
+                or before.st_ino != after.st_ino
+                or before.st_size != after.st_size
+                or before.st_mtime_ns != after.st_mtime_ns
+                or before.st_ctime_ns != after.st_ctime_ns
+            ):
+                raise RuntimeError("persisted done artifact changed while being read")
+        finally:
+            os.close(descriptor)
+        payload = b"".join(chunks)
+        if hashlib.sha256(payload).hexdigest() != expected_hash:
+            raise RuntimeError("persisted done artifact digest does not match its protocol reference")
+        try:
+            parsed = json.loads(payload)
+        except (UnicodeDecodeError, json.JSONDecodeError) as error:
+            raise RuntimeError(f"persisted done artifact is invalid JSON: {error}") from error
+        if not isinstance(parsed, dict) or parsed.get("type") != "done":
+            raise RuntimeError("persisted done artifact is not a done document")
+        return parsed
 
     def _load_condition(self) -> dict:
         condition_path = self._cfg("HARNESS_EVAL_TB_CONDITION")

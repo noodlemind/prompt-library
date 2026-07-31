@@ -29,6 +29,7 @@ const MAX_BUNDLE_ENTRIES = 100_000;
 const MAX_BUNDLE_BYTES = 2 * 1024 * 1024 * 1024;
 const MAX_BUNDLE_DEPTH = 64;
 const MAX_MANIFEST_BYTES = 32 * 1024 * 1024;
+const SUPPORTS_NO_FOLLOW = Number.isInteger(fs.constants.O_NOFOLLOW) && fs.constants.O_NOFOLLOW > 0;
 const NO_FOLLOW = fs.constants.O_NOFOLLOW ?? 0;
 const ALLOWED_TOP_LEVEL = new Set([
   'harness',
@@ -175,19 +176,66 @@ function validateBundleRoot(bundleDir, repoRoot = repoRootDefault) {
   return canonical;
 }
 
-function scanBundle(bundleDir) {
+function boundedEntryLimit(value) {
+  if (value === undefined) return MAX_BUNDLE_ENTRIES;
+  if (!Number.isInteger(value) || value < 1 || value > MAX_BUNDLE_ENTRIES) {
+    throw new Error(`maximumEntries must be an integer between 1 and ${MAX_BUNDLE_ENTRIES}`);
+  }
+  return value;
+}
+
+function readDirectoryNamesBounded(absoluteDir, { isRoot, remaining, maximumEntries }) {
+  const names = [];
+  let directory;
+  try {
+    directory = fs.opendirSync(absoluteDir);
+    for (;;) {
+      const entry = directory.readSync();
+      if (entry === null) break;
+      if (isRoot && entry.name === BUNDLE_MANIFEST_FILE) continue;
+      if (names.length >= remaining) {
+        throw new Error(`bundle traversal exceeds maximum entry count ${maximumEntries}`);
+      }
+      names.push(entry.name);
+    }
+  } finally {
+    directory?.closeSync();
+  }
+  names.sort(bytewiseCompare);
+  return names;
+}
+
+function validateTopLevelNames(names) {
+  for (const name of names) {
+    if (!ALLOWED_TOP_LEVEL.has(name)) throw new Error(`unexpected top-level bundle content: ${name}`);
+  }
+  for (const required of ['harness', 'harness-cli', 'evidence-probe', 'evidence-probe.mjs', 'bounded-exec', 'bounded-exec.mjs']) {
+    if (!names.includes(required)) throw new Error(`required bundle content is missing: ${required}`);
+  }
+  if (!names.includes('node-x64') && !names.includes('node-arm64')) {
+    throw new Error('required bundle content is missing: a node-x64 or node-arm64 runtime');
+  }
+}
+
+function scanBundle(bundleDir, { maximumEntries: requestedMaximumEntries } = {}) {
+  const maximumEntries = boundedEntryLimit(requestedMaximumEntries);
   const entries = [];
   let regularBytes = 0;
+  let discoveredEntries = 0;
 
   const visit = (relativeDir, depth) => {
     if (depth > MAX_BUNDLE_DEPTH) throw new Error(`bundle traversal exceeds maximum depth ${MAX_BUNDLE_DEPTH}`);
     const absoluteDir = relativeDir ? path.join(bundleDir, relativeDir) : bundleDir;
-    const names = fs.readdirSync(absoluteDir).sort(bytewiseCompare);
+    const names = readDirectoryNamesBounded(absoluteDir, {
+      isRoot: relativeDir === '',
+      remaining: maximumEntries - discoveredEntries,
+      maximumEntries,
+    });
+    discoveredEntries += names.length;
+    if (!relativeDir) validateTopLevelNames(names);
     for (const name of names) {
       const relative = relativeDir ? `${relativeDir}/${name}` : name;
-      if (!relativeDir && name === BUNDLE_MANIFEST_FILE) continue;
       entries.push(null);
-      if (entries.length > MAX_BUNDLE_ENTRIES) throw new Error(`bundle traversal exceeds maximum entry count ${MAX_BUNDLE_ENTRIES}`);
       const absolute = path.join(bundleDir, ...relative.split('/'));
       const stat = fs.lstatSync(absolute);
       const mode = stat.mode & 0o777;
@@ -224,22 +272,8 @@ function scanBundle(bundleDir) {
   return { entries, regularBytes };
 }
 
-function validateTopLevel(bundleDir) {
-  const names = fs.readdirSync(bundleDir).filter((name) => name !== BUNDLE_MANIFEST_FILE);
-  for (const name of names) {
-    if (!ALLOWED_TOP_LEVEL.has(name)) throw new Error(`unexpected top-level bundle content: ${name}`);
-  }
-  for (const required of ['harness', 'harness-cli', 'evidence-probe', 'evidence-probe.mjs', 'bounded-exec', 'bounded-exec.mjs']) {
-    if (!names.includes(required)) throw new Error(`required bundle content is missing: ${required}`);
-  }
-  if (!names.includes('node-x64') && !names.includes('node-arm64')) {
-    throw new Error('required bundle content is missing: a node-x64 or node-arm64 runtime');
-  }
-}
-
-function manifestDocument(bundleDir) {
-  validateTopLevel(bundleDir);
-  const scanned = scanBundle(bundleDir);
+function manifestDocument(bundleDir, options) {
+  const scanned = scanBundle(bundleDir, options);
   return {
     version: BUNDLE_MANIFEST_VERSION,
     algorithm: 'sha256',
@@ -273,7 +307,11 @@ function writeBundleManifest(bundleDir) {
  * A colocated manifest is inventory, not a trust root: callers must retain
  * `expectedManifestHash` separately (for example in release configuration).
  */
-export function validatePrebuiltBundle(bundleDir, { expectedManifestHash, repoRoot = repoRootDefault } = {}) {
+function inspectPrebuiltBundle(
+  bundleDir,
+  { expectedManifestHash, repoRoot = repoRootDefault, maximumEntries } = {}
+) {
+  if (!SUPPORTS_NO_FOLLOW) throw new Error('secure prebuilt bundle validation requires O_NOFOLLOW support');
   if (!/^[a-f0-9]{64}$/.test(String(expectedManifestHash ?? ''))) {
     throw new Error('an out-of-bundle expected manifest digest is required');
   }
@@ -295,14 +333,146 @@ export function validatePrebuiltBundle(bundleDir, { expectedManifestHash, repoRo
   if (!recorded || Array.isArray(recorded) || recorded.version !== BUNDLE_MANIFEST_VERSION || recorded.algorithm !== 'sha256') {
     throw new Error(`unsupported bundle manifest version or algorithm`);
   }
-  const current = manifestDocument(canonical);
+  const current = manifestDocument(canonical, { maximumEntries });
   if (recorded.entryCount !== current.entryCount || recorded.regularBytes !== current.regularBytes) {
     throw new Error('bundle contents do not match the trusted manifest totals');
   }
   if (recorded.entriesHash !== current.entriesHash || JSON.stringify(recorded.entries) !== JSON.stringify(current.entries)) {
     throw new Error('bundle contents do not match the trusted manifest inventory');
   }
-  return { bundleDir: canonical, manifestHash: actualManifestHash, mount: bundleMount(canonical) };
+  return {
+    bundleDir: canonical,
+    manifestHash: actualManifestHash,
+    mount: bundleMount(canonical),
+    manifest: recorded,
+    manifestBytes,
+  };
+}
+
+export function validatePrebuiltBundle(bundleDir, options = {}) {
+  const inspected = inspectPrebuiltBundle(bundleDir, options);
+  return {
+    bundleDir: inspected.bundleDir,
+    manifestHash: inspected.manifestHash,
+    mount: inspected.mount,
+  };
+}
+
+function stableOpenFile(before, after) {
+  return before.dev === after.dev
+    && before.ino === after.ino
+    && before.size === after.size
+    && before.mode === after.mode
+    && before.mtimeMs === after.mtimeMs
+    && before.ctimeMs === after.ctimeMs;
+}
+
+function attestedPath(root, relative, label) {
+  if (typeof relative !== 'string'
+      || !relative
+      || relative.includes('\\')
+      || relative.includes('\0')
+      || path.posix.isAbsolute(relative)
+      || path.posix.normalize(relative) !== relative
+      || relative === '..'
+      || relative.startsWith('../')) {
+    throw new Error(`${label} contains an unsafe path: ${String(relative)}`);
+  }
+  const absolute = path.join(root, ...relative.split('/'));
+  if (!isInside(root, absolute)) throw new Error(`${label} escapes the bundle root: ${relative}`);
+  return absolute;
+}
+
+function verifyAttestedMode(stat, entry, label) {
+  if ((stat.mode & 0o777) !== entry.mode) throw new Error(`${label} mode changed after validation`);
+}
+
+function copyAttestedRegularFile(source, destination, entry) {
+  let sourceHandle;
+  let destinationHandle;
+  try {
+    sourceHandle = fs.openSync(source, fs.constants.O_RDONLY | NO_FOLLOW);
+    const before = fs.fstatSync(sourceHandle);
+    if (!before.isFile()) throw new Error(`attested bundle file is no longer regular: ${entry.path}`);
+    if (before.size !== entry.size) throw new Error(`attested bundle file size changed after validation: ${entry.path}`);
+    if (before.size > MAX_BUNDLE_BYTES) throw new Error(`attested bundle file exceeds the bundle byte allowance: ${entry.path}`);
+    verifyAttestedMode(before, entry, `attested bundle file ${entry.path}`);
+
+    destinationHandle = fs.openSync(
+      destination,
+      fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | NO_FOLLOW,
+      0o600
+    );
+    const digest = crypto.createHash('sha256');
+    const chunk = Buffer.allocUnsafe(64 * 1024);
+    let position = 0;
+    while (position < entry.size) {
+      const count = fs.readSync(sourceHandle, chunk, 0, Math.min(chunk.length, entry.size - position), position);
+      if (count === 0) throw new Error(`attested bundle file changed while being copied: ${entry.path}`);
+      digest.update(chunk.subarray(0, count));
+      let written = 0;
+      while (written < count) {
+        const writeCount = fs.writeSync(destinationHandle, chunk, written, count - written, position + written);
+        if (writeCount === 0) throw new Error(`attested bundle file could not be copied: ${entry.path}`);
+        written += writeCount;
+      }
+      position += count;
+    }
+    const after = fs.fstatSync(sourceHandle);
+    if (!stableOpenFile(before, after)) throw new Error(`attested bundle file changed while being copied: ${entry.path}`);
+    const actualHash = digest.digest('hex');
+    if (actualHash !== entry.sha256) throw new Error(`attested bundle file digest changed after validation: ${entry.path}`);
+    fs.fchmodSync(destinationHandle, entry.mode);
+  } finally {
+    if (destinationHandle !== undefined) fs.closeSync(destinationHandle);
+    if (sourceHandle !== undefined) fs.closeSync(sourceHandle);
+  }
+}
+
+function copyAttestedSymlink(sourceRoot, source, destination, entry) {
+  const before = fs.lstatSync(source);
+  if (!before.isSymbolicLink()) throw new Error(`attested bundle symlink changed type after validation: ${entry.path}`);
+  const target = fs.readlinkSync(source);
+  if (target !== entry.target || path.isAbsolute(target)) {
+    throw new Error(`attested bundle symlink target changed after validation: ${entry.path}`);
+  }
+  const targetPath = path.resolve(path.dirname(source), target);
+  if (!isInside(sourceRoot, targetPath)) throw new Error(`attested bundle symlink escapes bundle root: ${entry.path}`);
+  const canonicalTarget = canonicalExisting(targetPath, `attested bundle symlink target ${entry.path}`);
+  if (!isInside(sourceRoot, canonicalTarget)) throw new Error(`attested bundle symlink resolves outside bundle root: ${entry.path}`);
+  const after = fs.lstatSync(source);
+  if (!stableOpenFile(before, after) || fs.readlinkSync(source) !== target) {
+    throw new Error(`attested bundle symlink changed while being copied: ${entry.path}`);
+  }
+  fs.symlinkSync(target, destination);
+}
+
+function copyAttestedInventory(sourceBundle, destination) {
+  const directories = [];
+  for (const entry of sourceBundle.manifest.entries) {
+    const source = attestedPath(sourceBundle.bundleDir, entry.path, 'trusted bundle manifest');
+    const target = attestedPath(destination, entry.path, 'trusted bundle manifest');
+    if (entry.type === 'directory') {
+      const stat = fs.lstatSync(source);
+      if (!stat.isDirectory() || stat.isSymbolicLink()) {
+        throw new Error(`attested bundle directory changed type after validation: ${entry.path}`);
+      }
+      verifyAttestedMode(stat, entry, `attested bundle directory ${entry.path}`);
+      fs.mkdirSync(target, { recursive: false, mode: 0o700 });
+      directories.push({ target, mode: entry.mode });
+    } else if (entry.type === 'file') {
+      copyAttestedRegularFile(source, target, entry);
+    } else if (entry.type === 'symlink') {
+      copyAttestedSymlink(sourceBundle.bundleDir, source, target, entry);
+    } else {
+      throw new Error(`trusted bundle manifest contains unsupported type: ${entry.path}`);
+    }
+  }
+  fs.writeFileSync(path.join(destination, BUNDLE_MANIFEST_FILE), sourceBundle.manifestBytes, {
+    flag: 'wx',
+    mode: 0o600,
+  });
+  for (const directory of directories.reverse()) fs.chmodSync(directory.target, directory.mode);
 }
 
 /**
@@ -312,23 +482,42 @@ export function validatePrebuiltBundle(bundleDir, { expectedManifestHash, repoRo
  */
 export function materializePrebuiltBundle(
   source,
-  { destination, expectedManifestHash, repoRoot = repoRootDefault } = {}
+  {
+    destination,
+    expectedManifestHash,
+    repoRoot = repoRootDefault,
+    maximumEntries,
+    onSourceValidated,
+  } = {}
 ) {
   if (!destination || typeof destination !== 'string') throw new Error('a materialization destination is required');
-  const sourceBundle = validatePrebuiltBundle(source, { expectedManifestHash, repoRoot });
+  if (!SUPPORTS_NO_FOLLOW) throw new Error('secure prebuilt bundle materialization requires O_NOFOLLOW support');
+  if (onSourceValidated !== undefined && typeof onSourceValidated !== 'function') {
+    throw new Error('onSourceValidated must be a function when provided');
+  }
+  const sourceBundle = inspectPrebuiltBundle(source, { expectedManifestHash, repoRoot, maximumEntries });
   const resolvedDestination = path.resolve(destination);
   if (fs.existsSync(resolvedDestination)) throw new Error('bundle materialization destination must not already exist');
-  fs.mkdirSync(resolvedDestination, { recursive: false, mode: 0o700 });
-  for (const name of fs.readdirSync(sourceBundle.bundleDir).sort(bytewiseCompare)) {
-    fs.cpSync(path.join(sourceBundle.bundleDir, name), path.join(resolvedDestination, name), {
-      recursive: true,
-      dereference: false,
-      verbatimSymlinks: true,
-      errorOnExist: true,
-      force: false,
-    });
+  onSourceValidated?.({
+    bundleDir: sourceBundle.bundleDir,
+    manifestHash: sourceBundle.manifestHash,
+  });
+  let destinationCreated = false;
+  try {
+    fs.mkdirSync(resolvedDestination, { recursive: false, mode: 0o700 });
+    destinationCreated = true;
+    copyAttestedInventory(sourceBundle, resolvedDestination);
+    return validatePrebuiltBundle(resolvedDestination, { expectedManifestHash, repoRoot, maximumEntries });
+  } catch (error) {
+    if (destinationCreated) {
+      try {
+        fs.rmSync(resolvedDestination, { recursive: true, force: true });
+      } catch (cleanupError) {
+        throw new AggregateError([error, cleanupError], `bundle materialization failed and partial cleanup also failed`);
+      }
+    }
+    throw error;
   }
-  return validatePrebuiltBundle(resolvedDestination, { expectedManifestHash, repoRoot });
 }
 
 /**

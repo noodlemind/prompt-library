@@ -41,6 +41,7 @@ function sha256(value) {
 }
 
 const REDACTED_SECRET = '[REDACTED_SECRET]';
+const MAX_PERSISTED_DONE_BYTES = 4 * 1024 * 1024;
 
 function activeSecrets(values) {
   return [...new Set((values ?? []).filter((value) => typeof value === 'string' && value.length >= 8))].sort(
@@ -233,18 +234,50 @@ export async function runStdioAgent({
   let execId = 0;
   let steps = 0;
   const finish = (payload) => {
-    const done = redactSecrets(
+    let done = redactSecrets(
       { type: 'done', steps, telemetry: telemetry?.snapshot() ?? null, runtime, ...payload },
       secrets
     );
+    let serialized = JSON.stringify(done);
+    if (Buffer.byteLength(serialized, 'utf8') > MAX_PERSISTED_DONE_BYTES) {
+      done = {
+        type: 'done',
+        steps,
+        answer: null,
+        stopReason: 'bridge_payload_exceeded',
+        detail: `The bounded done artifact exceeded ${MAX_PERSISTED_DONE_BYTES} bytes; event detail was discarded and the trial must fail closed.`,
+        telemetry: { totals: done.telemetry?.totals ?? null, events: [] },
+        runtime,
+      };
+      serialized = JSON.stringify(done);
+    }
     // Persist BEFORE the stdout done line: the harbor side may terminate this
     // process the instant it reads that line, and a truncated telemetry file
     // would cost the trial its metered evidence.
     if (doneFilePath) {
       try {
-        fs.writeFileSync(doneFilePath, JSON.stringify(done));
+        fs.writeFileSync(doneFilePath, serialized);
+        send({
+          type: 'done',
+          doneFilePersisted: true,
+          doneBytes: Buffer.byteLength(serialized, 'utf8'),
+          doneHash: sha256(serialized),
+        });
+        rl.close();
+        return done;
       } catch {
-        // the done line still carries the payload
+        // The line protocol has a much smaller bound than the persisted
+        // artifact. If persistence fails, fail the trial closed with a tiny
+        // frame rather than overflowing the Python StreamReader.
+        done = {
+          type: 'done',
+          steps,
+          answer: null,
+          stopReason: 'done_persistence_failed',
+          detail: 'The bounded done artifact could not be persisted; detailed telemetry was discarded.',
+          telemetry: null,
+          runtime,
+        };
       }
     }
     send(done);

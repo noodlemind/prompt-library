@@ -28,6 +28,7 @@ function preparedFixture() {
   fs.mkdirSync(path.join(fixtureRoot, 'packages', 'harness', 'bin'), { recursive: true });
   fs.mkdirSync(path.join(fixtureRoot, 'evals', 'external', 'terminal_bench'), { recursive: true });
   fs.writeFileSync(path.join(fixtureRoot, 'packages', 'harness', 'package.json'), JSON.stringify({ name: '@fixture/harness' }));
+  fs.symlinkSync('package.json', path.join(fixtureRoot, 'packages', 'harness', 'package-link.json'));
   fs.writeFileSync(path.join(fixtureRoot, 'packages', 'harness', 'bin', 'harness.mjs'), 'process.stdout.write("ok\\n")');
   fs.writeFileSync(path.join(fixtureRoot, 'evals', 'external', 'terminal_bench', 'evidence-probe.mjs'), 'process.stdout.write("{}\\n")');
   fs.writeFileSync(path.join(fixtureRoot, 'evals', 'external', 'terminal_bench', 'bounded-exec.mjs'), 'process.stdout.write("{}\\n")');
@@ -37,7 +38,7 @@ function preparedFixture() {
     repoRoot: fixtureRoot,
     nodeTarballs: { x64: '/unused/node-x64.tar.gz', arm64: null },
     spawnImpl: (command, args) => {
-      if (command === 'cp') fs.cpSync(args[1], args[2], { recursive: true });
+      if (command === 'cp') fs.cpSync(args[1], args[2], { recursive: true, verbatimSymlinks: true });
       if (command === 'tar') {
         const destination = args[args.indexOf('-C') + 1];
         fs.mkdirSync(path.join(destination, 'bin'), { recursive: true });
@@ -73,9 +74,53 @@ test('prebuilt bundles are mounted from a separately validated runner-owned snap
   assert.equal(materialized.bundleDir, fs.realpathSync(destination));
   assert.equal(materialized.mount.source, fs.realpathSync(destination));
   assert.notEqual(materialized.mount.source, fs.realpathSync(bundleDir));
+  assert.equal(fs.readlinkSync(path.join(destination, 'harness', 'package-link.json')), 'package.json');
   fs.writeFileSync(path.join(bundleDir, 'harness', 'post-validation-mutation'), 'source changed');
   assert.equal(fs.existsSync(path.join(destination, 'harness', 'post-validation-mutation')), false);
   assert.equal(validatePrebuiltBundle(destination, { expectedManifestHash: prepared.manifestHash }).manifestHash, prepared.manifestHash);
+});
+
+test('prebuilt validation stops at a caller-tightened entry cap before accepting the inventory', () => {
+  const { bundleDir, prepared } = preparedFixture();
+  assert.throws(
+    () => validatePrebuiltBundle(bundleDir, {
+      expectedManifestHash: prepared.manifestHash,
+      maximumEntries: 2,
+    }),
+    /maximum entry count 2/i
+  );
+});
+
+test('materialization copies only attested entries added after validation', () => {
+  const { bundleDir, prepared } = preparedFixture();
+  const destination = path.join(tmpdir('tb-materialized-attested-'), 'materialized');
+  const materialized = materializePrebuiltBundle(bundleDir, {
+    destination,
+    expectedManifestHash: prepared.manifestHash,
+    onSourceValidated: ({ bundleDir: validatedSource }) => {
+      fs.writeFileSync(path.join(validatedSource, 'unattested-after-validation'), 'must not be copied');
+    },
+  });
+
+  assert.equal(fs.existsSync(path.join(destination, 'unattested-after-validation')), false);
+  assert.equal(materialized.manifestHash, prepared.manifestHash);
+});
+
+test('materialization detects an attested-file mutation and removes its partial destination', () => {
+  const { bundleDir, prepared } = preparedFixture();
+  const destination = path.join(tmpdir('tb-materialized-mutated-'), 'materialized');
+
+  assert.throws(
+    () => materializePrebuiltBundle(bundleDir, {
+      destination,
+      expectedManifestHash: prepared.manifestHash,
+      onSourceValidated: ({ bundleDir: validatedSource }) => {
+        fs.writeFileSync(path.join(validatedSource, 'harness', 'package.json'), '{"changed":true}\n');
+      },
+    }),
+    /changed|digest|size|manifest/i
+  );
+  assert.equal(fs.existsSync(destination), false, 'a failed snapshot must not leave mountable partial content');
 });
 
 test('a forged bundle and rewritten local manifest cannot replace the trusted digest', () => {
@@ -162,6 +207,11 @@ test('Node redacts provider-reflected secrets from return, stdout, telemetry, an
   assert.doesNotMatch(JSON.stringify(lines), new RegExp(secret));
   assert.doesNotMatch(persisted, new RegExp(secret));
   assert.match(persisted, /REDACTED_SECRET/);
+  assert.equal(lines.length, 1);
+  assert.equal(lines[0].doneFilePersisted, true, 'stdout carries only the bounded persisted-artifact reference');
+  assert.equal(lines[0].doneBytes, Buffer.byteLength(persisted));
+  assert.equal(lines[0].doneHash, sha256(persisted));
+  assert.equal(Object.hasOwn(lines[0], 'telemetry'), false, 'the full ledger is not duplicated into line framing');
 });
 
 test('Node refuses a provider-supplied command containing an active secret before Harbor sees it', async () => {
@@ -181,6 +231,30 @@ test('Node refuses a provider-supplied command containing an active secret befor
   assert.equal(done.stopReason, 'secret_reflection_blocked');
   assert.equal(lines.some((line) => line.type === 'exec'), false);
   assert.doesNotMatch(JSON.stringify(lines), new RegExp(secret));
+});
+
+test('Node emits a small fail-closed frame when the large done artifact cannot be persisted', async () => {
+  const unavailableDonePath = path.join(tmpdir(), 'missing-parent', 'done.json');
+  const driver = {
+    next: async () => ({ type: 'finish', answer: 'x'.repeat(700_000), stopReason: 'model_finish' }),
+  };
+  const telemetry = { snapshot: () => ({ events: [{ detail: 'y'.repeat(700_000) }], totals: {} }) };
+  const { input, output, lines } = protocolPump();
+
+  const done = await runStdioAgent({
+    driver,
+    input,
+    output,
+    systemPrompt: 'safe',
+    instruction: 'safe',
+    telemetry,
+    doneFilePath: unavailableDonePath,
+  });
+
+  assert.equal(lines.length, 1);
+  assert.equal(lines[0].stopReason, 'done_persistence_failed');
+  assert.ok(Buffer.byteLength(JSON.stringify(lines[0])) < 4096, 'stdout fallback stays far below the protocol line cap');
+  assert.equal(done.stopReason, 'done_persistence_failed');
 });
 
 function runPython(source, env = {}) {
@@ -234,6 +308,66 @@ asyncio.run(main())
 `, { OPENROUTER_API_KEY: secret });
   assert.doesNotMatch(JSON.stringify(result), new RegExp(secret));
   assert.match(JSON.stringify(result), /REDACTED_SECRET/);
+});
+
+test('Python bridge resolves a small authenticated frame to a bounded large done ledger', () => {
+  const result = runPython(`
+import asyncio, hashlib, json, pathlib, tempfile
+from evals.external.terminal_bench.harbor_agent import StdioBridgeAgent
+
+root = pathlib.Path(tempfile.mkdtemp())
+condition = root / "condition.json"
+condition.write_text("{}")
+done_file = root / "done.json"
+done = {"type": "done", "answer": "x" * 120000, "stopReason": "model_finish", "telemetry": {"events": [], "totals": {}}}
+done_bytes = json.dumps(done).encode()
+done_file.write_bytes(done_bytes)
+reference = {"type": "done", "doneFilePersisted": True, "doneBytes": len(done_bytes), "doneHash": hashlib.sha256(done_bytes).hexdigest()}
+line = (json.dumps(reference) + "\\n").encode()
+captured = {}
+
+class Proc:
+    def __init__(self, reader):
+        self.stdout = reader
+        self.returncode = None
+        self.stdin = None
+    def terminate(self): self.returncode = 0
+    async def wait(self):
+        if self.returncode is None: self.returncode = 0
+        return self.returncode
+
+async def fake_subprocess(*args, **kwargs):
+    captured["limitPresent"] = "limit" in kwargs
+    captured["limit"] = kwargs.get("limit")
+    captured["expectedLimit"] = StdioBridgeAgent._MAX_PROTOCOL_LINE_BYTES
+    captured["frameBytes"] = len(line)
+    reader = asyncio.StreamReader(limit=captured["limit"])
+    reader.feed_data(line)
+    reader.feed_eof()
+    return Proc(reader)
+
+class Agent(StdioBridgeAgent):
+    async def _enrich_done(self, environment, message): pass
+    def _populate_context(self, context, message): captured["answerLength"] = len(message["answer"])
+
+async def main():
+    original = asyncio.create_subprocess_exec
+    asyncio.create_subprocess_exec = fake_subprocess
+    try:
+        agent = Agent()
+        agent._extra_env = {"HARNESS_EVAL_TB_CONDITION": str(condition), "HARNESS_EVAL_TB_TELEMETRY_FILE": str(done_file)}
+        await agent.run("instruction", None, object())
+    finally:
+        asyncio.create_subprocess_exec = original
+    print(json.dumps(captured))
+
+asyncio.run(main())
+`);
+  assert.ok(result.frameBytes < 1024, 'the protocol frame stays small regardless of ledger size');
+  assert.equal(result.answerLength, 120_000);
+  assert.equal(result.limitPresent, true, 'the subprocess call must set an explicit framing bound');
+  assert.equal(result.limit, result.expectedLimit, 'the subprocess reader uses the production protocol limit');
+  assert.ok(result.limit <= 512 * 1024, 'the protocol line remains explicitly bounded');
 });
 
 test('Python command wrapping bounds streams before Harbor buffers them and preserves status', () => {
