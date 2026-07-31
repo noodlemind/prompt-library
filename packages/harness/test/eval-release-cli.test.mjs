@@ -76,8 +76,18 @@ fs.mkdirSync(verifierDir, { recursive: true });
 fs.writeFileSync(path.join(verifierDir, 'reward.json'), '{"reward": 1}');
 fs.writeFileSync(agentEnv.HARNESS_EVAL_TB_TELEMETRY_FILE, JSON.stringify({
   type: 'done', answer: 'ok', stopReason: 'model_finish', steps: 6,
+  workspaceEvidence: {
+    available: true,
+    collectionMode: 'bounded-content-manifest-v1',
+    beforeManifestHash: 'a'.repeat(64),
+    afterManifestHash: 'b'.repeat(64),
+    diffHash: 'c'.repeat(64),
+    changedPaths: ['src/result.txt'],
+  },
+  harnessEvents: [],
+  enforcement: { hooksActive: false, policyBypassAchieved: false },
   telemetry: {
-    totals: { requests: 4, missingUsage: 0, promptTokens: 3000, cachedTokens: 500, reasoningTokens: 0, outputTokens: 700, localCostUsd: 0.015, providerCostUsd: 0.02, costComplete: true },
+    totals: { requests: 4, modelRequests: 4, providerAttempts: 4, providerResponses: 4, providerErrors: 0, retries: 0, openAttempts: 0, unknownBillingAttempts: 0, missingUsage: 0, promptTokens: 3000, cachedTokens: 500, reasoningTokens: 0, outputTokens: 700, localCostUsd: 0.015, providerCostUsd: 0.02, usageComplete: true, providerCostComplete: true, billingComplete: true, costComplete: true },
     events: [{ seq: 0, type: 'response', model: 'moonshotai/kimi-k2.7-code', provider: 'Moonshot AI', generationId: 'g1' }],
   },
 }));

@@ -39,7 +39,19 @@
         "runnerVersion": { "type": "string" },
         "sandbox": { "type": ["object", "null"] },
         "startedAt": { "type": "string" },
-        "endedAt": { "type": ["string", "null"] }
+        "endedAt": { "type": ["string", "null"] },
+        "pairId": { "type": ["string", "null"] },
+        "repetitionId": { "type": ["string", "null"] },
+        "repetitionIndex": { "type": ["number", "null"], "minimum": 1 },
+        "orderIndex": { "type": ["number", "null"], "minimum": 1 },
+        "attempt": { "type": ["string", "null"] },
+        "aggregation": { "type": ["string", "null"] },
+        "taskHash": { "type": ["string", "null"] },
+        "conditionHash": { "type": ["string", "null"] },
+        "systemPromptHash": { "type": ["string", "null"] },
+        "toolSchemaHash": { "type": ["string", "null"] },
+        "telemetryHash": { "type": ["string", "null"] },
+        "harnessEventsHash": { "type": ["string", "null"] }
       }
     },
     "correctness": {
@@ -52,6 +64,7 @@
         "assertionsFailed": { "type": ["number", "null"] },
         "requiredFilesCreated": { "type": ["boolean", "null"] },
         "finalDiffHash": { "type": ["string", "null"] },
+        "verifierArtifactHash": { "type": ["string", "null"] },
         "exitReason": { "type": "string" },
         "completedWithinTimeout": { "type": "boolean" },
         "completedWithinBudget": { "type": "boolean" }
@@ -80,18 +93,30 @@
         "timeToFirstEditMs": { "type": ["number", "null"] },
         "timeFromFinalEditToVerificationMs": { "type": ["number", "null"] },
         "modelRequests": { "type": ["number", "null"] },
+        "providerAttempts": { "type": ["number", "null"] },
+        "providerResponses": { "type": ["number", "null"] },
+        "providerErrors": { "type": ["number", "null"] },
+        "openProviderAttempts": { "type": ["number", "null"] },
+        "unknownBillingAttempts": { "type": ["number", "null"] },
         "toolCalls": { "type": ["number", "null"] },
         "terminalCommands": { "type": ["number", "null"] },
         "failedCommands": { "type": ["number", "null"] },
         "testExecutions": { "type": ["number", "null"] },
         "failedTests": { "type": ["number", "null"] },
         "retries": { "type": ["number", "null"] },
+        "contextCompactions": { "type": ["number", "null"] },
+        "compactedToolResults": { "type": ["number", "null"] },
+        "requestPayloadChars": { "type": ["number", "null"] },
+        "peakRequestPayloadChars": { "type": ["number", "null"] },
         "promptTokens": { "type": ["number", "null"] },
         "cachedPromptTokens": { "type": ["number", "null"] },
         "reasoningTokens": { "type": ["number", "null"] },
         "outputTokens": { "type": ["number", "null"] },
         "providerReportedCostUsd": { "type": ["number", "null"] },
         "localCostUsd": { "type": ["number", "null"] },
+        "usageComplete": { "type": ["boolean", "null"] },
+        "providerCostComplete": { "type": ["boolean", "null"] },
+        "billingComplete": { "type": ["boolean", "null"] },
         "costComplete": { "type": ["boolean", "null"] },
         "missingUsage": { "type": ["number", "null"] }
       }
@@ -126,6 +151,52 @@
         "policyBypassAttempted": { "type": ["boolean", "null"] },
         "policyBypassAchieved": { "type": ["boolean", "null"] }
       }
+    },
+    "enforcementFidelity": {
+      "type": "object",
+      "required": ["mode", "promptContractActive", "cliActivated", "mechanicalHooksActive", "harnessEventsCaptured", "evidenceSource"],
+      "properties": {
+        "mode": { "enum": ["none", "prompt-and-cli", "mechanical-hooks"] },
+        "promptContractActive": { "type": "boolean" },
+        "cliActivated": { "type": "boolean" },
+        "mechanicalHooksActive": { "type": "boolean" },
+        "harnessEventsCaptured": { "type": "boolean" },
+        "evidenceSource": { "type": "string" }
+      }
+    },
+    "workspaceEvidence": {
+      "type": "object",
+      "required": ["available", "collectionMode", "beforeManifestHash", "afterManifestHash", "diffHash", "changedPaths", "changedPathCount", "changedPathsTruncated", "reason"],
+      "properties": {
+        "available": { "type": "boolean" },
+        "collectionMode": { "type": ["string", "null"] },
+        "beforeManifestHash": { "type": ["string", "null"] },
+        "afterManifestHash": { "type": ["string", "null"] },
+        "diffHash": { "type": ["string", "null"] },
+        "changedPaths": { "type": "array", "items": { "type": "string" } },
+        "changedPathCount": { "type": "number" },
+        "changedPathsTruncated": { "type": "boolean" },
+        "reason": { "type": ["string", "null"] }
+      }
+    },
+    "observability": {
+      "type": "object",
+      "required": ["providerEvents", "toolEvents", "harnessEvents", "providerAttemptsStarted", "providerAttemptsClosed", "unclosedProviderAttempts", "correlatedToolResults", "uncorrelatedToolResults", "eventEvidenceHash"],
+      "properties": {
+        "providerEvents": { "type": "array", "items": { "type": "object" } },
+        "toolEvents": { "type": "array", "items": { "type": "object" } },
+        "harnessEvents": { "type": "array", "items": { "type": "object" } },
+        "providerAttemptsStarted": { "type": "number" },
+        "providerAttemptsClosed": { "type": "number" },
+        "unclosedProviderAttempts": { "type": "number" },
+        "correlatedToolResults": { "type": "number" },
+        "uncorrelatedToolResults": { "type": "number" },
+        "eventEvidenceHash": { "type": "string" }
+      }
+    },
+    "repetitions": {
+      "type": "array",
+      "items": { "type": "object" }
     },
     "subscription": {
       "type": ["object", "null"],
