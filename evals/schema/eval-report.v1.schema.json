@@ -47,7 +47,7 @@
           "host": { "type": "string" },
           "comparisonTrack": { "const": "controlled-ablation" },
           "task": { "type": ["string", "null"] },
-          "seedCount": { "type": ["number", "null"] },
+          "repetitionCount": { "type": ["number", "null"] },
           "result": {
             "enum": [
               "harness-win",
@@ -97,25 +97,36 @@
     },
     "budget": {
       "type": "object",
-      "required": ["ceilingUsd", "spentUsd", "exhausted", "breached", "overrunUsd"],
+      "required": ["scope", "ceilingUsd", "spentUsd", "exhausted", "breached", "overrunUsd", "allocations"],
       "properties": {
+        "scope": { "const": "provider-api-only" },
         "ceilingUsd": { "type": "number" },
         "spentUsd": { "type": "number" },
         "exhausted": { "type": "boolean" },
         "breached": { "type": "boolean" },
         "overrunUsd": { "type": "number" },
-        "reserveUsed": { "type": ["string", "null"] }
+        "reserveUsed": { "type": ["string", "null"] },
+        "allocations": {
+          "type": "object",
+          "required": ["controlledPairUsd", "regressionRerunUsd", "reasonedReserveUsd"],
+          "properties": {
+            "controlledPairUsd": { "type": "number" },
+            "regressionRerunUsd": { "type": "number" },
+            "reasonedReserveUsd": { "type": "number" }
+          }
+        }
       }
     },
     "claim": {
       "type": "object",
-      "required": ["level", "statement", "controlledPairs", "controlledWins", "regressions"],
+      "required": ["level", "statement", "controlledPairs", "controlledWins", "regressions", "treatmentFidelityModes"],
       "properties": {
         "level": { "enum": ["demonstrated-value", "bounded-overhead", "regression", "inconclusive"] },
         "statement": { "type": "string" },
         "controlledPairs": { "type": "number" },
         "controlledWins": { "type": "number" },
-        "regressions": { "type": "number" }
+        "regressions": { "type": "number" },
+        "treatmentFidelityModes": { "type": "array", "items": { "type": "string" } }
       }
     },
     "gate": {

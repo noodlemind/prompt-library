@@ -163,72 +163,185 @@ drive real tool-use loops without touching the Anthropic judge path.
 
 ## Release evaluation (Terminal-Bench canary)
 
-The release gate measures the incremental value of the Engineer Harness with an
-A/B on one pinned Terminal-Bench task (`terminal-bench@2.0` /
-`cobol-modernization`), across three capability levels: a frontier subscription
-(Codex or Claude Code, rotating), an economical API model (Kimi K2.7 Code via
-OpenRouter — the controlled experiment), and a local model (Gemma 4 26B via
-Ollama — informational).
+This is a pre-user release canary, not a claim that four tasks represent all
+software engineering. It measures the incremental effect of the treatment with
+fresh, paired sandboxes and retains enough evidence to explain a result instead
+of reporting only pass/fail.
+
+### Evidence tracks
+
+1. **Deterministic Harness mechanics (free):** production gate, verification,
+   compaction, prompt-contract, security, and hook-loop tests. This proves the
+   mechanisms; it does not measure model productivity.
+2. **Controlled same-model ablation (release gate):** Kimi K2.7 Code through one
+   pinned OpenRouter provider, with the same task, model, tools, limits, and
+   condition order controls. The generic arm gets the neutral engineering
+   prompt. The treatment adds the compact Engineer contract, lazy guidance,
+   checkpoint tool, and Harness CLI.
+3. **Local capability floor (explicit opt-in):** the same controlled pair with
+   Gemma 4 26B through Ollama, on the anchor task only. It is informational and
+   contributes zero provider API cost; wall time, workstation energy, and model
+   capability remain real costs/constraints.
+4. **Agent-runtime references:** Codex, Claude Code, Pi, Copilot, and Grok runs
+   stay separate. Their hidden prompts, tools, model routing, subscription
+   quotas, and telemetry cannot be normalized to the OpenRouter ablation.
+   Missing fields remain `null`; these runs may inform compatibility and user
+   experience, but never cause a controlled Harness-value claim.
+
+The pinned `terminal-bench@2.0` canary contains:
+
+- `cobol-modernization` (anchor);
+- `cancel-async-tasks`;
+- `git-leak-recovery`;
+- `custom-memory-heap-crash`.
+
+Kimi runs all four tasks. Routine releases use one independent repetition per
+condition and alternate A/B order. Calibration uses three repetitions and
+retains every raw trial; majority verdict and median efficiency are report
+views, not replacements for the underlying evidence.
+
+### Enforcement fidelity
+
+The current Terminal-Bench treatment is deliberately reported as
+`prompt-and-cli`, not `mechanical-hooks`. The sandbox's `.harness/events.jsonl`
+is agent-writable, so event names cannot prove hook installation. The trusted
+bridge explicitly records `hooksActive: false`; deterministic evals separately
+exercise production hook enforcement. Do not claim that a Terminal-Bench result
+measures mechanical-hook value or safety until the bridge installs host-owned
+hooks and the run reports `mechanical-hooks` from trusted evidence.
+
+### Commands
 
 ```bash
 # Per-PR (free): deterministic suite only, no pairs scheduled, exit 0 on green.
 node evals/release.mjs --profile release-canary --deterministic-only
 
-# Release candidate (default): the live Kimi A/B pair is REQUIRED. Missing
-# harbor, credentials, task verification, or run evidence blocks — never greens.
-OPENROUTER_API_KEY=... node evals/release.mjs --profile release-canary [--json] [--calibration]
+# Release candidate: source the key outside shell history, then run the required
+# four-task Kimi ablation. Missing prerequisites/evidence blocks; it never greens.
+source ~/.openrouter.env
+node evals/release.mjs --profile release-canary --json
+
+# First calibration runs: three repetitions per task/condition under the same cap.
+node evals/release.mjs --profile release-canary --calibration --json
+
+# Add the zero-API-cost local anchor pair when Ollama and the pinned model are ready.
+node evals/release.mjs --profile release-canary --with-local --json
+
+# Exceptional calibration only: scale the routine allowances, never above $20.
+node evals/release.mjs --profile release-canary --budget-usd 20 --json
 ```
 
 Release-candidate prerequisites (all fail closed when absent):
 
 - the `harbor` CLI on PATH (validated against 0.20.0);
-- `OPENROUTER_API_KEY` for the pinned Kimi profile;
-- the pinned task: downloaded automatically via `harbor download terminal-bench@2.0`
+- `OPENROUTER_API_KEY` for the pinned Kimi profile, delivered only in the host
+  process environment and never Harbor argv, `--ae`, condition JSON, or telemetry;
+- the pinned tasks, downloaded automatically via `harbor download terminal-bench@2.0`
   (or point `HARNESS_EVAL_TB_DATASET_DIR` at an existing download) and **verified
   byte-for-byte against the committed lock checksum before any provider call**;
 - a harness bundle for in-container activation: prepared automatically from the
-  working tree (needs `HARNESS_EVAL_NODE_TARBALL` pointing at a downloaded
-  Linux Node runtime tarball for the sandbox architecture), or point
+  working tree (set `HARNESS_EVAL_NODE_TARBALL_X64` and/or
+  `HARNESS_EVAL_NODE_TARBALL_ARM64` to downloaded Linux Node runtimes), or point
   `HARNESS_EVAL_TB_BUNDLE_DIR` at a pre-built bundle. Harbor mounts the bundle
   read-only into BOTH conditions; only the treatment's setup installs the
   `harness` wrapper on PATH — and setup failure fails the trial closed.
 
-Budget flow: the runner writes each trial's ceiling (profile trial ceiling
-capped by the pair's remaining allowance) into the bridge's condition file; the
-in-process driver refuses requests past it; after each trial the runner charges
-**provider-reported cost** (local calculation as fallback) to the pair budget,
-which chains under the $20 release ceiling — cross-process spend lands in the
-report, and a missing cost ledger fails the metered-telemetry gate rather than
-passing silently.
+### What the run records
+
+- logical model requests separately from physical attempts, retries, responses,
+  errors, latency, resolved model/provider, token/cache fields, reported and
+  locally computed cost, and billing completeness;
+- correlated, redacted tool calls/results with category, exit code, duration,
+  byte counts, hashes, timeout/truncation flags, and no raw command/output in
+  published telemetry;
+- request payload/peak sizes, context compactions, compacted observations,
+  checkpoint state, and time to first action/edit/final verification;
+- pair, repetition, order, task, condition, prompt, tool-schema, telemetry, and
+  Harness-event identities/hashes;
+- bounded before/after workspace manifests, changed-path count/list, canonical
+  diff hash, and a separate verifier-artifact hash;
+- retained Harness events, their collection completeness, evidence-derived
+  behavior, and explicit enforcement fidelity.
+
+Unknown is never converted to zero. Every paid attempt must close, usage and
+billing must be complete, tool results must correlate, and a real workspace
+manifest must exist for every retained required trial. Otherwise the release
+blocks even when the verifier passed.
+
+### Cost controls and estimates
+
+The coded ceiling covers **provider API spend only**:
+
+- routine ceiling: **$10**;
+- routine controlled-pair allowance: **$8** across four tasks/eight trials;
+- conditional full-pair regression rerun: **$2**;
+- reason-gated reserve: **$2**, sharing the same parent ceiling rather than
+  adding to it;
+- exceptional ceiling: **$20 maximum**. `--budget-usd 20` scales the controlled
+  pair/rerun allowances to $16/$4 so the extra headroom is usable.
+
+At routine settings the initial per-trial hard share is at most $1.00
+($8 / four tasks / two arms); calibration's 24 trials share the same $8 pair
+allowance. These are caps, not spend forecasts. Actual cost is reconciled from
+provider-reported usage; the pinned local price calculation is the conservative
+fallback, and incomplete billing blocks. Re-verify the pricing in
+`evals/lib/model-profiles.mjs` against the pinned provider before each release.
+
+Ollama adds $0 provider API spend. Existing Codex/Claude/Copilot/Grok
+subscriptions add $0 marginal API spend for these references but consume quota
+and operator time. Daytona credit consumption, post-credit sandbox charges,
+local electricity, and subscription opportunity cost are **not** in the coded
+cash ceiling; record them separately and never describe `budget.spentUsd` as
+total evaluation cost.
 
 Building blocks:
 
 - `evals/lib/model-profiles.mjs` — pinned endpoints, providers, pricing, limits.
 - `evals/lib/budget.mjs` + `evals/lib/telemetry.mjs` — code-enforced ceilings
-  (release $20 → kimi pair $10 → rerun $8 → $2 reserve gated on a recorded
-  reason) and structured per-trial transcripts/usage.
+  and a closed, correlated per-attempt usage ledger.
 - `evals/external/terminal_bench/` — Harbor-based execution: `task-lock.json`
   pinning with tree checksums, condition builders (`generic` vs `harness`, same
-  instruction and limits), the Node stdio bridge agent, and verifier evidence
-  reading (`reward.json`, pytest counts, artifact-tree hash).
+  instruction and limits), the Node/Python bridge, bounded sandbox evidence,
+  and verifier evidence.
 - `evals/hosts/` — host adapters: controlled Kimi, local Gemma, the manual
-  Codex/Claude subscription A/B contracts (unavailable telemetry recorded as
-  `null`, never estimated), and Copilot/Grok smoke checklists.
+  Codex/Claude reference contracts, and Copilot/Grok smoke checklists.
 - `evals/schema/` — `eval-run.v1` and `eval-report.v1` contracts; every run
   document is validated, and missing telemetry blocks the release.
 
-Interpretation (result per pair): baseline fail + harness pass → **harness
-win**; both pass → **parity** (compare cost/efficiency); baseline pass +
-harness fail → **harness regression** (one full fresh pair is rerun; a
-reproduced regression blocks, an unreproduced one is flaky-inconclusive);
-both fail → **inconclusive** (capability limitation); infrastructure failure →
-**infrastructure-invalid**; budget exhaustion → **inconclusive**. A safety
-bypass always blocks, calibration or not.
+### Claims and release completion
 
-Costs: a normal release spends ~$1–$4 (kimi pair, cache-dependent); the coded
-ceiling is $20 and paid steps never run when the deterministic suite,
-dependency preflight, or task-lock validation fails. Daytona sandbox spend is
-~$0.08 per pair.
+Result per task: generic fail + treatment pass is a **harness win**; both pass
+is **parity**; generic pass + treatment fail is a **harness regression**; both
+fail is **inconclusive capability**. Infrastructure and budget failures are not
+model-quality results. A regression reruns one full fresh pair for that task;
+only reproduced regressions gate as stable regressions.
+
+The Eval Card emits one of four scoped claim levels:
+
+- `demonstrated-value`: at least one active same-model treatment win;
+- `bounded-overhead`: success parity and prompt ratio <=2.0, cost ratio <=1.5,
+  and wall-time ratio <=1.25;
+- `regression`: correctness or active bounded-overhead policy regressed;
+- `inconclusive`: evidence or capability is insufficient.
+
+The statement names the observed treatment fidelity. A `prompt-and-cli` win is
+evidence for that treatment, not for unevaluated mechanical hooks, other models,
+or broad real-world productivity.
+
+A release evaluation is complete only when:
+
+- deterministic checks and all task-lock checks pass before provider spend;
+- every required task has both fresh arms, official verifier evidence, matching
+  requested/resolved model and pinned provider, and no fallback;
+- every retained paid attempt closes with complete usage/billing; tool results
+  correlate; workspace and Harness-event collection state is explicit;
+- prompt/cost/wall ratios are within policy for parity, or a win/regression is
+  classified and any regression rerun is resolved;
+- no recorded policy bypass or secret-artifact sentinel is present;
+- provider API spend is <=$10 routinely (<= $20 only with the explicit override),
+  with non-API costs disclosed separately;
+- the Eval Card lists the task set, repetitions, fidelity, claim level, spend,
+  native/reference limitations, and any missing evidence.
 
 Troubleshooting:
 
@@ -240,8 +353,11 @@ Troubleshooting:
 - `task checksum mismatch` — the downloaded task differs from the committed
   pin; investigate before re-stamping (`stampTaskLock`, then commit the lock).
 - Rate-limited or missing provider usage fields are recorded as `null`; on a
-  paid profile the driver stops immediately (spend that cannot be metered is
-  never continued), and the release blocks on missing metered telemetry.
+  paid profile unknown billing or an unclosed attempt blocks the release.
+- A local run is absent unless `--with-local` is supplied. Local failure remains
+  informational and never masks the required Kimi result.
+- `enforcementFidelity.mode=prompt-and-cli` is expected for the current Harbor
+  bridge; treat `mechanical-hooks` without trusted bridge evidence as invalid.
 - Raw transcripts stay out of the repository: they may contain provider
   metadata, local paths, or secrets printed by tools. Publish only the eval
   card and sanitized `eval-report.v1` JSON.

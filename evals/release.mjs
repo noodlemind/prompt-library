@@ -184,6 +184,23 @@ export function allocateReleaseBudgets({ releaseCeilingUsd = 10, kimiPairUsd = 8
   };
 }
 
+/** Scale the planned child allowances when an operator raises the routine ceiling. */
+export function scaleReleaseBudget(baseBudget, requestedCeilingUsd) {
+  const baseCeiling = Number(baseBudget?.releaseCeilingUsd);
+  if (!Number.isFinite(baseCeiling) || baseCeiling <= 0) throw new Error('base releaseCeilingUsd must be positive');
+  if (!Number.isFinite(requestedCeilingUsd) || requestedCeilingUsd < 0 || requestedCeilingUsd > MAX_RELEASE_API_USD) {
+    throw new Error(`release API budget must be between 0 and ${MAX_RELEASE_API_USD}`);
+  }
+  const scale = requestedCeilingUsd / baseCeiling;
+  const scaled = (value) => Number((Number(value ?? 0) * scale).toFixed(6));
+  return {
+    releaseCeilingUsd: requestedCeilingUsd,
+    kimiPairUsd: scaled(baseBudget.kimiPairUsd),
+    rerunUsd: scaled(baseBudget.rerunUsd),
+    reserveUsd: scaled(baseBudget.reserveUsd),
+  };
+}
+
 /* ------------------------------------------------------------ gate policy -- */
 
 /** §9: always-blocking rules, with gate-inactive pairs reporting instead of blocking. */
@@ -225,6 +242,12 @@ export function applyGatePolicy({ deterministic, pairs = [], smokes = [], teleme
 
 function buildClaim(pairs, telemetryComplete) {
   const active = pairs.filter((pair) => pair.comparisonTrack === 'controlled-ablation' && pair.gateActive && pair.result !== 'skipped');
+  const treatmentFidelityModes = [...new Set(active.map((pair) => pair.harness?.enforcementFidelity?.mode).filter(Boolean))].sort();
+  const treatmentLabel = treatmentFidelityModes.length === 1
+    ? `${treatmentFidelityModes[0]} treatment`
+    : treatmentFidelityModes.length > 1
+      ? `${treatmentFidelityModes.join('+')} treatments`
+      : 'evaluated treatment';
   const controlledWins = active.filter((pair) => pair.result === 'harness-win').length;
   const regressions = active.filter(
     (pair) => pair.result === 'harness-regression' || (pair.result === 'parity' && pair.efficiencyDelta?.withinThresholds === false)
@@ -233,19 +256,19 @@ function buildClaim(pairs, telemetryComplete) {
   let statement = 'The controlled evidence is not yet sufficient for a Harness value claim.';
   if (regressions > 0) {
     level = 'regression';
-    statement = 'At least one active controlled comparison regressed in correctness or bounded-overhead policy.';
+    statement = `At least one active controlled comparison of the ${treatmentLabel} regressed in correctness or bounded-overhead policy.`;
   } else if (telemetryComplete && controlledWins > 0) {
     level = 'demonstrated-value';
-    statement = 'The Harness improved verified success in at least one active same-model controlled comparison.';
+    statement = `The ${treatmentLabel} improved verified success in at least one active same-model controlled comparison.`;
   } else if (
     telemetryComplete &&
     active.length > 0 &&
     active.every((pair) => pair.result === 'parity' && pair.efficiencyDelta?.withinThresholds === true)
   ) {
     level = 'bounded-overhead';
-    statement = 'Verified success was at parity and Harness overhead stayed within the declared release thresholds.';
+    statement = `Verified success was at parity and ${treatmentLabel} overhead stayed within the declared release thresholds.`;
   }
-  return { level, statement, controlledPairs: active.length, controlledWins, regressions };
+  return { level, statement, controlledPairs: active.length, controlledWins, regressions, treatmentFidelityModes };
 }
 
 /* ------------------------------------------------------------ orchestrator -- */
@@ -324,7 +347,7 @@ export async function runRelease({ config, steps, calibrationRelease = false, re
         host,
         comparisonTrack: 'controlled-ablation',
         task: pair.task ?? null,
-        seedCount: pair.seedCount ?? null,
+        repetitionCount: pair.repetitionCount ?? pair.seedCount ?? null,
         required,
         result: classification.result,
         reason: classification.reason,
@@ -361,6 +384,31 @@ export async function runRelease({ config, steps, calibrationRelease = false, re
   // required API pair actually metered its spend — an all-null efficiency
   // block is a missing measurement, not a measurement of nothing.
   const METERED_FIELDS = ['promptTokens', 'outputTokens', 'modelRequests', 'providerAttempts', 'localCostUsd'];
+  const attributableTrialEvidence = (doc) => {
+    const efficiency = doc?.efficiency ?? {};
+    const observability = doc?.observability;
+    const workspace = doc?.workspaceEvidence;
+    if (!observability || workspace?.available !== true || !doc?.enforcementFidelity?.mode) return false;
+    const requestEvents = observability.providerEvents?.filter((event) => event.type === 'request').length;
+    return (
+      observability.providerAttemptsStarted === efficiency.providerAttempts &&
+      observability.providerAttemptsClosed === efficiency.providerAttempts &&
+      observability.unclosedProviderAttempts === 0 &&
+      observability.uncorrelatedToolResults === 0 &&
+      requestEvents === efficiency.modelRequests &&
+      Number.isFinite(workspace.changedPathCount) &&
+      workspace.changedPathCount >= workspace.changedPaths.length
+    );
+  };
+  const attributableEvidence = (doc) => {
+    const repetitions = Array.isArray(doc?.repetitions) ? doc.repetitions : [];
+    // Multi-repetition aggregates intentionally carry medians and keep real
+    // workspace manifests on the raw repetitions. Never compare those medians
+    // to the aggregate (summed) event ledger; validate every retained trial.
+    return repetitions.length > 0
+      ? repetitions.every((repetition) => attributableTrialEvidence(repetition))
+      : attributableTrialEvidence(doc);
+  };
   const meteredOk = pairEntries.every((p) => {
     if (!p.required || p.result === 'skipped') return true;
     if (!p.generic || !p.harness) return false;
@@ -372,7 +420,8 @@ export async function runRelease({ config, steps, calibrationRelease = false, re
         doc.efficiency?.billingComplete === true &&
         doc.efficiency?.costComplete === true &&
         doc.efficiency?.unknownBillingAttempts === 0 &&
-        doc.efficiency?.missingUsage === 0
+        doc.efficiency?.missingUsage === 0 &&
+        attributableEvidence(doc)
     );
   });
   const telemetryComplete = meteredOk && runDocs.every((doc) => validateAgainstSchema(doc, RUN_SCHEMA).ok);
@@ -406,18 +455,26 @@ export async function runRelease({ config, steps, calibrationRelease = false, re
     nativeProducts,
     smokes,
     budget: {
+      scope: 'provider-api-only',
       ceilingUsd: budgets.release.ceilingUsd,
       spentUsd: budgets.release.spentUsd(),
       exhausted: budgets.release.exhausted,
       breached: budgets.release.breached,
       overrunUsd: budgets.release.overrunUsd(),
       reserveUsed: budgets.reserveUsedReason(),
+      allocations: {
+        controlledPairUsd: budgets.kimiPair.ceilingUsd,
+        regressionRerunUsd: budgets.rerun.ceilingUsd,
+        reasonedReserveUsd: budgets.reserve.amountUsd,
+      },
     },
     gate,
     claim,
     limitations: [
       'The pinned task set is a release canary, not a broad productivity benchmark.',
       'Native product runs (Codex, Claude Code, Pi, and similar agents) are reference evidence only and never substitute for a same-model controlled ablation.',
+      'Prompt-and-CLI Terminal-Bench results do not establish the value or safety of mechanical hooks; enforcement fidelity is reported per run.',
+      'The coded cash ceiling covers provider API charges only; Daytona credit consumption, local electricity, and subscription opportunity cost require separate operator accounting.',
       'A live paid calibration is still required before publishing measured ratio results from this implementation.',
     ],
   };
@@ -453,7 +510,7 @@ export function buildMarkdownReport(report) {
     ...(report.smokes.length
       ? [`Smokes: ${report.smokes.map((s) => `${s.host} ${s.ok ? 'ok' : `failed (${(s.failed ?? []).join(', ')})`}`).join(' · ')}`, '']
       : []),
-    `Incremental API spend: $${report.budget.spentUsd.toFixed(2)} of $${report.budget.ceilingUsd.toFixed(2)} ceiling${report.budget.breached ? ` (BREACHED by $${report.budget.overrunUsd.toFixed(2)})` : ''}${report.budget.reserveUsed ? ` (reserve used: ${report.budget.reserveUsed})` : ''}.`,
+    `Incremental provider API spend: $${report.budget.spentUsd.toFixed(2)} of $${report.budget.ceilingUsd.toFixed(2)} ceiling${report.budget.breached ? ` (BREACHED by $${report.budget.overrunUsd.toFixed(2)})` : ''}${report.budget.reserveUsed ? ` (reserve used: ${report.budget.reserveUsed})` : ''}.`,
     '',
     report.gate.block ? `**Release blocked:** ${report.gate.reasons.join('; ')}` : '**Release not blocked by evaluation gates.**',
     '',
@@ -481,6 +538,7 @@ async function main() {
   const profile = flag('--profile', 'release-canary');
   const calibrationRelease = argv.includes('--calibration');
   const deterministicOnly = argv.includes('--deterministic-only');
+  const withLocal = argv.includes('--with-local');
   const json = argv.includes('--json');
   const raw = loadYamlConfig(profile);
   const lockFileFlag = flag('--lock-file', null); // bootstrap/test hook; default is the committed lock
@@ -495,12 +553,7 @@ async function main() {
     ({ task, taskChecksum = null, role = null }) => ({ task, taskChecksum, role })
   );
   const config = {
-    budget: {
-      releaseCeilingUsd: budgetUsd,
-      kimiPairUsd: raw.budget.kimiPairUsd,
-      rerunUsd: raw.budget.rerunUsd,
-      reserveUsd: raw.budget.reserveUsd,
-    },
+    budget: scaleReleaseBudget(raw.budget, budgetUsd),
     task: {
       datasetRef: lock.datasetRef,
       task: flag('--task', taskSet.length === 1 ? taskSet[0].task : 'multi-task-canary'),
@@ -542,10 +595,17 @@ async function main() {
     // harbor, credentials, or task verification blocks — it never greens.
     const { buildLiveSteps } = await import('./external/terminal_bench/live-steps.mjs');
     const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-release-'));
-    const seeds = calibrationRelease ? raw.seeds?.calibration ?? 3 : raw.seeds?.routine ?? 1;
+    const repetitionsConfig = raw.repetitions ?? raw.seeds;
+    const repetitions = calibrationRelease ? repetitionsConfig?.calibration ?? 3 : repetitionsConfig?.routine ?? 1;
     steps = {
       deterministic: deterministicStep,
-      ...buildLiveSteps({ config: raw, lock, workDir, releaseSha, harnessVersion, seeds }),
+      ...buildLiveSteps({ config: raw, lock, workDir, releaseSha, harnessVersion, repetitions, localEnabled: withLocal }),
+      nativeProducts: async () => (raw.nativeProductRotation ?? []).map((host) => ({
+        host,
+        status: 'not-run',
+        telemetryAvailable: false,
+        reason: 'subscription/native agent references require an explicit separately captured run',
+      })),
     };
     requiredPairs = ['openrouter-kimi'];
   }

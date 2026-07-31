@@ -25,10 +25,10 @@ efficiencyThresholds:
 # not block, efficiency regressions are report-only, safety always blocks.
 calibrationReleases: 3
 
-# Seeds per condition per task. Calibration uses 3 (majority verdict, median
+# Independent repetitions per condition per task. Calibration uses 3 (majority verdict, median
 # efficiency) to establish variance bands; routine gating uses 1 with the §9
 # rerun-on-regression as the variance control.
-seeds:
+repetitions:
   calibration: 3
   routine: 1
 
@@ -41,6 +41,8 @@ pairs:
   - host: ollama-gemma
     enabled: true
     gate: informational
+    schedule: explicit-with-local
+    taskRole: anchor
     timeoutMs: 1800000
 
 # Optional native-product references. These never enter the controlled A/B

@@ -83,12 +83,19 @@ fs.writeFileSync(agentEnv.HARNESS_EVAL_TB_TELEMETRY_FILE, JSON.stringify({
     afterManifestHash: 'b'.repeat(64),
     diffHash: 'c'.repeat(64),
     changedPaths: ['src/result.txt'],
+    changedPathCount: 1,
+    changedPathsTruncated: false,
   },
   harnessEvents: [],
+  harnessEventEvidence: { available: true, reason: null, retainedEvents: 0, sourceTruncated: false },
   enforcement: { hooksActive: false, policyBypassAchieved: false },
   telemetry: {
     totals: { requests: 4, modelRequests: 4, providerAttempts: 4, providerResponses: 4, providerErrors: 0, retries: 0, openAttempts: 0, unknownBillingAttempts: 0, missingUsage: 0, promptTokens: 3000, cachedTokens: 500, reasoningTokens: 0, outputTokens: 700, localCostUsd: 0.015, providerCostUsd: 0.02, usageComplete: true, providerCostComplete: true, billingComplete: true, costComplete: true },
-    events: [{ seq: 0, type: 'response', model: 'moonshotai/kimi-k2.7-code', provider: 'Moonshot AI', generationId: 'g1' }],
+    events: Array.from({ length: 4 }, (_, index) => [
+      { seq: index * 3, type: 'request', requestId: 'r' + (index + 1) },
+      { seq: index * 3 + 1, type: 'request_attempt', requestId: 'r' + (index + 1), attemptId: 'a' + (index + 1) },
+      { seq: index * 3 + 2, type: 'response', requestId: 'r' + (index + 1), attemptId: 'a' + (index + 1), model: 'moonshotai/kimi-k2.7-code', provider: 'Moonshot AI', generationId: 'g' + (index + 1) },
+    ]).flat(),
   },
 }));
 process.exit(0);

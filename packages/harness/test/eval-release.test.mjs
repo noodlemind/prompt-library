@@ -9,6 +9,7 @@ import {
   runRelease,
   buildMarkdownReport,
   efficiencyDelta,
+  scaleReleaseBudget,
 } from '../../../evals/release.mjs';
 
 const RUN_SCHEMA = JSON.parse(fs.readFileSync(new URL('../../../evals/schema/eval-run.v1.schema.json', import.meta.url), 'utf8'));
@@ -47,6 +48,18 @@ function fullRun(condition, verdict, over = {}) {
       sandbox: null,
       startedAt: '2026-07-30T00:00:00Z',
       endedAt: '2026-07-30T00:10:00Z',
+      pairId: 'pair-1',
+      repetitionId: 'repetition-1',
+      repetitionIndex: 1,
+      orderIndex: condition === 'generic' ? 1 : 2,
+      attempt: 'a',
+      aggregation: null,
+      taskHash: '1'.repeat(64),
+      conditionHash: '2'.repeat(64),
+      systemPromptHash: '3'.repeat(64),
+      toolSchemaHash: '4'.repeat(64),
+      telemetryHash: '5'.repeat(64),
+      harnessEventsHash: '6'.repeat(64),
     },
     correctness: {
       verifierReward: verdict === 'pass' ? 1 : 0,
@@ -55,6 +68,7 @@ function fullRun(condition, verdict, over = {}) {
       assertionsFailed: null,
       requiredFilesCreated: null,
       finalDiffHash: null,
+      verifierArtifactHash: null,
       exitReason: 'model_finish',
       completedWithinTimeout: true,
       completedWithinBudget: true,
@@ -65,11 +79,16 @@ function fullRun(condition, verdict, over = {}) {
       providerAttempts: 5,
       providerResponses: 5,
       providerErrors: 0,
+      openProviderAttempts: 0,
       retries: 0,
       unknownBillingAttempts: 0,
       toolCalls: 9,
       terminalCommands: 7,
       failedCommands: 1,
+      contextCompactions: 0,
+      compactedToolResults: 0,
+      requestPayloadChars: 4000,
+      peakRequestPayloadChars: 1000,
       promptTokens: 1000,
       cachedPromptTokens: 200,
       reasoningTokens: 0,
@@ -96,6 +115,38 @@ function fullRun(condition, verdict, over = {}) {
       policyBypassAttempted: null,
       policyBypassAchieved: false,
     },
+    enforcementFidelity: {
+      mode: condition === 'harness' ? 'prompt-and-cli' : 'none',
+      promptContractActive: condition === 'harness',
+      cliActivated: condition === 'harness',
+      mechanicalHooksActive: false,
+      harnessEventsCaptured: true,
+      evidenceSource: condition === 'harness' ? 'condition-and-setup' : 'control-condition',
+    },
+    workspaceEvidence: {
+      available: true,
+      collectionMode: 'bounded-content-hash-manifest-v1',
+      beforeManifestHash: 'a'.repeat(64),
+      afterManifestHash: 'b'.repeat(64),
+      diffHash: 'c'.repeat(64),
+      changedPaths: ['src/result.txt'],
+      changedPathCount: 1,
+      changedPathsTruncated: false,
+      reason: null,
+    },
+    observability: {
+      providerEvents: Array.from({ length: 5 }, (_, index) => ({ type: 'request', requestId: `request-${index + 1}` })),
+      toolEvents: [],
+      harnessEvents: [],
+      harnessEventEvidence: { available: true, reason: null, retainedEvents: 0, sourceTruncated: false },
+      providerAttemptsStarted: 5,
+      providerAttemptsClosed: 5,
+      unclosedProviderAttempts: 0,
+      correlatedToolResults: 9,
+      uncorrelatedToolResults: 0,
+      eventEvidenceHash: 'd'.repeat(64),
+    },
+    repetitions: [],
     subscription: null,
   };
   for (const [section, value] of Object.entries(over)) {
@@ -111,6 +162,42 @@ function pairOf(host, genericVerdict, harnessVerdict, over = {}) {
     harness: fullRun('harness', harnessVerdict, over.harness ?? {}),
     failureKind: over.failureKind ?? null,
   };
+}
+
+function repeatedRun(condition, verdict, count = 3) {
+  const repetitions = Array.from({ length: count }, (_, index) => {
+    const run = fullRun(condition, verdict);
+    run.reproducibility.repetitionId = `repetition-${index + 1}`;
+    run.reproducibility.repetitionIndex = index + 1;
+    return run;
+  });
+  const aggregate = structuredClone(repetitions[0]);
+  aggregate.reproducibility.repetitionId = null;
+  aggregate.reproducibility.repetitionIndex = null;
+  aggregate.reproducibility.orderIndex = null;
+  aggregate.reproducibility.aggregation = 'majority-verdict-median-efficiency';
+  aggregate.correctness.finalDiffHash = null;
+  aggregate.correctness.verifierArtifactHash = null;
+  aggregate.workspaceEvidence = {
+    available: false,
+    collectionMode: 'per-repetition',
+    beforeManifestHash: null,
+    afterManifestHash: null,
+    diffHash: null,
+    changedPaths: ['src/result.txt'],
+    changedPathCount: count,
+    changedPathsTruncated: false,
+    reason: 'workspace-evidence-retained-per-repetition',
+  };
+  aggregate.observability = {
+    ...aggregate.observability,
+    providerEvents: repetitions.flatMap((run) => run.observability.providerEvents),
+    providerAttemptsStarted: count * 5,
+    providerAttemptsClosed: count * 5,
+    correlatedToolResults: count * 9,
+  };
+  aggregate.repetitions = repetitions;
+  return aggregate;
 }
 
 function baseSteps(overrides = {}) {
@@ -178,6 +265,13 @@ test('the local release orchestrator can never be configured above the absolute 
   assert.equal(allocateReleaseBudgets({ ...CONFIG.budget, releaseCeilingUsd: 10 }).release.ceilingUsd, 10);
 });
 
+test('raising the release ceiling scales the controlled pair and rerun allowances instead of creating unusable headroom', () => {
+  const base = { releaseCeilingUsd: 10, kimiPairUsd: 8, rerunUsd: 2, reserveUsd: 2 };
+  assert.deepEqual(scaleReleaseBudget(base, 10), base);
+  assert.deepEqual(scaleReleaseBudget(base, 20), { releaseCeilingUsd: 20, kimiPairUsd: 16, rerunUsd: 4, reserveUsd: 4 });
+  assert.throws(() => scaleReleaseBudget(base, 20.01), /20/);
+});
+
 test('efficiency deltas use like-for-like evidence and the configured parity thresholds', () => {
   const generic = fullRun('generic', 'pass');
   const harness = fullRun('harness', 'pass', {
@@ -231,9 +325,29 @@ test('an all-green release produces a schema-valid report and exit code 0', asyn
   assert.equal(kimi.result, 'parity');
   assert.equal(kimi.comparisonTrack, 'controlled-ablation');
   assert.equal(report.claim.level, 'bounded-overhead');
+  assert.deepEqual(report.claim.treatmentFidelityModes, ['prompt-and-cli']);
   assert.equal(report.nativeProducts.length, 1);
   assert.ok(!('generic' in report.nativeProducts[0]) && !('harness' in report.nativeProducts[0]));
   assert.equal(report.gate.block, false);
+  assert.equal(report.budget.scope, 'provider-api-only');
+});
+
+test('required multi-repetition evidence is validated per retained trial instead of comparing medians to summed events', async () => {
+  const repeatedPair = {
+    host: 'openrouter-kimi',
+    repetitionCount: 3,
+    generic: repeatedRun('generic', 'pass'),
+    harness: repeatedRun('harness', 'pass'),
+    failureKind: null,
+  };
+  const { report, exitCode } = await runRelease({
+    config: CONFIG,
+    steps: baseSteps({ kimiPair: async () => repeatedPair }),
+    requiredPairs: ['openrouter-kimi'],
+  });
+  assert.equal(exitCode, 0, report.gate.reasons.join('; '));
+  assert.equal(report.pairs.find((pair) => pair.host === 'openrouter-kimi').repetitionCount, 3);
+  assert.equal(report.claim.level, 'bounded-overhead');
 });
 
 test('active success parity above an efficiency threshold blocks the release claim', async () => {
@@ -477,6 +591,21 @@ test('a required API pair with incomplete paid usage cannot produce a green rele
   const { report, exitCode } = await runRelease({ config: CONFIG, steps, requiredPairs: ['openrouter-kimi'] });
   assert.equal(exitCode, 1);
   assert.ok(report.gate.reasons.some((r) => /telemetry/i.test(r)));
+});
+
+test('a required pair without a closed attempt ledger or real workspace manifest cannot produce a green release', async () => {
+  for (const harnessOverride of [
+    { workspaceEvidence: { available: false, beforeManifestHash: null, afterManifestHash: null, diffHash: null } },
+    { observability: { providerAttemptsClosed: 4, unclosedProviderAttempts: 1 } },
+    { observability: { uncorrelatedToolResults: 1 } },
+  ]) {
+    const steps = baseSteps({
+      kimiPair: async () => pairOf('openrouter-kimi', 'pass', 'pass', { harness: harnessOverride }),
+    });
+    const { report, exitCode } = await runRelease({ config: CONFIG, steps, requiredPairs: ['openrouter-kimi'] });
+    assert.equal(exitCode, 1);
+    assert.ok(report.gate.reasons.some((reason) => /telemetry/i.test(reason)));
+  }
 });
 
 test('a multi-task pair step yields one report entry per task, each classified independently', async () => {
