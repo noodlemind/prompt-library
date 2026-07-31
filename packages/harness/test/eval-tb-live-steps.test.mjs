@@ -766,6 +766,7 @@ test('a complete before/after manifest with no changed paths is available eviden
       workspaceEvidence: {
         available: true,
         collectionMode: 'bounded-content-hash-manifest-v1',
+        containmentMode: 'descriptor-relative-procfs',
         beforeManifestHash: 'b'.repeat(64),
         afterManifestHash: 'b'.repeat(64),
         diffHash: null,
@@ -784,6 +785,7 @@ test('a complete before/after manifest with no changed paths is available eviden
     endedAt: '2026-07-31T00:01:00Z',
   });
   assert.equal(doc.workspaceEvidence.available, true);
+  assert.equal(doc.workspaceEvidence.containmentMode, 'descriptor-relative-procfs');
   assert.equal(doc.workspaceEvidence.diffHash, null);
   assert.equal(doc.workspaceEvidence.reason, null);
   assert.equal(doc.correctness.finalDiffHash, null);

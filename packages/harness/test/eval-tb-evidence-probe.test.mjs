@@ -4,7 +4,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { test } from 'node:test';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { manifest, writeStateJson } from '../../../evals/external/terminal_bench/evidence-probe.mjs';
 import {
   BUNDLE_MOUNT_TARGET,
   evidenceProbeWrapperScript,
@@ -131,6 +132,78 @@ test('workspace traversal has independent directory, node, and depth bounds with
   assert.ok(Number.isInteger(state.nodeCount));
 });
 
+test('directory enumeration stops at the node cap before retaining and sorting an unbounded name list', () => {
+  const cwd = workspace();
+  for (let index = 0; index < 17; index += 1) {
+    fs.writeFileSync(path.join(cwd, `entry-${String(index).padStart(2, '0')}`), '');
+  }
+
+  const result = manifest(cwd, { maxNodes: 16 });
+
+  assert.equal(result.available, false);
+  assert.equal(result.reason, 'workspace-node-limit-exceeded');
+  assert.equal(result.nodeCount, 17, 'the collector reads only the single entry needed to prove the cap was exceeded');
+  assert.equal(result.limits.maxNodes, 16);
+});
+
+test('an opened directory cannot be redirected through an ancestor symlink race', () => {
+  const cwd = workspace();
+  const outside = workspace();
+  fs.mkdirSync(path.join(cwd, 'nested'));
+  fs.writeFileSync(path.join(cwd, 'nested', 'inside.txt'), 'inside');
+  fs.writeFileSync(path.join(outside, 'outside-secret.txt'), 'must-not-be-hashed');
+  let swapped = false;
+
+  const result = manifest(cwd, {
+    onDirectoryOpened({ relative }) {
+      if (relative !== 'nested' || swapped) return;
+      swapped = true;
+      fs.renameSync(path.join(cwd, 'nested'), path.join(cwd, 'parked'));
+      fs.symlinkSync(outside, path.join(cwd, 'nested'), 'dir');
+    },
+  });
+
+  assert.equal(swapped, true);
+  if (result.containmentMode === 'descriptor-relative-procfs') {
+    assert.equal(result.available, true);
+    assert.deepEqual(result.entries.map((entry) => entry.path), ['nested/inside.txt']);
+    assert.ok(!JSON.stringify(result).includes('outside-secret'));
+  } else {
+    assert.equal(result.available, false);
+    assert.equal(result.reason, 'workspace-ancestor-identity-ambiguous');
+    assert.equal(result.containmentMode, 'identity-checked-path-fallback');
+  }
+});
+
+test('untrusted FIFO read candidates fail promptly instead of blocking before fstat', (t) => {
+  const cwd = workspace();
+  const fifo = path.join(cwd, 'candidate');
+  const created = spawnSync('mkfifo', [fifo], { encoding: 'utf8' });
+  if (created.error?.code === 'ENOENT') {
+    t.skip('mkfifo is unavailable');
+    return;
+  }
+  assert.equal(created.status, 0, created.stderr);
+  const source = `
+    import { readRegularFileNoFollow } from ${JSON.stringify(pathToFileURL(probe).href)};
+    try {
+      readRegularFileNoFollow(process.argv[1], 1024);
+      process.exitCode = 3;
+    } catch (error) {
+      process.stdout.write(String(error.evidenceReason ?? error.message));
+    }
+  `;
+
+  const result = spawnSync(process.execPath, ['--input-type=module', '-e', source, fifo], {
+    encoding: 'utf8',
+    timeout: 2_000,
+  });
+
+  assert.equal(result.error, undefined, result.error?.message);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout, 'workspace-entry-not-regular-file');
+});
+
 test('probe state cannot escape through a symlinked .harness directory or nested state directory', () => {
   const outside = workspace();
 
@@ -146,6 +219,35 @@ test('probe state cannot escape through a symlinked .harness directory or nested
   const stateFailure = runFailure(symlinkedState, ['snapshot', '--output', '.harness/state/eval-before.json']);
   assert.match(stateFailure.stderr, /state.*symlink/i);
   assert.equal(fs.existsSync(path.join(outside, 'eval-before.json')), false);
+});
+
+test('an opened state parent cannot be redirected before the atomic write', () => {
+  const cwd = workspace();
+  const outside = workspace();
+  fs.mkdirSync(path.join(cwd, '.harness', 'state'), { recursive: true });
+  let containmentMode = null;
+  let failure = null;
+
+  try {
+    writeStateJson(cwd, '.harness/state/eval.json', { ok: true }, {
+      onParentOpened(info) {
+        containmentMode = info.containmentMode;
+        fs.renameSync(path.join(cwd, '.harness', 'state'), path.join(cwd, '.harness', 'parked'));
+        fs.symlinkSync(outside, path.join(cwd, '.harness', 'state'), 'dir');
+      },
+    });
+  } catch (error) {
+    failure = error;
+  }
+
+  assert.equal(fs.existsSync(path.join(outside, 'eval.json')), false, 'the raced external directory is never written');
+  if (containmentMode === 'descriptor-relative-procfs') {
+    assert.equal(failure, null);
+    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(cwd, '.harness', 'parked', 'eval.json'), 'utf8')), { ok: true });
+  } else {
+    assert.match(failure?.evidenceReason ?? failure?.message ?? '', /ancestor-identity-ambiguous/);
+    assert.equal(fs.existsSync(path.join(cwd, '.harness', 'parked', 'eval.json')), false);
+  }
 });
 
 test('changed-path detail is bounded while the complete diff count and hash are retained', () => {
@@ -262,12 +364,31 @@ test('event and check projection rejects are counted and make evidence explicitl
   assert.ok(!JSON.stringify(collected).includes('must-not-leave'));
 });
 
+test('valid checks beyond the retained projection limit are counted as rejected', () => {
+  const cwd = workspace();
+  run(cwd, ['snapshot', '--output', '.harness/eval-before.json']);
+  const checks = Array.from({ length: 53 }, (_, index) => ({
+    id: `C${index + 1}`,
+    pass: true,
+    severity: 'ok',
+  }));
+  fs.writeFileSync(path.join(cwd, '.harness', 'events.jsonl'), `${JSON.stringify({ type: 'gate', checks })}\n`);
+
+  const collected = run(cwd, ['collect', '--before', '.harness/eval-before.json']);
+
+  assert.equal(collected.harnessEvents[0].checks.length, 50);
+  assert.equal(collected.harnessEventEvidence.projectionRejectedChecks, 3);
+  assert.equal(collected.harnessEventEvidence.complete, false);
+  assert.match(collected.harnessEventEvidence.reason, /projection-rejected/);
+});
+
 test('the evidence probe is bundled behind the same cross-architecture Node selection as Harness', () => {
   const root = workspace();
   const bundleDir = path.join(root, 'bundle');
   fs.mkdirSync(path.join(root, 'packages', 'harness'), { recursive: true });
   fs.mkdirSync(path.join(root, 'evals', 'external', 'terminal_bench'), { recursive: true });
   fs.writeFileSync(path.join(root, 'evals', 'external', 'terminal_bench', 'evidence-probe.mjs'), 'process.stdout.write("{}\\n")');
+  fs.writeFileSync(path.join(root, 'evals', 'external', 'terminal_bench', 'bounded-exec.mjs'), 'process.stdout.write("{}\\n")');
   const calls = [];
   prepareHarnessBundle({
     bundleDir,
@@ -275,6 +396,12 @@ test('the evidence probe is bundled behind the same cross-architecture Node sele
     nodeTarballs: { x64: '/tmp/node-x64.tar.gz', arm64: null },
     spawnImpl: (cmd, args) => {
       calls.push([cmd, args]);
+      if (cmd === 'cp') fs.cpSync(args[1], args[2], { recursive: true });
+      if (cmd === 'tar') {
+        const destination = args[args.indexOf('-C') + 1];
+        fs.mkdirSync(path.join(destination, 'bin'), { recursive: true });
+        fs.writeFileSync(path.join(destination, 'bin', 'node'), '#!/bin/sh\n', { mode: 0o755 });
+      }
       return { status: 0, stderr: '' };
     },
   });
@@ -289,7 +416,7 @@ test('the evidence probe is bundled behind the same cross-architecture Node sele
   assert.ok(calls.some(([cmd]) => cmd === 'tar'));
 });
 
-test('the Python Harbor bridge parses complete JSON before bounding model-visible stdout', () => {
+test('the Python Harbor bridge never promotes model-command JSON into parsed protocol data', () => {
   const result = runPython(`
 import asyncio, json
 from evals.external.terminal_bench.harbor_agent import StdioBridgeAgent
@@ -309,14 +436,14 @@ async def main():
     ordinary = await agent._exec(Environment(), "cat result.json")
     print(json.dumps({
         "stdoutLength": len(result["stdout"]),
-        "parsedLength": len(result["parsedStdout"]["payload"]),
+        "verifyExposed": "parsedStdout" in result,
         "ordinaryExposed": "parsedStdout" in ordinary,
     }))
 
 asyncio.run(main())
 `);
-  assert.equal(result.stdoutLength, 6000);
-  assert.equal(result.parsedLength, 9000);
+  assert.ok(result.stdoutLength <= 6000);
+  assert.equal(result.verifyExposed, false, 'sandbox-authored verifier JSON is untrusted data');
   assert.equal(result.ordinaryExposed, false, 'arbitrary JSON command output is never copied into the agent protocol unbounded');
 });
 
@@ -338,6 +465,7 @@ collected = {
     "workspaceEvidence": {
         "available": True,
         "collectionMode": "bounded-content-hash-manifest-v1",
+        "containmentMode": "descriptor-relative-procfs",
         "beforeManifestHash": before_hash,
         "afterManifestHash": after_hash,
         "diffHash": diff_hash,
@@ -345,7 +473,7 @@ collected = {
         "reason": None,
     },
     "harnessEvents": [{"type": "pre_tool", "decision": "allow"}],
-    "harnessEventEvidence": {"available": True, "reason": None, "retainedEvents": 1, "sourceTruncated": False},
+    "harnessEventEvidence": {"available": True, "complete": True, "reason": None, "retainedEvents": 1, "sourceTruncated": False, "projectionRejectedEvents": 0, "projectionRejectedChecks": 0},
     "enforcement": {"hooksActive": True, "source": "mechanical-hook-events"},
 }
 
@@ -364,8 +492,16 @@ class Environment:
             return Result(json.dumps(collected))
         return Result("ok")
 
+class Agent(StdioBridgeAgent):
+    async def _exec(self, environment, command, **kwargs):
+        result = await environment.exec(command=command)
+        normalized = {"code": result.return_code, "stdout": result.output, "stderr": result.stderr}
+        if kwargs.get("parse_json"):
+            normalized["_parsedJson"] = json.loads(result.output)
+        return normalized
+
 async def main():
-    agent = StdioBridgeAgent()
+    agent = Agent()
     agent._extra_env = {
         "HARNESS_EVAL_TB_CONDITION": str(condition),
         "HARNESS_EVAL_TB_TELEMETRY_FILE": str(done_file),
@@ -383,6 +519,7 @@ asyncio.run(main())
   assert.match(result.commands[1], /evidence-probe snapshot/, 'the baseline is taken after setup activation');
   assert.match(result.commands[2], /evidence-probe collect/);
   assert.equal(result.done.workspaceEvidence.diffHash, 'd'.repeat(64));
+  assert.equal(result.done.workspaceEvidence.containmentMode, 'descriptor-relative-procfs');
   assert.equal(result.done.harnessEvents[0].type, 'pre_tool');
   assert.equal(result.done.harnessEventEvidence.retainedEvents, 1);
   assert.equal(result.done.enforcement.hooksActive, true);
@@ -408,8 +545,13 @@ class Result:
 class Environment:
     async def exec(self, command=None, **kwargs): return Result()
 
+class Agent(StdioBridgeAgent):
+    async def _exec(self, environment, command, **kwargs):
+        result = await environment.exec(command=command)
+        return {"code": result.return_code, "stdout": result.output, "stderr": result.stderr}
+
 async def main():
-    agent = StdioBridgeAgent()
+    agent = Agent()
     agent._extra_env = {
         "HARNESS_EVAL_TB_CONDITION": str(condition),
         "HARNESS_EVAL_TB_TELEMETRY_FILE": str(done_file),

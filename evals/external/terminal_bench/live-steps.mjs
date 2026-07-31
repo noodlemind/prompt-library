@@ -92,6 +92,9 @@ function workspaceEvidenceOf(done) {
   return {
     available,
     collectionMode: source?.collectionMode ?? null,
+    containmentMode: ['descriptor-relative-procfs', 'identity-checked-path-fallback'].includes(source?.containmentMode)
+      ? source.containmentMode
+      : null,
     beforeManifestHash: available ? source.beforeManifestHash : null,
     afterManifestHash: available ? source.afterManifestHash : null,
     diffHash: available ? source.diffHash ?? null : null,

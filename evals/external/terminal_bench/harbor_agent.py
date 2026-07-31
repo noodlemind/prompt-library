@@ -377,6 +377,7 @@ class StdioBridgeAgent(BaseAgent):
             "workspaceEvidence": {
                 "available": False,
                 "collectionMode": "bounded-content-hash-manifest-v1",
+                "containmentMode": None,
                 "beforeManifestHash": None,
                 "afterManifestHash": None,
                 "diffHash": None,
@@ -441,9 +442,13 @@ class StdioBridgeAgent(BaseAgent):
             if isinstance(raw_changed_count, int) and raw_changed_count >= len(changed_paths)
             else len(changed_paths)
         )
+        containment_mode = workspace.get("containmentMode")
+        if containment_mode not in {"descriptor-relative-procfs", "identity-checked-path-fallback"}:
+            containment_mode = None
         safe_workspace = {
             "available": available,
             "collectionMode": "bounded-content-hash-manifest-v1",
+            "containmentMode": containment_mode,
             "beforeManifestHash": hashes[0] if available else None,
             "afterManifestHash": hashes[1] if available else None,
             "diffHash": hashes[2] if available else None,

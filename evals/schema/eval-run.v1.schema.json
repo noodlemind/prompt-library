@@ -168,6 +168,10 @@
       "properties": {
         "available": { "type": "boolean" },
         "collectionMode": { "type": ["string", "null"] },
+        "containmentMode": {
+          "type": ["string", "null"],
+          "enum": ["descriptor-relative-procfs", "identity-checked-path-fallback", null]
+        },
         "beforeManifestHash": { "type": ["string", "null"] },
         "afterManifestHash": { "type": ["string", "null"] },
         "diffHash": { "type": ["string", "null"] },
