@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { buildGenericCondition, NEUTRAL_SYSTEM_PROMPT } from '../../../evals/external/terminal-bench/generic-condition.mjs';
-import { buildHarnessCondition } from '../../../evals/external/terminal-bench/harness-condition.mjs';
+import { buildGenericCondition, NEUTRAL_SYSTEM_PROMPT } from '../../../evals/external/terminal_bench/generic-condition.mjs';
+import { buildHarnessCondition } from '../../../evals/external/terminal_bench/harness-condition.mjs';
 
 const INSTRUCTION = 'Reimplement the COBOL program in Python producing identical output files.';
 const LIMITS = { maxSteps: 60, timeoutMs: 15 * 60_000, maxOutputTokens: 8192, trialCeilingUsd: 5 };

@@ -182,7 +182,7 @@ Building blocks:
 - `evals/lib/budget.mjs` + `evals/lib/telemetry.mjs` — code-enforced ceilings
   (release $20 → kimi pair $10 → rerun $8 → $2 reserve gated on a recorded
   reason) and structured per-trial transcripts/usage.
-- `evals/external/terminal-bench/` — Harbor-based execution: `task-lock.json`
+- `evals/external/terminal_bench/` — Harbor-based execution: `task-lock.json`
   pinning with tree checksums, condition builders (`generic` vs `harness`, same
   instruction and limits), the Node stdio bridge agent, and verifier evidence
   reading (`reward.json`, pytest counts, artifact-tree hash).

@@ -4,7 +4,8 @@
   "task": "cobol-modernization",
   "registryUrl": "https://www.tbench.ai/benchmarks/terminal-bench-2/cobol-modernization",
   "lockedAt": "2026-07-30",
-  "taskChecksum": null,
+  "stampedFrom": "harbor download terminal-bench@2.0 (harbor 0.20.0, export mode)",
+  "taskChecksum": "2f6a6312c196794d62305d01d5ea955dda13c88c2b61761df4f52813cad1abc0",
   "verifier": {
     "rewardFiles": ["reward.json", "reward.txt"],
     "passingReward": 1

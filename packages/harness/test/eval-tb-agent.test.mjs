@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { PassThrough } from 'node:stream';
 import { test } from 'node:test';
-import { BRIDGE_TOOLS, runStdioAgent } from '../../../evals/external/terminal-bench/agent.mjs';
+import { BRIDGE_TOOLS, runStdioAgent } from '../../../evals/external/terminal_bench/agent.mjs';
 import { replayDriver, ProviderError } from '../../../evals/lib/drivers.mjs';
 import { createTelemetry } from '../../../evals/lib/telemetry.mjs';
 

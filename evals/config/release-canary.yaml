@@ -2,7 +2,7 @@
 profile: release-canary
 
 task:
-  lockFile: evals/external/terminal-bench/task-lock.json
+  lockFile: evals/external/terminal_bench/task-lock.json
 
 # Cost controls (§10). The ceiling is enforced in code before every provider
 # request; the reserve is unusable without a recorded reason.

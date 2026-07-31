@@ -57,8 +57,36 @@ export function verifyTaskAgainstLock(taskDir, lock) {
   return { ok: true, reason: '', checksum };
 }
 
-export function buildHarborRunArgs({ lock, agentRef, model, envName, trials = 1 }) {
-  return ['run', '-d', lock.datasetRef, '--task-name', lock.task, '--agent', agentRef, '--model', model, '--env', envName, '-n', String(trials)];
+// Flags verified against harbor 0.20.0 (src/harbor/cli/jobs.py):
+// -i/--include-task-name filters tasks, -k/--n-attempts is attempts per trial,
+// -n/--n-concurrent is CONCURRENCY, --job-name/-o/--jobs-dir pin the output
+// identity, -y auto-confirms prompts.
+export function buildHarborRunArgs({ lock, agentRef, model, envName, jobName, jobsDir, attempts = 1 }) {
+  return [
+    'run',
+    '-d',
+    lock.datasetRef,
+    '--include-task-name',
+    lock.task,
+    '--agent',
+    agentRef,
+    '--model',
+    model,
+    '--env',
+    envName,
+    '--n-attempts',
+    String(attempts),
+    '--n-concurrent',
+    '1',
+    '-y',
+    ...(jobName ? ['--job-name', jobName] : []),
+    ...(jobsDir ? ['--jobs-dir', jobsDir] : []),
+  ];
+}
+
+/** The deterministic job directory for an invocation that passed --job-name/--jobs-dir. */
+export function jobDirFor({ jobsDir, jobName }) {
+  return path.join(jobsDir, jobName);
 }
 
 /** Run the harbor CLI. `spawnImpl` mirrors spawnSync's contract for testability. */
@@ -111,6 +139,9 @@ export function readTrialResult(jobDir, { passingReward = 1 } = {}) {
 export function classifyFailure({ run, reward, providerFailure = false, jobDirCreated = true }) {
   if (run.spawnError || run.timedOut) return 'infrastructure';
   if (!jobDirCreated) return 'infrastructure';
+  // A nonzero harbor exit is classified before any reward is trusted — a
+  // reward file read out of a failed invocation is not evidence.
+  if (typeof run.code === 'number' && run.code !== 0) return 'infrastructure';
   if (providerFailure) return 'provider';
   if (reward == null) return 'verifier';
   return null;

@@ -332,7 +332,7 @@ async function main() {
   };
 
   const { runEvals, summarize } = await import('./lib/runner.mjs');
-  const { validateTaskLock } = await import('./external/terminal-bench/harbor-adapter.mjs');
+  const { validateTaskLock } = await import('./external/terminal_bench/harbor-adapter.mjs');
 
   const steps = {
     deterministic: async () => {

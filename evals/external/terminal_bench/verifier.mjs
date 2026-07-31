@@ -85,8 +85,13 @@ export function hashTree(dir) {
  */
 export function collectVerifierEvidence(trialDir) {
   const files = walkFiles(trialDir);
-  const rewardJson = files.find((f) => path.basename(f) === 'reward.json');
-  const rewardTxt = files.find((f) => path.basename(f) === 'reward.txt');
+  // Reward evidence is trusted ONLY from the official verifier output
+  // directory — a reward-named file anywhere else in the tree (e.g. dropped
+  // into the workspace by the agent) must never override the real verdict.
+  const officialDir = `${path.sep}logs${path.sep}verifier${path.sep}`;
+  const official = files.filter((f) => f.includes(officialDir));
+  const rewardJson = official.find((f) => path.basename(f) === 'reward.json');
+  const rewardTxt = official.find((f) => path.basename(f) === 'reward.txt');
   let reward = null;
   let rewardPath = null;
   let metrics = null;
@@ -101,7 +106,7 @@ export function collectVerifierEvidence(trialDir) {
     }
   }
   let pytest = null;
-  for (const file of files) {
+  for (const file of official) {
     if (!/\.(log|txt|out)$/.test(file) || file === rewardTxt) continue;
     pytest = parsePytestSummary(fs.readFileSync(file, 'utf8'));
     if (pytest) break;

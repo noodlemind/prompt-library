@@ -29,7 +29,10 @@ import json
 import os
 import pathlib
 
-from harbor.agents.base import BaseAgent
+try:
+    from harbor.agents.base import BaseAgent
+except ImportError:  # pragma: no cover - lets CI import-check the module without harbor
+    BaseAgent = object
 
 
 class StdioBridgeAgent(BaseAgent):
@@ -126,13 +129,38 @@ class StdioBridgeAgent(BaseAgent):
         return {"code": code, "stdout": (stdout or "")[-6000:], "stderr": stderr[-2000:]}
 
     def _populate_context(self, context, done: dict) -> None:
-        """Attach the bridge outcome to whatever context fields this Harbor has."""
+        """Attach the bridge outcome to Harbor's AgentContext.
+
+        AgentContext is a Pydantic model: assigning fields it does not define
+        raises ValueError, so everything bridge-specific goes into `metadata`
+        (a supported dict field), and only recognized token/cost fields are
+        attempted individually. Every write is exception-safe — a context
+        schema change must never turn a completed trial into a crash.
+        """
+        payload = {
+            "answer": done.get("answer"),
+            "stopReason": done.get("stopReason"),
+            "steps": done.get("steps"),
+            "telemetry": done.get("telemetry"),
+        }
+        try:
+            existing = getattr(context, "metadata", None)
+            if isinstance(existing, dict):
+                existing["stdio_bridge"] = payload
+            else:
+                setattr(context, "metadata", {"stdio_bridge": payload})
+        except Exception:
+            pass
+        totals = (done.get("telemetry") or {}).get("totals") or {}
         for attr, value in (
-            ("final_answer", done.get("answer")),
-            ("stop_reason", done.get("stopReason")),
-            ("metadata", {"telemetry": done.get("telemetry"), "steps": done.get("steps")}),
+            ("n_input_tokens", totals.get("promptTokens")),
+            ("n_cache_read_tokens", totals.get("cachedTokens")),
+            ("n_output_tokens", totals.get("outputTokens")),
+            ("cost_usd", totals.get("localCostUsd")),
         ):
+            if value is None:
+                continue
             try:
                 setattr(context, attr, value)
-            except (AttributeError, TypeError):
+            except Exception:
                 pass

@@ -101,13 +101,21 @@ export function openAiToolDriver({
     return body;
   }
 
-  /** Record usage/cost from a response and charge the budget. Malformed usage is never estimated. */
+  /**
+   * Record usage/cost from a response and charge the budget. Malformed usage
+   * is never estimated — and on a paid, budgeted driver it is terminal: spend
+   * that cannot be metered must stop immediately, not continue unbudgeted.
+   */
   function captureUsage(data) {
     const usage = data?.usage;
     const zeroPricing = { inputPerM: 0, cachedInputPerM: 0, outputPerM: 0 };
     const cost = costOfUsage(usage, effPricing ?? zeroPricing);
     if (!cost) {
       telemetry?.addUsage(null);
+      if (effPricing && budget) {
+        telemetry?.record('error', { kind: 'usage', message: 'provider usage missing or malformed on a paid profile' });
+        throw new ProviderError('provider usage missing or malformed — paid spend cannot be metered', { kind: 'usage', billed: null });
+      }
       return null;
     }
     const localCostUsd = effPricing ? cost.usd : 0;

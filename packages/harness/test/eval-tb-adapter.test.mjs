@@ -8,14 +8,15 @@ import {
   verifyTaskAgainstLock,
   stampTaskLock,
   buildHarborRunArgs,
+  jobDirFor,
   runHarbor,
   findLatestJobDir,
   readTrialResult,
   classifyFailure,
-} from '../../../evals/external/terminal-bench/harbor-adapter.mjs';
-import { hashTree } from '../../../evals/external/terminal-bench/verifier.mjs';
+} from '../../../evals/external/terminal_bench/harbor-adapter.mjs';
+import { hashTree } from '../../../evals/external/terminal_bench/verifier.mjs';
 
-const LOCK = JSON.parse(fs.readFileSync(new URL('../../../evals/external/terminal-bench/task-lock.json', import.meta.url), 'utf8'));
+const LOCK = JSON.parse(fs.readFileSync(new URL('../../../evals/external/terminal_bench/task-lock.json', import.meta.url), 'utf8'));
 
 function tmpdir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'tb-adapter-'));
@@ -58,18 +59,23 @@ test('stampTaskLock pins the task directory and verification then passes and det
   assert.match(tampered.reason, /checksum/i);
 });
 
-test('buildHarborRunArgs pins dataset, task, agent, model, and environment', () => {
+test('buildHarborRunArgs uses real Harbor flags and anchors the job identity', () => {
   const args = buildHarborRunArgs({
     lock: LOCK,
     agentRef: 'evals.external.terminal_bench.harbor_agent:StdioBridgeAgent',
     model: 'moonshotai/kimi-k2.7-code',
     envName: 'daytona',
+    jobName: 'canary-generic-1',
+    jobsDir: '/work/jobs',
   });
+  // Flags verified against harbor 0.20.0 (src/harbor/cli/jobs.py):
+  // -i/--include-task-name filters tasks; -n means CONCURRENCY, not trials;
+  // -k/--n-attempts is attempts; --job-name/-o pin the output identity.
   assert.deepEqual(args, [
     'run',
     '-d',
     'terminal-bench@2.0',
-    '--task-name',
+    '--include-task-name',
     'cobol-modernization',
     '--agent',
     'evals.external.terminal_bench.harbor_agent:StdioBridgeAgent',
@@ -77,9 +83,20 @@ test('buildHarborRunArgs pins dataset, task, agent, model, and environment', () 
     'moonshotai/kimi-k2.7-code',
     '--env',
     'daytona',
-    '-n',
+    '--n-attempts',
     '1',
+    '--n-concurrent',
+    '1',
+    '-y',
+    '--job-name',
+    'canary-generic-1',
+    '--jobs-dir',
+    '/work/jobs',
   ]);
+});
+
+test('jobDirFor is the deterministic job identity — no newest-directory guessing needed', () => {
+  assert.equal(jobDirFor({ jobsDir: '/work/jobs', jobName: 'canary-generic-1' }), path.join('/work/jobs', 'canary-generic-1'));
 });
 
 test('runHarbor uses the injected spawn and surfaces exit details', () => {
@@ -148,4 +165,13 @@ test('classifyFailure distinguishes infrastructure, provider, verifier, and vali
   assert.equal(classifyFailure({ run: { spawnError: null, code: 0, timedOut: false }, reward: null }), 'verifier');
   assert.equal(classifyFailure({ run: { spawnError: null, code: 0, timedOut: false }, reward: 1 }), null);
   assert.equal(classifyFailure({ run: { spawnError: null, code: 0, timedOut: false }, reward: 0 }), null, 'reward 0 is a graded fail, not an infrastructure failure');
+});
+
+test('a nonzero harbor exit is classified before any reward is trusted', () => {
+  assert.equal(classifyFailure({ run: { spawnError: null, code: 3, timedOut: false }, reward: null }), 'infrastructure');
+  assert.equal(
+    classifyFailure({ run: { spawnError: null, code: 1, timedOut: false }, reward: 1 }),
+    'infrastructure',
+    'a reward read out of a failed invocation is not evidence'
+  );
 });

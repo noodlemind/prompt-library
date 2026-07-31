@@ -22,6 +22,31 @@ test('kimi host is the controlled API experiment on the pinned profile', () => {
   assert.equal(driver.model, 'moonshotai/kimi-k2.7-code');
 });
 
+test('kimi host enforces the profile trial ceiling even when no budget is supplied', async () => {
+  const host = createKimiHost({ apiKey: 'test-key' });
+  // Usage priced at ~$8 against the $5 trial ceiling: the first response is
+  // charged, the second request must be refused by the auto-created budget.
+  const bigUsage = { prompt_tokens: 10, completion_tokens: 2_000_000 };
+  const fetchImpl = async () => ({
+    ok: true,
+    json: async () => ({
+      id: 'gen',
+      model: host.profile.model,
+      provider: 'Moonshot AI',
+      usage: bigUsage,
+      choices: [{ message: { role: 'assistant', content: null, tool_calls: [{ id: 'c0', type: 'function', function: { name: 'bash', arguments: '{"command":"ls"}' } }] } }],
+    }),
+  });
+  const driver = host.createDriver({ fetchImpl });
+  driver.reset({ system: 's', instruction: 'i', tools: [{ name: 'bash', description: 'x', parameters: { type: 'object', properties: {} } }] });
+  const first = await driver.next();
+  assert.equal(first.type, 'tool');
+  driver.observe(first, { code: 0 });
+  const second = await driver.next();
+  assert.equal(second.type, 'finish');
+  assert.equal(second.stopReason, 'budget_exhausted', 'an unbudgeted paid driver must still hit a ceiling');
+});
+
 test('kimi host fails credential validation closed without its API key', () => {
   const host = createKimiHost({ apiKey: undefined });
   const verdict = host.validateCredentials();

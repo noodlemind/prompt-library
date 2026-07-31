@@ -81,16 +81,29 @@ test('captures usage, local cost, provider cost, and generation/provider identif
   assert.ok(!events.some((e) => e.type === 'fallback'), 'matching pinned provider must not read as fallback');
 });
 
-test('malformed usage is recorded as unusable, never estimated, never charged', async () => {
+test('a paid, budgeted driver stops immediately when usage is unusable — no unmetered spending', async () => {
   const { driver, telemetry, budget } = harness([
     completion({ message: assistantToolCalls([['runInTerminal', { command: 'ls' }]]), usage: { prompt_tokens: 'lots' } }),
   ]);
-  await driver.next();
-  const { totals, events } = telemetry.snapshot();
-  assert.equal(totals.missingUsage, 1);
+  await assert.rejects(driver.next(), (err) => err.kind === 'usage' && err.billed === null);
+  const { totals } = telemetry.snapshot();
+  assert.equal(totals.missingUsage, 1, 'the unusable response is still counted');
   assert.equal(totals.costComplete, false);
-  assert.equal(budget.spentUsd(), 0);
-  assert.equal(events.find((e) => e.type === 'response').costUsd, null);
+  assert.equal(budget.spentUsd(), 0, 'nothing is charged and nothing further can be spent');
+});
+
+test('without pricing and budget, unusable usage is recorded but the run may continue', async () => {
+  const calls = [];
+  const fetchImpl = async (url, init) => {
+    calls.push(init);
+    return completion({ message: assistantToolCalls([['runInTerminal', { command: 'ls' }]]), usage: { prompt_tokens: 'lots' } });
+  };
+  const telemetry = createTelemetry();
+  const driver = openAiToolDriver({ url: 'http://localhost:11434/v1/chat/completions', apiKey: 'ollama', model: 'qwen2.5-coder', fetchImpl, telemetry });
+  driver.reset({ system: 's', instruction: 'i', tools: TOOLS });
+  const action = await driver.next();
+  assert.equal(action.type, 'tool');
+  assert.equal(telemetry.snapshot().totals.missingUsage, 1);
 });
 
 test('a resolved model different from the requested model is a fallback', async () => {
