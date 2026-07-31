@@ -29,6 +29,15 @@ const ALLOWED_AGENT_ENV_KEYS = new Set([
   'HARNESS_EVAL_TB_NODE',
   'HARNESS_EVAL_TB_AGENT_MJS',
 ]);
+const SAFE_TASK_NAME = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
+
+function isSafeTaskName(value) {
+  return typeof value === 'string' && SAFE_TASK_NAME.test(value);
+}
+
+function assertSafeTaskName(value) {
+  if (!isSafeTaskName(value)) throw new TypeError('Harbor task name must be a safe basename');
+}
 
 function buildAgentEnvArgs(agentEnv) {
   const entries = Object.entries(agentEnv);
@@ -60,7 +69,8 @@ export function validateTaskLock(lock) {
   const tasks = tasksOf(lock);
   if (!tasks.length) errors.push('missing required lock field: tasks (or legacy task)');
   for (const entry of tasks) {
-    if (!entry.task) errors.push('every tasks[] entry needs a task name');
+    if (!entry || typeof entry !== 'object' || !entry.task) errors.push('every tasks[] entry needs a task name');
+    else if (!isSafeTaskName(entry.task)) errors.push('every tasks[] task name must be a safe basename');
   }
   if (lock?.datasetRef != null && !/^[\w./-]+@[\w.-]+$/.test(lock.datasetRef)) {
     errors.push(`datasetRef must pin a version (name@version), got: ${lock.datasetRef}`);
@@ -78,6 +88,7 @@ export function validateTaskLock(lock) {
  * in place.
  */
 export function stampTaskLock(taskDir, lock, taskName = tasksOf(lock)[0]?.task) {
+  assertSafeTaskName(taskName);
   const checksum = hashTree(taskDir);
   const tasks = tasksOf(lock).map((entry) => (entry.task === taskName ? { ...entry, taskChecksum: checksum } : entry));
   if (!tasks.some((entry) => entry.task === taskName)) {
@@ -91,6 +102,7 @@ export function stampTaskLock(taskDir, lock, taskName = tasksOf(lock)[0]?.task) 
 export function verifyTaskAgainstLock(taskDir, lock, taskName = tasksOf(lock)[0]?.task) {
   const structural = validateTaskLock(lock);
   if (!structural.ok) return { ok: false, reason: structural.errors.join('; '), checksum: null };
+  if (!isSafeTaskName(taskName)) return { ok: false, reason: 'task name must be a safe basename', checksum: null };
   const entry = tasksOf(lock).find((t) => t.task === taskName);
   if (!entry) return { ok: false, reason: `task ${taskName} is not in the pinned lock`, checksum: null };
   if (!entry.taskChecksum) {
@@ -107,12 +119,22 @@ export function verifyTaskAgainstLock(taskDir, lock, taskName = tasksOf(lock)[0]
 // -i/--include-task-name filters tasks, -k/--n-attempts is attempts per trial,
 // -n/--n-concurrent is CONCURRENCY, --job-name/-o/--jobs-dir pin the output
 // identity, -y auto-confirms prompts.
-export function buildHarborRunArgs({ lock, task = tasksOf(lock)[0]?.task, agentRef, model, envName, jobName, jobsDir, attempts = 1, mounts = [], agentEnv = {} }) {
+export function buildHarborRunArgs({ lock, task = tasksOf(lock)[0]?.task, datasetPath, agentRef, model, envName, jobName, jobsDir, attempts = 1, mounts = [], agentEnv = {} }) {
+  assertSafeTaskName(task);
+  if (
+    datasetPath !== undefined &&
+    (typeof datasetPath !== 'string' || !datasetPath || datasetPath.includes('\0') || !path.isAbsolute(datasetPath))
+  ) {
+    throw new TypeError('datasetPath must be a non-empty absolute NUL-free string');
+  }
   const agentEnvArgs = buildAgentEnvArgs(agentEnv);
+  // Harbor treats -p and -d as alternative dataset selectors. A prepared
+  // local tree is the stronger integrity boundary because registry bytes
+  // cannot drift between lock verification and execution.
+  const datasetArgs = datasetPath === undefined ? ['-d', lock.datasetRef] : ['-p', datasetPath];
   return [
     'run',
-    '-d',
-    lock.datasetRef,
+    ...datasetArgs,
     '--include-task-name',
     task,
     '--agent',

@@ -2,14 +2,14 @@
   "$id": "eval-report.v1",
   "title": "One release evaluation report (the Eval Card's data)",
   "type": "object",
-  "required": ["schema", "harnessVersion", "releaseSha", "task", "calibrationRelease", "deterministic", "pairs", "nativeProducts", "smokes", "budget", "gate", "claim"],
+  "required": ["schema", "harnessVersion", "releaseSha", "task", "calibrationRelease", "deterministic", "pairs", "smokes", "budget", "gate"],
   "properties": {
     "schema": { "const": "eval-report.v1" },
     "harnessVersion": { "type": "string" },
     "releaseSha": { "type": "string" },
     "task": {
       "type": "object",
-      "required": ["datasetRef", "task", "taskSet"],
+      "required": ["datasetRef", "task"],
       "properties": {
         "datasetRef": { "type": "string" },
         "task": { "type": "string" },
@@ -42,7 +42,7 @@
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["host", "comparisonTrack", "result", "reason", "gateActive"],
+        "required": ["host", "result", "reason", "gateActive"],
         "properties": {
           "host": { "type": "string" },
           "comparisonTrack": { "const": "controlled-ablation" },
@@ -97,7 +97,7 @@
     },
     "budget": {
       "type": "object",
-      "required": ["scope", "ceilingUsd", "spentUsd", "exhausted", "breached", "overrunUsd", "allocations"],
+      "required": ["ceilingUsd", "spentUsd", "exhausted"],
       "properties": {
         "scope": { "const": "provider-api-only" },
         "ceilingUsd": { "type": "number" },

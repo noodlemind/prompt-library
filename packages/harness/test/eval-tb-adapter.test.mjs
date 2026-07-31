@@ -48,6 +48,34 @@ test('validateTaskLock names every missing field', () => {
   assert.ok(verdict.errors.some((e) => /verifier/.test(e)));
 });
 
+test('validateTaskLock reports malformed task entries instead of throwing', () => {
+  for (const entry of [null, 1, 'task']) {
+    const verdict = validateTaskLock({ ...LOCK, tasks: [entry] });
+    assert.equal(verdict.ok, false);
+    assert.ok(verdict.errors.some((error) => /task name/.test(error)));
+  }
+});
+
+test('task names are safe basenames and cannot traverse Harbor dataset or job paths', () => {
+  for (const task of ['../escape', 'nested/task', '/absolute', '.', '..', 'line\nbreak', '-flag']) {
+    const verdict = validateTaskLock({ ...LOCK, tasks: [{ task, taskChecksum: 'a'.repeat(64), role: 'candidate' }] });
+    assert.equal(verdict.ok, false, task);
+    assert.ok(verdict.errors.some((error) => /safe basename/.test(error)), task);
+    assert.throws(
+      () =>
+        buildHarborRunArgs({
+          lock: LOCK,
+          task,
+          agentRef: 'evals.external.terminal_bench.harbor_agent:StdioBridgeAgent',
+          model: 'moonshotai/kimi-k2.7-code',
+          envName: 'docker',
+        }),
+      /safe basename/,
+      task
+    );
+  }
+});
+
 test('an unstamped lock entry fails task verification closed', () => {
   const dir = tmpdir();
   fs.writeFileSync(path.join(dir, 'task.yaml'), 'name: cobol-modernization');
@@ -116,6 +144,37 @@ test('buildHarborRunArgs uses real Harbor flags and anchors the job identity', (
     '--jobs-dir',
     '/work/jobs',
   ]);
+});
+
+test('buildHarborRunArgs binds a prepared local dataset with -p instead of resolving registry bytes with -d', () => {
+  const args = buildHarborRunArgs({
+    lock: LOCK,
+    task: 'cobol-modernization',
+    datasetPath: '/work/pinned-terminal-bench',
+    agentRef: 'evals.external.terminal_bench.harbor_agent:StdioBridgeAgent',
+    model: 'moonshotai/kimi-k2.7-code',
+    envName: 'docker',
+  });
+  assert.deepEqual(args.slice(0, 3), ['run', '-p', '/work/pinned-terminal-bench']);
+  assert.equal(args.includes('-d'), false, 'local and registry dataset selectors are mutually exclusive');
+  assert.ok(args.includes('--include-task-name'));
+});
+
+test('buildHarborRunArgs rejects an empty, relative, or NUL-bearing local dataset path', () => {
+  for (const datasetPath of ['', 'relative/path', 'bad\0path']) {
+    assert.throws(
+      () =>
+        buildHarborRunArgs({
+          lock: LOCK,
+          task: 'cobol-modernization',
+          datasetPath,
+          agentRef: 'evals.external.terminal_bench.harbor_agent:StdioBridgeAgent',
+          model: 'moonshotai/kimi-k2.7-code',
+          envName: 'docker',
+        }),
+      /datasetPath/
+    );
+  }
 });
 
 test('buildHarborRunArgs can mount the harness bundle and pass only the bridge control variables', () => {

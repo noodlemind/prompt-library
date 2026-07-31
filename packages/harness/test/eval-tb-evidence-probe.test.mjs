@@ -24,6 +24,12 @@ function run(cwd, args) {
   return JSON.parse(result.stdout);
 }
 
+function runFailure(cwd, args) {
+  const result = spawnSync(process.execPath, [probe, ...args], { cwd, encoding: 'utf8' });
+  assert.notEqual(result.status, 0, result.stdout);
+  return result;
+}
+
 function runPython(source) {
   const result = spawnSync('python3', ['-c', source], {
     cwd: repoRoot,
@@ -106,6 +112,42 @@ test('workspace byte limits fail evidence closed without failing the probe proce
   assert.equal(before.manifestHash, null);
 });
 
+test('workspace traversal has independent directory, node, and depth bounds with explicit evidence reasons', () => {
+  const cwd = workspace();
+  let directory = cwd;
+  for (let index = 0; index < 66; index += 1) {
+    directory = path.join(directory, 'd');
+    fs.mkdirSync(directory);
+  }
+  const before = run(cwd, ['snapshot', '--output', '.harness/eval-before.json']);
+  assert.equal(before.available, false);
+  assert.equal(before.reason, 'workspace-depth-limit-exceeded');
+
+  const state = JSON.parse(fs.readFileSync(path.join(cwd, '.harness', 'eval-before.json'), 'utf8'));
+  assert.ok(state.limits.maxDirectories > 0);
+  assert.ok(state.limits.maxNodes > 0);
+  assert.ok(state.limits.maxDepth > 0);
+  assert.ok(Number.isInteger(state.directoryCount));
+  assert.ok(Number.isInteger(state.nodeCount));
+});
+
+test('probe state cannot escape through a symlinked .harness directory or nested state directory', () => {
+  const outside = workspace();
+
+  const symlinkedHarness = workspace();
+  fs.symlinkSync(outside, path.join(symlinkedHarness, '.harness'));
+  const harnessFailure = runFailure(symlinkedHarness, ['snapshot', '--output', '.harness/eval-before.json']);
+  assert.match(harnessFailure.stderr, /state.*symlink|\.harness.*directory/i);
+  assert.equal(fs.existsSync(path.join(outside, 'eval-before.json')), false);
+
+  const symlinkedState = workspace();
+  fs.mkdirSync(path.join(symlinkedState, '.harness'));
+  fs.symlinkSync(outside, path.join(symlinkedState, '.harness', 'state'));
+  const stateFailure = runFailure(symlinkedState, ['snapshot', '--output', '.harness/state/eval-before.json']);
+  assert.match(stateFailure.stderr, /state.*symlink/i);
+  assert.equal(fs.existsSync(path.join(outside, 'eval-before.json')), false);
+});
+
 test('changed-path detail is bounded while the complete diff count and hash are retained', () => {
   const cwd = workspace();
   run(cwd, ['snapshot', '--output', '.harness/eval-before.json']);
@@ -143,10 +185,81 @@ test('harness events are bounded and projected through a redacted allowlist', ()
   assert.equal(collected.enforcement.hooksActive, false, 'ordinary CLI lifecycle events are not mechanical hook evidence');
   assert.deepEqual(collected.harnessEventEvidence, {
     available: true,
-    reason: null,
+    complete: false,
+    reason: 'harness-events-retention-limit-exceeded',
     retainedEvents: 200,
-    sourceTruncated: false,
+    sourceTruncated: true,
+    projectionRejectedEvents: 0,
+    projectionRejectedChecks: 0,
   });
+});
+
+test('realistic gate and verify checks survive projection while secrets do not', () => {
+  const cwd = workspace();
+  fs.writeFileSync(path.join(cwd, 'app.txt'), 'same');
+  run(cwd, ['snapshot', '--output', '.harness/eval-before.json']);
+  const sentinel = 'sentinel-provider-key-must-not-leave';
+  const events = [
+    {
+      version: 2,
+      id: 'gate-event',
+      ts: '2026-07-31T00:00:01Z',
+      type: 'gate',
+      result: 'warn',
+      checks: [
+        { id: 'C1', pass: true, severity: 'ok', message: `plan includes ${sentinel}` },
+        { id: 'C2', pass: false, severity: 'warn', secret: sentinel },
+      ],
+      providerSecret: sentinel,
+    },
+    {
+      version: 2,
+      id: 'verify-event',
+      ts: '2026-07-31T00:00:02Z',
+      type: 'verify',
+      result: 'pass',
+      checks: [{ id: 'harness-tests', pass: true, severity: 'ok', message: sentinel }],
+    },
+  ];
+  fs.writeFileSync(path.join(cwd, '.harness', 'events.jsonl'), `${events.map(JSON.stringify).join('\n')}\n`);
+  const collected = run(cwd, ['collect', '--before', '.harness/eval-before.json']);
+
+  assert.deepEqual(collected.harnessEvents.map((event) => event.type), ['gate', 'verify']);
+  assert.deepEqual(collected.harnessEvents.map((event) => event.checks.length), [2, 1]);
+  assert.deepEqual(collected.harnessEvents[0].checks.map((check) => check.severity), ['ok', 'warn']);
+  assert.ok(collected.harnessEvents.every((event) => event.checks.every((check) => /^[a-f0-9]{24}$/.test(check.id))));
+  assert.ok(!JSON.stringify(collected).includes(sentinel));
+  assert.deepEqual(collected.harnessEventEvidence, {
+    available: true,
+    complete: true,
+    reason: null,
+    retainedEvents: 2,
+    sourceTruncated: false,
+    projectionRejectedEvents: 0,
+    projectionRejectedChecks: 0,
+  });
+});
+
+test('event and check projection rejects are counted and make evidence explicitly incomplete', () => {
+  const cwd = workspace();
+  run(cwd, ['snapshot', '--output', '.harness/eval-before.json']);
+  const events = [
+    JSON.stringify({ type: 'gate', checks: [{ id: 'C1', pass: true, severity: 'ok' }, { id: 'C2', pass: false, severity: 'secret-value' }] }),
+    '{invalid-json',
+    JSON.stringify({ type: 'unknown-event', secret: 'must-not-leave' }),
+  ];
+  fs.writeFileSync(path.join(cwd, '.harness', 'events.jsonl'), `${events.join('\n')}\n`);
+  const collected = run(cwd, ['collect', '--before', '.harness/eval-before.json']);
+
+  assert.equal(collected.harnessEvents.length, 1);
+  assert.equal(collected.harnessEvents[0].checks.length, 1);
+  assert.equal(collected.harnessEventEvidence.available, true, 'the retained event remains usable');
+  assert.equal(collected.harnessEventEvidence.complete, false);
+  assert.equal(collected.harnessEventEvidence.projectionRejectedEvents, 2);
+  assert.equal(collected.harnessEventEvidence.projectionRejectedChecks, 1);
+  assert.match(collected.harnessEventEvidence.reason, /projection-rejected/);
+  assert.ok(!JSON.stringify(collected).includes('secret-value'));
+  assert.ok(!JSON.stringify(collected).includes('must-not-leave'));
 });
 
 test('the evidence probe is bundled behind the same cross-architecture Node selection as Harness', () => {
