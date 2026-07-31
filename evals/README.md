@@ -195,7 +195,9 @@ The pinned `terminal-bench@2.0` canary contains:
 - `git-leak-recovery`;
 - `custom-memory-heap-crash`.
 
-Kimi runs all four tasks. Routine releases use one independent repetition per
+Kimi runs all four tasks by default. A cost-bounded diagnostic may select one
+pinned task with `--task`; the selected task is the actual validation, budget,
+Harbor execution, coverage, and report scope—not a metadata-only label. Routine releases use one independent repetition per
 condition and alternate A/B order. Calibration uses three repetitions and
 retains every raw trial; majority verdict and median efficiency are report
 views, not replacements for the underlying evidence.
@@ -227,6 +229,10 @@ node evals/release.mjs --profile release-canary --deterministic-only
 # four-task Kimi ablation. Missing prerequisites/evidence blocks; it never greens.
 source ~/.openrouter.env
 node evals/release.mjs --profile release-canary --json
+
+# Cost-bounded one-task diagnostic: execute only this pinned task and scope the
+# Eval Card accordingly. Unknown/unpinned names fail before provider preflight.
+node evals/release.mjs --profile release-canary --task cobol-modernization --json
 
 # First calibration runs: three repetitions per task/condition under the same cap.
 node evals/release.mjs --profile release-canary --calibration --json
@@ -278,7 +284,7 @@ Release-candidate prerequisites (all fail closed when absent):
 - request payload/peak sizes, context compactions, compacted observations,
   checkpoint state, and time to first action/edit/final verification;
 - pair, repetition, order, task, condition, prompt, tool-schema, telemetry, and
-  Harness-event identities/hashes;
+  Harness-event identities/hashes, plus the exact mounted bundle manifest hash;
 - bounded before/after workspace manifests, changed-path count/list, canonical
   diff hash, and a separate verifier-artifact hash;
 - retained Harness events, their collection completeness, evidence-derived
@@ -304,7 +310,11 @@ The coded ceiling covers **provider API spend only**:
 
 At routine settings the initial per-trial scheduler share is at most $1.00
 ($8 / four tasks / two arms); calibration's 24 trials share the same $8 pair
-allowance. These are caps, not spend forecasts. Actual cost is reconciled from
+allowance. A `--task` diagnostic does not inherit the unused multi-task
+allowance: its primary per-arm ceiling is capped at the $1.00 that the full
+conditional rerun can reproduce. Calibration reruns reuse the original lower
+per-arm ceiling rather than changing the experimental condition. These are
+caps, not spend forecasts. Actual cost is reconciled from
 the greater of provider-reported and pinned local cost inside the request loop;
 input prechecks use UTF-8 bytes as a tokenizer-independent upper bound plus the
 maximum output allocation. Incomplete billing reserves the remainder and stops.
@@ -364,7 +374,10 @@ A release evaluation is complete only when:
 
 - deterministic checks and all task-lock checks pass before provider spend;
 - every required task has both fresh arms, official verifier evidence, matching
-  requested/resolved model and pinned provider, and no fallback;
+  release/task/bundle/pair/repetition/attempt identity, requested/resolved model,
+  pinned provider policy, complementary order, and no fallback;
+- required coverage contains exactly one controlled pair for every selected
+  pinned task, with no missing, duplicate, or unexpected task;
 - the provider-side eval-key limit was checked for the selected release ceiling,
   and the report retains only its non-secret limit/remaining/reset evidence;
 - every retained paid attempt closes with complete usage/billing; tool results
@@ -386,6 +399,12 @@ Troubleshooting:
   produced no evidence; a skipped pair can never green a release candidate.
 - `task checksum mismatch` — the downloaded task differs from the committed
   pin; investigate before re-stamping (`stampTaskLock`, then commit the lock).
+- `required controlled task coverage is incomplete` — a selected task is
+  missing, duplicated, or unexpected; the report's `coverage` object names the
+  exact host/task discrepancy and the claim remains inconclusive.
+- `controlled identity mismatch` / `rerun identity mismatch` — the arms or
+  rerun did not preserve the causal task/model/provider/release/bundle identity;
+  retain the evidence as infrastructure-invalid and do not compare outcomes.
 - `bundle manifest digest` — the prebuilt bundle is missing its out-of-band
   digest, was changed after preparation, contains an escaping symlink, or points
   at an unsafe broad host path; prepare a fresh bundle and retain its digest.

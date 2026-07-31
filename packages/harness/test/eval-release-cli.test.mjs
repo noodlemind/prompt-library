@@ -33,14 +33,19 @@ function filesUnder(root) {
   return files;
 }
 
-function setupFixture() {
+function setupFixture({ taskNames = ['cobol-modernization'] } = {}) {
   const datasetDir = tmpdir();
-  const taskDir = path.join(datasetDir, 'cobol-modernization');
-  fs.mkdirSync(taskDir, { recursive: true });
-  fs.writeFileSync(path.join(taskDir, 'instruction.md'), 'Modernize the COBOL program.');
+  for (const taskName of taskNames) {
+    const taskDir = path.join(datasetDir, taskName);
+    fs.mkdirSync(taskDir, { recursive: true });
+    fs.writeFileSync(path.join(taskDir, 'instruction.md'), `Complete ${taskName}.`);
+  }
   const lockFile = path.join(tmpdir(), 'lock.json');
-  const singleTaskLock = { ...BASE_LOCK, tasks: BASE_LOCK.tasks.filter((t) => t.task === 'cobol-modernization') };
-  fs.writeFileSync(lockFile, JSON.stringify(stampTaskLock(taskDir, singleTaskLock, 'cobol-modernization')));
+  let selectedLock = { ...BASE_LOCK, tasks: BASE_LOCK.tasks.filter((entry) => taskNames.includes(entry.task)) };
+  for (const taskName of taskNames) {
+    selectedLock = stampTaskLock(path.join(datasetDir, taskName), selectedLock, taskName);
+  }
+  fs.writeFileSync(lockFile, JSON.stringify(selectedLock));
 
   const binDir = tmpdir();
   const auditFile = path.join(binDir, 'harbor-audit.jsonl');
@@ -66,6 +71,7 @@ fs.appendFileSync(process.env.HARNESS_EVAL_TEST_AUDIT_FILE, JSON.stringify({
   providerKeyInAgentEnv,
   conditionPath: agentEnv.HARNESS_EVAL_TB_CONDITION,
   telemetryFile: agentEnv.HARNESS_EVAL_TB_TELEMETRY_FILE,
+  jobName,
   jobsDir,
 }) + '\\n');
 if (!providerKey || secretInArgv || providerKeyInAgentEnv) {
@@ -136,7 +142,7 @@ process.exit(0);
   return { datasetDir, lockFile, binDir, bundleDir, bundleHash: prepared.manifestHash, auditFile, fetchPreload };
 }
 
-function runCli({ datasetDir, lockFile, binDir, bundleDir, bundleHash, auditFile, fetchPreload, withKey = true }) {
+function runCli({ datasetDir, lockFile, binDir, bundleDir, bundleHash, auditFile, fetchPreload, withKey = true, task = null, omitTaskValue = false }) {
   const env = {
     ...process.env,
     PATH: `${binDir}${path.delimiter}${process.env.PATH}`,
@@ -148,7 +154,10 @@ function runCli({ datasetDir, lockFile, binDir, bundleDir, bundleHash, auditFile
   };
   if (withKey) env.OPENROUTER_API_KEY = SENTINEL_PROVIDER_KEY;
   else delete env.OPENROUTER_API_KEY;
-  return spawnSync(process.execPath, ['evals/release.mjs', '--profile', 'release-canary', '--json', '--lock-file', lockFile], {
+  const args = ['evals/release.mjs', '--profile', 'release-canary', '--json', '--lock-file', lockFile];
+  if (omitTaskValue) args.push('--task');
+  else if (task !== null) args.push('--task', task);
+  return spawnSync(process.execPath, args, {
     cwd: repoRoot,
     env,
     encoding: 'utf8',
@@ -200,4 +209,36 @@ test('release-candidate mode without credentials blocks instead of greening', ()
   const report = JSON.parse(result.stdout);
   assert.ok(report.gate.reasons.some((r) => /dependencies or credentials/i.test(r)));
   assert.equal(report.pairs.find((p) => p.host === 'openrouter-kimi').result, 'skipped');
+});
+
+test('--task selects exactly one pinned task for metadata, validation, budgeting, and Harbor execution', () => {
+  const fixture = setupFixture({ taskNames: ['cobol-modernization', 'cancel-async-tasks'] });
+  const result = runCli({ ...fixture, task: 'cancel-async-tasks' });
+  assert.ok([0, 1].includes(result.status), result.stderr || result.stdout);
+  const report = JSON.parse(result.stdout);
+  assert.equal(report.task.task, 'cancel-async-tasks');
+  assert.deepEqual(report.task.taskSet.map((entry) => entry.task), ['cancel-async-tasks']);
+  assert.deepEqual(report.coverage.expectedTasks, ['cancel-async-tasks']);
+  assert.equal(report.coverage.complete, true);
+  const audits = fs.readFileSync(fixture.auditFile, 'utf8').trim().split('\n').map((line) => JSON.parse(line));
+  assert.equal(audits.length, 2, 'one selected task runs exactly one generic and one harness arm');
+  assert.ok(audits.every((audit) => audit.jobName.includes('cancel-async-tasks')));
+});
+
+test('--task rejects an unknown task before environment preflight or paid Harbor execution', () => {
+  const fixture = setupFixture({ taskNames: ['cobol-modernization', 'cancel-async-tasks'] });
+  const result = runCli({ ...fixture, task: 'not-in-lock' });
+  assert.equal(result.status, 2);
+  assert.match(result.stderr, /not-in-lock.*pinned task|unknown.*task/i);
+  assert.equal(fs.existsSync(fixture.auditFile), false, 'Harbor must not run for an invalid selection');
+});
+
+test('--task requires a nonempty value instead of silently running every paid task', () => {
+  for (const selection of [{ omitTaskValue: true }, { task: '' }]) {
+    const fixture = setupFixture({ taskNames: ['cobol-modernization', 'cancel-async-tasks'] });
+    const result = runCli({ ...fixture, ...selection });
+    assert.equal(result.status, 2);
+    assert.match(result.stderr, /--task.*nonempty|requires.*value/i);
+    assert.equal(fs.existsSync(fixture.auditFile), false, 'Harbor must not run for a missing task value');
+  }
 });

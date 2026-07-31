@@ -38,6 +38,20 @@
         "skipped": { "type": "number" }
       }
     },
+    "coverage": {
+      "type": "object",
+      "required": ["complete", "requiredHosts", "expectedTasks", "observed", "missing", "duplicates", "unexpected", "reason"],
+      "properties": {
+        "complete": { "type": "boolean" },
+        "requiredHosts": { "type": "array", "items": { "type": "string" } },
+        "expectedTasks": { "type": "array", "items": { "type": "string" } },
+        "observed": { "type": "array", "items": { "type": "object" } },
+        "missing": { "type": "array", "items": { "type": "object" } },
+        "duplicates": { "type": "array", "items": { "type": "object" } },
+        "unexpected": { "type": "array", "items": { "type": "object" } },
+        "reason": { "type": ["string", "null"] }
+      }
+    },
     "pairs": {
       "type": "array",
       "items": {

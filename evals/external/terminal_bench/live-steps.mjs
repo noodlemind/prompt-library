@@ -469,6 +469,7 @@ export function buildRunDoc({
   identity = {},
   conditionDocument = null,
   hostId = 'openrouter-kimi',
+  bundleManifestHash = null,
 }) {
   const telemetryLedgerPresent = Array.isArray(done?.telemetry?.events);
   const telemetryEvents = telemetryLedgerPresent ? done.telemetry.events : [];
@@ -549,6 +550,7 @@ export function buildRunDoc({
       attempt: identity.attempt ?? null,
       aggregation: null,
       taskHash,
+      bundleManifestHash,
       conditionHash,
       systemPromptHash,
       toolSchemaHash,
@@ -622,6 +624,7 @@ export function buildLiveSteps({
   let verifiedDatasetDir = null;
   let bundle = null;
   let paidSchedulingStop = null;
+  const primaryTrialCeilingByTask = new Map();
 
   async function providerSpendGuard() {
     const ceilingUsd = config.budget?.releaseCeilingUsd;
@@ -887,7 +890,9 @@ export function buildLiveSteps({
       identity,
       conditionDocument,
       hostId: evalHost.id,
+      bundleManifestHash: bundle?.manifestHash ?? null,
     });
+    doc.efficiency.reconciledCostUsd = reconciledCost;
     doc.efficiency.billingUncertain = billingUncertain;
     if (allocationBreached) doc.correctness.completedWithinBudget = false;
     doc.billingEvidence = {
@@ -1011,10 +1016,19 @@ export function buildLiveSteps({
       ensureBundle();
       const tasks = tasksOf(lock);
       const profile = kimiHost.profile;
-      const trialCeilingUsd = Math.min(profile.trialCeilingUsd, budget.remainingUsd() / (tasks.length * repetitionCount * 2));
+      const configuredRerunUsd = Number(config.budget?.rerunUsd);
+      const rerunnableArmCeiling = Number.isFinite(configuredRerunUsd) && configuredRerunUsd >= 0
+        ? configuredRerunUsd / 2
+        : Number.POSITIVE_INFINITY;
+      const trialCeilingUsd = Math.min(
+        profile.trialCeilingUsd,
+        budget.remainingUsd() / (tasks.length * repetitionCount * 2),
+        rerunnableArmCeiling
+      );
       const pairs = [];
       for (const entry of tasks) {
         if (paidSchedulingStop) break;
+        primaryTrialCeilingByTask.set(entry.task, trialCeilingUsd);
         pairs.push(taskPair({ evalHost: kimiHost, task: entry.task, budget, attempt: 'a', trialCeilingUsd }));
       }
       return pairs;
@@ -1023,9 +1037,11 @@ export function buildLiveSteps({
     rerunKimiPair: async (budget, task) => {
       if (!kimiHost.validateCredentials().ok) return null;
       if (paidSchedulingStop) return null;
+      const primaryTrialCeilingUsd = primaryTrialCeilingByTask.get(task);
+      if (!Number.isFinite(primaryTrialCeilingUsd)) return null;
       ensureBundle();
       const profile = kimiHost.profile;
-      const trialCeilingUsd = Math.min(profile.trialCeilingUsd, budget.remainingUsd() / 2);
+      const trialCeilingUsd = Math.min(profile.trialCeilingUsd, budget.remainingUsd() / 2, primaryTrialCeilingUsd);
       return taskPair({ evalHost: kimiHost, task: task ?? tasksOf(lock)[0].task, budget, attempt: 'b', trialCeilingUsd, n: 1 });
     },
     frontierPair: null,

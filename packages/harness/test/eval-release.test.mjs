@@ -19,13 +19,24 @@ const CONFIG = {
   budget: { releaseCeilingUsd: 20, kimiPairUsd: 10, rerunUsd: 8, reserveUsd: 2 },
   task: {
     datasetRef: 'terminal-bench@2.0',
+    task: 'cobol-modernization',
+    taskChecksum: 'a'.repeat(64),
+    taskSet: [{ task: 'cobol-modernization', role: 'anchor', taskChecksum: 'a'.repeat(64) }],
+  },
+  efficiencyThresholds: { promptRatio: 2, costRatio: 1.5, wallTimeRatio: 1.25 },
+};
+
+const MULTI_TASK_CONFIG = {
+  ...CONFIG,
+  task: {
+    datasetRef: 'terminal-bench@2.0',
     task: 'multi-task-canary',
+    taskChecksum: null,
     taskSet: [
       { task: 'cobol-modernization', role: 'anchor', taskChecksum: 'a'.repeat(64) },
       { task: 'build-pmars', role: 'candidate', taskChecksum: 'b'.repeat(64) },
     ],
   },
-  efficiencyThresholds: { promptRatio: 2, costRatio: 1.5, wallTimeRatio: 1.25 },
 };
 
 /** A schema-valid eval-run document; `over` shallow-merges per section. */
@@ -35,7 +46,7 @@ function fullRun(condition, verdict, over = {}) {
     reproducibility: {
       releaseSha: 'abc123',
       harnessVersion: '0.5.0',
-      harnessContentHash: null,
+      harnessContentHash: condition === 'harness' ? '3'.repeat(64) : null,
       taskId: 'cobol-modernization',
       taskRevision: 'terminal-bench@2.0',
       condition,
@@ -56,7 +67,8 @@ function fullRun(condition, verdict, over = {}) {
       orderIndex: condition === 'generic' ? 1 : 2,
       attempt: 'a',
       aggregation: null,
-      taskHash: '1'.repeat(64),
+      taskHash: 'a'.repeat(64),
+      bundleManifestHash: '7'.repeat(64),
       conditionHash: '2'.repeat(64),
       systemPromptHash: '3'.repeat(64),
       toolSchemaHash: '4'.repeat(64),
@@ -97,6 +109,7 @@ function fullRun(condition, verdict, over = {}) {
       outputTokens: 400,
       providerReportedCostUsd: 0.02,
       localCostUsd: 0.02,
+      reconciledCostUsd: 0.02,
       usageComplete: true,
       providerCostComplete: true,
       billingComplete: true,
@@ -176,12 +189,38 @@ function fullRun(condition, verdict, over = {}) {
 }
 
 function pairOf(host, genericVerdict, harnessVerdict, over = {}) {
+  const task = over.task ?? over.generic?.reproducibility?.taskId ?? over.harness?.reproducibility?.taskId ?? 'cobol-modernization';
+  const pairId = over.pairId ?? over.generic?.reproducibility?.pairId ?? over.harness?.reproducibility?.pairId ?? 'pair-1';
+  const attempt = over.attempt ?? over.generic?.reproducibility?.attempt ?? over.harness?.reproducibility?.attempt ?? 'a';
+  const generic = fullRun('generic', genericVerdict, over.generic ?? {});
+  const harness = fullRun('harness', harnessVerdict, over.harness ?? {});
+  for (const doc of [generic, harness]) {
+    doc.reproducibility.host = host;
+    doc.reproducibility.taskId = task;
+    doc.reproducibility.pairId = pairId;
+    doc.reproducibility.attempt = attempt;
+  }
   return {
     host,
-    generic: fullRun('generic', genericVerdict, over.generic ?? {}),
-    harness: fullRun('harness', harnessVerdict, over.harness ?? {}),
+    task,
+    pairId,
+    repetitionCount: over.repetitionCount ?? 1,
+    generic,
+    harness,
     failureKind: over.failureKind ?? null,
   };
+}
+
+function rerunPairOf(host, genericVerdict, harnessVerdict, over = {}) {
+  const pair = pairOf(host, genericVerdict, harnessVerdict, {
+    ...over,
+    pairId: over.pairId ?? 'pair-2',
+    attempt: over.attempt ?? 'b',
+  });
+  for (const doc of [pair.generic, pair.harness]) {
+    doc.reproducibility.repetitionId = over.repetitionId ?? 'rerun-repetition-1';
+  }
+  return pair;
 }
 
 function repeatedRun(condition, verdict, count = 3) {
@@ -288,6 +327,8 @@ test('a model or provider fallback is detected from the run documents', () => {
 test('fallback contamination in an earlier response or raw repetition invalidates the causal comparison', async () => {
   const repeated = {
     host: 'openrouter-kimi',
+    task: 'cobol-modernization',
+    pairId: 'pair-1',
     repetitionCount: 3,
     generic: repeatedRun('generic', 'pass'),
     harness: repeatedRun('harness', 'pass'),
@@ -326,6 +367,104 @@ test('paid required trials require resolved model and provider on every response
   }
 });
 
+test('controlled arms are infrastructure-invalid unless every causal identity field aligns', async () => {
+  const cases = [
+    ['model request', (doc) => { doc.reproducibility.modelRequested = 'different/model'; }],
+    ['provider policy', (doc) => { doc.reproducibility.providerRequestedOrder = ['different-provider']; }],
+    ['task hash', (doc) => { doc.reproducibility.taskHash = 'f'.repeat(64); }],
+    ['bundle manifest', (doc) => { doc.reproducibility.bundleManifestHash = 'e'.repeat(64); }],
+    ['pair id', (doc) => { doc.reproducibility.pairId = 'different-pair'; }],
+    ['repetition id', (doc) => { doc.reproducibility.repetitionId = 'different-repetition'; }],
+    ['attempt', (doc) => { doc.reproducibility.attempt = 'b'; }],
+    ['reasoning configuration', (doc) => { doc.reproducibility.reasoningConfig = { effort: 'high' }; }],
+  ];
+
+  for (const [label, mutate] of cases) {
+    const pair = pairOf('openrouter-kimi', 'pass', 'pass');
+    mutate(pair.harness);
+    const { report, exitCode } = await runRelease({
+      config: CONFIG,
+      steps: baseSteps({ kimiPair: async () => pair }),
+      requiredPairs: ['openrouter-kimi'],
+    });
+    const result = report.pairs.find((entry) => entry.host === 'openrouter-kimi');
+    assert.equal(result.result, 'infrastructure-invalid', label);
+    assert.equal(result.causallyAttributable, false, label);
+    assert.match(result.reason, /identity/i, label);
+    assert.equal(exitCode, 1, label);
+  }
+});
+
+test('controlled claims require a present bundle hash and the configured task checksum', async () => {
+  for (const mutate of [
+    (pair) => {
+      pair.generic.reproducibility.bundleManifestHash = null;
+      pair.harness.reproducibility.bundleManifestHash = null;
+    },
+    (pair) => {
+      pair.generic.reproducibility.taskHash = 'f'.repeat(64);
+      pair.harness.reproducibility.taskHash = 'f'.repeat(64);
+    },
+  ]) {
+    const pair = pairOf('openrouter-kimi', 'pass', 'pass');
+    mutate(pair);
+    const { report, exitCode } = await runRelease({
+      config: CONFIG,
+      steps: baseSteps({ kimiPair: async () => pair }),
+      requiredPairs: ['openrouter-kimi'],
+    });
+    assert.equal(report.pairs[0].causallyAttributable, false);
+    assert.equal(report.claim.level, 'inconclusive');
+    assert.equal(exitCode, 1);
+  }
+});
+
+test('controlled identity remains invariant across repetitions and matches the declared count', () => {
+  const repeated = {
+    host: 'openrouter-kimi',
+    task: 'cobol-modernization',
+    pairId: 'pair-1',
+    repetitionCount: 3,
+    generic: repeatedRun('generic', 'pass'),
+    harness: repeatedRun('harness', 'pass'),
+    failureKind: null,
+  };
+  repeated.generic.repetitions[1].reproducibility.bundleManifestHash = 'e'.repeat(64);
+  repeated.harness.repetitions[1].reproducibility.bundleManifestHash = 'e'.repeat(64);
+  const drifted = classifyPair(repeated);
+  assert.equal(drifted.result, 'infrastructure-invalid');
+  assert.match(drifted.reason, /cross-repetition.*bundle/i);
+
+  repeated.generic.repetitions[1].reproducibility.bundleManifestHash = '7'.repeat(64);
+  repeated.harness.repetitions[1].reproducibility.bundleManifestHash = '7'.repeat(64);
+  repeated.repetitionCount = 2;
+  const miscounted = classifyPair(repeated);
+  assert.equal(miscounted.result, 'infrastructure-invalid');
+  assert.match(miscounted.reason, /repetition-count/i);
+
+  repeated.repetitionCount = 3;
+  repeated.generic.repetitions[1].reproducibility.repetitionId = 'repetition-1';
+  repeated.harness.repetitions[1].reproducibility.repetitionId = 'repetition-1';
+  const duplicated = classifyPair(repeated);
+  assert.equal(duplicated.result, 'infrastructure-invalid');
+  assert.match(duplicated.reason, /repetition-id-uniqueness/i);
+
+  repeated.generic.repetitions[1].reproducibility.repetitionId = 'repetition-2';
+  repeated.harness.repetitions[1].reproducibility.repetitionId = 'repetition-2';
+  repeated.generic.repetitions[2].reproducibility.repetitionIndex = 4;
+  repeated.harness.repetitions[2].reproducibility.repetitionIndex = 4;
+  const noncontiguous = classifyPair(repeated);
+  assert.equal(noncontiguous.result, 'infrastructure-invalid');
+  assert.match(noncontiguous.reason, /repetition-index-sequence/i);
+
+  repeated.generic.repetitions[2].reproducibility.repetitionIndex = 3;
+  repeated.harness.repetitions[2].reproducibility.repetitionIndex = 3;
+  repeated.harness.repetitions[1].reproducibility.conditionHash = 'f'.repeat(64);
+  const treatmentDrift = classifyPair(repeated);
+  assert.equal(treatmentDrift.result, 'infrastructure-invalid');
+  assert.match(treatmentDrift.reason, /cross-repetition-harness-conditionHash/i);
+});
+
 test('allocateReleaseBudgets chains the plan allowances under the release ceiling', () => {
   const budgets = allocateReleaseBudgets(CONFIG.budget);
   assert.equal(budgets.release.ceilingUsd, 20);
@@ -359,6 +498,34 @@ test('efficiency deltas use like-for-like evidence and the configured parity thr
   );
   assert.equal(delta.withinThresholds, true, 'threshold boundaries are inclusive');
   assert.deepEqual(delta.breaches, []);
+});
+
+test('efficiency deltas compare the same conservative reconciled cost charged by execution', () => {
+  const generic = fullRun('generic', 'pass', {
+    efficiency: { providerReportedCostUsd: 0.02, localCostUsd: 0.02, reconciledCostUsd: 0.02 },
+  });
+  const harness = fullRun('harness', 'pass', {
+    efficiency: { providerReportedCostUsd: 0.02, localCostUsd: 0.02, reconciledCostUsd: 0.04 },
+  });
+
+  const delta = efficiencyDelta(generic, harness, CONFIG.efficiencyThresholds);
+
+  assert.equal(delta.costRatio, 2);
+  assert.equal(delta.withinThresholds, false);
+  assert.ok(delta.breaches.includes('costRatio'));
+});
+
+test('efficiency deltas exclude billing-uncertain cost from comparable evidence', () => {
+  const generic = fullRun('generic', 'pass');
+  const harness = fullRun('harness', 'pass', {
+    efficiency: { billingUncertain: true },
+  });
+
+  const delta = efficiencyDelta(generic, harness, CONFIG.efficiencyThresholds);
+
+  assert.equal(delta.costRatio, null);
+  assert.equal(delta.evidenceComplete, false);
+  assert.equal(delta.withinThresholds, false);
 });
 
 test('the reserve is unusable without a recorded reason', () => {
@@ -447,6 +614,8 @@ test('a required OpenRouter pair is withheld unless the provider key hard limit 
 test('required multi-repetition evidence is validated per retained trial instead of comparing medians to summed events', async () => {
   const repeatedPair = {
     host: 'openrouter-kimi',
+    task: 'cobol-modernization',
+    pairId: 'pair-1',
     repetitionCount: 3,
     generic: repeatedRun('generic', 'pass'),
     harness: repeatedRun('harness', 'pass'),
@@ -525,7 +694,7 @@ test('a kimi baseline-pass/harness-fail reruns one full fresh pair and blocks wh
     kimiPair: async () => pairOf('openrouter-kimi', 'pass', 'fail'),
     rerunKimiPair: async () => {
       rerunCalls += 1;
-      return pairOf('openrouter-kimi', 'pass', 'fail');
+      return rerunPairOf('openrouter-kimi', 'pass', 'fail');
     },
   });
   const { report, exitCode } = await runRelease({ config: CONFIG, steps });
@@ -543,7 +712,7 @@ test('a kimi baseline-pass/harness-fail reruns one full fresh pair and blocks wh
 test('an unreproduced kimi regression is flaky-inconclusive and does not block', async () => {
   const steps = baseSteps({
     kimiPair: async () => pairOf('openrouter-kimi', 'pass', 'fail'),
-    rerunKimiPair: async () => pairOf('openrouter-kimi', 'pass', 'pass'),
+    rerunKimiPair: async () => rerunPairOf('openrouter-kimi', 'pass', 'pass'),
   });
   const { report, exitCode } = await runRelease({ config: CONFIG, steps });
   const kimi = report.pairs.find((p) => p.host === 'openrouter-kimi');
@@ -556,18 +725,18 @@ test('an unreproduced kimi regression is flaky-inconclusive and does not block',
 
 test('an invalid, incomplete, fallback-contaminated, or policy-regressing rerun cannot clear the original regression', async () => {
   const invalidReruns = [
-    () => pairOf('openrouter-kimi', 'pass', 'pass', { failureKind: 'provider' }),
+    () => rerunPairOf('openrouter-kimi', 'pass', 'pass', { failureKind: 'provider' }),
     () => {
-      const pair = pairOf('openrouter-kimi', 'pass', 'pass');
+      const pair = rerunPairOf('openrouter-kimi', 'pass', 'pass');
       pair.harness.efficiency.costComplete = false;
       return pair;
     },
     () => {
-      const pair = pairOf('openrouter-kimi', 'pass', 'pass');
+      const pair = rerunPairOf('openrouter-kimi', 'pass', 'pass');
       pair.harness.observability.providerEvents.find((event) => event.type === 'response').provider = 'DeepInfra';
       return pair;
     },
-    () => pairOf('openrouter-kimi', 'pass', 'pass', { harness: { efficiency: { promptTokens: 2001 } } }),
+    () => rerunPairOf('openrouter-kimi', 'pass', 'pass', { harness: { efficiency: { promptTokens: 2001 } } }),
   ];
   for (const rerun of invalidReruns) {
     const { report, exitCode } = await runRelease({
@@ -586,10 +755,41 @@ test('an invalid, incomplete, fallback-contaminated, or policy-regressing rerun 
   }
 });
 
+test('a rerun for another task or without a fresh attempt identity cannot clear a regression', async () => {
+  const invalidReruns = [
+    rerunPairOf('openrouter-kimi', 'pass', 'pass', {
+      task: 'build-pmars',
+      generic: { reproducibility: { taskHash: 'b'.repeat(64) } },
+      harness: { reproducibility: { taskHash: 'b'.repeat(64) } },
+    }),
+    pairOf('openrouter-kimi', 'pass', 'pass'),
+    rerunPairOf('openrouter-kimi', 'pass', 'pass', { pairId: 'pair-1' }),
+    rerunPairOf('openrouter-kimi', 'pass', 'pass', {
+      harness: { reproducibility: { conditionHash: 'f'.repeat(64) } },
+    }),
+  ];
+
+  for (const rerun of invalidReruns) {
+    const { report, exitCode } = await runRelease({
+      config: CONFIG,
+      steps: baseSteps({
+        kimiPair: async () => pairOf('openrouter-kimi', 'pass', 'fail'),
+        rerunKimiPair: async () => rerun,
+      }),
+    });
+    const pair = report.pairs.find((entry) => entry.host === 'openrouter-kimi');
+    assert.equal(pair.result, 'harness-regression');
+    assert.equal(pair.reproduced, null);
+    assert.equal(pair.rerun.causallyAttributable, false);
+    assert.match(pair.rerun.reason, /identity/i);
+    assert.equal(exitCode, 1);
+  }
+});
+
 test('during calibration a reproduced kimi regression is informational, not blocking', async () => {
   const steps = baseSteps({
     kimiPair: async () => pairOf('openrouter-kimi', 'pass', 'fail'),
-    rerunKimiPair: async () => pairOf('openrouter-kimi', 'pass', 'fail'),
+    rerunKimiPair: async () => rerunPairOf('openrouter-kimi', 'pass', 'fail'),
   });
   const { report, exitCode } = await runRelease({ config: CONFIG, steps, calibrationRelease: true });
   assert.equal(exitCode, 0);
@@ -796,11 +996,16 @@ test('incomplete harness-event projection prevents a required causal claim', asy
 test('a multi-task pair step yields one report entry per task, each classified independently', async () => {
   const steps = baseSteps({
     kimiPair: async () => [
-      { ...pairOf('openrouter-kimi', 'pass', 'pass'), task: 'cobol-modernization' },
-      { ...pairOf('openrouter-kimi', 'fail', 'pass'), task: 'build-pmars' },
+      pairOf('openrouter-kimi', 'pass', 'pass'),
+      pairOf('openrouter-kimi', 'fail', 'pass', {
+        task: 'build-pmars',
+        pairId: 'pair-build-pmars',
+        generic: { reproducibility: { taskHash: 'b'.repeat(64) } },
+        harness: { reproducibility: { taskHash: 'b'.repeat(64) } },
+      }),
     ],
   });
-  const { report, exitCode } = await runRelease({ config: CONFIG, steps, requiredPairs: ['openrouter-kimi'] });
+  const { report, exitCode } = await runRelease({ config: MULTI_TASK_CONFIG, steps, requiredPairs: ['openrouter-kimi'] });
   const kimi = report.pairs.filter((p) => p.host === 'openrouter-kimi');
   assert.equal(kimi.length, 2);
   assert.equal(kimi.find((p) => p.task === 'cobol-modernization').result, 'parity');
@@ -808,19 +1013,65 @@ test('a multi-task pair step yields one report entry per task, each classified i
   assert.equal(exitCode, 0);
 });
 
+test('required task-set coverage blocks missing, duplicate, and unexpected controlled tasks', async () => {
+  const buildPair = () => pairOf('openrouter-kimi', 'pass', 'pass', {
+    task: 'build-pmars',
+    pairId: 'pair-build-pmars',
+    generic: { reproducibility: { taskHash: 'b'.repeat(64) } },
+    harness: { reproducibility: { taskHash: 'b'.repeat(64) } },
+  });
+  const cases = [
+    [
+      pairOf('openrouter-kimi', 'pass', 'pass'),
+    ],
+    [
+      pairOf('openrouter-kimi', 'pass', 'pass'),
+      pairOf('openrouter-kimi', 'pass', 'pass', { pairId: 'duplicate-pair' }),
+      buildPair(),
+    ],
+    [
+      pairOf('openrouter-kimi', 'pass', 'pass'),
+      buildPair(),
+      pairOf('openrouter-kimi', 'pass', 'pass', { task: 'not-in-lock', pairId: 'unexpected-pair' }),
+    ],
+  ];
+
+  for (const pairs of cases) {
+    const { report, exitCode } = await runRelease({
+      config: MULTI_TASK_CONFIG,
+      steps: baseSteps({ kimiPair: async () => pairs }),
+      requiredPairs: ['openrouter-kimi'],
+    });
+    assert.equal(report.coverage.complete, false);
+    assert.equal(report.claim.level, 'inconclusive');
+    assert.ok(report.gate.reasons.some((reason) => /coverage/i.test(reason)));
+    assert.equal(exitCode, 1);
+  }
+});
+
 test('a regression on one task reruns and gates ONLY that task', async () => {
   let rerunTasks = [];
   const steps = baseSteps({
     kimiPair: async () => [
-      { ...pairOf('openrouter-kimi', 'pass', 'pass'), task: 'cobol-modernization' },
-      { ...pairOf('openrouter-kimi', 'pass', 'fail'), task: 'build-pmars' },
+      pairOf('openrouter-kimi', 'pass', 'pass'),
+      pairOf('openrouter-kimi', 'pass', 'fail', {
+        task: 'build-pmars',
+        pairId: 'pair-build-pmars',
+        generic: { reproducibility: { taskHash: 'b'.repeat(64) } },
+        harness: { reproducibility: { taskHash: 'b'.repeat(64) } },
+      }),
     ],
     rerunKimiPair: async (budget, task) => {
       rerunTasks.push(task);
-      return { ...pairOf('openrouter-kimi', 'pass', 'fail'), task };
+      return rerunPairOf('openrouter-kimi', 'pass', 'fail', {
+        task,
+        pairId: 'pair-build-pmars-rerun',
+        generic: { reproducibility: { taskHash: 'b'.repeat(64) } },
+        harness: { reproducibility: { taskHash: 'b'.repeat(64) } },
+      });
     },
   });
-  const { report, exitCode } = await runRelease({ config: CONFIG, steps, requiredPairs: ['openrouter-kimi'] });
+  const { report, exitCode } = await runRelease({ config: MULTI_TASK_CONFIG, steps, requiredPairs: ['openrouter-kimi'] });
   assert.deepEqual(rerunTasks, ['build-pmars'], 'only the regressed task is rerun');
   const regressed = report.pairs.find((p) => p.task === 'build-pmars');
   assert.equal(regressed.result, 'harness-regression');
@@ -831,7 +1082,18 @@ test('a regression on one task reruns and gates ONLY that task', async () => {
 });
 
 test('the markdown eval card names the full task set, verdicts, spend, claim, and comparison limitations', async () => {
-  const { report } = await runRelease({ config: CONFIG, steps: baseSteps(), releaseSha: 'abc123', harnessVersion: '0.5.0' });
+  const steps = baseSteps({
+    kimiPair: async () => [
+      pairOf('openrouter-kimi', 'pass', 'pass', { task: 'cobol-modernization' }),
+      pairOf('openrouter-kimi', 'pass', 'pass', {
+        task: 'build-pmars',
+        pairId: 'pair-build-pmars',
+        generic: { reproducibility: { taskHash: 'b'.repeat(64) } },
+        harness: { reproducibility: { taskHash: 'b'.repeat(64) } },
+      }),
+    ],
+  });
+  const { report } = await runRelease({ config: MULTI_TASK_CONFIG, steps, releaseSha: 'abc123', harnessVersion: '0.5.0' });
   const md = buildMarkdownReport(report);
   assert.match(md, /cobol-modernization/);
   assert.match(md, /build-pmars/);

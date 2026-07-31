@@ -6,7 +6,7 @@ import { test } from 'node:test';
 import { AGENT_REF, buildLiveSteps, aggregateRepetitionDocs, buildRunDoc } from '../../../evals/external/terminal_bench/live-steps.mjs';
 import { BUNDLE_MOUNT_TARGET, harnessWrapperScript, activationCommands } from '../../../evals/external/terminal_bench/provision.mjs';
 import { stampTaskLock, verifyTaskAgainstLock } from '../../../evals/external/terminal_bench/harbor-adapter.mjs';
-import { validateAgainstSchema, runRelease } from '../../../evals/release.mjs';
+import { efficiencyDelta, validateAgainstSchema, runRelease } from '../../../evals/release.mjs';
 import { createBudget } from '../../../evals/lib/budget.mjs';
 
 const RUN_SCHEMA = JSON.parse(fs.readFileSync(new URL('../../../evals/schema/eval-run.v1.schema.json', import.meta.url), 'utf8'));
@@ -158,7 +158,7 @@ function fakeHarborSpawn({
   };
 }
 
-function liveSteps({ datasetDir, taskDir, lock, spawnImpl, apiKey = 'test-key', workDir = tmpdir(), config = null, fetchImpl = undefined }) {
+function liveSteps({ datasetDir, taskDir, lock, spawnImpl, apiKey = 'test-key', workDir = tmpdir(), config = null, fetchImpl = undefined, repetitions = null }) {
   let clockTick = 0;
   return buildLiveSteps({
     config: config ?? { execution: { environment: 'docker' } },
@@ -169,8 +169,9 @@ function liveSteps({ datasetDir, taskDir, lock, spawnImpl, apiKey = 'test-key', 
     harnessVersion: '0.5.0',
     spawnImpl,
     ...(fetchImpl ? { fetchImpl } : {}),
+    ...(repetitions != null ? { repetitions } : {}),
     now: () => new Date(Date.UTC(2026, 6, 31, 0, 0, clockTick++)).toISOString(),
-    prepareBundle: ({ bundleDir }) => ({ bundleDir, mount: { source: bundleDir, target: BUNDLE_MOUNT_TARGET, readOnly: true } }),
+    prepareBundle: ({ bundleDir }) => ({ bundleDir, manifestHash: 'f'.repeat(64), mount: { source: bundleDir, target: BUNDLE_MOUNT_TARGET, readOnly: true } }),
   });
 }
 
@@ -282,12 +283,14 @@ test('a live kimi pair produces two schema-valid run documents and charges provi
     assert.equal(doc.efficiency.billingComplete, true);
     assert.equal(doc.efficiency.usageComplete, true);
     assert.equal(doc.efficiency.providerCostComplete, true);
+    assert.equal(doc.efficiency.reconciledCostUsd, 0.02, 'the charged per-trial cost is retained for aggregation');
     assert.equal(doc.efficiency.missingUsage, 0);
     assert.equal(doc.reproducibility.modelResolved, 'moonshotai/kimi-k2.7-code');
     assert.match(doc.reproducibility.pairId, /^[a-f0-9]{24}$/);
     assert.match(doc.reproducibility.repetitionId, /^[a-f0-9]{24}$/);
     assert.match(doc.reproducibility.conditionHash, /^[a-f0-9]{64}$/);
     assert.match(doc.reproducibility.taskHash, /^[a-f0-9]{64}$/);
+    assert.equal(doc.reproducibility.bundleManifestHash, 'f'.repeat(64), 'the exact mounted bundle identity is retained');
     assert.match(doc.reproducibility.toolSchemaHash, /^[a-f0-9]{64}$/);
     assert.equal(doc.correctness.finalDiffHash, 'c'.repeat(64), 'the final diff hash comes from workspace evidence');
     assert.match(doc.correctness.verifierArtifactHash, /^[a-f0-9]{64}$/);
@@ -364,6 +367,42 @@ test('the pair allowance is preallocated equally across both conditions', async 
     .map((i) => i.args[i.args.findIndex((a) => typeof a === 'string' && a.startsWith('HARNESS_EVAL_TB_CONDITION=')) ]);
   const ceilings = conditionPaths.map((kv) => JSON.parse(fs.readFileSync(kv.split('=')[1], 'utf8')).limits.trialCeilingUsd);
   assert.deepEqual(ceilings, [3.5, 3.5], 'generic and harness receive identical fixed ceilings');
+});
+
+test('a selected-task calibration and its rerun keep the exact same per-arm budget condition', async () => {
+  const { taskDir, lock } = fixtureTask();
+  const { spawnImpl, invocations } = fakeHarborSpawn({ providerCostUsd: 0.01 });
+  const budgetConfig = { releaseCeilingUsd: 10, kimiPairUsd: 8, rerunUsd: 2, reserveUsd: 2 };
+  const steps = liveSteps({
+    taskDir,
+    lock,
+    spawnImpl,
+    repetitions: 3,
+    config: { execution: { environment: 'docker' }, budget: budgetConfig },
+  });
+  await steps.taskLock();
+  const [primary] = await steps.kimiPair(createBudget({ ceilingUsd: 8, label: 'primary-selected-calibration' }));
+  const rerun = await steps.rerunKimiPair(
+    createBudget({ ceilingUsd: 2, label: 'rerun-selected-calibration' }),
+    'cobol-modernization'
+  );
+
+  for (const condition of ['generic', 'harness']) {
+    const hashes = [
+      ...primary[condition].repetitions.map((run) => run.reproducibility.conditionHash),
+      ...rerun[condition].repetitions.map((run) => run.reproducibility.conditionHash),
+    ];
+    assert.equal(new Set(hashes).size, 1, `${condition} must not receive a different budget/prompt contract on rerun`);
+  }
+  const conditionPaths = invocations
+    .filter((invocation) => invocation.args[0] === 'run')
+    .map((invocation) => invocation.args.find((arg) => String(arg).startsWith('HARNESS_EVAL_TB_CONDITION=')))
+    .map((assignment) => assignment.split('=')[1]);
+  assert.deepEqual(
+    conditionPaths.map((file) => JSON.parse(fs.readFileSync(file, 'utf8')).limits.trialCeilingUsd),
+    Array(8).fill(1),
+    'the primary ceiling is capped at the amount a full rerun can reproduce'
+  );
 });
 
 test('an incomplete provider-cost total never undercharges the release ledger', async () => {
@@ -518,7 +557,7 @@ test('the local model floor is explicit opt-in, anchor-only, secret-free, and ze
     },
     spawnImpl,
     localEnabled: true,
-    prepareBundle: ({ bundleDir }) => ({ bundleDir, mount: { source: bundleDir, target: BUNDLE_MOUNT_TARGET, readOnly: true } }),
+    prepareBundle: ({ bundleDir }) => ({ bundleDir, manifestHash: 'f'.repeat(64), mount: { source: bundleDir, target: BUNDLE_MOUNT_TARGET, readOnly: true } }),
   });
   assert.equal((await enabled.taskLock()).ok, true);
   const budget = createBudget({ ceilingUsd: 0, label: 'local-floor' });
@@ -539,7 +578,16 @@ test('the local model floor is explicit opt-in, anchor-only, secret-free, and ze
 test('live steps feed runRelease end to end: green pair, valid report, exit 0', async () => {
   const { taskDir, lock } = fixtureTask();
   const { spawnImpl } = fakeHarborSpawn();
-  const config = { budget: { releaseCeilingUsd: 20, kimiPairUsd: 10, rerunUsd: 8, reserveUsd: 2 }, task: { datasetRef: lock.datasetRef, task: lock.task } };
+  const [taskEntry] = lock.tasks;
+  const config = {
+    budget: { releaseCeilingUsd: 20, kimiPairUsd: 10, rerunUsd: 8, reserveUsd: 2 },
+    task: {
+      datasetRef: lock.datasetRef,
+      task: taskEntry.task,
+      taskChecksum: taskEntry.taskChecksum,
+      taskSet: [taskEntry],
+    },
+  };
   const steps = liveSteps({
     taskDir,
     lock,
@@ -562,12 +610,12 @@ test('AGENT_REF matches the importable module path', () => {
   assert.equal(AGENT_REF, 'evals.external.terminal_bench.harbor_agent:StdioBridgeAgent');
 });
 
-function repetitionDoc({ verdict = 'pass', reward = 1, promptTokens = 1000, costUsd = 0.02, costComplete = true, missingUsage = 0 } = {}) {
+function repetitionDoc({ verdict = 'pass', reward = 1, promptTokens = 1000, costUsd = 0.02, providerCostUsd = costUsd, reconciledCostUsd = Math.max(costUsd, providerCostUsd), costComplete = true, missingUsage = 0 } = {}) {
   return {
     schema: 'eval-run.v1',
     reproducibility: { condition: 'generic', startedAt: '2026-07-31T00:00:00Z', endedAt: '2026-07-31T00:03:00Z' },
     correctness: { verifierReward: reward, verdict, exitReason: 'model_finish', completedWithinTimeout: true, completedWithinBudget: true },
-    efficiency: { promptTokens, outputTokens: 500, modelRequests: 10, localCostUsd: costUsd, providerReportedCostUsd: costUsd, cachedPromptTokens: 0, reasoningTokens: 0, costComplete, missingUsage },
+    efficiency: { promptTokens, outputTokens: 500, modelRequests: 10, localCostUsd: costUsd, providerReportedCostUsd: providerCostUsd, reconciledCostUsd, cachedPromptTokens: 0, reasoningTokens: 0, costComplete, missingUsage },
     harnessBehavior: {},
     subscription: null,
   };
@@ -583,6 +631,24 @@ test('repetition aggregation uses majority verdict and median efficiency over va
   assert.equal(agg.correctness.verifierReward, 1, 'median reward');
   assert.equal(agg.efficiency.promptTokens, 200, 'median tokens');
   assert.match(agg.correctness.exitReason, /repetition-aggregate\(n=3\)/);
+});
+
+test('repetition aggregation preserves the median per-trial reconciled charge for efficiency comparison', () => {
+  const generic = aggregateRepetitionDocs([
+    repetitionDoc({ costUsd: 1, providerCostUsd: 1 }),
+    repetitionDoc({ costUsd: 1, providerCostUsd: 1 }),
+    repetitionDoc({ costUsd: 1, providerCostUsd: 1 }),
+  ]);
+  const harness = aggregateRepetitionDocs([
+    repetitionDoc({ costUsd: 100, providerCostUsd: 1 }),
+    repetitionDoc({ costUsd: 1, providerCostUsd: 100 }),
+    repetitionDoc({ costUsd: 1, providerCostUsd: 1 }),
+  ]);
+
+  assert.equal(harness.efficiency.localCostUsd, 1, 'component medians alone would understate charged cost');
+  assert.equal(harness.efficiency.providerReportedCostUsd, 1);
+  assert.equal(harness.efficiency.reconciledCostUsd, 100);
+  assert.equal(efficiencyDelta(generic, harness).costRatio, 100);
 });
 
 test('invalid repetitions are excluded from the verdict denominator while raw evidence remains retained', () => {
@@ -803,7 +869,7 @@ test('multiple repetitions run each condition, alternate order, and all charge t
     harnessVersion: 'v',
     spawnImpl,
     repetitions: 2,
-    prepareBundle: ({ bundleDir }) => ({ bundleDir, mount: { source: bundleDir, target: BUNDLE_MOUNT_TARGET, readOnly: true } }),
+    prepareBundle: ({ bundleDir }) => ({ bundleDir, manifestHash: 'f'.repeat(64), mount: { source: bundleDir, target: BUNDLE_MOUNT_TARGET, readOnly: true } }),
   });
   await steps.taskLock();
   const budget = createBudget({ ceilingUsd: 10, label: 'kimi-pair' });
@@ -842,7 +908,7 @@ test('a pair requires a strict majority of scheduled repetitions to have two val
     env: { OPENROUTER_API_KEY: 'k', HARNESS_EVAL_TB_DATASET_DIR: datasetDir },
     spawnImpl,
     repetitions: 3,
-    prepareBundle: ({ bundleDir }) => ({ bundleDir, mount: { source: bundleDir, target: BUNDLE_MOUNT_TARGET, readOnly: true } }),
+    prepareBundle: ({ bundleDir }) => ({ bundleDir, manifestHash: 'f'.repeat(64), mount: { source: bundleDir, target: BUNDLE_MOUNT_TARGET, readOnly: true } }),
   });
   await steps.taskLock();
   const [pair] = await steps.kimiPair(createBudget({ ceilingUsd: 10, label: 'strict-pair-validity' }));

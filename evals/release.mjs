@@ -17,6 +17,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { isDeepStrictEqual } from 'node:util';
 import { createBudget } from './lib/budget.mjs';
 
 export const MAX_RELEASE_API_USD = 20;
@@ -79,6 +80,209 @@ function normalizeProviderName(value) {
 
 function rawTrials(doc) {
   return Array.isArray(doc?.repetitions) && doc.repetitions.length > 0 ? doc.repetitions : doc ? [doc] : [];
+}
+
+const SHA256_HEX = /^[a-f0-9]{64}$/i;
+const PAIR_SCALAR_FIELDS = [
+  'releaseSha',
+  'harnessVersion',
+  'taskId',
+  'taskRevision',
+  'taskHash',
+  'bundleManifestHash',
+  'modelRequested',
+  'modelResolved',
+  'host',
+  'runnerVersion',
+  'pairId',
+  'repetitionId',
+  'repetitionIndex',
+  'attempt',
+];
+const CROSS_REPETITION_FIELDS = [
+  'releaseSha',
+  'harnessVersion',
+  'taskId',
+  'taskRevision',
+  'taskHash',
+  'bundleManifestHash',
+  'modelRequested',
+  'modelResolved',
+  'host',
+  'runnerVersion',
+  'pairId',
+  'attempt',
+];
+const CONDITION_REPETITION_FIELDS = [
+  'conditionHash',
+  'systemPromptHash',
+  'toolSchemaHash',
+  'harnessContentHash',
+];
+
+function normalizedProviderOrder(value) {
+  return Array.isArray(value) ? value.map(normalizeProviderName) : null;
+}
+
+function pairIdentityVerdict(pair, {
+  host = pair?.host,
+  releaseSha = null,
+  harnessVersion = null,
+  expectedTask = pair?.task,
+  expectedTaskRevision = null,
+  expectedTaskHash = null,
+} = {}) {
+  const mismatches = [];
+  const note = (field) => mismatches.push(field);
+  const genericTrials = rawTrials(pair?.generic);
+  const harnessTrials = rawTrials(pair?.harness);
+  if (!pair?.generic || !pair?.harness) note('arm-presence');
+  if (genericTrials.length === 0 || genericTrials.length !== harnessTrials.length) note('repetition-count');
+  const declaredRepetitions = pair?.repetitionCount ?? pair?.seedCount;
+  if (!Number.isInteger(declaredRepetitions) || declaredRepetitions !== genericTrials.length) note('repetition-count-envelope');
+
+  const indexed = (trials, condition) => {
+    const map = new Map();
+    for (const trial of trials) {
+      const index = trial?.reproducibility?.repetitionIndex;
+      if (!Number.isInteger(index) || index < 1 || map.has(index)) {
+        note(`${condition}-repetition-index`);
+        continue;
+      }
+      map.set(index, trial);
+    }
+    return map;
+  };
+  const genericByIndex = indexed(genericTrials, 'generic');
+  const harnessByIndex = indexed(harnessTrials, 'harness');
+  const expectedIndices = Array.from({ length: genericTrials.length }, (_, index) => index + 1);
+  if (!isDeepStrictEqual([...genericByIndex.keys()].sort((a, b) => a - b), expectedIndices)) note('repetition-index-sequence');
+  if (!isDeepStrictEqual([...harnessByIndex.keys()].sort((a, b) => a - b), expectedIndices)) note('repetition-index-sequence');
+  const repetitionIds = genericTrials.map((trial) => trial?.reproducibility?.repetitionId);
+  if (repetitionIds.some((id) => typeof id !== 'string' || id.length === 0) || new Set(repetitionIds).size !== repetitionIds.length) {
+    note('repetition-id-uniqueness');
+  }
+  const firstIdentity = genericTrials[0]?.reproducibility ?? null;
+  for (const trial of genericTrials) {
+    const identity = trial?.reproducibility ?? {};
+    for (const field of CROSS_REPETITION_FIELDS) {
+      if (firstIdentity && !isDeepStrictEqual(identity[field], firstIdentity[field])) note(`cross-repetition-${field}`);
+    }
+    if (firstIdentity && !isDeepStrictEqual(
+      normalizedProviderOrder(identity.providerRequestedOrder),
+      normalizedProviderOrder(firstIdentity.providerRequestedOrder)
+    )) note('cross-repetition-providerRequestedOrder');
+    if (firstIdentity && normalizeProviderName(identity.providerResolved) !== normalizeProviderName(firstIdentity.providerResolved)) {
+      note('cross-repetition-providerResolved');
+    }
+    if (firstIdentity && !isDeepStrictEqual(identity.reasoningConfig, firstIdentity.reasoningConfig)) {
+      note('cross-repetition-reasoningConfig');
+    }
+  }
+  for (const [condition, trials] of [['generic', genericTrials], ['harness', harnessTrials]]) {
+    const first = trials[0]?.reproducibility ?? null;
+    for (const trial of trials) {
+      const identity = trial?.reproducibility ?? {};
+      for (const field of CONDITION_REPETITION_FIELDS) {
+        if (first && !isDeepStrictEqual(identity[field], first[field])) {
+          note(`cross-repetition-${condition}-${field}`);
+        }
+      }
+    }
+  }
+
+  for (const [index, generic] of genericByIndex) {
+    const harness = harnessByIndex.get(index);
+    if (!harness) {
+      note('repetition-alignment');
+      continue;
+    }
+    const genericIdentity = generic?.reproducibility ?? {};
+    const harnessIdentity = harness?.reproducibility ?? {};
+    for (const field of PAIR_SCALAR_FIELDS) {
+      if (!isDeepStrictEqual(genericIdentity[field], harnessIdentity[field])) note(field);
+    }
+    if (!isDeepStrictEqual(
+      normalizedProviderOrder(genericIdentity.providerRequestedOrder),
+      normalizedProviderOrder(harnessIdentity.providerRequestedOrder)
+    )) note('providerRequestedOrder');
+    if (normalizeProviderName(genericIdentity.providerResolved) !== normalizeProviderName(harnessIdentity.providerResolved)) {
+      note('providerResolved');
+    }
+    if (!isDeepStrictEqual(genericIdentity.reasoningConfig, harnessIdentity.reasoningConfig)) note('reasoningConfig');
+    if (genericIdentity.condition !== 'generic' || harnessIdentity.condition !== 'harness') note('condition');
+    const order = [genericIdentity.orderIndex, harnessIdentity.orderIndex].sort((a, b) => a - b);
+    if (!isDeepStrictEqual(order, [1, 2])) note('orderIndex');
+    if (!SHA256_HEX.test(String(genericIdentity.taskHash ?? ''))) note('taskHash-presence');
+    if (!SHA256_HEX.test(String(genericIdentity.bundleManifestHash ?? ''))) note('bundleManifestHash-presence');
+    for (const field of ['conditionHash', 'systemPromptHash', 'toolSchemaHash']) {
+      if (!SHA256_HEX.test(String(genericIdentity[field] ?? ''))) note(`generic-${field}-presence`);
+      if (!SHA256_HEX.test(String(harnessIdentity[field] ?? ''))) note(`harness-${field}-presence`);
+    }
+    if (!SHA256_HEX.test(String(harnessIdentity.harnessContentHash ?? ''))) note('harnessContentHash-presence');
+    if (!genericIdentity.pairId || !genericIdentity.repetitionId || !genericIdentity.attempt) note('trial-identity-presence');
+    if (pair?.pairId && genericIdentity.pairId !== pair.pairId) note('pairId-envelope');
+    if (expectedTask && genericIdentity.taskId !== expectedTask) note('expected-task');
+    if (expectedTaskRevision && genericIdentity.taskRevision !== expectedTaskRevision) note('expected-task-revision');
+    if (expectedTaskHash && genericIdentity.taskHash !== expectedTaskHash) note('expected-task-hash');
+    if (host && genericIdentity.host !== host) note('expected-host');
+    if (releaseSha && releaseSha !== 'unknown' && genericIdentity.releaseSha !== releaseSha) note('expected-release');
+    if (harnessVersion && harnessVersion !== 'unknown' && genericIdentity.harnessVersion !== harnessVersion) note('expected-harness-version');
+  }
+  for (const index of harnessByIndex.keys()) if (!genericByIndex.has(index)) note('repetition-alignment');
+  if (!pair?.task || (expectedTask && pair.task !== expectedTask)) note('task-envelope');
+  if (!pair?.pairId) note('pairId-envelope');
+  const unique = [...new Set(mismatches)].sort();
+  return { ok: unique.length === 0, mismatches: unique };
+}
+
+function rerunIdentityVerdict(original, rerun, expected = {}) {
+  const rerunPair = pairIdentityVerdict(rerun, expected);
+  const mismatches = [...rerunPair.mismatches];
+  const originalTrials = rawTrials(original?.generic);
+  const rerunTrials = rawTrials(rerun?.generic);
+  const originalIdentity = originalTrials[0]?.reproducibility ?? {};
+  const rerunIdentity = rerunTrials[0]?.reproducibility ?? {};
+  const invariantFields = [
+    'releaseSha', 'harnessVersion', 'taskId', 'taskRevision', 'taskHash', 'bundleManifestHash',
+    'modelRequested', 'modelResolved', 'host', 'runnerVersion',
+  ];
+  for (const field of invariantFields) {
+    if (!isDeepStrictEqual(originalIdentity[field], rerunIdentity[field])) mismatches.push(`rerun-${field}`);
+  }
+  if (!isDeepStrictEqual(
+    normalizedProviderOrder(originalIdentity.providerRequestedOrder),
+    normalizedProviderOrder(rerunIdentity.providerRequestedOrder)
+  )) mismatches.push('rerun-providerRequestedOrder');
+  if (normalizeProviderName(originalIdentity.providerResolved) !== normalizeProviderName(rerunIdentity.providerResolved)) {
+    mismatches.push('rerun-providerResolved');
+  }
+  if (!isDeepStrictEqual(originalIdentity.reasoningConfig, rerunIdentity.reasoningConfig)) mismatches.push('rerun-reasoningConfig');
+  for (const condition of ['generic', 'harness']) {
+    const originalCondition = rawTrials(original?.[condition])[0]?.reproducibility ?? {};
+    const rerunCondition = rawTrials(rerun?.[condition])[0]?.reproducibility ?? {};
+    for (const field of CONDITION_REPETITION_FIELDS) {
+      if (!isDeepStrictEqual(originalCondition[field], rerunCondition[field])) {
+        mismatches.push(`rerun-${condition}-${field}`);
+      }
+    }
+  }
+  if (original?.task !== rerun?.task) mismatches.push('rerun-task-envelope');
+  const originalPairIds = new Set(rawTrials(original?.generic).map((trial) => trial?.reproducibility?.pairId).filter(Boolean));
+  const rerunPairIds = new Set(rerunTrials.map((trial) => trial?.reproducibility?.pairId).filter(Boolean));
+  if ([...rerunPairIds].some((pairId) => originalPairIds.has(pairId))) mismatches.push('rerun-fresh-pairId');
+  const originalRepetitionIds = new Set(
+    rawTrials(original?.generic).map((trial) => trial?.reproducibility?.repetitionId).filter(Boolean)
+  );
+  const rerunRepetitionIds = new Set(rerunTrials.map((trial) => trial?.reproducibility?.repetitionId).filter(Boolean));
+  if ([...rerunRepetitionIds].some((repetitionId) => originalRepetitionIds.has(repetitionId))) {
+    mismatches.push('rerun-fresh-repetitionId');
+  }
+  const originalAttempts = new Set(rawTrials(original?.generic).map((trial) => trial?.reproducibility?.attempt).filter(Boolean));
+  const rerunAttempts = new Set(rerunTrials.map((trial) => trial?.reproducibility?.attempt).filter(Boolean));
+  if ([...rerunAttempts].some((attempt) => originalAttempts.has(attempt))) mismatches.push('rerun-fresh-attempt');
+  const unique = [...new Set(mismatches)].sort();
+  return { ok: unique.length === 0, mismatches: unique };
 }
 
 function trialAttribution(doc, { requireProvider = false } = {}) {
@@ -144,13 +348,20 @@ function summarizeRun(doc, { requireProvider = false } = {}) {
 }
 
 /** The §8 result matrix with its precedence: safety, infrastructure, budget. */
-export function classifyPair(pair) {
+export function classifyPair(pair, identityOptions = {}) {
   const requireProvider = String(pair.host ?? '').startsWith('openrouter');
   const generic = summarizeRun(pair.generic, { requireProvider });
   const harness = summarizeRun(pair.harness, { requireProvider });
+  const identity = pairIdentityVerdict(pair, identityOptions);
   const fallbackDetected = generic.fallback || harness.fallback;
   const attributionComplete = generic.attributionComplete && harness.attributionComplete;
-  const base = { safety: false, fallbackDetected, attributionComplete };
+  const base = {
+    safety: false,
+    fallbackDetected,
+    attributionComplete,
+    identityAligned: identity.ok,
+    identityMismatches: identity.mismatches,
+  };
   if (generic.safety || harness.safety) {
     return { ...base, safety: true, result: 'harness-regression', reason: 'a harness safety control was bypassed' };
   }
@@ -161,6 +372,13 @@ export function classifyPair(pair) {
     // provider and verifier failures are invalid trials too — never "the
     // model wasn't capable".
     return { ...base, result: 'infrastructure-invalid', reason: `${pair.failureKind} failure invalidated the trial` };
+  }
+  if (!identity.ok) {
+    return {
+      ...base,
+      result: 'infrastructure-invalid',
+      reason: `controlled identity mismatch (${identity.mismatches.join(', ')})`,
+    };
   }
   if (fallbackDetected) {
     return { ...base, result: 'infrastructure-invalid', reason: 'model or provider fallback contaminated the comparison' };
@@ -195,11 +413,14 @@ function ratio(candidate, baseline) {
 
 function comparableCost(doc) {
   const efficiency = doc?.efficiency;
-  if (!efficiency || efficiency.costComplete !== true) return null;
-  if (efficiency.providerCostComplete === true && finiteNumber(efficiency.providerReportedCostUsd) != null) {
-    return efficiency.providerReportedCostUsd;
-  }
-  return finiteNumber(efficiency.localCostUsd);
+  if (!efficiency || efficiency.costComplete !== true || efficiency.billingUncertain === true) return null;
+  const reconciledCost = finiteNumber(efficiency.reconciledCostUsd);
+  const localCost = finiteNumber(efficiency.localCostUsd);
+  const providerCost = efficiency.providerCostComplete === true
+    ? finiteNumber(efficiency.providerReportedCostUsd)
+    : null;
+  const comparable = [reconciledCost, localCost, providerCost].filter((value) => value != null);
+  return comparable.length ? Math.max(...comparable) : null;
 }
 
 /** Like-for-like Harness/baseline efficiency ratios for a controlled pair. */
@@ -275,11 +496,12 @@ export function scaleReleaseBudget(baseBudget, requestedCeilingUsd) {
 /* ------------------------------------------------------------ gate policy -- */
 
 /** §9: always-blocking rules, with gate-inactive pairs reporting instead of blocking. */
-export function applyGatePolicy({ deterministic, pairs = [], smokes = [], telemetryComplete, taskLockOk, environmentOk, budgetBreached = false, calibrationRelease = false }) {
+export function applyGatePolicy({ deterministic, pairs = [], smokes = [], telemetryComplete, coverageComplete = true, coverageReason = null, taskLockOk, environmentOk, budgetBreached = false, calibrationRelease = false }) {
   const reasons = [];
   if (deterministic?.failed > 0) reasons.push(`existing deterministic evals regressed (${deterministic.failed} failing)`);
   if (environmentOk === false) reasons.push('required dependencies or credentials are missing');
   if (taskLockOk === false) reasons.push('the pinned task/verifier failed validation');
+  if (coverageComplete === false) reasons.push(`required controlled task coverage is incomplete${coverageReason ? ` (${coverageReason})` : ''}`);
   if (telemetryComplete === false) reasons.push('required telemetry is missing from at least one run');
   if (budgetBreached) reasons.push('the absolute release API budget was exceeded during provider reconciliation');
   for (const pair of pairs) {
@@ -309,6 +531,40 @@ export function applyGatePolicy({ deterministic, pairs = [], smokes = [], teleme
     if (smoke.ok === false) reasons.push(`compatibility smoke failed: ${smoke.host} (${(smoke.failed ?? []).join(', ')})`);
   }
   return { block: reasons.length > 0, reasons };
+}
+
+function controlledTaskCoverage(config, pairs, requiredPairs) {
+  const requiredHosts = requiredPairs.filter((host) => String(host).startsWith('openrouter'));
+  const expectedTasks = (config.task?.taskSet ?? [])
+    .map((entry) => entry?.task)
+    .filter((task) => typeof task === 'string' && task.length > 0);
+  const observed = pairs
+    .filter((pair) => requiredHosts.includes(pair.host) && pair.result !== 'skipped' && typeof pair.task === 'string')
+    .map((pair) => ({ host: pair.host, task: pair.task }));
+  const missing = [];
+  const duplicates = [];
+  const unexpected = [];
+  for (const host of requiredHosts) {
+    for (const task of expectedTasks) {
+      const count = observed.filter((entry) => entry.host === host && entry.task === task).length;
+      if (count === 0) missing.push({ host, task });
+      if (count > 1) duplicates.push({ host, task, count });
+    }
+    for (const entry of observed.filter((candidate) => candidate.host === host)) {
+      if (!expectedTasks.includes(entry.task)) unexpected.push(entry);
+    }
+  }
+  const complete = requiredHosts.length === 0 || (
+    expectedTasks.length > 0 && missing.length === 0 && duplicates.length === 0 && unexpected.length === 0
+  );
+  const describe = (entries) => entries.map((entry) => `${entry.host}:${entry.task}`).join(', ');
+  const reason = [
+    missing.length ? `missing ${describe(missing)}` : null,
+    duplicates.length ? `duplicate ${describe(duplicates)}` : null,
+    unexpected.length ? `unexpected ${describe(unexpected)}` : null,
+    requiredHosts.length > 0 && expectedTasks.length === 0 ? 'no expected tasks configured' : null,
+  ].filter(Boolean).join('; ');
+  return { complete, requiredHosts, expectedTasks, observed, missing, duplicates, unexpected, reason: reason || null };
 }
 
 function buildClaim(pairs, telemetryComplete) {
@@ -355,7 +611,7 @@ function gateActiveFor(host, calibrationRelease) {
   return true; // frontier rotation gates when scheduled
 }
 
-const METERED_FIELDS = ['promptTokens', 'outputTokens', 'modelRequests', 'providerAttempts', 'localCostUsd'];
+const METERED_FIELDS = ['promptTokens', 'outputTokens', 'modelRequests', 'providerAttempts', 'localCostUsd', 'reconciledCostUsd'];
 
 function attributableTrialEvidence(doc, { paid = false } = {}) {
   const efficiency = doc?.efficiency ?? {};
@@ -410,8 +666,9 @@ function completePaidEvidence(doc) {
   );
 }
 
-function fullyAttributablePair(pair, host) {
+function fullyAttributablePair(pair, host, identityOptions = {}) {
   if (!pair?.generic || !pair?.harness || pair.failureKind) return false;
+  if (!pairIdentityVerdict(pair, { ...identityOptions, host }).ok) return false;
   if (String(host).startsWith('openrouter')) {
     return completePaidEvidence(pair.generic) && completePaidEvidence(pair.harness);
   }
@@ -453,6 +710,18 @@ export async function runRelease({ config, steps, calibrationRelease = false, re
   const collect = (pair) => {
     for (const doc of [pair?.generic, pair?.harness]) if (doc) runDocs.push(doc);
   };
+  const identityOptionsFor = (host, pair) => {
+    const expectedTask = pair?.task ?? null;
+    const expectedTaskEntry = (config.task?.taskSet ?? []).find((entry) => entry.task === expectedTask);
+    return {
+      host,
+      releaseSha,
+      harnessVersion,
+      expectedTask,
+      expectedTaskRevision: config.task?.datasetRef ?? null,
+      expectedTaskHash: expectedTaskEntry?.taskChecksum ?? null,
+    };
+  };
 
   async function evaluatePair(host, stepFn, { rerunFn = null, budget = budgets.release } = {}) {
     const required = requiredPairs.includes(host);
@@ -480,7 +749,8 @@ export async function runRelease({ config, steps, calibrationRelease = false, re
     // rerun, and gated independently.
     for (const pair of Array.isArray(result) ? result : [result]) {
       collect(pair);
-      let classification = classifyPair(pair);
+      const identityOptions = identityOptionsFor(host, pair);
+      let classification = classifyPair(pair, identityOptions);
       let reproduced = null;
       let rerunEvidence = null;
       // §9 conditional rerun: one complete fresh pair for THIS task, never treatment-only.
@@ -492,8 +762,18 @@ export async function runRelease({ config, steps, calibrationRelease = false, re
           classification = { ...classification, reason: `${classification.reason}; rerun unavailable — regression unresolved` };
         } else {
           collect(second);
-          const rerunClassification = classifyPair(second);
-          const rerunAttributable = fullyAttributablePair(second, host);
+          const rerunIdentity = rerunIdentityVerdict(pair, second, identityOptionsFor(host, pair));
+          let rerunClassification = classifyPair(second, identityOptionsFor(host, pair));
+          if (!rerunIdentity.ok) {
+            rerunClassification = {
+              ...rerunClassification,
+              result: 'infrastructure-invalid',
+              identityAligned: false,
+              identityMismatches: rerunIdentity.mismatches,
+              reason: `rerun identity mismatch (${rerunIdentity.mismatches.join(', ')})`,
+            };
+          }
+          const rerunAttributable = rerunIdentity.ok && fullyAttributablePair(second, host, identityOptionsFor(host, pair));
           const rerunEfficiency = efficiencyDelta(second.generic, second.harness, config.efficiencyThresholds);
           rerunEvidence = {
             task: second.task ?? pair.task ?? null,
@@ -523,7 +803,7 @@ export async function runRelease({ config, steps, calibrationRelease = false, re
           }
         }
       }
-      const causallyAttributable = fullyAttributablePair(pair, host) && classification.fallbackDetected !== true;
+      const causallyAttributable = fullyAttributablePair(pair, host, identityOptions) && classification.fallbackDetected !== true;
       pairEntries.push({
         host,
         comparisonTrack: 'controlled-ablation',
@@ -563,6 +843,7 @@ export async function runRelease({ config, steps, calibrationRelease = false, re
   });
 
   const smokes = preflightOk && steps.smokes ? await steps.smokes() : [];
+  const coverage = controlledTaskCoverage(config, pairEntries, requiredPairs);
   // Evidence is complete only when every run document validates AND every
   // required API pair actually metered its spend — an all-null efficiency
   // block is a missing measurement, not a measurement of nothing.
@@ -571,12 +852,14 @@ export async function runRelease({ config, steps, calibrationRelease = false, re
     if (!p.generic || !p.harness) return false;
     return p.causallyAttributable === true && [p.generic, p.harness].every((doc) => completePaidEvidence(doc));
   });
-  const telemetryComplete = meteredOk && runDocs.every((doc) => validateAgainstSchema(doc, RUN_SCHEMA).ok);
+  const telemetryComplete = coverage.complete && meteredOk && runDocs.every((doc) => validateAgainstSchema(doc, RUN_SCHEMA).ok);
   const gate = applyGatePolicy({
     deterministic,
     pairs: pairEntries,
     smokes,
     telemetryComplete,
+    coverageComplete: coverage.complete,
+    coverageReason: coverage.reason,
     taskLockOk: taskLock.ok !== false,
     environmentOk,
     budgetBreached: budgets.release.breached,
@@ -604,6 +887,7 @@ export async function runRelease({ config, steps, calibrationRelease = false, re
     },
     calibrationRelease,
     deterministic,
+    coverage,
     pairs: pairEntries.map(({ classification, required, ...entry }) => entry),
     nativeProducts,
     smokes,
@@ -654,6 +938,7 @@ export function buildMarkdownReport(report) {
     `Task set: ${taskNames} (${report.task.datasetRef})${report.calibrationRelease ? ' — calibration release' : ''}`,
     '',
     `Deterministic suite: ${report.deterministic.passed} passed, ${report.deterministic.failed} failed, ${report.deterministic.skipped} skipped.`,
+    `Controlled task coverage: ${report.coverage?.complete === true ? 'complete' : `incomplete${report.coverage?.reason ? ` (${report.coverage.reason})` : ''}`}.`,
     '',
     '| Host | Result | Gate | Reason |',
     '|---|---|---|---|',
@@ -703,21 +988,40 @@ async function main() {
   const json = argv.includes('--json');
   const raw = loadYamlConfig(profile);
   const lockFileFlag = flag('--lock-file', null); // bootstrap/test hook; default is the committed lock
-  const lock = JSON.parse(
+  const completeLock = JSON.parse(
     fs.readFileSync(lockFileFlag ? path.resolve(lockFileFlag) : new URL(`../${raw.task.lockFile}`, import.meta.url), 'utf8')
   );
   const budgetUsd = Number(flag('--budget-usd', raw.budget.releaseCeilingUsd));
   if (!Number.isFinite(budgetUsd) || budgetUsd < 0 || budgetUsd > MAX_RELEASE_API_USD) {
     throw new Error(`--budget-usd must be between 0 and ${MAX_RELEASE_API_USD}, got: ${flag('--budget-usd')}`);
   }
-  const taskSet = (lock.tasks ?? (lock.task ? [{ task: lock.task, taskChecksum: lock.taskChecksum, role: 'anchor' }] : [])).map(
+  const lockedTasks = completeLock.tasks ?? (
+    completeLock.task
+      ? [{ task: completeLock.task, taskChecksum: completeLock.taskChecksum, role: 'anchor' }]
+      : []
+  );
+  const taskFlagPresent = argv.includes('--task');
+  const requestedTask = flag('--task', null);
+  if (taskFlagPresent && (
+    typeof requestedTask !== 'string' || requestedTask.length === 0 || requestedTask.startsWith('--')
+  )) {
+    throw new Error('--task requires a nonempty pinned task value');
+  }
+  if (requestedTask && !lockedTasks.some((entry) => entry.task === requestedTask)) {
+    throw new Error(`--task ${requestedTask} is not a pinned task in the selected lock`);
+  }
+  const selectedTasks = requestedTask ? lockedTasks.filter((entry) => entry.task === requestedTask) : lockedTasks;
+  const lock = { ...completeLock, tasks: selectedTasks };
+  delete lock.task;
+  delete lock.taskChecksum;
+  const taskSet = selectedTasks.map(
     ({ task, taskChecksum = null, role = null }) => ({ task, taskChecksum, role })
   );
   const config = {
     budget: scaleReleaseBudget(raw.budget, budgetUsd),
     task: {
       datasetRef: lock.datasetRef,
-      task: flag('--task', taskSet.length === 1 ? taskSet[0].task : 'multi-task-canary'),
+      task: taskSet.length === 1 ? taskSet[0].task : 'multi-task-canary',
       taskChecksum: taskSet.length === 1 ? taskSet[0].taskChecksum : null,
       taskSet,
     },
