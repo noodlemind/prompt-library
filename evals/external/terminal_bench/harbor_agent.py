@@ -28,6 +28,9 @@ import asyncio
 import json
 import os
 import pathlib
+import re
+import shlex
+import tempfile
 
 try:
     from harbor.agents.base import BaseAgent
@@ -36,6 +39,24 @@ except ImportError:  # pragma: no cover - lets CI import-check the module withou
 
 
 class StdioBridgeAgent(BaseAgent):
+    _EVIDENCE_PROBE = "/opt/harness-bundle/evidence-probe"
+    _EVIDENCE_BEFORE = ".harness/eval-before.json"
+    _MAX_PARSED_JSON_BYTES = 2 * 1024 * 1024
+    _EVENT_KEYS = {
+        "version", "id", "ts", "type", "result", "exitCode", "plan",
+        "phase", "gate", "decision", "blockedReason", "mutation", "success",
+        "durationMs", "checks",
+    }
+    _EVIDENCE_REASONS = {
+        "before-manifest-unavailable",
+        "workspace-directory-unreadable",
+        "workspace-entry-unreadable",
+        "workspace-file-limit-exceeded",
+        "workspace-file-byte-limit-exceeded",
+        "workspace-total-byte-limit-exceeded",
+        "workspace-evidence-unavailable",
+    }
+
     @staticmethod
     def name() -> str:
         return "engineer-harness-stdio-bridge"
@@ -59,6 +80,32 @@ class StdioBridgeAgent(BaseAgent):
                     f"setup command failed (exit {result['code']}): {command}\n"
                     f"stdout: {result['stdout'][-2000:]}\nstderr: {result['stderr'][-2000:]}"
                 )
+        # Setup mutations are not product work. Capture the baseline only
+        # after activation succeeds and immediately before the model runs.
+        # Probe failures are retained as explicit unavailable evidence; they
+        # never change the benchmark task's correctness outcome.
+        snapshot = await self._exec(
+            environment,
+            f"{self._EVIDENCE_PROBE} snapshot --output {self._EVIDENCE_BEFORE}",
+            timeout_ms=60_000,
+            parse_json=True,
+        )
+        parsed = snapshot.get("_parsedJson")
+        if snapshot.get("code") == 0 and isinstance(parsed, dict) and parsed.get("available") is True:
+            digest = parsed.get("manifestHash")
+            self._evidence_snapshot = {
+                "available": isinstance(digest, str) and bool(re.fullmatch(r"[a-f0-9]{64}", digest)),
+                "manifestHash": digest,
+                "reason": None,
+            }
+            if not self._evidence_snapshot["available"]:
+                self._evidence_snapshot["reason"] = "evidence-probe-snapshot-invalid"
+        else:
+            self._evidence_snapshot = {
+                "available": False,
+                "manifestHash": None,
+                "reason": "evidence-probe-snapshot-unavailable",
+            }
 
     async def run(self, instruction: str, environment, context) -> None:
         condition_path = self._cfg("HARNESS_EVAL_TB_CONDITION")
@@ -103,6 +150,7 @@ class StdioBridgeAgent(BaseAgent):
                     await proc.stdin.drain()
                 elif message["type"] == "done":
                     saw_done = True
+                    await self._enrich_done(environment, message)
                     self._populate_context(context, message)
                     break
         finally:
@@ -123,7 +171,37 @@ class StdioBridgeAgent(BaseAgent):
         with open(condition_path) as fh:
             return json.load(fh)
 
-    async def _exec(self, environment, command: str, timeout_ms: int | None = None) -> dict:
+    @staticmethod
+    def _is_standalone_json_verify(command: str) -> bool:
+        """Only strict Harness verification may expose full parsed JSON."""
+        if not isinstance(command, str) or any(char in command for char in "\r\n;&|<>`$"):
+            return False
+        try:
+            words = shlex.split(command, posix=True)
+        except ValueError:
+            return False
+        if len(words) < 3 or words[0:2] != ["harness", "verify"] or "--json" not in words:
+            return False
+        return not any(
+            word in {"--dry-run", "--help", "-h"} or word.startswith("--dry-run=")
+            for word in words
+        )
+
+    @staticmethod
+    def _text(value) -> str:
+        if value is None:
+            return ""
+        if isinstance(value, bytes):
+            return value.decode("utf-8", errors="replace")
+        return str(value)
+
+    async def _exec(
+        self,
+        environment,
+        command: str,
+        timeout_ms: int | None = None,
+        parse_json: bool = False,
+    ) -> dict:
         """Execute a command via whichever exec surface this Harbor exposes."""
         exec_fn = getattr(environment, "exec", None) or getattr(environment, "execute", None)
         if exec_fn is None:
@@ -154,8 +232,194 @@ class StdioBridgeAgent(BaseAgent):
         stdout = getattr(result, "output", None)
         if stdout is None:
             stdout = getattr(result, "stdout", "")
-        stderr = getattr(result, "stderr", "") or ""
-        return {"code": code, "stdout": (stdout or "")[-6000:], "stderr": stderr[-2000:]}
+        stdout = self._text(stdout)
+        stderr = self._text(getattr(result, "stderr", ""))
+        normalized = {"code": code, "stdout": stdout[-6000:], "stderr": stderr[-2000:]}
+
+        # Parse the complete stdout before applying the model-visible tail
+        # bound. Arbitrary command JSON is not exposed: only a strict
+        # standalone `harness verify ... --json` receives `parsedStdout`.
+        # Probe calls opt into a private key consumed inside this wrapper.
+        expose = self._is_standalone_json_verify(command)
+        if (parse_json or expose) and len(stdout.encode("utf-8")) <= self._MAX_PARSED_JSON_BYTES:
+            try:
+                parsed = json.loads(stdout.strip())
+            except (json.JSONDecodeError, TypeError):
+                parsed = None
+            if parsed is not None:
+                if expose:
+                    normalized["parsedStdout"] = parsed
+                elif parse_json:
+                    normalized["_parsedJson"] = parsed
+        return normalized
+
+    @staticmethod
+    def _unavailable_evidence(reason: str) -> dict:
+        return {
+            "workspaceEvidence": {
+                "available": False,
+                "collectionMode": "bounded-content-hash-manifest-v1",
+                "beforeManifestHash": None,
+                "afterManifestHash": None,
+                "diffHash": None,
+                "changedPaths": [],
+                "changedPathCount": 0,
+                "changedPathsTruncated": False,
+                "reason": reason,
+            },
+            "harnessEvents": [],
+            "harnessEventEvidence": {
+                "available": False,
+                "reason": reason,
+                "retainedEvents": 0,
+                "sourceTruncated": False,
+            },
+            "enforcement": {
+                "hooksActive": False,
+                "source": "unavailable",
+            },
+        }
+
+    async def _collect_evidence(self, environment) -> dict:
+        snapshot = getattr(self, "_evidence_snapshot", None) or {
+            "available": False,
+            "manifestHash": None,
+            "reason": "evidence-probe-snapshot-not-attempted",
+        }
+        expected = snapshot.get("manifestHash")
+        expected_flag = f" --expected-before-hash {expected}" if snapshot.get("available") and expected else ""
+        result = await self._exec(
+            environment,
+            f"{self._EVIDENCE_PROBE} collect --before {self._EVIDENCE_BEFORE}{expected_flag}",
+            timeout_ms=120_000,
+            parse_json=True,
+        )
+        parsed = result.get("_parsedJson")
+        if result.get("code") != 0 or not isinstance(parsed, dict):
+            return self._unavailable_evidence("evidence-probe-collect-unavailable")
+        workspace = parsed.get("workspaceEvidence")
+        events = parsed.get("harnessEvents")
+        event_evidence = parsed.get("harnessEventEvidence")
+        enforcement = parsed.get("enforcement")
+        if not isinstance(workspace, dict) or not isinstance(events, list) or not isinstance(enforcement, dict):
+            return self._unavailable_evidence("evidence-probe-collect-invalid")
+        # The read-only probe already allowlists fields. Bound once more at the
+        # host bridge so a future probe regression cannot inflate the done file.
+        hashes = [workspace.get(key) for key in ("beforeManifestHash", "afterManifestHash", "diffHash")]
+        hashes_valid = all(isinstance(value, str) and re.fullmatch(r"[a-f0-9]{64}", value) for value in hashes)
+        available = workspace.get("available") is True and hashes_valid
+        paths = workspace.get("changedPaths") if isinstance(workspace.get("changedPaths"), list) else []
+        changed_paths = [
+            value[:500]
+            for value in paths
+            if isinstance(value, str) and not any(ord(char) < 32 or ord(char) == 127 for char in value)
+        ][:200]
+        raw_changed_count = workspace.get("changedPathCount")
+        changed_count = (
+            raw_changed_count
+            if isinstance(raw_changed_count, int) and raw_changed_count >= len(changed_paths)
+            else len(changed_paths)
+        )
+        safe_workspace = {
+            "available": available,
+            "collectionMode": "bounded-content-hash-manifest-v1",
+            "beforeManifestHash": hashes[0] if available else None,
+            "afterManifestHash": hashes[1] if available else None,
+            "diffHash": hashes[2] if available else None,
+            "changedPaths": changed_paths if available else [],
+            "changedPathCount": changed_count if available else 0,
+            "changedPathsTruncated": (
+                bool(workspace.get("changedPathsTruncated")) or changed_count > len(changed_paths)
+            ) if available else False,
+            "reason": None if available else (
+                workspace.get("reason")
+                if workspace.get("reason") in self._EVIDENCE_REASONS
+                else "evidence-probe-reported-unavailable"
+            ),
+        }
+        safe_events = []
+        for event in events[-200:]:
+            if not isinstance(event, dict) or not isinstance(event.get("type"), str):
+                continue
+            projected = {key: event[key] for key in self._EVENT_KEYS if key in event}
+            try:
+                if len(json.dumps(projected, separators=(",", ":"))) > 8_192:
+                    continue
+            except (TypeError, ValueError):
+                continue
+            safe_events.append(projected)
+        safe_event_evidence = {
+            "available": isinstance(event_evidence, dict) and event_evidence.get("available") is True,
+            "reason": None,
+            "retainedEvents": len(safe_events),
+            "sourceTruncated": isinstance(event_evidence, dict) and event_evidence.get("sourceTruncated") is True,
+        }
+        if not safe_event_evidence["available"]:
+            reported_reason = event_evidence.get("reason") if isinstance(event_evidence, dict) else None
+            safe_event_evidence["reason"] = (
+                reported_reason
+                if reported_reason in {"harness-events-not-found", "harness-events-unreadable"}
+                else "harness-event-evidence-unavailable"
+            )
+        return {
+            "workspaceEvidence": safe_workspace,
+            "harnessEvents": safe_events,
+            "harnessEventEvidence": safe_event_evidence,
+            "enforcement": {
+                "hooksActive": enforcement.get("hooksActive") is True,
+                "source": str(enforcement.get("source") or "unavailable")[:80],
+                **(
+                    {"policyBypassAchieved": enforcement["policyBypassAchieved"]}
+                    if isinstance(enforcement.get("policyBypassAchieved"), bool)
+                    else {}
+                ),
+            },
+        }
+
+    def _rewrite_done_file(self, done: dict) -> bool:
+        destination_value = self._cfg("HARNESS_EVAL_TB_TELEMETRY_FILE")
+        if not destination_value:
+            return False
+        destination = pathlib.Path(destination_value)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        temporary_name = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                encoding="utf-8",
+                dir=destination.parent,
+                prefix=f".{destination.name}.",
+                suffix=".tmp",
+                delete=False,
+            ) as temporary:
+                temporary_name = temporary.name
+                json.dump(done, temporary, separators=(",", ":"))
+                temporary.write("\n")
+                temporary.flush()
+                os.fsync(temporary.fileno())
+            os.replace(temporary_name, destination)
+            return True
+        except Exception:
+            if temporary_name:
+                try:
+                    os.unlink(temporary_name)
+                except OSError:
+                    pass
+            return False
+
+    async def _enrich_done(self, environment, done: dict) -> None:
+        try:
+            evidence = await self._collect_evidence(environment)
+        except Exception:
+            evidence = self._unavailable_evidence("evidence-probe-bridge-error")
+        done.update(evidence)
+        if not self._rewrite_done_file(done):
+            # Keep this diagnostic in Harbor context/the in-memory outcome. A
+            # host-file failure is observability loss, not task incorrectness.
+            done["evidenceBridge"] = {
+                "telemetryPersisted": False,
+                "reason": "host-telemetry-rewrite-unavailable",
+            }
 
     def _populate_context(self, context, done: dict) -> None:
         """Attach the bridge outcome to Harbor's AgentContext.
@@ -171,6 +435,10 @@ class StdioBridgeAgent(BaseAgent):
             "stopReason": done.get("stopReason"),
             "steps": done.get("steps"),
             "telemetry": done.get("telemetry"),
+            "workspaceEvidence": done.get("workspaceEvidence"),
+            "harnessEvents": done.get("harnessEvents"),
+            "harnessEventEvidence": done.get("harnessEventEvidence"),
+            "enforcement": done.get("enforcement"),
         }
         try:
             existing = getattr(context, "metadata", None)

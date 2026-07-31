@@ -29,19 +29,28 @@ export function bundleMount(bundleDir) {
 
 const repoRootDefault = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 
-export function harnessWrapperScript() {
+function architectureWrapperScript(entrypoint, label) {
   // The container architecture belongs to the task image (the pinned COBOL
   // image is amd64-only regardless of host), so the runtime is chosen by
   // uname -m and the bundle carries one runtime per supported arch.
   return [
     '#!/bin/sh',
     'case "$(uname -m)" in',
-    `  x86_64) exec ${BUNDLE_MOUNT_TARGET}/node-x64/bin/node ${BUNDLE_MOUNT_TARGET}/harness/bin/harness.mjs "$@" ;;`,
-    `  aarch64|arm64) exec ${BUNDLE_MOUNT_TARGET}/node-arm64/bin/node ${BUNDLE_MOUNT_TARGET}/harness/bin/harness.mjs "$@" ;;`,
-    '  *) echo "harness bundle: unsupported architecture $(uname -m)" >&2; exit 1 ;;',
+    `  x86_64) exec ${BUNDLE_MOUNT_TARGET}/node-x64/bin/node ${entrypoint} "$@" ;;`,
+    `  aarch64|arm64) exec ${BUNDLE_MOUNT_TARGET}/node-arm64/bin/node ${entrypoint} "$@" ;;`,
+    `  *) echo "${label}: unsupported architecture $(uname -m)" >&2; exit 1 ;;`,
     'esac',
     '',
   ].join('\n');
+}
+
+export function harnessWrapperScript() {
+  return architectureWrapperScript(`${BUNDLE_MOUNT_TARGET}/harness/bin/harness.mjs`, 'harness bundle');
+}
+
+/** A sandbox-local probe that uses the runtime matching the task image. */
+export function evidenceProbeWrapperScript() {
+  return architectureWrapperScript(`${BUNDLE_MOUNT_TARGET}/evidence-probe.mjs`, 'evidence probe');
 }
 
 /**
@@ -103,5 +112,12 @@ export function prepareHarnessBundle({
   }
   const wrapper = path.join(bundleDir, 'harness-cli');
   fs.writeFileSync(wrapper, harnessWrapperScript(), { mode: 0o755 });
+  // Evidence is collected in both conditions, so it is part of the symmetric
+  // read-only bundle rather than installed as a treatment-only executable.
+  fs.copyFileSync(
+    path.join(repoRoot, 'evals', 'external', 'terminal_bench', 'evidence-probe.mjs'),
+    path.join(bundleDir, 'evidence-probe.mjs')
+  );
+  fs.writeFileSync(path.join(bundleDir, 'evidence-probe'), evidenceProbeWrapperScript(), { mode: 0o755 });
   return { bundleDir, mount: bundleMount(bundleDir) };
 }
