@@ -546,9 +546,38 @@ test('the local model floor is explicit opt-in, anchor-only, secret-free, and ze
   });
   assert.equal(disabled.gemmaPair, null, 'routine releases do not inherit local-model wall time');
 
+  const scheduleDisabled = buildLiveSteps({
+    config: {
+      execution: { environment: 'docker' },
+      pairs: [{ host: 'ollama-gemma', enabled: true, schedule: 'disabled', taskRole: 'anchor' }],
+    },
+    lock,
+    workDir: tmpdir(),
+    env: { HARNESS_EVAL_TB_DATASET_DIR: datasetDir ?? path.dirname(taskDir) },
+    localEnabled: true,
+  });
+  assert.equal(scheduleDisabled.gemmaPair, null, 'the configured schedule can reject the CLI opt-in');
+  assert.throws(
+    () => buildLiveSteps({
+      config: {
+        execution: { environment: 'docker' },
+        pairs: [{ host: 'ollama-gemma', enabled: true, schedule: 'explicit-with-local', taskRole: 'stress' }],
+      },
+      lock,
+      workDir: tmpdir(),
+      env: { HARNESS_EVAL_TB_DATASET_DIR: datasetDir ?? path.dirname(taskDir) },
+      localEnabled: true,
+    }),
+    /taskRole is not pinned.*stress/,
+    'the configured role is consumed instead of silently falling back to the anchor'
+  );
+
   const { spawnImpl, invocations } = fakeHarborSpawn({ providerCostUsd: 9.99 });
   const enabled = buildLiveSteps({
-    config: { execution: { environment: 'docker' } },
+    config: {
+      execution: { environment: 'docker' },
+      pairs: [{ host: 'ollama-gemma', enabled: true, schedule: 'explicit-with-local', taskRole: 'anchor' }],
+    },
     lock,
     workDir: tmpdir(),
     env: {

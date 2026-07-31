@@ -610,6 +610,27 @@ export function buildLiveSteps({
   if (conditionOrderPolicy !== 'release-hash-balanced') {
     throw new Error(`unsupported condition order policy: ${conditionOrderPolicy}`);
   }
+  const configuredPairs = Array.isArray(config.pairs) ? config.pairs : null;
+  const localPairConfig = configuredPairs?.find((entry) => entry?.host === 'ollama-gemma') ?? null;
+  const localSchedule = localPairConfig?.schedule ?? 'explicit-with-local';
+  const localTaskRole = localPairConfig?.taskRole ?? 'anchor';
+  if (!['explicit-with-local', 'disabled'].includes(localSchedule)) {
+    throw new Error(`unsupported ollama-gemma schedule: ${localSchedule}`);
+  }
+  if (typeof localTaskRole !== 'string' || localTaskRole.length === 0) {
+    throw new Error('ollama-gemma taskRole must be a nonempty string');
+  }
+  // An explicitly configured pair controls whether the CLI opt-in is accepted.
+  // Configurations predating `pairs` retain the old explicit-opt-in behavior.
+  const localScheduled = localEnabled &&
+    (localPairConfig ? localPairConfig.enabled !== false : configuredPairs == null) &&
+    localSchedule === 'explicit-with-local';
+  const localTask = localScheduled
+    ? tasksOf(lock).find((entry) => entry.role === localTaskRole) ?? null
+    : null;
+  if (localScheduled && !localTask) {
+    throw new Error(`ollama-gemma configured taskRole is not pinned in the selected lock: ${localTaskRole}`);
+  }
   // ?? null: an absent key must NOT fall back to the process environment —
   // the injected env is the whole truth for credential decisions here.
   const kimiHost = createKimiHost({ apiKey: env.OPENROUTER_API_KEY ?? null });
@@ -1058,13 +1079,12 @@ export function buildLiveSteps({
     // The local floor is deliberately opt-in: it adds wall time, not API
     // spend, and only runs the anchor task so an M3 Max is not turned into a
     // hidden multi-hour release dependency.
-    gemmaPair: localEnabled
+    gemmaPair: localScheduled
       ? async (budget) => {
           ensureBundle();
-          const anchor = tasksOf(lock).find((entry) => entry.role === 'anchor') ?? tasksOf(lock)[0];
           return [taskPair({
             evalHost: gemmaHost,
-            task: anchor.task,
+            task: localTask.task,
             budget,
             attempt: 'local',
             trialCeilingUsd: 0,
