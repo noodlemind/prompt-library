@@ -32,7 +32,6 @@ import json
 import os
 import pathlib
 import re
-import shlex
 import stat
 import tempfile
 
@@ -223,7 +222,7 @@ class StdioBridgeAgent(BaseAgent):
                     proc.stdin.write((json.dumps(reply) + "\n").encode())
                     await proc.stdin.drain()
                 elif message["type"] == "verify":
-                    result = await self._trusted_verify(environment, message.get("plan"))
+                    result = await self._trusted_verify(environment)
                     reply = {
                         "type": "verification_result",
                         "id": message["id"],
@@ -250,27 +249,9 @@ class StdioBridgeAgent(BaseAgent):
                 f"stdio bridge exited without a done message (node exit {proc.returncode})"
             )
 
-    async def _trusted_verify(self, environment, plan: str | None) -> dict:
+    async def _trusted_verify(self, environment) -> dict:
         """Run only the immutable verifier command and return a bounded attestation."""
-        if plan is not None:
-            if (
-                not isinstance(plan, str)
-                or len(plan) > 500
-                or re.fullmatch(r"docs/plans/[A-Za-z0-9._/-]+\.md", plan) is None
-                or ".." in pathlib.PurePosixPath(plan).parts
-            ):
-                return {
-                    "code": 126,
-                    "stdout": "",
-                    "stderr": "trusted verification plan path is invalid",
-                    "trustedVerification": True,
-                    "passed": False,
-                    "plan": None,
-                    "evidencePath": None,
-                }
         command = f"{self._HARNESS_CLI} verify --workspace . --json"
-        if plan is not None:
-            command += f" --plan {shlex.quote(plan)}"
         result = await self._exec(
             environment,
             command,
@@ -278,6 +259,20 @@ class StdioBridgeAgent(BaseAgent):
             parse_json=True,
         )
         parsed = result.get("_parsedJson")
+        reported_plan = parsed.get("plan") if isinstance(parsed, dict) else None
+        reported_evidence = parsed.get("evidencePath") if isinstance(parsed, dict) else None
+        safe_plan = (
+            isinstance(reported_plan, str)
+            and len(reported_plan) <= 500
+            and re.fullmatch(r"docs/plans/[A-Za-z0-9._/-]+\.md", reported_plan) is not None
+            and ".." not in pathlib.PurePosixPath(reported_plan).parts
+        )
+        safe_evidence = (
+            isinstance(reported_evidence, str)
+            and len(reported_evidence) <= 500
+            and re.fullmatch(r"\.harness/evidence/[A-Za-z0-9._/-]+\.json", reported_evidence) is not None
+            and ".." not in pathlib.PurePosixPath(reported_evidence).parts
+        )
         passed = (
             result.get("code") == 0
             and isinstance(parsed, dict)
@@ -286,17 +281,25 @@ class StdioBridgeAgent(BaseAgent):
             and parsed.get("scopeViolations") == []
             and parsed.get("openHardGaps") == []
             and parsed.get("requiredReviews") == []
-            and isinstance(parsed.get("plan"), str)
-            and isinstance(parsed.get("evidencePath"), str)
+            and safe_plan
+            and safe_evidence
         )
+        summary = {
+            "outcome": parsed.get("outcome") if isinstance(parsed, dict) else "invalid",
+            "passed": passed,
+            "unverifiedCriteria": (parsed.get("unverifiedCriteria") or [])[:20] if isinstance(parsed, dict) else [],
+            "scopeViolations": (parsed.get("scopeViolations") or [])[:20] if isinstance(parsed, dict) else [],
+            "openHardGaps": (parsed.get("openHardGaps") or [])[:20] if isinstance(parsed, dict) else [],
+            "requiredReviews": (parsed.get("requiredReviews") or [])[:20] if isinstance(parsed, dict) else [],
+        }
         return {
             "code": result.get("code", 125),
-            "stdout": result.get("stdout", ""),
-            "stderr": result.get("stderr", ""),
+            "stdout": json.dumps(summary, separators=(",", ":"))[:8_000],
+            "stderr": str(result.get("stderr", ""))[-2_000:],
             "trustedVerification": True,
             "passed": passed,
-            "plan": parsed.get("plan") if passed else None,
-            "evidencePath": parsed.get("evidencePath") if passed else None,
+            "plan": reported_plan if passed else None,
+            "evidencePath": reported_evidence if passed else None,
         }
 
     def _load_persisted_done(self, reference: dict) -> dict:

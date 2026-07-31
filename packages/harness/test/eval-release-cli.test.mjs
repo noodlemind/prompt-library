@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { test } from 'node:test';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { stampTaskLock } from '../../../evals/external/terminal_bench/harbor-adapter.mjs';
 import { prepareHarnessBundle } from '../../../evals/external/terminal_bench/provision.mjs';
 
@@ -48,7 +48,7 @@ function cleanGitView() {
   run(['add', '-A']);
   run(['-c', 'user.name=Eval Test', '-c', 'user.email=eval-test@example.invalid', 'commit', '-m', 'clean eval source snapshot']);
   const releaseSha = run(['rev-parse', '--verify', 'HEAD']);
-  assert.match(releaseSha, /^[a-f0-9]{40,64}$/);
+  assert.match(releaseSha, /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/);
   assert.equal(run(['status', '--porcelain=v1', '--untracked-files=all']), '');
   return { gitEnv: { GIT_DIR: gitDir, GIT_WORK_TREE: repoRoot }, releaseSha };
 }
@@ -86,8 +86,10 @@ function setupFixture({ taskNames = ['cobol-modernization'] } = {}) {
   fs.writeFileSync(
     fakeHarbor,
     `
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
+import { runtimeBridgeTools } from ${JSON.stringify(pathToFileURL(path.join(repoRoot, 'evals', 'external', 'terminal_bench', 'agent.mjs')).href)};
 const args = process.argv.slice(2);
 if (args[0] === '--version') { console.log('0.20.0'); process.exit(0); }
 if (args[0] !== 'run') process.exit(0);
@@ -116,8 +118,26 @@ if (!providerKey || secretInArgv || providerKeyInAgentEnv) {
 const verifierDir = path.join(jobsDir, jobName, 'trial-0', 'verifier');
 fs.mkdirSync(verifierDir, { recursive: true });
 fs.writeFileSync(path.join(verifierDir, 'reward.json'), '{"reward": 1}');
+const condition = JSON.parse(fs.readFileSync(agentEnv.HARNESS_EVAL_TB_CONDITION, 'utf8'));
+const runtimeConfig = condition.runtime ?? {};
+const tools = runtimeBridgeTools({
+  guidanceCatalog: runtimeConfig.guidanceCatalog ?? condition.guidanceCatalog ?? null,
+  enableCheckpoint: runtimeConfig.checkpoint === true,
+  enableTrustedVerify: runtimeConfig.trustedVerify === true,
+});
+const digest = (value) => crypto.createHash('sha256').update(String(value)).digest('hex');
+const instruction = fs.readFileSync(
+  path.join(args[args.indexOf('-p') + 1], args[args.indexOf('--include-task-name') + 1], 'instruction.md'),
+  'utf8'
+);
 fs.writeFileSync(agentEnv.HARNESS_EVAL_TB_TELEMETRY_FILE, JSON.stringify({
   type: 'done', answer: 'ok', stopReason: 'model_finish', steps: 6,
+  runtime: {
+    systemPromptHash: digest(condition.systemPrompt),
+    instructionHash: digest(instruction),
+    toolSchemaHash: digest(JSON.stringify(tools)),
+    toolCount: tools.length,
+  },
   workspaceEvidence: {
     available: true,
     collectionMode: 'bounded-content-manifest-v1',
@@ -221,7 +241,7 @@ test('release-candidate mode runs a live kimi pair end to end through the CLI', 
   assert.equal(result.status, 0, result.stderr || result.stdout);
   assert.ok(!`${result.stdout}\n${result.stderr}`.includes(SENTINEL_PROVIDER_KEY), 'CLI output and errors must not echo the provider key');
   const report = JSON.parse(result.stdout);
-  assert.match(report.releaseSha, /^[a-f0-9]{40,64}$/, 'normal live commands derive a real HEAD identity for order balancing');
+  assert.match(report.releaseSha, /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/, 'normal live commands derive a real HEAD identity for order balancing');
   const kimi = report.pairs.find((p) => p.host === 'openrouter-kimi');
   assert.equal(kimi.generic.reproducibility.releaseSha, report.releaseSha);
   assert.equal(kimi.harness.reproducibility.releaseSha, report.releaseSha);
@@ -287,15 +307,37 @@ test('live release claims reject a dirty source tree before Harbor execution', (
 test('--task selects exactly one pinned task for metadata, validation, budgeting, and Harbor execution', () => {
   const fixture = setupFixture({ taskNames: ['cobol-modernization', 'cancel-async-tasks'] });
   const result = runCli({ ...fixture, task: 'cancel-async-tasks' });
-  assert.ok([0, 1].includes(result.status), result.stderr || result.stdout);
+  assert.equal(result.status, 1, result.stderr || result.stdout);
   const report = JSON.parse(result.stdout);
   assert.equal(report.task.task, 'cancel-async-tasks');
   assert.deepEqual(report.task.taskSet.map((entry) => entry.task), ['cancel-async-tasks']);
-  assert.deepEqual(report.coverage.expectedTasks, ['cancel-async-tasks']);
-  assert.equal(report.coverage.complete, true);
+  assert.deepEqual(report.task.requiredTaskSet.map((entry) => entry.task), ['cobol-modernization', 'cancel-async-tasks']);
+  assert.deepEqual(report.coverage.expectedTasks, ['cobol-modernization', 'cancel-async-tasks']);
+  assert.equal(report.coverage.complete, false);
+  assert.equal(report.telemetryComplete, true, 'intentional diagnostic scope is distinct from telemetry loss');
+  assert.deepEqual(report.evaluationScope, {
+    mode: 'diagnostic-task',
+    releaseEligible: false,
+    selectedTasks: ['cancel-async-tasks'],
+    requiredTasks: ['cobol-modernization', 'cancel-async-tasks'],
+  });
+  assert.equal(report.claim.level, 'inconclusive');
+  assert.equal(report.gate.block, true);
+  assert.ok(report.gate.reasons.some((reason) => /diagnostic.*not eligible/i.test(reason)));
   const audits = fs.readFileSync(fixture.auditFile, 'utf8').trim().split('\n').map((line) => JSON.parse(line));
   assert.equal(audits.length, 2, 'one selected task runs exactly one generic and one harness arm');
   assert.ok(audits.every((audit) => audit.jobName.includes('cancel-async-tasks')));
+});
+
+test('an explicit --task remains release-ineligible even when the selected lock has one task', () => {
+  const fixture = setupFixture();
+  const result = runCli({ ...fixture, task: 'cobol-modernization' });
+  assert.equal(result.status, 1, result.stderr || result.stdout);
+  const report = JSON.parse(result.stdout);
+  assert.equal(report.coverage.complete, true, 'coverage math remains truthful for the one-task fixture');
+  assert.equal(report.evaluationScope.releaseEligible, false);
+  assert.equal(report.claim.level, 'inconclusive');
+  assert.ok(report.gate.reasons.some((reason) => /diagnostic.*not eligible/i.test(reason)));
 });
 
 test('--task rejects an unknown task before environment preflight or paid Harbor execution', () => {

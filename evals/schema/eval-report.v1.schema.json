@@ -25,10 +25,33 @@
               "role": { "type": ["string", "null"] }
             }
           }
+        },
+        "requiredTaskSet": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["task"],
+            "properties": {
+              "task": { "type": "string" },
+              "taskChecksum": { "type": ["string", "null"] },
+              "role": { "type": ["string", "null"] }
+            }
+          }
         }
       }
     },
+    "evaluationScope": {
+      "type": "object",
+      "required": ["mode", "releaseEligible", "selectedTasks", "requiredTasks"],
+      "properties": {
+        "mode": { "enum": ["release", "diagnostic-task", "deterministic-only"] },
+        "releaseEligible": { "type": "boolean" },
+        "selectedTasks": { "type": "array", "items": { "type": "string" } },
+        "requiredTasks": { "type": "array", "items": { "type": "string" } }
+      }
+    },
     "calibrationRelease": { "type": "boolean" },
+    "telemetryComplete": { "type": "boolean" },
     "deterministic": {
       "type": "object",
       "required": ["passed", "failed", "skipped"],
@@ -175,6 +198,7 @@
         "statement": { "type": "string" },
         "controlledPairs": { "type": "number" },
         "controlledWins": { "type": "number" },
+        "confirmedWins": { "type": "number" },
         "regressions": { "type": "number" },
         "treatmentFidelityModes": { "type": "array", "items": { "type": "string" } }
       }

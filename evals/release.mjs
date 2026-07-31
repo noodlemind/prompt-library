@@ -91,6 +91,7 @@ const PAIR_SCALAR_FIELDS = [
   'taskRevision',
   'taskHash',
   'bundleManifestHash',
+  'instructionHash',
   'modelRequested',
   'modelResolved',
   'host',
@@ -107,6 +108,7 @@ const CROSS_REPETITION_FIELDS = [
   'taskRevision',
   'taskHash',
   'bundleManifestHash',
+  'instructionHash',
   'modelRequested',
   'modelResolved',
   'host',
@@ -216,6 +218,8 @@ function pairIdentityVerdict(pair, {
     if (!isDeepStrictEqual(order, [1, 2])) note('orderIndex');
     if (!SHA256_HEX.test(String(genericIdentity.taskHash ?? ''))) note('taskHash-presence');
     if (!SHA256_HEX.test(String(genericIdentity.bundleManifestHash ?? ''))) note('bundleManifestHash-presence');
+    if (!SHA256_HEX.test(String(genericIdentity.instructionHash ?? ''))) note('generic-instructionHash-presence');
+    if (!SHA256_HEX.test(String(harnessIdentity.instructionHash ?? ''))) note('harness-instructionHash-presence');
     for (const field of ['conditionHash', 'systemPromptHash', 'toolSchemaHash']) {
       if (!SHA256_HEX.test(String(genericIdentity[field] ?? ''))) note(`generic-${field}-presence`);
       if (!SHA256_HEX.test(String(harnessIdentity[field] ?? ''))) note(`harness-${field}-presence`);
@@ -246,7 +250,7 @@ function rerunIdentityVerdict(original, rerun, expected = {}) {
   const rerunIdentity = rerunTrials[0]?.reproducibility ?? {};
   const invariantFields = [
     'releaseSha', 'harnessVersion', 'taskId', 'taskRevision', 'taskHash', 'bundleManifestHash',
-    'modelRequested', 'modelResolved', 'host', 'runnerVersion',
+    'instructionHash', 'modelRequested', 'modelResolved', 'host', 'runnerVersion',
   ];
   for (const field of invariantFields) {
     if (!isDeepStrictEqual(originalIdentity[field], rerunIdentity[field])) mismatches.push(`rerun-${field}`);
@@ -497,7 +501,7 @@ export function scaleReleaseBudget(baseBudget, requestedCeilingUsd) {
 /* ------------------------------------------------------------ gate policy -- */
 
 /** §9: always-blocking rules, with gate-inactive pairs reporting instead of blocking. */
-export function applyGatePolicy({ deterministic, pairs = [], smokes = [], telemetryComplete, coverageComplete = true, coverageReason = null, taskLockOk, environmentOk, budgetBreached = false, calibrationRelease = false }) {
+export function applyGatePolicy({ deterministic, pairs = [], smokes = [], telemetryComplete, coverageComplete = true, coverageReason = null, taskLockOk, environmentOk, budgetBreached = false, calibrationRelease = false, evaluationMode = 'release' }) {
   const reasons = [];
   if (deterministic?.failed > 0) reasons.push(`existing deterministic evals regressed (${deterministic.failed} failing)`);
   if (environmentOk === false) reasons.push('required dependencies or credentials are missing');
@@ -505,6 +509,7 @@ export function applyGatePolicy({ deterministic, pairs = [], smokes = [], teleme
   if (coverageComplete === false) reasons.push(`required controlled task coverage is incomplete${coverageReason ? ` (${coverageReason})` : ''}`);
   if (telemetryComplete === false) reasons.push('required telemetry is missing from at least one run');
   if (budgetBreached) reasons.push('the absolute release API budget was exceeded during provider reconciliation');
+  if (evaluationMode === 'diagnostic-task') reasons.push('a one-task diagnostic is not eligible to green the release');
   for (const pair of pairs) {
     const c = pair.classification ?? {};
     const label = pair.task ? `${pair.host} (${pair.task})` : pair.host;
@@ -537,7 +542,7 @@ export function applyGatePolicy({ deterministic, pairs = [], smokes = [], teleme
 
 function controlledTaskCoverage(config, pairs, requiredPairs) {
   const requiredHosts = requiredPairs.filter((host) => String(host).startsWith('openrouter'));
-  const expectedTasks = (config.task?.taskSet ?? [])
+  const expectedTasks = (config.task?.requiredTaskSet ?? config.task?.taskSet ?? [])
     .map((entry) => entry?.task)
     .filter((task) => typeof task === 'string' && task.length > 0);
   const observed = pairs
@@ -569,7 +574,7 @@ function controlledTaskCoverage(config, pairs, requiredPairs) {
   return { complete, requiredHosts, expectedTasks, observed, missing, duplicates, unexpected, reason: reason || null };
 }
 
-function buildClaim(pairs, telemetryComplete) {
+function buildClaim(pairs, evidenceComplete, { releaseEligible = true } = {}) {
   const active = pairs.filter((pair) =>
     pair.comparisonTrack === 'controlled-ablation' &&
     pair.gateActive &&
@@ -583,26 +588,32 @@ function buildClaim(pairs, telemetryComplete) {
       ? `${treatmentFidelityModes.join('+')} treatments`
       : 'evaluated treatment';
   const controlledWins = active.filter((pair) => pair.result === 'harness-win').length;
+  const confirmedWins = active.filter((pair) =>
+    pair.result === 'harness-win' &&
+    ((Number.isInteger(pair.repetitionCount) && pair.repetitionCount >= 2) || pair.reproduced === true)
+  ).length;
   const regressions = active.filter(
     (pair) => pair.result === 'harness-regression' || (pair.result === 'parity' && pair.efficiencyDelta?.withinThresholds === false)
   ).length;
   let level = 'inconclusive';
   let statement = 'The controlled evidence is not yet sufficient for a Harness value claim.';
-  if (regressions > 0) {
+  if (!releaseEligible) {
+    statement = 'This diagnostic scope is not release-eligible and cannot support a Harness value claim.';
+  } else if (regressions > 0) {
     level = 'regression';
     statement = `At least one active controlled comparison of the ${treatmentLabel} regressed in correctness or bounded-overhead policy.`;
-  } else if (telemetryComplete && controlledWins > 0) {
+  } else if (evidenceComplete && confirmedWins > 0) {
     level = 'demonstrated-value';
     statement = `The ${treatmentLabel} improved verified success in at least one active same-model controlled comparison.`;
   } else if (
-    telemetryComplete &&
+    evidenceComplete &&
     active.length > 0 &&
     active.every((pair) => pair.result === 'parity' && pair.efficiencyDelta?.withinThresholds === true)
   ) {
     level = 'bounded-overhead';
     statement = `Verified success was at parity and ${treatmentLabel} overhead stayed within the declared release thresholds.`;
   }
-  return { level, statement, controlledPairs: active.length, controlledWins, regressions, treatmentFidelityModes };
+  return { level, statement, controlledPairs: active.length, controlledWins, confirmedWins, regressions, treatmentFidelityModes };
 }
 
 /* ------------------------------------------------------------ orchestrator -- */
@@ -638,7 +649,17 @@ function attributableTrialEvidence(doc, { paid = false } = {}) {
     observability.providerAttemptsStarted === efficiency.providerAttempts &&
     observability.providerAttemptsClosed === efficiency.providerAttempts &&
     observability.unclosedProviderAttempts === 0 &&
+    observability.uncorrelatedProviderTerminals === 0 &&
+    observability.duplicateProviderAttemptIdentities === 0 &&
+    observability.duplicateProviderTerminalIdentities === 0 &&
+    observability.invalidProviderEventIdentities === 0 &&
     observability.uncorrelatedToolResults === 0 &&
+    observability.unclosedToolCalls === 0 &&
+    observability.duplicateToolCallIdentities === 0 &&
+    observability.duplicateToolResultIdentities === 0 &&
+    observability.invalidToolEventIdentities === 0 &&
+    observability.runtimeContractEvidence?.complete === true &&
+    observability.runtimeContractEvidence?.matchesExpected === true &&
     requestEvents === efficiency.modelRequests &&
     Number.isFinite(workspace.changedPathCount) &&
     Array.isArray(workspace.changedPaths) &&
@@ -685,6 +706,19 @@ function fullyAttributablePair(pair, host, identityOptions = {}) {
  * pin) — that is the cost-control property, not an optimization.
  */
 export async function runRelease({ config, steps, calibrationRelease = false, releaseSha = 'unknown', harnessVersion = 'unknown', requiredPairs = [] }) {
+  const requestedEvaluationMode = config.evaluationScope?.mode ?? 'release';
+  const evaluationMode = ['release', 'diagnostic-task', 'deterministic-only'].includes(requestedEvaluationMode)
+    ? requestedEvaluationMode
+    : 'release';
+  const releaseEligible = evaluationMode === 'release' && config.evaluationScope?.releaseEligible !== false;
+  const selectedTaskSet = config.task?.taskSet ?? [];
+  const requiredTaskSet = config.task?.requiredTaskSet ?? selectedTaskSet;
+  const evaluationScope = {
+    mode: evaluationMode,
+    releaseEligible,
+    selectedTasks: selectedTaskSet.map((entry) => entry.task),
+    requiredTasks: requiredTaskSet.map((entry) => entry.task),
+  };
   const budgets = allocateReleaseBudgets(config.budget ?? {});
   const deterministic = await steps.deterministic();
   const environment = steps.environment ? await steps.environment() : { ok: true, missing: [] };
@@ -715,7 +749,8 @@ export async function runRelease({ config, steps, calibrationRelease = false, re
   };
   const identityOptionsFor = (host, pair) => {
     const expectedTask = pair?.task ?? null;
-    const expectedTaskEntry = (config.task?.taskSet ?? []).find((entry) => entry.task === expectedTask);
+    const expectedTaskEntry = requiredTaskSet.find((entry) => entry.task === expectedTask) ??
+      selectedTaskSet.find((entry) => entry.task === expectedTask);
     return {
       host,
       releaseSha,
@@ -748,21 +783,39 @@ export async function runRelease({ config, steps, calibrationRelease = false, re
       pairEntries.push({ host, comparisonTrack: 'controlled-ablation', task: null, required, result: 'skipped', reason: 'dependencies unavailable', gateActive: false, reproduced: null, classification: null, efficiencyDelta: null, generic: null, harness: null });
       return;
     }
-    // Multi-task steps return one pair per pinned task; each is classified,
-    // rerun, and gated independently.
-    for (const pair of Array.isArray(result) ? result : [result]) {
+    // Multi-task steps return one pair per pinned task. Classify every primary
+    // pair first so a later regression always has priority over spending the
+    // single rerun allowance to confirm an earlier directional win.
+    const primaryPairs = Array.isArray(result) ? result : [result];
+    const primaryClassifications = primaryPairs.map((pair) =>
+      classifyPair(pair, identityOptionsFor(host, pair))
+    );
+    const hasPrimaryRegression = primaryClassifications.some(
+      (classification) => classification.result === 'harness-regression' && !classification.safety
+    );
+    let exceptionalRerunAttempted = false;
+    for (const [pairIndex, pair] of primaryPairs.entries()) {
       collect(pair);
       const identityOptions = identityOptionsFor(host, pair);
-      let classification = classifyPair(pair, identityOptions);
+      let classification = primaryClassifications[pairIndex];
       let reproduced = null;
       let rerunEvidence = null;
-      // §9 conditional rerun: one complete fresh pair for THIS task, never treatment-only.
-      if (classification.result === 'harness-regression' && !classification.safety && rerunFn) {
+      const regressionNeedsConfirmation = classification.result === 'harness-regression' && !classification.safety;
+      const regressionConfirmation = regressionNeedsConfirmation && !exceptionalRerunAttempted;
+      const winConfirmation =
+        classification.result === 'harness-win' &&
+        !hasPrimaryRegression &&
+        !exceptionalRerunAttempted &&
+        (pair.repetitionCount ?? pair.seedCount ?? 1) < 2;
+      // One complete fresh pair for the same task, never treatment-only.
+      if ((regressionConfirmation || winConfirmation) && rerunFn) {
+        exceptionalRerunAttempted = true;
         const second = await rerunFn(budgets.rerun, pair.task);
         if (!second) {
-          // No rerun evidence: the regression stays a regression, unresolved —
-          // it must not silently soften to flaky.
-          classification = { ...classification, reason: `${classification.reason}; rerun unavailable — regression unresolved` };
+          classification = {
+            ...classification,
+            reason: `${classification.reason}; rerun unavailable — ${regressionConfirmation ? 'regression unresolved' : 'win remains unconfirmed'}`,
+          };
         } else {
           collect(second);
           const rerunIdentity = rerunIdentityVerdict(pair, second, identityOptionsFor(host, pair));
@@ -790,22 +843,39 @@ export async function runRelease({ config, steps, calibrationRelease = false, re
             generic: second.generic ?? null,
             harness: second.harness ?? null,
           };
-          const validNonRegression = rerunAttributable && (
-            rerunClassification.result === 'harness-win' ||
-            (rerunClassification.result === 'parity' && rerunEfficiency.withinThresholds === true)
-          );
-          if (rerunAttributable && rerunClassification.result === 'harness-regression') {
-            reproduced = true;
-          } else if (validNonRegression) {
-            reproduced = false;
-            classification = { ...classification, result: 'flaky-inconclusive', reason: 'regression did not reproduce on a fresh pair' };
+          if (winConfirmation) {
+            if (rerunAttributable && rerunClassification.result === 'harness-win') {
+              reproduced = true;
+              classification = { ...classification, reason: `${classification.reason}; win reproduced on a fresh same-task pair` };
+            } else if (rerunAttributable) {
+              reproduced = false;
+              classification = { ...classification, reason: `${classification.reason}; win did not reproduce on a fresh same-task pair` };
+            } else {
+              classification = { ...classification, reason: `${classification.reason}; win confirmation evidence was not fully attributable` };
+            }
           } else {
-            classification = {
-              ...classification,
-              reason: `${classification.reason}; rerun did not establish a fully attributable policy-compliant non-regression — regression unresolved`,
-            };
+            const validNonRegression = rerunAttributable && (
+              rerunClassification.result === 'harness-win' ||
+              (rerunClassification.result === 'parity' && rerunEfficiency.withinThresholds === true)
+            );
+            if (rerunAttributable && rerunClassification.result === 'harness-regression') {
+              reproduced = true;
+            } else if (validNonRegression) {
+              reproduced = false;
+              classification = { ...classification, result: 'flaky-inconclusive', reason: 'regression did not reproduce on a fresh pair' };
+            } else {
+              classification = {
+                ...classification,
+                reason: `${classification.reason}; rerun did not establish a fully attributable policy-compliant non-regression — regression unresolved`,
+              };
+            }
           }
         }
+      } else if (regressionNeedsConfirmation && exceptionalRerunAttempted) {
+        classification = {
+          ...classification,
+          reason: `${classification.reason}; the one exceptional rerun allowance was already used — regression unresolved`,
+        };
       }
       const causallyAttributable = fullyAttributablePair(pair, host, identityOptions) && classification.fallbackDetected !== true;
       pairEntries.push({
@@ -861,8 +931,9 @@ export async function runRelease({ config, steps, calibrationRelease = false, re
     return pair.rerun.causallyAttributable === true &&
       [pair.rerun.generic, pair.rerun.harness].every((doc) => doc && completePaidEvidence(doc));
   });
-  const telemetryComplete = coverage.complete && meteredOk && rerunMeteredOk &&
+  const telemetryComplete = meteredOk && rerunMeteredOk &&
     runDocs.every((doc) => validateAgainstSchema(doc, RUN_SCHEMA).ok);
+  const claimEvidenceComplete = telemetryComplete && coverage.complete && releaseEligible;
   const gate = applyGatePolicy({
     deterministic,
     pairs: pairEntries,
@@ -874,10 +945,11 @@ export async function runRelease({ config, steps, calibrationRelease = false, re
     environmentOk,
     budgetBreached: budgets.release.breached,
     calibrationRelease,
+    evaluationMode,
   });
 
-  const taskSet = config.task?.taskSet ?? [];
-  const claim = buildClaim(pairEntries, telemetryComplete);
+  const taskSet = selectedTaskSet;
+  const claim = buildClaim(pairEntries, claimEvidenceComplete, { releaseEligible });
   const billingUncertain = runDocs.some((doc) =>
     rawTrials(doc).some((trial) => trial?.efficiency?.billingUncertain === true || trial?.billingEvidence?.uncertain === true)
   );
@@ -894,9 +966,12 @@ export async function runRelease({ config, steps, calibrationRelease = false, re
       task: config.task?.task ?? 'unknown',
       taskChecksum: config.task?.taskChecksum ?? null,
       taskSet,
+      requiredTaskSet,
     },
+    evaluationScope,
     calibrationRelease,
     deterministic,
+    telemetryComplete,
     coverage,
     pairs: pairEntries.map(({ classification, required, ...entry }) => entry),
     nativeProducts,
@@ -942,13 +1017,23 @@ export function buildMarkdownReport(report) {
   const taskNames = report.task.taskSet?.length
     ? report.task.taskSet.map((entry) => `\`${entry.task}\``).join(', ')
     : `\`${report.task.task}\``;
+  const requiredTaskNames = report.task.requiredTaskSet?.length
+    ? report.task.requiredTaskSet.map((entry) => `\`${entry.task}\``).join(', ')
+    : taskNames;
+  const evaluationMode = report.evaluationScope?.mode ?? 'legacy-unspecified';
+  const releaseEligibility = report.evaluationScope
+    ? report.evaluationScope.releaseEligible === true ? 'eligible' : 'not eligible'
+    : 'legacy-unspecified';
   const lines = [
     `# Eval Card — Engineer Harness ${report.harnessVersion} (${report.releaseSha})`,
     '',
     `Task set: ${taskNames} (${report.task.datasetRef})${report.calibrationRelease ? ' — calibration release' : ''}`,
+    `Required release task set: ${requiredTaskNames}.`,
+    `Evaluation scope: ${evaluationMode} (${releaseEligibility} to green the release).`,
     '',
     `Deterministic suite: ${report.deterministic.passed} passed, ${report.deterministic.failed} failed, ${report.deterministic.skipped} skipped.`,
     `Controlled task coverage: ${report.coverage?.complete === true ? 'complete' : `incomplete${report.coverage?.reason ? ` (${report.coverage.reason})` : ''}`}.`,
+    `Telemetry completeness: ${report.telemetryComplete === true ? 'complete' : report.telemetryComplete === false ? 'incomplete' : 'legacy-unspecified'}.`,
     '',
     '| Host | Result | Gate | Reason |',
     '|---|---|---|---|',
@@ -993,7 +1078,7 @@ function currentGitReleaseSha() {
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   const sha = result.status === 0 ? result.stdout.trim() : '';
-  if (!/^[a-f0-9]{40,64}$/i.test(sha)) {
+  if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i.test(sha)) {
     throw new Error('--release-sha is required when the current git HEAD cannot be resolved');
   }
   return sha;
@@ -1074,6 +1159,14 @@ async function main() {
   const taskSet = selectedTasks.map(
     ({ task, taskChecksum = null, role = null }) => ({ task, taskChecksum, role })
   );
+  const requiredTaskSet = lockedTasks.map(
+    ({ task, taskChecksum = null, role = null }) => ({ task, taskChecksum, role })
+  );
+  const evaluationMode = requestedTask
+    ? 'diagnostic-task'
+    : deterministicOnly
+      ? 'deterministic-only'
+      : 'release';
   const config = {
     budget: scaleReleaseBudget(raw.budget, budgetUsd),
     task: {
@@ -1081,7 +1174,9 @@ async function main() {
       task: taskSet.length === 1 ? taskSet[0].task : 'multi-task-canary',
       taskChecksum: taskSet.length === 1 ? taskSet[0].taskChecksum : null,
       taskSet,
+      requiredTaskSet,
     },
+    evaluationScope: { mode: evaluationMode, releaseEligible: evaluationMode === 'release' },
     efficiencyThresholds: raw.efficiencyThresholds ?? DEFAULT_EFFICIENCY_THRESHOLDS,
   };
 
@@ -1101,7 +1196,7 @@ async function main() {
   } else {
     const currentHead = currentGitReleaseSha();
     if (explicitReleaseSha && (
-      !/^[a-f0-9]{40,64}$/i.test(explicitReleaseSha) ||
+      !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i.test(explicitReleaseSha) ||
       explicitReleaseSha.toLowerCase() !== currentHead.toLowerCase()
     )) {
       throw new Error('--release-sha for a live evaluation must be the full current git HEAD');

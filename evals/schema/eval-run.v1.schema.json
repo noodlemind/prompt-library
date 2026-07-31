@@ -50,6 +50,7 @@
         "bundleManifestHash": { "type": ["string", "null"] },
         "conditionHash": { "type": ["string", "null"] },
         "systemPromptHash": { "type": ["string", "null"] },
+        "instructionHash": { "type": ["string", "null"] },
         "toolSchemaHash": { "type": ["string", "null"] },
         "telemetryHash": { "type": ["string", "null"] },
         "harnessEventsHash": { "type": ["string", "null"] }
@@ -206,8 +207,32 @@
         "providerAttemptsStarted": { "type": "number" },
         "providerAttemptsClosed": { "type": "number" },
         "unclosedProviderAttempts": { "type": "number" },
+        "uncorrelatedProviderTerminals": { "type": "number", "minimum": 0 },
+        "duplicateProviderAttemptIdentities": { "type": "number", "minimum": 0 },
+        "duplicateProviderTerminalIdentities": { "type": "number", "minimum": 0 },
+        "invalidProviderEventIdentities": { "type": "number", "minimum": 0 },
         "correlatedToolResults": { "type": "number" },
         "uncorrelatedToolResults": { "type": "number" },
+        "unclosedToolCalls": { "type": "number", "minimum": 0 },
+        "duplicateToolCallIdentities": { "type": "number", "minimum": 0 },
+        "duplicateToolResultIdentities": { "type": "number", "minimum": 0 },
+        "invalidToolEventIdentities": { "type": "number", "minimum": 0 },
+        "runtimeContractEvidence": {
+          "type": "object",
+          "required": ["complete", "matchesExpected", "expectedSystemPromptHash", "actualSystemPromptHash", "expectedToolSchemaHash", "actualToolSchemaHash", "expectedToolCount", "actualToolCount", "instructionHash", "reason"],
+          "properties": {
+            "complete": { "type": "boolean" },
+            "matchesExpected": { "type": "boolean" },
+            "expectedSystemPromptHash": { "type": ["string", "null"] },
+            "actualSystemPromptHash": { "type": ["string", "null"] },
+            "expectedToolSchemaHash": { "type": ["string", "null"] },
+            "actualToolSchemaHash": { "type": ["string", "null"] },
+            "expectedToolCount": { "type": ["number", "null"] },
+            "actualToolCount": { "type": ["number", "null"] },
+            "instructionHash": { "type": ["string", "null"] },
+            "reason": { "type": ["string", "null"] }
+          }
+        },
         "eventEvidenceHash": { "type": "string" }
       }
     },

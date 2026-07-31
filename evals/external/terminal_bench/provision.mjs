@@ -116,8 +116,8 @@ function normalizedSourceIdentity(value, label = 'bundle source identity') {
   }
   const releaseSha = String(value.releaseSha ?? '').toLowerCase();
   const harnessVersion = String(value.harnessVersion ?? '');
-  if (!/^[a-f0-9]{40,64}$/.test(releaseSha)) {
-    throw new Error(`${label}.releaseSha must be a full 40-64 character hexadecimal commit identity`);
+  if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(releaseSha)) {
+    throw new Error(`${label}.releaseSha must be a full 40- or 64-character hexadecimal commit identity`);
   }
   if (!harnessVersion || harnessVersion.length > 128 || /[\0\r\n]/.test(harnessVersion)) {
     throw new Error(`${label}.harnessVersion must be a nonempty bounded string`);

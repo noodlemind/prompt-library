@@ -64,6 +64,39 @@ const normalizeProviderName = (value) => String(value ?? '').toLowerCase().repla
 
 const PROVIDER_EVENT_TYPES = new Set(['request', 'request_attempt', 'response', 'error', 'retry', 'completion_error', 'fallback', 'billing_uncertain']);
 const TOOL_EVENT_TYPES = new Set(['tool_call', 'tool_result', 'tool_result_compacted', 'post_verify_tool_suppressed']);
+const BRIDGE_INTEGRITY_STOP_REASONS = new Set([
+  'protocol_error',
+  'secret_reflection_blocked',
+  'bridge_payload_exceeded',
+  'done_persistence_failed',
+  'bridge_error',
+]);
+const SHA256_HEX = /^[a-f0-9]{64}$/i;
+
+function toolEventIdentity(event) {
+  return typeof event?.requestId === 'string' && event.requestId.length > 0 &&
+    typeof event?.toolCallId === 'string' && event.toolCallId.length > 0
+    ? `${event.requestId}:${event.toolCallId}`
+    : null;
+}
+
+function providerAttemptIdentity(event) {
+  return typeof event?.requestId === 'string' && event.requestId.length > 0 &&
+    typeof event?.attemptId === 'string' && event.attemptId.length > 0
+    ? `${event.requestId}:${event.attemptId}`
+    : null;
+}
+
+function identityCounts(events, identityOf = toolEventIdentity) {
+  const counts = new Map();
+  let invalid = 0;
+  for (const event of events) {
+    const key = identityOf(event);
+    if (key == null) invalid += 1;
+    else counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  return { counts, invalid };
+}
 
 function numericEventTime(event) {
   return typeof event?.monotonicMs === 'number' && Number.isFinite(event.monotonicMs) ? event.monotonicMs : null;
@@ -395,6 +428,7 @@ export function aggregateRepetitionDocs(docs, { validMask = null } = {}) {
     const toolEvents = tagged('toolEvents');
     const harnessEvents = tagged('harnessEvents');
     const sum = (key) => observed.reduce((total, doc) => total + (Number.isFinite(doc.observability[key]) ? doc.observability[key] : 0), 0);
+    const runtimeEvidence = observed.map((doc) => doc.observability.runtimeContractEvidence).filter(Boolean);
     base.observability = {
       providerEvents,
       toolEvents,
@@ -425,8 +459,30 @@ export function aggregateRepetitionDocs(docs, { validMask = null } = {}) {
       providerAttemptsStarted: sum('providerAttemptsStarted'),
       providerAttemptsClosed: sum('providerAttemptsClosed'),
       unclosedProviderAttempts: sum('unclosedProviderAttempts'),
+      uncorrelatedProviderTerminals: sum('uncorrelatedProviderTerminals'),
+      duplicateProviderAttemptIdentities: sum('duplicateProviderAttemptIdentities'),
+      duplicateProviderTerminalIdentities: sum('duplicateProviderTerminalIdentities'),
+      invalidProviderEventIdentities: sum('invalidProviderEventIdentities'),
       correlatedToolResults: sum('correlatedToolResults'),
       uncorrelatedToolResults: sum('uncorrelatedToolResults'),
+      unclosedToolCalls: sum('unclosedToolCalls'),
+      duplicateToolCallIdentities: sum('duplicateToolCallIdentities'),
+      duplicateToolResultIdentities: sum('duplicateToolResultIdentities'),
+      invalidToolEventIdentities: sum('invalidToolEventIdentities'),
+      runtimeContractEvidence: {
+        complete: runtimeEvidence.length === docs.length && runtimeEvidence.every((entry) => entry.complete === true),
+        matchesExpected: runtimeEvidence.length === docs.length && runtimeEvidence.every((entry) => entry.matchesExpected === true),
+        expectedSystemPromptHash: null,
+        actualSystemPromptHash: null,
+        expectedToolSchemaHash: null,
+        actualToolSchemaHash: null,
+        expectedToolCount: null,
+        actualToolCount: null,
+        instructionHash: null,
+        reason: runtimeEvidence.length === docs.length && runtimeEvidence.every((entry) => entry.matchesExpected === true)
+          ? 'runtime-evidence-retained-per-repetition'
+          : 'one-or-more-repetitions-have-invalid-runtime-contract-evidence',
+      },
       eventEvidenceHash: stableHash({ providerEvents, toolEvents, harnessEvents }),
     };
   }
@@ -492,26 +548,89 @@ export function buildRunDoc({
   const toolEvents = telemetryEvents.filter((event) => TOOL_EVENT_TYPES.has(event.type));
   const attempts = providerEvents.filter((event) => event.type === 'request_attempt');
   const terminalAttempts = providerEvents.filter((event) => ['response', 'error'].includes(event.type));
-  const terminalAttemptIds = new Set(terminalAttempts.map((event) => event.attemptId).filter(Boolean));
-  const toolCallKeys = new Set(
-    toolEvents
-      .filter((event) => event.type === 'tool_call')
-      .map((event) => `${event.requestId ?? ''}:${event.toolCallId ?? ''}`)
-  );
+  const attemptIdentities = identityCounts(attempts, providerAttemptIdentity);
+  const terminalIdentities = identityCounts(terminalAttempts, providerAttemptIdentity);
+  const allProviderIdentities = new Set([...attemptIdentities.counts.keys(), ...terminalIdentities.counts.keys()]);
+  let providerAttemptsClosed = 0;
+  let unclosedProviderAttempts = attemptIdentities.invalid;
+  let uncorrelatedProviderTerminals = terminalIdentities.invalid;
+  for (const key of allProviderIdentities) {
+    const attemptCount = attemptIdentities.counts.get(key) ?? 0;
+    const terminalCount = terminalIdentities.counts.get(key) ?? 0;
+    providerAttemptsClosed += Math.min(attemptCount, terminalCount);
+    unclosedProviderAttempts += Math.max(0, attemptCount - terminalCount);
+    uncorrelatedProviderTerminals += Math.max(0, terminalCount - attemptCount);
+  }
+  const duplicateProviderAttemptIdentities = [...attemptIdentities.counts.values()]
+    .reduce((total, count) => total + Math.max(0, count - 1), 0);
+  const duplicateProviderTerminalIdentities = [...terminalIdentities.counts.values()]
+    .reduce((total, count) => total + Math.max(0, count - 1), 0);
+  const invalidProviderEventIdentities = attemptIdentities.invalid + terminalIdentities.invalid;
+  const toolCalls = toolEvents.filter((event) => event.type === 'tool_call');
   const toolResults = toolEvents.filter((event) => event.type === 'tool_result');
+  const callIdentities = identityCounts(toolCalls);
+  const resultIdentities = identityCounts(toolResults);
+  const allToolIdentities = new Set([...callIdentities.counts.keys(), ...resultIdentities.counts.keys()]);
+  let correlatedToolResults = 0;
+  let unclosedToolCalls = callIdentities.invalid;
+  let uncorrelatedToolResults = resultIdentities.invalid;
+  for (const key of allToolIdentities) {
+    const callCount = callIdentities.counts.get(key) ?? 0;
+    const resultCount = resultIdentities.counts.get(key) ?? 0;
+    correlatedToolResults += Math.min(callCount, resultCount);
+    unclosedToolCalls += Math.max(0, callCount - resultCount);
+    uncorrelatedToolResults += Math.max(0, resultCount - callCount);
+  }
+  const duplicateToolCallIdentities = [...callIdentities.counts.values()]
+    .reduce((total, count) => total + Math.max(0, count - 1), 0);
+  const duplicateToolResultIdentities = [...resultIdentities.counts.values()]
+    .reduce((total, count) => total + Math.max(0, count - 1), 0);
+  const invalidToolEventIdentities = callIdentities.invalid + resultIdentities.invalid;
   const taskEntry = tasksOf(lock).find((entry) => entry.task === task);
   const taskHash = taskEntry?.taskChecksum ?? null;
   const conditionHash = conditionDocument ? stableHash(conditionDocument) : null;
-  const systemPromptHash = typeof conditionDocument?.systemPrompt === 'string' ? sha256(conditionDocument.systemPrompt) : null;
   const runtime = conditionDocument?.runtime ?? {};
-  const toolSchemaHash = conditionDocument
-    ? stableHash(
-        runtimeBridgeTools({
-          guidanceCatalog: runtime.guidanceCatalog ?? conditionDocument.guidanceCatalog ?? null,
-          enableCheckpoint: runtime.checkpoint === true,
-        })
-      )
-    : done?.runtime?.toolSchemaHash ?? null;
+  const expectedSystemPromptHash = typeof conditionDocument?.systemPrompt === 'string'
+    ? sha256(conditionDocument.systemPrompt)
+    : null;
+  const expectedTools = conditionDocument
+    ? runtimeBridgeTools({
+        guidanceCatalog: runtime.guidanceCatalog ?? conditionDocument.guidanceCatalog ?? null,
+        enableCheckpoint: runtime.checkpoint === true,
+        enableTrustedVerify: runtime.trustedVerify === true,
+      })
+    : null;
+  const expectedToolSchemaHash = expectedTools ? stableHash(expectedTools) : null;
+  const expectedToolCount = expectedTools?.length ?? null;
+  const actualSystemPromptHash = SHA256_HEX.test(String(done?.runtime?.systemPromptHash ?? ''))
+    ? done.runtime.systemPromptHash.toLowerCase()
+    : null;
+  const actualToolSchemaHash = SHA256_HEX.test(String(done?.runtime?.toolSchemaHash ?? ''))
+    ? done.runtime.toolSchemaHash.toLowerCase()
+    : null;
+  const instructionHash = SHA256_HEX.test(String(done?.runtime?.instructionHash ?? ''))
+    ? done.runtime.instructionHash.toLowerCase()
+    : null;
+  const actualToolCount = Number.isInteger(done?.runtime?.toolCount) && done.runtime.toolCount >= 0
+    ? done.runtime.toolCount
+    : null;
+  const runtimeContractComplete = Boolean(
+    expectedSystemPromptHash && expectedToolSchemaHash && Number.isInteger(expectedToolCount) &&
+    actualSystemPromptHash && actualToolSchemaHash && instructionHash && Number.isInteger(actualToolCount)
+  );
+  const runtimeContractMatches = runtimeContractComplete &&
+    actualSystemPromptHash === expectedSystemPromptHash &&
+    actualToolSchemaHash === expectedToolSchemaHash &&
+    actualToolCount === expectedToolCount;
+  const runtimeContractReason = !runtimeContractComplete
+    ? 'runtime-attestation-missing-or-malformed'
+    : runtimeContractMatches
+      ? null
+      : [
+          actualSystemPromptHash !== expectedSystemPromptHash ? 'system-prompt-hash-mismatch' : null,
+          actualToolSchemaHash !== expectedToolSchemaHash ? 'tool-schema-hash-mismatch' : null,
+          actualToolCount !== expectedToolCount ? 'tool-count-mismatch' : null,
+        ].filter(Boolean).join(';');
   const providerRequestedOrder = Array.isArray(profile.provider?.order) ? profile.provider.order.slice() : [];
   const normalizedOrder = providerRequestedOrder.map(normalizeProviderName);
   const attributionComplete =
@@ -532,7 +651,7 @@ export function buildRunDoc({
     reproducibility: {
       releaseSha,
       harnessVersion,
-      harnessContentHash: condition === 'harness' ? systemPromptHash : null,
+      harnessContentHash: condition === 'harness' ? actualSystemPromptHash : null,
       taskId: task,
       taskRevision: lock.datasetRef,
       condition,
@@ -560,8 +679,9 @@ export function buildRunDoc({
       taskHash,
       bundleManifestHash,
       conditionHash,
-      systemPromptHash,
-      toolSchemaHash,
+      systemPromptHash: actualSystemPromptHash,
+      instructionHash,
+      toolSchemaHash: actualToolSchemaHash,
       telemetryHash: telemetryEvents.length ? stableHash(telemetryEvents) : null,
       harnessEventsHash: harnessEvents ? stableHash(harnessEvents) : null,
     },
@@ -587,10 +707,30 @@ export function buildRunDoc({
       harnessEvents: harnessEvents ?? [],
       harnessEventEvidence,
       providerAttemptsStarted: attempts.length,
-      providerAttemptsClosed: attempts.filter((event) => terminalAttemptIds.has(event.attemptId)).length,
-      unclosedProviderAttempts: attempts.filter((event) => !terminalAttemptIds.has(event.attemptId)).length,
-      correlatedToolResults: toolResults.filter((event) => toolCallKeys.has(`${event.requestId ?? ''}:${event.toolCallId ?? ''}`)).length,
-      uncorrelatedToolResults: toolResults.filter((event) => !toolCallKeys.has(`${event.requestId ?? ''}:${event.toolCallId ?? ''}`)).length,
+      providerAttemptsClosed,
+      unclosedProviderAttempts,
+      uncorrelatedProviderTerminals,
+      duplicateProviderAttemptIdentities,
+      duplicateProviderTerminalIdentities,
+      invalidProviderEventIdentities,
+      correlatedToolResults,
+      uncorrelatedToolResults,
+      unclosedToolCalls,
+      duplicateToolCallIdentities,
+      duplicateToolResultIdentities,
+      invalidToolEventIdentities,
+      runtimeContractEvidence: {
+        complete: runtimeContractComplete,
+        matchesExpected: runtimeContractMatches,
+        expectedSystemPromptHash,
+        actualSystemPromptHash,
+        expectedToolSchemaHash,
+        actualToolSchemaHash,
+        expectedToolCount,
+        actualToolCount,
+        instructionHash,
+        reason: runtimeContractReason,
+      },
       eventEvidenceHash: stableHash({ providerEvents, toolEvents, harnessEvents: harnessEvents ?? [] }),
     },
     repetitions: [],
@@ -965,7 +1105,25 @@ export function buildLiveSteps({
       allocationBreached,
       policy: billingUncertain ? 'reserve-trial-remainder-and-stop' : 'max-local-provider-reported',
     };
-    const failureKind = classifiedFailure ?? (billingUncertain ? 'billing' : allocationBreached ? 'budget' : null);
+    const integrityFailure = BRIDGE_INTEGRITY_STOP_REASONS.has(doc.correctness.exitReason) ||
+      doc.observability.runtimeContractEvidence.matchesExpected !== true ||
+      doc.observability.unclosedProviderAttempts !== 0 ||
+      doc.observability.uncorrelatedProviderTerminals !== 0 ||
+      doc.observability.duplicateProviderAttemptIdentities !== 0 ||
+      doc.observability.duplicateProviderTerminalIdentities !== 0 ||
+      doc.observability.invalidProviderEventIdentities !== 0 ||
+      doc.observability.unclosedToolCalls !== 0 ||
+      doc.observability.uncorrelatedToolResults !== 0 ||
+      doc.observability.duplicateToolCallIdentities !== 0 ||
+      doc.observability.duplicateToolResultIdentities !== 0 ||
+      doc.observability.invalidToolEventIdentities !== 0;
+    const failureKind = classifiedFailure ?? (billingUncertain
+      ? 'billing'
+      : allocationBreached
+        ? 'budget'
+        : integrityFailure
+          ? 'infrastructure'
+          : null);
     doc.trialValidity = { valid: failureKind == null && evidence.reward != null, failureKind };
     return { doc, failureKind, stopPaidScheduling: billingUncertain || allocationBreached };
   }
@@ -993,8 +1151,9 @@ export function buildLiveSteps({
       const results = {};
       // Primary repetitions alternate AB/BA; the one-repetition regression rerun reverses
       // the original order. Fixed per-arm budgets keep either order equivalent.
+      const taskOrderOffset = tasksOf(lock).findIndex((entry) => entry.task === task);
       const genericFirst = (
-        (repetition - 1) + releaseOrderOffset + (attempt === 'b' ? 1 : 0)
+        taskOrderOffset + (repetition - 1) + releaseOrderOffset + (attempt === 'b' ? 1 : 0)
       ) % 2 === 0;
       const order = genericFirst ? ['generic', 'harness'] : ['harness', 'generic'];
       for (const [orderOffset, conditionId] of order.entries()) {

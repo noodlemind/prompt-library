@@ -1,9 +1,11 @@
 import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
 import { AGENT_REF, buildLiveSteps, aggregateRepetitionDocs, buildRunDoc } from '../../../evals/external/terminal_bench/live-steps.mjs';
+import { runtimeBridgeTools } from '../../../evals/external/terminal_bench/agent.mjs';
 import { BUNDLE_MOUNT_TARGET, harnessWrapperScript, activationCommands } from '../../../evals/external/terminal_bench/provision.mjs';
 import { stampTaskLock, verifyTaskAgainstLock } from '../../../evals/external/terminal_bench/harbor-adapter.mjs';
 import { efficiencyDelta, validateAgainstSchema, runRelease } from '../../../evals/release.mjs';
@@ -51,6 +53,8 @@ function fakeHarborSpawn({
   providerCostComplete = true,
   billingComplete = true,
   unknownBillingAttempts = 0,
+  stopReason = 'model_finish',
+  mutateDone = null,
 } = {}) {
   const invocations = [];
   return {
@@ -75,13 +79,29 @@ function fakeHarborSpawn({
         const resolvedReward = typeof reward === 'function' ? reward({ jobName, runIndex }) : reward;
         fs.writeFileSync(path.join(verifierDir, 'reward.json'), JSON.stringify({ reward: resolvedReward }));
         if (writeTelemetry && agentEnv.HARNESS_EVAL_TB_TELEMETRY_FILE) {
-          fs.writeFileSync(
-            agentEnv.HARNESS_EVAL_TB_TELEMETRY_FILE,
-            JSON.stringify({
+          const condition = JSON.parse(fs.readFileSync(agentEnv.HARNESS_EVAL_TB_CONDITION, 'utf8'));
+          const runtime = condition.runtime ?? {};
+          const tools = runtimeBridgeTools({
+            guidanceCatalog: runtime.guidanceCatalog ?? condition.guidanceCatalog ?? null,
+            enableCheckpoint: runtime.checkpoint === true,
+            enableTrustedVerify: runtime.trustedVerify === true,
+          });
+          const digest = (value) => crypto.createHash('sha256').update(String(value)).digest('hex');
+          const instruction = fs.readFileSync(
+            path.join(args[args.indexOf('-p') + 1], args[args.indexOf('--include-task-name') + 1], 'instruction.md'),
+            'utf8'
+          );
+          const done = {
               type: 'done',
               answer: 'done',
-              stopReason: 'model_finish',
+              stopReason,
               steps: 7,
+              runtime: {
+                systemPromptHash: digest(condition.systemPrompt),
+                instructionHash: digest(instruction),
+                toolSchemaHash: digest(JSON.stringify(tools)),
+                toolCount: tools.length,
+              },
               telemetry: {
                 totals: {
                   requests: 8,
@@ -149,7 +169,11 @@ function fakeHarborSpawn({
                 projectionRejectedChecks: 0,
               },
               enforcement: { hooksActive: false, policyBypassAchieved: false, source: 'sandbox-writable-harness-events' },
-            })
+            };
+          mutateDone?.(done, { condition, runIndex, jobName });
+          fs.writeFileSync(
+            agentEnv.HARNESS_EVAL_TB_TELEMETRY_FILE,
+            JSON.stringify(done)
           );
         }
       }
@@ -293,6 +317,9 @@ test('a live kimi pair produces two schema-valid run documents and charges provi
     assert.match(doc.reproducibility.taskHash, /^[a-f0-9]{64}$/);
     assert.equal(doc.reproducibility.bundleManifestHash, 'f'.repeat(64), 'the exact mounted bundle identity is retained');
     assert.match(doc.reproducibility.toolSchemaHash, /^[a-f0-9]{64}$/);
+    assert.match(doc.reproducibility.instructionHash, /^[a-f0-9]{64}$/);
+    assert.equal(doc.observability.runtimeContractEvidence.complete, true);
+    assert.equal(doc.observability.runtimeContractEvidence.matchesExpected, true);
     assert.equal(doc.correctness.finalDiffHash, 'c'.repeat(64), 'the final diff hash comes from workspace evidence');
     assert.match(doc.correctness.verifierArtifactHash, /^[a-f0-9]{64}$/);
     assert.equal(doc.workspaceEvidence.available, true, 'collected workspace evidence is retained independently of verifier artifacts');
@@ -300,6 +327,13 @@ test('a live kimi pair produces two schema-valid run documents and charges provi
     assert.equal(doc.enforcementFidelity.mode, doc.reproducibility.condition === 'harness' ? 'prompt-and-cli' : 'none');
     assert.equal(doc.enforcementFidelity.mechanicalHooksActive, false);
     assert.ok(doc.observability.providerEvents.length > 0, 'redacted provider correlation events are retained');
+    assert.equal(doc.observability.providerAttemptsStarted, 6);
+    assert.equal(doc.observability.providerAttemptsClosed, 6);
+    assert.equal(doc.observability.unclosedProviderAttempts, 0);
+    assert.equal(doc.observability.uncorrelatedProviderTerminals, 0);
+    assert.equal(doc.observability.duplicateProviderAttemptIdentities, 0);
+    assert.equal(doc.observability.duplicateProviderTerminalIdentities, 0);
+    assert.equal(doc.observability.invalidProviderEventIdentities, 0);
     assert.equal(doc.observability.toolEvents.length, 5, 'redacted tool call/result/compaction evidence is retained');
     assert.equal(doc.observability.correlatedToolResults, 2);
     assert.equal(doc.repetitions.length, 1, 'even one repetition retains its raw run document');
@@ -312,6 +346,76 @@ test('a live kimi pair produces two schema-valid run documents and charges provi
     runs.every((i) => !i.args.some((arg) => typeof arg === 'string' && arg.startsWith('OPENROUTER_API_KEY='))),
     'the provider credential must never be placed in Harbor --ae arguments'
   );
+});
+
+test('a wrong runtime prompt/tool attestation invalidates a rewarded trial', async () => {
+  const { taskDir, lock } = fixtureTask();
+  const { spawnImpl } = fakeHarborSpawn({
+    mutateDone: (done, { condition }) => {
+      if (condition.id === 'harness') done.runtime.toolCount += 1;
+    },
+  });
+  const steps = liveSteps({ taskDir, lock, spawnImpl });
+  await steps.taskLock();
+  const [pair] = await steps.kimiPair(createBudget({ ceilingUsd: 10, label: 'runtime-mismatch' }));
+  const rawHarness = pair.harness.repetitions[0];
+  assert.equal(rawHarness.correctness.verdict, 'pass', 'the official verifier result remains visible on raw evidence');
+  assert.equal(rawHarness.observability.runtimeContractEvidence.matchesExpected, false);
+  assert.match(rawHarness.observability.runtimeContractEvidence.reason, /tool-count-mismatch/);
+  assert.equal(rawHarness.trialValidity.valid, false);
+  assert.equal(pair.failureKind, 'infrastructure');
+});
+
+test('a rewarded bridge-integrity stop with an unclosed tool call fails closed', async () => {
+  const { taskDir, lock } = fixtureTask();
+  const { spawnImpl } = fakeHarborSpawn({
+    mutateDone: (done, { condition }) => {
+      if (condition.id !== 'harness') return;
+      done.stopReason = 'protocol_error';
+      done.telemetry.events = done.telemetry.events.filter(
+        (event) => !(event.type === 'tool_result' && event.toolCallId === 'tc2')
+      );
+    },
+  });
+  const steps = liveSteps({ taskDir, lock, spawnImpl });
+  await steps.taskLock();
+  const [pair] = await steps.kimiPair(createBudget({ ceilingUsd: 10, label: 'unclosed-tool' }));
+  const rawHarness = pair.harness.repetitions[0];
+  assert.equal(rawHarness.correctness.verdict, 'pass');
+  assert.equal(rawHarness.observability.unclosedToolCalls, 1);
+  assert.equal(rawHarness.observability.uncorrelatedToolResults, 0);
+  assert.equal(rawHarness.trialValidity.valid, false);
+  assert.equal(pair.failureKind, 'infrastructure');
+});
+
+test('duplicate or unmatched provider-attempt events invalidate a rewarded trial', async () => {
+  const { taskDir, lock } = fixtureTask();
+  const { spawnImpl } = fakeHarborSpawn({
+    mutateDone: (done, { condition }) => {
+      if (condition.id !== 'harness') return;
+      const attempt = done.telemetry.events.find((event) => event.type === 'request_attempt');
+      done.telemetry.events.push({ ...attempt, seq: 900, eventId: 'duplicate-attempt' });
+      done.telemetry.events.push({
+        type: 'response',
+        seq: 901,
+        eventId: 'unmatched-terminal',
+        requestId: 'r-unmatched',
+        attemptId: 'a-unmatched',
+        model: 'moonshotai/kimi-k2.7-code',
+        provider: 'Moonshot AI',
+      });
+    },
+  });
+  const steps = liveSteps({ taskDir, lock, spawnImpl });
+  await steps.taskLock();
+  const [pair] = await steps.kimiPair(createBudget({ ceilingUsd: 10, label: 'provider-ledger-integrity' }));
+  const rawHarness = pair.harness.repetitions[0];
+  assert.equal(rawHarness.correctness.verdict, 'pass');
+  assert.equal(rawHarness.observability.duplicateProviderAttemptIdentities, 1);
+  assert.equal(rawHarness.observability.unclosedProviderAttempts, 1);
+  assert.equal(rawHarness.observability.uncorrelatedProviderTerminals, 1);
+  assert.equal(rawHarness.trialValidity.valid, false);
+  assert.equal(pair.failureKind, 'infrastructure');
 });
 
 test('only the harness condition receives the lazy guidance catalog and checkpoint runtime', async () => {
@@ -962,6 +1066,34 @@ test('routine primary order alternates deterministically across release identiti
     firstConditions.push(firstJob.match(/-(generic|harness)-a$/)?.[1]);
   }
   assert.deepEqual(firstConditions, ['harness', 'generic']);
+});
+
+test('a four-task routine is blocked into an exact two-by-two AB/BA order balance', async () => {
+  const { datasetDir, taskDir } = fixtureTask();
+  const taskNames = ['cobol-modernization', 'cancel-async-tasks', 'git-leak-recovery', 'custom-memory-heap-crash'];
+  let lock = { ...BASE_LOCK, tasks: BASE_LOCK.tasks.filter((entry) => entry.task === 'cobol-modernization') };
+  lock = stampTaskLock(taskDir, lock, 'cobol-modernization');
+  for (const taskName of taskNames.slice(1)) {
+    const candidateDir = path.join(datasetDir, taskName);
+    fs.mkdirSync(candidateDir, { recursive: true });
+    fs.writeFileSync(path.join(candidateDir, 'instruction.md'), `Complete ${taskName}.`);
+    lock = stampTaskLock(candidateDir, lock, taskName);
+  }
+  const { spawnImpl, invocations } = fakeHarborSpawn({ providerCostUsd: 0.01 });
+  const steps = liveSteps({ datasetDir, lock, spawnImpl, releaseSha: 'balanced-release' });
+  await steps.taskLock();
+  await steps.kimiPair(createBudget({ ceilingUsd: 10, label: 'balanced-order' }));
+  const firstArmByTask = new Map();
+  for (const invocation of invocations.filter((entry) => entry.args[0] === 'run')) {
+    const task = invocation.args[invocation.args.indexOf('--include-task-name') + 1];
+    const jobName = invocation.args[invocation.args.indexOf('--job-name') + 1];
+    const condition = jobName.match(/-(generic|harness)-a$/)?.[1];
+    if (!firstArmByTask.has(task)) firstArmByTask.set(task, condition);
+  }
+  const sequence = taskNames.map((task) => firstArmByTask.get(task));
+  assert.equal(sequence.filter((condition) => condition === 'generic').length, 2);
+  assert.equal(sequence.filter((condition) => condition === 'harness').length, 2);
+  assert.ok(sequence.every((condition, index) => index === 0 || condition !== sequence[index - 1]), sequence.join(','));
 });
 
 test('a pair requires a strict majority of scheduled repetitions to have two valid aligned arms', async () => {

@@ -114,12 +114,10 @@ const CHECKPOINT_TOOL = {
 
 const VERIFY_HARNESS_TOOL = {
   name: 'verify_harness',
-  description: 'Run the immutable Harness verifier through the trusted Harbor bridge and stop tool work when it passes.',
+  description: 'Run the immutable Harness verifier for the active plan through the trusted Harbor bridge and stop tool work when it passes.',
   parameters: {
     type: 'object',
-    properties: {
-      plan: { type: 'string', description: 'Optional relative docs/plans/*.md path. Omit to use the active plan.' },
-    },
+    properties: {},
     additionalProperties: false,
   },
 };
@@ -228,6 +226,7 @@ export async function runStdioAgent({
   const runtime = {
     toolSchemaHash: sha256(JSON.stringify(bridgeTools)),
     systemPromptHash: sha256(systemPrompt),
+    instructionHash: sha256(instruction),
     toolCount: bridgeTools.length,
   };
   driver.reset?.({ system: systemPrompt, instruction, tools: bridgeTools });
@@ -350,8 +349,7 @@ export async function runStdioAgent({
     }
     if (action.name === 'verify_harness' && enableTrustedVerify) {
       const id = execId++;
-      const plan = typeof action.input?.plan === 'string' ? action.input.plan : null;
-      send({ type: 'verify', id, plan });
+      send({ type: 'verify', id });
       const result = redactSecrets(await nextLine(), secrets);
       if (result.type !== 'verification_result' || result.id !== id) {
         return finish({ answer: null, stopReason: 'protocol_error', detail: JSON.stringify(result).slice(0, 200) });
@@ -360,7 +358,7 @@ export async function runStdioAgent({
       driver.observe?.(action, observation);
       if (result.trustedVerification === true && result.passed === true) {
         driver.markVerified?.({
-          plan: result.plan ?? plan,
+          plan: result.plan ?? null,
           evidencePath: result.evidencePath ?? null,
           fallbackAnswer: 'Harness verification passed.',
         });

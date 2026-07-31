@@ -253,7 +253,7 @@ test('bridge-owned immutable verification promotes verified stop only on a compl
   const driver = {
     next: (() => {
       const actions = [
-        { type: 'tool', name: 'verify_harness', input: { plan: 'docs/plans/task.md' }, _id: 'verify-1' },
+        { type: 'tool', name: 'verify_harness', input: {}, _id: 'verify-1' },
         { type: 'finish', answer: 'verified', stopReason: 'verified_stop' },
       ];
       let index = 0;
@@ -354,6 +354,7 @@ test('telemetry snapshot rides along in the done message', async () => {
   assert.equal(done.telemetry.events[0].model, 'kimi');
   assert.match(done.runtime.toolSchemaHash, /^[a-f0-9]{64}$/);
   assert.match(done.runtime.systemPromptHash, /^[a-f0-9]{64}$/);
+  assert.match(done.runtime.instructionHash, /^[a-f0-9]{64}$/);
   assert.equal(done.runtime.toolCount, 2);
 });
 
