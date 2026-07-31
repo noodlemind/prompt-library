@@ -26,7 +26,7 @@ test('kimi host enforces the profile trial ceiling even when no budget is suppli
   const host = createKimiHost({ apiKey: 'test-key' });
   // Usage priced at ~$8 against the $5 trial ceiling: the first response is
   // charged, the second request must be refused by the auto-created budget.
-  const bigUsage = { prompt_tokens: 10, completion_tokens: 2_000_000 };
+  const bigUsage = { prompt_tokens: 10, completion_tokens: 2_000_000, cost: 8 };
   const fetchImpl = async () => ({
     ok: true,
     json: async () => ({
