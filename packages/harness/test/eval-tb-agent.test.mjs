@@ -124,6 +124,44 @@ test('large guidance is disclosed as a bounded section index and paged section c
   assert.equal(lines.some((line) => line.type === 'exec'), false);
 });
 
+test('large guidance without headings remains available through whole-document pages', async () => {
+  const observed = [];
+  const body = 'follow this bounded procedure. '.repeat(100);
+  const driver = {
+    next: (() => {
+      const actions = [
+        { type: 'tool', name: 'load_guidance', input: { name: 'plain' }, _id: 'page-1' },
+        { type: 'tool', name: 'load_guidance', input: { name: 'plain', cursor: 900 }, _id: 'page-2' },
+        { type: 'finish', answer: 'done', stopReason: 'model_finish' },
+      ];
+      let index = 0;
+      return async () => actions[index++];
+    })(),
+    checkpoint: () => {},
+    observe: (_action, result) => observed.push(result),
+  };
+  const { input, output } = pump();
+  await runStdioAgent({
+    driver,
+    input,
+    output,
+    systemPrompt: 's',
+    instruction: 'i',
+    guidanceCatalog: { plain: { content: body } },
+  });
+
+  const first = JSON.parse(observed[0].stdout);
+  const second = JSON.parse(observed[1].stdout);
+  assert.equal(first.section, null);
+  assert.equal(first.cursor, 0);
+  assert.equal(first.content.length, 900);
+  assert.equal(first.nextCursor, 900);
+  assert.equal(second.section, null);
+  assert.equal(second.cursor, 900);
+  assert.ok(second.content.length <= 900);
+  assert.equal(first.totalChars, body.length);
+});
+
 test('load_guidance rejects inherited object properties as unknown catalog entries', async () => {
   const observed = [];
   const driver = {

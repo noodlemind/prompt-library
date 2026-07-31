@@ -141,6 +141,20 @@ function guidanceResult(name, entry, input) {
     return { code: 0, stdout: content, stderr: '', guidance: metadata };
   }
   const headings = guidanceHeadings(content);
+  if (headings.length === 0 && !input?.section) {
+    const cursor = Number.isInteger(input?.cursor) && input.cursor >= 0 ? input.cursor : 0;
+    if (cursor > content.length) {
+      return { code: 2, stdout: '', stderr: `guidance cursor out of range: ${cursor}`, guidance: metadata };
+    }
+    const chunk = content.slice(cursor, cursor + GUIDANCE_PAGE_CHARS);
+    const nextCursor = cursor + chunk.length < content.length ? cursor + chunk.length : null;
+    return {
+      code: 0,
+      stdout: JSON.stringify({ name, section: null, cursor, content: chunk, nextCursor, totalChars: content.length }),
+      stderr: '',
+      guidance: metadata,
+    };
+  }
   if (!input?.section) {
     return {
       code: 0,
