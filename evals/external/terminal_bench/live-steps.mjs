@@ -17,7 +17,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHost as createKimiHost } from '../../hosts/openrouter-kimi.mjs';
-import { buildHarborRunArgs, jobDirFor, runHarbor, verifyTaskAgainstLock, classifyFailure } from './harbor-adapter.mjs';
+import { buildHarborRunArgs, jobDirFor, runHarbor, verifyTaskAgainstLock, classifyFailure, tasksOf } from './harbor-adapter.mjs';
 import { collectVerifierEvidence, verdictFromReward } from './verifier.mjs';
 import { buildGenericCondition } from './generic-condition.mjs';
 import { buildHarnessCondition } from './harness-condition.mjs';
@@ -39,7 +39,7 @@ const harborSpawnEnv = () => ({
 const INSTRUCTION_PLACEHOLDER = '(the task instruction is supplied by Harbor at runtime)';
 
 /** One trial's eval-run.v1 document, from harbor + verifier + bridge evidence. */
-export function buildRunDoc({ condition, evidence, done, run, profile, lock, releaseSha, harnessVersion, startedAt, endedAt }) {
+export function buildRunDoc({ condition, task, evidence, done, run, profile, lock, releaseSha, harnessVersion, startedAt, endedAt }) {
   const totals = done?.telemetry?.totals ?? null;
   const lastResponse = (done?.telemetry?.events ?? []).filter((e) => e.type === 'response').at(-1) ?? null;
   const stopReason = done?.stopReason ?? (run.timedOut ? 'timeout' : 'unknown');
@@ -49,7 +49,7 @@ export function buildRunDoc({ condition, evidence, done, run, profile, lock, rel
       releaseSha,
       harnessVersion,
       harnessContentHash: null,
-      taskId: lock.task,
+      taskId: task,
       taskRevision: lock.datasetRef,
       condition,
       modelRequested: profile.model,
@@ -131,7 +131,7 @@ export function buildLiveSteps({
     maxOutputTokens: profile.maxTokens,
     trialCeilingUsd: profile.trialCeilingUsd,
   };
-  let taskDir = null;
+  let datasetDir = null;
   let bundle = null;
 
   function environment() {
@@ -142,11 +142,11 @@ export function buildLiveSteps({
     return { ok: missing.length === 0, missing };
   }
 
-  /** Locate (or download) the pinned task and verify its bytes BEFORE any paid step. */
+  /** Locate (or download) the pinned dataset and verify EVERY pinned task's bytes BEFORE any paid step. */
   function taskLock() {
-    if (!taskDir) {
-      if (env.HARNESS_EVAL_TB_TASK_DIR) {
-        taskDir = env.HARNESS_EVAL_TB_TASK_DIR;
+    if (!datasetDir) {
+      if (env.HARNESS_EVAL_TB_DATASET_DIR) {
+        datasetDir = env.HARNESS_EVAL_TB_DATASET_DIR;
       } else {
         const dest = path.join(workDir, 'dataset');
         const download = runHarbor({
@@ -159,16 +159,19 @@ export function buildLiveSteps({
         if (download.spawnError || download.code !== 0) {
           return { ok: false, reason: `task download failed: ${download.spawnError ?? download.stderr}` };
         }
-        taskDir = path.join(dest, lock.datasetRef.split('@')[0], lock.task);
+        datasetDir = path.join(dest, lock.datasetRef.split('@')[0]);
       }
     }
-    const verdict = verifyTaskAgainstLock(taskDir, lock);
-    return { ok: verdict.ok, reason: verdict.reason };
+    for (const entry of tasksOf(lock)) {
+      const verdict = verifyTaskAgainstLock(path.join(datasetDir, entry.task), lock, entry.task);
+      if (!verdict.ok) return { ok: false, reason: verdict.reason };
+    }
+    return { ok: true, reason: '' };
   }
 
-  function runTrial({ condition, budget, label }) {
-    const conditionPath = path.join(workDir, `${label}.condition.json`);
-    const telemetryFile = path.join(workDir, `${label}.done.json`);
+  function runTrial({ condition, budget, label, task }) {
+    const conditionPath = path.join(workDir, `${task}-${label}.condition.json`);
+    const telemetryFile = path.join(workDir, `${task}-${label}.done.json`);
     const trialCeilingUsd = Math.min(profile.trialCeilingUsd, budget.remainingUsd());
     fs.writeFileSync(
       conditionPath,
@@ -178,12 +181,13 @@ export function buildLiveSteps({
         2
       )
     );
-    const jobName = `kimi-${label}`;
+    const jobName = `kimi-${task}-${label}`;
     const jobsDir = path.join(workDir, 'jobs');
     const startedAt = now();
     const run = runHarbor({
       args: buildHarborRunArgs({
         lock,
+        task,
         agentRef: AGENT_REF,
         model: profile.model,
         envName: env.HARNESS_EVAL_TB_ENV ?? config.execution?.environment ?? 'docker',
@@ -225,30 +229,43 @@ export function buildLiveSteps({
       jobDirCreated,
       passed: verdictFromReward(evidence.reward, { passingReward: lock.verifier.passingReward }) === 'pass',
     });
-    const doc = buildRunDoc({ condition: condition.id, evidence, done, run, profile, lock, releaseSha, harnessVersion, startedAt, endedAt });
+    const doc = buildRunDoc({ condition: condition.id, task, evidence, done, run, profile, lock, releaseSha, harnessVersion, startedAt, endedAt });
     return { doc, failureKind };
   }
 
-  async function pairStep(budget, attempt) {
-    if (!host.validateCredentials().ok) return null;
-    // A pre-built bundle (offline releases, tests) short-circuits preparation.
-    bundle ??= env.HARNESS_EVAL_TB_BUNDLE_DIR
-      ? { bundleDir: env.HARNESS_EVAL_TB_BUNDLE_DIR, mount: bundleMount(env.HARNESS_EVAL_TB_BUNDLE_DIR) }
-      : prepareBundle({ bundleDir: path.join(workDir, 'harness-bundle'), spawnImpl });
-    const generic = runTrial({ condition: buildGenericCondition({ instruction: INSTRUCTION_PLACEHOLDER, limits }), budget, label: `generic-${attempt}` });
+  function taskPair({ task, budget, attempt }) {
+    const generic = runTrial({ condition: buildGenericCondition({ instruction: INSTRUCTION_PLACEHOLDER, limits }), budget, label: `generic-${attempt}`, task });
     const harness = runTrial({
       condition: buildHarnessCondition({ instruction: INSTRUCTION_PLACEHOLDER, limits, engineerContract, guidance: buildGuidance() }),
       budget,
       label: `harness-${attempt}`,
+      task,
     });
-    return { host: host.id, generic: generic.doc, harness: harness.doc, failureKind: generic.failureKind ?? harness.failureKind };
+    return { host: host.id, task, generic: generic.doc, harness: harness.doc, failureKind: generic.failureKind ?? harness.failureKind };
+  }
+
+  function ensureBundle() {
+    // A pre-built bundle (offline releases, tests) short-circuits preparation.
+    bundle ??= env.HARNESS_EVAL_TB_BUNDLE_DIR
+      ? { bundleDir: env.HARNESS_EVAL_TB_BUNDLE_DIR, mount: bundleMount(env.HARNESS_EVAL_TB_BUNDLE_DIR) }
+      : prepareBundle({ bundleDir: path.join(workDir, 'harness-bundle'), spawnImpl });
   }
 
   return {
     environment,
     taskLock,
-    kimiPair: (budget) => pairStep(budget, 'a'),
-    rerunKimiPair: (budget) => pairStep(budget, 'b'),
+    /** One fresh generic+harness pair per pinned task. */
+    kimiPair: async (budget) => {
+      if (!host.validateCredentials().ok) return null;
+      ensureBundle();
+      return tasksOf(lock).map((entry) => taskPair({ task: entry.task, budget, attempt: 'a' }));
+    },
+    /** §9 conditional rerun: one complete fresh pair for ONE regressed task. */
+    rerunKimiPair: async (budget, task) => {
+      if (!host.validateCredentials().ok) return null;
+      ensureBundle();
+      return taskPair({ task: task ?? tasksOf(lock)[0].task, budget, attempt: 'b' });
+    },
     frontierPair: null,
     gemmaPair: null,
     smokes: null,

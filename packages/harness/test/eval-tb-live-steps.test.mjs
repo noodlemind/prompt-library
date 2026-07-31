@@ -16,13 +16,15 @@ function tmpdir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'tb-live-'));
 }
 
-/** A fixture task directory plus a lock stamped against it. */
+/** A fixture dataset root with the anchor task, plus a lock stamped against it. */
 function fixtureTask() {
-  const taskDir = tmpdir();
+  const datasetDir = tmpdir();
+  const taskDir = path.join(datasetDir, 'cobol-modernization');
+  fs.mkdirSync(taskDir, { recursive: true });
   fs.writeFileSync(path.join(taskDir, 'instruction.md'), 'Modernize the COBOL program.');
   fs.mkdirSync(path.join(taskDir, 'tests'));
   fs.writeFileSync(path.join(taskDir, 'tests', 'test.sh'), 'pytest');
-  return { taskDir, lock: stampTaskLock(taskDir, BASE_LOCK) };
+  return { datasetDir, taskDir, lock: stampTaskLock(taskDir, BASE_LOCK, 'cobol-modernization') };
 }
 
 /**
@@ -81,12 +83,12 @@ function fakeHarborSpawn({ reward = 1, exitCode = 0, writeTelemetry = true, prov
   };
 }
 
-function liveSteps({ taskDir, lock, spawnImpl, apiKey = 'test-key' }) {
+function liveSteps({ datasetDir, taskDir, lock, spawnImpl, apiKey = 'test-key' }) {
   return buildLiveSteps({
     config: { execution: { environment: 'docker' } },
     lock,
     workDir: tmpdir(),
-    env: { OPENROUTER_API_KEY: apiKey, HARNESS_EVAL_TB_TASK_DIR: taskDir },
+    env: { OPENROUTER_API_KEY: apiKey, HARNESS_EVAL_TB_DATASET_DIR: datasetDir ?? path.dirname(taskDir) },
     releaseSha: 'sha1',
     harnessVersion: '0.5.0',
     spawnImpl,
@@ -127,13 +129,39 @@ test('the task bytes are verified against the lock before any provider work', as
   assert.match(tampered.reason, /checksum/i);
 });
 
+test('a multi-task lock runs a fresh pair per pinned task with per-task job identities', async () => {
+  const { taskDir, lock } = fixtureTask();
+  // Second pinned task: its own directory and checksum entry.
+  const datasetDir = path.dirname(taskDir);
+  const secondDir = path.join(datasetDir, 'build-pmars');
+  fs.mkdirSync(secondDir, { recursive: true });
+  fs.writeFileSync(path.join(secondDir, 'instruction.md'), 'Build pMARS.');
+  const { stampTaskLock: stamp } = await import('../../../evals/external/terminal_bench/harbor-adapter.mjs');
+  const multiLock = stamp(secondDir, lock, 'build-pmars');
+  const { spawnImpl, invocations } = fakeHarborSpawn({ providerCostUsd: 0.01 });
+  const steps = liveSteps({ taskDir, lock: multiLock, spawnImpl });
+  assert.equal((await steps.taskLock()).ok, true, 'every pinned task verifies');
+  const budget = createBudget({ ceilingUsd: 10, label: 'kimi-pair' });
+  const pairs = await steps.kimiPair(budget);
+  assert.equal(pairs.length, 2, 'one pair per pinned task');
+  assert.deepEqual(
+    pairs.map((p) => p.task),
+    ['cobol-modernization', 'build-pmars']
+  );
+  const runs = invocations.filter((i) => i.args[0] === 'run');
+  assert.equal(runs.length, 4, 'generic+harness per task');
+  const jobNames = runs.map((i) => i.args[i.args.indexOf('--job-name') + 1]);
+  assert.ok(jobNames.every((n, idx) => n.includes(pairs[Math.floor(idx / 2)].task)), 'job identity carries the task name');
+  assert.ok(Math.abs(budget.spentUsd() - 0.04) < 1e-12, 'all four trials charge the pair budget');
+});
+
 test('a live kimi pair produces two schema-valid run documents and charges provider-reported cost', async () => {
   const { taskDir, lock } = fixtureTask();
   const { spawnImpl, invocations } = fakeHarborSpawn({ providerCostUsd: 0.02 });
   const steps = liveSteps({ taskDir, lock, spawnImpl });
   assert.equal((await steps.taskLock()).ok, true);
   const budget = createBudget({ ceilingUsd: 10, label: 'kimi-pair' });
-  const pair = await steps.kimiPair(budget);
+  const [pair] = await steps.kimiPair(budget);
   assert.equal(pair.host, 'openrouter-kimi');
   for (const doc of [pair.generic, pair.harness]) {
     assert.deepEqual(validateAgainstSchema(doc, RUN_SCHEMA).errors, []);
@@ -167,7 +195,7 @@ test('a nonzero harbor exit becomes an infrastructure-invalid pair that blocks a
   const { spawnImpl } = fakeHarborSpawn({ exitCode: 3 });
   const steps = liveSteps({ taskDir, lock, spawnImpl });
   await steps.taskLock();
-  const pair = await steps.kimiPair(createBudget({ ceilingUsd: 10, label: 'p' }));
+  const [pair] = await steps.kimiPair(createBudget({ ceilingUsd: 10, label: 'p' }));
   assert.equal(pair.failureKind, 'infrastructure');
 });
 

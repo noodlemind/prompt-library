@@ -22,10 +22,12 @@ function tmpdir() {
 }
 
 function setupFixture() {
-  const taskDir = tmpdir();
+  const datasetDir = tmpdir();
+  const taskDir = path.join(datasetDir, 'cobol-modernization');
+  fs.mkdirSync(taskDir, { recursive: true });
   fs.writeFileSync(path.join(taskDir, 'instruction.md'), 'Modernize the COBOL program.');
   const lockFile = path.join(tmpdir(), 'lock.json');
-  fs.writeFileSync(lockFile, JSON.stringify(stampTaskLock(taskDir, BASE_LOCK)));
+  fs.writeFileSync(lockFile, JSON.stringify(stampTaskLock(taskDir, BASE_LOCK, 'cobol-modernization')));
 
   const binDir = tmpdir();
   const fakeHarbor = path.join(binDir, 'fake-harbor.mjs');
@@ -55,14 +57,14 @@ process.exit(0);
 `
   );
   fs.writeFileSync(path.join(binDir, 'harbor'), `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(fakeHarbor)} "$@"\n`, { mode: 0o755 });
-  return { taskDir, lockFile, binDir, bundleDir: tmpdir() };
+  return { datasetDir, lockFile, binDir, bundleDir: tmpdir() };
 }
 
-function runCli({ taskDir, lockFile, binDir, bundleDir, withKey = true }) {
+function runCli({ datasetDir, lockFile, binDir, bundleDir, withKey = true }) {
   const env = {
     ...process.env,
     PATH: `${binDir}${path.delimiter}${process.env.PATH}`,
-    HARNESS_EVAL_TB_TASK_DIR: taskDir,
+    HARNESS_EVAL_TB_DATASET_DIR: datasetDir,
     HARNESS_EVAL_TB_BUNDLE_DIR: bundleDir,
   };
   if (withKey) env.OPENROUTER_API_KEY = 'test-key';

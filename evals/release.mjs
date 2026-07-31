@@ -142,18 +142,19 @@ export function applyGatePolicy({ deterministic, pairs = [], smokes = [], teleme
   if (telemetryComplete === false) reasons.push('required telemetry is missing from at least one run');
   for (const pair of pairs) {
     const c = pair.classification ?? {};
-    if (c.safety) reasons.push(`harness safety control bypassed on ${pair.host}`);
+    const label = pair.task ? `${pair.host} (${pair.task})` : pair.host;
+    if (c.safety) reasons.push(`harness safety control bypassed on ${label}`);
     // A required pair with no valid evidence is a red release, not a green one.
     if (pair.required && pair.result === 'skipped') {
-      reasons.push(`required pair ${pair.host} was skipped and did not run`);
+      reasons.push(`required pair ${label} was skipped and did not run`);
     }
     if ((pair.gateActive || pair.required) && pair.result === 'infrastructure-invalid') {
-      reasons.push(`pair ${pair.host} produced no valid signal (${pair.reason})`);
+      reasons.push(`pair ${label} produced no valid signal (${pair.reason})`);
     }
     if (!pair.gateActive) continue;
-    if (c.fallbackDetected) reasons.push(`model or provider fallback invalidated the comparison on ${pair.host}`);
+    if (c.fallbackDetected) reasons.push(`model or provider fallback invalidated the comparison on ${label}`);
     if (c.result === 'harness-regression' && pair.reproduced === true) {
-      reasons.push(`reproduced harness regression on ${pair.host}`);
+      reasons.push(`reproduced harness regression on ${label}`);
     }
   }
   for (const smoke of smokes) {
@@ -205,42 +206,47 @@ export async function runRelease({ config, steps, calibrationRelease = false, re
       });
       return;
     }
-    const pair = await stepFn(budget);
-    if (!pair) {
-      pairEntries.push({ host, required, result: 'skipped', reason: 'dependencies unavailable', gateActive: false, reproduced: null, classification: null, generic: null, harness: null });
+    const result = await stepFn(budget);
+    if (!result || (Array.isArray(result) && !result.length)) {
+      pairEntries.push({ host, task: null, required, result: 'skipped', reason: 'dependencies unavailable', gateActive: false, reproduced: null, classification: null, generic: null, harness: null });
       return;
     }
-    collect(pair);
-    let classification = classifyPair(pair);
-    let reproduced = null;
-    // §9 conditional rerun: one complete fresh pair, never treatment-only.
-    if (classification.result === 'harness-regression' && !classification.safety && rerunFn) {
-      const second = await rerunFn(budgets.rerun);
-      if (!second) {
-        // No rerun evidence: the regression stays a regression, unresolved —
-        // it must not silently soften to flaky.
-        classification = { ...classification, reason: `${classification.reason}; rerun unavailable — regression unresolved` };
-      } else {
-        collect(second);
-        if (classifyPair(second).result === 'harness-regression') {
-          reproduced = true;
+    // Multi-task steps return one pair per pinned task; each is classified,
+    // rerun, and gated independently.
+    for (const pair of Array.isArray(result) ? result : [result]) {
+      collect(pair);
+      let classification = classifyPair(pair);
+      let reproduced = null;
+      // §9 conditional rerun: one complete fresh pair for THIS task, never treatment-only.
+      if (classification.result === 'harness-regression' && !classification.safety && rerunFn) {
+        const second = await rerunFn(budgets.rerun, pair.task);
+        if (!second) {
+          // No rerun evidence: the regression stays a regression, unresolved —
+          // it must not silently soften to flaky.
+          classification = { ...classification, reason: `${classification.reason}; rerun unavailable — regression unresolved` };
         } else {
-          reproduced = false;
-          classification = { ...classification, result: 'flaky-inconclusive', reason: 'regression did not reproduce on a fresh pair' };
+          collect(second);
+          if (classifyPair(second).result === 'harness-regression') {
+            reproduced = true;
+          } else {
+            reproduced = false;
+            classification = { ...classification, result: 'flaky-inconclusive', reason: 'regression did not reproduce on a fresh pair' };
+          }
         }
       }
+      pairEntries.push({
+        host,
+        task: pair.task ?? null,
+        required,
+        result: classification.result,
+        reason: classification.reason,
+        gateActive: gateActiveFor(host, calibrationRelease),
+        reproduced,
+        classification,
+        generic: pair.generic ?? null,
+        harness: pair.harness ?? null,
+      });
     }
-    pairEntries.push({
-      host,
-      required,
-      result: classification.result,
-      reason: classification.reason,
-      gateActive: gateActiveFor(host, calibrationRelease),
-      reproduced,
-      classification,
-      generic: pair.generic ?? null,
-      harness: pair.harness ?? null,
-    });
   }
 
   await evaluatePair('codex-subscription', steps.frontierPair);
@@ -311,7 +317,7 @@ export function buildMarkdownReport(report) {
     '',
     '| Host | Result | Gate | Reason |',
     '|---|---|---|---|',
-    ...report.pairs.map((p) => `| ${p.host} | ${p.result} | ${p.gateActive ? 'active' : 'informational'} | ${p.reason} |`),
+    ...report.pairs.map((p) => `| ${p.task ? `${p.host} (${p.task})` : p.host} | ${p.result} | ${p.gateActive ? 'active' : 'informational'} | ${p.reason} |`),
     '',
     ...(report.smokes.length
       ? [`Smokes: ${report.smokes.map((s) => `${s.host} ${s.ok ? 'ok' : `failed (${(s.failed ?? []).join(', ')})`}`).join(' · ')}`, '']

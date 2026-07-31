@@ -373,6 +373,43 @@ test('an API pair whose telemetry is entirely null is not complete evidence', as
   assert.ok(report.gate.reasons.some((r) => /telemetry/i.test(r)));
 });
 
+test('a multi-task pair step yields one report entry per task, each classified independently', async () => {
+  const steps = baseSteps({
+    kimiPair: async () => [
+      { ...pairOf('openrouter-kimi', 'pass', 'pass'), task: 'cobol-modernization' },
+      { ...pairOf('openrouter-kimi', 'fail', 'pass'), task: 'build-pmars' },
+    ],
+  });
+  const { report, exitCode } = await runRelease({ config: CONFIG, steps, requiredPairs: ['openrouter-kimi'] });
+  const kimi = report.pairs.filter((p) => p.host === 'openrouter-kimi');
+  assert.equal(kimi.length, 2);
+  assert.equal(kimi.find((p) => p.task === 'cobol-modernization').result, 'parity');
+  assert.equal(kimi.find((p) => p.task === 'build-pmars').result, 'harness-win');
+  assert.equal(exitCode, 0);
+});
+
+test('a regression on one task reruns and gates ONLY that task', async () => {
+  let rerunTasks = [];
+  const steps = baseSteps({
+    kimiPair: async () => [
+      { ...pairOf('openrouter-kimi', 'pass', 'pass'), task: 'cobol-modernization' },
+      { ...pairOf('openrouter-kimi', 'pass', 'fail'), task: 'build-pmars' },
+    ],
+    rerunKimiPair: async (budget, task) => {
+      rerunTasks.push(task);
+      return { ...pairOf('openrouter-kimi', 'pass', 'fail'), task };
+    },
+  });
+  const { report, exitCode } = await runRelease({ config: CONFIG, steps, requiredPairs: ['openrouter-kimi'] });
+  assert.deepEqual(rerunTasks, ['build-pmars'], 'only the regressed task is rerun');
+  const regressed = report.pairs.find((p) => p.task === 'build-pmars');
+  assert.equal(regressed.result, 'harness-regression');
+  assert.equal(regressed.reproduced, true);
+  assert.equal(report.pairs.find((p) => p.task === 'cobol-modernization').result, 'parity');
+  assert.equal(exitCode, 1);
+  assert.ok(report.gate.reasons.some((r) => /build-pmars/.test(r)), 'the gate reason names the task');
+});
+
 test('the markdown eval card names the task, verdicts, spend, and the single-task limitation', async () => {
   const { report } = await runRelease({ config: CONFIG, steps: baseSteps(), releaseSha: 'abc123', harnessVersion: '0.5.0' });
   const md = buildMarkdownReport(report);

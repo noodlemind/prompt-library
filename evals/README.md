@@ -184,7 +184,7 @@ Release-candidate prerequisites (all fail closed when absent):
 - the `harbor` CLI on PATH (validated against 0.20.0);
 - `OPENROUTER_API_KEY` for the pinned Kimi profile;
 - the pinned task: downloaded automatically via `harbor download terminal-bench@2.0`
-  (or point `HARNESS_EVAL_TB_TASK_DIR` at an existing download) and **verified
+  (or point `HARNESS_EVAL_TB_DATASET_DIR` at an existing download) and **verified
   byte-for-byte against the committed lock checksum before any provider call**;
 - a harness bundle for in-container activation: prepared automatically from the
   working tree (needs `HARNESS_EVAL_NODE_TARBALL` pointing at a downloaded

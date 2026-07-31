@@ -27,8 +27,12 @@ test('the harbor agent module imports at exactly the reference passed to --agent
   assert.equal(python.stdout.trim(), 'engineer-harness-stdio-bridge');
 });
 
-test('the committed task lock is stamped with a real checksum', () => {
-  assert.match(LOCK.taskChecksum ?? '', /^[0-9a-f]{64}$/, 'taskChecksum must be committed, not stamped at release time');
+test('every committed task lock entry is stamped with a real checksum', () => {
+  const tasks = LOCK.tasks ?? [{ taskChecksum: LOCK.taskChecksum }];
+  assert.ok(tasks.length >= 1);
+  for (const entry of tasks) {
+    assert.match(entry.taskChecksum ?? '', /^[0-9a-f]{64}$/, `${entry.task}: taskChecksum must be committed, not stamped at release time`);
+  }
 });
 
 test('the emitted harbor flags exist in the installed harbor CLI (skipped when absent)', (t) => {

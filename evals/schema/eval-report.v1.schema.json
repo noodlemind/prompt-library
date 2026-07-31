@@ -33,6 +33,7 @@
         "required": ["host", "result", "reason", "gateActive"],
         "properties": {
           "host": { "type": "string" },
+          "task": { "type": ["string", "null"] },
           "result": {
             "enum": [
               "harness-win",

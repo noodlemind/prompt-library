@@ -7,6 +7,7 @@ import {
   validateTaskLock,
   verifyTaskAgainstLock,
   stampTaskLock,
+  tasksOf,
   buildHarborRunArgs,
   jobDirFor,
   runHarbor,
@@ -22,12 +23,22 @@ function tmpdir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'tb-adapter-'));
 }
 
-test('the committed task-lock.json is structurally valid and pins the plan task', () => {
+test('the committed task-lock.json is structurally valid and pins a task LIST', () => {
   const verdict = validateTaskLock(LOCK);
   assert.deepEqual(verdict.errors, []);
   assert.equal(verdict.ok, true);
   assert.equal(LOCK.datasetRef, 'terminal-bench@2.0');
-  assert.equal(LOCK.task, 'cobol-modernization');
+  assert.equal(LOCK.lockSchema, 2);
+  const tasks = tasksOf(LOCK);
+  assert.ok(Array.isArray(tasks) && tasks.length >= 1);
+  assert.equal(tasks[0].task, 'cobol-modernization');
+  assert.equal(tasks[0].role, 'anchor');
+  assert.match(tasks[0].taskChecksum ?? '', /^[0-9a-f]{64}$/);
+});
+
+test('tasksOf falls back to a legacy single-task lock', () => {
+  const legacy = { lockSchema: 1, datasetRef: 'terminal-bench@2.0', task: 'cobol-modernization', taskChecksum: 'abc', verifier: { passingReward: 1 } };
+  assert.deepEqual(tasksOf(legacy), [{ task: 'cobol-modernization', taskChecksum: 'abc', role: 'anchor' }]);
 });
 
 test('validateTaskLock names every missing field', () => {
@@ -37,31 +48,43 @@ test('validateTaskLock names every missing field', () => {
   assert.ok(verdict.errors.some((e) => /verifier/.test(e)));
 });
 
-test('an unstamped lock fails task verification closed', () => {
+test('an unstamped lock entry fails task verification closed', () => {
   const dir = tmpdir();
   fs.writeFileSync(path.join(dir, 'task.yaml'), 'name: cobol-modernization');
-  const verdict = verifyTaskAgainstLock(dir, { ...LOCK, taskChecksum: null });
+  const unstamped = { ...LOCK, tasks: [{ task: 'cobol-modernization', taskChecksum: null, role: 'anchor' }] };
+  const verdict = verifyTaskAgainstLock(dir, unstamped);
   assert.equal(verdict.ok, false);
   assert.match(verdict.reason, /not.*stamped|unpinned|no checksum/i);
 });
 
-test('stampTaskLock pins the task directory and verification then passes and detects tampering', () => {
+test('stampTaskLock pins a named task entry; verification passes and detects tampering', () => {
   const dir = tmpdir();
   fs.writeFileSync(path.join(dir, 'task.yaml'), 'name: cobol-modernization');
   fs.mkdirSync(path.join(dir, 'tests'));
   fs.writeFileSync(path.join(dir, 'tests', 'test_output.py'), 'def test(): pass');
-  const stamped = stampTaskLock(dir, LOCK);
-  assert.equal(stamped.taskChecksum, hashTree(dir));
-  assert.equal(verifyTaskAgainstLock(dir, stamped).ok, true);
+  const stamped = stampTaskLock(dir, LOCK, 'cobol-modernization');
+  assert.equal(tasksOf(stamped)[0].taskChecksum, hashTree(dir));
+  assert.equal(verifyTaskAgainstLock(dir, stamped, 'cobol-modernization').ok, true);
   fs.writeFileSync(path.join(dir, 'tests', 'test_output.py'), 'def test(): assert False');
-  const tampered = verifyTaskAgainstLock(dir, stamped);
+  const tampered = verifyTaskAgainstLock(dir, stamped, 'cobol-modernization');
   assert.equal(tampered.ok, false);
   assert.match(tampered.reason, /checksum/i);
+});
+
+test('stampTaskLock can append a NEW task entry to the pinned list', () => {
+  const dir = tmpdir();
+  fs.writeFileSync(path.join(dir, 'main.c'), 'int main(){}');
+  const stamped = stampTaskLock(dir, LOCK, 'build-pmars');
+  const entry = tasksOf(stamped).find((t) => t.task === 'build-pmars');
+  assert.equal(entry.taskChecksum, hashTree(dir));
+  assert.equal(entry.role, 'candidate');
+  assert.equal(tasksOf(stamped)[0].task, 'cobol-modernization', 'existing entries are preserved');
 });
 
 test('buildHarborRunArgs uses real Harbor flags and anchors the job identity', () => {
   const args = buildHarborRunArgs({
     lock: LOCK,
+    task: 'cobol-modernization',
     agentRef: 'evals.external.terminal_bench.harbor_agent:StdioBridgeAgent',
     model: 'moonshotai/kimi-k2.7-code',
     envName: 'daytona',
@@ -98,6 +121,7 @@ test('buildHarborRunArgs uses real Harbor flags and anchors the job identity', (
 test('buildHarborRunArgs can mount the harness bundle and pass agent environment variables', () => {
   const args = buildHarborRunArgs({
     lock: LOCK,
+    task: 'cobol-modernization',
     agentRef: 'evals.external.terminal_bench.harbor_agent:StdioBridgeAgent',
     model: 'moonshotai/kimi-k2.7-code',
     envName: 'docker',

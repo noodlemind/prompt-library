@@ -22,12 +22,24 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { collectVerifierEvidence, hashTree, verdictFromReward } from './verifier.mjs';
 
-const REQUIRED_LOCK_FIELDS = ['lockSchema', 'datasetRef', 'task', 'verifier'];
+const REQUIRED_LOCK_FIELDS = ['lockSchema', 'datasetRef', 'verifier'];
+
+/** The pinned task list, normalized: legacy single-task locks become one anchor entry. */
+export function tasksOf(lock) {
+  if (Array.isArray(lock?.tasks)) return lock.tasks;
+  if (lock?.task) return [{ task: lock.task, taskChecksum: lock.taskChecksum ?? null, role: 'anchor' }];
+  return [];
+}
 
 export function validateTaskLock(lock) {
   const errors = [];
   for (const field of REQUIRED_LOCK_FIELDS) {
     if (lock?.[field] == null) errors.push(`missing required lock field: ${field}`);
+  }
+  const tasks = tasksOf(lock);
+  if (!tasks.length) errors.push('missing required lock field: tasks (or legacy task)');
+  for (const entry of tasks) {
+    if (!entry.task) errors.push('every tasks[] entry needs a task name');
   }
   if (lock?.datasetRef != null && !/^[\w./-]+@[\w.-]+$/.test(lock.datasetRef)) {
     errors.push(`datasetRef must pin a version (name@version), got: ${lock.datasetRef}`);
@@ -38,21 +50,34 @@ export function validateTaskLock(lock) {
   return { ok: errors.length === 0, errors };
 }
 
-/** Return a copy of the lock pinned to the given task directory's checksum. */
-export function stampTaskLock(taskDir, lock) {
-  return { ...lock, taskChecksum: hashTree(taskDir) };
+/**
+ * Return a schema-2 copy of the lock with the named task pinned to the given
+ * directory's checksum. An unknown task name is appended as a candidate;
+ * existing entries (including a legacy single-task lock's anchor) are updated
+ * in place.
+ */
+export function stampTaskLock(taskDir, lock, taskName = tasksOf(lock)[0]?.task) {
+  const checksum = hashTree(taskDir);
+  const tasks = tasksOf(lock).map((entry) => (entry.task === taskName ? { ...entry, taskChecksum: checksum } : entry));
+  if (!tasks.some((entry) => entry.task === taskName)) {
+    tasks.push({ task: taskName, taskChecksum: checksum, role: 'candidate' });
+  }
+  const { task: _legacyTask, taskChecksum: _legacyChecksum, ...rest } = lock;
+  return { ...rest, lockSchema: 2, tasks };
 }
 
-/** Fail closed: an unstamped lock or a drifted task tree both refuse the run. */
-export function verifyTaskAgainstLock(taskDir, lock) {
+/** Fail closed: an unstamped entry or a drifted task tree both refuse the run. */
+export function verifyTaskAgainstLock(taskDir, lock, taskName = tasksOf(lock)[0]?.task) {
   const structural = validateTaskLock(lock);
   if (!structural.ok) return { ok: false, reason: structural.errors.join('; '), checksum: null };
-  if (!lock.taskChecksum) {
-    return { ok: false, reason: 'task lock is not stamped (taskChecksum is null) — run stampTaskLock against the pinned task', checksum: null };
+  const entry = tasksOf(lock).find((t) => t.task === taskName);
+  if (!entry) return { ok: false, reason: `task ${taskName} is not in the pinned lock`, checksum: null };
+  if (!entry.taskChecksum) {
+    return { ok: false, reason: `task ${taskName} is not stamped (taskChecksum is null) — run stampTaskLock against the pinned task`, checksum: null };
   }
   const checksum = hashTree(taskDir);
-  if (checksum !== lock.taskChecksum) {
-    return { ok: false, reason: `task checksum mismatch: expected ${lock.taskChecksum}, got ${checksum}`, checksum };
+  if (checksum !== entry.taskChecksum) {
+    return { ok: false, reason: `task ${taskName} checksum mismatch: expected ${entry.taskChecksum}, got ${checksum}`, checksum };
   }
   return { ok: true, reason: '', checksum };
 }
@@ -61,13 +86,13 @@ export function verifyTaskAgainstLock(taskDir, lock) {
 // -i/--include-task-name filters tasks, -k/--n-attempts is attempts per trial,
 // -n/--n-concurrent is CONCURRENCY, --job-name/-o/--jobs-dir pin the output
 // identity, -y auto-confirms prompts.
-export function buildHarborRunArgs({ lock, agentRef, model, envName, jobName, jobsDir, attempts = 1, mounts = [], agentEnv = {} }) {
+export function buildHarborRunArgs({ lock, task = tasksOf(lock)[0]?.task, agentRef, model, envName, jobName, jobsDir, attempts = 1, mounts = [], agentEnv = {} }) {
   return [
     'run',
     '-d',
     lock.datasetRef,
     '--include-task-name',
-    lock.task,
+    task,
     '--agent',
     agentRef,
     '--model',
