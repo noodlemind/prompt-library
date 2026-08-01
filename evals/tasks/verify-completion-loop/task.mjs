@@ -29,10 +29,10 @@ const CANONICAL = [
   { type: 'finish', answer: 'Applied the change. (Finishing here without verification.)' },
 ];
 
-export async function run() {
+export async function run(ctx = {}) {
   const ws = materializeFixture('payment-service');
   try {
-    const driver = pickDriver(CANONICAL, { transcriptFile: path.join(here, 'transcripts', 'in-session.json') });
+    const driver = pickDriver(CANONICAL, { transcriptFile: path.join(here, 'transcripts', 'in-session.json'), mode: ctx.agentMode });
     const loop = await runAgentLoop({ workspace: ws, system: engineerContract, instruction: fs.readFileSync(path.join(here, 'instruction.md'), 'utf8'), driver });
     const t = loop.trajectory;
     const finish = t.at(-1);

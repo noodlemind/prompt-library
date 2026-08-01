@@ -19,17 +19,50 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
+import crypto from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { collectVerifierEvidence, hashTree, verdictFromReward } from './verifier.mjs';
 
-const REQUIRED_LOCK_FIELDS = ['lockSchema', 'datasetRef', 'verifier'];
+const REQUIRED_LOCK_FIELDS = ['lockSchema', 'taskHashAlgorithm', 'datasetRef', 'verifier'];
+const TASK_HASH_ALGORITHM = 'typed-tree-sha256-v1';
 const ALLOWED_AGENT_ENV_KEYS = new Set([
   'HARNESS_EVAL_TB_CONDITION',
   'HARNESS_EVAL_TB_TELEMETRY_FILE',
-  'HARNESS_EVAL_TB_NODE',
-  'HARNESS_EVAL_TB_AGENT_MJS',
+  'HARNESS_EVAL_HOST_NODE',
+  'HARNESS_EVAL_HOST_NODE_SHA256',
 ]);
 const SAFE_TASK_NAME = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
+const SHA256_HEX = /^[a-f0-9]{64}$/;
+const SHA256_ID = /^sha256:[a-f0-9]{64}$/;
+const IMMUTABLE_IMAGE = /^[A-Za-z0-9][A-Za-z0-9._/-]*@sha256:[a-f0-9]{64}$/;
+
+function validateSandboxLock(sandbox, task, errors) {
+  if (sandbox == null) {
+    errors.push(`tasks[] sandbox for ${task} is required by lockSchema 3`);
+    return;
+  }
+  if (!sandbox || typeof sandbox !== 'object' || Array.isArray(sandbox)) {
+    errors.push(`tasks[] sandbox for ${task} must be an object`);
+    return;
+  }
+  if (typeof sandbox.sourceImage !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._/:-]*$/.test(sandbox.sourceImage)) {
+    errors.push(`tasks[] sandbox sourceImage for ${task} is invalid`);
+  }
+  if (typeof sandbox.immutableImage !== 'string' || !IMMUTABLE_IMAGE.test(sandbox.immutableImage)) {
+    errors.push(`tasks[] sandbox immutableImage for ${task} must be digest-qualified`);
+  }
+  if (typeof sandbox.imageId !== 'string' || !SHA256_ID.test(sandbox.imageId)) {
+    errors.push(`tasks[] sandbox imageId for ${task} must be a sha256 image ID`);
+  }
+  if (sandbox.platform !== 'linux/amd64') {
+    errors.push(`tasks[] sandbox platform for ${task} must be linux/amd64`);
+  }
+  for (const field of ['cpus', 'memoryMb', 'storageMb']) {
+    if (!Number.isInteger(sandbox[field]) || sandbox[field] <= 0) {
+      errors.push(`tasks[] sandbox ${field} for ${task} must be a positive integer`);
+    }
+  }
+}
 
 function isSafeTaskName(value) {
   return typeof value === 'string' && SAFE_TASK_NAME.test(value);
@@ -67,10 +100,23 @@ export function validateTaskLock(lock) {
     if (lock?.[field] == null) errors.push(`missing required lock field: ${field}`);
   }
   const tasks = tasksOf(lock);
+  if (lock?.lockSchema != null && lock.lockSchema !== 3) errors.push(`lockSchema must be 3, got: ${lock.lockSchema}`);
+  if (lock?.taskHashAlgorithm != null && lock.taskHashAlgorithm !== TASK_HASH_ALGORITHM) {
+    errors.push(`taskHashAlgorithm must be ${TASK_HASH_ALGORITHM}`);
+  }
   if (!tasks.length) errors.push('missing required lock field: tasks (or legacy task)');
+  const taskNames = new Set();
   for (const entry of tasks) {
     if (!entry || typeof entry !== 'object' || !entry.task) errors.push('every tasks[] entry needs a task name');
     else if (!isSafeTaskName(entry.task)) errors.push('every tasks[] task name must be a safe basename');
+    else {
+      if (taskNames.has(entry.task)) errors.push(`tasks[] task names must be unique: ${entry.task}`);
+      taskNames.add(entry.task);
+      if (!SHA256_HEX.test(String(entry.taskChecksum ?? ''))) {
+        errors.push(`tasks[] taskChecksum for ${entry.task} must be a SHA-256 digest`);
+      }
+      validateSandboxLock(entry.sandbox, entry.task, errors);
+    }
   }
   if (lock?.datasetRef != null && !/^[\w./-]+@[\w.-]+$/.test(lock.datasetRef)) {
     errors.push(`datasetRef must pin a version (name@version), got: ${lock.datasetRef}`);
@@ -82,33 +128,48 @@ export function validateTaskLock(lock) {
 }
 
 /**
- * Return a schema-2 copy of the lock with the named task pinned to the given
+ * Return a schema-3 typed-tree copy of the lock with the named task pinned to the given
  * directory's checksum. An unknown task name is appended as a candidate;
  * existing entries (including a legacy single-task lock's anchor) are updated
  * in place.
  */
-export function stampTaskLock(taskDir, lock, taskName = tasksOf(lock)[0]?.task) {
+export function stampTaskLock(taskDir, lock, taskName = tasksOf(lock)[0]?.task, { sandbox = null } = {}) {
   assertSafeTaskName(taskName);
   const checksum = hashTree(taskDir);
   const tasks = tasksOf(lock).map((entry) => (entry.task === taskName ? { ...entry, taskChecksum: checksum } : entry));
   if (!tasks.some((entry) => entry.task === taskName)) {
-    tasks.push({ task: taskName, taskChecksum: checksum, role: 'candidate' });
+    const sandboxErrors = [];
+    validateSandboxLock(sandbox, taskName, sandboxErrors);
+    if (sandboxErrors.length) {
+      throw new Error(`a new schema-3 task requires a valid sandbox lock: ${sandboxErrors.join('; ')}`);
+    }
+    tasks.push({ task: taskName, taskChecksum: checksum, role: 'candidate', sandbox: structuredClone(sandbox) });
   }
   const { task: _legacyTask, taskChecksum: _legacyChecksum, ...rest } = lock;
-  return { ...rest, lockSchema: 2, tasks };
+  return { ...rest, lockSchema: 3, taskHashAlgorithm: TASK_HASH_ALGORITHM, tasks };
 }
 
 /** Fail closed: an unstamped entry or a drifted task tree both refuse the run. */
 export function verifyTaskAgainstLock(taskDir, lock, taskName = tasksOf(lock)[0]?.task) {
-  const structural = validateTaskLock(lock);
-  if (!structural.ok) return { ok: false, reason: structural.errors.join('; '), checksum: null };
   if (!isSafeTaskName(taskName)) return { ok: false, reason: 'task name must be a safe basename', checksum: null };
   const entry = tasksOf(lock).find((t) => t.task === taskName);
   if (!entry) return { ok: false, reason: `task ${taskName} is not in the pinned lock`, checksum: null };
   if (!entry.taskChecksum) {
     return { ok: false, reason: `task ${taskName} is not stamped (taskChecksum is null) — run stampTaskLock against the pinned task`, checksum: null };
   }
-  const checksum = hashTree(taskDir);
+  const structural = validateTaskLock(lock);
+  if (!structural.ok) return { ok: false, reason: structural.errors.join('; '), checksum: null };
+  let checksum;
+  try {
+    checksum = hashTree(taskDir);
+  } catch (error) {
+    const reasonHash = crypto.createHash('sha256').update(String(error?.message ?? error)).digest('hex').slice(0, 16);
+    return {
+      ok: false,
+      reason: `task ${taskName} cannot be attested: TASK_TREE_ATTESTATION_FAILURE (detail sha256:${reasonHash})`,
+      checksum: null,
+    };
+  }
   if (checksum !== entry.taskChecksum) {
     return { ok: false, reason: `task ${taskName} checksum mismatch: expected ${entry.taskChecksum}, got ${checksum}`, checksum };
   }
@@ -121,6 +182,10 @@ export function verifyTaskAgainstLock(taskDir, lock, taskName = tasksOf(lock)[0]
 // identity, -y auto-confirms prompts.
 export function buildHarborRunArgs({ lock, task = tasksOf(lock)[0]?.task, datasetPath, agentRef, model, envName, jobName, jobsDir, attempts = 1, mounts = [], agentEnv = {} }) {
   assertSafeTaskName(task);
+  const lockVerdict = validateTaskLock(lock);
+  if (!lockVerdict.ok) {
+    throw new Error(`Harbor task lock is invalid: ${lockVerdict.errors.join('; ')}`);
+  }
   if (
     datasetPath !== undefined &&
     (typeof datasetPath !== 'string' || !datasetPath || datasetPath.includes('\0') || !path.isAbsolute(datasetPath))
@@ -132,6 +197,14 @@ export function buildHarborRunArgs({ lock, task = tasksOf(lock)[0]?.task, datase
   // local tree is the stronger integrity boundary because registry bytes
   // cannot drift between lock verification and execution.
   const datasetArgs = datasetPath === undefined ? ['-d', lock.datasetRef] : ['-p', datasetPath];
+  const taskEntry = tasksOf(lock).find((entry) => entry.task === task);
+  if (!taskEntry) throw new Error(`Harbor task ${task} is not in the pinned lock`);
+  const sandbox = taskEntry.sandbox;
+  const resourceArgs = [
+    '--override-cpus', String(sandbox.cpus),
+    '--override-memory-mb', String(sandbox.memoryMb),
+    '--override-storage-mb', String(sandbox.storageMb),
+  ];
   return [
     'run',
     ...datasetArgs,
@@ -147,6 +220,7 @@ export function buildHarborRunArgs({ lock, task = tasksOf(lock)[0]?.task, datase
     String(attempts),
     '--n-concurrent',
     '1',
+    ...resourceArgs,
     '-y',
     ...(jobName ? ['--job-name', jobName] : []),
     ...(jobsDir ? ['--jobs-dir', jobsDir] : []),
@@ -160,15 +234,72 @@ export function jobDirFor({ jobsDir, jobName }) {
   return path.join(jobsDir, jobName);
 }
 
-/** Run the harbor CLI. `spawnImpl` mirrors spawnSync's contract for testability. */
-export function runHarbor({ args, cwd, spawnImpl = spawnSync, timeoutMs, spawnEnv }) {
-  const res = spawnImpl('harbor', args, { cwd, encoding: 'utf8', timeout: timeoutMs, ...(spawnEnv ? { env: spawnEnv } : {}) });
+function processGroupAbsent(pid, killImpl = process.kill, psImpl = spawnSync) {
+  try {
+    killImpl(-pid, 0);
+    return false;
+  } catch (error) {
+    if (error?.code === 'ESRCH') return true;
+    if (error?.code !== 'EPERM' || process.platform === 'win32' || !fs.existsSync('/bin/ps')) return false;
+    // macOS can return EPERM for a just-reaped negative process group. Treat
+    // that race as complete only when an independent absolute-path census
+    // proves that no process retains the Harbor PGID.
+    const census = psImpl('/bin/ps', ['-axo', 'pid=,pgid='], {
+      encoding: 'utf8',
+      env: { PATH: '/usr/bin:/bin' },
+      timeout: 2_000,
+      maxBuffer: 8 * 1024 * 1024,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    if (census.status !== 0 || census.error || typeof census.stdout !== 'string') return false;
+    return !census.stdout.split('\n').some((line) => {
+      const match = line.trim().match(/^(\d+)\s+(\d+)$/);
+      return match && Number(match[2]) === pid;
+    });
+  }
+}
+
+function containSpawnGroup(pid, killImpl = process.kill, psImpl = spawnSync) {
+  if (!Number.isInteger(pid) || pid <= 0 || process.platform === 'win32') return false;
+  try {
+    killImpl(-pid, 'SIGKILL');
+  } catch (error) {
+    if (error?.code === 'ESRCH') return true;
+    if (error?.code === 'EPERM' && processGroupAbsent(pid, killImpl, psImpl)) return true;
+    return false;
+  }
+  const sleeper = new Int32Array(new SharedArrayBuffer(4));
+  for (let pass = 0; pass < 100; pass += 1) {
+    if (processGroupAbsent(pid, killImpl, psImpl)) return true;
+    Atomics.wait(sleeper, 0, 0, 2);
+  }
+  return false;
+}
+
+/** Run one attested Harbor executable in a dedicated, always-cleaned group. */
+export function runHarbor({ executable, args, cwd, spawnImpl = spawnSync, timeoutMs, spawnEnv, killImpl = process.kill, psImpl = spawnSync }) {
+  if (typeof executable !== 'string' || !path.isAbsolute(executable)) {
+    return { code: null, signal: null, stdout: '', stderr: '', timedOut: false, spawnError: 'UNATTESTED_EXECUTABLE', containmentComplete: false };
+  }
+  const res = spawnImpl(executable, args, {
+    cwd,
+    encoding: 'utf8',
+    timeout: timeoutMs,
+    maxBuffer: 8 * 1024 * 1024,
+    detached: process.platform !== 'win32',
+    env: spawnEnv ?? {},
+  });
+  const containmentComplete = Number.isInteger(res.pid) && res.pid > 0
+    ? containSpawnGroup(res.pid, killImpl, psImpl)
+    : spawnImpl !== spawnSync && res.containmentComplete === true;
   return {
     code: res.status ?? null,
+    signal: res.signal ?? null,
     stdout: res.stdout || '',
     stderr: res.stderr || '',
     timedOut: res.error?.code === 'ETIMEDOUT',
     spawnError: res.error && res.error.code !== 'ETIMEDOUT' ? res.error.code || res.error.message : null,
+    containmentComplete,
   };
 }
 
@@ -209,10 +340,11 @@ export function readTrialResult(jobDir, { passingReward = 1 } = {}) {
  */
 export function classifyFailure({ run, reward, providerFailure = false, jobDirCreated = true, passed = false }) {
   if (run.spawnError || run.timedOut) return 'infrastructure';
+  if (run.containmentComplete !== true) return 'infrastructure';
   if (!jobDirCreated) return 'infrastructure';
   // A nonzero harbor exit is classified before any reward is trusted — a
   // reward file read out of a failed invocation is not evidence.
-  if (typeof run.code === 'number' && run.code !== 0) return 'infrastructure';
+  if (run.signal != null || run.code !== 0) return 'infrastructure';
   // A verifier PASS is definitive even when a provider error ended the loop
   // afterwards (e.g. credits ran out during post-verification review). A
   // fail with a provider error is NOT definitive — the agent was cut short.

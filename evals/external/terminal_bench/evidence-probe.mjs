@@ -12,8 +12,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-const FORMAT = 'harness-eval-workspace-manifest.v1';
-const COLLECTION_MODE = 'bounded-content-hash-manifest-v1';
+const FORMAT = 'harness-eval-workspace-manifest.v3';
+const COLLECTION_MODE = 'bounded-typed-content-plus-git-state-v3';
+const GIT_STATE_FORMAT = 'harness-eval-git-state.v1';
 const MAX_FILES = 20_000;
 const MAX_DIRECTORIES = 5_000;
 const MAX_NODES = 25_000;
@@ -24,6 +25,8 @@ const MAX_CHANGED_PATHS = 200;
 const MAX_EVENT_BYTES = 1024 * 1024;
 const MAX_STATE_BYTES = 128 * 1024 * 1024;
 const MAX_EVENTS = 200;
+const MAX_MOUNTINFO_BYTES = 1024 * 1024;
+const MAX_EXPECTED_MOUNTS = 32;
 
 const EXCLUDED_DIR_NAMES = new Set([
   '.git',
@@ -87,6 +90,11 @@ function excluded(relative, isDirectory = false) {
   return isDirectory && parts.at(-1) === '.pytest_cache';
 }
 
+function excludedFromTraversal(relative, isDirectory, options) {
+  if (excluded(relative, isDirectory)) return true;
+  return typeof options.includeEntry === 'function' && options.includeEntry(relative, isDirectory) !== true;
+}
+
 function evidenceError(reason) {
   const error = new Error(reason);
   error.evidenceReason = reason;
@@ -107,6 +115,14 @@ function directoryFlag() {
 
 function sameIdentity(left, right) {
   return Boolean(left && right && left.dev === right.dev && left.ino === right.ino && left.mode === right.mode);
+}
+
+function sameStableDirectory(left, right) {
+  return sameIdentity(left, right) &&
+    left.nlink === right.nlink &&
+    left.size === right.size &&
+    left.mtimeNs === right.mtimeNs &&
+    left.ctimeNs === right.ctimeNs;
 }
 
 function sameStableFile(left, right) {
@@ -218,24 +234,43 @@ function assertDirectoryStack(stack) {
     } catch {
       throw evidenceError('workspace-ancestor-identity-ambiguous');
     }
-    if (!opened.isDirectory() || !sameIdentity(opened, context.identity)) {
+    if (!opened.isDirectory() || !sameStableDirectory(opened, context.identity)) {
       throw evidenceError('workspace-ancestor-identity-ambiguous');
     }
-    if (!context.anchorBase) {
-      // This portable fallback detects observable ancestor replacement before
-      // and after each operation. It is intentionally reported as
-      // identity-checked (not atomic) because Node exposes no openat/renameat.
-      try {
-        const named = statBigInt(context.absolute);
-        if (named.isSymbolicLink() || !named.isDirectory() || !sameIdentity(named, context.identity)) {
-          throw evidenceError('workspace-ancestor-identity-ambiguous');
-        }
-      } catch (error) {
-        if (error?.evidenceReason) throw error;
+    // Descriptor-relative access prevents traversal escape, but the evidence
+    // must also describe the final named workspace. A renamed/detached inode
+    // is safe to read yet no longer proves what the verifier will see.
+    try {
+      const named = statBigInt(context.absolute);
+      if (named.isSymbolicLink() || !named.isDirectory() || !sameStableDirectory(named, context.identity)) {
         throw evidenceError('workspace-ancestor-identity-ambiguous');
       }
+    } catch (error) {
+      if (error?.evidenceReason) throw error;
+      throw evidenceError('workspace-ancestor-identity-ambiguous');
     }
   }
+}
+
+function refreshDirectoryStackAfterOwnedMutation(stack) {
+  for (const context of stack) {
+    let opened;
+    let named;
+    try {
+      opened = fs.fstatSync(context.handle, { bigint: true });
+      named = statBigInt(context.absolute);
+    } catch {
+      throw evidenceError('workspace-ancestor-identity-ambiguous');
+    }
+    if (
+      !opened.isDirectory() || !named.isDirectory() || named.isSymbolicLink() ||
+      !sameIdentity(opened, context.identity) || !sameIdentity(named, opened)
+    ) {
+      throw evidenceError('workspace-ancestor-identity-ambiguous');
+    }
+    context.identity = opened;
+  }
+  assertDirectoryStack(stack);
 }
 
 function readDirectoryIncrementally(context, stack, state) {
@@ -310,7 +345,7 @@ function openChildDirectory(parent, name, relative, expectedStat, stack, options
       fs.constants.O_RDONLY | directoryFlag() | nonBlockingFlag() | noFollowFlag()
     );
     const identity = fs.fstatSync(handle, { bigint: true });
-    if (!identity.isDirectory() || !sameIdentity(expectedStat, identity)) {
+    if (!identity.isDirectory() || !sameStableDirectory(expectedStat, identity)) {
       throw evidenceError('workspace-ancestor-identity-ambiguous');
     }
     const context = {
@@ -338,14 +373,24 @@ function visitDirectory(context, stack, depth, state, options) {
   if (state.directoryCount > MAX_DIRECTORIES) throw evidenceError('workspace-directory-limit-exceeded');
 
   const children = readDirectoryIncrementally(context, stack, state);
+  options.onDirectoryEnumerated?.({ relative: context.relative });
+  assertDirectoryStack(stack);
   for (const child of children) {
     const relative = context.relative ? `${context.relative}/${child.name}` : child.name;
-    if (excluded(relative, child.isDirectory())) continue;
+    if (excludedFromTraversal(relative, child.isDirectory(), options)) continue;
     const stat = childStat(context, child.name, stack);
-    if (excluded(relative, stat.isDirectory())) continue;
+    if (excludedFromTraversal(relative, stat.isDirectory(), options)) continue;
 
     if (stat.isDirectory()) {
       if (depth + 1 > MAX_DEPTH) throw evidenceError('workspace-depth-limit-exceeded');
+      if (state.entries.length >= MAX_FILES) throw evidenceError('workspace-file-limit-exceeded');
+      state.entries.push({
+        path: relative,
+        type: 'directory',
+        mode: Number(stat.mode & 0o777n),
+        size: 0,
+        sha256: null,
+      });
       const nested = openChildDirectory(context, child.name, relative, stat, stack, options);
       try {
         visitDirectory(nested, [...stack, nested], depth + 1, state, options);
@@ -369,11 +414,23 @@ function visitDirectory(context, stack, depth, state, options) {
       continue;
     }
 
-    // Sockets, devices, and FIFOs are intentionally ignored. If a regular file
-    // is raced into one of these after lstat, O_NONBLOCK above prevents a hang
-    // and the descriptor type/identity checks fail evidence closed.
-    if (!stat.isFile()) continue;
+    // An unsupported node is itself workspace state. Silently omitting it
+    // would let a FIFO/socket/device mutation disappear from the causal diff.
+    // Regular-file reads remain O_NONBLOCK/no-follow so a concurrent type race
+    // also fails closed without hanging the collector.
+    if (!stat.isFile()) throw evidenceError('workspace-unsupported-node');
     if (state.entries.length >= MAX_FILES) throw evidenceError('workspace-file-limit-exceeded');
+    const hashContent = typeof options.hashFile !== 'function' || options.hashFile(relative) === true;
+    if (!hashContent) {
+      state.entries.push({
+        path: relative,
+        type: 'file-metadata',
+        mode: Number(stat.mode & 0o777n),
+        size: Number(stat.size),
+        sha256: null,
+      });
+      continue;
+    }
     if (stat.size > BigInt(MAX_FILE_BYTES)) throw evidenceError('workspace-file-byte-limit-exceeded');
     if (BigInt(state.hashedBytes) + stat.size > BigInt(MAX_HASHED_BYTES)) {
       throw evidenceError('workspace-total-byte-limit-exceeded');
@@ -422,7 +479,7 @@ export function manifest(root = process.cwd(), options = {}) {
     collectionMode: COLLECTION_MODE,
     containmentMode: anchorBase ? 'descriptor-relative-procfs' : 'identity-checked-path-fallback',
     root: '.',
-    fileCount: entries.length,
+    fileCount: entries.filter((entry) => entry.type !== 'directory').length,
     directoryCount: state.directoryCount,
     nodeCount: state.nodeCount,
     hashedBytes: state.hashedBytes,
@@ -437,6 +494,44 @@ export function manifest(root = process.cwd(), options = {}) {
       maxFileBytes: MAX_FILE_BYTES,
       maxStateBytes: MAX_STATE_BYTES,
     },
+  };
+}
+
+function gitState(root) {
+  const gitRoot = path.join(path.resolve(root), '.git');
+  let stat;
+  try {
+    stat = statBigInt(gitRoot);
+  } catch (error) {
+    if (error?.code === 'ENOENT') {
+      const digest = sha256(stableJson({ format: GIT_STATE_FORMAT, present: false }));
+      return { available: true, present: false, hash: digest, reason: null };
+    }
+    return { available: false, present: null, hash: null, reason: 'git-state-unavailable' };
+  }
+  if (stat.isSymbolicLink() || !stat.isDirectory()) {
+    return { available: false, present: true, hash: null, reason: 'git-state-unavailable' };
+  }
+  const includeEntry = (relative, isDirectory) => {
+    const [top, ...rest] = relative.split('/');
+    if (['HEAD', 'packed-refs', 'shallow'].includes(top)) return rest.length === 0 && !isDirectory;
+    return ['refs', 'logs', 'objects'].includes(top);
+  };
+  const result = manifest(gitRoot, {
+    includeEntry,
+    // Loose objects and packfiles are content-addressed; their bounded path,
+    // type, mode and size inventory detects ref/repack/history changes without
+    // hashing arbitrarily large object databases. Refs/logs remain content hashed.
+    hashFile: (relative) => !relative.startsWith('objects/'),
+  });
+  if (!result.available) {
+    return { available: false, present: true, hash: null, reason: 'git-state-unavailable' };
+  }
+  return {
+    available: true,
+    present: true,
+    hash: sha256(stableJson({ format: GIT_STATE_FORMAT, present: true, manifestHash: result.manifestHash })),
+    reason: null,
   };
 }
 
@@ -480,7 +575,7 @@ function openStateTarget(root, candidate, { createParent = false, onParentOpened
         } catch (error) {
           if (error?.code !== 'EEXIST') throw error;
         }
-        assertDirectoryStack(stack);
+        refreshDirectoryStackAfterOwnedMutation(stack);
         stat = childStat(parent, component, stack);
       }
       if (stat.isSymbolicLink() || !stat.isDirectory()) {
@@ -543,6 +638,7 @@ function writeJsonAtomic(target, value) {
       0o600
     );
     temporaryCreated = true;
+    refreshDirectoryStackAfterOwnedMutation(target.stack);
     writtenStat = fs.fstatSync(handle, { bigint: true });
     if (!writtenStat.isFile()) throw new Error('evidence temporary state is not a regular file');
     assertDirectoryStack(target.stack);
@@ -557,7 +653,7 @@ function writeJsonAtomic(target, value) {
     assertDirectoryStack(target.stack);
     fs.renameSync(temporary, destination);
     renamed = true;
-    assertDirectoryStack(target.stack);
+    refreshDirectoryStackAfterOwnedMutation(target.stack);
     const persisted = childStat(target.parent, target.name, target.stack);
     if (!sameIdentity(writtenStat, persisted) || persisted.size !== writtenStat.size) {
       throw evidenceError('workspace-ancestor-identity-ambiguous');
@@ -574,7 +670,7 @@ function writeJsonAtomic(target, value) {
       try {
         assertDirectoryStack(target.stack);
         fs.unlinkSync(temporary);
-        assertDirectoryStack(target.stack);
+        refreshDirectoryStackAfterOwnedMutation(target.stack);
       } catch {
         // Preserve the authoritative write/fsync/rename failure. Any leftover
         // file is a bounded, randomly named 0600 temporary below .harness/.
@@ -594,6 +690,13 @@ export function writeStateJson(root, candidate, value, options = {}) {
 
 function snapshot(root, output) {
   const result = manifest(root);
+  result.gitState = gitState(root);
+  if (result.gitState.available !== true) {
+    result.available = false;
+    result.reason = result.gitState.reason;
+    result.manifestHash = null;
+    result.entries = [];
+  }
   writeStateJson(root, output, result);
   // The persisted manifest has per-file records. Stdout stays a small summary.
   return {
@@ -602,6 +705,8 @@ function snapshot(root, output) {
     collectionMode: result.collectionMode,
     containmentMode: result.containmentMode,
     manifestHash: result.manifestHash,
+    gitStateHash: result.gitState.hash,
+    gitStatePresent: result.gitState.present,
     fileCount: result.fileCount,
     directoryCount: result.directoryCount,
     nodeCount: result.nodeCount,
@@ -609,14 +714,23 @@ function snapshot(root, output) {
   };
 }
 
-function readBefore(root, beforePath, expectedHash) {
+function readBefore(root, beforePath, expectedHash, expectedGitStateHash) {
   try {
+    if (typeof expectedHash !== 'string' || !/^[a-f0-9]{64}$/.test(expectedHash)) {
+      throw new Error('run-start manifest digest is required');
+    }
     const { content } = readStateFile(root, beforePath, MAX_STATE_BYTES);
     const parsed = JSON.parse(content.toString('utf8'));
     if (parsed?.format !== FORMAT || !Array.isArray(parsed.entries)) throw new Error('unexpected manifest format');
     const computedHash = sha256(stableJson(parsed.entries));
     if (parsed.manifestHash !== computedHash) throw new Error('manifest digest mismatch');
-    if (expectedHash && parsed.manifestHash !== expectedHash) throw new Error('manifest does not match run-start digest');
+    if (parsed.manifestHash !== expectedHash) throw new Error('manifest does not match run-start digest');
+    if (
+      typeof expectedGitStateHash !== 'string' || !/^[a-f0-9]{64}$/.test(expectedGitStateHash) ||
+      parsed.gitState?.available !== true || parsed.gitState?.hash !== expectedGitStateHash
+    ) {
+      throw new Error('git state does not match run-start digest');
+    }
     return parsed;
   } catch {
     return { available: false, reason: 'before-manifest-unavailable', entries: [], manifestHash: null };
@@ -704,16 +818,16 @@ function collectHarnessEvents(root) {
     try {
       target = openStateTarget(root, '.harness/events.jsonl');
     } catch (error) {
-      if (error?.code === 'ENOENT') return { available: false, complete: false, reason: 'harness-events-not-found', events: [], projectionRejectedEvents: 0, projectionRejectedChecks: 0 };
+      if (error?.code === 'ENOENT') return { available: true, complete: true, reason: null, events: [], projectionRejectedEvents: 0, projectionRejectedChecks: 0 };
       throw error;
     }
     const expectedStat = childStat(target.parent, target.name, target.stack, { allowMissing: true });
-    if (!expectedStat) return { available: false, complete: false, reason: 'harness-events-not-found', events: [], projectionRejectedEvents: 0, projectionRejectedChecks: 0 };
+    if (!expectedStat) return { available: true, complete: true, reason: null, events: [], projectionRejectedEvents: 0, projectionRejectedChecks: 0 };
     if (expectedStat.isSymbolicLink() || !expectedStat.isFile()) throw new Error('events source is not a regular file');
     try {
       handle = fs.openSync(accessPath(target.parent, target.name), fs.constants.O_RDONLY | nonBlockingFlag() | noFollowFlag());
     } catch (error) {
-      if (error?.code === 'ENOENT') return { available: false, complete: false, reason: 'harness-events-not-found', events: [], projectionRejectedEvents: 0, projectionRejectedChecks: 0 };
+      if (error?.code === 'ENOENT') return { available: true, complete: true, reason: null, events: [], projectionRejectedEvents: 0, projectionRejectedChecks: 0 };
       throw error;
     }
     const before = fs.fstatSync(handle, { bigint: true });
@@ -756,13 +870,12 @@ function collectHarnessEvents(root) {
     const retentionTruncated = allProjected.length > MAX_EVENTS;
     const events = allProjected.slice(-MAX_EVENTS);
     const reasons = [];
-    if (allProjected.length === 0) reasons.push('harness-events-empty');
     if (start > 0) reasons.push('harness-events-byte-limit-exceeded');
     if (retentionTruncated) reasons.push('harness-events-retention-limit-exceeded');
     if (projectionRejectedEvents || projectionRejectedChecks) reasons.push('harness-events-projection-rejected');
     const complete = reasons.length === 0;
     return {
-      available: events.length > 0,
+      available: true,
       complete,
       reason: complete ? null : reasons.join(';'),
       events,
@@ -786,18 +899,24 @@ function collectHarnessEvents(root) {
   }
 }
 
-function collect(root, beforePath, expectedBeforeHash) {
-  const before = readBefore(root, beforePath, expectedBeforeHash);
+function collect(root, beforePath, expectedBeforeHash, expectedBeforeGitStateHash) {
+  const before = readBefore(root, beforePath, expectedBeforeHash, expectedBeforeGitStateHash);
   const after = manifest(root);
-  const available = before.available === true && after.available === true;
+  const afterGitState = gitState(root);
+  const available = before.available === true && after.available === true &&
+    before.gitState?.available === true && afterGitState.available === true;
   const beforeMap = new Map((before.entries ?? []).map((entry) => [entry.path, entry]));
   const afterMap = new Map((after.entries ?? []).map((entry) => [entry.path, entry]));
   const paths = [...new Set([...beforeMap.keys(), ...afterMap.keys()])].sort(bytewiseCompare);
-  const changes = available
+  const workspaceChanges = available
     ? paths
         .filter((entryPath) => stableJson(beforeMap.get(entryPath) ?? null) !== stableJson(afterMap.get(entryPath) ?? null))
         .map((entryPath) => ({ path: entryPath, before: beforeMap.get(entryPath) ?? null, after: afterMap.get(entryPath) ?? null }))
     : [];
+  const gitStateChanged = available && before.gitState.hash !== afterGitState.hash;
+  const changes = gitStateChanged
+    ? [...workspaceChanges, { path: '.git/[state]', before: { sha256: before.gitState.hash }, after: { sha256: afterGitState.hash } }]
+    : workspaceChanges;
   const harness = collectHarnessEvents(root);
   const hookEvents = harness.events.filter((event) => ['pre_tool', 'post_tool', 'session_end'].includes(event.type));
   return {
@@ -811,7 +930,12 @@ function collect(root, beforePath, expectedBeforeHash) {
       changedPaths: changes.slice(0, MAX_CHANGED_PATHS).map((change) => safeChangedPath(change.path)),
       changedPathCount: changes.length,
       changedPathsTruncated: changes.length > MAX_CHANGED_PATHS,
-      reason: available ? null : before.reason ?? after.reason ?? 'workspace-evidence-unavailable',
+      gitStateAvailable: before.gitState?.available === true && afterGitState.available === true,
+      gitStatePresent: afterGitState.present,
+      beforeGitStateHash: available ? before.gitState.hash : null,
+      afterGitStateHash: available ? afterGitState.hash : null,
+      gitStateChanged: available ? gitStateChanged : null,
+      reason: available ? null : before.reason ?? after.reason ?? afterGitState.reason ?? 'workspace-evidence-unavailable',
     },
     harnessEvents: harness.events,
     harnessEventEvidence: {
@@ -835,6 +959,81 @@ function collect(root, beforePath, expectedBeforeHash) {
   };
 }
 
+function decodeMountInfoField(value) {
+  return String(value).replace(/\\([0-7]{3})/g, (_match, octal) =>
+    String.fromCharCode(Number.parseInt(octal, 8))
+  );
+}
+
+function readMountInfo() {
+  const descriptor = fs.openSync(
+    '/proc/self/mountinfo',
+    fs.constants.O_RDONLY | nonBlockingFlag() | noFollowFlag()
+  );
+  try {
+    const chunks = [];
+    let total = 0;
+    while (total <= MAX_MOUNTINFO_BYTES) {
+      const chunk = Buffer.alloc(Math.min(64 * 1024, MAX_MOUNTINFO_BYTES + 1 - total));
+      const read = fs.readSync(descriptor, chunk, 0, chunk.length, null);
+      if (read === 0) break;
+      chunks.push(chunk.subarray(0, read));
+      total += read;
+    }
+    if (total > MAX_MOUNTINFO_BYTES) throw new Error('mountinfo exceeds evidence limit');
+    return Buffer.concat(chunks).toString('utf8');
+  } finally {
+    fs.closeSync(descriptor);
+  }
+}
+
+/** Observe only code-owned eval mount targets; never expose host mount sources. */
+export function observeMountTargets(expectedTargets, { mountInfoText = null } = {}) {
+  if (!Array.isArray(expectedTargets) || expectedTargets.length === 0 || expectedTargets.length > MAX_EXPECTED_MOUNTS) {
+    throw new Error('expected mount targets must be a nonempty bounded array');
+  }
+  const unique = [...new Set(expectedTargets)];
+  if (unique.length !== expectedTargets.length || unique.some((target) =>
+    typeof target !== 'string' || target.length > 500 ||
+    !/^\/opt\/(?:eval-runtime|harness-bundle)\/[A-Za-z0-9._/-]+$/.test(target) ||
+    target.split('/').includes('..')
+  )) {
+    throw new Error('expected mount target is outside the evaluation runtime allowlist');
+  }
+  const mounts = new Map();
+  for (const line of String(mountInfoText ?? readMountInfo()).split('\n')) {
+    if (!line) continue;
+    const separator = line.indexOf(' - ');
+    if (separator < 0) continue;
+    const before = line.slice(0, separator).split(' ');
+    const after = line.slice(separator + 3).split(' ');
+    if (before.length < 6 || after.length < 3) continue;
+    const target = decodeMountInfoField(before[4]);
+    if (!unique.includes(target)) continue;
+    const mountOptions = new Set(before[5].split(','));
+    const superOptions = new Set(after[2].split(','));
+    mounts.set(target, { readOnly: mountOptions.has('ro') || superOptions.has('ro') });
+  }
+  const observedTargets = unique.filter((target) => mounts.has(target));
+  const existingTargets = unique.filter((target) => {
+    try {
+      fs.lstatSync(target);
+      return true;
+    } catch {
+      return false;
+    }
+  });
+  return {
+    version: 'eval-mount-policy.v1',
+    source: 'sandbox-observed',
+    targets: observedTargets,
+    existingTargets,
+    allReadOnly: observedTargets.length > 0 &&
+      observedTargets.every((target) => mounts.get(target).readOnly === true),
+    complete: true,
+  };
+}
+
 function option(args, name, fallback) {
   const index = args.indexOf(name);
   if (index < 0) return fallback;
@@ -850,10 +1049,21 @@ function main(args = process.argv.slice(2)) {
     return collect(
       root,
       option(args, '--before', '.harness/eval-before.json'),
-      option(args, '--expected-before-hash', null)
+      option(args, '--expected-before-hash', null),
+      option(args, '--expected-before-git-hash', null)
     );
   }
-  throw new Error('usage: evidence-probe.mjs snapshot [--output .harness/file] | collect [--before .harness/file]');
+  if (command === 'mounts') {
+    const encoded = option(args, '--expected-b64', null);
+    let expected;
+    try {
+      expected = JSON.parse(Buffer.from(encoded, 'base64').toString('utf8'));
+    } catch {
+      throw new Error('mount target list is invalid');
+    }
+    return observeMountTargets(expected);
+  }
+  throw new Error('usage: evidence-probe.mjs snapshot|collect|mounts --expected-b64 BASE64_JSON');
 }
 
 const invokedDirectly = process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href;

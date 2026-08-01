@@ -90,12 +90,12 @@ const CANONICAL = [
   { type: 'finish', answer: 'No plan existed, so the first edit was denied. I captured and locked the plan, passed the implement gate, then applied the scoped change.' },
 ];
 
-export async function run() {
+export async function run(ctx = {}) {
   const ws = materializeFixture('payment-service');
   try {
     // Simulate a repo without a plan for this work: remove the fixture plan.
     fs.rmSync(path.join(ws, 'docs', 'plans', '2026-07-20-feat-payment-override-role.md'), { force: true });
-    const driver = pickDriver(CANONICAL, { transcriptFile: path.join(here, 'transcripts', 'in-session.json') });
+    const driver = pickDriver(CANONICAL, { transcriptFile: path.join(here, 'transcripts', 'in-session.json'), mode: ctx.agentMode });
     const loop = await runAgentLoop({ workspace: ws, system: engineerContract, instruction: fs.readFileSync(path.join(here, 'instruction.md'), 'utf8'), driver });
     const t = loop.trajectory;
     const edits = t.filter((s) => s.type === 'tool' && s.name === 'editFiles' && s.input.path === 'src/PaymentController.java');

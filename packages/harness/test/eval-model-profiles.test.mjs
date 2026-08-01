@@ -4,10 +4,14 @@ import { getProfile, listProfiles } from '../../../evals/lib/model-profiles.mjs'
 
 test('kimi profile pins the OpenRouter provider with fallbacks disabled', () => {
   const p = getProfile('kimi-k2.7-code');
-  assert.equal(p.model, 'moonshotai/kimi-k2.7-code');
+  assert.equal(p.model, 'moonshotai/kimi-k2.7-code-20260612');
+  assert.equal('modelAlias' in p, false, 'the mutable convenience alias is not an accepted resolved model');
   assert.equal(p.url, 'https://openrouter.ai/api/v1/chat/completions');
-  assert.ok(Array.isArray(p.provider.order) && p.provider.order.length > 0, 'provider order must be pinned');
+  assert.deepEqual(p.provider.order, ['moonshotai/int4']);
+  assert.deepEqual(p.provider.expectedResolvedNames, ['Moonshot AI']);
   assert.equal(p.provider.allowFallbacks, false);
+  assert.equal(p.catalogPin.canonicalSlug, p.model);
+  assert.equal(p.catalogPin.endpointTag, p.provider.order[0]);
 });
 
 test('kimi profile carries pricing with cached input cheaper than uncached', () => {
@@ -20,7 +24,7 @@ test('kimi profile carries pricing with cached input cheaper than uncached', () 
 
 test('kimi pricing matches the pinned Moonshot AI endpoint, not the model-level floor', () => {
   // OpenRouter bills per endpoint. The profile pins provider order to
-  // moonshotai, whose standard endpoint lists $0.95/M input, $0.19/M cached
+  // moonshotai/int4, whose endpoint lists $0.95/M input, $0.19/M cached
   // input, and $4.00/M output — cost totals, charges, and prechecks must use
   // the pinned endpoint's rates.
   assert.deepEqual(getProfile('kimi-k2.7-code').pricing, { inputPerM: 0.95, cachedInputPerM: 0.19, outputPerM: 4.0 });

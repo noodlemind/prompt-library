@@ -28,7 +28,8 @@ test('the committed task-lock.json is structurally valid and pins a task LIST', 
   assert.deepEqual(verdict.errors, []);
   assert.equal(verdict.ok, true);
   assert.equal(LOCK.datasetRef, 'terminal-bench@2.0');
-  assert.equal(LOCK.lockSchema, 2);
+  assert.equal(LOCK.lockSchema, 3);
+  assert.equal(LOCK.taskHashAlgorithm, 'typed-tree-sha256-v1');
   const tasks = tasksOf(LOCK);
   assert.ok(Array.isArray(tasks) && tasks.length >= 1);
   assert.equal(tasks[0].task, 'cobol-modernization');
@@ -56,6 +57,26 @@ test('validateTaskLock reports malformed task entries instead of throwing', () =
   }
 });
 
+test('schema-3 locks reject duplicate names, malformed checksums, and missing sandbox pins', () => {
+  const duplicate = validateTaskLock({ ...LOCK, tasks: [LOCK.tasks[0], { ...LOCK.tasks[0] }] });
+  assert.equal(duplicate.ok, false);
+  assert.ok(duplicate.errors.some((error) => /unique/i.test(error)));
+
+  const malformed = validateTaskLock({
+    ...LOCK,
+    tasks: [{ ...LOCK.tasks[0], taskChecksum: 'not-a-digest' }],
+  });
+  assert.equal(malformed.ok, false);
+  assert.ok(malformed.errors.some((error) => /SHA-256/i.test(error)));
+
+  const missingSandbox = validateTaskLock({
+    ...LOCK,
+    tasks: [{ ...LOCK.tasks[0], sandbox: null }],
+  });
+  assert.equal(missingSandbox.ok, false);
+  assert.ok(missingSandbox.errors.some((error) => /sandbox.*required/i.test(error)));
+});
+
 test('task names are safe basenames and cannot traverse Harbor dataset or job paths', () => {
   for (const task of ['../escape', 'nested/task', '/absolute', '.', '..', 'line\nbreak', '-flag']) {
     const verdict = validateTaskLock({ ...LOCK, tasks: [{ task, taskChecksum: 'a'.repeat(64), role: 'candidate' }] });
@@ -79,7 +100,10 @@ test('task names are safe basenames and cannot traverse Harbor dataset or job pa
 test('an unstamped lock entry fails task verification closed', () => {
   const dir = tmpdir();
   fs.writeFileSync(path.join(dir, 'task.yaml'), 'name: cobol-modernization');
-  const unstamped = { ...LOCK, tasks: [{ task: 'cobol-modernization', taskChecksum: null, role: 'anchor' }] };
+  const unstamped = {
+    ...LOCK,
+    tasks: [{ ...LOCK.tasks[0], taskChecksum: null }],
+  };
   const verdict = verifyTaskAgainstLock(dir, unstamped);
   assert.equal(verdict.ok, false);
   assert.match(verdict.reason, /not.*stamped|unpinned|no checksum/i);
@@ -99,10 +123,54 @@ test('stampTaskLock pins a named task entry; verification passes and detects tam
   assert.match(tampered.reason, /checksum/i);
 });
 
+test('a copied task snapshot has the same typed attestation as its source', () => {
+  const source = tmpdir();
+  const copied = path.join(tmpdir(), 'copied-task');
+  fs.mkdirSync(path.join(source, 'empty'));
+  fs.mkdirSync(path.join(source, 'bin'));
+  fs.writeFileSync(path.join(source, 'bin', 'verify.sh'), '#!/bin/sh\nexit 0\n');
+  fs.chmodSync(path.join(source, 'bin', 'verify.sh'), 0o755);
+  fs.cpSync(source, copied, { recursive: true, dereference: false, errorOnExist: true, force: false });
+
+  const stamped = stampTaskLock(source, LOCK, 'cobol-modernization');
+  assert.equal(hashTree(copied), hashTree(source));
+  assert.equal(verifyTaskAgainstLock(copied, stamped, 'cobol-modernization').ok, true);
+
+  fs.chmodSync(path.join(copied, 'bin', 'verify.sh'), 0o555);
+  fs.chmodSync(path.join(copied, 'bin'), 0o555);
+  fs.chmodSync(path.join(copied, 'empty'), 0o555);
+  fs.chmodSync(copied, 0o555);
+  assert.equal(hashTree(copied), hashTree(source), 'making the copy read-only must not create checksum drift');
+  assert.equal(verifyTaskAgainstLock(copied, stamped, 'cobol-modernization').ok, true);
+});
+
+test('task verification fails closed when a tree cannot be safely attested', (t) => {
+  const dir = tmpdir();
+  fs.writeFileSync(path.join(dir, 'target'), 'content');
+  try {
+    fs.symlinkSync('target', path.join(dir, 'link'));
+  } catch (error) {
+    if (['EPERM', 'ENOSYS'].includes(error.code)) return t.skip(`symlinks unavailable: ${error.code}`);
+    throw error;
+  }
+  const pinned = {
+    ...LOCK,
+    tasks: [{ ...LOCK.tasks[0], taskChecksum: 'a'.repeat(64) }],
+  };
+  const verdict = verifyTaskAgainstLock(dir, pinned, 'cobol-modernization');
+  assert.equal(verdict.ok, false);
+  assert.equal(verdict.checksum, null);
+  assert.match(verdict.reason, /TASK_TREE_ATTESTATION_FAILURE.*sha256/i);
+});
+
 test('stampTaskLock can append a NEW task entry to the pinned list', () => {
   const dir = tmpdir();
   fs.writeFileSync(path.join(dir, 'main.c'), 'int main(){}');
-  const stamped = stampTaskLock(dir, LOCK, 'build-pmars');
+  assert.throws(
+    () => stampTaskLock(dir, LOCK, 'build-pmars'),
+    /new schema-3 task requires a valid sandbox lock/i
+  );
+  const stamped = stampTaskLock(dir, LOCK, 'build-pmars', { sandbox: LOCK.tasks[0].sandbox });
   const entry = tasksOf(stamped).find((t) => t.task === 'build-pmars');
   assert.equal(entry.taskChecksum, hashTree(dir));
   assert.equal(entry.role, 'candidate');
@@ -138,12 +206,37 @@ test('buildHarborRunArgs uses real Harbor flags and anchors the job identity', (
     '1',
     '--n-concurrent',
     '1',
+    '--override-cpus',
+    '1',
+    '--override-memory-mb',
+    '2048',
+    '--override-storage-mb',
+    '10240',
     '-y',
     '--job-name',
     'canary-generic-1',
     '--jobs-dir',
     '/work/jobs',
   ]);
+});
+
+test('buildHarborRunArgs refuses missing or invalid sandbox resource locks', () => {
+  for (const sandbox of [null, { ...LOCK.tasks[0].sandbox, cpus: 0 }]) {
+    const invalidLock = {
+      ...LOCK,
+      tasks: [{ ...LOCK.tasks[0], sandbox }],
+    };
+    assert.throws(
+      () => buildHarborRunArgs({
+        lock: invalidLock,
+        task: 'cobol-modernization',
+        agentRef: 'evals.external.terminal_bench.harbor_agent:StdioBridgeAgent',
+        model: 'moonshotai/kimi-k2.7-code',
+        envName: 'docker',
+      }),
+      /sandbox.*(?:required|cpus)|task lock is invalid/i
+    );
+  }
 });
 
 test('buildHarborRunArgs binds a prepared local dataset with -p instead of resolving registry bytes with -d', () => {
@@ -190,16 +283,16 @@ test('buildHarborRunArgs can mount the harness bundle and pass only the bridge c
     agentEnv: {
       HARNESS_EVAL_TB_CONDITION: '/w/generic.json',
       HARNESS_EVAL_TB_TELEMETRY_FILE: '/w/generic.done.json',
-      HARNESS_EVAL_TB_NODE: '/opt/node/bin/node',
-      HARNESS_EVAL_TB_AGENT_MJS: '/opt/bridge/agent.mjs',
+      HARNESS_EVAL_HOST_NODE: '/opt/node/bin/node',
+      HARNESS_EVAL_HOST_NODE_SHA256: 'a'.repeat(64),
     },
   });
   const joined = args.join(' ');
   assert.ok(joined.includes('--mounts'), 'bundle mount must reach harbor');
   assert.ok(args.includes('--ae') && joined.includes('HARNESS_EVAL_TB_CONDITION=/w/generic.json'));
   assert.ok(joined.includes('HARNESS_EVAL_TB_TELEMETRY_FILE=/w/generic.done.json'));
-  assert.ok(joined.includes('HARNESS_EVAL_TB_NODE=/opt/node/bin/node'));
-  assert.ok(joined.includes('HARNESS_EVAL_TB_AGENT_MJS=/opt/bridge/agent.mjs'));
+  assert.ok(joined.includes('HARNESS_EVAL_HOST_NODE=/opt/node/bin/node'));
+  assert.ok(joined.includes(`HARNESS_EVAL_HOST_NODE_SHA256=${'a'.repeat(64)}`));
 });
 
 test('buildHarborRunArgs rejects every non-control agent env key without echoing its value', () => {
@@ -248,23 +341,117 @@ test('runHarbor uses the injected spawn and surfaces exit details', () => {
   let seen = null;
   const spawnImpl = (cmd, args, opts) => {
     seen = { cmd, args, opts };
-    return { status: 0, stdout: 'done', stderr: '' };
+    return { status: 0, stdout: 'done', stderr: '', containmentComplete: true };
   };
-  const result = runHarbor({ args: ['run', '-d', 'x'], cwd: '/work', spawnImpl, timeoutMs: 1000 });
-  assert.equal(seen.cmd, 'harbor');
+  const result = runHarbor({ executable: '/opt/pinned/harbor', args: ['run', '-d', 'x'], cwd: '/work', spawnImpl, timeoutMs: 1000 });
+  assert.equal(seen.cmd, '/opt/pinned/harbor');
   assert.deepEqual(seen.args, ['run', '-d', 'x']);
   assert.equal(seen.opts.cwd, '/work');
   assert.equal(seen.opts.timeout, 1000);
+  assert.equal(seen.opts.detached, process.platform !== 'win32');
+  assert.deepEqual(seen.opts.env, {}, 'omitting spawnEnv must never inherit the ambient process environment');
   assert.equal(result.code, 0);
+  assert.equal(result.signal, null);
   assert.equal(result.timedOut, false);
   assert.equal(result.spawnError, null);
 });
 
+test('runHarbor preserves an explicit minimal spawn environment', () => {
+  let seenEnv;
+  const spawnEnv = { PATH: '/usr/bin:/bin', LANG: 'C' };
+  runHarbor({
+    executable: '/opt/pinned/harbor',
+    args: ['--version'],
+    cwd: '/work',
+    spawnEnv,
+    spawnImpl: (_cmd, _args, options) => {
+      seenEnv = options.env;
+      return { status: 0, stdout: '0.20.0', stderr: '', containmentComplete: true };
+    },
+  });
+  assert.deepEqual(seenEnv, spawnEnv);
+});
+
+test('runHarbor always reaps the dedicated host process group', { skip: process.platform === 'win32' }, () => {
+  const killed = [];
+  let probeCount = 0;
+  const result = runHarbor({
+    executable: '/opt/pinned/harbor',
+    args: ['run'],
+    cwd: '/work',
+    spawnImpl: () => ({ pid: 43210, status: 0, stdout: '', stderr: '' }),
+    killImpl: (pid, signal) => {
+      killed.push([pid, signal]);
+      if (signal === 0 && ++probeCount === 2) throw Object.assign(new Error('gone'), { code: 'ESRCH' });
+    },
+  });
+
+  assert.deepEqual(killed, [[-43210, 'SIGKILL'], [-43210, 0], [-43210, 0]]);
+  assert.equal(result.containmentComplete, true);
+});
+
+test('runHarbor fails closed when its host process group does not disappear', { skip: process.platform === 'win32' }, () => {
+  const result = runHarbor({
+    executable: '/opt/pinned/harbor',
+    args: ['run'],
+    cwd: '/work',
+    spawnImpl: () => ({ pid: 43210, status: 0, stdout: '', stderr: '' }),
+    killImpl: () => {},
+  });
+
+  assert.equal(result.containmentComplete, false);
+  assert.equal(classifyFailure({ run: result, reward: 1, jobDirCreated: true, passed: true }), 'infrastructure');
+});
+
+test('runHarbor proves an EPERM cleanup race with an independent process-group census', { skip: process.platform === 'win32' }, () => {
+  const result = runHarbor({
+    executable: '/opt/pinned/harbor',
+    args: ['run'],
+    cwd: '/work',
+    spawnImpl: () => ({ pid: 43210, status: 0, stdout: '', stderr: '' }),
+    killImpl: () => { throw Object.assign(new Error('raced with reap'), { code: 'EPERM' }); },
+    psImpl: () => ({ status: 0, stdout: '  100  100\n  200  200\n', stderr: '' }),
+  });
+
+  assert.equal(result.containmentComplete, true);
+});
+
+test('runHarbor keeps EPERM fail-closed when the process group still exists', { skip: process.platform === 'win32' }, () => {
+  const result = runHarbor({
+    executable: '/opt/pinned/harbor',
+    args: ['run'],
+    cwd: '/work',
+    spawnImpl: () => ({ pid: 43210, status: 0, stdout: '', stderr: '' }),
+    killImpl: () => { throw Object.assign(new Error('permission denied'), { code: 'EPERM' }); },
+    psImpl: () => ({ status: 0, stdout: '  999  43210\n', stderr: '' }),
+  });
+
+  assert.equal(result.containmentComplete, false);
+});
+
 test('runHarbor classifies a missing harbor binary and a timeout', () => {
-  const enoent = runHarbor({ args: [], cwd: '.', spawnImpl: () => ({ status: null, error: Object.assign(new Error('nf'), { code: 'ENOENT' }) }) });
+  const enoent = runHarbor({ executable: '/opt/pinned/harbor', args: [], cwd: '.', spawnImpl: () => ({ status: null, error: Object.assign(new Error('nf'), { code: 'ENOENT' }) }) });
   assert.equal(enoent.spawnError, 'ENOENT');
-  const timeout = runHarbor({ args: [], cwd: '.', spawnImpl: () => ({ status: null, error: Object.assign(new Error('t'), { code: 'ETIMEDOUT' }) }) });
+  const timeout = runHarbor({ executable: '/opt/pinned/harbor', args: [], cwd: '.', spawnImpl: () => ({ status: null, error: Object.assign(new Error('t'), { code: 'ETIMEDOUT' }) }) });
   assert.equal(timeout.timedOut, true);
+});
+
+test('runHarbor retains terminating signals and never trusts their artifacts', () => {
+  const signaled = runHarbor({
+    executable: '/opt/pinned/harbor',
+    args: [],
+    cwd: '.',
+    spawnImpl: () => ({
+      status: null,
+      signal: 'SIGKILL',
+      stdout: '',
+      stderr: '',
+      containmentComplete: true,
+    }),
+  });
+  assert.equal(signaled.code, null);
+  assert.equal(signaled.signal, 'SIGKILL');
+  assert.equal(classifyFailure({ run: signaled, reward: 1, jobDirCreated: true, passed: true }), 'infrastructure');
 });
 
 test('findLatestJobDir picks the newest job directory', () => {
@@ -306,14 +493,15 @@ test('readTrialResult finds verifier evidence inside the job tree', () => {
 test('classifyFailure distinguishes infrastructure, provider, verifier, and valid trials', () => {
   assert.equal(classifyFailure({ run: { spawnError: 'ENOENT', code: null, timedOut: false }, reward: null }), 'infrastructure');
   assert.equal(classifyFailure({ run: { spawnError: null, code: null, timedOut: true }, reward: null }), 'infrastructure');
-  assert.equal(classifyFailure({ run: { spawnError: null, code: 0, timedOut: false }, reward: null, providerFailure: true }), 'provider');
-  assert.equal(classifyFailure({ run: { spawnError: null, code: 0, timedOut: false }, reward: null }), 'verifier');
-  assert.equal(classifyFailure({ run: { spawnError: null, code: 0, timedOut: false }, reward: 1 }), null);
-  assert.equal(classifyFailure({ run: { spawnError: null, code: 0, timedOut: false }, reward: 0 }), null, 'reward 0 is a graded fail, not an infrastructure failure');
+  assert.equal(classifyFailure({ run: { spawnError: null, code: null, signal: null, timedOut: false }, reward: 1 }), 'infrastructure');
+  assert.equal(classifyFailure({ run: { spawnError: null, code: 0, timedOut: false, containmentComplete: true }, reward: null, providerFailure: true }), 'provider');
+  assert.equal(classifyFailure({ run: { spawnError: null, code: 0, timedOut: false, containmentComplete: true }, reward: null }), 'verifier');
+  assert.equal(classifyFailure({ run: { spawnError: null, code: 0, timedOut: false, containmentComplete: true }, reward: 1 }), null);
+  assert.equal(classifyFailure({ run: { spawnError: null, code: 0, timedOut: false, containmentComplete: true }, reward: 0 }), null, 'reward 0 is a graded fail, not an infrastructure failure');
 });
 
 test('a verified pass survives a trailing provider error; an interrupted fail does not', () => {
-  const run = { spawnError: null, code: 0, timedOut: false };
+  const run = { spawnError: null, code: 0, timedOut: false, containmentComplete: true };
   assert.equal(
     classifyFailure({ run, reward: 1, providerFailure: true, passed: true }),
     null,

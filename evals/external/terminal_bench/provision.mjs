@@ -4,8 +4,8 @@
  * The pinned COBOL task image ships Python and GnuCOBOL — no Node, no npm, no
  * Harness. Instead of mutating the task image (which would contaminate the
  * benchmark), the release runner prepares a self-contained bundle on the host
- * and Harbor mounts it read-only into BOTH conditions (per the plan, the
- * executable may be present in both; only the treatment activates it):
+ * and Harbor mounts its common runner subset read-only into both conditions.
+ * The Harness package and CLI are mounted only into the treatment condition:
  *
  *   <bundle>/node/...        an extracted official Linux Node runtime
  *   <bundle>/harness/...     the harness package at the evaluated SHA, with
@@ -23,13 +23,22 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 export const BUNDLE_MOUNT_TARGET = '/opt/harness-bundle';
+export const EVAL_RUNTIME_MOUNT_TARGET = '/opt/eval-runtime';
 export const BUNDLE_MANIFEST_FILE = 'bundle-manifest.v1.json';
+export const CONDITION_INPUTS_FILE = 'condition-inputs.v1.json';
 const BUNDLE_MANIFEST_VERSION = 1;
 const MAX_BUNDLE_ENTRIES = 100_000;
 const MAX_BUNDLE_BYTES = 2 * 1024 * 1024 * 1024;
 const MAX_BUNDLE_DEPTH = 64;
 const MAX_MANIFEST_BYTES = 32 * 1024 * 1024;
 const MAX_NODE_TARBALL_BYTES = 1024 * 1024 * 1024;
+const BUILD_ENV_ALLOWLIST = [
+  'LANG', 'LC_ALL', 'TERM',
+  'SSL_CERT_FILE', 'SSL_CERT_DIR',
+];
+const DEFAULT_BUILD_TOOL_PATH = process.platform === 'darwin'
+  ? '/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin:/opt/homebrew/bin'
+  : '/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin';
 const SUPPORTS_NO_FOLLOW = Number.isInteger(fs.constants.O_NOFOLLOW) && fs.constants.O_NOFOLLOW > 0;
 const NO_FOLLOW = fs.constants.O_NOFOLLOW ?? 0;
 const ALLOWED_TOP_LEVEL = new Set([
@@ -39,40 +48,113 @@ const ALLOWED_TOP_LEVEL = new Set([
   'evidence-probe.mjs',
   'bounded-exec',
   'bounded-exec.mjs',
+  CONDITION_INPUTS_FILE,
+  'bridge',
   'node-x64',
   'node-arm64',
 ]);
 
-/** The bundle's bind mount in harbor's Docker Compose service-volume format. */
-export function bundleMount(bundleDir) {
-  return { type: 'bind', source: bundleDir, target: BUNDLE_MOUNT_TARGET, read_only: true };
+function readOnlyMount(source, target) {
+  return { type: 'bind', source, target, read_only: true };
+}
+
+/**
+ * Structurally isolate control from treatment. Common evidence/containment
+ * code and the matching Node runtime are mounted into both arms; no Harness
+ * path is mounted into the generic arm, so shell spelling cannot bypass the
+ * ablation boundary.
+ */
+export function bundleMountPolicy(bundleDir) {
+  const commonEntries = [
+    ['node-x64', 'node-x64'],
+    ['node-arm64', 'node-arm64'],
+    ['evidence-probe', 'evidence-probe'],
+    ['evidence-probe.mjs', 'evidence-probe.mjs'],
+    ['bounded-exec', 'bounded-exec'],
+    ['bounded-exec.mjs', 'bounded-exec.mjs'],
+  ].filter(([source]) => fs.existsSync(path.join(bundleDir, source)));
+  const treatmentEntries = [
+    ['harness', 'harness'],
+    ['harness-cli', 'harness-cli'],
+  ];
+  for (const [relative] of [...commonEntries, ...treatmentEntries]) {
+    const source = path.join(bundleDir, relative);
+    const stat = fs.lstatSync(source);
+    if (stat.isSymbolicLink() || (!stat.isFile() && !stat.isDirectory())) {
+      throw new Error(`bundle mount source must be a regular file or directory: ${relative}`);
+    }
+  }
+  const common = commonEntries.map(([source, target]) =>
+    readOnlyMount(path.join(bundleDir, source), `${EVAL_RUNTIME_MOUNT_TARGET}/${target}`)
+  );
+  const treatmentOnly = treatmentEntries.map(([source, target]) =>
+    readOnlyMount(path.join(bundleDir, source), `${BUNDLE_MOUNT_TARGET}/${target}`)
+  );
+  if (!common.some((mount) => mount.target.endsWith('/bounded-exec')) ||
+      !common.some((mount) => mount.target.endsWith('/evidence-probe')) ||
+      !common.some((mount) => /\/node-(?:x64|arm64)$/.test(mount.target))) {
+    throw new Error('bundle is missing the common immutable evaluation runtime');
+  }
+  for (const mount of treatmentOnly) {
+    if (!fs.existsSync(mount.source)) throw new Error(`bundle is missing treatment-only mount source: ${mount.source}`);
+  }
+  const generic = common.map((mount) => ({ ...mount }));
+  const harness = [...common, ...treatmentOnly].map((mount) => ({ ...mount }));
+  return {
+    version: 'eval-mount-policy.v1',
+    generic,
+    harness,
+    commonTargets: common.map((mount) => mount.target),
+    treatmentOnlyTargets: treatmentOnly.map((mount) => mount.target),
+    structurallyIsolated: treatmentOnly.every((mount) => !generic.some((entry) => entry.target === mount.target)),
+  };
 }
 
 const repoRootDefault = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const BUNDLE_SOURCE_PATHS = [
+  '.github/agents/engineer.agent.md',
+  '.github/skills/ensure-plan/SKILL.md',
   'packages/harness',
+  'evals/__init__.py',
+  'evals/config',
+  'evals/hosts',
+  'evals/lib',
+  'evals/external/__init__.py',
+  'evals/external/terminal_bench/__init__.py',
+  'evals/external/terminal_bench/agent.mjs',
+  'evals/external/terminal_bench/harbor_agent.py',
   'evals/external/terminal_bench/evidence-probe.mjs',
   'evals/external/terminal_bench/bounded-exec.mjs',
 ];
 
 function snapshotTrackedSource({ repoRoot, releaseSha, destination, run }) {
+  const repository = fs.realpathSync.native(repoRoot);
+  const gitMetadata = path.join(repository, '.git');
+  const metadata = fs.lstatSync(gitMetadata);
+  if (metadata.isSymbolicLink() || (!metadata.isDirectory() && !metadata.isFile())) {
+    throw new Error('bundle source has invalid git metadata');
+  }
   const archive = path.join(path.dirname(destination), `.tracked-source-${crypto.randomUUID()}.tar`);
   fs.mkdirSync(destination, { recursive: false, mode: 0o700 });
   try {
     run('git', [
+      `--git-dir=${gitMetadata}`,
+      `--work-tree=${repository}`,
+      '-c',
+      'core.fsmonitor=false',
       'archive',
       '--format=tar',
       `--output=${archive}`,
       releaseSha,
       '--',
       ...BUNDLE_SOURCE_PATHS,
-    ], { cwd: repoRoot });
+    ], { cwd: repository });
     run('tar', ['-xf', archive, '-C', destination]);
   } finally {
     try {
       fs.unlinkSync(archive);
-    } catch (error) {
-      if (error?.code !== 'ENOENT') throw error;
+    } catch {
+      // Cleanup must not replace the authoritative archive/extract failure.
     }
   }
 }
@@ -84,8 +166,8 @@ function architectureWrapperScript(entrypoint, label) {
   return [
     '#!/bin/sh',
     'case "$(uname -m)" in',
-    `  x86_64) exec ${BUNDLE_MOUNT_TARGET}/node-x64/bin/node ${entrypoint} "$@" ;;`,
-    `  aarch64|arm64) exec ${BUNDLE_MOUNT_TARGET}/node-arm64/bin/node ${entrypoint} "$@" ;;`,
+    `  x86_64) exec ${EVAL_RUNTIME_MOUNT_TARGET}/node-x64/bin/node ${entrypoint} "$@" ;;`,
+    `  aarch64|arm64) exec ${EVAL_RUNTIME_MOUNT_TARGET}/node-arm64/bin/node ${entrypoint} "$@" ;;`,
     `  *) echo "${label}: unsupported architecture $(uname -m)" >&2; exit 1 ;;`,
     'esac',
     '',
@@ -98,16 +180,28 @@ export function harnessWrapperScript() {
 
 /** A sandbox-local probe that uses the runtime matching the task image. */
 export function evidenceProbeWrapperScript() {
-  return architectureWrapperScript(`${BUNDLE_MOUNT_TARGET}/evidence-probe.mjs`, 'evidence probe');
+  return architectureWrapperScript(`${EVAL_RUNTIME_MOUNT_TARGET}/evidence-probe.mjs`, 'evidence probe');
 }
 
 /** An immutable bounded-output command runner used by the Python bridge. */
 export function boundedExecWrapperScript() {
-  return architectureWrapperScript(`${BUNDLE_MOUNT_TARGET}/bounded-exec.mjs`, 'bounded exec');
+  return architectureWrapperScript(`${EVAL_RUNTIME_MOUNT_TARGET}/bounded-exec.mjs`, 'bounded exec');
 }
 
 function sha256(value) {
   return crypto.createHash('sha256').update(value).digest('hex');
+}
+
+function normalizeInstalledPermissions(root) {
+  const visit = (current) => {
+    const stat = fs.lstatSync(current);
+    if (stat.isSymbolicLink()) return;
+    if (stat.isDirectory()) {
+      for (const name of fs.readdirSync(current)) visit(path.join(current, name));
+    }
+    fs.chmodSync(current, stat.mode & ~0o022);
+  };
+  visit(root);
 }
 
 function normalizedSourceIdentity(value, label = 'bundle source identity') {
@@ -267,11 +361,63 @@ function validateTopLevelNames(names) {
   for (const name of names) {
     if (!ALLOWED_TOP_LEVEL.has(name)) throw new Error(`unexpected top-level bundle content: ${name}`);
   }
-  for (const required of ['harness', 'harness-cli', 'evidence-probe', 'evidence-probe.mjs', 'bounded-exec', 'bounded-exec.mjs']) {
+  for (const required of ['harness', 'harness-cli', 'evidence-probe', 'evidence-probe.mjs', 'bounded-exec', 'bounded-exec.mjs', CONDITION_INPUTS_FILE]) {
     if (!names.includes(required)) throw new Error(`required bundle content is missing: ${required}`);
   }
   if (!names.includes('node-x64') && !names.includes('node-arm64')) {
     throw new Error('required bundle content is missing: a node-x64 or node-arm64 runtime');
+  }
+}
+
+function stripYamlFrontmatter(value) {
+  const text = String(value ?? '');
+  if (!/^---\r?\n/.test(text)) return text;
+  const match = text.match(/^---\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)/);
+  if (!match) return text;
+  return text.slice(match[0].length).replace(/^\r?\n/, '');
+}
+
+function conditionInputsFromSnapshot(snapshotRoot, sourceIdentity) {
+  const rawEngineer = fs.readFileSync(path.join(snapshotRoot, '.github', 'agents', 'engineer.agent.md'), 'utf8');
+  const engineerRuntimeContract = stripYamlFrontmatter(rawEngineer).replace(
+    /\s*Before work on a skill, agent, instruction, prompt, check, reference, or solution, read `~\/\.copilot\/skills\/create-primitive\/SKILL\.md`; a plan label is not activation\./,
+    ''
+  );
+  const skillPath = '.github/skills/ensure-plan/SKILL.md';
+  const rawSkill = fs.readFileSync(path.join(snapshotRoot, ...skillPath.split('/')), 'utf8');
+  const content = stripYamlFrontmatter(rawSkill);
+  const description = rawSkill.match(/^description:\s*(.+)$/m)?.[1]
+    ?.trim().replace(/^['"]|['"]$/g, '') || 'ensure-plan workflow guidance';
+  const guidanceCatalog = {
+    'ensure-plan': {
+      id: 'ensure-plan',
+      path: skillPath,
+      description: description.slice(0, 320),
+      content,
+      sizeChars: content.length,
+      sha256: crypto.createHash('sha256').update(content).digest('hex'),
+    },
+  };
+  const guidancePrompt = [
+    '# On-demand Harness guidance',
+    'Guidance bodies are intentionally not embedded here. Call `load_guidance` with a catalog name only when that procedure becomes necessary, then use `checkpoint` to retain durable task state.',
+    'Available guidance:',
+    ...Object.values(guidanceCatalog).map(
+      (entry) => `- ${entry.id} — ${entry.description} (source: ${entry.path})`
+    ),
+  ].join('\n');
+  return {
+    version: 'eval-condition-inputs.v1',
+    sourceIdentity,
+    engineerRuntimeContract,
+    guidancePrompt,
+    guidanceCatalog,
+  };
+}
+
+function rejectUntrustedWritableMode(mode, label) {
+  if ((mode & 0o022) !== 0) {
+    throw new Error(`${label} must not be group- or other-writable`);
   }
 }
 
@@ -298,6 +444,7 @@ function scanBundle(bundleDir, { maximumEntries: requestedMaximumEntries } = {})
       const stat = fs.lstatSync(absolute);
       const mode = stat.mode & 0o777;
       if (stat.isDirectory()) {
+        rejectUntrustedWritableMode(mode, `bundle directory ${relative}`);
         entries[entries.length - 1] = { path: relative, type: 'directory', mode };
         visit(relative, depth + 1);
         continue;
@@ -315,13 +462,15 @@ function scanBundle(bundleDir, { maximumEntries: requestedMaximumEntries } = {})
       if (!stat.isFile()) throw new Error(`unsupported bundle entry type: ${relative}`);
       const remaining = MAX_BUNDLE_BYTES - regularBytes;
       const opened = hashRegularFileBounded(absolute, remaining, `bundle file ${relative}`);
+      const openedMode = opened.stat.mode & 0o777;
+      rejectUntrustedWritableMode(openedMode, `bundle file ${relative}`);
       regularBytes += opened.stat.size;
       if (regularBytes > MAX_BUNDLE_BYTES) throw new Error(`bundle traversal exceeds maximum byte count ${MAX_BUNDLE_BYTES}`);
       entries[entries.length - 1] = {
         path: relative,
         type: 'file',
         size: opened.stat.size,
-        mode: opened.stat.mode & 0o777,
+        mode: openedMode,
         sha256: opened.sha256,
       };
     }
@@ -417,7 +566,7 @@ function inspectPrebuiltBundle(
   return {
     bundleDir: canonical,
     manifestHash: actualManifestHash,
-    mount: bundleMount(canonical),
+    mountPolicy: bundleMountPolicy(canonical),
     manifest: recorded,
     manifestBytes,
   };
@@ -428,7 +577,7 @@ export function validatePrebuiltBundle(bundleDir, options = {}) {
   return {
     bundleDir: inspected.bundleDir,
     manifestHash: inspected.manifestHash,
-    mount: inspected.mount,
+    mountPolicy: inspected.mountPolicy,
   };
 }
 
@@ -624,17 +773,20 @@ export function prepareHarnessBundle({
   bundleDir,
   repoRoot = repoRootDefault,
   sourceIdentity,
-  nodeTarballs = {
-    x64: process.env.HARNESS_EVAL_NODE_TARBALL_X64 ?? null,
-    arm64: process.env.HARNESS_EVAL_NODE_TARBALL_ARM64 ?? null,
-  },
-  nodeTarballHashes = {
-    x64: process.env.HARNESS_EVAL_NODE_TARBALL_X64_SHA256 ?? null,
-    arm64: process.env.HARNESS_EVAL_NODE_TARBALL_ARM64_SHA256 ?? null,
-  },
+  nodeTarballs = null,
+  nodeTarballHashes = null,
   snapshotSource = snapshotTrackedSource,
   spawnImpl = spawnSync,
+  ambientEnv = process.env,
 }) {
+  nodeTarballs ??= {
+    x64: ambientEnv.HARNESS_EVAL_NODE_TARBALL_X64 ?? null,
+    arm64: ambientEnv.HARNESS_EVAL_NODE_TARBALL_ARM64 ?? null,
+  };
+  nodeTarballHashes ??= {
+    x64: ambientEnv.HARNESS_EVAL_NODE_TARBALL_X64_SHA256 ?? null,
+    arm64: ambientEnv.HARNESS_EVAL_NODE_TARBALL_ARM64_SHA256 ?? null,
+  };
   sourceIdentity = normalizedSourceIdentity(sourceIdentity, 'bundle source identity');
   if (!SUPPORTS_NO_FOLLOW) throw new Error('secure Node runtime verification requires O_NOFOLLOW support');
   if (typeof snapshotSource !== 'function') throw new Error('snapshotSource must be a function');
@@ -643,9 +795,34 @@ export function prepareHarnessBundle({
   const existing = fs.readdirSync(bundleDir);
   if (existing.length) throw new Error(`bundle directory must be empty before preparation: ${bundleDir}`);
   const harnessDir = path.join(bundleDir, 'harness');
+  const bridgeDir = path.join(bundleDir, 'bridge');
   const trackedSourceDir = path.join(bundleDir, `.tracked-source-${crypto.randomUUID()}`);
+  const buildHome = path.join(bundleDir, `.build-home-${crypto.randomUUID()}`);
+  const buildTmp = path.join(buildHome, 'tmp');
+  fs.mkdirSync(buildTmp, { recursive: true, mode: 0o700 });
+  const bundleSpawnEnv = Object.fromEntries(
+    BUILD_ENV_ALLOWLIST
+      .filter((name) => typeof ambientEnv[name] === 'string')
+      .map((name) => [name, ambientEnv[name]])
+  );
+  bundleSpawnEnv.PATH = ambientEnv.HARNESS_EVAL_BUILD_TOOL_PATH ?? DEFAULT_BUILD_TOOL_PATH;
+  if (String(bundleSpawnEnv.PATH).split(path.delimiter).some((entry) => !path.isAbsolute(entry))) {
+    throw new Error('HARNESS_EVAL_BUILD_TOOL_PATH must contain only absolute directories');
+  }
+  bundleSpawnEnv.npm_config_umask = '0022';
+  bundleSpawnEnv.HOME = buildHome;
+  bundleSpawnEnv.XDG_CONFIG_HOME = path.join(buildHome, 'config');
+  bundleSpawnEnv.XDG_CACHE_HOME = path.join(buildHome, 'cache');
+  bundleSpawnEnv.TMPDIR = buildTmp;
+  bundleSpawnEnv.npm_config_userconfig = '/dev/null';
+  bundleSpawnEnv.npm_config_ignore_scripts = 'true';
+  bundleSpawnEnv.npm_config_audit = 'false';
+  bundleSpawnEnv.npm_config_fund = 'false';
+  bundleSpawnEnv.GIT_CONFIG_GLOBAL = '/dev/null';
+  bundleSpawnEnv.GIT_CONFIG_SYSTEM = '/dev/null';
+  bundleSpawnEnv.GIT_OPTIONAL_LOCKS = '0';
   const run = (cmd, args, opts = {}) => {
-    const res = spawnImpl(cmd, args, { encoding: 'utf8', ...opts });
+    const res = spawnImpl(cmd, args, { encoding: 'utf8', ...opts, env: bundleSpawnEnv });
     if (res.status !== 0) throw new Error(`bundle step failed: ${cmd} ${args.join(' ')}: ${res.stderr || res.error?.message || res.status}`);
     return res;
   };
@@ -655,15 +832,26 @@ export function prepareHarnessBundle({
     destination: trackedSourceDir,
     run,
   });
+  const conditionInputs = conditionInputsFromSnapshot(trackedSourceDir, sourceIdentity);
+  fs.writeFileSync(
+    path.join(bundleDir, CONDITION_INPUTS_FILE),
+    `${JSON.stringify(conditionInputs, null, 2)}\n`,
+    { mode: 0o444 }
+  );
   fs.renameSync(path.join(trackedSourceDir, 'packages', 'harness'), harnessDir);
+  fs.mkdirSync(bridgeDir, { mode: 0o700 });
+  fs.renameSync(path.join(trackedSourceDir, 'evals'), path.join(bridgeDir, 'evals'));
   // --ignore-scripts: the package's prepare hook (build:assets) needs the
   // full repo tree; the commit snapshot already contains the built assets.
   // npm ci recreates node_modules strictly from the tracked lockfile, so
   // ignored working-tree dependencies can never leak into the release bundle.
   run('npm', ['ci', '--omit=dev', '--no-audit', '--no-fund', '--ignore-scripts'], { cwd: harnessDir });
+  // npm honors the restrictive umask above, then this normalization makes the
+  // invariant independent of platform/npm defaults before manifest scanning.
+  normalizeInstalledPermissions(harnessDir);
   // Legacy single-tarball hook: infer its architecture from the filename.
-  const legacy = process.env.HARNESS_EVAL_NODE_TARBALL;
-  const legacyHash = process.env.HARNESS_EVAL_NODE_TARBALL_SHA256;
+  const legacy = ambientEnv.HARNESS_EVAL_NODE_TARBALL;
+  const legacyHash = ambientEnv.HARNESS_EVAL_NODE_TARBALL_SHA256;
   if (legacy && !nodeTarballs.x64 && !nodeTarballs.arm64) {
     if (/x64/.test(legacy)) {
       nodeTarballs = { ...nodeTarballs, x64: legacy };
@@ -739,8 +927,8 @@ export function prepareHarnessBundle({
     } finally {
       try {
         fs.unlinkSync(verifiedArchive);
-      } catch (error) {
-        if (error?.code !== 'ENOENT') throw error;
+      } catch {
+        // Cleanup must not replace the authoritative verification/extract failure.
       }
     }
   }
@@ -749,19 +937,20 @@ export function prepareHarnessBundle({
   // Evidence is collected in both conditions, so it is part of the symmetric
   // read-only bundle rather than installed as a treatment-only executable.
   fs.copyFileSync(
-    path.join(trackedSourceDir, 'evals', 'external', 'terminal_bench', 'evidence-probe.mjs'),
+    path.join(bridgeDir, 'evals', 'external', 'terminal_bench', 'evidence-probe.mjs'),
     path.join(bundleDir, 'evidence-probe.mjs')
   );
   fs.writeFileSync(path.join(bundleDir, 'evidence-probe'), evidenceProbeWrapperScript(), { mode: 0o755 });
   fs.copyFileSync(
-    path.join(trackedSourceDir, 'evals', 'external', 'terminal_bench', 'bounded-exec.mjs'),
+    path.join(bridgeDir, 'evals', 'external', 'terminal_bench', 'bounded-exec.mjs'),
     path.join(bundleDir, 'bounded-exec.mjs')
   );
   fs.writeFileSync(path.join(bundleDir, 'bounded-exec'), boundedExecWrapperScript(), { mode: 0o755 });
   fs.rmSync(trackedSourceDir, { recursive: true, force: true });
+  fs.rmSync(buildHome, { recursive: true, force: true });
   const { manifestHash } = writeBundleManifest(bundleDir, {
     sourceIdentity,
     nodeTarballHashes: suppliedHashes,
   });
-  return { bundleDir, manifestHash, mount: bundleMount(bundleDir) };
+  return { bundleDir, manifestHash, mountPolicy: bundleMountPolicy(bundleDir) };
 }

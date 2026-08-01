@@ -24,7 +24,7 @@ function infra(id, reason) {
   return { id, status: 'infrastructure_error', reason };
 }
 
-export async function runTask(taskDir, { provider } = {}) {
+export async function runTask(taskDir, { provider, agentMode } = {}) {
   const id = path.basename(taskDir);
   const mod = await import(pathToFileURL(path.join(taskDir, 'task.mjs')).href);
   const meta = mod.meta || {};
@@ -32,6 +32,9 @@ export async function runTask(taskDir, { provider } = {}) {
     instruction: readMaybe(path.join(taskDir, 'instruction.md')).trim(),
     rubric: readMaybe(path.join(taskDir, 'rubric.md')).trim(),
     provider,
+    // Release preflight supplies this explicitly so ambient live-driver
+    // credentials cannot turn a free deterministic check into an API call.
+    agentMode,
   };
 
   // Semantic reconstructions cannot run without a provider — skip cleanly.
@@ -84,11 +87,20 @@ export async function runTask(taskDir, { provider } = {}) {
   };
 }
 
-export async function runEvals({ tasksDir = DEFAULT_TASKS_DIR, filter = null, provider = getProvider(), writeJobs = true } = {}) {
+export async function runEvals({
+  tasksDir = DEFAULT_TASKS_DIR,
+  filter = null,
+  provider = undefined,
+  agentMode = undefined,
+  writeJobs = true,
+} = {}) {
+  // Preserve the interactive runner's opt-in provider discovery while letting
+  // security-sensitive callers pass an explicit null without reading keys.
+  const selectedProvider = provider === undefined ? getProvider() : provider;
   const dirs = discoverTasks(tasksDir).filter((d) => !filter || path.basename(d).includes(filter));
   const results = [];
   for (const dir of dirs) {
-    results.push(await runTask(dir, { provider }));
+    results.push(await runTask(dir, { provider: selectedProvider, agentMode }));
   }
   if (writeJobs && results.length) {
     fs.mkdirSync(JOBS_DIR, { recursive: true });

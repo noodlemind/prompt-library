@@ -1,0 +1,303 @@
+{
+  "$id": "eval-report.v2",
+  "title": "Release evaluation report with causal-decision evidence",
+  "type": "object",
+  "required": [
+    "schema", "harnessVersion", "releaseSha", "task", "evaluationScope",
+    "calibrationRelease", "preflight", "deterministic", "telemetryComplete",
+    "coverage", "pairs", "nativeProducts", "smokes", "budget", "gate",
+    "claim", "readiness", "limitations"
+  ],
+  "properties": {
+    "schema": { "const": "eval-report.v2" },
+    "harnessVersion": { "type": "string" },
+    "releaseSha": { "type": "string" },
+    "task": {
+      "type": "object",
+      "required": ["datasetRef", "task", "taskChecksum", "taskSet", "requiredTaskSet"],
+      "properties": {
+        "datasetRef": { "type": "string" },
+        "task": { "type": "string" },
+        "taskChecksum": { "type": ["string", "null"] },
+        "taskSet": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["task"],
+            "properties": {
+              "task": { "type": "string" },
+              "taskChecksum": { "type": ["string", "null"] },
+              "role": { "type": ["string", "null"] },
+              "sandbox": { "type": ["object", "null"] }
+            }
+          }
+        },
+        "requiredTaskSet": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["task"],
+            "properties": {
+              "task": { "type": "string" },
+              "taskChecksum": { "type": ["string", "null"] },
+              "role": { "type": ["string", "null"] },
+              "sandbox": { "type": ["object", "null"] }
+            }
+          }
+        }
+      }
+    },
+    "evaluationScope": {
+      "type": "object",
+      "required": ["mode", "releaseEligible", "selectedTasks", "requiredTasks", "trust"],
+      "properties": {
+        "mode": { "enum": ["release", "calibration", "diagnostic-task", "diagnostic-lock", "diagnostic-trust", "deterministic-only"] },
+        "releaseEligible": { "type": "boolean" },
+        "selectedTasks": { "type": "array", "items": { "type": "string" } },
+        "requiredTasks": { "type": "array", "items": { "type": "string" } },
+        "trust": {
+          "type": ["object", "null"],
+          "required": [
+            "ok", "status", "configuredStatus", "evidenceSource", "evidenceHash",
+            "requiredCapabilities", "missingCapabilities"
+          ],
+          "properties": {
+            "ok": { "type": "boolean" },
+            "status": { "enum": ["attested", "blocked"] },
+            "configuredStatus": { "enum": ["attested", "blocked"] },
+            "evidenceSource": { "type": ["string", "null"] },
+            "evidenceHash": { "type": ["string", "null"] },
+            "requiredCapabilities": { "type": "array", "items": { "type": "string" } },
+            "missingCapabilities": { "type": "array", "items": { "type": "string" } }
+          },
+          "if": {
+            "type": "object",
+            "required": ["status"],
+            "properties": { "status": { "const": "attested" } }
+          },
+          "then": {
+            "properties": {
+              "evidenceSource": { "type": "string" },
+              "evidenceHash": { "type": "string" }
+            }
+          }
+        }
+      }
+    },
+    "calibrationRelease": { "type": "boolean" },
+    "preflight": {
+      "type": "object",
+      "required": ["ok", "environment", "taskLock"],
+      "properties": {
+        "ok": { "type": "boolean" },
+        "environment": {
+          "type": "object",
+          "required": ["ok", "missing"],
+          "properties": {
+            "ok": { "type": "boolean" },
+            "missing": { "type": "array", "items": { "type": "string" } }
+          }
+        },
+        "taskLock": {
+          "type": "object",
+          "required": ["ok", "reason"],
+          "properties": {
+            "ok": { "type": "boolean" },
+            "reason": { "type": ["string", "null"] }
+          }
+        }
+      }
+    },
+    "deterministic": {
+      "type": "object",
+      "required": ["passed", "failed", "skipped"],
+      "properties": {
+        "passed": { "type": "integer", "minimum": 0 },
+        "failed": { "type": "integer", "minimum": 0 },
+        "skipped": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "telemetryComplete": { "type": "boolean" },
+    "coverage": {
+      "type": "object",
+      "required": ["complete", "requiredHosts", "expectedTasks", "observed", "missing", "duplicates", "unexpected", "reason"],
+      "properties": {
+        "complete": { "type": "boolean" },
+        "requiredHosts": { "type": "array", "items": { "type": "string" } },
+        "expectedTasks": { "type": "array", "items": { "type": "string" } },
+        "observed": { "type": "array", "items": { "type": "object" } },
+        "missing": { "type": "array", "items": { "type": "object" } },
+        "duplicates": { "type": "array", "items": { "type": "object" } },
+        "unexpected": { "type": "array", "items": { "type": "object" } },
+        "reason": { "type": ["string", "null"] }
+      }
+    },
+    "pairs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "host", "comparisonTrack", "task", "pairId", "repetitionCount", "failureKind", "result", "reason",
+          "gateActive", "reproduced", "rerun", "pairedOutcomes", "causallyAttributable",
+          "classification", "efficiencyDelta", "overheadAttribution", "failureDiagnostics",
+          "generic", "harness"
+        ],
+        "properties": {
+          "host": { "type": "string" },
+          "comparisonTrack": { "const": "controlled-ablation" },
+          "task": { "type": ["string", "null"] },
+          "pairId": { "type": ["string", "null"] },
+          "repetitionCount": { "type": ["integer", "null"], "minimum": 0 },
+          "failureKind": { "type": ["string", "null"] },
+          "result": {
+            "enum": [
+              "harness-win", "parity", "harness-regression", "inconclusive-capability",
+              "infrastructure-invalid", "inconclusive-budget", "mixed-inconclusive",
+              "flaky-inconclusive", "skipped"
+            ]
+          },
+          "reason": { "type": "string" },
+          "gateActive": { "type": "boolean" },
+          "reproduced": { "type": ["boolean", "null"] },
+          "rerun": { "type": ["object", "null"] },
+          "pairedOutcomes": { "type": ["object", "null"] },
+          "causallyAttributable": { "type": "boolean" },
+          "classification": { "type": ["object", "null"] },
+          "efficiencyDelta": { "type": ["object", "null"] },
+          "overheadAttribution": { "type": ["object", "null"] },
+          "failureDiagnostics": { "type": "array" },
+          "generic": { "type": ["object", "null"] },
+          "harness": { "type": ["object", "null"] }
+        }
+      }
+    },
+    "nativeProducts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["host", "comparisonTrack", "status"],
+        "properties": {
+          "host": { "type": "string" },
+          "comparisonTrack": { "const": "native-product-reference" },
+          "status": { "type": "string" },
+          "telemetryAvailable": { "type": ["boolean", "null"] },
+          "reason": { "type": ["string", "null"] }
+        }
+      }
+    },
+    "smokes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["host", "ok"],
+        "properties": {
+          "host": { "type": "string" },
+          "ok": { "type": ["boolean", "null"] },
+          "failed": { "type": ["array", "null"], "items": { "type": "string" } }
+        }
+      }
+    },
+    "budget": {
+      "type": "object",
+      "required": [
+        "scope", "ceilingUsd", "spentUsd", "knownReconciledSpendUsd",
+        "retainedReconciledSpendUsd", "chargeLedgerMatchesRetainedEvidence",
+        "uncertainReservedUsd", "accountedExposureUsd", "exhausted", "breached", "overrunUsd",
+        "providerSpendGuard", "billingUncertain", "enforcementSemantics",
+        "requestEstimateSemantics", "allocations"
+      ],
+      "properties": {
+        "scope": { "const": "provider-api-only" },
+        "ceilingUsd": { "type": "number", "minimum": 0 },
+        "spentUsd": { "type": "number", "minimum": 0 },
+        "knownReconciledSpendUsd": { "type": "number", "minimum": 0 },
+        "retainedReconciledSpendUsd": { "type": "number", "minimum": 0 },
+        "chargeLedgerMatchesRetainedEvidence": { "type": "boolean" },
+        "uncertainReservedUsd": { "type": "number", "minimum": 0 },
+        "accountedExposureUsd": { "type": "number", "minimum": 0 },
+        "exhausted": { "type": "boolean" },
+        "breached": { "type": "boolean" },
+        "overrunUsd": { "type": "number", "minimum": 0 },
+        "providerSpendGuard": {
+          "type": "object",
+          "required": ["verified", "limitUsd", "limitRemainingUsd", "reset", "checkedAt"],
+          "properties": {
+            "verified": { "type": "boolean" },
+            "limitUsd": { "type": ["number", "null"], "minimum": 0 },
+            "limitRemainingUsd": { "type": ["number", "null"], "minimum": 0 },
+            "reset": { "type": ["string", "null"] },
+            "checkedAt": { "type": ["string", "null"] }
+          }
+        },
+        "billingUncertain": { "type": "boolean" },
+        "enforcementSemantics": {
+          "enum": [
+            "provider-key-hard-limit-plus-conservative-scheduler",
+            "scheduler-fail-stop-not-atomic-cash-guarantee"
+          ]
+        },
+        "requestEstimateSemantics": {
+          "const": "utf8-byte-prompt-token-upper-bound-plus-max-output-at-pinned-rates"
+        },
+        "allocations": {
+          "type": "object",
+          "required": ["controlledPairUsd", "regressionRerunUsd", "controlledArmCeilingUsd"],
+          "properties": {
+            "controlledPairUsd": { "type": "number", "minimum": 0 },
+            "regressionRerunUsd": { "type": "number", "minimum": 0 },
+            "controlledArmCeilingUsd": { "type": ["number", "null"], "minimum": 0 }
+          }
+        }
+      }
+    },
+    "gate": {
+      "type": "object",
+      "required": ["block", "reasons"],
+      "properties": {
+        "block": { "type": "boolean" },
+        "reasons": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "claim": {
+      "type": "object",
+      "required": ["level", "statement", "controlledPairs", "controlledWins", "confirmedWins", "regressions", "treatmentFidelityModes"],
+      "properties": {
+        "level": { "enum": ["demonstrated-value", "bounded-overhead", "regression", "inconclusive"] },
+        "statement": { "type": "string" },
+        "controlledPairs": { "type": "integer", "minimum": 0 },
+        "controlledWins": { "type": "integer", "minimum": 0 },
+        "confirmedWins": { "type": "integer", "minimum": 0 },
+        "regressions": { "type": "integer", "minimum": 0 },
+        "treatmentFidelityModes": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "readiness": {
+      "type": "object",
+      "required": [
+        "policy", "ready", "reasons", "minimumHarnessSolvedTasks", "harnessSolvedTasks",
+        "calibrationRequired", "calibrationBaseline"
+      ],
+      "properties": {
+        "policy": { "enum": ["regression-gate", "initial-user-ship"] },
+        "ready": { "type": ["boolean", "null"] },
+        "reasons": { "type": "array", "items": { "type": "string" } },
+        "minimumHarnessSolvedTasks": { "type": ["integer", "null"], "minimum": 0 },
+        "harnessSolvedTasks": { "type": ["integer", "null"], "minimum": 0 },
+        "calibrationRequired": { "type": "boolean" },
+        "calibrationBaseline": {
+          "type": ["object", "null"],
+          "required": ["valid", "evidenceHash", "minimumRepetitions", "controlledWins", "harnessSolvedTasks", "reasons"],
+          "properties": {
+            "valid": { "type": "boolean" },
+            "evidenceHash": { "type": ["string", "null"] },
+            "minimumRepetitions": { "type": ["integer", "null"], "minimum": 0 },
+            "controlledWins": { "type": ["integer", "null"], "minimum": 0 },
+            "harnessSolvedTasks": { "type": ["integer", "null"], "minimum": 0 },
+            "reasons": { "type": "array", "items": { "type": "string" } }
+          }
+        }
+      }
+    },
+    "limitations": { "type": "array", "items": { "type": "string" } }
+  }
+}

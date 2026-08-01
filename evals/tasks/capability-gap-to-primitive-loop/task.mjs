@@ -192,10 +192,10 @@ function gatePassed(call) {
   }
 }
 
-export async function run() {
+export async function run(ctx = {}) {
   const ws = materializeFixture('payment-service');
   try {
-    const driver = pickDriver(CANONICAL, { transcriptFile: path.join(here, 'transcripts', 'in-session.json') });
+    const driver = pickDriver(CANONICAL, { transcriptFile: path.join(here, 'transcripts', 'in-session.json'), mode: ctx.agentMode });
     const loop = await runAgentLoop({ workspace: ws, system: engineerContract, instruction: fs.readFileSync(path.join(here, 'instruction.md'), 'utf8'), driver, maxSteps: 20 });
     const t = loop.trajectory;
     const gates = t.filter((s) => s.type === 'tool' && s.name === 'runInTerminal' && /gate --phase implement/.test(s.input.command));

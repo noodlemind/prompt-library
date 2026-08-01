@@ -19,7 +19,7 @@ test('kimi host is the controlled API experiment on the pinned profile', () => {
   assert.equal(host.gate, 'after-calibration');
   assert.equal(host.profile.id, 'kimi-k2.7-code');
   const driver = host.createDriver({ budget: createBudget({ ceilingUsd: 5 }), telemetry: createTelemetry() });
-  assert.equal(driver.model, 'moonshotai/kimi-k2.7-code');
+  assert.equal(driver.model, 'moonshotai/kimi-k2.7-code-20260612');
 });
 
 test('kimi host enforces the profile trial ceiling even when no budget is supplied', async () => {
@@ -65,9 +65,10 @@ test('gemma host is local, free, and needs no credentials', () => {
   assert.equal(driver.model, 'gemma4:26b-a4b-it-q4_K_M');
 });
 
-test('gemma host rewrites its endpoint for agents running inside Docker', () => {
+test('gemma host keeps its provider bridge on the host loopback endpoint', () => {
   const host = createGemmaHost();
-  assert.match(host.urlForDockerContainer(), /^http:\/\/host\.docker\.internal:11434\//);
+  assert.equal(host.profile.url, 'http://localhost:11434/v1/chat/completions');
+  assert.equal(Object.hasOwn(host, 'urlForDockerContainer'), false);
 });
 
 test('subscription hosts report every unavailable telemetry field as null, never an estimate', () => {

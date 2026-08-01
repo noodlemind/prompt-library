@@ -22,7 +22,8 @@
             "properties": {
               "task": { "type": "string" },
               "taskChecksum": { "type": ["string", "null"] },
-              "role": { "type": ["string", "null"] }
+              "role": { "type": ["string", "null"] },
+              "sandbox": { "type": ["object", "null"] }
             }
           }
         },
@@ -34,7 +35,8 @@
             "properties": {
               "task": { "type": "string" },
               "taskChecksum": { "type": ["string", "null"] },
-              "role": { "type": ["string", "null"] }
+              "role": { "type": ["string", "null"] },
+              "sandbox": { "type": ["object", "null"] }
             }
           }
         }
@@ -44,13 +46,37 @@
       "type": "object",
       "required": ["mode", "releaseEligible", "selectedTasks", "requiredTasks"],
       "properties": {
-        "mode": { "enum": ["release", "diagnostic-task", "deterministic-only"] },
+        "mode": { "enum": ["release", "calibration", "diagnostic-task", "diagnostic-lock", "diagnostic-trust", "deterministic-only"] },
         "releaseEligible": { "type": "boolean" },
         "selectedTasks": { "type": "array", "items": { "type": "string" } },
-        "requiredTasks": { "type": "array", "items": { "type": "string" } }
+        "requiredTasks": { "type": "array", "items": { "type": "string" } },
+        "trust": { "type": ["object", "null"] }
       }
     },
     "calibrationRelease": { "type": "boolean" },
+    "preflight": {
+      "type": "object",
+      "required": ["ok", "environment", "taskLock"],
+      "properties": {
+        "ok": { "type": "boolean" },
+        "environment": {
+          "type": "object",
+          "required": ["ok", "missing"],
+          "properties": {
+            "ok": { "type": "boolean" },
+            "missing": { "type": "array", "items": { "type": "string" } }
+          }
+        },
+        "taskLock": {
+          "type": "object",
+          "required": ["ok", "reason"],
+          "properties": {
+            "ok": { "type": "boolean" },
+            "reason": { "type": ["string", "null"] }
+          }
+        }
+      }
+    },
     "telemetryComplete": { "type": "boolean" },
     "deterministic": {
       "type": "object",
@@ -92,8 +118,9 @@
               "harness-regression",
               "inconclusive-capability",
               "infrastructure-invalid",
-              "inconclusive-budget",
-              "flaky-inconclusive",
+        "inconclusive-budget",
+        "mixed-inconclusive",
+        "flaky-inconclusive",
               "skipped"
             ]
           },
@@ -181,11 +208,10 @@
         },
         "allocations": {
           "type": "object",
-          "required": ["controlledPairUsd", "regressionRerunUsd", "reasonedReserveUsd"],
+          "required": ["controlledPairUsd", "regressionRerunUsd"],
           "properties": {
             "controlledPairUsd": { "type": "number" },
-            "regressionRerunUsd": { "type": "number" },
-            "reasonedReserveUsd": { "type": "number" }
+            "regressionRerunUsd": { "type": "number" }
           }
         }
       }
@@ -201,6 +227,17 @@
         "confirmedWins": { "type": "number" },
         "regressions": { "type": "number" },
         "treatmentFidelityModes": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "readiness": {
+      "type": "object",
+      "required": ["policy", "ready", "reasons", "minimumHarnessSolvedTasks", "harnessSolvedTasks"],
+      "properties": {
+        "policy": { "type": "string" },
+        "ready": { "type": ["boolean", "null"] },
+        "reasons": { "type": "array", "items": { "type": "string" } },
+        "minimumHarnessSolvedTasks": { "type": ["number", "null"] },
+        "harnessSolvedTasks": { "type": ["number", "null"] }
       }
     },
     "gate": {

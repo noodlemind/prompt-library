@@ -28,9 +28,12 @@ export function createTelemetry({
     promptTokens: 0,
     cachedTokens: 0,
     reasoningTokens: 0,
+    cachedTokensComplete: true,
+    reasoningTokensComplete: true,
     outputTokens: 0,
     localCostUsd: 0,
     providerCostUsd: null,
+    reconciledCostUsd: 0,
     usageComplete: true,
     providerCostComplete: true,
     billingComplete: true,
@@ -65,15 +68,32 @@ export function createTelemetry({
     if (!usage) {
       totals.missingUsage += 1;
       totals.usageComplete = false;
+      totals.cachedTokens = null;
+      totals.reasoningTokens = null;
+      totals.cachedTokensComplete = false;
+      totals.reasoningTokensComplete = false;
       if (providerCostRequired) totals.providerCostComplete = false;
       refreshCostComplete();
       return;
     }
     totals.promptTokens += usage.promptTokens || 0;
-    totals.cachedTokens += usage.cachedTokens || 0;
-    totals.reasoningTokens += usage.reasoningTokens || 0;
+    const cachedComplete = usage.cachedTokensComplete !== false &&
+      typeof usage.cachedTokens === 'number' && Number.isFinite(usage.cachedTokens) && usage.cachedTokens >= 0;
+    const reasoningComplete = usage.reasoningTokensComplete !== false &&
+      typeof usage.reasoningTokens === 'number' && Number.isFinite(usage.reasoningTokens) && usage.reasoningTokens >= 0;
+    if (totals.cachedTokensComplete && cachedComplete) totals.cachedTokens += usage.cachedTokens;
+    else {
+      totals.cachedTokens = null;
+      totals.cachedTokensComplete = false;
+    }
+    if (totals.reasoningTokensComplete && reasoningComplete) totals.reasoningTokens += usage.reasoningTokens;
+    else {
+      totals.reasoningTokens = null;
+      totals.reasoningTokensComplete = false;
+    }
     totals.outputTokens += usage.outputTokens || 0;
     totals.localCostUsd += usage.localCostUsd || 0;
+    totals.reconciledCostUsd += usage.reconciledCostUsd || 0;
     if (typeof usage.providerCostUsd === 'number' && Number.isFinite(usage.providerCostUsd)) {
       totals.providerCostUsd = (totals.providerCostUsd ?? 0) + usage.providerCostUsd;
     } else if (providerCostRequired) {
@@ -115,6 +135,11 @@ export function createTelemetry({
       addUsage(usage ?? null, { providerCostRequired });
     } else {
       totals.providerErrors += 1;
+      // Some providers return a billable partial completion as an error. Keep
+      // the terminal classified as an error while still reconciling its usage.
+      if (usage !== undefined || billingStatus === 'reported') {
+        addUsage(usage ?? null, { providerCostRequired });
+      }
     }
     if (billingStatus === 'unknown') {
       totals.unknownBillingAttempts += 1;
@@ -126,7 +151,7 @@ export function createTelemetry({
       attemptId,
       billingStatus,
       durationMs: Math.max(0, monotonicNow() - open.startedMonotonicMs),
-      ...(type === 'response' ? { usage: usage ?? null } : {}),
+      ...(usage !== undefined || type === 'response' ? { usage: usage ?? null } : {}),
       ...data,
     });
   }

@@ -38,6 +38,40 @@ function sha256(value) {
   return crypto.createHash('sha256').update(String(value)).digest('hex');
 }
 
+function requestControlProjection(endpoint, body) {
+  const allowedFields = new Set([
+    'model',
+    'messages',
+    'tools',
+    'tool_choice',
+    'max_tokens',
+    'temperature',
+    'reasoning',
+    'provider',
+  ]);
+  const unexpectedRequestFields = Object.keys(body)
+    .filter((field) => !allowedFields.has(field))
+    .sort();
+  const providerPresent = Object.hasOwn(body, 'provider');
+  const providerOrder = Array.isArray(body.provider?.order) ? body.provider.order.slice() : null;
+  return {
+    endpointHash: sha256(endpoint),
+    model: body.model ?? null,
+    maxTokens: body.max_tokens ?? null,
+    temperaturePresent: Object.hasOwn(body, 'temperature'),
+    temperature: Object.hasOwn(body, 'temperature') ? body.temperature : null,
+    reasoningPresent: Object.hasOwn(body, 'reasoning'),
+    reasoning: Object.hasOwn(body, 'reasoning') ? body.reasoning : null,
+    toolChoice: body.tool_choice ?? null,
+    providerPresent,
+    providerOrder,
+    providerAllowFallbacks: providerPresent && typeof body.provider?.allow_fallbacks === 'boolean'
+      ? body.provider.allow_fallbacks
+      : null,
+    unexpectedRequestFields,
+  };
+}
+
 function redactExactSecret(value, secret) {
   if (!secret || String(secret).length < 8) return structuredClone(value);
   if (typeof value === 'string') return value.split(secret).join('[REDACTED_SECRET]');
@@ -68,14 +102,27 @@ function commandCategory(command) {
   if (invokesHarness('(?:plan-new|validate-plan)') || /docs\/plans\//.test(text)) return 'plan';
   if (invokesHarness('gate')) return 'gate';
   if (invokesHarness('verify')) return 'verify';
+  const gitPrefix = String.raw`\bgit(?:\s+(?:(?:-C|-c|--git-dir|--work-tree)\s+\S+|--(?:git-dir|work-tree)=\S+))*\s+`;
+  const mutatingGit = new RegExp(
+    `${gitPrefix}(?:add|am|apply|branch|checkout|cherry-pick|clean|clone|commit|filter-branch|filter-repo|gc|merge|mv|rebase|reflog\\s+(?:delete|expire)|remote\\s+(?:add|remove|rename|set-url)|reset|restore|revert|rm|stash|switch|tag|update-index|update-ref|worktree\\s+(?:add|move|prune|remove))\\b`
+  );
+  const inspectingGit = new RegExp(
+    `${gitPrefix}(?:cat-file|diff|fsck|grep|log|ls-files|ls-tree|merge-base|rev-list|rev-parse|show|status)\\b`
+  );
+  if (/\bgit-filter-repo\b/.test(text) || mutatingGit.test(text)) return 'edit';
   if (/\b(?:npm|pnpm|yarn|pytest|python\s+-m\s+pytest|go\s+test|cargo\s+test|mvn|gradle)\b[^\n]*(?:test|verify)|\btest\b/.test(text)) return 'test';
-  if (/(?:^|\s)(?:>|>>)|\bsed\s+-i\b|\b(?:rm|mv|cp|install|touch|mkdir)\b|\b(?:python|node|perl|ruby)\b[^\n]*(?:write|open\()/.test(text)) return 'edit';
-  if (/\b(?:cat|sed|rg|grep|find|ls|pwd|head|tail|wc|git\s+(?:status|diff|log|show))\b/.test(text)) return 'inspect';
+  const scriptedWrite = /\b(?:python|node|perl|ruby)\b[^\n]*(?:write_text|write_bytes|writeFile|appendFile|\.write\s*\(|open\s*\([^)]*,\s*['"][wax+])/.test(text);
+  if (/(?:^|\s)(?:>|>>)|\bsed\s+-i\b|\b(?:rm|mv|cp|install|touch|mkdir)\b/.test(text) || scriptedWrite) return 'edit';
+  if (inspectingGit.test(text) || /\b(?:cat|sed|rg|grep|find|ls|pwd|head|tail|wc)\b/.test(text)) return 'inspect';
   return 'other';
 }
 
 function commandProgram(command) {
   return String(command || '').trim().split(/\s+/)[0]?.replace(/^.*\//, '') || null;
+}
+
+function invokesImmutableHarnessCli(command) {
+  return /(?:^|[\s;&|()])['"]?\/opt\/harness-bundle\/harness-cli['"]?(?=\s|$)/.test(String(command || ''));
 }
 
 function changedPaths(command) {
@@ -174,13 +221,50 @@ function boundedState(state, maxChars) {
   };
   const reducedJson = JSON.stringify(reduced);
   if (reducedJson.length <= maxChars) return reducedJson;
-  const minimal = JSON.stringify({
-    schema: state.schema || 'eval-agent-state.v1',
-    revision: state.revision || 0,
-    stateHash: sha256(json),
-    truncated: true,
-  });
-  if (minimal.length <= maxChars) return minimal;
+
+  const describe = (value) => {
+    if (typeof value === 'string') return value;
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return String(value);
+    }
+  };
+  const tailSummaries = (values, count, chars, summarize = describe) =>
+    (Array.isArray(values) ? values : [])
+      .slice(-count)
+      .map((value) => summarize(value).slice(0, chars));
+  const testSummary = (value) => value && typeof value === 'object'
+    ? `${value.status ?? 'unknown'}:${value.command ?? 'test'}:${value.summary ?? ''}`
+    : describe(value);
+  const failureSummary = (value) => value && typeof value === 'object'
+    ? `exit-${value.exitCode ?? 'unknown'}:${value.command ?? 'tool'}:${value.summary ?? ''}`
+    : describe(value);
+  for (const { chars, items, metadata } of [
+    { chars: 160, items: 3, metadata: true },
+    { chars: 80, items: 2, metadata: false },
+    { chars: 40, items: 1, metadata: false },
+    { chars: 16, items: 1, metadata: false },
+    { chars: 8, items: 1, metadata: false },
+    { chars: 2, items: 1, metadata: false },
+  ]) {
+    const operational = {
+      ...(metadata ? {
+        schema: state.schema || 'eval-agent-state.v1',
+        revision: state.revision || 0,
+        stateHash: sha256(json),
+      } : {}),
+      goal: String(state.goal || '').slice(0, chars),
+      constraints: tailSummaries(state.constraints, items, chars),
+      files: { changed: tailSummaries(state.files?.changed, items, chars) },
+      tests: tailSummaries(state.tests, items, chars, testSummary),
+      failures: tailSummaries(state.failures, items, chars, failureSummary),
+      nextAction: state.nextAction == null ? null : describe(state.nextAction).slice(0, chars),
+      truncated: true,
+    };
+    const candidate = JSON.stringify(operational);
+    if (candidate.length <= maxChars) return candidate;
+  }
   const marker = JSON.stringify({ truncated: true });
   return marker.length <= maxChars ? marker : '{}';
 }
@@ -254,7 +338,7 @@ export function openAiToolDriver({
 
   function reserveUncertainBilling(reason, data = {}) {
     const reservedUsd = budget?.remainingUsd() ?? 0;
-    if (reservedUsd > 0) budget.charge(reservedUsd, `uncertain billing reserve: ${reason}`);
+    if (reservedUsd > 0) budget.reserve(reservedUsd, `uncertain billing reserve: ${reason}`);
     telemetry?.record('billing_uncertain', {
       reason,
       reservedUsd,
@@ -271,10 +355,13 @@ export function openAiToolDriver({
     if (!cost) return { usageRecord: null, meteringError: isPaid, billingUncertain: isPaid };
     maxObservedPromptTokens = Math.max(maxObservedPromptTokens, cost.promptTokens);
     const localCostUsd = effPricing ? cost.usd : 0;
-    const providerCostUsd =
+    const providerCostUsd = isPaid &&
       typeof usage?.cost === 'number' && Number.isFinite(usage.cost) && usage.cost >= 0 ? usage.cost : undefined;
     const billingUncertain = isPaid && providerCostUsd == null;
-    const reconciledCostUsd = Math.max(localCostUsd, providerCostUsd ?? 0);
+    const reconciledCostUsd = isPaid ? Math.max(localCostUsd, providerCostUsd ?? 0) : 0;
+    const reportedReasoning = usage?.completion_tokens_details?.reasoning_tokens;
+    const reasoningTokensComplete = Number.isSafeInteger(reportedReasoning) &&
+      reportedReasoning >= 0 && reportedReasoning <= cost.outputTokens;
     budget?.charge(reconciledCostUsd, `response ${data?.id ?? ''}`.trim());
     return {
       meteringError: false,
@@ -282,7 +369,9 @@ export function openAiToolDriver({
       usageRecord: {
         promptTokens: cost.promptTokens,
         cachedTokens: cost.cachedTokens,
-        reasoningTokens: usage?.completion_tokens_details?.reasoning_tokens || 0,
+        cachedTokensComplete: cost.cachedTokensComplete,
+        reasoningTokens: reasoningTokensComplete ? reportedReasoning : null,
+        reasoningTokensComplete,
         outputTokens: cost.outputTokens,
         localCostUsd,
         providerCostUsd,
@@ -300,7 +389,9 @@ export function openAiToolDriver({
     } else if (
       effProvider?.order?.length &&
       resolvedProvider &&
-      !effProvider.order.map(normalizeProviderName).includes(normalizeProviderName(resolvedProvider))
+      !(effProvider.expectedResolvedNames ?? effProvider.order)
+        .map(normalizeProviderName)
+        .includes(normalizeProviderName(resolvedProvider))
     ) {
       reason = `resolved provider ${resolvedProvider} is outside the pinned order`;
     }
@@ -337,16 +428,56 @@ export function openAiToolDriver({
   }
 
   function requestFootprint(body, payload, requestId, postVerify) {
+    const requestMessages = Array.isArray(body.messages) ? body.messages : [];
+    const systemMessages = requestMessages.filter((message) => message?.role === 'system');
+    const instructionMessages = requestMessages.filter((message) => message?.role === 'user');
+    const systemContent = requestMessages[0]?.role === 'system' && typeof requestMessages[0]?.content === 'string'
+      ? requestMessages[0].content
+      : null;
+    const instructionContent = requestMessages[1]?.role === 'user' && typeof requestMessages[1]?.content === 'string'
+      ? requestMessages[1].content
+      : null;
+    const durableStateMessages = requestMessages
+      .map((message, index) => ({ message, index }))
+      .filter(({ message, index }) =>
+        index > 1 && message?.role === 'system' &&
+        typeof message.content === 'string' && message.content.startsWith('# Durable eval state\n')
+      );
+    const unexpectedSystemMessageCount = requestMessages.filter((message, index) =>
+      message?.role === 'system' && index !== 0 &&
+      !durableStateMessages.some((candidate) => candidate.index === index)
+    ).length;
+    const requestControls = requestControlProjection(endpoint, body);
     return {
       requestId,
-      model: requestedModel,
-      messageCount: messages.length,
+      ...requestControls,
+      requestBodyHash: sha256(payload),
+      requestControlHash: sha256(JSON.stringify(requestControls)),
+      messageCount: requestMessages.length,
       payloadChars: payload.length,
       payloadBytes: Buffer.byteLength(payload, 'utf8'),
-      systemChars: JSON.stringify(messages.filter((message) => message.role === 'system')).length,
+      systemChars: JSON.stringify(systemMessages).length,
+      baseSystemChars: systemContent == null ? 0 : JSON.stringify(requestMessages[0]).length,
+      instructionChars: instructionContent == null ? 0 : JSON.stringify(requestMessages[1]).length,
+      durableStateChars: durableStateMessages.reduce((sum, entry) => sum + JSON.stringify(entry.message).length, 0),
+      systemMessageCount: systemMessages.length,
+      instructionMessageCount: instructionMessages.length,
+      systemPromptPosition: systemContent == null ? null : 0,
+      instructionPosition: instructionContent == null ? null : 1,
+      systemPromptHash: systemContent == null ? null : sha256(systemContent),
+      instructionHash: instructionContent == null ? null : sha256(instructionContent),
+      durableStateMessageCount: durableStateMessages.length,
+      durableStateMessageIndex: durableStateMessages.length === 1 ? durableStateMessages[0].index : null,
+      durableStateMessageHash: durableStateMessages.length === 1
+        ? sha256(durableStateMessages[0].message.content)
+        : null,
+      unexpectedSystemMessageCount,
       toolSchemaChars: JSON.stringify(body.tools).length,
-      charsByRole: roleChars(messages),
-      messagesHash: sha256(JSON.stringify(messages)),
+      toolSchemaHash: sha256(JSON.stringify(body.tools)),
+      toolCount: body.tools.length,
+      toolMode: postVerify ? 'finish-only' : 'full',
+      charsByRole: roleChars(requestMessages),
+      messagesHash: sha256(JSON.stringify(requestMessages)),
       stateRevision,
       postVerify,
     };
@@ -423,16 +554,19 @@ export function openAiToolDriver({
         }
 
         const captured = captureUsage(data);
+        const choice = data?.choices?.[0] ?? null;
+        const completionFailure = data?.error != null || choice?.error != null || choice?.finish_reason === 'error';
         const billingStatus = captured.meteringError || captured.billingUncertain ? 'unknown' : 'reported';
         telemetry?.finishAttempt(attemptId, {
-          type: 'response',
+          type: completionFailure ? 'error' : 'response',
           billingStatus,
           usage: captured.usageRecord,
           providerCostRequired: isPaid,
+          ...(completionFailure ? { kind: 'provider', reason: 'provider_completion_error' } : {}),
           generationId: data?.id ?? null,
           provider: data?.provider ?? null,
           model: data?.model ?? null,
-          finishReason: data?.choices?.[0]?.finish_reason ?? null,
+          finishReason: choice?.finish_reason ?? null,
         });
         detectFallback(data);
         if (captured.meteringError || captured.billingUncertain) {
@@ -447,6 +581,19 @@ export function openAiToolDriver({
             billingUncertain: true,
           });
         }
+        if (completionFailure) {
+          telemetry?.record('completion_error', {
+            requestId,
+            attemptId,
+            kind: 'provider',
+            billed: true,
+            reason: 'provider_completion_error',
+          });
+          throw new ProviderError('provider returned a partial or errored completion', {
+            kind: 'provider',
+            billed: true,
+          });
+        }
         if (!data?.choices?.[0]?.message) {
           telemetry?.record('completion_error', { requestId, attemptId, kind: 'provider', billed: Boolean(data?.usage) });
           throw new ProviderError('provider response contained no completion', { kind: 'provider', billed: Boolean(data?.usage) });
@@ -458,28 +605,56 @@ export function openAiToolDriver({
     }
   }
 
-  function actionFor(call, requestId) {
-    let input = {};
+  function parsedArguments(call) {
+    const raw = typeof call?.function?.arguments === 'string' ? call.function.arguments : '';
     try {
-      input = JSON.parse(call.function.arguments || '{}');
+      const input = JSON.parse(raw || '{}');
+      if (!input || typeof input !== 'object' || Array.isArray(input)) throw new TypeError('tool arguments must be an object');
+      return { input, raw, valid: true, error: null };
     } catch {
-      input = {};
+      return { input: {}, raw, valid: false, error: 'provider tool arguments were not a valid JSON object' };
     }
-    if (call.function.name === 'finish') {
-      telemetry?.record('finish', { stopReason: 'model_finish', requestId });
-      return { type: 'finish', answer: input.answer || '', stopReason: 'model_finish', _id: call.id };
-    }
-    const rawArgs = call.function.arguments || '{}';
-    const category = call.function.name === 'verify_harness' ? 'verify' : commandCategory(input.command);
+  }
+
+  function recordIssuedToolCall(call, requestId) {
+    const parsed = parsedArguments(call);
+    const category = !parsed.valid
+      ? 'invalid'
+      : call.function.name === 'finish'
+        ? 'finish'
+      : call.function.name === 'verify_harness'
+        ? 'verify'
+        : commandCategory(parsed.input.command);
     telemetry?.record('tool_call', {
       requestId,
-      toolCallId: call.id,
-      tool: call.function.name,
+      toolCallId: call?.id ?? null,
+      tool: call?.function?.name ?? null,
       category,
-      program: commandProgram(input.command),
-      argsChars: rawArgs.length,
-      argsHash: sha256(rawArgs),
+      program: commandProgram(parsed.input.command),
+      immutableHarnessCli: parsed.valid && invokesImmutableHarnessCli(parsed.input.command),
+      argumentsValid: parsed.valid,
+      argsChars: parsed.raw.length,
+      argsHash: sha256(parsed.raw),
     });
+  }
+
+  function actionFor(call, requestId) {
+    const parsed = parsedArguments(call);
+    const input = parsed.input;
+    if (call.function.name === 'finish') {
+      return {
+        type: 'tool',
+        name: 'finish',
+        input,
+        _id: call.id,
+        _requestId: requestId,
+        _category: parsed.valid ? 'finish' : 'invalid',
+        _startedAtMs: monotonicNow(),
+        _argumentsValid: parsed.valid,
+        ...(parsed.error ? { _argumentError: parsed.error } : {}),
+      };
+    }
+    const category = !parsed.valid ? 'invalid' : call.function.name === 'verify_harness' ? 'verify' : commandCategory(input.command);
     return {
       type: 'tool',
       name: call.function.name,
@@ -488,7 +663,59 @@ export function openAiToolDriver({
       _requestId: requestId,
       _category: category,
       _startedAtMs: monotonicNow(),
+      _argumentsValid: parsed.valid,
+      ...(parsed.error ? { _argumentError: parsed.error } : {}),
     };
+  }
+
+  function suppressedResult(reason) {
+    return {
+      code: 126,
+      stdout: '',
+      stderr: `provider tool call suppressed: ${reason}`,
+      stdoutTruncated: false,
+      stderrTruncated: false,
+      timedOut: false,
+      containmentMode: 'bridge-local',
+      containmentComplete: true,
+    };
+  }
+
+  function suppressCalls(calls, requestId, reason) {
+    for (const call of calls.filter((candidate) => candidate?.function?.name !== 'finish')) {
+      const action = actionFor(call, requestId);
+      telemetry?.record(reason === 'verification_passed' ? 'post_verify_tool_suppressed' : 'tool_call_suppressed', {
+        requestId,
+        toolCallId: call.id,
+        tool: call.function?.name || null,
+        reason,
+      });
+      driver.observe(action, suppressedResult(reason));
+    }
+  }
+
+  function settleFinishCalls(calls, requestId) {
+    for (const call of calls.filter((candidate) => candidate?.function?.name === 'finish')) {
+      const action = actionFor(call, requestId);
+      driver.observe(action, {
+        code: action._argumentsValid === false ? 126 : 0,
+        stdout: '',
+        stderr: action._argumentError || '',
+        stdoutTruncated: false,
+        stderrTruncated: false,
+        timedOut: false,
+        containmentMode: 'bridge-local',
+        containmentComplete: true,
+      });
+    }
+  }
+
+  function suppressPending(reason) {
+    const calls = pending;
+    const requestId = pendingRequestId;
+    pending = [];
+    pendingRequestId = null;
+    suppressCalls(calls, requestId, reason);
   }
 
   function compactContext(body) {
@@ -620,13 +847,10 @@ export function openAiToolDriver({
         revision: stateRevision,
         lifecycle: { ...(stateLedger.lifecycle || {}), phase: 'done', planPath: safePlan, verify: 'passed' },
       };
-      for (const call of pending) {
-        telemetry?.record('post_verify_tool_suppressed', { toolCallId: call.id, tool: call.function?.name || null });
-      }
-      pending = [];
-      pendingRequestId = null;
+      suppressPending('verification_passed');
       telemetry?.record('verification_passed', { plan: safePlan, evidencePath: safeEvidencePath, stateRevision });
     },
+    suppressPending,
     async next() {
       if (verifiedTerminal) return verifiedTerminal;
       if (verified && verifiedAttempted) return verifiedFinish({ reason: 'provider_attempt_already_used' });
@@ -658,11 +882,12 @@ export function openAiToolDriver({
       const msg = data.choices[0].message;
       messages.push(msg);
       const calls = msg.tool_calls || [];
+      const actionableCalls = calls.filter((call) => call?.function?.name !== 'finish');
+      for (const call of calls) recordIssuedToolCall(call, requestId);
       if (verified) {
-        for (const call of calls) {
-          telemetry?.record('post_verify_tool_suppressed', { requestId, toolCallId: call.id, tool: call.function?.name || null });
-        }
+        suppressCalls(actionableCalls, requestId, 'verification_passed');
         const finishCall = calls.find((call) => call.function?.name === 'finish');
+        settleFinishCalls(calls, requestId);
         let answer = msg.content || verified.fallbackAnswer || '';
         if (finishCall) {
           try {
@@ -677,7 +902,20 @@ export function openAiToolDriver({
         telemetry?.record('finish', { stopReason: 'model_finish', requestId });
         return { type: 'finish', answer: msg.content || '', stopReason: 'model_finish' };
       }
-      pending = calls.slice();
+      const finishCall = calls.find((call) => call?.function?.name === 'finish');
+      if (finishCall) {
+        suppressCalls(actionableCalls, requestId, 'finish_selected');
+        settleFinishCalls(calls, requestId);
+        const parsed = parsedArguments(finishCall);
+        telemetry?.record('finish', { stopReason: 'model_finish', requestId });
+        return {
+          type: 'finish',
+          answer: parsed.valid ? parsed.input.answer || msg.content || '' : msg.content || '',
+          stopReason: 'model_finish',
+          _id: finishCall.id,
+        };
+      }
+      pending = actionableCalls.slice();
       pendingRequestId = requestId;
       return actionFor(pending.shift(), requestId);
     },
@@ -686,18 +924,25 @@ export function openAiToolDriver({
       const serialized = JSON.stringify(safeResult);
       const compacted = compactToolResult(safeResult, toolResultLimit);
       const category = action._category || commandCategory(action.input?.command);
+      const terminalTool = ['bash', 'runInTerminal', 'verify_harness'].includes(action.name);
+      const exitCode = Number.isFinite(safeResult?.code) ? safeResult.code : null;
       telemetry?.record('tool_result', {
         requestId: action._requestId ?? null,
         toolCallId: action._id || 'call_0',
         tool: action.name || 'finish',
         category,
-        exitCode: Number.isFinite(result?.code) ? result.code : null,
+        exitCode,
         durationMs: Math.max(0, monotonicNow() - (action._startedAtMs ?? monotonicNow())),
         stdoutChars: String(safeResult?.stdout ?? '').length,
         stderrChars: String(safeResult?.stderr ?? '').length,
         resultChars: serialized.length,
         resultHash: sha256(serialized),
         compacted: compacted.compacted,
+        stdoutTruncated: safeResult?.stdoutTruncated === true,
+        stderrTruncated: safeResult?.stderrTruncated === true,
+        timedOut: safeResult?.timedOut === true,
+        containmentMode: terminalTool ? safeResult?.containmentMode ?? null : 'bridge-local',
+        containmentComplete: terminalTool ? safeResult?.containmentComplete === true : true,
       });
       if (compacted.compacted) {
         telemetry?.record('tool_result_compacted', {

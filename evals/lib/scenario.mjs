@@ -91,8 +91,8 @@ export function buildGuidance(skills, { eager = skills !== undefined } = {}) {
   return parts.join('\n\n---\n\n');
 }
 
-export function pickDriver(canonicalTrajectory, { transcriptFile } = {}) {
-  const which = process.env.HARNESS_EVAL_AGENT || 'scripted';
+export function pickDriver(canonicalTrajectory, { transcriptFile, mode } = {}) {
+  const which = mode ?? process.env.HARNESS_EVAL_AGENT ?? 'scripted';
   if (which === 'scripted') return replayDriver(canonicalTrajectory, { name: 'no-model', model: 'scripted' });
   if (which === 'insession') {
     if (!transcriptFile || !fs.existsSync(transcriptFile)) throw new EvalInfraError('no in-session transcript recorded for this scenario');

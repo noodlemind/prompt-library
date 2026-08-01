@@ -1,18 +1,34 @@
-# Release-canary evaluation profile — the plan's §3 matrix and §10 budget in data.
+# Initial-qualification release canary — the plan's matrix and budget in data.
 profile: release-canary
+
+# Release execution is deliberately fail-closed until every key-bearing trust
+# boundary below is implemented and independently reviewed. Deterministic evals
+# remain available; no provider request is scheduled while this block is red.
+releaseTrust:
+  status: blocked
+  capabilities:
+    fullHarborRuntimeClosureAttested: false
+    keyBearingToolchainIsolated: false
+    sandboxEntryChainAttested: false
+    mountsObservedFromTrustedSupervisor: false
+    escapedProcessesAndContainersReaped: false
+    imageResourcesAndNetworkObserved: false
 
 task:
   lockFile: evals/external/terminal_bench/task-lock.json
 
 # Cost controls (§10). The ceiling is enforced in code before every provider
-# request; the reserve is unusable without a recorded reason.
+# request; the two allowances exhaust the routine ceiling without decorative
+# headroom.
 budget:
   # Routine target: $10. Operators may override up to the code-enforced
   # absolute ceiling of $20 for a justified calibration.
   releaseCeilingUsd: 10
   kimiPairUsd: 8
   rerunUsd: 2
-  reserveUsd: 2
+  # Identical in routine and calibration so stopping policy is part of the
+  # controlled condition rather than a repetition-dependent confound.
+  controlledArmCeilingUsd: 0.65
 
 # Post-calibration success-parity limits. A correctness win is reported
 # separately; parity outside any of these bounds blocks the release claim.
@@ -21,9 +37,22 @@ efficiencyThresholds:
   costRatio: 1.5
   wallTimeRatio: 1.25
 
-# The first N releases are calibration: kimi fail/fail and gemma failures do
-# not block, efficiency regressions are report-only, safety always blocks.
-calibrationReleases: 3
+# A fail→pass result is valuable only inside an explicit willingness-to-pay
+# envelope; parity continues to use the ratios above.
+valueThresholds:
+  maxIncrementalApiCostPerAdditionalSuccessUsd: 2.0
+  maxIncrementalWallTimePerAdditionalSuccessMs: 600000
+
+# This profile is for confidence before first user exposure, not merely a
+# regression smoke. A green decision needs a supported value claim and at
+# least two Harness-solved tasks from the full controlled denominator.
+claimPolicy:
+  mode: initial-user-ship
+  minimumHarnessSolvedTasks: 2
+  # The qualifying three-repetition calibration is itself the initial ship
+  # decision, so a second routine run cannot create $30 of same-release exposure.
+  requireCalibrationBaseline: false
+  minimumCalibrationRepetitions: 3
 
 # Independent repetitions per condition per task. Calibration uses 3 (majority
 # verdict, median efficiency) to establish variance bands. Routine gating uses
@@ -35,17 +64,12 @@ repetitions:
   routine: 1
 
 pairs:
-  - host: openrouter-kimi
-    enabled: true
-    gate: after-calibration
-    trialCeilingUsd: 5
-    timeoutMs: 900000
+  # The required OpenRouter pair is fixed by the release runner and its pinned
+  # model profile. This list controls only the optional local schedule.
   - host: ollama-gemma
     enabled: true
-    gate: informational
     schedule: explicit-with-local
     taskRole: anchor
-    timeoutMs: 1800000
 
 # Optional native-product references. These never enter the controlled A/B
 # result because their models, prompts, tools, and subscription metering are
@@ -54,18 +78,13 @@ nativeProductRotation:
   - codex-subscription
   - claude-subscription
 
-# Compatibility smokes run on relevant changes; full pairs on major releases.
-smokes:
-  - copilot-smoke
-  - grok-smoke
-
 execution:
-  environment: daytona
-  sandbox:
-    cpu: 1
-    memoryGb: 2
-    storageGb: 10
-    autoStopMinutes: 45
+  # Harbor 0.20 cloud environments do not faithfully materialize host bind
+  # mount sources. The causal release path therefore requires local Docker so
+  # the attested runtime and treatment-only Harness bytes actually exist.
+  environment: docker
+  # Image, platform, CPU, memory, and storage are authoritative per task in
+  # task-lock.json and are checked against the materialized task TOML.
   # A stable release-SHA offset plus locked-task ordinal gives this four-task
   # matrix an exact 2/2 AB/BA split per repetition without mutable state.
   # Repetitions alternate each task; the exceptional fresh pair reverses its

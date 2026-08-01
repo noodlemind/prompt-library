@@ -71,6 +71,54 @@ test('unknown billing and an unclosed attempt make cost evidence incomplete', ()
   assert.equal(totals.costComplete, false);
 });
 
+test('a billable provider error retains usage while remaining an error terminal', () => {
+  const t = createTelemetry();
+  t.startRequest({ requestId: 'request-1' });
+  t.startAttempt({ requestId: 'request-1', attemptId: 'attempt-1' });
+  t.finishAttempt('attempt-1', {
+    type: 'error',
+    billingStatus: 'reported',
+    kind: 'provider',
+    usage: {
+      promptTokens: 10,
+      cachedTokens: 0,
+      cachedTokensComplete: true,
+      reasoningTokens: 0,
+      reasoningTokensComplete: true,
+      outputTokens: 2,
+      localCostUsd: 0.01,
+      providerCostUsd: 0.02,
+      reconciledCostUsd: 0.02,
+    },
+    providerCostRequired: true,
+  });
+  const { totals, events } = t.snapshot();
+  assert.equal(totals.providerErrors, 1);
+  assert.equal(totals.providerResponses, 0);
+  assert.equal(totals.requests, 1);
+  assert.equal(totals.promptTokens, 10);
+  assert.equal(totals.providerCostUsd, 0.02);
+  assert.equal(events.find((event) => event.type === 'error').usage.reconciledCostUsd, 0.02);
+});
+
+test('a reported-billing error without usage makes metering incomplete', () => {
+  const t = createTelemetry();
+  t.startRequest({ requestId: 'request-1' });
+  t.startAttempt({ requestId: 'request-1', attemptId: 'attempt-1' });
+  t.finishAttempt('attempt-1', {
+    type: 'error',
+    billingStatus: 'reported',
+    providerCostRequired: true,
+  });
+  const { totals, events } = t.snapshot();
+  assert.equal(totals.providerErrors, 1);
+  assert.equal(totals.missingUsage, 1);
+  assert.equal(totals.usageComplete, false);
+  assert.equal(totals.providerCostComplete, false);
+  assert.equal(totals.costComplete, false);
+  assert.equal(events.find((event) => event.type === 'error').usage, undefined);
+});
+
 test('mixed provider-cost presence is incomplete when provider cost is required', () => {
   const t = createTelemetry();
   t.addUsage({ promptTokens: 1, cachedTokens: 0, reasoningTokens: 0, outputTokens: 1, localCostUsd: 0.001, providerCostUsd: 0.002 }, { providerCostRequired: true });
@@ -104,7 +152,32 @@ test('a response with unusable usage is counted but never estimated', () => {
   assert.equal(totals.requests, 2);
   assert.equal(totals.missingUsage, 1);
   assert.equal(totals.costComplete, false);
+  assert.equal(totals.cachedTokens, null);
+  assert.equal(totals.reasoningTokens, null);
+  assert.equal(totals.cachedTokensComplete, false);
+  assert.equal(totals.reasoningTokensComplete, false);
   assert.ok(Math.abs(totals.localCostUsd - 0.001) < 1e-12, 'known cost is kept, missing cost is not invented');
+});
+
+test('missing cache and reasoning details remain null without invalidating usable billing totals', () => {
+  const t = createTelemetry();
+  t.addUsage({
+    promptTokens: 100,
+    cachedTokens: null,
+    cachedTokensComplete: false,
+    reasoningTokens: null,
+    reasoningTokensComplete: false,
+    outputTokens: 10,
+    localCostUsd: 0.001,
+    providerCostUsd: 0.002,
+  }, { providerCostRequired: true });
+  const { totals } = t.snapshot();
+  assert.equal(totals.cachedTokens, null);
+  assert.equal(totals.reasoningTokens, null);
+  assert.equal(totals.cachedTokensComplete, false);
+  assert.equal(totals.reasoningTokensComplete, false);
+  assert.equal(totals.usageComplete, true);
+  assert.equal(totals.costComplete, true);
 });
 
 test('provider-reported cost stays null until a provider actually reports one', () => {

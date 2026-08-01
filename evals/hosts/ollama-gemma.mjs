@@ -3,8 +3,9 @@
  *
  * The local capability floor — free, credential-less, initially informational
  * (it does not gate a release unless local support becomes a product
- * guarantee). When the agent runs inside a Docker task container, the Ollama
- * endpoint must be reached through host.docker.internal.
+ * guarantee). The provider bridge is a host-side Node subprocess; only its
+ * terminal tool calls cross Harbor's container boundary. Ollama therefore
+ * remains on the host loopback endpoint.
  */
 import { openAiToolDriver } from '../lib/drivers.mjs';
 import { getProfile } from '../lib/model-profiles.mjs';
@@ -19,10 +20,6 @@ export function createHost() {
     requiredEnv: [],
     validateCredentials() {
       return { ok: true, missing: [] };
-    },
-    /** The profile endpoint as reachable from inside a Docker task container. */
-    urlForDockerContainer() {
-      return profile.url.replace('localhost', 'host.docker.internal');
     },
     createDriver({ budget = null, telemetry = null, maxTokens } = {}) {
       return openAiToolDriver({ profile, apiKey: 'ollama', budget, telemetry, maxTokens });

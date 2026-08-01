@@ -1,5 +1,6 @@
 {
-  "lockSchema": 2,
+  "lockSchema": 3,
+  "taskHashAlgorithm": "typed-tree-sha256-v1",
   "datasetRef": "terminal-bench@2.0",
   "registryUrl": "https://www.tbench.ai/benchmarks/terminal-bench-2",
   "lockedAt": "2026-07-30",
@@ -8,22 +9,58 @@
     {
       "task": "cobol-modernization",
       "role": "anchor",
-      "taskChecksum": "2f6a6312c196794d62305d01d5ea955dda13c88c2b61761df4f52813cad1abc0"
+      "taskChecksum": "4a674b685aab87e99389c58395dc166fffce0341dd9278d70c504ce8272b09c7",
+      "sandbox": {
+        "sourceImage": "alexgshaw/cobol-modernization:20251031",
+        "immutableImage": "alexgshaw/cobol-modernization@sha256:593ab9df3d83f771e927888b2d9436b380cdf7ec4d0af2a9f0802d541edebba0",
+        "imageId": "sha256:593ab9df3d83f771e927888b2d9436b380cdf7ec4d0af2a9f0802d541edebba0",
+        "platform": "linux/amd64",
+        "cpus": 1,
+        "memoryMb": 2048,
+        "storageMb": 10240
+      }
     },
     {
       "task": "cancel-async-tasks",
-      "taskChecksum": "b5fb76c087759dbe29d18cde0331f451f688e91ec557ae2eadc74678e00d7dc2",
-      "role": "candidate"
+      "taskChecksum": "d168e0c74f6ca5c1a236b608dab258f6918870fa383d04f2f67fffdbaac0ffc1",
+      "role": "candidate",
+      "sandbox": {
+        "sourceImage": "alexgshaw/cancel-async-tasks:20251031",
+        "immutableImage": "alexgshaw/cancel-async-tasks@sha256:84c7fae6b256dcc56a350790e2a9715eefc7dad662a9d8e8a472363aa71ef18d",
+        "imageId": "sha256:84c7fae6b256dcc56a350790e2a9715eefc7dad662a9d8e8a472363aa71ef18d",
+        "platform": "linux/amd64",
+        "cpus": 1,
+        "memoryMb": 2048,
+        "storageMb": 10240
+      }
     },
     {
       "task": "git-leak-recovery",
-      "taskChecksum": "97e1b29bb6ffa5f827b9e9e9f1e246b7f8bc79793c64c700e0d01f581ef23d2f",
-      "role": "candidate"
+      "taskChecksum": "480df488c45cc13c1dfb47aa143106b5c195d255811fed1c53da40a760fad71e",
+      "role": "candidate",
+      "sandbox": {
+        "sourceImage": "alexgshaw/git-leak-recovery:20251031",
+        "immutableImage": "alexgshaw/git-leak-recovery@sha256:62160e522a4238b8bcd522411ea97b5b200f811e5899d34947e66809bef7e586",
+        "imageId": "sha256:62160e522a4238b8bcd522411ea97b5b200f811e5899d34947e66809bef7e586",
+        "platform": "linux/amd64",
+        "cpus": 1,
+        "memoryMb": 2048,
+        "storageMb": 10240
+      }
     },
     {
       "task": "custom-memory-heap-crash",
-      "taskChecksum": "0fbf6a3128751eb081f62748fb1eeb8794d77a8e8fdc1cf0161aca42439d874a",
-      "role": "candidate"
+      "taskChecksum": "e0c1a56ce5ffb126f2179745dca32047d460337bbdedcd333b7660f774f03c84",
+      "role": "candidate",
+      "sandbox": {
+        "sourceImage": "alexgshaw/custom-memory-heap-crash:20251031",
+        "immutableImage": "alexgshaw/custom-memory-heap-crash@sha256:1895d7d6240d5fb2ec774d6bfdd1057d170f8d199c15c582e4585d3c63802557",
+        "imageId": "sha256:1895d7d6240d5fb2ec774d6bfdd1057d170f8d199c15c582e4585d3c63802557",
+        "platform": "linux/amd64",
+        "cpus": 1,
+        "memoryMb": 2048,
+        "storageMb": 10240
+      }
     }
   ],
   "verifier": {

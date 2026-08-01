@@ -12,7 +12,8 @@ test('uncached cost: full input rate plus output rate', () => {
   const cost = costOfUsage({ prompt_tokens: 1_000_000, completion_tokens: 100_000 }, PRICING);
   approx(cost.usd, 0.73 + 0.35);
   assert.equal(cost.promptTokens, 1_000_000);
-  assert.equal(cost.cachedTokens, 0);
+  assert.equal(cost.cachedTokens, null, 'missing cache detail remains unknown');
+  assert.equal(cost.cachedTokensComplete, false);
   assert.equal(cost.outputTokens, 100_000);
 });
 
@@ -24,15 +25,17 @@ test('cached cost: cached share billed at the cached input rate', () => {
   // 400k * 0.73/M + 600k * 0.15/M = 0.292 + 0.09
   approx(cost.usd, 0.382);
   assert.equal(cost.cachedTokens, 600_000);
+  assert.equal(cost.cachedTokensComplete, true);
 });
 
-test('cached tokens reported above prompt tokens clamp to the prompt size', () => {
+test('cached tokens reported above prompt tokens are rejected as incomplete detail', () => {
   const cost = costOfUsage(
     { prompt_tokens: 100, completion_tokens: 0, prompt_tokens_details: { cached_tokens: 5_000 } },
     PRICING
   );
-  assert.equal(cost.cachedTokens, 100);
-  approx(cost.usd, (100 * 0.15) / 1_000_000);
+  assert.equal(cost.cachedTokens, null);
+  assert.equal(cost.cachedTokensComplete, false);
+  approx(cost.usd, (100 * 0.73) / 1_000_000);
 });
 
 test('missing or malformed usage yields null, never a silent estimate', () => {
@@ -43,6 +46,8 @@ test('missing or malformed usage yields null, never a silent estimate', () => {
   assert.equal(costOfUsage({ prompt_tokens: -1, completion_tokens: 5 }, PRICING), null);
   assert.equal(costOfUsage({ prompt_tokens: '10', completion_tokens: 5 }, PRICING), null);
   assert.equal(costOfUsage({ prompt_tokens: NaN, completion_tokens: 5 }, PRICING), null);
+  assert.equal(costOfUsage({ prompt_tokens: 10.5, completion_tokens: 5 }, PRICING), null);
+  assert.equal(costOfUsage({ prompt_tokens: 10, completion_tokens: 1.5 }, PRICING), null);
 });
 
 test('request estimate is worst-case: uncached input plus maximum output tokens', () => {
@@ -76,6 +81,18 @@ test('precheck refuses a request that could cross the ceiling and records budget
   assert.equal(events.at(-1).estimateUsd, 1);
 });
 
+test('precheck fails closed on negative or non-finite request estimates', () => {
+  for (const estimate of [-1, NaN, Infinity, -Infinity]) {
+    const budget = createBudget({ ceilingUsd: 5, label: 'trial' });
+    const verdict = budget.precheck(estimate);
+    assert.equal(verdict.allowed, false);
+    assert.match(verdict.reason, /invalid request estimate/);
+    assert.equal(budget.exhausted, true);
+    assert.equal(budget.events().at(-1).type, 'budget_invalid_estimate');
+    assert.equal(budget.spentUsd(), 0);
+  }
+});
+
 test('charge accumulates and propagates to the parent release budget', () => {
   const release = createBudget({ ceilingUsd: 20, label: 'release' });
   const trial = createBudget({ ceilingUsd: 5, label: 'trial', parent: release });
@@ -84,6 +101,20 @@ test('charge accumulates and propagates to the parent release budget', () => {
   approx(release.spentUsd(), 2);
   approx(trial.remainingUsd(), 3);
   approx(release.remainingUsd(), 18);
+});
+
+test('an uncertain reserve consumes allowance without becoming known spend', () => {
+  const release = createBudget({ ceilingUsd: 10, label: 'release' });
+  const trial = createBudget({ ceilingUsd: 5, label: 'trial', parent: release });
+  trial.charge(0.25, 'known response');
+  trial.reserve(4.75, 'ambiguous transport');
+  assert.equal(trial.spentUsd(), 5);
+  assert.equal(trial.knownReconciledSpendUsd(), 0.25);
+  assert.equal(trial.uncertainReservedUsd(), 4.75);
+  assert.equal(trial.accountedExposureUsd(), 5);
+  assert.equal(release.knownReconciledSpendUsd(), 0.25);
+  assert.equal(release.uncertainReservedUsd(), 4.75);
+  assert.equal(release.events().at(-1).type, 'reserve');
 });
 
 test('precheck refuses when the trial fits but the release ceiling would be crossed', () => {

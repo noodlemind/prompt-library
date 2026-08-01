@@ -16,40 +16,177 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { fileURLToPath } from 'node:url';
+import { spawnSync } from 'node:child_process';
 import { createHost as createKimiHost } from '../../hosts/openrouter-kimi.mjs';
 import { createHost as createGemmaHost } from '../../hosts/ollama-gemma.mjs';
 import { buildHarborRunArgs, jobDirFor, runHarbor, verifyTaskAgainstLock, classifyFailure, tasksOf } from './harbor-adapter.mjs';
-import { collectVerifierEvidence, verdictFromReward } from './verifier.mjs';
+import { collectVerifierEvidence, hashTree, verdictFromReward } from './verifier.mjs';
 import { buildGenericCondition } from './generic-condition.mjs';
 import { buildHarnessCondition } from './harness-condition.mjs';
 import { runtimeBridgeTools } from './agent.mjs';
-import { engineerRuntimeContract, buildGuidance, buildGuidanceCatalog } from '../../lib/scenario.mjs';
 import { createBudget } from '../../lib/budget.mjs';
-import { prepareHarnessBundle, materializePrebuiltBundle } from './provision.mjs';
+import { billingProfileHash } from '../../lib/model-profiles.mjs';
+import {
+  CONDITION_INPUTS_FILE,
+  prepareHarnessBundle,
+  materializePrebuiltBundle,
+  validatePrebuiltBundle,
+} from './provision.mjs';
 
 export const AGENT_REF = 'evals.external.terminal_bench.harbor_agent:StdioBridgeAgent';
+export const SUPPORTED_HARBOR_VERSION = '0.20.0';
 
-// harbor resolves --agent with plain importlib: the repo root must be on
-// PYTHONPATH for evals.external.terminal_bench.harbor_agent to import.
-const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const HARBOR_ENV_ALLOWLIST = [
-  'PATH', 'HOME', 'USER', 'LOGNAME', 'SHELL', 'LANG', 'LC_ALL', 'TERM', 'TMPDIR',
-  'XDG_CONFIG_HOME', 'XDG_CACHE_HOME',
-  'DOCKER_HOST', 'DOCKER_CONTEXT', 'DOCKER_CONFIG', 'DOCKER_TLS_VERIFY', 'DOCKER_CERT_PATH',
+  'LANG', 'LC_ALL', 'TERM',
+  'DOCKER_HOST', 'DOCKER_TLS_VERIFY', 'DOCKER_CERT_PATH',
   'SSL_CERT_FILE', 'SSL_CERT_DIR',
 ];
-const harborSpawnEnv = ({ apiKey = null, daytonaApiKey = null } = {}) => {
+const DEFAULT_TOOL_PATH = process.platform === 'darwin'
+  ? '/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin:/opt/homebrew/bin'
+  : '/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin';
+const MAX_HOST_EXECUTABLE_BYTES = 256 * 1024 * 1024;
+
+function stableExecutableIdentity(executable, { expectedSha256 = null, label }) {
+  if (typeof executable !== 'string' || !path.isAbsolute(executable) || /[\0\r\n]/.test(executable)) {
+    throw new Error(`${label} must be an absolute path`);
+  }
+  const requested = path.resolve(executable);
+  const requestedStat = fs.lstatSync(requested);
+  if (requestedStat.isSymbolicLink()) throw new Error(`${label} must not be a symlink`);
+  const canonical = fs.realpathSync.native(requested);
+  const handle = fs.openSync(canonical, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0));
+  try {
+    const before = fs.fstatSync(handle);
+    if (!before.isFile() || before.size > MAX_HOST_EXECUTABLE_BYTES || (before.mode & 0o111) === 0 || (before.mode & 0o022) !== 0) {
+      throw new Error(`${label} must be a protected executable regular file`);
+    }
+    const digest = crypto.createHash('sha256');
+    const chunk = Buffer.allocUnsafe(64 * 1024);
+    let position = 0;
+    while (position < before.size) {
+      const count = fs.readSync(handle, chunk, 0, Math.min(chunk.length, before.size - position), position);
+      if (count === 0) throw new Error(`${label} changed while being attested`);
+      digest.update(chunk.subarray(0, count));
+      position += count;
+    }
+    const after = fs.fstatSync(handle);
+    if (before.dev !== after.dev || before.ino !== after.ino || before.size !== after.size ||
+        before.mode !== after.mode || before.mtimeMs !== after.mtimeMs || before.ctimeMs !== after.ctimeMs) {
+      throw new Error(`${label} changed while being attested`);
+    }
+    const sha256 = digest.digest('hex');
+    if (expectedSha256 != null && sha256 !== String(expectedSha256).toLowerCase()) {
+      throw new Error(`${label} digest does not match HARNESS_EVAL_HARBOR_SHA256`);
+    }
+    return { path: canonical, sha256 };
+  } finally {
+    fs.closeSync(handle);
+  }
+}
+
+function defaultAttestHarborExecutable({ env }) {
+  if (!/^[a-f0-9]{64}$/i.test(String(env.HARNESS_EVAL_HARBOR_SHA256 ?? ''))) {
+    throw new Error('HARNESS_EVAL_HARBOR_SHA256 must pin the Harbor executable');
+  }
+  return stableExecutableIdentity(env.HARNESS_EVAL_HARBOR_BIN, {
+    expectedSha256: env.HARNESS_EVAL_HARBOR_SHA256,
+    label: 'Harbor executable',
+  });
+}
+
+function defaultAttestHostNodeExecutable() {
+  return stableExecutableIdentity(fs.realpathSync.native(process.execPath), {
+    label: 'host Node executable',
+  });
+}
+
+function defaultAttestSandboxImage({ sandbox, env, runtimeHome }) {
+  if (!sandbox) return null;
+  if (!/^[a-f0-9]{64}$/i.test(String(env.HARNESS_EVAL_DOCKER_SHA256 ?? ''))) {
+    throw new Error('HARNESS_EVAL_DOCKER_SHA256 must pin the Docker executable');
+  }
+  const docker = stableExecutableIdentity(env.HARNESS_EVAL_DOCKER_BIN, {
+    expectedSha256: env.HARNESS_EVAL_DOCKER_SHA256,
+    label: 'Docker executable',
+  });
+  const inspectEnv = Object.fromEntries(
+    ['LANG', 'LC_ALL', 'DOCKER_HOST', 'DOCKER_TLS_VERIFY', 'DOCKER_CERT_PATH', 'SSL_CERT_FILE', 'SSL_CERT_DIR']
+      .filter((name) => typeof env[name] === 'string')
+      .map((name) => [name, env[name]])
+  );
+  inspectEnv.HOME = runtimeHome;
+  inspectEnv.DOCKER_CONFIG = path.join(runtimeHome, 'docker');
+  const result = spawnSync(docker.path, ['image', 'inspect', sandbox.immutableImage], {
+    encoding: 'utf8',
+    env: inspectEnv,
+    stdio: ['ignore', 'pipe', 'pipe'],
+    timeout: 60_000,
+    maxBuffer: 4 * 1024 * 1024,
+  });
+  if (result.status !== 0) throw new Error(`pinned sandbox image is unavailable: ${result.stderr || result.error?.message || result.status}`);
+  let inspected;
+  try {
+    inspected = JSON.parse(result.stdout)?.[0];
+  } catch {
+    throw new Error('Docker image inspect returned invalid JSON');
+  }
+  const platform = `${inspected?.Os ?? ''}/${inspected?.Architecture ?? ''}`;
+  if (inspected?.Id !== sandbox.imageId || platform !== sandbox.platform) {
+    throw new Error(`sandbox image identity mismatch for ${sandbox.immutableImage}`);
+  }
+  const repoDigests = Array.isArray(inspected?.RepoDigests) ? inspected.RepoDigests : [];
+  if (!repoDigests.includes(sandbox.immutableImage)) {
+    throw new Error(`sandbox image repository digest is not present: ${sandbox.immutableImage}`);
+  }
+  return {
+    ...sandbox,
+    dockerExecutableHash: docker.sha256,
+    observedImageId: inspected.Id,
+    observedPlatform: platform,
+    identityAttested: true,
+  };
+}
+
+const harborSpawnEnv = ({
+  ambientEnv = process.env,
+  runtimeHome,
+  trustedPythonPath = null,
+  hostNode = null,
+  hostNodeSha256 = null,
+  apiKey = null,
+} = {}) => {
   const spawnEnv = Object.fromEntries(
     HARBOR_ENV_ALLOWLIST
-      .filter((name) => typeof process.env[name] === 'string')
-      .map((name) => [name, process.env[name]])
+      .filter((name) => typeof ambientEnv[name] === 'string')
+      .map((name) => [name, ambientEnv[name]])
   );
-  spawnEnv.PYTHONPATH = process.env.PYTHONPATH ? `${repoRoot}${path.delimiter}${process.env.PYTHONPATH}` : repoRoot;
+  const toolPath = ambientEnv.HARNESS_EVAL_TOOL_PATH ?? DEFAULT_TOOL_PATH;
+  if (String(toolPath).split(path.delimiter).some((entry) => !path.isAbsolute(entry))) {
+    throw new Error('HARNESS_EVAL_TOOL_PATH must contain only absolute directories');
+  }
+  spawnEnv.PATH = toolPath;
+  if (typeof runtimeHome !== 'string' || !path.isAbsolute(runtimeHome)) {
+    throw new Error('Harbor runtime HOME must be an absolute runner-owned path');
+  }
+  spawnEnv.HOME = runtimeHome;
+  spawnEnv.XDG_CONFIG_HOME = path.join(runtimeHome, 'xdg-config');
+  spawnEnv.XDG_CACHE_HOME = path.join(runtimeHome, 'xdg-cache');
+  spawnEnv.TMPDIR = path.join(runtimeHome, 'tmp');
+  spawnEnv.DOCKER_CONFIG = path.join(runtimeHome, 'docker');
+  if (trustedPythonPath != null) spawnEnv.PYTHONPATH = trustedPythonPath;
+  spawnEnv.PYTHONNOUSERSITE = '1';
+  spawnEnv.PYTHONSAFEPATH = '1';
+  spawnEnv.PYTHONDONTWRITEBYTECODE = '1';
+  if (hostNode != null) {
+    if (!/^[a-f0-9]{64}$/i.test(String(hostNodeSha256 ?? ''))) {
+      throw new Error('host Node executable requires its attested SHA-256 digest');
+    }
+    spawnEnv.HARNESS_EVAL_HOST_NODE = hostNode;
+    spawnEnv.HARNESS_EVAL_HOST_NODE_SHA256 = String(hostNodeSha256).toLowerCase();
+  }
   // The key belongs only to the host-side Harbor/Python/Node bridge process.
   // Passing it through --ae would also scope it into every sandbox exec.
   if (apiKey != null) spawnEnv.OPENROUTER_API_KEY = apiKey;
-  if (daytonaApiKey != null) spawnEnv.DAYTONA_API_KEY = daytonaApiKey;
   return spawnEnv;
 };
 
@@ -60,10 +197,58 @@ const INSTRUCTION_PLACEHOLDER = '(the task instruction is supplied by Harbor at 
 const sha256 = (value) => crypto.createHash('sha256').update(String(value)).digest('hex');
 const stableHash = (value) => sha256(JSON.stringify(value ?? null));
 const shortHash = (value) => stableHash(value).slice(0, 24);
+
+function diagnosticCode(raw, fallback = 'EXECUTION_INTEGRITY_FAILURE') {
+  const message = String(raw ?? '');
+  const mappings = [
+    [/verified execution task snapshot drifted/i, 'TASK_SNAPSHOT_DRIFT'],
+    [/bundle.*(?:digest|manifest|contents|drift|validation|identity)/i, 'BUNDLE_INTEGRITY_FAILURE'],
+    [/sandbox image identity changed/i, 'SANDBOX_IDENTITY_DRIFT'],
+    [/sandbox image/i, 'SANDBOX_ATTESTATION_FAILURE'],
+    [/Harbor executable identity changed/i, 'HARBOR_EXECUTABLE_DRIFT'],
+    [/Harbor executable/i, 'HARBOR_EXECUTABLE_ATTESTATION_FAILURE'],
+    [/task snapshot/i, 'TASK_SNAPSHOT_FAILURE'],
+    [/task download/i, 'TASK_DOWNLOAD_FAILURE'],
+    [/provider.*(?:limit|key)/i, 'PROVIDER_PREFLIGHT_FAILURE'],
+  ];
+  return mappings.find(([pattern]) => pattern.test(message))?.[1] ?? fallback;
+}
+
+function failureDiagnostic(stage, code, raw = null, details = {}) {
+  return {
+    stage,
+    code,
+    reasonHash: raw == null ? null : sha256(String(raw)),
+    ...details,
+  };
+}
+
+function publicFailureReason(stage, code, raw = null) {
+  const hash = raw == null ? null : sha256(String(raw)).slice(0, 16);
+  return `${stage}: ${code}${hash ? ` (detail sha256:${hash})` : ''}`;
+}
+
+// Harbor 0.20.0 removes leading provenance-canary comment lines before it
+// hands an instruction to an agent. Reproduce that pinned transformation
+// independently so runtime prompt attestation compares with the bytes the
+// bridge actually receives while taskHash still binds the untouched fixture.
+export function instructionAsDeliveredByHarbor(rawInstruction) {
+  const lines = String(rawInstruction).split('\n');
+  const canaryLine = /^(<!--.*canary.*-->|#.*canary.*)$/i;
+  let index = 0;
+  while (index < lines.length && canaryLine.test(lines[index].trim())) index += 1;
+  while (index < lines.length && lines[index].trim() === '') index += 1;
+  return lines.slice(index).join('\n');
+}
 const normalizeProviderName = (value) => String(value ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
+const harborVersionOf = (probe) => {
+  const text = `${probe?.stdout ?? ''}\n${probe?.stderr ?? ''}`;
+  const versions = text.match(/\b\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?\b/g) ?? [];
+  return versions.length === 1 ? versions[0] : null;
+};
 
 const PROVIDER_EVENT_TYPES = new Set(['request', 'request_attempt', 'response', 'error', 'retry', 'completion_error', 'fallback', 'billing_uncertain']);
-const TOOL_EVENT_TYPES = new Set(['tool_call', 'tool_result', 'tool_result_compacted', 'post_verify_tool_suppressed']);
+const TOOL_EVENT_TYPES = new Set(['tool_call', 'tool_result', 'tool_result_compacted', 'post_verify_tool_suppressed', 'tool_call_suppressed']);
 const BRIDGE_INTEGRITY_STOP_REASONS = new Set([
   'protocol_error',
   'secret_reflection_blocked',
@@ -98,6 +283,39 @@ function identityCounts(events, identityOf = toolEventIdentity) {
   return { counts, invalid };
 }
 
+const nonNegativeFinite = (value) => typeof value === 'number' && Number.isFinite(value) && value >= 0;
+const nonEmptyString = (value) => typeof value === 'string' && value.length > 0;
+
+function completeToolCallEvidence(event) {
+  return toolEventIdentity(event) != null &&
+    nonEmptyString(event.tool) &&
+    nonEmptyString(event.category) &&
+    nonNegativeFinite(event.monotonicMs) &&
+    nonNegativeFinite(event.argsChars) &&
+    SHA256_HEX.test(String(event.argsHash ?? '')) &&
+    typeof event.immutableHarnessCli === 'boolean' &&
+    typeof event.argumentsValid === 'boolean';
+}
+
+function completeToolResultEvidence(event) {
+  return toolEventIdentity(event) != null &&
+    nonEmptyString(event.tool) &&
+    nonEmptyString(event.category) &&
+    nonNegativeFinite(event.monotonicMs) &&
+    Number.isInteger(event.exitCode) &&
+    nonNegativeFinite(event.durationMs) &&
+    nonNegativeFinite(event.stdoutChars) &&
+    nonNegativeFinite(event.stderrChars) &&
+    nonNegativeFinite(event.resultChars) &&
+    SHA256_HEX.test(String(event.resultHash ?? '')) &&
+    typeof event.compacted === 'boolean' &&
+    typeof event.stdoutTruncated === 'boolean' &&
+    typeof event.stderrTruncated === 'boolean' &&
+    typeof event.timedOut === 'boolean' &&
+    nonEmptyString(event.containmentMode) &&
+    typeof event.containmentComplete === 'boolean';
+}
+
 function numericEventTime(event) {
   return typeof event?.monotonicMs === 'number' && Number.isFinite(event.monotonicMs) ? event.monotonicMs : null;
 }
@@ -123,12 +341,21 @@ function workspaceEvidenceOf(done) {
     : [];
   const changedPathCount = Number.isFinite(source?.changedPathCount) ? Math.max(0, source.changedPathCount) : changedPaths.length;
   const validDiffState = validHash(source?.diffHash) || (source?.diffHash == null && changedPathCount === 0);
+  const requiresGitState = source?.collectionMode === 'bounded-typed-content-plus-git-state-v3';
+  const validGitState = !requiresGitState || (
+    source?.gitStateAvailable === true &&
+    typeof source?.gitStatePresent === 'boolean' &&
+    typeof source?.gitStateChanged === 'boolean' &&
+    validHash(source?.beforeGitStateHash) &&
+    validHash(source?.afterGitStateHash)
+  );
   const available = Boolean(
     source &&
       source.available !== false &&
       validHash(source.beforeManifestHash) &&
       validHash(source.afterManifestHash) &&
-      validDiffState
+      validDiffState &&
+      validGitState
   );
   return {
     available,
@@ -142,6 +369,11 @@ function workspaceEvidenceOf(done) {
     changedPaths: available ? changedPaths : [],
     changedPathCount: available ? changedPathCount : 0,
     changedPathsTruncated: available ? source.changedPathsTruncated === true || changedPathCount > changedPaths.length : false,
+    gitStateAvailable: requiresGitState ? source?.gitStateAvailable === true : null,
+    gitStatePresent: requiresGitState && typeof source?.gitStatePresent === 'boolean' ? source.gitStatePresent : null,
+    beforeGitStateHash: requiresGitState && validHash(source?.beforeGitStateHash) ? source.beforeGitStateHash : null,
+    afterGitStateHash: requiresGitState && validHash(source?.afterGitStateHash) ? source.afterGitStateHash : null,
+    gitStateChanged: requiresGitState && typeof source?.gitStateChanged === 'boolean' ? source.gitStateChanged : null,
     reason: available ? null : source?.reason ?? 'workspace-manifest-not-captured',
   };
 }
@@ -194,6 +426,10 @@ function deriveHarnessBehavior(condition, telemetryEvents, harnessEvents, harnes
   };
   if (condition !== 'harness') return empty;
 
+  // Sandbox Harness events are agent-writable. Positive events are useful
+  // advisory evidence, but their absence can never establish that an action
+  // did not occur. Trusted bridge tool calls/results remain authoritative for
+  // counts and ordering that they can observe.
   const capturedHarnessEvents = Array.isArray(harnessEvents) && harnessEventEvidence?.complete === true;
   const capturedToolEvents = telemetryLedgerPresent;
   if (!capturedHarnessEvents && !capturedToolEvents) return empty;
@@ -215,7 +451,9 @@ function deriveHarnessBehavior(condition, telemetryEvents, harnessEvents, harnes
   } else {
     const finalMutationIndex = events.findLastIndex((event) => event.type === 'post_tool' && event.mutation === true && event.result !== 'fail');
     if (finalMutationIndex >= 0) {
-      verificationAfterFinalMutation = events.slice(finalMutationIndex + 1).some((event) => event.type === 'verify' && event.result === 'pass');
+      verificationAfterFinalMutation = events.slice(finalMutationIndex + 1).some((event) => event.type === 'verify' && event.result === 'pass')
+        ? true
+        : null;
     }
   }
 
@@ -223,26 +461,37 @@ function deriveHarnessBehavior(condition, telemetryEvents, harnessEvents, harnes
     (event) => event.type === 'session_end' && (event.decision === 'block' || event.result === 'fail' || event.blockedReason)
   );
   const explicitBypass = done?.enforcement?.policyBypassAchieved;
+  const advisoryCount = (matches) => matches.length > 0 ? matches.length : null;
+  const trustedOrPositive = (trusted, positive) => trusted ? true : positive ? true : capturedToolEvents ? false : null;
+  const eventGateDenials = gateEvents.filter(
+    (event) => event.result === 'fail' || event.decision === 'block' || event.blockedReason
+  );
+  const outOfScopeBlocks = blocks.filter((event) => /out[- ]of[- ]scope|outside.*scope|scope/.test(reason(event)));
+  const dangerousBlocks = blocks.filter((event) => /danger|destruct|unsafe|protected|secret/.test(reason(event)));
   return {
-    orientInvoked: events.some((event) => event.type === 'orient') || toolCalls.some((event) => event.category === 'orient'),
-    planCreatedOrSelected:
-      events.some((event) => typeof event.plan === 'string' && event.plan.length > 0) ||
+    orientInvoked: trustedOrPositive(
+      toolCalls.some((event) => event.category === 'orient'),
+      events.some((event) => event.type === 'orient')
+    ),
+    planCreatedOrSelected: trustedOrPositive(
       toolCalls.some((event) => event.category === 'plan'),
-    gateAttempts: capturedHarnessEvents ? gateEvents.length : gateCalls.length,
-    gateDenials: capturedHarnessEvents
-      ? gateEvents.filter((event) => event.result === 'fail' || event.decision === 'block' || event.blockedReason).length
-      : gateResults.filter((event) => event.exitCode !== 0).length,
-    outOfScopeMutationAttempts: capturedHarnessEvents ? blocks.filter((event) => /out[- ]of[- ]scope|outside.*scope|scope/.test(reason(event))).length : null,
-    dangerousCommandAttempts: capturedHarnessEvents ? blocks.filter((event) => /danger|destruct|unsafe|protected|secret/.test(reason(event))).length : null,
+      events.some((event) => typeof event.plan === 'string' && event.plan.length > 0)
+    ),
+    gateAttempts: capturedToolEvents && gateCalls.length > 0
+      ? Math.max(gateCalls.length, gateEvents.length)
+      : advisoryCount(gateEvents),
+    gateDenials: capturedToolEvents && gateCalls.length > 0
+      ? Math.max(gateResults.filter((event) => event.exitCode !== 0).length, eventGateDenials.length)
+      : advisoryCount(eventGateDenials),
+    outOfScopeMutationAttempts: advisoryCount(outOfScopeBlocks),
+    dangerousCommandAttempts: advisoryCount(dangerousBlocks),
     verificationAfterFinalMutation,
-    prematureFinishAttempts: capturedHarnessEvents ? sessionBlocks.length : null,
-    completionBlockedForVerification: capturedHarnessEvents
-      ? sessionBlocks.some((event) => /verif|evidence|completion/.test(reason(event)))
-      : null,
+    prematureFinishAttempts: advisoryCount(sessionBlocks),
+    completionBlockedForVerification: sessionBlocks.some((event) => /verif|evidence|completion/.test(reason(event))) ? true : null,
     // Harness v2 has no review event type. Leave this unsupported field null
     // rather than converting the absence of evidence into a false claim.
     reviewPerformed: null,
-    policyBypassAttempted: capturedHarnessEvents ? blocks.length > 0 : null,
+    policyBypassAttempted: blocks.length > 0 ? true : null,
     policyBypassAchieved: typeof explicitBypass === 'boolean' ? explicitBypass : null,
   };
 }
@@ -285,6 +534,7 @@ function efficiencyOf(done, startedAt, endedAt) {
   const startMs = Date.parse(startedAt ?? '');
   const endMs = Date.parse(endedAt ?? '');
   return {
+    commandTimingSemantics: 'bridge-command-category-heuristic; final workspace state is independently observed',
     wallTimeMs: Number.isFinite(startMs) && Number.isFinite(endMs) ? Math.max(0, endMs - startMs) : null,
     timeToFirstTerminalActionMs: eventDelta(events, (event) => event.type === 'tool_call' && ['bash', 'runInTerminal'].includes(event.tool), startedAt),
     timeToFirstEditMs: eventDelta(events, (event) => event.type === 'tool_call' && event.category === 'edit', startedAt),
@@ -310,9 +560,12 @@ function efficiencyOf(done, startedAt, endedAt) {
     promptTokens: totals?.promptTokens ?? null,
     cachedPromptTokens: totals?.cachedTokens ?? null,
     reasoningTokens: totals?.reasoningTokens ?? null,
+    cachedPromptTokensComplete: totals?.cachedTokensComplete ?? null,
+    reasoningTokensComplete: totals?.reasoningTokensComplete ?? null,
     outputTokens: totals?.outputTokens ?? null,
     providerReportedCostUsd: totals?.providerCostUsd ?? null,
     localCostUsd: totals?.localCostUsd ?? null,
+    reconciledCostUsd: totals?.reconciledCostUsd ?? null,
     usageComplete: totals?.usageComplete ?? null,
     providerCostComplete: totals?.providerCostComplete ?? null,
     billingComplete: totals?.billingComplete ?? null,
@@ -339,13 +592,6 @@ export function aggregateRepetitionDocs(docs, { validMask = null } = {}) {
   const isValid = (doc, index) =>
     doc.correctness?.verifierReward != null && (validMask == null || validMask[index] === true);
   const valid = docs.filter(isValid);
-  if (docs.length === 1 && valid.length === 1) {
-    const only = structuredClone(docs[0]);
-    only.validRepetitionCount = 1;
-    only.invalidRepetitionCount = 0;
-    only.repetitions = rawRepetitions;
-    return only;
-  }
   const median = (values) => {
     const nums = values.filter((v) => typeof v === 'number' && Number.isFinite(v)).sort((a, b) => a - b);
     if (!nums.length) return null;
@@ -363,10 +609,13 @@ export function aggregateRepetitionDocs(docs, { validMask = null } = {}) {
   for (const key of Object.keys(base.efficiency ?? {})) {
     base.efficiency[key] = median((valid.length ? valid : docs).map((d) => d.efficiency?.[key]));
   }
+  base.efficiency.commandTimingSemantics = docs.every(
+    (doc) => doc.efficiency?.commandTimingSemantics === docs[0].efficiency?.commandTimingSemantics
+  ) ? docs[0].efficiency?.commandTimingSemantics ?? null : null;
   // Cost completeness is an all-repetitions invariant, not a typical/median value:
   // one unmetered paid response invalidates the aggregate's spend evidence.
   base.efficiency.costComplete = docs.every((d) => d.efficiency?.costComplete === true);
-  for (const key of ['usageComplete', 'providerCostComplete', 'billingComplete']) {
+  for (const key of ['usageComplete', 'providerCostComplete', 'billingComplete', 'cachedPromptTokensComplete', 'reasoningTokensComplete']) {
     const values = docs.map((doc) => doc.efficiency?.[key]).filter((value) => typeof value === 'boolean');
     base.efficiency[key] = values.length ? values.length === docs.length && values.every(Boolean) : null;
   }
@@ -418,30 +667,34 @@ export function aggregateRepetitionDocs(docs, { validMask = null } = {}) {
   }
   const observed = docs.filter((doc) => doc.observability);
   if (observed.length) {
-    const tagged = (key) => observed.flatMap((doc) =>
-      (doc.observability[key] ?? []).map((event) => ({
-        ...structuredClone(event),
-        repetitionId: doc.reproducibility?.repetitionId ?? null,
-      }))
-    );
-    const providerEvents = tagged('providerEvents');
-    const toolEvents = tagged('toolEvents');
-    const harnessEvents = tagged('harnessEvents');
     const sum = (key) => observed.reduce((total, doc) => total + (Number.isFinite(doc.observability[key]) ? doc.observability[key] : 0), 0);
     const runtimeEvidence = observed.map((doc) => doc.observability.runtimeContractEvidence).filter(Boolean);
+    const mountEvidence = observed.map((doc) => doc.observability.mountPolicyEvidence).filter(Boolean);
+    const everyRepetitionObserved = observed.length === docs.length;
+    const harnessEvidenceAvailable = everyRepetitionObserved &&
+      observed.every((doc) => doc.observability.harnessEventEvidence?.available === true);
+    const harnessEvidenceComplete = everyRepetitionObserved &&
+      observed.every((doc) => doc.observability.harnessEventEvidence?.complete === true);
     base.observability = {
-      providerEvents,
-      toolEvents,
-      harnessEvents,
+      // Full ledgers live exactly once under `repetitions`; aggregate evidence
+      // is counters plus an ordered commitment to those retained ledgers.
+      providerEvents: [],
+      toolEvents: [],
+      harnessEvents: [],
       harnessEventEvidence: {
-        available: observed.every((doc) => doc.observability.harnessEventEvidence?.available === true),
-        complete: observed.every((doc) => doc.observability.harnessEventEvidence?.complete === true),
-        reason: observed.every((doc) => doc.observability.harnessEventEvidence?.available === true)
-          ? observed.every((doc) => doc.observability.harnessEventEvidence?.complete === true)
+        available: harnessEvidenceAvailable,
+        complete: harnessEvidenceComplete,
+        reason: harnessEvidenceAvailable
+          ? harnessEvidenceComplete
             ? null
             : 'one-or-more-repetitions-have-incomplete-harness-event-projection'
           : 'one-or-more-repetitions-missing-harness-events',
-        retainedEvents: harnessEvents.length,
+        retainedEvents: observed.reduce(
+          (total, doc) => total + (Number.isFinite(doc.observability.harnessEventEvidence?.retainedEvents)
+            ? doc.observability.harnessEventEvidence.retainedEvents
+            : 0),
+          0
+        ),
         sourceTruncated: observed.some((doc) => doc.observability.harnessEventEvidence?.sourceTruncated === true),
         projectionRejectedEvents: observed.reduce(
           (total, doc) => total + (Number.isFinite(doc.observability.harnessEventEvidence?.projectionRejectedEvents)
@@ -469,6 +722,13 @@ export function aggregateRepetitionDocs(docs, { validMask = null } = {}) {
       duplicateToolCallIdentities: sum('duplicateToolCallIdentities'),
       duplicateToolResultIdentities: sum('duplicateToolResultIdentities'),
       invalidToolEventIdentities: sum('invalidToolEventIdentities'),
+      malformedToolCallEvidence: sum('malformedToolCallEvidence'),
+      malformedToolResultEvidence: sum('malformedToolResultEvidence'),
+      invalidToolArguments: sum('invalidToolArguments'),
+      incompleteToolContainment: sum('incompleteToolContainment'),
+      controlContaminationAttempted: observed.some((doc) => doc.observability.controlContaminationAttempted === true),
+      controlContaminationAchieved: observed.some((doc) => doc.observability.controlContaminationAchieved === true),
+      controlContaminationDetected: observed.some((doc) => doc.observability.controlContaminationDetected === true),
       runtimeContractEvidence: {
         complete: runtimeEvidence.length === docs.length && runtimeEvidence.every((entry) => entry.complete === true),
         matchesExpected: runtimeEvidence.length === docs.length && runtimeEvidence.every((entry) => entry.matchesExpected === true),
@@ -478,12 +738,44 @@ export function aggregateRepetitionDocs(docs, { validMask = null } = {}) {
         actualToolSchemaHash: null,
         expectedToolCount: null,
         actualToolCount: null,
+        expectedFinishToolSchemaHash: null,
+        expectedFinishToolCount: null,
+        requestContractsChecked: runtimeEvidence.reduce((total, entry) => total + (entry.requestContractsChecked ?? 0), 0),
+        postVerifyRequestContracts: runtimeEvidence.reduce((total, entry) => total + (entry.postVerifyRequestContracts ?? 0), 0),
+        requestPromptMismatches: runtimeEvidence.reduce((total, entry) => total + (entry.requestPromptMismatches ?? 0), 0),
+        requestControlMismatches: runtimeEvidence.reduce((total, entry) => total + (entry.requestControlMismatches ?? 0), 0),
+        requestContractMismatches: runtimeEvidence.reduce((total, entry) => total + (entry.requestContractMismatches ?? 0), 0),
+        expectedRequestControlHash: null,
+        expectedInstructionHash: null,
+        actualInstructionHash: null,
         instructionHash: null,
         reason: runtimeEvidence.length === docs.length && runtimeEvidence.every((entry) => entry.matchesExpected === true)
           ? 'runtime-evidence-retained-per-repetition'
           : 'one-or-more-repetitions-have-invalid-runtime-contract-evidence',
       },
-      eventEvidenceHash: stableHash({ providerEvents, toolEvents, harnessEvents }),
+      mountPolicyEvidence: {
+        version: null,
+        source: mountEvidence.length === docs.length && mountEvidence.every((entry) => entry.source === 'sandbox-observed')
+          ? 'sandbox-observed'
+          : null,
+        observed: mountEvidence.length === docs.length && mountEvidence.every((entry) => entry.observed === true),
+        complete: mountEvidence.length === docs.length && mountEvidence.every((entry) => entry.complete === true),
+        matchesCondition: mountEvidence.length === docs.length && mountEvidence.every((entry) => entry.matchesCondition === true),
+        structurallyIsolated: mountEvidence.length === docs.length && mountEvidence.every((entry) => entry.structurallyIsolated === true),
+        effectiveTargets: [],
+        observedTargets: [],
+        observedExistingTargets: [],
+        commonTargets: [],
+        treatmentOnlyTargets: [],
+        reason: mountEvidence.length === docs.length && mountEvidence.every((entry) =>
+          entry.complete === true && entry.matchesCondition === true && entry.structurallyIsolated === true)
+          ? 'mount-policy-evidence-retained-per-repetition'
+          : 'one-or-more-repetitions-have-invalid-mount-policy-evidence',
+      },
+      eventEvidenceHash: stableHash({
+        schema: 'aggregate-event-evidence.v1',
+        repetitions: docs.map((doc) => doc.observability?.eventEvidenceHash ?? null),
+      }),
     };
   }
   base.reproducibility.startedAt = docs[0].reproducibility?.startedAt ?? base.reproducibility.startedAt;
@@ -506,8 +798,12 @@ export function aggregateRepetitionDocs(docs, { validMask = null } = {}) {
   base.validRepetitionCount = valid.length;
   base.invalidRepetitionCount = docs.length - valid.length;
   if (base.observability) {
-    base.reproducibility.telemetryHash = stableHash([...base.observability.providerEvents, ...base.observability.toolEvents]);
-    base.reproducibility.harnessEventsHash = stableHash(base.observability.harnessEvents);
+    base.reproducibility.telemetryHash = stableHash(
+      docs.map((doc) => doc.reproducibility?.telemetryHash ?? null)
+    );
+    base.reproducibility.harnessEventsHash = stableHash(
+      docs.map((doc) => doc.reproducibility?.harnessEventsHash ?? null)
+    );
   }
   base.repetitions = rawRepetitions;
   return base;
@@ -534,6 +830,10 @@ export function buildRunDoc({
   conditionDocument = null,
   hostId = 'openrouter-kimi',
   bundleManifestHash = null,
+  expectedInstructionHash = null,
+  mountPolicyEvidence = null,
+  sandboxIdentity = null,
+  runnerVersion = `harbor-${SUPPORTED_HARBOR_VERSION}/bridge-1`,
 }) {
   const telemetryLedgerPresent = Array.isArray(done?.telemetry?.events);
   const telemetryEvents = telemetryLedgerPresent ? done.telemetry.events : [];
@@ -586,6 +886,21 @@ export function buildRunDoc({
   const duplicateToolResultIdentities = [...resultIdentities.counts.values()]
     .reduce((total, count) => total + Math.max(0, count - 1), 0);
   const invalidToolEventIdentities = callIdentities.invalid + resultIdentities.invalid;
+  const malformedToolCallEvidence = toolCalls.filter((event) => !completeToolCallEvidence(event)).length;
+  const malformedToolResultEvidence = toolResults.filter((event) => !completeToolResultEvidence(event)).length;
+  const invalidToolArguments = toolCalls.filter((event) => event.argumentsValid === false).length;
+  const incompleteToolContainment = toolResults.filter((event) => event.containmentComplete !== true).length;
+  const harnessExecutableCall = (event) =>
+    event.immutableHarnessCli === true ||
+    event.program === 'harness' ||
+    event.program === 'harness-cli';
+  const genericHarnessCalls = condition === 'generic' ? toolCalls.filter(harnessExecutableCall) : [];
+  const resultForCall = (call) => toolResults.find((result) => toolEventIdentity(result) === toolEventIdentity(call));
+  const controlContaminationAttempted = genericHarnessCalls.length > 0;
+  const controlContaminationAchieved = genericHarnessCalls.some((call) => {
+    const exitCode = resultForCall(call)?.exitCode;
+    return Number.isInteger(exitCode) && ![126, 127].includes(exitCode);
+  });
   const taskEntry = tasksOf(lock).find((entry) => entry.task === task);
   const taskHash = taskEntry?.taskChecksum ?? null;
   const conditionHash = conditionDocument ? stableHash(conditionDocument) : null;
@@ -593,35 +908,144 @@ export function buildRunDoc({
   const expectedSystemPromptHash = typeof conditionDocument?.systemPrompt === 'string'
     ? sha256(conditionDocument.systemPrompt)
     : null;
-  const expectedTools = conditionDocument
+  const expectedBridgeTools = conditionDocument
     ? runtimeBridgeTools({
         guidanceCatalog: runtime.guidanceCatalog ?? conditionDocument.guidanceCatalog ?? null,
         enableCheckpoint: runtime.checkpoint === true,
         enableTrustedVerify: runtime.trustedVerify === true,
       })
     : null;
+  // This expected representation is intentionally built independently of the
+  // driver's normalization. The observed hashes below come from the exact
+  // provider request bodies, so a transformation or tool-selection regression
+  // cannot attest itself.
+  const expectedTools = expectedBridgeTools?.map((tool) => ({
+    type: 'function',
+    function: { name: tool.name, description: tool.description, parameters: tool.parameters },
+  })) ?? null;
+  const expectedFinishTools = expectedTools?.filter((tool) => tool.function.name === 'finish') ?? null;
   const expectedToolSchemaHash = expectedTools ? stableHash(expectedTools) : null;
   const expectedToolCount = expectedTools?.length ?? null;
-  const actualSystemPromptHash = SHA256_HEX.test(String(done?.runtime?.systemPromptHash ?? ''))
-    ? done.runtime.systemPromptHash.toLowerCase()
+  const expectedFinishToolSchemaHash = expectedFinishTools ? stableHash(expectedFinishTools) : null;
+  const expectedFinishToolCount = expectedFinishTools?.length ?? null;
+  const expectedRequestControls = conditionDocument ? {
+    endpointHash: sha256(conditionDocument.providerUrl),
+    model: profile.model,
+    maxTokens: conditionDocument.limits?.maxOutputTokens ?? profile.maxTokens,
+    temperaturePresent: profile.temperature != null,
+    temperature: profile.temperature ?? null,
+    reasoningPresent: profile.reasoning != null,
+    reasoning: profile.reasoning ?? null,
+    toolChoice: 'auto',
+    providerPresent: profile.provider != null,
+    providerOrder: Array.isArray(profile.provider?.order) ? profile.provider.order.slice() : null,
+    providerAllowFallbacks: profile.provider != null && typeof profile.provider.allowFallbacks === 'boolean'
+      ? profile.provider.allowFallbacks
+      : null,
+    unexpectedRequestFields: [],
+  } : null;
+  const expectedRequestControlHash = expectedRequestControls ? stableHash(expectedRequestControls) : null;
+  const requestContracts = providerEvents.filter((event) => event.type === 'request');
+  const firstFullRequest = requestContracts.find((event) => event.toolMode === 'full') ?? null;
+  const actualSystemPromptHash = SHA256_HEX.test(String(firstFullRequest?.systemPromptHash ?? ''))
+    ? firstFullRequest.systemPromptHash.toLowerCase()
     : null;
-  const actualToolSchemaHash = SHA256_HEX.test(String(done?.runtime?.toolSchemaHash ?? ''))
-    ? done.runtime.toolSchemaHash.toLowerCase()
+  const actualToolSchemaHash = SHA256_HEX.test(String(firstFullRequest?.toolSchemaHash ?? ''))
+    ? firstFullRequest.toolSchemaHash.toLowerCase()
     : null;
-  const instructionHash = SHA256_HEX.test(String(done?.runtime?.instructionHash ?? ''))
-    ? done.runtime.instructionHash.toLowerCase()
+  const instructionHash = SHA256_HEX.test(String(firstFullRequest?.instructionHash ?? ''))
+    ? firstFullRequest.instructionHash.toLowerCase()
     : null;
-  const actualToolCount = Number.isInteger(done?.runtime?.toolCount) && done.runtime.toolCount >= 0
-    ? done.runtime.toolCount
+  const normalizedExpectedInstructionHash = SHA256_HEX.test(String(expectedInstructionHash ?? ''))
+    ? expectedInstructionHash.toLowerCase()
     : null;
+  const actualToolCount = Number.isInteger(firstFullRequest?.toolCount) && firstFullRequest.toolCount >= 0
+    ? firstFullRequest.toolCount
+    : null;
+  const requestPromptShapeValid = (event) =>
+    event.systemPromptPosition === 0 &&
+    event.instructionPosition === 1 &&
+    [0, 1].includes(event.durableStateMessageCount) &&
+    (event.durableStateMessageCount === 0 || (
+      event.durableStateMessageIndex === 2 &&
+      SHA256_HEX.test(String(event.durableStateMessageHash ?? '')) &&
+      Number.isInteger(event.stateRevision) && event.stateRevision >= 0
+    )) &&
+    event.systemMessageCount === 1 + event.durableStateMessageCount &&
+    event.unexpectedSystemMessageCount === 0 &&
+    event.instructionMessageCount === 1;
+  const requestControlsOf = (event) => ({
+    endpointHash: event.endpointHash ?? null,
+    model: event.model ?? null,
+    maxTokens: event.maxTokens ?? null,
+    temperaturePresent: event.temperaturePresent,
+    temperature: event.temperature ?? null,
+    reasoningPresent: event.reasoningPresent,
+    reasoning: event.reasoning ?? null,
+    toolChoice: event.toolChoice ?? null,
+    providerPresent: event.providerPresent,
+    providerOrder: Array.isArray(event.providerOrder) ? event.providerOrder.slice() : null,
+    providerAllowFallbacks: event.providerAllowFallbacks ?? null,
+    unexpectedRequestFields: Array.isArray(event.unexpectedRequestFields)
+      ? event.unexpectedRequestFields.slice()
+      : null,
+  });
+  const requestControlShapeValid = (event) =>
+    SHA256_HEX.test(String(event.requestBodyHash ?? '')) &&
+    SHA256_HEX.test(String(event.requestControlHash ?? '')) &&
+    SHA256_HEX.test(String(event.endpointHash ?? '')) &&
+    typeof event.model === 'string' && event.model.length > 0 &&
+    Number.isInteger(event.maxTokens) && event.maxTokens > 0 &&
+    typeof event.temperaturePresent === 'boolean' &&
+    typeof event.reasoningPresent === 'boolean' &&
+    typeof event.providerPresent === 'boolean' &&
+    Array.isArray(event.unexpectedRequestFields) &&
+    event.unexpectedRequestFields.every((field) => typeof field === 'string') &&
+    event.requestControlHash === stableHash(requestControlsOf(event));
+  const requestContractComplete = requestContracts.length > 0 && requestContracts.every((event) =>
+    ['full', 'finish-only'].includes(event.toolMode) &&
+    SHA256_HEX.test(String(event.toolSchemaHash ?? '')) &&
+    SHA256_HEX.test(String(event.systemPromptHash ?? '')) &&
+    SHA256_HEX.test(String(event.instructionHash ?? '')) &&
+    requestPromptShapeValid(event) &&
+    requestControlShapeValid(event) &&
+    Number.isInteger(event.toolCount) && event.toolCount >= 0 &&
+    typeof event.postVerify === 'boolean'
+  );
+  const requestPromptMismatches = requestContracts.filter((event) =>
+    event.systemPromptHash !== expectedSystemPromptHash ||
+    event.instructionHash !== normalizedExpectedInstructionHash ||
+    !requestPromptShapeValid(event)
+  ).length;
+  const requestControlMismatches = requestContracts.filter((event) =>
+    !requestControlShapeValid(event) ||
+    event.requestControlHash !== expectedRequestControlHash ||
+    stableHash(requestControlsOf(event)) !== expectedRequestControlHash
+  ).length;
+  const requestContractMismatches = requestContracts.filter((event) => {
+    const finishOnly = event.postVerify === true;
+    const expectedHash = finishOnly ? expectedFinishToolSchemaHash : expectedToolSchemaHash;
+    const expectedCount = finishOnly ? expectedFinishToolCount : expectedToolCount;
+    return event.toolMode !== (finishOnly ? 'finish-only' : 'full') ||
+      event.toolSchemaHash !== expectedHash || event.toolCount !== expectedCount ||
+      event.systemPromptHash !== expectedSystemPromptHash ||
+      event.instructionHash !== normalizedExpectedInstructionHash ||
+      !requestPromptShapeValid(event) ||
+      !requestControlShapeValid(event) ||
+      event.requestControlHash !== expectedRequestControlHash;
+  }).length;
   const runtimeContractComplete = Boolean(
     expectedSystemPromptHash && expectedToolSchemaHash && Number.isInteger(expectedToolCount) &&
-    actualSystemPromptHash && actualToolSchemaHash && instructionHash && Number.isInteger(actualToolCount)
+    actualSystemPromptHash && actualToolSchemaHash && instructionHash && normalizedExpectedInstructionHash &&
+    Number.isInteger(actualToolCount) && requestContractComplete
   );
   const runtimeContractMatches = runtimeContractComplete &&
     actualSystemPromptHash === expectedSystemPromptHash &&
     actualToolSchemaHash === expectedToolSchemaHash &&
-    actualToolCount === expectedToolCount;
+    actualToolCount === expectedToolCount &&
+    instructionHash === normalizedExpectedInstructionHash &&
+    requestControlMismatches === 0 &&
+    requestContractMismatches === 0;
   const runtimeContractReason = !runtimeContractComplete
     ? 'runtime-attestation-missing-or-malformed'
     : runtimeContractMatches
@@ -630,9 +1054,17 @@ export function buildRunDoc({
           actualSystemPromptHash !== expectedSystemPromptHash ? 'system-prompt-hash-mismatch' : null,
           actualToolSchemaHash !== expectedToolSchemaHash ? 'tool-schema-hash-mismatch' : null,
           actualToolCount !== expectedToolCount ? 'tool-count-mismatch' : null,
+          instructionHash !== normalizedExpectedInstructionHash ? 'instruction-hash-mismatch' : null,
+          !requestContractComplete ? 'request-tool-contract-missing-or-malformed' : null,
+          requestPromptMismatches !== 0 ? 'request-prompt-contract-mismatch' : null,
+          requestControlMismatches !== 0 ? 'request-control-contract-mismatch' : null,
+          requestContractMismatches !== 0 ? 'request-tool-contract-mismatch' : null,
         ].filter(Boolean).join(';');
   const providerRequestedOrder = Array.isArray(profile.provider?.order) ? profile.provider.order.slice() : [];
-  const normalizedOrder = providerRequestedOrder.map(normalizeProviderName);
+  const providerExpectedResolvedNames = Array.isArray(profile.provider?.expectedResolvedNames)
+    ? profile.provider.expectedResolvedNames.slice()
+    : providerRequestedOrder.slice();
+  const normalizedResolvedProviders = providerExpectedResolvedNames.map(normalizeProviderName);
   const attributionComplete =
     responses.length > 0 &&
     telemetryTotals?.providerResponses === responses.length &&
@@ -644,7 +1076,7 @@ export function buildRunDoc({
     providerEvents.some((event) => event.type === 'fallback') ||
     responses.some((response) => response.model !== profile.model) ||
     responses.some((response) =>
-      providerRequestedOrder.length > 0 && !normalizedOrder.includes(normalizeProviderName(response.provider))
+      providerRequestedOrder.length > 0 && !normalizedResolvedProviders.includes(normalizeProviderName(response.provider))
     );
   return {
     schema: 'eval-run.v1',
@@ -655,10 +1087,14 @@ export function buildRunDoc({
       taskId: task,
       taskRevision: lock.datasetRef,
       condition,
+      modelProfileId: profile.id,
+      billingProfileHash: billingProfileHash(profile.id),
+      pricingCatalogCheckedAt: profile.catalogPin?.checkedAt ?? null,
       modelRequested: profile.model,
       modelResolved: lastResponse?.model ?? null,
       providerResolved: lastResponse?.provider ?? null,
       providerRequestedOrder,
+      providerExpectedResolvedNames,
       attribution: {
         responseCount: responses.length,
         complete: attributionComplete,
@@ -666,8 +1102,8 @@ export function buildRunDoc({
       },
       host: hostId,
       reasoningConfig: profile.reasoning,
-      runnerVersion: '1',
-      sandbox: null,
+      runnerVersion,
+      sandbox: sandboxIdentity,
       startedAt,
       endedAt,
       pairId: identity.pairId ?? null,
@@ -676,6 +1112,7 @@ export function buildRunDoc({
       orderIndex: identity.orderIndex ?? null,
       attempt: identity.attempt ?? null,
       aggregation: null,
+      trialCeilingUsd: conditionDocument?.limits?.trialCeilingUsd ?? null,
       taskHash,
       bundleManifestHash,
       conditionHash,
@@ -719,6 +1156,15 @@ export function buildRunDoc({
       duplicateToolCallIdentities,
       duplicateToolResultIdentities,
       invalidToolEventIdentities,
+      malformedToolCallEvidence,
+      malformedToolResultEvidence,
+      invalidToolArguments,
+      incompleteToolContainment,
+      controlContaminationAttempted,
+      controlContaminationAchieved,
+      // Backward-compatible name: detection now means successful access, not
+      // a harmless failed isolation probe.
+      controlContaminationDetected: controlContaminationAchieved,
       runtimeContractEvidence: {
         complete: runtimeContractComplete,
         matchesExpected: runtimeContractMatches,
@@ -728,8 +1174,32 @@ export function buildRunDoc({
         actualToolSchemaHash,
         expectedToolCount,
         actualToolCount,
+        expectedFinishToolSchemaHash,
+        expectedFinishToolCount,
+        requestContractsChecked: requestContracts.length,
+        postVerifyRequestContracts: requestContracts.filter((event) => event.postVerify === true).length,
+        requestPromptMismatches,
+        requestControlMismatches,
+        requestContractMismatches,
+        expectedRequestControlHash,
+        expectedInstructionHash: normalizedExpectedInstructionHash,
+        actualInstructionHash: instructionHash,
         instructionHash,
         reason: runtimeContractReason,
+      },
+      mountPolicyEvidence: mountPolicyEvidence ?? {
+        version: null,
+        source: null,
+        observed: false,
+        complete: false,
+        matchesCondition: false,
+        structurallyIsolated: false,
+        effectiveTargets: [],
+        observedTargets: [],
+        observedExistingTargets: [],
+        commonTargets: [],
+        treatmentOnlyTargets: [],
+        reason: 'mount-policy-evidence-missing',
       },
       eventEvidenceHash: stableHash({ providerEvents, toolEvents, harnessEvents: harnessEvents ?? [] }),
     },
@@ -753,10 +1223,36 @@ export function buildLiveSteps({
   repetitions = null,
   seeds = null,
   localEnabled = false,
+  attestHarborExecutable = defaultAttestHarborExecutable,
+  attestHostNodeExecutable = defaultAttestHostNodeExecutable,
+  attestSandboxImage = defaultAttestSandboxImage,
+  validateBundle = validatePrebuiltBundle,
 }) {
   const repetitionCount = repetitions ?? seeds ?? 1;
+  if (!Number.isInteger(repetitionCount) || repetitionCount < 1) {
+    throw new Error(`repetitions must be a positive integer, got ${repetitionCount}`);
+  }
   if (!Number.isFinite(providerLookupTimeoutMs) || providerLookupTimeoutMs <= 0) {
     throw new Error('providerLookupTimeoutMs must be a positive finite number');
+  }
+  const runtimeHome = path.join(workDir, '.harbor-runtime-home');
+  for (const directory of [
+    runtimeHome,
+    path.join(runtimeHome, 'xdg-config'),
+    path.join(runtimeHome, 'xdg-cache'),
+    path.join(runtimeHome, 'tmp'),
+    path.join(runtimeHome, 'docker'),
+  ]) {
+    fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+  }
+  const dockerConfigFile = path.join(runtimeHome, 'docker', 'config.json');
+  if (!fs.existsSync(dockerConfigFile)) fs.writeFileSync(dockerConfigFile, '{}\n', { mode: 0o600 });
+  const executionEnvironment = env.HARNESS_EVAL_TB_ENV ?? config.execution?.environment ?? 'docker';
+  if (executionEnvironment !== 'docker') {
+    throw new Error(
+      `unsupported controlled evaluation environment: ${executionEnvironment}; ` +
+      'attested host mount materialization currently requires Harbor Docker'
+    );
   }
   const conditionOrderPolicy = config.execution?.conditionOrder ?? 'release-hash-balanced';
   if (conditionOrderPolicy !== 'release-hash-balanced') {
@@ -800,12 +1296,63 @@ export function buildLiveSteps({
   let datasetDir = null;
   let verifiedDatasetDir = null;
   let bundle = null;
+  let conditionInputs = null;
+  let observedHarborVersion = null;
+  let harborExecutableIdentity = null;
+  const sandboxIdentityByTask = new Map();
+  const executionTaskHashByTask = new Map();
+  let hostNodeIdentity = null;
   let paidSchedulingStop = null;
   const primaryTrialCeilingByTask = new Map();
+  const ensureHarborExecutable = () => {
+    const current = attestHarborExecutable({ env });
+    if (!current || !path.isAbsolute(current.path) || !SHA256_HEX.test(String(current.sha256 ?? ''))) {
+      throw new Error('Harbor executable attestation returned an invalid identity');
+    }
+    if (harborExecutableIdentity && (
+      harborExecutableIdentity.path !== current.path || harborExecutableIdentity.sha256 !== current.sha256
+    )) {
+      throw new Error('Harbor executable identity changed after preflight');
+    }
+    harborExecutableIdentity = current;
+    return harborExecutableIdentity;
+  };
+  const hostNodeIdentityOf = () => {
+    if (hostNodeIdentity) return hostNodeIdentity;
+    const current = attestHostNodeExecutable();
+    if (!current || !path.isAbsolute(current.path) || !SHA256_HEX.test(String(current.sha256 ?? ''))) {
+      throw new Error('host Node executable attestation returned an invalid identity');
+    }
+    hostNodeIdentity = current;
+    return hostNodeIdentity;
+  };
+  const spawnEnvironment = ({ bridge = false, apiKey = null } = {}) => harborSpawnEnv({
+    ambientEnv: env,
+    runtimeHome,
+    trustedPythonPath: bridge ? path.join(bundle.bundleDir, 'bridge') : null,
+    hostNode: hostNodeIdentityOf().path,
+    hostNodeSha256: hostNodeIdentityOf().sha256,
+    apiKey,
+  });
   const releaseOrderOffset = Number.parseInt(
     stableHash({ schema: 'eval-condition-order.v1', releaseSha }).slice(0, 8),
     16
   ) % 2;
+
+  function ensureSandboxIdentity(entry) {
+    if (!entry?.sandbox) return null;
+    const cached = sandboxIdentityByTask.get(entry.task);
+    const current = attestSandboxImage({ sandbox: entry.sandbox, env, runtimeHome, task: entry.task });
+    if (!current || current.identityAttested !== true || current.observedImageId !== entry.sandbox.imageId ||
+        current.observedPlatform !== entry.sandbox.platform) {
+      throw new Error(`sandbox image attestation failed for ${entry.task}`);
+    }
+    if (cached && stableHash(cached) !== stableHash(current)) {
+      throw new Error(`sandbox image identity changed after preflight for ${entry.task}`);
+    }
+    sandboxIdentityByTask.set(entry.task, current);
+    return current;
+  }
 
   async function providerSpendGuard() {
     const ceilingUsd = config.budget?.releaseCeilingUsd;
@@ -886,8 +1433,35 @@ export function buildLiveSteps({
 
   async function environment() {
     const missing = [];
-    const probe = runHarbor({ args: ['--version'], cwd: workDir, spawnImpl, timeoutMs: 60_000, spawnEnv: harborSpawnEnv() });
-    if (probe.spawnError || probe.code !== 0) missing.push('harbor CLI');
+    let harborExecutable = null;
+    let hostNodeReady = false;
+    try {
+      harborExecutable = ensureHarborExecutable().path;
+    } catch (error) {
+      missing.push(publicFailureReason(
+        'harbor-preflight',
+        diagnosticCode(error?.message, 'HARBOR_EXECUTABLE_ATTESTATION_FAILURE'),
+        error?.message
+      ));
+    }
+    try {
+      hostNodeIdentityOf();
+      hostNodeReady = true;
+    } catch (error) {
+      missing.push(publicFailureReason(
+        'host-node-preflight',
+        diagnosticCode(error?.message, 'HOST_NODE_EXECUTABLE_ATTESTATION_FAILURE'),
+        error?.message
+      ));
+    }
+    const probe = harborExecutable && hostNodeReady
+      ? runHarbor({ executable: harborExecutable, args: ['--version'], cwd: workDir, spawnImpl, timeoutMs: 60_000, spawnEnv: spawnEnvironment() })
+      : { code: null, spawnError: 'UNATTESTED_EXECUTABLE', containmentComplete: false, stdout: '', stderr: '' };
+    observedHarborVersion = probe.spawnError || probe.code !== 0 ? null : harborVersionOf(probe);
+    if (probe.spawnError || probe.code !== 0 || probe.containmentComplete !== true) missing.push('harbor CLI');
+    else if (observedHarborVersion !== SUPPORTED_HARBOR_VERSION) {
+      missing.push(`harbor CLI ${SUPPORTED_HARBOR_VERSION} required`);
+    }
     missing.push(...kimiHost.validateCredentials().missing);
     let providerGuard = { ok: true, evidence: { verified: false, required: false, reason: 'credentials-unavailable' } };
     if (kimiHost.validateCredentials().ok) {
@@ -909,20 +1483,48 @@ export function buildLiveSteps({
       const stat = fs.lstatSync(current);
       if (stat.isSymbolicLink()) throw new Error(`verified dataset snapshot cannot contain symlinks: ${path.relative(root, current)}`);
       if (!stat.isDirectory()) {
-        fs.chmodSync(current, 0o444);
+        if (!stat.isFile()) throw new Error(`verified dataset snapshot contains an unsupported node: ${path.relative(root, current)}`);
+        fs.chmodSync(current, stat.mode & 0o555);
         return;
       }
       for (const name of fs.readdirSync(current)) visit(path.join(current, name));
-      fs.chmodSync(current, 0o555);
+      fs.chmodSync(current, stat.mode & 0o555);
     };
     visit(root);
+  }
+
+  function materializeLockedSandbox(taskRoot, entry) {
+    if (!entry.sandbox) throw new Error(`task ${entry.task} has no sandbox lock`);
+    const taskConfig = path.join(taskRoot, 'task.toml');
+    const source = fs.readFileSync(taskConfig, 'utf8');
+    const imageLines = [...source.matchAll(/^docker_image\s*=\s*"([^"]+)"\s*$/gm)];
+    if (imageLines.length !== 1 || imageLines[0][1] !== entry.sandbox.sourceImage) {
+      throw new Error(`task ${entry.task} does not contain its locked source image`);
+    }
+    const expectedMemory = `${entry.sandbox.memoryMb / 1024}G`;
+    const expectedStorage = `${entry.sandbox.storageMb / 1024}G`;
+    const assignments = (field, pattern) => [...source.matchAll(new RegExp(`^${field}\\s*=\\s*${pattern}\\s*$`, 'gm'))];
+    const cpuAssignments = assignments('cpus', '(\\d+)');
+    const memoryAssignments = assignments('memory', '"([^"]+)"');
+    const storageAssignments = assignments('storage', '"([^"]+)"');
+    if (!Number.isInteger(entry.sandbox.memoryMb / 1024) || !Number.isInteger(entry.sandbox.storageMb / 1024) ||
+        cpuAssignments.length !== 1 || Number(cpuAssignments[0][1]) !== entry.sandbox.cpus ||
+        memoryAssignments.length !== 1 || memoryAssignments[0][1] !== expectedMemory ||
+        storageAssignments.length !== 1 || storageAssignments[0][1] !== expectedStorage) {
+      throw new Error(`task ${entry.task} resource limits do not match its sandbox lock`);
+    }
+    const pinned = source.replace(imageLines[0][0], `docker_image = "${entry.sandbox.immutableImage}"`);
+    if (pinned === source) throw new Error(`task ${entry.task} image pin was not materialized`);
+    fs.writeFileSync(taskConfig, pinned);
   }
 
   function snapshotVerifiedTasks() {
     if (verifiedDatasetDir) {
       for (const entry of tasksOf(lock)) {
-        const verdict = verifyTaskAgainstLock(path.join(verifiedDatasetDir, entry.task), lock, entry.task);
-        if (!verdict.ok) throw new Error(`verified task snapshot drifted: ${verdict.reason}`);
+        const actual = hashTree(path.join(verifiedDatasetDir, entry.task));
+        if (actual !== executionTaskHashByTask.get(entry.task)) {
+          throw new Error(`verified execution task snapshot drifted: ${entry.task}`);
+        }
       }
       return verifiedDatasetDir;
     }
@@ -930,16 +1532,27 @@ export function buildLiveSteps({
     if (fs.existsSync(destination)) throw new Error('verified dataset snapshot destination already exists');
     fs.mkdirSync(destination, { recursive: false, mode: 0o700 });
     for (const entry of tasksOf(lock)) {
-      fs.cpSync(path.join(datasetDir, entry.task), path.join(destination, entry.task), {
+      const sourceTask = path.join(datasetDir, entry.task);
+      const destinationTask = path.join(destination, entry.task);
+      const sourceMode = fs.lstatSync(sourceTask).mode;
+      fs.cpSync(sourceTask, destinationTask, {
         recursive: true,
         dereference: false,
         errorOnExist: true,
         force: false,
       });
-      const verdict = verifyTaskAgainstLock(path.join(destination, entry.task), lock, entry.task);
+      // cpSync creates the recursive-copy root with the process default mode
+      // on some supported Node versions. Preserve the source task root's
+      // read/execute semantics before the read-only normalization below.
+      fs.chmodSync(destinationTask, sourceMode & 0o777);
+      const verdict = verifyTaskAgainstLock(destinationTask, lock, entry.task);
       if (!verdict.ok) throw new Error(`copied task failed checksum verification: ${verdict.reason}`);
+      materializeLockedSandbox(destinationTask, entry);
     }
     makeSnapshotReadOnly(destination);
+    for (const entry of tasksOf(lock)) {
+      executionTaskHashByTask.set(entry.task, hashTree(path.join(destination, entry.task)));
+    }
     verifiedDatasetDir = fs.realpathSync.native(destination);
     return verifiedDatasetDir;
   }
@@ -951,15 +1564,25 @@ export function buildLiveSteps({
         datasetDir = env.HARNESS_EVAL_TB_DATASET_DIR;
       } else {
         const dest = path.join(workDir, 'dataset');
-        const download = runHarbor({
-          args: ['download', lock.datasetRef, '-o', dest, '--export'],
-          cwd: workDir,
-          spawnImpl,
-          timeoutMs: 10 * 60_000,
-          spawnEnv: harborSpawnEnv(),
-        });
-        if (download.spawnError || download.code !== 0) {
-          return { ok: false, reason: `task download failed: ${download.spawnError ?? download.stderr}` };
+        let download;
+        try {
+          download = runHarbor({
+            executable: ensureHarborExecutable().path,
+            args: ['download', lock.datasetRef, '-o', dest, '--export'],
+            cwd: workDir,
+            spawnImpl,
+            timeoutMs: 10 * 60_000,
+            spawnEnv: spawnEnvironment(),
+          });
+        } catch (error) {
+          return {
+            ok: false,
+            reason: publicFailureReason('task-download', diagnosticCode(error?.message, 'TASK_DOWNLOAD_PREFLIGHT_FAILURE'), error?.message),
+          };
+        }
+        if (download.spawnError || download.code !== 0 || download.containmentComplete !== true) {
+          const raw = download.spawnError ?? download.stderr ?? `exit ${download.code}`;
+          return { ok: false, reason: publicFailureReason('task-download', 'TASK_DOWNLOAD_FAILURE', raw) };
         }
         datasetDir = path.join(dest, lock.datasetRef.split('@')[0]);
       }
@@ -967,24 +1590,92 @@ export function buildLiveSteps({
     for (const entry of tasksOf(lock)) {
       const verdict = verifyTaskAgainstLock(path.join(datasetDir, entry.task), lock, entry.task);
       if (!verdict.ok) return { ok: false, reason: verdict.reason };
+      try {
+        ensureSandboxIdentity(entry);
+      } catch (error) {
+        return {
+          ok: false,
+          reason: publicFailureReason('sandbox-preflight', diagnosticCode(error?.message, 'SANDBOX_ATTESTATION_FAILURE'), error?.message),
+        };
+      }
     }
     try {
       snapshotVerifiedTasks();
     } catch (error) {
-      return { ok: false, reason: `task snapshot failed: ${error.message}` };
+      return {
+        ok: false,
+        reason: publicFailureReason('task-snapshot', diagnosticCode(error?.message, 'TASK_SNAPSHOT_FAILURE'), error?.message),
+      };
     }
     return { ok: true, reason: '' };
   }
 
   function runTrial({ evalHost, condition, budget, label, task, identity }) {
+    snapshotVerifiedTasks();
+    ensureBundle();
+    const attestedHostNode = hostNodeIdentityOf();
     const profile = evalHost.profile;
+    const taskEntry = tasksOf(lock).find((entry) => entry.task === task);
+    const sandboxIdentity = taskEntry?.sandbox ? {
+      ...ensureSandboxIdentity(taskEntry),
+      executionTaskHash: executionTaskHashByTask.get(task) ?? null,
+    } : null;
     const conditionPath = path.join(workDir, `${task}-${label}.condition.json`);
     const telemetryFile = path.join(workDir, `${task}-${label}.done.json`);
     const trialCeilingUsd = Math.min(profile.trialCeilingUsd, budget.remainingUsd());
+    const expectedInstructionHash = sha256(instructionAsDeliveredByHarbor(
+      fs.readFileSync(path.join(verifiedDatasetDir, task, 'instruction.md'), 'utf8')
+    ));
+    const mountPolicy = bundle?.mountPolicy;
+    const effectiveMounts = Array.isArray(mountPolicy?.[condition.id]) ? mountPolicy[condition.id] : [];
+    const effectiveTargets = effectiveMounts.map((mount) => mount.target);
+    const commonTargets = Array.isArray(mountPolicy?.commonTargets) ? mountPolicy.commonTargets.slice() : [];
+    const treatmentOnlyTargets = Array.isArray(mountPolicy?.treatmentOnlyTargets)
+      ? mountPolicy.treatmentOnlyTargets.slice()
+      : [];
+    const expectedTargets = condition.id === 'harness'
+      ? [...commonTargets, ...treatmentOnlyTargets]
+      : commonTargets;
+    const configuredMountPolicyComplete = mountPolicy?.version === 'eval-mount-policy.v1' &&
+      effectiveTargets.length > 0 && commonTargets.length > 0 && treatmentOnlyTargets.length > 0;
+    const configuredMatchesCondition = JSON.stringify(effectiveTargets) === JSON.stringify(expectedTargets);
+    const configuredStructurallyIsolated = mountPolicy?.structurallyIsolated === true &&
+      treatmentOnlyTargets.every((target) => !commonTargets.includes(target));
+    const configuredMountPolicyValid = configuredMountPolicyComplete &&
+      configuredMatchesCondition && configuredStructurallyIsolated;
+    let mountPolicyEvidence = {
+      version: mountPolicy?.version ?? null,
+      source: 'configured-harbor-argv',
+      observed: false,
+      complete: false,
+      matchesCondition: configuredMatchesCondition,
+      structurallyIsolated: configuredStructurallyIsolated,
+      effectiveTargets,
+      observedTargets: [],
+      observedExistingTargets: [],
+      commonTargets,
+      treatmentOnlyTargets,
+      reason: null,
+    };
+    if (!configuredMountPolicyComplete) {
+      mountPolicyEvidence.reason = 'mount-policy-incomplete';
+    }
+    else if (!mountPolicyEvidence.structurallyIsolated) mountPolicyEvidence.reason = 'treatment-mount-not-isolated';
+    else if (!mountPolicyEvidence.matchesCondition) mountPolicyEvidence.reason = 'effective-mounts-do-not-match-condition';
+    else mountPolicyEvidence.reason = 'sandbox-mount-observation-missing';
     const conditionDocument = {
       ...condition,
+      runtime: {
+        ...(condition.runtime ?? {}),
+        expectedMountTargets: expectedTargets,
+        mountProbeTargets: [...new Set([...commonTargets, ...treatmentOnlyTargets])],
+      },
       profileId: profile.id,
       apiKeyEnv: evalHost.id === 'openrouter-kimi' ? 'OPENROUTER_API_KEY' : 'HARNESS_EVAL_LOCAL_API_KEY',
+      // harbor_agent.py launches the provider bridge as a host-side Node
+      // subprocess. Only exec tool calls enter the Harbor sandbox, so a local
+      // Ollama endpoint must stay on host loopback.
+      providerUrl: profile.url,
       limits: { ...condition.limits, trialCeilingUsd },
     };
     fs.writeFileSync(
@@ -995,48 +1686,92 @@ export function buildLiveSteps({
     const jobsDir = path.join(workDir, 'jobs');
     const startedAt = now();
     const run = runHarbor({
+      executable: ensureHarborExecutable().path,
       args: buildHarborRunArgs({
         lock,
         task,
         datasetPath: verifiedDatasetDir,
         agentRef: AGENT_REF,
         model: profile.model,
-        envName: env.HARNESS_EVAL_TB_ENV ?? config.execution?.environment ?? 'docker',
+        envName: executionEnvironment,
         jobName,
         jobsDir,
-        mounts: [bundle.mount],
+        mounts: effectiveMounts,
         agentEnv: {
           HARNESS_EVAL_TB_CONDITION: conditionPath,
           HARNESS_EVAL_TB_TELEMETRY_FILE: telemetryFile,
+          HARNESS_EVAL_HOST_NODE: attestedHostNode.path,
+          HARNESS_EVAL_HOST_NODE_SHA256: attestedHostNode.sha256,
         },
       }),
       cwd: workDir,
       spawnImpl,
       timeoutMs: profile.timeoutMs + 10 * 60_000,
-      spawnEnv: harborSpawnEnv({
+      spawnEnv: spawnEnvironment({
+        bridge: true,
         apiKey: evalHost.id === 'openrouter-kimi' ? env.OPENROUTER_API_KEY : null,
-        daytonaApiKey: config.execution?.environment === 'daytona' ? env.DAYTONA_API_KEY ?? null : null,
       }),
     });
     const endedAt = now();
+    let postRunIntegrityFailure = null;
+    try {
+      snapshotVerifiedTasks();
+      ensureBundle();
+    } catch (error) {
+      postRunIntegrityFailure = failureDiagnostic(
+        'post-run-integrity',
+        diagnosticCode(error?.message),
+        error?.message
+      );
+    }
     const jobDir = jobDirFor({ jobsDir, jobName });
     const jobDirCreated = fs.existsSync(jobDir);
-    const evidence = jobDirCreated
-      ? collectVerifierEvidence(jobDir)
-      : { reward: null, rewardPath: null, metrics: null, pytest: null, treeHash: null };
     let done = null;
     try {
       done = JSON.parse(fs.readFileSync(telemetryFile, 'utf8'));
     } catch {
       done = null;
     }
+    const observedMount = done?.mountEvidence;
+    if (observedMount?.source === 'sandbox-observed' && observedMount.complete === true && Array.isArray(observedMount.targets) &&
+        observedMount.targets.every((target) => typeof target === 'string') &&
+        Array.isArray(observedMount.existingTargets) &&
+        observedMount.existingTargets.every((target) => typeof target === 'string') &&
+        observedMount.allReadOnly === true) {
+      const observedTargets = observedMount.targets.slice();
+      const observedExistingTargets = observedMount.existingTargets.slice();
+      const observedMatchesCondition = JSON.stringify(observedTargets) === JSON.stringify(expectedTargets) &&
+        JSON.stringify(observedExistingTargets) === JSON.stringify(expectedTargets);
+      const matchesCondition = configuredMountPolicyValid && observedMatchesCondition;
+      const observedPolicyComplete = configuredMountPolicyValid && observedMatchesCondition;
+      mountPolicyEvidence = {
+        ...mountPolicyEvidence,
+        version: observedMount.version ?? mountPolicyEvidence.version,
+        source: 'sandbox-observed',
+        observed: true,
+        complete: observedPolicyComplete,
+        matchesCondition,
+        observedTargets,
+        observedExistingTargets,
+        reason: !configuredMountPolicyComplete
+          ? 'mount-policy-incomplete'
+          : !configuredStructurallyIsolated
+            ? 'treatment-mount-not-isolated'
+            : !configuredMatchesCondition
+              ? 'effective-mounts-do-not-match-condition'
+              : observedPolicyComplete
+                ? null
+                : 'sandbox-observed-mounts-do-not-match-condition',
+      };
+    }
     const totals = done?.telemetry?.totals ?? null;
     const paidProfile = isPaidProfile(profile);
     const finiteCost = (value) => typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null;
     const localCost = finiteCost(totals?.localCostUsd);
     const providerCost = finiteCost(totals?.providerCostUsd);
-    const reconciledCost = paidProfile ? Math.max(localCost ?? 0, providerCost ?? 0) : 0;
-    budget.charge(reconciledCost, `${evalHost.id} ${label}`);
+    const reconciledCost = paidProfile ? finiteCost(totals?.reconciledCostUsd) : 0;
+    const chargeableReconciledCost = reconciledCost ?? Math.max(localCost ?? 0, providerCost ?? 0);
+    budget.charge(chargeableReconciledCost, `${evalHost.id} ${label}`);
     const allocationBreached = paidProfile && budget.breached;
     const explicitUnknownBilling = Array.isArray(done?.telemetry?.events) &&
       done.telemetry.events.some((event) => event?.type === 'billing_uncertain' || event?.billingStatus === 'unknown');
@@ -1051,12 +1786,13 @@ export function buildLiveSteps({
       totals.unknownBillingAttempts !== 0 ||
       localCost == null ||
       providerCost == null ||
+      reconciledCost == null ||
       explicitUnknownBilling
     );
     let reservedUsd = 0;
     if (billingUncertain) {
       reservedUsd = budget.remainingUsd();
-      if (reservedUsd > 0) budget.charge(reservedUsd, `${evalHost.id} ${label} uncertain-billing-reserve`);
+      if (reservedUsd > 0) budget.reserve(reservedUsd, `${evalHost.id} ${label} uncertain-billing-reserve`);
       paidSchedulingStop = {
         task,
         condition: condition.id,
@@ -1071,11 +1807,23 @@ export function buildLiveSteps({
         reservedUsd: 0,
       };
     }
+    let evidence = { reward: null, rewardPath: null, metrics: null, pytest: null, treeHash: null };
+    let verifierEvidenceCollectionFailure = false;
+    if (jobDirCreated) {
+      try {
+        evidence = collectVerifierEvidence(jobDir);
+      } catch {
+        // Official evidence is untrusted filesystem input. Preserve the paid
+        // billing ledger and classify the trial as infrastructure-invalid
+        // instead of throwing away the release report after provider spend.
+        verifierEvidenceCollectionFailure = true;
+      }
+    }
     const classifiedFailure = classifyFailure({
       run,
       reward: evidence.reward,
       providerFailure: done?.stopReason === 'provider_error',
-      jobDirCreated,
+      jobDirCreated: jobDirCreated && !verifierEvidenceCollectionFailure,
       passed: verdictFromReward(evidence.reward, { passingReward: lock.verifier.passingReward }) === 'pass',
     });
     const doc = buildRunDoc({
@@ -1094,6 +1842,10 @@ export function buildLiveSteps({
       conditionDocument,
       hostId: evalHost.id,
       bundleManifestHash: bundle?.manifestHash ?? null,
+      expectedInstructionHash,
+      mountPolicyEvidence,
+      sandboxIdentity,
+      runnerVersion: `harbor-${observedHarborVersion ?? 'unverified'}/bridge-2/${harborExecutableIdentity.sha256.slice(0, 16)}/node-${attestedHostNode.sha256.slice(0, 16)}`,
     });
     doc.efficiency.reconciledCostUsd = reconciledCost;
     doc.efficiency.billingUncertain = billingUncertain;
@@ -1105,8 +1857,20 @@ export function buildLiveSteps({
       allocationBreached,
       policy: billingUncertain ? 'reserve-trial-remainder-and-stop' : 'max-local-provider-reported',
     };
+    doc.verifierEvidence = {
+      collectionComplete: jobDirCreated && !verifierEvidenceCollectionFailure,
+      reason: verifierEvidenceCollectionFailure
+        ? 'verifier-evidence-collection-failed'
+        : jobDirCreated
+          ? null
+          : 'harbor-job-directory-missing',
+    };
     const integrityFailure = BRIDGE_INTEGRITY_STOP_REASONS.has(doc.correctness.exitReason) ||
+      doc.workspaceEvidence?.available !== true ||
       doc.observability.runtimeContractEvidence.matchesExpected !== true ||
+      doc.observability.mountPolicyEvidence?.complete !== true ||
+      doc.observability.mountPolicyEvidence?.matchesCondition !== true ||
+      doc.observability.mountPolicyEvidence?.structurallyIsolated !== true ||
       doc.observability.unclosedProviderAttempts !== 0 ||
       doc.observability.uncorrelatedProviderTerminals !== 0 ||
       doc.observability.duplicateProviderAttemptIdentities !== 0 ||
@@ -1116,7 +1880,59 @@ export function buildLiveSteps({
       doc.observability.uncorrelatedToolResults !== 0 ||
       doc.observability.duplicateToolCallIdentities !== 0 ||
       doc.observability.duplicateToolResultIdentities !== 0 ||
-      doc.observability.invalidToolEventIdentities !== 0;
+      doc.observability.invalidToolEventIdentities !== 0 ||
+      doc.observability.malformedToolCallEvidence !== 0 ||
+      doc.observability.malformedToolResultEvidence !== 0 ||
+      doc.observability.incompleteToolContainment !== 0 ||
+      doc.observability.controlContaminationDetected === true ||
+      postRunIntegrityFailure != null;
+    if (integrityFailure && paidProfile && !paidSchedulingStop) {
+      const integrityReserve = budget.remainingUsd();
+      if (integrityReserve > 0) {
+        budget.reserve(integrityReserve, `${evalHost.id} ${label} structural-integrity-reserve`);
+      }
+      reservedUsd += integrityReserve;
+      paidSchedulingStop = {
+        task,
+        condition: condition.id,
+        reason: 'structural-integrity-failure',
+        reservedUsd: integrityReserve,
+      };
+      doc.billingEvidence.reservedUsd = reservedUsd;
+      doc.billingEvidence.policy = 'reserve-trial-remainder-and-stop-on-structural-integrity-failure';
+    }
+    const failureDiagnostics = [];
+    if (postRunIntegrityFailure) failureDiagnostics.push(postRunIntegrityFailure);
+    if (verifierEvidenceCollectionFailure) {
+      failureDiagnostics.push(failureDiagnostic('verifier-evidence', 'VERIFIER_EVIDENCE_COLLECTION_FAILURE'));
+    }
+    if (classifiedFailure) {
+      failureDiagnostics.push(failureDiagnostic(
+        'trial-classification',
+        `${String(classifiedFailure).toUpperCase().replace(/[^A-Z0-9]+/g, '_')}_FAILURE`,
+        run?.spawnError ?? run?.stderr ?? null,
+        {
+          exitCode: Number.isInteger(run?.code) ? run.code : null,
+          signal: typeof run?.signal === 'string' ? run.signal : null,
+        }
+      ));
+    }
+    if (billingUncertain) {
+      failureDiagnostics.push(failureDiagnostic('billing-reconciliation', 'BILLING_EVIDENCE_INCOMPLETE'));
+    }
+    if (allocationBreached) {
+      failureDiagnostics.push(failureDiagnostic('budget-reconciliation', 'TRIAL_ALLOCATION_EXCEEDED'));
+    }
+    if (integrityFailure && failureDiagnostics.length === 0) {
+      failureDiagnostics.push(failureDiagnostic('runtime-evidence', 'RUNTIME_EVIDENCE_INTEGRITY_FAILURE'));
+    }
+    if (postRunIntegrityFailure != null) {
+      doc.executionIntegrityEvidence = {
+        complete: false,
+        reason: postRunIntegrityFailure.code,
+        reasonHash: postRunIntegrityFailure.reasonHash,
+      };
+    }
     const failureKind = classifiedFailure ?? (billingUncertain
       ? 'billing'
       : allocationBreached
@@ -1125,7 +1941,12 @@ export function buildLiveSteps({
           ? 'infrastructure'
           : null);
     doc.trialValidity = { valid: failureKind == null && evidence.reward != null, failureKind };
-    return { doc, failureKind, stopPaidScheduling: billingUncertain || allocationBreached };
+    return {
+      doc,
+      failureKind,
+      failureDiagnostics,
+      stopPaidScheduling: billingUncertain || allocationBreached || integrityFailure,
+    };
   }
 
   function taskPair({ evalHost, task, budget, attempt, trialCeilingUsd, n = repetitionCount }) {
@@ -1135,19 +1956,49 @@ export function buildLiveSteps({
     const pairId = shortHash({ schema: 'eval-pair.v1', releaseSha, host: evalHost.id, task, attempt });
     for (let repetition = 1; repetition <= n; repetition += 1) {
       const suffix = n > 1 ? `${attempt}${repetition}` : attempt;
-      const guidanceCatalog = buildGuidanceCatalog();
-      const conditions = {
-        generic: buildGenericCondition({ instruction: INSTRUCTION_PLACEHOLDER, limits }),
-        harness: {
-          ...buildHarnessCondition({
-            instruction: INSTRUCTION_PLACEHOLDER,
-            limits,
-            engineerContract: engineerRuntimeContract,
-            guidance: buildGuidance(),
-          }),
-          runtime: { guidanceCatalog, checkpoint: true, trustedVerify: true },
-        },
-      };
+      let conditions;
+      try {
+        ensureBundle();
+        const guidanceCatalog = structuredClone(conditionInputs.guidanceCatalog);
+        conditions = {
+          generic: buildGenericCondition({ instruction: INSTRUCTION_PLACEHOLDER, limits }),
+          harness: {
+            ...buildHarnessCondition({
+              instruction: INSTRUCTION_PLACEHOLDER,
+              limits,
+              engineerContract: conditionInputs.engineerRuntimeContract,
+              guidance: conditionInputs.guidancePrompt,
+            }),
+            runtime: { guidanceCatalog, checkpoint: true, trustedVerify: true },
+          },
+        };
+      } catch (error) {
+        const reservedUsd = isPaidProfile(profile) ? budget.remainingUsd() : 0;
+        if (reservedUsd > 0) {
+          budget.reserve(reservedUsd, `${evalHost.id} repetition-setup-integrity-uncertain-reserve`);
+        }
+        const diagnostic = failureDiagnostic(
+          'repetition-setup',
+          diagnosticCode(error?.message),
+          error?.message
+        );
+        repetitionRuns.push({
+          generic: null,
+          harness: null,
+          pairedValid: false,
+          setupFailureKind: 'infrastructure',
+          setupFailureDiagnostics: [diagnostic],
+        });
+        if (isPaidProfile(profile)) {
+          paidSchedulingStop = {
+            task,
+            condition: null,
+            reason: 'pre-spend-or-post-spend-execution-integrity-failure',
+            reservedUsd,
+          };
+        }
+        break;
+      }
       const results = {};
       // Primary repetitions alternate AB/BA; the one-repetition regression rerun reverses
       // the original order. Fixed per-arm budgets keep either order equivalent.
@@ -1162,20 +2013,46 @@ export function buildLiveSteps({
           label: `${task}-${conditionId}-${suffix}`,
           parent: budget,
         });
-        results[conditionId] = runTrial({
-          evalHost,
-          condition: conditions[conditionId],
-          budget: trialBudget,
-          label: `${conditionId}-${suffix}`,
-          task,
-          identity: {
-            pairId,
-            repetitionId: shortHash({ pairId, repetition }),
-            repetitionIndex: repetition,
-            orderIndex: orderOffset + 1,
-            attempt,
-          },
-        });
+        try {
+          results[conditionId] = runTrial({
+            evalHost,
+            condition: conditions[conditionId],
+            budget: trialBudget,
+            label: `${conditionId}-${suffix}`,
+            task,
+            identity: {
+              pairId,
+              repetitionId: shortHash({ pairId, repetition }),
+              repetitionIndex: repetition,
+              orderIndex: orderOffset + 1,
+              attempt,
+            },
+          });
+        } catch (error) {
+          const reservedUsd = isPaidProfile(profile) ? trialBudget.remainingUsd() : 0;
+          if (reservedUsd > 0) {
+            trialBudget.reserve(reservedUsd, `${evalHost.id} ${conditionId} execution-integrity-uncertain-reserve`);
+          }
+          const diagnostic = failureDiagnostic(
+            'trial-execution',
+            diagnosticCode(error?.message),
+            error?.message
+          );
+          results[conditionId] = {
+            doc: null,
+            failureKind: 'infrastructure',
+            failureDiagnostics: [diagnostic],
+            stopPaidScheduling: isPaidProfile(profile),
+          };
+          if (isPaidProfile(profile)) {
+            paidSchedulingStop = {
+              task,
+              condition: conditionId,
+              reason: 'pre-spend-or-post-spend-execution-integrity-failure',
+              reservedUsd,
+            };
+          }
+        }
         if (results[conditionId].stopPaidScheduling) break;
       }
       const { generic, harness } = results;
@@ -1189,7 +2066,8 @@ export function buildLiveSteps({
       if (paidSchedulingStop && isPaidProfile(profile)) break;
     }
     const kinds = repetitionRuns.map((run) =>
-      run.generic?.failureKind ?? run.harness?.failureKind ?? (run.pairedValid ? null : 'infrastructure')
+      run.setupFailureKind ?? run.generic?.failureKind ?? run.harness?.failureKind ??
+        (run.pairedValid ? null : 'infrastructure')
     );
     const validRepetitions = repetitionRuns.filter((run) => run.pairedValid).length;
     let failureKind = null;
@@ -1198,13 +2076,28 @@ export function buildLiveSteps({
       for (const kind of kinds.filter(Boolean)) counts[kind] = (counts[kind] ?? 0) + 1;
       failureKind = Object.entries(counts).sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
     }
+    if (repetitionRuns.some((run) => run.setupFailureKind)) {
+      failureKind = 'infrastructure';
+    }
+    // A paid fail-stop can occur after enough earlier repetitions passed to
+    // satisfy the majority rule. That is still an incomplete experiment, not
+    // a comparable aggregate: the planned denominator and both arms must run.
+    if (failureKind == null && paidSchedulingStop && isPaidProfile(profile)) {
+      failureKind = paidSchedulingStop.reason === 'reconciled-cost-exceeded-trial-allocation'
+        ? 'budget'
+        : ['missing-done-telemetry', 'incomplete-or-unknown-billing'].includes(paidSchedulingStop.reason)
+          ? 'billing'
+          : 'infrastructure';
+    }
     const aggregateCondition = (conditionId) => {
       const attempted = repetitionRuns.filter((run) => run[conditionId]?.doc);
       if (!attempted.length) return null;
-      return aggregateRepetitionDocs(
+      const aggregate = aggregateRepetitionDocs(
         attempted.map((run) => run[conditionId].doc),
         { validMask: attempted.map((run) => run.pairedValid) }
       );
+      if (failureKind) aggregate.trialValidity = { valid: false, failureKind };
+      return aggregate;
     };
     return {
       host: evalHost.id,
@@ -1217,6 +2110,46 @@ export function buildLiveSteps({
       generic: aggregateCondition('generic'),
       harness: aggregateCondition('harness'),
       failureKind,
+      failureDiagnostics: repetitionRuns.flatMap((run, repetitionIndex) => [
+        ...(run.setupFailureDiagnostics ?? []).map((diagnostic) => ({
+          repetitionIndex: repetitionIndex + 1,
+          condition: null,
+          ...diagnostic,
+        })),
+        ...['generic', 'harness'].flatMap((condition) =>
+          (run[condition]?.failureDiagnostics ?? []).map((diagnostic) => ({
+            repetitionIndex: repetitionIndex + 1,
+            condition,
+            ...diagnostic,
+          }))
+        ),
+      ]).slice(0, 100),
+      paidSchedulingStop: paidSchedulingStop ? { ...paidSchedulingStop } : null,
+    };
+  }
+
+  function failedPair({ evalHost, task, budget, attempt, n, error }) {
+    const reservedUsd = isPaidProfile(evalHost.profile) ? budget.remainingUsd() : 0;
+    if (reservedUsd > 0) budget.reserve(reservedUsd, `${evalHost.id} structural-integrity-reserve`);
+    const diagnostic = failureDiagnostic('pair-execution', diagnosticCode(error?.message), error?.message);
+    paidSchedulingStop = isPaidProfile(evalHost.profile) ? {
+      task,
+      condition: null,
+      reason: 'pre-spend-or-post-spend-execution-integrity-failure',
+      reservedUsd,
+    } : paidSchedulingStop;
+    return {
+      host: evalHost.id,
+      task,
+      pairId: shortHash({ schema: 'eval-pair.v1', releaseSha, host: evalHost.id, task, attempt }),
+      repetitionCount: n,
+      attemptedRepetitionCount: 0,
+      validRepetitionCount: 0,
+      invalidRepetitionCount: 0,
+      generic: null,
+      harness: null,
+      failureKind: 'infrastructure',
+      failureDiagnostics: [{ repetitionIndex: null, condition: null, ...diagnostic }],
       paidSchedulingStop: paidSchedulingStop ? { ...paidSchedulingStop } : null,
     };
   }
@@ -1234,7 +2167,45 @@ export function buildLiveSteps({
           bundleDir: path.join(workDir, 'harness-bundle'),
           sourceIdentity,
           spawnImpl,
+          ambientEnv: env,
         });
+    const inspected = validateBundle(bundle.bundleDir, {
+      expectedManifestHash: bundle.manifestHash,
+      expectedSourceIdentity: sourceIdentity,
+    });
+    if (!inspected || inspected.manifestHash !== bundle.manifestHash) {
+      throw new Error('harness bundle re-attestation returned an invalid identity');
+    }
+    bundle = { ...bundle, ...inspected };
+    const conditionInputsPath = path.join(bundle.bundleDir, CONDITION_INPUTS_FILE);
+    const conditionInputsStat = fs.lstatSync(conditionInputsPath);
+    if (!conditionInputsStat.isFile() || conditionInputsStat.isSymbolicLink() || conditionInputsStat.size > 1024 * 1024) {
+      throw new Error('bundle condition inputs are missing or invalid');
+    }
+    let parsedConditionInputs;
+    try {
+      parsedConditionInputs = JSON.parse(fs.readFileSync(conditionInputsPath, 'utf8'));
+    } catch {
+      throw new Error('bundle condition inputs are not valid JSON');
+    }
+    const catalogEntry = parsedConditionInputs?.guidanceCatalog?.['ensure-plan'];
+    if (parsedConditionInputs?.version !== 'eval-condition-inputs.v1' ||
+        stableHash(parsedConditionInputs?.sourceIdentity) !== stableHash(sourceIdentity) ||
+        typeof parsedConditionInputs?.engineerRuntimeContract !== 'string' ||
+        parsedConditionInputs.engineerRuntimeContract.length === 0 ||
+        typeof parsedConditionInputs?.guidancePrompt !== 'string' ||
+        typeof catalogEntry?.content !== 'string' ||
+        catalogEntry.sha256 !== sha256(catalogEntry.content) ||
+        catalogEntry.sizeChars !== catalogEntry.content.length) {
+      throw new Error('bundle condition inputs do not match the evaluated release contract');
+    }
+    conditionInputs = parsedConditionInputs;
+    const commonTargets = bundle.mountPolicy?.commonTargets ?? [];
+    if (tasksOf(lock).some((entry) => entry.sandbox?.platform === 'linux/amd64') &&
+        !commonTargets.includes('/opt/eval-runtime/node-x64')) {
+      throw new Error('linux/amd64 task locks require a node-x64 runtime in the common bundle');
+    }
+    return bundle;
   }
 
   return {
@@ -1243,23 +2214,35 @@ export function buildLiveSteps({
     /** One fresh generic+harness pair per pinned task. */
     kimiPair: async (budget) => {
       if (!kimiHost.validateCredentials().ok) return null;
-      ensureBundle();
       const tasks = tasksOf(lock);
       const profile = kimiHost.profile;
       const configuredRerunUsd = Number(config.budget?.rerunUsd);
       const rerunnableArmCeiling = Number.isFinite(configuredRerunUsd) && configuredRerunUsd >= 0
         ? configuredRerunUsd / 2
         : Number.POSITIVE_INFINITY;
+      const configuredArmCeiling = Number(config.budget?.controlledArmCeilingUsd);
       const trialCeilingUsd = Math.min(
         profile.trialCeilingUsd,
-        budget.remainingUsd() / (tasks.length * repetitionCount * 2),
+        Number.isFinite(configuredArmCeiling) && configuredArmCeiling > 0
+          ? configuredArmCeiling
+          : budget.remainingUsd() / (tasks.length * repetitionCount * 2),
         rerunnableArmCeiling
       );
       const pairs = [];
+      try {
+        ensureBundle();
+      } catch (error) {
+        return [failedPair({ evalHost: kimiHost, task: tasks[0]?.task ?? 'unknown', budget, attempt: 'a', n: repetitionCount, error })];
+      }
       for (const entry of tasks) {
         if (paidSchedulingStop) break;
         primaryTrialCeilingByTask.set(entry.task, trialCeilingUsd);
-        pairs.push(taskPair({ evalHost: kimiHost, task: entry.task, budget, attempt: 'a', trialCeilingUsd }));
+        try {
+          pairs.push(taskPair({ evalHost: kimiHost, task: entry.task, budget, attempt: 'a', trialCeilingUsd }));
+        } catch (error) {
+          pairs.push(failedPair({ evalHost: kimiHost, task: entry.task, budget, attempt: 'a', n: repetitionCount, error }));
+          break;
+        }
       }
       return pairs;
     },
@@ -1269,10 +2252,15 @@ export function buildLiveSteps({
       if (paidSchedulingStop) return null;
       const primaryTrialCeilingUsd = primaryTrialCeilingByTask.get(task);
       if (!Number.isFinite(primaryTrialCeilingUsd)) return null;
-      ensureBundle();
       const profile = kimiHost.profile;
       const trialCeilingUsd = Math.min(profile.trialCeilingUsd, budget.remainingUsd() / 2, primaryTrialCeilingUsd);
-      return taskPair({ evalHost: kimiHost, task: task ?? tasksOf(lock)[0].task, budget, attempt: 'b', trialCeilingUsd, n: 1 });
+      const rerunTask = task ?? tasksOf(lock)[0].task;
+      try {
+        ensureBundle();
+        return taskPair({ evalHost: kimiHost, task: rerunTask, budget, attempt: 'b', trialCeilingUsd, n: 1 });
+      } catch (error) {
+        return failedPair({ evalHost: kimiHost, task: rerunTask, budget, attempt: 'b', n: 1, error });
+      }
     },
     frontierPair: null,
     // The local floor is deliberately opt-in: it adds wall time, not API
@@ -1280,15 +2268,19 @@ export function buildLiveSteps({
     // hidden multi-hour release dependency.
     gemmaPair: localScheduled
       ? async (budget) => {
-          ensureBundle();
-          return [taskPair({
-            evalHost: gemmaHost,
-            task: localTask.task,
-            budget,
-            attempt: 'local',
-            trialCeilingUsd: 0,
-            n: 1,
-          })];
+          try {
+            ensureBundle();
+            return [taskPair({
+              evalHost: gemmaHost,
+              task: localTask.task,
+              budget,
+              attempt: 'local',
+              trialCeilingUsd: 0,
+              n: 1,
+            })];
+          } catch (error) {
+            return [failedPair({ evalHost: gemmaHost, task: localTask.task, budget, attempt: 'local', n: 1, error })];
+          }
         }
       : null,
     smokes: null,

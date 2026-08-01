@@ -125,6 +125,42 @@ test('large guidance is disclosed as a bounded section index and paged section c
   assert.equal(lines.some((line) => line.type === 'exec'), false);
 });
 
+test('large guidance section indexes page without hiding headings after the cap', async () => {
+  const observed = [];
+  const body = Array.from({ length: 65 }, (_, index) => `## Section ${index + 1}\n\n${'bounded detail '.repeat(8)}`).join('\n\n');
+  const driver = {
+    next: (() => {
+      const actions = [
+        { type: 'tool', name: 'load_guidance', input: { name: 'many' }, _id: 'index-1' },
+        { type: 'tool', name: 'load_guidance', input: { name: 'many', cursor: 60 }, _id: 'index-2' },
+        { type: 'finish', answer: 'done', stopReason: 'model_finish' },
+      ];
+      let index = 0;
+      return async () => actions[index++];
+    })(),
+    checkpoint: () => {},
+    observe: (_action, result) => observed.push(result),
+  };
+  const { input, output } = pump();
+  await runStdioAgent({
+    driver,
+    input,
+    output,
+    systemPrompt: 's',
+    instruction: 'i',
+    guidanceCatalog: { many: { content: body } },
+  });
+  const first = JSON.parse(observed[0].stdout);
+  const second = JSON.parse(observed[1].stdout);
+  assert.equal(first.sections.length, 60);
+  assert.equal(first.totalSections, 65);
+  assert.equal(first.sectionsTruncated, true);
+  assert.equal(first.nextCursor, 60);
+  assert.deepEqual(second.sections, ['Section 61', 'Section 62', 'Section 63', 'Section 64', 'Section 65']);
+  assert.equal(second.nextCursor, null);
+  assert.equal(second.sectionsTruncated, false);
+});
+
 test('large guidance without headings remains available through whole-document pages', async () => {
   const observed = [];
   const body = 'follow this bounded procedure. '.repeat(100);
@@ -288,6 +324,83 @@ test('bridge-owned immutable verification promotes verified stop only on a compl
   assert.equal(lines.some((line) => line.type === 'exec'), false, 'trusted verification is not a model-selected shell command');
 });
 
+test('trusted verification at the step ceiling still permits one finalization request', async () => {
+  let marked = false;
+  const driver = {
+    next: (() => {
+      const actions = [
+        { type: 'tool', name: 'verify_harness', input: {}, _id: 'verify-at-limit' },
+        { type: 'finish', answer: 'final summary', stopReason: 'verified_stop' },
+      ];
+      let index = 0;
+      return async () => actions[index++];
+    })(),
+    observe: () => {},
+    markVerified: () => { marked = true; },
+  };
+  const { input, output } = pump({ resultFor: (line) => line.type === 'verify' ? ({
+    code: 0,
+    stdout: '{"outcome":"passed"}',
+    stderr: '',
+    trustedVerification: true,
+    passed: true,
+  }) : ({ code: 0, stdout: '', stderr: '' }) });
+  const done = await runStdioAgent({
+    driver,
+    input,
+    output,
+    systemPrompt: 's',
+    instruction: 'i',
+    enableTrustedVerify: true,
+    maxSteps: 1,
+  });
+  assert.equal(marked, true);
+  assert.equal(done.steps, 1);
+  assert.equal(done.answer, 'final summary');
+  assert.equal(done.stopReason, 'verified_stop');
+});
+
+test('unknown provider tools receive a correlated nonzero result', async () => {
+  const observed = [];
+  const driver = {
+    next: (() => {
+      const actions = [
+        { type: 'tool', name: 'not_advertised', input: {}, _id: 'unknown-1' },
+        { type: 'finish', answer: 'done', stopReason: 'model_finish' },
+      ];
+      let index = 0;
+      return async () => actions[index++];
+    })(),
+    observe: (_action, result) => observed.push(result),
+  };
+  const { input, output } = pump();
+  await runStdioAgent({ driver, input, output, systemPrompt: 's', instruction: 'i' });
+  assert.deepEqual(observed, [{ code: 127, stdout: '', stderr: 'unknown tool: not_advertised' }]);
+});
+
+test('malformed provider tool arguments are rejected locally before sandbox execution', async () => {
+  const observed = [];
+  const driver = {
+    next: (() => {
+      const actions = [
+        { type: 'tool', name: 'bash', input: {}, _id: 'bad-args', _argumentsValid: false, _argumentError: 'provider tool arguments were not a valid JSON object' },
+        { type: 'finish', answer: 'recovered', stopReason: 'model_finish' },
+      ];
+      let index = 0;
+      return async () => actions[index++];
+    })(),
+    observe: (_action, result) => observed.push(result),
+  };
+  const { input, output, lines } = pump();
+  const done = await runStdioAgent({ driver, input, output, systemPrompt: 's', instruction: 'i' });
+  assert.equal(done.stopReason, 'model_finish');
+  assert.equal(lines.some((line) => line.type === 'exec'), false);
+  assert.equal(observed.length, 1);
+  assert.equal(observed[0].code, 126);
+  assert.equal(observed[0].containmentMode, 'bridge-local');
+  assert.equal(observed[0].containmentComplete, true);
+});
+
 test('happy path: execs stream out, results stream back into the driver, done carries the answer', async () => {
   const observed = [];
   const driver = {
@@ -330,11 +443,16 @@ test('a provider failure surfaces as provider_error with its classification', as
 });
 
 test('the step ceiling ends the run with max_steps', async () => {
-  const driver = { next: async () => ({ type: 'tool', name: 'bash', input: { command: 'true' } }) };
+  const suppressed = [];
+  const driver = {
+    next: async () => ({ type: 'tool', name: 'bash', input: { command: 'true' } }),
+    suppressPending: (reason) => suppressed.push(reason),
+  };
   const { input, output } = pump();
   const done = await runStdioAgent({ driver, input, output, maxSteps: 3, systemPrompt: 's', instruction: 'i' });
   assert.equal(done.stopReason, 'max_steps');
   assert.equal(done.steps, 3);
+  assert.deepEqual(suppressed, ['step_ceiling']);
 });
 
 test('a budget-exhausted finish passes its stop reason through', async () => {

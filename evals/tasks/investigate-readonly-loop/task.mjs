@@ -30,10 +30,10 @@ const CANONICAL = [
   },
 ];
 
-export async function run() {
+export async function run(ctx = {}) {
   const ws = materializeFixture('payment-service');
   try {
-    const driver = pickDriver(CANONICAL, { transcriptFile: path.join(here, 'transcripts', 'in-session.json') });
+    const driver = pickDriver(CANONICAL, { transcriptFile: path.join(here, 'transcripts', 'in-session.json'), mode: ctx.agentMode });
     const loop = await runAgentLoop({ workspace: ws, system: engineerContract, instruction: fs.readFileSync(path.join(here, 'instruction.md'), 'utf8'), driver });
     const t = loop.trajectory;
     const dirty = spawnSync('git', ['-C', ws, 'status', '--porcelain', '--', 'src', 'docs'], { encoding: 'utf8' }).stdout.trim();

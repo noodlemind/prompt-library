@@ -15,21 +15,28 @@
 const PER_TOKEN = 1 / 1_000_000;
 
 function nonNegativeInt(value) {
-  return typeof value === 'number' && Number.isFinite(value) && value >= 0;
+  return Number.isSafeInteger(value) && value >= 0;
 }
 
-/** Provider-reported usage → { usd, promptTokens, cachedTokens, outputTokens } | null. */
+/** Provider-reported usage → cost plus an honest cache-detail completeness marker. */
 export function costOfUsage(usage, pricing) {
   if (!usage || !nonNegativeInt(usage.prompt_tokens) || !nonNegativeInt(usage.completion_tokens)) return null;
   const promptTokens = usage.prompt_tokens;
   const outputTokens = usage.completion_tokens;
   const reportedCached = usage.prompt_tokens_details?.cached_tokens;
-  const cachedTokens = nonNegativeInt(reportedCached) ? Math.min(reportedCached, promptTokens) : 0;
+  const cachedTokensComplete = nonNegativeInt(reportedCached) && reportedCached <= promptTokens;
+  const cachedTokensForCost = cachedTokensComplete ? reportedCached : 0;
   const usd =
-    (promptTokens - cachedTokens) * pricing.inputPerM * PER_TOKEN +
-    cachedTokens * pricing.cachedInputPerM * PER_TOKEN +
+    (promptTokens - cachedTokensForCost) * pricing.inputPerM * PER_TOKEN +
+    cachedTokensForCost * pricing.cachedInputPerM * PER_TOKEN +
     outputTokens * pricing.outputPerM * PER_TOKEN;
-  return { usd, promptTokens, cachedTokens, outputTokens };
+  return {
+    usd,
+    promptTokens,
+    cachedTokens: cachedTokensComplete ? cachedTokensForCost : null,
+    cachedTokensComplete,
+    outputTokens,
+  };
 }
 
 /** Worst case for the next request: all input uncached, output at its maximum. */
@@ -52,6 +59,8 @@ export function createBudget({ ceilingUsd, label = 'budget', parent = null } = {
     throw new Error(`budget ceilingUsd must be a non-negative number, got ${ceilingUsd}`);
   }
   let spent = 0;
+  let knownSpent = 0;
+  let uncertainReserved = 0;
   let exhausted = false;
   let breached = false;
   const events = [];
@@ -66,11 +75,20 @@ export function createBudget({ ceilingUsd, label = 'budget', parent = null } = {
       return breached;
     },
     spentUsd: () => spent,
+    knownReconciledSpendUsd: () => knownSpent,
+    uncertainReservedUsd: () => uncertainReserved,
+    accountedExposureUsd: () => spent,
     overrunUsd: () => Number(Math.max(0, spent - ceilingUsd).toFixed(12)),
     remainingUsd: () => Math.max(0, ceilingUsd - spent),
     events: () => events.slice(),
     /** Would spending `estimateUsd` cross this ceiling or any parent's? */
     precheck(estimateUsd) {
+      if (!(typeof estimateUsd === 'number' && Number.isFinite(estimateUsd)) || estimateUsd < 0) {
+        exhausted = true;
+        const reason = `budget_exhausted: ${label} received an invalid request estimate`;
+        events.push({ type: 'budget_invalid_estimate', label, ceilingUsd, spentUsd: spent });
+        return { allowed: false, reason };
+      }
       if (spent + estimateUsd > ceilingUsd) {
         exhausted = true;
         const reason = `budget_exhausted: ${label} ceiling $${ceilingUsd} would be crossed (spent $${spent.toFixed(4)}, next up to $${estimateUsd.toFixed(4)})`;
@@ -96,6 +114,7 @@ export function createBudget({ ceilingUsd, label = 'budget', parent = null } = {
         throw new Error(`budget charge must be a non-negative number, got ${usd}`);
       }
       spent += usd;
+      knownSpent += usd;
       events.push({ type: 'charge', label, usd, note, spentUsd: spent });
       if (spent > ceilingUsd) {
         breached = true;
@@ -110,6 +129,32 @@ export function createBudget({ ceilingUsd, label = 'budget', parent = null } = {
         });
       }
       parent?.charge(usd, note);
+    },
+    /**
+     * Conservatively consume allowance whose billing outcome is unknown without
+     * misreporting that exposure as known provider spend.
+     */
+    reserve(usd, note = '') {
+      if (usd == null) return;
+      if (!(typeof usd === 'number' && Number.isFinite(usd)) || usd < 0) {
+        throw new Error(`budget reserve must be a non-negative number, got ${usd}`);
+      }
+      spent += usd;
+      uncertainReserved += usd;
+      events.push({ type: 'reserve', label, usd, note, spentUsd: spent, uncertainReservedUsd: uncertainReserved });
+      if (spent > ceilingUsd) {
+        breached = true;
+        exhausted = true;
+        events.push({
+          type: 'budget_breach',
+          label,
+          ceilingUsd,
+          spentUsd: spent,
+          overrunUsd: Number((spent - ceilingUsd).toFixed(12)),
+          note,
+        });
+      }
+      parent?.reserve(usd, note);
     },
   };
   return budget;

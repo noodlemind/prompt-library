@@ -171,12 +171,22 @@ function guidanceResult(name, entry, input) {
     };
   }
   if (!input?.section) {
+    const cursor = Number.isInteger(input?.cursor) && input.cursor >= 0 ? input.cursor : 0;
+    if (cursor > headings.length) {
+      return { code: 2, stdout: '', stderr: `guidance section cursor out of range: ${cursor}`, guidance: metadata };
+    }
+    const sectionPage = headings.slice(cursor, cursor + 60);
+    const nextCursor = cursor + sectionPage.length < headings.length ? cursor + sectionPage.length : null;
     return {
       code: 0,
       stdout: JSON.stringify({
         name,
-        sections: headings.slice(0, 60).map((heading) => heading.title),
-        instruction: 'Call load_guidance again with section and cursor; follow nextCursor until null.',
+        cursor,
+        sections: sectionPage.map((heading) => heading.title),
+        sectionsTruncated: nextCursor != null,
+        nextCursor,
+        totalSections: headings.length,
+        instruction: 'Page the section list with cursor until nextCursor is null, then call load_guidance with section and cursor.',
       }),
       stderr: '',
       guidance: metadata,
@@ -264,6 +274,7 @@ export async function runStdioAgent({
 
   let execId = 0;
   let steps = 0;
+  let trustedFinalizationPending = false;
   const finish = (payload) => {
     let done = redactSecrets(
       { type: 'done', steps, telemetry: telemetry?.snapshot() ?? null, runtime, ...payload },
@@ -316,7 +327,7 @@ export async function runStdioAgent({
     return done;
   };
 
-  while (steps < maxSteps) {
+  while (steps < maxSteps || trustedFinalizationPending) {
     let action;
     try {
       action = await driver.next();
@@ -328,9 +339,42 @@ export async function runStdioAgent({
       });
     }
     if (!action || action.type === 'finish') {
-      return finish({ answer: action?.answer ?? null, stopReason: action?.stopReason ?? 'model_finish' });
+      return finish({
+        answer: action?.answer ?? null,
+        stopReason: trustedFinalizationPending ? 'verified_stop' : action?.stopReason ?? 'model_finish',
+      });
+    }
+    if (trustedFinalizationPending) {
+      driver.observe?.(action, {
+        code: 126,
+        stdout: '',
+        stderr: 'post-verification tool call suppressed',
+        stdoutTruncated: false,
+        stderrTruncated: false,
+        timedOut: false,
+        containmentMode: 'bridge-local',
+        containmentComplete: true,
+      });
+      return finish({
+        answer: 'Harness verification passed.',
+        stopReason: 'verified_stop',
+        detail: 'A post-verification tool call was suppressed by the bridge.',
+      });
     }
     steps += 1;
+    if (action._argumentsValid === false) {
+      driver.observe?.(action, {
+        code: 126,
+        stdout: '',
+        stderr: action._argumentError || 'provider tool arguments were invalid',
+        stdoutTruncated: false,
+        stderrTruncated: false,
+        timedOut: false,
+        containmentMode: 'bridge-local',
+        containmentComplete: true,
+      });
+      continue;
+    }
     if (action.name === 'load_guidance' && guidanceCatalog != null) {
       const name = String(action.input?.name ?? '');
       const entry = Object.hasOwn(guidanceCatalog, name) ? guidanceCatalog[name] : null;
@@ -354,7 +398,16 @@ export async function runStdioAgent({
       if (result.type !== 'verification_result' || result.id !== id) {
         return finish({ answer: null, stopReason: 'protocol_error', detail: JSON.stringify(result).slice(0, 200) });
       }
-      const observation = { code: result.code, stdout: result.stdout, stderr: result.stderr };
+      const observation = {
+        code: result.code,
+        stdout: result.stdout,
+        stderr: result.stderr,
+        ...(typeof result.stdoutTruncated === 'boolean' ? { stdoutTruncated: result.stdoutTruncated } : {}),
+        ...(typeof result.stderrTruncated === 'boolean' ? { stderrTruncated: result.stderrTruncated } : {}),
+        ...(typeof result.timedOut === 'boolean' ? { timedOut: result.timedOut } : {}),
+        ...(typeof result.containmentMode === 'string' ? { containmentMode: result.containmentMode } : {}),
+        ...(typeof result.containmentComplete === 'boolean' ? { containmentComplete: result.containmentComplete } : {}),
+      };
       driver.observe?.(action, observation);
       if (result.trustedVerification === true && result.passed === true) {
         driver.markVerified?.({
@@ -362,15 +415,26 @@ export async function runStdioAgent({
           evidencePath: result.evidencePath ?? null,
           fallbackAnswer: 'Harness verification passed.',
         });
+        trustedFinalizationPending = true;
       }
       continue;
     }
     if (action.name !== 'bash') {
-      driver.observe?.(action, { error: `unknown tool: ${action.name}` });
+      driver.observe?.(action, { code: 127, stdout: '', stderr: `unknown tool: ${action.name}` });
       continue;
     }
     const command = String(action.input?.command ?? '');
     if (secrets.some((secret) => command.includes(secret))) {
+      driver.observe?.(action, {
+        code: 126,
+        stdout: '',
+        stderr: 'provider tool command contained an active credential and was blocked',
+        stdoutTruncated: false,
+        stderrTruncated: false,
+        timedOut: false,
+        containmentMode: 'bridge-local',
+        containmentComplete: true,
+      });
       return finish({
         answer: null,
         stopReason: 'secret_reflection_blocked',
@@ -381,6 +445,16 @@ export async function runStdioAgent({
     send({ type: 'exec', id, command, timeoutMs: execTimeoutMs });
     const result = redactSecrets(await nextLine(), secrets);
     if (result.type !== 'result' || result.id !== id) {
+      driver.observe?.(action, {
+        code: 125,
+        stdout: '',
+        stderr: 'sandbox execution protocol did not return the correlated result',
+        stdoutTruncated: false,
+        stderrTruncated: false,
+        timedOut: false,
+        containmentMode: 'bridge-protocol-error',
+        containmentComplete: false,
+      });
       return finish({ answer: null, stopReason: 'protocol_error', detail: JSON.stringify(result).slice(0, 200) });
     }
     const observation = {
@@ -389,9 +463,13 @@ export async function runStdioAgent({
       stderr: result.stderr,
       ...(typeof result.stdoutTruncated === 'boolean' ? { stdoutTruncated: result.stdoutTruncated } : {}),
       ...(typeof result.stderrTruncated === 'boolean' ? { stderrTruncated: result.stderrTruncated } : {}),
+      ...(typeof result.timedOut === 'boolean' ? { timedOut: result.timedOut } : {}),
+      ...(typeof result.containmentMode === 'string' ? { containmentMode: result.containmentMode } : {}),
+      ...(typeof result.containmentComplete === 'boolean' ? { containmentComplete: result.containmentComplete } : {}),
     };
     driver.observe?.(action, observation);
   }
+  driver.suppressPending?.('step_ceiling');
   return finish({ answer: null, stopReason: 'max_steps' });
 }
 
@@ -406,6 +484,9 @@ async function main() {
   const instructionPath = flag('--instruction');
   const instruction = instructionPath ? fs.readFileSync(instructionPath, 'utf8') : condition.instruction;
   const profile = getProfile(condition.profileId ?? 'kimi-k2.7-code');
+  const effectiveProfile = typeof condition.providerUrl === 'string' && condition.providerUrl.length > 0
+    ? { ...profile, url: condition.providerUrl }
+    : profile;
   const apiKeyEnv = condition.apiKeyEnv ?? 'OPENROUTER_API_KEY';
   const activeApiKey = process.env[apiKeyEnv] ?? null;
   const apiKey = activeApiKey ?? 'local';
@@ -414,7 +495,7 @@ async function main() {
     ceilingUsd: condition.limits?.trialCeilingUsd ?? profile.trialCeilingUsd,
     label: `${condition.id}-trial`,
   });
-  const driver = openAiToolDriver({ profile, apiKey, budget, telemetry, maxTokens: condition.limits?.maxOutputTokens });
+  const driver = openAiToolDriver({ profile: effectiveProfile, apiKey, budget, telemetry, maxTokens: condition.limits?.maxOutputTokens });
   if (!driver) throw new Error('driver not configured: check profile and API key environment');
   // The runner reads the done file to charge the release budget and build the
   // eval-run document; runStdioAgent persists it before the stdout done line
@@ -438,7 +519,7 @@ async function main() {
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   main().catch((err) => {
     const activeEnvironmentSecrets = Object.entries(process.env)
-      .filter(([name, value]) => value && /(?:API_KEY|TOKEN|PASSWORD|SECRET)$/i.test(name))
+      .filter(([name, value]) => value && /(?:API_?KEY|TOKEN|PASSWORD|PASSWD|SECRET|CREDENTIAL)/i.test(name))
       .map(([, value]) => value);
     const done = redactSecrets(
       { type: 'done', answer: null, stopReason: 'bridge_error', detail: err.message },

@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { spawn, spawnSync } from 'node:child_process';
+import { once } from 'node:events';
 import { test } from 'node:test';
 import {
   parseReward,
@@ -65,6 +67,102 @@ test('hashTree is deterministic, content-sensitive, and path-sensitive', () => {
   assert.notEqual(hashTree(a), hashTree(b), 'path change changes the hash');
 });
 
+test('hashTree includes empty directories and regular-file mode in its typed manifest', (t) => {
+  const a = tmpdir();
+  const b = tmpdir();
+  fs.writeFileSync(path.join(a, 'run.sh'), '#!/bin/sh\n');
+  fs.writeFileSync(path.join(b, 'run.sh'), '#!/bin/sh\n');
+  assert.equal(hashTree(a), hashTree(b));
+
+  fs.mkdirSync(path.join(b, 'empty'));
+  assert.notEqual(hashTree(a), hashTree(b), 'an extra empty directory must change the digest');
+  fs.rmdirSync(path.join(b, 'empty'));
+
+  const beforeMode = fs.lstatSync(path.join(b, 'run.sh')).mode & 0o7777;
+  fs.chmodSync(path.join(b, 'run.sh'), beforeMode ^ 0o100);
+  const afterMode = fs.lstatSync(path.join(b, 'run.sh')).mode & 0o7777;
+  if (afterMode === beforeMode) t.skip('filesystem does not expose executable mode changes');
+  else assert.notEqual(hashTree(a), hashTree(b), 'a mode change must change the digest');
+});
+
+test('hashTree rejects symlinks instead of following or silently omitting them', (t) => {
+  const dir = tmpdir();
+  fs.writeFileSync(path.join(dir, 'target.txt'), 'inside');
+  try {
+    fs.symlinkSync('target.txt', path.join(dir, 'link.txt'));
+  } catch (error) {
+    if (['EPERM', 'ENOSYS'].includes(error.code)) return t.skip(`symlinks unavailable: ${error.code}`);
+    throw error;
+  }
+  assert.throws(() => hashTree(dir), /rejects symbolic link.*link\.txt/i);
+  assert.throws(() => hashTree(path.join(dir, 'link.txt')), /root must be a directory.*symbolic link/i);
+});
+
+test('hashTree rejects special filesystem nodes', (t) => {
+  if (process.platform === 'win32') return t.skip('mkfifo is not portable to Windows');
+  const dir = tmpdir();
+  const fifo = path.join(dir, 'stream');
+  const created = spawnSync('mkfifo', [fifo], { encoding: 'utf8' });
+  if (created.error || created.status !== 0) return t.skip(`mkfifo unavailable: ${created.error?.code ?? created.stderr}`);
+  assert.throws(() => hashTree(dir), /rejects FIFO.*stream/i);
+});
+
+test('hashTree enforces entry, byte, depth, and relative-path bounds', () => {
+  const dir = tmpdir();
+  fs.writeFileSync(path.join(dir, 'data.txt'), '12345');
+  fs.mkdirSync(path.join(dir, 'nested'));
+  fs.mkdirSync(path.join(dir, 'nested', 'deeper'));
+  assert.throws(() => hashTree(dir, { maxEntries: 1 }), /exceeds maxEntries 1/);
+  assert.throws(() => hashTree(dir, { maxBytes: 4 }), /exceeds maxBytes 4/);
+  assert.throws(() => hashTree(dir, { maxDepth: 1 }), /exceeds maxDepth 1/);
+  assert.throws(() => hashTree(dir, { maxPathLength: 4 }), /exceeds maxPathLength 4/);
+  assert.throws(() => hashTree(dir, { maxEntries: 50_001 }), /maxEntries must be an integer/);
+});
+
+test('hashTree rejects an unreadable regular file when permissions are enforced', (t) => {
+  const dir = tmpdir();
+  const file = path.join(dir, 'private.txt');
+  fs.writeFileSync(file, 'secret');
+  fs.chmodSync(file, 0);
+  try {
+    let error = null;
+    try {
+      hashTree(dir);
+    } catch (caught) {
+      error = caught;
+    }
+    if (!error) return t.skip('current user can read mode-000 files');
+    assert.match(error.message, /cannot open file private\.txt.*(?:EACCES|EPERM)/i);
+  } finally {
+    fs.chmodSync(file, 0o600);
+  }
+});
+
+test('hashTree detects a file mutated during inspection or reading', async () => {
+  const dir = tmpdir();
+  const file = path.join(dir, 'changing.bin');
+  fs.writeFileSync(file, Buffer.alloc(8 * 1024 * 1024));
+  const script = [
+    "const fs = require('node:fs');",
+    'const fd = fs.openSync(process.argv[1], \'r+\');',
+    "process.stdout.write('ready\\n');",
+    'const bytes = [Buffer.from([1]), Buffer.from([2])];',
+    'const end = Date.now() + 10_000;',
+    'let index = 0;',
+    'while (Date.now() < end) fs.writeSync(fd, bytes[index++ & 1], 0, 1, 0);',
+    'fs.closeSync(fd);',
+  ].join('\n');
+  const mutator = spawn(process.execPath, ['-e', script, file], { stdio: ['ignore', 'pipe', 'ignore'] });
+  const exited = once(mutator, 'exit');
+  await once(mutator.stdout, 'data');
+  try {
+    assert.throws(() => hashTree(dir), /detected mutation/i);
+  } finally {
+    mutator.kill('SIGKILL');
+    await exited;
+  }
+});
+
 test('collectVerifierEvidence prefers reward.json, captures pytest counts, and hashes the tree', () => {
   const trial = tmpdir();
   const verifierDir = path.join(trial, 'logs', 'verifier');
@@ -77,6 +175,16 @@ test('collectVerifierEvidence prefers reward.json, captures pytest counts, and h
   assert.match(evidence.rewardPath, /reward\.json$/);
   assert.deepEqual(evidence.pytest, { passed: 4, failed: 2 });
   assert.match(evidence.treeHash, /^[0-9a-f]{64}$/);
+});
+
+test('collectVerifierEvidence bounds official files before allocating or parsing them', () => {
+  const trial = tmpdir();
+  const verifierDir = path.join(trial, 'logs', 'verifier');
+  fs.mkdirSync(verifierDir, { recursive: true });
+  const reward = path.join(verifierDir, 'reward.txt');
+  fs.writeFileSync(reward, '1');
+  fs.truncateSync(reward, 4 * 1024 * 1024 + 1);
+  assert.throws(() => collectVerifierEvidence(trial), /evidence file exceeds 4194304 bytes.*reward\.txt/i);
 });
 
 test('an ambiguous reward.json falls back to a valid reward.txt', () => {

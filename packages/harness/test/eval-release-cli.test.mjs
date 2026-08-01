@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { createRequire } from 'node:module';
 import { test } from 'node:test';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { stampTaskLock } from '../../../evals/external/terminal_bench/harbor-adapter.mjs';
@@ -20,6 +21,7 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'
 const BASE_LOCK = JSON.parse(fs.readFileSync(path.join(repoRoot, 'evals', 'external', 'terminal_bench', 'task-lock.json'), 'utf8'));
 const SENTINEL_PROVIDER_KEY = 'sentinel-openrouter-secret-do-not-persist';
 const harnessVersion = JSON.parse(fs.readFileSync(path.join(repoRoot, 'packages', 'harness', 'package.json'), 'utf8')).version;
+const YAML = createRequire(import.meta.url)('yaml');
 
 function tmpdir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'tb-cli-'));
@@ -35,29 +37,70 @@ function filesUnder(root) {
   return files;
 }
 
-function cleanGitView() {
-  const gitRoot = tmpdir();
-  const gitDir = path.join(gitRoot, '.git');
-  const gitEnv = { ...process.env, GIT_DIR: gitDir, GIT_WORK_TREE: repoRoot };
-  const run = (args, env = gitEnv) => {
-    const result = spawnSync('git', args, { cwd: repoRoot, env, encoding: 'utf8' });
-    assert.equal(result.status, 0, result.stderr || result.stdout);
-    return result.stdout.trim();
-  };
-  run(['init', gitRoot], process.env);
-  run(['add', '-A']);
-  run(['-c', 'user.name=Eval Test', '-c', 'user.email=eval-test@example.invalid', 'commit', '-m', 'clean eval source snapshot']);
-  const releaseSha = run(['rev-parse', '--verify', 'HEAD']);
+function fixtureGit(sourceRoot, args) {
+  const env = { ...process.env };
+  for (const key of Object.keys(env)) {
+    if (/^GIT_/i.test(key)) delete env[key];
+  }
+  const result = spawnSync('git', args, { cwd: sourceRoot, env, encoding: 'utf8' });
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  return result.stdout.trim();
+}
+
+function commitFixtureMutation(sourceRoot, message) {
+  fixtureGit(sourceRoot, ['add', '-A']);
+  fixtureGit(sourceRoot, ['-c', 'user.name=Eval Test', '-c', 'user.email=eval-test@example.invalid', 'commit', '-m', message]);
+}
+
+function cleanGitView(taskLock, { attestTrust = true } = {}) {
+  const sourceRoot = tmpdir();
+  fs.cpSync(repoRoot, sourceRoot, {
+    recursive: true,
+    filter: (source) => path.resolve(source) !== path.join(repoRoot, '.git'),
+  });
+  fs.writeFileSync(
+    path.join(sourceRoot, 'evals', 'external', 'terminal_bench', 'task-lock.json'),
+    `${JSON.stringify(taskLock, null, 2)}\n`
+  );
+  const profilePath = path.join(sourceRoot, 'evals', 'config', 'release-canary.yaml');
+  const profile = YAML.parse(fs.readFileSync(profilePath, 'utf8'));
+  if (attestTrust) {
+    profile.releaseTrust.status = 'attested';
+    for (const capability of Object.keys(profile.releaseTrust.capabilities)) {
+      profile.releaseTrust.capabilities[capability] = true;
+    }
+    profile.claimPolicy.minimumHarnessSolvedTasks = 1;
+  }
+  fs.writeFileSync(profilePath, YAML.stringify(profile));
+  fixtureGit(sourceRoot, ['init']);
+  commitFixtureMutation(sourceRoot, 'clean eval source snapshot');
+  const releaseSha = fixtureGit(sourceRoot, ['rev-parse', '--verify', 'HEAD']);
   assert.match(releaseSha, /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/);
-  assert.equal(run(['status', '--porcelain=v1', '--untracked-files=all']), '');
-  return { gitEnv: { GIT_DIR: gitDir, GIT_WORK_TREE: repoRoot }, releaseSha };
+  assert.equal(fixtureGit(sourceRoot, ['status', '--porcelain=v1', '--untracked-files=all']), '');
+  return { sourceRoot, releaseSha };
 }
 
 function snapshotFixtureSource({ repoRoot: sourceRoot, destination }) {
+  fs.mkdirSync(path.join(destination, '.github', 'agents'), { recursive: true });
+  fs.mkdirSync(path.join(destination, '.github', 'skills'), { recursive: true });
   fs.mkdirSync(path.join(destination, 'packages'), { recursive: true });
   fs.mkdirSync(path.join(destination, 'evals', 'external', 'terminal_bench'), { recursive: true });
+  fs.copyFileSync(
+    path.join(sourceRoot, '.github', 'agents', 'engineer.agent.md'),
+    path.join(destination, '.github', 'agents', 'engineer.agent.md')
+  );
+  fs.cpSync(
+    path.join(sourceRoot, '.github', 'skills', 'ensure-plan'),
+    path.join(destination, '.github', 'skills', 'ensure-plan'),
+    { recursive: true }
+  );
   fs.cpSync(path.join(sourceRoot, 'packages', 'harness'), path.join(destination, 'packages', 'harness'), { recursive: true });
-  for (const file of ['evidence-probe.mjs', 'bounded-exec.mjs']) {
+  fs.copyFileSync(path.join(sourceRoot, 'evals', '__init__.py'), path.join(destination, 'evals', '__init__.py'));
+  for (const directory of ['config', 'hosts', 'lib']) {
+    fs.cpSync(path.join(sourceRoot, 'evals', directory), path.join(destination, 'evals', directory), { recursive: true });
+  }
+  fs.copyFileSync(path.join(sourceRoot, 'evals', 'external', '__init__.py'), path.join(destination, 'evals', 'external', '__init__.py'));
+  for (const file of ['__init__.py', 'agent.mjs', 'harbor_agent.py', 'evidence-probe.mjs', 'bounded-exec.mjs']) {
     fs.copyFileSync(
       path.join(sourceRoot, 'evals', 'external', 'terminal_bench', file),
       path.join(destination, 'evals', 'external', 'terminal_bench', file)
@@ -65,13 +108,17 @@ function snapshotFixtureSource({ repoRoot: sourceRoot, destination }) {
   }
 }
 
-function setupFixture({ taskNames = ['cobol-modernization'] } = {}) {
-  const { gitEnv, releaseSha } = cleanGitView();
+function setupFixture({ taskNames = ['cobol-modernization'], attestTrust = true } = {}) {
   const datasetDir = tmpdir();
   for (const taskName of taskNames) {
     const taskDir = path.join(datasetDir, taskName);
     fs.mkdirSync(taskDir, { recursive: true });
     fs.writeFileSync(path.join(taskDir, 'instruction.md'), `Complete ${taskName}.`);
+    const sandbox = BASE_LOCK.tasks.find((entry) => entry.task === taskName)?.sandbox;
+    assert.ok(sandbox, `BASE_LOCK must define sandbox identity for fixture task ${taskName}`);
+    fs.writeFileSync(path.join(taskDir, 'task.toml'), `[environment]\n` +
+      `docker_image = "${sandbox.sourceImage}"\ncpus = ${sandbox.cpus}\n` +
+      `memory = "${sandbox.memoryMb / 1024}G"\nstorage = "${sandbox.storageMb / 1024}G"\n`);
   }
   const lockFile = path.join(tmpdir(), 'lock.json');
   let selectedLock = { ...BASE_LOCK, tasks: BASE_LOCK.tasks.filter((entry) => taskNames.includes(entry.task)) };
@@ -79,6 +126,7 @@ function setupFixture({ taskNames = ['cobol-modernization'] } = {}) {
     selectedLock = stampTaskLock(path.join(datasetDir, taskName), selectedLock, taskName);
   }
   fs.writeFileSync(lockFile, JSON.stringify(selectedLock));
+  const { sourceRoot, releaseSha } = cleanGitView(selectedLock, { attestTrust });
 
   const binDir = tmpdir();
   const auditFile = path.join(binDir, 'harbor-audit.jsonl');
@@ -126,10 +174,50 @@ const tools = runtimeBridgeTools({
   enableTrustedVerify: runtimeConfig.trustedVerify === true,
 });
 const digest = (value) => crypto.createHash('sha256').update(String(value)).digest('hex');
+const providerTools = tools.map((tool) => ({
+  type: 'function',
+  function: { name: tool.name, description: tool.description, parameters: tool.parameters },
+}));
+const requestContract = {
+  toolSchemaHash: digest(JSON.stringify(providerTools)),
+  toolCount: providerTools.length,
+  toolMode: 'full',
+  postVerify: false,
+};
+const requestControls = {
+  endpointHash: digest(condition.providerUrl),
+  model: 'moonshotai/kimi-k2.7-code-20260612',
+  maxTokens: condition.limits.maxOutputTokens,
+  temperaturePresent: false,
+  temperature: null,
+  reasoningPresent: false,
+  reasoning: null,
+  toolChoice: 'auto',
+  providerPresent: true,
+  providerOrder: ['moonshotai/int4'],
+  providerAllowFallbacks: false,
+  unexpectedRequestFields: [],
+};
+Object.assign(requestContract, requestControls, {
+  requestBodyHash: '9'.repeat(64),
+  requestControlHash: digest(JSON.stringify(requestControls)),
+});
 const instruction = fs.readFileSync(
   path.join(args[args.indexOf('-p') + 1], args[args.indexOf('--include-task-name') + 1], 'instruction.md'),
   'utf8'
 );
+Object.assign(requestContract, {
+  systemPromptHash: digest(condition.systemPrompt),
+  instructionHash: digest(instruction),
+  systemMessageCount: 1,
+  instructionMessageCount: 1,
+  systemPromptPosition: 0,
+  instructionPosition: 1,
+  durableStateMessageCount: 0,
+  durableStateMessageIndex: null,
+  durableStateMessageHash: null,
+  unexpectedSystemMessageCount: 0,
+});
 fs.writeFileSync(agentEnv.HARNESS_EVAL_TB_TELEMETRY_FILE, JSON.stringify({
   type: 'done', answer: 'ok', stopReason: 'model_finish', steps: 6,
   runtime: {
@@ -138,32 +226,63 @@ fs.writeFileSync(agentEnv.HARNESS_EVAL_TB_TELEMETRY_FILE, JSON.stringify({
     toolSchemaHash: digest(JSON.stringify(tools)),
     toolCount: tools.length,
   },
+  mountEvidence: {
+    version: 'eval-mount-policy.v1',
+    source: 'sandbox-observed',
+    targets: JSON.parse(args[args.indexOf('--mounts') + 1]).map((mount) => mount.target),
+    existingTargets: JSON.parse(args[args.indexOf('--mounts') + 1]).map((mount) => mount.target),
+    allReadOnly: true,
+    complete: true,
+  },
   workspaceEvidence: {
     available: true,
-    collectionMode: 'bounded-content-manifest-v1',
+    collectionMode: 'bounded-typed-content-plus-git-state-v3',
     beforeManifestHash: 'a'.repeat(64),
     afterManifestHash: 'b'.repeat(64),
     diffHash: 'c'.repeat(64),
     changedPaths: ['src/result.txt'],
     changedPathCount: 1,
     changedPathsTruncated: false,
+    gitStateAvailable: true,
+    gitStatePresent: true,
+    beforeGitStateHash: 'd'.repeat(64),
+    afterGitStateHash: 'd'.repeat(64),
+    gitStateChanged: false,
   },
   harnessEvents: [],
   harnessEventEvidence: { available: true, complete: true, reason: null, retainedEvents: 0, sourceTruncated: false, projectionRejectedEvents: 0, projectionRejectedChecks: 0 },
   enforcement: { hooksActive: false, policyBypassAchieved: false },
   telemetry: {
-    totals: { requests: 4, modelRequests: 4, providerAttempts: 4, providerResponses: 4, providerErrors: 0, retries: 0, openAttempts: 0, unknownBillingAttempts: 0, missingUsage: 0, promptTokens: 3000, cachedTokens: 500, reasoningTokens: 0, outputTokens: 700, localCostUsd: 0.015, providerCostUsd: 0.02, usageComplete: true, providerCostComplete: true, billingComplete: true, costComplete: true },
+    totals: { requests: 4, modelRequests: 4, providerAttempts: 4, providerResponses: 4, providerErrors: 0, retries: 0, openAttempts: 0, unknownBillingAttempts: 0, missingUsage: 0, promptTokens: 3000, cachedTokens: 500, reasoningTokens: 0, cachedTokensComplete: true, reasoningTokensComplete: true, outputTokens: 700, localCostUsd: 0.00527, providerCostUsd: 0.02, reconciledCostUsd: 0.02, usageComplete: true, providerCostComplete: true, billingComplete: true, costComplete: true },
     events: Array.from({ length: 4 }, (_, index) => [
-      { seq: index * 3, type: 'request', requestId: 'r' + (index + 1) },
+      { seq: index * 3, type: 'request', requestId: 'r' + (index + 1), ...requestContract },
       { seq: index * 3 + 1, type: 'request_attempt', requestId: 'r' + (index + 1), attemptId: 'a' + (index + 1) },
-      { seq: index * 3 + 2, type: 'response', requestId: 'r' + (index + 1), attemptId: 'a' + (index + 1), model: 'moonshotai/kimi-k2.7-code', provider: 'Moonshot AI', generationId: 'g' + (index + 1) },
+      { seq: index * 3 + 2, type: 'response', requestId: 'r' + (index + 1), attemptId: 'a' + (index + 1), model: 'moonshotai/kimi-k2.7-code-20260612', provider: 'Moonshot AI', generationId: 'g' + (index + 1), billingStatus: 'reported', usage: { promptTokens: 750, cachedTokens: 125, cachedTokensComplete: true, reasoningTokens: 0, reasoningTokensComplete: true, outputTokens: 175, localCostUsd: 0.0013175, providerCostUsd: 0.005, reconciledCostUsd: 0.005 } },
     ]).flat(),
   },
 }));
 process.exit(0);
 `
   );
-  fs.writeFileSync(path.join(binDir, 'harbor'), `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(fakeHarbor)} "$@"\n`, { mode: 0o755 });
+  const harborBin = path.join(binDir, 'harbor');
+  fs.writeFileSync(harborBin, `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(fakeHarbor)} "$@"\n`, { mode: 0o755 });
+  const harborSha256 = crypto.createHash('sha256').update(fs.readFileSync(harborBin)).digest('hex');
+  const fakeDocker = path.join(binDir, 'fake-docker.mjs');
+  const imageMap = Object.fromEntries(selectedLock.tasks.map((entry) => [entry.sandbox.immutableImage, {
+    Id: entry.sandbox.imageId,
+    Os: entry.sandbox.platform.split('/')[0],
+    Architecture: entry.sandbox.platform.split('/')[1],
+    RepoDigests: [entry.sandbox.immutableImage],
+  }]));
+  fs.writeFileSync(fakeDocker, `
+const args = process.argv.slice(2);
+const images = ${JSON.stringify(imageMap)};
+if (args[0] !== 'image' || args[1] !== 'inspect' || !images[args[2]]) process.exit(3);
+process.stdout.write(JSON.stringify([images[args[2]]]));
+`);
+  const dockerBin = path.join(binDir, 'docker-fixture');
+  fs.writeFileSync(dockerBin, `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(fakeDocker)} "$@"\n`, { mode: 0o755 });
+  const dockerSha256 = crypto.createHash('sha256').update(fs.readFileSync(dockerBin)).digest('hex');
   const fetchPreload = path.join(binDir, 'provider-key-fetch-preload.mjs');
   fs.writeFileSync(
     fetchPreload,
@@ -173,10 +292,20 @@ process.exit(0);
     };\n`
   );
   const bundleFixtureRoot = tmpdir();
+  fs.mkdirSync(path.join(bundleFixtureRoot, '.github', 'agents'), { recursive: true });
+  fs.mkdirSync(path.join(bundleFixtureRoot, '.github', 'skills', 'ensure-plan'), { recursive: true });
   fs.mkdirSync(path.join(bundleFixtureRoot, 'packages', 'harness', 'bin'), { recursive: true });
-  fs.mkdirSync(path.join(bundleFixtureRoot, 'evals', 'external', 'terminal_bench'), { recursive: true });
+  fs.cpSync(path.join(repoRoot, 'evals'), path.join(bundleFixtureRoot, 'evals'), { recursive: true });
   fs.writeFileSync(path.join(bundleFixtureRoot, 'packages', 'harness', 'package.json'), JSON.stringify({ name: '@fixture/harness' }));
   fs.writeFileSync(path.join(bundleFixtureRoot, 'packages', 'harness', 'bin', 'harness.mjs'), 'process.stdout.write("ok\\n")');
+  fs.writeFileSync(
+    path.join(bundleFixtureRoot, '.github', 'agents', 'engineer.agent.md'),
+    '---\nname: engineer\n---\n# Fixture Engineer\nFollow the verified delivery contract.\n'
+  );
+  fs.writeFileSync(
+    path.join(bundleFixtureRoot, '.github', 'skills', 'ensure-plan', 'SKILL.md'),
+    '---\ndescription: Fixture planning guidance\n---\n# Ensure Plan\nRetain a bounded plan.\n'
+  );
   fs.writeFileSync(path.join(bundleFixtureRoot, 'evals', 'external', 'terminal_bench', 'evidence-probe.mjs'), 'process.stdout.write("{}\\n")');
   fs.writeFileSync(path.join(bundleFixtureRoot, 'evals', 'external', 'terminal_bench', 'bounded-exec.mjs'), 'process.stdout.write("{}\\n")');
   const nodeTarball = path.join(bundleFixtureRoot, 'node-v-test-linux-x64.tar.gz');
@@ -199,84 +328,250 @@ process.exit(0);
       return { status: 0, stderr: '' };
     },
   });
-  return { datasetDir, lockFile, binDir, bundleDir, bundleHash: prepared.manifestHash, auditFile, fetchPreload, gitEnv, releaseSha };
+  return { datasetDir, lockFile, binDir, harborBin, harborSha256, dockerBin, dockerSha256, bundleDir, bundleHash: prepared.manifestHash, auditFile, fetchPreload, sourceRoot, releaseSha };
 }
 
-function runCli({ datasetDir, lockFile, binDir, bundleDir, bundleHash, auditFile, fetchPreload, gitEnv, withKey = true, task = null, omitTaskValue = false, releaseSha = null, dirtySource = false }) {
+function runCli({ datasetDir, lockFile, binDir, harborBin, harborSha256, dockerBin, dockerSha256, bundleDir, bundleHash, auditFile, fetchPreload, sourceRoot, withKey = true, task = null, omitTaskValue = false, releaseSha = null, dirtySource = false, useExternalLock = false, omitLockValue = false, profile = 'release-canary', reportFile = null, ambientGitEnv = null, ambientEvalEnv = null, deterministicOnly = false, calibration = false }) {
   if (dirtySource) {
-    const dirty = spawnSync('git', ['update-index', '--force-remove', 'evals/release.mjs'], {
-      cwd: repoRoot,
-      env: { ...process.env, ...gitEnv },
-      encoding: 'utf8',
-    });
-    assert.equal(dirty.status, 0, dirty.stderr || dirty.stdout);
+    fs.appendFileSync(path.join(sourceRoot, 'evals', 'release.mjs'), '\n// dirty fixture source\n');
   }
   const env = {
     ...process.env,
-    ...gitEnv,
+    ...(ambientGitEnv ?? {}),
+    ...(ambientEvalEnv ?? {}),
     PATH: `${binDir}${path.delimiter}${process.env.PATH}`,
     HARNESS_EVAL_TB_DATASET_DIR: datasetDir,
     HARNESS_EVAL_TB_BUNDLE_DIR: bundleDir,
     HARNESS_EVAL_TB_BUNDLE_SHA256: bundleHash,
+    HARNESS_EVAL_HARBOR_BIN: harborBin,
+    HARNESS_EVAL_HARBOR_SHA256: harborSha256,
+    HARNESS_EVAL_DOCKER_BIN: dockerBin,
+    HARNESS_EVAL_DOCKER_SHA256: dockerSha256,
     NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ''} --import=${fetchPreload}`.trim(),
     GITHUB_TOKEN: 'sentinel-unrelated-ci-token',
   };
   if (withKey) env.OPENROUTER_API_KEY = SENTINEL_PROVIDER_KEY;
   else delete env.OPENROUTER_API_KEY;
-  const args = ['evals/release.mjs', '--profile', 'release-canary', '--json', '--lock-file', lockFile];
+  const args = ['evals/release.mjs', '--profile', profile, '--json'];
+  if (deterministicOnly) args.push('--deterministic-only');
+  if (calibration) args.push('--calibration', '--budget-usd', '20');
+  if (useExternalLock) {
+    args.push('--lock-file');
+    if (!omitLockValue) args.push(lockFile);
+  }
   if (releaseSha !== null) args.push('--release-sha', releaseSha);
+  if (reportFile !== null) args.push('--report-file', reportFile);
   if (omitTaskValue) args.push('--task');
   else if (task !== null) args.push('--task', task);
   return spawnSync(process.execPath, args, {
-    cwd: repoRoot,
+    cwd: sourceRoot,
     env,
     encoding: 'utf8',
     timeout: 600_000,
   });
 }
 
-test('release-candidate mode runs a live kimi pair end to end through the CLI', () => {
+test('configured trust intent alone cannot unlock provider execution through the CLI', () => {
   const fixture = setupFixture();
   const result = runCli(fixture);
-  assert.equal(result.status, 0, result.stderr || result.stdout);
+  assert.equal(result.status, 1, result.stderr || result.stdout);
   assert.ok(!`${result.stdout}\n${result.stderr}`.includes(SENTINEL_PROVIDER_KEY), 'CLI output and errors must not echo the provider key');
   const report = JSON.parse(result.stdout);
-  assert.match(report.releaseSha, /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/, 'normal live commands derive a real HEAD identity for order balancing');
-  const kimi = report.pairs.find((p) => p.host === 'openrouter-kimi');
-  assert.equal(kimi.generic.reproducibility.releaseSha, report.releaseSha);
-  assert.equal(kimi.harness.reproducibility.releaseSha, report.releaseSha);
-  assert.equal(kimi.result, 'parity');
-  assert.equal(kimi.generic.correctness.verdict, 'pass');
-  assert.equal(kimi.harness.correctness.verdict, 'pass');
-  assert.equal(kimi.generic.efficiency.promptTokens, 3000, 'live docs carry real metered telemetry');
-  assert.ok(Math.abs(report.budget.spentUsd - 0.04) < 1e-12, 'provider-reported spend reaches the release ledger');
-  assert.equal(report.gate.block, false);
+  assert.equal(report.evaluationScope.mode, 'diagnostic-trust');
+  assert.equal(report.evaluationScope.trust.configuredStatus, 'attested');
+  assert.equal(report.evaluationScope.trust.evidenceSource, null);
+  assert.equal(report.budget.spentUsd, 0);
+  assert.equal(report.gate.block, true);
   assert.ok(!JSON.stringify(report).includes(SENTINEL_PROVIDER_KEY), 'the persisted/reportable result must not contain the provider key');
+  assert.equal(fs.existsSync(fixture.auditFile), false, 'a committed YAML claim is not runtime trust evidence and Harbor stays untouched');
+});
 
-  const audits = fs
-    .readFileSync(fixture.auditFile, 'utf8')
-    .trim()
-    .split('\n')
-    .map((line) => JSON.parse(line));
-  assert.equal(audits.length, 2, 'generic and harness both reached fake Harbor');
-  assert.ok(audits.every((audit) => audit.providerKeyPresent), 'real spawned Harbor receives the key through its process environment');
-  assert.ok(audits.every((audit) => !audit.githubTokenPresent), 'unrelated ambient CI credentials are excluded from Harbor');
-  assert.ok(audits.every((audit) => !audit.secretInArgv && !audit.providerKeyInAgentEnv), 'neither argv nor --ae receives the key');
-  const artifactRoots = new Set([
-    fixture.datasetDir,
-    path.dirname(fixture.lockFile),
-    fixture.binDir,
-    fixture.bundleDir,
-  ]);
-  for (const root of artifactRoots) {
-    for (const artifact of filesUnder(root)) {
-      assert.ok(!fs.readFileSync(artifact, 'utf8').includes(SENTINEL_PROVIDER_KEY), `the key must not be persisted in ${path.basename(artifact)}`);
+test('the committed red trust gate blocks provider execution while deterministic-only remains free', () => {
+  const fixture = setupFixture({ attestTrust: false });
+  const blocked = runCli(fixture);
+  assert.equal(blocked.status, 1, blocked.stderr || blocked.stdout);
+  const report = JSON.parse(blocked.stdout);
+  assert.equal(report.evaluationScope.mode, 'diagnostic-trust');
+  assert.equal(report.evaluationScope.releaseEligible, false);
+  assert.equal(report.evaluationScope.trust.ok, false);
+  assert.equal(report.preflight.environment.ok, false);
+  assert.equal(report.budget.spentUsd, 0);
+  assert.equal(fs.existsSync(fixture.auditFile), false, 'Harbor/provider execution is withheld before trust closure');
+
+  const deterministic = runCli({
+    ...fixture,
+    deterministicOnly: true,
+    ambientEvalEnv: {
+      HARNESS_EVAL_AGENT: 'openai',
+      HARNESS_EVAL_AGENT_URL: 'https://must-not-be-called.invalid/v1/chat/completions',
+      HARNESS_EVAL_AGENT_MODEL: 'sentinel-paid-model',
+      HARNESS_EVAL_AGENT_KEY: 'sentinel-agent-key',
+      HARNESS_EVAL_JUDGE_KEY: 'sentinel-judge-key',
+      ANTHROPIC_API_KEY: 'sentinel-anthropic-key',
+    },
+  });
+  assert.equal(deterministic.status, 0, deterministic.stderr || deterministic.stdout);
+  const deterministicReport = JSON.parse(deterministic.stdout);
+  assert.equal(deterministicReport.evaluationScope.mode, 'deterministic-only');
+  assert.equal(deterministicReport.preflight.ok, true);
+  assert.equal(deterministicReport.budget.spentUsd, 0);
+});
+
+test('an explicit task lock is diagnostic-only and cannot green the release', () => {
+  const fixture = setupFixture();
+  const result = runCli({ ...fixture, useExternalLock: true });
+  assert.equal(result.status, 1, result.stderr || result.stdout);
+  const report = JSON.parse(result.stdout);
+  assert.deepEqual({
+    mode: report.evaluationScope.mode,
+    releaseEligible: report.evaluationScope.releaseEligible,
+    selectedTasks: report.evaluationScope.selectedTasks,
+    requiredTasks: report.evaluationScope.requiredTasks,
+  }, {
+    mode: 'diagnostic-lock',
+    releaseEligible: false,
+    selectedTasks: ['cobol-modernization'],
+    requiredTasks: ['cobol-modernization'],
+  });
+  assert.equal(report.claim.level, 'inconclusive');
+  assert.equal(report.gate.block, true);
+  assert.ok(report.gate.reasons.some((reason) => /task-lock diagnostic.*not eligible/i.test(reason)));
+  assert.equal(fs.existsSync(fixture.auditFile), false, 'the diagnostic scope does not bypass the independent runtime trust gate');
+});
+
+test('--lock-file requires a value and cannot silently fall back to the release lock', () => {
+  const fixture = setupFixture();
+  const result = runCli({ ...fixture, useExternalLock: true, omitLockValue: true });
+  assert.equal(result.status, 2);
+  assert.match(result.stderr, /--lock-file.*nonempty.*path/i);
+  assert.equal(fs.existsSync(fixture.auditFile), false);
+});
+
+test('a malformed task lock fails with an explicit bounded JSON diagnostic', () => {
+  const fixture = setupFixture();
+  fs.writeFileSync(fixture.lockFile, '{not-json');
+  const result = runCli({ ...fixture, useExternalLock: true, deterministicOnly: true });
+  assert.equal(result.status, 2);
+  assert.match(result.stderr, /task lock is not valid JSON/i);
+  assert.doesNotMatch(result.stderr, /Unexpected token|position [0-9]+/i);
+  assert.equal(fs.existsSync(fixture.auditFile), false);
+});
+
+test('--report-file rejects repository destinations before evaluation', () => {
+  const fixture = setupFixture();
+  const result = runCli({ ...fixture, reportFile: path.join(fixture.sourceRoot, 'eval-report.json') });
+  assert.equal(result.status, 2, result.stderr || result.stdout);
+  assert.match(result.stderr, /report-file.*outside.*source repository/i);
+  assert.equal(fs.existsSync(fixture.auditFile), false);
+  assert.equal(fs.existsSync(path.join(fixture.sourceRoot, 'eval-report.json')), false);
+});
+
+test('--calibration rejects the post-qualification routine profile before Harbor execution', () => {
+  const fixture = setupFixture();
+  const result = runCli({ ...fixture, profile: 'release-routine', calibration: true });
+  assert.equal(result.status, 2, result.stderr || result.stdout);
+  assert.match(result.stderr, /calibration requires an initial-user-ship profile/i);
+  assert.equal(fs.existsSync(fixture.auditFile), false);
+});
+
+test('release git identity ignores ambient GIT_DIR and GIT_WORK_TREE injection', () => {
+  const fixture = setupFixture();
+  const result = runCli({
+    ...fixture,
+    withKey: false,
+    ambientGitEnv: {
+      GIT_DIR: path.join(tmpdir(), 'attacker-controlled.git'),
+      GIT_WORK_TREE: tmpdir(),
+      GIT_CONFIG_COUNT: '1',
+      GIT_CONFIG_KEY_0: 'core.worktree',
+      GIT_CONFIG_VALUE_0: tmpdir(),
+    },
+  });
+  assert.equal(result.status, 1, result.stderr || result.stdout);
+  const report = JSON.parse(result.stdout);
+  assert.equal(report.releaseSha, fixture.releaseSha, 'identity comes from the checkout containing release.mjs');
+  assert.ok(report.gate.reasons.some((reason) => /dependencies or credentials/i.test(reason)));
+});
+
+test('missing code-owned git metadata produces the explicit invalid-checkout diagnostic', () => {
+  const fixture = setupFixture();
+  fs.rmSync(path.join(fixture.sourceRoot, '.git'), { recursive: true, force: true });
+  const result = runCli({ ...fixture, deterministicOnly: true, releaseSha: null });
+  assert.equal(result.status, 2);
+  assert.match(result.stderr, /code-owned checkout has no git metadata/i);
+  assert.doesNotMatch(result.stderr, /ENOENT|lstat/i);
+  assert.equal(fs.existsSync(fixture.auditFile), false);
+});
+
+test('--profile rejects traversal before reading an out-of-tree configuration', () => {
+  const fixture = setupFixture();
+  const result = runCli({ ...fixture, profile: '../external/terminal_bench/task-lock' });
+  assert.equal(result.status, 2);
+  assert.match(result.stderr, /--profile.*safe.*basename/i);
+  assert.equal(fs.existsSync(fixture.auditFile), false, 'Harbor must not run for an invalid profile path');
+});
+
+test('a live profile must be tracked and byte-identical to HEAD even when git ignores it', () => {
+  const fixture = setupFixture();
+  const ignoredProfile = path.join(fixture.sourceRoot, 'evals', 'config', 'ignored-profile.yaml');
+  fs.copyFileSync(path.join(fixture.sourceRoot, 'evals', 'config', 'release-canary.yaml'), ignoredProfile);
+  fs.appendFileSync(path.join(fixture.sourceRoot, '.git', 'info', 'exclude'), '\nevals/config/ignored-profile.yaml\n');
+  assert.equal(fixtureGit(fixture.sourceRoot, ['status', '--porcelain=v1', '--untracked-files=all']), '');
+
+  const result = runCli({ ...fixture, profile: 'ignored-profile' });
+  assert.equal(result.status, 2);
+  assert.match(result.stderr, /profile.*tracked.*code-owned checkout/i);
+  assert.equal(fs.existsSync(fixture.auditFile), false);
+});
+
+test('profile resolution rejects a committed symlink and non-regular file', () => {
+  for (const kind of ['symlink', 'directory']) {
+    const fixture = setupFixture();
+    const candidate = path.join(fixture.sourceRoot, 'evals', 'config', `${kind}-profile.yaml`);
+    if (kind === 'symlink') fs.symlinkSync('release-canary.yaml', candidate);
+    else {
+      fs.mkdirSync(candidate);
+      fs.writeFileSync(path.join(candidate, 'tracked-fixture.txt'), 'profile path must be a file\n');
     }
+    commitFixtureMutation(fixture.sourceRoot, `add ${kind} profile fixture`);
+    fixture.releaseSha = fixtureGit(fixture.sourceRoot, ['rev-parse', '--verify', 'HEAD']);
+
+    const result = runCli({ ...fixture, profile: `${kind}-profile` });
+    assert.equal(result.status, 2);
+    assert.match(result.stderr, kind === 'symlink' ? /profile.*symbolic link/i : /profile.*regular file/i);
+    assert.equal(fs.existsSync(fixture.auditFile), false);
   }
-  assert.ok(
-    audits.every((audit) => !fs.existsSync(path.dirname(audit.conditionPath))),
-    'the release work directory, including read-only verified snapshots, is removed after the run'
-  );
+});
+
+test('release lock resolution rejects an out-of-repository path and a committed symlink', () => {
+  for (const kind of ['outside', 'symlink']) {
+    const fixture = setupFixture();
+    const configPath = path.join(fixture.sourceRoot, 'evals', 'config', 'release-canary.yaml');
+    if (kind === 'outside') {
+      const outsideLock = path.join(path.dirname(fixture.sourceRoot), `${path.basename(fixture.sourceRoot)}-outside-lock.json`);
+      fs.writeFileSync(outsideLock, fs.readFileSync(fixture.lockFile));
+      const relativeOutside = path.relative(fixture.sourceRoot, outsideLock).split(path.sep).join('/');
+      fs.writeFileSync(
+        configPath,
+        fs.readFileSync(configPath, 'utf8').replace(
+          'lockFile: evals/external/terminal_bench/task-lock.json',
+          `lockFile: ${relativeOutside}`
+        )
+      );
+    } else {
+      const lockPath = path.join(fixture.sourceRoot, 'evals', 'external', 'terminal_bench', 'task-lock.json');
+      const targetPath = path.join(path.dirname(lockPath), 'task-lock-target.json');
+      fs.renameSync(lockPath, targetPath);
+      fs.symlinkSync('task-lock-target.json', lockPath);
+    }
+    commitFixtureMutation(fixture.sourceRoot, `add ${kind} lock fixture`);
+    fixture.releaseSha = fixtureGit(fixture.sourceRoot, ['rev-parse', '--verify', 'HEAD']);
+
+    const result = runCli(fixture);
+    assert.equal(result.status, 2);
+    assert.match(result.stderr, kind === 'outside' ? /task lock.*remain within/i : /task lock.*symbolic link/i);
+    assert.equal(fs.existsSync(fixture.auditFile), false);
+  }
 });
 
 test('release-candidate mode without credentials blocks instead of greening', () => {
@@ -315,7 +610,12 @@ test('--task selects exactly one pinned task for metadata, validation, budgeting
   assert.deepEqual(report.coverage.expectedTasks, ['cobol-modernization', 'cancel-async-tasks']);
   assert.equal(report.coverage.complete, false);
   assert.equal(report.telemetryComplete, true, 'intentional diagnostic scope is distinct from telemetry loss');
-  assert.deepEqual(report.evaluationScope, {
+  assert.deepEqual({
+    mode: report.evaluationScope.mode,
+    releaseEligible: report.evaluationScope.releaseEligible,
+    selectedTasks: report.evaluationScope.selectedTasks,
+    requiredTasks: report.evaluationScope.requiredTasks,
+  }, {
     mode: 'diagnostic-task',
     releaseEligible: false,
     selectedTasks: ['cancel-async-tasks'],
@@ -324,9 +624,7 @@ test('--task selects exactly one pinned task for metadata, validation, budgeting
   assert.equal(report.claim.level, 'inconclusive');
   assert.equal(report.gate.block, true);
   assert.ok(report.gate.reasons.some((reason) => /diagnostic.*not eligible/i.test(reason)));
-  const audits = fs.readFileSync(fixture.auditFile, 'utf8').trim().split('\n').map((line) => JSON.parse(line));
-  assert.equal(audits.length, 2, 'one selected task runs exactly one generic and one harness arm');
-  assert.ok(audits.every((audit) => audit.jobName.includes('cancel-async-tasks')));
+  assert.equal(fs.existsSync(fixture.auditFile), false, 'task selection cannot bypass the independent runtime trust gate');
 });
 
 test('an explicit --task remains release-ineligible even when the selected lock has one task', () => {
@@ -334,7 +632,7 @@ test('an explicit --task remains release-ineligible even when the selected lock 
   const result = runCli({ ...fixture, task: 'cobol-modernization' });
   assert.equal(result.status, 1, result.stderr || result.stdout);
   const report = JSON.parse(result.stdout);
-  assert.equal(report.coverage.complete, true, 'coverage math remains truthful for the one-task fixture');
+  assert.equal(report.coverage.complete, false, 'zero-trial trust diagnostics cannot claim controlled task coverage');
   assert.equal(report.evaluationScope.releaseEligible, false);
   assert.equal(report.claim.level, 'inconclusive');
   assert.ok(report.gate.reasons.some((reason) => /diagnostic.*not eligible/i.test(reason)));

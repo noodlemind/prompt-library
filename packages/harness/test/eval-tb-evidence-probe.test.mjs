@@ -6,24 +6,81 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { test } from 'node:test';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { manifest, writeStateJson } from '../../../evals/external/terminal_bench/evidence-probe.mjs';
+import { manifest, observeMountTargets, writeStateJson } from '../../../evals/external/terminal_bench/evidence-probe.mjs';
 import {
-  BUNDLE_MOUNT_TARGET,
+  EVAL_RUNTIME_MOUNT_TARGET,
   evidenceProbeWrapperScript,
   prepareHarnessBundle,
 } from '../../../evals/external/terminal_bench/provision.mjs';
 
 const probe = fileURLToPath(new URL('../../../evals/external/terminal_bench/evidence-probe.mjs', import.meta.url));
+
+test('mount observation returns only expected read-only sandbox targets', () => {
+  const expected = ['/opt/eval-runtime/evidence-probe', '/opt/harness-bundle/harness-cli'];
+  const result = observeMountTargets(expected, {
+    mountInfoText: [
+      '31 22 0:44 /source /opt/eval-runtime/evidence-probe ro,nosuid - ext4 /dev/root rw',
+      '32 22 0:44 /source /opt/harness-bundle/harness-cli ro,nosuid - ext4 /dev/root rw',
+      '33 22 0:44 /secret /host/secret rw - ext4 /dev/root rw',
+    ].join('\n'),
+  });
+  assert.deepEqual(result.targets, expected);
+  assert.equal(result.allReadOnly, true);
+  assert.equal(result.complete, true);
+  assert.doesNotMatch(JSON.stringify(result), /\/source|\/host\/secret/);
+
+  const writable = observeMountTargets(expected, {
+    mountInfoText: [
+      '31 22 0:44 /source /opt/eval-runtime/evidence-probe ro - ext4 /dev/root rw',
+      '32 22 0:44 /source /opt/harness-bundle/harness-cli rw - ext4 /dev/root rw',
+    ].join('\n'),
+  });
+  assert.equal(writable.allReadOnly, false);
+
+  const absent = observeMountTargets(expected, { mountInfoText: '' });
+  assert.deepEqual(absent.targets, []);
+  assert.equal(absent.allReadOnly, false, 'observing no mounts is never evidence of read-only mounts');
+  assert.throws(
+    () => observeMountTargets(['/opt/eval-runtime/..'], { mountInfoText: '' }),
+    /outside the evaluation runtime allowlist/
+  );
+});
 const repoRoot = fileURLToPath(new URL('../../../', import.meta.url));
 
 function workspace() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'tb-evidence-'));
 }
 
+const retainedSnapshotHashes = new Map();
+
 function run(cwd, args) {
-  const result = spawnSync(process.execPath, [probe, ...args], { cwd, encoding: 'utf8' });
+  const effectiveArgs = [...args];
+  if (effectiveArgs[0] === 'collect' && !effectiveArgs.includes('--expected-before-hash')) {
+    const beforeIndex = effectiveArgs.indexOf('--before');
+    const beforePath = beforeIndex >= 0 ? effectiveArgs[beforeIndex + 1] : '.harness/eval-before.json';
+    const retained = retainedSnapshotHashes.get(`${cwd}:${beforePath}`);
+    assert.match(retained?.manifestHash ?? '', /^[a-f0-9]{64}$/, 'the test host must retain the run-start hash');
+    effectiveArgs.push('--expected-before-hash', retained.manifestHash);
+  }
+  if (effectiveArgs[0] === 'collect' && !effectiveArgs.includes('--expected-before-git-hash')) {
+    const beforeIndex = effectiveArgs.indexOf('--before');
+    const beforePath = beforeIndex >= 0 ? effectiveArgs[beforeIndex + 1] : '.harness/eval-before.json';
+    const retained = retainedSnapshotHashes.get(`${cwd}:${beforePath}`);
+    assert.match(retained?.gitStateHash ?? '', /^[a-f0-9]{64}$/, 'the test host must retain the run-start Git-state hash');
+    effectiveArgs.push('--expected-before-git-hash', retained.gitStateHash);
+  }
+  const result = spawnSync(process.execPath, [probe, ...effectiveArgs], { cwd, encoding: 'utf8' });
   assert.equal(result.status, 0, result.stderr || result.stdout);
-  return JSON.parse(result.stdout);
+  const parsed = JSON.parse(result.stdout);
+  if (effectiveArgs[0] === 'snapshot' && parsed.available === true) {
+    const outputIndex = effectiveArgs.indexOf('--output');
+    const outputPath = outputIndex >= 0 ? effectiveArgs[outputIndex + 1] : '.harness/eval-before.json';
+    retainedSnapshotHashes.set(`${cwd}:${outputPath}`, {
+      manifestHash: parsed.manifestHash,
+      gitStateHash: parsed.gitStateHash,
+    });
+  }
+  return parsed;
 }
 
 function runFailure(cwd, args) {
@@ -86,6 +143,60 @@ test('probe-owned, git, and harness files never contaminate the product diff', (
   assert.match(collected.workspaceEvidence.diffHash, /^[a-f0-9]{64}$/);
 });
 
+test('bounded Git-state evidence detects history/ref mutations without exposing repository contents', () => {
+  const cwd = workspace();
+  const git = (args) => spawnSync('git', args, {
+    cwd,
+    encoding: 'utf8',
+    env: { PATH: process.env.PATH, HOME: cwd, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_SYSTEM: '/dev/null' },
+  });
+  assert.equal(git(['init']).status, 0);
+  fs.writeFileSync(path.join(cwd, 'tracked.txt'), 'tracked');
+  assert.equal(git(['add', 'tracked.txt']).status, 0);
+  assert.equal(git(['-c', 'user.name=Eval Test', '-c', 'user.email=eval@example.invalid', 'commit', '-m', 'initial']).status, 0);
+
+  const before = run(cwd, ['snapshot', '--output', '.harness/eval-before.json']);
+  assert.equal(before.gitStatePresent, true);
+  assert.match(before.gitStateHash, /^[a-f0-9]{64}$/);
+  assert.equal(git(['update-ref', 'refs/heads/evidence-marker', 'HEAD']).status, 0);
+  const collected = run(cwd, ['collect', '--before', '.harness/eval-before.json']);
+
+  assert.equal(collected.workspaceEvidence.available, true);
+  assert.equal(collected.workspaceEvidence.gitStateAvailable, true);
+  assert.equal(collected.workspaceEvidence.gitStatePresent, true);
+  assert.equal(collected.workspaceEvidence.gitStateChanged, true);
+  assert.notEqual(collected.workspaceEvidence.beforeGitStateHash, collected.workspaceEvidence.afterGitStateHash);
+  assert.deepEqual(collected.workspaceEvidence.changedPaths, ['.git/[state]']);
+  assert.doesNotMatch(JSON.stringify(collected), /Eval Test|eval@example|tracked/);
+});
+
+test('empty directories and directory modes are part of workspace evidence', () => {
+  const cwd = workspace();
+  fs.mkdirSync(path.join(cwd, 'existing'), { mode: 0o755 });
+  run(cwd, ['snapshot', '--output', '.harness/eval-before.json']);
+
+  fs.mkdirSync(path.join(cwd, 'new-empty'));
+  fs.chmodSync(path.join(cwd, 'existing'), 0o700);
+  const collected = run(cwd, ['collect', '--before', '.harness/eval-before.json']);
+
+  assert.equal(collected.workspaceEvidence.available, true);
+  assert.deepEqual(collected.workspaceEvidence.changedPaths, ['existing', 'new-empty']);
+  assert.equal(collected.workspaceEvidence.changedPathCount, 2);
+  assert.match(collected.workspaceEvidence.diffHash, /^[a-f0-9]{64}$/);
+});
+
+test('unsupported workspace nodes fail evidence closed instead of disappearing', { skip: process.platform === 'win32' }, () => {
+  const cwd = workspace();
+  run(cwd, ['snapshot', '--output', '.harness/eval-before.json']);
+  const fifo = spawnSync('mkfifo', [path.join(cwd, 'agent-created-fifo')], { encoding: 'utf8' });
+  assert.equal(fifo.status, 0, fifo.stderr);
+
+  const collected = run(cwd, ['collect', '--before', '.harness/eval-before.json']);
+  assert.equal(collected.workspaceEvidence.available, false);
+  assert.equal(collected.workspaceEvidence.reason, 'workspace-unsupported-node');
+  assert.equal(collected.workspaceEvidence.diffHash, null);
+});
+
 test('a sandbox-tampered baseline is reported unavailable against the host-retained start hash', () => {
   const cwd = workspace();
   fs.writeFileSync(path.join(cwd, 'app.txt'), 'before');
@@ -101,6 +212,19 @@ test('a sandbox-tampered baseline is reported unavailable against the host-retai
     '--expected-before-hash',
     before.manifestHash,
   ]);
+  assert.equal(collected.workspaceEvidence.available, false);
+  assert.equal(collected.workspaceEvidence.reason, 'before-manifest-unavailable');
+});
+
+test('collection without a host-retained run-start hash fails evidence closed', () => {
+  const cwd = workspace();
+  run(cwd, ['snapshot', '--output', '.harness/eval-before.json']);
+  const result = spawnSync(process.execPath, [probe, 'collect', '--before', '.harness/eval-before.json'], {
+    cwd,
+    encoding: 'utf8',
+  });
+  assert.equal(result.status, 0, result.stderr);
+  const collected = JSON.parse(result.stdout);
   assert.equal(collected.workspaceEvidence.available, false);
   assert.equal(collected.workspaceEvidence.reason, 'before-manifest-unavailable');
 });
@@ -165,15 +289,27 @@ test('an opened directory cannot be redirected through an ancestor symlink race'
   });
 
   assert.equal(swapped, true);
-  if (result.containmentMode === 'descriptor-relative-procfs') {
-    assert.equal(result.available, true);
-    assert.deepEqual(result.entries.map((entry) => entry.path), ['nested/inside.txt']);
-    assert.ok(!JSON.stringify(result).includes('outside-secret'));
-  } else {
-    assert.equal(result.available, false);
-    assert.equal(result.reason, 'workspace-ancestor-identity-ambiguous');
-    assert.equal(result.containmentMode, 'identity-checked-path-fallback');
-  }
+  assert.equal(result.available, false);
+  assert.equal(result.reason, 'workspace-ancestor-identity-ambiguous');
+  assert.ok(!JSON.stringify(result).includes('outside-secret'));
+});
+
+test('a directory mutation after enumeration makes final-state evidence unavailable', () => {
+  const cwd = workspace();
+  fs.writeFileSync(path.join(cwd, 'before.txt'), 'before');
+  let mutated = false;
+
+  const result = manifest(cwd, {
+    onDirectoryEnumerated({ relative }) {
+      if (relative !== '' || mutated) return;
+      mutated = true;
+      fs.writeFileSync(path.join(cwd, 'late.txt'), 'late');
+    },
+  });
+
+  assert.equal(mutated, true);
+  assert.equal(result.available, false);
+  assert.equal(result.reason, 'workspace-ancestor-identity-ambiguous');
 });
 
 test('untrusted FIFO read candidates fail promptly instead of blocking before fstat', (t) => {
@@ -242,13 +378,8 @@ test('an opened state parent cannot be redirected before the atomic write', () =
   }
 
   assert.equal(fs.existsSync(path.join(outside, 'eval.json')), false, 'the raced external directory is never written');
-  if (containmentMode === 'descriptor-relative-procfs') {
-    assert.equal(failure, null);
-    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(cwd, '.harness', 'parked', 'eval.json'), 'utf8')), { ok: true });
-  } else {
-    assert.match(failure?.evidenceReason ?? failure?.message ?? '', /ancestor-identity-ambiguous/);
-    assert.equal(fs.existsSync(path.join(cwd, '.harness', 'parked', 'eval.json')), false);
-  }
+  assert.match(failure?.evidenceReason ?? failure?.message ?? '', /ancestor-identity-ambiguous/);
+  assert.equal(fs.existsSync(path.join(cwd, '.harness', 'parked', 'eval.json')), false);
 });
 
 test('changed-path detail is bounded while the complete diff count and hash are retained', () => {
@@ -343,14 +474,31 @@ test('realistic gate and verify checks survive projection while secrets do not',
   });
 });
 
-test('an empty harness event ledger is incomplete rather than evidence of zero behavior', () => {
+test('an empty harness event ledger is complete evidence of zero observed behavior', () => {
   const cwd = workspace();
   run(cwd, ['snapshot', '--output', '.harness/eval-before.json']);
   fs.writeFileSync(path.join(cwd, '.harness', 'events.jsonl'), '');
   const collected = run(cwd, ['collect', '--before', '.harness/eval-before.json']);
-  assert.equal(collected.harnessEventEvidence.available, false);
-  assert.equal(collected.harnessEventEvidence.complete, false);
-  assert.equal(collected.harnessEventEvidence.reason, 'harness-events-empty');
+  assert.equal(collected.harnessEventEvidence.available, true);
+  assert.equal(collected.harnessEventEvidence.complete, true);
+  assert.equal(collected.harnessEventEvidence.reason, null);
+  assert.deepEqual(collected.harnessEvents, []);
+});
+
+test('a missing harness event file is complete evidence of zero observed behavior', () => {
+  const cwd = workspace();
+  run(cwd, ['snapshot', '--output', '.harness/eval-before.json']);
+  const collected = run(cwd, ['collect', '--before', '.harness/eval-before.json']);
+
+  assert.deepEqual(collected.harnessEventEvidence, {
+    available: true,
+    complete: true,
+    reason: null,
+    retainedEvents: 0,
+    sourceTruncated: false,
+    projectionRejectedEvents: 0,
+    projectionRejectedChecks: 0,
+  });
   assert.deepEqual(collected.harnessEvents, []);
 });
 
@@ -397,10 +545,23 @@ test('valid checks beyond the retained projection limit are counted as rejected'
 test('the evidence probe is bundled behind the same cross-architecture Node selection as Harness', () => {
   const root = workspace();
   const bundleDir = path.join(root, 'bundle');
+  fs.mkdirSync(path.join(root, '.github', 'agents'), { recursive: true });
+  fs.mkdirSync(path.join(root, '.github', 'skills', 'ensure-plan'), { recursive: true });
   fs.mkdirSync(path.join(root, 'packages', 'harness'), { recursive: true });
   fs.mkdirSync(path.join(root, 'evals', 'external', 'terminal_bench'), { recursive: true });
+  for (const directory of ['config', 'hosts', 'lib']) {
+    fs.mkdirSync(path.join(root, 'evals', directory), { recursive: true });
+    fs.writeFileSync(path.join(root, 'evals', directory, 'fixture.mjs'), 'export default null;\n');
+  }
+  for (const relative of ['evals/__init__.py', 'evals/external/__init__.py', 'evals/external/terminal_bench/__init__.py']) {
+    fs.writeFileSync(path.join(root, relative), '');
+  }
+  fs.writeFileSync(path.join(root, 'evals', 'external', 'terminal_bench', 'agent.mjs'), 'process.exit(0);\n');
+  fs.writeFileSync(path.join(root, 'evals', 'external', 'terminal_bench', 'harbor_agent.py'), 'class StdioBridgeAgent: pass\n');
   fs.writeFileSync(path.join(root, 'evals', 'external', 'terminal_bench', 'evidence-probe.mjs'), 'process.stdout.write("{}\\n")');
   fs.writeFileSync(path.join(root, 'evals', 'external', 'terminal_bench', 'bounded-exec.mjs'), 'process.stdout.write("{}\\n")');
+  fs.writeFileSync(path.join(root, '.github', 'agents', 'engineer.agent.md'), '---\nname: engineer\n---\nFixture engineer contract.\n');
+  fs.writeFileSync(path.join(root, '.github', 'skills', 'ensure-plan', 'SKILL.md'), '---\ndescription: Fixture guidance\n---\nFixture plan guidance.\n');
   const nodeTarball = path.join(root, 'node-v-test-linux-x64.tar.gz');
   fs.writeFileSync(nodeTarball, 'pinned fixture archive bytes');
   const calls = [];
@@ -411,15 +572,13 @@ test('the evidence probe is bundled behind the same cross-architecture Node sele
     nodeTarballs: { x64: nodeTarball, arm64: null },
     nodeTarballHashes: { x64: crypto.createHash('sha256').update(fs.readFileSync(nodeTarball)).digest('hex'), arm64: null },
     snapshotSource: ({ repoRoot: sourceRoot, destination }) => {
+      fs.mkdirSync(path.join(destination, '.github', 'agents'), { recursive: true });
+      fs.mkdirSync(path.join(destination, '.github', 'skills'), { recursive: true });
       fs.mkdirSync(path.join(destination, 'packages'), { recursive: true });
-      fs.mkdirSync(path.join(destination, 'evals', 'external', 'terminal_bench'), { recursive: true });
+      fs.copyFileSync(path.join(sourceRoot, '.github', 'agents', 'engineer.agent.md'), path.join(destination, '.github', 'agents', 'engineer.agent.md'));
+      fs.cpSync(path.join(sourceRoot, '.github', 'skills', 'ensure-plan'), path.join(destination, '.github', 'skills', 'ensure-plan'), { recursive: true });
       fs.cpSync(path.join(sourceRoot, 'packages', 'harness'), path.join(destination, 'packages', 'harness'), { recursive: true });
-      for (const file of ['evidence-probe.mjs', 'bounded-exec.mjs']) {
-        fs.copyFileSync(
-          path.join(sourceRoot, 'evals', 'external', 'terminal_bench', file),
-          path.join(destination, 'evals', 'external', 'terminal_bench', file)
-        );
-      }
+      fs.cpSync(path.join(sourceRoot, 'evals'), path.join(destination, 'evals'), { recursive: true });
     },
     spawnImpl: (cmd, args) => {
       calls.push([cmd, args]);
@@ -435,9 +594,9 @@ test('the evidence probe is bundled behind the same cross-architecture Node sele
 
   const wrapper = evidenceProbeWrapperScript();
   assert.match(wrapper, /uname -m/);
-  assert.ok(wrapper.includes(`${BUNDLE_MOUNT_TARGET}/node-x64/bin/node`));
-  assert.ok(wrapper.includes(`${BUNDLE_MOUNT_TARGET}/node-arm64/bin/node`));
-  assert.ok(wrapper.includes(`${BUNDLE_MOUNT_TARGET}/evidence-probe.mjs`));
+  assert.ok(wrapper.includes(`${EVAL_RUNTIME_MOUNT_TARGET}/node-x64/bin/node`));
+  assert.ok(wrapper.includes(`${EVAL_RUNTIME_MOUNT_TARGET}/node-arm64/bin/node`));
+  assert.ok(wrapper.includes(`${EVAL_RUNTIME_MOUNT_TARGET}/evidence-probe.mjs`));
   assert.equal(fs.readFileSync(path.join(bundleDir, 'evidence-probe.mjs'), 'utf8'), 'process.stdout.write("{}\\n")');
   assert.equal(fs.readFileSync(path.join(bundleDir, 'evidence-probe'), 'utf8'), wrapper);
   assert.ok(calls.some(([cmd]) => cmd === 'tar'));
@@ -456,6 +615,9 @@ envelope = json.dumps({
     "stderrB64": "",
     "stdoutTruncated": False,
     "stderrTruncated": False,
+    "timedOut": False,
+    "containmentMode": "linux-process-census",
+    "containmentComplete": True,
 })
 
 class Result:
@@ -492,21 +654,35 @@ from evals.external.terminal_bench.harbor_agent import StdioBridgeAgent
 root = pathlib.Path(tempfile.mkdtemp())
 condition = root / "condition.json"
 done_file = root / "done.json"
-condition.write_text(json.dumps({"setupCommands": ["activate-harness"]}))
+condition.write_text(json.dumps({
+    "setupCommands": ["activate-harness"],
+    "runtime": {
+        "expectedMountTargets": ["/opt/eval-runtime/evidence-probe"],
+        "mountProbeTargets": ["/opt/eval-runtime/evidence-probe", "/opt/harness-bundle/harness-cli"],
+    },
+}))
 done_file.write_text(json.dumps({"type": "done", "stopReason": "old"}))
 
 before_hash = "b" * 64
 after_hash = "a" * 64
 diff_hash = "d" * 64
+git_hash = "e" * 64
 collected = {
     "workspaceEvidence": {
         "available": True,
-        "collectionMode": "bounded-content-hash-manifest-v1",
+        "collectionMode": "bounded-typed-content-plus-git-state-v3",
         "containmentMode": "descriptor-relative-procfs",
         "beforeManifestHash": before_hash,
         "afterManifestHash": after_hash,
         "diffHash": diff_hash,
         "changedPaths": ["src/a.c"],
+        "changedPathCount": 1,
+        "changedPathsTruncated": False,
+        "gitStateAvailable": True,
+        "gitStatePresent": True,
+        "beforeGitStateHash": git_hash,
+        "afterGitStateHash": git_hash,
+        "gitStateChanged": False,
         "reason": None,
     },
     "harnessEvents": [{"type": "pre_tool", "decision": "allow"}],
@@ -524,15 +700,31 @@ class Environment:
     async def exec(self, command=None, **kwargs):
         self.commands.append(command)
         if " snapshot " in command:
-            return Result(json.dumps({"available": True, "manifestHash": before_hash}))
+            return Result(json.dumps({"available": True, "manifestHash": before_hash, "gitStateHash": git_hash}))
         if " collect " in command:
             return Result(json.dumps(collected))
+        if " mounts " in command:
+            return Result(json.dumps({
+                "version": "eval-mount-policy.v1",
+                "source": "sandbox-observed",
+                "targets": ["/opt/eval-runtime/evidence-probe"],
+                "existingTargets": ["/opt/eval-runtime/evidence-probe"],
+                "allReadOnly": True,
+                "complete": True,
+            }))
         return Result("ok")
 
 class Agent(StdioBridgeAgent):
     async def _exec(self, environment, command, **kwargs):
         result = await environment.exec(command=command)
-        normalized = {"code": result.return_code, "stdout": result.output, "stderr": result.stderr}
+        normalized = {
+            "code": result.return_code,
+            "stdout": result.output,
+            "stderr": result.stderr,
+            "timedOut": False,
+            "containmentMode": "linux-process-census",
+            "containmentComplete": True,
+        }
         if kwargs.get("parse_json"):
             normalized["_parsedJson"] = json.loads(result.output)
         return normalized
@@ -555,13 +747,100 @@ asyncio.run(main())
   assert.match(result.commands[0], /activate-harness/);
   assert.match(result.commands[1], /evidence-probe snapshot/, 'the baseline is taken after setup activation');
   assert.match(result.commands[2], /evidence-probe collect/);
+  assert.match(result.commands[2], /--expected-before-git-hash e{64}/);
+  assert.match(result.commands[3], /evidence-probe mounts/);
   assert.equal(result.done.workspaceEvidence.diffHash, 'd'.repeat(64));
   assert.equal(result.done.workspaceEvidence.containmentMode, 'descriptor-relative-procfs');
   assert.equal(result.done.harnessEvents[0].type, 'pre_tool');
   assert.equal(result.done.harnessEventEvidence.retainedEvents, 1);
   assert.equal(result.done.enforcement.hooksActive, true);
+  assert.deepEqual(result.done.mountEvidence.targets, ['/opt/eval-runtime/evidence-probe']);
+  assert.deepEqual(result.done.mountEvidence.existingTargets, ['/opt/eval-runtime/evidence-probe']);
+  assert.equal(result.done.mountEvidence.allReadOnly, true);
+  assert.equal(result.done.mountEvidence.complete, true);
   assert.deepEqual(result.persisted, result.done);
   assert.deepEqual(result.tempFiles, []);
+});
+
+test('the Python bridge canonicalizes valid mounts and rejects malformed or contaminated projections', () => {
+  const result = runPython(`
+import asyncio, json, pathlib, tempfile
+from evals.external.terminal_bench.harbor_agent import StdioBridgeAgent
+
+root = pathlib.Path(tempfile.mkdtemp())
+condition = root / "condition.json"
+expected = ["/opt/eval-runtime/a", "/opt/eval-runtime/b"]
+probe = [*expected, "/opt/harness-bundle/harness"]
+condition.write_text(json.dumps({
+    "runtime": {"expectedMountTargets": expected, "mountProbeTargets": probe},
+}))
+
+class Agent(StdioBridgeAgent):
+    def __init__(self, payload):
+        self.payload = payload
+        self._extra_env = {"HARNESS_EVAL_TB_CONDITION": str(condition)}
+    async def _exec(self, environment, command, **kwargs):
+        return {
+            "code": 0,
+            "stdout": json.dumps(self.payload),
+            "stderr": "",
+            "timedOut": False,
+            "containmentMode": "linux-process-census",
+            "containmentComplete": True,
+            "_parsedJson": self.payload,
+        }
+
+def payload(targets, existing=None, version="eval-mount-policy.v1", source="sandbox-observed"):
+    return {
+        "version": version,
+        "source": source,
+        "targets": targets,
+        "existingTargets": targets if existing is None else existing,
+        "allReadOnly": True,
+        "complete": True,
+    }
+
+async def main():
+    cases = {
+        "reordered": payload([expected[1], expected[0]]),
+        "duplicate": payload([expected[0], expected[0], expected[1]]),
+        "nonString": payload([expected[0], None]),
+        "wrongVersion": payload(expected, version="wrong"),
+        "wrongSource": payload(expected, source="workspace-claimed"),
+        "outsideProbe": payload([*expected, "/opt/eval-runtime/rogue"]),
+        "treatmentLeak": payload([*expected, probe[2]]),
+    }
+    observed = {}
+    for name, candidate in cases.items():
+        observed[name] = await Agent(candidate)._observe_mounts(None)
+    condition.write_text(json.dumps({
+        "runtime": {
+            "expectedMountTargets": ["/opt/eval-runtime/.."],
+            "mountProbeTargets": ["/opt/eval-runtime/.."],
+        },
+    }))
+    observed["expectedTraversal"] = await Agent(payload([]))._observe_mounts(None)
+    condition.write_text(json.dumps({
+        "runtime": {
+            "expectedMountTargets": expected,
+            "mountProbeTargets": [*expected, "/opt/harness-bundle/.."],
+        },
+    }))
+    observed["probeTraversal"] = await Agent(payload(expected))._observe_mounts(None)
+    print(json.dumps(observed))
+
+asyncio.run(main())
+  `);
+
+  assert.deepEqual(result.reordered.targets, ['/opt/eval-runtime/a', '/opt/eval-runtime/b']);
+  assert.deepEqual(result.reordered.existingTargets, ['/opt/eval-runtime/a', '/opt/eval-runtime/b']);
+  assert.equal(result.reordered.complete, true);
+  for (const name of [
+    'duplicate', 'nonString', 'wrongVersion', 'wrongSource', 'outsideProbe',
+    'treatmentLeak', 'expectedTraversal', 'probeTraversal',
+  ]) {
+    assert.equal(result[name].complete, false, `${name} must fail closed`);
+  }
 });
 
 test('an unavailable sandbox probe records observability loss without changing task correctness', () => {
@@ -604,7 +883,7 @@ asyncio.run(main())
   assert.equal(result.done.stopReason, 'model_finish');
   assert.equal(result.done.answer, 'correct');
   assert.equal(result.done.workspaceEvidence.available, false);
-  assert.equal(result.done.workspaceEvidence.reason, 'evidence-probe-collect-unavailable');
+  assert.equal(result.done.workspaceEvidence.reason, 'evidence-probe-snapshot-unavailable');
   assert.deepEqual(result.done.harnessEvents, []);
   assert.equal(result.done.harnessEventEvidence.available, false);
   assert.equal(result.done.workspaceEvidence.changedPathCount, 0);

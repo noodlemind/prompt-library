@@ -1,0 +1,58 @@
+# Post-qualification routine release profile. Initial user exposure must first
+# pass the three-repetition `release-canary --calibration` decision. Later
+# releases use this one-repetition regression/overhead gate within $10.
+profile: release-routine
+
+# Runtime trust remains a code-observed prerequisite on every release. These
+# configuration booleans are a kill switch and declaration, never an
+# attestation by themselves.
+releaseTrust:
+  status: blocked
+  capabilities:
+    fullHarborRuntimeClosureAttested: false
+    keyBearingToolchainIsolated: false
+    sandboxEntryChainAttested: false
+    mountsObservedFromTrustedSupervisor: false
+    escapedProcessesAndContainersReaped: false
+    imageResourcesAndNetworkObserved: false
+
+task:
+  lockFile: evals/external/terminal_bench/task-lock.json
+
+budget:
+  releaseCeilingUsd: 10
+  kimiPairUsd: 8
+  rerunUsd: 2
+  controlledArmCeilingUsd: 0.65
+
+efficiencyThresholds:
+  promptRatio: 2.0
+  costRatio: 1.5
+  wallTimeRatio: 1.25
+
+valueThresholds:
+  maxIncrementalApiCostPerAdditionalSuccessUsd: 2.0
+  maxIncrementalWallTimePerAdditionalSuccessMs: 600000
+
+# Initial value is established once by the calibration profile. This profile
+# then blocks correctness regressions and parity outside the predeclared
+# prompt/cost/wall-time bounds; it does not re-claim initial value each release.
+claimPolicy:
+  mode: regression-gate
+
+repetitions:
+  routine: 1
+
+pairs:
+  - host: ollama-gemma
+    enabled: true
+    schedule: explicit-with-local
+    taskRole: anchor
+
+nativeProductRotation:
+  - codex-subscription
+  - claude-subscription
+
+execution:
+  environment: docker
+  conditionOrder: release-hash-balanced

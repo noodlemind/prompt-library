@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
 import { test } from 'node:test';
 import { openAiToolDriver, replayDriver } from '../../../evals/lib/drivers.mjs';
 import { getProfile } from '../../../evals/lib/model-profiles.mjs';
@@ -59,8 +60,8 @@ function harness(responses, opts = {}) {
   return { driver, calls, telemetry, budget };
 }
 
-test('captures usage, local cost, provider cost, and generation/provider identifiers', async () => {
-  const { driver, telemetry, budget } = harness([
+test('captures usage, exact outbound controls, local cost, provider cost, and generation/provider identifiers', async () => {
+  const { driver, calls, telemetry, budget } = harness([
     completion({ message: assistantToolCalls([['runInTerminal', { command: 'harness orient' }]]), usage: USAGE }),
   ]);
   const action = await driver.next();
@@ -69,6 +70,8 @@ test('captures usage, local cost, provider cost, and generation/provider identif
   assert.equal(totals.promptTokens, 1000);
   assert.equal(totals.cachedTokens, 400);
   assert.equal(totals.reasoningTokens, 25);
+  assert.equal(totals.cachedTokensComplete, true);
+  assert.equal(totals.reasoningTokensComplete, true);
   assert.equal(totals.outputTokens, 100);
   assert.ok(Math.abs(totals.localCostUsd - USAGE_LOCAL_COST) < 1e-9);
   assert.ok(Math.abs(totals.providerCostUsd - 0.0012) < 1e-12);
@@ -79,6 +82,47 @@ test('captures usage, local cost, provider cost, and generation/provider identif
   assert.equal(response.model, KIMI.model);
   assert.equal(driver.fallbackDetected, false);
   assert.ok(!events.some((e) => e.type === 'fallback'), 'matching pinned provider must not read as fallback');
+  const request = events.find((event) => event.type === 'request');
+  assert.equal(request.toolMode, 'full');
+  assert.equal(request.postVerify, false);
+  assert.equal(request.toolCount, TOOLS.length);
+  assert.match(request.toolSchemaHash, /^[a-f0-9]{64}$/);
+  assert.equal(request.endpointHash, crypto.createHash('sha256').update(KIMI.url).digest('hex'));
+  assert.equal(request.model, KIMI.model);
+  assert.equal(request.maxTokens, KIMI.maxTokens);
+  assert.equal(request.temperaturePresent, false);
+  assert.equal(request.reasoningPresent, false);
+  assert.equal(request.toolChoice, 'auto');
+  assert.equal(request.providerPresent, true);
+  assert.deepEqual(request.providerOrder, KIMI.provider.order);
+  assert.equal(request.providerAllowFallbacks, false);
+  assert.deepEqual(request.unexpectedRequestFields, []);
+  assert.equal(
+    request.requestBodyHash,
+    crypto.createHash('sha256').update(JSON.stringify(calls[0].body)).digest('hex'),
+    'the ledger binds the exact serialized provider body'
+  );
+  assert.match(request.requestControlHash, /^[a-f0-9]{64}$/);
+});
+
+test('missing provider token details stay null while conservative cost and billing remain usable', async () => {
+  const usage = { prompt_tokens: 1000, completion_tokens: 100, cost: 0.0015 };
+  const { driver, telemetry, budget } = harness([
+    completion({ message: { role: 'assistant', content: 'done' }, usage, finishReason: 'stop' }),
+  ]);
+  const action = await driver.next();
+  assert.equal(action.type, 'finish');
+  const { totals, events } = telemetry.snapshot();
+  assert.equal(totals.cachedTokens, null);
+  assert.equal(totals.reasoningTokens, null);
+  assert.equal(totals.cachedTokensComplete, false);
+  assert.equal(totals.reasoningTokensComplete, false);
+  assert.equal(totals.usageComplete, true);
+  assert.equal(totals.costComplete, true);
+  assert.ok(budget.spentUsd() >= 0.0015);
+  const response = events.find((event) => event.type === 'response');
+  assert.equal(response.usage.cachedTokens, null);
+  assert.equal(response.usage.reasoningTokens, null);
 });
 
 test('the provider-reported charge is reconciled inside the driver before another request can be sent', async () => {
@@ -153,7 +197,7 @@ test('profile supplies endpoint, model, limits, and pinning; temperature stays m
   const body = calls[0].body;
   assert.equal(body.model, KIMI.model);
   assert.equal(body.max_tokens, KIMI.maxTokens);
-  assert.deepEqual(body.provider, { order: ['moonshotai'], allow_fallbacks: false });
+  assert.deepEqual(body.provider, { order: ['moonshotai/int4'], allow_fallbacks: false });
   assert.ok(!('temperature' in body), 'temperature must be omitted so the model default applies');
   assert.ok(!('reasoning' in body), 'kimi profile sets no reasoning override');
 });
@@ -189,6 +233,11 @@ test('multiple tool calls in one response drain without extra provider requests'
     completion({ message: { role: 'assistant', content: 'done' }, usage: USAGE, finishReason: 'stop' }),
   ]);
   const first = await driver.next();
+  assert.equal(
+    telemetry.snapshot().events.filter((event) => event.type === 'tool_call').length,
+    2,
+    'all provider-issued calls are recorded before the first one executes'
+  );
   driver.observe(first, { code: 0 });
   const second = await driver.next();
   driver.observe(second, { code: 0 });
@@ -202,6 +251,106 @@ test('multiple tool calls in one response drain without extra provider requests'
   const finish = await driver.next();
   assert.equal(finish.type, 'finish');
   assert.equal(calls.length, 2);
+});
+
+test('finish suppresses every sibling actionable call with a correlated terminal result', async () => {
+  const { driver, telemetry, calls } = harness([
+    completion({
+      message: assistantToolCalls([
+        ['finish', { answer: 'complete' }],
+        ['runInTerminal', { command: 'echo must-not-run' }],
+      ]),
+      usage: USAGE,
+    }),
+  ]);
+  const result = await driver.next();
+  assert.equal(result.type, 'finish');
+  assert.equal(result.answer, 'complete');
+  assert.equal(calls.length, 1);
+  const events = telemetry.snapshot().events;
+  const issued = events.filter((event) => event.type === 'tool_call');
+  const terminals = events.filter((event) => event.type === 'tool_result');
+  assert.equal(issued.length, 2);
+  assert.equal(terminals.length, 2);
+  assert.deepEqual(
+    terminals.map((event) => `${event.requestId}:${event.toolCallId}`).sort(),
+    issued.map((event) => `${event.requestId}:${event.toolCallId}`).sort()
+  );
+  const suppressed = terminals.find((event) => event.tool === 'runInTerminal');
+  assert.equal(suppressed.exitCode, 126);
+  assert.equal(suppressed.containmentMode, 'bridge-local');
+  assert.equal(suppressed.containmentComplete, true);
+  assert.ok(events.some((event) => event.type === 'tool_call_suppressed' && event.reason === 'finish_selected'));
+});
+
+test('markVerified and explicit step-ceiling suppression close every pending tool call', async () => {
+  for (const mode of ['verification', 'step_ceiling']) {
+    const { driver, telemetry } = harness([
+      completion({
+        message: assistantToolCalls([
+          ['runInTerminal', { command: 'first' }],
+          ['runInTerminal', { command: 'second' }],
+        ]),
+        usage: USAGE,
+      }),
+    ]);
+    const first = await driver.next();
+    driver.observe(first, {
+      code: 0,
+      stdout: '',
+      stderr: '',
+      timedOut: false,
+      containmentMode: 'linux-process-census',
+      containmentComplete: true,
+    });
+    if (mode === 'verification') driver.markVerified({ fallbackAnswer: 'verified' });
+    else driver.suppressPending('step_ceiling');
+    const events = telemetry.snapshot().events;
+    const calls = events.filter((event) => event.type === 'tool_call');
+    const results = events.filter((event) => event.type === 'tool_result');
+    assert.equal(calls.length, 2, mode);
+    assert.equal(results.length, 2, mode);
+    assert.deepEqual(
+      results.map((event) => `${event.requestId}:${event.toolCallId}`).sort(),
+      calls.map((event) => `${event.requestId}:${event.toolCallId}`).sort(),
+      mode
+    );
+    assert.equal(results.at(-1).exitCode, 126);
+  }
+});
+
+test('malformed provider tool arguments are explicit and cannot become an empty successful command', async () => {
+  const malformed = {
+    role: 'assistant',
+    content: null,
+    tool_calls: [{ id: 'bad-json', type: 'function', function: { name: 'runInTerminal', arguments: '{not-json' } }],
+  };
+  const { driver, telemetry } = harness([completion({ message: malformed, usage: USAGE })]);
+  const action = await driver.next();
+  assert.equal(action.type, 'tool');
+  assert.equal(action._argumentsValid, false);
+  assert.match(action._argumentError, /valid JSON object/);
+  const event = telemetry.snapshot().events.find((candidate) => candidate.type === 'tool_call');
+  assert.equal(event.argumentsValid, false);
+  assert.equal(event.category, 'invalid');
+});
+
+test('a malformed finish call is retained in the one-to-one ledger', async () => {
+  const message = {
+    role: 'assistant',
+    content: 'fallback summary',
+    tool_calls: [{ id: 'bad-finish', type: 'function', function: { name: 'finish', arguments: '{broken' } }],
+  };
+  const { driver, telemetry } = harness([completion({ message, usage: USAGE })]);
+  const result = await driver.next();
+  assert.equal(result.type, 'finish');
+  assert.equal(result.answer, 'fallback summary');
+  const events = telemetry.snapshot().events;
+  const call = events.find((event) => event.type === 'tool_call' && event.toolCallId === 'bad-finish');
+  const terminal = events.find((event) => event.type === 'tool_result' && event.toolCallId === 'bad-finish');
+  assert.equal(call.argumentsValid, false);
+  assert.equal(terminal.exitCode, 126);
+  assert.equal(terminal.requestId, call.requestId);
 });
 
 test('oversized tool results become valid bounded head/tail JSON and the compaction is recorded', async () => {
@@ -267,6 +416,56 @@ test('immutable harness-cli invocations retain lifecycle categories without matc
   assert.deepEqual(
     telemetry.snapshot().events.filter((event) => event.type === 'tool_call').map((event) => event.category),
     ['verify', 'other']
+  );
+});
+
+test('history-rewriting Git work is timed as an edit while read-only Git checks remain inspection', async () => {
+  const commands = [
+    ['git filter-repo --path secret.txt --invert-paths --force', 'edit'],
+    ['git reflog expire --expire=now --all', 'edit'],
+    ['git gc --prune=now', 'edit'],
+    ['git update-ref -d refs/original/main', 'edit'],
+    ['git -C /app rebase --root', 'edit'],
+    ['git reset --hard HEAD~1', 'edit'],
+    ['git fsck --no-reflogs --unreachable', 'inspect'],
+    ['git rev-list --objects --all', 'inspect'],
+    ['git cat-file -p HEAD', 'inspect'],
+  ];
+  const { driver, telemetry } = harness([
+    completion({
+      message: assistantToolCalls(commands.map(([command]) => ['runInTerminal', { command }])),
+      usage: USAGE,
+    }),
+  ]);
+  for (let index = 0; index < commands.length; index += 1) {
+    const action = await driver.next();
+    driver.observe(action, { code: 0, stdout: '', stderr: '' });
+  }
+  assert.deepEqual(
+    telemetry.snapshot().events.filter((event) => event.type === 'tool_call').map((event) => event.category),
+    commands.map(([, category]) => category)
+  );
+});
+
+test('read-only script file access is not mislabeled as a workspace mutation', async () => {
+  const commands = [
+    ['python -c "print(open(\'README.md\').read())"', 'other'],
+    ['python -c "open(\'result.txt\', \'w\').write(\'done\')"', 'edit'],
+    ['node -e "require(\'fs\').writeFileSync(\'result.txt\', \'done\')"', 'edit'],
+  ];
+  const { driver, telemetry } = harness([
+    completion({
+      message: assistantToolCalls(commands.map(([command]) => ['runInTerminal', { command }])),
+      usage: USAGE,
+    }),
+  ]);
+  for (const _entry of commands) {
+    const action = await driver.next();
+    driver.observe(action, { code: 0, stdout: '', stderr: '' });
+  }
+  assert.deepEqual(
+    telemetry.snapshot().events.filter((event) => event.type === 'tool_call').map((event) => event.category),
+    commands.map(([, category]) => category)
   );
 });
 
@@ -419,7 +618,14 @@ test('heavily reduced durable state remains valid bounded JSON', async () => {
     ],
     { driver: { maxPayloadChars: 1200, maxStateChars: 180, retainCompletedTurns: 0 } }
   );
-  driver.checkpoint({ goal: 'g'.repeat(5000), constraints: Array.from({ length: 30 }, (_, i) => `constraint-${i}-${'x'.repeat(200)}`) });
+  driver.checkpoint({
+    goal: 'g'.repeat(5000),
+    constraints: Array.from({ length: 30 }, (_, i) => `constraint-${i}-${'x'.repeat(200)}`),
+    files: { changed: ['src/critical-result.js'] },
+    tests: [{ command: 'npm test', status: 'failed', summary: 'one failure' }],
+    failures: [{ command: 'npm test', exitCode: 1, summary: 'assertion' }],
+    nextAction: 'repair the failing assertion',
+  });
   const action = await driver.next();
   driver.observe(action, { code: 0, stdout: 'x'.repeat(8000), stderr: '' });
   await driver.next();
@@ -427,7 +633,13 @@ test('heavily reduced durable state remains valid bounded JSON', async () => {
   assert.ok(stateMessage);
   const serializedState = stateMessage.content.slice('# Durable eval state\n'.length);
   assert.ok(serializedState.length <= 180);
-  assert.doesNotThrow(() => JSON.parse(serializedState));
+  const parsedState = JSON.parse(serializedState);
+  assert.match(parsedState.goal, /^g+/);
+  assert.ok(parsedState.constraints.length > 0);
+  assert.ok(parsedState.files.changed.length > 0);
+  assert.ok(parsedState.tests.length > 0);
+  assert.ok(parsedState.failures.length > 0);
+  assert.ok(parsedState.nextAction);
 });
 
 test('a malformed completion that still reports usage is a billable failure and is charged', async () => {
@@ -435,6 +647,43 @@ test('a malformed completion that still reports usage is a billable failure and 
   await assert.rejects(driver.next(), (err) => err.kind === 'provider' && err.billed === true);
   assert.ok(Math.abs(budget.spentUsd() - USAGE.cost) < 1e-9, 'billed usage must still be charged at the reconciled amount');
   assert.equal(telemetry.snapshot().totals.requests, 1);
+});
+
+test('a 200 partial provider error is charged but never accepted as a model completion', async () => {
+  const response = ok({
+    id: 'gen-partial',
+    model: KIMI.model,
+    provider: 'Moonshot AI',
+    choices: [{
+      message: { role: 'assistant', content: 'partial answer' },
+      finish_reason: 'error',
+      error: { code: 502, message: 'upstream failed' },
+    }],
+    usage: USAGE,
+  });
+  const { driver, budget, telemetry } = harness([response]);
+  await assert.rejects(driver.next(), (error) => error.kind === 'provider' && error.billed === true);
+  assert.ok(Math.abs(budget.knownReconciledSpendUsd() - USAGE.cost) < 1e-9);
+  const { totals, events } = telemetry.snapshot();
+  assert.equal(totals.providerResponses, 0);
+  assert.equal(totals.providerErrors, 1);
+  assert.equal(totals.promptTokens, USAGE.prompt_tokens);
+  assert.equal(events.some((event) => event.type === 'completion_error'), true);
+});
+
+test('reasoning tokens above completion tokens are retained as unknown detail', async () => {
+  const usage = {
+    ...USAGE,
+    completion_tokens: 10,
+    completion_tokens_details: { reasoning_tokens: 11 },
+  };
+  const { driver, telemetry } = harness([
+    completion({ message: { role: 'assistant', content: 'done' }, usage, finishReason: 'stop' }),
+  ]);
+  await driver.next();
+  const { totals } = telemetry.snapshot();
+  assert.equal(totals.reasoningTokens, null);
+  assert.equal(totals.reasoningTokensComplete, false);
 });
 
 test('a paid response without provider cost fail-stops and reserves the remainder after charging the local estimate', async () => {
@@ -488,6 +737,10 @@ test('request telemetry records request and payload footprint without retaining 
   assert.ok(request.systemChars > 0);
   assert.ok(request.toolSchemaChars > 0);
   assert.ok(request.messagesHash);
+  assert.equal(request.systemPromptPosition, 0);
+  assert.equal(request.instructionPosition, 1);
+  assert.equal(request.durableStateMessageCount, 0);
+  assert.equal(request.unexpectedSystemMessageCount, 0);
   assert.equal('messages' in request, false);
 });
 
@@ -524,7 +777,16 @@ test('deterministic compaction bounds the request and retains durable task state
   for (const message of last.messages.filter((item) => item.role === 'assistant' && item.tool_calls)) {
     assert.ok(message.tool_calls.every((call) => toolIds.has(call.id)), 'no assistant tool call may survive without its tool result');
   }
-  assert.ok(telemetry.snapshot().events.some((event) => event.type === 'context_compacted'));
+  const events = telemetry.snapshot().events;
+  assert.ok(events.some((event) => event.type === 'context_compacted'));
+  const compactedRequest = events.filter((event) => event.type === 'request').at(-1);
+  assert.equal(compactedRequest.systemPromptPosition, 0);
+  assert.equal(compactedRequest.instructionPosition, 1);
+  assert.equal(compactedRequest.systemMessageCount, 2);
+  assert.equal(compactedRequest.durableStateMessageCount, 1);
+  assert.equal(compactedRequest.durableStateMessageIndex, 2);
+  assert.match(compactedRequest.durableStateMessageHash, /^[a-f0-9]{64}$/);
+  assert.equal(compactedRequest.unexpectedSystemMessageCount, 0);
 });
 
 test('checkpoint normalizes malformed collection shapes before later observations', () => {
@@ -550,6 +812,11 @@ test('verified stop permits one final provider attempt and suppresses later tool
   assert.equal(finish.stopReason, 'verified_stop');
   assert.equal(finish.answer, 'verified');
   assert.equal(calls.length, 1);
+  const request = telemetry.snapshot().events.find((event) => event.type === 'request');
+  assert.equal(request.toolMode, 'finish-only');
+  assert.equal(request.postVerify, true);
+  assert.equal(request.toolCount, 1);
+  assert.match(request.toolSchemaHash, /^[a-f0-9]{64}$/);
   const again = await driver.next();
   assert.equal(again.stopReason, 'verified_stop');
   assert.equal(calls.length, 1, 'verified completion never issues a second provider request');

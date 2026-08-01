@@ -10,6 +10,7 @@
  *
  * Pricing units are USD per million tokens.
  */
+import crypto from 'node:crypto';
 
 function deepFreeze(value) {
   if (value && typeof value === 'object') {
@@ -22,11 +23,17 @@ function deepFreeze(value) {
 const PROFILES = deepFreeze({
   'kimi-k2.7-code': {
     id: 'kimi-k2.7-code',
-    model: 'moonshotai/kimi-k2.7-code',
+    model: 'moonshotai/kimi-k2.7-code-20260612',
     host: 'openrouter',
     url: 'https://openrouter.ai/api/v1/chat/completions',
-    // Pinned routing: one provider, no fallback — a fallback invalidates the A/B.
-    provider: { order: ['moonshotai'], allowFallbacks: false },
+    // Pin one exact endpoint variant. A base `moonshotai` slug also matches the
+    // 2x-priced `moonshotai/highspeed` endpoint and is not reproducible.
+    provider: { order: ['moonshotai/int4'], expectedResolvedNames: ['Moonshot AI'], allowFallbacks: false },
+    catalogPin: {
+      checkedAt: '2026-07-31',
+      canonicalSlug: 'moonshotai/kimi-k2.7-code-20260612',
+      endpointTag: 'moonshotai/int4',
+    },
     // OpenRouter bills per endpoint: these are the pinned Moonshot AI standard
     // endpoint rates, not the cheaper model-level floor from unpinned providers.
     pricing: { inputPerM: 0.95, cachedInputPerM: 0.19, outputPerM: 4.0 },
@@ -45,7 +52,9 @@ const PROFILES = deepFreeze({
     pricing: { inputPerM: 0, cachedInputPerM: 0, outputPerM: 0 },
     maxTokens: 4096,
     temperature: null,
-    reasoning: { enabled: true }, // thinking on, same in both conditions
+    // Ollama's OpenAI-compatible /v1/chat/completions surface accepts
+    // `reasoning.effort`, not the native API's `think`/an `enabled` flag.
+    reasoning: { effort: 'high' },
     timeoutMs: 30 * 60_000,
     trialCeilingUsd: 0,
   },
@@ -57,6 +66,25 @@ export function getProfile(id) {
     throw new Error(`unknown model profile: ${id} (known: ${Object.keys(PROFILES).join(', ')})`);
   }
   return profile;
+}
+
+/** Stable, non-secret identity for the exact routing and pricing assumptions. */
+export function billingProfileEvidence(id) {
+  const profile = getProfile(id);
+  return {
+    profileId: profile.id,
+    model: profile.model,
+    host: profile.host,
+    provider: profile.provider,
+    catalogPin: profile.catalogPin ?? null,
+    pricing: profile.pricing,
+  };
+}
+
+export function billingProfileHash(id) {
+  return crypto.createHash('sha256')
+    .update(JSON.stringify(billingProfileEvidence(id)))
+    .digest('hex');
 }
 
 export function listProfiles() {

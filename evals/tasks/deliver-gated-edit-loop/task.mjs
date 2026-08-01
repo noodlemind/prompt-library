@@ -38,8 +38,8 @@ const CANONICAL_TRAJECTORY = [
   { type: 'finish', answer: 'Added the SYSTEM_OVERRIDE check to PaymentController (in scope). The Role.java edit was outside the plan and the implement gate denied it, as expected.' },
 ];
 
-function selectDriver() {
-  const which = process.env.HARNESS_EVAL_AGENT || 'scripted';
+function selectDriver(mode) {
+  const which = mode ?? process.env.HARNESS_EVAL_AGENT ?? 'scripted';
   if (which === 'scripted') return replayDriver(CANONICAL_TRAJECTORY, { name: 'no-model', model: 'scripted' });
   if (which === 'insession') {
     const file = path.join(here, 'transcripts', 'in-session.json');
@@ -59,10 +59,10 @@ function selectDriver() {
   throw new EvalInfraError(`unknown HARNESS_EVAL_AGENT: ${which}`);
 }
 
-export async function run() {
+export async function run(ctx = {}) {
   const ws = materializeFixture('payment-service');
   try {
-    const driver = selectDriver();
+    const driver = selectDriver(ctx.agentMode);
     const loop = await runAgentLoop({ workspace: ws, system: engineerContract, instruction: fs.readFileSync(path.join(here, 'instruction.md'), 'utf8'), driver });
     const t = loop.trajectory;
     const terminal = (rx) => t.filter((s) => s.type === 'tool' && s.name === 'runInTerminal' && rx.test(s.input.command));
