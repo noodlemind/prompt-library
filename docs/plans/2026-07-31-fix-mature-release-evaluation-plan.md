@@ -2,7 +2,7 @@
 plan_schema: 1
 title: "Mature Engineer Harness Release Evaluation"
 type: fix
-status: review
+status: done
 plan_lock: true
 phase: 5
 priority: P1
@@ -73,10 +73,11 @@ Two different completions must not be conflated:
   arithmetic, known spend, uncertain exposure, and report v2 validate; scoped
   and broad eval tests pass; required reviews have no unresolved critical code
   finding; the stack is pushed to PR #38.
-- **Current state:** AC1–AC7 are complete. AC8 remains open until the final
-  coherent commits, ancestry check, and PR push finish. Required independent
-  reviews and the final external re-review are complete with no unresolved
-  finding.
+- **Current state:** The implementation-completion threshold is satisfied:
+  AC1–AC8 are complete, required reviews and the final external re-review have
+  no unresolved finding, the coherent stack is published to PR #38, and its
+  remote ancestry and head update were verified. Initial-ship evidence remains
+  deliberately incomplete under the separate threshold below.
 - **Initial-ship evidence complete:** a trusted supervisor supplies
   runtime-observed evidence for all six release-trust capabilities, then one
   clean full-lock three-repetition calibration runs within the single $20 cap,
@@ -103,7 +104,7 @@ within $10 and use the separate `release-routine` regression/overhead profile.
 - [x] **AC5** Tool observations use bounded head/tail summaries with hashes, and deterministic history compaction retains the task goal, constraints, changed files, test outcomes, and failures while recording before/after context size.
 - [x] **AC6** After a successful internal `harness verify`, at most one provider request may obtain final prose; later tool calls are suppressed and the stop reason records verified completion.
 - [x] **AC7** Reports distinguish causal same-model A/B evidence from native-product experience, preserve missing proprietary telemetry as null, enforce a hard routine ceiling of 10 USD and explicit calibration ceiling of 20 USD, and encode parity limits of prompt ratio <=2.0, cost ratio <=1.5, and wall-time ratio <=1.25.
-- [ ] **AC8** Focused tests fail before their fixes, the named and compositional
+- [x] **AC8** Focused tests fail before their fixes, the named and compositional
   `harness-tests` evidence is green after correction, required reviews have no
   unresolved critical findings, `evals/README.md` documents metrics, claim
   levels, limits, costs, and operator completion criteria, the commit stack is
@@ -166,7 +167,7 @@ within $10 and use the separate `release-routine` regression/overhead profile.
 
 - [x] Run focused tests throughout and the named `npm --prefix packages/harness test` check twice; the first run passed, the expanded second run exposed one trust-gate regression, and the corrected eval surface passed the final broad sweep. The named command is not repeated a third time. <!-- phase:5 -->
 - [x] Resolve final correctness review findings; record evidence and plan state. <!-- phase:5 -->
-- [ ] Commit coherent layers, synchronize with the latest PR head, and push to `feat/eval-driver-telemetry-budgets`. <!-- phase:5 -->
+- [x] Commit coherent layers, synchronize with the latest PR head, and push to `feat/eval-driver-telemetry-budgets`. <!-- phase:5 -->
 
 ## Research Notes
 
@@ -278,6 +279,10 @@ authoritative complete inventory.
   changed-file credential-signature scan, plan validation, and documentation
   hygiene audit are clean.
 - No paid provider or subscription run was performed for this implementation.
+- The implementation/tests commit `0ec650f` and operator-contract/plan commit
+  `ce7cd14` form the coherent stack. After fetching the PR branch, remote head
+  `bf124c4` was verified as an ancestor of `ce7cd14`; the non-force push then
+  advanced `feat/eval-driver-telemetry-budgets` to `ce7cd14` successfully.
 
 ## Risk & Review Routing
 
@@ -289,11 +294,9 @@ authoritative complete inventory.
 
 ## Implementation Notes
 
-- Implementation and broad verification are complete on
-  `codex/pr38-eval-maturity` and preserve PR #38's existing commits. The
-  remaining work is coherent commits, the remote ancestry check, and a
-  non-force push to
-  `feat/eval-driver-telemetry-budgets`.
+- Implementation and broad verification are complete. Commits `0ec650f` and
+  `ce7cd14` preserve PR #38's existing history and were published by non-force
+  push to `feat/eval-driver-telemetry-budgets` after remote ancestry validation.
 - Production live execution remains intentionally unreachable. The red trust
   state is a completion criterion, not unfinished measurement code: it prevents
   a paid claim until runtime closure can be observed independently.
@@ -370,6 +373,17 @@ authoritative complete inventory.
   canonical plan, and confirmed no generated reports, logs, attachment copies,
   temporary notes, or review artifacts remain.
 - Plan validation, whitespace checks, and changed-file credential-signature
-  scans pass. Commit construction, remote ancestry validation, and PR push are
-  the only remaining AC8 records.
+  scans passed; the publication records that completed AC8 are captured in the
+  next activity entry.
 - **Status:** review; **phase:** 5.
+
+### 2026-07-31 — Published to PR #38
+
+- Created a coherent implementation/test commit (`0ec650f`) and durable
+  operator-contract/plan commit (`ce7cd14`).
+- Fetched remote head `bf124c4`, verified it was an ancestor of the local
+  stack, and advanced `feat/eval-driver-telemetry-budgets` by non-force push.
+- AC1–AC8 and the implementation-completion threshold are complete. No paid
+  run occurred; initial-ship evidence remains blocked until a trusted runtime
+  supervisor attests all six required capabilities.
+- **Status:** done; **phase:** 5.
