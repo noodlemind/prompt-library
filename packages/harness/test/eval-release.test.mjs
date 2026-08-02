@@ -1580,7 +1580,10 @@ test('unknown billing is reported as reserved exposure rather than known spend',
     },
   });
   const { report } = await runRelease({ config: CONFIG, steps, requiredPairs: ['openrouter-kimi'] });
-  assert.equal(report.budget.spentUsd, 0.25);
+  // `spentUsd` keeps its v1 meaning — TOTAL accounted exposure — so a v1-era
+  // consumer can never read $0.25 while $4.75 of uncertain billing is
+  // reserved; the reconciled/uncertain split lives in the explicit fields.
+  assert.equal(report.budget.spentUsd, 5);
   assert.equal(report.budget.knownReconciledSpendUsd, 0.25);
   assert.equal(report.budget.uncertainReservedUsd, 4.75);
   assert.equal(report.budget.accountedExposureUsd, 5);

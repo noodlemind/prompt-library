@@ -163,7 +163,7 @@ if (!providerKey || secretInArgv || providerKeyInAgentEnv) {
   console.error('unsafe provider credential delivery');
   process.exit(86);
 }
-const verifierDir = path.join(jobsDir, jobName, 'trial-0', 'verifier');
+const verifierDir = path.join(jobsDir, jobName, 'trial__fx0', 'verifier');
 fs.mkdirSync(verifierDir, { recursive: true });
 fs.writeFileSync(path.join(verifierDir, 'reward.json'), '{"reward": 1}');
 const condition = JSON.parse(fs.readFileSync(agentEnv.HARNESS_EVAL_TB_CONDITION, 'utf8'));

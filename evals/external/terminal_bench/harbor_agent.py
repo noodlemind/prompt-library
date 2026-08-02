@@ -847,13 +847,15 @@ class StdioBridgeAgent(BaseAgent):
             "harnessEvents": safe_events,
             "harnessEventEvidence": safe_event_evidence,
             "enforcement": {
-                "hooksActive": enforcement.get("hooksActive") is True,
-                "source": str(enforcement.get("source") or "unavailable")[:80],
-                **(
-                    {"policyBypassAchieved": enforcement["policyBypassAchieved"]}
-                    if isinstance(enforcement.get("policyBypassAchieved"), bool)
-                    else {}
-                ),
+                # The probe's stdout crosses the sandbox boundary and is
+                # therefore agent-forgeable: nothing the sandbox prints may
+                # establish enforcement facts. The genuine probe hard-codes
+                # hooksActive false; only a future TRUSTED supervisor channel
+                # (outside the sandbox) may ever assert true, and a forged
+                # policyBypassAchieved boolean must never mask or mint a
+                # safety verdict.
+                "hooksActive": False,
+                "source": "sandbox-untrusted",
             },
         }
 

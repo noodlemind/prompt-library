@@ -16,6 +16,9 @@ function fail(message) {
 }
 
 function integer(value, label, { min = 0, max = Number.MAX_SAFE_INTEGER } = {}) {
+  // Number('') === 0 would silently satisfy a zero minimum; a blank argument
+  // is always caller error.
+  if (typeof value !== 'string' || value.trim() === '') fail(`invalid ${label}`);
   const parsed = Number(value);
   if (!Number.isSafeInteger(parsed) || parsed < min || parsed > max) fail(`invalid ${label}`);
   return parsed;
@@ -60,7 +63,28 @@ try {
 }
 const stdoutCap = integer(stdoutCapValue, 'stdout cap', { min: 1, max: 2 * 1024 * 1024 });
 const stderrCap = integer(stderrCapValue, 'stderr cap', { min: 1, max: 2 * 1024 * 1024 });
-const timeoutMs = integer(timeoutValue, 'timeout', { min: 0, max: 24 * 60 * 60 * 1000 });
+// A bounded runner with no bound is a contradiction: the timeout is mandatory.
+const timeoutMs = integer(timeoutValue, 'timeout', { min: 1, max: 24 * 60 * 60 * 1000 });
+
+/**
+ * The Linux census (below) kills every same-user process created after the
+ * baseline. That is correct ONLY inside a dedicated task container. Refuse to
+ * run it on a bare host unless the operator explicitly accepts host-wide kill
+ * semantics — a code comment is not a guard.
+ */
+function insideLinuxContainer() {
+  try {
+    if (fs.existsSync('/.dockerenv') || fs.existsSync('/run/.containerenv')) return true;
+    return /docker|containerd|kubepods|libpod|lxc/.test(fs.readFileSync('/proc/1/cgroup', 'utf8'));
+  } catch {
+    return false;
+  }
+}
+if (process.platform === 'linux' && process.env.HARNESS_EVAL_TB_CENSUS !== '1' && !insideLinuxContainer()) {
+  fail(
+    'linux process census refused: not inside a dedicated container. Set HARNESS_EVAL_TB_CENSUS=1 only where killing every post-baseline same-user process is acceptable.'
+  );
+}
 const stdout = { cap: stdoutCap, total: 0, length: 0, chunks: [], truncated: false };
 const stderr = { cap: stderrCap, total: 0, length: 0, chunks: [], truncated: false };
 
@@ -97,7 +121,8 @@ function linuxProcessSnapshot() {
     const pid = Number(name);
     const state = fields[0];
     const starttime = fields[19];
-    if (!Number.isSafeInteger(pid) || pid <= 0 || !/^[A-Z]$/.test(state ?? '') || !/^\d+$/.test(starttime ?? '')) {
+    // Linux states include lowercase letters (t = ptrace-stopped, x = dead).
+    if (!Number.isSafeInteger(pid) || pid <= 0 || !/^[A-Za-z]$/.test(state ?? '') || !/^\d+$/.test(starttime ?? '')) {
       // Confirm whether an apparently malformed entry merely exited between
       // read and parse. A still-present malformed identity makes reuse unsafe.
       if (!fs.existsSync(`/proc/${name}`)) continue;
@@ -176,7 +201,7 @@ function signalProcessGroup(signal = 'SIGKILL') {
 function postBaselineProcesses() {
   const current = linuxProcessSnapshot();
   return [...current.values()].filter((entry) =>
-    entry.pid !== process.pid && !baseline.has(entry.identity) && !['Z', 'X'].includes(entry.state)
+    entry.pid !== process.pid && !baseline.has(entry.identity) && !['Z', 'X', 'x'].includes(entry.state)
   );
 }
 
@@ -255,12 +280,32 @@ child.on('error', (error) => fail(`command spawn failed: ${error.message}`));
 // A background descendant can inherit the pipes and delay `close` after the
 // command shell exits. Kill the detached group at `exit`; `close` below waits
 // for the streams to drain before publishing the result.
+let exitContainmentComplete = false;
+let drainWatchdog = null;
 child.on('exit', () => {
-  containCommand();
+  // The command is over: the deadline no longer applies. Clearing here (not
+  // in `close`) stops a synchronous exit-time census from letting the timer
+  // fire late and misreport a successful command as a timeout.
+  if (timer) clearTimeout(timer);
+  exitContainmentComplete = containCommand();
+  // A surviving descendant outside the group (non-Linux setsid escapee) can
+  // hold the pipes open forever. Bound the drain: emit a fail-closed envelope
+  // rather than hanging silently.
+  drainWatchdog = setTimeout(() => {
+    cleanupFailure ??= 'PIPE_DRAIN_ABORTED';
+    appendTail(stderr, Buffer.from('\npipe drain aborted: a surviving descendant held stdio open\n', 'utf8'));
+    child.stdout.destroy();
+    child.stderr.destroy();
+  }, 5_000);
+  drainWatchdog.unref();
 });
 child.on('close', (code, signal) => {
   if (timer) clearTimeout(timer);
-  containCommand();
+  if (drainWatchdog) clearTimeout(drainWatchdog);
+  // Linux re-runs the census to catch post-drain stragglers (identity-guarded
+  // against pid reuse). The non-Linux numeric group kill has no such guard,
+  // so it must not run a third time against a possibly-recycled pgid.
+  if (process.platform === 'linux' || !exitContainmentComplete) containCommand();
   if (cleanupFailure) appendTail(stderr, Buffer.from(`\ncommand containment cleanup failed (${cleanupFailure})\n`, 'utf8'));
   const explicitTimedOut = timedOut;
   const complete = cleanupFailure == null && containmentComplete;

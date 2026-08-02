@@ -21,7 +21,7 @@ test('bounded exec cleans up redirected background descendants before returning'
     const result = spawnSync(
       process.execPath,
       [runner, Buffer.from(command).toString('base64'), '4096', '4096', '5000'],
-      { encoding: 'utf8', timeout: 5000 }
+      { encoding: 'utf8', timeout: 5000, env: { ...process.env, HARNESS_EVAL_TB_CENSUS: '1' } }
     );
 
     assert.equal(result.status, 0, result.stderr);
@@ -42,7 +42,7 @@ test('non-Linux process-group cleanup is idempotent across exit/close races', { 
     const result = spawnSync(
       process.execPath,
       [runner, Buffer.from(command).toString('base64'), '4096', '4096', '5000'],
-      { encoding: 'utf8', timeout: 5000 }
+      { encoding: 'utf8', timeout: 5000, env: { ...process.env, HARNESS_EVAL_TB_CENSUS: '1' } }
     );
     assert.equal(result.status, 0, result.stderr);
     const envelope = JSON.parse(result.stdout);
@@ -74,7 +74,7 @@ test('bounded exec reaps a descendant that escapes into a new session', { skip: 
     const result = spawnSync(
       process.execPath,
       [runner, Buffer.from(command).toString('base64'), '4096', '4096', '5000'],
-      { encoding: 'utf8', timeout: 5000 }
+      { encoding: 'utf8', timeout: 5000, env: { ...process.env, HARNESS_EVAL_TB_CENSUS: '1' } }
     );
 
     assert.equal(result.status, 0, result.stderr);
@@ -125,6 +125,34 @@ test('Linux container census ignores workspace Python startup shims and reaps se
     assert.equal(fs.existsSync(startupMarker), false, 'the trusted supervisor never invokes workspace-controlled Python');
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('the linux census refuses to run on a bare host without explicit opt-in', { skip: process.platform !== 'linux' }, (t) => {
+  if (fs.existsSync('/.dockerenv') || fs.existsSync('/run/.containerenv')) {
+    t.skip('running inside a container — the census is legitimately enabled here');
+    return;
+  }
+  const env = { ...process.env };
+  delete env.HARNESS_EVAL_TB_CENSUS;
+  const result = spawnSync(process.execPath, [runner, Buffer.from('true').toString('base64'), '4096', '4096', '5000'], {
+    encoding: 'utf8',
+    timeout: 5000,
+    env,
+  });
+  assert.equal(result.status, 125);
+  assert.match(result.stderr, /census refused/i);
+});
+
+test('a blank or zero timeout is rejected — the runner is bounded by contract', () => {
+  for (const timeout of ['', '0', ' ']) {
+    const result = spawnSync(process.execPath, [runner, Buffer.from('true').toString('base64'), '4096', '4096', timeout], {
+      encoding: 'utf8',
+      timeout: 5000,
+      env: { ...process.env, HARNESS_EVAL_TB_CENSUS: '1' },
+    });
+    assert.equal(result.status, 125, `timeout ${JSON.stringify(timeout)} must be refused`);
+    assert.match(result.stderr, /invalid timeout/);
   }
 });
 

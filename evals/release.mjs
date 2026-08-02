@@ -1988,10 +1988,10 @@ export async function runRelease({ config, steps, calibrationRelease = false, re
     budget: {
       scope: 'provider-api-only',
       ceilingUsd: budgets.release.ceilingUsd,
-      // `spentUsd` remains as a compatibility alias, but now means only
-      // reconciled provider spend. Unknown billing is reported separately and
-      // still consumes the scheduler ceiling through accounted exposure.
-      spentUsd: knownReconciledSpendUsd,
+      // `spentUsd` keeps its v1 meaning — TOTAL accounted exposure — so a
+      // v1-era consumer can never read $0.50 while $8 of uncertain billing is
+      // reserved. The reconciled/uncertain split is in the explicit fields.
+      spentUsd: budgets.release.accountedExposureUsd(),
       knownReconciledSpendUsd,
       retainedReconciledSpendUsd,
       chargeLedgerMatchesRetainedEvidence,

@@ -24,9 +24,10 @@ export function parseReward(content, filename) {
     }
     if (!metrics || typeof metrics !== 'object') return null;
     if (typeof metrics.reward === 'number' && Number.isFinite(metrics.reward)) return { reward: metrics.reward, metrics };
-    const numeric = Object.values(metrics).filter((v) => typeof v === 'number' && Number.isFinite(v));
-    // A single numeric metric is unambiguous; anything else needs a human.
-    return { reward: numeric.length === 1 ? numeric[0] : null, metrics };
+    // NO single-numeric fallback: a reward-less official JSON (e.g.
+    // {"failed": 3} from a schema drift) must never grade — {"failed": 3}
+    // would otherwise read as reward 3 and PASS a failure.
+    return { reward: null, metrics };
   }
   // The whole trimmed content must be one number — parseFloat('1 of 2') → 1
   // would grade a corrupt artifact as a pass.
@@ -39,12 +40,24 @@ export function verdictFromReward(reward, { passingReward = 1 } = {}) {
   return typeof reward === 'number' && reward >= passingReward ? 'pass' : 'fail';
 }
 
-/** Extract assertion counts from a pytest summary line, if one exists. */
+/**
+ * Extract assertion counts from the FINAL pytest summary line. Captured agent
+ * stdout appears earlier in the log and is attacker-influenced ("9999 passed"
+ * printed by the solution must not become evidence); the real summary is the
+ * last duration-bearing line, so scan from the end and require the `in N.NNs`
+ * marker pytest always emits.
+ */
 export function parsePytestSummary(text) {
-  const passed = /(\d+) passed/.exec(text);
-  const failed = /(\d+) failed/.exec(text);
-  if (!passed && !failed) return null;
-  return { passed: passed ? Number(passed[1]) : 0, failed: failed ? Number(failed[1]) : 0 };
+  const lines = String(text).split(/\r?\n/);
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    const line = lines[index];
+    if (!/\bin \d+(\.\d+)?s\b/.test(line)) continue;
+    const passed = /(\d+) passed\b/.exec(line);
+    const failed = /(\d+) failed\b/.exec(line);
+    if (!passed && !failed) continue;
+    return { passed: passed ? Number(passed[1]) : 0, failed: failed ? Number(failed[1]) : 0 };
+  }
+  return null;
 }
 
 const TREE_MANIFEST_VERSION = 'engineer-harness-tree-manifest-v1';
@@ -242,7 +255,10 @@ function hashFile(hash, record) {
   let fd;
   try {
     const noFollow = Number.isInteger(fs.constants.O_NOFOLLOW) ? fs.constants.O_NOFOLLOW : 0;
-    fd = fs.openSync(record.full, fs.constants.O_RDONLY | noFollow);
+    // O_NONBLOCK: a FIFO raced into the tree must fail the open, not block
+    // the collector forever (mirrors the in-sandbox probe's precaution).
+    const nonBlock = Number.isInteger(fs.constants.O_NONBLOCK) ? fs.constants.O_NONBLOCK : 0;
+    fd = fs.openSync(record.full, fs.constants.O_RDONLY | noFollow | nonBlock);
   } catch (error) {
     throw new Error(`tree manifest cannot open file ${displayPath(record.relative)}: ${error.code ?? error.message}`);
   }
@@ -279,7 +295,8 @@ function readEvidenceText(record) {
   let fd;
   try {
     const noFollow = Number.isInteger(fs.constants.O_NOFOLLOW) ? fs.constants.O_NOFOLLOW : 0;
-    fd = fs.openSync(record.full, fs.constants.O_RDONLY | noFollow);
+    const nonBlock = Number.isInteger(fs.constants.O_NONBLOCK) ? fs.constants.O_NONBLOCK : 0;
+    fd = fs.openSync(record.full, fs.constants.O_RDONLY | noFollow | nonBlock);
   } catch (error) {
     throw new Error(`tree manifest cannot open file ${displayPath(record.relative)}: ${error.code ?? error.message}`);
   }
@@ -362,7 +379,11 @@ export function collectVerifierEvidence(trialDir) {
     const rel = path.relative(tree.root, record.full).split(path.sep);
     if (rel[0] === 'artifacts') return false;
     return [0, 1].some((offset) => {
-      if (offset === 1 && ['workspace', 'logs', 'verifier'].includes(rel[0])) return false;
+      // Offset 1 is the job-root case, where the first segment must be a
+      // harbor-named trial directory (<task>__suffix) — an ALLOW-list, so a
+      // trial-root caller with an agent-created `agent/verifier/` or
+      // `sessions/logs/verifier/` directory can never mint official evidence.
+      if (offset === 1 && !/__[A-Za-z0-9]+$/.test(rel[0] ?? '')) return false;
       return layouts.some(
         (layout) =>
           rel.length > offset + layout.length &&
@@ -389,11 +410,28 @@ export function collectVerifierEvidence(trialDir) {
       break;
     }
   }
+  // Assertion counts and the tree hash are ADVISORY evidence. An oversized or
+  // unreadable log (agent stdout captured by pytest can be arbitrarily large)
+  // must degrade those fields — never abort collection after a valid official
+  // reward was already read, which would convert a graded FAIL into an
+  // excluded invalid trial and bias the sample.
   let pytest = null;
+  let degraded = null;
   for (const file of official) {
     if (!/\.(log|txt|out)$/.test(file.full) || file === rewardTxt) continue;
-    pytest = parsePytestSummary(readEvidenceText(file));
+    try {
+      pytest = parsePytestSummary(readEvidenceText(file));
+    } catch (error) {
+      degraded ??= `assertion evidence degraded: ${error.message}`;
+      continue;
+    }
     if (pytest) break;
   }
-  return { reward, rewardPath, metrics, pytest, treeHash: hashInspectedTree(tree) };
+  let treeHash = null;
+  try {
+    treeHash = hashInspectedTree(tree);
+  } catch (error) {
+    degraded ??= `tree hash degraded: ${error.message}`;
+  }
+  return { reward, rewardPath, metrics, pytest, treeHash, degraded };
 }

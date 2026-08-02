@@ -753,7 +753,11 @@ asyncio.run(main())
   assert.equal(result.done.workspaceEvidence.containmentMode, 'descriptor-relative-procfs');
   assert.equal(result.done.harnessEvents[0].type, 'pre_tool');
   assert.equal(result.done.harnessEventEvidence.retainedEvents, 1);
-  assert.equal(result.done.enforcement.hooksActive, true);
+  // The fixture's sandbox payload CLAIMS mechanical hooks; the bridge must
+  // neutralize that claim — nothing printed inside the sandbox may establish
+  // enforcement facts (the genuine probe hard-codes hooksActive false).
+  assert.equal(result.done.enforcement.hooksActive, false);
+  assert.equal(result.done.enforcement.source, 'sandbox-untrusted');
   assert.deepEqual(result.done.mountEvidence.targets, ['/opt/eval-runtime/evidence-probe']);
   assert.deepEqual(result.done.mountEvidence.existingTargets, ['/opt/eval-runtime/evidence-probe']);
   assert.equal(result.done.mountEvidence.allReadOnly, true);

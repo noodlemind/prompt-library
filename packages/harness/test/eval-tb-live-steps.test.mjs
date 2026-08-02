@@ -144,7 +144,7 @@ function fakeHarborSpawn({
         }
       });
       if (exitCode === 0) {
-        const verifierDir = path.join(jobsDir, jobName, 'trial-0', 'verifier');
+        const verifierDir = path.join(jobsDir, jobName, 'trial__fx0', 'verifier');
         fs.mkdirSync(verifierDir, { recursive: true });
         const resolvedReward = typeof reward === 'function' ? reward({ jobName, runIndex }) : reward;
         fs.writeFileSync(path.join(verifierDir, 'reward.json'), JSON.stringify({ reward: resolvedReward }));
@@ -1800,8 +1800,12 @@ test('run documents derive harness behavior only from retained evidence and labe
     identity: { pairId: 'pair', repetitionId: 'rep', repetitionIndex: 1, orderIndex: 2 },
     conditionDocument: { id: 'harness', systemPrompt: 'safe prompt', limits: {} },
   });
-  assert.equal(doc.enforcementFidelity.mode, 'mechanical-hooks');
-  assert.equal(doc.enforcementFidelity.mechanicalHooksActive, true, 'the trusted bridge explicitly establishes hook activation');
+  // The done payload crosses the sandbox boundary: even a bridge-relayed
+  // hooksActive:true is forgeable by a root-capable agent replacing the probe
+  // invocation, so mechanical fidelity is clamped until a supervisor outside
+  // the sandbox can attest it.
+  assert.equal(doc.enforcementFidelity.mode, 'prompt-and-cli');
+  assert.equal(doc.enforcementFidelity.mechanicalHooksActive, false, 'sandbox-relayed enforcement claims can never establish mechanical hooks');
   assert.equal(doc.harnessBehavior.orientInvoked, true);
   assert.equal(doc.harnessBehavior.planCreatedOrSelected, true);
   assert.equal(doc.harnessBehavior.gateAttempts, 1);

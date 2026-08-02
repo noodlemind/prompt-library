@@ -22,10 +22,30 @@ test('parseReward reads harbor reward.json with a reward key', () => {
   assert.deepEqual(parseReward('{"reward": 0.25}', 'reward.json'), { reward: 0.25, metrics: { reward: 0.25 } });
 });
 
-test('parseReward falls back to a single numeric metric when no reward key exists', () => {
-  assert.deepEqual(parseReward('{"accuracy": 0.5}', 'reward.json'), { reward: 0.5, metrics: { accuracy: 0.5 } });
+test('parseReward never grades a reward-less official JSON — no numeric fallback', () => {
+  // {"failed": 3} from a verifier schema drift must not read as reward 3
+  // (which would grade a recorded failure as a PASS).
+  assert.equal(parseReward('{"failed": 3}', 'reward.json').reward, null);
+  assert.equal(parseReward('{"accuracy": 0.5}', 'reward.json').reward, null);
   const ambiguous = parseReward('{"a": 1, "b": 0}', 'reward.json');
-  assert.equal(ambiguous.reward, null, 'two metrics with no reward key is ambiguous');
+  assert.equal(ambiguous.reward, null, 'no reward key means no grade, ever');
+});
+
+test('the pytest summary is taken from the FINAL duration-bearing line, not agent stdout', () => {
+  const spoofed = ['captured stdout:', '9999 passed', '==== 1 failed, 2 passed in 0.44s ===='].join('\n');
+  assert.deepEqual(parsePytestSummary(spoofed), { passed: 2, failed: 1 });
+});
+
+test('an oversized official log degrades assertion evidence but keeps the parsed reward', () => {
+  const trial = tmpdir();
+  const verifierDir = path.join(trial, 'verifier');
+  fs.mkdirSync(verifierDir, { recursive: true });
+  fs.writeFileSync(path.join(verifierDir, 'reward.json'), '{"reward": 0}');
+  fs.writeFileSync(path.join(verifierDir, 'huge.log'), Buffer.alloc(4 * 1024 * 1024 + 1, 0x61));
+  const evidence = collectVerifierEvidence(trial);
+  assert.equal(evidence.reward, 0, 'a graded FAIL must stay graded — never become an excluded invalid trial');
+  assert.equal(evidence.pytest, null);
+  assert.match(evidence.degraded ?? '', /degraded/i);
 });
 
 test('parseReward reads reward.txt plain numbers and rejects garbage', () => {

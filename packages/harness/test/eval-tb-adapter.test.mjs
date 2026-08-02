@@ -482,7 +482,7 @@ test('a harbor exit without a fresh job directory is an infrastructure failure',
 
 test('readTrialResult finds verifier evidence inside the job tree', () => {
   const job = tmpdir();
-  const verifierDir = path.join(job, 'trial-0', 'verifier');
+  const verifierDir = path.join(job, 'trial__fx0', 'verifier');
   fs.mkdirSync(verifierDir, { recursive: true });
   fs.writeFileSync(path.join(verifierDir, 'reward.json'), '{"reward": 1}');
   const result = readTrialResult(job);
