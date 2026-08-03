@@ -351,6 +351,35 @@ export function readTrialResult(jobDir, { passingReward = 1 } = {}) {
 }
 
 /**
+ * The grading trust boundary: harbor's `result.json` is written by the harbor
+ * process on the HOST after the verifier phase. Only specific subdirectories
+ * (verifier logs, agent logs, artifacts) are mounted into the sandbox — the
+ * trial root and this record never are — so unlike the in-sandbox reward
+ * files, the evaluated agent cannot forge it. Everything here fails closed:
+ * missing, corrupt, non-numeric, or ambiguous records never grade.
+ */
+export function readHostVerifierReward(jobDir) {
+  let entries;
+  try {
+    entries = fs.readdirSync(jobDir, { withFileTypes: true });
+  } catch {
+    return null;
+  }
+  const trials = entries.filter((entry) => entry.isDirectory() && /__[A-Za-z0-9]+$/.test(entry.name));
+  if (trials.length !== 1) return null; // one attempt per invocation; ambiguity never grades
+  const file = path.join(jobDir, trials[0].name, 'result.json');
+  let record;
+  try {
+    record = JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch {
+    return null;
+  }
+  const reward = record?.verifier_result?.rewards?.reward;
+  if (typeof reward !== 'number' || !Number.isFinite(reward)) return null;
+  return { reward, trialName: trials[0].name, source: 'harbor-host-result' };
+}
+
+/**
  * Classify a completed run. Returns the failure kind, or null for a valid
  * graded trial (whose pass/fail comes from the reward, not from here).
  * `jobDirCreated: false` means harbor produced no fresh job directory — the

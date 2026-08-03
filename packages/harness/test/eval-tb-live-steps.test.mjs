@@ -144,6 +144,7 @@ function fakeHarborSpawn({
   reward = 1,
   exitCode = 0,
   writeTelemetry = true,
+  writeHostResult = true,
   providerCostUsd = 0.02,
   providerCostComplete = true,
   billingComplete = true,
@@ -176,6 +177,13 @@ function fakeHarborSpawn({
         fs.mkdirSync(verifierDir, { recursive: true });
         const resolvedReward = typeof reward === 'function' ? reward({ jobName, runIndex }) : reward;
         fs.writeFileSync(path.join(verifierDir, 'reward.json'), JSON.stringify({ reward: resolvedReward }));
+        // Harbor writes the trial record on the HOST after the verifier phase.
+        if (writeHostResult) {
+          fs.writeFileSync(
+            path.join(jobsDir, jobName, 'trial__fx0', 'result.json'),
+            JSON.stringify({ verifier_result: { rewards: { reward: resolvedReward } } })
+          );
+        }
         if (writeTelemetry && agentEnv.HARNESS_EVAL_TB_TELEMETRY_FILE) {
           condition = JSON.parse(fs.readFileSync(agentEnv.HARNESS_EVAL_TB_CONDITION, 'utf8'));
           const runtime = condition.runtime ?? {};
@@ -801,9 +809,27 @@ test('a live kimi pair produces two schema-valid run documents and charges provi
   );
 });
 
-test('production collection classifies Harbor shared-mode reward files as verifier-invalid', async () => {
+test('the host-written harbor trial record grades through the production collector', async () => {
   const { taskDir, lock } = fixtureTask();
   const { spawnImpl } = fakeHarborSpawn({ reward: 1, providerCostUsd: 0.02 });
+  const steps = liveSteps({ taskDir, lock, spawnImpl, collectEvidence: null });
+  assert.equal((await steps.taskLock()).ok, true);
+  const [pair] = await steps.kimiPair(createBudget({ ceilingUsd: 10, label: 'host-graded' }));
+
+  assert.equal(pair.failureKind, null);
+  for (const doc of [pair.generic.repetitions[0], pair.harness.repetitions[0]]) {
+    assert.equal(doc.correctness.verifierReward, 1);
+    assert.equal(doc.correctness.verdict, 'pass');
+    assert.equal(doc.trialValidity.valid, true);
+    assert.equal(doc.verifierEvidence.rewardTrusted, true);
+    assert.equal(doc.verifierEvidence.rewardSource, 'harbor-host-result', 'grading comes from the host record, not sandbox files');
+    assert.equal(doc.verifierEvidence.assertionEvidenceTrusted, false, 'assertion counts stay advisory');
+  }
+});
+
+test('production collection classifies Harbor shared-mode reward files as verifier-invalid', async () => {
+  const { taskDir, lock } = fixtureTask();
+  const { spawnImpl } = fakeHarborSpawn({ reward: 1, providerCostUsd: 0.02, writeHostResult: false });
   const steps = liveSteps({ taskDir, lock, spawnImpl, collectEvidence: null });
   assert.equal((await steps.taskLock()).ok, true);
   const [pair] = await steps.kimiPair(createBudget({ ceilingUsd: 10, label: 'untrusted-verifier-reward' }));

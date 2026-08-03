@@ -13,6 +13,7 @@ import {
   runHarbor,
   findLatestJobDir,
   readTrialResult,
+  readHostVerifierReward,
   classifyFailure,
 } from '../../../evals/external/terminal_bench/harbor-adapter.mjs';
 import { hashTree } from '../../../evals/external/terminal_bench/verifier.mjs';
@@ -557,6 +558,25 @@ test('a harbor exit without a fresh job directory is an infrastructure failure',
     'infrastructure',
     'a clean exit that produced no job still is not a verifier failure'
   );
+});
+
+test('readHostVerifierReward grades from the host-written trial record only', () => {
+  const job = tmpdir();
+  const trial = path.join(job, 'cobol-modernization__abc1');
+  fs.mkdirSync(trial, { recursive: true });
+  fs.writeFileSync(path.join(trial, 'result.json'), JSON.stringify({ verifier_result: { rewards: { reward: 1 } } }));
+  const graded = readHostVerifierReward(job);
+  assert.equal(graded.reward, 1);
+  assert.equal(graded.source, 'harbor-host-result');
+
+  fs.writeFileSync(path.join(trial, 'result.json'), JSON.stringify({ verifier_result: { rewards: { reward: 'one' } } }));
+  assert.equal(readHostVerifierReward(job), null, 'a non-numeric reward never grades');
+  fs.writeFileSync(path.join(trial, 'result.json'), '{broken');
+  assert.equal(readHostVerifierReward(job), null, 'a corrupt record never grades');
+  fs.rmSync(path.join(trial, 'result.json'));
+  assert.equal(readHostVerifierReward(job), null, 'a missing record never grades');
+  fs.mkdirSync(path.join(job, 'cobol-modernization__abc2'));
+  assert.equal(readHostVerifierReward(job), null, 'ambiguous trial identity never grades');
 });
 
 test('readTrialResult never grades agent-writable Harbor verifier rewards', () => {

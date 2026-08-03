@@ -19,7 +19,7 @@ import crypto from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { createHost as createKimiHost } from '../../hosts/openrouter-kimi.mjs';
 import { createHost as createGemmaHost } from '../../hosts/ollama-gemma.mjs';
-import { buildHarborRunArgs, jobDirFor, runHarbor, verifyTaskAgainstLock, classifyFailure, tasksOf } from './harbor-adapter.mjs';
+import { buildHarborRunArgs, jobDirFor, runHarbor, verifyTaskAgainstLock, classifyFailure, tasksOf, readHostVerifierReward } from './harbor-adapter.mjs';
 import { collectVerifierEvidence, hashTree, verdictFromReward } from './verifier.mjs';
 import { buildGenericCondition } from './generic-condition.mjs';
 import { buildHarnessCondition } from './harness-condition.mjs';
@@ -1836,6 +1836,22 @@ export function buildLiveSteps({
         verifierEvidenceCollectionFailure = true;
       }
     }
+    // Grading trust boundary: harbor's host-written trial record. The
+    // in-sandbox reward files are agent-writable and never grade; the host
+    // record is written by the harbor process after the verifier phase and is
+    // never mounted into the sandbox.
+    let hostVerifier = null;
+    if (jobDirCreated && !verifierEvidenceCollectionFailure && evidence.reward == null) {
+      hostVerifier = readHostVerifierReward(jobDir);
+      if (hostVerifier) {
+        evidence = {
+          ...evidence,
+          reward: hostVerifier.reward,
+          rewardPath: `${hostVerifier.trialName}/result.json`,
+          degraded: evidence.degraded,
+        };
+      }
+    }
     const classifiedFailure = classifyFailure({
       run,
       reward: evidence.reward,
@@ -1884,6 +1900,7 @@ export function buildLiveSteps({
       collectionComplete: verifierEvidenceCollectionComplete,
       trustComplete: verifierEvidenceCollectionComplete && rewardTrusted,
       rewardTrusted,
+      rewardSource: hostVerifier ? 'harbor-host-result' : rewardTrusted ? 'collected-evidence' : null,
       assertionEvidenceTrusted,
       advisoryAssertions: assertionEvidenceTrusted ? null : evidence.pytest ?? null,
       degraded: verifierEvidenceDegraded,
