@@ -50,16 +50,16 @@ Prove or bound the harness's remaining unmeasured value claims without weakening
 - [ ] **AC1** Knowledge net-benefit measurement: a documented corpus-activation threshold plus an eval design that measures behavior improvement from injected learnings (not retrieval precision alone), honoring the Memory Model rule to never publish judged-precision as a benefit claim.
 - [ ] **AC2** Session-level compaction: structured compaction summaries bounding whole-session context growth (revives R21 from the 2026-04-04 entry-point plan; current budgets cover harness-injected context only).
 - [ ] **AC3** Correction-effort metric: a human-intervention signal in harness/release-eval telemetry; today's closest proxy is tool-failure counts in `harness report`.
-- [ ] **AC4** Verify-tier decision: a documented adopt-or-decline on risk-tiered verification for low-risk edits, with rationale, in the architecture docs (current state: fail-closed verify with `enforcement: warn`).
+- [ ] **AC4** Verify-tier decision: a documented adopt-or-decline on risk-tiered verification for low-risk edits, with rationale, in the architecture docs (current state: non-blocking verify under the repo policy's `enforcement: warn`; fail-closed behavior requires `enforcement: enforce`).
 - [ ] **AC5** Canary methodology pre-review: the release-evaluation metrics and win-classification sections shared with the external reviewer before Terminal-Bench trials run; outcome recorded in the release-evaluation plan's activity log.
 
 ## Plan
 
 Each gap is planned and locked independently; this capture holds the shared context.
 
-- [ ] Phase A (AC5, first — cheap and time-sensitive): share the release-evaluation methodology for pre-review once the remaining release-eval PRs land; record the outcome.
+- [ ] Phase A (AC5, first — cheap and time-sensitive; routed to PR #38): send the release-evaluation metrics, result-classification, and gate/budget sections for reviewer pre-review after PR #38 merges and before the release canary spends real budget; record the outcome in the release-evaluation plan's activity log. A calibration pair already ran (2026-07-31); the pre-review must precede the release run.
 - [ ] Phase B (AC4): run the decide-and-document pass on verify proportionality; record the decision in `docs/architecture/engineer-harness.md`.
-- [ ] Phase C (AC3): extend telemetry with a human-intervention signal; wire it into `harness report` and the release-eval schema.
+- [ ] Phase C (AC3, schema half routed to PR #38): nullable correction-effort fields (interventions, correction turns) belong in `eval-run.v1` while it is still version 1 — autonomous trials record `null`. The session-side collection in `harness report` remains in this plan.
 - [ ] Phase D (AC2): design and land session compaction summaries.
 - [ ] Phase E (AC1, corpus-gated): define the activation threshold; when the learnings corpus crosses it, land the net-benefit eval.
 
@@ -88,6 +88,12 @@ Named checks only, refined per gap at lock time: `harness-tests` for code-bearin
 None yet.
 
 ## Activity
+
+### 2026-08-03 — AC3 (schema half) and AC5 routed to PR #38
+
+- Per user decision, the `eval-run.v1` correction-effort schema fields (AC3) and the methodology pre-review step (AC5) are addressed as part of PR #38 (release evaluation).
+- Remaining in this plan: AC3's session-side collection in `harness report`, plus AC1, AC2, and AC4 unchanged.
+- Timing note: PR #38's calibration pair ran 2026-07-31; the release canary is still pending, so the AC5 pre-review lands before it.
 
 ### 2026-08-02 — Captured
 
