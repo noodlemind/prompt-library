@@ -2,6 +2,8 @@
 
 This file provides context for AI coding agents working in this repository. It follows the [AGENTS.md open standard](https://agents.md/) under the Linux Foundation's Agentic AI Foundation.
 
+_Last updated 2026-08-02 — reflects the July 2026 hardening wave (PRs #33–#37)._
+
 ## Project Overview
 
 This is a skill-driven prompt library for software development teams. The primary consumption platforms are GitHub Copilot in VS Code and IntelliJ IDEA on Windows. Teams hydrate agents, skills, and instructions globally from this repo; product repositories should not receive prompt-library source artifacts.
@@ -29,7 +31,7 @@ Deliver-mode internal skill chain:
                          open → planned → in-progress → review → done
 ```
 
-Harness architecture: `docs/architecture/engineer-harness.md`. Knowledge lookup: `.github/skills/references/knowledge-locations.md`.
+Harness architecture: `docs/architecture/engineer-harness.md`. Knowledge lookup: `.github/skills/references/knowledge-locations.md`. Context budgets are CI-enforced (2 KB `harness orient` pack, ~900-token engineer definition), `harness report` measures real host token usage and session metrics, deterministic evals live in `evals/`, and the tiered memory model is canonical in `docs/MEMORY-MODEL.md`.
 
 Plan files in `docs/plans/` (product repos only) track state via YAML frontmatter (`status`, `plan_lock`, `phase`). Team-wide learnings hydrate from `knowledge/` to `~/.copilot/knowledge/`. Run `/recall` before engineering work. Inter-step memory flows through plan sections including `## Memory Cards`, `## Context`, `## Research Notes`, and `## Activity`. See `docs/architecture/engineer-harness.md`.
 
@@ -46,8 +48,12 @@ Plan files in `docs/plans/` (product repos only) track state via YAML frontmatte
 .vscode/
   mcp.json         — MCP server configuration
 knowledge/         — team-wide solutions + manifest (hydrated to ~/.copilot/knowledge/)
+packages/
+  harness/         — @dev-kit/harness CLI: deterministic core (install, orient, gate, verify, report, consolidate)
+evals/             — deterministic eval tasks, skill trigger evals, host-compatibility matrix
 docs/
   architecture/    — canonical Engineer Harness architecture and primitive standard
+  MEMORY-MODEL.md  — canonical memory model (tiers, consolidation, governance, SLOs)
   plans/           — plan template; product repos use docs/plans/ for active work
   brainstorms/     — brainstorm documents from /brainstorming skill
   codebase-snapshot.md — generated codebase snapshot with architecture diagrams

@@ -1,6 +1,8 @@
 # Prompt Library
 
-Skill-driven software engineering prompt library with **25 skills**, **21 agents**, scoped instructions, review checks, and a three-tier memory model (product plans, global knowledge, user profile). Primary platforms: GitHub Copilot in VS Code and IntelliJ IDEA.
+Skill-driven software engineering prompt library with **25 skills**, **21 agents**, scoped instructions, review checks, and a tiered memory model — episodic (T1), semantic (T2), and behavioral (T3) — with consolidation, governance, and SLOs ([Memory Model](docs/MEMORY-MODEL.md)). Primary platforms: GitHub Copilot in VS Code and IntelliJ IDEA.
+
+_Last updated 2026-08-02 — reflects the July 2026 hardening wave (PRs #33–#37): context budgets, host token telemetry, the deterministic eval suite, and the knowledge layer._
 
 ## Quick Start
 
@@ -75,18 +77,28 @@ User-invocable: `/engineer`, `/harness-doctor`, `/project-readme`, `/triage-issu
 | Tier | Where | What |
 |------|--------|------|
 | Team (global) | `knowledge/solutions/` + `manifest.yaml` | Cross-repo learnings after hydrate |
+| Consolidated learnings | `~/.harness/knowledge/<repo-id>/` | Episodes clustered into one-claim learnings via `harness consolidate`; governance ledger, quarantine, and SLOs |
 | Product | `docs/plans/` | Active issues (local only) |
 | Product (optional) | `docs/solutions/` | Repo-private learnings |
 | User | `~/.copilot/knowledge/profile.md` | Preferences |
 
-Context lookup order: `.github/skills/references/knowledge-locations.md`.
+Canonical model — episodic/semantic/behavioral tiers, single-writer ownership, governance, threat model: [Memory Model](docs/MEMORY-MODEL.md). Context lookup order: `.github/skills/references/knowledge-locations.md`.
+
+## Measurement, budgets, and evals
+
+Context cost is bounded and CI-enforced: `harness orient` emits a context pack capped at 2 KB (`packages/harness/lib/context-pack.mjs`), and the `@engineer` definition is held to a ~900-token budget by contract tests (`packages/harness/test/prompt-library-contracts.test.mjs`). `harness report` reads real host token usage from Copilot session-state logs and summarizes tokens-per-session trend, ranked token sinks, turns, tool calls and failures, and budget breaches (`--check` fails CI on a breach).
+
+Behavior is covered by a deterministic eval suite in `evals/` — tasks that replay the real hook chain (gating, verification, knowledge retrieval) across scripted and live drivers — plus skill trigger/outcome evals and the host-compatibility matrix (`evals/host-compatibility.yaml`).
 
 ## Directory structure
 
-```
+```text
 .github/          agents, skills, instructions, copilot-instructions.md
 knowledge/        team solutions, manifest, capability-registry (hydrated globally)
+packages/harness/ @dev-kit/harness CLI — deterministic core (install, orient, gate, verify, report, consolidate)
+evals/            deterministic eval tasks, skill trigger evals, host-compatibility matrix
 docs/architecture/  canonical harness architecture and primitive standard
+docs/MEMORY-MODEL.md  canonical memory model (tiers, consolidation, governance, SLOs)
 docs/plans/       template + at most one live PR plan (see docs/plans/README.md)
 .vscode/          @dev-kit/harness tasks (install/upgrade/doctor), MCP config
 AGENTS.md         Cross-tool guidance

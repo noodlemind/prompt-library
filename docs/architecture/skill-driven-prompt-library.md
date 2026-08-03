@@ -1,5 +1,7 @@
 # Skill-Driven Prompt Library Standard
 
+_Last updated 2026-08-02 — reflects the July 2026 hardening wave (PRs #33–#37)._
+
 This repository is a source-of-truth prompt library, not a host plugin or generated package. Teams should clone the repo once and hydrate global Copilot customizations from it. The primary consumption surfaces are GitHub Copilot in VS Code and IntelliJ IDEA on Windows, with user-level global files under `%USERPROFILE%\.copilot` for VS Code/shared Copilot personal assets and `%LOCALAPPDATA%\github-copilot\intellij` for IntelliJ IDEA.
 
 ## Flow Overview
@@ -8,9 +10,9 @@ This repository is a source-of-truth prompt library, not a host plugin or genera
 
 The diagram shows the recommended usage web: users enter through GitHub Copilot Chat, choose a skill or `@engineer`, and specialist agents are invoked only when review, separate judgment, or domain expertise is needed.
 
-## Review Summary
+## Standardization Summary
 
-The current library already has a strong compound-engineering base:
+The library is standardized on a compound-engineering base:
 
 - A local-first pipeline: `/capture-issue` -> `/plan-issue` -> `@engineer` Deliver mode -> `/code-review` -> `/compound-learnings`
 - Plan files in `docs/plans/` that preserve state, research notes, implementation notes, activity logs, and review findings
@@ -18,7 +20,7 @@ The current library already has a strong compound-engineering base:
 - Skills using progressive disclosure, trigger examples, references, assets, and explicit execution boundaries
 - Bundled review checks under skill references, optional product checks under `.github/checks/`, and team-wide durable learnings under `knowledge/solutions/`
 
-The main gap is presentation and governance. The repo historically explains itself as an agent collection with supporting skills. The standardized model should be the inverse: **skills are the primary reusable contract; agents, instructions, checks, plans, and solution docs support those skills.**
+The organizing model is the inverse of an agent collection with supporting skills: **skills are the primary reusable contract; agents, instructions, checks, plans, and solution docs support those skills.** Governance and measurement back that contract at runtime: context budgets are enforced in CI (the 2 KB `harness orient` pack and the ~900-token Engineer definition), `harness report` measures real host token usage per session, deterministic evals in `evals/` replay the real hook chain, and consolidated learnings are governed by the tiered memory model in [Memory Model](../MEMORY-MODEL.md). Runtime detail lives in [Engineer Harness Architecture](./engineer-harness.md).
 
 ## External Tool Alignment
 
@@ -117,6 +119,7 @@ reviews:
 ```
 
 - `## Context` — problem facts, constraints, user intent, and related artifacts
+- `## Memory Cards` — optional compact recall bullets with `source:` paths (see `.github/skills/references/memory-cards.md`)
 - `## Acceptance Criteria` — measurable outcomes
 - `## Research Notes` — local patterns, prior solution docs, external references, and open questions
 - `## Impacted Files` — allowlist of expected file changes
@@ -192,7 +195,7 @@ flowchart TD
 ## Governance
 
 - Treat skills, agents, instructions, hooks, checks, scripts, and MCP metadata as executable governance artifacts.
-- **Harness vs skill scripts:** Cross-repo deterministic agent tools live in **`@dev-kit/harness`** (`orient`, `gate`, `verify`, `recall`, `index`, `compound`, `validate-plan`). Skills are thin orchestration that invoke harness with `--json`. Skill-local `scripts/` is allowed only for narrow, read-only validators tied to one skill — see [`.github/skills/references/harness-tool-contract.md`](../../.github/skills/references/harness-tool-contract.md).
+- **Harness vs skill scripts:** Cross-repo deterministic agent tools live in **`@dev-kit/harness`** — setup (`install`, `upgrade`, `doctor`, `status`, `uninstall`), workspace (`init-repo`, `index`, `plan-new`), the engineer loop (`orient`, `gate`, `verify`, `validate-plan`, `compound`, `recall`, `get`, `events`, `report`), and the knowledge layer (`knowledge`, `consolidate`, `remember`, `learning`, `learnings`, `eval-knowledge`). Skills are thin orchestration that invoke harness with `--json`. Skill-local `scripts/` is allowed only for narrow, read-only validators tied to one skill — see [`.github/skills/references/harness-tool-contract.md`](../../.github/skills/references/harness-tool-contract.md).
 - Do not pre-approve shell or network access in community or shared artifacts without local review.
 - Keep permissions minimal in agent frontmatter.
 - Prefer read-only specialist agents for review and research.
