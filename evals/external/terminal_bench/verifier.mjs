@@ -2,11 +2,11 @@
  * Terminal-Bench verifier artifact reading.
  *
  * Harbor's verifier writes a numeric reward to `logs/verifier/reward.json`
- * (preferred) or `reward.txt` inside the trial's artifact tree. This module
- * reads that evidence without re-implementing the verifier: parse the reward,
- * grade it against the lock's passing threshold, pull pytest assertion counts
- * when a test log is present, and hash the artifact tree so a trial's end
- * state is auditable byte-for-byte.
+ * (preferred) or `reward.txt` inside the trial's artifact tree. Harbor 0.20
+ * exposes the same directory to the evaluated agent, so those files are not a
+ * grading trust boundary. This module retains them only as advisory debugging
+ * artifacts, pulls pytest assertion counts when a test log is present, and
+ * hashes the artifact tree so a trial's end state is auditable byte-for-byte.
  */
 import crypto from 'node:crypto';
 import fs from 'node:fs';
@@ -207,11 +207,11 @@ function inspectTree(dir, options = {}) {
       relative: current.relative,
       type,
       // Write bits are deliberately excluded: the verified snapshot is made
-      // read-only after copying. Execute/read semantics remain attested, while
-      // that containment-only chmod cannot create checksum drift. The root is
-      // the caller-provided container directory, whose creation mode is not a
-      // member of the relative task tree.
-      mode: current.relative === '' ? 0 : Number(stat.mode & 0o555n),
+      // read-only after copying. Execute/read and privilege-bearing special
+      // bits remain attested, while that containment-only chmod cannot create
+      // checksum drift. The root is the caller-provided container directory,
+      // whose creation mode is not a member of the relative task tree.
+      mode: current.relative === '' ? 0 : Number(stat.mode & 0o7555n),
       size: type === 'file' ? stat.size : 0n,
       identity: statIdentity(stat),
     };
@@ -359,23 +359,27 @@ export function hashTree(dir, options = {}) {
 }
 
 /**
- * Read a trial directory's verifier evidence: reward (reward.json preferred),
- * pytest assertion counts from any *.log/*.txt test output, and the artifact
- * tree hash. A missing reward stays null — it is never coerced to 0.
+ * Read a trial directory's verifier evidence: advisory pytest assertion counts
+ * from verifier *.log/*.txt output and the artifact tree hash. Harbor 0.20
+ * bind-mounts the same verifier directory into the evaluated agent at
+ * `/logs/verifier`, so neither reward.json nor reward.txt can establish who
+ * wrote it. They therefore never grade without a separate runner-owned
+ * attestation channel; a missing trusted reward stays null, never zero.
  */
 export function collectVerifierEvidence(trialDir) {
   const tree = inspectTree(trialDir);
   const files = fileRecords(tree);
-  // Reward evidence is trusted ONLY from the official verifier output: the
-  // in-container convention (logs/verifier) or harbor 0.20.0's host-side
-  // verifier directory. Anything under artifacts is agent-controlled and must
-  // never contribute reward evidence.
+  // These exact layouts locate Harbor's verifier diagnostics, but are NOT a
+  // reward trust boundary. Harbor 0.20.0 mounts `<trial>/verifier` at
+  // `/logs/verifier` during the agent phase and makes it writable. The
+  // alternative logs/verifier shape is equally unsafe. Reading either reward
+  // directly would let an agent forge a PASS before verification begins.
   // `collectVerifierEvidence` accepts either a trial root or its one-level-up
   // job root, so each exact shape may begin at relative segment 0 or 1. Never
   // use substring matching: the task workspace is agent-writable and may itself
   // contain a nested logs/verifier directory.
   const layouts = [['verifier'], ['logs', 'verifier']];
-  const official = files.filter((record) => {
+  const verifierFiles = files.filter((record) => {
     const rel = path.relative(tree.root, record.full).split(path.sep);
     if (rel[0] === 'artifacts') return false;
     return [0, 1].some((offset) => {
@@ -391,38 +395,20 @@ export function collectVerifierEvidence(trialDir) {
       );
     });
   });
-  const rewardJson = official.find((record) => path.basename(record.full) === 'reward.json');
-  const rewardTxt = official.find((record) => path.basename(record.full) === 'reward.txt');
-  let reward = null;
-  let rewardPath = null;
-  let metrics = null;
-  for (const candidate of [rewardJson, rewardTxt]) {
-    if (!candidate) continue;
-    const parsed = parseReward(readEvidenceText(candidate), path.basename(candidate.full));
-    if (!parsed) continue;
-    metrics ??= parsed.metrics;
-    // An ambiguous reward.json (parseable but no usable reward) must not mask
-    // a valid reward.txt — keep looking until an actual reward appears.
-    if (parsed.reward != null) {
-      reward = parsed.reward;
-      metrics = parsed.metrics;
-      rewardPath = candidate.full;
-      break;
-    }
-  }
+  const reward = null;
+  const rewardPath = null;
+  const metrics = null;
   // Assertion counts and the tree hash are ADVISORY evidence. An oversized or
   // unreadable log (agent stdout captured by pytest can be arbitrarily large)
-  // must degrade those fields — never abort collection after a valid official
-  // reward was already read, which would convert a graded FAIL into an
-  // excluded invalid trial and bias the sample.
+  // must degrade those fields rather than aborting evidence collection.
   let pytest = null;
-  let degraded = null;
-  for (const file of official) {
-    if (!/\.(log|txt|out)$/.test(file.full) || file === rewardTxt) continue;
+  let degraded = 'reward evidence unavailable: Harbor verifier output is agent-writable and has no runner-owned attestation';
+  for (const file of verifierFiles) {
+    if (!/\.(log|txt|out)$/.test(file.full) || /^reward\.(?:txt|json)$/.test(path.basename(file.full))) continue;
     try {
       pytest = parsePytestSummary(readEvidenceText(file));
     } catch (error) {
-      degraded ??= `assertion evidence degraded: ${error.message}`;
+      degraded += `; assertion evidence degraded: ${error.message}`;
       continue;
     }
     if (pytest) break;
@@ -431,7 +417,18 @@ export function collectVerifierEvidence(trialDir) {
   try {
     treeHash = hashInspectedTree(tree);
   } catch (error) {
-    degraded ??= `tree hash degraded: ${error.message}`;
+    degraded += `; tree hash degraded: ${error.message}`;
   }
-  return { reward, rewardPath, metrics, pytest, treeHash, degraded };
+  return {
+    reward,
+    rewardPath,
+    metrics,
+    pytest,
+    // Harbor's shared verifier directory cannot authenticate assertion output
+    // any more than it can authenticate reward.json. Retain parsed counts only
+    // as explicitly advisory diagnostics for the archived run document.
+    assertionEvidenceTrusted: false,
+    treeHash,
+    degraded,
+  };
 }

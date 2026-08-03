@@ -72,6 +72,12 @@ function assertSafeTaskName(value) {
   if (!isSafeTaskName(value)) throw new TypeError('Harbor task name must be a safe basename');
 }
 
+function assertSafeArgument(value, field) {
+  if (typeof value !== 'string' || !value || value.includes('\0') || value.startsWith('-')) {
+    throw new TypeError(`Harbor ${field} must be a non-empty NUL-free string that does not begin with -`);
+  }
+}
+
 function buildAgentEnvArgs(agentEnv) {
   const entries = Object.entries(agentEnv);
   for (const [key, value] of entries) {
@@ -186,6 +192,9 @@ export function buildHarborRunArgs({ lock, task = tasksOf(lock)[0]?.task, datase
   if (!lockVerdict.ok) {
     throw new Error(`Harbor task lock is invalid: ${lockVerdict.errors.join('; ')}`);
   }
+  assertSafeArgument(agentRef, 'agentRef');
+  assertSafeArgument(model, 'model');
+  assertSafeArgument(envName, 'envName');
   if (
     datasetPath !== undefined &&
     (typeof datasetPath !== 'string' || !datasetPath || datasetPath.includes('\0') || !path.isAbsolute(datasetPath))
@@ -240,7 +249,10 @@ function processGroupAbsent(pid, killImpl = process.kill, psImpl = spawnSync) {
     return false;
   } catch (error) {
     if (error?.code === 'ESRCH') return true;
-    if (error?.code !== 'EPERM' || process.platform === 'win32' || !fs.existsSync('/bin/ps')) return false;
+    if (
+      error?.code !== 'EPERM' || process.platform === 'win32' ||
+      (psImpl === spawnSync && !fs.existsSync('/bin/ps'))
+    ) return false;
     // macOS can return EPERM for a just-reaped negative process group. Treat
     // that race as complete only when an independent absolute-path census
     // proves that no process retains the Harbor PGID.
@@ -320,8 +332,14 @@ export function findLatestJobDir(jobsRoot, { excludeNames = [] } = {}) {
     .filter((e) => e.isDirectory() && !stale.has(e.name))
     .map((e) => {
       const full = path.join(jobsRoot, e.name);
-      return { full, name: e.name, mtimeMs: fs.statSync(full).mtimeMs };
+      try {
+        return { full, name: e.name, mtimeMs: fs.statSync(full).mtimeMs };
+      } catch (error) {
+        if (['ENOENT', 'ENOTDIR'].includes(error?.code)) return null;
+        throw error;
+      }
     })
+    .filter(Boolean)
     .sort((a, b) => a.mtimeMs - b.mtimeMs || (a.name < b.name ? -1 : 1));
   return dirs.at(-1)?.full ?? null;
 }

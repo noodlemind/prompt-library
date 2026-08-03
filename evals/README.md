@@ -281,6 +281,16 @@ Missing or mismatched evidence makes the trial infrastructure-invalid even when
 the official verifier reports success; expected configuration hashes are never
 accepted as proof of executed configuration.
 
+Harbor 0.20 shared mode currently exposes its verifier directory to the
+evaluated agent before verification. Consequently, `reward.json` and
+`reward.txt` from that directory are advisory only: the runner records their
+artifact-tree diagnostics but never treats either file as a passing reward. A
+pytest summary parsed from the same directory is likewise labeled advisory and
+never populates trusted correctness assertions. A live trial remains
+verifier-invalid until Harbor provides a separately runner-owned reward
+channel, or the bridge clears the shared directory before verification and
+attests the verifier's post-agent output out of band.
+
 ### Commands
 
 ```bash
@@ -665,7 +675,8 @@ A release evaluation is complete only when:
 - deterministic checks and all task-lock checks pass before provider spend;
 - the run is full release scope rather than `--task` diagnostic scope, and
   required coverage is computed against every task in the committed lock;
-- every required task has both fresh arms, official verifier evidence, matching
+- every required task has both fresh arms, runner-owned official verifier
+  evidence, matching
   release/task/bundle/pair/repetition/attempt/instruction identity,
   requested/resolved model, pinned provider policy, complementary order, and no
   fallback;

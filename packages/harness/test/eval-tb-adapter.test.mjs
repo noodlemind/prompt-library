@@ -220,6 +220,25 @@ test('buildHarborRunArgs uses real Harbor flags and anchors the job identity', (
   ]);
 });
 
+test('buildHarborRunArgs rejects malformed agent, model, and environment values before argv construction', () => {
+  const valid = {
+    lock: LOCK,
+    task: 'cobol-modernization',
+    agentRef: 'evals.external.terminal_bench.harbor_agent:StdioBridgeAgent',
+    model: 'moonshotai/kimi-k2.7-code',
+    envName: 'docker',
+  };
+  for (const field of ['agentRef', 'model', 'envName']) {
+    for (const value of [null, 42, '', `bad\0${field}`, '--flag-like']) {
+      assert.throws(
+        () => buildHarborRunArgs({ ...valid, [field]: value }),
+        new RegExp(field, 'i'),
+        `${field}=${String(value)}`
+      );
+    }
+  }
+});
+
 test('buildHarborRunArgs refuses missing or invalid sandbox resource locks', () => {
   for (const sandbox of [null, { ...LOCK.tasks[0].sandbox, cpus: 0 }]) {
     const invalidLock = {
@@ -403,16 +422,28 @@ test('runHarbor fails closed when its host process group does not disappear', { 
   assert.equal(classifyFailure({ run: result, reward: 1, jobDirCreated: true, passed: true }), 'infrastructure');
 });
 
-test('runHarbor proves an EPERM cleanup race with an independent process-group census', { skip: process.platform === 'win32' }, () => {
-  const result = runHarbor({
-    executable: '/opt/pinned/harbor',
-    args: ['run'],
-    cwd: '/work',
-    spawnImpl: () => ({ pid: 43210, status: 0, stdout: '', stderr: '' }),
-    killImpl: () => { throw Object.assign(new Error('raced with reap'), { code: 'EPERM' }); },
-    psImpl: () => ({ status: 0, stdout: '  100  100\n  200  200\n', stderr: '' }),
-  });
+test('runHarbor proves an EPERM cleanup race with an injected process-group census independent of host /bin/ps', { skip: process.platform === 'win32' }, () => {
+  const originalExistsSync = fs.existsSync;
+  let censusCalls = 0;
+  fs.existsSync = (candidate) => candidate === '/bin/ps' ? false : originalExistsSync(candidate);
+  let result;
+  try {
+    result = runHarbor({
+      executable: '/opt/pinned/harbor',
+      args: ['run'],
+      cwd: '/work',
+      spawnImpl: () => ({ pid: 43210, status: 0, stdout: '', stderr: '' }),
+      killImpl: () => { throw Object.assign(new Error('raced with reap'), { code: 'EPERM' }); },
+      psImpl: () => {
+        censusCalls += 1;
+        return { status: 0, stdout: '  100  100\n  200  200\n', stderr: '' };
+      },
+    });
+  } finally {
+    fs.existsSync = originalExistsSync;
+  }
 
+  assert.equal(censusCalls, 1, 'the injected census must run even when the host path is absent');
   assert.equal(result.containmentComplete, true);
 });
 
@@ -463,6 +494,54 @@ test('findLatestJobDir picks the newest job directory', () => {
   assert.equal(findLatestJobDir(path.join(root, 'missing')), null);
 });
 
+test('findLatestJobDir skips a job directory that disappears during stat', () => {
+  const root = tmpdir();
+  const stable = path.join(root, 'stable-job');
+  const raced = path.join(root, 'raced-job');
+  fs.mkdirSync(stable);
+  fs.mkdirSync(raced);
+  const originalStatSync = fs.statSync;
+  let disappearanceCode = 'ENOENT';
+  fs.statSync = function racedStatSync(candidate, ...args) {
+    if (candidate === raced) throw Object.assign(new Error('removed during scan'), { code: disappearanceCode });
+    return originalStatSync.call(this, candidate, ...args);
+  };
+
+  try {
+    for (disappearanceCode of ['ENOENT', 'ENOTDIR']) {
+      assert.equal(findLatestJobDir(root), stable, disappearanceCode);
+    }
+  } finally {
+    fs.statSync = originalStatSync;
+  }
+});
+
+test('findLatestJobDir fails closed when a candidate cannot be inspected', () => {
+  const root = tmpdir();
+  const stable = path.join(root, 'stable-job');
+  const unreadable = path.join(root, 'unreadable-job');
+  fs.mkdirSync(stable);
+  fs.mkdirSync(unreadable);
+  const originalStatSync = fs.statSync;
+  let failureCode = 'EACCES';
+  fs.statSync = function failedStatSync(candidate, ...args) {
+    if (candidate === unreadable) throw Object.assign(new Error('cannot inspect candidate'), { code: failureCode });
+    return originalStatSync.call(this, candidate, ...args);
+  };
+
+  try {
+    for (failureCode of ['EACCES', 'EIO']) {
+      assert.throws(
+        () => findLatestJobDir(root),
+        (error) => error?.code === failureCode,
+        failureCode
+      );
+    }
+  } finally {
+    fs.statSync = originalStatSync;
+  }
+});
+
 test('job discovery anchors to the current run and never grades a stale directory', () => {
   const root = tmpdir();
   fs.mkdirSync(path.join(root, 'stale-job'));
@@ -480,14 +559,16 @@ test('a harbor exit without a fresh job directory is an infrastructure failure',
   );
 });
 
-test('readTrialResult finds verifier evidence inside the job tree', () => {
+test('readTrialResult never grades agent-writable Harbor verifier rewards', () => {
   const job = tmpdir();
   const verifierDir = path.join(job, 'trial__fx0', 'verifier');
   fs.mkdirSync(verifierDir, { recursive: true });
   fs.writeFileSync(path.join(verifierDir, 'reward.json'), '{"reward": 1}');
   const result = readTrialResult(job);
-  assert.equal(result.reward, 1);
-  assert.equal(result.verdict, 'pass');
+  assert.equal(result.reward, null);
+  assert.equal(result.rewardPath, null);
+  assert.equal(result.verdict, 'fail');
+  assert.match(result.degraded, /agent-writable/i);
 });
 
 test('classifyFailure distinguishes infrastructure, provider, verifier, and valid trials', () => {

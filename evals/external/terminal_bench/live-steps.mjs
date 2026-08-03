@@ -840,6 +840,9 @@ export function buildRunDoc({
   sandboxIdentity = null,
   runnerVersion = `harbor-${SUPPORTED_HARBOR_VERSION}/bridge-1`,
 }) {
+  const trustedAssertions = evidence?.assertionEvidenceTrusted === true
+    ? evidence.pytest ?? null
+    : null;
   const telemetryLedgerPresent = Array.isArray(done?.telemetry?.events);
   const telemetryEvents = telemetryLedgerPresent ? done.telemetry.events : [];
   const telemetryTotals = done?.telemetry?.totals ?? null;
@@ -1130,8 +1133,8 @@ export function buildRunDoc({
     correctness: {
       verifierReward: evidence.reward,
       verdict: verdictFromReward(evidence.reward, { passingReward: lock.verifier.passingReward }),
-      assertionsPassed: evidence.pytest?.passed ?? null,
-      assertionsFailed: evidence.pytest?.failed ?? null,
+      assertionsPassed: trustedAssertions?.passed ?? null,
+      assertionsFailed: trustedAssertions?.failed ?? null,
       requiredFilesCreated: null,
       finalDiffHash: workspaceEvidence.diffHash,
       verifierArtifactHash: evidence.treeHash ?? null,
@@ -1232,6 +1235,7 @@ export function buildLiveSteps({
   attestHostNodeExecutable = defaultAttestHostNodeExecutable,
   attestSandboxImage = defaultAttestSandboxImage,
   validateBundle = validatePrebuiltBundle,
+  collectEvidence = collectVerifierEvidence,
 }) {
   const repetitionCount = repetitions ?? seeds ?? 1;
   if (!Number.isInteger(repetitionCount) || repetitionCount < 1) {
@@ -1812,11 +1816,19 @@ export function buildLiveSteps({
         reservedUsd: 0,
       };
     }
-    let evidence = { reward: null, rewardPath: null, metrics: null, pytest: null, treeHash: null };
+    let evidence = {
+      reward: null,
+      rewardPath: null,
+      metrics: null,
+      pytest: null,
+      assertionEvidenceTrusted: false,
+      treeHash: null,
+      degraded: null,
+    };
     let verifierEvidenceCollectionFailure = false;
     if (jobDirCreated) {
       try {
-        evidence = collectVerifierEvidence(jobDir);
+        evidence = collectEvidence(jobDir);
       } catch {
         // Official evidence is untrusted filesystem input. Preserve the paid
         // billing ledger and classify the trial as infrastructure-invalid
@@ -1862,13 +1874,28 @@ export function buildLiveSteps({
       allocationBreached,
       policy: billingUncertain ? 'reserve-trial-remainder-and-stop' : 'max-local-provider-reported',
     };
+    const verifierEvidenceCollectionComplete = jobDirCreated && !verifierEvidenceCollectionFailure;
+    const verifierEvidenceDegraded = typeof evidence.degraded === 'string' && evidence.degraded.length > 0
+      ? evidence.degraded
+      : null;
+    const rewardTrusted = typeof evidence.reward === 'number' && Number.isFinite(evidence.reward);
+    const assertionEvidenceTrusted = evidence.assertionEvidenceTrusted === true;
     doc.verifierEvidence = {
-      collectionComplete: jobDirCreated && !verifierEvidenceCollectionFailure,
+      collectionComplete: verifierEvidenceCollectionComplete,
+      trustComplete: verifierEvidenceCollectionComplete && rewardTrusted,
+      rewardTrusted,
+      assertionEvidenceTrusted,
+      advisoryAssertions: assertionEvidenceTrusted ? null : evidence.pytest ?? null,
+      degraded: verifierEvidenceDegraded,
       reason: verifierEvidenceCollectionFailure
         ? 'verifier-evidence-collection-failed'
-        : jobDirCreated
-          ? null
-          : 'harbor-job-directory-missing',
+        : !jobDirCreated
+          ? 'harbor-job-directory-missing'
+          : verifierEvidenceDegraded
+            ? 'verifier-evidence-degraded'
+            : rewardTrusted
+              ? null
+              : 'trusted-verifier-reward-unavailable',
     };
     const integrityFailure = BRIDGE_INTEGRITY_STOP_REASONS.has(doc.correctness.exitReason) ||
       doc.workspaceEvidence?.available !== true ||
@@ -1928,7 +1955,7 @@ export function buildLiveSteps({
     if (allocationBreached) {
       failureDiagnostics.push(failureDiagnostic('budget-reconciliation', 'TRIAL_ALLOCATION_EXCEEDED'));
     }
-    if (integrityFailure && failureDiagnostics.length === 0) {
+    if (integrityFailure) {
       failureDiagnostics.push(failureDiagnostic('runtime-evidence', 'RUNTIME_EVIDENCE_INTEGRITY_FAILURE'));
     }
     if (postRunIntegrityFailure != null) {
@@ -1938,13 +1965,18 @@ export function buildLiveSteps({
         reasonHash: postRunIntegrityFailure.reasonHash,
       };
     }
-    const failureKind = classifiedFailure ?? (billingUncertain
+    // A missing trusted reward is a verifier-invalid fallback, not a reason to
+    // hide a stronger failure observed during the same paid trial. Preserve
+    // definitive spawn/provider classifications, then prefer billing, budget,
+    // and structural-integrity causes before falling back to verifier-invalid.
+    const definitiveClassifiedFailure = classifiedFailure === 'verifier' ? null : classifiedFailure;
+    const failureKind = definitiveClassifiedFailure ?? (billingUncertain
       ? 'billing'
       : allocationBreached
         ? 'budget'
         : integrityFailure
           ? 'infrastructure'
-          : null);
+          : classifiedFailure);
     doc.trialValidity = { valid: failureKind == null && evidence.reward != null, failureKind };
     return {
       doc,

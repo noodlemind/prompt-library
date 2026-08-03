@@ -64,10 +64,6 @@
     }
   ],
   "verifier": {
-    "rewardFiles": [
-      "reward.json",
-      "reward.txt"
-    ],
     "passingReward": 1
   }
 }

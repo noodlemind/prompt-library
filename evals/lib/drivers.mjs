@@ -93,6 +93,46 @@ function roleChars(messages) {
   return totals;
 }
 
+function shellCommandSegments(command) {
+  const text = String(command || '');
+  const segments = [];
+  let start = 0;
+  let quote = null;
+  let escaped = false;
+
+  function push(end) {
+    const segment = text.slice(start, end).trim();
+    if (segment) segments.push(segment);
+  }
+
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (char === '\\' && quote !== "'") {
+      escaped = true;
+      continue;
+    }
+    if (quote) {
+      if (char === quote) quote = null;
+      continue;
+    }
+    if (char === "'" || char === '"') {
+      quote = char;
+      continue;
+    }
+    if (char === ';' || char === '\n' || char === '(' || char === ')' || char === '&' || char === '|') {
+      push(index);
+      if ((char === '&' || char === '|') && text[index + 1] === char) index += 1;
+      start = index + 1;
+    }
+  }
+  push(text.length);
+  return segments;
+}
+
 function commandCategory(command) {
   const text = String(command || '').trim();
   const harnessCommand = '(?:harness|/opt/harness-bundle/harness-cli)';
@@ -110,9 +150,23 @@ function commandCategory(command) {
     `${gitPrefix}(?:cat-file|diff|fsck|grep|log|ls-files|ls-tree|merge-base|rev-list|rev-parse|show|status)\\b`
   );
   if (/\bgit-filter-repo\b/.test(text) || mutatingGit.test(text)) return 'edit';
-  if (/\b(?:npm|pnpm|yarn|pytest|python\s+-m\s+pytest|go\s+test|cargo\s+test|mvn|gradle)\b[^\n]*(?:test|verify)|\btest\b/.test(text)) return 'test';
   const scriptedWrite = /\b(?:python|node|perl|ruby)\b[^\n]*(?:write_text|write_bytes|writeFile|appendFile|\.write\s*\(|open\s*\([^)]*,\s*['"][wax+])/.test(text);
   if (/(?:^|\s)(?:>|>>)|\bsed\s+-i\b|\b(?:rm|mv|cp|install|touch|mkdir)\b/.test(text) || scriptedWrite) return 'edit';
+  const testCommands = [
+    /^(?:npm|pnpm|yarn)(?:\s+(?:--(?:prefix|workspace|filter|dir|cwd)(?:=\S+|\s+\S+)|-[CwF]\s+\S+|--\S+(?:=\S+)?|-\S+))*\s+(?:workspace\s+\S+\s+)?(?:(?:run|run-script)\s+)?(?:test|verify)(?::[\w.-]+)?(?=\s|$)/,
+    /^(?:npx|pnpm\s+exec|yarn\s+dlx)\s+(?:--?\S+\s+)*(?:[\w./-]*\/)?(?:vitest|jest)(?=\s|$)/,
+    /^(?:[\w./-]*\/)?(?:vitest|jest|pytest)(?=\s|$)/,
+    /^python(?:3(?:\.\d+)?)?\s+-m\s+pytest(?=\s|$)/,
+    /^(?:[\w./-]*\/)?node\b[^\n;&|]*\s--test(?:=\S+)?(?=\s|$)/,
+    /^(?:go|cargo|bun|deno|dotnet)\s+test(?=\s|$)/,
+    /^cargo\s+nextest\s+run(?=\s|$)/,
+    /^(?:mvn|mvnw|\.\/mvnw|gradle|gradlew|\.\/gradlew)\b[^\n;&|]*\b(?:test|verify)\b/,
+    /^make\b[^\n;&|]*\b(?:test|verify)(?=\s|$)/,
+    /^(?:\.\/)?(?:[\w.-]+\/)*test(?=\s|$)/,
+  ];
+  if (shellCommandSegments(text).some((segment) => testCommands.some((pattern) => pattern.test(segment)))) {
+    return 'test';
+  }
   if (inspectingGit.test(text) || /\b(?:cat|sed|rg|grep|find|ls|pwd|head|tail|wc)\b/.test(text)) return 'inspect';
   return 'other';
 }
@@ -487,15 +541,36 @@ export function openAiToolDriver({
     const requestId = `request-${++requestSeq}`;
     telemetry?.startRequest(requestFootprint(body, payload, requestId, postVerify));
     const allowedRetries = postVerify ? 0 : transientRetries;
+    const deadlineMs = effRequestTimeoutMs ? monotonicNow() + effRequestTimeoutMs : null;
+
+    function recordDeadlineExhausted(data = {}) {
+      telemetry?.record('request_deadline_exhausted', {
+        requestId,
+        timeoutMs: effRequestTimeoutMs,
+        ...data,
+      });
+    }
+
+    function deadlineError(data = {}) {
+      recordDeadlineExhausted(data);
+      return new ProviderError(`provider request exceeded its ${effRequestTimeoutMs}ms deadline`, {
+        kind: 'timeout',
+        billed: false,
+      });
+    }
 
     for (let attempt = 0; ; attempt += 1) {
       if (attempt > 0 && precheckBudget(payload)) {
         throw new ProviderError('provider retry refused by budget', { kind: 'budget', billed: false });
       }
+      const remainingMs = deadlineMs == null ? null : deadlineMs - monotonicNow();
+      if (remainingMs != null && remainingMs <= 0) {
+        throw deadlineError({ phase: 'before_attempt', attempt: attempt + 1, remainingMs });
+      }
       const attemptId = `${requestId}-attempt-${attempt + 1}`;
       telemetry?.startAttempt({ requestId, attemptId, attempt: attempt + 1, payloadChars: payload.length });
-      const controller = effRequestTimeoutMs ? new AbortController() : null;
-      const timer = controller ? setTimeout(() => controller.abort(), effRequestTimeoutMs) : null;
+      const controller = remainingMs != null ? new AbortController() : null;
+      const timer = controller ? setTimeout(() => controller.abort(), remainingMs) : null;
       try {
         let res;
         try {
@@ -520,6 +595,7 @@ export function openAiToolDriver({
         }
 
         if (res.status === 429) {
+          if (timer) clearTimeout(timer);
           telemetry?.finishAttempt(attemptId, { type: 'error', billingStatus: 'confirmed_unbilled', kind: 'http', status: 429 });
           if (attempt < allowedRetries) {
             const rawRetryAfter = res.headers?.get?.('retry-after');
@@ -528,6 +604,16 @@ export function openAiToolDriver({
             const waitMs = Number.isFinite(retryAfterSec) && retryAfterSec >= 0
               ? Math.min(retryAfterSec * 1000, 30_000)
               : backoffMs;
+            const remainingBeforeBackoffMs = deadlineMs == null ? null : deadlineMs - monotonicNow();
+            if (remainingBeforeBackoffMs != null && waitMs >= remainingBeforeBackoffMs) {
+              throw deadlineError({
+                phase: 'backoff',
+                attempt: attempt + 1,
+                attemptId,
+                remainingMs: remainingBeforeBackoffMs,
+                waitMs,
+              });
+            }
             telemetry?.recordRetry({ requestId, attemptId, status: 429, attempt: attempt + 1, waitMs });
             await sleepImpl(waitMs);
             continue;
@@ -544,6 +630,27 @@ export function openAiToolDriver({
         try {
           data = redactExactSecret(await res.json(), apiKey);
         } catch (error) {
+          if (controller?.signal.aborted) {
+            telemetry?.finishAttempt(attemptId, {
+              type: 'error',
+              billingStatus: 'unknown',
+              kind: 'timeout',
+              reason: 'response_body_timeout',
+              timeoutMs: effRequestTimeoutMs,
+            });
+            recordDeadlineExhausted({
+              phase: 'response_body',
+              attempt: attempt + 1,
+              attemptId,
+              remainingMs: deadlineMs == null ? null : deadlineMs - monotonicNow(),
+            });
+            reserveUncertainBilling('timeout', { requestId, attemptId, phase: 'response_body' });
+            throw new ProviderError(`provider request timed out after ${effRequestTimeoutMs}ms while reading the response body`, {
+              kind: 'timeout',
+              billed: null,
+              billingUncertain: true,
+            });
+          }
           telemetry?.finishAttempt(attemptId, { type: 'error', billingStatus: 'unknown', kind: 'provider', reason: 'unparseable_response' });
           reserveUncertainBilling('unparseable_response', { requestId, attemptId });
           throw new ProviderError(`provider returned unparseable JSON: ${redactExactSecret(String(error?.message ?? error), apiKey)}`, {

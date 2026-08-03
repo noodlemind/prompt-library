@@ -45,6 +45,14 @@ test('mount observation returns only expected read-only sandbox targets', () => 
     /outside the evaluation runtime allowlist/
   );
 });
+
+test('mount observation reports a missing --expected-b64 argument distinctly', () => {
+  const cwd = workspace();
+  const failure = runFailure(cwd, ['mounts']);
+
+  assert.match(failure.stderr, /--expected-b64.*required/i);
+  assert.doesNotMatch(failure.stderr, /mount target list is invalid/i);
+});
 const repoRoot = fileURLToPath(new URL('../../../', import.meta.url));
 
 function workspace() {
@@ -216,6 +224,40 @@ test('a sandbox-tampered baseline is reported unavailable against the host-retai
   assert.equal(collected.workspaceEvidence.reason, 'before-manifest-unavailable');
 });
 
+test('a self-consistent baseline that differs from the host-retained digest reports a distinct mismatch', () => {
+  const cwd = workspace();
+  fs.writeFileSync(path.join(cwd, 'app.txt'), 'before');
+  const before = run(cwd, ['snapshot', '--output', '.harness/eval-before.json']);
+  const collected = run(cwd, [
+    'collect',
+    '--before',
+    '.harness/eval-before.json',
+    '--expected-before-hash',
+    before.manifestHash === 'f'.repeat(64) ? 'e'.repeat(64) : 'f'.repeat(64),
+  ]);
+
+  assert.equal(collected.workspaceEvidence.available, false);
+  assert.equal(collected.workspaceEvidence.reason, 'before-manifest-digest-mismatch');
+});
+
+test('a baseline whose Git state differs from the host-retained digest reports a distinct mismatch', () => {
+  const cwd = workspace();
+  fs.writeFileSync(path.join(cwd, 'app.txt'), 'before');
+  const before = run(cwd, ['snapshot', '--output', '.harness/eval-before.json']);
+  const collected = run(cwd, [
+    'collect',
+    '--before',
+    '.harness/eval-before.json',
+    '--expected-before-hash',
+    before.manifestHash,
+    '--expected-before-git-hash',
+    before.gitStateHash === 'f'.repeat(64) ? 'e'.repeat(64) : 'f'.repeat(64),
+  ]);
+
+  assert.equal(collected.workspaceEvidence.available, false);
+  assert.equal(collected.workspaceEvidence.reason, 'before-git-state-digest-mismatch');
+});
+
 test('collection without a host-retained run-start hash fails evidence closed', () => {
   const cwd = workspace();
   run(cwd, ['snapshot', '--output', '.harness/eval-before.json']);
@@ -236,6 +278,10 @@ test('workspace byte limits fail evidence closed without failing the probe proce
   assert.equal(before.available, false);
   assert.equal(before.reason, 'workspace-file-byte-limit-exceeded');
   assert.equal(before.manifestHash, null);
+  assert.equal(before.fileCount, 0);
+  assert.equal(before.directoryCount, 0);
+  assert.equal(before.nodeCount, 0);
+  assert.equal(before.hashedBytes, 0);
 });
 
 test('workspace traversal has independent directory, node, and depth bounds with explicit evidence reasons', () => {
@@ -267,8 +313,34 @@ test('directory enumeration stops at the node cap before retaining and sorting a
 
   assert.equal(result.available, false);
   assert.equal(result.reason, 'workspace-node-limit-exceeded');
-  assert.equal(result.nodeCount, 17, 'the collector reads only the single entry needed to prove the cap was exceeded');
+  assert.equal(result.nodeCount, 0, 'unavailable manifests never expose partial traversal counters');
   assert.equal(result.limits.maxNodes, 16);
+});
+
+test('wide directories do not revalidate every ancestor for every child', () => {
+  const cwd = workspace();
+  const nested = path.join(cwd, 'nested');
+  fs.mkdirSync(nested);
+  for (let index = 0; index < 128; index += 1) {
+    fs.writeFileSync(path.join(nested, `entry-${String(index).padStart(3, '0')}`), `${index}`);
+  }
+  const resolvedRoot = fs.realpathSync(cwd);
+  const originalLstatSync = fs.lstatSync;
+  let rootRevalidations = 0;
+  fs.lstatSync = function countedLstatSync(candidate, ...args) {
+    if (path.resolve(String(candidate)) === resolvedRoot) rootRevalidations += 1;
+    return originalLstatSync.call(this, candidate, ...args);
+  };
+
+  let result;
+  try {
+    result = manifest(cwd);
+  } finally {
+    fs.lstatSync = originalLstatSync;
+  }
+
+  assert.equal(result.available, true, result.reason);
+  assert.ok(rootRevalidations <= 20, `root was revalidated ${rootRevalidations} times for one wide child directory`);
 });
 
 test('an opened directory cannot be redirected through an ancestor symlink race', () => {
@@ -485,6 +557,58 @@ test('an empty harness event ledger is complete evidence of zero observed behavi
   assert.deepEqual(collected.harnessEvents, []);
 });
 
+test('an events-handle close failure cannot replace the primary unreadable-evidence result', () => {
+  const cwd = workspace();
+  fs.writeFileSync(path.join(cwd, 'app.txt'), 'same');
+  const before = run(cwd, ['snapshot', '--output', '.harness/eval-before.json']);
+  fs.writeFileSync(path.join(cwd, '.harness', 'events.jsonl'), '{"type":"orient"}\n');
+  const preloadRoot = workspace();
+  const preload = path.join(preloadRoot, 'fail-events-read-and-close.mjs');
+  fs.writeFileSync(preload, `
+    import fs from 'node:fs';
+    const originalOpenSync = fs.openSync;
+    const originalReadSync = fs.readSync;
+    const originalCloseSync = fs.closeSync;
+    let eventsHandle;
+    let closeFailed = false;
+    fs.openSync = function (candidate, ...args) {
+      const handle = originalOpenSync.call(this, candidate, ...args);
+      if (String(candidate).endsWith('/events.jsonl')) eventsHandle = handle;
+      return handle;
+    };
+    fs.readSync = function (handle, ...args) {
+      if (handle === eventsHandle) throw Object.assign(new Error('forced events read failure'), { code: 'EIO' });
+      return originalReadSync.call(this, handle, ...args);
+    };
+    fs.closeSync = function (handle) {
+      if (handle === eventsHandle && !closeFailed) {
+        closeFailed = true;
+        throw Object.assign(new Error('forced events close failure'), { code: 'EIO' });
+      }
+      return originalCloseSync.call(this, handle);
+    };
+  `);
+
+  const result = spawnSync(process.execPath, [
+    '--import',
+    pathToFileURL(preload).href,
+    probe,
+    'collect',
+    '--before',
+    '.harness/eval-before.json',
+    '--expected-before-hash',
+    before.manifestHash,
+    '--expected-before-git-hash',
+    before.gitStateHash,
+  ], { cwd, encoding: 'utf8' });
+
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  const collected = JSON.parse(result.stdout);
+  assert.equal(collected.workspaceEvidence.available, true);
+  assert.equal(collected.harnessEventEvidence.available, false);
+  assert.equal(collected.harnessEventEvidence.reason, 'harness-events-unreadable');
+});
+
 test('a missing harness event file is complete evidence of zero observed behavior', () => {
   const cwd = workspace();
   run(cwd, ['snapshot', '--output', '.harness/eval-before.json']);
@@ -644,6 +768,74 @@ asyncio.run(main())
   assert.ok(result.stdoutLength <= 6000);
   assert.equal(result.verifyExposed, false, 'sandbox-authored verifier JSON is untrusted data');
   assert.equal(result.ordinaryExposed, false, 'arbitrary JSON command output is never copied into the agent protocol unbounded');
+});
+
+test('the Python bridge preserves distinct host-retained baseline digest mismatch reasons', () => {
+  const result = runPython(`
+import asyncio, json
+from evals.external.terminal_bench.harbor_agent import StdioBridgeAgent
+
+manifest_hash = "a" * 64
+git_hash = "b" * 64
+
+def collected(reason):
+    return {
+        "workspaceEvidence": {
+            "available": False,
+            "reason": reason,
+        },
+        "harnessEvents": [],
+        "harnessEventEvidence": {
+            "available": True,
+            "complete": True,
+            "reason": None,
+            "retainedEvents": 0,
+            "sourceTruncated": False,
+            "projectionRejectedEvents": 0,
+            "projectionRejectedChecks": 0,
+        },
+        "enforcement": {},
+    }
+
+class Agent(StdioBridgeAgent):
+    def __init__(self, reason):
+        self.reason = reason
+        self._evidence_snapshot = {
+            "available": True,
+            "manifestHash": manifest_hash,
+            "gitStateHash": git_hash,
+        }
+
+    async def _exec(self, environment, command, **kwargs):
+        payload = collected(self.reason)
+        return {
+            "code": 0,
+            "stdout": json.dumps(payload),
+            "stderr": "",
+            "timedOut": False,
+            "containmentMode": "linux-process-census",
+            "containmentComplete": True,
+            "_parsedJson": payload,
+        }
+
+async def main():
+    reasons = [
+        "before-manifest-digest-mismatch",
+        "before-git-state-digest-mismatch",
+    ]
+    observed = {}
+    for reason in reasons:
+        evidence = await Agent(reason)._collect_evidence(None)
+        observed[reason] = evidence["workspaceEvidence"]["reason"]
+    print(json.dumps(observed))
+
+asyncio.run(main())
+`);
+
+  assert.deepEqual(result, {
+    'before-manifest-digest-mismatch': 'before-manifest-digest-mismatch',
+    'before-git-state-digest-mismatch': 'before-git-state-digest-mismatch',
+  });
 });
 
 test('the Python bridge snapshots after setup, enriches done evidence, and atomically replaces the host done file', () => {

@@ -226,30 +226,38 @@ function accessPath(context, name = null) {
   return name === null ? context.absolute : path.join(context.absolute, name);
 }
 
-function assertDirectoryStack(stack) {
-  for (const context of stack) {
-    let opened;
-    try {
-      opened = fs.fstatSync(context.handle, { bigint: true });
-    } catch {
-      throw evidenceError('workspace-ancestor-identity-ambiguous');
-    }
-    if (!opened.isDirectory() || !sameStableDirectory(opened, context.identity)) {
-      throw evidenceError('workspace-ancestor-identity-ambiguous');
-    }
-    // Descriptor-relative access prevents traversal escape, but the evidence
-    // must also describe the final named workspace. A renamed/detached inode
-    // is safe to read yet no longer proves what the verifier will see.
-    try {
-      const named = statBigInt(context.absolute);
-      if (named.isSymbolicLink() || !named.isDirectory() || !sameStableDirectory(named, context.identity)) {
-        throw evidenceError('workspace-ancestor-identity-ambiguous');
-      }
-    } catch (error) {
-      if (error?.evidenceReason) throw error;
-      throw evidenceError('workspace-ancestor-identity-ambiguous');
-    }
+function assertDirectoryContext(context) {
+  let opened;
+  try {
+    opened = fs.fstatSync(context.handle, { bigint: true });
+  } catch {
+    throw evidenceError('workspace-ancestor-identity-ambiguous');
   }
+  if (!opened.isDirectory() || !sameStableDirectory(opened, context.identity)) {
+    throw evidenceError('workspace-ancestor-identity-ambiguous');
+  }
+  // Descriptor-relative access prevents traversal escape, but the evidence
+  // must also describe the final named workspace. A renamed/detached inode
+  // is safe to read yet no longer proves what the verifier will see.
+  try {
+    const named = statBigInt(context.absolute);
+    if (named.isSymbolicLink() || !named.isDirectory() || !sameStableDirectory(named, context.identity)) {
+      throw evidenceError('workspace-ancestor-identity-ambiguous');
+    }
+  } catch (error) {
+    if (error?.evidenceReason) throw error;
+    throw evidenceError('workspace-ancestor-identity-ambiguous');
+  }
+}
+
+function assertDirectoryStack(stack) {
+  for (const context of stack) assertDirectoryContext(context);
+}
+
+function assertDeepestDirectory(stack) {
+  const context = stack.at(-1);
+  if (!context) throw evidenceError('workspace-ancestor-identity-ambiguous');
+  assertDirectoryContext(context);
 }
 
 function refreshDirectoryStackAfterOwnedMutation(stack) {
@@ -274,12 +282,12 @@ function refreshDirectoryStackAfterOwnedMutation(stack) {
 }
 
 function readDirectoryIncrementally(context, stack, state) {
-  assertDirectoryStack(stack);
+  assertDeepestDirectory(stack);
   let directory;
   const children = [];
   try {
     directory = fs.opendirSync(accessPath(context));
-    assertDirectoryStack(stack);
+    assertDeepestDirectory(stack);
     while (true) {
       const child = directory.readSync();
       if (child === null) break;
@@ -299,21 +307,24 @@ function readDirectoryIncrementally(context, stack, state) {
       }
     }
   }
-  assertDirectoryStack(stack);
+  assertDeepestDirectory(stack);
   children.sort((left, right) => bytewiseCompare(left.name, right.name));
   return children;
 }
 
-function childStat(context, name, stack, { allowMissing = false } = {}) {
-  assertDirectoryStack(stack);
+function childStat(context, name, stack, { allowMissing = false, revalidateAncestors = true } = {}) {
+  const validate = revalidateAncestors
+    ? () => assertDirectoryStack(stack)
+    : () => assertDeepestDirectory(stack);
+  validate();
   try {
     const stat = statBigInt(accessPath(context, name));
-    assertDirectoryStack(stack);
+    validate();
     return stat;
   } catch (error) {
     if (error?.evidenceReason) throw error;
     if (allowMissing && error?.code === 'ENOENT') {
-      assertDirectoryStack(stack);
+      validate();
       return null;
     }
     throw evidenceError('workspace-entry-changed-during-read');
@@ -321,11 +332,11 @@ function childStat(context, name, stack, { allowMissing = false } = {}) {
 }
 
 function readSymlink(context, name, expectedStat, stack) {
-  assertDirectoryStack(stack);
+  assertDeepestDirectory(stack);
   try {
     const target = fs.readlinkSync(accessPath(context, name), { encoding: 'buffer' });
     const after = statBigInt(accessPath(context, name));
-    assertDirectoryStack(stack);
+    assertDeepestDirectory(stack);
     if (!after.isSymbolicLink() || !sameIdentity(expectedStat, after) || expectedStat.size !== after.size) {
       throw evidenceError('workspace-entry-changed-during-read');
     }
@@ -337,7 +348,10 @@ function readSymlink(context, name, expectedStat, stack) {
 }
 
 function openChildDirectory(parent, name, relative, expectedStat, stack, options) {
-  assertDirectoryStack(stack);
+  const validateParent = options.revalidateAncestors === false
+    ? () => assertDeepestDirectory(stack)
+    : () => assertDirectoryStack(stack);
+  validateParent();
   let handle;
   try {
     handle = fs.openSync(
@@ -356,7 +370,12 @@ function openChildDirectory(parent, name, relative, expectedStat, stack, options
       anchorBase: parent.anchorBase,
     };
     options.onDirectoryOpened?.({ relative, descriptorAnchored: Boolean(parent.anchorBase) });
-    assertDirectoryStack([...stack, context]);
+    if (options.revalidateAncestors === false) {
+      validateParent();
+      assertDirectoryContext(context);
+    } else {
+      assertDirectoryStack([...stack, context]);
+    }
     return context;
   } catch (error) {
     if (handle !== undefined) fs.closeSync(handle);
@@ -378,7 +397,7 @@ function visitDirectory(context, stack, depth, state, options) {
   for (const child of children) {
     const relative = context.relative ? `${context.relative}/${child.name}` : child.name;
     if (excludedFromTraversal(relative, child.isDirectory(), options)) continue;
-    const stat = childStat(context, child.name, stack);
+    const stat = childStat(context, child.name, stack, { revalidateAncestors: false });
     if (excludedFromTraversal(relative, stat.isDirectory(), options)) continue;
 
     if (stat.isDirectory()) {
@@ -391,13 +410,16 @@ function visitDirectory(context, stack, depth, state, options) {
         size: 0,
         sha256: null,
       });
-      const nested = openChildDirectory(context, child.name, relative, stat, stack, options);
+      const nested = openChildDirectory(context, child.name, relative, stat, stack, {
+        ...options,
+        revalidateAncestors: false,
+      });
       try {
         visitDirectory(nested, [...stack, nested], depth + 1, state, options);
       } finally {
         fs.closeSync(nested.handle);
       }
-      assertDirectoryStack(stack);
+      assertDeepestDirectory(stack);
       continue;
     }
 
@@ -437,7 +459,7 @@ function visitDirectory(context, stack, depth, state, options) {
     }
     const { content, stat: openedStat } = readRegularFileNoFollow(accessPath(context, child.name), MAX_FILE_BYTES, {
       expectedStat: stat,
-      validate: () => assertDirectoryStack(stack),
+      validate: () => assertDeepestDirectory(stack),
     });
     if (state.hashedBytes + content.length > MAX_HASHED_BYTES) throw evidenceError('workspace-total-byte-limit-exceeded');
     state.hashedBytes += content.length;
@@ -479,10 +501,10 @@ export function manifest(root = process.cwd(), options = {}) {
     collectionMode: COLLECTION_MODE,
     containmentMode: anchorBase ? 'descriptor-relative-procfs' : 'identity-checked-path-fallback',
     root: '.',
-    fileCount: entries.filter((entry) => entry.type !== 'directory').length,
-    directoryCount: state.directoryCount,
-    nodeCount: state.nodeCount,
-    hashedBytes: state.hashedBytes,
+    fileCount: available ? entries.filter((entry) => entry.type !== 'directory').length : 0,
+    directoryCount: available ? state.directoryCount : 0,
+    nodeCount: available ? state.nodeCount : 0,
+    hashedBytes: available ? state.hashedBytes : 0,
     manifestHash: available ? sha256(stableJson(entries)) : null,
     entries: available ? entries : [],
     limits: {
@@ -724,16 +746,23 @@ function readBefore(root, beforePath, expectedHash, expectedGitStateHash) {
     if (parsed?.format !== FORMAT || !Array.isArray(parsed.entries)) throw new Error('unexpected manifest format');
     const computedHash = sha256(stableJson(parsed.entries));
     if (parsed.manifestHash !== computedHash) throw new Error('manifest digest mismatch');
-    if (parsed.manifestHash !== expectedHash) throw new Error('manifest does not match run-start digest');
-    if (
-      typeof expectedGitStateHash !== 'string' || !/^[a-f0-9]{64}$/.test(expectedGitStateHash) ||
-      parsed.gitState?.available !== true || parsed.gitState?.hash !== expectedGitStateHash
-    ) {
-      throw new Error('git state does not match run-start digest');
+    if (parsed.manifestHash !== expectedHash) throw evidenceError('before-manifest-digest-mismatch');
+    if (typeof expectedGitStateHash !== 'string' || !/^[a-f0-9]{64}$/.test(expectedGitStateHash)) {
+      throw new Error('run-start git-state digest is required');
     }
+    if (parsed.gitState?.available !== true || !/^[a-f0-9]{64}$/.test(parsed.gitState?.hash ?? '')) {
+      throw new Error('baseline git state is unavailable');
+    }
+    if (parsed.gitState.hash !== expectedGitStateHash) throw evidenceError('before-git-state-digest-mismatch');
     return parsed;
-  } catch {
-    return { available: false, reason: 'before-manifest-unavailable', entries: [], manifestHash: null };
+  } catch (error) {
+    const reason = [
+      'before-manifest-digest-mismatch',
+      'before-git-state-digest-mismatch',
+    ].includes(error?.evidenceReason)
+      ? error.evidenceReason
+      : 'before-manifest-unavailable';
+    return { available: false, reason, entries: [], manifestHash: null };
   }
 }
 
@@ -894,7 +923,13 @@ function collectHarnessEvents(root) {
       projectionRejectedChecks: 0,
     };
   } finally {
-    if (handle !== undefined) fs.closeSync(handle);
+    if (handle !== undefined) {
+      try {
+        fs.closeSync(handle);
+      } catch {
+        // Preserve the primary events-read result.
+      }
+    }
     if (target) closeStateTarget(target);
   }
 }
@@ -1055,6 +1090,7 @@ function main(args = process.argv.slice(2)) {
   }
   if (command === 'mounts') {
     const encoded = option(args, '--expected-b64', null);
+    if (encoded === null) throw new Error('--expected-b64 is required for mounts');
     let expected;
     try {
       expected = JSON.parse(Buffer.from(encoded, 'base64').toString('utf8'));

@@ -8,7 +8,7 @@ import { AGENT_REF, buildLiveSteps, aggregateRepetitionDocs, buildRunDoc, instru
 import { runtimeBridgeTools } from '../../../evals/external/terminal_bench/agent.mjs';
 import { BUNDLE_MOUNT_TARGET, CONDITION_INPUTS_FILE, EVAL_RUNTIME_MOUNT_TARGET, harnessWrapperScript, activationCommands } from '../../../evals/external/terminal_bench/provision.mjs';
 import { stampTaskLock, verifyTaskAgainstLock } from '../../../evals/external/terminal_bench/harbor-adapter.mjs';
-import { hashTree } from '../../../evals/external/terminal_bench/verifier.mjs';
+import { hashTree, parseReward } from '../../../evals/external/terminal_bench/verifier.mjs';
 import { efficiencyDelta, validateAgainstSchema, runRelease } from '../../../evals/release.mjs';
 import { createBudget } from '../../../evals/lib/budget.mjs';
 import { getProfile } from '../../../evals/lib/model-profiles.mjs';
@@ -90,6 +90,34 @@ function filesUnder(root) {
     else if (entry.isFile()) files.push(full);
   }
   return files;
+}
+
+// Most live-step tests exercise telemetry, budgeting, pairing, and integrity
+// logic independently of reward provenance. Their fake Harbor has no verifier
+// phase, so inject a synthetic collector for those tests only. Production uses
+// collectVerifierEvidence, which rejects Harbor 0.20's agent-writable rewards.
+function trustedFixtureVerifierEvidence(jobDir) {
+  const files = filesUnder(jobDir);
+  const rewardJson = files.find((file) => /[/\\]verifier[/\\]reward\.json$/.test(file));
+  const rewardTxt = files.find((file) => /[/\\]verifier[/\\]reward\.txt$/.test(file));
+  let parsed = null;
+  let rewardPath = null;
+  for (const candidate of [rewardJson, rewardTxt]) {
+    if (!candidate) continue;
+    const result = parseReward(fs.readFileSync(candidate, 'utf8'), path.basename(candidate));
+    if (result?.reward == null) continue;
+    parsed = result;
+    rewardPath = candidate;
+    break;
+  }
+  return {
+    reward: parsed?.reward ?? null,
+    rewardPath,
+    metrics: parsed?.metrics ?? null,
+    pytest: null,
+    treeHash: hashTree(jobDir),
+    degraded: null,
+  };
 }
 
 /** A fixture dataset root with the anchor task, plus a lock pinning ONLY it. */
@@ -333,7 +361,7 @@ function fakeHarborSpawn({
   };
 }
 
-function liveSteps({ datasetDir, taskDir, lock, spawnImpl, apiKey = 'test-key', workDir = tmpdir(), config = null, fetchImpl = undefined, providerLookupTimeoutMs = undefined, repetitions = null, releaseSha = 'sha1', ambientEnv = {}, validateBundle = fakeValidateBundle, prepareBundle = null, attestHostNodeExecutable = undefined }) {
+function liveSteps({ datasetDir, taskDir, lock, spawnImpl, apiKey = 'test-key', workDir = tmpdir(), config = null, fetchImpl = undefined, providerLookupTimeoutMs = undefined, repetitions = null, releaseSha = 'sha1', ambientEnv = {}, validateBundle = fakeValidateBundle, prepareBundle = null, attestHostNodeExecutable = undefined, collectEvidence = trustedFixtureVerifierEvidence }) {
   let clockTick = 0;
   return buildLiveSteps({
     config: config ?? { execution: { environment: 'docker' } },
@@ -347,6 +375,7 @@ function liveSteps({ datasetDir, taskDir, lock, spawnImpl, apiKey = 'test-key', 
     ...(attestHostNodeExecutable ? { attestHostNodeExecutable } : {}),
     attestSandboxImage: fakeSandboxIdentity,
     validateBundle,
+    ...(collectEvidence ? { collectEvidence } : {}),
     ...(fetchImpl ? { fetchImpl } : {}),
     ...(providerLookupTimeoutMs != null ? { providerLookupTimeoutMs } : {}),
     ...(repetitions != null ? { repetitions } : {}),
@@ -770,6 +799,105 @@ test('a live kimi pair produces two schema-valid run documents and charges provi
     runs.every((i) => !i.args.some((arg) => typeof arg === 'string' && arg.startsWith('OPENROUTER_API_KEY='))),
     'the provider credential must never be placed in Harbor --ae arguments'
   );
+});
+
+test('production collection classifies Harbor shared-mode reward files as verifier-invalid', async () => {
+  const { taskDir, lock } = fixtureTask();
+  const { spawnImpl } = fakeHarborSpawn({ reward: 1, providerCostUsd: 0.02 });
+  const steps = liveSteps({ taskDir, lock, spawnImpl, collectEvidence: null });
+  assert.equal((await steps.taskLock()).ok, true);
+  const [pair] = await steps.kimiPair(createBudget({ ceilingUsd: 10, label: 'untrusted-verifier-reward' }));
+
+  assert.equal(pair.failureKind, 'verifier');
+  for (const doc of [pair.generic.repetitions[0], pair.harness.repetitions[0]]) {
+    assert.equal(doc.correctness.verifierReward, null);
+    assert.equal(doc.correctness.verdict, 'fail');
+    assert.equal(doc.trialValidity.valid, false);
+    assert.equal(doc.trialValidity.failureKind, 'verifier');
+    assert.equal(doc.verifierEvidence.collectionComplete, true);
+    assert.equal(doc.verifierEvidence.trustComplete, false);
+    assert.equal(doc.verifierEvidence.rewardTrusted, false);
+    assert.equal(doc.verifierEvidence.assertionEvidenceTrusted, false);
+    assert.equal(doc.verifierEvidence.reason, 'verifier-evidence-degraded');
+    assert.match(doc.verifierEvidence.degraded, /agent-writable/i);
+    assert.match(doc.correctness.verifierArtifactHash, /^[a-f0-9]{64}$/);
+  }
+});
+
+test('an unavailable trusted reward never masks billing, budget, or runtime-integrity failures', async () => {
+  const cases = [
+    {
+      name: 'billing',
+      spawnOptions: { billingComplete: false, unknownBillingAttempts: 1 },
+      expectedFailureKind: 'billing',
+      expectedDiagnostic: 'BILLING_EVIDENCE_INCOMPLETE',
+    },
+    {
+      name: 'budget',
+      spawnOptions: { providerCostUsd: 6 },
+      expectedFailureKind: 'budget',
+      expectedDiagnostic: 'TRIAL_ALLOCATION_EXCEEDED',
+    },
+    {
+      name: 'runtime integrity',
+      spawnOptions: {
+        mutateDone: (done) => {
+          done.workspaceEvidence.available = false;
+          done.workspaceEvidence.reason = 'fixture-integrity-failure';
+        },
+      },
+      expectedFailureKind: 'infrastructure',
+      expectedDiagnostic: 'RUNTIME_EVIDENCE_INTEGRITY_FAILURE',
+    },
+    {
+      name: 'billing plus runtime integrity',
+      spawnOptions: {
+        billingComplete: false,
+        unknownBillingAttempts: 1,
+        mutateDone: (done) => {
+          done.workspaceEvidence.available = false;
+          done.workspaceEvidence.reason = 'fixture-integrity-failure';
+        },
+      },
+      expectedFailureKind: 'billing',
+      expectedDiagnostic: 'RUNTIME_EVIDENCE_INTEGRITY_FAILURE',
+    },
+  ];
+
+  for (const fixtureCase of cases) {
+    const { taskDir, lock } = fixtureTask();
+    const { spawnImpl } = fakeHarborSpawn(fixtureCase.spawnOptions);
+    const steps = liveSteps({ taskDir, lock, spawnImpl, collectEvidence: null });
+    assert.equal((await steps.taskLock()).ok, true, fixtureCase.name);
+    const [pair] = await steps.kimiPair(createBudget({ ceilingUsd: 10, label: `untrusted-reward-${fixtureCase.name}` }));
+
+    assert.equal(pair.failureKind, fixtureCase.expectedFailureKind, fixtureCase.name);
+    assert.ok(
+      pair.failureDiagnostics.some((diagnostic) => diagnostic.code === fixtureCase.expectedDiagnostic),
+      `${fixtureCase.name}: ${JSON.stringify(pair.failureDiagnostics)}`
+    );
+  }
+});
+
+test('agent-writable pytest summaries remain advisory and retain degraded provenance', async () => {
+  const { taskDir, lock } = fixtureTask();
+  const { spawnImpl } = fakeHarborSpawn({
+    mutateJob: ({ verifierDir }) => {
+      fs.writeFileSync(path.join(verifierDir, 'pytest.log'), '==== 9999 passed in 0.01s ====');
+    },
+  });
+  const steps = liveSteps({ taskDir, lock, spawnImpl, collectEvidence: null });
+  assert.equal((await steps.taskLock()).ok, true);
+  const [pair] = await steps.kimiPair(createBudget({ ceilingUsd: 10, label: 'untrusted-assertions' }));
+
+  for (const doc of [pair.generic.repetitions[0], pair.harness.repetitions[0]]) {
+    assert.equal(doc.correctness.assertionsPassed, null);
+    assert.equal(doc.correctness.assertionsFailed, null);
+    assert.deepEqual(doc.verifierEvidence.advisoryAssertions, { passed: 9999, failed: 0 });
+    assert.equal(doc.verifierEvidence.assertionEvidenceTrusted, false);
+    assert.equal(doc.verifierEvidence.reason, 'verifier-evidence-degraded');
+    assert.match(doc.verifierEvidence.degraded, /agent-writable/i);
+  }
 });
 
 test('a wrong provider-facing request tool contract invalidates a rewarded trial', async () => {
@@ -1926,6 +2054,7 @@ test('multiple repetitions run each condition, alternate order, and all charge t
     attestSandboxImage: fakeSandboxIdentity,
     prepareBundle: ({ bundleDir, sourceIdentity }) => fakePreparedBundle(bundleDir, sourceIdentity),
     validateBundle: fakeValidateBundle,
+    collectEvidence: trustedFixtureVerifierEvidence,
   });
   await steps.taskLock();
   const budget = createBudget({ ceilingUsd: 10, label: 'kimi-pair' });
@@ -2015,6 +2144,7 @@ test('a pair requires a strict majority of scheduled repetitions to have two val
     attestSandboxImage: fakeSandboxIdentity,
     prepareBundle: ({ bundleDir, sourceIdentity }) => fakePreparedBundle(bundleDir, sourceIdentity),
     validateBundle: fakeValidateBundle,
+    collectEvidence: trustedFixtureVerifierEvidence,
   });
   await steps.taskLock();
   const [pair] = await steps.kimiPair(createBudget({ ceilingUsd: 10, label: 'strict-pair-validity' }));

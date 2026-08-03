@@ -116,6 +116,8 @@ class StdioBridgeAgent(BaseAgent):
         "durationMs", "checks",
     }
     _EVIDENCE_REASONS = {
+        "before-git-state-digest-mismatch",
+        "before-manifest-digest-mismatch",
         "before-manifest-unavailable",
         "workspace-ancestor-identity-ambiguous",
         "workspace-depth-limit-exceeded",

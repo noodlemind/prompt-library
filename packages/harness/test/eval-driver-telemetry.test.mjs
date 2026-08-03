@@ -469,6 +469,40 @@ test('read-only script file access is not mislabeled as a workspace mutation', a
   );
 });
 
+test('mutations containing test-like paths remain edits while actual test runners remain tests', async () => {
+  const commands = [
+    ['rm -rf test-output', 'edit'],
+    ["sed -i 's/a/b/' src/test_util.py", 'edit'],
+    ['printf x > tests/result.txt', 'edit'],
+    ['echo test', 'other'],
+    ['echo "not a command: && pytest"', 'other'],
+    ['cat test', 'inspect'],
+    ['rg pytest .', 'inspect'],
+    ['npm view test', 'other'],
+    ['npm --prefix packages/harness test', 'test'],
+    ['pytest -q', 'test'],
+    ['python -m pytest -q', 'test'],
+    ['go test ./...', 'test'],
+    ['cargo test --workspace', 'test'],
+    ['node --test packages/harness/test/eval-budget.test.mjs', 'test'],
+    ['npx vitest run', 'test'],
+  ];
+  const { driver, telemetry } = harness([
+    completion({
+      message: assistantToolCalls(commands.map(([command]) => ['runInTerminal', { command }])),
+      usage: USAGE,
+    }),
+  ]);
+  for (const _entry of commands) {
+    const action = await driver.next();
+    driver.observe(action, { code: 0, stdout: '', stderr: '' });
+  }
+  assert.deepEqual(
+    telemetry.snapshot().events.filter((event) => event.type === 'tool_call').map((event) => event.category),
+    commands.map(([, category]) => category)
+  );
+});
+
 test('a request that could cross the ceiling is refused before it is sent', async () => {
   const { driver, calls, telemetry, budget } = harness(
     [completion({ message: { role: 'assistant', content: 'never reached' }, usage: USAGE, finishReason: 'stop' })],
@@ -570,6 +604,83 @@ test('Retry-After is clamped to thirty seconds', async () => {
   driver.reset({ system: 's', instruction: 'i', tools: TOOLS });
   await driver.next();
   assert.deepEqual(sleeps, [30_000]);
+});
+
+test('a 429 backoff cannot extend one logical request past its deadline', async () => {
+  let now = 0;
+  let attempts = 0;
+  const sleeps = [];
+  const telemetry = createTelemetry({ monotonicNow: () => now });
+  const driver = openAiToolDriver({
+    profile: KIMI,
+    apiKey: 'k',
+    fetchImpl: async () => {
+      attempts += 1;
+      const retryAfter = attempts === 1 ? '0.6' : '0.5';
+      return { ok: false, status: 429, headers: { get: () => retryAfter }, json: async () => ({}) };
+    },
+    requestTimeoutMs: 1_000,
+    transientRetries: 2,
+    monotonicNow: () => now,
+    telemetry,
+    sleepImpl: async (ms) => {
+      sleeps.push(ms);
+      now += ms;
+    },
+  });
+  driver.reset({ system: 's', instruction: 'i', tools: TOOLS });
+
+  await assert.rejects(driver.next(), (error) => error.kind === 'timeout');
+  assert.equal(attempts, 2, 'only the retry that fits inside the logical deadline may begin');
+  assert.deepEqual(sleeps, [600], 'cumulative backoffs may not consume more than the logical deadline');
+  const { totals, events } = telemetry.snapshot();
+  assert.equal(totals.providerAttempts, 2);
+  assert.equal(totals.providerErrors, 2);
+  assert.equal(totals.retries, 1);
+  assert.equal(totals.openAttempts, 0);
+  assert.equal(totals.billingComplete, true, 'both completed 429 attempts are confirmed unbilled');
+  assert.ok(events.some((event) => event.type === 'request_deadline_exhausted' && event.phase === 'backoff'));
+});
+
+test('a deadline abort while reading the response body remains an unknown-billing timeout', async () => {
+  const telemetry = createTelemetry();
+  const budget = createBudget({ ceilingUsd: 1, label: 'response-body-timeout' });
+  const driver = openAiToolDriver({
+    profile: KIMI,
+    apiKey: 'k',
+    requestTimeoutMs: 20,
+    telemetry,
+    budget,
+    fetchImpl: async (_url, init) => ({
+      ok: true,
+      status: 200,
+      json: async () => new Promise((_resolve, reject) => {
+        init.signal.addEventListener(
+          'abort',
+          () => reject(new DOMException('aborted while reading the response body', 'AbortError')),
+          { once: true }
+        );
+      }),
+    }),
+  });
+  driver.reset({ system: 's', instruction: 'i', tools: TOOLS });
+
+  await assert.rejects(
+    driver.next(),
+    (error) => error.kind === 'timeout' && error.billed === null && error.billingUncertain === true
+  );
+  const { totals, events } = telemetry.snapshot();
+  assert.equal(totals.providerAttempts, 1);
+  assert.equal(totals.providerErrors, 1);
+  assert.equal(totals.openAttempts, 0);
+  assert.equal(totals.billingComplete, false);
+  assert.equal(budget.spentUsd(), budget.ceilingUsd, 'an in-flight timeout reserves the remaining allowance');
+  assert.ok(events.some((event) =>
+    event.type === 'error' && event.kind === 'timeout' && event.billingStatus === 'unknown'
+  ));
+  assert.ok(events.some((event) =>
+    event.type === 'request_deadline_exhausted' && event.phase === 'response_body'
+  ));
 });
 
 test('retries exhaust into a classified http failure; terminal statuses never retry', async () => {

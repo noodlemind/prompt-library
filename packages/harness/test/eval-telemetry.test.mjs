@@ -40,7 +40,15 @@ test('the attempt ledger distinguishes logical requests, physical attempts, resp
   t.finishAttempt('request-1-attempt-2', {
     type: 'response',
     billingStatus: 'reported',
-    usage: { promptTokens: 10, cachedTokens: 4, reasoningTokens: 1, outputTokens: 2, localCostUsd: 0.01, providerCostUsd: 0.02 },
+    usage: {
+      promptTokens: 10,
+      cachedTokens: 4,
+      reasoningTokens: 1,
+      outputTokens: 2,
+      localCostUsd: 0.01,
+      providerCostUsd: 0.02,
+      reconciledCostUsd: 0.02,
+    },
     providerCostRequired: true,
   });
 
@@ -69,6 +77,29 @@ test('unknown billing and an unclosed attempt make cost evidence incomplete', ()
   assert.equal(totals.openAttempts, 1);
   assert.equal(totals.billingComplete, false);
   assert.equal(totals.costComplete, false);
+});
+
+test('the attempt ledger rejects every malformed lifecycle transition', () => {
+  const t = createTelemetry();
+  assert.throws(() => t.startAttempt({ attemptId: 'attempt-missing-request' }), /required/);
+  assert.throws(() => t.startAttempt({ requestId: 'request-1' }), /required/);
+
+  t.startAttempt({ requestId: 'request-1', attemptId: 'attempt-1' });
+  assert.throws(
+    () => t.startAttempt({ requestId: 'request-1', attemptId: 'attempt-1' }),
+    /already open/
+  );
+  assert.throws(() => t.finishAttempt('attempt-never-opened', { type: 'response' }), /not open/);
+  assert.throws(() => t.finishAttempt('attempt-1', { type: 'retry' }), /response or error/);
+  assert.throws(
+    () => t.finishAttempt('attempt-1', { type: 'error', billingStatus: 'free' }),
+    /invalid billingStatus/
+  );
+  assert.doesNotThrow(() => t.finishAttempt('attempt-1', {
+    type: 'error',
+    billingStatus: 'confirmed_unbilled',
+  }));
+  assert.equal(t.snapshot().totals.openAttempts, 0, 'rejected transitions must not corrupt the valid open attempt');
 });
 
 test('a billable provider error retains usage while remaining an error terminal', () => {
@@ -121,8 +152,8 @@ test('a reported-billing error without usage makes metering incomplete', () => {
 
 test('mixed provider-cost presence is incomplete when provider cost is required', () => {
   const t = createTelemetry();
-  t.addUsage({ promptTokens: 1, cachedTokens: 0, reasoningTokens: 0, outputTokens: 1, localCostUsd: 0.001, providerCostUsd: 0.002 }, { providerCostRequired: true });
-  t.addUsage({ promptTokens: 1, cachedTokens: 0, reasoningTokens: 0, outputTokens: 1, localCostUsd: 0.001 }, { providerCostRequired: true });
+  t.addUsage({ promptTokens: 1, cachedTokens: 0, reasoningTokens: 0, outputTokens: 1, localCostUsd: 0.001, providerCostUsd: 0.002, reconciledCostUsd: 0.002 }, { providerCostRequired: true });
+  t.addUsage({ promptTokens: 1, cachedTokens: 0, reasoningTokens: 0, outputTokens: 1, localCostUsd: 0.001, reconciledCostUsd: 0.001 }, { providerCostRequired: true });
   const { totals } = t.snapshot();
   assert.equal(totals.providerCostUsd, 0.002, 'known provider cost remains available but is explicitly partial');
   assert.equal(totals.providerCostComplete, false);
@@ -131,8 +162,8 @@ test('mixed provider-cost presence is incomplete when provider cost is required'
 
 test('addUsage accumulates token totals, request count, and local cost', () => {
   const t = createTelemetry();
-  t.addUsage({ promptTokens: 100, cachedTokens: 40, reasoningTokens: 10, outputTokens: 20, localCostUsd: 0.001 });
-  t.addUsage({ promptTokens: 200, cachedTokens: 0, reasoningTokens: 0, outputTokens: 30, localCostUsd: 0.002 });
+  t.addUsage({ promptTokens: 100, cachedTokens: 40, reasoningTokens: 10, outputTokens: 20, localCostUsd: 0.001, reconciledCostUsd: 0.001 });
+  t.addUsage({ promptTokens: 200, cachedTokens: 0, reasoningTokens: 0, outputTokens: 30, localCostUsd: 0.002, reconciledCostUsd: 0.002 });
   const { totals } = t.snapshot();
   assert.equal(totals.requests, 2);
   assert.equal(totals.promptTokens, 300);
@@ -146,7 +177,7 @@ test('addUsage accumulates token totals, request count, and local cost', () => {
 
 test('a response with unusable usage is counted but never estimated', () => {
   const t = createTelemetry();
-  t.addUsage({ promptTokens: 100, cachedTokens: 0, reasoningTokens: 0, outputTokens: 10, localCostUsd: 0.001 });
+  t.addUsage({ promptTokens: 100, cachedTokens: 0, reasoningTokens: 0, outputTokens: 10, localCostUsd: 0.001, reconciledCostUsd: 0.001 });
   t.addUsage(null);
   const { totals } = t.snapshot();
   assert.equal(totals.requests, 2);
@@ -170,6 +201,7 @@ test('missing cache and reasoning details remain null without invalidating usabl
     outputTokens: 10,
     localCostUsd: 0.001,
     providerCostUsd: 0.002,
+    reconciledCostUsd: 0.002,
   }, { providerCostRequired: true });
   const { totals } = t.snapshot();
   assert.equal(totals.cachedTokens, null);
@@ -182,10 +214,62 @@ test('missing cache and reasoning details remain null without invalidating usabl
 
 test('provider-reported cost stays null until a provider actually reports one', () => {
   const t = createTelemetry();
-  t.addUsage({ promptTokens: 1, cachedTokens: 0, reasoningTokens: 0, outputTokens: 1, localCostUsd: 0 });
+  t.addUsage({ promptTokens: 1, cachedTokens: 0, reasoningTokens: 0, outputTokens: 1, localCostUsd: 0, reconciledCostUsd: 0 });
   assert.equal(t.snapshot().totals.providerCostUsd, null);
-  t.addUsage({ promptTokens: 1, cachedTokens: 0, reasoningTokens: 0, outputTokens: 1, localCostUsd: 0, providerCostUsd: 0.005 });
+  t.addUsage({ promptTokens: 1, cachedTokens: 0, reasoningTokens: 0, outputTokens: 1, localCostUsd: 0, providerCostUsd: 0.005, reconciledCostUsd: 0.005 });
   assert.ok(Math.abs(t.snapshot().totals.providerCostUsd - 0.005) < 1e-12);
+});
+
+test('missing or non-finite core usage is incomplete while known fields still accumulate safely', () => {
+  const t = createTelemetry();
+  const complete = {
+    promptTokens: 10,
+    cachedTokens: 0,
+    reasoningTokens: 0,
+    outputTokens: 2,
+    localCostUsd: 0.01,
+    reconciledCostUsd: 0.02,
+  };
+  for (const usage of [
+    { ...complete, promptTokens: undefined },
+    { ...complete, outputTokens: Infinity },
+    { ...complete, localCostUsd: Number.NaN },
+    { ...complete, reconciledCostUsd: undefined },
+  ]) {
+    t.addUsage(usage);
+  }
+
+  const { totals } = t.snapshot();
+  assert.equal(totals.requests, 4);
+  assert.equal(totals.missingUsage, 4);
+  assert.equal(totals.usageComplete, false);
+  assert.equal(totals.costComplete, false);
+  assert.equal(totals.promptTokens, 30, 'only finite prompt-token fields are retained');
+  assert.equal(totals.outputTokens, 6, 'only finite output-token fields are retained');
+  assert.ok(Math.abs(totals.localCostUsd - 0.03) < 1e-12, 'only finite local costs are retained');
+  assert.ok(Math.abs(totals.reconciledCostUsd - 0.06) < 1e-12, 'only finite reconciled costs are retained');
+  for (const field of ['promptTokens', 'outputTokens', 'localCostUsd', 'reconciledCostUsd']) {
+    assert.equal(Number.isFinite(totals[field]), true, `${field} must never become NaN or Infinity`);
+  }
+});
+
+test('negative or non-finite provider cost is incomplete and never accumulates', () => {
+  const complete = {
+    promptTokens: 10,
+    cachedTokens: 0,
+    reasoningTokens: 0,
+    outputTokens: 2,
+    localCostUsd: 0.01,
+    reconciledCostUsd: 0.02,
+  };
+  for (const providerCostUsd of [-1, Number.NaN, Infinity, -Infinity]) {
+    const t = createTelemetry();
+    t.addUsage({ ...complete, providerCostUsd }, { providerCostRequired: true });
+    const { totals } = t.snapshot();
+    assert.equal(totals.providerCostUsd, null);
+    assert.equal(totals.providerCostComplete, false);
+    assert.equal(totals.costComplete, false);
+  }
 });
 
 test('snapshot is a copy — mutating it does not corrupt internal state', () => {

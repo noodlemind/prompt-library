@@ -15,13 +15,14 @@ import { fileURLToPath } from 'node:url';
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const LOCK = JSON.parse(fs.readFileSync(path.join(repoRoot, 'evals', 'external', 'terminal_bench', 'task-lock.json'), 'utf8'));
 
-test('the harbor agent module imports at exactly the reference passed to --agent', () => {
+test('the harbor agent module imports at exactly the reference passed to --agent', (t) => {
   const python = spawnSync('python3', ['-c', 'import evals.external.terminal_bench.harbor_agent as m; print(m.StdioBridgeAgent.name())'], {
     cwd: repoRoot,
     encoding: 'utf8',
   });
   if (python.error?.code === 'ENOENT') {
-    return; // no python3 on this machine — covered wherever the release runs
+    t.skip('python3 not installed here; contract enforced where the release runs');
+    return;
   }
   assert.equal(python.status, 0, python.stderr);
   assert.equal(python.stdout.trim(), 'engineer-harness-stdio-bridge');
@@ -33,6 +34,7 @@ test('every committed task lock entry is stamped with a real checksum', () => {
   for (const entry of tasks) {
     assert.match(entry.taskChecksum ?? '', /^[0-9a-f]{64}$/, `${entry.task}: taskChecksum must be committed, not stamped at release time`);
   }
+  assert.deepEqual(Object.keys(LOCK.verifier).sort(), ['passingReward'], 'the lock declares only verifier fields consumed at runtime');
 });
 
 test('the emitted harbor flags exist in the installed harbor CLI (skipped when absent)', (t) => {

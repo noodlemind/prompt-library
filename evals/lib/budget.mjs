@@ -65,6 +65,20 @@ export function createBudget({ ceilingUsd, label = 'budget', parent = null } = {
   let breached = false;
   const events = [];
 
+  function markBreachIfCrossed(note) {
+    if (spent <= ceilingUsd) return;
+    breached = true;
+    exhausted = true;
+    events.push({
+      type: 'budget_breach',
+      label,
+      ceilingUsd,
+      spentUsd: spent,
+      overrunUsd: Number((spent - ceilingUsd).toFixed(12)),
+      note,
+    });
+  }
+
   const budget = {
     label,
     ceilingUsd,
@@ -116,18 +130,7 @@ export function createBudget({ ceilingUsd, label = 'budget', parent = null } = {
       spent += usd;
       knownSpent += usd;
       events.push({ type: 'charge', label, usd, note, spentUsd: spent });
-      if (spent > ceilingUsd) {
-        breached = true;
-        exhausted = true;
-        events.push({
-          type: 'budget_breach',
-          label,
-          ceilingUsd,
-          spentUsd: spent,
-          overrunUsd: Number((spent - ceilingUsd).toFixed(12)),
-          note,
-        });
-      }
+      markBreachIfCrossed(note);
       parent?.charge(usd, note);
     },
     /**
@@ -142,18 +145,7 @@ export function createBudget({ ceilingUsd, label = 'budget', parent = null } = {
       spent += usd;
       uncertainReserved += usd;
       events.push({ type: 'reserve', label, usd, note, spentUsd: spent, uncertainReservedUsd: uncertainReserved });
-      if (spent > ceilingUsd) {
-        breached = true;
-        exhausted = true;
-        events.push({
-          type: 'budget_breach',
-          label,
-          ceilingUsd,
-          spentUsd: spent,
-          overrunUsd: Number((spent - ceilingUsd).toFixed(12)),
-          note,
-        });
-      }
+      markBreachIfCrossed(note);
       parent?.reserve(usd, note);
     },
   };

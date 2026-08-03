@@ -36,16 +36,17 @@ test('the pytest summary is taken from the FINAL duration-bearing line, not agen
   assert.deepEqual(parsePytestSummary(spoofed), { passed: 2, failed: 1 });
 });
 
-test('an oversized official log degrades assertion evidence but keeps the parsed reward', () => {
+test('an oversized verifier log degrades advisory assertions without grading a writable reward', () => {
   const trial = tmpdir();
   const verifierDir = path.join(trial, 'verifier');
   fs.mkdirSync(verifierDir, { recursive: true });
   fs.writeFileSync(path.join(verifierDir, 'reward.json'), '{"reward": 0}');
   fs.writeFileSync(path.join(verifierDir, 'huge.log'), Buffer.alloc(4 * 1024 * 1024 + 1, 0x61));
   const evidence = collectVerifierEvidence(trial);
-  assert.equal(evidence.reward, 0, 'a graded FAIL must stay graded — never become an excluded invalid trial');
+  assert.equal(evidence.reward, null);
+  assert.equal(evidence.rewardPath, null);
   assert.equal(evidence.pytest, null);
-  assert.match(evidence.degraded ?? '', /degraded/i);
+  assert.match(evidence.degraded ?? '', /agent-writable.*assertion evidence degraded/i);
 });
 
 test('parseReward reads reward.txt plain numbers and rejects garbage', () => {
@@ -103,6 +104,25 @@ test('hashTree includes empty directories and regular-file mode in its typed man
   const afterMode = fs.lstatSync(path.join(b, 'run.sh')).mode & 0o7777;
   if (afterMode === beforeMode) t.skip('filesystem does not expose executable mode changes');
   else assert.notEqual(hashTree(a), hashTree(b), 'a mode change must change the digest');
+});
+
+test('hashTree attests setuid, setgid, and sticky bits while ignoring write-bit containment chmod', (t) => {
+  if (process.platform === 'win32') return t.skip('POSIX special mode bits are unavailable on Windows');
+  const baseline = tmpdir();
+  const changed = tmpdir();
+  for (const dir of [baseline, changed]) {
+    fs.writeFileSync(path.join(dir, 'run.sh'), '#!/bin/sh\n');
+    fs.chmodSync(path.join(dir, 'run.sh'), 0o555);
+  }
+  const baselineHash = hashTree(baseline);
+  for (const special of [0o4000, 0o2000, 0o1000]) {
+    fs.chmodSync(path.join(changed, 'run.sh'), 0o555 | special);
+    const observed = fs.lstatSync(path.join(changed, 'run.sh')).mode & 0o7777;
+    if ((observed & special) === 0) return t.skip(`filesystem does not expose mode bit ${special.toString(8)}`);
+    assert.notEqual(hashTree(changed), baselineHash, `mode bit ${special.toString(8)} must change the digest`);
+  }
+  fs.chmodSync(path.join(changed, 'run.sh'), 0o755);
+  assert.equal(hashTree(changed), baselineHash, 'write bits remain excluded from the attested mode');
 });
 
 test('hashTree rejects symlinks instead of following or silently omitting them', (t) => {
@@ -183,7 +203,7 @@ test('hashTree detects a file mutated during inspection or reading', async () =>
   }
 });
 
-test('collectVerifierEvidence prefers reward.json, captures pytest counts, and hashes the tree', () => {
+test('collectVerifierEvidence keeps verifier diagnostics advisory and hashes the full tree', () => {
   const trial = tmpdir();
   const verifierDir = path.join(trial, 'logs', 'verifier');
   fs.mkdirSync(verifierDir, { recursive: true });
@@ -191,45 +211,63 @@ test('collectVerifierEvidence prefers reward.json, captures pytest counts, and h
   fs.writeFileSync(path.join(verifierDir, 'reward.json'), '{"reward": 1}');
   fs.writeFileSync(path.join(verifierDir, 'pytest.log'), '==== 4 passed, 2 failed in 1.0s ====');
   const evidence = collectVerifierEvidence(trial);
-  assert.equal(evidence.reward, 1, 'reward.json wins over reward.txt');
-  assert.match(evidence.rewardPath, /reward\.json$/);
+  assert.equal(evidence.reward, null, 'neither agent-writable reward format may grade');
+  assert.equal(evidence.rewardPath, null);
+  assert.equal(evidence.metrics, null);
   assert.deepEqual(evidence.pytest, { passed: 4, failed: 2 });
   assert.match(evidence.treeHash, /^[0-9a-f]{64}$/);
+  assert.match(evidence.degraded, /agent-writable/i);
 });
 
-test('collectVerifierEvidence bounds official files before allocating or parsing them', () => {
+test('agent-writable verifier reward files cannot grade without runner-owned attestation', () => {
+  for (const layout of [['verifier'], ['logs', 'verifier']]) {
+    const trial = tmpdir();
+    const verifierDir = path.join(trial, ...layout);
+    fs.mkdirSync(verifierDir, { recursive: true });
+    fs.writeFileSync(path.join(verifierDir, 'reward.json'), '{"reward": 1}');
+    const evidence = collectVerifierEvidence(trial);
+    assert.equal(evidence.reward, null, `${layout.join('/')} is writable by the evaluated agent`);
+    assert.equal(evidence.rewardPath, null);
+  }
+});
+
+test('collectVerifierEvidence never allocates or parses an oversized untrusted reward', () => {
   const trial = tmpdir();
   const verifierDir = path.join(trial, 'logs', 'verifier');
   fs.mkdirSync(verifierDir, { recursive: true });
   const reward = path.join(verifierDir, 'reward.txt');
   fs.writeFileSync(reward, '1');
   fs.truncateSync(reward, 4 * 1024 * 1024 + 1);
-  assert.throws(() => collectVerifierEvidence(trial), /evidence file exceeds 4194304 bytes.*reward\.txt/i);
+  const evidence = collectVerifierEvidence(trial);
+  assert.equal(evidence.reward, null);
+  assert.equal(evidence.rewardPath, null);
+  assert.match(evidence.treeHash, /^[0-9a-f]{64}$/);
 });
 
-test('an ambiguous reward.json falls back to a valid reward.txt', () => {
+test('a valid reward.txt cannot rescue an ambiguous agent-writable reward.json', () => {
   const trial = tmpdir();
   const officialDir = path.join(trial, 'logs', 'verifier');
   fs.mkdirSync(officialDir, { recursive: true });
   fs.writeFileSync(path.join(officialDir, 'reward.json'), '{"a": 1, "b": 0}');
   fs.writeFileSync(path.join(officialDir, 'reward.txt'), '1');
   const evidence = collectVerifierEvidence(trial);
-  assert.equal(evidence.reward, 1, 'a json file without a usable reward must not mask the txt verdict');
-  assert.match(evidence.rewardPath, /reward\.txt$/);
+  assert.equal(evidence.reward, null);
+  assert.equal(evidence.rewardPath, null);
 });
 
-test("harbor 0.20.0's host-side layout — a direct-child verifier directory — is official evidence", () => {
+test("harbor 0.20.0's direct-child verifier directory is advisory because the agent also mounts it", () => {
   const trial = tmpdir();
   const verifierDir = path.join(trial, 'verifier');
   fs.mkdirSync(verifierDir, { recursive: true });
   fs.writeFileSync(path.join(verifierDir, 'reward.txt'), '1');
   fs.writeFileSync(path.join(verifierDir, 'test-stdout.txt'), '==== 3 passed in 0.33s ====');
   const evidence = collectVerifierEvidence(trial);
-  assert.equal(evidence.reward, 1);
+  assert.equal(evidence.reward, null);
+  assert.equal(evidence.rewardPath, null);
   assert.deepEqual(evidence.pytest, { passed: 3, failed: 0 });
 });
 
-test('a verifier-named directory nested in agent artifacts is still not official', () => {
+test('a verifier-named directory nested in agent artifacts cannot restore grading trust', () => {
   const trial = tmpdir();
   fs.mkdirSync(path.join(trial, 'verifier'), { recursive: true });
   fs.writeFileSync(path.join(trial, 'verifier', 'reward.txt'), '0');
@@ -237,7 +275,8 @@ test('a verifier-named directory nested in agent artifacts is still not official
   fs.mkdirSync(spoof, { recursive: true });
   fs.writeFileSync(path.join(spoof, 'reward.json'), '{"reward": 1}');
   const evidence = collectVerifierEvidence(trial);
-  assert.equal(evidence.reward, 0, 'only the trial-root verifier dir (or logs/verifier) counts');
+  assert.equal(evidence.reward, null);
+  assert.equal(evidence.rewardPath, null);
 });
 
 test('logs/verifier nested in the agent workspace cannot spoof official evidence', () => {
@@ -248,11 +287,11 @@ test('logs/verifier nested in the agent workspace cannot spoof official evidence
   fs.mkdirSync(spoof, { recursive: true });
   fs.writeFileSync(path.join(spoof, 'reward.json'), '{"reward": 1}');
   const evidence = collectVerifierEvidence(trial);
-  assert.equal(evidence.reward, 0, 'an agent-writable logs/verifier path must be ignored');
-  assert.match(evidence.rewardPath, /verifier[/\\]reward\.txt$/);
+  assert.equal(evidence.reward, null, 'all agent-writable verifier paths must be ignored');
+  assert.equal(evidence.rewardPath, null);
 });
 
-test('reward evidence is only trusted from the official logs/verifier directory', () => {
+test('trial-root logs/verifier and workspace reward files are both untrusted', () => {
   const trial = tmpdir();
   const officialDir = path.join(trial, 'logs', 'verifier');
   fs.mkdirSync(officialDir, { recursive: true });
@@ -263,8 +302,8 @@ test('reward evidence is only trusted from the official logs/verifier directory'
   fs.mkdirSync(spoofDir, { recursive: true });
   fs.writeFileSync(path.join(spoofDir, 'reward.json'), '{"reward": 1}');
   const evidence = collectVerifierEvidence(trial);
-  assert.equal(evidence.reward, 0, 'the spoofed reward.json must be ignored');
-  assert.match(evidence.rewardPath, /logs[/\\]verifier[/\\]reward\.txt$/);
+  assert.equal(evidence.reward, null);
+  assert.equal(evidence.rewardPath, null);
 });
 
 test('reward evidence below artifacts is rejected even at an otherwise official layout', () => {
@@ -276,8 +315,8 @@ test('reward evidence below artifacts is rejected even at an otherwise official 
   fs.mkdirSync(spoofDir, { recursive: true });
   fs.writeFileSync(path.join(spoofDir, 'reward.json'), '{"reward": 1}');
   const evidence = collectVerifierEvidence(trial);
-  assert.equal(evidence.reward, 0);
-  assert.match(evidence.rewardPath, /verifier[/\\]reward\.txt$/);
+  assert.equal(evidence.reward, null);
+  assert.equal(evidence.rewardPath, null);
 });
 
 test('collectVerifierEvidence reports a missing reward as null evidence, not zero', () => {

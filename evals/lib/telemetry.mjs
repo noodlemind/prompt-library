@@ -76,7 +76,17 @@ export function createTelemetry({
       refreshCostComplete();
       return;
     }
-    totals.promptTokens += usage.promptTokens || 0;
+    const coreFields = ['promptTokens', 'outputTokens', 'localCostUsd', 'reconciledCostUsd'];
+    const coreComplete = coreFields.every((field) =>
+      typeof usage[field] === 'number' && Number.isFinite(usage[field]) && usage[field] >= 0
+    );
+    if (!coreComplete) {
+      totals.missingUsage += 1;
+      totals.usageComplete = false;
+    }
+    if (typeof usage.promptTokens === 'number' && Number.isFinite(usage.promptTokens) && usage.promptTokens >= 0) {
+      totals.promptTokens += usage.promptTokens;
+    }
     const cachedComplete = usage.cachedTokensComplete !== false &&
       typeof usage.cachedTokens === 'number' && Number.isFinite(usage.cachedTokens) && usage.cachedTokens >= 0;
     const reasoningComplete = usage.reasoningTokensComplete !== false &&
@@ -91,12 +101,22 @@ export function createTelemetry({
       totals.reasoningTokens = null;
       totals.reasoningTokensComplete = false;
     }
-    totals.outputTokens += usage.outputTokens || 0;
-    totals.localCostUsd += usage.localCostUsd || 0;
-    totals.reconciledCostUsd += usage.reconciledCostUsd || 0;
-    if (typeof usage.providerCostUsd === 'number' && Number.isFinite(usage.providerCostUsd)) {
+    if (typeof usage.outputTokens === 'number' && Number.isFinite(usage.outputTokens) && usage.outputTokens >= 0) {
+      totals.outputTokens += usage.outputTokens;
+    }
+    if (typeof usage.localCostUsd === 'number' && Number.isFinite(usage.localCostUsd) && usage.localCostUsd >= 0) {
+      totals.localCostUsd += usage.localCostUsd;
+    }
+    if (typeof usage.reconciledCostUsd === 'number' && Number.isFinite(usage.reconciledCostUsd) && usage.reconciledCostUsd >= 0) {
+      totals.reconciledCostUsd += usage.reconciledCostUsd;
+    }
+    if (
+      typeof usage.providerCostUsd === 'number' &&
+      Number.isFinite(usage.providerCostUsd) &&
+      usage.providerCostUsd >= 0
+    ) {
       totals.providerCostUsd = (totals.providerCostUsd ?? 0) + usage.providerCostUsd;
-    } else if (providerCostRequired) {
+    } else if (providerCostRequired || usage.providerCostUsd != null) {
       totals.providerCostComplete = false;
     }
     refreshCostComplete();

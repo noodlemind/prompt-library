@@ -142,11 +142,24 @@ test('a parent refusal marks the child exhausted and lands in its audit trail', 
   assert.equal(trial.events().at(-1).type, 'budget_exhausted');
 });
 
-test('charge rejects negative amounts and ignores null cost', () => {
+test('charge and reserve reject negative amounts and ignore null cost', () => {
   const budget = createBudget({ ceilingUsd: 5, label: 'b' });
   assert.throws(() => budget.charge(-1), /negative/);
   budget.charge(null, 'unusable usage');
+  assert.throws(() => budget.reserve(-1), /negative/);
+  budget.reserve(null, 'unknown billing');
   assert.equal(budget.spentUsd(), 0);
+});
+
+test('an unexpected reserve above the ceiling uses the same blocking breach ledger as a charge', () => {
+  const budget = createBudget({ ceilingUsd: 1, label: 'release' });
+  budget.reserve(1.1, 'ambiguous response');
+  assert.equal(budget.spentUsd(), 1.1);
+  assert.equal(budget.knownReconciledSpendUsd(), 0);
+  assert.equal(budget.uncertainReservedUsd(), 1.1);
+  assert.equal(budget.breached, true);
+  assert.equal(budget.exhausted, true);
+  assert.equal(budget.events().at(-1).type, 'budget_breach');
 });
 
 test('an unexpected actual charge above a prechecked ceiling is retained and marked as a blocking breach', () => {
