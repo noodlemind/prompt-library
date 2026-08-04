@@ -271,6 +271,8 @@ export function buildReport({ workspace, copilotHome, events }) {
   const hostBacked = all.some((e) => e.source === 'host');
   const performance = sessionPerformance(all);
   return {
+    workspace: workspace ?? null,
+    copilotHome: copilotHome ?? null,
     totals: { tokens: usage.totalTokens, input: usage.inputTokens, output: usage.outputTokens, events: all.length, measured: withUsage.length },
     span,
     hostBacked,
@@ -376,6 +378,41 @@ export function renderReport(report, ui = createStyle()) {
     lines.push(
       ui.line({ key: 'sinks', value: 'none yet', note: 'run some harness commands, then report', keyWidth })
     );
+    // An empty report must be self-diagnosing: say exactly where telemetry
+    // was expected, what exists there, and which knob fixes each gap.
+    const sessionStateDir = report.copilotHome ? path.join(report.copilotHome, 'session-state') : null;
+    const vscodeUsage = report.copilotHome ? path.join(report.copilotHome, 'host-usage', 'vscode.jsonl') : null;
+    const countSessions = (dir) => {
+      try {
+        return fs.readdirSync(dir).length;
+      } catch {
+        return null;
+      }
+    };
+    const hostSessions = sessionStateDir ? countSessions(sessionStateDir) : null;
+    lines.push('');
+    lines.push(ui.line({ key: 'looked in', value: `workspace ${report.workspace}`, note: 'harness event store (.harness) — run report from the instrumented workspace, or use --global for all synced workspaces', keyWidth }));
+    lines.push(
+      ui.line({
+        key: '',
+        value: `copilot home ${report.copilotHome ?? '(unresolved)'}`,
+        note:
+          hostSessions == null
+            ? 'session-state missing — set COPILOT_HOME if Copilot stores sessions elsewhere on this machine'
+            : `session-state present · ${hostSessions} session dir(s)`,
+        keyWidth,
+      })
+    );
+    if (vscodeUsage) {
+      lines.push(
+        ui.line({
+          key: '',
+          value: `vscode usage ${vscodeUsage}`,
+          note: fs.existsSync(vscodeUsage) ? 'present' : 'absent — the VS Code emitter hook has not written host usage here',
+          keyWidth,
+        })
+      );
+    }
   } else {
     lines.push(ui.line({ key: 'sinks', value: `${report.sinks.length} event type(s)`, keyWidth }));
     const max = report.sinks[0].tokens;
