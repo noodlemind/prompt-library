@@ -3,6 +3,10 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
+import {
+  createHost as createControlledHost,
+  validateControlledProfile,
+} from '../../../evals/hosts/openrouter-controlled.mjs';
 import { createHost as createKimiHost } from '../../../evals/hosts/openrouter-kimi.mjs';
 import { createHost as createGemmaHost } from '../../../evals/hosts/ollama-gemma.mjs';
 import { createHost as createCodexHost } from '../../../evals/hosts/codex-subscription.mjs';
@@ -12,11 +16,92 @@ import { createHost as createGrokSmoke } from '../../../evals/hosts/grok-smoke.m
 import { createBudget } from '../../../evals/lib/budget.mjs';
 import { createTelemetry } from '../../../evals/lib/telemetry.mjs';
 
+test('controlled OpenRouter host requires an explicit registered OpenRouter profile', () => {
+  assert.throws(
+    () => createControlledHost({ apiKey: 'test-key' }),
+    /profileId.*required/i,
+  );
+  assert.throws(
+    () => createControlledHost({ profileId: 'unknown-profile', apiKey: 'test-key' }),
+    /unknown model profile/i,
+  );
+  assert.throws(
+    () => createControlledHost({ profileId: 'gemma-4-26b-local', apiKey: 'test-key' }),
+    /OpenRouter profile/i,
+  );
+});
+
+test('controlled OpenRouter host uses the selected profile with provider fallback disabled', async () => {
+  const requests = [];
+  const host = createControlledHost({ profileId: 'kimi-k2.7-code', apiKey: 'test-key' });
+  assert.equal(host.id, 'openrouter-controlled');
+  assert.equal(host.kind, 'api');
+  assert.equal(host.gate, 'controlled-ablation');
+  assert.equal(host.profile.id, 'kimi-k2.7-code');
+
+  const driver = host.createDriver({
+    budget: createBudget({ ceilingUsd: 5 }),
+    telemetry: createTelemetry(),
+    fetchImpl: async (_url, request) => {
+      requests.push(JSON.parse(request.body));
+      return {
+        ok: true,
+        json: async () => ({
+          id: 'gen',
+          model: host.profile.model,
+          provider: 'Moonshot AI',
+          usage: { prompt_tokens: 1, completion_tokens: 1, cost: 0.00001 },
+          choices: [{ message: { role: 'assistant', content: 'done', tool_calls: [] } }],
+        }),
+      };
+    },
+  });
+  driver.reset({ system: 's', instruction: 'i', tools: [] });
+  await driver.next();
+
+  assert.deepEqual(requests[0].provider, {
+    order: ['moonshotai/int4'],
+    allow_fallbacks: false,
+  });
+});
+
+test('controlled OpenRouter profiles pin exactly one endpoint and resolved provider identity', () => {
+  const profile = structuredClone(createControlledHost({ profileId: 'kimi-k2.7-code', apiKey: 'test-key' }).profile);
+  assert.throws(
+    () => validateControlledProfile({
+      ...profile,
+      provider: { ...profile.provider, order: [...profile.provider.order, 'another/provider'] },
+    }),
+    /exactly one provider endpoint/i,
+  );
+  assert.throws(
+    () => validateControlledProfile({
+      ...profile,
+      provider: { ...profile.provider, expectedResolvedNames: [...profile.provider.expectedResolvedNames, 'Other'] },
+    }),
+    /exactly one resolved provider identity/i,
+  );
+});
+
+test('release profiles select the controlled host and budget without a model-named lane', () => {
+  for (const name of ['release-canary.yaml', 'release-routine.yaml']) {
+    const config = fs.readFileSync(new URL(`../../../evals/config/${name}`, import.meta.url), 'utf8');
+    const expected = name === 'release-canary.yaml'
+      ? { controlled: '8.4', rerun: '1.6', hardLimit: '20' }
+      : { controlled: '8', rerun: '2', hardLimit: '10' };
+    assert.match(config, /controlledLane:\s*\n\s+host: openrouter-controlled\s*\n\s+profileId: kimi-k2\.7-code/);
+    assert.match(config, new RegExp(`controlledPairUsd: ${expected.controlled}(?:\\n|$)`));
+    assert.match(config, new RegExp(`rerunUsd: ${expected.rerun}(?:\\n|$)`));
+    assert.match(config, new RegExp(`providerHardLimitUsd: ${expected.hardLimit}(?:\\n|$)`));
+    assert.doesNotMatch(config, /kimiPairUsd:/);
+  }
+});
+
 test('kimi host is the controlled API experiment on the pinned profile', () => {
   const host = createKimiHost({ apiKey: 'test-key' });
   assert.equal(host.id, 'openrouter-kimi');
   assert.equal(host.kind, 'api');
-  assert.equal(host.gate, 'after-calibration');
+  assert.equal(host.gate, 'controlled-ablation');
   assert.equal(host.profile.id, 'kimi-k2.7-code');
   const driver = host.createDriver({ budget: createBudget({ ceilingUsd: 5 }), telemetry: createTelemetry() });
   assert.equal(driver.model, 'moonshotai/kimi-k2.7-code-20260612');

@@ -61,6 +61,21 @@ test('listProfiles returns every profile id', () => {
   assert.deepEqual(ids.sort(), ['gemma-4-26b-local', 'kimi-k2.7-code']);
 });
 
+test('every registered OpenRouter profile pins a provider and disables fallback', () => {
+  const profiles = listProfiles().filter((profile) => profile.host === 'openrouter');
+  assert.ok(profiles.length > 0);
+  for (const profile of profiles) {
+    assert.equal(profile.provider?.allowFallbacks, false, profile.id);
+    assert.ok(Array.isArray(profile.provider?.order) && profile.provider.order.length > 0, profile.id);
+    assert.ok(
+      Array.isArray(profile.provider?.expectedResolvedNames) && profile.provider.expectedResolvedNames.length > 0,
+      profile.id,
+    );
+    assert.equal(profile.catalogPin?.canonicalSlug, profile.model, profile.id);
+    assert.ok(profile.provider.order.includes(profile.catalogPin?.endpointTag), profile.id);
+  }
+});
+
 test('profiles are deep-frozen so eval code cannot drift pricing mid-run', () => {
   const p = getProfile('kimi-k2.7-code');
   assert.ok(Object.isFrozen(p));

@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { PassThrough } from 'node:stream';
 import { test } from 'node:test';
 import {
@@ -42,6 +44,29 @@ test('bridge tools expose exactly a terminal and a finish', () => {
     BRIDGE_TOOLS.map((t) => t.name).sort(),
     ['bash', 'finish']
   );
+});
+
+test('agent entry point never restores an implicit model when profileId is missing or unknown', () => {
+  const agentPath = fileURLToPath(new URL('../../../evals/external/terminal_bench/agent.mjs', import.meta.url));
+  for (const profileId of [undefined, 'not-a-registered-profile']) {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'tb-agent-profile-'));
+    const conditionPath = path.join(root, 'condition.json');
+    fs.writeFileSync(conditionPath, JSON.stringify({
+      id: 'profile-contract',
+      systemPrompt: 'system',
+      instruction: 'instruction',
+      ...(profileId === undefined ? {} : { profileId }),
+    }));
+    const result = spawnSync(process.execPath, [agentPath, '--condition', conditionPath], {
+      encoding: 'utf8',
+      env: {},
+      timeout: 5_000,
+    });
+    assert.equal(result.status, 1);
+    const done = JSON.parse(result.stdout.trim());
+    assert.equal(done.stopReason, 'bridge_error');
+    assert.match(done.detail, profileId === undefined ? /profileId is required/i : /unknown model profile/i);
+  }
 });
 
 test('runtime tools are treatment-only additions to the symmetric bridge baseline', () => {

@@ -197,6 +197,19 @@ Automated evidence covers the supported surfaces:
 
 Source and package tests cannot prove organization-specific IDE discovery settings. Platform owners therefore run a small post-publish interactive smoke in each enabled host; this supplements rather than replaces deterministic source, package, runtime, and evidence checks.
 
+## Evaluation boundary
+
+Harness-value claims come from a controlled same-model Generic-versus-Harness comparison: identical task bytes, sandbox, resolved provider, resolved model, model profile, settings, tools, stopping budget, and verifier, with fallback rejected. Native Claude Code, Codex, Copilot, Grok, and similar subscription runs are compatibility and user-experience references because their hidden prompts, tools, routing, and quotas are not normalized. Pi or mini-SWE-agent becomes a causal comparator only when it uses the same observable condition and budget. Missing prompt, lifecycle, cost, or correctness evidence remains unknown and cannot support a release claim. The executable qualification, calibration, budget, and completion policy lives in [the eval guide](../../evals/README.md).
+
+The small-model release-evidence lifecycle is deliberately staged:
+
+1. Select and price-check one exact economical model profile before spend.
+2. Run one locked qualification task once per arm under a `$1.30` ceiling. If neither arm passes the locked verifier threshold, stop; that is inconclusive model capability, not Harness evidence.
+3. Only an accepted qualification may unlock calibration on the same profile and continuity-bound provider credential: four locked tasks, three repetitions per arm, at most `$18.70`. Qualification plus calibration can reserve no more than `$20` in total.
+4. After an accepted calibration, routine release evaluation uses the same locked task set once per arm and may reserve no more than `$10`.
+
+Implementation completion and release-evidence completion are separate. Implementation is complete only after deterministic tests, scope verification, required reviews, and the PR stack are green; it requires no provider spend. Release evidence is complete only after trusted private qualification and calibration artifacts satisfy identity, correctness, safety, coverage, economics, readiness, and budget gates. Local Ollama and native subscription runs retain separate diagnostic coverage: incomplete diagnostic evidence is disclosed but cannot green or block the controlled claim.
+
 ## Verification
 
 For architecture or runtime changes, run:

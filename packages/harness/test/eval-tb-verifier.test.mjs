@@ -2,8 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { spawn, spawnSync } from 'node:child_process';
-import { once } from 'node:events';
+import { spawnSync } from 'node:child_process';
 import { test } from 'node:test';
 import {
   parseReward,
@@ -178,28 +177,25 @@ test('hashTree rejects an unreadable regular file when permissions are enforced'
   }
 });
 
-test('hashTree detects a file mutated during inspection or reading', async () => {
+test('hashTree detects a file mutated during inspection or reading', () => {
   const dir = tmpdir();
   const file = path.join(dir, 'changing.bin');
   fs.writeFileSync(file, Buffer.alloc(8 * 1024 * 1024));
-  const script = [
-    "const fs = require('node:fs');",
-    'const fd = fs.openSync(process.argv[1], \'r+\');',
-    "process.stdout.write('ready\\n');",
-    'const bytes = [Buffer.from([1]), Buffer.from([2])];',
-    'const end = Date.now() + 10_000;',
-    'let index = 0;',
-    'while (Date.now() < end) fs.writeSync(fd, bytes[index++ & 1], 0, 1, 0);',
-    'fs.closeSync(fd);',
-  ].join('\n');
-  const mutator = spawn(process.execPath, ['-e', script, file], { stdio: ['ignore', 'pipe', 'ignore'] });
-  const exited = once(mutator, 'exit');
-  await once(mutator.stdout, 'data');
+  const originalReadSync = fs.readSync;
+  let mutated = false;
+  fs.readSync = function mutateAfterFirstRead(...args) {
+    const count = Reflect.apply(originalReadSync, fs, args);
+    if (!mutated && count > 0) {
+      mutated = true;
+      fs.appendFileSync(file, Buffer.from([1]));
+    }
+    return count;
+  };
   try {
     assert.throws(() => hashTree(dir), /detected mutation/i);
+    assert.equal(mutated, true, 'the test must mutate during the actual file read');
   } finally {
-    mutator.kill('SIGKILL');
-    await exited;
+    fs.readSync = originalReadSync;
   }
 });
 

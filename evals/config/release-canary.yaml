@@ -1,4 +1,4 @@
-# Initial-qualification release canary — the plan's matrix and budget in data.
+# Initial-release calibration canary — the plan's matrix and budget in data.
 profile: release-canary
 
 # Release execution is deliberately fail-closed until every key-bearing trust
@@ -17,15 +17,32 @@ releaseTrust:
 task:
   lockFile: evals/external/terminal_bench/task-lock.json
 
-# Cost controls (§10). The ceiling is enforced in code before every provider
-# request; the two allowances exhaust the routine ceiling without decorative
-# headroom.
+# The controlled role is model-agnostic; this canary currently selects the
+# historical Kimi profile explicitly. Change and price-check profileId before
+# qualification if another economical model is chosen. Qualification evaluates
+# the configured profile; it never selects or replaces one. Both Generic and
+# Harness arms resolve this exact same profile, and fallback is rejected.
+controlledLane:
+  host: openrouter-controlled
+  profileId: kimi-k2.7-code
+
+# Cost controls (§10). This canary's $10 base allocation is $8.40 for primary
+# work and $1.60 for one rerun; calibration scales that split within $18.70.
+# The separate routine profile uses an $8/$2 split. Every provider request is
+# checked against its active ceiling.
 budget:
-  # Routine target: $10. Operators may override up to the code-enforced
-  # absolute ceiling of $20 for a justified calibration.
+  # Base canary ceiling. Calibration may raise this only as far as
+  # calibrationCeilingUsd after an accepted qualification baseline.
   releaseCeilingUsd: 10
-  kimiPairUsd: 8
-  rerunUsd: 2
+  controlledPairUsd: 8.4
+  rerunUsd: 1.6
+  # Qualification and calibration are separate evidence artifacts but one
+  # economic decision. Their maximum exposures sum to the absolute $20 cap.
+  qualificationPairUsd: 1.3
+  calibrationCeilingUsd: 18.7
+  # Both phases must reuse one dedicated no-reset key. The runner stores only
+  # a release-scoped HMAC fingerprint and rejects key rotation between them.
+  providerHardLimitUsd: 20
   # Identical in routine and calibration so stopping policy is part of the
   # controlled condition rather than a repetition-dependent confound.
   controlledArmCeilingUsd: 0.65
@@ -49,6 +66,8 @@ valueThresholds:
 claimPolicy:
   mode: initial-user-ship
   minimumHarnessSolvedTasks: 2
+  requireQualificationBaseline: true
+  qualificationTask: cobol-modernization
   # The qualifying three-repetition calibration is itself the initial ship
   # decision, so a second routine run cannot create $30 of same-release exposure.
   requireCalibrationBaseline: false
@@ -80,8 +99,9 @@ nativeProductRotation:
 
 execution:
   # Harbor 0.20 cloud environments do not faithfully materialize host bind
-  # mount sources. The causal release path therefore requires local Docker so
-  # the attested runtime and treatment-only Harness bytes actually exist.
+  # mount sources. The causal path therefore uses Docker on the attested Linux
+  # evaluator host. A Daytona Linux VM may be that outer host when it runs
+  # Docker-in-Docker; direct Harbor `--env daytona` remains unsupported.
   environment: docker
   # Image, platform, CPU, memory, and storage are authoritative per task in
   # task-lock.json and are checked against the materialized task TOML.

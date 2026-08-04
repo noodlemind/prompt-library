@@ -2,6 +2,94 @@
   "$id": "eval-run.v1",
   "title": "One eval trial (one condition of one A/B pair)",
   "type": "object",
+  "$defs": {
+    "economicPhase": {
+      "type": "object",
+      "required": [
+        "status", "logicalRequests", "usageRecords", "promptTokens", "cachedPromptTokens",
+        "reasoningTokens", "outputTokens", "localCostUsd", "providerReportedCostUsd",
+        "reconciledCostUsd", "promptTokensComplete", "cachedPromptTokensComplete",
+        "reasoningTokensComplete", "outputTokensComplete", "localCostUsdComplete",
+        "providerReportedCostUsdComplete", "reconciledCostUsdComplete"
+      ],
+      "properties": {
+        "status": { "enum": ["measured", "not_exercised", "partial", "unavailable", "aggregate"] },
+        "logicalRequests": { "type": "integer", "minimum": 0 },
+        "usageRecords": { "type": "integer", "minimum": 0 },
+        "promptTokens": { "type": ["number", "null"], "minimum": 0 },
+        "cachedPromptTokens": { "type": ["number", "null"], "minimum": 0 },
+        "reasoningTokens": { "type": ["number", "null"], "minimum": 0 },
+        "outputTokens": { "type": ["number", "null"], "minimum": 0 },
+        "localCostUsd": { "type": ["number", "null"], "minimum": 0 },
+        "providerReportedCostUsd": { "type": ["number", "null"], "minimum": 0 },
+        "reconciledCostUsd": { "type": ["number", "null"], "minimum": 0 },
+        "promptTokensComplete": { "type": "boolean" },
+        "cachedPromptTokensComplete": { "type": "boolean" },
+        "reasoningTokensComplete": { "type": "boolean" },
+        "outputTokensComplete": { "type": "boolean" },
+        "localCostUsdComplete": { "type": "boolean" },
+        "providerReportedCostUsdComplete": { "type": "boolean" },
+        "reconciledCostUsdComplete": { "type": "boolean" },
+        "repetitionsObserved": { "type": "integer", "minimum": 0 },
+        "repetitionCoverage": { "type": ["number", "null"], "minimum": 0 }
+        ,"derivedFrom": { "type": ["array", "null"], "items": { "type": "string" } }
+      }
+    },
+    "economicTotals": {
+      "type": ["object", "null"],
+      "required": [
+        "logicalRequests", "usageRecords", "promptTokens", "cachedPromptTokens", "reasoningTokens",
+        "outputTokens", "localCostUsd", "providerReportedCostUsd", "reconciledCostUsd",
+        "promptTokensComplete", "cachedPromptTokensComplete", "reasoningTokensComplete",
+        "outputTokensComplete", "localCostUsdComplete", "providerReportedCostUsdComplete",
+        "reconciledCostUsdComplete"
+      ],
+      "properties": {
+        "logicalRequests": { "type": "integer", "minimum": 0 },
+        "usageRecords": { "type": "integer", "minimum": 0 },
+        "promptTokens": { "type": ["number", "null"], "minimum": 0 },
+        "cachedPromptTokens": { "type": ["number", "null"], "minimum": 0 },
+        "reasoningTokens": { "type": ["number", "null"], "minimum": 0 },
+        "outputTokens": { "type": ["number", "null"], "minimum": 0 },
+        "localCostUsd": { "type": ["number", "null"], "minimum": 0 },
+        "providerReportedCostUsd": { "type": ["number", "null"], "minimum": 0 },
+        "reconciledCostUsd": { "type": ["number", "null"], "minimum": 0 },
+        "promptTokensComplete": { "type": "boolean" },
+        "cachedPromptTokensComplete": { "type": "boolean" },
+        "reasoningTokensComplete": { "type": "boolean" },
+        "outputTokensComplete": { "type": "boolean" },
+        "localCostUsdComplete": { "type": "boolean" },
+        "providerReportedCostUsdComplete": { "type": "boolean" },
+        "reconciledCostUsdComplete": { "type": "boolean" }
+      }
+    },
+    "promptComponent": {
+      "type": "object",
+      "required": ["id", "ordinal", "startChar", "endChar", "chars", "bytes", "sha256"],
+      "properties": {
+        "id": { "type": "string" },
+        "ordinal": { "type": "integer", "minimum": 0 },
+        "startChar": { "type": "integer", "minimum": 0 },
+        "endChar": { "type": "integer", "minimum": 0 },
+        "chars": { "type": "integer", "minimum": 0 },
+        "bytes": { "type": "integer", "minimum": 0 },
+        "sha256": { "type": "string" }
+      }
+    },
+    "promptManifest": {
+      "type": ["object", "null"],
+      "required": ["schema", "separator", "systemPromptChars", "systemPromptBytes", "systemPromptHash", "complete", "components"],
+      "properties": {
+        "schema": { "const": "prompt-component-manifest.v1" },
+        "separator": { "const": "\n\n" },
+        "systemPromptChars": { "type": "integer", "minimum": 0 },
+        "systemPromptBytes": { "type": "integer", "minimum": 0 },
+        "systemPromptHash": { "type": "string" },
+        "complete": { "type": "boolean" },
+        "components": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/promptComponent" } }
+      }
+    }
+  },
   "required": ["schema", "reproducibility", "correctness", "efficiency", "harnessBehavior", "subscription"],
   "properties": {
     "schema": { "const": "eval-run.v1" },
@@ -76,6 +164,14 @@
         "completedWithinBudget": { "type": "boolean" }
       }
     },
+    "trialValidity": {
+      "type": "object",
+      "required": ["valid", "failureKind"],
+      "properties": {
+        "valid": { "type": "boolean" },
+        "failureKind": { "type": ["string", "null"] }
+      }
+    },
     "efficiency": {
       "type": "object",
       "required": [
@@ -128,6 +224,104 @@
         "missingUsage": { "type": ["number", "null"] }
       }
     },
+    "economics": {
+      "type": ["object", "null"],
+      "required": ["coverage", "prompt", "phases", "rollups", "totals", "reconciliation"],
+      "properties": {
+        "coverage": {
+          "type": "object",
+          "required": ["status", "complete", "requestEvents", "usageEvents", "matchedUsageEvents", "reason"],
+          "properties": {
+            "status": { "enum": ["complete", "partial", "unavailable"] },
+            "complete": { "type": "boolean" },
+            "requestEvents": { "type": "integer", "minimum": 0 },
+            "usageEvents": { "type": "integer", "minimum": 0 },
+            "matchedUsageEvents": { "type": "integer", "minimum": 0 },
+            "reason": { "type": ["string", "null"] }
+          }
+        },
+        "prompt": {
+          "type": "object",
+          "required": ["manifest", "coverage", "cumulative"],
+          "properties": {
+            "manifest": { "$ref": "#/$defs/promptManifest" },
+            "coverage": {
+              "type": "object",
+              "required": ["complete", "requests", "requestsWithCompleteBuckets"],
+              "properties": {
+                "complete": { "type": "boolean" },
+                "requests": { "type": "integer", "minimum": 0 },
+                "requestsWithCompleteBuckets": { "type": "integer", "minimum": 0 }
+              }
+            },
+            "cumulative": {
+              "type": ["object", "null"],
+              "required": [
+                "payloadChars", "baseSystemChars", "instructionChars", "durableStateChars",
+                "assistantHistoryChars", "toolResultHistoryChars", "otherMessageChars",
+                "messageEnvelopeChars", "toolSchemaChars", "payloadEnvelopeChars",
+                "toolResultHistoryBySource"
+              ],
+              "properties": {
+                "payloadChars": { "type": ["integer", "null"], "minimum": 0 },
+                "baseSystemChars": { "type": ["integer", "null"], "minimum": 0 },
+                "instructionChars": { "type": ["integer", "null"], "minimum": 0 },
+                "durableStateChars": { "type": ["integer", "null"], "minimum": 0 },
+                "assistantHistoryChars": { "type": ["integer", "null"], "minimum": 0 },
+                "toolResultHistoryChars": { "type": ["integer", "null"], "minimum": 0 },
+                "otherMessageChars": { "type": ["integer", "null"], "minimum": 0 },
+                "messageEnvelopeChars": { "type": ["integer", "null"], "minimum": 0 },
+                "toolSchemaChars": { "type": ["integer", "null"], "minimum": 0 },
+                "payloadEnvelopeChars": { "type": ["integer", "null"], "minimum": 0 },
+                "toolResultHistoryBySource": {
+                  "type": ["object", "null"],
+                  "additionalProperties": { "type": "integer", "minimum": 0 }
+                }
+              }
+            }
+          }
+        },
+        "phases": {
+          "type": "object",
+          "required": [
+            "memory-retrieval", "memory-construction", "memory-consolidation", "guidance",
+            "planning-and-gate", "verification", "orientation", "implementation",
+            "finalization", "uncategorized", "mixed", "unknown"
+          ],
+          "properties": {
+            "memory-retrieval": { "$ref": "#/$defs/economicPhase" },
+            "memory-construction": { "$ref": "#/$defs/economicPhase" },
+            "memory-consolidation": { "$ref": "#/$defs/economicPhase" },
+            "guidance": { "$ref": "#/$defs/economicPhase" },
+            "planning-and-gate": { "$ref": "#/$defs/economicPhase" },
+            "verification": { "$ref": "#/$defs/economicPhase" },
+            "orientation": { "$ref": "#/$defs/economicPhase" },
+            "implementation": { "$ref": "#/$defs/economicPhase" },
+            "finalization": { "$ref": "#/$defs/economicPhase" },
+            "uncategorized": { "$ref": "#/$defs/economicPhase" },
+            "mixed": { "$ref": "#/$defs/economicPhase" },
+            "unknown": { "$ref": "#/$defs/economicPhase" }
+          }
+        },
+        "rollups": {
+          "type": "object",
+          "required": ["task-execution"],
+          "properties": {
+            "task-execution": { "$ref": "#/$defs/economicPhase" }
+          }
+        },
+        "totals": { "$ref": "#/$defs/economicTotals" },
+        "reconciliation": {
+          "type": "object",
+          "required": ["complete", "checks", "reason"],
+          "properties": {
+            "complete": { "type": "boolean" },
+            "checks": { "type": ["object", "null"] },
+            "reason": { "type": ["string", "null"] }
+          }
+        }
+      }
+    },
     "harnessBehavior": {
       "type": "object",
       "required": [
@@ -166,6 +360,8 @@
         "mode": { "enum": ["none", "prompt-and-cli", "mechanical-hooks"] },
         "promptContractActive": { "type": "boolean" },
         "cliActivated": { "type": "boolean" },
+        "cliInvoked": { "type": "boolean" },
+        "cliSucceeded": { "type": "boolean" },
         "mechanicalHooksActive": { "type": "boolean" },
         "harnessEventsCaptured": { "type": "boolean" },
         "evidenceSource": { "type": "string" }
@@ -247,9 +443,13 @@
             "actualToolCount": { "type": ["number", "null"] },
             "expectedFinishToolSchemaHash": { "type": ["string", "null"] },
             "expectedFinishToolCount": { "type": ["number", "null"] },
+            "expectedPromptComponentManifestHash": { "type": ["string", "null"] },
+            "actualPromptComponentManifestHash": { "type": ["string", "null"] },
             "requestContractsChecked": { "type": "number", "minimum": 0 },
             "postVerifyRequestContracts": { "type": "number", "minimum": 0 },
             "requestPromptMismatches": { "type": "number", "minimum": 0 },
+            "requestPromptManifestMismatches": { "type": "number", "minimum": 0 },
+            "requestPromptBucketMismatches": { "type": "number", "minimum": 0 },
             "requestControlMismatches": { "type": "number", "minimum": 0 },
             "requestContractMismatches": { "type": "number", "minimum": 0 },
             "expectedRequestControlHash": { "type": ["string", "null"] },

@@ -172,12 +172,15 @@ of reporting only pass/fail.
 verified, but paid release execution is deliberately disabled. Both committed
 live profiles keep the runtime trust gate red, and the CLI has no code-owned
 runtime attestation input yet. Therefore every non-deterministic invocation
-currently reports
-`diagnostic-trust`, schedules **zero provider trials**, and exits blocked. Do not
-turn the YAML booleans green: committed configuration is only a kill switch and
+schedules **zero provider trials** and exits blocked. A plain live request is
+reported as `diagnostic-trust`; an explicit `--qualification` remains a
+`qualification` report, and an otherwise valid explicit `--calibration` remains
+a `calibration` report. Runtime trust blocks spend in every mode. Do not turn
+the YAML booleans green: committed configuration is only a kill switch and
 cannot attest runtime behavior. The six runtime conditions under
 [Release-trust completion](#release-trust-completion) must be observed by a
-trusted supervisor before the first paid calibration.
+trusted supervisor before the first paid qualification or subsequent
+calibration.
 
 ### Evidence tracks
 
@@ -185,11 +188,15 @@ trusted supervisor before the first paid calibration.
    compaction, prompt-contract, security, and hook-loop tests. This proves the
    mechanisms; it does not measure model productivity.
 2. **Controlled same-model ablation (release gate):** the canonical
-   `moonshotai/kimi-k2.7-code-20260612` model through the exact
-   `moonshotai/int4` OpenRouter endpoint, with the same task, model, tools, limits, and
-   condition order controls. The generic arm gets the neutral engineering
-   prompt. The treatment adds the compact Engineer contract, lazy guidance,
-   checkpoint tool, and Harness CLI.
+   `openrouter-controlled` role resolves one explicit registered model profile
+   with an exact provider endpoint and fallback disabled. Both arms share that
+   profile, task, tools, limits, and condition-order controls. The generic arm
+   gets the neutral engineering prompt. The treatment adds the compact Engineer
+   contract, lazy guidance, checkpoint tool, and Harness CLI. The committed
+   profile currently names Kimi K2.7 explicitly for historical continuity, but
+   it is not a runtime default: the operator must explicitly configure and
+   price-check the intended economical model before qualification. Qualification
+   tests that configured profile; it does not select or replace a model.
 3. **Local capability floor (explicit opt-in):** the same controlled pair with
    Gemma 4 26B through Ollama, on the anchor task only. It is informational and
    contributes zero provider API cost; wall time, workstation energy, and model
@@ -230,7 +237,19 @@ observed. A later maturity phase should add blinded/private perturbations of
 the same task families and a held-out rotation; never select the release set by
 which tasks happened to show a Harness win.
 
-Kimi runs all four tasks by default. A cost-bounded diagnostic may select one
+The controlled profile runs all four tasks by default. Before initial
+calibration, `--qualification` runs the configured anchor once in both arms
+with the same exact profile and a $1.30 pair ceiling. If neither arm passes the
+official verifier, the result is `inconclusive-capability`: stop and choose a
+different model tier. If either arm passes, the report is eligible to be
+supplied as the qualification baseline for the full calibration. The CLI
+recomputes its SHA-256 digest to bind the accepted baseline to the supplied
+bytes; that digest is neither a signature nor authentication, so trusted report
+custody remains part of the operator/runtime trust boundary. The qualification
+pair is a calibration prerequisite: it establishes model capability only, is
+not itself Harness-value evidence, and cannot green the release.
+
+A cost-bounded diagnostic may select one
 pinned task with `--task`; only that task is executed, but the report remains a
 `diagnostic-task` against the full committed lock. It is explicitly
 release-ineligible, cannot satisfy full-lock release coverage, and cannot green a
@@ -297,8 +316,9 @@ attests the verifier's post-agent output out of band.
 # Per-PR (free): deterministic suite only, no pairs scheduled, exit 0 on green.
 node evals/release.mjs --profile release-canary --deterministic-only
 
-# Current non-deterministic behavior while releaseTrust is red: a zero-spend
-# diagnostic-trust report. It must remain blocked and must not invoke Harbor.
+# Current plain non-deterministic behavior while releaseTrust is red: a
+# zero-spend diagnostic-trust report. Explicit qualification/calibration modes
+# keep their requested report mode but are equally blocked from Harbor/spend.
 node evals/release.mjs --profile release-canary --json
 
 # Future trusted live setup. Pin both host executables; ambient PATH is not an
@@ -309,16 +329,24 @@ export HARNESS_EVAL_DOCKER_BIN=/absolute/path/to/docker
 export HARNESS_EVAL_DOCKER_SHA256=<sha256-of-that-executable>
 EVAL_REPORT_DIR=$(mktemp -d)
 
-# Initial ship calibration: 4 tasks × 2 arms × 3 repetitions. The fixed
-# condition needs the explicit $20 calibration ceiling; the default $10 is not
-# enough for all scheduled arms and fails before spend.
-node evals/release.mjs --profile release-canary --calibration --budget-usd 20 --json \
+# Small-model capability qualification: 1 task × 2 arms × 1 repetition.
+# Neither arm passing stops the larger calibration.
+node evals/release.mjs --profile release-canary --qualification --json \
+  --report-file "$EVAL_REPORT_DIR/qualification.json"
+
+# Initial ship calibration: 4 tasks × 2 arms × 3 repetitions, using the exact
+# qualified profile. Qualification ($1.30 max) plus calibration ($18.70 max)
+# share one absolute $20 initial-evidence envelope.
+node evals/release.mjs --profile release-canary --calibration --budget-usd 18.7 --json \
+  --qualification-baseline "$EVAL_REPORT_DIR/qualification.json" \
   --report-file "$EVAL_REPORT_DIR/calibration.json"
 
 # After that one calibration qualifies initial user exposure, later releases
 # use the explicit regression/overhead profile: 4 tasks × 2 arms × 1 repetition,
 # fixed $0.65 per-arm ceiling, and a hard $10 provider limit.
 node evals/release.mjs --profile release-routine --json \
+  --qualification-baseline "$EVAL_REPORT_DIR/qualification.json" \
+  --calibration-baseline "$EVAL_REPORT_DIR/calibration.json" \
   --report-file "$EVAL_REPORT_DIR/routine.json"
 
 # Cost-bounded one-task diagnostic. It remains release-ineligible against the
@@ -329,14 +357,22 @@ node evals/release.mjs --profile release-canary --task cobol-modernization --jso
 # Add the informational, zero-provider-cost local anchor pair to a future
 # trusted run. It never substitutes for the required OpenRouter denominator.
 node evals/release.mjs --profile release-routine --with-local --json \
+  --qualification-baseline "$EVAL_REPORT_DIR/qualification.json" \
+  --calibration-baseline "$EVAL_REPORT_DIR/calibration.json" \
   --report-file "$EVAL_REPORT_DIR/routine-with-local.json"
 ```
 
 The live mode matrix is enforced before Harbor can run: the
-`initial-user-ship` profile requires `--calibration` for a trusted full-lock
-decision, while `release-routine` rejects `--calibration`. Calibration also
-rejects `--task`, an explicit lock, and deterministic-only scope because those
-cannot supply the qualifying denominator.
+`initial-user-ship` profile first requires its code-owned `--qualification`
+task, then requires that trusted verifier-passing report through
+`--qualification-baseline` for `--calibration`. `release-routine` rejects
+calibration and requires both prior artifacts as a validated historical chain.
+The historical reports keep their original release SHA, Harness version, $20
+provider-key continuity, exact controlled profile, and task-lock identities;
+the current routine remains independently capped at $10. Qualification rejects
+`--task`; calibration rejects partial task,
+explicit-lock, and deterministic-only scopes because they cannot supply the
+full denominator.
 
 ### Release-trust completion
 
@@ -356,9 +392,16 @@ produce one evidence hash covering all six capabilities below:
 
 Until a code-owned path passes that `runtime-observed` evidence into
 `releaseTrustVerdict`, the implementation is complete but the first live
-calibration is **not eligible to run**. Daytona remains unused for the causal
-path until it can supply equivalent uploaded-byte, mount, lifecycle, resource,
-and network attestations.
+qualification and subsequent calibration are **not eligible to run**. A direct
+Harbor `--env daytona` run remains unsupported because it does not materialize
+the host-owned mounts used by this evaluator. Daytona may instead host the
+unchanged evaluator as an outer Linux VM with Docker-in-Docker: Harbor still
+runs with `--env docker` inside that VM. That arrangement solves the Darwin and
+remote-daemon placement constraints, but it is not a trust attestation by
+itself. Paid release evidence remains blocked until a code-owned supervisor in
+that VM observes the six capabilities above and supplies the resulting evidence
+to `releaseTrustVerdict`; configuration flags or operator-authored JSON cannot
+substitute for that observation.
 
 Release-candidate prerequisites (all fail closed when absent):
 
@@ -374,11 +417,14 @@ Release-candidate prerequisites (all fail closed when absent):
 - the selected profile and default task lock tracked and byte-identical to that
   commit. Git identity, cleanliness, profile, lock, and bundle snapshots ignore
   ambient `GIT_*` controls and use the code-owned git directory/work tree;
-- a running local Docker daemon. Harbor 0.20 cloud environments do not faithfully
-  materialize the attested host bind-mount sources used by this implementation,
-  so `daytona` and `HARNESS_EVAL_TB_ENV` overrides fail before provider spend.
-  Daytona remains a future option only after an upload/materialization path can
-  attest the same bytes and read-only modes inside the remote sandbox;
+- a running Docker daemon on the same attested Linux evaluator host. For a
+  workstation run this is the local daemon. For Daytona, provision a Linux VM
+  with Docker-in-Docker, transfer the exact clean release commit and retained
+  dependency digests, and run the evaluator there with its environment still
+  set to `docker`. Direct `daytona` or other `HARNESS_EVAL_TB_ENV` overrides
+  fail before provider spend. The outer VM must also expose its identity,
+  uploaded-byte custody, mounts, descendant lifecycle, resource limits, and
+  network policy to the code-owned runtime supervisor;
 - `HARNESS_EVAL_HARBOR_BIN` set to an absolute, non-symlink, protected Harbor
   executable at exactly the supported `0.20.0` version, and
   `HARNESS_EVAL_HARBOR_SHA256` set to its independently retained SHA-256. The
@@ -388,11 +434,16 @@ Release-candidate prerequisites (all fail closed when absent):
   explicit absolute-directory-only tool path when Harbor needs extra host tools;
 - `HARNESS_EVAL_DOCKER_BIN` set to an absolute protected Docker executable and
   `HARNESS_EVAL_DOCKER_SHA256` set to its independently retained digest;
-- `OPENROUTER_API_KEY` for the pinned Kimi profile, delivered only in the host
+- `OPENROUTER_API_KEY` for the selected controlled profile, delivered only in the host
   process environment and never Harbor argv, `--ae`, condition JSON, or telemetry;
-- a fresh dedicated OpenRouter evaluation key whose provider-side, no-reset
-  spending limit and remaining allowance equal this run's `$10` routine (`$20`
-  exceptional) ceiling;
+- one fresh dedicated OpenRouter evaluation key with a provider-side, no-reset
+  `$20` limit for the whole initial evidence cycle. Qualification requires the
+  full `$20` remaining, records only a release-scoped HMAC fingerprint of the
+  credential, and retains a `$1.30` scheduler ceiling. Calibration must reuse
+  that fingerprint, observe at least its `$18.70` scheduler ceiling remaining,
+  and stays behind the same `$20` provider limit. Routine runs instead require
+  a fresh dedicated key whose limit and remaining allowance equal the selected
+  run ceiling (normally `$10`);
   the scheduler ledger prevents additional calls, while the provider limit is
   the final cash backstop if reported pricing or billing differs;
 - a fresh private `--report-file` path outside the repository, inside a
@@ -459,10 +510,22 @@ Release-candidate prerequisites (all fail closed when absent):
   timeout, containment-mode, and containment-completeness fields. Exit code 124
   is not inferred to be a timeout;
 - request payload/peak sizes and a per-request character decomposition for the
-  recurring base system contract, instruction, tool schema, durable state, and
-  other dynamic/framing content. The Eval Card shows both the exact additive
-  request-count versus average-request-size effect and these component deltas,
-  making excess prompt volume diagnosable without retaining raw prompts;
+  recurring base system contract, instruction, tool schema, durable state,
+  assistant/tool-result history, and other message/framing content. A
+  content-free manifest separately identifies neutral system, Engineer
+  contract, immutable CLI guidance, and guidance-index spans by hash and exact
+  character/byte size. Every disjoint request bucket must add to the serialized
+  payload. The Eval Card shows request-count versus average-request-size effects
+  and component deltas without retaining raw prompts;
+- provider usage joined by request to explicit lifecycle phases: memory
+  retrieval, construction, consolidation, guidance, planning/gates,
+  orientation, implementation, verification, finalization, mixed, unknown,
+  and uncategorized work. `task-execution` is the explicitly derived sum of all
+  non-memory leaf phases; it is not independently added to totals. Every
+  request belongs to one leaf phase. Phase token values remain whole-request
+  measurements; the evaluator never invents a component-token split. Coverage
+  is `complete`, `partial`, or `unavailable`, and an unexercised phase is
+  labeled rather than rendered as measured zero;
 - context compactions, compacted observations, checkpoint state, and time to
   first action/edit/final verification;
 - pair, repetition, order, task, condition, exact outbound system-prompt and
@@ -474,6 +537,11 @@ Release-candidate prerequisites (all fail closed when absent):
   diff hash, and a separate verifier-artifact hash;
 - retained Harness events, their collection completeness, evidence-derived
   behavior, and explicit enforcement fidelity.
+
+`telemetryComplete` covers required or gate-active controlled evidence only.
+Gate-inactive local/reference pairs are retained under `diagnosticCoverage` as
+`complete`, `partial`, or `unavailable`; incomplete diagnostics are disclosed
+without either greening or blocking the controlled release claim.
 
 Unknown is never converted to zero. An unknown-billing attempt consumes the
 remaining trial allowance and immediately stops later paid scheduling. Every
@@ -499,9 +567,12 @@ when it contains billable partial usage.
 This is enough to distinguish the main actionable causes of excess token use:
 more requests, larger average requests, repeated contract/instruction/tool
 schema, durable-state growth, dynamic history/tool framing, retries, late gate
-failures, compaction, or unnecessary post-verification turns. It also tells
-whether the extra work bought verifier success, safer behavior, or merely
-overhead.
+failures, guidance loading, memory retrieval/construction/consolidation,
+compaction, or unnecessary post-verification turns. It also tells whether the
+extra work bought verifier success, safer behavior, or merely overhead. Exact
+provider tokens are attributable to whole requests and decision phases; prompt
+components remain exact characters because provider framing/tokenization does
+not expose a trustworthy component-token split.
 
 It is not yet enough to estimate broad user productivity, prove which shared
 evaluator feature caused a result, compare hidden commercial runtimes causally,
@@ -525,25 +596,36 @@ The coded ceiling covers **provider API spend only**:
 - fixed controlled condition: **$0.65 per arm** in routine and calibration.
   The four-task routine can therefore schedule at most $5.20 of primary
   exposure (8 arms) plus $1.30 for one fresh pair, or $6.50 total;
-- calibration: the explicit **$20** ceiling scales the allocation to $16/$4.
-  Three repetitions can schedule at most $15.60 of primary exposure (24 arms)
-  plus $1.30 for one fresh pair, or $16.90 total;
+- initial model qualification: **$1.30** for one task pair. At least one arm
+  must pass before calibration;
+- calibration: **$18.70** maximum after qualification. The scaled primary and
+  rerun allowances are $15.708/$2.992. Three repetitions can schedule at most
+  $15.60 of primary exposure (24 arms) plus $1.30 for one fresh pair, or $16.90
+  total. Qualification plus the worst scheduled calibration path is $18.20;
+  qualification plus the full calibration reservation can never exceed $20;
 - the one exceptional pair is selected only after all primaries are classified.
   A non-safety correctness regression gets priority; otherwise it may confirm
   one directional one-shot Harness win.
 
 There is only one exceptional fresh pair per controlled run, not one per task
-or finding. A `--task` diagnostic and a calibration use the same $0.65 per-arm
+or finding. Qualification, a `--task` diagnostic, and calibration use the same $0.65 per-arm
 condition, so changing sample size never changes the agent's stopping budget.
 Actual cost is reconciled from
 the greater of provider-reported and pinned local cost inside the request loop;
 input prechecks use UTF-8 bytes as a tokenizer-independent upper bound plus the
 maximum output allocation. Incomplete billing reserves the remainder and stops.
-The dedicated provider-side key limit makes `$10`/`$20` the cash backstop rather
-than merely an after-the-fact alert. Re-verify the pricing in
+The dedicated provider-side key limit makes `$10` routine and the combined
+`$20` initial-evidence envelope the cash backstop rather than merely an
+after-the-fact alert. The initial path is continuity-bound: discarded or
+unrelated attempts on that same key reduce the observed remaining allowance and
+can block calibration. Spending on replacement keys is outside this report, so
+the operating rule is to reuse one dedicated key for every attempt in an
+evidence cycle; account-wide prevention of fresh-key evasion requires a provider
+account cap or trusted durable ledger. Re-verify the pricing in
 `evals/lib/model-profiles.mjs` against the pinned provider before each release.
 
-The retained calibration #1 pair cost about **$0.242** for two arms. If that
+The historical Kimi calibration #1 pair (catalog/pricing snapshot dated
+2026-07-31) cost about **$0.242** for two arms. If that
 trajectory were representative, four routine task pairs would cost about
 **$0.97** primary and **$1.21** with one similar rerun; a three-repetition
 four-task calibration would cost about **$2.90** primary and **$3.14** with one
@@ -556,7 +638,9 @@ The report separates `knownReconciledSpendUsd` from
 `uncertainReservedUsd`; `accountedExposureUsd` is their scheduler total. It
 also compares the charge ledger to `retainedReconciledSpendUsd` from raw trial
 evidence. Unknown billing is conservative exposure, never mislabeled as known
-provider spend, and any mismatch blocks the release.
+provider spend, and any mismatch blocks the release. The Eval Card also reports
+the key's hard limit, remaining allowance, and observed prior same-key
+consumption; it never stores the key itself.
 
 Cost control is intentionally sequential. From the configured Harbor timeouts,
 the upper scheduling envelope is about 250 minutes for the four-task routine run
@@ -573,9 +657,10 @@ cash ceiling; record them separately and never describe `budget.spentUsd` as
 total evaluation cost.
 
 The controlled denominator intentionally uses one economical API model instead
-of adding Gemini/Gemma/Claude/Codex as parallel paid denominators. Kimi is
-available through an exact endpoint pin at $0.95/M uncached input, $0.19/M
-cached input, and $4/M output in the checked catalog snapshot. Adding another
+of adding Gemini/Gemma/Claude/Codex as parallel paid denominators. In the
+2026-07-31 historical Kimi profile snapshot, its exact endpoint pin cost
+$0.95/M uncached input, $0.19/M cached input, and $4/M output. Re-price and pin
+the selected qualification profile immediately before spend. Adding another
 frontier model would mostly measure model variance while multiplying sample
 cost. Existing Claude Max, ChatGPT Pro, Copilot Pro, and Grok Code access is
 better used for rotating native-product references; it does not make their
@@ -616,11 +701,13 @@ Building blocks:
   pinning with typed-tree checksums, condition builders (`generic` vs `harness`, same
   instruction and limits), the Node/Python bridge, bounded sandbox evidence,
   and verifier evidence.
-- `evals/hosts/` — host adapters: controlled Kimi, local Gemma, the manual
-  Codex/Claude reference contracts, and Copilot/Grok smoke checklists.
+- `evals/hosts/` — the model-agnostic controlled OpenRouter host, historical
+  Kimi compatibility adapter, local Gemma, manual Codex/Claude reference
+  contracts, and Copilot/Grok smoke checklists.
 - `evals/schema/` — backward-compatible `eval-run.v1`/`eval-report.v1` plus the
-  current `eval-report.v2` contract; every run document is validated, and
-  missing telemetry blocks the release.
+  current `eval-report.v2` contract; every gate-relevant run document is
+  validated and missing gate evidence blocks the release, while optional local
+  diagnostics retain separate coverage.
 
 ### Claims and release completion
 
@@ -667,12 +754,19 @@ Implementation completion and release-evidence completion are separate:
   containment tests, documentation, and required reviews pass; the commit stack
   is pushed. No paid run is needed to complete this software change.
 - **Evidence complete:** the six release-trust capabilities are observed, a
-  clean committed source/bundle/task set is used, and one trusted $20 calibration
-  satisfies every criterion below. Only then may the initial user ship be green.
+  clean committed source/bundle/task set is used, one trusted qualification
+  proves the selected model can pass, and the combined qualification plus
+  calibration exposure remains within $20 while satisfying every criterion
+  below. Only then may the initial user ship be green.
 
 A release evaluation is complete only when:
 
 - deterministic checks and all task-lock checks pass before provider spend;
+- the code-owned one-task qualification used the same exact controlled profile
+  in both arms, at least one arm passed the verifier, its retained billing was
+  complete, and the accepted baseline matches the calibration release SHA,
+  Harness version, task, provider route, billing-profile hash, and release-scoped
+  provider-key fingerprint;
 - the run is full release scope rather than `--task` diagnostic scope, and
   required coverage is computed against every task in the committed lock;
 - every required task has both fresh arms, runner-owned official verifier
@@ -684,25 +778,39 @@ A release evaluation is complete only when:
   pinned task, with no missing, duplicate, or unexpected task. Selected-task
   telemetry completeness is reported separately and cannot substitute for that
   denominator;
-- the provider-side eval-key limit was checked for the selected release ceiling,
-  and the report retains only its non-secret limit/remaining/reset evidence;
+- the provider-side eval-key limit was independently checked: qualification saw
+  a fresh `$20` no-reset key, calibration reused the same HMAC fingerprint with
+  enough remaining allowance, and routine saw a fresh exact run cap. The report
+  retains only the non-secret limit/remaining/reset/fingerprint evidence;
 - every retained paid attempt has exactly one classified terminal event with
   complete usage/billing; every tool call/result is matched one-to-one; neither
   ledger contains duplicate, malformed, uncorrelated, or unclosed identities;
   workspace and Harness-event collection state is explicit;
 - every exact outbound request's system prompt, instruction, tool schema, and
-  tool count match the independently derived condition contract; mount-policy
+  tool count, prompt-component manifest, and disjoint prompt buckets match the
+  independently derived condition contract and serialized payload; mount-policy
   evidence proves the generic arm structurally lacks treatment-only Harness
   targets; and the mounted bundle manifest binds the evaluated full SHA, Harness
   version, and Node pins;
 - prompt/cost/wall ratios are within policy for parity, or a win/regression is
   classified and any exceptional confirmation is resolved. One unconfirmed
   routine win is insufficient for a value claim;
+- prompt and lifecycle economics have complete coverage and reconcile to the
+  provider ledger. Memory retrieval, construction, consolidation, and task
+  execution are explicitly measured, marked not exercised, or marked
+  unavailable—never silently rendered as measured zero;
+- the initial calibration contains all four locked tasks and three aligned
+  repetitions per arm, demonstrates at least one confirmed Harness win, has at
+  least two attributable Harness-solved tasks, and contains no attributable
+  Harness regression. Parity stays within 2.0x prompt, 1.5x cost, and 1.25x wall
+  time; every added success costs at most $2 and ten additional minutes;
 - a required routine task cannot be all-fail: `inconclusive-capability` blocks
   instead of silently discarding the capability established at qualification;
 - no recorded policy bypass or secret-artifact sentinel is present;
-- provider API exposure is <=$10 routinely (<= $20 only with the explicit
-  calibration override), known spend equals retained raw evidence, uncertain
+- provider API exposure is <=$10 routinely; qualification is <=$1.30 and the
+  subsequent calibration reservation is <=$18.70, with combined initial
+  evidence protected by the same key's <=$20 hard limit. Known spend equals
+  retained raw evidence, uncertain
   billing is separately reserved,
   with non-API costs disclosed separately;
 - the Eval Card lists the task set, repetitions, fidelity, claim level, spend,
@@ -713,7 +821,7 @@ Troubleshooting:
 - `required dependencies or credentials are missing` — harbor CLI or
   `OPENROUTER_API_KEY` absent in release-candidate mode; the release blocks
   (use `--deterministic-only` for the free per-PR path).
-- `required pair openrouter-kimi was skipped` — an enabled required pair
+- `required pair openrouter-controlled was skipped` — the configured controlled pair
   produced no evidence; a skipped pair can never green a release candidate.
 - `task checksum mismatch` — the downloaded task differs from the committed
   pin; investigate before re-stamping (`stampTaskLock`, then commit the lock).
@@ -742,9 +850,13 @@ Troubleshooting:
   paid profile unknown billing consumes the trial reservation, stops later paid
   work, and blocks the release.
 - A local run is absent unless `--with-local` is supplied. Local failure remains
-  informational and never masks the required Kimi result.
+  informational and never masks the configured controlled result.
 - `enforcementFidelity.mode=prompt-and-cli` is expected for the current Harbor
-  bridge; treat `mechanical-hooks` without trusted bridge evidence as invalid.
+  bridge and means the treatment was available. `cliInvoked`, `cliSucceeded`,
+  and the compatibility field `cliActivated` come only from a complete,
+  correlated trusted tool ledger; a completed treatment with no such call
+  reports them false. Treat `mechanical-hooks` without trusted bridge evidence
+  as invalid.
 - Raw transcripts stay out of the repository: they may contain provider
   metadata, local paths, or secrets printed by tools. Publish only the eval
   card and sanitized `eval-report.v2` JSON.

@@ -8,7 +8,11 @@
  * function driven by injected steps, so the whole pipeline is testable without
  * a provider, a sandbox, or a dollar:
  *
- *   node evals/release.mjs --profile release-canary --budget-usd 20
+ *   node evals/release.mjs --profile release-canary --qualification --budget-usd 1.3 \
+ *     --report-file /private/eval/qualification.json
+ *   node evals/release.mjs --profile release-canary --calibration --budget-usd 18.7 \
+ *     --qualification-baseline /private/eval/qualification.json \
+ *     --report-file /private/eval/calibration.json
  *
  * Exit code is non-zero only for genuinely blocking results (§9).
  */
@@ -22,8 +26,23 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { isDeepStrictEqual } from 'node:util';
 import { costOfUsage, createBudget } from './lib/budget.mjs';
 import { billingProfileHash, getProfile } from './lib/model-profiles.mjs';
+import { validateControlledProfile } from './hosts/openrouter-controlled.mjs';
+import {
+  evaluateProviderSpendEvidence,
+  normalizedKeyFingerprint,
+  providerSpendPolicy,
+  resolveProviderSpendPolicy,
+} from './lib/provider-spend-policy.mjs';
+import {
+  ECONOMIC_PHASES,
+  MEMORY_ECONOMIC_PHASES,
+  ECONOMIC_PHASE_FIELDS,
+} from './lib/economic-phases.mjs';
 
 export const MAX_RELEASE_API_USD = 20;
+export const MAX_QUALIFICATION_API_USD = 1.3;
+export const MAX_CALIBRATION_API_USD = 18.7;
+export const MAX_ROUTINE_API_USD = 10;
 const DEFAULT_EFFICIENCY_THRESHOLDS = { promptRatio: 2, costRatio: 1.5, wallTimeRatio: 1.25 };
 const RELEASE_TRUST_CAPABILITIES = [
   'fullHarborRuntimeClosureAttested',
@@ -60,6 +79,44 @@ export function releaseTrustVerdict(config, observedEvidence = null) {
 const RUN_SCHEMA = JSON.parse(fs.readFileSync(new URL('./schema/eval-run.v1.schema.json', import.meta.url), 'utf8'));
 const REPORT_SCHEMA = JSON.parse(fs.readFileSync(new URL('./schema/eval-report.v2.schema.json', import.meta.url), 'utf8'));
 
+function taskIdentityProjection(entries) {
+  return (Array.isArray(entries) ? entries : [])
+    .map((entry) => (entry != null && typeof entry === 'object' ? entry : {}))
+    .map(({ task = null, taskChecksum = null, role = null, sandbox = null }) => ({
+      task,
+      taskChecksum,
+      role,
+      sandbox,
+    }))
+    .sort((left, right) => String(left.task).localeCompare(String(right.task)));
+}
+
+/** Resolve the controlled release role without coupling it to one model name. */
+export function controlledLaneOf(config = {}) {
+  if (config?.controlledLane == null) {
+    throw new Error('controlledLane is required; historical Kimi compatibility must be selected explicitly');
+  }
+  return {
+    host: config.controlledLane.host,
+    profileId: config.controlledLane.profileId,
+  };
+}
+
+function controlledPairAllowanceOf(budget = {}) {
+  const hasNeutral = Object.hasOwn(budget, 'controlledPairUsd');
+  const hasLegacy = Object.hasOwn(budget, 'kimiPairUsd');
+  if (hasNeutral && hasLegacy) {
+    throw new Error('budget cannot define both controlledPairUsd and legacy kimiPairUsd');
+  }
+  if (!hasNeutral && !hasLegacy) {
+    throw new Error('budget.controlledPairUsd is required (legacy kimiPairUsd is accepted only for compatibility)');
+  }
+  return {
+    key: hasNeutral ? 'controlledPairUsd' : 'kimiPairUsd',
+    value: hasNeutral ? budget.controlledPairUsd : budget.kimiPairUsd,
+  };
+}
+
 /* ---------------------------------------------------------------- schema -- */
 
 function typeName(value) {
@@ -74,9 +131,20 @@ function typeName(value) {
  * contracts without adding a dependency. Returns { ok, errors } with dotted
  * paths.
  */
-export function validateAgainstSchema(value, schema, path = '') {
+export function validateAgainstSchema(value, schema, path = '', rootSchema = schema) {
   const errors = [];
   const at = (key) => (path ? `${path}.${key}` : key);
+  if (typeof schema?.$ref === 'string') {
+    if (!schema.$ref.startsWith('#/')) {
+      return { ok: false, errors: [`${path || '$'}: unsupported schema reference ${schema.$ref}`] };
+    }
+    const target = schema.$ref.slice(2).split('/').reduce(
+      (current, segment) => current?.[segment.replace(/~1/g, '/').replace(/~0/g, '~')],
+      rootSchema
+    );
+    if (target == null) return { ok: false, errors: [`${path || '$'}: unresolved schema reference ${schema.$ref}`] };
+    return validateAgainstSchema(value, target, path, rootSchema);
+  }
   if ('const' in schema && value !== schema.const) {
     errors.push(`${path || '$'}: expected const ${JSON.stringify(schema.const)}`);
   }
@@ -100,14 +168,25 @@ export function validateAgainstSchema(value, schema, path = '') {
       if (!(key in value)) errors.push(`${at(key)}: missing required field`);
     }
     for (const [key, sub] of Object.entries(schema.properties ?? {})) {
-      if (key in value) errors.push(...validateAgainstSchema(value[key], sub, at(key)).errors);
+      if (key in value) errors.push(...validateAgainstSchema(value[key], sub, at(key), rootSchema).errors);
+    }
+    const known = new Set(Object.keys(schema.properties ?? {}));
+    for (const key of Object.keys(value)) {
+      if (known.has(key)) continue;
+      if (schema.additionalProperties === false) errors.push(`${at(key)}: unexpected field`);
+      else if (schema.additionalProperties && typeof schema.additionalProperties === 'object') {
+        errors.push(...validateAgainstSchema(value[key], schema.additionalProperties, at(key), rootSchema).errors);
+      }
     }
   }
   if (typeName(value) === 'array' && schema.items) {
-    value.forEach((item, i) => errors.push(...validateAgainstSchema(item, schema.items, at(String(i))).errors));
+    value.forEach((item, i) => errors.push(...validateAgainstSchema(item, schema.items, at(String(i)), rootSchema).errors));
   }
-  if (schema.if && validateAgainstSchema(value, schema.if, path).ok && schema.then) {
-    errors.push(...validateAgainstSchema(value, schema.then, path).errors);
+  if (typeName(value) === 'array' && Number.isInteger(schema.minItems) && value.length < schema.minItems) {
+    errors.push(`${path || '$'}: expected at least ${schema.minItems} items`);
+  }
+  if (schema.if && validateAgainstSchema(value, schema.if, path, rootSchema).ok && schema.then) {
+    errors.push(...validateAgainstSchema(value, schema.then, path, rootSchema).errors);
   }
   return { ok: errors.length === 0, errors };
 }
@@ -122,6 +201,11 @@ export function calibrationBaselineVerdict(report, {
   efficiencyThresholds = DEFAULT_EFFICIENCY_THRESHOLDS,
   valueThresholds = {},
   controlledArmCeilingUsd = null,
+  controlledLane = null,
+  expectedProviderHardLimitUsd = null,
+  expectedProviderKeyFingerprint = null,
+  maximumCalibrationUsd = MAX_CALIBRATION_API_USD,
+  verifierPassingReward = 1,
 } = {}) {
   const reasons = [];
   const note = (reason) => reasons.push(reason);
@@ -135,27 +219,76 @@ export function calibrationBaselineVerdict(report, {
   if (report?.preflight?.ok !== true) note('calibration preflight was not complete');
   if (report?.telemetryComplete !== true) note('calibration telemetry was incomplete');
   if (report?.coverage?.complete !== true) note('calibration task coverage was incomplete');
+  if (report?.deterministic?.failed !== 0 || report?.gate?.block !== false || report?.readiness?.ready !== true ||
+      (report?.smokes ?? []).some((smoke) => smoke?.ok !== true)) {
+    note('calibration overall gate, readiness, deterministic suite, or compatibility smoke did not pass');
+  }
   if (report?.budget?.breached === true || report?.budget?.billingUncertain === true) {
     note('calibration billing evidence was unsafe or incomplete');
   }
+  if (!Number.isFinite(report?.budget?.ceilingUsd) ||
+      report.budget.ceilingUsd > maximumCalibrationUsd + 1e-12) {
+    note('calibration exceeded its declared cost ceiling');
+  }
+  const providerGuard = report?.budget?.providerSpendGuard ?? {};
+  const providerKeyFingerprint = normalizedKeyFingerprint(providerGuard.keyFingerprint);
+  if (expectedProviderHardLimitUsd != null) {
+    const acceptedQualificationFingerprint = normalizedKeyFingerprint(expectedProviderKeyFingerprint);
+    const providerPolicy = providerSpendPolicy({
+      evaluationMode: 'calibration',
+      ceilingUsd: report?.budget?.ceilingUsd,
+      hardLimitUsd: expectedProviderHardLimitUsd,
+      expectedQualificationFingerprint: acceptedQualificationFingerprint,
+    });
+    const guardReconciles = providerGuard.verified === true && evaluateProviderSpendEvidence({
+      policy: providerPolicy,
+      keyFingerprint: providerKeyFingerprint,
+      observed: providerGuard,
+    }).ok && report?.qualificationBaseline?.providerKeyFingerprint === acceptedQualificationFingerprint;
+    if (!guardReconciles) {
+      note('calibration did not retain the qualification provider key under the shared hard limit');
+    }
+  }
   if (releaseSha && report?.releaseSha !== releaseSha) note('calibration release identity does not match');
   if (harnessVersion && report?.harnessVersion !== harnessVersion) note('calibration Harness version does not match');
-  const taskProjection = (entries) => (Array.isArray(entries) ? entries : [])
-    .map((entry) => (entry != null && typeof entry === 'object' ? entry : {}))
-    .map(({ task = null, taskChecksum = null, role = null, sandbox = null }) => ({
-      task,
-      taskChecksum,
-      role,
-      sandbox,
-    }))
-    .sort((left, right) => String(left.task).localeCompare(String(right.task)));
-  const expectedTasks = taskProjection(requiredTaskSet);
-  const observedTasks = taskProjection(report?.task?.requiredTaskSet ?? report?.task?.taskSet);
+  const expectedTasks = taskIdentityProjection(requiredTaskSet);
+  const observedTasks = taskIdentityProjection(report?.task?.requiredTaskSet ?? report?.task?.taskSet);
   if (!isDeepStrictEqual(observedTasks, expectedTasks)) note('calibration task identities do not match');
-  const controlled = (report?.pairs ?? []).filter((pair) => pair?.host === 'openrouter-kimi');
+  const controlledHost = controlledLane?.host ?? report?.controlledLane?.host;
+  const controlled = (report?.pairs ?? []).filter((pair) => pair?.host === controlledHost);
   const observedControlledTasks = controlled.map((pair) => pair.task).sort();
   if (!isDeepStrictEqual(observedControlledTasks, expectedTasks.map((entry) => entry.task).sort())) {
     note('calibration controlled denominator does not match');
+  }
+  const retainedTrials = controlled.flatMap((pair) => [
+    pair?.generic,
+    pair?.harness,
+    pair?.rerun?.generic,
+    pair?.rerun?.harness,
+  ].filter(Boolean).flatMap((doc) => rawTrials(doc)));
+  const retainedCosts = retainedTrials.map((trial) => trial?.efficiency?.reconciledCostUsd);
+  if (retainedTrials.some((trial) => !verifierEvidenceConsistent(trial, verifierPassingReward))) {
+    note('calibration retained verifier verdict does not match the locked passing reward');
+  }
+  const retainedExposureUsd = retainedCosts.length > 0 && retainedCosts.every((value) =>
+    typeof value === 'number' && Number.isFinite(value) && value >= 0
+  ) ? retainedCosts.reduce((sum, value) => sum + value, 0) : null;
+  const sameRetainedExposure = (value) => typeof value === 'number' && Number.isFinite(value) &&
+    retainedExposureUsd != null && Math.abs(value - retainedExposureUsd) <= 1e-9;
+  const calibrationBudgetReconciles = retainedExposureUsd != null &&
+    report?.budget?.chargeLedgerMatchesRetainedEvidence === true &&
+    report?.budget?.billingUncertain === false && report?.budget?.uncertainReservedUsd === 0 &&
+    sameRetainedExposure(report?.budget?.knownReconciledSpendUsd) &&
+    sameRetainedExposure(report?.budget?.retainedReconciledSpendUsd) &&
+    sameRetainedExposure(report?.budget?.accountedExposureUsd) &&
+    sameRetainedExposure(report?.budget?.spentUsd) &&
+    typeof report?.budget?.ceilingUsd === 'number' &&
+    retainedExposureUsd <= report.budget.ceilingUsd + 1e-9;
+  if (!calibrationBudgetReconciles) {
+    note('calibration exposure does not reconcile to retained trial cost evidence');
+  }
+  if (retainedExposureUsd == null || retainedExposureUsd > maximumCalibrationUsd + 1e-12) {
+    note('calibration retained trial costs exceeded the declared cost ceiling');
   }
   let controlledWins = 0;
   let harnessSolvedTasks = 0;
@@ -171,17 +304,26 @@ export function calibrationBaselineVerdict(report, {
       harness: pair?.harness,
     };
     const identityOptions = {
-      host: 'openrouter-kimi',
+      host: controlledHost,
+      expectedProfileId: controlledLane?.profileId ?? null,
       releaseSha: report?.releaseSha,
       harnessVersion: report?.harnessVersion,
       expectedTask: pair?.task,
       expectedTaskRevision: report?.task?.datasetRef ?? null,
-      expectedTaskHash: taskEntry?.taskChecksum ?? null,
-      expectedSandbox: taskEntry?.sandbox ?? null,
+    expectedTaskHash: taskEntry?.taskChecksum ?? null,
+    expectedSandbox: taskEntry?.sandbox ?? null,
+    expectedVerifierPassingReward: verifierPassingReward,
     };
     const recomputedClassification = classifyPair(envelope, identityOptions);
-    const recomputedEfficiency = efficiencyDelta(pair?.generic, pair?.harness, efficiencyThresholds, valueThresholds);
-    const recomputedAttribution = fullyAttributablePair(envelope, 'openrouter-kimi', identityOptions) &&
+    const recomputedEfficiency = efficiencyDelta(
+      pair?.generic,
+      pair?.harness,
+      efficiencyThresholds,
+      valueThresholds,
+      verifierPassingReward
+    );
+    const recomputedOverhead = overheadAttribution(pair?.generic, pair?.harness);
+    const recomputedAttribution = fullyAttributablePair(envelope, controlledHost, identityOptions) &&
       recomputedClassification.fallbackDetected !== true;
     const retainedTrials = [...rawTrials(pair?.generic), ...rawTrials(pair?.harness)];
     if (controlledArmCeilingUsd != null && retainedTrials.some((trial) =>
@@ -206,6 +348,12 @@ export function calibrationBaselineVerdict(report, {
         recomputedClassification.safety === true || recomputedClassification.fallbackDetected === true ||
         pair?.result !== recomputedClassification.result) {
       note(`calibration pair ${pair?.task ?? 'unknown'} failed integrity requirements`);
+    }
+    if (!isDeepStrictEqual(pair?.classification, recomputedClassification) ||
+        !isDeepStrictEqual(pair?.pairedOutcomes, recomputedClassification.pairedOutcomes) ||
+        !isDeepStrictEqual(pair?.efficiencyDelta, recomputedEfficiency) ||
+        !isDeepStrictEqual(pair?.overheadAttribution, recomputedOverhead)) {
+      note(`calibration pair ${pair?.task ?? 'unknown'} retained summaries do not match raw repetitions`);
     }
     if (pair?.efficiencyDelta?.evidenceComplete !== true || recomputedEfficiency.evidenceComplete !== true) {
       note(`calibration pair ${pair?.task ?? 'unknown'} lacks complete paired efficiency evidence`);
@@ -239,6 +387,218 @@ export function calibrationBaselineVerdict(report, {
     minimumHarnessSolvedTasks,
     controlledWins,
     harnessSolvedTasks,
+    providerKeyFingerprint,
+    accountedExposureUsd: retainedExposureUsd,
+    reasons: [...new Set(reasons)],
+  };
+}
+
+/**
+ * Validate the one-task capability probe that must precede a paid calibration.
+ * This is deliberately weaker than the release claim: either arm may establish
+ * that the selected model can solve the task, but an all-fail result stops the
+ * larger run as capability-inconclusive.
+ */
+export function qualificationBaselineVerdict(report, {
+  evidenceHash = null,
+  releaseSha = null,
+  harnessVersion = null,
+  controlledLane = null,
+  qualificationTask = null,
+  requiredTaskSet = [],
+  requiredTaskRevision = null,
+  maximumQualificationUsd = MAX_QUALIFICATION_API_USD,
+  controlledArmCeilingUsd = null,
+  expectedProviderHardLimitUsd = null,
+  expectedProviderKeyFingerprint = null,
+  verifierPassingReward = 1,
+} = {}) {
+  const reasons = [];
+  const note = (reason) => reasons.push(reason);
+  const lane = controlledLane ?? report?.controlledLane;
+  const profileId = lane?.profileId;
+  let expectedBillingHash = null;
+  try {
+    expectedBillingHash = billingProfileHash(profileId);
+  } catch {
+    note('qualification controlled model profile is unknown');
+  }
+  if (!validateAgainstSchema(report, REPORT_SCHEMA).ok) note('qualification report does not satisfy eval-report.v2');
+  if (!SHA256_HEX.test(String(evidenceHash ?? ''))) note('qualification report digest is missing');
+  if (report?.evaluationScope?.mode !== 'qualification') note('report is not a one-task qualification run');
+  if (report?.evaluationScope?.trust?.ok !== true) note('qualification runtime trust was not attested');
+  if (report?.preflight?.ok !== true) note('qualification preflight was not complete');
+  if (report?.telemetryComplete !== true) note('qualification telemetry was incomplete');
+  if (report?.coverage?.complete !== true) note('qualification task coverage was incomplete');
+  if (releaseSha && report?.releaseSha !== releaseSha) note('qualification release identity does not match');
+  if (harnessVersion && report?.harnessVersion !== harnessVersion) note('qualification Harness version does not match');
+  if (report?.controlledLane?.host !== lane?.host || report?.controlledLane?.profileId !== profileId ||
+      report?.controlledLane?.billingProfileHash !== expectedBillingHash) {
+    note('qualification controlled lane identity does not match');
+  }
+  const selectedTasks = report?.task?.taskSet ?? [];
+  const expectedTasks = taskIdentityProjection(requiredTaskSet);
+  const lockedTaskEntry = expectedTasks.find((entry) => entry.task === qualificationTask) ?? null;
+  if (selectedTasks.length !== 1 || selectedTasks[0]?.task !== qualificationTask) {
+    note('qualification did not use the configured single task');
+  }
+  if (expectedTasks.length > 0) {
+    const selectedProjection = taskIdentityProjection(selectedTasks);
+    const requiredProjection = taskIdentityProjection(report?.task?.requiredTaskSet ?? []);
+    if (!isDeepStrictEqual(selectedProjection, expectedTasks) ||
+        !isDeepStrictEqual(requiredProjection, expectedTasks)) {
+      note('qualification task identities do not match the current lock');
+    }
+  }
+  if (report?.budget?.breached === true || report?.budget?.billingUncertain !== false) {
+    note('qualification billing evidence was unsafe or incomplete');
+  }
+  if (maximumQualificationUsd != null && (!Number.isFinite(report?.budget?.ceilingUsd) ||
+      report.budget.ceilingUsd > maximumQualificationUsd + 1e-12)) {
+    note('qualification exceeded its declared cost ceiling');
+  }
+
+  const controlled = (report?.pairs ?? []).filter((pair) => pair?.host === lane?.host);
+  if (controlled.length !== 1) note('qualification controlled denominator must contain exactly one pair');
+  const pair = controlled[0] ?? null;
+  const explicitTrials = (doc) => Array.isArray(doc?.repetitions) ? doc.repetitions : [];
+  const genericTrials = explicitTrials(pair?.generic);
+  const harnessTrials = explicitTrials(pair?.harness);
+  if (genericTrials.length !== 1 || harnessTrials.length !== 1) {
+    note('qualification requires exactly one retained raw repetition per arm');
+  }
+  const retainedTrials = [...genericTrials, ...harnessTrials];
+  const retainedCosts = retainedTrials.map((trial) => trial?.efficiency?.reconciledCostUsd);
+  const retainedExposureUsd = retainedCosts.length > 0 && retainedCosts.every((value) =>
+    typeof value === 'number' && Number.isFinite(value) && value >= 0
+  ) ? retainedCosts.reduce((sum, value) => sum + value, 0) : null;
+  const sameExposure = (value) => typeof value === 'number' && Number.isFinite(value) &&
+    retainedExposureUsd != null && Math.abs(value - retainedExposureUsd) <= 1e-9;
+  const providerGuard = report?.budget?.providerSpendGuard ?? {};
+  const providerKeyFingerprint = normalizedKeyFingerprint(providerGuard.keyFingerprint);
+  const qualificationProviderPolicy = expectedProviderHardLimitUsd == null
+    ? null
+    : providerSpendPolicy({
+      evaluationMode: 'qualification',
+      ceilingUsd: report?.budget?.ceilingUsd,
+      hardLimitUsd: expectedProviderHardLimitUsd,
+      expectedQualificationFingerprint: expectedProviderKeyFingerprint,
+    });
+  const providerContinuityReconciles = qualificationProviderPolicy == null ||
+    evaluateProviderSpendEvidence({
+      policy: qualificationProviderPolicy,
+      keyFingerprint: providerKeyFingerprint,
+      observed: providerGuard,
+    }).ok;
+  const budgetReconciles = retainedTrials.length === 2 && retainedExposureUsd != null &&
+    report?.budget?.chargeLedgerMatchesRetainedEvidence === true &&
+    report?.budget?.providerSpendGuard?.verified === true &&
+    report?.budget?.providerSpendGuard?.reset === null &&
+    report?.budget?.uncertainReservedUsd === 0 &&
+    sameExposure(report?.budget?.knownReconciledSpendUsd) &&
+    sameExposure(report?.budget?.retainedReconciledSpendUsd) &&
+    sameExposure(report?.budget?.accountedExposureUsd) &&
+    sameExposure(report?.budget?.spentUsd) && providerContinuityReconciles;
+  if (!budgetReconciles) {
+    note('qualification exposure does not reconcile to retained trial cost evidence');
+  }
+  if (!providerContinuityReconciles) {
+    note('qualification provider key evidence does not match the fresh shared hard limit');
+  }
+  if (maximumQualificationUsd != null && (
+    retainedExposureUsd == null || retainedExposureUsd > maximumQualificationUsd + 1e-12
+  )) {
+    note('qualification retained trial costs exceeded the declared cost ceiling');
+  }
+  const taskEntry = lockedTaskEntry ?? selectedTasks[0] ?? {};
+  const identityOptions = {
+    host: lane?.host,
+    expectedProfileId: profileId,
+    releaseSha: report?.releaseSha,
+    harnessVersion: report?.harnessVersion,
+    expectedTask: qualificationTask,
+    expectedTaskRevision: requiredTaskRevision ?? report?.task?.datasetRef ?? null,
+    expectedTaskHash: taskEntry.taskChecksum ?? null,
+    expectedSandbox: taskEntry.sandbox ?? null,
+    expectedVerifierPassingReward: verifierPassingReward,
+  };
+  const envelope = pair == null ? null : {
+    host: pair.host,
+    task: pair.task,
+    pairId: pair.pairId,
+    repetitionCount: pair.repetitionCount,
+    failureKind: pair.failureKind ?? null,
+    generic: pair.generic,
+    harness: pair.harness,
+  };
+  const recomputedQualificationClassification = envelope == null
+    ? null
+    : classifyPair(envelope, identityOptions);
+  const rawSafetyViolation = retainedTrials.some((trial) =>
+    trial?.harnessBehavior?.policyBypassAchieved === true ||
+    trial?.harnessBehavior?.unsafeWriteOutsideWorkspace === true
+  );
+  if (rawSafetyViolation || pair?.classification?.safety === true ||
+      recomputedQualificationClassification?.safety === true) {
+    note('qualification retained raw evidence contains a safety or policy bypass violation');
+  }
+  if (!envelope || pair?.repetitionCount !== 1 || pair?.causallyAttributable !== true ||
+      !fullyAttributablePair(envelope, lane?.host, identityOptions) ||
+      pair?.classification?.fallbackDetected === true) {
+    note('qualification pair was not a complete same-model controlled comparison');
+  }
+  for (const doc of [pair?.generic, pair?.harness]) {
+    for (const trial of explicitTrials(doc)) {
+      const identity = trial?.reproducibility ?? {};
+      if (identity.modelProfileId !== profileId || identity.billingProfileHash !== expectedBillingHash ||
+          identity.host !== lane?.host || identity.attribution?.fallbackDetected === true) {
+        note('qualification trial model or routing identity drifted');
+      }
+      if (controlledArmCeilingUsd != null && identity.trialCeilingUsd !== controlledArmCeilingUsd) {
+        note('qualification trial used a different per-arm ceiling');
+      }
+    }
+  }
+
+  if (retainedTrials.some((trial) => !verifierEvidenceConsistent(trial, verifierPassingReward))) {
+    note('qualification retained verifier verdict does not match the locked passing reward');
+  }
+  const genericPassed = genericTrials.length === 1 &&
+    singleRetainedVerifierPass({ repetitions: genericTrials }, verifierPassingReward);
+  const harnessPassed = harnessTrials.length === 1 &&
+    singleRetainedVerifierPass({ repetitions: harnessTrials }, verifierPassingReward);
+  if (!genericPassed && !harnessPassed) {
+    note('neither arm produced a retained verifier pass; model capability is inconclusive');
+  }
+  const passingArm = genericPassed && harnessPassed
+    ? 'both'
+    : genericPassed
+      ? 'generic'
+      : harnessPassed
+        ? 'harness'
+        : null;
+  const recomputedCapability = genericPassed || harnessPassed ? 'qualified' : 'inconclusive';
+  if (report?.qualification?.capability !== recomputedCapability ||
+      report?.qualification?.passingArm !== passingArm ||
+      report?.qualification?.task !== qualificationTask) {
+    note('qualification summary does not match retained verifier evidence');
+  }
+  return {
+    required: true,
+    valid: reasons.length === 0,
+    capability: recomputedCapability,
+    passingArm,
+    evidenceHash: SHA256_HEX.test(String(evidenceHash ?? '')) ? String(evidenceHash).toLowerCase() : null,
+    releaseSha: typeof report?.releaseSha === 'string' ? report.releaseSha : null,
+    harnessVersion: typeof report?.harnessVersion === 'string' ? report.harnessVersion : null,
+    controlledLane: lane == null ? null : {
+      host: lane.host ?? null,
+      profileId: profileId ?? null,
+      billingProfileHash: expectedBillingHash,
+    },
+    task: qualificationTask,
+    accountedExposureUsd: retainedExposureUsd,
+    providerKeyFingerprint,
     reasons: [...new Set(reasons)],
   };
 }
@@ -253,7 +613,23 @@ function rawTrials(doc) {
   return Array.isArray(doc?.repetitions) && doc.repetitions.length > 0 ? doc.repetitions : doc ? [doc] : [];
 }
 
-function alignedValidTrialPairs(generic, harness) {
+function verifierEvidenceConsistent(trial, passingReward = 1) {
+  const reward = trial?.correctness?.verifierReward;
+  if (!(typeof passingReward === 'number' && Number.isFinite(passingReward)) ||
+      !(typeof reward === 'number' && Number.isFinite(reward))) {
+    return false;
+  }
+  const expectedVerdict = reward >= passingReward ? 'pass' : 'fail';
+  return trial?.correctness?.verdict === expectedVerdict;
+}
+
+function singleRetainedVerifierPass(doc, passingReward = 1) {
+  const trials = rawTrials(doc);
+  return trials.length === 1 && verifierEvidenceConsistent(trials[0], passingReward) &&
+    trials[0].correctness.verdict === 'pass';
+}
+
+function alignedValidTrialPairs(generic, harness, passingReward = 1) {
   const uniqueIndexed = (trials) => {
     const byIndex = new Map();
     const duplicates = new Set();
@@ -274,7 +650,8 @@ function alignedValidTrialPairs(generic, harness) {
       const treatment = harnessByIndex.get(repetitionIndex);
       if (!treatment) return [];
       const comparable = [baseline, treatment].every((trial) =>
-        trial?.trialValidity?.valid !== false && trial?.correctness?.verifierReward != null
+        trial?.trialValidity?.valid === true && trial?.trialValidity?.failureKind == null &&
+        verifierEvidenceConsistent(trial, passingReward)
       );
       return comparable ? [{ repetitionIndex, generic: baseline, harness: treatment }] : [];
     });
@@ -336,6 +713,7 @@ function normalizedProviderOrder(value) {
 
 function pairIdentityVerdict(pair, {
   host = pair?.host,
+  expectedProfileId = null,
   releaseSha = null,
   harnessVersion = null,
   expectedTask = pair?.task,
@@ -345,6 +723,14 @@ function pairIdentityVerdict(pair, {
 } = {}) {
   const mismatches = [];
   const note = (field) => mismatches.push(field);
+  let expectedProfile = null;
+  if (expectedProfileId != null) {
+    try {
+      expectedProfile = getProfile(expectedProfileId);
+    } catch {
+      note('expected-profile');
+    }
+  }
   const genericTrials = rawTrials(pair?.generic);
   const harnessTrials = rawTrials(pair?.harness);
   if (!pair?.generic || !pair?.harness) note('arm-presence');
@@ -421,6 +807,30 @@ function pairIdentityVerdict(pair, {
       note('providerResolved');
     }
     if (!isDeepStrictEqual(genericIdentity.reasoningConfig, harnessIdentity.reasoningConfig)) note('reasoningConfig');
+    if (expectedProfile) {
+      if (genericIdentity.modelProfileId !== expectedProfile.id) note('expected-profile-id');
+      if (genericIdentity.billingProfileHash !== billingProfileHash(expectedProfile.id)) note('expected-billing-profile');
+      if (genericIdentity.pricingCatalogCheckedAt !== (expectedProfile.catalogPin?.checkedAt ?? null)) {
+        note('expected-pricing-catalog');
+      }
+      if (genericIdentity.modelRequested !== expectedProfile.model) note('expected-profile-model');
+      if (!isDeepStrictEqual(
+        normalizedProviderOrder(genericIdentity.providerRequestedOrder),
+        normalizedProviderOrder(expectedProfile.provider?.order)
+      )) note('expected-provider-order');
+      if (!isDeepStrictEqual(
+        normalizedProviderOrder(genericIdentity.providerExpectedResolvedNames),
+        normalizedProviderOrder(expectedProfile.provider?.expectedResolvedNames)
+      )) note('expected-provider-resolved-names');
+      if (!isDeepStrictEqual(genericIdentity.reasoningConfig, expectedProfile.reasoning ?? null)) {
+        note('expected-reasoning-config');
+      }
+      const allowedResolvedProviders = normalizedProviderOrder(expectedProfile.provider?.expectedResolvedNames) ?? [];
+      if (normalizeProviderName(genericIdentity.providerResolved) &&
+          !allowedResolvedProviders.includes(normalizeProviderName(genericIdentity.providerResolved))) {
+        note('expected-resolved-provider');
+      }
+    }
     if (genericIdentity.condition !== 'generic' || harnessIdentity.condition !== 'harness') note('condition');
     const order = [genericIdentity.orderIndex, harnessIdentity.orderIndex].sort((a, b) => a - b);
     if (!isDeepStrictEqual(order, [1, 2])) note('orderIndex');
@@ -586,10 +996,10 @@ function summarizeRun(doc, { requireProvider = false } = {}) {
   };
 }
 
-function pairedOutcomeDistribution(pair, { requireProvider = false } = {}) {
+function pairedOutcomeDistribution(pair, { requireProvider = false, passingReward = 1 } = {}) {
   const outcomes = [];
   for (const { repetitionIndex, generic: genericTrial, harness: harnessTrial } of
-    alignedValidTrialPairs(pair?.generic, pair?.harness)) {
+    alignedValidTrialPairs(pair?.generic, pair?.harness, passingReward)) {
     const generic = summarizeRun(genericTrial, { requireProvider });
     const harness = summarizeRun(harnessTrial, { requireProvider });
     const key = `${generic.verdict}/${harness.verdict}`;
@@ -635,7 +1045,10 @@ export function classifyPair(pair, identityOptions = {}) {
     attributionComplete,
     identityAligned: identity.ok,
     identityMismatches: identity.mismatches,
-    pairedOutcomes: pairedOutcomeDistribution(pair, { requireProvider }),
+    pairedOutcomes: pairedOutcomeDistribution(pair, {
+      requireProvider,
+      passingReward: identityOptions.expectedVerifierPassingReward ?? 1,
+    }),
   };
   if (generic.safety || harness.safety) {
     return { ...base, safety: true, result: 'harness-regression', reason: 'a harness safety control was bypassed' };
@@ -730,9 +1143,15 @@ function distribution(values) {
  * Ratios are calculated inside each pair before taking the median; taking two
  * independent arm medians and then dividing can reverse a result.
  */
-export function efficiencyDelta(generic, harness, thresholds = DEFAULT_EFFICIENCY_THRESHOLDS, valueThresholds = {}) {
+export function efficiencyDelta(
+  generic,
+  harness,
+  thresholds = DEFAULT_EFFICIENCY_THRESHOLDS,
+  valueThresholds = {},
+  passingReward = 1
+) {
   const limits = { ...DEFAULT_EFFICIENCY_THRESHOLDS, ...(thresholds ?? {}) };
-  const aligned = alignedValidTrialPairs(generic, harness);
+  const aligned = alignedValidTrialPairs(generic, harness, passingReward);
   const observations = aligned.map(({ repetitionIndex, generic: baseline, harness: treatment }) => {
     const genericCost = comparableCost(baseline);
     const harnessCost = comparableCost(treatment);
@@ -905,16 +1324,31 @@ export function overheadAttribution(generic, harness) {
 /* ----------------------------------------------------------------- budget -- */
 
 /** Chained primary and one-fresh-pair allowances under one release ceiling. */
-export function allocateReleaseBudgets({ releaseCeilingUsd = 10, kimiPairUsd = 8, rerunUsd = 2 } = {}) {
-  if (releaseCeilingUsd > MAX_RELEASE_API_USD) {
-    throw new Error(`release API budget may not exceed the absolute $${MAX_RELEASE_API_USD} ceiling`);
+export function allocateReleaseBudgets(budget = {}) {
+  const releaseCeilingUsd = budget.releaseCeilingUsd;
+  const controlledPairUsd = controlledPairAllowanceOf(budget).value;
+  const rerunUsd = budget.rerunUsd;
+  for (const [label, value] of [
+    ['budget.releaseCeilingUsd', releaseCeilingUsd],
+    ['budget.controlledPairUsd', controlledPairUsd],
+    ['budget.rerunUsd', rerunUsd],
+  ]) {
+    if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
+      throw new Error(`${label} must be an explicitly configured finite number >= 0`);
+    }
+  }
+  if (releaseCeilingUsd > MAX_CALIBRATION_API_USD) {
+    throw new Error(`a single release evaluation may not exceed the $${MAX_CALIBRATION_API_USD} calibration ceiling`);
   }
   const release = createBudget({ ceilingUsd: releaseCeilingUsd, label: 'release' });
-  const kimiPair = createBudget({ ceilingUsd: kimiPairUsd, label: 'kimi-pair', parent: release });
-  const rerun = createBudget({ ceilingUsd: rerunUsd, label: 'kimi-rerun', parent: release });
+  const controlledPair = createBudget({ ceilingUsd: controlledPairUsd, label: 'controlled-pair', parent: release });
+  const rerun = createBudget({ ceilingUsd: rerunUsd, label: 'controlled-rerun', parent: release });
   return {
     release,
-    kimiPair,
+    controlledPair,
+    // Compatibility for historical callers and fixtures. This is the exact
+    // same budget object, never a second allowance.
+    kimiPair: controlledPair,
     rerun,
   };
 }
@@ -923,17 +1357,27 @@ export function allocateReleaseBudgets({ releaseCeilingUsd = 10, kimiPairUsd = 8
 export function scaleReleaseBudget(baseBudget, requestedCeilingUsd) {
   const baseCeiling = Number(baseBudget?.releaseCeilingUsd);
   if (!Number.isFinite(baseCeiling) || baseCeiling <= 0) throw new Error('base releaseCeilingUsd must be positive');
-  if (!Number.isFinite(requestedCeilingUsd) || requestedCeilingUsd < 0 || requestedCeilingUsd > MAX_RELEASE_API_USD) {
-    throw new Error(`release API budget must be between 0 and ${MAX_RELEASE_API_USD}`);
+  if (!Number.isFinite(requestedCeilingUsd) || requestedCeilingUsd < 0 || requestedCeilingUsd > MAX_CALIBRATION_API_USD) {
+    throw new Error(`release API budget must be between 0 and ${MAX_CALIBRATION_API_USD}`);
   }
   const scale = requestedCeilingUsd / baseCeiling;
   const scaled = (value) => Number((Number(value ?? 0) * scale).toFixed(6));
+  const controlled = controlledPairAllowanceOf(baseBudget);
   return {
     releaseCeilingUsd: requestedCeilingUsd,
-    kimiPairUsd: scaled(baseBudget.kimiPairUsd),
+    [controlled.key]: scaled(controlled.value),
     rerunUsd: scaled(baseBudget.rerunUsd),
     ...(baseBudget.controlledArmCeilingUsd != null
       ? { controlledArmCeilingUsd: Number(baseBudget.controlledArmCeilingUsd) }
+      : {}),
+    ...(baseBudget.qualificationPairUsd != null
+      ? { qualificationPairUsd: Number(baseBudget.qualificationPairUsd) }
+      : {}),
+    ...(baseBudget.calibrationCeilingUsd != null
+      ? { calibrationCeilingUsd: Number(baseBudget.calibrationCeilingUsd) }
+      : {}),
+    ...(baseBudget.providerHardLimitUsd != null
+      ? { providerHardLimitUsd: Number(baseBudget.providerHardLimitUsd) }
       : {}),
   };
 }
@@ -947,6 +1391,24 @@ export function releaseRepetitionCount(raw = {}, calibrationRelease = false) {
     throw new Error(`${calibrationRelease ? 'calibration' : 'routine'} repetitions must be a positive integer`);
   }
   return count;
+}
+
+/** Worst-case scheduled provider exposure for one controlled task matrix. */
+export function releaseScheduledExposure({
+  taskCount,
+  repetitions,
+  controlledArmCeilingUsd,
+  rerunEnabled = true,
+} = {}) {
+  if (!Number.isInteger(taskCount) || taskCount < 1) throw new Error('taskCount must be a positive integer');
+  if (!Number.isInteger(repetitions) || repetitions < 1) throw new Error('repetitions must be a positive integer');
+  if (!Number.isFinite(controlledArmCeilingUsd) || controlledArmCeilingUsd <= 0) {
+    throw new Error('controlledArmCeilingUsd must be a positive finite number');
+  }
+  return {
+    primaryExposureUsd: controlledArmCeilingUsd * taskCount * repetitions * 2,
+    rerunExposureUsd: rerunEnabled ? controlledArmCeilingUsd * 2 : 0,
+  };
 }
 
 export function releaseMinimumCalibrationRepetitions(raw = {}) {
@@ -963,21 +1425,94 @@ export function validateReleasePolicyConfig(config) {
     if (typeof value !== 'number' || !Number.isFinite(value) || value < minimum) errors.push(`${label} must be a finite number >= ${minimum}`);
   };
   const budget = config?.budget ?? {};
+  const claimMode = config?.claimPolicy?.mode ?? 'regression-gate';
+  let controlledAllowance = null;
+  try {
+    controlledAllowance = controlledPairAllowanceOf(budget);
+  } catch (error) {
+    errors.push(error.message);
+  }
   finiteAtLeast(budget.releaseCeilingUsd, 0, 'budget.releaseCeilingUsd');
-  finiteAtLeast(budget.kimiPairUsd, 0, 'budget.kimiPairUsd');
+  finiteAtLeast(controlledAllowance?.value, 0, `budget.${controlledAllowance?.key ?? 'controlledPairUsd'}`);
   finiteAtLeast(budget.rerunUsd, 0, 'budget.rerunUsd');
+  if (budget.providerHardLimitUsd != null) {
+    finiteAtLeast(budget.providerHardLimitUsd, 0, 'budget.providerHardLimitUsd');
+  }
   if (budget.controlledArmCeilingUsd != null) {
     finiteAtLeast(budget.controlledArmCeilingUsd, 0, 'budget.controlledArmCeilingUsd');
     if (Number.isFinite(budget.controlledArmCeilingUsd) && budget.controlledArmCeilingUsd <= 0) {
       errors.push('budget.controlledArmCeilingUsd must be greater than zero');
     }
   }
-  if (Number.isFinite(budget.releaseCeilingUsd) && budget.releaseCeilingUsd > MAX_RELEASE_API_USD) {
-    errors.push(`budget.releaseCeilingUsd must not exceed ${MAX_RELEASE_API_USD}`);
+  const stagedInitialEvidence = claimMode === 'initial-user-ship' && (
+    config?.claimPolicy?.requireQualificationBaseline === true ||
+    ['qualification', 'calibration'].includes(config?.evaluationScope?.mode)
+  );
+  if (stagedInitialEvidence) {
+    finiteAtLeast(budget.qualificationPairUsd, 0, 'budget.qualificationPairUsd');
+    finiteAtLeast(budget.calibrationCeilingUsd, 0, 'budget.calibrationCeilingUsd');
+  } else {
+    if (budget.qualificationPairUsd != null) finiteAtLeast(budget.qualificationPairUsd, 0, 'budget.qualificationPairUsd');
+    if (budget.calibrationCeilingUsd != null) finiteAtLeast(budget.calibrationCeilingUsd, 0, 'budget.calibrationCeilingUsd');
   }
-  if ([budget.releaseCeilingUsd, budget.kimiPairUsd, budget.rerunUsd].every(Number.isFinite) &&
-      budget.kimiPairUsd + budget.rerunUsd > budget.releaseCeilingUsd) {
+  const releaseModeCap = claimMode === 'initial-user-ship'
+    ? MAX_CALIBRATION_API_USD
+    : MAX_ROUTINE_API_USD;
+  const providerModeCap = claimMode === 'initial-user-ship'
+    ? MAX_RELEASE_API_USD
+    : MAX_ROUTINE_API_USD;
+  if (Number.isFinite(budget.releaseCeilingUsd) && budget.releaseCeilingUsd > releaseModeCap) {
+    errors.push(`budget.releaseCeilingUsd must not exceed ${releaseModeCap} for ${claimMode}`);
+  }
+  if (Number.isFinite(budget.providerHardLimitUsd) && budget.providerHardLimitUsd > providerModeCap) {
+    errors.push(`budget.providerHardLimitUsd must not exceed ${providerModeCap} for ${claimMode}`);
+  }
+  if (Number.isFinite(budget.qualificationPairUsd) &&
+      budget.qualificationPairUsd > MAX_QUALIFICATION_API_USD) {
+    errors.push(`budget.qualificationPairUsd must not exceed ${MAX_QUALIFICATION_API_USD}`);
+  }
+  if (Number.isFinite(budget.calibrationCeilingUsd) &&
+      budget.calibrationCeilingUsd > MAX_CALIBRATION_API_USD) {
+    errors.push(`budget.calibrationCeilingUsd must not exceed ${MAX_CALIBRATION_API_USD}`);
+  }
+  if (Number.isFinite(budget.providerHardLimitUsd) && Number.isFinite(budget.releaseCeilingUsd) &&
+      budget.releaseCeilingUsd > budget.providerHardLimitUsd + 1e-12) {
+    errors.push('budget.releaseCeilingUsd must not exceed budget.providerHardLimitUsd');
+  }
+  if ([budget.releaseCeilingUsd, controlledAllowance?.value, budget.rerunUsd].every(Number.isFinite) &&
+      controlledAllowance.value + budget.rerunUsd > budget.releaseCeilingUsd + 1e-12) {
     errors.push('controlled-pair and rerun allowances exceed the release ceiling');
+  }
+  if (Number.isFinite(budget.qualificationPairUsd) && Number.isFinite(budget.calibrationCeilingUsd) &&
+      budget.qualificationPairUsd + budget.calibrationCeilingUsd > MAX_RELEASE_API_USD) {
+    errors.push('qualification and calibration ceilings exceed the absolute initial-evidence ceiling');
+  }
+  if (Number.isFinite(budget.providerHardLimitUsd) && Number.isFinite(budget.qualificationPairUsd) &&
+      Number.isFinite(budget.calibrationCeilingUsd) &&
+      budget.qualificationPairUsd + budget.calibrationCeilingUsd > budget.providerHardLimitUsd + 1e-12) {
+    errors.push('qualification and calibration ceilings exceed the shared provider hard limit');
+  }
+  let lane = null;
+  try {
+    lane = controlledLaneOf(config);
+  } catch (error) {
+    errors.push(error.message);
+  }
+  if (lane && !['openrouter-controlled', 'openrouter-kimi'].includes(lane.host)) {
+    errors.push('controlledLane.host must be openrouter-controlled or the historical openrouter-kimi adapter');
+  }
+  if (lane && (typeof lane.profileId !== 'string' || lane.profileId.length === 0)) {
+    errors.push('controlledLane.profileId must be a registered OpenRouter profile');
+  } else if (lane) {
+    try {
+      const profile = getProfile(lane.profileId);
+      validateControlledProfile(profile);
+      if (lane.host === 'openrouter-kimi' && lane.profileId !== 'kimi-k2.7-code') {
+        errors.push('the historical openrouter-kimi adapter only supports kimi-k2.7-code');
+      }
+    } catch (error) {
+      errors.push(`controlledLane.profileId is invalid: ${error.message}`);
+    }
   }
   for (const field of ['promptRatio', 'costRatio', 'wallTimeRatio']) {
     finiteAtLeast(config?.efficiencyThresholds?.[field], 0, `efficiencyThresholds.${field}`);
@@ -989,12 +1524,37 @@ export function validateReleasePolicyConfig(config) {
   if (!['regression-gate', 'initial-user-ship'].includes(policy.mode)) {
     errors.push('claimPolicy.mode must be regression-gate or initial-user-ship');
   }
+  if (policy.requireCalibrationBaseline != null && typeof policy.requireCalibrationBaseline !== 'boolean') {
+    errors.push('claimPolicy.requireCalibrationBaseline must be boolean');
+  }
+  if (policy.requireQualificationBaseline != null && typeof policy.requireQualificationBaseline !== 'boolean') {
+    errors.push('claimPolicy.requireQualificationBaseline must be boolean');
+  }
+  if ((policy.requireQualificationBaseline === true || policy.requireCalibrationBaseline === true) &&
+      (typeof policy.qualificationTask !== 'string' || policy.qualificationTask.length === 0)) {
+    errors.push('claimPolicy.qualificationTask must name one pinned task when baseline provenance is required');
+  }
+  if (policy.requireCalibrationBaseline === true &&
+      (!Number.isInteger(policy.minimumCalibrationRepetitions) || policy.minimumCalibrationRepetitions < 2)) {
+    errors.push('claimPolicy.minimumCalibrationRepetitions must be an integer >= 2 when calibration provenance is required');
+  }
+  if (policy.requireCalibrationBaseline === true &&
+      (!Number.isInteger(policy.minimumHarnessSolvedTasks) || policy.minimumHarnessSolvedTasks < 1)) {
+    errors.push('claimPolicy.minimumHarnessSolvedTasks must be a positive integer when calibration provenance is required');
+  }
   if (policy.mode === 'initial-user-ship') {
     if (!Number.isInteger(policy.minimumHarnessSolvedTasks) || policy.minimumHarnessSolvedTasks < 1) {
       errors.push('claimPolicy.minimumHarnessSolvedTasks must be a positive integer');
     }
     if (policy.requireCalibrationBaseline != null && typeof policy.requireCalibrationBaseline !== 'boolean') {
       errors.push('claimPolicy.requireCalibrationBaseline must be boolean');
+    }
+    if (policy.requireQualificationBaseline != null && typeof policy.requireQualificationBaseline !== 'boolean') {
+      errors.push('claimPolicy.requireQualificationBaseline must be boolean');
+    }
+    if (policy.requireQualificationBaseline === true &&
+        (typeof policy.qualificationTask !== 'string' || policy.qualificationTask.length === 0)) {
+      errors.push('claimPolicy.qualificationTask must name one pinned task when qualification is required');
     }
     if (policy.minimumCalibrationRepetitions != null &&
         (!Number.isInteger(policy.minimumCalibrationRepetitions) || policy.minimumCalibrationRepetitions < 2)) {
@@ -1015,17 +1575,24 @@ export function validateReleasePolicyConfig(config) {
 export function releaseInvocationPolicy({
   claimMode,
   calibrationRelease = false,
+  qualificationRelease = false,
   diagnosticScope = false,
   trustOk = false,
 } = {}) {
   const reasons = [];
+  if (qualificationRelease && claimMode !== 'initial-user-ship') {
+    reasons.push('--qualification requires an initial-user-ship profile');
+  }
+  if (qualificationRelease && diagnosticScope) {
+    reasons.push('--qualification requires the committed task lock and a live scope, not a diagnostic scope');
+  }
   if (calibrationRelease && claimMode !== 'initial-user-ship') {
     reasons.push('--calibration requires an initial-user-ship profile');
   }
   if (calibrationRelease && diagnosticScope) {
     reasons.push('--calibration requires the complete committed task lock, not a diagnostic scope');
   }
-  if (trustOk && !calibrationRelease && !diagnosticScope && claimMode === 'initial-user-ship') {
+  if (trustOk && !calibrationRelease && !qualificationRelease && !diagnosticScope && claimMode === 'initial-user-ship') {
     reasons.push('a trusted initial-user-ship profile must run with --calibration; use the routine profile after qualification');
   }
   return { ok: reasons.length === 0, reasons };
@@ -1042,6 +1609,7 @@ export function applyGatePolicy({ deterministic, pairs = [], smokes = [], teleme
   if (coverageComplete === false) reasons.push(`required controlled task coverage is incomplete${coverageReason ? ` (${coverageReason})` : ''}`);
   if (telemetryComplete === false) reasons.push('required telemetry is missing from at least one run');
   if (budgetBreached) reasons.push('the absolute release API budget was exceeded during provider reconciliation');
+  if (evaluationMode === 'qualification') reasons.push('a one-task qualification establishes model capability only and cannot green the release');
   if (evaluationMode === 'diagnostic-task') reasons.push('a one-task diagnostic is not eligible to green the release');
   if (evaluationMode === 'diagnostic-lock') reasons.push('an explicit task-lock diagnostic is not eligible to green the release');
   if (releaseTrustOk === false && evaluationMode !== 'deterministic-only') {
@@ -1176,14 +1744,30 @@ function buildClaim(pairs, evidenceComplete, { releaseEligible = true } = {}) {
 function initialShipReadiness(config, claim, pairs, { releaseEligible, calibrationRelease = false }) {
   const mode = config.claimPolicy?.mode ?? 'regression-gate';
   if (mode !== 'initial-user-ship') {
+    const calibrationRequired = config.claimPolicy?.requireCalibrationBaseline === true;
+    const calibrationBaseline = config.calibrationBaseline ?? null;
+    const acceptedCalibrationBaseline = calibrationBaseline?.valid === true &&
+      Number(calibrationBaseline?.controlledWins ?? 0) > 0;
     return {
       policy: mode,
-      ready: null,
-      reasons: [],
+      ready: calibrationRequired ? acceptedCalibrationBaseline : null,
+      reasons: calibrationRequired && !acceptedCalibrationBaseline
+        ? ['an accepted initial-value calibration baseline is required before a routine release']
+        : [],
       minimumHarnessSolvedTasks: null,
       harnessSolvedTasks: null,
-      calibrationRequired: false,
-      calibrationBaseline: null,
+      calibrationRequired,
+      calibrationBaseline: calibrationBaseline ? {
+        valid: calibrationBaseline.valid === true,
+        evidenceHash: calibrationBaseline.evidenceHash ?? null,
+        releaseSha: calibrationBaseline.releaseSha ?? null,
+        harnessVersion: calibrationBaseline.harnessVersion ?? null,
+        minimumRepetitions: calibrationBaseline.minimumRepetitions ?? null,
+        controlledWins: calibrationBaseline.controlledWins ?? null,
+        harnessSolvedTasks: calibrationBaseline.harnessSolvedTasks ?? null,
+        providerKeyFingerprint: calibrationBaseline.providerKeyFingerprint ?? null,
+        reasons: Array.isArray(calibrationBaseline.reasons) ? calibrationBaseline.reasons : [],
+      } : null,
     };
   }
   const minimum = Number.isInteger(config.claimPolicy?.minimumHarnessSolvedTasks) &&
@@ -1240,6 +1824,7 @@ function initialShipReadiness(config, claim, pairs, { releaseEligible, calibrati
       minimumRepetitions: calibrationBaseline.minimumRepetitions ?? null,
       controlledWins: calibrationBaseline.controlledWins ?? null,
       harnessSolvedTasks: calibrationBaseline.harnessSolvedTasks ?? null,
+      providerKeyFingerprint: calibrationBaseline.providerKeyFingerprint ?? null,
       reasons: Array.isArray(calibrationBaseline.reasons) ? calibrationBaseline.reasons : [],
     } : null,
   };
@@ -1247,8 +1832,11 @@ function initialShipReadiness(config, claim, pairs, { releaseEligible, calibrati
 
 /* ------------------------------------------------------------ orchestrator -- */
 
-function gateActiveFor(host, calibrationRelease, releaseEligible) {
-  if (host === 'openrouter-kimi') return !calibrationRelease || releaseEligible;
+function gateActiveFor(host, controlledHost, calibrationRelease, releaseEligible, evaluationMode) {
+  if (host === controlledHost) {
+    if (evaluationMode === 'qualification') return false;
+    return !calibrationRelease || releaseEligible;
+  }
   if (host === 'ollama-gemma') return false; // gate: informational
   return true; // frontier rotation gates when scheduled
 }
@@ -1392,7 +1980,85 @@ function meteringLedgerVerdict(doc, { paid = false } = {}) {
   return { ok: mismatches.length === 0, mismatches: [...new Set(mismatches)] };
 }
 
-function attributableTrialEvidence(doc, { paid = false } = {}) {
+const ECONOMIC_PHASE_NAMES = ECONOMIC_PHASES;
+const MEMORY_ECONOMIC_PHASE_SET = new Set(MEMORY_ECONOMIC_PHASES);
+
+function phaseEconomicsReconcile(economics) {
+  const phases = economics?.phases;
+  const totals = economics?.totals;
+  if (phases == null || typeof phases !== 'object' || Array.isArray(phases) ||
+      totals == null || typeof totals !== 'object' || Array.isArray(totals) ||
+      ECONOMIC_PHASE_NAMES.some((name) => phases[name] == null || typeof phases[name] !== 'object')) {
+    return false;
+  }
+  const counts = ['logicalRequests', 'usageRecords'];
+  const measured = [];
+  for (const name of ECONOMIC_PHASE_NAMES) {
+    const phase = phases[name];
+    if (!['measured', 'not_exercised'].includes(phase.status) ||
+        counts.some((field) => !Number.isSafeInteger(phase[field]) || phase[field] < 0)) {
+      return false;
+    }
+    for (const field of ECONOMIC_PHASE_FIELDS) {
+      const complete = phase[`${field}Complete`];
+      const value = phase[field];
+      if (typeof complete !== 'boolean' ||
+          (complete ? !(typeof value === 'number' && Number.isFinite(value) && value >= 0) : value !== null)) {
+        return false;
+      }
+    }
+    if (phase.status === 'not_exercised') {
+      if (phase.logicalRequests !== 0 || phase.usageRecords !== 0 ||
+          ECONOMIC_PHASE_FIELDS.some((field) => phase[`${field}Complete`] !== false)) return false;
+    } else {
+      if (phase.logicalRequests < 1 || phase.usageRecords < 1) return false;
+      measured.push(phase);
+    }
+  }
+  for (const field of counts) {
+    if (!Number.isSafeInteger(totals[field]) || totals[field] < 0 ||
+        measured.reduce((sum, phase) => sum + phase[field], 0) !== totals[field]) return false;
+  }
+  for (const field of ECONOMIC_PHASE_FIELDS) {
+    const complete = totals[`${field}Complete`];
+    const value = totals[field];
+    if (typeof complete !== 'boolean') return false;
+    if (complete) {
+      if (!(typeof value === 'number' && Number.isFinite(value) && value >= 0) ||
+          measured.some((phase) => phase[`${field}Complete`] !== true) ||
+          Math.abs(measured.reduce((sum, phase) => sum + phase[field], 0) - value) > 1e-9) return false;
+    } else if (value !== null) {
+      return false;
+    }
+  }
+  const taskPhaseNames = ECONOMIC_PHASE_NAMES.filter((name) => !MEMORY_ECONOMIC_PHASE_SET.has(name));
+  const taskExecution = economics?.rollups?.['task-execution'];
+  if (taskExecution == null || typeof taskExecution !== 'object' ||
+      !isDeepStrictEqual(taskExecution.derivedFrom, taskPhaseNames) ||
+      !['measured', 'not_exercised'].includes(taskExecution.status)) return false;
+  for (const field of counts) {
+    const expected = taskPhaseNames.reduce((sum, name) => sum + phases[name][field], 0);
+    if (taskExecution[field] !== expected) return false;
+  }
+  const taskExercised = taskPhaseNames.map((name) => phases[name]).filter((phase) => phase.status === 'measured');
+  if ((taskExercised.length === 0) !== (taskExecution.status === 'not_exercised')) return false;
+  for (const field of ECONOMIC_PHASE_FIELDS) {
+    const completeKey = `${field}Complete`;
+    if (taskExercised.length === 0) {
+      if (taskExecution[field] !== null || taskExecution[completeKey] !== false) return false;
+      continue;
+    }
+    const allComplete = taskExercised.every((phase) => phase[completeKey] === true);
+    if (taskExecution[completeKey] !== allComplete) return false;
+    if (allComplete) {
+      const expected = taskExercised.reduce((sum, phase) => sum + phase[field], 0);
+      if (typeof taskExecution[field] !== 'number' || Math.abs(taskExecution[field] - expected) > 1e-9) return false;
+    } else if (taskExecution[field] !== null) return false;
+  }
+  return true;
+}
+
+function attributableTrialEvidence(doc, { paid = false, passingReward = 1 } = {}) {
   const efficiency = doc?.efficiency ?? {};
   const observability = doc?.observability;
   const workspace = doc?.workspaceEvidence;
@@ -1400,8 +2066,9 @@ function attributableTrialEvidence(doc, { paid = false } = {}) {
     !observability ||
     workspace?.available !== true ||
     !doc?.enforcementFidelity?.mode ||
-    doc?.trialValidity?.valid === false ||
-    doc?.correctness?.verifierReward == null
+    doc?.trialValidity?.valid !== true ||
+    doc?.trialValidity?.failureKind != null ||
+    !verifierEvidenceConsistent(doc, passingReward)
   ) return false;
   // Harness-event files live in the evaluated workspace and are agent-writable.
   // They explain positive behavior but cannot be a causal-validity prerequisite:
@@ -1411,10 +2078,32 @@ function attributableTrialEvidence(doc, { paid = false } = {}) {
   const requestEvents = observability.providerEvents?.filter((event) => event.type === 'request').length;
   const attribution = trialAttribution(doc, { requireProvider: paid });
   const metering = meteringLedgerVerdict(doc, { paid });
+  const economics = doc?.economics;
+  const economicTotals = economics?.totals;
+  const sameEconomicNumber = (left, right) => typeof left === 'number' && Number.isFinite(left) &&
+    typeof right === 'number' && Number.isFinite(right) && Math.abs(left - right) <= 1e-9;
+  const economicsComplete = economics?.coverage?.status === 'complete' &&
+    economics.coverage.complete === true && economics?.prompt?.coverage?.complete === true &&
+    economics?.prompt?.manifest != null && economics?.reconciliation?.complete === true &&
+    phaseEconomicsReconcile(economics) &&
+    economics.prompt.coverage.requests === efficiency.modelRequests &&
+    economics.prompt.coverage.requestsWithCompleteBuckets === efficiency.modelRequests &&
+    sameEconomicNumber(economicTotals?.logicalRequests, efficiency.modelRequests) &&
+    sameEconomicNumber(economicTotals?.promptTokens, efficiency.promptTokens) &&
+    sameEconomicNumber(economicTotals?.outputTokens, efficiency.outputTokens) &&
+    sameEconomicNumber(economicTotals?.localCostUsd, efficiency.localCostUsd) &&
+    sameEconomicNumber(economicTotals?.reconciledCostUsd, efficiency.reconciledCostUsd) &&
+    (!efficiency.cachedPromptTokensComplete ||
+      sameEconomicNumber(economicTotals?.cachedPromptTokens, efficiency.cachedPromptTokens)) &&
+    (!efficiency.reasoningTokensComplete ||
+      sameEconomicNumber(economicTotals?.reasoningTokens, efficiency.reasoningTokens)) &&
+    (!paid || !efficiency.providerCostComplete ||
+      sameEconomicNumber(economicTotals?.providerReportedCostUsd, efficiency.providerReportedCostUsd));
   return (
     attribution.complete &&
     !attribution.contaminated &&
     metering.ok &&
+    economicsComplete &&
     observability.providerAttemptsStarted === efficiency.providerAttempts &&
     observability.providerAttemptsClosed === efficiency.providerAttempts &&
     observability.unclosedProviderAttempts === 0 &&
@@ -1450,7 +2139,7 @@ function attributableEvidence(doc, options) {
   return repetitions.length > 0 && repetitions.every((repetition) => attributableTrialEvidence(repetition, options));
 }
 
-function completePaidEvidence(doc) {
+function completePaidEvidence(doc, { passingReward = 1 } = {}) {
   const trials = rawTrials(doc);
   return trials.length > 0 && trials.every((trial) =>
     validateAgainstSchema(trial, RUN_SCHEMA).ok &&
@@ -1464,17 +2153,20 @@ function completePaidEvidence(doc) {
     trial.efficiency?.missingUsage === 0 &&
     trial.correctness?.completedWithinTimeout === true &&
     trial.correctness?.completedWithinBudget === true &&
-    attributableTrialEvidence(trial, { paid: true })
+    attributableTrialEvidence(trial, { paid: true, passingReward })
   );
 }
 
 function fullyAttributablePair(pair, host, identityOptions = {}) {
   if (!pair?.generic || !pair?.harness || pair.failureKind) return false;
   if (!pairIdentityVerdict(pair, { ...identityOptions, host }).ok) return false;
+  const passingReward = identityOptions.expectedVerifierPassingReward ?? 1;
   if (String(host).startsWith('openrouter')) {
-    return completePaidEvidence(pair.generic) && completePaidEvidence(pair.harness);
+    return completePaidEvidence(pair.generic, { passingReward }) &&
+      completePaidEvidence(pair.harness, { passingReward });
   }
-  return attributableEvidence(pair.generic) && attributableEvidence(pair.harness);
+  return attributableEvidence(pair.generic, { paid: false, passingReward }) &&
+    attributableEvidence(pair.harness, { paid: false, passingReward });
 }
 
 /**
@@ -1486,7 +2178,9 @@ function fullyAttributablePair(pair, host, identityOptions = {}) {
 export async function runRelease({ config, steps, calibrationRelease = false, releaseSha = 'unknown', harnessVersion = 'unknown', requiredPairs = [] }) {
   const configVerdict = validateReleasePolicyConfig(config);
   if (!configVerdict.ok) throw new Error(`invalid release evaluation policy: ${configVerdict.errors.join('; ')}`);
-  const allowedEvaluationModes = ['release', 'calibration', 'diagnostic-task', 'diagnostic-lock', 'diagnostic-trust', 'deterministic-only'];
+  const controlledLane = controlledLaneOf(config);
+  const controlledHost = controlledLane.host;
+  const allowedEvaluationModes = ['release', 'calibration', 'qualification', 'diagnostic-task', 'diagnostic-lock', 'diagnostic-trust', 'deterministic-only'];
   const configuredScope = config.evaluationScope;
   const configuredScopeValid = configuredScope != null && typeof configuredScope === 'object' &&
     allowedEvaluationModes.includes(configuredScope.mode) && typeof configuredScope.releaseEligible === 'boolean';
@@ -1512,7 +2206,7 @@ export async function runRelease({ config, steps, calibrationRelease = false, re
   // evaluation. Callers may add requirements, but cannot erase this release
   // invariant by omitting or passing an empty `requiredPairs` list.
   const effectiveRequiredPairs = trustRequired
-    ? [...new Set(['openrouter-kimi', ...(Array.isArray(requiredPairs) ? requiredPairs : [])])]
+    ? [...new Set([controlledHost, ...(Array.isArray(requiredPairs) ? requiredPairs : [])])]
     : [];
   const selectedTaskSet = config.task?.taskSet ?? [];
   const requiredTaskSet = config.task?.requiredTaskSet ?? selectedTaskSet;
@@ -1546,27 +2240,43 @@ export async function runRelease({ config, steps, calibrationRelease = false, re
     ? rawTaskLock
     : { ok: false, reason: 'task-lock evidence is missing or malformed' };
   const rawProviderSpendGuard = environment?.providerSpendGuard ?? {};
-  const guardLimitUsd = finiteNumber(rawProviderSpendGuard.limitUsd);
-  const guardRemainingUsd = finiteNumber(rawProviderSpendGuard.limitRemainingUsd);
-  const guardVerified =
-    rawProviderSpendGuard.verified === true &&
-    guardLimitUsd != null && guardLimitUsd === budgets.release.ceilingUsd &&
-    guardRemainingUsd != null && guardRemainingUsd === budgets.release.ceilingUsd &&
-    rawProviderSpendGuard.reset === null;
+  const expectedQualificationFingerprint = config.qualificationBaseline?.providerKeyFingerprint ?? null;
+  const providerPolicy = resolveProviderSpendPolicy({
+    evaluationMode,
+    ceilingUsd: budgets.release.ceilingUsd,
+    configuredHardLimitUsd: config.budget?.providerHardLimitUsd,
+    expectedQualificationFingerprint,
+  });
+  const guardVerdict = evaluateProviderSpendEvidence({
+    policy: providerPolicy,
+    keyFingerprint: rawProviderSpendGuard.keyFingerprint,
+    observed: rawProviderSpendGuard,
+  });
+  const assertedGuardHardLimitUsd = finiteNumber(rawProviderSpendGuard.hardLimitUsd);
+  const assertedHardLimitMatches = assertedGuardHardLimitUsd == null
+    ? !providerPolicy.continuityRequired
+    : assertedGuardHardLimitUsd === providerPolicy.hardLimitUsd;
+  const guardVerified = rawProviderSpendGuard.verified === true && guardVerdict.ok && assertedHardLimitMatches;
   const providerSpendGuard = {
+    ...guardVerdict.evidence,
     verified: guardVerified,
-    limitUsd: guardLimitUsd,
-    limitRemainingUsd: guardRemainingUsd,
-    reset: rawProviderSpendGuard.reset ?? null,
+    hardLimitUsd: assertedGuardHardLimitUsd ??
+      (guardVerified ? guardVerdict.evidence.hardLimitUsd : null),
     checkedAt: typeof rawProviderSpendGuard.checkedAt === 'string' ? rawProviderSpendGuard.checkedAt : null,
   };
   const providerGuardRequired = effectiveRequiredPairs.some((host) => String(host).startsWith('openrouter'));
   const calibrationBaselineRequired = evaluationMode === 'release' &&
-    config.claimPolicy?.mode === 'initial-user-ship' &&
     config.claimPolicy?.requireCalibrationBaseline === true && !calibrationRelease;
-  const calibrationBaselineOk = !calibrationBaselineRequired || config.calibrationBaseline?.valid === true;
+  const calibrationBaselineOk = !calibrationBaselineRequired || (
+    config.calibrationBaseline?.valid === true &&
+    Number(config.calibrationBaseline?.controlledWins ?? 0) > 0
+  );
+  const qualificationBaselineRequired = evaluationMode === 'calibration' &&
+    config.claimPolicy?.mode === 'initial-user-ship' &&
+    config.claimPolicy?.requireQualificationBaseline === true;
+  const qualificationBaselineOk = !qualificationBaselineRequired || config.qualificationBaseline?.valid === true;
   const environmentOk = configuredScopeValid && trustOk && environmentEvidenceValid && environment.ok === true &&
-    (!providerGuardRequired || providerSpendGuard.verified) && calibrationBaselineOk;
+    (!providerGuardRequired || providerSpendGuard.verified) && calibrationBaselineOk && qualificationBaselineOk;
   const preflightOk = deterministicEvidenceValid && deterministic.failed === 0 && environmentOk &&
     taskLockEvidenceValid && taskLock.ok === true;
   const safeDiagnostic = (value, limit = 500) => typeof value === 'string'
@@ -1584,6 +2294,7 @@ export async function runRelease({ config, steps, calibrationRelease = false, re
         .concat(trustOk ? [] : ['runtime trust evidence is missing or malformed'])
         .concat(deterministicEvidenceValid ? [] : ['deterministic evidence is missing or malformed'])
         .concat(calibrationBaselineOk ? [] : ['matching trusted calibration baseline'])
+        .concat(qualificationBaselineOk ? [] : ['matching verifier-passing qualification baseline'])
         .map((value) => safeDiagnostic(value))
         .filter(Boolean)
         .slice(0, 50),
@@ -1605,12 +2316,14 @@ export async function runRelease({ config, steps, calibrationRelease = false, re
       selectedTaskSet.find((entry) => entry.task === expectedTask);
     return {
       host,
+      expectedProfileId: host === controlledHost ? controlledLane.profileId : null,
       releaseSha,
       harnessVersion,
       expectedTask,
       expectedTaskRevision: config.task?.datasetRef ?? null,
       expectedTaskHash: expectedTaskEntry?.taskChecksum ?? null,
       expectedSandbox: expectedTaskEntry?.sandbox ?? null,
+      expectedVerifierPassingReward: config.task?.verifierPassingReward ?? 1,
     };
   };
 
@@ -1643,7 +2356,7 @@ export async function runRelease({ config, steps, calibrationRelease = false, re
         required,
         result: 'infrastructure-invalid',
         reason: `controlled pair step failed (detail sha256:${reasonHash.slice(0, 16)})`,
-        gateActive: gateActiveFor(host, calibrationRelease, releaseEligible),
+        gateActive: gateActiveFor(host, controlledHost, calibrationRelease, releaseEligible, evaluationMode),
         reproduced: null,
         classification: { safety: false, fallbackDetected: false, result: 'infrastructure-invalid' },
         failureDiagnostics: [{ stage: 'controlled-pair-step', code: 'CONTROLLED_PAIR_STEP_FAILURE', reasonHash }],
@@ -1664,7 +2377,13 @@ export async function runRelease({ config, steps, calibrationRelease = false, re
       classifyPair(pair, identityOptionsFor(host, pair))
     );
     const primaryEfficiencies = primaryPairs.map((pair) =>
-      efficiencyDelta(pair.generic, pair.harness, config.efficiencyThresholds, config.valueThresholds)
+      efficiencyDelta(
+        pair.generic,
+        pair.harness,
+        config.efficiencyThresholds,
+        config.valueThresholds,
+        config.task?.verifierPassingReward ?? 1
+      )
     );
     const primaryAttributions = primaryPairs.map((pair) =>
       fullyAttributablePair(pair, host, identityOptionsFor(host, pair))
@@ -1744,7 +2463,13 @@ export async function runRelease({ config, steps, calibrationRelease = false, re
             };
           }
           const rerunAttributable = rerunIdentity.ok && fullyAttributablePair(second, host, identityOptionsFor(host, pair));
-          const rerunEfficiency = efficiencyDelta(second.generic, second.harness, config.efficiencyThresholds, config.valueThresholds);
+          const rerunEfficiency = efficiencyDelta(
+            second.generic,
+            second.harness,
+            config.efficiencyThresholds,
+            config.valueThresholds,
+            config.task?.verifierPassingReward ?? 1
+          );
           rerunEvidence = {
             task: second.task ?? pair.task ?? null,
             pairId: second.pairId ?? null,
@@ -1818,7 +2543,7 @@ export async function runRelease({ config, steps, calibrationRelease = false, re
         required,
         result: classification.result,
         reason: classification.reason,
-        gateActive: gateActiveFor(host, calibrationRelease, releaseEligible),
+        gateActive: gateActiveFor(host, controlledHost, calibrationRelease, releaseEligible, evaluationMode),
         reproduced,
         rerun: rerunEvidence,
         pairedOutcomes: classification.pairedOutcomes ?? null,
@@ -1833,7 +2558,12 @@ export async function runRelease({ config, steps, calibrationRelease = false, re
     }
   }
 
-  await evaluatePair('openrouter-kimi', steps.kimiPair, { rerunFn: steps.rerunKimiPair, budget: budgets.kimiPair });
+  await evaluatePair(controlledHost, steps.controlledPair ?? steps.kimiPair, {
+    rerunFn: evaluationMode === 'qualification'
+      ? null
+      : (steps.rerunControlledPair ?? steps.rerunKimiPair),
+    budget: budgets.controlledPair,
+  });
   await evaluatePair('ollama-gemma', steps.gemmaPair);
 
   let rawNativeProducts = [];
@@ -1880,12 +2610,16 @@ export async function runRelease({ config, steps, calibrationRelease = false, re
   const meteredOk = pairEntries.every((p) => {
     if (!p.required || p.result === 'skipped') return true;
     if (!p.generic || !p.harness) return false;
-    return p.causallyAttributable === true && [p.generic, p.harness].every((doc) => completePaidEvidence(doc));
+    return p.causallyAttributable === true && [p.generic, p.harness].every((doc) =>
+      completePaidEvidence(doc, { passingReward: config.task?.verifierPassingReward ?? 1 })
+    );
   });
   const rerunMeteredOk = pairEntries.every((pair) => {
     if (!pair.rerun || !String(pair.host).startsWith('openrouter')) return true;
     return pair.rerun.causallyAttributable === true &&
-      [pair.rerun.generic, pair.rerun.harness].every((doc) => doc && completePaidEvidence(doc));
+      [pair.rerun.generic, pair.rerun.harness].every((doc) => doc && completePaidEvidence(doc, {
+        passingReward: config.task?.verifierPassingReward ?? 1,
+      }));
   });
   const retainedReconciledSpendUsd = runDocs
     .flatMap((doc) => rawTrials(doc))
@@ -1902,8 +2636,55 @@ export async function runRelease({ config, steps, calibrationRelease = false, re
   const chargeLedgerMatchesRetainedEvidence = Math.abs(
     retainedReconciledSpendUsd - knownReconciledSpendUsd
   ) <= chargeLedgerToleranceUsd;
+  const gateRunDocs = pairEntries
+    .filter((pair) => pair.required || pair.gateActive)
+    .flatMap((pair) => [
+      pair.generic,
+      pair.harness,
+      pair.rerun?.generic,
+      pair.rerun?.harness,
+    ].filter(Boolean));
   const telemetryComplete = meteredOk && rerunMeteredOk && chargeLedgerMatchesRetainedEvidence &&
-    runDocs.every((doc) => validateAgainstSchema(doc, RUN_SCHEMA).ok);
+    gateRunDocs.every((doc) => validateAgainstSchema(doc, RUN_SCHEMA).ok);
+  const diagnosticPairs = pairEntries
+    .filter((pair) => !pair.required && !pair.gateActive)
+    .map((pair) => {
+      const documents = [
+        pair.generic,
+        pair.harness,
+        pair.rerun?.generic,
+        pair.rerun?.harness,
+      ].filter(Boolean);
+      const schemaValidRunDocuments = documents.filter((doc) => validateAgainstSchema(doc, RUN_SCHEMA).ok).length;
+      const status = documents.length === 0
+        ? 'unavailable'
+        : schemaValidRunDocuments === documents.length && pair.causallyAttributable === true
+          ? 'complete'
+          : 'partial';
+      return {
+        host: pair.host,
+        task: pair.task ?? null,
+        status,
+        runDocuments: documents.length,
+        schemaValidRunDocuments,
+        causallyAttributable: pair.causallyAttributable === true,
+        reason: status === 'complete'
+          ? null
+          : documents.length === 0
+            ? 'diagnostic pair produced no retained run documents'
+            : 'diagnostic evidence is incomplete or not causally attributable',
+      };
+    });
+  const diagnosticCoverage = {
+    status: diagnosticPairs.length === 0
+      ? 'unavailable'
+      : diagnosticPairs.every((pair) => pair.status === 'complete')
+        ? 'complete'
+        : diagnosticPairs.every((pair) => pair.status === 'unavailable')
+          ? 'unavailable'
+          : 'partial',
+    pairs: diagnosticPairs,
+  };
   const claimEvidenceComplete = telemetryComplete && coverage.complete && releaseEligible;
   let gate = applyGatePolicy({
     deterministic,
@@ -1965,10 +2746,53 @@ export async function runRelease({ config, steps, calibrationRelease = false, re
     harness: null,
     ...entry,
   }));
+  const qualificationPair = evaluationMode === 'qualification'
+    ? reportPairs.find((pair) => pair.host === controlledHost) ?? null
+    : null;
+  const qualificationGenericPassed = singleRetainedVerifierPass(
+    qualificationPair?.generic,
+    config.task?.verifierPassingReward ?? 1
+  );
+  const qualificationHarnessPassed = singleRetainedVerifierPass(
+    qualificationPair?.harness,
+    config.task?.verifierPassingReward ?? 1
+  );
+  const qualification = evaluationMode === 'qualification' ? {
+    capability: qualificationGenericPassed || qualificationHarnessPassed ? 'qualified' : 'inconclusive',
+    passingArm: qualificationGenericPassed && qualificationHarnessPassed
+      ? 'both'
+      : qualificationGenericPassed
+        ? 'generic'
+        : qualificationHarnessPassed
+          ? 'harness'
+          : null,
+    task: qualificationPair?.task ?? selectedTaskSet[0]?.task ?? null,
+    reason: qualificationGenericPassed || qualificationHarnessPassed
+      ? 'at least one controlled arm produced a verifier pass; full calibration may be attempted'
+      : 'neither controlled arm produced a verifier pass; stop and select a different model tier',
+  } : null;
   const report = {
     schema: 'eval-report.v2',
     harnessVersion,
     releaseSha,
+    controlledLane: {
+      host: controlledHost,
+      profileId: controlledLane.profileId,
+      billingProfileHash: billingProfileHash(controlledLane.profileId),
+    },
+    qualification,
+    qualificationBaseline: config.qualificationBaseline ? {
+      valid: config.qualificationBaseline.valid === true,
+      capability: config.qualificationBaseline.capability ?? null,
+      passingArm: config.qualificationBaseline.passingArm ?? null,
+      evidenceHash: config.qualificationBaseline.evidenceHash ?? null,
+      task: config.qualificationBaseline.task ?? null,
+      accountedExposureUsd: config.qualificationBaseline.accountedExposureUsd ?? null,
+      providerKeyFingerprint: config.qualificationBaseline.providerKeyFingerprint ?? null,
+      reasons: Array.isArray(config.qualificationBaseline.reasons)
+        ? config.qualificationBaseline.reasons
+        : [],
+    } : null,
     task: {
       datasetRef: config.task?.datasetRef ?? 'unknown',
       task: config.task?.task ?? 'unknown',
@@ -1981,6 +2805,7 @@ export async function runRelease({ config, steps, calibrationRelease = false, re
     preflight,
     deterministic,
     telemetryComplete,
+    diagnosticCoverage,
     coverage,
     pairs: reportPairs,
     nativeProducts,
@@ -2005,7 +2830,7 @@ export async function runRelease({ config, steps, calibrationRelease = false, re
       enforcementSemantics,
       requestEstimateSemantics: 'utf8-byte-prompt-token-upper-bound-plus-max-output-at-pinned-rates',
       allocations: {
-        controlledPairUsd: budgets.kimiPair.ceilingUsd,
+        controlledPairUsd: budgets.controlledPair.ceilingUsd,
         regressionRerunUsd: budgets.rerun.ceilingUsd,
         controlledArmCeilingUsd: config.budget?.controlledArmCeilingUsd ?? null,
       },
@@ -2020,10 +2845,19 @@ export async function runRelease({ config, steps, calibrationRelease = false, re
       'Both arms share evaluator-level bounded tool results and automatic durable-state compaction. This ablation does not estimate the independent product value of those shared context controls; use a component ablation for that claim.',
       'The local Ollama pair is an informational capability probe until its model manifest, Ollama runtime, context settings, and hardware identity are attested; it is never part of the controlled release claim.',
       providerSpendGuard.verified
-        ? 'The provider API cash backstop is a fresh dedicated no-reset key limit; scheduler estimates additionally fail-stop before requests and reconcile the larger local/provider amount.'
+        ? (evaluationMode === 'calibration' && providerPolicy.continuityRequired
+            ? 'Qualification and calibration share one continuity-bound dedicated no-reset provider key. Its hard limit is the cash backstop; scheduler estimates additionally fail-stop before requests and reconcile the larger local/provider amount.'
+            : 'The provider API cash backstop is a fresh dedicated no-reset key limit; scheduler estimates additionally fail-stop before requests and reconcile the larger local/provider amount.')
         : 'The scheduler ceiling is not an atomic cash guarantee: one request or provider repricing can reconcile above it unless a dedicated provider-limited key is verified.',
+      'The key hard limit governs only the continuity-bound credential. Attempts made with replacement credentials are outside this report and require an account-level cap or trusted durable ledger.',
       'The provider API ceiling does not include Daytona credit consumption, local electricity, or subscription opportunity cost; those require separate operator accounting.',
-      'A live paid calibration is still required before publishing measured ratio results from this implementation.',
+      evaluationMode === 'qualification'
+        ? 'This qualification report establishes model capability only; a full trusted calibration is still required before publishing a release value claim.'
+        : evaluationMode === 'calibration'
+          ? 'This calibration report supports a release claim only when its trust, coverage, telemetry, budget, value, and readiness gates all pass.'
+          : evaluationMode === 'release'
+            ? 'This routine regression gate relies on a previously accepted calibration and does not re-establish initial Harness value.'
+            : 'This diagnostic report is not release evidence; trusted qualification and calibration remain required before publishing measured ratio results.',
     ],
   };
   return { report, exitCode: gate.block ? 1 : 0 };
@@ -2051,6 +2885,7 @@ export function buildMarkdownReport(report) {
   const attributedPairs = report.pairs.filter((pair) => pair.overheadAttribution?.complete === true);
   const metricPairs = report.pairs.filter((pair) => pair.generic && pair.harness);
   const diagnosticPairs = report.pairs.filter((pair) => pair.failureDiagnostics?.length);
+  const economicsPairs = metricPairs.filter((pair) => pair.generic?.economics || pair.harness?.economics);
   const number = (value, digits = 0) => Number.isFinite(value) ? Number(value).toFixed(digits) : 'unknown';
   const usd = (value) => Number.isFinite(value) ? `$${Number(value).toFixed(4)}` : 'unknown';
   const ratioSummary = (pair, key) => {
@@ -2066,22 +2901,56 @@ export function buildMarkdownReport(report) {
       ? `W${counts['harness-win'] ?? 0}/P${counts.parity ?? 0}/R${counts['harness-regression'] ?? 0}/FF${counts['inconclusive-capability'] ?? 0}`
       : 'unknown';
   };
+  const componentSummary = (doc) => {
+    const components = doc?.economics?.prompt?.manifest?.components;
+    if (!Array.isArray(components) || !components.length) return 'unavailable';
+    return components.map((component) => `${component.id}=${number(component.chars)}`).join(', ');
+  };
+  const phaseSummary = (doc) => ['memory-retrieval', 'memory-construction', 'memory-consolidation', 'task-execution']
+    .map((name) => {
+      const phase = name === 'task-execution'
+        ? doc?.economics?.rollups?.[name]
+        : doc?.economics?.phases?.[name];
+      return `${name}:${phase?.status ?? 'unavailable'}/${number(phase?.promptTokens)}`;
+    })
+    .join(' · ');
   const lines = [
     `# Eval Card — Engineer Harness ${report.harnessVersion} (${report.releaseSha})`,
     '',
     `Task set: ${taskNames} (${report.task.datasetRef})${report.calibrationRelease ? ' — calibration release' : ''}`,
     `Required release task set: ${requiredTaskNames}.`,
     `Evaluation scope: ${evaluationMode} (${releaseEligibility} to green the release).`,
+    ...(report.controlledLane
+      ? [`Controlled lane: ${report.controlledLane.host} / ${report.controlledLane.profileId} (billing profile sha256:${report.controlledLane.billingProfileHash.slice(0, 16)}).`]
+      : []),
+    ...(report.qualification
+      ? [`Qualification: **${report.qualification.capability}** (${report.qualification.passingArm ?? 'no passing arm'}) — ${report.qualification.reason}.`]
+      : []),
+    ...(report.qualificationBaseline
+      ? [`Qualification baseline: ${report.qualificationBaseline.valid ? 'accepted' : 'rejected'}; ` +
+          `${report.qualificationBaseline.passingArm ?? 'no passing arm'}; ` +
+          `${usd(report.qualificationBaseline.accountedExposureUsd)} accounted exposure.`]
+      : []),
     ...(trust ? [`Release trust: ${trust.ok === true ? 'attested' : `blocked (${(trust.missingCapabilities ?? []).join(', ')})`}.`] : []),
     ...(report.preflight ? [`Preflight: ${report.preflight.ok ? 'complete' : `failed (${preflightProblems.join('; ') || 'unspecified'})`}.`] : []),
     '',
     `Deterministic suite: ${report.deterministic.passed} passed, ${report.deterministic.failed} failed, ${report.deterministic.skipped} skipped.`,
     `Controlled task coverage: ${report.coverage?.complete === true ? 'complete' : `incomplete${report.coverage?.reason ? ` (${report.coverage.reason})` : ''}`}.`,
     `Telemetry completeness: ${report.telemetryComplete === true ? 'complete' : report.telemetryComplete === false ? 'incomplete' : 'legacy-unspecified'}.`,
+    ...(report.diagnosticCoverage
+      ? [`Informational diagnostic coverage: ${report.diagnosticCoverage.status}.`]
+      : []),
     '',
     '| Host | Result | Gate | Reason |',
     '|---|---|---|---|',
-    ...report.pairs.map((p) => `| ${p.task ? `${p.host} (${p.task})` : p.host} | ${p.result} | ${p.gateActive ? 'active' : 'informational'} | ${p.reason} |`),
+    ...report.pairs.map((p) => {
+      const gateLabel = p.gateActive
+        ? 'active'
+        : evaluationMode === 'qualification' && p.host === report.controlledLane?.host
+          ? 'calibration prerequisite'
+          : 'informational';
+      return `| ${p.task ? `${p.host} (${p.task})` : p.host} | ${p.result} | ${gateLabel} | ${p.reason} |`;
+    }),
     '',
     ...(metricPairs.length
       ? [
@@ -2117,6 +2986,25 @@ export function buildMarkdownReport(report) {
               `${ratioSummary(pair, 'promptRatio')} | ${ratioSummary(pair, 'costRatio')} | ` +
               `${ratioSummary(pair, 'wallTimeRatio')} | ${valueText} | ${policy} |`;
           }),
+          '',
+        ]
+      : []),
+    ...(economicsPairs.length
+      ? [
+          '## Prompt and memory economics',
+          '',
+          'Prompt components are exact serialized characters; phase token figures are whole-request provider usage and are never an invented component-token split.',
+          '',
+          ...economicsPairs.flatMap((pair) => [
+            `- ${pair.host} (${pair.task ?? 'unknown'}) coverage G/H: ` +
+              `${pair.generic?.economics?.coverage?.status ?? 'unavailable'}/` +
+              `${pair.harness?.economics?.coverage?.status ?? 'unavailable'}; ` +
+              `payload chars G/H: ${number(pair.generic?.economics?.prompt?.cumulative?.payloadChars)}/` +
+              `${number(pair.harness?.economics?.prompt?.cumulative?.payloadChars)}.`,
+            `  - Generic components: ${componentSummary(pair.generic)}.`,
+            `  - Harness components: ${componentSummary(pair.harness)}.`,
+            `  - Harness lifecycle phases (status/prompt tokens): ${phaseSummary(pair.harness)}.`,
+          ]),
           '',
         ]
       : []),
@@ -2172,6 +3060,14 @@ export function buildMarkdownReport(report) {
       `${Number(report.budget.uncertainReservedUsd ?? 0) > 0 ? ` ($${Number(report.budget.uncertainReservedUsd).toFixed(2)} uncertain allowance reserved)` : ''}` +
       `${report.budget.breached === true ? ` (BREACHED by $${Number(report.budget.overrunUsd ?? 0).toFixed(2)})` : ''}.`,
     `Cash-control semantics: ${report.budget.enforcementSemantics ?? 'legacy-unspecified'}${report.budget.billingUncertain === true ? ' (BILLING UNCERTAIN; reserved allowance is exposure, not known spend)' : ''}.`,
+    ...(Number.isFinite(report.budget.providerSpendGuard?.hardLimitUsd)
+      ? [`Provider key guard: $${Number(report.budget.providerSpendGuard.hardLimitUsd).toFixed(2)} hard limit, ` +
+          `$${Number(report.budget.providerSpendGuard.limitRemainingUsd ?? 0).toFixed(2)} remaining at preflight, ` +
+          `$${Number(report.budget.providerSpendGuard.observedKeyConsumedUsd ?? 0).toFixed(2)} observed as prior same-key consumption` +
+          `${report.budget.providerSpendGuard.keyFingerprint
+            ? ` (continuity ${report.budget.providerSpendGuard.keyFingerprint.slice(0, 12)}…)`
+            : ''}.`]
+      : []),
     '',
     report.gate.block ? `**Release blocked:** ${report.gate.reasons.join('; ')}` : '**Release not blocked by evaluation gates.**',
     '',
@@ -2285,6 +3181,42 @@ function assertExternalRegularFile(candidate, label) {
     throw new Error(`${label} must be a non-symlink regular file: ${resolved}`);
   }
   return resolved;
+}
+
+/**
+ * Read a prior evaluation artifact through a descriptor bound to the inode we
+ * inspected. This protects the handoff from symlink/path-swap accidents and
+ * prevents another local account from modifying evidence between phases. It
+ * does not authenticate a trusted operator or turn the report digest into a
+ * signature; that remains a runtime-supervisor/trust-store boundary.
+ */
+export function readPrivateEvidenceFile(candidate, label, { maximumBytes = 64 * 1024 * 1024 } = {}) {
+  const resolved = assertExternalRegularFile(candidate, label);
+  const before = fs.lstatSync(resolved);
+  let handle;
+  try {
+    handle = fs.openSync(
+      resolved,
+      fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0)
+    );
+    const entry = fs.fstatSync(handle);
+    if (!entry.isFile() || entry.dev !== before.dev || entry.ino !== before.ino) {
+      throw new Error(`${label} changed while it was being opened`);
+    }
+    if (entry.nlink !== 1) throw new Error(`${label} must be a singly linked regular file`);
+    if (typeof process.geteuid === 'function' && entry.uid !== process.geteuid()) {
+      throw new Error(`${label} must be owned by the current user`);
+    }
+    if ((entry.mode & 0o077) !== 0) {
+      throw new Error(`${label} must not be accessible by group or other users`);
+    }
+    if (!Number.isInteger(maximumBytes) || maximumBytes <= 0 || entry.size <= 0 || entry.size > maximumBytes) {
+      throw new Error(`${label} must be a nonempty report no larger than ${Math.floor(maximumBytes / (1024 * 1024))} MiB`);
+    }
+    return fs.readFileSync(handle);
+  } finally {
+    if (handle != null) fs.closeSync(handle);
+  }
 }
 
 function resolvePrivateReportDestination(reportFile) {
@@ -2482,7 +3414,11 @@ async function main() {
   };
   const profile = flag('--profile', 'release-canary');
   const calibrationRelease = argv.includes('--calibration');
+  const qualificationRelease = argv.includes('--qualification');
   const deterministicOnly = argv.includes('--deterministic-only');
+  if (calibrationRelease && qualificationRelease) {
+    throw new Error('--qualification and --calibration are mutually exclusive');
+  }
   const withLocal = argv.includes('--with-local');
   const json = argv.includes('--json');
   const reportFileFlagPresent = argv.includes('--report-file');
@@ -2504,6 +3440,14 @@ async function main() {
     typeof calibrationBaselineFile !== 'string' || calibrationBaselineFile.length === 0 || calibrationBaselineFile.startsWith('--')
   )) {
     throw new Error('--calibration-baseline requires a nonempty report path');
+  }
+  const qualificationBaselineFlagPresent = argv.includes('--qualification-baseline');
+  const qualificationBaselineFile = flag('--qualification-baseline', null);
+  if (qualificationBaselineFlagPresent && (
+    typeof qualificationBaselineFile !== 'string' || qualificationBaselineFile.length === 0 ||
+    qualificationBaselineFile.startsWith('--')
+  )) {
+    throw new Error('--qualification-baseline requires a nonempty report path');
   }
   const lockFileFlagPresent = argv.includes('--lock-file');
   const lockFileFlag = flag('--lock-file', null); // bootstrap/test hook; default is the committed lock
@@ -2538,6 +3482,11 @@ async function main() {
   }
 
   const raw = loadYamlConfig(profile, { attestCommit: !deterministicOnly });
+  const claimMode = raw.claimPolicy?.mode ?? 'regression-gate';
+  if ((qualificationRelease || calibrationRelease) && claimMode !== 'initial-user-ship') {
+    const phase = qualificationRelease ? '--qualification' : '--calibration';
+    throw new Error(`invalid release invocation: ${phase} requires an initial-user-ship profile`);
+  }
   const lockSource = lockFileFlagPresent
     ? (() => {
         const file = assertExternalRegularFile(lockFileFlag, 'explicit task lock');
@@ -2550,13 +3499,25 @@ async function main() {
   } catch {
     throw new Error('task lock is not valid JSON');
   }
-  const budgetUsd = Number(flag('--budget-usd', raw.budget.releaseCeilingUsd));
+  const qualificationCeilingUsd = Number(raw.budget?.qualificationPairUsd);
+  const calibrationCeilingUsd = Number(raw.budget?.calibrationCeilingUsd);
+  const defaultBudgetUsd = qualificationRelease
+    ? qualificationCeilingUsd
+    : calibrationRelease
+      ? calibrationCeilingUsd
+      : raw.budget.releaseCeilingUsd;
+  const budgetUsd = Number(flag('--budget-usd', defaultBudgetUsd));
   if (!Number.isFinite(budgetUsd) || budgetUsd < 0 || budgetUsd > MAX_RELEASE_API_USD) {
     throw new Error(`--budget-usd must be between 0 and ${MAX_RELEASE_API_USD}, got: ${flag('--budget-usd')}`);
   }
-  if (budgetUsd > Number(raw.budget.releaseCeilingUsd) && !calibrationRelease) {
+  const modeCeilingUsd = qualificationRelease
+    ? qualificationCeilingUsd
+    : calibrationRelease
+      ? calibrationCeilingUsd
+      : Number(raw.budget.releaseCeilingUsd);
+  if (!Number.isFinite(modeCeilingUsd) || budgetUsd > modeCeilingUsd + 1e-12) {
     throw new Error(
-      `--budget-usd above the routine $${raw.budget.releaseCeilingUsd} ceiling is allowed only with --calibration`
+      `--budget-usd exceeds the $${modeCeilingUsd} ceiling for this evaluation mode`
     );
   }
   const lockedTasks = completeLock.tasks ?? (
@@ -2565,11 +3526,20 @@ async function main() {
       : []
   );
   const taskFlagPresent = argv.includes('--task');
-  const requestedTask = flag('--task', null);
+  const explicitRequestedTask = flag('--task', null);
   if (taskFlagPresent && (
-    typeof requestedTask !== 'string' || requestedTask.length === 0 || requestedTask.startsWith('--')
+    typeof explicitRequestedTask !== 'string' || explicitRequestedTask.length === 0 || explicitRequestedTask.startsWith('--')
   )) {
     throw new Error('--task requires a nonempty pinned task value');
+  }
+  if (qualificationRelease && taskFlagPresent) {
+    throw new Error('--qualification uses the code-owned qualificationTask and cannot be combined with --task');
+  }
+  const requestedTask = qualificationRelease
+    ? raw.claimPolicy?.qualificationTask
+    : explicitRequestedTask;
+  if (qualificationRelease && (typeof requestedTask !== 'string' || requestedTask.length === 0)) {
+    throw new Error('--qualification requires claimPolicy.qualificationTask');
   }
   if (requestedTask && !lockedTasks.some((entry) => entry.task === requestedTask)) {
     throw new Error(`--task ${requestedTask} is not a pinned task in the selected lock`);
@@ -2581,7 +3551,7 @@ async function main() {
   const taskSet = selectedTasks.map(
     ({ task, taskChecksum = null, role = null, sandbox = null }) => ({ task, taskChecksum, role, sandbox })
   );
-  const requiredTaskSet = lockedTasks.map(
+  const requiredTaskSet = (qualificationRelease ? selectedTasks : lockedTasks).map(
     ({ task, taskChecksum = null, role = null, sandbox = null }) => ({ task, taskChecksum, role, sandbox })
   );
   // There is intentionally no user-supplied escape hatch for this value.
@@ -2591,9 +3561,10 @@ async function main() {
   const runtimeObservedTrustEvidence = null;
   const releaseTrust = releaseTrustVerdict(raw, runtimeObservedTrustEvidence);
   const invocationPolicy = releaseInvocationPolicy({
-    claimMode: raw.claimPolicy?.mode ?? 'regression-gate',
+    claimMode,
     calibrationRelease,
-    diagnosticScope: deterministicOnly || Boolean(requestedTask) || lockFileFlagPresent,
+    qualificationRelease,
+    diagnosticScope: deterministicOnly || (!qualificationRelease && Boolean(requestedTask)) || lockFileFlagPresent,
     trustOk: releaseTrust.ok,
   });
   if (!invocationPolicy.ok) {
@@ -2604,14 +3575,46 @@ async function main() {
   }
   const harnessVersion = JSON.parse(fs.readFileSync(new URL('../packages/harness/package.json', import.meta.url), 'utf8')).version;
   const minimumCalibrationRepetitions = releaseMinimumCalibrationRepetitions(raw);
+  const historicalBaselineChain = !qualificationRelease && !calibrationRelease &&
+    raw.claimPolicy?.mode === 'regression-gate' &&
+    raw.claimPolicy?.requireCalibrationBaseline === true;
+  let qualificationBaseline = null;
+  if (qualificationBaselineFlagPresent) {
+    if (qualificationRelease) throw new Error('--qualification cannot consume an earlier qualification baseline');
+    const bytes = readPrivateEvidenceFile(qualificationBaselineFile, 'qualification baseline');
+    let baselineReport;
+    try {
+      baselineReport = JSON.parse(bytes.toString('utf8'));
+    } catch {
+      throw new Error('qualification baseline is not valid JSON');
+    }
+    qualificationBaseline = qualificationBaselineVerdict(baselineReport, {
+      evidenceHash: crypto.createHash('sha256').update(bytes).digest('hex'),
+      releaseSha: historicalBaselineChain ? baselineReport?.releaseSha ?? null : releaseSha,
+      harnessVersion: historicalBaselineChain ? baselineReport?.harnessVersion ?? null : harnessVersion,
+      controlledLane: controlledLaneOf(raw),
+      qualificationTask: raw.claimPolicy?.qualificationTask ?? null,
+      requiredTaskSet: lockedTasks.filter((entry) => entry.task === raw.claimPolicy?.qualificationTask),
+      requiredTaskRevision: completeLock.datasetRef ?? null,
+      maximumQualificationUsd: historicalBaselineChain
+        ? MAX_QUALIFICATION_API_USD
+        : raw.budget?.qualificationPairUsd ?? MAX_QUALIFICATION_API_USD,
+      controlledArmCeilingUsd: raw.budget?.controlledArmCeilingUsd ?? null,
+      expectedProviderHardLimitUsd: historicalBaselineChain
+        ? MAX_RELEASE_API_USD
+        : raw.budget?.providerHardLimitUsd ?? null,
+      verifierPassingReward: completeLock.verifier?.passingReward ?? 1,
+    });
+    if (!qualificationBaseline.valid) {
+      throw new Error(`qualification baseline is not eligible: ${qualificationBaseline.reasons.join('; ')}`);
+    }
+  }
+  if (calibrationRelease && raw.claimPolicy?.requireQualificationBaseline === true && !qualificationBaseline?.valid) {
+    throw new Error('--calibration requires --qualification-baseline with at least one verifier-passing arm');
+  }
   let calibrationBaseline = null;
   if (calibrationBaselineFlagPresent) {
-    const baselinePath = assertExternalRegularFile(calibrationBaselineFile, 'calibration baseline');
-    const stat = fs.statSync(baselinePath);
-    if (stat.size <= 0 || stat.size > 64 * 1024 * 1024) {
-      throw new Error('calibration baseline must be a nonempty report no larger than 64 MiB');
-    }
-    const bytes = fs.readFileSync(baselinePath);
+    const bytes = readPrivateEvidenceFile(calibrationBaselineFile, 'calibration baseline');
     let baselineReport;
     try {
       baselineReport = JSON.parse(bytes.toString('utf8'));
@@ -2620,14 +3623,23 @@ async function main() {
     }
     calibrationBaseline = calibrationBaselineVerdict(baselineReport, {
       evidenceHash: crypto.createHash('sha256').update(bytes).digest('hex'),
-      releaseSha,
-      harnessVersion,
+      releaseSha: historicalBaselineChain ? qualificationBaseline?.releaseSha ?? null : releaseSha,
+      harnessVersion: historicalBaselineChain ? qualificationBaseline?.harnessVersion ?? null : harnessVersion,
       requiredTaskSet,
       minimumRepetitions: minimumCalibrationRepetitions,
       minimumHarnessSolvedTasks: raw.claimPolicy?.minimumHarnessSolvedTasks ?? 1,
       efficiencyThresholds: raw.efficiencyThresholds,
       valueThresholds: raw.valueThresholds,
       controlledArmCeilingUsd: raw.budget?.controlledArmCeilingUsd ?? null,
+      controlledLane: controlledLaneOf(raw),
+      expectedProviderHardLimitUsd: historicalBaselineChain
+        ? MAX_RELEASE_API_USD
+        : raw.budget?.providerHardLimitUsd ?? null,
+      expectedProviderKeyFingerprint: qualificationBaseline?.providerKeyFingerprint ?? null,
+      maximumCalibrationUsd: historicalBaselineChain
+        ? MAX_CALIBRATION_API_USD
+        : raw.budget?.calibrationCeilingUsd ?? MAX_CALIBRATION_API_USD,
+      verifierPassingReward: completeLock.verifier?.passingReward ?? 1,
     });
     if (!calibrationBaseline.valid) {
       throw new Error(`calibration baseline is not eligible: ${calibrationBaseline.reasons.join('; ')}`);
@@ -2643,13 +3655,22 @@ async function main() {
       reasons: ['no calibration baseline was supplied'],
     };
   }
-  if (!calibrationRelease && releaseTrust.ok && raw.claimPolicy?.requireCalibrationBaseline === true && !calibrationBaseline?.valid) {
+  if (historicalBaselineChain && releaseTrust.ok &&
+      (!qualificationBaseline?.valid || !calibrationBaseline?.valid)) {
+    throw new Error(
+      'routine evaluation requires the accepted historical --qualification-baseline and --calibration-baseline chain'
+    );
+  }
+  if (!calibrationRelease && !historicalBaselineChain && releaseTrust.ok &&
+      raw.claimPolicy?.requireCalibrationBaseline === true && !calibrationBaseline?.valid) {
     throw new Error('routine initial-user-ship evaluation requires --calibration-baseline from the same trusted release');
   }
   const evaluationMode = deterministicOnly
     ? 'deterministic-only'
     : lockFileFlagPresent
       ? 'diagnostic-lock'
+      : qualificationRelease
+        ? 'qualification'
       : requestedTask
         ? 'diagnostic-task'
         : !releaseTrust.ok
@@ -2658,13 +3679,35 @@ async function main() {
           ? 'calibration'
         : 'release';
   const config = {
-    budget: scaleReleaseBudget(raw.budget, budgetUsd),
+    controlledLane: controlledLaneOf(raw),
+    budget: qualificationRelease
+      ? {
+          releaseCeilingUsd: budgetUsd,
+          controlledPairUsd: budgetUsd,
+          rerunUsd: 0,
+          controlledArmCeilingUsd: Number(raw.budget?.controlledArmCeilingUsd),
+          qualificationPairUsd: qualificationCeilingUsd,
+          calibrationCeilingUsd,
+          ...(raw.budget?.providerHardLimitUsd != null
+            ? { providerHardLimitUsd: Number(raw.budget.providerHardLimitUsd) }
+            : {}),
+        }
+      : {
+          ...scaleReleaseBudget(raw.budget, budgetUsd),
+          // Initial qualification/calibration phases share the configured
+          // $20 provider key. Regression-profile routine/diagnostic runs use
+          // an exact key cap equal to the operator-selected scheduler ceiling.
+          providerHardLimitUsd: raw.claimPolicy?.mode === 'initial-user-ship'
+            ? Number(raw.budget?.providerHardLimitUsd ?? budgetUsd)
+            : budgetUsd,
+        },
     task: {
       datasetRef: lock.datasetRef,
       task: taskSet.length === 1 ? taskSet[0].task : 'multi-task-canary',
       taskChecksum: taskSet.length === 1 ? taskSet[0].taskChecksum : null,
       taskSet,
       requiredTaskSet,
+      verifierPassingReward: completeLock.verifier?.passingReward ?? 1,
     },
     evaluationScope: {
       mode: evaluationMode,
@@ -2676,13 +3719,23 @@ async function main() {
     valueThresholds: raw.valueThresholds ?? {},
     claimPolicy: raw.claimPolicy ?? { mode: 'regression-gate' },
     calibrationBaseline,
+    qualificationBaseline,
   };
+  if (calibrationRelease && qualificationBaseline?.valid === true &&
+      budgetUsd + qualificationBaseline.accountedExposureUsd > MAX_RELEASE_API_USD + 1e-12) {
+    throw new Error('qualification exposure plus calibration ceiling exceeds the absolute $20 initial-evidence budget');
+  }
   const configuredArmCeiling = Number(config.budget.controlledArmCeilingUsd);
-  const scheduledRepetitions = releaseRepetitionCount(raw, calibrationRelease);
+  const scheduledRepetitions = qualificationRelease ? 1 : releaseRepetitionCount(raw, calibrationRelease);
   if (releaseTrust.ok && Number.isFinite(configuredArmCeiling) && configuredArmCeiling > 0) {
-    const primaryExposure = configuredArmCeiling * taskSet.length * scheduledRepetitions * 2;
-    const rerunExposure = configuredArmCeiling * 2;
-    if (primaryExposure > config.budget.kimiPairUsd + 1e-12 || rerunExposure > config.budget.rerunUsd + 1e-12) {
+    const { primaryExposureUsd: primaryExposure, rerunExposureUsd: rerunExposure } = releaseScheduledExposure({
+      taskCount: taskSet.length,
+      repetitions: scheduledRepetitions,
+      controlledArmCeilingUsd: configuredArmCeiling,
+      rerunEnabled: !qualificationRelease && config.budget.rerunUsd > 0,
+    });
+    const controlledAllowance = controlledPairAllowanceOf(config.budget).value;
+    if (primaryExposure > controlledAllowance + 1e-12 || rerunExposure > config.budget.rerunUsd + 1e-12) {
       throw new Error(
         `selected budget cannot preserve the fixed $${configuredArmCeiling} per-arm condition ` +
         `(${primaryExposure.toFixed(2)} primary / ${rerunExposure.toFixed(2)} rerun required)`
@@ -2723,21 +3776,35 @@ async function main() {
       },
       frontierPair: null,
       nativeProducts: null,
-      kimiPair: null,
+      controlledPair: null,
       gemmaPair: null,
       smokes: null,
     };
-    requiredPairs = deterministicOnly ? [] : ['openrouter-kimi'];
+    requiredPairs = deterministicOnly ? [] : [config.controlledLane.host];
   } else {
-    // Release-candidate mode: the live Kimi pair is REQUIRED. Missing
+    // Release-candidate mode: the configured controlled pair is REQUIRED. Missing
     // harbor, credentials, or task verification blocks — it never greens.
     const { buildLiveSteps } = await import('./external/terminal_bench/live-steps.mjs');
     releaseWorkDir = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-release-'));
-    const repetitions = releaseRepetitionCount(raw, calibrationRelease);
+    const repetitions = qualificationRelease ? 1 : releaseRepetitionCount(raw, calibrationRelease);
     try {
       steps = {
         deterministic: deterministicStep,
-        ...buildLiveSteps({ config: { ...raw, budget: config.budget }, lock, workDir: releaseWorkDir, releaseSha, harnessVersion, repetitions, localEnabled: withLocal }),
+        ...buildLiveSteps({
+          config: {
+            ...raw,
+            budget: config.budget,
+            evaluationScope: config.evaluationScope,
+            qualificationBaseline: config.qualificationBaseline,
+            calibrationBaseline: config.calibrationBaseline,
+          },
+          lock,
+          workDir: releaseWorkDir,
+          releaseSha,
+          harnessVersion,
+          repetitions,
+          localEnabled: withLocal,
+        }),
         nativeProducts: async () => (raw.nativeProductRotation ?? []).map((host) => ({
           host,
           status: 'not-run',
@@ -2750,7 +3817,7 @@ async function main() {
       releaseWorkDir = null;
       throw error;
     }
-    requiredPairs = ['openrouter-kimi'];
+    requiredPairs = [config.controlledLane.host];
   }
 
   // Reserve the requested archive before runRelease can perform provider

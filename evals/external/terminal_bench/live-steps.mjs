@@ -1,5 +1,5 @@
 /**
- * Live release steps: the callable implementation of the Kimi A/B pair.
+ * Live release steps: the callable implementation of the controlled A/B pair.
  *
  * `buildLiveSteps` returns the step functions `runRelease` schedules. The
  * flow per trial: verify the pinned task bytes (before any provider work),
@@ -17,6 +17,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { spawnSync } from 'node:child_process';
+import { createHost as createControlledHost } from '../../hosts/openrouter-controlled.mjs';
 import { createHost as createKimiHost } from '../../hosts/openrouter-kimi.mjs';
 import { createHost as createGemmaHost } from '../../hosts/ollama-gemma.mjs';
 import { buildHarborRunArgs, jobDirFor, runHarbor, verifyTaskAgainstLock, classifyFailure, tasksOf, readHostVerifierReward } from './harbor-adapter.mjs';
@@ -26,6 +27,18 @@ import { buildHarnessCondition } from './harness-condition.mjs';
 import { runtimeBridgeTools } from './agent.mjs';
 import { createBudget } from '../../lib/budget.mjs';
 import { billingProfileHash } from '../../lib/model-profiles.mjs';
+import {
+  evaluateProviderSpendEvidence,
+  resolveProviderSpendPolicy,
+} from '../../lib/provider-spend-policy.mjs';
+import {
+  ECONOMIC_PHASES,
+  ECONOMIC_PHASE_FIELDS,
+  SOURCE_USAGE_TO_ECONOMIC_FIELD,
+  TASK_EXECUTION_ECONOMIC_PHASES,
+  economicPhaseForContextSource,
+} from '../../lib/economic-phases.mjs';
+import { validatePromptComponentManifestStructure } from '../../lib/prompt-manifest.mjs';
 import {
   CONDITION_INPUTS_FILE,
   prepareHarnessBundle,
@@ -197,6 +210,13 @@ const INSTRUCTION_PLACEHOLDER = '(the task instruction is supplied by Harbor at 
 const sha256 = (value) => crypto.createHash('sha256').update(String(value)).digest('hex');
 const stableHash = (value) => sha256(JSON.stringify(value ?? null));
 const shortHash = (value) => stableHash(value).slice(0, 24);
+const releaseScopedKeyFingerprint = (apiKey, releaseSha) =>
+  typeof apiKey === 'string' && apiKey.length > 0
+    ? crypto.createHmac('sha256', apiKey)
+      .update('engineer-harness/openrouter-key/v1\0')
+      .update(String(releaseSha))
+      .digest('hex')
+    : null;
 
 function diagnosticCode(raw, fallback = 'EXECUTION_INTEGRITY_FAILURE') {
   const message = String(raw ?? '');
@@ -314,6 +334,29 @@ function completeToolResultEvidence(event) {
     typeof event.timedOut === 'boolean' &&
     nonEmptyString(event.containmentMode) &&
     typeof event.containmentComplete === 'boolean';
+}
+
+function harnessExecutableCall(event) {
+  return event?.immutableHarnessCli === true ||
+    event?.program === 'harness' ||
+    event?.program === 'harness-cli';
+}
+
+function trustedHarnessCliEvidence(toolEvents) {
+  const calls = toolEvents.filter((event) =>
+    event?.type === 'tool_call' && harnessExecutableCall(event) && completeToolCallEvidence(event)
+  );
+  const results = toolEvents.filter((event) => event?.type === 'tool_result' && completeToolResultEvidence(event));
+  const resultCounts = identityCounts(results);
+  const correlated = calls.flatMap((call) => {
+    const identity = toolEventIdentity(call);
+    if (identity == null || resultCounts.counts.get(identity) !== 1) return [];
+    return results.filter((result) => toolEventIdentity(result) === identity).slice(0, 1);
+  });
+  return {
+    invoked: correlated.length > 0,
+    succeeded: correlated.some((result) => result.exitCode === 0),
+  };
 }
 
 function numericEventTime(event) {
@@ -499,22 +542,375 @@ function deriveHarnessBehavior(condition, telemetryEvents, harnessEvents, harnes
   };
 }
 
-function enforcementFidelityOf(condition, done, harnessEvents) {
+function enforcementFidelityOf(condition, done, harnessEvents, toolEvents) {
   // Harness event files live in the evaluated workspace and are therefore
   // agent-writable — and so is the probe's stdout that the bridge relays, so
   // `done.enforcement` cannot establish mechanical fidelity either. Clamp to
   // false until a trusted supervisor channel outside the sandbox exists; the
   // genuine probe hard-codes false, so any `true` arriving here is a forgery.
   const mechanicalHooksActive = false;
+  const cliEvidence = condition === 'harness'
+    ? trustedHarnessCliEvidence(toolEvents)
+    : { invoked: false, succeeded: false };
   return {
     // If hooks unexpectedly appear in the control arm, report that
     // contamination instead of forcing the intended `none` label.
     mode: mechanicalHooksActive ? 'mechanical-hooks' : condition === 'generic' ? 'none' : 'prompt-and-cli',
     promptContractActive: condition === 'harness',
-    cliActivated: condition === 'harness' ? Boolean(done) : false,
+    // `prompt-and-cli` names treatment availability. Actual use is derived
+    // only from a complete, correlated runner-owned tool call/result pair.
+    cliActivated: cliEvidence.succeeded,
+    cliInvoked: cliEvidence.invoked,
+    cliSucceeded: cliEvidence.succeeded,
     mechanicalHooksActive,
     harnessEventsCaptured: Array.isArray(harnessEvents),
     evidenceSource: done?.enforcement?.source ?? (mechanicalHooksActive ? 'trusted-bridge' : condition === 'harness' ? 'condition-and-setup' : 'control-condition'),
+  };
+}
+
+function phaseForToolCall(event) {
+  return economicPhaseForContextSource(event?.contextSource ?? event?.category ?? 'unknown');
+}
+
+function freshPhase() {
+  return {
+    logicalRequests: 0,
+    usageRecords: 0,
+    ...Object.fromEntries(ECONOMIC_PHASE_FIELDS.flatMap((field) => [
+      [field, 0],
+      [`${field}Complete`, true],
+    ])),
+  };
+}
+
+function unavailablePhase(status) {
+  const phase = freshPhase();
+  closeEmptyPhaseFields(phase);
+  phase.status = status;
+  return phase;
+}
+
+function unavailablePhaseMatrix(status) {
+  return Object.fromEntries(ECONOMIC_PHASES.map((phase) => [phase, unavailablePhase(status)]));
+}
+
+function taskExecutionRollup(phases, fallbackStatus = 'unavailable') {
+  const selected = TASK_EXECUTION_ECONOMIC_PHASES.map((name) => phases[name]);
+  const exercised = selected.filter((phase) => (phase?.logicalRequests ?? 0) > 0 || (phase?.usageRecords ?? 0) > 0);
+  if (exercised.length === 0) {
+    return { ...unavailablePhase(fallbackStatus), derivedFrom: [...TASK_EXECUTION_ECONOMIC_PHASES] };
+  }
+  const rollup = freshPhase();
+  rollup.logicalRequests = selected.reduce((sum, phase) => sum + (phase?.logicalRequests ?? 0), 0);
+  rollup.usageRecords = selected.reduce((sum, phase) => sum + (phase?.usageRecords ?? 0), 0);
+  for (const target of ECONOMIC_PHASE_FIELDS) {
+    const completeKey = `${target}Complete`;
+    if (exercised.every((phase) => phase?.[completeKey] === true && typeof phase?.[target] === 'number')) {
+      rollup[target] = exercised.reduce((sum, phase) => sum + phase[target], 0);
+    } else {
+      rollup[target] = null;
+      rollup[completeKey] = false;
+    }
+  }
+  rollup.status = exercised.every((phase) => phase?.status === 'measured') ? 'measured' : 'partial';
+  rollup.derivedFrom = [...TASK_EXECUTION_ECONOMIC_PHASES];
+  return rollup;
+}
+
+function addUsageToPhase(phase, usage) {
+  phase.usageRecords += 1;
+  for (const [source, target] of Object.entries(SOURCE_USAGE_TO_ECONOMIC_FIELD)) {
+    const value = usage?.[source];
+    const completeKey = `${target}Complete`;
+    if (typeof value === 'number' && Number.isFinite(value) && value >= 0 && phase[completeKey] !== false) {
+      phase[target] += value;
+    } else {
+      phase[target] = null;
+      phase[completeKey] = false;
+    }
+  }
+  if (usage?.cachedTokensComplete === false) {
+    phase.cachedPromptTokens = null;
+    phase.cachedPromptTokensComplete = false;
+  }
+  if (usage?.reasoningTokensComplete === false) {
+    phase.reasoningTokens = null;
+    phase.reasoningTokensComplete = false;
+  }
+}
+
+function closeEmptyPhaseFields(phase) {
+  if (phase.usageRecords > 0) return phase;
+  for (const target of ECONOMIC_PHASE_FIELDS) {
+    phase[target] = null;
+    phase[`${target}Complete`] = false;
+  }
+  return phase;
+}
+
+function sameNumber(left, right) {
+  return typeof left === 'number' && Number.isFinite(left) &&
+    typeof right === 'number' && Number.isFinite(right) &&
+    Math.abs(left - right) <= 1e-9;
+}
+
+const PROMPT_BUCKET_FIELDS = [
+  ['baseSystem', 'baseSystemChars'],
+  ['instruction', 'instructionChars'],
+  ['durableState', 'durableStateChars'],
+  ['assistantHistory', 'assistantHistoryChars'],
+  ['toolResultHistory', 'toolResultHistoryChars'],
+  ['otherMessages', 'otherMessageChars'],
+  ['messageEnvelope', 'messageEnvelopeChars'],
+  ['toolSchema', 'toolSchemaChars'],
+  ['payloadEnvelope', 'payloadEnvelopeChars'],
+];
+const PROMPT_BUCKET_KEYS = new Set([
+  ...PROMPT_BUCKET_FIELDS.map(([source]) => source),
+  'toolResultHistoryBySource',
+  'complete',
+]);
+function isPlainRecord(value) {
+  if (value == null || typeof value !== 'object' || Array.isArray(value)) return false;
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+}
+
+function hasExactKeys(value, expected) {
+  if (!isPlainRecord(value)) return false;
+  const keys = Object.keys(value);
+  return keys.length === expected.size && keys.every((key) => expected.has(key));
+}
+
+function nonnegativeSafeInteger(value) {
+  return Number.isSafeInteger(value) && value >= 0;
+}
+
+function safeIntegerSum(values) {
+  let total = 0;
+  for (const value of values) {
+    if (!nonnegativeSafeInteger(value) || total > Number.MAX_SAFE_INTEGER - value) return null;
+    total += value;
+  }
+  return total;
+}
+
+function promptComponentManifestValid(manifest) {
+  return validatePromptComponentManifestStructure(manifest).valid;
+}
+
+function promptBucketsValid(event) {
+  const buckets = event?.promptBuckets;
+  if (!nonnegativeSafeInteger(event?.payloadChars) ||
+      !hasExactKeys(buckets, PROMPT_BUCKET_KEYS) ||
+      buckets.complete !== true ||
+      !PROMPT_BUCKET_FIELDS.every(([key]) => nonnegativeSafeInteger(buckets[key])) ||
+      !isPlainRecord(buckets.toolResultHistoryBySource)) {
+    return false;
+  }
+  const sourceEntries = Object.entries(buckets.toolResultHistoryBySource);
+  if (!sourceEntries.every(([source, chars]) => source.length > 0 && nonnegativeSafeInteger(chars))) return false;
+  const sourceTotal = safeIntegerSum(sourceEntries.map(([, chars]) => chars));
+  const bucketTotal = safeIntegerSum(PROMPT_BUCKET_FIELDS.map(([key]) => buckets[key]));
+  return sourceTotal === buckets.toolResultHistory && bucketTotal === event.payloadChars;
+}
+
+function blankPromptCumulative(payloadChars = null) {
+  return {
+    payloadChars,
+    ...Object.fromEntries(PROMPT_BUCKET_FIELDS.map(([, target]) => [target, null])),
+    toolResultHistoryBySource: null,
+  };
+}
+
+/**
+ * Join content-free request footprints, exact provider usage, and the actions
+ * chosen by each response. Provider tokens remain whole-request measurements;
+ * prompt components are reported in exact serialized characters, never as an
+ * invented token split.
+ */
+export function promptAndPhaseEconomicsOf(events, authoritativeTotals = null) {
+  const ledger = Array.isArray(events) ? events : [];
+  const requests = ledger.filter((event) => event?.type === 'request');
+  const usageEvents = ledger.filter((event) =>
+    ['response', 'error'].includes(event?.type) && event?.usage != null
+  );
+  if (requests.length === 0 && usageEvents.length === 0) {
+    return {
+      coverage: { status: 'unavailable', complete: false, requestEvents: 0, usageEvents: 0, matchedUsageEvents: 0, reason: 'no request or provider-usage events' },
+      prompt: { manifest: null, coverage: { complete: false, requests: 0, requestsWithCompleteBuckets: 0 }, cumulative: null },
+      phases: unavailablePhaseMatrix('unavailable'),
+      rollups: { 'task-execution': { ...unavailablePhase('unavailable'), derivedFrom: [...TASK_EXECUTION_ECONOMIC_PHASES] } },
+      totals: null,
+      reconciliation: { complete: false, checks: null, reason: 'authoritative usage is unavailable' },
+    };
+  }
+
+  const requestIdCounts = new Map();
+  let invalidRequestIdentities = 0;
+  for (const request of requests) {
+    if (typeof request.requestId !== 'string' || request.requestId.length === 0) {
+      invalidRequestIdentities += 1;
+      continue;
+    }
+    requestIdCounts.set(request.requestId, (requestIdCounts.get(request.requestId) ?? 0) + 1);
+  }
+  const duplicateRequestIdentities = [...requestIdCounts.values()]
+    .reduce((total, count) => total + Math.max(0, count - 1), 0);
+  const requestIdentitiesComplete = invalidRequestIdentities === 0 && duplicateRequestIdentities === 0;
+  const requestById = new Map(requests
+    .filter((event) => requestIdCounts.get(event.requestId) === 1)
+    .map((event) => [event.requestId, event]));
+  const callsByRequest = new Map();
+  for (const event of ledger.filter((candidate) => candidate?.type === 'tool_call' && typeof candidate.requestId === 'string')) {
+    if (!callsByRequest.has(event.requestId)) callsByRequest.set(event.requestId, []);
+    callsByRequest.get(event.requestId).push(event);
+  }
+  const terminalsByRequest = new Map();
+  for (const event of ledger.filter((candidate) => ['response', 'error'].includes(candidate?.type) && typeof candidate.requestId === 'string')) {
+    if (!terminalsByRequest.has(event.requestId)) terminalsByRequest.set(event.requestId, []);
+    terminalsByRequest.get(event.requestId).push(event);
+  }
+
+  const phaseByRequest = new Map();
+  const phases = {};
+  for (const request of requests) {
+    if (!requestById.has(request.requestId)) {
+      phases.unknown ??= freshPhase();
+      phases.unknown.logicalRequests += 1;
+      continue;
+    }
+    const selected = new Set((callsByRequest.get(request.requestId) ?? []).map(phaseForToolCall));
+    selected.delete('unknown');
+    let phase;
+    if (selected.size > 1) phase = 'mixed';
+    else if (selected.size === 1) phase = [...selected][0];
+    else {
+      const terminals = terminalsByRequest.get(request.requestId) ?? [];
+      phase = terminals.some((event) => event.type === 'response') ? 'finalization' : 'unknown';
+    }
+    phaseByRequest.set(request.requestId, phase);
+    phases[phase] ??= freshPhase();
+    phases[phase].logicalRequests += 1;
+  }
+
+  let matchedUsageEvents = 0;
+  for (const event of usageEvents) {
+    const phase = phaseByRequest.get(event.requestId) ?? 'unknown';
+    if (requestById.has(event.requestId)) matchedUsageEvents += 1;
+    phases[phase] ??= freshPhase();
+    addUsageToPhase(phases[phase], event.usage);
+  }
+  for (const phase of Object.values(phases)) closeEmptyPhaseFields(phase);
+
+  const validManifestRequests = requests.filter((event) => promptComponentManifestValid(event.promptComponentManifest));
+  const manifests = validManifestRequests.map((event) => event.promptComponentManifest);
+  const manifestHashes = new Set(manifests.map(stableHash));
+  const manifestContractComplete = requests.length > 0 &&
+    manifests.length === requests.length && manifestHashes.size === 1;
+  const manifestComplete = requestIdentitiesComplete && manifestContractComplete;
+  const completeBuckets = requests.filter(promptBucketsValid);
+  const bucketContractComplete = requests.length > 0 && completeBuckets.length === requests.length;
+  const bucketsComplete = requestIdentitiesComplete && bucketContractComplete;
+  const payloadChars = requestIdentitiesComplete && requests.length > 0
+    ? safeIntegerSum(requests.map((event) => event.payloadChars))
+    : null;
+  let cumulativeBucketsComplete = bucketsComplete;
+  let cumulative;
+  if (bucketsComplete) {
+    cumulative = {
+      payloadChars,
+      toolResultHistoryBySource: {},
+    };
+    for (const [source, target] of PROMPT_BUCKET_FIELDS) {
+      cumulative[target] = safeIntegerSum(requests.map((event) => event.promptBuckets[source]));
+      if (cumulative[target] == null) cumulativeBucketsComplete = false;
+    }
+    for (const event of requests) {
+      for (const [source, chars] of Object.entries(event.promptBuckets.toolResultHistoryBySource ?? {})) {
+        const total = safeIntegerSum([cumulative.toolResultHistoryBySource[source] ?? 0, chars]);
+        if (total == null) {
+          cumulativeBucketsComplete = false;
+          break;
+        }
+        cumulative.toolResultHistoryBySource[source] = total;
+      }
+      if (!cumulativeBucketsComplete) break;
+    }
+    if (payloadChars == null || !cumulativeBucketsComplete) {
+      cumulativeBucketsComplete = false;
+      cumulative = blankPromptCumulative(payloadChars);
+    }
+  } else {
+    cumulative = blankPromptCumulative(payloadChars);
+  }
+
+  const totals = freshPhase();
+  totals.logicalRequests = requests.length;
+  for (const event of usageEvents) addUsageToPhase(totals, event.usage);
+  closeEmptyPhaseFields(totals);
+
+  const reconciliationChecks = {
+    modelRequests: authoritativeTotals != null && authoritativeTotals.modelRequests === requests.length,
+    promptTokens: authoritativeTotals != null && sameNumber(authoritativeTotals.promptTokens, totals.promptTokens),
+    outputTokens: authoritativeTotals != null && sameNumber(authoritativeTotals.outputTokens, totals.outputTokens),
+    localCostUsd: authoritativeTotals != null && sameNumber(authoritativeTotals.localCostUsd, totals.localCostUsd),
+    reconciledCostUsd: authoritativeTotals != null && sameNumber(authoritativeTotals.reconciledCostUsd, totals.reconciledCostUsd),
+  };
+  if (authoritativeTotals?.cachedTokensComplete === true) {
+    reconciliationChecks.cachedPromptTokens = sameNumber(authoritativeTotals.cachedTokens, totals.cachedPromptTokens);
+  }
+  if (authoritativeTotals?.reasoningTokensComplete === true) {
+    reconciliationChecks.reasoningTokens = sameNumber(authoritativeTotals.reasoningTokens, totals.reasoningTokens);
+  }
+  if (authoritativeTotals?.providerCostComplete === true && authoritativeTotals.providerCostUsd != null) {
+    reconciliationChecks.providerReportedCostUsd = sameNumber(authoritativeTotals.providerCostUsd, totals.providerReportedCostUsd);
+  }
+  const reconciliationComplete = Object.values(reconciliationChecks).every(Boolean) &&
+    authoritativeTotals?.usageComplete === true &&
+    authoritativeTotals?.billingComplete === true &&
+    authoritativeTotals?.costComplete === true;
+
+  const reasons = [];
+  if (invalidRequestIdentities > 0) reasons.push('request identity contract missing or malformed');
+  if (duplicateRequestIdentities > 0) reasons.push('duplicate request identities violate the request identity contract');
+  if (!manifestContractComplete) reasons.push('prompt component manifest contract missing, malformed, or inconsistent');
+  if (!bucketContractComplete) reasons.push('prompt bucket contract missing or malformed');
+  if (bucketsComplete && !cumulativeBucketsComplete) reasons.push('prompt bucket cumulative totals exceed the safe integer range');
+  if (matchedUsageEvents !== usageEvents.length) reasons.push('provider usage event unmatched to a request');
+  if (phaseByRequest.size && [...phaseByRequest.values()].includes('unknown')) reasons.push('one or more request phases are unknown');
+  if (!reconciliationComplete) reasons.push('phase usage does not reconcile to authoritative totals');
+  const complete = reasons.length === 0;
+  for (const phase of Object.values(phases)) phase.status = complete ? 'measured' : 'partial';
+  for (const name of ECONOMIC_PHASES) {
+    if (!phases[name]) phases[name] = unavailablePhase(complete ? 'not_exercised' : 'unavailable');
+  }
+  return {
+    coverage: {
+      status: complete ? 'complete' : 'partial',
+      complete,
+      requestEvents: requests.length,
+      usageEvents: usageEvents.length,
+      matchedUsageEvents,
+      reason: complete ? null : reasons.join('; '),
+    },
+    prompt: {
+      manifest: manifestComplete ? structuredClone(manifests[0]) : null,
+      coverage: {
+        complete: manifestComplete && cumulativeBucketsComplete,
+        requests: requests.length,
+        requestsWithCompleteBuckets: completeBuckets.length,
+      },
+      cumulative,
+    },
+    phases,
+    rollups: { 'task-execution': taskExecutionRollup(phases, complete ? 'not_exercised' : 'unavailable') },
+    totals,
+    reconciliation: {
+      complete: reconciliationComplete,
+      checks: reconciliationChecks,
+      reason: reconciliationComplete ? null : 'one or more phase totals do not match the authoritative telemetry ledger',
+    },
   };
 }
 
@@ -586,6 +982,108 @@ function efficiencyOf(done, startedAt, endedAt) {
  * per numeric efficiency field. Budget charging is untouched — every trial charges
  * as it runs; the aggregate represents a typical trial, not the sum.
  */
+function medianNumeric(values) {
+  const nums = values.filter((value) => typeof value === 'number' && Number.isFinite(value)).sort((a, b) => a - b);
+  if (!nums.length) return null;
+  const middle = Math.floor(nums.length / 2);
+  return nums.length % 2 ? nums[middle] : (nums[middle - 1] + nums[middle]) / 2;
+}
+
+function medianStructure(objects) {
+  const selected = objects.filter((value) => value && typeof value === 'object' && !Array.isArray(value));
+  if (!selected.length) return null;
+  const output = {};
+  const keys = new Set(selected.flatMap((value) => Object.keys(value)));
+  for (const key of keys) {
+    const values = selected.map((value) => value[key]).filter((value) => value !== undefined);
+    const numeric = values.filter((value) => typeof value === 'number' && Number.isFinite(value));
+    const booleans = values.filter((value) => typeof value === 'boolean');
+    const nested = values.filter((value) => value && typeof value === 'object' && !Array.isArray(value));
+    const strings = values.filter((value) => typeof value === 'string');
+    if (numeric.length) output[key] = medianNumeric(numeric);
+    else if (booleans.length) {
+      output[key] = /complete$/i.test(key)
+        ? booleans.length === selected.length && booleans.every(Boolean)
+        : booleans.every((value) => value === booleans[0]) ? booleans[0] : null;
+    } else if (nested.length) output[key] = medianStructure(nested);
+    else if (strings.length) output[key] = strings.length === selected.length && strings.every((value) => value === strings[0])
+      ? strings[0]
+      : null;
+    else output[key] = null;
+  }
+  return output;
+}
+
+function aggregateEconomics(numericDocs, allDocs) {
+  const numeric = numericDocs.map((doc) => doc.economics).filter(Boolean);
+  const all = allDocs.map((doc) => doc.economics).filter(Boolean);
+  if (!all.length) return null;
+  const allComplete = all.length === allDocs.length && all.every((economics) => economics.coverage?.complete === true);
+  const allUnavailable = all.length === allDocs.length && all.every((economics) => economics.coverage?.status === 'unavailable');
+  const manifests = numeric.map((economics) => economics.prompt?.manifest).filter(Boolean);
+  const stableManifest = manifests.length === numeric.length && new Set(manifests.map(stableHash)).size === 1
+    ? structuredClone(manifests[0])
+    : null;
+  const phases = {};
+  const phaseNames = new Set(numeric.flatMap((economics) => Object.keys(economics.phases ?? {})));
+  for (const name of phaseNames) {
+    const entries = numeric.map((economics) => economics.phases?.[name]).filter(Boolean);
+    const statuses = entries.map((entry) => entry.status).filter((value) => typeof value === 'string');
+    phases[name] = {
+      ...medianStructure(entries),
+      status: statuses.length === entries.length && statuses.every((value) => value === statuses[0])
+        ? statuses[0]
+        : 'aggregate',
+      repetitionsObserved: entries.length,
+      repetitionCoverage: numeric.length ? entries.length / numeric.length : null,
+    };
+  }
+  const taskExecutionEntries = numeric.map((economics) => economics.rollups?.['task-execution']).filter(Boolean);
+  const taskExecutionStatuses = taskExecutionEntries
+    .map((entry) => entry.status)
+    .filter((value) => typeof value === 'string');
+  const taskExecutionRollup = taskExecutionEntries.length ? {
+    ...medianStructure(taskExecutionEntries),
+    status: taskExecutionStatuses.length === taskExecutionEntries.length &&
+      taskExecutionStatuses.every((value) => value === taskExecutionStatuses[0])
+      ? taskExecutionStatuses[0]
+      : 'aggregate',
+    repetitionsObserved: taskExecutionEntries.length,
+    repetitionCoverage: numeric.length ? taskExecutionEntries.length / numeric.length : null,
+  } : null;
+  const checks = medianStructure(all.map((economics) => economics.reconciliation?.checks).filter(Boolean));
+  return {
+    aggregation: 'median-per-valid-repetition',
+    coverage: {
+      status: allComplete ? 'complete' : allUnavailable ? 'unavailable' : 'partial',
+      complete: allComplete,
+      requestEvents: medianNumeric(numeric.map((economics) => economics.coverage?.requestEvents)),
+      usageEvents: medianNumeric(numeric.map((economics) => economics.coverage?.usageEvents)),
+      matchedUsageEvents: medianNumeric(numeric.map((economics) => economics.coverage?.matchedUsageEvents)),
+      reason: allComplete ? null : 'one or more repetitions have incomplete prompt or phase economics',
+    },
+    prompt: {
+      manifest: stableManifest,
+      coverage: {
+        complete: all.length === allDocs.length && all.every((economics) => economics.prompt?.coverage?.complete === true),
+        requests: medianNumeric(numeric.map((economics) => economics.prompt?.coverage?.requests)),
+        requestsWithCompleteBuckets: medianNumeric(numeric.map((economics) => economics.prompt?.coverage?.requestsWithCompleteBuckets)),
+      },
+      cumulative: medianStructure(numeric.map((economics) => economics.prompt?.cumulative).filter(Boolean)),
+    },
+    phases,
+    rollups: { 'task-execution': taskExecutionRollup },
+    totals: medianStructure(numeric.map((economics) => economics.totals).filter(Boolean)),
+    reconciliation: {
+      complete: all.length === allDocs.length && all.every((economics) => economics.reconciliation?.complete === true),
+      checks,
+      reason: all.length === allDocs.length && all.every((economics) => economics.reconciliation?.complete === true)
+        ? null
+        : 'one or more repetitions do not reconcile phase usage to authoritative totals',
+    },
+  };
+}
+
 export function aggregateRepetitionDocs(docs, { validMask = null } = {}) {
   if (!docs.length) throw new Error('at least one repetition document is required');
   if (validMask && validMask.length !== docs.length) throw new Error('validMask must align with repetition documents');
@@ -629,6 +1127,7 @@ export function aggregateRepetitionDocs(docs, { validMask = null } = {}) {
     (sum, d) => sum + (Number.isFinite(d.efficiency?.missingUsage) ? d.efficiency.missingUsage : 0),
     0
   );
+  base.economics = aggregateEconomics(valid.length ? valid : docs, docs);
   for (const key of Object.keys(base.harnessBehavior ?? {})) {
     const values = docs.map((doc) => doc.harnessBehavior?.[key]);
     const numeric = values.filter((value) => typeof value === 'number' && Number.isFinite(value));
@@ -745,9 +1244,19 @@ export function aggregateRepetitionDocs(docs, { validMask = null } = {}) {
         actualToolCount: null,
         expectedFinishToolSchemaHash: null,
         expectedFinishToolCount: null,
+        expectedPromptComponentManifestHash: null,
+        actualPromptComponentManifestHash: null,
         requestContractsChecked: runtimeEvidence.reduce((total, entry) => total + (entry.requestContractsChecked ?? 0), 0),
         postVerifyRequestContracts: runtimeEvidence.reduce((total, entry) => total + (entry.postVerifyRequestContracts ?? 0), 0),
         requestPromptMismatches: runtimeEvidence.reduce((total, entry) => total + (entry.requestPromptMismatches ?? 0), 0),
+        requestPromptManifestMismatches: runtimeEvidence.reduce(
+          (total, entry) => total + (entry.requestPromptManifestMismatches ?? 0),
+          0
+        ),
+        requestPromptBucketMismatches: runtimeEvidence.reduce(
+          (total, entry) => total + (entry.requestPromptBucketMismatches ?? 0),
+          0
+        ),
         requestControlMismatches: runtimeEvidence.reduce((total, entry) => total + (entry.requestControlMismatches ?? 0), 0),
         requestContractMismatches: runtimeEvidence.reduce((total, entry) => total + (entry.requestContractMismatches ?? 0), 0),
         expectedRequestControlHash: null,
@@ -833,13 +1342,16 @@ export function buildRunDoc({
   endedAt,
   identity = {},
   conditionDocument = null,
-  hostId = 'openrouter-kimi',
+  hostId,
   bundleManifestHash = null,
   expectedInstructionHash = null,
   mountPolicyEvidence = null,
   sandboxIdentity = null,
   runnerVersion = `harbor-${SUPPORTED_HARBOR_VERSION}/bridge-1`,
 }) {
+  if (typeof hostId !== 'string' || hostId.length === 0) {
+    throw new Error('hostId is required when building a run document');
+  }
   const trustedAssertions = evidence?.assertionEvidenceTrusted === true
     ? evidence.pytest ?? null
     : null;
@@ -898,10 +1410,6 @@ export function buildRunDoc({
   const malformedToolResultEvidence = toolResults.filter((event) => !completeToolResultEvidence(event)).length;
   const invalidToolArguments = toolCalls.filter((event) => event.argumentsValid === false).length;
   const incompleteToolContainment = toolResults.filter((event) => event.containmentComplete !== true).length;
-  const harnessExecutableCall = (event) =>
-    event.immutableHarnessCli === true ||
-    event.program === 'harness' ||
-    event.program === 'harness-cli';
   const genericHarnessCalls = condition === 'generic' ? toolCalls.filter(harnessExecutableCall) : [];
   const resultForCall = (call) => toolResults.find((result) => toolEventIdentity(result) === toolEventIdentity(call));
   const controlContaminationAttempted = genericHarnessCalls.length > 0;
@@ -953,6 +1461,15 @@ export function buildRunDoc({
     unexpectedRequestFields: [],
   } : null;
   const expectedRequestControlHash = expectedRequestControls ? stableHash(expectedRequestControls) : null;
+  const expectedPromptComponentManifest = conditionDocument?.promptComponentManifest ?? null;
+  const expectedPromptComponentManifestHash = expectedPromptComponentManifest
+    ? stableHash(expectedPromptComponentManifest)
+    : null;
+  const runtimePromptComponentManifest = done?.runtime?.promptComponentManifest ?? null;
+  const claimedRuntimePromptComponentManifestHash = done?.runtime?.promptComponentManifestHash ?? null;
+  const actualPromptComponentManifestHash = runtimePromptComponentManifest
+    ? stableHash(runtimePromptComponentManifest)
+    : null;
   const requestContracts = providerEvents.filter((event) => event.type === 'request');
   const firstFullRequest = requestContracts.find((event) => event.toolMode === 'full') ?? null;
   const actualSystemPromptHash = SHA256_HEX.test(String(firstFullRequest?.systemPromptHash ?? ''))
@@ -1010,6 +1527,12 @@ export function buildRunDoc({
     Array.isArray(event.unexpectedRequestFields) &&
     event.unexpectedRequestFields.every((field) => typeof field === 'string') &&
     event.requestControlHash === stableHash(requestControlsOf(event));
+  const promptManifestEvidencePresent = promptComponentManifestValid;
+  const promptManifestMatchesExpected = (manifest) =>
+    promptManifestEvidencePresent(manifest) && stableHash(manifest) === expectedPromptComponentManifestHash;
+  const promptBucketEvidencePresent = (event) => event.promptBuckets != null &&
+    typeof event.promptBuckets === 'object' && Number.isInteger(event.payloadChars) && event.payloadChars >= 0;
+  const promptBucketValid = promptBucketsValid;
   const requestContractComplete = requestContracts.length > 0 && requestContracts.every((event) =>
     ['full', 'finish-only'].includes(event.toolMode) &&
     SHA256_HEX.test(String(event.toolSchemaHash ?? '')) &&
@@ -1017,9 +1540,15 @@ export function buildRunDoc({
     SHA256_HEX.test(String(event.instructionHash ?? '')) &&
     requestPromptShapeValid(event) &&
     requestControlShapeValid(event) &&
+    promptManifestEvidencePresent(event.promptComponentManifest) &&
+    promptBucketEvidencePresent(event) &&
     Number.isInteger(event.toolCount) && event.toolCount >= 0 &&
     typeof event.postVerify === 'boolean'
   );
+  const requestPromptManifestMismatches = requestContracts.filter((event) =>
+    !promptManifestMatchesExpected(event.promptComponentManifest)
+  ).length;
+  const requestPromptBucketMismatches = requestContracts.filter((event) => !promptBucketValid(event)).length;
   const requestPromptMismatches = requestContracts.filter((event) =>
     event.systemPromptHash !== expectedSystemPromptHash ||
     event.instructionHash !== normalizedExpectedInstructionHash ||
@@ -1044,6 +1573,8 @@ export function buildRunDoc({
   }).length;
   const runtimeContractComplete = Boolean(
     expectedSystemPromptHash && expectedToolSchemaHash && Number.isInteger(expectedToolCount) &&
+    expectedPromptComponentManifestHash && actualPromptComponentManifestHash &&
+    SHA256_HEX.test(String(claimedRuntimePromptComponentManifestHash ?? '')) &&
     actualSystemPromptHash && actualToolSchemaHash && instructionHash && normalizedExpectedInstructionHash &&
     Number.isInteger(actualToolCount) && requestContractComplete
   );
@@ -1052,6 +1583,10 @@ export function buildRunDoc({
     actualToolSchemaHash === expectedToolSchemaHash &&
     actualToolCount === expectedToolCount &&
     instructionHash === normalizedExpectedInstructionHash &&
+    actualPromptComponentManifestHash === expectedPromptComponentManifestHash &&
+    claimedRuntimePromptComponentManifestHash === actualPromptComponentManifestHash &&
+    requestPromptManifestMismatches === 0 &&
+    requestPromptBucketMismatches === 0 &&
     requestControlMismatches === 0 &&
     requestContractMismatches === 0;
   const runtimeContractReason = !runtimeContractComplete
@@ -1063,8 +1598,14 @@ export function buildRunDoc({
           actualToolSchemaHash !== expectedToolSchemaHash ? 'tool-schema-hash-mismatch' : null,
           actualToolCount !== expectedToolCount ? 'tool-count-mismatch' : null,
           instructionHash !== normalizedExpectedInstructionHash ? 'instruction-hash-mismatch' : null,
+          actualPromptComponentManifestHash !== expectedPromptComponentManifestHash ||
+            claimedRuntimePromptComponentManifestHash !== actualPromptComponentManifestHash
+            ? 'runtime-prompt-manifest-mismatch'
+            : null,
           !requestContractComplete ? 'request-tool-contract-missing-or-malformed' : null,
           requestPromptMismatches !== 0 ? 'request-prompt-contract-mismatch' : null,
+          requestPromptManifestMismatches !== 0 ? 'request-prompt-manifest-mismatch' : null,
+          requestPromptBucketMismatches !== 0 ? 'request-prompt-bucket-mismatch' : null,
           requestControlMismatches !== 0 ? 'request-control-contract-mismatch' : null,
           requestContractMismatches !== 0 ? 'request-tool-contract-mismatch' : null,
         ].filter(Boolean).join(';');
@@ -1143,8 +1684,9 @@ export function buildRunDoc({
       completedWithinBudget: stopReason !== 'budget_exhausted',
     },
     efficiency: efficiencyOf(done, startedAt, endedAt),
+    economics: promptAndPhaseEconomicsOf(telemetryEvents, telemetryTotals),
     harnessBehavior: deriveHarnessBehavior(condition, telemetryEvents, harnessEvents, harnessEventEvidence, done, telemetryLedgerPresent),
-    enforcementFidelity: enforcementFidelityOf(condition, done, harnessEvents),
+    enforcementFidelity: enforcementFidelityOf(condition, done, harnessEvents, toolEvents),
     workspaceEvidence,
     observability: {
       providerEvents,
@@ -1184,9 +1726,13 @@ export function buildRunDoc({
         actualToolCount,
         expectedFinishToolSchemaHash,
         expectedFinishToolCount,
+        expectedPromptComponentManifestHash,
+        actualPromptComponentManifestHash,
         requestContractsChecked: requestContracts.length,
         postVerifyRequestContracts: requestContracts.filter((event) => event.postVerify === true).length,
         requestPromptMismatches,
+        requestPromptManifestMismatches,
+        requestPromptBucketMismatches,
         requestControlMismatches,
         requestContractMismatches,
         expectedRequestControlHash,
@@ -1294,7 +1840,22 @@ export function buildLiveSteps({
   }
   // ?? null: an absent key must NOT fall back to the process environment —
   // the injected env is the whole truth for credential decisions here.
-  const kimiHost = createKimiHost({ apiKey: env.OPENROUTER_API_KEY ?? null });
+  const controlledLane = config.controlledLane;
+  if (controlledLane == null) {
+    throw new Error('controlledLane is required; historical Kimi compatibility must be selected explicitly');
+  }
+  if (!['openrouter-controlled', 'openrouter-kimi'].includes(controlledLane?.host)) {
+    throw new Error(`unsupported controlled lane host: ${controlledLane?.host ?? 'missing'}`);
+  }
+  if (typeof controlledLane?.profileId !== 'string' || controlledLane.profileId.length === 0) {
+    throw new Error('controlledLane.profileId must select a registered model profile');
+  }
+  if (controlledLane.host === 'openrouter-kimi' && controlledLane.profileId !== 'kimi-k2.7-code') {
+    throw new Error('the historical openrouter-kimi host supports only kimi-k2.7-code');
+  }
+  const controlledHost = controlledLane.host === 'openrouter-controlled'
+    ? createControlledHost({ profileId: controlledLane.profileId, apiKey: env.OPENROUTER_API_KEY ?? null })
+    : createKimiHost({ apiKey: env.OPENROUTER_API_KEY ?? null });
   const gemmaHost = createGemmaHost();
   const limitsFor = (profile) => ({
     maxSteps: 60,
@@ -1369,9 +1930,33 @@ export function buildLiveSteps({
 
   async function providerSpendGuard() {
     const ceilingUsd = config.budget?.releaseCeilingUsd;
+    const configuredHardLimitUsd = config.budget?.providerHardLimitUsd;
+    const evaluationMode = config.evaluationScope?.mode ?? 'release';
+    const keyFingerprint = releaseScopedKeyFingerprint(env.OPENROUTER_API_KEY, releaseSha);
+    const expectedQualificationFingerprint = config.qualificationBaseline?.providerKeyFingerprint ?? null;
     const checkedAt = now();
-    if (typeof ceilingUsd !== 'number' || !Number.isFinite(ceilingUsd) || ceilingUsd < 0) {
+    if (ceilingUsd == null) {
       return { ok: true, evidence: { verified: false, required: false, reason: 'release-ceiling-not-configured', checkedAt } };
+    }
+    const providerPolicy = resolveProviderSpendPolicy({
+      evaluationMode,
+      ceilingUsd,
+      configuredHardLimitUsd,
+      expectedQualificationFingerprint,
+    });
+    if (!providerPolicy.ok) {
+      return {
+        ok: false,
+        reason: providerPolicy.errors.join('; '),
+        evidence: {
+          verified: false,
+          required: true,
+          ceilingUsd: providerPolicy.ceilingUsd,
+          hardLimitUsd: providerPolicy.hardLimitUsd,
+          keyFingerprint,
+          checkedAt,
+        },
+      };
     }
     if (typeof fetchImpl !== 'function') {
       return { ok: false, reason: 'provider key limit could not be verified', evidence: { verified: false, required: true, ceilingUsd, checkedAt } };
@@ -1417,27 +2002,23 @@ export function buildLiveSteps({
         evidence: { verified: false, required: true, ceilingUsd, checkedAt },
       };
     }
-    const limitUsd = metadata?.limit;
-    const limitRemainingUsd = metadata?.limit_remaining;
-    const reset = metadata?.limit_reset;
-    const finiteLimit = typeof limitUsd === 'number' && Number.isFinite(limitUsd) && limitUsd >= 0;
-    const finiteRemaining = typeof limitRemainingUsd === 'number' && Number.isFinite(limitRemainingUsd) && limitRemainingUsd >= 0;
-    const noReset = reset === null;
-    const limitMatchesCeiling = finiteLimit && limitUsd === ceilingUsd;
-    const allowanceSufficient = finiteRemaining && limitRemainingUsd === ceilingUsd;
+    const verdict = evaluateProviderSpendEvidence({
+      policy: providerPolicy,
+      keyFingerprint,
+      observed: {
+        limitUsd: metadata?.limit,
+        limitRemainingUsd: metadata?.limit_remaining,
+        reset: metadata?.limit_reset,
+      },
+    });
     const evidence = {
-      verified: finiteLimit && finiteRemaining && noReset && limitMatchesCeiling && allowanceSufficient,
-      required: true,
-      limitUsd: finiteLimit ? limitUsd : null,
-      limitRemainingUsd: finiteRemaining ? limitRemainingUsd : null,
-      reset: reset ?? null,
-      ceilingUsd,
+      ...verdict.evidence,
       checkedAt,
     };
     if (!evidence.verified) {
       return {
         ok: false,
-        reason: 'provider limit must use a fresh dedicated no-reset key capped exactly at the release ceiling',
+        reason: verdict.reason,
         evidence,
       };
     }
@@ -1475,9 +2056,9 @@ export function buildLiveSteps({
     else if (observedHarborVersion !== SUPPORTED_HARBOR_VERSION) {
       missing.push(`harbor CLI ${SUPPORTED_HARBOR_VERSION} required`);
     }
-    missing.push(...kimiHost.validateCredentials().missing);
+    missing.push(...controlledHost.validateCredentials().missing);
     let providerGuard = { ok: true, evidence: { verified: false, required: false, reason: 'credentials-unavailable' } };
-    if (kimiHost.validateCredentials().ok) {
+    if (controlledHost.validateCredentials().ok) {
       providerGuard = await providerSpendGuard();
       if (!providerGuard.ok) missing.push(providerGuard.reason);
     }
@@ -1684,7 +2265,7 @@ export function buildLiveSteps({
         mountProbeTargets: [...new Set([...commonTargets, ...treatmentOnlyTargets])],
       },
       profileId: profile.id,
-      apiKeyEnv: evalHost.id === 'openrouter-kimi' ? 'OPENROUTER_API_KEY' : 'HARNESS_EVAL_LOCAL_API_KEY',
+      apiKeyEnv: profile.host === 'openrouter' ? 'OPENROUTER_API_KEY' : 'HARNESS_EVAL_LOCAL_API_KEY',
       // harbor_agent.py launches the provider bridge as a host-side Node
       // subprocess. Only exec tool calls enter the Harbor sandbox, so a local
       // Ollama endpoint must stay on host loopback.
@@ -1722,7 +2303,7 @@ export function buildLiveSteps({
       timeoutMs: profile.timeoutMs + 10 * 60_000,
       spawnEnv: spawnEnvironment({
         bridge: true,
-        apiKey: evalHost.id === 'openrouter-kimi' ? env.OPENROUTER_API_KEY : null,
+        apiKey: profile.host === 'openrouter' ? env.OPENROUTER_API_KEY : null,
       }),
     });
     const endedAt = now();
@@ -1920,6 +2501,9 @@ export function buildLiveSteps({
     };
     const integrityFailure = BRIDGE_INTEGRITY_STOP_REASONS.has(doc.correctness.exitReason) ||
       doc.workspaceEvidence?.available !== true ||
+      doc.economics?.coverage?.complete !== true ||
+      doc.economics?.prompt?.coverage?.complete !== true ||
+      doc.economics?.reconciliation?.complete !== true ||
       doc.observability.runtimeContractEvidence.matchesExpected !== true ||
       doc.observability.mountPolicyEvidence?.complete !== true ||
       doc.observability.mountPolicyEvidence?.matchesCondition !== true ||
@@ -2266,16 +2850,13 @@ export function buildLiveSteps({
     return bundle;
   }
 
-  return {
-    environment,
-    taskLock,
-    /** One fresh generic+harness pair per pinned task. */
-    kimiPair: async (budget) => {
-      if (!kimiHost.validateCredentials().ok) return null;
+  /** One fresh Generic/Harness pair per pinned task. */
+  const controlledPair = async (budget) => {
+      if (!controlledHost.validateCredentials().ok) return null;
       const tasks = tasksOf(lock);
-      const profile = kimiHost.profile;
+      const profile = controlledHost.profile;
       const configuredRerunUsd = Number(config.budget?.rerunUsd);
-      const rerunnableArmCeiling = Number.isFinite(configuredRerunUsd) && configuredRerunUsd >= 0
+      const rerunnableArmCeiling = Number.isFinite(configuredRerunUsd) && configuredRerunUsd > 0
         ? configuredRerunUsd / 2
         : Number.POSITIVE_INFINITY;
       const configuredArmCeiling = Number(config.budget?.controlledArmCeilingUsd);
@@ -2290,36 +2871,46 @@ export function buildLiveSteps({
       try {
         ensureBundle();
       } catch (error) {
-        return [failedPair({ evalHost: kimiHost, task: tasks[0]?.task ?? 'unknown', budget, attempt: 'a', n: repetitionCount, error })];
+        return [failedPair({ evalHost: controlledHost, task: tasks[0]?.task ?? 'unknown', budget, attempt: 'a', n: repetitionCount, error })];
       }
       for (const entry of tasks) {
         if (paidSchedulingStop) break;
         primaryTrialCeilingByTask.set(entry.task, trialCeilingUsd);
         try {
-          pairs.push(taskPair({ evalHost: kimiHost, task: entry.task, budget, attempt: 'a', trialCeilingUsd }));
+          pairs.push(taskPair({ evalHost: controlledHost, task: entry.task, budget, attempt: 'a', trialCeilingUsd }));
         } catch (error) {
-          pairs.push(failedPair({ evalHost: kimiHost, task: entry.task, budget, attempt: 'a', n: repetitionCount, error }));
+          pairs.push(failedPair({ evalHost: controlledHost, task: entry.task, budget, attempt: 'a', n: repetitionCount, error }));
           break;
         }
       }
       return pairs;
-    },
-    /** §9 conditional rerun: ONE complete fresh pair for ONE regressed task (never repetition-multiplied). */
-    rerunKimiPair: async (budget, task) => {
-      if (!kimiHost.validateCredentials().ok) return null;
+    };
+  /** §9 conditional rerun: one fresh pair for one task (never repetition-multiplied). */
+  const rerunControlledPair = async (budget, task) => {
+      if (!controlledHost.validateCredentials().ok) return null;
       if (paidSchedulingStop) return null;
       const primaryTrialCeilingUsd = primaryTrialCeilingByTask.get(task);
       if (!Number.isFinite(primaryTrialCeilingUsd)) return null;
-      const profile = kimiHost.profile;
+      const profile = controlledHost.profile;
       const trialCeilingUsd = Math.min(profile.trialCeilingUsd, budget.remainingUsd() / 2, primaryTrialCeilingUsd);
       const rerunTask = task ?? tasksOf(lock)[0].task;
       try {
         ensureBundle();
-        return taskPair({ evalHost: kimiHost, task: rerunTask, budget, attempt: 'b', trialCeilingUsd, n: 1 });
+        return taskPair({ evalHost: controlledHost, task: rerunTask, budget, attempt: 'b', trialCeilingUsd, n: 1 });
       } catch (error) {
-        return failedPair({ evalHost: kimiHost, task: rerunTask, budget, attempt: 'b', n: 1, error });
+        return failedPair({ evalHost: controlledHost, task: rerunTask, budget, attempt: 'b', n: 1, error });
       }
-    },
+    };
+
+  return {
+    environment,
+    taskLock,
+    controlledPair,
+    rerunControlledPair,
+    // Compatibility aliases for callers created before the controlled lane
+    // was separated from its historical Kimi profile.
+    kimiPair: controlledPair,
+    rerunKimiPair: rerunControlledPair,
     frontierPair: null,
     // The local floor is deliberately opt-in: it adds wall time, not API
     // spend, and only runs the anchor task so an M3 Max is not turned into a

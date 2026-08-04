@@ -8,6 +8,7 @@
  * they are real product overhead.
  */
 import { NEUTRAL_SYSTEM_PROMPT } from './generic-condition.mjs';
+import { buildPromptComponentManifest } from '../../lib/prompt-manifest.mjs';
 import { activationCommands, BUNDLE_MOUNT_TARGET } from './provision.mjs';
 
 // The task image has no Node and no Harness; activation installs the mounted
@@ -23,11 +24,16 @@ export function buildHarnessCondition({ instruction, limits, engineerContract, g
   if (!instruction) throw new Error('instruction is required');
   if (!limits) throw new Error('limits is required');
   if (!engineerContract) throw new Error('engineerContract is required');
-  const sections = [NEUTRAL_SYSTEM_PROMPT, engineerContract, IMMUTABLE_CLI_GUIDANCE];
-  if (guidance) sections.push(guidance);
+  const prompt = buildPromptComponentManifest([
+    { id: 'neutral-system', content: NEUTRAL_SYSTEM_PROMPT },
+    { id: 'engineer-contract', content: engineerContract },
+    { id: 'immutable-cli-guidance', content: IMMUTABLE_CLI_GUIDANCE },
+    { id: 'guidance-index', content: guidance },
+  ]);
   return {
     id: 'harness',
-    systemPrompt: sections.join('\n\n'),
+    systemPrompt: prompt.systemPrompt,
+    promptComponentManifest: prompt.manifest,
     instruction,
     setupCommands: [...activationCommands],
     limits: { ...limits },

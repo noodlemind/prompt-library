@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
-import { AGENT_REF, buildLiveSteps, aggregateRepetitionDocs, buildRunDoc, instructionAsDeliveredByHarbor } from '../../../evals/external/terminal_bench/live-steps.mjs';
+import { AGENT_REF, buildLiveSteps, aggregateRepetitionDocs, buildRunDoc, instructionAsDeliveredByHarbor, promptAndPhaseEconomicsOf } from '../../../evals/external/terminal_bench/live-steps.mjs';
 import { runtimeBridgeTools } from '../../../evals/external/terminal_bench/agent.mjs';
 import { BUNDLE_MOUNT_TARGET, CONDITION_INPUTS_FILE, EVAL_RUNTIME_MOUNT_TARGET, harnessWrapperScript, activationCommands } from '../../../evals/external/terminal_bench/provision.mjs';
 import { stampTaskLock, verifyTaskAgainstLock } from '../../../evals/external/terminal_bench/harbor-adapter.mjs';
@@ -12,9 +12,17 @@ import { hashTree, parseReward } from '../../../evals/external/terminal_bench/ve
 import { efficiencyDelta, validateAgainstSchema, runRelease } from '../../../evals/release.mjs';
 import { createBudget } from '../../../evals/lib/budget.mjs';
 import { getProfile } from '../../../evals/lib/model-profiles.mjs';
+import {
+  ECONOMIC_PHASES,
+  ECONOMIC_PHASE_FIELDS,
+  SOURCE_USAGE_TO_ECONOMIC_FIELD,
+  CONTEXT_SOURCE_TO_ECONOMIC_PHASE,
+  economicPhaseForContextSource,
+} from '../../../evals/lib/economic-phases.mjs';
 
 const RUN_SCHEMA = JSON.parse(fs.readFileSync(new URL('../../../evals/schema/eval-run.v1.schema.json', import.meta.url), 'utf8'));
 const BASE_LOCK = JSON.parse(fs.readFileSync(new URL('../../../evals/external/terminal_bench/task-lock.json', import.meta.url), 'utf8'));
+const CONTROLLED_LANE = { host: 'openrouter-controlled', profileId: 'kimi-k2.7-code' };
 const fakeHarborIdentity = () => ({ path: '/opt/test/harbor', sha256: 'e'.repeat(64) });
 const fakeSandboxIdentity = ({ sandbox }) => ({
   ...sandbox,
@@ -22,6 +30,52 @@ const fakeSandboxIdentity = ({ sandbox }) => ({
   observedImageId: sandbox.imageId,
   observedPlatform: sandbox.platform,
   identityAttested: true,
+});
+
+test('eval-run schema pins the prompt-manifest separator to the builder contract', () => {
+  assert.deepEqual(RUN_SCHEMA.$defs.promptManifest.properties.separator, { const: '\n\n' });
+});
+
+test('economic phase taxonomy and driver context sources stay closed and schema-aligned', () => {
+  const schemaPhases = RUN_SCHEMA.properties.economics.properties.phases;
+  const schemaPhase = RUN_SCHEMA.$defs.economicPhase;
+  const schemaTotals = RUN_SCHEMA.$defs.economicTotals;
+  const expectedEconomicProperties = [
+    ...ECONOMIC_PHASE_FIELDS,
+    ...ECONOMIC_PHASE_FIELDS.map((field) => `${field}Complete`),
+  ].sort();
+  const phaseMetadata = new Set([
+    'status', 'logicalRequests', 'usageRecords', 'repetitionsObserved',
+    'repetitionCoverage', 'derivedFrom',
+  ]);
+  const totalsMetadata = new Set(['logicalRequests', 'usageRecords']);
+  assert.deepEqual(schemaPhases.required, ECONOMIC_PHASES);
+  assert.deepEqual(Object.keys(schemaPhases.properties), ECONOMIC_PHASES);
+  assert.deepEqual(ECONOMIC_PHASE_FIELDS, Object.values(SOURCE_USAGE_TO_ECONOMIC_FIELD));
+  assert.deepEqual(
+    Object.keys(schemaPhase.properties).filter((field) => !phaseMetadata.has(field)).sort(),
+    expectedEconomicProperties,
+    'phase schema economic fields must exactly match the usage mapping'
+  );
+  assert.deepEqual(
+    Object.keys(schemaTotals.properties).filter((field) => !totalsMetadata.has(field)).sort(),
+    expectedEconomicProperties,
+    'totals schema economic fields must exactly match the usage mapping'
+  );
+  for (const field of ECONOMIC_PHASE_FIELDS) {
+    assert.ok(schemaPhase.required.includes(field), `${field} phase value is required`);
+    assert.ok(schemaPhase.required.includes(`${field}Complete`), `${field} phase completeness is required`);
+    assert.ok(Object.hasOwn(schemaPhase.properties, field), `${field} phase value is declared`);
+    assert.ok(Object.hasOwn(schemaPhase.properties, `${field}Complete`), `${field} phase completeness is declared`);
+    assert.ok(schemaTotals.required.includes(field), `${field} total value is required`);
+    assert.ok(schemaTotals.required.includes(`${field}Complete`), `${field} total completeness is required`);
+  }
+  for (const [source, phase] of Object.entries(CONTEXT_SOURCE_TO_ECONOMIC_PHASE)) {
+    assert.equal(economicPhaseForContextSource(source), phase, source);
+    assert.ok(ECONOMIC_PHASES.includes(phase), source);
+  }
+  assert.equal(economicPhaseForContextSource('new-unclassified-source'), 'unknown');
+  assert.equal(economicPhaseForContextSource('durable-state'), 'memory-construction');
 });
 
 function fakePreparedBundle(bundleDir, sourceIdentity = { releaseSha: 'sha1', harnessVersion: '0.5.0' }) {
@@ -226,7 +280,19 @@ function fakeHarborSpawn({
             path.join(args[args.indexOf('-p') + 1], args[args.indexOf('--include-task-name') + 1], 'instruction.md'),
             'utf8'
           ));
+          const systemMessageChars = JSON.stringify({ role: 'system', content: condition.systemPrompt }).length;
+          const instructionMessageChars = JSON.stringify({ role: 'user', content: instruction }).length;
+          const messageEnvelopeChars = JSON.stringify([
+            { role: 'system', content: condition.systemPrompt },
+            { role: 'user', content: instruction },
+          ]).length - systemMessageChars - instructionMessageChars;
+          const toolSchemaChars = JSON.stringify(providerTools).length;
+          const payloadEnvelopeChars = 200;
+          const payloadChars = systemMessageChars + instructionMessageChars + messageEnvelopeChars +
+            toolSchemaChars + payloadEnvelopeChars;
           Object.assign(requestContract, {
+            payloadChars,
+            payloadBytes: payloadChars,
             systemPromptHash: digest(condition.systemPrompt),
             instructionHash: digest(instruction),
             systemMessageCount: 1,
@@ -237,6 +303,20 @@ function fakeHarborSpawn({
             durableStateMessageIndex: null,
             durableStateMessageHash: null,
             unexpectedSystemMessageCount: 0,
+            promptComponentManifest: structuredClone(condition.promptComponentManifest),
+            promptBuckets: {
+              baseSystem: systemMessageChars,
+              instruction: instructionMessageChars,
+              durableState: 0,
+              assistantHistory: 0,
+              toolResultHistory: 0,
+              otherMessages: 0,
+              messageEnvelope: messageEnvelopeChars,
+              toolSchema: toolSchemaChars,
+              payloadEnvelope: payloadEnvelopeChars,
+              toolResultHistoryBySource: {},
+              complete: true,
+            },
           });
           const localCostPerResponse = paidProfile ? 0.001328 : 0;
           const observedProviderCostUsd = paidProfile && providerCostComplete ? providerCostUsd : null;
@@ -269,6 +349,8 @@ function fakeHarborSpawn({
                 instructionHash: digest(instruction),
                 toolSchemaHash: digest(JSON.stringify(tools)),
                 toolCount: tools.length,
+                promptComponentManifest: structuredClone(condition.promptComponentManifest),
+                promptComponentManifestHash: digest(JSON.stringify(condition.promptComponentManifest)),
               },
               mountEvidence: {
                 version: 'eval-mount-policy.v1',
@@ -306,7 +388,7 @@ function fakeHarborSpawn({
                   costComplete: observedProviderCostComplete && observedBillingComplete && observedUnknownBillingAttempts === 0,
                 },
                 events: [
-                  { seq: 0, eventId: 'e0', type: 'request', requestId: 'r1', monotonicMs: 10, payloadChars: 1000, ...requestContract },
+                  { seq: 0, eventId: 'e0', type: 'request', requestId: 'r1', monotonicMs: 10, ...requestContract },
                   { seq: 1, eventId: 'e1', type: 'request_attempt', requestId: 'r1', attemptId: 'a1', monotonicMs: 11 },
                   { seq: 2, eventId: 'e2', type: 'error', requestId: 'r1', attemptId: 'a1', billingStatus: 'confirmed_unbilled', monotonicMs: 12 },
                   { seq: 3, eventId: 'e3', type: 'retry', requestId: 'r1', attemptId: 'a1', monotonicMs: 13 },
@@ -372,7 +454,7 @@ function fakeHarborSpawn({
 function liveSteps({ datasetDir, taskDir, lock, spawnImpl, apiKey = 'test-key', workDir = tmpdir(), config = null, fetchImpl = undefined, providerLookupTimeoutMs = undefined, repetitions = null, releaseSha = 'sha1', ambientEnv = {}, validateBundle = fakeValidateBundle, prepareBundle = null, attestHostNodeExecutable = undefined, collectEvidence = trustedFixtureVerifierEvidence }) {
   let clockTick = 0;
   return buildLiveSteps({
-    config: config ?? { execution: { environment: 'docker' } },
+    config: { controlledLane: CONTROLLED_LANE, ...(config ?? { execution: { environment: 'docker' } }) },
     lock,
     workDir,
     env: { ...ambientEnv, OPENROUTER_API_KEY: apiKey, HARNESS_EVAL_TB_DATASET_DIR: datasetDir ?? path.dirname(taskDir) },
@@ -391,6 +473,28 @@ function liveSteps({ datasetDir, taskDir, lock, spawnImpl, apiKey = 'test-key', 
     prepareBundle: prepareBundle ?? (({ bundleDir, sourceIdentity }) => fakePreparedBundle(bundleDir, sourceIdentity)),
   });
 }
+
+test('controlled live steps require an explicit lane instead of silently selecting Kimi', () => {
+  const { lock } = fixtureTask();
+  assert.throws(
+    () => buildLiveSteps({
+      config: { execution: { environment: 'docker' } },
+      lock,
+      workDir: tmpdir(),
+      env: {},
+    }),
+    /controlledLane.*required/i
+  );
+});
+
+test('historical Kimi pair names remain exact aliases of the controlled API', () => {
+  const { taskDir, lock } = fixtureTask();
+  const { spawnImpl } = fakeHarborSpawn();
+  const steps = liveSteps({ taskDir, lock, spawnImpl });
+
+  assert.equal(steps.kimiPair, steps.controlledPair);
+  assert.equal(steps.rerunKimiPair, steps.rerunControlledPair);
+});
 
 function requestControlsFromEvent(event) {
   return {
@@ -519,7 +623,7 @@ test('Harbor uses a runner-owned verified snapshot even if the configured datase
   const steps = liveSteps({ datasetDir, taskDir, lock, spawnImpl });
   assert.equal((await steps.taskLock()).ok, true);
   fs.writeFileSync(path.join(taskDir, 'instruction.md'), 'mutated after verification');
-  await steps.kimiPair(createBudget({ ceilingUsd: 10, label: 'snapshot-race' }));
+  await steps.controlledPair(createBudget({ ceilingUsd: 10, label: 'snapshot-race' }));
   const runs = invocations.filter((invocation) => invocation.args[0] === 'run');
   const snapshot = runs[0].args[runs[0].args.indexOf('-p') + 1];
   assert.notEqual(snapshot, datasetDir);
@@ -549,7 +653,7 @@ test('runner-owned task snapshot drift fail-stops later paid arms and retains a 
   const steps = liveSteps({ datasetDir, taskDir, lock, spawnImpl });
   assert.equal((await steps.taskLock()).ok, true);
   const budget = createBudget({ ceilingUsd: 10, label: 'task-snapshot-drift' });
-  const [pair] = await steps.kimiPair(budget);
+  const [pair] = await steps.controlledPair(budget);
 
   assert.equal(pair.failureKind, 'infrastructure');
   assert.equal(harbor.invocations.filter((entry) => entry.args[0] === 'run').length, 1);
@@ -573,7 +677,7 @@ test('bundle drift after one arm fail-stops the experiment and preserves the int
   const steps = liveSteps({ datasetDir, taskDir, lock, spawnImpl: harbor.spawnImpl, validateBundle });
   assert.equal((await steps.taskLock()).ok, true);
   const budget = createBudget({ ceilingUsd: 10, label: 'bundle-drift' });
-  const [pair] = await steps.kimiPair(budget);
+  const [pair] = await steps.controlledPair(budget);
 
   assert.equal(pair.failureKind, 'infrastructure');
   assert.equal(harbor.invocations.filter((entry) => entry.args[0] === 'run').length, 1);
@@ -603,7 +707,7 @@ test('a later repetition setup failure retains earlier paired documents and bill
   });
   assert.equal((await steps.taskLock()).ok, true);
   const budget = createBudget({ ceilingUsd: 10, label: 'later-repetition-setup' });
-  const [pair] = await steps.kimiPair(budget);
+  const [pair] = await steps.controlledPair(budget);
 
   assert.equal(harbor.invocations.filter((entry) => entry.args[0] === 'run').length, 2);
   assert.equal(pair.attemptedRepetitionCount, 2);
@@ -629,7 +733,7 @@ test('read-only task snapshots preserve restrictive attested read and execute mo
   const steps = liveSteps({ datasetDir, taskDir, lock: restrictedLock, spawnImpl });
 
   assert.equal((await steps.taskLock()).ok, true);
-  await steps.kimiPair(createBudget({ ceilingUsd: 10, label: 'restrictive-snapshot-modes' }));
+  await steps.controlledPair(createBudget({ ceilingUsd: 10, label: 'restrictive-snapshot-modes' }));
   const run = invocations.find((invocation) => invocation.args[0] === 'run');
   const snapshot = run.args[run.args.indexOf('-p') + 1];
   const snapshotTask = path.join(snapshot, 'cobol-modernization');
@@ -649,7 +753,7 @@ test('runtime instruction attestation models Harbor 0.20 canary stripping while 
   const steps = liveSteps({ taskDir, lock: canaryLock, spawnImpl });
 
   assert.equal((await steps.taskLock()).ok, true);
-  const [pair] = await steps.kimiPair(createBudget({ ceilingUsd: 10, label: 'canary-instruction' }));
+  const [pair] = await steps.controlledPair(createBudget({ ceilingUsd: 10, label: 'canary-instruction' }));
   for (const condition of [pair.generic, pair.harness]) {
     const rawTrial = condition.repetitions[0];
     assert.equal(rawTrial.observability.runtimeContractEvidence.matchesExpected, true);
@@ -685,8 +789,8 @@ test('a multi-task lock runs a fresh pair per pinned task with per-task job iden
   const { spawnImpl, invocations } = fakeHarborSpawn({ providerCostUsd: 0.01 });
   const steps = liveSteps({ taskDir, lock: multiLock, spawnImpl });
   assert.equal((await steps.taskLock()).ok, true, 'every pinned task verifies');
-  const budget = createBudget({ ceilingUsd: 10, label: 'kimi-pair' });
-  const pairs = await steps.kimiPair(budget);
+  const budget = createBudget({ ceilingUsd: 10, label: 'controlled-pair' });
+  const pairs = await steps.controlledPair(budget);
   assert.equal(pairs.length, 2, 'one pair per pinned task');
   assert.deepEqual(
     pairs.map((p) => p.task),
@@ -716,14 +820,14 @@ test('a multi-task lock runs a fresh pair per pinned task with per-task job iden
   assert.ok(Math.abs(budget.spentUsd() - 0.04) < 1e-12, 'all four trials charge the larger reconciled estimate');
 });
 
-test('a live kimi pair produces two schema-valid run documents and charges provider-reported cost', async () => {
+test('a live controlled pair produces two schema-valid run documents and charges provider-reported cost', async () => {
   const { taskDir, lock } = fixtureTask();
   const { spawnImpl, invocations } = fakeHarborSpawn({ providerCostUsd: 0.02 });
   const steps = liveSteps({ taskDir, lock, spawnImpl });
   assert.equal((await steps.taskLock()).ok, true);
-  const budget = createBudget({ ceilingUsd: 10, label: 'kimi-pair' });
-  const [pair] = await steps.kimiPair(budget);
-  assert.equal(pair.host, 'openrouter-kimi');
+  const budget = createBudget({ ceilingUsd: 10, label: 'controlled-pair' });
+  const [pair] = await steps.controlledPair(budget);
+  assert.equal(pair.host, 'openrouter-controlled');
   for (const doc of [pair.generic, pair.harness]) {
     assert.deepEqual(validateAgainstSchema(doc, RUN_SCHEMA).errors, []);
     assert.equal(doc.correctness.verdict, 'pass');
@@ -814,7 +918,7 @@ test('the host-written harbor trial record grades through the production collect
   const { spawnImpl } = fakeHarborSpawn({ reward: 1, providerCostUsd: 0.02 });
   const steps = liveSteps({ taskDir, lock, spawnImpl, collectEvidence: null });
   assert.equal((await steps.taskLock()).ok, true);
-  const [pair] = await steps.kimiPair(createBudget({ ceilingUsd: 10, label: 'host-graded' }));
+  const [pair] = await steps.controlledPair(createBudget({ ceilingUsd: 10, label: 'host-graded' }));
 
   assert.equal(pair.failureKind, null);
   for (const doc of [pair.generic.repetitions[0], pair.harness.repetitions[0]]) {
@@ -832,7 +936,7 @@ test('production collection classifies Harbor shared-mode reward files as verifi
   const { spawnImpl } = fakeHarborSpawn({ reward: 1, providerCostUsd: 0.02, writeHostResult: false });
   const steps = liveSteps({ taskDir, lock, spawnImpl, collectEvidence: null });
   assert.equal((await steps.taskLock()).ok, true);
-  const [pair] = await steps.kimiPair(createBudget({ ceilingUsd: 10, label: 'untrusted-verifier-reward' }));
+  const [pair] = await steps.controlledPair(createBudget({ ceilingUsd: 10, label: 'untrusted-verifier-reward' }));
 
   assert.equal(pair.failureKind, 'verifier');
   for (const doc of [pair.generic.repetitions[0], pair.harness.repetitions[0]]) {
@@ -895,7 +999,7 @@ test('an unavailable trusted reward never masks billing, budget, or runtime-inte
     const { spawnImpl } = fakeHarborSpawn(fixtureCase.spawnOptions);
     const steps = liveSteps({ taskDir, lock, spawnImpl, collectEvidence: null });
     assert.equal((await steps.taskLock()).ok, true, fixtureCase.name);
-    const [pair] = await steps.kimiPair(createBudget({ ceilingUsd: 10, label: `untrusted-reward-${fixtureCase.name}` }));
+    const [pair] = await steps.controlledPair(createBudget({ ceilingUsd: 10, label: `untrusted-reward-${fixtureCase.name}` }));
 
     assert.equal(pair.failureKind, fixtureCase.expectedFailureKind, fixtureCase.name);
     assert.ok(
@@ -914,7 +1018,7 @@ test('agent-writable pytest summaries remain advisory and retain degraded proven
   });
   const steps = liveSteps({ taskDir, lock, spawnImpl, collectEvidence: null });
   assert.equal((await steps.taskLock()).ok, true);
-  const [pair] = await steps.kimiPair(createBudget({ ceilingUsd: 10, label: 'untrusted-assertions' }));
+  const [pair] = await steps.controlledPair(createBudget({ ceilingUsd: 10, label: 'untrusted-assertions' }));
 
   for (const doc of [pair.generic.repetitions[0], pair.harness.repetitions[0]]) {
     assert.equal(doc.correctness.assertionsPassed, null);
@@ -939,7 +1043,7 @@ test('a wrong provider-facing request tool contract invalidates a rewarded trial
   });
   const steps = liveSteps({ taskDir, lock, spawnImpl });
   await steps.taskLock();
-  const [pair] = await steps.kimiPair(createBudget({ ceilingUsd: 10, label: 'runtime-mismatch' }));
+  const [pair] = await steps.controlledPair(createBudget({ ceilingUsd: 10, label: 'runtime-mismatch' }));
   const rawHarness = pair.harness.repetitions[0];
   assert.equal(rawHarness.correctness.verdict, 'pass', 'the official verifier result remains visible on raw evidence');
   assert.equal(rawHarness.observability.runtimeContractEvidence.matchesExpected, false);
@@ -972,7 +1076,7 @@ test('every exact outbound provider control is independently attested', async ()
     });
     const steps = liveSteps({ taskDir, lock, spawnImpl });
     await steps.taskLock();
-    const [pair] = await steps.kimiPair(createBudget({ ceilingUsd: 10, label: `request-control-${label}` }));
+    const [pair] = await steps.controlledPair(createBudget({ ceilingUsd: 10, label: `request-control-${label}` }));
     const rawHarness = pair.harness.repetitions[0];
     assert.equal(rawHarness.observability.runtimeContractEvidence.matchesExpected, false, label);
     assert.equal(rawHarness.observability.runtimeContractEvidence.requestControlMismatches, 1, label);
@@ -989,7 +1093,7 @@ test('every exact outbound provider control is independently attested', async ()
   });
   const steps = liveSteps({ taskDir, lock, spawnImpl });
   await steps.taskLock();
-  const [pair] = await steps.kimiPair(createBudget({ ceilingUsd: 10, label: 'request-body-hash' }));
+  const [pair] = await steps.controlledPair(createBudget({ ceilingUsd: 10, label: 'request-body-hash' }));
   assert.equal(pair.harness.repetitions[0].observability.runtimeContractEvidence.complete, false);
   assert.equal(pair.harness.repetitions[0].trialValidity.valid, false);
 });
@@ -1007,7 +1111,7 @@ test('a post-verification request must expose only the independently expected fi
   });
   const steps = liveSteps({ taskDir, lock, spawnImpl });
   await steps.taskLock();
-  const [pair] = await steps.kimiPair(createBudget({ ceilingUsd: 10, label: 'finish-contract-mismatch' }));
+  const [pair] = await steps.controlledPair(createBudget({ ceilingUsd: 10, label: 'finish-contract-mismatch' }));
   const rawHarness = pair.harness.repetitions[0];
   assert.equal(rawHarness.observability.runtimeContractEvidence.matchesExpected, false);
   assert.equal(rawHarness.observability.runtimeContractEvidence.postVerifyRequestContracts, 1);
@@ -1033,7 +1137,7 @@ test('runtime attestation accepts one exact durable-state system message after c
   });
   const steps = liveSteps({ taskDir, lock, spawnImpl });
   await steps.taskLock();
-  const [pair] = await steps.kimiPair(createBudget({ ceilingUsd: 10, label: 'compacted-runtime' }));
+  const [pair] = await steps.controlledPair(createBudget({ ceilingUsd: 10, label: 'compacted-runtime' }));
   const rawHarness = pair.harness.repetitions[0];
 
   assert.equal(rawHarness.observability.runtimeContractEvidence.complete, true);
@@ -1053,11 +1157,36 @@ test('runtime attestation rejects an unexpected extra system message', async () 
   });
   const steps = liveSteps({ taskDir, lock, spawnImpl });
   await steps.taskLock();
-  const [pair] = await steps.kimiPair(createBudget({ ceilingUsd: 10, label: 'unexpected-system-message' }));
+  const [pair] = await steps.controlledPair(createBudget({ ceilingUsd: 10, label: 'unexpected-system-message' }));
   const rawHarness = pair.harness.repetitions[0];
 
   assert.equal(rawHarness.observability.runtimeContractEvidence.matchesExpected, false);
   assert.equal(rawHarness.observability.runtimeContractEvidence.requestPromptMismatches, 1);
+  assert.equal(rawHarness.trialValidity.valid, false);
+  assert.equal(pair.failureKind, 'infrastructure');
+});
+
+test('runtime attestation rejects prompt-manifest drift and incomplete request buckets', async () => {
+  const { taskDir, lock } = fixtureTask();
+  const { spawnImpl } = fakeHarborSpawn({
+    mutateDone: (done, { condition }) => {
+      if (condition.id !== 'harness') return;
+      const requests = done.telemetry.events.filter((event) => event.type === 'request');
+      requests[0].promptComponentManifest = structuredClone(requests[0].promptComponentManifest);
+      requests[0].promptComponentManifest.components[0].sha256 = '0'.repeat(64);
+      requests[1].promptBuckets = structuredClone(requests[1].promptBuckets);
+      requests[1].promptBuckets.complete = false;
+    },
+  });
+  const steps = liveSteps({ taskDir, lock, spawnImpl });
+  await steps.taskLock();
+  const [pair] = await steps.controlledPair(createBudget({ ceilingUsd: 10, label: 'prompt-evidence-drift' }));
+  const rawHarness = pair.harness.repetitions[0];
+
+  assert.equal(rawHarness.observability.runtimeContractEvidence.matchesExpected, false);
+  assert.equal(rawHarness.observability.runtimeContractEvidence.requestPromptManifestMismatches, 1);
+  assert.equal(rawHarness.observability.runtimeContractEvidence.requestPromptBucketMismatches, 1);
+  assert.match(rawHarness.observability.runtimeContractEvidence.reason, /prompt-manifest|prompt-bucket/);
   assert.equal(rawHarness.trialValidity.valid, false);
   assert.equal(pair.failureKind, 'infrastructure');
 });
@@ -1075,7 +1204,7 @@ test('a wrong runtime instruction attestation invalidates a rewarded trial', asy
   });
   const steps = liveSteps({ taskDir, lock, spawnImpl });
   await steps.taskLock();
-  const [pair] = await steps.kimiPair(createBudget({ ceilingUsd: 10, label: 'instruction-mismatch' }));
+  const [pair] = await steps.controlledPair(createBudget({ ceilingUsd: 10, label: 'instruction-mismatch' }));
   const rawHarness = pair.harness.repetitions[0];
   assert.equal(rawHarness.correctness.verdict, 'pass');
   assert.equal(rawHarness.observability.runtimeContractEvidence.matchesExpected, false);
@@ -1097,7 +1226,7 @@ test('a rewarded bridge-integrity stop with an unclosed tool call fails closed',
   });
   const steps = liveSteps({ taskDir, lock, spawnImpl });
   await steps.taskLock();
-  const [pair] = await steps.kimiPair(createBudget({ ceilingUsd: 10, label: 'unclosed-tool' }));
+  const [pair] = await steps.controlledPair(createBudget({ ceilingUsd: 10, label: 'unclosed-tool' }));
   const rawHarness = pair.harness.repetitions[0];
   assert.equal(rawHarness.correctness.verdict, 'pass');
   assert.equal(rawHarness.observability.unclosedToolCalls, 1);
@@ -1117,7 +1246,7 @@ test('a generic arm that invokes the immutable Harness CLI is control-contaminat
   });
   const steps = liveSteps({ taskDir, lock, spawnImpl });
   await steps.taskLock();
-  const [pair] = await steps.kimiPair(createBudget({ ceilingUsd: 10, label: 'contaminated-control' }));
+  const [pair] = await steps.controlledPair(createBudget({ ceilingUsd: 10, label: 'contaminated-control' }));
   const rawGeneric = pair.generic.repetitions[0];
   assert.equal(rawGeneric.correctness.verdict, 'pass');
   assert.equal(rawGeneric.observability.controlContaminationDetected, true);
@@ -1136,7 +1265,7 @@ test('a treatment mount or preexisting Harness path in the generic sandbox inval
   });
   const steps = liveSteps({ taskDir, lock, spawnImpl });
   await steps.taskLock();
-  const [pair] = await steps.kimiPair(createBudget({ ceilingUsd: 10, label: 'mounted-control' }));
+  const [pair] = await steps.controlledPair(createBudget({ ceilingUsd: 10, label: 'mounted-control' }));
   const rawGeneric = pair.generic.repetitions[0];
   assert.equal(rawGeneric.observability.mountPolicyEvidence.matchesCondition, false);
   assert.equal(rawGeneric.observability.mountPolicyEvidence.complete, false);
@@ -1202,7 +1331,7 @@ test('sandbox observations cannot overwrite incomplete or mismatched configured 
     });
     const steps = liveSteps({ taskDir, lock, spawnImpl, prepareBundle, validateBundle });
     await steps.taskLock();
-    const [pair] = await steps.kimiPair(createBudget({ ceilingUsd: 10, label: fixtureCase.name }));
+    const [pair] = await steps.controlledPair(createBudget({ ceilingUsd: 10, label: fixtureCase.name }));
     assert.ok(pair.generic, `${fixtureCase.name}: ${JSON.stringify(pair.failureDiagnostics)}`);
     const rawGeneric = pair.generic.repetitions[0];
     const evidence = rawGeneric.observability.mountPolicyEvidence;
@@ -1239,7 +1368,7 @@ test('duplicate or unmatched provider-attempt events invalidate a rewarded trial
   });
   const steps = liveSteps({ taskDir, lock, spawnImpl });
   await steps.taskLock();
-  const [pair] = await steps.kimiPair(createBudget({ ceilingUsd: 10, label: 'provider-ledger-integrity' }));
+  const [pair] = await steps.controlledPair(createBudget({ ceilingUsd: 10, label: 'provider-ledger-integrity' }));
   const rawHarness = pair.harness.repetitions[0];
   assert.equal(rawHarness.correctness.verdict, 'pass');
   assert.equal(rawHarness.observability.duplicateProviderAttemptIdentities, 1);
@@ -1260,7 +1389,7 @@ test('malformed tool metadata invalidates a rewarded trial', async () => {
   });
   const steps = liveSteps({ taskDir, lock, spawnImpl });
   await steps.taskLock();
-  const [pair] = await steps.kimiPair(createBudget({ ceilingUsd: 10, label: 'malformed-tool-evidence' }));
+  const [pair] = await steps.controlledPair(createBudget({ ceilingUsd: 10, label: 'malformed-tool-evidence' }));
   const rawHarness = pair.harness.repetitions[0];
   assert.equal(rawHarness.correctness.verdict, 'pass');
   assert.equal(rawHarness.observability.malformedToolResultEvidence, 1);
@@ -1273,7 +1402,7 @@ test('only the harness condition receives the lazy guidance catalog and checkpoi
   const { spawnImpl, invocations } = fakeHarborSpawn();
   const steps = liveSteps({ taskDir, lock, spawnImpl });
   await steps.taskLock();
-  await steps.kimiPair(createBudget({ ceilingUsd: 10, label: 'runtime' }));
+  await steps.controlledPair(createBudget({ ceilingUsd: 10, label: 'runtime' }));
   const conditionDocs = invocations
     .filter((invocation) => invocation.args[0] === 'run')
     .map((invocation) => invocation.args.find((arg) => String(arg).startsWith('HARNESS_EVAL_TB_CONDITION=')))
@@ -1307,7 +1436,7 @@ test('the provider credential reaches injected Harbor only through spawn env and
     ambientEnv: { PATH: hostileSearchRoot, PYTHONPATH: hostileSearchRoot, HOME: hostileHome },
   });
   assert.equal((await steps.taskLock()).ok, true);
-  const [pair] = await steps.kimiPair(createBudget({ ceilingUsd: 10, label: 'credential-boundary' }));
+  const [pair] = await steps.controlledPair(createBudget({ ceilingUsd: 10, label: 'credential-boundary' }));
 
   const runs = invocations.filter((invocation) => invocation.args[0] === 'run');
   assert.equal(runs.length, 2);
@@ -1338,8 +1467,8 @@ test('the pair allowance is preallocated equally across both conditions', async 
   const { spawnImpl, invocations } = fakeHarborSpawn({ providerCostUsd: 3 });
   const steps = liveSteps({ taskDir, lock, spawnImpl });
   await steps.taskLock();
-  const budget = createBudget({ ceilingUsd: 7, label: 'kimi-pair' });
-  await steps.kimiPair(budget);
+  const budget = createBudget({ ceilingUsd: 7, label: 'controlled-pair' });
+  await steps.controlledPair(budget);
   const conditionPaths = invocations
     .filter((i) => i.args[0] === 'run')
     .map((i) => i.args[i.args.findIndex((a) => typeof a === 'string' && a.startsWith('HARNESS_EVAL_TB_CONDITION=')) ]);
@@ -1347,10 +1476,39 @@ test('the pair allowance is preallocated equally across both conditions', async 
   assert.deepEqual(ceilings, [3.5, 3.5], 'generic and harness receive identical fixed ceilings');
 });
 
+test('a qualification pair keeps its fixed arm ceiling when no rerun is scheduled', async () => {
+  const { taskDir, lock } = fixtureTask();
+  const { spawnImpl, invocations } = fakeHarborSpawn({ providerCostUsd: 0.01 });
+  const steps = liveSteps({
+    taskDir,
+    lock,
+    spawnImpl,
+    config: {
+      execution: { environment: 'docker' },
+      budget: {
+        releaseCeilingUsd: 1.3,
+        controlledPairUsd: 1.3,
+        rerunUsd: 0,
+        controlledArmCeilingUsd: 0.65,
+      },
+    },
+  });
+  await steps.taskLock();
+  await steps.controlledPair(createBudget({ ceilingUsd: 1.3, label: 'qualification-pair' }));
+  const conditionPaths = invocations
+    .filter((invocation) => invocation.args[0] === 'run')
+    .map((invocation) => invocation.args.find((arg) => String(arg).startsWith('HARNESS_EVAL_TB_CONDITION=')))
+    .map((assignment) => assignment.split('=')[1]);
+  assert.deepEqual(
+    conditionPaths.map((file) => JSON.parse(fs.readFileSync(file, 'utf8')).limits.trialCeilingUsd),
+    [0.65, 0.65]
+  );
+});
+
 test('a selected-task calibration and its rerun keep the exact same per-arm budget condition', async () => {
   const { taskDir, lock } = fixtureTask();
   const { spawnImpl, invocations } = fakeHarborSpawn({ providerCostUsd: 0.01 });
-  const budgetConfig = { releaseCeilingUsd: 10, kimiPairUsd: 8, rerunUsd: 2, reserveUsd: 2 };
+  const budgetConfig = { releaseCeilingUsd: 10, controlledPairUsd: 8, rerunUsd: 2, reserveUsd: 2 };
   const steps = liveSteps({
     taskDir,
     lock,
@@ -1359,8 +1517,8 @@ test('a selected-task calibration and its rerun keep the exact same per-arm budg
     config: { execution: { environment: 'docker' }, budget: budgetConfig },
   });
   await steps.taskLock();
-  const [primary] = await steps.kimiPair(createBudget({ ceilingUsd: 8, label: 'primary-selected-calibration' }));
-  const rerun = await steps.rerunKimiPair(
+  const [primary] = await steps.controlledPair(createBudget({ ceilingUsd: 8, label: 'primary-selected-calibration' }));
+  const rerun = await steps.rerunControlledPair(
     createBudget({ ceilingUsd: 2, label: 'rerun-selected-calibration' }),
     'cobol-modernization'
   );
@@ -1388,8 +1546,8 @@ test('an incomplete provider-cost total never undercharges the release ledger', 
   const { spawnImpl } = fakeHarborSpawn({ providerCostUsd: 0.001, providerCostComplete: false });
   const steps = liveSteps({ taskDir, lock, spawnImpl });
   await steps.taskLock();
-  const budget = createBudget({ ceilingUsd: 10, label: 'kimi-pair' });
-  const [pair] = await steps.kimiPair(budget);
+  const budget = createBudget({ ceilingUsd: 10, label: 'controlled-pair' });
+  const [pair] = await steps.controlledPair(budget);
   assert.equal(pair.failureKind, 'billing');
   assert.equal(pair.harness, null, 'paid scheduling stops before the second arm after uncertain billing');
   assert.equal(budget.spentUsd(), 5, 'the first trial allowance is conservatively reserved');
@@ -1416,8 +1574,8 @@ test('missing done telemetry reserves the attempted allowance and fail-stops all
   const { spawnImpl, invocations } = fakeHarborSpawn({ writeTelemetry: false });
   const steps = liveSteps({ datasetDir, taskDir, lock: multiLock, spawnImpl });
   await steps.taskLock();
-  const budget = createBudget({ ceilingUsd: 10, label: 'kimi-pair' });
-  const pairs = await steps.kimiPair(budget);
+  const budget = createBudget({ ceilingUsd: 10, label: 'controlled-pair' });
+  const pairs = await steps.controlledPair(budget);
   assert.equal(invocations.filter((invocation) => invocation.args[0] === 'run').length, 1, 'no later arm or task is scheduled');
   assert.equal(pairs.length, 1, 'only the partially attempted task is retained');
   assert.equal(pairs[0].failureKind, 'billing');
@@ -1430,8 +1588,8 @@ test('unknown billing in a done ledger also reserves the allowance and fail-stop
   const { spawnImpl, invocations } = fakeHarborSpawn({ billingComplete: false, unknownBillingAttempts: 1 });
   const steps = liveSteps({ taskDir, lock, spawnImpl });
   await steps.taskLock();
-  const budget = createBudget({ ceilingUsd: 10, label: 'kimi-pair' });
-  const [pair] = await steps.kimiPair(budget);
+  const budget = createBudget({ ceilingUsd: 10, label: 'controlled-pair' });
+  const [pair] = await steps.controlledPair(budget);
   assert.equal(invocations.filter((invocation) => invocation.args[0] === 'run').length, 1);
   assert.equal(pair.failureKind, 'billing');
   assert.equal(pair.generic.efficiency.billingUncertain, true);
@@ -1443,8 +1601,8 @@ test('release reconciliation charges the larger of provider and locally calculat
   const { spawnImpl } = fakeHarborSpawn({ providerCostUsd: 0.001 });
   const steps = liveSteps({ taskDir, lock, spawnImpl });
   await steps.taskLock();
-  const budget = createBudget({ ceilingUsd: 10, label: 'kimi-pair' });
-  await steps.kimiPair(budget);
+  const budget = createBudget({ ceilingUsd: 10, label: 'controlled-pair' });
+  await steps.controlledPair(budget);
   assert.ok(Math.abs(budget.spentUsd() - 0.01328) < 1e-12, 'two arms each charge max($0.00664 local, $0.001 provider)');
 });
 
@@ -1453,8 +1611,8 @@ test('a provider reconciliation above one trial allocation stops before another 
   const { spawnImpl, invocations } = fakeHarborSpawn({ providerCostUsd: 6 });
   const steps = liveSteps({ taskDir, lock, spawnImpl });
   await steps.taskLock();
-  const budget = createBudget({ ceilingUsd: 10, label: 'kimi-pair' });
-  const [pair] = await steps.kimiPair(budget);
+  const budget = createBudget({ ceilingUsd: 10, label: 'controlled-pair' });
+  const [pair] = await steps.controlledPair(budget);
   assert.equal(invocations.filter((invocation) => invocation.args[0] === 'run').length, 1);
   assert.equal(pair.failureKind, 'budget');
   assert.equal(pair.generic.correctness.completedWithinBudget, false);
@@ -1475,6 +1633,10 @@ test('paid preflight requires a fresh no-reset provider key limited to the confi
   });
   const good = await accepted.environment();
   assert.equal(good.ok, true);
+  const expectedKeyFingerprint = crypto.createHmac('sha256', 'test-key')
+    .update('engineer-harness/openrouter-key/v1\0')
+    .update('sha1')
+    .digest('hex');
   assert.deepEqual(good.providerSpendGuard, {
     verified: true,
     required: true,
@@ -1482,6 +1644,9 @@ test('paid preflight requires a fresh no-reset provider key limited to the confi
     limitRemainingUsd: 10,
     reset: null,
     ceilingUsd: 10,
+    hardLimitUsd: 10,
+    keyFingerprint: expectedKeyFingerprint,
+    observedKeyConsumedUsd: 0,
     checkedAt: '2026-07-31T00:00:00.000Z',
   });
 
@@ -1505,6 +1670,93 @@ test('paid preflight requires a fresh no-reset provider key limited to the confi
     assert.equal(verdict.ok, false, JSON.stringify(metadata));
     assert.ok(verdict.missing.some((reason) => /provider.*limit|dedicated.*key|reset/i.test(reason)));
   }
+});
+
+test('a malformed configured release ceiling cannot disable the provider cash guard', async () => {
+  const { taskDir, lock } = fixtureTask();
+  const { spawnImpl } = fakeHarborSpawn();
+  for (const releaseCeilingUsd of [-1, '10', Number.NaN]) {
+    const steps = liveSteps({
+      taskDir,
+      lock,
+      spawnImpl,
+      config: { execution: { environment: 'docker' }, budget: { releaseCeilingUsd } },
+      fetchImpl: async () => {
+        throw new Error('invalid policy must fail before provider lookup');
+      },
+    });
+    const verdict = await steps.environment();
+    assert.equal(verdict.ok, false, String(releaseCeilingUsd));
+    assert.ok(verdict.missing.some((reason) => /scheduled ceiling/i.test(reason)));
+  }
+});
+
+test('qualification and calibration share one pseudonymously linked 20 USD provider key limit', async () => {
+  const { taskDir, lock } = fixtureTask();
+  const { spawnImpl } = fakeHarborSpawn();
+  const keyMetadata = (limitRemaining) => async () => ({
+    ok: true,
+    json: async () => ({ data: { limit: 20, limit_remaining: limitRemaining, limit_reset: null } }),
+  });
+  const qualification = liveSteps({
+    taskDir,
+    lock,
+    spawnImpl,
+    apiKey: 'a',
+    config: {
+      evaluationScope: { mode: 'qualification' },
+      execution: { environment: 'docker' },
+      budget: { releaseCeilingUsd: 1.3, providerHardLimitUsd: 20 },
+    },
+    fetchImpl: keyMetadata(20),
+  });
+  const qualified = await qualification.environment();
+  assert.equal(qualified.ok, true);
+  assert.equal(qualified.providerSpendGuard.verified, true);
+  assert.equal(qualified.providerSpendGuard.hardLimitUsd, 20);
+  assert.match(qualified.providerSpendGuard.keyFingerprint, /^[a-f0-9]{64}$/);
+
+  const calibrationConfig = {
+    evaluationScope: { mode: 'calibration' },
+    execution: { environment: 'docker' },
+    budget: { releaseCeilingUsd: 18.7, providerHardLimitUsd: 20 },
+    qualificationBaseline: {
+      providerKeyFingerprint: qualified.providerSpendGuard.keyFingerprint,
+    },
+  };
+  const calibration = liveSteps({
+    taskDir,
+    lock,
+    spawnImpl,
+    apiKey: 'a',
+    config: calibrationConfig,
+    fetchImpl: keyMetadata(18.9),
+  });
+  assert.equal((await calibration.environment()).ok, true, 'prior accepted-path spend may consume the first 1.3 USD');
+
+  const changedKey = liveSteps({
+    taskDir,
+    lock,
+    spawnImpl,
+    apiKey: 'b',
+    config: calibrationConfig,
+    fetchImpl: keyMetadata(18.9),
+  });
+  const changedKeyVerdict = await changedKey.environment();
+  assert.equal(changedKeyVerdict.ok, false);
+  assert.ok(changedKeyVerdict.missing.some((reason) => /same dedicated.*key|credential/i.test(reason)));
+
+  const overspentBeforeCalibration = liveSteps({
+    taskDir,
+    lock,
+    spawnImpl,
+    apiKey: 'a',
+    config: calibrationConfig,
+    fetchImpl: keyMetadata(18.69),
+  });
+  const overspentVerdict = await overspentBeforeCalibration.environment();
+  assert.equal(overspentVerdict.ok, false);
+  assert.ok(overspentVerdict.missing.some((reason) => /remaining|20.*limit|dedicated.*key/i.test(reason)));
 });
 
 test('paid preflight times out a hung provider key-limit lookup', async () => {
@@ -1545,7 +1797,7 @@ test('a nonzero harbor exit becomes an infrastructure-invalid pair that blocks a
   const { spawnImpl } = fakeHarborSpawn({ exitCode: 3 });
   const steps = liveSteps({ taskDir, lock, spawnImpl });
   await steps.taskLock();
-  const [pair] = await steps.kimiPair(createBudget({ ceilingUsd: 10, label: 'p' }));
+  const [pair] = await steps.controlledPair(createBudget({ ceilingUsd: 10, label: 'p' }));
   assert.equal(pair.failureKind, 'infrastructure');
 });
 
@@ -1558,7 +1810,7 @@ test('hostile verifier artifacts preserve billing and become retained infrastruc
   const steps = liveSteps({ taskDir, lock, spawnImpl });
   await steps.taskLock();
   const budget = createBudget({ ceilingUsd: 10, label: 'hostile-verifier-artifact' });
-  const [pair] = await steps.kimiPair(budget);
+  const [pair] = await steps.controlledPair(budget);
 
   assert.ok(budget.spentUsd() > 0, 'provider billing is reconciled before untrusted verifier traversal');
   assert.equal(pair.failureKind, 'infrastructure');
@@ -1573,7 +1825,7 @@ test('missing credentials skip the pair without touching harbor run', async () =
   const { taskDir, lock } = fixtureTask();
   const { spawnImpl, invocations } = fakeHarborSpawn();
   const steps = liveSteps({ taskDir, lock, spawnImpl, apiKey: null });
-  const pair = await steps.kimiPair(createBudget({ ceilingUsd: 10, label: 'p' }));
+  const pair = await steps.controlledPair(createBudget({ ceilingUsd: 10, label: 'p' }));
   assert.equal(pair, null);
   assert.equal(invocations.filter((i) => i.args[0] === 'run').length, 0);
 });
@@ -1581,7 +1833,7 @@ test('missing credentials skip the pair without touching harbor run', async () =
 test('the local model floor is explicit opt-in, anchor-only, secret-free, and zero API spend', async () => {
   const { taskDir, lock, datasetDir } = fixtureTask();
   const disabled = buildLiveSteps({
-    config: { execution: { environment: 'docker' } },
+    config: { controlledLane: CONTROLLED_LANE, execution: { environment: 'docker' } },
     lock,
     workDir: tmpdir(),
     env: { HARNESS_EVAL_TB_DATASET_DIR: datasetDir ?? path.dirname(taskDir) },
@@ -1590,6 +1842,7 @@ test('the local model floor is explicit opt-in, anchor-only, secret-free, and ze
 
   const scheduleDisabled = buildLiveSteps({
     config: {
+      controlledLane: CONTROLLED_LANE,
       execution: { environment: 'docker' },
       pairs: [{ host: 'ollama-gemma', enabled: true, schedule: 'disabled', taskRole: 'anchor' }],
     },
@@ -1602,6 +1855,7 @@ test('the local model floor is explicit opt-in, anchor-only, secret-free, and ze
   assert.throws(
     () => buildLiveSteps({
       config: {
+        controlledLane: CONTROLLED_LANE,
         execution: { environment: 'docker' },
         pairs: [{ host: 'ollama-gemma', enabled: true, schedule: 'explicit-with-local', taskRole: 'stress' }],
       },
@@ -1617,6 +1871,7 @@ test('the local model floor is explicit opt-in, anchor-only, secret-free, and ze
   const { spawnImpl, invocations } = fakeHarborSpawn({ providerCostUsd: 9.99 });
   const enabled = buildLiveSteps({
     config: {
+      controlledLane: CONTROLLED_LANE,
       execution: { environment: 'docker' },
       pairs: [{ host: 'ollama-gemma', enabled: true, schedule: 'explicit-with-local', taskRole: 'anchor' }],
     },
@@ -1669,6 +1924,7 @@ test('live steps feed runRelease end to end: green pair, valid report, exit 0', 
   const { spawnImpl } = fakeHarborSpawn();
   const [taskEntry] = lock.tasks;
   const config = {
+    controlledLane: CONTROLLED_LANE,
     evaluationScope: {
       mode: 'release',
       releaseEligible: true,
@@ -1689,7 +1945,7 @@ test('live steps feed runRelease end to end: green pair, valid report, exit 0', 
         missingCapabilities: [],
       },
     },
-    budget: { releaseCeilingUsd: 20, kimiPairUsd: 10, rerunUsd: 8 },
+    budget: { releaseCeilingUsd: 10, controlledPairUsd: 8, rerunUsd: 2, providerHardLimitUsd: 10 },
     efficiencyThresholds: { promptRatio: 2, costRatio: 1.5, wallTimeRatio: 1.25 },
     valueThresholds: {
       maxIncrementalApiCostPerAdditionalSuccessUsd: 2,
@@ -1706,17 +1962,31 @@ test('live steps feed runRelease end to end: green pair, valid report, exit 0', 
     taskDir,
     lock,
     spawnImpl,
-    config: { execution: { environment: 'docker' }, budget: config.budget },
-    fetchImpl: async () => ({ ok: true, json: async () => ({ data: { limit: 20, limit_remaining: 20, limit_reset: null } }) }),
+    config: { controlledLane: CONTROLLED_LANE, execution: { environment: 'docker' }, budget: config.budget },
+    fetchImpl: async () => ({ ok: true, json: async () => ({ data: { limit: 10, limit_remaining: 10, limit_reset: null } }) }),
   });
+  let liveProviderSpendGuard = null;
   const { report, exitCode } = await runRelease({
     config,
-    steps: { ...steps, deterministic: async () => ({ passed: 17, failed: 0, skipped: 2 }) },
-    requiredPairs: ['openrouter-kimi'],
+    steps: {
+      ...steps,
+      deterministic: async () => ({ passed: 17, failed: 0, skipped: 2 }),
+      environment: async () => {
+        const evidence = await steps.environment();
+        liveProviderSpendGuard = evidence.providerSpendGuard;
+        return evidence;
+      },
+    },
+    requiredPairs: ['openrouter-controlled'],
   });
-  assert.equal(exitCode, 0, JSON.stringify({ reasons: report.gate.reasons, delta: report.pairs.find((pair) => pair.host === 'openrouter-kimi')?.efficiencyDelta }));
-  const kimi = report.pairs.find((p) => p.host === 'openrouter-kimi');
-  assert.equal(kimi.result, 'parity');
+  assert.equal(exitCode, 0, JSON.stringify({ reasons: report.gate.reasons, delta: report.pairs.find((pair) => pair.host === 'openrouter-controlled')?.efficiencyDelta }));
+  const controlled = report.pairs.find((p) => p.host === 'openrouter-controlled');
+  assert.equal(controlled.result, 'parity');
+  assert.deepEqual(
+    report.budget.providerSpendGuard,
+    liveProviderSpendGuard,
+    'release revalidation must consume the same resolved provider policy as live preflight'
+  );
   assert.ok(Math.abs(report.budget.spentUsd - 0.04) < 1e-12, 'live child charges reach the release report');
 });
 
@@ -1724,11 +1994,362 @@ test('AGENT_REF matches the importable module path', () => {
   assert.equal(AGENT_REF, 'evals.external.terminal_bench.harbor_agent:StdioBridgeAgent');
 });
 
+function promptEconomicsFixture(requestId = 'r1') {
+  const manifest = {
+    schema: 'prompt-component-manifest.v1',
+    separator: '\n\n',
+    systemPromptChars: 10,
+    systemPromptBytes: 10,
+    systemPromptHash: 'a'.repeat(64),
+    complete: true,
+    components: [
+      { id: 'engineer-contract', ordinal: 0, startChar: 0, endChar: 4, chars: 4, bytes: 4, sha256: 'b'.repeat(64) },
+      { id: 'loaded-guidance', ordinal: 1, startChar: 6, endChar: 10, chars: 4, bytes: 4, sha256: 'c'.repeat(64) },
+    ],
+  };
+  const request = {
+    type: 'request',
+    requestId,
+    payloadChars: 100,
+    promptComponentManifest: manifest,
+    promptBuckets: {
+      baseSystem: 20,
+      instruction: 10,
+      durableState: 0,
+      assistantHistory: 20,
+      toolResultHistory: 10,
+      otherMessages: 0,
+      messageEnvelope: 10,
+      toolSchema: 20,
+      payloadEnvelope: 10,
+      toolResultHistoryBySource: { 'memory-retrieval': 10 },
+      complete: true,
+    },
+  };
+  const response = {
+    type: 'response',
+    requestId,
+    usage: {
+      promptTokens: 100,
+      cachedTokens: 40,
+      cachedTokensComplete: true,
+      reasoningTokens: 0,
+      reasoningTokensComplete: true,
+      outputTokens: 20,
+      localCostUsd: 0.01,
+      providerCostUsd: 0.01,
+      reconciledCostUsd: 0.01,
+    },
+  };
+  return { request, response };
+}
+
+function promptEconomicsAuthoritativeTotals(multiplier = 1) {
+  return {
+    modelRequests: multiplier,
+    promptTokens: 100 * multiplier,
+    cachedTokens: 40 * multiplier,
+    cachedTokensComplete: true,
+    outputTokens: 20 * multiplier,
+    localCostUsd: 0.01 * multiplier,
+    providerCostUsd: 0.01 * multiplier,
+    reconciledCostUsd: 0.01 * multiplier,
+    usageComplete: true,
+    providerCostComplete: true,
+    billingComplete: true,
+    costComplete: true,
+  };
+}
+
+test('prompt and phase economics reconcile exact usage without inventing component token splits', () => {
+  const manifest = {
+    schema: 'prompt-component-manifest.v1',
+    separator: '\n\n',
+    systemPromptChars: 10,
+    systemPromptBytes: 10,
+    systemPromptHash: 'a'.repeat(64),
+    complete: true,
+    components: [{ id: 'engineer-contract', ordinal: 0, startChar: 0, endChar: 10, chars: 10, bytes: 10, sha256: 'b'.repeat(64) }],
+  };
+  const request = (requestId, toolResultSource = null) => ({
+    type: 'request',
+    requestId,
+    payloadChars: 100,
+    promptComponentManifest: manifest,
+    promptBuckets: {
+      baseSystem: 20,
+      instruction: 10,
+      durableState: 0,
+      assistantHistory: 20,
+      toolResultHistory: toolResultSource ? 10 : 0,
+      otherMessages: 0,
+      messageEnvelope: 10,
+      toolSchema: 20,
+      payloadEnvelope: toolResultSource ? 10 : 20,
+      toolResultHistoryBySource: toolResultSource ? { [toolResultSource]: 10 } : {},
+      complete: true,
+    },
+  });
+  const usage = (requestId, promptTokens, cachedTokens, outputTokens, cost) => ({
+    type: 'response',
+    requestId,
+    usage: {
+      promptTokens,
+      cachedTokens,
+      cachedTokensComplete: true,
+      reasoningTokens: 0,
+      reasoningTokensComplete: true,
+      outputTokens,
+      localCostUsd: cost,
+      providerCostUsd: cost,
+      reconciledCostUsd: cost,
+    },
+  });
+  const events = [
+    request('r1'),
+    usage('r1', 100, 40, 20, 0.01),
+    { type: 'tool_call', requestId: 'r1', contextSource: 'memory-retrieval', category: 'orient' },
+    request('r2', 'memory-retrieval'),
+    usage('r2', 150, 70, 30, 0.02),
+  ];
+  const economics = promptAndPhaseEconomicsOf(events, {
+    modelRequests: 2,
+    promptTokens: 250,
+    cachedTokens: 110,
+    cachedTokensComplete: true,
+    outputTokens: 50,
+    localCostUsd: 0.03,
+    providerCostUsd: 0.03,
+    reconciledCostUsd: 0.03,
+    usageComplete: true,
+    providerCostComplete: true,
+    billingComplete: true,
+    costComplete: true,
+  });
+
+  assert.equal(economics.coverage.status, 'complete');
+  assert.equal(economics.prompt.cumulative.payloadChars, 200);
+  assert.equal(economics.prompt.cumulative.toolResultHistoryBySource['memory-retrieval'], 10);
+  assert.equal(economics.phases['memory-retrieval'].promptTokens, 100);
+  assert.equal(economics.phases['memory-retrieval'].status, 'measured');
+  assert.equal(economics.phases['memory-construction'].status, 'not_exercised');
+  assert.equal(economics.phases['memory-construction'].promptTokens, null);
+  assert.equal(economics.phases.finalization.promptTokens, 150);
+  assert.equal(economics.rollups['task-execution'].logicalRequests, 1);
+  assert.equal(economics.rollups['task-execution'].promptTokens, 150);
+  for (const [source, target] of Object.entries(SOURCE_USAGE_TO_ECONOMIC_FIELD)) {
+    const expected = events
+      .filter((event) => event.usage)
+      .reduce((sum, event) => sum + event.usage[source], 0);
+    assert.equal(economics.totals[target], expected, `${source} maps to ${target}`);
+    assert.equal(economics.totals[`${target}Complete`], true, `${target} completeness is retained`);
+  }
+  assert.deepEqual(
+    economics.rollups['task-execution'].derivedFrom,
+    ['guidance', 'planning-and-gate', 'verification', 'orientation', 'implementation', 'finalization', 'uncategorized', 'mixed', 'unknown']
+  );
+  assert.equal(economics.reconciliation.complete, true);
+  assert.equal('componentPromptTokens' in economics.prompt, false, 'provider totals cannot be truthfully split across prompt components');
+});
+
+test('a complete authoritative reasoning-token mismatch makes phase economics partial', () => {
+  const { request, response } = promptEconomicsFixture();
+  const authoritativeTotals = {
+    ...promptEconomicsAuthoritativeTotals(),
+    reasoningTokens: 1,
+    reasoningTokensComplete: true,
+  };
+  const economics = promptAndPhaseEconomicsOf([request, response], authoritativeTotals);
+
+  assert.equal(economics.totals.reasoningTokens, 0, 'provider event usage remains the measured total');
+  assert.equal(economics.totals.reasoningTokensComplete, true);
+  assert.equal(economics.reconciliation.checks.reasoningTokens, false);
+  assert.equal(economics.reconciliation.complete, false);
+  assert.equal(economics.coverage.complete, false);
+  assert.equal(economics.coverage.status, 'partial');
+  assert.match(economics.coverage.reason, /phase usage does not reconcile/i);
+});
+
+test('prompt and phase economics reject malformed disjoint bucket attribution', async (t) => {
+  const cases = [
+    {
+      name: 'negative bucket value',
+      mutate: (request) => {
+        request.promptBuckets.baseSystem = -1;
+        request.promptBuckets.payloadEnvelope = 31;
+      },
+    },
+    {
+      name: 'fractional bucket value',
+      mutate: (request) => {
+        request.promptBuckets.baseSystem = 19.5;
+        request.promptBuckets.payloadEnvelope = 10.5;
+      },
+    },
+    {
+      name: 'bucket sum differs from payloadChars',
+      mutate: (request) => {
+        request.promptBuckets.payloadEnvelope = 9;
+      },
+    },
+    {
+      name: 'tool-result source subtotal overflows its bucket',
+      mutate: (request) => {
+        request.promptBuckets.toolResultHistoryBySource['memory-retrieval'] = 11;
+      },
+    },
+    {
+      name: 'tool-result source subtotal does not explain its bucket',
+      mutate: (request) => {
+        request.promptBuckets.toolResultHistoryBySource['memory-retrieval'] = 9;
+      },
+    },
+  ];
+
+  for (const entry of cases) {
+    await t.test(entry.name, () => {
+      const { request, response } = promptEconomicsFixture();
+      entry.mutate(request);
+      const economics = promptAndPhaseEconomicsOf(
+        [request, response],
+        promptEconomicsAuthoritativeTotals()
+      );
+
+      assert.equal(economics.coverage.status, 'partial');
+      assert.equal(economics.coverage.complete, false);
+      assert.equal(economics.prompt.coverage.complete, false);
+      assert.equal(economics.prompt.coverage.requestsWithCompleteBuckets, 0);
+      assert.equal(economics.prompt.cumulative.payloadChars, 100, 'the independently valid request size remains usable');
+      for (const field of [
+        'baseSystemChars', 'instructionChars', 'durableStateChars', 'assistantHistoryChars',
+        'toolResultHistoryChars', 'otherMessageChars', 'messageEnvelopeChars',
+        'toolSchemaChars', 'payloadEnvelopeChars',
+      ]) {
+        assert.equal(economics.prompt.cumulative[field], null, `${field} must fail closed`);
+      }
+      assert.equal(economics.prompt.cumulative.toolResultHistoryBySource, null);
+      assert.match(economics.coverage.reason, /prompt bucket contract/i);
+      assert.equal(
+        economics.coverage.complete && economics.prompt.coverage.complete && economics.reconciliation.complete,
+        false,
+        'malformed attribution cannot become causal evidence'
+      );
+    });
+  }
+});
+
+test('prompt and phase economics reject malformed content-free component manifests', async (t) => {
+  const rawPromptSentinel = 'RAW-PROMPT-MUST-NOT-BE-RETAINED';
+  const cases = [
+    {
+      name: 'component spans are not contiguous through the separator',
+      mutate: (manifest) => { manifest.components[1].startChar = 5; },
+    },
+    {
+      name: 'system hash is not a SHA-256 digest',
+      mutate: (manifest) => { manifest.systemPromptHash = 'not-a-sha256'; },
+    },
+    {
+      name: 'component hash is not a SHA-256 digest',
+      mutate: (manifest) => { manifest.components[0].sha256 = 'not-a-sha256'; },
+    },
+    {
+      name: 'separator does not agree with component geometry',
+      mutate: (manifest) => { manifest.separator = '\n'; },
+    },
+    {
+      name: 'component character total does not match its span',
+      mutate: (manifest) => { manifest.components[0].chars = 5; },
+    },
+    {
+      name: 'component byte totals do not match the system total',
+      mutate: (manifest) => { manifest.components[0].bytes = 5; },
+    },
+    {
+      name: 'unexpected content-bearing manifest field',
+      mutate: (manifest) => { manifest.components[0].content = rawPromptSentinel; },
+    },
+  ];
+
+  for (const entry of cases) {
+    await t.test(entry.name, () => {
+      const { request, response } = promptEconomicsFixture();
+      entry.mutate(request.promptComponentManifest);
+      const economics = promptAndPhaseEconomicsOf(
+        [request, response],
+        promptEconomicsAuthoritativeTotals()
+      );
+
+      assert.equal(economics.coverage.status, 'partial');
+      assert.equal(economics.coverage.complete, false);
+      assert.equal(economics.prompt.coverage.complete, false);
+      assert.equal(economics.prompt.manifest, null);
+      assert.equal(economics.prompt.cumulative.payloadChars, 100);
+      assert.equal(economics.prompt.cumulative.baseSystemChars, 20, 'valid bucket evidence remains usable');
+      assert.match(economics.coverage.reason, /prompt component manifest contract/i);
+      assert.doesNotMatch(JSON.stringify(economics), new RegExp(rawPromptSentinel));
+      assert.equal(
+        economics.coverage.complete && economics.prompt.coverage.complete && economics.reconciliation.complete,
+        false,
+        'malformed attribution cannot become causal evidence'
+      );
+    });
+  }
+});
+
+test('prompt and phase economics reject duplicate request identities without double-counting prompt totals', () => {
+  const first = promptEconomicsFixture('duplicate-request');
+  const second = structuredClone(first);
+  const economics = promptAndPhaseEconomicsOf(
+    [first.request, first.response, second.request, second.response],
+    promptEconomicsAuthoritativeTotals(2)
+  );
+
+  assert.equal(economics.coverage.status, 'partial');
+  assert.equal(economics.coverage.complete, false);
+  assert.equal(economics.prompt.coverage.complete, false);
+  assert.equal(economics.prompt.cumulative.payloadChars, null);
+  assert.equal(economics.prompt.cumulative.baseSystemChars, null);
+  assert.equal(economics.prompt.cumulative.toolResultHistoryBySource, null);
+  assert.match(economics.coverage.reason, /duplicate request identit/i);
+  assert.equal(
+    economics.coverage.complete && economics.prompt.coverage.complete && economics.reconciliation.complete,
+    false,
+    'ambiguous request identities cannot become causal evidence'
+  );
+});
+
+test('prompt and phase economics label unmatched or missing evidence as partial instead of zero', () => {
+  const economics = promptAndPhaseEconomicsOf([
+    { type: 'request', requestId: 'r1', payloadChars: 50, promptComponentManifest: null, promptBuckets: null },
+    { type: 'response', requestId: 'missing-request', usage: { promptTokens: 10, outputTokens: 2, localCostUsd: 0.01, reconciledCostUsd: 0.01 } },
+  ], { modelRequests: 1, promptTokens: 10, outputTokens: 2, localCostUsd: 0.01, reconciledCostUsd: 0.01 });
+  assert.equal(economics.coverage.status, 'partial');
+  assert.equal(economics.coverage.complete, false);
+  assert.equal(economics.prompt.cumulative.baseSystemChars, null);
+  assert.equal(economics.phases.unknown.promptTokens, 10);
+  assert.equal(economics.phases['memory-construction'].status, 'unavailable');
+  assert.equal(economics.phases['memory-construction'].promptTokens, null);
+  assert.match(economics.coverage.reason, /manifest|bucket|unmatched/i);
+});
+
+test('absent prompt telemetry explicitly marks every economic phase unavailable', () => {
+  const economics = promptAndPhaseEconomicsOf([], null);
+  assert.equal(economics.coverage.status, 'unavailable');
+  for (const phase of ['memory-retrieval', 'memory-construction', 'memory-consolidation']) {
+    assert.equal(economics.phases[phase].status, 'unavailable');
+    assert.equal(economics.phases[phase].promptTokens, null);
+  }
+  assert.equal(economics.rollups['task-execution'].status, 'unavailable');
+  assert.equal(economics.rollups['task-execution'].promptTokens, null);
+});
+
 function repetitionDoc({ verdict = 'pass', reward = 1, repetitionIndex = 1, promptTokens = 1000, costUsd = 0.02, providerCostUsd = costUsd, reconciledCostUsd = Math.max(costUsd, providerCostUsd), costComplete = true, missingUsage = 0 } = {}) {
   return {
     schema: 'eval-run.v1',
     reproducibility: { condition: 'generic', repetitionIndex, startedAt: '2026-07-31T00:00:00Z', endedAt: '2026-07-31T00:03:00Z' },
     correctness: { verifierReward: reward, verdict, exitReason: 'model_finish', completedWithinTimeout: true, completedWithinBudget: true },
+    trialValidity: { valid: true, failureKind: null },
     efficiency: { promptTokens, outputTokens: 500, modelRequests: 10, localCostUsd: costUsd, providerReportedCostUsd: providerCostUsd, reconciledCostUsd, cachedPromptTokens: 0, reasoningTokens: 0, costComplete, missingUsage },
     harnessBehavior: {},
     subscription: null,
@@ -1820,6 +2441,36 @@ test('repetition aggregation preserves the median per-trial reconciled charge fo
   assert.equal(harness.efficiency.providerReportedCostUsd, 1);
   assert.equal(harness.efficiency.reconciledCostUsd, 100);
   assert.equal(efficiencyDelta(generic, harness).costRatio, 100);
+});
+
+test('repetition aggregation summarizes prompt and phase economics instead of retaining the first trial as typical', () => {
+  const withEconomics = (promptTokens, payloadChars, status = 'complete') => {
+    const doc = repetitionDoc({ promptTokens });
+    doc.economics = {
+      coverage: { status, complete: status === 'complete', requestEvents: 2, usageEvents: 2, matchedUsageEvents: 2, reason: status === 'complete' ? null : 'partial fixture' },
+      prompt: {
+        manifest: { schema: 'prompt-component-manifest.v1', systemPromptHash: 'a'.repeat(64), complete: true, components: [] },
+        coverage: { complete: status === 'complete', requests: 2, requestsWithCompleteBuckets: status === 'complete' ? 2 : 1 },
+        cumulative: { payloadChars, baseSystemChars: payloadChars / 2, toolResultHistoryBySource: { 'memory-retrieval': payloadChars / 10 } },
+      },
+      phases: {
+        implementation: { logicalRequests: 2, usageRecords: 2, promptTokens, promptTokensComplete: true },
+      },
+      totals: { logicalRequests: 2, usageRecords: 2, promptTokens, promptTokensComplete: true },
+      reconciliation: { complete: status === 'complete', checks: { promptTokens: true }, reason: status === 'complete' ? null : 'partial fixture' },
+    };
+    return doc;
+  };
+  const aggregate = aggregateRepetitionDocs([
+    withEconomics(100, 1000),
+    withEconomics(200, 2000),
+    withEconomics(900, 9000, 'partial'),
+  ]);
+  assert.equal(aggregate.economics.aggregation, 'median-per-valid-repetition');
+  assert.equal(aggregate.economics.prompt.cumulative.payloadChars, 2000);
+  assert.equal(aggregate.economics.phases.implementation.promptTokens, 200);
+  assert.equal(aggregate.economics.coverage.complete, false, 'one partial repetition makes aggregate coverage partial');
+  assert.equal(aggregate.economics.coverage.status, 'partial');
 });
 
 test('invalid repetitions are excluded from the verdict denominator while raw evidence remains retained', () => {
@@ -1923,8 +2574,18 @@ test('run documents derive harness behavior only from retained evidence and labe
   const telemetryEvents = [
     { eventId: 't1', type: 'tool_call', requestId: 'r1', toolCallId: 'c1', tool: 'bash', category: 'edit', monotonicMs: 10 },
     { eventId: 't2', type: 'tool_result', requestId: 'r1', toolCallId: 'c1', tool: 'bash', category: 'edit', exitCode: 0, monotonicMs: 20 },
-    { eventId: 't3', type: 'tool_call', requestId: 'r2', toolCallId: 'c2', tool: 'bash', category: 'verify', monotonicMs: 30 },
-    { eventId: 't4', type: 'tool_result', requestId: 'r2', toolCallId: 'c2', tool: 'bash', category: 'verify', exitCode: 0, monotonicMs: 40 },
+    {
+      eventId: 't3', type: 'tool_call', requestId: 'r2', toolCallId: 'c2', tool: 'bash',
+      category: 'verify', program: 'harness-cli', immutableHarnessCli: true,
+      argumentsValid: true, argsChars: 16, argsHash: '1'.repeat(64), monotonicMs: 30,
+    },
+    {
+      eventId: 't4', type: 'tool_result', requestId: 'r2', toolCallId: 'c2', tool: 'bash',
+      category: 'verify', exitCode: 0, monotonicMs: 40, durationMs: 10,
+      stdoutChars: 0, stderrChars: 0, resultChars: 2, resultHash: '2'.repeat(64),
+      compacted: false, stdoutTruncated: false, stderrTruncated: false, timedOut: false,
+      containmentMode: 'host-bounded', containmentComplete: true,
+    },
   ];
   const harnessEvents = [
     { id: 'h1', type: 'orient', result: 'pass', ts: '2026-07-31T00:00:01Z' },
@@ -1951,6 +2612,7 @@ test('run documents derive harness behavior only from retained evidence and labe
     harnessVersion: 'v',
     startedAt: '2026-07-31T00:00:00Z',
     endedAt: '2026-07-31T00:01:00Z',
+    hostId: 'openrouter-controlled',
     identity: { pairId: 'pair', repetitionId: 'rep', repetitionIndex: 1, orderIndex: 2 },
     conditionDocument: { id: 'harness', systemPrompt: 'safe prompt', limits: {} },
   });
@@ -1959,6 +2621,9 @@ test('run documents derive harness behavior only from retained evidence and labe
   // invocation, so mechanical fidelity is clamped until a supervisor outside
   // the sandbox can attest it.
   assert.equal(doc.enforcementFidelity.mode, 'prompt-and-cli');
+  assert.equal(doc.enforcementFidelity.cliInvoked, true);
+  assert.equal(doc.enforcementFidelity.cliSucceeded, true);
+  assert.equal(doc.enforcementFidelity.cliActivated, true);
   assert.equal(doc.enforcementFidelity.mechanicalHooksActive, false, 'sandbox-relayed enforcement claims can never establish mechanical hooks');
   assert.equal(doc.harnessBehavior.orientInvoked, true);
   assert.equal(doc.harnessBehavior.planCreatedOrSelected, true);
@@ -1977,13 +2642,27 @@ test('run documents derive harness behavior only from retained evidence and labe
 });
 
 test('agent-writable hook event names cannot establish mechanical enforcement fidelity', () => {
+  const failedCliEvents = [
+    {
+      eventId: 'cli-call', type: 'tool_call', requestId: 'r1', toolCallId: 'c1', tool: 'bash',
+      category: 'verify_harness', program: 'harness-cli', immutableHarnessCli: true,
+      argumentsValid: true, argsChars: 16, argsHash: '3'.repeat(64), monotonicMs: 10,
+    },
+    {
+      eventId: 'cli-result', type: 'tool_result', requestId: 'r1', toolCallId: 'c1', tool: 'bash',
+      category: 'verify_harness', exitCode: 2, monotonicMs: 20, durationMs: 10,
+      stdoutChars: 0, stderrChars: 8, resultChars: 8, resultHash: '4'.repeat(64),
+      compacted: false, stdoutTruncated: false, stderrTruncated: false, timedOut: false,
+      containmentMode: 'host-bounded', containmentComplete: true,
+    },
+  ];
   const doc = buildRunDoc({
     condition: 'harness',
     task: 'fixture',
     evidence: { reward: 1, pytest: null, treeHash: 'a'.repeat(64) },
     done: {
       stopReason: 'model_finish',
-      telemetry: { totals: {}, events: [] },
+      telemetry: { totals: {}, events: failedCliEvents },
       harnessEvents: [{ type: 'pre_tool' }, { type: 'post_tool' }, { type: 'session_end' }],
       harnessEventEvidence: { available: true, reason: null, retainedEvents: 3, sourceTruncated: false },
       enforcement: { hooksActive: false, policyBypassAchieved: false, source: 'sandbox-writable-harness-events' },
@@ -1995,8 +2674,12 @@ test('agent-writable hook event names cannot establish mechanical enforcement fi
     harnessVersion: 'v',
     startedAt: '2026-07-31T00:00:00Z',
     endedAt: '2026-07-31T00:01:00Z',
+    hostId: 'openrouter-controlled',
   });
   assert.equal(doc.enforcementFidelity.mode, 'prompt-and-cli');
+  assert.equal(doc.enforcementFidelity.cliInvoked, true);
+  assert.equal(doc.enforcementFidelity.cliSucceeded, false);
+  assert.equal(doc.enforcementFidelity.cliActivated, false);
   assert.equal(doc.enforcementFidelity.mechanicalHooksActive, false);
   assert.equal(doc.enforcementFidelity.evidenceSource, 'sandbox-writable-harness-events');
 });
@@ -2019,11 +2702,15 @@ test('missing event ledgers stay unknown instead of being converted into zero ac
     harnessVersion: 'v',
     startedAt: '2026-07-31T00:00:00Z',
     endedAt: '2026-07-31T00:01:00Z',
+    hostId: 'openrouter-controlled',
   });
   assert.equal(doc.harnessBehavior.orientInvoked, null);
   assert.equal(doc.harnessBehavior.gateAttempts, null);
   assert.equal(doc.harnessBehavior.policyBypassAttempted, null);
   assert.equal(doc.enforcementFidelity.mode, 'prompt-and-cli');
+  assert.equal(doc.enforcementFidelity.cliInvoked, false);
+  assert.equal(doc.enforcementFidelity.cliSucceeded, false);
+  assert.equal(doc.enforcementFidelity.cliActivated, false);
   assert.equal(doc.enforcementFidelity.harnessEventsCaptured, false);
   assert.equal(doc.observability.harnessEventEvidence.reason, 'harness-events-not-found');
 });
@@ -2056,6 +2743,7 @@ test('a complete before/after manifest with no changed paths is available eviden
     harnessVersion: 'v',
     startedAt: '2026-07-31T00:00:00Z',
     endedAt: '2026-07-31T00:01:00Z',
+    hostId: 'openrouter-controlled',
   });
   assert.equal(doc.workspaceEvidence.available, true);
   assert.equal(doc.workspaceEvidence.containmentMode, 'descriptor-relative-procfs');
@@ -2068,7 +2756,7 @@ test('multiple repetitions run each condition, alternate order, and all charge t
   const { taskDir, lock, datasetDir } = fixtureTask();
   const { spawnImpl, invocations } = fakeHarborSpawn({ providerCostUsd: 0.01 });
   const steps = buildLiveSteps({
-    config: { execution: { environment: 'docker' } },
+    config: { controlledLane: CONTROLLED_LANE, execution: { environment: 'docker' } },
     lock,
     workDir: fs.mkdtempSync(path.join(os.tmpdir(), 'tb-repetitions-')),
     env: { OPENROUTER_API_KEY: 'k', HARNESS_EVAL_TB_DATASET_DIR: datasetDir ?? path.dirname(taskDir) },
@@ -2083,8 +2771,8 @@ test('multiple repetitions run each condition, alternate order, and all charge t
     collectEvidence: trustedFixtureVerifierEvidence,
   });
   await steps.taskLock();
-  const budget = createBudget({ ceilingUsd: 10, label: 'kimi-pair' });
-  const [pair] = await steps.kimiPair(budget);
+  const budget = createBudget({ ceilingUsd: 10, label: 'controlled-pair' });
+  const [pair] = await steps.controlledPair(budget);
   assert.equal(pair.repetitionCount, 2);
   const runs = invocations.filter((i) => i.args[0] === 'run');
   assert.equal(runs.length, 4, '2 repetitions × 2 conditions');
@@ -2114,7 +2802,7 @@ test('routine primary order alternates deterministically across release identiti
     const { spawnImpl, invocations } = fakeHarborSpawn({ providerCostUsd: 0.01 });
     const steps = liveSteps({ taskDir, lock, spawnImpl, releaseSha });
     await steps.taskLock();
-    await steps.kimiPair(createBudget({ ceilingUsd: 10, label: `order-${releaseSha}` }));
+    await steps.controlledPair(createBudget({ ceilingUsd: 10, label: `order-${releaseSha}` }));
     const firstJob = invocations.find((invocation) => invocation.args[0] === 'run')
       .args.find((arg, index, args) => args[index - 1] === '--job-name');
     firstConditions.push(firstJob.match(/-(generic|harness)-a$/)?.[1]);
@@ -2140,7 +2828,7 @@ test('a four-task routine is blocked into an exact two-by-two AB/BA order balanc
   const { spawnImpl, invocations } = fakeHarborSpawn({ providerCostUsd: 0.01 });
   const steps = liveSteps({ datasetDir, lock, spawnImpl, releaseSha: 'balanced-release' });
   await steps.taskLock();
-  await steps.kimiPair(createBudget({ ceilingUsd: 10, label: 'balanced-order' }));
+  await steps.controlledPair(createBudget({ ceilingUsd: 10, label: 'balanced-order' }));
   const firstArmByTask = new Map();
   for (const invocation of invocations.filter((entry) => entry.args[0] === 'run')) {
     const task = invocation.args[invocation.args.indexOf('--include-task-name') + 1];
@@ -2160,7 +2848,7 @@ test('a pair requires a strict majority of scheduled repetitions to have two val
     reward: ({ jobName }) => /-(?:generic|harness)-a1$/.test(jobName) ? 1 : null,
   });
   const steps = buildLiveSteps({
-    config: { execution: { environment: 'docker' } },
+    config: { controlledLane: CONTROLLED_LANE, execution: { environment: 'docker' } },
     lock,
     workDir: tmpdir(),
     env: { OPENROUTER_API_KEY: 'k', HARNESS_EVAL_TB_DATASET_DIR: datasetDir },
@@ -2173,7 +2861,7 @@ test('a pair requires a strict majority of scheduled repetitions to have two val
     collectEvidence: trustedFixtureVerifierEvidence,
   });
   await steps.taskLock();
-  const [pair] = await steps.kimiPair(createBudget({ ceilingUsd: 10, label: 'strict-pair-validity' }));
+  const [pair] = await steps.controlledPair(createBudget({ ceilingUsd: 10, label: 'strict-pair-validity' }));
   assert.equal(pair.validRepetitionCount, 1);
   assert.equal(pair.invalidRepetitionCount, 2);
   assert.equal(pair.failureKind, 'verifier', 'one valid paired trial out of three scheduled cannot validate the pair');

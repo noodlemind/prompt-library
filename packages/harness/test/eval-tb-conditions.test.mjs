@@ -1,8 +1,18 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { buildGenericCondition, NEUTRAL_SYSTEM_PROMPT } from '../../../evals/external/terminal_bench/generic-condition.mjs';
+import {
+  buildGenericCondition,
+  buildPromptComponentManifest as buildConditionPromptComponentManifest,
+  NEUTRAL_SYSTEM_PROMPT,
+} from '../../../evals/external/terminal_bench/generic-condition.mjs';
 import { buildHarnessCondition } from '../../../evals/external/terminal_bench/harness-condition.mjs';
 import { BUNDLE_MOUNT_TARGET } from '../../../evals/external/terminal_bench/provision.mjs';
+import {
+  buildPromptComponentManifest,
+  PROMPT_COMPONENT_MANIFEST_SCHEMA,
+  PROMPT_COMPONENT_MANIFEST_SEPARATOR,
+  validatePromptComponentManifestStructure,
+} from '../../../evals/lib/prompt-manifest.mjs';
 import {
   buildGuidance,
   buildGuidanceCatalog,
@@ -14,6 +24,25 @@ const INSTRUCTION = 'Reimplement the COBOL program in Python producing identical
 const LIMITS = { maxSteps: 60, timeoutMs: 15 * 60_000, maxOutputTokens: 8192, trialCeilingUsd: 5 };
 const CONTRACT = '# Engineer Agent contract\nOrient before edits; gate mutations; verify before completion.';
 
+test('prompt manifest builders share one fixed structural contract', () => {
+  assert.equal(buildConditionPromptComponentManifest, buildPromptComponentManifest);
+  const { systemPrompt, manifest } = buildPromptComponentManifest([
+    { id: 'first', content: 'alpha' },
+    { id: 'second', content: 'beta 🧠' },
+  ]);
+  assert.equal(systemPrompt, `alpha${PROMPT_COMPONENT_MANIFEST_SEPARATOR}beta 🧠`);
+  assert.equal(manifest.schema, PROMPT_COMPONENT_MANIFEST_SCHEMA);
+  assert.equal(manifest.separator, PROMPT_COMPONENT_MANIFEST_SEPARATOR);
+  assert.equal(validatePromptComponentManifestStructure(manifest).valid, true);
+
+  const wrongSeparator = structuredClone(manifest);
+  wrongSeparator.separator = '\n';
+  assert.deepEqual(validatePromptComponentManifestStructure(wrongSeparator), {
+    valid: false,
+    reason: 'invalid-root',
+  });
+});
+
 test('generic condition keeps the original instruction and a neutral prompt with no harness workflow', () => {
   const condition = buildGenericCondition({ instruction: INSTRUCTION, limits: LIMITS });
   assert.equal(condition.id, 'generic');
@@ -21,6 +50,11 @@ test('generic condition keeps the original instruction and a neutral prompt with
   assert.equal(condition.systemPrompt, NEUTRAL_SYSTEM_PROMPT);
   assert.ok(!/harness|orient|gate|plan[_ -]?lock|skill/i.test(condition.systemPrompt), 'neutral prompt must not leak harness workflow');
   assert.deepEqual(condition.setupCommands, []);
+  assert.equal(condition.promptComponentManifest.complete, true);
+  assert.equal(condition.promptComponentManifest.systemPromptChars, condition.systemPrompt.length);
+  assert.equal(condition.promptComponentManifest.systemPromptBytes, Buffer.byteLength(condition.systemPrompt, 'utf8'));
+  assert.deepEqual(condition.promptComponentManifest.components.map((component) => component.id), ['neutral-system']);
+  assert.ok(condition.promptComponentManifest.components.every((component) => !('content' in component)));
 });
 
 test('the neutral prompt is a fair baseline that still encourages testing and verification', () => {
@@ -37,6 +71,19 @@ test('harness condition layers the engineer contract and guidance on the same ba
   assert.ok(condition.systemPrompt.includes(`${BUNDLE_MOUNT_TARGET}/harness-cli`), 'the model is taught the immutable absolute CLI path');
   assert.match(condition.systemPrompt, /do not (?:install|copy|symlink)/i);
   assert.ok(condition.setupCommands.length > 0 && condition.setupCommands.every((c) => /harness/.test(c)), 'activation commands run the harness CLI');
+  assert.deepEqual(
+    condition.promptComponentManifest.components.map((component) => component.id),
+    ['neutral-system', 'engineer-contract', 'immutable-cli-guidance', 'guidance-index']
+  );
+  assert.equal(condition.promptComponentManifest.systemPromptChars, condition.systemPrompt.length);
+  assert.equal(condition.promptComponentManifest.systemPromptBytes, Buffer.byteLength(condition.systemPrompt, 'utf8'));
+  assert.match(condition.promptComponentManifest.systemPromptHash, /^[a-f0-9]{64}$/);
+  assert.ok(condition.promptComponentManifest.components.every((component) =>
+    Number.isInteger(component.chars) && component.chars > 0 &&
+    Number.isInteger(component.bytes) && component.bytes > 0 &&
+    /^[a-f0-9]{64}$/.test(component.sha256) &&
+    !('content' in component)
+  ));
 });
 
 test('both conditions receive identical, independent limit copies', () => {

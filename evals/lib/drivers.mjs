@@ -5,6 +5,10 @@
  */
 import crypto from 'node:crypto';
 import { costOfUsage, estimateRequestCostUsd } from './budget.mjs';
+import {
+  PROMPT_COMPONENT_MANIFEST_SEPARATOR,
+  validatePromptComponentManifestStructure,
+} from './prompt-manifest.mjs';
 
 export class ProviderError extends Error {
   constructor(message, { kind, billed = false, status = null, billingUncertain = false } = {}) {
@@ -93,6 +97,46 @@ function roleChars(messages) {
   return totals;
 }
 
+function validatedPromptComponentManifest(manifest, systemPrompt) {
+  if (manifest == null) return null;
+  const structural = validatePromptComponentManifestStructure(manifest);
+  if (!structural.valid && structural.reason === 'unexpected-field') {
+    throw new ProviderError('prompt component manifest contains an unexpected field', { kind: 'contract', billed: false });
+  }
+  if (!structural.valid) {
+    throw new ProviderError('prompt component manifest does not match the system prompt', { kind: 'contract', billed: false });
+  }
+  const value = structural.manifest;
+  const components = value.components;
+  const shapeMatchesContent =
+    value.systemPromptChars === systemPrompt.length &&
+    value.systemPromptBytes === Buffer.byteLength(systemPrompt, 'utf8') &&
+    value.systemPromptHash === sha256(systemPrompt);
+  if (!shapeMatchesContent) {
+    throw new ProviderError('prompt component manifest does not match the system prompt', { kind: 'contract', billed: false });
+  }
+
+  for (let ordinal = 0; ordinal < components.length; ordinal += 1) {
+    const component = components[ordinal];
+    const content = systemPrompt.slice(component.startChar, component.endChar);
+    const validComponent =
+      component.chars === content.length &&
+      component.bytes === Buffer.byteLength(content, 'utf8') &&
+      component.sha256 === sha256(content);
+    if (!validComponent) {
+      throw new ProviderError('prompt component manifest contains an invalid component span', { kind: 'contract', billed: false });
+    }
+    if (ordinal < components.length - 1 &&
+        systemPrompt.slice(
+          component.endChar,
+          component.endChar + PROMPT_COMPONENT_MANIFEST_SEPARATOR.length
+        ) !== PROMPT_COMPONENT_MANIFEST_SEPARATOR) {
+      throw new ProviderError('prompt component manifest separator does not match the system prompt', { kind: 'contract', billed: false });
+    }
+  }
+  return value;
+}
+
 function shellCommandSegments(command) {
   const text = String(command || '');
   const segments = [];
@@ -133,15 +177,62 @@ function shellCommandSegments(command) {
   return segments;
 }
 
+function shellWords(command) {
+  const words = [];
+  let word = '';
+  let quote = null;
+  let escaped = false;
+  let started = false;
+
+  const push = () => {
+    if (!started) return;
+    words.push(word);
+    word = '';
+    started = false;
+  };
+
+  for (const char of String(command || '')) {
+    if (escaped) {
+      word += char;
+      started = true;
+      escaped = false;
+      continue;
+    }
+    if (char === '\\' && quote !== "'") {
+      escaped = true;
+      started = true;
+      continue;
+    }
+    if (quote) {
+      if (char === quote) quote = null;
+      else word += char;
+      started = true;
+      continue;
+    }
+    if (char === "'" || char === '"') {
+      quote = char;
+      started = true;
+      continue;
+    }
+    if (/\s/.test(char)) {
+      push();
+      continue;
+    }
+    word += char;
+    started = true;
+  }
+  if (escaped) word += '\\';
+  push();
+  return words;
+}
+
 function commandCategory(command) {
   const text = String(command || '').trim();
-  const harnessCommand = '(?:harness|/opt/harness-bundle/harness-cli)';
-  const invokesHarness = (subcommand) =>
-    new RegExp(`(?:^|[\\s;&|()])${harnessCommand}\\s+${subcommand}(?=\\s|$)`).test(text);
-  if (invokesHarness('orient')) return 'orient';
-  if (invokesHarness('(?:plan-new|validate-plan)') || /docs\/plans\//.test(text)) return 'plan';
-  if (invokesHarness('gate')) return 'gate';
-  if (invokesHarness('verify')) return 'verify';
+  const operation = harnessOperation(text);
+  if (operation === 'orient') return 'orient';
+  if (['plan-new', 'validate-plan'].includes(operation) || /docs\/plans\//.test(text)) return 'plan';
+  if (operation === 'gate') return 'gate';
+  if (operation === 'verify') return 'verify';
   const gitPrefix = String.raw`\bgit(?:\s+(?:(?:-C|-c|--git-dir|--work-tree)\s+\S+|--(?:git-dir|work-tree)=\S+))*\s+`;
   const mutatingGit = new RegExp(
     `${gitPrefix}(?:add|am|apply|branch|checkout|cherry-pick|clean|clone|commit|filter-branch|filter-repo|gc|merge|mv|rebase|reflog\\s+(?:delete|expire)|remote\\s+(?:add|remove|rename|set-url)|reset|restore|revert|rm|stash|switch|tag|update-index|update-ref|worktree\\s+(?:add|move|prune|remove))\\b`
@@ -175,8 +266,46 @@ function commandProgram(command) {
   return String(command || '').trim().split(/\s+/)[0]?.replace(/^.*\//, '') || null;
 }
 
+const KNOWN_HARNESS_OPERATIONS = new Set([
+  'orient', 'recall', 'learnings', 'remember', 'compound', 'index', 'consolidate',
+  'plan-new', 'validate-plan', 'gate', 'verify', 'doctor', 'report',
+]);
+
+function harnessInvocation(command) {
+  for (const segment of shellCommandSegments(command)) {
+    const words = shellWords(segment);
+    let executableIndex = 0;
+    while (/^[A-Za-z_][A-Za-z0-9_]*=/.test(words[executableIndex] || '')) executableIndex += 1;
+    const executable = words[executableIndex];
+    const immutable = executable === '/opt/harness-bundle/harness-cli';
+    if (executable !== 'harness' && !immutable) continue;
+    const candidate = words[executableIndex + 1] || null;
+    return {
+      immutable,
+      operation: KNOWN_HARNESS_OPERATIONS.has(candidate) ? candidate : null,
+    };
+  }
+  return null;
+}
+
+function harnessOperation(command) {
+  return harnessInvocation(command)?.operation ?? null;
+}
+
+function contextSourceFor({ toolName, command, category }) {
+  if (toolName === 'load_guidance') return 'guidance-retrieval';
+  if (toolName === 'checkpoint') return 'durable-state';
+  const operation = harnessOperation(command);
+  if (['orient', 'recall', 'learnings'].includes(operation)) return 'memory-retrieval';
+  if (['remember', 'compound', 'index'].includes(operation)) return 'memory-construction';
+  if (operation === 'consolidate') return 'memory-consolidation';
+  if (operation === 'gate' || operation === 'plan-new' || operation === 'validate-plan') return 'planning-and-gate';
+  if (operation === 'verify' || toolName === 'verify_harness') return 'verification';
+  return category || 'unknown';
+}
+
 function invokesImmutableHarnessCli(command) {
-  return /(?:^|[\s;&|()])['"]?\/opt\/harness-bundle\/harness-cli['"]?(?=\s|$)/.test(String(command || ''));
+  return harnessInvocation(command)?.immutable === true;
 }
 
 function changedPaths(command) {
@@ -364,6 +493,8 @@ export function openAiToolDriver({
   let pendingRequestId = null;
   let baseSystem = '';
   let baseInstruction = '';
+  let promptComponentManifest = null;
+  const toolResultContextSources = new Map();
   let stateLedger = null;
   let stateRevision = 0;
   let fallbackDetected = false;
@@ -501,6 +632,47 @@ export function openAiToolDriver({
       message?.role === 'system' && index !== 0 &&
       !durableStateMessages.some((candidate) => candidate.index === index)
     ).length;
+    const serializedMessages = JSON.stringify(requestMessages);
+    const serializedTools = JSON.stringify(body.tools);
+    const serializedMessageChars = requestMessages.map((message) => JSON.stringify(message).length);
+    const buckets = {
+      baseSystem: 0,
+      instruction: 0,
+      durableState: 0,
+      assistantHistory: 0,
+      toolResultHistory: 0,
+      otherMessages: 0,
+      messageEnvelope: Math.max(0, serializedMessages.length - serializedMessageChars.reduce((sum, value) => sum + value, 0)),
+      toolSchema: serializedTools.length,
+      payloadEnvelope: Math.max(0, payload.length - serializedMessages.length - serializedTools.length),
+      toolResultHistoryBySource: {},
+      complete: true,
+    };
+    for (let index = 0; index < requestMessages.length; index += 1) {
+      const message = requestMessages[index];
+      const chars = serializedMessageChars[index];
+      if (index === 0 && message?.role === 'system') buckets.baseSystem += chars;
+      else if (index === 1 && message?.role === 'user') buckets.instruction += chars;
+      else if (durableStateMessages.some((candidate) => candidate.index === index)) buckets.durableState += chars;
+      else if (message?.role === 'assistant') buckets.assistantHistory += chars;
+      else if (message?.role === 'tool') {
+        buckets.toolResultHistory += chars;
+        const source = toolResultContextSources.get(message.tool_call_id) ?? 'unknown';
+        buckets.toolResultHistoryBySource[source] = (buckets.toolResultHistoryBySource[source] ?? 0) + chars;
+      } else buckets.otherMessages += chars;
+    }
+    const explainedChars = [
+      buckets.baseSystem,
+      buckets.instruction,
+      buckets.durableState,
+      buckets.assistantHistory,
+      buckets.toolResultHistory,
+      buckets.otherMessages,
+      buckets.messageEnvelope,
+      buckets.toolSchema,
+      buckets.payloadEnvelope,
+    ].reduce((sum, value) => sum + value, 0);
+    buckets.complete = explainedChars === payload.length;
     const requestControls = requestControlProjection(endpoint, body);
     return {
       requestId,
@@ -530,6 +702,8 @@ export function openAiToolDriver({
       toolSchemaHash: sha256(JSON.stringify(body.tools)),
       toolCount: body.tools.length,
       toolMode: postVerify ? 'finish-only' : 'full',
+      promptComponentManifest: promptComponentManifest ? structuredClone(promptComponentManifest) : null,
+      promptBuckets: buckets,
       charsByRole: roleChars(requestMessages),
       messagesHash: sha256(JSON.stringify(requestMessages)),
       stateRevision,
@@ -732,12 +906,20 @@ export function openAiToolDriver({
       : call.function.name === 'verify_harness'
         ? 'verify'
         : commandCategory(parsed.input.command);
+    const operation = parsed.valid ? harnessOperation(parsed.input.command) : null;
+    const contextSource = contextSourceFor({
+      toolName: call.function.name,
+      command: parsed.input.command,
+      category,
+    });
     telemetry?.record('tool_call', {
       requestId,
       toolCallId: call?.id ?? null,
       tool: call?.function?.name ?? null,
       category,
       program: commandProgram(parsed.input.command),
+      harnessOperation: operation,
+      contextSource,
       immutableHarnessCli: parsed.valid && invokesImmutableHarnessCli(parsed.input.command),
       argumentsValid: parsed.valid,
       argsChars: parsed.raw.length,
@@ -756,12 +938,15 @@ export function openAiToolDriver({
         _id: call.id,
         _requestId: requestId,
         _category: parsed.valid ? 'finish' : 'invalid',
+        _harnessOperation: null,
+        _contextSource: 'finalization',
         _startedAtMs: monotonicNow(),
         _argumentsValid: parsed.valid,
         ...(parsed.error ? { _argumentError: parsed.error } : {}),
       };
     }
     const category = !parsed.valid ? 'invalid' : call.function.name === 'verify_harness' ? 'verify' : commandCategory(input.command);
+    const operation = parsed.valid ? harnessOperation(input.command) : null;
     return {
       type: 'tool',
       name: call.function.name,
@@ -769,6 +954,8 @@ export function openAiToolDriver({
       _id: call.id,
       _requestId: requestId,
       _category: category,
+      _harnessOperation: operation,
+      _contextSource: contextSourceFor({ toolName: call.function.name, command: input.command, category }),
       _startedAtMs: monotonicNow(),
       _argumentsValid: parsed.valid,
       ...(parsed.error ? { _argumentError: parsed.error } : {}),
@@ -885,11 +1072,13 @@ export function openAiToolDriver({
     get verificationPassed() {
       return verified != null;
     },
-    reset({ system, instruction, tools: schemas }) {
+    reset({ system, instruction, tools: schemas, promptComponentManifest: manifest = null }) {
       tools.length = 0;
       tools.push(...toOpenAiTools(schemas));
       baseSystem = redactExactSecret(String(system ?? ''), apiKey);
       baseInstruction = redactExactSecret(String(instruction ?? ''), apiKey);
+      promptComponentManifest = validatedPromptComponentManifest(manifest, baseSystem);
+      toolResultContextSources.clear();
       messages = [
         { role: 'system', content: baseSystem },
         { role: 'user', content: baseInstruction },
@@ -1031,13 +1220,22 @@ export function openAiToolDriver({
       const serialized = JSON.stringify(safeResult);
       const compacted = compactToolResult(safeResult, toolResultLimit);
       const category = action._category || commandCategory(action.input?.command);
+      const operation = action._harnessOperation ?? harnessOperation(action.input?.command);
+      const contextSource = action._contextSource ?? contextSourceFor({
+        toolName: action.name,
+        command: action.input?.command,
+        category,
+      });
       const terminalTool = ['bash', 'runInTerminal', 'verify_harness'].includes(action.name);
       const exitCode = Number.isFinite(safeResult?.code) ? safeResult.code : null;
+      if (action._id) toolResultContextSources.set(action._id, contextSource);
       telemetry?.record('tool_result', {
         requestId: action._requestId ?? null,
         toolCallId: action._id || 'call_0',
         tool: action.name || 'finish',
         category,
+        harnessOperation: operation,
+        contextSource,
         exitCode,
         durationMs: Math.max(0, monotonicNow() - (action._startedAtMs ?? monotonicNow())),
         stdoutChars: String(safeResult?.stdout ?? '').length,

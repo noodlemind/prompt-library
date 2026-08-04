@@ -12,6 +12,39 @@
     "schema": { "const": "eval-report.v2" },
     "harnessVersion": { "type": "string" },
     "releaseSha": { "type": "string" },
+    "controlledLane": {
+      "type": "object",
+      "required": ["host", "profileId", "billingProfileHash"],
+      "properties": {
+        "host": { "type": "string" },
+        "profileId": { "type": "string" },
+        "billingProfileHash": { "type": "string" }
+      }
+    },
+    "qualification": {
+      "type": ["object", "null"],
+      "required": ["capability", "passingArm", "task", "reason"],
+      "properties": {
+        "capability": { "enum": ["qualified", "inconclusive"] },
+        "passingArm": { "type": ["string", "null"] },
+        "task": { "type": ["string", "null"] },
+        "reason": { "type": "string" }
+      }
+    },
+    "qualificationBaseline": {
+      "type": ["object", "null"],
+      "required": ["valid", "capability", "passingArm", "evidenceHash", "task", "accountedExposureUsd", "reasons"],
+      "properties": {
+        "valid": { "type": "boolean" },
+        "capability": { "type": ["string", "null"] },
+        "passingArm": { "type": ["string", "null"] },
+        "evidenceHash": { "type": ["string", "null"] },
+        "task": { "type": ["string", "null"] },
+        "accountedExposureUsd": { "type": ["number", "null"], "minimum": 0 },
+        "providerKeyFingerprint": { "type": ["string", "null"] },
+        "reasons": { "type": "array", "items": { "type": "string" } }
+      }
+    },
     "task": {
       "type": "object",
       "required": ["datasetRef", "task", "taskChecksum", "taskSet", "requiredTaskSet"],
@@ -51,7 +84,7 @@
       "type": "object",
       "required": ["mode", "releaseEligible", "selectedTasks", "requiredTasks", "trust"],
       "properties": {
-        "mode": { "enum": ["release", "calibration", "diagnostic-task", "diagnostic-lock", "diagnostic-trust", "deterministic-only"] },
+        "mode": { "enum": ["release", "calibration", "qualification", "diagnostic-task", "diagnostic-lock", "diagnostic-trust", "deterministic-only"] },
         "releaseEligible": { "type": "boolean" },
         "selectedTasks": { "type": "array", "items": { "type": "string" } },
         "requiredTasks": { "type": "array", "items": { "type": "string" } },
@@ -118,6 +151,32 @@
       }
     },
     "telemetryComplete": { "type": "boolean" },
+    "diagnosticCoverage": {
+      "type": "object",
+      "required": ["status", "pairs"],
+      "properties": {
+        "status": { "enum": ["complete", "partial", "unavailable"] },
+        "pairs": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "host", "task", "status", "runDocuments", "schemaValidRunDocuments",
+              "causallyAttributable", "reason"
+            ],
+            "properties": {
+              "host": { "type": "string" },
+              "task": { "type": ["string", "null"] },
+              "status": { "enum": ["complete", "partial", "unavailable"] },
+              "runDocuments": { "type": "integer", "minimum": 0 },
+              "schemaValidRunDocuments": { "type": "integer", "minimum": 0 },
+              "causallyAttributable": { "type": "boolean" },
+              "reason": { "type": ["string", "null"] }
+            }
+          }
+        }
+      }
+    },
     "coverage": {
       "type": "object",
       "required": ["complete", "requiredHosts", "expectedTasks", "observed", "missing", "duplicates", "unexpected", "reason"],
@@ -226,6 +285,9 @@
             "limitUsd": { "type": ["number", "null"], "minimum": 0 },
             "limitRemainingUsd": { "type": ["number", "null"], "minimum": 0 },
             "reset": { "type": ["string", "null"] },
+            "hardLimitUsd": { "type": ["number", "null"], "minimum": 0 },
+            "keyFingerprint": { "type": ["string", "null"] },
+            "observedKeyConsumedUsd": { "type": ["number", "null"], "minimum": 0 },
             "checkedAt": { "type": ["string", "null"] }
           }
         },
@@ -293,6 +355,7 @@
             "minimumRepetitions": { "type": ["integer", "null"], "minimum": 0 },
             "controlledWins": { "type": ["integer", "null"], "minimum": 0 },
             "harnessSolvedTasks": { "type": ["integer", "null"], "minimum": 0 },
+            "providerKeyFingerprint": { "type": ["string", "null"] },
             "reasons": { "type": "array", "items": { "type": "string" } }
           }
         }

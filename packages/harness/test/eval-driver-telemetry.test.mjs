@@ -5,6 +5,7 @@ import { openAiToolDriver, replayDriver } from '../../../evals/lib/drivers.mjs';
 import { getProfile } from '../../../evals/lib/model-profiles.mjs';
 import { createBudget } from '../../../evals/lib/budget.mjs';
 import { createTelemetry } from '../../../evals/lib/telemetry.mjs';
+import { buildPromptComponentManifest } from '../../../evals/lib/prompt-manifest.mjs';
 
 const KIMI = getProfile('kimi-k2.7-code');
 const TOOLS = [
@@ -56,7 +57,12 @@ function harness(responses, opts = {}) {
   const telemetry = createTelemetry();
   const budget = createBudget({ ceilingUsd: opts.ceilingUsd ?? 5, label: 'trial' });
   const driver = openAiToolDriver({ profile: KIMI, apiKey: 'k', fetchImpl, budget, telemetry, ...opts.driver });
-  driver.reset({ system: 'sys', instruction: 'do the task', tools: TOOLS });
+  driver.reset({
+    system: 'sys',
+    instruction: 'do the task',
+    tools: TOOLS,
+    ...(opts.promptComponentManifest ? { promptComponentManifest: opts.promptComponentManifest } : {}),
+  });
   return { driver, calls, telemetry, budget };
 }
 
@@ -405,6 +411,7 @@ test('immutable harness-cli invocations retain lifecycle categories without matc
       message: assistantToolCalls([
         ['runInTerminal', { command: 'cd /workspace && /opt/harness-bundle/harness-cli verify --json' }],
         ['runInTerminal', { command: 'evil-harness-cli verify' }],
+        ['runInTerminal', { command: 'echo harness recall' }],
       ]),
       usage: USAGE,
     }),
@@ -413,9 +420,16 @@ test('immutable harness-cli invocations retain lifecycle categories without matc
   driver.observe(action, { code: 0, stdout: '', stderr: '' });
   action = await driver.next();
   driver.observe(action, { code: 0, stdout: '', stderr: '' });
+  action = await driver.next();
+  driver.observe(action, { code: 0, stdout: '', stderr: '' });
   assert.deepEqual(
     telemetry.snapshot().events.filter((event) => event.type === 'tool_call').map((event) => event.category),
-    ['verify', 'other']
+    ['verify', 'other', 'other']
+  );
+  assert.equal(
+    telemetry.snapshot().events.filter((event) => event.type === 'tool_call').at(-1).harnessOperation,
+    null,
+    'mentioning a Harness command as data must not count as lifecycle engagement'
   );
 });
 
@@ -853,6 +867,95 @@ test('request telemetry records request and payload footprint without retaining 
   assert.equal(request.durableStateMessageCount, 0);
   assert.equal(request.unexpectedSystemMessageCount, 0);
   assert.equal('messages' in request, false);
+});
+
+test('request telemetry binds content-free prompt components and exact context buckets to memory operations', async () => {
+  const systemPrompt = 'sys';
+  const promptComponentManifest = {
+    schema: 'prompt-component-manifest.v1',
+    separator: '\n\n',
+    systemPromptChars: systemPrompt.length,
+    systemPromptBytes: Buffer.byteLength(systemPrompt, 'utf8'),
+    systemPromptHash: crypto.createHash('sha256').update(systemPrompt).digest('hex'),
+    complete: true,
+    components: [{
+      id: 'engineer-contract',
+      ordinal: 0,
+      startChar: 0,
+      endChar: systemPrompt.length,
+      chars: systemPrompt.length,
+      bytes: Buffer.byteLength(systemPrompt, 'utf8'),
+      sha256: crypto.createHash('sha256').update(systemPrompt).digest('hex'),
+    }],
+  };
+  const { driver, telemetry } = harness([
+    completion({
+      message: assistantToolCalls([['runInTerminal', { command: '/opt/harness-bundle/harness-cli recall payment --json' }]]),
+      usage: USAGE,
+    }),
+    completion({ message: { role: 'assistant', content: 'done' }, usage: USAGE, finishReason: 'stop' }),
+  ], { promptComponentManifest });
+
+  const action = await driver.next();
+  driver.observe(action, { code: 0, stdout: 'one bounded memory card', stderr: '' });
+  await driver.next();
+
+  const events = telemetry.snapshot().events;
+  const recall = events.find((event) => event.type === 'tool_call');
+  assert.equal(recall.harnessOperation, 'recall');
+  assert.equal(recall.contextSource, 'memory-retrieval');
+  const request = events.filter((event) => event.type === 'request').at(-1);
+  assert.deepEqual(request.promptComponentManifest, promptComponentManifest);
+  assert.equal(request.promptBuckets.complete, true);
+  assert.ok(request.promptBuckets.toolResultHistoryBySource['memory-retrieval'] > 0);
+  const disjointTotal = [
+    'baseSystem', 'instruction', 'durableState', 'assistantHistory',
+    'toolResultHistory', 'otherMessages', 'messageEnvelope', 'toolSchema', 'payloadEnvelope',
+  ].reduce((sum, key) => sum + request.promptBuckets[key], 0);
+  assert.equal(disjointTotal, request.payloadChars, 'disjoint serialized buckets must explain the complete provider request');
+  assert.equal(JSON.stringify(request).includes('one bounded memory card'), false, 'telemetry retains sizes and hashes, never memory content');
+});
+
+test('prompt component manifests reject unknown content fields without leaking their values', () => {
+  const secret = 'RAW-PROMPT-CONTENT-MUST-NOT-SURVIVE';
+  const systemPrompt = 'sys';
+  const component = {
+    id: 'engineer-contract', ordinal: 0, startChar: 0, endChar: systemPrompt.length,
+    chars: systemPrompt.length, bytes: Buffer.byteLength(systemPrompt, 'utf8'),
+    sha256: crypto.createHash('sha256').update(systemPrompt).digest('hex'),
+  };
+  const manifest = {
+    schema: 'prompt-component-manifest.v1', separator: '\n\n',
+    systemPromptChars: systemPrompt.length,
+    systemPromptBytes: Buffer.byteLength(systemPrompt, 'utf8'),
+    systemPromptHash: crypto.createHash('sha256').update(systemPrompt).digest('hex'),
+    complete: true,
+    components: [{ ...component, content: secret }],
+    content: secret,
+  };
+  let observed;
+  try {
+    harness([completion({ message: { role: 'assistant', content: 'done' }, usage: USAGE })], {
+      promptComponentManifest: manifest,
+    });
+  } catch (error) {
+    observed = error;
+  }
+  assert.ok(observed);
+  assert.match(observed.message, /manifest.*unexpected field/i);
+  assert.doesNotMatch(observed.message, new RegExp(secret));
+  assert.doesNotMatch(JSON.stringify(observed.details ?? {}), new RegExp(secret));
+});
+
+test('the driver verifies structurally valid component hashes against the actual system prompt', () => {
+  const { manifest } = buildPromptComponentManifest([{ id: 'system', content: 'sys' }]);
+  manifest.components[0].sha256 = '0'.repeat(64);
+  assert.throws(
+    () => harness([completion({ message: { role: 'assistant', content: 'done' }, usage: USAGE })], {
+      promptComponentManifest: manifest,
+    }),
+    /invalid component span/i
+  );
 });
 
 test('deterministic compaction bounds the request and retains durable task state without orphaning tool messages', async () => {

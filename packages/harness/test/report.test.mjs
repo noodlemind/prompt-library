@@ -124,6 +124,91 @@ test('report surfaces per-session performance from host metrics', () => {
   assert.match(text, /75%/); // cache ratio rendered as percent
 });
 
+test('report exposes host evidence coverage, compaction cost, and assistant output phases', () => {
+  const events = [
+    {
+      type: 'host_session', session: 'evidence-session', source: 'host', ts: '2026-08-04T00:00:00Z',
+      usage: { 'gen_ai.usage.input_tokens': 1000, 'gen_ai.usage.output_tokens': 200, 'gen_ai.usage.total_tokens': 1200 },
+      metrics: {
+        model: 'small-model', turns: 2, toolCalls: 1,
+        promptEvidence: {
+          systemMessages: [{ ordinal: 0, role: 'system', chars: 100, bytes: 100, sha256: 'a'.repeat(64) }],
+          loadedSkills: [{ name: 'engineer', path: '/skills/engineer/SKILL.md', contentChars: 180, contentBytes: 200, contentSha256: 'b'.repeat(64), invocations: 2 }],
+          coverage: { systemMessages: 'complete', loadedSkills: 'complete' },
+        },
+        compaction: {
+          started: 1, completed: 1, failed: 0, compactionTokensUsed: 80,
+          preCompactionTokens: 900, preCompactionMessages: 12, completionsWithTokenUsage: 1, coverage: 'complete',
+        },
+        assistantOutput: {
+          messages: 2, messagesWithTokens: 2, observedTokens: 200,
+          byPhase: { toolCalling: 140, responseOnly: 60 }, coverage: 'complete', reconcilesSessionOutput: true,
+        },
+        telemetryCoverage: {
+          sessionTotals: 'exact', finalContextSnapshot: 'complete', perRequestInputTokens: 'unavailable',
+          systemMessages: 'complete', loadedSkills: 'complete', compactions: 'complete',
+          assistantOutputByPhase: 'complete',
+        },
+      },
+    },
+  ];
+  const report = buildReport({ workspace: os.tmpdir(), events });
+  assert.equal(report.sessionTotals.compactions, 1);
+  assert.equal(report.sessionTotals.compactionTokens, 80);
+  assert.equal(report.sessionTotals.assistantOutputTokens, 200);
+  assert.equal(report.sessionTotals.assistantToolCallingTokens, 140);
+  assert.equal(report.sessionTotals.assistantResponseOnlyTokens, 60);
+  assert.equal(report.sessionTotals.systemMessages, 1);
+  assert.equal(report.sessionTotals.systemMessageChars, 100);
+  assert.equal(report.sessionTotals.loadedSkills, 1);
+  assert.equal(report.sessionTotals.loadedSkillBytes, 200);
+  assert.equal(report.sessionTotals.skillInvocations, 2);
+  assert.equal(report.sessionTotals.systemMessageEvidenceCompleteSessions, 1);
+  assert.equal(report.sessionTotals.loadedSkillEvidenceCompleteSessions, 1);
+  assert.deepEqual(report.sessionCoverage, [
+    'exact-session-totals; final-context-snapshot; per-request-input-unavailable',
+  ]);
+  assert.deepEqual(report.sessionCoverageDetails, [{
+    sessionTotals: 'exact', finalContextSnapshot: 'complete', perRequestInputTokens: 'unavailable',
+  }]);
+  const text = renderReport(report);
+  assert.match(text, /1 compaction · 80 tokens/);
+  assert.match(text, /assistant output observed 200 · tool-calling 140 · response-only 60/);
+  assert.match(text, /prompt evidence 1 system message · 100 chars · 1 loaded skill · 200 bytes \(2 invocations\)/);
+  assert.match(text, /prompt coverage system 1\/1 complete \(0 partial, 0 unavailable\) · skills 1\/1 complete \(0 partial, 0 unavailable\)/);
+  assert.match(text, /exact session totals · final context snapshot · per-request input unavailable/);
+});
+
+test('assistant phase rollup includes unavailable sessions in its completeness denominator', () => {
+  const events = [
+    {
+      type: 'host_session', session: 'complete', source: 'host',
+      usage: { 'gen_ai.usage.input_tokens': 100, 'gen_ai.usage.output_tokens': 20, 'gen_ai.usage.total_tokens': 120 },
+      metrics: {
+        assistantOutput: {
+          messages: 1, messagesWithTokens: 1, observedTokens: 20,
+          byPhase: { toolCalling: 0, responseOnly: 20 }, coverage: 'complete', reconcilesSessionOutput: true,
+        },
+      },
+    },
+    {
+      type: 'host_session', session: 'unavailable', source: 'host',
+      usage: { 'gen_ai.usage.input_tokens': 50, 'gen_ai.usage.output_tokens': 10, 'gen_ai.usage.total_tokens': 60 },
+      metrics: {
+        assistantOutput: {
+          messages: 0, messagesWithTokens: 0, observedTokens: 0,
+          byPhase: { toolCalling: 0, responseOnly: 0 }, coverage: 'unavailable', reconcilesSessionOutput: null,
+        },
+      },
+    },
+  ];
+  const report = buildReport({ workspace: os.tmpdir(), events });
+  assert.equal(report.sessionTotals.assistantOutputCompleteSessions, 1);
+  assert.equal(report.sessionTotals.assistantOutputUnavailableSessions, 1);
+  const text = renderReport(report);
+  assert.match(text, /1\/2 sessions complete · 0 partial · 1 unavailable/);
+});
+
 test('session token ranking uses input+output when total is absent (matches roll-up)', () => {
   const events = [
     { type: 'host_session', session: 'a', source: 'host', ts: '2026-01-01T00:00:00Z',
@@ -140,4 +225,30 @@ test('session token ranking uses input+output when total is absent (matches roll
   // Roll-up total = 400 + 999; row tokens sum to the same.
   assert.equal(report.totals.tokens, 1399);
   assert.equal(report.sessionTotals.tokens, 1399);
+});
+
+test('report does not render a partial host usage event as a measured zero', () => {
+  const events = [{
+    type: 'host_session', session: 'partial', source: 'host',
+    usage: { 'gen_ai.usage.input_tokens': 150, estimated: false },
+    metrics: {
+      model: 'small-model',
+      telemetryCoverage: {
+        sessionTotals: 'partial', finalContextSnapshot: 'unavailable', perRequestInputTokens: 'unavailable',
+      },
+    },
+  }];
+  const report = buildReport({ workspace: os.tmpdir(), events });
+  assert.deepEqual(report.totals.usageCoverage, {
+    input: 'complete', output: 'unavailable', total: 'unavailable',
+  });
+  assert.equal(report.totals.tokens, null);
+  assert.equal(report.totals.input, 150);
+  assert.equal(report.totals.output, null);
+  assert.equal(report.totals.measured, 0);
+  assert.equal(report.totals.partialMeasured, 1);
+  const text = renderReport(report);
+  assert.match(text, /^report\s+token total unavailable/m);
+  assert.match(text, /input 150 · output unavailable · partial usage 1\/1 event/);
+  assert.doesNotMatch(text, /^report\s+~0 tokens/m);
 });

@@ -1,4 +1,4 @@
-# Post-qualification routine release profile. Initial user exposure must first
+# Post-calibration routine release profile. Initial user exposure must first
 # pass the three-repetition `release-canary --calibration` decision. Later
 # releases use this one-repetition regression/overhead gate within $10.
 profile: release-routine
@@ -19,10 +19,15 @@ releaseTrust:
 task:
   lockFile: evals/external/terminal_bench/task-lock.json
 
+controlledLane:
+  host: openrouter-controlled
+  profileId: kimi-k2.7-code
+
 budget:
   releaseCeilingUsd: 10
-  kimiPairUsd: 8
+  controlledPairUsd: 8
   rerunUsd: 2
+  providerHardLimitUsd: 10
   controlledArmCeilingUsd: 0.65
 
 efficiencyThresholds:
@@ -39,6 +44,13 @@ valueThresholds:
 # prompt/cost/wall-time bounds; it does not re-claim initial value each release.
 claimPolicy:
   mode: regression-gate
+  # Routine releases may spend only after the operator supplies the accepted
+  # qualification + calibration artifact chain that established initial value.
+  requireCalibrationBaseline: true
+  requireQualificationBaseline: true
+  qualificationTask: cobol-modernization
+  minimumCalibrationRepetitions: 3
+  minimumHarnessSolvedTasks: 2
 
 repetitions:
   routine: 1

@@ -220,6 +220,7 @@ export async function runStdioAgent({
   input,
   output,
   systemPrompt,
+  promptComponentManifest = null,
   instruction,
   maxSteps = 50,
   telemetry = null,
@@ -236,10 +237,12 @@ export async function runStdioAgent({
   const runtime = {
     toolSchemaHash: sha256(JSON.stringify(bridgeTools)),
     systemPromptHash: sha256(systemPrompt),
+    promptComponentManifest: promptComponentManifest ? structuredClone(promptComponentManifest) : null,
+    promptComponentManifestHash: promptComponentManifest ? sha256(JSON.stringify(promptComponentManifest)) : null,
     instructionHash: sha256(instruction),
     toolCount: bridgeTools.length,
   };
-  driver.reset?.({ system: systemPrompt, instruction, tools: bridgeTools });
+  driver.reset?.({ system: systemPrompt, instruction, tools: bridgeTools, promptComponentManifest });
 
   const rl = readline.createInterface({ input });
   const pendingLines = [];
@@ -483,7 +486,10 @@ async function main() {
   const condition = JSON.parse(fs.readFileSync(flag('--condition'), 'utf8'));
   const instructionPath = flag('--instruction');
   const instruction = instructionPath ? fs.readFileSync(instructionPath, 'utf8') : condition.instruction;
-  const profile = getProfile(condition.profileId ?? 'kimi-k2.7-code');
+  if (typeof condition.profileId !== 'string' || condition.profileId.length === 0) {
+    throw new Error('condition.profileId is required; release agents never select a model implicitly');
+  }
+  const profile = getProfile(condition.profileId);
   const effectiveProfile = typeof condition.providerUrl === 'string' && condition.providerUrl.length > 0
     ? { ...profile, url: condition.providerUrl }
     : profile;
@@ -505,6 +511,7 @@ async function main() {
     input: process.stdin,
     output: process.stdout,
     systemPrompt: condition.systemPrompt,
+    promptComponentManifest: condition.promptComponentManifest ?? null,
     instruction,
     maxSteps: condition.limits?.maxSteps ?? 50,
     telemetry,

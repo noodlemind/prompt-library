@@ -97,7 +97,13 @@ to Deliver before editing.
 For current VS Code session-state records, total input already includes cached
 input and total output already includes reasoning output. `report` retains the
 cache, cache-write, and reasoning fields as pricing details without adding them
-to the token total a second time. When VS Code supplies `totalNanoAiu`, the
+to the token total a second time. It also reports content-free system-message
+and loaded-skill hashes/sizes, compaction usage, and assistant output by
+tool-calling versus response-only phase. The coverage label is explicit: session
+totals are exact, the system/conversation/tool-definition split is the final
+context snapshot, and per-request input attribution is unavailable from this
+host surface. Missing snapshot or phase evidence remains unavailable or partial,
+never zero. When VS Code supplies `totalNanoAiu`, the
 report renders the authoritative session value as AI credits (`1 AIC = 10^9
 nano-AIU`). The GitHub billing dashboard remains account- and billing-period
 scoped, so it should not be expected to equal one session row.

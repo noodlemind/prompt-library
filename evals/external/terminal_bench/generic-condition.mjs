@@ -8,6 +8,9 @@
  * is checked by tests to keep harness vocabulary from leaking into the
  * control arm.
  */
+import { buildPromptComponentManifest } from '../../lib/prompt-manifest.mjs';
+
+export { buildPromptComponentManifest } from '../../lib/prompt-manifest.mjs';
 
 export const NEUTRAL_SYSTEM_PROMPT = [
   'You are an experienced software engineer working in a Linux terminal.',
@@ -20,9 +23,13 @@ export const NEUTRAL_SYSTEM_PROMPT = [
 export function buildGenericCondition({ instruction, limits } = {}) {
   if (!instruction) throw new Error('instruction is required');
   if (!limits) throw new Error('limits is required');
+  const prompt = buildPromptComponentManifest([
+    { id: 'neutral-system', content: NEUTRAL_SYSTEM_PROMPT },
+  ]);
   return {
     id: 'generic',
-    systemPrompt: NEUTRAL_SYSTEM_PROMPT,
+    systemPrompt: prompt.systemPrompt,
+    promptComponentManifest: prompt.manifest,
     instruction,
     setupCommands: [],
     limits: { ...limits },
