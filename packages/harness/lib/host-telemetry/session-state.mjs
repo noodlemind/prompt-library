@@ -17,9 +17,10 @@ import { resolveCopilotHome } from '../paths.mjs';
  *
  * Each session yields one `source: 'host'`, `estimated: false` event carrying
  * both `usage` (for token roll-ups) and `metrics` (for the performance view).
- * The headline token total folds in cache and reasoning tokens so the report
- * reflects the full billed footprint. It never throws — a missing or malformed
- * store degrades the report to harness estimates.
+ * VS Code records provider `prompt_tokens` and `completion_tokens` as the input
+ * and output totals. Cache read/write and reasoning are detail subsets used for
+ * pricing, not extra tokens to add again. It never throws — a missing or
+ * malformed store degrades the report to harness estimates.
  */
 
 // Bound how many session directories we scan so a long-lived store cannot blow
@@ -33,7 +34,16 @@ function sessionStateDir(copilotHome) {
 /** Sum every model's usage in a `session.shutdown` modelMetrics block. */
 function sumModelMetrics(modelMetrics) {
   if (!modelMetrics || typeof modelMetrics !== 'object' || Array.isArray(modelMetrics)) return null;
-  const totals = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, reasoning: 0, apiRequests: 0 };
+  const totals = {
+    input: 0,
+    output: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
+    reasoning: 0,
+    apiRequests: 0,
+    nanoAiu: 0,
+    hasNanoAiu: false,
+  };
   let sawUsage = false;
   for (const model of Object.values(modelMetrics)) {
     const usage = model?.usage;
@@ -50,6 +60,11 @@ function sumModelMetrics(modelMetrics) {
     totals.cacheRead += cacheRead;
     totals.cacheWrite += cacheWrite;
     totals.reasoning += reasoning;
+    const nanoAiu = Number(model?.totalNanoAiu);
+    if (Number.isFinite(nanoAiu) && nanoAiu >= 0) {
+      totals.nanoAiu += nanoAiu;
+      totals.hasNanoAiu = true;
+    }
   }
   return sawUsage ? totals : null;
 }
@@ -78,6 +93,18 @@ function parseJsonl(file) {
 
 function ratio(part, whole) {
   return whole > 0 ? Number((part / whole).toFixed(3)) : null;
+}
+
+function aiCreditsFromNano(value) {
+  if (value === null || value === undefined || value === '') return null;
+  const nanoAiu = Number(value);
+  return Number.isFinite(nanoAiu) && nanoAiu >= 0 ? nanoAiu / 1_000_000_000 : null;
+}
+
+function optionalCount(value) {
+  if (value === null || value === undefined || value === '') return null;
+  const count = Number(value);
+  return Number.isFinite(count) && count >= 0 ? count : null;
 }
 
 function wallMs(shutdown, startEpochMs) {
@@ -146,8 +173,11 @@ function eventFromSession(file, sessionId, workspace) {
   if (!totals) return null; // no authoritative usage — leave to harness estimates
 
   const session = shutdown?.data?.sessionId || start?.data?.sessionId || sessionId;
-  const total = totals.input + totals.output + totals.cacheRead + totals.cacheWrite + totals.reasoning;
   const sd = shutdown?.data || {};
+  const total = totals.input + totals.output;
+  const aiCredits = aiCreditsFromNano(
+    sd.totalNanoAiu ?? (totals.hasNanoAiu ? totals.nanoAiu : undefined)
+  );
   const codeChanges = sd.codeChanges || {};
   const metrics = {
     model: sd.currentModel || null,
@@ -162,11 +192,12 @@ function eventFromSession(file, sessionId, workspace) {
     toolFailures,
     skills: skillNames.size,
     skillNames: [...skillNames],
-    contextTokens: Number(sd.currentTokens) || 0,
-    systemTokens: Number(sd.systemTokens) || 0,
-    conversationTokens: Number(sd.conversationTokens) || 0,
-    toolDefinitionsTokens: Number(sd.toolDefinitionsTokens) || 0,
-    cacheReadRatio: ratio(totals.cacheRead, totals.input + totals.cacheRead),
+    contextTokens: optionalCount(sd.currentTokens),
+    systemTokens: optionalCount(sd.systemTokens),
+    conversationTokens: optionalCount(sd.conversationTokens),
+    toolDefinitionsTokens: optionalCount(sd.toolDefinitionsTokens),
+    cacheReadRatio: ratio(totals.cacheRead, totals.input),
+    aiCredits,
     tokensPerTurn: turns > 0 ? Math.round(total / turns) : null,
     linesAdded: Number(codeChanges.linesAdded) || 0,
     linesRemoved: Number(codeChanges.linesRemoved) || 0,

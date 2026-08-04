@@ -244,6 +244,10 @@ export function sessionPerformance(events) {
     (acc, r) => {
       acc.sessions += 1;
       acc.tokens += r.tokens || 0;
+      if (Number.isFinite(r.aiCredits)) {
+        acc.aiCredits += r.aiCredits;
+        acc.aiCreditSessions += 1;
+      }
       acc.premiumRequests += r.premiumRequests || 0;
       acc.apiRequests += r.apiRequests || 0;
       acc.apiDurationMs += r.apiDurationMs || 0;
@@ -254,7 +258,7 @@ export function sessionPerformance(events) {
       acc.linesRemoved += r.linesRemoved || 0;
       return acc;
     },
-    { sessions: 0, tokens: 0, premiumRequests: 0, apiRequests: 0, apiDurationMs: 0, turns: 0, toolCalls: 0, toolFailures: 0, linesAdded: 0, linesRemoved: 0 }
+    { sessions: 0, tokens: 0, aiCredits: 0, aiCreditSessions: 0, premiumRequests: 0, apiRequests: 0, apiDurationMs: 0, turns: 0, toolCalls: 0, toolFailures: 0, linesAdded: 0, linesRemoved: 0 }
   );
   return { rows: rows.slice(0, SESSION_PERF_CAP), totals };
 }
@@ -319,25 +323,46 @@ function fmtTokens(n) {
   return String(n);
 }
 
+function fmtCredits(n) {
+  if (!Number.isFinite(n)) return '-';
+  if (n > 0 && n < 0.01) return '<0.01';
+  return n.toFixed(2).replace(/\.00$/, '').replace(/(\.\d)0$/, '$1');
+}
+
+function fmtContext(r) {
+  if ([r.contextTokens, r.systemTokens, r.conversationTokens, r.toolDefinitionsTokens].every((n) => n == null)) {
+    return '-';
+  }
+  const total = fmtTokens(r.contextTokens);
+  const parts = [r.systemTokens, r.conversationTokens, r.toolDefinitionsTokens].map(fmtTokens);
+  return `${total}(${parts.join('/')})`;
+}
+
 /** Compact per-session performance table (local session metrics). */
 function renderSessionPerformance(report, ui, keyWidth) {
   const rows = report.sessions || [];
   if (!rows.length) return [];
   const tt = report.sessionTotals || {};
+  const creditSummary = !tt.aiCreditSessions
+    ? ''
+    : tt.aiCreditSessions === tt.sessions
+      ? ` · ${fmtCredits(tt.aiCredits)} AIC`
+      : ` · ${fmtCredits(tt.aiCredits)} AIC reported (${tt.aiCreditSessions}/${tt.sessions} sessions)`;
   const out = [
     '',
     ui.line({
       key: 'sessions',
-      value: `${tt.sessions} · ${tt.premiumRequests} premium · ${fmtDuration(tt.apiDurationMs)} API · ${tt.turns} turns · ${tt.toolCalls} tools (${tt.toolFailures} failed)`,
+      value: `${tt.sessions}${creditSummary} · ${tt.premiumRequests} premium · ${fmtDuration(tt.apiDurationMs)} API · ${tt.turns} turns · ${tt.toolCalls} tools (${tt.toolFailures} failed)`,
       note: `+${tt.linesAdded}/-${tt.linesRemoved} lines`,
       keyWidth,
     }),
   ];
-  const header = ['session', 'model', 'tokens', 'prem', 'turns', 'tools(f)', 'skills', 'cli', 'API', 'cache', 'ctx', 'lines'];
+  const header = ['session', 'model', 'tokens', 'AIC', 'prem', 'turns', 'tools(f)', 'skills', 'cli', 'API', 'cache', 'ctx(s/c/t)', 'lines'];
   const table = rows.map((r) => [
     String(r.session).slice(0, 8),
     r.model || '-',
     fmtTokens(r.tokens),
+    fmtCredits(r.aiCredits),
     String(r.premiumRequests ?? '-'),
     String(r.turns ?? '-'),
     `${r.toolCalls ?? 0}(${r.toolFailures ?? 0})`,
@@ -345,13 +370,14 @@ function renderSessionPerformance(report, ui, keyWidth) {
     String(r.harnessCliCalls ?? '-'),
     fmtDuration(r.apiDurationMs),
     fmtPct(r.cacheReadRatio),
-    fmtTokens(r.contextTokens),
+    fmtContext(r),
     `+${r.linesAdded ?? 0}/-${r.linesRemoved ?? 0}`,
   ]);
   const widths = header.map((h, i) => Math.max(h.length, ...table.map((row) => row[i].length)));
   const fmtRow = (row) => '  ' + row.map((cell, i) => cell.padEnd(widths[i])).join('  ').trimEnd();
   out.push(ui.paint('muted', fmtRow(header)));
   for (const row of table) out.push(fmtRow(row));
+  out.push(ui.paint('muted', '  ctx(system/conversation/tools) · AIC is host-reported for the session'));
   const silent = rows.filter((r) => (r.turns ?? 0) > 0 && (r.harnessCliCalls ?? 0) === 0);
   if (silent.length) {
     out.push(

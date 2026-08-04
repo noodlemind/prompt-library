@@ -6,6 +6,7 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 import { collectHostUsage, mergeHostUsage } from '../lib/host-telemetry/index.mjs';
+import { collectSessionState } from '../lib/host-telemetry/session-state.mjs';
 
 const binPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'bin', 'harness.mjs');
 
@@ -45,10 +46,20 @@ function writeSessionStore(copilotHome, sessions) {
           sessionId: s.id,
           currentModel: model,
           totalPremiumRequests: s.premiumRequests ?? 0,
+          ...(s.totalNanoAiu !== undefined ? { totalNanoAiu: s.totalNanoAiu } : {}),
           totalApiDurationMs: s.apiDurationMs ?? 0,
-          currentTokens: s.contextTokens ?? 0,
+          ...(s.contextTokens !== undefined ? { currentTokens: s.contextTokens } : {}),
+          ...(s.systemTokens !== undefined ? { systemTokens: s.systemTokens } : {}),
+          ...(s.conversationTokens !== undefined ? { conversationTokens: s.conversationTokens } : {}),
+          ...(s.toolDefinitionsTokens !== undefined ? { toolDefinitionsTokens: s.toolDefinitionsTokens } : {}),
           codeChanges: s.codeChanges || { linesAdded: 0, linesRemoved: 0, filesModified: [] },
-          modelMetrics: { [model]: { requests: { count: s.apiRequests ?? 0, cost: s.premiumRequests ?? 0 }, usage: s.usage } },
+          modelMetrics: {
+            [model]: {
+              requests: { count: s.apiRequests ?? 0, cost: s.premiumRequests ?? 0 },
+              usage: s.usage,
+              ...(s.totalNanoAiu !== undefined ? { totalNanoAiu: s.totalNanoAiu } : {}),
+            },
+          },
         },
         timestamp: s.ts,
       });
@@ -75,7 +86,7 @@ test('normalized log resolves under the copilotHome override, not just ~/.copilo
   }
 });
 
-test('session-state adapter sums real usage incl. cache + reasoning into the total', () => {
+test('session-state adapter treats cache and reasoning as subsets of input and output', () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-ss-'));
   const ws = '/Users/dev/repo';
   writeSessionStore(home, [
@@ -91,8 +102,11 @@ test('session-state adapter sums real usage incl. cache + reasoning into the tot
     assert.equal(events[0].source, 'host');
     assert.equal(u['gen_ai.usage.input_tokens'], 423324);
     assert.equal(u['gen_ai.usage.output_tokens'], 7766);
-    // total folds in cache + reasoning: 423324 + 7766 + 242816 + 0 + 2598
-    assert.equal(u['gen_ai.usage.total_tokens'], 676504);
+    assert.equal(u['gen_ai.usage.cache_read_tokens'], 242816);
+    assert.equal(u['gen_ai.usage.reasoning_tokens'], 2598);
+    // VS Code records provider prompt_tokens/output_tokens as the totals. Cache
+    // and reasoning are pricing/detail subsets and must not be counted twice.
+    assert.equal(u['gen_ai.usage.total_tokens'], 431090);
   } finally {
     if (prev === undefined) delete process.env.HARNESS_VSCODE_USAGE_LOG;
     else process.env.HARNESS_VSCODE_USAGE_LOG = prev;
@@ -105,8 +119,10 @@ test('session-state adapter derives per-session performance metrics', () => {
   writeSessionStore(home, [
     {
       id: 'perf', gitRoot: ws, ts: '2026-01-02T00:00:00Z',
-      usage: { inputTokens: 1000, outputTokens: 200, cacheReadTokens: 3000, reasoningTokens: 50 },
+      usage: { inputTokens: 4000, outputTokens: 200, cacheReadTokens: 3000, cacheWriteTokens: 50, reasoningTokens: 50 },
       premiumRequests: 3, apiDurationMs: 42000, apiRequests: 8, contextTokens: 55000,
+      totalNanoAiu: 5_290_000_000,
+      systemTokens: 8477, conversationTokens: 27397, toolDefinitionsTokens: 14618,
       turns: 4, tools: 6, toolFailures: 1, skills: ['engineer', 'code-review'],
       codeChanges: { linesAdded: 12, linesRemoved: 3, filesModified: ['a.js', 'b.js'] },
     },
@@ -125,17 +141,102 @@ test('session-state adapter derives per-session performance metrics', () => {
     assert.equal(m.skills, 2);
     assert.deepEqual(m.skillNames.sort(), ['code-review', 'engineer']);
     assert.equal(m.contextTokens, 55000);
+    assert.equal(m.systemTokens, 8477);
+    assert.equal(m.conversationTokens, 27397);
+    assert.equal(m.toolDefinitionsTokens, 14618);
+    assert.equal(m.aiCredits, 5.29);
     assert.equal(m.linesAdded, 12);
     assert.equal(m.linesRemoved, 3);
     assert.equal(m.filesModified, 2);
-    // cacheReadRatio = 3000 / (1000 + 3000) = 0.75; total = 1000+200+3000+50 = 4250; perTurn = 4250/4
+    // cacheReadRatio = 3000 / total input 4000; total = input + output.
     assert.equal(m.cacheReadRatio, 0.75);
-    assert.equal(m.tokensPerTurn, Math.round(4250 / 4));
-    assert.equal(event.usage['gen_ai.usage.total_tokens'], 4250);
+    assert.equal(m.tokensPerTurn, 1050);
+    assert.equal(event.usage['gen_ai.usage.total_tokens'], 4200);
   } finally {
     if (prev === undefined) delete process.env.HARNESS_VSCODE_USAGE_LOG;
     else process.env.HARNESS_VSCODE_USAGE_LOG = prev;
   }
+});
+
+test('report renders host-reported AI credits and the final context composition', () => {
+  const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-context-report-'));
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-context-home-'));
+  writeSessionStore(home, [
+    {
+      id: 'context', gitRoot: ws, ts: '2026-08-03T12:00:00Z', model: 'gpt-5.6-luna',
+      usage: { inputTokens: 4000, outputTokens: 200, cacheReadTokens: 3000, cacheWriteTokens: 50 },
+      totalNanoAiu: 5_290_000_000, contextTokens: 50492,
+      systemTokens: 8477, conversationTokens: 27397, toolDefinitionsTokens: 14618,
+      turns: 4, tools: 2, apiRequests: 4,
+    },
+  ]);
+  const run = spawnSync(
+    process.execPath,
+    [binPath, 'report', '--workspace', ws, '--copilot-home', home],
+    {
+      encoding: 'utf8',
+      env: { ...process.env, HARNESS_VSCODE_USAGE_LOG: path.join(home, 'missing.jsonl') },
+    }
+  );
+  assert.equal(run.status, 0, run.stderr);
+  assert.match(run.stdout, /5\.29 AIC/);
+  assert.match(run.stdout, /50k\(8\.5k\/27k\/15k\)/);
+  assert.match(run.stdout, /ctx\(system\/conversation\/tools\)/);
+});
+
+test('report labels an AI-credit sum as partial when historical sessions lack credit telemetry', () => {
+  const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-credit-report-'));
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-credit-home-'));
+  writeSessionStore(home, [
+    {
+      id: 'credited', gitRoot: ws, ts: '2026-08-03T12:00:00Z',
+      usage: { inputTokens: 4000, outputTokens: 200, cacheReadTokens: 3000 },
+      totalNanoAiu: 5_000_000_000,
+    },
+    {
+      id: 'historical', gitRoot: ws, ts: '2026-08-03T13:00:00Z',
+      usage: { inputTokens: 1000, outputTokens: 100, cacheReadTokens: 500 },
+    },
+  ]);
+  const run = spawnSync(
+    process.execPath,
+    [binPath, 'report', '--workspace', ws, '--copilot-home', home],
+    {
+      encoding: 'utf8',
+      env: { ...process.env, HARNESS_VSCODE_USAGE_LOG: path.join(home, 'missing.jsonl') },
+    }
+  );
+  assert.equal(run.status, 0, run.stderr);
+  assert.match(run.stdout, /5 AIC reported \(1\/2 sessions\)/);
+});
+
+test('session-state preserves unavailable context telemetry instead of claiming zero tokens', () => {
+  const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-missing-context-'));
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-missing-context-home-'));
+  writeSessionStore(home, [
+    {
+      id: 'old-session', gitRoot: ws, ts: '2026-08-03T12:00:00Z',
+      usage: { inputTokens: 1000, outputTokens: 100, cacheReadTokens: 500 },
+    },
+  ]);
+  const events = collectSessionState({ workspace: ws, copilotHome: home });
+  assert.equal(events.length, 1);
+  assert.equal(events[0].metrics.contextTokens, null);
+  assert.equal(events[0].metrics.systemTokens, null);
+  assert.equal(events[0].metrics.conversationTokens, null);
+  assert.equal(events[0].metrics.toolDefinitionsTokens, null);
+
+  const run = spawnSync(
+    process.execPath,
+    [binPath, 'report', '--workspace', ws, '--copilot-home', home],
+    {
+      encoding: 'utf8',
+      env: { ...process.env, HARNESS_VSCODE_USAGE_LOG: path.join(home, 'missing.jsonl') },
+    }
+  );
+  assert.equal(run.status, 0, run.stderr);
+  assert.doesNotMatch(run.stdout, /0\(0\/0\/0\)/);
+  assert.match(run.stdout, /\s-\s+\+0\/-0/);
 });
 
 test('session-state adapter filters sessions by workspace and skips sessions without usage', () => {
@@ -239,7 +340,7 @@ test('session metrics count real harness CLI invocations and expose zero-engagem
   writeSessionStore(home, [
     {
       id: 'cli-heavy', ts: '2026-08-03T10:00:00Z', model: 'claude-sonnet-5', gitRoot: '/Users/dev/repo',
-      usage: { inputTokens: 1000, outputTokens: 200, cacheReadTokens: 3000, cacheWriteTokens: 50 },
+      usage: { inputTokens: 4000, outputTokens: 200, cacheReadTokens: 3000, cacheWriteTokens: 50 },
       premiumRequests: 1, apiDurationMs: 1000, apiRequests: 4, contextTokens: 500,
       turns: 3, tools: 1, toolFailures: 0, skills: [],
       codeChanges: { linesAdded: 0, linesRemoved: 0, filesModified: [] },
@@ -252,7 +353,7 @@ test('session metrics count real harness CLI invocations and expose zero-engagem
     },
     {
       id: 'cli-silent', ts: '2026-08-03T11:00:00Z', model: 'claude-sonnet-5', gitRoot: '/Users/dev/repo',
-      usage: { inputTokens: 1000, outputTokens: 200, cacheReadTokens: 3000, cacheWriteTokens: 50 },
+      usage: { inputTokens: 4000, outputTokens: 200, cacheReadTokens: 3000, cacheWriteTokens: 50 },
       premiumRequests: 1, apiDurationMs: 1000, apiRequests: 4, contextTokens: 500,
       turns: 4, tools: 3, toolFailures: 0, skills: [],
       codeChanges: { linesAdded: 0, linesRemoved: 0, filesModified: [] },

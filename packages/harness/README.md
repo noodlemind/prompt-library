@@ -92,6 +92,15 @@ to Deliver before editing.
 | `compound --insight` | Evidence-free capture of investigation learnings (`kind: insight`, secret-scanned, ranked below verified fixes, never promotable) |
 | `consolidate` | Knowledge loop: `--status` debt gauge (quarantine + at-cap domains surfaced) · `--candidates` deterministic work packet, plus any id a human already retired/disputed/promoted (`governed`) so the skill doesn't waste an op re-deriving it · `--apply --ops <path>` validated sole writer of learnings via ADD/STRENGTHEN/SUPERSEDE/MERGE/NOOP ops (`suggest` mode requires `--yes`); mechanically reapplies a standing governance decision when a regenerated id matches one, returning `governed` |
 | `events` | Inspect schema-v2 `.harness/events.jsonl`; filter by session/failure or summarize |
+| `report [--host vscode]` | Host-backed session efficiency: turns, tools, actual Harness CLI calls, tokens, cache ratio, AI credits, and final context split (`system/conversation/tool definitions`) |
+
+For current VS Code session-state records, total input already includes cached
+input and total output already includes reasoning output. `report` retains the
+cache, cache-write, and reasoning fields as pricing details without adding them
+to the token total a second time. When VS Code supplies `totalNanoAiu`, the
+report renders the authoritative session value as AI credits (`1 AIC = 10^9
+nano-AIU`). The GitHub billing dashboard remains account- and billing-period
+scoped, so it should not be expected to equal one session row.
 
 ### Knowledge (semantic memory)
 
