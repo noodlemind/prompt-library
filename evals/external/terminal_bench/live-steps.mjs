@@ -1212,6 +1212,10 @@ export function buildRunDoc({
       eventEvidenceHash: stableHash({ providerEvents, toolEvents, harnessEvents: harnessEvents ?? [] }),
     },
     repetitions: [],
+    // AC3 correction-effort vocabulary: autonomous canary trials have no
+    // human in the loop, so every field is null — measured, never estimated.
+    // Subscription-host A/Bs and future session telemetry fill these in.
+    correctionEffort: { humanInterventions: null, correctionTurns: null, interventionTokens: null },
     subscription: null,
   };
 }

@@ -564,6 +564,27 @@ function baseSteps(overrides = {}) {
   return steps;
 }
 
+test('correction-effort vocabulary: nullable fields validate, wrong types fail, absence stays legal', () => {
+  // AC3 schema half: autonomous canary trials record null for every field;
+  // subscription-host A/Bs and future session telemetry fill them in without
+  // needing a schema v2. Never estimated — null or measured, nothing between.
+  const doc = fullRun('generic', 'pass');
+  doc.correctionEffort = { humanInterventions: null, correctionTurns: null, interventionTokens: null };
+  assert.deepEqual(validateAgainstSchema(doc, RUN_SCHEMA).errors, []);
+
+  doc.correctionEffort = { humanInterventions: 2, correctionTurns: 5, interventionTokens: 1200 };
+  assert.deepEqual(validateAgainstSchema(doc, RUN_SCHEMA).errors, [], 'measured values validate');
+
+  doc.correctionEffort = { humanInterventions: 'several', correctionTurns: null, interventionTokens: null };
+  const invalid = validateAgainstSchema(doc, RUN_SCHEMA);
+  assert.equal(invalid.ok, false);
+  assert.ok(invalid.errors.some((e) => e.includes('correctionEffort.humanInterventions')));
+
+  const legacy = fullRun('generic', 'pass');
+  delete legacy.correctionEffort;
+  assert.deepEqual(validateAgainstSchema(legacy, RUN_SCHEMA).errors, [], 'pre-vocabulary documents remain valid');
+});
+
 test('validateAgainstSchema checks required keys, types, nullability, const, and enum with paths', () => {
   const good = fullRun('generic', 'pass');
   assert.deepEqual(validateAgainstSchema(good, RUN_SCHEMA).errors, []);

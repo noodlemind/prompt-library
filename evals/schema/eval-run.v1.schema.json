@@ -282,6 +282,14 @@
       "type": "array",
       "items": { "type": "object" }
     },
+    "correctionEffort": {
+      "type": ["object", "null"],
+      "properties": {
+        "humanInterventions": { "type": ["number", "null"] },
+        "correctionTurns": { "type": ["number", "null"] },
+        "interventionTokens": { "type": ["number", "null"] }
+      }
+    },
     "subscription": {
       "type": ["object", "null"],
       "properties": {
