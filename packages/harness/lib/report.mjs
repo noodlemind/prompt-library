@@ -333,7 +333,7 @@ function renderSessionPerformance(report, ui, keyWidth) {
       keyWidth,
     }),
   ];
-  const header = ['session', 'model', 'tokens', 'prem', 'turns', 'tools(f)', 'skills', 'API', 'cache', 'ctx', 'lines'];
+  const header = ['session', 'model', 'tokens', 'prem', 'turns', 'tools(f)', 'skills', 'cli', 'API', 'cache', 'ctx', 'lines'];
   const table = rows.map((r) => [
     String(r.session).slice(0, 8),
     r.model || '-',
@@ -342,6 +342,7 @@ function renderSessionPerformance(report, ui, keyWidth) {
     String(r.turns ?? '-'),
     `${r.toolCalls ?? 0}(${r.toolFailures ?? 0})`,
     String(r.skills ?? 0),
+    String(r.harnessCliCalls ?? '-'),
     fmtDuration(r.apiDurationMs),
     fmtPct(r.cacheReadRatio),
     fmtTokens(r.contextTokens),
@@ -351,6 +352,18 @@ function renderSessionPerformance(report, ui, keyWidth) {
   const fmtRow = (row) => '  ' + row.map((cell, i) => cell.padEnd(widths[i])).join('  ').trimEnd();
   out.push(ui.paint('muted', fmtRow(header)));
   for (const row of table) out.push(fmtRow(row));
+  const silent = rows.filter((r) => (r.turns ?? 0) > 0 && (r.harnessCliCalls ?? 0) === 0);
+  if (silent.length) {
+    out.push(
+      ui.line({
+        state: 'warn',
+        key: 'engagement',
+        value: `harness CLI never invoked in ${silent.length} session(s)`,
+        note: 'agent turns ran but no orient/gate/verify calls — check that the engineer contract is engaging',
+        keyWidth,
+      })
+    );
+  }
   return out;
 }
 

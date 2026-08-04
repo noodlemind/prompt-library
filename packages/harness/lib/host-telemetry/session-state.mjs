@@ -102,6 +102,12 @@ function eventFromSession(file, sessionId, workspace) {
   let toolCalls = 0;
   let toolFailures = 0;
   const skillNames = new Set();
+  // Actual harness CLI engagement: how often the agent really ran
+  // `harness <command>` inside its tool calls. Zero across a session means
+  // the engineer contract never exercised the CLI (e.g. only init-repo was
+  // ever run by hand) — the report flags that.
+  const harnessCliCommands = {};
+  let harnessCliCalls = 0;
   for (const record of records) {
     switch (record?.type) {
       case 'session.start':
@@ -113,9 +119,15 @@ function eventFromSession(file, sessionId, workspace) {
       case 'assistant.turn_start':
         turns += 1;
         break;
-      case 'tool.execution_start':
+      case 'tool.execution_start': {
         toolCalls += 1;
+        const text = JSON.stringify(record.data?.arguments ?? '');
+        for (const match of text.matchAll(/\bharness(?:\.(?:mjs|cmd|exe))?\s+([a-z][a-z0-9-]{1,32})\b/g)) {
+          harnessCliCalls += 1;
+          harnessCliCommands[match[1]] = (harnessCliCommands[match[1]] ?? 0) + 1;
+        }
         break;
+      }
       case 'tool.execution_complete':
         if (record.data?.success === false) toolFailures += 1;
         break;
@@ -145,6 +157,8 @@ function eventFromSession(file, sessionId, workspace) {
     wallMs: wallMs(shutdown, Number(sd.sessionStartTime)),
     turns,
     toolCalls,
+    harnessCliCalls,
+    harnessCliCommands,
     toolFailures,
     skills: skillNames.size,
     skillNames: [...skillNames],

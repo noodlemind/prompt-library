@@ -35,6 +35,7 @@ function writeSessionStore(copilotHome, sessions) {
     ];
     for (let i = 0; i < (s.turns || 0); i++) records.push({ type: 'assistant.turn_start', data: { turnId: `t${i}` }, timestamp: s.ts });
     for (let i = 0; i < (s.tools || 0); i++) records.push({ type: 'tool.execution_start', data: { toolName: 'read_file' }, timestamp: s.ts });
+    for (const command of s.harnessCommands || []) records.push({ type: 'tool.execution_start', data: { toolName: 'run_in_terminal', arguments: { command } }, timestamp: s.ts });
     for (let i = 0; i < (s.toolFailures || 0); i++) records.push({ type: 'tool.execution_complete', data: { success: false }, timestamp: s.ts });
     for (const name of s.skills || []) records.push({ type: 'skill.invoked', data: { name }, timestamp: s.ts });
     if (s.usage) {
@@ -230,4 +231,43 @@ test('report reflects host-real usage over estimates end-to-end', () => {
   const report = JSON.parse(run.stdout);
   assert.equal(report.hostBacked, true);
   assert.equal(report.totals.tokens, 2500, 'host-real total replaces the 41-token estimate');
+});
+
+test('session metrics count real harness CLI invocations and expose zero-engagement', async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-cli-'));
+  const ws = '/Users/dev/repo';
+  writeSessionStore(home, [
+    {
+      id: 'cli-heavy', ts: '2026-08-03T10:00:00Z', model: 'claude-sonnet-5', gitRoot: '/Users/dev/repo',
+      usage: { inputTokens: 1000, outputTokens: 200, cacheReadTokens: 3000, cacheWriteTokens: 50 },
+      premiumRequests: 1, apiDurationMs: 1000, apiRequests: 4, contextTokens: 500,
+      turns: 3, tools: 1, toolFailures: 0, skills: [],
+      codeChanges: { linesAdded: 0, linesRemoved: 0, filesModified: [] },
+      harnessCommands: [
+        'harness orient --query "payment flow" --json',
+        '/usr/local/bin/harness gate --phase implement --json',
+        'harness orient',
+        'git status',
+      ],
+    },
+    {
+      id: 'cli-silent', ts: '2026-08-03T11:00:00Z', model: 'claude-sonnet-5', gitRoot: '/Users/dev/repo',
+      usage: { inputTokens: 1000, outputTokens: 200, cacheReadTokens: 3000, cacheWriteTokens: 50 },
+      premiumRequests: 1, apiDurationMs: 1000, apiRequests: 4, contextTokens: 500,
+      turns: 4, tools: 3, toolFailures: 0, skills: [],
+      codeChanges: { linesAdded: 0, linesRemoved: 0, filesModified: [] },
+    },
+  ]);
+  const prev = process.env.HARNESS_VSCODE_USAGE_LOG;
+  process.env.HARNESS_VSCODE_USAGE_LOG = path.join(os.tmpdir(), 'nope.jsonl');
+  try {
+    const events = collectHostUsage({ workspace: ws, host: 'vscode', copilotHome: home });
+    const heavy = events.find((e) => e.session === 'cli-heavy').metrics;
+    assert.equal(heavy.harnessCliCalls, 3, 'git status must not count');
+    assert.deepEqual(heavy.harnessCliCommands, { orient: 2, gate: 1 });
+    const silent = events.find((e) => e.session === 'cli-silent').metrics;
+    assert.equal(silent.harnessCliCalls, 0, 'an agent session that never ran the CLI reports zero');
+  } finally {
+    process.env.HARNESS_VSCODE_USAGE_LOG = prev;
+  }
 });
