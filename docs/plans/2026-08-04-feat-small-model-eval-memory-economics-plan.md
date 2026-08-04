@@ -29,7 +29,7 @@ verification:
 reviews:
   required: [correctness, maintainability, testing, project-standards, security]
   completed: []
-  critical_open: [privileged-runtime-supervisor-approval-pending, privileged-runtime-supervisor-unimplemented]
+  critical_open: [daytona-per-trial-container-topology-approval-pending, privileged-runtime-supervisor-unimplemented]
 skills_used: [engineer, recall, ensure-plan, code-review]
 capability_gaps: [privileged-runtime-supervisor]
 org_objectives: ["Prove that the Engineer Harness improves verified outcomes for smaller models at an economically sustainable release cost"]
@@ -111,6 +111,15 @@ preconditions.
 - The inner task network policy is `none`; provider access is host-broker-only. Storage is eligible only when capability discovery proves a kernel/filesystem-backed per-trial limit with observed effective values. Requested Harbor arguments or Docker metadata without effective kernel enforcement are insufficient.
 - The threat model trusts Daytona/hypervisor administration, the guest kernel, exclusive Docker daemon, pinned Harbor distribution, provisioning channel, OpenRouter/upstream identity/usage/billing responses, and standard TLS roots. It protects against task-controlled code, model output, cross-arm contamination, replay/forgery, runtime drift, and incomplete cleanup; stronger cloud-admin/kernel claims require remote hardware attestation and an external verifier and are out of scope.
 
+## Proposed Daytona Container Amendment — Awaiting Approval
+
+- The approved Linux-VM topology is unavailable in the authenticated Daytona Personal organization: no `linux-vm` runner is configured in `us` or `eu`. Do not silently relabel a container as that VM.
+- The viable substitute is one fresh 10-GiB Daytona container-DIND sandbox per Harbor trial, controlled by an external session coordinator that retains Daytona credentials, cumulative budget state, nonces, and the ordered evidence chain. Qualification therefore creates two isolated sandboxes; calibration creates at most one isolated sandbox for each scheduled arm/repetition and runs them serially.
+- Inside each sandbox, the root supervisor starts a separate private Docker daemon whose `--data-root` is on the observed Daytona quota-bounded root filesystem. The default DIND daemon/root on the large host XFS mount is forbidden. Harbor sees only the policy-proxy socket; the task remains `network=none`; only the separate broker UID may egress; sanitized evidence is exported before the coordinator deletes the whole sandbox.
+- The 10-GiB value preserves the four locked tasks' `storageMb: 10240` contract. It is whole-trial ephemeral capacity shared by the pinned image, task, runtime, and evidence—not a false claim that Harbor or Docker `StorageOpt` enforces 10 GiB inside a larger host filesystem. The supervisor preallocates finalization headroom and releases it only for cleanup/evidence if task writes exhaust the filesystem.
+- Daytona's platform and the sandbox kernel remain explicit TCB; this amendment does not claim a dedicated guest kernel unless the provider proves one. The external controller is the sole Daytona-credential, cumulative-budget, evidence-chain, and deletion authority and never places Daytona credentials in the sandbox.
+- Approval alone does not prove this amendment. Before implementation, a disposable 10-GiB probe must bind the Daytona API allocation to `statfs`, force a bounded nested write to `ENOSPC`, prove every mutable path is on the bounded filesystem, prove the runner cannot reach the real daemon/Daytona credentials/alternate daemon/mount or ptrace authority, prove IPv4/IPv6/DNS/raw-socket/metadata/broker denial outside the broker UID, trace Harbor 0.20 through the exact proxy, export authenticated evidence under disk/channel/process failure, and verify whole-sandbox deletion. Any failure returns to a design decision at `$0` provider spend.
+
 ## Plan
 
 ### Phase 1
@@ -136,7 +145,7 @@ preconditions.
 
 ### Phase 5
 
-- [ ] Obtain explicit Tier-3 approval for the proposed privileged runtime, provider-secret isolation, and evidence-custody contract; complete the Human Approval Record before relocking the plan. (AC8-AC10)
+- [x] Obtain explicit Tier-3 approval for the proposed privileged runtime, provider-secret isolation, and evidence-custody contract; complete the Human Approval Record before relocking the plan. (AC8-AC10)
 - [ ] Before product implementation or provider-secret injection, provision a fresh no-secret Daytona VM and prove the pinned VM/snapshot, kernel/cgroup-v2 authority, exclusive local Docker socket/daemon, UID separation, host namespace visibility, pre-start `network=none` enforcement, kernel/filesystem-backed storage limit, and Harbor 0.20 compatibility with the exact supervisor-owned Docker API proxy. Record the proxy API allowlist and trust boundary in this plan. If any control is unavailable, stop for a new human design decision. (AC8-AC10)
 - [ ] Add failing protocol and policy tests for outer-supervisor → unprivileged-runner launch, inherited control pipes, per-trial readiness leases, final attestation/session archival, canonical evidence hashing, identity binding, replay/tamper resistance, and fail-stop behavior after channel loss. (AC8, AC10)
 - [ ] Implement the privileged supervisor execution service, non-bypassable Docker API proxy with the approved direct-argv entry path, and separately isolated Unix-socket provider broker without a user-supplied trust escape hatch. Broker policy owns endpoint/model/provider allowlists, per-trial budget enforcement, egress, and usage/cost evidence reconciliation. (AC8-AC10)
@@ -191,11 +200,15 @@ does not prove the reopened Phase 5 supervisor scope.
 
 ## Human Approval Record
 
-- **Authority / approver:** repository owner (pending explicit response)
-- **Decision:** pending
-- **Date:** pending
+- **Authority / approver:** repository owner
+- **Decision:** approved in the active delivery task
+- **Date:** 2026-08-04
 - **Requested scope:** approve the Proposed Privileged Runtime Contract, including an outer privileged supervisor, an unprivileged release/Harbor execution identity, a separate-UID provider broker, a non-bypassable Docker API proxy with direct-argv trusted bootstrap, cgroup/Docker/network/storage custody, and authenticated two-phase evidence.
 - **Conditions:** no OpenRouter key or paid call during capability discovery; both release kill switches remain blocked until final security review and Daytona zero-provider evidence pass; the first provider attempt is qualification-only at `$1.30`; calibration is conditional and the accepted provider path remains at most `$20`.
+- **Approval response:** `I approve`
+- **Capability-discovery outcome:** no-go for the approved VM topology on 2026-08-04. The authenticated Daytona Personal organization exposes no Linux-VM runner in `us` or `eu`. Direct nested-Docker `--storage-opt size=...` also fails because the default XFS backing store lacks `pquota`; the default DIND data root is therefore ineligible.
+- **Conditional alternative:** the no-secret probes support the separately documented one-container-sandbox-per-trial amendment, using a supervisor-owned daemon rooted on Daytona's bounded filesystem plus an external trusted session controller. This is a meaningful topology and orchestration change, not an implementation detail, and remains pending an explicit owner decision and the listed 10-GiB/ENOSPC/Harbor proofs.
+- **Transition after no-go:** restore `status: blocked-capability` and `plan_lock: false`; preserve the original approval record; do not inject a provider key, implement the amended topology, or spend provider credits. A new human decision must either approve the Proposed Daytona Container Amendment, enable a suitable Daytona/custom VM runner, or move the trusted supervisor to another proven host.
 - **Transition on approval:** set `Decision` and `Date`, name any changed conditions, set `status: planned`, restore `plan_lock: true`, remove `privileged-runtime-supervisor-approval-pending` while leaving `privileged-runtime-supervisor-unimplemented`, run `validate-plan` and the implement gate, then begin the no-secret Daytona capability-discovery task.
 - **Transition on rejection/defer:** record the decision and leave `status: blocked-capability`; the existing zero-spend diagnostic lane remains available, but the operational paid-release objective is incomplete.
 
@@ -210,6 +223,10 @@ does not prove the reopened Phase 5 supervisor scope.
 - Current wrappers pass through mutable sandbox `/bin/sh` and PATH-resolved `uname`, and the real provider key is inherited by Harbor. Phase 5 must replace the shell entry seam with direct pinned exec-argv and remove the key from Harbor/task environments rather than attempting to observe around those weaknesses.
 - `releaseTrustVerdict` currently accepts any 64-hex-shaped evidence hash plus booleans. Final evidence must be strict canonical bytes bound to release/profile/lock/bundle/VM/daemon/executable/trial/container identities, recomputed by code, and received through a private authenticated channel with nonce, peer identity, ordering, and replay protection.
 - Daytona's current official documentation supports Linux VM snapshots, Docker-in-Docker, explicit CPU/memory/disk allocation, and network allow/block policy. Those features make the topology plausible but do not prove cgroup delegation, Docker exclusivity, storage quotas, or pre-start inner-container network enforcement; each remains a live-host fail-closed prerequisite.
+- Live Daytona capability discovery used CLI `v0.203.0` under the authenticated Personal organization and created no provider-enabled resource. Public `daytona-vm-*` snapshots were visible but unavailable; creating a private `linux-vm` snapshot in `us` failed with `No runners are configured ... for sandbox class 'linux-vm'`, and the public VM snapshot was unavailable in both `us` and `eu`.
+- A temporary network-blocked 2-vCPU/4-GiB/8-GiB container snapshot based on Daytona's documented `docker:28.3.3-dind` image proved Linux 6.8, cgroup v2 controllers, writable delegated cgroups, a private Docker 28.3.3 daemon, separate PID/mount namespaces, full declared outer capabilities, XFS/overlay2, and blocked OpenRouter egress. Direct Docker `--storage-opt` failed because XFS lacks `pquota`; the temporary sandbox and snapshot were deleted and a follow-up list returned no remaining resources.
+- A second no-secret DIND probe proved that an unprivileged runner cannot open the real Docker socket, an owner-UID firewall can block runner egress while allowing only the broker UID to reach OpenRouter, CPU/memory/PID cgroup limits can be created and observed, and an inner task object can be forced to `network=none`, read-only root, dropped capabilities, `no-new-privileges`, and explicit memory/PID/CPU limits. It also proved that mount operations are denied and that the default `/var/lib/docker` is on a large host XFS mount, so both are forbidden dependencies.
+- The same probe started a separate Docker daemon with its data root on the sandbox root, whose `statfs` reported the configured 8-GiB outer allocation. This makes one whole sandbox per trial a plausible provider-enforced storage boundary, but the accepted tasks require 10 GiB and a successful ENOSPC/path-placement test remains mandatory. The second sandbox and snapshot were deleted; the snapshot briefly reported `removing`, with no running sandbox remaining.
 
 ## Implementation Notes
 
@@ -297,6 +314,13 @@ does not prove the reopened Phase 5 supervisor scope.
 - **decision:** Reopen the plan as red Phase 5 with `privileged-runtime-supervisor` explicit. Keep all paid execution blocked. Require human approval for the exact trust boundary before implementing cgroup/Docker/network/quota custody, provider-secret isolation, direct exec-argv, or authenticated evidence handling.
 - **next:** Obtain the Tier-3 decision, relock and gate the amended plan, implement TDD-first, independently review security, then run the zero-provider Daytona verification before considering the capped qualification.
 
+### 2026-08-04 — Daytona capability discovery
+
+- **state:** blocked-capability
+- **observation:** The owner approved the privileged VM contract and authenticated Daytona CLI v0.203.0. Live no-secret discovery found no Linux-VM runner in either shared region. Container-DIND provides cgroup, namespace, daemon, UID-egress, and inner-network controls, but its default Docker root is an unbounded host XFS mount and direct Docker storage quotas lack `pquota`.
+- **decision:** Reject the original VM path and the default DIND daemon without spending provider credits. Preserve a conditional alternative—one fresh 10-GiB DIND sandbox per trial, a supervisor-owned daemon rooted on the bounded sandbox filesystem, and an external trusted session controller—but require explicit approval because it changes both the trust boundary and multi-trial orchestration.
+- **next:** Obtain the amended-topology decision. If approved, run the 10-GiB/ENOSPC/path/Harbor/deletion proofs before writing product code; otherwise wait for Daytona VM capacity or select another host.
+
 ## Activity
 
 - 2026-08-04 — `ensure-plan`: captured, researched, planned, and locked autonomously.
@@ -306,3 +330,6 @@ does not prove the reopened Phase 5 supervisor scope.
 - 2026-08-04 — `recall`: resumed the one active plan; no prior learning covered privileged Terminal-Bench runtime custody.
 - 2026-08-04 — completion audit: reopened Phase 5 after proving the paid production path is deliberately non-executable.
 - 2026-08-04 — approval pending: privileged runtime, secret isolation, direct execution, and authenticated evidence are Tier-3 scope; no product code or provider call proceeds until approved.
+- 2026-08-04 — owner approval recorded for the original privileged VM contract; Daytona CLI upgraded to v0.203.0 and authenticated.
+- 2026-08-04 — two temporary no-secret Daytona DIND probes completed and were deleted; no OpenRouter key was present and no provider request was billed.
+- 2026-08-04 — capability discovery blocked the unavailable VM/default-DIND design and proposed an explicit per-trial-container amendment for owner decision.
