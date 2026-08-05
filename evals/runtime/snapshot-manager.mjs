@@ -373,8 +373,8 @@ function kernelIdentity() {
   };
 }
 
-function liveObservation({ sessionNonce, createdAt }) {
-  const manager = readProcessIdentity(process.pid);
+function liveObservation({ managerPid, sessionNonce, createdAt }) {
+  const manager = readProcessIdentity(managerPid);
   const pidfile = readPidFile();
   const daemon = readProcessIdentity(pidfile.pid);
   if (manager.executablePath !== NODE_PATH || daemon.executablePath !== DOCKERD_PATH) {
@@ -492,6 +492,7 @@ async function readReceiptProtected() {
 export async function attestDaemonAdoptionReceipt() {
   const loaded = await readReceiptProtected();
   const live = createDaemonAdoptionReceipt(liveObservation({
+    managerPid: loaded.receipt.manager.pid,
     sessionNonce: loaded.receipt.sessionNonce,
     createdAt: loaded.receipt.createdAt,
   }));
@@ -621,6 +622,7 @@ export async function runSnapshotManagerCli({ argv = process.argv.slice(2) } = {
   try {
     await Promise.race([waitForDaemonReady(child), spawnFailure]);
     const built = createDaemonAdoptionReceipt(liveObservation({
+      managerPid: process.pid,
       sessionNonce: crypto.randomBytes(32).toString('hex'),
       createdAt: new Date().toISOString(),
     }));
