@@ -9,6 +9,7 @@ import {
   downloadPinnedSnapshotSource,
   prepareRuntimeSnapshotArtifacts,
   pullExactImages,
+  runDaytonaSnapshotCliCommand,
 } from '../../../evals/runtime/runtime-snapshot-artifacts.mjs';
 import {
   DAYTONA_DIND_BASE_IMAGE,
@@ -18,6 +19,31 @@ import {
 
 const HASH = (character) => character.repeat(64);
 const sha256 = (value) => crypto.createHash('sha256').update(value).digest('hex');
+
+test('the production Daytona adapter hard-kills cleanup commands at the controller timeout', () => {
+  const calls = [];
+  const spawnImpl = (file, args, options) => {
+    calls.push({ file, args: [...args], options });
+    return { status: 0, stdout: '', stderr: '', error: null };
+  };
+
+  runDaytonaSnapshotCliCommand('/opt/daytona', ['delete', 'sandbox-id'],
+    { timeoutMs: 1_234 }, spawnImpl);
+  runDaytonaSnapshotCliCommand('/opt/daytona', ['snapshot', 'create', 'snapshot-name'],
+    undefined, spawnImpl);
+  runDaytonaSnapshotCliCommand('/opt/daytona', ['info', 'sandbox-id'], undefined, spawnImpl);
+
+  assert.equal(calls[0].options.timeout, 1_234);
+  assert.equal(calls[0].options.killSignal, 'SIGKILL');
+  assert.equal(calls[0].options.shell, false);
+  assert.equal(calls[1].options.timeout, 30 * 60_000);
+  assert.equal(Object.hasOwn(calls[1].options, 'killSignal'), false);
+  assert.equal(calls[2].options.timeout, 5 * 60_000);
+  assert.throws(() => runDaytonaSnapshotCliCommand('/opt/daytona', ['delete', 'sandbox-id'],
+    { timeoutMs: 0 }, spawnImpl), /timeout.*bound/i);
+  assert.throws(() => runDaytonaSnapshotCliCommand('/opt/daytona', ['delete', 'sandbox-id'],
+    { timeoutMs: 1_000, extra: true }, spawnImpl), /command options/i);
+});
 
 function input(t) {
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'runtime-snapshot-artifacts-test-'));

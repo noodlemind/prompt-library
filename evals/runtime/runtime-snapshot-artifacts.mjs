@@ -258,15 +258,33 @@ function validateReceipt(receipt, identity) {
   return receipt;
 }
 
-function defaultRunDaytona(daytonaPath, args) {
-  const timeout = args[0] === 'snapshot' && args[1] === 'create' ? 30 * 60_000 : 5 * 60_000;
-  const result = spawnSync(daytonaPath, args, {
+export function runDaytonaSnapshotCliCommand(
+  daytonaPath,
+  args,
+  commandOptions = undefined,
+  spawnImpl = spawnSync,
+) {
+  if (commandOptions !== undefined &&
+      (!plainObject(commandOptions) || Object.keys(commandOptions).length !== 1 ||
+       !Object.hasOwn(commandOptions, 'timeoutMs'))) {
+    fail('Daytona cleanup command options violate their reviewed contract');
+  }
+  const requestedTimeout = commandOptions?.timeoutMs;
+  if (requestedTimeout !== undefined &&
+      (!Number.isSafeInteger(requestedTimeout) || requestedTimeout < 1 || requestedTimeout > 60_000)) {
+    fail('Daytona cleanup command timeout is outside its reviewed bound');
+  }
+  const timeout = requestedTimeout ??
+    (args[0] === 'snapshot' && args[1] === 'create' ? 30 * 60_000 : 5 * 60_000);
+  if (typeof spawnImpl !== 'function') fail('Daytona command runner must be a function');
+  const result = spawnImpl(daytonaPath, args, {
     shell: false,
     windowsHide: true,
     encoding: 'utf8',
     env: daytonaCliEnvironment(process.env),
     timeout,
     maxBuffer: MAX_COMMAND_BYTES,
+    ...(requestedTimeout === undefined ? {} : { killSignal: 'SIGKILL' }),
   });
   return {
     code: Number.isInteger(result.status) ? result.status : null,
@@ -278,7 +296,8 @@ function defaultRunDaytona(daytonaPath, args) {
 
 async function ensureCodeOwnedSnapshot(request) {
   const controller = createDaytonaSnapshotController({
-    runCommand: async (args) => defaultRunDaytona(request.daytonaPath, args),
+    runCommand: async (args, commandOptions) =>
+      runDaytonaSnapshotCliCommand(request.daytonaPath, args, commandOptions),
   });
   return controller.ensureSnapshot({
     identity: request.identity,

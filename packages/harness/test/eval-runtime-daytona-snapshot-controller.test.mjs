@@ -6,6 +6,7 @@ import path from 'node:path';
 import { test } from 'node:test';
 
 import {
+  DaytonaSnapshotControllerError,
   createDaytonaSnapshotController,
 } from '../../../evals/runtime/daytona-snapshot-controller.mjs';
 import { hasCredentialMarker } from '../../../evals/runtime/credential-material.mjs';
@@ -729,7 +730,6 @@ test('every failure after snapshot ownership is proven deletes the exact id and 
     'sandbox-info-command',
     'sandbox-info-malformed',
     'sandbox-inspect',
-    'sandbox-delete',
     'not-found-drift',
   ]) {
     const fake = fakeDaytona(input, { mode });
@@ -745,6 +745,22 @@ test('every failure after snapshot ownership is proven deletes the exact id and 
       args[0] === 'snapshot' && args[1] === 'list' && args.includes('--page')),
     `${mode} must prove absence with the paginated list API`);
   }
+});
+
+test('a lost sandbox-delete response is accepted only after exact absence is proven', async (t) => {
+  const input = files(t);
+  const fake = fakeDaytona(input, {
+    initialSnapshots: [snapshotRecord(input)],
+    mode: 'sandbox-delete',
+  });
+
+  const receipt = await controller(fake).ensureSnapshot(request(input));
+
+  assert.equal(receipt.validation.sandboxDeleted, true);
+  const deleteIndex = fake.calls.findIndex((args) => args[0] === 'delete');
+  assert.ok(deleteIndex >= 0);
+  assert.equal(fake.calls.slice(deleteIndex + 1).some((args) => args[0] === 'info'), true,
+    'exact absence is observed after the lost delete response');
 });
 
 test('ambiguous creation adopts a valid shared snapshot and never deletes an unowned identity', async (t) => {
@@ -802,29 +818,336 @@ test('validation uses an attempt-unique name and never deletes a stale determini
   assert.equal(receipt.validation.sandboxDeleted, true);
 });
 
+test('the production cleanup bound survives Daytona deletion visibility beyond twenty observations', async (t) => {
+  const input = files(t);
+  const fake = fakeDaytona(input, { initialSnapshots: [snapshotRecord(input)] });
+  const original = fake.runCommand;
+  let deletionRequested = false;
+  let deletionObservations = 0;
+  fake.runCommand = async (args) => {
+    if (args[0] === 'delete') {
+      deletionRequested = true;
+      return { code: 0, stdout: '', stderr: '' };
+    }
+    if (deletionRequested && args[0] === 'info') {
+      deletionObservations += 1;
+      if (deletionObservations > 20) return exactNotFound(args[1]);
+    }
+    return original(args);
+  };
+
+  const receipt = await createDaytonaSnapshotController({
+    runCommand: fake.runCommand,
+    cleanupPollIntervalMs: 0,
+  }).ensureSnapshot(request(input));
+
+  assert.equal(deletionObservations, 21);
+  assert.equal(receipt.validation.sandboxDeleted, true);
+});
+
+test('a dual validation and cleanup failure retains only stable causal error codes', async (t) => {
+  const input = files(t);
+  const fake = fakeDaytona(input, { mode: 'selftest-mismatch' });
+  const original = fake.runCommand;
+  let deletionRequested = false;
+  fake.runCommand = async (args) => {
+    if (args[0] === 'delete') {
+      deletionRequested = true;
+      return { code: 70, stdout: '', stderr: 'sandbox deletion pending' };
+    }
+    if (deletionRequested && args[0] === 'info') return original(args);
+    return original(args);
+  };
+
+  const error = await rejected(controller(fake).ensureSnapshot(request(input)));
+
+  assert.equal(error.code, 'ERR_SNAPSHOT_SANDBOX_CLEANUP');
+  assert.match(error.message,
+    /ERR_SNAPSHOT_SELFTEST_IDENTITY.*ERR_SNAPSHOT_SANDBOX_CLEANUP/);
+  assert.doesNotMatch(error.message, /sandbox deletion pending/);
+  assert.equal(fake.snapshotDeleteAttempted, true);
+  assert.equal(fake.snapshots.some((entry) => entry.name === input.identity.name), false);
+});
+
+test('dual-failure diagnostics never execute or trust adversarial error-code properties', async (t) => {
+  const credential = 'sk-or-v1-never-emit-from-an-error-code';
+  let rotatingReads = 0;
+  const rotating = Object.create(DaytonaSnapshotControllerError.prototype);
+  Object.defineProperty(rotating, 'code', {
+    configurable: true,
+    get() {
+      rotatingReads += 1;
+      return rotatingReads < 3 ? 'ERR_SNAPSHOT_COMMAND' : credential;
+    },
+  });
+  const throwing = Object.create(DaytonaSnapshotControllerError.prototype);
+  Object.defineProperty(throwing, 'code', {
+    configurable: true,
+    get() { throw new Error('error-code getter executed'); },
+  });
+  const inherited = Object.create(new DaytonaSnapshotControllerError(
+    'inherited controller error',
+    'ERR_SNAPSHOT_COMMAND',
+  ));
+  const trapped = new Proxy(Object.create(DaytonaSnapshotControllerError.prototype), {
+    getPrototypeOf() { throw new Error('error prototype trap executed'); },
+  });
+
+  for (const [label, lifecycleError] of [
+    ['rotating accessor', rotating],
+    ['throwing accessor', throwing],
+    ['inherited code', inherited],
+    ['proxy trap', trapped],
+    ['primitive', 7],
+    ['unknown code', Object.assign(new Error('unknown'), { code: 'ERR_NOT_REVIEWED' })],
+  ]) {
+    await t.test(label, async (subtest) => {
+      const input = files(subtest);
+      const fake = fakeDaytona(input, { initialSnapshots: [snapshotRecord(input)] });
+      const original = fake.runCommand;
+      let deletionRequested = false;
+      fake.runCommand = async (args, commandOptions) => {
+        if (args[0] === 'exec') {
+          return new Proxy({}, {
+            getPrototypeOf() { throw lifecycleError; },
+          });
+        }
+        if (args[0] === 'delete') {
+          deletionRequested = true;
+          return { code: 70, stdout: '', stderr: 'sandbox deletion pending' };
+        }
+        if (deletionRequested && args[0] === 'info') return original(args, commandOptions);
+        return original(args, commandOptions);
+      };
+
+      const error = await rejected(controller(fake).ensureSnapshot(request(input)));
+
+      assert.equal(error.code, 'ERR_SNAPSHOT_SANDBOX_CLEANUP');
+      assert.match(error.message,
+        /ERR_SNAPSHOT_RUNNER_RESULT.*ERR_SNAPSHOT_SANDBOX_CLEANUP/);
+      assert.equal(hasCredentialMarker(Buffer.from(error.message)), false);
+      assert.doesNotMatch(error.message, /getter executed|prototype trap|ERR_NOT_REVIEWED/);
+    });
+  }
+  assert.equal(rotatingReads, 0, 'an accessor-backed code is rejected without invocation');
+});
+
+test('a hostile returned runner value is collapsed before successful cleanup can rethrow it', async (t) => {
+  const input = files(t);
+  const fake = fakeDaytona(input, { initialSnapshots: [snapshotRecord(input)] });
+  const original = fake.runCommand;
+  const credential = 'sk-or-v1-never-escape-a-runner-result';
+  const authenticatedTrapError = new DaytonaSnapshotControllerError(
+    credential,
+    'ERR_SNAPSHOT_COMMAND',
+  );
+  fake.runCommand = async (args, commandOptions) => {
+    if (args[0] === 'exec') {
+      return new Proxy({}, {
+        getPrototypeOf() { throw authenticatedTrapError; },
+      });
+    }
+    return original(args, commandOptions);
+  };
+
+  const error = await rejected(controller(fake).ensureSnapshot(request(input)));
+
+  assert.equal(error.code, 'ERR_SNAPSHOT_RUNNER_RESULT');
+  assert.equal(error.message, 'Daytona command runner returned an unsafe result');
+  assert.equal(hasCredentialMarker(Buffer.from(error.message)), false);
+  assert.equal(fake.sandbox, null, 'the temporary validation sandbox is still deleted');
+});
+
+test('controller errors expose only immutable authenticated codes', () => {
+  const error = new DaytonaSnapshotControllerError('unknown', 'ERR_NOT_REVIEWED');
+  const descriptor = Object.getOwnPropertyDescriptor(error, 'code');
+
+  assert.equal(error.code, 'ERR_DAYTONA_SNAPSHOT_CONTROLLER');
+  assert.deepEqual(descriptor, {
+    configurable: false,
+    enumerable: true,
+    value: 'ERR_DAYTONA_SNAPSHOT_CONTROLLER',
+    writable: false,
+  });
+  assert.throws(() => { error.code = 'ERR_SNAPSHOT_COMMAND'; }, TypeError);
+  assert.throws(() => createDaytonaSnapshotController({
+    runCommand: async () => ({ code: 0, stdout: '', stderr: '' }),
+    cleanupDeadlineMs: 10,
+    cleanupCommandTimeoutMs: 11,
+  }), /must not exceed/i);
+});
+
+test('cleanup is bounded by elapsed time and passes only the remaining budget to commands', async (t) => {
+  const input = files(t);
+  const fake = fakeDaytona(input, { initialSnapshots: [snapshotRecord(input)] });
+  const original = fake.runCommand;
+  const cleanupTimeouts = [];
+  let nowMs = 0;
+  let deletionRequested = false;
+  fake.runCommand = async (args, commandOptions) => {
+    if (args[0] === 'delete') {
+      deletionRequested = true;
+      cleanupTimeouts.push(commandOptions?.timeoutMs);
+      nowMs += 15;
+      return { code: 0, stdout: '', stderr: '' };
+    }
+    if (deletionRequested && args[0] === 'info') {
+      cleanupTimeouts.push(commandOptions?.timeoutMs);
+      nowMs += 15;
+      return original(args, commandOptions);
+    }
+    return original(args, commandOptions);
+  };
+
+  const error = await rejected(createDaytonaSnapshotController({
+    runCommand: fake.runCommand,
+    cleanupPollAttempts: 100,
+    cleanupPollIntervalMs: 0,
+    cleanupDeadlineMs: 30,
+    cleanupCommandTimeoutMs: 20,
+    monotonicNow: () => nowMs,
+  }).ensureSnapshot(request(input)));
+
+  assert.equal(error.code, 'ERR_SNAPSHOT_SANDBOX_CLEANUP');
+  assert.deepEqual(cleanupTimeouts, [20, 15]);
+  assert.equal(fake.calls.filter((args) => args[0] === 'info').length, 2,
+    'one validation inspection and one bounded cleanup inspection occurred');
+});
+
+test('sandbox cleanup retries one transient command timeout and trusts later exact absence', async (t) => {
+  const input = files(t);
+  const fake = fakeDaytona(input, { initialSnapshots: [snapshotRecord(input)] });
+  const original = fake.runCommand;
+  let deletionRequested = false;
+  let cleanupInspections = 0;
+  fake.runCommand = async (args, commandOptions) => {
+    if (args[0] === 'delete') {
+      deletionRequested = true;
+      return { code: 0, stdout: '', stderr: '', error: null };
+    }
+    if (deletionRequested && args[0] === 'info') {
+      cleanupInspections += 1;
+      if (cleanupInspections === 1) {
+        return {
+          code: null,
+          stdout: '',
+          stderr: '',
+          error: Object.assign(new Error('timed out'), { code: 'ETIMEDOUT' }),
+        };
+      }
+      return exactNotFound(args[1]);
+    }
+    return original(args, commandOptions);
+  };
+
+  const receipt = await controller(fake).ensureSnapshot(request(input));
+
+  assert.equal(cleanupInspections, 2);
+  assert.equal(receipt.validation.sandboxDeleted, true);
+});
+
+test('a production-shaped cleanup timeout retains its authenticated command cause', async (t) => {
+  const input = files(t);
+  const fake = fakeDaytona(input, { initialSnapshots: [snapshotRecord(input)] });
+  const original = fake.runCommand;
+  let deletionRequested = false;
+  fake.runCommand = async (args, commandOptions) => {
+    if (args[0] === 'delete') {
+      deletionRequested = true;
+      return { code: 0, stdout: '', stderr: '', error: null };
+    }
+    if (deletionRequested && args[0] === 'info') {
+      return {
+        code: null,
+        stdout: '',
+        stderr: '',
+        error: Object.assign(new Error('timed out'), { code: 'ETIMEDOUT' }),
+      };
+    }
+    return original(args, commandOptions);
+  };
+
+  const error = await rejected(controller(fake).ensureSnapshot(request(input)));
+
+  assert.equal(error.code, 'ERR_SNAPSHOT_SANDBOX_CLEANUP');
+  assert.match(error.message, /last cause ERR_SNAPSHOT_COMMAND/);
+  assert.doesNotMatch(error.message, /ETIMEDOUT|timed out/);
+});
+
 test('rollback tolerates a lost snapshot-delete response only after all pages prove absence', async (t) => {
   const input = files(t);
   const initialSnapshots = Array.from({ length: 201 }, (_, index) => fillerRecord(index));
   const fake = fakeDaytona(input, { initialSnapshots, mode: 'selftest' });
   const original = fake.runCommand;
+  const observedCalls = [];
+  let nowMs = 0;
   let deleteResponseLost = false;
-  fake.runCommand = async (args) => {
+  fake.runCommand = async (args, commandOptions) => {
+    observedCalls.push({ args: [...args], cleanupPhase: deleteResponseLost, commandOptions });
     if (args[0] === 'snapshot' && args[1] === 'delete') {
-      await original(args);
+      await original(args, commandOptions);
       deleteResponseLost = true;
+      nowMs += 7;
       return { code: 75, stdout: '', stderr: 'response lost' };
     }
-    return original(args);
+    if (deleteResponseLost && args[0] === 'snapshot' && args[1] === 'list') nowMs += 7;
+    return original(args, commandOptions);
   };
 
-  await assert.rejects(controller(fake).ensureSnapshot(request(input)), /self-test/i);
+  await assert.rejects(controller(fake, {
+    cleanupDeadlineMs: 30,
+    cleanupCommandTimeoutMs: 20,
+    monotonicNow: () => nowMs,
+  }).ensureSnapshot(request(input)), /self-test/i);
   assert.equal(deleteResponseLost, true);
   const deleteIndex = fake.calls.findIndex((args) => args[0] === 'snapshot' && args[1] === 'delete');
   const cleanupPages = fake.calls.slice(deleteIndex + 1)
     .filter((args) => args[0] === 'snapshot' && args[1] === 'list')
     .map((args) => args[args.indexOf('--page') + 1]);
   assert.deepEqual(cleanupPages, ['1', '2']);
+  const cleanupExecutions = observedCalls.filter(({ args, cleanupPhase }) =>
+    args[0] === 'snapshot' && (args[1] === 'delete' || cleanupPhase && args[1] === 'list'));
+  assert.equal(cleanupExecutions.length, 3);
+  assert.deepEqual(cleanupExecutions.map(({ commandOptions }) => commandOptions.timeoutMs),
+    [20, 20, 16], 'one rollback deadline shrinks across delete and every pagination page');
+  assert.equal(cleanupExecutions.every(({ commandOptions }) => Object.isFrozen(commandOptions)), true);
+  const ordinarySnapshotLists = observedCalls.filter(({ args, commandOptions }) =>
+    args[0] === 'snapshot' && args[1] === 'list' && commandOptions === undefined);
+  assert.equal(ordinarySnapshotLists.length > 0, true,
+    'ordinary lifecycle listing does not inherit the cleanup timeout');
   assert.equal(fake.snapshots.some((entry) => entry.name === input.identity.name), false);
+});
+
+test('rollback stops pagination when its shared elapsed deadline expires', async (t) => {
+  const input = files(t);
+  const initialSnapshots = Array.from({ length: 201 }, (_, index) => fillerRecord(index));
+  const fake = fakeDaytona(input, { initialSnapshots, mode: 'selftest' });
+  const original = fake.runCommand;
+  let cleanupPhase = false;
+  let nowMs = 0;
+  fake.runCommand = async (args, commandOptions) => {
+    if (args[0] === 'snapshot' && args[1] === 'delete') {
+      cleanupPhase = true;
+      await original(args, commandOptions);
+      nowMs += 5;
+      return { code: 0, stdout: '', stderr: '' };
+    }
+    if (cleanupPhase && args[0] === 'snapshot' && args[1] === 'list') nowMs += 15;
+    return original(args, commandOptions);
+  };
+
+  const error = await rejected(controller(fake, {
+    cleanupDeadlineMs: 20,
+    cleanupCommandTimeoutMs: 10,
+    monotonicNow: () => nowMs,
+  }).ensureSnapshot(request(input)));
+
+  const deleteIndex = fake.calls.findIndex((args) => args[0] === 'snapshot' && args[1] === 'delete');
+  const cleanupPages = fake.calls.slice(deleteIndex + 1)
+    .filter((args) => args[0] === 'snapshot' && args[1] === 'list')
+    .map((args) => args[args.indexOf('--page') + 1]);
+  assert.equal(error.code, 'ERR_SNAPSHOT_ROLLBACK');
+  assert.deepEqual(cleanupPages, ['1']);
 });
 
 test('cleanup fails closed when the new snapshot cannot be proven absent', async (t) => {

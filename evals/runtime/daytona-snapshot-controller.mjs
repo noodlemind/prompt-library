@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { performance } from 'node:perf_hooks';
 import { TextDecoder } from 'node:util';
 
 import {
@@ -32,6 +33,9 @@ const DEFAULT_MAX_FILE_BYTES = 8 * 1024 * 1024 * 1024;
 const MAX_DOCKERFILE_BYTES = 1024 * 1024;
 const MAX_MANIFEST_BYTES = 4 * 1024 * 1024;
 const MAX_TOTAL_ARCHIVE_BYTES = 8 * 1024 * 1024 * 1024;
+const DEFAULT_CLEANUP_DEADLINE_MS = 60_000;
+const DEFAULT_CLEANUP_COMMAND_TIMEOUT_MS = 10_000;
+const INVALID_RUNNER_OUTPUT = Symbol('invalid-runner-output');
 const SELFTEST = '/opt/engineer/bin/engineer-snapshot-selftest';
 const HASH = /^[a-f0-9]{64}$/;
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,191}$/;
@@ -56,17 +60,66 @@ const CUSTODY_FILE_NAMES = Object.freeze([
   'Dockerfile',
   ...Object.values(SNAPSHOT_CONTEXT_POLICY).map((policy) => policy.fileName),
 ].sort());
+const STABLE_CONTROLLER_ERROR_CODES = new Set([
+  'ERR_DAYTONA_SNAPSHOT_CONTROLLER',
+  'ERR_SNAPSHOT_ARGV',
+  'ERR_SNAPSHOT_COMMAND',
+  'ERR_SNAPSHOT_CONCURRENT',
+  'ERR_SNAPSHOT_CREDENTIAL',
+  'ERR_SNAPSHOT_CUSTODY',
+  'ERR_SNAPSHOT_CUSTODY_CLEANUP',
+  'ERR_SNAPSHOT_CUSTODY_HANDLE',
+  'ERR_SNAPSHOT_DIGEST',
+  'ERR_SNAPSHOT_FILE',
+  'ERR_SNAPSHOT_FILE_RACE',
+  'ERR_SNAPSHOT_INPUT',
+  'ERR_SNAPSHOT_JSON',
+  'ERR_SNAPSHOT_MANIFEST',
+  'ERR_SNAPSHOT_OUTPUT_BOUND',
+  'ERR_SNAPSHOT_PAGE_BOUND',
+  'ERR_SNAPSHOT_PLATFORM',
+  'ERR_SNAPSHOT_RECORD',
+  'ERR_SNAPSHOT_RECORD_DUPLICATE',
+  'ERR_SNAPSHOT_RECORD_MISMATCH',
+  'ERR_SNAPSHOT_RECORD_MISSING',
+  'ERR_SNAPSHOT_ROLLBACK',
+  'ERR_SNAPSHOT_RUNNER_RESULT',
+  'ERR_SNAPSHOT_SANDBOX',
+  'ERR_SNAPSHOT_SANDBOX_CLEANUP',
+  'ERR_SNAPSHOT_SANDBOX_MISMATCH',
+  'ERR_SNAPSHOT_SELFTEST_IDENTITY',
+  'ERR_SNAPSHOT_VERSION',
+]);
+const AUTHENTICATED_CONTROLLER_ERROR_CODES = new WeakMap();
 
 export class DaytonaSnapshotControllerError extends Error {
   constructor(message, code = 'ERR_DAYTONA_SNAPSHOT_CONTROLLER') {
     super(message);
     this.name = 'DaytonaSnapshotControllerError';
-    this.code = code;
+    const authenticatedCode = STABLE_CONTROLLER_ERROR_CODES.has(code)
+      ? code
+      : 'ERR_DAYTONA_SNAPSHOT_CONTROLLER';
+    Object.defineProperty(this, 'code', {
+      configurable: false,
+      enumerable: true,
+      value: authenticatedCode,
+      writable: false,
+    });
+    AUTHENTICATED_CONTROLLER_ERROR_CODES.set(this, authenticatedCode);
   }
 }
 
 function fail(message, code) {
   throw new DaytonaSnapshotControllerError(message, code);
+}
+
+function authenticatedControllerErrorCode(error) {
+  if (error === null || typeof error !== 'object' && typeof error !== 'function') return null;
+  return AUTHENTICATED_CONTROLLER_ERROR_CODES.get(error) ?? null;
+}
+
+function stableErrorCode(error) {
+  return authenticatedControllerErrorCode(error) ?? 'ERR_UNKNOWN';
 }
 
 function plainObject(value) {
@@ -447,21 +500,50 @@ function decodeOutput(value, label, maximumBytes) {
   }
 }
 
-function normalizeRunnerResult(value, maximumBytes) {
-  if (!plainObject(value)) fail('Daytona command runner returned a malformed result', 'ERR_SNAPSHOT_RUNNER_RESULT');
-  const allowed = new Set(['code', 'stdout', 'stderr', 'error']);
-  if (Object.keys(value).some((key) => !allowed.has(key))) {
-    fail('Daytona command runner returned an unexpected field', 'ERR_SNAPSHOT_RUNNER_RESULT');
+function captureRunnerOutput(value) {
+  if (value == null) return '';
+  if (typeof value === 'string') return value;
+  if (Buffer.isBuffer(value)) return Buffer.from(value);
+  if (ArrayBuffer.isView(value) && value.BYTES_PER_ELEMENT === 1) return Buffer.from(value);
+  return INVALID_RUNNER_OUTPUT;
+}
+
+function captureRunnerResult(value) {
+  try {
+    if (value === null || typeof value !== 'object' || Array.isArray(value)) return null;
+    const prototype = Object.getPrototypeOf(value);
+    if (prototype !== Object.prototype && prototype !== null) return null;
+    const allowed = new Set(['code', 'stdout', 'stderr', 'error']);
+    const keys = Reflect.ownKeys(value);
+    if (keys.some((key) => typeof key !== 'string' || !allowed.has(key))) return null;
+    const fields = {};
+    for (const key of keys) {
+      const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      if (!descriptor || !Object.hasOwn(descriptor, 'value')) return null;
+      fields[key] = descriptor.value;
+    }
+    const stdout = captureRunnerOutput(fields.stdout);
+    const stderr = captureRunnerOutput(fields.stderr);
+    if (stdout === INVALID_RUNNER_OUTPUT || stderr === INVALID_RUNNER_OUTPUT) return null;
+    return Object.freeze({
+      code: fields.code,
+      runnerFailed: fields.error != null,
+      stderr,
+      stdout,
+    });
+  } catch {
+    return null;
   }
-  if (!Number.isInteger(value.code)) {
+}
+
+function normalizeRunnerResult(value, maximumBytes) {
+  if (value.runnerFailed) fail('Daytona command runner failed', 'ERR_SNAPSHOT_COMMAND');
+  const exitCode = value.code;
+  if (!Number.isInteger(exitCode)) {
     fail('Daytona command runner returned an invalid exit code', 'ERR_SNAPSHOT_RUNNER_RESULT');
   }
-  if (value.error != null) {
-    const detail = sha256(String(value.error?.message ?? value.error)).slice(0, 16);
-    fail(`Daytona command runner failed (detail sha256:${detail})`, 'ERR_SNAPSHOT_COMMAND');
-  }
   return Object.freeze({
-    code: value.code,
+    code: exitCode,
     stdout: decodeOutput(value.stdout ?? '', 'Daytona command stdout', maximumBytes),
     stderr: decodeOutput(value.stderr ?? '', 'Daytona command stderr', maximumBytes),
   });
@@ -1139,13 +1221,16 @@ async function prepareRequest(input, maximumFileBytes) {
 
 export function createDaytonaSnapshotController(options = {}) {
   optionKeys(options, [
-    'runCommand', 'cleanupPollAttempts', 'cleanupPollIntervalMs', 'maxPages',
-    'maxOutputBytes', 'maxFileBytes',
+    'runCommand', 'cleanupPollAttempts', 'cleanupPollIntervalMs', 'cleanupDeadlineMs',
+    'cleanupCommandTimeoutMs', 'monotonicNow', 'maxPages', 'maxOutputBytes', 'maxFileBytes',
   ]);
   const {
     runCommand,
-    cleanupPollAttempts = 20,
-    cleanupPollIntervalMs = 250,
+    cleanupPollAttempts = 100,
+    cleanupPollIntervalMs = 500,
+    cleanupDeadlineMs = DEFAULT_CLEANUP_DEADLINE_MS,
+    cleanupCommandTimeoutMs = DEFAULT_CLEANUP_COMMAND_TIMEOUT_MS,
+    monotonicNow = () => performance.now(),
     maxPages = DEFAULT_MAX_PAGES,
     maxOutputBytes = DEFAULT_MAX_OUTPUT_BYTES,
     maxFileBytes = DEFAULT_MAX_FILE_BYTES,
@@ -1153,6 +1238,12 @@ export function createDaytonaSnapshotController(options = {}) {
   if (typeof runCommand !== 'function') throw new TypeError('runCommand must be an injected fixed-argv function');
   boundedInteger(cleanupPollAttempts, 'cleanupPollAttempts', 1, 100);
   boundedInteger(cleanupPollIntervalMs, 'cleanupPollIntervalMs', 0, 60_000);
+  boundedInteger(cleanupDeadlineMs, 'cleanupDeadlineMs', 1, 5 * 60_000);
+  boundedInteger(cleanupCommandTimeoutMs, 'cleanupCommandTimeoutMs', 1, 60_000);
+  if (cleanupCommandTimeoutMs > cleanupDeadlineMs) {
+    throw new TypeError('cleanupCommandTimeoutMs must not exceed cleanupDeadlineMs');
+  }
+  if (typeof monotonicNow !== 'function') throw new TypeError('monotonicNow must be a function');
   boundedInteger(maxPages, 'maxPages', 1, 1_000);
   boundedInteger(maxOutputBytes, 'maxOutputBytes', 1024, 16 * 1024 * 1024);
   boundedInteger(maxFileBytes, 'maxFileBytes', 1, DEFAULT_MAX_FILE_BYTES);
@@ -1160,25 +1251,32 @@ export function createDaytonaSnapshotController(options = {}) {
   let versionVerified = false;
   let busy = false;
 
-  async function invokeRaw(args) {
+  async function invokeRaw(args, cleanupBudget = null) {
     if (!Array.isArray(args) || args.length < 1 || args.length > 128 ||
         args.some((arg) => typeof arg !== 'string' || arg.length < 1 || Buffer.byteLength(arg) > 2048 ||
           arg.includes('\0'))) {
       fail('internal Daytona argv violated its fixed-argument contract', 'ERR_SNAPSHOT_ARGV');
     }
     const fixedArgv = Object.freeze([...args]);
+    const commandOptions = cleanupBudget === null
+      ? undefined
+      : Object.freeze({ timeoutMs: cleanupBudget.commandTimeoutMs() });
     let result;
     try {
-      result = await runCommand(fixedArgv);
-    } catch (error) {
-      const detail = sha256(String(error?.message ?? error)).slice(0, 16);
-      fail(`Daytona command runner threw (detail sha256:${detail})`, 'ERR_SNAPSHOT_COMMAND');
+      result = await runCommand(fixedArgv, commandOptions);
+    } catch {
+      fail('Daytona command runner threw', 'ERR_SNAPSHOT_COMMAND');
     }
-    return normalizeRunnerResult(result, maxOutputBytes);
+    const captured = captureRunnerResult(result);
+    if (captured === null) {
+      fail('Daytona command runner returned an unsafe result', 'ERR_SNAPSHOT_RUNNER_RESULT');
+    }
+    if (cleanupBudget !== null) cleanupBudget.assertActive();
+    return normalizeRunnerResult(captured, maxOutputBytes);
   }
 
-  async function invoke(args, label) {
-    const result = await invokeRaw(args);
+  async function invoke(args, label, cleanupBudget = null) {
+    const result = await invokeRaw(args, cleanupBudget);
     if (result.code !== 0 || result.stderr !== '') throw commandError(label, result);
     return result;
   }
@@ -1193,14 +1291,14 @@ export function createDaytonaSnapshotController(options = {}) {
     versionVerified = true;
   }
 
-  async function listSnapshots() {
+  async function listSnapshots(cleanupBudget = null) {
     const records = [];
     const ids = new Set();
     const names = new Set();
     for (let page = 1; page <= maxPages; page += 1) {
       const result = await invoke([
         'snapshot', 'list', '--format', 'json', '--limit', String(PAGE_LIMIT), '--page', String(page),
-      ], 'Daytona snapshot list');
+      ], 'Daytona snapshot list', cleanupBudget);
       const value = parseJson(result.stdout, 'Daytona snapshot list');
       if (!Array.isArray(value) || value.length > PAGE_LIMIT) {
         fail('Daytona snapshot list JSON is malformed or exceeds its page bound', 'ERR_SNAPSHOT_JSON');
@@ -1219,70 +1317,113 @@ export function createDaytonaSnapshotController(options = {}) {
     fail('Daytona snapshot pagination exceeded its bounded page count', 'ERR_SNAPSHOT_PAGE_BOUND');
   }
 
-  async function wait() {
-    if (cleanupPollIntervalMs === 0) return;
-    await new Promise((resolve) => setTimeout(resolve, cleanupPollIntervalMs));
+  function readMonotonicClock() {
+    let value;
+    try {
+      value = monotonicNow();
+    } catch {
+      fail('cleanup monotonic clock is unavailable', 'ERR_SNAPSHOT_PLATFORM');
+    }
+    if (typeof value !== 'number' || !Number.isFinite(value) || value < 0 ||
+        value > Number.MAX_SAFE_INTEGER - cleanupDeadlineMs) {
+      fail('cleanup monotonic clock returned an invalid value', 'ERR_SNAPSHOT_PLATFORM');
+    }
+    return value;
+  }
+
+  function cleanupBudget(code, label) {
+    let lastObservedMs = readMonotonicClock();
+    const deadlineMs = lastObservedMs + cleanupDeadlineMs;
+    const remainingMs = () => {
+      const observedMs = readMonotonicClock();
+      if (observedMs < lastObservedMs) {
+        fail('cleanup monotonic clock moved backwards', 'ERR_SNAPSHOT_PLATFORM');
+      }
+      lastObservedMs = observedMs;
+      const remaining = Math.ceil(deadlineMs - observedMs);
+      if (remaining < 1) fail(label, code);
+      return remaining;
+    };
+    return Object.freeze({
+      assertActive() { remainingMs(); },
+      commandTimeoutMs() { return Math.min(cleanupCommandTimeoutMs, remainingMs()); },
+      waitMs() { return Math.min(cleanupPollIntervalMs, remainingMs()); },
+    });
+  }
+
+  async function wait(budget) {
+    const waitMs = budget.waitMs();
+    if (waitMs > 0) await new Promise((resolve) => setTimeout(resolve, waitMs));
+    budget.assertActive();
   }
 
   async function rollbackSnapshot(snapshotId) {
     safeRemoteId(snapshotId, 'owned snapshot id');
+    const budget = cleanupBudget(
+      'ERR_SNAPSHOT_ROLLBACK',
+      'snapshot rollback exceeded its elapsed-time bound',
+    );
     try {
-      await invokeRaw(['snapshot', 'delete', snapshotId]);
+      await invokeRaw(['snapshot', 'delete', snapshotId], budget);
     } catch {
       // Absence is authoritative; a lost delete response is tolerated only when every page proves absence.
     }
     for (let attempt = 0; attempt < cleanupPollAttempts; attempt += 1) {
       try {
-        const records = await listSnapshots();
+        const records = await listSnapshots(budget);
         const present = records.some((record) => record.id === snapshotId);
         if (!present) return;
       } catch {
         // A malformed or incomplete observation cannot prove cleanup; retry within the fixed bound.
       }
-      if (attempt + 1 < cleanupPollAttempts) await wait();
+      if (attempt + 1 < cleanupPollAttempts) await wait(budget);
     }
     fail('snapshot rollback could not prove absence across all paginated records', 'ERR_SNAPSHOT_ROLLBACK');
   }
 
   async function deleteAndConfirmSandbox(identity) {
-    let deletionError = null;
+    const budget = cleanupBudget(
+      'ERR_SNAPSHOT_SANDBOX_CLEANUP',
+      'validation sandbox cleanup exceeded its elapsed-time bound',
+    );
+    let lastCleanupError = null;
     try {
-      const deletion = await invokeRaw(['delete', identity]);
-      if (deletion.code !== 0 || deletion.stderr !== '') deletionError = commandError('validation sandbox deletion', deletion);
+      const deletion = await invokeRaw(['delete', identity], budget);
+      if (deletion.code !== 0 || deletion.stderr !== '') {
+        lastCleanupError = commandError('validation sandbox deletion', deletion);
+      }
     } catch (error) {
-      deletionError = error;
+      lastCleanupError = error;
     }
 
     let absent = false;
     for (let attempt = 0; attempt < cleanupPollAttempts; attempt += 1) {
       let inspected;
       try {
-        inspected = await invokeRaw(['info', identity, '--format', 'json']);
+        inspected = await invokeRaw(['info', identity, '--format', 'json'], budget);
       } catch (error) {
-        if (!deletionError) deletionError = error;
-        break;
+        lastCleanupError = error;
       }
-      if (exactSandboxNotFound(inspected, identity)) {
+      if (inspected && exactSandboxNotFound(inspected, identity)) {
         absent = true;
         break;
       }
-      if (inspected.code === 0 && inspected.stderr === '') {
+      if (inspected && inspected.code === 0 && inspected.stderr === '') {
         const value = parseJson(inspected.stdout, 'Daytona validation sandbox deletion inspection');
         if (!plainObject(value) || value.id !== identity && value.name !== identity) {
           fail('validation sandbox deletion inspection returned a mismatched identity',
             'ERR_SNAPSHOT_SANDBOX_CLEANUP');
         }
-      } else {
-        deletionError = commandError('validation sandbox deletion inspection', inspected);
-        break;
+      } else if (inspected) {
+        lastCleanupError = commandError('validation sandbox deletion inspection', inspected);
       }
-      if (attempt + 1 < cleanupPollAttempts) await wait();
+      if (attempt + 1 < cleanupPollAttempts) await wait(budget);
     }
     if (!absent) {
-      fail('validation sandbox deletion did not return the exact Not Found proof',
+      fail(`validation sandbox deletion did not return the exact Not Found proof ` +
+        `(last cause ${stableErrorCode(lastCleanupError)})`,
         'ERR_SNAPSHOT_SANDBOX_CLEANUP');
     }
-    if (deletionError) throw deletionError;
   }
 
   async function validateCreatedSnapshot(prepared) {
@@ -1339,7 +1480,8 @@ export function createDaytonaSnapshotController(options = {}) {
       }
     }
     if (lifecycleError && cleanupError) {
-      fail('snapshot validation failed and temporary sandbox cleanup was not confirmed',
+      fail(`snapshot validation failed (${stableErrorCode(lifecycleError)}) and temporary sandbox ` +
+        `cleanup was not confirmed (${stableErrorCode(cleanupError)})`,
         'ERR_SNAPSHOT_SANDBOX_CLEANUP');
     }
     if (lifecycleError) throw lifecycleError;
