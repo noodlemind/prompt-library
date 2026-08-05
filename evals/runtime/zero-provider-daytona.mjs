@@ -34,6 +34,7 @@ export const ZERO_PROVIDER_EXECUTION_MODE = 'zero-provider-canary';
 
 const QUALIFICATION_SESSION_MICROUSD = 1_300_000;
 const MAX_JSON_BYTES = 4 * 1024 * 1024;
+const MAX_RUNTIME_DISPOSAL_ATTEMPTS = 2;
 const HASH = /^[a-f0-9]{64}$/;
 const RELEASE_SHA = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/;
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,191}$/;
@@ -644,6 +645,12 @@ export async function runZeroProviderDaytonaGate(input = {}) {
   const boundAllocations = new Map();
   const attemptedTrials = new Set();
   let disposed = false;
+  let disposalAttempts = 0;
+  const attemptRuntimeDisposal = async () => {
+    disposalAttempts += 1;
+    await disposeRuntime({ sessionController, daytonaTransport, pendingArchives, rootHmacKey });
+    disposed = true;
+  };
   try {
     const sessionSuffix = crypto.createHash('sha256').update(sessionEntropy).digest('hex').slice(0, 24);
     sessionEntropy.fill(0);
@@ -967,17 +974,21 @@ export async function runZeroProviderDaytonaGate(input = {}) {
     };
     const result = deepFreeze({ ...unsignedResult, artifactHash: canonicalArtifactHash(unsignedResult) });
     if (productionComposition) validateZeroProviderDaytonaRun(result);
-    await disposeRuntime({ sessionController, daytonaTransport, pendingArchives, rootHmacKey });
-    disposed = true;
+    await attemptRuntimeDisposal();
     if (productionComposition) zeroProviderRunBrand.add(result);
     return result;
   } catch (error) {
     sessionEntropy.fill(0);
     if (!disposed) {
-      try {
-        await disposeRuntime({ sessionController, daytonaTransport, pendingArchives, rootHmacKey });
-        disposed = true;
-      } catch (cleanupError) {
+      let cleanupError;
+      while (!disposed && disposalAttempts < MAX_RUNTIME_DISPOSAL_ATTEMPTS) {
+        try {
+          await attemptRuntimeDisposal();
+        } catch (candidate) {
+          cleanupError = candidate;
+        }
+      }
+      if (!disposed) {
         throw new ZeroProviderDaytonaError(
           `${String(error?.message ?? error)}; ${String(cleanupError?.message ?? cleanupError)}`,
           'ERR_ZERO_PROVIDER_DAYTONA_CLEANUP',

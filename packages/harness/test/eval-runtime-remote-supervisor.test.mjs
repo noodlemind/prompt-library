@@ -19,6 +19,30 @@ const HASH = (character) => character.repeat(64);
 const sha256 = (value) => crypto.createHash('sha256').update(value).digest('hex');
 const CONTROLLED_PROVIDER = 'controlled-provider';
 const ZERO_PROVIDER_CANARY = 'zero-provider-canary';
+const DAYTONA_METADATA = Object.freeze({
+  DAYTONA_ORGANIZATION_ID: '123e4567-e89b-42d3-a456-426614174000',
+  DAYTONA_OTEL_ENDPOINT: 'https://telemetry.invalid',
+  DAYTONA_REGION_ID: 'us',
+  DAYTONA_SANDBOX_ID: '8d2890a2-57ef-4d75-91d5-2b0a81256b89',
+  DAYTONA_SANDBOX_SNAPSHOT: `ghcr.io/daytonaio/runtime@sha256:${HASH('a')}`,
+  DAYTONA_SANDBOX_USER: 'root',
+});
+
+async function withLiveDaytonaMetadata(action) {
+  const originals = new Map(Object.keys(DAYTONA_METADATA).map((name) => [
+    name, Object.getOwnPropertyDescriptor(process.env, name),
+  ]));
+  Object.assign(process.env, DAYTONA_METADATA);
+  try {
+    return await action();
+  } finally {
+    for (const name of Object.keys(DAYTONA_METADATA)) {
+      delete process.env[name];
+      const descriptor = originals.get(name);
+      if (descriptor) Object.defineProperty(process.env, name, descriptor);
+    }
+  }
+}
 
 function authenticatedControlChannel(hmacKey, executionMode) {
   const unsigned = {
@@ -329,9 +353,22 @@ test('fails closed on ambient provider or Daytona credentials, non-Linux default
     buildDockerPolicy: () => ({}),
     buildBrokerPolicy: () => ({}),
   };
+  assert.doesNotThrow(() => createRemoteSupervisorEntrypoint({
+    ...definition,
+    dependencies: {
+      platform: 'linux',
+      environment: { PATH: '/usr/bin', ...DAYTONA_METADATA },
+      createEffects: () => ({
+        bindControlChannel: async () => ({ bound: true }),
+        closeInheritedFd: async () => ({ closed: true }),
+      }),
+      createCustody: fakeCustody,
+    },
+  }));
   for (const environment of [
     { OPENROUTER_API_KEY: 'redacted' },
     { DAYTONA_API_KEY: 'redacted' },
+    { DAYTONA_UNKNOWN: 'redacted' },
     { ANTHROPIC_AUTH_TOKEN: 'redacted' },
     { AWS_SECRET_ACCESS_KEY: 'redacted' },
   ]) {
@@ -445,6 +482,23 @@ test('direct CLI loads the one code-owned definition when no embedding definitio
     }),
     (error) => error.code === 'ERR_REMOTE_SUPERVISOR_DEFINITION'
   );
+});
+
+test('production remote CLI deletes Daytona metadata before definition loading', async () => {
+  await withLiveDaytonaMetadata(async () => {
+    let loadedAfterScrub = false;
+    await assert.rejects(
+      runRemoteSupervisorCli({
+        definitionLoader: async () => {
+          loadedAfterScrub = Object.keys(DAYTONA_METADATA)
+            .every((name) => !Object.hasOwn(process.env, name));
+          throw new Error('definition unavailable after observation');
+        },
+      }),
+      (error) => error.code === 'ERR_REMOTE_SUPERVISOR_DEFINITION',
+    );
+    assert.equal(loadedAfterScrub, true);
+  });
 });
 
 test('serialized topology cannot spoof a live authenticated control-channel observation', () => {

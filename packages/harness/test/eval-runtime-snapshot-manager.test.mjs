@@ -7,22 +7,58 @@ import {
   SNAPSHOT_MANAGER_DOCKERD_ARGV,
   assertSnapshotManagerEnvironment,
   createDaemonAdoptionReceipt,
+  runSnapshotManagerCli,
   validateDaemonAdoptionReceipt,
   waitForManagedDaemonStop,
 } from '../../../evals/runtime/snapshot-manager.mjs';
+import { scrubDaytonaPlatformMetadata } from '../../../evals/runtime/platform-environment.mjs';
 
 const HASH = (character) => character.repeat(64);
+const DAYTONA_METADATA = Object.freeze({
+  DAYTONA_ORGANIZATION_ID: '123e4567-e89b-42d3-a456-426614174000',
+  DAYTONA_OTEL_ENDPOINT: 'https://telemetry.invalid',
+  DAYTONA_REGION_ID: 'us',
+  DAYTONA_SANDBOX_ID: '8d2890a2-57ef-4d75-91d5-2b0a81256b89',
+  DAYTONA_SANDBOX_SNAPSHOT: `ghcr.io/daytonaio/runtime@sha256:${HASH('a')}`,
+  DAYTONA_SANDBOX_USER: 'root',
+});
 
-test('snapshot manager accepts only Daytona platform metadata, never Daytona credentials', () => {
-  assert.doesNotThrow(() => assertSnapshotManagerEnvironment({
-    DAYTONA_ORGANIZATION_ID: 'organization-id',
-    DAYTONA_OTEL_ENDPOINT: 'https://telemetry.invalid',
-    DAYTONA_REGION_ID: 'us',
-    DAYTONA_SANDBOX_ID: 'sandbox-id',
-    DAYTONA_SANDBOX_SNAPSHOT: 'snapshot-name',
-    DAYTONA_SANDBOX_USER: 'root',
-  }));
-  for (const name of ['DAYTONA_API_KEY', 'DAYTONA_TOKEN', 'DAYTONA_UNKNOWN']) {
+async function withLiveDaytonaMetadata(action) {
+  const originals = new Map(Object.keys(DAYTONA_METADATA).map((name) => [
+    name, Object.getOwnPropertyDescriptor(process.env, name),
+  ]));
+  Object.assign(process.env, DAYTONA_METADATA);
+  try {
+    return await action();
+  } finally {
+    for (const name of Object.keys(DAYTONA_METADATA)) {
+      delete process.env[name];
+      const descriptor = originals.get(name);
+      if (descriptor) Object.defineProperty(process.env, name, descriptor);
+    }
+  }
+}
+
+test('production snapshot CLI deletes Daytona metadata before argument handling', async () => {
+  await withLiveDaytonaMetadata(async () => {
+    await assert.rejects(runSnapshotManagerCli({ argv: ['unexpected'] }), /accepts no arguments/i);
+    for (const name of Object.keys(DAYTONA_METADATA)) {
+      assert.equal(Object.hasOwn(process.env, name), false);
+    }
+  });
+});
+
+test('snapshot manager asserts strictly after validated Daytona platform metadata is scrubbed', () => {
+  const scrubbed = scrubDaytonaPlatformMetadata({ PATH: '/usr/bin', ...DAYTONA_METADATA });
+  assert.deepEqual({ ...scrubbed }, { PATH: '/usr/bin' });
+  assert.doesNotThrow(() => assertSnapshotManagerEnvironment(scrubbed));
+
+  for (const name of [
+    ...Object.keys(DAYTONA_METADATA),
+    'DAYTONA_API_KEY',
+    'DAYTONA_TOKEN',
+    'DAYTONA_UNKNOWN',
+  ]) {
     assert.throws(
       () => assertSnapshotManagerEnvironment({ [name]: 'credential-material' }),
       /forbids ambient cloud or provider credentials/i,

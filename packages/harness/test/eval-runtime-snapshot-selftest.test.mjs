@@ -6,6 +6,7 @@ import {
   buildSnapshotBuildManifest,
 } from '../../../evals/runtime/snapshot-build-manifest.mjs';
 import {
+  SnapshotSelfTestError,
   parseSnapshotSelfTestFailure,
   runSnapshotSelfTestMain,
   runSnapshotSelfTestCli,
@@ -20,6 +21,14 @@ import {
 } from '../../../evals/runtime/daytona-topology.mjs';
 
 const HASH = (character) => character.repeat(64);
+const DAYTONA_METADATA = Object.freeze({
+  DAYTONA_ORGANIZATION_ID: '123e4567-e89b-42d3-a456-426614174000',
+  DAYTONA_OTEL_ENDPOINT: 'https://telemetry.daytona.invalid/v1/traces',
+  DAYTONA_REGION_ID: 'us',
+  DAYTONA_SANDBOX_ID: '8d2890a2-57ef-4d75-91d5-2b0a81256b89',
+  DAYTONA_SANDBOX_SNAPSHOT: `ghcr.io/daytonaio/runtime@sha256:${HASH('a')}`,
+  DAYTONA_SANDBOX_USER: 'root',
+});
 
 function context(kind, entries) {
   return {
@@ -224,6 +233,55 @@ test('attests the canonical embedded manifest, every executable, and exact Harbo
 
   assert.equal(code, 0);
   assert.equal(target.read(), `ENGINEER-SNAPSHOT/1 ${input.artifact.buildHash}\n`);
+});
+
+test('scrubs live-shaped Daytona platform metadata in place before strict validation', async () => {
+  const input = fixture();
+  const target = sink();
+  const environment = { PATH: '/usr/bin', ...DAYTONA_METADATA };
+  const code = await runSnapshotSelfTestCli({
+    argv: ['--expected-build-hash', input.artifact.buildHash],
+    environment,
+    output: target.output,
+    primitives: input.primitives,
+  });
+
+  assert.equal(code, 0);
+  assert.deepEqual(environment, { PATH: '/usr/bin' });
+  assert.equal(target.read(), `ENGINEER-SNAPSHOT/1 ${input.artifact.buildHash}\n`);
+});
+
+test('rejects unknown Daytona names and invalid or opaque known metadata', async () => {
+  const opaque = {};
+  Object.defineProperty(opaque, 'DAYTONA_SANDBOX_ID', {
+    configurable: false,
+    enumerable: true,
+    value: '8d2890a2-57ef-4d75-91d5-2b0a81256b89',
+    writable: true,
+  });
+  const mixedInvalid = {
+    ...DAYTONA_METADATA,
+    DAYTONA_SANDBOX_USER: 'invalid user',
+  };
+  for (const environment of [
+    { DAYTONA_UNKNOWN: 'unknown-platform-authority' },
+    mixedInvalid,
+    opaque,
+  ]) {
+    const input = fixture();
+    await assert.rejects(
+      runSnapshotSelfTestCli({
+        argv: ['--expected-build-hash', input.artifact.buildHash],
+        environment,
+        output: sink().output,
+        primitives: input.primitives,
+      }),
+      (error) => error instanceof SnapshotSelfTestError
+        && error.code === 'ERR_SNAPSHOT_SELFTEST_ENVIRONMENT',
+    );
+  }
+  assert.equal(Object.hasOwn(mixedInvalid, 'DAYTONA_ORGANIZATION_ID'), true,
+    'invalid metadata is rejected before any known field is deleted');
 });
 
 test('fails closed on manifest, executable, platform, identity, version, environment, and argv drift', async () => {

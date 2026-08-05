@@ -15,6 +15,7 @@ import path from 'node:path';
 import process from 'node:process';
 import { spawn } from 'node:child_process';
 import { createDockerPolicyProxy } from './docker-proxy.mjs';
+import { scrubDaytonaPlatformMetadata } from './platform-environment.mjs';
 import { providerBrokerStaticPolicyHash } from './provider-broker.mjs';
 import { createTrialSecurityContract } from './trial-security-contract.mjs';
 import { archivedConditionReadOnlyBindVariants } from './trial-archive.mjs';
@@ -131,6 +132,20 @@ export class LinuxRuntimeEffectsError extends Error {
 
 function fail(message, code) {
   throw new LinuxRuntimeEffectsError(message, code);
+}
+
+export function observeHostCredentialAbsence(environment) {
+  let scrubbed;
+  try {
+    scrubbed = scrubDaytonaPlatformMetadata(environment);
+  } catch {
+    fail('host environment contains invalid Daytona platform metadata', 'ERR_LINUX_RUNTIME_SECRET');
+  }
+  const names = Object.keys(scrubbed);
+  return Object.freeze({
+    providerCredentialsAbsent: names.every((name) => !PROVIDER_ENV.test(name)),
+    daytonaCredentialsAbsent: names.every((name) => !/^DAYTONA_/i.test(name)),
+  });
 }
 
 function plainObject(value) {
@@ -2384,8 +2399,7 @@ export function createNodeLinuxDriver(topology) {
       const evidence = statMode(topology.paths.evidenceDirectory);
       const boot = fs.readFileSync('/proc/sys/kernel/random/boot_id', 'utf8').trim();
       const limits = fs.readFileSync('/proc/self/limits', 'utf8');
-      const credentialNames = Object.keys(process.env).filter((name) => PROVIDER_ENV.test(name));
-      const daytonaNames = Object.keys(process.env).filter((name) => /^DAYTONA_/i.test(name));
+      const credentialAbsence = observeHostCredentialAbsence(process.env);
       return {
         platform: process.platform,
         effectiveUid: process.geteuid?.() ?? process.getuid?.(),
@@ -2408,8 +2422,7 @@ export function createNodeLinuxDriver(topology) {
           authenticated: true,
           open: controlChannel.stream.destroyed !== true,
         },
-        providerCredentialsAbsent: credentialNames.length === 0,
-        daytonaCredentialsAbsent: daytonaNames.length === 0,
+        ...credentialAbsence,
         custody: {
           coreDumpsDisabled: /^Max core file size\s+0\s+0\s+/m.test(limits),
           evidenceStoreOwnerUid: evidence.ownerUid,

@@ -11,6 +11,10 @@ import { pathToFileURL } from 'node:url';
 import { archiveLimitsForKind } from './archive-limits.mjs';
 import { createLinuxRuntimeEffects } from './linux-effects.mjs';
 import {
+  scrubDaytonaPlatformMetadata,
+  scrubDaytonaPlatformMetadataInPlace,
+} from './platform-environment.mjs';
+import {
   runRemoteBridgeCli,
   verifyAuthenticatedControlChannel,
 } from './remote-bridge.mjs';
@@ -595,7 +599,13 @@ export function createRemoteSupervisorEntrypoint({
   if (platform !== 'linux') {
     fail('remote supervisor requires Linux', 'ERR_REMOTE_SUPERVISOR_PLATFORM');
   }
-  assertCredentialFreeEnvironment(dependencies.environment ?? process.env);
+  let scrubbedEnvironment;
+  try {
+    scrubbedEnvironment = scrubDaytonaPlatformMetadata(dependencies.environment ?? process.env);
+  } catch {
+    fail('ambient Daytona platform metadata is invalid', 'ERR_REMOTE_SUPERVISOR_ENVIRONMENT');
+  }
+  assertCredentialFreeEnvironment(scrubbedEnvironment);
   if (typeof buildDockerPolicy !== 'function' || typeof buildBrokerPolicy !== 'function') {
     fail('code-owned runtime policies are missing', 'ERR_REMOTE_SUPERVISOR_DEFINITION');
   }
@@ -813,6 +823,12 @@ export async function runRemoteSupervisorCli({
   output = process.stdout,
   dependencies,
 } = {}) {
+  try {
+    scrubDaytonaPlatformMetadataInPlace(process.env);
+  } catch {
+    fail('ambient Daytona platform metadata is invalid', 'ERR_REMOTE_SUPERVISOR_ENVIRONMENT');
+  }
+  assertCredentialFreeEnvironment(process.env);
   if (typeof definitionLoader !== 'function') {
     fail('code-owned runtime definition loader is unavailable',
       'ERR_REMOTE_SUPERVISOR_DEFINITION');

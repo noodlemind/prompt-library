@@ -527,6 +527,100 @@ test('fails closed on provider drift and still disposes the created sandbox', as
   assert.deepEqual(fake.disposed, { transportDisposed: true, sessionDisposed: true });
 });
 
+test('an execution failure retries transient runtime disposal exactly once without publishing success', async (t) => {
+  const fake = fakeComponents();
+  const createSession = fake.components.createRuntimeSessionController;
+  const createTransport = fake.components.createDaytonaTransport;
+  let sessionDisposals = 0;
+  let transportDisposals = 0;
+  fake.components.createRuntimeSessionController = (options) => {
+    const controller = createSession(options);
+    return {
+      ...controller,
+      async runTrial() {
+        throw new Error('primary zero-provider execution failure');
+      },
+      async dispose() {
+        sessionDisposals += 1;
+        if (sessionDisposals === 1) throw new Error('transient session cleanup failure');
+        return controller.dispose();
+      },
+    };
+  };
+  fake.components.createDaytonaTransport = (options) => {
+    const transport = createTransport(options);
+    return {
+      ...transport,
+      async dispose() {
+        transportDisposals += 1;
+        return transport.dispose();
+      },
+    };
+  };
+
+  await assert.rejects(
+    runZeroProviderDaytonaGate(input(t, fake)),
+    (error) => {
+      assert.equal(error.code, 'ERR_ZERO_PROVIDER_DAYTONA_EXECUTION');
+      assert.match(error.message, /primary zero-provider execution failure/i);
+      assert.doesNotMatch(error.message, /transient session cleanup failure/i);
+      return true;
+    },
+  );
+
+  assert.equal(sessionDisposals, 2);
+  assert.equal(transportDisposals, 2);
+  assert.deepEqual(fake.disposed, { transportDisposed: true, sessionDisposed: true });
+  assert.ok(fake.archiveBuffers.every((bytes) => bytes.every((byte) => byte === 0)));
+});
+
+test('an execution failure remains fail-closed after two unsuccessful disposal attempts', async (t) => {
+  const fake = fakeComponents();
+  const createSession = fake.components.createRuntimeSessionController;
+  const createTransport = fake.components.createDaytonaTransport;
+  let sessionDisposals = 0;
+  let transportDisposals = 0;
+  fake.components.createRuntimeSessionController = (options) => {
+    const controller = createSession(options);
+    return {
+      ...controller,
+      async runTrial() {
+        throw new Error('persistent-path primary execution failure');
+      },
+      async dispose() {
+        sessionDisposals += 1;
+        throw new Error('secret-shaped dependency cleanup detail');
+      },
+    };
+  };
+  fake.components.createDaytonaTransport = (options) => {
+    const transport = createTransport(options);
+    return {
+      ...transport,
+      async dispose() {
+        transportDisposals += 1;
+        return transport.dispose();
+      },
+    };
+  };
+
+  await assert.rejects(
+    runZeroProviderDaytonaGate(input(t, fake)),
+    (error) => {
+      assert.equal(error.code, 'ERR_ZERO_PROVIDER_DAYTONA_CLEANUP');
+      assert.match(error.message, /persistent-path primary execution failure/i);
+      assert.match(error.message, /runtime disposal was incomplete/i);
+      assert.equal(error.message.includes('secret-shaped dependency cleanup detail'), false);
+      return true;
+    },
+  );
+
+  assert.equal(sessionDisposals, 2);
+  assert.equal(transportDisposals, 2);
+  assert.deepEqual(fake.disposed, { transportDisposed: true, sessionDisposed: false });
+  assert.ok(fake.archiveBuffers.every((bytes) => bytes.every((byte) => byte === 0)));
+});
+
 test('rejects ambient provider credentials and operator-supplied trial routes before cloud effects', async (t) => {
   const fake = fakeComponents();
   const base = input(t, fake);

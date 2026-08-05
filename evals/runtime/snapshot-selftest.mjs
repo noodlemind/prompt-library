@@ -9,6 +9,7 @@ import {
   validateSnapshotBuildManifest,
 } from './snapshot-build-manifest.mjs';
 import { DAYTONA_NODE_USTAR_ATTESTATION } from './daytona-topology.mjs';
+import { scrubDaytonaPlatformMetadataInPlace } from './platform-environment.mjs';
 
 const MANIFEST_PATH = '/opt/engineer/snapshot/build-manifest.json';
 const NODE_PATH = '/usr/local/bin/node';
@@ -19,6 +20,7 @@ const MAX_EXECUTABLE_BYTES = 512 * 1024 * 1024;
 const MAX_COMMAND_BYTES = 16 * 1024;
 const UTF8 = new TextDecoder('utf-8', { fatal: true });
 const FORBIDDEN_ENV = /(?:^|_)(?:API_?KEY|AUTHORIZATION|CREDENTIAL|PASSWORD|SECRET|TOKEN)(?:$|_)/i;
+const DAYTONA_ENV = /^DAYTONA(?:_|$)/i;
 const DANGEROUS_ENV = /^(?:NODE_OPTIONS|NODE_PATH|LD_PRELOAD|LD_LIBRARY_PATH|DYLD_.+)$/;
 const CREDENTIAL_VALUE = /(?:Bearer\s+|sk-(?:or|ant|proj)-|github_pat_|ghp_|xox[baprs]-|hf_[A-Za-z0-9])/i;
 const FAILURE_PREFIX = 'ENGINEER-SNAPSHOT-FAILURE/1 ';
@@ -165,7 +167,8 @@ function assertEnvironment(environment) {
     if (typeof value !== 'string' || value.includes('\0') || Buffer.byteLength(value) > 16 * 1024) {
       fail('snapshot self-test environment is malformed', 'ERR_SNAPSHOT_SELFTEST_ENVIRONMENT');
     }
-    if (FORBIDDEN_ENV.test(name) || DANGEROUS_ENV.test(name) || CREDENTIAL_VALUE.test(value)) {
+    if (DAYTONA_ENV.test(name) || FORBIDDEN_ENV.test(name) || DANGEROUS_ENV.test(name)
+        || CREDENTIAL_VALUE.test(value)) {
       fail('snapshot self-test refuses credential-bearing or injectable environment state',
         'ERR_SNAPSHOT_SELFTEST_ENVIRONMENT');
     }
@@ -242,6 +245,12 @@ export async function runSnapshotSelfTestCli({
   primitives = createNodeSnapshotSelfTestPrimitives(),
 } = {}) {
   const expectedBuildHash = parseExpectedHash(argv);
+  try {
+    scrubDaytonaPlatformMetadataInPlace(environment);
+  } catch {
+    fail('snapshot self-test Daytona platform metadata is invalid',
+      'ERR_SNAPSHOT_SELFTEST_ENVIRONMENT');
+  }
   assertEnvironment(environment);
   if (primitives === null || typeof primitives !== 'object' || Array.isArray(primitives)) {
     throw new TypeError('snapshot self-test primitives must be an object');

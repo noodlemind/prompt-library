@@ -21,6 +21,10 @@ import {
   publishProvisionedRuntimeTopologyReceipt,
   removeProvisionedRuntimeTopologyReceipt,
 } from './runtime-definition.mjs';
+import {
+  scrubDaytonaPlatformMetadata,
+  scrubDaytonaPlatformMetadataInPlace,
+} from './platform-environment.mjs';
 
 export const PRIVATE_DOCKER_SOCKET = '/run/engineer/private-docker.sock';
 export const TASK_IMAGE_PRELOAD_MARKER_PATH = '/engineer-bounded/evidence/task-image-preload.json';
@@ -546,7 +550,13 @@ export function createTaskImageProvisioner(options = {}) {
     .some((implementation) => typeof implementation !== 'function')) {
     fail('provisioner effects must be functions', 'ERR_TASK_IMAGE_PROVISION_CONFIG');
   }
-  assertCredentialFreeEnvironment(baseEnv);
+  let scrubbedBaseEnv;
+  try {
+    scrubbedBaseEnv = scrubDaytonaPlatformMetadata(baseEnv);
+  } catch {
+    fail('ambient Daytona platform metadata is invalid', 'ERR_TASK_IMAGE_PROVISION_ENVIRONMENT');
+  }
+  assertCredentialFreeEnvironment(scrubbedBaseEnv);
 
   let state = 'idle';
   let identity = null;
@@ -857,6 +867,12 @@ export async function runTaskImageProvisionerCli({
   const errors = writableStream(stderr, 'stderr');
   let provisioner = suppliedProvisioner;
   try {
+    try {
+      scrubDaytonaPlatformMetadataInPlace(process.env);
+    } catch {
+      fail('ambient Daytona platform metadata is invalid', 'ERR_TASK_IMAGE_PROVISION_ENVIRONMENT');
+    }
+    assertCredentialFreeEnvironment(process.env);
     const request = parseTaskImageProvisionerArgs(argv);
     provisioner ??= createTaskImageProvisioner(provisionerOptions);
     if (!provisioner || typeof provisioner.provision !== 'function' || typeof provisioner.stop !== 'function') {

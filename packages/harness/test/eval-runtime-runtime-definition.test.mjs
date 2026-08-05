@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import { test } from 'node:test';
 
+import * as runtimeDefinition from '../../../evals/runtime/runtime-definition.mjs';
 import {
   RUNTIME_TOPOLOGY_RECEIPT_PATH,
   RUNTIME_TOPOLOGY_RECEIPT_SCHEMA,
@@ -27,6 +28,14 @@ const HASH = (character) => character.repeat(64);
 const TEN_GIB = 10 * 1024 * 1024 * 1024;
 const IMAGE_DIGEST = `sha256:${HASH('d')}`;
 const IMMUTABLE_IMAGE = `alexgshaw/cobol-modernization@${IMAGE_DIGEST}`;
+const DAYTONA_METADATA = Object.freeze({
+  DAYTONA_ORGANIZATION_ID: '123e4567-e89b-42d3-a456-426614174000',
+  DAYTONA_OTEL_ENDPOINT: 'https://telemetry.invalid',
+  DAYTONA_REGION_ID: 'us',
+  DAYTONA_SANDBOX_ID: '8d2890a2-57ef-4d75-91d5-2b0a81256b89',
+  DAYTONA_SANDBOX_SNAPSHOT: `ghcr.io/daytonaio/runtime@sha256:${HASH('a')}`,
+  DAYTONA_SANDBOX_USER: 'root',
+});
 
 const EXECUTABLE_PATHS = Object.freeze({
   dockerd: '/usr/local/bin/dockerd',
@@ -275,6 +284,33 @@ function dependencies(artifact, store, observed = observation(artifact)) {
     receiptStore: store,
   };
 }
+
+test('runtime environment evidence scrubs Daytona metadata before strict credential checks', () => {
+  const environment = { PATH: '/usr/bin', ...DAYTONA_METADATA };
+  const original = structuredClone(environment);
+  const evidence = runtimeDefinition.runtimeEnvironmentCredentialEvidence(environment);
+
+  assert.deepEqual(evidence, {
+    providerCredentialsAbsent: true,
+    daytonaCredentialsAbsent: true,
+  });
+  assert.equal(Object.isFrozen(evidence), true);
+  assert.deepEqual(environment, original, 'runtime environment observation does not mutate its input');
+
+  for (const rejected of [
+    { DAYTONA_UNKNOWN: 'unknown-platform-authority' },
+    { OPENROUTER_API_KEY: 'provider-key' },
+    { INNOCENT_NAME: 'sk-or-v1-provider-key' },
+    { DAYTONA_SANDBOX_ID: 'contains\0nul' },
+  ]) {
+    assert.throws(
+      () => runtimeDefinition.runtimeEnvironmentCredentialEvidence(rejected),
+      (error) => error instanceof RuntimeDefinitionError
+        && error.code === 'ERR_RUNTIME_DEFINITION_ENVIRONMENT'
+        && !error.message.includes('provider-key'),
+    );
+  }
+});
 
 test('trusted provisioner publishes one canonical fixed-path receipt and direct loader consumes it once', async () => {
   const artifact = snapshotArtifact();

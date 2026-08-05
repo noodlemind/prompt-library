@@ -22,6 +22,31 @@ const IMAGE_ID = `sha256:${DIGEST}`;
 const PLATFORM = 'linux/amd64';
 const DOCKER = '/usr/local/bin/docker';
 const SECRET = 'sk-or-v1-output-that-must-never-survive';
+const DAYTONA_METADATA = Object.freeze({
+  DAYTONA_ORGANIZATION_ID: '123e4567-e89b-42d3-a456-426614174000',
+  DAYTONA_OTEL_ENDPOINT: 'https://telemetry.invalid',
+  DAYTONA_REGION_ID: 'us',
+  DAYTONA_SANDBOX_ID: '8d2890a2-57ef-4d75-91d5-2b0a81256b89',
+  DAYTONA_SANDBOX_SNAPSHOT:
+    `registry.daytona.invalid/snapshots/engineer-runtime:release-v1-${'a'.repeat(40)}`,
+  DAYTONA_SANDBOX_USER: 'root',
+});
+
+async function withLiveDaytonaMetadata(action) {
+  const originals = new Map(Object.keys(DAYTONA_METADATA).map((name) => [
+    name, Object.getOwnPropertyDescriptor(process.env, name),
+  ]));
+  Object.assign(process.env, DAYTONA_METADATA);
+  try {
+    return await action();
+  } finally {
+    for (const name of Object.keys(DAYTONA_METADATA)) {
+      delete process.env[name];
+      const descriptor = originals.get(name);
+      if (descriptor) Object.defineProperty(process.env, name, descriptor);
+    }
+  }
+}
 
 function sha256(value) {
   return crypto.createHash('sha256').update(value).digest('hex');
@@ -343,9 +368,28 @@ test('rejects ambient provider credentials before any command runner can observe
     { PATH: '/usr/bin', OPENROUTER_API_KEY: 'present-even-if-never-forwarded' },
     { PATH: '/usr/bin', ANTHROPIC_API_KEY: '' },
     { PATH: '/usr/bin', DAYTONA_API_KEY: 'sandbox-must-not-have-controller-authority' },
+    { PATH: '/usr/bin', DAYTONA_UNKNOWN: 'unknown-platform-authority' },
     { PATH: '/usr/bin', INNOCENT_NAME: SECRET },
   ]) {
     assert.throws(() => harness({ baseEnv }), /ambient.*credential|provider credential/i);
+  }
+});
+
+test('scrubs validated Daytona platform metadata before the strict environment check', async () => {
+  const current = harness({ baseEnv: { PATH: '/usr/bin', ...DAYTONA_METADATA } });
+  await current.provisioner.provision(spec());
+  assert.equal(current.calls.length, 2);
+  for (const call of current.calls) {
+    for (const name of Object.keys(DAYTONA_METADATA)) {
+      assert.equal(call.options.env[name], undefined);
+    }
+  }
+
+  for (const value of ['sk-or-v1-secret-metadata', 'contains\0nul', 'x'.repeat(4_097)]) {
+    assert.throws(
+      () => harness({ baseEnv: { PATH: '/usr/bin', DAYTONA_SANDBOX_ID: value } }),
+      /platform metadata|ambient environment/i,
+    );
   }
 });
 
@@ -552,4 +596,21 @@ test('CLI emits only bounded provision evidence and sanitizes parser or provisio
   assert.equal(stdout, '');
   assert.equal(stderr.includes(SECRET), false);
   assert.deepEqual(Object.keys(JSON.parse(stderr)).sort(), ['code', 'schema']);
+});
+
+test('production task-image CLI deletes Daytona metadata before parsing', async () => {
+  await withLiveDaytonaMetadata(async () => {
+    let stderr = '';
+    const exitCode = await runTaskImageProvisionerCli({
+      argv: ['invalid'],
+      provisioner: null,
+      stdout: { write: () => assert.fail('invalid request wrote stdout') },
+      stderr: { write: (chunk) => { stderr += chunk; } },
+    });
+    assert.equal(exitCode, 70);
+    assert.match(stderr, /ERR_TASK_IMAGE_PROVISION/);
+    for (const name of Object.keys(DAYTONA_METADATA)) {
+      assert.equal(Object.hasOwn(process.env, name), false);
+    }
+  });
 });

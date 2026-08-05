@@ -8,6 +8,7 @@ import {
   planLinuxNetworkPolicy,
   createLinuxRuntimeEffects,
   createNodeLinuxDriver,
+  observeHostCredentialAbsence,
 } from '../../../evals/runtime/linux-effects.mjs';
 import { providerBrokerStaticPolicyHash } from '../../../evals/runtime/provider-broker.mjs';
 import { createTrialSecurityContract } from '../../../evals/runtime/trial-security-contract.mjs';
@@ -29,6 +30,41 @@ import {
 
 const TEN_GIB = 10 * 1024 * 1024 * 1024;
 const HASH = (character) => character.repeat(64);
+
+test('host credential observation scrubs only validated Daytona platform metadata', () => {
+  const liveMetadata = {
+    DAYTONA_ORGANIZATION_ID: '123e4567-e89b-42d3-a456-426614174000',
+    DAYTONA_OTEL_ENDPOINT: 'https://telemetry.daytona.invalid/v1/traces',
+    DAYTONA_REGION_ID: 'us',
+    DAYTONA_SANDBOX_ID: '8d2890a2-57ef-4d75-91d5-2b0a81256b89',
+    DAYTONA_SANDBOX_SNAPSHOT:
+      `registry.daytona.invalid/snapshots/engineer-runtime:release-v1-${'a'.repeat(40)}`,
+    DAYTONA_SANDBOX_USER: 'root',
+  };
+  assert.deepEqual(observeHostCredentialAbsence({ PATH: '/usr/bin:/bin', ...liveMetadata }), {
+    providerCredentialsAbsent: true,
+    daytonaCredentialsAbsent: true,
+  });
+  assert.deepEqual(observeHostCredentialAbsence({ DAYTONA_UNKNOWN: 'present' }), {
+    providerCredentialsAbsent: true,
+    daytonaCredentialsAbsent: false,
+  });
+  assert.deepEqual(observeHostCredentialAbsence({ OPENROUTER_API_KEY: 'present' }), {
+    providerCredentialsAbsent: false,
+    daytonaCredentialsAbsent: true,
+  });
+  assert.deepEqual(observeHostCredentialAbsence({ DAYTONA_API_KEY: 'present' }), {
+    providerCredentialsAbsent: false,
+    daytonaCredentialsAbsent: false,
+  });
+  assert.throws(
+    () => observeHostCredentialAbsence({
+      ...liveMetadata,
+      DAYTONA_SANDBOX_ID: 'sk-or-v1-secret-metadata',
+    }),
+    LinuxRuntimeEffectsError,
+  );
+});
 
 function nodeDriverMethodSource(name, nextName) {
   const source = fs.readFileSync(new URL('../../../evals/runtime/linux-effects.mjs', import.meta.url), 'utf8');

@@ -18,6 +18,8 @@ import { spawn, spawnSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 import { TextDecoder } from 'node:util';
 
+import { scrubDaytonaPlatformMetadataInPlace } from './platform-environment.mjs';
+
 export const DAEMON_ADOPTION_RECEIPT_PATH =
   '/engineer-bounded/evidence/daemon-adoption-receipt.json';
 export const DAEMON_ADOPTION_RECEIPT_SCHEMA = 'engineer-daemon-adoption-receipt.v1';
@@ -42,17 +44,6 @@ const BOOT_ID = /^[a-f0-9]{8}-[a-f0-9]{4}-[1-5][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,191}$/;
 const POSITIVE_DECIMAL = /^[1-9][0-9]{0,31}$/;
 const CREDENTIAL_ENV = /(?:^DAYTONA(?:_|$)|OPENROUTER|OPENAI|ANTHROPIC|GEMINI|GOOGLE_AI|GROQ|XAI|MISTRAL|COHERE|TOGETHER|FIREWORKS|DEEPSEEK|CEREBRAS|PERPLEXITY|API_KEY|AUTHORIZATION|CREDENTIAL|PASSWORD|SECRET|TOKEN)/i;
-// Daytona v0.203 injects these non-secret platform facts even when the
-// allocation's operator-supplied env is empty. They are never read or
-// forwarded; every other Daytona-prefixed name remains credential-shaped.
-const DAYTONA_PLATFORM_METADATA_ENV = new Set([
-  'DAYTONA_ORGANIZATION_ID',
-  'DAYTONA_OTEL_ENDPOINT',
-  'DAYTONA_REGION_ID',
-  'DAYTONA_SANDBOX_ID',
-  'DAYTONA_SANDBOX_SNAPSHOT',
-  'DAYTONA_SANDBOX_USER',
-]);
 const SECRET_VALUE = /(?:Bearer\s+|sk-(?:or|ant|proj)-|github_pat_|gh[pousr]_|xox[baprs]-|hf_[A-Za-z0-9])/i;
 const UTF8 = new TextDecoder('utf-8', { fatal: true });
 
@@ -522,8 +513,7 @@ export async function attestDaemonAdoptionReceipt() {
 
 export function assertSnapshotManagerEnvironment(environment) {
   for (const [name, value] of Object.entries(environment ?? {})) {
-    const safeDaytonaMetadata = DAYTONA_PLATFORM_METADATA_ENV.has(name);
-    if ((!safeDaytonaMetadata && CREDENTIAL_ENV.test(name))
+    if (CREDENTIAL_ENV.test(name)
         || (typeof value === 'string' && SECRET_VALUE.test(value))) {
       fail('snapshot manager forbids ambient cloud or provider credentials',
         'ERR_SNAPSHOT_MANAGER_ENVIRONMENT');
@@ -582,6 +572,11 @@ export function waitForManagedDaemonStop(child, {
 
 /** Production PID-1 entrypoint. It accepts no caller-controlled configuration. */
 export async function runSnapshotManagerCli({ argv = process.argv.slice(2) } = {}) {
+  try {
+    scrubDaytonaPlatformMetadataInPlace(process.env);
+  } catch {
+    fail('ambient Daytona platform metadata is invalid', 'ERR_SNAPSHOT_MANAGER_ENVIRONMENT');
+  }
   if (!Array.isArray(argv) || argv.length !== 0) fail('snapshot manager accepts no arguments');
   assertSnapshotManagerEnvironment(process.env);
   if (process.platform !== 'linux' || (process.geteuid?.() ?? process.getuid?.()) !== 0) {

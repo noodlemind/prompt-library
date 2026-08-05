@@ -20,6 +20,7 @@ import {
   controlledProviderBrokerStaticPolicyHash,
 } from './controlled-provider-policy.mjs';
 import { DAYTONA_EXECUTABLE_PATHS } from './daytona-topology.mjs';
+import { scrubDaytonaPlatformMetadata } from './platform-environment.mjs';
 import {
   snapshotBuildManifestHash,
   validateSnapshotBuildManifest,
@@ -198,6 +199,21 @@ function assertCredentialFreeEnvironment(environment) {
         'ERR_RUNTIME_DEFINITION_ENVIRONMENT');
     }
   }
+}
+
+export function runtimeEnvironmentCredentialEvidence(environment) {
+  let scrubbedEnvironment;
+  try {
+    scrubbedEnvironment = scrubDaytonaPlatformMetadata(environment);
+  } catch {
+    fail('ambient Daytona platform metadata is invalid', 'ERR_RUNTIME_DEFINITION_ENVIRONMENT');
+  }
+  assertCredentialFreeEnvironment(scrubbedEnvironment);
+  const names = Object.keys(scrubbedEnvironment);
+  return Object.freeze({
+    providerCredentialsAbsent: names.every((name) => !RAW_CREDENTIAL_ENV.test(name)),
+    daytonaCredentialsAbsent: names.every((name) => !/^DAYTONA(?:_|$)/i.test(name)),
+  });
 }
 
 function validateProvisionRequest(value) {
@@ -581,7 +597,7 @@ function statFilesystem(target) {
 }
 
 async function defaultObserveRuntime({ buildManifest }) {
-  assertCredentialFreeEnvironment(process.env);
+  const environmentEvidence = runtimeEnvironmentCredentialEvidence(process.env);
   if (process.platform !== 'linux' || (process.geteuid?.() ?? process.getuid?.()) !== 0) {
     fail('runtime definition observation requires Linux root', 'ERR_RUNTIME_DEFINITION_PLATFORM');
   }
@@ -617,8 +633,7 @@ async function defaultObserveRuntime({ buildManifest }) {
       preloadMarkerSha256: marker.attestation.sha256,
       cgroupV2: fs.existsSync('/sys/fs/cgroup/cgroup.controllers'),
       cgroupKillAvailable: fs.existsSync('/sys/fs/cgroup/cgroup.kill'),
-      providerCredentialsAbsent: Object.keys(process.env).every((name) => !RAW_CREDENTIAL_ENV.test(name)),
-      daytonaCredentialsAbsent: Object.keys(process.env).every((name) => !/^DAYTONA(?:_|$)/i.test(name)),
+      ...environmentEvidence,
     };
   } finally {
     marker.bytes.fill(0);
