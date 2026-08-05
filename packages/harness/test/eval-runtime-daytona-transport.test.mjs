@@ -17,6 +17,7 @@ const PROVIDER_SECRET = Buffer.from('sk-or-v1-provider-secret-value');
 const HMAC_SECRET = Buffer.alloc(32, 0xa5);
 const CONTROLLED_PROVIDER = 'controlled-provider';
 const ZERO_PROVIDER_CANARY = 'zero-provider-canary';
+const NON_TTY_NOTICE = 'Pseudo-terminal will not be allocated because stdin is not a terminal.\r\n';
 
 function sha256(value) {
   return crypto.createHash('sha256').update(value).digest('hex');
@@ -45,15 +46,39 @@ function zeroProviderPayload(hmacKey = HMAC_SECRET) {
   return Buffer.concat([header, hmacKey]);
 }
 
-function fakeChild({ stdout = [], stderr = [], closeBeforeOutput = false } = {}) {
+function fakeChild({
+  stdout = [],
+  stderr = [],
+  events = null,
+  closeBeforeOutput = false,
+  outputAfterFirstWrite = false,
+  onWrite = null,
+} = {}) {
   const child = new EventEmitter();
   const writes = [];
   let killCalls = 0;
+  let outputStarted = false;
+  const emitOutput = () => {
+    if (outputStarted) return;
+    outputStarted = true;
+    if (closeBeforeOutput) {
+      child.emit('close', 255, null);
+      return;
+    }
+    if (events) {
+      for (const event of events) child[event.stream].write(event.bytes);
+      return;
+    }
+    for (const chunk of stdout) child.stdout.write(chunk);
+    for (const chunk of stderr) child.stderr.write(chunk);
+  };
   child.stdout = new PassThrough();
   child.stderr = new PassThrough();
   child.stdin = new Writable({
     write(chunk, _encoding, callback) {
       writes.push(Buffer.from(chunk));
+      onWrite?.({ child, writes, chunk: Buffer.from(chunk) });
+      if (outputAfterFirstWrite) queueMicrotask(emitOutput);
       callback();
     },
   });
@@ -65,14 +90,7 @@ function fakeChild({ stdout = [], stderr = [], closeBeforeOutput = false } = {})
     queueMicrotask(() => child.emit('close', null, 'SIGTERM'));
     return true;
   };
-  queueMicrotask(() => {
-    if (closeBeforeOutput) {
-      child.emit('close', 255, null);
-      return;
-    }
-    for (const chunk of stdout) child.stdout.write(chunk);
-    for (const chunk of stderr) child.stderr.write(chunk);
-  });
+  if (!outputAfterFirstWrite) queueMicrotask(emitOutput);
   return { child, writes, get killCalls() { return killCalls; } };
 }
 
@@ -109,7 +127,7 @@ function transport(overrides = {}) {
         NODE_OPTIONS: '--require=/tmp/attacker.cjs',
       },
       commandTimeoutMs: 2_000,
-      channelTimeoutMs: 2_000,
+      channelTimeoutMs: overrides.channelTimeoutMs ?? 2_000,
       maxCommandOutputBytes: 4_096,
       maxArchiveBytes: 1_024,
     }),
@@ -238,7 +256,10 @@ test('bounded upload and download use a fixed SSH bridge, fixed paths, and verif
     status: 'accepted',
   };
   const scripts = [
-    fakeChild({ stdout: [Buffer.from(`${ARCHIVE_BOOTSTRAP}\r\nENGINEER-ARCHIVE/1 READY\n`), frame(uploadAck)] }),
+    fakeChild({
+      stdout: [Buffer.from(`${ARCHIVE_BOOTSTRAP}\r\nENGINEER-ARCHIVE/1 READY\n`), frame(uploadAck)],
+      stderr: [Buffer.from(NON_TTY_NOTICE.slice(0, 31)), Buffer.from(NON_TTY_NOTICE.slice(31))],
+    }),
     fakeChild({ stdout: [Buffer.from('ENGINEER-ARCHIVE/1 READY\n'), frame(downloadHeader), frame(archive)] }),
   ];
   const harness = transport({ nextChild: () => scripts.shift() });
@@ -286,6 +307,38 @@ test('bounded upload and download use a fixed SSH bridge, fixed paths, and verif
   const archiveOffset = 4 + metadataLength;
   assert.equal(outbound.readUInt32BE(archiveOffset), archive.length);
   assert.deepEqual(outbound.subarray(archiveOffset + 4), archive);
+});
+
+test('final validation accepts a bounded allowed stderr notice split across event-loop turns', async () => {
+  const archive = Buffer.from('payload');
+  const digest = sha256(archive);
+  const accepted = {
+    schema: 'engineer-daytona-archive-result.v1',
+    operation: 'upload',
+    kind: 'task-input',
+    path: '/engineer-bounded/transport/task-input.tar',
+    byteLength: archive.length,
+    sha256: digest,
+    status: 'accepted',
+  };
+  const splitAt = 31;
+  const scripted = fakeChild({
+    stdout: [Buffer.from('ENGINEER-ARCHIVE/1 READY\n'), frame(accepted)],
+    outputAfterFirstWrite: true,
+    onWrite: ({ child, writes }) => {
+      if (writes.length !== 5) return;
+      child.stderr.write(Buffer.from(NON_TTY_NOTICE.slice(0, splitAt)));
+      setTimeout(() => child.stderr.write(Buffer.from(NON_TTY_NOTICE.slice(splitAt))), 5);
+    },
+  });
+  const harness = transport({ nextChild: () => scripted });
+
+  await assert.doesNotReject(harness.value.uploadArchive({
+    sandboxId: SANDBOX,
+    kind: 'task-input',
+    bytes: archive,
+    sha256: digest,
+  }));
 });
 
 test('archive digest, size, malformed response, and oversized frame failures are fail-closed', async () => {
@@ -340,6 +393,7 @@ test('supervisor control waits for echo-disabled readiness and sends each secret
   };
   const scripted = fakeChild({
     stdout: [Buffer.from(`${SUPERVISOR_BOOTSTRAP}\r\nENGINEER-SUPERVISOR/1 READY\n`), frame(accepted)],
+    stderr: [Buffer.from(NON_TTY_NOTICE)],
   });
   const harness = transport({ nextChild: () => scripted });
 
@@ -469,6 +523,61 @@ test('unexpected echo, secret echo, extra output, and channel loss never leak th
     assert.equal(error.message.includes(PROVIDER_SECRET.toString()), false, `${scenario.name} leaked provider key`);
     assert.equal(error.message.includes(HMAC_SECRET.toString()), false, `${scenario.name} leaked HMAC key`);
   }
+});
+
+test('interleaved allowed stderr cannot reset stdout secret scanning', async () => {
+  const leakedFrame = frame(Buffer.concat([Buffer.from('echo:'), PROVIDER_SECRET]));
+  const stdout = Buffer.concat([
+    Buffer.from('ENGINEER-SUPERVISOR/1 READY\n'),
+    leakedFrame,
+  ]);
+  const secretOffset = stdout.indexOf(PROVIDER_SECRET);
+  const splitAt = secretOffset + Math.floor(PROVIDER_SECRET.length / 2);
+  const scripted = fakeChild({
+    events: [
+      { stream: 'stdout', bytes: stdout.subarray(0, splitAt) },
+      { stream: 'stderr', bytes: Buffer.from(NON_TTY_NOTICE) },
+      { stream: 'stdout', bytes: stdout.subarray(splitAt) },
+    ],
+    outputAfterFirstWrite: true,
+  });
+  const harness = transport({ nextChild: () => scripted });
+
+  await assert.rejects(
+    harness.value.openSupervisorControl({
+      sandboxId: SANDBOX,
+      hmacKey: HMAC_SECRET,
+      executionMode: CONTROLLED_PROVIDER,
+      providerKey: PROVIDER_SECRET,
+    }),
+    (error) => error?.code === 'ERR_TRANSPORT_SECRET'
+  );
+  assert.equal(Buffer.concat(scripted.writes).includes(PROVIDER_SECRET), false);
+});
+
+test('incomplete allowed stderr blocks the one-shot secret handoff', async () => {
+  const scripted = fakeChild({
+    stdout: [Buffer.from('ENGINEER-SUPERVISOR/1 READY\n')],
+    stderr: [Buffer.from(NON_TTY_NOTICE.slice(0, -1))],
+    outputAfterFirstWrite: true,
+  });
+  const harness = transport({
+    nextChild: () => scripted,
+    channelTimeoutMs: 25,
+  });
+
+  await assert.rejects(
+    harness.value.openSupervisorControl({
+      sandboxId: SANDBOX,
+      hmacKey: HMAC_SECRET,
+      executionMode: CONTROLLED_PROVIDER,
+      providerKey: PROVIDER_SECRET,
+    }),
+    (error) => error?.code === 'ERR_TRANSPORT_STDERR'
+  );
+  const outbound = Buffer.concat(scripted.writes);
+  assert.equal(outbound.includes(PROVIDER_SECRET), false);
+  assert.equal(outbound.includes(HMAC_SECRET), false);
 });
 
 test('provider-shaped output stays behind hash-only receipts while explicit control secrets are scanned', async () => {
