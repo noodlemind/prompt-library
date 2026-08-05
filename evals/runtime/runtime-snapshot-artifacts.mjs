@@ -371,17 +371,21 @@ function createDockerRunner(workspace) {
   ], { env, timeoutMs: options.timeoutMs ?? 10 * 60_000 });
 }
 
-async function downloadPinned({ url, expectedSha256, destination }) {
+export async function downloadPinnedSnapshotSource({ url, expectedSha256, destination }, {
+  fetchImpl = fetch,
+} = {}) {
   const expected = new URL(url);
   if (expected.protocol !== 'https:' || expected.username || expected.password || expected.hash) {
     fail('pinned source URL is invalid', 'ERR_RUNTIME_SNAPSHOT_DOWNLOAD');
   }
-  const response = await fetch(expected, { redirect: 'error' });
+  const response = await fetchImpl(expected, { redirect: 'error' });
   if (!response || response.status !== 200 || response.url !== expected.href || !response.body) {
     fail('pinned source download failed closed', 'ERR_RUNTIME_SNAPSHOT_DOWNLOAD');
   }
-  const declared = Number(response.headers?.get?.('content-length'));
-  if (Number.isFinite(declared) && (declared < 1 || declared > MAX_DOWNLOAD_BYTES)) {
+  const declaredHeader = response.headers?.get?.('content-length');
+  const declared = declaredHeader == null ? null : Number(declaredHeader);
+  if (declaredHeader != null &&
+      (!Number.isFinite(declared) || declared < 1 || declared > MAX_DOWNLOAD_BYTES)) {
     fail('pinned source download exceeds its byte bound', 'ERR_RUNTIME_SNAPSHOT_DOWNLOAD');
   }
   const descriptor = fs.openSync(destination,
@@ -731,7 +735,7 @@ async function prepareCodeOwnedClosures({
   if (Object.keys(wrappers).length !== Object.keys(WRAPPERS).length + 1) fail('runtime wrapper inventory is incomplete');
 
   const harborDownload = path.join(workspace, 'harbor-source.tar.gz');
-  await downloadPinned({
+  await downloadPinnedSnapshotSource({
     url: HARBOR_SOURCE.url,
     expectedSha256: HARBOR_SOURCE.sha256,
     destination: harborDownload,

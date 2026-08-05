@@ -6,6 +6,7 @@ import path from 'node:path';
 import { test } from 'node:test';
 
 import {
+  downloadPinnedSnapshotSource,
   prepareRuntimeSnapshotArtifacts,
 } from '../../../evals/runtime/runtime-snapshot-artifacts.mjs';
 import {
@@ -139,6 +140,28 @@ function components(captured, overrides = {}) {
     ...overrides,
   };
 }
+
+test('pinned snapshot source accepts an absent Content-Length and enforces the streamed digest', async (t) => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'runtime-snapshot-download-test-'));
+  t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));
+  const destination = path.join(workspace, 'source.tar.gz');
+  const bytes = Buffer.from('bounded pinned source');
+  const url = 'https://example.invalid/source.tar.gz';
+  const fetchImpl = async () => ({
+    status: 200,
+    url,
+    headers: { get: () => null },
+    body: (async function* body() { yield bytes; })(),
+  });
+
+  await downloadPinnedSnapshotSource({
+    url,
+    expectedSha256: sha256(bytes),
+    destination,
+  }, { fetchImpl });
+
+  assert.deepEqual(fs.readFileSync(destination), bytes);
+});
 
 test('builds four deterministic closures plus a self-authenticating manifest and retains the validated snapshot', async (t) => {
   const request = input(t);
