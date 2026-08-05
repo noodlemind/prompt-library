@@ -357,6 +357,16 @@ test('controller readiness is code-owned and does not pre-attest a future sandbo
   assert.equal(controller.snapshot().keyMaterialDisposed, false);
 });
 
+test('transport deadline admits the bounded live readiness window but never exceeds one hour', async () => {
+  const admitted = runtime({ overrides: { transportTimeoutMs: 40 * 60_000 } });
+  await admitted.controller.dispose();
+
+  assert.throws(
+    () => runtime({ overrides: { transportTimeoutMs: 60 * 60_000 + 1 } }),
+    /transportTimeoutMs.*between/i,
+  );
+});
+
 test('two per-trial sandboxes produce one authenticated global sequence, deletion chain, and exact budget', async () => {
   const daytona = fakeDaytona();
   const transport = fakeTransport({ spends: [125_000, 200_000] });

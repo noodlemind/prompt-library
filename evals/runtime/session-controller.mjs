@@ -22,7 +22,8 @@ const KEY_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]*$/;
 const MAX_MICROUSD = 20_000_000;
 const MAX_REQUEST_LIFETIME_MS = 60 * 60 * 1_000;
 const MAX_FINAL_LIFETIME_MS = 30 * 24 * 60 * 60 * 1_000;
-const MAX_TRANSPORT_TIMEOUT_MS = 10 * 60 * 1_000;
+const DEFAULT_TRANSPORT_TIMEOUT_MS = 40 * 60 * 1_000;
+const MAX_TRANSPORT_TIMEOUT_MS = 60 * 60 * 1_000;
 
 const controllerReadinessBrand = new WeakSet();
 const sessionFinalBrand = new WeakSet();
@@ -263,7 +264,7 @@ export function createRuntimeSessionController({
   nonceGenerator = generateNonce,
   requestLifetimeMs = MAX_REQUEST_LIFETIME_MS,
   finalLifetimeMs = 24 * 60 * 60 * 1_000,
-  transportTimeoutMs = 5 * 60 * 1_000,
+  transportTimeoutMs = DEFAULT_TRANSPORT_TIMEOUT_MS,
 } = {}) {
   validateDependencies(daytonaController, transport);
   const session = validateSession(sessionInput);
