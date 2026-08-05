@@ -174,9 +174,24 @@ test('rejects empty, linked, special, unsafe, credential-bearing, and oversized 
     const root = temporaryDirectory();
     fs.writeFileSync(
       path.join(root, 'runtime-module'),
-      'engineer-task-isolation-probe\nrisk-adjusted-check\ndisk-snapshot\n',
+      'engineer-task-isolation-probe\nrisk-adjusted-check\ndisk-snapshot-artifact\n',
     );
     assert.doesNotThrow(() => buildDeterministicUstar({ kind: 'runtime', root }));
+  });
+
+  await t.test('the sk boundary does not weaken unrelated credential detectors', () => {
+    for (const content of [
+      'xgithub_pat_abcdefghijklmno',
+      `XAKIA${'E'.repeat(16)}`,
+      'xBearer abcdefghijklmnop',
+    ]) {
+      const root = temporaryDirectory();
+      fs.writeFileSync(path.join(root, 'payload'), content);
+      assert.throws(
+        () => buildDeterministicUstar({ kind: 'runtime', root }),
+        (error) => error?.code === 'ERR_DETERMINISTIC_USTAR_SECRET',
+      );
+    }
   });
 
   await t.test('lowered size bound', () => {
