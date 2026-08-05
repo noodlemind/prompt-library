@@ -203,6 +203,7 @@ export function createBrokerFetchImpl({ socketPath, binding, profile, requestImp
       typeof profile?.model !== 'string' || profile?.provider?.allowFallbacks !== false ||
       !Array.isArray(profile?.provider?.order) || profile.provider.order.length !== 1 ||
       !Array.isArray(profile?.provider?.expectedResolvedNames) || profile.provider.expectedResolvedNames.length !== 1 ||
+      !Array.isArray(profile?.provider?.expectedResolvedModels) || profile.provider.expectedResolvedModels.length !== 1 ||
       !Number.isSafeInteger(profile?.maxTokens) || profile.maxTokens < 1) {
     throw new Error('provider broker requires one exact controlled OpenRouter profile');
   }
@@ -230,6 +231,7 @@ export function createBrokerFetchImpl({ socketPath, binding, profile, requestImp
       provider: {
         order: Array.isArray(body.provider?.order) ? body.provider.order.slice() : [],
         expectedResolvedNames: profile.provider.expectedResolvedNames.slice(),
+        expectedResolvedModels: profile.provider.expectedResolvedModels.slice(),
         allowFallbacks: body.provider?.allow_fallbacks,
       },
       settings: {
@@ -256,13 +258,15 @@ export function createBrokerFetchImpl({ socketPath, binding, profile, requestImp
     }
     const usage = response?.evidence?.usage;
     if (!usage || !Number.isSafeInteger(usage.promptTokens) || !Number.isSafeInteger(usage.outputTokens) ||
-        typeof usage.providerCostUsd !== 'number' || !Number.isFinite(usage.providerCostUsd)) {
+        typeof usage.providerCostUsd !== 'number' || !Number.isFinite(usage.providerCostUsd) ||
+        !profile.provider.expectedResolvedModels.includes(response.model) ||
+        !profile.provider.expectedResolvedNames.includes(response.provider)) {
       return brokerHttpResponse(502, { error: { message: 'provider broker usage evidence was incomplete' } });
     }
     const data = {
       id: response.attemptId,
-      model: profile.model,
-      provider: profile.provider.expectedResolvedNames[0],
+      model: response.model,
+      provider: response.provider,
       choices: [{
         message: response.message,
         finish_reason: response.finishReason,

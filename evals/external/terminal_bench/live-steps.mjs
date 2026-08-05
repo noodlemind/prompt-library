@@ -1611,6 +1611,9 @@ export function buildRunDoc({
   const providerExpectedResolvedNames = Array.isArray(profile.provider?.expectedResolvedNames)
     ? profile.provider.expectedResolvedNames.slice()
     : providerRequestedOrder.slice();
+  const expectedResolvedModels = Array.isArray(profile.provider?.expectedResolvedModels)
+    ? profile.provider.expectedResolvedModels
+    : [profile.model];
   const normalizedResolvedProviders = providerExpectedResolvedNames.map(normalizeProviderName);
   const attributionComplete =
     responses.length > 0 &&
@@ -1621,7 +1624,7 @@ export function buildRunDoc({
     );
   const fallbackDetected =
     providerEvents.some((event) => event.type === 'fallback') ||
-    responses.some((response) => response.model !== profile.model) ||
+    responses.some((response) => !expectedResolvedModels.includes(response.model)) ||
     responses.some((response) =>
       providerRequestedOrder.length > 0 && !normalizedResolvedProviders.includes(normalizeProviderName(response.provider))
     );

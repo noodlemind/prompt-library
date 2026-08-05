@@ -483,6 +483,9 @@ export function openAiToolDriver({
   const effTemperature = temperature !== undefined ? temperature : profile?.temperature ?? null;
   const effReasoning = reasoning !== undefined ? reasoning : profile?.reasoning ?? null;
   const effProvider = provider !== undefined ? provider : profile?.provider ?? null;
+  const expectedResolvedModels = Array.isArray(effProvider?.expectedResolvedModels)
+    ? effProvider.expectedResolvedModels
+    : [requestedModel];
   const effPricing = pricing ?? profile?.pricing ?? null;
   const effRequestTimeoutMs = requestTimeoutMs ?? profile?.timeoutMs ?? null;
   const isPaid = Boolean(effPricing && (effPricing.inputPerM > 0 || effPricing.cachedInputPerM > 0 || effPricing.outputPerM > 0));
@@ -569,8 +572,8 @@ export function openAiToolDriver({
     const resolvedModel = data?.model ?? null;
     const resolvedProvider = data?.provider ?? null;
     let reason = null;
-    if (resolvedModel && resolvedModel !== requestedModel) {
-      reason = `resolved model ${resolvedModel} differs from requested ${requestedModel}`;
+    if (resolvedModel && !expectedResolvedModels.includes(resolvedModel)) {
+      reason = `resolved model ${resolvedModel} is outside the pinned model identities`;
     } else if (
       effProvider?.order?.length &&
       resolvedProvider &&

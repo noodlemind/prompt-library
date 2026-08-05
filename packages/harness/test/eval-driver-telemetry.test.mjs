@@ -30,7 +30,14 @@ function assistantToolCalls(callSpecs, extra = {}) {
   };
 }
 
-function completion({ message, usage, model = KIMI.model, provider = 'Moonshot AI', id = 'gen-1', finishReason = 'tool_calls' }) {
+function completion({
+  message,
+  usage,
+  model = KIMI.provider.expectedResolvedModels[0],
+  provider = 'Moonshot AI',
+  id = 'gen-1',
+  finishReason = 'tool_calls',
+}) {
   return ok({ id, model, provider, choices: [{ message, finish_reason: finishReason }], usage });
 }
 
@@ -85,7 +92,7 @@ test('captures usage, exact outbound controls, local cost, provider cost, and ge
   const response = events.find((e) => e.type === 'response');
   assert.equal(response.generationId, 'gen-1');
   assert.equal(response.provider, 'Moonshot AI');
-  assert.equal(response.model, KIMI.model);
+  assert.equal(response.model, KIMI.provider.expectedResolvedModels[0]);
   assert.equal(driver.fallbackDetected, false);
   assert.ok(!events.some((e) => e.type === 'fallback'), 'matching pinned provider must not read as fallback');
   const request = events.find((event) => event.type === 'request');
@@ -184,6 +191,15 @@ test('a resolved model different from the requested model is a fallback', async 
   const fallback = telemetry.snapshot().events.find((e) => e.type === 'fallback');
   assert.equal(fallback.requestedModel, KIMI.model);
   assert.equal(fallback.resolvedModel, 'moonshotai/kimi-k2-instruct');
+});
+
+test('the outbound request alias cannot stand in for the pinned canonical resolution', async () => {
+  const { driver, telemetry } = harness([
+    completion({ message: assistantToolCalls([['runInTerminal', { command: 'ls' }]]), usage: USAGE, model: KIMI.model }),
+  ]);
+  await driver.next();
+  assert.equal(driver.fallbackDetected, true);
+  assert.equal(telemetry.snapshot().events.find((event) => event.type === 'fallback')?.resolvedModel, KIMI.model);
 });
 
 test('a provider outside the pinned order is a fallback', async () => {

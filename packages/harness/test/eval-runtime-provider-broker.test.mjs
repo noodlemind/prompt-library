@@ -20,10 +20,11 @@ const LEASE_DIGEST = 'a'.repeat(64);
 function brokerPolicy(overrides = {}) {
   return {
     endpoint: 'https://openrouter.ai/api/v1/chat/completions',
-    model: 'moonshotai/kimi-k2.7-code-20260612',
+    model: 'moonshotai/kimi-k2.7-code',
     provider: {
       order: ['moonshotai/int4'],
       expectedResolvedNames: ['Moonshot AI'],
+      expectedResolvedModels: ['moonshotai/kimi-k2.7-code-20260612'],
       allowFallbacks: false,
     },
     settings: { temperature: null, reasoning: null, toolChoice: 'auto' },
@@ -52,10 +53,11 @@ function providerRequest(overrides = {}) {
     sequence: 1,
     attemptId: 'attempt-1',
     endpoint: 'https://openrouter.ai/api/v1/chat/completions',
-    model: 'moonshotai/kimi-k2.7-code-20260612',
+    model: 'moonshotai/kimi-k2.7-code',
     provider: {
       order: ['moonshotai/int4'],
       expectedResolvedNames: ['Moonshot AI'],
+      expectedResolvedModels: ['moonshotai/kimi-k2.7-code-20260612'],
       allowFallbacks: false,
     },
     settings: { temperature: null, reasoning: null, toolChoice: 'auto' },
@@ -160,6 +162,10 @@ test('broker alone receives the raw key and returns only sanitized output and ev
   assert.equal(providerCalls[0].url, brokerPolicy().endpoint);
   assert.equal(providerCalls[0].options.headers.authorization, `Bearer ${SECRET}`);
   assert.equal(response.message.content, 'echo [REDACTED_PROVIDER_KEY]');
+  assert.equal(response.model, 'moonshotai/kimi-k2.7-code-20260612');
+  assert.equal(response.provider, 'Moonshot AI');
+  assert.equal(response.evidence.resolvedModel, response.model);
+  assert.equal(response.evidence.resolvedProvider, response.provider);
   assert.equal(response.evidence.usage.reasoningTokens, 1);
   assert.equal(response.evidence.usage.reasoningTokensComplete, true);
 
@@ -445,6 +451,12 @@ test('malformed usage, provider drift, and actual-cost overruns fail closed', as
     {
       name: 'model drift',
       response: successfulProviderResponse({ model: 'fallback/model' }),
+      kind: 'provider-drift',
+      state: 'completed',
+    },
+    {
+      name: 'request alias is not canonical resolution',
+      response: successfulProviderResponse({ model: brokerPolicy().model }),
       kind: 'provider-drift',
       state: 'completed',
     },

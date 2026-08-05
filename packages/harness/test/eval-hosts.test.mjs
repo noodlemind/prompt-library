@@ -48,7 +48,7 @@ test('controlled OpenRouter host uses the selected profile with provider fallbac
         ok: true,
         json: async () => ({
           id: 'gen',
-          model: host.profile.model,
+          model: host.profile.provider.expectedResolvedModels[0],
           provider: 'Moonshot AI',
           usage: { prompt_tokens: 1, completion_tokens: 1, cost: 0.00001 },
           choices: [{ message: { role: 'assistant', content: 'done', tool_calls: [] } }],
@@ -81,6 +81,20 @@ test('controlled OpenRouter profiles pin exactly one endpoint and resolved provi
     }),
     /exactly one resolved provider identity/i,
   );
+  assert.throws(
+    () => validateControlledProfile({
+      ...profile,
+      provider: { ...profile.provider, expectedResolvedModels: ['moonshotai/other-model'] },
+    }),
+    /exactly one resolved model identity/i,
+  );
+  assert.throws(
+    () => validateControlledProfile({
+      ...profile,
+      catalogPin: { ...profile.catalogPin, modelId: 'moonshotai/other-model' },
+    }),
+    /catalog model identity/i,
+  );
 });
 
 test('release profiles select the controlled host and budget without a model-named lane', () => {
@@ -104,7 +118,7 @@ test('kimi host is the controlled API experiment on the pinned profile', () => {
   assert.equal(host.gate, 'controlled-ablation');
   assert.equal(host.profile.id, 'kimi-k2.7-code');
   const driver = host.createDriver({ budget: createBudget({ ceilingUsd: 5 }), telemetry: createTelemetry() });
-  assert.equal(driver.model, 'moonshotai/kimi-k2.7-code-20260612');
+  assert.equal(driver.model, 'moonshotai/kimi-k2.7-code');
 });
 
 test('kimi host enforces the profile trial ceiling even when no budget is supplied', async () => {

@@ -42,6 +42,7 @@ function protectedBrokerPolicy() {
     provider: {
       order: ['OpenAI'],
       expectedResolvedNames: ['openai'],
+      expectedResolvedModels: ['openai/gpt-5-nano'],
       allowFallbacks: false,
     },
     settings: { temperature: 0, reasoning: null, toolChoice: 'auto' },
@@ -103,6 +104,7 @@ function providerSnapshot(overrides = {}) {
       bindingPolicyHash: PROTECTED_BINDING_HASH,
       endpointHash: sha256(PROTECTED_POLICY.endpoint),
       model: PROTECTED_POLICY.model,
+      expectedResolvedModels: PROTECTED_POLICY.provider.expectedResolvedModels.slice(),
       providerEndpointTag: PROTECTED_POLICY.provider.order[0],
       expectedResolvedProvider: PROTECTED_POLICY.provider.expectedResolvedNames[0],
       settings: structuredClone(PROTECTED_POLICY.settings),
@@ -145,6 +147,8 @@ function providerSnapshot(overrides = {}) {
       startedAt: Date.parse('2026-08-04T16:00:03.000Z'),
       completedAt: Date.parse('2026-08-04T16:00:04.000Z'),
       model: PROTECTED_POLICY.model,
+      resolvedModel: PROTECTED_POLICY.provider.expectedResolvedModels[0],
+      resolvedProvider: PROTECTED_POLICY.provider.expectedResolvedNames[0],
       providerEndpointTag: PROTECTED_POLICY.provider.order[0],
       expectedResolvedProvider: PROTECTED_POLICY.provider.expectedResolvedNames[0],
       maxTokens: PROTECTED_POLICY.maxTokens,
@@ -1073,6 +1077,8 @@ test('provider reconciliation derives exact ledger arithmetic from protected pol
     const disconnected = mutateProviderSnapshot((snapshot) => {
       Object.assign(snapshot.attempts[0], {
         outcome: 'rejected-disconnected-before-dispatch',
+        resolvedModel: null,
+        resolvedProvider: null,
         usage: null,
         actualCostUsd: 0,
       });
@@ -1165,6 +1171,8 @@ test('provider reconciliation derives exact ledger arithmetic from protected pol
       attemptId: 'attempt-2',
       sequence: 2,
       outcome: 'rejected-disconnected-before-dispatch',
+      resolvedModel: null,
+      resolvedProvider: null,
       startedAt: Date.parse('2026-08-04T16:00:05.000Z'),
       completedAt: Date.parse('2026-08-04T16:00:06.000Z'),
       usage: null,

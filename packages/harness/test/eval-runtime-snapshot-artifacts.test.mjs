@@ -8,6 +8,7 @@ import { test } from 'node:test';
 import {
   downloadPinnedSnapshotSource,
   prepareRuntimeSnapshotArtifacts,
+  pullExactImages,
 } from '../../../evals/runtime/runtime-snapshot-artifacts.mjs';
 import {
   DAYTONA_DIND_BASE_IMAGE,
@@ -161,6 +162,29 @@ test('pinned snapshot source accepts an absent Content-Length and enforces the s
   }, { fetchImpl });
 
   assert.deepEqual(fs.readFileSync(destination), bytes);
+});
+
+test('pinned builder platform inspection resolves the requested linux/amd64 manifest', () => {
+  const calls = [];
+  pullExactImages((args) => {
+    calls.push(args);
+    return args[0] === 'image' ? 'linux/amd64\n' : '';
+  });
+
+  const inspections = calls.filter(([command]) => command === 'image');
+  assert.equal(inspections.length, 4);
+  for (const args of inspections) {
+    assert.deepEqual(args.slice(0, 4), ['image', 'inspect', '--platform', 'linux/amd64']);
+    assert.deepEqual(args.slice(4, 6), ['--format', '{{.Os}}/{{.Architecture}}']);
+  }
+});
+
+test('pinned builder platform inspection rejects an unresolved OCI index', () => {
+  assert.throws(
+    () => pullExactImages((args) => args[0] === 'image' ? '/\n' : ''),
+    (error) => error?.code === 'ERR_RUNTIME_SNAPSHOT_DOCKER' &&
+      /platform drifted/i.test(error.message),
+  );
 });
 
 test('builds four deterministic closures plus a self-authenticating manifest and retains the validated snapshot', async (t) => {

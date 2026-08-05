@@ -256,15 +256,23 @@ function validateJsonData(value, label, { depth = 0, nodes = { count: 0 } } = {}
 }
 
 function validateProvider(provider, label) {
-  exactKeys(provider, ['order', 'expectedResolvedNames', 'allowFallbacks'], label);
+  exactKeys(provider, ['order', 'expectedResolvedNames', 'expectedResolvedModels', 'allowFallbacks'], label);
   if (!Array.isArray(provider.order) || provider.order.length !== 1) {
     throw new Error(`${label}.order must pin exactly one endpoint`);
   }
   if (!Array.isArray(provider.expectedResolvedNames) || provider.expectedResolvedNames.length !== 1) {
     throw new Error(`${label}.expectedResolvedNames must pin exactly one identity`);
   }
+  if (!Array.isArray(provider.expectedResolvedModels) || provider.expectedResolvedModels.length !== 1) {
+    throw new Error(`${label}.expectedResolvedModels must pin exactly one identity`);
+  }
   boundedString(provider.order[0], `${label}.order[0]`, { min: 1, max: 256, pattern: SLUG_PATTERN });
   boundedString(provider.expectedResolvedNames[0], `${label}.expectedResolvedNames[0]`, { min: 1, max: 128 });
+  boundedString(provider.expectedResolvedModels[0], `${label}.expectedResolvedModels[0]`, {
+    min: 1,
+    max: 256,
+    pattern: SLUG_PATTERN,
+  });
   if (provider.allowFallbacks !== false) throw new Error(`${label} must disable fallback`);
 }
 
@@ -497,7 +505,7 @@ function usageEvidence(data, policy) {
 }
 
 function providerIdentityDrift(data, policy) {
-  if (data?.model !== policy.model) return 'resolved-model-drift';
+  if (!policy.provider.expectedResolvedModels.includes(data?.model)) return 'resolved-model-drift';
   if (data?.provider !== policy.provider.expectedResolvedNames[0]) return 'resolved-provider-drift';
   return null;
 }
@@ -549,6 +557,8 @@ function successResponse(attempt, output) {
     type: 'provider-response',
     ok: true,
     attemptId: attempt.attemptId,
+    model: attempt.resolvedModel,
+    provider: attempt.resolvedProvider,
     message: output.message,
     finishReason: output.finishReason,
     evidence: attemptPublicEvidence(attempt),
@@ -818,6 +828,8 @@ export function createProviderBroker({
       startedAt: clock.now(),
       completedAt: null,
       model: policy.model,
+      resolvedModel: null,
+      resolvedProvider: null,
       providerEndpointTag: policy.provider.order[0],
       expectedResolvedProvider: policy.provider.expectedResolvedNames[0],
       maxTokens: policy.maxTokens,
@@ -910,6 +922,13 @@ export function createProviderBroker({
       });
     }
 
+    attempt.resolvedModel = typeof data?.model === 'string' && data.model.length <= 256
+      ? data.model
+      : null;
+    attempt.resolvedProvider = typeof data?.provider === 'string' && data.provider.length <= 128
+      ? data.provider
+      : null;
+
     const identityDrift = providerIdentityDrift(data, policy);
     if (identityDrift) {
       settleKnown(trial, attempt, usage, 'rejected-provider-drift');
@@ -961,6 +980,7 @@ export function createProviderBroker({
         bindingPolicyHash: crypto.createHash('sha256').update(canonicalJson(policy)).digest('hex'),
         endpointHash: crypto.createHash('sha256').update(policy.endpoint).digest('hex'),
         model: policy.model,
+        expectedResolvedModels: policy.provider.expectedResolvedModels.slice(),
         providerEndpointTag: policy.provider.order[0],
         expectedResolvedProvider: policy.provider.expectedResolvedNames[0],
         settings: jsonClone(policy.settings),

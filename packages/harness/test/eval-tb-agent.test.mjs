@@ -151,6 +151,8 @@ test('the provider bridge maps exact model requests through a lease-bound broker
         type: 'provider-response',
         ok: true,
         attemptId: request.request.attemptId,
+        model: profile.provider.expectedResolvedModels[0],
+        provider: profile.provider.expectedResolvedNames[0],
         message: { role: 'assistant', content: 'done', tool_calls: [] },
         finishReason: 'stop',
         evidence: {
@@ -190,7 +192,7 @@ test('the provider bridge maps exact model requests through a lease-bound broker
   assert.equal(observed[0].request.leaseDigest, 'd'.repeat(64));
   assert.equal(JSON.stringify(observed[0]).includes('broker-placeholder'), false);
   const data = await response.json();
-  assert.equal(data.model, profile.model);
+  assert.equal(data.model, profile.provider.expectedResolvedModels[0]);
   assert.equal(data.provider, profile.provider.expectedResolvedNames[0]);
   assert.equal(data.usage.prompt_tokens, 12);
   assert.equal(data.usage.prompt_tokens_details.cached_tokens, 3);

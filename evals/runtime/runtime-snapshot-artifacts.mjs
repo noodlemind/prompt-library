@@ -511,10 +511,13 @@ app()
   return wrapperFiles;
 }
 
-function pullExactImages(runDocker) {
+export function pullExactImages(runDocker) {
   for (const reference of [DAYTONA_DIND_BASE_IMAGE, NATIVE_COMPILER_IMAGE, PYTHON_BUILDER_IMAGE, UV_BUILDER_IMAGE]) {
     runDocker(['pull', '--platform', 'linux/amd64', reference], { timeoutMs: 20 * 60_000 });
-    const platform = runDocker(['image', 'inspect', '--format', '{{.Os}}/{{.Architecture}}', reference]);
+    const platform = runDocker([
+      'image', 'inspect', '--platform', 'linux/amd64',
+      '--format', '{{.Os}}/{{.Architecture}}', reference,
+    ]);
     if (platform !== 'linux/amd64\n') fail('pinned builder image platform drifted', 'ERR_RUNTIME_SNAPSHOT_DOCKER');
   }
 }

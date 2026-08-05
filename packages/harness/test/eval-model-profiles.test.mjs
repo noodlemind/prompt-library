@@ -4,13 +4,16 @@ import { getProfile, listProfiles } from '../../../evals/lib/model-profiles.mjs'
 
 test('kimi profile pins the OpenRouter provider with fallbacks disabled', () => {
   const p = getProfile('kimi-k2.7-code');
-  assert.equal(p.model, 'moonshotai/kimi-k2.7-code-20260612');
+  assert.equal(p.model, 'moonshotai/kimi-k2.7-code');
   assert.equal('modelAlias' in p, false, 'the mutable convenience alias is not an accepted resolved model');
   assert.equal(p.url, 'https://openrouter.ai/api/v1/chat/completions');
   assert.deepEqual(p.provider.order, ['moonshotai/int4']);
   assert.deepEqual(p.provider.expectedResolvedNames, ['Moonshot AI']);
+  assert.deepEqual(p.provider.expectedResolvedModels, ['moonshotai/kimi-k2.7-code-20260612']);
   assert.equal(p.provider.allowFallbacks, false);
-  assert.equal(p.catalogPin.canonicalSlug, p.model);
+  assert.equal(p.catalogPin.modelId, p.model);
+  assert.equal(p.catalogPin.canonicalSlug, 'moonshotai/kimi-k2.7-code-20260612');
+  assert.notEqual(p.catalogPin.canonicalSlug, p.model);
   assert.equal(p.catalogPin.endpointTag, p.provider.order[0]);
 });
 
@@ -71,7 +74,9 @@ test('every registered OpenRouter profile pins a provider and disables fallback'
       Array.isArray(profile.provider?.expectedResolvedNames) && profile.provider.expectedResolvedNames.length > 0,
       profile.id,
     );
-    assert.equal(profile.catalogPin?.canonicalSlug, profile.model, profile.id);
+    assert.deepEqual(profile.provider?.expectedResolvedModels, [profile.catalogPin?.canonicalSlug], profile.id);
+    assert.equal(profile.catalogPin?.modelId, profile.model, profile.id);
+    assert.notEqual(profile.catalogPin?.canonicalSlug, profile.model, profile.id);
     assert.ok(profile.provider.order.includes(profile.catalogPin?.endpointTag), profile.id);
   }
 });

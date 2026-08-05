@@ -206,7 +206,7 @@ const requestContract = {
 };
 const requestControls = {
   endpointHash: digest(condition.providerUrl),
-  model: 'moonshotai/kimi-k2.7-code-20260612',
+  model: 'moonshotai/kimi-k2.7-code',
   maxTokens: condition.limits.maxOutputTokens,
   temperaturePresent: false,
   temperature: null,

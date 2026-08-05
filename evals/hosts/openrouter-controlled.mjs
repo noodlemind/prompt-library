@@ -21,9 +21,14 @@ export function validateControlledProfile(profile) {
   const provider = profile.provider;
   const providerOrder = provider?.order;
   const expectedResolvedNames = provider?.expectedResolvedNames;
+  const expectedResolvedModels = provider?.expectedResolvedModels;
   const catalogPin = profile.catalogPin;
-  if (provider?.allowFallbacks !== false || catalogPin?.canonicalSlug !== profile.model) {
+  if (provider?.allowFallbacks !== false) {
     throw new Error(`controlled OpenRouter profile must pin a provider and disable fallback: ${profileId}`);
+  }
+  if (catalogPin?.modelId !== profile.model ||
+      typeof catalogPin?.canonicalSlug !== 'string' || catalogPin.canonicalSlug.length === 0) {
+    throw new Error(`controlled OpenRouter profile must pin its catalog model identity: ${profileId}`);
   }
   if (!Array.isArray(providerOrder) || providerOrder.length !== 1 ||
       providerOrder[0] !== catalogPin?.endpointTag) {
@@ -32,6 +37,10 @@ export function validateControlledProfile(profile) {
   if (!Array.isArray(expectedResolvedNames) || expectedResolvedNames.length !== 1 ||
       typeof expectedResolvedNames[0] !== 'string' || expectedResolvedNames[0].length === 0) {
     throw new Error(`controlled OpenRouter profile must pin exactly one resolved provider identity: ${profileId}`);
+  }
+  if (!Array.isArray(expectedResolvedModels) || expectedResolvedModels.length !== 1 ||
+      expectedResolvedModels[0] !== catalogPin.canonicalSlug) {
+    throw new Error(`controlled OpenRouter profile must pin exactly one resolved model identity: ${profileId}`);
   }
 
   return profile;

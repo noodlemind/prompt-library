@@ -23,16 +23,20 @@ function deepFreeze(value) {
 export const CONTROLLED_OPENROUTER_PROFILES = deepFreeze({
   'kimi-k2.7-code': {
     id: 'kimi-k2.7-code',
-    model: 'moonshotai/kimi-k2.7-code-20260612',
+    // OpenRouter accepts the catalog model ID on requests, but release
+    // evidence must resolve to the one dated canonical model below.
+    model: 'moonshotai/kimi-k2.7-code',
     host: 'openrouter',
     url: 'https://openrouter.ai/api/v1/chat/completions',
     provider: {
       order: ['moonshotai/int4'],
       expectedResolvedNames: ['Moonshot AI'],
+      expectedResolvedModels: ['moonshotai/kimi-k2.7-code-20260612'],
       allowFallbacks: false,
     },
     catalogPin: {
-      checkedAt: '2026-07-31',
+      checkedAt: '2026-08-05',
+      modelId: 'moonshotai/kimi-k2.7-code',
       canonicalSlug: 'moonshotai/kimi-k2.7-code-20260612',
       endpointTag: 'moonshotai/int4',
     },

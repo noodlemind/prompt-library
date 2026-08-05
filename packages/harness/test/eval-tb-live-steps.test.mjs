@@ -412,14 +412,14 @@ function fakeHarborSpawn({
                   { seq: 2, eventId: 'e2', type: 'error', requestId: 'r1', attemptId: 'a1', billingStatus: 'confirmed_unbilled', monotonicMs: 12 },
                   { seq: 3, eventId: 'e3', type: 'retry', requestId: 'r1', attemptId: 'a1', monotonicMs: 13 },
                   { seq: 4, eventId: 'e4', type: 'request_attempt', requestId: 'r1', attemptId: 'a2', monotonicMs: 14 },
-                  { seq: 5, eventId: 'e5', type: 'response', requestId: 'r1', attemptId: 'a2', model: profile.model, provider: paidProfile ? 'Moonshot AI' : null, generationId: 'gen-1', billingStatus: responseBillingStatus, usage: responseUsage, monotonicMs: 20 },
+                  { seq: 5, eventId: 'e5', type: 'response', requestId: 'r1', attemptId: 'a2', model: paidProfile ? profile.provider.expectedResolvedModels[0] : profile.model, provider: paidProfile ? 'Moonshot AI' : null, generationId: 'gen-1', billingStatus: responseBillingStatus, usage: responseUsage, monotonicMs: 20 },
                   ...Array.from({ length: 4 }, (_, index) => {
                     const requestNumber = index + 2;
                     const attemptNumber = index + 3;
                     return [
                       { seq: 6 + index * 3, eventId: `e-request-${requestNumber}`, type: 'request', requestId: `r${requestNumber}`, monotonicMs: 21 + index * 3, ...requestContract },
                       { seq: 7 + index * 3, eventId: `e-attempt-${attemptNumber}`, type: 'request_attempt', requestId: `r${requestNumber}`, attemptId: `a${attemptNumber}`, monotonicMs: 22 + index * 3 },
-                      { seq: 8 + index * 3, eventId: `e-response-${attemptNumber}`, type: 'response', requestId: `r${requestNumber}`, attemptId: `a${attemptNumber}`, model: profile.model, provider: paidProfile ? 'Moonshot AI' : null, generationId: `gen-${requestNumber}`, billingStatus: index === 0 ? responseBillingStatus : paidProfile ? 'reported' : 'confirmed_unbilled', usage: responseUsage, monotonicMs: 23 + index * 3 },
+                      { seq: 8 + index * 3, eventId: `e-response-${attemptNumber}`, type: 'response', requestId: `r${requestNumber}`, attemptId: `a${attemptNumber}`, model: paidProfile ? profile.provider.expectedResolvedModels[0] : profile.model, provider: paidProfile ? 'Moonshot AI' : null, generationId: `gen-${requestNumber}`, billingStatus: index === 0 ? responseBillingStatus : paidProfile ? 'reported' : 'confirmed_unbilled', usage: responseUsage, monotonicMs: 23 + index * 3 },
                     ];
                   }).flat(),
                   { seq: 18, eventId: 'e18', type: 'tool_call', requestId: 'r1', toolCallId: 'tc1', tool: 'bash', category: 'inspect', argsChars: 12, argsHash: '1'.repeat(64), immutableHarnessCli: false, argumentsValid: true, monotonicMs: 35 },

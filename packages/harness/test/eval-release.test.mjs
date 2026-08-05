@@ -460,8 +460,8 @@ function fullRun(condition, verdict, over = {}) {
       condition,
       modelProfileId: 'kimi-k2.7-code',
       billingProfileHash: billingProfileHash('kimi-k2.7-code'),
-      pricingCatalogCheckedAt: '2026-07-31',
-      modelRequested: 'moonshotai/kimi-k2.7-code-20260612',
+      pricingCatalogCheckedAt: '2026-08-05',
+      modelRequested: 'moonshotai/kimi-k2.7-code',
       modelResolved: 'moonshotai/kimi-k2.7-code-20260612',
       providerResolved: 'Moonshot AI',
       providerRequestedOrder: ['moonshotai/int4'],
@@ -2561,7 +2561,7 @@ test('classifyPair precedence: safety bypass, then infrastructure, then budget',
 
 test('a model or provider fallback is detected from the run documents', () => {
   const fallback = classifyPair(
-    pairOf('h', 'pass', 'pass', { harness: { reproducibility: { modelResolved: 'moonshotai/kimi-k2-instruct' } } })
+    pairOf('h', 'pass', 'pass', { harness: { reproducibility: { modelResolved: 'moonshotai/kimi-k2.7-code' } } })
   );
   assert.equal(fallback.fallbackDetected, true);
   assert.equal(fallback.result, 'infrastructure-invalid');

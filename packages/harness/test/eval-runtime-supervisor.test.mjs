@@ -29,6 +29,7 @@ function providerPolicy(overrides = {}) {
     provider: {
       order: ['moonshotai/int4'],
       expectedResolvedNames: ['Moonshot AI'],
+      expectedResolvedModels: ['moonshotai/kimi-k2.7-code-20260612'],
       allowFallbacks: false,
     },
     settings: { temperature: null, reasoning: null, toolChoice: 'auto' },

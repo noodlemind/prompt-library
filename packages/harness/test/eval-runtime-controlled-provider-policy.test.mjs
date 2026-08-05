@@ -16,6 +16,7 @@ test('one code-owned profile drives both model telemetry and the runtime broker 
   const model = getProfile('kimi-k2.7-code');
   assert.deepEqual(runtime, model);
   assert.equal(runtime.provider.allowFallbacks, false);
+  assert.deepEqual(runtime.provider.expectedResolvedModels, [runtime.catalogPin.canonicalSlug]);
 
   const policy = buildControlledProviderBrokerPolicy({
     profileId: runtime.id,

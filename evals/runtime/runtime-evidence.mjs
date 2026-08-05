@@ -1889,10 +1889,15 @@ function reconcileProviderEvidence(evidence, spec, rawTrustedPolicy) {
   }
   exactKeys(snapshot.policy, [
     'policyHash', 'bindingPolicyHash', 'endpointHash', 'model', 'providerEndpointTag',
-    'expectedResolvedProvider', 'settings', 'maxTokens', 'pricing',
+    'expectedResolvedModels', 'expectedResolvedProvider', 'settings', 'maxTokens', 'pricing',
   ], 'provider broker policy evidence');
   digest(snapshot.policy.endpointHash, 'provider endpoint hash');
   boundedString(snapshot.policy.model, 'provider model', 256);
+  if (!Array.isArray(snapshot.policy.expectedResolvedModels) ||
+      snapshot.policy.expectedResolvedModels.length !== 1) {
+    fail('resolved model identity evidence is malformed');
+  }
+  boundedString(snapshot.policy.expectedResolvedModels[0], 'resolved model identity', 256);
   boundedString(snapshot.policy.providerEndpointTag, 'provider endpoint tag', 128);
   boundedString(snapshot.policy.expectedResolvedProvider, 'resolved provider identity', 128);
   integer(snapshot.policy.maxTokens, 'provider max tokens', 1, 1_000_000);
@@ -1900,6 +1905,8 @@ function reconcileProviderEvidence(evidence, spec, rawTrustedPolicy) {
       || !plainObject(snapshot.policy.pricing)
       || snapshot.policy.endpointHash !== sha256(trustedPolicy.endpoint)
       || snapshot.policy.model !== trustedPolicy.model
+      || canonicalJson(snapshot.policy.expectedResolvedModels) !==
+        canonicalJson(trustedPolicy.provider?.expectedResolvedModels)
       || snapshot.policy.providerEndpointTag !== trustedPolicy.provider?.order?.[0]
       || snapshot.policy.expectedResolvedProvider !== trustedPolicy.provider?.expectedResolvedNames?.[0]
       || snapshot.policy.maxTokens !== trustedPolicy.maxTokens
@@ -1953,6 +1960,7 @@ function reconcileProviderEvidence(evidence, spec, rawTrustedPolicy) {
     exactKeys(attempt, [
       'ordinal', 'attemptId', 'leaseId', 'leaseDigest', 'trialId', 'leaseSequence',
       'sequence', 'state', 'outcome', 'startedAt', 'completedAt', 'model',
+      'resolvedModel', 'resolvedProvider',
       'providerEndpointTag', 'expectedResolvedProvider', 'maxTokens',
       'requestPayloadBytes', 'reservedUsd', 'usage', 'actualCostUsd',
       'reservationUnderestimated', 'budgetBreached',
@@ -1997,6 +2005,8 @@ function reconcileProviderEvidence(evidence, spec, rawTrustedPolicy) {
     if (attempt.outcome === 'rejected-disconnected-before-dispatch') {
       actual = usdPico(attempt.actualCostUsd, 'disconnected provider attempt cost');
       if (attempt.usage !== null
+          || attempt.resolvedModel !== null
+          || attempt.resolvedProvider !== null
           || actual !== 0n
           || attempt.reservationUnderestimated !== false
           || attempt.budgetBreached !== false) {
@@ -2005,6 +2015,12 @@ function reconcileProviderEvidence(evidence, spec, rawTrustedPolicy) {
     } else {
       if (!allowedDispatchedOutcomes.has(attempt.outcome)) {
         fail('provider attempt outcome cannot produce clean final evidence');
+      }
+      boundedString(attempt.resolvedModel, 'resolved provider model', 256);
+      boundedString(attempt.resolvedProvider, 'resolved provider identity', 128);
+      if (!snapshot.policy.expectedResolvedModels.includes(attempt.resolvedModel)
+          || attempt.resolvedProvider !== snapshot.policy.expectedResolvedProvider) {
+        fail('provider attempt resolved identity drifted');
       }
       exactKeys(attempt.usage, [
         'promptTokens', 'cachedTokens', 'cachedTokensComplete', 'reasoningTokens',
@@ -2101,6 +2117,7 @@ function reconcileProviderEvidence(evidence, spec, rawTrustedPolicy) {
     bindingPolicyHash: snapshot.policy.bindingPolicyHash,
     endpointHash: snapshot.policy.endpointHash,
     model: snapshot.policy.model,
+    expectedResolvedModels: snapshot.policy.expectedResolvedModels,
     providerEndpointTag: snapshot.policy.providerEndpointTag,
     expectedResolvedProvider: snapshot.policy.expectedResolvedProvider,
   };

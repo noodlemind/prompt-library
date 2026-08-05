@@ -1181,6 +1181,15 @@ function trialAttribution(doc, { requireProvider = false } = {}) {
   const responses = (doc?.observability?.providerEvents ?? []).filter((event) => event?.type === 'response');
   const fallbackEvents = (doc?.observability?.providerEvents ?? []).filter((event) => event?.type === 'fallback');
   const requestedModel = reproducibility.modelRequested;
+  let expectedResolvedModels = [requestedModel];
+  try {
+    const profile = getProfile(reproducibility.modelProfileId);
+    if (profile.model === requestedModel && Array.isArray(profile.provider?.expectedResolvedModels)) {
+      expectedResolvedModels = profile.provider.expectedResolvedModels;
+    }
+  } catch {
+    // The profile-identity checks report the malformed profile separately.
+  }
   const requestedProviders = Array.isArray(reproducibility.providerRequestedOrder)
     ? reproducibility.providerRequestedOrder.map(normalizeProviderName).filter(Boolean)
     : [];
@@ -1201,8 +1210,8 @@ function trialAttribution(doc, { requireProvider = false } = {}) {
     (!requireProvider || (typeof response.provider === 'string' && response.provider.length > 0))
   );
   const modelMismatch =
-    (modelComplete && reproducibility.modelResolved !== requestedModel) ||
-    responses.some((response) => response.model !== requestedModel);
+    (modelComplete && !expectedResolvedModels.includes(reproducibility.modelResolved)) ||
+    responses.some((response) => !expectedResolvedModels.includes(response.model));
   const providerMismatch = requireProvider && requestedProviders.length > 0 && (
     (providerComplete && !expectedResolvedProviders.includes(normalizeProviderName(reproducibility.providerResolved))) ||
     responses.some((response) => !expectedResolvedProviders.includes(normalizeProviderName(response.provider)))
