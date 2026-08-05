@@ -41,7 +41,11 @@ function fixture(t) {
   const dataset = path.join(root, 'dataset');
   const task = path.join(dataset, TASK.task);
   fs.mkdirSync(task, { recursive: true, mode: 0o700 });
-  file(path.join(task, 'instruction.md'), 'Modernize the COBOL service.\n');
+  file(path.join(task, 'instruction.md'), 'Modernize the COBOL service.\n', 0o444);
+  const tests = path.join(task, 'tests');
+  fs.mkdirSync(tests, { mode: 0o700 });
+  file(path.join(tests, 'run.sh'), '#!/bin/sh\nexit 0\n', 0o555);
+  fs.chmodSync(tests, 0o555);
   file(path.join(task, 'task.toml'), [
     '[environment]',
     `docker_image = "${TASK.sandbox.sourceImage}"`,
@@ -78,24 +82,31 @@ function fixture(t) {
 
 test('builds two archive-bound no-model requests with treatment-only Harness activation', (t) => {
   const fx = fixture(t);
-  const generic = buildZeroProviderCanaryTrialRequest({
-    condition: 'generic',
-    taskLock: fx.taskLock,
-    taskId: TASK.task,
-    datasetPath: fx.dataset,
-    bundleDir: fx.bundle,
-    workDir: fx.genericWork,
-    trialId: 'zero-generic-r1',
-  });
-  const harness = buildZeroProviderCanaryTrialRequest({
-    condition: 'harness',
-    taskLock: fx.taskLock,
-    taskId: TASK.task,
-    datasetPath: fx.dataset,
-    bundleDir: fx.bundle,
-    workDir: fx.harnessWork,
-    trialId: 'zero-harness-r1',
-  });
+  const previousUmask = process.umask(0o077);
+  let generic;
+  let harness;
+  try {
+    generic = buildZeroProviderCanaryTrialRequest({
+      condition: 'generic',
+      taskLock: fx.taskLock,
+      taskId: TASK.task,
+      datasetPath: fx.dataset,
+      bundleDir: fx.bundle,
+      workDir: fx.genericWork,
+      trialId: 'zero-generic-r1',
+    });
+    harness = buildZeroProviderCanaryTrialRequest({
+      condition: 'harness',
+      taskLock: fx.taskLock,
+      taskId: TASK.task,
+      datasetPath: fx.dataset,
+      bundleDir: fx.bundle,
+      workDir: fx.harnessWork,
+      trialId: 'zero-harness-r1',
+    });
+  } finally {
+    process.umask(previousUmask);
+  }
 
   for (const request of [generic, harness]) {
     assert.equal(request.trial.executionMode, 'zero-provider-canary');
@@ -165,7 +176,9 @@ test('rejects unknown fields, unsafe identities, mutable work roots, and missing
 
 test('rejects a task tree that drifted after the code-owned offline lock was stamped', (t) => {
   const fx = fixture(t);
-  fs.appendFileSync(path.join(fx.dataset, TASK.task, 'instruction.md'), 'tampered\n');
+  const instruction = path.join(fx.dataset, TASK.task, 'instruction.md');
+  fs.chmodSync(instruction, 0o600);
+  fs.appendFileSync(instruction, 'tampered\n');
   assert.throws(() => buildZeroProviderCanaryTrialRequest({
     condition: 'generic',
     taskLock: fx.taskLock,

@@ -62,6 +62,37 @@ function materializeLockedSandbox(taskRoot, entry) {
   }
 }
 
+function restoreCopiedModes(sourceRoot, destinationRoot) {
+  const visit = (source, destination) => {
+    const sourceStat = fs.lstatSync(source);
+    const destinationStat = fs.lstatSync(destination);
+    if (sourceStat.isDirectory()) {
+      if (!destinationStat.isDirectory() || destinationStat.isSymbolicLink()) {
+        throw new Error('copied task node type drifted before mode restoration');
+      }
+      const sourceNames = fs.readdirSync(source)
+        .sort((left, right) => Buffer.compare(Buffer.from(left), Buffer.from(right)));
+      const destinationNames = fs.readdirSync(destination)
+        .sort((left, right) => Buffer.compare(Buffer.from(left), Buffer.from(right)));
+      if (sourceNames.length !== destinationNames.length
+          || sourceNames.some((name, index) => name !== destinationNames[index])) {
+        throw new Error('copied task directory entries drifted before mode restoration');
+      }
+      for (const name of sourceNames) {
+        visit(path.join(source, name), path.join(destination, name));
+      }
+    } else if (!sourceStat.isFile() || sourceStat.isSymbolicLink()
+        || !destinationStat.isFile() || destinationStat.isSymbolicLink()) {
+      throw new Error('copied task contains an unsupported node before mode restoration');
+    }
+    // Recursive copy creation is umask-sensitive on supported Node versions.
+    // Restore the exact attested permission/special bits before hashing; the
+    // caller seals every entry read-only immediately after image pinning.
+    fs.chmodSync(destination, sourceStat.mode & 0o7777);
+  };
+  visit(sourceRoot, destinationRoot);
+}
+
 /** Copy one lock-attested source task and materialize its digest-pinned execution image. */
 export function materializeLockedTaskSnapshot({ sourceTask, destinationTask, lock, taskName } = {}) {
   const entry = tasksOf(lock).find((candidate) => candidate?.task === taskName);
@@ -86,16 +117,13 @@ export function materializeLockedTaskSnapshot({ sourceTask, destinationTask, loc
     throw new Error('destination task must be a new direct dataset child');
   }
 
-  const sourceMode = fs.lstatSync(source).mode;
   fs.cpSync(source, destination, {
     recursive: true,
     dereference: false,
     errorOnExist: true,
     force: false,
   });
-  // Some supported Node versions create a recursive-copy root with the
-  // process default mode rather than the source root's read/execute bits.
-  fs.chmodSync(destination, sourceMode & 0o777);
+  restoreCopiedModes(source, destination);
   const copied = verifyTaskAgainstLock(destination, lock, taskName);
   if (!copied.ok || copied.checksum !== sourceVerdict.checksum) {
     throw new Error(`copied task failed checksum verification: ${copied.reason}`);
