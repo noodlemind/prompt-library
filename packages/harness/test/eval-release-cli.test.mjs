@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
-import { test } from 'node:test';
+import { after, test } from 'node:test';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { stampTaskLock } from '../../../evals/external/terminal_bench/harbor-adapter.mjs';
 import { prepareHarnessBundle } from '../../../evals/external/terminal_bench/provision.mjs';
@@ -22,9 +22,18 @@ const BASE_LOCK = JSON.parse(fs.readFileSync(path.join(repoRoot, 'evals', 'exter
 const SENTINEL_PROVIDER_KEY = 'sentinel-openrouter-secret-do-not-persist';
 const harnessVersion = JSON.parse(fs.readFileSync(path.join(repoRoot, 'packages', 'harness', 'package.json'), 'utf8')).version;
 const YAML = createRequire(import.meta.url)('yaml');
+const temporaryRoots = new Set();
+
+after(() => {
+  for (const root of temporaryRoots) {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
 
 function tmpdir() {
-  return fs.mkdtempSync(path.join(os.tmpdir(), 'tb-cli-'));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'tb-cli-'));
+  temporaryRoots.add(root);
+  return root;
 }
 
 function filesUnder(root) {
@@ -697,7 +706,7 @@ test('release lock resolution rejects an out-of-repository path and a committed 
     const fixture = setupFixture();
     const configPath = path.join(fixture.sourceRoot, 'evals', 'config', 'release-canary.yaml');
     if (kind === 'outside') {
-      const outsideLock = path.join(path.dirname(fixture.sourceRoot), `${path.basename(fixture.sourceRoot)}-outside-lock.json`);
+      const outsideLock = path.join(tmpdir(), 'outside-lock.json');
       fs.writeFileSync(outsideLock, fs.readFileSync(fixture.lockFile));
       const relativeOutside = path.relative(fixture.sourceRoot, outsideLock).split(path.sep).join('/');
       fs.writeFileSync(
