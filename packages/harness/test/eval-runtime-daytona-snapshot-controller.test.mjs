@@ -620,6 +620,53 @@ test('paginates and revalidates an exact active content-addressed snapshot befor
   assert.equal(receipt.validation.sandboxDeleted, true);
 });
 
+test('accepts slash-bearing Daytona names only as unrelated bounded list data', async (t) => {
+  const input = files(t);
+  const upstream = {
+    ...fillerRecord(0),
+    name: 'daytona/default-runtime',
+  };
+  const owned = snapshotRecord(input);
+  const fake = fakeDaytona(input, { initialSnapshots: [upstream, owned] });
+
+  const receipt = await controller(fake).ensureSnapshot(request(input));
+
+  assert.equal(receipt.created, false);
+  assert.equal(receipt.name, input.identity.name);
+  assert.equal(receipt.snapshotId, owned.id);
+  assert.equal(fake.calls.some((args) =>
+    args[0] === 'snapshot' && args[1] === 'create'), false);
+  const sandboxCreate = fake.calls.find(([command]) => command === 'create');
+  assert.equal(sandboxCreate[sandboxCreate.indexOf('--snapshot') + 1], input.identity.name);
+  assert.equal(fake.calls.some((args) => args.includes(upstream.name)), false,
+    'an unrelated list name must never become a command argument');
+});
+
+test('keeps slash-bearing command identities and unsafe list names fail-closed', async (t) => {
+  const input = files(t);
+  const invalidRecords = [
+    { ...fillerRecord(0), id: 'tenant/snapshot-id' },
+    { ...fillerRecord(0), name: '/leading' },
+    { ...fillerRecord(0), name: 'trailing/' },
+    { ...fillerRecord(0), name: 'tenant//snapshot' },
+    { ...fillerRecord(0), name: 'tenant/../snapshot' },
+    { ...fillerRecord(0), name: 'tenant\\snapshot' },
+    { ...fillerRecord(0), name: 'tenant snapshot' },
+    { ...fillerRecord(0), name: 'tenant/snäpshot' },
+    { ...fillerRecord(0), name: `tenant/${'a'.repeat(193)}` },
+    { ...fillerRecord(0), name: 'tenant/sk-or-v1-forbidden-provider-key' },
+  ];
+
+  for (const record of invalidRecords) {
+    const fake = fakeDaytona(input, { initialSnapshots: [record] });
+    await assert.rejects(controller(fake).ensureSnapshot(request(input)),
+      /snapshot|credential|malformed/i);
+    assert.equal(fake.calls.some((args) =>
+      args[0] === 'create' || args[0] === 'delete' ||
+      args[0] === 'snapshot' && ['create', 'delete'].includes(args[1])), false);
+  }
+});
+
 test('fails closed on malformed pages, duplicate identities, and mismatched matching records', async (t) => {
   const input = files(t);
 
@@ -633,6 +680,19 @@ test('fails closed on malformed pages, duplicate identities, and mismatched matc
     initialSnapshots: [...firstPage, { ...fillerRecord(200), id: duplicateId.id }],
   });
   await assert.rejects(controller(duplicates).ensureSnapshot(request(input)), /duplicate.*snapshot/i);
+
+  const slashName = 'daytona/default-runtime';
+  const slashFirstPage = [
+    { ...fillerRecord(0), name: slashName },
+    ...Array.from({ length: 199 }, (_, index) => fillerRecord(index + 1)),
+  ];
+  const duplicateSlashName = fakeDaytona(input, {
+    initialSnapshots: [...slashFirstPage, { ...fillerRecord(200), name: slashName }],
+  });
+  await assert.rejects(
+    controller(duplicateSlashName).ensureSnapshot(request(input)),
+    /duplicate.*snapshot/i,
+  );
 
   for (const mutation of [
     { state: 'building' },
@@ -807,6 +867,9 @@ test('rejects wrong names, non-files, digest drift, credentials, and extra input
   }
   const attempts = [
     request(input, { identity: { name: 'operator-selected', buildHash: input.identity.buildHash } }),
+    request(input, {
+      identity: { name: `${input.identity.name}/alias`, buildHash: input.identity.buildHash },
+    }),
     request(input, {
       archives: input.archives.map((entry, index) => index === 0
         ? { ...entry, path: path.dirname(input.dockerfilePath) }

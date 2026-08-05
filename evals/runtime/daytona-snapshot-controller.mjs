@@ -35,6 +35,7 @@ const MAX_TOTAL_ARCHIVE_BYTES = 8 * 1024 * 1024 * 1024;
 const SELFTEST = '/opt/engineer/bin/engineer-snapshot-selftest';
 const HASH = /^[a-f0-9]{64}$/;
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,191}$/;
+const SAFE_LIST_NAME = /^[A-Za-z0-9][A-Za-z0-9_.:-]*(?:\/[A-Za-z0-9][A-Za-z0-9_.:-]*)*$/;
 const SAFE_ABSOLUTE_PATH = /^\/[A-Za-z0-9_./:+-]+$/;
 const UTF8 = new TextDecoder('utf-8', { fatal: true });
 const ATTESTED_USTAR_EXECUTABLE_DIGESTS = Object.freeze(Object.fromEntries(
@@ -490,10 +491,18 @@ function safeRemoteId(value, label) {
   return value;
 }
 
+function safeListName(value, label) {
+  if (typeof value !== 'string' || Buffer.byteLength(value) > 192 || !SAFE_LIST_NAME.test(value)) {
+    fail(`${label} is malformed`, 'ERR_SNAPSHOT_RECORD');
+  }
+  assertCredentialFreeString(value, label);
+  return value;
+}
+
 function validateListRecord(value) {
   if (!plainObject(value)) fail('snapshot list contains a malformed record', 'ERR_SNAPSHOT_RECORD');
   safeRemoteId(value.id, 'snapshot record id');
-  safeRemoteId(value.name, 'snapshot record name');
+  safeListName(value.name, 'snapshot record name');
   if (typeof value.state !== 'string' || value.state.length < 1 || value.state.length > 64) {
     fail('snapshot list contains a malformed status', 'ERR_SNAPSHOT_RECORD');
   }
