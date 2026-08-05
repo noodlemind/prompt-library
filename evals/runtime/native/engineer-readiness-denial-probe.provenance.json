@@ -1,0 +1,9 @@
+{
+  "schema": "engineer-readiness-denial-probe-provenance.v1",
+  "source": "evals/runtime/native/engineer-readiness-denial-probe.c",
+  "sourceSha256": "583cec133efe426749dbdcb30e751d96c0463636f7d4a76ecac768ecac269ac5",
+  "baseImage": "docker:28.3.3-dind@sha256:a56b3bdde89315ed2cc0e4906e582b5033d93bf20d9cb9510c2cdd4e7f7690b1",
+  "buildTarget": "readiness-denial-probe-static",
+  "platform": "linux/amd64",
+  "artifactPath": "/opt/engineer/bin/engineer-readiness-denial-probe"
+}

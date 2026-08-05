@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import crypto from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import { createRequire } from 'node:module';
@@ -49,6 +50,7 @@ import {
   canonicalSha256,
   protocolDocumentHash,
 } from '../../../evals/runtime/protocol.mjs';
+import { controlledProviderBrokerStaticPolicyHash } from '../../../evals/runtime/controlled-provider-policy.mjs';
 import { createGenuineRuntimeSession } from './support/runtime-session-fixture.mjs';
 
 const RUN_SCHEMA = JSON.parse(fs.readFileSync(new URL('../../../evals/schema/eval-run.v1.schema.json', import.meta.url), 'utf8'));
@@ -1343,7 +1345,7 @@ const CLI_RELEASE_CAPABILITIES = [
   'imageResourcesAndNetworkObserved',
 ];
 
-function releaseCliRawConfig({ armed = true } = {}) {
+function releaseCliRawConfig({ armed = true, qualification = false } = {}) {
   return {
     profile: 'release-fixture',
     releaseTrust: {
@@ -1356,25 +1358,34 @@ function releaseCliRawConfig({ armed = true } = {}) {
       releaseCeilingUsd: 10,
       controlledPairUsd: 8,
       rerunUsd: 2,
-      providerHardLimitUsd: 10,
+      providerHardLimitUsd: qualification ? 20 : 10,
       controlledArmCeilingUsd: 0.65,
+      ...(qualification ? { qualificationPairUsd: 1.3, calibrationCeilingUsd: 18.7 } : {}),
     },
     efficiencyThresholds: { promptRatio: 2, costRatio: 1.5, wallTimeRatio: 1.25 },
     valueThresholds: {
       maxIncrementalApiCostPerAdditionalSuccessUsd: 2,
       maxIncrementalWallTimePerAdditionalSuccessMs: 600_000,
     },
-    claimPolicy: {
-      mode: 'regression-gate',
-      requireCalibrationBaseline: false,
-      requireQualificationBaseline: false,
-    },
+    claimPolicy: qualification
+      ? {
+          mode: 'initial-user-ship',
+          minimumHarnessSolvedTasks: 1,
+          requireCalibrationBaseline: false,
+          requireQualificationBaseline: true,
+          qualificationTask: 'cobol-modernization',
+        }
+      : {
+          mode: 'regression-gate',
+          requireCalibrationBaseline: false,
+          requireQualificationBaseline: false,
+        },
     repetitions: { routine: 1 },
     nativeProductRotation: [],
   };
 }
 
-function releaseCliTaskLock() {
+function releaseCliTaskLock({ multiple = false } = {}) {
   return {
     schema: 'terminal-bench-task-lock.v1',
     datasetRef: 'terminal-bench@2.0',
@@ -1384,12 +1395,19 @@ function releaseCliTaskLock() {
       role: 'anchor',
       taskChecksum: 'a'.repeat(64),
       sandbox: { ...SANDBOX_LOCK },
-    }],
+    }, ...(multiple ? [{
+      task: 'second-release-task',
+      role: 'stress',
+      taskChecksum: 'd'.repeat(64),
+      sandbox: { ...SANDBOX_LOCK },
+    }] : [])],
   };
 }
 
 function makeReleaseCliFixture({
   armed = true,
+  qualification = false,
+  multiTaskLock = false,
   artifactDisposeError = null,
   runtimeDisposeError = null,
 } = {}) {
@@ -1398,9 +1416,9 @@ function makeReleaseCliFixture({
   const bundleDir = path.join(root, 'bundle');
   const releaseSha = 'a'.repeat(40);
   const harnessVersion = '0.5.0';
-  const raw = releaseCliRawConfig({ armed });
+  const raw = releaseCliRawConfig({ armed, qualification });
   const suppliedRaw = structuredClone(raw);
-  const lock = releaseCliTaskLock();
+  const lock = releaseCliTaskLock({ multiple: multiTaskLock });
   const events = [];
   const writes = [];
   const captured = {};
@@ -1426,6 +1444,7 @@ function makeReleaseCliFixture({
     }),
     buildOfflineDataset: async ({ outputRoot, taskLock }) => {
       events.push('offline-dataset');
+      captured.offlineSourceTaskNames = taskLock.tasks.map(({ task }) => task);
       const derivedLock = {
         ...structuredClone(taskLock),
         datasetRef: 'terminal-bench-derived-offline@53ff2b87d621',
@@ -1474,6 +1493,7 @@ function makeReleaseCliFixture({
       return {
         bundle: { bundleDir, manifestHash: bundleHash },
         runtimeProjection: {
+          snapshot: { buildHash: 'e'.repeat(64) },
           bindings: {
             releaseSha,
             taskLockHash: context.taskLockHash,
@@ -1500,7 +1520,10 @@ function makeReleaseCliFixture({
         runtimeSession,
         dispose: async () => {
           events.push('runtime-dispose');
-          if (runtimeDisposeError) throw runtimeDisposeError;
+          const error = typeof runtimeDisposeError === 'function'
+            ? runtimeDisposeError()
+            : runtimeDisposeError;
+          if (error) throw error;
         },
       };
     },
@@ -1514,6 +1537,16 @@ function makeReleaseCliFixture({
           controlledPair: async () => null,
         };
       },
+    }),
+    loadZeroProviderBaselineSupport: async () => ({
+      validateZeroProviderDaytonaRun: (value) => {
+        events.push('zero-baseline-validate');
+        return structuredClone(value);
+      },
+      buildZeroProviderQualificationDefinition: (value) => ({
+        schema: 'fixture-zero-provider-gate-definition.v1',
+        ...structuredClone(value),
+      }),
     }),
     runRelease: async (input) => {
       events.push('run');
@@ -1564,6 +1597,81 @@ function makeReleaseCliFixture({
       fs.rmSync(root, { recursive: true, force: true });
     },
   };
+}
+
+function qualificationBaselineFixture(fixture, mutation = () => {}) {
+  const taskLock = releaseCliTaskLock();
+  const derivedLock = {
+    ...structuredClone(taskLock),
+    datasetRef: 'terminal-bench-derived-offline@53ff2b87d621',
+    tasks: taskLock.tasks.map((entry) => ({ ...entry, taskChecksum: 'c'.repeat(64) })),
+  };
+  const taskLockHash = canonicalSha256(canonicalReleaseRuntimeTaskLock(derivedLock));
+  const qualificationBudget = {
+    releaseCeilingUsd: 1.3,
+    controlledPairUsd: 1.3,
+    rerunUsd: 0,
+    controlledArmCeilingUsd: 0.65,
+    qualificationPairUsd: 1.3,
+    calibrationCeilingUsd: 18.7,
+    providerHardLimitUsd: 20,
+  };
+  const budgetPolicyHash = releaseBudgetPolicyHash({
+    evaluationMode: 'qualification',
+    controlledLane: { host: 'openrouter-controlled', profileId: 'kimi-k2.7-code' },
+    budget: qualificationBudget,
+    repetitions: 1,
+    taskCount: 1,
+  });
+  const brokerPolicyHash = controlledProviderBrokerStaticPolicyHash({
+    profileId: 'kimi-k2.7-code',
+    sessionCeilingMicrousd: 1_300_000,
+  });
+  const gateDefinition = {
+    schema: 'fixture-zero-provider-gate-definition.v1',
+    profileId: 'kimi-k2.7-code',
+    taskLockHash,
+    budgetPolicyHash,
+    brokerPolicyHash,
+  };
+  const run = {
+    schema: 'engineer-zero-provider-daytona-run.v1',
+    report: {
+      bindings: {
+        releaseSha: fixture.releaseSha,
+        profileId: 'kimi-k2.7-code',
+        taskId: 'cobol-modernization',
+        taskLockHash,
+        bundleHash: 'b'.repeat(64),
+        snapshotBuildHash: 'e'.repeat(64),
+        gateDefinitionHash: canonicalSha256(gateDefinition),
+      },
+      timing: {
+        startedAt: '2026-08-04T19:50:00.000Z',
+        completedAt: '2026-08-04T19:59:00.000Z',
+      },
+      reportHash: '1'.repeat(64),
+    },
+    protocolEvidence: {
+      sessionFinalAttestation: {
+        issuedAt: '2026-08-04T19:58:00.000Z',
+        expiresAt: '2026-08-04T20:58:00.000Z',
+      },
+    },
+    lifecycleHash: '2'.repeat(64),
+    artifactHash: '3'.repeat(64),
+  };
+  mutation(run);
+  const envelope = {
+    schema: 'engineer-zero-provider-daytona-evidence.v1',
+    operatorTrustModel: 'trusted-local-owner',
+    artifactHashSemantics: 'canonical-content-integrity-only',
+    runtimeRun: run,
+  };
+  const file = path.join(fixture.root, 'zero-provider-baseline.json');
+  const bytes = Buffer.from(`${JSON.stringify(envelope, null, 2)}\n`);
+  fs.writeFileSync(file, bytes, { mode: 0o600 });
+  return { file, bytes, envelope, run };
 }
 
 test('the injectable artifact preparer disposes malformed code-owned output', async () => {
@@ -1655,6 +1763,245 @@ test('runReleaseCli reserves, constructs, injects, disposes, then publishes one 
     assert.match(fixture.captured.runtimeInput.taskLock.datasetRef, /^terminal-bench-derived-offline@/);
   } finally {
     fixture.cleanup();
+  }
+});
+
+test('armed qualification consumes one current owner-private zero-provider baseline before runtime custody', async () => {
+  const fixture = makeReleaseCliFixture({ qualification: true, multiTaskLock: true });
+  const baseline = qualificationBaselineFixture(fixture);
+  try {
+    await runReleaseCli({
+      argv: [
+        '--qualification',
+        '--zero-provider-baseline', baseline.file,
+        '--provider-key-fd', '9',
+        '--report-file', fixture.reportFile,
+        '--json',
+      ],
+      env: { PATH: process.env.PATH ?? '/usr/bin' },
+      stdout: () => {},
+      stderr: () => {},
+      dependencies: fixture.dependencies,
+    });
+    assert.ok(fixture.events.indexOf('zero-baseline-validate') < fixture.events.indexOf('artifacts'));
+    assert.ok(fixture.events.indexOf('artifacts') < fixture.events.indexOf('runtime'));
+    assert.deepEqual(fixture.captured.offlineSourceTaskNames, [
+      'cobol-modernization', 'second-release-task',
+    ], 'the immutable offline dataset is built from the complete release lock');
+    assert.deepEqual(fixture.captured.runtimeInput.taskLock.tasks.map(({ task }) => task), [
+      'cobol-modernization',
+    ], 'only the qualification task enters the paid runtime projection');
+    assert.deepEqual(fixture.captured.runInput.config.zeroProviderBaseline, {
+      byteSha256: crypto.createHash('sha256').update(baseline.bytes).digest('hex'),
+      reportHash: baseline.run.report.reportHash,
+      lifecycleHash: baseline.run.lifecycleHash,
+      artifactHash: baseline.run.artifactHash,
+    });
+    assert.equal(fixture.captured.runInput.config.evaluationScope.releaseEligible, false,
+      'zero-provider evidence can never make qualification release-eligible');
+    assert.equal(fixture.captured.runInput.config.evaluationScope.trust.ok, false,
+      'the trusted-owner receipt cannot create runtime or release trust');
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('zero-provider qualification baseline is mandatory only for armed qualification and must be absolute', async () => {
+  const missing = makeReleaseCliFixture({ qualification: true });
+  try {
+    await assert.rejects(
+      runReleaseCli({
+        argv: ['--qualification', '--provider-key-fd', '9', '--report-file', missing.reportFile],
+        env: { PATH: '/usr/bin' },
+        dependencies: missing.dependencies,
+      }),
+      /qualification requires exactly one --zero-provider-baseline/i,
+    );
+    assert.equal(missing.events.includes('artifacts'), false);
+    assert.equal(missing.events.includes('runtime'), false);
+  } finally {
+    missing.cleanup();
+  }
+
+  const outside = makeReleaseCliFixture();
+  const baseline = qualificationBaselineFixture(outside);
+  try {
+    await assert.rejects(
+      runReleaseCli({
+        argv: ['--zero-provider-baseline', baseline.file, '--provider-key-fd', '9', '--report-file', outside.reportFile],
+        env: { PATH: '/usr/bin' },
+        dependencies: outside.dependencies,
+      }),
+      /--zero-provider-baseline.*only.*--qualification/i,
+    );
+    assert.equal(outside.events.includes('zero-baseline-validate'), false);
+    assert.equal(outside.events.includes('runtime'), false);
+  } finally {
+    outside.cleanup();
+  }
+
+  const relative = makeReleaseCliFixture({ qualification: true });
+  try {
+    await assert.rejects(
+      runReleaseCli({
+        argv: [
+          '--qualification', '--zero-provider-baseline', 'relative.json',
+          '--provider-key-fd', '9', '--report-file', relative.reportFile,
+        ],
+        env: { PATH: '/usr/bin' },
+        dependencies: relative.dependencies,
+      }),
+      /zero-provider-baseline.*absolute/i,
+    );
+    assert.equal(relative.events.includes('zero-baseline-validate'), false);
+    assert.equal(relative.events.includes('runtime'), false);
+  } finally {
+    relative.cleanup();
+  }
+
+  const exposed = makeReleaseCliFixture({ qualification: true });
+  const exposedBaseline = qualificationBaselineFixture(exposed);
+  fs.chmodSync(exposedBaseline.file, 0o644);
+  try {
+    await assert.rejects(
+      runReleaseCli({
+        argv: [
+          '--qualification', '--zero-provider-baseline', exposedBaseline.file,
+          '--provider-key-fd', '9', '--report-file', exposed.reportFile,
+        ],
+        env: { PATH: '/usr/bin' },
+        dependencies: exposed.dependencies,
+      }),
+      /zero-provider baseline.*must not be accessible by group or other users/i,
+    );
+    assert.equal(exposed.events.includes('zero-baseline-validate'), false);
+    assert.equal(exposed.events.includes('runtime'), false);
+  } finally {
+    exposed.cleanup();
+  }
+
+  const forgedTrust = makeReleaseCliFixture({ qualification: true });
+  const forgedBaseline = qualificationBaselineFixture(forgedTrust);
+  const forgedEnvelope = JSON.parse(forgedBaseline.bytes.toString('utf8'));
+  forgedEnvelope.operatorTrustModel = 'standalone-authenticated';
+  fs.writeFileSync(forgedBaseline.file, `${JSON.stringify(forgedEnvelope)}\n`, { mode: 0o600 });
+  try {
+    await assert.rejects(
+      runReleaseCli({
+        argv: [
+          '--qualification', '--zero-provider-baseline', forgedBaseline.file,
+          '--provider-key-fd', '9', '--report-file', forgedTrust.reportFile,
+        ],
+        env: { PATH: '/usr/bin' },
+        dependencies: forgedTrust.dependencies,
+      }),
+      /durable evidence trust or digest semantics are invalid/i,
+    );
+    assert.equal(forgedTrust.events.includes('zero-baseline-validate'), false);
+    assert.equal(forgedTrust.events.includes('runtime'), false);
+  } finally {
+    forgedTrust.cleanup();
+  }
+});
+
+test('qualification rejects every stale zero-provider binding before provider runtime construction', async () => {
+  const cases = [
+    ['releaseSha', (run) => { run.report.bindings.releaseSha = 'f'.repeat(40); }],
+    ['profileId', (run) => { run.report.bindings.profileId = 'other-profile'; }],
+    ['taskId', (run) => { run.report.bindings.taskId = 'other-task'; }],
+    ['taskLockHash', (run) => { run.report.bindings.taskLockHash = '4'.repeat(64); }],
+    ['bundleHash', (run) => { run.report.bindings.bundleHash = '5'.repeat(64); }],
+    ['snapshotBuildHash', (run) => { run.report.bindings.snapshotBuildHash = '6'.repeat(64); }],
+    ['gateDefinitionHash', (run) => { run.report.bindings.gateDefinitionHash = '7'.repeat(64); }],
+  ];
+  for (const [field, mutate] of cases) {
+    const fixture = makeReleaseCliFixture({ qualification: true });
+    const baseline = qualificationBaselineFixture(fixture, mutate);
+    try {
+      await assert.rejects(
+        runReleaseCli({
+          argv: [
+            '--qualification', '--zero-provider-baseline', baseline.file,
+            '--provider-key-fd', '9', '--report-file', fixture.reportFile,
+          ],
+          env: { PATH: '/usr/bin' },
+          dependencies: fixture.dependencies,
+        }),
+        ['releaseSha', 'profileId', 'taskId'].includes(field)
+          ? new RegExp(`zero-provider baseline.*${field}`, 'i')
+          : /release evaluation failed unexpectedly/i,
+        field,
+      );
+      assert.equal(fixture.events.includes('runtime'), false, `${field} drift must precede runtime construction`);
+    } finally {
+      fixture.cleanup();
+    }
+  }
+});
+
+test('qualification rejects stale, future-dated, and expired zero-provider receipts before provider custody', async () => {
+  const cases = [
+    ['stale', (run) => {
+      run.report.timing.completedAt = '2026-08-04T18:59:59.999Z';
+      run.protocolEvidence.sessionFinalAttestation.issuedAt = '2026-08-04T18:58:00.000Z';
+      run.protocolEvidence.sessionFinalAttestation.expiresAt = '2026-08-04T21:00:00.000Z';
+    }, /older than the 60-minute qualification window/i],
+    ['future', (run) => {
+      run.report.timing.completedAt = '2026-08-04T20:01:00.000Z';
+      run.protocolEvidence.sessionFinalAttestation.issuedAt = '2026-08-04T20:00:00.000Z';
+      run.protocolEvidence.sessionFinalAttestation.expiresAt = '2026-08-04T21:00:00.000Z';
+    }, /future-dated/i],
+    ['expired', (run) => {
+      run.protocolEvidence.sessionFinalAttestation.expiresAt = '2026-08-04T20:00:00.000Z';
+    }, /session evidence has expired/i],
+  ];
+  for (const [label, mutate, expected] of cases) {
+    const fixture = makeReleaseCliFixture({ qualification: true });
+    const baseline = qualificationBaselineFixture(fixture, mutate);
+    try {
+      await assert.rejects(
+        runReleaseCli({
+          argv: [
+            '--qualification', '--zero-provider-baseline', baseline.file,
+            '--provider-key-fd', '9', '--report-file', fixture.reportFile,
+          ],
+          env: { PATH: '/usr/bin' },
+          dependencies: fixture.dependencies,
+        }),
+        expected,
+        label,
+      );
+      assert.equal(fixture.events.includes('artifacts'), false, `${label} evidence must fail before artifacts`);
+      assert.equal(fixture.events.includes('runtime'), false, `${label} evidence must fail before provider runtime`);
+    } finally {
+      fixture.cleanup();
+    }
+  }
+
+  const agedDuringPreparation = makeReleaseCliFixture({ qualification: true });
+  const baseline = qualificationBaselineFixture(agedDuringPreparation);
+  let nowCalls = 0;
+  agedDuringPreparation.dependencies.now = () => new Date(
+    nowCalls++ === 0 ? '2026-08-04T20:00:00.000Z' : '2026-08-04T21:01:00.000Z'
+  );
+  try {
+    await assert.rejects(
+      runReleaseCli({
+        argv: [
+          '--qualification', '--zero-provider-baseline', baseline.file,
+          '--provider-key-fd', '9', '--report-file', agedDuringPreparation.reportFile,
+        ],
+        env: { PATH: '/usr/bin' },
+        dependencies: agedDuringPreparation.dependencies,
+      }),
+      /release evaluation failed unexpectedly/i,
+    );
+    assert.equal(agedDuringPreparation.events.includes('artifacts'), true);
+    assert.equal(agedDuringPreparation.events.includes('artifact-dispose'), true);
+    assert.equal(agedDuringPreparation.events.includes('runtime'), false,
+      'freshness is rechecked after artifact preparation and before provider FD consumption');
+  } finally {
+    agedDuringPreparation.cleanup();
   }
 });
 
@@ -1862,9 +2209,9 @@ test('artifact disposal failure suppresses trusted archival and stdout after run
       /release evaluation failed unexpectedly/i
     );
     assert.equal(stdoutCalls, 0);
-    assert.deepEqual(fixture.events.slice(0, 10), [
+    assert.deepEqual(fixture.events.slice(0, 11), [
       'reserve', 'workdir', 'offline-dataset', 'artifacts', 'runtime', 'live', 'run',
-      'runtime-dispose', 'artifact-dispose', 'write-emergency',
+      'runtime-dispose', 'artifact-dispose', 'artifact-dispose', 'write-emergency',
     ]);
     assert.equal(fixture.events.includes('write-trusted'), false);
     assert.equal(fixture.writes[0].schema, 'eval-emergency.v1');
@@ -1890,6 +2237,43 @@ test('runtime disposal failure cannot skip artifact disposal or publish trusted 
     assert.ok(fixture.events.indexOf('artifact-dispose') > fixture.events.indexOf('runtime-dispose'));
     assert.equal(fixture.events.includes('write-trusted'), false);
     assert.equal(fixture.writes[0].schema, 'eval-emergency.v1');
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('a transient runtime disposal failure is retried by the catch path without publishing trusted output', async () => {
+  let runtimeDisposeAttempts = 0;
+  const fixture = makeReleaseCliFixture({
+    runtimeDisposeError: () => {
+      runtimeDisposeAttempts += 1;
+      return runtimeDisposeAttempts === 1 ? new Error('transient runtime cleanup failure') : null;
+    },
+  });
+  let stdoutCalls = 0;
+  try {
+    await assert.rejects(
+      runReleaseCli({
+        argv: ['--provider-key-fd', '9', '--report-file', fixture.reportFile, '--json'],
+        env: { PATH: '/usr/bin' },
+        stdout: () => { stdoutCalls += 1; },
+        dependencies: fixture.dependencies,
+      }),
+      /release evaluation failed unexpectedly/i
+    );
+    assert.equal(stdoutCalls, 0);
+    assert.equal(runtimeDisposeAttempts, 2, 'the catch path retries rejected runtime teardown');
+    assert.equal(
+      fixture.events.filter((event) => event === 'runtime-dispose').length,
+      2
+    );
+    assert.equal(
+      fixture.events.filter((event) => event === 'artifact-dispose').length,
+      1,
+      'successful artifact teardown remains terminal while runtime teardown retries'
+    );
+    assert.equal(fixture.events.includes('write-trusted'), false);
+    assert.deepEqual(fixture.writes.map(({ schema }) => schema), ['eval-emergency.v1']);
   } finally {
     fixture.cleanup();
   }
@@ -2485,8 +2869,15 @@ test('runRelease schedules the configured controlled host and records its profil
 });
 
 test('qualification evidence blocks an all-fail model but accepts either-arm capability', async () => {
+  const zeroProviderBaseline = {
+    byteSha256: '1'.repeat(64),
+    reportHash: '2'.repeat(64),
+    lifecycleHash: '3'.repeat(64),
+    artifactHash: '4'.repeat(64),
+  };
   const qualificationConfig = {
     ...CONTROLLED_CONFIG,
+    zeroProviderBaseline,
     evaluationScope: { ...TRUSTED_SCOPE, mode: 'qualification', releaseEligible: false },
     budget: {
       releaseCeilingUsd: 1.3,
@@ -2549,6 +2940,21 @@ test('qualification evidence blocks an all-fail model but accepts either-arm cap
   assert.equal(harnessPass.capability, 'qualified');
   assert.equal(harnessPass.passingArm, 'harness');
   assert.equal(harnessPass.providerKeyFingerprint, '9'.repeat(64));
+  assert.deepEqual(harnessPass.zeroProviderBaseline, zeroProviderBaseline,
+    'later calibration retains the exact zero-provider evidence chain');
+  assert.deepEqual((await makeReport('fail', 'pass')).zeroProviderBaseline, zeroProviderBaseline,
+    'the paid qualification report records the exact durable-evidence hashes');
+
+  const missingZeroChain = structuredClone(await makeReport('fail', 'pass'));
+  missingZeroChain.zeroProviderBaseline = null;
+  const missingZeroChainVerdict = qualificationBaselineVerdict(missingZeroChain, {
+    ...options,
+    requireZeroProviderBaseline: true,
+  });
+  assert.equal(missingZeroChainVerdict.valid, false,
+    'an older qualification artifact cannot unlock a new calibration');
+  assert.ok(missingZeroChainVerdict.reasons.some((reason) =>
+    /zero-provider baseline chain is missing or malformed/i.test(reason)));
   assert.match(
     buildMarkdownReport(await makeReport('fail', 'pass')),
     /\| calibration prerequisite \|/i,
@@ -3131,6 +3537,37 @@ test('the report schema rejects malformed release decisions and economic evidenc
       verdict.errors.some((error) => error.includes(`readiness.calibrationBaseline.${field}`)),
       verdict.errors.join('; ')
     );
+  }
+
+  const zeroChain = {
+    byteSha256: '1'.repeat(64),
+    reportHash: '2'.repeat(64),
+    lifecycleHash: '3'.repeat(64),
+    artifactHash: '4'.repeat(64),
+  };
+  const chained = structuredClone(report);
+  chained.zeroProviderBaseline = zeroChain;
+  chained.qualificationBaseline = {
+    valid: true,
+    capability: 'qualified',
+    passingArm: 'harness',
+    evidenceHash: '5'.repeat(64),
+    task: 'cobol-modernization',
+    accountedExposureUsd: 0.5,
+    providerKeyFingerprint: '6'.repeat(64),
+    zeroProviderBaseline: zeroChain,
+    reasons: [],
+  };
+  assert.equal(validateAgainstSchema(chained, REPORT_SCHEMA).ok, true);
+  for (const location of ['zeroProviderBaseline', 'qualificationBaseline.zeroProviderBaseline']) {
+    const malformed = structuredClone(chained);
+    const target = location === 'zeroProviderBaseline'
+      ? malformed.zeroProviderBaseline
+      : malformed.qualificationBaseline.zeroProviderBaseline;
+    target.byteSha256 = 7;
+    const verdict = validateAgainstSchema(malformed, REPORT_SCHEMA);
+    assert.equal(verdict.ok, false, `${location}.byteSha256 must be a SHA-256 string`);
+    assert.ok(verdict.errors.some((error) => error.includes(`${location}.byteSha256`)));
   }
 });
 

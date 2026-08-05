@@ -1,5 +1,6 @@
 import path from 'node:path';
 import {
+  RuntimeExecutionModes,
   RuntimeProtocolSchemas,
   canonicalJson,
   canonicalSha256,
@@ -116,6 +117,13 @@ function assertSafeId(value, label, maximum = 192) {
 
 function assertHash(value, label) {
   if (typeof value !== 'string' || !HASH.test(value)) invalid(`${label} is not a SHA-256 digest`);
+}
+
+function validateExecutionMode(value) {
+  if (!Object.values(RuntimeExecutionModes).includes(value)) {
+    invalid('runtime execution mode is invalid');
+  }
+  return value;
 }
 
 function assertAbsolutePath(value, label, maximum = 512) {
@@ -492,7 +500,10 @@ function validateBroker(value, platform, daemon, proxy, expected) {
   assertBoolean(value.taskReachable, 'task broker reachability', false);
 }
 
-function validateReadiness(value, platform, request, { brokerInstalled = true } = {}) {
+function validateReadiness(value, platform, request, {
+  brokerInstalled = true,
+  executionMode = RuntimeExecutionModes.CONTROLLED_PROVIDER,
+} = {}) {
   exactKeys(value, [
     'cgroup',
     'noProviderProbe',
@@ -585,18 +596,26 @@ function validateReadiness(value, platform, request, { brokerInstalled = true } 
   for (const field of ['networkNone', 'readOnlyRoot', 'capabilitiesDropped', 'noNewPrivileges']) {
     assertBoolean(value.task[field], `task ${field}`, true);
   }
-  if (brokerInstalled) {
-    assertBoolean(value.task.brokerReachable, 'task broker reachability', false);
-    assertBoolean(value.task.brokerSocketMounted, 'task broker socket mount', false);
-    assertBoolean(value.task.brokerClientGidPresent, 'task broker client group', false);
-  }
+  assertBoolean(value.task.brokerReachable, 'task broker reachability', false);
+  assertBoolean(value.task.brokerSocketMounted, 'task broker socket mount', false);
+  assertBoolean(value.task.brokerClientGidPresent, 'task broker client group', false);
 
-  exactKeys(value.broker, ['uid', 'onlyProviderEgress'], 'broker readiness');
-  if (brokerInstalled) {
+  if (executionMode === RuntimeExecutionModes.CONTROLLED_PROVIDER) {
+    exactKeys(value.broker, ['uid', 'onlyProviderEgress'], 'broker readiness');
+    if (!brokerInstalled) return validateReadinessExecutables(value, request);
     if (value.broker.uid !== platform.identities.brokerUid) invalid('broker UID drifted');
     assertBoolean(value.broker.onlyProviderEgress, 'broker-only egress', true);
+  } else {
+    exactKeys(value.broker, ['installed', 'socketAbsent', 'policyAbsent'], 'zero-provider broker readiness');
+    assertBoolean(value.broker.installed, 'zero-provider broker installation', false);
+    assertBoolean(value.broker.socketAbsent, 'zero-provider broker socket absence', true);
+    assertBoolean(value.broker.policyAbsent, 'zero-provider broker policy absence', true);
   }
 
+  validateReadinessExecutables(value, request);
+}
+
+function validateReadinessExecutables(value, request) {
   exactKeys(value.executables, ['runnerExecutableHash', 'harborExecutableHash'], 'executable readiness');
   if (value.executables.runnerExecutableHash !== request.bindings.runnerExecutableHash
       || value.executables.harborExecutableHash !== request.bindings.harborExecutableHash) {
@@ -782,25 +801,7 @@ function validateFinalEvidence(value, context, outcome) {
     'rawSocketDenied',
   ]) assertBoolean(value.network[field], `network ${field}`, true);
 
-  exactKeys(value.provider, [
-    'usageHash',
-    'identityHash',
-    'spendMicrousd',
-    'billingCertain',
-    'budgetComplete',
-    'withinTrialCeiling',
-    'attempts',
-  ], 'provider evidence');
-  assertHash(value.provider.usageHash, 'provider usage hash');
-  assertHash(value.provider.identityHash, 'provider identity hash');
-  assertInteger(value.provider.spendMicrousd, 'provider spend', 0, context.request.budget.trialCeilingMicrousd);
-  assertInteger(value.provider.attempts, 'provider attempts', 0, 100_000);
-  if (value.provider.spendMicrousd > 0 && value.provider.attempts === 0) {
-    invalid('provider spend has no attempt evidence');
-  }
-  for (const field of ['billingCertain', 'budgetComplete', 'withinTrialCeiling']) {
-    assertBoolean(value.provider[field], `provider ${field}`, true);
-  }
+  validateProviderEvidence(value.provider, context);
 
   exactKeys(value.cleanup, [
     'completed',
@@ -830,6 +831,78 @@ function validateFinalEvidence(value, context, outcome) {
     invalid('successful outcome contradicts the observed exit status');
   }
   return { started, ended };
+}
+
+function zeroProviderUsageHash() {
+  return canonicalSha256({
+    schema: 'engineer-runtime-zero-provider-usage.v1',
+    executionMode: RuntimeExecutionModes.ZERO_PROVIDER_CANARY,
+    attempts: 0,
+    calls: 0,
+    spendMicrousd: 0,
+  });
+}
+
+function zeroProviderIdentityHash(requestHash, leaseHash) {
+  return canonicalSha256({
+    schema: 'engineer-runtime-zero-provider-identity.v1',
+    executionMode: RuntimeExecutionModes.ZERO_PROVIDER_CANARY,
+    requestHash,
+    leaseHash,
+    brokerAbsent: true,
+  });
+}
+
+function validateProviderEvidence(value, context) {
+  if (context.executionMode === RuntimeExecutionModes.ZERO_PROVIDER_CANARY) {
+    exactKeys(value, [
+      'mode',
+      'requestHash',
+      'leaseHash',
+      'usageHash',
+      'identityHash',
+      'spendMicrousd',
+      'billingCertain',
+      'budgetComplete',
+      'withinTrialCeiling',
+      'attempts',
+      'calls',
+      'brokerAbsent',
+    ], 'zero-provider evidence');
+    if (value.mode !== 'not-exercised'
+        || value.requestHash !== protocolDocumentHash(context.request)
+        || value.leaseHash !== context.leaseHash
+        || value.usageHash !== zeroProviderUsageHash()
+        || value.identityHash !== zeroProviderIdentityHash(value.requestHash, value.leaseHash)) {
+      invalid('zero-provider evidence identity drifted');
+    }
+    assertInteger(value.spendMicrousd, 'zero-provider spend', 0, 0);
+    assertInteger(value.attempts, 'zero-provider attempts', 0, 0);
+    assertInteger(value.calls, 'zero-provider calls', 0, 0);
+    assertBoolean(value.brokerAbsent, 'zero-provider broker absence', true);
+    for (const field of ['billingCertain', 'budgetComplete', 'withinTrialCeiling']) {
+      assertBoolean(value[field], `zero-provider ${field}`, true);
+    }
+    return;
+  }
+
+  exactKeys(value, [
+    'usageHash',
+    'identityHash',
+    'spendMicrousd',
+    'billingCertain',
+    'budgetComplete',
+    'withinTrialCeiling',
+    'attempts',
+  ], 'provider evidence');
+  assertHash(value.usageHash, 'provider usage hash');
+  assertHash(value.identityHash, 'provider identity hash');
+  assertInteger(value.spendMicrousd, 'provider spend', 0, context.request.budget.trialCeilingMicrousd);
+  assertInteger(value.attempts, 'provider attempts', 0, 100_000);
+  if (value.spendMicrousd > 0 && value.attempts === 0) invalid('provider spend has no attempt evidence');
+  for (const field of ['billingCertain', 'budgetComplete', 'withinTrialCeiling']) {
+    assertBoolean(value[field], `provider ${field}`, true);
+  }
 }
 
 function validateOutcome(value) {
@@ -918,6 +991,7 @@ export function createRuntimeSupervisor({
   let daemon = null;
   let proxy = null;
   let broker = null;
+  let executionMode = null;
   let providerKeyFd = null;
   let providerFdOpen = false;
   let readinessLeaseHash;
@@ -994,26 +1068,29 @@ export function createRuntimeSupervisor({
     state = 'preparing';
     try {
       const prepared = cloneOpaqueJson(input, 'supervisor prepare input');
-      exactKeys(prepared, [
-        'request',
-        'providerKeyFd',
-        'dockerPolicy',
-        'brokerPolicy',
-        'runner',
-      ], 'supervisor prepare input');
+      validateExecutionMode(prepared.executionMode);
+      exactKeys(prepared, prepared.executionMode === RuntimeExecutionModes.CONTROLLED_PROVIDER
+        ? ['executionMode', 'request', 'providerKeyFd', 'dockerPolicy', 'brokerPolicy', 'runner']
+        : ['executionMode', 'request', 'dockerPolicy', 'runner'], 'supervisor prepare input');
+      executionMode = prepared.executionMode;
       runnerSpec = validateRunner(prepared.runner);
-      assertInteger(prepared.providerKeyFd, 'provider key descriptor', 3, 1_048_575);
-      providerKeyFd = prepared.providerKeyFd;
-      providerFdOpen = true;
       const dockerPolicy = cloneOpaqueJson(prepared.dockerPolicy, 'Docker proxy policy');
-      const brokerPolicy = cloneOpaqueJson(prepared.brokerPolicy, 'provider broker policy');
+      const brokerPolicy = executionMode === RuntimeExecutionModes.CONTROLLED_PROVIDER
+        ? cloneOpaqueJson(prepared.brokerPolicy, 'provider broker policy')
+        : null;
       assertCredentialFree(dockerPolicy, 'Docker proxy policy');
-      assertCredentialFree(brokerPolicy, 'provider broker policy');
+      if (brokerPolicy !== null) assertCredentialFree(brokerPolicy, 'provider broker policy');
       request = verifyProtocolDocument(prepared.request, verificationBytes, {
         expectedKeyId: expectedControllerKeyId,
         now: new Date(nowMs(clock)),
       });
       if (request.schema !== RuntimeProtocolSchemas.request) invalid('supervisor expected a trial request');
+      if (request.executionMode !== executionMode) invalid('signed request execution mode drifted');
+      if (executionMode === RuntimeExecutionModes.CONTROLLED_PROVIDER) {
+        assertInteger(prepared.providerKeyFd, 'provider key descriptor', 3, 1_048_575);
+        providerKeyFd = prepared.providerKeyFd;
+        providerFdOpen = true;
+      }
       sessionId = request.sessionId;
       trialId = request.trialId;
       const requestHash = protocolDocumentHash(request);
@@ -1029,11 +1106,13 @@ export function createRuntimeSupervisor({
 
       platform = canonicalClone(await safeEffect('inspectPlatform'), 'platform observation');
       validatePlatform(platform, request, limits);
-      const fdObservation = canonicalClone(
-        await safeEffect('inspectProviderKeyFd', providerKeyFd),
-        'provider key descriptor observation'
-      );
-      validateProviderFd(fdObservation);
+      if (executionMode === RuntimeExecutionModes.CONTROLLED_PROVIDER) {
+        const fdObservation = canonicalClone(
+          await safeEffect('inspectProviderKeyFd', providerKeyFd),
+          'provider key descriptor observation'
+        );
+        validateProviderFd(fdObservation);
+      }
       const headroom = canonicalClone(await safeEffect('reserveEvidenceHeadroom', {
         bytes: limits.evidenceReserveBytes,
         filesystemId: platform.filesystem.boundedRootId,
@@ -1058,26 +1137,42 @@ export function createRuntimeSupervisor({
         runnerUid: platform.identities.runnerUid,
         runnerGid: platform.identities.runnerGid,
         upstreamSocketPath: daemon.socketPath,
+        executionMode,
+        ...(executionMode === RuntimeExecutionModes.ZERO_PROVIDER_CANARY ? {
+          releaseSha: request.bindings.releaseSha,
+          taskLockHash: request.bindings.taskLockHash,
+          bundleHash: request.bindings.bundleHash,
+        } : {}),
       }), 'Docker proxy observation');
       validateProxy(proxy, daemon, platform);
 
       const preBrokerReadiness = canonicalClone(
         await safeEffect('inspectReadiness', {
-          phase: 'pre-broker',
+          phase: executionMode === RuntimeExecutionModes.CONTROLLED_PROVIDER
+            ? 'pre-broker'
+            : 'zero-provider',
+          executionMode,
           requestHash,
           daemon,
           proxy,
-          broker: {},
+          broker: executionMode === RuntimeExecutionModes.CONTROLLED_PROVIDER ? {} : null,
         }),
         'pre-broker readiness observation'
       );
-      validateReadiness(preBrokerReadiness, platform, request, { brokerInstalled: false });
+      validateReadiness(preBrokerReadiness, platform, request, {
+        brokerInstalled: false,
+        executionMode,
+      });
 
       let brokerStaticPolicyHash;
-      try {
-        brokerStaticPolicyHash = providerBrokerStaticPolicyHash(brokerPolicy);
-      } catch {
-        invalid('provider broker static policy is invalid');
+      if (executionMode === RuntimeExecutionModes.CONTROLLED_PROVIDER) {
+        try {
+          brokerStaticPolicyHash = providerBrokerStaticPolicyHash(brokerPolicy);
+        } catch {
+          invalid('provider broker static policy is invalid');
+        }
+      } else {
+        brokerStaticPolicyHash = request.bindings.brokerPolicyHash;
       }
 
       const issuedMs = Math.max(nowMs(clock), instantMs(request.issuedAt, 'request issuedAt'));
@@ -1097,6 +1192,7 @@ export function createRuntimeSupervisor({
         requestHash,
         requestNonce: request.nonce,
         previousTrialChainHash: request.previousTrialChainHash,
+        executionMode,
         bindings: request.bindings,
         budget: request.budget,
         readiness: {
@@ -1115,50 +1211,53 @@ export function createRuntimeSupervisor({
       lease = signProtocolDocument(unsignedLease, signingBytes, { keyId });
       verifyReadinessLeaseForRequest(lease, request);
       readinessLeaseHash = protocolDocumentHash(lease);
-      const brokerBinding = bindBrokerPolicy(
-        brokerPolicy,
-        request,
-        lease.sequence,
-        readinessLeaseHash
-      );
-      broker = canonicalClone(await safeEffect('startProviderBroker', {
-        policy: brokerBinding.policy,
-        providerKeyFd,
-        leaseHash: readinessLeaseHash,
-        leaseId: brokerBinding.leaseId,
-        leaseSequence: brokerBinding.leaseSequence,
-        requestHash,
-        trialId: request.trialId,
-        brokerUid: platform.identities.brokerUid,
-        brokerGid: platform.identities.brokerGid,
-        sharedGid: platform.identities.brokerClientGid,
-        budget: request.budget,
-      }), 'provider broker observation');
-      validateBroker(broker, platform, daemon, proxy, brokerBinding);
-      const closeResult = canonicalClone(
-        await safeEffect('closeInheritedFd', providerKeyFd),
-        'provider key descriptor close result'
-      );
-      exactKeys(closeResult, ['closed'], 'provider key descriptor close result');
-      assertBoolean(closeResult.closed, 'provider key descriptor closure', true);
-      providerFdOpen = false;
-      providerKeyFd = null;
-
-      const observedReadiness = canonicalClone(
-        await safeEffect('inspectReadiness', {
-          phase: 'post-broker',
+      if (executionMode === RuntimeExecutionModes.CONTROLLED_PROVIDER) {
+        const brokerBinding = bindBrokerPolicy(
+          brokerPolicy,
+          request,
+          lease.sequence,
+          readinessLeaseHash
+        );
+        broker = canonicalClone(await safeEffect('startProviderBroker', {
+          policy: brokerBinding.policy,
+          providerKeyFd,
+          leaseHash: readinessLeaseHash,
+          leaseId: brokerBinding.leaseId,
+          leaseSequence: brokerBinding.leaseSequence,
           requestHash,
-          daemon,
-          proxy,
-          broker,
-        }),
-        'post-broker readiness observation'
-      );
-      validateReadiness(observedReadiness, platform, request);
-      if (canonicalSha256(observedReadiness.noProviderProbe) !== lease.readiness.noProviderProbeHash
-          || canonicalSha256(observedReadiness.storageProbe) !== lease.readiness.storageProbeHash
-          || broker.policyHash !== lease.readiness.brokerPolicyHash) {
-        invalid('post-broker readiness drifted from the undisclosed signed candidate');
+          trialId: request.trialId,
+          brokerUid: platform.identities.brokerUid,
+          brokerGid: platform.identities.brokerGid,
+          sharedGid: platform.identities.brokerClientGid,
+          budget: request.budget,
+        }), 'provider broker observation');
+        validateBroker(broker, platform, daemon, proxy, brokerBinding);
+        const closeResult = canonicalClone(
+          await safeEffect('closeInheritedFd', providerKeyFd),
+          'provider key descriptor close result'
+        );
+        exactKeys(closeResult, ['closed'], 'provider key descriptor close result');
+        assertBoolean(closeResult.closed, 'provider key descriptor closure', true);
+        providerFdOpen = false;
+        providerKeyFd = null;
+
+        const observedReadiness = canonicalClone(
+          await safeEffect('inspectReadiness', {
+            phase: 'post-broker',
+            executionMode,
+            requestHash,
+            daemon,
+            proxy,
+            broker,
+          }),
+          'post-broker readiness observation'
+        );
+        validateReadiness(observedReadiness, platform, request, { executionMode });
+        if (canonicalSha256(observedReadiness.noProviderProbe) !== lease.readiness.noProviderProbeHash
+            || canonicalSha256(observedReadiness.storageProbe) !== lease.readiness.storageProbeHash
+            || broker.policyHash !== lease.readiness.brokerPolicyHash) {
+          invalid('post-broker readiness drifted from the undisclosed signed candidate');
+        }
       }
 
       if (state !== 'preparing') return failedClosed('control-channel-loss');
@@ -1174,19 +1273,26 @@ export function createRuntimeSupervisor({
     state = 'running';
     try {
       const launched = await safeEffect('launchRunner', {
+        executionMode,
         uid: platform.identities.runnerUid,
         gid: platform.identities.runnerGid,
-        supplementaryGids: [platform.identities.brokerClientGid],
+        supplementaryGids: executionMode === RuntimeExecutionModes.CONTROLLED_PROVIDER
+          ? [platform.identities.brokerClientGid]
+          : [],
         argv: [...runnerSpec.argv],
         cwd: runnerSpec.cwd,
         env: {
           ...runnerSpec.env,
           DOCKER_HOST: `unix://${proxy.socketPath}`,
-          ENGINEER_PROVIDER_BROKER_SOCKET: broker.socketPath,
-          ENGINEER_PROVIDER_LEASE_ID: broker.leaseId,
-          ENGINEER_PROVIDER_TRIAL_ID: request.trialId,
-          ENGINEER_PROVIDER_LEASE_DIGEST: readinessLeaseHash,
-          ENGINEER_PROVIDER_LEASE_SEQUENCE: String(broker.leaseSequence),
+          ...(executionMode === RuntimeExecutionModes.CONTROLLED_PROVIDER ? {
+            ENGINEER_PROVIDER_BROKER_SOCKET: broker.socketPath,
+            ENGINEER_PROVIDER_LEASE_ID: broker.leaseId,
+            ENGINEER_PROVIDER_TRIAL_ID: request.trialId,
+            ENGINEER_PROVIDER_LEASE_DIGEST: readinessLeaseHash,
+            ENGINEER_PROVIDER_LEASE_SEQUENCE: String(broker.leaseSequence),
+          } : {
+            ENGINEER_RUNTIME_EXECUTION_MODE: RuntimeExecutionModes.ZERO_PROVIDER_CANARY,
+          }),
           ENGINEER_RUNTIME_LEASE_HASH: readinessLeaseHash,
         },
         inheritedFds: [],
@@ -1222,6 +1328,7 @@ export function createRuntimeSupervisor({
         daemon,
         proxy,
         broker,
+        executionMode,
       });
       const shutdown = canonicalClone(await safeEffect('shutdown', {
         reason: 'finalize',
@@ -1234,6 +1341,8 @@ export function createRuntimeSupervisor({
         request,
         runnerResult,
         platform,
+        executionMode,
+        leaseHash: readinessLeaseHash,
       }, outcome);
       const shutdownEnded = validateShutdown(shutdown);
       if (coverage.started < instantMs(lease.issuedAt, 'readiness lease issuedAt')
@@ -1256,6 +1365,7 @@ export function createRuntimeSupervisor({
         requestHash: protocolDocumentHash(request),
         readinessLeaseHash,
         previousTrialChainHash: request.previousTrialChainHash,
+        executionMode,
         bindings: request.bindings,
         budget: request.budget,
         outcome: {

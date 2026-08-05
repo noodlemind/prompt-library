@@ -3,6 +3,7 @@ import { TextDecoder } from 'node:util';
 
 import {
   MAX_PROTOCOL_BYTES,
+  RuntimeExecutionModes,
   canonicalJson,
   canonicalSha256,
   protocolDocumentHash,
@@ -66,6 +67,13 @@ function hash(value, label) {
 function integer(value, label, minimum, maximum) {
   if (!Number.isSafeInteger(value) || value < minimum || value > maximum) {
     invalid(`${label} is outside its integer bound`);
+  }
+  return value;
+}
+
+function executionMode(value) {
+  if (!Object.values(RuntimeExecutionModes).includes(value)) {
+    invalid('execution mode must be controlled-provider or zero-provider-canary');
   }
   return value;
 }
@@ -167,7 +175,7 @@ function validateRuntimeBindings(value) {
   return Object.freeze(structuredClone(value));
 }
 
-function validateTrialSpec(value) {
+function validateTrialSpec(value, mode) {
   exactKeys(value, [
     'trialId',
     'taskId',
@@ -184,7 +192,16 @@ function validateTrialSpec(value) {
   if (typeof value.imageDigest !== 'string' || !IMAGE_DIGEST.test(value.imageDigest)) {
     invalid('trial image digest is invalid');
   }
-  integer(value.trialCeilingMicrousd, 'trial budget', 1, 20_000_000);
+  integer(
+    value.trialCeilingMicrousd,
+    'trial budget',
+    mode === RuntimeExecutionModes.ZERO_PROVIDER_CANARY ? 0 : 1,
+    20_000_000
+  );
+  if (mode === RuntimeExecutionModes.ZERO_PROVIDER_CANARY
+      && value.trialCeilingMicrousd !== 0) {
+    invalid('zero-provider-canary trial budget must be zero');
+  }
   hash(value.supervisorExecutableHash, 'supervisor executable hash');
   hash(value.runnerExecutableHash, 'runner executable hash');
   hash(value.harborExecutableHash, 'Harbor executable hash');
@@ -327,11 +344,13 @@ function responseBody(value, operation) {
 export function createRuntimeTrialTransport({
   daytonaTransport,
   sessionId,
+  executionMode: executionModeInput,
   taskInputArchive,
   takeTrialSecrets,
 } = {}) {
   validateDependencies(daytonaTransport, taskInputArchive, takeTrialSecrets);
   safeId(sessionId, 'runtime session id');
+  const mode = executionMode(executionModeInput);
 
   const handles = new WeakSet();
   const records = new WeakMap();
@@ -433,7 +452,7 @@ export function createRuntimeTrialTransport({
 
   async function prepareTrial({ allocation, provisioning, spec: specInput, signal } = {}) {
     assertSignal(signal);
-    const spec = validateTrialSpec(specInput);
+    const spec = validateTrialSpec(specInput, mode);
     const allocationId = validateAllocation(allocation, spec.trialId);
     if (seenTrialIds.has(spec.trialId)) invalid('trial input archive or trial identity was already staged');
     if (activeByTrial.size !== 0) invalid('runtime trial transport permits only one active trial');
@@ -441,6 +460,8 @@ export function createRuntimeTrialTransport({
 
     let archive;
     let secrets;
+    let hmacKey;
+    let providerKey;
     let opened;
     let record;
     try {
@@ -470,20 +491,28 @@ export function createRuntimeTrialTransport({
         trialId: spec.trialId,
         allocationId,
       });
-      exactKeys(secrets, ['hmacKey', 'providerKey'], 'trial secrets');
-      const hmacKey = asOwnedBytes(secrets.hmacKey, 'runtime HMAC key', 32, 32);
-      const providerKey = asOwnedBytes(secrets.providerKey, 'provider key', 8, 512);
+      const controlledProvider = mode === RuntimeExecutionModes.CONTROLLED_PROVIDER;
+      exactKeys(
+        secrets,
+        controlledProvider ? ['hmacKey', 'providerKey'] : ['hmacKey'],
+        'trial secrets'
+      );
+      hmacKey = asOwnedBytes(secrets.hmacKey, 'runtime HMAC key', 32, 32);
+      providerKey = controlledProvider
+        ? asOwnedBytes(secrets.providerKey, 'provider key', 8, 512)
+        : undefined;
       try {
         opened = await daytonaTransport.openSupervisorControl({
           sandboxId: allocationId,
           hmacKey,
-          providerKey,
+          executionMode: mode,
+          ...(controlledProvider ? { providerKey } : {}),
         });
       } finally {
         hmacKey.fill(0);
-        providerKey.fill(0);
+        providerKey?.fill(0);
         secrets.hmacKey.fill(0);
-        secrets.providerKey.fill(0);
+        secrets.providerKey?.fill(0);
       }
       if (!isPlainObject(opened) || !opened.control
           || typeof opened.control.sendFrame !== 'function'
@@ -495,6 +524,7 @@ export function createRuntimeTrialTransport({
         sessionId,
         trialId: spec.trialId,
         allocationId,
+        executionMode: mode,
         spec,
         manifest,
         control: opened.control,
@@ -509,6 +539,7 @@ export function createRuntimeTrialTransport({
         sessionId,
         trialId: spec.trialId,
         allocationId,
+        executionMode: mode,
       });
       handles.add(channel);
       records.set(channel, record);
@@ -525,6 +556,8 @@ export function createRuntimeTrialTransport({
       return Object.freeze({ channel, runtimeBindings: bound.runtimeBindings });
     } catch (error) {
       archive?.fill(0);
+      hmacKey?.fill(0);
+      providerKey?.fill(0);
       if (isPlainObject(secrets)) {
         if (Buffer.isBuffer(secrets.hmacKey) || secrets.hmacKey instanceof Uint8Array) secrets.hmacKey.fill(0);
         if (Buffer.isBuffer(secrets.providerKey) || secrets.providerKey instanceof Uint8Array) secrets.providerKey.fill(0);
@@ -545,6 +578,7 @@ export function createRuntimeTrialTransport({
     if (!isPlainObject(request)
         || request.sessionId !== sessionId
         || request.trialId !== record.trialId
+        || request.executionMode !== record.executionMode
         || request.bindings?.sandboxId !== record.allocationId) {
       invalid('signed trial request identity drifted');
     }
@@ -556,6 +590,7 @@ export function createRuntimeTrialTransport({
           || body.readinessLease.schema !== 'engineer-runtime-readiness-lease.v1'
           || body.readinessLease.sessionId !== sessionId
           || body.readinessLease.trialId !== record.trialId
+          || body.readinessLease.executionMode !== record.executionMode
           || body.readinessLease.requestHash !== requestHash) {
         invalid('readiness lease identity or request digest drifted');
       }
@@ -583,7 +618,8 @@ export function createRuntimeTrialTransport({
     if (!isPlainObject(authorization)
         || authorization.sessionId !== sessionId
         || authorization.trialId !== record.trialId
-        || authorization.providerAuthorized !== true
+        || authorization.providerAuthorized
+          !== (record.executionMode === RuntimeExecutionModes.CONTROLLED_PROVIDER)
         || authorization.readinessLeaseHash !== record.readinessLeaseHash
         || protocolDocumentHash(authorization.readinessLease) !== record.readinessLeaseHash
         || protocolDocumentHash(handle.request) !== record.requestHash) {
@@ -650,6 +686,7 @@ export function createRuntimeTrialTransport({
           || body.trialFinalAttestation.schema !== 'engineer-runtime-trial-final-attestation.v1'
           || body.trialFinalAttestation.sessionId !== sessionId
           || body.trialFinalAttestation.trialId !== record.trialId
+          || body.trialFinalAttestation.executionMode !== record.executionMode
           || body.trialFinalAttestation.requestHash !== requestHash
           || body.trialFinalAttestation.readinessLeaseHash !== leaseHash) {
         invalid('final attestation response binding drifted');

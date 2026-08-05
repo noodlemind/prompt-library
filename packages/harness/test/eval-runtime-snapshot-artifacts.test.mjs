@@ -56,7 +56,8 @@ function materializedClosures(workspace) {
   const executables = {};
   for (const [name, absolute] of Object.entries(DAYTONA_EXECUTABLE_PATHS)) {
     const context = name === 'node' ? 'node' : name === 'harbor' ? 'harbor'
-      : ['cgroupExec', 'taskIsolationProbe'].includes(name) ? 'native' : 'runtime';
+      : ['cgroupExec', 'taskIsolationProbe', 'readinessDenialProbe'].includes(name)
+        ? 'native' : 'runtime';
     const sourcePath = absolute.slice(1);
     const file = path.join(roots[context], ...sourcePath.split('/'));
     const bytes = Buffer.from(`protected executable ${name}\n`);
@@ -102,6 +103,14 @@ function materializedClosures(workspace) {
         binarySha256: executables.taskIsolationProbe.sha256,
         platform: 'linux/amd64',
         artifactPath: '/opt/engineer/bin/engineer-task-isolation-probe',
+      },
+      readinessDenialProbe: {
+        sourceSha256: HASH('a'),
+        compilerImage: `gcc:14.2.0-bookworm@sha256:${HASH('8')}`,
+        compilerImageDigest: `sha256:${HASH('8')}`,
+        binarySha256: executables.readinessDenialProbe.sha256,
+        platform: 'linux/amd64',
+        artifactPath: '/opt/engineer/bin/engineer-readiness-denial-probe',
       },
     },
   };

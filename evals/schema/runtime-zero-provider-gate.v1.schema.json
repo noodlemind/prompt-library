@@ -1,0 +1,147 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "engineer-zero-provider-daytona-gate.v1",
+  "title": "Validation-only two-sandbox Daytona zero-provider gate evidence",
+  "type": "object",
+  "additionalProperties": false,
+  "maxProperties": 11,
+  "required": [
+    "schema", "executionMode", "evidenceClass", "releaseEligible", "bindings",
+    "timing", "trials", "provider", "cleanup", "sessionFinalAttestationHash",
+    "reportHash"
+  ],
+  "properties": {
+    "schema": { "const": "engineer-zero-provider-daytona-gate.v1" },
+    "executionMode": { "const": "zero-provider-canary" },
+    "evidenceClass": { "const": "infrastructure-validation" },
+    "releaseEligible": { "const": false },
+    "bindings": { "$ref": "#/$defs/bindings" },
+    "timing": { "$ref": "#/$defs/timing" },
+    "trials": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 2,
+      "prefixItems": [
+        { "$ref": "#/$defs/genericTrial" },
+        { "$ref": "#/$defs/harnessTrial" }
+      ],
+      "items": false
+    },
+    "provider": { "$ref": "#/$defs/provider" },
+    "cleanup": { "$ref": "#/$defs/cleanup" },
+    "sessionFinalAttestationHash": { "$ref": "#/$defs/hash" },
+    "reportHash": { "$ref": "#/$defs/hash" }
+  },
+  "$defs": {
+    "hash": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 192,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "instant": {
+      "type": "string",
+      "minLength": 24,
+      "maxLength": 24,
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+    },
+    "bindings": {
+      "type": "object",
+      "additionalProperties": false,
+      "maxProperties": 7,
+      "required": [
+        "releaseSha", "snapshotBuildHash", "taskLockHash", "bundleHash",
+        "gateDefinitionHash", "profileId", "taskId"
+      ],
+      "properties": {
+        "releaseSha": { "type": "string", "pattern": "^(?:[a-f0-9]{40}|[a-f0-9]{64})$" },
+        "snapshotBuildHash": { "$ref": "#/$defs/hash" },
+        "taskLockHash": { "$ref": "#/$defs/hash" },
+        "bundleHash": { "$ref": "#/$defs/hash" },
+        "gateDefinitionHash": { "$ref": "#/$defs/hash" },
+        "profileId": { "$ref": "#/$defs/id" },
+        "taskId": { "$ref": "#/$defs/id" }
+      }
+    },
+    "timing": {
+      "type": "object",
+      "additionalProperties": false,
+      "maxProperties": 2,
+      "required": ["startedAt", "completedAt"],
+      "properties": {
+        "startedAt": { "$ref": "#/$defs/instant" },
+        "completedAt": { "$ref": "#/$defs/instant" }
+      }
+    },
+    "trial": {
+      "type": "object",
+      "additionalProperties": false,
+      "maxProperties": 16,
+      "required": [
+        "condition", "trialId", "sandboxId", "sandboxBootId", "readinessLeaseHash",
+        "outputArchiveHash", "trialAttestationHash", "deletionReceiptHash",
+        "harborCompleted", "finalEvidenceComplete", "deleted", "absentAfterDelete",
+        "providerAttempts", "providerCalls", "providerSpendMicrousd", "verifierReward"
+      ],
+      "properties": {
+        "condition": { "enum": ["generic", "harness"] },
+        "trialId": { "$ref": "#/$defs/id" },
+        "sandboxId": { "$ref": "#/$defs/id" },
+        "sandboxBootId": { "$ref": "#/$defs/id" },
+        "readinessLeaseHash": { "$ref": "#/$defs/hash" },
+        "outputArchiveHash": { "$ref": "#/$defs/hash" },
+        "trialAttestationHash": { "$ref": "#/$defs/hash" },
+        "deletionReceiptHash": { "$ref": "#/$defs/hash" },
+        "harborCompleted": { "const": true },
+        "finalEvidenceComplete": { "const": true },
+        "deleted": { "const": true },
+        "absentAfterDelete": { "const": true },
+        "providerAttempts": { "const": 0 },
+        "providerCalls": { "const": 0 },
+        "providerSpendMicrousd": { "const": 0 },
+        "verifierReward": {
+          "anyOf": [
+            { "type": "null" },
+            { "type": "number", "minimum": 0, "maximum": 1 }
+          ]
+        }
+      }
+    },
+    "genericTrial": {
+      "allOf": [
+        { "$ref": "#/$defs/trial" },
+        { "properties": { "condition": { "const": "generic" } } }
+      ]
+    },
+    "harnessTrial": {
+      "allOf": [
+        { "$ref": "#/$defs/trial" },
+        { "properties": { "condition": { "const": "harness" } } }
+      ]
+    },
+    "provider": {
+      "type": "object",
+      "additionalProperties": false,
+      "maxProperties": 5,
+      "required": ["mode", "credentialPresent", "attempts", "calls", "spendMicrousd"],
+      "properties": {
+        "mode": { "const": "not-exercised" },
+        "credentialPresent": { "const": false },
+        "attempts": { "const": 0 },
+        "calls": { "const": 0 },
+        "spendMicrousd": { "const": 0 }
+      }
+    },
+    "cleanup": {
+      "type": "object",
+      "additionalProperties": false,
+      "maxProperties": 2,
+      "required": ["allSandboxesDeleted", "allSandboxesAbsent"],
+      "properties": {
+        "allSandboxesDeleted": { "const": true },
+        "allSandboxesAbsent": { "const": true }
+      }
+    }
+  }
+}

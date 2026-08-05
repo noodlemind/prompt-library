@@ -64,6 +64,7 @@ function trialRequest(overrides = {}) {
     issuedAt: NOW.toISOString(),
     expiresAt: HOUR_LATER,
     previousTrialChainHash: GENESIS_CHAIN_HASH,
+    executionMode: 'controlled-provider',
     bindings: { ...bindings },
     budget: { ...budget },
     ...overrides,
@@ -83,6 +84,7 @@ function readiness(request, overrides = {}) {
     requestHash: sha256Hex(canonicalJson(request)),
     requestNonce: request.nonce,
     previousTrialChainHash: request.previousTrialChainHash,
+    executionMode: request.executionMode,
     bindings: { ...request.bindings },
     budget: { ...request.budget },
     readiness: {
@@ -114,6 +116,7 @@ function finalAttestation(request, lease, overrides = {}) {
     requestHash: sha256Hex(canonicalJson(request)),
     readinessLeaseHash: sha256Hex(canonicalJson(lease)),
     previousTrialChainHash: request.previousTrialChainHash,
+    executionMode: request.executionMode,
     bindings: { ...request.bindings },
     budget: { ...request.budget },
     outcome: {
@@ -187,6 +190,20 @@ test('all four additive schemas are strict, versioned, and share the runtime ide
     assert.equal(schema.properties.protocolVersion.const, 1);
     assert.ok(schema.maxProperties > 0);
     assert.equal(schema.$defs.id.maxLength, 128);
+    assert.ok(Array.isArray(schema.allOf) && schema.allOf.length > 0);
+    if (file === 'runtime-session-final-attestation.v1.schema.json') {
+      assert.ok(schema.$defs.sessionBindings.required.includes('executionMode'));
+      assert.deepEqual(
+        schema.$defs.sessionBindings.properties.executionMode.enum,
+        ['controlled-provider', 'zero-provider-canary'],
+      );
+    } else {
+      assert.ok(schema.required.includes('executionMode'));
+      assert.deepEqual(
+        schema.properties.executionMode.enum,
+        ['controlled-provider', 'zero-provider-canary'],
+      );
+    }
   }
 
   const maximumId = 'a'.repeat(128);
@@ -280,6 +297,83 @@ test('readiness and final evidence must match the exact request, lease, binding,
   );
 });
 
+test('execution mode is required, exact, mode-bound, and enforces provider economics', () => {
+  const controlled = trialRequest();
+  assert.throws(
+    () => validateProtocolDocument(
+      Object.fromEntries(Object.entries(controlled).filter(([field]) => field !== 'executionMode')),
+      { requireAuthentication: false },
+    ),
+    /executionMode|required/i,
+  );
+  assert.throws(
+    () => validateProtocolDocument({ ...controlled, executionMode: 'openrouter' }, { requireAuthentication: false }),
+    /executionMode|controlled-provider|zero-provider-canary/i,
+  );
+  assert.throws(
+    () => validateProtocolDocument({
+      ...controlled,
+      budget: {
+        currency: 'USD',
+        trialCeilingMicrousd: 0,
+        sessionCeilingMicrousd: 0,
+        sessionCommittedMicrousd: 0,
+      },
+    }, { requireAuthentication: false }),
+    /controlled-provider|positive|budget/i,
+  );
+
+  const zeroRequest = trialRequest({
+    executionMode: 'zero-provider-canary',
+    budget: {
+      currency: 'USD',
+      trialCeilingMicrousd: 0,
+      sessionCeilingMicrousd: 0,
+      sessionCommittedMicrousd: 0,
+    },
+  });
+  const zeroLease = readiness(zeroRequest);
+  const zeroFinal = finalAttestation(zeroRequest, zeroLease, {
+    outcome: {
+      status: 'succeeded',
+      exitReason: 'zero-provider-canary-verified',
+      providerSpendMicrousd: 0,
+      providerUsageHash: HASH('c'),
+    },
+  });
+  assert.doesNotThrow(() => verifyReadinessLeaseForRequest(zeroLease, zeroRequest));
+  assert.doesNotThrow(() => verifyTrialAttestationForLease(zeroFinal, zeroLease, zeroRequest));
+  assert.throws(
+    () => validateProtocolDocument({
+      ...zeroRequest,
+      budget: { ...zeroRequest.budget, trialCeilingMicrousd: 1 },
+    }, { requireAuthentication: false }),
+    /zero-provider-canary|zero|budget/i,
+  );
+  assert.throws(
+    () => validateProtocolDocument({
+      ...zeroFinal,
+      outcome: { ...zeroFinal.outcome, providerSpendMicrousd: 1 },
+    }, { requireAuthentication: false }),
+    /zero-provider-canary|zero|provider spend|budget/i,
+  );
+  assert.throws(
+    () => verifyReadinessLeaseForRequest(
+      { ...zeroLease, executionMode: 'controlled-provider' },
+      zeroRequest,
+    ),
+    /execution mode|binding|budget/i,
+  );
+  assert.throws(
+    () => verifyTrialAttestationForLease(
+      { ...zeroFinal, executionMode: 'controlled-provider' },
+      zeroLease,
+      zeroRequest,
+    ),
+    /execution mode|binding|budget/i,
+  );
+});
+
 test('replay guard requires an exact monotonic sequence and globally unique 32-byte nonces', () => {
   const guard = new ProtocolReplayGuard({ initialSequence: 0 });
   const request = trialRequest();
@@ -322,6 +416,7 @@ test('ordered hash chain binds final attestations and whole-sandbox deletion rec
       profileId: request.bindings.profileId,
       taskLockHash: request.bindings.taskLockHash,
       bundleHash: request.bindings.bundleHash,
+      executionMode: request.executionMode,
       budgetId: request.bindings.budgetId,
       budgetPolicyHash: request.bindings.budgetPolicyHash,
       brokerPolicyHash: request.bindings.brokerPolicyHash,

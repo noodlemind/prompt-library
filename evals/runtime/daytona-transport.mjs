@@ -14,7 +14,10 @@ const ARCHIVE_REQUEST_SCHEMA = 'engineer-daytona-archive-request.v1';
 const ARCHIVE_RESULT_SCHEMA = 'engineer-daytona-archive-result.v1';
 const SECRET_RESULT_SCHEMA = 'engineer-supervisor-secret-accepted.v1';
 const COMMAND_RECEIPT_SCHEMA = 'engineer-daytona-command-receipt.v1';
-const SECRET_FRAME_MAGIC = 'EHS1';
+const CONTROLLED_SECRET_FRAME_MAGIC = 'EHS1';
+const ZERO_PROVIDER_SECRET_FRAME_MAGIC = 'EHZ1';
+const CONTROLLED_PROVIDER = 'controlled-provider';
+const ZERO_PROVIDER_CANARY = 'zero-provider-canary';
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
 const SAFE_ARG = /^[A-Za-z0-9_./:@=,+%-]+$/;
 const SHA256_HEX = /^[a-f0-9]{64}$/;
@@ -79,6 +82,16 @@ function exactKeys(value, keys, label) {
 function boundedInteger(value, label, minimum, maximum) {
   if (!Number.isSafeInteger(value) || value < minimum || value > maximum) {
     throw new TypeError(`${label} must be an integer between ${minimum} and ${maximum}`);
+  }
+  return value;
+}
+
+function validateExecutionMode(value) {
+  if (value !== CONTROLLED_PROVIDER && value !== ZERO_PROVIDER_CANARY) {
+    fail(
+      'execution mode must be controlled-provider or zero-provider-canary',
+      'ERR_TRANSPORT_CONTROL'
+    );
   }
   return value;
 }
@@ -456,10 +469,15 @@ function validateArchiveReceipt(value, expected) {
   });
 }
 
-function validateSecretReceipt(value, expectedHash, expectedBytes) {
-  exactKeys(value, ['schema', 'status', 'frameSha256', 'byteLength'], 'supervisor secret response');
+function validateSecretReceipt(value, expectedMode, expectedHash, expectedBytes) {
+  exactKeys(
+    value,
+    ['schema', 'status', 'executionMode', 'frameSha256', 'byteLength'],
+    'supervisor secret response'
+  );
   if (value.schema !== SECRET_RESULT_SCHEMA
     || value.status !== 'accepted'
+    || value.executionMode !== expectedMode
     || value.byteLength !== expectedBytes
     || !timingSafeHexEqual(value.frameSha256, expectedHash)) {
     fail('supervisor secret response does not match the transmitted frame', 'ERR_TRANSPORT_CONTROL');
@@ -467,6 +485,7 @@ function validateSecretReceipt(value, expectedHash, expectedBytes) {
   return Object.freeze({
     schema: value.schema,
     status: value.status,
+    executionMode: value.executionMode,
     frameSha256: value.frameSha256,
     byteLength: value.byteLength,
   });
@@ -683,28 +702,48 @@ export function createDaytonaTransport({
     }
   }
 
-  async function openSupervisorControl({ sandboxId, hmacKey, providerKey } = {}) {
+  async function openSupervisorControl(input = {}) {
     assertActive();
+    if (!isPlainObject(input)) {
+      fail('supervisor control input must be an object', 'ERR_TRANSPORT_CONTROL');
+    }
+    const mode = validateExecutionMode(input.executionMode);
+    const controlledProvider = mode === CONTROLLED_PROVIDER;
+    exactKeys(
+      input,
+      controlledProvider
+        ? ['sandboxId', 'hmacKey', 'executionMode', 'providerKey']
+        : ['sandboxId', 'hmacKey', 'executionMode'],
+      'supervisor control input'
+    );
+    const { sandboxId, hmacKey, providerKey } = input;
     const hmac = secretBytes(hmacKey, 'hmacKey', 32, 32);
     let provider;
-    try {
-      provider = secretBytes(providerKey, 'providerKey', 8, 512);
-    } catch (error) {
-      hmac.fill(0);
-      throw error;
+    if (controlledProvider) {
+      try {
+        provider = secretBytes(providerKey, 'providerKey', 8, 512);
+      } catch (error) {
+        hmac.fill(0);
+        throw error;
+      }
     }
-    const payloadLength = 8 + hmac.length + provider.length;
+    const providerLength = provider?.length ?? 0;
+    const payloadLength = 8 + hmac.length + providerLength;
     if (payloadLength > MAX_SECRET_FRAME_BYTES) {
       hmac.fill(0);
-      provider.fill(0);
+      provider?.fill(0);
       fail('supervisor secret frame exceeds its byte bound', 'ERR_TRANSPORT_OVERSIZED');
     }
     const payload = Buffer.alloc(payloadLength);
-    payload.write(SECRET_FRAME_MAGIC, 0, 'ascii');
+    payload.write(
+      controlledProvider ? CONTROLLED_SECRET_FRAME_MAGIC : ZERO_PROVIDER_SECRET_FRAME_MAGIC,
+      0,
+      'ascii'
+    );
     payload.writeUInt16BE(hmac.length, 4);
-    payload.writeUInt16BE(provider.length, 6);
+    payload.writeUInt16BE(providerLength, 6);
     hmac.copy(payload, 8);
-    provider.copy(payload, 8 + hmac.length);
+    provider?.copy(payload, 8 + hmac.length);
     const payloadHash = sha256(payload);
     let channel;
     try {
@@ -712,14 +751,14 @@ export function createDaytonaTransport({
         sandboxId,
         bootstrap: SUPERVISOR_BOOTSTRAP,
         ready: SUPERVISOR_READY,
-        secrets: [hmac, provider],
+        secrets: controlledProvider ? [hmac, provider] : [hmac],
       });
       await channel.writeFrame(payload, { allowSecret: true });
       payload.fill(0);
       hmac.fill(0);
-      provider.fill(0);
+      provider?.fill(0);
       const response = parseJsonFrame(await channel.readFrame(MAX_JSON_FRAME_BYTES), 'supervisor secret response');
-      const receipt = validateSecretReceipt(response, payloadHash, payloadLength);
+      const receipt = validateSecretReceipt(response, mode, payloadHash, payloadLength);
       await channel.assertNoExtraOutput({ requireOpen: true });
 
       let controlClosed = false;
@@ -750,7 +789,7 @@ export function createDaytonaTransport({
     } finally {
       payload.fill(0);
       hmac.fill(0);
-      provider.fill(0);
+      provider?.fill(0);
     }
   }
 

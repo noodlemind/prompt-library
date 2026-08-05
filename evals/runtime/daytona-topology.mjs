@@ -50,6 +50,7 @@ export const DAYTONA_EXECUTABLE_PATHS = Object.freeze({
   evidenceCollector: '/opt/engineer/bin/engineer-runtime-evidence',
   cgroupExec: '/opt/engineer/bin/engineer-cgroup-exec',
   taskIsolationProbe: '/opt/engineer/bin/engineer-task-isolation-probe',
+  readinessDenialProbe: '/opt/engineer/bin/engineer-readiness-denial-probe',
   imageProvisioner: '/opt/engineer/bin/engineer-task-image-provision',
   snapshotSelfTest: '/opt/engineer/bin/engineer-snapshot-selftest',
   dockerd: '/usr/local/bin/dockerd',

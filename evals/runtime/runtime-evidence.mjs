@@ -67,6 +67,8 @@ const HASH = /^[a-f0-9]{64}$/;
 const IMAGE_DIGEST = /^sha256:[a-f0-9]{64}$/;
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,191}$/;
 const SAFE_SIGNAL = /^(?:none|SIG[A-Z0-9]{1,24})$/;
+const CONTROLLED_PROVIDER = 'controlled-provider';
+const ZERO_PROVIDER_CANARY = 'zero-provider-canary';
 const CREDENTIAL_NAME = /(?:^DAYTONA(?:_|$)|OPENROUTER|OPENAI|ANTHROPIC|GEMINI|GOOGLE_AI|GROQ|XAI|MISTRAL|COHERE|TOGETHER|FIREWORKS|DEEPSEEK|CEREBRAS|PERPLEXITY|API_KEY|AUTHORIZATION|CREDENTIAL|PASSWORD|SECRET|TOKEN)/i;
 const CREDENTIAL_VALUE = /(?:Bearer\s+|sk-(?:or|ant|proj)-|github_pat_|ghp_|xox[baprs]-|hf_[A-Za-z0-9])/i;
 const SAFE_ENVIRONMENT = Object.freeze({
@@ -105,6 +107,8 @@ const REQUIRED_PRIMITIVES = Object.freeze([
   'now',
 ]);
 const HANDOFF_INPUT_FIELDS = Object.freeze([
+  'executionMode',
+  'trialId',
   'requestHash',
   'leaseHash',
   'observedAt',
@@ -203,6 +207,13 @@ function digest(value, label) {
 function safeId(value, label) {
   boundedString(value, label, 192);
   if (!SAFE_ID.test(value)) fail(`${label} is not a safe identifier`);
+  return value;
+}
+
+function executionMode(value) {
+  if (![CONTROLLED_PROVIDER, ZERO_PROVIDER_CANARY].includes(value)) {
+    fail('runtime execution mode is invalid');
+  }
   return value;
 }
 
@@ -659,7 +670,7 @@ export function validateRuntimeNetworkPolicyReceipt(input) {
   return deepFreeze(value);
 }
 
-function validateBroker(value, leaseHash) {
+function validateBroker(value, leaseHash, trialId) {
   exactKeys(value, [
     'leaseId', 'leaseDigest', 'leaseSequence', 'trialId', 'policyHash', 'bindingPolicyHash',
   ], 'handoff broker observation');
@@ -669,12 +680,16 @@ function validateBroker(value, leaseHash) {
   safeId(value.trialId, 'handoff broker trial id');
   digest(value.policyHash, 'handoff broker policy hash');
   digest(value.bindingPolicyHash, 'handoff broker binding policy hash');
-  if (value.leaseDigest !== leaseHash) fail('handoff broker lease identity drifted');
+  if (value.leaseDigest !== leaseHash || value.trialId !== trialId) {
+    fail('handoff broker lease identity drifted');
+  }
 }
 
 function unsignedHandoff(input) {
   exactKeys(input, HANDOFF_INPUT_FIELDS, 'runtime evidence handoff input');
   const value = boundedClone(input, 'runtime evidence handoff input', MAX_HANDOFF_BYTES);
+  executionMode(value.executionMode);
+  safeId(value.trialId, 'handoff trial id');
   digest(value.requestHash, 'handoff request hash');
   digest(value.leaseHash, 'handoff lease hash');
   if (value.requestHash === value.leaseHash) fail('handoff request and lease hashes must be distinct');
@@ -686,9 +701,13 @@ function unsignedHandoff(input) {
   validateTopology(value.topology);
   validateProxy(value.proxy, value.topology);
   const networkPolicy = validateRuntimeNetworkPolicyReceipt(value.networkPolicy);
-  validateBroker(value.broker, value.leaseHash);
+  if (value.executionMode === CONTROLLED_PROVIDER) {
+    validateBroker(value.broker, value.leaseHash, value.trialId);
+  } else if (value.broker !== null) {
+    fail('zero-provider handoff must prove no broker binding');
+  }
   if (networkPolicy.requestHash !== value.requestHash
-      || networkPolicy.trialId !== value.broker.trialId) {
+      || networkPolicy.trialId !== value.trialId) {
     fail('handoff network policy lifecycle binding drifted');
   }
   return value;
@@ -839,7 +858,7 @@ async function observeNow(primitives) {
   }
 }
 
-function validateDaemonCustody(value) {
+function validateDaemonCustody(value, mode) {
   exactKeys(value, ['daemon', 'proxy', 'broker', 'brokerPolicy'], 'daemon custody evidence');
   const expected = {
     daemon: { kind: 'socket', ownerUid: 0, groupGid: 0, mode: 0o600 },
@@ -848,6 +867,11 @@ function validateDaemonCustody(value) {
     brokerPolicy: { kind: 'file', ownerUid: BROKER_UID, groupGid: BROKER_GID, mode: 0o600 },
   };
   for (const [name, policy] of Object.entries(expected)) {
+    if (mode === ZERO_PROVIDER_CANARY && ['broker', 'brokerPolicy'].includes(name)) {
+      exactKeys(value[name], ['exists'], `${name} absence`);
+      boolean(value[name].exists, `${name} absence`, false);
+      continue;
+    }
     exactKeys(value[name], ['kind', 'real', 'ownerUid', 'groupGid', 'mode'], `${name} custody`);
     if (value[name].kind !== policy.kind
         || value[name].ownerUid !== policy.ownerUid
@@ -947,6 +971,47 @@ function validateNetwork(value) {
 }
 
 function validateProvider(value, handoff, options) {
+  if (handoff.executionMode === ZERO_PROVIDER_CANARY) {
+    exactKeys(value, [
+      'mode', 'requestHash', 'leaseHash', 'usageHash', 'identityHash', 'spendMicrousd',
+      'billingCertain', 'budgetComplete', 'withinTrialCeiling', 'attempts', 'calls',
+      'brokerAbsent',
+    ], 'zero-provider evidence');
+    if (value.mode !== 'not-exercised'
+        || value.requestHash !== options.requestHash
+        || value.requestHash !== handoff.requestHash
+        || value.leaseHash !== options.leaseHash
+        || value.leaseHash !== handoff.leaseHash
+        || handoff.broker !== null) {
+      fail('zero-provider evidence binding drifted');
+    }
+    const expectedUsageHash = sha256(canonicalJson({
+      schema: 'engineer-runtime-zero-provider-usage.v1',
+      executionMode: ZERO_PROVIDER_CANARY,
+      attempts: 0,
+      calls: 0,
+      spendMicrousd: 0,
+    }));
+    const expectedIdentityHash = sha256(canonicalJson({
+      schema: 'engineer-runtime-zero-provider-identity.v1',
+      executionMode: ZERO_PROVIDER_CANARY,
+      requestHash: value.requestHash,
+      leaseHash: value.leaseHash,
+      brokerAbsent: true,
+    }));
+    if (value.usageHash !== expectedUsageHash || value.identityHash !== expectedIdentityHash) {
+      fail('zero-provider evidence identity drifted');
+    }
+    integer(value.spendMicrousd, 'zero-provider spend', 0, 0);
+    integer(value.attempts, 'zero-provider attempt count', 0, 0);
+    integer(value.calls, 'zero-provider call count', 0, 0);
+    boolean(value.brokerAbsent, 'zero-provider broker absence', true);
+    for (const field of ['billingCertain', 'budgetComplete', 'withinTrialCeiling']) {
+      boolean(value[field], `zero-provider ${field}`, true);
+    }
+    return;
+  }
+
   exactKeys(value, [
     'requestHash', 'leaseHash', 'usageHash', 'identityHash', 'spendMicrousd',
     'billingCertain', 'budgetComplete', 'withinTrialCeiling', 'attempts',
@@ -1037,7 +1102,7 @@ export async function collectRuntimeEvidence({
     observeNow(source),
   ]);
 
-  validateDaemonCustody(daemonCustody);
+  validateDaemonCustody(daemonCustody, handoff.executionMode);
   validateHarbor(harbor, handoff);
   validateDocker(docker, handoff);
   validateMounts(mounts, handoff);
@@ -1062,15 +1127,17 @@ export async function collectRuntimeEvidence({
     cgroup,
     resources,
     network,
-    provider: {
-      usageHash: provider.usageHash,
-      identityHash: provider.identityHash,
-      spendMicrousd: provider.spendMicrousd,
-      billingCertain: provider.billingCertain,
-      budgetComplete: provider.budgetComplete,
-      withinTrialCeiling: provider.withinTrialCeiling,
-      attempts: provider.attempts,
-    },
+    provider: handoff.executionMode === ZERO_PROVIDER_CANARY
+      ? { ...provider }
+      : {
+        usageHash: provider.usageHash,
+        identityHash: provider.identityHash,
+        spendMicrousd: provider.spendMicrousd,
+        billingCertain: provider.billingCertain,
+        budgetComplete: provider.budgetComplete,
+        withinTrialCeiling: provider.withinTrialCeiling,
+        attempts: provider.attempts,
+      },
     cleanup,
   };
   const encoded = canonicalJson(result);
@@ -2068,6 +2135,29 @@ export function createNodeRuntimeEvidencePrimitives({ system: overrides = {} } =
         name,
         await system.inspectPath({ path: target, maxBytes: spec.maxOutputBytes, shell: false }),
       ])));
+      if (spec.handoff.executionMode === ZERO_PROVIDER_CANARY) {
+        if (entries.broker?.exists !== false || entries.brokerPolicy?.exists !== false) {
+          fail('zero-provider daemon custody did not prove broker absence');
+        }
+        return {
+          daemon: {
+            kind: entries.daemon.kind,
+            real: entries.daemon.real,
+            ownerUid: entries.daemon.ownerUid,
+            groupGid: entries.daemon.groupGid,
+            mode: entries.daemon.mode,
+          },
+          proxy: {
+            kind: entries.proxy.kind,
+            real: entries.proxy.real,
+            ownerUid: entries.proxy.ownerUid,
+            groupGid: entries.proxy.groupGid,
+            mode: entries.proxy.mode,
+          },
+          broker: { exists: false },
+          brokerPolicy: { exists: false },
+        };
+      }
       const policy = await system.attestBrokerPolicy({
         path: spec.brokerPolicy,
         maxBytes: MAX_POLICY_BYTES,
@@ -2222,6 +2312,17 @@ export function createNodeRuntimeEvidencePrimitives({ system: overrides = {} } =
         maxBytes: MAX_KERNEL_FILE_BYTES,
         shell: false,
       });
+      const brokerObservation = spec.handoff.executionMode === CONTROLLED_PROVIDER
+        ? system.observeSocketProcess({
+          socketPath: spec.brokerSocket,
+          maxPids: MAX_PROC_SCAN,
+          maxBytes: spec.maxOutputBytes,
+          shell: false,
+        })
+        : Promise.all([
+          system.inspectPath({ path: spec.brokerSocket, maxBytes: spec.maxOutputBytes, shell: false }),
+          system.inspectPath({ path: spec.brokerPolicy, maxBytes: spec.maxOutputBytes, shell: false }),
+        ]).then(([socket, policyPath]) => ({ socket, policyPath }));
       const [observed, broker, iptablesHash, ip6tablesHash, supervisorHash, bootId] = await Promise.all([
         system.observeNetworkPolicy({
           files: [FIXED_IPTABLES, FIXED_IP6TABLES],
@@ -2230,12 +2331,7 @@ export function createNodeRuntimeEvidencePrimitives({ system: overrides = {} } =
           maxBytes: spec.maxOutputBytes,
           shell: false,
         }),
-        system.observeSocketProcess({
-          socketPath: spec.brokerSocket,
-          maxPids: MAX_PROC_SCAN,
-          maxBytes: spec.maxOutputBytes,
-          shell: false,
-        }),
+        brokerObservation,
         system.hashExecutable({ file: FIXED_IPTABLES, maxBytes: MAX_EXECUTABLE_BYTES, shell: false }),
         system.hashExecutable({ file: FIXED_IP6TABLES, maxBytes: MAX_EXECUTABLE_BYTES, shell: false }),
         system.hashExecutable({ file: FIXED_SUPERVISOR, maxBytes: MAX_EXECUTABLE_BYTES, shell: false }),
@@ -2253,20 +2349,25 @@ export function createNodeRuntimeEvidencePrimitives({ system: overrides = {} } =
         'producerExecutableHash', 'producerSessionId',
       ]) digest(taskReceipt[field], `task isolation ${field}`);
       safeId(taskReceipt.trialId, 'task isolation trial id');
+      const brokerCompliant = spec.handoff.executionMode === CONTROLLED_PROVIDER
+        ? plainObject(broker)
+          && broker.uid === BROKER_UID
+          && broker.gid === BROKER_GID
+          && Array.isArray(broker.supplementaryGids)
+          && broker.supplementaryGids.includes(BROKER_CLIENT_GID)
+          && broker.effectiveCapabilities === 0
+          && broker.noNewPrivileges === true
+          && /^(?:0|[1-9][0-9]*)$/.test(String(broker.startTimeTicks))
+        : plainObject(broker)
+          && broker.socket?.exists === false
+          && broker.policyPath?.exists === false;
       if (!plainObject(observed)
           || !HASH.test(String(observed.evidenceHash))
           || observed.runnerEgressDenied !== true
           || observed.brokerOnlyEgress !== true
           || observed.metadataDenied !== true
           || observed.rawSocketDenied !== true
-          || !plainObject(broker)
-          || broker.uid !== BROKER_UID
-          || broker.gid !== BROKER_GID
-          || !Array.isArray(broker.supplementaryGids)
-          || !broker.supplementaryGids.includes(BROKER_CLIENT_GID)
-          || broker.effectiveCapabilities !== 0
-          || broker.noNewPrivileges !== true
-          || !/^(?:0|[1-9][0-9]*)$/.test(String(broker.startTimeTicks))
+          || !brokerCompliant
           || iptablesHash !== policy.iptablesExecutableHash
           || ip6tablesHash !== policy.ip6tablesExecutableHash
           || supervisorHash !== policy.producerExecutableHash
@@ -2299,6 +2400,43 @@ export function createNodeRuntimeEvidencePrimitives({ system: overrides = {} } =
       };
     },
     async inspectProvider(spec) {
+      if (spec.handoff.executionMode === ZERO_PROVIDER_CANARY) {
+        const [socket, policyPath] = await Promise.all([
+          system.inspectPath({ path: spec.brokerSocket, maxBytes: spec.maxOutputBytes, shell: false }),
+          system.inspectPath({ path: spec.brokerPolicy, maxBytes: spec.maxOutputBytes, shell: false }),
+        ]);
+        if (socket?.exists !== false || policyPath?.exists !== false || spec.handoff.broker !== null) {
+          fail('zero-provider broker custody is not absent');
+        }
+        const usage = {
+          schema: 'engineer-runtime-zero-provider-usage.v1',
+          executionMode: ZERO_PROVIDER_CANARY,
+          attempts: 0,
+          calls: 0,
+          spendMicrousd: 0,
+        };
+        const identity = {
+          schema: 'engineer-runtime-zero-provider-identity.v1',
+          executionMode: ZERO_PROVIDER_CANARY,
+          requestHash: spec.requestHash,
+          leaseHash: spec.leaseHash,
+          brokerAbsent: true,
+        };
+        return {
+          mode: 'not-exercised',
+          requestHash: spec.requestHash,
+          leaseHash: spec.leaseHash,
+          usageHash: sha256(canonicalJson(usage)),
+          identityHash: sha256(canonicalJson(identity)),
+          spendMicrousd: 0,
+          billingCertain: true,
+          budgetComplete: true,
+          withinTrialCeiling: true,
+          attempts: 0,
+          calls: 0,
+          brokerAbsent: true,
+        };
+      }
       const [evidence, protectedPolicy] = await Promise.all([
         system.requestBrokerEvidence({
           socketPath: spec.brokerSocket,

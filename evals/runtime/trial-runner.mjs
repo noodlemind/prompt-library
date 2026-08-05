@@ -23,6 +23,9 @@ const HASH = /^[a-f0-9]{64}$/;
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,191}$/;
 const MAX_ARCHIVE_BYTES = 64 * 1024 * 1024;
 const MAX_COMMAND_OUTPUT_BYTES = 1024 * 1024;
+const CONTROLLED_PROVIDER = 'controlled-provider';
+const ZERO_PROVIDER_CANARY = 'zero-provider-canary';
+const EXECUTION_MODE_ENV = 'ENGINEER_RUNTIME_EXECUTION_MODE';
 const BROKER_BINDINGS = Object.freeze([
   'ENGINEER_PROVIDER_BROKER_SOCKET',
   'ENGINEER_PROVIDER_LEASE_ID',
@@ -36,6 +39,7 @@ const SAFE_SUPPORT_ENV = new Set([
 ]);
 const SECRET_ENV = /(?:OPENROUTER|OPENAI|ANTHROPIC|GEMINI|GOOGLE_AI|API_KEY|AUTHORIZATION|CREDENTIAL|PASSWORD|SECRET|TOKEN)/i;
 const SECRET_VALUE = /(?:Bearer\s+|sk-[A-Za-z0-9_-]{8,})/i;
+const ZERO_PROVIDER_ENV = /(?:PROVIDER|BROKER|OPENROUTER|OPENAI|ANTHROPIC|GEMINI|GOOGLE_AI|API_KEY|AUTHORIZATION|CREDENTIAL|PASSWORD|SECRET|TOKEN)/i;
 
 export class TrialRunnerError extends Error {
   constructor(message, code = 'ERR_TRIAL_RUNNER') {
@@ -154,12 +158,46 @@ function defaultRunCommand(file, args, options) {
   });
 }
 
-function validateBrokerBindings(inheritedEnv, trialId) {
+function validateRuntimeBindings(inheritedEnv, trial) {
   if (!plainObject(inheritedEnv)) fail('inherited runner environment is invalid', 'ERR_TRIAL_RUNNER_BINDING');
+  if (![CONTROLLED_PROVIDER, ZERO_PROVIDER_CANARY].includes(trial.executionMode)) {
+    fail('archived execution mode is invalid', 'ERR_TRIAL_RUNNER_BINDING');
+  }
   for (const [name, value] of Object.entries(inheritedEnv)) {
     if ((SECRET_ENV.test(name) && !name.startsWith('ENGINEER_PROVIDER_')) || SECRET_VALUE.test(String(value ?? ''))) {
       fail('runner environment contains raw provider or secret material', 'ERR_TRIAL_RUNNER_SECRET');
     }
+  }
+  if (trial.executionMode === ZERO_PROVIDER_CANARY) {
+    if (inheritedEnv[EXECUTION_MODE_ENV] !== ZERO_PROVIDER_CANARY) {
+      fail('zero-provider execution mode binding is missing or drifted', 'ERR_TRIAL_RUNNER_BINDING');
+    }
+    for (const name of Object.keys(inheritedEnv)) {
+      if (name !== EXECUTION_MODE_ENV && ZERO_PROVIDER_ENV.test(name)) {
+        fail('zero-provider runner environment contains a provider or broker binding', 'ERR_TRIAL_RUNNER_SECRET');
+      }
+    }
+    for (const name of ['DOCKER_HOST', 'ENGINEER_RUNTIME_LEASE_HASH']) {
+      if (!Object.hasOwn(inheritedEnv, name)
+          || typeof inheritedEnv[name] !== 'string'
+          || inheritedEnv[name].includes('\0')) {
+        fail(`runtime binding is missing or malformed: ${name}`, 'ERR_TRIAL_RUNNER_BINDING');
+      }
+    }
+    if (!HASH.test(inheritedEnv.ENGINEER_RUNTIME_LEASE_HASH)) {
+      fail('runtime lease binding drifted', 'ERR_TRIAL_RUNNER_BINDING');
+    }
+    validateDockerHost(inheritedEnv.DOCKER_HOST);
+    return Object.freeze({
+      executionMode: ZERO_PROVIDER_CANARY,
+      bindings: Object.freeze({
+        DOCKER_HOST: inheritedEnv.DOCKER_HOST,
+        ENGINEER_RUNTIME_LEASE_HASH: inheritedEnv.ENGINEER_RUNTIME_LEASE_HASH,
+      }),
+    });
+  }
+  if (Object.hasOwn(inheritedEnv, EXECUTION_MODE_ENV)) {
+    fail('controlled-provider runner received an unexpected execution mode override', 'ERR_TRIAL_RUNNER_BINDING');
   }
   for (const name of [...BROKER_BINDINGS, 'DOCKER_HOST', 'ENGINEER_RUNTIME_LEASE_HASH']) {
     if (!Object.hasOwn(inheritedEnv, name) || typeof inheritedEnv[name] !== 'string' || inheritedEnv[name].includes('\0')) {
@@ -174,20 +212,26 @@ function validateBrokerBindings(inheritedEnv, trialId) {
   if (!SAFE_ID.test(inheritedEnv.ENGINEER_PROVIDER_LEASE_ID)
       || !HASH.test(inheritedEnv.ENGINEER_PROVIDER_LEASE_DIGEST)
       || !/^[1-9][0-9]{0,8}$/.test(inheritedEnv.ENGINEER_PROVIDER_LEASE_SEQUENCE)
-      || inheritedEnv.ENGINEER_PROVIDER_TRIAL_ID !== trialId
+      || inheritedEnv.ENGINEER_PROVIDER_TRIAL_ID !== trial.trialId
       || !HASH.test(inheritedEnv.ENGINEER_RUNTIME_LEASE_HASH)
       || inheritedEnv.ENGINEER_RUNTIME_LEASE_HASH !== inheritedEnv.ENGINEER_PROVIDER_LEASE_DIGEST) {
     fail('broker lease or trial binding drifted', 'ERR_TRIAL_RUNNER_BINDING');
   }
-  const dockerHost = inheritedEnv.DOCKER_HOST;
+  validateDockerHost(inheritedEnv.DOCKER_HOST);
+  const selected = {};
+  for (const name of SAFE_SUPPORT_ENV) selected[name] = inheritedEnv[name];
+  return Object.freeze({
+    executionMode: CONTROLLED_PROVIDER,
+    bindings: Object.freeze(selected),
+  });
+}
+
+function validateDockerHost(dockerHost) {
   const dockerSocket = dockerHost.startsWith('unix://') ? dockerHost.slice('unix://'.length) : '';
   if (!dockerHost.startsWith('unix:///run/engineer/') || !dockerHost.endsWith('.sock') || dockerHost.includes('\0')
       || !path.posix.isAbsolute(dockerSocket) || path.posix.normalize(dockerSocket) !== dockerSocket) {
     fail('private Docker proxy binding is invalid', 'ERR_TRIAL_RUNNER_BINDING');
   }
-  const selected = {};
-  for (const name of SAFE_SUPPORT_ENV) selected[name] = inheritedEnv[name];
-  return Object.freeze(selected);
 }
 
 function physicalPath(value, boundedRoot) {
@@ -196,7 +240,7 @@ function physicalPath(value, boundedRoot) {
   return value.split(LOGICAL_ROOT).join(workRoot);
 }
 
-function rewriteRuntimeArgs(document, boundedRoot, nodeHash, bindings) {
+function rewriteRuntimeArgs(document, boundedRoot, nodeHash, runtime) {
   if (!Array.isArray(document.harbor.args) || document.harbor.executable !== PINNED_HARBOR_EXECUTABLE
       || document.harbor.cwd !== LOGICAL_ROOT) {
     fail('archived Harbor launch identity drifted', 'ERR_TRIAL_RUNNER_ARGV');
@@ -208,23 +252,29 @@ function rewriteRuntimeArgs(document, boundedRoot, nodeHash, bindings) {
     fail('archived runtime Node digest placeholder drifted', 'ERR_TRIAL_RUNNER_ARGV');
   }
   args[nodeMatches[0]] = `${nodeDigestPrefix}${nodeHash}`;
+  if (runtime.executionMode === ZERO_PROVIDER_CANARY
+      && args.some((argument) => /(?:ENGINEER_PROVIDER_|OPENROUTER|API[_-]?KEY|AUTHORIZATION|CREDENTIAL|PASSWORD|SECRET|TOKEN)/i.test(argument))) {
+    fail('archived zero-provider Harbor argv contains provider material', 'ERR_TRIAL_RUNNER_ARGV');
+  }
   for (const name of BROKER_BINDINGS) {
     if (args.some((argument) => argument.startsWith(`${name}=`))) {
       fail('archived Harbor argv contains a broker binding before readiness', 'ERR_TRIAL_RUNNER_ARGV');
     }
-    args.push('--ae', `${name}=${bindings[name]}`);
+    if (runtime.executionMode === CONTROLLED_PROVIDER) {
+      args.push('--ae', `${name}=${runtime.bindings[name]}`);
+    }
   }
   if (args.some((argument) => argument.startsWith('ENGINEER_RUNTIME_LEASE_HASH='))) {
     fail('archived Harbor argv contains a runtime lease binding before readiness', 'ERR_TRIAL_RUNNER_ARGV');
   }
-  args.push('--ae', `ENGINEER_RUNTIME_LEASE_HASH=${bindings.ENGINEER_RUNTIME_LEASE_HASH}`);
+  args.push('--ae', `ENGINEER_RUNTIME_LEASE_HASH=${runtime.bindings.ENGINEER_RUNTIME_LEASE_HASH}`);
   if (args.length > 128 || args.reduce((total, value) => total + Buffer.byteLength(value), 0) > 64 * 1024) {
     fail('rewritten Harbor argv exceeds its bound', 'ERR_TRIAL_RUNNER_ARGV');
   }
   return args;
 }
 
-function strictCommandEnv(document, boundedRoot, bindings, nodeHash) {
+function strictCommandEnv(document, boundedRoot, runtime, nodeHash) {
   if (!plainObject(document.harbor.baseEnv)) fail('archived Harbor base env is invalid', 'ERR_TRIAL_RUNNER_ENV');
   const env = {};
   for (const [name, value] of Object.entries(document.harbor.baseEnv)) {
@@ -239,13 +289,20 @@ function strictCommandEnv(document, boundedRoot, bindings, nodeHash) {
     fail('archived Harbor Node environment drifted', 'ERR_TRIAL_RUNNER_ENV');
   }
   env.HARNESS_EVAL_HOST_NODE_SHA256 = nodeHash;
-  for (const [name, value] of Object.entries(bindings)) env[name] = value;
+  for (const [name, value] of Object.entries(runtime.bindings)) env[name] = value;
   return Object.freeze(env);
 }
 
-function brokerBindingHash(bindings) {
-  const ordered = Object.fromEntries([...BROKER_BINDINGS, 'ENGINEER_RUNTIME_LEASE_HASH']
-    .map((name) => [name, bindings[name]]));
+function runtimeBindingHash(runtime) {
+  const fields = runtime.executionMode === CONTROLLED_PROVIDER
+    ? [...BROKER_BINDINGS, 'ENGINEER_RUNTIME_LEASE_HASH']
+    : ['DOCKER_HOST', 'ENGINEER_RUNTIME_LEASE_HASH'];
+  const ordered = {
+    ...(runtime.executionMode === ZERO_PROVIDER_CANARY
+      ? { executionMode: runtime.executionMode }
+      : {}),
+    ...Object.fromEntries(fields.map((name) => [name, runtime.bindings[name]])),
+  };
   return sha256(JSON.stringify(ordered));
 }
 
@@ -334,11 +391,11 @@ export async function runArchivedTrial({
     }
     inspected = inspectTrialArchive(archive, { kind: 'task-input' });
     const document = inspected.document;
-    const bindings = validateBrokerBindings(inheritedEnv, document.trial.trialId);
+    const runtime = validateRuntimeBindings(inheritedEnv, document.trial);
     const observedNodeHash = await hashExecutable(PINNED_NODE_EXECUTABLE);
     if (!HASH.test(String(observedNodeHash ?? ''))) fail('runtime Node attestation returned an invalid digest', 'ERR_TRIAL_RUNNER_EXECUTABLE');
-    const args = rewriteRuntimeArgs(document, root, observedNodeHash, bindings);
-    const env = strictCommandEnv(document, root, bindings, observedNodeHash);
+    const args = rewriteRuntimeArgs(document, root, observedNodeHash, runtime);
+    const env = strictCommandEnv(document, root, runtime, observedNodeHash);
     for (const entry of inspected.entries) entry.bytes.fill(0);
     inspected = null;
     extractTrialInputArchive(archive, { destination: workRoot, expectedSha256: expectedInputSha256 });
@@ -362,12 +419,15 @@ export async function runArchivedTrial({
         error: { code: `ERR_${sha256(`${error?.name ?? 'Error'}\0${error?.message ?? ''}`).slice(0, 16).toUpperCase()}` },
       };
     }
+    const bindingHash = runtimeBindingHash(runtime);
     const output = createTrialOutputArchive({
       workRoot,
       inputArchiveSha256: expectedInputSha256,
       trialId: document.trial.trialId,
       jobName: document.output.jobName,
-      brokerBindingHash: brokerBindingHash(bindings),
+      executionMode: runtime.executionMode,
+      runtimeBindingHash: bindingHash,
+      brokerBindingHash: runtime.executionMode === CONTROLLED_PROVIDER ? bindingHash : null,
       commandResult,
     });
     writeOwnerOnlyAtomic(outputPath, output.bytes, root);

@@ -19,6 +19,11 @@ import {
   validateRuntimeNetworkPolicyReceipt,
   validateRuntimeNetworkRuleInventory,
 } from './runtime-evidence.mjs';
+import {
+  consumeReadinessPreflightReceipt,
+  readinessPreflightNetworkPolicyHash,
+  validateReadinessPreflightPublication,
+} from './readiness-preflight.mjs';
 
 export const RUNTIME_PROBE_EXECUTABLE = '/opt/engineer/bin/engineer-runtime-probe';
 export const RUNTIME_PROBE_HANDOFF_FD = 3;
@@ -38,6 +43,8 @@ const BROKER_CLIENT_GID = 2003;
 const FIXED_IPTABLES = '/usr/sbin/iptables';
 const FIXED_IP6TABLES = '/usr/sbin/ip6tables';
 const FIXED_SUPERVISOR = '/opt/engineer/bin/engineer-runtime-supervisor';
+const FIXED_TASK_ISOLATION_PROBE = '/opt/engineer/bin/engineer-task-isolation-probe';
+const FIXED_READINESS_DENIAL_PROBE = '/opt/engineer/bin/engineer-readiness-denial-probe';
 const NETWORK_CHAIN_V4 = 'ENGINEER_EGRESS_V4';
 const NETWORK_CHAIN_V6 = 'ENGINEER_EGRESS_V6';
 const MAX_KERNEL_FILE_BYTES = 1024 * 1024;
@@ -223,6 +230,8 @@ function noProviderBindingHash(unsigned) {
     sandboxBootId: unsigned.networkPolicy.sandboxBootId,
     trialId: unsigned.networkPolicy.trialId,
     producerSessionId: unsigned.networkPolicy.producerSessionId,
+    readinessPreflightReceiptHash: unsigned.readinessPreflight?.receiptHash ?? null,
+    readinessPreflightBindingHash: unsigned.readinessPreflight?.bindingHash ?? null,
   };
   return crypto.createHash('sha256')
     .update('engineer-runtime-no-provider-probe-binding.v1\0')
@@ -365,7 +374,7 @@ export function parseRuntimeProbeArgs(argv) {
     fail('runtime probe invocation is incomplete', 'ERR_RUNTIME_PROBE_INVOCATION');
   }
   const phase = values.get('--phase');
-  if (!['pre-broker', 'post-broker'].includes(phase)) {
+  if (!['pre-broker', 'post-broker', 'zero-provider'].includes(phase)) {
     fail('runtime probe phase is invalid', 'ERR_RUNTIME_PROBE_INVOCATION');
   }
   const imageDigest = values.get('--image-digest');
@@ -430,10 +439,16 @@ function validateHandoffResources(value) {
 }
 
 function unsignedProbeHandoff(input) {
-  exactKeys(input, HANDOFF_INPUT_FIELDS, 'runtime probe handoff input');
+  if (!plainObject(input)) fail('runtime probe handoff input must be a plain object');
+  const inputFields = input.phase === 'zero-provider'
+    ? [...HANDOFF_INPUT_FIELDS, 'readinessPreflight']
+    : HANDOFF_INPUT_FIELDS;
+  exactKeys(input, inputFields, 'runtime probe handoff input');
   const value = boundedClone(input, 'runtime probe handoff input', MAX_HANDOFF_BYTES);
   digest(value.requestHash, 'probe handoff request hash');
-  if (!['pre-broker', 'post-broker'].includes(value.phase)) fail('probe handoff phase is invalid');
+  if (!['pre-broker', 'post-broker', 'zero-provider'].includes(value.phase)) {
+    fail('probe handoff phase is invalid');
+  }
   instant(value.observedAt, 'probe handoff observedAt');
   boolean(value.brokerInstalled, 'probe handoff broker state', value.phase === 'post-broker');
   validateHandoffTopology(value.topology);
@@ -448,6 +463,32 @@ function unsignedProbeHandoff(input) {
   }
   if (value.topology.cgroupId !== path.posix.basename(value.paths.cgroup)) {
     fail('probe handoff topology identity drifted');
+  }
+  if (value.phase === 'zero-provider') {
+    let publication;
+    try { publication = validateReadinessPreflightPublication(value.readinessPreflight); } catch {
+      fail('probe handoff readiness preflight publication drifted');
+    }
+    const bindings = publication.bindings;
+    if (bindings.executionMode !== 'zero-provider-canary'
+        || bindings.requestHash !== value.requestHash
+        || bindings.imageDigest !== value.topology.imageDigest
+        || bindings.sandboxId !== networkPolicy.sandboxId
+        || bindings.sandboxBootId !== networkPolicy.sandboxBootId
+        || bindings.trialId !== networkPolicy.trialId
+        || bindings.cgroupId !== value.topology.cgroupId
+        || bindings.cgroupPathHash !== value.topology.cgroupPathHash
+        || bindings.filesystemId !== value.topology.filesystemId
+        || bindings.filesystemBytes !== value.topology.filesystemBytes
+        || bindings.evidenceReserveBytes !== value.resources.evidenceReserveBytes
+        || bindings.networkPolicyHash !== readinessPreflightNetworkPolicyHash(networkPolicy)
+        || bindings.networkProducerSessionId !== networkPolicy.producerSessionId
+        || bindings.producerExecutableHash !== networkPolicy.producerExecutableHash
+        || bindings.runnerExecutableHash !== value.topology.runnerExecutableHash
+        || bindings.harborExecutableHash !== value.topology.harborExecutableHash) {
+      fail('probe handoff readiness preflight lifecycle binding drifted');
+    }
+    value.readinessPreflight = publication;
   }
   return value;
 }
@@ -468,12 +509,18 @@ export function createRuntimeProbeHandoff(input) {
 
 export function validateRuntimeProbeHandoff(input) {
   const value = boundedClone(input, 'runtime probe handoff', MAX_HANDOFF_BYTES);
-  exactKeys(value, HANDOFF_FIELDS, 'runtime probe handoff');
+  const fields = value.phase === 'zero-provider'
+    ? [...HANDOFF_FIELDS, 'readinessPreflight']
+    : HANDOFF_FIELDS;
+  exactKeys(value, fields, 'runtime probe handoff');
   if (value.schema !== RUNTIME_PROBE_HANDOFF_SCHEMA) fail('runtime probe handoff schema drifted');
   digest(value.noProviderProbeBindingHash, 'no-provider probe binding hash');
   digest(value.handoffHash, 'runtime probe handoff hash');
+  const unsignedFields = value.phase === 'zero-provider'
+    ? [...HANDOFF_INPUT_FIELDS, 'readinessPreflight']
+    : HANDOFF_INPUT_FIELDS;
   const unsigned = unsignedProbeHandoff(Object.fromEntries(
-    HANDOFF_INPUT_FIELDS.map((field) => [field, value[field]]),
+    unsignedFields.map((field) => [field, value[field]]),
   ));
   if (value.noProviderProbeBindingHash !== noProviderBindingHash(unsigned)) {
     fail('no-provider probe binding hash drifted');
@@ -636,7 +683,11 @@ function validateCgroup(value, options, handoff) {
 }
 
 function validateNoProvider(value, options, handoff) {
-  exactKeys(value, [
+  const conditionScoped = options.phase === 'zero-provider';
+  exactKeys(value, conditionScoped ? [
+    'completed', 'imageDigest', 'condition', 'conditionMountPassed',
+    'providerCalls', 'providerCredentialAbsent', 'bindingHash',
+  ] : [
     'completed', 'imageDigest', 'genericMountPassed', 'harnessMountPassed',
     'providerCalls', 'providerCredentialAbsent', 'bindingHash',
   ], 'no-provider probe');
@@ -645,11 +696,25 @@ function validateNoProvider(value, options, handoff) {
     fail('no-provider probe binding drifted');
   }
   boolean(value.completed, 'no-provider completion', true);
-  boolean(value.genericMountPassed, 'generic mount probe', true);
-  boolean(value.harnessMountPassed, 'harness mount probe', true);
+  if (conditionScoped) {
+    if (value.condition !== handoff.readinessPreflight.bindings.condition) {
+      fail('no-provider condition binding drifted');
+    }
+    boolean(value.conditionMountPassed, 'condition mount probe', true);
+  } else {
+    boolean(value.genericMountPassed, 'generic mount probe', true);
+    boolean(value.harnessMountPassed, 'harness mount probe', true);
+  }
   integer(value.providerCalls, 'no-provider call count', 0, 0);
   boolean(value.providerCredentialAbsent, 'no-provider credential absence', true);
-  return {
+  return conditionScoped ? {
+    completed: value.completed,
+    imageDigest: value.imageDigest,
+    condition: value.condition,
+    conditionMountPassed: value.conditionMountPassed,
+    providerCalls: value.providerCalls,
+    providerCredentialAbsent: value.providerCredentialAbsent,
+  } : {
     completed: value.completed,
     imageDigest: value.imageDigest,
     genericMountPassed: value.genericMountPassed,
@@ -700,6 +765,13 @@ function validateTask(value) {
 }
 
 function validateBroker(value, phase) {
+  if (phase === 'zero-provider') {
+    exactKeys(value, ['installed', 'socketAbsent', 'policyAbsent'], 'broker readiness');
+    boolean(value.installed, 'zero-provider broker installation', false);
+    boolean(value.socketAbsent, 'zero-provider broker socket absence', true);
+    boolean(value.policyAbsent, 'zero-provider broker policy absence', true);
+    return;
+  }
   exactKeys(value, ['uid', 'onlyProviderEgress'], 'broker readiness');
   integer(value.uid, 'broker uid', BROKER_UID, BROKER_UID);
   boolean(value.onlyProviderEgress, 'broker-only egress', phase === 'post-broker');
@@ -777,6 +849,34 @@ export async function collectRuntimeProbe({
   if (runnerHash !== handoff.topology.runnerExecutableHash
       || harborHash !== handoff.topology.harborExecutableHash) {
     fail('trusted executable identity drifted');
+  }
+  if (options.phase === 'zero-provider') {
+    const bindings = handoff.readinessPreflight.bindings;
+    const [producerHash, readinessHash, taskIsolationHash, readinessDenialHash] = await Promise.all([
+      invoke(source, 'hashExecutable', {
+        role: 'producer', file: FIXED_SUPERVISOR, maxBytes: MAX_EXECUTABLE_BYTES,
+      }),
+      invoke(source, 'hashExecutable', {
+        role: 'readiness-probe', file: RUNTIME_PROBE_EXECUTABLE, maxBytes: MAX_EXECUTABLE_BYTES,
+      }),
+      invoke(source, 'hashExecutable', {
+        role: 'task-isolation-probe', file: FIXED_TASK_ISOLATION_PROBE,
+        maxBytes: MAX_EXECUTABLE_BYTES,
+      }),
+      invoke(source, 'hashExecutable', {
+        role: 'readiness-denial-probe', file: FIXED_READINESS_DENIAL_PROBE,
+        maxBytes: MAX_EXECUTABLE_BYTES,
+      }),
+    ]);
+    for (const [actual, expected] of [
+      [producerHash, bindings.producerExecutableHash],
+      [readinessHash, bindings.readinessProbeExecutableHash],
+      [taskIsolationHash, bindings.taskIsolationProbeExecutableHash],
+      [readinessDenialHash, bindings.readinessDenialProbeExecutableHash],
+    ]) {
+      digest(actual, 'zero-provider trusted executable hash');
+      if (actual !== expected) fail('zero-provider trusted executable identity drifted');
+    }
   }
 
   const result = {
@@ -1164,11 +1264,14 @@ function nodeProbeSystem(overrides) {
     async observeSocketProcess({ socketPath }) { return observeSocketProcess(socketPath); },
     async hashExecutable({ file, maxBytes }) { return hashProtectedExecutable(file, maxBytes); },
     async readBootId() { return readBoundKernelFile('/proc/sys/kernel/random', 'boot_id', 128).trim(); },
+    async consumeReadinessPreflight({ publication, observedAt }) {
+      return consumeReadinessPreflightReceipt(publication, { observedAt });
+    },
     ...overrides,
   };
   for (const name of [
     'observeCgroup', 'observeNetworkPolicy', 'inspectPath', 'observeSocketProcess',
-    'hashExecutable', 'readBootId',
+    'hashExecutable', 'readBootId', 'consumeReadinessPreflight',
   ]) {
     if (typeof system[name] !== 'function') throw new TypeError(`runtime probe system method ${name} is required`);
   }
@@ -1182,6 +1285,24 @@ function nodeProbeSystem(overrides) {
  */
 export function createNodeRuntimeProbePrimitives({ system: overrides = {} } = {}) {
   const system = nodeProbeSystem(overrides);
+  let readinessPreflightPromise;
+  async function readinessPreflight(spec) {
+    if (spec.phase !== 'zero-provider' || !spec.handoff.readinessPreflight) {
+      missingProbeProducer(
+        'ZERO_PROVIDER_READINESS_PREFLIGHT',
+        'active readiness facts require a zero-provider one-time preflight receipt',
+      );
+    }
+    if (!readinessPreflightPromise) {
+      readinessPreflightPromise = system.consumeReadinessPreflight({
+        publication: spec.handoff.readinessPreflight,
+        observedAt: spec.handoff.observedAt,
+        maxBytes: MAX_EVIDENCE_BYTES,
+        shell: false,
+      });
+    }
+    return readinessPreflightPromise;
+  }
   return {
     async platform() { return process.platform; },
     async effectiveUid() { return process.geteuid?.() ?? process.getuid?.() ?? -1; },
@@ -1218,29 +1339,36 @@ export function createNodeRuntimeProbePrimitives({ system: overrides = {} } = {}
         runnerUid: spec.runnerUid,
       };
     },
-    async inspectNoProviderProbe() {
-      missingProbeProducer(
-        'NO_PROVIDER_CANARY_RECEIPT',
-        'the no-provider canary has no authenticated receipt producer',
-      );
+    async inspectNoProviderProbe(spec) {
+      const receipt = await readinessPreflight(spec);
+      return {
+        completed: receipt.observations.noProvider.completed,
+        imageDigest: receipt.bindings.imageDigest,
+        condition: receipt.bindings.condition,
+        conditionMountPassed: receipt.observations.conditionMount.passed,
+        providerCalls: receipt.observations.noProvider.providerCalls,
+        providerCredentialAbsent: receipt.observations.noProvider.providerCredentialAbsent,
+        bindingHash: spec.handoff.noProviderProbeBindingHash,
+      };
     },
-    async inspectStorage() {
-      missingProbeProducer(
-        'STORAGE_ENOSPC_RECEIPT',
-        'the ENOSPC and recovered-headroom probe has no authenticated receipt producer',
-      );
+    async inspectStorage(spec) {
+      const receipt = await readinessPreflight(spec);
+      return {
+        filesystemId: receipt.observations.storage.filesystemId,
+        totalBytes: receipt.observations.storage.totalBytes,
+        enospcObserved: receipt.observations.storage.enospcObserved,
+        evidenceHeadroomRecovered: receipt.observations.storage.evidenceHeadroomRecovered,
+      };
     },
-    async inspectRunner() {
-      missingProbeProducer(
-        'RUNNER_DENIAL_RECEIPT',
-        'runner mount, ptrace, socket, egress, and credential denials have no authenticated receipt producer',
-      );
+    async inspectRunner(spec) {
+      const receipt = await readinessPreflight(spec);
+      const { proofHash: _proofHash, ...runner } = receipt.observations.runner;
+      return runner;
     },
-    async inspectTask() {
-      missingProbeProducer(
-        'TASK_CANARY_RECEIPT',
-        'task namespace and broker-isolation facts have no authenticated canary receipt producer',
-      );
+    async inspectTask(spec) {
+      const receipt = await readinessPreflight(spec);
+      const { observationHash: _observationHash, ...task } = receipt.observations.task;
+      return task;
     },
     async inspectBroker(spec) {
       const policy = validateRuntimeNetworkPolicyReceipt(spec.handoff.networkPolicy);
@@ -1274,6 +1402,21 @@ export function createNodeRuntimeProbePrimitives({ system: overrides = {} } = {}
         maxBytes: spec.maxOutputBytes,
         shell: false,
       });
+      if (spec.phase === 'zero-provider') {
+        const receipt = await readinessPreflight(spec);
+        if (receipt.observations.noProvider.brokerSocketAbsent !== true
+            || socket?.exists !== false) {
+          fail('zero-provider broker socket custody drifted');
+        }
+        const policyFile = await system.inspectPath({
+          path: '/engineer-bounded/broker/provider-policy.json',
+          kind: 'file',
+          maxBytes: spec.maxOutputBytes,
+          shell: false,
+        });
+        if (policyFile?.exists !== false) fail('zero-provider broker policy exists');
+        return { installed: false, socketAbsent: true, policyAbsent: true };
+      }
       if (spec.phase === 'pre-broker') {
         if (socket?.exists !== false) fail('broker socket exists before broker installation');
         return { uid: spec.brokerUid, onlyProviderEgress: false };

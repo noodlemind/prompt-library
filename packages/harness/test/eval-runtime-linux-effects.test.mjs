@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import { EventEmitter } from 'node:events';
+import fs from 'node:fs';
 import { test } from 'node:test';
 import {
   LinuxRuntimeEffectsError,
@@ -16,6 +17,11 @@ import {
   validateRuntimeProbeHandoff,
 } from '../../../evals/runtime/runtime-probe.mjs';
 import {
+  READINESS_PREFLIGHT_PATH,
+  READINESS_PREFLIGHT_PUBLICATION_SCHEMA,
+  createReadinessPreflightReceipt,
+} from '../../../evals/runtime/readiness-preflight.mjs';
+import {
   createRuntimeEvidenceHandoff,
   createRuntimeNetworkPolicyReceipt,
   validateRuntimeEvidenceHandoff,
@@ -23,6 +29,14 @@ import {
 
 const TEN_GIB = 10 * 1024 * 1024 * 1024;
 const HASH = (character) => character.repeat(64);
+
+function nodeDriverMethodSource(name, nextName) {
+  const source = fs.readFileSync(new URL('../../../evals/runtime/linux-effects.mjs', import.meta.url), 'utf8');
+  const start = source.indexOf(`async ${name}(spec)`);
+  const end = source.indexOf(`async ${nextName}(spec)`, start);
+  assert.ok(start >= 0 && end > start, `${name} source is missing`);
+  return source.slice(start, end);
+}
 
 function stableHash(value) {
   const canonical = (current) => {
@@ -34,6 +48,28 @@ function stableHash(value) {
   };
   return crypto.createHash('sha256').update(canonical(value)).digest('hex');
 }
+
+test('readiness canary cleanup cannot replace its primary failure', () => {
+  for (const method of [
+    nodeDriverMethodSource('runStorageReadinessCanary', 'runReadinessDenialProbe'),
+    nodeDriverMethodSource('runTaskIsolationCanary', 'runReadinessProbe'),
+  ]) {
+    assert.match(method, /let primaryError;/);
+    assert.match(method, /let cleanupError;/);
+    assert.match(method, /primaryError = error;/);
+    assert.match(method, /if \(primaryError\) throw primaryError;/);
+    assert.match(method, /if \(cleanupError\) throw cleanupError;/);
+    const finallyBlocks = method.match(/finally\s*\{[\s\S]*?\n\s*\}/g) ?? [];
+    assert.equal(finallyBlocks.some((block) => /\bthrow\b/.test(block)), false);
+  }
+});
+
+test('task-isolation canary bounds its trusted timeout before Docker work', () => {
+  const source = nodeDriverMethodSource('runTaskIsolationCanary', 'runReadinessProbe');
+  assert.match(source, /Number\.isSafeInteger\(spec\.timeoutMs\)/);
+  assert.match(source, /spec\.timeoutMs < 1_000/);
+  assert.match(source, /spec\.timeoutMs > 60_000/);
+});
 
 function topology(overrides = {}) {
   const base = {
@@ -67,6 +103,7 @@ function topology(overrides = {}) {
       dockerd: '/usr/local/bin/dockerd',
       cgroupExec: '/opt/engineer/bin/engineer-cgroup-exec',
       taskIsolationProbe: '/opt/engineer/bin/engineer-task-isolation-probe',
+      readinessDenialProbe: '/opt/engineer/bin/engineer-readiness-denial-probe',
       iptables: '/usr/sbin/iptables',
       ip6tables: '/usr/sbin/ip6tables',
       supervisor: '/opt/engineer/bin/engineer-runtime-supervisor',
@@ -82,6 +119,7 @@ function topology(overrides = {}) {
       dockerd: HASH('8'),
       cgroupExec: HASH('9'),
       taskIsolationProbe: HASH('1'),
+      readinessDenialProbe: HASH('0'),
       iptables: HASH('a'),
       ip6tables: HASH('b'),
       sentinel: HASH('c'),
@@ -301,15 +339,79 @@ function taskObservation(topo, input) {
   return { ...unsigned, observationHash: stableHash(unsigned) };
 }
 
+function preflightPublication(topo, bindings) {
+  const receipt = createReadinessPreflightReceipt({
+    bindings,
+    observations: {
+      conditionMount: {
+        condition: bindings.condition,
+        passed: true,
+        inventoryHash: HASH('a'),
+      },
+      noProvider: {
+        completed: true,
+        providerCalls: 0,
+        providerCredentialAbsent: true,
+        brokerSocketAbsent: true,
+        proofHash: HASH('b'),
+      },
+      storage: {
+        filesystemId: topo.filesystem.id,
+        totalBytes: topo.filesystem.expectedBytes,
+        bytesWritten: 8 * 1024 * 1024 * 1024,
+        availableBytesAfterCleanup: 512 * 1024 * 1024,
+        enospcObserved: true,
+        evidenceHeadroomRecovered: true,
+        proofHash: HASH('c'),
+      },
+      runner: {
+        uid: 2001,
+        effectiveCapabilities: 0,
+        privateDaemonDenied: true,
+        realDaemonDenied: true,
+        alternateDaemonDenied: true,
+        mountDenied: true,
+        ptraceDenied: true,
+        providerEgressDenied: true,
+        metadataDenied: true,
+        daytonaCredentialsAbsent: true,
+        providerCredentialsAbsent: true,
+        proofHash: HASH('d'),
+      },
+      task: {
+        networkNone: true,
+        readOnlyRoot: true,
+        capabilitiesDropped: true,
+        noNewPrivileges: true,
+        brokerReachable: false,
+        brokerSocketMounted: false,
+        brokerClientGidPresent: false,
+        observationHash: HASH('e'),
+      },
+    },
+    producedAt: '2026-08-04T16:00:00.000Z',
+    expiresAt: '2026-08-04T16:01:00.000Z',
+    producerNonce: HASH('f'),
+  });
+  return {
+    schema: READINESS_PREFLIGHT_PUBLICATION_SCHEMA,
+    path: READINESS_PREFLIGHT_PATH,
+    receiptHash: receipt.receiptHash,
+    bindingHash: receipt.bindingHash,
+    bindings: receipt.bindings,
+  };
+}
+
 function socket(path, uid, gid, mode) {
   return { path, kind: 'socket', ownerUid: uid, groupGid: gid, mode, real: true };
 }
 
-function liveControlChannel(stream = new EventEmitter()) {
+function liveControlChannel(stream = new EventEmitter(), executionMode = 'controlled-provider') {
   return {
     schema: 'engineer-authenticated-control-channel.v1',
     kind: 'inherited-socket',
     kernelBound: true,
+    executionMode,
     authenticated: true,
     open: true,
     receiptHash: HASH('1'),
@@ -371,6 +473,7 @@ function fakeDriver(topo = topology(), overrides = {}) {
       if (name === 'dockerd') return topo.hashes.dockerd;
       if (name === 'cgroupExec') return topo.hashes.cgroupExec;
       if (name === 'taskIsolationProbe') return topo.hashes.taskIsolationProbe;
+      if (name === 'readinessDenialProbe') return topo.hashes.readinessDenialProbe;
       if (name === 'iptables') return topo.hashes.iptables;
       if (name === 'ip6tables') return topo.hashes.ip6tables;
       if (name === 'sentinel') return topo.hashes.sentinel;
@@ -441,8 +544,75 @@ function fakeDriver(topo = topology(), overrides = {}) {
       calls.push(['setSocketPolicy', spec]);
       return true;
     },
+    async inspectZeroProviderAbsence(spec) {
+      calls.push(['inspectZeroProviderAbsence', spec]);
+      return { socketAbsent: true, policyAbsent: true };
+    },
+    async runStorageReadinessCanary(spec) {
+      calls.push(['runStorageReadinessCanary', spec]);
+      const proof = {
+        schema: 'engineer-readiness-storage-observation.v1',
+        filesystemId: topo.filesystem.id,
+        totalBytes: topo.filesystem.expectedBytes,
+        bytesWritten: 8 * 1024 * 1024 * 1024,
+        availableBytesAfterCleanup: 512 * 1024 * 1024,
+        enospcObserved: true,
+        evidenceHeadroomRecovered: true,
+      };
+      return { ...proof, proofHash: stableHash(proof) };
+    },
+    async runReadinessDenialProbe(spec) {
+      calls.push(['runReadinessDenialProbe', spec]);
+      return {
+        uid: 2001,
+        effectiveCapabilities: 0,
+        privateDaemonDenied: true,
+        realDaemonDenied: true,
+        alternateDaemonDenied: true,
+        mountDenied: true,
+        ptraceDenied: true,
+        providerEgressDenied: true,
+        metadataDenied: true,
+        daytonaCredentialsAbsent: true,
+        providerCredentialsAbsent: true,
+        proofHash: HASH('d'),
+      };
+    },
+    async runTaskIsolationCanary(spec) {
+      calls.push(['runTaskIsolationCanary', spec]);
+      return {
+        conditionMount: {
+          condition: spec.condition,
+          passed: true,
+          inventoryHash: HASH('a'),
+        },
+        task: {
+          networkNone: true,
+          readOnlyRoot: true,
+          capabilitiesDropped: true,
+          noNewPrivileges: true,
+          brokerReachable: false,
+          brokerSocketMounted: false,
+          brokerClientGidPresent: false,
+          observationHash: HASH('e'),
+        },
+      };
+    },
     async runReadinessProbe(spec) {
       calls.push(['runReadinessProbe', spec]);
+      if (spec.handoff.phase === 'zero-provider') {
+        return readiness(topo, {
+          noProviderProbe: {
+            completed: true,
+            imageDigest: topo.imageDigest,
+            condition: spec.handoff.readinessPreflight.bindings.condition,
+            conditionMountPassed: true,
+            providerCalls: 0,
+            providerCredentialAbsent: true,
+          },
+          broker: { installed: false, socketAbsent: true, policyAbsent: true },
+        });
+      }
       return readiness(topo);
     },
     async waitProcess(handle, spec) {
@@ -542,6 +712,8 @@ async function preparedEffects({
   topo = topology(),
   driver = fakeDriver(topo),
   mutateDockerPolicy = (policy) => policy,
+  executionMode = 'controlled-provider',
+  readinessPreflightProducer,
 } = {}) {
   const effects = createLinuxRuntimeEffects({
     topology: topo,
@@ -582,11 +754,12 @@ async function preparedEffects({
         isolationHash: stableHash(receipts.isolation),
       };
     },
+    ...(readinessPreflightProducer === undefined ? {} : { readinessPreflightProducer }),
   });
-  await effects.bindControlChannel(liveControlChannel(driver.channel));
+  await effects.bindControlChannel(liveControlChannel(driver.channel, executionMode));
   effects.installControlChannelLossHandler(() => {});
   await effects.inspectPlatform();
-  await effects.inspectProviderKeyFd(7);
+  if (executionMode === 'controlled-provider') await effects.inspectProviderKeyFd(7);
   await effects.reserveEvidenceHeadroom({ bytes: 256 * 1024 * 1024, filesystemId: topo.filesystem.id, trialId: 'trial-1' });
   const daemon = await effects.startPrivateDaemon({
     dataRoot: topo.paths.daemonDataRoot,
@@ -616,10 +789,27 @@ async function preparedEffects({
     requestHash: HASH('1'),
     trialId: 'trial-1',
     condition: 'generic',
+    executionMode,
+    ...(executionMode === 'zero-provider-canary' ? {
+      releaseSha: '1'.repeat(40),
+      taskLockHash: HASH('6'),
+      bundleHash: HASH('7'),
+    } : {}),
     runnerUid: topo.identities.runnerUid,
     runnerGid: topo.identities.runnerGid,
     upstreamSocketPath: topo.paths.daemonSocket,
   });
+  if (executionMode === 'zero-provider-canary') {
+    const zeroReadiness = await effects.inspectReadiness({
+      phase: 'zero-provider',
+      requestHash: HASH('1'),
+      daemon,
+      proxy,
+      broker: null,
+      executionMode,
+    });
+    return { effects, driver, topo, daemon, proxy, broker: null, policy: null, zeroReadiness };
+  }
   await effects.inspectReadiness({ phase: 'pre-broker', requestHash: HASH('1'), daemon, proxy, broker: {} });
   const policy = brokerPolicy();
   const broker = await effects.startProviderBroker({
@@ -648,6 +838,142 @@ test('does not classify the task-isolation-probe bind as provider credential mat
     JSON.stringify(proxyOptions.policy).includes(topo.executables.taskIsolationProbe),
     true,
   );
+});
+
+test('zero-provider readiness is condition-scoped and produced after materialization without a broker', async () => {
+  const topo = topology();
+  const driver = fakeDriver(topo);
+  const producer = async (bindings, { probes }) => {
+    driver.calls.push(['runReadinessPreflight', structuredClone(bindings)]);
+    for (const name of [
+      'inspectProducer', 'probeConditionMount', 'probeProviderAbsence',
+      'probeStorage', 'probeRunnerDenials', 'probeTaskIsolation',
+    ]) assert.equal(typeof probes[name], 'function');
+    const publication = preflightPublication(topo, bindings);
+    const spec = Object.freeze({ bindings: publication.bindings });
+    await probes.inspectProducer(spec);
+    await probes.probeConditionMount(spec);
+    await probes.probeProviderAbsence(spec);
+    await probes.probeStorage(spec);
+    await probes.probeRunnerDenials(spec);
+    await probes.probeTaskIsolation(spec);
+    return publication;
+  };
+  const { zeroReadiness } = await preparedEffects({
+    topo,
+    driver,
+    executionMode: 'zero-provider-canary',
+    readinessPreflightProducer: producer,
+  });
+
+  assert.deepEqual(zeroReadiness.noProviderProbe, {
+    completed: true,
+    imageDigest: topo.imageDigest,
+    condition: 'generic',
+    conditionMountPassed: true,
+    providerCalls: 0,
+    providerCredentialAbsent: true,
+  });
+  assert.deepEqual(zeroReadiness.broker, {
+    installed: false,
+    socketAbsent: true,
+    policyAbsent: true,
+  });
+  assert.equal(driver.calls.some(([name]) => name === 'inspectDescriptor'), false);
+  assert.equal(driver.calls.some(([name, spec]) =>
+    name === 'spawnProcess' && spec.role === 'provider-broker'), false);
+
+  const materialized = driver.calls.findIndex(([name]) => name === 'materializeTrialSecurity');
+  const proxyStarted = driver.calls.findIndex(([name]) => name === 'proxy.start');
+  const preflight = driver.calls.findIndex(([name]) => name === 'runReadinessPreflight');
+  const readinessProbe = driver.calls.findIndex(([name]) => name === 'runReadinessProbe');
+  assert.ok(materialized >= 0 && materialized < proxyStarted);
+  assert.ok(proxyStarted < preflight && preflight < readinessProbe);
+  assert.equal(driver.calls.some(([name]) => name === 'runTaskIsolationCanary'), true);
+  assert.equal(driver.calls.some(([name]) => name === 'runReadinessDenialProbe'), true);
+  assert.equal(driver.calls.some(([name]) => name === 'runStorageReadinessCanary'), true);
+
+  const [, probeSpec] = driver.calls.find(([name]) => name === 'runReadinessProbe');
+  const handoff = validateRuntimeProbeHandoff(probeSpec.handoff);
+  assert.equal(handoff.phase, 'zero-provider');
+  assert.equal(handoff.brokerInstalled, false);
+  assert.equal(handoff.readinessPreflight.bindings.executionMode, 'zero-provider-canary');
+  assert.equal(handoff.readinessPreflight.bindings.condition, 'generic');
+});
+
+test('zero-provider Linux lifecycle launches, observes, evidences, and shuts down without broker capability', async () => {
+  const topo = topology();
+  let evidenceSpec;
+  const driver = fakeDriver(topo, { async collectEvidence(spec) {
+    evidenceSpec = spec;
+    return finalEvidence(topo, {
+      provider: {
+        mode: 'not-exercised',
+        requestHash: spec.handoff.requestHash,
+        leaseHash: spec.handoff.leaseHash,
+        usageHash: HASH('c'),
+        identityHash: HASH('d'),
+        spendMicrousd: 0,
+        billingCertain: true,
+        budgetComplete: true,
+        withinTrialCeiling: true,
+        attempts: 0,
+        calls: 0,
+        brokerAbsent: true,
+      },
+    });
+  } });
+  const prepared = await preparedEffects({
+    topo,
+    driver,
+    executionMode: 'zero-provider-canary',
+    readinessPreflightProducer: async (bindings) => preflightPublication(topo, bindings),
+  });
+  const { effects, daemon, proxy } = prepared;
+  const leaseHash = HASH('a');
+  const launchInput = {
+    executionMode: 'zero-provider-canary',
+    uid: topo.identities.runnerUid,
+    gid: topo.identities.runnerGid,
+    supplementaryGids: [],
+    argv: [topo.executables.runner, '--mode', 'canary'],
+    cwd: topo.paths.workspace,
+    env: {
+      LANG: 'C.UTF-8',
+      DOCKER_HOST: `unix://${topo.paths.proxySocket}`,
+      ENGINEER_RUNTIME_EXECUTION_MODE: 'zero-provider-canary',
+      ENGINEER_RUNTIME_LEASE_HASH: leaseHash,
+    },
+    inheritedFds: [],
+    timeoutMs: 30_000,
+    requestHash: HASH('1'),
+    leaseHash,
+  };
+  const result = await effects.launchRunner(launchInput);
+  assert.equal(result.exitCode, 0);
+  const runnerSpawn = driver.calls.find(([name, spec]) => name === 'spawnProcess' && spec.role === 'runner')[1];
+  assert.deepEqual(runnerSpawn.supplementaryGids, []);
+  assert.equal(Object.keys(runnerSpawn.env).some((name) => name.startsWith('ENGINEER_PROVIDER_')), false);
+
+  const evidence = await effects.collectFinalEvidence({
+    executionMode: 'zero-provider-canary',
+    requestHash: HASH('1'),
+    leaseHash,
+    runnerResult: result,
+    daemon,
+    proxy,
+    broker: null,
+  });
+  assert.equal(evidence.provider.mode, 'not-exercised');
+  assert.equal(evidence.provider.spendMicrousd, 0);
+  const handoff = validateRuntimeEvidenceHandoff(
+    evidenceSpec.handoff,
+  );
+  assert.equal(handoff.executionMode, 'zero-provider-canary');
+  assert.equal(handoff.broker, null);
+
+  const shutdown = await effects.shutdown({ reason: 'finalize', failClosed: false });
+  assert.equal(shutdown.completed, true);
 });
 
 test('implements the exact privileged effect contract without exposing a provider credential', async () => {
@@ -725,6 +1051,7 @@ test('implements the exact privileged effect contract without exposing a provide
   assert.equal(JSON.stringify(brokerSpawn).includes('sk-or'), false);
 
   const result = await effects.launchRunner({
+    executionMode: 'controlled-provider',
     uid: 2001,
     gid: 2001,
     supplementaryGids: [2003],
@@ -752,6 +1079,7 @@ test('implements the exact privileged effect contract without exposing a provide
   assert.deepEqual(runnerSpawn.inheritedFds, []);
 
   const evidence = await effects.collectFinalEvidence({
+    executionMode: 'controlled-provider',
     requestHash: HASH('1'),
     leaseHash: HASH('a'),
     runnerResult: result,
@@ -875,6 +1203,7 @@ test('pins one immutable trial, request, and producer session across the runtime
   await t.test('rejects cross-request final-evidence rebinding before collection', async () => {
     const { effects, driver, topo, daemon, proxy, broker } = await preparedEffects();
     const result = await effects.launchRunner({
+      executionMode: 'controlled-provider',
       uid: 2001,
       gid: 2001,
       supplementaryGids: [2003],
@@ -896,6 +1225,7 @@ test('pins one immutable trial, request, and producer session across the runtime
       leaseHash: HASH('a'),
     });
     await assert.rejects(effects.collectFinalEvidence({
+      executionMode: 'controlled-provider',
       requestHash: HASH('9'),
       leaseHash: HASH('a'),
       runnerResult: result,
@@ -930,6 +1260,7 @@ test('fail-stop drains a suspended runner transition before proving shutdown', a
   };
   const { effects } = await preparedEffects({ topo, driver });
   const launch = effects.launchRunner({
+    executionMode: 'controlled-provider',
     uid: 2001,
     gid: 2001,
     supplementaryGids: [2003],
@@ -1098,6 +1429,7 @@ test('rejects runner cgroup escape, launch timeout, and secret propagation', asy
     });
     const { effects } = await preparedEffects({ topo, driver });
     await assert.rejects(effects.launchRunner({
+      executionMode: 'controlled-provider',
       uid: 2001, gid: 2001, supplementaryGids: [2003],
       argv: [topo.executables.runner], cwd: topo.paths.workspace,
       env: {
@@ -1120,6 +1452,7 @@ test('rejects runner cgroup escape, launch timeout, and secret propagation', asy
     });
     const { effects } = await preparedEffects({ topo, driver });
     await assert.rejects(effects.launchRunner({
+      executionMode: 'controlled-provider',
       uid: 2001, gid: 2001, supplementaryGids: [2003], argv: [topo.executables.runner],
       cwd: topo.paths.workspace,
       env: {
@@ -1138,6 +1471,7 @@ test('rejects runner cgroup escape, launch timeout, and secret propagation', asy
   await t.test('credential-like runner value never reaches a child', async () => {
     const { effects, driver, topo } = await preparedEffects();
     await assert.rejects(effects.launchRunner({
+      executionMode: 'controlled-provider',
       uid: 2001, gid: 2001, supplementaryGids: [2003], argv: [topo.executables.runner],
       cwd: topo.paths.workspace,
       env: {
@@ -1168,6 +1502,7 @@ test('rejects incomplete events and inventories, then removes orphans during fai
       const driver = fakeDriver(topo, { async collectEvidence() { return finalEvidence(topo, drift); } });
       const { effects, daemon, proxy, broker } = await preparedEffects({ topo, driver });
       await assert.rejects(effects.collectFinalEvidence({
+        executionMode: 'controlled-provider',
         requestHash: HASH('1'), leaseHash: HASH('a'),
         runnerResult: { exitCode: 0, signal: 'none', startedAt: '2026-08-04T16:00:02.000Z', endedAt: '2026-08-04T16:00:07.000Z' },
         daemon, proxy, broker,
@@ -1372,6 +1707,8 @@ test('default Linux driver transfers each canonical helper handoff through one i
   ), { schema: probe.schema, handoffHash: probe.handoffHash });
 
   const evidence = createRuntimeEvidenceHandoff({
+    executionMode: 'controlled-provider',
+    trialId: 'trial-1',
     requestHash: HASH('1'),
     leaseHash: HASH('2'),
     observedAt: '2026-08-04T16:00:07.500Z',

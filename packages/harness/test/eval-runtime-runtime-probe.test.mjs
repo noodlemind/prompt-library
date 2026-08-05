@@ -17,6 +17,11 @@ import {
   runRuntimeProbeCli,
 } from '../../../evals/runtime/runtime-probe.mjs';
 import { createRuntimeNetworkPolicyReceipt } from '../../../evals/runtime/runtime-evidence.mjs';
+import {
+  READINESS_PREFLIGHT_PATH,
+  READINESS_PREFLIGHT_PUBLICATION_SCHEMA,
+  createReadinessPreflightReceipt,
+} from '../../../evals/runtime/readiness-preflight.mjs';
 
 const TEN_GIB = 10 * 1024 * 1024 * 1024;
 const HASH = (character) => character.repeat(64);
@@ -103,6 +108,87 @@ function handoff(overrides = {}) {
   });
 }
 
+function zeroProviderReceipt() {
+  return createReadinessPreflightReceipt({
+    bindings: {
+      requestHash: HASH('1'),
+      releaseSha: '1'.repeat(40),
+      taskLockHash: HASH('6'),
+      bundleHash: HASH('7'),
+      executionMode: 'zero-provider-canary',
+      condition: 'generic',
+      imageDigest: `sha256:${HASH('d')}`,
+      sandboxId: 'sandbox-1',
+      sandboxBootId: '11111111-2222-3333-4444-555555555555',
+      trialId: 'trial-1',
+      cgroup: { id: 'trial-1', pathHash: sha256('/sys/fs/cgroup/engineer/trial-1') },
+      filesystem: {
+        id: 'dev:feed', bytes: TEN_GIB, evidenceReserveBytes: 256 * 1024 * 1024,
+      },
+      networkPolicy: networkPolicy(),
+      materialization: {
+        trialId: 'trial-1', imageDigest: `sha256:${HASH('d')}`,
+        workspaceFilesystemId: 'dev:feed', receiptHash: HASH('8'),
+      },
+      executables: {
+        producerExecutableHash: HASH('2'),
+        readinessProbeExecutableHash: HASH('6'),
+        runnerExecutableHash: HASH('3'),
+        harborExecutableHash: HASH('4'),
+        taskIsolationProbeExecutableHash: HASH('e'),
+        readinessDenialProbeExecutableHash: HASH('f'),
+      },
+    },
+    observations: {
+      conditionMount: { condition: 'generic', passed: true, inventoryHash: HASH('a') },
+      noProvider: {
+        completed: true, providerCalls: 0, providerCredentialAbsent: true,
+        brokerSocketAbsent: true, proofHash: HASH('b'),
+      },
+      storage: {
+        filesystemId: 'dev:feed', totalBytes: TEN_GIB,
+        bytesWritten: 8 * 1024 * 1024 * 1024,
+        availableBytesAfterCleanup: 512 * 1024 * 1024,
+        enospcObserved: true, evidenceHeadroomRecovered: true, proofHash: HASH('c'),
+      },
+      runner: {
+        uid: 2001, effectiveCapabilities: 0, privateDaemonDenied: true,
+        realDaemonDenied: true, alternateDaemonDenied: true, mountDenied: true,
+        ptraceDenied: true, providerEgressDenied: true, metadataDenied: true,
+        daytonaCredentialsAbsent: true, providerCredentialsAbsent: true,
+        proofHash: HASH('d'),
+      },
+      task: {
+        networkNone: true, readOnlyRoot: true, capabilitiesDropped: true,
+        noNewPrivileges: true, brokerReachable: false, brokerSocketMounted: false,
+        brokerClientGidPresent: false, observationHash: HASH('e'),
+      },
+    },
+    producedAt: '2026-08-04T16:00:00.000Z',
+    expiresAt: '2026-08-04T16:01:00.000Z',
+    producerNonce: HASH('f'),
+  });
+}
+
+function zeroProviderHandoff() {
+  const receipt = zeroProviderReceipt();
+  const readinessPreflight = {
+    schema: READINESS_PREFLIGHT_PUBLICATION_SCHEMA,
+    path: READINESS_PREFLIGHT_PATH,
+    receiptHash: receipt.receiptHash,
+    bindingHash: receipt.bindingHash,
+    bindings: receipt.bindings,
+  };
+  return {
+    receipt,
+    document: handoff({
+      phase: 'zero-provider',
+      brokerInstalled: false,
+      readinessPreflight,
+    }),
+  };
+}
+
 function fakePrimitives(overrides = {}) {
   const calls = [];
   const primitives = {
@@ -175,7 +261,14 @@ function fakePrimitives(overrides = {}) {
     },
     async hashExecutable(spec) {
       calls.push(['hashExecutable', spec]);
-      return spec.role === 'runner' ? HASH('3') : HASH('4');
+      return new Map([
+        ['runner', HASH('3')],
+        ['harbor', HASH('4')],
+        ['producer', HASH('2')],
+        ['readiness-probe', HASH('6')],
+        ['task-isolation-probe', HASH('e')],
+        ['readiness-denial-probe', HASH('f')],
+      ]).get(spec.role);
     },
     ...overrides,
   };
@@ -299,10 +392,50 @@ test('collects the supervisor readiness shape through fixed, content-free primit
   }
 });
 
+test('collects one condition-scoped zero-provider readiness shape with no broker', async () => {
+  const { document } = zeroProviderHandoff();
+  const primitives = fakePrimitives({
+    async readHandoff() { return document; },
+    async inspectNoProviderProbe(spec) {
+      return {
+        completed: true,
+        imageDigest: `sha256:${HASH('d')}`,
+        condition: 'generic',
+        conditionMountPassed: true,
+        providerCalls: 0,
+        providerCredentialAbsent: true,
+        bindingHash: spec.handoff.noProviderProbeBindingHash,
+      };
+    },
+    async inspectBroker() {
+      return { installed: false, socketAbsent: true, policyAbsent: true };
+    },
+  });
+  const argv = [...PROBE_ARGV];
+  argv[1] = 'zero-provider';
+  const observation = await collectRuntimeProbe({ argv, environment: {}, primitives });
+  assert.deepEqual(observation.noProviderProbe, {
+    completed: true,
+    imageDigest: `sha256:${HASH('d')}`,
+    condition: 'generic',
+    conditionMountPassed: true,
+    providerCalls: 0,
+    providerCredentialAbsent: true,
+  });
+  assert.deepEqual(observation.broker, {
+    installed: false,
+    socketAbsent: true,
+    policyAbsent: true,
+  });
+});
+
 test('parser accepts the exact set once and rejects malformed, duplicate, unknown, and oversized argv', () => {
   const parsed = parseRuntimeProbeArgs([...PROBE_ARGV]);
   assert.equal(parsed.phase, 'post-broker');
   assert.equal(parsed.cgroup, '/sys/fs/cgroup/engineer/trial-1');
+  const zeroProvider = [...PROBE_ARGV];
+  zeroProvider[1] = 'zero-provider';
+  assert.equal(parseRuntimeProbeArgs(zeroProvider).phase, 'zero-provider');
 
   const malformed = [
     PROBE_ARGV.slice(0, -2),
@@ -541,20 +674,75 @@ test('production probe collectors bind cgroup and broker observations to fixed r
   assert.equal(calls.some(([, spec]) => spec?.shell !== false), false);
 });
 
-test('production probe collectors name the missing active receipt producers instead of fabricating success', async () => {
+test('production probe collectors require one zero-provider preflight instead of fabricating success', async () => {
   const primitives = createNodeRuntimeProbePrimitives({ system: {} });
   const document = handoff();
   const spec = { handoff: document, phase: 'post-broker', shell: false };
-  const missing = [
-    ['inspectNoProviderProbe', 'NO_PROVIDER_CANARY_RECEIPT'],
-    ['inspectStorage', 'STORAGE_ENOSPC_RECEIPT'],
-    ['inspectRunner', 'RUNNER_DENIAL_RECEIPT'],
-    ['inspectTask', 'TASK_CANARY_RECEIPT'],
-  ];
-  for (const [method, producer] of missing) {
+  for (const method of [
+    'inspectNoProviderProbe', 'inspectStorage', 'inspectRunner', 'inspectTask',
+  ]) {
     await assert.rejects(
       primitives[method](spec),
-      (error) => error instanceof RuntimeProbeError && error.code.includes(producer),
+      (error) => error instanceof RuntimeProbeError
+        && error.code.includes('ZERO_PROVIDER_READINESS_PREFLIGHT'),
     );
   }
+});
+
+test('production collectors consume one condition-scoped receipt and attest no broker', async () => {
+  const { document, receipt } = zeroProviderHandoff();
+  let consumes = 0;
+  const system = {
+    async consumeReadinessPreflight(spec) {
+      consumes += 1;
+      assert.deepEqual(spec.publication, document.readinessPreflight);
+      assert.equal(spec.observedAt, document.observedAt);
+      return receipt;
+    },
+    async observeCgroup() { throw new Error('not used'); },
+    async observeNetworkPolicy() {
+      return {
+        runnerEgressDenied: true, brokerOnlyEgress: true,
+        metadataDenied: true, rawSocketDenied: true, evidenceHash: HASH('a'),
+      };
+    },
+    async inspectPath() { return { exists: false }; },
+    async observeSocketProcess() { throw new Error('not used'); },
+    async hashExecutable({ file }) {
+      return new Map([
+        ['/usr/sbin/iptables', HASH('a')],
+        ['/usr/sbin/ip6tables', HASH('b')],
+        ['/opt/engineer/bin/engineer-runtime-supervisor', HASH('2')],
+      ]).get(file);
+    },
+    async readBootId() { return '11111111-2222-3333-4444-555555555555'; },
+  };
+  const primitives = createNodeRuntimeProbePrimitives({ system });
+  const spec = {
+    handoff: document,
+    phase: 'zero-provider',
+    brokerSocket: document.paths.brokerSocket,
+    maxOutputBytes: 64 * 1024,
+  };
+  const [noProvider, storage, runner, task, broker] = await Promise.all([
+    primitives.inspectNoProviderProbe(spec),
+    primitives.inspectStorage(spec),
+    primitives.inspectRunner(spec),
+    primitives.inspectTask(spec),
+    primitives.inspectBroker(spec),
+  ]);
+  assert.equal(consumes, 1);
+  assert.deepEqual(noProvider, {
+    completed: true,
+    imageDigest: `sha256:${HASH('d')}`,
+    condition: 'generic',
+    conditionMountPassed: true,
+    providerCalls: 0,
+    providerCredentialAbsent: true,
+    bindingHash: document.noProviderProbeBindingHash,
+  });
+  assert.equal(storage.enospcObserved, true);
+  assert.equal(runner.ptraceDenied, true);
+  assert.equal(task.brokerReachable, false);
+  assert.deepEqual(broker, { installed: false, socketAbsent: true, policyAbsent: true });
 });

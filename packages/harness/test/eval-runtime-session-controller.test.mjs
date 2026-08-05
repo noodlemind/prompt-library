@@ -30,6 +30,7 @@ const SESSION = Object.freeze({
   profileId: 'economical-small-model',
   taskLockHash: HASH('1'),
   bundleHash: HASH('2'),
+  executionMode: 'controlled-provider',
   budgetId: 'qualification-budget-1',
   budgetPolicyHash: HASH('3'),
   brokerPolicyHash: HASH('0'),
@@ -68,7 +69,8 @@ function allocation(name, trialId) {
     target: 'us',
     sandboxClass: 'container',
     cpu: 2,
-    memory: 4,
+    // Daytona CLI reports memory in MB even though the controller accepts GiB.
+    memory: 4096,
     disk: 10,
     env: {},
     volumes: [],
@@ -120,12 +122,87 @@ function fakeDaytona() {
     daytonaPath: '/opt/daytona',
     snapshot: SNAPSHOT,
     releaseSha: RELEASE_SHA,
+    executionMode: 'controlled-provider',
     sessionBudgetUsd: 1.3,
     runCommand,
     randomBytes: () => Buffer.alloc(16, 0xab),
     now: () => NOW,
     sleep: async () => {},
   });
+  return { calls, controller, sandboxes };
+}
+
+function fakeZeroDaytona() {
+  const calls = [];
+  const sandboxes = new Map();
+  const retained = [];
+  const controller = {
+    async beginTrial(input) {
+      calls.push({ name: 'beginTrial', input: structuredClone(input) });
+      assert.equal(input.reservedUsd, 0);
+      const trialId = input.trialId;
+      const opened = {
+        allocation: { id: `sandbox-${trialId}` },
+        readiness: { bounded: true },
+      };
+      sandboxes.set(trialId, opened);
+      return structuredClone(opened);
+    },
+    async completeTrial({ trialId, evidence }) {
+      calls.push({ name: 'completeTrial', trialId, evidence: structuredClone(evidence) });
+      const opened = sandboxes.get(trialId);
+      sandboxes.delete(trialId);
+      retained.push({
+        trialId,
+        sandboxId: opened.allocation.id,
+        evidenceHash: evidence.evidenceHash,
+        deleted: true,
+      });
+      return {
+        trialId,
+        sandboxId: opened.allocation.id,
+        deleted: true,
+        deletedAt: NOW.toISOString(),
+      };
+    },
+    async abortTrial({ trialId }) {
+      calls.push({ name: 'abortTrial', trialId });
+      const opened = sandboxes.get(trialId);
+      sandboxes.delete(trialId);
+      return {
+        trialId,
+        sandboxId: opened?.allocation.id,
+        deleted: true,
+        deletedAt: NOW.toISOString(),
+      };
+    },
+    async dispose() {
+      calls.push({ name: 'dispose' });
+      const [trialId] = sandboxes.keys();
+      if (trialId === undefined) {
+        return {
+          schema: 'daytona-controller-disposal.v1',
+          disposed: true,
+          activeTrialDeleted: false,
+          deletion: null,
+        };
+      }
+      const deletion = await this.abortTrial({ trialId });
+      return {
+        schema: 'daytona-controller-disposal.v1',
+        disposed: true,
+        activeTrialDeleted: true,
+        deletion,
+      };
+    },
+    finalizeSession() {
+      calls.push({ name: 'finalizeSession' });
+      return { deleted: true, reservedUsd: 0, trials: structuredClone(retained) };
+    },
+    snapshot() {
+      return { active: sandboxes.size };
+    },
+  };
   return { calls, controller, sandboxes };
 }
 
@@ -142,6 +219,7 @@ function supervisorReadiness(request, overrides = {}) {
     requestHash: protocolDocumentHash(request),
     requestNonce: request.nonce,
     previousTrialChainHash: request.previousTrialChainHash,
+    executionMode: request.executionMode,
     bindings: structuredClone(request.bindings),
     budget: structuredClone(request.budget),
     readiness: {
@@ -176,6 +254,7 @@ function supervisorFinal(request, lease, spendMicrousd, overrides = {}) {
     requestHash: protocolDocumentHash(request),
     readinessLeaseHash: protocolDocumentHash(lease),
     previousTrialChainHash: request.previousTrialChainHash,
+    executionMode: request.executionMode,
     bindings: structuredClone(request.bindings),
     budget: structuredClone(request.budget),
     outcome: {
@@ -296,6 +375,9 @@ test('two per-trial sandboxes produce one authenticated global sequence, deletio
   assert.equal(first.attestation.sequence, 3);
   assert.equal(second.attestation.sequence, 6);
   assert.equal(final.sequence, 7);
+  assert.equal(first.attestation.executionMode, 'controlled-provider');
+  assert.equal(second.attestation.executionMode, 'controlled-provider');
+  assert.equal(final.sessionBindings.executionMode, 'controlled-provider');
   assert.equal(final.budget.sessionCommittedMicrousd, 1_300_000);
   assert.equal(final.budget.sessionSpentMicrousd, 325_000);
   assert.equal(final.trials[0].previousChainHash, GENESIS_CHAIN_HASH);
@@ -312,6 +394,106 @@ test('two per-trial sandboxes produce one authenticated global sequence, deletio
     now: NOW,
   }));
   assert.doesNotThrow(() => verifySessionTrialHashChain(final, [first.attestation, second.attestation]));
+});
+
+test('zero-provider canary is cryptographically mode-bound, authorizes no provider, and cannot become paid evidence', async () => {
+  const daytona = fakeZeroDaytona();
+  const transport = fakeTransport({ spends: [0] });
+  const { controller } = runtime({
+    daytona,
+    transport,
+    overrides: {
+      session: {
+        ...SESSION,
+        executionMode: 'zero-provider-canary',
+        sessionCeilingMicrousd: 0,
+      },
+    },
+  });
+  const readiness = controller.readiness();
+  assert.equal(readiness.executionMode, 'zero-provider-canary');
+  assert.equal(readiness.providerAuthorized, false);
+  assert.equal(isRuntimeControllerReadiness(readiness), false);
+
+  let canaryCalls = 0;
+  const completed = await controller.runTrial(
+    trialSpec('zero-provider-r1', 'generic', { trialCeilingMicrousd: 0 }),
+    async ({ authorization, handle }) => {
+      canaryCalls += 1;
+      assert.equal(authorization.executionMode, 'zero-provider-canary');
+      assert.equal(authorization.providerAuthorized, false);
+      assert.equal(handle.request.executionMode, 'zero-provider-canary');
+      assert.deepEqual(handle.request.budget, {
+        currency: 'USD',
+        trialCeilingMicrousd: 0,
+        sessionCeilingMicrousd: 0,
+        sessionCommittedMicrousd: 0,
+      });
+      return { canary: 'pass' };
+    },
+  );
+  const final = controller.finalize();
+
+  assert.equal(canaryCalls, 1);
+  assert.equal(completed.attestation.executionMode, 'zero-provider-canary');
+  assert.equal(completed.attestation.outcome.providerSpendMicrousd, 0);
+  assert.equal(final.sessionBindings.executionMode, 'zero-provider-canary');
+  assert.deepEqual(final.budget, {
+    currency: 'USD',
+    sessionCeilingMicrousd: 0,
+    sessionCommittedMicrousd: 0,
+    sessionSpentMicrousd: 0,
+  });
+  assert.equal(isRuntimeSessionFinal(final), false);
+  assert.doesNotThrow(() => verifyProtocolDocument(final, CONTROLLER_KEY, {
+    expectedKeyId: 'controller-key-1',
+    now: NOW,
+  }));
+  assert.doesNotThrow(() => verifySessionTrialHashChain(final, [completed.attestation]));
+  assert.equal(daytona.calls.find(({ name }) => name === 'beginTrial').input.reservedUsd, 0);
+  assert.equal(daytona.sandboxes.size, 0);
+});
+
+test('execution mode rejects inconsistent session, trial, and attested provider spend', async () => {
+  assert.throws(
+    () => runtime({ overrides: { session: { ...SESSION, executionMode: 'controlled-provider', sessionCeilingMicrousd: 0 } } }),
+    /controlled-provider|positive|sessionCeilingMicrousd/i,
+  );
+  assert.throws(
+    () => runtime({ overrides: { session: { ...SESSION, executionMode: 'zero-provider-canary' } } }),
+    /zero-provider-canary|zero|sessionCeilingMicrousd/i,
+  );
+  assert.throws(
+    () => runtime({ overrides: { session: { ...SESSION, executionMode: 'unknown-mode' } } }),
+    /executionMode|controlled-provider|zero-provider-canary/i,
+  );
+
+  const controlled = runtime();
+  await assert.rejects(
+    controlled.controller.beginTrial(trialSpec('controlled-zero-r1', 'generic', { trialCeilingMicrousd: 0 })),
+    /controlled-provider|positive|trialCeilingMicrousd/i,
+  );
+
+  const zeroSession = { ...SESSION, executionMode: 'zero-provider-canary', sessionCeilingMicrousd: 0 };
+  const zero = runtime({ overrides: { session: zeroSession } });
+  await assert.rejects(
+    zero.controller.beginTrial(trialSpec('zero-paid-r1', 'generic')),
+    /zero-provider-canary|zero|trialCeilingMicrousd/i,
+  );
+
+  const nonzeroEvidence = runtime({
+    daytona: fakeZeroDaytona(),
+    transport: fakeTransport({ spends: [1] }),
+    overrides: { session: zeroSession },
+  });
+  await assert.rejects(
+    nonzeroEvidence.controller.runTrial(
+      trialSpec('zero-spend-r1', 'generic', { trialCeilingMicrousd: 0 }),
+      async () => ({ canary: 'pass' }),
+    ),
+    /zero-provider-canary|provider spend|budget|zero/i,
+  );
+  assert.equal(nonzeroEvidence.controller.snapshot().failStopped, true);
 });
 
 test('tampered or replayed readiness never reaches provider work and always deletes the sandbox', async () => {
@@ -374,6 +556,7 @@ test('an unconfirmed platform deletion prevents a trial chain and green session 
   const deletionFailure = {
     beginTrial: original.beginTrial,
     abortTrial: original.abortTrial,
+    dispose: original.dispose,
     snapshot: original.snapshot,
     finalizeSession: original.finalizeSession,
     async completeTrial() {
@@ -389,6 +572,39 @@ test('an unconfirmed platform deletion prevents a trial chain and green session 
   assert.equal(controller.snapshot().failStopped, true);
   assert.equal(daytona.sandboxes.size, 0);
   assert.throws(() => controller.finalize(), /fail-stopped|compromised/i);
+});
+
+test('a successful outer cleanup retry clears the sticky incomplete state', async () => {
+  const daytona = fakeDaytona();
+  const originalAbort = daytona.controller.abortTrial;
+  let abortAttempts = 0;
+  const retryingController = {
+    ...daytona.controller,
+    async abortTrial(input) {
+      abortAttempts += 1;
+      if (abortAttempts === 1) throw new Error('transient Daytona abort failure');
+      return originalAbort(input);
+    },
+  };
+  const transport = fakeTransport({
+    readinessTransform: (lease) => ({ ...lease, requestHash: HASH('f') }),
+  });
+  const { controller } = runtime({
+    daytona: { ...daytona, controller: retryingController },
+    transport,
+  });
+
+  await assert.rejects(
+    controller.runTrial(trialSpec('cleanup-converges-r1', 'generic'), async () => 'unreachable'),
+    /cleanup was incomplete/i,
+  );
+  assert.equal(abortAttempts, 2);
+  assert.equal(daytona.sandboxes.size, 0);
+  assert.equal(controller.snapshot().activeTrial, undefined);
+
+  const disposal = await controller.dispose();
+  assert.equal(disposal.disposed, true);
+  assert.equal(daytona.sandboxes.size, 0);
 });
 
 test('unknown secret-bearing trial input is rejected before provisioning and never retained', async () => {
@@ -483,7 +699,19 @@ test('dispose exposes no dependency error or secret material when active cleanup
     transport.calls.push({ name: 'closeTrial', input });
     throw new Error(`cleanup transport contained ${secret}`);
   };
-  const { controller } = runtime({ daytona, transport });
+  const deletionFailure = {
+    ...daytona.controller,
+    async abortTrial() {
+      throw new Error('Daytona deletion dependency failed');
+    },
+    async dispose() {
+      throw new Error('Daytona disposal dependency failed');
+    },
+  };
+  const { controller } = runtime({
+    daytona: { ...daytona, controller: deletionFailure },
+    transport,
+  });
   await controller.beginTrial(trialSpec('dispose-error-r1', 'generic'));
 
   const disposal = controller.dispose();
@@ -494,9 +722,48 @@ test('dispose exposes no dependency error or secret material when active cleanup
     return true;
   });
   await assert.rejects(controller.dispose(), /disposal cleanup failed/i);
-  assert.equal(daytona.sandboxes.size, 0);
+  assert.equal(daytona.sandboxes.size, 1);
+  assert.equal(controller.snapshot().activeTrial?.trialId, 'dispose-error-r1');
   assert.equal(JSON.stringify(controller.snapshot()).includes(secret), false);
   assert.equal(controller.snapshot().keyMaterialDisposed, true);
+});
+
+test('dispose retains cleanup identity and succeeds when a later deletion retry recovers', async () => {
+  const daytona = fakeDaytona();
+  const originalAbort = daytona.controller.abortTrial;
+  const originalDispose = daytona.controller.dispose;
+  let cleanupFailuresRemaining = 2;
+  const retryingController = {
+    ...daytona.controller,
+    async abortTrial(input) {
+      if (cleanupFailuresRemaining > 0) {
+        cleanupFailuresRemaining -= 1;
+        throw new Error('transient Daytona deletion failure');
+      }
+      return originalAbort(input);
+    },
+    async dispose() {
+      if (cleanupFailuresRemaining > 0) {
+        cleanupFailuresRemaining -= 1;
+        throw new Error('transient Daytona disposal failure');
+      }
+      return originalDispose();
+    },
+  };
+  const { controller } = runtime({
+    daytona: { ...daytona, controller: retryingController },
+    transport: fakeTransport(),
+  });
+  await controller.beginTrial(trialSpec('dispose-retry-r1', 'generic'));
+
+  await assert.rejects(controller.dispose(), /disposal cleanup failed/i);
+  assert.equal(daytona.sandboxes.size, 1);
+  assert.equal(controller.snapshot().activeTrial?.trialId, 'dispose-retry-r1');
+
+  const receipt = await controller.dispose();
+  assert.equal(receipt.activeTrialDeleted, true);
+  assert.equal(daytona.sandboxes.size, 0);
+  assert.equal(controller.snapshot().activeTrial, undefined);
 });
 
 test('dispose after finalization remains idempotent without invalidating authenticated final evidence', async () => {

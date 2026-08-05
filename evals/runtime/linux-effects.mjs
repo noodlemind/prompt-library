@@ -33,6 +33,7 @@ import {
   createRuntimeProbeHandoff,
   encodeRuntimeProbeHandoff,
 } from './runtime-probe.mjs';
+import { runReadinessPreflight } from './readiness-preflight.mjs';
 import {
   createRuntimeNetworkPolicyReceipt,
   createRuntimeEvidenceHandoff,
@@ -48,6 +49,7 @@ const MAX_HELPER_OUTPUT_BYTES = 64 * 1024;
 const MAX_HELPER_HANDOFF_BYTES = 32 * 1024;
 const MAX_CHILD_OUTPUT_BYTES = 64 * 1024;
 const PINNED_HARBOR = '/opt/engineer/bin/harbor';
+const FIXED_DOCKER = '/usr/local/bin/docker';
 const HASH = /^[a-f0-9]{64}$/;
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const PROVIDER_ENV = /(?:OPENROUTER|OPENAI|ANTHROPIC|GEMINI|GOOGLE_AI|GROQ|XAI|MISTRAL|COHERE|TOGETHER|FIREWORKS|DEEPSEEK|CEREBRAS|PERPLEXITY|API_KEY|AUTHORIZATION|CREDENTIAL|PASSWORD|SECRET|TOKEN)/i;
@@ -74,6 +76,7 @@ const RUNTIME_RUNNER_ENV = new Set([
   'ENGINEER_PROVIDER_TRIAL_ID',
   'ENGINEER_PROVIDER_LEASE_DIGEST',
   'ENGINEER_PROVIDER_LEASE_SEQUENCE',
+  'ENGINEER_RUNTIME_EXECUTION_MODE',
   'ENGINEER_RUNTIME_LEASE_HASH',
   'HOME',
   'LANG',
@@ -102,6 +105,10 @@ const REQUIRED_DRIVER = Object.freeze([
   'inspectSocket',
   'setSocketPolicy',
   'runReadinessProbe',
+  'inspectZeroProviderAbsence',
+  'runStorageReadinessCanary',
+  'runReadinessDenialProbe',
+  'runTaskIsolationCanary',
   'waitProcess',
   'collectEvidence',
   'closeDescriptor',
@@ -216,6 +223,10 @@ function evidenceHash(value) {
 
 function sameJson(left, right) {
   return evidenceHash(left) === evidenceHash(right);
+}
+
+function exactObjectKeys(value, fields) {
+  return plainObject(value) && sameJson(Object.keys(value).sort(), [...fields].sort());
 }
 
 function ipv4Integer(address) {
@@ -484,14 +495,15 @@ function validateTopology(input) {
   }
   for (const field of [
     'dockerd', 'cgroupExec', 'iptables', 'ip6tables', 'supervisor', 'providerBroker', 'readinessProbe',
-    'taskIsolationProbe', 'evidenceCollector', 'runner', 'harbor', 'sentinel',
+    'taskIsolationProbe', 'readinessDenialProbe', 'evidenceCollector', 'runner', 'harbor', 'sentinel',
   ]) absolute(topology.executables[field], `executables.${field}`);
   if (topology.executables.harbor !== PINNED_HARBOR) {
     fail('Harbor executable drifted from the fixed runtime', 'ERR_LINUX_RUNTIME_CONFIG');
   }
   for (const field of [
     'supervisor', 'dockerd', 'cgroupExec', 'iptables', 'ip6tables', 'sentinel',
-    'taskIsolationProbe', 'providerBroker', 'readinessProbe', 'evidenceCollector', 'runner', 'harbor', 'daemonRoot',
+    'taskIsolationProbe', 'readinessDenialProbe', 'providerBroker', 'readinessProbe',
+    'evidenceCollector', 'runner', 'harbor', 'daemonRoot',
   ]) sha(topology.hashes[field], `hashes.${field}`);
   const identities = topology.identities;
   for (const field of ['supervisorUid', 'runnerUid', 'runnerGid', 'brokerUid', 'brokerGid', 'brokerClientGid']) {
@@ -583,14 +595,19 @@ function validatePlatform(observed, topology) {
   return clone(observed, 'platform observation');
 }
 
-function validateReadiness(value, topology, { phase, baseline }) {
+function validateReadiness(value, topology, { phase, baseline, condition }) {
   credentialFree(value, 'readiness observation');
+  const zeroProvider = phase === 'zero-provider';
   const trueFields = [
     value.cgroup?.populated,
     value.cgroup?.controllersEnforced,
     value.noProviderProbe?.completed,
-    value.noProviderProbe?.genericMountPassed,
-    value.noProviderProbe?.harnessMountPassed,
+    ...(zeroProvider
+      ? [value.noProviderProbe?.conditionMountPassed]
+      : [
+        value.noProviderProbe?.genericMountPassed,
+        value.noProviderProbe?.harnessMountPassed,
+      ]),
     value.noProviderProbe?.providerCredentialAbsent,
     value.storageProbe?.enospcObserved,
     value.storageProbe?.evidenceHeadroomRecovered,
@@ -614,6 +631,7 @@ function validateReadiness(value, topology, { phase, baseline }) {
       || value.cgroup?.runnerUid !== topology.identities.runnerUid
       || value.noProviderProbe?.imageDigest !== topology.imageDigest
       || value.noProviderProbe?.providerCalls !== 0
+      || (zeroProvider && value.noProviderProbe?.condition !== condition)
       || value.storageProbe?.filesystemId !== topology.filesystem.id
       || value.storageProbe?.totalBytes !== TEN_GIB
       || value.runner?.uid !== topology.identities.runnerUid
@@ -629,6 +647,12 @@ function validateReadiness(value, topology, { phase, baseline }) {
       && (value.broker?.uid !== topology.identities.brokerUid
         || value.broker?.onlyProviderEgress !== true)) {
     fail('post-broker egress identity drifted', 'ERR_LINUX_RUNTIME_READINESS');
+  }
+  if (zeroProvider
+      && (value.broker?.installed !== false
+        || value.broker?.socketAbsent !== true
+        || value.broker?.policyAbsent !== true)) {
+    fail('zero-provider broker absence drifted', 'ERR_LINUX_RUNTIME_READINESS');
   }
   if (baseline && (!sameJson(value.noProviderProbe, baseline.noProviderProbe)
       || !sameJson(value.storageProbe, baseline.storageProbe)
@@ -800,6 +824,7 @@ function executableHashMap(topology) {
     [topology.executables.dockerd, topology.hashes.dockerd],
     [topology.executables.cgroupExec, topology.hashes.cgroupExec],
     [topology.executables.taskIsolationProbe, topology.hashes.taskIsolationProbe],
+    [topology.executables.readinessDenialProbe, topology.hashes.readinessDenialProbe],
     [topology.executables.iptables, topology.hashes.iptables],
     [topology.executables.ip6tables, topology.hashes.ip6tables],
     [topology.executables.sentinel, topology.hashes.sentinel],
@@ -821,6 +846,7 @@ export function createLinuxRuntimeEffects({
   taskSecurityMaterializer = materializeTrialSecurity,
   taskContainerObserver = observeLiveTaskContainer,
   taskReceiptPublisher = publishTaskRuntimeReceipts,
+  readinessPreflightProducer = runReadinessPreflight,
 } = {}) {
   const topology = validateTopology(rawTopology);
   const driver = validateDriver(suppliedDriver ?? createNodeLinuxDriver(topology));
@@ -830,6 +856,9 @@ export function createLinuxRuntimeEffects({
   }
   if (typeof taskContainerObserver !== 'function' || typeof taskReceiptPublisher !== 'function') {
     fail('task namespace evidence producers are required', 'ERR_LINUX_RUNTIME_CONFIG');
+  }
+  if (typeof readinessPreflightProducer !== 'function') {
+    fail('readiness preflight producer is required', 'ERR_LINUX_RUNTIME_CONFIG');
   }
 
   let platform;
@@ -849,14 +878,111 @@ export function createLinuxRuntimeEffects({
   let installedNetworkPolicy;
   let networkPolicyObservation;
   let preBrokerReadiness;
+  let readinessPreflightPublication;
+  let runtimeExecutionMode = 'controlled-provider';
+  let activeCondition = null;
   let providerFd = null;
   let providerFdClosed = false;
+
+  function zeroProviderPreflightProbes({ allowedBindSets }) {
+    let canary;
+    return {
+      async inspectProducer({ bindings }) {
+        const entries = [
+          ['producerExecutableHash', topology.executables.supervisor],
+          ['readinessProbeExecutableHash', topology.executables.readinessProbe],
+          ['runnerExecutableHash', topology.executables.runner],
+          ['harborExecutableHash', topology.executables.harbor],
+          ['taskIsolationProbeExecutableHash', topology.executables.taskIsolationProbe],
+          ['readinessDenialProbeExecutableHash', topology.executables.readinessDenialProbe],
+        ];
+        const hashes = await Promise.all(entries.map(([, file]) => driver.hashExecutable(file)));
+        return {
+          platform: platform.platform,
+          effectiveUid: platform.effectiveUid,
+          sandboxBootId: platform.sandboxBootId,
+          executableHashes: Object.fromEntries(entries.map(([name], index) => [name, hashes[index]])),
+        };
+      },
+      async probeConditionMount({ bindings }) {
+        canary = await driver.runTaskIsolationCanary({
+          condition: bindings.condition,
+          contract: securityContract,
+          allowedBindSets,
+          materialization: securityMaterialization,
+          imageDigest: topology.imageDigest,
+          probeExecutableHash: topology.hashes.taskIsolationProbe,
+          timeoutMs: topology.timeouts.helperMs,
+        });
+        if (!plainObject(canary) || !plainObject(canary.conditionMount) || !plainObject(canary.task)) {
+          fail('condition task-isolation canary failed closed',
+            'ERR_READINESS_PREFLIGHT_MISSING_PINNED_DENIAL_HELPER');
+        }
+        return canary.conditionMount;
+      },
+      async probeProviderAbsence({ bindings }) {
+        const absence = await driver.inspectZeroProviderAbsence({
+          brokerSocket: topology.paths.brokerSocket,
+          brokerPolicy: topology.paths.brokerPolicy,
+        });
+        if (!plainObject(absence)
+            || absence.socketAbsent !== true
+            || absence.policyAbsent !== true
+            || platform.providerCredentialsAbsent !== true
+            || platform.daytonaCredentialsAbsent !== true
+            || brokerHandle || brokerObservation) {
+          fail('zero-provider capability was present before readiness',
+            'ERR_READINESS_PREFLIGHT_PROVIDER');
+        }
+        return {
+          completed: true,
+          providerCalls: 0,
+          providerCredentialAbsent: true,
+          brokerSocketAbsent: true,
+          proofHash: evidenceHash({
+            schema: 'engineer-zero-provider-absence-proof.v1',
+            requestHash: bindings.requestHash,
+            networkPolicyHash: bindings.networkPolicyHash,
+            socketAbsent: true,
+            policyAbsent: true,
+          }),
+        };
+      },
+      async probeStorage({ bindings }) {
+        return driver.runStorageReadinessCanary({
+          path: '/engineer-bounded/.readiness-storage-canary',
+          reservePath: topology.paths.evidenceReserve,
+          filesystemId: bindings.filesystemId,
+          totalBytes: bindings.filesystemBytes,
+          evidenceReserveBytes: bindings.evidenceReserveBytes,
+        });
+      },
+      async probeRunnerDenials({ bindings }) {
+        return driver.runReadinessDenialProbe({
+          file: topology.executables.readinessDenialProbe,
+          targetProcess: daemonHandle,
+          cgroupPath: topology.cgroup.path,
+          providerAddresses: installedNetworkPolicy.providerAddresses,
+          expectedExecutableHash: bindings.readinessDenialProbeExecutableHash,
+          timeoutMs: topology.timeouts.helperMs,
+        });
+      },
+      async probeTaskIsolation() {
+        if (!plainObject(canary) || !plainObject(canary.task)) {
+          fail('task-isolation canary was not bound to the condition mount',
+            'ERR_READINESS_PREFLIGHT_MISSING_PINNED_DENIAL_HELPER');
+        }
+        return canary.task;
+      },
+    };
+  }
   let runnerResult;
   let detachLossHandler;
   let shutdownStarted = false;
   let controlChannel;
   let activeTrialId = null;
   let activeRequestHash = null;
+  let activeLeaseHash = null;
   let lifecycleEpoch = 0;
   let lifecycleInvalidated = false;
   let activeLifecycleTransition = null;
@@ -919,13 +1045,14 @@ export function createLinuxRuntimeEffects({
         fail('control channel lifecycle is invalid', 'ERR_LINUX_RUNTIME_CONTROL_CHANNEL');
       }
       const expected = new Set([
-        'schema', 'kind', 'kernelBound', 'authenticated', 'open', 'receiptHash',
+        'schema', 'kind', 'kernelBound', 'executionMode', 'authenticated', 'open', 'receiptHash',
         'inputDescriptorHash', 'outputDescriptorHash', 'stream',
       ]);
       const keys = Object.keys(value);
       if (keys.length !== expected.size || keys.some((key) => !expected.has(key)) ||
           value.schema !== 'engineer-authenticated-control-channel.v1' ||
           !['inherited-pipe', 'inherited-socket'].includes(value.kind) ||
+          !['controlled-provider', 'zero-provider-canary'].includes(value.executionMode) ||
           value.kernelBound !== true || value.authenticated !== true || value.open !== true ||
           !value.stream || typeof value.stream.once !== 'function' || value.stream.destroyed === true) {
         fail('control channel is not a live authenticated inherited transport',
@@ -935,9 +1062,11 @@ export function createLinuxRuntimeEffects({
         sha(value[field], `control channel ${field}`);
       }
       controlChannel = value;
+      runtimeExecutionMode = value.executionMode;
       return {
         schema: value.schema,
         kind: value.kind,
+        executionMode: value.executionMode,
         authenticated: true,
         receiptHash: value.receiptHash,
       };
@@ -1159,14 +1288,27 @@ export function createLinuxRuntimeEffects({
   async function startDockerProxy(options) {
     return guarded('Docker policy proxy startup', async () => {
       if (!daemonObservation || proxyInstance) fail('Docker proxy lifecycle is invalid');
+      const executionMode = options?.executionMode;
       if (!plainObject(options)
           || options.upstreamSocketPath !== topology.paths.daemonSocket
           || options.runnerUid !== topology.identities.runnerUid
-          || options.runnerGid !== topology.identities.runnerGid) {
+          || options.runnerGid !== topology.identities.runnerGid
+          || !['controlled-provider', 'zero-provider-canary'].includes(executionMode)
+          || executionMode !== controlChannel?.executionMode) {
         fail('Docker proxy identity binding drifted');
+      }
+      if (executionMode === 'zero-provider-canary') {
+        if (typeof options.releaseSha !== 'string'
+            || !/^[a-f0-9]{40,64}$/.test(options.releaseSha)) {
+          fail('zero-provider release binding drifted');
+        }
+        sha(options.taskLockHash, 'zero-provider task lock hash');
+        sha(options.bundleHash, 'zero-provider bundle hash');
       }
       bindTrial(options.trialId);
       bindRequest(options.requestHash);
+      runtimeExecutionMode = executionMode;
+      activeCondition = options.condition;
       credentialFree(options.policy, 'Docker proxy policy');
       const contract = createTrialSecurityContract({
         trialId: options.trialId,
@@ -1225,9 +1367,12 @@ export function createLinuxRuntimeEffects({
         upstreamSocketPath: topology.paths.daemonSocket,
         policy: options.policy,
         onContainerStarted: async ({ containerId, containerBindingHash } = {}) => {
+          const providerBoundaryReady = runtimeExecutionMode === 'zero-provider-canary'
+            ? !brokerObservation && Boolean(readinessPreflightPublication)
+            : Boolean(brokerObservation);
           if (!securityContract || !securityMaterialization || liveTaskObservation
-              || !brokerObservation || !networkPolicyObservation) {
-            fail('live task observation occurred outside the broker-bound trial lifecycle',
+              || !providerBoundaryReady || !networkPolicyObservation) {
+            fail('live task observation occurred outside the bound trial lifecycle',
               'ERR_LINUX_RUNTIME_EVIDENCE');
           }
           liveTaskObservation = await taskContainerObserver({
@@ -1267,6 +1412,47 @@ export function createLinuxRuntimeEffects({
         nonBypassable: true,
         realDaemonDenied: true,
       };
+      if (executionMode === 'zero-provider-canary') {
+        const preflightInput = {
+          requestHash: options.requestHash,
+          releaseSha: options.releaseSha,
+          taskLockHash: options.taskLockHash,
+          bundleHash: options.bundleHash,
+          executionMode,
+          condition: options.condition,
+          imageDigest: topology.imageDigest,
+          sandboxId: platform.sandboxId,
+          sandboxBootId: platform.sandboxBootId,
+          trialId: options.trialId,
+          cgroup: {
+            id: topology.cgroup.id,
+            pathHash: topology.cgroup.pathHash,
+          },
+          filesystem: {
+            id: topology.filesystem.id,
+            bytes: topology.filesystem.expectedBytes,
+            evidenceReserveBytes: reserve.bytes,
+          },
+          networkPolicy: clone(networkPolicyObservation, 'network policy observation'),
+          materialization: {
+            trialId: securityMaterialization.trialId,
+            imageDigest: securityMaterialization.imageDigest,
+            workspaceFilesystemId: securityMaterialization.workspaceFilesystemId,
+            receiptHash: securityMaterialization.receiptHash,
+          },
+          executables: {
+            producerExecutableHash: topology.hashes.supervisor,
+            readinessProbeExecutableHash: topology.hashes.readinessProbe,
+            runnerExecutableHash: topology.hashes.runner,
+            harborExecutableHash: topology.hashes.harbor,
+            taskIsolationProbeExecutableHash: topology.hashes.taskIsolationProbe,
+            readinessDenialProbeExecutableHash: topology.hashes.readinessDenialProbe,
+          },
+        };
+        readinessPreflightPublication = await readinessPreflightProducer(preflightInput, {
+          probes: zeroProviderPreflightProbes({ allowedBindSets }),
+        });
+      }
       return clone(proxyObservation);
     });
   }
@@ -1274,8 +1460,19 @@ export function createLinuxRuntimeEffects({
   async function inspectReadiness(options) {
     return guarded(`${options?.phase ?? 'unknown'} readiness`, async () => {
       if (!platform || !daemonObservation || !proxyObservation) fail('readiness prerequisites are incomplete');
-      if (!plainObject(options) || !['pre-broker', 'post-broker'].includes(options.phase)) {
+      if (!plainObject(options)
+          || !['pre-broker', 'post-broker', 'zero-provider'].includes(options.phase)) {
         fail('readiness phase is invalid');
+      }
+      if (options.phase === 'zero-provider') {
+        if (runtimeExecutionMode !== 'zero-provider-canary'
+            || options.executionMode !== 'zero-provider-canary'
+            || options.broker !== null
+            || !readinessPreflightPublication) {
+          fail('zero-provider readiness prerequisites are incomplete');
+        }
+      } else if (runtimeExecutionMode !== 'controlled-provider') {
+        fail('controlled-provider readiness phase drifted');
       }
       bindRequest(options.requestHash);
       bindTrial(networkPolicyObservation.trialId);
@@ -1345,6 +1542,9 @@ export function createLinuxRuntimeEffects({
           pidsMax: topology.cgroup.pidsMax,
         },
         networkPolicy: clone(networkPolicyObservation, 'network policy observation'),
+        ...(options.phase === 'zero-provider'
+          ? { readinessPreflight: clone(readinessPreflightPublication, 'readiness preflight publication') }
+          : {}),
       });
       const observation = await driver.runReadinessProbe({
         file: topology.executables.readinessProbe,
@@ -1366,6 +1566,7 @@ export function createLinuxRuntimeEffects({
       const verified = validateReadiness(observation, topology, {
         phase: options.phase,
         baseline: options.phase === 'post-broker' ? preBrokerReadiness : null,
+        condition: activeCondition,
       });
       if (options.phase === 'pre-broker') preBrokerReadiness = verified;
       return clone(verified);
@@ -1524,23 +1725,33 @@ export function createLinuxRuntimeEffects({
 
   async function launchRunner(options) {
     return guardedLifecycleTransition('runner launch', async (transition) => {
-      if (!brokerObservation || !providerFdClosed || runnerHandle) fail('runner prerequisites are incomplete');
+      const zeroProvider = runtimeExecutionMode === 'zero-provider-canary';
+      const providerBoundaryReady = zeroProvider
+        ? !brokerObservation && providerFd === null && providerFdClosed === false
+          && Boolean(readinessPreflightPublication)
+        : Boolean(brokerObservation) && providerFdClosed;
+      if (!providerBoundaryReady || runnerHandle || activeLeaseHash !== null) {
+        fail('runner prerequisites are incomplete');
+      }
+      const supplementaryGids = zeroProvider ? [] : [topology.identities.brokerClientGid];
+      const expectedLeaseHash = zeroProvider ? options?.leaseHash : brokerObservation?.leaseDigest;
       if (!plainObject(options)
+          || options.executionMode !== runtimeExecutionMode
           || options.uid !== topology.identities.runnerUid
           || options.gid !== topology.identities.runnerGid
-          || !sameJson(options.supplementaryGids, [topology.identities.brokerClientGid])
+          || !sameJson(options.supplementaryGids, supplementaryGids)
           || !Array.isArray(options.inheritedFds)
           || options.inheritedFds.length !== 0
           || !Array.isArray(options.argv)
           || options.argv[0] !== topology.executables.runner
           || options.cwd !== topology.paths.workspace
-          || options.leaseHash !== brokerObservation.leaseDigest) {
+          || options.leaseHash !== expectedLeaseHash) {
         fail('runner identity, cgroup, or executable binding drifted', 'ERR_LINUX_RUNTIME_RUNNER');
       }
       integer(options.timeoutMs, 'runner timeoutMs', 1_000, 4 * 60 * 60 * 1_000);
       bindRequest(options.requestHash);
       sha(options.leaseHash, 'leaseHash');
-      bindTrial(brokerObservation.trialId);
+      bindTrial(activeTrialId);
       if (!plainObject(options.env)) fail('runner environment is invalid');
       for (const [name, value] of Object.entries(options.env)) {
         if (!RUNTIME_RUNNER_ENV.has(name)
@@ -1551,15 +1762,21 @@ export function createLinuxRuntimeEffects({
           fail('runner environment contains credential or command drift', 'ERR_LINUX_RUNTIME_SECRET');
         }
       }
+      const providerEnvironmentValid = zeroProvider
+        ? options.env.ENGINEER_RUNTIME_EXECUTION_MODE === 'zero-provider-canary'
+          && !Object.keys(options.env).some((name) => name.startsWith('ENGINEER_PROVIDER_'))
+        : options.env.ENGINEER_RUNTIME_EXECUTION_MODE === undefined
+          && options.env.ENGINEER_PROVIDER_BROKER_SOCKET === topology.paths.brokerSocket
+          && options.env.ENGINEER_PROVIDER_LEASE_ID === brokerObservation.leaseId
+          && options.env.ENGINEER_PROVIDER_TRIAL_ID === brokerObservation.trialId
+          && options.env.ENGINEER_PROVIDER_LEASE_DIGEST === brokerObservation.leaseDigest
+          && options.env.ENGINEER_PROVIDER_LEASE_SEQUENCE === String(brokerObservation.leaseSequence);
       if (options.env.DOCKER_HOST !== `unix://${topology.paths.proxySocket}`
-          || options.env.ENGINEER_PROVIDER_BROKER_SOCKET !== topology.paths.brokerSocket
-          || options.env.ENGINEER_PROVIDER_LEASE_ID !== brokerObservation.leaseId
-          || options.env.ENGINEER_PROVIDER_TRIAL_ID !== brokerObservation.trialId
-          || options.env.ENGINEER_PROVIDER_LEASE_DIGEST !== brokerObservation.leaseDigest
-          || options.env.ENGINEER_PROVIDER_LEASE_SEQUENCE !== String(brokerObservation.leaseSequence)
-          || options.env.ENGINEER_RUNTIME_LEASE_HASH !== brokerObservation.leaseDigest) {
+          || options.env.ENGINEER_RUNTIME_LEASE_HASH !== options.leaseHash
+          || !providerEnvironmentValid) {
         fail('runner lease environment drifted', 'ERR_LINUX_RUNTIME_RUNNER');
       }
+      activeLeaseHash = options.leaseHash;
       if (sentinelHandle) {
         await driver.terminateProcess(sentinelHandle, { reason: 'runner-start', timeoutMs: 5_000 });
         sentinelHandle = null;
@@ -1574,7 +1791,7 @@ export function createLinuxRuntimeEffects({
           env: clone(options.env, 'runner environment'),
           uid: topology.identities.runnerUid,
           gid: topology.identities.runnerGid,
-          supplementaryGids: [topology.identities.brokerClientGid],
+          supplementaryGids,
           cgroupPath: topology.cgroup.path,
           inheritedFds: [],
           timeoutMs: options.timeoutMs,
@@ -1612,19 +1829,23 @@ export function createLinuxRuntimeEffects({
 
   async function collectFinalEvidence(options) {
     return guarded('final evidence collection', async () => {
-      if (!runnerResult || runnerHandle || !brokerObservation || !networkPolicyObservation
+      const zeroProvider = runtimeExecutionMode === 'zero-provider-canary';
+      const providerBoundaryReady = zeroProvider ? !brokerObservation : Boolean(brokerObservation);
+      if (!runnerResult || runnerHandle || !providerBoundaryReady || !networkPolicyObservation
           || !liveTaskObservation || !securityContract || !securityMaterialization
-          || taskReceiptPublication) {
+          || taskReceiptPublication || activeLeaseHash === null) {
         fail('final evidence prerequisites are incomplete');
       }
       if (!plainObject(options)
+          || options.executionMode !== runtimeExecutionMode
           || options.requestHash == null
-          || options.leaseHash !== brokerObservation.leaseDigest) {
+          || options.leaseHash !== activeLeaseHash
+          || (zeroProvider ? options.broker !== null : options.leaseHash !== brokerObservation.leaseDigest)) {
         fail('final evidence lease binding drifted');
       }
       bindRequest(options.requestHash);
       sha(options.leaseHash, 'leaseHash');
-      bindTrial(brokerObservation.trialId);
+      bindTrial(activeTrialId);
       if (sentinelHandle) {
         const stopped = await driver.terminateProcess(sentinelHandle, {
           reason: 'final-evidence',
@@ -1654,6 +1875,8 @@ export function createLinuxRuntimeEffects({
         fail('task namespace receipt publication drifted', 'ERR_LINUX_RUNTIME_EVIDENCE');
       }
       const handoff = createRuntimeEvidenceHandoff({
+        executionMode: runtimeExecutionMode,
+        trialId: activeTrialId,
         requestHash: options.requestHash,
         leaseHash: options.leaseHash,
         observedAt: canonicalInstant(driver.now(), 'final evidence handoff observation'),
@@ -1670,7 +1893,7 @@ export function createLinuxRuntimeEffects({
         },
         proxy: proxyEvidence,
         networkPolicy: clone(networkPolicyObservation, 'network policy observation'),
-        broker: {
+        broker: runtimeExecutionMode === 'zero-provider-canary' ? null : {
           leaseId: brokerObservation.leaseId,
           leaseDigest: brokerObservation.leaseDigest,
           leaseSequence: brokerObservation.leaseSequence,
@@ -1827,6 +2050,15 @@ function statFilesystem(target) {
   const bytes = filesystem.bsize * filesystem.blocks;
   if (bytes > BigInt(Number.MAX_SAFE_INTEGER)) throw new Error('filesystem size exceeds safe evidence bounds');
   return { id: `dev:${stat.dev.toString(16)}`, bytes: Number(bytes) };
+}
+
+function availableFilesystemBytes(target) {
+  const filesystem = fs.statfsSync(target, { bigint: true });
+  const bytes = filesystem.bsize * filesystem.bavail;
+  if (bytes > BigInt(Number.MAX_SAFE_INTEGER)) {
+    throw new Error('available filesystem capacity exceeds safe evidence bounds');
+  }
+  return Number(bytes);
 }
 
 function statMode(target) {
@@ -2023,6 +2255,49 @@ export function createNodeLinuxDriver(topology) {
     } finally {
       clearTimeout(timer);
     }
+  }
+
+  async function runCapturedProcess(spec) {
+    const maximum = spec.maxOutputBytes ?? MAX_CHILD_OUTPUT_BYTES;
+    const handle = await spawnProcess({ ...spec, maxOutputBytes: maximum });
+    const chunks = [];
+    let stdoutBytes = 0;
+    handle.child.stdout.on('data', (chunk) => {
+      stdoutBytes += chunk.length;
+      if (stdoutBytes <= maximum) chunks.push(Buffer.from(chunk));
+    });
+    const result = await waitProcess(handle, { timeoutMs: spec.timeoutMs });
+    if (result.exitCode !== 0 || stdoutBytes > maximum) {
+      throw new Error(`${spec.role} failed closed`);
+    }
+    const output = Buffer.concat(chunks).toString('utf8');
+    if (Buffer.byteLength(output, 'utf8') !== stdoutBytes) {
+      throw new Error(`${spec.role} output framing drifted`);
+    }
+    return output;
+  }
+
+  async function runDockerCommand(args, timeoutMs, label) {
+    if (!Array.isArray(args) || args.length < 1 || args.length > 160
+        || args.some((argument) => typeof argument !== 'string'
+          || argument.includes('\0') || Buffer.byteLength(argument, 'utf8') > 512)) {
+      throw new Error(`${label} invocation escaped its bound`);
+    }
+    return runCapturedProcess({
+      role: label,
+      file: FIXED_DOCKER,
+      args: ['--host', `unix://${topology.paths.daemonSocket}`, ...args],
+      cwd: '/',
+      env: SUPPORT_ENV,
+      uid: 0,
+      gid: 0,
+      supplementaryGids: [],
+      cgroupPath: null,
+      inheritedFds: [],
+      maxOutputBytes: MAX_CHILD_OUTPUT_BYTES,
+      timeoutMs,
+      shell: false,
+    });
   }
 
   async function runJsonHelper(spec, { role, encodeHandoff }) {
@@ -2254,6 +2529,333 @@ export function createNodeLinuxDriver(topology) {
       fs.chownSync(spec.path, spec.uid, spec.gid);
       fs.chmodSync(spec.path, spec.mode);
       return true;
+    },
+    async inspectZeroProviderAbsence(spec) {
+      if (!plainObject(spec)
+          || spec.brokerSocket !== topology.paths.brokerSocket
+          || spec.brokerPolicy !== topology.paths.brokerPolicy) {
+        throw new Error('zero-provider absence inspection escaped its fixed paths');
+      }
+      const absent = (target) => {
+        try {
+          fs.lstatSync(target);
+          return false;
+        } catch (error) {
+          if (error?.code === 'ENOENT') return true;
+          throw error;
+        }
+      };
+      return {
+        socketAbsent: absent(spec.brokerSocket),
+        policyAbsent: absent(spec.brokerPolicy),
+      };
+    },
+    async runStorageReadinessCanary(spec) {
+      if (!plainObject(spec)
+          || spec.path !== '/engineer-bounded/.readiness-storage-canary'
+          || spec.reservePath !== topology.paths.evidenceReserve
+          || spec.filesystemId !== topology.filesystem.id
+          || spec.totalBytes !== topology.filesystem.expectedBytes
+          || !Number.isSafeInteger(spec.evidenceReserveBytes)
+          || spec.evidenceReserveBytes < 64 * 1024 * 1024
+          || spec.evidenceReserveBytes >= spec.totalBytes) {
+        throw new Error('storage readiness canary escaped its fixed bound');
+      }
+      const reserveStat = fs.lstatSync(spec.reservePath);
+      const before = statFilesystem(spec.path.slice(0, spec.path.lastIndexOf('/')));
+      if (!reserveStat.isFile() || reserveStat.isSymbolicLink()
+          || reserveStat.uid !== 0 || reserveStat.gid !== 0
+          || (reserveStat.mode & 0o777) !== 0o600
+          || reserveStat.blocks * 512 < spec.evidenceReserveBytes
+          || before.id !== spec.filesystemId || before.bytes !== spec.totalBytes) {
+        throw new Error('storage readiness reserve or filesystem identity drifted');
+      }
+      const descriptor = fs.openSync(
+        spec.path,
+        fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY
+          | (fs.constants.O_NOFOLLOW ?? 0),
+        0o600,
+      );
+      const block = Buffer.alloc(8 * 1024 * 1024);
+      let bytesWritten = 0;
+      let enospcObserved = false;
+      let primaryError;
+      let cleanupError;
+      try {
+        fs.fchownSync(descriptor, 0, 0);
+        fs.fchmodSync(descriptor, 0o600);
+        while (bytesWritten < spec.totalBytes) {
+          const count = Math.min(block.length, spec.totalBytes - bytesWritten);
+          try {
+            const written = fs.writeSync(descriptor, block, 0, count, null);
+            if (written < 1 || written > count) throw new Error('storage canary write drifted');
+            bytesWritten += written;
+          } catch (error) {
+            if (error?.code === 'ENOSPC') {
+              enospcObserved = true;
+              break;
+            }
+            throw error;
+          }
+        }
+        if (!enospcObserved) throw new Error('bounded storage did not produce ENOSPC');
+      } catch (error) {
+        primaryError = error;
+      } finally {
+        try {
+          block.fill(0);
+          fs.closeSync(descriptor);
+          fs.unlinkSync(spec.path);
+          const parent = fs.openSync('/engineer-bounded', fs.constants.O_RDONLY);
+          try { fs.fsyncSync(parent); } finally { fs.closeSync(parent); }
+        } catch (error) {
+          cleanupError = error;
+        }
+      }
+      if (primaryError) throw primaryError;
+      if (cleanupError) throw cleanupError;
+      const after = statFilesystem('/engineer-bounded');
+      const availableBytesAfterCleanup = availableFilesystemBytes('/engineer-bounded');
+      if (after.id !== spec.filesystemId || after.bytes !== spec.totalBytes
+          || availableBytesAfterCleanup < spec.evidenceReserveBytes) {
+        throw new Error('storage readiness headroom did not recover');
+      }
+      const proof = {
+        schema: 'engineer-readiness-storage-observation.v1',
+        filesystemId: spec.filesystemId,
+        totalBytes: spec.totalBytes,
+        bytesWritten,
+        availableBytesAfterCleanup,
+        enospcObserved: true,
+        evidenceHeadroomRecovered: true,
+      };
+      return { ...proof, proofHash: evidenceHash(proof) };
+    },
+    async runReadinessDenialProbe(spec) {
+      if (!plainObject(spec)
+          || spec.file !== topology.executables.readinessDenialProbe
+          || spec.cgroupPath !== topology.cgroup.path
+          || spec.expectedExecutableHash !== topology.hashes.readinessDenialProbe
+          || !plainObject(spec.targetProcess)
+          || !plainObject(spec.providerAddresses)
+          || !Array.isArray(spec.providerAddresses.ipv4)
+          || !Array.isArray(spec.providerAddresses.ipv6)) {
+        throw new Error('readiness denial probe escaped its trusted binding');
+      }
+      if (hashFile(spec.file) !== spec.expectedExecutableHash) {
+        throw new Error('readiness denial probe executable identity drifted');
+      }
+      const targetPid = spec.targetProcess.adopted === true
+        ? spec.targetProcess.pid : spec.targetProcess.child?.pid;
+      if (!Number.isSafeInteger(targetPid) || targetPid < 1 || targetPid > 4_194_304) {
+        throw new Error('readiness denial target PID is invalid');
+      }
+      const targetStartTicks = processStartTime(targetPid);
+      if (targetStartTicks === null
+          || (spec.targetProcess.adopted === true
+            && spec.targetProcess.startTimeTicks !== targetStartTicks)) {
+        throw new Error('readiness denial target process identity drifted');
+      }
+      const destinations = [
+        ...spec.providerAddresses.ipv4.map((address) => ['--provider-v4', address]),
+        ...spec.providerAddresses.ipv6.map((address) => ['--provider-v6', address]),
+      ];
+      if (destinations.length < 1 || destinations.length > 32) {
+        throw new Error('readiness denial provider destination inventory is invalid');
+      }
+      const output = await runCapturedProcess({
+        role: 'readiness-denial-probe',
+        file: spec.file,
+        args: [
+          '--target-pid', String(targetPid),
+          '--target-start-ticks', targetStartTicks,
+          ...destinations.flat(),
+        ],
+        cwd: '/',
+        env: SUPPORT_ENV,
+        uid: topology.identities.runnerUid,
+        gid: topology.identities.runnerGid,
+        supplementaryGids: [],
+        cgroupPath: topology.cgroup.path,
+        inheritedFds: [],
+        maxOutputBytes: MAX_HELPER_OUTPUT_BYTES,
+        timeoutMs: spec.timeoutMs,
+        shell: false,
+      });
+      if (processStartTime(targetPid) !== targetStartTicks) {
+        throw new Error('readiness denial target process changed during observation');
+      }
+      let observation;
+      try { observation = JSON.parse(output.trim()); } catch {
+        throw new Error('readiness denial probe output is malformed');
+      }
+      if (!exactObjectKeys(observation, [
+        'daytonaCredentialsAbsent', 'effectiveCapabilities', 'egress', 'gid', 'mount',
+        'noNewPrivileges', 'providerCredentialsAbsent', 'ptrace', 'schema', 'sockets',
+        'supplementaryGroups', 'uid',
+      ])
+          || !exactObjectKeys(observation.egress, [
+            'denied', 'metadataAttempts', 'metadataConnected',
+            'providerAttempts', 'providerConnected',
+          ])
+          || !exactObjectKeys(observation.mount, ['denied', 'errno'])
+          || !exactObjectKeys(observation.ptrace,
+            ['denied', 'errno', 'targetPid', 'targetStartTicks'])
+          || !exactObjectKeys(observation.sockets, ['alternate', 'private', 'real'])
+          || observation.schema !== 'engineer-readiness-denial-observation.v1'
+          || observation.uid !== 2001 || observation.gid !== 2001
+          || observation.effectiveCapabilities !== 0
+          || observation.noNewPrivileges !== true
+          || observation.daytonaCredentialsAbsent !== true
+          || observation.providerCredentialsAbsent !== true
+          || !Array.isArray(observation.supplementaryGroups)
+          || observation.supplementaryGroups.length !== 0
+          || observation.mount.denied !== true || observation.mount.errno < 1
+          || observation.ptrace.denied !== true || observation.ptrace.errno < 1
+          || observation.ptrace.targetPid !== targetPid
+          || observation.ptrace.targetStartTicks !== targetStartTicks
+          || observation.sockets.private !== 'denied'
+          || !['absent', 'denied'].includes(observation.sockets.real)
+          || !['absent', 'denied'].includes(observation.sockets.alternate)
+          || observation.egress.denied !== true
+          || observation.egress.providerAttempts !== destinations.length
+          || observation.egress.providerConnected !== 0
+          || observation.egress.metadataAttempts !== 2
+          || observation.egress.metadataConnected !== 0) {
+        throw new Error('readiness denial probe observation drifted');
+      }
+      return {
+        uid: 2001,
+        effectiveCapabilities: 0,
+        privateDaemonDenied: true,
+        realDaemonDenied: true,
+        alternateDaemonDenied: true,
+        mountDenied: true,
+        ptraceDenied: true,
+        providerEgressDenied: true,
+        metadataDenied: true,
+        daytonaCredentialsAbsent: observation.daytonaCredentialsAbsent,
+        providerCredentialsAbsent: observation.providerCredentialsAbsent,
+        proofHash: evidenceHash(observation),
+      };
+    },
+    async runTaskIsolationCanary(spec) {
+      if (!plainObject(spec)
+          || !['generic', 'harness'].includes(spec.condition)
+          || !Number.isSafeInteger(spec.timeoutMs)
+          || spec.timeoutMs < 1_000 || spec.timeoutMs > 60_000
+          || !plainObject(spec.contract)
+          || !Array.isArray(spec.allowedBindSets)
+          || spec.allowedBindSets.length < 1 || spec.allowedBindSets.length > 8
+          || !plainObject(spec.materialization)
+          || spec.imageDigest !== topology.imageDigest
+          || spec.probeExecutableHash !== topology.hashes.taskIsolationProbe) {
+        throw new Error('task isolation canary escaped its trusted binding');
+      }
+      const binds = spec.allowedBindSets[0];
+      if (!Array.isArray(binds) || binds.length < 4 || binds.length > 40) {
+        throw new Error('task isolation canary bind inventory is invalid');
+      }
+      const mountArguments = [];
+      for (const bind of binds) {
+        if (typeof bind !== 'string' || Buffer.byteLength(bind, 'utf8') > 512) {
+          throw new Error('task isolation canary bind is invalid');
+        }
+        const parts = bind.split(':');
+        if (parts.length !== 3 || !['ro', 'rw'].includes(parts[2])
+            || !path.posix.isAbsolute(parts[0]) || !path.posix.isAbsolute(parts[1])
+            || parts[0].includes(',') || parts[1].includes(',')) {
+          throw new Error('task isolation canary bind escaped its path contract');
+        }
+        mountArguments.push('--mount',
+          `type=bind,src=${parts[0]},dst=${parts[1]}${parts[2] === 'ro' ? ',readonly' : ''}`);
+      }
+      const name = `engineer-readiness-${evidenceHash({
+        trialId: spec.contract.identity.trialId,
+        condition: spec.condition,
+      }).slice(0, 24)}`;
+      let containerId = null;
+      let primaryError;
+      let cleanupError;
+      let result;
+      try {
+        containerId = (await runDockerCommand([
+          'container', 'create', '--pull=never', '--platform', 'linux/amd64',
+          '--name', name, '--network', 'none', '--read-only', '--cap-drop', 'ALL',
+          '--security-opt', 'no-new-privileges:true',
+          '--pids-limit', String(spec.contract.docker.resources.pidsLimit),
+          '--label', `${spec.contract.docker.leaseLabel}=${spec.contract.docker.leaseId}`,
+          ...mountArguments,
+          '--entrypoint', '/bin/sleep', spec.contract.docker.pinnedImage, '86400',
+        ], spec.timeoutMs, 'readiness-task-create')).trim();
+        if (!/^[a-f0-9]{64}$/.test(containerId)) {
+          throw new Error('task isolation canary container identity is malformed');
+        }
+        await runDockerCommand(['container', 'start', containerId],
+          spec.timeoutMs, 'readiness-task-start');
+        const groupOutput = await runDockerCommand([
+          'container', 'inspect', '--format',
+          '{"groupAdd":{{json .HostConfig.GroupAdd}}}', containerId,
+        ], spec.timeoutMs, 'readiness-task-groups');
+        let groupObservation;
+        try { groupObservation = JSON.parse(groupOutput.trim()); } catch {
+          throw new Error('task isolation group observation is malformed');
+        }
+        if (!exactObjectKeys(groupObservation, ['groupAdd'])
+            || !(groupObservation.groupAdd === null
+              || (Array.isArray(groupObservation.groupAdd)
+                && groupObservation.groupAdd.length === 0))) {
+          throw new Error('task isolation canary gained supplementary groups');
+        }
+        const observation = observeLiveTaskContainer({
+          containerId,
+          containerBindingHash: crypto.createHash('sha256')
+            .update('engineer-harness/docker-binding/v1\0')
+            .update(containerId)
+            .digest('hex'),
+          contract: spec.contract,
+          allowedBindSets: spec.allowedBindSets,
+          materialization: spec.materialization,
+          imageDigest: spec.imageDigest,
+          probeExecutableHash: spec.probeExecutableHash,
+        });
+        result = {
+          conditionMount: {
+            condition: spec.condition,
+            passed: true,
+            inventoryHash: observation.bindInventoryHash,
+          },
+          task: {
+            networkNone: observation.taskNetworkNone,
+            readOnlyRoot: observation.policyCompliant,
+            capabilitiesDropped: observation.effectiveCapabilities === 0,
+            noNewPrivileges: observation.noNewPrivileges,
+            brokerReachable: false,
+            brokerSocketMounted: false,
+            brokerClientGidPresent: false,
+            observationHash: observation.observationHash,
+          },
+        };
+      } catch (error) {
+        primaryError = error;
+      } finally {
+        if (containerId !== null) {
+          try {
+            await runDockerCommand(['container', 'rm', '--force', containerId],
+              spec.timeoutMs, 'readiness-task-remove');
+            const remaining = (await runDockerCommand([
+              'container', 'ls', '--all', '--filter', `id=${containerId}`,
+              '--quiet', '--no-trunc',
+            ], spec.timeoutMs, 'readiness-task-census')).trim();
+            if (remaining !== '') cleanupError = new Error('task isolation canary cleanup was incomplete');
+          } catch (error) {
+            cleanupError = error;
+          }
+        }
+      }
+      if (primaryError) throw primaryError;
+      if (cleanupError) throw cleanupError;
+      return result;
     },
     async runReadinessProbe(spec) {
       return runJsonHelper(spec, {

@@ -5,6 +5,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
 
+import { canonicalJson } from '../../../evals/runtime/protocol.mjs';
+
 import {
   RemoteSupervisorEntrypointError,
   createProviderKeyDescriptorCustody,
@@ -15,6 +17,45 @@ import {
 
 const HASH = (character) => character.repeat(64);
 const sha256 = (value) => crypto.createHash('sha256').update(value).digest('hex');
+const CONTROLLED_PROVIDER = 'controlled-provider';
+const ZERO_PROVIDER_CANARY = 'zero-provider-canary';
+
+function authenticatedControlChannel(hmacKey, executionMode) {
+  const unsigned = {
+    schema: 'engineer-authenticated-control-channel.v1',
+    kind: 'inherited-pipe',
+    kernelBound: true,
+    executionMode,
+    frameSha256: HASH('1'),
+    inputDescriptor: {
+      fd: 0,
+      kind: 'pipe',
+      device: '1',
+      inode: '2',
+      mode: 0o600,
+      ownerUid: 0,
+      ownerGid: 0,
+    },
+    outputDescriptor: {
+      fd: 1,
+      kind: 'pipe',
+      device: '1',
+      inode: '3',
+      mode: 0o600,
+      ownerUid: 0,
+      ownerGid: 0,
+    },
+  };
+  const authenticationTag = crypto.createHmac('sha256', hmacKey)
+    .update(canonicalJson(unsigned)).digest('hex');
+  return {
+    ...unsigned,
+    authenticationTag,
+    receiptHash: sha256(canonicalJson({ ...unsigned, authenticationTag })),
+    open: true,
+    stream: { destroyed: false, once() {} },
+  };
+}
 
 function topology(overrides = {}) {
   const base = {
@@ -113,13 +154,23 @@ test('composes the fixed supervisor route, archive bindings, policies, and exact
       },
       createHandlerFactory(options) {
         captured.handlerOptions = options;
-        return async () => ({
+        return async (input) => {
+          captured.handlerInput = input;
+          return ({
           async handleFrame() { return { response: Buffer.from('{}'), done: true }; },
-        });
+          });
+        };
       },
       createCustody() { return custody; },
       async bridgeCli(options) {
         captured.bridgeOptions = options;
+        const hmacKey = Buffer.alloc(32, 0xa1);
+        await options.handlerFactory({
+          hmacKey,
+          executionMode: CONTROLLED_PROVIDER,
+          providerKey: Buffer.from('provider-key'),
+          controlChannel: authenticatedControlChannel(hmacKey, CONTROLLED_PROVIDER),
+        });
         return { status: 'complete' };
       },
     },
@@ -135,6 +186,13 @@ test('composes the fixed supervisor route, archive bindings, policies, and exact
   assert.deepEqual(captured.bridgeOptions.argv, ['--control-stdio']);
   assert.equal(captured.bridgeOptions.executableName, 'engineer-runtime-supervisor');
   assert.equal(typeof captured.bridgeOptions.handlerFactory, 'function');
+  assert.deepEqual(Object.keys(captured.handlerInput).sort(), [
+    'executionMode',
+    'hmacKey',
+    'providerKey',
+  ]);
+  assert.equal(captured.handlerInput.executionMode, CONTROLLED_PROVIDER);
+  assert.deepEqual(captured.handlerInput.providerKey, Buffer.from('provider-key'));
   assert.deepEqual(custody.calls, [['dispose']]);
 
   const taskManifest = {
@@ -213,6 +271,56 @@ test('composes the fixed supervisor route, archive bindings, policies, and exact
   await captured.handlerOptions.effects.closeInheritedFd(descriptor);
   assert.equal(captured.closedByEffects, 17);
   assert.deepEqual(custody.calls.slice(-1), [['released', 17]]);
+});
+
+test('zero-provider bridge mode reaches the handler without provider bytes or FIFO handoff', async () => {
+  const captured = {};
+  const custody = fakeCustody();
+  const entrypoint = createRemoteSupervisorEntrypoint({
+    topology: topology(),
+    buildDockerPolicy: () => ({}),
+    buildBrokerPolicy: () => ({}),
+    dependencies: {
+      platform: 'linux',
+      environment: {},
+      createEffects: () => ({
+        async bindControlChannel(value) { captured.bound = value; },
+        async closeInheritedFd() { assert.fail('zero-provider mode has no provider descriptor'); },
+      }),
+      createHandlerFactory: () => async (input) => {
+        captured.handlerInput = input;
+        return { async handleFrame() { return { response: Buffer.from('{}'), done: true }; } };
+      },
+      createCustody: () => custody,
+      async bridgeCli({ handlerFactory }) {
+        const hmacKey = Buffer.alloc(32, 0xb2);
+        await handlerFactory({
+          hmacKey,
+          executionMode: ZERO_PROVIDER_CANARY,
+          controlChannel: authenticatedControlChannel(hmacKey, ZERO_PROVIDER_CANARY),
+        });
+        await assert.rejects(handlerFactory({
+          hmacKey,
+          executionMode: ZERO_PROVIDER_CANARY,
+          providerKey: Buffer.from('forbidden-provider-key'),
+          controlChannel: authenticatedControlChannel(hmacKey, ZERO_PROVIDER_CANARY),
+        }), /provider|execution mode|control/i);
+        await assert.rejects(handlerFactory({
+          hmacKey,
+          executionMode: CONTROLLED_PROVIDER,
+          controlChannel: authenticatedControlChannel(hmacKey, CONTROLLED_PROVIDER),
+        }), /provider|execution mode|control/i);
+        return { status: 'complete' };
+      },
+    },
+  });
+
+  assert.deepEqual(await entrypoint.run({ argv: ['--control-stdio'] }), { status: 'complete' });
+  assert.deepEqual(Object.keys(captured.handlerInput).sort(), ['executionMode', 'hmacKey']);
+  assert.equal(captured.handlerInput.executionMode, ZERO_PROVIDER_CANARY);
+  assert.equal(Object.prototype.hasOwnProperty.call(captured.handlerInput, 'providerKey'), false);
+  assert.equal(captured.bound.executionMode, ZERO_PROVIDER_CANARY);
+  assert.deepEqual(custody.calls, [['dispose']], 'provider custody is never opened in zero-provider mode');
 });
 
 test('fails closed on ambient provider or Daytona credentials, non-Linux defaults, and route drift', async () => {

@@ -31,6 +31,7 @@ function fixture() {
     node: HASH('c'),
     harbor: HASH('d'),
     taskIsolationProbe: HASH('f'),
+    readinessDenialProbe: HASH('9'),
   };
   const runtimeEntries = [
     { path: 'opt/engineer/bin/engineer-runtime-supervisor', type: 'file', mode: 0o555, byteLength: 12, sha256: executableHashes.supervisor },
@@ -45,6 +46,7 @@ function fixture() {
   const nativeEntries = [
     { path: 'opt/engineer/bin/engineer-cgroup-exec', type: 'file', mode: 0o555, byteLength: 16, sha256: HASH('e') },
     { path: 'opt/engineer/bin/engineer-task-isolation-probe', type: 'file', mode: 0o555, byteLength: 17, sha256: executableHashes.taskIsolationProbe },
+    { path: 'opt/engineer/bin/engineer-readiness-denial-probe', type: 'file', mode: 0o555, byteLength: 18, sha256: executableHashes.readinessDenialProbe },
   ];
   const artifact = buildSnapshotBuildManifest({
     dockerfile: { byteLength: 100, sha256: HASH('5') },
@@ -92,6 +94,12 @@ function fixture() {
         context: 'native',
         sourcePath: nativeEntries[1].path,
       },
+      readinessDenialProbe: {
+        path: '/opt/engineer/bin/engineer-readiness-denial-probe',
+        sha256: executableHashes.readinessDenialProbe,
+        context: 'native',
+        sourcePath: nativeEntries[2].path,
+      },
     },
     provenance: {
       baseImage: { reference: DAYTONA_DIND_BASE_IMAGE, digest: DAYTONA_DIND_BASE_IMAGE_DIGEST },
@@ -114,6 +122,14 @@ function fixture() {
         binarySha256: executableHashes.taskIsolationProbe,
         platform: 'linux/amd64',
         artifactPath: '/opt/engineer/bin/engineer-task-isolation-probe',
+      },
+      readinessDenialProbe: {
+        sourceSha256: HASH('b'),
+        compilerImage: `gcc:14.2.0-bookworm@sha256:${HASH('f')}`,
+        compilerImageDigest: `sha256:${HASH('f')}`,
+        binarySha256: executableHashes.readinessDenialProbe,
+        platform: 'linux/amd64',
+        artifactPath: '/opt/engineer/bin/engineer-readiness-denial-probe',
       },
     },
     bindings: {

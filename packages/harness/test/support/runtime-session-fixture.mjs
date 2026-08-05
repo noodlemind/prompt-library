@@ -23,6 +23,7 @@ function readinessFor(request) {
     requestHash: protocolDocumentHash(request),
     requestNonce: request.nonce,
     previousTrialChainHash: request.previousTrialChainHash,
+    executionMode: request.executionMode,
     bindings: structuredClone(request.bindings),
     budget: structuredClone(request.budget),
     readiness: {
@@ -53,6 +54,7 @@ function finalFor(request, readinessLease, providerSpendMicrousd) {
     requestHash: protocolDocumentHash(request),
     readinessLeaseHash: protocolDocumentHash(readinessLease),
     previousTrialChainHash: request.previousTrialChainHash,
+    executionMode: request.executionMode,
     bindings: structuredClone(request.bindings),
     budget: structuredClone(request.budget),
     outcome: {
@@ -85,9 +87,20 @@ function finalFor(request, readinessLease, providerSpendMicrousd) {
 export async function createGenuineRuntimeSession({
   releaseSha = 'a'.repeat(40),
   sessionId = 'release-session-fixture',
+  profileId = 'economical-small-model',
+  taskLockHash = HASH('1'),
+  bundleHash = HASH('2'),
+  budgetId = 'qualification-budget-1',
+  budgetPolicyHash = HASH('3'),
+  brokerPolicyHash = HASH('0'),
   conditions = ['generic', 'harness'],
-  providerSpendMicrousd = 100,
+  executionMode = 'controlled-provider',
+  providerSpendMicrousd,
 } = {}) {
+  const controlledProvider = executionMode === 'controlled-provider';
+  const resolvedProviderSpendMicrousd = providerSpendMicrousd ?? (controlledProvider ? 100 : 0);
+  const sessionCeilingMicrousd = controlledProvider ? 1_300_000 : 0;
+  const trialCeilingMicrousd = controlledProvider ? 650_000 : 0;
   const retained = [];
   const allocations = new Map();
   const daytonaController = {
@@ -118,6 +131,25 @@ export async function createGenuineRuntimeSession({
       if (record) record.deleted = true;
       return { trialId, sandboxId: record?.allocation.id, deleted: true, deletedAt: NOW.toISOString() };
     },
+    async dispose() {
+      const active = [...allocations.entries()].find(([, record]) => record.deleted !== true);
+      if (!active) {
+        return {
+          schema: 'daytona-controller-disposal.v1',
+          disposed: true,
+          activeTrialDeleted: false,
+          deletion: null,
+        };
+      }
+      const [trialId] = active;
+      const deletion = await this.abortTrial({ trialId });
+      return {
+        schema: 'daytona-controller-disposal.v1',
+        disposed: true,
+        activeTrialDeleted: true,
+        deletion,
+      };
+    },
     finalizeSession() {
       return {
         deleted: retained.length === conditions.length,
@@ -146,7 +178,7 @@ export async function createGenuineRuntimeSession({
       return readinessFor(request);
     },
     async requestFinal({ request, readinessLease }) {
-      return finalFor(request, readinessLease, providerSpendMicrousd);
+      return finalFor(request, readinessLease, resolvedProviderSpendMicrousd);
     },
     async closeTrial() {},
   };
@@ -157,13 +189,14 @@ export async function createGenuineRuntimeSession({
     session: {
       sessionId,
       releaseSha,
-      profileId: 'economical-small-model',
-      taskLockHash: HASH('1'),
-      bundleHash: HASH('2'),
-      budgetId: 'qualification-budget-1',
-      budgetPolicyHash: HASH('3'),
-      brokerPolicyHash: HASH('0'),
-      sessionCeilingMicrousd: 1_300_000,
+      profileId,
+      taskLockHash,
+      bundleHash,
+      executionMode,
+      budgetId,
+      budgetPolicyHash,
+      brokerPolicyHash,
+      sessionCeilingMicrousd,
     },
     controllerKey: CONTROLLER_KEY,
     controllerKeyId: 'controller-key-1',
@@ -173,18 +206,33 @@ export async function createGenuineRuntimeSession({
     nonceGenerator: () => (nonce++).toString(16).padStart(64, '0'),
   });
   const attestationHashes = [];
+  const protocolTrials = [];
   for (const [index, condition] of conditions.entries()) {
+    let runtimeRequest;
+    let readinessLease;
     const completed = await controller.runTrial({
       trialId: `${condition}-${index + 1}`,
       taskId: 'cobol-modernization',
       condition,
       imageDigest: `sha256:${HASH('6')}`,
-      trialCeilingMicrousd: 650_000,
+      trialCeilingMicrousd,
       supervisorExecutableHash: HASH('7'),
       runnerExecutableHash: HASH('8'),
       harborExecutableHash: HASH('9'),
-    }, async () => ({ verifier: 'pass' }));
+    }, async ({ handle, authorization }) => {
+      runtimeRequest = structuredClone(handle.request);
+      readinessLease = structuredClone(authorization.readinessLease);
+      return { verifier: 'pass' };
+    });
     attestationHashes.push(protocolDocumentHash(completed.attestation));
+    protocolTrials.push({
+      condition,
+      runtimeRequest,
+      readinessLease,
+      trialAttestation: structuredClone(completed.attestation),
+      deletionReceipt: structuredClone(completed.deletionReceipt),
+      chainEntry: structuredClone(completed.chainEntry),
+    });
   }
-  return { controller, attestationHashes };
+  return { controller, attestationHashes, protocolTrials };
 }

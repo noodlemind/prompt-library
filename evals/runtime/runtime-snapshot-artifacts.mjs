@@ -583,9 +583,14 @@ function compileNativeArtifacts(runDocker, nativeSource, nativeRoot, workspace) 
   const probeSourceSha256 = hashRegularFile(
     path.join(nativeSource, 'engineer-task-isolation-probe.c'), 4 * 1024 * 1024,
     'task isolation probe source');
+  const denialProbeSourceSha256 = hashRegularFile(
+    path.join(nativeSource, 'engineer-readiness-denial-probe.c'), 4 * 1024 * 1024,
+    'readiness denial probe source');
   const helperOutput = path.join(nativeRoot, ...DAYTONA_EXECUTABLE_PATHS.cgroupExec.slice(1).split('/'));
   const probeOutput = path.join(nativeRoot,
     ...DAYTONA_EXECUTABLE_PATHS.taskIsolationProbe.slice(1).split('/'));
+  const denialProbeOutput = path.join(nativeRoot,
+    ...DAYTONA_EXECUTABLE_PATHS.readinessDenialProbe.slice(1).split('/'));
   fs.mkdirSync(path.dirname(helperOutput), { recursive: true, mode: 0o755 });
   withBuilderContainer(runDocker, [
     '--platform', 'linux/amd64',
@@ -596,13 +601,15 @@ function compileNativeArtifacts(runDocker, nativeSource, nativeRoot, workspace) 
     NATIVE_COMPILER_IMAGE,
     'make', 'OUTPUT=/out/engineer-cgroup-exec',
     'PROBE_OUTPUT=/out/engineer-task-isolation-probe',
-    'alpine-static', 'task-isolation-probe-static',
+    'DENIAL_PROBE_OUTPUT=/out/engineer-readiness-denial-probe',
+    'alpine-static', 'task-isolation-probe-static', 'readiness-denial-probe-static',
   ], (containerId) => {
     runDocker(['cp', `${nativeSource}/.`, `${containerId}:/src`]);
     runDocker(['start', '-a', containerId]);
     for (const [name, output] of [
       ['engineer-cgroup-exec', helperOutput],
       ['engineer-task-isolation-probe', probeOutput],
+      ['engineer-readiness-denial-probe', denialProbeOutput],
     ]) {
       const temporary = path.join(workspace, `${name}.compiled`);
       runDocker(['cp', `${containerId}:/out/${name}`, temporary]);
@@ -625,6 +632,15 @@ function compileNativeArtifacts(runDocker, nativeSource, nativeRoot, workspace) 
         'task isolation probe binary'),
       platform: 'linux/amd64',
       artifactPath: DAYTONA_EXECUTABLE_PATHS.taskIsolationProbe,
+    },
+    readinessDenialProbe: {
+      sourceSha256: denialProbeSourceSha256,
+      compilerImage: NATIVE_COMPILER_IMAGE,
+      compilerImageDigest: NATIVE_COMPILER_DIGEST,
+      binarySha256: hashRegularFile(denialProbeOutput, 64 * 1024 * 1024,
+        'readiness denial probe binary'),
+      platform: 'linux/amd64',
+      artifactPath: DAYTONA_EXECUTABLE_PATHS.readinessDenialProbe,
     },
   };
 }
@@ -657,7 +673,7 @@ function executableInventory(roots) {
   const inventory = {};
   for (const [name, approvedPath] of Object.entries(DAYTONA_EXECUTABLE_PATHS)) {
     const context = name === 'node' ? 'node' : name === 'harbor' ? 'harbor'
-      : ['cgroupExec', 'taskIsolationProbe'].includes(name) ? 'native' : 'runtime';
+      : ['cgroupExec', 'taskIsolationProbe', 'readinessDenialProbe'].includes(name) ? 'native' : 'runtime';
     const sourcePath = approvedPath.slice(1);
     const file = path.join(roots[context], ...sourcePath.split('/'));
     inventory[name] = {
@@ -686,7 +702,7 @@ function snapshotDockerfile() {
     'ADD node.tar /',
     'ADD native.tar /',
     'COPY build-manifest.json /opt/engineer/snapshot/build-manifest.json',
-    'RUN addgroup -S -g 2001 engineer-runner && addgroup -S -g 2002 engineer-broker && addgroup -S -g 2003 engineer-client && adduser -S -D -H -u 2001 -G engineer-runner engineer-runner && adduser -S -D -H -u 2002 -G engineer-broker engineer-broker && addgroup engineer-runner engineer-client && mkdir -p /engineer-bounded/transport /engineer-bounded/work /engineer-bounded/evidence /engineer-bounded/broker /engineer-bounded/docker /run/engineer && chown 2001:2001 /engineer-bounded/work && chown 2002:2002 /engineer-bounded/broker && chmod 0755 /engineer-bounded /engineer-bounded/transport /engineer-bounded/docker /run/engineer && chmod 0700 /engineer-bounded/work /engineer-bounded/evidence /engineer-bounded/broker && chmod -R go-w /opt/engineer /usr/local/bin/node /usr/local/bin/docker /usr/local/bin/dockerd /usr/sbin/iptables /usr/sbin/ip6tables /usr/bin/sleep',
+    'RUN addgroup -S -g 2001 engineer-runner && addgroup -S -g 2002 engineer-broker && addgroup -S -g 2003 engineer-client && adduser -S -D -H -u 2001 -G engineer-runner engineer-runner && adduser -S -D -H -u 2002 -G engineer-broker engineer-broker && addgroup engineer-runner engineer-client && mkdir -p /engineer-bounded/transport /engineer-bounded/work /engineer-bounded/evidence /engineer-bounded/broker /engineer-bounded/docker /engineer-bounded/.readiness-denial-mount /run/engineer && chown 2001:2001 /engineer-bounded/work && chown 2002:2002 /engineer-bounded/broker && chmod 0755 /engineer-bounded /engineer-bounded/transport /engineer-bounded/docker /run/engineer && chmod 0555 /engineer-bounded/.readiness-denial-mount && chmod 0700 /engineer-bounded/work /engineer-bounded/evidence /engineer-bounded/broker && chmod -R go-w /opt/engineer /usr/local/bin/node /usr/local/bin/docker /usr/local/bin/dockerd /usr/sbin/iptables /usr/sbin/ip6tables /usr/bin/sleep',
     'ENV PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin PYTHONDONTWRITEBYTECODE=1',
     'ENTRYPOINT ["/usr/local/bin/node","/opt/engineer/runtime/snapshot-manager.mjs"]',
     '',
@@ -732,12 +748,20 @@ async function prepareCodeOwnedClosures({
     path.join(roots.native, ...DAYTONA_EXECUTABLE_PATHS.taskIsolationProbe.slice(1).split('/')),
     'task isolation probe binary',
   );
+  assertStaticLinuxAmd64Elf(
+    path.join(roots.native, ...DAYTONA_EXECUTABLE_PATHS.readinessDenialProbe.slice(1).split('/')),
+    'readiness denial probe binary',
+  );
   const executables = executableInventory(roots);
   if (!sameHash(executables.cgroupExec.sha256, native.nativeHelper.binarySha256)) {
     fail('native helper binary identity drifted after materialization');
   }
   if (!sameHash(executables.taskIsolationProbe.sha256, native.taskIsolationProbe.binarySha256)) {
     fail('task isolation probe binary identity drifted after materialization');
+  }
+  if (!sameHash(executables.readinessDenialProbe.sha256,
+    native.readinessDenialProbe.binarySha256)) {
+    fail('readiness denial probe binary identity drifted after materialization');
   }
 
   const definitionPath = path.join(roots.runtime, 'opt', 'engineer', 'snapshot', 'snapshot-definition.json');

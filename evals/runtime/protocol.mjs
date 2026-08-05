@@ -5,6 +5,10 @@ export const MAX_PROTOCOL_BYTES = 64 * 1024;
 export const MAX_PROTOCOL_SEQUENCE = 1_000_000;
 export const MAX_SESSION_TRIALS = 64;
 export const GENESIS_CHAIN_HASH = '0'.repeat(64);
+export const RuntimeExecutionModes = Object.freeze({
+  CONTROLLED_PROVIDER: 'controlled-provider',
+  ZERO_PROVIDER_CANARY: 'zero-provider-canary',
+});
 
 const HEX_64 = /^[a-f0-9]{64}$/;
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._:/-]*$/;
@@ -69,6 +73,7 @@ const SESSION_BINDING_FIELDS = Object.freeze([
   'profileId',
   'taskLockHash',
   'bundleHash',
+  'executionMode',
   'budgetId',
   'budgetPolicyHash',
   'brokerPolicyHash',
@@ -155,6 +160,16 @@ function assertBoolean(value, label) {
   if (typeof value !== 'boolean') fail(`${label} must be a boolean`, 'ERR_PROTOCOL_TYPE');
 }
 
+function validateExecutionMode(value, label = 'executionMode') {
+  if (!Object.values(RuntimeExecutionModes).includes(value)) {
+    fail(
+      `${label} must be controlled-provider or zero-provider-canary`,
+      'ERR_PROTOCOL_EXECUTION_MODE',
+    );
+  }
+  return value;
+}
+
 function instantMs(value, label) {
   assertString(value, label, { minimum: 24, maximum: 24, pattern: ISO_INSTANT });
   const milliseconds = Date.parse(value);
@@ -227,12 +242,13 @@ function validateSessionBindings(value) {
   assertSafeId(value.profileId, 'sessionBindings.profileId');
   assertHash(value.taskLockHash, 'sessionBindings.taskLockHash');
   assertHash(value.bundleHash, 'sessionBindings.bundleHash');
+  validateExecutionMode(value.executionMode, 'sessionBindings.executionMode');
   assertSafeId(value.budgetId, 'sessionBindings.budgetId');
   assertHash(value.budgetPolicyHash, 'sessionBindings.budgetPolicyHash');
   assertHash(value.brokerPolicyHash, 'sessionBindings.brokerPolicyHash');
 }
 
-function validateTrialBudget(value) {
+function validateTrialBudget(value, executionMode) {
   exactKeys(value, [
     'currency',
     'trialCeilingMicrousd',
@@ -248,9 +264,20 @@ function validateTrialBudget(value) {
       || value.trialCeilingMicrousd > value.sessionCommittedMicrousd) {
     fail('budget reservation exceeds its bound session budget', 'ERR_PROTOCOL_BUDGET');
   }
+  if (executionMode === RuntimeExecutionModes.ZERO_PROVIDER_CANARY) {
+    if (value.trialCeilingMicrousd !== 0
+        || value.sessionCeilingMicrousd !== 0
+        || value.sessionCommittedMicrousd !== 0) {
+      fail('zero-provider-canary budget values must all be zero', 'ERR_PROTOCOL_BUDGET');
+    }
+  } else if (value.trialCeilingMicrousd === 0
+      || value.sessionCeilingMicrousd === 0
+      || value.sessionCommittedMicrousd === 0) {
+    fail('controlled-provider budget reservations must be positive', 'ERR_PROTOCOL_BUDGET');
+  }
 }
 
-function validateSessionBudget(value) {
+function validateSessionBudget(value, executionMode) {
   exactKeys(value, [
     'currency',
     'sessionCeilingMicrousd',
@@ -264,6 +291,15 @@ function validateSessionBudget(value) {
   if (value.sessionSpentMicrousd > value.sessionCommittedMicrousd
       || value.sessionCommittedMicrousd > value.sessionCeilingMicrousd) {
     fail('session budget totals exceed their authorized bounds', 'ERR_PROTOCOL_BUDGET');
+  }
+  if (executionMode === RuntimeExecutionModes.ZERO_PROVIDER_CANARY) {
+    if (value.sessionCeilingMicrousd !== 0
+        || value.sessionCommittedMicrousd !== 0
+        || value.sessionSpentMicrousd !== 0) {
+      fail('zero-provider-canary session budget values must all be zero', 'ERR_PROTOCOL_BUDGET');
+    }
+  } else if (value.sessionCeilingMicrousd === 0 || value.sessionCommittedMicrousd === 0) {
+    fail('controlled-provider session budget reservations must be positive', 'ERR_PROTOCOL_BUDGET');
   }
 }
 
@@ -286,6 +322,7 @@ function validateTrialRequest(document, requireAuthentication) {
     ...BASE_FIELDS,
     'trialId',
     'previousTrialChainHash',
+    'executionMode',
     'bindings',
     'budget',
     ...authenticationField(requireAuthentication),
@@ -293,8 +330,9 @@ function validateTrialRequest(document, requireAuthentication) {
   validateBase(document, SCHEMAS.request);
   assertSafeId(document.trialId, 'trialId');
   assertHash(document.previousTrialChainHash, 'previousTrialChainHash');
+  validateExecutionMode(document.executionMode);
   validateBindings(document.bindings);
-  validateTrialBudget(document.budget);
+  validateTrialBudget(document.budget, document.executionMode);
   if (document.authentication !== undefined) validateAuthentication(document.authentication);
 }
 
@@ -337,6 +375,7 @@ function validateReadinessLease(document, requireAuthentication) {
     'requestHash',
     'requestNonce',
     'previousTrialChainHash',
+    'executionMode',
     'bindings',
     'budget',
     'readiness',
@@ -347,13 +386,14 @@ function validateReadinessLease(document, requireAuthentication) {
   assertHash(document.requestHash, 'requestHash');
   assertHash(document.requestNonce, 'requestNonce');
   assertHash(document.previousTrialChainHash, 'previousTrialChainHash');
+  validateExecutionMode(document.executionMode);
   validateBindings(document.bindings);
-  validateTrialBudget(document.budget);
+  validateTrialBudget(document.budget, document.executionMode);
   validateReadiness(document.readiness);
   if (document.authentication !== undefined) validateAuthentication(document.authentication);
 }
 
-function validateOutcome(value, budget) {
+function validateOutcome(value, budget, executionMode) {
   exactKeys(value, ['status', 'exitReason', 'providerSpendMicrousd', 'providerUsageHash'], 'outcome');
   if (!['succeeded', 'failed', 'invalid'].includes(value.status)) {
     fail('outcome.status is invalid', 'ERR_PROTOCOL_OUTCOME');
@@ -363,6 +403,10 @@ function validateOutcome(value, budget) {
   assertHash(value.providerUsageHash, 'outcome.providerUsageHash');
   if (value.providerSpendMicrousd > budget.trialCeilingMicrousd) {
     fail('outcome provider spend exceeds the trial budget', 'ERR_PROTOCOL_BUDGET');
+  }
+  if (executionMode === RuntimeExecutionModes.ZERO_PROVIDER_CANARY
+      && value.providerSpendMicrousd !== 0) {
+    fail('zero-provider-canary outcome provider spend must be zero', 'ERR_PROTOCOL_BUDGET');
   }
 }
 
@@ -424,6 +468,7 @@ function validateTrialFinalAttestation(document, requireAuthentication) {
     'requestHash',
     'readinessLeaseHash',
     'previousTrialChainHash',
+    'executionMode',
     'bindings',
     'budget',
     'outcome',
@@ -436,9 +481,10 @@ function validateTrialFinalAttestation(document, requireAuthentication) {
   assertHash(document.requestHash, 'requestHash');
   assertHash(document.readinessLeaseHash, 'readinessLeaseHash');
   assertHash(document.previousTrialChainHash, 'previousTrialChainHash');
+  validateExecutionMode(document.executionMode);
   validateBindings(document.bindings);
-  validateTrialBudget(document.budget);
-  validateOutcome(document.outcome, document.budget);
+  validateTrialBudget(document.budget, document.executionMode);
+  validateOutcome(document.outcome, document.budget, document.executionMode);
   validateRuntimeEvidence(document.runtimeEvidence);
   validateCleanup(document.cleanup);
   if (instantMs(document.issuedAt, 'issuedAt') < instantMs(document.runtimeEvidence.endedAt, 'runtimeEvidence.endedAt')) {
@@ -546,7 +592,7 @@ function validateSessionFinalAttestation(document, requireAuthentication) {
   });
   assertHash(document.chainHead, 'chainHead');
   if (!safeHexEqual(document.chainHead, previous)) fail('session chain head mismatch', 'ERR_PROTOCOL_CHAIN');
-  validateSessionBudget(document.budget);
+  validateSessionBudget(document.budget, document.sessionBindings.executionMode);
   assertHash(document.evidenceArchiveHash, 'evidenceArchiveHash');
   if (document.authentication !== undefined) validateAuthentication(document.authentication);
 }
@@ -907,6 +953,9 @@ function assertDocumentIdentity(left, right, label) {
     fail(`${label} trial identity mismatch`, 'ERR_PROTOCOL_BINDING');
   }
   if (!sameCanonical(left.bindings, right.bindings)) fail(`${label} binding mismatch`, 'ERR_PROTOCOL_BINDING');
+  if (left.executionMode !== right.executionMode) {
+    fail(`${label} execution mode binding mismatch`, 'ERR_PROTOCOL_BINDING');
+  }
   if (!sameCanonical(left.budget, right.budget)) fail(`${label} budget binding mismatch`, 'ERR_PROTOCOL_BUDGET');
   if (!safeHexEqual(left.previousTrialChainHash, right.previousTrialChainHash)) {
     fail(`${label} previous trial chain binding mismatch`, 'ERR_PROTOCOL_CHAIN');
@@ -1036,7 +1085,10 @@ export function verifySessionTrialHashChain(sessionInput, attestationInputs) {
       fail('session final attestation predates observed sandbox deletion', 'ERR_PROTOCOL_DELETION');
     }
     for (const field of SESSION_BINDING_FIELDS) {
-      if (session.sessionBindings[field] !== attestation.bindings[field]) {
+      const trialValue = field === 'executionMode'
+        ? attestation.executionMode
+        : attestation.bindings[field];
+      if (session.sessionBindings[field] !== trialValue) {
         fail(`session binding ${field} does not match trial evidence`, 'ERR_PROTOCOL_BINDING');
       }
     }

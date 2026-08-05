@@ -29,6 +29,7 @@ const EXECUTABLE_PATHS = Object.freeze({
   dockerd: '/usr/local/bin/dockerd',
   cgroupExec: '/opt/engineer/bin/engineer-cgroup-exec',
   taskIsolationProbe: '/opt/engineer/bin/engineer-task-isolation-probe',
+  readinessDenialProbe: '/opt/engineer/bin/engineer-readiness-denial-probe',
   iptables: '/usr/sbin/iptables',
   ip6tables: '/usr/sbin/ip6tables',
   supervisor: '/opt/engineer/bin/engineer-runtime-supervisor',
@@ -47,7 +48,9 @@ function snapshotArtifact() {
       .digest('hex')])
   );
   const runtimeNames = Object.keys(EXECUTABLE_PATHS)
-    .filter((name) => !['cgroupExec', 'taskIsolationProbe'].includes(name));
+    .filter((name) => ![
+      'cgroupExec', 'taskIsolationProbe', 'readinessDenialProbe',
+    ].includes(name));
   const runtimeEntries = runtimeNames.map((name) => ({
     path: `runtime/${name}`,
     type: 'file',
@@ -70,6 +73,13 @@ function snapshotArtifact() {
       byteLength: 23,
       sha256: logicalHashes.taskIsolationProbe,
     },
+    {
+      path: 'native/engineer-readiness-denial-probe',
+      type: 'file',
+      mode: 0o555,
+      byteLength: 24,
+      sha256: logicalHashes.readinessDenialProbe,
+    },
   ];
   const context = (kind, entries, character) => ({
     kind,
@@ -81,9 +91,11 @@ function snapshotArtifact() {
   const executable = (name) => ({
     path: EXECUTABLE_PATHS[name],
     sha256: logicalHashes[name],
-    context: ['cgroupExec', 'taskIsolationProbe'].includes(name) ? 'native' : 'runtime',
+    context: ['cgroupExec', 'taskIsolationProbe', 'readinessDenialProbe'].includes(name)
+      ? 'native' : 'runtime',
     sourcePath: name === 'cgroupExec' ? nativeEntries[0].path
-      : name === 'taskIsolationProbe' ? nativeEntries[1].path : `runtime/${name}`,
+      : name === 'taskIsolationProbe' ? nativeEntries[1].path
+        : name === 'readinessDenialProbe' ? nativeEntries[2].path : `runtime/${name}`,
   });
   const budgetPolicyHash = HASH('f');
   const brokerPolicyHash = controlledProviderBrokerStaticPolicyHash({
@@ -133,6 +145,14 @@ function snapshotArtifact() {
         binarySha256: logicalHashes.taskIsolationProbe,
         platform: 'linux/amd64',
         artifactPath: '/opt/engineer/bin/engineer-task-isolation-probe',
+      },
+      readinessDenialProbe: {
+        sourceSha256: HASH('d'),
+        compilerImage: `gcc:14.2.0-bookworm@sha256:${HASH('a')}`,
+        compilerImageDigest: `sha256:${HASH('a')}`,
+        binarySha256: logicalHashes.readinessDenialProbe,
+        platform: 'linux/amd64',
+        artifactPath: '/opt/engineer/bin/engineer-readiness-denial-probe',
       },
     },
     bindings: {
@@ -298,6 +318,7 @@ test('code-owned policy builders bind the exact trial contract and pinned OpenRo
     request: {
       trialId: 'trial-1',
       sequence: 9,
+      executionMode: 'controlled-provider',
       bindings: {
         sandboxId: request().sandboxId,
         imageDigest: IMAGE_DIGEST,
@@ -319,7 +340,7 @@ test('code-owned policy builders bind the exact trial contract and pinned OpenRo
   assert.deepEqual(docker.allowedArchivePaths, ['/app', '/tests', '/tmp']);
   assert.equal(docker.allowedBindSets.length, 3);
   assert.ok(docker.allowedBindSets.every((binds) =>
-    binds.every((bind) => !bind.includes('/opt/engineer/harness'))));
+    binds.every((bind) => !bind.includes('/opt/harness-bundle/harness'))));
   assert.ok(docker.allowedBindSets.every((binds) =>
     binds.some((bind) => bind.endsWith('/opt/eval-runtime/evidence-probe:ro'))));
   assert.equal(docker.requireReadOnlyRootfs, true);
@@ -348,6 +369,44 @@ test('code-owned policy builders bind the exact trial contract and pinned OpenRo
       bindings: { ...context.request.bindings, brokerPolicyHash: HASH('0') },
     },
   }), /policy context.*drift/i);
+
+  const zeroContext = {
+    ...context,
+    request: {
+      ...context.request,
+      executionMode: 'zero-provider-canary',
+      budget: {
+        trialCeilingMicrousd: 0,
+        sessionCeilingMicrousd: 0,
+        sessionCommittedMicrousd: 0,
+      },
+    },
+  };
+  const zeroDocker = definition.buildDockerPolicy(zeroContext);
+  assert.equal(zeroDocker.pinnedImage, IMMUTABLE_IMAGE);
+  assert.throws(
+    () => definition.buildBrokerPolicy(zeroContext),
+    /zero-provider|broker|not authorized/i,
+  );
+  for (const drift of [
+    { executionMode: 'unknown-mode' },
+    {
+      executionMode: 'zero-provider-canary',
+      budget: { trialCeilingMicrousd: 1, sessionCeilingMicrousd: 0, sessionCommittedMicrousd: 0 },
+    },
+    {
+      executionMode: 'controlled-provider',
+      budget: { trialCeilingMicrousd: 0, sessionCeilingMicrousd: 0, sessionCommittedMicrousd: 0 },
+    },
+  ]) {
+    assert.throws(
+      () => definition.buildDockerPolicy({
+        ...context,
+        request: { ...context.request, ...drift },
+      }),
+      /execution mode|zero-provider|policy context|ceiling/i,
+    );
+  }
 });
 
 test('receipt creation rejects ambiguous task identity and runtime observation drift', () => {

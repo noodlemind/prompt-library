@@ -455,6 +455,40 @@ test('Node top-level failures redact credential variables with suffixes', () => 
   assert.match(result.stdout, /REDACTED_SECRET/);
 });
 
+test('scripted canary fails before execution when any provider, broker, or raw credential environment reaches it', () => {
+  const agentPath = path.join(repoRoot, 'evals', 'external', 'terminal_bench', 'agent.mjs');
+  const root = tmpdir();
+  const conditionPath = path.join(root, 'condition.json');
+  fs.writeFileSync(conditionPath, JSON.stringify({
+    id: 'runtime-canary',
+    systemPrompt: 'fixed',
+    instruction: 'fixed',
+    runtime: { driverMode: 'scripted-canary' },
+  }));
+
+  for (const environmentState of [
+    { OPENROUTER_API_KEY: 'sentinel-openrouter-key-123456' },
+    { OPENAI_BASE_URL: 'https://provider.invalid/v1' },
+    { ENGINEER_PROVIDER_BROKER_SOCKET: '/run/provider.sock' },
+    { SERVICE_TOKEN_BACKUP: 'sentinel-service-token-123456' },
+  ]) {
+    const secretValues = Object.values(environmentState).filter((value) => value.length >= 8);
+    const result = spawnSync(process.execPath, [agentPath, '--condition', conditionPath], {
+      cwd: repoRoot,
+      encoding: 'utf8',
+      env: environmentState,
+      timeout: 5_000,
+    });
+    assert.equal(result.status, 1, Object.keys(environmentState)[0]);
+    const done = JSON.parse(result.stdout.trim());
+    assert.equal(done.stopReason, 'bridge_error');
+    assert.match(done.detail, /scripted canary.*provider.*environment|provider.*environment.*scripted canary/i);
+    for (const secret of secretValues) {
+      assert.doesNotMatch(`${result.stdout}${result.stderr}`, new RegExp(secret.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+    }
+  }
+});
+
 test('Node refuses a provider-supplied command containing an active secret before Harbor sees it', async () => {
   const secret = 'sentinel-command-secret-654321';
   const driver = {

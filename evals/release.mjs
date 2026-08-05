@@ -9,6 +9,7 @@
  * a provider, a sandbox, or a dollar:
  *
  *   node evals/release.mjs --profile release-canary --qualification --budget-usd 1.3 \
+ *     --zero-provider-baseline /private/eval/zero-provider-daytona.json \
  *     --report-file /private/eval/qualification.json
  *   node evals/release.mjs --profile release-canary --calibration --budget-usd 18.7 \
  *     --qualification-baseline /private/eval/qualification.json \
@@ -641,9 +642,21 @@ export function qualificationBaselineVerdict(report, {
   expectedProviderHardLimitUsd = null,
   expectedProviderKeyFingerprint = null,
   verifierPassingReward = 1,
+  requireZeroProviderBaseline = false,
 } = {}) {
   const reasons = [];
   const note = (reason) => reasons.push(reason);
+  const zeroProviderBaseline = report?.zeroProviderBaseline;
+  const zeroProviderBaselineValid = zeroProviderBaseline != null &&
+    typeof zeroProviderBaseline === 'object' && !Array.isArray(zeroProviderBaseline) &&
+    ['byteSha256', 'reportHash', 'lifecycleHash', 'artifactHash'].every((field) =>
+      SHA256_HEX.test(String(zeroProviderBaseline[field] ?? ''))
+    );
+  if (requireZeroProviderBaseline && !zeroProviderBaselineValid) {
+    note('qualification zero-provider baseline chain is missing or malformed');
+  } else if (zeroProviderBaseline != null && !zeroProviderBaselineValid) {
+    note('qualification zero-provider baseline chain is malformed');
+  }
   const lane = controlledLane ?? report?.controlledLane;
   const profileId = lane?.profileId;
   let expectedBillingHash = null;
@@ -828,6 +841,12 @@ export function qualificationBaselineVerdict(report, {
     task: qualificationTask,
     accountedExposureUsd: retainedExposureUsd,
     providerKeyFingerprint,
+    zeroProviderBaseline: zeroProviderBaselineValid ? {
+      byteSha256: zeroProviderBaseline.byteSha256.toLowerCase(),
+      reportHash: zeroProviderBaseline.reportHash.toLowerCase(),
+      lifecycleHash: zeroProviderBaseline.lifecycleHash.toLowerCase(),
+      artifactHash: zeroProviderBaseline.artifactHash.toLowerCase(),
+    } : null,
     reasons: [...new Set(reasons)],
   };
 }
@@ -3111,6 +3130,12 @@ export async function runRelease({ config, steps, calibrationRelease = false, re
       billingProfileHash: billingProfileHash(controlledLane.profileId),
     },
     qualification,
+    zeroProviderBaseline: config.zeroProviderBaseline ? {
+      byteSha256: config.zeroProviderBaseline.byteSha256 ?? null,
+      reportHash: config.zeroProviderBaseline.reportHash ?? null,
+      lifecycleHash: config.zeroProviderBaseline.lifecycleHash ?? null,
+      artifactHash: config.zeroProviderBaseline.artifactHash ?? null,
+    } : null,
     qualificationBaseline: config.qualificationBaseline ? {
       valid: config.qualificationBaseline.valid === true,
       capability: config.qualificationBaseline.capability ?? null,
@@ -3119,6 +3144,9 @@ export async function runRelease({ config, steps, calibrationRelease = false, re
       task: config.qualificationBaseline.task ?? null,
       accountedExposureUsd: config.qualificationBaseline.accountedExposureUsd ?? null,
       providerKeyFingerprint: config.qualificationBaseline.providerKeyFingerprint ?? null,
+      zeroProviderBaseline: config.qualificationBaseline.zeroProviderBaseline
+        ? { ...config.qualificationBaseline.zeroProviderBaseline }
+        : null,
       reasons: Array.isArray(config.qualificationBaseline.reasons)
         ? config.qualificationBaseline.reasons
         : [],
@@ -3430,7 +3458,7 @@ export function buildMarkdownReport(report) {
 
 /* -------------------------------------------------------------------- CLI -- */
 
-function loadYamlConfig(profileName, { attestCommit = false } = {}) {
+export function loadYamlConfig(profileName, { attestCommit = false } = {}) {
   const require = createRequire(fileURLToPath(new URL('../packages/harness/package.json', import.meta.url)));
   const YAML = require('yaml');
   if (typeof profileName !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(profileName)) {
@@ -3444,7 +3472,7 @@ function loadYamlConfig(profileName, { attestCommit = false } = {}) {
   return YAML.parse(bytes.toString('utf8'));
 }
 
-function releaseRepository() {
+export function releaseRepository() {
   return fs.realpathSync(fileURLToPath(new URL('../', import.meta.url)));
 }
 
@@ -3711,7 +3739,7 @@ function assertCommittedCheckoutFile(file, label) {
   return committed.stdout;
 }
 
-function resolveDefaultLockFile(lockFile, { attestCommit = false } = {}) {
+export function resolveDefaultLockFile(lockFile, { attestCommit = false } = {}) {
   if (typeof lockFile !== 'string' || lockFile.length === 0 || path.isAbsolute(lockFile)) {
     throw new Error('the profile task lock must be a nonempty repository-relative path');
   }
@@ -3723,7 +3751,7 @@ function resolveDefaultLockFile(lockFile, { attestCommit = false } = {}) {
   return { path: resolved, bytes };
 }
 
-function currentGitReleaseSha() {
+export function currentGitReleaseSha() {
   const result = runReleaseGit(['rev-parse', '--verify', 'HEAD']);
   const sha = result.status === 0 ? result.stdout.trim() : '';
   if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i.test(sha)) {
@@ -3732,7 +3760,7 @@ function currentGitReleaseSha() {
   return sha;
 }
 
-function assertCleanLiveReleaseSource() {
+export function assertCleanLiveReleaseSource() {
   const result = runReleaseGit(['status', '--porcelain=v1', '--untracked-files=all']);
   if (result.status !== 0) {
     throw new Error('live release source cleanliness could not be verified');
@@ -3762,13 +3790,41 @@ function removeReleaseWorkDir(workDir) {
 
 const RELEASE_CLI_VALUE_FLAGS = new Set([
   '--profile', '--report-file', '--calibration-baseline', '--qualification-baseline',
-  '--lock-file', '--release-sha', '--budget-usd', '--task', '--provider-key-fd',
+  '--zero-provider-baseline', '--lock-file', '--release-sha', '--budget-usd', '--task', '--provider-key-fd',
 ]);
 const RELEASE_CLI_BOOLEAN_FLAGS = new Set([
   '--calibration', '--qualification', '--deterministic-only', '--with-local', '--json',
 ]);
+const ZERO_PROVIDER_DURABLE_EVIDENCE_SCHEMA = 'engineer-zero-provider-daytona-evidence.v1';
+const ZERO_PROVIDER_DURABLE_EVIDENCE_FIELDS = Object.freeze([
+  'schema', 'operatorTrustModel', 'artifactHashSemantics', 'runtimeRun',
+]);
+const ZERO_PROVIDER_BASELINE_MAX_AGE_MS = 60 * 60 * 1_000;
 const RAW_PROVIDER_ENVIRONMENT = /^(?:OPENROUTER_API_KEY|OPENAI_API_KEY|ANTHROPIC_API_KEY|GEMINI_API_KEY|GOOGLE_API_KEY|GROQ_API_KEY|XAI_API_KEY|MISTRAL_API_KEY|COHERE_API_KEY|TOGETHER_API_KEY|FIREWORKS_API_KEY|DEEPSEEK_API_KEY|CEREBRAS_API_KEY|PERPLEXITY_API_KEY|HARNESS_EVAL_(?:AGENT|JUDGE)_KEY)$/i;
 const USER_RUNTIME_PATH_ENVIRONMENT = /^(?:HARNESS_EVAL_(?:TB_(?:BUNDLE_(?:DIR|SHA256)|DATASET_DIR|ENV)|HARBOR_(?:BIN|SHA256)|DOCKER_(?:BIN|SHA256)|(?:BUILD_)?TOOL_PATH|NODE_TARBALL(?:_(?:X64|ARM64))?(?:_SHA256)?|HOST_NODE(?:_SHA256)?|.*(?:RUNTIME|SNAPSHOT|DAYTONA).*(?:BIN|DIR|FILE|PATH|SHA256))|DAYTONA_(?:CLI_)?PATH)$/i;
+
+function assertFreshZeroProviderBaseline(run, observedNow) {
+  const nowMs = observedNow instanceof Date
+    ? observedNow.getTime()
+    : new Date(observedNow).getTime();
+  const completedAtMs = Date.parse(run?.report?.timing?.completedAt);
+  const sessionIssuedAtMs = Date.parse(run?.protocolEvidence?.sessionFinalAttestation?.issuedAt);
+  const sessionExpiresAtMs = Date.parse(run?.protocolEvidence?.sessionFinalAttestation?.expiresAt);
+  if (![nowMs, completedAtMs, sessionIssuedAtMs, sessionExpiresAtMs].every(Number.isFinite) ||
+      sessionExpiresAtMs <= sessionIssuedAtMs || completedAtMs < sessionIssuedAtMs ||
+      completedAtMs > sessionExpiresAtMs) {
+    throw new Error('zero-provider baseline freshness evidence is invalid');
+  }
+  if (completedAtMs > nowMs || sessionIssuedAtMs > nowMs) {
+    throw new Error('zero-provider baseline is future-dated');
+  }
+  if (nowMs - completedAtMs > ZERO_PROVIDER_BASELINE_MAX_AGE_MS) {
+    throw new Error('zero-provider baseline is older than the 60-minute qualification window');
+  }
+  if (nowMs >= sessionExpiresAtMs) {
+    throw new Error('zero-provider baseline session evidence has expired');
+  }
+}
 
 function validateReleaseCliArgv(argv) {
   if (!Array.isArray(argv) || argv.some((value) => typeof value !== 'string')) {
@@ -3794,7 +3850,8 @@ function validateReleaseCliArgv(argv) {
         if (token === '--lock-file') {
           throw new Error('--lock-file requires a nonempty diagnostic lock path');
         }
-        if (token === '--qualification-baseline' || token === '--calibration-baseline') {
+        if (token === '--qualification-baseline' || token === '--calibration-baseline' ||
+            token === '--zero-provider-baseline') {
           throw new Error(`${token} requires a nonempty report path`);
         }
         if (token === '--report-file') {
@@ -3819,7 +3876,7 @@ function providerKeyFdFrom(value) {
   return descriptor;
 }
 
-function assertTrustedLauncherEnvironment(env) {
+export function assertTrustedLauncherEnvironment(env) {
   if (env == null || typeof env !== 'object' || Array.isArray(env)) {
     throw new TypeError('release CLI environment must be an object');
   }
@@ -4063,6 +4120,16 @@ function releaseCliDependencies(overrides = {}) {
     ).version,
     loadDeterministicRunner: () => import('./lib/runner.mjs'),
     loadTaskLockValidator: () => import('./external/terminal_bench/harbor-adapter.mjs'),
+    loadZeroProviderBaselineSupport: async () => {
+      const [runtime, gate] = await Promise.all([
+        import('./runtime/zero-provider-daytona.mjs'),
+        import('./runtime/zero-provider-gate.mjs'),
+      ]);
+      return {
+        validateZeroProviderDaytonaRun: runtime.validateZeroProviderDaytonaRun,
+        buildZeroProviderQualificationDefinition: gate.buildZeroProviderQualificationDefinition,
+      };
+    },
     buildOfflineDataset: async (input) => {
       const offline = await import('./external/terminal_bench/offline-artifacts.mjs');
       return offline.buildOfflineTerminalBenchDataset(input);
@@ -4137,6 +4204,22 @@ export async function runReleaseCli({
     qualificationBaselineFile.startsWith('--')
   )) {
     throw new Error('--qualification-baseline requires a nonempty report path');
+  }
+  const zeroProviderBaselineFlagPresent = argv.includes('--zero-provider-baseline');
+  const zeroProviderBaselineFile = flag('--zero-provider-baseline', null);
+  if (zeroProviderBaselineFlagPresent && (
+    typeof zeroProviderBaselineFile !== 'string' || zeroProviderBaselineFile.length === 0 ||
+    zeroProviderBaselineFile.startsWith('--')
+  )) {
+    throw new Error('--zero-provider-baseline requires a nonempty report path');
+  }
+  if (zeroProviderBaselineFlagPresent && !qualificationRelease) {
+    throw new Error('--zero-provider-baseline may be used only with --qualification');
+  }
+  if (zeroProviderBaselineFlagPresent && (
+    !path.isAbsolute(zeroProviderBaselineFile) || path.normalize(zeroProviderBaselineFile) !== zeroProviderBaselineFile
+  )) {
+    throw new Error('--zero-provider-baseline must be an absolute normalized path');
   }
   const lockFileFlagPresent = argv.includes('--lock-file');
   const lockFileFlag = flag('--lock-file', null); // bootstrap/test hook; default is the committed lock
@@ -4248,6 +4331,59 @@ export async function runReleaseCli({
   if (!runtimeRequired && providerKeyFdFlagPresent) {
     throw new Error('--provider-key-fd is forbidden for deterministic or unarmed release evaluation');
   }
+  if (runtimeRequired && qualificationRelease &&
+      (argumentCounts.get('--zero-provider-baseline') ?? 0) !== 1) {
+    throw new Error('armed qualification requires exactly one --zero-provider-baseline');
+  }
+  let zeroProviderBaselineCandidate = null;
+  if (zeroProviderBaselineFlagPresent) {
+    // This persisted receipt is explicitly trusted-local-owner evidence, not
+    // a standalone signature and never a source of release runtime trust.
+    // Code-owned arming remains independent, and the paid runtime must still
+    // produce fresh branded readiness/final evidence before any report can be
+    // trusted. The receipt only makes the approved zero-spend lifecycle a
+    // mandatory, content-bound prerequisite for entering that fresh runtime.
+    const bytes = deps.readPrivateEvidenceFile(zeroProviderBaselineFile, 'zero-provider baseline', {
+      maximumBytes: 8 * 1024 * 1024,
+    });
+    let envelope;
+    try {
+      envelope = JSON.parse(bytes.toString('utf8'));
+    } catch {
+      throw new Error('zero-provider baseline is not valid JSON');
+    }
+    if (envelope == null || typeof envelope !== 'object' || Array.isArray(envelope) ||
+        Object.getPrototypeOf(envelope) !== Object.prototype ||
+        Object.keys(envelope).length !== ZERO_PROVIDER_DURABLE_EVIDENCE_FIELDS.length ||
+        ZERO_PROVIDER_DURABLE_EVIDENCE_FIELDS.some((field) => !Object.hasOwn(envelope, field)) ||
+        envelope.schema !== ZERO_PROVIDER_DURABLE_EVIDENCE_SCHEMA ||
+        envelope.operatorTrustModel !== 'trusted-local-owner' ||
+        envelope.artifactHashSemantics !== 'canonical-content-integrity-only') {
+      throw new Error('zero-provider baseline durable evidence trust or digest semantics are invalid');
+    }
+    const support = await deps.loadZeroProviderBaselineSupport();
+    if (typeof support?.validateZeroProviderDaytonaRun !== 'function' ||
+        typeof support?.buildZeroProviderQualificationDefinition !== 'function') {
+      throw new Error('zero-provider baseline validator is unavailable');
+    }
+    const run = support.validateZeroProviderDaytonaRun(envelope.runtimeRun);
+    assertFreshZeroProviderBaseline(run, deps.now());
+    zeroProviderBaselineCandidate = {
+      byteSha256: crypto.createHash('sha256').update(bytes).digest('hex'),
+      run,
+      buildDefinition: support.buildZeroProviderQualificationDefinition,
+    };
+    const earlyBindings = {
+      releaseSha,
+      profileId: controlledLaneOf(raw).profileId,
+      taskId: requestedTask,
+    };
+    for (const [field, expected] of Object.entries(earlyBindings)) {
+      if (run?.report?.bindings?.[field] !== expected) {
+        throw new Error(`zero-provider baseline ${field} binding does not match the paid qualification`);
+      }
+    }
+  }
   let providerKeyFd = null;
   if (runtimeRequired) {
     if ((argumentCounts.get('--provider-key-fd') ?? 0) !== 1) {
@@ -4302,6 +4438,7 @@ export async function runReleaseCli({
       expectedProviderHardLimitUsd: historicalBaselineChain
         ? MAX_RELEASE_API_USD
         : raw.budget?.providerHardLimitUsd ?? null,
+      requireZeroProviderBaseline: raw.claimPolicy?.requireQualificationBaseline === true,
       verifierPassingReward: completeLock.verifier?.passingReward ?? 1,
     });
     if (!qualificationBaseline.valid) {
@@ -4421,6 +4558,7 @@ export async function runReleaseCli({
     claimPolicy: raw.claimPolicy ?? { mode: 'regression-gate' },
     calibrationBaseline,
     qualificationBaseline,
+    zeroProviderBaseline: null,
   };
   if (calibrationRelease && qualificationBaseline?.valid === true &&
       budgetUsd + qualificationBaseline.accountedExposureUsd > MAX_RELEASE_API_USD + 1e-12) {
@@ -4465,65 +4603,64 @@ export async function runReleaseCli({
   let releaseWorkDir = null;
   let runtime = null;
   let artifacts = null;
-  let runtimeDisposeAttempted = false;
-  let runtimeDisposeError = null;
-  let artifactDisposeAttempted = false;
-  let artifactDisposeError = null;
-  let ownedResourcesDisposeAttempted = false;
-  let ownedResourcesDisposeError = null;
+  let runtimeDisposePromise = null;
+  let artifactDisposePromise = null;
+  let ownedResourcesDisposePromise = null;
   let completedReport = null;
   let preserveReleaseWorkDir = false;
 
   const disposeRuntime = async () => {
-    if (!runtime || runtimeDisposeAttempted) {
-      if (runtimeDisposeError) throw runtimeDisposeError;
-      return;
-    }
-    runtimeDisposeAttempted = true;
+    if (!runtime) return;
+    const attempt = runtimeDisposePromise ?? Promise.resolve().then(() => runtime.dispose());
+    runtimeDisposePromise = attempt;
     try {
-      await runtime.dispose();
+      await attempt;
     } catch (error) {
-      runtimeDisposeError = error;
+      // A successful disposal is terminal and remains cached. A rejected
+      // attempt is not: the catch path must be able to retry transient remote
+      // session/container teardown before any trusted output is published.
+      if (runtimeDisposePromise === attempt) runtimeDisposePromise = null;
       throw error;
     }
   };
 
   const disposeArtifacts = async () => {
-    if (!artifacts || artifactDisposeAttempted) {
-      if (artifactDisposeError) throw artifactDisposeError;
-      return;
-    }
-    artifactDisposeAttempted = true;
+    if (!artifacts) return;
+    const attempt = artifactDisposePromise ?? Promise.resolve().then(() => artifacts.dispose());
+    artifactDisposePromise = attempt;
     try {
-      await artifacts.dispose();
+      await attempt;
     } catch (error) {
-      artifactDisposeError = error;
+      if (artifactDisposePromise === attempt) artifactDisposePromise = null;
       throw error;
     }
   };
 
   const disposeOwnedResources = async () => {
-    if (ownedResourcesDisposeAttempted) {
-      if (ownedResourcesDisposeError) throw ownedResourcesDisposeError;
-      return;
-    }
-    ownedResourcesDisposeAttempted = true;
-    const errors = [];
+    const attempt = ownedResourcesDisposePromise ?? (async () => {
+      const errors = [];
+      try {
+        await disposeRuntime();
+      } catch (error) {
+        errors.push(`runtime: ${String(error?.message ?? error)}`);
+      }
+      try {
+        // Artifact disposal intentionally follows runtime disposal: the runtime
+        // may still need the bundle and executable identities while shutting down.
+        await disposeArtifacts();
+      } catch (error) {
+        errors.push(`artifacts: ${String(error?.message ?? error)}`);
+      }
+      if (errors.length > 0) {
+        throw new Error(`release-owned resource disposal failed (${errors.join('; ')})`);
+      }
+    })();
+    ownedResourcesDisposePromise = attempt;
     try {
-      await disposeRuntime();
+      await attempt;
     } catch (error) {
-      errors.push(`runtime: ${String(error?.message ?? error)}`);
-    }
-    try {
-      // Artifact disposal intentionally follows runtime disposal: the runtime
-      // may still need the bundle and executable identities while shutting down.
-      await disposeArtifacts();
-    } catch (error) {
-      errors.push(`artifacts: ${String(error?.message ?? error)}`);
-    }
-    if (errors.length > 0) {
-      ownedResourcesDisposeError = new Error(`release-owned resource disposal failed (${errors.join('; ')})`);
-      throw ownedResourcesDisposeError;
+      if (ownedResourcesDisposePromise === attempt) ownedResourcesDisposePromise = null;
+      throw error;
     }
   };
 
@@ -4558,9 +4695,22 @@ export async function runReleaseCli({
       const offlineDataset = validateOfflineReleaseDataset(await deps.buildOfflineDataset({
         repoRoot: deps.releaseRepository(),
         outputRoot: path.join(releaseWorkDir, 'offline-terminal-bench'),
-        taskLock: structuredClone(lock),
-      }), { sourceLock: lock, workDir: releaseWorkDir });
-      const runtimeTaskLock = canonicalReleaseRuntimeTaskLock(offlineDataset.taskLock);
+        // The pinned offline builder attests the complete release dataset.
+        // Select the qualification/diagnostic task only after that immutable
+        // four-task artifact exists, exactly as the zero-provider lane does.
+        taskLock: structuredClone(completeLock),
+      }), { sourceLock: completeLock, workDir: releaseWorkDir });
+      const selectedRuntimeNames = new Set(taskSet.map(({ task }) => task));
+      const selectedRuntimeTasks = offlineDataset.taskLock.tasks.filter(({ task }) =>
+        selectedRuntimeNames.has(task)
+      );
+      if (selectedRuntimeTasks.length !== selectedRuntimeNames.size) {
+        throw new Error('offline Terminal-Bench artifact is missing a selected release task');
+      }
+      const runtimeTaskLock = canonicalReleaseRuntimeTaskLock({
+        ...offlineDataset.taskLock,
+        tasks: selectedRuntimeTasks,
+      });
       const taskLockHash = canonicalSha256(runtimeTaskLock);
       const sessionCeilingMicrousd = roundedMicrousd(config.budget.releaseCeilingUsd);
       if (!Number.isSafeInteger(sessionCeilingMicrousd) || sessionCeilingMicrousd < 1) {
@@ -4596,6 +4746,48 @@ export async function runReleaseCli({
       // the production preparer. Assign first so malformed results with a
       // disposer are still reclaimed by the catch path.
       artifacts = validatePreparedReleaseRuntimeArtifacts(artifacts, artifactContext);
+      if (qualificationRelease) {
+        if (zeroProviderBaselineCandidate == null) {
+          throw new Error('armed qualification is missing its validated zero-provider baseline');
+        }
+        const definition = zeroProviderBaselineCandidate.buildDefinition({
+          profileId: config.controlledLane.profileId,
+          taskLockHash,
+          budgetPolicyHash,
+          brokerPolicyHash,
+        });
+        const expectedBindings = {
+          releaseSha,
+          profileId: config.controlledLane.profileId,
+          taskId: config.task.task,
+          taskLockHash,
+          bundleHash: artifacts.bundle.manifestHash,
+          snapshotBuildHash: artifacts.runtimeProjection?.snapshot?.buildHash,
+          gateDefinitionHash: canonicalSha256(definition),
+        };
+        const observedBindings = zeroProviderBaselineCandidate.run?.report?.bindings;
+        for (const [field, expected] of Object.entries(expectedBindings)) {
+          if (observedBindings?.[field] !== expected) {
+            throw new Error(`zero-provider baseline ${field} binding does not match the paid qualification`);
+          }
+        }
+        const hashFields = {
+          reportHash: zeroProviderBaselineCandidate.run?.report?.reportHash,
+          lifecycleHash: zeroProviderBaselineCandidate.run?.lifecycleHash,
+          artifactHash: zeroProviderBaselineCandidate.run?.artifactHash,
+        };
+        if (Object.values(hashFields).some((value) => !SHA256_HEX.test(String(value ?? '')))) {
+          throw new Error('zero-provider baseline retained hashes are incomplete');
+        }
+        // Recheck immediately before runtime construction: local artifact
+        // preparation must not let an otherwise valid receipt age past its
+        // pre-spend window.
+        assertFreshZeroProviderBaseline(zeroProviderBaselineCandidate.run, deps.now());
+        config.zeroProviderBaseline = Object.freeze({
+          byteSha256: zeroProviderBaselineCandidate.byteSha256,
+          ...hashFields,
+        });
+      }
       const runtimeTrustBindings = {
         releaseSha,
         profileId: config.controlledLane.profileId,

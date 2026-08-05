@@ -12,12 +12,15 @@ import {
   runArchiveBridge,
   runRemoteBridgeCli,
   runSupervisorControlBridge,
+  verifyAuthenticatedControlChannel,
 } from '../../../evals/runtime/remote-bridge.mjs';
 
 const TASK_PATH = '/engineer-bounded/transport/task-input.tar';
 const OUTPUT_PATH = '/engineer-bounded/transport/trial-output.tar';
 const HMAC_SECRET = Buffer.alloc(32, 0xa7);
 const PROVIDER_SECRET = Buffer.from('sk-or-v1-remote-bridge-secret');
+const CONTROLLED_PROVIDER = 'controlled-provider';
+const ZERO_PROVIDER_CANARY = 'zero-provider-canary';
 
 function sha256(value) {
   return crypto.createHash('sha256').update(value).digest('hex');
@@ -43,6 +46,20 @@ function secretPayload({
   header.writeUInt16BE(hmacLength, 4);
   header.writeUInt16BE(providerLength, 6);
   return Buffer.concat([header, hmac, provider, suffix]);
+}
+
+function zeroProviderPayload({
+  magic = 'EHZ1',
+  hmac = HMAC_SECRET,
+  hmacLength = hmac.length,
+  providerLength = 0,
+  suffix = Buffer.alloc(0),
+} = {}) {
+  const header = Buffer.alloc(8);
+  header.write(magic, 0, 'ascii');
+  header.writeUInt16BE(hmacLength, 4);
+  header.writeUInt16BE(providerLength, 6);
+  return Buffer.concat([header, hmac, suffix]);
 }
 
 function memoryOutput() {
@@ -277,6 +294,7 @@ test('supervisor accepts one EHS1 secret frame, scrubs bridge copies, and relays
   const sink = memoryOutput();
   let capturedSecrets;
   let capturedChannel;
+  let verifiedExecutionMode;
   let capturedRequest;
   let closedReason;
 
@@ -289,13 +307,25 @@ test('supervisor accepts one EHS1 secret frame, scrubs bridge copies, and relays
       inputDescriptor: { fd: 0, kind: 'pipe', device: '1', inode: '2', mode: 0o600, ownerUid: 0, ownerGid: 0 },
       outputDescriptor: { fd: 1, kind: 'pipe', device: '1', inode: '3', mode: 0o600, ownerUid: 0, ownerGid: 0 },
     }),
-    handlerFactory: async ({ hmacKey, providerKey, controlChannel }) => {
+    handlerFactory: async ({ hmacKey, executionMode, providerKey, controlChannel }) => {
       assert.deepEqual(hmacKey, HMAC_SECRET);
+      assert.equal(executionMode, CONTROLLED_PROVIDER);
       assert.deepEqual(providerKey, PROVIDER_SECRET);
       assert.equal(controlChannel.kind, 'inherited-pipe');
       assert.equal(controlChannel.kernelBound, true);
       assert.equal(controlChannel.open, true);
       assert.equal(controlChannel.receiptHash.length, 64);
+      verifiedExecutionMode = verifyAuthenticatedControlChannel(
+        controlChannel,
+        HMAC_SECRET
+      ).executionMode;
+      assert.throws(
+        () => verifyAuthenticatedControlChannel(
+          { ...controlChannel, executionMode: ZERO_PROVIDER_CANARY },
+          HMAC_SECRET
+        ),
+        /authentication|identity/i
+      );
       capturedChannel = controlChannel;
       capturedSecrets = { hmacKey, providerKey };
       return {
@@ -313,6 +343,8 @@ test('supervisor accepts one EHS1 secret frame, scrubs bridge copies, and relays
   assert.deepEqual(capturedSecrets.hmacKey, Buffer.alloc(32));
   assert.deepEqual(capturedSecrets.providerKey, Buffer.alloc(PROVIDER_SECRET.length));
   assert.equal(capturedChannel.authenticationTag.length, 64);
+  assert.equal(capturedChannel.executionMode, CONTROLLED_PROVIDER);
+  assert.equal(verifiedExecutionMode, CONTROLLED_PROVIDER);
   assert.deepEqual(capturedRequest, Buffer.alloc(request.length), 'request buffer is scrubbed after the handler returns');
   assert.equal(closedReason, 'complete');
   const responseFrames = splitOutput(sink.bytes(), SUPERVISOR_READY_LINE);
@@ -320,12 +352,70 @@ test('supervisor accepts one EHS1 secret frame, scrubs bridge copies, and relays
   assert.deepEqual(JSON.parse(responseFrames[0]), {
     schema: 'engineer-supervisor-secret-accepted.v1',
     status: 'accepted',
+    executionMode: CONTROLLED_PROVIDER,
     frameSha256: sha256(payload),
     byteLength: payload.length,
   });
   assert.deepEqual(responseFrames[1], response);
   assert.equal(sink.bytes().includes(PROVIDER_SECRET), false);
   assert.equal(sink.bytes().includes(HMAC_SECRET), false);
+});
+
+test('supervisor accepts the HMAC-only zero-provider variant without constructing provider bytes', async () => {
+  const payload = zeroProviderPayload();
+  const request = Buffer.from('{"schema":"zero-provider-canary"}');
+  const response = Buffer.from('{"status":"complete"}');
+  const sink = memoryOutput();
+  let capturedInput;
+  let capturedHmac;
+  let capturedChannel;
+  let verifiedExecutionMode;
+
+  await runSupervisorControlBridge({
+    input: Readable.from([frame(payload), frame(request)]),
+    output: sink.output,
+    controlChannelInspector: () => ({
+      kind: 'inherited-pipe',
+      kernelBound: true,
+      inputDescriptor: { fd: 0, kind: 'pipe', device: '1', inode: '2', mode: 0o600, ownerUid: 0, ownerGid: 0 },
+      outputDescriptor: { fd: 1, kind: 'pipe', device: '1', inode: '3', mode: 0o600, ownerUid: 0, ownerGid: 0 },
+    }),
+    handlerFactory: async (input) => {
+      capturedInput = input;
+      capturedHmac = input.hmacKey;
+      capturedChannel = input.controlChannel;
+      assert.deepEqual(Object.keys(input).sort(), [
+        'controlChannel',
+        'executionMode',
+        'hmacKey',
+      ]);
+      assert.equal(input.executionMode, ZERO_PROVIDER_CANARY);
+      assert.equal(Object.prototype.hasOwnProperty.call(input, 'providerKey'), false);
+      assert.deepEqual(input.hmacKey, HMAC_SECRET);
+      assert.equal(input.controlChannel.executionMode, ZERO_PROVIDER_CANARY);
+      verifiedExecutionMode = verifyAuthenticatedControlChannel(
+        input.controlChannel,
+        HMAC_SECRET
+      ).executionMode;
+      return { handleFrame: async () => ({ response, done: true }) };
+    },
+  });
+
+  assert.equal(capturedInput.executionMode, ZERO_PROVIDER_CANARY);
+  assert.deepEqual(capturedHmac, Buffer.alloc(HMAC_SECRET.length));
+  assert.equal(capturedChannel.executionMode, ZERO_PROVIDER_CANARY);
+  assert.equal(verifiedExecutionMode, ZERO_PROVIDER_CANARY);
+  const responseFrames = splitOutput(sink.bytes(), SUPERVISOR_READY_LINE);
+  assert.deepEqual(JSON.parse(responseFrames[0]), {
+    schema: 'engineer-supervisor-secret-accepted.v1',
+    status: 'accepted',
+    executionMode: ZERO_PROVIDER_CANARY,
+    frameSha256: sha256(payload),
+    byteLength: payload.length,
+  });
+  assert.deepEqual(responseFrames[1], response);
+  assert.equal(sink.bytes().includes(HMAC_SECRET), false);
+  assert.equal(sink.bytes().includes(PROVIDER_SECRET), false);
 });
 
 test('supervisor rejects malformed and oversized secret frames before invoking the factory', async () => {
@@ -339,6 +429,8 @@ test('supervisor rejects malformed and oversized secret frames before invoking t
     frame(secretPayload({ provider: Buffer.alloc(7), providerLength: 7 })),
     frame(secretPayload({ providerLength: PROVIDER_SECRET.length + 1 })),
     frame(secretPayload({ suffix: Buffer.from('extra') })),
+    frame(zeroProviderPayload({ providerLength: 1 })),
+    frame(zeroProviderPayload({ suffix: Buffer.from('provider-byte') })),
   ];
   let factoryCalls = 0;
   for (const candidate of malformed) {

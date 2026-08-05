@@ -24,6 +24,8 @@ const PROVIDER_KEY = Buffer.from('sk-or-v1-one-shot-provider-key');
 const TASK_ARCHIVE = Buffer.from('content-addressed task input');
 const OUTPUT_ARCHIVE = Buffer.from('content-addressed trial output');
 const NOW = '2026-08-04T20:00:00.000Z';
+const CONTROLLED_PROVIDER = 'controlled-provider';
+const ZERO_PROVIDER_CANARY = 'zero-provider-canary';
 
 const RUNTIME_BINDINGS = Object.freeze({
   sandboxBootId: 'sandbox-boot-1',
@@ -64,6 +66,7 @@ function request(overrides = {}) {
     issuedAt: NOW,
     expiresAt: '2026-08-04T20:30:00.000Z',
     previousTrialChainHash: HASH('0'),
+    executionMode: CONTROLLED_PROVIDER,
     bindings: {
       releaseSha: 'b'.repeat(40),
       profileId: 'economical-small-model',
@@ -105,6 +108,7 @@ function readinessLease(signedRequest) {
     requestHash: protocolDocumentHash(signedRequest),
     requestNonce: signedRequest.nonce,
     previousTrialChainHash: signedRequest.previousTrialChainHash,
+    executionMode: signedRequest.executionMode,
     bindings: structuredClone(signedRequest.bindings),
     budget: structuredClone(signedRequest.budget),
     readiness: {
@@ -141,6 +145,7 @@ function finalAttestation(signedRequest, lease) {
     requestHash: protocolDocumentHash(signedRequest),
     readinessLeaseHash: protocolDocumentHash(lease),
     previousTrialChainHash: signedRequest.previousTrialChainHash,
+    executionMode: signedRequest.executionMode,
     bindings: structuredClone(signedRequest.bindings),
     budget: structuredClone(signedRequest.budget),
     outcome: {
@@ -311,12 +316,14 @@ function fakeDaytonaTransport(remote, overrides = {}) {
     async openSupervisorControl(input) {
       calls.push(['openSupervisorControl', {
         sandboxId: input.sandboxId,
+        executionMode: input.executionMode,
         hmacKey: Buffer.from(input.hmacKey),
         providerKey: Buffer.from(input.providerKey),
       }]);
       if (overrides.openFailure) throw new Error(overrides.openFailure);
       handler = await remote.handlerFactory({
         hmacKey: Buffer.from(input.hmacKey),
+        executionMode: input.executionMode,
         providerKey: Buffer.from(input.providerKey),
       });
       return { receipt: { status: 'accepted' }, control };
@@ -349,6 +356,7 @@ function externalHarness(overrides = {}) {
   const value = createRuntimeTrialTransport({
     daytonaTransport: daytona,
     sessionId: SESSION_ID,
+    executionMode: CONTROLLED_PROVIDER,
     taskInputArchive: async () => {
       const bytes = Buffer.from(TASK_ARCHIVE);
       archiveBuffers.push(bytes);
@@ -378,6 +386,10 @@ test('one trial stages one input, hands off byte secrets once, runs once, and do
   assert.deepEqual(prepared.runtimeBindings, RUNTIME_BINDINGS);
   assert.equal(harness.daytona.calls.filter(([name]) => name === 'uploadArchive').length, 1);
   assert.equal(harness.daytona.calls.filter(([name]) => name === 'openSupervisorControl').length, 1);
+  assert.equal(
+    harness.daytona.calls.find(([name]) => name === 'openSupervisorControl')[1].executionMode,
+    CONTROLLED_PROVIDER
+  );
   assert.deepEqual(harness.archiveBuffers[0], Buffer.alloc(TASK_ARCHIVE.length));
   for (const secret of harness.secretBuffers) assert.deepEqual(secret, Buffer.alloc(secret.length));
   assert.deepEqual(harness.remote.openedProviderKeys, [PROVIDER_KEY]);
@@ -435,10 +447,109 @@ test('one trial stages one input, hands off byte secrets once, runs once, and do
   assert.deepEqual(sequences, [1, 2, 3, 4]);
 });
 
+test('zero-provider transport takes only an HMAC key and rejects signed-request mode drift', async () => {
+  const calls = [];
+  let pending;
+  const daytona = {
+    async uploadArchive(input) {
+      calls.push(['uploadArchive', { ...input, bytes: Buffer.from(input.bytes) }]);
+      return {
+        schema: 'engineer-daytona-archive-result.v1',
+        operation: 'upload',
+        kind: 'task-input',
+        path: '/engineer-bounded/transport/task-input.tar',
+        byteLength: input.bytes.length,
+        sha256: input.sha256,
+        status: 'accepted',
+      };
+    },
+    async openSupervisorControl(input) {
+      calls.push(['openSupervisorControl', {
+        keys: Object.keys(input).sort(),
+        sandboxId: input.sandboxId,
+        executionMode: input.executionMode,
+        hmacKey: Buffer.from(input.hmacKey),
+      }]);
+      return {
+        receipt: { status: 'accepted' },
+        control: {
+          async sendFrame(bytes) {
+            const outbound = JSON.parse(bytes.toString());
+            pending = Buffer.from(canonicalJson({
+              schema: 'engineer-runtime-control-response.v1',
+              protocolVersion: 1,
+              operation: outbound.operation,
+              sessionId: outbound.sessionId,
+              trialId: outbound.trialId,
+              allocationId: outbound.allocationId,
+              controlSequence: outbound.controlSequence,
+              requestHash: crypto.createHash('sha256')
+                .update(canonicalJson(outbound)).digest('hex'),
+              body: {
+                status: 'bound',
+                taskArchive: structuredClone(outbound.body.taskArchive),
+                runtimeBindings: structuredClone(RUNTIME_BINDINGS),
+              },
+            }));
+          },
+          async receiveFrame() { return pending; },
+          async close() {},
+        },
+      };
+    },
+    async downloadArchive() { assert.fail('zero-provider trial was not authorized to run'); },
+  };
+  const retainedHmac = Buffer.from(HMAC_KEY);
+  const value = createRuntimeTrialTransport({
+    daytonaTransport: daytona,
+    sessionId: SESSION_ID,
+    executionMode: ZERO_PROVIDER_CANARY,
+    taskInputArchive: async () => Buffer.from(TASK_ARCHIVE),
+    takeTrialSecrets: async () => ({ hmacKey: retainedHmac }),
+  });
+  const prepared = await value.prepareTrial({
+    allocation: structuredClone(ALLOCATION),
+    provisioning: { schema: 'daytona-provisioning.v1' },
+    spec: { ...structuredClone(SPEC), trialCeilingMicrousd: 0 },
+  });
+  assert.equal(prepared.channel.executionMode, ZERO_PROVIDER_CANARY);
+  const opened = calls.find(([name]) => name === 'openSupervisorControl')[1];
+  assert.deepEqual(opened.keys, ['executionMode', 'hmacKey', 'sandboxId']);
+  assert.equal(opened.executionMode, ZERO_PROVIDER_CANARY);
+  assert.equal(Object.prototype.hasOwnProperty.call(opened, 'providerKey'), false);
+  assert.deepEqual(retainedHmac, Buffer.alloc(32));
+
+  await assert.rejects(
+    value.requestReadiness({ channel: prepared.channel, request: request() }),
+    /execution mode|identity.*drift/i
+  );
+
+  const withProvider = createRuntimeTrialTransport({
+    daytonaTransport: daytona,
+    sessionId: 'release-session-zero-provider-extra',
+    executionMode: ZERO_PROVIDER_CANARY,
+    taskInputArchive: async () => Buffer.from(TASK_ARCHIVE),
+    takeTrialSecrets: async () => ({
+      hmacKey: Buffer.from(HMAC_KEY),
+      providerKey: Buffer.from(PROVIDER_KEY),
+    }),
+  });
+  await assert.rejects(withProvider.prepareTrial({
+    allocation: { id: 'sandbox-zero-provider-extra', labels: { 'trial-id': 'trial-zero-provider-extra' } },
+    provisioning: { schema: 'daytona-provisioning.v1' },
+    spec: {
+      ...structuredClone(SPEC),
+      trialId: 'trial-zero-provider-extra',
+      trialCeilingMicrousd: 0,
+    },
+  }), /secret|provider|unexpected field/i);
+});
+
 test('remote handler rejects replay, out-of-order operations, extra fields, and secret-bearing payloads', async () => {
   const remote = remoteHandler();
   const handler = await remote.handlerFactory({
     hmacKey: Buffer.from(HMAC_KEY),
+    executionMode: CONTROLLED_PROVIDER,
     providerKey: Buffer.from(PROVIDER_KEY),
   });
   const bind = {
@@ -470,6 +581,7 @@ test('remote handler rejects replay, out-of-order operations, extra fields, and 
   ]) {
     const fresh = await remote.handlerFactory({
       hmacKey: Buffer.from(HMAC_KEY),
+      executionMode: CONTROLLED_PROVIDER,
       providerKey: Buffer.from(PROVIDER_KEY),
     });
     await assert.rejects(
@@ -540,6 +652,7 @@ test('channel loss invokes supervisor fail-stop and closes an unclaimed provider
   const remote = remoteHandler();
   const handler = await remote.handlerFactory({
     hmacKey: Buffer.from(HMAC_KEY),
+    executionMode: CONTROLLED_PROVIDER,
     providerKey: Buffer.from(PROVIDER_KEY),
   });
   await handler.channelLost();
@@ -558,6 +671,7 @@ test('an invalid provider descriptor is closed before handler construction fails
   });
   await assert.rejects(remote.handlerFactory({
     hmacKey: Buffer.from(HMAC_KEY),
+    executionMode: CONTROLLED_PROVIDER,
     providerKey: Buffer.from(PROVIDER_KEY),
   }), /descriptor|handoff/i);
   assert.deepEqual(closedFds, [2]);
@@ -567,6 +681,7 @@ test('oversized, noncanonical, duplicate, and output-digest-invalid exchanges ar
   const remote = remoteHandler();
   const handler = await remote.handlerFactory({
     hmacKey: Buffer.from(HMAC_KEY),
+    executionMode: CONTROLLED_PROVIDER,
     providerKey: Buffer.from(PROVIDER_KEY),
   });
   await assert.rejects(handler.handleFrame(Buffer.alloc(65_537, 0x20)), /bound|size|frame/i);
@@ -574,6 +689,7 @@ test('oversized, noncanonical, duplicate, and output-digest-invalid exchanges ar
 
   const noncanonical = await remote.handlerFactory({
     hmacKey: Buffer.from(HMAC_KEY),
+    executionMode: CONTROLLED_PROVIDER,
     providerKey: Buffer.from(PROVIDER_KEY),
   });
   await assert.rejects(

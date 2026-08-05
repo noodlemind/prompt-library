@@ -388,7 +388,14 @@ test('buildHarborRunArgs can mount the harness bundle and pass only the bridge c
 
 test('buildHarborRunArgs rejects every non-control agent env key without echoing its value', () => {
   const sentinel = 'sentinel-openrouter-secret-do-not-persist';
-  for (const key of ['OPENROUTER_API_KEY', 'ANTHROPIC_API_KEY', 'SOME_TOKEN', 'PASSWORD', 'HARMLESS_BUT_UNKNOWN']) {
+  for (const key of [
+    'OPENROUTER_API_KEY',
+    'ANTHROPIC_API_KEY',
+    'SOME_TOKEN',
+    'PASSWORD',
+    'HARMLESS_BUT_UNKNOWN',
+    'HARNESS_EVAL_TB_DRIVER_MODE',
+  ]) {
     assert.throws(
       () =>
         buildHarborRunArgs({
@@ -407,6 +414,28 @@ test('buildHarborRunArgs rejects every non-control agent env key without echoing
       }
     );
   }
+});
+
+test('scripted canary selection is not representable in Harbor process environment arguments', () => {
+  const args = buildHarborIsolatedTrialArgs({
+    lock: LOCK,
+    task: 'cobol-modernization',
+    trialId: 'pair-1-repetition-1-runtime-canary-1',
+    datasetPath: '/work/dataset',
+    agentRef: 'evals.external.terminal_bench.harbor_agent:StdioBridgeAgent',
+    model: 'scripted-canary-placeholder',
+    envName: 'docker',
+    jobName: 'controlled-cobol-runtime-canary',
+    jobsDir: '/work/jobs',
+    agentEnv: {
+      HARNESS_EVAL_TB_CONDITION: '/engineer-bounded/work/control/condition.json',
+      HARNESS_EVAL_TB_TELEMETRY_FILE: '/engineer-bounded/work/results/telemetry.json',
+      HARNESS_EVAL_HOST_NODE: '/opt/node/bin/node',
+      HARNESS_EVAL_HOST_NODE_SHA256: 'a'.repeat(64),
+    },
+  });
+  assert.equal(args.some((value) => /driver.?mode|scripted-canary/i.test(value) && value !== 'scripted-canary-placeholder'), false);
+  assert.ok(args.includes('HARNESS_EVAL_TB_CONDITION=/engineer-bounded/work/control/condition.json'));
 });
 
 test('buildHarborRunArgs rejects malformed control values before argv construction', () => {

@@ -361,6 +361,7 @@ export async function createReleaseRuntime({
     profileId,
     taskLockHash: expectedBindings.taskLockHash,
     bundleHash: expectedBindings.bundleHash,
+    executionMode: 'controlled-provider',
     budgetId,
     budgetPolicyHash: expectedBindings.budgetPolicyHash,
     brokerPolicyHash: expectedBindings.brokerPolicyHash,
@@ -394,7 +395,7 @@ export async function createReleaseRuntime({
   async function disposeInternal() {
     if (disposePromise) return disposePromise;
     disposed = true;
-    disposePromise = (async () => {
+    const attempt = (async () => {
       const failures = [];
       wipePendingArchives();
       boundAllocations.clear();
@@ -406,7 +407,16 @@ export async function createReleaseRuntime({
         throw new ReleaseRuntimeError('release runtime disposal was incomplete', 'ERR_RELEASE_RUNTIME_DISPOSAL');
       }
     })();
-    return disposePromise;
+    disposePromise = attempt;
+    try {
+      await attempt;
+    } catch (error) {
+      // Disposal is terminal for runtime use, but a transient cleanup failure
+      // must not poison the idempotency promise. A later dispose call retries
+      // every custodian so incomplete external cleanup can converge.
+      if (disposePromise === attempt) disposePromise = null;
+      throw error;
+    }
   }
 
   try {
@@ -427,6 +437,7 @@ export async function createReleaseRuntime({
       daytonaPath,
       snapshot: runtimeProjection.snapshot.name,
       releaseSha,
+      executionMode: 'controlled-provider',
       sessionBudgetUsd: sessionCeilingMicrousd / 1_000_000,
       baseEnv: env,
       async provisionTrial({ allocation, trial }) {
@@ -467,6 +478,7 @@ export async function createReleaseRuntime({
     trialTransport = components.createRuntimeTrialTransport({
       daytonaTransport,
       sessionId,
+      executionMode: 'controlled-provider',
       async taskInputArchive({ allocation, spec }) {
         const retained = pendingArchives.get(spec?.trialId);
         if (!retained || retained.specHash !== canonicalSha256(spec)) {
@@ -564,7 +576,10 @@ export async function createReleaseRuntime({
       attemptedTrials.add(trialId);
       let prepared;
       try {
-        prepared = validateArchive(components.createTrialInputArchive(request), trialId);
+        prepared = validateArchive(components.createTrialInputArchive({
+          ...request,
+          trial: { ...request.trial, executionMode: 'controlled-provider' },
+        }), trialId);
         pendingArchives.set(trialId, { bytes: prepared.bytes, specHash: canonicalSha256(spec) });
         const completed = await sessionController.runTrial(spec, async ({ handle, authorization }) => {
           const executed = await trialTransport.executeTrial({ handle, authorization });

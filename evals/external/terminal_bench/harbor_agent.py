@@ -1048,3 +1048,11 @@ class StdioBridgeAgent(BaseAgent):
                 setattr(context, attr, value)
             except Exception:
                 pass
+
+
+class ScriptedCanaryAgent(StdioBridgeAgent):
+    """Mode-distinct Harbor entry point for the archive-bound no-model canary."""
+
+    @staticmethod
+    def name() -> str:
+        return "engineer-harness-scripted-canary"

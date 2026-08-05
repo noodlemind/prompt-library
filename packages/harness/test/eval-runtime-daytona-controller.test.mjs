@@ -19,7 +19,8 @@ function allocation(name, overrides = {}) {
     target: 'us',
     sandboxClass: 'container',
     cpu: 2,
-    memory: 4,
+    // Daytona CLI reports memory in MB even though the controller accepts GiB.
+    memory: 4096,
     disk: 10,
     env: {},
     volumes: [],
@@ -84,6 +85,7 @@ function controller(fake, overrides = {}) {
     diskGiB: 10,
     ttlMinutes: 120,
     releaseSha: RELEASE_SHA,
+    executionMode: 'controlled-provider',
     sessionBudgetUsd: 1.3,
     runCommand: fake.runCommand,
     randomBytes: () => Buffer.alloc(16, 0xab),
@@ -92,6 +94,59 @@ function controller(fake, overrides = {}) {
     ...overrides,
   });
 }
+
+test('zero-provider mode permits only zero reservations and labels fresh sandboxes credential-absent', async () => {
+  const fake = fakeDaytona();
+  const runtime = controller(fake, {
+    executionMode: 'zero-provider-canary',
+    sessionBudgetUsd: 0,
+  });
+
+  await assert.rejects(
+    runtime.beginTrial({
+      trialId: 'zero-paid',
+      task: 'cobol-modernization',
+      condition: 'generic',
+      reservedUsd: 0.01,
+    }),
+    /zero-provider|zero|reservation/i,
+  );
+  const opened = await runtime.beginTrial({
+    trialId: 'zero-generic',
+    task: 'cobol-modernization',
+    condition: 'generic',
+    reservedUsd: 0,
+  });
+  assert.equal(opened.reservedUsd, 0);
+  assert.equal(opened.allocation.labels['provider-secret'], 'absent');
+  assert.equal(opened.allocation.labels['execution-mode'], 'zero-provider-canary');
+  const create = fake.calls.find((entry) => entry.args[0] === 'create');
+  assert.ok(create.args.includes('provider-secret=absent'));
+  assert.ok(create.args.includes('execution-mode=zero-provider-canary'));
+
+  await runtime.completeTrial({
+    trialId: 'zero-generic',
+    evidence: { evidenceHash: '9'.repeat(64) },
+  });
+  assert.equal(runtime.snapshot().reservedUsd, 0);
+  assert.equal(runtime.finalizeSession().reservedUsd, 0);
+});
+
+test('Daytona execution mode and budget cannot be mixed', () => {
+  const fake = fakeDaytona();
+  assert.throws(
+    () => controller(fake, { executionMode: 'controlled-provider', sessionBudgetUsd: 0 }),
+    /controlled-provider|positive|sessionBudgetUsd/i,
+  );
+  assert.throws(
+    () => controller(fake, { executionMode: 'zero-provider-canary', sessionBudgetUsd: 0.01 }),
+    /zero-provider|zero|sessionBudgetUsd/i,
+  );
+  assert.throws(
+    () => controller(fake, { executionMode: 'unknown-mode' }),
+    /executionMode|controlled-provider|zero-provider-canary/i,
+  );
+});
 
 test('Daytona allocation validation binds every approved topology field', () => {
   const good = allocation('engineer-eval-a-1-bbbbbbbb', {
@@ -115,6 +170,7 @@ test('Daytona allocation validation binds every approved topology field', () => 
 
   for (const mutation of [
     { id: '../unsafe-sandbox-id' },
+    { memory: 4 },
     { disk: 100 },
     { env: { OPENROUTER_API_KEY: 'forbidden' } },
     { volumes: [{ mountPath: '/secret' }] },
@@ -344,6 +400,113 @@ test('proven eventual absence remains authoritative after a lost delete response
   assert.equal(receipt.sandboxId, opened.allocation.id);
   assert.equal(fake.sandboxes.size, 0);
   assert.equal(runtime.snapshot().receipts.length, 1);
+});
+
+test('an unconfirmed completion deletion retains cleanup identity and abort retries idempotently', async () => {
+  const fake = fakeDaytona();
+  const originalRun = fake.runCommand;
+  let failDeletion = true;
+  fake.runCommand = async (file, args, options = {}) => {
+    if (args[0] === 'delete' && failDeletion) {
+      fake.calls.push({ file, args: args.slice(), options: { ...options, env: { ...(options.env ?? {}) } } });
+      return { code: 70, stdout: '', stderr: 'simulated deletion outage' };
+    }
+    return originalRun(file, args, options);
+  };
+  const runtime = controller(fake, { deletePollAttempts: 1 });
+  const opened = await runtime.beginTrial({
+    trialId: 'completion-cleanup-retry',
+    task: 'cobol-modernization',
+    condition: 'generic',
+    reservedUsd: 0.65,
+  });
+
+  await assert.rejects(
+    runtime.completeTrial({
+      trialId: 'completion-cleanup-retry',
+      evidence: { evidenceHash: '7'.repeat(64) },
+    }),
+    /deletion receipt is unavailable/i,
+  );
+  assert.deepEqual(runtime.snapshot().activeTrial, {
+    trialId: 'completion-cleanup-retry',
+    sequence: 1,
+    sandboxId: opened.allocation.id,
+    sandboxName: opened.allocation.name,
+    reservedUsd: 0.65,
+    cleanupPending: true,
+  });
+  assert.equal(runtime.snapshot().receipts.length, 0, 'failed cleanup is not a deletion receipt');
+  assert.equal(fake.sandboxes.size, 1);
+
+  failDeletion = false;
+  const deletion = await runtime.abortTrial({
+    trialId: 'completion-cleanup-retry',
+    reason: 'retry after finalization cleanup failure',
+  });
+  assert.equal(deletion.deleted, true);
+  assert.equal(deletion.sandboxId, opened.allocation.id);
+  assert.equal(runtime.snapshot().activeTrial, null);
+  assert.equal(runtime.snapshot().receipts.length, 1);
+  assert.equal(fake.sandboxes.size, 0);
+
+  const repeated = await runtime.abortTrial({
+    trialId: 'completion-cleanup-retry',
+    reason: 'duplicate cleanup retry',
+  });
+  assert.deepEqual(repeated, deletion);
+  assert.equal(runtime.snapshot().receipts.length, 1, 'idempotent abort does not duplicate receipts');
+  assert.equal(fake.calls.filter(({ args }) => args[0] === 'delete').length, 2);
+});
+
+test('provisioning cleanup failure is retained and dispose can retry until absence is confirmed', async () => {
+  const fake = fakeDaytona();
+  const originalRun = fake.runCommand;
+  let failDeletion = true;
+  fake.runCommand = async (file, args, options = {}) => {
+    if (args[0] === 'delete' && failDeletion) {
+      fake.calls.push({ file, args: args.slice(), options: { ...options, env: { ...(options.env ?? {}) } } });
+      return { code: 70, stdout: '', stderr: 'simulated deletion outage' };
+    }
+    return originalRun(file, args, options);
+  };
+  const runtime = controller(fake, {
+    deletePollAttempts: 1,
+    provisionTrial: async () => { throw new Error('provisioning failed after allocation'); },
+  });
+
+  await assert.rejects(
+    runtime.beginTrial({
+      trialId: 'provision-cleanup-retry',
+      task: 'cobol-modernization',
+      condition: 'generic',
+      reservedUsd: 0.65,
+    }),
+    /provisioning failed.*deletion was not confirmed/i,
+  );
+  const pending = runtime.snapshot().activeTrial;
+  assert.equal(pending.trialId, 'provision-cleanup-retry');
+  assert.equal(pending.cleanupPending, true);
+  assert.match(pending.sandboxId, /^sandbox-engineer-eval-/);
+  assert.equal(fake.sandboxes.size, 1);
+
+  await assert.rejects(runtime.dispose(), /deletion receipt is unavailable/i);
+  assert.equal(runtime.snapshot().activeTrial.cleanupPending, true);
+  assert.equal(runtime.snapshot().disposed, true);
+  assert.equal(fake.sandboxes.size, 1);
+
+  failDeletion = false;
+  const disposal = await runtime.dispose();
+  assert.equal(disposal.schema, 'daytona-controller-disposal.v1');
+  assert.equal(disposal.disposed, true);
+  assert.equal(disposal.activeTrialDeleted, true);
+  assert.equal(disposal.deletion.sandboxId, pending.sandboxId);
+  assert.equal(runtime.snapshot().activeTrial, null);
+  assert.equal(fake.sandboxes.size, 0);
+
+  const deleteCalls = fake.calls.filter(({ args }) => args[0] === 'delete').length;
+  assert.deepEqual(await runtime.dispose(), disposal);
+  assert.equal(fake.calls.filter(({ args }) => args[0] === 'delete').length, deleteCalls);
 });
 
 test('budget, identifiers, commands, and exported evidence fail closed', async () => {

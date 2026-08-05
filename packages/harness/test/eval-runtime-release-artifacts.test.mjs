@@ -48,7 +48,8 @@ function input() {
 function executableHashes() {
   return Object.fromEntries([
     'node', 'supervisor', 'archiveBridge', 'runner', 'harbor', 'providerBroker',
-    'readinessProbe', 'evidenceCollector', 'cgroupExec', 'taskIsolationProbe', 'imageProvisioner',
+    'readinessProbe', 'evidenceCollector', 'cgroupExec', 'taskIsolationProbe',
+    'readinessDenialProbe', 'imageProvisioner',
     'snapshotSelfTest', 'dockerd', 'docker', 'iptables', 'ip6tables', 'sentinel',
   ].map((name, index) => [name, HASH((index % 10).toString())]));
 }
@@ -141,6 +142,22 @@ test('prepares bundle before snapshot, binds every release identity, and dispose
 
   const workspace = path.dirname(artifacts.bundle.bundleDir);
   assert.equal(fs.existsSync(workspace), true);
+  await artifacts.dispose();
+  assert.equal(fs.existsSync(workspace), false);
+  await assert.rejects(artifacts.dispose(), /one-shot|disposed/i);
+});
+
+test('artifact disposal remains retryable until workspace custody removal succeeds', async (t) => {
+  const artifacts = await prepareReleaseRuntimeArtifacts(input(), { components: components(t) });
+  const workspace = path.dirname(artifacts.bundle.bundleDir);
+  const marker = path.join(workspace, '.engineer-release-artifacts-owner');
+  const heldMarker = `${marker}.held`;
+
+  fs.renameSync(marker, heldMarker);
+  await assert.rejects(artifacts.dispose(), /cleanup custody/i);
+  assert.equal(fs.existsSync(workspace), true);
+
+  fs.renameSync(heldMarker, marker);
   await artifacts.dispose();
   assert.equal(fs.existsSync(workspace), false);
   await assert.rejects(artifacts.dispose(), /one-shot|disposed/i);

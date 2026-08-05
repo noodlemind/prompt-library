@@ -8,6 +8,7 @@ import { PassThrough } from 'node:stream';
 import { test } from 'node:test';
 import {
   BRIDGE_TOOLS,
+  createScriptedCanaryDriver,
   createBrokerFetchImpl,
   resolveProviderRuntimeBoundary,
   runtimeBridgeTools,
@@ -70,6 +71,65 @@ test('agent entry point never restores an implicit model when profileId is missi
     assert.equal(done.stopReason, 'bridge_error');
     assert.match(done.detail, profileId === undefined ? /profileId is required/i : /unknown model profile/i);
   }
+});
+
+test('the archive condition alone selects one immediate no-model scripted canary finish', async () => {
+  const condition = {
+    id: 'runtime-canary',
+    runtime: { driverMode: 'scripted-canary' },
+  };
+  const driver = createScriptedCanaryDriver({
+    condition,
+    environment: {},
+  });
+  assert.ok(driver, 'the exact archive-owned condition mode selects the canary');
+  assert.equal(driver.name, 'scripted-canary');
+  assert.equal(driver.model, 'none');
+  assert.deepEqual(await driver.next(), {
+    type: 'finish',
+    answer: 'Scripted canary completed without model execution.',
+    stopReason: 'scripted_canary',
+  });
+  assert.deepEqual(await driver.next(), {
+    type: 'finish',
+    answer: '(replay exhausted)',
+    stopReason: 'replay_exhausted',
+  });
+
+  for (const runtime of [undefined, {}, { driverMode: 'scripted' }, { driverMode: 'scripted-canary ' }]) {
+    assert.equal(createScriptedCanaryDriver({
+      condition: { id: 'ordinary-release', ...(runtime === undefined ? {} : { runtime }) },
+      environment: { HARNESS_EVAL_TB_DRIVER_MODE: 'scripted-canary' },
+    }), null, 'process environment cannot opt an ordinary release condition into the canary');
+  }
+});
+
+test('scripted canary CLI needs no model profile and records exactly zero provider activity', () => {
+  const agentPath = fileURLToPath(new URL('../../../evals/external/terminal_bench/agent.mjs', import.meta.url));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'tb-scripted-canary-'));
+  const conditionPath = path.join(root, 'condition.json');
+  fs.writeFileSync(conditionPath, JSON.stringify({
+    id: 'runtime-canary',
+    systemPrompt: 'fixed canary system',
+    instruction: 'fixed canary instruction',
+    runtime: { driverMode: 'scripted-canary' },
+  }));
+  const result = spawnSync(process.execPath, [agentPath, '--condition', conditionPath], {
+    encoding: 'utf8',
+    env: {},
+    timeout: 5_000,
+  });
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  const done = JSON.parse(result.stdout.trim());
+  assert.equal(done.stopReason, 'scripted_canary');
+  assert.equal(done.steps, 0, 'the canary finishes before any sandbox tool request');
+  assert.equal(done.telemetry.totals.modelRequests, 0);
+  assert.equal(done.telemetry.totals.providerAttempts, 0);
+  assert.equal(done.telemetry.totals.providerResponses, 0);
+  assert.equal(done.telemetry.totals.providerErrors, 0);
+  assert.deepEqual(done.telemetry.events, []);
+  assert.equal(Object.hasOwn(done, 'passed'), false, 'the bridge never invents Harbor verifier success');
+  assert.equal(Object.hasOwn(done, 'reward'), false, 'only Harbor may record a verifier reward');
 });
 
 test('the provider bridge maps exact model requests through a lease-bound broker without a credential', async () => {

@@ -18,7 +18,8 @@ import {
 
 const HASH = (character) => character.repeat(64);
 
-function requestFixture() {
+function requestFixture({ executionMode = 'controlled-provider' } = {}) {
+  const zeroProvider = executionMode === 'zero-provider-canary';
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'trial-runner-controller-'));
   const work = path.join(root, 'work');
   const dataset = path.join(root, 'dataset');
@@ -31,12 +32,16 @@ function requestFixture() {
   fs.writeFileSync(path.join(mount, 'README.md'), 'mounted\n');
   const condition = path.join(work, 'task-a-generic.condition.json');
   const telemetry = path.join(work, 'task-a-generic.done.json');
-  fs.writeFileSync(condition, '{"id":"generic"}\n');
+  fs.writeFileSync(condition, zeroProvider
+    ? '{"id":"generic","runtime":{"driverMode":"scripted-canary"}}\n'
+    : '{"id":"generic"}\n');
   const args = [
     'run', '-p', dataset,
     '--include-task-name', 'task-a',
-    '--agent', 'evals.external.terminal_bench.harbor_agent:StdioBridgeAgent',
-    '--model', 'openrouter/test-small', '--env', 'docker',
+    '--agent', zeroProvider
+      ? 'evals.external.terminal_bench.harbor_agent:ScriptedCanaryAgent'
+      : 'evals.external.terminal_bench.harbor_agent:StdioBridgeAgent',
+    '--model', zeroProvider ? 'canary/scripted' : 'openrouter/test-small', '--env', 'docker',
     '--n-attempts', '1', '--n-concurrent', '1',
     '--override-cpus', '1', '--override-memory-mb', '2048', '--override-storage-mb', '4096',
     '-y', '--job-name', 'job-a', '--jobs-dir', path.join(work, 'jobs'),
@@ -49,8 +54,9 @@ function requestFixture() {
   const archived = createTrialInputArchive({
     trial: {
       trialId: 'trial-a', task: 'task-a', condition: 'generic',
+      executionMode,
       identity: { pairId: 'pair-a', repetitionId: 'rep-a', attempt: 1 },
-      ceilingUsd: 0.65, profileId: 'small',
+      ceilingUsd: zeroProvider ? 0 : 0.65, profileId: zeroProvider ? 'canary' : 'small',
     },
     harbor: {
       executable: '/trusted/harbor', args, cwd: work, timeoutMs: 30_000,
@@ -63,6 +69,15 @@ function requestFixture() {
     },
   });
   return { root, work, telemetry, archived };
+}
+
+function zeroProviderEnv(overrides = {}) {
+  return {
+    DOCKER_HOST: 'unix:///run/engineer/harbor-docker.sock',
+    ENGINEER_RUNTIME_EXECUTION_MODE: 'zero-provider-canary',
+    ENGINEER_RUNTIME_LEASE_HASH: HASH('2'),
+    ...overrides,
+  };
 }
 
 function brokerEnv(overrides = {}) {
@@ -118,6 +133,9 @@ test('remote runner uses pinned direct Harbor argv, forwards exact broker bindin
   assert.equal(result.run.stdout, '');
   assert.equal(result.run.stderr, '');
   assert.equal(result.run.containmentComplete, true);
+  assert.equal(result.receipt.executionMode, 'controlled-provider');
+  assert.match(result.receipt.runtimeBindingHash, /^[a-f0-9]{64}$/);
+  assert.equal(result.receipt.brokerBindingHash, result.receipt.runtimeBindingHash);
   assert.equal(fs.readdirSync(boundedRoot).includes('work'), false);
 
   const applied = applyTrialOutputArchive({
@@ -149,6 +167,63 @@ test('runner rejects partial or mismatched broker bindings before Harbor', async
     /broker.*binding|trial/i
   );
   assert.equal(called, false);
+});
+
+test('zero-provider runner executes the archive-bound canary without forwarding provider or broker bindings', async () => {
+  const fx = requestFixture({ executionMode: 'zero-provider-canary' });
+  const boundedRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'trial-runner-zero-provider-'));
+  const calls = [];
+  const result = await runArchivedTrial({
+    inputBytes: fx.archived.bytes,
+    expectedInputSha256: fx.archived.manifest.sha256,
+    boundedRoot,
+    inheritedEnv: zeroProviderEnv(),
+    hashExecutable: async () => HASH('3'),
+    runCommand: async (file, args, options) => {
+      calls.push({ file, args: args.slice(), env: { ...options.env } });
+      fs.mkdirSync(path.join(options.cwd, 'jobs', 'job-a', 'trial__canary'), { recursive: true });
+      fs.writeFileSync(path.join(options.cwd, 'jobs', 'job-a', 'trial__canary', 'result.json'), '{"canary":true}\n');
+      return { status: 0, signal: null, stdout: Buffer.alloc(0), stderr: Buffer.alloc(0), error: null };
+    },
+  });
+
+  assert.equal(calls.length, 1);
+  const forwarded = [...calls[0].args, ...Object.keys(calls[0].env)];
+  assert.equal(forwarded.some((value) => /ENGINEER_PROVIDER_|BROKER/i.test(value)), false);
+  assert.equal(calls[0].env.DOCKER_HOST, zeroProviderEnv().DOCKER_HOST);
+  assert.equal(calls[0].env.ENGINEER_RUNTIME_LEASE_HASH, HASH('2'));
+  assert.equal(Object.hasOwn(calls[0].env, 'ENGINEER_RUNTIME_EXECUTION_MODE'), false);
+  assert.equal(result.run.code, 0);
+  assert.equal(result.receipt.executionMode, 'zero-provider-canary');
+  assert.match(result.receipt.runtimeBindingHash, /^[a-f0-9]{64}$/);
+  assert.equal(result.receipt.brokerBindingHash, null);
+});
+
+test('zero-provider runner rejects mode drift and every provider or broker environment binding before Harbor', async (t) => {
+  const fx = requestFixture({ executionMode: 'zero-provider-canary' });
+  for (const [name, inheritedEnv] of [
+    ['missing authenticated mode', { ...zeroProviderEnv(), ENGINEER_RUNTIME_EXECUTION_MODE: undefined }],
+    ['controlled mode', zeroProviderEnv({ ENGINEER_RUNTIME_EXECUTION_MODE: 'controlled-provider' })],
+    ['broker socket', zeroProviderEnv({ ENGINEER_PROVIDER_BROKER_SOCKET: '/run/engineer/provider.sock' })],
+    ['provider endpoint', zeroProviderEnv({ CUSTOM_PROVIDER_ENDPOINT: 'https://example.invalid' })],
+    ['raw credential', zeroProviderEnv({ OPENROUTER_API_KEY: 'sk-secret-value' })],
+  ]) {
+    await t.test(name, async () => {
+      if (inheritedEnv.ENGINEER_RUNTIME_EXECUTION_MODE === undefined) {
+        delete inheritedEnv.ENGINEER_RUNTIME_EXECUTION_MODE;
+      }
+      let called = false;
+      await assert.rejects(runArchivedTrial({
+        inputBytes: fx.archived.bytes,
+        expectedInputSha256: fx.archived.manifest.sha256,
+        boundedRoot: fs.mkdtempSync(path.join(os.tmpdir(), 'trial-runner-zero-reject-')),
+        inheritedEnv,
+        hashExecutable: async () => HASH('3'),
+        runCommand: async () => { called = true; },
+      }), /mode|provider|broker|secret|binding/i);
+      assert.equal(called, false);
+    });
+  }
 });
 
 test('runner rejects a tar link entry before extraction or execution', async () => {

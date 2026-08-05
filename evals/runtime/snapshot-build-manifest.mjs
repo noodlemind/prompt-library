@@ -189,7 +189,9 @@ function validateExecutables(value, contexts) {
       fail(`executable ${name} source hash is not bound to its closure`, 'ERR_SNAPSHOT_BUILD_MANIFEST_EXECUTABLE');
     }
   }
-  for (const required of ['supervisor', 'snapshotSelfTest', 'taskIsolationProbe']) {
+  for (const required of [
+    'supervisor', 'snapshotSelfTest', 'taskIsolationProbe', 'readinessDenialProbe',
+  ]) {
     if (!Object.hasOwn(value, required)) fail(`executables is missing ${required}`);
   }
   const isolationProbe = value.taskIsolationProbe;
@@ -198,10 +200,18 @@ function validateExecutables(value, contexts) {
     fail('task isolation probe must use its protected native executable path',
       'ERR_SNAPSHOT_BUILD_MANIFEST_EXECUTABLE');
   }
+  const denialProbe = value.readinessDenialProbe;
+  if (denialProbe.path !== '/opt/engineer/bin/engineer-readiness-denial-probe' ||
+      denialProbe.context !== 'native') {
+    fail('readiness denial probe must use its protected native executable path',
+      'ERR_SNAPSHOT_BUILD_MANIFEST_EXECUTABLE');
+  }
 }
 
 function validateProvenance(value) {
-  exactKeys(value, ['baseImage', 'harbor', 'node', 'nativeHelper', 'taskIsolationProbe'], 'provenance');
+  exactKeys(value, [
+    'baseImage', 'harbor', 'node', 'nativeHelper', 'taskIsolationProbe', 'readinessDenialProbe',
+  ], 'provenance');
   exactKeys(value.baseImage, ['reference', 'digest'], 'provenance.baseImage');
   if (value.baseImage.reference !== DAYTONA_DIND_BASE_IMAGE ||
       value.baseImage.digest !== DAYTONA_DIND_BASE_IMAGE_DIGEST) {
@@ -243,6 +253,26 @@ function validateProvenance(value) {
   if (value.taskIsolationProbe.platform !== 'linux/amd64' ||
       value.taskIsolationProbe.artifactPath !== '/opt/engineer/bin/engineer-task-isolation-probe') {
     fail('task isolation probe provenance must bind the protected linux/amd64 artifact');
+  }
+  exactKeys(value.readinessDenialProbe, [
+    'sourceSha256', 'compilerImage', 'compilerImageDigest', 'binarySha256', 'platform',
+    'artifactPath',
+  ], 'provenance.readinessDenialProbe');
+  hash(value.readinessDenialProbe.sourceSha256,
+    'provenance.readinessDenialProbe.sourceSha256');
+  if (typeof value.readinessDenialProbe.compilerImage !== 'string' ||
+      !IMMUTABLE_IMAGE.test(value.readinessDenialProbe.compilerImage) ||
+      !IMAGE_ID.test(value.readinessDenialProbe.compilerImageDigest) ||
+      !value.readinessDenialProbe.compilerImage.endsWith(
+        `@${value.readinessDenialProbe.compilerImageDigest}`)) {
+    fail('readiness denial probe compiler image must be an immutable digest-qualified image');
+  }
+  hash(value.readinessDenialProbe.binarySha256,
+    'provenance.readinessDenialProbe.binarySha256');
+  if (value.readinessDenialProbe.platform !== 'linux/amd64' ||
+      value.readinessDenialProbe.artifactPath !==
+        '/opt/engineer/bin/engineer-readiness-denial-probe') {
+    fail('readiness denial probe provenance must bind the protected linux/amd64 artifact');
   }
 }
 
@@ -305,6 +335,11 @@ export function validateSnapshotBuildManifest(input) {
   }
   if (input.executables.taskIsolationProbe.sha256 !== input.provenance.taskIsolationProbe.binarySha256) {
     fail('task isolation probe binary hash is not bound to its protected executable inventory',
+      'ERR_SNAPSHOT_BUILD_MANIFEST_EXECUTABLE');
+  }
+  if (input.executables.readinessDenialProbe.sha256 !==
+      input.provenance.readinessDenialProbe.binarySha256) {
+    fail('readiness denial probe binary hash is not bound to its protected executable inventory',
       'ERR_SNAPSHOT_BUILD_MANIFEST_EXECUTABLE');
   }
   validateBindings(input.bindings);

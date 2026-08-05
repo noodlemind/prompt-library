@@ -32,6 +32,8 @@ const canonicalJson = (value) => {
   return JSON.stringify(value);
 };
 const sha256 = (value) => crypto.createHash('sha256').update(value).digest('hex');
+const CONTROLLED_PROVIDER = 'controlled-provider';
+const ZERO_PROVIDER_CANARY = 'zero-provider-canary';
 
 function protectedBrokerPolicy() {
   return {
@@ -208,6 +210,8 @@ async function reconcileSnapshot(snapshot, { policy = PROTECTED_POLICY } = {}) {
 
 function handoff(overrides = {}) {
   const base = {
+    executionMode: CONTROLLED_PROVIDER,
+    trialId: 'trial-1',
     requestHash: HASH('1'),
     leaseHash: HASH('2'),
     observedAt: '2026-08-04T16:00:07.500Z',
@@ -251,7 +255,44 @@ function handoff(overrides = {}) {
     topology: { ...base.topology, ...overrides.topology },
     proxy: { ...base.proxy, ...overrides.proxy },
     networkPolicy: overrides.networkPolicy ?? base.networkPolicy,
-    broker: { ...base.broker, ...overrides.broker },
+    broker: overrides.broker === null ? null : { ...base.broker, ...overrides.broker },
+  });
+}
+
+function zeroProviderEvidence() {
+  return {
+    mode: 'not-exercised',
+    requestHash: HASH('1'),
+    leaseHash: HASH('2'),
+    usageHash: sha256(canonicalJson({
+      schema: 'engineer-runtime-zero-provider-usage.v1',
+      executionMode: ZERO_PROVIDER_CANARY,
+      attempts: 0,
+      calls: 0,
+      spendMicrousd: 0,
+    })),
+    identityHash: sha256(canonicalJson({
+      schema: 'engineer-runtime-zero-provider-identity.v1',
+      executionMode: ZERO_PROVIDER_CANARY,
+      requestHash: HASH('1'),
+      leaseHash: HASH('2'),
+      brokerAbsent: true,
+    })),
+    spendMicrousd: 0,
+    billingCertain: true,
+    budgetComplete: true,
+    withinTrialCeiling: true,
+    attempts: 0,
+    calls: 0,
+    brokerAbsent: true,
+  };
+}
+
+function zeroHandoff(overrides = {}) {
+  return handoff({
+    executionMode: ZERO_PROVIDER_CANARY,
+    broker: null,
+    ...overrides,
   });
 }
 
@@ -360,6 +401,22 @@ function fakePrimitives(overrides = {}) {
   };
 }
 
+function zeroFakePrimitives(overrides = {}) {
+  return fakePrimitives({
+    async readHandoff(spec) { return zeroHandoff(); },
+    async inspectDaemonCustody() {
+      return {
+        daemon: { kind: 'socket', real: true, ownerUid: 0, groupGid: 0, mode: 0o600 },
+        proxy: { kind: 'socket', real: true, ownerUid: 0, groupGid: 2001, mode: 0o660 },
+        broker: { exists: false },
+        brokerPolicy: { exists: false },
+      };
+    },
+    async inspectProvider() { return zeroProviderEvidence(); },
+    ...overrides,
+  });
+}
+
 function networkRuleInventory(overrides = {}) {
   const ipv4 = {
     output: '-P OUTPUT ACCEPT\n-A OUTPUT -j ENGINEER_EGRESS_V4\n',
@@ -421,7 +478,7 @@ test('FD-3 handoff is exact, versioned, bounded, canonical, hash-bound, and one-
   assert.deepEqual(parseRuntimeEvidenceHandoff(encoded), document);
   assert.equal(encoded.at(-1), '}'.charCodeAt(0), 'canonical handoff has no trailing newline');
   assert.throws(() => handoff({ requestHash: HASH('9') }), /lifecycle|binding/i);
-  assert.throws(() => handoff({ broker: { trialId: 'trial-2' } }), /lifecycle|binding/i);
+  assert.throws(() => handoff({ broker: { trialId: 'trial-2' } }), /lifecycle|binding|identity/i);
 
   const text = encoded.toString('utf8');
   const duplicate = text.replace('{', `{"schema":"${RUNTIME_EVIDENCE_HANDOFF_SCHEMA}",`);
@@ -532,6 +589,72 @@ test('collects only the final evidence fields accepted by the supervisor', async
     assert.equal(spec.shell, false);
     assert.equal(Object.hasOwn(spec, 'env'), false, 'ambient environment is never forwarded');
   }
+});
+
+test('zero-provider evidence proves broker and policy absence without broker reconciliation', async () => {
+  const primitives = zeroFakePrimitives();
+  const evidence = await collectRuntimeEvidence({
+    argv: [...EVIDENCE_ARGV],
+    environment: { LANG: 'C.UTF-8', PATH: '/usr/bin:/bin' },
+    primitives,
+  });
+
+  assert.deepEqual(evidence.provider, zeroProviderEvidence());
+  assert.equal(evidence.provider.mode, 'not-exercised');
+  assert.equal(evidence.provider.attempts, 0);
+  assert.equal(evidence.provider.calls, 0);
+  assert.equal(evidence.provider.spendMicrousd, 0);
+  assert.equal(evidence.provider.brokerAbsent, true);
+});
+
+test('production zero-provider collectors attest fixed broker paths absent and never query a broker', async () => {
+  const calls = [];
+  const system = {
+    async inspectPath(spec) {
+      calls.push(['inspectPath', spec]);
+      if (spec.path === '/run/engineer/private-docker.sock') {
+        return { exists: true, kind: 'socket', real: true, ownerUid: 0, groupGid: 0, mode: 0o600 };
+      }
+      if (spec.path === '/run/engineer/harbor-docker.sock') {
+        return { exists: true, kind: 'socket', real: true, ownerUid: 0, groupGid: 2001, mode: 0o660 };
+      }
+      return { exists: false };
+    },
+    async requestBrokerEvidence() { calls.push(['requestBrokerEvidence']); throw new Error('must not query broker'); },
+    async attestBrokerPolicy() { calls.push(['attestBrokerPolicy']); throw new Error('must not read broker policy'); },
+  };
+  const primitives = createNodeRuntimeEvidencePrimitives({ system });
+  const common = {
+    requestHash: HASH('1'),
+    leaseHash: HASH('2'),
+    daemonSocket: '/run/engineer/private-docker.sock',
+    proxySocket: '/run/engineer/harbor-docker.sock',
+    brokerSocket: '/run/engineer/provider/provider.sock',
+    brokerPolicy: '/engineer-bounded/broker/provider-policy.json',
+    handoff: zeroHandoff(),
+    maxOutputBytes: 64 * 1024,
+  };
+
+  assert.deepEqual(await primitives.inspectDaemonCustody(common), {
+    daemon: { kind: 'socket', real: true, ownerUid: 0, groupGid: 0, mode: 0o600 },
+    proxy: { kind: 'socket', real: true, ownerUid: 0, groupGid: 2001, mode: 0o660 },
+    broker: { exists: false },
+    brokerPolicy: { exists: false },
+  });
+  assert.deepEqual(await primitives.inspectProvider(common), zeroProviderEvidence());
+  assert.equal(calls.some(([name]) => name === 'requestBrokerEvidence'), false);
+  assert.equal(calls.some(([name]) => name === 'attestBrokerPolicy'), false);
+
+  const incompleteAbsence = createNodeRuntimeEvidencePrimitives({
+    system: {
+      ...system,
+      async inspectPath(spec) {
+        if (spec.path === '/run/engineer/provider/provider.sock') return {};
+        return system.inspectPath(spec);
+      },
+    },
+  });
+  await assert.rejects(incompleteAbsence.inspectDaemonCustody(common), /absence/i);
 });
 
 test('parser rejects missing, unknown, duplicate, non-canonical, and oversized arguments', () => {
@@ -909,6 +1032,33 @@ test('production evidence collectors use fixed read-only inventories and authent
     },
   });
   await assert.rejects(replayedIsolation.inspectNetwork(common), /drift|binding/i);
+
+  const zeroSocketObservationsBefore = calls.filter(([name]) => name === 'observeSocketProcess').length;
+  const zeroPrimitives = createNodeRuntimeEvidencePrimitives({
+    system: {
+      ...system,
+      async inspectPath(spec) {
+        calls.push(['inspectPath', spec]);
+        if ([
+          '/run/engineer/provider/provider.sock',
+          '/engineer-bounded/broker/provider-policy.json',
+        ].includes(spec.path)) return { exists: false };
+        return { exists: true, ...pathFacts.get(spec.path) };
+      },
+      async observeSocketProcess() {
+        throw new Error('zero-provider evidence must not observe a broker process');
+      },
+    },
+  });
+  const zeroNetwork = await zeroPrimitives.inspectNetwork({
+    ...common,
+    handoff: zeroHandoff(),
+  });
+  assert.equal(zeroNetwork.brokerOnlyEgress, true);
+  assert.equal(
+    calls.filter(([name]) => name === 'observeSocketProcess').length,
+    zeroSocketObservationsBefore,
+  );
 });
 
 test('provider reconciliation derives exact ledger arithmetic from protected policy and attempts', async (t) => {

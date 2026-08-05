@@ -2,6 +2,7 @@ import { TextDecoder } from 'node:util';
 
 import {
   MAX_PROTOCOL_BYTES,
+  RuntimeExecutionModes,
   canonicalJson,
   canonicalSha256,
   protocolDocumentHash,
@@ -48,6 +49,23 @@ function exactKeys(value, fields, label) {
   }
 }
 
+function exactDataKeys(value, fields, label) {
+  if (!isPlainObject(value) || Object.getOwnPropertySymbols(value).length !== 0) {
+    invalid(`${label} must be a plain data object`);
+  }
+  const names = Object.getOwnPropertyNames(value);
+  const expected = new Set(fields);
+  if (names.length !== expected.size || names.some((name) => !expected.has(name))) {
+    invalid(`${label} contains an unexpected field`);
+  }
+  for (const name of names) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, name);
+    if (!descriptor?.enumerable || descriptor.get || descriptor.set || !Object.hasOwn(descriptor, 'value')) {
+      invalid(`${label} contains an unsafe field`);
+    }
+  }
+}
+
 function safeId(value, label, maximum = 192) {
   if (typeof value !== 'string'
       || Buffer.byteLength(value, 'utf8') < 1
@@ -66,6 +84,13 @@ function hash(value, label) {
 function integer(value, label, minimum, maximum) {
   if (!Number.isSafeInteger(value) || value < minimum || value > maximum) {
     invalid(`${label} is outside its integer bound`);
+  }
+  return value;
+}
+
+function executionMode(value) {
+  if (!Object.values(RuntimeExecutionModes).includes(value)) {
+    invalid('execution mode must be controlled-provider or zero-provider-canary');
   }
   return value;
 }
@@ -202,7 +227,7 @@ function validateRuntimeBindings(value) {
   return Object.freeze(structuredClone(value));
 }
 
-function validateTrial(value) {
+function validateTrial(value, mode) {
   exactKeys(value, [
     'trialId',
     'taskId',
@@ -219,7 +244,15 @@ function validateTrial(value) {
   if (typeof value.imageDigest !== 'string' || !IMAGE_DIGEST.test(value.imageDigest)) {
     invalid('trial image digest is invalid');
   }
-  integer(value.trialCeilingMicrousd, 'trial ceiling', 1, 20_000_000);
+  integer(
+    value.trialCeilingMicrousd,
+    'trial ceiling',
+    mode === RuntimeExecutionModes.ZERO_PROVIDER_CANARY ? 0 : 1,
+    20_000_000,
+  );
+  if (mode === RuntimeExecutionModes.ZERO_PROVIDER_CANARY && value.trialCeilingMicrousd !== 0) {
+    invalid('zero-provider-canary trial ceiling must be zero');
+  }
   hash(value.supervisorExecutableHash, 'supervisor executable hash');
   hash(value.runnerExecutableHash, 'runner executable hash');
   hash(value.harborExecutableHash, 'Harbor executable hash');
@@ -249,7 +282,7 @@ function validateBindingObservation(value, expected) {
   };
 }
 
-function validateRequestBinding(request, binding) {
+function validateRequestBinding(request, binding, mode) {
   let validated;
   try {
     validated = validateProtocolDocument(request, { requireAuthentication: true });
@@ -257,6 +290,7 @@ function validateRequestBinding(request, binding) {
     invalid('signed trial request is structurally invalid');
   }
   if (validated.schema !== 'engineer-runtime-trial-request.v1'
+      || validated.executionMode !== mode
       || validated.sessionId !== binding.sessionId
       || validated.trialId !== binding.trialId
       || validated.bindings.sandboxId !== binding.allocationId
@@ -347,19 +381,36 @@ export function createSupervisorHandlerFactory({
   };
   validateFactoryOptions(options);
 
-  return async function supervisorHandlerFactory({ hmacKey, providerKey } = {}) {
+  return async function supervisorHandlerFactory(input = {}) {
+    if (!isPlainObject(input)) invalid('supervisor secret handoff must be a plain object');
+    const modeDescriptor = Object.getOwnPropertyDescriptor(input, 'executionMode');
+    if (!modeDescriptor?.enumerable || modeDescriptor.get || modeDescriptor.set) {
+      invalid('supervisor secret handoff execution mode is unsafe');
+    }
+    executionMode(modeDescriptor.value);
+    exactDataKeys(
+      input,
+      modeDescriptor.value === RuntimeExecutionModes.CONTROLLED_PROVIDER
+        ? ['hmacKey', 'executionMode', 'providerKey']
+        : ['hmacKey', 'executionMode'],
+      'supervisor secret handoff',
+    );
+    const { hmacKey, providerKey } = input;
+    const mode = modeDescriptor.value;
     if ((!Buffer.isBuffer(hmacKey) && !(hmacKey instanceof Uint8Array)) || hmacKey.byteLength !== 32) {
       invalid('supervisor HMAC key must be exactly 32 bytes');
     }
-    if ((!Buffer.isBuffer(providerKey) && !(providerKey instanceof Uint8Array))
-        || providerKey.byteLength < 8
-        || providerKey.byteLength > 512) {
-      invalid('provider key must be bounded bytes');
+    if (mode === RuntimeExecutionModes.CONTROLLED_PROVIDER) {
+      if ((!Buffer.isBuffer(providerKey) && !(providerKey instanceof Uint8Array))
+          || providerKey.byteLength < 8
+          || providerKey.byteLength > 512) {
+        invalid('provider key must be bounded bytes');
+      }
     }
 
     let supervisor;
     let providerKeyFd;
-    let providerFdClosed = false;
+    let providerFdClosed = mode === RuntimeExecutionModes.ZERO_PROVIDER_CANARY;
     try {
       const supervisedEffects = {
         ...effects,
@@ -383,8 +434,10 @@ export function createSupervisorHandlerFactory({
         .some((method) => typeof supervisor[method] !== 'function')) {
         invalid('runtime supervisor factory returned an invalid supervisor');
       }
-      providerKeyFd = await openProviderKeyFd(providerKey);
-      integer(providerKeyFd, 'provider key descriptor', 3, 1_048_575);
+      if (mode === RuntimeExecutionModes.CONTROLLED_PROVIDER) {
+        providerKeyFd = await openProviderKeyFd(providerKey);
+        integer(providerKeyFd, 'provider key descriptor', 3, 1_048_575);
+      }
     } catch (error) {
       try { await supervisor?.failStop?.('prepare-failure'); } catch { /* construction is already fail-closed */ }
       if (!providerFdClosed && Number.isSafeInteger(providerKeyFd)) {
@@ -473,7 +526,7 @@ export function createSupervisorHandlerFactory({
 
     async function bind(envelope) {
       exactKeys(envelope.body, ['trial', 'taskArchive'], 'bind request body');
-      const trial = validateTrial(envelope.body.trial);
+      const trial = validateTrial(envelope.body.trial, mode);
       if (trial.trialId !== envelope.trialId) invalid('bound trial identity drifted');
       const taskArchive = validateArchiveManifest(envelope.body.taskArchive, 'task-input');
       const observed = validateBindingObservation(await inspectBinding({
@@ -505,7 +558,7 @@ export function createSupervisorHandlerFactory({
 
     async function prepare(envelope) {
       exactKeys(envelope.body, ['request'], 'readiness request body');
-      request = validateRequestBinding(envelope.body.request, binding);
+      request = validateRequestBinding(envelope.body.request, binding, mode);
       requestHash = protocolDocumentHash(request);
       const context = Object.freeze({
         sessionId: binding.sessionId,
@@ -513,21 +566,37 @@ export function createSupervisorHandlerFactory({
         allocationId: binding.allocationId,
         request: structuredClone(request),
         requestHash,
+        executionMode: mode,
         trial: structuredClone(binding.trial),
         taskArchive: structuredClone(binding.taskArchive),
       });
-      const [resolvedDockerPolicy, resolvedBrokerPolicy, resolvedRunner] = await Promise.all([
+      const configurations = await Promise.all([
         resolveConfiguration(dockerPolicy, context, 'Docker policy'),
-        resolveConfiguration(brokerPolicy, context, 'provider broker policy'),
+        ...(mode === RuntimeExecutionModes.CONTROLLED_PROVIDER
+          ? [resolveConfiguration(brokerPolicy, context, 'provider broker policy')]
+          : []),
         resolveConfiguration(runner, context, 'runner configuration'),
       ]);
-      readinessLease = await supervisor.prepare({
-        request: structuredClone(request),
-        providerKeyFd,
-        dockerPolicy: resolvedDockerPolicy,
-        brokerPolicy: resolvedBrokerPolicy,
-        runner: resolvedRunner,
-      });
+      const resolvedDockerPolicy = configurations[0];
+      const resolvedBrokerPolicy = mode === RuntimeExecutionModes.CONTROLLED_PROVIDER
+        ? configurations[1]
+        : null;
+      const resolvedRunner = configurations.at(-1);
+      readinessLease = await supervisor.prepare(mode === RuntimeExecutionModes.CONTROLLED_PROVIDER
+        ? {
+          executionMode: mode,
+          request: structuredClone(request),
+          providerKeyFd,
+          dockerPolicy: resolvedDockerPolicy,
+          brokerPolicy: resolvedBrokerPolicy,
+          runner: resolvedRunner,
+        }
+        : {
+          executionMode: mode,
+          request: structuredClone(request),
+          dockerPolicy: resolvedDockerPolicy,
+          runner: resolvedRunner,
+        });
       try {
         validateProtocolDocument(readinessLease, { requireAuthentication: true });
         readinessLeaseHash = protocolDocumentHash(readinessLease);
@@ -535,6 +604,7 @@ export function createSupervisorHandlerFactory({
         invalid('supervisor returned an invalid readiness lease');
       }
       if (readinessLease.schema !== 'engineer-runtime-readiness-lease.v1'
+          || readinessLease.executionMode !== mode
           || readinessLease.sessionId !== binding.sessionId
           || readinessLease.trialId !== binding.trialId
           || readinessLease.requestHash !== requestHash) {
@@ -590,6 +660,7 @@ export function createSupervisorHandlerFactory({
         invalid('supervisor returned an invalid final attestation');
       }
       if (attestation.schema !== 'engineer-runtime-trial-final-attestation.v1'
+          || attestation.executionMode !== mode
           || attestation.sessionId !== binding.sessionId
           || attestation.trialId !== binding.trialId
           || attestation.requestHash !== requestHash

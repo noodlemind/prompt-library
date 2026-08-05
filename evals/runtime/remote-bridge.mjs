@@ -12,7 +12,10 @@ const ARCHIVE_REQUEST_SCHEMA = 'engineer-daytona-archive-request.v1';
 const ARCHIVE_RESULT_SCHEMA = 'engineer-daytona-archive-result.v1';
 const SECRET_RESULT_SCHEMA = 'engineer-supervisor-secret-accepted.v1';
 const CONTROL_CHANNEL_SCHEMA = 'engineer-authenticated-control-channel.v1';
-const SECRET_FRAME_MAGIC = 'EHS1';
+const CONTROLLED_SECRET_FRAME_MAGIC = 'EHS1';
+const ZERO_PROVIDER_SECRET_FRAME_MAGIC = 'EHZ1';
+const CONTROLLED_PROVIDER = 'controlled-provider';
+const ZERO_PROVIDER_CANARY = 'zero-provider-canary';
 const DEFAULT_TRANSPORT_DIRECTORY = '/engineer-bounded/transport';
 const MAX_JSON_FRAME_BYTES = 8 * 1024;
 const MAX_SECRET_FRAME_BYTES = 1_024;
@@ -70,6 +73,13 @@ function exactKeys(value, expectedKeys, label) {
 function boundedInteger(value, label, minimum, maximum) {
   if (!Number.isSafeInteger(value) || value < minimum || value > maximum) {
     throw new TypeError(`${label} must be an integer between ${minimum} and ${maximum}`);
+  }
+  return value;
+}
+
+function validateExecutionMode(value) {
+  if (value !== CONTROLLED_PROVIDER && value !== ZERO_PROVIDER_CANARY) {
+    fail('execution mode is invalid', 'ERR_REMOTE_SECRET_FRAME');
   }
   return value;
 }
@@ -137,6 +147,7 @@ function inspectInheritedControlChannel(input, output) {
 
 function createAuthenticatedControlChannel({
   hmacKey,
+  executionMode,
   frameSha256,
   input,
   output,
@@ -149,6 +160,7 @@ function createAuthenticatedControlChannel({
     schema: CONTROL_CHANNEL_SCHEMA,
     kind: inspected.kind,
     kernelBound: inspected.kernelBound,
+    executionMode: validateExecutionMode(executionMode),
     frameSha256,
     inputDescriptor: inspected.inputDescriptor,
     outputDescriptor: inspected.outputDescriptor,
@@ -171,13 +183,14 @@ export function verifyAuthenticatedControlChannel(value, hmacKey) {
     fail('authenticated control channel is missing', 'ERR_REMOTE_CHANNEL_IDENTITY');
   }
   const expected = new Set([
-    'schema', 'kind', 'kernelBound', 'frameSha256', 'inputDescriptor',
+    'schema', 'kind', 'kernelBound', 'executionMode', 'frameSha256', 'inputDescriptor',
     'outputDescriptor', 'authenticationTag', 'receiptHash', 'open', 'stream',
   ]);
   const keys = Object.keys(value);
   if (keys.length !== expected.size || keys.some((key) => !expected.has(key)) ||
       value.schema !== CONTROL_CHANNEL_SCHEMA ||
       !['inherited-pipe', 'inherited-socket'].includes(value.kind) ||
+      ![CONTROLLED_PROVIDER, ZERO_PROVIDER_CANARY].includes(value.executionMode) ||
       value.kernelBound !== true || value.open !== true ||
       !SHA256_HEX.test(String(value.frameSha256)) ||
       !SHA256_HEX.test(String(value.authenticationTag)) ||
@@ -207,6 +220,7 @@ export function verifyAuthenticatedControlChannel(value, hmacKey) {
     schema: value.schema,
     kind: value.kind,
     kernelBound: value.kernelBound,
+    executionMode: value.executionMode,
     frameSha256: value.frameSha256,
     inputDescriptor: value.inputDescriptor,
     outputDescriptor: value.outputDescriptor,
@@ -222,6 +236,7 @@ export function verifyAuthenticatedControlChannel(value, hmacKey) {
     schema: value.schema,
     kind: value.kind,
     kernelBound: true,
+    executionMode: value.executionMode,
     authenticated: true,
     open: true,
     receiptHash: value.receiptHash,
@@ -612,19 +627,36 @@ export async function runArchiveBridge({
 }
 
 function parseSecretFrame(payload) {
-  if (payload.length < 8 || payload.subarray(0, 4).toString('ascii') !== SECRET_FRAME_MAGIC) {
+  if (payload.length < 8) {
+    fail('supervisor secret frame is malformed', 'ERR_REMOTE_SECRET_FRAME');
+  }
+  const magic = payload.subarray(0, 4).toString('ascii');
+  const executionMode = magic === CONTROLLED_SECRET_FRAME_MAGIC
+    ? CONTROLLED_PROVIDER
+    : magic === ZERO_PROVIDER_SECRET_FRAME_MAGIC
+      ? ZERO_PROVIDER_CANARY
+      : null;
+  if (executionMode === null) {
     fail('supervisor secret frame is malformed', 'ERR_REMOTE_SECRET_FRAME');
   }
   const hmacLength = payload.readUInt16BE(4);
   const providerLength = payload.readUInt16BE(6);
-  if (hmacLength !== 32 || providerLength < 8 || providerLength > 512
+  const controlledProvider = executionMode === CONTROLLED_PROVIDER;
+  if (hmacLength !== 32
+    || (controlledProvider
+      ? providerLength < 8 || providerLength > 512
+      : providerLength !== 0)
     || payload.length !== 8 + hmacLength + providerLength) {
     fail('supervisor secret frame has invalid bounds', 'ERR_REMOTE_SECRET_FRAME');
   }
-  return {
+  const result = {
     hmacKey: Buffer.from(payload.subarray(8, 8 + hmacLength)),
-    providerKey: Buffer.from(payload.subarray(8 + hmacLength)),
+    executionMode,
   };
+  if (controlledProvider) {
+    result.providerKey = Buffer.from(payload.subarray(8 + hmacLength));
+  }
+  return result;
 }
 
 function secretFingerprints(secrets) {
@@ -746,6 +778,7 @@ export async function runSupervisorControlBridge({
   let payload;
   let hmacKey;
   let providerKey;
+  let executionMode;
   let handler;
   let fingerprints;
   let echoGuard;
@@ -755,20 +788,29 @@ export async function runSupervisorControlBridge({
     await writeRaw(output, Buffer.from(`${SUPERVISOR_READY_LINE}\n`));
     payload = await reader.readFrame(MAX_SECRET_FRAME_BYTES);
     const frameSha256 = sha256(payload);
-    ({ hmacKey, providerKey } = parseSecretFrame(payload));
+    const frameByteLength = payload.length;
+    ({ hmacKey, executionMode, providerKey } = parseSecretFrame(payload));
     const controlChannel = createAuthenticatedControlChannel({
       hmacKey,
+      executionMode,
       frameSha256,
       input,
       output,
       inspectControlChannel: controlChannelInspector,
     });
-    fingerprints = secretFingerprints([hmacKey, providerKey]);
+    fingerprints = secretFingerprints(
+      executionMode === CONTROLLED_PROVIDER ? [hmacKey, providerKey] : [hmacKey]
+    );
     echoGuard = new SecretEchoGuard(fingerprints);
     payload.fill(0);
     payload = null;
     try {
-      handler = validateHandler(await handlerFactory({ hmacKey, providerKey, controlChannel }));
+      handler = validateHandler(await handlerFactory({
+        hmacKey,
+        executionMode,
+        ...(executionMode === CONTROLLED_PROVIDER ? { providerKey } : {}),
+        controlChannel,
+      }));
     } catch (error) {
       throw sanitized(error, 'supervisor handler factory failed', 'ERR_REMOTE_HANDLER');
     } finally {
@@ -779,8 +821,9 @@ export async function runSupervisorControlBridge({
     const receipt = {
       schema: SECRET_RESULT_SCHEMA,
       status: 'accepted',
+      executionMode,
       frameSha256,
-      byteLength: 8 + 32 + fingerprints[1].length,
+      byteLength: frameByteLength,
     };
     const receiptBytes = encodeJson(receipt, 'supervisor secret receipt');
     try {

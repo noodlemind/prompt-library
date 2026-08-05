@@ -243,7 +243,7 @@ test('validates create policy before forwarding and binds the returned container
 
 test('container binds must match one complete condition-specific set', () => {
   const common = '/engineer-bounded/work/mounts/000:/opt/eval-runtime/node-x64:ro';
-  const treatment = '/engineer-bounded/work/mounts/005:/opt/engineer/harness:ro';
+  const treatment = '/engineer-bounded/work/mounts/005:/opt/harness-bundle/harness:ro';
   const authorizeBinds = (binds) => request(
     new DockerProxyPolicy(policyOptions({
       allowedBindSets: [[common], [common, treatment]],

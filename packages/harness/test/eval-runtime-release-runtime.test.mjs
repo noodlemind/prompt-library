@@ -74,7 +74,7 @@ function fixture() {
   return { workDir, bundle, taskLock, runtimeProjection };
 }
 
-function fakeComponents() {
+function fakeComponents({ sessionDisposeFailures = 0, transportDisposeFailures = 0 } = {}) {
   const calls = [];
   const issued = [];
   const archiveBuffers = [];
@@ -84,6 +84,8 @@ function fakeComponents() {
   let sessionDisposed = false;
   let preflightCalls = 0;
   let postflightCalls = 0;
+  let sessionDisposeCalls = 0;
+  let transportDisposeCalls = 0;
   let trialTransportOptions;
   let daytonaControllerOptions;
 
@@ -146,7 +148,13 @@ function fakeComponents() {
         stderrSha256: HASH('0'),
       };
     },
-    async dispose() { transportDisposed = true; },
+    async dispose() {
+      transportDisposeCalls += 1;
+      if (transportDisposeCalls <= transportDisposeFailures) {
+        throw new Error('transient transport disposal failure');
+      }
+      transportDisposed = true;
+    },
   };
   const daytonaController = {
     snapshot: () => ({ activeTrial: null, receipts: [] }),
@@ -219,7 +227,13 @@ function fakeComponents() {
       };
     },
     snapshot: () => ({ schema: 'engineer-runtime-session-snapshot.v1', disposed: sessionDisposed }),
-    async dispose() { sessionDisposed = true; },
+    async dispose() {
+      sessionDisposeCalls += 1;
+      if (sessionDisposeCalls <= sessionDisposeFailures) {
+        throw new Error('transient session disposal failure');
+      }
+      sessionDisposed = true;
+    },
   };
 
   return {
@@ -229,6 +243,7 @@ function fakeComponents() {
     outputBuffers,
     get preflightCalls() { return preflightCalls; },
     get postflightCalls() { return postflightCalls; },
+    get disposalCalls() { return { sessionDisposeCalls, transportDisposeCalls }; },
     get disposed() { return { custodianDisposed, transportDisposed, sessionDisposed }; },
     components: {
       createProviderCredentialCustodian(options) {
@@ -244,13 +259,17 @@ function fakeComponents() {
         calls.push(['daytona-controller', {
           snapshot: options.snapshot,
           releaseSha: options.releaseSha,
+          executionMode: options.executionMode,
           sessionBudgetUsd: options.sessionBudgetUsd,
         }]);
         return daytonaController;
       },
       createRuntimeTrialTransport(options) {
         trialTransportOptions = options;
-        calls.push(['trial-transport', { sessionId: options.sessionId }]);
+        calls.push(['trial-transport', {
+          sessionId: options.sessionId,
+          executionMode: options.executionMode,
+        }]);
         return trialTransport;
       },
       createRuntimeSessionController(options) {
@@ -326,7 +345,8 @@ function harborRequest(workDir, trialId = 'pair-r0-generic-a') {
 
 async function runtime(overrides = {}) {
   const input = fixture();
-  const fake = fakeComponents();
+  const { fakeOptions, ...runtimeOverrides } = overrides;
+  const fake = fakeComponents(fakeOptions);
   const value = await createReleaseRuntime({
     releaseSha: RELEASE_SHA,
     profileId: 'economical-small-model',
@@ -342,7 +362,7 @@ async function runtime(overrides = {}) {
     env: { PATH: '/usr/bin:/bin', DAYTONA_API_KEY: 'controller-login-only' },
     randomBytes,
     components: fake.components,
-    ...overrides,
+    ...runtimeOverrides,
   });
   return { ...input, fake, runtime: value };
 }
@@ -351,6 +371,16 @@ test('release runtime consumes provider custody immediately and exposes exact sa
   const { fake, runtime: value } = await runtime();
   assert.deepEqual(fake.calls[0], ['custodian', { keyFd: 9, releaseSha: RELEASE_SHA }]);
   assert.equal(value.providerControl.available, true);
+  assert.deepEqual(fake.calls.find(([name]) => name === 'daytona-controller')[1], {
+    snapshot: 'engineer-eval-44444444444444444444444444444444',
+    releaseSha: RELEASE_SHA,
+    executionMode: 'controlled-provider',
+    sessionBudgetUsd: 1.3,
+  });
+  assert.equal(
+    fake.calls.find(([name]) => name === 'session-controller')[1].session.executionMode,
+    'controlled-provider',
+  );
 
   const first = await value.providerControl.preflight();
   const second = await value.providerControl.preflight();
@@ -449,6 +479,33 @@ test('final runtime trust is returned only after allowance reconciliation and al
     sessionDisposed: true,
   });
   assert.equal(value.snapshot().disposed, true);
+});
+
+test('a failed disposal attempt can be retried after transient session and transport cleanup failures', async () => {
+  const { fake, runtime: value } = await runtime({
+    fakeOptions: { sessionDisposeFailures: 1, transportDisposeFailures: 1 },
+  });
+
+  await assert.rejects(
+    value.dispose(),
+    (error) => error?.code === 'ERR_RELEASE_RUNTIME_DISPOSAL',
+  );
+  assert.deepEqual(fake.disposed, {
+    custodianDisposed: true,
+    transportDisposed: false,
+    sessionDisposed: false,
+  });
+
+  await value.dispose();
+  assert.deepEqual(fake.disposalCalls, {
+    sessionDisposeCalls: 2,
+    transportDisposeCalls: 2,
+  });
+  assert.deepEqual(fake.disposed, {
+    custodianDisposed: true,
+    transportDisposed: true,
+    sessionDisposed: true,
+  });
 });
 
 test('a trial ceiling above the signed session ceiling fails before allocation', async () => {

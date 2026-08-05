@@ -19,6 +19,8 @@ const KEY = Buffer.alloc(32, 0x5a);
 const NOW = Date.parse('2026-08-04T16:00:00.000Z');
 const TEN_GIB = 10 * 1024 * 1024 * 1024;
 const RESERVE_BYTES = 256 * 1024 * 1024;
+const CONTROLLED_PROVIDER = 'controlled-provider';
+const ZERO_PROVIDER_CANARY = 'zero-provider-canary';
 
 function providerPolicy(overrides = {}) {
   return {
@@ -80,6 +82,7 @@ function signedRequest(overrides = {}) {
     issuedAt: '2026-08-04T15:59:00.000Z',
     expiresAt: '2026-08-04T16:30:00.000Z',
     previousTrialChainHash: HASH('0'),
+    executionMode: CONTROLLED_PROVIDER,
     bindings: bindings(),
     budget: {
       currency: 'USD',
@@ -90,6 +93,20 @@ function signedRequest(overrides = {}) {
     ...overrides,
   };
   return signProtocolDocument(request, KEY, { keyId: 'controller-1' });
+}
+
+function zeroProviderRequest(overrides = {}) {
+  return signedRequest({
+    executionMode: ZERO_PROVIDER_CANARY,
+    bindings: bindings({ brokerPolicyHash: HASH('0') }),
+    budget: {
+      currency: 'USD',
+      trialCeilingMicrousd: 0,
+      sessionCeilingMicrousd: 0,
+      sessionCommittedMicrousd: 0,
+    },
+    ...overrides,
+  });
 }
 
 function platformObservation(overrides = {}) {
@@ -312,6 +329,43 @@ function finalEvidence(overrides = {}) {
   };
 }
 
+function zeroProviderFinalEvidence({ leaseHash = HASH('8'), ...overrides } = {}) {
+  const requestHash = protocolDocumentHash(zeroProviderRequest());
+  return finalEvidence({
+    network: {
+      ...finalEvidence().network,
+      brokerOnlyEgress: true,
+    },
+    provider: {
+      mode: 'not-exercised',
+      requestHash,
+      leaseHash,
+      usageHash: canonicalSha256({
+        schema: 'engineer-runtime-zero-provider-usage.v1',
+        executionMode: ZERO_PROVIDER_CANARY,
+        attempts: 0,
+        calls: 0,
+        spendMicrousd: 0,
+      }),
+      identityHash: canonicalSha256({
+        schema: 'engineer-runtime-zero-provider-identity.v1',
+        executionMode: ZERO_PROVIDER_CANARY,
+        requestHash,
+        leaseHash,
+        brokerAbsent: true,
+      }),
+      spendMicrousd: 0,
+      billingCertain: true,
+      budgetComplete: true,
+      withinTrialCeiling: true,
+      attempts: 0,
+      calls: 0,
+      brokerAbsent: true,
+    },
+    ...overrides,
+  });
+}
+
 function createEffects(overrides = {}) {
   const calls = [];
   let lossHandler = null;
@@ -412,6 +466,7 @@ function supervisor(effects, overrides = {}) {
 }
 
 const prepareInput = (request = signedRequest()) => ({
+  executionMode: CONTROLLED_PROVIDER,
   request,
   providerKeyFd: 7,
   dockerPolicy: { policyId: 'harbor-offline-v1' },
@@ -422,6 +477,116 @@ const prepareInput = (request = signedRequest()) => ({
     env: { LANG: 'C.UTF-8' },
     timeoutMs: 30 * 60 * 1_000,
   },
+});
+
+const zeroProviderPrepareInput = (request = zeroProviderRequest()) => ({
+  executionMode: ZERO_PROVIDER_CANARY,
+  request,
+  dockerPolicy: { policyId: 'harbor-offline-v1' },
+  runner: {
+    argv: ['/usr/local/bin/engineer-eval-runner', '--mode', 'canary'],
+    cwd: '/workspace/eval',
+    env: { LANG: 'C.UTF-8' },
+    timeoutMs: 30 * 60 * 1_000,
+  },
+});
+
+test('zero-provider canary issues a bound lease and runs Harbor without credential, broker, or broker group capability', async () => {
+  let leaseHash;
+  const request = zeroProviderRequest();
+  const requestHash = protocolDocumentHash(request);
+  const effects = createEffects({
+    async inspectReadiness(options) {
+      effects.calls.push(['inspectReadiness', options]);
+      return {
+        ...readinessObservation(),
+        broker: { installed: false, socketAbsent: true, policyAbsent: true },
+      };
+    },
+    async collectFinalEvidence(options) {
+      effects.calls.push(['collectFinalEvidence', options]);
+      return zeroProviderFinalEvidence({ leaseHash });
+    },
+  });
+  const runtime = supervisor(effects);
+
+  const lease = await runtime.prepare(zeroProviderPrepareInput(request));
+  leaseHash = protocolDocumentHash(lease);
+  assert.equal(lease.executionMode, ZERO_PROVIDER_CANARY);
+  assert.equal(lease.readiness.brokerPolicyHash, HASH('0'));
+  assert.equal(verifyReadinessLeaseForRequest(lease, request), true);
+  assert.equal(effects.calls.some(([name]) => name === 'inspectProviderKeyFd'), false);
+  assert.equal(effects.calls.some(([name]) => name === 'startProviderBroker'), false);
+  assert.equal(effects.calls.some(([name]) => name === 'closeInheritedFd'), false);
+  const proxyCall = effects.calls.find(([name]) => name === 'startDockerProxy')[1];
+  assert.equal(proxyCall.executionMode, ZERO_PROVIDER_CANARY);
+  assert.equal(proxyCall.releaseSha, request.bindings.releaseSha);
+  assert.equal(proxyCall.taskLockHash, request.bindings.taskLockHash);
+  assert.equal(proxyCall.bundleHash, request.bindings.bundleHash);
+
+  await runtime.run();
+  const runnerCall = effects.calls.find(([name]) => name === 'launchRunner')[1];
+  assert.equal(runnerCall.executionMode, ZERO_PROVIDER_CANARY);
+  assert.deepEqual(runnerCall.supplementaryGids, []);
+  assert.equal(runnerCall.env.DOCKER_HOST, 'unix:///run/engineer/harbor-docker.sock');
+  assert.equal(runnerCall.env.ENGINEER_RUNTIME_LEASE_HASH, leaseHash);
+  assert.equal(runnerCall.env.ENGINEER_RUNTIME_EXECUTION_MODE, ZERO_PROVIDER_CANARY);
+  assert.equal(Object.keys(runnerCall.env).some((name) => name.includes('PROVIDER') || name.includes('BROKER')), false);
+
+  const attestation = await runtime.finalize({ outcome: { status: 'succeeded', exitReason: 'completed' } });
+  assert.equal(attestation.executionMode, ZERO_PROVIDER_CANARY);
+  assert.equal(attestation.outcome.providerSpendMicrousd, 0);
+  assert.equal(attestation.outcome.providerUsageHash, zeroProviderFinalEvidence({ leaseHash }).provider.usageHash);
+  assert.equal(verifyTrialAttestationForLease(attestation, lease, request), true);
+  const finalCall = effects.calls.find(([name]) => name === 'collectFinalEvidence')[1];
+  assert.equal(finalCall.executionMode, ZERO_PROVIDER_CANARY);
+  assert.equal(finalCall.broker, null);
+  assert.equal(finalCall.requestHash, requestHash);
+});
+
+test('zero-provider canary rejects a provider descriptor, broker policy, mode mismatch, and nonzero provider evidence', async (t) => {
+  for (const [name, mutate] of [
+    ['provider descriptor', (input) => { input.providerKeyFd = 7; }],
+    ['broker policy', (input) => { input.brokerPolicy = providerPolicy(); }],
+    ['authenticated mode mismatch', (input) => { input.executionMode = CONTROLLED_PROVIDER; }],
+  ]) {
+    await t.test(name, async () => {
+      const input = zeroProviderPrepareInput();
+      mutate(input);
+      const effects = createEffects();
+      await assert.rejects(supervisor(effects).prepare(input), /failed closed/i);
+      assert.equal(effects.calls.some(([method]) => method === 'startProviderBroker'), false);
+    });
+  }
+
+  for (const [name, providerDrift] of [
+    ['provider attempt', { attempts: 1 }],
+    ['provider call', { calls: 1 }],
+    ['provider spend', { spendMicrousd: 1 }],
+    ['broker present', { brokerAbsent: false }],
+  ]) {
+    await t.test(name, async () => {
+      let leaseHash;
+      const effects = createEffects({
+        async inspectReadiness(options) {
+          effects.calls.push(['inspectReadiness', options]);
+          return { ...readinessObservation(), broker: { installed: false, socketAbsent: true, policyAbsent: true } };
+        },
+        async collectFinalEvidence(options) {
+          effects.calls.push(['collectFinalEvidence', options]);
+          return zeroProviderFinalEvidence({
+            leaseHash,
+            provider: { ...zeroProviderFinalEvidence({ leaseHash }).provider, ...providerDrift },
+          });
+        },
+      });
+      const runtime = supervisor(effects);
+      const lease = await runtime.prepare(zeroProviderPrepareInput());
+      leaseHash = protocolDocumentHash(lease);
+      await runtime.run();
+      await assert.rejects(runtime.finalize({ outcome: { status: 'succeeded', exitReason: 'completed' } }), /failed closed/i);
+    });
+  }
 });
 
 test('issues readiness only after observed controls, launches an unprivileged secret-free runner, and signs final evidence', async () => {

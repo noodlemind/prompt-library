@@ -31,6 +31,16 @@
         "reason": { "type": "string" }
       }
     },
+    "zeroProviderBaseline": {
+      "type": ["object", "null"],
+      "required": ["byteSha256", "reportHash", "lifecycleHash", "artifactHash"],
+      "properties": {
+        "byteSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "reportHash": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "lifecycleHash": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "artifactHash": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+      }
+    },
     "qualificationBaseline": {
       "type": ["object", "null"],
       "required": ["valid", "capability", "passingArm", "evidenceHash", "task", "accountedExposureUsd", "reasons"],
@@ -42,6 +52,16 @@
         "task": { "type": ["string", "null"] },
         "accountedExposureUsd": { "type": ["number", "null"], "minimum": 0 },
         "providerKeyFingerprint": { "type": ["string", "null"] },
+        "zeroProviderBaseline": {
+          "type": ["object", "null"],
+          "required": ["byteSha256", "reportHash", "lifecycleHash", "artifactHash"],
+          "properties": {
+            "byteSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+            "reportHash": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+            "lifecycleHash": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+            "artifactHash": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+          }
+        },
         "reasons": { "type": "array", "items": { "type": "string" } }
       }
     },

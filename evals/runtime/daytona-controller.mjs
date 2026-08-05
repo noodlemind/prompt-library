@@ -35,6 +35,21 @@ function positiveMoney(value, field) {
   return value;
 }
 
+function executionMode(value) {
+  if (!['controlled-provider', 'zero-provider-canary'].includes(value)) {
+    throw new TypeError('executionMode must be controlled-provider or zero-provider-canary');
+  }
+  return value;
+}
+
+function modeMoney(value, field, mode) {
+  if (mode === 'zero-provider-canary') {
+    if (value !== 0) throw new TypeError(`${field} must be zero in zero-provider-canary mode`);
+    return value;
+  }
+  return positiveMoney(value, field);
+}
+
 function safeId(value, field) {
   if (typeof value !== 'string' || !SAFE_ID.test(value)) {
     throw new TypeError(`${field} must be a safe identifier`);
@@ -136,11 +151,12 @@ function defaultRunCommand(file, args, { timeoutMs = 180_000, env = daytonaCliEn
   };
 }
 
-function expectedLabels(releaseSha, trialId = null) {
+function expectedLabels(releaseSha, trialId = null, mode = 'controlled-provider') {
   return {
     purpose: 'engineer-release-eval',
     'release-commit': releaseSha,
-    'provider-secret': 'broker-only',
+    'provider-secret': mode === 'zero-provider-canary' ? 'absent' : 'broker-only',
+    ...(mode === 'zero-provider-canary' ? { 'execution-mode': mode } : {}),
     ...(trialId == null ? {} : { 'trial-id': trialId }),
   };
 }
@@ -159,7 +175,10 @@ export function validateDaytonaAllocation(allocation, expected) {
   exact('target', expected.target);
   exact('sandboxClass', 'container');
   exact('cpu', expected.cpu);
-  exact('memory', expected.memoryGiB);
+  // Daytona's CLI accepts and reports `--memory` in MB; the public controller
+  // option remains GiB so the observed allocation must use the same conversion
+  // as the create command below.
+  exact('memory', expected.memoryGiB * 1024);
   exact('disk', expected.diskGiB);
   exact('public', false);
   if (allocation.state !== 'started' || (allocation.desiredState != null && allocation.desiredState !== 'started')) {
@@ -174,7 +193,11 @@ export function validateDaytonaAllocation(allocation, expected) {
   const labels = allocation.labels;
   if (!isPlainObject(labels)) errors.push('allocation labels are missing');
   else {
-    for (const [key, value] of Object.entries(expectedLabels(expected.releaseSha, expected.trialId ?? null))) {
+    for (const [key, value] of Object.entries(expectedLabels(
+      expected.releaseSha,
+      expected.trialId ?? null,
+      expected.executionMode ?? 'controlled-provider',
+    ))) {
       if (labels[key] !== value) errors.push(`allocation label ${key} is invalid`);
     }
   }
@@ -190,6 +213,7 @@ export function createDaytonaSessionController({
   diskGiB = 10,
   ttlMinutes = 120,
   releaseSha,
+  executionMode: executionModeInput,
   sessionBudgetUsd,
   runCommand = defaultRunCommand,
   provisionTrial = async () => null,
@@ -211,7 +235,8 @@ export function createDaytonaSessionController({
   if (typeof releaseSha !== 'string' || !/^[a-f0-9]{7,64}$/.test(releaseSha)) {
     throw new TypeError('releaseSha must be a hexadecimal commit identity');
   }
-  positiveMoney(sessionBudgetUsd, 'sessionBudgetUsd');
+  const mode = executionMode(executionModeInput);
+  modeMoney(sessionBudgetUsd, 'sessionBudgetUsd', mode);
   if (typeof runCommand !== 'function' || typeof provisionTrial !== 'function') {
     throw new TypeError('runCommand and provisionTrial must be functions');
   }
@@ -224,9 +249,12 @@ export function createDaytonaSessionController({
 
   let active = null;
   let finalized = false;
+  let disposed = false;
+  let disposalReceipt = null;
   let sequence = 0;
   const seenTrialIds = new Set();
   const receipts = [];
+  const abortDeletions = new Map();
   let committedReservationUsd = 0;
   let versionVerified = false;
 
@@ -240,10 +268,15 @@ export function createDaytonaSessionController({
   }
 
   async function deleteAndConfirm(trial) {
+    const cleanupIdentity = trial.cleanupIdentity;
+    if (!isPlainObject(cleanupIdentity) || !SAFE_ID.test(String(cleanupIdentity.id ?? '')) ||
+        cleanupIdentity.name !== trial.name) {
+      throw new Error('Daytona cleanup identity is unavailable');
+    }
     const deletionRequestedAt = now().toISOString();
     const deletionRequestId = crypto.createHash('sha256')
       .update('engineer-eval/daytona-delete/v1\0')
-      .update(String(trial.allocation.id))
+      .update(cleanupIdentity.id)
       .update('\0')
       .update(deletionRequestedAt)
       .digest('hex')
@@ -264,12 +297,12 @@ export function createDaytonaSessionController({
       try {
         const inspected = await runCommand(
           executable,
-          ['info', trial.allocation.id, '--format', 'json'],
+          ['info', cleanupIdentity.id, '--format', 'json'],
           { timeoutMs: 180_000, env: { ...cliEnv } }
         );
-        if (exactSandboxNotFound(inspected, trial.allocation.id)) {
+        if (exactSandboxNotFound(inspected, cleanupIdentity.id)) {
           platformEvidence.update(JSON.stringify({
-            sandboxId: trial.allocation.id,
+            sandboxId: cleanupIdentity.id,
             status: 'not-found',
             cliExitCode: 1,
           }));
@@ -281,9 +314,14 @@ export function createDaytonaSessionController({
             name: observed.name ?? null,
             state: observed.state ?? null,
           }));
-          if (observed.id !== trial.allocation.id || observed.name !== trial.name) {
+          if (observed.name !== trial.name || typeof observed.id !== 'string' || !SAFE_ID.test(observed.id) ||
+              (cleanupIdentity.observed === true && observed.id !== cleanupIdentity.id)) {
             integrityError = new Error('Daytona deletion inspection returned a mismatched sandbox identity');
             break;
+          }
+          if (cleanupIdentity.observed !== true) {
+            cleanupIdentity.id = observed.id;
+            cleanupIdentity.observed = true;
           }
           absent = false;
         } else {
@@ -302,7 +340,7 @@ export function createDaytonaSessionController({
     }
     const observedAbsentAt = now().toISOString();
     return {
-      sandboxId: trial.allocation.id,
+      sandboxId: cleanupIdentity.id,
       sandboxName: trial.name,
       deleted: true,
       deletedAt: observedAbsentAt,
@@ -318,11 +356,12 @@ export function createDaytonaSessionController({
 
   async function beginTrial({ trialId, task, condition, reservedUsd }) {
     if (finalized) throw new Error('runtime session is finalized');
+    if (disposed) throw new Error('runtime session is disposed');
     if (active) throw new Error('the per-trial topology permits only one active trial; execution is serial');
     safeId(trialId, 'trialId');
     safeId(task, 'task');
     if (!['generic', 'harness'].includes(condition)) throw new TypeError('condition must be generic or harness');
-    positiveMoney(reservedUsd, 'reservedUsd');
+    modeMoney(reservedUsd, 'reservedUsd', mode);
     if (seenTrialIds.has(trialId)) throw new Error(`trialId was already used: ${trialId}`);
     if (committedReservationUsd + reservedUsd > sessionBudgetUsd + 1e-12) {
       throw new Error('trial reservation exceeds the external session budget');
@@ -351,16 +390,32 @@ export function createDaytonaSessionController({
       '--ttl', String(ttlMinutes),
       '--label', 'purpose=engineer-release-eval',
       '--label', `release-commit=${releaseSha}`,
-      '--label', 'provider-secret=broker-only',
+      '--label', `provider-secret=${mode === 'zero-provider-canary' ? 'absent' : 'broker-only'}`,
+      ...(mode === 'zero-provider-canary' ? ['--label', `execution-mode=${mode}`] : []),
       '--label', `trial-id=${trialId}`,
     ];
-    const trial = { trialId, task, condition, reservedUsd, sequence, name, allocation: null, readiness: null };
+    const trial = {
+      trialId,
+      task,
+      condition,
+      reservedUsd,
+      sequence,
+      name,
+      allocation: null,
+      cleanupIdentity: { id: name, name, observed: false },
+      readiness: null,
+      cleanupPending: false,
+    };
     let createAttempted = false;
     try {
       createAttempted = true;
+      seenTrialIds.add(trialId);
       await invoke(createArgs, 'Daytona sandbox creation', { timeoutMs: 300_000 });
       const info = await invoke(['info', name, '--format', 'json'], 'Daytona sandbox inspection');
       const observed = parseJsonObject(info.stdout, 'Daytona allocation');
+      if (observed.name === name && typeof observed.id === 'string' && SAFE_ID.test(observed.id)) {
+        trial.cleanupIdentity = { id: observed.id, name, observed: true };
+      }
       const verdict = validateDaytonaAllocation(observed, {
         name,
         snapshot,
@@ -370,6 +425,7 @@ export function createDaytonaSessionController({
         diskGiB,
         releaseSha,
         trialId,
+        executionMode: mode,
       });
       if (!verdict.ok) throw new Error(`Daytona allocation is invalid: ${verdict.errors.join('; ')}`);
       trial.allocation = observed;
@@ -378,7 +434,6 @@ export function createDaytonaSessionController({
         trial: { trialId, task, condition, reservedUsd, sequence },
       });
       active = trial;
-      seenTrialIds.add(trialId);
       return {
         allocation: structuredClone(observed),
         readiness: structuredClone(trial.readiness),
@@ -388,9 +443,12 @@ export function createDaytonaSessionController({
     } catch (error) {
       if (createAttempted) {
         try {
-          if (!trial.allocation) trial.allocation = { id: name, name };
           await deleteAndConfirm(trial);
         } catch (cleanupError) {
+          trial.cleanupPending = true;
+          trial.allocation = null;
+          trial.readiness = null;
+          active = trial;
           throw new AggregateError([error, cleanupError], 'trial provisioning failed and sandbox deletion was not confirmed');
         }
       }
@@ -400,6 +458,7 @@ export function createDaytonaSessionController({
 
   async function completeTrial({ trialId, evidence }) {
     safeId(trialId, 'trialId');
+    if (disposed) throw new Error('runtime session is disposed');
     if (!active || active.trialId !== trialId) throw new Error('trial is not the active Daytona allocation');
     const trial = active;
     let retainedEvidence;
@@ -412,9 +471,13 @@ export function createDaytonaSessionController({
     let deletion;
     try {
       deletion = await deleteAndConfirm(trial);
-    } finally {
-      active = null;
+    } catch (error) {
+      trial.cleanupPending = true;
+      trial.allocation = null;
+      trial.readiness = null;
+      throw error;
     }
+    active = null;
     const receipt = {
       trialId,
       sequence: trial.sequence,
@@ -433,31 +496,66 @@ export function createDaytonaSessionController({
 
   async function abortTrial({ trialId, reason = 'aborted' }) {
     safeId(trialId, 'trialId');
-    if (!active || active.trialId !== trialId) throw new Error('trial is not the active Daytona allocation');
+    if (!active) {
+      const prior = abortDeletions.get(trialId);
+      if (prior) return structuredClone(prior);
+      throw new Error('trial is not the active Daytona allocation');
+    }
+    if (active.trialId !== trialId) throw new Error('trial is not the active Daytona allocation');
     const trial = active;
-    let deletion = null;
+    let deletion;
     try {
       deletion = await deleteAndConfirm(trial);
-      return deletion;
-    } finally {
-      active = null;
-      receipts.push({
-        trialId,
-        sequence: trial.sequence,
-        task: trial.task,
-        condition: trial.condition,
-        reservedUsd: 0,
-        evidenceHash: null,
-        completed: false,
-        deleted: deletion?.deleted === true,
-        ...(deletion ?? {}),
-        abortReasonHash: crypto.createHash('sha256').update(String(reason)).digest('hex'),
-      });
+    } catch (error) {
+      trial.cleanupPending = true;
+      trial.allocation = null;
+      trial.readiness = null;
+      throw error;
     }
+    active = null;
+    const receipt = {
+      trialId,
+      sequence: trial.sequence,
+      task: trial.task,
+      condition: trial.condition,
+      reservedUsd: 0,
+      evidenceHash: null,
+      completed: false,
+      deleted: true,
+      ...deletion,
+      abortReasonHash: crypto.createHash('sha256').update(String(reason)).digest('hex'),
+    };
+    receipts.push(receipt);
+    abortDeletions.set(trialId, structuredClone(deletion));
+    return structuredClone(deletion);
+  }
+
+  async function dispose() {
+    disposed = true;
+    if (disposalReceipt) return structuredClone(disposalReceipt);
+    if (!active) {
+      disposalReceipt = {
+        schema: 'daytona-controller-disposal.v1',
+        disposed: true,
+        activeTrialDeleted: false,
+        deletion: null,
+      };
+      return structuredClone(disposalReceipt);
+    }
+    const trialId = active.trialId;
+    const deletion = await abortTrial({ trialId, reason: 'Daytona controller disposed' });
+    disposalReceipt = {
+      schema: 'daytona-controller-disposal.v1',
+      disposed: true,
+      activeTrialDeleted: true,
+      deletion,
+    };
+    return structuredClone(disposalReceipt);
   }
 
   function finalizeSession() {
     if (finalized) throw new Error('runtime session is already finalized');
+    if (disposed) throw new Error('runtime session is disposed');
     if (active) throw new Error('cannot finalize a runtime session with an active trial');
     if (receipts.length === 0 || receipts.some((receipt) =>
       receipt.deleted !== true || !SHA256_HEX.test(String(receipt.evidenceHash ?? ''))
@@ -469,6 +567,7 @@ export function createDaytonaSessionController({
       schema: 'daytona-session-deletion.v1',
       releaseSha,
       snapshot,
+      executionMode: mode,
       deleted: true,
       reservedUsd: committedReservationUsd,
       finalizedAt: now().toISOString(),
@@ -483,12 +582,14 @@ export function createDaytonaSessionController({
       sessionBudgetUsd,
       reservedUsd: committedReservationUsd + (active?.reservedUsd ?? 0),
       finalized,
+      disposed,
       activeTrial: active ? {
         trialId: active.trialId,
         sequence: active.sequence,
-        sandboxId: active.allocation?.id ?? null,
+        sandboxId: active.cleanupIdentity?.id ?? null,
         sandboxName: active.name,
         reservedUsd: active.reservedUsd,
+        cleanupPending: active.cleanupPending === true,
       } : null,
       receipts: structuredClone(receipts),
     };
@@ -498,6 +599,7 @@ export function createDaytonaSessionController({
     beginTrial,
     completeTrial,
     abortTrial,
+    dispose,
     finalizeSession,
     snapshot: snapshotState,
   };

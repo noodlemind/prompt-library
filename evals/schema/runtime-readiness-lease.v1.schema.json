@@ -4,10 +4,10 @@
   "title": "Short-lived authenticated readiness lease for one evaluation trial",
   "type": "object",
   "additionalProperties": false,
-  "maxProperties": 15,
+  "maxProperties": 16,
   "required": [
     "schema", "protocolVersion", "sessionId", "trialId", "sequence", "nonce",
-    "issuedAt", "expiresAt", "requestHash", "requestNonce", "previousTrialChainHash",
+    "issuedAt", "expiresAt", "requestHash", "requestNonce", "previousTrialChainHash", "executionMode",
     "bindings", "budget", "readiness", "authentication"
   ],
   "properties": {
@@ -22,11 +22,42 @@
     "requestHash": { "$ref": "#/$defs/hash" },
     "requestNonce": { "$ref": "#/$defs/hash" },
     "previousTrialChainHash": { "$ref": "#/$defs/hash" },
+    "executionMode": { "enum": ["controlled-provider", "zero-provider-canary"] },
     "bindings": { "$ref": "#/$defs/bindings" },
     "budget": { "$ref": "#/$defs/trialBudget" },
     "readiness": { "$ref": "#/$defs/readiness" },
     "authentication": { "$ref": "#/$defs/authentication" }
   },
+  "allOf": [
+    {
+      "if": {
+        "properties": { "executionMode": { "const": "zero-provider-canary" } },
+        "required": ["executionMode"]
+      },
+      "then": {
+        "properties": {
+          "budget": {
+            "properties": {
+              "trialCeilingMicrousd": { "const": 0 },
+              "sessionCeilingMicrousd": { "const": 0 },
+              "sessionCommittedMicrousd": { "const": 0 }
+            }
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "budget": {
+            "properties": {
+              "trialCeilingMicrousd": { "minimum": 1 },
+              "sessionCeilingMicrousd": { "minimum": 1 },
+              "sessionCommittedMicrousd": { "minimum": 1 }
+            }
+          }
+        }
+      }
+    }
+  ],
   "$defs": {
     "id": {
       "type": "string",

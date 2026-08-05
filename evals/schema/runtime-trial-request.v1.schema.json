@@ -4,10 +4,10 @@
   "title": "Authenticated request for one isolated Engineer Harness evaluation trial",
   "type": "object",
   "additionalProperties": false,
-  "maxProperties": 12,
+  "maxProperties": 13,
   "required": [
     "schema", "protocolVersion", "sessionId", "trialId", "sequence", "nonce",
-    "issuedAt", "expiresAt", "previousTrialChainHash", "bindings", "budget", "authentication"
+    "issuedAt", "expiresAt", "previousTrialChainHash", "executionMode", "bindings", "budget", "authentication"
   ],
   "properties": {
     "schema": { "const": "engineer-runtime-trial-request.v1" },
@@ -19,10 +19,41 @@
     "issuedAt": { "$ref": "#/$defs/instant" },
     "expiresAt": { "$ref": "#/$defs/instant" },
     "previousTrialChainHash": { "$ref": "#/$defs/hash" },
+    "executionMode": { "enum": ["controlled-provider", "zero-provider-canary"] },
     "bindings": { "$ref": "#/$defs/bindings" },
     "budget": { "$ref": "#/$defs/trialBudget" },
     "authentication": { "$ref": "#/$defs/authentication" }
   },
+  "allOf": [
+    {
+      "if": {
+        "properties": { "executionMode": { "const": "zero-provider-canary" } },
+        "required": ["executionMode"]
+      },
+      "then": {
+        "properties": {
+          "budget": {
+            "properties": {
+              "trialCeilingMicrousd": { "const": 0 },
+              "sessionCeilingMicrousd": { "const": 0 },
+              "sessionCommittedMicrousd": { "const": 0 }
+            }
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "budget": {
+            "properties": {
+              "trialCeilingMicrousd": { "minimum": 1 },
+              "sessionCeilingMicrousd": { "minimum": 1 },
+              "sessionCommittedMicrousd": { "minimum": 1 }
+            }
+          }
+        }
+      }
+    }
+  ],
   "$defs": {
     "id": {
       "type": "string",

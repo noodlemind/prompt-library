@@ -24,6 +24,7 @@ const EXECUTABLE_HASHES = Object.freeze({
   evidenceCollector: HASH('8'),
   cgroupExec: HASH('9'),
   taskIsolationProbe: HASH('e'),
+  readinessDenialProbe: HASH('f'),
   imageProvisioner: HASH('0'),
   snapshotSelfTest: HASH('1'),
   dockerd: HASH('a'),

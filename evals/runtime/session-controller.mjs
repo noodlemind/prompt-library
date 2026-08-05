@@ -1,6 +1,7 @@
 import {
   GENESIS_CHAIN_HASH,
   ProtocolReplayGuard,
+  RuntimeExecutionModes,
   appendTrialHashChain,
   canonicalSha256,
   generateNonce,
@@ -32,6 +33,7 @@ const SESSION_FIELDS = Object.freeze([
   'profileId',
   'taskLockHash',
   'bundleHash',
+  'executionMode',
   'budgetId',
   'budgetPolicyHash',
   'brokerPolicyHash',
@@ -105,6 +107,13 @@ function microusd(value, label, { positive = false } = {}) {
   return value;
 }
 
+function executionMode(value, label = 'executionMode') {
+  if (!Object.values(RuntimeExecutionModes).includes(value)) {
+    throw new TypeError(`${label} must be controlled-provider or zero-provider-canary`);
+  }
+  return value;
+}
+
 function normalizedKey(value, label) {
   if (!Buffer.isBuffer(value) && !(value instanceof Uint8Array)) {
     throw new TypeError(`${label} must be supplied as bytes`);
@@ -174,14 +183,21 @@ function validateSession(input) {
   safeId(value.profileId, 'session.profileId');
   hash(value.taskLockHash, 'session.taskLockHash');
   hash(value.bundleHash, 'session.bundleHash');
+  executionMode(value.executionMode, 'session.executionMode');
   safeId(value.budgetId, 'session.budgetId');
   hash(value.budgetPolicyHash, 'session.budgetPolicyHash');
   hash(value.brokerPolicyHash, 'session.brokerPolicyHash');
-  microusd(value.sessionCeilingMicrousd, 'session.sessionCeilingMicrousd', { positive: true });
+  microusd(value.sessionCeilingMicrousd, 'session.sessionCeilingMicrousd', {
+    positive: value.executionMode === RuntimeExecutionModes.CONTROLLED_PROVIDER,
+  });
+  if (value.executionMode === RuntimeExecutionModes.ZERO_PROVIDER_CANARY
+      && value.sessionCeilingMicrousd !== 0) {
+    throw new TypeError('zero-provider-canary session.sessionCeilingMicrousd must be zero');
+  }
   return deepFreeze(value);
 }
 
-function validateTrialSpec(input) {
+function validateTrialSpec(input, mode) {
   const value = structuredClone(exactObject(input, TRIAL_FIELDS, 'trial'));
   daytonaId(value.trialId, 'trial.trialId');
   daytonaId(value.taskId, 'trial.taskId');
@@ -191,7 +207,13 @@ function validateTrialSpec(input) {
   if (typeof value.imageDigest !== 'string' || !IMAGE_DIGEST.test(value.imageDigest)) {
     throw new TypeError('trial.imageDigest must be a pinned SHA-256 image digest');
   }
-  microusd(value.trialCeilingMicrousd, 'trial.trialCeilingMicrousd', { positive: true });
+  microusd(value.trialCeilingMicrousd, 'trial.trialCeilingMicrousd', {
+    positive: mode === RuntimeExecutionModes.CONTROLLED_PROVIDER,
+  });
+  if (mode === RuntimeExecutionModes.ZERO_PROVIDER_CANARY
+      && value.trialCeilingMicrousd !== 0) {
+    throw new TypeError('zero-provider-canary trial.trialCeilingMicrousd must be zero');
+  }
   hash(value.supervisorExecutableHash, 'trial.supervisorExecutableHash');
   hash(value.runnerExecutableHash, 'trial.runnerExecutableHash');
   hash(value.harborExecutableHash, 'trial.harborExecutableHash');
@@ -209,7 +231,7 @@ function validateRuntimeBindings(input) {
 }
 
 function validateDependencies(daytonaController, transport) {
-  const daytonaMethods = ['beginTrial', 'completeTrial', 'abortTrial', 'finalizeSession', 'snapshot'];
+  const daytonaMethods = ['beginTrial', 'completeTrial', 'abortTrial', 'dispose', 'finalizeSession', 'snapshot'];
   const transportMethods = ['prepareTrial', 'requestReadiness', 'requestFinal', 'closeTrial'];
   if (!daytonaController || daytonaMethods.some((name) => typeof daytonaController[name] !== 'function')) {
     throw new TypeError(`daytonaController must implement ${daytonaMethods.join(', ')}`);
@@ -219,12 +241,12 @@ function validateDependencies(daytonaController, transport) {
   }
 }
 
-/** Only in-process values issued by this module can satisfy this predicate. */
+/** Only controlled-provider readiness issued in-process can arm paid execution. */
 export function isRuntimeControllerReadiness(value) {
   return isPlainObject(value) && controllerReadinessBrand.has(value);
 }
 
-/** Only an authenticated, reconciled, and finalized in-process session can satisfy this predicate. */
+/** Only an authenticated, reconciled controlled-provider final can satisfy paid evidence. */
 export function isRuntimeSessionFinal(value) {
   return isPlainObject(value) && sessionFinalBrand.has(value);
 }
@@ -296,6 +318,7 @@ export function createRuntimeSessionController({
     source: 'external-controller',
     sessionId: session.sessionId,
     releaseSha: session.releaseSha,
+    executionMode: session.executionMode,
     runtimeAttested: false,
     providerAuthorized: false,
     perTrialSandboxRequired: true,
@@ -303,7 +326,9 @@ export function createRuntimeSessionController({
     authenticatedSupervisorEvidenceRequired: true,
     exactBudgetReconciliationRequired: true,
   });
-  controllerReadinessBrand.add(controllerReadiness);
+  if (session.executionMode === RuntimeExecutionModes.CONTROLLED_PROVIDER) {
+    controllerReadinessBrand.add(controllerReadiness);
+  }
 
   function ensureOpen() {
     if (disposed) throw new Error('runtime session is disposed');
@@ -370,15 +395,19 @@ export function createRuntimeSessionController({
         });
       } catch (error) {
         failureHashes.push(errorHash(error));
-      } finally {
-        record.channel = undefined;
-        record.channelReady = false;
-        if (active === record) active = undefined;
       }
-      return deepFreeze({
+      record.channel = undefined;
+      record.channelReady = false;
+      const result = deepFreeze({
         deleted: failureHashes.length === 0,
         failureHashes,
       });
+      if (result.deleted && active === record) {
+        active = undefined;
+        cleanupIncomplete = false;
+      }
+      record.cleanupPromise = null;
+      return result;
     })();
     return record.cleanupPromise;
   }
@@ -416,6 +445,7 @@ export function createRuntimeSessionController({
       issuedAt: issued.toISOString(),
       expiresAt: expiresAt(issued, requestLifetimeMs),
       previousTrialChainHash: chainHead,
+      executionMode: session.executionMode,
       bindings: {
         releaseSha: session.releaseSha,
         profileId: session.profileId,
@@ -455,7 +485,7 @@ export function createRuntimeSessionController({
   async function beginTrial(input) {
     ensureOpen();
     if (active || beginning) throw new Error('the runtime session permits only one active per-trial sandbox');
-    const spec = validateTrialSpec(input);
+    const spec = validateTrialSpec(input, session.executionMode);
     if (seenTrialIds.has(spec.trialId)) throw new Error(`trialId was already used: ${spec.trialId}`);
     if (committedMicrousd + spec.trialCeilingMicrousd > session.sessionCeilingMicrousd) {
       throw new Error('trial reservation exceeds the external session budget');
@@ -570,7 +600,8 @@ export function createRuntimeSessionController({
         schema: 'engineer-runtime-trial-authorization.v1',
         sessionId: session.sessionId,
         trialId: record.spec.trialId,
-        providerAuthorized: true,
+        executionMode: session.executionMode,
+        providerAuthorized: session.executionMode === RuntimeExecutionModes.CONTROLLED_PROVIDER,
         readinessLeaseHash: protocolDocumentHash(lease),
         readinessLease: structuredClone(lease),
       });
@@ -742,6 +773,7 @@ export function createRuntimeSessionController({
           profileId: session.profileId,
           taskLockHash: session.taskLockHash,
           bundleHash: session.bundleHash,
+          executionMode: session.executionMode,
           budgetId: session.budgetId,
           budgetPolicyHash: session.budgetPolicyHash,
           brokerPolicyHash: session.brokerPolicyHash,
@@ -764,7 +796,9 @@ export function createRuntimeSessionController({
       });
       verifySessionTrialHashChain(verified, trials.map((entry) => entry.attestation));
       deepFreeze(verified);
-      sessionFinalBrand.add(verified);
+      if (session.executionMode === RuntimeExecutionModes.CONTROLLED_PROVIDER) {
+        sessionFinalBrand.add(verified);
+      }
       finalized = true;
       disposeKeyMaterial();
       return verified;
@@ -788,18 +822,33 @@ export function createRuntimeSessionController({
     }
     disposeKeyMaterial();
 
-    disposalPromise = (async () => {
+    const attempt = (async () => {
       await beginSettlement;
       let activeTrialDeleted = disposedProvisioningDeleted;
-      const record = active;
+      let record = active;
       if (record) {
         const cleanup = await cleanupRecord(record, sha256Hex('runtime-session-disposed'));
         activeTrialDeleted = cleanup.deleted;
-        if (!cleanup.deleted) cleanupIncomplete = true;
+        cleanupIncomplete = !cleanup.deleted;
       }
-      if (cleanupIncomplete) {
+      let platformDisposal;
+      try {
+        platformDisposal = await daytonaController.dispose();
+      } catch {
+        cleanupIncomplete = true;
         throw new Error('runtime session disposal cleanup failed');
       }
+      record = active;
+      if (record) {
+        const retry = await cleanupRecord(record, sha256Hex('runtime-session-disposed-retry'));
+        activeTrialDeleted = activeTrialDeleted || retry.deleted
+          || platformDisposal?.activeTrialDeleted === true;
+        cleanupIncomplete = !retry.deleted;
+      } else if (platformDisposal?.activeTrialDeleted === true) {
+        activeTrialDeleted = true;
+        cleanupIncomplete = false;
+      }
+      if (cleanupIncomplete) throw new Error('runtime session disposal cleanup failed');
       return deepFreeze({
         schema: 'engineer-runtime-session-disposal.v1',
         sessionId: session.sessionId,
@@ -807,6 +856,10 @@ export function createRuntimeSessionController({
         activeTrialDeleted,
       });
     })();
+    disposalPromise = attempt;
+    attempt.catch(() => {
+      if (disposalPromise === attempt) disposalPromise = null;
+    });
     return disposalPromise;
   }
 
@@ -815,6 +868,7 @@ export function createRuntimeSessionController({
       schema: 'engineer-runtime-session-snapshot.v1',
       sessionId: session.sessionId,
       releaseSha: session.releaseSha,
+      executionMode: session.executionMode,
       sessionCeilingMicrousd: session.sessionCeilingMicrousd,
       committedMicrousd,
       spentMicrousd,

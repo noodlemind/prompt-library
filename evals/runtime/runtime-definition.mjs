@@ -50,7 +50,7 @@ const CREDENTIAL_VALUE = /(?:Bearer\s+|sk-(?:or|ant|proj)-|github_pat_|gh[pousr]
 const UTF8 = new TextDecoder('utf-8', { fatal: true });
 
 const RUNTIME_EXECUTABLE_NAMES = Object.freeze([
-  'dockerd', 'cgroupExec', 'taskIsolationProbe', 'iptables', 'ip6tables', 'supervisor',
+  'dockerd', 'cgroupExec', 'taskIsolationProbe', 'readinessDenialProbe', 'iptables', 'ip6tables', 'supervisor',
   'providerBroker', 'readinessProbe', 'evidenceCollector', 'runner', 'harbor', 'sentinel',
 ]);
 const EXECUTABLE_PATHS = Object.freeze(Object.fromEntries(
@@ -824,19 +824,34 @@ function validatePolicyContext(context, receipt) {
     fail('runtime policy context is incomplete', 'ERR_RUNTIME_DEFINITION_POLICY');
   }
   safeId(context.trialId, 'policy trial identity');
+  if (!['controlled-provider', 'zero-provider-canary'].includes(context.request.executionMode)) {
+    fail('runtime policy context execution mode is invalid', 'ERR_RUNTIME_DEFINITION_POLICY');
+  }
   if (context.allocationId !== receipt.topology.sandboxId ||
       context.request.trialId !== context.trialId ||
       context.request.bindings.sandboxId !== receipt.topology.sandboxId ||
       context.request.bindings.imageDigest !== receipt.task.imageId ||
       context.request.bindings.budgetPolicyHash !== receipt.bindings.budgetPolicyHash ||
-      context.request.bindings.brokerPolicyHash !== receipt.bindings.brokerPolicyHash ||
-      context.request.budget.sessionCeilingMicrousd !== receipt.bindings.sessionCeilingMicrousd) {
+      context.request.bindings.brokerPolicyHash !== receipt.bindings.brokerPolicyHash) {
     fail('runtime policy context drifted from the trusted receipt',
       'ERR_RUNTIME_DEFINITION_POLICY');
   }
   boundedInteger(context.request.sequence, 'policy request sequence', 1, 1_000_000);
-  boundedInteger(context.request.budget.trialCeilingMicrousd,
-    'policy trial ceiling', 1, receipt.bindings.sessionCeilingMicrousd);
+  if (context.request.executionMode === 'zero-provider-canary') {
+    if (context.request.budget.trialCeilingMicrousd !== 0
+        || context.request.budget.sessionCeilingMicrousd !== 0
+        || context.request.budget.sessionCommittedMicrousd !== 0) {
+      fail('zero-provider runtime policy budget must be exactly zero',
+        'ERR_RUNTIME_DEFINITION_POLICY');
+    }
+  } else {
+    if (context.request.budget.sessionCeilingMicrousd !== receipt.bindings.sessionCeilingMicrousd) {
+      fail('runtime policy context drifted from the trusted receipt',
+        'ERR_RUNTIME_DEFINITION_POLICY');
+    }
+    boundedInteger(context.request.budget.trialCeilingMicrousd,
+      'policy trial ceiling', 1, receipt.bindings.sessionCeilingMicrousd);
+  }
   return context;
 }
 
@@ -869,6 +884,11 @@ function codeOwnedPolicyBuilders(receipt) {
   }
 
   function buildBrokerPolicy(context) {
+    if (context?.request?.executionMode === 'zero-provider-canary') {
+      validatePolicyContext(context, receipt);
+      fail('zero-provider runtime is not authorized to build a provider broker policy',
+        'ERR_RUNTIME_DEFINITION_POLICY');
+    }
     const contract = trialContract(context);
     let policy;
     try {

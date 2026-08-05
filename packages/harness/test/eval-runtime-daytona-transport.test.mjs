@@ -14,6 +14,8 @@ const DAYTONA = '/opt/homebrew/bin/daytona';
 const SANDBOX = 'engineer-eval-abcd1234-1-00112233';
 const PROVIDER_SECRET = Buffer.from('sk-or-v1-provider-secret-value');
 const HMAC_SECRET = Buffer.alloc(32, 0xa5);
+const CONTROLLED_PROVIDER = 'controlled-provider';
+const ZERO_PROVIDER_CANARY = 'zero-provider-canary';
 
 function sha256(value) {
   return crypto.createHash('sha256').update(value).digest('hex');
@@ -32,6 +34,14 @@ function secretPayload(hmacKey = HMAC_SECRET, providerKey = PROVIDER_SECRET) {
   header.writeUInt16BE(hmacKey.length, 4);
   header.writeUInt16BE(providerKey.length, 6);
   return Buffer.concat([header, hmacKey, providerKey]);
+}
+
+function zeroProviderPayload(hmacKey = HMAC_SECRET) {
+  const header = Buffer.alloc(8);
+  header.write('EHZ1', 0, 'ascii');
+  header.writeUInt16BE(hmacKey.length, 4);
+  header.writeUInt16BE(0, 6);
+  return Buffer.concat([header, hmacKey]);
 }
 
 function fakeChild({ stdout = [], stderr = [], closeBeforeOutput = false } = {}) {
@@ -313,6 +323,7 @@ test('supervisor control waits for echo-disabled readiness and sends each secret
   const accepted = {
     schema: 'engineer-supervisor-secret-accepted.v1',
     status: 'accepted',
+    executionMode: CONTROLLED_PROVIDER,
     frameSha256: payloadDigest,
     byteLength: payload.length,
   };
@@ -324,6 +335,7 @@ test('supervisor control waits for echo-disabled readiness and sends each secret
   const opened = await harness.value.openSupervisorControl({
     sandboxId: SANDBOX,
     hmacKey: HMAC_SECRET,
+    executionMode: CONTROLLED_PROVIDER,
     providerKey: PROVIDER_SECRET,
   });
   assert.deepEqual(opened.receipt, accepted);
@@ -345,6 +357,59 @@ test('supervisor control waits for echo-disabled readiness and sends each secret
   await opened.control.close();
 });
 
+test('zero-provider control sends an authenticated HMAC-only frame and forbids provider bytes', async () => {
+  const payload = zeroProviderPayload();
+  const accepted = {
+    schema: 'engineer-supervisor-secret-accepted.v1',
+    status: 'accepted',
+    executionMode: ZERO_PROVIDER_CANARY,
+    frameSha256: sha256(payload),
+    byteLength: payload.length,
+  };
+  const scripted = fakeChild({
+    stdout: [Buffer.from('ENGINEER-SUPERVISOR/1 READY\n'), frame(accepted)],
+  });
+  const harness = transport({ nextChild: () => scripted });
+  const opened = await harness.value.openSupervisorControl({
+    sandboxId: SANDBOX,
+    hmacKey: HMAC_SECRET,
+    executionMode: ZERO_PROVIDER_CANARY,
+  });
+  assert.deepEqual(opened.receipt, accepted);
+  const writtenFrame = Buffer.concat(scripted.writes.slice(1));
+  assert.equal(writtenFrame.readUInt32BE(0), payload.length);
+  assert.deepEqual(writtenFrame.subarray(4), payload);
+  assert.equal(writtenFrame.subarray(4, 8).toString('ascii'), 'EHZ1');
+  assert.equal(writtenFrame.subarray(4).includes(PROVIDER_SECRET), false);
+  await opened.control.close();
+
+  for (const input of [
+    {
+      sandboxId: SANDBOX,
+      hmacKey: HMAC_SECRET,
+      executionMode: ZERO_PROVIDER_CANARY,
+      providerKey: PROVIDER_SECRET,
+    },
+    {
+      sandboxId: SANDBOX,
+      hmacKey: HMAC_SECRET,
+      executionMode: CONTROLLED_PROVIDER,
+    },
+    {
+      sandboxId: SANDBOX,
+      hmacKey: HMAC_SECRET,
+      executionMode: 'openrouter',
+    },
+  ]) {
+    const rejected = transport();
+    await assert.rejects(
+      rejected.value.openSupervisorControl(input),
+      /execution mode|provider|unexpected field/i
+    );
+    assert.equal(rejected.channelCalls.length, 0);
+  }
+});
+
 test('unexpected echo, secret echo, extra output, and channel loss never leak their content', async () => {
   const cases = [
     {
@@ -362,6 +427,7 @@ test('unexpected echo, secret echo, extra output, and channel loss never leak th
       child: () => fakeChild({ stdout: [Buffer.from('ENGINEER-SUPERVISOR/1 READY\n'), frame({
         schema: 'engineer-supervisor-secret-accepted.v1',
         status: 'accepted',
+        executionMode: CONTROLLED_PROVIDER,
         frameSha256: sha256(secretPayload()),
         byteLength: secretPayload().length,
       }), Buffer.from('extra')] }),
@@ -381,6 +447,7 @@ test('unexpected echo, secret echo, extra output, and channel loss never leak th
       await harness.value.openSupervisorControl({
         sandboxId: SANDBOX,
         hmacKey: HMAC_SECRET,
+        executionMode: CONTROLLED_PROVIDER,
         providerKey: PROVIDER_SECRET,
       });
     } catch (caught) {
@@ -405,7 +472,12 @@ test('provider-shaped output stays behind hash-only receipts while explicit cont
     nextChild: () => fakeChild({ stderr: [Buffer.from(`fatal ${leak}`)] }),
   });
   await assert.rejects(
-    stderrLeak.value.openSupervisorControl({ sandboxId: SANDBOX, hmacKey: HMAC_SECRET, providerKey: PROVIDER_SECRET }),
+    stderrLeak.value.openSupervisorControl({
+      sandboxId: SANDBOX,
+      hmacKey: HMAC_SECRET,
+      executionMode: CONTROLLED_PROVIDER,
+      providerKey: PROVIDER_SECRET,
+    }),
     (error) => /secret|channel|stderr/i.test(error.message) && !error.message.includes(leak)
   );
 });
@@ -416,6 +488,7 @@ test('dispose closes live control channels, drops retained environment, and reje
     stdout: [Buffer.from('ENGINEER-SUPERVISOR/1 READY\n'), frame({
       schema: 'engineer-supervisor-secret-accepted.v1',
       status: 'accepted',
+      executionMode: CONTROLLED_PROVIDER,
       frameSha256: sha256(payload),
       byteLength: payload.length,
     })],
@@ -424,6 +497,7 @@ test('dispose closes live control channels, drops retained environment, and reje
   const opened = await harness.value.openSupervisorControl({
     sandboxId: SANDBOX,
     hmacKey: HMAC_SECRET,
+    executionMode: CONTROLLED_PROVIDER,
     providerKey: PROVIDER_SECRET,
   });
 

@@ -18,7 +18,7 @@ import fs from 'node:fs';
 import crypto from 'node:crypto';
 import readline from 'node:readline';
 import { pathToFileURL } from 'node:url';
-import { openAiToolDriver } from '../../lib/drivers.mjs';
+import { openAiToolDriver, replayDriver } from '../../lib/drivers.mjs';
 import { getProfile } from '../../lib/model-profiles.mjs';
 import { createBudget } from '../../lib/budget.mjs';
 import { createTelemetry } from '../../lib/telemetry.mjs';
@@ -52,6 +52,44 @@ const BROKER_ENV_FIELDS = Object.freeze({
   trialId: 'ENGINEER_PROVIDER_TRIAL_ID',
 });
 const BROKER_ENV_NAMES = Object.freeze(Object.values(BROKER_ENV_FIELDS));
+const SCRIPTED_CANARY_DRIVER_MODE = 'scripted-canary';
+const PROVIDER_ENV_STATE = /(?:^|_)(?:AI_GATEWAY|ANTHROPIC|AZURE_OPENAI|BROKER|COHERE|DEEPSEEK|FIREWORKS|GEMINI|GOOGLE_GENERATIVE_AI|GROQ|MISTRAL|MODEL_PROVIDER|OPENAI|OPENROUTER|PROVIDER|TOGETHER)(?:_|$)/i;
+const DRIVER_MODE_ENV_STATE = /(?:^|_)DRIVER_?MODE(?:_|$)/i;
+
+/**
+ * Select the zero-provider topology canary only from the archived condition.
+ *
+ * The returned replay is deliberately code-owned: the archive chooses the
+ * mode, but cannot supply actions or an answer. Provider state is forbidden
+ * even though this path never constructs a live driver, making a successful
+ * canary an auditable proof that no provider route reached the bridge.
+ */
+export function createScriptedCanaryDriver({ condition, environment = process.env } = {}) {
+  const runtime = condition != null && typeof condition === 'object' && !Array.isArray(condition) &&
+      Object.hasOwn(condition, 'runtime') && condition.runtime != null &&
+      typeof condition.runtime === 'object' && !Array.isArray(condition.runtime)
+    ? condition.runtime
+    : null;
+  if (runtime == null || !Object.hasOwn(runtime, 'driverMode') ||
+      runtime.driverMode !== SCRIPTED_CANARY_DRIVER_MODE) return null;
+  if (environment == null || typeof environment !== 'object' || Array.isArray(environment)) {
+    throw new Error('scripted canary provider environment is malformed');
+  }
+  const forbiddenEnvironment = Object.keys(environment).filter((name) =>
+    BROKER_ENV_NAMES.includes(name) || RAW_CREDENTIAL_ENV.test(name) ||
+    PROVIDER_ENV_STATE.test(name) || DRIVER_MODE_ENV_STATE.test(name)
+  );
+  if (forbiddenEnvironment.length > 0) {
+    throw new Error('scripted canary rejects provider, broker, raw-credential, and driver-mode environment state');
+  }
+  return replayDriver([
+    {
+      type: 'finish',
+      answer: 'Scripted canary completed without model execution.',
+      stopReason: 'scripted_canary',
+    },
+  ], { name: 'scripted-canary', model: 'none' });
+}
 
 function safeRuntimeId(value) {
   return typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(value);
@@ -688,35 +726,40 @@ async function main() {
   const condition = JSON.parse(fs.readFileSync(flag('--condition'), 'utf8'));
   const instructionPath = flag('--instruction');
   const instruction = instructionPath ? fs.readFileSync(instructionPath, 'utf8') : condition.instruction;
-  if (typeof condition.profileId !== 'string' || condition.profileId.length === 0) {
-    throw new Error('condition.profileId is required; release agents never select a model implicitly');
-  }
-  const profile = getProfile(condition.profileId);
-  const effectiveProfile = typeof condition.providerUrl === 'string' && condition.providerUrl.length > 0
-    ? { ...profile, url: condition.providerUrl }
-    : profile;
-  const apiKeyEnv = condition.apiKeyEnv ?? 'OPENROUTER_API_KEY';
-  const brokerRuntime = resolveProviderRuntimeBoundary({ condition, profile, environment: process.env });
-  const activeApiKey = brokerRuntime == null ? (process.env[apiKeyEnv] ?? null) : null;
-  const brokerFetch = brokerRuntime == null ? null : createBrokerFetchImpl({
-    socketPath: brokerRuntime.socketPath,
-    binding: brokerRuntime.binding,
-    profile,
-  });
-  const apiKey = brokerRuntime == null ? (activeApiKey ?? 'local') : 'broker-placeholder';
   const telemetry = createTelemetry();
-  const budget = createBudget({
-    ceilingUsd: condition.limits?.trialCeilingUsd ?? profile.trialCeilingUsd,
-    label: `${condition.id}-trial`,
-  });
-  const driver = openAiToolDriver({
-    profile: effectiveProfile,
-    apiKey,
-    budget,
-    telemetry,
-    maxTokens: condition.limits?.maxOutputTokens,
-    ...(brokerFetch ? { fetchImpl: brokerFetch, transientRetries: 0 } : {}),
-  });
+  const scriptedDriver = createScriptedCanaryDriver({ condition, environment: process.env });
+  let activeApiKey = null;
+  let driver = scriptedDriver;
+  if (driver == null) {
+    if (typeof condition.profileId !== 'string' || condition.profileId.length === 0) {
+      throw new Error('condition.profileId is required; release agents never select a model implicitly');
+    }
+    const profile = getProfile(condition.profileId);
+    const effectiveProfile = typeof condition.providerUrl === 'string' && condition.providerUrl.length > 0
+      ? { ...profile, url: condition.providerUrl }
+      : profile;
+    const apiKeyEnv = condition.apiKeyEnv ?? 'OPENROUTER_API_KEY';
+    const brokerRuntime = resolveProviderRuntimeBoundary({ condition, profile, environment: process.env });
+    activeApiKey = brokerRuntime == null ? (process.env[apiKeyEnv] ?? null) : null;
+    const brokerFetch = brokerRuntime == null ? null : createBrokerFetchImpl({
+      socketPath: brokerRuntime.socketPath,
+      binding: brokerRuntime.binding,
+      profile,
+    });
+    const apiKey = brokerRuntime == null ? (activeApiKey ?? 'local') : 'broker-placeholder';
+    const budget = createBudget({
+      ceilingUsd: condition.limits?.trialCeilingUsd ?? profile.trialCeilingUsd,
+      label: `${condition.id}-trial`,
+    });
+    driver = openAiToolDriver({
+      profile: effectiveProfile,
+      apiKey,
+      budget,
+      telemetry,
+      maxTokens: condition.limits?.maxOutputTokens,
+      ...(brokerFetch ? { fetchImpl: brokerFetch, transientRetries: 0 } : {}),
+    });
+  }
   if (!driver) throw new Error('driver not configured: check profile and API key environment');
   // The runner reads the done file to charge the release budget and build the
   // eval-run document; runStdioAgent persists it before the stdout done line
@@ -728,7 +771,7 @@ async function main() {
     systemPrompt: condition.systemPrompt,
     promptComponentManifest: condition.promptComponentManifest ?? null,
     instruction,
-    maxSteps: condition.limits?.maxSteps ?? 50,
+    maxSteps: scriptedDriver == null ? (condition.limits?.maxSteps ?? 50) : 1,
     telemetry,
     doneFilePath: process.env.HARNESS_EVAL_TB_TELEMETRY_FILE ?? null,
     guidanceCatalog: condition.runtime?.guidanceCatalog ?? condition.guidanceCatalog ?? null,

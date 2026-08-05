@@ -29,6 +29,40 @@
     "evidenceArchiveHash": { "$ref": "#/$defs/hash" },
     "authentication": { "$ref": "#/$defs/authentication" }
   },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "sessionBindings": {
+            "properties": { "executionMode": { "const": "zero-provider-canary" } },
+            "required": ["executionMode"]
+          }
+        },
+        "required": ["sessionBindings"]
+      },
+      "then": {
+        "properties": {
+          "budget": {
+            "properties": {
+              "sessionCeilingMicrousd": { "const": 0 },
+              "sessionCommittedMicrousd": { "const": 0 },
+              "sessionSpentMicrousd": { "const": 0 }
+            }
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "budget": {
+            "properties": {
+              "sessionCeilingMicrousd": { "minimum": 1 },
+              "sessionCommittedMicrousd": { "minimum": 1 }
+            }
+          }
+        }
+      }
+    }
+  ],
   "$defs": {
     "id": {
       "type": "string",
@@ -48,13 +82,14 @@
     "sessionBindings": {
       "type": "object",
       "additionalProperties": false,
-      "maxProperties": 7,
-      "required": ["releaseSha", "profileId", "taskLockHash", "bundleHash", "budgetId", "budgetPolicyHash", "brokerPolicyHash"],
+      "maxProperties": 8,
+      "required": ["releaseSha", "profileId", "taskLockHash", "bundleHash", "executionMode", "budgetId", "budgetPolicyHash", "brokerPolicyHash"],
       "properties": {
         "releaseSha": { "type": "string", "pattern": "^[a-f0-9]{40,64}$" },
         "profileId": { "$ref": "#/$defs/id" },
         "taskLockHash": { "$ref": "#/$defs/hash" },
         "bundleHash": { "$ref": "#/$defs/hash" },
+        "executionMode": { "enum": ["controlled-provider", "zero-provider-canary"] },
         "budgetId": { "$ref": "#/$defs/id" },
         "budgetPolicyHash": { "$ref": "#/$defs/hash" },
         "brokerPolicyHash": { "$ref": "#/$defs/hash" }

@@ -4,10 +4,10 @@
   "title": "Authenticated post-exit and post-cleanup evidence for one evaluation trial",
   "type": "object",
   "additionalProperties": false,
-  "maxProperties": 17,
+  "maxProperties": 18,
   "required": [
     "schema", "protocolVersion", "sessionId", "trialId", "sequence", "nonce",
-    "issuedAt", "expiresAt", "requestHash", "readinessLeaseHash", "previousTrialChainHash",
+    "issuedAt", "expiresAt", "requestHash", "readinessLeaseHash", "previousTrialChainHash", "executionMode",
     "bindings", "budget", "outcome", "runtimeEvidence", "cleanup", "authentication"
   ],
   "properties": {
@@ -22,6 +22,7 @@
     "requestHash": { "$ref": "#/$defs/hash" },
     "readinessLeaseHash": { "$ref": "#/$defs/hash" },
     "previousTrialChainHash": { "$ref": "#/$defs/hash" },
+    "executionMode": { "enum": ["controlled-provider", "zero-provider-canary"] },
     "bindings": { "$ref": "#/$defs/bindings" },
     "budget": { "$ref": "#/$defs/trialBudget" },
     "outcome": { "$ref": "#/$defs/outcome" },
@@ -29,6 +30,39 @@
     "cleanup": { "$ref": "#/$defs/cleanup" },
     "authentication": { "$ref": "#/$defs/authentication" }
   },
+  "allOf": [
+    {
+      "if": {
+        "properties": { "executionMode": { "const": "zero-provider-canary" } },
+        "required": ["executionMode"]
+      },
+      "then": {
+        "properties": {
+          "budget": {
+            "properties": {
+              "trialCeilingMicrousd": { "const": 0 },
+              "sessionCeilingMicrousd": { "const": 0 },
+              "sessionCommittedMicrousd": { "const": 0 }
+            }
+          },
+          "outcome": {
+            "properties": { "providerSpendMicrousd": { "const": 0 } }
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "budget": {
+            "properties": {
+              "trialCeilingMicrousd": { "minimum": 1 },
+              "sessionCeilingMicrousd": { "minimum": 1 },
+              "sessionCommittedMicrousd": { "minimum": 1 }
+            }
+          }
+        }
+      }
+    }
+  ],
   "$defs": {
     "id": {
       "type": "string",

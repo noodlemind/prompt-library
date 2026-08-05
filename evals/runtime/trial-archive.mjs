@@ -50,8 +50,8 @@ const COMMON_MOUNT_TAIL = Object.freeze([
   '/opt/eval-runtime/bounded-exec.mjs',
 ]);
 const TREATMENT_MOUNT_TARGETS = Object.freeze([
-  '/opt/engineer/harness',
-  '/opt/engineer/harness-cli',
+  '/opt/harness-bundle/harness',
+  '/opt/harness-bundle/harness-cli',
 ]);
 
 export function archivedConditionReadOnlyBindVariants(condition) {
@@ -199,6 +199,27 @@ function assertRealDirectory(directory, label) {
     fail(`${label} must be a real non-symlink directory`, 'ERR_TRIAL_ARCHIVE_PATH');
   }
   return real;
+}
+
+function assertRealMountSource(source, label) {
+  normalizedAbsolute(source, label);
+  let stat;
+  let real;
+  try {
+    stat = fs.lstatSync(source);
+    real = fs.realpathSync.native(source);
+  } catch {
+    fail(`${label} is unavailable`, 'ERR_TRIAL_ARCHIVE_PATH');
+  }
+  if (stat.isSymbolicLink() || (!stat.isDirectory() && !stat.isFile())) {
+    fail(`${label} must be a real non-symlink file or directory`, 'ERR_TRIAL_ARCHIVE_PATH');
+  }
+  const realStat = fs.lstatSync(real);
+  const kind = stat.isDirectory() ? 'directory' : 'file';
+  if (realStat.isSymbolicLink() || (kind === 'directory' ? !realStat.isDirectory() : !realStat.isFile())) {
+    fail(`${label} canonical identity drifted`, 'ERR_TRIAL_ARCHIVE_PATH');
+  }
+  return { source: real, kind };
 }
 
 function safeArchivePath(value, { directory = false } = {}) {
@@ -450,6 +471,47 @@ function readAttestedFile(file, expectedRoot, label) {
   }
 }
 
+function validateConditionExecutionMode(bytes, trial) {
+  if (!['controlled-provider', 'zero-provider-canary'].includes(trial.executionMode)) {
+    fail(
+      'trial execution mode must be controlled-provider or zero-provider-canary',
+      'ERR_TRIAL_ARCHIVE_SCHEMA',
+    );
+  }
+  let condition;
+  try {
+    condition = JSON.parse(bytes.toString('utf8'));
+  } catch {
+    fail('condition file is not valid JSON', 'ERR_TRIAL_ARCHIVE_SCHEMA');
+  }
+  if (!plainObject(condition) || condition.id !== trial.condition) {
+    fail('condition file identity drifted from the trial', 'ERR_TRIAL_ARCHIVE_SCHEMA');
+  }
+  const runtime = plainObject(condition.runtime) ? condition.runtime : null;
+  const scripted = runtime?.driverMode === 'scripted-canary';
+  if (trial.executionMode === 'zero-provider-canary') {
+    if (!scripted) {
+      fail(
+        'zero-provider trial requires the archive-bound scripted-canary driver mode',
+        'ERR_TRIAL_ARCHIVE_SECURITY',
+      );
+    }
+    for (const field of ['profileId', 'providerUrl', 'apiKeyEnv']) {
+      if (Object.hasOwn(condition, field)) {
+        fail(
+          'zero-provider condition contains provider configuration',
+          'ERR_TRIAL_ARCHIVE_SECURITY',
+        );
+      }
+    }
+  } else if (scripted) {
+    fail(
+      'controlled-provider trial cannot select the scripted-canary driver mode',
+      'ERR_TRIAL_ARCHIVE_SECURITY',
+    );
+  }
+}
+
 function addTree(entries, seen, sourceDirectory, archiveDirectory) {
   const root = assertRealDirectory(sourceDirectory, `archive source ${sourceDirectory}`);
   const visit = (current, relative) => {
@@ -485,6 +547,17 @@ function addTree(entries, seen, sourceDirectory, archiveDirectory) {
   visit(root, '');
 }
 
+function addMountSource(entries, seen, source, archivePath, kind) {
+  if (kind === 'directory') {
+    addTree(entries, seen, source, archivePath);
+    return;
+  }
+  if (kind !== 'file') fail('archive mount source kind is invalid', 'ERR_TRIAL_ARCHIVE_PATH');
+  const read = readAttestedFile(source, path.dirname(source), `archive mount source ${source}`);
+  addFile(entries, seen, archivePath, read.bytes, read.mode);
+  read.bytes.fill(0);
+}
+
 function validateSpawnEnv(value) {
   if (!plainObject(value) || Object.keys(value).length > 32) fail('Harbor spawn env is invalid', 'ERR_TRIAL_ARCHIVE_SCHEMA');
   for (const [name, item] of Object.entries(value)) {
@@ -500,7 +573,7 @@ function validateSpawnEnv(value) {
   return { bridge: assertRealDirectory(bridge, 'Harbor bridge directory') };
 }
 
-function parseHarborArgs(args, cwd) {
+function parseHarborArgs(args, cwd, executionMode) {
   if (!Array.isArray(args) || args.length < 30 || args.length > 96) fail('Harbor argv is outside its bound', 'ERR_TRIAL_ARCHIVE_ARGV');
   const values = args.map((value, index) => boundedString(value, `Harbor argument ${index}`, 8_192));
   let index = 0;
@@ -544,7 +617,10 @@ function parseHarborArgs(args, cwd) {
     }
   }
   const agent = field('--agent');
-  if (agent !== 'evals.external.terminal_bench.harbor_agent:StdioBridgeAgent') fail('Harbor agent reference drifted', 'ERR_TRIAL_ARCHIVE_ARGV');
+  const expectedAgent = executionMode === 'zero-provider-canary'
+    ? 'evals.external.terminal_bench.harbor_agent:ScriptedCanaryAgent'
+    : 'evals.external.terminal_bench.harbor_agent:StdioBridgeAgent';
+  if (agent !== expectedAgent) fail('Harbor agent reference drifted from the authenticated execution mode', 'ERR_TRIAL_ARCHIVE_ARGV');
   const model = field('--model');
   if (model.startsWith('-')) fail('Harbor model is invalid', 'ERR_TRIAL_ARCHIVE_ARGV');
   const environment = field('--env');
@@ -588,11 +664,14 @@ function parseHarborArgs(args, cwd) {
   const parsedMounts = mounts.map((mount, mountIndex) => {
     exactKeys(mount, ['type', 'source', 'target', 'read_only'], `Harbor mount ${mountIndex}`);
     if (mount.type !== 'bind' || mount.read_only !== true) fail('Harbor mount must be a read-only bind', 'ERR_TRIAL_ARCHIVE_ARGV');
-    const source = assertRealDirectory(normalizedAbsolute(mount.source, `Harbor mount ${mountIndex} source`), `Harbor mount ${mountIndex} source`);
+    const sourceIdentity = assertRealMountSource(
+      normalizedAbsolute(mount.source, `Harbor mount ${mountIndex} source`),
+      `Harbor mount ${mountIndex} source`,
+    );
     const target = normalizedAbsolute(mount.target, `Harbor mount ${mountIndex} target`);
     if (target === '/' || mountTargets.has(target)) fail('Harbor mount target is duplicated or unsafe', 'ERR_TRIAL_ARCHIVE_ARGV');
     mountTargets.add(target);
-    return { source, target };
+    return { source: sourceIdentity.source, sourceKind: sourceIdentity.kind, target };
   });
   const agentEnv = {};
   while (index < values.length) {
@@ -743,13 +822,16 @@ export function createTrialInputArchive(request) {
   safeId(trial.trialId, 'trial id');
   safeId(trial.task, 'trial task', SAFE_JOB);
   if (!['generic', 'harness'].includes(trial.condition)) fail('trial condition is invalid', 'ERR_TRIAL_ARCHIVE_SCHEMA');
+  if (!['controlled-provider', 'zero-provider-canary'].includes(trial.executionMode)) {
+    fail('trial execution mode must be controlled-provider or zero-provider-canary', 'ERR_TRIAL_ARCHIVE_SCHEMA');
+  }
   exactKeys(request.harbor, ['executable', 'args', 'cwd', 'timeoutMs', 'spawnEnv'], 'Harbor request');
   normalizedAbsolute(request.harbor.executable, 'controller Harbor executable');
   const requestedCwd = normalizedAbsolute(request.harbor.cwd, 'controller work root');
   const cwd = assertRealDirectory(requestedCwd, 'controller work root');
   boundedInteger(request.harbor.timeoutMs, 'Harbor timeout', 1_000, 4 * 60 * 60 * 1_000);
   const spawn = validateSpawnEnv(request.harbor.spawnEnv);
-  const parsed = parseHarborArgs(request.harbor.args, requestedCwd);
+  const parsed = parseHarborArgs(request.harbor.args, requestedCwd, trial.executionMode);
   if (parsed.task !== trial.task) fail('trial task and Harbor argv drifted', 'ERR_TRIAL_ARCHIVE_ARGV');
   if (parsed.launch === 'trial') {
     validateConditionMountTargets(parsed.mounts, trial.condition);
@@ -787,8 +869,15 @@ export function createTrialInputArchive(request) {
   ]) addDirectory(entries, seen, directory);
   addTree(entries, seen, parsed.dataset, 'work/dataset');
   addTree(entries, seen, spawn.bridge, 'work/bridge');
-  parsed.mounts.forEach((mount, index) => addTree(entries, seen, mount.source, `work/mounts/${String(index).padStart(3, '0')}`));
+  parsed.mounts.forEach((mount, index) => addMountSource(
+    entries,
+    seen,
+    mount.source,
+    `work/mounts/${String(index).padStart(3, '0')}`,
+    mount.sourceKind,
+  ));
   const condition = readAttestedFile(parsed.condition, cwd, 'condition file');
+  validateConditionExecutionMode(condition.bytes, trial);
   addFile(entries, seen, 'work/control/condition.json', condition.bytes, 0o600);
   condition.bytes.fill(0);
   if (security !== null) {
@@ -980,11 +1069,22 @@ function validateInputDocument(document, entries) {
 function validateOutputDocument(document, entries) {
   exactKeys(document, [
     'schema', 'archiveEncoding', 'inputArchiveSha256', 'trialId', 'jobName',
-    'brokerBindingHash', 'harbor', 'payload',
+    'executionMode', 'runtimeBindingHash', 'brokerBindingHash', 'harbor', 'payload',
   ], 'trial output receipt');
   if (document.schema !== 'engineer-trial-runner-receipt.v1' || document.archiveEncoding !== TRIAL_ARCHIVE_ENCODING
-      || !HASH.test(document.inputArchiveSha256) || !HASH.test(document.brokerBindingHash)) {
+      || !HASH.test(document.inputArchiveSha256) || !HASH.test(document.runtimeBindingHash)) {
     fail('trial output receipt identity drifted', 'ERR_TRIAL_ARCHIVE_SCHEMA');
+  }
+  if (!['controlled-provider', 'zero-provider-canary'].includes(document.executionMode)) {
+    fail('trial output receipt execution mode is invalid', 'ERR_TRIAL_ARCHIVE_SCHEMA');
+  }
+  if (document.executionMode === 'controlled-provider') {
+    if (!HASH.test(String(document.brokerBindingHash ?? ''))
+        || document.brokerBindingHash !== document.runtimeBindingHash) {
+      fail('controlled trial output must bind one exact provider broker runtime', 'ERR_TRIAL_ARCHIVE_DIGEST');
+    }
+  } else if (document.brokerBindingHash !== null) {
+    fail('zero-provider trial output cannot contain a provider broker binding', 'ERR_TRIAL_ARCHIVE_DIGEST');
   }
   safeId(document.trialId, 'output trial id');
   safeId(document.jobName, 'output job name', SAFE_JOB);
@@ -1127,12 +1227,24 @@ export function createTrialOutputArchive({
   inputArchiveSha256,
   trialId,
   jobName,
+  executionMode,
+  runtimeBindingHash,
   brokerBindingHash,
   commandResult,
 } = {}) {
   assertRealDirectory(workRoot, 'remote work root');
-  if (!HASH.test(String(inputArchiveSha256 ?? '')) || !HASH.test(String(brokerBindingHash ?? ''))) {
+  if (!HASH.test(String(inputArchiveSha256 ?? '')) || !HASH.test(String(runtimeBindingHash ?? ''))) {
     fail('output receipt digest binding is invalid', 'ERR_TRIAL_ARCHIVE_DIGEST');
+  }
+  if (!['controlled-provider', 'zero-provider-canary'].includes(executionMode)) {
+    fail('output receipt execution mode is invalid', 'ERR_TRIAL_ARCHIVE_SCHEMA');
+  }
+  if (executionMode === 'controlled-provider') {
+    if (!HASH.test(String(brokerBindingHash ?? '')) || brokerBindingHash !== runtimeBindingHash) {
+      fail('controlled output receipt requires one exact provider broker binding', 'ERR_TRIAL_ARCHIVE_DIGEST');
+    }
+  } else if (brokerBindingHash !== null) {
+    fail('zero-provider output receipt must not contain a provider broker binding', 'ERR_TRIAL_ARCHIVE_DIGEST');
   }
   safeId(trialId, 'output trial id');
   safeId(jobName, 'output job name', SAFE_JOB);
@@ -1164,6 +1276,8 @@ export function createTrialOutputArchive({
     inputArchiveSha256,
     trialId,
     jobName,
+    executionMode,
+    runtimeBindingHash,
     brokerBindingHash,
     harbor,
     payload: contentManifest(entries, TRIAL_OUTPUT_RECEIPT_PATH),

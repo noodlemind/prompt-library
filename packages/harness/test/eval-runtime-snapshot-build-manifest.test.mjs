@@ -68,6 +68,12 @@ function input(overrides = {}) {
         context: 'native',
         sourcePath: 'native/bin/tool',
       },
+      readinessDenialProbe: {
+        path: '/opt/engineer/bin/engineer-readiness-denial-probe',
+        sha256: HASH('6'),
+        context: 'native',
+        sourcePath: 'native/bin/tool',
+      },
     },
     provenance: {
       baseImage: {
@@ -97,6 +103,14 @@ function input(overrides = {}) {
         binarySha256: HASH('6'),
         platform: 'linux/amd64',
         artifactPath: '/opt/engineer/bin/engineer-task-isolation-probe',
+      },
+      readinessDenialProbe: {
+        sourceSha256: HASH('a'),
+        compilerImage: `alpine:3.22@sha256:${HASH('b')}`,
+        compilerImageDigest: `sha256:${HASH('b')}`,
+        binarySha256: HASH('6'),
+        platform: 'linux/amd64',
+        artifactPath: '/opt/engineer/bin/engineer-readiness-denial-probe',
       },
     },
     bindings: {

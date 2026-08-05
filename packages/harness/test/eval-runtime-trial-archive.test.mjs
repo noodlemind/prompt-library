@@ -46,13 +46,14 @@ function fixture() {
   const nodeHash = HASH('a');
   const mounts = [
     { type: 'bind', source: common, target: '/opt/engineer/common', read_only: true },
-    { type: 'bind', source: harness, target: '/opt/engineer/harness', read_only: true },
+    { type: 'bind', source: harness, target: '/opt/harness-bundle/harness', read_only: true },
   ];
   const request = {
     trial: {
       trialId: 'pair-1-generic-1',
       task: 'cobol-modernization',
       condition: 'generic',
+      executionMode: 'controlled-provider',
       identity: { pairId: 'pair-1', repetitionId: 'rep-1', attempt: 1 },
       ceilingUsd: 0.65,
       profileId: 'economical-small-model',
@@ -195,14 +196,60 @@ test('archives one deterministic Harbor trial start and preserves its exact outp
   assert.equal(archived.materialization.jobsRelativePath, 'jobs');
 });
 
+test('archive-bound execution mode is the only authority for the scripted zero-provider driver', () => {
+  const zero = isolatedFixture();
+  zero.request.trial.executionMode = 'zero-provider-canary';
+  zero.request.harbor.args[zero.request.harbor.args.indexOf('--agent') + 1] =
+    'evals.external.terminal_bench.harbor_agent:ScriptedCanaryAgent';
+  fs.writeFileSync(zero.condition, JSON.stringify({
+    id: 'generic',
+    runtime: { driverMode: 'scripted-canary' },
+  }), { mode: 0o600 });
+  const archived = createTrialInputArchive(zero.request);
+  const inspected = inspectTrialArchive(archived.bytes, { kind: 'task-input' });
+  assert.equal(inspected.document.trial.executionMode, 'zero-provider-canary');
+  const conditionEntry = inspected.entries.find((entry) => entry.path === 'work/control/condition.json');
+  assert.equal(JSON.parse(conditionEntry.bytes).runtime.driverMode, 'scripted-canary');
+
+  const missing = isolatedFixture();
+  missing.request.trial.executionMode = 'zero-provider-canary';
+  missing.request.harbor.args[missing.request.harbor.args.indexOf('--agent') + 1] =
+    'evals.external.terminal_bench.harbor_agent:ScriptedCanaryAgent';
+  assert.throws(
+    () => createTrialInputArchive(missing.request),
+    /zero-provider|scripted-canary|driver mode/i,
+  );
+
+  const paid = isolatedFixture();
+  fs.writeFileSync(paid.condition, JSON.stringify({
+    id: 'generic',
+    runtime: { driverMode: 'scripted-canary' },
+  }), { mode: 0o600 });
+  assert.throws(
+    () => createTrialInputArchive(paid.request),
+    /controlled-provider|scripted-canary|driver mode/i,
+  );
+
+  for (const mode of [undefined, 'zero-provider', 'controlled-provider ']) {
+    const invalid = isolatedFixture();
+    if (mode === undefined) delete invalid.request.trial.executionMode;
+    else invalid.request.trial.executionMode = mode;
+    assert.throws(
+      () => createTrialInputArchive(invalid.request),
+      /execution mode|controlled-provider|zero-provider-canary/i,
+    );
+  }
+});
+
 test('harness archive admits exactly the two treatment mounts after the common ordinal set', () => {
   const fx = isolatedFixture();
   fx.request.trial.condition = 'harness';
+  fs.writeFileSync(fx.condition, '{"id":"harness"}\n', { mode: 0o600 });
   const index = fx.request.harbor.args.indexOf('--mounts');
   const mounts = JSON.parse(fx.request.harbor.args[index + 1]);
   mounts.push(
-    { type: 'bind', source: fx.harness, target: '/opt/engineer/harness', read_only: true },
-    { type: 'bind', source: fx.harness, target: '/opt/engineer/harness-cli', read_only: true },
+    { type: 'bind', source: fx.harness, target: '/opt/harness-bundle/harness', read_only: true },
+    { type: 'bind', source: fx.harness, target: '/opt/harness-bundle/harness-cli', read_only: true },
   );
   fx.request.harbor.args[index + 1] = JSON.stringify(mounts);
   const archived = createTrialInputArchive(fx.request);
@@ -214,7 +261,7 @@ test('harness archive admits exactly the two treatment mounts after the common o
     `/engineer-bounded/work/mounts/${String(ordinal).padStart(3, '0')}`
   ));
   assert.deepEqual(remoteMounts.slice(-2).map((mount) => mount.target), [
-    '/opt/engineer/harness', '/opt/engineer/harness-cli',
+    '/opt/harness-bundle/harness', '/opt/harness-bundle/harness-cli',
   ]);
 });
 
@@ -236,7 +283,7 @@ test('isolated Harbor archives reject trial identity and output-layout drift', a
     const index = fx.request.harbor.args.indexOf('--mounts');
     const mounts = JSON.parse(fx.request.harbor.args[index + 1]);
     mounts.push({
-      type: 'bind', source: fx.harness, target: '/opt/engineer/harness', read_only: true,
+      type: 'bind', source: fx.harness, target: '/opt/harness-bundle/harness', read_only: true,
     });
     fx.request.harbor.args[index + 1] = JSON.stringify(mounts);
     assert.throws(() => createTrialInputArchive(fx.request), /condition-specific.*mount/i);

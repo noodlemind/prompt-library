@@ -30,6 +30,8 @@ const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,191}$/;
 const RAW_CREDENTIAL_ENV = /(?:^DAYTONA(?:_|$)|OPENROUTER|OPENAI|ANTHROPIC|GEMINI|GOOGLE_AI|GROQ|XAI|MISTRAL|COHERE|TOGETHER|FIREWORKS|DEEPSEEK|CEREBRAS|PERPLEXITY|API_KEY|AUTHORIZATION|CREDENTIAL|PASSWORD|SECRET|TOKEN)/i;
 const SUPPORT_ENV = Object.freeze({ LANG: 'C.UTF-8', PATH: '/usr/bin:/bin' });
 const ARCHIVE_KINDS = new Set(['task-input', 'trial-output']);
+const CONTROLLED_PROVIDER = 'controlled-provider';
+const ZERO_PROVIDER_CANARY = 'zero-provider-canary';
 
 export class RemoteSupervisorEntrypointError extends Error {
   constructor(message, code = 'ERR_REMOTE_SUPERVISOR') {
@@ -718,15 +720,48 @@ export function createRemoteSupervisorEntrypoint({
   }
 
   let lifecycle = 'ready';
-  const authenticatedHandlerFactory = async ({ hmacKey, providerKey, controlChannel } = {}) => {
+  const authenticatedHandlerFactory = async (input = {}) => {
     let verified;
+    let controlledProvider;
+    let hmacKey;
+    let executionMode;
+    let providerKey;
     try {
+      if (!plainObject(input)) throw new Error('invalid bridge input');
+      controlledProvider = input.executionMode === CONTROLLED_PROVIDER;
+      if (!controlledProvider && input.executionMode !== ZERO_PROVIDER_CANARY) {
+        throw new Error('invalid execution mode');
+      }
+      const expectedFields = new Set(controlledProvider
+        ? ['hmacKey', 'executionMode', 'providerKey', 'controlChannel']
+        : ['hmacKey', 'executionMode', 'controlChannel']);
+      const fields = Object.keys(input);
+      if (fields.length !== expectedFields.size
+          || fields.some((field) => !expectedFields.has(field))
+          || (!Buffer.isBuffer(input.hmacKey) && !(input.hmacKey instanceof Uint8Array))
+          || input.hmacKey.byteLength !== 32
+          || (controlledProvider && (
+            (!Buffer.isBuffer(input.providerKey) && !(input.providerKey instanceof Uint8Array))
+            || input.providerKey.byteLength < 8
+            || input.providerKey.byteLength > 512
+          ))) {
+        throw new Error('invalid bridge secret shape');
+      }
+      ({ hmacKey, executionMode, providerKey } = input);
+      const { controlChannel } = input;
       verified = verifyAuthenticatedControlChannel(controlChannel, hmacKey);
+      if (verified.executionMode !== executionMode) {
+        throw new Error('control channel execution mode drifted');
+      }
       await rawEffects.bindControlChannel(verified);
     } catch {
       fail('live control channel authentication failed', 'ERR_REMOTE_SUPERVISOR_CONTROL_CHANNEL');
     }
-    return handlerFactory({ hmacKey, providerKey });
+    return handlerFactory({
+      hmacKey,
+      executionMode,
+      ...(controlledProvider ? { providerKey } : {}),
+    });
   };
   async function run({ argv = process.argv.slice(2), input = process.stdin, output = process.stdout } = {}) {
     if (!Array.isArray(argv) || argv.length !== 1 || argv[0] !== CONTROL_ROUTE) {

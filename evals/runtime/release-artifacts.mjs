@@ -403,10 +403,10 @@ export async function prepareReleaseRuntimeArtifacts(input, { components = DEFAU
     let disposed = false;
     const dispose = async () => {
       if (disposed) fail('release artifacts are one-shot and already disposed', 'ERR_RELEASE_ARTIFACT_DISPOSED');
-      disposed = true;
       if (!removeOwnedWorkspace(workspace, ownerNonce)) {
         fail('release artifact cleanup custody could not be proven', 'ERR_RELEASE_ARTIFACT_CLEANUP');
       }
+      disposed = true;
     };
     handedOff = true;
     return Object.freeze({ bundle, runtimeProjection, daytonaPath, dispose });
