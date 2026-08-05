@@ -1,15 +1,22 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 import { test } from 'node:test';
 
 import {
   buildSnapshotBuildManifest,
 } from '../../../evals/runtime/snapshot-build-manifest.mjs';
 import {
+  parseSnapshotSelfTestFailure,
+  runSnapshotSelfTestMain,
   runSnapshotSelfTestCli,
 } from '../../../evals/runtime/snapshot-selftest.mjs';
 import {
   DAYTONA_DIND_BASE_IMAGE,
   DAYTONA_DIND_BASE_IMAGE_DIGEST,
+  DAYTONA_NODE_RUNTIME_IMAGE,
+  DAYTONA_NODE_RUNTIME_IMAGE_DIGEST,
+  DAYTONA_NODE_USTAR_ATTESTATION,
+  DAYTONA_USTAR_ATTESTED_EXECUTABLE_SHA256,
 } from '../../../evals/runtime/daytona-topology.mjs';
 
 const HASH = (character) => character.repeat(64);
@@ -28,7 +35,7 @@ function fixture() {
   const executableHashes = {
     supervisor: HASH('a'),
     snapshotSelfTest: HASH('b'),
-    node: HASH('c'),
+    node: DAYTONA_USTAR_ATTESTED_EXECUTABLE_SHA256.node,
     harbor: HASH('d'),
     taskIsolationProbe: HASH('f'),
     readinessDenialProbe: HASH('9'),
@@ -108,7 +115,13 @@ function fixture() {
         commit: '459ff6ec99417589b7f679d14ddf3b3f0ae4f1dc',
         lockSha256: HASH('7'),
       },
-      node: { version: 'v22.17.1', platform: 'linux-x64', archiveSha256: HASH('8') },
+      node: {
+        version: 'v22.17.1',
+        platform: 'linux/amd64-musl',
+        runtimeImage: DAYTONA_NODE_RUNTIME_IMAGE,
+        runtimeImageDigest: DAYTONA_NODE_RUNTIME_IMAGE_DIGEST,
+        binarySha256: DAYTONA_USTAR_ATTESTED_EXECUTABLE_SHA256.node,
+      },
       nativeHelper: {
         sourceSha256: HASH('9'),
         compilerImage: `gcc:14.2.0-bookworm@sha256:${HASH('f')}`,
@@ -157,6 +170,15 @@ function fixture() {
     entry.path,
     { type: 'file', uid: 0, mode: 0o555, byteLength: 32, sha256: entry.sha256 },
   ]));
+  for (const entry of DAYTONA_NODE_USTAR_ATTESTATION.entries) {
+    inspections.set(`/${entry.path}`, {
+      type: entry.type,
+      uid: 0,
+      mode: entry.mode,
+      byteLength: entry.byteLength,
+      sha256: entry.sha256,
+    });
+  }
   const primitives = {
     async platform() { return 'linux'; },
     async effectiveUid() { return 0; },
@@ -175,6 +197,20 @@ function sink() {
   let value = '';
   return { output: { write(chunk) { value += chunk; } }, read: () => value };
 }
+
+test('the production snapshot self-test hard-kills bounded version probes', () => {
+  const source = fs.readFileSync(
+    new URL('../../../evals/runtime/snapshot-selftest.mjs', import.meta.url),
+    'utf8',
+  );
+  const start = source.indexOf('function runFixedCommand(');
+  const end = source.indexOf('\n}\n\nexport function createNodeSnapshotSelfTestPrimitives', start);
+  assert.notEqual(start, -1);
+  assert.notEqual(end, -1);
+  const implementation = source.slice(start, end);
+  assert.match(implementation, /timeout:\s*30_000/);
+  assert.match(implementation, /killSignal:\s*'SIGKILL'/);
+});
 
 test('attests the canonical embedded manifest, every executable, and exact Harbor/Node closures', async () => {
   const input = fixture();
@@ -201,6 +237,19 @@ test('fails closed on manifest, executable, platform, identity, version, environ
       inspections.set('/usr/local/bin/node', { ...inspections.get('/usr/local/bin/node'), sha256: HASH('0') });
       value.primitives = { ...value.primitives, inspectExecutable: async ({ file }) => inspections.get(file) };
     }, expected: /executable|digest|hash/i },
+    { mutate: (value) => {
+      const inspections = new Map(value.inspections);
+      inspections.delete('/usr/lib/libgcc_s.so.1');
+      value.primitives = { ...value.primitives, inspectExecutable: async ({ file }) => inspections.get(file) };
+    }, expected: /runtime|closure|file|digest|hash/i },
+    { mutate: (value) => {
+      const inspections = new Map(value.inspections);
+      inspections.set('/usr/lib/libstdc++.so.6', {
+        ...inspections.get('/usr/lib/libstdc++.so.6'),
+        mode: 0o644,
+      });
+      value.primitives = { ...value.primitives, inspectExecutable: async ({ file }) => inspections.get(file) };
+    }, expected: /runtime|closure|mode|file/i },
     { mutate: (value) => { value.primitives = { ...value.primitives, runCommand: async () => ({ code: 0, stdout: 'wrong\n', stderr: '' }) }; }, expected: /version|closure/i },
     { mutate: (value) => { value.environment = { OPENROUTER_API_KEY: 'forbidden' }; }, expected: /environment|credential/i },
     { mutate: (value) => { value.argv = []; }, expected: /invocation|argv/i },
@@ -219,4 +268,40 @@ test('fails closed on manifest, executable, platform, identity, version, environ
       entry.expected,
     );
   }
+});
+
+test('the process entry point emits only an authenticated content-free failure code', async () => {
+  const input = fixture();
+  const target = sink();
+  const secret = 'sk-or-v1-never-emit-this-provider-key';
+
+  const code = await runSnapshotSelfTestMain({
+    argv: ['--expected-build-hash', input.artifact.buildHash],
+    environment: { OPENROUTER_API_KEY: secret },
+    output: target.output,
+    primitives: input.primitives,
+  });
+
+  assert.equal(code, 70);
+  assert.equal(target.read(),
+    'ENGINEER-SNAPSHOT-FAILURE/1 ERR_SNAPSHOT_SELFTEST_ENVIRONMENT\n');
+  assert.equal(parseSnapshotSelfTestFailure(target.read()),
+    'ERR_SNAPSHOT_SELFTEST_ENVIRONMENT');
+  assert.equal(target.read().includes(secret), false);
+  assert.equal(parseSnapshotSelfTestFailure(
+    'ENGINEER-SNAPSHOT-FAILURE/1 ERR_SNAPSHOT_SELFTEST_NOT_AUTHENTICATED\n'), null);
+
+  const unexpected = sink();
+  const unexpectedCode = await runSnapshotSelfTestMain({
+    argv: ['--expected-build-hash', input.artifact.buildHash],
+    environment: {},
+    output: unexpected.output,
+    primitives: {
+      ...input.primitives,
+      async platform() { throw new Error(secret); },
+    },
+  });
+  assert.equal(unexpectedCode, 70);
+  assert.equal(unexpected.read(), 'ENGINEER-SNAPSHOT-FAILURE/1 ERR_SNAPSHOT_SELFTEST\n');
+  assert.equal(unexpected.read().includes(secret), false);
 });

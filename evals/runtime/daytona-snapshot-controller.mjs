@@ -21,6 +21,7 @@ import {
   snapshotBuildManifestHash,
   validateSnapshotBuildManifest,
 } from './snapshot-build-manifest.mjs';
+import { parseSnapshotSelfTestFailure } from './snapshot-selftest.mjs';
 
 export const DAYTONA_SNAPSHOT_CLI_VERSION = 'v0.203.0';
 export const DAYTONA_SNAPSHOT_RECEIPT_SCHEMA = 'engineer-daytona-snapshot-lifecycle-receipt.v1';
@@ -35,6 +36,7 @@ const MAX_MANIFEST_BYTES = 4 * 1024 * 1024;
 const MAX_TOTAL_ARCHIVE_BYTES = 8 * 1024 * 1024 * 1024;
 const DEFAULT_CLEANUP_DEADLINE_MS = 60_000;
 const DEFAULT_CLEANUP_COMMAND_TIMEOUT_MS = 10_000;
+const CLEANUP_ABSENCE_CONFIRMATIONS = 3;
 const INVALID_RUNNER_OUTPUT = Symbol('invalid-runner-output');
 const SELFTEST = '/opt/engineer/bin/engineer-snapshot-selftest';
 const HASH = /^[a-f0-9]{64}$/;
@@ -111,6 +113,12 @@ export class DaytonaSnapshotControllerError extends Error {
 
 function fail(message, code) {
   throw new DaytonaSnapshotControllerError(message, code);
+}
+
+const ATTESTED_NODE_USTAR_EXECUTABLE = DAYTONA_NODE_USTAR_ATTESTATION.entries.find((entry) =>
+  entry.path === DAYTONA_EXECUTABLE_PATHS.node.slice(1));
+if (ATTESTED_NODE_USTAR_EXECUTABLE === undefined) {
+  fail('Node USTAR attestation is missing its approved executable', 'ERR_SNAPSHOT_CREDENTIAL');
 }
 
 function authenticatedControllerErrorCode(error) {
@@ -427,7 +435,7 @@ async function inspectRegularFile(filePath, {
     }
     const semanticExecutableDigests = attestedCredentialArchive === null
       ? allowedUstarExecutableDigests
-      : { [attestedCredentialArchive.entry.path]: attestedCredentialArchive.entry.sha256 };
+      : { [ATTESTED_NODE_USTAR_EXECUTABLE.path]: ATTESTED_NODE_USTAR_EXECUTABLE.sha256 };
     if (semanticExecutableDigests !== null) {
       let verified = false;
       try {
@@ -438,11 +446,15 @@ async function inspectRegularFile(filePath, {
           allowedExecutableDigests: semanticExecutableDigests,
         });
         if (attestedCredentialArchive !== null) {
-          const [entry] = semanticUstar.entries;
+          const exactEntries = semanticUstar.entries.length === attestedCredentialArchive.entries.length &&
+            semanticUstar.entries.every((entry, index) => {
+              const attested = attestedCredentialArchive.entries[index];
+              return entry.path === attested.path && entry.type === attested.type &&
+                entry.mode === attested.mode && entry.byteLength === attested.byteLength &&
+                entry.sha256 === attested.sha256;
+            });
           if (semanticUstar.credentialRangeCount !== 0 || semanticUstar.attestedEntryCount !== 0 ||
-              semanticUstar.entries.length !== 1 || entry.path !== attestedCredentialArchive.entry.path ||
-              entry.type !== 'file' || entry.mode !== attestedCredentialArchive.entry.mode ||
-              entry.sha256 !== attestedCredentialArchive.entry.sha256) {
+              !exactEntries) {
             throw new Error('attested credential archive structure drifted');
           }
         }
@@ -995,7 +1007,8 @@ function validateExactSandbox(value, expected) {
   const id = validateSandbox(value);
   if (value.name !== expected.name || value.snapshot !== expected.snapshot || value.state !== 'started' ||
       value.desiredState !== 'started' || value.target !== 'us' || value.sandboxClass !== 'container' ||
-      value.cpu !== 2 || value.memory !== 4096 || value.disk !== 10 || value.networkBlockAll !== true ||
+      value.user !== 'root' || value.cpu !== 2 || value.memory !== 4096 || value.disk !== 10 ||
+      value.networkBlockAll !== true ||
       value.public !== false || !plainObject(value.env) || Object.keys(value.env).length !== 0 ||
       !Array.isArray(value.volumes) || value.volumes.length !== 0) {
     fail('validation sandbox identity or provider-free status mismatch', 'ERR_SNAPSHOT_SANDBOX_MISMATCH');
@@ -1237,6 +1250,9 @@ export function createDaytonaSnapshotController(options = {}) {
   } = options;
   if (typeof runCommand !== 'function') throw new TypeError('runCommand must be an injected fixed-argv function');
   boundedInteger(cleanupPollAttempts, 'cleanupPollAttempts', 1, 100);
+  if (cleanupPollAttempts < CLEANUP_ABSENCE_CONFIRMATIONS) {
+    throw new TypeError(`cleanupPollAttempts must be at least ${CLEANUP_ABSENCE_CONFIRMATIONS}`);
+  }
   boundedInteger(cleanupPollIntervalMs, 'cleanupPollIntervalMs', 0, 60_000);
   boundedInteger(cleanupDeadlineMs, 'cleanupDeadlineMs', 1, 5 * 60_000);
   boundedInteger(cleanupCommandTimeoutMs, 'cleanupCommandTimeoutMs', 1, 60_000);
@@ -1368,12 +1384,15 @@ export function createDaytonaSnapshotController(options = {}) {
     } catch {
       // Absence is authoritative; a lost delete response is tolerated only when every page proves absence.
     }
+    let consecutiveAbsenceObservations = 0;
     for (let attempt = 0; attempt < cleanupPollAttempts; attempt += 1) {
       try {
         const records = await listSnapshots(budget);
         const present = records.some((record) => record.id === snapshotId);
-        if (!present) return;
+        consecutiveAbsenceObservations = present ? 0 : consecutiveAbsenceObservations + 1;
+        if (consecutiveAbsenceObservations >= CLEANUP_ABSENCE_CONFIRMATIONS) return;
       } catch {
+        consecutiveAbsenceObservations = 0;
         // A malformed or incomplete observation cannot prove cleanup; retry within the fixed bound.
       }
       if (attempt + 1 < cleanupPollAttempts) await wait(budget);
@@ -1397,6 +1416,7 @@ export function createDaytonaSnapshotController(options = {}) {
     }
 
     let absent = false;
+    let consecutiveAbsenceObservations = 0;
     for (let attempt = 0; attempt < cleanupPollAttempts; attempt += 1) {
       let inspected;
       try {
@@ -1405,17 +1425,21 @@ export function createDaytonaSnapshotController(options = {}) {
         lastCleanupError = error;
       }
       if (inspected && exactSandboxNotFound(inspected, identity)) {
-        absent = true;
-        break;
-      }
-      if (inspected && inspected.code === 0 && inspected.stderr === '') {
+        consecutiveAbsenceObservations += 1;
+        absent = consecutiveAbsenceObservations >= CLEANUP_ABSENCE_CONFIRMATIONS;
+        if (absent) break;
+      } else if (inspected && inspected.code === 0 && inspected.stderr === '') {
+        consecutiveAbsenceObservations = 0;
         const value = parseJson(inspected.stdout, 'Daytona validation sandbox deletion inspection');
         if (!plainObject(value) || value.id !== identity && value.name !== identity) {
           fail('validation sandbox deletion inspection returned a mismatched identity',
             'ERR_SNAPSHOT_SANDBOX_CLEANUP');
         }
       } else if (inspected) {
+        consecutiveAbsenceObservations = 0;
         lastCleanupError = commandError('validation sandbox deletion inspection', inspected);
+      } else {
+        consecutiveAbsenceObservations = 0;
       }
       if (attempt + 1 < cleanupPollAttempts) await wait(budget);
     }
@@ -1437,11 +1461,19 @@ export function createDaytonaSnapshotController(options = {}) {
       sandboxMayExist = true;
       await invoke([
         'create', '--name', sandboxName, '--snapshot', prepared.identity.name,
-        '--target', 'us', '--network-block-all', '--auto-stop', '0', '--ttl', '30',
+        '--user', 'root', '--target', 'us', '--network-block-all', '--auto-stop', '0', '--ttl', '30',
       ], 'Daytona validation sandbox creation');
-      const selfTest = await invoke([
+      const selfTest = await invokeRaw([
         'exec', sandboxName, '--', SELFTEST, '--expected-build-hash', prepared.identity.buildHash,
-      ], 'Daytona snapshot self-test');
+      ]);
+      const reportedFailure = parseSnapshotSelfTestFailure(selfTest.stdout);
+      if (reportedFailure !== null) {
+        fail(`Daytona snapshot self-test rejected the runtime closure (${reportedFailure})`,
+          'ERR_SNAPSHOT_SELFTEST_IDENTITY');
+      }
+      if (selfTest.code !== 0 || selfTest.stderr !== '') {
+        throw commandError('Daytona snapshot self-test', selfTest);
+      }
       const expectedSelfTest = `ENGINEER-SNAPSHOT/1 ${prepared.identity.buildHash}\n`;
       if (selfTest.stdout !== expectedSelfTest || selfTest.stderr !== '') {
         fail('Daytona snapshot self-test did not attest the exact content identity',

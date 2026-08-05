@@ -8,6 +8,7 @@ import {
   snapshotBuildManifestHash,
   validateSnapshotBuildManifest,
 } from './snapshot-build-manifest.mjs';
+import { DAYTONA_NODE_USTAR_ATTESTATION } from './daytona-topology.mjs';
 
 const MANIFEST_PATH = '/opt/engineer/snapshot/build-manifest.json';
 const NODE_PATH = '/usr/local/bin/node';
@@ -20,17 +21,50 @@ const UTF8 = new TextDecoder('utf-8', { fatal: true });
 const FORBIDDEN_ENV = /(?:^|_)(?:API_?KEY|AUTHORIZATION|CREDENTIAL|PASSWORD|SECRET|TOKEN)(?:$|_)/i;
 const DANGEROUS_ENV = /^(?:NODE_OPTIONS|NODE_PATH|LD_PRELOAD|LD_LIBRARY_PATH|DYLD_.+)$/;
 const CREDENTIAL_VALUE = /(?:Bearer\s+|sk-(?:or|ant|proj)-|github_pat_|ghp_|xox[baprs]-|hf_[A-Za-z0-9])/i;
+const FAILURE_PREFIX = 'ENGINEER-SNAPSHOT-FAILURE/1 ';
+const STABLE_SELFTEST_ERROR_CODES = new Set([
+  'ERR_SNAPSHOT_SELFTEST',
+  'ERR_SNAPSHOT_SELFTEST_BUILD_IDENTITY',
+  'ERR_SNAPSHOT_SELFTEST_ENVIRONMENT',
+  'ERR_SNAPSHOT_SELFTEST_EXECUTABLE',
+  'ERR_SNAPSHOT_SELFTEST_FILE',
+  'ERR_SNAPSHOT_SELFTEST_IDENTITY',
+  'ERR_SNAPSHOT_SELFTEST_INVOCATION',
+  'ERR_SNAPSHOT_SELFTEST_MANIFEST',
+  'ERR_SNAPSHOT_SELFTEST_PLATFORM',
+  'ERR_SNAPSHOT_SELFTEST_VERSION',
+]);
+const AUTHENTICATED_SELFTEST_ERROR_CODES = new WeakMap();
 
 export class SnapshotSelfTestError extends Error {
   constructor(message, code = 'ERR_SNAPSHOT_SELFTEST') {
     super(message);
     this.name = 'SnapshotSelfTestError';
-    this.code = code;
+    const authenticatedCode = STABLE_SELFTEST_ERROR_CODES.has(code)
+      ? code
+      : 'ERR_SNAPSHOT_SELFTEST';
+    Object.defineProperty(this, 'code', {
+      configurable: false,
+      enumerable: true,
+      value: authenticatedCode,
+      writable: false,
+    });
+    AUTHENTICATED_SELFTEST_ERROR_CODES.set(this, authenticatedCode);
   }
 }
 
 function fail(message, code = 'ERR_SNAPSHOT_SELFTEST') {
   throw new SnapshotSelfTestError(message, code);
+}
+
+function stableSelfTestErrorCode(error) {
+  return AUTHENTICATED_SELFTEST_ERROR_CODES.get(error) ?? 'ERR_SNAPSHOT_SELFTEST';
+}
+
+export function parseSnapshotSelfTestFailure(value) {
+  if (typeof value !== 'string') return null;
+  const match = /^ENGINEER-SNAPSHOT-FAILURE\/1 (ERR_SNAPSHOT_SELFTEST[A-Z_]*)\n$/.exec(value);
+  return match && STABLE_SELFTEST_ERROR_CODES.has(match[1]) ? match[1] : null;
 }
 
 function sameHash(left, right) {
@@ -92,6 +126,7 @@ function runFixedCommand(file, args) {
     encoding: 'utf8',
     env: { LANG: 'C.UTF-8', LC_ALL: 'C.UTF-8' },
     timeout: 30_000,
+    killSignal: 'SIGKILL',
     maxBuffer: MAX_COMMAND_BYTES,
   });
   return {
@@ -179,6 +214,15 @@ function validateInspection(value, executable) {
   }
 }
 
+function validateNodeRuntimeInspection(value, expected) {
+  if (value === null || typeof value !== 'object' || Array.isArray(value) ||
+      value.type !== expected.type || value.uid !== 0 || value.mode !== expected.mode ||
+      value.byteLength !== expected.byteLength || !sameHash(value.sha256, expected.sha256)) {
+    fail('protected Node runtime closure ownership, mode, type, size, or digest drifted',
+      'ERR_SNAPSHOT_SELFTEST_EXECUTABLE');
+  }
+}
+
 function exactCommandResult(value, stdout, label) {
   if (value === null || typeof value !== 'object' || value.code !== 0 || value.stdout !== stdout ||
       value.stderr !== '' || value.error != null) {
@@ -216,11 +260,22 @@ export async function runSnapshotSelfTestCli({
       fail('snapshot build identity does not match the canonical embedded manifest',
         'ERR_SNAPSHOT_SELFTEST_BUILD_IDENTITY');
     }
+    const inspections = new Map();
     for (const executable of Object.values(parsed.manifest.executables)) {
-      validateInspection(await primitives.inspectExecutable({
+      const inspected = await primitives.inspectExecutable({
         file: executable.path,
         maxBytes: MAX_EXECUTABLE_BYTES,
-      }), executable);
+      });
+      validateInspection(inspected, executable);
+      inspections.set(executable.path, inspected);
+    }
+    for (const expected of DAYTONA_NODE_USTAR_ATTESTATION.entries) {
+      const file = `/${expected.path}`;
+      const inspected = inspections.get(file) ?? await primitives.inspectExecutable({
+        file,
+        maxBytes: expected.byteLength,
+      });
+      validateNodeRuntimeInspection(inspected, expected);
     }
     if (!parsed.manifest.executables.node || parsed.manifest.executables.node.path !== NODE_PATH ||
         !parsed.manifest.executables.harbor || parsed.manifest.executables.harbor.path !== HARBOR_PATH) {
@@ -236,11 +291,19 @@ export async function runSnapshotSelfTestCli({
   }
 }
 
+export async function runSnapshotSelfTestMain(options = {}) {
+  const output = writable(options.output ?? process.stdout);
+  try {
+    return await runSnapshotSelfTestCli({ ...options, output });
+  } catch (error) {
+    output.write(`${FAILURE_PREFIX}${stableSelfTestErrorCode(error)}\n`);
+    return 70;
+  }
+}
+
 const direct = process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url;
 if (direct) {
-  runSnapshotSelfTestCli().catch((error) => {
-    const code = error instanceof SnapshotSelfTestError ? error.code : 'ERR_SNAPSHOT_SELFTEST';
-    process.stderr.write(`engineer snapshot self-test failed: ${code}\n`);
-    process.exitCode = 70;
-  });
+  runSnapshotSelfTestMain()
+    .then((code) => { process.exitCode = code; })
+    .catch(() => { process.exitCode = 70; });
 }

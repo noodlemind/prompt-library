@@ -1,10 +1,14 @@
 import crypto from 'node:crypto';
 import { spawnSync } from 'node:child_process';
+import { performance } from 'node:perf_hooks';
 
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
 const SHA256_HEX = /^[a-f0-9]{64}$/;
 const SECRET_FIELD = /(?:api[_-]?key|authorization|credential|password|secret|token)/i;
 const MAX_COMMAND_OUTPUT_BYTES = 1024 * 1024;
+const CLEANUP_DEADLINE_MS = 60_000;
+const CLEANUP_COMMAND_TIMEOUT_MS = 10_000;
+const CLEANUP_ABSENCE_CONFIRMATIONS = 3;
 const DAYTONA_CLI_ENV_ALLOWLIST = Object.freeze(new Set([
   'PATH', 'HOME', 'USER', 'LOGNAME', 'LANG', 'LANGUAGE', 'LC_ALL', 'LC_CTYPE', 'LC_MESSAGES',
   'LC_TIME', 'LC_NUMERIC', 'LC_MONETARY', 'LC_COLLATE', 'LC_PAPER', 'LC_NAME', 'LC_ADDRESS',
@@ -134,12 +138,19 @@ export function daytonaCliEnvironment(baseEnv = process.env) {
   return env;
 }
 
-function defaultRunCommand(file, args, { timeoutMs = 180_000, env = daytonaCliEnvironment() } = {}) {
-  const result = spawnSync(file, args, {
+export function runDaytonaSessionCliCommand(
+  file,
+  args,
+  { timeoutMs = 180_000, env = daytonaCliEnvironment() } = {},
+  spawnImpl = spawnSync,
+) {
+  if (typeof spawnImpl !== 'function') throw new TypeError('spawnImpl must be a function');
+  const result = spawnImpl(file, args, {
     shell: false,
     encoding: 'utf8',
     env,
     timeout: timeoutMs,
+    killSignal: 'SIGKILL',
     maxBuffer: MAX_COMMAND_OUTPUT_BYTES,
     windowsHide: true,
   });
@@ -151,14 +162,32 @@ function defaultRunCommand(file, args, { timeoutMs = 180_000, env = daytonaCliEn
   };
 }
 
-function expectedLabels(releaseSha, trialId = null, mode = 'controlled-provider') {
+function expectedLabels(
+  releaseSha,
+  trialId = null,
+  mode = 'controlled-provider',
+  allocationAttempt = null,
+) {
   return {
     purpose: 'engineer-release-eval',
     'release-commit': releaseSha,
     'provider-secret': mode === 'zero-provider-canary' ? 'absent' : 'broker-only',
     ...(mode === 'zero-provider-canary' ? { 'execution-mode': mode } : {}),
     ...(trialId == null ? {} : { 'trial-id': trialId }),
+    ...(allocationAttempt == null ? {} : { 'allocation-attempt': allocationAttempt }),
   };
+}
+
+function hasExpectedAllocationOwnership(allocation, expected) {
+  if (!isPlainObject(allocation) || allocation.name !== expected.name ||
+      typeof allocation.id !== 'string' || !SAFE_ID.test(allocation.id) ||
+      !isPlainObject(allocation.labels)) return false;
+  return Object.entries(expectedLabels(
+    expected.releaseSha,
+    expected.trialId ?? null,
+    expected.executionMode ?? 'controlled-provider',
+    expected.allocationAttempt ?? null,
+  )).every(([key, value]) => allocation.labels[key] === value);
 }
 
 export function validateDaytonaAllocation(allocation, expected) {
@@ -173,11 +202,11 @@ export function validateDaytonaAllocation(allocation, expected) {
   exact('name', expected.name);
   exact('snapshot', expected.snapshot);
   exact('target', expected.target);
+  exact('user', 'root');
   exact('sandboxClass', 'container');
   exact('cpu', expected.cpu);
-  // Daytona's CLI accepts and reports `--memory` in MB; the public controller
-  // option remains GiB so the observed allocation must use the same conversion
-  // as the create command below.
+  // Daytona reports inherited snapshot memory in MB; the public controller
+  // option remains GiB, so observed allocation still uses the exact conversion.
   exact('memory', expected.memoryGiB * 1024);
   exact('disk', expected.diskGiB);
   exact('public', false);
@@ -197,6 +226,7 @@ export function validateDaytonaAllocation(allocation, expected) {
       expected.releaseSha,
       expected.trialId ?? null,
       expected.executionMode ?? 'controlled-provider',
+      expected.allocationAttempt ?? null,
     ))) {
       if (labels[key] !== value) errors.push(`allocation label ${key} is invalid`);
     }
@@ -215,21 +245,24 @@ export function createDaytonaSessionController({
   releaseSha,
   executionMode: executionModeInput,
   sessionBudgetUsd,
-  runCommand = defaultRunCommand,
+  runCommand = runDaytonaSessionCliCommand,
   provisionTrial = async () => null,
   randomBytes = crypto.randomBytes,
   now = () => new Date(),
+  monotonicNow = () => performance.now(),
   sleep = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)),
-  deletePollAttempts = 20,
-  deletePollIntervalMs = 250,
+  deletePollAttempts = 100,
+  deletePollIntervalMs = 500,
   expectedDaytonaVersion = 'v0.203.0',
   baseEnv = process.env,
 } = {}) {
   const executable = safeAbsoluteExecutable(daytonaPath);
   safeId(snapshot, 'snapshot');
   if (!['us', 'eu'].includes(target)) throw new TypeError('target must be us or eu');
-  positiveInteger(cpu, 'cpu', 64);
-  positiveInteger(memoryGiB, 'memoryGiB', 256);
+  if (cpu !== 2) throw new TypeError('cpu must be exactly 2 for the approved snapshot topology');
+  if (memoryGiB !== 4) {
+    throw new TypeError('memoryGiB must be exactly 4 for the approved snapshot topology');
+  }
   if (diskGiB !== 10) throw new TypeError('diskGiB must be exactly 10 for the approved topology');
   positiveInteger(ttlMinutes, 'ttlMinutes', 240);
   if (typeof releaseSha !== 'string' || !/^[a-f0-9]{7,64}$/.test(releaseSha)) {
@@ -240,8 +273,12 @@ export function createDaytonaSessionController({
   if (typeof runCommand !== 'function' || typeof provisionTrial !== 'function') {
     throw new TypeError('runCommand and provisionTrial must be functions');
   }
-  positiveInteger(deletePollAttempts, 'deletePollAttempts', 1_000);
+  positiveInteger(deletePollAttempts, 'deletePollAttempts', 100);
+  if (deletePollAttempts < CLEANUP_ABSENCE_CONFIRMATIONS) {
+    throw new TypeError(`deletePollAttempts must be at least ${CLEANUP_ABSENCE_CONFIRMATIONS}`);
+  }
   positiveInteger(deletePollIntervalMs, 'deletePollIntervalMs', 60_000);
+  if (typeof monotonicNow !== 'function') throw new TypeError('monotonicNow must be a function');
   if (typeof expectedDaytonaVersion !== 'string' || !/^v\d+\.\d+\.\d+$/.test(expectedDaytonaVersion)) {
     throw new TypeError('expectedDaytonaVersion must be an exact semantic CLI version');
   }
@@ -267,47 +304,219 @@ export function createDaytonaSessionController({
     return result;
   }
 
+  function cleanupBudget() {
+    let failure = null;
+    const fail = (message) => {
+      if (!failure) failure = new Error(message);
+      throw failure;
+    };
+    const readClock = () => {
+      if (failure) throw failure;
+      let value;
+      try {
+        value = monotonicNow();
+      } catch {
+        fail('Daytona sandbox cleanup monotonic clock is unavailable');
+      }
+      if (typeof value !== 'number' || !Number.isFinite(value) || value < 0 ||
+          value > Number.MAX_SAFE_INTEGER - CLEANUP_DEADLINE_MS) {
+        fail('Daytona sandbox cleanup monotonic clock returned an invalid value');
+      }
+      return value;
+    };
+    let lastObservedMs = readClock();
+    const deadlineMs = lastObservedMs + CLEANUP_DEADLINE_MS;
+    const remainingMs = () => {
+      const observedMs = readClock();
+      if (observedMs < lastObservedMs) {
+        fail('Daytona sandbox cleanup monotonic clock moved backwards');
+      }
+      lastObservedMs = observedMs;
+      const remaining = Math.floor(deadlineMs - observedMs);
+      if (remaining < 1) fail('Daytona sandbox cleanup exceeded its 60-second monotonic deadline');
+      return remaining;
+    };
+    return Object.freeze({
+      assertActive() { remainingMs(); },
+      commandTimeoutMs() { return Math.min(CLEANUP_COMMAND_TIMEOUT_MS, remainingMs()); },
+      waitMs() { return Math.min(deletePollIntervalMs, remainingMs()); },
+      failure() { return failure; },
+    });
+  }
+
+  async function runCleanupCommand(args, budget) {
+    if (!Array.isArray(args) || args.some((arg) => typeof arg !== 'string' || arg.includes('\0'))) {
+      throw new TypeError('Daytona argv must be NUL-free strings');
+    }
+    const options = { timeoutMs: budget.commandTimeoutMs(), env: { ...cliEnv } };
+    try {
+      const result = await runCommand(executable, args, options);
+      budget.assertActive();
+      return result;
+    } catch (error) {
+      budget.assertActive();
+      throw error;
+    }
+  }
+
+  async function waitForCleanup(budget) {
+    const waitMs = budget.waitMs();
+    if (waitMs > 0) await sleep(waitMs);
+    budget.assertActive();
+  }
+
   async function deleteAndConfirm(trial) {
     const cleanupIdentity = trial.cleanupIdentity;
     if (!isPlainObject(cleanupIdentity) || !SAFE_ID.test(String(cleanupIdentity.id ?? '')) ||
-        cleanupIdentity.name !== trial.name) {
+        cleanupIdentity.name !== trial.name || !/^[a-f0-9]{32}$/.test(String(trial.allocationAttempt ?? ''))) {
       throw new Error('Daytona cleanup identity is unavailable');
     }
+    const budget = cleanupBudget();
+    const platformEvidence = crypto.createHash('sha256')
+      .update('engineer-eval/daytona-deletion-evidence/v2\0')
+      .update(trial.name);
+    let cleanupTarget = cleanupIdentity.observed === true ? cleanupIdentity.id : null;
+    let absenceProvenWithoutResource = false;
+    let reconciliationError = null;
+    let reconciliationBudgetError = budget.failure();
+
+    if (cleanupTarget == null) {
+      let consecutiveAbsenceObservations = 0;
+      for (let attempt = 0; attempt < deletePollAttempts; attempt += 1) {
+        if (reconciliationBudgetError) break;
+        try {
+          const inspected = await runCleanupCommand(
+            ['info', trial.name, '--format', 'json'],
+            budget,
+          );
+          if (exactSandboxNotFound(inspected, trial.name)) {
+            consecutiveAbsenceObservations += 1;
+            platformEvidence.update(JSON.stringify({
+              sandboxIdentity: trial.name,
+              phase: 'ambiguous-create-reconciliation',
+              status: 'not-found',
+              cliExitCode: 1,
+              confirmation: consecutiveAbsenceObservations,
+            }));
+            absenceProvenWithoutResource =
+              consecutiveAbsenceObservations >= CLEANUP_ABSENCE_CONFIRMATIONS;
+          } else if (inspected?.code === 0) {
+            consecutiveAbsenceObservations = 0;
+            const observed = parseJsonObject(inspected.stdout, 'Daytona ambiguous creation inspection');
+            const expectedAllocation = {
+              name: trial.name,
+              snapshot,
+              target,
+              cpu,
+              memoryGiB,
+              diskGiB,
+              releaseSha,
+              trialId: trial.trialId,
+              executionMode: mode,
+              allocationAttempt: trial.allocationAttempt,
+            };
+            const verdict = validateDaytonaAllocation(observed, expectedAllocation);
+            const owned = hasExpectedAllocationOwnership(observed, expectedAllocation);
+            platformEvidence.update(JSON.stringify({
+              id: observed.id ?? null,
+              name: observed.name ?? null,
+              phase: 'ambiguous-create-reconciliation',
+              allocationOwned: owned,
+              allocationValid: verdict.ok,
+            }));
+            if (!owned) {
+              reconciliationError = new Error(
+                'Daytona ambiguous creation ownership reconciliation failed; refusing deletion',
+              );
+              break;
+            }
+            cleanupIdentity.id = observed.id;
+            cleanupIdentity.observed = true;
+            cleanupTarget = observed.id;
+          } else {
+            consecutiveAbsenceObservations = 0;
+            throw commandFailure('Daytona ambiguous creation reconciliation', inspected);
+          }
+        } catch (error) {
+          consecutiveAbsenceObservations = 0;
+          if (!reconciliationError) reconciliationError = error;
+          reconciliationBudgetError = budget.failure();
+        }
+        if (cleanupTarget != null || absenceProvenWithoutResource) break;
+        if (reconciliationBudgetError) break;
+        if (attempt + 1 < deletePollAttempts) {
+          try {
+            await waitForCleanup(budget);
+          } catch (error) {
+            reconciliationBudgetError = budget.failure() ?? error;
+            break;
+          }
+        }
+      }
+      if (cleanupTarget == null && !absenceProvenWithoutResource) {
+        const base = reconciliationBudgetError?.message ?? reconciliationError?.message ??
+          'Daytona ambiguous creation could not be reconciled';
+        throw new Error(`${base}; sandbox deletion receipt is unavailable`);
+      }
+    }
+
+    if (absenceProvenWithoutResource) {
+      const observedAbsentAt = now().toISOString();
+      return {
+        sandboxId: null,
+        sandboxName: trial.name,
+        deleted: false,
+        resourceAbsent: true,
+        deletedAt: null,
+        deletionRequestId: null,
+        deletionRequestedAt: null,
+        observedAbsentAt,
+        platformEvidenceHash: platformEvidence
+          .update('\0confirmed-never-observed\0')
+          .update(observedAbsentAt)
+          .digest('hex'),
+      };
+    }
+
     const deletionRequestedAt = now().toISOString();
     const deletionRequestId = crypto.createHash('sha256')
       .update('engineer-eval/daytona-delete/v1\0')
-      .update(cleanupIdentity.id)
+      .update(cleanupTarget)
       .update('\0')
       .update(deletionRequestedAt)
       .digest('hex')
       .slice(0, 32);
-    const platformEvidence = crypto.createHash('sha256')
-      .update('engineer-eval/daytona-deletion-evidence/v1\0')
-      .update(deletionRequestId);
+    platformEvidence.update('\0').update(deletionRequestId);
     let deleteError = null;
     try {
-      await invoke(['delete', trial.name], 'Daytona sandbox deletion');
+      const deleted = await runCleanupCommand(['delete', cleanupTarget], budget);
+      if (!deleted || deleted.code !== 0) throw commandFailure('Daytona sandbox deletion', deleted);
     } catch (error) {
       deleteError = error;
     }
     let absent = false;
+    let consecutiveAbsenceObservations = 0;
     let observationError = null;
     let integrityError = null;
+    let budgetError = budget.failure();
     for (let attempt = 0; attempt < deletePollAttempts; attempt += 1) {
+      if (budgetError) break;
       try {
-        const inspected = await runCommand(
-          executable,
-          ['info', cleanupIdentity.id, '--format', 'json'],
-          { timeoutMs: 180_000, env: { ...cliEnv } }
+        const inspected = await runCleanupCommand(
+          ['info', cleanupTarget, '--format', 'json'],
+          budget,
         );
-        if (exactSandboxNotFound(inspected, cleanupIdentity.id)) {
+        if (exactSandboxNotFound(inspected, cleanupTarget)) {
+          consecutiveAbsenceObservations += 1;
           platformEvidence.update(JSON.stringify({
-            sandboxId: cleanupIdentity.id,
+            sandboxIdentity: cleanupTarget,
             status: 'not-found',
             cliExitCode: 1,
+            confirmation: consecutiveAbsenceObservations,
           }));
-          absent = true;
+          absent = consecutiveAbsenceObservations >= CLEANUP_ABSENCE_CONFIRMATIONS;
         } else if (inspected?.code === 0) {
+          consecutiveAbsenceObservations = 0;
           const observed = parseJsonObject(inspected.stdout, 'Daytona deletion inspection');
           platformEvidence.update(JSON.stringify({
             id: observed.id ?? null,
@@ -325,17 +534,28 @@ export function createDaytonaSessionController({
           }
           absent = false;
         } else {
+          consecutiveAbsenceObservations = 0;
           throw commandFailure('Daytona sandbox deletion check', inspected);
         }
       } catch (error) {
+        consecutiveAbsenceObservations = 0;
         if (!observationError) observationError = error;
+        budgetError = budget.failure();
       }
       if (absent) break;
-      if (attempt + 1 < deletePollAttempts) await sleep(deletePollIntervalMs);
+      if (budgetError) break;
+      if (attempt + 1 < deletePollAttempts) {
+        try {
+          await waitForCleanup(budget);
+        } catch (error) {
+          budgetError = budget.failure() ?? error;
+          break;
+        }
+      }
     }
     if (integrityError || !absent) {
-      const base = integrityError?.message ?? observationError?.message ?? deleteError?.message ??
-        'Daytona sandbox deletion could not be confirmed';
+      const base = integrityError?.message ?? budgetError?.message ?? observationError?.message ??
+        deleteError?.message ?? 'Daytona sandbox deletion could not be confirmed';
       throw new Error(`${base}; sandbox deletion receipt is unavailable`);
     }
     const observedAbsentAt = now().toISOString();
@@ -377,14 +597,13 @@ export function createDaytonaSessionController({
     sequence += 1;
     const nonce = randomBytes(16);
     if (!Buffer.isBuffer(nonce) || nonce.length !== 16) throw new Error('randomBytes must return exactly 16 bytes');
-    const name = `engineer-eval-${releaseSha.slice(0, 8)}-${sequence}-${nonce.toString('hex').slice(0, 8)}`;
+    const allocationAttempt = nonce.toString('hex');
+    const name = `engineer-eval-${releaseSha.slice(0, 8)}-${sequence}-${allocationAttempt}`;
     const createArgs = [
       'create',
       '--name', name,
       '--snapshot', snapshot,
-      '--cpu', String(cpu),
-      '--memory', String(memoryGiB * 1024),
-      '--disk', String(diskGiB),
+      '--user', 'root',
       '--target', target,
       '--auto-stop', '0',
       '--ttl', String(ttlMinutes),
@@ -393,6 +612,7 @@ export function createDaytonaSessionController({
       '--label', `provider-secret=${mode === 'zero-provider-canary' ? 'absent' : 'broker-only'}`,
       ...(mode === 'zero-provider-canary' ? ['--label', `execution-mode=${mode}`] : []),
       '--label', `trial-id=${trialId}`,
+      '--label', `allocation-attempt=${allocationAttempt}`,
     ];
     const trial = {
       trialId,
@@ -401,6 +621,7 @@ export function createDaytonaSessionController({
       reservedUsd,
       sequence,
       name,
+      allocationAttempt,
       allocation: null,
       cleanupIdentity: { id: name, name, observed: false },
       readiness: null,
@@ -413,10 +634,7 @@ export function createDaytonaSessionController({
       await invoke(createArgs, 'Daytona sandbox creation', { timeoutMs: 300_000 });
       const info = await invoke(['info', name, '--format', 'json'], 'Daytona sandbox inspection');
       const observed = parseJsonObject(info.stdout, 'Daytona allocation');
-      if (observed.name === name && typeof observed.id === 'string' && SAFE_ID.test(observed.id)) {
-        trial.cleanupIdentity = { id: observed.id, name, observed: true };
-      }
-      const verdict = validateDaytonaAllocation(observed, {
+      const expectedAllocation = {
         name,
         snapshot,
         target,
@@ -426,7 +644,12 @@ export function createDaytonaSessionController({
         releaseSha,
         trialId,
         executionMode: mode,
-      });
+        allocationAttempt,
+      };
+      if (hasExpectedAllocationOwnership(observed, expectedAllocation)) {
+        trial.cleanupIdentity = { id: observed.id, name, observed: true };
+      }
+      const verdict = validateDaytonaAllocation(observed, expectedAllocation);
       if (!verdict.ok) throw new Error(`Daytona allocation is invalid: ${verdict.errors.join('; ')}`);
       trial.allocation = observed;
       trial.readiness = await provisionTrial({

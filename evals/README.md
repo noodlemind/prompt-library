@@ -325,10 +325,14 @@ node evals/release.mjs --profile release-canary --deterministic-only
 # keep their requested report mode but are equally blocked from Harbor/spend.
 node evals/release.mjs --profile release-canary --json
 
-# Handoff template only after an approved commit arms releaseTrust and the
-# zero-provider Daytona gate has passed. Runtime paths and identities are
-# code-owned. Do not export the provider key or any HARNESS_EVAL_* runtime path.
+# Handoff template only after an approved commit arms releaseTrust. Runtime
+# paths and identities are code-owned. Do not export the provider key or any
+# HARNESS_EVAL_* runtime path. Run the credential-free gate on that exact commit
+# immediately before qualification; its evidence is valid for 60 minutes.
 EVAL_REPORT_DIR=$(mktemp -d)
+env -u OPENROUTER_API_KEY node evals/zero-provider-daytona.mjs \
+  --report-file "$EVAL_REPORT_DIR/zero-provider-daytona.json"
+
 printf 'Dedicated OpenRouter evaluation key: ' >&2
 IFS= read -r -s provider_key
 printf '\n' >&2
@@ -338,6 +342,7 @@ trap 'unset provider_key' EXIT
 # Neither arm passing stops the larger calibration.
 node evals/release.mjs --profile release-canary --qualification --json \
   --provider-key-fd 3 \
+  --zero-provider-baseline "$EVAL_REPORT_DIR/zero-provider-daytona.json" \
   --report-file "$EVAL_REPORT_DIR/qualification.json" \
   3< <(printf '%s' "$provider_key")
 

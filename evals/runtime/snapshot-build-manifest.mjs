@@ -3,6 +3,9 @@ import crypto from 'node:crypto';
 import {
   DAYTONA_DIND_BASE_IMAGE,
   DAYTONA_DIND_BASE_IMAGE_DIGEST,
+  DAYTONA_NODE_RUNTIME_IMAGE,
+  DAYTONA_NODE_RUNTIME_IMAGE_DIGEST,
+  DAYTONA_USTAR_ATTESTED_EXECUTABLE_SHA256,
 } from './daytona-topology.mjs';
 import { isSensitiveArchivePath } from './archive-path-policy.mjs';
 
@@ -225,10 +228,15 @@ function validateProvenance(value) {
     fail('Harbor provenance drifted from the exact v0.20.0 commit');
   }
   hash(value.harbor.lockSha256, 'provenance.harbor.lockSha256');
-  exactKeys(value.node, ['version', 'platform', 'archiveSha256'], 'provenance.node');
-  if (typeof value.node.version !== 'string' || !/^v\d+\.\d+\.\d+$/.test(value.node.version) ||
-      value.node.platform !== 'linux-x64') fail('Node provenance must pin one linux-x64 release');
-  hash(value.node.archiveSha256, 'provenance.node.archiveSha256');
+  exactKeys(value.node, [
+    'version', 'platform', 'runtimeImage', 'runtimeImageDigest', 'binarySha256',
+  ], 'provenance.node');
+  if (value.node.version !== 'v22.17.1' || value.node.platform !== 'linux/amd64-musl' ||
+      value.node.runtimeImage !== DAYTONA_NODE_RUNTIME_IMAGE ||
+      value.node.runtimeImageDigest !== DAYTONA_NODE_RUNTIME_IMAGE_DIGEST ||
+      value.node.binarySha256 !== DAYTONA_USTAR_ATTESTED_EXECUTABLE_SHA256.node) {
+    fail('Node provenance must pin the reviewed Alpine-compatible runtime closure');
+  }
   exactKeys(value.nativeHelper, [
     'sourceSha256', 'compilerImage', 'compilerImageDigest', 'binarySha256',
   ], 'provenance.nativeHelper');

@@ -15,6 +15,9 @@ import { buildSnapshotBuildManifest } from '../../../evals/runtime/snapshot-buil
 import {
   DAYTONA_DIND_BASE_IMAGE,
   DAYTONA_DIND_BASE_IMAGE_DIGEST,
+  DAYTONA_NODE_RUNTIME_IMAGE,
+  DAYTONA_NODE_RUNTIME_IMAGE_DIGEST,
+  DAYTONA_USTAR_ATTESTED_EXECUTABLE_SHA256,
 } from '../../../evals/runtime/daytona-topology.mjs';
 
 const HASH = (character) => character.repeat(64);
@@ -127,7 +130,13 @@ function files(t, overrides = {}) {
         commit: '459ff6ec99417589b7f679d14ddf3b3f0ae4f1dc',
         lockSha256: HASH('7'),
       },
-      node: { version: 'v22.17.1', platform: 'linux-x64', archiveSha256: HASH('8') },
+      node: {
+        version: 'v22.17.1',
+        platform: 'linux/amd64-musl',
+        runtimeImage: DAYTONA_NODE_RUNTIME_IMAGE,
+        runtimeImageDigest: DAYTONA_NODE_RUNTIME_IMAGE_DIGEST,
+        binarySha256: DAYTONA_USTAR_ATTESTED_EXECUTABLE_SHA256.node,
+      },
       nativeHelper: {
         sourceSha256: HASH('9'),
         compilerImage: `alpine:3.22@sha256:${HASH('b')}`,
@@ -219,6 +228,7 @@ function sandboxRecord(input, overrides = {}) {
     state: 'started',
     desiredState: 'started',
     target: 'us',
+    user: 'root',
     sandboxClass: 'container',
     cpu: 2,
     memory: 4096,
@@ -300,6 +310,13 @@ function fakeDaytona(input, {
 
     if (args[0] === 'exec') {
       if (mode === 'selftest') return { code: 70, stdout: 'failed detail', stderr: 'selftest failure' };
+      if (mode === 'selftest-diagnostic') {
+        return {
+          code: 1,
+          stdout: 'ENGINEER-SNAPSHOT-FAILURE/1 ERR_SNAPSHOT_SELFTEST_IDENTITY\n',
+          stderr: 'remote process exited with status 70\n',
+        };
+      }
       if (mode === 'selftest-secret') return { code: 0, stdout: 'sk-or-v1-never-retain-this', stderr: '' };
       if (mode === 'selftest-mismatch') return { code: 0, stdout: `ENGINEER-SNAPSHOT/1 ${'b'.repeat(64)}\n`, stderr: '' };
       return {
@@ -403,7 +420,7 @@ test('creates, validates, and retains one content-addressed snapshot with exact 
   assert.match(sandboxName, new RegExp(`^${input.sandboxNamePrefix}[a-f0-9]{32}$`));
   assert.deepEqual(fake.calls[4], [
     'create', '--name', sandboxName, '--snapshot', input.identity.name,
-    '--target', 'us', '--network-block-all', '--auto-stop', '0', '--ttl', '30',
+    '--user', 'root', '--target', 'us', '--network-block-all', '--auto-stop', '0', '--ttl', '30',
   ]);
   assert.equal(['--cpu', '--memory', '--disk'].some((flag) => fake.calls[4].includes(flag)), false,
     'a sandbox created from a resource-bound snapshot must not restate resource flags');
@@ -608,7 +625,7 @@ test('paginates and revalidates an exact active content-addressed snapshot befor
     ['snapshot', 'list', '--format', 'json', '--limit', '200', '--page', '2'],
     [
       'create', '--name', sandboxName, '--snapshot', input.identity.name,
-      '--target', 'us', '--network-block-all', '--auto-stop', '0', '--ttl', '30',
+      '--user', 'root', '--target', 'us', '--network-block-all', '--auto-stop', '0', '--ttl', '30',
     ],
     [
       'exec', sandboxName, '--',
@@ -616,6 +633,8 @@ test('paginates and revalidates an exact active content-addressed snapshot befor
     ],
     ['info', sandboxName, '--format', 'json'],
     ['delete', 'sandbox-validation-0001'],
+    ['info', 'sandbox-validation-0001', '--format', 'json'],
+    ['info', 'sandbox-validation-0001', '--format', 'json'],
     ['info', 'sandbox-validation-0001', '--format', 'json'],
   ]);
   assert.equal(receipt.created, false);
@@ -725,9 +744,10 @@ test('version and initial-list failures stop before any resource-changing comman
   }
 });
 
-test('rejects every mismatched resource inherited by a snapshot validation sandbox', async (t) => {
+test('rejects a non-root identity and every mismatched inherited validation resource', async (t) => {
   const input = files(t);
   for (const sandboxOverrides of [
+    { user: 'daytona' },
     { cpu: 1 },
     { memory: 2048 },
     { disk: 9 },
@@ -742,6 +762,19 @@ test('rejects every mismatched resource inherited by a snapshot validation sandb
     assert.equal(fake.snapshots.some((entry) => entry.name === input.identity.name), false,
       'the rejected release snapshot must be absent after rollback');
   }
+});
+
+test('surfaces only an authenticated snapshot self-test failure code and still rolls back', async (t) => {
+  const input = files(t);
+  const fake = fakeDaytona(input, { mode: 'selftest-diagnostic' });
+  const error = await rejected(controller(fake).ensureSnapshot(request(input)));
+
+  assert.equal(error.code, 'ERR_SNAPSHOT_SELFTEST_IDENTITY');
+  assert.match(error.message, /ERR_SNAPSHOT_SELFTEST_IDENTITY/);
+  assert.doesNotMatch(error.message, /remote process|status 70/);
+  assert.equal(fake.sandbox, null);
+  assert.equal(fake.snapshotDeleteAttempted, true);
+  assert.equal(fake.snapshots.some((entry) => entry.name === input.identity.name), false);
 });
 
 test('every failure after snapshot ownership is proven deletes the exact id and proves absence', async (t) => {
@@ -864,7 +897,7 @@ test('the production cleanup bound survives Daytona deletion visibility beyond t
     cleanupPollIntervalMs: 0,
   }).ensureSnapshot(request(input));
 
-  assert.equal(deletionObservations, 21);
+  assert.equal(deletionObservations, 23);
   assert.equal(receipt.validation.sandboxDeleted, true);
 });
 
@@ -1063,9 +1096,43 @@ test('sandbox cleanup retries one transient command timeout and trusts later exa
     return original(args, commandOptions);
   };
 
-  const receipt = await controller(fake).ensureSnapshot(request(input));
+  const receipt = await controller(fake, { cleanupPollAttempts: 5 })
+    .ensureSnapshot(request(input));
 
-  assert.equal(cleanupInspections, 2);
+  assert.equal(cleanupInspections, 4);
+  assert.equal(receipt.validation.sandboxDeleted, true);
+});
+
+test('one transient sandbox Not Found cannot authorize cleanup after the identity reappears', async (t) => {
+  const input = files(t);
+  const fake = fakeDaytona(input, { initialSnapshots: [snapshotRecord(input)] });
+  const original = fake.runCommand;
+  let deletionRequested = false;
+  let cleanupInspections = 0;
+  fake.runCommand = async (args, commandOptions) => {
+    if (args[0] === 'delete') {
+      deletionRequested = true;
+      return original(args, commandOptions);
+    }
+    if (deletionRequested && args[0] === 'info') {
+      cleanupInspections += 1;
+      if (cleanupInspections === 1) return exactNotFound(args[1]);
+      if (cleanupInspections === 2) {
+        return {
+          code: 0,
+          stdout: JSON.stringify(sandboxRecord(input, { id: args[1], name: args[1] })),
+          stderr: '',
+        };
+      }
+      return exactNotFound(args[1]);
+    }
+    return original(args, commandOptions);
+  };
+
+  const receipt = await controller(fake, { cleanupPollAttempts: 5 })
+    .ensureSnapshot(request(input));
+
+  assert.equal(cleanupInspections, 5);
   assert.equal(receipt.validation.sandboxDeleted, true);
 });
 
@@ -1118,7 +1185,7 @@ test('rollback tolerates a lost snapshot-delete response only after all pages pr
   };
 
   await assert.rejects(controller(fake, {
-    cleanupDeadlineMs: 30,
+    cleanupDeadlineMs: 50,
     cleanupCommandTimeoutMs: 20,
     monotonicNow: () => nowMs,
   }).ensureSnapshot(request(input)), /self-test/i);
@@ -1127,12 +1194,13 @@ test('rollback tolerates a lost snapshot-delete response only after all pages pr
   const cleanupPages = fake.calls.slice(deleteIndex + 1)
     .filter((args) => args[0] === 'snapshot' && args[1] === 'list')
     .map((args) => args[args.indexOf('--page') + 1]);
-  assert.deepEqual(cleanupPages, ['1', '2']);
+  assert.deepEqual(cleanupPages, ['1', '2', '1', '2', '1', '2']);
   const cleanupExecutions = observedCalls.filter(({ args, cleanupPhase }) =>
     args[0] === 'snapshot' && (args[1] === 'delete' || cleanupPhase && args[1] === 'list'));
-  assert.equal(cleanupExecutions.length, 3);
+  assert.equal(cleanupExecutions.length, 7);
   assert.deepEqual(cleanupExecutions.map(({ commandOptions }) => commandOptions.timeoutMs),
-    [20, 20, 16], 'one rollback deadline shrinks across delete and every pagination page');
+    [20, 20, 20, 20, 20, 15, 8],
+    'one rollback deadline shrinks across delete and every pagination page');
   assert.equal(cleanupExecutions.every(({ commandOptions }) => Object.isFrozen(commandOptions)), true);
   const ordinarySnapshotLists = observedCalls.filter(({ args, commandOptions }) =>
     args[0] === 'snapshot' && args[1] === 'list' && commandOptions === undefined);

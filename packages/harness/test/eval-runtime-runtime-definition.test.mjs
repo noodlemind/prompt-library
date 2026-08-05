@@ -14,6 +14,9 @@ import {
 import {
   DAYTONA_DIND_BASE_IMAGE,
   DAYTONA_DIND_BASE_IMAGE_DIGEST,
+  DAYTONA_NODE_RUNTIME_IMAGE,
+  DAYTONA_NODE_RUNTIME_IMAGE_DIGEST,
+  DAYTONA_USTAR_ATTESTED_EXECUTABLE_SHA256,
 } from '../../../evals/runtime/daytona-topology.mjs';
 import { getProfile } from '../../../evals/lib/model-profiles.mjs';
 import { controlledProviderBrokerStaticPolicyHash } from '../../../evals/runtime/controlled-provider-policy.mjs';
@@ -131,7 +134,13 @@ function snapshotArtifact() {
         commit: '459ff6ec99417589b7f679d14ddf3b3f0ae4f1dc',
         lockSha256: HASH('7'),
       },
-      node: { version: 'v22.17.1', platform: 'linux-x64', archiveSha256: HASH('8') },
+      node: {
+        version: 'v22.17.1',
+        platform: 'linux/amd64-musl',
+        runtimeImage: DAYTONA_NODE_RUNTIME_IMAGE,
+        runtimeImageDigest: DAYTONA_NODE_RUNTIME_IMAGE_DIGEST,
+        binarySha256: DAYTONA_USTAR_ATTESTED_EXECUTABLE_SHA256.node,
+      },
       nativeHelper: {
         sourceSha256: HASH('9'),
         compilerImage: `gcc:14.2.0-bookworm@sha256:${HASH('a')}`,

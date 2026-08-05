@@ -1,7 +1,9 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
+import { performance } from 'node:perf_hooks';
 import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 
 import { daytonaCliEnvironment } from './daytona-controller.mjs';
 import { createDaytonaSnapshotController } from './daytona-snapshot-controller.mjs';
@@ -9,6 +11,8 @@ import {
   DAYTONA_DIND_BASE_IMAGE,
   DAYTONA_DIND_BASE_IMAGE_DIGEST,
   DAYTONA_EXECUTABLE_PATHS,
+  DAYTONA_NODE_RUNTIME_IMAGE,
+  DAYTONA_NODE_RUNTIME_IMAGE_DIGEST,
   DAYTONA_NODE_USTAR_ATTESTATION,
   DAYTONA_USTAR_ATTESTED_EXECUTABLE_SHA256,
 } from './daytona-topology.mjs';
@@ -28,7 +32,24 @@ const MAX_DEFINITION_BYTES = 4 * 1024 * 1024;
 const MAX_DOCKERFILE_BYTES = 1024 * 1024;
 const MAX_COMMAND_BYTES = 4 * 1024 * 1024;
 const MAX_DOWNLOAD_BYTES = 64 * 1024 * 1024;
+const MAX_DOWNLOAD_ELAPSED_MS = 5 * 60_000;
+const DOWNLOAD_CLEANUP_TIMEOUT_MS = 10_000;
+const BUILDER_CLEANUP_DEADLINE_MS = 60_000;
+const BUILDER_CLEANUP_COMMAND_TIMEOUT_MS = 10_000;
+const BUILDER_CLEANUP_ATTEMPTS = 8;
+const BUILDER_CLEANUP_ABSENCE_CONFIRMATIONS = 3;
+const BUILDER_CLEANUP_BACKOFF_BASE_MS = 100;
+const BUILDER_CLEANUP_BACKOFF_MAX_MS = 5_000;
 const DOCKER_HOST = 'unix:///var/run/docker.sock';
+const PINNED_SOURCE_HELPER = fileURLToPath(new URL('./pinned-snapshot-source.mjs', import.meta.url));
+const PINNED_SOURCE_SUCCESS = 'ENGINEER-PINNED-SOURCE/1';
+const PINNED_SOURCE_ABSENT = 'ENGINEER-PINNED-SOURCE-ABSENT/1\n';
+const PINNED_SOURCE_ATTEMPT_PREFIX = '.engineer-pinned-source-';
+const PINNED_SOURCE_ATTEMPT_TOKEN = /^[a-f0-9]{32}$/;
+const PINNED_SOURCE_PARTIAL_NAME = 'source.partial';
+const BUILDER_OWNER_LABEL = 'io.noodlemind.engineer.eval.builder';
+const BUILDER_ID_LABEL = 'io.noodlemind.engineer.eval.builder-id';
+const BUILDER_OWNER = 'runtime-snapshot-artifacts.v1';
 
 const HARBOR_SOURCE = Object.freeze({
   version: 'v0.20.0',
@@ -45,7 +66,14 @@ const NATIVE_COMPILER_IMAGE =
   'gcc:14.2.0-bookworm@sha256:82549aa8f90ada3236a8be70c74543132a76662ef33f0c3271ed802b81584a82';
 const NATIVE_COMPILER_DIGEST =
   'sha256:82549aa8f90ada3236a8be70c74543132a76662ef33f0c3271ed802b81584a82';
-const NODE_ARCHIVE_SHA256 = 'cfb6ac0cf339825fe36efd1f18a79016b02aca19fbfa6c9547c57e27dc09f6ea';
+const NODE_RUNTIME_FILES = Object.freeze(DAYTONA_NODE_USTAR_ATTESTATION.entries.map((entry) =>
+  Object.freeze({
+    source: `/${entry.path}`,
+    path: entry.path,
+    mode: entry.mode,
+    byteLength: entry.byteLength,
+    sha256: entry.sha256,
+  })));
 
 const DOCKER_CANDIDATES = Object.freeze({
   'darwin-arm64': Object.freeze([
@@ -283,8 +311,8 @@ export function runDaytonaSnapshotCliCommand(
     encoding: 'utf8',
     env: daytonaCliEnvironment(process.env),
     timeout,
+    killSignal: 'SIGKILL',
     maxBuffer: MAX_COMMAND_BYTES,
-    ...(requestedTimeout === undefined ? {} : { killSignal: 'SIGKILL' }),
   });
   return {
     code: Number.isInteger(result.status) ? result.status : null,
@@ -344,27 +372,33 @@ function safeCommandResult(result, label, { maximumBytes = MAX_COMMAND_BYTES } =
   return stdout;
 }
 
-function runFixed(file, args, {
+export function runRuntimeSnapshotArtifactCommand(file, args, {
   cwd,
   env = { PATH: '/usr/bin:/bin', LANG: 'C', LC_ALL: 'C' },
   timeoutMs = 5 * 60_000,
   maximumBytes = MAX_COMMAND_BYTES,
-} = {}) {
+} = {}, spawnImpl = spawnSync) {
   if (!Array.isArray(args) || args.length < 1 || args.length > 256 ||
       args.some((value) => typeof value !== 'string' || value.length < 1 || value.includes('\0') ||
         Buffer.byteLength(value) > 4096)) {
     fail('code-owned command arguments drifted', 'ERR_RUNTIME_SNAPSHOT_COMMAND');
   }
-  return safeCommandResult(spawnSync(file, args, {
+  if (typeof spawnImpl !== 'function') {
+    fail('code-owned command runner must be a function', 'ERR_RUNTIME_SNAPSHOT_COMMAND');
+  }
+  return safeCommandResult(spawnImpl(file, args, {
     shell: false,
     windowsHide: true,
     encoding: 'utf8',
     cwd,
     env,
     timeout: timeoutMs,
+    killSignal: 'SIGKILL',
     maxBuffer: maximumBytes,
   }), path.basename(file), { maximumBytes });
 }
+
+const runFixed = runRuntimeSnapshotArtifactCommand;
 
 function assertDockerSocket() {
   let target;
@@ -395,46 +429,428 @@ function createDockerRunner(workspace) {
   ], { env, timeoutMs: options.timeoutMs ?? 10 * 60_000 });
 }
 
-export async function downloadPinnedSnapshotSource({ url, expectedSha256, destination }, {
+function cancelWithoutWaiting(target, method, argument) {
+  if (!target || typeof target[method] !== 'function') return;
+  try {
+    const result = target[method](argument);
+    if (result && typeof result.then === 'function') void result.catch(() => {});
+  } catch {
+    // Cancellation is best effort after the stable primary failure has already been selected.
+  }
+}
+
+export async function downloadPinnedSnapshotSourceWithFetch({ url, expectedSha256, destination }, {
   fetchImpl = fetch,
+  deadlineMs = MAX_DOWNLOAD_ELAPSED_MS,
+  monotonicNow = () => performance.now(),
 } = {}) {
   const expected = new URL(url);
   if (expected.protocol !== 'https:' || expected.username || expected.password || expected.hash) {
     fail('pinned source URL is invalid', 'ERR_RUNTIME_SNAPSHOT_DOWNLOAD');
   }
-  const response = await fetchImpl(expected, { redirect: 'error' });
-  if (!response || response.status !== 200 || response.url !== expected.href || !response.body) {
-    fail('pinned source download failed closed', 'ERR_RUNTIME_SNAPSHOT_DOWNLOAD');
+  if (typeof fetchImpl !== 'function' || typeof monotonicNow !== 'function' ||
+      !Number.isSafeInteger(deadlineMs) || deadlineMs < 1 || deadlineMs > MAX_DOWNLOAD_ELAPSED_MS) {
+    fail('pinned source download deadline is outside its reviewed bound',
+      'ERR_RUNTIME_SNAPSHOT_DOWNLOAD');
   }
-  const declaredHeader = response.headers?.get?.('content-length');
-  const declared = declaredHeader == null ? null : Number(declaredHeader);
-  if (declaredHeader != null &&
-      (!Number.isFinite(declared) || declared < 1 || declared > MAX_DOWNLOAD_BYTES)) {
-    fail('pinned source download exceeds its byte bound', 'ERR_RUNTIME_SNAPSHOT_DOWNLOAD');
-  }
-  const descriptor = fs.openSync(destination,
-    fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | (fs.constants.O_NOFOLLOW ?? 0),
-    0o400);
-  const hash = crypto.createHash('sha256');
-  let total = 0;
-  try {
-    for await (const rawChunk of response.body) {
-      const chunk = Buffer.from(rawChunk);
-      total += chunk.length;
-      if (total > MAX_DOWNLOAD_BYTES) fail('pinned source download exceeds its byte bound', 'ERR_RUNTIME_SNAPSHOT_DOWNLOAD');
-      hash.update(chunk);
-      let offset = 0;
-      while (offset < chunk.length) offset += fs.writeSync(descriptor, chunk, offset, chunk.length - offset);
-      chunk.fill(0);
+
+  const abortController = new AbortController();
+  const timeoutError = new RuntimeSnapshotArtifactError(
+    'pinned source download exceeded its elapsed-time deadline',
+    'ERR_RUNTIME_SNAPSHOT_DOWNLOAD_TIMEOUT',
+  );
+  let expired = false;
+  let rejectDeadline;
+  const deadline = new Promise((_resolve, reject) => { rejectDeadline = reject; });
+  void deadline.catch(() => {});
+  const markExpired = () => {
+    if (expired) return;
+    expired = true;
+    rejectDeadline(timeoutError);
+    abortController.abort(timeoutError);
+  };
+  const readClock = () => {
+    let observed;
+    try {
+      observed = monotonicNow();
+    } catch {
+      fail('pinned source download monotonic clock is unavailable',
+        'ERR_RUNTIME_SNAPSHOT_DOWNLOAD');
     }
+    if (typeof observed !== 'number' || !Number.isFinite(observed) || observed < 0 ||
+        observed > Number.MAX_SAFE_INTEGER - deadlineMs) {
+      fail('pinned source download monotonic clock is invalid',
+        'ERR_RUNTIME_SNAPSHOT_DOWNLOAD');
+    }
+    return observed;
+  };
+  const startedAt = readClock();
+  let lastObservedAt = startedAt;
+  const assertActive = () => {
+    if (expired) throw timeoutError;
+    const observed = readClock();
+    if (observed < lastObservedAt) {
+      fail('pinned source download monotonic clock moved backwards',
+        'ERR_RUNTIME_SNAPSHOT_DOWNLOAD');
+    }
+    lastObservedAt = observed;
+    if (observed - startedAt >= deadlineMs) {
+      markExpired();
+      throw timeoutError;
+    }
+  };
+  const timeout = setTimeout(markExpired, deadlineMs);
+  const withinDeadline = async (operation) => {
+    if (typeof operation !== 'function') {
+      fail('pinned source download operation is invalid', 'ERR_RUNTIME_SNAPSHOT_DOWNLOAD');
+    }
+    assertActive();
+    const pending = Promise.resolve().then(operation);
+    const result = await Promise.race([pending, deadline]);
+    assertActive();
+    return result;
+  };
+  let response;
+  let iterator;
+  let descriptor;
+  let created = false;
+  let succeeded = false;
+  try {
+    response = await withinDeadline(() => fetchImpl(expected, {
+      redirect: 'error',
+      signal: abortController.signal,
+    }));
+    if (!response || response.status !== 200 || response.url !== expected.href || !response.body) {
+      fail('pinned source download failed closed', 'ERR_RUNTIME_SNAPSHOT_DOWNLOAD');
+    }
+    const declaredHeader = response.headers?.get?.('content-length');
+    const declared = declaredHeader == null ? null : Number(declaredHeader);
+    if (declaredHeader != null &&
+        (!Number.isFinite(declared) || declared < 1 || declared > MAX_DOWNLOAD_BYTES)) {
+      fail('pinned source download exceeds its byte bound', 'ERR_RUNTIME_SNAPSHOT_DOWNLOAD');
+    }
+    iterator = response.body[Symbol.asyncIterator]?.();
+    if (!iterator || typeof iterator.next !== 'function') {
+      fail('pinned source download failed closed', 'ERR_RUNTIME_SNAPSHOT_DOWNLOAD');
+    }
+    descriptor = fs.openSync(destination,
+      fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL |
+        (fs.constants.O_NOFOLLOW ?? 0),
+      0o400);
+    created = true;
+    const hash = crypto.createHash('sha256');
+    let total = 0;
+    while (true) {
+      const next = await withinDeadline(() => iterator.next());
+      if (!plainObject(next) || typeof next.done !== 'boolean') {
+        fail('pinned source download failed closed', 'ERR_RUNTIME_SNAPSHOT_DOWNLOAD');
+      }
+      if (next.done) break;
+      const rawChunk = next.value;
+      const chunk = Buffer.from(rawChunk);
+      try {
+        assertActive();
+        total += chunk.length;
+        if (total > MAX_DOWNLOAD_BYTES) {
+          fail('pinned source download exceeds its byte bound', 'ERR_RUNTIME_SNAPSHOT_DOWNLOAD');
+        }
+        hash.update(chunk);
+        assertActive();
+        let offset = 0;
+        while (offset < chunk.length) {
+          const written = fs.writeSync(descriptor, chunk, offset, chunk.length - offset);
+          if (written < 1) {
+            fail('pinned source download write stopped early', 'ERR_RUNTIME_SNAPSHOT_DOWNLOAD');
+          }
+          offset += written;
+          assertActive();
+        }
+      } finally {
+        chunk.fill(0);
+      }
+    }
+    assertActive();
     fs.fsyncSync(descriptor);
-  } finally {
+    assertActive();
     fs.closeSync(descriptor);
+    descriptor = undefined;
+    assertActive();
+    const streamedHash = hash.digest('hex');
+    assertActive();
+    const retainedHash = hashRegularFile(destination, MAX_DOWNLOAD_BYTES, 'pinned source');
+    assertActive();
+    if (total < 1 || !sameHash(streamedHash, expectedSha256) ||
+        !sameHash(retainedHash, expectedSha256)) {
+      fail('pinned source digest drifted', 'ERR_RUNTIME_SNAPSHOT_DOWNLOAD');
+    }
+    succeeded = true;
+  } catch (error) {
+    if (expired) throw timeoutError;
+    if (error instanceof RuntimeSnapshotArtifactError) throw error;
+    fail('pinned source download failed closed', 'ERR_RUNTIME_SNAPSHOT_DOWNLOAD');
+  } finally {
+    clearTimeout(timeout);
+    if (!succeeded) {
+      abortController.abort(timeoutError);
+      cancelWithoutWaiting(iterator, 'return');
+      cancelWithoutWaiting(response?.body, 'cancel', timeoutError);
+      let cleanupFailed = false;
+      if (descriptor !== undefined) {
+        try { fs.closeSync(descriptor); } catch { cleanupFailed = true; }
+      }
+      if (created) {
+        try { fs.rmSync(destination, { force: true }); } catch { cleanupFailed = true; }
+        try {
+          fs.lstatSync(destination);
+          cleanupFailed = true;
+        } catch (error) {
+          if (error?.code !== 'ENOENT') cleanupFailed = true;
+        }
+      }
+      if (cleanupFailed) {
+        throw new RuntimeSnapshotArtifactError(
+          'pinned source download failed and residue cleanup was not proved',
+          'ERR_RUNTIME_SNAPSHOT_DOWNLOAD_CLEANUP',
+        );
+      }
+    }
   }
-  if (total < 1 || !sameHash(hash.digest('hex'), expectedSha256) ||
-      !sameHash(hashRegularFile(destination, MAX_DOWNLOAD_BYTES, 'pinned source'), expectedSha256)) {
-    fail('pinned source digest drifted', 'ERR_RUNTIME_SNAPSHOT_DOWNLOAD');
+}
+
+function pinnedSourceProcessResult(result) {
+  if (!plainObject(result)) return null;
+  const stdout = result.stdout ?? '';
+  const stderr = result.stderr ?? '';
+  if (typeof stdout !== 'string' || typeof stderr !== 'string' ||
+      Buffer.byteLength(stdout) > 8 * 1024 || Buffer.byteLength(stderr) > 8 * 1024) {
+    return null;
   }
+  return {
+    status: Number.isInteger(result.status) ? result.status : null,
+    signal: typeof result.signal === 'string' ? result.signal : null,
+    errorCode: typeof result.error?.code === 'string' ? result.error.code : null,
+    stdout,
+    stderr,
+  };
+}
+
+function runPinnedSourceHelper(args, timeoutMs, spawnImpl) {
+  if (typeof spawnImpl !== 'function' || !Array.isArray(args) ||
+      args.some((value) => typeof value !== 'string' || value.includes('\0'))) {
+    fail('pinned source helper invocation is invalid', 'ERR_RUNTIME_SNAPSHOT_DOWNLOAD');
+  }
+  return pinnedSourceProcessResult(spawnImpl(process.execPath, [PINNED_SOURCE_HELPER, ...args], {
+    shell: false,
+    windowsHide: true,
+    encoding: 'utf8',
+    cwd: '/',
+    env: { PATH: '/usr/bin:/bin', LANG: 'C.UTF-8', LC_ALL: 'C.UTF-8' },
+    timeout: timeoutMs,
+    killSignal: 'SIGKILL',
+    maxBuffer: 8 * 1024,
+    stdio: ['ignore', 'pipe', 'pipe'],
+  }));
+}
+
+function provePinnedPathAbsent(file, label) {
+  try {
+    fs.lstatSync(file);
+  } catch (error) {
+    if (error?.code === 'ENOENT') return;
+    fail(`${label} absence could not be proved`, 'ERR_RUNTIME_SNAPSHOT_DOWNLOAD');
+  }
+  fail(`${label} must be absent before download`, 'ERR_RUNTIME_SNAPSHOT_DOWNLOAD');
+}
+
+function pinnedSourceTarget(destination) {
+  const requested = absolute(destination, 'pinned source destination');
+  let parent;
+  let parentStat;
+  try {
+    parent = fs.realpathSync.native(path.dirname(requested));
+    parentStat = fs.lstatSync(parent);
+  } catch {
+    fail('pinned source parent custody could not be proved', 'ERR_RUNTIME_SNAPSHOT_DOWNLOAD');
+  }
+  const effectiveUid = process.geteuid?.();
+  if (!parentStat.isDirectory() || parentStat.isSymbolicLink() ||
+      !Number.isInteger(effectiveUid) || parentStat.uid !== effectiveUid ||
+      (parentStat.mode & 0o077) !== 0 || (parentStat.mode & 0o700) !== 0o700) {
+    fail('pinned source parent must be an owner-private directory',
+      'ERR_RUNTIME_SNAPSHOT_DOWNLOAD');
+  }
+  return path.join(parent, path.basename(requested));
+}
+
+function createPinnedSourceAttempt(target, randomBytes) {
+  if (typeof randomBytes !== 'function') {
+    fail('pinned source attempt entropy is unavailable', 'ERR_RUNTIME_SNAPSHOT_DOWNLOAD');
+  }
+  provePinnedPathAbsent(target, 'pinned source destination');
+  let entropy;
+  try {
+    entropy = randomBytes(16);
+  } catch {
+    fail('pinned source attempt entropy is unavailable', 'ERR_RUNTIME_SNAPSHOT_DOWNLOAD');
+  }
+  if (!Buffer.isBuffer(entropy) || entropy.length !== 16) {
+    fail('pinned source attempt entropy is malformed', 'ERR_RUNTIME_SNAPSHOT_DOWNLOAD');
+  }
+  const token = entropy.toString('hex');
+  entropy.fill(0);
+  if (!PINNED_SOURCE_ATTEMPT_TOKEN.test(token)) {
+    fail('pinned source attempt identity is malformed', 'ERR_RUNTIME_SNAPSHOT_DOWNLOAD');
+  }
+  const directory = path.join(path.dirname(target), `${PINNED_SOURCE_ATTEMPT_PREFIX}${token}`);
+  try {
+    fs.mkdirSync(directory, { recursive: false, mode: 0o700 });
+    const stat = fs.lstatSync(directory);
+    if (!stat.isDirectory() || stat.isSymbolicLink() || (stat.mode & 0o077) !== 0) {
+      fail('pinned source attempt custody could not be proved',
+        'ERR_RUNTIME_SNAPSHOT_DOWNLOAD');
+    }
+  } catch (error) {
+    if (error instanceof RuntimeSnapshotArtifactError) throw error;
+    fail('pinned source attempt could not be created exclusively',
+      'ERR_RUNTIME_SNAPSHOT_DOWNLOAD');
+  }
+  return {
+    token,
+    directory,
+    partial: path.join(directory, PINNED_SOURCE_PARTIAL_NAME),
+  };
+}
+
+function pinnedSourceAttemptAbsent(attempt) {
+  try {
+    fs.lstatSync(attempt.directory);
+    return false;
+  } catch (error) {
+    return error?.code === 'ENOENT';
+  }
+}
+
+function validatePinnedSourcePartial(attempt, expectedSha256) {
+  let stat;
+  try {
+    stat = fs.lstatSync(attempt.partial);
+  } catch {
+    fail('pinned source helper did not retain its attempt-owned result',
+      'ERR_RUNTIME_SNAPSHOT_DOWNLOAD');
+  }
+  const effectiveUid = process.geteuid?.();
+  if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || stat.size < 1 ||
+      stat.size > MAX_DOWNLOAD_BYTES || !Number.isInteger(effectiveUid) ||
+      stat.uid !== effectiveUid || (stat.mode & 0o077) !== 0 ||
+      !sameHash(hashRegularFile(attempt.partial, MAX_DOWNLOAD_BYTES, 'pinned source partial'),
+        expectedSha256)) {
+    fail('pinned source helper result failed ownership or digest validation',
+      'ERR_RUNTIME_SNAPSHOT_DOWNLOAD');
+  }
+  return stat;
+}
+
+function publishPinnedSource(attempt, target, expectedSha256) {
+  const partialStat = validatePinnedSourcePartial(attempt, expectedSha256);
+  provePinnedPathAbsent(target, 'pinned source destination');
+  try {
+    fs.linkSync(attempt.partial, target);
+    const published = fs.lstatSync(target);
+    if (!published.isFile() || published.isSymbolicLink() || published.dev !== partialStat.dev ||
+        published.ino !== partialStat.ino || published.nlink !== 2 ||
+        published.uid !== partialStat.uid || published.size !== partialStat.size) {
+      fail('pinned source publication identity drifted', 'ERR_RUNTIME_SNAPSHOT_DOWNLOAD');
+    }
+  } catch (error) {
+    try {
+      const published = fs.lstatSync(target);
+      if (published.dev === partialStat.dev && published.ino === partialStat.ino) {
+        fs.unlinkSync(target);
+      }
+    } catch (cleanupError) {
+      if (cleanupError?.code !== 'ENOENT') {
+        throw new RuntimeSnapshotArtifactError(
+          'pinned source publication failed and rollback was not proved',
+          'ERR_RUNTIME_SNAPSHOT_DOWNLOAD_CLEANUP',
+        );
+      }
+    }
+    if (error instanceof RuntimeSnapshotArtifactError) throw error;
+    fail('pinned source publication failed closed', 'ERR_RUNTIME_SNAPSHOT_DOWNLOAD');
+  }
+  return partialStat;
+}
+
+export async function downloadPinnedSnapshotSource({ url, expectedSha256, destination }, {
+  spawnImpl = spawnSync,
+  randomBytes = crypto.randomBytes,
+} = {}) {
+  let expected;
+  try {
+    expected = new URL(url);
+  } catch {
+    fail('pinned source URL is invalid', 'ERR_RUNTIME_SNAPSHOT_DOWNLOAD');
+  }
+  if (expected.protocol !== 'https:' || expected.username || expected.password || expected.hash ||
+      !HASH.test(String(expectedSha256))) {
+    fail('pinned source URL or digest is invalid', 'ERR_RUNTIME_SNAPSHOT_DOWNLOAD');
+  }
+  const target = pinnedSourceTarget(destination);
+  const attempt = createPinnedSourceAttempt(target, randomBytes);
+  const expectedSuccess = `${PINNED_SOURCE_SUCCESS} ${expectedSha256}\n`;
+  const result = runPinnedSourceHelper([
+    '--download',
+    '--url', expected.href,
+    '--expected-sha256', expectedSha256,
+    '--destination', target,
+    '--attempt-token', attempt.token,
+  ], MAX_DOWNLOAD_ELAPSED_MS, spawnImpl);
+  let publishedStat = null;
+  let primaryCode;
+  if (result?.status === 0 && result.signal === null && result.errorCode === null &&
+      result.stdout === expectedSuccess && result.stderr === '') {
+    try {
+      publishedStat = publishPinnedSource(attempt, target, expectedSha256);
+    } catch (error) {
+      primaryCode = error?.code === 'ERR_RUNTIME_SNAPSHOT_DOWNLOAD_CLEANUP'
+        ? 'ERR_RUNTIME_SNAPSHOT_DOWNLOAD_CLEANUP'
+        : 'ERR_RUNTIME_SNAPSHOT_DOWNLOAD';
+    }
+  }
+  primaryCode ??= result?.errorCode === 'ETIMEDOUT' || result?.signal === 'SIGKILL'
+    ? 'ERR_RUNTIME_SNAPSHOT_DOWNLOAD_TIMEOUT'
+    : 'ERR_RUNTIME_SNAPSHOT_DOWNLOAD';
+  const cleanup = runPinnedSourceHelper([
+    '--cleanup',
+    '--destination', target,
+    '--attempt-token', attempt.token,
+  ], DOWNLOAD_CLEANUP_TIMEOUT_MS, spawnImpl);
+  if (cleanup?.status !== 0 || cleanup.signal !== null || cleanup.errorCode !== null ||
+      cleanup.stdout !== PINNED_SOURCE_ABSENT || cleanup.stderr !== '' ||
+      !pinnedSourceAttemptAbsent(attempt)) {
+    throw new RuntimeSnapshotArtifactError(
+      `pinned source download cleanup was not proved after ${primaryCode}`,
+      'ERR_RUNTIME_SNAPSHOT_DOWNLOAD_CLEANUP',
+    );
+  }
+  if (publishedStat != null) {
+    const retained = fs.lstatSync(target);
+    if (!retained.isFile() || retained.isSymbolicLink() || retained.dev !== publishedStat.dev ||
+        retained.ino !== publishedStat.ino || retained.nlink !== 1 ||
+        !sameHash(hashRegularFile(target, MAX_DOWNLOAD_BYTES, 'pinned source'), expectedSha256)) {
+      throw new RuntimeSnapshotArtifactError(
+        'pinned source publication verification failed after cleanup',
+        'ERR_RUNTIME_SNAPSHOT_DOWNLOAD_CLEANUP',
+      );
+    }
+    return;
+  }
+  throw new RuntimeSnapshotArtifactError(
+    primaryCode === 'ERR_RUNTIME_SNAPSHOT_DOWNLOAD_TIMEOUT'
+      ? 'pinned source download exceeded its elapsed-time deadline'
+      : 'pinned source download failed closed',
+    primaryCode,
+  );
 }
 
 function copyRegular(source, destination, mode) {
@@ -512,8 +928,8 @@ import { runTaskImageProvisionerCli } from '/opt/engineer/runtime/task-image-pro
 process.exitCode = await runTaskImageProvisionerCli();
 `,
   snapshotSelfTest: `#!/usr/local/bin/node
-import { runSnapshotSelfTestCli } from '/opt/engineer/runtime/snapshot-selftest.mjs';
-try { process.exitCode = await runSnapshotSelfTestCli(); } catch { process.exitCode = 70; }
+import { runSnapshotSelfTestMain } from '/opt/engineer/runtime/snapshot-selftest.mjs';
+try { process.exitCode = await runSnapshotSelfTestMain(); } catch { process.exitCode = 70; }
 `,
 });
 
@@ -536,7 +952,13 @@ app()
 }
 
 export function pullExactImages(runDocker) {
-  for (const reference of [DAYTONA_DIND_BASE_IMAGE, NATIVE_COMPILER_IMAGE, PYTHON_BUILDER_IMAGE, UV_BUILDER_IMAGE]) {
+  for (const reference of [
+    DAYTONA_DIND_BASE_IMAGE,
+    DAYTONA_NODE_RUNTIME_IMAGE,
+    NATIVE_COMPILER_IMAGE,
+    PYTHON_BUILDER_IMAGE,
+    UV_BUILDER_IMAGE,
+  ]) {
     runDocker(['pull', '--platform', 'linux/amd64', reference], { timeoutMs: 20 * 60_000 });
     const platform = runDocker([
       'image', 'inspect', '--platform', 'linux/amd64',
@@ -546,13 +968,181 @@ export function pullExactImages(runDocker) {
   }
 }
 
-function removeBuilderContainer(runDocker, containerId) {
-  runDocker(['rm', '-f', containerId]);
+function builderRecord(runDocker, identity, commandOptions = undefined) {
+  const output = runDocker([
+    'container', 'ls', '--all', '--no-trunc',
+    '--filter', `name=^/${identity.name}$`,
+    '--format', `{{.ID}}\t{{.Names}}\t{{.Label "${BUILDER_OWNER_LABEL}"}}\t{{.Label "${BUILDER_ID_LABEL}"}}`,
+  ], commandOptions);
+  if (output === '') return null;
+  const lines = output.endsWith('\n') ? output.slice(0, -1).split('\n') : [];
+  if (lines.length !== 1) {
+    fail('Docker builder ownership lookup returned malformed output', 'ERR_RUNTIME_SNAPSHOT_DOCKER');
+  }
+  const [containerId, name, owner, token, ...extra] = lines[0].split('\t');
+  if (extra.length !== 0 || !/^[a-f0-9]{64}$/.test(containerId) || name !== identity.name) {
+    fail('Docker builder ownership lookup returned malformed output', 'ERR_RUNTIME_SNAPSHOT_DOCKER');
+  }
+  return { containerId, name, owner, token };
 }
 
-function withBuilderContainer(runDocker, createArgs, operation) {
-  const rawId = runDocker(['create', ...createArgs]).trim();
-  if (!/^[a-f0-9]{64}$/.test(rawId)) fail('Docker returned a malformed builder container identity');
+function defaultBuilderCleanupWait(milliseconds) {
+  const cell = new Int32Array(new SharedArrayBuffer(4));
+  Atomics.wait(cell, 0, 0, milliseconds);
+}
+
+function builderCleanupBackoffMs(identity, attempt) {
+  const base = Math.min(
+    BUILDER_CLEANUP_BACKOFF_MAX_MS,
+    BUILDER_CLEANUP_BACKOFF_BASE_MS * (2 ** attempt),
+  );
+  const offset = (attempt * 2) % identity.token.length;
+  const jitterByte = Number.parseInt(identity.token.slice(offset, offset + 2), 16);
+  return Math.min(
+    BUILDER_CLEANUP_BACKOFF_MAX_MS,
+    base + Math.floor((base * jitterByte) / (255 * 4)),
+  );
+}
+
+function reconcileBuilderAbsence(runDocker, identity, monotonicNow, wait) {
+  if (typeof monotonicNow !== 'function' || typeof wait !== 'function') {
+    fail('Docker builder cleanup monotonic clock is unavailable', 'ERR_RUNTIME_SNAPSHOT_DOCKER');
+  }
+  const readClock = () => {
+    let observed;
+    try { observed = monotonicNow(); } catch {
+      fail('Docker builder cleanup monotonic clock is unavailable', 'ERR_RUNTIME_SNAPSHOT_DOCKER');
+    }
+    if (typeof observed !== 'number' || !Number.isFinite(observed) || observed < 0 ||
+        observed > Number.MAX_SAFE_INTEGER - BUILDER_CLEANUP_DEADLINE_MS) {
+      fail('Docker builder cleanup monotonic clock is invalid', 'ERR_RUNTIME_SNAPSHOT_DOCKER');
+    }
+    return observed;
+  };
+  let lastObservedAt = readClock();
+  const deadlineAt = lastObservedAt + BUILDER_CLEANUP_DEADLINE_MS;
+  const remainingMs = () => {
+    const observed = readClock();
+    if (observed < lastObservedAt) {
+      fail('Docker builder cleanup monotonic clock moved backwards', 'ERR_RUNTIME_SNAPSHOT_DOCKER');
+    }
+    lastObservedAt = observed;
+    const remaining = Math.floor(deadlineAt - observed);
+    if (remaining < 1) {
+      fail('Docker builder cleanup exceeded its elapsed-time deadline',
+        'ERR_RUNTIME_SNAPSHOT_DOCKER');
+    }
+    return remaining;
+  };
+  const commandOptions = () => {
+    const remaining = remainingMs();
+    return Object.freeze({
+      timeoutMs: Math.min(BUILDER_CLEANUP_COMMAND_TIMEOUT_MS, remaining),
+    });
+  };
+  const runCleanup = (args) => {
+    const result = runDocker(args, commandOptions());
+    commandOptions();
+    return result;
+  };
+  const waitBeforeRetry = (attempt) => {
+    const remaining = remainingMs();
+    const milliseconds = Math.min(builderCleanupBackoffMs(identity, attempt), remaining - 1);
+    if (milliseconds < 1) {
+      fail('Docker builder cleanup exceeded its elapsed-time deadline',
+        'ERR_RUNTIME_SNAPSHOT_DOCKER');
+    }
+    try {
+      const result = wait(milliseconds);
+      if (result && typeof result.then === 'function') {
+        fail('Docker builder cleanup wait must be synchronous',
+          'ERR_RUNTIME_SNAPSHOT_DOCKER');
+      }
+    } catch (error) {
+      if (error instanceof RuntimeSnapshotArtifactError) throw error;
+      fail('Docker builder cleanup wait failed', 'ERR_RUNTIME_SNAPSHOT_DOCKER');
+    }
+    remainingMs();
+  };
+
+  let lastCleanupError = null;
+  let consecutiveAbsenceObservations = 0;
+  for (let attempt = 0; attempt < BUILDER_CLEANUP_ATTEMPTS; attempt += 1) {
+    let record;
+    try {
+      record = builderRecord(runDocker, identity, commandOptions());
+      commandOptions();
+    } catch (error) {
+      lastCleanupError = error;
+      consecutiveAbsenceObservations = 0;
+      if (attempt + 1 < BUILDER_CLEANUP_ATTEMPTS) waitBeforeRetry(attempt);
+      continue;
+    }
+    if (record === null) {
+      consecutiveAbsenceObservations += 1;
+      if (consecutiveAbsenceObservations >= BUILDER_CLEANUP_ABSENCE_CONFIRMATIONS) return;
+      if (attempt + 1 < BUILDER_CLEANUP_ATTEMPTS) waitBeforeRetry(attempt);
+      continue;
+    }
+    consecutiveAbsenceObservations = 0;
+    if (record.owner !== BUILDER_OWNER || record.token !== identity.token) {
+      fail('Docker builder ownership could not be proved; refusing cleanup',
+        'ERR_RUNTIME_SNAPSHOT_DOCKER');
+    }
+    try {
+      runCleanup(['rm', '-f', record.containerId]);
+    } catch (error) {
+      lastCleanupError = error;
+    }
+    // A lost remove response is ambiguous. Re-observe the exact owned name before deciding
+    // whether another remove is necessary or absence has already been achieved.
+    if (attempt + 1 < BUILDER_CLEANUP_ATTEMPTS) waitBeforeRetry(attempt);
+  }
+  const cause = lastCleanupError instanceof RuntimeSnapshotArtifactError
+    ? lastCleanupError.code
+    : 'ERR_UNKNOWN';
+  fail(`Docker builder container absence was not proved (last cause ${cause})`,
+    'ERR_RUNTIME_SNAPSHOT_DOCKER');
+}
+
+export function withBuilderContainer(runDocker, createArgs, operation, {
+  monotonicNow = () => performance.now(),
+  wait = defaultBuilderCleanupWait,
+} = {}) {
+  if (typeof runDocker !== 'function' || typeof operation !== 'function') {
+    fail('Docker builder callbacks must be functions', 'ERR_RUNTIME_SNAPSHOT_DOCKER');
+  }
+  const token = crypto.randomBytes(16).toString('hex');
+  const identity = Object.freeze({
+    name: `engineer-eval-builder-${token}`,
+    token,
+  });
+  let rawId;
+  try {
+    rawId = runDocker([
+      'create',
+      '--name', identity.name,
+      '--label', `${BUILDER_OWNER_LABEL}=${BUILDER_OWNER}`,
+      '--label', `${BUILDER_ID_LABEL}=${identity.token}`,
+      ...createArgs,
+    ]).trim();
+    if (!/^[a-f0-9]{64}$/.test(rawId)) {
+      fail('Docker returned a malformed builder container identity', 'ERR_RUNTIME_SNAPSHOT_DOCKER');
+    }
+    const created = builderRecord(runDocker, identity);
+    if (created === null || created.owner !== BUILDER_OWNER || created.token !== identity.token ||
+        created.containerId !== rawId) {
+      fail('Docker builder container identity was not proved', 'ERR_RUNTIME_SNAPSHOT_DOCKER');
+    }
+  } catch (primaryError) {
+    try {
+      reconcileBuilderAbsence(runDocker, identity, monotonicNow, wait);
+    } catch (cleanupError) {
+      throw new AggregateError([primaryError, cleanupError],
+        'builder create failed and cleanup was not confirmed');
+    }
+    throw primaryError;
+  }
   let primaryError;
   try {
     return operation(rawId);
@@ -561,7 +1151,7 @@ function withBuilderContainer(runDocker, createArgs, operation) {
     throw error;
   } finally {
     try {
-      removeBuilderContainer(runDocker, rawId);
+      reconcileBuilderAbsence(runDocker, identity, monotonicNow, wait);
     } catch (cleanupError) {
       if (primaryError) throw new AggregateError([primaryError, cleanupError], 'builder failed and cleanup was not confirmed');
       throw cleanupError;
@@ -687,11 +1277,58 @@ function verifyHarborLock(archive, workspace) {
   writeExclusive(marker, Buffer.from(`${HARBOR_SOURCE.lockSha256}\n`), 0o400);
 }
 
-function materializeNode(bundle, nodeRoot) {
-  const source = path.join(bundle.bundleDir, 'node-x64', 'bin', 'node');
-  const destination = path.join(nodeRoot, ...DAYTONA_EXECUTABLE_PATHS.node.slice(1).split('/'));
-  copyRegular(source, destination, 0o555);
-  return destination;
+export function smokeNodeRuntimeClosure(runDocker, nodeRoot) {
+  if (typeof runDocker !== 'function') {
+    fail('Node runtime smoke runner must be a function', 'ERR_RUNTIME_SNAPSHOT_NODE_ABI');
+  }
+  const closureRoot = absolute(nodeRoot, 'Node runtime closure root');
+  const mounts = NODE_RUNTIME_FILES.flatMap((record) => [
+    '--mount',
+    `type=bind,src=${path.join(closureRoot, ...record.path.split('/'))},dst=/${record.path},readonly`,
+  ]);
+  const version = runDocker([
+    'run', '--rm', '--pull', 'never', '--platform', 'linux/amd64', '--network', 'none',
+    '--read-only', '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges',
+    ...mounts,
+    '--entrypoint', DAYTONA_EXECUTABLE_PATHS.node,
+    DAYTONA_DIND_BASE_IMAGE,
+    '--version',
+  ]);
+  if (version !== 'v22.17.1\n') {
+    fail('pinned Node runtime is not executable in the DIND base', 'ERR_RUNTIME_SNAPSHOT_NODE_ABI');
+  }
+}
+
+function materializeNode(runDocker, nodeRoot, workspace) {
+  const probeRoot = path.join(workspace, 'node-runtime-abi');
+  fs.mkdirSync(probeRoot, { mode: 0o700 });
+  withBuilderContainer(runDocker, [
+    '--platform', 'linux/amd64', '--entrypoint', '/bin/true', DAYTONA_NODE_RUNTIME_IMAGE,
+  ], (containerId) => {
+    for (const [index, record] of NODE_RUNTIME_FILES.entries()) {
+      const target = path.join(probeRoot, `runtime-${index}`);
+      runDocker(['cp', '-L', `${containerId}:${record.source}`, target]);
+      const bytes = readRegular(target, 512 * 1024 * 1024, 'Node runtime file');
+      try {
+        if (bytes.length !== record.byteLength || !sameHash(sha256(bytes), record.sha256)) {
+          fail('pinned Node runtime image contents drifted', 'ERR_RUNTIME_SNAPSHOT_NODE_ABI');
+        }
+      } finally {
+        bytes.fill(0);
+      }
+      const destination = path.join(nodeRoot, ...record.path.split('/'));
+      copyRegular(target, destination, record.mode);
+      const copied = fs.lstatSync(destination);
+      if (!copied.isFile() || copied.isSymbolicLink() || copied.size !== record.byteLength ||
+          (copied.mode & 0o777) !== record.mode) {
+        fail('pinned Node runtime image contents drifted', 'ERR_RUNTIME_SNAPSHOT_NODE_ABI');
+      }
+      fs.rmSync(target);
+    }
+  });
+  smokeNodeRuntimeClosure(runDocker, nodeRoot);
+  fs.rmdirSync(probeRoot);
+  return path.join(nodeRoot, ...DAYTONA_EXECUTABLE_PATHS.node.slice(1).split('/'));
 }
 
 function materializeHarborSource(harborRoot, downloaded) {
@@ -739,7 +1376,7 @@ function snapshotDockerfile() {
     'ADD node.tar /',
     'ADD native.tar /',
     'COPY build-manifest.json /opt/engineer/snapshot/build-manifest.json',
-    'RUN addgroup -S -g 2001 engineer-runner && addgroup -S -g 2002 engineer-broker && addgroup -S -g 2003 engineer-client && adduser -S -D -H -u 2001 -G engineer-runner engineer-runner && adduser -S -D -H -u 2002 -G engineer-broker engineer-broker && addgroup engineer-runner engineer-client && mkdir -p /engineer-bounded/transport /engineer-bounded/work /engineer-bounded/evidence /engineer-bounded/broker /engineer-bounded/docker /engineer-bounded/.readiness-denial-mount /run/engineer && chown 2001:2001 /engineer-bounded/work && chown 2002:2002 /engineer-bounded/broker && chmod 0755 /engineer-bounded /engineer-bounded/transport /engineer-bounded/docker /run/engineer && chmod 0555 /engineer-bounded/.readiness-denial-mount && chmod 0700 /engineer-bounded/work /engineer-bounded/evidence /engineer-bounded/broker && chmod -R go-w /opt/engineer /usr/local/bin/node /usr/local/bin/docker /usr/local/bin/dockerd /usr/sbin/iptables /usr/sbin/ip6tables /usr/bin/sleep',
+    'RUN addgroup -S -g 2001 engineer-runner && addgroup -S -g 2002 engineer-broker && addgroup -S -g 2003 engineer-client && adduser -S -D -H -u 2001 -G engineer-runner engineer-runner && adduser -S -D -H -u 2002 -G engineer-broker engineer-broker && addgroup engineer-runner engineer-client && mkdir -p /engineer-bounded/transport /engineer-bounded/work /engineer-bounded/evidence /engineer-bounded/broker /engineer-bounded/docker /engineer-bounded/.readiness-denial-mount /run/engineer && chown 2001:2001 /engineer-bounded/work && chown 2002:2002 /engineer-bounded/broker && chmod 0755 /engineer-bounded /engineer-bounded/transport /engineer-bounded/docker /run/engineer && chmod 0555 /engineer-bounded/.readiness-denial-mount && chmod 0700 /engineer-bounded/work /engineer-bounded/evidence /engineer-bounded/broker && chmod -R go-w /opt/engineer /usr/local/bin/node /usr/local/bin/docker /usr/local/bin/dockerd /usr/sbin/iptables /usr/sbin/ip6tables /usr/bin/sleep /usr/lib/libgcc_s.so.1 /usr/lib/libstdc++.so.6',
     'ENV PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin PYTHONDONTWRITEBYTECODE=1',
     'ENTRYPOINT ["/usr/local/bin/node","/opt/engineer/runtime/snapshot-manager.mjs"]',
     '',
@@ -749,7 +1386,6 @@ function snapshotDockerfile() {
 async function prepareCodeOwnedClosures({
   workspace,
   repoRoot,
-  bundle,
   bindings,
   taskImages,
 }) {
@@ -775,10 +1411,10 @@ async function prepareCodeOwnedClosures({
   });
   verifyHarborLock(harborDownload, workspace);
   materializeHarborSource(roots.harbor, harborDownload);
-  materializeNode(bundle, roots.node);
 
   const runDocker = createDockerRunner(workspace);
   pullExactImages(runDocker);
+  materializeNode(runDocker, roots.node, workspace);
   extractBaseExecutables(runDocker, roots.runtime, workspace);
   const native = compileNativeArtifacts(runDocker, tracked.nativeSource, roots.native, workspace);
   assertStaticLinuxAmd64Elf(
@@ -841,8 +1477,10 @@ async function prepareCodeOwnedClosures({
       },
       node: {
         version: 'v22.17.1',
-        platform: 'linux-x64',
-        archiveSha256: NODE_ARCHIVE_SHA256,
+        platform: 'linux/amd64-musl',
+        runtimeImage: DAYTONA_NODE_RUNTIME_IMAGE,
+        runtimeImageDigest: DAYTONA_NODE_RUNTIME_IMAGE_DIGEST,
+        binarySha256: DAYTONA_USTAR_ATTESTED_EXECUTABLE_SHA256.node,
       },
       ...native,
     },
@@ -894,9 +1532,20 @@ export async function prepareRuntimeSnapshotArtifacts(input, { components = DEFA
     });
     if (kind === DAYTONA_NODE_USTAR_ATTESTATION.kind &&
         sameHash(closures.executables.node.sha256,
-          DAYTONA_USTAR_ATTESTED_EXECUTABLE_SHA256.node) &&
-        built.context.sha256 !== DAYTONA_NODE_USTAR_ATTESTATION.archiveSha256) {
-      fail('Node USTAR identity drifted from its code-owned pin');
+          DAYTONA_USTAR_ATTESTED_EXECUTABLE_SHA256.node)) {
+      const expected = DAYTONA_NODE_USTAR_ATTESTATION;
+      const exactEntries = built.context.entries.length === expected.entries.length &&
+        built.context.entries.every((entry, index) => {
+          const attested = expected.entries[index];
+          return entry.path === attested.path && entry.type === attested.type &&
+            entry.mode === attested.mode && entry.byteLength === attested.byteLength &&
+            entry.sha256 === attested.sha256;
+        });
+      if (built.context.kind !== expected.kind || built.context.encoding !== 'ustar' ||
+          built.context.sha256 !== expected.archiveSha256 ||
+          built.context.byteLength !== expected.byteLength || !exactEntries) {
+        fail('Node USTAR identity drifted from its code-owned pin');
+      }
     }
     const archivePath = path.join(outputDirectory, `${kind}.tar`);
     try {

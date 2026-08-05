@@ -3,6 +3,7 @@ import { test } from 'node:test';
 
 import {
   createDaytonaSessionController,
+  runDaytonaSessionCliCommand,
   validateDaytonaAllocation,
 } from '../../../evals/runtime/daytona-controller.mjs';
 
@@ -17,6 +18,7 @@ function allocation(name, overrides = {}) {
     desiredState: 'started',
     snapshot: SNAPSHOT,
     target: 'us',
+    user: 'root',
     sandboxClass: 'container',
     cpu: 2,
     // Daytona CLI reports memory in MB even though the controller accepts GiB.
@@ -63,7 +65,9 @@ function fakeDaytona() {
       return { code: 0, stdout: JSON.stringify(observed), stderr: '' };
     }
     if (args[0] === 'delete') {
-      sandboxes.delete(args[1]);
+      const observed = [...sandboxes.entries()]
+        .find(([, entry]) => entry.name === args[1] || entry.id === args[1]);
+      if (observed) sandboxes.delete(observed[0]);
       return { code: 0, stdout: '', stderr: '' };
     }
     if (args[0] === 'list') {
@@ -94,6 +98,23 @@ function controller(fake, overrides = {}) {
     ...overrides,
   });
 }
+
+test('the production Daytona session adapter hard-kills commands at their timeout', () => {
+  const calls = [];
+  const spawnImpl = (file, args, options) => {
+    calls.push({ file, args: [...args], options });
+    return { status: 0, stdout: '', stderr: '', error: null };
+  };
+
+  runDaytonaSessionCliCommand('/opt/daytona', ['info', 'sandbox-id'], {
+    timeoutMs: 1_234,
+    env: { PATH: '/usr/bin' },
+  }, spawnImpl);
+
+  assert.equal(calls[0].options.timeout, 1_234);
+  assert.equal(calls[0].options.killSignal, 'SIGKILL');
+  assert.equal(calls[0].options.shell, false);
+});
 
 test('zero-provider mode permits only zero reservations and labels fresh sandboxes credential-absent', async () => {
   const fake = fakeDaytona();
@@ -155,6 +176,7 @@ test('Daytona allocation validation binds every approved topology field', () => 
       'release-commit': RELEASE_SHA,
       'provider-secret': 'broker-only',
       'trial-id': 'trial-1',
+      'allocation-attempt': '1'.repeat(32),
     },
   });
   assert.equal(validateDaytonaAllocation(good, {
@@ -166,10 +188,13 @@ test('Daytona allocation validation binds every approved topology field', () => 
     diskGiB: 10,
     releaseSha: RELEASE_SHA,
     trialId: 'trial-1',
+    allocationAttempt: '1'.repeat(32),
   }).ok, true);
 
   for (const mutation of [
     { id: '../unsafe-sandbox-id' },
+    { user: 'daytona' },
+    { cpu: 1 },
     { memory: 4 },
     { disk: 100 },
     { env: { OPENROUTER_API_KEY: 'forbidden' } },
@@ -179,6 +204,7 @@ test('Daytona allocation validation binds every approved topology field', () => 
     { snapshot: 'other' },
     { labels: { purpose: 'other' } },
     { labels: Object.fromEntries(Object.entries(good.labels).filter(([key]) => key !== 'trial-id')) },
+    { labels: { ...good.labels, 'allocation-attempt': '2'.repeat(32) } },
   ]) {
     const verdict = validateDaytonaAllocation({ ...good, ...mutation }, {
       name: good.name,
@@ -189,6 +215,7 @@ test('Daytona allocation validation binds every approved topology field', () => 
       diskGiB: 10,
       releaseSha: RELEASE_SHA,
       trialId: 'trial-1',
+      allocationAttempt: '1'.repeat(32),
     });
     assert.equal(verdict.ok, false, JSON.stringify(mutation));
   }
@@ -206,6 +233,10 @@ test('one fresh no-env/no-volume sandbox is created per serial trial and deleted
 
   assert.equal(opened.allocation.disk, 10);
   assert.equal(opened.allocation.labels['trial-id'], 'cobol-generic-r1');
+  assert.match(opened.allocation.name, /^engineer-eval-[a-f0-9]{8}-1-[a-f0-9]{32}$/);
+  assert.match(opened.allocation.labels['allocation-attempt'], /^[a-f0-9]{32}$/);
+  assert.equal(opened.allocation.name.endsWith(opened.allocation.labels['allocation-attempt']), true,
+    'the full 128-bit allocation attempt must bind both name and ownership labels');
   assert.equal(opened.reservedUsd, 0.65);
   assert.equal(fake.sandboxes.size, 1);
   const create = fake.calls.find((entry) => entry.args[0] === 'create');
@@ -216,8 +247,10 @@ test('one fresh no-env/no-volume sandbox is created per serial trial and deleted
   assert.equal(create.args.includes('-v'), false);
   assert.equal(create.args.includes('--volume'), false);
   assert.deepEqual(create.args.slice(0, 2), ['create', '--name']);
-  assert.equal(create.args[create.args.indexOf('--disk') + 1], '10');
   assert.equal(create.args[create.args.indexOf('--snapshot') + 1], SNAPSHOT);
+  assert.equal(create.args[create.args.indexOf('--user') + 1], 'root');
+  assert.equal(['--cpu', '--memory', '--disk'].some((flag) => create.args.includes(flag)), false,
+    'resource-bound snapshots must not restate sandbox resource flags');
   assert.equal(create.args[create.args.indexOf('--ttl') + 1], '120');
 
   await assert.rejects(
@@ -241,6 +274,19 @@ test('one fresh no-env/no-volume sandbox is created per serial trial and deleted
     'deletion is confirmed against the exact sandbox id, not inferred from one list page');
   assert.equal(fake.calls.some((entry) => entry.args[0] === 'list'), false);
   assert.equal(runtime.snapshot().activeTrial, null);
+});
+
+test('the resource-bound snapshot topology rejects local resource overrides before Daytona', () => {
+  for (const overrides of [
+    { cpu: 1 },
+    { memoryGiB: 8 },
+    { diskGiB: 20 },
+  ]) {
+    const fake = fakeDaytona();
+    assert.throws(() => controller(fake, overrides), /approved|snapshot|topology|exactly/i,
+      JSON.stringify(overrides));
+    assert.equal(fake.calls.length, 0);
+  }
 });
 
 test('every Daytona CLI process receives only the explicit login, config, locale, certificate, proxy, PATH, and HOME allowlist', async () => {
@@ -368,8 +414,121 @@ test('a lost create response reconciles and deletes the sandbox created under th
   );
 
   assert.equal(fake.sandboxes.size, 0);
-  assert.ok(fake.calls.some((entry) => entry.args[0] === 'delete'),
-    'a possibly committed create is reconciled by generated sandbox name');
+  const create = fake.calls.find(({ args }) => args[0] === 'create');
+  const name = create.args[create.args.indexOf('--name') + 1];
+  const ownedId = `sandbox-${name}`;
+  const ambiguousInspectionIndex = fake.calls.findIndex(({ args }) =>
+    args[0] === 'info' && args[1] === name);
+  const deleteIndex = fake.calls.findIndex(({ args }) => args[0] === 'delete');
+  assert.ok(ambiguousInspectionIndex >= 0 && ambiguousInspectionIndex < deleteIndex,
+    'an ambiguous create must be reconciled by name before deletion');
+  assert.deepEqual(fake.calls.filter(({ args }) => args[0] === 'delete').map(({ args }) => args[1]), [ownedId]);
+  assert.ok(fake.calls.slice(deleteIndex + 1)
+    .filter(({ args }) => args[0] === 'info')
+    .every(({ args }) => args[1] === ownedId),
+    'post-delete absence proof must use only the captured immutable id');
+  assert.equal(runtime.snapshot().activeTrial, null);
+});
+
+test('a lost create response deletes the exact attempt-owned sandbox while it is still starting', async () => {
+  const fake = fakeDaytona();
+  const originalRun = fake.runCommand;
+  let ownedId;
+  fake.runCommand = async (file, args, options) => {
+    const result = await originalRun(file, args, options);
+    if (args[0] !== 'create') return result;
+    const name = args[args.indexOf('--name') + 1];
+    const owned = fake.sandboxes.get(name);
+    ownedId = owned.id;
+    fake.sandboxes.set(name, {
+      ...owned,
+      state: 'starting',
+      desiredState: 'started',
+      env: null,
+      volumes: null,
+    });
+    return { code: 70, stdout: '', stderr: 'simulated timeout while create is starting' };
+  };
+  const runtime = controller(fake);
+
+  await assert.rejects(
+    runtime.beginTrial({
+      trialId: 'lost-create-while-starting',
+      task: 'cobol-modernization',
+      condition: 'generic',
+      reservedUsd: 0.65,
+    }),
+    /sandbox creation failed/i,
+  );
+
+  assert.equal(fake.sandboxes.size, 0);
+  assert.deepEqual(
+    fake.calls.filter(({ args }) => args[0] === 'delete').map(({ args }) => args[1]),
+    [ownedId],
+  );
+  assert.equal(runtime.snapshot().activeTrial, null);
+});
+
+test('an ambiguous create refuses to delete a foreign same-name sandbox', async () => {
+  const fake = fakeDaytona();
+  const originalRun = fake.runCommand;
+  let foreign;
+  fake.runCommand = async (file, args, options) => {
+    const result = await originalRun(file, args, options);
+    if (args[0] !== 'create') return result;
+    const name = args[args.indexOf('--name') + 1];
+    const owned = fake.sandboxes.get(name);
+    foreign = allocation(name, {
+      id: `foreign-${name}`,
+      labels: { ...owned.labels, 'allocation-attempt': 'f'.repeat(32) },
+    });
+    fake.sandboxes.set(name, foreign);
+    return { code: 70, stdout: '', stderr: 'simulated ambiguous create collision' };
+  };
+  const runtime = controller(fake);
+
+  await assert.rejects(
+    runtime.beginTrial({
+      trialId: 'foreign-collision',
+      task: 'cobol-modernization',
+      condition: 'generic',
+      reservedUsd: 0.65,
+    }),
+    /ownership|foreign|reconcil|deletion was not confirmed/i,
+  );
+
+  assert.equal(fake.calls.some(({ args }) => args[0] === 'delete'), false,
+    'foreign ownership must prevent every deletion attempt');
+  assert.deepEqual([...fake.sandboxes.values()], [foreign]);
+  assert.equal(runtime.snapshot().activeTrial.cleanupPending, true);
+});
+
+test('an ambiguous create requires three exact absence observations before declaring no resource', async () => {
+  const fake = fakeDaytona();
+  const originalRun = fake.runCommand;
+  fake.runCommand = async (file, args, options = {}) => {
+    if (args[0] === 'create') {
+      fake.calls.push({ file, args: args.slice(), options: { ...options, env: { ...(options.env ?? {}) } } });
+      return { code: 70, stdout: '', stderr: 'simulated create failure before commit' };
+    }
+    return originalRun(file, args, options);
+  };
+  const runtime = controller(fake);
+
+  await assert.rejects(
+    runtime.beginTrial({
+      trialId: 'absent-ambiguous-create',
+      task: 'cobol-modernization',
+      condition: 'generic',
+      reservedUsd: 0.65,
+    }),
+    /sandbox creation failed/i,
+  );
+
+  const create = fake.calls.find(({ args }) => args[0] === 'create');
+  const name = create.args[create.args.indexOf('--name') + 1];
+  assert.equal(fake.calls.filter(({ args }) => args[0] === 'info' && args[1] === name).length, 3);
+  assert.equal(fake.calls.some(({ args }) => args[0] === 'delete'), false);
   assert.equal(runtime.snapshot().activeTrial, null);
 });
 
@@ -402,6 +561,172 @@ test('proven eventual absence remains authoritative after a lost delete response
   assert.equal(runtime.snapshot().receipts.length, 1);
 });
 
+test('cleanup never retargets a replacement sandbox after observing the original immutable id', async () => {
+  const fake = fakeDaytona();
+  const runtime = controller(fake);
+  const opened = await runtime.beginTrial({
+    trialId: 'replacement-safety',
+    task: 'cobol-modernization',
+    condition: 'generic',
+    reservedUsd: 0.65,
+  });
+  const originalName = opened.allocation.name;
+  const originalId = opened.allocation.id;
+  const replacement = allocation(originalName, { id: `${originalId}-replacement` });
+  fake.sandboxes.clear();
+  fake.sandboxes.set(originalName, replacement);
+
+  const receipt = await runtime.completeTrial({
+    trialId: 'replacement-safety',
+    evidence: { evidenceHash: '5'.repeat(64) },
+  });
+
+  const cleanupDeletes = fake.calls.filter(({ args }) => args[0] === 'delete');
+  const cleanupInspections = fake.calls.filter(({ args }) => args[0] === 'info')
+    .slice(1);
+  assert.deepEqual(cleanupDeletes.map(({ args }) => args[1]), [originalId]);
+  assert.ok(cleanupInspections.length >= 3);
+  assert.ok(cleanupInspections.every(({ args }) => args[1] === originalId),
+    'absence must be proven against the same immutable id used for deletion');
+  assert.equal(receipt.sandboxId, originalId);
+  assert.deepEqual(fake.sandboxes.get(originalName), replacement,
+    'the same-name replacement must remain untouched');
+});
+
+test('cleanup requires three consecutive absence observations after eventual absence appears', async () => {
+  const fake = fakeDaytona();
+  const originalRun = fake.runCommand;
+  let deletionRequested = false;
+  let cleanupObservations = 0;
+  fake.runCommand = async (file, args, options = {}) => {
+    if (args[0] === 'delete') {
+      deletionRequested = true;
+      fake.calls.push({ file, args: args.slice(), options: { ...options, env: { ...(options.env ?? {}) } } });
+      return { code: 0, stdout: '', stderr: '' };
+    }
+    if (deletionRequested && args[0] === 'info') {
+      cleanupObservations += 1;
+      if (cleanupObservations === 21) fake.sandboxes.clear();
+    }
+    return originalRun(file, args, options);
+  };
+  const runtime = controller(fake);
+  await runtime.beginTrial({
+    trialId: 'slow-eventual-cleanup',
+    task: 'cobol-modernization',
+    condition: 'generic',
+    reservedUsd: 0.65,
+  });
+
+  const receipt = await runtime.completeTrial({
+    trialId: 'slow-eventual-cleanup',
+    evidence: { evidenceHash: '6'.repeat(64) },
+  });
+
+  assert.equal(receipt.deleted, true);
+  assert.equal(cleanupObservations, 23);
+  assert.equal(fake.sandboxes.size, 0);
+});
+
+test('one transient not-found observation cannot authorize a deletion receipt', async () => {
+  const fake = fakeDaytona();
+  const originalRun = fake.runCommand;
+  let deletionRequested = false;
+  let cleanupObservations = 0;
+  fake.runCommand = async (file, args, options = {}) => {
+    if (args[0] === 'delete') {
+      deletionRequested = true;
+      fake.calls.push({ file, args: args.slice(), options: { ...options, env: { ...(options.env ?? {}) } } });
+      return { code: 0, stdout: '', stderr: '' };
+    }
+    if (deletionRequested && args[0] === 'info') {
+      cleanupObservations += 1;
+      if (cleanupObservations === 1) {
+        fake.calls.push({ file, args: args.slice(), options: { ...options, env: { ...(options.env ?? {}) } } });
+        return {
+          code: 1,
+          stdout: '',
+          stderr: `time="2026-08-04T20:00:00Z" level=fatal msg="Not Found: Sandbox with ID or name ${args[1]} not found"\n`,
+        };
+      }
+      if (cleanupObservations === 3) fake.sandboxes.clear();
+    }
+    return originalRun(file, args, options);
+  };
+  const runtime = controller(fake);
+  await runtime.beginTrial({
+    trialId: 'transient-absence',
+    task: 'cobol-modernization',
+    condition: 'generic',
+    reservedUsd: 0.65,
+  });
+
+  const receipt = await runtime.completeTrial({
+    trialId: 'transient-absence',
+    evidence: { evidenceHash: '7'.repeat(64) },
+  });
+
+  assert.equal(receipt.deleted, true);
+  assert.equal(cleanupObservations, 5,
+    'a reappearing sandbox resets the consecutive-absence proof');
+  assert.equal(fake.sandboxes.size, 0);
+});
+
+test('cleanup commands and waits share one decreasing monotonic deadline', async () => {
+  const fake = fakeDaytona();
+  const originalRun = fake.runCommand;
+  const cleanupTimeouts = [];
+  const cleanupSleeps = [];
+  let deletionRequested = false;
+  let cleanupObservations = 0;
+  let monotonicMs = 0;
+  fake.runCommand = async (file, args, options = {}) => {
+    if (args[0] === 'delete') {
+      deletionRequested = true;
+      cleanupTimeouts.push(options.timeoutMs);
+      fake.calls.push({ file, args: args.slice(), options: { ...options, env: { ...(options.env ?? {}) } } });
+      monotonicMs += 9_000;
+      return { code: 0, stdout: '', stderr: '' };
+    }
+    if (deletionRequested && args[0] === 'info') {
+      cleanupObservations += 1;
+      cleanupTimeouts.push(options.timeoutMs);
+      const result = await originalRun(file, args, options);
+      monotonicMs += cleanupObservations === 6 ? 3_300 : 9_000;
+      return result;
+    }
+    return originalRun(file, args, options);
+  };
+  const runtime = controller(fake, {
+    deletePollAttempts: 100,
+    deletePollIntervalMs: 500,
+    monotonicNow: () => monotonicMs,
+    sleep: async (milliseconds) => {
+      cleanupSleeps.push(milliseconds);
+      monotonicMs += milliseconds;
+    },
+  });
+  await runtime.beginTrial({
+    trialId: 'deadline-bound-cleanup',
+    task: 'cobol-modernization',
+    condition: 'generic',
+    reservedUsd: 0.65,
+  });
+
+  await assert.rejects(
+    runtime.completeTrial({
+      trialId: 'deadline-bound-cleanup',
+      evidence: { evidenceHash: '8'.repeat(64) },
+    }),
+    /deadline|elapsed-time|deletion receipt is unavailable/i,
+  );
+
+  assert.deepEqual(cleanupTimeouts, [10_000, 10_000, 10_000, 10_000, 10_000, 10_000, 3_500]);
+  assert.deepEqual(cleanupSleeps, [500, 500, 500, 500, 500, 200]);
+  assert.equal(cleanupObservations, 6, 'the deadline prevents another cleanup inspection');
+  assert.equal(runtime.snapshot().activeTrial.cleanupPending, true);
+});
+
 test('an unconfirmed completion deletion retains cleanup identity and abort retries idempotently', async () => {
   const fake = fakeDaytona();
   const originalRun = fake.runCommand;
@@ -413,7 +738,7 @@ test('an unconfirmed completion deletion retains cleanup identity and abort retr
     }
     return originalRun(file, args, options);
   };
-  const runtime = controller(fake, { deletePollAttempts: 1 });
+  const runtime = controller(fake, { deletePollAttempts: 3 });
   const opened = await runtime.beginTrial({
     trialId: 'completion-cleanup-retry',
     task: 'cobol-modernization',
@@ -471,7 +796,7 @@ test('provisioning cleanup failure is retained and dispose can retry until absen
     return originalRun(file, args, options);
   };
   const runtime = controller(fake, {
-    deletePollAttempts: 1,
+    deletePollAttempts: 3,
     provisionTrial: async () => { throw new Error('provisioning failed after allocation'); },
   });
 

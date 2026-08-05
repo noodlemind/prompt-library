@@ -9,6 +9,9 @@ import {
 import {
   DAYTONA_DIND_BASE_IMAGE,
   DAYTONA_DIND_BASE_IMAGE_DIGEST,
+  DAYTONA_NODE_RUNTIME_IMAGE,
+  DAYTONA_NODE_RUNTIME_IMAGE_DIGEST,
+  DAYTONA_USTAR_ATTESTED_EXECUTABLE_SHA256,
 } from '../../../evals/runtime/daytona-topology.mjs';
 
 const HASH = (character) => character.repeat(64);
@@ -87,8 +90,10 @@ function input(overrides = {}) {
       },
       node: {
         version: 'v22.17.1',
-        platform: 'linux-x64',
-        archiveSha256: HASH('8'),
+        platform: 'linux/amd64-musl',
+        runtimeImage: DAYTONA_NODE_RUNTIME_IMAGE,
+        runtimeImageDigest: DAYTONA_NODE_RUNTIME_IMAGE_DIGEST,
+        binarySha256: DAYTONA_USTAR_ATTESTED_EXECUTABLE_SHA256.node,
       },
       nativeHelper: {
         sourceSha256: HASH('9'),
@@ -174,6 +179,29 @@ test('snapshot manifest rejects unbound executable hashes and task reference/id 
   const bareImage = structuredClone(input());
   bareImage.taskImages['cobol-modernization'].immutableImage = `sha256:${HASH('f')}`;
   assert.throws(() => buildSnapshotBuildManifest(bareImage), /immutableImage|immutable image/i);
+});
+
+test('Node provenance rejects the multi-platform index and every Alpine runtime identity drift', () => {
+  const expected = input().provenance.node;
+  assert.deepEqual(expected, {
+    version: 'v22.17.1',
+    platform: 'linux/amd64-musl',
+    runtimeImage: DAYTONA_NODE_RUNTIME_IMAGE,
+    runtimeImageDigest: DAYTONA_NODE_RUNTIME_IMAGE_DIGEST,
+    binarySha256: DAYTONA_USTAR_ATTESTED_EXECUTABLE_SHA256.node,
+  });
+
+  for (const replacement of [
+    { runtimeImage: `node:22.17.1-alpine3.22@sha256:${HASH('0')}` },
+    { runtimeImageDigest: 'sha256:5539840ce9d013fa13e3b9814c9353024be7ac75aca5db6d039504a56c04ea59' },
+    { version: 'v22.17.2' },
+    { platform: 'linux/amd64' },
+    { binarySha256: HASH('0') },
+  ]) {
+    const candidate = structuredClone(input());
+    Object.assign(candidate.provenance.node, replacement);
+    assert.throws(() => buildSnapshotBuildManifest(candidate), /Node provenance|Alpine-compatible/i);
+  }
 });
 
 test('snapshot manifest is exact, bounded, credential-free, and binds required context kinds', () => {

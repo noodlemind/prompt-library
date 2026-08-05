@@ -59,7 +59,7 @@ function trialSpec(trialId, condition, overrides = {}) {
   };
 }
 
-function allocation(name, trialId) {
+function allocation(name, trialId, labels = {}) {
   return {
     id: `sandbox-${name}`,
     name,
@@ -67,6 +67,7 @@ function allocation(name, trialId) {
     desiredState: 'started',
     snapshot: SNAPSHOT,
     target: 'us',
+    user: 'root',
     sandboxClass: 'container',
     cpu: 2,
     // Daytona CLI reports memory in MB even though the controller accepts GiB.
@@ -80,6 +81,7 @@ function allocation(name, trialId) {
       'release-commit': RELEASE_SHA,
       'provider-secret': 'broker-only',
       'trial-id': trialId,
+      ...labels,
     },
   };
 }
@@ -94,8 +96,9 @@ function fakeDaytona() {
     }
     if (args[0] === 'create') {
       const name = args[args.indexOf('--name') + 1];
-      const trialLabel = args.find((arg) => arg.startsWith('trial-id='));
-      sandboxes.set(name, allocation(name, trialLabel.slice('trial-id='.length)));
+      const labels = Object.fromEntries(args.flatMap((arg, index) =>
+        arg === '--label' ? [args[index + 1].split(/=(.*)/s).slice(0, 2)] : []));
+      sandboxes.set(name, allocation(name, labels['trial-id'], labels));
       return { code: 0, stdout: '', stderr: '' };
     }
     if (args[0] === 'info') {
@@ -110,7 +113,9 @@ function fakeDaytona() {
       return { code: 0, stdout: JSON.stringify(observed), stderr: '' };
     }
     if (args[0] === 'delete') {
-      sandboxes.delete(args[1]);
+      const observed = [...sandboxes.entries()]
+        .find(([, entry]) => entry.name === args[1] || entry.id === args[1]);
+      if (observed) sandboxes.delete(observed[0]);
       return { code: 0, stdout: '', stderr: '' };
     }
     if (args[0] === 'list') {

@@ -4,6 +4,8 @@ import { test } from 'node:test';
 import {
   DAYTONA_DIND_BASE_IMAGE,
   DAYTONA_DIND_BASE_IMAGE_DIGEST,
+  DAYTONA_NODE_RUNTIME_IMAGE,
+  DAYTONA_NODE_RUNTIME_IMAGE_DIGEST,
   DAYTONA_NODE_USTAR_ATTESTATION,
   DAYTONA_USTAR_ATTESTED_EXECUTABLE_SHA256,
   buildDaytonaTopologyManifest,
@@ -60,21 +62,45 @@ const TASK_IMAGES = Object.freeze({
 });
 
 test('pins the exact executable identities allowed to explain credential-shaped USTAR bytes', () => {
+  assert.equal(DAYTONA_NODE_RUNTIME_IMAGE,
+    `node:22.17.1-alpine3.22@${DAYTONA_NODE_RUNTIME_IMAGE_DIGEST}`);
+  assert.equal(DAYTONA_NODE_RUNTIME_IMAGE_DIGEST,
+    'sha256:99351363debf40f3495cb7fc657a777334c3b21143e594dbfcc7de187439633c');
   assert.deepEqual(DAYTONA_USTAR_ATTESTED_EXECUTABLE_SHA256, {
-    node: 'e5207b0c9f178fe6b5caf8f5bab550b9f589a3f8e0e802165340e8bbf7f90927',
+    node: '53084676a6082c4a3141ec97a4950decc351c0295c3a83acc04a4a397df35c74',
     dockerd: '8d43fc3a858b949fc4e333b1b1d56ffbf579e74fe6ac866b662899f27a6ea74f',
     docker: 'c6a20cf0d5cd2e0efc6dce3aaa9cbd9cd7ef2a98f32aac3bfa7ff976577fab18',
   });
   assert.deepEqual(DAYTONA_NODE_USTAR_ATTESTATION, {
     kind: 'node',
-    archiveSha256: 'b641a1094bee7fa4bacd72742402eff426e0278290ea2080d6f18984bdaa91f9',
-    byteLength: 121_615_360,
-    entry: {
-      path: 'usr/local/bin/node',
-      mode: 0o555,
-      sha256: DAYTONA_USTAR_ATTESTED_EXECUTABLE_SHA256.node,
-    },
+    archiveSha256: 'b97bf72a7b32b94de07503b83a24dac3a819994778bd9c8f4365b17eef1e55e5',
+    byteLength: 127_067_136,
+    entries: [
+      {
+        path: 'usr/lib/libgcc_s.so.1',
+        type: 'file',
+        mode: 0o444,
+        byteLength: 173_920,
+        sha256: '0cd532bd6739a5419c5a14e8897ad4e9de0df77c9f4e8e6ba202e369a8c8b4e5',
+      },
+      {
+        path: 'usr/lib/libstdc++.so.6',
+        type: 'file',
+        mode: 0o444,
+        byteLength: 2_771_336,
+        sha256: '5d72f927924ae6b0b27febbab7598e0684b3cce9b377ef93315be96e11812f3a',
+      },
+      {
+        path: 'usr/local/bin/node',
+        type: 'file',
+        mode: 0o555,
+        byteLength: 124_118_992,
+        sha256: DAYTONA_USTAR_ATTESTED_EXECUTABLE_SHA256.node,
+      },
+    ],
   });
+  assert.equal(Object.isFrozen(DAYTONA_NODE_USTAR_ATTESTATION.entries), true);
+  assert.equal(DAYTONA_NODE_USTAR_ATTESTATION.entries.every(Object.isFrozen), true);
 });
 
 function options(overrides = {}) {

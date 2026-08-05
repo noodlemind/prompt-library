@@ -5,23 +5,45 @@ export const DAYTONA_RELEASE_RUNTIME_PROJECTION_SCHEMA = 'engineer-daytona-relea
 export const DAYTONA_DIND_BASE_IMAGE_DIGEST =
   'sha256:a56b3bdde89315ed2cc0e4906e582b5033d93bf20d9cb9510c2cdd4e7f7690b1';
 export const DAYTONA_DIND_BASE_IMAGE = `docker:28.3.3-dind@${DAYTONA_DIND_BASE_IMAGE_DIGEST}`;
+export const DAYTONA_NODE_RUNTIME_IMAGE_DIGEST =
+  'sha256:99351363debf40f3495cb7fc657a777334c3b21143e594dbfcc7de187439633c';
+export const DAYTONA_NODE_RUNTIME_IMAGE =
+  `node:22.17.1-alpine3.22@${DAYTONA_NODE_RUNTIME_IMAGE_DIGEST}`;
 export const DAYTONA_DIND_EXECUTABLE_SHA256 = Object.freeze({
   dockerd: '8d43fc3a858b949fc4e333b1b1d56ffbf579e74fe6ac866b662899f27a6ea74f',
   docker: 'c6a20cf0d5cd2e0efc6dce3aaa9cbd9cd7ef2a98f32aac3bfa7ff976577fab18',
 });
 export const DAYTONA_USTAR_ATTESTED_EXECUTABLE_SHA256 = Object.freeze({
-  node: 'e5207b0c9f178fe6b5caf8f5bab550b9f589a3f8e0e802165340e8bbf7f90927',
+  node: '53084676a6082c4a3141ec97a4950decc351c0295c3a83acc04a4a397df35c74',
   ...DAYTONA_DIND_EXECUTABLE_SHA256,
 });
 export const DAYTONA_NODE_USTAR_ATTESTATION = Object.freeze({
   kind: 'node',
-  archiveSha256: 'b641a1094bee7fa4bacd72742402eff426e0278290ea2080d6f18984bdaa91f9',
-  byteLength: 121_615_360,
-  entry: Object.freeze({
-    path: 'usr/local/bin/node',
-    mode: 0o555,
-    sha256: DAYTONA_USTAR_ATTESTED_EXECUTABLE_SHA256.node,
-  }),
+  archiveSha256: 'b97bf72a7b32b94de07503b83a24dac3a819994778bd9c8f4365b17eef1e55e5',
+  byteLength: 127_067_136,
+  entries: Object.freeze([
+    Object.freeze({
+      path: 'usr/lib/libgcc_s.so.1',
+      type: 'file',
+      mode: 0o444,
+      byteLength: 173_920,
+      sha256: '0cd532bd6739a5419c5a14e8897ad4e9de0df77c9f4e8e6ba202e369a8c8b4e5',
+    }),
+    Object.freeze({
+      path: 'usr/lib/libstdc++.so.6',
+      type: 'file',
+      mode: 0o444,
+      byteLength: 2_771_336,
+      sha256: '5d72f927924ae6b0b27febbab7598e0684b3cce9b377ef93315be96e11812f3a',
+    }),
+    Object.freeze({
+      path: 'usr/local/bin/node',
+      type: 'file',
+      mode: 0o555,
+      byteLength: 124_118_992,
+      sha256: DAYTONA_USTAR_ATTESTED_EXECUTABLE_SHA256.node,
+    }),
+  ]),
 });
 
 const TEN_GIB = 10 * 1024 * 1024 * 1024;
