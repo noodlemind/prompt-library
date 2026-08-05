@@ -5,6 +5,10 @@ export const DAYTONA_RELEASE_RUNTIME_PROJECTION_SCHEMA = 'engineer-daytona-relea
 export const DAYTONA_DIND_BASE_IMAGE_DIGEST =
   'sha256:a56b3bdde89315ed2cc0e4906e582b5033d93bf20d9cb9510c2cdd4e7f7690b1';
 export const DAYTONA_DIND_BASE_IMAGE = `docker:28.3.3-dind@${DAYTONA_DIND_BASE_IMAGE_DIGEST}`;
+export const DAYTONA_DIND_EXECUTABLE_SHA256 = Object.freeze({
+  dockerd: '8d43fc3a858b949fc4e333b1b1d56ffbf579e74fe6ac866b662899f27a6ea74f',
+  docker: 'c6a20cf0d5cd2e0efc6dce3aaa9cbd9cd7ef2a98f32aac3bfa7ff976577fab18',
+});
 
 const TEN_GIB = 10 * 1024 * 1024 * 1024;
 const MAX_MANIFEST_BYTES = 64 * 1024;

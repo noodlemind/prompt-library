@@ -8,6 +8,7 @@ import { createDaytonaSnapshotController } from './daytona-snapshot-controller.m
 import {
   DAYTONA_DIND_BASE_IMAGE,
   DAYTONA_DIND_BASE_IMAGE_DIGEST,
+  DAYTONA_DIND_EXECUTABLE_SHA256,
   DAYTONA_EXECUTABLE_PATHS,
 } from './daytona-topology.mjs';
 import { buildDeterministicUstar } from './deterministic-ustar.mjs';
@@ -773,6 +774,11 @@ async function prepareCodeOwnedClosures({
     'readiness denial probe binary',
   );
   const executables = executableInventory(roots);
+  for (const [name, expectedSha256] of Object.entries(DAYTONA_DIND_EXECUTABLE_SHA256)) {
+    if (!sameHash(executables[name].sha256, expectedSha256)) {
+      fail('DIND executable identity drifted from its pinned base image');
+    }
+  }
   if (!sameHash(executables.cgroupExec.sha256, native.nativeHelper.binarySha256)) {
     fail('native helper binary identity drifted after materialization');
   }
@@ -873,7 +879,12 @@ export async function prepareRuntimeSnapshotArtifacts(input, { components = DEFA
       built.bytes.fill(0);
     }
     contexts[kind] = built.context;
-    archives.push({ path: archivePath, sha256: built.context.sha256 });
+    archives.push({
+      path: archivePath,
+      sha256: built.context.sha256,
+      kind,
+      encoding: 'ustar',
+    });
   }
 
   const dockerfileBytes = readRegular(closures.dockerfilePath, MAX_DOCKERFILE_BYTES, 'snapshot Dockerfile');
@@ -901,7 +912,12 @@ export async function prepareRuntimeSnapshotArtifacts(input, { components = DEFA
   } finally {
     manifestBytes.fill(0);
   }
-  archives.push({ path: manifestPath, sha256: artifact.buildHash });
+  archives.push({
+    path: manifestPath,
+    sha256: artifact.buildHash,
+    kind: 'manifest',
+    encoding: 'snapshot-manifest',
+  });
   const identity = Object.freeze({ name: artifact.snapshotName, buildHash: artifact.buildHash });
   const receipt = validateReceipt(await implementation.ensureSnapshot({
     daytonaPath: validated.daytonaPath,

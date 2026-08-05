@@ -2,6 +2,9 @@ import crypto from 'node:crypto';
 import fs, { constants as FS_CONSTANTS } from 'node:fs';
 import path from 'node:path';
 
+import { isSensitiveArchivePath } from './archive-path-policy.mjs';
+import { hasCredentialMarker } from './credential-material.mjs';
+
 const BLOCK_BYTES = 512;
 const END_BYTES = BLOCK_BYTES * 2;
 const HARD_LIMITS = Object.freeze({
@@ -16,8 +19,6 @@ const CONTEXT_KINDS = new Set(['runtime', 'harbor', 'node', 'native']);
 const HASH = /^[a-f0-9]{64}$/;
 const MAX_CREDENTIAL_SCAN_EXEMPTIONS = 32;
 const SAFE_RELATIVE = /^(?!\/)(?!.*(?:^|\/)\.\.?$)(?!.*\/\.\.\/)[A-Za-z0-9._/+:-]+$/;
-const SENSITIVE_FILE = /(?:^|\/)(?:\.env(?:\.[^/]*)?|credentials?(?:\.(?:json|ya?ml|txt))?|id_(?:rsa|dsa|ecdsa|ed25519)|[^/]+\.(?:pem|p12|pfx|key))$/i;
-const CREDENTIAL_MATERIAL = /(?:Bearer[ \t]+[A-Za-z0-9._~+/=-]{8,}|(?<![A-Za-z0-9])sk-(?:(?:or|ant|proj)-)?[A-Za-z0-9_-]{12,}|github_pat_[A-Za-z0-9_]{8,}|gh[pousr]_[A-Za-z0-9]{8,}|xox[baprs]-[A-Za-z0-9-]{8,}|hf_[A-Za-z0-9]{12,}|AKIA[0-9A-Z]{16}|-----BEGIN [A-Z ]*PRIVATE KEY-----)/i;
 
 export class DeterministicUstarError extends Error {
   constructor(message, code = 'ERR_DETERMINISTIC_USTAR') {
@@ -111,7 +112,7 @@ function safeRelative(value) {
       !SAFE_RELATIVE.test(value) || path.posix.normalize(value) !== value || value.includes('//')) {
     fail('archive source contains a non-portable relative path', 'ERR_DETERMINISTIC_USTAR_PATH');
   }
-  if (SENSITIVE_FILE.test(value)) {
+  if (isSensitiveArchivePath(value)) {
     fail('archive source contains credential material', 'ERR_DETERMINISTIC_USTAR_SECRET');
   }
   splitUstarPath(value);
@@ -291,7 +292,7 @@ function readStableFile(record, expectedSha256) {
       fail('credential scan exemption digest does not match the stable file identity',
         'ERR_DETERMINISTIC_USTAR_EXEMPTION');
     }
-    if (CREDENTIAL_MATERIAL.test(bytes.toString('latin1')) && expectedSha256 === undefined) {
+    if (hasCredentialMarker(bytes) && expectedSha256 === undefined) {
       bytes.fill(0);
       fail('archive source contains credential material', 'ERR_DETERMINISTIC_USTAR_SECRET');
     }

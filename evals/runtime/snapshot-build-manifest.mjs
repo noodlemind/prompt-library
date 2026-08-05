@@ -4,6 +4,7 @@ import {
   DAYTONA_DIND_BASE_IMAGE,
   DAYTONA_DIND_BASE_IMAGE_DIGEST,
 } from './daytona-topology.mjs';
+import { isSensitiveArchivePath } from './archive-path-policy.mjs';
 
 export const SNAPSHOT_BUILD_MANIFEST_SCHEMA = 'engineer-daytona-snapshot-build-manifest.v1';
 
@@ -124,7 +125,8 @@ function safeId(value, label) {
 function relativePath(value, label) {
   if (typeof value !== 'string' || value.length < 1 || value.length > 512 || value.includes('\0') ||
       value.includes('\\') || !SAFE_RELATIVE.test(value) || value.startsWith('../') || value.includes('/../') ||
-      value.includes('//') || value.endsWith('/.') || value.endsWith('/..')) {
+      value.includes('//') || value.endsWith('/.') || value.endsWith('/..') ||
+      isSensitiveArchivePath(value)) {
     fail(`${label} must be a normalized bounded relative path`);
   }
   return value;

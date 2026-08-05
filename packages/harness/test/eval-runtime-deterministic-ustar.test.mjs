@@ -165,9 +165,18 @@ test('rejects empty, linked, special, unsafe, credential-bearing, and oversized 
   });
 
   await t.test('credential content', () => {
-    const root = temporaryDirectory();
-    fs.writeFileSync(path.join(root, 'config'), 'OPENROUTER_API_KEY=sk-proj-abcdefghijklmno\n');
-    assert.throws(() => buildDeterministicUstar({ kind: 'runtime', root }), /credential|secret/i);
+    for (const content of [
+      'OPENROUTER_API_KEY=sk-proj-abcdefghijklmno\n',
+      'OPENROUTER_API_KEY=sk-proj-abcdefgh\n',
+      'LEGACY_API_KEY=(sk-abcdefghijkl)\n',
+      `Authorization: Bearer${' '.repeat(9)}abcdefgh\n`,
+      `-----BEGIN ${'A'.repeat(64)}PRIVATE KEY-----\n`,
+      `-----BEGIN ${'A'.repeat(65)}PRIVATE KEY-----\n`,
+    ]) {
+      const root = temporaryDirectory();
+      fs.writeFileSync(path.join(root, 'config'), content);
+      assert.throws(() => buildDeterministicUstar({ kind: 'runtime', root }), /credential|secret/i);
+    }
   });
 
   await t.test('token-prefix substrings inside ordinary task names', () => {
@@ -307,6 +316,14 @@ test('permits credential-shaped executable bytes only through an exact path and 
         root,
         credentialScanExemptions: [{ path: 'credentials.json', sha256: sha256(credentialLikeBytes) }],
       }),
+      (error) => error?.code === 'ERR_DETERMINISTIC_USTAR_SECRET',
+    );
+
+    const nestedRoot = temporaryDirectory();
+    fs.mkdirSync(path.join(nestedRoot, '.env'));
+    fs.writeFileSync(path.join(nestedRoot, '.env', 'payload'), 'ordinary');
+    assert.throws(
+      () => buildDeterministicUstar({ kind: 'runtime', root: nestedRoot }),
       (error) => error?.code === 'ERR_DETERMINISTIC_USTAR_SECRET',
     );
   });

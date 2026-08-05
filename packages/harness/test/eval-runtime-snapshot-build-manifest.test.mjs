@@ -193,4 +193,12 @@ test('snapshot manifest is exact, bounded, credential-free, and binds required c
   const duplicatePath = structuredClone(input());
   duplicatePath.contexts.runtime.entries.push({ ...duplicatePath.contexts.runtime.entries[0] });
   assert.throws(() => buildSnapshotBuildManifest(duplicatePath), /duplicate.*path/i);
+
+  const sensitivePath = structuredClone(input());
+  sensitivePath.contexts.harbor.entries[0].path = 'credentials.json';
+  assert.throws(() => buildSnapshotBuildManifest(sensitivePath), /relative path|credential|sensitive/i);
+
+  const sensitiveDirectory = structuredClone(input());
+  sensitiveDirectory.contexts.harbor.entries[0].path = '.env/payload';
+  assert.throws(() => buildSnapshotBuildManifest(sensitiveDirectory), /relative path|credential|sensitive/i);
 });

@@ -8,43 +8,186 @@ import { test } from 'node:test';
 import {
   createDaytonaSnapshotController,
 } from '../../../evals/runtime/daytona-snapshot-controller.mjs';
+import { hasCredentialMarker } from '../../../evals/runtime/credential-material.mjs';
+import { buildDeterministicUstar } from '../../../evals/runtime/deterministic-ustar.mjs';
+import { buildSnapshotBuildManifest } from '../../../evals/runtime/snapshot-build-manifest.mjs';
+import {
+  DAYTONA_DIND_BASE_IMAGE,
+  DAYTONA_DIND_BASE_IMAGE_DIGEST,
+} from '../../../evals/runtime/daytona-topology.mjs';
 
-const BUILD_HASH = 'a'.repeat(64);
-const SNAPSHOT_NAME = `engineer-eval-${BUILD_HASH.slice(0, 32)}`;
-const SANDBOX_NAME = `${SNAPSHOT_NAME}-selftest`;
+const HASH = (character) => character.repeat(64);
 
 function sha256(value) {
   return crypto.createHash('sha256').update(value).digest('hex');
+}
+
+function removeQuarantinedCustody(directory) {
+  if (!directory || !fs.existsSync(directory)) return;
+  assert.match(path.basename(directory), /^engineer-snapshot-custody-[A-Za-z0-9]+$/);
+  fs.chmodSync(directory, 0o700);
+  fs.rmSync(directory, { recursive: true, force: false });
 }
 
 function files(t, overrides = {}) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'daytona-snapshot-controller-'));
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
   const dockerfilePath = path.join(directory, 'Dockerfile');
-  const firstPath = path.join(directory, 'a-runtime.tar');
-  const secondPath = path.join(directory, 'z-native.tar');
-  const dockerfile = overrides.dockerfile ?? 'FROM scratch\nCOPY a-runtime.tar /runtime.tar\n';
+  const dockerfile = overrides.dockerfile ?? [
+    'FROM scratch',
+    'ADD runtime.tar /',
+    'ADD harbor.tar /',
+    'ADD node.tar /',
+    'ADD native.tar /',
+    'COPY build-manifest.json /opt/engineer/snapshot/build-manifest.json',
+    '',
+  ].join('\n');
   const first = overrides.first ?? 'deterministic runtime archive';
   const second = overrides.second ?? 'deterministic native archive';
   fs.writeFileSync(dockerfilePath, dockerfile);
-  fs.writeFileSync(firstPath, first);
-  fs.writeFileSync(secondPath, second);
+
+  const definition = Buffer.from('{"schema":"test-runtime-definition"}\n');
+  const contextInputs = {
+    runtime: [
+      ['opt/engineer/snapshot/snapshot-definition.json', definition, false],
+      ['runtime/bin/tool', first, true],
+    ],
+    harbor: [['harbor/bin/tool', 'harbor', true]],
+    node: [['node/bin/tool', 'node', true]],
+    native: [['native/bin/tool', second, true]],
+  };
+  const contexts = {};
+  const archiveRecords = [];
+  for (const [kind, entries] of Object.entries(contextInputs)) {
+    const root = path.join(directory, `source-${kind}`);
+    const exemptions = [];
+    for (const [relative, content, executable] of entries) {
+      const target = path.join(root, ...relative.split('/'));
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.writeFileSync(target, content);
+      fs.chmodSync(target, executable ? 0o755 : 0o644);
+      const bytes = Buffer.isBuffer(content) ? content : Buffer.from(content);
+      if (executable && hasCredentialMarker(bytes)) {
+        exemptions.push({ path: relative, sha256: sha256(bytes) });
+      }
+    }
+    const built = buildDeterministicUstar({
+      kind,
+      root,
+      ...(exemptions.length > 0 ? { credentialScanExemptions: exemptions } : {}),
+    });
+    const archivePath = path.join(directory, `${kind}.tar`);
+    fs.writeFileSync(archivePath, built.bytes);
+    contexts[kind] = built.context;
+    archiveRecords.push({
+      path: archivePath,
+      sha256: built.context.sha256,
+      kind,
+      encoding: 'ustar',
+    });
+  }
+
+  const runtimeTool = contexts.runtime.entries.find((entry) => entry.path === 'runtime/bin/tool');
+  const nativeTool = contexts.native.entries.find((entry) => entry.path === 'native/bin/tool');
+  const artifact = buildSnapshotBuildManifest({
+    dockerfile: { byteLength: Buffer.byteLength(dockerfile), sha256: sha256(dockerfile) },
+    definition: { byteLength: definition.length, sha256: sha256(definition) },
+    contexts,
+    executables: {
+      supervisor: {
+        path: '/opt/engineer/bin/engineer-runtime-supervisor',
+        sha256: runtimeTool.sha256,
+        context: 'runtime',
+        sourcePath: runtimeTool.path,
+      },
+      snapshotSelfTest: {
+        path: '/opt/engineer/bin/engineer-snapshot-selftest',
+        sha256: nativeTool.sha256,
+        context: 'native',
+        sourcePath: nativeTool.path,
+      },
+      taskIsolationProbe: {
+        path: '/opt/engineer/bin/engineer-task-isolation-probe',
+        sha256: nativeTool.sha256,
+        context: 'native',
+        sourcePath: nativeTool.path,
+      },
+      readinessDenialProbe: {
+        path: '/opt/engineer/bin/engineer-readiness-denial-probe',
+        sha256: nativeTool.sha256,
+        context: 'native',
+        sourcePath: nativeTool.path,
+      },
+    },
+    provenance: {
+      baseImage: { reference: DAYTONA_DIND_BASE_IMAGE, digest: DAYTONA_DIND_BASE_IMAGE_DIGEST },
+      harbor: {
+        version: 'v0.20.0',
+        commit: '459ff6ec99417589b7f679d14ddf3b3f0ae4f1dc',
+        lockSha256: HASH('7'),
+      },
+      node: { version: 'v22.17.1', platform: 'linux-x64', archiveSha256: HASH('8') },
+      nativeHelper: {
+        sourceSha256: HASH('9'),
+        compilerImage: `alpine:3.22@sha256:${HASH('b')}`,
+        compilerImageDigest: `sha256:${HASH('b')}`,
+        binarySha256: nativeTool.sha256,
+      },
+      taskIsolationProbe: {
+        sourceSha256: HASH('a'),
+        compilerImage: `alpine:3.22@sha256:${HASH('b')}`,
+        compilerImageDigest: `sha256:${HASH('b')}`,
+        binarySha256: nativeTool.sha256,
+        platform: 'linux/amd64',
+        artifactPath: '/opt/engineer/bin/engineer-task-isolation-probe',
+      },
+      readinessDenialProbe: {
+        sourceSha256: HASH('a'),
+        compilerImage: `alpine:3.22@sha256:${HASH('b')}`,
+        compilerImageDigest: `sha256:${HASH('b')}`,
+        binarySha256: nativeTool.sha256,
+        platform: 'linux/amd64',
+        artifactPath: '/opt/engineer/bin/engineer-readiness-denial-probe',
+      },
+    },
+    bindings: {
+      releaseSha: 'c'.repeat(40), taskLockHash: HASH('c'), bundleHash: HASH('d'),
+      budgetPolicyHash: HASH('e'), brokerPolicyHash: HASH('f'),
+      profileId: 'kimi-k2.7-code', sessionCeilingMicrousd: 1_300_000,
+    },
+    taskImages: {
+      'cobol-modernization': {
+        immutableImage: `alexgshaw/cobol-modernization@sha256:${HASH('f')}`,
+        imageId: `sha256:${HASH('f')}`,
+        platform: 'linux/amd64', cpus: 1, memoryMb: 2048, storageMb: 10240,
+      },
+    },
+  });
+  const manifestPath = path.join(directory, 'build-manifest.json');
+  fs.writeFileSync(manifestPath, artifact.canonicalJson);
+  archiveRecords.push({
+    path: manifestPath,
+    sha256: artifact.buildHash,
+    kind: 'manifest',
+    encoding: 'snapshot-manifest',
+  });
+  const orderedArchives = [...archiveRecords]
+    .sort((left, right) => path.basename(left.path).localeCompare(path.basename(right.path)))
+    .map((record) => record.path);
   return {
     dockerfile,
     dockerfilePath,
-    archives: [
-      { path: secondPath, sha256: sha256(second) },
-      { path: firstPath, sha256: sha256(first) },
-    ],
-    orderedArchives: [firstPath, secondPath],
-    orderedHashes: [sha256(first), sha256(second)],
+    archives: archiveRecords,
+    orderedArchives,
+    identity: { name: artifact.snapshotName, buildHash: artifact.buildHash },
+    sandboxNamePrefix: `${artifact.snapshotName}-selftest-`,
   };
 }
 
 function snapshotRecord(input, overrides = {}) {
   return {
-    id: `snapshot-${BUILD_HASH.slice(0, 16)}`,
-    name: SNAPSHOT_NAME,
+    id: `snapshot-${input.identity.buildHash.slice(0, 16)}`,
+    name: input.identity.name,
     state: 'active',
     cpu: 2,
     mem: 4,
@@ -67,11 +210,11 @@ function fillerRecord(index) {
   };
 }
 
-function sandboxRecord(overrides = {}) {
+function sandboxRecord(input, overrides = {}) {
   return {
     id: 'sandbox-validation-0001',
-    name: SANDBOX_NAME,
-    snapshot: SNAPSHOT_NAME,
+    name: input.sandboxName,
+    snapshot: input.identity.name,
     state: 'started',
     desiredState: 'started',
     target: 'us',
@@ -98,7 +241,7 @@ function exactNotFound(identity) {
 function fakeDaytona(input, {
   initialSnapshots = [],
   mode = null,
-  selfTestStdout = `ENGINEER-SNAPSHOT/1 ${BUILD_HASH}\n`,
+  selfTestStdout = null,
 } = {}) {
   const calls = [];
   const snapshots = [...initialSnapshots];
@@ -135,7 +278,7 @@ function fakeDaytona(input, {
     if (args[0] === 'snapshot' && args[1] === 'delete') {
       snapshotDeleteAttempted = true;
       if (mode !== 'snapshot-cleanup-stuck') {
-        const index = snapshots.findIndex((entry) => entry.name === args[2]);
+        const index = snapshots.findIndex((entry) => entry.id === args[2] || entry.name === args[2]);
         if (index >= 0) snapshots.splice(index, 1);
       }
       if (mode === 'snapshot-cleanup-command') {
@@ -145,7 +288,7 @@ function fakeDaytona(input, {
     }
 
     if (args[0] === 'create') {
-      sandbox = sandboxRecord();
+      sandbox = sandboxRecord(input, { name: args[args.indexOf('--name') + 1] });
       if (mode === 'sandbox-create') return { code: 70, stdout: '', stderr: 'partial sandbox failure' };
       return { code: 0, stdout: '', stderr: '' };
     }
@@ -154,7 +297,11 @@ function fakeDaytona(input, {
       if (mode === 'selftest') return { code: 70, stdout: 'failed detail', stderr: 'selftest failure' };
       if (mode === 'selftest-secret') return { code: 0, stdout: 'sk-or-v1-never-retain-this', stderr: '' };
       if (mode === 'selftest-mismatch') return { code: 0, stdout: `ENGINEER-SNAPSHOT/1 ${'b'.repeat(64)}\n`, stderr: '' };
-      return { code: 0, stdout: selfTestStdout, stderr: '' };
+      return {
+        code: 0,
+        stdout: selfTestStdout ?? `ENGINEER-SNAPSHOT/1 ${input.identity.buildHash}\n`,
+        stderr: '',
+      };
     }
 
     if (args[0] === 'info') {
@@ -166,7 +313,7 @@ function fakeDaytona(input, {
           return { code: 0, stdout: '{not-json', stderr: '' };
         }
         const observed = mode === 'sandbox-inspect'
-          ? sandboxRecord({ snapshot: 'wrong-snapshot' })
+          ? { ...sandbox, snapshot: 'wrong-snapshot' }
           : sandbox;
         return { code: 0, stdout: JSON.stringify(observed), stderr: '' };
       }
@@ -206,7 +353,7 @@ function controller(fake, overrides = {}) {
 
 function request(input, overrides = {}) {
   return {
-    identity: { name: SNAPSHOT_NAME, buildHash: BUILD_HASH },
+    identity: input.identity,
     dockerfilePath: input.dockerfilePath,
     archives: input.archives,
     ...overrides,
@@ -231,48 +378,54 @@ test('creates, validates, and retains one content-addressed snapshot with exact 
 
   assert.deepEqual(fake.calls[0], ['--version']);
   assert.deepEqual(fake.calls[1], ['snapshot', 'list', '--format', 'json', '--limit', '200', '--page', '1']);
-  assert.deepEqual(fake.calls[2], [
-    'snapshot', 'create', SNAPSHOT_NAME,
-    '--dockerfile', input.dockerfilePath,
-    '--context', input.orderedArchives[0],
-    '--context', input.orderedArchives[1],
-    '--cpu', '2',
-    '--memory', '4',
-    '--disk', '10',
-    '--region', 'us',
+  const createCall = fake.calls[2];
+  assert.deepEqual(createCall.slice(0, 3), ['snapshot', 'create', input.identity.name]);
+  const dockerfileArgument = createCall[createCall.indexOf('--dockerfile') + 1];
+  assert.equal(path.basename(dockerfileArgument), 'Dockerfile');
+  assert.notEqual(dockerfileArgument, input.dockerfilePath);
+  const contextArguments = createCall.flatMap((value, index) =>
+    createCall[index - 1] === '--context' ? [value] : []);
+  assert.deepEqual(contextArguments.map((value) => path.basename(value)), [
+    'build-manifest.json', 'harbor.tar', 'native.tar', 'node.tar', 'runtime.tar',
+  ]);
+  assert.equal(contextArguments.some((value) => input.orderedArchives.includes(value)), false);
+  assert.deepEqual(createCall.slice(-10), [
+    '--cpu', '2', '--memory', '4', '--disk', '10', '--region', 'us',
     '--sandbox-class', 'container',
   ]);
   assert.deepEqual(fake.calls[3], ['snapshot', 'list', '--format', 'json', '--limit', '200', '--page', '1']);
+  const sandboxName = fake.calls[4][2];
+  assert.match(sandboxName, new RegExp(`^${input.sandboxNamePrefix}[a-f0-9]{32}$`));
   assert.deepEqual(fake.calls[4], [
-    'create', '--name', SANDBOX_NAME, '--snapshot', SNAPSHOT_NAME,
+    'create', '--name', sandboxName, '--snapshot', input.identity.name,
     '--cpu', '2', '--memory', '4096', '--disk', '10', '--target', 'us',
     '--network-block-all', '--auto-stop', '0', '--ttl', '30',
   ]);
   assert.deepEqual(fake.calls[5], [
-    'exec', SANDBOX_NAME, '--',
-    '/opt/engineer/bin/engineer-snapshot-selftest', '--expected-build-hash', BUILD_HASH,
+    'exec', sandboxName, '--',
+    '/opt/engineer/bin/engineer-snapshot-selftest', '--expected-build-hash', input.identity.buildHash,
   ]);
-  assert.deepEqual(fake.calls[6], ['info', SANDBOX_NAME, '--format', 'json']);
+  assert.deepEqual(fake.calls[6], ['info', sandboxName, '--format', 'json']);
   assert.deepEqual(fake.calls[7], ['delete', 'sandbox-validation-0001']);
   assert.deepEqual(fake.calls[8], ['info', 'sandbox-validation-0001', '--format', 'json']);
   assert.equal(fake.calls.some((args) => args[0] === 'snapshot' && args[1] === 'delete'), false);
 
   assert.deepEqual(receipt, {
     schema: 'engineer-daytona-snapshot-lifecycle-receipt.v1',
-    name: SNAPSHOT_NAME,
-    snapshotId: `snapshot-${BUILD_HASH.slice(0, 16)}`,
-    buildHash: BUILD_HASH,
+    name: input.identity.name,
+    snapshotId: `snapshot-${input.identity.buildHash.slice(0, 16)}`,
+    buildHash: input.identity.buildHash,
     status: 'active',
     created: true,
     retained: true,
-    archiveCount: 2,
+    archiveCount: 5,
     validation: {
       performed: true,
       sandboxId: 'sandbox-validation-0001',
       networkBlocked: true,
       selfTestExitCode: 0,
-      selfTestStdoutBytes: Buffer.byteLength(`ENGINEER-SNAPSHOT/1 ${BUILD_HASH}\n`),
-      selfTestStdoutSha256: sha256(`ENGINEER-SNAPSHOT/1 ${BUILD_HASH}\n`),
+      selfTestStdoutBytes: Buffer.byteLength(`ENGINEER-SNAPSHOT/1 ${input.identity.buildHash}\n`),
+      selfTestStdoutSha256: sha256(`ENGINEER-SNAPSHOT/1 ${input.identity.buildHash}\n`),
       selfTestStderrBytes: 0,
       selfTestStderrSha256: sha256(''),
       sandboxDeleted: true,
@@ -283,6 +436,156 @@ test('creates, validates, and retains one content-addressed snapshot with exact 
   assert.equal(input.orderedArchives.some((archivePath) => serialized.includes(archivePath)), false);
 });
 
+test('custodies verified files through snapshot creation instead of reopening caller paths', async (t) => {
+  const input = files(t);
+  const original = fs.readFileSync(input.orderedArchives[0]);
+  const fake = fakeDaytona(input);
+  const originalRun = fake.runCommand;
+  let custodyPaths = [];
+  fake.runCommand = async (args) => {
+    if (args[0] === 'snapshot' && args[1] === 'create') {
+      custodyPaths = args.flatMap((value, index) => args[index - 1] === '--context' ? [value] : []);
+      assert.equal(custodyPaths.includes(input.orderedArchives[0]), false);
+      fs.writeFileSync(input.orderedArchives[0], 'replacement contains sk-proj-abcdefghijklmnop');
+      assert.deepEqual(fs.readFileSync(custodyPaths[0]), original);
+    }
+    return originalRun(args);
+  };
+
+  await controller(fake).ensureSnapshot(request(input));
+  assert.ok(custodyPaths.length > 0);
+  assert.equal(custodyPaths.every((file) => !fs.existsSync(file)), true);
+});
+
+test('detects custody mutation during snapshot upload, rolls back, and quarantines custody', async (t) => {
+  const input = files(t);
+  const fake = fakeDaytona(input);
+  const originalRun = fake.runCommand;
+  let mutatedPath = null;
+  t.after(() => removeQuarantinedCustody(mutatedPath && path.dirname(mutatedPath)));
+  fake.runCommand = async (args) => {
+    const result = await originalRun(args);
+    if (args[0] === 'snapshot' && args[1] === 'create') {
+      mutatedPath = args[args.indexOf('--context') + 1];
+      fs.chmodSync(mutatedPath, 0o600);
+      fs.writeFileSync(mutatedPath, 'changed during upload');
+    }
+    return result;
+  };
+
+  await assert.rejects(
+    controller(fake).ensureSnapshot(request(input)),
+    /custody|changed|rollback/i,
+  );
+  assert.equal(fake.snapshotDeleteAttempted, true);
+  assert.ok(mutatedPath);
+  assert.equal(fs.existsSync(path.dirname(mutatedPath)), true);
+});
+
+test('does not follow a substituted custody directory during rollback cleanup', async (t) => {
+  const input = files(t);
+  const fake = fakeDaytona(input);
+  const originalRun = fake.runCommand;
+  const victim = fs.mkdtempSync(path.join(os.tmpdir(), 'snapshot-cleanup-victim-'));
+  const sentinel = path.join(victim, 'sentinel');
+  fs.writeFileSync(sentinel, 'retain');
+  let custodyDirectory = null;
+  let retainedDirectory = null;
+  t.after(() => {
+    if (custodyDirectory && fs.lstatSync(custodyDirectory, { throwIfNoEntry: false })?.isSymbolicLink()) {
+      fs.unlinkSync(custodyDirectory);
+    }
+    if (retainedDirectory && fs.existsSync(retainedDirectory)) {
+      fs.chmodSync(retainedDirectory, 0o700);
+      fs.rmSync(retainedDirectory, { recursive: true, force: true });
+    }
+    fs.rmSync(victim, { recursive: true, force: true });
+  });
+  fake.runCommand = async (args) => {
+    const result = await originalRun(args);
+    if (args[0] === 'snapshot' && args[1] === 'create') {
+      custodyDirectory = path.dirname(args[args.indexOf('--context') + 1]);
+      retainedDirectory = `${custodyDirectory}-retained`;
+      fs.renameSync(custodyDirectory, retainedDirectory);
+      fs.symlinkSync(victim, custodyDirectory, 'dir');
+    }
+    return result;
+  };
+
+  await assert.rejects(
+    controller(fake).ensureSnapshot(request(input)),
+    /custody|changed|rollback|cleanup/i,
+  );
+  assert.equal(fake.snapshotDeleteAttempted, true);
+  assert.equal(fs.readFileSync(sentinel, 'utf8'), 'retain');
+  assert.equal(fs.lstatSync(custodyDirectory).isSymbolicLink(), true);
+  assert.equal(fs.existsSync(retainedDirectory), true);
+});
+
+test('revalidates custody immediately before upload and starts no snapshot after earlier drift', async (t) => {
+  const input = files(t);
+  const existingCustody = new Set(fs.readdirSync(os.tmpdir())
+    .filter((name) => name.startsWith('engineer-snapshot-custody-')));
+  const fake = fakeDaytona(input);
+  const originalRun = fake.runCommand;
+  let custodyDirectory = null;
+  t.after(() => removeQuarantinedCustody(custodyDirectory));
+  fake.runCommand = async (args) => {
+    if (args[0] === 'snapshot' && args[1] === 'list' && custodyDirectory === null) {
+      const candidate = fs.readdirSync(os.tmpdir())
+        .find((name) => name.startsWith('engineer-snapshot-custody-') && !existingCustody.has(name));
+      assert.ok(candidate);
+      custodyDirectory = path.join(os.tmpdir(), candidate);
+      fs.chmodSync(custodyDirectory, 0o700);
+      const runtime = path.join(custodyDirectory, 'runtime.tar');
+      fs.chmodSync(runtime, 0o600);
+      fs.writeFileSync(runtime, 'changed before upload');
+    }
+    return originalRun(args);
+  };
+
+  await assert.rejects(
+    controller(fake).ensureSnapshot(request(input)),
+    /custody|changed|lifecycle/i,
+  );
+  assert.equal(fake.calls.some((args) => args[0] === 'snapshot' && args[1] === 'create'), false);
+  assert.ok(custodyDirectory);
+  assert.equal(fs.existsSync(custodyDirectory), true);
+});
+
+test('rejects a marker-free malformed archive before Daytona', async (t) => {
+  const input = files(t);
+  const runtime = input.archives.find((record) => record.kind === 'runtime');
+  const corrupted = fs.readFileSync(runtime.path);
+  corrupted[0] ^= 0x01;
+  fs.writeFileSync(runtime.path, corrupted);
+  runtime.sha256 = sha256(corrupted);
+  const fake = fakeDaytona(input);
+  await assert.rejects(
+    controller(fake).ensureSnapshot(request(input)),
+    /archive|ustar|deterministic|credential/i,
+  );
+  assert.equal(fake.calls.length, 0);
+});
+
+test('removes a partial custody inventory when preparation fails', async (t) => {
+  const input = files(t);
+  const before = new Set(fs.readdirSync(os.tmpdir())
+    .filter((name) => name.startsWith('engineer-snapshot-custody-')));
+  const malformedArchives = input.archives.map((record) => record.kind === 'node'
+    ? { ...record, path: path.dirname(input.dockerfilePath) }
+    : record);
+  const fake = fakeDaytona(input);
+  await assert.rejects(
+    controller(fake).ensureSnapshot(request(input, { archives: malformedArchives })),
+    /regular file|custody|context/i,
+  );
+  const after = fs.readdirSync(os.tmpdir())
+    .filter((name) => name.startsWith('engineer-snapshot-custody-') && !before.has(name));
+  assert.deepEqual(after, []);
+  assert.equal(fake.calls.length, 0);
+});
+
 test('paginates and revalidates an exact active content-addressed snapshot before reuse', async (t) => {
   const input = files(t);
   const records = Array.from({ length: 200 }, (_, index) => fillerRecord(index));
@@ -291,20 +594,22 @@ test('paginates and revalidates an exact active content-addressed snapshot befor
 
   const receipt = await controller(fake).ensureSnapshot(request(input));
 
+  const sandboxName = fake.calls[3][2];
+  assert.match(sandboxName, new RegExp(`^${input.sandboxNamePrefix}[a-f0-9]{32}$`));
   assert.deepEqual(fake.calls, [
     ['--version'],
     ['snapshot', 'list', '--format', 'json', '--limit', '200', '--page', '1'],
     ['snapshot', 'list', '--format', 'json', '--limit', '200', '--page', '2'],
     [
-      'create', '--name', SANDBOX_NAME, '--snapshot', SNAPSHOT_NAME,
+      'create', '--name', sandboxName, '--snapshot', input.identity.name,
       '--cpu', '2', '--memory', '4096', '--disk', '10', '--target', 'us',
       '--network-block-all', '--auto-stop', '0', '--ttl', '30',
     ],
     [
-      'exec', SANDBOX_NAME, '--',
-      '/opt/engineer/bin/engineer-snapshot-selftest', '--expected-build-hash', BUILD_HASH,
+      'exec', sandboxName, '--',
+      '/opt/engineer/bin/engineer-snapshot-selftest', '--expected-build-hash', input.identity.buildHash,
     ],
-    ['info', SANDBOX_NAME, '--format', 'json'],
+    ['info', sandboxName, '--format', 'json'],
     ['delete', 'sandbox-validation-0001'],
     ['info', 'sandbox-validation-0001', '--format', 'json'],
   ]);
@@ -355,12 +660,9 @@ test('version and initial-list failures stop before any resource-changing comman
   }
 });
 
-test('every failure after a possible snapshot create deletes it and proves absence', async (t) => {
+test('every failure after snapshot ownership is proven deletes the exact id and proves absence', async (t) => {
   const input = files(t);
   for (const mode of [
-    'snapshot-create',
-    'post-create-command',
-    'post-create-malformed',
     'sandbox-create',
     'selftest',
     'selftest-mismatch',
@@ -373,13 +675,37 @@ test('every failure after a possible snapshot create deletes it and proves absen
     const fake = fakeDaytona(input, { mode });
     await assert.rejects(controller(fake).ensureSnapshot(request(input)), undefined, mode);
     assert.equal(fake.snapshotDeleteAttempted, true, `${mode} must request snapshot rollback`);
-    assert.equal(fake.snapshots.some((entry) => entry.name === SNAPSHOT_NAME), false,
+    assert.equal(fake.snapshots.some((entry) => entry.name === input.identity.name), false,
       `${mode} must leave no failed release snapshot`);
     const deleteIndex = fake.calls.findIndex((args) => args[0] === 'snapshot' && args[1] === 'delete');
     assert.ok(deleteIndex >= 0, `${mode} must call snapshot delete`);
+    assert.equal(fake.calls[deleteIndex][2], snapshotRecord(input).id,
+      `${mode} must delete only the observed owned snapshot id`);
     assert.ok(fake.calls.slice(deleteIndex + 1).some((args) =>
       args[0] === 'snapshot' && args[1] === 'list' && args.includes('--page')),
     `${mode} must prove absence with the paginated list API`);
+  }
+});
+
+test('ambiguous creation adopts a valid shared snapshot and never deletes an unowned identity', async (t) => {
+  const input = files(t);
+  const fake = fakeDaytona(input, { mode: 'snapshot-create' });
+
+  const receipt = await controller(fake).ensureSnapshot(request(input));
+
+  assert.equal(receipt.created, false);
+  assert.equal(receipt.snapshotId, snapshotRecord(input).id);
+  assert.equal(fake.snapshotDeleteAttempted, false);
+  assert.equal(fake.snapshots.some((entry) => entry.id === receipt.snapshotId), true);
+});
+
+test('post-create observation failure never deletes a snapshot whose id was not proven', async (t) => {
+  const input = files(t);
+  for (const mode of ['post-create-command', 'post-create-malformed']) {
+    const fake = fakeDaytona(input, { mode });
+    await assert.rejects(controller(fake).ensureSnapshot(request(input)), /snapshot list|malformed/i, mode);
+    assert.equal(fake.snapshotDeleteAttempted, false, `${mode} must not delete by shared name`);
+    assert.equal(fake.snapshots.some((entry) => entry.name === input.identity.name), true);
   }
 });
 
@@ -393,6 +719,27 @@ test('an existing same-name snapshot is accepted only after its embedded build i
   await assert.rejects(controller(fake).ensureSnapshot(request(input)), /content identity|self-test|build hash/i);
   assert.equal(fake.snapshotDeleteAttempted, false, 'a pre-existing mismatched snapshot is not deleted implicitly');
   assert.equal(fake.sandbox, null, 'the validation sandbox is still deleted');
+});
+
+test('validation uses an attempt-unique name and never deletes a stale deterministic sandbox', async (t) => {
+  const input = files(t);
+  const fake = fakeDaytona(input, { initialSnapshots: [snapshotRecord(input)] });
+  const original = fake.runCommand;
+  const staleName = `${input.identity.name}-selftest`;
+  const staleId = 'sandbox-stale-validation-0001';
+  let staleDeleted = false;
+  fake.runCommand = async (args) => {
+    if (args[0] === 'delete' && [staleName, staleId].includes(args[1])) staleDeleted = true;
+    return original(args);
+  };
+
+  const receipt = await controller(fake).ensureSnapshot(request(input));
+  const attemptedName = fake.calls.find((args) => args[0] === 'create')[2];
+
+  assert.match(attemptedName, new RegExp(`^${input.sandboxNamePrefix}[a-f0-9]{32}$`));
+  assert.notEqual(attemptedName, staleName);
+  assert.equal(staleDeleted, false);
+  assert.equal(receipt.validation.sandboxDeleted, true);
 });
 
 test('rollback tolerates a lost snapshot-delete response only after all pages prove absence', async (t) => {
@@ -417,7 +764,7 @@ test('rollback tolerates a lost snapshot-delete response only after all pages pr
     .filter((args) => args[0] === 'snapshot' && args[1] === 'list')
     .map((args) => args[args.indexOf('--page') + 1]);
   assert.deepEqual(cleanupPages, ['1', '2']);
-  assert.equal(fake.snapshots.some((entry) => entry.name === SNAPSHOT_NAME), false);
+  assert.equal(fake.snapshots.some((entry) => entry.name === input.identity.name), false);
 });
 
 test('cleanup fails closed when the new snapshot cannot be proven absent', async (t) => {
@@ -446,15 +793,52 @@ test('cleanup fails closed when the new snapshot cannot be proven absent', async
 
 test('rejects wrong names, non-files, digest drift, credentials, and extra input before Daytona', async (t) => {
   const input = files(t);
+  for (const injectedOptions of [
+    { allowedExecutableDigests: {} },
+    { credentialRanges: [] },
+  ]) {
+    assert.throws(
+      () => createDaytonaSnapshotController({
+        runCommand: async () => ({ code: 0, stdout: '', stderr: '' }),
+        ...injectedOptions,
+      }),
+      /unexpected field/i,
+    );
+  }
   const attempts = [
-    request(input, { identity: { name: 'operator-selected', buildHash: BUILD_HASH } }),
-    request(input, { archives: [{ path: path.dirname(input.dockerfilePath), sha256: '0'.repeat(64) }] }),
-    request(input, { archives: [{ ...input.archives[0], sha256: '0'.repeat(64) }] }),
+    request(input, { identity: { name: 'operator-selected', buildHash: input.identity.buildHash } }),
+    request(input, {
+      archives: input.archives.map((entry, index) => index === 0
+        ? { ...entry, path: path.dirname(input.dockerfilePath) }
+        : entry),
+    }),
+    request(input, {
+      archives: input.archives.map((entry, index) => index === 0
+        ? { ...entry, sha256: '0'.repeat(64) }
+        : entry),
+    }),
     { ...request(input), apiKey: 'sk-or-v1-forbidden' },
+    { ...request(input), allowedExecutableDigests: {} },
+    { ...request(input), credentialRanges: [] },
+    {
+      ...request(input),
+      archives: input.archives.map((entry, index) => index === 0
+        ? { ...entry, credentialScanExemptions: [] }
+        : entry),
+    },
+    {
+      ...request(input),
+      archives: input.archives.map((entry, index) => index === 0
+        ? { ...entry, allowedExecutableDigests: {} }
+        : entry),
+    },
   ];
   for (const attempt of attempts) {
     const fake = fakeDaytona(input);
-    await assert.rejects(controller(fake).ensureSnapshot(attempt), /name|regular file|digest|unexpected field/i);
+    await assert.rejects(
+      controller(fake).ensureSnapshot(attempt),
+      /name|regular file|digest|unexpected field|inventory/i,
+    );
     assert.equal(fake.calls.length, 0);
   }
 
@@ -469,9 +853,33 @@ test('rejects wrong names, non-files, digest drift, credentials, and extra input
   const secretFake = fakeDaytona(secretInput);
   const secretError = await rejected(controller(secretFake).ensureSnapshot(request(secretInput)));
   assert.match(secretError.message, /credential/i);
-  assert.match(secretError.message, /archive 1/i);
+  assert.match(secretError.message, /context 5/i);
   assert.doesNotMatch(secretError.message, /sk-or-v1-forbidden-provider-key/);
   assert.equal(secretFake.calls.length, 0);
+
+  const legacySecretInput = files(t, {
+    first: 'archive contains (sk-abcdefghijklmnop) legacy provider key',
+  });
+  const legacySecretFake = fakeDaytona(legacySecretInput);
+  const legacySecretError = await rejected(
+    controller(legacySecretFake).ensureSnapshot(request(legacySecretInput)),
+  );
+  assert.match(legacySecretError.message, /credential/i);
+  assert.doesNotMatch(legacySecretError.message, /sk-abcdefghijklmnop/);
+  assert.equal(legacySecretFake.calls.length, 0);
+
+  const boundarySecretInput = files(t, {
+    first: Buffer.concat([
+      Buffer.alloc((64 * 1024) - 5, 0x78),
+      Buffer.from('\n(sk-abcdefghijklmnop)'),
+    ]),
+  });
+  const boundarySecretFake = fakeDaytona(boundarySecretInput);
+  const boundarySecretError = await rejected(
+    controller(boundarySecretFake).ensureSnapshot(request(boundarySecretInput)),
+  );
+  assert.match(boundarySecretError.message, /credential/i);
+  assert.equal(boundarySecretFake.calls.length, 0);
 });
 
 test('secret-bearing command output is never returned or echoed and still triggers complete rollback', async (t) => {
@@ -480,6 +888,6 @@ test('secret-bearing command output is never returned or echoed and still trigge
   const error = await rejected(controller(fake).ensureSnapshot(request(input)));
   assert.match(error.message, /credential/i);
   assert.doesNotMatch(error.message, /sk-or-v1-never-retain-this/);
-  assert.equal(fake.snapshots.some((entry) => entry.name === SNAPSHOT_NAME), false);
+  assert.equal(fake.snapshots.some((entry) => entry.name === input.identity.name), false);
   assert.equal(fake.sandbox, null);
 });
