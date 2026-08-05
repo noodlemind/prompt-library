@@ -94,6 +94,17 @@ test('builds identical portable ustar bytes independent of source order, modes, 
   }
 });
 
+test('archives the credential scanner implementation without treating its pattern source as a credential', (t) => {
+  const root = temporaryDirectory();
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.copyFileSync(
+    new URL('../../../evals/runtime/credential-material.mjs', import.meta.url),
+    path.join(root, 'credential-material.mjs'),
+  );
+
+  assert.doesNotThrow(() => buildDeterministicUstar({ kind: 'runtime', root }));
+});
+
 test('splits long paths into portable ustar name and prefix fields and interoperates with system tar', (t) => {
   const root = temporaryDirectory();
   const relative = `${'a'.repeat(80)}/${'b'.repeat(70)}/tool.sh`;
@@ -170,6 +181,8 @@ test('rejects empty, linked, special, unsafe, credential-bearing, and oversized 
       'OPENROUTER_API_KEY=sk-proj-abcdefgh\n',
       'LEGACY_API_KEY=(sk-abcdefghijkl)\n',
       `Authorization: Bearer${' '.repeat(9)}abcdefgh\n`,
+      '-----BEGIN PRIVATE KEY-----\n',
+      '-----BEGIN RSA PRIVATE KEY-----\n',
       `-----BEGIN ${'A'.repeat(64)}PRIVATE KEY-----\n`,
       `-----BEGIN ${'A'.repeat(65)}PRIVATE KEY-----\n`,
     ]) {
