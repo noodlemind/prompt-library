@@ -296,7 +296,11 @@ function normalizeRuntimeTree(sourceRoot, destinationRoot) {
   const visit = (current, relative) => {
     const named = fs.lstatSync(current);
     if (named.isDirectory()) {
-      if (relative) fs.mkdirSync(path.join(destinationRoot, ...relative.split('/')), { mode: 0o755 });
+      if (relative) {
+        const target = path.join(destinationRoot, ...relative.split('/'));
+        fs.mkdirSync(target, { mode: 0o755 });
+        fs.chmodSync(target, 0o755);
+      }
       for (const name of fs.readdirSync(current).sort((a, b) => Buffer.compare(Buffer.from(a), Buffer.from(b)))) {
         visit(path.join(current, name), path.posix.join(relative, name));
       }
@@ -381,6 +385,7 @@ function disposeOwnedWorkspace(workspace, nonce) {
   try {
     const marker = path.join(workspace, OWNER_MARKER);
     if (fs.readFileSync(marker, 'utf8') !== `${nonce}\n`) return false;
+    makeWritableForRemoval(workspace);
     fs.rmSync(workspace, { recursive: true, force: false });
     return true;
   } catch {

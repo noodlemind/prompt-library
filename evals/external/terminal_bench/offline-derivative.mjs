@@ -344,6 +344,7 @@ function assertionInventory(sourceEntries) {
 
 function copyTree(source, destination, entries) {
   fs.mkdirSync(destination, { recursive: true, mode: 0o755 });
+  fs.chmodSync(destination, 0o755);
   for (const entry of entries) {
     const target = path.join(destination, ...entry.relative.split('/'));
     if (entry.type === 'directory') {
@@ -354,6 +355,28 @@ function copyTree(source, destination, entries) {
       fs.chmodSync(target, entry.mode & 0o7777);
     }
   }
+}
+
+function sealTree(root) {
+  const entries = inventoryTree(root);
+  for (const entry of entries) {
+    fs.chmodSync(entry.full, entry.type === 'directory' || (entry.mode & 0o111) !== 0 ? 0o555 : 0o444);
+  }
+  fs.chmodSync(root, 0o555);
+}
+
+function openTreeForCleanup(root) {
+  if (!fs.existsSync(root)) return;
+  const visit = (current) => {
+    const stat = fs.lstatSync(current);
+    if (stat.isDirectory()) {
+      fs.chmodSync(current, 0o700);
+      for (const name of fs.readdirSync(current)) visit(path.join(current, name));
+    } else if (stat.isFile()) {
+      fs.chmodSync(current, 0o600);
+    }
+  };
+  visit(root);
 }
 
 function pathsOverlap(left, right) {
@@ -579,6 +602,11 @@ export function buildOfflineTerminalBenchDerivative({
     copyTree(paths.runtime, runtimeTarget, runtime.inspected.entries);
     const manifestPath = path.join(staging, DERIVED_MANIFEST_FILENAME);
     fs.writeFileSync(manifestPath, document.encoded, { mode: 0o444, flag: 'wx' });
+    fs.chmodSync(manifestPath, 0o444);
+
+    // Hash and retain the exact permissions that will be published. The outer
+    // artifact seal can then remove write bits without changing any task hash.
+    sealTree(staging);
 
     verifyOfflineTerminalBenchDerivative({
       sourceTaskDir: paths.source,
@@ -588,10 +616,6 @@ export function buildOfflineTerminalBenchDerivative({
     if (hashTree(paths.source) !== lockedSourceChecksum || hashTree(paths.runtime) !== runtime.runtime.treeHash) {
       fail('an input tree mutated while building the derivative', 'ERR_TB_OFFLINE_INPUT_MUTATION');
     }
-    // mkdtemp creates the task root as 0700. Normalize it before publication
-    // so an aggregate dataset hash observes the same read/execute bits before
-    // and after the outer artifact is sealed read-only (0755 -> 0555).
-    fs.chmodSync(staging, 0o755);
     fs.renameSync(staging, paths.output);
     published = true;
     return {
@@ -601,6 +625,9 @@ export function buildOfflineTerminalBenchDerivative({
       taskTreeHash: hashTree(paths.output),
     };
   } finally {
-    if (!published) fs.rmSync(staging, { recursive: true, force: true });
+    if (!published) {
+      openTreeForCleanup(staging);
+      fs.rmSync(staging, { recursive: true, force: true });
+    }
   }
 }

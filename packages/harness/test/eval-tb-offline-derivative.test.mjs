@@ -25,9 +25,36 @@ const canonicalJson = (value) => {
   return JSON.stringify(value);
 };
 
+function removeFixture(root) {
+  if (!fs.existsSync(root)) return;
+  const open = (current) => {
+    const stat = fs.lstatSync(current);
+    if (stat.isDirectory()) {
+      fs.chmodSync(current, 0o700);
+      for (const name of fs.readdirSync(current)) open(path.join(current, name));
+    } else if (stat.isFile()) {
+      fs.chmodSync(current, 0o600);
+    }
+  };
+  open(root);
+  fs.rmSync(root, { recursive: true, force: true });
+}
+
+function openMutationPath(root, target) {
+  fs.chmodSync(root, 0o755);
+  const parent = path.dirname(target);
+  const relative = path.relative(root, parent);
+  let current = root;
+  for (const segment of relative === '' ? [] : relative.split(path.sep)) {
+    current = path.join(current, segment);
+    fs.chmodSync(current, 0o755);
+  }
+  if (fs.existsSync(target)) fs.chmodSync(target, 0o644);
+}
+
 function fixture(t, { cancelCopy = false } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'engineer-offline-derivative-'));
-  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  t.after(() => removeFixture(root));
   const sourceTaskDir = path.join(root, 'source-task');
   const runtimeDir = path.join(root, 'runtime');
   const outputDir = path.join(root, 'derived-task');
@@ -89,6 +116,16 @@ fi
     path.join(sitePackages, 'pytest_json_ctrf-0.3.5.dist-info', 'METADATA'),
     'Metadata-Version: 2.4\nName: pytest-json-ctrf\nVersion: 0.3.5\n',
   );
+  const normalizeRuntime = (current) => {
+    const stat = fs.lstatSync(current);
+    if (stat.isDirectory()) {
+      for (const name of fs.readdirSync(current)) normalizeRuntime(path.join(current, name));
+      fs.chmodSync(current, 0o755);
+    } else {
+      fs.chmodSync(current, (stat.mode & 0o111) !== 0 ? 0o555 : 0o444);
+    }
+  };
+  normalizeRuntime(runtimeDir);
   const runtimeManifest = {
     schema: OFFLINE_RUNTIME_SCHEMA,
     platform: 'linux/amd64',
@@ -226,11 +263,25 @@ test('rejects runtime hash, package, mutability, platform, ELF, secret, and link
     'pytest-8.4.1.dist-info',
     'METADATA',
   );
+  fs.chmodSync(pytestMetadata, 0o644);
   fs.writeFileSync(pytestMetadata, 'Metadata-Version: 2.4\nName: pytest\nVersion: 8.4.0\n');
   assert.throws(() => buildOfflineTerminalBenchDerivative({
     ...packageDrift,
     runtimeManifest: { ...packageDrift.runtimeManifest, treeHash: hashTree(packageDrift.runtimeDir) },
   }), /installed pytest.*8\.4\.1|metadata.*8\.4\.1/i);
+});
+
+test('removes a sealed staging tree when post-seal verification fails', (t) => {
+  const input = fixture(t);
+  fs.chmodSync(path.join(input.runtimeDir, 'lib'), 0o700);
+  const runtimeManifest = { ...input.runtimeManifest, treeHash: hashTree(input.runtimeDir) };
+
+  assert.throws(
+    () => buildOfflineTerminalBenchDerivative({ ...input, runtimeManifest }),
+    /runtime tree hash mismatch/i,
+  );
+  assert.equal(fs.existsSync(input.outputDir), false);
+  assert.deepEqual(fs.readdirSync(input.root).sort(), ['runtime', 'source-task']);
 });
 
 test('rejects links and special files in the locked source tree', (t) => {
@@ -269,8 +320,8 @@ test('equivalence verification rejects assertion, non-runner, runtime, metadata,
     const input = fixture(t);
     buildOfflineTerminalBenchDerivative(input);
     const target = path.join(input.outputDir, relative);
+    openMutationPath(input.outputDir, target);
     fs.mkdirSync(path.dirname(target), { recursive: true });
-    if (fs.existsSync(target)) fs.chmodSync(target, 0o644);
     fs.writeFileSync(target, content);
     assert.throws(
       () => verifyOfflineTerminalBenchDerivative({

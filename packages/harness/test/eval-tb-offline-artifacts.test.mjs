@@ -225,6 +225,110 @@ test('identical inputs produce the same content identity', async (t) => {
   assert.deepEqual(one.attestation, two.attestation);
 });
 
+test('content identity is independent of the caller umask', async (t) => {
+  const originalUmask = process.umask();
+  try {
+    process.umask(0o022);
+    const restrictive = fixture(t);
+    const permissive = fixture(t);
+
+    process.umask(0o077);
+    const one = await buildOfflineTerminalBenchDataset(
+      { repoRoot: restrictive.repoRoot, outputRoot: restrictive.outputRoot, taskLock: restrictive.taskLock },
+      restrictive.dependencies,
+    );
+
+    process.umask(0o022);
+    const two = await buildOfflineTerminalBenchDataset(
+      { repoRoot: permissive.repoRoot, outputRoot: permissive.outputRoot, taskLock: permissive.taskLock },
+      permissive.dependencies,
+    );
+
+    assert.equal(one.attestation.runtime.treeHash, two.attestation.runtime.treeHash);
+    assert.deepEqual(one.attestation, two.attestation);
+    assert.equal(one.artifactId, two.artifactId);
+    assert.equal(one.datasetTreeHash, two.datasetTreeHash);
+  } finally {
+    process.umask(originalUmask);
+  }
+});
+
+test('retained checksums describe the sealed artifact for restrictive source modes', async (t) => {
+  const input = fixture(t);
+  for (const entry of input.taskLock.tasks) {
+    const taskDir = path.join(input.sourceRoot, entry.task);
+    fs.chmodSync(path.join(taskDir, 'instruction.md'), 0o600);
+    fs.chmodSync(path.join(taskDir, 'solution'), 0o700);
+    entry.taskChecksum = hashTree(taskDir);
+  }
+
+  const result = await buildOfflineTerminalBenchDataset(
+    { repoRoot: input.repoRoot, outputRoot: input.outputRoot, taskLock: input.taskLock },
+    input.dependencies,
+  );
+
+  for (const entry of result.taskLock.tasks) {
+    assert.equal(entry.taskChecksum, hashTree(path.join(result.datasetDir, entry.task)));
+  }
+  assert.equal(result.datasetTreeHash, hashTree(result.datasetDir));
+  assert.equal(verifyOfflineTerminalBenchDataset({ artifactDir: result.artifactDir, expectedPins: input.pins }).ok, true);
+});
+
+test('a later task failure removes earlier sealed derivatives and preserves the original error', async (t) => {
+  const input = fixture(t);
+  fs.appendFileSync(path.join(input.sourceRoot, 'cancel-async-tasks', 'instruction.md'), 'drift');
+  let ownedWorkspace = null;
+  const materializePinnedInputs = (args) => {
+    ownedWorkspace = args.workspace;
+    return input.dependencies.materializePinnedInputs(args);
+  };
+
+  await assert.rejects(
+    buildOfflineTerminalBenchDataset(
+      { repoRoot: input.repoRoot, outputRoot: input.outputRoot, taskLock: input.taskLock },
+      { ...input.dependencies, materializePinnedInputs },
+    ),
+    /source checksum mismatch/i,
+  );
+  assert.equal(typeof ownedWorkspace, 'string');
+  assert.equal(fs.existsSync(ownedWorkspace), false);
+  assert.equal(fs.existsSync(input.outputRoot) ? fs.readdirSync(input.outputRoot).length : 0, 0);
+});
+
+test('a post-task identity failure removes the fully sealed temporary dataset', async (t) => {
+  const reference = fixture(t);
+  const built = await buildOfflineTerminalBenchDataset(
+    { repoRoot: reference.repoRoot, outputRoot: reference.outputRoot, taskLock: reference.taskLock },
+    reference.dependencies,
+  );
+  const input = fixture(t);
+  const pins = {
+    ...input.pins,
+    expected: {
+      runtimeTreeHash: built.attestation.runtime.treeHash,
+      taskLockHash: built.taskLockHash,
+      artifactId: '0'.repeat(64),
+      datasetTreeHash: built.datasetTreeHash,
+    },
+  };
+  let ownedWorkspace = null;
+  const materializePinnedInputs = (args) => {
+    ownedWorkspace = args.workspace;
+    return input.dependencies.materializePinnedInputs(args);
+  };
+
+  await assert.rejects(
+    buildOfflineTerminalBenchDataset(
+      { repoRoot: input.repoRoot, outputRoot: input.outputRoot, taskLock: input.taskLock },
+      { ...input.dependencies, pins, materializePinnedInputs },
+    ),
+    /content identity drifted/i,
+  );
+  assert.equal(typeof ownedWorkspace, 'string');
+  assert.equal(fs.existsSync(ownedWorkspace), false);
+  assert.equal(fs.existsSync(input.outputRoot) ? fs.readdirSync(input.outputRoot).length : 0, 0);
+});
+
 test('fails closed on requirement lock, source task, materializer, and published artifact drift', async (t) => {
   const lockDrift = fixture(t);
   fs.appendFileSync(path.join(lockDrift.repoRoot, 'evals', 'external', 'terminal_bench', 'offline-verifier-requirements.txt'), '\n# drift\n');
