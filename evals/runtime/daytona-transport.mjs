@@ -3,6 +3,11 @@ import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { TextDecoder } from 'node:util';
 
+import {
+  TASK_INPUT_ARCHIVE_LIMITS,
+  archiveLimitsForKind,
+} from './archive-limits.mjs';
+
 export const ARCHIVE_BOOTSTRAP =
   'if [ -t 0 ]; then stty -echo || exit 70; fi; exec /opt/engineer/bin/engineer-archive-bridge --stdio';
 export const SUPERVISOR_BOOTSTRAP =
@@ -508,7 +513,7 @@ export function createDaytonaTransport({
   commandTimeoutMs = 180_000,
   channelTimeoutMs = 30_000,
   maxCommandOutputBytes = 1024 * 1024,
-  maxArchiveBytes = 16 * 1024 * 1024,
+  maxArchiveBytes = TASK_INPUT_ARCHIVE_LIMITS.compressedBytes,
 } = {}) {
   const executable = safeAbsoluteExecutable(daytonaPath, 'daytonaPath');
   if (typeof runCommand !== 'function' || typeof spawnChannel !== 'function') {
@@ -517,7 +522,12 @@ export function createDaytonaTransport({
   boundedInteger(commandTimeoutMs, 'commandTimeoutMs', 1, 10 * 60_000);
   boundedInteger(channelTimeoutMs, 'channelTimeoutMs', 1, 10 * 60_000);
   boundedInteger(maxCommandOutputBytes, 'maxCommandOutputBytes', 1, 16 * 1024 * 1024);
-  boundedInteger(maxArchiveBytes, 'maxArchiveBytes', 1, 64 * 1024 * 1024);
+  boundedInteger(
+    maxArchiveBytes,
+    'maxArchiveBytes',
+    1,
+    TASK_INPUT_ARCHIVE_LIMITS.compressedBytes,
+  );
   const commandEnv = scrubEnvironment(baseEnv);
   const activeChannels = new Set();
   let disposed = false;
@@ -619,7 +629,8 @@ export function createDaytonaTransport({
     assertActive();
     const remotePath = ARCHIVE_PATHS[kind];
     if (!remotePath) throw new TypeError('archive kind must be task-input or trial-output');
-    const archive = asBoundedBuffer(bytes, 'archive', maxArchiveBytes);
+    const operationLimit = Math.min(maxArchiveBytes, archiveLimitsForKind(kind).compressedBytes);
+    const archive = asBoundedBuffer(bytes, 'archive', operationLimit);
     if (archive.length < 1) {
       archive.fill(0);
       throw new TypeError('archive must not be empty');
@@ -648,7 +659,7 @@ export function createDaytonaTransport({
         sandboxId,
         bootstrap: ARCHIVE_BOOTSTRAP,
         ready: ARCHIVE_READY,
-        maxBufferedBytes: maxArchiveBytes + MAX_JSON_FRAME_BYTES + MAX_BOOTSTRAP_LINE_BYTES + 16,
+        maxBufferedBytes: operationLimit + MAX_JSON_FRAME_BYTES + MAX_BOOTSTRAP_LINE_BYTES + 16,
       });
       await channel.writeFrame(metadata);
       await channel.writeFrame(archive);
@@ -667,8 +678,9 @@ export function createDaytonaTransport({
     assertActive();
     const remotePath = ARCHIVE_PATHS[kind];
     if (!remotePath) throw new TypeError('archive kind must be task-input or trial-output');
+    const operationLimit = Math.min(maxArchiveBytes, archiveLimitsForKind(kind).compressedBytes);
     const expected = assertSha256(expectedSha256, 'expectedSha256');
-    boundedInteger(expectedBytes, 'expectedBytes', 1, maxArchiveBytes);
+    boundedInteger(expectedBytes, 'expectedBytes', 1, operationLimit);
     const request = {
       schema: ARCHIVE_REQUEST_SCHEMA,
       operation: 'download',
@@ -684,12 +696,12 @@ export function createDaytonaTransport({
         sandboxId,
         bootstrap: ARCHIVE_BOOTSTRAP,
         ready: ARCHIVE_READY,
-        maxBufferedBytes: maxArchiveBytes + MAX_JSON_FRAME_BYTES + MAX_BOOTSTRAP_LINE_BYTES + 16,
+        maxBufferedBytes: operationLimit + MAX_JSON_FRAME_BYTES + MAX_BOOTSTRAP_LINE_BYTES + 16,
       });
       await channel.writeFrame(metadata);
       const response = parseJsonFrame(await channel.readFrame(MAX_JSON_FRAME_BYTES), 'archive response');
       const receipt = validateArchiveReceipt(response, request);
-      const archive = await channel.readFrame(maxArchiveBytes);
+      const archive = await channel.readFrame(operationLimit);
       if (archive.length !== expectedBytes || !timingSafeHexEqual(sha256(archive), expected)) {
         archive.fill(0);
         fail('downloaded archive digest or size does not match', 'ERR_TRANSPORT_DIGEST');

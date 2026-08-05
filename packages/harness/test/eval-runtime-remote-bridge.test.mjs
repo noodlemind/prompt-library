@@ -7,6 +7,10 @@ import { Readable, Writable } from 'node:stream';
 import { test } from 'node:test';
 
 import {
+  TASK_INPUT_ARCHIVE_LIMITS,
+  TRIAL_OUTPUT_ARCHIVE_LIMITS,
+} from '../../../evals/runtime/archive-limits.mjs';
+import {
   ARCHIVE_READY_LINE,
   SUPERVISOR_READY_LINE,
   runArchiveBridge,
@@ -210,6 +214,44 @@ test('archive metadata is exact and rejects schema, operation, kind, path, and f
     );
     assert.deepEqual(sink.bytes(), Buffer.from(`${ARCHIVE_READY_LINE}\n`));
   }
+});
+
+test('archive bridge admits the larger input envelope while retaining the output ceiling', async (t) => {
+  const transportDirectory = await archiveRoot(t);
+  const largerThanOutput = TRIAL_OUTPUT_ARCHIVE_LIMITS.compressedBytes + 1;
+  const taskRequest = {
+    schema: 'engineer-daytona-archive-request.v1',
+    operation: 'upload',
+    kind: 'task-input',
+    path: TASK_PATH,
+    byteLength: largerThanOutput,
+    sha256: '1'.repeat(64),
+  };
+  await assert.rejects(
+    runArchiveBridge({
+      input: Readable.from([frame(taskRequest)]),
+      output: memoryOutput().output,
+      transportDirectory,
+      maxArchiveBytes: TASK_INPUT_ARCHIVE_LIMITS.compressedBytes,
+    }),
+    (error) => error.code !== 'ERR_REMOTE_ARCHIVE_METADATA',
+  );
+
+  const outputRequest = {
+    ...taskRequest,
+    operation: 'download',
+    kind: 'trial-output',
+    path: OUTPUT_PATH,
+  };
+  await assert.rejects(
+    runArchiveBridge({
+      input: Readable.from([frame(outputRequest)]),
+      output: memoryOutput().output,
+      transportDirectory,
+      maxArchiveBytes: TASK_INPUT_ARCHIVE_LIMITS.compressedBytes,
+    }),
+    (error) => error.code === 'ERR_REMOTE_ARCHIVE_METADATA',
+  );
 });
 
 test('archive framing, size, digest, trailing data, and channel loss fail closed', async (t) => {

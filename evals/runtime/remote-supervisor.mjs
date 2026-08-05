@@ -8,6 +8,7 @@ import process from 'node:process';
 import { spawn } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 
+import { archiveLimitsForKind } from './archive-limits.mjs';
 import { createLinuxRuntimeEffects } from './linux-effects.mjs';
 import {
   runRemoteBridgeCli,
@@ -24,12 +25,15 @@ const OUTPUT_ARCHIVE_PATH = `${DEFAULT_TRANSPORT_DIRECTORY}/trial-output.tar`;
 const PROVIDER_PIPE_PATH = `${DEFAULT_TRANSPORT_DIRECTORY}/provider-key.pipe`;
 const PINNED_RUNNER = '/opt/engineer/bin/engineer-eval-runner';
 const PINNED_MKFIFO = '/usr/bin/mkfifo';
-const MAX_ARCHIVE_BYTES = 64 * 1024 * 1024;
 const HASH = /^[a-f0-9]{64}$/;
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,191}$/;
 const RAW_CREDENTIAL_ENV = /(?:^DAYTONA(?:_|$)|OPENROUTER|OPENAI|ANTHROPIC|GEMINI|GOOGLE_AI|GROQ|XAI|MISTRAL|COHERE|TOGETHER|FIREWORKS|DEEPSEEK|CEREBRAS|PERPLEXITY|API_KEY|AUTHORIZATION|CREDENTIAL|PASSWORD|SECRET|TOKEN)/i;
 const SUPPORT_ENV = Object.freeze({ LANG: 'C.UTF-8', PATH: '/usr/bin:/bin' });
-const ARCHIVE_KINDS = new Set(['task-input', 'trial-output']);
+const ARCHIVE_FILENAME_BY_KIND = Object.freeze({
+  'task-input': 'task-input.tar',
+  'trial-output': 'trial-output.tar',
+});
+const ARCHIVE_KINDS = new Set(Object.keys(ARCHIVE_FILENAME_BY_KIND));
 const CONTROLLED_PROVIDER = 'controlled-provider';
 const ZERO_PROVIDER_CANARY = 'zero-provider-canary';
 
@@ -140,8 +144,12 @@ export async function inspectBoundArchive({
   if (!ARCHIVE_KINDS.has(kind)) {
     fail('archive kind is invalid', 'ERR_REMOTE_SUPERVISOR_ARCHIVE_PATH');
   }
+  if (path.posix.basename(file) !== ARCHIVE_FILENAME_BY_KIND[kind]) {
+    fail('archive path does not match its kind', 'ERR_REMOTE_SUPERVISOR_ARCHIVE_PATH');
+  }
+  const limits = archiveLimitsForKind(kind);
   if (expectedByteLength !== undefined) {
-    boundedInteger(expectedByteLength, 'archive byte length', 1, MAX_ARCHIVE_BYTES);
+    boundedInteger(expectedByteLength, 'archive byte length', 1, limits.compressedBytes);
   }
   if (expectedSha256 !== undefined && !HASH.test(String(expectedSha256))) {
     fail('archive digest is invalid', 'ERR_REMOTE_SUPERVISOR_ARCHIVE_DIGEST');
@@ -169,7 +177,7 @@ export async function inspectBoundArchive({
         || Number(before.uid) !== expectedOwnerUid
         || (Number(before.mode) & 0o077) !== 0
         || before.size < 1n
-        || before.size > BigInt(MAX_ARCHIVE_BYTES)) {
+        || before.size > BigInt(limits.compressedBytes)) {
       fail('archive custody or path identity drifted', 'ERR_REMOTE_SUPERVISOR_ARCHIVE_PATH');
     }
     const flags = FS_CONSTANTS.O_RDONLY | (FS_CONSTANTS.O_NOFOLLOW ?? 0);

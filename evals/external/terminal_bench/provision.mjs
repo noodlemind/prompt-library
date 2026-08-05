@@ -192,12 +192,16 @@ function sha256(value) {
   return crypto.createHash('sha256').update(value).digest('hex');
 }
 
-function normalizeInstalledPermissions(root) {
+function normalizeInstalledPermissions(root, { ownerWritableDirectories = false } = {}) {
   const visit = (current) => {
     const stat = fs.lstatSync(current);
     if (stat.isSymbolicLink()) return;
     if (stat.isDirectory()) {
+      const mode = (stat.mode & ~0o022) | (ownerWritableDirectories ? 0o700 : 0);
+      if (ownerWritableDirectories) fs.chmodSync(current, mode);
       for (const name of fs.readdirSync(current)) visit(path.join(current, name));
+      if (!ownerWritableDirectories) fs.chmodSync(current, mode);
+      return;
     }
     fs.chmodSync(current, stat.mode & ~0o022);
   };
@@ -652,6 +656,117 @@ function copyAttestedRegularFile(source, destination, entry) {
   }
 }
 
+function removeNpmCommandShims(harnessDir) {
+  const directory = path.join(harnessDir, 'node_modules', '.bin');
+  let stat;
+  try {
+    stat = fs.lstatSync(directory);
+  } catch (error) {
+    if (error?.code === 'ENOENT') return;
+    throw error;
+  }
+  if (stat.isSymbolicLink() || !stat.isDirectory()) {
+    throw new Error('npm command shims must be a real directory before pruning');
+  }
+  const canonicalHarness = canonicalExisting(harnessDir, 'Harness package directory');
+  const canonicalDirectory = canonicalExisting(directory, 'npm command shim directory');
+  if (!isInside(canonicalHarness, canonicalDirectory)) {
+    throw new Error('npm command shim directory escaped the Harness package');
+  }
+  // The release runner imports production dependencies as libraries and never
+  // invokes dependency CLIs. npm's generated .bin links are therefore unused,
+  // and retaining them would make the read-only trial archive link-bearing.
+  fs.rmSync(canonicalDirectory, { recursive: true, force: false });
+}
+
+function projectMinimalNodeRuntime(nodeDir, arch) {
+  const namedRoot = fs.lstatSync(nodeDir);
+  const canonicalRoot = canonicalExisting(nodeDir, `Node runtime for ${arch}`);
+  if (namedRoot.isSymbolicLink() || !namedRoot.isDirectory() || canonicalRoot !== nodeDir) {
+    throw new Error(`Node runtime for ${arch} must be a real canonical directory`);
+  }
+  // The extracted archive may legitimately mark runtime directories 0555.
+  // Keep those directories protected from group/world mutation while adding
+  // owner write/traverse so the discarded full tree can always be removed.
+  normalizeInstalledPermissions(canonicalRoot, { ownerWritableDirectories: true });
+  const source = path.join(canonicalRoot, 'bin', 'node');
+  const identity = hashRegularFileBounded(
+    source,
+    MAX_NODE_TARBALL_BYTES,
+    `Node executable for ${arch}`,
+  );
+  const mode = identity.stat.mode & 0o777;
+  if (identity.stat.size < 1 || (mode & 0o111) === 0 || (mode & 0o022) !== 0) {
+    throw new Error(`Node executable for ${arch} must be nonempty, executable, and non-writable by group or other`);
+  }
+
+  const parent = path.dirname(canonicalRoot);
+  const staging = path.join(parent, `.minimal-node-${arch}-${crypto.randomUUID()}`);
+  const discarded = path.join(parent, `.full-node-${arch}-${crypto.randomUUID()}`);
+  fs.mkdirSync(path.join(staging, 'bin'), { recursive: true, mode: 0o700 });
+  try {
+    const destination = path.join(staging, 'bin', 'node');
+    copyAttestedRegularFile(source, destination, {
+      path: `node-${arch}/bin/node`,
+      size: identity.stat.size,
+      mode,
+      sha256: identity.sha256,
+    });
+    const projected = hashRegularFileBounded(
+      destination,
+      MAX_NODE_TARBALL_BYTES,
+      `projected Node executable for ${arch}`,
+    );
+    if (projected.sha256 !== identity.sha256
+        || projected.stat.size !== identity.stat.size
+        || (projected.stat.mode & 0o777) !== mode) {
+      throw new Error(`projected Node executable for ${arch} drifted from its pinned runtime`);
+    }
+    // Keep owner write permission so release/test cleanup remains reliable;
+    // the bundle is mounted read-only into the task container.
+    fs.chmodSync(path.join(staging, 'bin'), 0o755);
+    fs.chmodSync(staging, 0o755);
+
+    fs.renameSync(canonicalRoot, discarded);
+    try {
+      fs.renameSync(staging, canonicalRoot);
+    } catch (error) {
+      fs.renameSync(discarded, canonicalRoot);
+      throw error;
+    }
+    try {
+      fs.rmSync(discarded, {
+        recursive: true,
+        force: false,
+        maxRetries: 2,
+        retryDelay: 10,
+      });
+    } catch (cleanupError) {
+      let rollbackError;
+      try {
+        // Put the full runtime back at its canonical name before surfacing the
+        // cleanup failure. This avoids retaining a hidden full runtime that a
+        // subsequent projection attempt cannot safely distinguish or remove.
+        fs.renameSync(canonicalRoot, staging);
+        fs.renameSync(discarded, canonicalRoot);
+        fs.rmSync(staging, { recursive: true, force: true });
+      } catch (error) {
+        rollbackError = error;
+      }
+      if (rollbackError) {
+        throw new AggregateError(
+          [cleanupError, rollbackError],
+          `Node runtime projection cleanup and rollback failed for ${arch}`,
+        );
+      }
+      throw cleanupError;
+    }
+  } catch (error) {
+    try { fs.rmSync(staging, { recursive: true, force: true }); } catch { /* preserve the projection failure */ }
+    throw error;
+  }
+}
+
 function copyAttestedSymlink(sourceRoot, source, destination, entry) {
   const before = fs.lstatSync(source);
   if (!before.isSymbolicLink()) throw new Error(`attested bundle symlink changed type after validation: ${entry.path}`);
@@ -846,6 +961,7 @@ export function prepareHarnessBundle({
   // npm ci recreates node_modules strictly from the tracked lockfile, so
   // ignored working-tree dependencies can never leak into the release bundle.
   run('npm', ['ci', '--omit=dev', '--no-audit', '--no-fund', '--ignore-scripts'], { cwd: harnessDir });
+  removeNpmCommandShims(harnessDir);
   // npm honors the restrictive umask above, then this normalization makes the
   // invariant independent of platform/npm defaults before manifest scanning.
   normalizeInstalledPermissions(harnessDir);
@@ -923,6 +1039,7 @@ export function prepareHarnessBundle({
       const nodeDir = path.join(bundleDir, `node-${arch}`);
       fs.mkdirSync(nodeDir, { recursive: true });
       run('tar', ['-xzf', verifiedArchive, '--strip-components=1', '-C', nodeDir]);
+      projectMinimalNodeRuntime(nodeDir, arch);
       suppliedHashes[arch] = actualHash;
     } finally {
       try {

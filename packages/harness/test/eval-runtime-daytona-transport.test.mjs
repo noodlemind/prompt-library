@@ -4,6 +4,7 @@ import { EventEmitter } from 'node:events';
 import { PassThrough, Writable } from 'node:stream';
 import { test } from 'node:test';
 
+import { TASK_INPUT_ARCHIVE_LIMITS } from '../../../evals/runtime/archive-limits.mjs';
 import {
   ARCHIVE_BOOTSTRAP,
   SUPERVISOR_BOOTSTRAP,
@@ -167,6 +168,23 @@ test('the default process environment shape is accepted without relaxing provide
     spawnChannel: () => fakeChild({ closeBeforeOutput: true }).child,
     baseEnv: process.env,
   }));
+});
+
+test('transport admits the measured task-input ceiling but nothing above it', () => {
+  const options = {
+    daytonaPath: DAYTONA,
+    runCommand: async () => ({ code: 0, stdout: '', stderr: '' }),
+    spawnChannel: () => fakeChild({ closeBeforeOutput: true }).child,
+    baseEnv: { PATH: '/usr/bin:/bin' },
+  };
+  assert.doesNotThrow(() => createDaytonaTransport({
+    ...options,
+    maxArchiveBytes: TASK_INPUT_ARCHIVE_LIMITS.compressedBytes,
+  }));
+  assert.throws(() => createDaytonaTransport({
+    ...options,
+    maxArchiveBytes: TASK_INPUT_ARCHIVE_LIMITS.compressedBytes + 1,
+  }), /maxArchiveBytes.*(?:between|bound)/i);
 });
 
 test('stripped provider environment values are not copied or retained by the transport', async () => {

@@ -5,6 +5,11 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { TextDecoder } from 'node:util';
 
+import {
+  TASK_INPUT_ARCHIVE_LIMITS,
+  archiveLimitsForKind,
+} from './archive-limits.mjs';
+
 export const ARCHIVE_READY_LINE = 'ENGINEER-ARCHIVE/1 READY';
 export const SUPERVISOR_READY_LINE = 'ENGINEER-SUPERVISOR/1 READY';
 
@@ -20,7 +25,7 @@ const DEFAULT_TRANSPORT_DIRECTORY = '/engineer-bounded/transport';
 const MAX_JSON_FRAME_BYTES = 8 * 1024;
 const MAX_SECRET_FRAME_BYTES = 1_024;
 const MAX_PROTOCOL_FRAME_BYTES = 64 * 1024;
-const DEFAULT_MAX_ARCHIVE_BYTES = 16 * 1024 * 1024;
+const DEFAULT_MAX_ARCHIVE_BYTES = TASK_INPUT_ARCHIVE_LIMITS.compressedBytes;
 const SHA256_HEX = /^[a-f0-9]{64}$/;
 const UTF8 = new TextDecoder('utf-8', { fatal: true });
 
@@ -545,7 +550,11 @@ function validateArchiveRequest(value, maximumArchiveBytes) {
     || value.path !== definition.logicalPath) {
     fail('archive metadata does not match a fixed operation', 'ERR_REMOTE_ARCHIVE_METADATA');
   }
-  if (!Number.isSafeInteger(value.byteLength) || value.byteLength < 1 || value.byteLength > maximumArchiveBytes) {
+  const operationLimit = definition == null
+    ? 0
+    : Math.min(maximumArchiveBytes, archiveLimitsForKind(value.kind).compressedBytes);
+  if (!Number.isSafeInteger(value.byteLength) || value.byteLength < 1
+      || value.byteLength > operationLimit) {
     fail('archive metadata byte length exceeds its bound', 'ERR_REMOTE_ARCHIVE_METADATA');
   }
   if (typeof value.sha256 !== 'string' || !SHA256_HEX.test(value.sha256)) {
@@ -581,7 +590,12 @@ export async function runArchiveBridge({
   maxArchiveBytes = DEFAULT_MAX_ARCHIVE_BYTES,
 } = {}) {
   const directory = validateTransportDirectory(transportDirectory);
-  boundedInteger(maxArchiveBytes, 'maxArchiveBytes', 1, 64 * 1024 * 1024);
+  boundedInteger(
+    maxArchiveBytes,
+    'maxArchiveBytes',
+    1,
+    TASK_INPUT_ARCHIVE_LIMITS.compressedBytes,
+  );
   await inspectTransportDirectory(directory);
   const reader = new BoundedFrameReader(input, maxArchiveBytes + MAX_JSON_FRAME_BYTES + 16);
   let metadataBytes;
@@ -591,11 +605,15 @@ export async function runArchiveBridge({
     await writeRaw(output, Buffer.from(`${ARCHIVE_READY_LINE}\n`));
     metadataBytes = await reader.readFrame(MAX_JSON_FRAME_BYTES);
     const request = validateArchiveRequest(parseJson(metadataBytes, 'archive metadata'), maxArchiveBytes);
+    const operationLimit = Math.min(
+      maxArchiveBytes,
+      archiveLimitsForKind(request.kind).compressedBytes,
+    );
     const target = path.join(directory, request.filename);
     const receipt = archiveReceipt(request);
 
     if (request.operation === 'upload') {
-      archiveBytes = await reader.readFrame(maxArchiveBytes);
+      archiveBytes = await reader.readFrame(operationLimit);
       if (archiveBytes.length !== request.byteLength
         || !timingSafeHexEqual(sha256(archiveBytes), request.sha256)) {
         fail('archive digest or size does not match the request', 'ERR_REMOTE_ARCHIVE_DIGEST');
@@ -614,7 +632,7 @@ export async function runArchiveBridge({
     reader.assertNoBufferedInput();
     responseBytes = encodeJson(receipt, 'archive receipt');
     await writeFrame(output, responseBytes);
-    await writeFrame(output, archiveBytes, maxArchiveBytes);
+    await writeFrame(output, archiveBytes, operationLimit);
     return receipt;
   } catch (error) {
     throw sanitized(error, 'archive bridge failed', 'ERR_REMOTE_ARCHIVE');

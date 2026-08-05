@@ -4,6 +4,11 @@ import path from 'node:path';
 import zlib from 'node:zlib';
 
 import {
+  TASK_INPUT_ARCHIVE_LIMITS,
+  TRIAL_OUTPUT_ARCHIVE_LIMITS,
+  archiveLimitsForKind,
+} from './archive-limits.mjs';
+import {
   TASK_SECURITY_COMPOSE_PATH,
   createTrialSecurityContract,
   deriveTrialRuntimeIdentity,
@@ -21,13 +26,8 @@ const HASH = /^[a-f0-9]{64}$/;
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,191}$/;
 const SAFE_JOB = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
 const IMMUTABLE_IMAGE = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}@sha256:[a-f0-9]{64}$/;
-const MAX_COMPRESSED_BYTES = 64 * 1024 * 1024;
-const MAX_UNCOMPRESSED_BYTES = 96 * 1024 * 1024;
-const MAX_CONTENT_BYTES = 48 * 1024 * 1024;
-const MAX_FILE_BYTES = 16 * 1024 * 1024;
-const MAX_FILES = 4_096;
 const MAX_ARCHIVE_PATH_BYTES = 240;
-const MAX_JSON_BYTES = 512 * 1024;
+const MAX_METADATA_JSON_BYTES = 512 * 1024;
 const BLOCK = 512;
 const SECRET_NAME = /(?:^|_)(?:OPENROUTER|OPENAI|ANTHROPIC|GEMINI|GOOGLE_AI|API_KEY|AUTHORIZATION|CREDENTIAL|PASSWORD|SECRET|TOKEN)(?:_|$)/i;
 const SECRET_VALUE = /(?:Bearer\s+|sk-[A-Za-z0-9_-]{8,})/i;
@@ -119,7 +119,7 @@ function cloneCanonical(value, label) {
     if (error instanceof TrialArchiveError) throw error;
     fail(`${label} is not JSON`, 'ERR_TRIAL_ARCHIVE_SCHEMA');
   }
-  if (Buffer.byteLength(text) > MAX_JSON_BYTES) fail(`${label} exceeds its byte bound`, 'ERR_TRIAL_ARCHIVE_BOUND');
+  if (Buffer.byteLength(text) > MAX_METADATA_JSON_BYTES) fail(`${label} exceeds its byte bound`, 'ERR_TRIAL_ARCHIVE_BOUND');
   const clone = JSON.parse(text);
   scanCredentialMetadata(clone, label);
   return clone;
@@ -284,19 +284,19 @@ function tarHeader(entry) {
   return header;
 }
 
-function encodeTar(entries) {
+function encodeTar(entries, limits) {
   const ordered = entries.slice().sort((left, right) => compareText(left.path, right.path));
   const parts = [];
   let total = BLOCK * 2;
   let contentTotal = 0;
-  if (ordered.length > MAX_FILES) fail('tar archive contains too many entries', 'ERR_TRIAL_ARCHIVE_BOUND');
+  if (ordered.length > limits.entries) fail('tar archive contains too many entries', 'ERR_TRIAL_ARCHIVE_BOUND');
   for (const entry of ordered) {
     const header = tarHeader(entry);
     parts.push(header);
     total += BLOCK;
     if (entry.type === 'file') {
       contentTotal += entry.bytes.length;
-      if (contentTotal > MAX_CONTENT_BYTES) fail('tar contents exceed their byte bound', 'ERR_TRIAL_ARCHIVE_BOUND');
+      if (contentTotal > limits.contentBytes) fail('tar contents exceed their byte bound', 'ERR_TRIAL_ARCHIVE_BOUND');
       parts.push(entry.bytes);
       total += entry.bytes.length;
       const padding = (BLOCK - (entry.bytes.length % BLOCK)) % BLOCK;
@@ -305,13 +305,17 @@ function encodeTar(entries) {
         total += padding;
       }
     }
-    if (total > MAX_UNCOMPRESSED_BYTES) fail('tar archive exceeds its byte bound', 'ERR_TRIAL_ARCHIVE_BOUND');
+    if (total > limits.uncompressedBytes) fail('tar archive exceeds its byte bound', 'ERR_TRIAL_ARCHIVE_BOUND');
   }
   parts.push(Buffer.alloc(BLOCK * 2));
   const raw = Buffer.concat(parts, total);
-  const compressed = zlib.gzipSync(raw, { level: 9, mtime: 0 });
-  raw.fill(0);
-  if (compressed.length > MAX_COMPRESSED_BYTES) {
+  let compressed;
+  try {
+    compressed = zlib.gzipSync(raw, { level: 9, mtime: 0 });
+  } finally {
+    raw.fill(0);
+  }
+  if (compressed.length > limits.compressedBytes) {
     compressed.fill(0);
     fail('compressed trial archive exceeds its byte bound', 'ERR_TRIAL_ARCHIVE_BOUND');
   }
@@ -326,17 +330,26 @@ function parseOctal(field, label) {
   return value;
 }
 
-function parseTar(archiveBytes) {
+function parseTar(archiveBytes, limits) {
   if (!Buffer.isBuffer(archiveBytes) && !(archiveBytes instanceof Uint8Array)) {
     fail('archive must be supplied as bytes', 'ERR_TRIAL_ARCHIVE_SCHEMA');
   }
+  if (Buffer.isBuffer(archiveBytes)) return parseCompressedTar(archiveBytes, limits);
   const compressed = Buffer.from(archiveBytes);
-  if (compressed.length < 20 || compressed.length > MAX_COMPRESSED_BYTES || compressed[0] !== 0x1f || compressed[1] !== 0x8b) {
+  try {
+    return parseCompressedTar(compressed, limits);
+  } finally {
+    compressed.fill(0);
+  }
+}
+
+function parseCompressedTar(compressed, limits) {
+  if (compressed.length < 20 || compressed.length > limits.compressedBytes || compressed[0] !== 0x1f || compressed[1] !== 0x8b) {
     fail('trial archive must be a bounded gzip stream', 'ERR_TRIAL_ARCHIVE_TAR');
   }
   let raw;
   try {
-    raw = zlib.gunzipSync(compressed, { maxOutputLength: MAX_UNCOMPRESSED_BYTES });
+    raw = zlib.gunzipSync(compressed, { maxOutputLength: limits.uncompressedBytes });
   } catch {
     fail('trial gzip archive is malformed or oversized', 'ERR_TRIAL_ARCHIVE_TAR');
   }
@@ -388,11 +401,11 @@ function parseTar(archiveBytes) {
           || ![0o600, 0o700].includes(mode)) {
         fail('tar metadata violates the portable archive policy', 'ERR_TRIAL_ARCHIVE_TAR');
       }
-      boundedInteger(size, 'tar file size', 0, MAX_FILE_BYTES);
+      boundedInteger(size, 'tar file size', 0, limits.fileBytes);
       if (offset + size > raw.length) fail('tar entry is truncated', 'ERR_TRIAL_ARCHIVE_TAR');
       const bytes = type === 'file' ? Buffer.from(raw.subarray(offset, offset + size)) : Buffer.alloc(0);
       contentBytes += bytes.length;
-      if (contentBytes > MAX_CONTENT_BYTES || entries.length + 1 > MAX_FILES) {
+      if (contentBytes > limits.contentBytes || entries.length + 1 > limits.entries) {
         bytes.fill(0);
         fail('tar contents exceed their bound', 'ERR_TRIAL_ARCHIVE_BOUND');
       }
@@ -415,22 +428,63 @@ function parseTar(archiveBytes) {
   }
 }
 
-function addDirectory(entries, seen, archivePath) {
+function createArchiveConstructionState(limits) {
+  return {
+    limits,
+    entryCount: 0,
+    contentBytes: 0,
+    uncompressedBytes: BLOCK * 2,
+  };
+}
+
+function projectedTarBytes(type, size) {
+  return BLOCK + (type === 'file' ? Math.ceil(size / BLOCK) * BLOCK : 0);
+}
+
+function assertArchiveEntryFits(state, type, size) {
+  const { limits } = state;
+  if (state.entryCount + 1 > limits.entries) {
+    fail('aggregate archive contains too many entries', 'ERR_TRIAL_ARCHIVE_BOUND');
+  }
+  if (type === 'file' && state.contentBytes + size > limits.contentBytes) {
+    fail('aggregate contents exceed their byte bound', 'ERR_TRIAL_ARCHIVE_BOUND');
+  }
+  if (state.uncompressedBytes + projectedTarBytes(type, size) > limits.uncompressedBytes) {
+    fail('aggregate tar archive exceeds its byte bound', 'ERR_TRIAL_ARCHIVE_BOUND');
+  }
+}
+
+function commitArchiveEntry(state, type, size) {
+  state.entryCount += 1;
+  if (type === 'file') state.contentBytes += size;
+  state.uncompressedBytes += projectedTarBytes(type, size);
+}
+
+function clearEntryBuffers(entries) {
+  for (const entry of entries) entry.bytes.fill(0);
+}
+
+function addDirectory(entries, seen, archivePath, state) {
   const safe = safeArchivePath(archivePath, { directory: true });
   if (seen.has(safe)) return;
+  assertArchiveEntryFits(state, 'directory', 0);
   seen.add(safe);
   entries.push({ path: safe, type: 'directory', mode: 0o700, bytes: Buffer.alloc(0) });
+  commitArchiveEntry(state, 'directory', 0);
 }
 
-function addFile(entries, seen, archivePath, bytes, mode = 0o600) {
+function addFile(entries, seen, archivePath, bytes, mode, state) {
   const safe = safeArchivePath(archivePath);
   if (seen.has(safe)) fail(`duplicate archive path: ${safe}`, 'ERR_TRIAL_ARCHIVE_PATH');
-  if (!Buffer.isBuffer(bytes) || bytes.length > MAX_FILE_BYTES) fail(`archive file exceeds its bound: ${safe}`, 'ERR_TRIAL_ARCHIVE_BOUND');
+  if (!Buffer.isBuffer(bytes) || bytes.length > state.limits.fileBytes) fail(`archive file exceeds its bound: ${safe}`, 'ERR_TRIAL_ARCHIVE_BOUND');
+  assertArchiveEntryFits(state, 'file', bytes.length);
+  const copy = Buffer.from(bytes);
   seen.add(safe);
-  entries.push({ path: safe, type: 'file', mode: mode === 0o700 ? 0o700 : 0o600, bytes: Buffer.from(bytes) });
+  entries.push({ path: safe, type: 'file', mode: mode === 0o700 ? 0o700 : 0o600, bytes: copy });
+  commitArchiveEntry(state, 'file', bytes.length);
 }
 
-function readAttestedFile(file, expectedRoot, label) {
+function readAttestedFile(file, expectedRoot, label, limits = TRIAL_OUTPUT_ARCHIVE_LIMITS, state = null) {
   let lstat;
   let real;
   try {
@@ -451,21 +505,30 @@ function readAttestedFile(file, expectedRoot, label) {
   const descriptor = fs.openSync(real, FS_CONSTANTS.O_RDONLY | (FS_CONSTANTS.O_NOFOLLOW ?? 0));
   try {
     const before = fs.fstatSync(descriptor);
-    if (!before.isFile() || before.size > MAX_FILE_BYTES) fail(`${label} exceeds its file bound`, 'ERR_TRIAL_ARCHIVE_BOUND');
-    const bytes = Buffer.alloc(before.size);
-    let position = 0;
-    while (position < bytes.length) {
-      const count = fs.readSync(descriptor, bytes, position, bytes.length - position, position);
-      if (count === 0) fail(`${label} changed while being read`, 'ERR_TRIAL_ARCHIVE_RACE');
-      position += count;
+    if (!before.isFile() || !Number.isSafeInteger(before.size) || before.size < 0
+        || before.size > limits.fileBytes) {
+      fail(`${label} exceeds its file bound`, 'ERR_TRIAL_ARCHIVE_BOUND');
     }
-    const after = fs.fstatSync(descriptor);
-    if (before.dev !== after.dev || before.ino !== after.ino || before.size !== after.size
-        || before.mode !== after.mode || before.mtimeMs !== after.mtimeMs || before.ctimeMs !== after.ctimeMs) {
-      bytes.fill(0);
-      fail(`${label} changed while being attested`, 'ERR_TRIAL_ARCHIVE_RACE');
+    if (state !== null) assertArchiveEntryFits(state, 'file', before.size);
+    let bytes;
+    try {
+      bytes = Buffer.alloc(before.size);
+      let position = 0;
+      while (position < bytes.length) {
+        const count = fs.readSync(descriptor, bytes, position, bytes.length - position, position);
+        if (count === 0) fail(`${label} changed while being read`, 'ERR_TRIAL_ARCHIVE_RACE');
+        position += count;
+      }
+      const after = fs.fstatSync(descriptor);
+      if (before.dev !== after.dev || before.ino !== after.ino || before.size !== after.size
+          || before.mode !== after.mode || before.mtimeMs !== after.mtimeMs || before.ctimeMs !== after.ctimeMs) {
+        fail(`${label} changed while being attested`, 'ERR_TRIAL_ARCHIVE_RACE');
+      }
+      return { bytes, mode: (before.mode & 0o111) === 0 ? 0o600 : 0o700 };
+    } catch (error) {
+      bytes?.fill(0);
+      throw error;
     }
-    return { bytes, mode: (before.mode & 0o111) === 0 ? 0o600 : 0o700 };
   } finally {
     fs.closeSync(descriptor);
   }
@@ -512,11 +575,11 @@ function validateConditionExecutionMode(bytes, trial) {
   }
 }
 
-function addTree(entries, seen, sourceDirectory, archiveDirectory) {
+function addTree(entries, seen, sourceDirectory, archiveDirectory, state) {
   const root = assertRealDirectory(sourceDirectory, `archive source ${sourceDirectory}`);
   const visit = (current, relative) => {
     const archivePath = relative ? `${archiveDirectory}/${relative}` : archiveDirectory;
-    addDirectory(entries, seen, archivePath);
+    addDirectory(entries, seen, archivePath, state);
     let children;
     try {
       children = fs.readdirSync(current, { withFileTypes: true })
@@ -535,27 +598,44 @@ function addTree(entries, seen, sourceDirectory, archiveDirectory) {
         if (!below(root, real)) fail('archive directory escaped its attested root', 'ERR_TRIAL_ARCHIVE_PATH');
         visit(real, childRelative);
       } else if (stat.isFile()) {
-        const read = readAttestedFile(sourcePath, root, `archive source file ${childRelative}`);
-        addFile(entries, seen, `${archiveDirectory}/${childRelative}`, read.bytes, read.mode);
-        read.bytes.fill(0);
+        const read = readAttestedFile(
+          sourcePath,
+          root,
+          `archive source file ${childRelative}`,
+          state.limits,
+          state,
+        );
+        try {
+          addFile(entries, seen, `${archiveDirectory}/${childRelative}`, read.bytes, read.mode, state);
+        } finally {
+          read.bytes.fill(0);
+        }
       } else {
         fail(`archive source contains a non-regular input: ${childRelative}`, 'ERR_TRIAL_ARCHIVE_PATH');
       }
-      if (entries.length > MAX_FILES) fail('archive contains too many files', 'ERR_TRIAL_ARCHIVE_BOUND');
     }
   };
   visit(root, '');
 }
 
-function addMountSource(entries, seen, source, archivePath, kind) {
+function addMountSource(entries, seen, source, archivePath, kind, state) {
   if (kind === 'directory') {
-    addTree(entries, seen, source, archivePath);
+    addTree(entries, seen, source, archivePath, state);
     return;
   }
   if (kind !== 'file') fail('archive mount source kind is invalid', 'ERR_TRIAL_ARCHIVE_PATH');
-  const read = readAttestedFile(source, path.dirname(source), `archive mount source ${source}`);
-  addFile(entries, seen, archivePath, read.bytes, read.mode);
-  read.bytes.fill(0);
+  const read = readAttestedFile(
+    source,
+    path.dirname(source),
+    `archive mount source ${source}`,
+    state.limits,
+    state,
+  );
+  try {
+    addFile(entries, seen, archivePath, read.bytes, read.mode, state);
+  } finally {
+    read.bytes.fill(0);
+  }
 }
 
 function validateSpawnEnv(value) {
@@ -731,9 +811,9 @@ function validateConditionMountTargets(mounts, condition, { archived = false } =
   }
 }
 
-function lockedTaskSecurity(taskRoot, parsed, trialId) {
+function lockedTaskSecurity(taskRoot, parsed, trialId, limits) {
   const taskConfig = path.join(taskRoot, 'task.toml');
-  const config = readAttestedFile(taskConfig, taskRoot, 'task configuration');
+  const config = readAttestedFile(taskConfig, taskRoot, 'task configuration', limits);
   let source;
   try {
     source = config.bytes.toString('utf8');
@@ -816,6 +896,7 @@ function validateContentManifest(entries, document, excludedPath, field) {
 }
 
 export function createTrialInputArchive(request) {
+  const limits = TASK_INPUT_ARCHIVE_LIMITS;
   exactKeys(request, ['trial', 'harbor'], 'trial archive request');
   if (!plainObject(request.trial) || !plainObject(request.harbor)) fail('trial and Harbor specifications are required', 'ERR_TRIAL_ARCHIVE_SCHEMA');
   const trial = cloneCanonical(request.trial, 'trial specification');
@@ -853,7 +934,7 @@ export function createTrialInputArchive(request) {
   let security = null;
   if (parsed.launch === 'trial') {
     const taskRoot = assertRealDirectory(path.join(parsed.dataset, parsed.task), 'Harbor task root');
-    const material = lockedTaskSecurity(taskRoot, parsed, trial.trialId);
+    const material = lockedTaskSecurity(taskRoot, parsed, trial.trialId, limits);
     security = material.binding;
     if (material.contract.composePath !== TASK_SECURITY_COMPOSE_PATH) {
       fail('code-owned security Compose path drifted', 'ERR_TRIAL_ARCHIVE_SECURITY');
@@ -862,121 +943,139 @@ export function createTrialInputArchive(request) {
 
   const entries = [];
   const seen = new Set();
-  for (const directory of [
-    'work', 'work/.engineer', 'work/control', 'work/jobs', 'work/telemetry',
-    'work/.home', 'work/.home/xdg-config', 'work/.home/xdg-cache', 'work/.home/tmp', 'work/.home/docker',
-    'work/mounts',
-  ]) addDirectory(entries, seen, directory);
-  addTree(entries, seen, parsed.dataset, 'work/dataset');
-  addTree(entries, seen, spawn.bridge, 'work/bridge');
-  parsed.mounts.forEach((mount, index) => addMountSource(
-    entries,
-    seen,
-    mount.source,
-    `work/mounts/${String(index).padStart(3, '0')}`,
-    mount.sourceKind,
-  ));
-  const condition = readAttestedFile(parsed.condition, cwd, 'condition file');
-  validateConditionExecutionMode(condition.bytes, trial);
-  addFile(entries, seen, 'work/control/condition.json', condition.bytes, 0o600);
-  condition.bytes.fill(0);
-  if (security !== null) {
-    const contract = createTrialSecurityContract({
-      trialId: trial.trialId,
-      immutableImage: security.immutableImage,
-      cpus: security.resources.cpus,
-      memoryMb: security.resources.memoryMb,
-      pidsLimit: security.resources.pidsLimit,
+  const state = createArchiveConstructionState(limits);
+  try {
+    for (const directory of [
+      'work', 'work/.engineer', 'work/control', 'work/jobs', 'work/telemetry',
+      'work/.home', 'work/.home/xdg-config', 'work/.home/xdg-cache', 'work/.home/tmp', 'work/.home/docker',
+      'work/mounts',
+    ]) addDirectory(entries, seen, directory, state);
+    addTree(entries, seen, parsed.dataset, 'work/dataset', state);
+    addTree(entries, seen, spawn.bridge, 'work/bridge', state);
+    parsed.mounts.forEach((mount, index) => addMountSource(
+      entries,
+      seen,
+      mount.source,
+      `work/mounts/${String(index).padStart(3, '0')}`,
+      mount.sourceKind,
+      state,
+    ));
+    const condition = readAttestedFile(parsed.condition, cwd, 'condition file', limits, state);
+    try {
+      validateConditionExecutionMode(condition.bytes, trial);
+      addFile(entries, seen, 'work/control/condition.json', condition.bytes, 0o600, state);
+    } finally {
+      condition.bytes.fill(0);
+    }
+    if (security !== null) {
+      const contract = createTrialSecurityContract({
+        trialId: trial.trialId,
+        immutableImage: security.immutableImage,
+        cpus: security.resources.cpus,
+        memoryMb: security.resources.memoryMb,
+        pidsLimit: security.resources.pidsLimit,
+      });
+      const composeBytes = Buffer.from(contract.canonicalCompose);
+      try {
+        addFile(entries, seen, 'work/control/security-compose.json', composeBytes, 0o600, state);
+      } finally {
+        composeBytes.fill(0);
+      }
+    }
+
+    const rewritten = parsed.values.slice();
+    if (parsed.launch === 'trial') {
+      replaceArgAfter(rewritten, '--path', `${REMOTE_ROOT}/dataset/${parsed.task}`);
+      replaceArgAfter(rewritten, '--trials-dir', `${REMOTE_ROOT}/jobs/${parsed.jobName}`);
+      replaceArgAfter(rewritten, '--extra-docker-compose', TASK_SECURITY_COMPOSE_PATH);
+    } else {
+      replaceArgAfter(rewritten, '-p', `${REMOTE_ROOT}/dataset`);
+      replaceArgAfter(rewritten, '--jobs-dir', `${REMOTE_ROOT}/jobs`);
+    }
+    const remoteMounts = parsed.mounts.map((mount, index) => ({
+      type: 'bind',
+      source: `${REMOTE_ROOT}/mounts/${String(index).padStart(3, '0')}`,
+      target: mount.target,
+      read_only: true,
+    }));
+    replaceArgAfter(rewritten, '--mounts', canonicalJson(remoteMounts));
+    replaceAgentEnv(rewritten, 'HARNESS_EVAL_TB_CONDITION', `${REMOTE_ROOT}/control/condition.json`);
+    replaceAgentEnv(rewritten, 'HARNESS_EVAL_TB_TELEMETRY_FILE', `${REMOTE_ROOT}/telemetry/done.json`);
+    replaceAgentEnv(rewritten, 'HARNESS_EVAL_HOST_NODE', REMOTE_NODE);
+    replaceAgentEnv(rewritten, 'HARNESS_EVAL_HOST_NODE_SHA256', ZERO_HASH);
+    const baseEnv = {
+      DOCKER_CONFIG: `${REMOTE_ROOT}/.home/docker`,
+      HARNESS_EVAL_HOST_NODE: REMOTE_NODE,
+      HARNESS_EVAL_HOST_NODE_SHA256: ZERO_HASH,
+      HOME: `${REMOTE_ROOT}/.home`,
+      LANG: request.harbor.spawnEnv.LANG ?? 'C.UTF-8',
+      PATH: '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
+      PYTHONNOUSERSITE: '1',
+      PYTHONPATH: `${REMOTE_ROOT}/bridge`,
+      PYTHONSAFEPATH: '1',
+      PYTHONDONTWRITEBYTECODE: '1',
+      TMPDIR: `${REMOTE_ROOT}/.home/tmp`,
+      XDG_CACHE_HOME: `${REMOTE_ROOT}/.home/xdg-cache`,
+      XDG_CONFIG_HOME: `${REMOTE_ROOT}/.home/xdg-config`,
+    };
+    if (request.harbor.spawnEnv.LC_ALL) baseEnv.LC_ALL = request.harbor.spawnEnv.LC_ALL;
+
+    const document = {
+      schema: 'engineer-trial-input.v1',
+      archiveEncoding: TRIAL_ARCHIVE_ENCODING,
+      logicalRoot: REMOTE_ROOT,
+      trial,
+      security,
+      harbor: {
+        executable: REMOTE_HARBOR,
+        args: rewritten,
+        cwd: REMOTE_ROOT,
+        timeoutMs: request.harbor.timeoutMs,
+        baseEnv,
+        runtimeNodeAttestation: { executable: REMOTE_NODE, digestPlaceholder: ZERO_HASH },
+      },
+      output: {
+        jobsPath: `${REMOTE_ROOT}/jobs`,
+        telemetryPath: `${REMOTE_ROOT}/telemetry/done.json`,
+        jobName: parsed.jobName,
+      },
+      content: contentManifest(entries, TRIAL_INPUT_MANIFEST_PATH),
+    };
+    const manifestBytes = Buffer.from(canonicalJson(document));
+    try {
+      if (manifestBytes.length > limits.controlDocumentBytes) {
+        fail('trial input manifest exceeds its byte bound', 'ERR_TRIAL_ARCHIVE_BOUND');
+      }
+      addFile(entries, seen, TRIAL_INPUT_MANIFEST_PATH, manifestBytes, 0o600, state);
+    } finally {
+      manifestBytes.fill(0);
+    }
+    const bytes = encodeTar(entries, limits);
+    const manifest = archiveManifest(bytes, 'task-input');
+    const telemetryRelativePath = path.relative(requestedCwd, parsed.telemetry);
+    return Object.freeze({
+      bytes,
+      manifest,
+      materialization: Object.freeze({
+        schema: 'engineer-trial-output-materialization.v1',
+        inputArchiveSha256: manifest.sha256,
+        controllerWorkRoot: cwd,
+        jobsDirectory: cwd,
+        jobsRelativePath: path.relative(requestedCwd, parsed.jobsDirectory),
+        telemetryRelativePath,
+        jobName: parsed.jobName,
+        trialId: trial.trialId,
+      }),
     });
-    const composeBytes = Buffer.from(contract.canonicalCompose);
-    addFile(entries, seen, 'work/control/security-compose.json', composeBytes, 0o600);
-    composeBytes.fill(0);
+  } finally {
+    clearEntryBuffers(entries);
   }
-
-  const rewritten = parsed.values.slice();
-  if (parsed.launch === 'trial') {
-    replaceArgAfter(rewritten, '--path', `${REMOTE_ROOT}/dataset/${parsed.task}`);
-    replaceArgAfter(rewritten, '--trials-dir', `${REMOTE_ROOT}/jobs/${parsed.jobName}`);
-    replaceArgAfter(rewritten, '--extra-docker-compose', TASK_SECURITY_COMPOSE_PATH);
-  } else {
-    replaceArgAfter(rewritten, '-p', `${REMOTE_ROOT}/dataset`);
-    replaceArgAfter(rewritten, '--jobs-dir', `${REMOTE_ROOT}/jobs`);
-  }
-  const remoteMounts = parsed.mounts.map((mount, index) => ({
-    type: 'bind',
-    source: `${REMOTE_ROOT}/mounts/${String(index).padStart(3, '0')}`,
-    target: mount.target,
-    read_only: true,
-  }));
-  replaceArgAfter(rewritten, '--mounts', canonicalJson(remoteMounts));
-  replaceAgentEnv(rewritten, 'HARNESS_EVAL_TB_CONDITION', `${REMOTE_ROOT}/control/condition.json`);
-  replaceAgentEnv(rewritten, 'HARNESS_EVAL_TB_TELEMETRY_FILE', `${REMOTE_ROOT}/telemetry/done.json`);
-  replaceAgentEnv(rewritten, 'HARNESS_EVAL_HOST_NODE', REMOTE_NODE);
-  replaceAgentEnv(rewritten, 'HARNESS_EVAL_HOST_NODE_SHA256', ZERO_HASH);
-  const baseEnv = {
-    DOCKER_CONFIG: `${REMOTE_ROOT}/.home/docker`,
-    HARNESS_EVAL_HOST_NODE: REMOTE_NODE,
-    HARNESS_EVAL_HOST_NODE_SHA256: ZERO_HASH,
-    HOME: `${REMOTE_ROOT}/.home`,
-    LANG: request.harbor.spawnEnv.LANG ?? 'C.UTF-8',
-    PATH: '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
-    PYTHONNOUSERSITE: '1',
-    PYTHONPATH: `${REMOTE_ROOT}/bridge`,
-    PYTHONSAFEPATH: '1',
-    PYTHONDONTWRITEBYTECODE: '1',
-    TMPDIR: `${REMOTE_ROOT}/.home/tmp`,
-    XDG_CACHE_HOME: `${REMOTE_ROOT}/.home/xdg-cache`,
-    XDG_CONFIG_HOME: `${REMOTE_ROOT}/.home/xdg-config`,
-  };
-  if (request.harbor.spawnEnv.LC_ALL) baseEnv.LC_ALL = request.harbor.spawnEnv.LC_ALL;
-
-  const document = {
-    schema: 'engineer-trial-input.v1',
-    archiveEncoding: TRIAL_ARCHIVE_ENCODING,
-    logicalRoot: REMOTE_ROOT,
-    trial,
-    security,
-    harbor: {
-      executable: REMOTE_HARBOR,
-      args: rewritten,
-      cwd: REMOTE_ROOT,
-      timeoutMs: request.harbor.timeoutMs,
-      baseEnv,
-      runtimeNodeAttestation: { executable: REMOTE_NODE, digestPlaceholder: ZERO_HASH },
-    },
-    output: {
-      jobsPath: `${REMOTE_ROOT}/jobs`,
-      telemetryPath: `${REMOTE_ROOT}/telemetry/done.json`,
-      jobName: parsed.jobName,
-    },
-    content: contentManifest(entries, TRIAL_INPUT_MANIFEST_PATH),
-  };
-  const manifestBytes = Buffer.from(canonicalJson(document));
-  addFile(entries, seen, TRIAL_INPUT_MANIFEST_PATH, manifestBytes, 0o600);
-  manifestBytes.fill(0);
-  const bytes = encodeTar(entries);
-  const manifest = archiveManifest(bytes, 'task-input');
-  for (const entry of entries) entry.bytes.fill(0);
-  const telemetryRelativePath = path.relative(requestedCwd, parsed.telemetry);
-  return Object.freeze({
-    bytes,
-    manifest,
-    materialization: Object.freeze({
-      schema: 'engineer-trial-output-materialization.v1',
-      inputArchiveSha256: manifest.sha256,
-      controllerWorkRoot: cwd,
-      jobsDirectory: cwd,
-      jobsRelativePath: path.relative(requestedCwd, parsed.jobsDirectory),
-      telemetryRelativePath,
-      jobName: parsed.jobName,
-      trialId: trial.trialId,
-    }),
-  });
 }
 
-function parseDocumentEntry(entries, documentPath) {
+function parseDocumentEntry(entries, documentPath, limits) {
   const matches = entries.filter((entry) => entry.path === documentPath && entry.type === 'file');
-  if (matches.length !== 1 || matches[0].bytes.length < 2 || matches[0].bytes.length > MAX_JSON_BYTES) {
+  if (matches.length !== 1 || matches[0].bytes.length < 2
+      || matches[0].bytes.length > limits.controlDocumentBytes) {
     fail('archive control document is missing or oversized', 'ERR_TRIAL_ARCHIVE_SCHEMA');
   }
   let document;
@@ -1122,16 +1221,17 @@ function validateOutputDocument(document, entries) {
 
 export function inspectTrialArchive(bytes, { kind } = {}) {
   if (!['task-input', 'trial-output'].includes(kind)) fail('archive kind is invalid', 'ERR_TRIAL_ARCHIVE_SCHEMA');
-  const entries = parseTar(bytes);
+  const limits = archiveLimitsForKind(kind);
+  const entries = parseTar(bytes, limits);
   try {
     if (entries.some((entry) => !(entry.path === 'work' || entry.path.startsWith('work/')))) {
       fail('archive entry escaped the fixed work root', 'ERR_TRIAL_ARCHIVE_PATH');
     }
     const controlPath = kind === 'task-input' ? TRIAL_INPUT_MANIFEST_PATH : TRIAL_OUTPUT_RECEIPT_PATH;
-    const document = parseDocumentEntry(entries, controlPath);
+    const document = parseDocumentEntry(entries, controlPath, limits);
     if (kind === 'task-input') validateInputDocument(document, entries);
     else validateOutputDocument(document, entries);
-    return { entries, document, manifest: archiveManifest(Buffer.from(bytes), kind) };
+    return { entries, document, manifest: archiveManifest(bytes, kind) };
   } catch (error) {
     for (const entry of entries) entry.bytes.fill(0);
     throw error;
@@ -1232,6 +1332,7 @@ export function createTrialOutputArchive({
   brokerBindingHash,
   commandResult,
 } = {}) {
+  const limits = TRIAL_OUTPUT_ARCHIVE_LIMITS;
   assertRealDirectory(workRoot, 'remote work root');
   if (!HASH.test(String(inputArchiveSha256 ?? '')) || !HASH.test(String(runtimeBindingHash ?? ''))) {
     fail('output receipt digest binding is invalid', 'ERR_TRIAL_ARCHIVE_DIGEST');
@@ -1250,57 +1351,70 @@ export function createTrialOutputArchive({
   safeId(jobName, 'output job name', SAFE_JOB);
   const entries = [];
   const seen = new Set();
-  for (const directory of ['work', 'work/.engineer']) addDirectory(entries, seen, directory);
-  const jobsRoot = path.join(workRoot, 'jobs');
-  if (fs.existsSync(jobsRoot)) {
-    assertRealDirectory(jobsRoot, 'remote jobs root');
-    const jobEntries = fs.readdirSync(jobsRoot, { withFileTypes: true });
-    if (jobEntries.some((entry) => entry.name !== jobName)) fail('remote jobs root contains an unexpected job', 'ERR_TRIAL_ARCHIVE_PATH');
-    const jobRoot = path.join(jobsRoot, jobName);
-    if (fs.existsSync(jobRoot)) {
-      addDirectory(entries, seen, 'work/jobs');
-      addTree(entries, seen, jobRoot, `work/jobs/${jobName}`);
+  const state = createArchiveConstructionState(limits);
+  try {
+    for (const directory of ['work', 'work/.engineer']) addDirectory(entries, seen, directory, state);
+    const jobsRoot = path.join(workRoot, 'jobs');
+    if (fs.existsSync(jobsRoot)) {
+      assertRealDirectory(jobsRoot, 'remote jobs root');
+      const jobEntries = fs.readdirSync(jobsRoot, { withFileTypes: true });
+      if (jobEntries.some((entry) => entry.name !== jobName)) fail('remote jobs root contains an unexpected job', 'ERR_TRIAL_ARCHIVE_PATH');
+      const jobRoot = path.join(jobsRoot, jobName);
+      if (fs.existsSync(jobRoot)) {
+        addDirectory(entries, seen, 'work/jobs', state);
+        addTree(entries, seen, jobRoot, `work/jobs/${jobName}`, state);
+      }
     }
+    const telemetry = path.join(workRoot, 'telemetry', 'done.json');
+    if (fs.existsSync(telemetry)) {
+      addDirectory(entries, seen, 'work/telemetry', state);
+      const read = readAttestedFile(telemetry, workRoot, 'remote telemetry', limits, state);
+      try {
+        addFile(entries, seen, 'work/telemetry/done.json', read.bytes, 0o600, state);
+      } finally {
+        read.bytes.fill(0);
+      }
+    }
+    const harbor = sanitizeCommandResult(commandResult);
+    const receipt = {
+      schema: 'engineer-trial-runner-receipt.v1',
+      archiveEncoding: TRIAL_ARCHIVE_ENCODING,
+      inputArchiveSha256,
+      trialId,
+      jobName,
+      executionMode,
+      runtimeBindingHash,
+      brokerBindingHash,
+      harbor,
+      payload: contentManifest(entries, TRIAL_OUTPUT_RECEIPT_PATH),
+    };
+    const receiptBytes = Buffer.from(canonicalJson(receipt));
+    try {
+      if (receiptBytes.length > limits.controlDocumentBytes) {
+        fail('trial output receipt exceeds its byte bound', 'ERR_TRIAL_ARCHIVE_BOUND');
+      }
+      addFile(entries, seen, TRIAL_OUTPUT_RECEIPT_PATH, receiptBytes, 0o600, state);
+    } finally {
+      receiptBytes.fill(0);
+    }
+    const bytes = encodeTar(entries, limits);
+    return Object.freeze({
+      bytes,
+      manifest: archiveManifest(bytes, 'trial-output'),
+      receipt: Object.freeze(receipt),
+      run: Object.freeze({
+        code: harbor.code,
+        signal: harbor.signal,
+        stdout: '',
+        stderr: '',
+        timedOut: harbor.timedOut,
+        spawnError: harbor.spawnError,
+        containmentComplete: true,
+      }),
+    });
+  } finally {
+    clearEntryBuffers(entries);
   }
-  const telemetry = path.join(workRoot, 'telemetry', 'done.json');
-  if (fs.existsSync(telemetry)) {
-    addDirectory(entries, seen, 'work/telemetry');
-    const read = readAttestedFile(telemetry, workRoot, 'remote telemetry');
-    addFile(entries, seen, 'work/telemetry/done.json', read.bytes, 0o600);
-    read.bytes.fill(0);
-  }
-  const harbor = sanitizeCommandResult(commandResult);
-  const receipt = {
-    schema: 'engineer-trial-runner-receipt.v1',
-    archiveEncoding: TRIAL_ARCHIVE_ENCODING,
-    inputArchiveSha256,
-    trialId,
-    jobName,
-    executionMode,
-    runtimeBindingHash,
-    brokerBindingHash,
-    harbor,
-    payload: contentManifest(entries, TRIAL_OUTPUT_RECEIPT_PATH),
-  };
-  const receiptBytes = Buffer.from(canonicalJson(receipt));
-  addFile(entries, seen, TRIAL_OUTPUT_RECEIPT_PATH, receiptBytes, 0o600);
-  receiptBytes.fill(0);
-  const bytes = encodeTar(entries);
-  for (const entry of entries) entry.bytes.fill(0);
-  return Object.freeze({
-    bytes,
-    manifest: archiveManifest(bytes, 'trial-output'),
-    receipt: Object.freeze(receipt),
-    run: Object.freeze({
-      code: harbor.code,
-      signal: harbor.signal,
-      stdout: '',
-      stderr: '',
-      timedOut: harbor.timedOut,
-      spawnError: harbor.spawnError,
-      containmentComplete: true,
-    }),
-  });
 }
 
 function ensureMaterialization(value) {

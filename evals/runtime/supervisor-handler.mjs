@@ -1,5 +1,6 @@
 import { TextDecoder } from 'node:util';
 
+import { archiveLimitsForKind } from './archive-limits.mjs';
 import {
   MAX_PROTOCOL_BYTES,
   RuntimeExecutionModes,
@@ -17,7 +18,6 @@ const HASH = /^[a-f0-9]{64}$/;
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._:/-]*$/;
 const IMAGE_DIGEST = /^sha256:[a-f0-9]{64}$/;
 const UTF8 = new TextDecoder('utf-8', { fatal: true });
-const MAX_ARCHIVE_BYTES = 64 * 1024 * 1024;
 const SECRET_FIELD = /^(?:api[_-]?key|authorization|credential|hmac[_-]?key|password|provider[_-]?key|secret|token)$/i;
 const SECRET_VALUE = /^(?:Bearer\s+|sk-[A-Za-z0-9_-]{8,})/i;
 
@@ -262,7 +262,7 @@ function validateTrial(value, mode) {
 function validateArchiveManifest(value, kind) {
   exactKeys(value, ['kind', 'byteLength', 'sha256'], `${kind} archive manifest`);
   if (value.kind !== kind) invalid(`${kind} archive kind drifted`);
-  integer(value.byteLength, `${kind} archive bytes`, 1, MAX_ARCHIVE_BYTES);
+  integer(value.byteLength, `${kind} archive bytes`, 1, archiveLimitsForKind(kind).compressedBytes);
   hash(value.sha256, `${kind} archive digest`);
   return Object.freeze(structuredClone(value));
 }

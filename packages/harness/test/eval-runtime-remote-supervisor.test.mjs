@@ -481,6 +481,17 @@ test('attests owner-only regular archives and rejects digest, permission, and sy
     sha256: sha256(fixture.taskBytes),
   });
   await assert.rejects(
+    inspectBoundArchive({ file, kind: 'trial-output' }),
+    (error) => error.code === 'ERR_REMOTE_SUPERVISOR_ARCHIVE_PATH'
+  );
+  await assert.rejects(
+    inspectBoundArchive({
+      file: path.join(fixture.directory, 'trial-output.tar'),
+      kind: 'task-input',
+    }),
+    (error) => error.code === 'ERR_REMOTE_SUPERVISOR_ARCHIVE_PATH'
+  );
+  await assert.rejects(
     inspectBoundArchive({
       file,
       kind: 'task-input',

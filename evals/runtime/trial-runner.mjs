@@ -6,6 +6,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 
+import { TASK_INPUT_ARCHIVE_LIMITS } from './archive-limits.mjs';
 import {
   TrialArchiveError,
   createTrialOutputArchive,
@@ -21,7 +22,6 @@ export const DEFAULT_TRIAL_OUTPUT_PATH = '/engineer-bounded/transport/trial-outp
 const LOGICAL_ROOT = '/engineer-bounded/work';
 const HASH = /^[a-f0-9]{64}$/;
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,191}$/;
-const MAX_ARCHIVE_BYTES = 64 * 1024 * 1024;
 const MAX_COMMAND_OUTPUT_BYTES = 1024 * 1024;
 const CONTROLLED_PROVIDER = 'controlled-provider';
 const ZERO_PROVIDER_CANARY = 'zero-provider-canary';
@@ -82,7 +82,8 @@ function readBoundedRegularFile(file, label) {
   } catch {
     fail(`${label} is unavailable`, 'ERR_TRIAL_RUNNER_PATH');
   }
-  if (stat.isSymbolicLink() || !stat.isFile() || stat.size < 1 || stat.size > MAX_ARCHIVE_BYTES) {
+  if (stat.isSymbolicLink() || !stat.isFile() || stat.size < 1
+      || stat.size > TASK_INPUT_ARCHIVE_LIMITS.compressedBytes) {
     fail(`${label} must be a bounded regular non-symlink file`, 'ERR_TRIAL_RUNNER_PATH');
   }
   const descriptor = fs.openSync(file, FS_CONSTANTS.O_RDONLY | (FS_CONSTANTS.O_NOFOLLOW ?? 0));
@@ -386,7 +387,8 @@ export async function runArchivedTrial({
   let inspected;
   let extracted = false;
   try {
-    if (archive.length < 1 || archive.length > MAX_ARCHIVE_BYTES || sha256(archive) !== expectedInputSha256) {
+    if (archive.length < 1 || archive.length > TASK_INPUT_ARCHIVE_LIMITS.compressedBytes
+        || sha256(archive) !== expectedInputSha256) {
       fail('task input archive digest or size drifted', 'ERR_TRIAL_RUNNER_DIGEST');
     }
     inspected = inspectTrialArchive(archive, { kind: 'task-input' });

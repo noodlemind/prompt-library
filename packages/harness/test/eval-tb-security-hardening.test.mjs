@@ -79,14 +79,20 @@ function writeBridgeFixture(root, { probe = 'process.stdout.write("{}\\n")', bou
   fs.writeFileSync(path.join(root, 'evals', 'external', 'terminal_bench', 'bounded-exec.mjs'), bounded);
 }
 
-function preparedFixture() {
+function preparedFixture({
+  nodeRuntimeDirectoryMode = 0o755,
+  bundleDir = path.join(tmpdir('tb-bundle-output-'), 'bundle'),
+} = {}) {
   const fixtureRoot = tmpdir('tb-bundle-fixture-');
-  const bundleDir = path.join(tmpdir('tb-bundle-output-'), 'bundle');
   fs.mkdirSync(path.join(fixtureRoot, 'packages', 'harness', 'bin'), { recursive: true });
   writeBridgeFixture(fixtureRoot);
   fs.writeFileSync(path.join(fixtureRoot, 'packages', 'harness', 'package.json'), JSON.stringify({ name: '@fixture/harness' }));
   fs.symlinkSync('package.json', path.join(fixtureRoot, 'packages', 'harness', 'package-link.json'));
   fs.writeFileSync(path.join(fixtureRoot, 'packages', 'harness', 'bin', 'harness.mjs'), 'process.stdout.write("ok\\n")');
+  fs.mkdirSync(path.join(fixtureRoot, 'packages', 'harness', 'node_modules', '.bin'), { recursive: true });
+  fs.mkdirSync(path.join(fixtureRoot, 'packages', 'harness', 'node_modules', 'yaml'), { recursive: true });
+  fs.writeFileSync(path.join(fixtureRoot, 'packages', 'harness', 'node_modules', 'yaml', 'bin.mjs'), 'process.exit(0);\n');
+  fs.symlinkSync('../yaml/bin.mjs', path.join(fixtureRoot, 'packages', 'harness', 'node_modules', '.bin', 'yaml'));
   const nodeTarball = path.join(fixtureRoot, 'node-v-test-linux-x64.tar.gz');
   fs.writeFileSync(nodeTarball, 'pinned fixture archive bytes');
 
@@ -102,7 +108,11 @@ function preparedFixture() {
       if (command === 'tar') {
         const destination = args[args.indexOf('-C') + 1];
         fs.mkdirSync(path.join(destination, 'bin'), { recursive: true });
+        fs.mkdirSync(path.join(destination, 'lib'), { recursive: true });
         fs.writeFileSync(path.join(destination, 'bin', 'node'), '#!/bin/sh\n', { mode: 0o755 });
+        fs.writeFileSync(path.join(destination, 'lib', 'unused-runtime-file'), 'unused\n');
+        fs.symlinkSync('../lib/unused-runtime-file', path.join(destination, 'bin', 'npm'));
+        fs.chmodSync(path.join(destination, 'lib'), nodeRuntimeDirectoryMode);
       }
       return { status: 0, stderr: '' };
     },
@@ -123,6 +133,11 @@ test('prepared bundles require an out-of-bundle digest and validate exact conten
   const recorded = JSON.parse(fs.readFileSync(path.join(bundleDir, BUNDLE_MANIFEST_FILE), 'utf8'));
   assert.deepEqual(recorded.sourceIdentity, SOURCE_IDENTITY);
   assert.match(recorded.nodeTarballHashes.x64, /^[a-f0-9]{64}$/);
+  assert.deepEqual(fs.readdirSync(path.join(bundleDir, 'node-x64')), ['bin']);
+  assert.deepEqual(fs.readdirSync(path.join(bundleDir, 'node-x64', 'bin')), ['node']);
+  assert.equal(fs.lstatSync(path.join(bundleDir, 'node-x64', 'bin', 'node')).isFile(), true);
+  assert.equal(fs.existsSync(path.join(bundleDir, 'harness', 'node_modules', '.bin')), false);
+  assert.equal(fs.existsSync(path.join(bundleDir, 'harness', 'node_modules', 'yaml', 'bin.mjs')), true);
   assert.equal(validatePrebuiltBundle(bundleDir, trustBundle(prepared)).manifestHash, prepared.manifestHash);
   assert.throws(() => validatePrebuiltBundle(bundleDir), /expected manifest digest/i);
   assert.throws(
@@ -137,6 +152,44 @@ test('prepared bundles require an out-of-bundle digest and validate exact conten
     () => validatePrebuiltBundle(bundleDir, trustBundle(prepared)),
     /contents|manifest|unexpected/i
   );
+});
+
+test('Node projection removes an owner-read-only discarded runtime without hidden leftovers', () => {
+  const { bundleDir, prepared } = preparedFixture({ nodeRuntimeDirectoryMode: 0o555 });
+  const names = fs.readdirSync(bundleDir);
+  assert.equal(names.some((name) => name.startsWith('.full-node-')), false);
+  assert.equal(names.some((name) => name.startsWith('.minimal-node-')), false);
+  assert.deepEqual(fs.readdirSync(path.join(bundleDir, 'node-x64')), ['bin']);
+  assert.deepEqual(fs.readdirSync(path.join(bundleDir, 'node-x64', 'bin')), ['node']);
+  assert.equal(validatePrebuiltBundle(bundleDir, trustBundle(prepared)).manifestHash, prepared.manifestHash);
+});
+
+test('Node projection rolls back a full runtime cleanup failure without hidden custody', () => {
+  const bundleDir = path.join(tmpdir('tb-bundle-cleanup-failure-'), 'bundle');
+  const originalRmSync = fs.rmSync;
+  let cleanupFailureInjected = false;
+  fs.rmSync = (target, options) => {
+    if (!cleanupFailureInjected && path.basename(target).startsWith('.full-node-')) {
+      cleanupFailureInjected = true;
+      throw new Error('simulated full runtime cleanup failure');
+    }
+    return originalRmSync(target, options);
+  };
+  try {
+    assert.throws(
+      () => preparedFixture({ bundleDir }),
+      /simulated full runtime cleanup failure/i,
+    );
+  } finally {
+    fs.rmSync = originalRmSync;
+  }
+
+  assert.equal(cleanupFailureInjected, true);
+  const names = fs.readdirSync(bundleDir);
+  assert.equal(names.some((name) => name.startsWith('.full-node-')), false);
+  assert.equal(names.some((name) => name.startsWith('.minimal-node-')), false);
+  assert.deepEqual(fs.readdirSync(path.join(bundleDir, 'node-x64')).sort(), ['bin', 'lib']);
+  assert.equal(fs.lstatSync(path.join(bundleDir, 'node-x64', 'bin', 'npm')).isSymbolicLink(), true);
 });
 
 test('prebuilt validation rejects group- or other-writable files and directories', () => {
