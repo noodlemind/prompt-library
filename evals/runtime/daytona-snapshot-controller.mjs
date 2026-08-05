@@ -19,7 +19,7 @@ const HASH = /^[a-f0-9]{64}$/;
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,191}$/;
 const SAFE_ABSOLUTE_PATH = /^\/[A-Za-z0-9_./:+-]+$/;
 const UTF8 = new TextDecoder('utf-8', { fatal: true });
-const CREDENTIAL_VALUE = /(?:Bearer [A-Za-z0-9._~+/=-]{12,}|sk-(?:or-v1|ant|proj)-[A-Za-z0-9_-]{8,}|github_pat_[A-Za-z0-9_]{8,}|ghp_[A-Za-z0-9]{16,}|xox[bp]-[A-Za-z0-9-]{12,}|hf_[A-Za-z0-9]{16,})/;
+const CREDENTIAL_VALUE = /(?:Bearer [A-Za-z0-9._~+/=-]{12,}|(?<![A-Za-z0-9])sk-(?:or-v1|ant|proj)-[A-Za-z0-9_-]{8,}|github_pat_[A-Za-z0-9_]{8,}|ghp_[A-Za-z0-9]{16,}|xox[bp]-[A-Za-z0-9-]{12,}|hf_[A-Za-z0-9]{16,})/;
 const CREDENTIAL_SCAN_TAIL_BYTES = 256;
 
 export class DaytonaSnapshotControllerError extends Error {
@@ -344,10 +344,11 @@ async function prepareRequest(input, maximumFileBytes) {
   const archives = [];
   let totalBytes = 0;
   for (const archive of declared) {
+    const ordinal = archives.length + 1;
     const inspected = await inspectRegularFile(archive.path, {
       expectedHash: archive.sha256,
       maximumBytes: maximumFileBytes,
-      label: 'deterministic archive',
+      label: `deterministic archive ${ordinal}`,
     });
     totalBytes += inspected.byteLength;
     if (totalBytes > MAX_TOTAL_ARCHIVE_BYTES) {

@@ -458,10 +458,18 @@ test('rejects wrong names, non-files, digest drift, credentials, and extra input
     assert.equal(fake.calls.length, 0);
   }
 
+  const taskNameInput = files(t, {
+    first: 'ordinary task-proj-artifact-content-that-is-not-a-token',
+  });
+  const taskNameFake = fakeDaytona(taskNameInput);
+  const taskNameResult = await controller(taskNameFake).ensureSnapshot(request(taskNameInput));
+  assert.equal(taskNameResult.retained, true);
+
   const secretInput = files(t, { first: 'archive contains sk-or-v1-forbidden-provider-key' });
   const secretFake = fakeDaytona(secretInput);
   const secretError = await rejected(controller(secretFake).ensureSnapshot(request(secretInput)));
   assert.match(secretError.message, /credential/i);
+  assert.match(secretError.message, /archive 1/i);
   assert.doesNotMatch(secretError.message, /sk-or-v1-forbidden-provider-key/);
   assert.equal(secretFake.calls.length, 0);
 });
