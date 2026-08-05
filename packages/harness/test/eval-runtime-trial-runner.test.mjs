@@ -12,6 +12,8 @@ import {
 } from '../../../evals/runtime/trial-archive.mjs';
 import {
   PINNED_HARBOR_EXECUTABLE,
+  TRIAL_INPUT_ARCHIVE_FD,
+  TRIAL_OUTPUT_ARCHIVE_FD,
   runArchivedTrial,
   runArchivedTrialCli,
 } from '../../../evals/runtime/trial-runner.mjs';
@@ -91,6 +93,29 @@ function brokerEnv(overrides = {}) {
     ENGINEER_RUNTIME_LEASE_HASH: HASH('2'),
     ...overrides,
   };
+}
+
+function localDescriptorOwner() {
+  return {
+    expectedDescriptorOwnerUid: process.getuid(),
+    expectedDescriptorOwnerGid: process.getgid(),
+  };
+}
+
+function descriptorFixture(inputBytes) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'trial-runner-fds-'));
+  const input = path.join(root, 'task-input.tar');
+  const output = path.join(root, 'trial-output.tar');
+  fs.writeFileSync(input, inputBytes, { mode: 0o600 });
+  fs.chmodSync(input, 0o600);
+  const inputFd = fs.openSync(input, fs.constants.O_RDONLY);
+  const outputFd = fs.openSync(
+    output,
+    fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL,
+    0o600,
+  );
+  fs.chmodSync(output, 0o600);
+  return { root, input, output, inputFd, outputFd };
 }
 
 test('remote runner uses pinned direct Harbor argv, forwards exact broker bindings, and round-trips only fresh evidence', async () => {
@@ -263,8 +288,206 @@ test('runner rejects a tar link entry before extraction or execution', async () 
   assert.equal(called, false);
 });
 
+test('runner reads and publishes archives only through protected inherited descriptors', async () => {
+  const fx = requestFixture();
+  const descriptors = descriptorFixture(fx.archived.bytes);
+  const boundedRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'trial-runner-inherited-'));
+  const calls = [];
+  let result;
+  try {
+    result = await runArchivedTrial({
+      inputArchiveFd: descriptors.inputFd,
+      expectedInputSha256: fx.archived.manifest.sha256,
+      boundedRoot,
+      outputArchiveFd: descriptors.outputFd,
+      ...localDescriptorOwner(),
+      inheritedEnv: brokerEnv(),
+      hashExecutable: async () => HASH('3'),
+      runCommand: async (file, args, options) => {
+        calls.push({ file, args: args.slice(), options });
+        fs.mkdirSync(path.join(options.cwd, 'jobs', 'job-a', 'trial__fd'), { recursive: true });
+        fs.writeFileSync(path.join(options.cwd, 'jobs', 'job-a', 'trial__fd', 'result.json'), '{"fd":true}\n');
+        return { status: 0, signal: null, stdout: Buffer.alloc(0), stderr: Buffer.alloc(0), error: null };
+      },
+    });
+  } finally {
+    fs.closeSync(descriptors.inputFd);
+    fs.closeSync(descriptors.outputFd);
+  }
+
+  assert.equal(calls.length, 1);
+  assert.deepEqual(calls[0].options.stdio, ['ignore', 'pipe', 'pipe']);
+  assert.deepEqual(fs.readFileSync(descriptors.output), result.bytes);
+  assert.equal(fs.statSync(descriptors.output).mode & 0o777, 0o600);
+  assert.equal(result.manifest.sha256, crypto.createHash('sha256').update(result.bytes).digest('hex'));
+});
+
+test('runner accepts inherited archive descriptors only as an unmixed input-output pair', async () => {
+  const fx = requestFixture();
+  const common = {
+    expectedInputSha256: fx.archived.manifest.sha256,
+    boundedRoot: fs.mkdtempSync(path.join(os.tmpdir(), 'trial-runner-fd-pair-')),
+    inheritedEnv: brokerEnv(),
+  };
+
+  await assert.rejects(
+    runArchivedTrial({ ...common, inputArchiveFd: 40 }),
+    /descriptor.*pair|paired.*descriptor/i,
+  );
+  await assert.rejects(
+    runArchivedTrial({ ...common, inputBytes: fx.archived.bytes, outputArchiveFd: 41 }),
+    /descriptor.*pair|paired.*descriptor/i,
+  );
+});
+
+test('runner rejects unprotected or writable input descriptors before Harbor', async (t) => {
+  const fx = requestFixture();
+  for (const scenario of [
+    {
+      name: 'write-enabled input',
+      prepare(file) { return fs.openSync(file, fs.constants.O_RDWR); },
+      pattern: /read-only/i,
+    },
+    {
+      name: 'group-readable input',
+      prepare(file) { fs.chmodSync(file, 0o640); return fs.openSync(file, fs.constants.O_RDONLY); },
+      pattern: /protected|owner-only/i,
+    },
+    {
+      name: 'setuid input',
+      prepare(file) { fs.chmodSync(file, 0o4600); return fs.openSync(file, fs.constants.O_RDONLY); },
+      pattern: /protected|owner-only/i,
+    },
+  ]) {
+    await t.test(scenario.name, async () => {
+      const descriptors = descriptorFixture(fx.archived.bytes);
+      fs.closeSync(descriptors.inputFd);
+      descriptors.inputFd = scenario.prepare(descriptors.input);
+      let called = false;
+      try {
+        await assert.rejects(runArchivedTrial({
+          inputArchiveFd: descriptors.inputFd,
+          expectedInputSha256: fx.archived.manifest.sha256,
+          boundedRoot: fs.mkdtempSync(path.join(os.tmpdir(), 'trial-runner-input-fd-reject-')),
+          outputArchiveFd: descriptors.outputFd,
+          ...localDescriptorOwner(),
+          inheritedEnv: brokerEnv(),
+          hashExecutable: async () => HASH('3'),
+          runCommand: async () => { called = true; },
+        }), scenario.pattern);
+      } finally {
+        fs.closeSync(descriptors.inputFd);
+        fs.closeSync(descriptors.outputFd);
+      }
+      assert.equal(called, false);
+    });
+  }
+
+  await t.test('owner drift', async () => {
+    const descriptors = descriptorFixture(fx.archived.bytes);
+    let called = false;
+    try {
+      await assert.rejects(runArchivedTrial({
+        inputArchiveFd: descriptors.inputFd,
+        expectedInputSha256: fx.archived.manifest.sha256,
+        boundedRoot: fs.mkdtempSync(path.join(os.tmpdir(), 'trial-runner-input-owner-reject-')),
+        outputArchiveFd: descriptors.outputFd,
+        expectedDescriptorOwnerUid: process.getuid() + 1,
+        expectedDescriptorOwnerGid: process.getgid(),
+        inheritedEnv: brokerEnv(),
+        hashExecutable: async () => HASH('3'),
+        runCommand: async () => { called = true; },
+      }), /owner|protected/i);
+    } finally {
+      fs.closeSync(descriptors.inputFd);
+      fs.closeSync(descriptors.outputFd);
+    }
+    assert.equal(called, false);
+  });
+});
+
+test('runner rejects unsafe output descriptors before Harbor', async (t) => {
+  const fx = requestFixture();
+  for (const scenario of [
+    {
+      name: 'read-only output',
+      prepare(file) { return fs.openSync(file, fs.constants.O_RDONLY); },
+      pattern: /writable/i,
+    },
+    {
+      name: 'nonempty output',
+      prepare(file) { fs.writeFileSync(file, 'occupied', { mode: 0o600 }); return fs.openSync(file, fs.constants.O_WRONLY); },
+      pattern: /empty|precreated/i,
+    },
+    {
+      name: 'group-writable output',
+      prepare(file) { fs.chmodSync(file, 0o620); return fs.openSync(file, fs.constants.O_WRONLY); },
+      pattern: /protected|owner-only/i,
+    },
+    {
+      name: 'sticky-bit output',
+      prepare(file) { fs.chmodSync(file, 0o1600); return fs.openSync(file, fs.constants.O_WRONLY); },
+      pattern: /protected|owner-only/i,
+    },
+  ]) {
+    await t.test(scenario.name, async () => {
+      const descriptors = descriptorFixture(fx.archived.bytes);
+      fs.closeSync(descriptors.outputFd);
+      descriptors.outputFd = scenario.prepare(descriptors.output);
+      let called = false;
+      try {
+        await assert.rejects(runArchivedTrial({
+          inputArchiveFd: descriptors.inputFd,
+          expectedInputSha256: fx.archived.manifest.sha256,
+          boundedRoot: fs.mkdtempSync(path.join(os.tmpdir(), 'trial-runner-output-fd-reject-')),
+          outputArchiveFd: descriptors.outputFd,
+          ...localDescriptorOwner(),
+          inheritedEnv: brokerEnv(),
+          hashExecutable: async () => HASH('3'),
+          runCommand: async () => { called = true; },
+        }), scenario.pattern);
+      } finally {
+        fs.closeSync(descriptors.inputFd);
+        fs.closeSync(descriptors.outputFd);
+      }
+      assert.equal(called, false);
+    });
+  }
+});
+
 test('snapshot CLI accepts only the control-plane digest flag and stays output-silent by contract', async () => {
   assert.equal(await runArchivedTrialCli({ argv: [], env: {} }), 64);
   assert.equal(await runArchivedTrialCli({ argv: ['--input-sha256', 'not-a-digest'], env: {} }), 64);
   assert.equal(await runArchivedTrialCli({ argv: ['--input', HASH('1')], env: {} }), 64);
+});
+
+test('snapshot CLI binds only fixed inherited archive descriptors and never archive pathnames', async () => {
+  let received;
+  const output = Buffer.from('private output bytes');
+  const env = brokerEnv();
+  const exitCode = await runArchivedTrialCli({
+    argv: ['--input-sha256', HASH('a')],
+    env,
+    runTrial: async (options) => {
+      received = options;
+      return {
+        run: { code: 0, timedOut: false },
+        bytes: output,
+      };
+    },
+  });
+
+  assert.equal(exitCode, 0);
+  assert.equal(TRIAL_INPUT_ARCHIVE_FD, 3);
+  assert.equal(TRIAL_OUTPUT_ARCHIVE_FD, 4);
+  assert.equal(received.inputArchiveFd, TRIAL_INPUT_ARCHIVE_FD);
+  assert.equal(received.outputArchiveFd, TRIAL_OUTPUT_ARCHIVE_FD);
+  assert.equal(received.expectedDescriptorOwnerUid, 0);
+  assert.equal(received.expectedDescriptorOwnerGid, 0);
+  assert.equal(received.expectedInputSha256, HASH('a'));
+  assert.equal(received.inheritedEnv, env);
+  assert.equal(Object.hasOwn(received, 'inputArchivePath'), false);
+  assert.equal(Object.hasOwn(received, 'inputBytes'), false);
+  assert.equal(Object.hasOwn(received, 'outputArchivePath'), false);
+  assert.deepEqual(output, Buffer.alloc(output.length));
 });

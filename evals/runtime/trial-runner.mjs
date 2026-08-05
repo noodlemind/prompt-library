@@ -6,7 +6,10 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 
-import { TASK_INPUT_ARCHIVE_LIMITS } from './archive-limits.mjs';
+import {
+  TASK_INPUT_ARCHIVE_LIMITS,
+  TRIAL_OUTPUT_ARCHIVE_LIMITS,
+} from './archive-limits.mjs';
 import {
   TrialArchiveError,
   createTrialOutputArchive,
@@ -18,6 +21,8 @@ export const PINNED_HARBOR_EXECUTABLE = '/opt/engineer/bin/harbor';
 export const PINNED_NODE_EXECUTABLE = '/usr/local/bin/node';
 export const DEFAULT_TRIAL_INPUT_PATH = '/engineer-bounded/transport/task-input.tar';
 export const DEFAULT_TRIAL_OUTPUT_PATH = '/engineer-bounded/transport/trial-output.tar';
+export const TRIAL_INPUT_ARCHIVE_FD = 3;
+export const TRIAL_OUTPUT_ARCHIVE_FD = 4;
 
 const LOGICAL_ROOT = '/engineer-bounded/work';
 const HASH = /^[a-f0-9]{64}$/;
@@ -40,6 +45,7 @@ const SAFE_SUPPORT_ENV = new Set([
 const SECRET_ENV = /(?:OPENROUTER|OPENAI|ANTHROPIC|GEMINI|GOOGLE_AI|API_KEY|AUTHORIZATION|CREDENTIAL|PASSWORD|SECRET|TOKEN)/i;
 const SECRET_VALUE = /(?:Bearer\s+|sk-[A-Za-z0-9_-]{8,})/i;
 const ZERO_PROVIDER_ENV = /(?:PROVIDER|BROKER|OPENROUTER|OPENAI|ANTHROPIC|GEMINI|GOOGLE_AI|API_KEY|AUTHORIZATION|CREDENTIAL|PASSWORD|SECRET|TOKEN)/i;
+const HARBOR_STDIO = Object.freeze(['ignore', 'pipe', 'pipe']);
 
 export class TrialRunnerError extends Error {
   constructor(message, code = 'ERR_TRIAL_RUNNER') {
@@ -108,6 +114,139 @@ function readBoundedRegularFile(file, label) {
   }
 }
 
+function validateDescriptorOwner(expectedOwnerUid, expectedOwnerGid) {
+  if (!Number.isSafeInteger(expectedOwnerUid) || expectedOwnerUid < 0 || expectedOwnerUid > 0xffff_ffff
+      || !Number.isSafeInteger(expectedOwnerGid) || expectedOwnerGid < 0 || expectedOwnerGid > 0xffff_ffff) {
+    fail('archive descriptor owner binding is invalid', 'ERR_TRIAL_RUNNER_DESCRIPTOR');
+  }
+}
+
+function descriptorStat(descriptor, label) {
+  if (!Number.isSafeInteger(descriptor) || descriptor < 3) {
+    fail(`${label} descriptor is invalid`, 'ERR_TRIAL_RUNNER_DESCRIPTOR');
+  }
+  try {
+    return fs.fstatSync(descriptor, { bigint: true });
+  } catch {
+    fail(`${label} descriptor is unavailable`, 'ERR_TRIAL_RUNNER_DESCRIPTOR');
+  }
+}
+
+function validateProtectedRegularDescriptor(stat, label, expectedOwnerUid, expectedOwnerGid) {
+  if (!stat.isFile() || stat.nlink !== 1n
+      || stat.uid !== BigInt(expectedOwnerUid) || stat.gid !== BigInt(expectedOwnerGid)
+      || (stat.mode & 0o7777n) !== 0o600n) {
+    fail(`${label} descriptor must be a protected owner-only regular file`, 'ERR_TRIAL_RUNNER_DESCRIPTOR');
+  }
+}
+
+function sameDescriptorIdentity(left, right) {
+  return left.dev === right.dev && left.ino === right.ino && left.nlink === right.nlink
+    && left.uid === right.uid && left.gid === right.gid && left.mode === right.mode;
+}
+
+function sameDescriptorAttestation(left, right) {
+  return sameDescriptorIdentity(left, right) && left.size === right.size
+    && left.mtimeNs === right.mtimeNs && left.ctimeNs === right.ctimeNs;
+}
+
+function readBoundedRegularDescriptor(descriptor, label, expectedOwnerUid, expectedOwnerGid) {
+  const before = descriptorStat(descriptor, label);
+  validateProtectedRegularDescriptor(before, label, expectedOwnerUid, expectedOwnerGid);
+  if (before.size < 1n || before.size > BigInt(TASK_INPUT_ARCHIVE_LIMITS.compressedBytes)) {
+    fail(`${label} descriptor must contain one bounded archive`, 'ERR_TRIAL_RUNNER_DESCRIPTOR');
+  }
+
+  try {
+    fs.writeSync(descriptor, Buffer.alloc(0), 0, 0, 0);
+    fail(`${label} descriptor must be read-only`, 'ERR_TRIAL_RUNNER_DESCRIPTOR');
+  } catch (error) {
+    if (error instanceof TrialRunnerError) throw error;
+    if (error?.code !== 'EBADF') {
+      fail(`${label} descriptor access mode could not be attested`, 'ERR_TRIAL_RUNNER_DESCRIPTOR');
+    }
+  }
+
+  const bytes = Buffer.alloc(Number(before.size));
+  try {
+    let position = 0;
+    while (position < bytes.length) {
+      let count;
+      try {
+        count = fs.readSync(descriptor, bytes, position, bytes.length - position, position);
+      } catch {
+        fail(`${label} descriptor could not be read`, 'ERR_TRIAL_RUNNER_DESCRIPTOR');
+      }
+      if (count === 0) fail(`${label} changed while being read`, 'ERR_TRIAL_RUNNER_RACE');
+      position += count;
+    }
+    const after = descriptorStat(descriptor, label);
+    if (!sameDescriptorAttestation(before, after)) {
+      fail(`${label} changed while being attested`, 'ERR_TRIAL_RUNNER_RACE');
+    }
+    return bytes;
+  } catch (error) {
+    bytes.fill(0);
+    throw error;
+  }
+}
+
+function prepareOutputDescriptor(descriptor, expectedOwnerUid, expectedOwnerGid) {
+  const label = 'trial output archive';
+  const before = descriptorStat(descriptor, label);
+  validateProtectedRegularDescriptor(before, label, expectedOwnerUid, expectedOwnerGid);
+  if (before.size !== 0n) {
+    fail('trial output archive descriptor must be precreated and empty', 'ERR_TRIAL_RUNNER_DESCRIPTOR');
+  }
+  try {
+    fs.ftruncateSync(descriptor, 0);
+  } catch {
+    fail('trial output archive descriptor must be writable', 'ERR_TRIAL_RUNNER_DESCRIPTOR');
+  }
+  const after = descriptorStat(descriptor, label);
+  validateProtectedRegularDescriptor(after, label, expectedOwnerUid, expectedOwnerGid);
+  if (!sameDescriptorIdentity(before, after) || after.size !== 0n) {
+    fail('trial output archive descriptor changed while being prepared', 'ERR_TRIAL_RUNNER_RACE');
+  }
+  return after;
+}
+
+function writeOwnerOnlyDescriptor(descriptor, bytes, prepared, expectedOwnerUid, expectedOwnerGid) {
+  const label = 'trial output archive';
+  if (!Buffer.isBuffer(bytes) || bytes.length < 1
+      || bytes.length > TRIAL_OUTPUT_ARCHIVE_LIMITS.compressedBytes) {
+    fail('trial output archive exceeds its descriptor bound', 'ERR_TRIAL_RUNNER_DESCRIPTOR');
+  }
+  const before = descriptorStat(descriptor, label);
+  validateProtectedRegularDescriptor(before, label, expectedOwnerUid, expectedOwnerGid);
+  if (!sameDescriptorAttestation(prepared, before) || before.size !== 0n) {
+    fail('trial output archive descriptor changed before publication', 'ERR_TRIAL_RUNNER_RACE');
+  }
+  try {
+    fs.ftruncateSync(descriptor, 0);
+    let position = 0;
+    while (position < bytes.length) {
+      const count = fs.writeSync(descriptor, bytes, position, bytes.length - position, position);
+      if (count < 1) fail('trial output archive descriptor write was incomplete', 'ERR_TRIAL_RUNNER_DESCRIPTOR');
+      position += count;
+    }
+    fs.ftruncateSync(descriptor, bytes.length);
+    fs.fsyncSync(descriptor);
+  } catch (error) {
+    try {
+      fs.ftruncateSync(descriptor, 0);
+      fs.fsyncSync(descriptor);
+    } catch { /* the original fail-closed write error remains authoritative */ }
+    if (error instanceof TrialRunnerError) throw error;
+    fail('trial output archive descriptor write failed', 'ERR_TRIAL_RUNNER_DESCRIPTOR');
+  }
+  const after = descriptorStat(descriptor, label);
+  validateProtectedRegularDescriptor(after, label, expectedOwnerUid, expectedOwnerGid);
+  if (!sameDescriptorIdentity(before, after) || after.size !== BigInt(bytes.length)) {
+    fail('trial output archive descriptor changed during publication', 'ERR_TRIAL_RUNNER_RACE');
+  }
+}
+
 function defaultHashExecutable(file) {
   if (file !== PINNED_NODE_EXECUTABLE) fail('runtime Node executable path drifted', 'ERR_TRIAL_RUNNER_EXECUTABLE');
   let stat;
@@ -155,7 +294,7 @@ function defaultRunCommand(file, args, options) {
     encoding: null,
     shell: false,
     windowsHide: true,
-    stdio: ['ignore', 'pipe', 'pipe'],
+    stdio: options.stdio,
   });
 }
 
@@ -362,28 +501,61 @@ function cleanupFreshWorkRoot(workRoot, boundedRoot) {
 export async function runArchivedTrial({
   inputArchivePath = null,
   inputBytes = null,
+  inputArchiveFd = null,
   expectedInputSha256,
   boundedRoot = '/engineer-bounded',
   outputArchivePath = null,
+  outputArchiveFd = null,
+  expectedDescriptorOwnerUid = 0,
+  expectedDescriptorOwnerGid = 0,
   inheritedEnv = process.env,
   hashExecutable = defaultHashExecutable,
   runCommand = defaultRunCommand,
 } = {}) {
-  if ((inputArchivePath == null) === (inputBytes == null)) {
+  const descriptorMode = inputArchiveFd != null || outputArchiveFd != null;
+  if (descriptorMode) {
+    if (inputArchiveFd == null
+        || outputArchiveFd == null
+        || inputArchivePath != null
+        || inputBytes != null
+        || outputArchivePath != null) {
+      fail('inherited archive descriptors must be provided as an unmixed input-output pair', 'ERR_TRIAL_RUNNER_INPUT');
+    }
+  } else if ([inputArchivePath, inputBytes].filter((source) => source != null).length !== 1) {
     fail('provide exactly one task input archive source', 'ERR_TRIAL_RUNNER_INPUT');
+  }
+  if (inputArchiveFd != null && inputArchiveFd === outputArchiveFd) {
+    fail('task input and trial output descriptors must be distinct', 'ERR_TRIAL_RUNNER_DESCRIPTOR');
   }
   if (!HASH.test(String(expectedInputSha256 ?? ''))) fail('expected task input digest is invalid', 'ERR_TRIAL_RUNNER_INPUT');
   if (typeof hashExecutable !== 'function' || typeof runCommand !== 'function') {
     throw new TypeError('hashExecutable and runCommand must be functions');
   }
+  validateDescriptorOwner(expectedDescriptorOwnerUid, expectedDescriptorOwnerGid);
   const root = ensureBoundedRoot(boundedRoot);
   const workRoot = path.join(root, 'work');
-  const outputPath = outputArchivePath ?? (root === '/engineer-bounded'
-    ? DEFAULT_TRIAL_OUTPUT_PATH
-    : path.join(root, 'transport', 'trial-output.tar'));
-  let archive = inputArchivePath == null
-    ? Buffer.from(inputBytes)
-    : readBoundedRegularFile(inputArchivePath, 'task input archive');
+  const outputPath = outputArchiveFd == null
+    ? outputArchivePath ?? (root === '/engineer-bounded'
+      ? DEFAULT_TRIAL_OUTPUT_PATH
+      : path.join(root, 'transport', 'trial-output.tar'))
+    : null;
+  const outputDescriptorAttestation = outputArchiveFd == null
+    ? null
+    : prepareOutputDescriptor(
+      outputArchiveFd,
+      expectedDescriptorOwnerUid,
+      expectedDescriptorOwnerGid,
+    );
+  let archive = inputArchiveFd != null
+    ? readBoundedRegularDescriptor(
+      inputArchiveFd,
+      'task input archive',
+      expectedDescriptorOwnerUid,
+      expectedDescriptorOwnerGid,
+    )
+    : inputArchivePath == null
+      ? Buffer.from(inputBytes)
+      : readBoundedRegularFile(inputArchivePath, 'task input archive');
   let inspected;
   let extracted = false;
   try {
@@ -411,6 +583,7 @@ export async function runArchivedTrial({
         timeoutMs: document.harbor.timeoutMs,
         maxOutputBytes: MAX_COMMAND_OUTPUT_BYTES,
         shell: false,
+        stdio: HARBOR_STDIO,
       });
     } catch (error) {
       commandResult = {
@@ -432,7 +605,17 @@ export async function runArchivedTrial({
       brokerBindingHash: runtime.executionMode === CONTROLLED_PROVIDER ? bindingHash : null,
       commandResult,
     });
-    writeOwnerOnlyAtomic(outputPath, output.bytes, root);
+    if (outputArchiveFd == null) {
+      writeOwnerOnlyAtomic(outputPath, output.bytes, root);
+    } else {
+      writeOwnerOnlyDescriptor(
+        outputArchiveFd,
+        output.bytes,
+        outputDescriptorAttestation,
+        expectedDescriptorOwnerUid,
+        expectedDescriptorOwnerGid,
+      );
+    }
     return output;
   } catch (error) {
     if (error instanceof TrialRunnerError || error instanceof TrialArchiveError) throw error;
@@ -446,20 +629,27 @@ export async function runArchivedTrial({
 
 /**
  * Minimal snapshot entrypoint. The control-plane-selected input digest is the
- * only CLI datum; archive locations and executable identities stay code-owned.
+ * only CLI datum; inherited archive descriptors and executable identities stay
+ * code-owned.
  * It intentionally emits no process output because remote command receipts are
  * hash-only and the supervisor owns diagnostics.
  */
-export async function runArchivedTrialCli({ argv = process.argv.slice(2), env = process.env } = {}) {
+export async function runArchivedTrialCli({
+  argv = process.argv.slice(2),
+  env = process.env,
+  runTrial = runArchivedTrial,
+} = {}) {
   if (!Array.isArray(argv) || argv.length !== 2 || argv[0] !== '--input-sha256' || !HASH.test(String(argv[1] ?? ''))) {
     return 64;
   }
   try {
-    const result = await runArchivedTrial({
-      inputArchivePath: DEFAULT_TRIAL_INPUT_PATH,
+    const result = await runTrial({
+      inputArchiveFd: TRIAL_INPUT_ARCHIVE_FD,
       expectedInputSha256: argv[1],
       boundedRoot: '/engineer-bounded',
-      outputArchivePath: DEFAULT_TRIAL_OUTPUT_PATH,
+      outputArchiveFd: TRIAL_OUTPUT_ARCHIVE_FD,
+      expectedDescriptorOwnerUid: 0,
+      expectedDescriptorOwnerGid: 0,
       inheritedEnv: env,
     });
     const code = Number.isInteger(result.run.code)

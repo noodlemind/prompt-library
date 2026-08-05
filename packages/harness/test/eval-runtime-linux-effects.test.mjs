@@ -68,8 +68,8 @@ test('host credential observation scrubs only validated Daytona platform metadat
 
 function nodeDriverMethodSource(name, nextName) {
   const source = fs.readFileSync(new URL('../../../evals/runtime/linux-effects.mjs', import.meta.url), 'utf8');
-  const start = source.indexOf(`async ${name}(spec)`);
-  const end = source.indexOf(`async ${nextName}(spec)`, start);
+  const start = source.indexOf(`async ${name}(`);
+  const end = source.indexOf(`async ${nextName}(`, start);
   assert.ok(start >= 0 && end > start, `${name} source is missing`);
   return source.slice(start, end);
 }
@@ -105,6 +105,56 @@ test('task-isolation canary bounds its trusted timeout before Docker work', () =
   assert.match(source, /Number\.isSafeInteger\(spec\.timeoutMs\)/);
   assert.match(source, /spec\.timeoutMs < 1_000/);
   assert.match(source, /spec\.timeoutMs > 60_000/);
+});
+
+test('default cgroup driver establishes both delegation levels and removes its exact owned child', () => {
+  const fullSource = fs.readFileSync(new URL('../../../evals/runtime/linux-effects.mjs', import.meta.url), 'utf8');
+  const ensure = nodeDriverMethodSource('ensureCgroup', 'prepareDirectory');
+  assert.match(ensure, /CGROUP_ROOT/);
+  assert.match(ensure, /ENGINEER_CGROUP_PARENT/);
+  assert.match(ensure, /cgroup\.controllers/);
+  assert.match(ensure, /cgroup\.subtree_control/);
+  assert.match(fullSource, /\+cpu \+memory \+pids/);
+  assert.match(ensure, /recursive: false/);
+  assert.match(ensure, /cgroup\.procs/);
+  assert.match(ensure, /rootActiveControllers/);
+  assert.match(ensure, /parentActiveControllers/);
+
+  const cleanup = nodeDriverMethodSource('removeRuntimeArtifacts', 'releaseEvidence');
+  assert.match(cleanup, /removeOwnedCgroup/);
+  assert.match(cleanup, /spec\.cgroupPath/);
+  assert.match(fullSource, /if \(!parentRemoved\)[\s\S]*owned engineer cgroup parent/);
+});
+
+test('default cleanup remains idempotent before cgroup ownership and still removes other artifacts', async () => {
+  const topo = topology();
+  const driver = createNodeLinuxDriver(topo);
+  const root = fs.mkdtempSync('/tmp/linux-effects-cleanup-');
+  const file = `${root}/artifact`;
+  fs.writeFileSync(file, 'bounded');
+
+  await driver.removeRuntimeArtifacts({
+    cgroupPath: topo.cgroup.path,
+    sockets: [],
+    files: [file],
+    directories: [root],
+  });
+
+  assert.equal(fs.existsSync(file), false);
+  assert.equal(fs.existsSync(root), false);
+});
+
+test('default runner archive driver opens only the fixed protected input and exclusive output', () => {
+  const source = nodeDriverMethodSource('openRunnerArchiveDescriptors', 'adoptPrivateDaemon');
+  assert.match(source, /async openRunnerArchiveDescriptors\(\)/);
+  assert.doesNotMatch(source, /\bspec\b/);
+  assert.match(source, /DEFAULT_TRIAL_INPUT_PATH/);
+  assert.match(source, /DEFAULT_TRIAL_OUTPUT_PATH/);
+  assert.match(source, /O_NOFOLLOW/);
+  assert.match(source, /O_EXCL/);
+  assert.match(source, /0o600/);
+  assert.match(source, /inputFd/);
+  assert.match(source, /outputFd/);
 });
 
 function topology(overrides = {}) {
@@ -526,7 +576,25 @@ function fakeDriver(topo = topology(), overrides = {}) {
     },
     async ensureCgroup(spec) {
       calls.push(['ensureCgroup', spec]);
-      return { id: topo.cgroup.id, pathHash: topo.cgroup.pathHash, limitsEnforced: true, writableByRunner: false };
+      return {
+        id: topo.cgroup.id,
+        path: topo.cgroup.path,
+        pathHash: topo.cgroup.pathHash,
+        parentPath: '/sys/fs/cgroup/engineer',
+        parentOwnerUid: 0,
+        parentGroupGid: 0,
+        parentMode: 0o755,
+        parentProcesses: 0,
+        childOwnerUid: 0,
+        childGroupGid: 0,
+        childMode: 0o755,
+        rootAvailableControllers: ['cpu', 'cpuset', 'hugetlb', 'io', 'memory', 'misc', 'pids', 'rdma'],
+        rootActiveControllers: ['cpu', 'cpuset', 'hugetlb', 'io', 'memory', 'misc', 'pids', 'rdma'],
+        parentAvailableControllers: ['cpu', 'cpuset', 'hugetlb', 'io', 'memory', 'misc', 'pids', 'rdma'],
+        parentActiveControllers: ['cpu', 'memory', 'pids'],
+        limitsEnforced: true,
+        writableByRunner: false,
+      };
     },
     async prepareDirectory(spec) {
       calls.push(['prepareDirectory', spec]);
@@ -559,6 +627,13 @@ function fakeDriver(topo = topology(), overrides = {}) {
     async writePolicy(spec) {
       calls.push(['writePolicy', spec]);
       return { path: spec.path, ownerUid: spec.uid, mode: spec.mode, hash: stableHash(spec.value) };
+    },
+    async openRunnerArchiveDescriptors() {
+      calls.push(['openRunnerArchiveDescriptors']);
+      return {
+        inputFd: 41,
+        outputFd: 42,
+      };
     },
     async spawnProcess(spec) {
       calls.push(['spawnProcess', spec]);
@@ -704,7 +779,12 @@ function fakeDriver(topo = topology(), overrides = {}) {
     },
     async inspectShutdown() {
       calls.push(['inspectShutdown']);
-      return { processesRemaining: 0, socketsRemaining: 0, cgroupPopulated: false };
+      return {
+        processesRemaining: 0,
+        socketsRemaining: 0,
+        cgroupPopulated: false,
+        cgroupPresent: false,
+      };
     },
     now() {
       return new Date('2026-08-04T16:00:09.000Z');
@@ -1023,6 +1103,23 @@ test('implements the exact privileged effect contract without exposing a provide
   assert.equal(broker.policyHash, providerBrokerStaticPolicyHash(policy));
   assert.equal(broker.leaseDigest, HASH('a'));
 
+  const runtimeParent = driver.calls.find(([name, spec]) =>
+    name === 'prepareDirectory' && spec.path === topo.paths.runtimeDirectory)[1];
+  assert.deepEqual(runtimeParent, {
+    path: topo.paths.runtimeDirectory,
+    uid: 0,
+    gid: 0,
+    mode: 0o711,
+  });
+  const proxySocketPolicy = driver.calls.find(([name, spec]) =>
+    name === 'setSocketPolicy' && spec.path === topo.paths.proxySocket)[1];
+  assert.deepEqual(proxySocketPolicy, {
+    path: topo.paths.proxySocket,
+    uid: 0,
+    gid: topo.identities.runnerGid,
+    mode: 0o660,
+  });
+
   const materializationIndex = driver.calls.findIndex(([name]) => name === 'materializeTrialSecurity');
   const proxyStartIndex = driver.calls.findIndex(([name]) => name === 'proxy.start');
   assert.ok(materializationIndex >= 0 && materializationIndex < proxyStartIndex);
@@ -1113,10 +1210,27 @@ test('implements the exact privileged effect contract without exposing a provide
     leaseHash: HASH('a'),
   });
   assert.equal(result.exitCode, 0);
+  const archiveOpenIndex = driver.calls.findIndex(([name]) =>
+    name === 'openRunnerArchiveDescriptors');
+  assert.deepEqual(driver.calls[archiveOpenIndex], ['openRunnerArchiveDescriptors']);
+  const runnerSpawnIndex = driver.calls.findIndex(([name, spec]) =>
+    name === 'spawnProcess' && spec.role === 'runner');
   const runnerSpawn = driver.calls.find(([name, spec]) => name === 'spawnProcess' && spec.role === 'runner')[1];
   assert.equal(runnerSpawn.file, topo.executables.runner);
   assert.equal(runnerSpawn.cgroupPath, topo.cgroup.path);
-  assert.deepEqual(runnerSpawn.inheritedFds, []);
+  assert.deepEqual(runnerSpawn.inheritedFds, [
+    { source: 41, target: 3 },
+    { source: 42, target: 4 },
+  ]);
+  assert.ok(archiveOpenIndex >= 0 && archiveOpenIndex < runnerSpawnIndex);
+  const inputCloseIndex = driver.calls.findIndex(([name, fd]) =>
+    name === 'closeDescriptor' && fd === 41);
+  const outputCloseIndex = driver.calls.findIndex(([name, fd]) =>
+    name === 'closeDescriptor' && fd === 42);
+  const runnerWaitIndex = driver.calls.findIndex(([name, role]) =>
+    name === 'waitProcess' && role === 'runner');
+  assert.ok(runnerSpawnIndex < inputCloseIndex && inputCloseIndex < runnerWaitIndex);
+  assert.ok(runnerSpawnIndex < outputCloseIndex && outputCloseIndex < runnerWaitIndex);
 
   const evidence = await effects.collectFinalEvidence({
     executionMode: 'controlled-provider',
@@ -1177,6 +1291,46 @@ test('implements the exact privileged effect contract without exposing a provide
     evidenceHeadroomReleased: true,
     endedAt: '2026-08-04T16:00:09.000Z',
   });
+  const cleanup = driver.calls.find(([name]) => name === 'removeRuntimeArtifacts')[1];
+  assert.equal(cleanup.cgroupPath, topo.cgroup.path);
+  assert.equal(cleanup.files.includes('/engineer-bounded/transport/task-input.tar'), true);
+  assert.equal(cleanup.files.includes('/engineer-bounded/transport/trial-output.tar'), true);
+});
+
+test('rejects cgroup delegation evidence drift before installing network policy', async (t) => {
+  for (const [name, drift] of [
+    ['parent custody', { parentOwnerUid: 2001 }],
+    ['parent population', { parentProcesses: 1 }],
+    ['root delegation', { rootActiveControllers: ['cpu', 'memory'] }],
+    ['parent delegation', { parentActiveControllers: ['cpu', 'pids'] }],
+    ['parent delegation widening', { parentActiveControllers: ['cpu', 'io', 'memory', 'pids'] }],
+    ['child custody', { childOwnerUid: 2001 }],
+  ]) {
+    await t.test(name, async () => {
+      const topo = topology();
+      const base = fakeDriver(topo);
+      const original = base.ensureCgroup;
+      base.ensureCgroup = async (spec) => ({ ...(await original(spec)), ...drift });
+      await assert.rejects(preparedEffects({ topo, driver: base }), (error) => {
+        assert.equal(error.code, 'ERR_LINUX_RUNTIME_CGROUP');
+        return true;
+      });
+      assert.equal(base.calls.some(([called]) => called === 'installNetworkPolicy'), false);
+    });
+  }
+});
+
+test('requires the trial cgroup to be the exact non-recursive child of the engineer parent', () => {
+  const topo = topology({
+    cgroup: { path: '/sys/fs/cgroup/other/trial-cgroup-1' },
+  });
+  assert.throws(
+    () => createLinuxRuntimeEffects({ topology: topo, driver: fakeDriver(topo) }),
+    (error) => {
+      assert.equal(error.code, 'ERR_LINUX_RUNTIME_CONFIG');
+      return true;
+    },
+  );
 });
 
 test('production-shaped effects adopt the PID-1 private daemon instead of starting a second daemon', async () => {

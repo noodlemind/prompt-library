@@ -14,6 +14,7 @@ import net from 'node:net';
 import path from 'node:path';
 import process from 'node:process';
 import { spawn } from 'node:child_process';
+import { TASK_INPUT_ARCHIVE_LIMITS } from './archive-limits.mjs';
 import { createDockerPolicyProxy } from './docker-proxy.mjs';
 import { scrubDaytonaPlatformMetadata } from './platform-environment.mjs';
 import { providerBrokerStaticPolicyHash } from './provider-broker.mjs';
@@ -44,6 +45,12 @@ import {
   DAEMON_ADOPTION_RECEIPT_PATH,
   attestDaemonAdoptionReceipt,
 } from './snapshot-manager.mjs';
+import {
+  DEFAULT_TRIAL_INPUT_PATH,
+  DEFAULT_TRIAL_OUTPUT_PATH,
+  TRIAL_INPUT_ARCHIVE_FD,
+  TRIAL_OUTPUT_ARCHIVE_FD,
+} from './trial-runner.mjs';
 
 const TEN_GIB = 10 * 1024 * 1024 * 1024;
 const MAX_HELPER_OUTPUT_BYTES = 64 * 1024;
@@ -64,6 +71,9 @@ const MAX_PROVIDER_ADDRESSES_PER_FAMILY = 16;
 const MAX_CONFIGURED_DNS_SERVERS = 8;
 const NETWORK_POLICY_CHAIN_V4 = 'ENGINEER_EGRESS_V4';
 const NETWORK_POLICY_CHAIN_V6 = 'ENGINEER_EGRESS_V6';
+const CGROUP_ROOT = '/sys/fs/cgroup';
+const ENGINEER_CGROUP_PARENT = `${CGROUP_ROOT}/engineer`;
+const REQUIRED_CGROUP_CONTROLLERS = Object.freeze(['cpu', 'memory', 'pids']);
 const EXACT_METADATA_CIDRS = Object.freeze([
   '169.254.0.0/16',
   '100.100.100.200/32',
@@ -101,6 +111,7 @@ const REQUIRED_DRIVER = Object.freeze([
   'inspectPath',
   'installNetworkPolicy',
   'writePolicy',
+  'openRunnerArchiveDescriptors',
   'spawnProcess',
   'waitForSocket',
   'inspectSocket',
@@ -238,6 +249,11 @@ function evidenceHash(value) {
 
 function sameJson(left, right) {
   return evidenceHash(left) === evidenceHash(right);
+}
+
+function hasRequiredCgroupControllers(value) {
+  return Array.isArray(value)
+    && REQUIRED_CGROUP_CONTROLLERS.every((controller) => value.includes(controller));
 }
 
 function exactObjectKeys(value, fields) {
@@ -535,6 +551,9 @@ function validateTopology(input) {
   }
   safeId(topology.cgroup.id, 'cgroup.id');
   absolute(topology.cgroup.path, 'cgroup.path', { below: '/sys/fs/cgroup' });
+  if (topology.cgroup.path !== `${ENGINEER_CGROUP_PARENT}/${topology.cgroup.id}`) {
+    fail('trial cgroup must be the exact child of the engineer cgroup parent', 'ERR_LINUX_RUNTIME_CONFIG');
+  }
   sha(topology.cgroup.pathHash, 'cgroup.pathHash');
   boundedString(topology.cgroup.cpuMax, 'cgroup.cpuMax', 64);
   integer(topology.cgroup.memoryMax, 'cgroup.memoryMax', 64 * 1024 * 1024, TEN_GIB);
@@ -1171,14 +1190,14 @@ export function createLinuxRuntimeEffects({
       const runtimeDirectory = await driver.prepareDirectory({
         path: topology.paths.runtimeDirectory,
         uid: 0,
-        gid: topology.identities.brokerClientGid,
-        mode: 0o710,
+        gid: 0,
+        mode: 0o711,
       });
       if (runtimeDirectory?.real !== true
           || runtimeDirectory.ownerUid !== 0
-          || runtimeDirectory.groupGid !== topology.identities.brokerClientGid
-          || runtimeDirectory.mode !== 0o710) {
-        fail('runtime socket parent is not narrowly traversable by the shared client group');
+          || runtimeDirectory.groupGid !== 0
+          || runtimeDirectory.mode !== 0o711) {
+        fail('runtime socket parent is not root-owned, traversable, and non-listable');
       }
       await driver.prepareDirectory({ path: topology.paths.daemonDataRoot, uid: 0, gid: 0, mode: 0o700 });
       const cgroup = await driver.ensureCgroup({
@@ -1188,7 +1207,20 @@ export function createLinuxRuntimeEffects({
         runnerUid: topology.identities.runnerUid,
       });
       if (cgroup?.id !== topology.cgroup.id
+          || cgroup.path !== topology.cgroup.path
           || cgroup.pathHash !== topology.cgroup.pathHash
+          || cgroup.parentPath !== ENGINEER_CGROUP_PARENT
+          || cgroup.parentOwnerUid !== 0
+          || cgroup.parentGroupGid !== 0
+          || cgroup.parentMode !== 0o755
+          || cgroup.parentProcesses !== 0
+          || cgroup.childOwnerUid !== 0
+          || cgroup.childGroupGid !== 0
+          || cgroup.childMode !== 0o755
+          || !hasRequiredCgroupControllers(cgroup.rootAvailableControllers)
+          || !hasRequiredCgroupControllers(cgroup.rootActiveControllers)
+          || !hasRequiredCgroupControllers(cgroup.parentAvailableControllers)
+          || !sameJson(cgroup.parentActiveControllers, REQUIRED_CGROUP_CONTROLLERS)
           || cgroup.limitsEnforced !== true
           || cgroup.writableByRunner !== false) {
         fail('cgroup v2 custody or limits drifted', 'ERR_LINUX_RUNTIME_CGROUP');
@@ -1796,8 +1828,18 @@ export function createLinuxRuntimeEffects({
         await driver.terminateProcess(sentinelHandle, { reason: 'runner-start', timeoutMs: 5_000 });
         sentinelHandle = null;
       }
+      let archiveDescriptors = null;
       try {
         assertLifecycleTransition(transition);
+        archiveDescriptors = await driver.openRunnerArchiveDescriptors();
+        if (!exactObjectKeys(archiveDescriptors, ['inputFd', 'outputFd'])
+            || !Number.isSafeInteger(archiveDescriptors.inputFd)
+            || archiveDescriptors.inputFd < 3
+            || !Number.isSafeInteger(archiveDescriptors.outputFd)
+            || archiveDescriptors.outputFd < 3
+            || archiveDescriptors.inputFd === archiveDescriptors.outputFd) {
+          fail('runner archive descriptor binding drifted', 'ERR_LINUX_RUNTIME_RUNNER');
+        }
         runnerHandle = await driver.spawnProcess({
           role: 'runner',
           file: options.argv[0],
@@ -1808,11 +1850,17 @@ export function createLinuxRuntimeEffects({
           gid: topology.identities.runnerGid,
           supplementaryGids,
           cgroupPath: topology.cgroup.path,
-          inheritedFds: [],
+          inheritedFds: [
+            { source: archiveDescriptors.inputFd, target: TRIAL_INPUT_ARCHIVE_FD },
+            { source: archiveDescriptors.outputFd, target: TRIAL_OUTPUT_ARCHIVE_FD },
+          ],
           timeoutMs: options.timeoutMs,
           maxOutputBytes: MAX_CHILD_OUTPUT_BYTES,
           shell: false,
         });
+        await driver.closeDescriptor(archiveDescriptors.inputFd);
+        await driver.closeDescriptor(archiveDescriptors.outputFd);
+        archiveDescriptors = null;
         assertLifecycleTransition(transition);
         const result = await driver.waitProcess(runnerHandle, {
           timeoutMs: options.timeoutMs,
@@ -1836,6 +1884,13 @@ export function createLinuxRuntimeEffects({
         runnerHandle = null;
         return clone(runnerResult, 'runner result');
       } catch (error) {
+        if (archiveDescriptors) {
+          for (const descriptor of [archiveDescriptors.inputFd, archiveDescriptors.outputFd]) {
+            if (!Number.isSafeInteger(descriptor)) continue;
+            try { await driver.closeDescriptor(descriptor); } catch { /* fail-stop cleanup continues */ }
+          }
+          archiveDescriptors = null;
+        }
         try { await driver.killCgroup({ path: topology.cgroup.path, reason: 'runner-failure' }); } catch { /* fail closed */ }
         throw error;
       }
@@ -1990,6 +2045,8 @@ export function createLinuxRuntimeEffects({
             DAEMON_ADOPTION_RECEIPT_PATH,
             TASK_MOUNT_RECEIPT_PATH,
             TASK_ISOLATION_RECEIPT_PATH,
+            DEFAULT_TRIAL_INPUT_PATH,
+            DEFAULT_TRIAL_OUTPUT_PATH,
           ],
           directories: [
             topology.paths.brokerDirectory,
@@ -1997,6 +2054,7 @@ export function createLinuxRuntimeEffects({
             topology.paths.daemonExecRoot,
             ...(securityMaterialization?.runtimeRoot ? [securityMaterialization.runtimeRoot] : []),
           ],
+          cgroupPath: topology.cgroup.path,
         });
       } catch {
         failures.push('artifacts');
@@ -2024,6 +2082,7 @@ export function createLinuxRuntimeEffects({
           || inventory?.processesRemaining !== 0
           || inventory?.socketsRemaining !== 0
           || inventory?.cgroupPopulated !== false
+          || inventory?.cgroupPresent !== false
           || !released) {
         fail('runtime shutdown left an orphan or incomplete custody evidence', 'ERR_LINUX_RUNTIME_ORPHAN');
       }
@@ -2098,6 +2157,30 @@ function hashFile(file) {
   }
 }
 
+function sameOpenedArchive(left, right) {
+  return left.dev === right.dev
+    && left.ino === right.ino
+    && left.nlink === right.nlink
+    && left.uid === right.uid
+    && left.gid === right.gid
+    && left.mode === right.mode
+    && left.size === right.size
+    && left.mtimeNs === right.mtimeNs
+    && left.ctimeNs === right.ctimeNs;
+}
+
+function assertProtectedRootArchive(stat, label, { empty = false } = {}) {
+  if (!stat.isFile()
+      || stat.isSymbolicLink()
+      || stat.nlink !== 1n
+      || stat.uid !== 0n
+      || stat.gid !== 0n
+      || (stat.mode & 0o7777n) !== 0o600n
+      || (empty ? stat.size !== 0n : stat.size < 1n)) {
+    throw new Error(`${label} is not a protected root-owned archive`);
+  }
+}
+
 function boundedChild(child, maximum) {
   let outputBytes = 0;
   let overflow = false;
@@ -2151,6 +2234,126 @@ export function createNodeLinuxDriver(topology) {
   const adoptedHandles = new Set();
   const knownSockets = new Set();
   let activeControlChannel;
+  let ownedCgroupPath = null;
+  let ownedCgroupParent = false;
+
+  function readCgroupControllerList(target) {
+    const value = fs.readFileSync(target, 'utf8').trim();
+    if (value === '') return [];
+    const controllers = value.split(/\s+/);
+    if (controllers.some((controller) => !/^[a-z][a-z0-9_]*$/.test(controller))
+        || new Set(controllers).size !== controllers.length) {
+      throw new Error('cgroup controller inventory is malformed');
+    }
+    return controllers.sort();
+  }
+
+  function requireCgroupControllers(target, label) {
+    const controllers = readCgroupControllerList(target);
+    if (!hasRequiredCgroupControllers(controllers)) {
+      throw new Error(`${label} does not expose cpu, memory, and pids controllers`);
+    }
+    return controllers;
+  }
+
+  function cgroupProcessCount(target) {
+    const value = fs.readFileSync(target, 'utf8').trim();
+    if (value === '') return 0;
+    const processes = value.split(/\s+/);
+    if (processes.some((pid) => !/^[1-9][0-9]*$/.test(pid))) {
+      throw new Error('cgroup process inventory is malformed');
+    }
+    return processes.length;
+  }
+
+  function attestCgroupDirectory(target, label) {
+    if (fs.realpathSync(target) !== target) throw new Error(`${label} resolved through a link`);
+    const observation = statMode(target);
+    if (observation.real !== true
+        || observation.kind !== 'directory'
+        || observation.ownerUid !== 0
+        || observation.groupGid !== 0
+        || observation.mode !== 0o755) {
+      throw new Error(`${label} custody drifted`);
+    }
+    return observation;
+  }
+
+  function runnerCanWrite(target) {
+    const observation = statMode(target);
+    if (observation.real !== true
+        || observation.ownerUid !== 0
+        || observation.groupGid !== 0) return true;
+    if (observation.ownerUid === topology.identities.runnerUid) {
+      return (observation.mode & 0o200) !== 0;
+    }
+    if (observation.groupGid === topology.identities.runnerGid) {
+      return (observation.mode & 0o020) !== 0;
+    }
+    return (observation.mode & 0o002) !== 0;
+  }
+
+  function enableCgroupControllers(cgroupPath, label, { exactActive = false } = {}) {
+    const controllersPath = path.join(cgroupPath, 'cgroup.controllers');
+    const subtreePath = path.join(cgroupPath, 'cgroup.subtree_control');
+    const available = requireCgroupControllers(controllersPath, `${label} availability`);
+    if (runnerCanWrite(subtreePath)) throw new Error(`${label} delegation is writable by the runner`);
+    fs.writeFileSync(subtreePath, '+cpu +memory +pids\n');
+    const active = requireCgroupControllers(subtreePath, `${label} subtree`);
+    if (exactActive && !sameJson(active, REQUIRED_CGROUP_CONTROLLERS)) {
+      throw new Error(`${label} subtree controller set drifted`);
+    }
+    return { available, active };
+  }
+
+  function cgroupIsEmpty(cgroupPath) {
+    if (cgroupProcessCount(path.join(cgroupPath, 'cgroup.procs')) !== 0) return false;
+    const eventsPath = path.join(cgroupPath, 'cgroup.events');
+    if (!fs.existsSync(eventsPath)) return false;
+    const events = parseCgroupEvents(fs.readFileSync(eventsPath, 'utf8'));
+    return events.populated === 0;
+  }
+
+  function removeEmptyCgroup(cgroupPath) {
+    if (!fs.existsSync(cgroupPath) || !cgroupIsEmpty(cgroupPath)) return false;
+    try {
+      fs.rmdirSync(cgroupPath);
+      return !fs.existsSync(cgroupPath);
+    } catch (error) {
+      if (['EBUSY', 'ENOTEMPTY'].includes(error?.code)) return false;
+      throw error;
+    }
+  }
+
+  function removeOwnedCgroup(cgroupPath) {
+    if (cgroupPath !== topology.cgroup.path) {
+      throw new Error('cgroup cleanup escaped its exact owned child');
+    }
+    let childRemoved = false;
+    if (ownedCgroupPath === null) {
+      if (fs.existsSync(cgroupPath)) {
+        throw new Error('trial cgroup exists without this driver owning it');
+      }
+    } else {
+      if (ownedCgroupPath !== cgroupPath) {
+        throw new Error('cgroup cleanup escaped its exact owned child');
+      }
+      if (!removeEmptyCgroup(cgroupPath)) {
+        throw new Error('owned trial cgroup is not empty or could not be removed');
+      }
+      ownedCgroupPath = null;
+      childRemoved = true;
+    }
+    let parentRemoved = false;
+    if (ownedCgroupParent) {
+      parentRemoved = removeEmptyCgroup(ENGINEER_CGROUP_PARENT);
+      if (!parentRemoved) {
+        throw new Error('owned engineer cgroup parent is not empty or could not be removed');
+      }
+      ownedCgroupParent = false;
+    }
+    return { childRemoved, parentRemoved };
+  }
 
   function processStartTime(pid) {
     try {
@@ -2351,6 +2554,84 @@ export function createNodeLinuxDriver(topology) {
   }
 
   return {
+    async openRunnerArchiveDescriptors() {
+      const parent = path.dirname(DEFAULT_TRIAL_INPUT_PATH);
+      if (parent !== path.dirname(DEFAULT_TRIAL_OUTPUT_PATH)
+          || fs.realpathSync(parent) !== parent) {
+        throw new Error('runner archive parent path drifted');
+      }
+      const parentStat = fs.lstatSync(parent, { bigint: true });
+      if (!parentStat.isDirectory()
+          || parentStat.isSymbolicLink()
+          || parentStat.uid !== 0n
+          || parentStat.gid !== 0n
+          || (parentStat.mode & 0o7777n) !== 0o755n) {
+        throw new Error('runner archive parent custody drifted');
+      }
+
+      let inputFd = null;
+      let outputFd = null;
+      let outputCreated = false;
+      try {
+        if (fs.realpathSync(DEFAULT_TRIAL_INPUT_PATH) !== DEFAULT_TRIAL_INPUT_PATH) {
+          throw new Error('runner input archive path drifted');
+        }
+        const inputPathStat = fs.lstatSync(DEFAULT_TRIAL_INPUT_PATH, { bigint: true });
+        assertProtectedRootArchive(inputPathStat, 'runner input archive');
+        if (inputPathStat.size > BigInt(TASK_INPUT_ARCHIVE_LIMITS.compressedBytes)) {
+          throw new Error('runner input archive exceeds its byte bound');
+        }
+        inputFd = fs.openSync(
+          DEFAULT_TRIAL_INPUT_PATH,
+          fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0),
+        );
+        const inputOpened = fs.fstatSync(inputFd, { bigint: true });
+        assertProtectedRootArchive(inputOpened, 'runner input archive');
+        if (!sameOpenedArchive(inputPathStat, inputOpened)) {
+          throw new Error('runner input archive changed during descriptor binding');
+        }
+
+        outputFd = fs.openSync(
+          DEFAULT_TRIAL_OUTPUT_PATH,
+          fs.constants.O_WRONLY
+            | fs.constants.O_CREAT
+            | fs.constants.O_EXCL
+            | (fs.constants.O_NOFOLLOW ?? 0),
+          0o600,
+        );
+        outputCreated = true;
+        fs.fchownSync(outputFd, 0, 0);
+        fs.fchmodSync(outputFd, 0o600);
+        fs.ftruncateSync(outputFd, 0);
+        fs.fsyncSync(outputFd);
+        if (fs.realpathSync(DEFAULT_TRIAL_OUTPUT_PATH) !== DEFAULT_TRIAL_OUTPUT_PATH) {
+          throw new Error('runner output archive path drifted');
+        }
+        const outputPathStat = fs.lstatSync(DEFAULT_TRIAL_OUTPUT_PATH, { bigint: true });
+        const outputOpened = fs.fstatSync(outputFd, { bigint: true });
+        assertProtectedRootArchive(outputPathStat, 'runner output archive', { empty: true });
+        assertProtectedRootArchive(outputOpened, 'runner output archive', { empty: true });
+        if (!sameOpenedArchive(outputPathStat, outputOpened)) {
+          throw new Error('runner output archive changed during descriptor binding');
+        }
+        return { inputFd, outputFd };
+      } catch (error) {
+        if (outputCreated && Number.isSafeInteger(outputFd)) {
+          try {
+            const linked = fs.lstatSync(DEFAULT_TRIAL_OUTPUT_PATH, { bigint: true });
+            const opened = fs.fstatSync(outputFd, { bigint: true });
+            if (linked.dev === opened.dev && linked.ino === opened.ino) {
+              fs.unlinkSync(DEFAULT_TRIAL_OUTPUT_PATH);
+            }
+          } catch { /* cleanup remains bounded to the exact output inode */ }
+        }
+        for (const descriptor of [outputFd, inputFd]) {
+          if (!Number.isSafeInteger(descriptor)) continue;
+          try { fs.closeSync(descriptor); } catch { /* preserve the binding failure */ }
+        }
+        throw error;
+      }
+    },
     async adoptPrivateDaemon(spec) {
       const adoption = await attestDaemonAdoptionReceipt();
       if (adoption.daemon.daemonId !== spec.daemonId ||
@@ -2461,14 +2742,118 @@ export function createNodeLinuxDriver(topology) {
       return { bytes: stat.blocks * 512, filesystemId: filesystem.id, protectedFromRunner: stat.uid === 0 && (stat.mode & 0o077) === 0 };
     },
     async ensureCgroup(spec) {
-      fs.mkdirSync(spec.path, { recursive: false, mode: 0o755 });
-      fs.writeFileSync(path.join(spec.path, 'cpu.max'), `${spec.cpuMax}\n`);
-      fs.writeFileSync(path.join(spec.path, 'memory.max'), `${spec.memoryMax}\n`);
-      fs.writeFileSync(path.join(spec.path, 'pids.max'), `${spec.pidsMax}\n`);
-      const limitsEnforced = fs.readFileSync(path.join(spec.path, 'cpu.max'), 'utf8').trim() === spec.cpuMax
-        && fs.readFileSync(path.join(spec.path, 'memory.max'), 'utf8').trim() === String(spec.memoryMax)
-        && fs.readFileSync(path.join(spec.path, 'pids.max'), 'utf8').trim() === String(spec.pidsMax);
-      return { id: spec.id, pathHash: spec.pathHash, limitsEnforced, writableByRunner: (fs.statSync(spec.path).mode & 0o022) !== 0 };
+      if (ownedCgroupPath !== null
+          || spec.id !== topology.cgroup.id
+          || spec.path !== `${ENGINEER_CGROUP_PARENT}/${spec.id}`
+          || spec.path !== topology.cgroup.path
+          || spec.pathHash !== topology.cgroup.pathHash
+          || spec.ownerUid !== 0
+          || spec.ownerGid !== 0
+          || spec.runnerUid !== topology.identities.runnerUid) {
+        throw new Error('trial cgroup specification drifted');
+      }
+      let createdParent = false;
+      let createdChild = false;
+      try {
+        attestCgroupDirectory(CGROUP_ROOT, 'cgroup root');
+        const rootDelegation = enableCgroupControllers(CGROUP_ROOT, 'cgroup root');
+
+        try {
+          fs.mkdirSync(ENGINEER_CGROUP_PARENT, { recursive: false, mode: 0o755 });
+          createdParent = true;
+          ownedCgroupParent = true;
+          fs.chownSync(ENGINEER_CGROUP_PARENT, 0, 0);
+          fs.chmodSync(ENGINEER_CGROUP_PARENT, 0o755);
+        } catch (error) {
+          if (error?.code !== 'EEXIST') throw error;
+        }
+        const parent = attestCgroupDirectory(ENGINEER_CGROUP_PARENT, 'engineer cgroup parent');
+        const parentProcessesPath = path.join(ENGINEER_CGROUP_PARENT, 'cgroup.procs');
+        if (cgroupProcessCount(parentProcessesPath) !== 0) {
+          throw new Error('engineer cgroup parent contains processes');
+        }
+        const parentDelegation = enableCgroupControllers(
+          ENGINEER_CGROUP_PARENT,
+          'engineer cgroup parent',
+          { exactActive: true },
+        );
+        if (cgroupProcessCount(parentProcessesPath) !== 0) {
+          throw new Error('engineer cgroup parent gained processes during delegation');
+        }
+
+        fs.mkdirSync(spec.path, { recursive: false, mode: 0o755 });
+        createdChild = true;
+        ownedCgroupPath = spec.path;
+        fs.chownSync(spec.path, 0, 0);
+        fs.chmodSync(spec.path, 0o755);
+        const child = attestCgroupDirectory(spec.path, 'trial cgroup child');
+        requireCgroupControllers(path.join(spec.path, 'cgroup.controllers'), 'trial cgroup availability');
+        if (cgroupProcessCount(path.join(spec.path, 'cgroup.procs')) !== 0) {
+          throw new Error('new trial cgroup is unexpectedly populated');
+        }
+
+        const limits = [
+          ['cpu.max', spec.cpuMax],
+          ['memory.max', String(spec.memoryMax)],
+          ['pids.max', String(spec.pidsMax)],
+        ];
+        for (const [name, value] of limits) {
+          fs.writeFileSync(path.join(spec.path, name), `${value}\n`);
+        }
+        const limitsEnforced = limits.every(([name, value]) =>
+          fs.readFileSync(path.join(spec.path, name), 'utf8').trim() === value);
+        const custodyTargets = [
+          spec.path,
+          parentProcessesPath,
+          path.join(ENGINEER_CGROUP_PARENT, 'cgroup.subtree_control'),
+          path.join(spec.path, 'cgroup.procs'),
+          ...limits.map(([name]) => path.join(spec.path, name)),
+        ];
+        const writableByRunner = custodyTargets.some(runnerCanWrite);
+        if (!limitsEnforced || writableByRunner) {
+          throw new Error('trial cgroup limits or runner write custody drifted');
+        }
+
+        return {
+          id: spec.id,
+          path: spec.path,
+          pathHash: spec.pathHash,
+          parentPath: ENGINEER_CGROUP_PARENT,
+          parentOwnerUid: parent.ownerUid,
+          parentGroupGid: parent.groupGid,
+          parentMode: parent.mode,
+          parentProcesses: 0,
+          childOwnerUid: child.ownerUid,
+          childGroupGid: child.groupGid,
+          childMode: child.mode,
+          rootAvailableControllers: rootDelegation.available,
+          rootActiveControllers: rootDelegation.active,
+          parentAvailableControllers: parentDelegation.available,
+          parentActiveControllers: parentDelegation.active,
+          limitsEnforced: true,
+          writableByRunner: false,
+        };
+      } catch (error) {
+        let cleanupFailed = false;
+        if (createdChild) {
+          try {
+            if (removeEmptyCgroup(spec.path)) ownedCgroupPath = null;
+            else cleanupFailed = true;
+          } catch {
+            cleanupFailed = true;
+          }
+        }
+        if (createdParent) {
+          try {
+            if (removeEmptyCgroup(ENGINEER_CGROUP_PARENT)) ownedCgroupParent = false;
+            else cleanupFailed = true;
+          } catch {
+            cleanupFailed = true;
+          }
+        }
+        if (cleanupFailed) throw new Error('cgroup setup failed and left owned artifacts', { cause: error });
+        throw error;
+      }
     },
     async prepareDirectory(spec) {
       fs.mkdirSync(spec.path, { recursive: true, mode: spec.mode });
@@ -2968,13 +3353,28 @@ export function createNodeLinuxDriver(topology) {
       return { killed: true, populated: events.populated !== 0, processesRemaining: processes.length };
     },
     async removeRuntimeArtifacts(spec) {
+      let cleanupError;
+      try {
+        removeOwnedCgroup(spec.cgroupPath);
+      } catch (error) {
+        cleanupError = error;
+      }
       for (const target of [...spec.sockets, ...spec.files]) {
-        try { fs.unlinkSync(target); } catch (error) { if (error?.code !== 'ENOENT') throw error; }
+        try {
+          fs.unlinkSync(target);
+        } catch (error) {
+          if (error?.code !== 'ENOENT' && cleanupError === undefined) cleanupError = error;
+        }
         knownSockets.delete(target);
       }
       for (const directory of spec.directories) {
-        try { fs.rmdirSync(directory); } catch (error) { if (!['ENOENT', 'ENOTEMPTY'].includes(error?.code)) throw error; }
+        try {
+          fs.rmdirSync(directory);
+        } catch (error) {
+          if (!['ENOENT', 'ENOTEMPTY'].includes(error?.code) && cleanupError === undefined) cleanupError = error;
+        }
       }
+      if (cleanupError) throw cleanupError;
       return true;
     },
     async releaseEvidence(spec) {
@@ -2991,7 +3391,12 @@ export function createNodeLinuxDriver(topology) {
       const eventsPath = path.join(spec.cgroupPath, 'cgroup.events');
       const cgroupPopulated = fs.existsSync(eventsPath)
         && parseCgroupEvents(fs.readFileSync(eventsPath, 'utf8')).populated !== 0;
-      return { processesRemaining, socketsRemaining, cgroupPopulated };
+      return {
+        processesRemaining,
+        socketsRemaining,
+        cgroupPopulated,
+        cgroupPresent: fs.existsSync(spec.cgroupPath),
+      };
     },
     now() { return new Date(); },
   };
