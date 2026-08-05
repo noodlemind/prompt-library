@@ -5,12 +5,34 @@ import test from 'node:test';
 import {
   DAEMON_ADOPTION_RECEIPT_PATH,
   SNAPSHOT_MANAGER_DOCKERD_ARGV,
+  assertSnapshotManagerEnvironment,
   createDaemonAdoptionReceipt,
   validateDaemonAdoptionReceipt,
   waitForManagedDaemonStop,
 } from '../../../evals/runtime/snapshot-manager.mjs';
 
 const HASH = (character) => character.repeat(64);
+
+test('snapshot manager accepts only Daytona platform metadata, never Daytona credentials', () => {
+  assert.doesNotThrow(() => assertSnapshotManagerEnvironment({
+    DAYTONA_ORGANIZATION_ID: 'organization-id',
+    DAYTONA_OTEL_ENDPOINT: 'https://telemetry.invalid',
+    DAYTONA_REGION_ID: 'us',
+    DAYTONA_SANDBOX_ID: 'sandbox-id',
+    DAYTONA_SANDBOX_SNAPSHOT: 'snapshot-name',
+    DAYTONA_SANDBOX_USER: 'root',
+  }));
+  for (const name of ['DAYTONA_API_KEY', 'DAYTONA_TOKEN', 'DAYTONA_UNKNOWN']) {
+    assert.throws(
+      () => assertSnapshotManagerEnvironment({ [name]: 'credential-material' }),
+      /forbids ambient cloud or provider credentials/i,
+    );
+  }
+  assert.throws(
+    () => assertSnapshotManagerEnvironment({ OPENROUTER_API_KEY: 'provider-key' }),
+    /forbids ambient cloud or provider credentials/i,
+  );
+});
 
 function observation() {
   const argvSha256 = 'bcbc7dee351a5db7c96d37898657d81b07ad39ee53ff4745c6106ee7c72f8916';
