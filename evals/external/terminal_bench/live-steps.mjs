@@ -54,6 +54,10 @@ import {
   materializePrebuiltBundle,
   validatePrebuiltBundle,
 } from './provision.mjs';
+import {
+  materializeLockedTaskSnapshot,
+  sealVerifiedDatasetSnapshot,
+} from './task-snapshot.mjs';
 
 export const AGENT_REF = 'evals.external.terminal_bench.harbor_agent:StdioBridgeAgent';
 export const SUPPORTED_HARBOR_VERSION = '0.20.0';
@@ -2059,46 +2063,6 @@ export function buildLiveSteps({
     return { ok: missing.length === 0, missing, providerSpendGuard: providerGuard.evidence };
   }
 
-  function makeSnapshotReadOnly(root) {
-    const visit = (current) => {
-      const stat = fs.lstatSync(current);
-      if (stat.isSymbolicLink()) throw new Error(`verified dataset snapshot cannot contain symlinks: ${path.relative(root, current)}`);
-      if (!stat.isDirectory()) {
-        if (!stat.isFile()) throw new Error(`verified dataset snapshot contains an unsupported node: ${path.relative(root, current)}`);
-        fs.chmodSync(current, stat.mode & 0o555);
-        return;
-      }
-      for (const name of fs.readdirSync(current)) visit(path.join(current, name));
-      fs.chmodSync(current, stat.mode & 0o555);
-    };
-    visit(root);
-  }
-
-  function materializeLockedSandbox(taskRoot, entry) {
-    if (!entry.sandbox) throw new Error(`task ${entry.task} has no sandbox lock`);
-    const taskConfig = path.join(taskRoot, 'task.toml');
-    const source = fs.readFileSync(taskConfig, 'utf8');
-    const imageLines = [...source.matchAll(/^docker_image\s*=\s*"([^"]+)"\s*$/gm)];
-    if (imageLines.length !== 1 || imageLines[0][1] !== entry.sandbox.sourceImage) {
-      throw new Error(`task ${entry.task} does not contain its locked source image`);
-    }
-    const expectedMemory = `${entry.sandbox.memoryMb / 1024}G`;
-    const expectedStorage = `${entry.sandbox.storageMb / 1024}G`;
-    const assignments = (field, pattern) => [...source.matchAll(new RegExp(`^${field}\\s*=\\s*${pattern}\\s*$`, 'gm'))];
-    const cpuAssignments = assignments('cpus', '(\\d+)');
-    const memoryAssignments = assignments('memory', '"([^"]+)"');
-    const storageAssignments = assignments('storage', '"([^"]+)"');
-    if (!Number.isInteger(entry.sandbox.memoryMb / 1024) || !Number.isInteger(entry.sandbox.storageMb / 1024) ||
-        cpuAssignments.length !== 1 || Number(cpuAssignments[0][1]) !== entry.sandbox.cpus ||
-        memoryAssignments.length !== 1 || memoryAssignments[0][1] !== expectedMemory ||
-        storageAssignments.length !== 1 || storageAssignments[0][1] !== expectedStorage) {
-      throw new Error(`task ${entry.task} resource limits do not match its sandbox lock`);
-    }
-    const pinned = source.replace(imageLines[0][0], `docker_image = "${entry.sandbox.immutableImage}"`);
-    if (pinned === source) throw new Error(`task ${entry.task} image pin was not materialized`);
-    fs.writeFileSync(taskConfig, pinned);
-  }
-
   function snapshotVerifiedTasks() {
     if (verifiedDatasetDir) {
       for (const entry of tasksOf(lock)) {
@@ -2113,24 +2077,14 @@ export function buildLiveSteps({
     if (fs.existsSync(destination)) throw new Error('verified dataset snapshot destination already exists');
     fs.mkdirSync(destination, { recursive: false, mode: 0o700 });
     for (const entry of tasksOf(lock)) {
-      const sourceTask = path.join(datasetDir, entry.task);
-      const destinationTask = path.join(destination, entry.task);
-      const sourceMode = fs.lstatSync(sourceTask).mode;
-      fs.cpSync(sourceTask, destinationTask, {
-        recursive: true,
-        dereference: false,
-        errorOnExist: true,
-        force: false,
+      materializeLockedTaskSnapshot({
+        sourceTask: path.join(datasetDir, entry.task),
+        destinationTask: path.join(destination, entry.task),
+        lock,
+        taskName: entry.task,
       });
-      // cpSync creates the recursive-copy root with the process default mode
-      // on some supported Node versions. Preserve the source task root's
-      // read/execute semantics before the read-only normalization below.
-      fs.chmodSync(destinationTask, sourceMode & 0o777);
-      const verdict = verifyTaskAgainstLock(destinationTask, lock, entry.task);
-      if (!verdict.ok) throw new Error(`copied task failed checksum verification: ${verdict.reason}`);
-      materializeLockedSandbox(destinationTask, entry);
     }
-    makeSnapshotReadOnly(destination);
+    sealVerifiedDatasetSnapshot(destination);
     for (const entry of tasksOf(lock)) {
       executionTaskHashByTask.set(entry.task, hashTree(path.join(destination, entry.task)));
     }

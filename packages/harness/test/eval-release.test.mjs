@@ -1756,6 +1756,16 @@ test('runReleaseCli reserves, constructs, injects, disposes, then publishes one 
     assert.equal(fixture.captured.liveInput.providerControl, fixture.controls.providerControl);
     assert.equal(fixture.captured.liveInput.trialExecutor, fixture.controls.trialExecutor);
     assert.match(fixture.captured.liveInput.lock.datasetRef, /^terminal-bench-derived-offline@/);
+    assert.equal(
+      fixture.captured.liveInput.lock.tasks[0].sandbox.sourceImage,
+      SANDBOX_LOCK.sourceImage,
+      'live snapshot materialization receives the full source lock',
+    );
+    assert.deepEqual(
+      canonicalReleaseRuntimeTaskLock(fixture.captured.liveInput.lock),
+      fixture.captured.artifactContext.taskLock,
+      'the full execution lock and reduced runtime projection bind the same immutable sandbox',
+    );
     assert.match(fixture.captured.liveInput.env.HARNESS_EVAL_TB_DATASET_DIR, /offline-terminal-bench/);
     assert.equal(fixture.captured.runtimeInput.providerKeyFd, 9);
     assert.equal(fixture.captured.runtimeInput.bundle.bundleDir, path.join(fixture.root, 'bundle'));

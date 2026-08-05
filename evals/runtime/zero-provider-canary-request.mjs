@@ -14,6 +14,10 @@ import {
   CONDITION_INPUTS_FILE,
   bundleMountPolicy,
 } from '../external/terminal_bench/provision.mjs';
+import {
+  materializeLockedTaskSnapshot,
+  sealVerifiedDatasetSnapshot,
+} from '../external/terminal_bench/task-snapshot.mjs';
 import { canonicalSha256 } from './protocol.mjs';
 
 export const ZERO_PROVIDER_CANARY_MODEL = 'scripted-canary/no-model';
@@ -168,6 +172,15 @@ export function buildZeroProviderCanaryTrialRequest(input = {}) {
   const bundleDir = canonicalDirectory(input.bundleDir, 'bundleDir');
   const workDir = canonicalDirectory(input.workDir, 'workDir');
   if ((fs.lstatSync(workDir).mode & 0o077) !== 0) fail('workDir must be owner-only');
+  const executionDataset = path.join(workDir, 'verified-dataset');
+  fs.mkdirSync(executionDataset, { mode: 0o700 });
+  materializeLockedTaskSnapshot({
+    sourceTask: path.join(datasetPath, input.taskId),
+    destinationTask: path.join(executionDataset, input.taskId),
+    lock: input.taskLock,
+    taskName: input.taskId,
+  });
+  sealVerifiedDatasetSnapshot(executionDataset);
   const mountPolicy = bundleMountPolicy(bundleDir);
   if (mountPolicy.version !== 'eval-mount-policy.v1' || mountPolicy.structurallyIsolated !== true) {
     fail('bundle mount policy is not structurally isolated');
@@ -180,7 +193,7 @@ export function buildZeroProviderCanaryTrialRequest(input = {}) {
   }
   const condition = conditionDocument({
     condition: input.condition,
-    instruction: readInstruction(datasetPath, input.taskId),
+    instruction: readInstruction(executionDataset, input.taskId),
     inputs,
     mountPolicy,
   });
@@ -201,7 +214,7 @@ export function buildZeroProviderCanaryTrialRequest(input = {}) {
     lock: input.taskLock,
     task: input.taskId,
     trialId: input.trialId,
-    datasetPath,
+    datasetPath: executionDataset,
     agentRef: ZERO_PROVIDER_CANARY_AGENT_REF,
     model: ZERO_PROVIDER_CANARY_MODEL,
     envName: 'docker',

@@ -4716,10 +4716,16 @@ export async function runReleaseCli({
       if (selectedRuntimeTasks.length !== selectedRuntimeNames.size) {
         throw new Error('offline Terminal-Bench artifact is missing a selected release task');
       }
-      const runtimeTaskLock = canonicalReleaseRuntimeTaskLock({
+      const executionTaskLock = structuredClone({
         ...offlineDataset.taskLock,
         tasks: selectedRuntimeTasks,
       });
+      const { validateTaskLock } = await deps.loadTaskLockValidator();
+      const executionLockVerdict = validateTaskLock(executionTaskLock);
+      if (!executionLockVerdict.ok) {
+        throw new Error(`selected execution task lock is invalid: ${executionLockVerdict.errors.join('; ')}`);
+      }
+      const runtimeTaskLock = canonicalReleaseRuntimeTaskLock(executionTaskLock);
       const taskLockHash = canonicalSha256(runtimeTaskLock);
       const sessionCeilingMicrousd = roundedMicrousd(config.budget.releaseCeilingUsd);
       if (!Number.isSafeInteger(sessionCeilingMicrousd) || sessionCeilingMicrousd < 1) {
@@ -4850,7 +4856,10 @@ export async function runReleaseCli({
             releaseTrust: structuredClone(config.releaseTrust),
             runtimeTrustRequired: true,
           },
-          lock: runtimeTaskLock,
+          // Snapshot materialization needs the attested tagged source image;
+          // only the reduced immutable projection enters the key-bearing
+          // runtime, artifact hashes, and final trust bindings above.
+          lock: executionTaskLock,
           workDir: releaseWorkDir,
           env: liveEnv,
           releaseSha,

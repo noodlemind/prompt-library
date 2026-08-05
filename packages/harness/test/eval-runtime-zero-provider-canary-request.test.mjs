@@ -6,7 +6,10 @@ import { test } from 'node:test';
 
 import { createTrialInputArchive, inspectTrialArchive } from '../../../evals/runtime/trial-archive.mjs';
 import { buildZeroProviderCanaryTrialRequest } from '../../../evals/runtime/zero-provider-canary-request.mjs';
-import { stampTaskLock } from '../../../evals/external/terminal_bench/harbor-adapter.mjs';
+import {
+  stampTaskLock,
+  verifyTaskAgainstLock,
+} from '../../../evals/external/terminal_bench/harbor-adapter.mjs';
 
 const TASK_LOCK = JSON.parse(fs.readFileSync(
   new URL('../../../evals/external/terminal_bench/task-lock.json', import.meta.url),
@@ -19,9 +22,21 @@ function file(target, contents = 'fixture\n', mode = 0o600) {
   fs.writeFileSync(target, contents, { mode });
 }
 
+function removeTree(root) {
+  if (!fs.existsSync(root)) return;
+  const restore = (current) => {
+    const stat = fs.lstatSync(current);
+    if (!stat.isDirectory()) return;
+    fs.chmodSync(current, 0o700);
+    for (const name of fs.readdirSync(current)) restore(path.join(current, name));
+  };
+  restore(root);
+  fs.rmSync(root, { recursive: true, force: true });
+}
+
 function fixture(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'zero-provider-request-'));
-  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  t.after(() => removeTree(root));
   fs.chmodSync(root, 0o700);
   const dataset = path.join(root, 'dataset');
   const task = path.join(dataset, TASK.task);
@@ -29,13 +44,15 @@ function fixture(t) {
   file(path.join(task, 'instruction.md'), 'Modernize the COBOL service.\n');
   file(path.join(task, 'task.toml'), [
     '[environment]',
-    `docker_image = "${TASK.sandbox.immutableImage}"`,
+    `docker_image = "${TASK.sandbox.sourceImage}"`,
     `cpus = ${TASK.sandbox.cpus}`,
     `memory = "${TASK.sandbox.memoryMb / 1024}G"`,
     `storage = "${TASK.sandbox.storageMb / 1024}G"`,
     '',
-  ].join('\n'));
+  ].join('\n'), 0o444);
   const taskLock = stampTaskLock(task, TASK_LOCK, TASK.task);
+  fs.chmodSync(task, 0o555);
+  fs.chmodSync(dataset, 0o555);
 
   const bundle = path.join(root, 'bundle');
   for (const directory of ['node-x64', 'harness', 'bridge']) {
@@ -92,11 +109,27 @@ test('builds two archive-bound no-model requests with treatment-only Harness act
     assert.equal(condition.runtime.driverMode, 'scripted-canary');
     assert.equal(Object.hasOwn(condition, 'profileId'), false);
     assert.equal(Object.hasOwn(condition, 'apiKeyEnv'), false);
+    const taskPath = request.harbor.args[request.harbor.args.indexOf('--path') + 1];
+    assert.notEqual(path.dirname(taskPath), fx.dataset);
+    assert.match(
+      fs.readFileSync(path.join(taskPath, 'task.toml'), 'utf8'),
+      new RegExp(`docker_image = "${TASK.sandbox.immutableImage.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}"`),
+    );
     const archived = createTrialInputArchive(request);
     const inspected = inspectTrialArchive(archived.bytes, { kind: 'task-input' });
     assert.equal(inspected.document.trial.executionMode, 'zero-provider-canary');
     archived.bytes.fill(0);
   }
+
+  assert.match(
+    fs.readFileSync(path.join(fx.dataset, TASK.task, 'task.toml'), 'utf8'),
+    new RegExp(`docker_image = "${TASK.sandbox.sourceImage.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}"`),
+  );
+  assert.equal(
+    verifyTaskAgainstLock(path.join(fx.dataset, TASK.task), fx.taskLock, TASK.task).ok,
+    true,
+  );
+  assert.equal(fs.lstatSync(path.join(fx.dataset, TASK.task, 'task.toml')).mode & 0o777, 0o444);
 
   const genericMounts = JSON.parse(generic.harbor.args[generic.harbor.args.indexOf('--mounts') + 1]);
   const harnessMounts = JSON.parse(harness.harbor.args[harness.harbor.args.indexOf('--mounts') + 1]);
