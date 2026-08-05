@@ -13,6 +13,8 @@ const HARD_LIMITS = Object.freeze({
 });
 const LIMIT_KEYS = Object.freeze(Object.keys(HARD_LIMITS));
 const CONTEXT_KINDS = new Set(['runtime', 'harbor', 'node', 'native']);
+const HASH = /^[a-f0-9]{64}$/;
+const MAX_CREDENTIAL_SCAN_EXEMPTIONS = 32;
 const SAFE_RELATIVE = /^(?!\/)(?!.*(?:^|\/)\.\.?$)(?!.*\/\.\.\/)[A-Za-z0-9._/+:-]+$/;
 const SENSITIVE_FILE = /(?:^|\/)(?:\.env(?:\.[^/]*)?|credentials?(?:\.(?:json|ya?ml|txt))?|id_(?:rsa|dsa|ecdsa|ed25519)|[^/]+\.(?:pem|p12|pfx|key))$/i;
 const CREDENTIAL_MATERIAL = /(?:Bearer[ \t]+[A-Za-z0-9._~+/=-]{8,}|sk-(?:(?:or|ant|proj)-)?[A-Za-z0-9_-]{12,}|github_pat_[A-Za-z0-9_]{8,}|gh[pousr]_[A-Za-z0-9]{8,}|xox[baprs]-[A-Za-z0-9-]{8,}|hf_[A-Za-z0-9]{12,}|AKIA[0-9A-Z]{16}|-----BEGIN [A-Z ]*PRIVATE KEY-----)/i;
@@ -38,7 +40,7 @@ function plainObject(value) {
 function exactInput(input) {
   if (!plainObject(input)) fail('ustar input must be a plain object', 'ERR_DETERMINISTIC_USTAR_INPUT');
   const keys = Object.keys(input);
-  if (keys.some((key) => !['kind', 'root', 'limits'].includes(key)) ||
+  if (keys.some((key) => !['kind', 'root', 'limits', 'credentialScanExemptions'].includes(key)) ||
       !Object.hasOwn(input, 'kind') || !Object.hasOwn(input, 'root')) {
     fail('ustar input contains an unexpected or missing field', 'ERR_DETERMINISTIC_USTAR_INPUT');
   }
@@ -65,6 +67,11 @@ function compareText(left, right) {
 
 function sha256(value) {
   return crypto.createHash('sha256').update(value).digest('hex');
+}
+
+function sameHash(left, right) {
+  return HASH.test(left) && HASH.test(right) &&
+    crypto.timingSafeEqual(Buffer.from(left, 'hex'), Buffer.from(right, 'hex'));
 }
 
 function stableIdentity(stat) {
@@ -109,6 +116,28 @@ function safeRelative(value) {
   }
   splitUstarPath(value);
   return value;
+}
+
+function credentialScanExemptions(value) {
+  if (value === undefined) return new Map();
+  if (!Array.isArray(value) || value.length > MAX_CREDENTIAL_SCAN_EXEMPTIONS) {
+    fail('credential scan exemptions exceed their schema or count bound',
+      'ERR_DETERMINISTIC_USTAR_EXEMPTION');
+  }
+  const exemptions = new Map();
+  for (const candidate of value) {
+    if (!plainObject(candidate) || Object.keys(candidate).length !== 2 ||
+        !Object.hasOwn(candidate, 'path') || !Object.hasOwn(candidate, 'sha256') ||
+        typeof candidate.sha256 !== 'string' || !HASH.test(candidate.sha256)) {
+      fail('credential scan exemption is malformed', 'ERR_DETERMINISTIC_USTAR_EXEMPTION');
+    }
+    const relative = safeRelative(candidate.path);
+    if (exemptions.has(relative)) {
+      fail('credential scan exemption path is duplicated', 'ERR_DETERMINISTIC_USTAR_EXEMPTION');
+    }
+    exemptions.set(relative, candidate.sha256);
+  }
+  return exemptions;
 }
 
 function directoryListing(directory) {
@@ -223,7 +252,7 @@ function sameFileIdentity(record, stat) {
     stableIdentity(stat) === record.identity;
 }
 
-function readStableFile(record) {
+function readStableFile(record, expectedSha256) {
   if (typeof FS_CONSTANTS.O_NOFOLLOW !== 'number') {
     fail('no-follow file reads are unavailable', 'ERR_DETERMINISTIC_USTAR_PLATFORM');
   }
@@ -256,11 +285,17 @@ function readStableFile(record) {
       bytes.fill(0);
       fail('archive source file changed during reading', 'ERR_DETERMINISTIC_USTAR_RACE');
     }
-    if (CREDENTIAL_MATERIAL.test(bytes.toString('latin1'))) {
+    const contentSha256 = sha256(bytes);
+    if (expectedSha256 !== undefined && !sameHash(contentSha256, expectedSha256)) {
+      bytes.fill(0);
+      fail('credential scan exemption digest does not match the stable file identity',
+        'ERR_DETERMINISTIC_USTAR_EXEMPTION');
+    }
+    if (CREDENTIAL_MATERIAL.test(bytes.toString('latin1')) && expectedSha256 === undefined) {
       bytes.fill(0);
       fail('archive source contains credential material', 'ERR_DETERMINISTIC_USTAR_SECRET');
     }
-    return bytes;
+    return { bytes, sha256: contentSha256 };
   } finally {
     fs.closeSync(descriptor);
   }
@@ -354,12 +389,29 @@ export function buildDeterministicUstar(input = {}) {
     fail('ustar kind is not a supported snapshot context', 'ERR_DETERMINISTIC_USTAR_INPUT');
   }
   const limits = resolvedLimits(input.limits);
+  const exemptions = credentialScanExemptions(input.credentialScanExemptions);
   const snapshot = snapshotTree(input.root, limits);
   const materialized = [];
+  const matchedExemptions = new Set();
   try {
     for (const record of snapshot.files) {
-      const bytes = readStableFile(record);
-      materialized.push({ path: record.relative, mode: record.mode, bytes, sha256: sha256(bytes) });
+      const expectedSha256 = exemptions.get(record.relative);
+      if (expectedSha256 !== undefined && record.mode !== 0o555) {
+        fail('credential scan exemption identifies a non-executable file',
+          'ERR_DETERMINISTIC_USTAR_EXEMPTION');
+      }
+      const stable = readStableFile(record, expectedSha256);
+      if (expectedSha256 !== undefined) matchedExemptions.add(record.relative);
+      materialized.push({
+        path: record.relative,
+        mode: record.mode,
+        bytes: stable.bytes,
+        sha256: stable.sha256,
+      });
+    }
+    if (matchedExemptions.size !== exemptions.size) {
+      fail('credential scan exemption does not identify an archived file',
+        'ERR_DETERMINISTIC_USTAR_EXEMPTION');
     }
     verifyTreeSnapshot(snapshot);
 

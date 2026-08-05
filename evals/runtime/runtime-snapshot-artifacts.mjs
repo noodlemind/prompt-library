@@ -65,6 +65,13 @@ const BASE_EXECUTABLE_SOURCES = Object.freeze({
   ip6tables: '/usr/sbin/ip6tables',
   sentinel: '/bin/sleep',
 });
+const CREDENTIAL_SCAN_ATTESTED_BINARY_NAMES = Object.freeze([
+  'node',
+  'cgroupExec',
+  'taskIsolationProbe',
+  'readinessDenialProbe',
+  ...Object.keys(BASE_EXECUTABLE_SOURCES),
+]);
 
 export class RuntimeSnapshotArtifactError extends Error {
   constructor(message, code = 'ERR_RUNTIME_SNAPSHOT_ARTIFACT') {
@@ -232,9 +239,9 @@ function validateClosures(value, workspace) {
   for (const [name, approvedPath] of Object.entries(DAYTONA_EXECUTABLE_PATHS)) {
     const executable = value.executables[name];
     exactKeys(executable, ['path', 'sha256', 'context', 'sourcePath'], `executables.${name}`);
-    if (executable.path !== approvedPath || !CONTEXT_KINDS.includes(executable.context) ||
-        typeof executable.sourcePath !== 'string' || executable.sourcePath.startsWith('/') ||
-        path.posix.normalize(executable.sourcePath) !== executable.sourcePath || executable.sourcePath.includes('..')) {
+    if (executable.path !== approvedPath || executable.context !== executableContext(name) ||
+        executable.sourcePath !== approvedPath.slice(1) ||
+        path.posix.normalize(executable.sourcePath) !== executable.sourcePath) {
       fail(`executable ${name} path or closure binding drifted`);
     }
     digest(executable.sha256, `executables.${name}.sha256`);
@@ -679,8 +686,7 @@ function materializeHarborSource(harborRoot, downloaded) {
 function executableInventory(roots) {
   const inventory = {};
   for (const [name, approvedPath] of Object.entries(DAYTONA_EXECUTABLE_PATHS)) {
-    const context = name === 'node' ? 'node' : name === 'harbor' ? 'harbor'
-      : ['cgroupExec', 'taskIsolationProbe', 'readinessDenialProbe'].includes(name) ? 'native' : 'runtime';
+    const context = executableContext(name);
     const sourcePath = approvedPath.slice(1);
     const file = path.join(roots[context], ...sourcePath.split('/'));
     inventory[name] = {
@@ -691,6 +697,13 @@ function executableInventory(roots) {
     };
   }
   return inventory;
+}
+
+function executableContext(name) {
+  if (name === 'node') return 'node';
+  if (name === 'harbor') return 'harbor';
+  if (['cgroupExec', 'taskIsolationProbe', 'readinessDenialProbe'].includes(name)) return 'native';
+  return 'runtime';
 }
 
 function snapshotDockerfile() {
@@ -844,7 +857,15 @@ export async function prepareRuntimeSnapshotArtifacts(input, { components = DEFA
   const contexts = {};
   const archives = [];
   for (const kind of CONTEXT_KINDS) {
-    const built = buildDeterministicUstar({ kind, root: closures.roots[kind] });
+    const credentialScanExemptions = Object.entries(closures.executables)
+      .filter(([name, executable]) =>
+        CREDENTIAL_SCAN_ATTESTED_BINARY_NAMES.includes(name) && executable.context === kind)
+      .map(([, executable]) => ({ path: executable.sourcePath, sha256: executable.sha256 }));
+    const built = buildDeterministicUstar({
+      kind,
+      root: closures.roots[kind],
+      credentialScanExemptions,
+    });
     const archivePath = path.join(outputDirectory, `${kind}.tar`);
     try {
       writeExclusive(archivePath, built.bytes);

@@ -190,6 +190,131 @@ test('rejects empty, linked, special, unsafe, credential-bearing, and oversized 
   });
 });
 
+test('permits credential-shaped executable bytes only through an exact path and digest attestation', async (t) => {
+  const credentialLikeBytes = Buffer.from(`\u0000AKIA${'A'.repeat(16)}\u0000`, 'latin1');
+
+  await t.test('matching attestation preserves the ordinary deterministic archive identity', () => {
+    const root = temporaryDirectory();
+    const relative = 'usr/local/bin/node';
+    const file = path.join(root, ...relative.split('/'));
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, credentialLikeBytes, { mode: 0o755 });
+
+    assert.throws(
+      () => buildDeterministicUstar({ kind: 'node', root }),
+      (error) => error?.code === 'ERR_DETERMINISTIC_USTAR_SECRET',
+    );
+    const attested = buildDeterministicUstar({
+      kind: 'node',
+      root,
+      credentialScanExemptions: [{ path: relative, sha256: sha256(credentialLikeBytes) }],
+    });
+    assert.equal(attested.context.entries[0].sha256, sha256(credentialLikeBytes));
+  });
+
+  await t.test('wrong digest and wrong path remain blocked', () => {
+    const root = temporaryDirectory();
+    const relative = 'usr/local/bin/node';
+    const file = path.join(root, ...relative.split('/'));
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, credentialLikeBytes, { mode: 0o755 });
+
+    for (const exemption of [
+      { path: relative, sha256: '0'.repeat(64) },
+      { path: 'usr/local/bin/not-node', sha256: sha256(credentialLikeBytes) },
+    ]) {
+      assert.throws(
+        () => buildDeterministicUstar({ kind: 'node', root, credentialScanExemptions: [exemption] }),
+        (error) => error?.code === 'ERR_DETERMINISTIC_USTAR_SECRET' ||
+          error?.code === 'ERR_DETERMINISTIC_USTAR_EXEMPTION',
+      );
+    }
+  });
+
+  await t.test('unused and duplicate attestations fail closed', () => {
+    const root = temporaryDirectory();
+    fs.writeFileSync(path.join(root, 'safe'), 'ordinary bytes');
+    const exemption = { path: 'missing', sha256: sha256('ordinary bytes') };
+    assert.throws(
+      () => buildDeterministicUstar({ kind: 'runtime', root, credentialScanExemptions: [exemption] }),
+      (error) => error?.code === 'ERR_DETERMINISTIC_USTAR_EXEMPTION',
+    );
+    assert.throws(
+      () => buildDeterministicUstar({
+        kind: 'runtime',
+        root,
+        credentialScanExemptions: [exemption, exemption],
+      }),
+      (error) => error?.code === 'ERR_DETERMINISTIC_USTAR_EXEMPTION',
+    );
+  });
+
+  await t.test('attestation schema and count remain bounded', () => {
+    const root = temporaryDirectory();
+    fs.writeFileSync(path.join(root, 'safe'), 'ordinary bytes');
+    assert.throws(
+      () => buildDeterministicUstar({
+        kind: 'runtime',
+        root,
+        credentialScanExemptions: [{ path: 'safe', sha256: sha256('ordinary bytes'), extra: true }],
+      }),
+      (error) => error?.code === 'ERR_DETERMINISTIC_USTAR_EXEMPTION',
+    );
+    assert.throws(
+      () => buildDeterministicUstar({
+        kind: 'runtime',
+        root,
+        credentialScanExemptions: Array.from({ length: 33 }, (_, index) => ({
+          path: `tool-${index}`,
+          sha256: sha256(`tool-${index}`),
+        })),
+      }),
+      (error) => error?.code === 'ERR_DETERMINISTIC_USTAR_EXEMPTION',
+    );
+  });
+
+  await t.test('sensitive filenames cannot be exempted', () => {
+    const root = temporaryDirectory();
+    const file = path.join(root, 'credentials.json');
+    fs.writeFileSync(file, credentialLikeBytes);
+    assert.throws(
+      () => buildDeterministicUstar({
+        kind: 'runtime',
+        root,
+        credentialScanExemptions: [{ path: 'credentials.json', sha256: sha256(credentialLikeBytes) }],
+      }),
+      (error) => error?.code === 'ERR_DETERMINISTIC_USTAR_SECRET',
+    );
+  });
+
+  await t.test('non-executable files cannot be exempted', () => {
+    const root = temporaryDirectory();
+    fs.writeFileSync(path.join(root, 'payload'), credentialLikeBytes, { mode: 0o444 });
+    assert.throws(
+      () => buildDeterministicUstar({
+        kind: 'runtime',
+        root,
+        credentialScanExemptions: [{ path: 'payload', sha256: sha256(credentialLikeBytes) }],
+      }),
+      (error) => error?.code === 'ERR_DETERMINISTIC_USTAR_EXEMPTION',
+    );
+  });
+
+  await t.test('attestation does not alter archive bytes or context for ordinary content', () => {
+    const root = temporaryDirectory();
+    const bytes = Buffer.from('ordinary executable bytes\n');
+    fs.writeFileSync(path.join(root, 'tool'), bytes, { mode: 0o755 });
+    const ordinary = buildDeterministicUstar({ kind: 'runtime', root });
+    const attested = buildDeterministicUstar({
+      kind: 'runtime',
+      root,
+      credentialScanExemptions: [{ path: 'tool', sha256: sha256(bytes) }],
+    });
+    assert.deepEqual(attested.bytes, ordinary.bytes);
+    assert.deepEqual(attested.context, ordinary.context);
+  });
+});
+
 test('detects replacement between tree inspection and no-follow file open', () => {
   const root = temporaryDirectory();
   const file = path.join(root, 'payload');
@@ -207,6 +332,36 @@ test('detects replacement between tree inspection and no-follow file open', () =
   };
   try {
     assert.throws(() => buildDeterministicUstar({ kind: 'runtime', root }), /changed|race|identity|replaced/i);
+  } finally {
+    fs.openSync = originalOpen;
+  }
+});
+
+test('an attested executable cannot be replaced before its no-follow file read', () => {
+  const root = temporaryDirectory();
+  const file = path.join(root, 'tool');
+  const bytes = Buffer.from(`AKIA${'D'.repeat(16)}\n`);
+  fs.writeFileSync(file, bytes, { mode: 0o755 });
+  const canonicalFile = fs.realpathSync.native(file);
+  const originalOpen = fs.openSync;
+  let replaced = false;
+  fs.openSync = function openWithReplacement(candidate, ...args) {
+    if (candidate === canonicalFile && !replaced) {
+      replaced = true;
+      fs.renameSync(file, `${file}.old`);
+      fs.writeFileSync(file, bytes, { mode: 0o755 });
+    }
+    return originalOpen.call(this, candidate, ...args);
+  };
+  try {
+    assert.throws(
+      () => buildDeterministicUstar({
+        kind: 'runtime',
+        root,
+        credentialScanExemptions: [{ path: 'tool', sha256: sha256(bytes) }],
+      }),
+      (error) => error?.code === 'ERR_DETERMINISTIC_USTAR_RACE',
+    );
   } finally {
     fs.openSync = originalOpen;
   }
