@@ -587,10 +587,13 @@ finally:
     os.path.isdir = original_isdir
 
 unsupported = None
+sys.platform = "darwin"
 try:
     agent._node_descriptor_path(7)
 except RuntimeError as error:
     unsupported = str(error)
+finally:
+    sys.platform = original_platform
 
 original_no_follow = os.O_NOFOLLOW
 del os.O_NOFOLLOW
