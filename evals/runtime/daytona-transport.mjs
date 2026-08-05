@@ -31,6 +31,8 @@ const MAX_JSON_FRAME_BYTES = 8 * 1024;
 const MAX_PROTOCOL_FRAME_BYTES = 64 * 1024;
 const MAX_SECRET_FRAME_BYTES = 1_024;
 const MAX_BOOTSTRAP_LINE_BYTES = 512;
+const DEFAULT_CONTROL_CHANNEL_TIMEOUT_MS = 40 * 60_000;
+const MAX_CONTROL_CHANNEL_TIMEOUT_MS = 60 * 60_000;
 const ALLOWED_SSH_STDERR = Object.freeze([
   Buffer.from('Pseudo-terminal will not be allocated because stdin is not a terminal.\n'),
   Buffer.from('Pseudo-terminal will not be allocated because stdin is not a terminal.\r\n'),
@@ -354,6 +356,13 @@ class ProcessChannel {
     this.waiters.clear();
   }
 
+  setIdleTimeoutMs(timeoutMs) {
+    if (this.closed || this.closing || this.fatal) {
+      fail('Daytona SSH channel cannot change its idle bound', 'ERR_TRANSPORT_CHANNEL');
+    }
+    this.timeoutMs = timeoutMs;
+  }
+
   async #waitForNotification(timeoutMs, timeoutError) {
     await new Promise((resolve, reject) => {
       let settled = false;
@@ -578,6 +587,7 @@ export function createDaytonaTransport({
   baseEnv = process.env,
   commandTimeoutMs = 180_000,
   channelTimeoutMs = 30_000,
+  controlChannelTimeoutMs = DEFAULT_CONTROL_CHANNEL_TIMEOUT_MS,
   maxCommandOutputBytes = 1024 * 1024,
   maxArchiveBytes = TASK_INPUT_ARCHIVE_LIMITS.compressedBytes,
 } = {}) {
@@ -587,6 +597,12 @@ export function createDaytonaTransport({
   }
   boundedInteger(commandTimeoutMs, 'commandTimeoutMs', 1, 10 * 60_000);
   boundedInteger(channelTimeoutMs, 'channelTimeoutMs', 1, 10 * 60_000);
+  boundedInteger(
+    controlChannelTimeoutMs,
+    'controlChannelTimeoutMs',
+    1,
+    MAX_CONTROL_CHANNEL_TIMEOUT_MS,
+  );
   boundedInteger(maxCommandOutputBytes, 'maxCommandOutputBytes', 1, 16 * 1024 * 1024);
   boundedInteger(
     maxArchiveBytes,
@@ -833,6 +849,7 @@ export function createDaytonaTransport({
       const response = parseJsonFrame(await channel.readFrame(MAX_JSON_FRAME_BYTES), 'supervisor secret response');
       const receipt = validateSecretReceipt(response, mode, payloadHash, payloadLength);
       await channel.assertNoExtraOutput({ requireOpen: true });
+      channel.setIdleTimeoutMs(controlChannelTimeoutMs);
 
       let controlClosed = false;
       const control = Object.freeze({

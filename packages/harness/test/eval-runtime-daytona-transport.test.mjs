@@ -128,6 +128,7 @@ function transport(overrides = {}) {
       },
       commandTimeoutMs: 2_000,
       channelTimeoutMs: overrides.channelTimeoutMs ?? 2_000,
+      controlChannelTimeoutMs: overrides.controlChannelTimeoutMs ?? 2_000,
       maxCommandOutputBytes: 4_096,
       maxArchiveBytes: 1_024,
     }),
@@ -419,6 +420,35 @@ test('supervisor control waits for echo-disabled readiness and sends each secret
 
   await assert.rejects(opened.control.sendFrame(PROVIDER_SECRET), /secret/i);
 
+  await opened.control.close();
+});
+
+test('supervisor control uses a trial-length idle bound after the short bootstrap bound', async () => {
+  const payload = secretPayload();
+  const accepted = {
+    schema: 'engineer-supervisor-secret-accepted.v1',
+    status: 'accepted',
+    executionMode: CONTROLLED_PROVIDER,
+    frameSha256: sha256(payload),
+    byteLength: payload.length,
+  };
+  const scripted = fakeChild({
+    stdout: [Buffer.from('ENGINEER-SUPERVISOR/1 READY\n'), frame(accepted)],
+  });
+  const harness = transport({
+    nextChild: () => scripted,
+    channelTimeoutMs: 25,
+    controlChannelTimeoutMs: 100,
+  });
+  const opened = await harness.value.openSupervisorControl({
+    sandboxId: SANDBOX,
+    hmacKey: HMAC_SECRET,
+    executionMode: CONTROLLED_PROVIDER,
+    providerKey: PROVIDER_SECRET,
+  });
+  setTimeout(() => scripted.child.stdout.write(frame(Buffer.from('delayed-control-response'))), 50);
+
+  assert.equal((await opened.control.receiveFrame()).toString(), 'delayed-control-response');
   await opened.control.close();
 });
 
