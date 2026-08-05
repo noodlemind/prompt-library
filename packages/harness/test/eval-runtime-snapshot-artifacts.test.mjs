@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url';
 import {
   downloadPinnedSnapshotSource,
   downloadPinnedSnapshotSourceWithFetch,
+  normalizeTrackedNativeSource,
   prepareRuntimeSnapshotArtifacts,
   pullExactImages,
   runDaytonaSnapshotCliCommand,
@@ -61,6 +62,25 @@ test('bounded production artifact commands always hard-kill at their timeout', (
   assert.equal(calls[3].options.timeout, 4_321);
   assert.equal(calls[3].options.killSignal, 'SIGKILL');
   assert.equal(calls[3].options.shell, false);
+});
+
+test('tracked native sources are readable independently of the caller umask', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'tracked-native-source-test-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const nested = path.join(root, 'nested');
+  fs.mkdirSync(nested, { mode: 0o700 });
+  const makefile = path.join(root, 'Makefile');
+  const source = path.join(nested, 'helper.c');
+  fs.writeFileSync(makefile, 'all:\n\ttrue\n', { mode: 0o600 });
+  fs.writeFileSync(source, 'int main(void) { return 0; }\n', { mode: 0o600 });
+  fs.chmodSync(root, 0o700);
+
+  normalizeTrackedNativeSource(root);
+
+  assert.equal(fs.lstatSync(root).mode & 0o777, 0o755);
+  assert.equal(fs.lstatSync(nested).mode & 0o777, 0o755);
+  assert.equal(fs.lstatSync(makefile).mode & 0o777, 0o444);
+  assert.equal(fs.lstatSync(source).mode & 0o777, 0o444);
 });
 
 function input(t) {

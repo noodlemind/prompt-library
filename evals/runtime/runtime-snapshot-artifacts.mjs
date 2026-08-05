@@ -864,6 +864,36 @@ function copyRegular(source, destination, mode) {
   }
 }
 
+export function normalizeTrackedNativeSource(root) {
+  if (typeof root !== 'string' || root.length < 1 || root.includes('\0')) {
+    fail('tracked native source path is invalid', 'ERR_RUNTIME_SNAPSHOT_SOURCE');
+  }
+  const resolved = path.resolve(root);
+  let entries = 0;
+  const visit = (current, depth) => {
+    if (depth > 4 || entries >= 64) {
+      fail('tracked native source exceeds its reviewed bounds', 'ERR_RUNTIME_SNAPSHOT_SOURCE');
+    }
+    entries += 1;
+    const stat = fs.lstatSync(current);
+    if (stat.isDirectory() && !stat.isSymbolicLink()) {
+      const names = fs.readdirSync(current)
+        .sort((left, right) => Buffer.compare(Buffer.from(left), Buffer.from(right)));
+      for (const name of names) visit(path.join(current, name), depth + 1);
+      // Keep owner write permission so the owner-verified outer workspace can
+      // still be removed after build failure; Docker only needs read/traverse.
+      fs.chmodSync(current, 0o755);
+      return;
+    }
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || stat.size > 4 * 1024 * 1024) {
+      fail('tracked native source contains an unsupported entry', 'ERR_RUNTIME_SNAPSHOT_SOURCE');
+    }
+    fs.chmodSync(current, 0o444);
+  };
+  visit(resolved, 0);
+  return resolved;
+}
+
 function snapshotTrackedRuntime({ repoRoot, releaseSha, destination, workspace }) {
   const trackedArchive = path.join(workspace, 'tracked-runtime.tar');
   const extracted = path.join(workspace, 'tracked-runtime');
@@ -895,7 +925,7 @@ function snapshotTrackedRuntime({ repoRoot, releaseSha, destination, workspace }
   }
   const nativeSource = path.join(source, 'native');
   if (!fs.lstatSync(nativeSource).isDirectory()) fail('tracked native helper source is missing');
-  return { nativeSource };
+  return { nativeSource: normalizeTrackedNativeSource(nativeSource) };
 }
 
 const WRAPPERS = Object.freeze({
