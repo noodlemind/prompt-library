@@ -94,10 +94,74 @@ test('readiness canary cleanup cannot replace its primary failure', () => {
     assert.match(method, /let cleanupError;/);
     assert.match(method, /primaryError = error;/);
     assert.match(method, /if \(primaryError\) throw primaryError;/);
-    assert.match(method, /if \(cleanupError\) throw cleanupError;/);
     const finallyBlocks = method.match(/finally\s*\{[\s\S]*?\n\s*\}/g) ?? [];
     assert.equal(finallyBlocks.some((block) => /\bthrow\b/.test(block)), false);
   }
+  assert.match(
+    nodeDriverMethodSource('runStorageReadinessCanary', 'runReadinessDenialProbe'),
+    /primaryError && \(cleanupError \|\| recoveryError\)/,
+  );
+  assert.match(
+    nodeDriverMethodSource('runTaskIsolationCanary', 'runReadinessProbe'),
+    /if \(cleanupError\) throw cleanupError;/,
+  );
+});
+
+test('storage readiness preallocates with the protected allocator and bounds the real ENOSPC write', () => {
+  const source = nodeDriverMethodSource('runStorageReadinessCanary', 'runReadinessDenialProbe');
+  assert.match(source, /topology\.executables\.storageAllocator/);
+  assert.match(source, /topology\.hashes\.storageAllocator/);
+  assert.match(source, /expectedExecutableHash/);
+  assert.match(source, /\/proc\/self\/fd\/3/);
+  assert.match(source, /inheritedFds:\s*\[\{\s*source:\s*descriptor,\s*target:\s*3\s*\}\]/);
+    assert.match(source, /writeAttemptLimitBytes\s*=\s*64 \* 1024 \* 1024/);
+  assert.match(source, /error\?\.code === 'ENOSPC'/);
+  assert.match(source, /preallocationRequestedBytes/);
+  assert.match(source, /allocatedBytesObserved/);
+  assert.match(source, /bytesWrittenBeforeEnospc/);
+  assert.match(source, /engineer-readiness-storage-observation\.v2/);
+  assert.doesNotMatch(source, /while \(bytesWritten < spec\.totalBytes\)/);
+});
+
+test('default process waits drain stdio and reap a timed-out child before returning', async () => {
+  const driver = createNodeLinuxDriver(topology());
+  const common = {
+    file: process.execPath,
+    cwd: '/',
+    env: { LANG: 'C.UTF-8', PATH: process.env.PATH ?? '/usr/bin:/bin' },
+    uid: 0,
+    gid: 0,
+    supplementaryGids: [],
+    cgroupPath: null,
+    inheritedFds: [],
+    maxOutputBytes: 4 * 1024,
+    shell: false,
+  };
+  const draining = await driver.spawnProcess({
+    ...common,
+    role: 'stdio-drain-test',
+    args: ['-e', [
+      "const { spawn } = require('node:child_process');",
+      "spawn(process.execPath, ['-e', 'setTimeout(() => {}, 80)'], { stdio: ['ignore', 'ignore', 2] });",
+      "process.stderr.write('drained');",
+      'process.exit(1);',
+    ].join(' ')],
+  });
+  const stderr = [];
+  draining.child.stderr.on('data', (chunk) => stderr.push(Buffer.from(chunk)));
+  const started = Date.now();
+  const drained = await driver.waitProcess(draining, { timeoutMs: 1_000 });
+  assert.equal(drained.exitCode, 1);
+  assert.equal(Buffer.concat(stderr).toString('utf8'), 'drained');
+  assert.ok(Date.now() - started >= 50);
+
+  const timed = await driver.spawnProcess({
+    ...common,
+    role: 'timeout-reap-test',
+    args: ['-e', 'setInterval(() => {}, 1000)'],
+  });
+  await assert.rejects(driver.waitProcess(timed, { timeoutMs: 10 }), /timed out/i);
+  assert.equal(timed.child.signalCode, 'SIGKILL');
 });
 
 test('task-isolation canary bounds its trusted timeout before Docker work', () => {
@@ -187,6 +251,7 @@ function topology(overrides = {}) {
     },
     executables: {
       dockerd: '/usr/local/bin/dockerd',
+      storageAllocator: '/opt/engineer/bin/busybox',
       cgroupExec: '/opt/engineer/bin/engineer-cgroup-exec',
       taskIsolationProbe: '/opt/engineer/bin/engineer-task-isolation-probe',
       readinessDenialProbe: '/opt/engineer/bin/engineer-readiness-denial-probe',
@@ -203,6 +268,7 @@ function topology(overrides = {}) {
     hashes: {
       supervisor: HASH('2'),
       dockerd: HASH('8'),
+      storageAllocator: HASH('d'),
       cgroupExec: HASH('9'),
       taskIsolationProbe: HASH('1'),
       readinessDenialProbe: HASH('0'),
@@ -443,9 +509,13 @@ function preflightPublication(topo, bindings) {
         proofHash: HASH('b'),
       },
       storage: {
+        schema: 'engineer-readiness-storage-observation.v2',
         filesystemId: topo.filesystem.id,
         totalBytes: topo.filesystem.expectedBytes,
-        bytesWritten: 8 * 1024 * 1024 * 1024,
+        preallocationRequestedBytes: 8 * 1024 * 1024 * 1024,
+        allocatedBytesObserved: 8 * 1024 * 1024 * 1024,
+        writeAttemptLimitBytes: 64 * 1024 * 1024,
+        bytesWrittenBeforeEnospc: 0,
         availableBytesAfterCleanup: 512 * 1024 * 1024,
         enospcObserved: true,
         evidenceHeadroomRecovered: true,
@@ -558,6 +628,7 @@ function fakeDriver(topo = topology(), overrides = {}) {
       if (name === 'providerBroker') return topo.hashes.providerBroker;
       if (name === 'supervisor') return topo.hashes.supervisor;
       if (name === 'dockerd') return topo.hashes.dockerd;
+      if (name === 'storageAllocator') return topo.hashes.storageAllocator;
       if (name === 'cgroupExec') return topo.hashes.cgroupExec;
       if (name === 'taskIsolationProbe') return topo.hashes.taskIsolationProbe;
       if (name === 'readinessDenialProbe') return topo.hashes.readinessDenialProbe;
@@ -663,10 +734,13 @@ function fakeDriver(topo = topology(), overrides = {}) {
     async runStorageReadinessCanary(spec) {
       calls.push(['runStorageReadinessCanary', spec]);
       const proof = {
-        schema: 'engineer-readiness-storage-observation.v1',
+        schema: 'engineer-readiness-storage-observation.v2',
         filesystemId: topo.filesystem.id,
         totalBytes: topo.filesystem.expectedBytes,
-        bytesWritten: 8 * 1024 * 1024 * 1024,
+        preallocationRequestedBytes: 8 * 1024 * 1024 * 1024,
+        allocatedBytesObserved: 8 * 1024 * 1024 * 1024,
+        writeAttemptLimitBytes: 64 * 1024 * 1024,
+        bytesWrittenBeforeEnospc: 0,
         availableBytesAfterCleanup: 512 * 1024 * 1024,
         enospcObserved: true,
         evidenceHeadroomRecovered: true,

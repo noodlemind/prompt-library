@@ -51,7 +51,7 @@ const CREDENTIAL_VALUE = /(?:Bearer\s+|sk-(?:or|ant|proj)-|github_pat_|gh[pousr]
 const UTF8 = new TextDecoder('utf-8', { fatal: true });
 
 const RUNTIME_EXECUTABLE_NAMES = Object.freeze([
-  'dockerd', 'cgroupExec', 'taskIsolationProbe', 'readinessDenialProbe', 'iptables', 'ip6tables', 'supervisor',
+  'dockerd', 'storageAllocator', 'cgroupExec', 'taskIsolationProbe', 'readinessDenialProbe', 'iptables', 'ip6tables', 'supervisor',
   'providerBroker', 'readinessProbe', 'evidenceCollector', 'runner', 'harbor', 'sentinel',
 ]);
 const EXECUTABLE_PATHS = Object.freeze(Object.fromEntries(

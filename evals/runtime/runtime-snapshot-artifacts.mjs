@@ -91,6 +91,7 @@ const DOCKER_CANDIDATES = Object.freeze({
 const BASE_EXECUTABLE_SOURCES = Object.freeze({
   dockerd: '/usr/local/bin/dockerd',
   docker: '/usr/local/bin/docker',
+  storageAllocator: '/bin/busybox',
   iptables: '/usr/sbin/iptables',
   ip6tables: '/usr/sbin/ip6tables',
   sentinel: '/bin/sleep',

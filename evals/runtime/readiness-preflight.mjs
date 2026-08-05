@@ -32,6 +32,7 @@ const BINDING_FIELDS = Object.freeze([
   'materializationReceiptHash', 'workspaceFilesystemId',
   'producerExecutableHash', 'readinessProbeExecutableHash',
   'runnerExecutableHash', 'harborExecutableHash',
+  'storageAllocatorExecutableHash',
   'taskIsolationProbeExecutableHash', 'readinessDenialProbeExecutableHash',
 ]);
 const RECEIPT_FIELDS = Object.freeze([
@@ -166,6 +167,7 @@ function validateBindings(value, label = 'readiness preflight bindings') {
     'networkProducerSessionId', 'materializationReceiptHash',
     'producerExecutableHash', 'readinessProbeExecutableHash',
     'runnerExecutableHash', 'harborExecutableHash',
+    'storageAllocatorExecutableHash',
     'taskIsolationProbeExecutableHash', 'readinessDenialProbeExecutableHash',
   ]) digest(bindings[field], `${label}.${field}`);
   if (bindings.executionMode !== ZERO_PROVIDER_MODE) {
@@ -204,6 +206,7 @@ function normalizeProducerInput(input) {
   exactKeys(value.executables, [
     'producerExecutableHash', 'readinessProbeExecutableHash',
     'runnerExecutableHash', 'harborExecutableHash',
+    'storageAllocatorExecutableHash',
     'taskIsolationProbeExecutableHash', 'readinessDenialProbeExecutableHash',
   ], 'readiness preflight executable binding');
   let networkPolicy;
@@ -269,14 +272,40 @@ function validateObservations(input, bindings) {
   digest(value.noProvider.proofHash, 'no-provider proof hash');
 
   exactKeys(value.storage, [
-    'filesystemId', 'totalBytes', 'bytesWritten', 'availableBytesAfterCleanup',
+    'schema', 'filesystemId', 'totalBytes', 'preallocationRequestedBytes',
+    'allocatedBytesObserved', 'writeAttemptLimitBytes', 'bytesWrittenBeforeEnospc',
+    'availableBytesAfterCleanup',
     'enospcObserved', 'evidenceHeadroomRecovered', 'proofHash',
   ], 'storage observation');
-  if (value.storage.filesystemId !== bindings.filesystemId
+  if (value.storage.schema !== 'engineer-readiness-storage-observation.v2'
+      || value.storage.filesystemId !== bindings.filesystemId
       || value.storage.totalBytes !== bindings.filesystemBytes) {
     fail('storage observation filesystem binding drifted');
   }
-  integer(value.storage.bytesWritten, 'storage canary bytes', 1, bindings.filesystemBytes);
+  integer(
+    value.storage.preallocationRequestedBytes,
+    'storage canary preallocation bytes',
+    1,
+    bindings.filesystemBytes,
+  );
+  integer(
+    value.storage.allocatedBytesObserved,
+    'storage canary allocated bytes',
+    value.storage.preallocationRequestedBytes,
+    bindings.filesystemBytes,
+  );
+  integer(
+    value.storage.writeAttemptLimitBytes,
+    'storage canary write limit',
+    64 * 1024 * 1024,
+    64 * 1024 * 1024,
+  );
+  integer(
+    value.storage.bytesWrittenBeforeEnospc,
+    'storage canary bytes written before ENOSPC',
+    0,
+    value.storage.writeAttemptLimitBytes - 1,
+  );
   integer(
     value.storage.availableBytesAfterCleanup,
     'storage recovered bytes',
@@ -680,6 +709,7 @@ function defaultProbes() {
           readinessProbeExecutableHash: bindings.readinessProbeExecutableHash,
           runnerExecutableHash: bindings.runnerExecutableHash,
           harborExecutableHash: bindings.harborExecutableHash,
+          storageAllocatorExecutableHash: bindings.storageAllocatorExecutableHash,
           taskIsolationProbeExecutableHash: bindings.taskIsolationProbeExecutableHash,
           readinessDenialProbeExecutableHash: bindings.readinessDenialProbeExecutableHash,
         },
@@ -728,6 +758,7 @@ export async function runReadinessPreflight(input, {
     exactKeys(producer.executableHashes, [
       'producerExecutableHash', 'readinessProbeExecutableHash',
       'runnerExecutableHash', 'harborExecutableHash',
+      'storageAllocatorExecutableHash',
       'taskIsolationProbeExecutableHash', 'readinessDenialProbeExecutableHash',
     ], 'readiness preflight executable observation');
     for (const [field, actual] of Object.entries(producer.executableHashes)) {

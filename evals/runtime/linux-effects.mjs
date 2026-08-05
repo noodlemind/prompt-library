@@ -525,14 +525,14 @@ function validateTopology(input) {
     fail('private Docker daemon paths are not the approved bounded topology', 'ERR_LINUX_RUNTIME_CONFIG');
   }
   for (const field of [
-    'dockerd', 'cgroupExec', 'iptables', 'ip6tables', 'supervisor', 'providerBroker', 'readinessProbe',
+    'dockerd', 'storageAllocator', 'cgroupExec', 'iptables', 'ip6tables', 'supervisor', 'providerBroker', 'readinessProbe',
     'taskIsolationProbe', 'readinessDenialProbe', 'evidenceCollector', 'runner', 'harbor', 'sentinel',
   ]) absolute(topology.executables[field], `executables.${field}`);
   if (topology.executables.harbor !== PINNED_HARBOR) {
     fail('Harbor executable drifted from the fixed runtime', 'ERR_LINUX_RUNTIME_CONFIG');
   }
   for (const field of [
-    'supervisor', 'dockerd', 'cgroupExec', 'iptables', 'ip6tables', 'sentinel',
+    'supervisor', 'dockerd', 'storageAllocator', 'cgroupExec', 'iptables', 'ip6tables', 'sentinel',
     'taskIsolationProbe', 'readinessDenialProbe', 'providerBroker', 'readinessProbe',
     'evidenceCollector', 'runner', 'harbor', 'daemonRoot',
   ]) sha(topology.hashes[field], `hashes.${field}`);
@@ -856,6 +856,7 @@ function executableHashMap(topology) {
   return new Map([
     [topology.executables.supervisor, topology.hashes.supervisor],
     [topology.executables.dockerd, topology.hashes.dockerd],
+    [topology.executables.storageAllocator, topology.hashes.storageAllocator],
     [topology.executables.cgroupExec, topology.hashes.cgroupExec],
     [topology.executables.taskIsolationProbe, topology.hashes.taskIsolationProbe],
     [topology.executables.readinessDenialProbe, topology.hashes.readinessDenialProbe],
@@ -927,6 +928,7 @@ export function createLinuxRuntimeEffects({
           ['readinessProbeExecutableHash', topology.executables.readinessProbe],
           ['runnerExecutableHash', topology.executables.runner],
           ['harborExecutableHash', topology.executables.harbor],
+          ['storageAllocatorExecutableHash', topology.executables.storageAllocator],
           ['taskIsolationProbeExecutableHash', topology.executables.taskIsolationProbe],
           ['readinessDenialProbeExecutableHash', topology.executables.readinessDenialProbe],
         ];
@@ -984,11 +986,14 @@ export function createLinuxRuntimeEffects({
       },
       async probeStorage({ bindings }) {
         return driver.runStorageReadinessCanary({
+          file: topology.executables.storageAllocator,
           path: '/engineer-bounded/.readiness-storage-canary',
           reservePath: topology.paths.evidenceReserve,
           filesystemId: bindings.filesystemId,
           totalBytes: bindings.filesystemBytes,
           evidenceReserveBytes: bindings.evidenceReserveBytes,
+          expectedExecutableHash: topology.hashes.storageAllocator,
+          timeoutMs: topology.timeouts.helperMs,
         });
       },
       async probeRunnerDenials({ bindings }) {
@@ -1492,6 +1497,7 @@ export function createLinuxRuntimeEffects({
             readinessProbeExecutableHash: topology.hashes.readinessProbe,
             runnerExecutableHash: topology.hashes.runner,
             harborExecutableHash: topology.hashes.harbor,
+            storageAllocatorExecutableHash: topology.hashes.storageAllocator,
             taskIsolationProbeExecutableHash: topology.hashes.taskIsolationProbe,
             readinessDenialProbeExecutableHash: topology.hashes.readinessDenialProbe,
           },
@@ -2135,6 +2141,15 @@ function availableFilesystemBytes(target) {
   return Number(bytes);
 }
 
+function freeFilesystemBytes(target) {
+  const filesystem = fs.statfsSync(target, { bigint: true });
+  const bytes = filesystem.bsize * filesystem.bfree;
+  if (bytes > BigInt(Number.MAX_SAFE_INTEGER)) {
+    throw new Error('free filesystem capacity exceeds safe evidence bounds');
+  }
+  return Number(bytes);
+}
+
 function statMode(target) {
   const stat = fs.lstatSync(target);
   return {
@@ -2195,7 +2210,7 @@ function boundedChild(child, maximum) {
   }
   const completion = new Promise((resolve, reject) => {
     child.once('error', reject);
-    child.once('exit', (code, signal) => resolve({ code, signal, outputBytes, overflow }));
+    child.once('close', (code, signal) => resolve({ code, signal, outputBytes, overflow }));
   });
   return { completion, get outputBytes() { return outputBytes; } };
 }
@@ -2446,7 +2461,6 @@ export function createNodeLinuxDriver(topology) {
           handle.bounded.completion,
           new Promise((_, reject) => {
             timer = setTimeout(() => {
-              handle.child.kill('SIGKILL');
               const error = new Error('child timed out');
               error.code = 'ETIMEDOUT';
               reject(error);
@@ -2468,6 +2482,20 @@ export function createNodeLinuxDriver(topology) {
     } catch (error) {
       if (handle.child.exitCode === null && handle.child.signalCode === null) {
         handle.child.kill('SIGKILL');
+      }
+      if (error?.code === 'ETIMEDOUT') {
+        let reapTimer;
+        try {
+          await Promise.race([
+            handle.bounded.completion,
+            new Promise((_, reject) => {
+              reapTimer = setTimeout(() => reject(new Error('timed-out child could not be reaped')), 5_000);
+              reapTimer.unref?.();
+            }),
+          ]);
+        } finally {
+          clearTimeout(reapTimer);
+        }
       }
       throw error;
     } finally {
@@ -2950,14 +2978,22 @@ export function createNodeLinuxDriver(topology) {
     },
     async runStorageReadinessCanary(spec) {
       if (!plainObject(spec)
+          || spec.file !== topology.executables.storageAllocator
           || spec.path !== '/engineer-bounded/.readiness-storage-canary'
           || spec.reservePath !== topology.paths.evidenceReserve
           || spec.filesystemId !== topology.filesystem.id
           || spec.totalBytes !== topology.filesystem.expectedBytes
+          || spec.expectedExecutableHash !== topology.hashes.storageAllocator
+          || !Number.isSafeInteger(spec.timeoutMs)
+          || spec.timeoutMs < 1_000
+          || spec.timeoutMs > 60_000
           || !Number.isSafeInteger(spec.evidenceReserveBytes)
           || spec.evidenceReserveBytes < 64 * 1024 * 1024
           || spec.evidenceReserveBytes >= spec.totalBytes) {
         throw new Error('storage readiness canary escaped its fixed bound');
+      }
+      if (hashFile(spec.file) !== spec.expectedExecutableHash) {
+        throw new Error('storage readiness allocator identity drifted');
       }
       const reserveStat = fs.lstatSync(spec.reservePath);
       const before = statFilesystem(spec.path.slice(0, spec.path.lastIndexOf('/')));
@@ -2968,26 +3004,119 @@ export function createNodeLinuxDriver(topology) {
           || before.id !== spec.filesystemId || before.bytes !== spec.totalBytes) {
         throw new Error('storage readiness reserve or filesystem identity drifted');
       }
-      const descriptor = fs.openSync(
-        spec.path,
-        fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY
-          | (fs.constants.O_NOFOLLOW ?? 0),
-        0o600,
-      );
-      const block = Buffer.alloc(8 * 1024 * 1024);
-      let bytesWritten = 0;
+      const parentPath = '/engineer-bounded';
+      const minimumChunkBytes = 1024 * 1024;
+      const maximumChunkBytes = 1024 * 1024 * 1024;
+      const maximumAllocationFiles = 32;
+      const writeAttemptLimitBytes = 64 * 1024 * 1024;
+      const records = [];
+      const openCanary = (target, flags) => {
+        const descriptor = fs.openSync(
+          target,
+          fs.constants.O_CREAT | fs.constants.O_EXCL | flags
+            | (fs.constants.O_NOFOLLOW ?? 0),
+          0o600,
+        );
+        const record = { path: target, descriptor, closed: false };
+        records.push(record);
+        fs.fchownSync(descriptor, 0, 0);
+        fs.fchmodSync(descriptor, 0o600);
+        return record;
+      };
+      const runAllocator = async (descriptor, bytes) => {
+        const stdout = [];
+        const stderr = [];
+        const handle = await spawnProcess({
+          role: 'storage-readiness-allocator',
+          file: spec.file,
+          args: ['fallocate', '-l', String(bytes), '/proc/self/fd/3'],
+          cwd: '/',
+          env: SUPPORT_ENV,
+          uid: 0,
+          gid: 0,
+          supplementaryGids: [],
+          cgroupPath: null,
+          inheritedFds: [{ source: descriptor, target: 3 }],
+          maxOutputBytes: 4 * 1024,
+          timeoutMs: spec.timeoutMs,
+          shell: false,
+        });
+        handle.child.stdout.on('data', (chunk) => stdout.push(Buffer.from(chunk)));
+        handle.child.stderr.on('data', (chunk) => stderr.push(Buffer.from(chunk)));
+        const result = await waitProcess(handle, { timeoutMs: spec.timeoutMs });
+        if (result.exitCode !== 0 || result.signal !== 'none' || result.outputBytes !== 0
+            || Buffer.concat(stdout).length !== 0 || Buffer.concat(stderr).length !== 0) {
+          throw new Error('storage readiness preallocation failed closed');
+        }
+      };
+      let preallocationRequestedBytes = 0;
+      let allocatedBytesObserved = 0;
+      let bytesWrittenBeforeEnospc = 0;
       let enospcObserved = false;
+      let writeBlock;
       let primaryError;
       let cleanupError;
       try {
-        fs.fchownSync(descriptor, 0, 0);
-        fs.fchmodSync(descriptor, 0o600);
-        while (bytesWritten < spec.totalBytes) {
-          const count = Math.min(block.length, spec.totalBytes - bytesWritten);
+        for (let index = 0; ; index += 1) {
+          const freeBytes = freeFilesystemBytes(parentPath);
+          if (!Number.isSafeInteger(freeBytes) || freeBytes < 0 || freeBytes > spec.totalBytes) {
+            throw new Error('storage readiness free-space observation drifted');
+          }
+          const requestedBytes = Math.min(
+            maximumChunkBytes,
+            Math.floor(freeBytes / 2 / minimumChunkBytes) * minimumChunkBytes,
+          );
+          if (requestedBytes < minimumChunkBytes) break;
+          if (index >= maximumAllocationFiles) {
+            throw new Error('storage readiness preallocation exceeded its file bound');
+          }
+          const record = openCanary(
+            `${spec.path}.allocation-${String(index).padStart(2, '0')}`,
+            fs.constants.O_RDWR,
+          );
+          await runAllocator(record.descriptor, requestedBytes);
+          const canaryStat = fs.fstatSync(record.descriptor);
+          const allocatedBytes = canaryStat.blocks * 512;
+          const freeBytesAfter = freeFilesystemBytes(parentPath);
+          if (!canaryStat.isFile() || canaryStat.nlink !== 1
+              || canaryStat.uid !== 0 || canaryStat.gid !== 0
+              || (canaryStat.mode & 0o777) !== 0o600
+              || canaryStat.size !== requestedBytes
+              || !Number.isSafeInteger(allocatedBytes)
+              || allocatedBytes < requestedBytes
+              || !Number.isSafeInteger(freeBytesAfter)
+              || freeBytesAfter >= freeBytes
+              || freeBytes - freeBytesAfter < requestedBytes) {
+            throw new Error('storage readiness preallocation observation drifted');
+          }
+          preallocationRequestedBytes += requestedBytes;
+          allocatedBytesObserved += allocatedBytes;
+          if (!Number.isSafeInteger(preallocationRequestedBytes)
+              || !Number.isSafeInteger(allocatedBytesObserved)
+              || preallocationRequestedBytes > spec.totalBytes
+              || allocatedBytesObserved > spec.totalBytes) {
+            throw new Error('storage readiness preallocation exceeded its capacity bound');
+          }
+        }
+        if (!Number.isSafeInteger(fs.constants.O_DSYNC) || fs.constants.O_DSYNC === 0) {
+          throw new Error('storage readiness requires O_DSYNC');
+        }
+        const writeRecord = openCanary(
+          spec.path,
+          fs.constants.O_WRONLY | fs.constants.O_DSYNC,
+        );
+        writeBlock = Buffer.alloc(minimumChunkBytes);
+        while (bytesWrittenBeforeEnospc < writeAttemptLimitBytes) {
+          const count = Math.min(
+            writeBlock.length,
+            writeAttemptLimitBytes - bytesWrittenBeforeEnospc,
+          );
           try {
-            const written = fs.writeSync(descriptor, block, 0, count, null);
-            if (written < 1 || written > count) throw new Error('storage canary write drifted');
-            bytesWritten += written;
+            const written = fs.writeSync(writeRecord.descriptor, writeBlock, 0, count, null);
+            if (written < 1 || written > count) {
+              throw new Error('storage readiness bounded write drifted');
+            }
+            bytesWrittenBeforeEnospc += written;
           } catch (error) {
             if (error?.code === 'ENOSPC') {
               enospcObserved = true;
@@ -2996,35 +3125,82 @@ export function createNodeLinuxDriver(topology) {
             throw error;
           }
         }
-        if (!enospcObserved) throw new Error('bounded storage did not produce ENOSPC');
+        if (!enospcObserved) {
+          throw new Error('bounded storage write did not produce ENOSPC');
+        }
       } catch (error) {
         primaryError = error;
       } finally {
+        writeBlock?.fill(0);
+        const cleanupFailures = [];
+        for (const record of [...records].reverse()) {
+          try {
+            fs.closeSync(record.descriptor);
+            record.closed = true;
+          } catch (error) {
+            cleanupFailures.push(error);
+          }
+        }
+        for (const record of [...records].reverse()) {
+          try { fs.unlinkSync(record.path); } catch (error) { cleanupFailures.push(error); }
+        }
         try {
-          block.fill(0);
-          fs.closeSync(descriptor);
-          fs.unlinkSync(spec.path);
-          const parent = fs.openSync('/engineer-bounded', fs.constants.O_RDONLY);
+          const parent = fs.openSync(parentPath, fs.constants.O_RDONLY);
           try { fs.fsyncSync(parent); } finally { fs.closeSync(parent); }
         } catch (error) {
-          cleanupError = error;
+          cleanupFailures.push(error);
+        }
+        if (cleanupFailures.length > 0) {
+          cleanupError = new AggregateError(cleanupFailures, 'storage readiness cleanup failed');
         }
       }
+      let availableBytesAfterCleanup = 0;
+      let recoveryError;
+      try {
+        const after = statFilesystem(parentPath);
+        availableBytesAfterCleanup = availableFilesystemBytes(parentPath);
+        const recoveredReserve = fs.lstatSync(spec.reservePath);
+        const canariesAbsent = records.every((record) => {
+          try { fs.lstatSync(record.path); return false; } catch (error) {
+            if (error?.code === 'ENOENT') return true;
+            throw error;
+          }
+        });
+        if (after.id !== spec.filesystemId || after.bytes !== spec.totalBytes
+            || !recoveredReserve.isFile() || recoveredReserve.isSymbolicLink()
+            || recoveredReserve.uid !== 0 || recoveredReserve.gid !== 0
+            || (recoveredReserve.mode & 0o777) !== 0o600
+            || recoveredReserve.blocks * 512 < spec.evidenceReserveBytes
+            || availableBytesAfterCleanup < spec.evidenceReserveBytes
+            || !canariesAbsent) {
+          throw new Error('storage readiness headroom did not recover');
+        }
+      } catch (error) {
+        recoveryError = error;
+      }
+      if (primaryError && (cleanupError || recoveryError)) {
+        throw new AggregateError(
+          [primaryError, cleanupError, recoveryError].filter(Boolean),
+          'storage readiness canary or recovery failed',
+        );
+      }
       if (primaryError) throw primaryError;
-      if (cleanupError) throw cleanupError;
-      const after = statFilesystem('/engineer-bounded');
-      const availableBytesAfterCleanup = availableFilesystemBytes('/engineer-bounded');
-      if (after.id !== spec.filesystemId || after.bytes !== spec.totalBytes
-          || availableBytesAfterCleanup < spec.evidenceReserveBytes) {
-        throw new Error('storage readiness headroom did not recover');
+      if (cleanupError || recoveryError) {
+        throw new AggregateError(
+          [cleanupError, recoveryError].filter(Boolean),
+          'storage readiness recovery failed',
+        );
       }
       const proof = {
-        schema: 'engineer-readiness-storage-observation.v1',
+        schema: 'engineer-readiness-storage-observation.v2',
         filesystemId: spec.filesystemId,
         totalBytes: spec.totalBytes,
-        bytesWritten,
+        preallocationRequestedBytes,
+        allocatedBytesObserved,
+        writeAttemptLimitBytes,
+        bytesWrittenBeforeEnospc,
         availableBytesAfterCleanup,
-        enospcObserved: true,
+        enospcObserved,
         evidenceHeadroomRecovered: true,
       };
       return { ...proof, proofHash: evidenceHash(proof) };

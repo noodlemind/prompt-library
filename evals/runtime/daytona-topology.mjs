@@ -12,6 +12,7 @@ export const DAYTONA_NODE_RUNTIME_IMAGE =
 export const DAYTONA_DIND_EXECUTABLE_SHA256 = Object.freeze({
   dockerd: '8d43fc3a858b949fc4e333b1b1d56ffbf579e74fe6ac866b662899f27a6ea74f',
   docker: 'c6a20cf0d5cd2e0efc6dce3aaa9cbd9cd7ef2a98f32aac3bfa7ff976577fab18',
+  storageAllocator: '58d22501495a1db93e859f6e406460ed5e179d7afc1197d19e16f58bf8562c34',
 });
 export const DAYTONA_USTAR_ATTESTED_EXECUTABLE_SHA256 = Object.freeze({
   node: '53084676a6082c4a3141ec97a4950decc351c0295c3a83acc04a4a397df35c74',
@@ -95,6 +96,7 @@ export const DAYTONA_EXECUTABLE_PATHS = Object.freeze({
   snapshotSelfTest: '/opt/engineer/bin/engineer-snapshot-selftest',
   dockerd: '/usr/local/bin/dockerd',
   docker: '/usr/local/bin/docker',
+  storageAllocator: '/opt/engineer/bin/busybox',
   iptables: '/usr/sbin/iptables',
   ip6tables: '/usr/sbin/ip6tables',
   sentinel: '/usr/bin/sleep',

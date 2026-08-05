@@ -74,6 +74,7 @@ function input(overrides = {}) {
       readinessProbeExecutableHash: HASH('3'),
       runnerExecutableHash: HASH('4'),
       harborExecutableHash: HASH('9'),
+      storageAllocatorExecutableHash: HASH('d'),
       taskIsolationProbeExecutableHash: HASH('e'),
       readinessDenialProbeExecutableHash: HASH('a'),
     },
@@ -104,9 +105,13 @@ function observations(condition = 'generic') {
       proofHash: HASH('b'),
     },
     storage: {
+      schema: 'engineer-readiness-storage-observation.v2',
       filesystemId: 'dev:feed',
       totalBytes: TEN_GIB,
-      bytesWritten: 8 * 1024 * 1024 * 1024,
+      preallocationRequestedBytes: 8 * 1024 * 1024 * 1024,
+      allocatedBytesObserved: 8 * 1024 * 1024 * 1024,
+      writeAttemptLimitBytes: 64 * 1024 * 1024,
+      bytesWrittenBeforeEnospc: 0,
       availableBytesAfterCleanup: 512 * 1024 * 1024,
       enospcObserved: true,
       evidenceHeadroomRecovered: true,
@@ -306,6 +311,8 @@ test('producer publishes only after all active probes pass and fails closed on m
             readinessProbeExecutableHash: spec.bindings.readinessProbeExecutableHash,
             runnerExecutableHash: spec.bindings.runnerExecutableHash,
             harborExecutableHash: spec.bindings.harborExecutableHash,
+            storageAllocatorExecutableHash:
+              spec.bindings.storageAllocatorExecutableHash,
             taskIsolationProbeExecutableHash: spec.bindings.taskIsolationProbeExecutableHash,
             readinessDenialProbeExecutableHash:
               spec.bindings.readinessDenialProbeExecutableHash,
@@ -347,6 +354,7 @@ test('producer publishes only after all active probes pass and fails closed on m
             readinessProbeExecutableHash: bindings.readinessProbeExecutableHash,
             runnerExecutableHash: bindings.runnerExecutableHash,
             harborExecutableHash: bindings.harborExecutableHash,
+            storageAllocatorExecutableHash: bindings.storageAllocatorExecutableHash,
             taskIsolationProbeExecutableHash: bindings.taskIsolationProbeExecutableHash,
             readinessDenialProbeExecutableHash:
               bindings.readinessDenialProbeExecutableHash,

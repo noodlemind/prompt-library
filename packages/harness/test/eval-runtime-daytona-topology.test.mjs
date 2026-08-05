@@ -33,6 +33,7 @@ const EXECUTABLE_HASHES = Object.freeze({
   snapshotSelfTest: HASH('1'),
   dockerd: HASH('a'),
   docker: HASH('2'),
+  storageAllocator: HASH('8'),
   iptables: HASH('b'),
   ip6tables: HASH('c'),
   sentinel: HASH('d'),
@@ -70,6 +71,7 @@ test('pins the exact executable identities allowed to explain credential-shaped 
     node: '53084676a6082c4a3141ec97a4950decc351c0295c3a83acc04a4a397df35c74',
     dockerd: '8d43fc3a858b949fc4e333b1b1d56ffbf579e74fe6ac866b662899f27a6ea74f',
     docker: 'c6a20cf0d5cd2e0efc6dce3aaa9cbd9cd7ef2a98f32aac3bfa7ff976577fab18',
+    storageAllocator: '58d22501495a1db93e859f6e406460ed5e179d7afc1197d19e16f58bf8562c34',
   });
   assert.deepEqual(DAYTONA_NODE_USTAR_ATTESTATION, {
     kind: 'node',
@@ -183,6 +185,10 @@ test('builds the exact approved per-trial Daytona topology as a content-addresse
     sha256: EXECUTABLE_HASHES.taskIsolationProbe,
   });
   assert.equal(manifest.executables.node.sha256, EXECUTABLE_HASHES.node);
+  assert.deepEqual(manifest.executables.storageAllocator, {
+    path: '/opt/engineer/bin/busybox',
+    sha256: EXECUTABLE_HASHES.storageAllocator,
+  });
   assert.deepEqual(manifest.snapshot.taskImages, TASK_IMAGES);
 
   assert.match(artifact.manifestHash, /^[a-f0-9]{64}$/);

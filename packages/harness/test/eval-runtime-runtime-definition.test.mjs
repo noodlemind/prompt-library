@@ -40,6 +40,7 @@ const DAYTONA_METADATA = Object.freeze({
 
 const EXECUTABLE_PATHS = Object.freeze({
   dockerd: '/usr/local/bin/dockerd',
+  storageAllocator: '/opt/engineer/bin/busybox',
   cgroupExec: '/opt/engineer/bin/engineer-cgroup-exec',
   taskIsolationProbe: '/opt/engineer/bin/engineer-task-isolation-probe',
   readinessDenialProbe: '/opt/engineer/bin/engineer-readiness-denial-probe',

@@ -50,7 +50,7 @@ function executableHashes() {
     'node', 'supervisor', 'archiveBridge', 'runner', 'harbor', 'providerBroker',
     'readinessProbe', 'evidenceCollector', 'cgroupExec', 'taskIsolationProbe',
     'readinessDenialProbe', 'imageProvisioner',
-    'snapshotSelfTest', 'dockerd', 'docker', 'iptables', 'ip6tables', 'sentinel',
+    'snapshotSelfTest', 'dockerd', 'docker', 'storageAllocator', 'iptables', 'ip6tables', 'sentinel',
   ].map((name, index) => [name, HASH((index % 10).toString())]));
 }
 
