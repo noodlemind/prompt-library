@@ -170,6 +170,15 @@ test('rejects empty, linked, special, unsafe, credential-bearing, and oversized 
     assert.throws(() => buildDeterministicUstar({ kind: 'runtime', root }), /credential|secret/i);
   });
 
+  await t.test('token-prefix substrings inside ordinary task names', () => {
+    const root = temporaryDirectory();
+    fs.writeFileSync(
+      path.join(root, 'runtime-module'),
+      'engineer-task-isolation-probe\nrisk-adjusted-check\ndisk-snapshot\n',
+    );
+    assert.doesNotThrow(() => buildDeterministicUstar({ kind: 'runtime', root }));
+  });
+
   await t.test('lowered size bound', () => {
     const root = temporaryDirectory();
     fs.writeFileSync(path.join(root, 'large'), '12345');

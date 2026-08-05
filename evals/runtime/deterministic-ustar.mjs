@@ -17,7 +17,7 @@ const HASH = /^[a-f0-9]{64}$/;
 const MAX_CREDENTIAL_SCAN_EXEMPTIONS = 32;
 const SAFE_RELATIVE = /^(?!\/)(?!.*(?:^|\/)\.\.?$)(?!.*\/\.\.\/)[A-Za-z0-9._/+:-]+$/;
 const SENSITIVE_FILE = /(?:^|\/)(?:\.env(?:\.[^/]*)?|credentials?(?:\.(?:json|ya?ml|txt))?|id_(?:rsa|dsa|ecdsa|ed25519)|[^/]+\.(?:pem|p12|pfx|key))$/i;
-const CREDENTIAL_MATERIAL = /(?:Bearer[ \t]+[A-Za-z0-9._~+/=-]{8,}|sk-(?:(?:or|ant|proj)-)?[A-Za-z0-9_-]{12,}|github_pat_[A-Za-z0-9_]{8,}|gh[pousr]_[A-Za-z0-9]{8,}|xox[baprs]-[A-Za-z0-9-]{8,}|hf_[A-Za-z0-9]{12,}|AKIA[0-9A-Z]{16}|-----BEGIN [A-Z ]*PRIVATE KEY-----)/i;
+const CREDENTIAL_MATERIAL = /(?<![A-Za-z0-9])(?:Bearer[ \t]+[A-Za-z0-9._~+/=-]{8,}|sk-(?:(?:or|ant|proj)-)?[A-Za-z0-9_-]{12,}|github_pat_[A-Za-z0-9_]{8,}|gh[pousr]_[A-Za-z0-9]{8,}|xox[baprs]-[A-Za-z0-9-]{8,}|hf_[A-Za-z0-9]{12,}|AKIA[0-9A-Z]{16}|-----BEGIN [A-Z ]*PRIVATE KEY-----)/i;
 
 export class DeterministicUstarError extends Error {
   constructor(message, code = 'ERR_DETERMINISTIC_USTAR') {
