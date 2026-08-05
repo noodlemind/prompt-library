@@ -14,6 +14,7 @@ import { verifyDeterministicUstarCredentialRanges } from './deterministic-ustar-
 import {
   DAYTONA_DIND_EXECUTABLE_SHA256,
   DAYTONA_EXECUTABLE_PATHS,
+  DAYTONA_NODE_USTAR_ATTESTATION,
 } from './daytona-topology.mjs';
 import {
   snapshotBuildManifestHash,
@@ -294,7 +295,13 @@ async function inspectRegularFile(filePath, {
   maximumBytes,
   label,
   allowedUstarExecutableDigests = null,
+  attestedCredentialArchive = null,
 }) {
+  if (attestedCredentialArchive !== null &&
+      expectedHash !== attestedCredentialArchive.archiveSha256) {
+    fail(`${label} does not match its code-owned credential archive identity`,
+      'ERR_SNAPSHOT_CREDENTIAL');
+  }
   let before;
   try {
     before = await fs.promises.lstat(filePath, { bigint: true });
@@ -305,6 +312,11 @@ async function inspectRegularFile(filePath, {
     fail(`${label} must be a bounded regular file`, 'ERR_SNAPSHOT_FILE');
   }
   const expectedSize = boundedStatSize(before, maximumBytes, label);
+  if (attestedCredentialArchive !== null &&
+      expectedSize !== attestedCredentialArchive.byteLength) {
+    fail(`${label} does not match its code-owned credential archive size`,
+      'ERR_SNAPSHOT_CREDENTIAL');
+  }
 
   const noFollow = noFollowFlag();
   let handle;
@@ -334,38 +346,52 @@ async function inspectRegularFile(filePath, {
       if (bytesReadTotal > maximumBytes) fail(`${label} exceeds its byte bound`, 'ERR_SNAPSHOT_FILE');
       const chunk = buffer.subarray(0, bytesRead);
       digest.update(chunk);
-      const scanned = tail.length ? Buffer.concat([tail, chunk]) : chunk;
-      const chunkStart = bytesReadTotal - bytesRead;
-      const scannedStart = chunkStart - tail.length;
-      let observedRanges;
-      try {
-        observedRanges = findCredentialMarkerRanges(scanned, scannedStart);
-      } catch {
-        fail(`${label} contains credential material`, 'ERR_SNAPSHOT_CREDENTIAL');
-      }
-      for (const range of observedRanges) {
-        if (range.end <= chunkStart) continue;
-        if (allowedUstarExecutableDigests === null) {
+      if (attestedCredentialArchive === null) {
+        const scanned = tail.length ? Buffer.concat([tail, chunk]) : chunk;
+        const chunkStart = bytesReadTotal - bytesRead;
+        const scannedStart = chunkStart - tail.length;
+        let observedRanges;
+        try {
+          observedRanges = findCredentialMarkerRanges(scanned, scannedStart);
+        } catch {
           fail(`${label} contains credential material`, 'ERR_SNAPSHOT_CREDENTIAL');
         }
-        const previous = credentialRanges.at(-1);
-        if (previous?.start === range.start && previous?.end === range.end) continue;
-        credentialRanges.push(range);
-        if (credentialRanges.length > MAX_CREDENTIAL_MARKER_RANGES) {
-          fail(`${label} contains credential material`, 'ERR_SNAPSHOT_CREDENTIAL');
+        for (const range of observedRanges) {
+          if (range.end <= chunkStart) continue;
+          if (allowedUstarExecutableDigests === null) {
+            fail(`${label} contains credential material`, 'ERR_SNAPSHOT_CREDENTIAL');
+          }
+          const previous = credentialRanges.at(-1);
+          if (previous?.start === range.start && previous?.end === range.end) continue;
+          credentialRanges.push(range);
+          if (credentialRanges.length > MAX_CREDENTIAL_MARKER_RANGES) {
+            fail(`${label} contains credential material`, 'ERR_SNAPSHOT_CREDENTIAL');
+          }
         }
+        tail = Buffer.from(scanned.subarray(Math.max(0, scanned.length - CREDENTIAL_SCAN_TAIL_BYTES)));
       }
-      tail = Buffer.from(scanned.subarray(Math.max(0, scanned.length - CREDENTIAL_SCAN_TAIL_BYTES)));
     }
-    if (allowedUstarExecutableDigests !== null) {
+    const semanticExecutableDigests = attestedCredentialArchive === null
+      ? allowedUstarExecutableDigests
+      : { [attestedCredentialArchive.entry.path]: attestedCredentialArchive.entry.sha256 };
+    if (semanticExecutableDigests !== null) {
       let verified = false;
       try {
         semanticUstar = await verifyDeterministicUstarCredentialRanges({
           handle,
           byteLength: expectedSize,
           credentialRanges,
-          allowedExecutableDigests: allowedUstarExecutableDigests,
+          allowedExecutableDigests: semanticExecutableDigests,
         });
+        if (attestedCredentialArchive !== null) {
+          const [entry] = semanticUstar.entries;
+          if (semanticUstar.credentialRangeCount !== 0 || semanticUstar.attestedEntryCount !== 0 ||
+              semanticUstar.entries.length !== 1 || entry.path !== attestedCredentialArchive.entry.path ||
+              entry.type !== 'file' || entry.mode !== attestedCredentialArchive.entry.mode ||
+              entry.sha256 !== attestedCredentialArchive.entry.sha256) {
+            throw new Error('attested credential archive structure drifted');
+          }
+        }
         verified = true;
       } catch {
         // Verification errors are intentionally collapsed so paths and bytes never reach logs.
@@ -984,6 +1010,11 @@ async function prepareRequest(input, maximumFileBytes) {
     for (const archive of declared) {
       const ordinal = partial.archives.length + 1;
       const policy = SNAPSHOT_CONTEXT_POLICY[archive.kind];
+      const attestedCredentialArchive =
+        archive.kind === DAYTONA_NODE_USTAR_ATTESTATION.kind &&
+        archive.sha256 === DAYTONA_NODE_USTAR_ATTESTATION.archiveSha256
+          ? DAYTONA_NODE_USTAR_ATTESTATION
+          : null;
       const custodyPath = path.join(custodyDirectory, policy.fileName);
       const contextMaximum = archive.kind === 'manifest'
         ? Math.min(maximumFileBytes, MAX_MANIFEST_BYTES)
@@ -1001,6 +1032,7 @@ async function prepareRequest(input, maximumFileBytes) {
         allowedUstarExecutableDigests: archive.encoding === 'ustar'
           ? ATTESTED_USTAR_EXECUTABLE_DIGESTS
           : null,
+        attestedCredentialArchive,
       });
       const record = Object.freeze({
         ...inspected,

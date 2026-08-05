@@ -62,8 +62,7 @@ function materializedClosures(workspace) {
         ? 'native' : 'runtime';
     const sourcePath = absolute.slice(1);
     const file = path.join(roots[context], ...sourcePath.split('/'));
-    const credentialShapedSuffix = name === 'node' ? `AKIA${'A'.repeat(16)}\n` : '';
-    const bytes = Buffer.from(`protected executable ${name}\n${credentialShapedSuffix}`);
+    const bytes = Buffer.from(`protected executable ${name}\n`);
     fs.mkdirSync(path.dirname(file), { recursive: true });
     fs.writeFileSync(file, bytes, { mode: 0o555 });
     executables[name] = { path: absolute, sha256: sha256(bytes), context, sourcePath };
@@ -282,6 +281,24 @@ test('fails before Daytona on input, closure, executable, manifest, or receipt d
   });
   await assert.rejects(
     prepareRuntimeSnapshotArtifacts(input(t), { components: unlistedCredentialMaterial }),
+    (error) => error?.code === 'ERR_DETERMINISTIC_USTAR_SECRET',
+  );
+
+  const unpinnedNodeCredentialMaterial = components({}, {
+    async prepareClosures(request) {
+      const closure = materializedClosures(request.workspace);
+      const executable = closure.executables.node;
+      const bytes = Buffer.from(`AKIA${'D'.repeat(16)}\n`);
+      const file = path.join(closure.roots.node, ...executable.sourcePath.split('/'));
+      fs.chmodSync(file, 0o755);
+      fs.writeFileSync(file, bytes);
+      fs.chmodSync(file, 0o555);
+      executable.sha256 = sha256(bytes);
+      return closure;
+    },
+  });
+  await assert.rejects(
+    prepareRuntimeSnapshotArtifacts(input(t), { components: unpinnedNodeCredentialMaterial }),
     (error) => error?.code === 'ERR_DETERMINISTIC_USTAR_SECRET',
   );
 

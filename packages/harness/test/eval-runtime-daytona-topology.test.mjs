@@ -4,6 +4,8 @@ import { test } from 'node:test';
 import {
   DAYTONA_DIND_BASE_IMAGE,
   DAYTONA_DIND_BASE_IMAGE_DIGEST,
+  DAYTONA_NODE_USTAR_ATTESTATION,
+  DAYTONA_USTAR_ATTESTED_EXECUTABLE_SHA256,
   buildDaytonaTopologyManifest,
   daytonaTopologyManifestHash,
   projectDaytonaReleaseRuntime,
@@ -55,6 +57,24 @@ const TASK_IMAGES = Object.freeze({
     imageId: `sha256:${HASH('e')}`,
     platform: 'linux/amd64', cpus: 1, memoryMb: 2048, storageMb: 10240,
   },
+});
+
+test('pins the exact executable identities allowed to explain credential-shaped USTAR bytes', () => {
+  assert.deepEqual(DAYTONA_USTAR_ATTESTED_EXECUTABLE_SHA256, {
+    node: 'e5207b0c9f178fe6b5caf8f5bab550b9f589a3f8e0e802165340e8bbf7f90927',
+    dockerd: '8d43fc3a858b949fc4e333b1b1d56ffbf579e74fe6ac866b662899f27a6ea74f',
+    docker: 'c6a20cf0d5cd2e0efc6dce3aaa9cbd9cd7ef2a98f32aac3bfa7ff976577fab18',
+  });
+  assert.deepEqual(DAYTONA_NODE_USTAR_ATTESTATION, {
+    kind: 'node',
+    archiveSha256: 'b641a1094bee7fa4bacd72742402eff426e0278290ea2080d6f18984bdaa91f9',
+    byteLength: 121_615_360,
+    entry: {
+      path: 'usr/local/bin/node',
+      mode: 0o555,
+      sha256: DAYTONA_USTAR_ATTESTED_EXECUTABLE_SHA256.node,
+    },
+  });
 });
 
 function options(overrides = {}) {

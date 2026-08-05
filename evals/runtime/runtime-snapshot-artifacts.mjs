@@ -8,8 +8,9 @@ import { createDaytonaSnapshotController } from './daytona-snapshot-controller.m
 import {
   DAYTONA_DIND_BASE_IMAGE,
   DAYTONA_DIND_BASE_IMAGE_DIGEST,
-  DAYTONA_DIND_EXECUTABLE_SHA256,
   DAYTONA_EXECUTABLE_PATHS,
+  DAYTONA_NODE_USTAR_ATTESTATION,
+  DAYTONA_USTAR_ATTESTED_EXECUTABLE_SHA256,
 } from './daytona-topology.mjs';
 import { buildDeterministicUstar } from './deterministic-ustar.mjs';
 import { buildSnapshotBuildManifest } from './snapshot-build-manifest.mjs';
@@ -66,13 +67,9 @@ const BASE_EXECUTABLE_SOURCES = Object.freeze({
   ip6tables: '/usr/sbin/ip6tables',
   sentinel: '/bin/sleep',
 });
-const CREDENTIAL_SCAN_ATTESTED_BINARY_NAMES = Object.freeze([
-  'node',
-  'cgroupExec',
-  'taskIsolationProbe',
-  'readinessDenialProbe',
-  ...Object.keys(BASE_EXECUTABLE_SOURCES),
-]);
+const CREDENTIAL_SCAN_ATTESTED_BINARY_NAMES = Object.freeze(
+  Object.keys(DAYTONA_USTAR_ATTESTED_EXECUTABLE_SHA256),
+);
 
 export class RuntimeSnapshotArtifactError extends Error {
   constructor(message, code = 'ERR_RUNTIME_SNAPSHOT_ARTIFACT') {
@@ -774,9 +771,9 @@ async function prepareCodeOwnedClosures({
     'readiness denial probe binary',
   );
   const executables = executableInventory(roots);
-  for (const [name, expectedSha256] of Object.entries(DAYTONA_DIND_EXECUTABLE_SHA256)) {
+  for (const [name, expectedSha256] of Object.entries(DAYTONA_USTAR_ATTESTED_EXECUTABLE_SHA256)) {
     if (!sameHash(executables[name].sha256, expectedSha256)) {
-      fail('DIND executable identity drifted from its pinned base image');
+      fail('credential-bearing executable identity drifted from its code-owned pin');
     }
   }
   if (!sameHash(executables.cgroupExec.sha256, native.nativeHelper.binarySha256)) {
@@ -865,13 +862,23 @@ export async function prepareRuntimeSnapshotArtifacts(input, { components = DEFA
   for (const kind of CONTEXT_KINDS) {
     const credentialScanExemptions = Object.entries(closures.executables)
       .filter(([name, executable]) =>
-        CREDENTIAL_SCAN_ATTESTED_BINARY_NAMES.includes(name) && executable.context === kind)
-      .map(([, executable]) => ({ path: executable.sourcePath, sha256: executable.sha256 }));
+        CREDENTIAL_SCAN_ATTESTED_BINARY_NAMES.includes(name) && executable.context === kind &&
+        sameHash(executable.sha256, DAYTONA_USTAR_ATTESTED_EXECUTABLE_SHA256[name]))
+      .map(([name, executable]) => ({
+        path: executable.sourcePath,
+        sha256: DAYTONA_USTAR_ATTESTED_EXECUTABLE_SHA256[name],
+      }));
     const built = buildDeterministicUstar({
       kind,
       root: closures.roots[kind],
       credentialScanExemptions,
     });
+    if (kind === DAYTONA_NODE_USTAR_ATTESTATION.kind &&
+        sameHash(closures.executables.node.sha256,
+          DAYTONA_USTAR_ATTESTED_EXECUTABLE_SHA256.node) &&
+        built.context.sha256 !== DAYTONA_NODE_USTAR_ATTESTATION.archiveSha256) {
+      fail('Node USTAR identity drifted from its code-owned pin');
+    }
     const archivePath = path.join(outputDirectory, `${kind}.tar`);
     try {
       writeExclusive(archivePath, built.bytes);

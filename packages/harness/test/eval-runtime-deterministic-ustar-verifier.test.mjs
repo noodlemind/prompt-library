@@ -7,6 +7,7 @@ import { test } from 'node:test';
 
 import {
   findCredentialMarkerRanges,
+  MAX_CREDENTIAL_MARKER_RANGES,
 } from '../../../evals/runtime/credential-material.mjs';
 import {
   buildDeterministicUstar,
@@ -74,6 +75,19 @@ function rewriteHeaderChecksum(header) {
   for (const byte of header) checksum += byte;
   header.write(`${checksum.toString(8).padStart(6, '0')}\0 `, 148, 8, 'ascii');
 }
+
+test('keeps ordinary marker inventories at their fail-closed bound', () => {
+  const marker = `AKIA${'A'.repeat(16)}\n`;
+  assert.equal(MAX_CREDENTIAL_MARKER_RANGES, 256);
+  assert.equal(
+    findCredentialMarkerRanges(Buffer.from(marker.repeat(MAX_CREDENTIAL_MARKER_RANGES))).length,
+    MAX_CREDENTIAL_MARKER_RANGES,
+  );
+  assert.throws(
+    () => findCredentialMarkerRanges(Buffer.from(marker.repeat(MAX_CREDENTIAL_MARKER_RANGES + 1))),
+    /count|bound/i,
+  );
+});
 
 test('accepts credential-like bytes only inside an exact executable path and digest', async (t) => {
   const input = fixture(t);

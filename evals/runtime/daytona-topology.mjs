@@ -9,6 +9,20 @@ export const DAYTONA_DIND_EXECUTABLE_SHA256 = Object.freeze({
   dockerd: '8d43fc3a858b949fc4e333b1b1d56ffbf579e74fe6ac866b662899f27a6ea74f',
   docker: 'c6a20cf0d5cd2e0efc6dce3aaa9cbd9cd7ef2a98f32aac3bfa7ff976577fab18',
 });
+export const DAYTONA_USTAR_ATTESTED_EXECUTABLE_SHA256 = Object.freeze({
+  node: 'e5207b0c9f178fe6b5caf8f5bab550b9f589a3f8e0e802165340e8bbf7f90927',
+  ...DAYTONA_DIND_EXECUTABLE_SHA256,
+});
+export const DAYTONA_NODE_USTAR_ATTESTATION = Object.freeze({
+  kind: 'node',
+  archiveSha256: 'b641a1094bee7fa4bacd72742402eff426e0278290ea2080d6f18984bdaa91f9',
+  byteLength: 121_615_360,
+  entry: Object.freeze({
+    path: 'usr/local/bin/node',
+    mode: 0o555,
+    sha256: DAYTONA_USTAR_ATTESTED_EXECUTABLE_SHA256.node,
+  }),
+});
 
 const TEN_GIB = 10 * 1024 * 1024 * 1024;
 const MAX_MANIFEST_BYTES = 64 * 1024;
