@@ -184,6 +184,8 @@ test('builds all four locked tasks into one content-addressed, explicitly non-le
   assert.equal(input.calls[2][0], 'materialize');
   assert.equal(fs.existsSync(path.join(result.datasetDir, 'cobol-modernization', 'tests', '.engineer-offline-verifier', 'bin', 'python3')), true);
   assert.doesNotMatch(fs.readFileSync(path.join(result.datasetDir, 'cobol-modernization', 'tests', 'test.sh'), 'utf8'), /apt-get|curl|uvx/);
+  assert.equal(result.datasetTreeHash, hashTree(result.datasetDir),
+    'the retained aggregate hash must describe the sealed published dataset');
   assert.equal(verifyOfflineTerminalBenchDataset({ artifactDir: result.artifactDir, expectedPins: input.pins }).ok, true);
   assert.equal(fs.readdirSync(input.outputRoot).length, 1, 'temporary build directories are removed');
 });

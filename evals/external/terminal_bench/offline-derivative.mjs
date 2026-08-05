@@ -588,6 +588,10 @@ export function buildOfflineTerminalBenchDerivative({
     if (hashTree(paths.source) !== lockedSourceChecksum || hashTree(paths.runtime) !== runtime.runtime.treeHash) {
       fail('an input tree mutated while building the derivative', 'ERR_TB_OFFLINE_INPUT_MUTATION');
     }
+    // mkdtemp creates the task root as 0700. Normalize it before publication
+    // so an aggregate dataset hash observes the same read/execute bits before
+    // and after the outer artifact is sealed read-only (0755 -> 0555).
+    fs.chmodSync(staging, 0o755);
     fs.renameSync(staging, paths.output);
     published = true;
     return {
