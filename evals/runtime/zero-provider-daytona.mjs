@@ -39,6 +39,7 @@ const HASH = /^[a-f0-9]{64}$/;
 const RELEASE_SHA = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/;
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,191}$/;
 const IMAGE_ID = /^sha256:[a-f0-9]{64}$/;
+const IMMUTABLE_IMAGE = /^[a-z0-9]+(?:[._-][a-z0-9]+)*(?::[0-9]+)?(?:\/[a-z0-9]+(?:[._-][a-z0-9]+)*)+@sha256:[a-f0-9]{64}$/;
 const RUN_FIELDS = Object.freeze([
   'schema', 'executionMode', 'evidenceClass', 'releaseEligible', 'authenticationScope',
   'standaloneSignatureVerifiable', 'report', 'protocolEvidence', 'lifecycleHash', 'artifactHash',
@@ -183,8 +184,8 @@ function canonicalTaskLock(taskLock, taskId) {
     storageMb: sandbox.storageMb,
   };
   if (typeof canonicalSandbox.immutableImage !== 'string'
+      || !IMMUTABLE_IMAGE.test(canonicalSandbox.immutableImage)
       || !IMAGE_ID.test(String(canonicalSandbox.imageId ?? ''))
-      || !canonicalSandbox.immutableImage.endsWith(`@${canonicalSandbox.imageId}`)
       || canonicalSandbox.platform !== 'linux/amd64'
       || !Number.isSafeInteger(canonicalSandbox.cpus) || canonicalSandbox.cpus < 1
       || !Number.isSafeInteger(canonicalSandbox.memoryMb) || canonicalSandbox.memoryMb < 256

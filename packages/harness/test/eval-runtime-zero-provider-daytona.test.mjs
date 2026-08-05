@@ -21,7 +21,8 @@ import { createGenuineRuntimeSession } from './support/runtime-session-fixture.m
 const HASH = (character) => character.repeat(64);
 const RELEASE_SHA = 'a'.repeat(40);
 const TASK_ID = 'cobol-modernization';
-const IMAGE_DIGEST = `sha256:${HASH('6')}`;
+const MANIFEST_DIGEST = `sha256:${HASH('6')}`;
+const IMAGE_ID = `sha256:${HASH('7')}`;
 const EXECUTION_MODE = 'zero-provider-canary';
 
 function fixture(t) {
@@ -40,8 +41,8 @@ function fixture(t) {
     tasks: [{
       task: TASK_ID,
       sandbox: {
-        immutableImage: `example.invalid/cobol@${IMAGE_DIGEST}`,
-        imageId: IMAGE_DIGEST,
+        immutableImage: `example.invalid/cobol@${MANIFEST_DIGEST}`,
+        imageId: IMAGE_ID,
         platform: 'linux/amd64',
         cpus: 1,
         memoryMb: 2048,

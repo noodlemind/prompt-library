@@ -64,8 +64,8 @@ export const PINNED_OFFLINE_INPUTS = Object.freeze({
   builder: Object.freeze({ image: GCC_BUILDER_IMAGE, platform: 'linux/amd64' }),
   expected: Object.freeze({
     runtimeTreeHash: '4c2c4b65ffdd548cc733982a08601add96e532f657801d9d8b13b07f431e470e',
-    taskLockHash: 'eebd5217b1831cbe869c0e7ddf75e696ccd662deaff17f61ed62042a27c9181d',
-    artifactId: '8c05bb07e04843f3bc570ad84da17ee826817cb106f1aaee7b5442730a73b368',
+    taskLockHash: '238558a5bbd453289ef198ad08d211f8832ca714ccc53788f5110895f2dc16b7',
+    artifactId: '22dc3ef702bc09a9f5c72098b7cb31fc11fda4c9b8e08f09cc260058fada254e',
     datasetTreeHash: 'c5e6b78bfbb2f91b4538e7531d106705b3538ebe599db1e58d6f5251e63be875',
   }),
 });

@@ -265,9 +265,8 @@ function validateComponents(components) {
 function runtimeSandbox(sandbox, task) {
   exactKeys(sandbox, SANDBOX_RUNTIME_FIELDS, `task ${task} sandbox`);
   if (typeof sandbox.immutableImage !== 'string' || !IMMUTABLE_IMAGE.test(sandbox.immutableImage) ||
-      typeof sandbox.imageId !== 'string' || !IMAGE_ID.test(sandbox.imageId) ||
-      !sandbox.immutableImage.endsWith(`@${sandbox.imageId}`)) {
-    fail(`task ${task} must use one matching immutable image identity`);
+      typeof sandbox.imageId !== 'string' || !IMAGE_ID.test(sandbox.imageId)) {
+    fail(`task ${task} must pin an immutable image reference and Docker image ID`);
   }
   if (sandbox.platform !== 'linux/amd64') fail(`task ${task} must target linux/amd64`);
   boundedInteger(sandbox.cpus, `task ${task} cpus`, 1, 2);

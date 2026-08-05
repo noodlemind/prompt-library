@@ -561,6 +561,118 @@ test('proven eventual absence remains authoritative after a lost delete response
   assert.equal(runtime.snapshot().receipts.length, 1);
 });
 
+test('cleanup accepts Daytona destroying identity renames and still requires three exact absence observations', async () => {
+  const fake = fakeDaytona();
+  const originalRun = fake.runCommand;
+  let deletionRequested = false;
+  let cleanupObservations = 0;
+  fake.runCommand = async (file, args, options = {}) => {
+    if (args[0] === 'delete') {
+      deletionRequested = true;
+      for (const [name, observed] of fake.sandboxes) {
+        fake.sandboxes.set(name, { ...observed, state: 'destroying', desiredState: 'destroyed' });
+      }
+      fake.calls.push({ file, args: args.slice(), options: { ...options, env: { ...(options.env ?? {}) } } });
+      return { code: 0, stdout: '', stderr: '' };
+    }
+    if (deletionRequested && args[0] === 'info') {
+      cleanupObservations += 1;
+      if (cleanupObservations <= 2) {
+        fake.calls.push({ file, args: args.slice(), options: { ...options, env: { ...(options.env ?? {}) } } });
+        const observed = [...fake.sandboxes.values()].find((entry) => entry.id === args[1]);
+        return {
+          code: 0,
+          stdout: JSON.stringify({
+            ...observed,
+            name: `DESTROYED_${observed.name}_1722801600000`,
+            state: 'destroying',
+            desiredState: 'destroyed',
+          }),
+          stderr: '',
+        };
+      }
+      fake.sandboxes.clear();
+    }
+    return originalRun(file, args, options);
+  };
+  const runtime = controller(fake);
+  const opened = await runtime.beginTrial({
+    trialId: 'destroying-transition',
+    task: 'cobol-modernization',
+    condition: 'generic',
+    reservedUsd: 0.65,
+  });
+
+  const receipt = await runtime.completeTrial({
+    trialId: 'destroying-transition',
+    evidence: { evidenceHash: '4'.repeat(64) },
+  });
+
+  assert.equal(receipt.deleted, true);
+  assert.equal(receipt.sandboxId, opened.allocation.id);
+  assert.equal(cleanupObservations, 5,
+    'destroying observations do not count toward the three-observation absence proof');
+  assert.equal(fake.sandboxes.size, 0);
+});
+
+test('cleanup rejects foreign deletion ids, names, epochs, and lifecycle states', async () => {
+  const variants = [
+    ['foreign id', (observed) => ({ ...observed, id: 'foreign-sandbox-id' })],
+    ['foreign name', (observed) => ({ ...observed, name: 'DESTROYED_foreign-sandbox_1722801600000' })],
+    ['unbounded epoch', (observed, originalName) => ({
+      ...observed,
+      name: `DESTROYED_${originalName}_17228016000000`,
+    })],
+    ['foreign state', (observed) => ({ ...observed, state: 'started' })],
+    ['foreign desired state', (observed) => ({ ...observed, desiredState: 'started' })],
+  ];
+
+  for (const [index, [label, mutate]] of variants.entries()) {
+    const fake = fakeDaytona();
+    const originalRun = fake.runCommand;
+    let deletionRequested = false;
+    let cleanupObservations = 0;
+    fake.runCommand = async (file, args, options = {}) => {
+      if (args[0] === 'delete') {
+        deletionRequested = true;
+        fake.calls.push({ file, args: args.slice(), options: { ...options, env: { ...(options.env ?? {}) } } });
+        return { code: 0, stdout: '', stderr: '' };
+      }
+      if (deletionRequested && args[0] === 'info') {
+        cleanupObservations += 1;
+        fake.calls.push({ file, args: args.slice(), options: { ...options, env: { ...(options.env ?? {}) } } });
+        const original = [...fake.sandboxes.values()].find((entry) => entry.id === args[1]);
+        const transition = {
+          ...original,
+          name: `DESTROYED_${original.name}_1722801600000`,
+          state: 'destroying',
+          desiredState: 'destroyed',
+        };
+        return { code: 0, stdout: JSON.stringify(mutate(transition, original.name)), stderr: '' };
+      }
+      return originalRun(file, args, options);
+    };
+    const trialId = `reject-transition-${index}`;
+    const runtime = controller(fake);
+    await runtime.beginTrial({
+      trialId,
+      task: 'cobol-modernization',
+      condition: 'generic',
+      reservedUsd: 0.65,
+    });
+
+    await assert.rejects(
+      runtime.completeTrial({ trialId, evidence: { evidenceHash: '3'.repeat(64) } }),
+      /mismatched sandbox identity.*deletion receipt is unavailable/i,
+      label,
+    );
+    assert.equal(cleanupObservations, 1, `${label} must fail closed on its first observation`);
+    assert.equal(runtime.snapshot().activeTrial.cleanupPending, true, label);
+    assert.equal(runtime.snapshot().receipts.length, 0, label);
+    assert.equal(fake.sandboxes.size, 1, label);
+  }
+});
+
 test('cleanup never retargets a replacement sandbox after observing the original immutable id', async () => {
   const fake = fakeDaytona();
   const runtime = controller(fake);
@@ -601,6 +713,9 @@ test('cleanup requires three consecutive absence observations after eventual abs
   fake.runCommand = async (file, args, options = {}) => {
     if (args[0] === 'delete') {
       deletionRequested = true;
+      for (const [name, observed] of fake.sandboxes) {
+        fake.sandboxes.set(name, { ...observed, state: 'destroying', desiredState: 'destroyed' });
+      }
       fake.calls.push({ file, args: args.slice(), options: { ...options, env: { ...(options.env ?? {}) } } });
       return { code: 0, stdout: '', stderr: '' };
     }
@@ -636,6 +751,9 @@ test('one transient not-found observation cannot authorize a deletion receipt', 
   fake.runCommand = async (file, args, options = {}) => {
     if (args[0] === 'delete') {
       deletionRequested = true;
+      for (const [name, observed] of fake.sandboxes) {
+        fake.sandboxes.set(name, { ...observed, state: 'destroying', desiredState: 'destroyed' });
+      }
       fake.calls.push({ file, args: args.slice(), options: { ...options, env: { ...(options.env ?? {}) } } });
       return { code: 0, stdout: '', stderr: '' };
     }
@@ -683,6 +801,9 @@ test('cleanup commands and waits share one decreasing monotonic deadline', async
   fake.runCommand = async (file, args, options = {}) => {
     if (args[0] === 'delete') {
       deletionRequested = true;
+      for (const [name, observed] of fake.sandboxes) {
+        fake.sandboxes.set(name, { ...observed, state: 'destroying', desiredState: 'destroyed' });
+      }
       cleanupTimeouts.push(options.timeoutMs);
       fake.calls.push({ file, args: args.slice(), options: { ...options, env: { ...(options.env ?? {}) } } });
       monotonicMs += 9_000;

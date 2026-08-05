@@ -183,10 +183,7 @@ export function observeLiveTaskContainer(input, { runDocker = defaultRunDocker }
     fail('live task container identity drifted');
   }
   const contract = expectedContract(input.contract);
-  if (!IMAGE_ID.test(String(input.imageDigest ?? ''))
-      || input.imageDigest !== contract.docker.pinnedImage.slice(
-        contract.docker.pinnedImage.lastIndexOf('@') + 1
-      )) fail('live task image identity drifted');
+  if (!IMAGE_ID.test(String(input.imageDigest ?? ''))) fail('live task image identity drifted');
   digest(input.probeExecutableHash, 'task isolation probe executable hash');
   if (!plainObject(input.materialization)
       || input.materialization.trialId !== contract.identity.trialId

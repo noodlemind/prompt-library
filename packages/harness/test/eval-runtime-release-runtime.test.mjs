@@ -11,11 +11,12 @@ import { createReleaseRuntime } from '../../../evals/runtime/release-runtime.mjs
 const HASH = (character) => character.repeat(64);
 const RELEASE_SHA = 'a'.repeat(40);
 const TASK_ID = 'cobol-modernization';
-const IMAGE_DIGEST = `sha256:${HASH('6')}`;
-const IMMUTABLE_IMAGE = `example.invalid/cobol-modernization@${IMAGE_DIGEST}`;
+const MANIFEST_DIGEST = `sha256:${HASH('6')}`;
+const IMMUTABLE_IMAGE = `example.invalid/cobol-modernization@${MANIFEST_DIGEST}`;
+const IMAGE_ID = `sha256:${HASH('7')}`;
 const TASK_IMAGE = Object.freeze({
   immutableImage: IMMUTABLE_IMAGE,
-  imageId: IMAGE_DIGEST,
+  imageId: IMAGE_ID,
   platform: 'linux/amd64',
   cpus: 1,
   memoryMb: 2048,
@@ -421,7 +422,7 @@ test('one paid trial is archived, lease-authorized, materialized, and returned w
     trialId: 'pair-r0-generic-a',
     taskId: TASK_ID,
     condition: 'generic',
-    imageDigest: IMAGE_DIGEST,
+    imageDigest: IMAGE_ID,
     trialCeilingMicrousd: 650_000,
     supervisorExecutableHash: HASH('7'),
     runnerExecutableHash: HASH('8'),
@@ -433,7 +434,7 @@ test('one paid trial is archived, lease-authorized, materialized, and returned w
     args: [
       '--sandbox-id', 'sandbox-1',
       '--immutable-image', IMMUTABLE_IMAGE,
-      '--image-id', IMAGE_DIGEST,
+      '--image-id', IMAGE_ID,
       '--platform', 'linux/amd64',
     ],
   });

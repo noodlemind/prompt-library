@@ -116,13 +116,27 @@ function commandFailure(label, result) {
   return new Error(`${label} failed (detail sha256:${detail})`);
 }
 
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 function exactSandboxNotFound(result, sandboxId) {
   if (result?.code !== 1 || result?.stdout !== '' || typeof result?.stderr !== 'string' ||
       Buffer.byteLength(result.stderr) > 512) return false;
-  const escaped = sandboxId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const escaped = escapeRegExp(sandboxId);
   return new RegExp(
     `^time="[^"\\r\\n]{1,64}" level=fatal msg="Not Found: Sandbox with ID or name ${escaped} not found"\\n?$`
   ).test(result.stderr);
+}
+
+function exactSandboxDeletionTransition(observed, sandboxId, sandboxName) {
+  if (!isPlainObject(observed) || observed.id !== sandboxId || typeof observed.name !== 'string' ||
+      observed.state !== 'destroying' || observed.desiredState !== 'destroyed') return false;
+  if (observed.name === sandboxName) return true;
+  const match = new RegExp(
+    `^DESTROYED_${escapeRegExp(sandboxName)}_[1-9][0-9]{12}$`,
+  ).exec(observed.name);
+  return match?.[0] === observed.name;
 }
 
 export function daytonaCliEnvironment(baseEnv = process.env) {
@@ -522,9 +536,9 @@ export function createDaytonaSessionController({
             id: observed.id ?? null,
             name: observed.name ?? null,
             state: observed.state ?? null,
+            desiredState: observed.desiredState ?? null,
           }));
-          if (observed.name !== trial.name || typeof observed.id !== 'string' || !SAFE_ID.test(observed.id) ||
-              (cleanupIdentity.observed === true && observed.id !== cleanupIdentity.id)) {
+          if (!exactSandboxDeletionTransition(observed, cleanupTarget, trial.name)) {
             integrityError = new Error('Daytona deletion inspection returned a mismatched sandbox identity');
             break;
           }

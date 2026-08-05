@@ -21,7 +21,7 @@ import { createRuntimeTrialTransport } from './trial-transport.mjs';
 const HASH = /^[a-f0-9]{64}$/;
 const RELEASE_SHA = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/;
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
-const IMAGE_DIGEST = /^sha256:[a-f0-9]{64}$/;
+const IMAGE_ID = /^sha256:[a-f0-9]{64}$/;
 const IMMUTABLE_IMAGE = /^[a-z0-9]+(?:[._-][a-z0-9]+)*(?::[0-9]+)?(?:\/[a-z0-9]+(?:[._-][a-z0-9]+)*)+@sha256:[a-f0-9]{64}$/;
 const EXPECTED_EXECUTABLES = Object.freeze({
   supervisor: '/opt/engineer/bin/engineer-runtime-supervisor',
@@ -143,9 +143,8 @@ function validateTaskLock(taskLock) {
       'immutableImage', 'imageId', 'platform', 'cpus', 'memoryMb', 'storageMb',
     ], `taskLock task ${task} sandbox`);
     if (typeof sandbox.immutableImage !== 'string' || !IMMUTABLE_IMAGE.test(sandbox.immutableImage) ||
-        typeof sandbox.imageId !== 'string' || !IMAGE_DIGEST.test(sandbox.imageId) ||
-        !sandbox.immutableImage.endsWith(`@${sandbox.imageId}`)) {
-      invalid(`taskLock task ${task} is missing a matching immutable image reference and ID`);
+        typeof sandbox.imageId !== 'string' || !IMAGE_ID.test(sandbox.imageId)) {
+      invalid(`taskLock task ${task} is missing an immutable image reference or Docker image ID`);
     }
     if (sandbox.platform !== 'linux/amd64') invalid(`taskLock task ${task} platform must be linux/amd64`);
     integer(sandbox.cpus, `taskLock task ${task} cpus`, 1, 2);
@@ -556,7 +555,7 @@ export async function createReleaseRuntime({
       if (request.trial.profileId !== profileId) invalid('trial profile binding drifted');
       if (attemptedTrials.has(trialId)) invalid('trial identity was already attempted');
       const taskImage = runtimeProjection.taskImages[taskId];
-      if (!plainObject(taskImage) || typeof taskImage.imageId !== 'string' || !IMAGE_DIGEST.test(taskImage.imageId)) {
+      if (!plainObject(taskImage) || typeof taskImage.imageId !== 'string' || !IMAGE_ID.test(taskImage.imageId)) {
         invalid('trial task has no locked runtime image');
       }
       const trialCeilingMicrousd = exactMicrousd(request.trial.ceilingUsd, 'trial ceiling');

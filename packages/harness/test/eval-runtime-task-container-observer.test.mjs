@@ -18,6 +18,7 @@ import {
 
 const HASH = (character) => character.repeat(64);
 const IMAGE = `registry.example.invalid/task@sha256:${HASH('a')}`;
+const IMAGE_ID = `sha256:${HASH('d')}`;
 const CONTAINER = HASH('b');
 
 function sha256(value) {
@@ -31,7 +32,7 @@ function containerBindingHash(value) {
     .digest('hex');
 }
 
-function fixture({ probeOverrides = {}, mountOverrides = null } = {}) {
+function fixture({ probeOverrides = {}, mountOverrides = null, containerOverrides = {} } = {}) {
   const contract = createTrialSecurityContract({
     trialId: 'pair-1-repetition-1-generic-1',
     immutableImage: IMAGE,
@@ -52,7 +53,7 @@ function fixture({ probeOverrides = {}, mountOverrides = null } = {}) {
     trialId: contract.identity.trialId,
     runtimeRoot: contract.identity.runtimeRoot,
     composeHash: contract.composeHash,
-    imageDigest: `sha256:${HASH('a')}`,
+    imageDigest: IMAGE_ID,
     workspaceFilesystemId: 'bounded-fs',
     receiptHash: HASH('c'),
   };
@@ -70,12 +71,13 @@ function fixture({ probeOverrides = {}, mountOverrides = null } = {}) {
       capDrop: ['ALL'],
       configImage: IMAGE,
       id: CONTAINER,
-      image: `sha256:${HASH('a')}`,
+      image: IMAGE_ID,
       mounts,
       networkMode: 'none',
       readonlyRootfs: true,
       running: true,
       securityOpt: ['no-new-privileges:true'],
+      ...containerOverrides,
     });
     if (args.includes('exec')) return ok({
       schema: 'engineer-task-isolation-observation.v1',
@@ -100,7 +102,7 @@ test('observes exact live binds and runs the static canary inside the started ta
     contract: fx.contract,
     allowedBindSets: fx.allowedBindSets,
     materialization: fx.materialization,
-    imageDigest: `sha256:${HASH('a')}`,
+    imageDigest: IMAGE_ID,
     probeExecutableHash: HASH('d'),
   }, { runDocker: fx.runDocker });
   assert.equal(observation.schema, TASK_CONTAINER_OBSERVATION_SCHEMA);
@@ -129,7 +131,7 @@ test('rejects writable-probe, treatment, namespace, capability, and raw-socket d
       contract: fx.contract,
       allowedBindSets: fx.allowedBindSets,
       materialization: fx.materialization,
-      imageDigest: `sha256:${HASH('a')}`,
+      imageDigest: IMAGE_ID,
       probeExecutableHash: HASH('d'),
     }, { runDocker: fx.runDocker }), item.expected);
   }
@@ -144,7 +146,7 @@ test('rejects writable-probe, treatment, namespace, capability, and raw-socket d
     contract: drifted.contract,
     allowedBindSets: drifted.allowedBindSets,
     materialization: drifted.materialization,
-    imageDigest: `sha256:${HASH('a')}`,
+    imageDigest: IMAGE_ID,
     probeExecutableHash: HASH('d'),
   }, { runDocker: drifted.runDocker }), /bind inventory|read-only protected bind/i);
 });
@@ -157,7 +159,7 @@ test('binds content-free mount and isolation receipts to the final proxy lifecyc
     contract: fx.contract,
     allowedBindSets: fx.allowedBindSets,
     materialization: fx.materialization,
-    imageDigest: `sha256:${HASH('a')}`,
+    imageDigest: IMAGE_ID,
     probeExecutableHash: HASH('d'),
   }, { runDocker: fx.runDocker });
   const receipts = createTaskRuntimeReceipts({
@@ -186,6 +188,24 @@ test('binds content-free mount and isolation receipts to the final proxy lifecyc
   assert.match(published.mountHash, /^[a-f0-9]{64}$/);
   assert.match(published.isolationHash, /^[a-f0-9]{64}$/);
   assert.equal(JSON.stringify(writes).includes(CONTAINER), false);
+});
+
+test('rejects live container drift from either pinned image identity', () => {
+  for (const containerOverrides of [
+    { configImage: `registry.example.invalid/other@sha256:${HASH('a')}` },
+    { image: `sha256:${HASH('a')}` },
+  ]) {
+    const fx = fixture({ containerOverrides });
+    assert.throws(() => observeLiveTaskContainer({
+      containerId: CONTAINER,
+      containerBindingHash: containerBindingHash(CONTAINER),
+      contract: fx.contract,
+      allowedBindSets: fx.allowedBindSets,
+      materialization: fx.materialization,
+      imageDigest: IMAGE_ID,
+      probeExecutableHash: HASH('d'),
+    }, { runDocker: fx.runDocker }), /container policy/i);
+  }
 });
 
 test('removes a renamed receipt when final custody durability fails', () => {

@@ -314,9 +314,8 @@ function validateTaskImages(value) {
     if (typeof image.immutableImage !== 'string' || !IMMUTABLE_IMAGE.test(image.immutableImage)) {
       fail(`taskImages.${taskId}.immutableImage must be a digest-qualified repository reference`);
     }
-    if (typeof image.imageId !== 'string' || !IMAGE_ID.test(image.imageId) ||
-        !image.immutableImage.endsWith(`@${image.imageId}`)) {
-      fail(`taskImages.${taskId} immutable image digest does not match its image id`);
+    if (typeof image.imageId !== 'string' || !IMAGE_ID.test(image.imageId)) {
+      fail(`taskImages.${taskId}.imageId must be a sha256 Docker image ID`);
     }
     if (image.platform !== 'linux/amd64') fail(`taskImages.${taskId}.platform must be linux/amd64`);
     integer(image.cpus, `taskImages.${taskId}.cpus`, 1, 64);

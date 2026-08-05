@@ -49,7 +49,7 @@ export const DAYTONA_NODE_USTAR_ATTESTATION = Object.freeze({
 const TEN_GIB = 10 * 1024 * 1024 * 1024;
 const MAX_MANIFEST_BYTES = 64 * 1024;
 const HASH = /^[a-f0-9]{64}$/;
-const IMAGE_DIGEST = /^sha256:[a-f0-9]{64}$/;
+const IMAGE_ID = /^sha256:[a-f0-9]{64}$/;
 const IMMUTABLE_IMAGE = /^[a-z0-9]+(?:[._-][a-z0-9]+)*(?::[0-9]+)?(?:\/[a-z0-9]+(?:[._-][a-z0-9]+)*)+@sha256:[a-f0-9]{64}$/;
 const RELEASE_SHA = /^[a-f0-9]{40,64}$/;
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,191}$/;
@@ -188,9 +188,9 @@ function assertHash(value, label) {
   }
 }
 
-function assertImageDigest(value, label) {
-  if (typeof value !== 'string' || !IMAGE_DIGEST.test(value)) {
-    fail(`${label} must be an exact sha256 image digest`, 'ERR_DAYTONA_TOPOLOGY_HASH');
+function assertImageId(value, label) {
+  if (typeof value !== 'string' || !IMAGE_ID.test(value)) {
+    fail(`${label} must be an exact sha256 Docker image ID`, 'ERR_DAYTONA_TOPOLOGY_HASH');
   }
 }
 
@@ -253,12 +253,7 @@ function assertTaskImages(value, label) {
       fail(`${label}.${taskId}.immutableImage must be an immutable repository@sha256 digest`,
         'ERR_DAYTONA_TOPOLOGY_HASH');
     }
-    assertImageDigest(taskImage.imageId, `${label}.${taskId}.imageId`);
-    const referenceDigest = taskImage.immutableImage.slice(taskImage.immutableImage.lastIndexOf('@') + 1);
-    if (referenceDigest !== taskImage.imageId) {
-      fail(`${label}.${taskId}.imageId must match the immutable image digest`,
-        'ERR_DAYTONA_TOPOLOGY_HASH');
-    }
+    assertImageId(taskImage.imageId, `${label}.${taskId}.imageId`);
     exactValue(taskImage.platform, 'linux/amd64', `${label}.${taskId}.platform`);
     if (!Number.isSafeInteger(taskImage.cpus) || taskImage.cpus < 1 || taskImage.cpus > 2) {
       fail(`${label}.${taskId}.cpus must be between 1 and 2`, 'ERR_DAYTONA_TOPOLOGY_BOUND');

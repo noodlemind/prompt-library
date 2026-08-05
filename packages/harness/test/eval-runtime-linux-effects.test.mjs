@@ -756,8 +756,10 @@ async function preparedEffects({
     topology: topo,
     driver,
     dockerProxyFactory: fakeProxyFactory(topo, driver),
-    taskSecurityMaterializer(contract) {
-      driver.calls.push(['materializeTrialSecurity', structuredClone(contract)]);
+    taskSecurityMaterializer(contract, options) {
+      driver.calls.push([
+        'materializeTrialSecurity', structuredClone(contract), structuredClone(options),
+      ]);
       const unsigned = {
         schema: 'engineer-trial-security-materialization.v1',
         trialId: contract.identity.trialId,
@@ -807,7 +809,7 @@ async function preparedEffects({
   });
   const contract = createTrialSecurityContract({
     trialId: 'trial-1',
-    immutableImage: `fixture@${topo.imageDigest}`,
+    immutableImage: `fixture@sha256:${HASH('e')}`,
     cpus: 2,
     memoryMb: 1024,
     pidsLimit: 256,
@@ -1025,6 +1027,7 @@ test('implements the exact privileged effect contract without exposing a provide
   const proxyStartIndex = driver.calls.findIndex(([name]) => name === 'proxy.start');
   assert.ok(materializationIndex >= 0 && materializationIndex < proxyStartIndex);
   assert.equal(driver.calls[materializationIndex][1].identity.trialId, 'trial-1');
+  assert.deepEqual(driver.calls[materializationIndex][2], { imageId: topo.imageDigest });
 
   const readinessCalls = driver.calls.filter(([name]) => name === 'runReadinessProbe');
   assert.equal(readinessCalls.length, 2);

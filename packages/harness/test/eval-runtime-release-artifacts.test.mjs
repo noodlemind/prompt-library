@@ -23,7 +23,7 @@ function input() {
       role: 'anchor',
       sandbox: {
         immutableImage: `alexgshaw/cobol-modernization@sha256:${HASH('2')}`,
-        imageId: `sha256:${HASH('2')}`,
+        imageId: `sha256:${HASH('3')}`,
         platform: 'linux/amd64',
         cpus: 1,
         memoryMb: 2048,
@@ -109,7 +109,7 @@ test('preserves the exact canonical runtime image contract', () => {
       task: 'cobol-modernization',
       sandbox: {
         immutableImage: `alexgshaw/cobol-modernization@sha256:${HASH('2')}`,
-        imageId: `sha256:${HASH('2')}`,
+        imageId: `sha256:${HASH('3')}`,
         platform: 'linux/amd64',
         cpus: 1,
         memoryMb: 2048,

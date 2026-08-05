@@ -223,10 +223,15 @@ function attestContract(input) {
  * read-only, network-none container is used only as Docker's image filesystem
  * projection for `docker cp`, then removed and independently proven absent.
  */
-export function materializeTrialSecurity(contractInput, { effects: effectOverrides = {} } = {}) {
+export function materializeTrialSecurity(
+  contractInput,
+  { imageId, effects: effectOverrides = {} } = {},
+) {
   const contract = attestContract(contractInput);
+  if (typeof imageId !== 'string' || !IMAGE_ID.test(imageId)) {
+    fail('Docker image ID must be sha256:<64 lowercase hex>', 'ERR_TRIAL_SECURITY_IMAGE');
+  }
   const effects = checkedEffects(effectOverrides);
-  const imageDigest = contract.docker.pinnedImage.slice(contract.docker.pinnedImage.lastIndexOf('@') + 1);
   const seedName = `engineer-seed-${contract.identity.trialHash.slice(0, 24)}`;
   let rootsCreated = false;
   let seedId = null;
@@ -251,7 +256,7 @@ export function materializeTrialSecurity(contractInput, { effects: effectOverrid
       '{"architecture":{{json .Architecture}},"id":{{json .Id}},"os":{{json .Os}},"repoDigests":{{json .RepoDigests}}}',
       contract.docker.pinnedImage,
     ], 'immutable image inspection'), 'immutable image inspection');
-    if (image.id !== imageDigest
+    if (image.id !== imageId
         || image.os !== 'linux' || image.architecture !== 'amd64'
         || !Array.isArray(image.repoDigests) || !image.repoDigests.includes(contract.docker.pinnedImage)) {
       fail('immutable image identity drifted', 'ERR_TRIAL_SECURITY_IMAGE');
@@ -269,7 +274,7 @@ export function materializeTrialSecurity(contractInput, { effects: effectOverrid
       '{"capDrop":{{json .HostConfig.CapDrop}},"id":{{json .Id}},"image":{{json .Image}},"networkMode":{{json .HostConfig.NetworkMode}},"pidsLimit":{{json .HostConfig.PidsLimit}},"readonlyRootfs":{{json .HostConfig.ReadonlyRootfs}},"running":{{json .State.Running}},"securityOpt":{{json .HostConfig.SecurityOpt}}}',
       seedId,
     ], 'workspace seed container inspection'), 'workspace seed container inspection');
-    if (container.id !== seedId || container.image !== imageDigest || container.networkMode !== 'none'
+    if (container.id !== seedId || container.image !== imageId || container.networkMode !== 'none'
         || container.readonlyRootfs !== true || container.running !== false
         || container.pidsLimit !== contract.docker.resources.pidsLimit
         || canonicalJson(container.capDrop) !== canonicalJson(['ALL'])
@@ -297,7 +302,7 @@ export function materializeTrialSecurity(contractInput, { effects: effectOverrid
       runtimeRoot: contract.identity.runtimeRoot,
       contractHash: sha256(canonicalJson(contract)),
       composeHash: contract.composeHash,
-      imageDigest,
+      imageDigest: imageId,
       seedContainerIdHash: sha256(created.stdout.trim()),
       workspaceInventoryHash: workspace.inventoryHash,
       workspaceFilesystemId: workspace.filesystemId,

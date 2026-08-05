@@ -41,22 +41,22 @@ const EXECUTABLE_HASHES = Object.freeze({
 const TASK_IMAGES = Object.freeze({
   'cobol-modernization': {
     immutableImage: `example.invalid/cobol-modernization@sha256:${HASH('b')}`,
-    imageId: `sha256:${HASH('b')}`,
+    imageId: `sha256:${HASH('1')}`,
     platform: 'linux/amd64', cpus: 1, memoryMb: 2048, storageMb: 10240,
   },
   'gate-heavy-repair': {
     immutableImage: `example.invalid/gate-heavy-repair@sha256:${HASH('c')}`,
-    imageId: `sha256:${HASH('c')}`,
+    imageId: `sha256:${HASH('2')}`,
     platform: 'linux/amd64', cpus: 1, memoryMb: 2048, storageMb: 10240,
   },
   'large-repo-orientation': {
     immutableImage: `example.invalid/large-repo-orientation@sha256:${HASH('d')}`,
-    imageId: `sha256:${HASH('d')}`,
+    imageId: `sha256:${HASH('3')}`,
     platform: 'linux/amd64', cpus: 1, memoryMb: 2048, storageMb: 10240,
   },
   'legacy-data-lineage': {
     immutableImage: `example.invalid/legacy-data-lineage@sha256:${HASH('e')}`,
-    imageId: `sha256:${HASH('e')}`,
+    imageId: `sha256:${HASH('4')}`,
     platform: 'linux/amd64', cpus: 1, memoryMb: 2048, storageMb: 10240,
   },
 });
@@ -212,7 +212,7 @@ test('canonical hashing is deterministic and binds release, task, bundle, budget
     { taskImages: { ...TASK_IMAGES, 'cobol-modernization': {
       ...TASK_IMAGES['cobol-modernization'],
       immutableImage: `example.invalid/cobol-modernization@sha256:${HASH('4')}`,
-      imageId: `sha256:${HASH('4')}`,
+      imageId: `sha256:${HASH('5')}`,
     } } },
     { executableHashes: { ...EXECUTABLE_HASHES, runner: HASH('e') } },
   ];

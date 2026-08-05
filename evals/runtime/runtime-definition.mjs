@@ -220,8 +220,7 @@ function validateProvisionRequest(value) {
   exactKeys(value, ['sandboxId', 'immutableImage', 'imageId', 'platform'], 'provision request');
   const sandboxId = safeId(value.sandboxId, 'sandbox identity');
   if (typeof value.immutableImage !== 'string' || !IMMUTABLE_IMAGE.test(value.immutableImage) ||
-      typeof value.imageId !== 'string' || !IMAGE_ID.test(value.imageId) ||
-      !value.immutableImage.endsWith(`@${value.imageId}`)) {
+      typeof value.imageId !== 'string' || !IMAGE_ID.test(value.imageId)) {
     fail('provision request image identity drifted', 'ERR_RUNTIME_DEFINITION_IDENTITY');
   }
   if (value.platform !== 'linux/amd64') {

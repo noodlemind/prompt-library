@@ -200,7 +200,7 @@ function immutableIdentity(value) {
       'ERR_TASK_IMAGE_PROVISION_IDENTITY');
   }
   repositoryName(match[1]);
-  return { immutableImage: value, digest: `sha256:${match[2]}` };
+  return value;
 }
 
 function sandboxIdentity(value) {
@@ -214,20 +214,16 @@ function sandboxIdentity(value) {
 function validateProvisionRequest(value) {
   exactKeys(value, ['sandboxId', 'immutableImage', 'imageId', 'platform'], 'provision request');
   const sandboxId = sandboxIdentity(value.sandboxId);
-  const identity = immutableIdentity(value.immutableImage);
+  const immutableImage = immutableIdentity(value.immutableImage);
   if (typeof value.imageId !== 'string' || !IMAGE_ID.test(value.imageId)) {
     fail('imageId digest must be sha256:<64 lowercase hex>', 'ERR_TASK_IMAGE_PROVISION_IDENTITY');
-  }
-  if (identity.digest !== value.imageId) {
-    fail('immutableImage and imageId must contain the matching digest',
-      'ERR_TASK_IMAGE_PROVISION_IDENTITY');
   }
   if (value.platform !== 'linux/amd64') {
     fail('platform must be exactly linux/amd64', 'ERR_TASK_IMAGE_PROVISION_IDENTITY');
   }
   return deepFreeze({
     sandboxId,
-    immutableImage: identity.immutableImage,
+    immutableImage,
     imageId: value.imageId,
     platform: value.platform,
   });

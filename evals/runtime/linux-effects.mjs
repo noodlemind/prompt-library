@@ -1372,7 +1372,7 @@ export function createLinuxRuntimeEffects({
         path: topology.paths.daemonSocket, uid: 0, gid: 0, mode: 0o600,
       }, 'private daemon');
       securityMaterialization = validateTrialMaterialization(
-        taskSecurityMaterializer(contract),
+        taskSecurityMaterializer(contract, { imageId: topology.imageDigest }),
         contract,
         topology,
       );

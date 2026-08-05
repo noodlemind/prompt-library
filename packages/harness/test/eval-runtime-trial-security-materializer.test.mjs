@@ -8,14 +8,20 @@ import {
   materializeTrialSecurity,
 } from '../../../evals/runtime/trial-security-materializer.mjs';
 
-const IMAGE_HASH = 'a'.repeat(64);
-const IMAGE = `registry.example.invalid/evals/task@sha256:${IMAGE_HASH}`;
+const MANIFEST_HASH = 'a'.repeat(64);
+const IMAGE = `registry.example.invalid/evals/task@sha256:${MANIFEST_HASH}`;
+const IMAGE_ID = `sha256:${'d'.repeat(64)}`;
 
 function hash(value) {
   return crypto.createHash('sha256').update(value).digest('hex');
 }
 
-function fixture({ failCopy = false, failCreateRootsAfterCreate = false } = {}) {
+function fixture({
+  failCopy = false,
+  failCreateRootsAfterCreate = false,
+  imageInspectOverrides = {},
+  containerInspectOverrides = {},
+} = {}) {
   const contract = createTrialSecurityContract({
     trialId: 'pair-1-repetition-1-harness-1',
     immutableImage: IMAGE,
@@ -56,13 +62,15 @@ function fixture({ failCopy = false, failCreateRootsAfterCreate = false } = {}) 
       calls.push(args);
       const operation = args.slice(2, 4).join(' ');
       if (operation === 'image inspect') return ok(JSON.stringify({
-        architecture: 'amd64', id: `sha256:${IMAGE_HASH}`, os: 'linux', repoDigests: [IMAGE],
+        architecture: 'amd64', id: IMAGE_ID, os: 'linux', repoDigests: [IMAGE],
+        ...imageInspectOverrides,
       }));
       if (operation === 'container create') return ok(`${seedId}\n`);
       if (operation === 'container inspect') return ok(JSON.stringify({
-        capDrop: ['ALL'], id: seedId, image: `sha256:${IMAGE_HASH}`, networkMode: 'none',
+        capDrop: ['ALL'], id: seedId, image: IMAGE_ID, networkMode: 'none',
         pidsLimit: 256, readonlyRootfs: true, running: false,
         securityOpt: ['no-new-privileges:true'],
+        ...containerInspectOverrides,
       }));
       if (operation === 'container cp') {
         if (failCopy) return { ...ok(), exitCode: 1 };
@@ -78,9 +86,9 @@ function fixture({ failCopy = false, failCreateRootsAfterCreate = false } = {}) 
 
 test('prepopulates /app through a never-started immutable network-none seed and returns content-bound evidence', () => {
   const fx = fixture();
-  const receipt = materializeTrialSecurity(fx.contract, { effects: fx.effects });
+  const receipt = materializeTrialSecurity(fx.contract, { imageId: IMAGE_ID, effects: fx.effects });
   assert.equal(receipt.schema, TRIAL_SECURITY_MATERIALIZATION_SCHEMA);
-  assert.equal(receipt.imageDigest, `sha256:${IMAGE_HASH}`);
+  assert.equal(receipt.imageDigest, IMAGE_ID);
   assert.equal(receipt.workspaceInventoryHash, 'c'.repeat(64));
   assert.equal(receipt.workspaceFilesystemId, 'dev:2a');
   assert.equal(receipt.observedPolicy.pullPolicy, 'never');
@@ -99,7 +107,7 @@ test('prepopulates /app through a never-started immutable network-none seed and 
 test('fails closed, removes the seed container, and deletes only the exact trial root on copy failure', () => {
   const fx = fixture({ failCopy: true });
   assert.throws(
-    () => materializeTrialSecurity(fx.contract, { effects: fx.effects }),
+    () => materializeTrialSecurity(fx.contract, { imageId: IMAGE_ID, effects: fx.effects }),
     /immutable workspace copy failed closed/i
   );
   assert.deepEqual(fx.removed, [fx.contract.identity.runtimeRoot]);
@@ -112,7 +120,7 @@ test('fails closed, removes the seed container, and deletes only the exact trial
 test('rolls back the exact runtime root when root materialization fails after partial creation', () => {
   const fx = fixture({ failCreateRootsAfterCreate: true });
   assert.throws(
-    () => materializeTrialSecurity(fx.contract, { effects: fx.effects }),
+    () => materializeTrialSecurity(fx.contract, { imageId: IMAGE_ID, effects: fx.effects }),
     /materialization failed closed/i
   );
   assert.deepEqual(fx.removed, [fx.contract.identity.runtimeRoot]);
@@ -122,6 +130,31 @@ test('rejects a caller-mutated security contract before any privileged effect', 
   const fx = fixture();
   const drifted = structuredClone(fx.contract);
   drifted.compose.services.main.network_mode = 'bridge';
-  assert.throws(() => materializeTrialSecurity(drifted, { effects: fx.effects }), /contract drifted/i);
+  assert.throws(() => materializeTrialSecurity(drifted, { imageId: IMAGE_ID, effects: fx.effects }), /contract drifted/i);
   assert.equal(fx.calls.length, 0);
+});
+
+test('requires a pinned Docker image ID before any privileged effect', () => {
+  for (const imageId of [undefined, MANIFEST_HASH, `sha256:${'D'.repeat(64)}`]) {
+    const fx = fixture();
+    assert.throws(
+      () => materializeTrialSecurity(fx.contract, { imageId, effects: fx.effects }),
+      /image id/i,
+    );
+    assert.equal(fx.calls.length, 0);
+  }
+});
+
+test('verifies the independent image ID and manifest-qualified repository reference exactly', () => {
+  for (const overrides of [
+    { imageInspectOverrides: { id: `sha256:${MANIFEST_HASH}` } },
+    { imageInspectOverrides: { repoDigests: [`registry.example.invalid/other@sha256:${MANIFEST_HASH}`] } },
+    { containerInspectOverrides: { image: `sha256:${MANIFEST_HASH}` } },
+  ]) {
+    const fx = fixture(overrides);
+    assert.throws(
+      () => materializeTrialSecurity(fx.contract, { imageId: IMAGE_ID, effects: fx.effects }),
+      /image identity|container policy/i,
+    );
+  }
 });

@@ -16,9 +16,9 @@ import {
 import { RUNTIME_TOPOLOGY_RECEIPT_PATH } from '../../../evals/runtime/runtime-definition.mjs';
 
 const SANDBOX_ID = 'sandbox-8d2890a2-57ef-4d75-91d5-2b0a81256b89';
-const DIGEST = 'a'.repeat(64);
-const IMAGE = `registry.example.invalid/evals/cobol-modernization@sha256:${DIGEST}`;
-const IMAGE_ID = `sha256:${DIGEST}`;
+const MANIFEST_DIGEST = 'a'.repeat(64);
+const IMAGE = `registry.example.invalid/evals/cobol-modernization@sha256:${MANIFEST_DIGEST}`;
+const IMAGE_ID = `sha256:${'b'.repeat(64)}`;
 const PLATFORM = 'linux/amd64';
 const DOCKER = '/usr/local/bin/docker';
 const SECRET = 'sk-or-v1-output-that-must-never-survive';
@@ -243,11 +243,11 @@ test('parses only the exact fixed entrypoint argv and returns a frozen bound req
 test('rejects mutable or malformed identities before a Docker or marker effect', async () => {
   const badSpecs = [
     spec({ immutableImage: 'registry.example.invalid/evals/cobol-modernization:latest' }),
-    spec({ immutableImage: `registry.example.invalid/evals/cobol-modernization:latest@sha256:${DIGEST}` }),
+    spec({ immutableImage: `registry.example.invalid/evals/cobol-modernization:latest@sha256:${MANIFEST_DIGEST}` }),
     spec({ immutableImage: `registry.example.invalid/evals/cobol-modernization@sha256:${'A'.repeat(64)}` }),
     spec({ immutableImage: `registry.example.invalid/evals/cobol-modernization@sha256:${'a'.repeat(63)}` }),
-    spec({ imageId: `sha256:${'b'.repeat(64)}` }),
-    spec({ imageId: DIGEST }),
+    spec({ imageId: `sha256:${'B'.repeat(64)}` }),
+    spec({ imageId: MANIFEST_DIGEST }),
     spec({ platform: 'linux/arm64' }),
     spec({ platform: 'linux/amd64/v2' }),
     spec({ sandboxId: '../foreign-sandbox' }),
@@ -436,8 +436,8 @@ test('secret-bearing pull or inspect output is rejected, never retained, and tri
 
 test('image-ID, repository-digest, or platform drift rolls back the pulled image before returning', async () => {
   for (const inspected of [
-    successfulInspect({ id: `sha256:${'b'.repeat(64)}` }),
-    successfulInspect({ repoDigests: [`registry.example.invalid/other@sha256:${DIGEST}`] }),
+    successfulInspect({ id: `sha256:${'c'.repeat(64)}` }),
+    successfulInspect({ repoDigests: [`registry.example.invalid/other@sha256:${MANIFEST_DIGEST}`] }),
     successfulInspect({ architecture: 'arm64' }),
     '{"id":"malformed-only"}',
   ]) {

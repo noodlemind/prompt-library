@@ -130,7 +130,7 @@ function input(overrides = {}) {
     taskImages: {
       'cobol-modernization': {
         immutableImage: `alexgshaw/cobol-modernization@sha256:${HASH('f')}`,
-        imageId: `sha256:${HASH('f')}`,
+        imageId: `sha256:${HASH('e')}`,
         platform: 'linux/amd64',
         cpus: 1,
         memoryMb: 2048,
@@ -159,7 +159,10 @@ test('snapshot build identity covers Dockerfile, all closures, definition, prove
     { taskImages: { ...input().taskImages, 'cobol-modernization': {
       ...input().taskImages['cobol-modernization'],
       immutableImage: `alexgshaw/cobol-modernization@sha256:${HASH('0')}`,
-      imageId: `sha256:${HASH('0')}`,
+    } } },
+    { taskImages: { ...input().taskImages, 'cobol-modernization': {
+      ...input().taskImages['cobol-modernization'],
+      imageId: `sha256:${HASH('1')}`,
     } } },
   ];
   for (const mutation of mutations) {
@@ -167,14 +170,14 @@ test('snapshot build identity covers Dockerfile, all closures, definition, prove
   }
 });
 
-test('snapshot manifest rejects unbound executable hashes and task reference/id drift', () => {
+test('snapshot manifest rejects unbound executable hashes and malformed task identities', () => {
   const badExecutable = structuredClone(input());
   badExecutable.executables.supervisor.sha256 = HASH('0');
   assert.throws(() => buildSnapshotBuildManifest(badExecutable), /executable.*closure|source.*hash/i);
 
   const badImage = structuredClone(input());
-  badImage.taskImages['cobol-modernization'].imageId = `sha256:${HASH('0')}`;
-  assert.throws(() => buildSnapshotBuildManifest(badImage), /immutable image.*image id|digest/i);
+  badImage.taskImages['cobol-modernization'].imageId = `sha256:${HASH('A')}`;
+  assert.throws(() => buildSnapshotBuildManifest(badImage), /image id|imageId|digest/i);
 
   const bareImage = structuredClone(input());
   bareImage.taskImages['cobol-modernization'].immutableImage = `sha256:${HASH('f')}`;

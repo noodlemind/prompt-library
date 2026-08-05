@@ -26,8 +26,9 @@ import { buildSnapshotBuildManifest } from '../../../evals/runtime/snapshot-buil
 
 const HASH = (character) => character.repeat(64);
 const TEN_GIB = 10 * 1024 * 1024 * 1024;
-const IMAGE_DIGEST = `sha256:${HASH('d')}`;
-const IMMUTABLE_IMAGE = `alexgshaw/cobol-modernization@${IMAGE_DIGEST}`;
+const MANIFEST_DIGEST = `sha256:${HASH('d')}`;
+const IMMUTABLE_IMAGE = `alexgshaw/cobol-modernization@${MANIFEST_DIGEST}`;
+const IMAGE_ID = `sha256:${HASH('e')}`;
 const DAYTONA_METADATA = Object.freeze({
   DAYTONA_ORGANIZATION_ID: '123e4567-e89b-42d3-a456-426614174000',
   DAYTONA_OTEL_ENDPOINT: 'https://telemetry.invalid',
@@ -185,7 +186,7 @@ function snapshotArtifact() {
     taskImages: {
       'cobol-modernization': {
         immutableImage: IMMUTABLE_IMAGE,
-        imageId: IMAGE_DIGEST,
+        imageId: IMAGE_ID,
         platform: 'linux/amd64',
         cpus: 1,
         memoryMb: 2048,
@@ -200,7 +201,7 @@ function request() {
   return {
     sandboxId: 'sandbox-bounded-1',
     immutableImage: IMMUTABLE_IMAGE,
-    imageId: IMAGE_DIGEST,
+    imageId: IMAGE_ID,
     platform: 'linux/amd64',
   };
 }
@@ -209,7 +210,7 @@ function preload() {
   return {
     sandboxId: request().sandboxId,
     immutableImage: IMMUTABLE_IMAGE,
-    imageId: IMAGE_DIGEST,
+    imageId: IMAGE_ID,
     platform: 'linux/amd64',
     pullReceiptHash: HASH('1'),
     inspectReceiptHash: HASH('2'),
@@ -332,7 +333,7 @@ test('trusted provisioner publishes one canonical fixed-path receipt and direct 
   assert.equal(definition.topology.sandboxId, request().sandboxId);
   assert.equal(definition.topology.sandboxBootId, observation(artifact).sandboxBootId);
   assert.equal(definition.topology.daemonId, observation(artifact).daemonId);
-  assert.equal(definition.topology.imageDigest, IMAGE_DIGEST);
+  assert.equal(definition.topology.imageDigest, IMAGE_ID);
   assert.equal(Object.hasOwn(definition.topology, 'controlChannelAuthenticated'), false);
   assert.equal(Object.hasOwn(definition.topology, 'controlChannelReceipt'), false);
   assert.equal(definition.topology.hashes.supervisor, artifact.logicalHashes.supervisor);
@@ -366,7 +367,7 @@ test('code-owned policy builders bind the exact trial contract and pinned OpenRo
       executionMode: 'controlled-provider',
       bindings: {
         sandboxId: request().sandboxId,
-        imageDigest: IMAGE_DIGEST,
+        imageDigest: IMAGE_ID,
         condition: 'generic',
         budgetPolicyHash: artifact.manifest.bindings.budgetPolicyHash,
         brokerPolicyHash: artifact.manifest.bindings.brokerPolicyHash,
