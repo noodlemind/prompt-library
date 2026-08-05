@@ -11,10 +11,10 @@ import { stampTaskLock } from '../../../evals/external/terminal_bench/harbor-ada
 import { prepareHarnessBundle } from '../../../evals/external/terminal_bench/provision.mjs';
 
 /**
- * True end-to-end: `node evals/release.mjs` in release-candidate mode against
- * a fake harbor CLI on PATH. No injected steps — this exercises main(), flag
- * parsing, live-step wiring, task verification, budget accounting, and the
- * gate, exactly as an operator would run it.
+ * Process-level coverage for parsing, Git/source integrity, deterministic
+ * execution, and red-trust diagnostics. Armed runtime construction is tested
+ * through runReleaseCli's injected artifact/runtime seam in eval-release.test;
+ * this suite never rewrites a trust boundary or installs a raw-key backdoor.
  */
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
@@ -52,7 +52,7 @@ function commitFixtureMutation(sourceRoot, message) {
   fixtureGit(sourceRoot, ['-c', 'user.name=Eval Test', '-c', 'user.email=eval-test@example.invalid', 'commit', '-m', message]);
 }
 
-function cleanGitView(taskLock, { attestTrust = true, runtimeTrustHook = false } = {}) {
+function cleanGitView(taskLock, { attestTrust = false } = {}) {
   const sourceRoot = tmpdir();
   fs.cpSync(repoRoot, sourceRoot, {
     recursive: true,
@@ -62,22 +62,6 @@ function cleanGitView(taskLock, { attestTrust = true, runtimeTrustHook = false }
     path.join(sourceRoot, 'evals', 'external', 'terminal_bench', 'task-lock.json'),
     `${JSON.stringify(taskLock, null, 2)}\n`
   );
-  if (runtimeTrustHook) {
-    const releasePath = path.join(sourceRoot, 'evals', 'release.mjs');
-    const releaseSource = fs.readFileSync(releasePath, 'utf8');
-    const needle = 'const runtimeObservedTrustEvidence = null;';
-    assert.equal(releaseSource.split(needle).length - 1, 1, 'fixture trust hook must replace one code-owned boundary');
-    fs.writeFileSync(releasePath, releaseSource.replace(
-      needle,
-      `const runtimeObservedTrustEvidence = process.env.HARNESS_TEST_RUNTIME_TRUST === '1'\n` +
-      `  ? {\n` +
-      `      source: 'runtime-observed',\n` +
-      `      evidenceHash: 'e'.repeat(64),\n` +
-      `      capabilities: Object.fromEntries(RELEASE_TRUST_CAPABILITIES.map((name) => [name, true])),\n` +
-      `    }\n` +
-      `  : null;`
-    ));
-  }
   const profilePath = path.join(sourceRoot, 'evals', 'config', 'release-canary.yaml');
   const profile = YAML.parse(fs.readFileSync(profilePath, 'utf8'));
   if (attestTrust) {
@@ -88,12 +72,6 @@ function cleanGitView(taskLock, { attestTrust = true, runtimeTrustHook = false }
     profile.claimPolicy.minimumHarnessSolvedTasks = 1;
   }
   fs.writeFileSync(profilePath, YAML.stringify(profile));
-  if (runtimeTrustHook) {
-    const routinePath = path.join(sourceRoot, 'evals', 'config', 'release-routine.yaml');
-    const routine = YAML.parse(fs.readFileSync(routinePath, 'utf8'));
-    routine.claimPolicy.minimumHarnessSolvedTasks = 1;
-    fs.writeFileSync(routinePath, YAML.stringify(routine));
-  }
   fixtureGit(sourceRoot, ['init']);
   commitFixtureMutation(sourceRoot, 'clean eval source snapshot');
   const releaseSha = fixtureGit(sourceRoot, ['rev-parse', '--verify', 'HEAD']);
@@ -133,7 +111,6 @@ function snapshotFixtureSource({ repoRoot: sourceRoot, destination }) {
 function setupFixture({
   taskNames = ['cobol-modernization'],
   attestTrust = true,
-  runtimeTrustHook = false,
   genericVerifierReward = 1,
   trialCostUsd = 0.02,
   providerLimitUsd = 10,
@@ -155,7 +132,7 @@ function setupFixture({
     selectedLock = stampTaskLock(path.join(datasetDir, taskName), selectedLock, taskName);
   }
   fs.writeFileSync(lockFile, JSON.stringify(selectedLock));
-  const { sourceRoot, releaseSha } = cleanGitView(selectedLock, { attestTrust, runtimeTrustHook });
+  const { sourceRoot, releaseSha } = cleanGitView(selectedLock, { attestTrust });
 
   const binDir = tmpdir();
   const auditFile = path.join(binDir, 'harbor-audit.jsonl');
@@ -410,7 +387,7 @@ process.stdout.write(JSON.stringify([images[args[2]]]));
   return { datasetDir, lockFile, binDir, harborBin, harborSha256, dockerBin, dockerSha256, bundleDir, bundleHash: prepared.manifestHash, auditFile, fetchPreload, sourceRoot, releaseSha };
 }
 
-function runCli({ datasetDir, lockFile, binDir, harborBin, harborSha256, dockerBin, dockerSha256, bundleDir, bundleHash, auditFile, fetchPreload, sourceRoot, withKey = true, task = null, omitTaskValue = false, releaseSha = null, dirtySource = false, useExternalLock = false, omitLockValue = false, profile = 'release-canary', reportFile = null, ambientGitEnv = null, ambientEvalEnv = null, deterministicOnly = false, calibration = false, qualification = false, budgetUsd = null, qualificationBaseline = null, calibrationBaseline = null, omitQualificationBaselineValue = false, omitCalibrationBaselineValue = false, runtimeTrust = false, providerLimitRemainingUsd = null }) {
+function runCli({ datasetDir, lockFile, binDir, harborBin, harborSha256, dockerBin, dockerSha256, bundleDir, bundleHash, auditFile, fetchPreload, sourceRoot, withKey = true, task = null, omitTaskValue = false, releaseSha = null, dirtySource = false, useExternalLock = false, omitLockValue = false, profile = 'release-canary', reportFile = null, ambientGitEnv = null, ambientEvalEnv = null, deterministicOnly = false, calibration = false, qualification = false, budgetUsd = null, qualificationBaseline = null, calibrationBaseline = null, omitQualificationBaselineValue = false, omitCalibrationBaselineValue = false, providerLimitRemainingUsd = null }) {
   if (dirtySource) {
     fs.appendFileSync(path.join(sourceRoot, 'evals', 'release.mjs'), '\n// dirty fixture source\n');
   }
@@ -429,8 +406,6 @@ function runCli({ datasetDir, lockFile, binDir, harborBin, harborSha256, dockerB
     NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ''} --import=${fetchPreload}`.trim(),
     GITHUB_TOKEN: 'sentinel-unrelated-ci-token',
   };
-  if (runtimeTrust) env.HARNESS_TEST_RUNTIME_TRUST = '1';
-  else delete env.HARNESS_TEST_RUNTIME_TRUST;
   if (providerLimitRemainingUsd !== null) {
     env.HARNESS_TEST_PROVIDER_LIMIT_REMAINING_USD = String(providerLimitRemainingUsd);
   } else {
@@ -463,87 +438,17 @@ function runCli({ datasetDir, lockFile, binDir, harborBin, harborSha256, dockerB
   });
 }
 
-function auditRecordCount(auditFile) {
-  if (!fs.existsSync(auditFile)) return 0;
-  return fs.readFileSync(auditFile, 'utf8').split('\n').filter(Boolean).length;
-}
-
-function writePrivateJson(file, value) {
-  fs.writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
-  return file;
-}
-
-function createValidArtifactChain() {
-  const fixture = setupFixture({
-    runtimeTrustHook: true,
-    genericVerifierReward: 0,
-    trialCostUsd: 0.65,
-    providerLimitUsd: 20,
-  });
-  const evidenceDir = tmpdir();
-  const qualificationFile = path.join(evidenceDir, 'qualification.json');
-  const calibrationFile = path.join(evidenceDir, 'calibration.json');
-
-  const qualificationResult = runCli({
-    ...fixture,
-    qualification: true,
-    budgetUsd: 1.3,
-    reportFile: qualificationFile,
-    runtimeTrust: true,
-    providerLimitRemainingUsd: 20,
-  });
-  assert.equal(qualificationResult.status, 1, qualificationResult.stderr || qualificationResult.stdout);
-  assert.equal(fs.existsSync(qualificationFile), true, 'qualification must archive its private artifact');
-  const qualificationReport = JSON.parse(fs.readFileSync(qualificationFile, 'utf8'));
-  assert.equal(
-    qualificationReport.qualification.capability,
-    'qualified',
-    JSON.stringify({
-      qualification: qualificationReport.qualification,
-      gate: qualificationReport.gate,
-      pair: qualificationReport.pairs?.[0] ?? null,
-    }, null, 2)
-  );
-  assert.ok(
-    Math.abs(qualificationReport.budget.accountedExposureUsd - 1.3) <= 1e-12,
-    `qualification evidence must account for the full boundary, got ${qualificationReport.budget.accountedExposureUsd}`
-  );
-
-  const calibrationResult = runCli({
-    ...fixture,
-    calibration: true,
-    budgetUsd: 18.7,
-    qualificationBaseline: qualificationFile,
-    reportFile: calibrationFile,
-    runtimeTrust: true,
-    providerLimitRemainingUsd: 18.7,
-  });
-  assert.equal(calibrationResult.status, 0, calibrationResult.stderr || calibrationResult.stdout);
-  assert.equal(fs.existsSync(calibrationFile), true, 'calibration must archive its private artifact');
-  const calibrationReport = JSON.parse(fs.readFileSync(calibrationFile, 'utf8'));
-  assert.equal(calibrationReport.qualificationBaseline.valid, true);
-  assert.equal(calibrationReport.gate.block, false, calibrationReport.gate.reasons.join('; '));
-
-  return { fixture, qualificationFile, qualificationReport, calibrationFile, calibrationReport };
-}
-
-test('configured trust intent alone cannot unlock provider execution through the CLI', () => {
-  const fixture = setupFixture();
+test('configured trust intent arms only the code-owned one-FD runtime path', () => {
+  const fixture = setupFixture({ attestTrust: true });
   const result = runCli(fixture);
-  assert.equal(result.status, 1, result.stderr || result.stdout);
+  assert.equal(result.status, 2, result.stderr || result.stdout);
   assert.ok(!`${result.stdout}\n${result.stderr}`.includes(SENTINEL_PROVIDER_KEY), 'CLI output and errors must not echo the provider key');
-  const report = JSON.parse(result.stdout);
-  assert.equal(report.evaluationScope.mode, 'diagnostic-trust');
-  assert.equal(report.evaluationScope.trust.configuredStatus, 'attested');
-  assert.equal(report.evaluationScope.trust.evidenceSource, null);
-  assert.equal(report.budget.spentUsd, 0);
-  assert.equal(report.gate.block, true);
-  assert.ok(!JSON.stringify(report).includes(SENTINEL_PROVIDER_KEY), 'the persisted/reportable result must not contain the provider key');
-  assert.equal(fs.existsSync(fixture.auditFile), false, 'a committed YAML claim is not runtime trust evidence and Harbor stays untouched');
+  assert.match(result.stderr, /exactly one --provider-key-fd/i);
+  assert.equal(fs.existsSync(fixture.auditFile), false, 'runtime construction stays untouched without inherited FD custody');
 });
 
 test('qualification applies a lower operator budget instead of restoring the profile maximum', () => {
-  const fixture = setupFixture();
+  const fixture = setupFixture({ attestTrust: false });
   const result = runCli({ ...fixture, qualification: true, budgetUsd: 0.9 });
   assert.equal(result.status, 1, result.stderr || result.stdout);
   const report = JSON.parse(result.stdout);
@@ -577,7 +482,7 @@ test('qualification and calibration CLI state transitions fail closed before pro
     },
   ];
   for (const { selection, message } of cases) {
-    const fixture = setupFixture();
+    const fixture = setupFixture({ attestTrust: false });
     const result = runCli({ ...fixture, ...selection });
     assert.equal(result.status, 2, result.stderr || result.stdout);
     assert.match(result.stderr, message);
@@ -586,74 +491,29 @@ test('qualification and calibration CLI state transitions fail closed before pro
 });
 
 test('CLI phase boundaries and private artifact transitions remain fail-closed and zero-spend under red trust', () => {
-  const {
-    fixture,
-    qualificationFile,
-    qualificationReport,
-    calibrationFile,
-    calibrationReport,
-  } = createValidArtifactChain();
-  const paidFixtureAuditCount = auditRecordCount(fixture.auditFile);
-  assert.ok(paidFixtureAuditCount > 0, 'fixture-only runtime attestation must generate real raw baseline reports');
-
-  const accepted = [
-    {
-      name: 'qualification $1.30',
-      selection: { qualification: true, budgetUsd: 1.3 },
-      expectedCeilingUsd: 1.3,
-      verify(report) {
-        assert.equal(report.evaluationScope.mode, 'qualification');
-      },
-    },
-    {
-      name: 'calibration $18.70',
-      selection: { calibration: true, budgetUsd: 18.7, qualificationBaseline: qualificationFile },
-      expectedCeilingUsd: 18.7,
-      verify(report) {
-        assert.equal(report.qualificationBaseline.valid, true);
-      },
-    },
-    {
-      name: 'routine $10.00',
-      selection: {
-        profile: 'release-routine',
-        budgetUsd: 10,
-        qualificationBaseline: qualificationFile,
-        calibrationBaseline: calibrationFile,
-      },
-      expectedCeilingUsd: 10,
-      verify(report) {
-        assert.equal(report.qualificationBaseline.valid, true);
-        assert.equal(report.readiness.calibrationBaseline.valid, true);
-      },
-    },
-  ];
-  for (const { name, selection, expectedCeilingUsd, verify } of accepted) {
-    const result = runCli({ ...fixture, ...selection });
-    assert.equal(result.status, 1, `${name}: ${result.stderr || result.stdout}`);
-    const report = JSON.parse(result.stdout);
-    assert.equal(report.budget.ceilingUsd, expectedCeilingUsd, name);
-    assert.equal(report.budget.spentUsd, 0, `${name} must not spend while runtime trust is red`);
-    assert.equal(report.evaluationScope.trust.ok, false, name);
-    verify(report);
-    assert.equal(auditRecordCount(fixture.auditFile), paidFixtureAuditCount, `${name} must not invoke Harbor`);
-  }
+  const fixture = setupFixture({ attestTrust: false });
+  const reportFile = path.join(tmpdir(), 'red-trust-report.json');
+  const archived = runCli({ ...fixture, qualification: true, budgetUsd: 1.3, reportFile });
+  assert.equal(archived.status, 1, archived.stderr || archived.stdout);
+  assert.equal(fs.existsSync(reportFile), true, 'a red diagnostic may retain one private report');
+  const report = JSON.parse(fs.readFileSync(reportFile, 'utf8'));
+  assert.equal(report.evaluationScope.mode, 'qualification');
+  assert.equal(report.evaluationScope.trust.ok, false);
+  assert.equal(report.budget.ceilingUsd, 1.3);
+  assert.equal(report.budget.spentUsd, 0);
+  assert.equal(fs.statSync(reportFile).mode & 0o077, 0, 'the diagnostic archive remains private');
+  assert.equal(fs.existsSync(fixture.auditFile), false, 'red trust never invokes Harbor');
 
   const rejected = [
     { name: 'qualification $1.31', selection: { qualification: true, budgetUsd: 1.31 }, ceiling: 1.3 },
     {
       name: 'calibration $18.71',
-      selection: { calibration: true, budgetUsd: 18.71, qualificationBaseline: qualificationFile },
+      selection: { calibration: true, budgetUsd: 18.71 },
       ceiling: 18.7,
     },
     {
       name: 'routine $10.01',
-      selection: {
-        profile: 'release-routine',
-        budgetUsd: 10.01,
-        qualificationBaseline: qualificationFile,
-        calibrationBaseline: calibrationFile,
-      },
+      selection: { profile: 'release-routine', budgetUsd: 10.01 },
       ceiling: 10,
     },
   ];
@@ -661,44 +521,12 @@ test('CLI phase boundaries and private artifact transitions remain fail-closed a
     const result = runCli({ ...fixture, ...selection });
     assert.equal(result.status, 2, `${name}: ${result.stderr || result.stdout}`);
     assert.match(result.stderr, new RegExp(`exceeds the \\$${ceiling} ceiling`, 'i'), name);
-    assert.equal(auditRecordCount(fixture.auditFile), paidFixtureAuditCount, `${name} must fail before Harbor`);
+    assert.equal(fs.existsSync(fixture.auditFile), false, `${name} must fail before Harbor`);
   }
-
-  const tamperedQualification = structuredClone(qualificationReport);
-  tamperedQualification.pairs[0].harness.repetitions[0].correctness.verifierReward = 0;
-  const tamperedQualificationFile = writePrivateJson(
-    path.join(path.dirname(qualificationFile), 'qualification-tampered.json'),
-    tamperedQualification
-  );
-  const rejectedQualification = runCli({
-    ...fixture,
-    calibration: true,
-    budgetUsd: 18.7,
-    qualificationBaseline: tamperedQualificationFile,
-  });
-  assert.equal(rejectedQualification.status, 2, rejectedQualification.stderr || rejectedQualification.stdout);
-  assert.match(rejectedQualification.stderr, /qualification baseline is not eligible.*locked passing reward/i);
-
-  const tamperedCalibration = structuredClone(calibrationReport);
-  tamperedCalibration.pairs[0].efficiencyDelta.costRatio = 999;
-  const tamperedCalibrationFile = writePrivateJson(
-    path.join(path.dirname(calibrationFile), 'calibration-tampered.json'),
-    tamperedCalibration
-  );
-  const rejectedCalibration = runCli({
-    ...fixture,
-    profile: 'release-routine',
-    budgetUsd: 10,
-    qualificationBaseline: qualificationFile,
-    calibrationBaseline: tamperedCalibrationFile,
-  });
-  assert.equal(rejectedCalibration.status, 2, rejectedCalibration.stderr || rejectedCalibration.stdout);
-  assert.match(rejectedCalibration.stderr, /calibration baseline is not eligible.*retained summaries.*raw repetitions/i);
-  assert.equal(auditRecordCount(fixture.auditFile), paidFixtureAuditCount, 'tampered artifacts fail before Harbor');
 });
 
 test('qualification mode cannot consume a prior qualification artifact', () => {
-  const fixture = setupFixture();
+  const fixture = setupFixture({ attestTrust: false });
   const evidence = path.join(tmpdir(), 'qualification.json');
   fs.writeFileSync(evidence, '{}\n', { mode: 0o600 });
   const result = runCli({ ...fixture, qualification: true, qualificationBaseline: evidence });
@@ -739,7 +567,7 @@ test('the committed red trust gate blocks provider execution while deterministic
 });
 
 test('an explicit task lock is diagnostic-only and cannot green the release', () => {
-  const fixture = setupFixture();
+  const fixture = setupFixture({ attestTrust: false });
   const result = runCli({ ...fixture, useExternalLock: true });
   assert.equal(result.status, 1, result.stderr || result.stdout);
   const report = JSON.parse(result.stdout);
@@ -796,7 +624,7 @@ test('--calibration rejects the post-calibration routine profile before Harbor e
 });
 
 test('release git identity ignores ambient GIT_DIR and GIT_WORK_TREE injection', () => {
-  const fixture = setupFixture();
+  const fixture = setupFixture({ attestTrust: false });
   const result = runCli({
     ...fixture,
     withKey: false,
@@ -895,8 +723,8 @@ test('release lock resolution rejects an out-of-repository path and a committed 
   }
 });
 
-test('release-candidate mode without credentials blocks instead of greening', () => {
-  const fixture = setupFixture();
+test('red release-candidate mode without credentials blocks instead of greening', () => {
+  const fixture = setupFixture({ attestTrust: false });
   const result = runCli({ ...fixture, withKey: false });
   assert.equal(result.status, 1, result.stdout);
   const report = JSON.parse(result.stdout);
@@ -921,7 +749,10 @@ test('live release claims reject a dirty source tree before Harbor execution', (
 });
 
 test('--task selects exactly one pinned task for metadata, validation, budgeting, and Harbor execution', () => {
-  const fixture = setupFixture({ taskNames: ['cobol-modernization', 'cancel-async-tasks'] });
+  const fixture = setupFixture({
+    taskNames: ['cobol-modernization', 'cancel-async-tasks'],
+    attestTrust: false,
+  });
   const result = runCli({ ...fixture, task: 'cancel-async-tasks' });
   assert.equal(result.status, 1, result.stderr || result.stdout);
   const report = JSON.parse(result.stdout);
@@ -949,7 +780,7 @@ test('--task selects exactly one pinned task for metadata, validation, budgeting
 });
 
 test('an explicit --task remains release-ineligible even when the selected lock has one task', () => {
-  const fixture = setupFixture();
+  const fixture = setupFixture({ attestTrust: false });
   const result = runCli({ ...fixture, task: 'cobol-modernization' });
   assert.equal(result.status, 1, result.stderr || result.stdout);
   const report = JSON.parse(result.stdout);

@@ -7,7 +7,7 @@ import { test } from 'node:test';
 import { AGENT_REF, buildLiveSteps, aggregateRepetitionDocs, buildRunDoc, instructionAsDeliveredByHarbor, promptAndPhaseEconomicsOf } from '../../../evals/external/terminal_bench/live-steps.mjs';
 import { runtimeBridgeTools } from '../../../evals/external/terminal_bench/agent.mjs';
 import { BUNDLE_MOUNT_TARGET, CONDITION_INPUTS_FILE, EVAL_RUNTIME_MOUNT_TARGET, harnessWrapperScript, activationCommands } from '../../../evals/external/terminal_bench/provision.mjs';
-import { stampTaskLock, verifyTaskAgainstLock } from '../../../evals/external/terminal_bench/harbor-adapter.mjs';
+import { runHarbor, stampTaskLock, verifyTaskAgainstLock } from '../../../evals/external/terminal_bench/harbor-adapter.mjs';
 import { hashTree, parseReward } from '../../../evals/external/terminal_bench/verifier.mjs';
 import { efficiencyDelta, validateAgainstSchema, runRelease } from '../../../evals/release.mjs';
 import { createBudget } from '../../../evals/lib/budget.mjs';
@@ -34,6 +34,12 @@ const fakeSandboxIdentity = ({ sandbox }) => ({
 
 test('eval-run schema pins the prompt-manifest separator to the builder contract', () => {
   assert.deepEqual(RUN_SCHEMA.$defs.promptManifest.properties.separator, { const: '\n\n' });
+  const runtimeTrustEvidence = RUN_SCHEMA.properties.observability.properties.runtimeTrustEvidence;
+  assert.equal(
+    runtimeTrustEvidence.properties.schema.const,
+    'engineer-runtime-trial-final-attestation.v1'
+  );
+  assert.equal(runtimeTrustEvidence.additionalProperties, false);
 });
 
 test('economic phase taxonomy and driver context sources stay closed and schema-aligned', () => {
@@ -75,6 +81,9 @@ test('economic phase taxonomy and driver context sources stay closed and schema-
     assert.ok(ECONOMIC_PHASES.includes(phase), source);
   }
   assert.equal(economicPhaseForContextSource('new-unclassified-source'), 'unknown');
+  assert.equal(economicPhaseForContextSource('toString'), 'unknown');
+  assert.equal(economicPhaseForContextSource('constructor'), 'unknown');
+  assert.equal(economicPhaseForContextSource('__proto__'), 'unknown');
   assert.equal(economicPhaseForContextSource('durable-state'), 'memory-construction');
 });
 
@@ -191,7 +200,7 @@ function fixtureTask() {
 }
 
 /**
- * A fake harbor: `--version` succeeds; `run` writes the job's verifier reward
+ * A fake harbor: `--version` succeeds; job and isolated-trial invocations write the verifier reward
  * and the bridge done-file exactly where the real pipeline would.
  */
 function fakeHarborSpawn({
@@ -214,10 +223,18 @@ function fakeHarborSpawn({
     spawnImpl: (cmd, args, opts) => {
       invocations.push({ cmd, args, opts });
       if (args[0] === '--version') return { status: 0, stdout: harborVersion, stderr: '', containmentComplete: true };
-      if (args[0] !== 'run') return { status: 0, stdout: '', stderr: '', containmentComplete: true };
-      const jobsDir = args[args.indexOf('--jobs-dir') + 1];
-      const jobName = args[args.indexOf('--job-name') + 1];
-      const runIndex = invocations.filter((invocation) => invocation.args[0] === 'run').length;
+      const isolatedTrial = args[0] === 'trial' && args[1] === 'start';
+      if (args[0] !== 'run' && !isolatedTrial) {
+        return { status: 0, stdout: '', stderr: '', containmentComplete: true };
+      }
+      const trialRoot = isolatedTrial ? args[args.indexOf('--trials-dir') + 1] : null;
+      const jobsDir = isolatedTrial ? path.dirname(trialRoot) : args[args.indexOf('--jobs-dir') + 1];
+      const jobName = isolatedTrial ? path.basename(trialRoot) : args[args.indexOf('--job-name') + 1];
+      const trialName = isolatedTrial ? args[args.indexOf('--trial-name') + 1] : 'trial__fx0';
+      const runIndex = invocations.filter((invocation) =>
+        invocation.args[0] === 'run' ||
+        (invocation.args[0] === 'trial' && invocation.args[1] === 'start')
+      ).length;
       const agentEnv = {};
       let condition = null;
       args.forEach((a, i) => {
@@ -227,14 +244,14 @@ function fakeHarborSpawn({
         }
       });
       if (exitCode === 0) {
-        const verifierDir = path.join(jobsDir, jobName, 'trial__fx0', 'verifier');
+        const verifierDir = path.join(jobsDir, jobName, trialName, 'verifier');
         fs.mkdirSync(verifierDir, { recursive: true });
         const resolvedReward = typeof reward === 'function' ? reward({ jobName, runIndex }) : reward;
         fs.writeFileSync(path.join(verifierDir, 'reward.json'), JSON.stringify({ reward: resolvedReward }));
         // Harbor writes the trial record on the HOST after the verifier phase.
         if (writeHostResult) {
           fs.writeFileSync(
-            path.join(jobsDir, jobName, 'trial__fx0', 'result.json'),
+            path.join(jobsDir, jobName, trialName, 'result.json'),
             JSON.stringify({ verifier_result: { rewards: { reward: resolvedReward } } })
           );
         }
@@ -276,10 +293,12 @@ function fakeHarborSpawn({
             requestBodyHash: '9'.repeat(64),
             requestControlHash: digest(JSON.stringify(requestControls)),
           };
-          const instruction = instructionAsDeliveredByHarbor(fs.readFileSync(
-            path.join(args[args.indexOf('-p') + 1], args[args.indexOf('--include-task-name') + 1], 'instruction.md'),
-            'utf8'
-          ));
+          const taskPath = isolatedTrial
+            ? args[args.indexOf('--path') + 1]
+            : path.join(args[args.indexOf('-p') + 1], args[args.indexOf('--include-task-name') + 1]);
+          const instruction = instructionAsDeliveredByHarbor(
+            fs.readFileSync(path.join(taskPath, 'instruction.md'), 'utf8')
+          );
           const systemMessageChars = JSON.stringify({ role: 'system', content: condition.systemPrompt }).length;
           const instructionMessageChars = JSON.stringify({ role: 'user', content: instruction }).length;
           const messageEnvelopeChars = JSON.stringify([
@@ -451,13 +470,65 @@ function fakeHarborSpawn({
   };
 }
 
-function liveSteps({ datasetDir, taskDir, lock, spawnImpl, apiKey = 'test-key', workDir = tmpdir(), config = null, fetchImpl = undefined, providerLookupTimeoutMs = undefined, repetitions = null, releaseSha = 'sha1', ambientEnv = {}, validateBundle = fakeValidateBundle, prepareBundle = null, attestHostNodeExecutable = undefined, collectEvidence = trustedFixtureVerifierEvidence }) {
+function testProviderControl({
+  apiKey,
+  fetchImpl,
+  timeoutMs = 30_000,
+  releaseSha,
+} = {}) {
+  if (apiKey == null) return { available: false, preflight: async () => null };
+  return {
+    available: true,
+    async preflight({ ceilingUsd, hardLimitUsd }) {
+      const lookup = fetchImpl ?? (async () => ({
+        ok: true,
+        json: async () => ({
+          data: {
+            limit: hardLimitUsd ?? ceilingUsd,
+            limit_remaining: hardLimitUsd ?? ceilingUsd,
+            limit_reset: null,
+          },
+        }),
+      }));
+      let timer;
+      const response = await Promise.race([
+        lookup(),
+        new Promise((_, reject) => {
+          timer = setTimeout(() => reject(new Error('test provider metadata timeout')), timeoutMs);
+        }),
+      ]).finally(() => clearTimeout(timer));
+      if (!response?.ok) throw new Error('test provider metadata lookup failed');
+      const data = (await Promise.race([
+        response.json(),
+        new Promise((_, reject) => {
+          timer = setTimeout(() => reject(new Error('test provider metadata timeout')), timeoutMs);
+        }),
+      ]).finally(() => clearTimeout(timer)))?.data;
+      const toMicrousd = (value) => typeof value === 'number' && Number.isFinite(value)
+        ? Math.round(value * 1_000_000)
+        : value;
+      return {
+        schema: 'engineer-provider-preflight-observation.v1',
+        keyFingerprint: crypto.createHmac('sha256', apiKey)
+          .update('engineer-harness/openrouter-key/v1\0')
+          .update(releaseSha)
+          .digest('hex'),
+        limitMicrousd: toMicrousd(data?.limit),
+        limitRemainingMicrousd: toMicrousd(data?.limit_remaining),
+        reset: data?.limit_reset == null ? null : 'configured',
+        checkedAt: '2026-07-31T00:00:00.000Z',
+      };
+    },
+  };
+}
+
+function liveSteps({ datasetDir, taskDir, lock, spawnImpl, apiKey = 'test-key', workDir = tmpdir(), config = null, fetchImpl = undefined, providerLookupTimeoutMs = undefined, repetitions = null, releaseSha = 'sha1', ambientEnv = {}, validateBundle = fakeValidateBundle, prepareBundle = null, attestHostNodeExecutable = undefined, collectEvidence = trustedFixtureVerifierEvidence, trialExecutor = undefined, localEnabled = false }) {
   let clockTick = 0;
   return buildLiveSteps({
     config: { controlledLane: CONTROLLED_LANE, ...(config ?? { execution: { environment: 'docker' } }) },
     lock,
     workDir,
-    env: { ...ambientEnv, OPENROUTER_API_KEY: apiKey, HARNESS_EVAL_TB_DATASET_DIR: datasetDir ?? path.dirname(taskDir) },
+    env: { ...ambientEnv, HARNESS_EVAL_TB_DATASET_DIR: datasetDir ?? path.dirname(taskDir) },
     releaseSha,
     harnessVersion: '0.5.0',
     spawnImpl,
@@ -466,13 +537,89 @@ function liveSteps({ datasetDir, taskDir, lock, spawnImpl, apiKey = 'test-key', 
     attestSandboxImage: fakeSandboxIdentity,
     validateBundle,
     ...(collectEvidence ? { collectEvidence } : {}),
-    ...(fetchImpl ? { fetchImpl } : {}),
-    ...(providerLookupTimeoutMs != null ? { providerLookupTimeoutMs } : {}),
+    providerControl: testProviderControl({
+      apiKey,
+      fetchImpl,
+      timeoutMs: providerLookupTimeoutMs,
+      releaseSha,
+    }),
     ...(repetitions != null ? { repetitions } : {}),
+    ...(trialExecutor ? { trialExecutor } : {}),
+    localEnabled,
     now: () => new Date(Date.UTC(2026, 6, 31, 0, 0, clockTick++)).toISOString(),
     prepareBundle: prepareBundle ?? (({ bundleDir, sourceIdentity }) => fakePreparedBundle(bundleDir, sourceIdentity)),
   });
 }
+
+test('the live pair awaits one injected isolated executor per arm and retains its runtime evidence', async () => {
+  const { taskDir, lock } = fixtureTask();
+  const harbor = fakeHarborSpawn();
+  const executions = [];
+  const trialExecutor = async (request) => {
+    assert.equal(Object.hasOwn(request, 'runLocal'), false, 'paid runtime never receives a host fallback');
+    executions.push({
+      trialId: request.trial.trialId,
+      condition: request.trial.condition,
+      hasProviderSecret: Object.values(request.harbor.spawnEnv ?? {}).includes('test-key'),
+    });
+    return {
+      run: runHarbor({ ...request.harbor, spawnImpl: harbor.spawnImpl }),
+      runtimeEvidence: {
+        schema: 'engineer-runtime-trial-final-attestation.v1',
+        evidenceHash: String(executions.length).repeat(64),
+        providerSpendMicrousd: 20_000,
+      },
+    };
+  };
+  const steps = liveSteps({
+    taskDir,
+    lock,
+    spawnImpl: harbor.spawnImpl,
+    trialExecutor,
+    localEnabled: true,
+    config: {
+      execution: { environment: 'docker' },
+      pairs: [{ host: 'ollama-gemma', enabled: true, schedule: 'explicit-with-local', taskRole: 'anchor' }],
+    },
+  });
+  await steps.taskLock();
+  const [pair] = await steps.controlledPair(createBudget({ ceilingUsd: 10, label: 'isolated-executor' }));
+
+  assert.deepEqual(executions.map(({ condition }) => condition).sort(), ['generic', 'harness']);
+  assert.ok(executions.every(({ trialId }) => typeof trialId === 'string' && trialId.length > 0));
+  assert.ok(executions.every(({ hasProviderSecret }) => hasProviderSecret === false));
+  for (const repetition of [pair.generic.repetitions[0], pair.harness.repetitions[0]]) {
+    assert.equal(repetition.observability.runtimeTrustEvidence.schema, 'engineer-runtime-trial-final-attestation.v1');
+    assert.match(repetition.observability.runtimeTrustEvidence.evidenceHash, /^[12]{64}$/);
+    assert.equal(repetition.observability.runtimeTrustEvidence.providerSpendMicrousd, 20_000);
+  }
+  await steps.gemmaPair(createBudget({ ceilingUsd: 1, label: 'local-informational' }));
+  assert.equal(executions.length, 2, 'the local Ollama lane never enters the credential-bearing executor');
+});
+
+test('injected provider custody rejects an ambient raw OpenRouter key before preflight', () => {
+  const { taskDir, lock } = fixtureTask();
+  const { spawnImpl } = fakeHarborSpawn();
+  assert.throws(
+    () => buildLiveSteps({
+      config: { controlledLane: CONTROLLED_LANE, execution: { environment: 'docker' } },
+      lock,
+      workDir: tmpdir(),
+      env: {
+        OPENROUTER_API_KEY: 'raw-key-must-be-rejected',
+        HARNESS_EVAL_TB_DATASET_DIR: path.dirname(taskDir),
+      },
+      providerControl: testProviderControl({ apiKey: 'custodied-key', releaseSha: 'sha1' }),
+      spawnImpl,
+      attestHarborExecutable: fakeHarborIdentity,
+      attestSandboxImage: fakeSandboxIdentity,
+      validateBundle: fakeValidateBundle,
+      collectEvidence: trustedFixtureVerifierEvidence,
+      prepareBundle: ({ bundleDir, sourceIdentity }) => fakePreparedBundle(bundleDir, sourceIdentity),
+    }),
+    /raw.*credential|OPENROUTER_API_KEY|ambient/i
+  );
+});
 
 test('controlled live steps require an explicit lane instead of silently selecting Kimi', () => {
   const { lock } = fixtureTask();
@@ -482,6 +629,7 @@ test('controlled live steps require an explicit lane instead of silently selecti
       lock,
       workDir: tmpdir(),
       env: {},
+      providerControl: testProviderControl(),
     }),
     /controlledLane.*required/i
   );
@@ -545,6 +693,7 @@ test('controlled live steps reject cloud environments that cannot materialize at
         lock,
         workDir: tmpdir(),
         env: { ...env, HARNESS_EVAL_TB_DATASET_DIR: path.dirname(taskDir) },
+        providerControl: testProviderControl(),
       }),
       /attested host mount materialization currently requires Harbor Docker/
     );
@@ -1419,7 +1568,7 @@ test('only the harness condition receives the lazy guidance catalog and checkpoi
   assert.doesNotMatch(harness.systemPrompt, /## Skill: create-primitive|creation-details/, 'irrelevant primitive bodies never enter the provider prefix');
 });
 
-test('the provider credential reaches injected Harbor only through spawn env and is never persisted', async () => {
+test('the external controller retains the provider credential; Harbor never receives or persists it', async () => {
   const sentinel = 'sentinel-openrouter-secret-do-not-persist';
   const { datasetDir, taskDir, lock } = fixtureTask();
   const workDir = tmpdir();
@@ -1442,7 +1591,7 @@ test('the provider credential reaches injected Harbor only through spawn env and
   assert.equal(runs.length, 2);
   for (const invocation of runs) {
     assert.equal(invocation.cmd, '/opt/test/harbor', 'Harbor is never resolved through ambient PATH');
-    assert.equal(invocation.opts.env.OPENROUTER_API_KEY, sentinel, 'injected spawns receive the provider key in env');
+    assert.equal(invocation.opts.env.OPENROUTER_API_KEY, undefined, 'Harbor never receives the provider key');
     assert.notEqual(invocation.opts.env.PATH, hostileSearchRoot, 'ambient PATH is not credential-bearing process input');
     assert.notEqual(invocation.opts.env.HOME, hostileHome, 'ambient HOME is not credential-bearing process input');
     assert.ok(invocation.opts.env.HOME.startsWith(workDir));
@@ -1837,6 +1986,7 @@ test('the local model floor is explicit opt-in, anchor-only, secret-free, and ze
     lock,
     workDir: tmpdir(),
     env: { HARNESS_EVAL_TB_DATASET_DIR: datasetDir ?? path.dirname(taskDir) },
+    providerControl: testProviderControl(),
   });
   assert.equal(disabled.gemmaPair, null, 'routine releases do not inherit local-model wall time');
 
@@ -1850,6 +2000,7 @@ test('the local model floor is explicit opt-in, anchor-only, secret-free, and ze
     workDir: tmpdir(),
     env: { HARNESS_EVAL_TB_DATASET_DIR: datasetDir ?? path.dirname(taskDir) },
     localEnabled: true,
+    providerControl: testProviderControl(),
   });
   assert.equal(scheduleDisabled.gemmaPair, null, 'the configured schedule can reject the CLI opt-in');
   assert.throws(
@@ -1863,6 +2014,7 @@ test('the local model floor is explicit opt-in, anchor-only, secret-free, and ze
       workDir: tmpdir(),
       env: { HARNESS_EVAL_TB_DATASET_DIR: datasetDir ?? path.dirname(taskDir) },
       localEnabled: true,
+      providerControl: testProviderControl(),
     }),
     /taskRole is not pinned.*stress/,
     'the configured role is consumed instead of silently falling back to the anchor'
@@ -1877,14 +2029,12 @@ test('the local model floor is explicit opt-in, anchor-only, secret-free, and ze
     },
     lock,
     workDir: tmpdir(),
-    env: {
-      OPENROUTER_API_KEY: 'must-not-reach-local-run',
-      HARNESS_EVAL_TB_DATASET_DIR: datasetDir ?? path.dirname(taskDir),
-    },
+    env: { HARNESS_EVAL_TB_DATASET_DIR: datasetDir ?? path.dirname(taskDir) },
     spawnImpl,
     attestHarborExecutable: fakeHarborIdentity,
     attestSandboxImage: fakeSandboxIdentity,
     localEnabled: true,
+    providerControl: testProviderControl(),
     prepareBundle: ({ bundleDir, sourceIdentity }) => fakePreparedBundle(bundleDir, sourceIdentity),
     validateBundle: fakeValidateBundle,
   });
@@ -2759,7 +2909,7 @@ test('multiple repetitions run each condition, alternate order, and all charge t
     config: { controlledLane: CONTROLLED_LANE, execution: { environment: 'docker' } },
     lock,
     workDir: fs.mkdtempSync(path.join(os.tmpdir(), 'tb-repetitions-')),
-    env: { OPENROUTER_API_KEY: 'k', HARNESS_EVAL_TB_DATASET_DIR: datasetDir ?? path.dirname(taskDir) },
+    env: { HARNESS_EVAL_TB_DATASET_DIR: datasetDir ?? path.dirname(taskDir) },
     releaseSha: 's',
     harnessVersion: 'v',
     spawnImpl,
@@ -2769,6 +2919,7 @@ test('multiple repetitions run each condition, alternate order, and all charge t
     prepareBundle: ({ bundleDir, sourceIdentity }) => fakePreparedBundle(bundleDir, sourceIdentity),
     validateBundle: fakeValidateBundle,
     collectEvidence: trustedFixtureVerifierEvidence,
+    providerControl: testProviderControl({ apiKey: 'k', releaseSha: 's' }),
   });
   await steps.taskLock();
   const budget = createBudget({ ceilingUsd: 10, label: 'controlled-pair' });
@@ -2851,7 +3002,7 @@ test('a pair requires a strict majority of scheduled repetitions to have two val
     config: { controlledLane: CONTROLLED_LANE, execution: { environment: 'docker' } },
     lock,
     workDir: tmpdir(),
-    env: { OPENROUTER_API_KEY: 'k', HARNESS_EVAL_TB_DATASET_DIR: datasetDir },
+    env: { HARNESS_EVAL_TB_DATASET_DIR: datasetDir },
     spawnImpl,
     repetitions: 3,
     attestHarborExecutable: fakeHarborIdentity,
@@ -2859,6 +3010,7 @@ test('a pair requires a strict majority of scheduled repetitions to have two val
     prepareBundle: ({ bundleDir, sourceIdentity }) => fakePreparedBundle(bundleDir, sourceIdentity),
     validateBundle: fakeValidateBundle,
     collectEvidence: trustedFixtureVerifierEvidence,
+    providerControl: testProviderControl({ apiKey: 'k', releaseSha: 'workdir' }),
   });
   await steps.taskLock();
   const [pair] = await steps.controlledPair(createBudget({ ceilingUsd: 10, label: 'strict-pair-validity' }));

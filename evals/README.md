@@ -168,19 +168,23 @@ software engineering. It measures the incremental effect of the treatment with
 fresh, paired sandboxes and retains enough evidence to explain a result instead
 of reporting only pass/fail.
 
-**Current status:** the measurement implementation is complete and locally
-verified, but paid release execution is deliberately disabled. Both committed
-live profiles keep the runtime trust gate red, and the CLI has no code-owned
-runtime attestation input yet. Therefore every non-deterministic invocation
-schedules **zero provider trials** and exits blocked. A plain live request is
-reported as `diagnostic-trust`; an explicit `--qualification` remains a
-`qualification` report, and an otherwise valid explicit `--calibration` remains
-a `calibration` report. Runtime trust blocks spend in every mode. Do not turn
-the YAML booleans green: committed configuration is only a kill switch and
-cannot attest runtime behavior. The six runtime conditions under
-[Release-trust completion](#release-trust-completion) must be observed by a
-trusted supervisor before the first paid qualification or subsequent
-calibration.
+**Current status:** the measurement and privileged-runtime implementation is
+authored and covered by deterministic tests, but it is not operationally
+verified. The CLI now owns the offline Terminal-Bench derivative, release
+bundle, pinned Daytona snapshot, external session controller, one fresh 10-GiB
+Daytona container-DIND sandbox per trial, private Docker daemon and policy
+proxy, separate-UID provider broker, and two-phase runtime evidence. The
+zero-provider Daytona integration run and final reviews are still pending, so
+both committed live profiles keep `releaseTrust` red and paid execution remains
+disabled.
+
+While the profiles are red, a non-deterministic invocation without provider
+custody produces a zero-spend blocked report; supplying `--provider-key-fd` is
+rejected because an unarmed run must not accept a credential. Do not turn the
+YAML booleans green merely because the code exists. The six conditions under
+[Release-trust completion](#release-trust-completion) must pass in the approved
+topology, the evidence must be bound to the release commit, and the required
+reviews must close before the first paid qualification.
 
 ### Evidence tracks
 
@@ -321,46 +325,60 @@ node evals/release.mjs --profile release-canary --deterministic-only
 # keep their requested report mode but are equally blocked from Harbor/spend.
 node evals/release.mjs --profile release-canary --json
 
-# Future trusted live setup. Pin both host executables; ambient PATH is not an
-# identity. Load OPENROUTER_API_KEY without placing it in shell history.
-export HARNESS_EVAL_HARBOR_BIN=/absolute/path/to/harbor
-export HARNESS_EVAL_HARBOR_SHA256=<sha256-of-that-executable>
-export HARNESS_EVAL_DOCKER_BIN=/absolute/path/to/docker
-export HARNESS_EVAL_DOCKER_SHA256=<sha256-of-that-executable>
+# Handoff template only after an approved commit arms releaseTrust and the
+# zero-provider Daytona gate has passed. Runtime paths and identities are
+# code-owned. Do not export the provider key or any HARNESS_EVAL_* runtime path.
 EVAL_REPORT_DIR=$(mktemp -d)
+printf 'Dedicated OpenRouter evaluation key: ' >&2
+IFS= read -r -s provider_key
+printf '\n' >&2
+trap 'unset provider_key' EXIT
 
 # Small-model capability qualification: 1 task × 2 arms × 1 repetition.
 # Neither arm passing stops the larger calibration.
 node evals/release.mjs --profile release-canary --qualification --json \
-  --report-file "$EVAL_REPORT_DIR/qualification.json"
+  --provider-key-fd 3 \
+  --report-file "$EVAL_REPORT_DIR/qualification.json" \
+  3< <(printf '%s' "$provider_key")
 
 # Initial ship calibration: 4 tasks × 2 arms × 3 repetitions, using the exact
-# qualified profile. Qualification ($1.30 max) plus calibration ($18.70 max)
-# share one absolute $20 initial-evidence envelope.
+# qualified profile and the same dedicated key. Qualification ($1.30 max) plus
+# calibration ($18.70 max) share one absolute $20 initial-evidence envelope.
 node evals/release.mjs --profile release-canary --calibration --budget-usd 18.7 --json \
+  --provider-key-fd 3 \
   --qualification-baseline "$EVAL_REPORT_DIR/qualification.json" \
-  --report-file "$EVAL_REPORT_DIR/calibration.json"
+  --report-file "$EVAL_REPORT_DIR/calibration.json" \
+  3< <(printf '%s' "$provider_key")
 
 # After that one calibration qualifies initial user exposure, later releases
 # use the explicit regression/overhead profile: 4 tasks × 2 arms × 1 repetition,
-# fixed $0.65 per-arm ceiling, and a hard $10 provider limit.
+# fixed $0.65 per-arm ceiling, and a fresh key with a hard $10 provider limit.
+unset provider_key
+printf 'Fresh routine OpenRouter evaluation key: ' >&2
+IFS= read -r -s provider_key
+printf '\n' >&2
 node evals/release.mjs --profile release-routine --json \
+  --provider-key-fd 3 \
   --qualification-baseline "$EVAL_REPORT_DIR/qualification.json" \
   --calibration-baseline "$EVAL_REPORT_DIR/calibration.json" \
-  --report-file "$EVAL_REPORT_DIR/routine.json"
-
-# Cost-bounded one-task diagnostic. It remains release-ineligible against the
-# complete lock even if its selected-task evidence is valid.
-node evals/release.mjs --profile release-canary --task cobol-modernization --json \
-  --report-file "$EVAL_REPORT_DIR/cobol-diagnostic.json"
-
-# Add the informational, zero-provider-cost local anchor pair to a future
-# trusted run. It never substitutes for the required OpenRouter denominator.
-node evals/release.mjs --profile release-routine --with-local --json \
-  --qualification-baseline "$EVAL_REPORT_DIR/qualification.json" \
-  --calibration-baseline "$EVAL_REPORT_DIR/calibration.json" \
-  --report-file "$EVAL_REPORT_DIR/routine-with-local.json"
+  --report-file "$EVAL_REPORT_DIR/routine.json" \
+  3< <(printf '%s' "$provider_key")
 ```
+
+The descriptor must be an inherited pipe or socket numbered 3 or higher. The
+custodian consumes and closes it exactly once, so every invocation opens a new
+descriptor even when qualification and calibration intentionally reuse the
+same key. The key must not contain a trailing newline; shell here-strings are
+therefore unsuitable. The example keeps the key in an unexported shell variable
+only long enough to feed the pipe. A production launcher may use an equivalent
+secret-store-to-pipe handoff.
+
+For a release-ineligible one-task diagnostic, use the same one-descriptor
+handoff with a fresh key satisfying the selected profile and add `--task
+cobol-modernization`; never reuse an accepted qualification, calibration, or
+routine key for unrelated diagnostics. Add `--with-local` to the routine
+invocation when the informational local anchor is required. It does not remove
+the controlled OpenRouter pair or its provider-custody requirement.
 
 The live mode matrix is enforced before Harbor can run: the
 `initial-user-ship` profile first requires its code-owned `--qualification`
@@ -390,52 +408,58 @@ produce one evidence hash covering all six capabilities below:
 6. executed image identity, CPU/memory/storage limits, and network policy are
    observed rather than inferred from requested Harbor arguments.
 
-Until a code-owned path passes that `runtime-observed` evidence into
-`releaseTrustVerdict`, the implementation is complete but the first live
-qualification and subsequent calibration are **not eligible to run**. A direct
-Harbor `--env daytona` run remains unsupported because it does not materialize
-the host-owned mounts used by this evaluator. Daytona may instead host the
-unchanged evaluator as an outer Linux VM with Docker-in-Docker: Harbor still
-runs with `--env docker` inside that VM. That arrangement solves the Darwin and
-remote-daemon placement constraints, but it is not a trust attestation by
-itself. Paid release evidence remains blocked until a code-owned supervisor in
-that VM observes the six capabilities above and supplies the resulting evidence
-to `releaseTrustVerdict`; configuration flags or operator-authored JSON cannot
-substitute for that observation.
+The code-owned path now exists, but its production composition has not yet
+produced accepted live evidence. The external coordinator creates one fresh
+10-GiB Daytona container-DIND sandbox for each Harbor arm/repetition. Inside
+that sandbox, the root supervisor starts a private Docker daemon whose data root
+is on the quota-bounded filesystem, exposes only the policy proxy to Harbor,
+runs the task with `network=none`, gives provider egress only to the separate
+broker UID, exports authenticated final evidence, and waits for externally
+verified whole-sandbox deletion. Harbor still uses `--env docker`; direct Harbor
+`--env daytona`, a workstation trial daemon, and an outer Daytona VM are not
+supported release topologies.
+
+Readiness authorizes at most one pending trial. Only the post-exit attestation,
+provider reconciliation, ordered session chain, and deletion receipt can make
+that trial release evidence. The committed profiles stay red until the
+zero-provider run exercises this exact composition on Daytona, all required
+reviews pass against the final commit, and the resulting evidence is retained
+outside the source tree. Configuration flags and operator-authored JSON cannot
+substitute for those checks.
 
 Release-candidate prerequisites (all fail closed when absent):
 
-- a Linux host with `/proc/self/fd` for the key-bearing Node bridge. The bridge
-  hashes an `O_NOFOLLOW` descriptor and executes that same inode through the
-  inherited descriptor; pathname execution after validation is forbidden.
-  macOS can run deterministic checks, but this implementation rejects live
-  Terminal-Bench pairs because Darwin exposes no equivalent descriptor-exec
-  primitive through the supported Python runtime;
 - a clean git working tree, including no staged or untracked files, and the full
   immutable current `HEAD` SHA. Live `--release-sha`, when supplied, must equal
   that full SHA; a dirty or ambiguous source tree is rejected before paid work;
 - the selected profile and default task lock tracked and byte-identical to that
   commit. Git identity, cleanliness, profile, lock, and bundle snapshots ignore
   ambient `GIT_*` controls and use the code-owned git directory/work tree;
-- a running Docker daemon on the same attested Linux evaluator host. For a
-  workstation run this is the local daemon. For Daytona, provision a Linux VM
-  with Docker-in-Docker, transfer the exact clean release commit and retained
-  dependency digests, and run the evaluator there with its environment still
-  set to `docker`. Direct `daytona` or other `HARNESS_EVAL_TB_ENV` overrides
-  fail before provider spend. The outer VM must also expose its identity,
-  uploaded-byte custody, mounts, descendant lifecycle, resource limits, and
-  network policy to the code-owned runtime supervisor;
-- `HARNESS_EVAL_HARBOR_BIN` set to an absolute, non-symlink, protected Harbor
-  executable at exactly the supported `0.20.0` version, and
-  `HARNESS_EVAL_HARBOR_SHA256` set to its independently retained SHA-256. The
-  executable is re-attested before every operation and its digest is retained
-  in each run's runner identity. Harbor receives a minimal environment; ambient
-  `PATH` and `PYTHONPATH` are ignored. `HARNESS_EVAL_TOOL_PATH` may supply an
-  explicit absolute-directory-only tool path when Harbor needs extra host tools;
-- `HARNESS_EVAL_DOCKER_BIN` set to an absolute protected Docker executable and
-  `HARNESS_EVAL_DOCKER_SHA256` set to its independently retained digest;
-- `OPENROUTER_API_KEY` for the selected controlled profile, delivered only in the host
-  process environment and never Harbor argv, `--ae`, condition JSON, or telemetry;
+- the compiled-in, digest-pinned Daytona v0.203.0 executable on the supported
+  controller platform and an authenticated Daytona controller session. Daytona
+  credentials stay in the external controller's allowlisted environment and
+  never enter uploaded artifacts, remote command input, the supervisor, Harbor,
+  or task containers. Operator-selected Daytona, Harbor, Docker, Node, dataset,
+  bundle, snapshot, topology, or tool paths are rejected;
+- the code-owned artifact builder prerequisites. The controller may use its
+  pinned local Docker client/daemon to construct the offline dataset and runtime
+  snapshot, but that builder is not the trial trust boundary. The release CLI
+  downloads only digest-pinned source, Python, Node, and builder inputs; builds
+  the explicitly non-leaderboard offline Terminal-Bench derivative; archives
+  the evaluated commit; and prepares the pinned Harbor/runtime snapshot before
+  any provider request;
+- one fresh 10-GiB Daytona container-DIND sandbox per trial, with the private
+  daemon rooted on the observed quota-bounded filesystem. Harbor receives only
+  the supervisor proxy socket. The task receives neither the real daemon socket,
+  Daytona credentials, provider credentials, general egress, nor alternate
+  writable executable paths. Unsupported storage, cgroup, UID, mount, network,
+  or cleanup enforcement invalidates the trial;
+- exactly one `--provider-key-fd` for every armed invocation. It must name an
+  inherited FIFO or socket, not a regular file, environment variable, command
+  argument containing key bytes, or here-string. The external custodian reads
+  and closes the descriptor before cloud work, retains only an owned mutable
+  buffer and release-scoped fingerprint, and issues a one-shot credential to the
+  isolated broker for each authorized trial;
 - one fresh dedicated OpenRouter evaluation key with a provider-side, no-reset
   `$20` limit for the whole initial evidence cycle. Qualification requires the
   full `$20` remaining, records only a release-scoped HMAC fingerprint of the
@@ -454,30 +478,13 @@ Release-candidate prerequisites (all fail closed when absent):
   failure after trusted execution—it removes partial JSON and retains the
   private temporary work directory for operator recovery instead of deleting
   the only post-spend evidence;
-- the pinned tasks, downloaded automatically via `harbor download terminal-bench@2.0`
-  (or point `HARNESS_EVAL_TB_DATASET_DIR` at an existing download) and **verified
-  byte-for-byte against the committed lock checksum before any provider call**.
-  The runner copies only the pinned tasks into a fresh read-only snapshot,
-  verifies the copy again, and passes that snapshot to Harbor with `-p`; it
-  never verifies one export and executes a separately resolved registry copy.
-  The versioned `typed-tree-sha256-v1` manifest binds directories, regular-file
-  type, normalized read/execute modes, size, path, and content while rejecting
-  symlinks, special/unreadable nodes, mutation, and traversal-limit overflow;
-- a harness bundle for in-container activation: prepared automatically from a
-  `git archive` of the evaluated full release SHA, followed by `npm ci` against
-  that committed snapshot—never from mutable working-tree source or dependencies.
-  Set `HARNESS_EVAL_NODE_TARBALL_X64` and/or
-  `HARNESS_EVAL_NODE_TARBALL_ARM64` to downloaded Linux Node runtimes and pin
-  each supplied archive with `HARNESS_EVAL_NODE_TARBALL_X64_SHA256` and/or
-  `HARNESS_EVAL_NODE_TARBALL_ARM64_SHA256`; an unpinned, symlinked, oversized,
-  changing, or digest-mismatched archive is rejected. Alternatively, point
-  `HARNESS_EVAL_TB_BUNDLE_DIR` at a pre-built bundle and set
-  `HARNESS_EVAL_TB_BUNDLE_SHA256` to its separately retained manifest digest.
-  The bundle manifest binds its contents to the evaluated release SHA, Harness
-  version, and verified Node archive digests. A prebuilt bundle must match that
-  expected source identity, is validated against the out-of-band digest, and is
-  copied into a fresh runner-owned directory before mounting. Both arms receive
-  only the immutable bridge runtime, bounded executor, and evidence probe under
+- the code-owned offline derivative, release bundle, runtime snapshot, and task
+  image identities must match their canonical attestations. The derivative
+  retains assertion-equivalent verifier content with pinned offline
+  dependencies and is explicitly excluded from public Terminal-Bench
+  leaderboard claims. No caller-provided dataset or prebuilt bundle may replace
+  the bytes that were attested. Both arms receive only the immutable bridge
+  runtime, bounded executor, and evidence probe under
   `/opt/eval-runtime`; the Harness package and
   `/opt/harness-bundle/harness-cli` are mounted read-only only in the treatment
   arm. Effective mount targets are retained and checked against the condition,
@@ -746,18 +753,23 @@ The statement names the observed treatment fidelity. A `prompt-and-cli` win is
 evidence for that treatment, not for unevaluated mechanical hooks, other models,
 or broad real-world productivity.
 
-Implementation completion and release-evidence completion are separate:
+Authored implementation, operational verification, and release evidence are
+separate states:
 
-- **Implementation complete:** schemas and policy are executable; deterministic
-  preflight cannot consume ambient paid credentials; provider/tool/workspace
-  ledgers, prompt attribution, cost reconciliation, condition identity,
-  containment tests, documentation, and required reviews pass; the commit stack
-  is pushed. No paid run is needed to complete this software change.
-- **Evidence complete:** the six release-trust capabilities are observed, a
-  clean committed source/bundle/task set is used, one trusted qualification
-  proves the selected model can pass, and the combined qualification plus
-  calibration exposure remains within $20 while satisfying every criterion
-  below. Only then may the initial user ship be green.
+- **Implementation authored (current):** the code-owned artifact pipeline,
+  external controller, supervisor, Docker proxy, provider broker, protocol,
+  schemas, and deterministic tests exist. This does not attest the production
+  Daytona composition.
+- **Implementation verified:** deterministic checks, the zero-provider
+  per-trial Daytona container-DIND run, externally confirmed sandbox deletion,
+  final-commit evidence, documentation, and all required reviews pass. No paid
+  run is needed to complete this software gate.
+- **Evidence complete:** after the implementation gate, the six release-trust
+  capabilities are observed on paid trials, a clean committed
+  source/bundle/task set is used, one trusted qualification proves the selected
+  model can pass, and the combined qualification plus calibration exposure
+  remains within $20 while satisfying every criterion below. Only then may the
+  initial user ship be green.
 
 A release evaluation is complete only when:
 
@@ -818,9 +830,21 @@ A release evaluation is complete only when:
 
 Troubleshooting:
 
-- `required dependencies or credentials are missing` — harbor CLI or
-  `OPENROUTER_API_KEY` absent in release-candidate mode; the release blocks
-  (use `--deterministic-only` for the free per-PR path).
+- `armed paid OpenRouter evaluation requires exactly one --provider-key-fd` —
+  the approved profile is armed but the launcher did not supply one inherited
+  FIFO/socket descriptor. Do not replace it with a raw-key environment variable.
+- `--provider-key-fd is forbidden for deterministic or unarmed release
+  evaluation` — the selected profile is still red or the command requested the
+  deterministic path. Remove provider custody and complete the zero-provider
+  implementation gate before attempting a paid run.
+- `trusted release launcher refuses ambient raw provider credentials` or
+  `runtime artifacts are code-owned` — remove raw provider-key and
+  `HARNESS_EVAL_*` runtime-path variables from the launcher environment. Supply
+  only the inherited descriptor and code-owned CLI flags documented above.
+- `the pinned Daytona v0.203.0 executable is unavailable` or an artifact digest
+  failure — the supported code-owned executable/input is missing or has drifted.
+  Restore the reviewed bytes; do not substitute a PATH-resolved or
+  operator-selected executable.
 - `required pair openrouter-controlled was skipped` — the configured controlled pair
   produced no evidence; a skipped pair can never green a release candidate.
 - `task checksum mismatch` — the downloaded task differs from the committed

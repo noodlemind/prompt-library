@@ -429,6 +429,16 @@
         "invalidToolArguments": { "type": "number", "minimum": 0 },
         "incompleteToolContainment": { "type": "number", "minimum": 0 },
         "controlContaminationDetected": { "type": "boolean" },
+        "runtimeTrustEvidence": {
+          "type": ["object", "null"],
+          "required": ["schema", "evidenceHash", "providerSpendMicrousd"],
+          "additionalProperties": false,
+          "properties": {
+            "schema": { "const": "engineer-runtime-trial-final-attestation.v1" },
+            "evidenceHash": { "type": "string" },
+            "providerSpendMicrousd": { "type": "integer", "minimum": 0, "maximum": 20000000 }
+          }
+        },
         "runtimeContractEvidence": {
           "type": "object",
           "required": ["complete", "matchesExpected", "expectedSystemPromptHash", "actualSystemPromptHash", "expectedToolSchemaHash", "actualToolSchemaHash", "expectedToolCount", "actualToolCount", "instructionHash", "reason"],

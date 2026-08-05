@@ -1,0 +1,130 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "engineer-runtime-readiness-lease.v1",
+  "title": "Short-lived authenticated readiness lease for one evaluation trial",
+  "type": "object",
+  "additionalProperties": false,
+  "maxProperties": 15,
+  "required": [
+    "schema", "protocolVersion", "sessionId", "trialId", "sequence", "nonce",
+    "issuedAt", "expiresAt", "requestHash", "requestNonce", "previousTrialChainHash",
+    "bindings", "budget", "readiness", "authentication"
+  ],
+  "properties": {
+    "schema": { "const": "engineer-runtime-readiness-lease.v1" },
+    "protocolVersion": { "const": 1 },
+    "sessionId": { "$ref": "#/$defs/id" },
+    "trialId": { "$ref": "#/$defs/id" },
+    "sequence": { "$ref": "#/$defs/sequence" },
+    "nonce": { "$ref": "#/$defs/hash" },
+    "issuedAt": { "$ref": "#/$defs/instant" },
+    "expiresAt": { "$ref": "#/$defs/instant" },
+    "requestHash": { "$ref": "#/$defs/hash" },
+    "requestNonce": { "$ref": "#/$defs/hash" },
+    "previousTrialChainHash": { "$ref": "#/$defs/hash" },
+    "bindings": { "$ref": "#/$defs/bindings" },
+    "budget": { "$ref": "#/$defs/trialBudget" },
+    "readiness": { "$ref": "#/$defs/readiness" },
+    "authentication": { "$ref": "#/$defs/authentication" }
+  },
+  "$defs": {
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]*$"
+    },
+    "hash": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "instant": {
+      "type": "string",
+      "minLength": 24,
+      "maxLength": 24,
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+    },
+    "sequence": { "type": "integer", "minimum": 1, "maximum": 1000000 },
+    "microusd": { "type": "integer", "minimum": 0, "maximum": 20000000 },
+    "bindings": {
+      "type": "object",
+      "additionalProperties": false,
+      "maxProperties": 19,
+      "required": [
+        "releaseSha", "profileId", "taskId", "taskLockHash", "bundleHash", "condition",
+        "imageDigest", "sandboxId", "sandboxBootId", "daemonId", "daemonRootHash",
+        "cgroupId", "cgroupPathHash", "budgetId", "budgetPolicyHash", "brokerPolicyHash",
+        "supervisorExecutableHash", "runnerExecutableHash", "harborExecutableHash"
+      ],
+      "properties": {
+        "releaseSha": { "type": "string", "pattern": "^[a-f0-9]{40,64}$" },
+        "profileId": { "$ref": "#/$defs/id" },
+        "taskId": { "$ref": "#/$defs/id" },
+        "taskLockHash": { "$ref": "#/$defs/hash" },
+        "bundleHash": { "$ref": "#/$defs/hash" },
+        "condition": { "enum": ["generic", "harness"] },
+        "imageDigest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+        "sandboxId": { "$ref": "#/$defs/id" },
+        "sandboxBootId": { "$ref": "#/$defs/id" },
+        "daemonId": { "$ref": "#/$defs/id" },
+        "daemonRootHash": { "$ref": "#/$defs/hash" },
+        "cgroupId": { "$ref": "#/$defs/id" },
+        "cgroupPathHash": { "$ref": "#/$defs/hash" },
+        "budgetId": { "$ref": "#/$defs/id" },
+        "budgetPolicyHash": { "$ref": "#/$defs/hash" },
+        "brokerPolicyHash": { "$ref": "#/$defs/hash" },
+        "supervisorExecutableHash": { "$ref": "#/$defs/hash" },
+        "runnerExecutableHash": { "$ref": "#/$defs/hash" },
+        "harborExecutableHash": { "$ref": "#/$defs/hash" }
+      }
+    },
+    "trialBudget": {
+      "type": "object",
+      "additionalProperties": false,
+      "maxProperties": 4,
+      "required": ["currency", "trialCeilingMicrousd", "sessionCeilingMicrousd", "sessionCommittedMicrousd"],
+      "properties": {
+        "currency": { "const": "USD" },
+        "trialCeilingMicrousd": { "$ref": "#/$defs/microusd" },
+        "sessionCeilingMicrousd": { "$ref": "#/$defs/microusd" },
+        "sessionCommittedMicrousd": { "$ref": "#/$defs/microusd" }
+      }
+    },
+    "readiness": {
+      "type": "object",
+      "additionalProperties": false,
+      "maxProperties": 10,
+      "required": [
+        "noProviderProbeHash", "dockerProxyPolicyHash", "brokerPolicyHash", "storageProbeHash",
+        "privateDaemonBounded", "realDaemonDenied", "taskNetworkNone", "brokerOnlyEgress",
+        "cgroupDelegated", "evidenceHeadroomReserved"
+      ],
+      "properties": {
+        "noProviderProbeHash": { "$ref": "#/$defs/hash" },
+        "dockerProxyPolicyHash": { "$ref": "#/$defs/hash" },
+        "brokerPolicyHash": { "$ref": "#/$defs/hash" },
+        "storageProbeHash": { "$ref": "#/$defs/hash" },
+        "privateDaemonBounded": { "const": true },
+        "realDaemonDenied": { "const": true },
+        "taskNetworkNone": { "const": true },
+        "brokerOnlyEgress": { "const": true },
+        "cgroupDelegated": { "const": true },
+        "evidenceHeadroomReserved": { "const": true }
+      }
+    },
+    "authentication": {
+      "type": "object",
+      "additionalProperties": false,
+      "maxProperties": 4,
+      "required": ["algorithm", "keyId", "payloadSha256", "signature"],
+      "properties": {
+        "algorithm": { "const": "HMAC-SHA256" },
+        "keyId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+        },
+        "payloadSha256": { "$ref": "#/$defs/hash" },
+        "signature": { "$ref": "#/$defs/hash" }
+      }
+    }
+  }
+}

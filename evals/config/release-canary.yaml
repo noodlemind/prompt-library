@@ -98,10 +98,10 @@ nativeProductRotation:
   - claude-subscription
 
 execution:
-  # Harbor 0.20 cloud environments do not faithfully materialize host bind
-  # mount sources. The causal path therefore uses Docker on the attested Linux
-  # evaluator host. A Daytona Linux VM may be that outer host when it runs
-  # Docker-in-Docker; direct Harbor `--env daytona` remains unsupported.
+  # Harbor 0.20 runs inside one fresh 10-GiB Daytona container-DIND sandbox per
+  # trial, behind the supervisor-owned private daemon and policy proxy. Direct
+  # Harbor `--env daytona` remains unsupported because it cannot preserve the
+  # attested mount and Docker-policy boundary used by the controlled pair.
   environment: docker
   # Image, platform, CPU, memory, and storage are authoritative per task in
   # task-lock.json and are checked against the materialized task TOML.

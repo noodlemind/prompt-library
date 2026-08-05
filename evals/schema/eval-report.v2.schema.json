@@ -100,6 +100,13 @@
             "configuredStatus": { "enum": ["attested", "blocked"] },
             "evidenceSource": { "type": ["string", "null"] },
             "evidenceHash": { "type": ["string", "null"] },
+            "sessionId": { "type": ["string", "null"] },
+            "finalizedTrialsAttested": { "type": "boolean" },
+            "trialEvidenceMatched": { "type": "boolean" },
+            "orderedTrialHashes": { "type": "array", "items": { "type": "string" } },
+            "deletionReceiptHashes": { "type": "array", "items": { "type": "string" } },
+            "chainHead": { "type": ["string", "null"] },
+            "evidenceArchiveHash": { "type": ["string", "null"] },
             "requiredCapabilities": { "type": "array", "items": { "type": "string" } },
             "missingCapabilities": { "type": "array", "items": { "type": "string" } }
           },
@@ -117,12 +124,92 @@
         }
       }
     },
+    "runtimeTrust": {
+      "type": ["object", "null"],
+      "required": ["required", "readiness", "finalization", "providerReconciliation"],
+      "properties": {
+        "required": { "type": "boolean" },
+        "readiness": {
+          "type": "object",
+          "required": ["ok", "status", "configuredStatus", "evidenceSource", "readinessHash", "sessionId", "releaseSha", "runtimeAttested", "providerAuthorized", "requiredCapabilities", "missingCapabilities", "reason", "errorHash"],
+          "properties": {
+            "ok": { "type": "boolean" },
+            "status": { "enum": ["armed", "blocked"] },
+            "configuredStatus": { "enum": ["attested", "blocked"] },
+            "evidenceSource": { "type": ["string", "null"] },
+            "readinessHash": { "type": ["string", "null"] },
+            "sessionId": { "type": ["string", "null"] },
+            "releaseSha": { "type": ["string", "null"] },
+            "runtimeAttested": { "type": "boolean" },
+            "providerAuthorized": { "type": "boolean" },
+            "requiredCapabilities": { "type": "array", "items": { "type": "string" } },
+            "missingCapabilities": { "type": "array", "items": { "type": "string" } },
+            "reason": { "type": ["string", "null"] },
+            "errorHash": { "type": ["string", "null"] }
+          }
+        },
+        "finalization": {
+          "type": "object",
+          "required": ["attempted", "complete", "evidenceHash", "sessionId", "finalizedTrialsAttested", "trialEvidenceMatched", "orderedTrialHashes", "deletionReceiptHashes", "chainHead", "evidenceArchiveHash", "errorHash"],
+          "properties": {
+            "attempted": { "type": "boolean" },
+            "complete": { "type": "boolean" },
+            "evidenceHash": { "type": ["string", "null"] },
+            "sessionId": { "type": ["string", "null"] },
+            "finalizedTrialsAttested": { "type": "boolean" },
+            "trialEvidenceMatched": { "type": "boolean" },
+            "orderedTrialHashes": { "type": "array", "items": { "type": "string" } },
+            "deletionReceiptHashes": { "type": "array", "items": { "type": "string" } },
+            "chainHead": { "type": ["string", "null"] },
+            "evidenceArchiveHash": { "type": ["string", "null"] },
+            "errorHash": { "type": ["string", "null"] }
+          }
+        },
+        "providerReconciliation": {
+          "type": "object",
+          "required": ["attempted", "schema", "verified", "keyFingerprint", "preflightRemainingMicrousd", "postflightRemainingMicrousd", "observedAllowanceDeltaMicrousd", "sessionSpentMicrousd", "differenceMicrousd", "toleranceMicrousd", "reason", "errorHash"],
+          "properties": {
+            "attempted": { "type": "boolean" },
+            "schema": { "type": ["string", "null"] },
+            "verified": { "type": "boolean" },
+            "keyFingerprint": { "type": ["string", "null"] },
+            "preflightRemainingMicrousd": { "type": ["integer", "null"], "minimum": 0 },
+            "postflightRemainingMicrousd": { "type": ["integer", "null"], "minimum": 0 },
+            "observedAllowanceDeltaMicrousd": { "type": ["integer", "null"], "minimum": 0 },
+            "sessionSpentMicrousd": { "type": ["integer", "null"], "minimum": 0 },
+            "differenceMicrousd": { "type": ["integer", "null"], "minimum": 0 },
+            "toleranceMicrousd": { "type": ["integer", "null"], "minimum": 0 },
+            "reason": { "enum": ["verified", "missing-or-malformed", "allowance-arithmetic-mismatch", "tolerance-exceeded", "session-spend-mismatch"] },
+            "errorHash": { "type": ["string", "null"] }
+          }
+        }
+      }
+    },
     "calibrationRelease": { "type": "boolean" },
     "preflight": {
       "type": "object",
       "required": ["ok", "environment", "taskLock"],
       "properties": {
         "ok": { "type": "boolean" },
+        "runtimeReadiness": {
+          "type": ["object", "null"],
+          "required": ["ok", "status", "configuredStatus", "evidenceSource", "readinessHash", "sessionId", "releaseSha", "runtimeAttested", "providerAuthorized", "requiredCapabilities", "missingCapabilities", "reason", "errorHash"],
+          "properties": {
+            "ok": { "type": "boolean" },
+            "status": { "enum": ["armed", "blocked"] },
+            "configuredStatus": { "enum": ["attested", "blocked"] },
+            "evidenceSource": { "type": ["string", "null"] },
+            "readinessHash": { "type": ["string", "null"] },
+            "sessionId": { "type": ["string", "null"] },
+            "releaseSha": { "type": ["string", "null"] },
+            "runtimeAttested": { "type": "boolean" },
+            "providerAuthorized": { "type": "boolean" },
+            "requiredCapabilities": { "type": "array", "items": { "type": "string" } },
+            "missingCapabilities": { "type": "array", "items": { "type": "string" } },
+            "reason": { "type": ["string", "null"] },
+            "errorHash": { "type": ["string", "null"] }
+          }
+        },
         "environment": {
           "type": "object",
           "required": ["ok", "missing"],

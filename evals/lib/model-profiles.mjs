@@ -12,6 +12,8 @@
  */
 import crypto from 'node:crypto';
 
+import { CONTROLLED_OPENROUTER_PROFILES } from '../runtime/controlled-provider-policy.mjs';
+
 function deepFreeze(value) {
   if (value && typeof value === 'object') {
     for (const key of Object.keys(value)) deepFreeze(value[key]);
@@ -21,28 +23,7 @@ function deepFreeze(value) {
 }
 
 const PROFILES = deepFreeze({
-  'kimi-k2.7-code': {
-    id: 'kimi-k2.7-code',
-    model: 'moonshotai/kimi-k2.7-code-20260612',
-    host: 'openrouter',
-    url: 'https://openrouter.ai/api/v1/chat/completions',
-    // Pin one exact endpoint variant. A base `moonshotai` slug also matches the
-    // 2x-priced `moonshotai/highspeed` endpoint and is not reproducible.
-    provider: { order: ['moonshotai/int4'], expectedResolvedNames: ['Moonshot AI'], allowFallbacks: false },
-    catalogPin: {
-      checkedAt: '2026-07-31',
-      canonicalSlug: 'moonshotai/kimi-k2.7-code-20260612',
-      endpointTag: 'moonshotai/int4',
-    },
-    // OpenRouter bills per endpoint: these are the pinned Moonshot AI standard
-    // endpoint rates, not the cheaper model-level floor from unpinned providers.
-    pricing: { inputPerM: 0.95, cachedInputPerM: 0.19, outputPerM: 4.0 },
-    maxTokens: 8192,
-    temperature: null, // model default, per the evaluation plan
-    reasoning: null, // identical (absent) in both conditions
-    timeoutMs: 15 * 60_000,
-    trialCeilingUsd: 5,
-  },
+  ...CONTROLLED_OPENROUTER_PROFILES,
   'gemma-4-26b-local': {
     id: 'gemma-4-26b-local',
     model: 'gemma4:26b-a4b-it-q4_K_M',

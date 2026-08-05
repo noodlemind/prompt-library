@@ -1,0 +1,8 @@
+{
+  "schema": "engineer-native-helper-provenance.v1",
+  "source": "evals/runtime/native/engineer-cgroup-exec.c",
+  "sourceSha256": "90a7c669ec7d1f8fa16cf4fa209e2602a3de3ab919af30a2c3bf7c525b1b63ea",
+  "baseImage": "docker:28.3.3-dind@sha256:a56b3bdde89315ed2cc0e4906e582b5033d93bf20d9cb9510c2cdd4e7f7690b1",
+  "buildTarget": "alpine-static",
+  "artifactPath": "/opt/engineer/bin/engineer-cgroup-exec"
+}

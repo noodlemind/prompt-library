@@ -20,7 +20,16 @@ import { spawnSync } from 'node:child_process';
 import { createHost as createControlledHost } from '../../hosts/openrouter-controlled.mjs';
 import { createHost as createKimiHost } from '../../hosts/openrouter-kimi.mjs';
 import { createHost as createGemmaHost } from '../../hosts/ollama-gemma.mjs';
-import { buildHarborRunArgs, jobDirFor, runHarbor, verifyTaskAgainstLock, classifyFailure, tasksOf, readHostVerifierReward } from './harbor-adapter.mjs';
+import {
+  buildHarborIsolatedTrialArgs,
+  buildHarborRunArgs,
+  jobDirFor,
+  runHarbor,
+  verifyTaskAgainstLock,
+  classifyFailure,
+  tasksOf,
+  readHostVerifierReward,
+} from './harbor-adapter.mjs';
 import { collectVerifierEvidence, hashTree, verdictFromReward } from './verifier.mjs';
 import { buildGenericCondition } from './generic-condition.mjs';
 import { buildHarnessCondition } from './harness-condition.mjs';
@@ -166,7 +175,6 @@ const harborSpawnEnv = ({
   trustedPythonPath = null,
   hostNode = null,
   hostNodeSha256 = null,
-  apiKey = null,
 } = {}) => {
   const spawnEnv = Object.fromEntries(
     HARBOR_ENV_ALLOWLIST
@@ -197,9 +205,6 @@ const harborSpawnEnv = ({
     spawnEnv.HARNESS_EVAL_HOST_NODE = hostNode;
     spawnEnv.HARNESS_EVAL_HOST_NODE_SHA256 = String(hostNodeSha256).toLowerCase();
   }
-  // The key belongs only to the host-side Harbor/Python/Node bridge process.
-  // Passing it through --ae would also scope it into every sandbox exec.
-  if (apiKey != null) spawnEnv.OPENROUTER_API_KEY = apiKey;
   return spawnEnv;
 };
 
@@ -210,13 +215,6 @@ const INSTRUCTION_PLACEHOLDER = '(the task instruction is supplied by Harbor at 
 const sha256 = (value) => crypto.createHash('sha256').update(String(value)).digest('hex');
 const stableHash = (value) => sha256(JSON.stringify(value ?? null));
 const shortHash = (value) => stableHash(value).slice(0, 24);
-const releaseScopedKeyFingerprint = (apiKey, releaseSha) =>
-  typeof apiKey === 'string' && apiKey.length > 0
-    ? crypto.createHmac('sha256', apiKey)
-      .update('engineer-harness/openrouter-key/v1\0')
-      .update(String(releaseSha))
-      .digest('hex')
-    : null;
 
 function diagnosticCode(raw, fallback = 'EXECUTION_INTEGRITY_FAILURE') {
   const message = String(raw ?? '');
@@ -1776,8 +1774,6 @@ export function buildLiveSteps({
   spawnImpl,
   now = () => new Date().toISOString(),
   prepareBundle = prepareHarnessBundle,
-  fetchImpl = globalThis.fetch,
-  providerLookupTimeoutMs = 30_000,
   repetitions = null,
   seeds = null,
   localEnabled = false,
@@ -1786,13 +1782,22 @@ export function buildLiveSteps({
   attestSandboxImage = defaultAttestSandboxImage,
   validateBundle = validatePrebuiltBundle,
   collectEvidence = collectVerifierEvidence,
+  trialExecutor = null,
+  providerControl = null,
 }) {
   const repetitionCount = repetitions ?? seeds ?? 1;
   if (!Number.isInteger(repetitionCount) || repetitionCount < 1) {
     throw new Error(`repetitions must be a positive integer, got ${repetitionCount}`);
   }
-  if (!Number.isFinite(providerLookupTimeoutMs) || providerLookupTimeoutMs <= 0) {
-    throw new Error('providerLookupTimeoutMs must be a positive finite number');
+  if (trialExecutor != null && typeof trialExecutor !== 'function') {
+    throw new TypeError('trialExecutor must be a function when provided');
+  }
+  if (providerControl == null || typeof providerControl !== 'object' || Array.isArray(providerControl) ||
+      typeof providerControl.available !== 'boolean' || typeof providerControl.preflight !== 'function') {
+    throw new TypeError('providerControl must declare availability and a preflight function');
+  }
+  if (Object.hasOwn(env, 'OPENROUTER_API_KEY')) {
+    throw new Error('controlled runtime refuses an ambient raw OPENROUTER_API_KEY credential');
   }
   const runtimeHome = path.join(workDir, '.harbor-runtime-home');
   for (const directory of [
@@ -1854,8 +1859,8 @@ export function buildLiveSteps({
     throw new Error('the historical openrouter-kimi host supports only kimi-k2.7-code');
   }
   const controlledHost = controlledLane.host === 'openrouter-controlled'
-    ? createControlledHost({ profileId: controlledLane.profileId, apiKey: env.OPENROUTER_API_KEY ?? null })
-    : createKimiHost({ apiKey: env.OPENROUTER_API_KEY ?? null });
+    ? createControlledHost({ profileId: controlledLane.profileId, apiKey: providerControl.available ? 'broker-custodied' : null })
+    : createKimiHost({ apiKey: providerControl.available ? 'broker-custodied' : null });
   const gemmaHost = createGemmaHost();
   const limitsFor = (profile) => ({
     maxSteps: 60,
@@ -1900,13 +1905,12 @@ export function buildLiveSteps({
     hostNodeIdentity = current;
     return hostNodeIdentity;
   };
-  const spawnEnvironment = ({ bridge = false, apiKey = null } = {}) => harborSpawnEnv({
+  const spawnEnvironment = ({ bridge = false } = {}) => harborSpawnEnv({
     ambientEnv: env,
     runtimeHome,
     trustedPythonPath: bridge ? path.join(bundle.bundleDir, 'bridge') : null,
     hostNode: hostNodeIdentityOf().path,
     hostNodeSha256: hostNodeIdentityOf().sha256,
-    apiKey,
   });
   const releaseOrderOffset = Number.parseInt(
     stableHash({ schema: 'eval-condition-order.v1', releaseSha }).slice(0, 8),
@@ -1932,7 +1936,6 @@ export function buildLiveSteps({
     const ceilingUsd = config.budget?.releaseCeilingUsd;
     const configuredHardLimitUsd = config.budget?.providerHardLimitUsd;
     const evaluationMode = config.evaluationScope?.mode ?? 'release';
-    const keyFingerprint = releaseScopedKeyFingerprint(env.OPENROUTER_API_KEY, releaseSha);
     const expectedQualificationFingerprint = config.qualificationBaseline?.providerKeyFingerprint ?? null;
     const checkedAt = now();
     if (ceilingUsd == null) {
@@ -1953,67 +1956,48 @@ export function buildLiveSteps({
           required: true,
           ceilingUsd: providerPolicy.ceilingUsd,
           hardLimitUsd: providerPolicy.hardLimitUsd,
-          keyFingerprint,
+          keyFingerprint: null,
           checkedAt,
         },
       };
     }
-    if (typeof fetchImpl !== 'function') {
-      return { ok: false, reason: 'provider key limit could not be verified', evidence: { verified: false, required: true, ceilingUsd, checkedAt } };
-    }
-    let lookup;
-    const controller = new AbortController();
-    let timeoutId;
+    let observed;
     try {
-      lookup = await Promise.race([
-        (async () => {
-          const response = await fetchImpl('https://openrouter.ai/api/v1/key', {
-            method: 'GET',
-            headers: { authorization: `Bearer ${env.OPENROUTER_API_KEY}` },
-            signal: controller.signal,
-          });
-          let metadata = null;
-          if (response?.ok) {
-            try {
-              metadata = (await response.json())?.data ?? null;
-            } catch {
-              metadata = null;
-            }
-          }
-          return { response, metadata };
-        })(),
-        new Promise((_, reject) => {
-          timeoutId = setTimeout(() => {
-            controller.abort();
-            reject(new Error('provider key limit lookup timed out'));
-          }, providerLookupTimeoutMs);
-        }),
-      ]);
+      observed = await providerControl.preflight({
+        evaluationMode,
+        ceilingUsd: providerPolicy.ceilingUsd,
+        hardLimitUsd: providerPolicy.hardLimitUsd,
+        expectedQualificationFingerprint,
+      });
     } catch {
       return { ok: false, reason: 'provider key limit lookup failed', evidence: { verified: false, required: true, ceilingUsd, checkedAt } };
-    } finally {
-      clearTimeout(timeoutId);
     }
-    const { response, metadata } = lookup;
-    if (!response?.ok) {
+    if (!observed || typeof observed !== 'object' || Array.isArray(observed) ||
+        observed.schema !== 'engineer-provider-preflight-observation.v1' ||
+        typeof observed.keyFingerprint !== 'string' || !SHA256_HEX.test(observed.keyFingerprint) ||
+        !Number.isSafeInteger(observed.limitMicrousd) || observed.limitMicrousd < 0 ||
+        !Number.isSafeInteger(observed.limitRemainingMicrousd) || observed.limitRemainingMicrousd < 0 ||
+        observed.limitRemainingMicrousd > observed.limitMicrousd ||
+        ![null, 'configured'].includes(observed.reset) ||
+        typeof observed.checkedAt !== 'string' || !Number.isFinite(Date.parse(observed.checkedAt))) {
       return {
         ok: false,
-        reason: `provider key limit lookup returned HTTP ${Number.isFinite(response?.status) ? response.status : 'error'}`,
+        reason: 'provider key limit lookup returned malformed custodian evidence',
         evidence: { verified: false, required: true, ceilingUsd, checkedAt },
       };
     }
     const verdict = evaluateProviderSpendEvidence({
       policy: providerPolicy,
-      keyFingerprint,
+      keyFingerprint: observed.keyFingerprint,
       observed: {
-        limitUsd: metadata?.limit,
-        limitRemainingUsd: metadata?.limit_remaining,
-        reset: metadata?.limit_reset,
+        limitUsd: observed.limitMicrousd / 1_000_000,
+        limitRemainingUsd: observed.limitRemainingMicrousd / 1_000_000,
+        reset: observed.reset,
       },
     });
     const evidence = {
       ...verdict.evidence,
-      checkedAt,
+      checkedAt: observed.checkedAt,
     };
     if (!evidence.verified) {
       return {
@@ -2204,7 +2188,7 @@ export function buildLiveSteps({
     return { ok: true, reason: '' };
   }
 
-  function runTrial({ evalHost, condition, budget, label, task, identity }) {
+  async function runTrial({ evalHost, condition, budget, label, task, identity }) {
     snapshotVerifiedTasks();
     ensureBundle();
     const attestedHostNode = hostNodeIdentityOf();
@@ -2279,33 +2263,84 @@ export function buildLiveSteps({
     const jobName = `${evalHost.id}-${task}-${label}`;
     const jobsDir = path.join(workDir, 'jobs');
     const startedAt = now();
-    const run = runHarbor({
+    const isolatedPaidRuntime = trialExecutor != null && profile.host === 'openrouter';
+    const trialId = `${identity.pairId}-${identity.repetitionId}-${condition.id}-${identity.attempt}`;
+    const harborArgs = isolatedPaidRuntime
+      ? buildHarborIsolatedTrialArgs({
+          lock,
+          task,
+          trialId,
+          datasetPath: verifiedDatasetDir,
+          agentRef: AGENT_REF,
+          model: profile.model,
+          envName: executionEnvironment,
+          jobName,
+          jobsDir,
+          mounts: effectiveMounts,
+          agentEnv: {
+            HARNESS_EVAL_TB_CONDITION: conditionPath,
+            HARNESS_EVAL_TB_TELEMETRY_FILE: telemetryFile,
+            HARNESS_EVAL_HOST_NODE: attestedHostNode.path,
+            HARNESS_EVAL_HOST_NODE_SHA256: attestedHostNode.sha256,
+          },
+        })
+      : buildHarborRunArgs({
+          lock,
+          task,
+          datasetPath: verifiedDatasetDir,
+          agentRef: AGENT_REF,
+          model: profile.model,
+          envName: executionEnvironment,
+          jobName,
+          jobsDir,
+          mounts: effectiveMounts,
+          agentEnv: {
+            HARNESS_EVAL_TB_CONDITION: conditionPath,
+            HARNESS_EVAL_TB_TELEMETRY_FILE: telemetryFile,
+            HARNESS_EVAL_HOST_NODE: attestedHostNode.path,
+            HARNESS_EVAL_HOST_NODE_SHA256: attestedHostNode.sha256,
+          },
+        });
+    const harborRequest = {
       executable: ensureHarborExecutable().path,
-      args: buildHarborRunArgs({
-        lock,
-        task,
-        datasetPath: verifiedDatasetDir,
-        agentRef: AGENT_REF,
-        model: profile.model,
-        envName: executionEnvironment,
-        jobName,
-        jobsDir,
-        mounts: effectiveMounts,
-        agentEnv: {
-          HARNESS_EVAL_TB_CONDITION: conditionPath,
-          HARNESS_EVAL_TB_TELEMETRY_FILE: telemetryFile,
-          HARNESS_EVAL_HOST_NODE: attestedHostNode.path,
-          HARNESS_EVAL_HOST_NODE_SHA256: attestedHostNode.sha256,
-        },
-      }),
+      args: harborArgs,
       cwd: workDir,
       spawnImpl,
       timeoutMs: profile.timeoutMs + 10 * 60_000,
-      spawnEnv: spawnEnvironment({
-        bridge: true,
-        apiKey: profile.host === 'openrouter' ? env.OPENROUTER_API_KEY : null,
-      }),
-    });
+      // The provider key stays with the trusted external controller and is
+      // injected only into the isolated broker through an inherited FD.
+      spawnEnv: spawnEnvironment({ bridge: true }),
+    };
+    const isolatedExecution = !isolatedPaidRuntime
+      ? { run: runHarbor(harborRequest), runtimeEvidence: null }
+      : await trialExecutor({
+          trial: {
+            trialId,
+            task,
+            condition: condition.id,
+            identity: structuredClone(identity),
+            ceilingUsd: trialCeilingUsd,
+            profileId: profile.id,
+          },
+          harbor: {
+            executable: harborRequest.executable,
+            args: harborRequest.args.slice(),
+            cwd: harborRequest.cwd,
+            timeoutMs: harborRequest.timeoutMs,
+            spawnEnv: { ...harborRequest.spawnEnv },
+          },
+        });
+    if (!isolatedExecution || typeof isolatedExecution !== 'object' || !isolatedExecution.run) {
+      throw new Error('isolated trial executor returned no Harbor result');
+    }
+    const run = isolatedExecution.run;
+    const runtimeTrustEvidence = isolatedExecution.runtimeEvidence == null
+      ? null
+      : {
+          schema: String(isolatedExecution.runtimeEvidence.schema ?? ''),
+          evidenceHash: String(isolatedExecution.runtimeEvidence.evidenceHash ?? ''),
+          providerSpendMicrousd: isolatedExecution.runtimeEvidence.providerSpendMicrousd,
+        };
     const endedAt = now();
     let postRunIntegrityFailure = null;
     try {
@@ -2364,7 +2399,13 @@ export function buildLiveSteps({
     const localCost = finiteCost(totals?.localCostUsd);
     const providerCost = finiteCost(totals?.providerCostUsd);
     const reconciledCost = paidProfile ? finiteCost(totals?.reconciledCostUsd) : 0;
-    const chargeableReconciledCost = reconciledCost ?? Math.max(localCost ?? 0, providerCost ?? 0);
+    const attestedSpendMicrousd = Number.isSafeInteger(runtimeTrustEvidence?.providerSpendMicrousd) &&
+      runtimeTrustEvidence.providerSpendMicrousd >= 0
+      ? runtimeTrustEvidence.providerSpendMicrousd
+      : null;
+    const chargeableReconciledCost = isolatedPaidRuntime && paidProfile && attestedSpendMicrousd != null
+      ? attestedSpendMicrousd / 1_000_000
+      : reconciledCost ?? Math.max(localCost ?? 0, providerCost ?? 0);
     budget.charge(chargeableReconciledCost, `${evalHost.id} ${label}`);
     const allocationBreached = paidProfile && budget.breached;
     const explicitUnknownBilling = Array.isArray(done?.telemetry?.events) &&
@@ -2381,6 +2422,7 @@ export function buildLiveSteps({
       localCost == null ||
       providerCost == null ||
       reconciledCost == null ||
+      (isolatedPaidRuntime && attestedSpendMicrousd == null) ||
       explicitUnknownBilling
     );
     let reservedUsd = 0;
@@ -2465,6 +2507,7 @@ export function buildLiveSteps({
       sandboxIdentity,
       runnerVersion: `harbor-${observedHarborVersion ?? 'unverified'}/bridge-2/${harborExecutableIdentity.sha256.slice(0, 16)}/node-${attestedHostNode.sha256.slice(0, 16)}`,
     });
+    doc.observability.runtimeTrustEvidence = runtimeTrustEvidence;
     doc.efficiency.reconciledCostUsd = reconciledCost;
     doc.efficiency.billingUncertain = billingUncertain;
     if (allocationBreached) doc.correctness.completedWithinBudget = false;
@@ -2591,7 +2634,7 @@ export function buildLiveSteps({
     };
   }
 
-  function taskPair({ evalHost, task, budget, attempt, trialCeilingUsd, n = repetitionCount }) {
+  async function taskPair({ evalHost, task, budget, attempt, trialCeilingUsd, n = repetitionCount }) {
     const profile = evalHost.profile;
     const limits = limitsFor(profile);
     const repetitionRuns = [];
@@ -2656,7 +2699,7 @@ export function buildLiveSteps({
           parent: budget,
         });
         try {
-          results[conditionId] = runTrial({
+          results[conditionId] = await runTrial({
             evalHost,
             condition: conditions[conditionId],
             budget: trialBudget,
@@ -2877,7 +2920,7 @@ export function buildLiveSteps({
         if (paidSchedulingStop) break;
         primaryTrialCeilingByTask.set(entry.task, trialCeilingUsd);
         try {
-          pairs.push(taskPair({ evalHost: controlledHost, task: entry.task, budget, attempt: 'a', trialCeilingUsd }));
+          pairs.push(await taskPair({ evalHost: controlledHost, task: entry.task, budget, attempt: 'a', trialCeilingUsd }));
         } catch (error) {
           pairs.push(failedPair({ evalHost: controlledHost, task: entry.task, budget, attempt: 'a', n: repetitionCount, error }));
           break;
@@ -2896,7 +2939,7 @@ export function buildLiveSteps({
       const rerunTask = task ?? tasksOf(lock)[0].task;
       try {
         ensureBundle();
-        return taskPair({ evalHost: controlledHost, task: rerunTask, budget, attempt: 'b', trialCeilingUsd, n: 1 });
+        return await taskPair({ evalHost: controlledHost, task: rerunTask, budget, attempt: 'b', trialCeilingUsd, n: 1 });
       } catch (error) {
         return failedPair({ evalHost: controlledHost, task: rerunTask, budget, attempt: 'b', n: 1, error });
       }
@@ -2919,7 +2962,7 @@ export function buildLiveSteps({
       ? async (budget) => {
           try {
             ensureBundle();
-            return [taskPair({
+            return [await taskPair({
               evalHost: gemmaHost,
               task: localTask.task,
               budget,

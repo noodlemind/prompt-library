@@ -8,11 +8,14 @@ import { PassThrough } from 'node:stream';
 import { test } from 'node:test';
 import {
   BRIDGE_TOOLS,
+  createBrokerFetchImpl,
+  resolveProviderRuntimeBoundary,
   runtimeBridgeTools,
   runStdioAgent,
 } from '../../../evals/external/terminal_bench/agent.mjs';
 import { replayDriver, ProviderError } from '../../../evals/lib/drivers.mjs';
 import { createTelemetry } from '../../../evals/lib/telemetry.mjs';
+import { getProfile } from '../../../evals/lib/model-profiles.mjs';
 
 /**
  * Simulated Harbor side of the protocol: answers every exec line with a
@@ -66,6 +69,156 @@ test('agent entry point never restores an implicit model when profileId is missi
     const done = JSON.parse(result.stdout.trim());
     assert.equal(done.stopReason, 'bridge_error');
     assert.match(done.detail, profileId === undefined ? /profileId is required/i : /unknown model profile/i);
+  }
+});
+
+test('the provider bridge maps exact model requests through a lease-bound broker without a credential', async () => {
+  const profile = getProfile('kimi-k2.7-code');
+  const observed = [];
+  const fetchImpl = createBrokerFetchImpl({
+    socketPath: '/run/engineer-eval/provider-relay.sock',
+    binding: {
+      leaseId: 'lease-1',
+      leaseDigest: 'd'.repeat(64),
+      trialId: 'trial-1',
+      leaseSequence: 2,
+    },
+    profile,
+    requestImpl: async (request) => {
+      observed.push(request);
+      return {
+        version: 1,
+        type: 'provider-response',
+        ok: true,
+        attemptId: request.request.attemptId,
+        message: { role: 'assistant', content: 'done', tool_calls: [] },
+        finishReason: 'stop',
+        evidence: {
+          attemptId: request.request.attemptId,
+          usage: {
+            promptTokens: 12,
+            cachedTokens: 3,
+            cachedTokensComplete: true,
+            outputTokens: 4,
+            localCostUsd: 0.001,
+            providerCostUsd: 0.002,
+            reconciledCostUsd: 0.002,
+          },
+        },
+      };
+    },
+  });
+  const body = {
+    model: profile.model,
+    messages: [{ role: 'user', content: 'hello' }],
+    tools: [],
+    tool_choice: 'auto',
+    max_tokens: profile.maxTokens,
+    reasoning: profile.reasoning,
+    provider: { order: profile.provider.order, allow_fallbacks: false },
+  };
+  const response = await fetchImpl(profile.url, {
+    method: 'POST',
+    headers: { authorization: 'Bearer broker-placeholder' },
+    body: JSON.stringify(body),
+  });
+  assert.equal(response.ok, true);
+  assert.equal(observed.length, 1);
+  assert.equal(observed[0].socketPath, '/run/engineer-eval/provider-relay.sock');
+  assert.deepEqual(observed[0].request.provider, profile.provider);
+  assert.equal(observed[0].request.sequence, 1);
+  assert.equal(observed[0].request.leaseDigest, 'd'.repeat(64));
+  assert.equal(JSON.stringify(observed[0]).includes('broker-placeholder'), false);
+  const data = await response.json();
+  assert.equal(data.model, profile.model);
+  assert.equal(data.provider, profile.provider.expectedResolvedNames[0]);
+  assert.equal(data.usage.prompt_tokens, 12);
+  assert.equal(data.usage.prompt_tokens_details.cached_tokens, 3);
+  assert.equal(data.usage.cost, 0.002);
+  assert.equal(data.choices[0].message.content, 'done');
+});
+
+test('controlled OpenRouter runtime is derived from the complete signed environment binding only', () => {
+  const profile = getProfile('kimi-k2.7-code');
+  const environment = {
+    ENGINEER_PROVIDER_BROKER_SOCKET: '/run/engineer/provider.sock',
+    ENGINEER_PROVIDER_LEASE_ID: 'lease-trial-1',
+    ENGINEER_PROVIDER_LEASE_DIGEST: 'd'.repeat(64),
+    ENGINEER_PROVIDER_LEASE_SEQUENCE: '2',
+    ENGINEER_PROVIDER_TRIAL_ID: 'pair-1-r1-generic-1',
+  };
+  const expected = {
+    socketPath: environment.ENGINEER_PROVIDER_BROKER_SOCKET,
+    binding: {
+      leaseId: environment.ENGINEER_PROVIDER_LEASE_ID,
+      leaseDigest: environment.ENGINEER_PROVIDER_LEASE_DIGEST,
+      leaseSequence: 2,
+      trialId: environment.ENGINEER_PROVIDER_TRIAL_ID,
+    },
+  };
+  assert.deepEqual(resolveProviderRuntimeBoundary({
+    condition: { id: 'generic', profileId: profile.id },
+    profile,
+    environment,
+  }), expected);
+
+  assert.deepEqual(resolveProviderRuntimeBoundary({
+    condition: { id: 'generic', profileId: profile.id, runtime: { providerBroker: expected } },
+    profile,
+    environment,
+  }), expected, 'a condition copy is tolerated only when it exactly matches signed runtime env');
+
+  assert.throws(
+    () => resolveProviderRuntimeBoundary({
+      condition: {
+        id: 'generic',
+        profileId: profile.id,
+        runtime: { providerBroker: { ...expected, binding: { ...expected.binding, leaseId: 'other' } } },
+      },
+      profile,
+      environment,
+    }),
+    /mismatch|condition.*broker/i
+  );
+});
+
+test('controlled OpenRouter rejects missing or partial broker binding and every raw credential environment', () => {
+  const profile = getProfile('kimi-k2.7-code');
+  const complete = {
+    ENGINEER_PROVIDER_BROKER_SOCKET: '/run/engineer/provider.sock',
+    ENGINEER_PROVIDER_LEASE_ID: 'lease-trial-1',
+    ENGINEER_PROVIDER_LEASE_DIGEST: 'd'.repeat(64),
+    ENGINEER_PROVIDER_LEASE_SEQUENCE: '2',
+    ENGINEER_PROVIDER_TRIAL_ID: 'pair-1-r1-generic-1',
+  };
+  const condition = { id: 'generic', profileId: profile.id, apiKeyEnv: 'CUSTOM_PROVIDER_VALUE' };
+
+  assert.throws(
+    () => resolveProviderRuntimeBoundary({ condition, profile, environment: {} }),
+    /isolated provider broker|complete.*binding/i
+  );
+  for (const name of Object.keys(complete)) {
+    const partial = { ...complete };
+    delete partial[name];
+    assert.throws(
+      () => resolveProviderRuntimeBoundary({ condition, profile, environment: partial }),
+      /complete.*binding|partial/i,
+      name
+    );
+  }
+  for (const raw of [
+    { OPENROUTER_API_KEY: 'raw-key' },
+    { OPENROUTER_KEY: 'raw-key' },
+    { OPENAI_API_KEY: 'raw-key' },
+    { ANTHROPIC_AUTH_TOKEN: 'raw-key' },
+    { CUSTOM_PROVIDER_VALUE: 'raw-key' },
+    { DAYTONA_API_KEY: 'controller-key-must-not-reach-runner' },
+  ]) {
+    assert.throws(
+      () => resolveProviderRuntimeBoundary({ condition, profile, environment: { ...complete, ...raw } }),
+      /raw.*credential|credential.*environment/i,
+      Object.keys(raw)[0]
+    );
   }
 });
 

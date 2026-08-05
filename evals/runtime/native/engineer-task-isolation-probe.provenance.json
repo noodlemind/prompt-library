@@ -1,0 +1,9 @@
+{
+  "schema": "engineer-task-isolation-probe-provenance.v1",
+  "source": "evals/runtime/native/engineer-task-isolation-probe.c",
+  "sourceSha256": "3bb37a55a3919125c686401592f621fc9cc8e1bd266fd63d9c0f580904246af7",
+  "baseImage": "docker:28.3.3-dind@sha256:a56b3bdde89315ed2cc0e4906e582b5033d93bf20d9cb9510c2cdd4e7f7690b1",
+  "buildTarget": "task-isolation-probe-static",
+  "platform": "linux/amd64",
+  "artifactPath": "/opt/engineer/bin/engineer-task-isolation-probe"
+}

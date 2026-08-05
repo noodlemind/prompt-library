@@ -22,6 +22,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { collectVerifierEvidence, hashTree, verdictFromReward } from './verifier.mjs';
+import { deriveTrialRuntimeIdentity } from '../../runtime/trial-security-contract.mjs';
 
 const REQUIRED_LOCK_FIELDS = ['lockSchema', 'taskHashAlgorithm', 'datasetRef', 'verifier'];
 const TASK_HASH_ALGORITHM = 'typed-tree-sha256-v1';
@@ -35,6 +36,8 @@ const SAFE_TASK_NAME = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
 const SHA256_HEX = /^[a-f0-9]{64}$/;
 const SHA256_ID = /^sha256:[a-f0-9]{64}$/;
 const IMMUTABLE_IMAGE = /^[A-Za-z0-9][A-Za-z0-9._/-]*@sha256:[a-f0-9]{64}$/;
+const ISOLATED_TRIAL_NAME = /^engineer-[a-f0-9]{24}$/;
+const LEGACY_TRIAL_NAME = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}__[A-Za-z0-9]+$/;
 
 function validateSandboxLock(sandbox, task, errors) {
   if (sandbox == null) {
@@ -238,6 +241,91 @@ export function buildHarborRunArgs({ lock, task = tasksOf(lock)[0]?.task, datase
   ];
 }
 
+/**
+ * Build the production paid-lane invocation as one named Harbor trial.
+ *
+ * `harbor run` creates a random TrialConfig name even for one attempt. That
+ * random suffix also becomes the Compose project identity, so an enforcing
+ * Docker proxy cannot bind it before the provider handoff. The public
+ * `harbor trial start --trial-name` path preserves Harbor's task/verifier
+ * implementation while making the one allowed container identity derivable
+ * from the authenticated trial id.
+ */
+export function buildHarborIsolatedTrialArgs(input = {}) {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) {
+    throw new TypeError('isolated Harbor trial input must be an object');
+  }
+  const allowed = new Set([
+    'lock', 'task', 'trialId', 'datasetPath', 'agentRef', 'model', 'envName',
+    'jobName', 'jobsDir', 'mounts', 'agentEnv',
+  ]);
+  if (Object.keys(input).some((key) => !allowed.has(key))) {
+    throw new TypeError('isolated Harbor trial input contains an unexpected field');
+  }
+  const {
+    lock,
+    task = tasksOf(input.lock)[0]?.task,
+    trialId,
+    datasetPath,
+    agentRef,
+    model,
+    envName,
+    jobName,
+    jobsDir,
+    mounts = [],
+    agentEnv = {},
+  } = input;
+  assertSafeTaskName(task);
+  const lockVerdict = validateTaskLock(lock);
+  if (!lockVerdict.ok) throw new Error(`Harbor task lock is invalid: ${lockVerdict.errors.join('; ')}`);
+  const taskEntry = tasksOf(lock).find((entry) => entry.task === task);
+  if (!taskEntry) throw new Error(`Harbor task ${task} is not in the pinned lock`);
+  assertSafeArgument(agentRef, 'agentRef');
+  assertSafeArgument(model, 'model');
+  assertSafeArgument(envName, 'envName');
+  if (envName !== 'docker') throw new TypeError('isolated Harbor trial environment must be docker');
+  if (typeof datasetPath !== 'string' || !datasetPath || datasetPath.includes('\0') ||
+      !path.isAbsolute(datasetPath) || path.normalize(datasetPath) !== datasetPath) {
+    throw new TypeError('datasetPath must be a normalized absolute NUL-free string');
+  }
+  if (typeof jobsDir !== 'string' || !jobsDir || jobsDir.includes('\0') ||
+      !path.isAbsolute(jobsDir) || path.normalize(jobsDir) !== jobsDir) {
+    throw new TypeError('jobsDir must be a normalized absolute NUL-free string');
+  }
+  if (!isSafeTaskName(jobName)) throw new TypeError('jobName must be a safe output identifier');
+  if (!Array.isArray(mounts) || mounts.length > 16) throw new TypeError('mounts must be a bounded array');
+  const identity = deriveTrialRuntimeIdentity(trialId);
+  const agentEnvArgs = buildAgentEnvArgs(agentEnv);
+  const sandbox = taskEntry.sandbox;
+  const securityComposePath = path.join(path.dirname(jobsDir), 'control', 'security-compose.json');
+  return [
+    'trial',
+    'start',
+    '--path',
+    path.join(datasetPath, task),
+    '--trial-name',
+    identity.trialName,
+    '--trials-dir',
+    path.join(jobsDir, jobName),
+    '--agent',
+    agentRef,
+    '--model',
+    model,
+    '--env',
+    envName,
+    '--override-cpus',
+    String(sandbox.cpus),
+    '--override-memory-mb',
+    String(sandbox.memoryMb),
+    '--override-storage-mb',
+    String(sandbox.storageMb),
+    '--extra-docker-compose',
+    securityComposePath,
+    ...(mounts.length ? ['--mounts', JSON.stringify(mounts)] : []),
+    ...agentEnvArgs,
+  ];
+}
+
 /** The deterministic job directory for an invocation that passed --job-name/--jobs-dir. */
 export function jobDirFor({ jobsDir, jobName }) {
   return path.join(jobsDir, jobName);
@@ -344,9 +432,29 @@ export function findLatestJobDir(jobsRoot, { excludeNames = [] } = {}) {
   return dirs.at(-1)?.full ?? null;
 }
 
+function singleTrialDirectory(jobDir) {
+  let entries;
+  try {
+    entries = fs.readdirSync(jobDir, { withFileTypes: true });
+  } catch {
+    return null;
+  }
+  const trials = entries.filter(
+    (entry) => entry.isDirectory() &&
+      (ISOLATED_TRIAL_NAME.test(entry.name) || LEGACY_TRIAL_NAME.test(entry.name))
+  );
+  return trials.length === 1
+    ? { name: trials[0].name, path: path.join(jobDir, trials[0].name) }
+    : null;
+}
+
 /** Verifier evidence + verdict for the (single) trial inside a job directory. */
 export function readTrialResult(jobDir, { passingReward = 1 } = {}) {
-  const evidence = collectVerifierEvidence(jobDir);
+  const trial = singleTrialDirectory(jobDir);
+  // Passing the exact trial root avoids making the verifier reader recognize a
+  // second job-layout grammar. Ambiguous/missing identities retain the legacy
+  // job-root advisory behavior and can never produce a trusted reward.
+  const evidence = collectVerifierEvidence(trial?.path ?? jobDir);
   return { ...evidence, verdict: verdictFromReward(evidence.reward, { passingReward }) };
 }
 
@@ -359,15 +467,9 @@ export function readTrialResult(jobDir, { passingReward = 1 } = {}) {
  * missing, corrupt, non-numeric, or ambiguous records never grade.
  */
 export function readHostVerifierReward(jobDir) {
-  let entries;
-  try {
-    entries = fs.readdirSync(jobDir, { withFileTypes: true });
-  } catch {
-    return null;
-  }
-  const trials = entries.filter((entry) => entry.isDirectory() && /__[A-Za-z0-9]+$/.test(entry.name));
-  if (trials.length !== 1) return null; // one attempt per invocation; ambiguity never grades
-  const file = path.join(jobDir, trials[0].name, 'result.json');
+  const trial = singleTrialDirectory(jobDir);
+  if (trial == null) return null; // one attempt per invocation; ambiguity never grades
+  const file = path.join(trial.path, 'result.json');
   let record;
   try {
     record = JSON.parse(fs.readFileSync(file, 'utf8'));
@@ -376,7 +478,7 @@ export function readHostVerifierReward(jobDir) {
   }
   const reward = record?.verifier_result?.rewards?.reward;
   if (typeof reward !== 'number' || !Number.isFinite(reward)) return null;
-  return { reward, trialName: trials[0].name, source: 'harbor-host-result' };
+  return { reward, trialName: trial.name, source: 'harbor-host-result' };
 }
 
 /**

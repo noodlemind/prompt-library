@@ -13,7 +13,15 @@ import {
   buildMarkdownReport,
   efficiencyDelta,
   overheadAttribution,
+  runReleaseCli,
   releaseTrustVerdict,
+  releaseRuntimeArmingVerdict,
+  runtimeReadinessVerdict,
+  providerReconciliationVerdict,
+  canonicalReleaseRuntimeTaskLock,
+  validateOfflineReleaseDataset,
+  releaseBudgetPolicyHash,
+  prepareReleaseRuntimeArtifacts,
   calibrationBaselineVerdict,
   validateReleasePolicyConfig,
   releaseInvocationPolicy,
@@ -36,6 +44,12 @@ import {
   evaluateProviderSpendEvidence,
   resolveProviderSpendPolicy,
 } from '../../../evals/lib/provider-spend-policy.mjs';
+import {
+  canonicalJson,
+  canonicalSha256,
+  protocolDocumentHash,
+} from '../../../evals/runtime/protocol.mjs';
+import { createGenuineRuntimeSession } from './support/runtime-session-fixture.mjs';
 
 const RUN_SCHEMA = JSON.parse(fs.readFileSync(new URL('../../../evals/schema/eval-run.v1.schema.json', import.meta.url), 'utf8'));
 const REPORT_SCHEMA = JSON.parse(fs.readFileSync(new URL('../../../evals/schema/eval-report.v2.schema.json', import.meta.url), 'utf8'));
@@ -98,6 +112,14 @@ test('provider spend policy normalization has one explicit legacy boundary', () 
     policy: insufficient,
     observed: { limitUsd: 9, limitRemainingUsd: 9, reset: null },
   }).ok, false);
+
+  const invalidMode = resolveProviderSpendPolicy({
+    evaluationMode: 'preview',
+    ceilingUsd: 1.3,
+    configuredHardLimitUsd: 20,
+  });
+  assert.equal(invalidMode.ok, false);
+  assert.ok(invalidMode.errors.some((reason) => /evaluation mode.*invalid|unsupported/i.test(reason)));
 });
 
 test('release cleanup never chmods an outside inode through an untrusted hard link', () => {
@@ -830,9 +852,13 @@ function baseSteps(overrides = {}) {
     .flatMap((pair) => [pair.generic, pair.harness])
     .filter(Boolean)
     .flatMap((doc) => Array.isArray(doc.repetitions) && doc.repetitions.length ? doc.repetitions : [doc])
-    .reduce((total, doc) => total + (Number.isFinite(doc.efficiency?.reconciledCostUsd)
-      ? doc.efficiency.reconciledCostUsd
-      : 0), 0);
+    .reduce((total, doc) => total + (
+      Number.isSafeInteger(doc.observability?.runtimeTrustEvidence?.providerSpendMicrousd)
+        ? doc.observability.runtimeTrustEvidence.providerSpendMicrousd / 1_000_000
+        : Number.isFinite(doc.efficiency?.reconciledCostUsd)
+          ? doc.efficiency.reconciledCostUsd
+          : 0
+    ), 0);
   for (const name of ['controlledPair', 'rerunControlledPair', 'kimiPair', 'rerunKimiPair']) {
     if (typeof steps[name] !== 'function') continue;
     const original = steps[name];
@@ -903,7 +929,7 @@ test('economics schema rejects incomplete nested evidence while legacy documents
   assert.equal(validateAgainstSchema(legacy, RUN_SCHEMA).ok, true, 'economics stays optional for stored v1 compatibility');
 });
 
-test('release trust requires runtime-observed evidence in addition to configured intent', () => {
+test('release trust requires branded runtime evidence in addition to configured intent', async () => {
   const capabilityNames = [
     'fullHarborRuntimeClosureAttested',
     'keyBearingToolchainIsolated',
@@ -913,21 +939,959 @@ test('release trust requires runtime-observed evidence in addition to configured
     'imageResourcesAndNetworkObserved',
   ];
   const all = Object.fromEntries(capabilityNames.map((name) => [name, true]));
-  const evidence = { source: 'runtime-observed', evidenceHash: 'e'.repeat(64), capabilities: all };
+  const releaseSha = 'a'.repeat(40);
+  const genuine = await createGenuineRuntimeSession({ releaseSha });
+  const evidence = genuine.controller.finalize();
 
   assert.equal(releaseTrustVerdict({ releaseTrust: { status: 'blocked', capabilities: all } }, evidence).ok, false);
   assert.equal(releaseTrustVerdict({ releaseTrust: { status: 'attested', capabilities: all } }).ok, false,
     'YAML booleans alone are never an attestation');
-  assert.equal(releaseTrustVerdict({ releaseTrust: { status: 'attested', capabilities: all } }, evidence).ok, true);
+  const verdict = releaseTrustVerdict(
+    { releaseTrust: { status: 'attested', capabilities: all } },
+    evidence,
+    { releaseSha, expectedTrialHashes: genuine.attestationHashes }
+  );
+  assert.equal(verdict.ok, true);
+  assert.equal(verdict.evidenceHash, protocolDocumentHash(evidence));
+  assert.equal(
+    releaseTrustVerdict(
+      { releaseTrust: { status: 'attested', capabilities: all } },
+      structuredClone(evidence),
+      { releaseSha, expectedTrialHashes: genuine.attestationHashes }
+    ).ok,
+    false,
+    'copying valid JSON does not preserve the private runtime brand'
+  );
 
   for (const missingCapability of capabilityNames) {
     const partial = { ...all, [missingCapability]: false };
-    const verdict = releaseTrustVerdict(
-      { releaseTrust: { status: 'attested', capabilities: all } },
-      { ...evidence, capabilities: partial }
+    const partialVerdict = releaseTrustVerdict(
+      { releaseTrust: { status: 'attested', capabilities: partial } },
+      evidence,
+      { releaseSha, expectedTrialHashes: genuine.attestationHashes }
     );
-    assert.equal(verdict.ok, false, missingCapability);
-    assert.deepEqual(verdict.missingCapabilities, [missingCapability]);
+    assert.equal(partialVerdict.ok, false, missingCapability);
+    assert.deepEqual(partialVerdict.missingCapabilities, [missingCapability]);
+  }
+});
+
+test('runtime arming is code-owned configuration intent, never initial final trust', () => {
+  const releaseTrust = {
+    status: 'attested',
+    capabilities: Object.fromEntries([
+      'fullHarborRuntimeClosureAttested',
+      'keyBearingToolchainIsolated',
+      'sandboxEntryChainAttested',
+      'mountsObservedFromTrustedSupervisor',
+      'escapedProcessesAndContainersReaped',
+      'imageResourcesAndNetworkObserved',
+    ].map((name) => [name, true])),
+  };
+  const configured = { releaseTrust };
+  assert.equal(releaseRuntimeArmingVerdict(configured).ok, true);
+  assert.equal(releaseRuntimeArmingVerdict(configured).status, 'armed');
+  assert.equal(releaseTrustVerdict(configured, null).ok, false);
+  assert.equal(releaseTrustVerdict(configured, null).status, 'blocked');
+});
+
+test('the canonical release runtime lock drops sourceImage without weakening the exact sandbox contract', () => {
+  const original = {
+    schema: 'terminal-bench-task-lock.v1',
+    datasetRef: 'terminal-bench@2.0',
+    verifier: { passingReward: 1 },
+    tasks: [{
+      task: 'cobol-modernization',
+      role: 'anchor',
+      taskChecksum: 'a'.repeat(64),
+      sandbox: { ...SANDBOX_LOCK },
+    }],
+  };
+  const projected = canonicalReleaseRuntimeTaskLock(original);
+  assert.deepEqual(Object.keys(projected.tasks[0].sandbox).sort(), [
+    'cpus', 'imageId', 'immutableImage', 'memoryMb', 'platform', 'storageMb',
+  ]);
+  assert.equal(Object.hasOwn(projected.tasks[0].sandbox, 'sourceImage'), false);
+  assert.equal(original.tasks[0].sandbox.sourceImage, SANDBOX_LOCK.sourceImage, 'projection does not mutate the lock');
+});
+
+test('release budget identity is independent and changes only with its economic policy inputs', () => {
+  const input = {
+    evaluationMode: 'release',
+    controlledLane: { host: 'openrouter-controlled', profileId: 'kimi-k2.7-code' },
+    budget: {
+      releaseCeilingUsd: 10,
+      controlledPairUsd: 8,
+      rerunUsd: 2,
+      controlledArmCeilingUsd: 0.65,
+      providerHardLimitUsd: 10,
+    },
+    repetitions: 1,
+    taskCount: 4,
+  };
+  const first = releaseBudgetPolicyHash(input);
+  const same = releaseBudgetPolicyHash(structuredClone(input));
+  const changed = releaseBudgetPolicyHash({
+    ...input,
+    budget: { ...input.budget, rerunUsd: 1.9 },
+  });
+  assert.match(first, /^[a-f0-9]{64}$/);
+  assert.equal(first, same);
+  assert.notEqual(first, changed);
+});
+
+test('controller readiness can arm per-trial execution but can never stand in for final release trust', async () => {
+  const releaseSha = 'a'.repeat(40);
+  const configured = {
+    releaseTrust: {
+      status: 'attested',
+      capabilities: Object.fromEntries([
+        'fullHarborRuntimeClosureAttested',
+        'keyBearingToolchainIsolated',
+        'sandboxEntryChainAttested',
+        'mountsObservedFromTrustedSupervisor',
+        'escapedProcessesAndContainersReaped',
+        'imageResourcesAndNetworkObserved',
+      ].map((name) => [name, true])),
+    },
+  };
+  const genuine = await createGenuineRuntimeSession({ releaseSha });
+  const readiness = genuine.controller.readiness();
+  assert.equal(runtimeReadinessVerdict(configured, readiness, { releaseSha }).ok, true);
+  assert.equal(releaseTrustVerdict(configured, readiness).ok, false, 'controller readiness is never final evidence');
+  assert.equal(runtimeReadinessVerdict(configured, structuredClone(readiness), { releaseSha }).ok, false,
+    'a plain JSON projection cannot arm provider execution');
+  const wrongIdentity = await createGenuineRuntimeSession({ releaseSha: 'b'.repeat(40), sessionId: 'wrong-release' });
+  assert.equal(runtimeReadinessVerdict(configured, wrongIdentity.controller.readiness(), { releaseSha }).ok, false);
+});
+
+function runtimeSecuredConfig(overrides = {}) {
+  const capabilities = Object.fromEntries([
+    'fullHarborRuntimeClosureAttested',
+    'keyBearingToolchainIsolated',
+    'sandboxEntryChainAttested',
+    'mountsObservedFromTrustedSupervisor',
+    'escapedProcessesAndContainersReaped',
+    'imageResourcesAndNetworkObserved',
+  ].map((name) => [name, true]));
+  return {
+    ...CONFIG,
+    runtimeTrustRequired: true,
+    releaseTrust: { status: 'attested', capabilities },
+    ...overrides,
+  };
+}
+
+function reconciledProviderEvidence(sessionSpentMicrousd = 200) {
+  return {
+    schema: 'engineer-release-provider-reconciliation.v1',
+    verified: true,
+    keyFingerprint: 'f'.repeat(64),
+    preflightRemainingMicrousd: 20_000_000,
+    postflightRemainingMicrousd: 20_000_000 - sessionSpentMicrousd,
+    observedAllowanceDeltaMicrousd: sessionSpentMicrousd,
+    sessionSpentMicrousd,
+    differenceMicrousd: 0,
+    toleranceMicrousd: 2,
+  };
+}
+
+test('provider postflight evidence is recomputed from retained integer allowance facts', () => {
+  const valid = reconciledProviderEvidence(200);
+  assert.equal(providerReconciliationVerdict(valid, { expectedSessionSpentMicrousd: 200 }).verified, true);
+  const splitLedger = providerReconciliationVerdict(valid, {
+    runtimeSessionSpentMicrousd: 200,
+    retainedTrialSpentMicrousd: 199,
+    schedulerSpentMicrousd: 200,
+  });
+  assert.equal(splitLedger.verified, false);
+  assert.equal(splitLedger.runtimeRetainedSchedulerMatched, false);
+  assert.equal(splitLedger.reason, 'session-spend-mismatch');
+  assert.equal(providerReconciliationVerdict(
+    { ...valid, observedAllowanceDeltaMicrousd: 199 },
+    { expectedSessionSpentMicrousd: 200 }
+  ).reason, 'allowance-arithmetic-mismatch');
+  assert.equal(providerReconciliationVerdict(
+    { ...valid, sessionSpentMicrousd: 199, differenceMicrousd: 1 },
+    { expectedSessionSpentMicrousd: 200 }
+  ).reason, 'session-spend-mismatch');
+  assert.equal(providerReconciliationVerdict(
+    { ...valid, postflightRemainingMicrousd: 19_999_797, observedAllowanceDeltaMicrousd: 203,
+      differenceMicrousd: 3 },
+    { expectedSessionSpentMicrousd: 200 }
+  ).reason, 'tolerance-exceeded');
+});
+
+test('final release trust compares every session identity and the exact session ceiling', async () => {
+  const releaseSha = 'a'.repeat(40);
+  const runtime = await createGenuineRuntimeSession({ releaseSha, sessionId: 'all-final-bindings' });
+  const evidence = runtime.controller.finalize();
+  const config = runtimeSecuredConfig();
+  const expected = {
+    releaseSha,
+    profileId: 'economical-small-model',
+    taskLockHash: '1'.repeat(64),
+    bundleHash: '2'.repeat(64),
+    budgetId: 'qualification-budget-1',
+    budgetPolicyHash: '3'.repeat(64),
+    brokerPolicyHash: '0'.repeat(64),
+  };
+  const options = {
+    releaseSha,
+    expectedTrialHashes: runtime.attestationHashes,
+    expectedSessionId: 'all-final-bindings',
+    expectedBindings: expected,
+    expectedSessionCeilingMicrousd: 1_300_000,
+  };
+  assert.equal(releaseTrustVerdict(config, evidence, options).ok, true);
+  for (const field of Object.keys(expected)) {
+    const drifted = {
+      ...options,
+      expectedBindings: { ...expected, [field]: field === 'releaseSha' ? 'b'.repeat(40) : `wrong-${field}` },
+    };
+    const verdict = releaseTrustVerdict(config, evidence, drifted);
+    assert.equal(verdict.ok, false, field);
+    assert.equal(verdict.bindingsMatched, false, field);
+  }
+  assert.equal(releaseTrustVerdict(config, evidence, {
+    ...options,
+    expectedSessionId: 'another-session',
+  }).sessionIdMatched, false);
+  assert.equal(releaseTrustVerdict(config, evidence, {
+    ...options,
+    expectedSessionCeilingMicrousd: 1_299_999,
+  }).sessionBudgetMatched, false);
+});
+
+function pairWithRuntimeEvidence(hashes, generic = 'pass', harness = 'pass', {
+  reconciledCostUsd = 0.0001,
+  providerSpendMicrousd = 100,
+} = {}) {
+  const pair = pairOf('openrouter-controlled', generic, harness);
+  for (const [doc, evidenceHash] of [[pair.generic, hashes[0]], [pair.harness, hashes[1]]]) {
+    const responses = doc.observability.providerEvents.filter((event) => event.type === 'response');
+    for (const response of responses) {
+      response.usage.localCostUsd = reconciledCostUsd / responses.length;
+      response.usage.providerCostUsd = reconciledCostUsd / responses.length;
+      response.usage.reconciledCostUsd = reconciledCostUsd / responses.length;
+    }
+    doc.efficiency.localCostUsd = reconciledCostUsd;
+    doc.efficiency.providerReportedCostUsd = reconciledCostUsd;
+    doc.efficiency.reconciledCostUsd = reconciledCostUsd;
+    doc.economics = completeEconomicsFor(doc.efficiency);
+    doc.observability ??= {};
+    doc.observability.runtimeTrustEvidence = {
+      schema: 'engineer-runtime-trial-final-attestation.v1',
+      evidenceHash,
+      providerSpendMicrousd,
+    };
+  }
+  return pair;
+}
+
+test('runRelease separates a pre-spend readiness lease from post-cleanup release trust', async () => {
+  const releaseSha = 'a'.repeat(40);
+  const runtime = await createGenuineRuntimeSession({ releaseSha });
+  const events = [];
+  let finalEvidence;
+  const steps = baseSteps({
+    runtimeSession: {
+      readiness: async () => { events.push('readiness'); return runtime.controller.readiness(); },
+      finalize: async () => { events.push('finalize'); finalEvidence = runtime.controller.finalize(); return finalEvidence; },
+      providerEvidence: async () => { events.push('reconcile'); return reconciledProviderEvidence(); },
+    },
+    controlledPair: async () => { events.push('pair'); return pairWithRuntimeEvidence(runtime.attestationHashes); },
+  });
+  const { report } = await runRelease({
+    config: runtimeSecuredConfig(),
+    steps,
+    releaseSha,
+    harnessVersion: '0.5.0',
+  });
+  assert.deepEqual(events, ['readiness', 'pair', 'finalize', 'reconcile']);
+  assert.equal(report.preflight.runtimeReadiness.ok, true);
+  assert.equal(report.evaluationScope.trust.ok, true);
+  assert.equal(report.evaluationScope.trust.evidenceHash, protocolDocumentHash(finalEvidence));
+  assert.deepEqual(report.runtimeTrust.finalization.orderedTrialHashes, runtime.attestationHashes);
+  assert.equal(report.runtimeTrust.finalization.trialEvidenceMatched, true);
+  assert.match(report.runtimeTrust.finalization.evidenceArchiveHash, /^[a-f0-9]{64}$/);
+  assert.equal(report.runtimeTrust.providerReconciliation.verified, true);
+  assert.equal(report.runtimeTrust.providerReconciliation.sessionSpentMicrousd, 200);
+  assert.equal(validateAgainstSchema(report, REPORT_SCHEMA).ok, true);
+});
+
+test('fractional-microusd trial costs reconcile through one attested integer ledger', async () => {
+  const releaseSha = 'a'.repeat(40);
+  const runtime = await createGenuineRuntimeSession({ releaseSha, providerSpendMicrousd: 100 });
+  const steps = baseSteps({
+    runtimeSession: {
+      readiness: async () => runtime.controller.readiness(),
+      finalize: async () => runtime.controller.finalize(),
+      providerEvidence: async () => reconciledProviderEvidence(200),
+    },
+    controlledPair: async () => pairWithRuntimeEvidence(
+      runtime.attestationHashes,
+      'pass',
+      'pass',
+      { reconciledCostUsd: 0.00009995, providerSpendMicrousd: 100 },
+    ),
+  });
+
+  const { report } = await runRelease({
+    config: runtimeSecuredConfig(),
+    steps,
+    releaseSha,
+    harnessVersion: '0.5.0',
+  });
+
+  assert.equal(report.runtimeTrust.providerReconciliation.verified, true);
+  assert.equal(report.runtimeTrust.providerReconciliation.retainedTrialSpentMicrousd, 200);
+  assert.equal(report.runtimeTrust.providerReconciliation.schedulerSpentMicrousd, 200);
+});
+
+test('a branded session final cannot attest unrelated retained trial documents', async () => {
+  const releaseSha = 'a'.repeat(40);
+  const runtime = await createGenuineRuntimeSession({ releaseSha, sessionId: 'mismatched-trials' });
+  const mismatchedHashes = [runtime.attestationHashes[0], 'f'.repeat(64)];
+  const { report } = await runRelease({
+    config: runtimeSecuredConfig(),
+    releaseSha,
+    steps: baseSteps({
+      runtimeSession: {
+        readiness: async () => runtime.controller.readiness(),
+        finalize: async () => runtime.controller.finalize(),
+        providerEvidence: async () => reconciledProviderEvidence(),
+      },
+      controlledPair: async () => pairWithRuntimeEvidence(mismatchedHashes),
+    }),
+  });
+  assert.equal(report.evaluationScope.trust.ok, false);
+  assert.equal(report.evaluationScope.trust.trialEvidenceMatched, false);
+  assert.equal(report.gate.block, true);
+});
+
+test('invalid readiness withholds provider work; invalid final attestation blocks retained results', async () => {
+  const releaseSha = 'a'.repeat(40);
+  const invalidReadinessRuntime = await createGenuineRuntimeSession({ releaseSha });
+  let providerCalls = 0;
+  let finalizeCalls = 0;
+  const blocked = await runRelease({
+    config: runtimeSecuredConfig(),
+    releaseSha,
+    steps: baseSteps({
+      runtimeSession: {
+        readiness: async () => structuredClone(invalidReadinessRuntime.controller.readiness()),
+        finalize: async () => { finalizeCalls += 1; return invalidReadinessRuntime.controller.finalize(); },
+        providerEvidence: async () => reconciledProviderEvidence(),
+      },
+      controlledPair: async () => { providerCalls += 1; return pairOf('openrouter-controlled', 'pass', 'pass'); },
+    }),
+  });
+  assert.equal(providerCalls, 0);
+  assert.equal(finalizeCalls, 0);
+  assert.equal(blocked.report.preflight.runtimeReadiness.ok, false);
+  assert.equal(blocked.report.evaluationScope.trust.ok, false);
+
+  const invalidFinalRuntime = await createGenuineRuntimeSession({ releaseSha, sessionId: 'invalid-final' });
+  const finalInvalid = await runRelease({
+    config: runtimeSecuredConfig(),
+    releaseSha,
+    steps: baseSteps({
+      runtimeSession: {
+        readiness: async () => invalidFinalRuntime.controller.readiness(),
+        finalize: async () => structuredClone(invalidFinalRuntime.controller.finalize()),
+        providerEvidence: async () => reconciledProviderEvidence(),
+      },
+      controlledPair: async () => {
+        providerCalls += 1;
+        return pairWithRuntimeEvidence(invalidFinalRuntime.attestationHashes);
+      },
+    }),
+  });
+  assert.equal(providerCalls, 1);
+  assert.equal(finalInvalid.report.evaluationScope.trust.ok, false);
+  assert.equal(finalInvalid.report.gate.block, true);
+  assert.ok(finalInvalid.report.gate.reasons.some((reason) => /release trust|attest/i.test(reason)));
+});
+
+test('a signed session final without postflight provider reconciliation remains blocked', async () => {
+  const releaseSha = 'a'.repeat(40);
+  const runtime = await createGenuineRuntimeSession({ releaseSha, sessionId: 'missing-provider-postflight' });
+  const { report } = await runRelease({
+    config: runtimeSecuredConfig(),
+    releaseSha,
+    steps: baseSteps({
+      runtimeSession: {
+        readiness: async () => runtime.controller.readiness(),
+        finalize: async () => runtime.controller.finalize(),
+      },
+      controlledPair: async () => pairWithRuntimeEvidence(runtime.attestationHashes),
+    }),
+  });
+  assert.equal(report.runtimeTrust.finalization.finalizedTrialsAttested, true);
+  assert.equal(report.runtimeTrust.providerReconciliation.verified, false);
+  assert.equal(report.runtimeTrust.finalization.complete, false);
+  assert.equal(report.evaluationScope.trust.ok, false);
+  assert.equal(report.gate.block, true);
+});
+
+const CLI_RELEASE_CAPABILITIES = [
+  'fullHarborRuntimeClosureAttested',
+  'keyBearingToolchainIsolated',
+  'sandboxEntryChainAttested',
+  'mountsObservedFromTrustedSupervisor',
+  'escapedProcessesAndContainersReaped',
+  'imageResourcesAndNetworkObserved',
+];
+
+function releaseCliRawConfig({ armed = true } = {}) {
+  return {
+    profile: 'release-fixture',
+    releaseTrust: {
+      status: armed ? 'attested' : 'blocked',
+      capabilities: Object.fromEntries(CLI_RELEASE_CAPABILITIES.map((name) => [name, armed])),
+    },
+    task: { lockFile: 'code-owned-task-lock.json' },
+    controlledLane: { host: 'openrouter-controlled', profileId: 'kimi-k2.7-code' },
+    budget: {
+      releaseCeilingUsd: 10,
+      controlledPairUsd: 8,
+      rerunUsd: 2,
+      providerHardLimitUsd: 10,
+      controlledArmCeilingUsd: 0.65,
+    },
+    efficiencyThresholds: { promptRatio: 2, costRatio: 1.5, wallTimeRatio: 1.25 },
+    valueThresholds: {
+      maxIncrementalApiCostPerAdditionalSuccessUsd: 2,
+      maxIncrementalWallTimePerAdditionalSuccessMs: 600_000,
+    },
+    claimPolicy: {
+      mode: 'regression-gate',
+      requireCalibrationBaseline: false,
+      requireQualificationBaseline: false,
+    },
+    repetitions: { routine: 1 },
+    nativeProductRotation: [],
+  };
+}
+
+function releaseCliTaskLock() {
+  return {
+    schema: 'terminal-bench-task-lock.v1',
+    datasetRef: 'terminal-bench@2.0',
+    verifier: { passingReward: 1 },
+    tasks: [{
+      task: 'cobol-modernization',
+      role: 'anchor',
+      taskChecksum: 'a'.repeat(64),
+      sandbox: { ...SANDBOX_LOCK },
+    }],
+  };
+}
+
+function makeReleaseCliFixture({
+  armed = true,
+  artifactDisposeError = null,
+  runtimeDisposeError = null,
+} = {}) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'release-cli-wiring-'));
+  const reportFile = path.join(root, 'report.json');
+  const bundleDir = path.join(root, 'bundle');
+  const releaseSha = 'a'.repeat(40);
+  const harnessVersion = '0.5.0';
+  const raw = releaseCliRawConfig({ armed });
+  const suppliedRaw = structuredClone(raw);
+  const lock = releaseCliTaskLock();
+  const events = [];
+  const writes = [];
+  const captured = {};
+  const providerControl = { id: 'provider-control' };
+  const trialExecutor = async () => ({ ok: true });
+  const runtimeSession = { id: 'runtime-session' };
+  const dependencies = {
+    releaseRepository: () => process.cwd(),
+    currentGitReleaseSha: () => releaseSha,
+    assertCleanLiveReleaseSource: () => {},
+    loadYamlConfig: () => suppliedRaw,
+    resolveDefaultLockFile: () => ({
+      path: path.join(process.cwd(), 'code-owned-task-lock.json'),
+      bytes: Buffer.from(JSON.stringify(lock)),
+    }),
+    readHarnessVersion: () => harnessVersion,
+    loadDeterministicRunner: async () => ({
+      runEvals: async () => [],
+      summarize: () => ({ passed: 1, failed: 0, infrastructureErrors: 0, skipped: 0 }),
+    }),
+    loadTaskLockValidator: async () => ({
+      validateTaskLock: () => ({ ok: true, errors: [] }),
+    }),
+    buildOfflineDataset: async ({ outputRoot, taskLock }) => {
+      events.push('offline-dataset');
+      const derivedLock = {
+        ...structuredClone(taskLock),
+        datasetRef: 'terminal-bench-derived-offline@53ff2b87d621',
+        tasks: taskLock.tasks.map((entry) => ({ ...entry, taskChecksum: 'c'.repeat(64) })),
+      };
+      const taskLockHash = canonicalSha256(derivedLock);
+      const attestation = {
+        schema: 'engineer-terminal-bench-offline-dataset-attestation.v1',
+        label: 'private-terminal-bench-derived-offline',
+        publicLeaderboardEligible: false,
+        networkRequiredAtTrial: false,
+        taskLock: { sha256: taskLockHash },
+      };
+      const artifactId = canonicalSha256(attestation);
+      const artifactDir = path.join(outputRoot, artifactId);
+      const datasetDir = path.join(artifactDir, 'dataset');
+      fs.mkdirSync(datasetDir, { recursive: true, mode: 0o700 });
+      const lockPath = path.join(artifactDir, 'offline-task-lock.json');
+      const attestationPath = path.join(artifactDir, 'offline-dataset-attestation.json');
+      fs.writeFileSync(lockPath, canonicalJson(derivedLock), { mode: 0o400 });
+      fs.writeFileSync(attestationPath, canonicalJson(attestation), { mode: 0o400 });
+      fs.chmodSync(datasetDir, 0o555);
+      fs.chmodSync(artifactDir, 0o555);
+      return {
+        artifactId,
+        artifactDir,
+        datasetDir,
+        lockPath,
+        attestationPath,
+        taskLockHash,
+        taskLock: derivedLock,
+        attestation,
+        datasetTreeHash: 'd'.repeat(64),
+      };
+    },
+    runtimeArtifactFactory: async (context) => {
+      events.push('artifacts');
+      captured.artifactContext = context;
+      assert.deepEqual(Object.keys(context).sort(), [
+        'brokerPolicyHash', 'budgetPolicyHash', 'profileId', 'releaseSha', 'repoRoot', 'sessionCeilingMicrousd',
+        'sourceIdentity', 'taskLock', 'taskLockHash',
+      ]);
+      assert.deepEqual(context.sourceIdentity, { releaseSha, harnessVersion });
+      assert.equal(Object.hasOwn(context.taskLock.tasks[0].sandbox, 'sourceImage'), false);
+      const bundleHash = 'b'.repeat(64);
+      return {
+        bundle: { bundleDir, manifestHash: bundleHash },
+        runtimeProjection: {
+          bindings: {
+            releaseSha,
+            taskLockHash: context.taskLockHash,
+            bundleHash,
+            budgetPolicyHash: context.budgetPolicyHash,
+            brokerPolicyHash: context.brokerPolicyHash,
+            profileId: context.profileId,
+            sessionCeilingMicrousd: context.sessionCeilingMicrousd,
+          },
+        },
+        daytonaPath: '/usr/bin/true',
+        dispose: async () => {
+          events.push('artifact-dispose');
+          if (artifactDisposeError) throw artifactDisposeError;
+        },
+      };
+    },
+    createReleaseRuntime: async (input) => {
+      events.push('runtime');
+      captured.runtimeInput = input;
+      return {
+        providerControl,
+        trialExecutor,
+        runtimeSession,
+        dispose: async () => {
+          events.push('runtime-dispose');
+          if (runtimeDisposeError) throw runtimeDisposeError;
+        },
+      };
+    },
+    loadLiveSteps: async () => ({
+      buildLiveSteps: (input) => {
+        events.push('live');
+        captured.liveInput = input;
+        return {
+          environment: async () => ({ ok: true, missing: [] }),
+          taskLock: async () => ({ ok: true, reason: '' }),
+          controlledPair: async () => null,
+        };
+      },
+    }),
+    runRelease: async (input) => {
+      events.push('run');
+      captured.runInput = input;
+      return {
+        report: { schema: 'fixture-report', evaluationScope: { trust: { ok: true } } },
+        exitCode: 0,
+      };
+    },
+    validateReport: () => ({ ok: true, errors: [] }),
+    reservePrivateReport: (destination) => {
+      events.push('reserve');
+      return { destination, writeAttempted: false, written: false };
+    },
+    writeReservedPrivateReport: (reservation, report) => {
+      events.push(report.schema === 'eval-emergency.v1' ? 'write-emergency' : 'write-trusted');
+      reservation.writeAttempted = true;
+      reservation.written = true;
+      writes.push(structuredClone(report));
+    },
+    closePrivateReportReservation: (reservation) => {
+      if (reservation) events.push('close');
+    },
+    makeReleaseWorkDir: () => {
+      events.push('workdir');
+      return fs.mkdtempSync(path.join(root, 'work-'));
+    },
+    removeReleaseWorkDir: (workDir) => {
+      if (!workDir) return;
+      events.push('remove-workdir');
+      makeReleaseTreeRemovable(workDir);
+      fs.rmSync(workDir, { recursive: true, force: true });
+    },
+    now: () => new Date('2026-08-04T20:00:00.000Z'),
+  };
+  return {
+    root,
+    reportFile,
+    releaseSha,
+    raw: suppliedRaw,
+    events,
+    writes,
+    captured,
+    controls: { providerControl, trialExecutor, runtimeSession },
+    dependencies,
+    cleanup: () => {
+      makeReleaseTreeRemovable(root);
+      fs.rmSync(root, { recursive: true, force: true });
+    },
+  };
+}
+
+test('the injectable artifact preparer disposes malformed code-owned output', async () => {
+  let disposed = false;
+  const context = {
+    releaseSha: 'a'.repeat(40),
+    taskLockHash: '1'.repeat(64),
+    budgetPolicyHash: '2'.repeat(64),
+    brokerPolicyHash: '3'.repeat(64),
+    profileId: 'kimi-k2.7-code',
+    sessionCeilingMicrousd: 10_000_000,
+  };
+  await assert.rejects(
+    prepareReleaseRuntimeArtifacts(context, {
+      artifactFactory: async () => ({
+        bundle: { bundleDir: '/private/code-owned-bundle', manifestHash: 'not-a-hash' },
+        runtimeProjection: { bindings: {} },
+        daytonaPath: '/usr/bin/true',
+        dispose: async () => { disposed = true; },
+      }),
+    }),
+    /manifest hash/i
+  );
+  assert.equal(disposed, true);
+});
+
+test('armed release fixtures produce a self-consistent offline dataset identity', async () => {
+  const fixture = makeReleaseCliFixture();
+  const workDir = fixture.dependencies.makeReleaseWorkDir();
+  try {
+    const dataset = await fixture.dependencies.buildOfflineDataset({
+      outputRoot: path.join(workDir, 'offline-terminal-bench'),
+      taskLock: releaseCliTaskLock(),
+    });
+    const validated = validateOfflineReleaseDataset(dataset, {
+      sourceLock: releaseCliTaskLock(),
+      workDir,
+    });
+    assert.equal(validated.artifactId, dataset.artifactId);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('runReleaseCli reserves, constructs, injects, disposes, then publishes one armed release', async () => {
+  const fixture = makeReleaseCliFixture();
+  const stdout = [];
+  try {
+    const result = await runReleaseCli({
+      argv: ['--provider-key-fd', '9', '--report-file', fixture.reportFile, '--json'],
+      env: { PATH: process.env.PATH ?? '/usr/bin' },
+      stdout: (value) => { fixture.events.push('stdout'); stdout.push(value); },
+      stderr: () => {},
+      dependencies: fixture.dependencies,
+    });
+    assert.equal(result.exitCode, 0);
+    assert.equal(result.runtimeArming.ok, true);
+    assert.deepEqual(fixture.events, [
+      'reserve', 'workdir', 'offline-dataset', 'artifacts', 'runtime', 'live', 'run',
+      'runtime-dispose', 'artifact-dispose', 'write-trusted', 'stdout', 'close', 'remove-workdir',
+    ]);
+    assert.equal(fixture.writes.length, 1);
+    assert.equal(fixture.writes[0].schema, 'fixture-report');
+    assert.equal(stdout.length, 1);
+
+    const { config, steps } = fixture.captured.runInput;
+    assert.equal(config.evaluationScope.trust.ok, false, 'final trust starts blocked');
+    assert.equal(config.runtimeTrustRequired, true);
+    assert.deepEqual(config.releaseTrust, fixture.raw.releaseTrust);
+    assert.notEqual(config.releaseTrust, fixture.raw.releaseTrust, 'releaseTrust is copied from raw configuration');
+    assert.deepEqual(config.runtimeTrustBindings, {
+      releaseSha: fixture.releaseSha,
+      profileId: 'kimi-k2.7-code',
+      taskLockHash: fixture.captured.artifactContext.taskLockHash,
+      bundleHash: 'b'.repeat(64),
+      budgetId: `release-release-${fixture.captured.artifactContext.budgetPolicyHash.slice(0, 24)}`,
+      budgetPolicyHash: fixture.captured.artifactContext.budgetPolicyHash,
+      brokerPolicyHash: fixture.captured.artifactContext.brokerPolicyHash,
+      sessionCeilingMicrousd: 10_000_000,
+    });
+    assert.equal(steps.runtimeSession, fixture.controls.runtimeSession);
+    assert.equal(fixture.captured.liveInput.providerControl, fixture.controls.providerControl);
+    assert.equal(fixture.captured.liveInput.trialExecutor, fixture.controls.trialExecutor);
+    assert.match(fixture.captured.liveInput.lock.datasetRef, /^terminal-bench-derived-offline@/);
+    assert.match(fixture.captured.liveInput.env.HARNESS_EVAL_TB_DATASET_DIR, /offline-terminal-bench/);
+    assert.equal(fixture.captured.runtimeInput.providerKeyFd, 9);
+    assert.equal(fixture.captured.runtimeInput.bundle.bundleDir, path.join(fixture.root, 'bundle'));
+    assert.equal(fixture.captured.runtimeInput.taskLock.tasks[0].sandbox.sourceImage, undefined);
+    assert.match(fixture.captured.runtimeInput.taskLock.datasetRef, /^terminal-bench-derived-offline@/);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('armed CLI rejects duplicate or noncanonical custody/report channels and ambient injection', async () => {
+  const cases = [
+    {
+      argv: [],
+      env: { PATH: '/usr/bin' },
+      expected: /exactly one --provider-key-fd/i,
+    },
+    {
+      argv: ['--provider-key-fd', '9'],
+      env: { PATH: '/usr/bin' },
+      expected: /exactly one --report-file/i,
+    },
+    {
+      argv: ['--provider-key-fd', '9', '--provider-key-fd', '10'],
+      env: { PATH: '/usr/bin' },
+      expected: /at most once/i,
+    },
+    {
+      argv: ['--provider-key-fd', '09'],
+      env: { PATH: '/usr/bin' },
+      expected: /canonical inherited descriptor/i,
+      includeReport: true,
+    },
+    {
+      argv: ['--provider-key-fd', '9'],
+      env: { PATH: '/usr/bin', OPENROUTER_API_KEY: 'raw-secret' },
+      expected: /raw provider credentials/i,
+      includeReport: true,
+    },
+    {
+      argv: ['--provider-key-fd', '9'],
+      env: { PATH: '/usr/bin', node_options: '' },
+      expected: /NODE_OPTIONS/i,
+      includeReport: true,
+    },
+    {
+      argv: ['--provider-key-fd', '9'],
+      env: { PATH: '/usr/bin', HARNESS_EVAL_TB_BUNDLE_DIR: '/tmp/operator-bundle' },
+      expected: /code-owned.*environment/i,
+      includeReport: true,
+    },
+    {
+      argv: ['--provider-key-fd', '9'],
+      env: { PATH: '/usr/bin', HARNESS_EVAL_HARBOR_BIN: '/tmp/operator-harbor' },
+      expected: /code-owned.*environment/i,
+      includeReport: true,
+    },
+    {
+      argv: ['--provider-key-fd', '9'],
+      env: { PATH: '/usr/bin', HARNESS_EVAL_TB_ENV: 'operator-topology' },
+      expected: /code-owned.*environment/i,
+      includeReport: true,
+    },
+  ];
+  for (const item of cases) {
+    const fixture = makeReleaseCliFixture();
+    try {
+      const argv = item.includeReport ? [...item.argv, '--report-file', fixture.reportFile] : item.argv;
+      await assert.rejects(
+        runReleaseCli({ argv, env: item.env, dependencies: fixture.dependencies }),
+        item.expected
+      );
+      assert.equal(fixture.events.includes('artifacts'), false);
+      assert.equal(fixture.events.includes('runtime'), false);
+    } finally {
+      fixture.cleanup();
+    }
+  }
+
+  await assert.rejects(
+    runReleaseCli({ argv: ['--daytona-path', '/tmp/daytona'] }),
+    /runtime artifact paths.*argv/i
+  );
+  await assert.rejects(
+    runReleaseCli({ argv: ['--provider-api-key', 'raw-secret'] }),
+    /inherited --provider-key-fd/i
+  );
+  const positionalSecret = 'sentinel-provider-secret-must-not-echo';
+  await assert.rejects(
+    runReleaseCli({ argv: [positionalSecret] }),
+    (error) => /unsupported release argument/i.test(error.message) && !error.message.includes(positionalSecret)
+  );
+});
+
+test('deterministic and red-trust diagnostics reject provider custody and never construct a runtime', async () => {
+  for (const deterministicOnly of [true, false]) {
+    const fixture = makeReleaseCliFixture({ armed: deterministicOnly });
+    try {
+      await assert.rejects(
+        runReleaseCli({
+          argv: [
+            ...(deterministicOnly ? ['--deterministic-only'] : []),
+            '--provider-key-fd', '9',
+          ],
+          env: { PATH: '/usr/bin' },
+          dependencies: fixture.dependencies,
+        }),
+        /forbidden for deterministic or unarmed/i
+      );
+      assert.equal(fixture.events.includes('runtime'), false);
+    } finally {
+      fixture.cleanup();
+    }
+  }
+
+  for (const deterministicOnly of [true, false]) {
+    const fixture = makeReleaseCliFixture({ armed: deterministicOnly });
+    const stdout = [];
+    fixture.dependencies.runRelease = async ({ config, steps }) => {
+      fixture.events.push('run');
+      assert.equal(config.evaluationScope.trust.ok, false);
+      assert.equal(steps.runtimeSession, undefined);
+      assert.equal(steps.controlledPair, null);
+      if (deterministicOnly) assert.deepEqual(await steps.deterministic(), { passed: 1, failed: 0, skipped: 0 });
+      return {
+        report: { schema: 'diagnostic-report', evaluationScope: { trust: { ok: false } } },
+        exitCode: 1,
+      };
+    };
+    try {
+      const result = await runReleaseCli({
+        argv: [...(deterministicOnly ? ['--deterministic-only'] : []), '--json'],
+        env: { PATH: '/usr/bin' },
+        stdout: (value) => stdout.push(value),
+        dependencies: fixture.dependencies,
+      });
+      assert.equal(result.exitCode, 1);
+      assert.equal(fixture.events.includes('artifacts'), false);
+      assert.equal(fixture.events.includes('runtime'), false);
+      assert.equal(stdout.length, 1);
+    } finally {
+      fixture.cleanup();
+    }
+  }
+});
+
+test('runReleaseCli disposes runtime and artifacts before archiving an execution failure', async () => {
+  const fixture = makeReleaseCliFixture();
+  let stdoutCalls = 0;
+  fixture.dependencies.runRelease = async () => {
+    fixture.events.push('run');
+    throw new Error('simulated release execution failure');
+  };
+  try {
+    await assert.rejects(
+      runReleaseCli({
+        argv: ['--provider-key-fd', '9', '--report-file', fixture.reportFile, '--json'],
+        env: { PATH: '/usr/bin' },
+        stdout: () => { stdoutCalls += 1; },
+        dependencies: fixture.dependencies,
+      }),
+      /release evaluation failed unexpectedly/i
+    );
+    assert.equal(stdoutCalls, 0);
+    assert.deepEqual(fixture.events, [
+      'reserve', 'workdir', 'offline-dataset', 'artifacts', 'runtime', 'live', 'run',
+      'runtime-dispose', 'artifact-dispose', 'write-emergency', 'close', 'remove-workdir',
+    ]);
+    assert.equal(fixture.writes[0].schema, 'eval-emergency.v1');
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('runtime construction failure still disposes prepared artifacts before emergency archival', async () => {
+  const fixture = makeReleaseCliFixture();
+  fixture.dependencies.createReleaseRuntime = async () => {
+    fixture.events.push('runtime');
+    throw new Error('simulated runtime construction failure');
+  };
+  try {
+    await assert.rejects(
+      runReleaseCli({
+        argv: ['--provider-key-fd', '9', '--report-file', fixture.reportFile, '--json'],
+        env: { PATH: '/usr/bin' },
+        stdout: () => { throw new Error('stdout must remain suppressed'); },
+        dependencies: fixture.dependencies,
+      }),
+      /release evaluation failed unexpectedly/i
+    );
+    assert.deepEqual(fixture.events, [
+      'reserve', 'workdir', 'offline-dataset', 'artifacts', 'runtime',
+      'artifact-dispose', 'write-emergency', 'close', 'remove-workdir',
+    ]);
+    assert.equal(fixture.writes[0].schema, 'eval-emergency.v1');
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('artifact disposal failure suppresses trusted archival and stdout after runtime shutdown', async () => {
+  const fixture = makeReleaseCliFixture({ artifactDisposeError: new Error('artifact cleanup failed') });
+  let stdoutCalls = 0;
+  try {
+    await assert.rejects(
+      runReleaseCli({
+        argv: ['--provider-key-fd', '9', '--report-file', fixture.reportFile, '--json'],
+        env: { PATH: '/usr/bin' },
+        stdout: () => { stdoutCalls += 1; },
+        dependencies: fixture.dependencies,
+      }),
+      /release evaluation failed unexpectedly/i
+    );
+    assert.equal(stdoutCalls, 0);
+    assert.deepEqual(fixture.events.slice(0, 10), [
+      'reserve', 'workdir', 'offline-dataset', 'artifacts', 'runtime', 'live', 'run',
+      'runtime-dispose', 'artifact-dispose', 'write-emergency',
+    ]);
+    assert.equal(fixture.events.includes('write-trusted'), false);
+    assert.equal(fixture.writes[0].schema, 'eval-emergency.v1');
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('runtime disposal failure cannot skip artifact disposal or publish trusted output', async () => {
+  const fixture = makeReleaseCliFixture({ runtimeDisposeError: new Error('runtime cleanup failed') });
+  let stdoutCalls = 0;
+  try {
+    await assert.rejects(
+      runReleaseCli({
+        argv: ['--provider-key-fd', '9', '--report-file', fixture.reportFile, '--json'],
+        env: { PATH: '/usr/bin' },
+        stdout: () => { stdoutCalls += 1; },
+        dependencies: fixture.dependencies,
+      }),
+      /release evaluation failed unexpectedly/i
+    );
+    assert.equal(stdoutCalls, 0);
+    assert.ok(fixture.events.indexOf('artifact-dispose') > fixture.events.indexOf('runtime-dispose'));
+    assert.equal(fixture.events.includes('write-trusted'), false);
+    assert.equal(fixture.writes[0].schema, 'eval-emergency.v1');
+  } finally {
+    fixture.cleanup();
   }
 });
 

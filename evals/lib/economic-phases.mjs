@@ -64,5 +64,9 @@ export const CONTEXT_SOURCE_TO_ECONOMIC_PHASE = Object.freeze({
 });
 
 export function economicPhaseForContextSource(contextSource) {
-  return CONTEXT_SOURCE_TO_ECONOMIC_PHASE[contextSource] ?? 'unknown';
+  if (typeof contextSource !== 'string' ||
+      !Object.hasOwn(CONTEXT_SOURCE_TO_ECONOMIC_PHASE, contextSource)) {
+    return 'unknown';
+  }
+  return CONTEXT_SOURCE_TO_ECONOMIC_PHASE[contextSource];
 }

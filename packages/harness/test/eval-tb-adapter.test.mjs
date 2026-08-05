@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -9,6 +10,7 @@ import {
   stampTaskLock,
   tasksOf,
   buildHarborRunArgs,
+  buildHarborIsolatedTrialArgs,
   jobDirFor,
   runHarbor,
   findLatestJobDir,
@@ -219,6 +221,75 @@ test('buildHarborRunArgs uses real Harbor flags and anchors the job identity', (
     '--jobs-dir',
     '/work/jobs',
   ]);
+});
+
+test('buildHarborIsolatedTrialArgs pins one deterministic trial and Compose identity', () => {
+  const args = buildHarborIsolatedTrialArgs({
+    lock: LOCK,
+    task: 'cobol-modernization',
+    trialId: 'pair-1-repetition-1-generic-1',
+    datasetPath: '/work/pinned-terminal-bench',
+    agentRef: 'evals.external.terminal_bench.harbor_agent:StdioBridgeAgent',
+    model: 'moonshotai/kimi-k2.7-code',
+    envName: 'docker',
+    jobName: 'canary-generic-1',
+    jobsDir: '/work/jobs',
+    mounts: [{ type: 'bind', source: '/work/runtime', target: '/opt/eval-runtime', read_only: true }],
+    agentEnv: {
+      HARNESS_EVAL_TB_CONDITION: '/work/generic.json',
+      HARNESS_EVAL_TB_TELEMETRY_FILE: '/work/generic.done.json',
+      HARNESS_EVAL_HOST_NODE: '/opt/node/bin/node',
+      HARNESS_EVAL_HOST_NODE_SHA256: 'a'.repeat(64),
+    },
+  });
+  const trialName = args[args.indexOf('--trial-name') + 1];
+  assert.equal(
+    args[args.indexOf('--extra-docker-compose') + 1],
+    '/work/control/security-compose.json'
+  );
+  assert.match(trialName, /^engineer-[a-f0-9]{24}$/);
+  assert.deepEqual(args.slice(0, 7), [
+    'trial', 'start', '--path', '/work/pinned-terminal-bench/cobol-modernization',
+    '--trial-name', trialName, '--trials-dir',
+  ]);
+  assert.equal(args[7], '/work/jobs/canary-generic-1');
+  assert.deepEqual(args.slice(8, 20), [
+    '--agent', 'evals.external.terminal_bench.harbor_agent:StdioBridgeAgent',
+    '--model', 'moonshotai/kimi-k2.7-code',
+    '--env', 'docker',
+    '--override-cpus', '1',
+    '--override-memory-mb', '2048',
+    '--override-storage-mb', '10240',
+  ]);
+  assert.equal(args.includes('--include-task-name'), false);
+  assert.equal(args.includes('--n-attempts'), false);
+  assert.equal(args.includes('-y'), false);
+  assert.equal(args[args.indexOf('--mounts') + 1], JSON.stringify([
+    { type: 'bind', source: '/work/runtime', target: '/opt/eval-runtime', read_only: true },
+  ]));
+});
+
+test('isolated trial argv refuses caller-selected trial names, missing output identity, and traversal', () => {
+  const valid = {
+    lock: LOCK,
+    task: 'cobol-modernization',
+    trialId: 'pair-1-repetition-1-generic-1',
+    datasetPath: '/work/pinned-terminal-bench',
+    agentRef: 'evals.external.terminal_bench.harbor_agent:StdioBridgeAgent',
+    model: 'moonshotai/kimi-k2.7-code',
+    envName: 'docker',
+    jobName: 'canary-generic-1',
+    jobsDir: '/work/jobs',
+  };
+  for (const input of [
+    { ...valid, trialName: 'caller-controlled' },
+    { ...valid, trialId: '../escape' },
+    { ...valid, datasetPath: 'relative' },
+    { ...valid, jobName: '../escape' },
+    { ...valid, jobsDir: '' },
+  ]) {
+    assert.throws(() => buildHarborIsolatedTrialArgs(input), /field|trial|dataset|job|absolute|safe/i);
+  }
 });
 
 test('buildHarborRunArgs rejects malformed agent, model, and environment values before argv construction', () => {
@@ -577,6 +648,33 @@ test('readHostVerifierReward grades from the host-written trial record only', ()
   assert.equal(readHostVerifierReward(job), null, 'a missing record never grades');
   fs.mkdirSync(path.join(job, 'cobol-modernization__abc2'));
   assert.equal(readHostVerifierReward(job), null, 'ambiguous trial identity never grades');
+});
+
+test('deterministic isolated trial directories support host reward and advisory evidence discovery', () => {
+  const job = tmpdir();
+  const trialId = 'pair-1-repetition-1-generic-1';
+  const trialName = `engineer-${crypto.createHash('sha256').update(trialId).digest('hex').slice(0, 24)}`;
+  const trial = path.join(job, trialName);
+  const verifierDir = path.join(trial, 'verifier');
+  fs.mkdirSync(verifierDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(trial, 'result.json'),
+    JSON.stringify({ verifier_result: { rewards: { reward: 1 } } })
+  );
+  fs.writeFileSync(path.join(verifierDir, 'test-stdout.txt'), '=== 2 passed in 0.42s ===\n');
+
+  assert.deepEqual(readHostVerifierReward(job), {
+    reward: 1,
+    trialName,
+    source: 'harbor-host-result',
+  });
+  const evidence = readTrialResult(job);
+  assert.deepEqual(evidence.pytest, { passed: 2, failed: 0 });
+  assert.match(evidence.treeHash, /^[a-f0-9]{64}$/);
+  assert.equal(evidence.reward, null, 'agent-writable verifier artifacts remain advisory');
+
+  fs.mkdirSync(path.join(job, `engineer-${'f'.repeat(24)}`));
+  assert.equal(readHostVerifierReward(job), null, 'ambiguous deterministic trial identity never grades');
 });
 
 test('readTrialResult never grades agent-writable Harbor verifier rewards', () => {

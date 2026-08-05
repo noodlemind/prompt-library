@@ -249,19 +249,15 @@ class StdioBridgeAgent(BaseAgent):
         instruction_path = pathlib.Path(condition_path).with_suffix(".instruction.txt")
         instruction_path.write_text(instruction)
 
-        # Pass only minimal process settings, the runner's allowlisted config,
-        # and the condition-selected provider credential. Other host tokens and
-        # passwords never enter the Node provider process.
-        condition = self._load_condition()
-        api_key_env = condition.get("apiKeyEnv", "OPENROUTER_API_KEY")
+        # Pass only minimal process settings and the runner's allowlisted
+        # config. Provider credentials belong exclusively to the separate-UID
+        # broker and never enter Harbor or this Node bridge process.
         bridge_env = {
             key: os.environ[key]
             for key in ("LANG", "LC_ALL", "SSL_CERT_FILE", "SSL_CERT_DIR")
             if key in os.environ
         }
         bridge_env.update(getattr(self, "_extra_env", {}))
-        if api_key_env in os.environ:
-            bridge_env[api_key_env] = os.environ[api_key_env]
         descriptor = self._open_attested_node(node, expected_node_hash)
         try:
             descriptor_node = self._node_descriptor_path(descriptor)

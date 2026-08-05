@@ -1,4 +1,5 @@
 const SHA256_HEX = /^[a-f0-9]{64}$/i;
+const EVALUATION_MODES = Object.freeze(['release', 'qualification', 'calibration']);
 
 function finiteNonnegative(value) {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0;
@@ -22,7 +23,7 @@ export function providerSpendPolicy({
   const continuityRequired = ['qualification', 'calibration'].includes(evaluationMode);
   const expectedFingerprint = normalizedKeyFingerprint(expectedQualificationFingerprint);
   const errors = [];
-  if (typeof evaluationMode !== 'string' || evaluationMode.length === 0) {
+  if (typeof evaluationMode !== 'string' || !EVALUATION_MODES.includes(evaluationMode)) {
     errors.push('provider evaluation mode is missing or invalid');
   }
   if (!finiteNonnegative(ceilingUsd)) errors.push('scheduled ceiling is missing or invalid');
@@ -61,10 +62,11 @@ export function resolveProviderSpendPolicy({
   expectedQualificationFingerprint = null,
 } = {}) {
   const hasConfiguredHardLimit = configuredHardLimitUsd !== null && configuredHardLimitUsd !== undefined;
+  const supportedMode = EVALUATION_MODES.includes(evaluationMode);
   const continuityMode = hasConfiguredHardLimit && ['qualification', 'calibration'].includes(evaluationMode);
   const compatibilityFallback = !hasConfiguredHardLimit;
   const resolved = providerSpendPolicy({
-    evaluationMode: continuityMode ? evaluationMode : 'release',
+    evaluationMode: supportedMode ? (continuityMode ? evaluationMode : 'release') : evaluationMode,
     ceilingUsd,
     hardLimitUsd: compatibilityFallback ? ceilingUsd : configuredHardLimitUsd,
     expectedQualificationFingerprint: continuityMode ? expectedQualificationFingerprint : null,

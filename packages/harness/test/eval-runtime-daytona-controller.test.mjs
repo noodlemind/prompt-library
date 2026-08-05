@@ -1,0 +1,393 @@
+import assert from 'node:assert/strict';
+import { test } from 'node:test';
+
+import {
+  createDaytonaSessionController,
+  validateDaytonaAllocation,
+} from '../../../evals/runtime/daytona-controller.mjs';
+
+const SNAPSHOT = 'engineer-eval-dind-release-v1';
+const RELEASE_SHA = 'a'.repeat(40);
+
+function allocation(name, overrides = {}) {
+  return {
+    id: `sandbox-${name}`,
+    name,
+    state: 'started',
+    desiredState: 'started',
+    snapshot: SNAPSHOT,
+    target: 'us',
+    sandboxClass: 'container',
+    cpu: 2,
+    memory: 4,
+    disk: 10,
+    env: {},
+    volumes: [],
+    public: false,
+    labels: {
+      purpose: 'engineer-release-eval',
+      'release-commit': RELEASE_SHA,
+      'provider-secret': 'broker-only',
+    },
+    ...overrides,
+  };
+}
+
+function fakeDaytona() {
+  const calls = [];
+  const sandboxes = new Map();
+  const runCommand = async (file, args, options = {}) => {
+    calls.push({ file, args: args.slice(), options: { ...options, env: { ...(options.env ?? {}) } } });
+    assert.equal(file, '/opt/daytona');
+    if (args[0] === '--version') {
+      return { code: 0, stdout: 'Daytona CLI version v0.203.0\n', stderr: '' };
+    }
+    if (args[0] === 'create') {
+      const name = args[args.indexOf('--name') + 1];
+      const labels = args.flatMap((arg, index) => arg === '--label' ? [args[index + 1]] : [])
+        .map((entry) => entry.split('='))
+        .reduce((result, [key, ...value]) => ({ ...result, [key]: value.join('=') }), {});
+      sandboxes.set(name, allocation(name, { labels }));
+      return { code: 0, stdout: '', stderr: '' };
+    }
+    if (args[0] === 'info') {
+      const observed = [...sandboxes.values()].find((entry) => entry.name === args[1] || entry.id === args[1]);
+      if (!observed) {
+        return {
+          code: 1,
+          stdout: '',
+          stderr: `time="2026-08-04T20:00:00Z" level=fatal msg="Not Found: Sandbox with ID or name ${args[1]} not found"\n`,
+        };
+      }
+      return { code: 0, stdout: JSON.stringify(observed), stderr: '' };
+    }
+    if (args[0] === 'delete') {
+      sandboxes.delete(args[1]);
+      return { code: 0, stdout: '', stderr: '' };
+    }
+    if (args[0] === 'list') {
+      // Daytona CLI v0.203 emits a top-level JSON array for `list --format json`.
+      return { code: 0, stdout: JSON.stringify([...sandboxes.values()]), stderr: '' };
+    }
+    throw new Error(`unexpected Daytona argv: ${args.join(' ')}`);
+  };
+  return { calls, sandboxes, runCommand };
+}
+
+function controller(fake, overrides = {}) {
+  return createDaytonaSessionController({
+    daytonaPath: '/opt/daytona',
+    snapshot: SNAPSHOT,
+    target: 'us',
+    cpu: 2,
+    memoryGiB: 4,
+    diskGiB: 10,
+    ttlMinutes: 120,
+    releaseSha: RELEASE_SHA,
+    sessionBudgetUsd: 1.3,
+    runCommand: fake.runCommand,
+    randomBytes: () => Buffer.alloc(16, 0xab),
+    now: () => new Date('2026-08-04T20:00:00.000Z'),
+    sleep: async () => {},
+    ...overrides,
+  });
+}
+
+test('Daytona allocation validation binds every approved topology field', () => {
+  const good = allocation('engineer-eval-a-1-bbbbbbbb', {
+    labels: {
+      purpose: 'engineer-release-eval',
+      'release-commit': RELEASE_SHA,
+      'provider-secret': 'broker-only',
+      'trial-id': 'trial-1',
+    },
+  });
+  assert.equal(validateDaytonaAllocation(good, {
+    name: good.name,
+    snapshot: SNAPSHOT,
+    target: 'us',
+    cpu: 2,
+    memoryGiB: 4,
+    diskGiB: 10,
+    releaseSha: RELEASE_SHA,
+    trialId: 'trial-1',
+  }).ok, true);
+
+  for (const mutation of [
+    { id: '../unsafe-sandbox-id' },
+    { disk: 100 },
+    { env: { OPENROUTER_API_KEY: 'forbidden' } },
+    { volumes: [{ mountPath: '/secret' }] },
+    { public: true },
+    { sandboxClass: 'linux-vm' },
+    { snapshot: 'other' },
+    { labels: { purpose: 'other' } },
+    { labels: Object.fromEntries(Object.entries(good.labels).filter(([key]) => key !== 'trial-id')) },
+  ]) {
+    const verdict = validateDaytonaAllocation({ ...good, ...mutation }, {
+      name: good.name,
+      snapshot: SNAPSHOT,
+      target: 'us',
+      cpu: 2,
+      memoryGiB: 4,
+      diskGiB: 10,
+      releaseSha: RELEASE_SHA,
+      trialId: 'trial-1',
+    });
+    assert.equal(verdict.ok, false, JSON.stringify(mutation));
+  }
+});
+
+test('one fresh no-env/no-volume sandbox is created per serial trial and deleted externally', async () => {
+  const fake = fakeDaytona();
+  const runtime = controller(fake);
+  const opened = await runtime.beginTrial({
+    trialId: 'cobol-generic-r1',
+    task: 'cobol-modernization',
+    condition: 'generic',
+    reservedUsd: 0.65,
+  });
+
+  assert.equal(opened.allocation.disk, 10);
+  assert.equal(opened.allocation.labels['trial-id'], 'cobol-generic-r1');
+  assert.equal(opened.reservedUsd, 0.65);
+  assert.equal(fake.sandboxes.size, 1);
+  const create = fake.calls.find((entry) => entry.args[0] === 'create');
+  assert.ok(create);
+  assert.deepEqual(fake.calls[0].args, ['--version']);
+  assert.equal(create.args.includes('-e'), false);
+  assert.equal(create.args.includes('--env'), false);
+  assert.equal(create.args.includes('-v'), false);
+  assert.equal(create.args.includes('--volume'), false);
+  assert.deepEqual(create.args.slice(0, 2), ['create', '--name']);
+  assert.equal(create.args[create.args.indexOf('--disk') + 1], '10');
+  assert.equal(create.args[create.args.indexOf('--snapshot') + 1], SNAPSHOT);
+  assert.equal(create.args[create.args.indexOf('--ttl') + 1], '120');
+
+  await assert.rejects(
+    runtime.beginTrial({ trialId: 'parallel', task: 'cobol-modernization', condition: 'harness', reservedUsd: 0.65 }),
+    /one active trial|serial/i
+  );
+
+  const receipt = await runtime.completeTrial({
+    trialId: 'cobol-generic-r1',
+    evidence: { schema: 'trial-final-attestation.v1', evidenceHash: 'c'.repeat(64) },
+  });
+  assert.equal(receipt.deleted, true);
+  assert.equal(receipt.sandboxId, opened.allocation.id);
+  assert.equal(receipt.evidenceHash, 'c'.repeat(64));
+  assert.match(receipt.deletionRequestId, /^[a-f0-9]{32}$/);
+  assert.equal(receipt.deletionRequestedAt, '2026-08-04T20:00:00.000Z');
+  assert.equal(receipt.observedAbsentAt, '2026-08-04T20:00:00.000Z');
+  assert.match(receipt.platformEvidenceHash, /^[a-f0-9]{64}$/);
+  assert.equal(fake.sandboxes.size, 0);
+  assert.ok(fake.calls.some((entry) => entry.args[0] === 'info' && entry.args[1] === opened.allocation.id),
+    'deletion is confirmed against the exact sandbox id, not inferred from one list page');
+  assert.equal(fake.calls.some((entry) => entry.args[0] === 'list'), false);
+  assert.equal(runtime.snapshot().activeTrial, null);
+});
+
+test('every Daytona CLI process receives only the explicit login, config, locale, certificate, proxy, PATH, and HOME allowlist', async () => {
+  const fake = fakeDaytona();
+  const baseEnv = {
+    PATH: '/usr/bin:/bin',
+    HOME: '/Users/release-controller',
+    USER: 'release-controller',
+    LOGNAME: 'release-controller',
+    LANG: 'en_US.UTF-8',
+    LC_ALL: 'en_US.UTF-8',
+    TERM: 'xterm-256color',
+    TMPDIR: '/private/tmp/controller',
+    XDG_CONFIG_HOME: '/Users/release-controller/.config',
+    DAYTONA_API_URL: 'https://app.daytona.io/api',
+    DAYTONA_API_KEY: 'daytona-login-only',
+    SSL_CERT_FILE: '/etc/ssl/cert.pem',
+    HTTPS_PROXY: 'https://proxy.example',
+    NO_PROXY: 'localhost,127.0.0.1',
+    OPENROUTER_API_KEY: 'forbidden-provider-key',
+    ANTHROPIC_API_KEY: 'forbidden-provider-key',
+    AWS_SECRET_ACCESS_KEY: 'forbidden-cloud-provider-key',
+    GITHUB_TOKEN: 'forbidden-source-provider-key',
+    SOME_TOKEN: 'forbidden-ambient-key',
+    NODE_OPTIONS: '--require=/tmp/attacker.cjs',
+  };
+  const runtime = controller(fake, { baseEnv });
+  const opened = await runtime.beginTrial({
+    trialId: 'allowlist-generic-r1',
+    task: 'cobol-modernization',
+    condition: 'generic',
+    reservedUsd: 0.65,
+  });
+  await runtime.completeTrial({
+    trialId: 'allowlist-generic-r1',
+    evidence: { evidenceHash: 'd'.repeat(64) },
+  });
+
+  const expected = {
+    PATH: baseEnv.PATH,
+    HOME: baseEnv.HOME,
+    USER: baseEnv.USER,
+    LOGNAME: baseEnv.LOGNAME,
+    LANG: baseEnv.LANG,
+    LC_ALL: baseEnv.LC_ALL,
+    TERM: baseEnv.TERM,
+    TMPDIR: baseEnv.TMPDIR,
+    XDG_CONFIG_HOME: baseEnv.XDG_CONFIG_HOME,
+    DAYTONA_API_URL: baseEnv.DAYTONA_API_URL,
+    DAYTONA_API_KEY: baseEnv.DAYTONA_API_KEY,
+    SSL_CERT_FILE: baseEnv.SSL_CERT_FILE,
+    HTTPS_PROXY: baseEnv.HTTPS_PROXY,
+    NO_PROXY: baseEnv.NO_PROXY,
+  };
+  assert.equal(opened.allocation.id.startsWith('sandbox-'), true);
+  assert.ok(fake.calls.length >= 4);
+  for (const call of fake.calls) assert.deepEqual(call.options.env, expected);
+});
+
+test('an unreviewed Daytona CLI version fails before sandbox creation', async () => {
+  const fake = fakeDaytona();
+  const original = fake.runCommand;
+  fake.runCommand = async (file, args) => args[0] === '--version'
+    ? { code: 0, stdout: 'Daytona CLI version v0.204.0\n', stderr: '' }
+    : original(file, args);
+  const runtime = controller(fake);
+  await assert.rejects(
+    runtime.beginTrial({ trialId: 'version-drift', task: 'cobol-modernization', condition: 'generic', reservedUsd: 0.65 }),
+    /Daytona CLI version/i
+  );
+  assert.equal(fake.calls.some((entry) => entry.args[0] === 'create'), false);
+});
+
+test('allocation drift and provisioning failure both fail closed and delete the exact sandbox', async () => {
+  const fake = fakeDaytona();
+  const originalRun = fake.runCommand;
+  fake.runCommand = async (file, args) => {
+    const result = await originalRun(file, args);
+    if (args[0] === 'info' && result.code === 0) {
+      const value = JSON.parse(result.stdout);
+      value.env = { LEAK: 'present' };
+      return { ...result, stdout: JSON.stringify(value) };
+    }
+    return result;
+  };
+  const runtime = controller(fake);
+  await assert.rejects(
+    runtime.beginTrial({ trialId: 'drift', task: 'cobol-modernization', condition: 'generic', reservedUsd: 0.65 }),
+    /allocation.*invalid|environment/i
+  );
+  assert.equal(fake.sandboxes.size, 0);
+  assert.ok(fake.calls.some((entry) => entry.args[0] === 'delete'));
+
+  const second = fakeDaytona();
+  const withProvision = controller(second, {
+    provisionTrial: async () => { throw new Error('supervisor channel failed'); },
+  });
+  await assert.rejects(
+    withProvision.beginTrial({ trialId: 'provision', task: 'cobol-modernization', condition: 'generic', reservedUsd: 0.65 }),
+    /supervisor channel failed/i
+  );
+  assert.equal(second.sandboxes.size, 0);
+});
+
+test('a lost create response reconciles and deletes the sandbox created under the generated name', async () => {
+  const fake = fakeDaytona();
+  const originalRun = fake.runCommand;
+  fake.runCommand = async (file, args, options) => {
+    const result = await originalRun(file, args, options);
+    if (args[0] === 'create') {
+      return { code: 70, stdout: '', stderr: 'simulated lost create response' };
+    }
+    return result;
+  };
+  const runtime = controller(fake);
+
+  await assert.rejects(
+    runtime.beginTrial({
+      trialId: 'lost-create-response',
+      task: 'cobol-modernization',
+      condition: 'generic',
+      reservedUsd: 0.65,
+    }),
+    /sandbox creation failed/i
+  );
+
+  assert.equal(fake.sandboxes.size, 0);
+  assert.ok(fake.calls.some((entry) => entry.args[0] === 'delete'),
+    'a possibly committed create is reconciled by generated sandbox name');
+  assert.equal(runtime.snapshot().activeTrial, null);
+});
+
+test('proven eventual absence remains authoritative after a lost delete response', async () => {
+  const fake = fakeDaytona();
+  const originalRun = fake.runCommand;
+  fake.runCommand = async (file, args, options) => {
+    const result = await originalRun(file, args, options);
+    if (args[0] === 'delete') {
+      return { code: 70, stdout: '', stderr: 'simulated lost delete response' };
+    }
+    return result;
+  };
+  const runtime = controller(fake);
+  const opened = await runtime.beginTrial({
+    trialId: 'lost-delete-response',
+    task: 'cobol-modernization',
+    condition: 'generic',
+    reservedUsd: 0.65,
+  });
+
+  const receipt = await runtime.completeTrial({
+    trialId: 'lost-delete-response',
+    evidence: { evidenceHash: 'e'.repeat(64) },
+  });
+
+  assert.equal(receipt.deleted, true);
+  assert.equal(receipt.sandboxId, opened.allocation.id);
+  assert.equal(fake.sandboxes.size, 0);
+  assert.equal(runtime.snapshot().receipts.length, 1);
+});
+
+test('budget, identifiers, commands, and exported evidence fail closed', async () => {
+  const fake = fakeDaytona();
+  const runtime = controller(fake);
+  await assert.rejects(
+    runtime.beginTrial({ trialId: '../escape', task: 'cobol-modernization', condition: 'generic', reservedUsd: 0.65 }),
+    /trialId/i
+  );
+  await assert.rejects(
+    runtime.beginTrial({ trialId: 'too-expensive', task: 'cobol-modernization', condition: 'generic', reservedUsd: 1.31 }),
+    /budget/i
+  );
+
+  await runtime.beginTrial({ trialId: 'valid', task: 'cobol-modernization', condition: 'generic', reservedUsd: 0.65 });
+  await assert.rejects(
+    runtime.completeTrial({ trialId: 'valid', evidence: { OPENROUTER_API_KEY: 'must-not-export' } }),
+    /evidence|secret/i
+  );
+  assert.equal(fake.sandboxes.size, 0, 'invalid evidence still triggers whole-sandbox deletion');
+  assert.equal(runtime.snapshot().receipts[0].deleted, true);
+  assert.equal(runtime.snapshot().receipts[0].evidenceHash, null);
+  assert.equal(runtime.snapshot().reservedUsd, 0.65,
+    'a paid reservation remains committed even when retained evidence is rejected');
+  await assert.rejects(
+    runtime.beginTrial({ trialId: 'over-budget', task: 'cobol-modernization', condition: 'generic', reservedUsd: 0.66 }),
+    /budget/i
+  );
+  assert.ok(fake.calls.every(({ args }) => args.every((arg) => typeof arg === 'string' && !arg.includes('must-not-export'))));
+});
+
+test('session finalization requires every reservation to have a deletion receipt in order', async () => {
+  const fake = fakeDaytona();
+  const runtime = controller(fake);
+  await runtime.beginTrial({ trialId: 'g', task: 'cobol-modernization', condition: 'generic', reservedUsd: 0.6 });
+  await runtime.completeTrial({ trialId: 'g', evidence: { evidenceHash: '1'.repeat(64) } });
+  await runtime.beginTrial({ trialId: 'h', task: 'cobol-modernization', condition: 'harness', reservedUsd: 0.6 });
+  await runtime.completeTrial({ trialId: 'h', evidence: { evidenceHash: '2'.repeat(64) } });
+  const session = runtime.finalizeSession();
+  assert.equal(session.deleted, true);
+  assert.deepEqual(session.trials.map((entry) => entry.trialId), ['g', 'h']);
+  assert.equal(session.reservedUsd, 1.2);
+  await assert.rejects(
+    runtime.beginTrial({ trialId: 'late', task: 'cobol-modernization', condition: 'generic', reservedUsd: 0.1 }),
+    /finalized/i
+  );
+});

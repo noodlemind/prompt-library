@@ -22,6 +22,7 @@ import { openAiToolDriver } from '../../lib/drivers.mjs';
 import { getProfile } from '../../lib/model-profiles.mjs';
 import { createBudget } from '../../lib/budget.mjs';
 import { createTelemetry } from '../../lib/telemetry.mjs';
+import { requestProviderBroker } from '../../runtime/provider-broker.mjs';
 
 export const BRIDGE_TOOLS = [
   {
@@ -42,6 +43,207 @@ function sha256(value) {
 
 const REDACTED_SECRET = '[REDACTED_SECRET]';
 const MAX_PERSISTED_DONE_BYTES = 4 * 1024 * 1024;
+const RAW_CREDENTIAL_ENV = /(?:^|_)(?:API_?KEY|KEY|AUTH_?TOKEN|ACCESS_?TOKEN|TOKEN|PASSWORD|PASSWD|SECRET|CREDENTIAL)(?:_|$)/i;
+const BROKER_ENV_FIELDS = Object.freeze({
+  socketPath: 'ENGINEER_PROVIDER_BROKER_SOCKET',
+  leaseId: 'ENGINEER_PROVIDER_LEASE_ID',
+  leaseDigest: 'ENGINEER_PROVIDER_LEASE_DIGEST',
+  leaseSequence: 'ENGINEER_PROVIDER_LEASE_SEQUENCE',
+  trialId: 'ENGINEER_PROVIDER_TRIAL_ID',
+});
+const BROKER_ENV_NAMES = Object.freeze(Object.values(BROKER_ENV_FIELDS));
+
+function safeRuntimeId(value) {
+  return typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(value);
+}
+
+function exactBrokerRuntime(value) {
+  if (value == null || typeof value !== 'object' || Array.isArray(value) ||
+      Object.keys(value).sort().join(',') !== 'binding,socketPath') return false;
+  const binding = value.binding;
+  return typeof value.socketPath === 'string' && value.socketPath.startsWith('/') &&
+    value.socketPath.length <= 100 && !value.socketPath.includes('\0') &&
+    !value.socketPath.split('/').includes('..') &&
+    binding != null && typeof binding === 'object' && !Array.isArray(binding) &&
+    Object.keys(binding).sort().join(',') === 'leaseDigest,leaseId,leaseSequence,trialId' &&
+    safeRuntimeId(binding.leaseId) && safeRuntimeId(binding.trialId) &&
+    typeof binding.leaseDigest === 'string' && /^[a-f0-9]{64}$/.test(binding.leaseDigest) &&
+    Number.isSafeInteger(binding.leaseSequence) && binding.leaseSequence >= 1 && binding.leaseSequence <= 1_000_000;
+}
+
+function sameBrokerRuntime(left, right) {
+  return left.socketPath === right.socketPath &&
+    left.binding.leaseId === right.binding.leaseId &&
+    left.binding.leaseDigest === right.binding.leaseDigest &&
+    left.binding.leaseSequence === right.binding.leaseSequence &&
+    left.binding.trialId === right.binding.trialId;
+}
+
+/** Resolve the paid provider boundary from supervisor-issued runtime state, never a task file. */
+export function resolveProviderRuntimeBoundary({ condition, profile, environment = process.env } = {}) {
+  if (condition == null || typeof condition !== 'object' || Array.isArray(condition)) {
+    throw new Error('provider runtime condition is malformed');
+  }
+  if (profile == null || typeof profile !== 'object' || Array.isArray(profile)) {
+    throw new Error('provider runtime profile is malformed');
+  }
+  if (environment == null || typeof environment !== 'object' || Array.isArray(environment)) {
+    throw new Error('provider runtime environment is malformed');
+  }
+  const explicit = condition.runtime?.providerBroker ?? null;
+  const presentBrokerFields = BROKER_ENV_NAMES.filter((name) => Object.hasOwn(environment, name));
+  if (profile.host !== 'openrouter') {
+    if (explicit != null || presentBrokerFields.length > 0) {
+      throw new Error('provider broker is valid only for the controlled OpenRouter profile');
+    }
+    return null;
+  }
+
+  const configuredRawName = condition.apiKeyEnv ?? 'OPENROUTER_API_KEY';
+  const rawCredentialNames = Object.keys(environment).filter((name) =>
+    !BROKER_ENV_NAMES.includes(name) &&
+    (RAW_CREDENTIAL_ENV.test(name) || (name === configuredRawName && environment[name] != null))
+  );
+  if (rawCredentialNames.length > 0) {
+    throw new Error('controlled OpenRouter execution refuses every raw credential environment path');
+  }
+  if (presentBrokerFields.length !== BROKER_ENV_NAMES.length) {
+    throw new Error('controlled OpenRouter execution requires the complete isolated provider broker binding');
+  }
+
+  const sequenceText = environment[BROKER_ENV_FIELDS.leaseSequence];
+  const derived = {
+    socketPath: environment[BROKER_ENV_FIELDS.socketPath],
+    binding: {
+      leaseId: environment[BROKER_ENV_FIELDS.leaseId],
+      leaseDigest: environment[BROKER_ENV_FIELDS.leaseDigest],
+      leaseSequence: typeof sequenceText === 'string' && /^[1-9][0-9]{0,6}$/.test(sequenceText)
+        ? Number(sequenceText)
+        : Number.NaN,
+      trialId: environment[BROKER_ENV_FIELDS.trialId],
+    },
+  };
+  if (!exactBrokerRuntime(derived)) {
+    throw new Error('controlled OpenRouter provider broker binding is malformed or out of bounds');
+  }
+  if (typeof condition.providerUrl === 'string' && condition.providerUrl !== profile.url) {
+    throw new Error('provider broker refuses a condition-selected endpoint override');
+  }
+  if (explicit != null && (!exactBrokerRuntime(explicit) || !sameBrokerRuntime(explicit, derived))) {
+    throw new Error('condition provider broker mismatch with the signed runtime environment');
+  }
+  return structuredClone(derived);
+}
+
+function brokerHttpResponse(status, data) {
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    headers: { get: () => null },
+    json: async () => structuredClone(data),
+  };
+}
+
+/**
+ * Adapt the lease-bound Unix-socket broker to the driver's fetch boundary.
+ * The credential never exists in this process; `broker-placeholder` only
+ * satisfies the generic driver's non-empty constructor contract.
+ */
+export function createBrokerFetchImpl({ socketPath, binding, profile, requestImpl = requestProviderBroker } = {}) {
+  if (typeof socketPath !== 'string' || !socketPath.startsWith('/') || socketPath.length > 100) {
+    throw new Error('provider broker socket must be a bounded absolute path');
+  }
+  const requiredBindingFields = ['leaseId', 'leaseDigest', 'trialId', 'leaseSequence'];
+  if (!binding || Object.keys(binding).sort().join(',') !== requiredBindingFields.slice().sort().join(',') ||
+      !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(String(binding.leaseId ?? '')) ||
+      !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(String(binding.trialId ?? '')) ||
+      !/^[a-f0-9]{64}$/.test(String(binding.leaseDigest ?? '')) ||
+      !Number.isSafeInteger(binding.leaseSequence) || binding.leaseSequence < 1) {
+    throw new Error('provider broker binding is malformed');
+  }
+  if (profile?.host !== 'openrouter' || typeof profile?.url !== 'string' ||
+      typeof profile?.model !== 'string' || profile?.provider?.allowFallbacks !== false ||
+      !Array.isArray(profile?.provider?.order) || profile.provider.order.length !== 1 ||
+      !Array.isArray(profile?.provider?.expectedResolvedNames) || profile.provider.expectedResolvedNames.length !== 1 ||
+      !Number.isSafeInteger(profile?.maxTokens) || profile.maxTokens < 1) {
+    throw new Error('provider broker requires one exact controlled OpenRouter profile');
+  }
+  if (typeof requestImpl !== 'function') throw new Error('provider broker request implementation is required');
+  let sequence = 0;
+  return async function brokerFetch(endpoint, options = {}) {
+    if (endpoint !== profile.url || options.method !== 'POST' || typeof options.body !== 'string') {
+      return brokerHttpResponse(400, { error: { message: 'provider broker request boundary rejected' } });
+    }
+    let body;
+    try {
+      body = JSON.parse(options.body);
+    } catch {
+      return brokerHttpResponse(400, { error: { message: 'provider broker request body was not JSON' } });
+    }
+    sequence += 1;
+    const request = {
+      version: 1,
+      type: 'provider-request',
+      ...binding,
+      sequence,
+      attemptId: `broker-${binding.leaseSequence}-${sequence}`,
+      endpoint: profile.url,
+      model: body.model,
+      provider: {
+        order: Array.isArray(body.provider?.order) ? body.provider.order.slice() : [],
+        expectedResolvedNames: profile.provider.expectedResolvedNames.slice(),
+        allowFallbacks: body.provider?.allow_fallbacks,
+      },
+      settings: {
+        temperature: Object.hasOwn(body, 'temperature') ? body.temperature : null,
+        reasoning: Object.hasOwn(body, 'reasoning') ? body.reasoning : null,
+        toolChoice: body.tool_choice,
+      },
+      maxTokens: body.max_tokens,
+      messages: body.messages,
+      tools: body.tools,
+    };
+    let response;
+    try {
+      response = await requestImpl({ socketPath, request });
+    } catch {
+      return brokerHttpResponse(502, { error: { message: 'provider broker channel failed' } });
+    }
+    if (response?.ok !== true) {
+      const kind = String(response?.error?.kind ?? 'broker');
+      return brokerHttpResponse(
+        ['policy', 'replay', 'budget', 'invalid-ipc'].includes(kind) ? 400 : 502,
+        { error: { message: `provider broker rejected request: ${kind}` } }
+      );
+    }
+    const usage = response?.evidence?.usage;
+    if (!usage || !Number.isSafeInteger(usage.promptTokens) || !Number.isSafeInteger(usage.outputTokens) ||
+        typeof usage.providerCostUsd !== 'number' || !Number.isFinite(usage.providerCostUsd)) {
+      return brokerHttpResponse(502, { error: { message: 'provider broker usage evidence was incomplete' } });
+    }
+    const data = {
+      id: response.attemptId,
+      model: profile.model,
+      provider: profile.provider.expectedResolvedNames[0],
+      choices: [{
+        message: response.message,
+        finish_reason: response.finishReason,
+      }],
+      usage: {
+        prompt_tokens: usage.promptTokens,
+        completion_tokens: usage.outputTokens,
+        cost: usage.providerCostUsd,
+        ...(usage.cachedTokensComplete === true && Number.isSafeInteger(usage.cachedTokens)
+          ? { prompt_tokens_details: { cached_tokens: usage.cachedTokens } }
+          : {}),
+        ...(usage.reasoningTokensComplete === true && Number.isSafeInteger(usage.reasoningTokens)
+          ? { completion_tokens_details: { reasoning_tokens: usage.reasoningTokens } }
+          : {}),
+      },
+    };
+    return brokerHttpResponse(200, data);
+  };
+}
 
 function activeSecrets(values) {
   return [...new Set((values ?? []).filter((value) => typeof value === 'string' && value.length >= 8))].sort(
@@ -494,14 +696,27 @@ async function main() {
     ? { ...profile, url: condition.providerUrl }
     : profile;
   const apiKeyEnv = condition.apiKeyEnv ?? 'OPENROUTER_API_KEY';
-  const activeApiKey = process.env[apiKeyEnv] ?? null;
-  const apiKey = activeApiKey ?? 'local';
+  const brokerRuntime = resolveProviderRuntimeBoundary({ condition, profile, environment: process.env });
+  const activeApiKey = brokerRuntime == null ? (process.env[apiKeyEnv] ?? null) : null;
+  const brokerFetch = brokerRuntime == null ? null : createBrokerFetchImpl({
+    socketPath: brokerRuntime.socketPath,
+    binding: brokerRuntime.binding,
+    profile,
+  });
+  const apiKey = brokerRuntime == null ? (activeApiKey ?? 'local') : 'broker-placeholder';
   const telemetry = createTelemetry();
   const budget = createBudget({
     ceilingUsd: condition.limits?.trialCeilingUsd ?? profile.trialCeilingUsd,
     label: `${condition.id}-trial`,
   });
-  const driver = openAiToolDriver({ profile: effectiveProfile, apiKey, budget, telemetry, maxTokens: condition.limits?.maxOutputTokens });
+  const driver = openAiToolDriver({
+    profile: effectiveProfile,
+    apiKey,
+    budget,
+    telemetry,
+    maxTokens: condition.limits?.maxOutputTokens,
+    ...(brokerFetch ? { fetchImpl: brokerFetch, transientRetries: 0 } : {}),
+  });
   if (!driver) throw new Error('driver not configured: check profile and API key environment');
   // The runner reads the done file to charge the release budget and build the
   // eval-run document; runStdioAgent persists it before the stdout done line

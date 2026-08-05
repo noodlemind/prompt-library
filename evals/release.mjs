@@ -38,6 +38,12 @@ import {
   MEMORY_ECONOMIC_PHASES,
   ECONOMIC_PHASE_FIELDS,
 } from './lib/economic-phases.mjs';
+import { canonicalSha256, protocolDocumentHash } from './runtime/protocol.mjs';
+import { controlledProviderBrokerStaticPolicyHash } from './runtime/controlled-provider-policy.mjs';
+import {
+  isRuntimeControllerReadiness,
+  isRuntimeSessionFinal,
+} from './runtime/session-controller.mjs';
 
 export const MAX_RELEASE_API_USD = 20;
 export const MAX_QUALIFICATION_API_USD = 1.3;
@@ -52,28 +58,251 @@ const RELEASE_TRUST_CAPABILITIES = [
   'escapedProcessesAndContainersReaped',
   'imageResourcesAndNetworkObserved',
 ];
+const RUNTIME_CONTROLLER_CAPABILITIES = [
+  'perTrialSandboxRequired',
+  'wholeSandboxDeletionRequired',
+  'authenticatedSupervisorEvidenceRequired',
+  'exactBudgetReconciliationRequired',
+];
 
-export function releaseTrustVerdict(config, observedEvidence = null) {
+function configuredReleaseTrust(config) {
   const configuredCapabilities = config?.releaseTrust?.capabilities ?? {};
-  const observedCapabilities = observedEvidence?.capabilities ?? {};
-  // Configuration is a kill switch and a declaration of intent, never the
-  // trust root. A committed YAML edit cannot attest runtime properties. Each
-  // capability must also arrive from code-owned, runtime-observed evidence.
-  const missing = RELEASE_TRUST_CAPABILITIES.filter((name) =>
-    configuredCapabilities[name] !== true || observedCapabilities[name] !== true
-  );
-  const statusAttested = config?.releaseTrust?.status === 'attested';
-  const evidenceAttested = observedEvidence?.source === 'runtime-observed' &&
-    typeof observedEvidence?.evidenceHash === 'string' && SHA256_HEX.test(observedEvidence.evidenceHash);
+  const missing = RELEASE_TRUST_CAPABILITIES.filter((name) => configuredCapabilities[name] !== true);
   return {
-    ok: statusAttested && evidenceAttested && missing.length === 0,
-    status: statusAttested && evidenceAttested && missing.length === 0 ? 'attested' : 'blocked',
-    configuredStatus: statusAttested ? 'attested' : 'blocked',
+    statusAttested: config?.releaseTrust?.status === 'attested',
+    configuredCapabilities,
+    missing,
+  };
+}
+
+/**
+ * A code-owned configuration may arm construction of the external runtime,
+ * but it is never final release evidence. Final trust remains blocked until
+ * the branded session final, retained trials, deletion receipts, and provider
+ * reconciliation all bind to this invocation.
+ */
+export function releaseRuntimeArmingVerdict(config) {
+  const configured = configuredReleaseTrust(config);
+  const ok = configured.statusAttested && configured.missing.length === 0;
+  return {
+    ok,
+    status: ok ? 'armed' : 'blocked',
+    configuredStatus: configured.statusAttested ? 'attested' : 'blocked',
+    requiredCapabilities: RELEASE_TRUST_CAPABILITIES.slice(),
+    missingCapabilities: configured.missing.slice(),
+    reason: !configured.statusAttested
+      ? 'release trust kill switch is blocked'
+      : configured.missing.length > 0
+        ? 'configured release trust capabilities are incomplete'
+        : null,
+  };
+}
+
+export function runtimeReadinessVerdict(config, observedEvidence = null, {
+  releaseSha = null,
+} = {}) {
+  const configured = configuredReleaseTrust(config);
+  const missingReadiness = RUNTIME_CONTROLLER_CAPABILITIES.filter((name) => observedEvidence?.[name] !== true);
+  const identityValid = typeof observedEvidence?.sessionId === 'string' && observedEvidence.sessionId.length > 0 &&
+    /^[a-f0-9]{40,64}$/.test(String(observedEvidence?.releaseSha ?? '')) &&
+    (releaseSha == null || observedEvidence.releaseSha === releaseSha);
+  const evidenceValid = isRuntimeControllerReadiness(observedEvidence) &&
+    observedEvidence.schema === 'engineer-runtime-controller-readiness.v1' &&
+    observedEvidence.source === 'external-controller' &&
+    observedEvidence.runtimeAttested === false && observedEvidence.providerAuthorized === false &&
+    identityValid && missingReadiness.length === 0;
+  const ok = configured.statusAttested && configured.missing.length === 0 && evidenceValid;
+  return {
+    ok,
+    status: ok ? 'armed' : 'blocked',
+    configuredStatus: configured.statusAttested ? 'attested' : 'blocked',
     evidenceSource: observedEvidence?.source ?? null,
-    evidenceHash: evidenceAttested ? observedEvidence.evidenceHash : null,
+    readinessHash: evidenceValid ? canonicalSha256(observedEvidence) : null,
+    sessionId: evidenceValid ? observedEvidence.sessionId : null,
+    releaseSha: evidenceValid ? observedEvidence.releaseSha : null,
+    runtimeAttested: false,
+    providerAuthorized: false,
+    requiredCapabilities: RUNTIME_CONTROLLER_CAPABILITIES.slice(),
+    missingCapabilities: [...new Set([...configured.missing, ...missingReadiness])],
+    reason: !configured.statusAttested
+      ? 'release trust kill switch is blocked'
+      : configured.missing.length > 0
+        ? 'configured release trust capabilities are incomplete'
+        : !identityValid
+          ? 'controller readiness identity binding is invalid'
+          : missingReadiness.length > 0
+            ? 'controller readiness capabilities are incomplete'
+            : evidenceValid
+              ? null
+              : 'controller readiness was not issued by the in-process runtime controller',
+  };
+}
+
+function sameHashMultiset(left, right) {
+  if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length) return false;
+  if (![...left, ...right].every((value) => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value))) return false;
+  return isDeepStrictEqual(left.slice().sort(), right.slice().sort());
+}
+
+export function releaseTrustVerdict(config, observedEvidence = null, {
+  releaseSha = null,
+  expectedTrialHashes = null,
+  expectedSessionId = null,
+  expectedBindings = null,
+  expectedSessionCeilingMicrousd = null,
+} = {}) {
+  const configured = configuredReleaseTrust(config);
+  const orderedTrialHashes = Array.isArray(observedEvidence?.trials)
+    ? observedEvidence.trials.map((trial) => trial?.trialAttestationHash)
+    : [];
+  const deletionReceiptHashes = Array.isArray(observedEvidence?.trials)
+    ? observedEvidence.trials.map((trial) => trial?.deletionReceiptHash)
+    : [];
+  const finalizedTrialsAttested = orderedTrialHashes.length > 0 &&
+    orderedTrialHashes.every((value) => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value)) &&
+    deletionReceiptHashes.length === orderedTrialHashes.length &&
+    deletionReceiptHashes.every((value) => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value)) &&
+    new Set(orderedTrialHashes).size === orderedTrialHashes.length;
+  const sessionIdValid = typeof observedEvidence?.sessionId === 'string' && observedEvidence.sessionId.length > 0 &&
+    (expectedSessionId == null || observedEvidence.sessionId === expectedSessionId);
+  const identityValid = sessionIdValid &&
+    /^[a-f0-9]{40,64}$/.test(String(observedEvidence?.sessionBindings?.releaseSha ?? '')) &&
+    (releaseSha == null || observedEvidence.sessionBindings.releaseSha === releaseSha);
+  const bindingFields = [
+    'releaseSha', 'profileId', 'taskLockHash', 'bundleHash', 'budgetId', 'budgetPolicyHash',
+    'brokerPolicyHash',
+  ];
+  const bindingsMatched = expectedBindings == null || (
+    expectedBindings != null && typeof expectedBindings === 'object' &&
+    bindingFields.every((field) => observedEvidence?.sessionBindings?.[field] === expectedBindings[field])
+  );
+  const sessionBudgetMatched = expectedSessionCeilingMicrousd == null || (
+    Number.isSafeInteger(expectedSessionCeilingMicrousd) && expectedSessionCeilingMicrousd > 0 &&
+    observedEvidence?.budget?.sessionCeilingMicrousd === expectedSessionCeilingMicrousd
+  );
+  const trialEvidenceMatched = expectedTrialHashes == null || sameHashMultiset(orderedTrialHashes, expectedTrialHashes);
+  const evidenceAttested = isRuntimeSessionFinal(observedEvidence) &&
+    observedEvidence.schema === 'engineer-runtime-session-final-attestation.v1' &&
+    identityValid && bindingsMatched && sessionBudgetMatched && finalizedTrialsAttested && trialEvidenceMatched &&
+    typeof observedEvidence.chainHead === 'string' && /^[a-f0-9]{64}$/.test(observedEvidence.chainHead) &&
+    typeof observedEvidence.evidenceArchiveHash === 'string' && /^[a-f0-9]{64}$/.test(observedEvidence.evidenceArchiveHash);
+  // Configuration remains only a kill switch. The private module brand can
+  // exist only after signed per-trial evidence, cleanup, external deletion,
+  // and exact session reconciliation have all succeeded.
+  const missing = RELEASE_TRUST_CAPABILITIES.filter((name) =>
+    configured.configuredCapabilities[name] !== true || !evidenceAttested
+  );
+  const ok = configured.statusAttested && evidenceAttested && missing.length === 0;
+  return {
+    ok,
+    status: ok ? 'attested' : 'blocked',
+    configuredStatus: configured.statusAttested ? 'attested' : 'blocked',
+    evidenceSource: evidenceAttested ? 'runtime-observed' : null,
+    evidenceHash: evidenceAttested ? protocolDocumentHash(observedEvidence) : null,
+    sessionId: evidenceAttested ? observedEvidence.sessionId : null,
+    finalizedTrialsAttested: evidenceAttested,
+    trialEvidenceMatched,
+    sessionIdMatched: sessionIdValid,
+    bindingsMatched,
+    sessionBudgetMatched,
+    orderedTrialHashes: evidenceAttested ? orderedTrialHashes.slice() : [],
+    deletionReceiptHashes: evidenceAttested ? deletionReceiptHashes.slice() : [],
+    chainHead: evidenceAttested ? observedEvidence.chainHead : null,
+    evidenceArchiveHash: evidenceAttested ? observedEvidence.evidenceArchiveHash : null,
     requiredCapabilities: RELEASE_TRUST_CAPABILITIES.slice(),
     missingCapabilities: missing,
   };
+}
+
+export function providerReconciliationVerdict(observedEvidence = null, {
+  expectedSessionSpentMicrousd = null,
+  runtimeSessionSpentMicrousd = expectedSessionSpentMicrousd,
+  retainedTrialSpentMicrousd = runtimeSessionSpentMicrousd,
+  schedulerSpentMicrousd = runtimeSessionSpentMicrousd,
+} = {}) {
+  const boundedInteger = (value) => Number.isSafeInteger(value) && value >= 0 && value <= 10_000_000_000
+    ? value
+    : null;
+  const projected = {
+    schema: observedEvidence?.schema === 'engineer-release-provider-reconciliation.v1'
+      ? observedEvidence.schema
+      : null,
+    verified: false,
+    keyFingerprint: typeof observedEvidence?.keyFingerprint === 'string' &&
+      /^[a-f0-9]{64}$/.test(observedEvidence.keyFingerprint)
+      ? observedEvidence.keyFingerprint
+      : null,
+    preflightRemainingMicrousd: boundedInteger(observedEvidence?.preflightRemainingMicrousd),
+    postflightRemainingMicrousd: boundedInteger(observedEvidence?.postflightRemainingMicrousd),
+    observedAllowanceDeltaMicrousd: boundedInteger(observedEvidence?.observedAllowanceDeltaMicrousd),
+    sessionSpentMicrousd: boundedInteger(observedEvidence?.sessionSpentMicrousd),
+    differenceMicrousd: boundedInteger(observedEvidence?.differenceMicrousd),
+    toleranceMicrousd: boundedInteger(observedEvidence?.toleranceMicrousd),
+    runtimeSessionSpentMicrousd: boundedInteger(runtimeSessionSpentMicrousd),
+    retainedTrialSpentMicrousd: boundedInteger(retainedTrialSpentMicrousd),
+    schedulerSpentMicrousd: boundedInteger(schedulerSpentMicrousd),
+    runtimeRetainedSchedulerMatched: false,
+    reason: 'missing-or-malformed',
+  };
+  const complete = projected.schema != null && projected.keyFingerprint != null &&
+    [
+      projected.preflightRemainingMicrousd,
+      projected.postflightRemainingMicrousd,
+      projected.observedAllowanceDeltaMicrousd,
+      projected.sessionSpentMicrousd,
+      projected.differenceMicrousd,
+      projected.toleranceMicrousd,
+    ].every((value) => value != null);
+  if (!complete || observedEvidence?.verified !== true) return projected;
+  if (projected.observedAllowanceDeltaMicrousd !==
+      projected.preflightRemainingMicrousd - projected.postflightRemainingMicrousd ||
+      projected.differenceMicrousd !== Math.abs(
+        projected.observedAllowanceDeltaMicrousd - projected.sessionSpentMicrousd
+      )) {
+    return { ...projected, reason: 'allowance-arithmetic-mismatch' };
+  }
+  if (projected.differenceMicrousd > projected.toleranceMicrousd) {
+    return { ...projected, reason: 'tolerance-exceeded' };
+  }
+  const totalsComplete = [
+    projected.runtimeSessionSpentMicrousd,
+    projected.retainedTrialSpentMicrousd,
+    projected.schedulerSpentMicrousd,
+  ].every((value) => value != null);
+  const totalsMatched = totalsComplete &&
+    projected.runtimeSessionSpentMicrousd === projected.retainedTrialSpentMicrousd &&
+    projected.runtimeSessionSpentMicrousd === projected.schedulerSpentMicrousd &&
+    projected.sessionSpentMicrousd === projected.runtimeSessionSpentMicrousd;
+  if (!totalsMatched) {
+    return { ...projected, reason: 'session-spend-mismatch' };
+  }
+  return {
+    ...projected,
+    verified: true,
+    runtimeRetainedSchedulerMatched: true,
+    reason: 'verified',
+  };
+}
+
+function roundedMicrousd(value) {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) return null;
+  const microusd = Math.round(value * 1_000_000);
+  return Number.isSafeInteger(microusd) && microusd <= 10_000_000_000 &&
+    Math.abs(value - microusd / 1_000_000) <= 1e-12
+    ? microusd
+    : null;
+}
+
+function summedRuntimeTrialSpendMicrousd(trials) {
+  if (!Array.isArray(trials) || trials.length === 0) return null;
+  let total = 0;
+  for (const trial of trials) {
+    const spend = trial?.observability?.runtimeTrustEvidence?.providerSpendMicrousd;
+    if (!Number.isSafeInteger(spend) || spend < 0 || spend > 20_000_000) return null;
+    total += spend;
+    if (!Number.isSafeInteger(total) || total > 10_000_000_000) return null;
+  }
+  return total;
 }
 
 const RUN_SCHEMA = JSON.parse(fs.readFileSync(new URL('./schema/eval-run.v1.schema.json', import.meta.url), 'utf8'));
@@ -2198,9 +2427,24 @@ export async function runRelease({ config, steps, calibrationRelease = false, re
     isDeepStrictEqual(trust.requiredCapabilities, RELEASE_TRUST_CAPABILITIES) &&
     Array.isArray(trust.missingCapabilities) && trust.missingCapabilities.length === 0;
   const trustRequired = evaluationMode !== 'deterministic-only';
-  const trustOk = !trustRequired || trustEvidenceValid;
+  const runtimeTrustRequired = trustRequired && config.runtimeTrustRequired === true;
+  let runtimeReadinessEvidence = null;
+  let runtimeReadinessErrorHash = null;
+  if (runtimeTrustRequired && typeof steps?.runtimeSession?.readiness === 'function') {
+    try {
+      runtimeReadinessEvidence = await steps.runtimeSession.readiness();
+    } catch (error) {
+      runtimeReadinessErrorHash = crypto.createHash('sha256')
+        .update(String(error?.message ?? error))
+        .digest('hex');
+    }
+  }
+  const runtimeReadiness = runtimeTrustRequired
+    ? runtimeReadinessVerdict(config, runtimeReadinessEvidence, { releaseSha, now: new Date() })
+    : null;
+  const trustOk = !trustRequired || (runtimeTrustRequired ? runtimeReadiness.ok : trustEvidenceValid);
   const calibrationEligible = calibrationRelease && config.claimPolicy?.mode === 'initial-user-ship';
-  const releaseEligible = (evaluationMode === 'release' || calibrationEligible) &&
+  let releaseEligible = (evaluationMode === 'release' || calibrationEligible) &&
     configuredScopeValid && configuredScope.releaseEligible === true && trustOk;
   // The controlled OpenRouter denominator is mandatory for every non-free
   // evaluation. Callers may add requirements, but cannot erase this release
@@ -2215,7 +2459,7 @@ export async function runRelease({ config, steps, calibrationRelease = false, re
     releaseEligible,
     selectedTasks: selectedTaskSet.map((entry) => entry.task),
     requiredTasks: requiredTaskSet.map((entry) => entry.task),
-    trust,
+    trust: runtimeTrustRequired ? releaseTrustVerdict(config, null) : trust,
   };
   const budgets = allocateReleaseBudgets(config.budget ?? {});
   const rawDeterministic = typeof steps?.deterministic === 'function' ? await steps.deterministic() : null;
@@ -2287,6 +2531,10 @@ export async function runRelease({ config, steps, calibrationRelease = false, re
     : null;
   const preflight = {
     ok: preflightOk,
+    runtimeReadiness: runtimeTrustRequired ? {
+      ...runtimeReadiness,
+      errorHash: runtimeReadinessErrorHash,
+    } : null,
     environment: {
       ok: environmentOk,
       missing: (Array.isArray(environment?.missing) ? environment.missing : [])
@@ -2566,6 +2814,93 @@ export async function runRelease({ config, steps, calibrationRelease = false, re
   });
   await evaluatePair('ollama-gemma', steps.gemmaPair);
 
+  const controlledRuntimeTrials = runDocs
+    .flatMap((doc) => rawTrials(doc))
+    .filter((trial) => trial?.reproducibility?.host === controlledHost);
+  const retainedReconciledSpendUsd = runDocs
+    .flatMap((doc) => rawTrials(doc))
+    .filter((trial) => String(trial?.reproducibility?.host ?? '').startsWith('openrouter'))
+    .reduce((total, trial) => total + (finiteNumber(trial?.efficiency?.reconciledCostUsd) ?? 0), 0);
+  const knownReconciledSpendUsd = budgets.release.knownReconciledSpendUsd();
+  const retainedTrialSpentMicrousd = runtimeTrustRequired
+    ? summedRuntimeTrialSpendMicrousd(controlledRuntimeTrials)
+    : roundedMicrousd(retainedReconciledSpendUsd);
+  const schedulerSpentMicrousd = roundedMicrousd(knownReconciledSpendUsd);
+
+  let runtimeFinalEvidence = null;
+  let runtimeFinalizationErrorHash = null;
+  let runtimeFinalizationAttempted = false;
+  if (runtimeTrustRequired && preflightOk && typeof steps?.runtimeSession?.finalize === 'function') {
+    runtimeFinalizationAttempted = true;
+    try {
+      runtimeFinalEvidence = await steps.runtimeSession.finalize({
+        releaseSha,
+        harnessVersion,
+        evaluationMode,
+        pairs: structuredClone(pairEntries),
+      });
+    } catch (error) {
+      runtimeFinalizationErrorHash = crypto.createHash('sha256')
+        .update(String(error?.message ?? error))
+        .digest('hex');
+    }
+  }
+  let providerReconciliationAttempted = false;
+  let providerReconciliationErrorHash = null;
+  let rawProviderReconciliation = null;
+  if (runtimeTrustRequired && runtimeFinalEvidence != null &&
+      typeof steps?.runtimeSession?.providerEvidence === 'function') {
+    providerReconciliationAttempted = true;
+    try {
+      rawProviderReconciliation = await steps.runtimeSession.providerEvidence();
+    } catch (error) {
+      providerReconciliationErrorHash = crypto.createHash('sha256')
+        .update(String(error?.message ?? error))
+        .digest('hex');
+    }
+  }
+  const providerReconciliation = {
+    attempted: providerReconciliationAttempted,
+    ...providerReconciliationVerdict(rawProviderReconciliation, {
+      runtimeSessionSpentMicrousd: runtimeFinalEvidence?.budget?.sessionSpentMicrousd ?? null,
+      retainedTrialSpentMicrousd,
+      schedulerSpentMicrousd,
+    }),
+    errorHash: providerReconciliationErrorHash,
+  };
+  const expectedRuntimeTrialHashes = controlledRuntimeTrials.map((trial) => {
+    const evidence = trial?.observability?.runtimeTrustEvidence;
+    return evidence?.schema === 'engineer-runtime-trial-final-attestation.v1' &&
+      typeof evidence?.evidenceHash === 'string' && /^[a-f0-9]{64}$/.test(evidence.evidenceHash)
+      ? evidence.evidenceHash
+      : 'missing-or-invalid-runtime-trial-evidence';
+  });
+  const authenticatedFinalTrust = runtimeTrustRequired
+    ? releaseTrustVerdict(config, runtimeFinalEvidence, {
+        releaseSha,
+        expectedTrialHashes: expectedRuntimeTrialHashes,
+        expectedSessionId: runtimeReadiness?.sessionId ?? null,
+        expectedBindings: config.runtimeTrustBindings ?? null,
+        expectedSessionCeilingMicrousd: config.runtimeTrustBindings?.sessionCeilingMicrousd ?? null,
+      })
+    : trust;
+  const finalTrust = runtimeTrustRequired && providerReconciliation.verified !== true
+    ? {
+        ...authenticatedFinalTrust,
+        ok: false,
+        status: 'blocked',
+        providerAllowanceReconciled: false,
+      }
+    : runtimeTrustRequired
+      ? { ...authenticatedFinalTrust, providerAllowanceReconciled: true }
+      : authenticatedFinalTrust;
+  if (runtimeTrustRequired) {
+    releaseEligible = (evaluationMode === 'release' || calibrationEligible) &&
+      configuredScopeValid && configuredScope.releaseEligible === true && finalTrust.ok;
+    evaluationScope.releaseEligible = releaseEligible;
+    evaluationScope.trust = finalTrust;
+  }
+
   let rawNativeProducts = [];
   if (preflightOk && steps.nativeProducts) {
     try {
@@ -2621,11 +2956,6 @@ export async function runRelease({ config, steps, calibrationRelease = false, re
         passingReward: config.task?.verifierPassingReward ?? 1,
       }));
   });
-  const retainedReconciledSpendUsd = runDocs
-    .flatMap((doc) => rawTrials(doc))
-    .filter((trial) => String(trial?.reproducibility?.host ?? '').startsWith('openrouter'))
-    .reduce((total, trial) => total + (finiteNumber(trial?.efficiency?.reconciledCostUsd) ?? 0), 0);
-  const knownReconciledSpendUsd = budgets.release.knownReconciledSpendUsd();
   const chargeLedgerToleranceUsd = Math.max(
     1e-12,
     1e-12 * Math.max(
@@ -2699,7 +3029,7 @@ export async function runRelease({ config, steps, calibrationRelease = false, re
     calibrationRelease,
     preflight,
     evaluationMode,
-    releaseTrustOk: trustOk,
+    releaseTrustOk: runtimeTrustRequired ? finalTrust.ok : trustOk,
     releaseEligible,
   });
   if (!chargeLedgerMatchesRetainedEvidence) {
@@ -2801,6 +3131,27 @@ export async function runRelease({ config, steps, calibrationRelease = false, re
       requiredTaskSet,
     },
     evaluationScope,
+    runtimeTrust: runtimeTrustRequired ? {
+      required: true,
+      readiness: {
+        ...runtimeReadiness,
+        errorHash: runtimeReadinessErrorHash,
+      },
+      finalization: {
+        attempted: runtimeFinalizationAttempted,
+        complete: finalTrust?.ok === true,
+        evidenceHash: finalTrust?.evidenceHash ?? null,
+        sessionId: finalTrust?.sessionId ?? null,
+        finalizedTrialsAttested: finalTrust?.finalizedTrialsAttested === true,
+        trialEvidenceMatched: finalTrust?.trialEvidenceMatched === true,
+        orderedTrialHashes: finalTrust?.orderedTrialHashes ?? [],
+        deletionReceiptHashes: finalTrust?.deletionReceiptHashes ?? [],
+        chainHead: finalTrust?.chainHead ?? null,
+        evidenceArchiveHash: finalTrust?.evidenceArchiveHash ?? null,
+        errorHash: runtimeFinalizationErrorHash,
+      },
+      providerReconciliation,
+    } : null,
     calibrationRelease,
     preflight,
     deterministic,
@@ -3146,12 +3497,14 @@ function isWithin(root, candidate) {
 }
 
 function assertContainedRegularFile(candidate, root, label) {
-  const realRoot = fs.realpathSync(root);
+  const declaredRoot = path.resolve(root);
   const resolved = path.resolve(candidate);
-  if (!isWithin(realRoot, resolved)) throw new Error(`${label} must remain within ${realRoot}`);
+  if (!isWithin(declaredRoot, resolved)) {
+    throw new Error(`${label} must remain within ${declaredRoot}`);
+  }
 
-  const relative = path.relative(realRoot, resolved);
-  let cursor = realRoot;
+  const relative = path.relative(declaredRoot, resolved);
+  let cursor = declaredRoot;
   for (const component of relative.split(path.sep).filter(Boolean)) {
     cursor = path.join(cursor, component);
     let entry;
@@ -3164,6 +3517,7 @@ function assertContainedRegularFile(candidate, root, label) {
   }
   const entry = fs.lstatSync(resolved);
   if (!entry.isFile()) throw new Error(`${label} must be a regular file: ${resolved}`);
+  const realRoot = fs.realpathSync(declaredRoot);
   const realFile = fs.realpathSync(resolved);
   if (!isWithin(realRoot, realFile)) throw new Error(`${label} resolves outside ${realRoot}`);
   return realFile;
@@ -3406,8 +3760,341 @@ function removeReleaseWorkDir(workDir) {
   fs.rmSync(workDir, { recursive: true, force: true });
 }
 
-async function main() {
-  const argv = process.argv.slice(2);
+const RELEASE_CLI_VALUE_FLAGS = new Set([
+  '--profile', '--report-file', '--calibration-baseline', '--qualification-baseline',
+  '--lock-file', '--release-sha', '--budget-usd', '--task', '--provider-key-fd',
+]);
+const RELEASE_CLI_BOOLEAN_FLAGS = new Set([
+  '--calibration', '--qualification', '--deterministic-only', '--with-local', '--json',
+]);
+const RAW_PROVIDER_ENVIRONMENT = /^(?:OPENROUTER_API_KEY|OPENAI_API_KEY|ANTHROPIC_API_KEY|GEMINI_API_KEY|GOOGLE_API_KEY|GROQ_API_KEY|XAI_API_KEY|MISTRAL_API_KEY|COHERE_API_KEY|TOGETHER_API_KEY|FIREWORKS_API_KEY|DEEPSEEK_API_KEY|CEREBRAS_API_KEY|PERPLEXITY_API_KEY|HARNESS_EVAL_(?:AGENT|JUDGE)_KEY)$/i;
+const USER_RUNTIME_PATH_ENVIRONMENT = /^(?:HARNESS_EVAL_(?:TB_(?:BUNDLE_(?:DIR|SHA256)|DATASET_DIR|ENV)|HARBOR_(?:BIN|SHA256)|DOCKER_(?:BIN|SHA256)|(?:BUILD_)?TOOL_PATH|NODE_TARBALL(?:_(?:X64|ARM64))?(?:_SHA256)?|HOST_NODE(?:_SHA256)?|.*(?:RUNTIME|SNAPSHOT|DAYTONA).*(?:BIN|DIR|FILE|PATH|SHA256))|DAYTONA_(?:CLI_)?PATH)$/i;
+
+function validateReleaseCliArgv(argv) {
+  if (!Array.isArray(argv) || argv.some((value) => typeof value !== 'string')) {
+    throw new TypeError('release CLI argv must be an array of strings');
+  }
+  const counts = new Map();
+  for (let index = 0; index < argv.length; index += 1) {
+    const token = argv[index];
+    if (!RELEASE_CLI_VALUE_FLAGS.has(token) && !RELEASE_CLI_BOOLEAN_FLAGS.has(token)) {
+      if (/provider.*(?:key|credential)/i.test(token)) {
+        throw new Error('provider credential material is accepted only through inherited --provider-key-fd');
+      }
+      if (/(?:bundle|runtime|snapshot|daytona|harbor|docker|dataset|node|tool|topology|environment).*(?:bin|dir|file|path|sha|image|mode|env)/i.test(token)) {
+        throw new Error('runtime artifact paths and identities are code-owned and cannot be supplied on argv');
+      }
+      throw new Error(`unsupported release argument at argv position ${index + 1}`);
+    }
+    counts.set(token, (counts.get(token) ?? 0) + 1);
+    if ((counts.get(token) ?? 0) > 1) throw new Error(`${token} may be supplied at most once`);
+    if (RELEASE_CLI_VALUE_FLAGS.has(token)) {
+      const value = argv[index + 1];
+      if (typeof value !== 'string' || value.length === 0 || value.startsWith('--')) {
+        if (token === '--lock-file') {
+          throw new Error('--lock-file requires a nonempty diagnostic lock path');
+        }
+        if (token === '--qualification-baseline' || token === '--calibration-baseline') {
+          throw new Error(`${token} requires a nonempty report path`);
+        }
+        if (token === '--report-file') {
+          throw new Error('--report-file requires a nonempty destination path');
+        }
+        throw new Error(`${token} requires a nonempty value`);
+      }
+      index += 1;
+    }
+  }
+  return counts;
+}
+
+function providerKeyFdFrom(value) {
+  if (typeof value !== 'string' || !/^[1-9][0-9]*$/.test(value)) {
+    throw new Error('--provider-key-fd must be one canonical inherited descriptor number');
+  }
+  const descriptor = Number(value);
+  if (!Number.isSafeInteger(descriptor) || descriptor < 3 || descriptor > 1_048_575 || String(descriptor) !== value) {
+    throw new Error('--provider-key-fd must be one canonical inherited descriptor number between 3 and 1048575');
+  }
+  return descriptor;
+}
+
+function assertTrustedLauncherEnvironment(env) {
+  if (env == null || typeof env !== 'object' || Array.isArray(env)) {
+    throw new TypeError('release CLI environment must be an object');
+  }
+  const names = Object.keys(env);
+  if (names.some((name) => name.toUpperCase() === 'NODE_OPTIONS')) {
+    throw new Error('trusted release launcher refuses ambient NODE_OPTIONS');
+  }
+  if (names.some((name) => RAW_PROVIDER_ENVIRONMENT.test(name))) {
+    throw new Error('trusted release launcher refuses ambient raw provider credentials');
+  }
+  if (names.some((name) => USER_RUNTIME_PATH_ENVIRONMENT.test(name))) {
+    throw new Error('trusted release runtime artifacts are code-owned and cannot be supplied through the environment');
+  }
+}
+
+/** The exact task-image projection accepted by createReleaseRuntime. */
+export function canonicalReleaseRuntimeTaskLock(lock) {
+  if (lock == null || typeof lock !== 'object' || Array.isArray(lock) || !Array.isArray(lock.tasks)) {
+    throw new Error('release runtime task lock must contain tasks');
+  }
+  return structuredClone({
+    ...lock,
+    tasks: lock.tasks.map((entry) => {
+      const sandbox = entry?.sandbox;
+      if (sandbox == null || typeof sandbox !== 'object' || Array.isArray(sandbox)) {
+        throw new Error(`release runtime task ${entry?.task ?? 'unknown'} is missing its sandbox identity`);
+      }
+      return {
+        ...entry,
+        sandbox: {
+          immutableImage: sandbox.immutableImage,
+          imageId: sandbox.imageId,
+          platform: sandbox.platform,
+          cpus: sandbox.cpus,
+          memoryMb: sandbox.memoryMb,
+          storageMb: sandbox.storageMb,
+        },
+      };
+    }),
+  });
+}
+
+export function validateOfflineReleaseDataset(value, { sourceLock, workDir }) {
+  if (value == null || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('offline Terminal-Bench artifact preparation returned no evidence');
+  }
+  const fields = new Set([
+    'artifactId', 'artifactDir', 'datasetDir', 'lockPath', 'attestationPath',
+    'taskLockHash', 'taskLock', 'attestation', 'datasetTreeHash',
+  ]);
+  const keys = Object.keys(value);
+  if (keys.length !== fields.size || keys.some((key) => !fields.has(key))) {
+    throw new Error('offline Terminal-Bench artifact contains an unexpected or missing field');
+  }
+  const hash = /^[a-f0-9]{64}$/;
+  for (const field of ['artifactId', 'taskLockHash', 'datasetTreeHash']) {
+    if (!hash.test(String(value[field]))) throw new Error(`offline Terminal-Bench ${field} is invalid`);
+  }
+  const realWorkDir = fs.realpathSync(workDir);
+  const artifactDir = fs.realpathSync(value.artifactDir);
+  const datasetDir = fs.realpathSync(value.datasetDir);
+  if (artifactDir === realWorkDir || !isWithin(realWorkDir, artifactDir) ||
+      datasetDir === artifactDir || !isWithin(artifactDir, datasetDir) ||
+      path.basename(artifactDir) !== value.artifactId) {
+    throw new Error('offline Terminal-Bench artifact escaped its release-owned content address');
+  }
+  for (const [label, directory] of [['artifact', artifactDir], ['dataset', datasetDir]]) {
+    const stat = fs.lstatSync(directory);
+    if (!stat.isDirectory() || stat.isSymbolicLink() || (stat.mode & 0o222) !== 0) {
+      throw new Error(`offline Terminal-Bench ${label} directory is mutable or invalid`);
+    }
+  }
+  const lockPath = assertContainedRegularFile(value.lockPath, value.artifactDir, 'offline task lock');
+  const attestationPath = assertContainedRegularFile(
+    value.attestationPath, value.artifactDir, 'offline dataset attestation'
+  );
+  const fileHash = (file) => crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
+  if (fileHash(lockPath) !== value.taskLockHash || fileHash(attestationPath) !== value.artifactId ||
+      canonicalSha256(value.taskLock) !== value.taskLockHash) {
+    throw new Error('offline Terminal-Bench lock or attestation content identity drifted');
+  }
+  if (value.taskLock?.datasetRef == null ||
+      !/^terminal-bench-derived-offline@[a-f0-9]{12}$/.test(value.taskLock.datasetRef) ||
+      value.attestation?.schema !== 'engineer-terminal-bench-offline-dataset-attestation.v1' ||
+      value.attestation.label !== 'private-terminal-bench-derived-offline' ||
+      value.attestation.publicLeaderboardEligible !== false ||
+      value.attestation.networkRequiredAtTrial !== false ||
+      value.attestation.taskLock?.sha256 !== value.taskLockHash) {
+    throw new Error('offline Terminal-Bench trust label or task-lock binding drifted');
+  }
+  if (!Array.isArray(sourceLock?.tasks) || !Array.isArray(value.taskLock?.tasks) ||
+      sourceLock.tasks.length !== value.taskLock.tasks.length) {
+    throw new Error('offline Terminal-Bench task coverage drifted');
+  }
+  for (let index = 0; index < sourceLock.tasks.length; index += 1) {
+    const source = structuredClone(sourceLock.tasks[index]);
+    const derived = structuredClone(value.taskLock.tasks[index]);
+    delete source.taskChecksum;
+    delete derived.taskChecksum;
+    if (!isDeepStrictEqual(source, derived) ||
+        !hash.test(String(value.taskLock.tasks[index].taskChecksum))) {
+      throw new Error('offline Terminal-Bench task identity or sandbox policy drifted');
+    }
+  }
+  return Object.freeze({ ...value, artifactDir, datasetDir, lockPath, attestationPath });
+}
+
+export function releaseBudgetPolicyHash({
+  evaluationMode,
+  controlledLane,
+  budget,
+  repetitions,
+  taskCount,
+} = {}) {
+  const microusd = (value, label, { nullable = false } = {}) => {
+    if (nullable && value == null) return null;
+    const converted = roundedMicrousd(value);
+    if (converted == null) throw new Error(`${label} must be a bounded non-negative USD amount`);
+    return converted;
+  };
+  if (typeof evaluationMode !== 'string' || evaluationMode.length === 0 ||
+      typeof controlledLane?.host !== 'string' || typeof controlledLane?.profileId !== 'string' ||
+      !Number.isSafeInteger(repetitions) || repetitions < 1 ||
+      !Number.isSafeInteger(taskCount) || taskCount < 1) {
+    throw new Error('release budget policy identity is incomplete');
+  }
+  const controlledAllowance = controlledPairAllowanceOf(budget ?? {});
+  return canonicalSha256({
+    schema: 'engineer-release-budget-policy.v1',
+    evaluationMode,
+    controlledHost: controlledLane.host,
+    profileId: controlledLane.profileId,
+    repetitions,
+    taskCount,
+    sessionCeilingMicrousd: microusd(budget?.releaseCeilingUsd, 'release ceiling'),
+    controlledPairCeilingMicrousd: microusd(controlledAllowance.value, 'controlled-pair ceiling'),
+    rerunCeilingMicrousd: microusd(budget?.rerunUsd, 'rerun ceiling'),
+    controlledArmCeilingMicrousd: microusd(
+      budget?.controlledArmCeilingUsd,
+      'controlled-arm ceiling',
+      { nullable: true }
+    ),
+    providerHardLimitMicrousd: microusd(
+      budget?.providerHardLimitUsd,
+      'provider hard limit',
+      { nullable: true }
+    ),
+  });
+}
+
+function validatePreparedReleaseRuntimeArtifacts(artifacts, expected) {
+  const bundle = artifacts?.bundle;
+  // `bundleDir` is the production contract. The temporary `path` alias keeps
+  // the seam easy to fake without allowing any caller-supplied runtime path.
+  const bundleDir = bundle?.bundleDir ?? bundle?.path;
+  const manifestHash = bundle?.manifestHash;
+  const projection = artifacts?.runtimeProjection;
+  const daytonaPath = artifacts?.daytonaPath;
+  if (typeof bundleDir !== 'string' || !path.isAbsolute(bundleDir) || path.normalize(bundleDir) !== bundleDir ||
+      bundleDir.includes('\0')) {
+    throw new Error('code-owned release runtime bundle path is invalid');
+  }
+  if (typeof manifestHash !== 'string' || !/^[a-f0-9]{64}$/.test(manifestHash)) {
+    throw new Error('code-owned release runtime bundle manifest hash is invalid');
+  }
+  if (projection == null || typeof projection !== 'object' || Array.isArray(projection)) {
+    throw new Error('code-owned release runtime projection is missing');
+  }
+  const expectedProjectionBindings = {
+    releaseSha: expected.releaseSha,
+    taskLockHash: expected.taskLockHash,
+    bundleHash: manifestHash,
+    budgetPolicyHash: expected.budgetPolicyHash,
+    brokerPolicyHash: expected.brokerPolicyHash,
+    profileId: expected.profileId,
+    sessionCeilingMicrousd: expected.sessionCeilingMicrousd,
+  };
+  for (const [field, value] of Object.entries(expectedProjectionBindings)) {
+    if (projection?.bindings?.[field] !== value) {
+      throw new Error(`code-owned release runtime projection ${field} binding drifted`);
+    }
+  }
+  if (typeof daytonaPath !== 'string' || !path.isAbsolute(daytonaPath) ||
+      path.normalize(daytonaPath) !== daytonaPath || daytonaPath.includes('\0')) {
+    throw new Error('code-owned Daytona executable path is invalid');
+  }
+  if (typeof artifacts?.dispose !== 'function') {
+    throw new Error('code-owned release runtime artifacts are missing their disposer');
+  }
+  return {
+    ...artifacts,
+    bundle: { bundleDir, manifestHash },
+    runtimeProjection: structuredClone(projection),
+    daytonaPath,
+    dispose: artifacts.dispose,
+  };
+}
+
+/**
+ * Topology-independent seam. A reviewed code-owned factory is injected by the
+ * production composition; no operator path or identity is accepted here.
+ */
+export async function prepareReleaseRuntimeArtifacts(context, {
+  artifactFactory = null,
+} = {}) {
+  let factory = artifactFactory;
+  if (factory == null) {
+    const production = await import('./runtime/release-artifacts.mjs');
+    factory = production.prepareReleaseRuntimeArtifacts;
+  }
+  if (typeof factory !== 'function') {
+    throw new Error('trusted release runtime artifact factory is not configured in this checkout');
+  }
+  const prepared = await factory(context);
+  try {
+    return validatePreparedReleaseRuntimeArtifacts(prepared, context);
+  } catch (error) {
+    try {
+      await prepared?.dispose?.();
+    } catch (disposeError) {
+      throw new Error(
+        `${String(error?.message ?? error)}; invalid release artifacts also failed disposal: ` +
+        String(disposeError?.message ?? disposeError)
+      );
+    }
+    throw error;
+  }
+}
+
+function releaseCliDependencies(overrides = {}) {
+  return {
+    loadYamlConfig,
+    releaseRepository,
+    currentGitReleaseSha,
+    assertCleanLiveReleaseSource,
+    assertExternalRegularFile,
+    resolveDefaultLockFile,
+    readPrivateEvidenceFile,
+    readHarnessVersion: () => JSON.parse(
+      fs.readFileSync(new URL('../packages/harness/package.json', import.meta.url), 'utf8')
+    ).version,
+    loadDeterministicRunner: () => import('./lib/runner.mjs'),
+    loadTaskLockValidator: () => import('./external/terminal_bench/harbor-adapter.mjs'),
+    buildOfflineDataset: async (input) => {
+      const offline = await import('./external/terminal_bench/offline-artifacts.mjs');
+      return offline.buildOfflineTerminalBenchDataset(input);
+    },
+    loadLiveSteps: () => import('./external/terminal_bench/live-steps.mjs'),
+    prepareReleaseRuntimeArtifacts,
+    runtimeArtifactFactory: null,
+    createReleaseRuntime: async (input) => {
+      const runtime = await import('./runtime/release-runtime.mjs');
+      return runtime.createReleaseRuntime(input);
+    },
+    runRelease,
+    validateReport: (report) => validateAgainstSchema(report, REPORT_SCHEMA),
+    reservePrivateReport,
+    writeReservedPrivateReport,
+    closePrivateReportReservation,
+    makeReleaseWorkDir: () => fs.mkdtempSync(path.join(os.tmpdir(), 'harness-release-')),
+    removeReleaseWorkDir,
+    now: () => new Date(),
+    ...overrides,
+  };
+}
+
+export async function runReleaseCli({
+  argv = process.argv.slice(2),
+  env = process.env,
+  stdout = (value) => console.log(value),
+  stderr = (value) => console.error(value),
+  dependencies = {},
+} = {}) {
+  const argumentCounts = validateReleaseCliArgv(argv);
+  const deps = releaseCliDependencies(dependencies);
   const flag = (name, fallback = null) => {
     const i = argv.indexOf(name);
     return i >= 0 ? argv[i + 1] : fallback;
@@ -3421,6 +4108,8 @@ async function main() {
   }
   const withLocal = argv.includes('--with-local');
   const json = argv.includes('--json');
+  const providerKeyFdFlagPresent = argv.includes('--provider-key-fd');
+  const providerKeyFdValue = flag('--provider-key-fd', null);
   const reportFileFlagPresent = argv.includes('--report-file');
   let reportFile = flag('--report-file', null);
   if (reportFileFlagPresent && (
@@ -3430,7 +4119,7 @@ async function main() {
   }
   if (reportFileFlagPresent) {
     reportFile = resolvePrivateReportDestination(reportFile);
-    if (isWithin(releaseRepository(), reportFile)) {
+    if (isWithin(deps.releaseRepository(), reportFile)) {
       throw new Error('--report-file must be outside the source repository');
     }
   }
@@ -3468,20 +4157,20 @@ async function main() {
     // Free local/PR checks may intentionally exercise an uncommitted tree and
     // retain support for an explicit content label. They publish no live
     // causal claim and never build or accept a release bundle.
-    releaseSha = explicitReleaseSha ?? currentGitReleaseSha();
+    releaseSha = explicitReleaseSha ?? deps.currentGitReleaseSha();
   } else {
-    const currentHead = currentGitReleaseSha();
+    const currentHead = deps.currentGitReleaseSha();
     if (explicitReleaseSha && (
       !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i.test(explicitReleaseSha) ||
       explicitReleaseSha.toLowerCase() !== currentHead.toLowerCase()
     )) {
       throw new Error('--release-sha for a live evaluation must be the full current git HEAD');
     }
-    assertCleanLiveReleaseSource();
+    deps.assertCleanLiveReleaseSource();
     releaseSha = currentHead;
   }
 
-  const raw = loadYamlConfig(profile, { attestCommit: !deterministicOnly });
+  const raw = deps.loadYamlConfig(profile, { attestCommit: !deterministicOnly });
   const claimMode = raw.claimPolicy?.mode ?? 'regression-gate';
   if ((qualificationRelease || calibrationRelease) && claimMode !== 'initial-user-ship') {
     const phase = qualificationRelease ? '--qualification' : '--calibration';
@@ -3489,10 +4178,10 @@ async function main() {
   }
   const lockSource = lockFileFlagPresent
     ? (() => {
-        const file = assertExternalRegularFile(lockFileFlag, 'explicit task lock');
+        const file = deps.assertExternalRegularFile(lockFileFlag, 'explicit task lock');
         return { path: file, bytes: fs.readFileSync(file) };
       })()
-    : resolveDefaultLockFile(raw.task?.lockFile, { attestCommit: !deterministicOnly });
+    : deps.resolveDefaultLockFile(raw.task?.lockFile, { attestCommit: !deterministicOnly });
   let completeLock;
   try {
     completeLock = JSON.parse(lockSource.bytes.toString('utf8'));
@@ -3554,26 +4243,36 @@ async function main() {
   const requiredTaskSet = (qualificationRelease ? selectedTasks : lockedTasks).map(
     ({ task, taskChecksum = null, role = null, sandbox = null }) => ({ task, taskChecksum, role, sandbox })
   );
-  // There is intentionally no user-supplied escape hatch for this value.
-  // A future code-owned runtime supervisor will provide an in-memory,
-  // identity-bound observation here; until then the verdict remains blocked
-  // and every non-deterministic invocation is a zero-spend diagnostic.
-  const runtimeObservedTrustEvidence = null;
-  const releaseTrust = releaseTrustVerdict(raw, runtimeObservedTrustEvidence);
+  const runtimeArming = releaseRuntimeArmingVerdict(raw);
+  const runtimeRequired = !deterministicOnly && runtimeArming.ok;
+  if (!runtimeRequired && providerKeyFdFlagPresent) {
+    throw new Error('--provider-key-fd is forbidden for deterministic or unarmed release evaluation');
+  }
+  let providerKeyFd = null;
+  if (runtimeRequired) {
+    if ((argumentCounts.get('--provider-key-fd') ?? 0) !== 1) {
+      throw new Error('armed paid OpenRouter evaluation requires exactly one --provider-key-fd');
+    }
+    if ((argumentCounts.get('--report-file') ?? 0) !== 1) {
+      throw new Error('armed paid OpenRouter evaluation requires exactly one --report-file');
+    }
+    providerKeyFd = providerKeyFdFrom(providerKeyFdValue);
+    assertTrustedLauncherEnvironment(env);
+  }
+  // Final trust always starts blocked. Only runRelease may replace this with
+  // the branded final session after paid work and cleanup reconcile.
+  const releaseTrust = releaseTrustVerdict(raw, null);
   const invocationPolicy = releaseInvocationPolicy({
     claimMode,
     calibrationRelease,
     qualificationRelease,
     diagnosticScope: deterministicOnly || (!qualificationRelease && Boolean(requestedTask)) || lockFileFlagPresent,
-    trustOk: releaseTrust.ok,
+    trustOk: runtimeArming.ok,
   });
   if (!invocationPolicy.ok) {
     throw new Error(`invalid release invocation: ${invocationPolicy.reasons.join('; ')}`);
   }
-  if (releaseTrust.ok && !deterministicOnly && !reportFileFlagPresent) {
-    throw new Error('trusted live evaluation requires --report-file with a new private destination');
-  }
-  const harnessVersion = JSON.parse(fs.readFileSync(new URL('../packages/harness/package.json', import.meta.url), 'utf8')).version;
+  const harnessVersion = deps.readHarnessVersion();
   const minimumCalibrationRepetitions = releaseMinimumCalibrationRepetitions(raw);
   const historicalBaselineChain = !qualificationRelease && !calibrationRelease &&
     raw.claimPolicy?.mode === 'regression-gate' &&
@@ -3581,7 +4280,7 @@ async function main() {
   let qualificationBaseline = null;
   if (qualificationBaselineFlagPresent) {
     if (qualificationRelease) throw new Error('--qualification cannot consume an earlier qualification baseline');
-    const bytes = readPrivateEvidenceFile(qualificationBaselineFile, 'qualification baseline');
+    const bytes = deps.readPrivateEvidenceFile(qualificationBaselineFile, 'qualification baseline');
     let baselineReport;
     try {
       baselineReport = JSON.parse(bytes.toString('utf8'));
@@ -3614,7 +4313,7 @@ async function main() {
   }
   let calibrationBaseline = null;
   if (calibrationBaselineFlagPresent) {
-    const bytes = readPrivateEvidenceFile(calibrationBaselineFile, 'calibration baseline');
+    const bytes = deps.readPrivateEvidenceFile(calibrationBaselineFile, 'calibration baseline');
     let baselineReport;
     try {
       baselineReport = JSON.parse(bytes.toString('utf8'));
@@ -3655,13 +4354,13 @@ async function main() {
       reasons: ['no calibration baseline was supplied'],
     };
   }
-  if (historicalBaselineChain && releaseTrust.ok &&
+  if (historicalBaselineChain && runtimeArming.ok &&
       (!qualificationBaseline?.valid || !calibrationBaseline?.valid)) {
     throw new Error(
       'routine evaluation requires the accepted historical --qualification-baseline and --calibration-baseline chain'
     );
   }
-  if (!calibrationRelease && !historicalBaselineChain && releaseTrust.ok &&
+  if (!calibrationRelease && !historicalBaselineChain && runtimeArming.ok &&
       raw.claimPolicy?.requireCalibrationBaseline === true && !calibrationBaseline?.valid) {
     throw new Error('routine initial-user-ship evaluation requires --calibration-baseline from the same trusted release');
   }
@@ -3673,13 +4372,15 @@ async function main() {
         ? 'qualification'
       : requestedTask
         ? 'diagnostic-task'
-        : !releaseTrust.ok
+        : !runtimeArming.ok
           ? 'diagnostic-trust'
         : calibrationRelease
           ? 'calibration'
         : 'release';
   const config = {
     controlledLane: controlledLaneOf(raw),
+    releaseTrust: structuredClone(raw.releaseTrust ?? { status: 'blocked', capabilities: {} }),
+    runtimeTrustRequired: runtimeRequired,
     budget: qualificationRelease
       ? {
           releaseCeilingUsd: budgetUsd,
@@ -3727,7 +4428,7 @@ async function main() {
   }
   const configuredArmCeiling = Number(config.budget.controlledArmCeilingUsd);
   const scheduledRepetitions = qualificationRelease ? 1 : releaseRepetitionCount(raw, calibrationRelease);
-  if (releaseTrust.ok && Number.isFinite(configuredArmCeiling) && configuredArmCeiling > 0) {
+  if (runtimeArming.ok && Number.isFinite(configuredArmCeiling) && configuredArmCeiling > 0) {
     const { primaryExposureUsd: primaryExposure, rerunExposureUsd: rerunExposure } = releaseScheduledExposure({
       taskCount: taskSet.length,
       repetitions: scheduledRepetitions,
@@ -3746,7 +4447,7 @@ async function main() {
   if (!configVerdict.ok) {
     throw new Error(`invalid release evaluation policy: ${configVerdict.errors.join('; ')}`);
   }
-  const { runEvals, summarize } = await import('./lib/runner.mjs');
+  const { runEvals, summarize } = await deps.loadDeterministicRunner();
   const deterministicStep = async () => {
     const summary = summarize(await runEvals({
       provider: null,
@@ -3756,38 +4457,186 @@ async function main() {
     return { passed: summary.passed, failed: summary.failed + summary.infrastructureErrors, skipped: summary.skipped };
   };
 
-  let steps;
-  let requiredPairs;
+  // Reserve the destination inode before any runtime construction can take
+  // ownership of the inherited provider credential descriptor.
+  const reportReservation = reportFileFlagPresent ? deps.reservePrivateReport(reportFile) : null;
+  let steps = null;
+  let requiredPairs = null;
   let releaseWorkDir = null;
-  if (deterministicOnly || !releaseTrust.ok) {
-    // Per-PR mode: free, no pairs scheduled, structural lock validation only.
-    const { validateTaskLock } = await import('./external/terminal_bench/harbor-adapter.mjs');
-    steps = {
-      deterministic: deterministicStep,
-      environment: async () => deterministicOnly
-        ? ({ ok: true, missing: [] })
-        : ({
-            ok: false,
-            missing: releaseTrust.missingCapabilities.map((capability) => `unattested release trust: ${capability}`),
-          }),
-      taskLock: async () => {
-        const verdict = validateTaskLock(lock);
-        return { ok: verdict.ok, reason: verdict.errors.join('; ') };
-      },
-      frontierPair: null,
-      nativeProducts: null,
-      controlledPair: null,
-      gemmaPair: null,
-      smokes: null,
-    };
-    requiredPairs = deterministicOnly ? [] : [config.controlledLane.host];
-  } else {
-    // Release-candidate mode: the configured controlled pair is REQUIRED. Missing
-    // harbor, credentials, or task verification blocks — it never greens.
-    const { buildLiveSteps } = await import('./external/terminal_bench/live-steps.mjs');
-    releaseWorkDir = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-release-'));
-    const repetitions = qualificationRelease ? 1 : releaseRepetitionCount(raw, calibrationRelease);
+  let runtime = null;
+  let artifacts = null;
+  let runtimeDisposeAttempted = false;
+  let runtimeDisposeError = null;
+  let artifactDisposeAttempted = false;
+  let artifactDisposeError = null;
+  let ownedResourcesDisposeAttempted = false;
+  let ownedResourcesDisposeError = null;
+  let completedReport = null;
+  let preserveReleaseWorkDir = false;
+
+  const disposeRuntime = async () => {
+    if (!runtime || runtimeDisposeAttempted) {
+      if (runtimeDisposeError) throw runtimeDisposeError;
+      return;
+    }
+    runtimeDisposeAttempted = true;
     try {
+      await runtime.dispose();
+    } catch (error) {
+      runtimeDisposeError = error;
+      throw error;
+    }
+  };
+
+  const disposeArtifacts = async () => {
+    if (!artifacts || artifactDisposeAttempted) {
+      if (artifactDisposeError) throw artifactDisposeError;
+      return;
+    }
+    artifactDisposeAttempted = true;
+    try {
+      await artifacts.dispose();
+    } catch (error) {
+      artifactDisposeError = error;
+      throw error;
+    }
+  };
+
+  const disposeOwnedResources = async () => {
+    if (ownedResourcesDisposeAttempted) {
+      if (ownedResourcesDisposeError) throw ownedResourcesDisposeError;
+      return;
+    }
+    ownedResourcesDisposeAttempted = true;
+    const errors = [];
+    try {
+      await disposeRuntime();
+    } catch (error) {
+      errors.push(`runtime: ${String(error?.message ?? error)}`);
+    }
+    try {
+      // Artifact disposal intentionally follows runtime disposal: the runtime
+      // may still need the bundle and executable identities while shutting down.
+      await disposeArtifacts();
+    } catch (error) {
+      errors.push(`artifacts: ${String(error?.message ?? error)}`);
+    }
+    if (errors.length > 0) {
+      ownedResourcesDisposeError = new Error(`release-owned resource disposal failed (${errors.join('; ')})`);
+      throw ownedResourcesDisposeError;
+    }
+  };
+
+  try {
+    if (!runtimeRequired) {
+      // Deterministic and red-trust paths are structurally useful but never
+      // construct a key-bearing runtime or schedule provider work.
+      const { validateTaskLock } = await deps.loadTaskLockValidator();
+      steps = {
+        deterministic: deterministicStep,
+        environment: async () => deterministicOnly
+          ? ({ ok: true, missing: [] })
+          : ({
+              ok: false,
+              missing: runtimeArming.missingCapabilities.map(
+                (capability) => `unattested release trust: ${capability}`
+              ),
+            }),
+        taskLock: async () => {
+          const verdict = validateTaskLock(lock);
+          return { ok: verdict.ok, reason: verdict.errors.join('; ') };
+        },
+        frontierPair: null,
+        nativeProducts: null,
+        controlledPair: null,
+        gemmaPair: null,
+        smokes: null,
+      };
+      requiredPairs = deterministicOnly ? [] : [config.controlledLane.host];
+    } else {
+      releaseWorkDir = deps.makeReleaseWorkDir();
+      const offlineDataset = validateOfflineReleaseDataset(await deps.buildOfflineDataset({
+        repoRoot: deps.releaseRepository(),
+        outputRoot: path.join(releaseWorkDir, 'offline-terminal-bench'),
+        taskLock: structuredClone(lock),
+      }), { sourceLock: lock, workDir: releaseWorkDir });
+      const runtimeTaskLock = canonicalReleaseRuntimeTaskLock(offlineDataset.taskLock);
+      const taskLockHash = canonicalSha256(runtimeTaskLock);
+      const sessionCeilingMicrousd = roundedMicrousd(config.budget.releaseCeilingUsd);
+      if (!Number.isSafeInteger(sessionCeilingMicrousd) || sessionCeilingMicrousd < 1) {
+        throw new Error('armed paid release requires a positive integer-microusd session ceiling');
+      }
+      const budgetPolicyHash = releaseBudgetPolicyHash({
+        evaluationMode,
+        controlledLane: config.controlledLane,
+        budget: config.budget,
+        repetitions: scheduledRepetitions,
+        taskCount: taskSet.length,
+      });
+      const brokerPolicyHash = controlledProviderBrokerStaticPolicyHash({
+        profileId: config.controlledLane.profileId,
+        sessionCeilingMicrousd,
+      });
+      const budgetId = `release-${evaluationMode}-${budgetPolicyHash.slice(0, 24)}`;
+      const artifactContext = {
+        repoRoot: deps.releaseRepository(),
+        releaseSha,
+        sourceIdentity: { releaseSha, harnessVersion },
+        taskLock: structuredClone(runtimeTaskLock),
+        taskLockHash,
+        budgetPolicyHash,
+        brokerPolicyHash,
+        profileId: config.controlledLane.profileId,
+        sessionCeilingMicrousd,
+      };
+      artifacts = await deps.prepareReleaseRuntimeArtifacts(artifactContext, {
+        artifactFactory: deps.runtimeArtifactFactory,
+      });
+      // Revalidate the dependency seam even when a test or embedding replaces
+      // the production preparer. Assign first so malformed results with a
+      // disposer are still reclaimed by the catch path.
+      artifacts = validatePreparedReleaseRuntimeArtifacts(artifacts, artifactContext);
+      const runtimeTrustBindings = {
+        releaseSha,
+        profileId: config.controlledLane.profileId,
+        taskLockHash,
+        bundleHash: artifacts.bundle.manifestHash,
+        budgetId,
+        budgetPolicyHash,
+        brokerPolicyHash,
+        sessionCeilingMicrousd,
+      };
+      config.runtimeTrustBindings = structuredClone(runtimeTrustBindings);
+
+      runtime = await deps.createReleaseRuntime({
+        releaseSha,
+        profileId: config.controlledLane.profileId,
+        taskLock: runtimeTaskLock,
+        bundle: {
+          bundleDir: artifacts.bundle.bundleDir,
+          manifestHash: artifacts.bundle.manifestHash,
+        },
+        budgetId,
+        budgetPolicyHash,
+        brokerPolicyHash,
+        sessionCeilingMicrousd,
+        providerKeyFd,
+        daytonaPath: artifacts.daytonaPath,
+        runtimeProjection: artifacts.runtimeProjection,
+        env: { ...env },
+      });
+      if (!runtime || typeof runtime.dispose !== 'function' || typeof runtime.trialExecutor !== 'function' ||
+          !runtime.providerControl || !runtime.runtimeSession) {
+        throw new Error('release runtime construction returned an incomplete controller');
+      }
+
+      const { buildLiveSteps } = await deps.loadLiveSteps();
+      const liveEnv = {
+        ...env,
+        HARNESS_EVAL_TB_BUNDLE_DIR: artifacts.bundle.bundleDir,
+        HARNESS_EVAL_TB_BUNDLE_SHA256: artifacts.bundle.manifestHash,
+        HARNESS_EVAL_TB_DATASET_DIR: offlineDataset.datasetDir,
+      };
       steps = {
         deterministic: deterministicStep,
         ...buildLiveSteps({
@@ -3797,14 +4646,20 @@ async function main() {
             evaluationScope: config.evaluationScope,
             qualificationBaseline: config.qualificationBaseline,
             calibrationBaseline: config.calibrationBaseline,
+            releaseTrust: structuredClone(config.releaseTrust),
+            runtimeTrustRequired: true,
           },
-          lock,
+          lock: runtimeTaskLock,
           workDir: releaseWorkDir,
+          env: liveEnv,
           releaseSha,
           harnessVersion,
-          repetitions,
+          repetitions: scheduledRepetitions,
           localEnabled: withLocal,
+          providerControl: runtime.providerControl,
+          trialExecutor: runtime.trialExecutor,
         }),
+        runtimeSession: runtime.runtimeSession,
         nativeProducts: async () => (raw.nativeProductRotation ?? []).map((host) => ({
           host,
           status: 'not-run',
@@ -3812,51 +4667,68 @@ async function main() {
           reason: 'subscription/native agent references require an explicit separately captured run',
         })),
       };
-    } catch (error) {
-      removeReleaseWorkDir(releaseWorkDir);
-      releaseWorkDir = null;
-      throw error;
+      requiredPairs = [config.controlledLane.host];
     }
-    requiredPairs = [config.controlledLane.host];
-  }
 
-  // Reserve the requested archive before runRelease can perform provider
-  // preflight or spend. A typo/pre-existing path must fail before evidence is
-  // generated and the temporary work directory becomes eligible for cleanup.
-  const reportReservation = reportFileFlagPresent ? reservePrivateReport(reportFile) : null;
-  let preserveReleaseWorkDir = false;
-  try {
-    const { report, exitCode } = await runRelease({ config, steps, calibrationRelease, releaseSha, harnessVersion, requiredPairs });
-    const reportVerdict = validateAgainstSchema(report, REPORT_SCHEMA);
+    const { report, exitCode } = await deps.runRelease({
+      config,
+      steps,
+      calibrationRelease,
+      releaseSha,
+      harnessVersion,
+      requiredPairs,
+    });
+    completedReport = report;
+    const reportVerdict = deps.validateReport(report);
     if (!reportVerdict.ok) throw new Error(`internal error: report failed its own schema: ${reportVerdict.errors.join('; ')}`);
+
+    // No trusted report bytes or stdout are published while runtime-owned
+    // channels, credentials, or key material remain live.
+    await disposeOwnedResources();
+
     let archivalError = null;
     if (reportReservation) {
       try {
-        writeReservedPrivateReport(reportReservation, report);
+        deps.writeReservedPrivateReport(reportReservation, report);
       } catch (error) {
         archivalError = error;
       }
     }
-    if (shouldRetainReleaseWorkDir({ releaseTrustOk: releaseTrust.ok, workDir: releaseWorkDir, archivalError })) {
+    const finalTrustOk = report?.evaluationScope?.trust?.ok === true;
+    if (shouldRetainReleaseWorkDir({ releaseTrustOk: finalTrustOk, workDir: releaseWorkDir, archivalError })) {
       preserveReleaseWorkDir = true;
     }
-    if (json) console.log(JSON.stringify(report, null, 2));
-    else console.log(buildMarkdownReport(report));
+    if (json) stdout(JSON.stringify(report, null, 2));
+    else stdout(buildMarkdownReport(report));
     if (archivalError) {
-      console.error(
+      stderr(
         `evaluation completed, but --report-file archival failed: ${archivalError.message}` +
         (preserveReleaseWorkDir ? `; trusted work directory retained at ${releaseWorkDir}` : '')
       );
     }
-    // exitCode (not process.exit) so piped stdout flushes fully before exit.
-    process.exitCode = archivalError ? 2 : exitCode;
+    return {
+      report,
+      exitCode: archivalError ? 2 : exitCode,
+      reportFile: reportReservation?.destination ?? null,
+      runtimeArming,
+    };
   } catch (error) {
-    const reasonHash = crypto.createHash('sha256').update(String(error?.message ?? error)).digest('hex');
-    preserveReleaseWorkDir = releaseTrust.ok && releaseWorkDir != null;
+    let primaryError = error;
+    try {
+      await disposeOwnedResources();
+    } catch (disposeError) {
+      primaryError = disposeError === error
+        ? disposeError
+        : new Error(
+            `${String(error?.message ?? error)}; ${String(disposeError?.message ?? disposeError)}`
+          );
+    }
+    const reasonHash = crypto.createHash('sha256').update(String(primaryError?.message ?? primaryError)).digest('hex');
+    preserveReleaseWorkDir = completedReport?.evaluationScope?.trust?.ok === true && releaseWorkDir != null;
     let emergencyArchived = false;
     if (reportReservation && reportReservation.writeAttempted !== true) {
       try {
-        writeReservedPrivateReport(reportReservation, {
+        deps.writeReservedPrivateReport(reportReservation, {
           schema: 'eval-emergency.v1',
           releaseSha,
           harnessVersion,
@@ -3864,7 +4736,7 @@ async function main() {
           reportComplete: false,
           reasonHash,
           workDirectoryRetained: preserveReleaseWorkDir,
-          occurredAt: new Date().toISOString(),
+          occurredAt: new Date(deps.now()).toISOString(),
         });
         emergencyArchived = true;
       } catch {
@@ -3879,15 +4751,17 @@ async function main() {
     ].filter(Boolean).join('; ');
     throw new Error(`release evaluation failed unexpectedly (${evidence})`);
   } finally {
-    closePrivateReportReservation(reportReservation, {
+    deps.closePrivateReportReservation(reportReservation, {
       removeIncomplete: reportReservation?.written !== true,
     });
-    if (!preserveReleaseWorkDir) removeReleaseWorkDir(releaseWorkDir);
+    if (!preserveReleaseWorkDir) deps.removeReleaseWorkDir(releaseWorkDir);
   }
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  main().catch((err) => {
+  runReleaseCli().then(({ exitCode }) => {
+    process.exitCode = exitCode;
+  }).catch((err) => {
     console.error(err.message);
     process.exitCode = 2;
   });
