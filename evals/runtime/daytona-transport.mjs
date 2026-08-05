@@ -635,10 +635,6 @@ export function createDaytonaTransport({
       archive.fill(0);
       throw new TypeError('archive must not be empty');
     }
-    if (containsCredentialMarker(archive)) {
-      archive.fill(0);
-      fail('archive resembles forbidden secret credential material', 'ERR_TRANSPORT_SECRET');
-    }
     const expected = assertSha256(expectedSha256, 'archive sha256');
     if (!timingSafeHexEqual(sha256(archive), expected)) {
       archive.fill(0);

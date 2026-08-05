@@ -1238,6 +1238,31 @@ export function inspectTrialArchive(bytes, { kind } = {}) {
   }
 }
 
+export function trialArchiveContainsExactBytes(bytes, { kind, needles } = {}) {
+  if (!['task-input', 'trial-output'].includes(kind)) fail('archive kind is invalid', 'ERR_TRIAL_ARCHIVE_SCHEMA');
+  if (!Array.isArray(needles) || needles.length < 1 || needles.length > 4
+      || needles.some((needle) => !Buffer.isBuffer(needle) || needle.length < 1 || needle.length > 512)) {
+    fail('archive exclusion needles are invalid', 'ERR_TRIAL_ARCHIVE_SCHEMA');
+  }
+  const entries = parseTar(bytes, archiveLimitsForKind(kind));
+  try {
+    for (const entry of entries) {
+      const pathBytes = Buffer.from(entry.path);
+      try {
+        if (needles.some((needle) => pathBytes.indexOf(needle) !== -1
+            || (entry.type === 'file' && entry.bytes.indexOf(needle) !== -1))) {
+          return true;
+        }
+      } finally {
+        pathBytes.fill(0);
+      }
+    }
+    return false;
+  } finally {
+    for (const entry of entries) entry.bytes.fill(0);
+  }
+}
+
 function ensureFreshDestination(destination) {
   normalizedAbsolute(destination, 'archive extraction destination');
   const parent = path.dirname(destination);

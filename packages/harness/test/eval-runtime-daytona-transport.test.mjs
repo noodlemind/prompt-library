@@ -217,7 +217,7 @@ test('stripped provider environment values are not copied or retained by the tra
 });
 
 test('bounded upload and download use a fixed SSH bridge, fixed paths, and verified digests', async () => {
-  const archive = Buffer.from('bounded nonsecret archive');
+  const archive = Buffer.from('bounded source archive containing the literal scanner prefix sk-or-');
   const digest = sha256(archive);
   const uploadAck = {
     schema: 'engineer-daytona-archive-result.v1',
@@ -303,13 +303,6 @@ test('archive digest, size, malformed response, and oversized frame failures are
     bytes: Buffer.alloc(1_025),
     sha256: sha256(Buffer.alloc(1_025)),
   }), /archive.*bound|oversized/i);
-  const secretArchive = Buffer.from(`archive includes ${PROVIDER_SECRET.toString()}`);
-  await assert.rejects(noEffect.value.uploadArchive({
-    sandboxId: SANDBOX,
-    kind: 'task-input',
-    bytes: secretArchive,
-    sha256: sha256(secretArchive),
-  }), /secret/i);
   assert.equal(noEffect.channelCalls.length, 0);
 
   const malformed = transport({

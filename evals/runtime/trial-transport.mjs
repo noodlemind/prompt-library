@@ -13,6 +13,7 @@ import {
   canonicalSha256,
   protocolDocumentHash,
 } from './protocol.mjs';
+import { trialArchiveContainsExactBytes } from './trial-archive.mjs';
 
 export const CONTROL_GENESIS_HASH = '0'.repeat(64);
 
@@ -485,16 +486,6 @@ export function createRuntimeTrialTransport({
         TASK_INPUT_ARCHIVE_LIMITS.compressedBytes
       );
       const manifest = taskArchiveManifest(archive);
-      const upload = await daytonaTransport.uploadArchive({
-        sandboxId: allocationId,
-        kind: 'task-input',
-        bytes: archive,
-        sha256: manifest.sha256,
-      });
-      validateUploadReceipt(upload, manifest);
-      archive.fill(0);
-      archive = undefined;
-
       secrets = await takeTrialSecrets({
         sessionId,
         trialId: spec.trialId,
@@ -510,6 +501,21 @@ export function createRuntimeTrialTransport({
       providerKey = controlledProvider
         ? asOwnedBytes(secrets.providerKey, 'provider key', 8, 512)
         : undefined;
+      if (trialArchiveContainsExactBytes(archive, {
+        kind: 'task-input',
+        needles: providerKey === undefined ? [hmacKey] : [hmacKey, providerKey],
+      })) {
+        invalid('task input archive contains runtime credential bytes', 'ERR_RUNTIME_TRIAL_TRANSPORT_SECRET');
+      }
+      const upload = await daytonaTransport.uploadArchive({
+        sandboxId: allocationId,
+        kind: 'task-input',
+        bytes: archive,
+        sha256: manifest.sha256,
+      });
+      validateUploadReceipt(upload, manifest);
+      archive.fill(0);
+      archive = undefined;
       try {
         opened = await daytonaTransport.openSupervisorControl({
           sandboxId: allocationId,

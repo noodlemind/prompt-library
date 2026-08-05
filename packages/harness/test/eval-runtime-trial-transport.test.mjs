@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
+import zlib from 'node:zlib';
 import { test } from 'node:test';
 
 import {
@@ -21,7 +22,38 @@ const TRIAL_ID = 'cobol-modernization-generic-1';
 const ALLOCATION_ID = 'sandbox-release-1';
 const HMAC_KEY = Buffer.alloc(32, 0x41);
 const PROVIDER_KEY = Buffer.from('sk-or-v1-one-shot-provider-key');
-const TASK_ARCHIVE = Buffer.from('content-addressed task input');
+
+function gzipTarEntry(name, content) {
+  const header = Buffer.alloc(512);
+  header.write(name, 0, 100, 'utf8');
+  const writeOctal = (value, offset, length) => {
+    header.write(`${value.toString(8).padStart(length - 1, '0')}\0`, offset, length, 'ascii');
+  };
+  writeOctal(0o600, 100, 8);
+  writeOctal(0, 108, 8);
+  writeOctal(0, 116, 8);
+  writeOctal(content.length, 124, 12);
+  writeOctal(0, 136, 12);
+  header.fill(0x20, 148, 156);
+  header[156] = 0x30;
+  header.write('ustar\0', 257, 6, 'ascii');
+  header.write('00', 263, 2, 'ascii');
+  let checksum = 0;
+  for (const byte of header) checksum += byte;
+  header.write(`${checksum.toString(8).padStart(6, '0')}\0 `, 148, 8, 'ascii');
+  const padding = Buffer.alloc((512 - (content.length % 512)) % 512);
+  const raw = Buffer.concat([header, content, padding, Buffer.alloc(1024)]);
+  try {
+    return zlib.gzipSync(raw, { level: 9, mtime: 0 });
+  } finally {
+    raw.fill(0);
+  }
+}
+
+const TASK_ARCHIVE = gzipTarEntry(
+  'work/payload.txt',
+  Buffer.from('content-addressed source with the noncredential scanner prefix sk-or-'),
+);
 const OUTPUT_ARCHIVE = Buffer.from('content-addressed trial output');
 const NOW = '2026-08-04T20:00:00.000Z';
 const CONTROLLED_PROVIDER = 'controlled-provider';
@@ -445,6 +477,33 @@ test('one trial stages one input, hands off byte secrets once, runs once, and do
     .filter(([name]) => name === 'sendFrame')
     .map(([, bytes]) => JSON.parse(bytes.toString()).controlSequence);
   assert.deepEqual(sequences, [1, 2, 3, 4]);
+});
+
+test('the runtime transport rejects the exact one-shot credential bytes before archive upload', async () => {
+  const remote = remoteHandler();
+  const daytona = fakeDaytonaTransport(remote);
+  const captured = Buffer.concat([
+    Buffer.from('legitimate source plus an accidentally captured credential: '),
+    PROVIDER_KEY,
+  ]);
+  const taskArchive = gzipTarEntry('work/captured-credential.txt', captured);
+  captured.fill(0);
+  const hmacKey = Buffer.from(HMAC_KEY);
+  const providerKey = Buffer.from(PROVIDER_KEY);
+  const value = createRuntimeTrialTransport({
+    daytonaTransport: daytona,
+    sessionId: SESSION_ID,
+    executionMode: CONTROLLED_PROVIDER,
+    taskInputArchive: async () => taskArchive,
+    takeTrialSecrets: async () => ({ hmacKey, providerKey }),
+  });
+
+  await assert.rejects(preparedTrial({ value }), /archive.*credential|credential.*archive/i);
+  assert.equal(daytona.calls.some(([name]) => name === 'uploadArchive'), false);
+  assert.equal(daytona.calls.some(([name]) => name === 'openSupervisorControl'), false);
+  assert.deepEqual(taskArchive, Buffer.alloc(taskArchive.length));
+  assert.deepEqual(hmacKey, Buffer.alloc(hmacKey.length));
+  assert.deepEqual(providerKey, Buffer.alloc(providerKey.length));
 });
 
 test('zero-provider transport takes only an HMAC key and rejects signed-request mode drift', async () => {
