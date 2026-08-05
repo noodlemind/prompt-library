@@ -242,6 +242,7 @@ function exactNotFound(identity) {
 function fakeDaytona(input, {
   initialSnapshots = [],
   mode = null,
+  sandboxOverrides = {},
   selfTestStdout = null,
 } = {}) {
   const calls = [];
@@ -289,7 +290,10 @@ function fakeDaytona(input, {
     }
 
     if (args[0] === 'create') {
-      sandbox = sandboxRecord(input, { name: args[args.indexOf('--name') + 1] });
+      sandbox = sandboxRecord(input, {
+        name: args[args.indexOf('--name') + 1],
+        ...sandboxOverrides,
+      });
       if (mode === 'sandbox-create') return { code: 70, stdout: '', stderr: 'partial sandbox failure' };
       return { code: 0, stdout: '', stderr: '' };
     }
@@ -399,9 +403,10 @@ test('creates, validates, and retains one content-addressed snapshot with exact 
   assert.match(sandboxName, new RegExp(`^${input.sandboxNamePrefix}[a-f0-9]{32}$`));
   assert.deepEqual(fake.calls[4], [
     'create', '--name', sandboxName, '--snapshot', input.identity.name,
-    '--cpu', '2', '--memory', '4096', '--disk', '10', '--target', 'us',
-    '--network-block-all', '--auto-stop', '0', '--ttl', '30',
+    '--target', 'us', '--network-block-all', '--auto-stop', '0', '--ttl', '30',
   ]);
+  assert.equal(['--cpu', '--memory', '--disk'].some((flag) => fake.calls[4].includes(flag)), false,
+    'a sandbox created from a resource-bound snapshot must not restate resource flags');
   assert.deepEqual(fake.calls[5], [
     'exec', sandboxName, '--',
     '/opt/engineer/bin/engineer-snapshot-selftest', '--expected-build-hash', input.identity.buildHash,
@@ -603,8 +608,7 @@ test('paginates and revalidates an exact active content-addressed snapshot befor
     ['snapshot', 'list', '--format', 'json', '--limit', '200', '--page', '2'],
     [
       'create', '--name', sandboxName, '--snapshot', input.identity.name,
-      '--cpu', '2', '--memory', '4096', '--disk', '10', '--target', 'us',
-      '--network-block-all', '--auto-stop', '0', '--ttl', '30',
+      '--target', 'us', '--network-block-all', '--auto-stop', '0', '--ttl', '30',
     ],
     [
       'exec', sandboxName, '--',
@@ -718,6 +722,25 @@ test('version and initial-list failures stop before any resource-changing comman
     assert.equal(fake.calls.some((args) =>
       args[0] === 'create' || args[0] === 'delete' ||
       args[0] === 'snapshot' && ['create', 'delete'].includes(args[1])), false, mode);
+  }
+});
+
+test('rejects every mismatched resource inherited by a snapshot validation sandbox', async (t) => {
+  const input = files(t);
+  for (const sandboxOverrides of [
+    { cpu: 1 },
+    { memory: 2048 },
+    { disk: 9 },
+  ]) {
+    const fake = fakeDaytona(input, { sandboxOverrides });
+    const error = await rejected(controller(fake).ensureSnapshot(request(input)));
+
+    assert.equal(error.code, 'ERR_SNAPSHOT_SANDBOX_MISMATCH', JSON.stringify(sandboxOverrides));
+    assert.equal(fake.sandbox, null, 'the mismatched validation sandbox must be deleted');
+    assert.equal(fake.snapshotDeleteAttempted, true,
+      'a newly created snapshot with mismatched inherited resources must be rolled back');
+    assert.equal(fake.snapshots.some((entry) => entry.name === input.identity.name), false,
+      'the rejected release snapshot must be absent after rollback');
   }
 });
 

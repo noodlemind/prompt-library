@@ -1437,8 +1437,7 @@ export function createDaytonaSnapshotController(options = {}) {
       sandboxMayExist = true;
       await invoke([
         'create', '--name', sandboxName, '--snapshot', prepared.identity.name,
-        '--cpu', '2', '--memory', '4096', '--disk', '10', '--target', 'us',
-        '--network-block-all', '--auto-stop', '0', '--ttl', '30',
+        '--target', 'us', '--network-block-all', '--auto-stop', '0', '--ttl', '30',
       ], 'Daytona validation sandbox creation');
       const selfTest = await invoke([
         'exec', sandboxName, '--', SELFTEST, '--expected-build-hash', prepared.identity.buildHash,
