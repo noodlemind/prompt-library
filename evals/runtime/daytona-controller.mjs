@@ -205,9 +205,9 @@ export function validateDaytonaAllocation(allocation, expected) {
   exact('user', 'root');
   exact('sandboxClass', 'container');
   exact('cpu', expected.cpu);
-  // Daytona reports inherited snapshot memory in MB; the public controller
-  // option remains GiB, so observed allocation still uses the exact conversion.
-  exact('memory', expected.memoryGiB * 1024);
+  // Daytona CLI v0.203 reports sandbox memory in GiB, matching the snapshot
+  // creation flag and this controller's public topology option.
+  exact('memory', expected.memoryGiB);
   exact('disk', expected.diskGiB);
   exact('public', false);
   if (allocation.state !== 'started' || (allocation.desiredState != null && allocation.desiredState !== 'started')) {

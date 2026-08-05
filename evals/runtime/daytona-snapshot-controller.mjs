@@ -1007,7 +1007,7 @@ function validateExactSandbox(value, expected) {
   const id = validateSandbox(value);
   if (value.name !== expected.name || value.snapshot !== expected.snapshot || value.state !== 'started' ||
       value.desiredState !== 'started' || value.target !== 'us' || value.sandboxClass !== 'container' ||
-      value.user !== 'root' || value.cpu !== 2 || value.memory !== 4096 || value.disk !== 10 ||
+      value.user !== 'root' || value.cpu !== 2 || value.memory !== 4 || value.disk !== 10 ||
       value.networkBlockAll !== true ||
       value.public !== false || !plainObject(value.env) || Object.keys(value.env).length !== 0 ||
       !Array.isArray(value.volumes) || value.volumes.length !== 0) {

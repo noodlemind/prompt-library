@@ -70,8 +70,8 @@ function allocation(name, trialId, labels = {}) {
     user: 'root',
     sandboxClass: 'container',
     cpu: 2,
-    // Daytona CLI reports memory in MB even though the controller accepts GiB.
-    memory: 4096,
+    // Daytona CLI v0.203 reports inherited snapshot memory in GiB.
+    memory: 4,
     disk: 10,
     env: {},
     volumes: [],

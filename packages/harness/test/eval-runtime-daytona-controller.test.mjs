@@ -21,8 +21,8 @@ function allocation(name, overrides = {}) {
     user: 'root',
     sandboxClass: 'container',
     cpu: 2,
-    // Daytona CLI reports memory in MB even though the controller accepts GiB.
-    memory: 4096,
+    // Daytona CLI v0.203 reports inherited snapshot memory in GiB.
+    memory: 4,
     disk: 10,
     env: {},
     volumes: [],
@@ -195,7 +195,7 @@ test('Daytona allocation validation binds every approved topology field', () => 
     { id: '../unsafe-sandbox-id' },
     { user: 'daytona' },
     { cpu: 1 },
-    { memory: 4 },
+    { memory: 4096 },
     { disk: 100 },
     { env: { OPENROUTER_API_KEY: 'forbidden' } },
     { volumes: [{ mountPath: '/secret' }] },

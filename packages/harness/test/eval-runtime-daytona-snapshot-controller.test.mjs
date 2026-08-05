@@ -231,7 +231,7 @@ function sandboxRecord(input, overrides = {}) {
     user: 'root',
     sandboxClass: 'container',
     cpu: 2,
-    memory: 4096,
+    memory: 4,
     disk: 10,
     networkBlockAll: true,
     env: {},
@@ -749,7 +749,7 @@ test('rejects a non-root identity and every mismatched inherited validation reso
   for (const sandboxOverrides of [
     { user: 'daytona' },
     { cpu: 1 },
-    { memory: 2048 },
+    { memory: 4096 },
     { disk: 9 },
   ]) {
     const fake = fakeDaytona(input, { sandboxOverrides });
