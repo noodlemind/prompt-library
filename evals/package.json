@@ -1,0 +1,19 @@
+{
+  "name": "@dev-kit/harness-evals",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "eval": "node ./run.mjs",
+    "run": "node ./run.mjs",
+    "release": "node ./release.mjs",
+    "test": "node ../scripts/test-repository.mjs --eval",
+    "test:daytona-zero-provider": "node ./zero-provider-daytona.mjs",
+    "verify:daytona-zero-provider": "node ./verify-zero-provider-daytona.mjs"
+  },
+  "dependencies": {
+    "yaml": "^2.8.0"
+  }
+}

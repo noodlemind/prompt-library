@@ -8,10 +8,12 @@ import {
 } from './archive-limits.mjs';
 import {
   MAX_PROTOCOL_BYTES,
+  RuntimeControlFailureSchema,
   RuntimeExecutionModes,
   canonicalJson,
   canonicalSha256,
   protocolDocumentHash,
+  verifyRuntimeControlFailure,
 } from './protocol.mjs';
 import { trialArchiveContainsExactBytes } from './trial-archive.mjs';
 
@@ -33,6 +35,8 @@ export class RuntimeTrialTransportError extends Error {
     this.code = code;
   }
 }
+
+class AuthenticatedRuntimeControlFailureError extends RuntimeTrialTransportError {}
 
 function invalid(message, code = 'ERR_RUNTIME_TRIAL_TRANSPORT_POLICY') {
   throw new RuntimeTrialTransportError(message, code);
@@ -385,6 +389,8 @@ export function createRuntimeTrialTransport({
     if (record.closed) return;
     record.closed = true;
     activeByTrial.delete(record.trialId);
+    record.failureVerificationKey?.fill(0);
+    record.failureVerificationKey = undefined;
     try {
       await record.control?.close();
     } catch (error) {
@@ -419,12 +425,33 @@ export function createRuntimeTrialTransport({
     const requestHash = canonicalSha256(envelope);
     const outbound = encodeFrame(envelope, `${operation} control request`);
     let inbound;
+    let validatingInbound = false;
     try {
       await record.control.sendFrame(outbound);
       assertSignal(signal);
       inbound = await record.control.receiveFrame();
       assertSignal(signal);
+      validatingInbound = true;
       const response = parseFrame(inbound, `${operation} control response`);
+      if (response.schema === RuntimeControlFailureSchema) {
+        let failure;
+        try {
+          failure = verifyRuntimeControlFailure(response, record.failureVerificationKey, {
+            operation,
+            sessionId,
+            trialId: record.trialId,
+            allocationId: record.allocationId,
+            controlSequence: record.nextSequence,
+            requestHash,
+          });
+        } catch {
+          throw new Error('runtime control failure verification failed');
+        }
+        throw new AuthenticatedRuntimeControlFailureError(
+          `runtime trial transport ${operation} failed (remote phase:${failure.phase} code:${failure.code} detail sha256:${failure.detailSha256})`,
+          'ERR_RUNTIME_TRIAL_TRANSPORT_REMOTE_FAILURE',
+        );
+      }
       exactKeys(response, [
         'schema',
         'protocolVersion',
@@ -449,11 +476,20 @@ export function createRuntimeTrialTransport({
       const validatedBody = responseBody(response.body, operation);
       record.previousResponseHash = canonicalSha256(response);
       record.nextSequence += 1;
+      if (operation === 'final') {
+        record.failureVerificationKey?.fill(0);
+        record.failureVerificationKey = undefined;
+      }
       return validatedBody;
     } catch (error) {
       record.failed = true;
       try { await closeRecord(record); } catch { /* the original failure remains authoritative */ }
-      throw sanitizedFailure(error, operation);
+      const sanitized = validatingInbound
+        && error instanceof RuntimeTrialTransportError
+        && !(error instanceof AuthenticatedRuntimeControlFailureError)
+        ? new Error('runtime control response validation failed')
+        : error;
+      throw sanitizedFailure(sanitized, operation);
     } finally {
       outbound.fill(0);
       if (Buffer.isBuffer(inbound)) inbound.fill(0);
@@ -471,6 +507,7 @@ export function createRuntimeTrialTransport({
     let archive;
     let secrets;
     let hmacKey;
+    let failureVerificationKey;
     let providerKey;
     let opened;
     let record;
@@ -498,6 +535,7 @@ export function createRuntimeTrialTransport({
         'trial secrets'
       );
       hmacKey = asOwnedBytes(secrets.hmacKey, 'runtime HMAC key', 32, 32);
+      failureVerificationKey = Buffer.from(hmacKey);
       providerKey = controlledProvider
         ? asOwnedBytes(secrets.providerKey, 'provider key', 8, 512)
         : undefined;
@@ -548,7 +586,9 @@ export function createRuntimeTrialTransport({
         failed: false,
         closed: false,
         downloaded: false,
+        failureVerificationKey,
       };
+      failureVerificationKey = undefined;
       const channel = Object.freeze({
         schema: 'engineer-runtime-control-handle.v1',
         sessionId,
@@ -572,6 +612,7 @@ export function createRuntimeTrialTransport({
     } catch (error) {
       archive?.fill(0);
       hmacKey?.fill(0);
+      failureVerificationKey?.fill(0);
       providerKey?.fill(0);
       if (isPlainObject(secrets)) {
         if (Buffer.isBuffer(secrets.hmacKey) || secrets.hmacKey instanceof Uint8Array) secrets.hmacKey.fill(0);

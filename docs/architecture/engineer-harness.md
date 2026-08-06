@@ -180,7 +180,7 @@ The repository supplies schema-versioned plans, trusted named checks, policy, su
 
 ## Distribution and host validation
 
-The prompt library is the authoring source. `scripts/build-harness-assets.mjs` builds ignored package assets, and the `@dev-kit/harness` npm package installs versioned agents, skills, instructions, hooks, schemas, and knowledge scaffolding into global Copilot locations. Hook commands are hydrated with a deterministic absolute working directory. `install --configure-vscode` merges `chat.hookFilesLocations` for `~/.copilot/hooks` into VS Code user settings. Upgrades preserve user-authored profiles and compounded solutions and remove only harness-owned paths tracked by the lock file or retirement manifest.
+The prompt library is the authoring source. `scripts/build-harness-assets.mjs` builds ignored package assets, and the `@dev-kit/harness` npm package installs versioned agents, skills, instructions, hooks, schemas, and knowledge scaffolding into global Copilot locations. Hook commands are hydrated with a deterministic absolute working directory. `install --configure-vscode` merges `chat.hookFilesLocations` for `~/.copilot/hooks` into VS Code user settings. Upgrades preserve user-authored profiles and compounded solutions and remove only harness-owned paths tracked by the lock file or retirement manifest. Release runners, cloud adapters, task fixtures, and eval-only dependencies remain in the private `evals/` workspace; package-boundary tests prevent them from entering the published Harness tarball.
 
 `harness doctor --host vscode` checks the installed bundle, command resolution, user hook discovery, known payload recognition, ungated denial, gated allow, successful post-tool recording, unverified Stop denial, and verified Stop allow in an isolated fixture. It diagnoses the installed runtime rather than passing from package-source files alone.
 
@@ -199,7 +199,17 @@ Source and package tests cannot prove organization-specific IDE discovery settin
 
 ## Evaluation boundary
 
-Harness-value claims come from a controlled same-model Generic-versus-Harness comparison: identical task bytes, sandbox, resolved provider, resolved model, model profile, settings, tools, stopping budget, and verifier, with fallback rejected. Native Claude Code, Codex, Copilot, Grok, and similar subscription runs are compatibility and user-experience references because their hidden prompts, tools, routing, and quotas are not normalized. Pi or mini-SWE-agent becomes a causal comparator only when it uses the same observable condition and budget. Missing prompt, lifecycle, cost, or correctness evidence remains unknown and cannot support a release claim. The executable qualification, calibration, budget, and completion policy lives in [the eval guide](../../evals/README.md).
+Harness-value claims come from a controlled same-model Generic-versus-Harness comparison: identical task bytes, sandbox, resolved provider, resolved model, model profile, settings, tools, stopping budget, and verifier, with fallback rejected. The treatment is the exact `@dev-kit/harness` npm tarball built from the evaluated commit. Its revalidated bundle manifest supplies a sanitized package identity (version, package/lock digests, SRI, and size/count inventory); the Generic arm has no Harness mount and the Harness arm does. New qualification, calibration, and routine claims fail closed unless that identity matches every controlled pair, rerun, and retained trial bundle. Older `eval-report.v2` files remain readable but cannot qualify as new release evidence without this additive artifact.
+
+Native Claude Code, Codex, Copilot, Grok, and similar subscription runs are compatibility and user-experience references because their hidden prompts, tools, routing, and quotas are not normalized. Pi or mini-SWE-agent becomes a causal comparator only when it uses the same observable condition and budget. Missing prompt, lifecycle, cost, correctness, or exact-treatment evidence remains unknown and cannot support a release claim. The executable qualification, calibration, budget, and completion policy lives in [the eval guide](../../evals/README.md).
+
+The evaluated release commit and its code-owned local runner/provisioner are
+part of the trusted computing base, together with the repository owner's
+workstation and the approved Docker/Daytona control planes. The isolation
+contract protects against task, model, Harbor payload, and runtime drift; it
+does not make an unreviewed or malicious repository commit safe to execute.
+Evaluating code from an untrusted contributor requires a separately maintained
+external builder that treats the candidate tree only as untrusted data.
 
 The small-model release-evidence lifecycle is deliberately staged:
 
@@ -216,7 +226,7 @@ For architecture or runtime changes, run:
 
 ```bash
 node scripts/build-harness-assets.mjs
-npm --prefix packages/harness test
+node scripts/test-repository.mjs
 ```
 
 For plan-governed delivery, the terminal gate is:

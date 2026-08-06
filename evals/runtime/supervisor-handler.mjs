@@ -3,13 +3,19 @@ import { TextDecoder } from 'node:util';
 import { archiveLimitsForKind } from './archive-limits.mjs';
 import {
   MAX_PROTOCOL_BYTES,
+  RuntimeControlFailureSchema,
   RuntimeExecutionModes,
   canonicalJson,
   canonicalSha256,
   protocolDocumentHash,
+  signRuntimeControlFailure,
   validateProtocolDocument,
+  verifyProtocolDocument,
 } from './protocol.mjs';
-import { createRuntimeSupervisor } from './supervisor.mjs';
+import {
+  createRuntimeSupervisor,
+  readRuntimeSupervisorFailureDiagnostic,
+} from './supervisor.mjs';
 
 const CONTROL_GENESIS_HASH = '0'.repeat(64);
 const CONTROL_REQUEST_SCHEMA = 'engineer-runtime-control-request.v1';
@@ -282,12 +288,26 @@ function validateBindingObservation(value, expected) {
   };
 }
 
-function validateRequestBinding(request, binding, mode) {
+function verificationNow(clock) {
+  const value = clock?.now?.() ?? Date.now();
+  const milliseconds = value instanceof Date
+    ? value.getTime()
+    : typeof value === 'number'
+      ? value
+      : Date.parse(String(value));
+  if (!Number.isFinite(milliseconds)) invalid('runtime verification clock is invalid');
+  return new Date(milliseconds);
+}
+
+function validateRequestBinding(request, binding, mode, verification) {
   let validated;
   try {
-    validated = validateProtocolDocument(request, { requireAuthentication: true });
+    validated = verifyProtocolDocument(request, verification.key, {
+      expectedKeyId: verification.expectedKeyId,
+      now: verification.now,
+    });
   } catch {
-    invalid('signed trial request is structurally invalid');
+    invalid('signed trial request is unauthenticated or structurally invalid');
   }
   if (validated.schema !== 'engineer-runtime-trial-request.v1'
       || validated.executionMode !== mode
@@ -408,6 +428,14 @@ export function createSupervisorHandlerFactory({
       }
     }
 
+    const diagnosticKey = Buffer.from(hmacKey);
+    let diagnosticKeyWiped = false;
+    function wipeDiagnosticKey() {
+      if (diagnosticKeyWiped) return;
+      diagnosticKeyWiped = true;
+      diagnosticKey.fill(0);
+    }
+
     let supervisor;
     let providerKeyFd;
     let providerFdClosed = mode === RuntimeExecutionModes.ZERO_PROVIDER_CANARY;
@@ -444,6 +472,7 @@ export function createSupervisorHandlerFactory({
         providerFdClosed = true;
         try { await closeProviderKeyFd(providerKeyFd); } catch { /* construction remains fail-closed */ }
       }
+      wipeDiagnosticKey();
       throw error instanceof SupervisorHandlerError
         ? error
         : new SupervisorHandlerError('supervisor secret handoff failed');
@@ -524,11 +553,34 @@ export function createSupervisorHandlerFactory({
       return bytes;
     }
 
-    async function bind(envelope) {
+    function failureResponseFor(envelope, diagnostic) {
+      const signingKey = Buffer.from(diagnosticKey);
+      try {
+        return encodeFrame(signRuntimeControlFailure({
+          schema: RuntimeControlFailureSchema,
+          protocolVersion: 1,
+          operation: envelope.operation,
+          sessionId: envelope.sessionId,
+          trialId: envelope.trialId,
+          allocationId: envelope.allocationId,
+          controlSequence: envelope.controlSequence,
+          requestHash: canonicalSha256(envelope),
+          phase: diagnostic.phase,
+          code: diagnostic.code,
+          detailSha256: diagnostic.detailSha256,
+        }, signingKey));
+      } finally {
+        signingKey.fill(0);
+        wipeDiagnosticKey();
+      }
+    }
+
+    async function bind(envelope, authorizeDiagnostic) {
       exactKeys(envelope.body, ['trial', 'taskArchive'], 'bind request body');
       const trial = validateTrial(envelope.body.trial, mode);
       if (trial.trialId !== envelope.trialId) invalid('bound trial identity drifted');
       const taskArchive = validateArchiveManifest(envelope.body.taskArchive, 'task-input');
+      authorizeDiagnostic();
       const observed = validateBindingObservation(await inspectBinding({
         sessionId: envelope.sessionId,
         trialId: envelope.trialId,
@@ -556,10 +608,15 @@ export function createSupervisorHandlerFactory({
       });
     }
 
-    async function prepare(envelope) {
+    async function prepare(envelope, authorizeDiagnostic) {
       exactKeys(envelope.body, ['request'], 'readiness request body');
-      request = validateRequestBinding(envelope.body.request, binding, mode);
+      request = validateRequestBinding(envelope.body.request, binding, mode, {
+        key: diagnosticKey,
+        expectedKeyId: expectedControllerKeyId,
+        now: verificationNow(clock),
+      });
       requestHash = protocolDocumentHash(request);
+      authorizeDiagnostic();
       const context = Object.freeze({
         sessionId: binding.sessionId,
         trialId: binding.trialId,
@@ -618,12 +675,13 @@ export function createSupervisorHandlerFactory({
       });
     }
 
-    async function run(envelope) {
+    async function run(envelope, authorizeDiagnostic) {
       exactKeys(envelope.body, ['requestHash', 'readinessLeaseHash'], 'run request body');
       if (envelope.body.requestHash !== requestHash
           || envelope.body.readinessLeaseHash !== readinessLeaseHash) {
         invalid('run request digest drifted');
       }
+      authorizeDiagnostic();
       runnerResult = validateRunnerResult(await supervisor.run());
       const outputArchive = validateArchiveManifest(await inspectTrialOutput({
         sessionId: binding.sessionId,
@@ -643,12 +701,13 @@ export function createSupervisorHandlerFactory({
       });
     }
 
-    async function finalize(envelope) {
+    async function finalize(envelope, authorizeDiagnostic) {
       exactKeys(envelope.body, ['requestHash', 'readinessLeaseHash'], 'final request body');
       if (envelope.body.requestHash !== requestHash
           || envelope.body.readinessLeaseHash !== readinessLeaseHash) {
         invalid('final request digest drifted');
       }
+      authorizeDiagnostic();
       const attestation = await supervisor.finalize({
         outcome: runnerResult.exitCode === 0
           ? { status: 'succeeded', exitReason: 'verified' }
@@ -680,18 +739,33 @@ export function createSupervisorHandlerFactory({
       if (lifecycleClosed || state === 'failed' || state === 'complete') {
         invalid('control lifecycle does not permit another frame');
       }
+      let envelope;
+      let diagnosticAuthorized = false;
+      const authorizeDiagnostic = () => { diagnosticAuthorized = true; };
       try {
-        const envelope = validateEnvelope(parseFrame(frameBytes));
+        envelope = validateEnvelope(parseFrame(frameBytes));
         const response = envelope.operation === 'bind'
-          ? await bind(envelope)
+          ? await bind(envelope, authorizeDiagnostic)
           : envelope.operation === 'readiness'
-            ? await prepare(envelope)
+            ? await prepare(envelope, authorizeDiagnostic)
             : envelope.operation === 'run'
-              ? await run(envelope)
-              : await finalize(envelope);
+              ? await run(envelope, authorizeDiagnostic)
+              : await finalize(envelope, authorizeDiagnostic);
+        if (state === 'complete') wipeDiagnosticKey();
         return { response, done: state === 'complete' };
       } catch (error) {
         state = 'failed';
+        const diagnostic = envelope && diagnosticAuthorized
+          ? readRuntimeSupervisorFailureDiagnostic(error)
+          : null;
+        if (diagnostic) {
+          try {
+            return { response: failureResponseFor(envelope, diagnostic), done: true };
+          } catch {
+            // A diagnostic that cannot be encoded remains a generic fail-closed error.
+          }
+        }
+        wipeDiagnosticKey();
         throw error instanceof SupervisorHandlerError
           ? error
           : new SupervisorHandlerError('supervisor control operation failed');
@@ -705,7 +779,11 @@ export function createSupervisorHandlerFactory({
       try {
         await supervisor.controlChannelLost('controller-channel-closed');
       } finally {
-        await closeUnclaimedFd();
+        try {
+          await closeUnclaimedFd();
+        } finally {
+          wipeDiagnosticKey();
+        }
       }
     }
 
@@ -720,7 +798,11 @@ export function createSupervisorHandlerFactory({
           );
         }
       } finally {
-        await closeUnclaimedFd();
+        try {
+          await closeUnclaimedFd();
+        } finally {
+          wipeDiagnosticKey();
+        }
       }
     }
 

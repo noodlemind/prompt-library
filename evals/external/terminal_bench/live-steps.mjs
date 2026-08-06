@@ -49,6 +49,10 @@ import {
 } from '../../lib/economic-phases.mjs';
 import { validatePromptComponentManifestStructure } from '../../lib/prompt-manifest.mjs';
 import {
+  TREATMENT_ARTIFACT_SCHEMA,
+  assertHarnessTreatmentArtifact,
+} from '../../lib/treatment-artifact.mjs';
+import {
   CONDITION_INPUTS_FILE,
   prepareHarnessBundle,
   materializePrebuiltBundle,
@@ -219,6 +223,17 @@ const INSTRUCTION_PLACEHOLDER = '(the task instruction is supplied by Harbor at 
 const sha256 = (value) => crypto.createHash('sha256').update(String(value)).digest('hex');
 const stableHash = (value) => sha256(JSON.stringify(value ?? null));
 const shortHash = (value) => stableHash(value).slice(0, 24);
+function treatmentArtifactFromValidatedBundle(bundle, expectedHarnessVersion) {
+  return assertHarnessTreatmentArtifact({
+    schema: TREATMENT_ARTIFACT_SCHEMA,
+    bundleManifestHash: bundle.manifestHash,
+    harnessPackage: bundle?.harnessPackage,
+    conditionExposure: { generic: false, harness: true },
+  }, {
+    label: 'validated bundle Harness treatment identity',
+    expectedHarnessVersion,
+  }).artifact;
+}
 
 function diagnosticCode(raw, fallback = 'EXECUTION_INTEGRITY_FAILURE') {
   const message = String(raw ?? '');
@@ -2751,6 +2766,7 @@ export function buildLiveSteps({
       invalidRepetitionCount: repetitionRuns.length - validRepetitions,
       generic: aggregateCondition('generic'),
       harness: aggregateCondition('harness'),
+      treatmentArtifact: structuredClone(bundle.treatmentArtifact),
       failureKind,
       failureDiagnostics: repetitionRuns.flatMap((run, repetitionIndex) => [
         ...(run.setupFailureDiagnostics ?? []).map((diagnostic) => ({
@@ -2818,7 +2834,8 @@ export function buildLiveSteps({
     if (!inspected || inspected.manifestHash !== bundle.manifestHash) {
       throw new Error('harness bundle re-attestation returned an invalid identity');
     }
-    bundle = { ...bundle, ...inspected };
+    const treatmentArtifact = treatmentArtifactFromValidatedBundle(inspected, harnessVersion);
+    bundle = { ...bundle, ...inspected, treatmentArtifact };
     const conditionInputsPath = path.join(bundle.bundleDir, CONDITION_INPUTS_FILE);
     const conditionInputsStat = fs.lstatSync(conditionInputsPath);
     if (!conditionInputsStat.isFile() || conditionInputsStat.isSymbolicLink() || conditionInputsStat.size > 1024 * 1024) {

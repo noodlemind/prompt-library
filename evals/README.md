@@ -1,13 +1,33 @@
 # Harness evals
 
-Deterministic, provider-optional evals for the Adaptive Engineer Harness.
+Deterministic, provider-optional evals for the Adaptive Engineer Harness. This
+directory is a private repository workspace: eval runners, cloud adapters,
+fixtures, and their tests are versioned with the Harness source but are never
+included in the published `@dev-kit/harness` package.
 
-Run the suite:
+Run repository tests from the repository root:
 
 ```bash
-node evals/run.mjs                 # all tasks
-node evals/run.mjs --filter orient # one task
+npm ci --prefix packages/harness
+npm ci --prefix evals
+node scripts/test-repository.mjs          # core, then eval tests
+node scripts/test-repository.mjs --core   # shipped Harness tests only
+node scripts/test-repository.mjs --eval   # repository eval tests only
+npm --prefix evals test                   # same eval-only test suite
 ```
+
+Run eval tasks through the private eval workspace:
+
+```bash
+npm --prefix evals run eval                       # all tasks
+npm --prefix evals run eval -- --task orient      # one task
+npm --prefix evals run test:daytona-zero-provider -- \
+  --report-file /absolute/new/private/path/zero-provider-daytona.json # explicit cloud integration
+```
+
+The repository test runner removes ambient provider credentials before starting
+either test suite. Paid or live-provider evaluation remains an explicit eval
+command with its existing credential-custody and budget gates.
 
 ## Task kinds
 
@@ -201,6 +221,17 @@ reviews must close before the first paid qualification.
    it is not a runtime default: the operator must explicitly configure and
    price-check the intended economical model before qualification. Qualification
    tests that configured profile; it does not select or replace a model.
+
+The treatment is not a label copied from configuration. The runner packs the
+evaluated `@dev-kit/harness` source, verifies the package and lock artifacts in
+the immutable bundle, and exposes only a frozen sanitized identity from the
+revalidated manifest. `eval-report.v2.treatmentArtifact` records the common
+bundle-manifest digest, package name/version/SRI/digests/size inventory, and the
+explicit exposure boundary (`generic: false`, `harness: true`). Each controlled
+pair and rerun retains a hash binding to that artifact, while every raw trial
+must name the same bundle digest. Missing or mismatched evidence blocks new
+qualification, calibration, and routine claims. Older v2 reports remain schema
+readable, but are ineligible as a new controlled baseline.
 3. **Local capability floor (explicit opt-in):** the same controlled pair with
    Gemma 4 26B through Ollama, on the anchor task only. It is informational and
    contributes zero provider API cost; wall time, workstation energy, and model
@@ -316,6 +347,11 @@ attests the verifier's post-agent output out of band.
 
 ### Commands
 
+Use the local deterministic suite and local Docker for focused implementation
+checks when cloud startup would add no evidence. Those checks are fast and
+provider-free, but they do not satisfy the commit-bound Daytona topology check
+or authorize paid execution.
+
 ```bash
 # Per-PR (free): deterministic suite only, no pairs scheduled, exit 0 on green.
 node evals/release.mjs --profile release-canary --deterministic-only
@@ -329,9 +365,17 @@ node evals/release.mjs --profile release-canary --json
 # paths and identities are code-owned. Do not export the provider key or any
 # HARNESS_EVAL_* runtime path. Run the credential-free gate on that exact commit
 # immediately before qualification; its evidence is valid for 60 minutes.
-EVAL_REPORT_DIR=$(mktemp -d)
+EVAL_REPOSITORY=$(pwd -P)
+EVAL_RELEASE_SHA=$(git rev-parse --verify HEAD)
+install -d -m 700 "$EVAL_REPOSITORY/.harness/private-evidence"
+EVAL_ZERO_PROVIDER_REPORT="$EVAL_REPOSITORY/.harness/private-evidence/zero-provider-daytona-$EVAL_RELEASE_SHA.json"
 env -u OPENROUTER_API_KEY node evals/zero-provider-daytona.mjs \
-  --report-file "$EVAL_REPORT_DIR/zero-provider-daytona.json"
+  --report-file "$EVAL_ZERO_PROVIDER_REPORT"
+npm --prefix evals run verify:daytona-zero-provider
+
+# Paid reports remain in a separate owner-private directory outside the source
+# repository; the release CLI rejects repository destinations for paid evidence.
+EVAL_REPORT_DIR=$(mktemp -d)
 
 printf 'Dedicated OpenRouter evaluation key: ' >&2
 IFS= read -r -s provider_key
@@ -342,7 +386,7 @@ trap 'unset provider_key' EXIT
 # Neither arm passing stops the larger calibration.
 node evals/release.mjs --profile release-canary --qualification --json \
   --provider-key-fd 3 \
-  --zero-provider-baseline "$EVAL_REPORT_DIR/zero-provider-daytona.json" \
+  --zero-provider-baseline "$EVAL_ZERO_PROVIDER_REPORT" \
   --report-file "$EVAL_REPORT_DIR/qualification.json" \
   3< <(printf '%s' "$provider_key")
 
@@ -544,7 +588,8 @@ Release-candidate prerequisites (all fail closed when absent):
   task-instruction message hashes for every request, tool-schema, telemetry, and
   Harness-event identities/hashes, plus the exact mounted bundle manifest hash,
   effective mount policy, attested Harbor/host-Node identities, and independently
-  checked runtime-contract evidence;
+  checked runtime-contract evidence. The report also retains the exact sanitized
+  npm treatment identity and per-pair binding described above;
 - bounded before/after workspace manifests, changed-path count/list, canonical
   diff hash, and a separate verifier-artifact hash;
 - retained Harness events, their collection completeness, evidence-derived
@@ -808,7 +853,9 @@ A release evaluation is complete only when:
   independently derived condition contract and serialized payload; mount-policy
   evidence proves the generic arm structurally lacks treatment-only Harness
   targets; and the mounted bundle manifest binds the evaluated full SHA, Harness
-  version, and Node pins;
+  version, npm package/lock identity, and Node pins. The top-level treatment
+  artifact, every controlled pair/rerun binding, and every raw trial bundle hash
+  must agree;
 - prompt/cost/wall ratios are within policy for parity, or a win/regression is
   classified and any exceptional confirmation is resolved. One unconfirmed
   routine win is insufficient for a value claim;

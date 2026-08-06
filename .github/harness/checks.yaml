@@ -1,13 +1,16 @@
 version: 1
 checks:
   harness-tests:
-    command: ["npm", "--prefix", "packages/harness", "test"]
+    command: ["node", "scripts/test-repository.mjs"]
     timeout_seconds: 600
+  zero-provider-daytona:
+    command: ["node", "evals/verify-zero-provider-daytona.mjs"]
+    timeout_seconds: 120
   prompt-contracts:
-    command: ["node", "--test", "packages/harness/test/prompt-library-contracts.test.mjs"]
+    command: ["node", "--test", "evals/test/prompt-library-contracts.test.mjs"]
     timeout_seconds: 120
   host-contracts:
-    command: ["node", "--test", "packages/harness/test/host-compatibility.test.mjs"]
+    command: ["node", "--test", "evals/test/host-compatibility.test.mjs"]
     timeout_seconds: 120
   build-assets:
     command: ["node", "scripts/build-harness-assets.mjs"]

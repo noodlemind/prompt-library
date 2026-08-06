@@ -192,12 +192,19 @@ remain useful but must be reported as degraded rather than hook-enforced.
 ## Maintainers (prompt-library repo)
 
 ```bash
-cd packages/harness
-npm run build:assets
-npm test
-npm version patch
-npm publish
+npm ci --prefix packages/harness
+npm ci --prefix evals
+node scripts/test-repository.mjs --core
+node scripts/test-repository.mjs --eval
+npm --prefix packages/harness run build:assets
+npm --prefix packages/harness version patch
+npm --prefix packages/harness publish
 ```
+
+`npm --prefix packages/harness test` is the core-only shortcut. Eval runners,
+cloud adapters, fixtures, and eval tests live in the private `evals/` workspace;
+use `npm --prefix evals test` for that suite. The published Harness package does
+not expose repository eval scripts or include `evals/` or either test tree.
 
 Local install:
 
@@ -213,7 +220,7 @@ packages/harness/
   bin/harness.mjs
   config/               # versioned plan schemas
   lib/                  # install, orient, gate, verify, compound, validate-plan, …
-  test/
+  test/                 # shipped-Harness unit and package-boundary tests
   assets/               # build output (in npm tarball)
 ```
 

@@ -9,6 +9,35 @@ export const RuntimeExecutionModes = Object.freeze({
   CONTROLLED_PROVIDER: 'controlled-provider',
   ZERO_PROVIDER_CANARY: 'zero-provider-canary',
 });
+export const RuntimeControlFailureSchema = 'engineer-runtime-control-failure.v1';
+export const RuntimeControlFailurePhases = Object.freeze({
+  REQUEST_VALIDATION: 'request-validation',
+  INSPECT_PLATFORM: 'inspect-platform',
+  INSPECT_PROVIDER_KEY: 'inspect-provider-key',
+  RESERVE_EVIDENCE_HEADROOM: 'reserve-evidence-headroom',
+  START_PRIVATE_DAEMON: 'start-private-daemon',
+  START_DOCKER_PROXY: 'start-docker-proxy',
+  INSPECT_READINESS: 'inspect-readiness',
+  LEASE_SIGNING: 'lease-signing',
+  START_PROVIDER_BROKER: 'start-provider-broker',
+  CLOSE_PROVIDER_KEY: 'close-provider-key',
+  RUN: 'run',
+  FINALIZE: 'finalize',
+});
+export const RuntimeControlFailureCodes = Object.freeze({
+  REQUEST_VALIDATION: 'ERR_RUNTIME_CONTROL_REQUEST_VALIDATION',
+  INSPECT_PLATFORM: 'ERR_RUNTIME_CONTROL_INSPECT_PLATFORM',
+  INSPECT_PROVIDER_KEY: 'ERR_RUNTIME_CONTROL_INSPECT_PROVIDER_KEY',
+  RESERVE_EVIDENCE_HEADROOM: 'ERR_RUNTIME_CONTROL_RESERVE_EVIDENCE_HEADROOM',
+  START_PRIVATE_DAEMON: 'ERR_RUNTIME_CONTROL_START_PRIVATE_DAEMON',
+  START_DOCKER_PROXY: 'ERR_RUNTIME_CONTROL_START_DOCKER_PROXY',
+  INSPECT_READINESS: 'ERR_RUNTIME_CONTROL_INSPECT_READINESS',
+  LEASE_SIGNING: 'ERR_RUNTIME_CONTROL_LEASE_SIGNING',
+  START_PROVIDER_BROKER: 'ERR_RUNTIME_CONTROL_START_PROVIDER_BROKER',
+  CLOSE_PROVIDER_KEY: 'ERR_RUNTIME_CONTROL_CLOSE_PROVIDER_KEY',
+  RUN: 'ERR_RUNTIME_CONTROL_RUN',
+  FINALIZE: 'ERR_RUNTIME_CONTROL_FINALIZE',
+});
 
 const HEX_64 = /^[a-f0-9]{64}$/;
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._:/-]*$/;
@@ -80,6 +109,42 @@ const SESSION_BINDING_FIELDS = Object.freeze([
 ]);
 
 const AUTH_FIELDS = Object.freeze(['algorithm', 'keyId', 'payloadSha256', 'signature']);
+const CONTROL_FAILURE_KEY_ID = 'runtime-control-failure-hmac-1';
+const CONTROL_FAILURE_FIELDS = Object.freeze([
+  'schema',
+  'protocolVersion',
+  'operation',
+  'sessionId',
+  'trialId',
+  'allocationId',
+  'controlSequence',
+  'requestHash',
+  'phase',
+  'code',
+  'detailSha256',
+]);
+const CONTROL_FAILURE_BINDING_FIELDS = Object.freeze([
+  'operation',
+  'sessionId',
+  'trialId',
+  'allocationId',
+  'controlSequence',
+  'requestHash',
+]);
+export const RuntimeControlFailureCodeByPhase = Object.freeze({
+  [RuntimeControlFailurePhases.REQUEST_VALIDATION]: RuntimeControlFailureCodes.REQUEST_VALIDATION,
+  [RuntimeControlFailurePhases.INSPECT_PLATFORM]: RuntimeControlFailureCodes.INSPECT_PLATFORM,
+  [RuntimeControlFailurePhases.INSPECT_PROVIDER_KEY]: RuntimeControlFailureCodes.INSPECT_PROVIDER_KEY,
+  [RuntimeControlFailurePhases.RESERVE_EVIDENCE_HEADROOM]: RuntimeControlFailureCodes.RESERVE_EVIDENCE_HEADROOM,
+  [RuntimeControlFailurePhases.START_PRIVATE_DAEMON]: RuntimeControlFailureCodes.START_PRIVATE_DAEMON,
+  [RuntimeControlFailurePhases.START_DOCKER_PROXY]: RuntimeControlFailureCodes.START_DOCKER_PROXY,
+  [RuntimeControlFailurePhases.INSPECT_READINESS]: RuntimeControlFailureCodes.INSPECT_READINESS,
+  [RuntimeControlFailurePhases.LEASE_SIGNING]: RuntimeControlFailureCodes.LEASE_SIGNING,
+  [RuntimeControlFailurePhases.START_PROVIDER_BROKER]: RuntimeControlFailureCodes.START_PROVIDER_BROKER,
+  [RuntimeControlFailurePhases.CLOSE_PROVIDER_KEY]: RuntimeControlFailureCodes.CLOSE_PROVIDER_KEY,
+  [RuntimeControlFailurePhases.RUN]: RuntimeControlFailureCodes.RUN,
+  [RuntimeControlFailurePhases.FINALIZE]: RuntimeControlFailureCodes.FINALIZE,
+});
 
 export class ProtocolError extends Error {
   constructor(message, code = 'ERR_RUNTIME_PROTOCOL') {
@@ -311,6 +376,43 @@ function validateAuthentication(value) {
   assertString(value.keyId, 'authentication.keyId', { maximum: 64, pattern: KEY_ID });
   assertHash(value.payloadSha256, 'authentication.payloadSha256');
   assertHash(value.signature, 'authentication.signature');
+}
+
+function validateRuntimeControlFailureDocument(document, requireAuthentication) {
+  exactKeys(document, [
+    ...CONTROL_FAILURE_FIELDS,
+    ...(requireAuthentication ? ['authentication'] : []),
+  ], 'runtime control failure', requireAuthentication ? [] : ['authentication']);
+  if (document.schema !== RuntimeControlFailureSchema) {
+    fail('runtime control failure schema is invalid', 'ERR_PROTOCOL_SCHEMA');
+  }
+  if (document.protocolVersion !== 1) {
+    fail('runtime control failure version is invalid', 'ERR_PROTOCOL_VERSION');
+  }
+  if (!['bind', 'readiness', 'run', 'final'].includes(document.operation)) {
+    fail('runtime control failure operation is invalid', 'ERR_PROTOCOL_OPERATION');
+  }
+  assertSafeId(document.sessionId, 'runtime control failure sessionId');
+  assertSafeId(document.trialId, 'runtime control failure trialId');
+  assertSafeId(document.allocationId, 'runtime control failure allocationId', 192);
+  assertInteger(document.controlSequence, 'runtime control failure controlSequence', {
+    minimum: 1,
+    maximum: MAX_PROTOCOL_SEQUENCE,
+  });
+  assertHash(document.requestHash, 'runtime control failure requestHash');
+  if (!Object.prototype.hasOwnProperty.call(RuntimeControlFailureCodeByPhase, document.phase)) {
+    fail('runtime control failure phase is invalid', 'ERR_PROTOCOL_FAILURE_PHASE');
+  }
+  if (document.code !== RuntimeControlFailureCodeByPhase[document.phase]) {
+    fail('runtime control failure code does not match its phase', 'ERR_PROTOCOL_FAILURE_CODE');
+  }
+  assertHash(document.detailSha256, 'runtime control failure detailSha256');
+  if (document.authentication !== undefined) {
+    validateAuthentication(document.authentication);
+    if (document.authentication.keyId !== CONTROL_FAILURE_KEY_ID) {
+      fail('runtime control failure key id is invalid', 'ERR_PROTOCOL_KEY');
+    }
+  }
 }
 
 function authenticationField(requireAuthentication) {
@@ -862,6 +964,121 @@ function normalizedKey(key) {
 
 function authBytes(schema, digest) {
   return Buffer.from(`engineer-runtime-protocol.v1\n${schema}\n${digest}`, 'utf8');
+}
+
+function runtimeControlFailureAuthBytes(digest) {
+  return Buffer.from(
+    `engineer-runtime-control-failure-auth.v1\n${RuntimeControlFailureSchema}\n${digest}`,
+    'utf8',
+  );
+}
+
+function runtimeControlFailureKey(key) {
+  if (!Buffer.isBuffer(key) && !(key instanceof Uint8Array)) {
+    fail('runtime control failure HMAC key must be supplied as bytes', 'ERR_PROTOCOL_KEY');
+  }
+  if (key.byteLength !== 32) {
+    fail('runtime control failure HMAC key must contain exactly 32 bytes', 'ERR_PROTOCOL_KEY');
+  }
+  return Buffer.from(key);
+}
+
+function parseExactRuntimeControlFailureInput(input) {
+  const parsed = parseProtocolInput(input);
+  const canonical = canonicalJson(parsed);
+  if (typeof input === 'string' || Buffer.isBuffer(input) || input instanceof Uint8Array) {
+    let source;
+    try {
+      source = typeof input === 'string' ? input : UTF8.decode(Buffer.from(input));
+    } catch {
+      fail('runtime control failure is not valid UTF-8', 'ERR_PROTOCOL_JSON');
+    }
+    if (source !== canonical) {
+      fail('runtime control failure must use exact canonical JSON', 'ERR_PROTOCOL_JSON');
+    }
+  }
+  return strictJsonParser(canonical);
+}
+
+function validateRuntimeControlFailureBinding(value) {
+  exactKeys(value, CONTROL_FAILURE_BINDING_FIELDS, 'runtime control failure binding');
+  if (!['bind', 'readiness', 'run', 'final'].includes(value.operation)) {
+    fail('runtime control failure expected operation is invalid', 'ERR_PROTOCOL_OPERATION');
+  }
+  assertSafeId(value.sessionId, 'runtime control failure expected sessionId');
+  assertSafeId(value.trialId, 'runtime control failure expected trialId');
+  assertSafeId(value.allocationId, 'runtime control failure expected allocationId', 192);
+  assertInteger(value.controlSequence, 'runtime control failure expected controlSequence', {
+    minimum: 1,
+    maximum: MAX_PROTOCOL_SEQUENCE,
+  });
+  assertHash(value.requestHash, 'runtime control failure expected requestHash');
+  return strictJsonParser(canonicalJson(value));
+}
+
+export function validateRuntimeControlFailure(input, { requireAuthentication = true } = {}) {
+  const document = parseExactRuntimeControlFailureInput(input);
+  validateRuntimeControlFailureDocument(document, requireAuthentication);
+  return document;
+}
+
+export function signRuntimeControlFailure(input, key) {
+  const document = validateRuntimeControlFailure(input, { requireAuthentication: false });
+  if (Object.prototype.hasOwnProperty.call(document, 'authentication')) {
+    fail('refusing to sign an authenticated runtime control failure', 'ERR_PROTOCOL_AUTH');
+  }
+  const payloadSha256 = canonicalSha256(document);
+  const temporaryKey = runtimeControlFailureKey(key);
+  let signature;
+  try {
+    signature = crypto.createHmac('sha256', temporaryKey)
+      .update(runtimeControlFailureAuthBytes(payloadSha256))
+      .digest('hex');
+  } finally {
+    temporaryKey.fill(0);
+  }
+  const signed = {
+    ...document,
+    authentication: {
+      algorithm: 'HMAC-SHA256',
+      keyId: CONTROL_FAILURE_KEY_ID,
+      payloadSha256,
+      signature,
+    },
+  };
+  return validateRuntimeControlFailure(signed);
+}
+
+export function verifyRuntimeControlFailure(input, key, expectedBinding) {
+  const document = validateRuntimeControlFailure(input);
+  const expected = validateRuntimeControlFailureBinding(expectedBinding);
+  const { authentication, ...unsigned } = document;
+  const payloadSha256 = canonicalSha256(unsigned);
+  const temporaryKey = runtimeControlFailureKey(key);
+  let expectedSignature;
+  try {
+    expectedSignature = crypto.createHmac('sha256', temporaryKey)
+      .update(runtimeControlFailureAuthBytes(payloadSha256))
+      .digest('hex');
+  } finally {
+    temporaryKey.fill(0);
+  }
+  if (!safeHexEqual(authentication.payloadSha256, payloadSha256)
+      || !safeHexEqual(authentication.signature, expectedSignature)) {
+    fail('runtime control failure authentication failed', 'ERR_PROTOCOL_AUTH');
+  }
+  for (const field of CONTROL_FAILURE_BINDING_FIELDS) {
+    const matches = field === 'requestHash'
+      ? safeHexEqual(document[field], expected[field])
+      : document[field] === expected[field];
+    if (!matches) {
+      fail('runtime control failure binding mismatch', 'ERR_PROTOCOL_BINDING');
+    }
+  }
+  return Object.freeze({
+    ...document,
+    authentication: Object.freeze({ ...document.authentication }),
+  });
 }
 
 export function generateNonce() {

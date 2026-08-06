@@ -7,6 +7,7 @@ import {
   TASK_INPUT_ARCHIVE_LIMITS,
   archiveLimitsForKind,
 } from './archive-limits.mjs';
+import { RuntimeControlFailureSchema } from './protocol.mjs';
 
 export const ARCHIVE_BOOTSTRAP =
   'if [ -t 0 ]; then stty -echo || exit 70; fi; ulimit -c 0 || exit 70; exec /opt/engineer/bin/engineer-archive-bridge --stdio';
@@ -19,6 +20,7 @@ const ARCHIVE_REQUEST_SCHEMA = 'engineer-daytona-archive-request.v1';
 const ARCHIVE_RESULT_SCHEMA = 'engineer-daytona-archive-result.v1';
 const SECRET_RESULT_SCHEMA = 'engineer-supervisor-secret-accepted.v1';
 const COMMAND_RECEIPT_SCHEMA = 'engineer-daytona-command-receipt.v1';
+const CONTROL_RESPONSE_SCHEMA = 'engineer-runtime-control-response.v1';
 const CONTROLLED_SECRET_FRAME_MAGIC = 'EHS1';
 const ZERO_PROVIDER_SECRET_FRAME_MAGIC = 'EHZ1';
 const CONTROLLED_PROVIDER = 'controlled-provider';
@@ -286,11 +288,17 @@ class ProcessChannel {
     this.stderrNoticeAccepted = false;
     this.waiters = new Set();
     this.closed = false;
+    this.closeCode = null;
+    this.closeSignal = null;
     this.closing = false;
     this.fatal = null;
+    this.deferredStderrFramePending = false;
 
     child.stdout.on('data', (chunk) => {
-      if (this.closing || this.fatal) return;
+      if (this.closing
+          || (this.fatal
+            && !(this.deferredStderrFramePending
+              && this.fatal.code === 'ERR_TRANSPORT_STDERR'))) return;
       try {
         const bytes = Buffer.from(chunk);
         if (bytes.length > this.maxBufferedBytes || this.buffer.length + bytes.length > this.maxBufferedBytes) {
@@ -345,7 +353,11 @@ class ProcessChannel {
       if (!this.closing) this.fatal = new TransportError('Daytona SSH channel failed', 'ERR_TRANSPORT_CHANNEL');
       this.#notify();
     });
-    child.on('close', () => {
+    child.on('close', (code, signal) => {
+      if (!this.closed) {
+        this.closeCode = Number.isInteger(code) ? code : null;
+        this.closeSignal = typeof signal === 'string' ? signal : null;
+      }
       this.closed = true;
       this.#notify();
     });
@@ -363,6 +375,14 @@ class ProcessChannel {
     this.timeoutMs = timeoutMs;
   }
 
+  beginDeferredStderrFrame() {
+    this.deferredStderrFramePending = true;
+  }
+
+  endDeferredStderrFrame() {
+    this.deferredStderrFramePending = false;
+  }
+
   async #waitForNotification(timeoutMs, timeoutError) {
     await new Promise((resolve, reject) => {
       let settled = false;
@@ -375,31 +395,39 @@ class ProcessChannel {
       };
       const wake = () => finish(resolve);
       const timer = setTimeout(() => finish(() => reject(timeoutError)), timeoutMs);
-      timer.unref?.();
       this.waiters.add(wake);
     });
   }
 
-  async #wait() {
-    if (this.fatal) throw this.fatal;
+  async #wait({ deferStderrFailure = false } = {}) {
+    const deferredStderr = () => deferStderrFailure
+      && this.fatal?.code === 'ERR_TRANSPORT_STDERR';
+    if (this.fatal && !deferredStderr()) throw this.fatal;
     if (this.buffer.length > 0) return;
-    if (this.closed) fail('Daytona SSH channel closed before the framed exchange completed', 'ERR_TRANSPORT_CHANNEL');
+    if (this.closed) {
+      if (this.fatal) throw this.fatal;
+      fail('Daytona SSH channel closed before the framed exchange completed', 'ERR_TRANSPORT_CHANNEL');
+    }
     await this.#waitForNotification(
       this.timeoutMs,
       new TransportError('Daytona SSH channel timed out', 'ERR_TRANSPORT_TIMEOUT')
     );
-    if (this.fatal) throw this.fatal;
+    if (this.fatal && !deferredStderr()) throw this.fatal;
     if (this.buffer.length === 0 && this.closed) {
+      if (this.fatal) throw this.fatal;
       fail('Daytona SSH channel closed before the framed exchange completed', 'ERR_TRANSPORT_CHANNEL');
     }
   }
 
-  async readExact(length) {
+  async readExact(length, { deferStderrFailure = false } = {}) {
     const chunks = [];
     let total = 0;
     while (total < length) {
-      if (this.fatal) throw this.fatal;
-      if (this.buffer.length === 0) await this.#wait();
+      if (this.buffer.length === 0) await this.#wait({ deferStderrFailure });
+      if (this.fatal
+          && !(deferStderrFailure && this.fatal.code === 'ERR_TRANSPORT_STDERR')) {
+        throw this.fatal;
+      }
       const take = Math.min(length - total, this.buffer.length);
       chunks.push(this.buffer.subarray(0, take));
       this.buffer = this.buffer.subarray(take);
@@ -424,13 +452,56 @@ class ProcessChannel {
     }
   }
 
-  async readFrame(maximum) {
-    const header = await this.readExact(4);
+  async readFrame(maximum, options = {}) {
+    const header = await this.readExact(4, options);
     const length = header.readUInt32BE(0);
     if (length < 1 || length > maximum) {
       fail('Daytona SSH frame exceeds its byte bound', 'ERR_TRANSPORT_OVERSIZED');
     }
-    return this.readExact(length);
+    return this.readExact(length, options);
+  }
+
+  async acceptControlFrame(frameBytes) {
+    let value;
+    try {
+      value = parseJsonFrame(frameBytes, 'supervisor control response');
+    } catch {
+      value = null;
+    }
+    if (value?.schema === RuntimeControlFailureSchema) return;
+    if (value?.schema === CONTROL_RESPONSE_SCHEMA && value.operation === 'final') {
+      await this.#waitForCleanClose();
+      return;
+    }
+    await this.assertNoExtraOutput({ requireOpen: true });
+  }
+
+  async #waitForCleanClose() {
+    const deadline = Date.now() + this.timeoutMs;
+    while (!this.closed) {
+      if (this.fatal) throw this.fatal;
+      if (this.buffer.length !== 0) {
+        fail('Daytona SSH emitted unexpected extra output', 'ERR_TRANSPORT_EXTRA_OUTPUT');
+      }
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) {
+        fail('Daytona SSH control channel did not close', 'ERR_TRANSPORT_TIMEOUT');
+      }
+      await this.#waitForNotification(
+        remaining,
+        new TransportError('Daytona SSH control channel did not close', 'ERR_TRANSPORT_TIMEOUT')
+      );
+    }
+    if (this.fatal) throw this.fatal;
+    if (this.stderrBuffer.length !== 0) {
+      fail('Daytona SSH emitted incomplete stderr', 'ERR_TRANSPORT_STDERR');
+    }
+    if (this.buffer.length !== 0) {
+      fail('Daytona SSH emitted unexpected extra output', 'ERR_TRANSPORT_EXTRA_OUTPUT');
+    }
+    if (this.closeCode !== 0 || this.closeSignal !== null) {
+      fail('Daytona SSH control channel did not exit cleanly', 'ERR_TRANSPORT_CHANNEL');
+    }
   }
 
   async #assertStderrSettled() {
@@ -856,19 +927,38 @@ export function createDaytonaTransport({
         async sendFrame(value) {
           if (controlClosed) fail('supervisor control channel is closed', 'ERR_TRANSPORT_CHANNEL');
           const frameBytes = asBoundedBuffer(value, 'supervisor protocol frame', MAX_PROTOCOL_FRAME_BYTES);
+          channel.beginDeferredStderrFrame();
           try {
             await channel.writeFrame(frameBytes);
+          } catch (error) {
+            channel.endDeferredStderrFrame();
+            throw error;
           } finally {
             frameBytes.fill(0);
           }
         },
         async receiveFrame() {
           if (controlClosed) fail('supervisor control channel is closed', 'ERR_TRANSPORT_CHANNEL');
-          return channel.readFrame(MAX_PROTOCOL_FRAME_BYTES);
+          channel.beginDeferredStderrFrame();
+          let frameBytes;
+          try {
+            frameBytes = await channel.readFrame(
+              MAX_PROTOCOL_FRAME_BYTES,
+              { deferStderrFailure: true },
+            );
+            await channel.acceptControlFrame(frameBytes);
+            return frameBytes;
+          } catch (error) {
+            frameBytes?.fill(0);
+            throw error;
+          } finally {
+            channel.endDeferredStderrFrame();
+          }
         },
         async close() {
           if (controlClosed) return;
           controlClosed = true;
+          channel.endDeferredStderrFrame();
           await releaseChannel(channel);
         },
       });

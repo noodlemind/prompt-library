@@ -7,14 +7,16 @@ plan_lock: true
 phase: 5
 risk: red
 intent: "Measure and reduce Engineer Harness prompt and memory overhead, then gate release confidence on a controlled Generic-versus-Harness Terminal-Bench comparison using the same pinned economical small model"
-expected_outputs: ["small-model-eval-memory-economics delivered", "privileged two-phase runtime supervisor delivered"]
+expected_outputs: ["small-model-eval-memory-economics delivered", "privileged two-phase runtime supervisor delivered", "private version-coupled eval workspace delivered", "exact packaged Harness treatment identity delivered"]
 success_criteria:
   - "The controlled release lane can pin an economical small model without Kimi-specific runtime assumptions or silent fallback"
   - "Generic and Harness arms are causally comparable and emit complete prompt, memory-phase, cost, and correctness evidence"
   - "Calibration is fail-closed under 20 USD and routine release evaluation is fail-closed under 10 USD"
   - "A paid trial can start only under a privileged supervisor readiness lease, and can become release evidence only after final runtime and cleanup attestation"
+  - "Eval runners, cloud adapters, fixtures, tests, and heavy dependencies stay outside the published Harness package while remaining reproducible with the evaluated commit"
+  - "Every new controlled claim identifies and binds the exact packed Harness treatment installed only in the Harness arm"
 verification:
-  required: [harness-tests]
+  required: [harness-tests, zero-provider-daytona]
   criteria:
     AC1: [harness-tests]
     AC2: [harness-tests]
@@ -23,9 +25,11 @@ verification:
     AC5: [harness-tests]
     AC6: [harness-tests]
     AC7: [harness-tests]
-    AC8: [harness-tests]
-    AC9: [harness-tests]
-    AC10: [harness-tests]
+    AC8: [harness-tests, zero-provider-daytona]
+    AC9: [harness-tests, zero-provider-daytona]
+    AC10: [harness-tests, zero-provider-daytona]
+    AC11: [harness-tests]
+    AC12: [harness-tests]
 reviews:
   required: [correctness, maintainability, testing, project-standards, security]
   completed: []
@@ -36,7 +40,7 @@ org_objectives: ["Prove that the Engineer Harness improves verified outcomes for
 domains: [evaluation, telemetry, memory, terminal-bench]
 specialists: [correctness, maintainability, testing, project-standards, security]
 created: 2026-08-04
-updated: 2026-08-04
+updated: 2026-08-05
 ---
 
 # Make Small-Model Harness Value Measurable
@@ -67,7 +71,7 @@ preconditions.
 - **Goal:** Measure and reduce Engineer Harness prompt and memory overhead, then gate release confidence on a controlled Generic-versus-Harness Terminal-Bench comparison using the same pinned economical small model.
 - **Expected outputs:** Model-agnostic controlled host configuration; small-model qualification and calibration policy; prompt-component and memory-phase evidence; a privileged two-phase Daytona runtime supervisor; a separately isolated provider broker; release criteria, documentation, and regression tests.
 - **Success criteria:** Same model/settings in both arms, no fallback, actionable cost attribution, deterministic trust gates, no paid execution above the configured ceiling, no credential exposure to Harbor/tasks, and release eligibility only after authenticated post-cleanup runtime evidence.
-- **Verification checks:** `harness-tests`.
+- **Verification checks:** `harness-tests` for deterministic repository proof and `zero-provider-daytona` for final-commit operational proof.
 - **Organizational objective:** Demonstrate that the Harness can raise smaller-model success and predictability enough to earn its additional prompt, time, and monetary cost.
 
 ## Memory Cards
@@ -88,6 +92,8 @@ preconditions.
 - [ ] **AC8** A code-owned outer supervisor uses a privileged or explicitly delegated Linux trust boundary, issues only a bounded preflight lease before spend, and produces canonical per-trial final evidence only after Harbor, cgroup, container, mount, resource, network, and cleanup reconciliation. Configuration, environment booleans, operator JSON, or a SHA-shaped string cannot create trust.
 - [ ] **AC9** The provider credential is removed from Harbor and task-container environments behind a separately isolated, exact-model/provider/budget broker; adversarial Linux tests cover replay/tamper, entry-chain mutation, process/container escape, key discovery, mount shadowing, resource/network drift, and supervisor failure. The four formerly skipped Linux/Harbor contracts pass in fresh per-trial 10-GiB Daytona container-DIND sandboxes before the `$1.30` qualification is eligible.
 - [ ] **AC10** Supervisor and broker interfaces accept only kernel-bound/inherited callers and strict lease/trial schemas with bounded fields, exact endpoint/model/provider allowlists, replay protection, and no task reachability. The fresh provider key is injected once into the broker, excluded from snapshots/core dumps/logs/artifacts, revoked after the evidence cycle or suspected exposure, and never persisted. Sanitized raw supervisor evidence is owner-only, content-allowlisted, retained for at most 30 days, and bound to the final report; OpenRouter/upstream identity, usage, and billing are explicitly trusted only after local and provider-key reconciliation, while model output remains untrusted.
+- [x] **AC11** Repository eval runners, cloud/runtime adapters, fixtures, eval tests, and eval-only dependencies live in a private version-coupled workspace outside the published Harness package. One credential-scrubbed composite runner verifies core and eval suites, and package-boundary tests prove neither eval code nor either test tree ships in the npm tarball.
+- [x] **AC12** The controlled treatment is the exact `npm pack` artifact built from the evaluated commit, installed only in the Harness arm, re-attested after bundle validation, and retained as a sanitized package/lock identity. New qualification, calibration, and routine reports, pairs, reruns, and the Eval Card fail closed on missing or mismatched treatment identity; legacy v2 reports remain readable but cannot qualify as new release evidence.
 
 ## Technical Notes
 
@@ -98,7 +104,7 @@ preconditions.
 - Add telemetry fields rather than inferring memory phase from free-form command text when a deterministic event or host record can provide the phase.
 - Do not implement autonomous forgetting or pruning in this scope.
 - Runtime trust has two temporal phases. A readiness lease may authorize one already-budgeted trial because the controls are installed; it is not release evidence. Only the supervisor's post-exit, post-cleanup evidence can satisfy `releaseTrustVerdict` and make the report eligible.
-- The declared trust model covers the evaluated task/model against escape or evidence forgery. Daytona/hypervisor administration, the guest kernel, Docker daemon, pinned Harbor distribution, and the provisioning channel are trusted computing base unless a later design adds remote hardware attestation and an external verifier.
+- The declared trust model covers the evaluated task/model against escape or evidence forgery. The reviewed release commit and its code-owned runner/provisioner, repository-owner workstation, Daytona/hypervisor administration, guest kernel, Docker daemon, pinned Harbor distribution, and provisioning channel are trusted computing base unless a later design adds an external builder, remote hardware attestation, and an external verifier. This lane must not execute an unreviewed contributor commit as though task isolation made repository code safe.
 - Ordinary same-user supervision is insufficient. The release host must provide cgroup-v2 lifecycle custody, exclusive Docker control or a non-bypassable API proxy, host mount/network namespace observation, enforceable storage limits, and privilege separation for the provider broker and evidence store.
 
 ## Proposed Privileged Runtime Contract
@@ -150,17 +156,22 @@ preconditions.
 - [x] Add deterministic protocol and policy tests for outer-supervisor → unprivileged-runner launch, inherited control pipes, per-trial readiness leases, final attestation/session archival, canonical evidence hashing, identity binding, replay/tamper resistance, and fail-stop behavior after channel loss. These tests prove the authored contracts, not the production Daytona composition. (AC8, AC10)
 - [x] Author the external Daytona session controller, privileged per-trial supervisor execution service, non-bypassable Docker API proxy against the observed Harbor API surface with the approved direct-argv entry path, and separately isolated Unix-socket provider broker without a user-supplied trust escape hatch. The controller owns Daytona credentials, trial creation/deletion, cumulative budget, nonces, and the ordered evidence chain; broker policy owns endpoint/model/provider allowlists, per-trial budget enforcement, egress, and usage/cost evidence reconciliation. Authored is not operationally verified. (AC8-AC10)
 - [x] Add deterministic adversarial unit/component coverage for caller spoofing, malformed/oversized IPC, cgroup escape, orphan containers/networks/volumes, mount policy, credential discovery/lifecycle, mutable shell/PATH shadowing, image/user/capability/resource/network drift, unsupported storage enforcement, event loss, and supervisor failure after spend. Live-host behavior remains a separate unchecked gate. (AC8-AC10)
+- [x] Move version-coupled eval runners, cloud adapters, fixtures, tests, and eval-only dependencies behind a private repository workspace and composite credential-scrubbed test runner; prove the published Harness tarball excludes both eval and test surfaces. (AC11)
+- [x] Build, retain, revalidate, install, and report the exact packed Harness treatment artifact with an explicit Generic/Harness exposure boundary and fail-closed report/pair/rerun binding. (AC12)
 - [ ] Execute the production zero-provider supervisor integration path using fresh, exclusive per-trial 10-GiB Daytona container-DIND sandboxes, including the formerly skipped Linux/Harbor contracts. Preserve sanitized code-owned evidence bound to the final commit and externally verify deletion of every sandbox. (AC8-AC10)
 - [ ] Run the complete deterministic suite and all five required reviews against the final Phase 5 diff, reconcile every blocking finding, and retain the final-commit verification artifact. Local unit/component success cannot substitute for the preceding Daytona gate. (AC8-AC10)
-- [ ] Only after every trust check passes, refresh the exact endpoint/pricing and attempt the one-task qualification with a fresh provider-limited key and a hard `$1.30` scheduler ceiling. Never proceed from invalid, incomplete, or all-fail qualification evidence. (AC1-AC10)
-- [ ] If qualification is valid and at least one arm passes, run the locked four-task/three-repetition calibration with the same key/profile and at most `$18.70` remaining provider exposure; otherwise stop. Preserve both private reports and the supervisor evidence chain, and never exceed `$20` across the accepted provider path. (AC1-AC10)
+- [ ] Only after every trust check passes, refresh the exact endpoint/pricing and attempt the one-task qualification with a fresh provider-limited key and a hard `$1.30` scheduler ceiling. Never proceed from invalid, incomplete, or all-fail qualification evidence. (AC1-AC12)
+- [ ] If qualification is valid and at least one arm passes, run the locked four-task/three-repetition calibration with the same key/profile and at most `$18.70` remaining provider exposure; otherwise stop. Preserve both private reports and the supervisor evidence chain, and never exceed `$20` across the accepted provider path. (AC1-AC12)
 
 ## Impacted Files
 
+- `.github/harness/checks.yaml`
 - `evals/**`
 - `packages/harness/lib/**`
 - `packages/harness/test/**`
 - `packages/harness/README.md`
+- `packages/harness/package.json`
+- `scripts/test-repository.mjs`
 - `docs/architecture/engineer-harness.md`
 - `docs/MEMORY-MODEL.md`
 - `docs/plans/2026-08-04-feat-small-model-eval-memory-economics-plan.md`
@@ -170,7 +181,7 @@ preconditions.
 - `harness-tests` is the currently configured repository check and covers the deterministic release runner, Terminal-Bench seams, model profiles, schemas, telemetry aggregation, reporting, and plan scope.
 - Focused node test files may be run during TDD, but only `harness-tests` satisfies the deterministic portion of the gate. It cannot by itself establish operational AC8-AC10.
 - The paid Terminal-Bench qualification and calibration are post-implementation release-evidence runs and are not substituted for deterministic implementation tests.
-- Before operational completion, Phase 5 must add a non-skippable, configured zero-provider Linux/Daytona check and map AC8-AC10 to it in frontmatter. Until that check exists and passes, the present `harness-tests` mapping is necessary deterministic evidence but cannot close those criteria. The live probe proves that the privileged controls can run without contacting OpenRouter; it does not substitute for per-trial final attestation.
+- The configured `zero-provider-daytona` check reads only the owner-private, commit-specific durable evidence file, validates its canonical code-owned envelope against current `HEAD`, and emits only the commit and digest. It must pass before AC8-AC10 can close. The live probe proves that the privileged controls can run without contacting OpenRouter; it does not substitute for paid per-trial final attestation.
 - The four macOS-skipped Linux/Harbor contracts plus the new supervisor integration cases must pass on fresh, exclusive per-trial 10-GiB Daytona container-DIND sandboxes matching qualification. Preserve the exact command results and supervisor evidence digest outside the source tree, bind them to the final release commit, and externally verify deletion.
 - The first paid attempt is qualification only, with each arm hosted in its own fresh 10-GiB Daytona container-DIND sandbox while Harbor continues to use its Docker environment behind the supervisor proxy. It is capped at `$1.30`, and calibration is not scheduled unless qualification passes, the evidence remains trustworthy, and the accepted-path `$20` envelope still holds.
 - **Phase 1-4 measurement/policy implementation complete** requires the configured `harness-tests` gate, scope verification, its required reviews, and the pushed PR stack; that historical subset deliberately requires no provider spend.
@@ -191,6 +202,14 @@ does not prove the reopened Phase 5 supervisor scope.
 - Direct scope verification passed: all 37 changed or added files match the locked `Impacted Files` allowlist, with 0 violations.
 - Settled-diff correctness, maintainability, testing, and project-standards reviews completed with no remaining findings.
 - Enforced `harness verify` passed all 11 plan, acceptance-criterion, named-check, review, binding, and scope checks; evidence is retained under `.harness/evidence/` and excluded from the product diff.
+
+The following is a Phase 5 candidate snapshot from 2026-08-05. It is not the
+final-commit Daytona artifact and therefore does not close AC8-AC10:
+
+- Private repository eval suite: 1,225 passed, 0 failed, 6 environment-dependent skips (1,231 total).
+- Shipped Harness core suite: 643 passed, 0 failed, 1 Harbor-availability skip (644 total).
+- Local Docker runtime/Linux slice on `node:22.17.1-bookworm`, with network disabled: 197 passed, 0 failed, 0 skipped, 0 cancelled.
+- Published package boundary: the dry-run tarball contains neither `evals/` nor either test tree, and production package sources do not import the private eval workspace.
 
 ### No-Provider Daytona Topology Proof
 
@@ -268,6 +287,7 @@ does not prove the reopened Phase 5 supervisor scope.
 - Imported qualification/calibration artifacts must be operator-owned private singly linked files. Their SHA-256 identifies supplied bytes but is not represented as authentication.
 - Audited transient documentation and found no redundant generated document to delete; the one active plan remains required until PR #38 merges.
 - Authored the Phase 5 production composition: code-owned offline derivative and release artifacts, external Daytona session controller, one fresh 10-GiB container-DIND sandbox per trial, privileged supervisor/private daemon, non-bypassable Docker proxy, separate-UID provider broker, and authenticated readiness/final/session evidence. The committed profiles remain red pending the production zero-provider Daytona run and final reviews; no paid call has been attempted.
+- Separated the private, version-coupled eval workspace from the published Harness package and made the exact npm tarball—not repository source or a treatment label—the only eligible controlled treatment. Reports and cards now retain its sanitized identity and exposure boundary.
 
 ## Review Findings
 
@@ -362,6 +382,20 @@ does not prove the reopened Phase 5 supervisor scope.
 - **decision:** Implement checksum-pinned, offline Terminal-Bench derivatives as the secure release gate, retain equivalent verifier assertions, and label the evidence so it cannot be mistaken for an untouched leaderboard run. Keep the public tasks diagnostic-only.
 - **next:** Finish the common supervisor/runtime wiring, implement and attest the derived task artifacts, then run the complete zero-provider Daytona gate before any paid request.
 
+### 2026-08-05 — Eval boundary and treatment identity
+
+- **state:** on-track
+- **observation:** The repository coupled more than sixty eval/runtime tests and live-eval scripts to the publishable package, while reports named only a bundle digest and did not disclose the exact installed npm treatment.
+- **decision:** Keep eval infrastructure version-coupled but private under `evals/`, add one credential-scrubbed composite test runner and package-boundary proof, and make the revalidated packed Harness package identity mandatory for every new controlled claim.
+- **next:** Complete the final repository suite and five reviews, then produce the fresh commit-bound Daytona evidence.
+
+### 2026-08-05 — Local Docker diagnostic gate
+
+- **state:** on-track
+- **observation:** The first Node 22 local-Docker slice exposed an unreferenced awaited timeout and a split stdout/stderr/EOF race that could collapse a useful authenticated remote failure into a generic channel error.
+- **decision:** Keep the timeout referenced, drain only a bounded authenticated failure-shaped frame after concurrent stderr, retain upper-layer HMAC and request-binding authority, and use local Docker as the default fast Linux gate. The corrected slice passed 197/197 without network or provider authority.
+- **next:** Run independent reviews and only then create the single fresh zero-provider Daytona sandbox.
+
 ## Activity
 
 - 2026-08-04 — `ensure-plan`: captured, researched, planned, and locked autonomously.
@@ -378,3 +412,5 @@ does not prove the reopened Phase 5 supervisor scope.
 - 2026-08-04 — the no-provider topology proof passed quota/ENOSPC, private-daemon path custody, UID/socket/cgroup/egress isolation, evidence-headroom recovery, Harbor 0.20 offline execution, empirical Docker API tracing, task `network_mode: none`, zero trial objects, evidence export, and externally confirmed sandbox/snapshot deletion.
 - 2026-08-04 — production compatibility audit found that the real locked verifier write/network requirements conflict with the separately approved read-only-root and `network=none` controls; implementation and all provider spend paused for an explicit design decision.
 - 2026-08-04 — owner approved option 1: explicitly labeled, checksum-pinned offline derivatives with equivalent verifier assertions for the secure release gate; untouched public tasks remain diagnostic-only.
+- 2026-08-05 — eval tooling and its tests moved to a private repository workspace; the published package boundary and exact packed treatment identity became explicit acceptance criteria.
+- 2026-08-05 — local Docker reproduced and verified the remote-control diagnostic fixes: 197/197 runtime/Linux tests passed with no network, cloud sandbox, provider key, or model spend.

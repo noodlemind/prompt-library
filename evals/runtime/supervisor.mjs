@@ -1,11 +1,14 @@
 import path from 'node:path';
 import {
+  RuntimeControlFailureCodeByPhase,
+  RuntimeControlFailurePhases,
   RuntimeExecutionModes,
   RuntimeProtocolSchemas,
   canonicalJson,
   canonicalSha256,
   generateNonce,
   protocolDocumentHash,
+  sha256Hex,
   signProtocolDocument,
   verifyProtocolDocument,
   verifyReadinessLeaseForRequest,
@@ -52,6 +55,8 @@ const REQUIRED_EFFECTS = Object.freeze([
   'killTrialCgroup',
   'shutdown',
 ]);
+const INTERNAL_ERROR_DETAILS = new WeakMap();
+const TRUSTED_FAILURE_DIAGNOSTICS = new WeakMap();
 
 export class RuntimeSupervisorError extends Error {
   constructor(message, code = 'ERR_RUNTIME_SUPERVISOR') {
@@ -59,6 +64,34 @@ export class RuntimeSupervisorError extends Error {
     this.name = 'RuntimeSupervisorError';
     this.code = code;
   }
+}
+
+function errorText(error, field, fallback) {
+  try {
+    const value = error?.[field];
+    return typeof value === 'string' ? value.slice(0, 4_096) : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function errorDetailSha256(error) {
+  const retained = error !== null && (typeof error === 'object' || typeof error === 'function')
+    ? INTERNAL_ERROR_DETAILS.get(error)
+    : undefined;
+  if (retained) return retained;
+  return sha256Hex([
+    errorText(error, 'name', 'Error'),
+    errorText(error, 'code', 'ERR_RUNTIME_SUPERVISOR'),
+    errorText(error, 'message', 'runtime supervisor failure'),
+  ].join('\0'));
+}
+
+/** Returns diagnostics only for failures branded inside this module after fail-stop. */
+export function readRuntimeSupervisorFailureDiagnostic(error) {
+  if (error === null || (typeof error !== 'object' && typeof error !== 'function')) return null;
+  const diagnostic = TRUSTED_FAILURE_DIAGNOSTICS.get(error);
+  return diagnostic ? Object.freeze({ ...diagnostic }) : null;
 }
 
 function invalid(message, code = 'ERR_RUNTIME_SUPERVISOR_POLICY') {
@@ -1018,8 +1051,13 @@ export function createRuntimeSupervisor({
         invalid('runtime operation lost control-channel custody');
       }
       return result;
-    } catch {
-      invalid(`privileged runtime effect ${method} failed`, 'ERR_RUNTIME_SUPERVISOR_EFFECT');
+    } catch (error) {
+      const wrapped = new RuntimeSupervisorError(
+        `privileged runtime effect ${method} failed`,
+        'ERR_RUNTIME_SUPERVISOR_EFFECT',
+      );
+      INTERNAL_ERROR_DETAILS.set(wrapped, errorDetailSha256(error));
+      throw wrapped;
     }
   }
 
@@ -1058,14 +1096,29 @@ export function createRuntimeSupervisor({
     return failPromise;
   }
 
-  async function failedClosed(reason) {
+  async function failedClosed(reason, phase, cause) {
     await beginFailClosed(reason);
-    throw new RuntimeSupervisorError('runtime supervisor failed closed', 'ERR_RUNTIME_SUPERVISOR_FAILED_CLOSED');
+    const failure = new RuntimeSupervisorError(
+      'runtime supervisor failed closed',
+      'ERR_RUNTIME_SUPERVISOR_FAILED_CLOSED',
+    );
+    if (phase !== undefined) {
+      const code = RuntimeControlFailureCodeByPhase[phase];
+      if (code) {
+        TRUSTED_FAILURE_DIAGNOSTICS.set(failure, Object.freeze({
+          phase,
+          code,
+          detailSha256: errorDetailSha256(cause),
+        }));
+      }
+    }
+    throw failure;
   }
 
   async function prepare(input) {
     assertState('created');
     state = 'preparing';
+    let failurePhase = RuntimeControlFailurePhases.REQUEST_VALIDATION;
     try {
       const prepared = cloneOpaqueJson(input, 'supervisor prepare input');
       validateExecutionMode(prepared.executionMode);
@@ -1104,15 +1157,18 @@ export function createRuntimeSupervisor({
       }
       detachChannelLoss = installedDetach;
 
+      failurePhase = RuntimeControlFailurePhases.INSPECT_PLATFORM;
       platform = canonicalClone(await safeEffect('inspectPlatform'), 'platform observation');
       validatePlatform(platform, request, limits);
       if (executionMode === RuntimeExecutionModes.CONTROLLED_PROVIDER) {
+        failurePhase = RuntimeControlFailurePhases.INSPECT_PROVIDER_KEY;
         const fdObservation = canonicalClone(
           await safeEffect('inspectProviderKeyFd', providerKeyFd),
           'provider key descriptor observation'
         );
         validateProviderFd(fdObservation);
       }
+      failurePhase = RuntimeControlFailurePhases.RESERVE_EVIDENCE_HEADROOM;
       const headroom = canonicalClone(await safeEffect('reserveEvidenceHeadroom', {
         bytes: limits.evidenceReserveBytes,
         filesystemId: platform.filesystem.boundedRootId,
@@ -1120,6 +1176,7 @@ export function createRuntimeSupervisor({
       }), 'evidence headroom observation');
       validateHeadroom(headroom, platform, limits);
 
+      failurePhase = RuntimeControlFailurePhases.START_PRIVATE_DAEMON;
       daemon = canonicalClone(await safeEffect('startPrivateDaemon', {
         dataRoot: limits.privateDaemonDataRoot,
         expectedDaemonId: request.bindings.daemonId,
@@ -1129,6 +1186,7 @@ export function createRuntimeSupervisor({
       }), 'private daemon observation');
       validateDaemon(daemon, platform, request, limits);
 
+      failurePhase = RuntimeControlFailurePhases.START_DOCKER_PROXY;
       proxy = canonicalClone(await safeEffect('startDockerProxy', {
         policy: dockerPolicy,
         requestHash,
@@ -1146,6 +1204,7 @@ export function createRuntimeSupervisor({
       }), 'Docker proxy observation');
       validateProxy(proxy, daemon, platform);
 
+      failurePhase = RuntimeControlFailurePhases.INSPECT_READINESS;
       const preBrokerReadiness = canonicalClone(
         await safeEffect('inspectReadiness', {
           phase: executionMode === RuntimeExecutionModes.CONTROLLED_PROVIDER
@@ -1164,6 +1223,7 @@ export function createRuntimeSupervisor({
         executionMode,
       });
 
+      failurePhase = RuntimeControlFailurePhases.LEASE_SIGNING;
       let brokerStaticPolicyHash;
       if (executionMode === RuntimeExecutionModes.CONTROLLED_PROVIDER) {
         try {
@@ -1218,6 +1278,7 @@ export function createRuntimeSupervisor({
           lease.sequence,
           readinessLeaseHash
         );
+        failurePhase = RuntimeControlFailurePhases.START_PROVIDER_BROKER;
         broker = canonicalClone(await safeEffect('startProviderBroker', {
           policy: brokerBinding.policy,
           providerKeyFd,
@@ -1232,6 +1293,7 @@ export function createRuntimeSupervisor({
           budget: request.budget,
         }), 'provider broker observation');
         validateBroker(broker, platform, daemon, proxy, brokerBinding);
+        failurePhase = RuntimeControlFailurePhases.CLOSE_PROVIDER_KEY;
         const closeResult = canonicalClone(
           await safeEffect('closeInheritedFd', providerKeyFd),
           'provider key descriptor close result'
@@ -1241,6 +1303,7 @@ export function createRuntimeSupervisor({
         providerFdOpen = false;
         providerKeyFd = null;
 
+        failurePhase = RuntimeControlFailurePhases.INSPECT_READINESS;
         const observedReadiness = canonicalClone(
           await safeEffect('inspectReadiness', {
             phase: 'post-broker',
@@ -1263,8 +1326,8 @@ export function createRuntimeSupervisor({
       if (state !== 'preparing') return failedClosed('control-channel-loss');
       state = 'prepared';
       return canonicalClone(lease, 'readiness lease');
-    } catch {
-      return failedClosed('prepare-failure');
+    } catch (error) {
+      return failedClosed('prepare-failure', failurePhase, error);
     }
   }
 
@@ -1309,8 +1372,8 @@ export function createRuntimeSupervisor({
       });
       state = 'exited';
       return canonicalClone(runnerResult, 'runner result');
-    } catch {
-      return failedClosed('runner-failure');
+    } catch (error) {
+      return failedClosed('runner-failure', RuntimeControlFailurePhases.RUN, error);
     }
   }
 
@@ -1405,8 +1468,8 @@ export function createRuntimeSupervisor({
       broker = null;
       wipeKeys();
       return canonicalClone(attestation, 'trial final attestation');
-    } catch {
-      return failedClosed('finalization-failure');
+    } catch (error) {
+      return failedClosed('finalization-failure', RuntimeControlFailurePhases.FINALIZE, error);
     }
   }
 

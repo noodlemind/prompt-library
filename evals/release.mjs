@@ -39,6 +39,7 @@ import {
   MEMORY_ECONOMIC_PHASES,
   ECONOMIC_PHASE_FIELDS,
 } from './lib/economic-phases.mjs';
+import { harnessTreatmentArtifactVerdict } from './lib/treatment-artifact.mjs';
 import { canonicalSha256, protocolDocumentHash } from './runtime/protocol.mjs';
 import { controlledProviderBrokerStaticPolicyHash } from './runtime/controlled-provider-policy.mjs';
 import {
@@ -357,7 +358,7 @@ function typeName(value) {
 
 /**
  * Minimal JSON-Schema subset validator (type incl. null unions, required,
- * properties, items, const, enum, numeric minimum) — enough to hold the eval-run/eval-report
+ * properties, items, const, enum, string pattern, numeric minimum) — enough to hold the eval-run/eval-report
  * contracts without adding a dependency. Returns { ok, errors } with dotted
  * paths.
  */
@@ -392,6 +393,21 @@ export function validateAgainstSchema(value, schema, path = '', rootSchema = sch
   }
   if (typeof value === 'number' && 'minimum' in schema && (!Number.isFinite(value) || value < schema.minimum)) {
     errors.push(`${path || '$'}: expected minimum ${schema.minimum}, got ${JSON.stringify(value)}`);
+  }
+  if ('pattern' in schema) {
+    let expression = null;
+    if (typeof schema.pattern !== 'string') {
+      errors.push(`${path || '$'}: invalid schema pattern ${JSON.stringify(schema.pattern)}`);
+    } else {
+      try {
+        expression = new RegExp(schema.pattern);
+      } catch {
+        errors.push(`${path || '$'}: invalid schema pattern ${JSON.stringify(schema.pattern)}`);
+      }
+    }
+    if (expression && typeof value === 'string' && !expression.test(value)) {
+      errors.push(`${path || '$'}: value does not match pattern ${JSON.stringify(schema.pattern)}`);
+    }
   }
   if (typeName(value) === 'object') {
     for (const key of schema.required ?? []) {
@@ -486,6 +502,15 @@ export function calibrationBaselineVerdict(report, {
   if (!isDeepStrictEqual(observedTasks, expectedTasks)) note('calibration task identities do not match');
   const controlledHost = controlledLane?.host ?? report?.controlledLane?.host;
   const controlled = (report?.pairs ?? []).filter((pair) => pair?.host === controlledHost);
+  const treatmentEvidence = controlledTreatmentArtifactVerdict({
+    artifact: report?.treatmentArtifact,
+    pairs: report?.pairs ?? [],
+    controlledHost,
+    harnessVersion: report?.harnessVersion,
+  });
+  if (!treatmentEvidence.ok) {
+    note(`calibration treatment artifact evidence is missing or inconsistent (${treatmentEvidence.reasons.join('; ')})`);
+  }
   const observedControlledTasks = controlled.map((pair) => pair.task).sort();
   if (!isDeepStrictEqual(observedControlledTasks, expectedTasks.map((entry) => entry.task).sort())) {
     note('calibration controlled denominator does not match');
@@ -701,6 +726,15 @@ export function qualificationBaselineVerdict(report, {
   }
 
   const controlled = (report?.pairs ?? []).filter((pair) => pair?.host === lane?.host);
+  const treatmentEvidence = controlledTreatmentArtifactVerdict({
+    artifact: report?.treatmentArtifact,
+    pairs: report?.pairs ?? [],
+    controlledHost: lane?.host,
+    harnessVersion: report?.harnessVersion,
+  });
+  if (!treatmentEvidence.ok) {
+    note(`qualification treatment artifact evidence is missing or inconsistent (${treatmentEvidence.reasons.join('; ')})`);
+  }
   if (controlled.length !== 1) note('qualification controlled denominator must contain exactly one pair');
   const pair = controlled[0] ?? null;
   const explicitTrials = (doc) => Array.isArray(doc?.repetitions) ? doc.repetitions : [];
@@ -906,6 +940,65 @@ function alignedValidTrialPairs(generic, harness, passingReward = 1) {
 }
 
 const SHA256_HEX = /^[a-f0-9]{64}$/i;
+
+function normalizedTreatmentArtifact(value, { harnessVersion = null } = {}) {
+  const verdict = harnessTreatmentArtifactVerdict(value, { expectedHarnessVersion: harnessVersion });
+  return {
+    ok: verdict.ok,
+    artifact: verdict.artifact,
+    hash: verdict.artifactHash,
+    reasons: verdict.reasons,
+  };
+}
+
+function controlledTreatmentArtifactVerdict({
+  artifact = null,
+  pairs = [],
+  controlledHost,
+  harnessVersion = null,
+  deriveFromPairs = false,
+} = {}) {
+  const controlled = pairs.filter((pair) => pair?.host === controlledHost);
+  const candidate = artifact ?? (deriveFromPairs
+    ? controlled.find((pair) => pair?.treatmentArtifact != null)?.treatmentArtifact ?? null
+    : null);
+  const normalized = normalizedTreatmentArtifact(candidate, { harnessVersion });
+  const reasons = [...normalized.reasons];
+  const note = (reason) => reasons.push(reason);
+  if (controlled.length === 0) note('controlled denominator has no treatment-bearing pair');
+  if (normalized.ok) {
+    for (const pair of controlled) {
+      if (pair?.treatmentArtifact != null) {
+        const pairArtifact = normalizedTreatmentArtifact(pair.treatmentArtifact, { harnessVersion });
+        if (!pairArtifact.ok || pairArtifact.hash !== normalized.hash) {
+          note(`pair ${pair?.task ?? 'unknown'} has a different treatment identity`);
+        }
+      }
+      if (pair?.treatmentArtifactHash !== normalized.hash) {
+        note(`pair ${pair?.task ?? 'unknown'} has a missing or different treatment identity binding`);
+      }
+      if (pair?.rerun && pair.rerun.treatmentArtifactHash !== normalized.hash) {
+        note(`pair ${pair?.task ?? 'unknown'} rerun has a different treatment identity`);
+      }
+      const documents = [pair?.generic, pair?.harness, pair?.rerun?.generic, pair?.rerun?.harness].filter(Boolean);
+      if (documents.length === 0) {
+        note(`pair ${pair?.task ?? 'unknown'} has no retained trial bundle evidence`);
+        continue;
+      }
+      const retained = documents.flatMap((doc) => [doc, ...rawTrials(doc)]);
+      if (retained.some((doc) => doc?.reproducibility?.bundleManifestHash !== normalized.artifact.bundleManifestHash)) {
+        note(`pair ${pair?.task ?? 'unknown'} trial bundle identity does not match the treatment artifact`);
+      }
+    }
+  }
+  return {
+    ok: normalized.ok && reasons.length === 0,
+    artifact: normalized.artifact,
+    artifactHash: normalized.hash,
+    reasons: [...new Set(reasons)],
+  };
+}
+
 const PAIR_SCALAR_FIELDS = [
   'releaseSha',
   'harnessVersion',
@@ -2672,6 +2765,7 @@ export async function runRelease({ config, steps, calibrationRelease = false, re
     let exceptionalRerunAttempted = false;
     for (const [pairIndex, pair] of primaryPairs.entries()) {
       collect(pair);
+      const primaryTreatment = normalizedTreatmentArtifact(pair?.treatmentArtifact, { harnessVersion });
       const identityOptions = identityOptionsFor(host, pair);
       let classification = primaryClassifications[pairIndex];
       const primaryEfficiency = primaryEfficiencies[pairIndex];
@@ -2708,6 +2802,7 @@ export async function runRelease({ config, steps, calibrationRelease = false, re
             causallyAttributable: false,
             efficiencyDelta: null,
             overheadAttribution: null,
+            treatmentArtifactHash: null,
             failureDiagnostics: [{ stage: 'fresh-pair-step', code: 'FRESH_PAIR_STEP_FAILURE', reasonHash }],
             generic: null,
             harness: null,
@@ -2746,6 +2841,7 @@ export async function runRelease({ config, steps, calibrationRelease = false, re
             config.valueThresholds,
             config.task?.verifierPassingReward ?? 1
           );
+          const rerunTreatment = normalizedTreatmentArtifact(second?.treatmentArtifact, { harnessVersion });
           rerunEvidence = {
             task: second.task ?? pair.task ?? null,
             pairId: second.pairId ?? null,
@@ -2757,6 +2853,7 @@ export async function runRelease({ config, steps, calibrationRelease = false, re
             causallyAttributable: rerunAttributable && rerunClassification.fallbackDetected !== true,
             efficiencyDelta: rerunEfficiency,
             overheadAttribution: overheadAttribution(second.generic, second.harness),
+            treatmentArtifactHash: rerunTreatment.hash,
             failureDiagnostics: Array.isArray(second.failureDiagnostics) ? second.failureDiagnostics : [],
             generic: second.generic ?? null,
             harness: second.harness ?? null,
@@ -2827,6 +2924,8 @@ export async function runRelease({ config, steps, calibrationRelease = false, re
         classification,
         efficiencyDelta: primaryEfficiency,
         overheadAttribution: overheadAttribution(pair.generic, pair.harness),
+        treatmentArtifact: pair?.treatmentArtifact == null ? null : structuredClone(pair.treatmentArtifact),
+        treatmentArtifactHash: primaryTreatment.hash,
         failureDiagnostics: Array.isArray(pair.failureDiagnostics) ? pair.failureDiagnostics : [],
         generic: pair.generic ?? null,
         harness: pair.harness ?? null,
@@ -3043,7 +3142,15 @@ export async function runRelease({ config, steps, calibrationRelease = false, re
           : 'partial',
     pairs: diagnosticPairs,
   };
-  const claimEvidenceComplete = telemetryComplete && coverage.complete && releaseEligible;
+  const treatmentRequired = ['release', 'qualification', 'calibration'].includes(evaluationMode);
+  const treatmentEvidence = controlledTreatmentArtifactVerdict({
+    pairs: pairEntries,
+    controlledHost,
+    harnessVersion,
+    deriveFromPairs: true,
+  });
+  const treatmentEvidenceComplete = !treatmentRequired || treatmentEvidence.ok;
+  const claimEvidenceComplete = telemetryComplete && coverage.complete && releaseEligible && treatmentEvidenceComplete;
   let gate = applyGatePolicy({
     deterministic,
     pairs: pairEntries,
@@ -3069,6 +3176,15 @@ export async function runRelease({ config, steps, calibrationRelease = false, re
       ])],
     };
   }
+  if (!treatmentEvidenceComplete) {
+    gate = {
+      block: true,
+      reasons: [...new Set([
+        ...gate.reasons,
+        `exact Harness treatment artifact evidence is missing or inconsistent (${treatmentEvidence.reasons.join('; ')})`,
+      ])],
+    };
+  }
 
   const taskSet = selectedTaskSet;
   const claim = buildClaim(pairEntries, claimEvidenceComplete, { releaseEligible });
@@ -3087,7 +3203,7 @@ export async function runRelease({ config, steps, calibrationRelease = false, re
     ? 'provider-key-hard-limit-plus-conservative-scheduler'
     : 'scheduler-fail-stop-not-atomic-cash-guarantee';
 
-  const reportPairs = pairEntries.map(({ required, ...entry }) => ({
+  const reportPairs = pairEntries.map(({ required, treatmentArtifact: ignoredTreatmentArtifact, ...entry }) => ({
     task: null,
     pairId: null,
     repetitionCount: null,
@@ -3133,6 +3249,7 @@ export async function runRelease({ config, steps, calibrationRelease = false, re
     schema: 'eval-report.v2',
     harnessVersion,
     releaseSha,
+    ...(treatmentEvidence.artifact ? { treatmentArtifact: treatmentEvidence.artifact } : {}),
     controlledLane: {
       host: controlledHost,
       profileId: controlledLane.profileId,
@@ -3270,11 +3387,24 @@ export function buildMarkdownReport(report) {
     ...(report.preflight?.taskLock?.reason ? [report.preflight.taskLock.reason] : []),
   ];
   const trust = report.evaluationScope?.trust;
+  const number = (value, digits = 0) => Number.isFinite(value) ? Number(value).toFixed(digits) : 'unknown';
+  const treatment = report.treatmentArtifact;
+  const treatmentLine = treatment
+    ? `Exact Harness treatment: \`${treatment.harnessPackage?.name}@${treatment.harnessPackage?.version}\`; ` +
+      `bundle sha256:${String(treatment.bundleManifestHash ?? '').slice(0, 16)}; ` +
+      `package sha256:${String(treatment.harnessPackage?.sha256 ?? '').slice(0, 16)}; ` +
+      `lockfile sha256:${String(treatment.harnessPackage?.lockfileSha256 ?? '').slice(0, 16)}; ` +
+      `${number(treatment.harnessPackage?.fileCount)} files, ` +
+      `${number(treatment.harnessPackage?.packedSize)} packed bytes / ` +
+      `${number(treatment.harnessPackage?.unpackedSize)} unpacked bytes. ` +
+      'Generic not exposed; Harness exposed.'
+    : report.controlledLane
+      ? 'Exact Harness treatment: unavailable (controlled claim ineligible).'
+      : null;
   const attributedPairs = report.pairs.filter((pair) => pair.overheadAttribution?.complete === true);
   const metricPairs = report.pairs.filter((pair) => pair.generic && pair.harness);
   const diagnosticPairs = report.pairs.filter((pair) => pair.failureDiagnostics?.length);
   const economicsPairs = metricPairs.filter((pair) => pair.generic?.economics || pair.harness?.economics);
-  const number = (value, digits = 0) => Number.isFinite(value) ? Number(value).toFixed(digits) : 'unknown';
   const usd = (value) => Number.isFinite(value) ? `$${Number(value).toFixed(4)}` : 'unknown';
   const ratioSummary = (pair, key) => {
     const summary = pair.efficiencyDelta?.ratioDistribution?.[key];
@@ -3311,6 +3441,7 @@ export function buildMarkdownReport(report) {
     ...(report.controlledLane
       ? [`Controlled lane: ${report.controlledLane.host} / ${report.controlledLane.profileId} (billing profile sha256:${report.controlledLane.billingProfileHash.slice(0, 16)}).`]
       : []),
+    ...(treatmentLine ? [treatmentLine] : []),
     ...(report.qualification
       ? [`Qualification: **${report.qualification.capability}** (${report.qualification.passingArm ?? 'no passing arm'}) — ${report.qualification.reason}.`]
       : []),

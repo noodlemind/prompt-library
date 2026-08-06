@@ -26,9 +26,7 @@
     "doctor": "node ./bin/harness.mjs doctor",
     "install:local": "node ./bin/harness.mjs install --configure-vscode --configure-path",
     "install:global": "npm run build:assets && npm install -g .",
-    "test": "node --test --test-concurrency=1 ./test/*.test.mjs",
-    "eval": "node ../../evals/run.mjs",
-    "test:daytona-zero-provider": "node ../../evals/zero-provider-daytona.mjs"
+    "test": "node --test --test-concurrency=1 ./test/*.test.mjs"
   },
   "publishConfig": {
     "registry": "https://your-nexus.example/repository/npm-hosted/",

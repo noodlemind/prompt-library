@@ -6,20 +6,14 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
+import {
+  HARNESS_ASSET_DIRECTORIES,
+  HARNESS_ASSET_FILES,
+} from './harness-asset-contract.mjs';
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..');
 const outRoot = path.join(repoRoot, 'packages', 'harness', 'assets');
-
-const copies = [
-  { from: '.github/skills', to: 'skills' },
-  { from: '.github/agents', to: 'agents' },
-  { from: '.github/instructions', to: 'instructions' },
-  { from: '.github/hooks', to: 'hooks' },
-  { from: 'knowledge', to: 'knowledge' },
-  { from: 'enterprise', to: 'enterprise' },
-];
-
-const singleFiles = [{ from: '.github/copilot-instructions.md', to: 'copilot-instructions.md' }];
 
 function rmrf(dir) {
   if (fs.existsSync(dir)) fs.rmSync(dir, { recursive: true, force: true });
@@ -33,23 +27,21 @@ function cpRecursive(src, dest) {
 rmrf(outRoot);
 fs.mkdirSync(outRoot, { recursive: true });
 
-for (const { from, to } of copies) {
+for (const { from, to } of HARNESS_ASSET_DIRECTORIES) {
   const src = path.join(repoRoot, from);
   const dst = path.join(outRoot, to);
   if (!fs.existsSync(src)) {
-    console.warn(`skip missing: ${from}`);
-    continue;
+    throw new Error(`missing declared Harness asset directory: ${from}`);
   }
   cpRecursive(src, dst);
   console.log(`copied ${from} → assets/${to}`);
 }
 
-for (const { from, to } of singleFiles) {
+for (const { from, to } of HARNESS_ASSET_FILES) {
   const src = path.join(repoRoot, from);
   const dst = path.join(outRoot, to);
   if (!fs.existsSync(src)) {
-    console.warn(`skip missing: ${from}`);
-    continue;
+    throw new Error(`missing declared Harness asset file: ${from}`);
   }
   fs.mkdirSync(path.dirname(dst), { recursive: true });
   fs.copyFileSync(src, dst);

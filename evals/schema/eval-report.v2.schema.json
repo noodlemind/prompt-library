@@ -12,6 +12,42 @@
     "schema": { "const": "eval-report.v2" },
     "harnessVersion": { "type": "string" },
     "releaseSha": { "type": "string" },
+    "treatmentArtifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema", "bundleManifestHash", "harnessPackage", "conditionExposure"],
+      "properties": {
+        "schema": { "const": "engineer-harness-treatment-artifact.v1" },
+        "bundleManifestHash": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "harnessPackage": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "name", "version", "sha256", "integrity", "packedSize", "unpackedSize",
+            "fileCount", "lockfileSha256"
+          ],
+          "properties": {
+            "name": { "const": "@dev-kit/harness" },
+            "version": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$" },
+            "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+            "integrity": { "type": "string", "pattern": "^sha512-[A-Za-z0-9+/]{86}==$" },
+            "packedSize": { "type": "integer", "minimum": 1 },
+            "unpackedSize": { "type": "integer", "minimum": 1 },
+            "fileCount": { "type": "integer", "minimum": 1 },
+            "lockfileSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+          }
+        },
+        "conditionExposure": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["generic", "harness"],
+          "properties": {
+            "generic": { "const": false },
+            "harness": { "const": true }
+          }
+        }
+      }
+    },
     "controlledLane": {
       "type": "object",
       "required": ["host", "profileId", "billingProfileHash"],
@@ -324,6 +360,7 @@
           },
           "reason": { "type": "string" },
           "gateActive": { "type": "boolean" },
+          "treatmentArtifactHash": { "type": ["string", "null"], "pattern": "^[a-f0-9]{64}$" },
           "reproduced": { "type": ["boolean", "null"] },
           "rerun": { "type": ["object", "null"] },
           "pairedOutcomes": { "type": ["object", "null"] },

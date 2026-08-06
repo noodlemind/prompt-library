@@ -52,15 +52,19 @@ export const ZERO_PROVIDER_DURABLE_EVIDENCE_SCHEMA =
   'engineer-zero-provider-daytona-evidence.v1';
 export const ZERO_PROVIDER_OPERATOR_TRUST_MODEL = 'trusted-local-owner';
 export const ZERO_PROVIDER_ARTIFACT_HASH_SEMANTICS = 'canonical-content-integrity-only';
+export const MAX_ZERO_PROVIDER_DURABLE_EVIDENCE_BYTES = 8 * 1024 * 1024;
 
 const HASH = /^[a-f0-9]{64}$/;
 const RELEASE_SHA = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/;
 const DURABLE_EVIDENCE_FIELDS = Object.freeze([
   'schema', 'operatorTrustModel', 'artifactHashSemantics', 'runtimeRun',
 ]);
-const MAX_DURABLE_EVIDENCE_BYTES = 8 * 1024 * 1024;
 const durableEvidenceBrand = new WeakSet();
 const productionDependenciesBrand = new WeakSet();
+
+export function serializeZeroProviderDurableEvidence(value) {
+  return Buffer.from(`${JSON.stringify(value, null, 2)}\n`);
+}
 
 export class ZeroProviderDaytonaCliError extends Error {
   constructor(message, code = 'ERR_ZERO_PROVIDER_DAYTONA_CLI') {
@@ -330,8 +334,8 @@ export function writeZeroProviderDurableEvidence({ destination, evidence } = {})
     parent,
     `.${path.basename(destination)}.${process.pid}.${crypto.randomBytes(8).toString('hex')}.tmp`,
   );
-  const bytes = Buffer.from(`${JSON.stringify(value, null, 2)}\n`);
-  if (bytes.length > MAX_DURABLE_EVIDENCE_BYTES) {
+  const bytes = serializeZeroProviderDurableEvidence(value);
+  if (bytes.length > MAX_ZERO_PROVIDER_DURABLE_EVIDENCE_BYTES) {
     bytes.fill(0);
     fail('zero-provider durable evidence exceeds its byte bound');
   }

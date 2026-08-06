@@ -22,16 +22,25 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
+import { HARNESS_ASSET_SOURCE_PATHS } from '../../../scripts/harness-asset-contract.mjs';
+import {
+  HARNESS_PACKAGE_NAME,
+  assertHarnessPackageIdentity,
+} from '../../lib/treatment-artifact.mjs';
+
 export const BUNDLE_MOUNT_TARGET = '/opt/harness-bundle';
 export const EVAL_RUNTIME_MOUNT_TARGET = '/opt/eval-runtime';
-export const BUNDLE_MANIFEST_FILE = 'bundle-manifest.v1.json';
+export const BUNDLE_MANIFEST_FILE = 'bundle-manifest.v2.json';
 export const CONDITION_INPUTS_FILE = 'condition-inputs.v1.json';
-const BUNDLE_MANIFEST_VERSION = 1;
+export const HARNESS_PACKAGE_ARCHIVE = 'harness-package.tgz';
+export const HARNESS_PACKAGE_LOCK = 'harness-package-lock.json';
+const BUNDLE_MANIFEST_VERSION = 2;
 const MAX_BUNDLE_ENTRIES = 100_000;
 const MAX_BUNDLE_BYTES = 2 * 1024 * 1024 * 1024;
 const MAX_BUNDLE_DEPTH = 64;
 const MAX_MANIFEST_BYTES = 32 * 1024 * 1024;
 const MAX_NODE_TARBALL_BYTES = 1024 * 1024 * 1024;
+const MAX_HARNESS_PACKAGE_BYTES = 64 * 1024 * 1024;
 const BUILD_ENV_ALLOWLIST = [
   'LANG', 'LC_ALL', 'TERM',
   'SSL_CERT_FILE', 'SSL_CERT_DIR',
@@ -48,6 +57,8 @@ const ALLOWED_TOP_LEVEL = new Set([
   'evidence-probe.mjs',
   'bounded-exec',
   'bounded-exec.mjs',
+  HARNESS_PACKAGE_ARCHIVE,
+  HARNESS_PACKAGE_LOCK,
   CONDITION_INPUTS_FILE,
   'bridge',
   'node-x64',
@@ -111,9 +122,10 @@ export function bundleMountPolicy(bundleDir) {
 }
 
 const repoRootDefault = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
-const BUNDLE_SOURCE_PATHS = [
-  '.github/agents/engineer.agent.md',
-  '.github/skills/ensure-plan/SKILL.md',
+export const BUNDLE_SOURCE_PATHS = Object.freeze([
+  ...HARNESS_ASSET_SOURCE_PATHS,
+  'scripts/harness-asset-contract.mjs',
+  'scripts/build-harness-assets.mjs',
   'packages/harness',
   'evals/__init__.py',
   'evals/config',
@@ -125,7 +137,8 @@ const BUNDLE_SOURCE_PATHS = [
   'evals/external/terminal_bench/harbor_agent.py',
   'evals/external/terminal_bench/evidence-probe.mjs',
   'evals/external/terminal_bench/bounded-exec.mjs',
-];
+]);
+const FORBIDDEN_HARNESS_RUNTIME_ENTRIES = new Set(['test', 'tests', 'eval', 'evals']);
 
 function snapshotTrackedSource({ repoRoot, releaseSha, destination, run }) {
   const repository = fs.realpathSync.native(repoRoot);
@@ -238,6 +251,19 @@ function normalizedNodeTarballHashes(value, label = 'node tarball hashes') {
   return normalized;
 }
 
+function normalizedHarnessPackage(value, label = 'Harness package identity') {
+  return assertHarnessPackageIdentity(value, {
+    label,
+    maximumPackedSize: MAX_HARNESS_PACKAGE_BYTES,
+    maximumUnpackedSize: MAX_BUNDLE_BYTES,
+    maximumFileCount: MAX_BUNDLE_ENTRIES,
+  });
+}
+
+function sanitizedHarnessPackageProjection(value, label = 'Harness package identity') {
+  return Object.freeze({ ...normalizedHarnessPackage(value, label) });
+}
+
 function bytewiseCompare(left, right) {
   return Buffer.compare(Buffer.from(left), Buffer.from(right));
 }
@@ -309,6 +335,34 @@ function hashRegularFileBounded(file, maximum, label) {
   }
 }
 
+function verifyHarnessPackageArtifacts(bundleDir, packageIdentity) {
+  const normalized = normalizedHarnessPackage(packageIdentity);
+  const archive = readRegularFileBounded(
+    path.join(bundleDir, HARNESS_PACKAGE_ARCHIVE),
+    MAX_HARNESS_PACKAGE_BYTES,
+    'retained Harness package archive'
+  );
+  if (archive.stat.size !== normalized.packedSize) {
+    throw new Error('retained Harness package archive size drifted');
+  }
+  const archiveSha256 = crypto.createHash('sha256').update(archive.bytes).digest('hex');
+  const archiveIntegrity = `sha512-${crypto.createHash('sha512').update(archive.bytes).digest('base64')}`;
+  if (!crypto.timingSafeEqual(Buffer.from(archiveSha256, 'hex'), Buffer.from(normalized.sha256, 'hex')) ||
+      archiveIntegrity !== normalized.integrity) {
+    throw new Error('retained Harness package archive identity drifted');
+  }
+  const lock = readRegularFileBounded(
+    path.join(bundleDir, HARNESS_PACKAGE_LOCK),
+    MAX_HARNESS_PACKAGE_BYTES,
+    'retained Harness package lock'
+  );
+  const lockfileSha256 = crypto.createHash('sha256').update(lock.bytes).digest('hex');
+  if (!crypto.timingSafeEqual(Buffer.from(lockfileSha256, 'hex'), Buffer.from(normalized.lockfileSha256, 'hex'))) {
+    throw new Error('retained Harness package lock identity drifted');
+  }
+  return normalized;
+}
+
 function validateBundleRoot(bundleDir, repoRoot = repoRootDefault) {
   if (!bundleDir || typeof bundleDir !== 'string') throw new Error('bundle directory is required');
   const resolved = path.resolve(bundleDir);
@@ -365,7 +419,11 @@ function validateTopLevelNames(names) {
   for (const name of names) {
     if (!ALLOWED_TOP_LEVEL.has(name)) throw new Error(`unexpected top-level bundle content: ${name}`);
   }
-  for (const required of ['harness', 'harness-cli', 'evidence-probe', 'evidence-probe.mjs', 'bounded-exec', 'bounded-exec.mjs', CONDITION_INPUTS_FILE]) {
+  for (const required of [
+    'harness', 'harness-cli', 'evidence-probe', 'evidence-probe.mjs',
+    'bounded-exec', 'bounded-exec.mjs', HARNESS_PACKAGE_ARCHIVE,
+    HARNESS_PACKAGE_LOCK, CONDITION_INPUTS_FILE,
+  ]) {
     if (!names.includes(required)) throw new Error(`required bundle content is missing: ${required}`);
   }
   if (!names.includes('node-x64') && !names.includes('node-arm64')) {
@@ -483,13 +541,19 @@ function scanBundle(bundleDir, { maximumEntries: requestedMaximumEntries } = {})
   return { entries, regularBytes };
 }
 
-function manifestDocument(bundleDir, { sourceIdentity, nodeTarballHashes, maximumEntries } = {}) {
+function manifestDocument(bundleDir, {
+  sourceIdentity,
+  nodeTarballHashes,
+  harnessPackage,
+  maximumEntries,
+} = {}) {
   const scanned = scanBundle(bundleDir, { maximumEntries });
   return {
     version: BUNDLE_MANIFEST_VERSION,
     algorithm: 'sha256',
     sourceIdentity: normalizedSourceIdentity(sourceIdentity),
     nodeTarballHashes: normalizedNodeTarballHashes(nodeTarballHashes),
+    harnessPackage: verifyHarnessPackageArtifacts(bundleDir, harnessPackage),
     entryCount: scanned.entries.length,
     regularBytes: scanned.regularBytes,
     entriesHash: sha256(JSON.stringify(scanned.entries)),
@@ -497,8 +561,8 @@ function manifestDocument(bundleDir, { sourceIdentity, nodeTarballHashes, maximu
   };
 }
 
-function writeBundleManifest(bundleDir, { sourceIdentity, nodeTarballHashes }) {
-  const manifest = manifestDocument(bundleDir, { sourceIdentity, nodeTarballHashes });
+function writeBundleManifest(bundleDir, { sourceIdentity, nodeTarballHashes, harnessPackage }) {
+  const manifest = manifestDocument(bundleDir, { sourceIdentity, nodeTarballHashes, harnessPackage });
   const bytes = Buffer.from(`${JSON.stringify(manifest, null, 2)}\n`);
   const manifestPath = path.join(bundleDir, BUNDLE_MANIFEST_FILE);
   const temporary = `${manifestPath}.${process.pid}.${crypto.randomUUID()}.tmp`;
@@ -556,10 +620,15 @@ function inspectPrebuiltBundle(
     throw new Error('bundle source identity does not match the evaluated release');
   }
   const recordedNodeTarballHashes = normalizedNodeTarballHashes(recorded.nodeTarballHashes, 'recorded node tarball hashes');
+  const recordedHarnessPackage = verifyHarnessPackageArtifacts(canonical, recorded.harnessPackage);
+  if (recordedHarnessPackage.version !== recordedSourceIdentity.harnessVersion) {
+    throw new Error('recorded Harness package version does not match the evaluated release');
+  }
   const current = manifestDocument(canonical, {
     maximumEntries,
     sourceIdentity: recordedSourceIdentity,
     nodeTarballHashes: recordedNodeTarballHashes,
+    harnessPackage: recordedHarnessPackage,
   });
   if (recorded.entryCount !== current.entryCount || recorded.regularBytes !== current.regularBytes) {
     throw new Error('bundle contents do not match the trusted manifest totals');
@@ -571,6 +640,7 @@ function inspectPrebuiltBundle(
     bundleDir: canonical,
     manifestHash: actualManifestHash,
     mountPolicy: bundleMountPolicy(canonical),
+    harnessPackage: sanitizedHarnessPackageProjection(recordedHarnessPackage, 'validated Harness package identity'),
     manifest: recorded,
     manifestBytes,
   };
@@ -582,6 +652,7 @@ export function validatePrebuiltBundle(bundleDir, options = {}) {
     bundleDir: inspected.bundleDir,
     manifestHash: inspected.manifestHash,
     mountPolicy: inspected.mountPolicy,
+    harnessPackage: inspected.harnessPackage,
   };
 }
 
@@ -877,12 +948,144 @@ export function activationCommands() {
   return [`${BUNDLE_MOUNT_TARGET}/harness-cli help`];
 }
 
+function safePackedPath(value, label) {
+  if (typeof value !== 'string' || !value || value.includes('\\') || value.includes('\0') ||
+      path.posix.isAbsolute(value) || path.posix.normalize(value) !== value ||
+      value === '..' || value.startsWith('../')) {
+    throw new Error(`${label} is unsafe`);
+  }
+  return value;
+}
+
+function inspectNpmPackArchive(packDir) {
+  const names = fs.readdirSync(packDir);
+  if (names.length !== 1 || path.basename(names[0]) !== names[0] || !names[0].endsWith('.tgz')) {
+    throw new Error('npm pack output directory must contain exactly one tgz archive');
+  }
+  const archivePath = path.join(packDir, names[0]);
+  const archive = readRegularFileBounded(archivePath, MAX_HARNESS_PACKAGE_BYTES, 'npm pack archive');
+  const integrity = `sha512-${crypto.createHash('sha512').update(archive.bytes).digest('base64')}`;
+  return {
+    archivePath,
+    sha256: crypto.createHash('sha256').update(archive.bytes).digest('hex'),
+    integrity,
+    packedSize: archive.stat.size,
+  };
+}
+
+function extractedPackageInventory(root) {
+  const files = [];
+  const visit = (directory, relativeDirectory = '') => {
+    for (const name of fs.readdirSync(directory).sort(bytewiseCompare)) {
+      const relative = relativeDirectory ? `${relativeDirectory}/${name}` : name;
+      safePackedPath(relative, 'extracted package path');
+      const absolute = path.join(directory, name);
+      const stat = fs.lstatSync(absolute);
+      if (stat.isDirectory()) {
+        visit(absolute, relative);
+      } else if (stat.isFile() && !stat.isSymbolicLink()) {
+        files.push({ path: relative, size: stat.size, mode: stat.mode & 0o777 });
+      } else {
+        throw new Error(`extracted Harness package contains unsupported content: ${relative}`);
+      }
+    }
+  };
+  visit(root);
+  files.sort((left, right) => bytewiseCompare(left.path, right.path));
+  const paths = new Set(files.map((entry) => entry.path));
+  for (const entry of files) {
+    const topLevel = entry.path.split('/')[0].toLowerCase();
+    if (FORBIDDEN_HARNESS_RUNTIME_ENTRIES.has(topLevel)) {
+      throw new Error(`npm pack included repository-only ${topLevel}/ content`);
+    }
+    if ((entry.mode & 0o022) !== 0) throw new Error(`npm pack returned an unsafe file mode: ${entry.path}`);
+  }
+  for (const required of [
+    'package.json',
+    'bin/harness.mjs',
+    'assets/harness-version.txt',
+    'assets/agents/engineer.agent.md',
+    'assets/skills/engineer/SKILL.md',
+  ]) {
+    if (!paths.has(required)) throw new Error(`npm pack omitted required Harness runtime content: ${required}`);
+  }
+  if (paths.has('package-lock.json')) throw new Error('npm pack must not publish the repository lockfile');
+  return files;
+}
+
+function preparePackedHarness({
+  trackedSourceDir,
+  bundleDir,
+  harnessDir,
+  buildHome,
+  sourceIdentity,
+  run,
+}) {
+  const harnessSource = path.join(trackedSourceDir, 'packages', 'harness');
+  const sourceManifest = JSON.parse(
+    readRegularFileBounded(
+      path.join(harnessSource, 'package.json'),
+      MAX_HARNESS_PACKAGE_BYTES,
+      'tracked Harness package manifest'
+    ).bytes.toString('utf8')
+  );
+  if (sourceManifest.name !== HARNESS_PACKAGE_NAME || sourceManifest.version !== sourceIdentity.harnessVersion) {
+    throw new Error('tracked Harness package identity does not match the evaluated release');
+  }
+
+  // Assets are generated from the same commit-only snapshot used for the
+  // package. Lifecycle scripts stay disabled; the build step is explicit and
+  // receives only the sanitized build environment.
+  run('node', ['scripts/build-harness-assets.mjs'], { cwd: trackedSourceDir });
+
+  const packDir = path.join(buildHome, 'pack');
+  fs.mkdirSync(packDir, { recursive: false, mode: 0o700 });
+  run('npm', [
+    'pack', '--ignore-scripts', '--silent', '--pack-destination', packDir,
+  ], { cwd: harnessSource });
+  const packed = inspectNpmPackArchive(packDir);
+  const packageArchive = path.join(bundleDir, HARNESS_PACKAGE_ARCHIVE);
+  fs.renameSync(packed.archivePath, packageArchive);
+
+  const lock = readRegularFileBounded(
+    path.join(harnessSource, 'package-lock.json'),
+    MAX_HARNESS_PACKAGE_BYTES,
+    'tracked Harness package lock'
+  );
+  const lockfileSha256 = crypto.createHash('sha256').update(lock.bytes).digest('hex');
+  fs.writeFileSync(path.join(bundleDir, HARNESS_PACKAGE_LOCK), lock.bytes, { flag: 'wx', mode: 0o600 });
+
+  fs.mkdirSync(harnessDir, { recursive: false, mode: 0o700 });
+  run('tar', ['-xzf', packageArchive, '--strip-components=1', '-C', harnessDir]);
+  const extracted = extractedPackageInventory(harnessDir);
+  const extractedManifest = JSON.parse(fs.readFileSync(path.join(harnessDir, 'package.json'), 'utf8'));
+  if (extractedManifest.name !== HARNESS_PACKAGE_NAME ||
+      extractedManifest.version !== sourceIdentity.harnessVersion) {
+    throw new Error('extracted npm package identity does not match the evaluated Harness release');
+  }
+  fs.writeFileSync(path.join(harnessDir, 'package-lock.json'), lock.bytes, { flag: 'wx', mode: 0o600 });
+  run('npm', ['ci', '--omit=dev', '--no-audit', '--no-fund', '--ignore-scripts'], { cwd: harnessDir });
+  fs.rmSync(path.join(harnessDir, 'package-lock.json'), { force: true });
+  removeNpmCommandShims(harnessDir);
+  normalizeInstalledPermissions(harnessDir);
+  return normalizedHarnessPackage({
+    name: extractedManifest.name,
+    version: extractedManifest.version,
+    sha256: packed.sha256,
+    integrity: packed.integrity,
+    packedSize: packed.packedSize,
+    unpackedSize: extracted.reduce((total, entry) => total + entry.size, 0),
+    fileCount: extracted.length,
+    lockfileSha256,
+  });
+}
+
 /**
  * Prepare the bundle directory on the host. Network and process access are
- * injected; the real run copies the working tree's harness package (the
- * evaluated SHA), installs its production deps, and unpacks a Linux Node
- * runtime for the sandbox architecture (`nodeTarball` may point at a
- * pre-downloaded archive to keep releases offline-friendly).
+ * injected; the real run builds and packs the Harness from the evaluated
+ * commit, installs its production deps, and unpacks a Linux Node runtime for
+ * the sandbox architecture (`nodeTarball` may point at a pre-downloaded
+ * archive to keep releases offline-friendly).
  */
 export function prepareHarnessBundle({
   bundleDir,
@@ -905,6 +1108,45 @@ export function prepareHarnessBundle({
   sourceIdentity = normalizedSourceIdentity(sourceIdentity, 'bundle source identity');
   if (!SUPPORTS_NO_FOLLOW) throw new Error('secure Node runtime verification requires O_NOFOLLOW support');
   if (typeof snapshotSource !== 'function') throw new Error('snapshotSource must be a function');
+  // Legacy single-tarball hook: infer its architecture from the filename.
+  const legacy = ambientEnv.HARNESS_EVAL_NODE_TARBALL;
+  const legacyHash = ambientEnv.HARNESS_EVAL_NODE_TARBALL_SHA256;
+  if (legacy && !nodeTarballs.x64 && !nodeTarballs.arm64) {
+    if (/x64/.test(legacy)) {
+      nodeTarballs = { ...nodeTarballs, x64: legacy };
+      nodeTarballHashes = { ...nodeTarballHashes, x64: legacyHash };
+    } else if (/arm64|aarch64/.test(legacy)) {
+      nodeTarballs = { ...nodeTarballs, arm64: legacy };
+      nodeTarballHashes = { ...nodeTarballHashes, arm64: legacyHash };
+    }
+  }
+  const provided = Object.entries(nodeTarballs).filter(([, tarball]) => tarball);
+  if (!provided.length) {
+    throw new Error(
+      'a Linux Node runtime tarball is required (set HARNESS_EVAL_NODE_TARBALL_X64 and/or HARNESS_EVAL_NODE_TARBALL_ARM64 to downloaded node-vXX-linux-<arch>.tar.gz files)'
+    );
+  }
+  const preflightNodeHashes = {};
+  for (const [arch, tarball] of provided) {
+    if (!['x64', 'arm64'].includes(arch)) throw new Error(`unsupported Node runtime architecture: ${arch}`);
+    const expectedHash = String(nodeTarballHashes?.[arch] ?? '').toLowerCase();
+    if (!/^[a-f0-9]{64}$/.test(expectedHash)) {
+      throw new Error(`a SHA-256 pin is required for the ${arch} Linux Node runtime tarball`);
+    }
+    const sourceStat = fs.lstatSync(tarball);
+    if (sourceStat.isSymbolicLink() || !sourceStat.isFile()) {
+      throw new Error(`Node runtime tarball for ${arch} must be a regular non-symlink file`);
+    }
+    const preflight = hashRegularFileBounded(
+      tarball,
+      MAX_NODE_TARBALL_BYTES,
+      `Node runtime tarball for ${arch}`
+    ).sha256;
+    if (!crypto.timingSafeEqual(Buffer.from(preflight, 'hex'), Buffer.from(expectedHash, 'hex'))) {
+      throw new Error(`Node runtime tarball digest mismatch for ${arch}: expected ${expectedHash}, got ${preflight}`);
+    }
+    preflightNodeHashes[arch] = preflight;
+  }
   fs.mkdirSync(bundleDir, { recursive: true });
   bundleDir = fs.realpathSync.native(bundleDir);
   const existing = fs.readdirSync(bundleDir);
@@ -953,47 +1195,24 @@ export function prepareHarnessBundle({
     `${JSON.stringify(conditionInputs, null, 2)}\n`,
     { mode: 0o444 }
   );
-  fs.renameSync(path.join(trackedSourceDir, 'packages', 'harness'), harnessDir);
+  const harnessPackage = preparePackedHarness({
+    trackedSourceDir,
+    bundleDir,
+    harnessDir,
+    buildHome,
+    sourceIdentity,
+    run,
+  });
   fs.mkdirSync(bridgeDir, { mode: 0o700 });
+  fs.mkdirSync(path.join(bridgeDir, 'scripts'), { mode: 0o700 });
+  fs.renameSync(
+    path.join(trackedSourceDir, 'scripts', 'harness-asset-contract.mjs'),
+    path.join(bridgeDir, 'scripts', 'harness-asset-contract.mjs'),
+  );
   fs.renameSync(path.join(trackedSourceDir, 'evals'), path.join(bridgeDir, 'evals'));
-  // --ignore-scripts: the package's prepare hook (build:assets) needs the
-  // full repo tree; the commit snapshot already contains the built assets.
-  // npm ci recreates node_modules strictly from the tracked lockfile, so
-  // ignored working-tree dependencies can never leak into the release bundle.
-  run('npm', ['ci', '--omit=dev', '--no-audit', '--no-fund', '--ignore-scripts'], { cwd: harnessDir });
-  removeNpmCommandShims(harnessDir);
-  // npm honors the restrictive umask above, then this normalization makes the
-  // invariant independent of platform/npm defaults before manifest scanning.
-  normalizeInstalledPermissions(harnessDir);
-  // Legacy single-tarball hook: infer its architecture from the filename.
-  const legacy = ambientEnv.HARNESS_EVAL_NODE_TARBALL;
-  const legacyHash = ambientEnv.HARNESS_EVAL_NODE_TARBALL_SHA256;
-  if (legacy && !nodeTarballs.x64 && !nodeTarballs.arm64) {
-    if (/x64/.test(legacy)) {
-      nodeTarballs = { ...nodeTarballs, x64: legacy };
-      nodeTarballHashes = { ...nodeTarballHashes, x64: legacyHash };
-    } else if (/arm64|aarch64/.test(legacy)) {
-      nodeTarballs = { ...nodeTarballs, arm64: legacy };
-      nodeTarballHashes = { ...nodeTarballHashes, arm64: legacyHash };
-    }
-  }
-  const provided = Object.entries(nodeTarballs).filter(([, tarball]) => tarball);
-  if (!provided.length) {
-    throw new Error(
-      'a Linux Node runtime tarball is required (set HARNESS_EVAL_NODE_TARBALL_X64 and/or HARNESS_EVAL_NODE_TARBALL_ARM64 to downloaded node-vXX-linux-<arch>.tar.gz files)'
-    );
-  }
   const suppliedHashes = {};
   for (const [arch, tarball] of provided) {
-    if (!['x64', 'arm64'].includes(arch)) throw new Error(`unsupported Node runtime architecture: ${arch}`);
     const expectedHash = String(nodeTarballHashes?.[arch] ?? '').toLowerCase();
-    if (!/^[a-f0-9]{64}$/.test(expectedHash)) {
-      throw new Error(`a SHA-256 pin is required for the ${arch} Linux Node runtime tarball`);
-    }
-    const sourceStat = fs.lstatSync(tarball);
-    if (sourceStat.isSymbolicLink() || !sourceStat.isFile()) {
-      throw new Error(`Node runtime tarball for ${arch} must be a regular non-symlink file`);
-    }
     const verifiedArchive = path.join(bundleDir, `.verified-node-${arch}-${crypto.randomUUID()}.tar.gz`);
     let actualHash;
     try {
@@ -1029,7 +1248,8 @@ export function prepareHarnessBundle({
         const after = fs.fstatSync(sourceHandle);
         if (!stableOpenFile(before, after)) throw new Error(`Node runtime tarball for ${arch} changed while being read`);
         actualHash = digest.digest('hex');
-        if (!crypto.timingSafeEqual(Buffer.from(actualHash, 'hex'), Buffer.from(expectedHash, 'hex'))) {
+        if (!crypto.timingSafeEqual(Buffer.from(actualHash, 'hex'), Buffer.from(expectedHash, 'hex')) ||
+            actualHash !== preflightNodeHashes[arch]) {
           throw new Error(`Node runtime tarball digest mismatch for ${arch}: expected ${expectedHash}, got ${actualHash}`);
         }
       } finally {
@@ -1065,9 +1285,15 @@ export function prepareHarnessBundle({
   fs.writeFileSync(path.join(bundleDir, 'bounded-exec'), boundedExecWrapperScript(), { mode: 0o755 });
   fs.rmSync(trackedSourceDir, { recursive: true, force: true });
   fs.rmSync(buildHome, { recursive: true, force: true });
-  const { manifestHash } = writeBundleManifest(bundleDir, {
+  const { manifest, manifestHash } = writeBundleManifest(bundleDir, {
     sourceIdentity,
     nodeTarballHashes: suppliedHashes,
+    harnessPackage,
   });
-  return { bundleDir, manifestHash, mountPolicy: bundleMountPolicy(bundleDir) };
+  return {
+    bundleDir,
+    manifestHash,
+    mountPolicy: bundleMountPolicy(bundleDir),
+    harnessPackage: sanitizedHarnessPackageProjection(manifest.harnessPackage, 'built Harness package identity'),
+  };
 }
