@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { storeDir, withStoreTransaction, StoreTransactionAbort, listLearnings, serializeLearning, appendGovernance } from './store.mjs';
 import { updateFrontmatterField, todayClamped, rebuildIndex } from './apply.mjs';
-import { writeLearningFile } from './learning-io.mjs';
+import { writeLearningFile } from './store-io.mjs';
 import { absorbOrAbort, mirrorLearnings } from './admin.mjs';
 
 /**

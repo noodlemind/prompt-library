@@ -10,7 +10,7 @@ import { applyOps } from '../lib/knowledge/apply.mjs';
 import { absorbHandEdits, absorbOrAbort, removeEpisodeLink } from '../lib/knowledge/admin.mjs';
 import { setLearningStatus } from '../lib/knowledge/lifecycle.mjs';
 import { ensureBucket } from '../lib/knowledge/layer.mjs';
-import { QUARANTINE_DIR } from '../lib/knowledge/learning-io.mjs';
+import { QUARANTINE_DIR } from '../lib/knowledge/store-io.mjs';
 import { ensureStore, storeDir, listLearnings, readLedger, parseLearningFrontmatter, serializeLearning, StoreTransactionAbort } from '../lib/knowledge/store.mjs';
 
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');

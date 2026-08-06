@@ -5,6 +5,7 @@ import { deriveGitContext, resolveDefaultBranch, isDetachedKey } from '../git-co
 import { branchesRoot, bucketDirFor, listBuckets, bucketAncestryOk, isSafeBucketKey } from './overlay.mjs';
 import { readSession } from '../session.mjs';
 import { assertRealpathContained, assertNoSymlinkAncestors } from '../fs-safe.mjs';
+import { writeStoreFile, storeFileState } from './store-io.mjs';
 
 /**
  * Layer-aware WRITE routing (blueprint P4, normative routing table):
@@ -81,14 +82,26 @@ export function resolveWriteLayer({ workspace, home, layerOverride = null, log =
 export function ensureBucket(dir, { key, branch = null, baseSha = null }) {
   const bucketDir = bucketDirFor(dir, key);
   fs.mkdirSync(path.join(bucketDir, 'learnings'), { recursive: true });
+  // Every bucket file goes through the choke point (R1), and `storeFileState`
+  // — never `fs.existsSync`, which FOLLOWS a symlink — decides whether one is
+  // already there: a planted link at a bucket's ledger/index/meta read as
+  // "already fine" and was then written through by the next writer.
+  // Same rule as ensureStore's seed: create only what is absent or a
+  // quarantinable plant; never replace a real file or something that is not a
+  // file at all.
+  const seed = (file, content) => {
+    const state = storeFileState(file);
+    if (state !== 'absent' && state !== 'symlink') return;
+    if (!writeStoreFile(file, content)) {
+      throw new Error(`refused to create ${file} — the path does not resolve safely inside the knowledge store`);
+    }
+  };
   const ledgerPath = path.join(bucketDir, 'consolidated.jsonl');
-  if (!fs.existsSync(ledgerPath)) fs.writeFileSync(ledgerPath, '', 'utf8');
+  seed(ledgerPath, '');
   const indexPath = path.join(bucketDir, 'INDEX.md');
-  if (!fs.existsSync(indexPath)) {
-    fs.writeFileSync(indexPath, '# Learnings Index (branch bucket)\n\n_Rebuilt by `harness consolidate --apply`._\n', 'utf8');
-  }
+  seed(indexPath, '# Learnings Index (branch bucket)\n\n_Rebuilt by `harness consolidate --apply`._\n');
   const metaPath = path.join(bucketDir, 'meta.json');
-  if (!fs.existsSync(metaPath)) {
+  if (storeFileState(metaPath) !== 'file') {
     const meta = {
       branch,
       branchKey: key,
@@ -96,7 +109,7 @@ export function ensureBucket(dir, { key, branch = null, baseSha = null }) {
       createdAt: new Date().toISOString(),
       promotable: !isDetachedKey(key),
     };
-    fs.writeFileSync(metaPath, JSON.stringify(meta) + '\n', 'utf8');
+    seed(metaPath, JSON.stringify(meta) + '\n');
   }
   return bucketDir;
 }
@@ -175,11 +188,12 @@ export function migrateRenamedBucket(dir, { workspace, context }) {
     // never authority — a failed rename leaving updated meta under the old
     // key is the recoverable orphan `knowledge status`/doctor K5 surface.)
     const meta = source.meta || {};
-    fs.writeFileSync(
-      path.join(source.dir, 'meta.json'),
-      JSON.stringify({ ...meta, branch: context.branch, branchKey: context.branchKey }) + '\n',
-      'utf8'
-    );
+    // A refused meta write must STOP the migration: the rename below would
+    // otherwise move the bucket with a stale `meta.branch`, which is exactly
+    // the migrated-but-unrecorded state the write-then-rename order avoids.
+    if (!writeStoreFile(path.join(source.dir, 'meta.json'), JSON.stringify({ ...meta, branch: context.branch, branchKey: context.branchKey }) + '\n')) {
+      return null;
+    }
     fs.renameSync(containedSource, target);
     return { migrated: true, from: source.key, to: context.branchKey };
   } catch {

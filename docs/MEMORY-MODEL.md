@@ -657,29 +657,56 @@ runs `git status --porcelain -uall` in the store first and commits any dirty edi
 - The absorbed content may exceed the 1,200-byte learning cap — human authority overrides
   the cap for hand edits (logged, not rejected; the cap binds only the sole writer's own
   ops).
-- **A symlink at a learning path is never a learning — and it is made inert, not just
-  refused.** Every read, write, delete, and size check of a `learnings/<domain>/<slug>.md`
-  file (or its `branches/<key>/` equivalent) goes through ONE internal choke point
-  (`lib/knowledge/learning-io.mjs`), built on the shared `fs-safe` primitives and contained
-  against the STORE root, which it derives from the path's own required shape rather than
-  from a caller-supplied argument. So a planted symlink is: never read through, never
-  written through, never deleted through, never listed as an active learning by
-  `harness learnings` / retrieval / ranking, and never copied into the workspace mirror
-  under `knowledge commit repo`. Following it would otherwise pull an arbitrary outside file
-  into store history and a workspace teaching snapshot, then overwrite that outside file
-  with a serialized learning.
-  **The link itself is quarantined.** Refusing to follow it while leaving it sitting at a
-  live learning path was not enough — it still looked like a learning to anything that only
-  read the directory listing, and the next writer reaching for that id met a live link. The
-  next `absorbHandEdits` therefore MOVES the link (never its target; `rename` does not
-  follow a symlink) into `<store>/.quarantine/`, logs where it went, and leaves it there for
-  inspection. `.quarantine/` is gitignored, so a quarantined link never enters store
-  history and is never swept by `git clean -fd`.
-- **The store lock cannot be lost, and is never released by a non-owner.** `ensureStore`
-  writes (and, for stores created by an older CLI, migrates in) a `<store>/.gitignore`
-  covering `/.lock/`, `/.lock.stale-*`, and `/.quarantine/`. That is what makes lock loss
-  structurally impossible rather than recoverable: the transaction rollback runs
-  `git clean -fd`, which used to sweep the untracked `.lock` out from under the very
+- **A symlink at ANY store path is inert — not just refused, and not just for learnings.**
+  Every read, write, append, delete, and existence check of a file the store owns goes
+  through ONE internal choke point (`lib/knowledge/store-io.mjs`), built on the shared
+  `fs-safe` primitives and contained against the STORE root, which it derives from the
+  path's own **allow-listed shape** rather than from a caller-supplied argument. The
+  allow-list covers `learnings/<domain>/<slug>.md` and its `branches/<key>/` equivalent,
+  the store-root metadata (`INDEX.md`, `consolidated.jsonl`, `governance.jsonl`,
+  `config.json`, `store.json`, `stale.json`, `.gitignore`), the bucket metadata
+  (`branches/<key>/INDEX.md|consolidated.jsonl|meta.json`), and the two nested files the
+  CLI owns (`.git/harness-txn.json`, `.lock/owner.json`). A planted symlink is therefore
+  never read through, never written through, never appended through, never deleted through,
+  never listed as an active learning by `harness learnings` / retrieval / ranking, never
+  copied into the workspace mirror under `knowledge commit repo` — and, critically, never
+  `existsSync`-trusted into "already fine": `existsSync` FOLLOWS a link, so the store now
+  asks `storeFileState`, which reports `symlink`, never `file`.
+  Scoping this to learning files was wrong for exactly the reason the store `.gitignore`
+  was already inside the choke point: the store root is a directory a human writes to, so
+  every metadata file in it is as plantable as a learning path. `ln -sf ~/.zshrc
+  <store>/INDEX.md` plus any command that rebuilds the index — retire, dispute, confirm,
+  promote, apply, absorb, purge, rebuild — truncated and replaced that outside file.
+  **The link itself is quarantined.** Refusing to follow it while leaving it standing was
+  not enough — it still looked like a real file to anything that only read the directory
+  listing, and the next writer met a live link. A write through the choke point MOVES the
+  link (never its target; `rename` does not follow a symlink) into `<store>/.quarantine/`
+  and writes the real file in its place; `absorbHandEdits` does the same for a learning
+  path and logs where it went. `.quarantine/` is gitignored, so a quarantined link never
+  enters store history and is never swept by `git clean -fd`.
+  A **filter-rewrite** (purge's ledger/governance rewrites) additionally fails CLOSED when
+  the file exists but could not be read: writing a filtered version of a file you never saw
+  is a truncation. An **append** never becomes a read-modify-write for the same reason — it
+  is a real `O_NOFOLLOW|O_APPEND` write, so a ledger too large to read whole is still
+  appendable rather than silently truncated by its next append. And a refused write,
+  append, or truncate throws rather than returning quietly: a store write nobody checked is
+  the same defect class as a rollback nobody checked.
+- **A tracked learning replaced by a symlink is quarantined too.** Replacing a *tracked*
+  file with a link is a git TYPECHANGE — `git status` emits ` T`, which is neither `??` nor
+  contains `M`. The absorb loop's status-code filter ran BEFORE the symlink branch, so
+  ` T` (and staged `A `) `continue`d: never quarantined, never logged, and the next
+  `git add -A` committed the symlink into store history while `listLearnings` silently
+  dropped the learning. The symlink check now runs before any code filter that could
+  exclude it, and the filter itself is an allow-list (`??`, `M`, `A`, `T`, with unmerged
+  codes carved out explicitly) rather than a deny-list.
+- **The store lock cannot be lost, and is never released by a non-owner.** The first
+  transaction to open a store writes (and, for stores created by an older CLI, migrates in)
+  a `<store>/.gitignore` covering `/.lock/`, `/.lock.stale-*`, and `/.quarantine/`. It is
+  written **under the lock** — writing it is a store mutation, and `ensureStore` runs before
+  the lock is acquired — and an existing `.gitignore` that cannot be read for a reason other
+  than "it is a symlink" is left exactly as found rather than replaced. That file is what
+  makes lock loss structurally impossible rather than recoverable: the transaction rollback
+  runs `git clean -fd`, which used to sweep the untracked `.lock` out from under the very
   transaction holding it, after which the code re-asserted with a bare `mkdir` and swallowed
   `EEXIST` as "still there" — so if a second writer had claimed the freed lock in that
   window, the first carried on inside a lock it no longer held, `git add -A`-ed the other
@@ -689,7 +716,25 @@ runs `git status --porcelain -uall` in the store first and commits any dirty edi
   inside the lock directory at acquisition. Re-assert and release both verify it: a lock
   whose owner stamp names somebody else (or cannot be read) is never reclaimed and never
   removed, and a transaction that discovers its lock has been taken over aborts instead of
-  continuing. The store `.gitignore` is additive — entries a human added are preserved.
+  continuing. A lock whose owner stamp could NOT be written **fails the acquisition** and is
+  removed again: leaving one live wedged the store for the full ten-minute staleness window,
+  because nobody — including its own creator — could then prove ownership to release it.
+  The store `.gitignore` is additive — entries a human added are preserved.
+- **Stale-lock takeover is a compare-and-swap, not a narrowed race.** Taking over a lock
+  older than ten minutes renames it to a tombstone whose name is DERIVED FROM THE IDENTITY
+  OBSERVED BEFORE THE RENAME, so the rename itself is the atomic swap: a second writer that
+  observed the same stale lock finds that exact tombstone in its way and fails. If it does
+  win the rename (the first writer already cleaned its tombstone up), the post-swap verify
+  catches that what it moved is not what it observed, and it puts the live lock straight
+  back. Previously both writers renamed, re-created, stamped and verified in turn, and both
+  returned "acquired".
+- **A transaction never clears a journal it does not own.** The intent journal is one shared
+  file, and clearing it used to be unconditional: a writer whose recovery rollback lost the
+  lock still removed the journal the WINNING writer had just written, leaving that writer
+  running unmarked — the exact state the fail-closed journal check exists to prevent,
+  reached from the other side. A journal now carries the same owner token its writer's lock
+  does, and is cleared only by its owner. Crash recovery is the one legitimate foreign
+  clear: it consumes a dead writer's journal under a freshly acquired lock.
 - **A rollback that failed is reported as failed.** `rollbackStore` checks both git
   invocations AND re-reads the tree afterwards (a zero exit is not the same thing as a clean
   tree), and a transaction that could not roll back what it meant to discard NEVER reaches
@@ -723,7 +768,17 @@ runs `git status --porcelain -uall` in the store first and commits any dirty edi
   intra-transaction commit aborts the transaction too, rather than leaving the previous
   journal in place: the previous journal names an OLDER checkpoint, and recovery resets
   `--hard` to exactly that sha — destroying the sub-commit that had just landed, which for
-  `absorbOrAbort` is an absorbed human hand edit.
+  `absorbOrAbort` is an absorbed human hand edit. **A recovery whose rollback could not
+  clean the tree refuses the run**: the fallback rollback's result used to be discarded, so
+  a residue that survived both attempts was reported as recovered and inherited by the next
+  transaction's absorb as human authority.
+- **Every rollback goes through the transaction's own guard.** `rollbackToCheckpoint`
+  unwinds to the last checkpoint; `rollbackUncommitted` discards only what is uncommitted,
+  for an `fn` undoing its own failed sub-commit attempt (the quarantine-strike recorder).
+  Both set the "this transaction could not discard what it meant to discard" latch and
+  re-assert lock ownership afterwards. No `fn` calls `rollbackStore` directly any more: the
+  strike recorder's bare call was the last `git clean -fd` in the codebase that could free
+  the lock with nobody checking who held it next.
 
 Use `harness remember` to add a new claim and `harness learning retire|dispute|confirm` to
 change a learning's status when a CLI command is more convenient than a direct edit — both

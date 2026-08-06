@@ -3,8 +3,16 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { harnessGlobalHome } from '../paths.mjs';
-import { readFileNoFollow, writeFileContained, assertRealpathContained } from '../fs-safe.mjs';
-import { readLearningFile, QUARANTINE_DIR } from './learning-io.mjs';
+import { assertNoSymlinkAncestors, assertRealpathContained, readFileNoFollow } from '../fs-safe.mjs';
+import {
+  readLearningFile,
+  readStoreFile,
+  writeStoreFile,
+  appendStoreFile,
+  removeStoreFile,
+  storeFileState,
+  QUARANTINE_DIR,
+} from './store-io.mjs';
 
 /**
  * The local knowledge store: a CLI-managed git repo OUTSIDE the working tree
@@ -103,10 +111,10 @@ export const STORE_SCHEMA = 2;
 export function assertStoreSchemaSupported(dir) {
   let recorded = null;
   try {
-    const parsed = JSON.parse(fs.readFileSync(path.join(dir, 'store.json'), 'utf8'));
+    const parsed = JSON.parse(readStoreFile(path.join(dir, 'store.json')));
     if (parsed && Number.isInteger(parsed.schema)) recorded = parsed.schema;
   } catch {
-    recorded = null; // absent or corrupt — legacy/current, never a refusal
+    recorded = null; // absent, unreadable, symlinked, or corrupt — never a refusal
   }
   if (recorded !== null && recorded > STORE_SCHEMA) {
     const err = new Error(
@@ -151,21 +159,44 @@ const STORE_IGNORE_ENTRIES = ['/.lock/', '/.lock.stale-*', `/${QUARANTINE_DIR}/`
  * migration exists. Idempotent and additive — an entry a human already wrote
  * is not duplicated, and lines this CLI does not own are preserved verbatim.
  */
+/**
+ * Called from inside `withStoreTransaction` UNDER THE LOCK (P3), never from
+ * `ensureStore`: it used to run before `acquireStoreLock`, which made it a
+ * store MUTATION outside the lock — two writers could interleave a
+ * read-modify-write of the same file, and the very file that keeps a rollback
+ * from sweeping the lock was written by an unlocked path.
+ *
+ * NEVER CLOBBER WHAT YOU COULD NOT READ (P3). A `.gitignore` that exists but
+ * fails `readStoreFile` for a reason OTHER than "it is a symlink" — over
+ * DEFAULT_MAX_BYTES, unreadable permissions — used to read as `''` and was then
+ * FULLY REPLACED rather than extended, destroying whatever a human had put
+ * there. Such a file is now left exactly as found: the entries are merely a
+ * belt to the ownership-token brace, so running without them is degraded, not
+ * unsafe, while silently rewriting a file we cannot see is neither.
+ */
 function ensureStoreGitignore(dir) {
-  // fs-safe on both halves (rule 1): `.gitignore` sits in the store root, a
-  // directory a human writes to, so it is as symlink-plantable as any learning
-  // path — following one would append these entries to (and, with the read
-  // returning that file's content, rewrite) an arbitrary outside file.
-  const existing = readFileNoFollow(path.join(dir, '.gitignore'), { root: dir }) ?? '';
+  const gitignore = path.join(dir, '.gitignore');
+  const state = storeFileState(gitignore);
+  // 'other'/'blocked': a directory at that name, or a symlinked ancestor —
+  // nothing this function may safely touch. 'symlink' falls through: the
+  // planted link is quarantined by writeStoreFile and a real file takes its
+  // place, which is the whole point of making a plant inert.
+  if (state === 'other' || state === 'blocked') return;
+  let existing = '';
+  if (state === 'file') {
+    const text = readStoreFile(gitignore);
+    if (text === null) return; // present and real, but unreadable — never rewrite it
+    existing = text;
+  }
   const lines = existing.split('\n').map((l) => l.trim());
   const missing = STORE_IGNORE_ENTRIES.filter((entry) => !lines.includes(entry));
   if (!missing.length) return;
   const header = existing ? (existing.endsWith('\n') ? '' : '\n') : '# harness knowledge store — never staged, never swept by `git clean -fd`\n';
   try {
-    // Best effort: an unwritable (or symlinked) `.gitignore` still lets the
-    // store run — it just falls back to the ownership-token layer below for
-    // lock safety, which is independent of this file.
-    writeFileContained(dir, '.gitignore', existing + header + missing.join('\n') + '\n');
+    // Best effort: an unwritable `.gitignore` still lets the store run — it
+    // just falls back to the ownership-token layer below for lock safety,
+    // which is independent of this file.
+    writeStoreFile(gitignore, existing + header + missing.join('\n') + '\n');
   } catch {
     // writeFileContained mkdirs the parent, which can throw on a hand-built store
   }
@@ -174,20 +205,39 @@ function ensureStoreGitignore(dir) {
 export function ensureStore(workspace, { home, dryRun = false } = {}) {
   const dir = storeDir(workspace, { home });
   assertStoreSchemaSupported(dir);
-  const created = !fs.existsSync(path.join(dir, 'consolidated.jsonl'));
+  const ledgerPath = path.join(dir, 'consolidated.jsonl');
+  const created = storeFileState(ledgerPath) !== 'file';
+  // `.git` is a DIRECTORY probe, not a store-owned file read — the store's git
+  // repo is created and read by git itself, never by this module.
   if (dryRun) return { dir, created, git: fs.existsSync(path.join(dir, '.git')) };
   fs.mkdirSync(path.join(dir, 'learnings'), { recursive: true });
-  ensureStoreGitignore(dir);
   let gitOk = fs.existsSync(path.join(dir, '.git'));
   if (!gitOk) {
     gitOk = spawnSync('git', ['init', '-q'], { cwd: dir, encoding: 'utf8' }).status === 0;
   }
-  const indexPath = path.join(dir, 'INDEX.md');
-  if (!fs.existsSync(indexPath)) fs.writeFileSync(indexPath, INDEX_STUB, 'utf8');
-  const ledgerPath = path.join(dir, 'consolidated.jsonl');
-  if (!fs.existsSync(ledgerPath)) fs.writeFileSync(ledgerPath, '', 'utf8');
-  const schemaPath = path.join(dir, 'store.json');
-  if (!fs.existsSync(schemaPath)) fs.writeFileSync(schemaPath, JSON.stringify({ schema: STORE_SCHEMA }) + '\n', 'utf8');
+  // `storeFileState` — never `fs.existsSync` — decides "is this file already
+  // there?": existsSync FOLLOWS a symlink, so a planted link read as "already
+  // fine" and was left live for the next writer to follow (the verified
+  // INDEX.md exploit). A 'symlink'/'absent'/'other' state all mean "write the
+  // real file", and writeStoreFile quarantines the link on the way.
+  // A refused write throws (as the bare `fs.writeFileSync` these replaced did):
+  // a store missing its index/ledger/schema marker is not a store this CLI may
+  // pretend it opened.
+  // Only 'absent' and 'symlink' are seeded: 'absent' is a fresh/legacy store,
+  // and a 'symlink' is a plant that writeStoreFile quarantines on the way. A
+  // real file is already correct, and 'other' (a directory, a device node) is
+  // NOT ours to replace — whichever writer actually needs it will fail closed
+  // inside the transaction, where a rollback exists.
+  const seed = (file, content) => {
+    const state = storeFileState(file);
+    if (state !== 'absent' && state !== 'symlink') return;
+    if (!writeStoreFile(file, content)) {
+      throw new Error(`refused to create ${file} — the path does not resolve safely inside the knowledge store`);
+    }
+  };
+  seed(path.join(dir, 'INDEX.md'), INDEX_STUB);
+  seed(ledgerPath, '');
+  seed(path.join(dir, 'store.json'), JSON.stringify({ schema: STORE_SCHEMA }) + '\n');
   return { dir, created, git: gitOk };
 }
 
@@ -217,7 +267,7 @@ export function readStoreConfig(workspace, { home } = {}) {
   let mode = 'on';
   let commit = 'none';
   try {
-    const parsed = JSON.parse(fs.readFileSync(path.join(dir, 'config.json'), 'utf8'));
+    const parsed = JSON.parse(readStoreFile(path.join(dir, 'config.json')));
     if (parsed && KNOWLEDGE_MODES.has(parsed.mode)) mode = parsed.mode;
     if (parsed && KNOWLEDGE_COMMIT_MODES.has(parsed.commit)) commit = parsed.commit;
   } catch {
@@ -243,12 +293,17 @@ export function writeStoreConfig(workspace, { home, mode, commit } = {}) {
     // read-modify-write owns only mode/commit, never the whole file.
     let raw = {};
     try {
-      const parsed = JSON.parse(fs.readFileSync(path.join(dir, 'config.json'), 'utf8'));
+      const parsed = JSON.parse(readStoreFile(path.join(dir, 'config.json')));
       if (parsed && typeof parsed === 'object') raw = parsed;
     } catch {
       // absent/corrupt — nothing extra to preserve
     }
-    fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify({ ...raw, mode: nextMode, commit: nextCommit }) + '\n', 'utf8');
+    // Through the choke point (R1), and CHECKED: a refused config write used to
+    // be invisible, so `knowledge freeze` reported the new mode while the store
+    // kept running in the old one. A refusal fails the transaction instead.
+    if (!writeStoreFile(path.join(dir, 'config.json'), JSON.stringify({ ...raw, mode: nextMode, commit: nextCommit }) + '\n')) {
+      throw new Error('refused to write config.json — the path does not resolve safely inside the knowledge store');
+    }
     const message = mode !== undefined ? `knowledge: mode ${nextMode}` : `knowledge: commit ${nextCommit}`;
     return { nextMode, nextCommit, commitMessage: message };
   });
@@ -273,12 +328,20 @@ export function writeStoreConfig(workspace, { home, mode, commit } = {}) {
   };
 }
 
-/** Append-only episode-consumption ledger. Torn tail lines are tolerated. */
-export function readLedger(dir) {
-  const ledgerPath = path.join(dir, 'consolidated.jsonl');
-  if (!fs.existsSync(ledgerPath)) return [];
+function ledgerPathFor(root) {
+  return path.join(root, 'consolidated.jsonl');
+}
+
+/** Append-only episode-consumption ledger. Torn tail lines are tolerated; a
+ * ledger that cannot be read safely (symlinked, over the read cap, outside the
+ * store) reads as empty — the same tolerant default an absent one gets. Every
+ * REWRITE goes through `writeLedger` below, which refuses on exactly that
+ * unreadable case rather than truncating what it could not see. */
+export function readLedger(root) {
+  const text = readStoreFile(ledgerPathFor(root));
+  if (text === null) return [];
   const entries = [];
-  for (const line of fs.readFileSync(ledgerPath, 'utf8').split('\n')) {
+  for (const line of text.split('\n')) {
     if (!line.trim()) continue;
     try {
       entries.push(JSON.parse(line));
@@ -289,12 +352,42 @@ export function readLedger(dir) {
   return entries;
 }
 
-export function appendLedger(dir, entries) {
+/**
+ * Append through the choke point: a real O_NOFOLLOW/O_APPEND write, so a ledger
+ * too large to read whole is still appendable (a read-modify-write "append"
+ * would truncate it).
+ *
+ * THROWS ON REFUSAL, never silently drops the entries (same discipline as S4's
+ * "a rollback whose result nobody checked"): the ledger is what counts episode
+ * consumption and three-strikes quarantine, so an append nobody noticed failing
+ * would leave the store's own bookkeeping quietly wrong. Every caller runs
+ * inside a transaction, which turns the throw into a rollback.
+ */
+export function appendLedger(root, entries) {
   if (!entries || !entries.length) return;
-  const ledgerPath = path.join(dir, 'consolidated.jsonl');
-  const existing = fs.existsSync(ledgerPath) ? fs.readFileSync(ledgerPath, 'utf8') : '';
-  const prefix = existing && !existing.endsWith('\n') ? '\n' : '';
-  fs.appendFileSync(ledgerPath, prefix + entries.map((e) => JSON.stringify(e)).join('\n') + '\n');
+  const ledgerPath = ledgerPathFor(root);
+  if (!appendStoreFile(ledgerPath, entries.map((e) => JSON.stringify(e)).join('\n') + '\n', { newlineGuard: true })) {
+    throw new Error(`refused to append to ${ledgerPath} — the path does not resolve safely inside the knowledge store`);
+  }
+}
+
+/**
+ * Full ledger REWRITE (the purge/cleanup filter shape: read → drop entries →
+ * write back). Unlike an append or a deliberate truncate, this one is only
+ * correct if the read that produced `keptEntries` actually saw the file — so
+ * it FAILS CLOSED when the ledger is present but unreadable, rather than
+ * writing a filtered version of nothing over it. Throws so the surrounding
+ * transaction rolls back; callers doing a deliberate WIPE write '' directly
+ * and never come through here.
+ */
+export function writeLedger(root, keptEntries) {
+  const ledgerPath = ledgerPathFor(root);
+  if (storeFileState(ledgerPath) === 'file' && readStoreFile(ledgerPath) === null) {
+    throw new Error(`refused to rewrite ${ledgerPath} — it exists but could not be read safely`);
+  }
+  if (!writeStoreFile(ledgerPath, keptEntries.length ? keptEntries.map((e) => JSON.stringify(e)).join('\n') + '\n' : '')) {
+    throw new Error(`refused to write ${ledgerPath} — the path does not resolve safely inside the knowledge store`);
+  }
 }
 
 /**
@@ -307,9 +400,14 @@ export function appendLedger(dir, entries) {
  */
 function readGovernanceEntries(dir) {
   const govPath = path.join(dir, 'governance.jsonl');
-  if (!fs.existsSync(govPath)) return [];
+  if (storeFileState(govPath) === 'absent') return [];
+  const text = readStoreFile(govPath);
+  // Present but unreadable (symlinked, over the read cap, escaping the store).
+  // Distinguished from absent — a tolerant READER treats it as empty, but a
+  // REWRITE must never truncate a file it could not see.
+  if (text === null) return null;
   const entries = [];
-  for (const line of fs.readFileSync(govPath, 'utf8').split('\n')) {
+  for (const line of text.split('\n')) {
     if (!line.trim()) continue;
     try {
       entries.push(JSON.parse(line));
@@ -358,7 +456,7 @@ const REPLAY_DECISION_ACTIONS = new Set(['retire', 'dispute', 'confirm', 'promot
 
 export function readGovernance(dir) {
   const map = new Map();
-  for (const entry of readGovernanceEntries(dir)) {
+  for (const entry of readGovernanceEntries(dir) || []) {
     if (!entry || !entry.id) continue;
     if (!REPLAY_DECISION_ACTIONS.has(entry.action)) continue; // audit-only (absorb-branch, future actions)
     const existing = map.get(entry.id);
@@ -368,12 +466,14 @@ export function readGovernance(dir) {
   return map;
 }
 
-/** Append one governance decision. Same newline-guard idiom as appendLedger. */
+/** Append one governance decision. Same choke-point append as appendLedger, and
+ * the same fail-closed rule: a standing human decision that silently failed to
+ * land would be re-derived away by the next `consolidate --rebuild`. */
 export function appendGovernance(dir, entry) {
   const govPath = path.join(dir, 'governance.jsonl');
-  const existing = fs.existsSync(govPath) ? fs.readFileSync(govPath, 'utf8') : '';
-  const prefix = existing && !existing.endsWith('\n') ? '\n' : '';
-  fs.appendFileSync(govPath, prefix + JSON.stringify(entry) + '\n');
+  if (!appendStoreFile(govPath, JSON.stringify(entry) + '\n', { newlineGuard: true })) {
+    throw new Error(`refused to append to ${govPath} — the path does not resolve safely inside the knowledge store`);
+  }
 }
 
 /**
@@ -385,9 +485,16 @@ export function appendGovernance(dir, entry) {
  */
 export function rewriteGovernance(dir, keepPredicate) {
   const govPath = path.join(dir, 'governance.jsonl');
-  if (!fs.existsSync(govPath)) return;
-  const kept = readGovernanceEntries(dir).filter(keepPredicate);
-  fs.writeFileSync(govPath, kept.length ? kept.map((e) => JSON.stringify(e)).join('\n') + '\n' : '', 'utf8');
+  if (storeFileState(govPath) === 'absent') return;
+  const entries = readGovernanceEntries(dir);
+  // Fail closed, exactly like writeLedger: a filter-rewrite is only correct if
+  // the read saw the file. Truncating a governance ledger we could not read
+  // would silently erase standing human decisions.
+  if (entries === null) throw new Error(`refused to rewrite ${govPath} — it exists but could not be read safely`);
+  const kept = entries.filter(keepPredicate);
+  if (!writeStoreFile(govPath, kept.length ? kept.map((e) => JSON.stringify(e)).join('\n') + '\n' : '')) {
+    throw new Error(`refused to write ${govPath} — the path does not resolve safely inside the knowledge store`);
+  }
 }
 
 /**
@@ -614,16 +721,21 @@ export function serializeLearning(fm, body) {
 }
 
 export function listLearnings(dir) {
-  const root = path.join(dir, 'learnings');
   const out = [];
-  if (!fs.existsSync(root)) return out;
+  // A symlinked `learnings/` (or a symlinked store root) would make this scan
+  // enumerate an arbitrary outside directory. Every individual read below is
+  // already inert against it — readLearningFile's ancestor walk refuses the
+  // whole subtree — but refusing the WALK up front means the scan never even
+  // enumerates names outside the store.
+  const root = assertNoSymlinkAncestors(dir, 'learnings');
+  if (!root || !fs.existsSync(root)) return out;
   for (const domain of fs.readdirSync(root, { withFileTypes: true })) {
     if (!domain.isDirectory()) continue;
     const dPath = path.join(root, domain.name);
     for (const f of fs.readdirSync(dPath)) {
       if (!f.endsWith('.md')) continue;
       const file = path.join(dPath, f);
-      // THE ONLY READ (S1): `readLearningFile` (learning-io.mjs) is the store's
+      // THE ONLY READ (S1): `readLearningFile` (store-io.mjs) is the store's
       // single learning-file reader. It returns null — and this entry is simply
       // not a learning — for a symlinked leaf or ancestor, a path resolving
       // outside the store, a file over the DEFAULT_MAX_BYTES read cap (the
@@ -731,19 +843,27 @@ function newLockToken() {
   return `${process.pid}-${crypto.randomBytes(12).toString('hex')}`;
 }
 
-/** Stamp ownership into a lock directory we just created. Best effort: a lock
- * whose owner file could not be written reads as `unknown` below, which is
- * treated as NOT ours — fail closed, never claim what we cannot prove. */
+/**
+ * Stamp ownership into a lock directory we just created, and REPORT whether it
+ * landed (P3). It used to be best-effort-and-ignored, which quietly wedged the
+ * store for STALE_LOCK_MS: a failed stamp makes `lockOwnership` report our own
+ * lock `foreign`, so `releaseStoreLock` refuses to remove it and the live,
+ * unowned lock sits there blocking every writer — including us — for ten
+ * minutes. `acquireStoreLock` now fails the acquisition (and removes the lock
+ * it just created) instead of leaving one behind that nobody can release.
+ *
+ * The write goes through the choke point (store-io.mjs), matching the contained
+ * read in `lockOwnership`: the lock directory is freshly mkdir'd, but the owner
+ * file inside it is still a path another process could reach.
+ */
 function writeLockOwner(lockPath, token) {
   try {
-    // Contained write (rule 1), matching the contained read in `lockOwnership`:
-    // the lock directory is freshly mkdir'd, but the owner file inside it is
-    // still a path another process could reach, so neither half touches it with
-    // a bare `fs` call.
-    writeFileContained(lockPath, LOCK_OWNER_FILE, JSON.stringify({ token, pid: process.pid, at: new Date().toISOString() }) + '\n');
+    return writeStoreFile(
+      path.join(lockPath, LOCK_OWNER_FILE),
+      JSON.stringify({ token, pid: process.pid, at: new Date().toISOString() }) + '\n'
+    );
   } catch {
-    // ignored — see the doc comment above: an unwritable owner stamp reads back
-    // as `foreign`, i.e. NOT ours, which fails closed.
+    return false;
   }
 }
 
@@ -757,7 +877,7 @@ function writeLockOwner(lockPath, token) {
  */
 export function lockOwnership(lockPath, token) {
   if (!fs.existsSync(lockPath)) return 'absent';
-  const text = readFileNoFollow(path.join(lockPath, LOCK_OWNER_FILE), { root: lockPath });
+  const text = readStoreFile(path.join(lockPath, LOCK_OWNER_FILE));
   if (text === null) return 'foreign';
   try {
     const parsed = JSON.parse(text);
@@ -808,53 +928,138 @@ export function releaseStoreLock(lockPath, token) {
   }
 }
 
-export function acquireStoreLock(lockPath) {
-  const token = newLockToken();
-  try {
-    fs.mkdirSync(lockPath);
-    writeLockOwner(lockPath, token);
-    return { acquired: true, staleLockNote: null, token };
-  } catch {
-    // fall through to the stale-takeover attempt below
-  }
+/**
+ * The IDENTITY of the lock currently sitting at `lockPath`, observed BEFORE any
+ * takeover attempt, or null when there is nothing there / it is not stale yet.
+ * `{ ageMs, key }` — `key` is the raw owner stamp when it can be read, and a
+ * dev+ino+mtime fingerprint when it cannot, so two processes looking at the
+ * SAME stale lock always derive the SAME key while a lock replaced in between
+ * derives a different one.
+ *
+ * Exported with `takeOverStaleLock` so the compare-and-swap can be exercised
+ * with both observations taken before either takeover runs — the exact
+ * interleaving that used to let two writers both believe they held the lock.
+ */
+export function observeStaleLock(lockPath) {
   let stat;
   try {
     stat = fs.statSync(lockPath);
   } catch {
-    stat = null;
+    return null;
   }
-  const ageMs = stat ? Date.now() - stat.mtimeMs : 0;
-  if (stat && ageMs > STALE_LOCK_MS) {
-    const tombstone = `${lockPath}.stale-${process.pid}-${Date.now()}`;
-    let claimed = false;
+  const ageMs = Date.now() - stat.mtimeMs;
+  if (ageMs <= STALE_LOCK_MS) return { ageMs, key: null, stale: false };
+  const owner = readStoreFile(path.join(lockPath, LOCK_OWNER_FILE));
+  const key = owner === null ? `ino:${stat.dev}:${stat.ino}:${stat.mtimeMs}` : `owner:${owner}`;
+  return { ageMs, key, stale: true };
+}
+
+/**
+ * COMPARE-AND-SWAP TAKEOVER (P2). The old dance — stat, rename to a
+ * pid/time-named tombstone, mkdir, stamp, verify — was narrowed by its final
+ * ownership check but never atomic: A renames, mkdirs, stamps and verifies
+ * owned; B's rename then succeeds against A's FRESH lock, and B mkdirs, stamps
+ * and verifies owned too. Both return acquired.
+ *
+ * The tombstone name is now DERIVED FROM THE OBSERVED IDENTITY, which makes the
+ * rename itself the compare-and-swap: the first writer to move identity `I`
+ * aside leaves a non-empty directory at that exact name, so the second writer's
+ * rename fails (POSIX rename refuses to replace a non-empty directory). And
+ * because a winner removes its tombstone at the end, the swap is re-verified
+ * after the fact: whatever we just moved must still carry the identity we
+ * observed BEFORE the rename, or we moved somebody's LIVE lock — in which case
+ * we put it straight back and refuse.
+ */
+export function takeOverStaleLock(lockPath, observed, token) {
+  if (!observed || !observed.stale || !observed.key) return { acquired: false, ageMs: observed?.ageMs || 0, lockPath, token: null };
+  const fingerprint = crypto.createHash('sha256').update(observed.key).digest('hex').slice(0, 16);
+  const tombstone = `${lockPath}.stale-${fingerprint}`;
+  try {
+    fs.renameSync(lockPath, tombstone);
+  } catch {
+    // Another process already moved this exact identity aside (its tombstone
+    // stands in the way), or the lock vanished — either way we did not win.
+    return { acquired: false, ageMs: observed.ageMs, lockPath, token: null };
+  }
+  // Post-swap verify: is what we moved the object we observed? The tombstone is
+  // a TRANSIENT rename target this call just created, not a store-owned path,
+  // so it has no allow-listed shape in store-io.mjs — it is read through the
+  // same fs-safe primitive, contained against the STORE root (the tombstone's
+  // parent), which is the identical guarantee `readStoreFile` gives the live
+  // `.lock/owner.json` above.
+  const movedOwner = readFileNoFollow(path.join(tombstone, LOCK_OWNER_FILE), { root: path.dirname(tombstone) });
+  const movedKey = movedOwner === null ? null : `owner:${movedOwner}`;
+  if (observed.key.startsWith('owner:') ? movedKey !== observed.key : movedKey !== null) {
+    // We moved a DIFFERENT lock — a fresh one a winner planted after we
+    // observed. Put it back; it is not ours to hold or to destroy.
     try {
-      fs.renameSync(lockPath, tombstone);
-      claimed = true;
+      fs.renameSync(tombstone, lockPath);
     } catch {
-      claimed = false; // another process already won the takeover race
+      // The winner already re-created its lock, so the rename-back is refused;
+      // the tombstone is gitignored debris, and their live lock stands.
     }
-    if (claimed) {
-      let recovered = false;
-      let staleLockNote = null;
-      try {
-        fs.mkdirSync(lockPath);
-        writeLockOwner(lockPath, token);
-        staleLockNote = `stale lock (${Math.round(ageMs / 60000)}m old) removed`;
-        recovered = true;
-      } catch {
-        recovered = false;
-      }
-      try {
-        fs.rmSync(tombstone, { recursive: true, force: true });
-      } catch {
-        // ignored — an orphaned tombstone is harmless disk debris either way
-      }
-      // Only a lock the owner stamp confirms as OURS counts as acquired: the
-      // mkdir above can win while a racing takeover re-stamps it a moment later.
-      if (recovered && lockOwnership(lockPath, token) === 'owned') return { acquired: true, staleLockNote, token };
+    return { acquired: false, ageMs: observed.ageMs, lockPath, token: null };
+  }
+  // `createdDir` is tracked SEPARATELY from `recovered`: the cleanup below may
+  // only ever remove a lock directory THIS call created. Folding the two
+  // together would mean a failed exclusive mkdir — which happens precisely
+  // because somebody ELSE now holds the lock — took their lock away.
+  let createdDir = false;
+  try {
+    fs.mkdirSync(lockPath);
+    createdDir = true;
+  } catch {
+    createdDir = false;
+  }
+  const recovered = createdDir && writeLockOwner(lockPath, token);
+  if (createdDir && !recovered) {
+    // Never leave a live lock nobody can prove they own (P3). Ours to remove:
+    // the exclusive mkdir above is what created it.
+    try {
+      fs.rmSync(lockPath, { recursive: true, force: true });
+    } catch {
+      // best effort
     }
   }
-  return { acquired: false, ageMs, lockPath, token: null };
+  try {
+    fs.rmSync(tombstone, { recursive: true, force: true });
+  } catch {
+    // ignored — an orphaned tombstone is harmless, gitignored disk debris
+  }
+  if (recovered && lockOwnership(lockPath, token) === 'owned') {
+    return { acquired: true, staleLockNote: `stale lock (${Math.round(observed.ageMs / 60000)}m old) removed`, token };
+  }
+  return { acquired: false, ageMs: observed.ageMs, lockPath, token: null };
+}
+
+export function acquireStoreLock(lockPath) {
+  const token = newLockToken();
+  let created = false;
+  try {
+    fs.mkdirSync(lockPath);
+    created = true;
+  } catch {
+    created = false; // occupied — fall through to the stale-takeover attempt
+  }
+  if (created) {
+    // AN UNSTAMPABLE LOCK IS NOT ACQUIRED (P3). Leaving one live wedges the
+    // store for STALE_LOCK_MS: nobody — including us — can prove ownership, so
+    // `releaseStoreLock` refuses to remove it. We created this directory, so
+    // removing it again is unambiguously ours to do.
+    if (writeLockOwner(lockPath, token) && lockOwnership(lockPath, token) === 'owned') {
+      return { acquired: true, staleLockNote: null, token };
+    }
+    try {
+      fs.rmSync(lockPath, { recursive: true, force: true });
+    } catch {
+      // best effort — a lock we could not remove is taken over as stale later
+    }
+    return { acquired: false, ageMs: 0, lockPath, token: null };
+  }
+  const observed = observeStaleLock(lockPath);
+  if (!observed) return { acquired: false, ageMs: 0, lockPath, token: null };
+  if (!observed.stale) return { acquired: false, ageMs: observed.ageMs, lockPath, token: null };
+  return takeOverStaleLock(lockPath, observed, token);
 }
 
 /**
@@ -1050,14 +1255,14 @@ const TXN_JOURNAL_REL = path.join('.git', 'harness-txn.json');
  * would escape with the lock still held; false simply refuses the run. */
 function writeTxnJournal(dir, data) {
   try {
-    return Boolean(writeFileContained(dir, TXN_JOURNAL_REL, JSON.stringify(data) + '\n'));
+    return writeStoreFile(path.join(dir, TXN_JOURNAL_REL), JSON.stringify(data) + '\n');
   } catch {
     return false;
   }
 }
 
 function readTxnJournal(dir) {
-  const text = readFileNoFollow(path.join(dir, TXN_JOURNAL_REL), { root: dir });
+  const text = readStoreFile(path.join(dir, TXN_JOURNAL_REL));
   if (text === null) return null; // absent, symlinked, or outside the store
   try {
     const parsed = JSON.parse(text);
@@ -1109,9 +1314,29 @@ function discardResiduePath(dir, rel, targetSha) {
   }
 }
 
-function clearTxnJournal(dir) {
+/**
+ * OWNER-CHECKED JOURNAL CLEARING (P2) — the journal-side twin of
+ * `releaseStoreLock`. The journal is ONE SHARED FILE, and clearing it used to
+ * be unconditional: a writer whose recovery rollback LOST the lock still ran
+ * `rmSync` on its way out, deleting the journal the WINNING writer had just
+ * written. That winner then ran unmarked — precisely the state the fail-closed
+ * journal-write check exists to prevent, reached from the other direction.
+ *
+ * A journal now carries the same `owner` token its writer's lock does, and this
+ * removes only a journal stamped with `token` (or an unstamped legacy one).
+ * `force: true` is the ONE legitimate foreign clear: crash recovery, running
+ * under a freshly acquired lock, is consuming a DEAD writer's journal, which by
+ * definition names somebody else.
+ */
+function clearTxnJournal(dir, { token = null, force = false } = {}) {
+  if (!force) {
+    const journal = readTxnJournal(dir);
+    // A journal whose owner is someone else's is not ours to remove. An
+    // unreadable/absent one (null) falls through: nothing to protect.
+    if (journal && typeof journal.owner === 'string' && journal.owner !== token) return;
+  }
   try {
-    fs.rmSync(path.join(dir, TXN_JOURNAL_REL), { force: true });
+    removeStoreFile(path.join(dir, TXN_JOURNAL_REL));
   } catch {
     // ignored — a stranded journal only ever costs one extra recovery pass
   }
@@ -1131,17 +1356,20 @@ function clearTxnJournal(dir) {
  */
 function recoverInterruptedTransaction(dir, git, lockPath, token) {
   const journal = readTxnJournal(dir);
-  if (!journal) return { note: null, lockLost: false };
-  clearTxnJournal(dir);
-  if (!git) return { note: null, lockLost: false };
+  if (!journal) return { note: null, lockLost: false, failed: false };
+  // The one legitimate FOREIGN clear: this journal belongs to a writer that
+  // died, and we hold the lock now.
+  clearTxnJournal(dir, { force: true });
+  if (!git) return { note: null, lockLost: false, failed: false };
   const before = journalDirtySet(journal);
-  if (before === null) return { note: null, lockLost: false }; // the journal cannot say — hands off
+  if (before === null) return { note: null, lockLost: false, failed: false }; // the journal cannot say — hands off
   const now = dirtyPaths(dir);
-  if (now === null) return { note: null, lockLost: false }; // unreadable status — fail closed, touch nothing
+  if (now === null) return { note: null, lockLost: false, failed: false }; // unreadable status — fail closed, touch nothing
   const residue = now.filter((p) => !before.has(p));
-  if (!residue.length) return { note: null, lockLost: false };
+  if (!residue.length) return { note: null, lockLost: false, failed: false };
   const checkpoint = typeof journal.checkpoint === 'string' && /^[0-9a-f]{40,64}$/.test(journal.checkpoint) ? journal.checkpoint : null;
   let lockLost = false;
+  let failed = false;
   if (before.size === 0) {
     // Nothing was dirty at the start, so EVERY uncommitted byte is residue —
     // the store's own whole-tree rollback is both the cheapest and the most
@@ -1152,7 +1380,13 @@ function recoverInterruptedTransaction(dir, git, lockPath, token) {
     // residue in place. rollbackStore now REPORTS that (S4), so the fallback to
     // the plain "discard everything uncommitted" reset keys off the honest
     // result rather than re-reading the tree by hand.
-    if (!rollbackStore(dir, checkpoint).ok) rollbackStore(dir);
+    //
+    // BOTH RESULTS ARE CHECKED (P3). The fallback's result used to be thrown
+    // away — `if (!rollbackStore(dir, checkpoint).ok) rollbackStore(dir);` — so
+    // a recovery that could not discard the residue reported success anyway and
+    // the next transaction inherited the dead writer's uncommitted bytes as a
+    // hand edit, which is the exact laundering the journal exists to stop.
+    if (!rollbackStore(dir, checkpoint).ok && !rollbackStore(dir).ok) failed = true;
     // `.lock` is gitignored (S2) so `git clean -fd` can no longer sweep it, but
     // re-assert through the OWNER-CHECKED path anyway: if this lock somehow
     // went away and another writer took it, we must abort, never mkdir over it.
@@ -1162,7 +1396,7 @@ function recoverInterruptedTransaction(dir, git, lockPath, token) {
     // time, so the pre-existing dirt survives untouched.
     for (const rel of residue) discardResiduePath(dir, rel, checkpoint);
   }
-  return { note: 'discarded interrupted write residue', lockLost };
+  return { note: failed ? null : 'discarded interrupted write residue', lockLost, failed };
 }
 
 /**
@@ -1225,7 +1459,12 @@ export class StoreTransactionAbort extends Error {
  * against the intent journal and writes a fresh one (see
  * recoverInterruptedTransaction above — a dead writer's uncommitted residue is
  * discarded rather than absorbed as human authority by the next transaction),
- * all BEFORE calling `fn({ dir, git, recordCheckpoint, rollbackToCheckpoint })`.
+ * all BEFORE calling
+ * `fn({ dir, git, recordCheckpoint, rollbackToCheckpoint, rollbackUncommitted })`.
+ * `rollbackUncommitted` is the same guarded rollback narrowed to "discard what
+ * is uncommitted" rather than "reset to the checkpoint" — the only shape an
+ * `fn` that made its own failed sub-commit attempt needs, and the reason no
+ * `fn` has any business calling `rollbackStore` itself.
  * `rollbackToCheckpoint` is the same rollback the failure paths below use,
  * exposed so an `fn` that REJECTS after already mutating (apply.mjs's write-time
  * `E_HEAD_MOVED`, which can only be reached once a branch bucket has been
@@ -1288,6 +1527,12 @@ export function withStoreTransaction(workspace, { home, label, afterCommit } = {
     return { ok: false, locked: true, rolledBack: false, error: null, committed: false, result: null, dir, git, staleLockNote: null };
   }
   const token = lock.token;
+  // UNDER THE LOCK (P3). `.gitignore` is what keeps a rollback's `git clean -fd`
+  // from sweeping the lock, and writing it is a store mutation — it used to run
+  // inside `ensureStore`, i.e. BEFORE `acquireStoreLock`, which is the one place
+  // a store mutation must never happen. It runs here, before recovery, because
+  // recovery's own rollback is the first thing that depends on it.
+  ensureStoreGitignore(dir);
   // Crash recovery BEFORE anything reads the tree (see
   // recoverInterruptedTransaction): a dead writer's uncommitted residue is
   // discarded here rather than inherited by the absorb step below as human
@@ -1295,16 +1540,23 @@ export function withStoreTransaction(workspace, { home, label, afterCommit } = {
   // already surface as `staleLockRemoved`.
   const recovery = recoverInterruptedTransaction(dir, git, lockPath, token);
   const staleLockNote = [lock.staleLockNote, recovery.note].filter(Boolean).join('; ') || null;
-  if (recovery.lockLost) {
-    // Somebody else's lock is sitting where ours was. Nothing has been mutated
-    // by this transaction, and their lock is NOT ours to remove — refuse loudly
-    // and leave the store exactly as it is.
-    clearTxnJournal(dir);
+  if (recovery.lockLost || recovery.failed) {
+    // Either somebody else's lock is sitting where ours was, or the dead
+    // writer's residue is still in the tree. Nothing has been mutated by THIS
+    // transaction, and a foreign lock is not ours to remove — refuse loudly and
+    // leave the store exactly as it is. The journal clear is owner-checked (P2):
+    // if another writer took the lock, the journal on disk is THEIRS.
+    clearTxnJournal(dir, { token });
+    if (!recovery.lockLost) releaseStoreLock(lockPath, token);
     return {
       ok: false,
-      locked: true,
+      locked: recovery.lockLost,
       rolledBack: false,
-      error: new Error('store lock was taken over by another writer during crash recovery — refusing to run'),
+      error: new Error(
+        recovery.lockLost
+          ? 'store lock was taken over by another writer during crash recovery — refusing to run'
+          : 'could not discard the interrupted write residue left by a previous transaction — refusing to run on a store this CLI cannot clean'
+      ),
       committed: false,
       result: null,
       dir,
@@ -1320,7 +1572,9 @@ export function withStoreTransaction(workspace, { home, label, afterCommit } = {
   // catches up — it can never make checkpointSha wrong the way a
   // hand-maintained value could.
   let checkpointSha = git ? currentHeadSha(dir) : null;
-  const journalBase = { pid: process.pid, at: new Date().toISOString(), label: label || null };
+  // `owner` stamps the journal with the SAME token the lock carries, so
+  // `clearTxnJournal` can refuse to delete a journal another writer owns (P2).
+  const journalBase = { pid: process.pid, at: new Date().toISOString(), label: label || null, owner: token };
   // FAIL CLOSED ON A JOURNAL WRITE FAILURE (P1). The journal is the ONLY thing
   // that tells this transaction's crash residue apart from a human hand edit,
   // so a best-effort write that silently failed left the transaction running
@@ -1332,7 +1586,7 @@ export function withStoreTransaction(workspace, { home, label, afterCommit } = {
   if (git) {
     const dirty = dirtyPaths(dir);
     if (dirty === null || !writeTxnJournal(dir, { ...journalBase, checkpoint: checkpointSha, dirty })) {
-      clearTxnJournal(dir);
+      clearTxnJournal(dir, { token });
       releaseStoreLock(lockPath, token);
       return {
         ok: false,
@@ -1390,9 +1644,18 @@ export function withStoreTransaction(workspace, { home, label, afterCommit } = {
    * `fn` bodies use it via `rollbackToCheckpoint`, and the terminal paths below
    * carry it into `rolledBack`.
    */
-  function guardedRollback() {
+  /**
+   * `toHead: true` discards only what is UNCOMMITTED (a plain
+   * `git reset --hard` + clean) instead of resetting to the checkpoint — the
+   * shape apply.mjs's `recordContentFailure` needs to undo its own failed
+   * strike sub-commit attempt without unwinding to the checkpoint. It used to
+   * call `rollbackStore` directly, which set no `rollbackFailed` latch and
+   * re-asserted no ownership: its `git clean -fd` was the last rollback in the
+   * codebase that could free the lock with nobody checking (R4).
+   */
+  function guardedRollback({ toHead = false } = {}) {
     if (!git) return false;
-    const res = rollbackStore(dir, checkpointSha);
+    const res = toHead ? rollbackStore(dir) : rollbackStore(dir, checkpointSha);
     // `.lock` is gitignored (S2), so `git clean -fd` no longer sweeps it — but
     // verify ownership rather than assume it: a rollback taken MID-`fn`
     // (rollbackToCheckpoint) must never let this transaction keep writing after
@@ -1412,7 +1675,13 @@ export function withStoreTransaction(workspace, { home, label, afterCommit } = {
   try {
     let result;
     try {
-      result = fn({ dir, git, recordCheckpoint, rollbackToCheckpoint: guardedRollback });
+      result = fn({
+        dir,
+        git,
+        recordCheckpoint,
+        rollbackToCheckpoint: () => guardedRollback(),
+        rollbackUncommitted: () => guardedRollback({ toHead: true }),
+      });
     } catch (err) {
       const isAbort = err instanceof StoreTransactionAbort;
       const rolledBack = isAbort ? false : guardedRollback();
@@ -1478,8 +1747,10 @@ export function withStoreTransaction(workspace, { home, label, afterCommit } = {
     return { ok: true, locked: false, rolledBack: false, error: null, committed: commitRes.committed, result, dir, git, staleLockNote };
   } finally {
     // Cleared only once the commit or rollback above has finished: while it
-    // exists, a crash at any point leaves the residue classifiable.
-    clearTxnJournal(dir);
+    // exists, a crash at any point leaves the residue classifiable. OWNER-
+    // CHECKED (P2): reached with `lockLost === true` this would otherwise
+    // delete the WINNING writer's journal and leave them running unmarked.
+    clearTxnJournal(dir, { token });
     // OWNER-CHECKED RELEASE (S2), on every exit path including this one. The
     // old unconditional `rmSync(lockPath)` was the release half of the lock-loss
     // class: if anything had taken the lock in the meantime, this deleted a LIVE
@@ -1509,7 +1780,7 @@ export function normalizeSlug(text) {
  */
 export function readStaleExclusions(dir) {
   try {
-    const parsed = JSON.parse(fs.readFileSync(path.join(dir, 'stale.json'), 'utf8'));
+    const parsed = JSON.parse(readStoreFile(path.join(dir, 'stale.json')));
     if (parsed && parsed.excluded && typeof parsed.excluded === 'object') {
       return { excluded: parsed.excluded };
     }
@@ -1520,5 +1791,5 @@ export function readStaleExclusions(dir) {
 }
 
 export function writeStaleExclusions(dir, data) {
-  fs.writeFileSync(path.join(dir, 'stale.json'), JSON.stringify(data) + '\n', 'utf8');
+  return writeStoreFile(path.join(dir, 'stale.json'), JSON.stringify(data) + '\n');
 }

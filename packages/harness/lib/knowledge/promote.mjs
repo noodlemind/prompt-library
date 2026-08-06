@@ -6,7 +6,7 @@ import { isActiveFm, MAX_OPS_PER_RUN } from './consolidate.mjs';
 import { bucketDirFor, readBucketMeta, listBuckets, bucketAncestryOk, isSafeBucketKey } from './overlay.mjs';
 import { deriveGitContext, isDetachedKey } from '../git-context.mjs';
 import { writeFileContained } from '../fs-safe.mjs';
-import { readLearningFile } from './learning-io.mjs';
+import { readLearningFile } from './store-io.mjs';
 
 /**
  * `harness knowledge promote` (blueprint §5): emits a REVIEWABLE op-set at

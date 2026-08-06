@@ -4,7 +4,7 @@ import path from 'node:path';
 import { runInsightCompound } from '../compound.mjs';
 import { runIndexKnowledge } from '../index-knowledge.mjs';
 import { applyOps } from './apply.mjs';
-import { normalizeSlug, readStoreConfig, storeDir, listLearnings, withStoreTransaction, StoreTransactionAbort, readLedger } from './store.mjs';
+import { normalizeSlug, readStoreConfig, storeDir, listLearnings, withStoreTransaction, StoreTransactionAbort, readLedger, writeLedger } from './store.mjs';
 import { absorbOrAbort } from './admin.mjs';
 import { resolveWriteLayer } from './layer.mjs';
 import { bucketDirFor } from './overlay.mjs';
@@ -210,11 +210,8 @@ export function runRemember({ workspace, copilotHome, flags, argv, log = () => {
         if (keptLedger.length === ledger.length) {
           return { kind: 'success', commitMessage: null };
         }
-        fs.writeFileSync(
-          path.join(dir, 'consolidated.jsonl'),
-          keptLedger.length ? keptLedger.map((e) => JSON.stringify(e)).join('\n') + '\n' : '',
-          'utf8'
-        );
+        // Through the choke point, fail-closed on an unreadable ledger (R1).
+        writeLedger(dir, keptLedger);
         return { kind: 'success', commitMessage: `remember: clear failure bookkeeping for ${episode.path}` };
       });
     } catch {

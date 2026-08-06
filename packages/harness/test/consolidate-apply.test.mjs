@@ -1060,7 +1060,7 @@ test('an ADD asserting kind: fix for a real file whose own frontmatter says kind
 
 test('updateFrontmatterField inserts a missing field on a CRLF-terminated learning file instead of silently no-opping', () => {
   // The fixture lives at a REAL learning path shape (`<root>/learnings/<domain>/
-  // <slug>.md`): updateFrontmatterField reads and writes through the learning-io
+  // <slug>.md`): updateFrontmatterField reads and writes through the store-io
   // choke point, which derives its containment root from exactly that shape and
   // refuses anything else outright.
   const file = path.join(tempDir('apply-crlf-'), 'learnings', 'sql', 'crlf-learning.md');

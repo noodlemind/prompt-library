@@ -33,7 +33,7 @@ import {
   lockOwnership,
   reassertStoreLock,
 } from '../lib/knowledge/store.mjs';
-import { QUARANTINE_DIR, readLearningFile, writeLearningFile } from '../lib/knowledge/learning-io.mjs';
+import { QUARANTINE_DIR, readLearningFile, writeLearningFile } from '../lib/knowledge/store-io.mjs';
 
 const tempDir = (p) => fs.mkdtempSync(path.join(os.tmpdir(), p));
 const isRoot = typeof process.getuid === 'function' && process.getuid() === 0;
@@ -114,7 +114,7 @@ test('S1: a planted symlink at a learning path cannot be strengthened — the ou
   assert.equal(fs.readFileSync(victim, 'utf8'), original, 'the symlink target was never written through');
 });
 
-test('S1: writeLearningFile refuses a symlinked leaf and a non-learning path shape', () => {
+test('S1: writeLearningFile never writes THROUGH a symlinked leaf, and refuses a non-learning path shape', () => {
   const root = tempDir('sh-io-');
   const victim = path.join(root, 'victim.txt');
   fs.writeFileSync(victim, 'OUTSIDE\n', 'utf8');
@@ -122,8 +122,18 @@ test('S1: writeLearningFile refuses a symlinked leaf and a non-learning path sha
   fs.mkdirSync(path.dirname(link), { recursive: true });
   fs.symlinkSync(victim, link);
 
-  assert.equal(writeLearningFile(link, 'rendered learning\n'), false);
-  assert.equal(fs.readFileSync(victim, 'utf8'), 'OUTSIDE\n');
+  // The planted LINK is moved into `.quarantine/` (rename never follows a
+  // symlink) and the real file is written in its place, so the path stops being
+  // a trap instead of being refused forever — the same rule the store's
+  // metadata writers follow. What must never happen is the write landing on the
+  // link's TARGET.
+  assert.equal(writeLearningFile(link, 'rendered learning\n'), true);
+  assert.equal(fs.readFileSync(victim, 'utf8'), 'OUTSIDE\n', 'the outside target is untouched');
+  assert.equal(fs.lstatSync(link).isSymbolicLink(), false);
+  assert.equal(fs.readFileSync(link, 'utf8'), 'rendered learning\n');
+  const q = fs.readdirSync(path.join(root, QUARANTINE_DIR));
+  assert.equal(q.length, 1, 'the link was preserved for inspection, not deleted');
+  assert.ok(fs.lstatSync(path.join(root, QUARANTINE_DIR, q[0])).isSymbolicLink());
 
   // Not a learning path at all — refused rather than "trusted because the
   // caller asked", which is what a root argument would have permitted.
@@ -188,9 +198,19 @@ test('S1: absorb quarantines the planted link out of learnings/ instead of leavi
 // S2 — the lock survives `git clean -fd`, and is never released by a non-owner
 // ---------------------------------------------------------------------------
 
+// The `.gitignore` is written by the first TRANSACTION, not by `ensureStore`:
+// writing it is a store mutation, and `ensureStore` runs before the lock is
+// acquired (P3). `openStore` below is therefore how a store is "opened" for
+// these tests — one no-op transaction, exactly what any real command does.
+const openStore = (c) => {
+  const tx = withStoreTransaction(c.ws, { home: c.harnessHome, label: 'open' }, () => ({ commitMessage: 'open' }));
+  assert.equal(tx.ok, true, String(tx.error || ''));
+  return tx.dir;
+};
+
 test('S2: the store carries a .gitignore, and `git clean -fd` cannot sweep the lock', () => {
   const c = ctx();
-  const { dir } = ensureStore(c.ws, { home: c.harnessHome });
+  const dir = openStore(c);
 
   const ignore = fs.readFileSync(path.join(dir, '.gitignore'), 'utf8');
   assert.match(ignore, /^\/\.lock\/$/m, 'the lock directory is ignored');
@@ -205,26 +225,26 @@ test('S2: the store carries a .gitignore, and `git clean -fd` cannot sweep the l
 
 test('S2: a legacy store with no .gitignore gains one the next time it is opened', () => {
   const c = ctx();
-  const { dir } = ensureStore(c.ws, { home: c.harnessHome });
+  const dir = openStore(c);
   fs.rmSync(path.join(dir, '.gitignore'), { force: true });
   assert.equal(fs.existsSync(path.join(dir, '.gitignore')), false, 'precondition: no .gitignore');
 
-  ensureStore(c.ws, { home: c.harnessHome });
+  openStore(c);
   assert.match(fs.readFileSync(path.join(dir, '.gitignore'), 'utf8'), /^\/\.lock\/$/m);
 });
 
 test('S2: a .gitignore a human already wrote is extended, never replaced', () => {
   const c = ctx();
-  const { dir } = ensureStore(c.ws, { home: c.harnessHome });
+  const dir = openStore(c);
   fs.writeFileSync(path.join(dir, '.gitignore'), '# mine\nscratch/\n', 'utf8');
 
-  ensureStore(c.ws, { home: c.harnessHome });
+  openStore(c);
   const after = fs.readFileSync(path.join(dir, '.gitignore'), 'utf8');
   assert.match(after, /^scratch\/$/m, 'the human entry survives');
   assert.match(after, /^\/\.lock\/$/m, 'and ours was appended');
 
   // Idempotent: a second open adds nothing.
-  ensureStore(c.ws, { home: c.harnessHome });
+  openStore(c);
   assert.equal(fs.readFileSync(path.join(dir, '.gitignore'), 'utf8'), after);
 });
 

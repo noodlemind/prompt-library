@@ -4,6 +4,7 @@ import { spawnSync } from 'node:child_process';
 import { storeDir, listLearnings, readGovernance, inertLine } from './store.mjs';
 import { deriveGitContext } from '../git-context.mjs';
 import { redactSecrets } from '../secret-scan.mjs';
+import { readStoreFile } from './store-io.mjs';
 
 /**
  * The layered read path (harness evolution blueprint §4) — ONE exported
@@ -104,7 +105,7 @@ export function safeBranchName(value) {
  * time; meta only carries display/ancestry hints. */
 export function readBucketMeta(bucketDir) {
   try {
-    const parsed = JSON.parse(fs.readFileSync(path.join(bucketDir, 'meta.json'), 'utf8'));
+    const parsed = JSON.parse(readStoreFile(path.join(bucketDir, 'meta.json')));
     return parsed && typeof parsed === 'object' ? parsed : null;
   } catch {
     return null;

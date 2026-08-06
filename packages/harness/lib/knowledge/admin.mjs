@@ -16,6 +16,7 @@ import {
   listLearnings,
   readLedger,
   appendLedger,
+  writeLedger,
   commitStore,
   parseLearningFrontmatter,
   serializeLearning,
@@ -29,7 +30,15 @@ import { consolidateStatus, LEARNING_BYTE_CAP, isActiveFm } from './consolidate.
 import { listBuckets, branchesRoot, bucketDirFor } from './overlay.mjs';
 import { scanSecrets } from '../secret-scan.mjs';
 import { assertNoSymlinkAncestors, assertRealpathContained, writeFileContained, readFileNoFollow } from '../fs-safe.mjs';
-import { readLearningFile, writeLearningFile, removeLearningFile, quarantineSymlinkedLearning } from './learning-io.mjs';
+import {
+  readLearningFile,
+  writeLearningFile,
+  removeLearningFile,
+  quarantineSymlinkedLearning,
+  writeStoreFile,
+  removeStoreFile,
+  storeFileState,
+} from './store-io.mjs';
 import { runIndexKnowledge } from '../index-knowledge.mjs';
 import { loadManifest } from '../recall-rank.mjs';
 
@@ -260,6 +269,19 @@ export function mirrorLearnings({ workspace, home, log = () => {}, retiredIds = 
  * overwriting that outside file with a canonically serialized learning. Such a
  * path is refused with a logged note, never followed.
  */
+/** Truncate a store-owned file through the choke point, failing closed: a wipe
+ * that was refused must never be reported as a completed purge/rebuild. */
+function wipe(file) {
+  if (!writeStoreFile(file, '')) {
+    throw new Error(`refused to truncate ${file} — the path does not resolve safely inside the knowledge store`);
+  }
+}
+
+/** Per-character allow-list of porcelain status codes an absorb acts on, plus
+ * the unmerged codes carved out of it. See the comment at the filter below. */
+const ABSORBABLE_CODES = new Set(['M', 'A', 'T']);
+const UNMERGED_CODES = new Set(['DD', 'AU', 'UD', 'UA', 'DU', 'AA', 'UU']);
+
 export function absorbHandEdits({ workspace, home, log = () => {} }) {
   const empty = { absorbed: [], deleted: [], committed: false };
   const dir = storeDir(workspace, { home });
@@ -307,28 +329,24 @@ export function absorbHandEdits({ workspace, home, log = () => {} }) {
     const id = `${domain}/${slug}`;
     const layerRoot = bucketKey ? bucketDirFor(dir, bucketKey) : dir;
 
-    if (code.includes('D')) {
-      // Human deletion always wins — nothing left to parse or re-render.
-      deleted.push(id);
-      if (bucketKey) touchedBucketRoots.add(layerRoot);
-      continue;
-    }
-    // `??` (planted, never tracked) absorbs exactly like `M` (see the doc
-    // comment above) — anything else (staged-only, renamed-into, conflicted)
-    // stays out of absorb scope.
-    if (code !== '??' && !code.includes('M')) continue;
-
-    // A SYMLINK AT A LEARNING PATH IS NEVER A LEARNING (P1). `rel` comes
-    // straight from `git status` over a directory a human hand-edits, and this
-    // block both READS the path and later REWRITES it canonically — so a
-    // planted symlink was followed BOTH ways: the read pulled an arbitrary
-    // outside file's content into the absorb pipeline (snapshotted into the
-    // workspace, committed into store history) and the rewrite overwrote that
-    // outside file with a serialized learning. Refused here rather than
-    // followed, through the same fs-safe.mjs primitives every other writer in
-    // this module uses: the ancestor walk rejects a symlinked component (or
-    // leaf) up front, and `readFileNoFollow` re-verifies against the store root
-    // after acquiring the descriptor, closing the swap window the walk cannot.
+    // A SYMLINK AT A LEARNING PATH IS NEVER A LEARNING (P1), AND THE CHECK RUNS
+    // BEFORE ANY STATUS-CODE FILTER (R2). `rel` comes straight from `git status`
+    // over a directory a human hand-edits, and this block both READS the path
+    // and later REWRITES it canonically — so a planted symlink was followed
+    // BOTH ways: the read pulled an arbitrary outside file's content into the
+    // absorb pipeline (snapshotted into the workspace, committed into store
+    // history) and the rewrite overwrote that outside file with a serialized
+    // learning.
+    //
+    // THE ORDER IS THE FIX. The absorbable-code filter used to run FIRST, and
+    // the likeliest plant of all — replacing a TRACKED learning file with a
+    // symlink — makes git emit ` T` (typechange; git-status(1): "[ MTARC] T
+    // type changed in the work tree since the index"), which is neither `??`
+    // nor contains `M`. It `continue`d here: never quarantined, never logged,
+    // and the next `commitStore`'s `git add -A` committed the symlink into
+    // store history while `listLearnings` silently dropped the learning. A
+    // deny-list filter excluded the case that mattered, so the symlink check
+    // now precedes every filter that could exclude it.
     const file = assertNoSymlinkAncestors(dir, rel);
     if (!file) {
       // REFUSING IS NOT ENOUGH — THE LINK MUST BECOME INERT (S1). The previous
@@ -345,6 +363,25 @@ export function absorbHandEdits({ workspace, home, log = () => {} }) {
       );
       continue;
     }
+
+    if (code.includes('D')) {
+      // Human deletion always wins — nothing left to parse or re-render.
+      deleted.push(id);
+      if (bucketKey) touchedBucketRoots.add(layerRoot);
+      continue;
+    }
+    // ALLOW-LIST, NOT DENY-LIST (rule 3). These are the codes whose worktree
+    // state means "this learning file's content is not what the last commit
+    // recorded", so it must be absorbed rather than swept into store history by
+    // the next `git add -A`:
+    //   `??` planted and never tracked   `M` modified in the worktree/index
+    //   `A`  staged but never committed  `T` type changed back to a real file
+    // Unmerged codes are carved out explicitly: a store repo never merges, and
+    // absorbing half a conflict would be worse than leaving it. Everything else
+    // (rename-into, copy) stays out of absorb scope as before.
+    if (UNMERGED_CODES.has(code)) continue;
+    if (code !== '??' && ![...code].some((ch) => ABSORBABLE_CODES.has(ch))) continue;
+
     const text = readLearningFile(file);
     if (text === null) {
       // Vanished between status and read, swapped for a symlink since the walk
@@ -946,11 +983,10 @@ export function purgeEpisode({ workspace, target, copilotHome, home, log = () =>
       }
       const keptLedger = m.ledger.filter((e) => e.path !== target);
       if (keptLedger.length !== m.ledger.length) {
-        fs.writeFileSync(
-          path.join(m.root, 'consolidated.jsonl'),
-          keptLedger.length ? keptLedger.map((e) => JSON.stringify(e)).join('\n') + '\n' : '',
-          'utf8'
-        );
+        // Through the choke point (R1), and fail-closed: `writeLedger` refuses
+        // when the ledger exists but could not be read, so a filtered rewrite
+        // can never truncate a ledger this pass did not actually see.
+        writeLedger(m.root, keptLedger);
         ledgerRemoved += m.ledger.length - keptLedger.length;
       }
       if (m.learnings.length) rebuildIndex(m.root);
@@ -1150,7 +1186,12 @@ export function purgeAll({ workspace, home, log = () => {} }) {
         if (!domain.isDirectory()) continue;
         const dPath = path.join(learningsDir, domain.name);
         n += fs.readdirSync(dPath).filter((f) => f.endsWith('.md')).length;
-        fs.rmSync(dPath, { recursive: true, force: true });
+        // Defense in depth (fs-safe.mjs): a recursive delete follows a
+        // symlinked ANCESTOR — a `learnings/` replaced by a link would make
+        // this sweep an outside directory tree. Delete only a path whose real
+        // location is still inside the store.
+        const contained = assertRealpathContained(dir, path.join('learnings', domain.name));
+        if (contained) fs.rmSync(contained, { recursive: true, force: true });
       }
     }
     // Layer cascade (blueprint §5a): purge --all wipes `branches/` whole —
@@ -1159,12 +1200,17 @@ export function purgeAll({ workspace, home, log = () => {} }) {
     for (const bucket of listBuckets(dir)) {
       n += listLearnings(bucket.dir).length;
     }
-    fs.rmSync(branchesRoot(dir), { recursive: true, force: true });
-    fs.writeFileSync(path.join(dir, 'consolidated.jsonl'), '', 'utf8');
+    const containedBranches = assertRealpathContained(dir, 'branches');
+    if (containedBranches) fs.rmSync(containedBranches, { recursive: true, force: true });
+    // A deliberate WIPE, not a filtered rewrite: it needs no prior read, so it
+    // goes straight through the choke point rather than through writeLedger.
+    // Checked, never silent — a wipe that did not happen must not be reported
+    // as a completed purge.
+    wipe(path.join(dir, 'consolidated.jsonl'));
     // Truncate rather than rewriteGovernance(dir, () => false): purge --all
     // erases the entire store, so there is no surviving id left for a
     // predicate to filter against — a full truncate is equivalent and simpler.
-    fs.writeFileSync(path.join(dir, 'governance.jsonl'), '', 'utf8');
+    wipe(path.join(dir, 'governance.jsonl'));
     rebuildIndex(dir);
     return { kind: 'success', commitMessage: 'purge: --all (store reset)', removedCount: n, idsBeforeReset };
     }
@@ -1277,10 +1323,12 @@ export function rebuildStore({ workspace, home, yes, copilotHome, log = () => {}
     if (fs.existsSync(learningsDir)) {
       for (const domain of fs.readdirSync(learningsDir, { withFileTypes: true })) {
         if (!domain.isDirectory()) continue;
-        fs.rmSync(path.join(learningsDir, domain.name), { recursive: true, force: true });
+        // Same containment guard as purgeAll's sweep above.
+        const contained = assertRealpathContained(dir, path.join('learnings', domain.name));
+        if (contained) fs.rmSync(contained, { recursive: true, force: true });
       }
     }
-    fs.writeFileSync(path.join(dir, 'consolidated.jsonl'), '', 'utf8');
+    wipe(path.join(dir, 'consolidated.jsonl'));
     // Per-layer rebuild (blueprint §5a): every bucket's learnings and ledger
     // are wiped too — bucket meta.json survives as the layer's identity — so
     // each lane re-derives from raw episodes routed by their `branch:`
@@ -1291,14 +1339,15 @@ export function rebuildStore({ workspace, home, yes, copilotHome, log = () => {}
     let archivedBranch = 0;
     for (const bucket of listBuckets(dir)) {
       archivedBranch += listLearnings(bucket.dir).length;
-      fs.rmSync(path.join(bucket.dir, 'learnings'), { recursive: true, force: true });
+      const containedBucketLearnings = assertRealpathContained(dir, path.join('branches', bucket.key, 'learnings'));
+      if (containedBucketLearnings) fs.rmSync(containedBucketLearnings, { recursive: true, force: true });
       fs.mkdirSync(path.join(bucket.dir, 'learnings'), { recursive: true });
-      fs.writeFileSync(path.join(bucket.dir, 'consolidated.jsonl'), '', 'utf8');
+      wipe(path.join(bucket.dir, 'consolidated.jsonl'));
       rebuildIndex(bucket.dir);
     }
     const archived = archivedLearnings.length + archivedBranch;
     rebuildIndex(dir);
-    fs.rmSync(path.join(dir, 'stale.json'), { force: true });
+    removeStoreFile(path.join(dir, 'stale.json'));
     return {
       kind: 'success',
       commitMessage: `consolidate: rebuild reset (${archived} learnings archived to git history)`,
@@ -1390,7 +1439,7 @@ export function migrateStrandedStore({ workspace, home, log = () => {} }) {
 
   // Non-creating gate: a workspace with no legacy path-keyed store on disk
   // must never be materialized by this command just to discover that.
-  if (!fs.existsSync(path.join(legacyDir, 'consolidated.jsonl'))) {
+  if (storeFileState(path.join(legacyDir, 'consolidated.jsonl')) !== 'file') {
     return {
       pass: false,
       exitCode: 2,
@@ -1464,7 +1513,7 @@ export function migrateStrandedStore({ workspace, home, log = () => {} }) {
       // non-empty" refusal caused by OUR OWN interrupted attempt.
       try {
         fs.cpSync(legacyDir, targetDir, { recursive: true });
-        if (!fs.existsSync(path.join(targetDir, 'consolidated.jsonl'))) {
+        if (storeFileState(path.join(targetDir, 'consolidated.jsonl')) !== 'file') {
           throw new Error('cross-device copy did not verify — legacy store left untouched');
         }
       } catch (copyErr) {

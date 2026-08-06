@@ -5,7 +5,6 @@ import {
   ensureStore,
   withStoreTransaction,
   StoreTransactionAbort,
-  rollbackStore,
   appendLedger,
   readLedger,
   listLearnings,
@@ -30,7 +29,7 @@ import { parseMergedFrom } from './listing.mjs';
 import { resolveWriteLayer, ensureBucket, migrateRenamedBucket, episodeEligibleForLayer, storeHasBuckets } from './layer.mjs';
 import { bucketDirFor, readBucketMeta, bucketAncestryOk, isSafeBucketKey } from './overlay.mjs';
 import { readFileNoFollow, assertNoSymlinkAncestors } from '../fs-safe.mjs';
-import { readLearningFile, writeLearningFile } from './learning-io.mjs';
+import { readLearningFile, writeLearningFile, writeStoreFile } from './store-io.mjs';
 
 /**
  * The SOLE writer of the learnings store. The consolidation skill emits an
@@ -902,7 +901,7 @@ export function applyOps({
    * which propagates as a thrown exception instead and lets
    * withStoreTransaction perform the rollback.
    */
-  function runOnce({ dir, git, recordCheckpoint = () => {}, rollbackToCheckpoint = () => false }) {
+  function runOnce({ dir, git, recordCheckpoint = () => {}, rollbackToCheckpoint = () => false, rollbackUncommitted = () => false }) {
     // HEAD RE-VALIDATION BEFORE THE FIRST MUTATION (P1). Bucket
     // materialization/migration below already WRITES to the store, so the
     // write-time gate further down was no longer the "nothing has been written
@@ -1053,13 +1052,16 @@ export function applyOps({
         appendLedger(dir, entries);
         const commitRes = commitStore(dir, `consolidate: record failure ${code}`);
         if (!commitRes.ok) {
-          // Verified rollback (S4): `rollbackStore` now reports whether the
-          // tree is actually clean again. A failed discard cannot be folded
-          // into the rejection note — the partial ledger append is still on
-          // disk and finalize would commit it.
-          const rb = rollbackStore(dir);
-          if (!rb.ok) {
-            unrecoverable = `strike recording failed to commit (${commitRes.stderr || 'git commit failed'}) and could not be rolled back: ${rb.stderr}`;
+          // GUARDED rollback (R4): this used to call `rollbackStore(dir)`
+          // directly — the last rollback in the codebase whose `git clean -fd`
+          // could free the lock with NO ownership re-check and NO
+          // `rollbackFailed` latch, so a store handed to another writer here
+          // was never noticed and the transaction went on to commit.
+          // `rollbackUncommitted` keeps this rollback's semantics (undo only
+          // this strike attempt, never unwind to the checkpoint) while setting
+          // the latch and re-asserting ownership like every other rollback.
+          if (!rollbackUncommitted()) {
+            unrecoverable = `strike recording failed to commit (${commitRes.stderr || 'git commit failed'}) and could not be rolled back`;
           }
           return `strike recording failed to commit: ${commitRes.stderr || 'git commit failed'}`;
         }
@@ -2271,7 +2273,7 @@ export function applyOps({
         mirrorLearnings({ workspace, home, log });
       },
     },
-    ({ dir, git, recordCheckpoint, rollbackToCheckpoint }) => {
+    ({ dir, git, recordCheckpoint, rollbackToCheckpoint, rollbackUncommitted }) => {
     // The run's ONE git snapshot (routing + provenance), taken under the store
     // lock rather than before it, and re-validated at write time
     // (assertHeadUnmoved) — see deriveRouting's doc comment above.
@@ -2308,7 +2310,7 @@ export function applyOps({
           : `knowledge mode is ${freshMode} — run: harness knowledge on`;
       return { kind: 'reject', applied: [], governed: [], rejected: [{ code: 'E_MODE', reason }], committed: false, exitCode: 2 };
     }
-    return runOnce({ dir, git, recordCheckpoint, rollbackToCheckpoint });
+    return runOnce({ dir, git, recordCheckpoint, rollbackToCheckpoint, rollbackUncommitted });
   });
 
   if (!tx.ok) {
@@ -2447,5 +2449,15 @@ export function rebuildIndex(dir) {
     ...active.map((l) => `- [${l.id}] ${inertLine(l.fm.trigger || '')}`),
     '',
   ];
-  fs.writeFileSync(path.join(dir, 'INDEX.md'), lines.join('\n'), 'utf8');
+  // THE CHOKE POINT (R1). This was the verified exploit: `ln -sf ~/.zshrc
+  // <store>/INDEX.md` plus ANY command that rebuilds the index — retire,
+  // dispute, confirm, promote, apply, absorb, purge, rebuild — truncated and
+  // replaced the outside file, because `ensureStore`'s `fs.existsSync` had
+  // followed the link and reported it as already fine. `writeStoreFile`
+  // quarantines a planted link and writes the real file; a refusal is raised
+  // rather than swallowed, so the surrounding transaction rolls back instead of
+  // reporting a rebuild that never happened.
+  if (!writeStoreFile(path.join(dir, 'INDEX.md'), lines.join('\n'))) {
+    throw new Error(`refused to rebuild ${path.join(dir, 'INDEX.md')} — the path does not resolve safely inside the knowledge store`);
+  }
 }
