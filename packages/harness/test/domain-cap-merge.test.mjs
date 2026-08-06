@@ -6,7 +6,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
-import { ensureStore, listLearnings, readLedger } from '../lib/knowledge/store.mjs';
+import { ensureStore, listLearnings, readLedger, commitStore } from '../lib/knowledge/store.mjs';
 import { rebuildIndex } from '../lib/knowledge/apply.mjs';
 
 /**
@@ -109,10 +109,24 @@ function seedLearning(dir, domain, slug, over = {}) {
   fs.writeFileSync(file, lines.join('\n'), 'utf8');
 }
 
+/**
+ * Finish a direct-write fixture the way the CLI itself always leaves the
+ * store: index rebuilt AND committed. Committing matters — an UNCOMMITTED
+ * learning file in the store is a hand edit (planted or modified), and
+ * absorbHandEdits (admin.mjs) now captures those through its validating path
+ * and stamps them `source: human`, which is exactly right for a person
+ * editing the store but would silently re-label these fixtures' "pre-existing
+ * auto-sourced store state" as human-taught.
+ */
+function finalizeSeed(dir) {
+  rebuildIndex(dir);
+  commitStore(dir, 'seed: pre-existing store state');
+}
+
 function seedDomainAtCap(c, domain, count = 25) {
   const { dir } = ensureStore(c.ws, { home: c.harnessHome });
   for (let i = 0; i < count; i++) seedLearning(dir, domain, `seed-${i}`);
-  rebuildIndex(dir);
+  finalizeSeed(dir);
   return dir;
 }
 
@@ -191,7 +205,7 @@ test('a MERGE with a source: human target lands disputed for that target, no new
   const { dir } = ensureStore(c.ws, { home: c.harnessHome });
   seedLearning(dir, 'sql', 'human-taught', { source: 'human', fixCount: 0 });
   seedLearning(dir, 'sql', 'auto-claim', { source: 'auto', fixCount: 1 });
-  rebuildIndex(dir);
+  finalizeSeed(dir);
 
   const mergeOp = {
     op: 'MERGE',
@@ -222,7 +236,7 @@ test('a MERGE whose new id already exists is rejected with E_EXISTS, targets unt
   seedLearning(dir, 'sql', 'target-a');
   seedLearning(dir, 'sql', 'target-b');
   seedLearning(dir, 'sql', 'already-exists');
-  rebuildIndex(dir);
+  finalizeSeed(dir);
 
   const mergeOp = {
     op: 'MERGE',
@@ -251,7 +265,7 @@ test('a MERGE targeting a promoted learning is rejected with the promoted E_TARG
   const { dir } = ensureStore(c.ws, { home: c.harnessHome });
   seedLearning(dir, 'sql', 'promoted-target');
   seedLearning(dir, 'sql', 'active-target');
-  rebuildIndex(dir);
+  finalizeSeed(dir);
 
   // Promote one target directly on disk — same field `learning promote`
   // itself writes (serializeLearning's promoted_to line).
@@ -262,7 +276,7 @@ test('a MERGE targeting a promoted learning is rejected with the promoted E_TARG
     text.replace('superseded_by: null', 'superseded_by: null\npromoted_to: .github/instructions/sql.instructions.md'),
     'utf8'
   );
-  rebuildIndex(dir);
+  finalizeSeed(dir);
 
   const ledgerBefore = readLedger(dir).length;
   const mergeOp = {
@@ -299,7 +313,7 @@ test('a MERGE naming an already-disputed target (prior run) is rejected E_TARGET
   const { dir } = ensureStore(c.ws, { home: c.harnessHome });
   seedLearning(dir, 'sql', 'disputed-merge-target', { status: 'disputed' });
   seedLearning(dir, 'sql', 'active-merge-target');
-  rebuildIndex(dir);
+  finalizeSeed(dir);
 
   const ledgerBefore = readLedger(dir).length;
   const mergeOp = {
@@ -329,7 +343,7 @@ test('a 4-target MERGE (5 file touches) alone passes the delta contract but comb
   const c = ctx();
   const { dir } = ensureStore(c.ws, { home: c.harnessHome });
   for (const slug of ['t1', 't2', 't3', 't4']) seedLearning(dir, 'sql', slug);
-  rebuildIndex(dir);
+  finalizeSeed(dir);
 
   const mergeOp = {
     op: 'MERGE',
@@ -514,7 +528,7 @@ test('Gap 1: a MERGE whose targets live in other domains still respects its dest
   const dir = seedDomainAtCap(c, 'gamma', 25);
   seedLearning(dir, 'alpha', 'a1');
   seedLearning(dir, 'beta', 'b1');
-  rebuildIndex(dir);
+  finalizeSeed(dir);
 
   const mergeOp = {
     op: 'MERGE',
@@ -641,7 +655,7 @@ test('a MERGE reusing a target an earlier SUPERSEDE already consumed this run is
   const { dir } = ensureStore(c.ws, { home: c.harnessHome });
   seedLearning(dir, 'sql', 't1');
   seedLearning(dir, 'sql', 't2');
-  rebuildIndex(dir);
+  finalizeSeed(dir);
 
   const supersedeOp = {
     op: 'SUPERSEDE',
@@ -680,7 +694,7 @@ test('a legitimate MERGE plus an unrelated ADD in a different domain both apply,
   seedLearning(dir, 'alpha', 'a1');
   seedLearning(dir, 'alpha', 'a2');
   seedLearning(dir, 'delta', 'd1');
-  rebuildIndex(dir);
+  finalizeSeed(dir);
 
   const mergeOp = {
     op: 'MERGE',

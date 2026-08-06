@@ -11,9 +11,10 @@ import {
   readLedger,
   readGovernance,
   appendGovernance,
+  commitStore,
 } from '../lib/knowledge/store.mjs';
 import { applyOps } from '../lib/knowledge/apply.mjs';
-import { buildPromotionOps, PROMOTE_OPS_REL } from '../lib/knowledge/promote.mjs';
+import { buildPromotionOps, PROMOTE_OPS_REL, promotionDigest } from '../lib/knowledge/promote.mjs';
 import { pruneBuckets } from '../lib/knowledge/prune.mjs';
 import { rebuildStore } from '../lib/knowledge/admin.mjs';
 import { bucketDirFor, listBuckets, loadLayeredLearnings } from '../lib/knowledge/overlay.mjs';
@@ -206,6 +207,12 @@ test('episodes-only overlap maps to STRENGTHEN; identical claims are skipped', (
     path.join(dir, 'learnings', 'sql', 'same-claim.md'),
     `---\nschema: 1\ntrigger: "same trigger"\nstatus: active\nsource: auto\nepisodes:\n  - path: ${goldenEp.path}\n    sha256: "${goldenEp.sha256}"\n    kind: fix\n    plan: docs/plans/p1.md\nanchors: []\nsuperseded_by: null\nlast_confirmed: null\norigin: t\n---\n\nShared claim body.\n`
   );
+  // Committed, like the CLI always leaves the store: an UNCOMMITTED learning
+  // file is a hand edit — including a planted, never-tracked one — and
+  // absorbHandEdits (admin.mjs) captures it, so leaving it uncommitted would
+  // make this "pre-existing golden twin" a human-taught claim with an extra
+  // snapshot episode.
+  commitStore(dir, 'seed: pre-existing golden twin');
   const branchEp = writeEpisode(ws, 'docs/solutions/perf/branch-ev.md');
   seedBucketLearning(ws, home, 'same-claim', { trigger: 'same trigger', body: 'Shared claim body.', episodes: [branchEp] });
 
@@ -254,22 +261,123 @@ test('--all chunks under MAX_OPS_PER_RUN with deterministic ordering and remaini
   assert.deepEqual(nextSet.ops.map((o) => o.source.id), ['sql/chunk-05', 'sql/chunk-06']);
 });
 
-test('a tampered promote-ops file is rejected by the digest binding (no strikes)', () => {
+// The digest is computed over the ops array by whoever writes the file and is
+// unkeyed, so it only ever proves "this file was not edited AFTER it was
+// digested" — never that its author was the emitter. Tampering therefore has
+// to be tested BOTH ways: with a stale digest (caught by the binding) and with
+// a correctly recomputed one (which must still be caught, by the semantic
+// binding to the promotion SOURCE).
+test('a tampered promote-ops file is rejected by the digest binding — and a re-digested tamper still cannot author the promoted claim (no strikes)', () => {
   const ws = featureWorkspace('feature/tamper');
   const home = tempDir('promo-home6-');
   seedBucketLearning(ws, home, 'tampered');
   const emitted = buildPromotionOps({ workspace: ws, home, all: true });
   assert.equal(emitted.pass, true, emitted.blockedReason);
   const opsFull = path.join(ws, PROMOTE_OPS_REL);
-  const opset = JSON.parse(fs.readFileSync(opsFull, 'utf8'));
-  opset.ops[0].body = 'Tampered body.';
-  fs.writeFileSync(opsFull, JSON.stringify(opset));
-
-  const applied = applyOps({ workspace: ws, opsPath: opsFull, home });
-  assert.equal(applied.exitCode, 1);
-  assert.match(applied.rejected[0].reason, /digest mismatch/);
+  const pristine = fs.readFileSync(opsFull, 'utf8');
   const { dir } = ensureStore(ws, { home });
-  assert.equal(readLedger(dir).filter((e) => e.failure).length, 0, 'digest rejection never strikes');
+
+  // 1. Stale digest: content edited after emission.
+  const stale = JSON.parse(pristine);
+  stale.ops[0].body = 'Tampered body.';
+  fs.writeFileSync(opsFull, JSON.stringify(stale));
+  const staleRes = applyOps({ workspace: ws, opsPath: opsFull, home });
+  assert.equal(staleRes.exitCode, 1);
+  assert.match(staleRes.rejected[0].reason, /digest mismatch/);
+
+  // 2. The SAME tamper, correctly re-digested — indistinguishable from an
+  //    emitter-authored file by the digest alone. The promoted claim's trigger
+  //    and body must still come from the verified source learning, not the op.
+  const redigested = JSON.parse(pristine);
+  redigested.ops[0].trigger = 'attacker-authored trigger';
+  redigested.ops[0].body = 'Attacker-authored golden claim body.';
+  redigested.promotion.digest = promotionDigest(redigested.ops);
+  fs.writeFileSync(opsFull, JSON.stringify(redigested));
+  const contentRes = applyOps({ workspace: ws, opsPath: opsFull, home });
+  assert.equal(contentRes.exitCode, 0, JSON.stringify(contentRes.rejected));
+
+  const golden = listLearnings(dir).find((l) => l.id === 'sql/tampered');
+  assert.ok(golden, 'the source claim still promotes');
+  assert.equal(golden.fm.trigger, 'trigger for tampered', 'the promoted trigger is the source learning’s');
+  assert.match(golden.body, /Claim body for tampered\./);
+  assert.ok(!/Attacker-authored/.test(`${golden.fm.trigger}\n${golden.body}`), 'the op never authors the promoted claim');
+
+  assert.equal(readLedger(dir).filter((e) => e.failure).length, 0, 'promotion rejections never strike');
+});
+
+// A promotion moves a claim between layers. Until the destination was bound to
+// the source, the writer verified `op.source.id` and its sha256 and then
+// trusted the op's own destination (`domain`/`slug`, or `target`) — so a
+// hand-authored, correctly-digested op could cite one claim's verified
+// identity while writing a completely different one, and the tombstone
+// (keyed off the destination) never marked the cited source as consumed.
+test('a re-digested promotion op cannot rename its destination, and a refused run never tombstones its source', () => {
+  const ws = featureWorkspace('feature/bind');
+  const home = tempDir('promo-home11-');
+  seedBucketLearning(ws, home, 'bound-claim');
+  const { dir } = ensureStore(ws, { home });
+  const key = branchKeyFor('feature/bind');
+  const opsFull = path.join(ws, PROMOTE_OPS_REL);
+
+  assert.equal(buildPromotionOps({ workspace: ws, home, all: true }).pass, true);
+  const renamed = JSON.parse(fs.readFileSync(opsFull, 'utf8'));
+  assert.equal(renamed.ops[0].source.id, 'sql/bound-claim');
+  renamed.ops[0].slug = 'attacker-claim';
+  renamed.ops[0].trigger = 'attacker-authored trigger';
+  renamed.ops[0].body = 'An arbitrary claim wearing another claim’s verified identity.';
+  renamed.promotion.digest = promotionDigest(renamed.ops);
+  fs.writeFileSync(opsFull, JSON.stringify(renamed));
+
+  const res = applyOps({ workspace: ws, opsPath: opsFull, home });
+  assert.equal(res.exitCode, 1, JSON.stringify(res));
+  assert.equal(res.rejected[0].code, 'E_SCHEMA');
+  assert.match(res.rejected[0].reason, /promotion destination .* does not match source/);
+  assert.deepEqual(listLearnings(dir).map((l) => l.id), [], 'nothing reached golden');
+
+  // The tombstone follows the SOURCE, so a refused run leaves it untouched —
+  // and, crucially, a SUCCESSFUL run must consume it exactly once.
+  const source = listLearnings(bucketDirFor(dir, key)).find((l) => l.id === 'sql/bound-claim');
+  assert.equal(source.fm.promoted_to_golden, undefined, 'a refused promotion never tombstones its source');
+
+  const clean = buildPromotionOps({ workspace: ws, home, all: true });
+  assert.equal(clean.pass, true, clean.blockedReason);
+  assert.equal(applyOps({ workspace: ws, opsPath: opsFull, home }).exitCode, 0);
+  const tombstoned = listLearnings(bucketDirFor(dir, key)).find((l) => l.id === 'sql/bound-claim');
+  assert.equal(tombstoned.fm.promoted_to_golden, 'sql/bound-claim', 'the promoted source is tombstoned by id');
+  assert.equal(buildPromotionOps({ workspace: ws, home, all: true }).pass, false, 'and is no longer re-offered');
+});
+
+test('a re-digested promotion STRENGTHEN cannot graft its source evidence onto an unrelated golden claim', () => {
+  const ws = featureWorkspace('feature/graft');
+  const home = tempDir('promo-home12-');
+  const opsFull = path.join(ws, PROMOTE_OPS_REL);
+
+  // A legitimately promoted golden claim — the graft victim.
+  seedBucketLearning(ws, home, 'victim');
+  assert.equal(buildPromotionOps({ workspace: ws, home, all: true }).pass, true);
+  assert.equal(applyOps({ workspace: ws, opsPath: opsFull, home }).exitCode, 0);
+  const { dir } = ensureStore(ws, { home });
+  const victimBefore = listLearnings(dir).find((l) => l.id === 'sql/victim');
+  assert.equal(victimBefore.fm.episodes.length, 1);
+
+  // A second, unrelated bucket claim whose evidence the op tries to hand to
+  // the victim: `verifiedFixLinks` is simultaneously the promotion-eligibility
+  // signal and the protected-target signal, so grafting inflates both.
+  seedBucketLearning(ws, home, 'evidence-source');
+  assert.equal(buildPromotionOps({ workspace: ws, home, all: true }).pass, true);
+  const grafted = JSON.parse(fs.readFileSync(opsFull, 'utf8'));
+  const donor = grafted.ops.find((o) => o.source.id === 'sql/evidence-source');
+  grafted.ops = [{ op: 'STRENGTHEN', target: 'sql/victim', episodes: donor.episodes, source: donor.source }];
+  grafted.promotion.digest = promotionDigest(grafted.ops);
+  fs.writeFileSync(opsFull, JSON.stringify(grafted));
+
+  const res = applyOps({ workspace: ws, opsPath: opsFull, home });
+  assert.equal(res.exitCode, 1, JSON.stringify(res));
+  assert.equal(res.rejected[0].code, 'E_SCHEMA');
+  assert.match(res.rejected[0].reason, /promotion destination sql\/victim does not match source sql\/evidence-source/);
+
+  const victimAfter = listLearnings(dir).find((l) => l.id === 'sql/victim');
+  assert.equal(victimAfter.fm.episodes.length, 1, 'the unrelated golden claim gained no borrowed evidence');
 });
 
 test('governed and detached sources are refused at emit time', () => {

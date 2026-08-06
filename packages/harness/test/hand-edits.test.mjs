@@ -562,6 +562,111 @@ test('a secret-skip during absorb triggered via `harness learning confirm` surfa
   );
 });
 
+// A learning file PLANTED in the store (never tracked) is live, retrievable
+// content the moment it lands — listLearnings reads the tree, not the index —
+// yet it used to be skipped here as "untracked/other" and then swept wholesale
+// into store history by the next transaction's own `git add -A`, unvalidated,
+// unscanned, and with whatever provenance its author typed. It is a hand edit
+// like any other, and absorbs through the same validating path.
+function plantLearning(file, { trigger, body, source = 'auto' }) {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(
+    file,
+    serializeLearning({ trigger, status: 'active', source, episodes: [], anchors: [], origin: 'planted' }, body),
+    'utf8'
+  );
+}
+
+test('a PLANTED untracked learning file absorbs as a hand edit — golden and bucket — with snapshot evidence and honest provenance', () => {
+  const c = ctx();
+  seedLearning(c);
+  const { dir } = ensureStore(c.ws, { home: c.harnessHome });
+
+  // A brand-new domain directory: `git status --porcelain` at its default
+  // untracked granularity reports only the collapsed `learnings/planted/`
+  // entry, which matches no learning path shape at all.
+  const goldenFile = path.join(dir, 'learnings', 'planted', 'golden-claim.md');
+  plantLearning(goldenFile, { trigger: 'planted golden trigger', body: 'Planted golden claim body.' });
+
+  const bucketDir = ensureBucket(dir, { key: 'planted-bucket', branch: 'feature/planted', baseSha: null });
+  const bucketFile = path.join(bucketDir, 'learnings', 'planted', 'bucket-claim.md');
+  plantLearning(bucketFile, { trigger: 'planted bucket trigger', body: 'Planted bucket claim body.' });
+
+  const result = absorbHandEdits({ workspace: c.ws, home: c.harnessHome });
+  assert.deepEqual(result.absorbed.map((a) => a.id).sort(), ['planted/bucket-claim', 'planted/golden-claim']);
+  assert.equal(result.committed, true);
+  assert.match(gitLog(dir).at(-1), /human edit: /, 'planted files land in a `human edit:` commit, not an anonymous sweep');
+
+  for (const [id, file] of [['planted/golden-claim', goldenFile], ['planted/bucket-claim', bucketFile]]) {
+    const { fm } = parseLearningFrontmatter(fs.readFileSync(file, 'utf8'));
+    assert.equal(fm.source, 'human', `${id}: a file a person put in the store carries human provenance`);
+    assert.equal(fm.episodes.length, 1, `${id}: snapshot-evidenced`);
+    assert.equal(fm.episodes[0].kind, 'human-teaching');
+    assert.ok(fs.existsSync(path.join(c.ws, fm.episodes[0].path)), `${id}: the snapshot really exists`);
+  }
+  // The bucket ledger — not golden's — records the bucket learning's evidence.
+  assert.ok(readLedger(bucketDir).some((e) => e.learning === 'planted/bucket-claim'));
+  assert.ok(!readLedger(dir).some((e) => e.learning === 'planted/bucket-claim'));
+  assert.equal(spawnSync('git', ['status', '--porcelain'], { cwd: dir, encoding: 'utf8' }).stdout.trim(), '');
+});
+
+test('a planted secret-shaped learning file is still scanned on absorb — the snapshot is skipped, warned, and never written', () => {
+  const c = ctx();
+  seedLearning(c);
+  const { dir } = ensureStore(c.ws, { home: c.harnessHome });
+  plantLearning(path.join(dir, 'learnings', 'planted', 'leaky.md'), {
+    trigger: 'planted leaky trigger',
+    body: 'Rotate the key AKIA1234567890ABCDEF before shipping.',
+  });
+
+  const logged = [];
+  const result = absorbHandEdits({ workspace: c.ws, home: c.harnessHome, log: (m) => logged.push(m) });
+  assert.deepEqual(result.absorbed.map((a) => a.id), ['planted/leaky']);
+  assert.equal(result.absorbed[0].snapshot, null, 'no snapshot for secret-shaped content');
+  assert.ok(logged.some((m) => /secret-shaped/.test(m)));
+  assert.equal(fs.existsSync(path.join(c.ws, 'docs', 'solutions', 'teachings')), false);
+});
+
+test('a REJECTED apply never launders a planted untracked learning file into store history unvalidated', () => {
+  const c = ctx();
+  seedLearning(c);
+  const { dir } = ensureStore(c.ws, { home: c.harnessHome });
+  const rel = 'learnings/planted/smuggled.md';
+  plantLearning(path.join(dir, rel), { trigger: 'smuggled trigger', body: 'Smuggled claim body.' });
+
+  // An op set that is rejected outright — the run applies nothing, but its
+  // transaction still finalizes with `git add -A`.
+  const bad = ADD_WITH_BAD_EPISODE(c.ws);
+  const res = applyOps({ workspace: c.ws, opsPath: writeOps(c.ws, [bad]), home: c.harnessHome });
+  assert.equal(res.exitCode, 1, JSON.stringify(res));
+  assert.deepEqual(res.applied, []);
+
+  // The planted file IS in history — but only as a validated, provenance-
+  // stamped hand edit, never as a silent passenger on the rejected run's own
+  // commit.
+  const introducing = spawnSync('git', ['log', '--format=%s', '--diff-filter=A', '--', rel], { cwd: dir, encoding: 'utf8' })
+    .stdout.trim()
+    .split('\n')
+    .filter(Boolean);
+  assert.deepEqual(introducing, ['human edit: planted/smuggled'], 'a `human edit:` commit introduced it, not the rejected apply');
+  const { fm } = parseLearningFrontmatter(fs.readFileSync(path.join(dir, rel), 'utf8'));
+  assert.equal(fm.source, 'human');
+  assert.equal(fm.episodes.length, 1);
+});
+
+// An ADD whose episode sha256 does not match the file on disk: rejected by
+// verifyAdmittedEpisodeKinds (apply.mjs) before anything is written.
+function ADD_WITH_BAD_EPISODE(ws) {
+  return {
+    op: 'ADD',
+    domain: 'sql',
+    slug: 'never-applied',
+    trigger: 'an op that never applies',
+    body: 'A claim whose evidence does not verify.',
+    episodes: [{ ...EP(ws, { path: 'docs/solutions/perf/unverifiable.md' }), sha256: 'b'.repeat(64) }],
+  };
+}
+
 test('untracked/modified non-learning store files (config.json, stale.json, INDEX.md) are left for the normal commit, not absorbed', () => {
   const c = ctx();
   seedLearning(c);

@@ -613,7 +613,7 @@ bucket key is recorded in the snapshot's frontmatter) — is
 absorbed automatically — every mutation entry point (`consolidate --apply`, `remember`,
 `learning retire|dispute|confirm|promote`, `knowledge purge`, `knowledge prune`,
 `consolidate --rebuild --yes`)
-runs `git status --porcelain` in the store first and commits any dirty edit as its own
+runs `git status --porcelain -uall` in the store first and commits any dirty edit as its own
 `human edit: <id>` commit, landing before that entry point's own commit.
 
 - **A modified learning file** is snapshotted verbatim as a `kind: human-teaching` episode
@@ -628,6 +628,14 @@ runs `git status --porcelain` in the store first and commits any dirty edit as i
   dispute, run `harness learning confirm <id>` or re-teach it (`harness remember`, same
   trigger/domain, at least as recent as the record) — either records a fresh governance
   entry; a hand edit alone never does.
+- **A planted (never-tracked) learning file** absorbs exactly like a modified one. A file
+  dropped straight into `learnings/<domain>/<slug>.md` — or the bucket equivalent — is live,
+  retrievable content the moment it lands, so it gets the same treatment: secret scan,
+  byte-cap check, `docs/solutions/teachings/` snapshot, re-serialization by the canonical
+  writer, `source: human`, and its own `human edit: <id>` commit. It is never adopted
+  silently by a later transaction's `git add -A`, and a run whose op set is REJECTED still
+  records it as an absorbed hand edit rather than laundering it into store history
+  unvalidated.
 - **A hand-deleted learning file** is absorbed as a governance `retire`, not a purge: the
   working file, `INDEX.md` entry, and (under `knowledge commit repo`) the mirrored
   product-repo copy are removed immediately — human deletion always wins, same immediacy as
@@ -635,10 +643,20 @@ runs `git status --porcelain` in the store first and commits any dirty edit as i
   rather than being erased. If the backing episodes ever regenerate this id again (a
   `consolidate --rebuild --yes` later re-derives it fresh from T1), the governance ledger
   reapplies retire instead of silently resurrecting it. Use `knowledge purge` instead when
-  the episodes themselves — not just this one learning — must stop existing.
+  the episodes themselves — not just this one learning — must stop existing. The
+  "another layer still holds this id" exemption that suppresses the retire record counts
+  only **active** learnings: an inactive `promoted_to_golden` bucket tombstone is not a
+  surviving holder, so deleting a promoted golden claim still records the retire.
 - The absorbed content may exceed the 1,200-byte learning cap — human authority overrides
   the cap for hand edits (logged, not rejected; the cap binds only the sole writer's own
   ops).
+- **Crash residue is not a hand edit.** Every store transaction writes an intent journal
+  under the store's `.git/` before its first mutation and clears it on commit or rollback,
+  so a writer killed mid-transaction leaves uncommitted state the next transaction can
+  positively identify as CLI-authored: it is rolled back to the dead writer's last
+  checkpoint (any intra-transaction commit it did land, such as an absorbed hand edit,
+  survives) instead of being absorbed as human authority. Dirt found with no journal behind
+  it is a genuine hand edit and absorbs exactly as described above.
 
 Use `harness remember` to add a new claim and `harness learning retire|dispute|confirm` to
 change a learning's status when a CLI command is more convenient than a direct edit — both
@@ -733,6 +751,17 @@ The approved [Harness Evolution Blueprint](../knowledge/proposals/harness-evolut
   promoted claim read as verified fixes across distinct plans — which is simultaneously
   the promotion-eligibility signal and the PROTECTED-target signal — i.e. an insight-only
   claim could launder itself into permanently protected golden knowledge.
+  **A promotion op is bound to its source IDENTITY, not just its evidence.** Promotion
+  moves a claim between layers; it is not an authoring operation. The destination — an
+  ADD/SUPERSEDE's `domain/slug`, a STRENGTHEN's `target` — must equal the cited source id,
+  and the promoted claim's `trigger` and `body` are read from the verified source learning
+  rather than from the op. Without that binding a hand-authored, correctly-re-digested op
+  could cite one claim's verified identity (including its `source: human` standing, which
+  the promoted claim inherits) while writing an entirely different, attacker-authored one,
+  or graft one claim's verified-fix episodes onto an unrelated golden claim. A
+  rename/re-slug during promotion would have to be its own explicitly gated operation; it
+  is never implicit. The tombstone below likewise follows the SOURCE id, so a mis-bound or
+  refused run can never leave the cited source unconsumed and reusable.
   Success tombstones each source `promoted_to_golden:` (a retrieval exclusion alongside
   `promoted_to`) and records **`absorb-branch`** in the governance ledger — an AUDIT
   action: `readGovernance`'s replay considers only `retire`/`dispute`/`confirm`/`promote`,

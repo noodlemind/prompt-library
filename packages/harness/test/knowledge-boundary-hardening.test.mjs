@@ -392,6 +392,50 @@ test('D: hand-deleting a BRANCH copy never retires the golden claim of the same 
   assert.equal(readGovernance(dir).get('sql/shared-x')?.action, 'retire', 'no layer holds it any more — a real retirement');
 });
 
+// The other side of D's guard: "still held by another layer" has to mean
+// ACTIVE, not merely present on disk. A promotion leaves a
+// `promoted_to_golden` tombstone in the source bucket, and counting that
+// inactive remnant as a surviving holder meant deleting the PROMOTED GOLDEN
+// claim recorded no governance retire at all — so a later
+// `consolidate --rebuild --yes` (which drops the tombstone and re-consolidates
+// the still-present branch episode) silently resurrected the id the human had
+// deleted, with no veto to stop it.
+test('E: hand-deleting a PROMOTED golden claim still records a retire — an inactive bucket tombstone never suppresses governance', () => {
+  const ws = featureWorkspace('feature/promo-delete');
+  const home = tempDir('bh-home-e-');
+  const ep = writeFixEpisode(ws, 'docs/solutions/perf/promo-delete.md');
+  seedBucketLearning(ws, home, 'promoted-then-deleted', { episodes: [ep] });
+  const { dir } = ensureStore(ws, { home });
+  const key = branchKeyFor('feature/promo-delete');
+
+  assert.equal(buildPromotionOps({ workspace: ws, home, all: true }).pass, true);
+  assert.equal(applyOps({ workspace: ws, opsPath: path.join(ws, PROMOTE_OPS_REL), home }).exitCode, 0);
+
+  const tombstone = listLearnings(bucketDirFor(dir, key)).find((l) => l.id === 'sql/promoted-then-deleted');
+  assert.equal(tombstone.fm.promoted_to_golden, 'sql/promoted-then-deleted');
+  assert.equal(isActiveFm(tombstone.fm), false, 'precondition: the only remaining twin is an INACTIVE tombstone');
+
+  // The human deletes the promoted golden claim.
+  const golden = listLearnings(dir).find((l) => l.id === 'sql/promoted-then-deleted');
+  fs.rmSync(golden.file, { force: true });
+  const absorbed = absorbHandEdits({ workspace: ws, home });
+  assert.deepEqual(absorbed.deleted, ['sql/promoted-then-deleted']);
+  assert.equal(
+    readGovernance(dir).get('sql/promoted-then-deleted')?.action,
+    'retire',
+    'no ACTIVE layer holds the id any more — the deletion is a real retirement'
+  );
+
+  // ...and the retire survives the wipe: a rebuild must not resurrect it.
+  const rebuilt = rebuildStore({ workspace: ws, home, yes: true, copilotHome: tempDir('bh-ch-e-') });
+  assert.equal(rebuilt.pass, true, rebuilt.blockedReason);
+  const resurrected = [
+    ...listLearnings(dir),
+    ...listLearnings(bucketDirFor(dir, key)),
+  ].filter((l) => l.id === 'sql/promoted-then-deleted' && isActiveFm(l.fm));
+  assert.deepEqual(resurrected, [], 'a rebuild cannot bring back a claim the human deleted');
+});
+
 // ---------------------------------------------------------------------------
 // F — layer containment is not self-grantable
 // ---------------------------------------------------------------------------

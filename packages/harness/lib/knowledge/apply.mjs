@@ -815,22 +815,63 @@ export function applyOps({
 
   const origin = repoId(workspace);
 
-  // Write-time git provenance (blueprint P1/P9): derived ONCE per run from the
-  // CURRENT workspace HEAD — never from anything the ops JSON asserts — and
-  // stamped on every fresh ADD/SUPERSEDE/MERGE write. STRENGTHEN re-renders
-  // preserve the target's ORIGINAL provenance instead (composeStrengthenedLearning),
-  // so a claim's recorded origin never silently migrates to the strengthening
-  // commit. All fields optional: a non-git workspace stamps nothing.
-  const gitContext = deriveGitContext({ workspace, home });
-  const writeProvenance = { commit: gitContext.headSha, branch: gitContext.branch, base: gitContext.baseSha };
+  // ONE GIT SNAPSHOT PER RUN, TAKEN INSIDE THE TRANSACTION (P1). Routing and
+  // provenance describe the same thing — the HEAD this write belongs to — so
+  // they must come from the SAME read. They used to be TWO separate
+  // `deriveGitContext` calls, both taken BEFORE the store lock existed: a
+  // checkout landing between them could stamp provenance for branch A while
+  // routing the write to branch B's layer, and a checkout landing after both
+  // could cache golden routing from the default branch and then write it out
+  // from a feature branch — bypassing branch isolation outright. Now
+  // `resolveWriteLayer`'s own context IS the provenance source (one read), it
+  // is derived under the lock, and `assertHeadUnmoved` below re-validates it
+  // at write time and fails closed if HEAD moved mid-transaction.
+  //
+  // STRENGTHEN re-renders preserve the target's ORIGINAL provenance instead
+  // (composeStrengthenedLearning), so a claim's recorded origin never silently
+  // migrates to the strengthening commit. All fields optional: a non-git
+  // workspace stamps nothing.
+  //
+  // Routing itself follows blueprint P4: feature branch → bucket, default
+  // branch → golden, detached HEAD → non-promotable detached bucket,
+  // `--layer golden` explicit override (logged), unresolvable default branch
+  // fails closed to branch-local. The orient-recorded branch is advisory;
+  // resolveWriteLayer logs a warning when write-time HEAD disagrees.
+  let routing = null;
+  let writeProvenance = null;
+  function deriveRouting() {
+    routing = resolveWriteLayer({ workspace, home, layerOverride: layer === 'golden' ? 'golden' : null, log });
+    writeProvenance = { commit: routing.context.headSha, branch: routing.context.branch, base: routing.context.baseSha };
+  }
 
-  // Write-layer routing (blueprint P4): derived from git context AT WRITE
-  // TIME — feature branch → bucket, default branch → golden, detached HEAD →
-  // non-promotable detached bucket, `--layer golden` explicit override
-  // (logged), unresolvable default branch fails closed to branch-local. The
-  // orient-recorded branch is advisory; resolveWriteLayer logs a warning when
-  // write-time HEAD disagrees.
-  const routing = resolveWriteLayer({ workspace, home, layerOverride: layer === 'golden' ? 'golden' : null, log });
+  /**
+   * Fail-closed write-time re-validation of the snapshot above: a `git
+   * checkout` in the workspace between routing derivation and the mutation
+   * phase would leave this run writing a claim into a layer that no longer
+   * matches the HEAD it stamped. The store lock cannot serialize the
+   * WORKSPACE's git operations, so the only safe answer is to notice and
+   * abort — never to silently write to the stale layer. Returns a rejection
+   * (nothing has been written yet at the point it is called) or null.
+   */
+  function assertHeadUnmoved() {
+    const now = deriveGitContext({ workspace, home });
+    const before = routing.context;
+    if (now.headSha === before.headSha && now.branch === before.branch && now.detached === before.detached) return null;
+    const nameOf = (c) => c.branch || (c.detached ? `detached ${String(c.headSha).slice(0, 12)}` : c.headSha || 'unknown');
+    return {
+      kind: 'reject',
+      applied: [],
+      governed: [],
+      rejected: [
+        fail(
+          'E_HEAD_MOVED',
+          `workspace HEAD moved mid-transaction (${nameOf(before)} → ${nameOf(now)}) — nothing was written; re-run the apply from a settled checkout`
+        ),
+      ],
+      committed: false,
+      exitCode: 1,
+    };
+  }
 
   /**
    * Everything from the store-state snapshot through the mutation phase,
@@ -1123,7 +1164,11 @@ export function applyOps({
     const planned = [];
     const disputes = [];
     for (let i = 0; i < parsed.ops.length; i++) {
-      const op = parsed.ops[i];
+      // Rebindable: a promotion op's claim CONTENT is replaced below with the
+      // verified source learning's own trigger/body, so everything downstream
+      // (secret scan, imperative lint, renderLearning) reads what the source
+      // actually says rather than what the ops file asserts.
+      let op = parsed.ops[i];
       if (promotionMode && !FILE_TOUCHING.has(op.op)) {
         // The emitter only ever produces ADD/STRENGTHEN/SUPERSEDE. A
         // hand-authored promotion envelope carrying a NOOP would otherwise
@@ -1216,6 +1261,44 @@ export function applyOps({
             committed: false,
             exitCode: 1,
           };
+        }
+        // PROMOTION IS A LAYER MOVE, NOT AN AUTHORING OPERATION (P1). Until
+        // this gate, only the SOURCE side was bound: `src.id` was looked up
+        // and its file hashed, but the op's own DESTINATION (`domain`/`slug`
+        // for ADD/SUPERSEDE, `target` for STRENGTHEN) and its `trigger`/`body`
+        // were taken verbatim. The digest is computed over the ops array by
+        // whoever wrote the file, so it binds nothing an attacker doesn't also
+        // control — a hand-authored ADD could cite human-sourced claim `A`,
+        // name destination `B`, carry arbitrary content, and mint a golden `B`
+        // stamped `source: human` (the promoted claim inherits the SOURCE's
+        // derived source/status below), i.e. exactly the authority the normal
+        // lane reserves for disk-verified human teaching. A STRENGTHEN could
+        // likewise graft `A`'s verified-fix episodes onto an unrelated golden
+        // `B`, inflating the protected/promotion-eligibility counts. So the
+        // destination MUST equal the source id, and the claim text comes from
+        // the verified source learning, never from the op. A genuine
+        // rename/re-slug during promotion would have to be its own explicitly
+        // gated operation — it is never implicit here. The emitter already
+        // only ever produces this shape (promote.mjs derives domain/slug/
+        // target from the source), so nothing legitimate changes.
+        const destId = op.op === 'STRENGTHEN' ? op.target : newIdFor(op);
+        if (destId !== src.id) {
+          return {
+            kind: 'reject',
+            applied: [],
+            governed: [],
+            rejected: [
+              fail(
+                'E_SCHEMA',
+                `op ${i}: promotion destination ${destId || '(none)'} does not match source ${src.id} — promotion moves a claim between layers, it never renames or re-authors it`
+              ),
+            ],
+            committed: false,
+            exitCode: 1,
+          };
+        }
+        if (op.op !== 'STRENGTHEN') {
+          op = { ...op, trigger: sourceLearning.fm.trigger || '', body: sourceLearning.body };
         }
         // EVIDENCE IS COPIED FROM THE SOURCE, NEVER TRUSTED FROM THE OP (P1).
         // Only `path@sha256` was ever compared here, so an op could re-label a
@@ -1777,6 +1860,12 @@ export function applyOps({
       };
     }
 
+    // Write-time HEAD re-validation (see assertHeadUnmoved): the last point
+    // before anything is written is the last point a stale routing/provenance
+    // snapshot can still be caught for free.
+    const moved = assertHeadUnmoved();
+    if (moved) return moved;
+
     // Mutation phase. No manual try/catch + git reset here any more — a
     // throw from anywhere below propagates straight out of runOnce, out of
     // withStoreTransaction's own fn callback, where the SAME rollback
@@ -1915,9 +2004,15 @@ export function applyOps({
     if (promotionMode && !dryRun) {
       const bucketRoot = bucketDirFor(dir, promotion.branchKey);
       let touchedBucket = false;
-      for (const a of applied) {
-        if (!FILE_TOUCHING.has(a.op)) continue;
-        const src = promotionSources.get(a.id);
+      // THE TOMBSTONE FOLLOWS THE SOURCE, NOT THE DESTINATION (P1). This loop
+      // used to look the bucket entry up by the id the op WROTE, so an op
+      // naming a destination other than its source left the source untouched
+      // — still active, still promotable, reusable for repeat runs. Walking
+      // the planned writes gives each one its own `op.source.id` directly;
+      // the destination-binding gate above already makes the two equal, so
+      // this is the belt to that gate's braces.
+      for (const entry of [...writes, ...strengthenWrites]) {
+        const src = entry.op.source?.id ? promotionSources.get(entry.op.source.id) : null;
         if (!src) continue;
         // Defense in depth (fs-safe.mjs's own documented discipline): this is
         // the one write in this module that targets a path under
@@ -1927,13 +2022,13 @@ export function applyOps({
         // withStoreTransaction rolls the whole promotion back, rather than
         // leaving a golden claim whose source was never tombstoned.
         if (!assertRealpathContained(dir, path.relative(dir, src.file))) {
-          throw new Error(`refused to tombstone ${a.id}: bucket learning path escapes the knowledge store`);
+          throw new Error(`refused to tombstone ${src.id}: bucket learning path escapes the knowledge store`);
         }
         const text = fs.readFileSync(src.file, 'utf8');
         const parsedSource = parseLearningFrontmatter(text);
-        fs.writeFileSync(src.file, serializeLearning({ ...parsedSource.fm, promoted_to_golden: a.id }, parsedSource.body), 'utf8');
+        fs.writeFileSync(src.file, serializeLearning({ ...parsedSource.fm, promoted_to_golden: src.id }, parsedSource.body), 'utf8');
         appendGovernance(dir, {
-          id: a.id,
+          id: src.id,
           action: 'absorb-branch',
           reason: `promoted from ${promotion.branchKey}`,
           to: null,
@@ -1988,6 +2083,10 @@ export function applyOps({
   }
 
   if (dryRun) {
+    // A preview writes nothing and takes no lock, so one snapshot is all it
+    // can meaningfully have; the write-time re-validation above never runs
+    // (runOnce returns its preview before reaching it).
+    deriveRouting();
     const { dir, git } = ensureStore(workspace, { home, dryRun: true });
     const result = runOnce({ dir, git });
     if (result.kind === 'reject') {
@@ -2018,6 +2117,10 @@ export function applyOps({
       },
     },
     ({ dir, git, recordCheckpoint }) => {
+    // The run's ONE git snapshot (routing + provenance), taken under the store
+    // lock rather than before it, and re-validated at write time
+    // (assertHeadUnmoved) — see deriveRouting's doc comment above.
+    deriveRouting();
     // Absorb any hand edit sitting in the store BEFORE anything else reads or
     // mutates it — still its own self-contained commit (absorbHandEdits calls
     // commitStore itself), now made WHILE the lock is held instead of before
@@ -2087,7 +2190,7 @@ export function applyOps({
     governed: inner.governed,
     layer: inner.layer,
     bucketKey: inner.bucketKey ?? null,
-    ...(routing.branchWarning ? { branchWarning: routing.branchWarning } : {}),
+    ...(routing?.branchWarning ? { branchWarning: routing.branchWarning } : {}),
     ...staleExtra,
   };
 }

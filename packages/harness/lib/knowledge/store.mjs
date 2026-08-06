@@ -757,6 +757,109 @@ function currentHeadSha(dir) {
   return res.status === 0 ? res.stdout.trim() : null;
 }
 
+/** True when the store's working tree has ANY uncommitted change. Fails
+ * CLOSED (dirty) on an unreadable `git status`, so the journal below never
+ * records "clean at start" for a tree it could not actually inspect — the
+ * recovery path only ever discards residue it is certain nobody else authored. */
+function treeIsDirty(dir) {
+  const res = spawnSync('git', ['status', '--porcelain'], { cwd: dir, encoding: 'utf8' });
+  if (res.error || res.status !== 0) return true;
+  return Boolean(res.stdout.trim());
+}
+
+/**
+ * IN-TRANSACTION INTENT JOURNAL (P1 — crash residue is not human authority).
+ *
+ * A writer that dies between its first mutation and its commit/rollback
+ * leaves CLI-authored dirt in the store working tree. The stale-lock takeover
+ * path cannot tell that dirt apart from a genuine hand edit, so the next
+ * transaction's `absorbHandEdits` (admin.mjs) used to absorb it as
+ * `kind: human-teaching` and stamp `source: human` — laundering a
+ * model-authored partial write into the one authority tier the store reserves
+ * for a person editing the file themselves.
+ *
+ * The journal makes the two distinguishable. It is written immediately after
+ * the lock is acquired and BEFORE `fn` runs, refreshed whenever an
+ * intra-transaction commit lands (recordCheckpoint — the tree is clean again
+ * at that instant, so everything dirty from there on is this transaction's
+ * own work), and removed once the transaction has committed or rolled back.
+ * `dirtyAtStart` records whether anything was ALREADY uncommitted when the
+ * journal was written: false means every uncommitted byte found later is
+ * necessarily CLI residue; true means an unabsorbed human edit was already
+ * sitting there, so recovery keeps its hands off and leaves it for absorb
+ * exactly as before.
+ *
+ * It lives under `.git/` deliberately: that is the one path inside the store
+ * `git add -A` can never stage and `git clean -fd` never sweeps, so the
+ * journal can neither leak into store history nor be destroyed by the very
+ * rollback it drives. A store with no git has neither commits nor rollbacks,
+ * so it is never journaled.
+ */
+const TXN_JOURNAL_REL = path.join('.git', 'harness-txn.json');
+
+function writeTxnJournal(dir, data) {
+  try {
+    fs.writeFileSync(path.join(dir, TXN_JOURNAL_REL), JSON.stringify(data) + '\n', 'utf8');
+  } catch {
+    // best effort — a journal write failure degrades to pre-journal behavior
+  }
+}
+
+function readTxnJournal(dir) {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(path.join(dir, TXN_JOURNAL_REL), 'utf8'));
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed;
+  } catch {
+    // absent or corrupt — treated as "no interrupted transaction"
+  }
+  return null;
+}
+
+function clearTxnJournal(dir) {
+  try {
+    fs.rmSync(path.join(dir, TXN_JOURNAL_REL), { force: true });
+  } catch {
+    // ignored — a stranded journal only ever costs one extra recovery pass
+  }
+}
+
+/**
+ * Crash recovery, run under the freshly-acquired lock: a journal still on
+ * disk means the previous holder never reached its commit or rollback. When
+ * that journal recorded a CLEAN tree at its start (see above), every
+ * uncommitted byte in the store right now is that dead writer's residue —
+ * discarded back to its last recorded checkpoint (so any intra-transaction
+ * commit it DID land, e.g. an absorbed hand edit, survives) instead of being
+ * inherited by the next transaction's absorb as human authority. A journal
+ * that recorded pre-existing dirt is left alone: that dirt may be a real hand
+ * edit the dead writer never got to absorb, and absorbing it is exactly the
+ * behavior to preserve. Returns a human-readable note, or null when nothing
+ * was recovered.
+ */
+function recoverInterruptedTransaction(dir, git, lockPath) {
+  const journal = readTxnJournal(dir);
+  if (!journal) return null;
+  clearTxnJournal(dir);
+  if (!git || journal.dirtyAtStart !== false) return null;
+  if (!treeIsDirty(dir)) return null;
+  const checkpoint = typeof journal.checkpoint === 'string' && /^[0-9a-f]{40,64}$/.test(journal.checkpoint) ? journal.checkpoint : null;
+  rollbackStore(dir, checkpoint);
+  // A recorded checkpoint can be unreachable (a store rewritten under the
+  // dead writer's feet) — `git reset --hard <sha>` then fails silently and
+  // leaves the residue in place. Fail closed to the store's plain
+  // "discard everything uncommitted" reset rather than let it through.
+  if (treeIsDirty(dir)) rollbackStore(dir);
+  // rollbackStore's `git clean -fd` sweeps untracked directories — including
+  // the `.lock` this transaction is holding right now. Re-assert it before
+  // anything else runs.
+  try {
+    fs.mkdirSync(lockPath);
+  } catch {
+    // still there — nothing to re-assert
+  }
+  return 'discarded interrupted write residue';
+}
+
 /**
  * Thrown by a withStoreTransaction `fn` to signal a failure that must NOT
  * trigger the standard rollback (git reset --hard + clean -fd). Reserved for
@@ -813,8 +916,12 @@ export class StoreTransactionAbort extends Error {
  *     concurrent writer's dirty-then-rolled-back mutation (P2).
  *
  * Acquires `.lock` (mkdir + stale-takeover-via-rename — moved here from
- * apply.mjs so there is exactly one implementation) BEFORE calling
- * `fn({ dir, git, recordCheckpoint })`. `fn` is expected to mutate the store
+ * apply.mjs so there is exactly one implementation), then runs crash recovery
+ * against the intent journal and writes a fresh one (see
+ * recoverInterruptedTransaction above — a dead writer's uncommitted residue is
+ * discarded rather than absorbed as human authority by the next transaction),
+ * all BEFORE calling `fn({ dir, git, recordCheckpoint })`. `fn` is expected
+ * to mutate the store
  * directly and return a plain result value describing what happened; it may
  * perform its OWN sub-commits when it needs more than one checkpoint inside
  * this same lock (e.g. absorbHandEdits's self-contained "human edit: <ids>"
@@ -870,7 +977,13 @@ export function withStoreTransaction(workspace, { home, label, afterCommit } = {
   if (!lock.acquired) {
     return { ok: false, locked: true, rolledBack: false, error: null, committed: false, result: null, dir, git, staleLockNote: null };
   }
-  const staleLockNote = lock.staleLockNote;
+  // Crash recovery BEFORE anything reads the tree (see
+  // recoverInterruptedTransaction): a dead writer's uncommitted residue is
+  // discarded here rather than inherited by the absorb step below as human
+  // authority. Both notes ride the one existing recovery channel callers
+  // already surface as `staleLockRemoved`.
+  const residueNote = recoverInterruptedTransaction(dir, git, lockPath);
+  const staleLockNote = [lock.staleLockNote, residueNote].filter(Boolean).join('; ') || null;
 
   // The rollback floor: entry HEAD, advanced by recordCheckpoint() whenever
   // an intra-transaction commit lands. Re-queried from git (not a
@@ -879,8 +992,15 @@ export function withStoreTransaction(workspace, { home, label, afterCommit } = {
   // catches up — it can never make checkpointSha wrong the way a
   // hand-maintained value could.
   let checkpointSha = git ? currentHeadSha(dir) : null;
+  const journalBase = { pid: process.pid, at: new Date().toISOString(), label: label || null };
+  if (git) writeTxnJournal(dir, { ...journalBase, checkpoint: checkpointSha, dirtyAtStart: treeIsDirty(dir) });
   function recordCheckpoint() {
-    if (git) checkpointSha = currentHeadSha(dir);
+    if (!git) return;
+    checkpointSha = currentHeadSha(dir);
+    // The intra-transaction commit just cleaned the tree, so whatever is
+    // dirty from here on is unambiguously this transaction's own work — even
+    // if a hand edit WAS pending when the journal was first written.
+    writeTxnJournal(dir, { ...journalBase, checkpoint: checkpointSha, dirtyAtStart: false });
   }
 
   function guardedRollback() {
@@ -933,6 +1053,9 @@ export function withStoreTransaction(workspace, { home, label, afterCommit } = {
     }
     return { ok: true, locked: false, rolledBack: false, error: null, committed: commitRes.committed, result, dir, git, staleLockNote };
   } finally {
+    // Cleared only once the commit or rollback above has finished: while it
+    // exists, a crash at any point leaves the residue classifiable.
+    clearTxnJournal(dir);
     // The rollback above may have already removed the untracked .lock
     // directory via `git clean -fd` — tolerate that instead of throwing.
     fs.rmSync(lockPath, { recursive: true, force: true });

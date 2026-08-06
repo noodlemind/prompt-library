@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { test } from 'node:test';
 import { applyOps } from '../lib/knowledge/apply.mjs';
 import { setLearningStatus } from '../lib/knowledge/lifecycle.mjs';
@@ -215,18 +215,26 @@ test('the writeStoreConfig lock-failure CLI path (`harness knowledge on`) render
 // Kill/restart: a stale lock + dirty tree from a "crashed" writer.
 // ---------------------------------------------------------------------------
 
+/** The in-transaction intent journal (store.mjs) — present on disk only while
+ * a transaction is between its first write and its commit/rollback, so its
+ * absence is what distinguishes a genuine human hand edit from a dead
+ * writer's residue. */
+const txnJournalPath = (dir) => path.join(dir, '.git', 'harness-txn.json');
+
 test('a crashed writer (stale lock + an uncommitted hand edit) is taken over cleanly: the hand edit is absorbed, not destroyed', () => {
   const c = ctx();
   const id = seedLearning(c);
   const { dir } = ensureStore(c.ws, { home: c.harnessHome });
   const learning = listLearnings(dir).find((l) => l.id === id);
 
-  // The "crashed" process hand-edited the learning file (or absorbed
-  // someone else's hand edit) but died before it could commit — leaving the
-  // tracked file dirty in the working tree.
+  // A HUMAN hand-edited the learning file directly and the CLI process that
+  // was going to absorb it died before it could — leaving the tracked file
+  // dirty in the working tree with NO transaction journal behind it. That
+  // absence is the signal: nothing was mid-write, so the dirt is the human's.
   handEditBody(learning.file, 'A crash-recovered hand edit that must survive takeover.');
   const dirty = gitPorcelainStatus(dir);
   assert.match(dirty, /M\s+learnings\/sql\/not-null-hot-tables\.md/, 'precondition: dirty tracked file');
+  assert.equal(fs.existsSync(txnJournalPath(dir)), false, 'precondition: no interrupted transaction — this dirt is a human edit');
 
   // ...and its own `.lock` directory, now stale (old mtime — past the
   // takeover threshold).
@@ -255,6 +263,69 @@ test('a crashed writer (stale lock + an uncommitted hand edit) is taken over cle
 
   // And the new op landed too.
   assert.ok(listLearnings(dir).some((l) => l.id === 'sql/after-crash'));
+});
+
+// The other half of the same distinction: dirt left by a writer that died
+// MID-TRANSACTION is CLI-authored residue, not a human edit. Without the
+// intent journal the takeover path could not tell the two apart, so the next
+// transaction's absorb inherited a model-authored partial write, snapshotted
+// it as `kind: human-teaching`, and stamped the learning `source: human` —
+// laundering a crash artifact into the store's highest authority tier (which
+// then protects it from demotion and exempts it from provisional damping).
+test('a writer killed MID-TRANSACTION leaves CLI residue, not human authority: takeover discards it and the committed claim survives', () => {
+  const c = ctx();
+  const id = seedLearning(c);
+  const { dir } = ensureStore(c.ws, { home: c.harnessHome });
+  const learning = listLearnings(dir).find((l) => l.id === id);
+  const committed = fs.readFileSync(learning.file, 'utf8');
+  const residue = committed.replace(
+    /(---\r?\n[\s\S]*?\r?\n---\r?\n\r?\n)[\s\S]*$/,
+    (_m, fm) => `${fm}A model-authored partial write that never reached a commit.\n`
+  );
+
+  // A REAL crash: the child takes the store lock through the same
+  // withStoreTransaction every writer uses, overwrites a learning, and is
+  // SIGKILLed before it can commit or roll back — so nothing in its `finally`
+  // ever runs and the lock, the journal, and the dirty tree all survive it.
+  const storeModule = pathToFileURL(path.join(packageRoot, 'lib', 'knowledge', 'store.mjs')).href;
+  const script = [
+    "import fs from 'node:fs';",
+    `import { withStoreTransaction } from ${JSON.stringify(storeModule)};`,
+    `withStoreTransaction(${JSON.stringify(c.ws)}, { home: ${JSON.stringify(c.harnessHome)}, label: 'crashing writer' }, () => {`,
+    `  fs.writeFileSync(${JSON.stringify(learning.file)}, ${JSON.stringify(residue)}, 'utf8');`,
+    "  process.kill(process.pid, 'SIGKILL');",
+    '});',
+  ].join('\n');
+  const child = spawnSync(process.execPath, ['--input-type=module', '-e', script], { encoding: 'utf8' });
+  assert.equal(child.signal, 'SIGKILL', `precondition: the writer really died mid-transaction (${child.stderr})`);
+  assert.equal(fs.readFileSync(learning.file, 'utf8'), residue, 'precondition: the residue is sitting in the tree');
+  assert.match(gitPorcelainStatus(dir), /M\s+learnings\/sql\/not-null-hot-tables\.md/, 'precondition: dirty tracked file');
+
+  const lockPath = path.join(dir, '.lock');
+  assert.ok(fs.existsSync(lockPath), 'precondition: the dead writer left its lock behind');
+  const old = new Date(Date.now() - 11 * 60 * 1000);
+  fs.utimesSync(lockPath, old, old);
+
+  const res = applyOps({
+    workspace: c.ws,
+    opsPath: writeOps(c.ws, [ADD(c.ws, { slug: 'after-kill', episodePath: 'docs/solutions/perf/after-kill.md' })]),
+    home: c.harnessHome,
+  });
+  assert.equal(res.exitCode, 0, JSON.stringify(res));
+  assert.match(res.staleLockRemoved || '', /residue/, 'the takeover reports the residue it discarded');
+
+  const after = listLearnings(dir).find((l) => l.id === id);
+  assert.equal(fs.readFileSync(after.file, 'utf8'), committed, 'the residue was rolled back to the committed claim');
+  assert.notEqual(after.fm.source, 'human', 'CLI residue is never promoted to human authority');
+  assert.ok(
+    !fs.existsSync(path.join(c.ws, 'docs', 'solutions', 'teachings')),
+    'and no human-teaching snapshot was fabricated from it'
+  );
+
+  // The takeover still works: the lock is released and the new op landed.
+  assert.equal(fs.existsSync(lockPath), false);
+  assert.equal(fs.existsSync(txnJournalPath(dir)), false, 'the journal is cleared once the transaction finishes');
+  assert.ok(listLearnings(dir).some((l) => l.id === 'sql/after-kill'));
 });
 
 function gitPorcelainStatus(dir) {

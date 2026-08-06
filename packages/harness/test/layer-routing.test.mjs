@@ -314,3 +314,55 @@ test('listBuckets sees a routed bucket and consolidate status reports the branch
   assert.equal(status.bucketKey, branchKeyFor('feature/lane'));
   assert.equal(status.debt, 0, 'the bucket ledger consumed the episode — no phantom debt');
 });
+
+// Routing and provenance describe the same thing — the HEAD this write belongs
+// to — but were derived from TWO separate git reads, both taken BEFORE the
+// store lock existed. A checkout landing between them could stamp provenance
+// for one branch while routing the write to another's layer; a checkout
+// landing after both could cache golden routing from the default branch and
+// then write it out from a feature branch, bypassing branch isolation
+// entirely. The store lock cannot serialize the WORKSPACE's git operations, so
+// the snapshot is taken once inside the transaction and re-validated at write
+// time — fail closed, never a silent write to the stale layer.
+//
+// Deterministic reproduction: a store-side `pre-commit` hook moves the
+// workspace HEAD during the absorb sub-commit the transaction makes before its
+// own mutation phase — i.e. inside the exact window the two reads straddled.
+test('a workspace checkout landing mid-transaction aborts the write instead of routing it to the stale layer', () => {
+  const ws = clonedWorkspace();
+  const home = tempDir('route-home11-');
+
+  // Land a first claim on main (the default branch → golden) so the store has
+  // a tracked learning file to hand-edit — that edit is what makes the
+  // transaction's absorb step commit, and therefore run the hook.
+  const first = applyOps({ workspace: ws, opsPath: writeOps(ws, [addOp(ws, { slug: 'settled-claim' })]), home });
+  assert.equal(first.exitCode, 0, JSON.stringify(first.rejected));
+  assert.equal(first.layer, 'golden');
+
+  const { dir } = ensureStore(ws, { home });
+  const learning = listLearnings(dir).find((l) => l.id === 'sql/settled-claim');
+  fs.writeFileSync(
+    learning.file,
+    fs.readFileSync(learning.file, 'utf8').replace('Routed claim body.', 'Hand-edited claim body.'),
+    'utf8'
+  );
+
+  const hooks = path.join(dir, '.git', 'hooks');
+  fs.mkdirSync(hooks, { recursive: true });
+  fs.writeFileSync(
+    path.join(hooks, 'pre-commit'),
+    `#!/bin/sh\ngit -C ${JSON.stringify(ws)} checkout -qB feature/moved >/dev/null 2>&1\nexit 0\n`,
+    { mode: 0o755 }
+  );
+
+  const res = applyOps({ workspace: ws, opsPath: writeOps(ws, [addOp(ws, { slug: 'raced-claim' })]), home });
+  assert.equal(res.exitCode, 1, JSON.stringify(res));
+  assert.equal(res.rejected[0].code, 'E_HEAD_MOVED');
+  assert.match(res.rejected[0].reason, /main → feature\/moved/);
+
+  // Nothing was written to EITHER layer — above all not to golden's stale route.
+  assert.equal(listLearnings(dir).some((l) => l.id === 'sql/raced-claim'), false, 'no golden write from a stale snapshot');
+  assert.deepEqual(listBuckets(dir), [], 'and no bucket was materialized either');
+  // The hand edit the absorb captured before the abort is still intact.
+  assert.match(listLearnings(dir).find((l) => l.id === 'sql/settled-claim').body, /Hand-edited claim body\./);
+});

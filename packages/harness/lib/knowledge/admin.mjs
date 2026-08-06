@@ -215,13 +215,29 @@ export function mirrorLearnings({ workspace, home, log = () => {}, retiredIds = 
  * absorbed; untracked/modified non-learning store files (config.json,
  * stale.json, INDEX.md) are left alone for the next normal commit's own
  * `git add -A` to pick up.
+ *
+ * UNTRACKED LEARNING FILES ARE HAND EDITS TOO (P1). A learning file planted
+ * directly in the store — `?? learnings/<domain>/<slug>.md`, or the bucket
+ * equivalent — is ACTIVE, retrievable content the moment it lands
+ * (listLearnings reads the tree, not the git index), yet it was skipped here
+ * as "untracked/other" and then swept wholesale into store history by the
+ * next transaction's `git add -A` — INCLUDING a transaction whose own op set
+ * was rejected. Never validated, never secret-scanned, never rendered by the
+ * sole writer, and recorded with whatever provenance its author typed.
+ * Untracked learning paths are therefore absorbed through this exact same
+ * path as a modified one: snapshot-evidenced, secret-scanned, byte-cap
+ * logged, re-serialized by `serializeLearning`, and stamped `source: human`
+ * — the honest provenance for a file a person put in the store by hand.
+ * `-uall` is required for that: the default `-unormal` collapses a brand-new
+ * `learnings/<domain>/` into a single directory entry that matches no
+ * learning path shape.
  */
 export function absorbHandEdits({ workspace, home, log = () => {} }) {
   const empty = { absorbed: [], deleted: [], committed: false };
   const dir = storeDir(workspace, { home });
   if (!fs.existsSync(dir) || !fs.existsSync(path.join(dir, '.git'))) return empty;
 
-  const status = spawnSync('git', ['status', '--porcelain'], { cwd: dir, encoding: 'utf8' });
+  const status = spawnSync('git', ['status', '--porcelain', '-uall'], { cwd: dir, encoding: 'utf8' });
   // Fail CLOSED (P2): a spawn error or a non-zero `git status` exit used to be
   // coerced to an empty string — read as "tree is clean" — so a later
   // transaction rollback (git reset --hard + clean -fd) could silently destroy
@@ -265,7 +281,10 @@ export function absorbHandEdits({ workspace, home, log = () => {} }) {
       if (bucketKey) touchedBucketRoots.add(layerRoot);
       continue;
     }
-    if (!code.includes('M')) continue; // untracked/other — out of absorb scope
+    // `??` (planted, never tracked) absorbs exactly like `M` (see the doc
+    // comment above) — anything else (staged-only, renamed-into, conflicted)
+    // stays out of absorb scope.
+    if (code !== '??' && !code.includes('M')) continue;
 
     const file = path.join(dir, rel);
     let text;
@@ -361,12 +380,23 @@ export function absorbHandEdits({ workspace, home, log = () => {} }) {
   // only a deletion that leaves NO layer holding the id is a retirement of the
   // id. The mirror sweep is scoped separately — it mirrors GOLDEN, so it keys
   // off whether golden still holds the id, not whether any layer does.
+  //
+  // "HOLDING" MEANS ACTIVE, NOT MERELY PRESENT (P1). `listLearnings` returns
+  // every physical file, including INACTIVE ones — most importantly the
+  // `promoted_to_golden` tombstone a promotion leaves in the source bucket.
+  // Counting that tombstone as a surviving holder meant a human deleting the
+  // PROMOTED GOLDEN claim recorded no `retire` at all: a later
+  // `consolidate --rebuild` drops the tombstone, re-consolidation of the
+  // still-present branch episode recreates the id, and the human's deletion
+  // is silently undone with no governance veto to stop it. Only an ACTIVE
+  // learning can suppress the retirement record.
   const goldenIds = new Set(listLearnings(dir).map((l) => l.id));
+  const activeIds = (root) => listLearnings(root).filter((l) => isActiveFm(l.fm)).map((l) => l.id);
   const survivingIds = new Set([
-    ...goldenIds,
+    ...activeIds(dir),
     ...listBuckets(dir).flatMap((b) => {
       try {
-        return listLearnings(b.dir).map((l) => l.id);
+        return activeIds(b.dir);
       } catch {
         return [];
       }
