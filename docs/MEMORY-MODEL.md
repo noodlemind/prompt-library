@@ -25,10 +25,6 @@ human authority durable across it. T2 is `f(T1, model, governance ledger)`, neve
 `f(T1, model)` in isolation; see [Governance ledger](#governance-ledger) below for the
 reapplication mechanics.
 
-### Memory economics
-
-Memory value is measured across its full lifecycle, not only the tokens injected into a later request. **Retrieval** is the work and context used to locate and load existing knowledge. **Construction** turns verified activity into an episode or candidate learning. **Consolidation** validates, deduplicates, supersedes, or merges durable knowledge. **Task execution** is a derived rollup of every non-memory request phase—guidance, planning/gates, orientation, implementation, verification, finalization, mixed, unknown, and uncategorized work—not a competing leaf bucket. Each request belongs to exactly one leaf phase, so the three memory phases plus the task-execution rollup do not silently lose ordinary implementation work. Evaluation reports attribute provider usage only when request-linked evidence exists; coverage is `complete`, `partial`, or `unavailable`, and an unexercised phase is labeled rather than shown as measured zero. Construction and consolidation cost therefore remain visible even when retrieval is small. This measurement work does not add automatic forgetting, pruning, or silent contradiction merging; human-governed retirement, supersession, purge, and rebuild remain the authority paths described below.
-
 ### Store identity and stranded stores
 
 `<repo-id>` (`repoId`, `store.mjs`) is derived from the workspace's origin remote when one is
