@@ -77,9 +77,13 @@ const CATALOG = [
     group: 'workspace',
     commands: [
       { name: 'init-repo', desc: 'seed the .harness workspace in a product repo', sig: '', options: [] },
-      { name: 'index', desc: 'rebuild knowledge index · --status reports drift',
-        sig: '[--status]',
-        options: [['--status', 'read-only freshness report vs HEAD (never rebuilds)']] },
+      { name: 'index', desc: 'rebuild knowledge index · --status reports drift · --structural builds the code symbol index',
+        sig: '[--status] [--structural [--since <ref>]]',
+        options: [
+          ['--status', 'read-only freshness report vs HEAD (never rebuilds)'],
+          ['--structural', 'build the persistent structural code index under ~/.harness/index/<repo-id>/structural (optional tree-sitter tier, lexical fallback)'],
+          ['--since <ref>', 'with --structural: re-parse only files changed since <ref> (validated via git rev-parse; leading "-" rejected)'],
+        ] },
       { name: 'plan-new', desc: 'scaffold a gate-ready plan',
         sig: '--type feat --slug <slug> --intent "..."',
         options: [

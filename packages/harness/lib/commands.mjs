@@ -358,6 +358,71 @@ export async function cmdIndex(argv) {
     return 0;
   }
 
+  // Structural code index (blueprint P3). The async tree-sitter lifecycle is
+  // confined to THIS command path: grammars init here, the tables persist at
+  // ~/.harness/index/<repo-id>/structural/, and orient/buildRepoMap read the
+  // PREBUILT files synchronously. Fully functional with the optional grammar
+  // packages absent (lexical tier).
+  if (argv.includes('--structural')) {
+    const { buildStructuralIndex, validateSinceRef, renderStructuralDigest, readStructuralIndex } = await import(
+      './repo-map/structural-index.mjs'
+    );
+    const { createTreesitterExtract } = await import('./repo-map/treesitter-extractor.mjs');
+    const since = flags.since ? validateSinceRef(workspace, flags.since) : null;
+    const extractor = await createTreesitterExtract();
+    const result = await buildStructuralIndex({ workspace, extractor, since, dryRun: flags.dryRun, log: logger });
+    const integrity = (result.meta.integrityFailures || []).length > 0;
+    writeEvent(workspace, flags, {
+      type: 'index',
+      command: 'index',
+      result: integrity ? 'warn' : 'pass',
+      exitCode: 0,
+    });
+    if (flags.json) {
+      // Program lane (§9): a bounded summary envelope — never the raw tables.
+      emitJson(flags, {
+        pass: true,
+        exitCode: 0,
+        dir: result.dir,
+        written: result.written,
+        sha: result.meta.sha,
+        baseSha: result.meta.baseSha,
+        tier: result.meta.extractorTier,
+        filesIndexed: result.meta.filesIndexed,
+        reparsed: result.reparsed,
+        reused: result.reused,
+        removedFiles: result.removedFiles,
+        parseFailures: result.meta.parseFailures,
+        grammarVersions: result.meta.grammarVersions,
+        missingGrammars: result.meta.missingGrammars,
+        integrityFailures: result.meta.integrityFailures,
+        delta: result.delta,
+      });
+    } else {
+      const deltaNote = `symbols +${result.delta.added.count} −${result.delta.removed.count} ~${result.delta.changed.count}${since ? ' vs prior index' : ''}`;
+      console.log(
+        ui.line({
+          state: integrity ? 'warn' : 'ok',
+          key: 'structural',
+          value: `${result.meta.filesIndexed} files · ${result.reparsed} parsed · ${result.reused} reused · tier ${result.meta.extractorTier}`,
+          note: integrity
+            ? `grammar integrity mismatch (${result.meta.integrityFailures.length}) — loud lexical fallback; run harness doctor`
+            : deltaNote,
+        })
+      );
+      // Agent lane (§9): the budgeted inert digest, never raw index JSON.
+      if (result.written) {
+        const index = readStructuralIndex(workspace);
+        if (index) {
+          for (const line of renderStructuralDigest(index).body.split('\n')) {
+            console.log(ui.paint('muted', `  ${line}`));
+          }
+        }
+      }
+    }
+    return 0;
+  }
+
   // Stamp the current git HEAD so `index --status` can measure drift later.
   const head = spawnSyncHead(workspace);
   const result = runIndexKnowledge({

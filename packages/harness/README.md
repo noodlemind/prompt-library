@@ -88,6 +88,7 @@ to Deliver before editing.
 | `get` | Bounded doc excerpt by `--docid` or `--path` |
 | `validate-plan` | Read-only plan template / intent compliance |
 | `index` | Rebuild `knowledge/manifest.yaml` + `.harness-index/` |
+| `index --structural [--since <ref>]` | Build the persistent structural code index at `~/.harness/index/<repo-id>/structural/` (optional tree-sitter WASM tier for TS/JS/TSX, Python, Java; per-file lexical fallback; incremental; `--since` re-parses only the ref diff). Derived and rebuildable — safe to delete |
 | `compound` | Consume passed evidence, index learning, and record usage/outcome telemetry |
 | `compound --insight` | Evidence-free capture of investigation learnings (`kind: insight`, secret-scanned, ranked below verified fixes, never promotable) |
 | `consolidate` | Knowledge loop: `--status` debt gauge (quarantine + at-cap domains surfaced) · `--candidates` deterministic work packet, plus any id a human already retired/disputed/promoted (`governed`) so the skill doesn't waste an op re-deriving it · `--apply --ops <path>` validated sole writer of learnings via ADD/STRENGTHEN/SUPERSEDE/MERGE/NOOP ops (`suggest` mode requires `--yes`); mechanically reapplies a standing governance decision when a regenerated id matches one, returning `governed` |
@@ -203,3 +204,12 @@ packages/harness/
 ```
 
 Node 20+. Runtime dependency: `yaml` (manifest parse).
+
+Optional dependencies (structural index tier only — the harness is fully
+functional without them, falling back to the lexical extractor):
+`web-tree-sitter` plus the `tree-sitter-javascript` / `tree-sitter-typescript`
+/ `tree-sitter-python` / `tree-sitter-java` grammar packages, all pinned
+exact. `lib/repo-map/grammars.lock` pins a sha256 digest for every wasm
+(runtime included) and is verified before instantiation — when bumping any of
+these versions, re-hash the installed wasm files and regenerate
+`grammars.lock` in the same change, or every install fails doctor S1 loudly.

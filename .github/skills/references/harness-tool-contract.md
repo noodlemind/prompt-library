@@ -65,7 +65,7 @@ This table tracks only what differs in runtime character across commands — whi
 | `verify` | agent-runtime | writes | mutates (evidence file + session) |
 | `validate-plan` | agent-runtime | writes¹ | read-only |
 | `plan-new` | agent-runtime | none | mutates workspace (writes the plan; `--stdout` prints instead) |
-| `index` | agent-runtime | writes¹ | mutates the knowledge index (`--status` read-only) |
+| `index` | agent-runtime | writes¹ | mutates the knowledge index (`--status` read-only); `--structural` mutates `~/.harness/index/<repo-id>/structural/` |
 | `get` | agent-runtime | none | read-only |
 | `compound` | agent-runtime | writes | mutates (index + solution doc + telemetry) |
 | `consolidate` | agent-runtime | writes | read-only (`--status`/`--candidates`); mutates the learnings store (`--apply`/`--rebuild --yes`) |
@@ -82,6 +82,30 @@ This table tracks only what differs in runtime character across commands — whi
 **Query construction (deterministic-retrieval discipline):** build `--query` from the user's salient nouns and identifiers **verbatim** (e.g. `SYSTEM-OVERRIDE`, `payment`, `token`) — do not paraphrase intent into synonyms. The retrieval tokenizer normalizes identifier formats and morphology, but it cannot recover a term the query never contained. Passing the literal request terms is what keeps recall stable across phrasings.
 
 **Repo map & knowledge freshness (deterministic-first).** `orient` regenerates `.harness/repo-map.md` every turn from `git ls-files` + a lexical symbol/import extractor — so code orientation is always current and never depends on a model. `init-repo` and `index` additionally write a committed, timestamp-free `docs/codebase-map.md` (~2.5k-token budget, query-less) so cold-start agents read one durable orientation file instead of exploring. Learnings (semantic memory) live in a local never-pushed git store at `~/.harness/knowledge/<repo-id>/`; `orient` injects the top-3 trigger-matched learnings inside the existing 2 KB pack, attributed by id, with insight-derived claims fenced `[unverified memory — advisory]`. The `.harness/repo-map.md` (like `.harness/context-pack.md`) is an ephemeral derived artifact, not a persistent type. The knowledge index is refreshed manually (`harness index`) — run it after a major pull from main or a docs rewrite; `index --status` and the `orient` next-hint tell you when it has drifted. A staleness-or-intent maintenance refresh may additionally re-derive conventions via `/codebase-context` (an optional, cheap, non-reasoning model pass) and promote generalizable solution docs to the global `~/.copilot/knowledge` store (episodes only — never the learnings store, whose sole writer is `consolidate --apply`) — never per turn. The extractor is a seam: a tree-sitter tier (WASM, lazy-loaded grammars, lexical fallback for SQL/HCL) can implement the same `extract` shape to power symbol-accurate `refs`/`def`/`callers`, built only when telemetry shows the lexical map misleads the agent.
+
+**Structural index (optional tier — Phase 3).** `harness index --structural [--since <ref>]` builds a persistent, derived symbol index at `~/.harness/index/<repo-id>/structural/` (`files.json`, `symbols.json`, `graph.json`, `meta.json` with the `{sha, branch, baseSha, generatedAt}` generation stamp). Parsing uses optional web-tree-sitter WASM grammars (TypeScript/JavaScript/TSX, Python, Java); any other language, missing grammar, parse failure, or init failure falls back **per file** to the lexical extractor, so the harness works fully with the optional grammar packages absent. `grammars.lock` pins a sha256 digest per wasm, verified before instantiation; a mismatch is a **loud** lexical fallback — recorded in `meta.json` and failed (not warned) by doctor S1. Rebuilds are incremental (mtime+size fast path, sha256 content confirm); `--since <ref>` re-parses only `git diff --name-only <ref> --` files after `git rev-parse --verify` validation (leading `-` rejected). When `meta.sha` equals the current HEAD, `orient`'s repo map prefers the prebuilt structural tables (still a synchronous read — the async grammar lifecycle never enters orient); otherwise behavior is byte-identical lexical. The committed `docs/codebase-map.md` stays lexical-only so host-local index state never leaks into a committed artifact. Output follows the three-audience contract: styled ledger for humans, the bounded `--json` summary envelope below for programs (never the raw tables), and a ≤1000-token inert digest as the agent lane — raw index JSON never enters model context. The index is derived and rebuildable: deleting the directory never loses knowledge. Unresolved graph edges (imports or calls the tables cannot bind) are preserved explicitly, never fabricated.
+
+**index --structural**
+```json
+{
+  "pass": true,
+  "exitCode": 0,
+  "dir": "~/.harness/index/<repo-id>/structural",
+  "written": true,
+  "sha": "<head-sha>",
+  "baseSha": null,
+  "tier": "treesitter",
+  "filesIndexed": 42,
+  "reparsed": 3,
+  "reused": 39,
+  "removedFiles": 0,
+  "parseFailures": 0,
+  "grammarVersions": { "javascript": "0.23.1", "typescript": "0.23.2", "tsx": "0.23.2", "python": "0.23.6", "java": "0.23.5" },
+  "missingGrammars": [],
+  "integrityFailures": [],
+  "delta": { "added": { "count": 1, "names": ["chargeV2"] }, "removed": { "count": 0, "names": [] }, "changed": { "count": 0, "names": [] } }
+}
+```
 
 ### JSON shapes (stable fields)
 

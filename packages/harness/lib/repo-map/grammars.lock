@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "runtime": {
+    "package": "web-tree-sitter",
+    "version": "0.25.10",
+    "file": "tree-sitter.wasm",
+    "sha256": "f38dcc4b43b818f9a0785bc1c6d5611a75ac4cdd428ff3f02757c34ca4e46d7f"
+  },
+  "grammars": {
+    "javascript": {
+      "package": "tree-sitter-javascript",
+      "version": "0.23.1",
+      "file": "tree-sitter-javascript.wasm",
+      "sha256": "4a378293fe7853cbee2836023be072dafa0e53b3b5edb245920838ca834ed121"
+    },
+    "typescript": {
+      "package": "tree-sitter-typescript",
+      "version": "0.23.2",
+      "file": "tree-sitter-typescript.wasm",
+      "sha256": "778025db5a8be0e70f8ccc3671e486dfeddd048c25d9e8a70c26de2e1bf6f97d"
+    },
+    "tsx": {
+      "package": "tree-sitter-typescript",
+      "version": "0.23.2",
+      "file": "tree-sitter-tsx.wasm",
+      "sha256": "79e5da75ea62855a0cd67177685f0164eac87d5f630b3cbe1e0a099751ad30f8"
+    },
+    "python": {
+      "package": "tree-sitter-python",
+      "version": "0.23.6",
+      "file": "tree-sitter-python.wasm",
+      "sha256": "8c93692fb368e288a5824cee55773c9b3602804f513bda48c97661e52e9c2da2"
+    },
+    "java": {
+      "package": "tree-sitter-java",
+      "version": "0.23.5",
+      "file": "tree-sitter-java.wasm",
+      "sha256": "4fdeac4ca6ca089f06c6f7e562abcac1733cd465728cc7031ebb73c2019122c4"
+    }
+  }
+}

@@ -20,6 +20,9 @@ import { listBuckets } from './knowledge/overlay.mjs';
 import { branchExists } from './knowledge/layer.mjs';
 import { deriveGitContext, resolveDefaultBranch } from './git-context.mjs';
 import { loadReportEvents, knowledgeSlos } from './report.mjs';
+import { readStructuralIndex } from './repo-map/structural-index.mjs';
+import { grammarStatus } from './repo-map/treesitter-extractor.mjs';
+import { assertNoSymlinkAncestors } from './fs-safe.mjs';
 
 const require = createRequire(import.meta.url);
 
@@ -494,6 +497,74 @@ function knowledgeChecks({ workspace, copilotHome }) {
   return checks;
 }
 
+// Structural-index health (blueprint P3, doctor S1). One check, four facts:
+// grammar availability + integrity (BOTH the mismatch recorded at index time
+// in meta.json AND the current on-disk wasm state via the sync grammarStatus
+// probe), meta.sha drift vs HEAD, parse-failure rate, and orphaned cache
+// entries. Binding blueprint rule: a grammar integrity mismatch FAILS S1
+// (optional: false) — the loud lexical fallback is a doctor failure, never a
+// warning. Everything else about the optional tier stays advisory. Exported
+// for direct testing, same as the check builders above are exercised through
+// runDoctor.
+export function structuralChecks({ workspace }) {
+  const checks = [];
+  try {
+    const disk = grammarStatus();
+    const index = readStructuralIndex(workspace);
+    const recorded = index?.meta?.integrityFailures || [];
+    const mismatches = [...disk.integrityFailures, ...recorded];
+    if (mismatches.length) {
+      const languages = [...new Set(mismatches.map((f) => f.language))].join(', ');
+      checks.push({
+        id: 'S1',
+        name: 'Structural index grammar integrity',
+        pass: false,
+        hint: `grammar wasm sha256 mismatch vs grammars.lock (${languages}) — the index fell back to lexical loudly; reinstall the harness optional dependencies, then re-run: harness index --structural`,
+      });
+      return checks;
+    }
+    if (!index) {
+      checks.push({
+        id: 'S1',
+        name: 'Structural index (optional tier)',
+        pass: true,
+        optional: true,
+        hint: 'not built — run: harness index --structural',
+      });
+      return checks;
+    }
+    const issues = [];
+    const head = spawnSync('git', ['-C', workspace, 'rev-parse', 'HEAD'], { encoding: 'utf8', timeout: 10_000 });
+    const headSha = head.status === 0 ? head.stdout.trim() : null;
+    if (index.meta.sha && headSha && index.meta.sha !== headSha) {
+      issues.push('meta.sha behind HEAD — re-run: harness index --structural');
+    }
+    const filesIndexed = Math.max(index.meta.filesIndexed || Object.keys(index.files).length, 1);
+    const failRate = (index.meta.parseFailures || 0) / filesIndexed;
+    if (failRate > 0.2) issues.push(`parse-failure rate ${(failRate * 100).toFixed(0)}% — inspect grammar installation`);
+    // Orphaned cache entries: indexed rels that no longer exist on disk.
+    // files.json can be hand-edited, so each rel is containment-checked
+    // before any stat — an escaping rel counts as an orphan, never a probe
+    // outside the workspace.
+    let orphans = 0;
+    for (const rel of Object.keys(index.files).slice(0, 500)) {
+      const full = assertNoSymlinkAncestors(workspace, rel);
+      if (!full || !fs.existsSync(full)) orphans += 1;
+    }
+    if (orphans) issues.push(`${orphans} orphaned cache entries — pruned on the next harness index --structural`);
+    checks.push({
+      id: 'S1',
+      name: 'Structural index health',
+      pass: issues.length === 0,
+      optional: true,
+      hint: issues.length ? issues.join(' · ') : 'current with HEAD; grammars verified',
+    });
+  } catch {
+    // Advisory; never fail doctor on a structural-check error.
+  }
+  return checks;
+}
+
 export function runDoctor({ copilotHome, assetsRoot, pkgRoot, flags, vscodeSettingsPaths = null, workspace = flags.workspace }) {
   const checks = [];
 
@@ -676,6 +747,7 @@ export function runDoctor({ copilotHome, assetsRoot, pkgRoot, flags, vscodeSetti
   });
 
   checks.push(...knowledgeChecks({ workspace, copilotHome }));
+  checks.push(...structuralChecks({ workspace }));
 
   if (flags.host === 'vscode') {
     checks.push(

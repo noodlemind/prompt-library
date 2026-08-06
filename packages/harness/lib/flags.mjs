@@ -91,6 +91,7 @@ export function parseFlags(argv) {
     all: false,
     merged: false,
     stale: null,
+    since: null,
   };
 
   for (let i = 0; i < argv.length; i++) {
@@ -188,6 +189,8 @@ export function parseFlags(argv) {
       const next = argv[i + 1];
       if (next !== undefined && !next.startsWith('--')) flags.why = argv[++i];
     }
+    else if (a.startsWith('--since=')) flags.since = a.split('=').slice(1).join('=');
+    else if (a === '--since') flags.since = argv[++i];
     else if (a === '--yes') flags.yes = true;
     else if (a.startsWith('--layer=')) flags.layer = parseLayer(a.split('=')[1]);
     else if (a === '--layer') flags.layer = parseLayer(argv[++i]);
