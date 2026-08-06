@@ -169,6 +169,8 @@ structural diff.
   lexical. Default-on only after `harness report` telemetry shows the structural tier
   earns its parse cost (this keeps the spirit of the original "built only when telemetry
   shows the lexical map misleads" clause while building the capability now).
+- **Output lanes:** the structural query surface renders per the three-audience contract
+  in §9 — its agent rendering is token-capped and framed, never raw index JSON.
 
 **Phase:** 3. **Risks:** WASM payload size; grammar/version skew across hosts (recorded in
 `meta.json`, surfaced by doctor S1); parse-cost regressions on huge repos (bounded by the
@@ -485,6 +487,21 @@ not paint the workbench into a corner:
   status model.
 - `knowledge status` output should serve both the workbench's one-line footer summary and
   its expanded ledger view: summary scalars first, detail arrays after.
+- **Three-audience output contract.** Every command surface proposed here renders one
+  canonical result three ways, and all three renderings are deterministic CLI work —
+  never a model pass:
+  1. **Human** — the styled ledger (`lib/style.mjs` conventions) for eyes.
+  2. **Program/TUI** — the versioned JSON envelope for the workbench and other tooling.
+  3. **Agent** — a budgeted text rendering for LLM consumption, following the existing
+     pattern (2048-byte context pack, 220-token plan slice, bounded `get` excerpts).
+  Agents consume the budgeted lane, never the JSON envelope: JSON is token-inefficient
+  and its arrays are unbounded, so envelope output must never enter model context. Agent
+  renderings inherit the existing hardening and metering — data-not-instructions framing,
+  `inertLine`, and secret redaction wherever the content is retrieved text, plus measured
+  bytes so `harness report`'s utilization SLOs see their cost. The structural query's
+  agent rendering carries a token cap, with the repo map's 1000-token budget as the
+  precedent. This is what makes the workbench's dual human/LLM promise real: no tokens
+  are ever spent translating one audience's output into another's.
 
 Where the workbench track defines its own contracts (registry, envelope schema, run
 journal), those contracts govern; this blueprint commits its surfaces only to being
