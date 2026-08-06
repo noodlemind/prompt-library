@@ -1,8 +1,0 @@
-[
-  "kubernetes ingress tls rotation",
-  "graphql federation gateway caching",
-  "terraform state locking dynamodb",
-  "websocket backpressure flow control",
-  "oauth device code grant flow",
-  "redis cluster resharding"
-]

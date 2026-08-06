@@ -68,3 +68,19 @@ test('summarizeUsage honors an explicit total (cache + reasoning beyond in/out)'
   assert.equal(summary.totalTokens, 5000, 'total is not recomputed as input + output');
   assert.equal(summary.byType.host_session.totalTokens, 5000);
 });
+
+test('summarizeUsage retains known partial subtotals without inventing a total', () => {
+  const summary = summarizeUsage([{
+    type: 'host_session',
+    usage: { 'gen_ai.usage.input_tokens': 150, estimated: false },
+  }]);
+  assert.equal(summary.inputTokens, 150);
+  assert.equal(summary.outputTokens, null);
+  assert.equal(summary.totalTokens, null);
+  assert.equal(summary.knownTotalTokens, 0);
+  assert.equal(summary.completeTotalEvents, 0);
+  assert.equal(summary.partialUsageEvents, 1);
+  assert.deepEqual(summary.coverage, {
+    input: 'complete', output: 'unavailable', total: 'unavailable',
+  });
+});

@@ -6,5 +6,5 @@ packages/harness/assets/
 .DS_Store
 .compound-engineering-plugin-analysis/
 
-# Generated eval run evidence
-evals/jobs/
+# Retired eval tree — local run leftovers stay untracked
+evals/

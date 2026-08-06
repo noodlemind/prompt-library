@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { eventPath } from './events.mjs';
-import { summarizeUsage } from './token-meter.mjs';
+import { measuredUsage, summarizeUsage } from './token-meter.mjs';
 import { createStyle, keyWidthFor } from './style.mjs';
 
 // A report reads more history than the bounded `events` view, but is still
@@ -41,8 +41,8 @@ export function loadReportEvents({ workspace, events }) {
 function rankSinks(events) {
   const byType = new Map();
   for (const event of events) {
-    const total = event.usage?.['gen_ai.usage.total_tokens'] || 0;
-    if (!total) continue;
+    const total = measuredUsage(event.usage)?.totalTokens;
+    if (total == null || total === 0) continue;
     const bucket = byType.get(event.type) || { type: event.type, tokens: 0, count: 0, source: 'est' };
     bucket.tokens += total;
     bucket.count += 1;
@@ -57,7 +57,8 @@ function rankSinks(events) {
 function topSessions(events, limit = 3) {
   const bySession = new Map();
   for (const event of events) {
-    const total = event.usage?.['gen_ai.usage.total_tokens'] || 0;
+    const total = measuredUsage(event.usage)?.totalTokens;
+    if (total == null) continue;
     const key = event.session || '(no session)';
     const bucket = bySession.get(key) || { session: key, tokens: 0, count: 0 };
     bucket.tokens += total;
@@ -127,7 +128,8 @@ export function trendRegression(events) {
   for (const event of events) {
     const key = event.session || null;
     if (!key) continue;
-    const total = event.usage?.['gen_ai.usage.total_tokens'] || 0;
+    const total = measuredUsage(event.usage)?.totalTokens;
+    if (total == null) continue;
     const bucket = bySession.get(key) || { session: key, tokens: 0, firstTs: event.ts };
     bucket.tokens += total;
     if (event.ts && event.ts < bucket.firstTs) bucket.firstTs = event.ts;
@@ -219,14 +221,48 @@ export function knowledgeTokenLedger(events) {
 // How many per-session performance rows the report shows (highest-token first).
 const SESSION_PERF_CAP = 10;
 
-/** Tokens for an event, matching summarizeUsage: explicit total, else input +
- * output, else 0 — so session rankings track the report roll-ups. */
+/** Trust an explicit total, or derive one only when both input and output are
+ * present. Partial usage remains null so rankings cannot turn it into zero. */
 function eventTokens(event) {
-  const usage = event.usage;
-  if (!usage) return 0;
-  const recorded = usage['gen_ai.usage.total_tokens'];
-  if (Number.isFinite(recorded)) return recorded;
-  return (usage['gen_ai.usage.input_tokens'] || 0) + (usage['gen_ai.usage.output_tokens'] || 0);
+  return measuredUsage(event.usage)?.totalTokens ?? null;
+}
+
+function incrementCoverage(acc, prefix, status) {
+  const normalized = ['complete', 'partial', 'unavailable'].includes(status)
+    ? status
+    : 'unavailable';
+  const suffix = normalized[0].toUpperCase() + normalized.slice(1);
+  acc[`${prefix}${suffix}Sessions`] += 1;
+}
+
+function coreCoverageProjection(coverage = {}) {
+  return {
+    sessionTotals: coverage.sessionTotals || 'unavailable',
+    finalContextSnapshot: coverage.finalContextSnapshot || 'unavailable',
+    perRequestInputTokens: coverage.perRequestInputTokens || 'unavailable',
+  };
+}
+
+function coverageLabel(coverage) {
+  const context = coverage.finalContextSnapshot === 'complete'
+    ? 'final-context-snapshot'
+    : `final-context-snapshot-${coverage.finalContextSnapshot}`;
+  return [
+    `${coverage.sessionTotals}-session-totals`,
+    context,
+    `per-request-input-${coverage.perRequestInputTokens}`,
+  ].join('; ');
+}
+
+function humanCoverage(coverage) {
+  const context = coverage.finalContextSnapshot === 'complete'
+    ? 'final context snapshot'
+    : `final context snapshot ${coverage.finalContextSnapshot}`;
+  return [
+    `${coverage.sessionTotals} session totals`,
+    context,
+    `per-request input ${coverage.perRequestInputTokens}`,
+  ].join(' · ');
 }
 
 /** Per-session performance rows and roll-up, from host events carrying metrics. */
@@ -239,30 +275,108 @@ export function sessionPerformance(events) {
       tokens: eventTokens(e),
       ...e.metrics,
     }));
-  rows.sort((a, b) => b.tokens - a.tokens);
+  rows.sort((a, b) => {
+    if (a.tokens == null && b.tokens == null) return 0;
+    if (a.tokens == null) return 1;
+    if (b.tokens == null) return -1;
+    return b.tokens - a.tokens;
+  });
   const totals = rows.reduce(
     (acc, r) => {
       acc.sessions += 1;
-      acc.tokens += r.tokens || 0;
+      if (Number.isFinite(r.tokens)) {
+        acc.tokens += r.tokens;
+        acc.tokenSessions += 1;
+      }
+      if (Number.isFinite(r.aiCredits)) {
+        acc.aiCredits += r.aiCredits;
+        acc.aiCreditSessions += 1;
+      }
       acc.premiumRequests += r.premiumRequests || 0;
       acc.apiRequests += r.apiRequests || 0;
       acc.apiDurationMs += r.apiDurationMs || 0;
       acc.turns += r.turns || 0;
       acc.toolCalls += r.toolCalls || 0;
       acc.toolFailures += r.toolFailures || 0;
+      const systemMessages = r.promptEvidence?.systemMessages || [];
+      const loadedSkills = r.promptEvidence?.loadedSkills || [];
+      acc.systemMessages += systemMessages.length;
+      acc.systemMessageChars += systemMessages.reduce((sum, message) => sum + (message.chars || 0), 0);
+      acc.loadedSkills += loadedSkills.length;
+      acc.loadedSkillBytes += loadedSkills.reduce((sum, skill) => sum + (skill.contentBytes || 0), 0);
+      acc.skillInvocations += loadedSkills.reduce((sum, skill) => sum + (skill.invocations || 0), 0);
+      const systemEvidenceCoverage = r.promptEvidence?.coverage?.systemMessages || 'unavailable';
+      const skillEvidenceCoverage = r.promptEvidence?.coverage?.loadedSkills || 'unavailable';
+      incrementCoverage(acc, 'systemMessageEvidence', systemEvidenceCoverage);
+      incrementCoverage(acc, 'loadedSkillEvidence', skillEvidenceCoverage);
+      acc.compactions += r.compaction?.completed || 0;
+      acc.compactionTokens += r.compaction?.compactionTokensUsed || 0;
+      const compactionCoverage = r.compaction?.coverage || 'unavailable';
+      incrementCoverage(acc, 'compactionEvidence', compactionCoverage);
+      const assistantCoverage = r.assistantOutput?.coverage || 'unavailable';
+      incrementCoverage(acc, 'assistantOutput', assistantCoverage);
+      if (r.assistantOutput?.messagesWithTokens > 0) {
+        acc.assistantOutputSessions += 1;
+        acc.assistantOutputTokens += r.assistantOutput.observedTokens || 0;
+        acc.assistantToolCallingTokens += r.assistantOutput.byPhase?.toolCalling || 0;
+        acc.assistantResponseOnlyTokens += r.assistantOutput.byPhase?.responseOnly || 0;
+      }
       acc.linesAdded += r.linesAdded || 0;
       acc.linesRemoved += r.linesRemoved || 0;
       return acc;
     },
-    { sessions: 0, tokens: 0, premiumRequests: 0, apiRequests: 0, apiDurationMs: 0, turns: 0, toolCalls: 0, toolFailures: 0, linesAdded: 0, linesRemoved: 0 }
+    {
+      sessions: 0,
+      tokens: 0,
+      tokenSessions: 0,
+      aiCredits: 0,
+      aiCreditSessions: 0,
+      premiumRequests: 0,
+      apiRequests: 0,
+      apiDurationMs: 0,
+      turns: 0,
+      toolCalls: 0,
+      toolFailures: 0,
+      systemMessages: 0,
+      systemMessageChars: 0,
+      loadedSkills: 0,
+      loadedSkillBytes: 0,
+      skillInvocations: 0,
+      systemMessageEvidenceCompleteSessions: 0,
+      systemMessageEvidencePartialSessions: 0,
+      systemMessageEvidenceUnavailableSessions: 0,
+      loadedSkillEvidenceCompleteSessions: 0,
+      loadedSkillEvidencePartialSessions: 0,
+      loadedSkillEvidenceUnavailableSessions: 0,
+      compactions: 0,
+      compactionTokens: 0,
+      compactionEvidenceCompleteSessions: 0,
+      compactionEvidencePartialSessions: 0,
+      compactionEvidenceUnavailableSessions: 0,
+      assistantOutputSessions: 0,
+      assistantOutputCompleteSessions: 0,
+      assistantOutputPartialSessions: 0,
+      assistantOutputUnavailableSessions: 0,
+      assistantOutputTokens: 0,
+      assistantToolCallingTokens: 0,
+      assistantResponseOnlyTokens: 0,
+      linesAdded: 0,
+      linesRemoved: 0,
+    }
   );
-  return { rows: rows.slice(0, SESSION_PERF_CAP), totals };
+  totals.knownTokens = totals.tokens;
+  if (totals.tokenSessions !== totals.sessions) totals.tokens = null;
+  const coverageDetails = [...new Map(rows.map((row) => {
+    const projection = coreCoverageProjection(row.telemetryCoverage);
+    return [JSON.stringify(projection), projection];
+  })).values()];
+  const coverage = coverageDetails.map(coverageLabel);
+  return { rows: rows.slice(0, SESSION_PERF_CAP), totals, coverage, coverageDetails };
 }
 
 export function buildReport({ workspace, copilotHome, events }) {
   const all = loadReportEvents({ workspace, events });
   const usage = summarizeUsage(all);
-  const withUsage = all.filter((e) => e.usage);
   const span = {
     from: all.length ? all[0].ts : null,
     to: all.length ? all[all.length - 1].ts : null,
@@ -271,13 +385,27 @@ export function buildReport({ workspace, copilotHome, events }) {
   const hostBacked = all.some((e) => e.source === 'host');
   const performance = sessionPerformance(all);
   return {
-    totals: { tokens: usage.totalTokens, input: usage.inputTokens, output: usage.outputTokens, events: all.length, measured: withUsage.length },
+    workspace: workspace ?? null,
+    copilotHome: copilotHome ?? null,
+    totals: {
+      tokens: usage.totalTokens,
+      knownTokens: usage.knownTotalTokens,
+      input: usage.inputTokens,
+      output: usage.outputTokens,
+      events: all.length,
+      measured: usage.completeTotalEvents,
+      partialMeasured: usage.partialUsageEvents,
+      usageEvents: usage.usageEvents,
+      usageCoverage: usage.coverage,
+    },
     span,
     hostBacked,
     sinks: rankSinks(all),
     topSessions: topSessions(all),
     sessions: performance.rows,
     sessionTotals: performance.totals,
+    sessionCoverage: performance.coverage,
+    sessionCoverageDetails: performance.coverageDetails,
     flags: {
       budgetBreaches: budgetBreaches({ workspace, copilotHome }),
       recoveryLoops: recoveryLoops(all),
@@ -317,38 +445,123 @@ function fmtTokens(n) {
   return String(n);
 }
 
+function fmtCredits(n) {
+  if (!Number.isFinite(n)) return '-';
+  if (n > 0 && n < 0.01) return '<0.01';
+  return n.toFixed(2).replace(/\.00$/, '').replace(/(\.\d)0$/, '$1');
+}
+
+function fmtContext(r) {
+  if ([r.contextTokens, r.systemTokens, r.conversationTokens, r.toolDefinitionsTokens].every((n) => n == null)) {
+    return '-';
+  }
+  const total = fmtTokens(r.contextTokens);
+  const parts = [r.systemTokens, r.conversationTokens, r.toolDefinitionsTokens].map(fmtTokens);
+  return `${total}(${parts.join('/')})`;
+}
+
 /** Compact per-session performance table (local session metrics). */
 function renderSessionPerformance(report, ui, keyWidth) {
   const rows = report.sessions || [];
   if (!rows.length) return [];
   const tt = report.sessionTotals || {};
+  const creditSummary = !tt.aiCreditSessions
+    ? ''
+    : tt.aiCreditSessions === tt.sessions
+      ? ` · ${fmtCredits(tt.aiCredits)} AIC`
+      : ` · ${fmtCredits(tt.aiCredits)} AIC reported (${tt.aiCreditSessions}/${tt.sessions} sessions)`;
   const out = [
     '',
     ui.line({
       key: 'sessions',
-      value: `${tt.sessions} · ${tt.premiumRequests} premium · ${fmtDuration(tt.apiDurationMs)} API · ${tt.turns} turns · ${tt.toolCalls} tools (${tt.toolFailures} failed)`,
+      value: `${tt.sessions}${creditSummary} · ${tt.premiumRequests} premium · ${fmtDuration(tt.apiDurationMs)} API · ${tt.turns} turns · ${tt.toolCalls} tools (${tt.toolFailures} failed)`,
       note: `+${tt.linesAdded}/-${tt.linesRemoved} lines`,
       keyWidth,
     }),
   ];
-  const header = ['session', 'model', 'tokens', 'prem', 'turns', 'tools(f)', 'skills', 'API', 'cache', 'ctx', 'lines'];
+  const header = ['session', 'model', 'tokens', 'AIC', 'prem', 'turns', 'tools(f)', 'skills', 'cli', 'API', 'cache', 'ctx(s/c/t)', 'lines'];
   const table = rows.map((r) => [
     String(r.session).slice(0, 8),
     r.model || '-',
     fmtTokens(r.tokens),
+    fmtCredits(r.aiCredits),
     String(r.premiumRequests ?? '-'),
     String(r.turns ?? '-'),
     `${r.toolCalls ?? 0}(${r.toolFailures ?? 0})`,
     String(r.skills ?? 0),
+    String(r.harnessCliCalls ?? '-'),
     fmtDuration(r.apiDurationMs),
     fmtPct(r.cacheReadRatio),
-    fmtTokens(r.contextTokens),
+    fmtContext(r),
     `+${r.linesAdded ?? 0}/-${r.linesRemoved ?? 0}`,
   ]);
   const widths = header.map((h, i) => Math.max(h.length, ...table.map((row) => row[i].length)));
   const fmtRow = (row) => '  ' + row.map((cell, i) => cell.padEnd(widths[i])).join('  ').trimEnd();
   out.push(ui.paint('muted', fmtRow(header)));
   for (const row of table) out.push(fmtRow(row));
+  out.push(ui.paint('muted', '  ctx(system/conversation/tools) · AIC is host-reported for the session'));
+  if (tt.systemMessages || tt.loadedSkills) {
+    out.push(
+      ui.paint(
+        'muted',
+        `  prompt evidence ${tt.systemMessages} system message${tt.systemMessages === 1 ? '' : 's'} · ${fmtGroup(tt.systemMessageChars)} chars · ${tt.loadedSkills} loaded skill${tt.loadedSkills === 1 ? '' : 's'} · ${fmtGroup(tt.loadedSkillBytes)} bytes (${tt.skillInvocations} invocations)`
+      )
+    );
+  }
+  if (tt.sessions) {
+    out.push(
+      ui.paint(
+        'muted',
+        `  prompt coverage system ${tt.systemMessageEvidenceCompleteSessions}/${tt.sessions} complete (${tt.systemMessageEvidencePartialSessions} partial, ${tt.systemMessageEvidenceUnavailableSessions} unavailable) · skills ${tt.loadedSkillEvidenceCompleteSessions}/${tt.sessions} complete (${tt.loadedSkillEvidencePartialSessions} partial, ${tt.loadedSkillEvidenceUnavailableSessions} unavailable)`
+      )
+    );
+  }
+  if (tt.compactions || tt.compactionTokens) {
+    out.push(
+      ui.paint(
+        'muted',
+        `  ${tt.compactions} compaction${tt.compactions === 1 ? '' : 's'} · ${fmtGroup(tt.compactionTokens)} tokens · ${tt.compactionEvidenceCompleteSessions}/${tt.sessions} sessions complete · ${tt.compactionEvidencePartialSessions} partial · ${tt.compactionEvidenceUnavailableSessions} unavailable`
+      )
+    );
+  } else if (tt.sessions) {
+    out.push(
+      ui.paint(
+        'muted',
+        `  compaction evidence ${tt.compactionEvidenceCompleteSessions}/${tt.sessions} sessions complete · ${tt.compactionEvidencePartialSessions} partial · ${tt.compactionEvidenceUnavailableSessions} unavailable`
+      )
+    );
+  }
+  if (tt.assistantOutputSessions) {
+    const coverage = `${tt.assistantOutputCompleteSessions}/${tt.sessions} sessions complete · ${tt.assistantOutputPartialSessions} partial · ${tt.assistantOutputUnavailableSessions} unavailable`;
+    out.push(
+      ui.paint(
+        'muted',
+        `  assistant output observed ${fmtGroup(tt.assistantOutputTokens)} · tool-calling ${fmtGroup(tt.assistantToolCallingTokens)} · response-only ${fmtGroup(tt.assistantResponseOnlyTokens)} · ${coverage}`
+      )
+    );
+  } else if (tt.sessions) {
+    out.push(
+      ui.paint(
+        'muted',
+        `  assistant output evidence ${tt.assistantOutputCompleteSessions}/${tt.sessions} sessions complete · ${tt.assistantOutputPartialSessions} partial · ${tt.assistantOutputUnavailableSessions} unavailable`
+      )
+    );
+  }
+  for (const coverage of report.sessionCoverageDetails || []) {
+    out.push(ui.paint('muted', `  coverage ${humanCoverage(coverage)}`));
+  }
+  const silent = rows.filter((r) => (r.turns ?? 0) > 0 && (r.harnessCliCalls ?? 0) === 0);
+  if (silent.length) {
+    out.push(
+      ui.line({
+        state: 'warn',
+        key: 'engagement',
+        value: `harness CLI never invoked in ${silent.length} session(s)`,
+        note: 'agent turns ran but no orient/gate/verify calls — check that the engineer contract is engaging',
+        keyWidth,
+      })
+    );
+  }
   return out;
 }
 
@@ -357,11 +570,21 @@ export function renderReport(report, ui = createStyle()) {
   const t = report.totals;
   const keyWidth = keyWidthFor(['report', 'span', 'sinks', 'sessions', 'flags', 'knowledge'], 8);
   const src = report.hostBacked ? 'host-backed + estimated' : 'estimated (chars/4)';
+  const incompleteUsage = t.usageEvents > 0 && t.tokens == null;
+  const tokenValue = incompleteUsage
+    ? t.usageCoverage?.total === 'partial'
+      ? `token total partial · ${fmtGroup(t.knownTokens)} known`
+      : 'token total unavailable'
+    : `~${fmtGroup(t.tokens)} tokens`;
+  const tokenNote = incompleteUsage
+    ? `input ${t.input == null ? 'unavailable' : fmtGroup(t.input)} · output ${t.output == null ? 'unavailable' : fmtGroup(t.output)} · partial usage ${t.partialMeasured}/${t.usageEvents} event${t.usageEvents === 1 ? '' : 's'}`
+    : `${t.events} events · ${report.span.sessions} session(s) · ${src}` +
+      (t.partialMeasured > 0 ? ` · partial usage ${t.partialMeasured}/${t.usageEvents}` : '');
   lines.push(
     ui.line({
       key: 'report',
-      value: `~${fmtGroup(t.tokens)} tokens`,
-      note: `${t.events} events · ${report.span.sessions} session(s) · ${src}`,
+      value: tokenValue,
+      note: tokenNote,
       keyWidth,
     })
   );
@@ -373,9 +596,52 @@ export function renderReport(report, ui = createStyle()) {
 
   lines.push('');
   if (!report.sinks.length) {
-    lines.push(
-      ui.line({ key: 'sinks', value: 'none yet', note: 'run some harness commands, then report', keyWidth })
-    );
+    const partialOnly = t.usageEvents > 0;
+    lines.push(ui.line({
+      key: 'sinks',
+      value: partialOnly ? 'no complete token totals' : 'none yet',
+      note: partialOnly
+        ? 'partial usage remains available in the session coverage below'
+        : 'run some harness commands, then report',
+      keyWidth,
+    }));
+    // An empty report must be self-diagnosing: say exactly where telemetry
+    // was expected, what exists there, and which knob fixes each gap.
+    const sessionStateDir = !partialOnly && report.copilotHome ? path.join(report.copilotHome, 'session-state') : null;
+    const vscodeUsage = report.copilotHome ? path.join(report.copilotHome, 'host-usage', 'vscode.jsonl') : null;
+    const countSessions = (dir) => {
+      try {
+        return fs.readdirSync(dir).length;
+      } catch {
+        return null;
+      }
+    };
+    const hostSessions = sessionStateDir ? countSessions(sessionStateDir) : null;
+    if (!partialOnly) {
+      lines.push('');
+      lines.push(ui.line({ key: 'looked in', value: `workspace ${report.workspace}`, note: 'harness event store (.harness) — run report from the instrumented workspace, or use --global for all synced workspaces', keyWidth }));
+      lines.push(
+        ui.line({
+          key: '',
+          value: `copilot home ${report.copilotHome ?? '(unresolved)'}`,
+          note:
+            hostSessions == null
+              ? 'session-state missing — set COPILOT_HOME if Copilot stores sessions elsewhere on this machine'
+              : `session-state present · ${hostSessions} session dir(s)`,
+          keyWidth,
+        })
+      );
+      if (vscodeUsage) {
+        lines.push(
+          ui.line({
+            key: '',
+            value: `vscode usage ${vscodeUsage}`,
+            note: fs.existsSync(vscodeUsage) ? 'present' : 'absent — the VS Code emitter hook has not written host usage here',
+            keyWidth,
+          })
+        );
+      }
+    }
   } else {
     lines.push(ui.line({ key: 'sinks', value: `${report.sinks.length} event type(s)`, keyWidth }));
     const max = report.sinks[0].tokens;
