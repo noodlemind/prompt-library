@@ -1,8 +1,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { storeDir, listLearnings, readGovernance } from './store.mjs';
+import { storeDir, listLearnings, readGovernance, inertLine } from './store.mjs';
 import { deriveGitContext } from '../git-context.mjs';
+import { redactSecrets } from '../secret-scan.mjs';
 
 /**
  * The layered read path (harness evolution blueprint §4) — ONE exported
@@ -54,8 +55,48 @@ export function branchesRoot(dir) {
   return path.join(dir, 'branches');
 }
 
+/**
+ * A bucket key is a plain directory NAME under `branches/`, never a path.
+ * Owned by the module that performs the `path.join` (bucketDirFor below), so
+ * the promotion EMITTER (`promote.mjs`, validating `--branch`) and the sole
+ * WRITER (`apply.mjs`, validating a hand-authored promotion envelope) share
+ * one definition instead of drifting — an emitter-only shape check is no
+ * check at all, since the ops file is a plain JSON file a human or model can
+ * hand-author and feed straight to `consolidate --apply`.
+ *
+ * Refused: separators (both kinds — a `\` segment traverses on Windows and is
+ * a legal filename byte on POSIX), any `..`, `.`/`..` whole, an absolute path,
+ * a control character, and any `:` — which covers both the Windows drive
+ * shape (`C:`) and the NTFS alternate-data-stream shape (`foo:bar`), neither
+ * of which `path.isAbsolute` recognizes on a POSIX build.
+ */
+export function isSafeBucketKey(key) {
+  if (typeof key !== 'string' || !key) return false;
+  if (key === '.' || key === '..') return false;
+  if (/[\\/:]/.test(key)) return false;
+  if (key.includes('..')) return false;
+  if (/[\x00-\x1f\x7f]/.test(key)) return false;
+  return !path.isAbsolute(key);
+}
+
 export function bucketDirFor(dir, key) {
   return path.join(branchesRoot(dir), key);
+}
+
+/**
+ * Render-safe form of a branch name for any surface that reports one —
+ * `knowledge status`, `knowledge prune`'s preview, and their `--json` lanes.
+ * A branch name is attacker-influenced on a fork checkout, and a bucket's
+ * `meta.json` `branch` field is a plain hand-editable string in the store, so
+ * it is the same untrusted class context-pack.mjs already redacts, flattens,
+ * and caps before rendering. Applied at the DATA boundary (where the report
+ * object is built), which is the only place that reaches the raw `--json`
+ * lane as well as the rendered CLI row. Null in, null out.
+ */
+export const BRANCH_DISPLAY_CAP = 80;
+export function safeBranchName(value) {
+  if (typeof value !== 'string' || !value) return null;
+  return inertLine(redactSecrets(value)).slice(0, BRANCH_DISPLAY_CAP);
 }
 
 /** Parsed bucket meta.json, or null. Meta is a CACHE, never authority —

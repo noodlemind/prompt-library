@@ -2,8 +2,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { deriveGitContext, resolveDefaultBranch, isDetachedKey } from '../git-context.mjs';
-import { branchesRoot, bucketDirFor, listBuckets, bucketAncestryOk } from './overlay.mjs';
+import { branchesRoot, bucketDirFor, listBuckets, bucketAncestryOk, isSafeBucketKey } from './overlay.mjs';
 import { readSession } from '../session.mjs';
+import { assertRealpathContained, assertNoSymlinkAncestors } from '../fs-safe.mjs';
 
 /**
  * Layer-aware WRITE routing (blueprint P4, normative routing table):
@@ -14,7 +15,8 @@ import { readSession } from '../session.mjs';
  *   | Default branch         | golden                                   |
  *   | Detached HEAD          | `branches/detached-<shortsha>/` (never   |
  *   |                        | promotable — derived from the key shape) |
- *   | `--layer golden`       | golden (explicit override, logged)       |
+ *   | `--layer golden`       | golden (explicit override, logged —      |
+ *   |                        | HUMAN-GATED at admission, see apply.mjs) |
  *   | Non-git workspace      | golden (no branch concept exists)        |
  *
  * The layer is derived from git context AT WRITE TIME — the branch recorded
@@ -156,7 +158,16 @@ export function migrateRenamedBucket(dir, { workspace, context }) {
   }
   if (candidates.length !== 1) return null;
   const [source] = candidates;
-  const target = bucketDirFor(dir, context.branchKey);
+  // Defense in depth (fs-safe.mjs): a rename moves a whole directory tree, and
+  // both endpoints are derived from `branches/` — a hand-editable tree — and
+  // from a branch name. Refuse unless both keys are plain bucket names, the
+  // source's REAL path still sits inside the store, and no symlinked component
+  // stands on the destination path.
+  if (!isSafeBucketKey(source.key) || !isSafeBucketKey(context.branchKey)) return null;
+  const containedSource = assertRealpathContained(dir, path.join('branches', source.key));
+  if (!containedSource) return null;
+  const target = assertNoSymlinkAncestors(dir, path.join('branches', context.branchKey));
+  if (!target) return null;
   try {
     // Rewrite the meta cache in the SOURCE dir first, THEN rename: if the
     // meta write throws, the bucket has not moved yet, so nothing is left
@@ -169,7 +180,7 @@ export function migrateRenamedBucket(dir, { workspace, context }) {
       JSON.stringify({ ...meta, branch: context.branch, branchKey: context.branchKey }) + '\n',
       'utf8'
     );
-    fs.renameSync(source.dir, target);
+    fs.renameSync(containedSource, target);
     return { migrated: true, from: source.key, to: context.branchKey };
   } catch {
     return null;

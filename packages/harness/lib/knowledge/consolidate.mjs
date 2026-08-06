@@ -187,12 +187,39 @@ export function splitLedger(ledger) {
 // out of every active-learning surface (cap counts, promotion candidates,
 // ranking, rebuild) exactly like retired/disputed/superseded, even though
 // `promote` leaves its own `status` field untouched.
+//
+// `promoted_to_golden` is the branch→golden equivalent (blueprint §5): the
+// bucket entry's claim IS the golden claim now, so the tombstone is just as
+// inactive. Without it here the overlay excluded the tombstone but every
+// OTHER active-learning surface still counted it — so a STRENGTHEN/SUPERSEDE
+// could resurrect a promoted bucket entry back into the overlay (shadowing
+// the golden claim it became), `promote` would re-offer it, and the bucket
+// INDEX.md rebuildIndex writes would disagree with `retrievalExclusion`.
 export function isActiveFm(fm) {
-  return !fm.superseded_by && !fm.promoted_to && !['retired', 'disputed'].includes(fm.status);
+  return !fm.superseded_by && !fm.promoted_to && !fm.promoted_to_golden && !['retired', 'disputed'].includes(fm.status);
 }
 
 export function activeLearnings(learnings) {
   return learnings.filter((l) => isActiveFm(l.fm));
+}
+
+/**
+ * The ONE bucket-occupancy predicate `knowledge status` reports and
+ * `knowledge prune` gates on (P2 finding: they used to disagree — status
+ * called a bucket "not prunable" while prune deleted it and its active,
+ * unpromoted learnings with no preview and no confirmation). `active` counts
+ * only learnings that are still live AND not already absorbed into golden;
+ * `promoted` counts the branch→golden tombstones, which are exactly what
+ * makes a bucket safe to delete.
+ */
+export function bucketCounts(learnings) {
+  let active = 0;
+  let promoted = 0;
+  for (const l of learnings) {
+    if (l.fm.promoted_to_golden) promoted += 1;
+    else if (isActiveFm(l.fm)) active += 1;
+  }
+  return { active, promoted, total: learnings.length };
 }
 
 /**

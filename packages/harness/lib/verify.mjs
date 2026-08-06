@@ -11,6 +11,8 @@ import { checkSeverityFor, enforcementExitCode, loadPolicy } from './policy.mjs'
 import { verifyPrimitiveGovernance } from './primitive-governance.mjs';
 import { validatePlanReadiness } from './plan-readiness.mjs';
 import { STRUCTURAL_CHECK_ID, runStructuralExpectations } from './structural/expectations.mjs';
+import { redactSecrets } from './secret-scan.mjs';
+import { inertLine } from './knowledge/store.mjs';
 
 const CHECKS_REL = '.github/harness/checks.yaml';
 
@@ -109,14 +111,53 @@ function applyCheckSeverities(checks, policy) {
   });
 }
 
-function collectAdvisoryFailures(checks) {
+// Advisory findings carry CURRENT-SIDE REPO TEXT (structural/expectations.mjs
+// derives its symbol names from a lexical extractor whose per-language
+// patterns are not length-bounded — a `.tf` string literal spanning newlines
+// can produce a six-figure-byte "symbol name"), and they are copied verbatim
+// into `.harness/evidence/*.json` and `verify --json`. Every other surface
+// that renders less-trusted repo-derived text redacts it, flattens control
+// characters, and caps it; the evidence lane must do the same at the point it
+// copies the payload, so the guarantee holds no matter which check produced
+// the findings.
+const ADVISORY_TEXT_CAP = 240;
+const ADVISORY_LIST_CAP = 20;
+const ADVISORY_FINDINGS_CAP = 50;
+const ADVISORY_DEPTH_CAP = 3;
+
+function advisoryText(value) {
+  return inertLine(redactSecrets(String(value ?? ''))).slice(0, ADVISORY_TEXT_CAP);
+}
+
+/** Redact + flatten + cap every string reachable in a finding, bound every
+ * array/object to ADVISORY_LIST_CAP entries, and stop at ADVISORY_DEPTH_CAP —
+ * shape-agnostic, so a check that grows a new findings field is covered
+ * without this function knowing about it. */
+function advisoryValue(value, depth = 0) {
+  if (typeof value === 'string') return advisoryText(value);
+  if (typeof value === 'number' || typeof value === 'boolean' || value === null) return value;
+  if (depth >= ADVISORY_DEPTH_CAP) return null;
+  if (Array.isArray(value)) return value.slice(0, ADVISORY_LIST_CAP).map((entry) => advisoryValue(entry, depth + 1));
+  if (value && typeof value === 'object') {
+    const out = {};
+    for (const [key, entry] of Object.entries(value).slice(0, ADVISORY_LIST_CAP)) {
+      out[advisoryText(key)] = advisoryValue(entry, depth + 1);
+    }
+    return out;
+  }
+  return null;
+}
+
+export function collectAdvisoryFailures(checks) {
   return checks
     .filter((check) => check.severity === 'advisory' && !['passed', 'skipped'].includes(check.status))
     .map((check) => ({
       id: check.id,
       status: check.status,
-      message: check.message,
-      ...(check.findings ? { findings: check.findings } : {}),
+      message: advisoryText(check.message),
+      ...(check.findings
+        ? { findings: (Array.isArray(check.findings) ? check.findings : []).slice(0, ADVISORY_FINDINGS_CAP).map((f) => advisoryValue(f)) }
+        : {}),
     }));
 }
 

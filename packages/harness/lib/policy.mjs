@@ -14,6 +14,37 @@ const MODES = new Set(['observe', 'warn', 'enforce']);
 export const CHECK_SEVERITIES = new Set(['advisory', 'warn', 'enforce']);
 const POLICY_VERSIONS = new Set([1, 2]);
 
+/**
+ * The built-in verify checks that can never be downgraded to `advisory`
+ * (human decision, recorded in docs/MEMORY-MODEL.md). `advisory` does not
+ * merely soften a report: resolveOutcome (verify.mjs) filters advisory checks
+ * OUT of the outcome entirely, so `outcome: passed` would be written into the
+ * evidence artifact that `harness gate` and `harness compound` trust — a
+ * policy marking `scope` advisory would open the gate on real scope
+ * violations AND mint a "verified" fix episode from a run that never
+ * verified. Every id verify.mjs pushes as a BUILT-IN check is listed here
+ * except the ones whose built-in DEFAULT is already advisory
+ * (`structural-expectations`) — those stay downgradable because advisory is
+ * what they already are. Project-defined named checks (checks.yaml) are
+ * deliberately NOT listed: a team's own command is theirs to mark advisory.
+ * `warn` remains available for every check — it degrades a failure to
+ * inconclusive (a non-zero exit under enforce), it does not erase it.
+ */
+export const NON_ADVISORY_CHECK_IDS = new Set([
+  'plan-selection',
+  'plan-schema',
+  'plan-readiness',
+  'plan-state',
+  'phase-tasks',
+  'criteria-evidence',
+  'scope',
+  'primitive-evidence',
+  'required-reviews',
+  'hard-gaps',
+  'critical-findings',
+  'workspace-stability',
+]);
+
 function parseCheckSeverities(policy, policyPath) {
   if (policy.checks === undefined || policy.checks === null) return {};
   if (typeof policy.checks !== 'object' || Array.isArray(policy.checks)) {
@@ -28,6 +59,11 @@ function parseCheckSeverities(policy, policyPath) {
     if (!CHECK_SEVERITIES.has(config.severity)) {
       throw new Error(
         `Invalid harness policy ${policyPath}: checks.${id}.severity must be advisory, warn, or enforce (got ${config.severity})`
+      );
+    }
+    if (config.severity === 'advisory' && NON_ADVISORY_CHECK_IDS.has(id)) {
+      throw new Error(
+        `Invalid harness policy ${policyPath}: checks.${id}.severity cannot be advisory — ${id} is a gating verify check whose failure must reach the evidence outcome; use warn to degrade it instead`
       );
     }
     severities[id] = config.severity;

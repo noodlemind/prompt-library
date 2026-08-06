@@ -14,7 +14,27 @@ import { rankLearnings, explainLearnings } from './knowledge/retrieve.mjs';
 import { readStoreConfig, storeDir } from './knowledge/store.mjs';
 import { consolidateStatus } from './knowledge/consolidate.mjs';
 import { deriveGitContext } from './git-context.mjs';
-import { redactRecallEntry } from './secret-scan.mjs';
+import { redactRecallEntry, redactSecrets } from './secret-scan.mjs';
+import { inertLine } from './knowledge/store.mjs';
+
+// The `--json` lane's copy of the git context. buildContextPack already
+// redacts, flattens, and caps the branch name before rendering it into the
+// pack (a fork checkout's ref name is attacker-influenced), and the session
+// keeps the RAW value because resolveWriteLayer compares it against live git
+// state — but `orient --json` returned the raw object straight to its
+// consumer, with no redaction and no cap, plus the absolute worktree path.
+// Same treatment as the pack, at the boundary where the JSON copy is built.
+const ORIENT_BRANCH_CAP = 80;
+function jsonGitContext(gitContext) {
+  if (!gitContext) return null;
+  return {
+    branch: gitContext.branch ? inertLine(redactSecrets(String(gitContext.branch))).slice(0, ORIENT_BRANCH_CAP) : null,
+    branchKey: gitContext.branchKey,
+    detached: gitContext.detached,
+    headSha: gitContext.headSha,
+    baseSha: gitContext.baseSha,
+  };
+}
 
 export function runOrient({ workspace, copilotHome, flags, query }) {
   const q = query || flags.query || '';
@@ -232,7 +252,7 @@ export function runOrient({ workspace, copilotHome, flags, query }) {
     contextPack: packRel,
     repoMap: repoMapRef,
     knowledgeDebt,
-    gitContext,
+    gitContext: jsonGitContext(gitContext),
     gateStatus: newSession.gateStatus,
     blockedReason: newSession.blockedReason,
     nextTools,

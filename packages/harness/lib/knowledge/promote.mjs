@@ -3,8 +3,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { storeDir, listLearnings, readGovernance } from './store.mjs';
 import { isActiveFm, MAX_OPS_PER_RUN } from './consolidate.mjs';
-import { bucketDirFor, readBucketMeta, listBuckets, bucketAncestryOk } from './overlay.mjs';
+import { bucketDirFor, readBucketMeta, listBuckets, bucketAncestryOk, isSafeBucketKey } from './overlay.mjs';
 import { deriveGitContext, isDetachedKey } from '../git-context.mjs';
+import { writeFileContained } from '../fs-safe.mjs';
 
 /**
  * `harness knowledge promote` (blueprint §5): emits a REVIEWABLE op-set at
@@ -51,10 +52,11 @@ export function buildPromotionOps({ workspace, home, branchKey = null, ids = nul
     return { pass: false, exitCode: 2, opsPath: null, ops: 0, remaining: 0, skipped: [], blockedReason: 'no branch bucket resolvable — pass --branch <key> (see harness knowledge status)' };
   }
   // Path-safety: a bucket key is a plain directory name under branches/,
-  // never a path — same shape check apply.mjs enforces on the promotion
-  // envelope's branchKey, applied here so an explicit --branch value can
-  // never traverse outside the store via bucketDirFor's path.join.
-  if (/[\\/]|\.\./.test(key) || key === '.' || path.isAbsolute(key)) {
+  // never a path — ONE shared shape check (isSafeBucketKey, overlay.mjs) that
+  // apply.mjs re-derives on the promotion envelope's branchKey at write time,
+  // so an explicit --branch value can never traverse outside the store via
+  // bucketDirFor's path.join and the emitter/writer can never drift.
+  if (!isSafeBucketKey(key)) {
     return { pass: false, exitCode: 2, opsPath: null, ops: 0, remaining: 0, skipped: [], blockedReason: `invalid branch key ${key} — bucket keys are plain directory names (see harness knowledge status)` };
   }
   if (isDetachedKey(key)) {
@@ -162,9 +164,23 @@ export function buildPromotionOps({ workspace, home, branchKey = null, ids = nul
     promotion: { branchKey: key, meta: bucketMeta, digest: promotionDigest(chunk) },
     ops: chunk,
   };
-  const opsFull = path.join(workspace, PROMOTE_OPS_REL);
-  fs.mkdirSync(path.dirname(opsFull), { recursive: true });
-  fs.writeFileSync(opsFull, JSON.stringify(opset, null, 2) + '\n', 'utf8');
+  // Contained, atomic write (fs-safe.mjs) — the same discipline every sibling
+  // workspace write uses. A symlinked `.harness/` (or any ancestor of it)
+  // must never let this op-set land outside the workspace, and a partially
+  // written op-set must never be readable by a concurrent `consolidate
+  // --apply`.
+  const written = writeFileContained(workspace, PROMOTE_OPS_REL, JSON.stringify(opset, null, 2) + '\n');
+  if (!written) {
+    return {
+      pass: false,
+      exitCode: 1,
+      opsPath: null,
+      ops: 0,
+      remaining: 0,
+      skipped,
+      blockedReason: `refused to write ${PROMOTE_OPS_REL} — a symlinked path component would place it outside the workspace`,
+    };
+  }
   log(`wrote ${PROMOTE_OPS_REL} (${chunk.length} op(s), ${remaining} remaining)`);
   return {
     pass: true,

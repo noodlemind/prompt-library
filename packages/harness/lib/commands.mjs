@@ -1487,6 +1487,9 @@ export async function cmdKnowledge(argv) {
       branchKey: flags.branch,
       merged: flags.merged,
       staleDays: flags.stale,
+      // Deleting a bucket that still holds ACTIVE, unpromoted learnings is a
+      // destructive human decision — prune previews it and refuses without --yes.
+      yes: flags.yes,
       log: logger,
     });
     writeEvent(workspace, flags, {
@@ -1499,19 +1502,33 @@ export async function cmdKnowledge(argv) {
     });
     if (flags.json) {
       emitJson(flags, result);
-    } else if (!result.pass) {
-      for (const l of ui.errorBlock({ code: 'E_USAGE', message: result.blockedReason, exit: result.exitCode })) {
-        console.error(l);
-      }
     } else {
-      console.log(
-        ui.line({
-          state: 'warn',
-          key: 'prune',
-          value: `${result.removed.length} bucket(s) removed`,
-          note: result.removed.join(' · '),
-        })
-      );
+      // The per-bucket preview prints on BOTH paths — it is what a human needs
+      // in order to decide whether to re-run with --yes, and what a human
+      // deserves to see after a prune that did land. `p.branch` is already
+      // redacted/flattened/capped at the data boundary (safeBranchName).
+      for (const p of result.preview || []) {
+        console.log(
+          ui.paint(
+            'muted',
+            `  ${p.key}${p.branch ? ` (${p.branch})` : ''} — ${p.active ?? '?'} active · ${p.promoted ?? '?'} promoted · ${p.total ?? '?'} total`
+          )
+        );
+      }
+      if (!result.pass) {
+        for (const l of ui.errorBlock({ code: 'E_USAGE', message: result.blockedReason, exit: result.exitCode })) {
+          console.error(l);
+        }
+      } else {
+        console.log(
+          ui.line({
+            state: 'warn',
+            key: 'prune',
+            value: `${result.removed.length} bucket(s) removed`,
+            note: result.removed.join(' · '),
+          })
+        );
+      }
     }
     return result.exitCode;
   }

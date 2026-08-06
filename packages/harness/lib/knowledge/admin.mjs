@@ -351,7 +351,32 @@ export function absorbHandEdits({ workspace, home, log = () => {} }) {
   // date) — the model-lane recency gate (overridesGovernanceRecency,
   // apply.mjs) needs finer-than-a-day resolution.
   const governanceAt = new Date().toISOString();
+  // A BUCKET-SCOPED DELETION MUST NOT WRITE A STORE-WIDE DECISION (P1). The
+  // porcelain path a deletion is derived from names its layer, but the id
+  // recorded here is the bare `<domain>/<slug>` — and a governance `retire`
+  // binds BOTH layers (§4) and survives `consolidate --rebuild`. So deleting a
+  // throwaway branch copy used to permanently retire the golden claim of the
+  // same name. Same guard purgeEpisode already applies to its own cascade
+  // ("record dropped only once no layer holds it"), stated the same way here:
+  // only a deletion that leaves NO layer holding the id is a retirement of the
+  // id. The mirror sweep is scoped separately — it mirrors GOLDEN, so it keys
+  // off whether golden still holds the id, not whether any layer does.
+  const goldenIds = new Set(listLearnings(dir).map((l) => l.id));
+  const survivingIds = new Set([
+    ...goldenIds,
+    ...listBuckets(dir).flatMap((b) => {
+      try {
+        return listLearnings(b.dir).map((l) => l.id);
+      } catch {
+        return [];
+      }
+    }),
+  ]);
   for (const id of deleted) {
+    if (survivingIds.has(id)) {
+      log(`hand-edit absorb: ${id} removed from one layer but still held by another — no store-wide retire recorded`);
+      continue;
+    }
     appendGovernance(dir, { id, action: 'retire', reason: 'hand deletion (absorbed)', to: null, at: governanceAt });
   }
   rebuildIndex(dir);
@@ -379,8 +404,11 @@ export function absorbHandEdits({ workspace, home, log = () => {} }) {
     // `deleted` names the ids a human removed directly (git status "D") —
     // human deletion must win in the mirror too, so those ids are named via
     // retiredIds even though the store itself has already forgotten them by
-    // the time this runs (same reasoning as purgeAll/rebuildStore).
-    mirrorLearnings({ workspace, home, log, retiredIds: deleted });
+    // the time this runs (same reasoning as purgeAll/rebuildStore). Scoped to
+    // ids GOLDEN no longer holds: the mirror only ever carries golden
+    // learnings, so a bucket-only deletion must not sweep the golden copy's
+    // mirror file.
+    mirrorLearnings({ workspace, home, log, retiredIds: deleted.filter((id) => !goldenIds.has(id)) });
   } catch {
     // best effort — a mirror failure must never block absorb.
   }

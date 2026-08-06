@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import { storeDir, listLearnings, readStoreConfig } from './store.mjs';
-import { isActiveFm } from './consolidate.mjs';
-import { listBuckets, bucketAncestryOk } from './overlay.mjs';
+import { isActiveFm, bucketCounts } from './consolidate.mjs';
+import { listBuckets, bucketAncestryOk, safeBranchName } from './overlay.mjs';
 import { deriveGitContext, isDetachedKey } from '../git-context.mjs';
 import { indexStatus } from '../index-status.mjs';
 
@@ -27,7 +27,7 @@ export function knowledgeStatus({ workspace, copilotHome, home } = {}) {
   try {
     const derived = deriveGitContext({ workspace, home });
     if (derived.branch || derived.detached) {
-      context = { branch: derived.branch, branchKey: derived.branchKey, detached: derived.detached };
+      context = { branch: safeBranchName(derived.branch), branchKey: derived.branchKey, detached: derived.detached };
     }
   } catch {
     context = null;
@@ -53,15 +53,14 @@ export function knowledgeStatus({ workspace, copilotHome, home } = {}) {
   const buckets = [];
   if (storeExists) {
     for (const { key, dir: bucketDir, meta } of listBuckets(dir)) {
+      // ONE occupancy predicate, shared with `knowledge prune`'s confirmation
+      // gate (bucketCounts, consolidate.mjs) — the two used to disagree about
+      // which buckets held live work.
       let active = 0;
       let total = 0;
       let promoted = 0;
       try {
-        for (const l of listLearnings(bucketDir)) {
-          total += 1;
-          if (l.fm.promoted_to_golden) promoted += 1;
-          else if (isActiveFm(l.fm)) active += 1;
-        }
+        ({ active, promoted, total } = bucketCounts(listLearnings(bucketDir)));
       } catch {
         // unreadable bucket — counts stay zero, the row still surfaces
       }
@@ -71,7 +70,7 @@ export function knowledgeStatus({ workspace, copilotHome, home } = {}) {
         : null;
       buckets.push({
         key,
-        branch: typeof meta?.branch === 'string' ? meta.branch : null,
+        branch: safeBranchName(meta?.branch),
         baseSha: typeof meta?.baseSha === 'string' ? meta.baseSha : null,
         createdAt,
         ageDays,

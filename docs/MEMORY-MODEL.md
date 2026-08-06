@@ -371,10 +371,18 @@ comment:
   `E_EXISTS`/`E_TARGET` strike when they fire against a genuine ON-DISK collision: a dedup
   miss (an `ADD`/`MERGE` id that already exists), a target that does not exist, or a `MERGE`
   target that is not active. Each records one failure entry per rejected episode, keyed on
-  `path@sha256`, in the store's ledger.
-- **Run-level** — `E_MODE`, `E_DELTA_CONTRACT`, `E_LOCKED`, `E_APPLY_FAILED` never strike:
-  they say nothing about any one op's episodes. Neither does `E_DOMAIN_CAP` — cap pressure is
-  a run-level resource limit, not a defect in the episodes behind it.
+  `path@sha256`, in the store's **root** ledger — strikes and quarantine markers are
+  STORE-GLOBAL, never per-bucket, even when the learning OUTCOME is routed to a branch
+  layer. Three strikes is a control over an episode, and a provenance-less episode is
+  eligible in every branch lane, so a per-bucket count would reset simply by switching
+  branches; recording at the root is also what makes `consolidate --status` and doctor K2
+  report a quarantine from every lane rather than only the one that raised it.
+  An op listing the same `path@sha256` more than once is rejected outright (`E_SCHEMA`) —
+  duplicate links inflate `verifiedFixLinks` (the protected-target threshold) and
+  `verifiedAndPlans` (promotion eligibility) from one episode file.
+- **Run-level** — `E_MODE`, `E_DELTA_CONTRACT`, `E_LOCKED`, `E_APPLY_FAILED`, `E_LAYER`
+  never strike: they say nothing about any one op's episodes. Neither does `E_DOMAIN_CAP` —
+  cap pressure is a run-level resource limit, not a defect in the episodes behind it.
 - **Composition** — the SAME `E_EXISTS`/`E_TARGET` codes, raised instead when a SIBLING op
   earlier in the SAME run already claimed the id/target — including a `SUPERSEDE`/`MERGE`
   reusing a target an earlier `STRENGTHEN` in this run already touched — never strike. The
@@ -660,11 +668,34 @@ The approved [Harness Evolution Blueprint](../knowledge/proposals/harness-evolut
   `LEARNING_BYTE_CAP` check excludes the provenance lines from the measured size, so a
   near-cap learning gaining provenance can never trip `E_BYTE_CAP` or a quarantine strike.
 - **Write routing** is derived from git context AT WRITE TIME: feature branch →
-  bucket; default branch → golden; detached → detached bucket; `--layer golden` is an
-  explicit, logged override. Default-branch resolution is store `config.json`
-  `defaultBranch` → `origin/HEAD` → unresolved, and an unresolved default fails closed TO
-  BRANCH-LOCAL, never golden (doctor K7 surfaces it). The orient-recorded branch is
-  advisory only — a write whose HEAD disagrees warns.
+  bucket; default branch → golden; detached → detached bucket. Default-branch resolution is
+  store `config.json` `defaultBranch` → `origin/HEAD` → unresolved, and an unresolved
+  default fails closed TO BRANCH-LOCAL, never golden (doctor K7 surfaces it). The
+  orient-recorded branch is advisory only — a write whose HEAD disagrees warns.
+- **Layer containment (what the boundary is, and what it is not).** "Promotion is the only
+  branch → golden route" is a containment claim, so the flag that bypasses routing is
+  gated like every other human-authority path in this store: `--layer golden` is an
+  explicit, logged override that requires the human-presence signal — a live human
+  (`harness remember`'s internal `humanPresent`, which the ops JSON can never assert) or an
+  explicit `--yes` after a person reviewed the ops file. Without it the run is refused with
+  `E_LAYER`; an unattended agent cannot grant itself golden. `--layer branch` is refused
+  outright rather than silently ignored: branch routing is derived, and there is nothing
+  for a flag to override.
+  An episode's `branch:` frontmatter is a DIFFERENT kind of thing and must not be read as
+  part of that boundary: it is an ACCIDENT-PREVENTION signal (it keeps unrelated branch
+  work from drifting into the golden lane), not a security control. It is written by the
+  agent that captured the episode, nothing verifies it against git, and per-layer
+  eligibility (`episodeEligibleForLayer`) trusts it as-is. A dishonest `branch:` can route
+  an episode into the golden CANDIDATE set; what it cannot do is write golden — that still
+  requires standing on the default branch, or the human-gated override above, or promotion.
+- **Governance is store-wide, so a branch lane never speaks for golden.** The governance
+  ledger binds both layers, which means a branch-local write must not append a decision
+  that resolves for golden. Two consequences: a re-teach landing in a BUCKET does not
+  append the `confirm` that would retract a standing golden `retire` (the standing decision
+  is reapplied to the bucket copy instead, and the CLI says so); and a hand-DELETE of a
+  bucket learning records a governance `retire` only when NO layer still holds that id —
+  the same guard `knowledge purge` already applies to its own cascade. Deleting a throwaway
+  branch copy is not a retirement of the golden claim of the same name.
 - **Read overlay.** Retrieval and the knowledge eval share one overlay
   (`overlay.mjs`): golden actives ∪ current-branch bucket actives; a branch-local claim
   shadows a same-id golden claim UNLESS the golden claim is protected (≥3 verified
@@ -681,11 +712,27 @@ The approved [Harness Evolution Blueprint](../knowledge/proposals/harness-evolut
   `consolidate --rebuild --yes` re-derivation enforces; rebuild wipes each bucket's
   learnings/ledger too, keeping `meta.json` as the layer identity).
 - **Promotion** (`harness knowledge promote`) emits a reviewable, digest-bound op-set at
-  `.harness/promote-ops.json`; only `consolidate --apply` in promotion mode applies it.
+  `.harness/promote-ops.json` (a contained, atomic `fs-safe` write like every other
+  workspace write); only `consolidate --apply` in promotion mode applies it.
   Promotion ops are exempt from golden candidacy — evidence re-validates from the sha256s
   recorded at branch-apply time, never working-tree presence; promotion rejections never
   record quarantine strikes; a shadow-of-golden maps to SUPERSEDE (STRENGTHEN when the
   overlap is episodes-only); a protected golden target rejects and is marked disputed.
+  **The ops file is a plain JSON file anyone can hand-author, and its digest is computed by
+  whoever wrote it — so every admission gate is re-derived by the SOLE WRITER at write
+  time, never inherited from the emitter**: the bucket key must be a plain directory name
+  (one shared `isSafeBucketKey` definition — no separators, `..`, `.`, absolute path,
+  control character, or `:` drive/ADS shape), the bucket must not be a `detached-*` key,
+  its recorded base must not be provably non-ancestral to HEAD (re-read from the bucket's
+  own `meta.json`, never the envelope's copy), and each source must still be an ACTIVE,
+  unpromoted bucket learning (a fresh golden write carries `superseded_by: null`, so an
+  ungated promotion would strip a tombstone en route).
+  **Evidence is copied from the source, never described by the op.** An op selects WHICH
+  recorded episodes to carry; `kind` and `plan` are taken from the source learning's own
+  records. Re-labelling a recorded `insight` as `kind: fix` used to be enough to make a
+  promoted claim read as verified fixes across distinct plans — which is simultaneously
+  the promotion-eligibility signal and the PROTECTED-target signal — i.e. an insight-only
+  claim could launder itself into permanently protected golden knowledge.
   Success tombstones each source `promoted_to_golden:` (a retrieval exclusion alongside
   `promoted_to`) and records **`absorb-branch`** in the governance ledger — an AUDIT
   action: `readGovernance`'s replay considers only `retire`/`dispute`/`confirm`/`promote`,
@@ -699,11 +746,26 @@ The approved [Harness Evolution Blueprint](../knowledge/proposals/harness-evolut
 - **Lifecycle.** `harness knowledge status` is the read-only layer report (golden
   per-domain counts, bucket rows with age/base/promotability/ancestry, recall-index
   drift); `harness knowledge prune [--branch <key>] [--merged] [--stale <days>]` deletes
-  buckets — human authority, never mode-gated, one store commit. Doctor K5 flags orphan
-  buckets (branch gone locally and on remotes), K6 flags bucket contents whose `branch:`
-  provenance disagrees with the bucket's meta. Branch renames auto-migrate a bucket to
-  the new key when exactly one gone-branch, ancestry-verified candidate exists; anything
-  ambiguous is left for `knowledge status`/K5 and manual prune.
+  buckets — human authority, never mode-gated, one store commit. **Prune previews and
+  confirms**: the selectors are not occupancy tests (a merged branch, a 30-day-old bucket,
+  or an explicitly named key can still hold live work), so prune and `knowledge status`
+  share ONE occupancy predicate. Every run prints a per-bucket preview (`active ·
+  promoted · total`) and any prune that would delete ACTIVE, unpromoted learnings is
+  refused without `--yes`; a bucket status calls prunable (nothing active) still prunes
+  unattended. Doctor K5 flags orphan buckets (branch gone locally and on remotes), K6 flags
+  bucket contents whose `branch:` provenance disagrees with the bucket's meta. Branch
+  renames auto-migrate a bucket to the new key when exactly one gone-branch,
+  ancestry-verified candidate exists; anything ambiguous is left for `knowledge status`/K5
+  and manual prune.
+- **Known gap (deferred, not fixed).** The human register is GOLDEN-ONLY: `harness
+  learnings`, `harness learnings --why <id>`, and `harness learning
+  <retire|dispute|confirm|promote> <id>` all read and write the store root, so a
+  branch-local learning is invisible to them — `--why` on a bucket id returns nothing and
+  `learning retire` reports `E_TARGET`. The layer-aware ways to act on bucket content
+  today are `knowledge status` (see it), `knowledge prune` (delete the bucket), a direct
+  hand edit in the store (absorbed, and now correctly scoped to its layer), or promotion
+  (move the claim to golden, where the register applies). Making the register layer-aware
+  is a larger change than this pass took on.
 
 Phase 3 (the optional tree-sitter structural index under
 `~/.harness/index/<repo-id>/structural/`) and Phase 4 (per-check verify severity via
@@ -711,6 +773,33 @@ policy v2 and the advisory `structural-expectations` check) are shipped. The str
 index is derived state, never knowledge: it lives outside this store, carries no
 governance, and is freely deletable and rebuildable — nothing else on this page applies
 to it.
+
+### `advisory` is not available for a gating verify check (human decision)
+
+Per-check severity has three values, and they are not three shades of the same thing.
+`enforce` fails verification, `warn` degrades a failure to `inconclusive` (still a non-zero
+exit under enforce), and `advisory` removes the check from the outcome ENTIRELY —
+`resolveOutcome` filters advisory checks out before deciding, so an advisory failure leaves
+`outcome: passed` in the evidence artifact that `harness gate` and `harness compound` trust
+(`validateEvidence` gates only on `outcome !== 'passed'`). Downgrading a real gate to
+advisory therefore does two things at once: it opens the gate on a genuine violation, and
+it mints a "verified" fix episode from a run that never verified — evidence that then feeds
+promotion eligibility in this store.
+
+So `advisory` is refused, at policy load, for the built-in gating checks —
+`plan-selection`, `plan-schema`, `plan-readiness`, `plan-state`, `phase-tasks`,
+`criteria-evidence`, `scope`, `primitive-evidence`, `required-reviews`, `hard-gaps`,
+`critical-findings`, `workspace-stability` (`NON_ADVISORY_CHECK_IDS`, `lib/policy.mjs`) —
+with an error naming the check and pointing at `warn`. `advisory` remains available for
+checks whose built-in DEFAULT is advisory (today only `structural-expectations`) and for a
+project's own named checks in `checks.yaml` — a team's own command is theirs to mark
+advisory. `warn` remains available for every check. Existing v1 policies are unaffected.
+
+Advisory findings are also less-trusted DATA, not report text: they carry current-side repo
+symbols from a lexical extractor with no length bound of its own, and they are copied into
+`.harness/evidence/*.json` and `verify --json`. Every string reachable in an advisory
+failure is secret-redacted, flattened to one line, and capped (240 chars per string, 20
+entries per list, 50 findings) at the point the payload is collected.
 
 ## Related
 
