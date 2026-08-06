@@ -54,12 +54,12 @@ import {
   cmdResolve,
 } from './commands.mjs';
 import { cmdPlanNew } from './plan-new.mjs';
-import { parseFlags } from './flags.mjs';
+import { parseFlags, hasFlag } from './flags.mjs';
 import { resolveCopilotHome } from './paths.mjs';
 import { createEnvelope, createErrorEnvelope, STATUS } from './envelope.mjs';
 import { renderAgentLane, recordAgentLaneBytes } from './agent-lane.mjs';
 import { EVENT_TYPE, summarizeArgFlags } from './event-registry.mjs';
-import { createRedactor } from './redact.mjs';
+import { createRedactor, redactedJson } from './redact.mjs';
 
 const REGISTRY = new Map();
 
@@ -467,13 +467,19 @@ async function dispatchLane(entry, rest, ctx, lane, events) {
         redactor,
         inert: ctx.inert,
       });
-      process.stdout.write(`${rendered.text}\n`);
+      // Fix-wave Minor #11: `rendered.text` is already newline-terminated
+      // and that newline is inside `rendered.bytes` and the budget — write
+      // it verbatim so the metered agent_lane byte count equals the bytes
+      // actually emitted (pre-fix, a '\n' was appended here OUTSIDE the
+      // budget/metering).
+      process.stdout.write(rendered.text);
       if (events) recordAgentLaneBytes({ writeEvent: (record) => events.emit(record.type, { ...record, result: PENDING_RESULT }) }, entry.name, rendered.bytes);
     } else {
       // lane === 'json' (or any future lane this entry doesn't specialize
       // for) — the versioned envelope is always a safe default rendering.
-      // Redacted (see the fix comment above) before it ever reaches stdout.
-      console.log(JSON.stringify(redactor.redactValue(envelope)));
+      // Redacted (see the fix comment above) via the shared emission
+      // boundary before it ever reaches stdout.
+      console.log(redactedJson(envelope, { redactor }));
     }
     events?.emit(EVENT_TYPE.COMMAND_RESULT, commandResultPayload(STATUS.OK, Date.now() - startedAt, EXIT.ok));
     return EXIT.ok;
@@ -495,14 +501,16 @@ async function dispatchLane(entry, rest, ctx, lane, events) {
         redactor,
         inert: ctx.inert,
       });
-      process.stdout.write(`${rendered.text}\n`);
+      // Fix-wave Minor #11: same as the success branch — the newline lives
+      // inside the budgeted, metered text.
+      process.stdout.write(rendered.text);
       if (events) recordAgentLaneBytes({ writeEvent: (record) => events.emit(record.type, { ...record, result: PENDING_RESULT }) }, entry.name, rendered.bytes);
     } else {
       // Redacted for the same reason as the success branch above — an
       // error's `message`/`fix` is frequently built directly from caller
       // input (e.g. learnings' `no learning ${flags.why}`), so it carries
       // exactly the same secret-leak risk as the success envelope.
-      console.error(JSON.stringify(redactor.redactValue(errorEnvelope)));
+      console.error(redactedJson(errorEnvelope, { redactor }));
     }
     events?.emit(EVENT_TYPE.COMMAND_RESULT, commandResultPayload(status, Date.now() - startedAt, exit));
     return exit;
@@ -540,7 +548,7 @@ async function learningsResultOf(argv) {
   // THROWS instead of returning `{pass:false, ...}` — dispatchLane's catch
   // branch turns this into the unified error envelope with the SAME exit
   // codes cmdLearnings already returns for these cases (EXIT.usage / 1).
-  if (argv.includes('--why') && !flags.why) {
+  if (hasFlag(argv, '--why') && !flags.why) {
     throw usageError('usage: harness learnings --why <id>', 'harness learnings --why <id>');
   }
   if (flags.why) {
@@ -975,6 +983,14 @@ registerCommand({
   // reproduce the `--json` mention, since --json is a global flag, not one
   // of report's own).
   usage: '[--sync] [--global] [--check] [--json]',
+  // Fix-wave Important #8: same structural hazard as `events` (see
+  // dispatch()'s comment) — `report` READS events.jsonl (loadReportEvents),
+  // so instrumenting its own dispatch appends this invocation's pending
+  // command.start an instant before the handler reads the file: report
+  // observes its own not-yet-resolved event, and `--sync` then copies that
+  // phantom row into the global ~/.harness store where it skews every
+  // cross-workspace report thereafter. Opt out, exactly like `events`.
+  instrument: false,
   args: {
     positionals: [],
     flags: [

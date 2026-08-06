@@ -21,6 +21,7 @@
  * lib/registry.mjs's `ctx.output` dispatch) — it only builds the shapes.
  */
 import { EXIT } from './style.mjs';
+import { createRedactor, redactedJson } from './redact.mjs';
 
 export const ENVELOPE_SCHEMA_VERSION = 1;
 
@@ -147,11 +148,27 @@ const JSONL_EVENTS = new Set(['start', 'progress', 'row', 'result']);
  * `createEnvelope` uses — a `cancelled` terminal row and a `timed-out`
  * terminal row are always distinguishable from each other and from `failed`,
  * matching lib/runner.mjs's status contract end to end.
+ *
+ * Fix-wave C2: every assembled row passes through the shared redacting
+ * emission boundary (lib/redact.mjs#redactedJson) immediately before
+ * serialization — a row's fields routinely echo caller/check-supplied free
+ * text (a check's streamed output line, an error message), and this sink
+ * must never depend on each producer remembering to redact. One redactor
+ * instance per stream (injectable via `redactor` for deterministic tests);
+ * byte-identical rows for secret-free fields.
+ *
+ * Fix-wave P2 (JSONL backpressure): each `stream.write` return value is
+ * tracked, and `drained()` resolves once the stream is writable again (or
+ * immediately when it never went into backpressure). A producer — and the CLI
+ * before its hard exit — awaits `drained()` so a terminal `result` row written
+ * while the kernel pipe buffer was full is never discarded by `process.exit`.
  */
-export function createJsonlStream(stream, { schema = ENVELOPE_SCHEMA_VERSION } = {}) {
+export function createJsonlStream(stream, { schema = ENVELOPE_SCHEMA_VERSION, redactor } = {}) {
   if (!stream || typeof stream.write !== 'function') {
     throw new TypeError('createJsonlStream: stream with a write(chunk) method is required');
   }
+  const activeRedactor = redactor || createRedactor();
+  let lastWriteOk = true;
 
   function emit(event, fields = {}) {
     if (!JSONL_EVENTS.has(event)) {
@@ -160,7 +177,17 @@ export function createJsonlStream(stream, { schema = ENVELOPE_SCHEMA_VERSION } =
     if (event === 'result' && fields.status !== undefined) {
       assertKnownStatus(fields.status, 'createJsonlStream result row');
     }
-    stream.write(`${JSON.stringify({ schema, event, ...fields })}\n`);
+    // `write` returns false when the kernel buffer is full (backpressure). Keep
+    // the last result so a caller can await `drained()` before exiting.
+    lastWriteOk = stream.write(`${redactedJson({ schema, event, ...fields }, { redactor: activeRedactor })}\n`) !== false;
+  }
+
+  /** Resolve once the stream is writable again after backpressure — or
+   * immediately when the last write did not signal backpressure, or the sink
+   * has no event interface (a plain in-memory test sink). */
+  function drained() {
+    if (lastWriteOk || typeof stream.once !== 'function') return Promise.resolve();
+    return new Promise((resolve) => stream.once('drain', resolve));
   }
 
   return {
@@ -169,5 +196,6 @@ export function createJsonlStream(stream, { schema = ENVELOPE_SCHEMA_VERSION } =
     row: (fields) => emit('row', fields),
     result: (fields) => emit('result', fields),
     write: emit,
+    drained,
   };
 }

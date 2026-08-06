@@ -3,6 +3,7 @@ import fs from 'fs';
 import path from 'path';
 import { ensureHarnessDir, readSession } from './session.mjs';
 import { summarizeUsage } from './token-meter.mjs';
+import { createRedactor } from './redact.mjs';
 
 export const EVENTS_FILE = 'events.jsonl';
 export const EVENTS_DEFAULT_LIMIT = 20;
@@ -114,8 +115,20 @@ export function writeEvent(workspace, flags, payload) {
     if (payload[field] !== undefined) event[field] = payload[field];
   }
 
-  fs.appendFileSync(eventPath(workspace), JSON.stringify(event) + '\n', 'utf8');
-  return event;
+  // Fix-wave C3: redact the FULLY ASSEMBLED event — including the
+  // host/actor/session metadata this function stamps AFTER the event
+  // registry's payload-only redaction (lib/event-registry.mjs), and
+  // including object keys (lib/redact.mjs walks those too) — immediately
+  // before the append. Verified pre-fix leak: `HARNESS_HOST=token=<secret>`
+  // landed verbatim in events.jsonl via the `host` field above. This makes
+  // the event registry's own redaction a defense-in-depth layer rather than
+  // the only screen, and it covers every legacy writeEvent call site in
+  // lib/commands.mjs that never went through the registry at all. The
+  // redacted event is also what gets RETURNED, so no caller can re-emit the
+  // unredacted original. Byte-identical for secret-free events.
+  const safeEvent = createRedactor().redactValue(event);
+  fs.appendFileSync(eventPath(workspace), JSON.stringify(safeEvent) + '\n', 'utf8');
+  return safeEvent;
 }
 
 export function readEvents(workspace, options = 20) {

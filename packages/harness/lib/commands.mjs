@@ -2,7 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { execSync } from 'child_process';
-import { parseFlags } from './flags.mjs';
+import { parseFlags, hasFlag } from './flags.mjs';
 import { resolveCopilotHome, resolveIntelliJHome, pkgRootFromImportMeta } from './paths.mjs';
 import { readLock, writeLock, LOCK_NAME } from './lock.mjs';
 import {
@@ -26,6 +26,7 @@ import { installGlobalHarnessShim, configureShellPath, globalHarnessShimPath } f
 import { readSession, writeSession } from './session.mjs';
 import { loadPolicy } from './policy.mjs';
 import { createStyle, keyWidthFor, clampNote, EXIT } from './style.mjs';
+import { redactedJson } from './redact.mjs';
 
 // One renderer per process, bound to stdout's real capabilities.
 // --no-color / NO_COLOR / non-TTY all degrade to the ascii surface.
@@ -82,8 +83,13 @@ function execSyncSafe(cmd, cwd) {
 
 // Compact JSON by default (fewer tokens for the agent to read); pretty-print
 // only under --verbose. Both are valid JSON for machine consumers.
+// Fix-wave C2: every legacy `--json` payload flows through the shared
+// redacting emission boundary (lib/redact.mjs#redactedJson) before it
+// reaches stdout — a `--why` id, an echoed query, or a check's captured
+// output can carry caller-supplied secrets, and this is the one choke point
+// for all of them. Byte-identical output for secret-free payloads.
 function emitJson(flags, obj) {
-  console.log(flags.verbose ? JSON.stringify(obj, null, 2) : JSON.stringify(obj));
+  console.log(redactedJson(obj, { pretty: flags.verbose }));
 }
 
 // Answer-first: a one-line verdict, then only the checks that did not pass,
@@ -186,8 +192,10 @@ export async function cmdInstallOrUpgrade(command, argv) {
   }
 
   if (flags.json) {
+    // Fix-wave C2: same shared redacting boundary as emitJson (this call
+    // site pretty-prints unconditionally, its pre-existing shape).
     console.log(
-      JSON.stringify(
+      redactedJson(
         {
           command,
           version,
@@ -196,8 +204,7 @@ export async function cmdInstallOrUpgrade(command, argv) {
           vscode: allStats.vscode,
           intellij: allStats.intellij,
         },
-        null,
-        2
+        { pretty: true }
       )
     );
   } else {
@@ -358,7 +365,7 @@ export async function cmdIndex(argv) {
   const logger = (m) => log(flags, m);
 
   // Read-only freshness report — never rebuilds, zero model cost.
-  if (argv.includes('--status')) {
+  if (hasFlag(argv, '--status')) {
     const { indexStatus } = await import('./index-status.mjs');
     const status = indexStatus({ workspace, copilotHome });
     if (flags.json) emitJson(flags, status);
@@ -608,7 +615,25 @@ export async function cmdVerify(argv, ctx = {}) {
 
   const result = await runVerify({ workspace, flags, signal, onEvent });
   const cancelled = result.outcome === 'cancelled';
-  const exitCode = cancelled ? EXIT.cancelled : exitCodeForOutcome(result.outcome, result.enforcement);
+  // Fix-wave Important #5: explicit run-outcome precedence for the exit
+  // code — cancelled (130) > timed-out (8) > the enforcement mapping.
+  // Pre-fix, a run whose checks timed out fell through to
+  // `outcome: inconclusive` -> exit 2, while the SAME run's jsonl terminal
+  // row said `status: timed-out` — EXIT.timedOut and its command.result
+  // telemetry were unreachable. `timed-out` maps BEFORE the enforcement
+  // mapping on purpose: enforcement modes (observe/warn) downgrade policy
+  // VERDICTS, but a timeout means verification never completed — there is
+  // no verdict to downgrade, and masking it as exit 0/2 loses the one
+  // signal that distinguishes "ran out of time" from "checked and found
+  // inconclusive". The unified status comes from statusForVerifyResult
+  // (lib/verify.mjs) so the exit code, the jsonl terminal row, and
+  // command.result telemetry can never disagree.
+  const runStatus = statusForVerifyResult(result);
+  const exitCode = cancelled
+    ? EXIT.cancelled
+    : runStatus === 'timed-out'
+      ? EXIT.timedOut
+      : exitCodeForOutcome(result.outcome, result.enforcement);
 
   const previous = readSession(workspace) || {};
   writeSession(
@@ -636,12 +661,17 @@ export async function cmdVerify(argv, ctx = {}) {
 
   if (streaming) {
     jsonl.result({
-      status: statusForVerifyResult(result),
+      status: runStatus,
       outcome: result.outcome,
       exitCode,
       evidencePath: result.evidencePath,
       checks: result.checks.map((c) => ({ id: c.id, status: c.status, unifiedStatus: unifiedStatusForCheck(c) })),
     });
+    // Fix-wave P2 (JSONL backpressure): await the stream draining the terminal
+    // result row before returning — the CLI's hard process.exit must not race
+    // ahead of a row buffered under backpressure (bin/harness.mjs also flushes
+    // stdout before exit as a second guarantee).
+    await jsonl.drained();
     return exitCode;
   }
 
@@ -678,7 +708,7 @@ export async function cmdVerify(argv, ctx = {}) {
 export async function cmdRecall(argv) {
   const { runRecall } = await import('./recall-cmd.mjs');
   const flags = parseFlags(argv);
-  if (argv.includes('--include-plans')) flags.includePlans = true;
+  if (hasFlag(argv, '--include-plans')) flags.includePlans = true;
   const workspace = path.resolve(flags.workspace);
   const copilotHome = resolveCopilotHome(flags.copilotHome);
   const result = runRecall({ workspace, copilotHome, flags, argv });
@@ -905,7 +935,7 @@ export async function cmdConsolidate(argv) {
   const copilotHome = resolveCopilotHome(flags.copilotHome);
   const logger = (m) => log(flags, m);
 
-  if (argv.includes('--apply')) {
+  if (hasFlag(argv, '--apply')) {
     const { applyOps } = await import('./knowledge/apply.mjs');
     if (!flags.ops) {
       throw Object.assign(new Error('--apply requires --ops <path> (the skill-emitted operations JSON)'), {
@@ -957,7 +987,7 @@ export async function cmdConsolidate(argv) {
     return result.exitCode;
   }
 
-  if (argv.includes('--candidates')) {
+  if (hasFlag(argv, '--candidates')) {
     const { consolidateCandidates } = await import('./knowledge/consolidate.mjs');
     const packet = consolidateCandidates({ workspace, copilotHome });
     writeEvent(workspace, flags, { type: 'consolidate', command: 'consolidate', result: 'pass', exitCode: 0 });
@@ -977,7 +1007,7 @@ export async function cmdConsolidate(argv) {
     return 0;
   }
 
-  if (argv.includes('--rebuild')) {
+  if (hasFlag(argv, '--rebuild')) {
     const { rebuildStore } = await import('./knowledge/admin.mjs');
     const { CONSOLIDATION_THRESHOLD } = await import('./knowledge/consolidate.mjs');
     const result = rebuildStore({ workspace, yes: flags.yes, copilotHome, log: logger });
@@ -1128,7 +1158,7 @@ export async function cmdLearnings(argv) {
   // A trailing bare --why (no id following it) must never silently fall
   // through to the full listing below — parseFlags leaves flags.why unset
   // when there's no next token to consume.
-  if (argv.includes('--why') && !flags.why) {
+  if (hasFlag(argv, '--why') && !flags.why) {
     const blockedReason = 'usage: harness learnings --why <id>';
     if (flags.json) {
       emitJson(flags, { pass: false, blockedReason });
@@ -1503,7 +1533,8 @@ export async function cmdUninstall(argv) {
     const message = 'no lock file — nothing to uninstall';
     const hint = 'harness install';
     if (flags.json) {
-      console.error(JSON.stringify({ ok: false, error: { code, message, hint, exit: 1 } }));
+      // Fix-wave C2: error envelopes are emission sinks too.
+      console.error(redactedJson({ ok: false, error: { code, message, hint, exit: 1 } }));
     } else {
       for (const l of ui.errorBlock({ code, message, fix: hint, exit: 1 })) console.error(l);
     }

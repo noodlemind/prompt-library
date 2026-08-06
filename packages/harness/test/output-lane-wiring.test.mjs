@@ -91,7 +91,9 @@ test('CLI: --output agent produces budgeted plain text, not JSON', () => {
   const result = runHarness(['status', '--workspace', workspace, '--copilot-home', copilotHome, '--output', 'agent']);
   assert.equal(result.status, 0, result.stderr);
   assert.doesNotMatch(result.stdout, /^\s*\{/);
-  assert.match(result.stdout, /^schema 1/);
+  // Minor #10: the agent lane opens with the untrusted-data fence.
+  assert.match(result.stdout, /^«untrusted-data»/);
+  assert.match(result.stdout, /\nschema 1\n/);
   assert.match(result.stdout, /command status/);
 });
 
@@ -100,7 +102,8 @@ test('CLI: --output=agent (equals-form) is honored, matching the rest of the har
   const copilotHome = tempDir('lane-eq-agent-home-');
   const result = runHarness(['status', '--workspace', workspace, '--copilot-home', copilotHome, '--output=agent']);
   assert.equal(result.status, 0, result.stderr);
-  assert.match(result.stdout, /^schema 1/);
+  assert.match(result.stdout, /^«untrusted-data»/);
+  assert.match(result.stdout, /\nschema 1\n/);
   assert.match(result.stdout, /command status/);
 });
 
@@ -164,7 +167,8 @@ test('CLI: --output before a literal `--` still works, proving the boundary chec
   const copilotHome = tempDir('lane-boundary-ok-home-');
   const result = runHarness(['status', '--workspace', workspace, '--copilot-home', copilotHome, '--output', 'agent', '--', 'ignored-literal']);
   assert.equal(result.status, 0, result.stderr);
-  assert.match(result.stdout, /^schema 1/);
+  assert.match(result.stdout, /^«untrusted-data»/);
+  assert.match(result.stdout, /\nschema 1\n/);
 });
 
 // --- lib/registry.mjs: dispatch/dispatchLane ctx.output branching ---------
@@ -182,7 +186,8 @@ test('dispatch: ctx.output "agent" renders budgeted plain text via dispatchLane'
   const copilotHome = tempDir('dispatch-agent-home-');
   const { code, stdout } = await withCapturedStdout(() => dispatch(['status', '--copilot-home', copilotHome], { output: 'agent' }));
   assert.equal(code, 0);
-  assert.match(stdout, /^schema 1/);
+  assert.match(stdout, /^«untrusted-data»/);
+  assert.match(stdout, /\nschema 1\n/);
 });
 
 test('dispatch: ctx.output omitted (or "ledger") runs the legacy handler untouched — every pre-P1.2 caller is unaffected', async () => {
@@ -197,7 +202,10 @@ test('dispatch: ctx.output omitted (or "ledger") runs the legacy handler untouch
 // --- Important-1 regression: error-path agent-lane rendering must be budgeted too ---
 
 test('dispatchLane error path honors entry.agentBudgetBytes, same as the success path (regression: budget was previously dropped on error)', async () => {
-  const budgetBytes = 40; // deliberately tiny — an unbudgeted render would blow past this immediately
+  // Deliberately small — enough for the untrusted-data fence skeleton plus a
+  // line or two; an unbudgeted render of the 500-char error would blow past
+  // this immediately.
+  const budgetBytes = 150;
   registerCommand({
     name: '__test-lane-error-budget',
     summary: 'test fixture for the error-path agent-lane budget regression',
@@ -212,13 +220,14 @@ test('dispatchLane error path honors entry.agentBudgetBytes, same as the success
 
   const { code, stdout } = await withCapturedStdout(() => dispatch(['__test-lane-error-budget'], { output: 'agent' }));
   assert.equal(code, 1);
-  // dispatchLane appends exactly one trailing '\n' after the budgeted text —
-  // strip it before measuring so this checks the RENDERED budget itself.
-  const rendered = stdout.endsWith('\n') ? stdout.slice(0, -1) : stdout;
+  // Minor #11: dispatchLane writes the rendered text VERBATIM — the trailing
+  // newline lives inside the budgeted, metered byte count, so stdout itself
+  // must honor the cap with nothing stripped.
   assert.ok(
-    Buffer.byteLength(rendered, 'utf8') <= budgetBytes,
-    `error-path agent-lane output (${Buffer.byteLength(rendered, 'utf8')} bytes) must honor agentBudgetBytes (${budgetBytes})`
+    Buffer.byteLength(stdout, 'utf8') <= budgetBytes,
+    `error-path agent-lane output (${Buffer.byteLength(stdout, 'utf8')} bytes) must honor agentBudgetBytes (${budgetBytes})`
   );
+  assert.match(stdout, /^«untrusted-data»/, 'the fence survives even at a tight error budget');
 });
 
 // --- Critical regression: the json-envelope lane must redact, same as agent ---
@@ -376,4 +385,30 @@ test('dispatch: ctx.output "ledger" (or omitted) is always accepted, regardless 
   const workspace = tempDir('dispatch-ledger-always-ok-ws-');
   const code = await dispatch(['gate', '--workspace', workspace, '--json'], { output: 'ledger' });
   assert.ok(Number.isInteger(code));
+});
+
+// --- Fix-wave Minor #11: metered bytes === written bytes -------------------
+//
+// Pre-fix, dispatchLane wrote `rendered.text + '\n'` but metered only
+// `rendered.bytes` — the trailing newline escaped both the budget and the
+// agent_lane telemetry, so the recorded byte count disagreed with what
+// actually hit stdout.
+
+test('CLI: the agent_lane event byte count equals the bytes actually written to stdout, newline included', () => {
+  const workspace = tempDir('lane-meter-ws-');
+  const copilotHome = tempDir('lane-meter-home-');
+  const result = runHarness(['status', '--workspace', workspace, '--copilot-home', copilotHome, '--output', 'agent']);
+  assert.equal(result.status, 0, result.stderr);
+  assert.ok(result.stdout.endsWith('\n'), 'the emitted text is newline-terminated (inside the budget)');
+
+  const eventsFile = path.join(workspace, '.harness', 'events.jsonl');
+  assert.ok(fs.existsSync(eventsFile), 'the agent lane run must have recorded events');
+  const rows = fs.readFileSync(eventsFile, 'utf8').trim().split('\n').map((line) => JSON.parse(line));
+  const metered = rows.find((r) => r.type === 'agent_lane');
+  assert.ok(metered, `expected an agent_lane metering event: ${JSON.stringify(rows)}`);
+  assert.equal(
+    metered.bytes,
+    Buffer.byteLength(result.stdout, 'utf8'),
+    'metered agent-lane bytes must equal the bytes actually emitted'
+  );
 });

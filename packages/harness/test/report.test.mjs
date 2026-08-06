@@ -252,3 +252,29 @@ test('report does not render a partial host usage event as a measured zero', () 
   assert.match(text, /input 150 · output unavailable · partial usage 1\/1 event/);
   assert.doesNotMatch(text, /^report\s+~0 tokens/m);
 });
+
+// --- Fix-wave Important #8: report must not observe its own dispatch -------
+//
+// `report` reads events.jsonl (loadReportEvents), and the dispatch pipeline
+// writes command.start BEFORE the handler runs — so an instrumented `report`
+// observed its own pending command.start on every invocation (the same
+// self-referential read-your-own-write class as the `events` command, fixed
+// earlier with instrument:false), and `--sync` could copy that phantom row
+// into the global store. The registry entry now opts out via
+// `instrument: false`, exactly like `events`.
+
+test('harness report leaves events.jsonl byte-identical — no self-observed command.start/command.result rows', () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-report-noinstr-'));
+  fs.mkdirSync(path.join(workspace, '.harness'), { recursive: true });
+  const events = [ev('orient', 's1', 300), ev('gate', 's1', 40)];
+  const eventsFile = path.join(workspace, '.harness', 'events.jsonl');
+  fs.writeFileSync(eventsFile, `${events.map(JSON.stringify).join('\n')}\n`);
+  const before = fs.readFileSync(eventsFile, 'utf8');
+
+  const res = spawnSync(process.execPath, [binPath, 'report', '--workspace', workspace, '--json'], { encoding: 'utf8' });
+  assert.equal(res.status, 0, res.stderr);
+
+  const after = fs.readFileSync(eventsFile, 'utf8');
+  assert.equal(after, before, 'report must not append its own dispatch telemetry to the file it is reading');
+  assert.doesNotMatch(after, /"command":"report"/, 'no report-command rows may exist');
+});

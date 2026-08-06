@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict';
+import { EventEmitter } from 'node:events';
+import { spawn } from 'node:child_process';
 import { test } from 'node:test';
 import { runProcess } from '../lib/runner.mjs';
 
@@ -223,3 +225,167 @@ test('throws on a malformed argv synchronously', () => {
   assert.throws(() => runProcess({ argv: [] }), TypeError);
   assert.throws(() => runProcess({ argv: 'not-an-array' }), TypeError);
 });
+
+// --- Fix-wave Important #6: abort after a failed spawn must not crash ------
+//
+// Verified pre-fix crash: spawning a nonexistent executable leaves
+// `child.pid` undefined ('error' fires asynchronously, no pid was ever
+// assigned); aborting in that window called killFn(undefined, ...) ->
+// process.kill(NaN) -> ERR_INVALID_ARG_TYPE thrown from inside the abort
+// listener, breaking the always-resolve contract.
+
+test('abort right after a failed spawn settles with a structured outcome — no ERR_INVALID_ARG_TYPE crash', async () => {
+  const controller = new AbortController();
+  const resultPromise = runProcess({
+    argv: ['/definitely/not/a/real/executable-harness-fixwave'],
+    signal: controller.signal,
+  });
+  // Pre-fix this abort() call itself threw (the listener runs synchronously
+  // inside it and killFn crashed on the invalid pid).
+  controller.abort();
+  const result = await resultPromise;
+  // The abort was observed before the spawn error surfaced, so the outcome
+  // is 'cancelled' — the point is that it SETTLES, structured, either way.
+  assert.equal(result.status, 'cancelled');
+  assert.equal(result.exitCode, null);
+  assert.equal(result.stdout, '');
+});
+
+test('a plain failed spawn (no abort) still settles as failed', async () => {
+  const result = await runProcess({ argv: ['/definitely/not/a/real/executable-harness-fixwave'] });
+  assert.equal(result.status, 'failed');
+  assert.equal(result.exitCode, null);
+});
+
+test('a throwing killFn never breaks the always-resolve contract', async () => {
+  const controller = new AbortController();
+  const resultPromise = runProcess({
+    argv: ['sleep', '0.4'],
+    signal: controller.signal,
+    killGraceMs: 50,
+    killFn: () => {
+      throw new Error('faulty termination primitive');
+    },
+  });
+  await delay(50);
+  controller.abort(); // pre-fix: the throw propagated out of the abort listener
+  // The child is never actually signalled (killFn throws every time, for
+  // SIGTERM and the SIGKILL escalation alike) — it simply finishes its short
+  // sleep, and the runner still settles with the cancelled outcome.
+  const result = await resultPromise;
+  assert.equal(result.status, 'cancelled');
+});
+
+// --- Fix-wave Important #7 (round 2): settlement AWAITS the group reap -------
+//
+// Pre-fix (round 1), a cancelled/timed-out run resolved on the direct child's
+// 'close' and only left an UNREF'd SIGKILL timer armed — so the CLI, which
+// awaits this promise and then calls process.exit, exited before the escalation
+// fired and a grandchild that ignored SIGTERM survived. A re-probe saw only
+// SIGTERM at exit, never the scheduled SIGKILL. The fix: the run does not
+// resolve 'cancelled'/'timed-out' until the whole process GROUP is confirmed
+// gone (past the SIGKILL escalation), bounded by groupReapTimeoutMs. Both tests
+// below assert settlement itself waits for the reap — neither relies on the
+// test's own event loop keeping the process alive for an unref'd timer.
+
+test('a cancelled run does not settle until the SIGKILL escalation has reaped the group (deterministic, injected probe)', async () => {
+  const calls = [];
+  const controller = new AbortController();
+  const fakeChild = new EventEmitter();
+  fakeChild.pid = 424242;
+  fakeChild.stdout = null;
+  fakeChild.stderr = null;
+
+  // The injected group probe reports the group ALIVE until a SIGKILL is
+  // delivered — modelling a grandchild that ignores SIGTERM. The run must keep
+  // polling and must NOT resolve until the escalation has actually taken
+  // effect.
+  let sigkilled = false;
+  const resultPromise = runProcess({
+    argv: ['fake-cmd'],
+    signal: controller.signal,
+    platform: 'linux',
+    killGraceMs: 100,
+    groupReapTimeoutMs: 5000,
+    spawnFn: () => fakeChild,
+    killFn: (pid, sig, plat) => {
+      calls.push({ pid, sig, plat });
+      if (sig === 'SIGKILL') sigkilled = true;
+    },
+    groupAliveFn: () => !sigkilled,
+  });
+
+  controller.abort(); // SIGTERM the group, arm the 100ms SIGKILL escalation
+  fakeChild.emit('close', null, 'SIGTERM'); // direct child dies immediately
+
+  // Pre-fix this resolved right here, with calls === ['SIGTERM'] and the
+  // SIGKILL escalation abandoned. Post-fix it resolves only after the group is
+  // reaped, i.e. after SIGKILL — no delay()/keep-alive from the test needed.
+  const result = await resultPromise;
+  assert.equal(result.status, 'cancelled');
+  assert.deepEqual(
+    calls.map((c) => c.sig),
+    ['SIGTERM', 'SIGKILL'],
+    'settlement must await the SIGKILL escalation — pre-fix it resolved on the direct-child close and abandoned it'
+  );
+  assert.equal(calls[1].pid, 424242, 'escalation targets the same process group');
+});
+
+test(
+  'a real grandchild that ignores SIGTERM is already SIGKILLed by the time the run settles (settlement awaits the reap, not the test loop)',
+  { skip: isWin32 ? 'POSIX process-group semantics only' : false },
+  async () => {
+    const controller = new AbortController();
+    let grandchildPid = null;
+    let signalPidSeen;
+    const pidSeen = new Promise((resolve) => {
+      signalPidSeen = resolve;
+    });
+
+    // The grandchild installs a SIGTERM handler and detaches from the stdio
+    // pipes (so the parent's 'close' fires the moment the parent dies —
+    // exactly the pre-fix regression window). `exec` makes $! the node pid.
+    const grandchildScript = "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);";
+    const killGraceMs = 400;
+    const resultPromise = runProcess({
+      argv: [
+        '/bin/sh',
+        '-c',
+        `(exec "${process.execPath}" -e "${grandchildScript}" >/dev/null 2>&1) & echo $!; wait`,
+      ],
+      signal: controller.signal,
+      killGraceMs,
+      onStdout: (chunk) => {
+        const match = chunk.match(/(\d+)/);
+        if (match && grandchildPid === null) {
+          grandchildPid = Number(match[1]);
+          signalPidSeen();
+        }
+      },
+    });
+
+    await pidSeen;
+    // Give the grandchild time to boot node and install its SIGTERM handler.
+    await delay(500);
+    assert.ok(processExists(grandchildPid), 'precondition: the grandchild is alive before we cancel');
+    controller.abort();
+
+    const result = await resultPromise; // parent sh dies to SIGTERM -> close fires
+    assert.equal(result.status, 'cancelled');
+    // The whole point: settlement waited for the group reap, so by the time the
+    // await returns the SIGTERM-ignoring grandchild is ALREADY gone. Asserted
+    // immediately, with the test doing nothing to keep the loop alive — pre-fix
+    // this fired while the grandchild was still very much alive (the escalation
+    // was abandoned once the owning process would have exited).
+    assert.ok(
+      !processExists(grandchildPid),
+      `grandchild pid ${grandchildPid} must be reaped BEFORE the run settles`
+    );
+    // And it genuinely went through the SIGKILL grace (it ignored SIGTERM), so
+    // settlement spanned at least the grace period rather than resolving early.
+    assert.ok(
+      result.durationMs >= killGraceMs - 100,
+      `settlement (${result.durationMs}ms) must span the SIGKILL grace (${killGraceMs}ms) — proof the escalation path ran`
+    );
+  }
+);

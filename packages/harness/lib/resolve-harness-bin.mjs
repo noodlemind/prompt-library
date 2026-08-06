@@ -129,7 +129,12 @@ if (!target) {
 }
 
 const args = process.argv.slice(2);
-const hasWorkspace = args.includes('--workspace');
+// Fix-wave C1: honor the literal-argument boundary — a --workspace appearing
+// after a bare -- is free-text content, not a flag, so it must not suppress
+// the default --workspace injection (same rule as lib/flags.mjs#hasFlag).
+const boundary = args.indexOf('--');
+const flagArgs = boundary === -1 ? args : args.slice(0, boundary);
+const hasWorkspace = flagArgs.includes('--workspace');
 const finalArgs = hasWorkspace ? args : [...args, '--workspace', workspace];
 const spawnArgs = target.args.length
   ? [...target.args, ...finalArgs]

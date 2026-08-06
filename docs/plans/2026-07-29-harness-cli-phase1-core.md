@@ -97,6 +97,15 @@ This plan modifies one existing primitive — the `harness-tool-contract.md` ref
 - Verification expectations: the `prompt-contracts` named check pins the tool-contract truths, with `harness-tests` covering the behavior the doc describes; both green in this plan's evidence.
 - Registry and documentation impact: the edit is itself the documentation impact (envelope-versioning note, registry-as-truth wording, accurate event columns and opt-outs); no capability-registry entries change.
 
+## External Review (Codex) — hardening rounds
+
+Two Codex adversarial reviews after the internal final review found real gaps the in-house chain missed (root cause: redaction was wired per-new-output-lane; no component made it universal, and the legacy `--json`/JSONL serializers plus the event-metadata path leaked). All findings across both rounds are fixed and internally verified:
+
+- **Round 1 (3 Critical + 8):** legacy `--json`/JSONL/events-sink redaction, object-key redaction, `--` boundary in `parseFlags`, timeout→exit 8, runner PID-guard + grandchild escalation, `report` self-instrumentation, verify live-streaming, agent-lane fence/metering. Codex round-2 confirmed 8/11 fixed.
+- **Round 2 (3 partial + 7 new):** `--` missing-value/top-level edges, SIGKILL group-settlement race, agent-lane fence injection, multi-line PEM streaming leak, human/ledger + debug-stack leak (now in scope per user decision — AC6 is an absolute guarantee), `toJSON` redaction bypass (closed with a final serialize-then-`redactText` string pass), `report --sync` re-persistence, `__proto__` byte-identity, JSONL backpressure, quadratic UTF-8 clip. All 10 fixed with 22 net-new regression tests and per-finding evasion probes; suite 919/919.
+
+**Verification status (honest):** all headline bypasses re-verified by the controller (`toJSON`, `--`-boundary, `bogus -- --json`, ledger `--why` secret, `__proto__` survival, secret-free byte-identity) and by the implementer's own evasion probes. The **third** independent Codex certification could not run — the Codex CLI's OAuth token expired (401) mid-session. The last independent third-party confirmation is Codex round 2 (8/11); the round-2 residuals + new findings are controller-verified, not Codex-re-certified. Re-run `codex login` then a third Codex pass to close that gap if independent certification is required before merge.
+
 ## Technical Notes
 
 - Registry entries declare: name, args schema, side-effect class, required capabilities, output modes. This metadata is what Phase 3 policy and Phase 4 journal consume — design it as data, not convention.

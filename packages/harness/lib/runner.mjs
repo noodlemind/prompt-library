@@ -28,6 +28,13 @@ import { spawn, spawnSync } from 'node:child_process';
 
 export const DEFAULT_MAX_BUFFER = 2 * 1024 * 1024; // 2 MiB
 export const DEFAULT_KILL_GRACE_MS = 2000;
+// Fix-wave Important #7 (round 2): after termination begins on POSIX, how long
+// to keep confirming the process GROUP has actually died (past the SIGKILL
+// escalation) before settling anyway. The always-resolve contract still holds
+// — this only bounds the wait so a truly un-reapable group can never hang the
+// run forever.
+export const DEFAULT_GROUP_REAP_TIMEOUT_MS = 5000;
+const GROUP_REAP_POLL_MS = 50;
 
 /** Bounded text accumulator: stops growing past maxBuffer, clipped at the
  * last line boundary at/before the limit so a caller never sees a
@@ -82,6 +89,26 @@ function defaultKill(pid, signal, platform) {
 }
 
 /**
+ * Default POSIX liveness probe for a process GROUP: signal 0 to the negative
+ * pid succeeds while the group has any member and throws ESRCH once it is
+ * empty. EPERM means the group exists but isn't ours to signal — treat as
+ * alive (conservative: never declare a still-present group dead). win32 has no
+ * addressable process group here (termination is taskkill /F, synchronous), so
+ * there is nothing to poll.
+ */
+function defaultGroupAlive(pid, platform) {
+  if (platform === 'win32') return false;
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(-pid, 0);
+    return true;
+  } catch (error) {
+    if (error.code === 'EPERM') return true;
+    return false;
+  }
+}
+
+/**
  * Run one process asynchronously. Never rejects for process outcomes — see
  * the module doc comment for the result shape and status contract.
  *
@@ -102,7 +129,16 @@ function defaultKill(pid, signal, platform) {
  * @param {NodeJS.Platform} [options.platform] - injectable for exercising
  *   the win32 termination path from any host.
  * @param {(pid: number, signal: string, platform: string) => void} [options.killFn] - injectable termination primitive.
+ * @param {(pid: number, platform: string) => boolean} [options.groupAliveFn] -
+ *   injectable process-group liveness probe (fix-wave Important #7). Defaults
+ *   to a real POSIX `kill(-pid, 0)` probe ONLY when `killFn` is the default
+ *   (real) terminator; a test that stubs `killFn` but not this keeps the
+ *   pre-#7 immediate-settle behavior, since it is simulating signals, not a
+ *   live OS group.
  * @param {number} [options.killGraceMs] - SIGTERM→SIGKILL grace period (POSIX only).
+ * @param {number} [options.groupReapTimeoutMs] - bound on how long a
+ *   cancelled/timed-out run waits for the group to be confirmed gone before
+ *   settling anyway (POSIX only).
  * @returns {Promise<{status: 'ok'|'failed'|'cancelled'|'timed-out', exitCode: number|null, signalName: string|null, durationMs: number, stdout: string, stderr: string, truncated: boolean}>}
  */
 export function runProcess({
@@ -118,7 +154,9 @@ export function runProcess({
   now = () => Date.now(),
   platform = process.platform,
   killFn = defaultKill,
+  groupAliveFn,
   killGraceMs = DEFAULT_KILL_GRACE_MS,
+  groupReapTimeoutMs = DEFAULT_GROUP_REAP_TIMEOUT_MS,
 } = {}) {
   if (!Array.isArray(argv) || argv.length === 0 || !argv.every((part) => typeof part === 'string')) {
     throw new TypeError('runProcess: argv must be a non-empty array of strings');
@@ -133,14 +171,60 @@ export function runProcess({
     let settled = false;
     let timeoutTimer = null;
     let killGraceTimer = null;
+    let groupReapTimer = null;
     // Set once cancellation/timeout is requested; wins over whatever exit
     // code the killed tree happens to report (AC4/AC5 hard contract).
     let outcomeStatus = null;
 
+    // Fix-wave Important #7 (round 2): the group-death watch engages only when
+    // the termination is REAL (default killFn against a live OS process group)
+    // or a test injected an explicit probe. A test that stubs killFn but not
+    // groupAliveFn keeps the pre-#7 immediate-settle path — it is simulating
+    // signals, not reaping a real group.
+    const groupAlive = groupAliveFn || (killFn === defaultKill ? defaultGroupAlive : null);
+    const watchGroupDeath = platform !== 'win32' && typeof groupAlive === 'function';
+
     function cleanup() {
       if (timeoutTimer) clearTimeout(timeoutTimer);
-      if (killGraceTimer) clearTimeout(killGraceTimer);
       if (signal) signal.removeEventListener('abort', onAbort);
+      // Fix-wave Important #7 (round 2): the SIGKILL escalation and the
+      // group-death poll are cleared only HERE, at settlement. While a
+      // termination is in progress the run does NOT settle until the group is
+      // confirmed gone (or the reap deadline passes — see settleAfterGroupDeath
+      // and child 'close' below), so these timers stay REF'd. That is the fix
+      // for the round-1 mistake: the escalation timer was unref'd, so once the
+      // owning CLI process called process.exit the still-pending SIGKILL was
+      // abandoned and a grandchild that ignored SIGTERM survived. Ref'd, it is
+      // guaranteed to run before the process can exit; bounded, it can never
+      // hang.
+      if (killGraceTimer) clearTimeout(killGraceTimer);
+      if (groupReapTimer) clearTimeout(groupReapTimer);
+    }
+
+    // Fix-wave Important #7 (round 2): a cancelled/timed-out run must not
+    // resolve while a grandchild that ignored SIGTERM is still alive — the
+    // caller (and the CLI that awaits this promise before process.exit) would
+    // otherwise exit before the SIGKILL escalation took effect. Poll the group
+    // until it is confirmed gone (past the escalation) or a bounded deadline,
+    // THEN settle. The poll timer is ref'd, so the process cannot exit out from
+    // under the escalation.
+    function settleAfterGroupDeath(partial) {
+      const deadline = now() + groupReapTimeoutMs;
+      const poll = () => {
+        if (settled) return;
+        let alive;
+        try {
+          alive = groupAlive(child.pid, platform);
+        } catch {
+          alive = false;
+        }
+        if (!alive || now() >= deadline) {
+          finish(partial);
+          return;
+        }
+        groupReapTimer = setTimeout(poll, GROUP_REAP_POLL_MS);
+      };
+      poll();
     }
 
     function finish(partial) {
@@ -178,13 +262,37 @@ export function runProcess({
       return;
     }
 
+    // Fix-wave Important #6: `child.pid` is undefined when the spawn itself
+    // failed asynchronously (a nonexistent executable emits 'error' with no
+    // pid) — the pre-fix killFn(undefined, ...) crashed with
+    // ERR_INVALID_ARG_TYPE (PID NaN) from inside the abort listener,
+    // breaking the always-resolve contract. Guard PID validity AND wrap the
+    // termination primitive: killFn is best-effort by definition, and no
+    // failure inside it may ever propagate into the caller's signal
+    // dispatch or a timer callback.
+    function safeKill(sig) {
+      if (!Number.isInteger(child.pid) || child.pid <= 0) return;
+      try {
+        killFn(child.pid, sig, platform);
+      } catch {
+        // best effort — the process/group may already be gone, or the
+        // injected killFn may be faulty; the structured outcome still settles.
+      }
+    }
+
     function terminateTree(status) {
       if (outcomeStatus) return; // already terminating for the other reason
       outcomeStatus = status;
-      killFn(child.pid, 'SIGTERM', platform);
+      safeKill('SIGTERM');
       if (platform === 'win32') return; // taskkill /F is already unconditional
+      if (!Number.isInteger(child.pid) || child.pid <= 0) return; // nothing to escalate against
+      // Ref'd on purpose (fix-wave Important #7 round 2): the SIGKILL
+      // escalation must be guaranteed to run before the process can exit. It
+      // is cleared at settlement (cleanup), and settlement is itself delayed
+      // until the group is confirmed reaped, so this can neither be abandoned
+      // (the round-1 unref'd bug) nor hang (the reap wait is bounded).
       killGraceTimer = setTimeout(() => {
-        killFn(child.pid, 'SIGKILL', platform);
+        safeKill('SIGKILL');
       }, killGraceMs);
     }
 
@@ -231,11 +339,22 @@ export function runProcess({
     });
 
     child.on('close', (exitCode, signalName) => {
-      finish({
+      const partial = {
         status: outcomeStatus || (exitCode === 0 ? 'ok' : 'failed'),
         exitCode,
         signalName,
-      });
+      };
+      // Fix-wave Important #7 (round 2): if we asked the tree to terminate,
+      // don't resolve on the direct child's close alone — a grandchild that
+      // ignored SIGTERM may still be alive in the group. Wait until the whole
+      // group is confirmed gone (past the SIGKILL escalation), bounded, so the
+      // caller/CLI never exits before the escalation has taken effect. A plain
+      // (non-terminating) close resolves immediately as before.
+      if (outcomeStatus && watchGroupDeath && Number.isInteger(child.pid) && child.pid > 0) {
+        settleAfterGroupDeath(partial);
+      } else {
+        finish(partial);
+      }
     });
   });
 }

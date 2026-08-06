@@ -296,9 +296,10 @@ test('redactValue still terminates on a genuine cycle and redacts the reachable,
     out = redactValue(circular);
   });
   assert.equal(out.name, 'token=«redacted:kv-secret»');
-  // The self-referencing branch is returned as-is (best-effort, documented
-  // limitation) rather than re-walked — but crucially, it did not hang.
-  assert.equal(typeof out.self, 'object');
+  // Fix-wave Important #4: the self-referencing branch used to be returned
+  // AS-IS (the raw, unredacted subtree) — it is now replaced by a fixed
+  // masked sentinel, so a cycle can never smuggle raw content past the walk.
+  assert.equal(out.self, '«redacted:cycle»');
 });
 
 // Regression (review fix #2, round 2): a diamond-shaped DAG — a node
@@ -465,4 +466,139 @@ test('handles a 2 MiB string well under a generous time budget', () => {
   // still catching an accidental quadratic regression.
   assert.ok(durationMs < 1000, `redactText took ${durationMs.toFixed(1)}ms on 2 MiB, expected < 1000ms`);
   assert.ok(!out.includes('ghp_' + 'b'.repeat(36)), 'secrets are actually redacted, not just fast');
+});
+
+// ---------------------------------------------------------------------------
+// Fix-wave Important #4 — object keys, depth guard, cycle guard.
+// ---------------------------------------------------------------------------
+
+// Verified pre-fix leak: `{'token=abcdef1234567890': 'v'}` survived redaction
+// intact because only VALUES ever passed through redactText — object keys are
+// free text too, and a payload can carry a secret in a key position.
+test('redactValue masks secret-shaped OBJECT KEYS, not just values', () => {
+  const { redactValue } = redactor();
+  const out = redactValue({ 'token=abcdef1234567890': 'v' });
+  assert.deepEqual(out, { 'token=«redacted:kv-secret»': 'v' });
+  assert.ok(!JSON.stringify(out).includes('abcdef1234567890'), 'the raw secret must not survive in any key');
+});
+
+test('redactValue masks secret keys at every nesting level, alongside secret values', () => {
+  const { redactValue } = redactor();
+  const ghp = 'ghp_' + 'a'.repeat(36);
+  const out = redactValue({ outer: { [ghp]: 'x', clean: 'token=abcdef1234567890' } });
+  assert.deepEqual(out, {
+    outer: { '«redacted:github-token»': 'x', clean: 'token=«redacted:kv-secret»' },
+  });
+});
+
+test('redactValue key collision after masking is last-wins (documented trade: losing data beats leaking it)', () => {
+  const { redactValue } = redactor();
+  // Two DISTINCT secret-shaped keys that both mask to the same string.
+  const input = {};
+  input['token=abcdef1234567890'] = 'first';
+  input['token=zyxwvu9876543210'] = 'second';
+  const out = redactValue(input);
+  assert.deepEqual(Object.keys(out), ['token=«redacted:kv-secret»']);
+  assert.equal(out['token=«redacted:kv-secret»'], 'second', 'later entry wins the collided masked key');
+});
+
+test('redactValue keys of secret-free objects are byte-identical (no false rewrites)', () => {
+  const { redactValue } = redactor();
+  const input = { command: 'orient', checks: [{ id: 'plan-schema', pass: true }] };
+  assert.equal(JSON.stringify(redactValue(input)), JSON.stringify(input));
+});
+
+// Verified pre-fix leak: past MAX_WALK_DEPTH (50) the guard RETURNED THE
+// ORIGINAL SUBTREE — a secret nested 51 levels deep sailed through unredacted.
+test('redactValue depth guard yields a masked sentinel, never the raw subtree', () => {
+  const { redactValue } = redactor();
+  // Build a chain 60 levels deep with a secret at the bottom.
+  let node = { secret: 'token=abcdef1234567890' };
+  for (let i = 0; i < 60; i++) node = { child: node };
+  const out = redactValue(node);
+  const text = JSON.stringify(out);
+  assert.ok(!text.includes('abcdef1234567890'), 'the deep secret must never survive the depth guard');
+  assert.ok(text.includes('«redacted:depth-limit»'), 'the guard must leave a visible sentinel, not silently drop or leak');
+});
+
+test('redactValue cycle guard yields a masked sentinel, never the raw subtree (secret in the cyclic node)', () => {
+  const { redactValue } = redactor();
+  const a = { secret: 'token=abcdef1234567890' };
+  a.self = a;
+  const out = redactValue({ wrap: a });
+  assert.equal(out.wrap.secret, 'token=«redacted:kv-secret»');
+  assert.equal(out.wrap.self, '«redacted:cycle»');
+  assert.ok(!JSON.stringify(out).includes('abcdef1234567890'));
+});
+
+// ---------------------------------------------------------------------------
+// Fix-wave C2 — the shared redacting emission boundary (redactedJson).
+// ---------------------------------------------------------------------------
+
+test('redactedJson serializes with redaction applied (compact and pretty)', async () => {
+  const { redactedJson } = await import('../lib/redact.mjs');
+  const value = { why: 'token=abcdef1234567890', ok: true };
+  const compact = redactedJson(value, { redactor: redactor() });
+  assert.equal(compact, '{"why":"token=«redacted:kv-secret»","ok":true}');
+  const pretty = redactedJson(value, { pretty: true, redactor: redactor() });
+  assert.equal(pretty, JSON.stringify({ why: 'token=«redacted:kv-secret»', ok: true }, null, 2));
+});
+
+test('redactedJson is byte-identical to bare JSON.stringify for secret-free data', async () => {
+  const { redactedJson } = await import('../lib/redact.mjs');
+  const value = {
+    schema: 1,
+    command: 'orient',
+    status: 'ok',
+    recall: [{ id: 'a', score: 0.4 }],
+    nested: { deep: { list: [1, 2, 3], flag: false, note: null } },
+  };
+  assert.equal(redactedJson(value, { redactor: redactor() }), JSON.stringify(value));
+  assert.equal(redactedJson(value, { pretty: true, redactor: redactor() }), JSON.stringify(value, null, 2));
+});
+
+// Fix-wave P2 — toJSON() bypass. redactValue walks the STRUCTURE, but a
+// surviving toJSON()/getter/replacer runs at JSON.stringify time, AFTER
+// redaction, and can emit a raw secret the walk never saw. The final
+// text-level pass in redactedJson closes that for good.
+test('redactedJson: a toJSON() that emits a secret at serialize time is still masked', async () => {
+  const { redactedJson } = await import('../lib/redact.mjs');
+  // The structural walk sees only a method here (a function leaf, passed
+  // through untouched); the secret string materializes only when
+  // JSON.stringify invokes toJSON.
+  const sneaky = { toJSON() { return 'token=abcdef1234567890'; } };
+  const out = redactedJson({ payload: sneaky }, { redactor: redactor() });
+  assert.ok(!out.includes('abcdef1234567890'), 'a serialize-time secret must never survive the boundary');
+  assert.equal(out, '{"payload":"token=«redacted:kv-secret»"}');
+});
+
+test('redactedJson: a getter that emits a secret at serialize time is masked, and secret-free toJSON stays byte-identical', async () => {
+  const { redactedJson } = await import('../lib/redact.mjs');
+  const gh = 'ghp_' + 'a'.repeat(36);
+  const sneaky = { toJSON() { return { leak: gh }; } };
+  const out = redactedJson({ nested: sneaky }, { redactor: redactor() });
+  assert.ok(!out.includes(gh), 'a serialize-time github token must be masked');
+  assert.equal(out, `{"nested":{"leak":"«redacted:github-token»"}}`);
+  // Byte-identity: a Date's toJSON (secret-free) is untouched by the text pass.
+  const d = new Date('2026-08-06T00:00:00.000Z');
+  assert.equal(redactedJson({ at: d }, { redactor: redactor() }), JSON.stringify({ at: d }));
+});
+
+// Fix-wave P2 — an own __proto__ key. JSON.parse makes a genuine OWN
+// enumerable "__proto__" data property; the pre-fix `out[k] =` rebuild hit the
+// prototype SETTER, mutating the clone's prototype and DROPPING the key, so
+// `redactedJson({"__proto__":…})` lost it.
+test('redactedJson: an own __proto__ key survives the redaction rebuild byte-identically', async () => {
+  const { redactedJson } = await import('../lib/redact.mjs');
+  const withProto = JSON.parse('{"__proto__": {"x": 1}, "keep": 2}');
+  const out = redactedJson(withProto, { redactor: redactor() });
+  assert.equal(out, '{"__proto__":{"x":1},"keep":2}', 'the own __proto__ key must survive, in order');
+});
+
+test('redactValue: a secret nested under an own __proto__ key is still masked and the key survives', () => {
+  const { redactValue } = redactor();
+  const input = JSON.parse('{"__proto__": {"leak": "token=abcdef1234567890"}}');
+  const out = redactValue(input);
+  assert.ok(Object.prototype.hasOwnProperty.call(out, '__proto__'), 'the own __proto__ key must not vanish');
+  assert.equal(JSON.stringify(out), '{"__proto__":{"leak":"token=«redacted:kv-secret»"}}');
 });

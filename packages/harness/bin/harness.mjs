@@ -13,12 +13,14 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
+import { inspect } from 'node:util';
 import { pathToFileURL } from 'node:url';
 import { createStyle, keyWidthFor, EXIT } from '../lib/style.mjs';
 import { dispatch as dispatchRegistered, hasCommand, describeCommand } from '../lib/registry.mjs';
 import { createEventRegistry } from '../lib/event-registry.mjs';
 import { writeEvent as writeHarnessEvent } from '../lib/events.mjs';
-import { parseFlags } from '../lib/flags.mjs';
+import { parseFlags, hasFlag } from '../lib/flags.mjs';
+import { createRedactor, redactedJson } from '../lib/redact.mjs';
 
 const [, , command = 'help', ...args] = process.argv;
 // This renderer only writes error blocks, which go to stderr — detect there.
@@ -133,11 +135,20 @@ function renderCommandHelp(name) {
 
 // Single error surface for both readers: the JSON envelope under --json,
 // the styled error block otherwise. Keeps the two failure paths from drifting.
+// Fix-wave C2: an error's message/fix frequently echoes caller input (an
+// unknown command name, a bad flag value), so BOTH renderings pass through
+// the shared redacting emission boundary (lib/redact.mjs) before stderr.
 function emitError({ code, message, fix, exit }) {
-  if (args.includes('--json')) {
-    console.error(JSON.stringify({ ok: false, error: { code, message, hint: fix, exit } }));
+  // Fix-wave C1: `--json` after a literal `--` is free-text content, not a
+  // flag — route this check through the boundary-aware hasFlag so a
+  // top-level error for `harness bogus -- --json` renders the human error
+  // block, never a JSON envelope (pre-fix `args.includes('--json')` matched
+  // the post-boundary token and emitted JSON).
+  if (hasFlag(args, '--json')) {
+    console.error(redactedJson({ ok: false, error: { code, message, hint: fix, exit } }));
   } else {
-    for (const l of ui.errorBlock({ code, message, fix, exit })) console.error(l);
+    const { redactText } = createRedactor();
+    for (const l of ui.errorBlock({ code, message: redactText(message), fix: redactText(fix), exit })) console.error(l);
   }
 }
 
@@ -265,10 +276,56 @@ async function main() {
   } catch (err) {
     const exit = Number.isInteger(err.exit) ? err.exit : 1;
     emitError({ code: err.code || 'E_UNEXPECTED', message: err.message, fix: err.hint, exit });
-    if (process.env.HARNESS_DEBUG) console.error(err);
+    // Fix-wave P1 (human/debug output leaks): the sanitized error block above
+    // must NOT be followed by an unredacted raw dump. A thrown error's stack
+    // embeds its message (which routinely echoes caller input) and can surface
+    // env-derived secrets in frames — route the whole HARNESS_DEBUG dump
+    // through the redactor, same guarantee as every other emission boundary.
+    if (process.env.HARNESS_DEBUG) {
+      const { redactText } = createRedactor();
+      console.error(redactText(inspect(err)));
+    }
     code = exit;
   }
+  // Fix-wave P2 (JSONL backpressure): flush buffered stdout/stderr before the
+  // hard exit. `process.exit` does not wait for async pipe writes, so a
+  // terminal JSONL `result` row (or any tail of streamed output) written under
+  // backpressure could be discarded — drain first so it is never lost.
+  await flushStreams();
   process.exit(code);
+}
+
+/** Resolve once a writable stream's buffered bytes have been handed to the OS
+ * — the reliable "drained" signal to wait on before a hard process.exit. */
+function flushStream(stream) {
+  return new Promise((resolve) => {
+    if (!stream || typeof stream.write !== 'function' || stream.writableLength === 0) {
+      resolve();
+      return;
+    }
+    let done = false;
+    const finish = () => {
+      if (!done) {
+        done = true;
+        resolve();
+      }
+    };
+    // The empty-write callback fires after the preceding buffered bytes flush.
+    try {
+      stream.write('', finish);
+    } catch {
+      finish();
+      return;
+    }
+    // Safety valve: never let a stuck pipe hang the CLI. Unref'd so the timer
+    // itself can't keep the process alive past the drain.
+    const t = setTimeout(finish, 2000);
+    t.unref?.();
+  });
+}
+
+function flushStreams() {
+  return Promise.all([flushStream(process.stdout), flushStream(process.stderr)]);
 }
 
 // Only auto-run when this file is executed directly (`node bin/harness.mjs

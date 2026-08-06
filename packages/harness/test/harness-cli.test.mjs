@@ -2168,7 +2168,7 @@ test('harness verify returns failed when a required named check fails', () => {
   assert.equal(body.checks.find((check) => check.id === 'unit-tests')?.status, 'failed');
 });
 
-test('harness verify returns inconclusive for timeout and records it', () => {
+test('harness verify returns inconclusive for timeout and exits EXIT.timedOut (8)', () => {
   const workspace = tempDir('harness-workspace-');
   const plan = writeVersionedPlan(workspace);
   writeChecks(workspace, {
@@ -2181,7 +2181,10 @@ test('harness verify returns inconclusive for timeout and records it', () => {
 
   const result = runHarness(['verify', '--plan', plan, '--base', 'HEAD', '--workspace', workspace, '--json']);
 
-  assert.equal(result.status, 2, result.stderr);
+  // Fix-wave Important #5: a genuinely timed-out run maps to EXIT.timedOut
+  // (8) BEFORE the enforcement mapping — pre-fix this exited 2 (the generic
+  // inconclusive code), losing the "ran out of time" signal entirely.
+  assert.equal(result.status, 8, result.stderr);
   const body = JSON.parse(result.stdout);
   assert.equal(body.outcome, 'inconclusive');
   assert.equal(body.checks.find((check) => check.id === 'unit-tests')?.status, 'timeout');

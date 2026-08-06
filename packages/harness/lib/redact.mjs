@@ -2,11 +2,14 @@
  * Deterministic secret redaction.
  *
  * A pure, offline masking pass over text and JSON-shaped values — no
- * network, no model, no filesystem. This module only produces masked
- * strings/structures; it does not decide WHERE those get applied. Wiring it
- * into the actual emission/persistence boundaries (stdout, event log,
- * telemetry, `harness report`, etc.) is later work (P1.5/P1.6) — this task
- * only builds the redactor itself.
+ * network, no model, no filesystem. This module produces masked
+ * strings/structures AND owns the one shared emission boundary
+ * (`redactedJson`, below) that every sink writing command output or
+ * persisting an event routes through: lib/commands.mjs's `emitJson` and
+ * every legacy `--json` serializer, lib/envelope.mjs's JSONL rows,
+ * lib/events.mjs's events.jsonl append, lib/registry.mjs's envelope lanes,
+ * and bin/harness.mjs's error envelope. Redaction is universal because it
+ * happens at THIS boundary, not per-output-lane (fix-wave C2/C3).
  *
  * Two independent masking layers, both applied by `redactText`:
  *
@@ -80,6 +83,18 @@ const MASK_SUFFIX = '»'; // «redacted:kind»
 
 function mask(kind) {
   return `${MASK_PREFIX}${kind}${MASK_SUFFIX}`;
+}
+
+/**
+ * The exact `«redacted:<kind>»` marker string for a kind — the single source
+ * of the mask format for callers that must emit a marker WITHOUT running a
+ * value through the pattern pipeline. Used by lib/verify.mjs to mask a
+ * structurally identified multi-line PEM block wholesale (once its BEGIN/END
+ * delimiters are seen), instead of relying on redactText's single PEM pattern
+ * whose body span is bounded and would let an oversized key slip past.
+ */
+export function redactionMarker(kind) {
+  return mask(kind);
 }
 
 // Conservative, kind-less fallback used only when the normal masking
@@ -274,6 +289,15 @@ function isPlainObject(value) {
 // alone wouldn't catch it) nested structure blowing the call stack.
 const MAX_WALK_DEPTH = 50;
 
+// Fix-wave Important #4: the depth and cycle guards used to RETURN THE
+// ORIGINAL subtree — the one place in the walk where unredacted content
+// could sail straight through to a sink. A guard trip now yields a fixed
+// masked sentinel instead: coarse (the whole subtree is replaced), but a
+// guard trip only happens on hostile/degenerate input, where losing detail
+// beats leaking a secret buried 51 levels deep or behind a self-reference.
+const DEPTH_LIMIT_MASK = mask('depth-limit');
+const CYCLE_MASK = mask('cycle');
+
 // Two distinct pieces of state, doing two distinct jobs:
 //
 // - `seen` (a WeakSet) is the CYCLE guard — the current recursion PATH (this
@@ -306,7 +330,8 @@ function walk(value, redactText, seen, memo, depth) {
   if (typeof value === 'string') return redactText(value);
   if (Array.isArray(value)) {
     if (memo.has(value)) return memo.get(value);
-    if (depth >= MAX_WALK_DEPTH || seen.has(value)) return value;
+    if (depth >= MAX_WALK_DEPTH) return DEPTH_LIMIT_MASK;
+    if (seen.has(value)) return CYCLE_MASK;
     seen.add(value);
     const out = value.map((item) => walk(item, redactText, seen, memo, depth + 1));
     seen.delete(value);
@@ -315,11 +340,36 @@ function walk(value, redactText, seen, memo, depth) {
   }
   if (isPlainObject(value)) {
     if (memo.has(value)) return memo.get(value);
-    if (depth >= MAX_WALK_DEPTH || seen.has(value)) return value;
+    if (depth >= MAX_WALK_DEPTH) return DEPTH_LIMIT_MASK;
+    if (seen.has(value)) return CYCLE_MASK;
     seen.add(value);
     const out = {};
     for (const [k, v] of Object.entries(value)) {
-      out[k] = walk(v, redactText, seen, memo, depth + 1);
+      // Fix-wave Important #4: object KEYS are free text too — a payload
+      // shaped `{'token=<secret>': ...}` used to persist its key verbatim
+      // because only values ever passed through redactText. Keys are now
+      // masked with the same text redactor. Collision note (documented
+      // trade): if two distinct keys mask to the SAME string, last-wins —
+      // the later entry overwrites the earlier one, which loses a value but
+      // can only happen when BOTH keys carried secret-shaped content, and
+      // losing data always beats leaking it.
+      const mk = redactText(k);
+      const mv = walk(v, redactText, seen, memo, depth + 1);
+      // Fix-wave P2 (__proto__ byte-identity): a bare `out[mk] = mv` when
+      // mk === '__proto__' hits Object.prototype's __proto__ SETTER — it
+      // reassigns the clone's prototype and drops the own key entirely, so
+      // `redactedJson({"__proto__": ...})` silently lost it. defineProperty
+      // installs a genuine own, enumerable data property named exactly mk
+      // (the literal "__proto__" included) without invoking any setter, so
+      // every own key survives and JSON.stringify emits it byte-identically.
+      // Normal keys keep the plain assignment (fast path; the clone stays an
+      // ordinary Object.prototype object, so deepEqual/deepStrictEqual on
+      // secret-free output is unchanged).
+      if (mk === '__proto__') {
+        Object.defineProperty(out, mk, { value: mv, enumerable: true, writable: true, configurable: true });
+      } else {
+        out[mk] = mv;
+      }
     }
     seen.delete(value);
     memo.set(value, out);
@@ -396,4 +446,42 @@ export function createRedactor({ env = process.env, patterns = [] } = {}) {
   }
 
   return { redactText, redactValue };
+}
+
+/**
+ * THE shared redacting emission boundary (fix-wave C2/C3): serialize any
+ * JSON-shaped value for a sink — stdout `--json`/envelope output, a JSONL
+ * stream row, an events.jsonl append — redacting FIRST, in one place, so no
+ * individual output lane can forget to. Every sink that writes command
+ * output or persists an event must route through this (or through
+ * `redactValue` directly) immediately before serialization.
+ *
+ * Byte-identity guarantee: for secret-free input, `redactValue` preserves
+ * shape, key order, and every value, so the serialized JSON is byte-for-byte
+ * what a bare `JSON.stringify` would have produced — redaction at this
+ * boundary is invisible unless something actually needed masking.
+ *
+ * @param {*} value - the JSON-shaped value to serialize.
+ * @param {object} [opts]
+ * @param {boolean} [opts.pretty] - `JSON.stringify(..., null, 2)` when true.
+ * @param {{redactValue: Function}} [opts.redactor] - injectable for tests /
+ *   reuse of an already-built instance; defaults to a fresh `createRedactor()`
+ *   bound to the live process env (secure by default, never stale).
+ * @returns {string} the redacted JSON text (no trailing newline).
+ */
+export function redactedJson(value, { pretty = false, redactor } = {}) {
+  const active = redactor || createRedactor();
+  const safe = active.redactValue(value);
+  const json = pretty ? JSON.stringify(safe, null, 2) : JSON.stringify(safe);
+  // Fix-wave P2 (toJSON bypass): `redactValue` walks the STRUCTURE, but
+  // `JSON.stringify` then invokes any surviving `toJSON()` / getter / replacer
+  // at serialize time — AFTER redaction — which can emit a raw secret the
+  // structural walk never saw. A final text-level pass over the serialized
+  // JSON closes that class for good: whatever a serialize-time hook produced
+  // still has to clear the text redactor before it leaves this boundary.
+  // Byte-identical (a genuine no-op) for secret-free data, because
+  // `redactText` returns its input unchanged when there is nothing to mask,
+  // and the masks it does emit (`«redacted:…»`) live inside JSON string
+  // tokens, so the result stays valid JSON.
+  return active.redactText(json);
 }

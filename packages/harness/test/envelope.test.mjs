@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { EventEmitter } from 'node:events';
 import { test } from 'node:test';
 import { EXIT } from '../lib/style.mjs';
 import {
@@ -249,4 +250,52 @@ test('createJsonlStream honors a custom schema version', () => {
   const jsonl = createJsonlStream(s, { schema: 2 });
   jsonl.start({});
   assert.equal(s.lines()[0].schema, 2);
+});
+
+// --- Fix-wave P2: JSONL backpressure — the terminal row is never discarded --
+//
+// emit() ignored `stream.write() === false`, and the CLI's unconditional
+// process.exit could discard a terminal `result` row buffered under
+// backpressure. The stream now tracks the write result and exposes drained(),
+// which a producer (and the CLI, plus bin/harness.mjs's flush-before-exit)
+// awaits before exiting.
+
+test('createJsonlStream: drained() waits while the stream is backpressured, then resolves on drain', async () => {
+  const emitter = new EventEmitter();
+  const writes = [];
+  const stream = {
+    write(chunk) {
+      writes.push(chunk);
+      return false; // always backpressured, like a full pipe
+    },
+    once: (event, cb) => emitter.once(event, cb),
+  };
+  const jsonl = createJsonlStream(stream);
+  jsonl.result({ status: 'ok' });
+  assert.equal(writes.length, 1, 'the terminal row was still written');
+
+  let resolved = false;
+  const pending = jsonl.drained().then(() => {
+    resolved = true;
+  });
+  await Promise.resolve();
+  assert.equal(resolved, false, 'drained() must not resolve while backpressure is unrelieved');
+  emitter.emit('drain');
+  await pending;
+  assert.equal(resolved, true, 'drained() resolves once the stream drains');
+});
+
+test('createJsonlStream: drained() resolves immediately when no backpressure occurred', async () => {
+  const jsonl = createJsonlStream({ write: () => true });
+  jsonl.result({ status: 'ok' });
+  await jsonl.drained(); // must not hang
+  assert.ok(true);
+});
+
+test('createJsonlStream: a plain in-memory sink (no once) never hangs drained()', async () => {
+  const s = fakeStream();
+  const jsonl = createJsonlStream(s);
+  jsonl.row({ line: 'x' });
+  await jsonl.drained();
+  assert.equal(s.chunks.length, 1);
 });

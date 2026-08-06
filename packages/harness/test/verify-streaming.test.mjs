@@ -20,7 +20,14 @@ import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
-import { runVerify, exitCodeForOutcome, statusForVerifyResult, unifiedStatusForCheck } from '../lib/verify.mjs';
+import {
+  runVerify,
+  exitCodeForOutcome,
+  statusForVerifyResult,
+  unifiedStatusForCheck,
+  createCheckOutputStreamer,
+} from '../lib/verify.mjs';
+import { createRedactor } from '../lib/redact.mjs';
 
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const binPath = path.join(packageRoot, 'bin', 'harness.mjs');
@@ -260,7 +267,7 @@ test('verify --output jsonl streams start/progress/row events plus a terminal re
   assert.equal(terminal.exitCode, 0);
 });
 
-test('verify --output jsonl reports a timed-out check as a distinct row and terminal status', () => {
+test('verify --output jsonl reports a timed-out check as a distinct row and terminal status, and exits 8', () => {
   const workspace = tempDir('verify-stream-jsonl-timeout-');
   const plan = writeVersionedPlan(workspace, { required: ['slow-check'] });
   writeChecks(workspace, {
@@ -273,8 +280,13 @@ test('verify --output jsonl reports a timed-out check as a distinct row and term
     [binPath, 'verify', '--plan', plan, '--base', 'HEAD', '--workspace', workspace, '--output', 'jsonl'],
     { encoding: 'utf8' }
   );
+  // Fix-wave Important #5: a genuinely timed-out run must exit EXIT.timedOut
+  // (8) — pre-fix it fell through to outcome inconclusive -> exit 2 while
+  // the terminal row said timed-out, so the exit code and the stream
+  // contradicted each other.
+  assert.equal(res.status, 8, `expected EXIT.timedOut (8), got ${res.status}. stdout: ${res.stdout} stderr: ${res.stderr}`);
   const rows = res.stdout.trim().split('\n').filter(Boolean).map((line) => JSON.parse(line));
-  const checkRow = rows.find((r) => r.event === 'row' && r.check === 'slow-check');
+  const checkRow = rows.find((r) => r.event === 'row' && r.check === 'slow-check' && r.status);
   assert.ok(checkRow, `expected a 'row' event for slow-check: ${res.stdout}`);
   assert.equal(checkRow.status, 'timeout');
   assert.equal(checkRow.unifiedStatus, 'timed-out');
@@ -282,6 +294,47 @@ test('verify --output jsonl reports a timed-out check as a distinct row and term
   assert.equal(terminal.event, 'result');
   assert.equal(terminal.status, 'timed-out');
   assert.equal(terminal.outcome, 'inconclusive');
+  assert.equal(terminal.exitCode, 8, 'the terminal row must carry the same exit code the process actually exits with');
+});
+
+// --- Fix-wave Important #5: exit-code precedence for a timed-out run -------
+
+test('CLI: a timed-out verify run (plain ledger path) exits 8 and records command.result.status === "timed-out"', () => {
+  const workspace = tempDir('verify-timeout-exit8-');
+  const plan = writeVersionedPlan(workspace, { required: ['slow-check'] });
+  writeChecks(workspace, {
+    'slow-check': { command: [process.execPath, '-e', 'setTimeout(() => {}, 5000)'], timeout_seconds: 1 },
+  });
+  initGit(workspace);
+
+  const res = spawnSync(
+    process.execPath,
+    [binPath, 'verify', '--plan', plan, '--base', 'HEAD', '--workspace', workspace],
+    { encoding: 'utf8' }
+  );
+  assert.equal(res.status, 8, `expected EXIT.timedOut (8), got ${res.status}. stdout: ${res.stdout} stderr: ${res.stderr}`);
+
+  const events = readEventsRaw(workspace);
+  const commandResult = events.find((e) => e.type === 'command.result');
+  assert.ok(commandResult, `expected a command.result event: ${JSON.stringify(events)}`);
+  assert.equal(commandResult.status, 'timed-out', 'timed-out command telemetry must not be lost');
+  assert.equal(commandResult.exitCode, 8);
+  assert.equal(commandResult.result, 'warn', 'legacyResultForStatus: timed-out -> warn, never pass/fail');
+});
+
+test('statusForVerifyResult precedence: a hard FAILED outcome stays "failed" even when another check timed out', () => {
+  const result = {
+    outcome: 'failed',
+    checks: [
+      { id: 'a', status: 'failed' },
+      { id: 'b', status: 'timeout' },
+    ],
+  };
+  assert.equal(statusForVerifyResult(result), 'failed', 'a real failure verdict must never be masked by a neighboring timeout');
+  assert.equal(
+    statusForVerifyResult({ outcome: 'inconclusive', checks: [{ id: 'b', status: 'timeout' }] }),
+    'timed-out'
+  );
 });
 
 // --- AC8: cancellation (AbortSignal, unit-level, fast) ----------------------
@@ -369,4 +422,206 @@ test('CLI: Ctrl-C (SIGINT) during `harness verify` (plain ledger path, no --outp
   const verifyEvent = events.find((e) => e.type === 'verify');
   assert.ok(verifyEvent, `expected the verify command's own lifecycle event: ${JSON.stringify(events)}`);
   assert.equal(verifyEvent.result, 'warn');
+});
+
+// --- Fix-wave Important #9 (AC8): check output IS streamed, redacted -------
+//
+// Pre-fix, runNamedCheck supplied no onStdout/onStderr to the runner, so
+// `verify --output jsonl` emitted a start marker and then only the terminal
+// status — a long-running check produced no output rows at all, violating
+// AC8's live-streaming requirement.
+
+test('verify --output jsonl streams a check\'s stdout/stderr as bounded, REDACTED output rows', () => {
+  const workspace = tempDir('verify-stream-output-rows-');
+  const plan = writeVersionedPlan(workspace, { required: ['chatty-check'] });
+  writeChecks(workspace, {
+    'chatty-check': {
+      command: [
+        process.execPath,
+        '-e',
+        "console.log('building things'); console.log('token=abcdef1234567890'); console.error('warn line'); process.exit(0)",
+      ],
+    },
+  });
+  initGit(workspace);
+
+  const res = spawnSync(
+    process.execPath,
+    [binPath, 'verify', '--plan', plan, '--base', 'HEAD', '--workspace', workspace, '--output', 'jsonl'],
+    { encoding: 'utf8' }
+  );
+  assert.equal(res.status, 0, res.stderr || res.stdout);
+  assert.doesNotMatch(res.stdout, /abcdef1234567890/, 'a secret in check output must never reach the stream raw');
+
+  const rows = res.stdout.trim().split('\n').filter(Boolean).map((line) => JSON.parse(line));
+  const outputRows = rows.filter((r) => r.event === 'row' && r.check === 'chatty-check' && r.stream);
+  assert.ok(outputRows.length >= 3, `expected streamed output rows, got: ${res.stdout}`);
+  const stdoutLines = outputRows.filter((r) => r.stream === 'stdout').map((r) => r.line);
+  const stderrLines = outputRows.filter((r) => r.stream === 'stderr').map((r) => r.line);
+  assert.ok(stdoutLines.includes('building things'), `plain output must stream verbatim: ${JSON.stringify(stdoutLines)}`);
+  assert.ok(stdoutLines.includes('token=«redacted:kv-secret»'), `secret-bearing output must stream masked: ${JSON.stringify(stdoutLines)}`);
+  assert.ok(stderrLines.includes('warn line'), `stderr must stream too: ${JSON.stringify(stderrLines)}`);
+
+  // Ordering: output rows land between the check's progress marker and its
+  // status row — live streaming, not an after-the-fact dump.
+  const progressIdx = rows.findIndex((r) => r.event === 'progress' && r.check === 'chatty-check');
+  const statusIdx = rows.findIndex((r) => r.event === 'row' && r.check === 'chatty-check' && r.status);
+  const firstOutputIdx = rows.findIndex((r) => r.event === 'row' && r.stream);
+  assert.ok(progressIdx < firstOutputIdx && firstOutputIdx < statusIdx, 'output rows must sit between progress and the status row');
+});
+
+test('createCheckOutputStreamer: a secret split across two chunks WITHIN one line is reassembled and redacted (carry buffer)', () => {
+  const events = [];
+  const { redactText } = createRedactor({ env: {} });
+  const streamer = createCheckOutputStreamer({ check: 'c', onEvent: (event, fields) => events.push({ event, ...fields }), redactText });
+
+  // The secret straddles the chunk boundary — neither fragment alone matches
+  // the kv-secret pattern.
+  streamer.onStdout('prefix token=abcdef');
+  streamer.onStdout('1234567890 suffix\n');
+  streamer.flush();
+
+  assert.equal(events.length, 1);
+  assert.equal(events[0].line, 'prefix token=«redacted:kv-secret» suffix');
+  assert.ok(!JSON.stringify(events).includes('abcdef1234567890'), 'no fragment recombination may leak the raw secret');
+});
+
+test('createCheckOutputStreamer: flush() redacts a trailing partial line (no newline before process exit)', () => {
+  const events = [];
+  const { redactText } = createRedactor({ env: {} });
+  const streamer = createCheckOutputStreamer({ check: 'c', onEvent: (event, fields) => events.push({ event, ...fields }), redactText });
+  streamer.onStdout('tail token=abcdef12345');
+  streamer.onStdout('67890');
+  streamer.flush();
+  assert.equal(events.length, 1);
+  assert.equal(events[0].line, 'tail token=«redacted:kv-secret»');
+});
+
+test('createCheckOutputStreamer: output is bounded — one truncated marker row, then silence', () => {
+  const events = [];
+  const { redactText } = createRedactor({ env: {} });
+  // Fix-wave P2: the budget now counts each row's JSON envelope overhead, not
+  // just its line content (pre-fix the overhead sat OUTSIDE the budget, so the
+  // bytes actually written could exceed it). One 'a'*25 row costs 25 + the
+  // per-row envelope (~67 bytes) ≈ 92; a budget of 100 admits exactly one such
+  // row and truncates at the second — the same intent as before, arithmetic
+  // corrected for the overhead now being in scope.
+  const streamer = createCheckOutputStreamer({
+    check: 'c',
+    onEvent: (event, fields) => events.push({ event, ...fields }),
+    redactText,
+    maxBytes: 100,
+    maxLineBytes: 30,
+  });
+  streamer.onStdout('a'.repeat(25) + '\n'); // ~92 bytes emitted (content + envelope)
+  streamer.onStdout('b'.repeat(25) + '\n'); // would exceed 100 -> truncation marker
+  streamer.onStdout('c'.repeat(25) + '\n'); // after truncation: dropped silently
+  streamer.flush();
+
+  const lines = events.filter((e) => e.line !== undefined);
+  const markers = events.filter((e) => e.truncated === true);
+  assert.equal(lines.length, 1, 'only the first row fits the byte budget once envelope overhead counts');
+  assert.equal(markers.length, 1, 'exactly one truncation marker row');
+  assert.equal(events.at(-1).truncated, true, 'the marker is the last thing emitted');
+});
+
+test('createCheckOutputStreamer: a single overlong line is clipped AFTER redaction, never exposing a cut secret', () => {
+  const events = [];
+  const { redactText } = createRedactor({ env: {} });
+  const streamer = createCheckOutputStreamer({
+    check: 'c',
+    onEvent: (event, fields) => events.push({ event, ...fields }),
+    redactText,
+    maxLineBytes: 24,
+  });
+  streamer.onStdout('token=abcdef1234567890 and much more trailing text\n');
+  streamer.flush();
+  assert.equal(events.length, 1);
+  assert.ok(!events[0].line.includes('abcdef'), 'clipping must happen after masking');
+  assert.ok(Buffer.byteLength(events[0].line, 'utf8') <= 24);
+});
+
+// --- Fix-wave P1: multi-line PEM blocks stream masked, not line-by-line raw --
+//
+// verify.mjs split check output into lines BEFORE redaction, so redact.mjs's
+// whole-block PEM pattern never matched — a 3-line dummy key emitted raw as 3
+// JSONL rows. The streamer is now block-aware: it holds every line from a
+// BEGIN…PRIVATE KEY opener to its END footer (bounded) and masks the block as
+// one row.
+
+const PEM_KEY_LINES = [
+  '-----BEGIN RSA PRIVATE KEY-----',
+  'MIIBOgIBAAJBAKj34GkxFhD90vcNLYLInFEX6Ppy1tPf9Cnzj4p4WGeKLs1Pt8Q',
+  'uKUpRKfFLfRYC9AIKjbJTWit+CqvjSFmk/8CAwEAAQ==',
+  '-----END RSA PRIVATE KEY-----',
+];
+
+test('createCheckOutputStreamer: a multi-line PEM block streamed across chunks is masked as one row, never leaked line-by-line', () => {
+  const events = [];
+  const { redactText } = createRedactor({ env: {} });
+  const streamer = createCheckOutputStreamer({ check: 'c', onEvent: (event, fields) => events.push({ event, ...fields }), redactText });
+  const pem = PEM_KEY_LINES.join('\n') + '\n';
+  // Split mid-block across chunk boundaries to stress line reassembly + hold.
+  streamer.onStdout(pem.slice(0, 40));
+  streamer.onStdout(pem.slice(40));
+  streamer.flush();
+
+  const serialized = JSON.stringify(events);
+  assert.ok(!serialized.includes('MIIBOgIBAA'), 'no raw key body may stream');
+  assert.ok(!serialized.includes('BEGIN RSA PRIVATE KEY'), 'the raw BEGIN marker line must not stream either');
+  const lines = events.filter((e) => e.line !== undefined).map((e) => e.line);
+  assert.ok(lines.includes('«redacted:private-key»'), `the block must collapse to one masked row: ${JSON.stringify(lines)}`);
+});
+
+test('createCheckOutputStreamer: an UNTERMINATED PEM block (BEGIN, no END) is masked at flush, never leaked', () => {
+  const events = [];
+  const { redactText } = createRedactor({ env: {} });
+  const streamer = createCheckOutputStreamer({ check: 'c', onEvent: (event, fields) => events.push({ event, ...fields }), redactText });
+  streamer.onStdout('-----BEGIN OPENSSH PRIVATE KEY-----\n');
+  streamer.onStdout('c3NoLXJzYQAAAB3NlY3JldGJvZHk=\n'); // key body, no END ever arrives
+  streamer.flush();
+  const serialized = JSON.stringify(events);
+  assert.ok(!serialized.includes('c3NoLXJzYQAAAB'), 'the held key body must never be emitted raw');
+  const lines = events.filter((e) => e.line !== undefined).map((e) => e.line);
+  assert.ok(lines.includes('«redacted:private-key»'), `an unterminated block must still be masked: ${JSON.stringify(lines)}`);
+});
+
+test('verify --output jsonl: a check emitting a multi-line PEM key streams it masked, never as raw rows', () => {
+  const workspace = tempDir('verify-stream-pem-');
+  const plan = writeVersionedPlan(workspace, { required: ['leaky-key-check'] });
+  const script = `console.log(${JSON.stringify(PEM_KEY_LINES.join('\n'))}); process.exit(0);`;
+  writeChecks(workspace, { 'leaky-key-check': { command: [process.execPath, '-e', script] } });
+  initGit(workspace);
+
+  const res = spawnSync(
+    process.execPath,
+    [binPath, 'verify', '--plan', plan, '--base', 'HEAD', '--workspace', workspace, '--output', 'jsonl'],
+    { encoding: 'utf8' }
+  );
+  assert.equal(res.status, 0, res.stderr || res.stdout);
+  assert.doesNotMatch(res.stdout, /MIIBOgIBAA/, 'the raw key body must never reach the stream');
+  assert.doesNotMatch(res.stdout, /BEGIN RSA PRIVATE KEY/, 'the raw BEGIN marker must not stream either');
+  assert.match(res.stdout, /«redacted:private-key»/, 'the multi-line key must stream masked');
+});
+
+// --- Fix-wave P2: UTF-8 clipping is O(n), not O(n²) -------------------------
+//
+// clipToBytes removed one UTF-16 unit and recomputed Buffer.byteLength each
+// iteration (~78ms for a 64 KiB newline-free chunk, blocking streaming and
+// cancellation). It now walks code points once and slices on a byte-accurate
+// boundary.
+
+test('createCheckOutputStreamer: clipping a huge newline-free chunk is O(n), not O(n²)', () => {
+  const events = [];
+  const { redactText } = createRedactor({ env: {} });
+  const streamer = createCheckOutputStreamer({ check: 'c', onEvent: (event, fields) => events.push({ event, ...fields }), redactText });
+  const chunk = 'a'.repeat(256 * 1024); // 256 KiB, no newline -> carry-cap force-flush -> one big clip
+  const start = process.hrtime.bigint();
+  streamer.onStdout(chunk);
+  streamer.flush();
+  const ms = Number(process.hrtime.bigint() - start) / 1e6;
+  assert.ok(ms < 500, `clipping 256 KiB took ${ms.toFixed(1)}ms — the quadratic clip regressed (pre-fix this is seconds)`);
+  const rows = events.filter((e) => e.line !== undefined);
+  assert.ok(rows.length >= 1, 'the flood must still emit a clipped row');
+  assert.ok(Buffer.byteLength(rows[0].line, 'utf8') <= 512, 'clipped to the default per-row cap');
 });

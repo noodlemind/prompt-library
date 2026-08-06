@@ -10,6 +10,7 @@ import { enforcementExitCode, loadPolicy } from './policy.mjs';
 import { verifyPrimitiveGovernance } from './primitive-governance.mjs';
 import { validatePlanReadiness } from './plan-readiness.mjs';
 import { runProcess } from './runner.mjs';
+import { createRedactor, redactionMarker } from './redact.mjs';
 
 const CHECKS_REL = '.github/harness/checks.yaml';
 
@@ -61,7 +62,7 @@ function trimOutput(value) {
 // to 'unavailable' here — the run-level short-circuit in runVerify (see
 // below) is what actually matters for AC8, not this one check's own legacy
 // status label.
-async function runNamedCheck(workspace, name, config, { signal } = {}) {
+async function runNamedCheck(workspace, name, config, { signal, onStdout, onStderr } = {}) {
   const invalid = validateCommand(name, config);
   if (invalid) return resultCheck(name, 'unavailable', invalid);
 
@@ -71,6 +72,8 @@ async function runNamedCheck(workspace, name, config, { signal } = {}) {
     cwd: workspace,
     timeoutMs: timeoutSeconds * 1000,
     signal,
+    onStdout,
+    onStderr,
     maxBuffer: 1024 * 1024,
   });
   const output = { stdout: trimOutput(execution.stdout), stderr: trimOutput(execution.stderr), durationMs: execution.durationMs };
@@ -100,6 +103,209 @@ async function runNamedCheck(workspace, name, config, { signal } = {}) {
   return resultCheck(name, 'passed', 'Named check passed', { ...output, exitCode: 0 });
 }
 
+// Fix-wave Important #9 (AC8): live check-output streaming for `verify
+// --output jsonl`. Pre-fix, runNamedCheck supplied no onStdout/onStderr, so
+// the stream emitted a start marker and then only the terminal status —
+// check output was never streamed at all. This streamer turns a check's raw
+// chunk stream into bounded, REDACTED, line-per-row `onEvent('row', {check,
+// stream, line})` events:
+//
+//   - Carry buffer per stream: chunks accumulate until a newline, so a
+//     secret split across two chunk boundaries WITHIN a line is reassembled
+//     before redaction and can't evade the masking pass.
+//   - Block-aware (fix-wave P1, multi-line PEM): redactText's PEM pattern
+//     needs a whole BEGIN..END block, but streaming splits it into per-line
+//     rows before redaction — so a 3-line key used to stream out raw, one
+//     unmasked line per row. This streamer now HOLDS every line from a
+//     `-----BEGIN … PRIVATE KEY-----` opener until its matching END footer
+//     (bounded) and masks the whole block as one `«redacted:private-key»`
+//     row, independent of redactText's own (length-bounded) PEM match. A
+//     secret spanning a newline that is NOT a PEM block remains outside a
+//     single-line redactor's reach — the same documented ceiling as
+//     lib/redact.mjs — but the highest-value multi-line secret (a private
+//     key) is now caught structurally.
+//   - Bounded: at most `maxBytes` of emitted output per check (line content
+//     AND the per-row JSON envelope overhead — fix-wave P2: the overhead used
+//     to sit outside the budget, so true bytes written could exceed it), and
+//     `maxLineBytes` per row — one final `{truncated: true}` row marks the
+//     cut. A pathological no-newline flood force-flushes the carry once it
+//     exceeds the carry cap; a PEM block that overflows its hold bound without
+//     an END is masked and then stays poisoned (drops raw lines) until END.
+//   - Redaction runs on the assembled LINE, before the row is handed to
+//     onEvent; the JSONL emitter's own row-level redaction (lib/envelope.mjs,
+//     fix C2) remains as defense in depth behind it.
+export const STREAM_MAX_BYTES_PER_CHECK = 16 * 1024;
+export const STREAM_MAX_LINE_BYTES = 512;
+const STREAM_CARRY_CAP_BYTES = 8 * 1024;
+// A detected PEM block is held (not emitted) from its BEGIN line until the
+// matching END so the WHOLE multi-line secret is masked as a unit. Bound the
+// held bytes so a lone BEGIN — or an attacker flooding one — can't buffer
+// without limit; comfortably larger than any real private key (RSA-8192 is
+// ~6.5 KiB of base64).
+const STREAM_BLOCK_MAX_BYTES = 16 * 1024;
+
+// Broad on purpose (any `-----BEGIN <words> PRIVATE KEY-----` / END form),
+// wider than redact.mjs's enumerated key types, so a novel key label can't
+// slip the structural hold.
+const PEM_BEGIN_RE = /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----/;
+const PEM_END_RE = /-----END [A-Z0-9 ]*PRIVATE KEY-----/;
+
+export function createCheckOutputStreamer({ check, onEvent, redactText, maxBytes = STREAM_MAX_BYTES_PER_CHECK, maxLineBytes = STREAM_MAX_LINE_BYTES }) {
+  const PRIVATE_KEY_MASK = redactionMarker('private-key');
+  // Per-stream state: partial-line carry plus the multi-line PEM hold.
+  const state = {
+    stdout: { carry: '', blockOpen: false, blockLines: [], blockBytes: 0, blockMasked: false },
+    stderr: { carry: '', blockOpen: false, blockLines: [], blockBytes: 0, blockMasked: false },
+  };
+  // Approximate serialized envelope cost of one emitted row, counted against
+  // the budget alongside the line content (fix-wave P2).
+  function rowOverhead(stream) {
+    return Buffer.byteLength(JSON.stringify({ schema: 1, event: 'row', check, stream, line: '' }), 'utf8') + 1;
+  }
+  let emittedBytes = 0;
+  let truncated = false;
+
+  function clipToBytes(text, cap) {
+    if (Buffer.byteLength(text, 'utf8') <= cap) return text;
+    // Walk whole code points once (O(n), never the old O(n²) that recomputed
+    // Buffer.byteLength over the whole string per removed UTF-16 unit),
+    // accumulating UTF-8 byte cost until the next char would cross the cap.
+    // Slicing on a code-point boundary never splits a surrogate pair or a
+    // multibyte char, so the clipped text is always valid UTF-8.
+    let bytes = 0;
+    let end = 0;
+    for (const ch of text) {
+      const chBytes = Buffer.byteLength(ch, 'utf8');
+      if (bytes + chBytes > cap) break;
+      bytes += chBytes;
+      end += ch.length;
+    }
+    return text.slice(0, end);
+  }
+
+  function budgetRow(stream, size, payload) {
+    if (emittedBytes + size > maxBytes) {
+      truncated = true;
+      onEvent('row', { check, stream, truncated: true });
+      return;
+    }
+    emittedBytes += size;
+    onEvent('row', payload);
+  }
+
+  // Emit one line as a row: redact, clip the redacted text, count line +
+  // envelope bytes against the per-check budget.
+  function emitLine(stream, line) {
+    if (truncated || !line) return;
+    const safe = clipToBytes(redactText(line), maxLineBytes);
+    budgetRow(stream, Buffer.byteLength(safe, 'utf8') + rowOverhead(stream), { check, stream, line: safe });
+  }
+
+  // Emit a fixed private-key mask row for a structurally identified PEM block —
+  // masked WHOLESALE, independent of redactText's bounded PEM pattern, because
+  // the BEGIN/END delimiters have already positively identified it.
+  function emitPrivateKeyMask(stream) {
+    if (truncated) return;
+    budgetRow(stream, Buffer.byteLength(PRIVATE_KEY_MASK, 'utf8') + rowOverhead(stream), { check, stream, line: PRIVATE_KEY_MASK });
+  }
+
+  function resetBlock(s) {
+    s.blockOpen = false;
+    s.blockLines = [];
+    s.blockBytes = 0;
+    s.blockMasked = false;
+  }
+
+  function closeBlock(stream) {
+    const s = state[stream];
+    const alreadyMasked = s.blockMasked;
+    resetBlock(s);
+    // Mask the whole identified block as one private-key row (unless overflow
+    // already emitted the mask). Any non-secret text on the BEGIN/END lines is
+    // dropped — secret safety over fidelity, the block was positively identified.
+    if (!alreadyMasked) emitPrivateKeyMask(stream);
+  }
+
+  // One complete line (newline already stripped) through the PEM state machine.
+  function feedLine(stream, line) {
+    if (truncated) return;
+    const s = state[stream];
+    if (!s.blockOpen) {
+      if (PEM_BEGIN_RE.test(line)) {
+        // BEGIN and END on ONE line (self-contained key): mask wholesale
+        // rather than trust redactText's length-bounded pattern.
+        if (PEM_END_RE.test(line)) {
+          emitPrivateKeyMask(stream);
+          return;
+        }
+        s.blockOpen = true;
+        s.blockLines = [line];
+        s.blockBytes = Buffer.byteLength(line, 'utf8');
+        s.blockMasked = false;
+        return;
+      }
+      emitLine(stream, line);
+      return;
+    }
+    // Inside a held block.
+    s.blockBytes += Buffer.byteLength(line, 'utf8') + 1;
+    if (!s.blockMasked) s.blockLines.push(line);
+    if (PEM_END_RE.test(line)) {
+      closeBlock(stream);
+      return;
+    }
+    if (s.blockBytes > STREAM_BLOCK_MAX_BYTES && !s.blockMasked) {
+      // Overflowed with no END yet: emit the mask now and stay poisoned (drop
+      // every further raw line) until the END arrives — never leak a key body
+      // just because the block is larger than the hold bound.
+      emitPrivateKeyMask(stream);
+      s.blockLines = [];
+      s.blockMasked = true;
+    }
+  }
+
+  function push(stream, chunk) {
+    if (truncated) return;
+    const s = state[stream];
+    s.carry += chunk;
+    let idx;
+    while ((idx = s.carry.indexOf('\n')) !== -1) {
+      const line = s.carry.slice(0, idx);
+      s.carry = s.carry.slice(idx + 1);
+      feedLine(stream, line);
+      if (truncated) {
+        s.carry = '';
+        return;
+      }
+    }
+    if (s.carry.length > STREAM_CARRY_CAP_BYTES) {
+      const line = s.carry;
+      s.carry = '';
+      feedLine(stream, line);
+    }
+  }
+
+  function flush() {
+    for (const stream of ['stdout', 'stderr']) {
+      const s = state[stream];
+      if (s.carry) {
+        const line = s.carry;
+        s.carry = '';
+        feedLine(stream, line);
+      }
+      // An unterminated block at flush (BEGIN seen, no END): mask it, never
+      // emit the held raw body.
+      if (s.blockOpen) closeBlock(stream);
+    }
+  }
+
+  return {
+    onStdout: (chunk) => push('stdout', chunk),
+    onStderr: (chunk) => push('stderr', chunk),
+    flush,
+  };
+}
+
 // The unified ok|failed|cancelled|timed-out status vocabulary (lib/envelope.mjs)
 // for ONE named check's legacy status label — used only by the new `verify
 // --output jsonl` row events (AC8's "terminal row with the unified status
@@ -116,17 +322,22 @@ export function unifiedStatusForCheck(check) {
 }
 
 // Same unified vocabulary, for the WHOLE verify run (the jsonl stream's
-// terminal `result` row). A judgment call, documented: `cancelled` wins
-// outright (the run was interrupted, nothing else matters); `passed` -> ok;
-// a run whose only reason for not passing is a per-check timeout reports
-// `timed-out` at the run level too (AC8: "timeout per check yields
-// timed-out distinctly" — carried through to the terminal row, not just the
-// individual check); everything else (failed, inconclusive for any other
-// reason) is a generic `failed`.
+// terminal `result` row AND — fix-wave Important #5 — the CLI exit-code
+// mapping in lib/commands.mjs#cmdVerify). Explicit run-outcome precedence,
+// documented: `cancelled` wins outright (the run was interrupted, nothing
+// else matters); `passed` -> ok; a hard `failed` outcome stays `failed`
+// even when some OTHER check also timed out (a real failure verdict must
+// never be masked by a neighboring timeout — this also aligns the code with
+// this comment's own long-documented "only reason for not passing" intent);
+// a run whose reason for not passing is a per-check timeout reports
+// `timed-out` (AC8: "timeout per check yields timed-out distinctly" —
+// carried through to the terminal row, the exit code, and command.result
+// telemetry, not just the individual check); everything else (inconclusive
+// for any other reason) is a generic `failed`.
 export function statusForVerifyResult(result) {
   if (result.outcome === 'cancelled') return 'cancelled';
   if (result.outcome === 'passed') return 'ok';
-  if ((result.checks || []).some((check) => check.status === 'timeout')) return 'timed-out';
+  if (result.outcome !== 'failed' && (result.checks || []).some((check) => check.status === 'timeout')) return 'timed-out';
   return 'failed';
 }
 
@@ -244,6 +455,10 @@ export async function runVerify({ workspace, flags, signal, onEvent }) {
 
   const named = loadNamedChecks(workspace);
   const required = Array.isArray(plan.fm.verification?.required) ? plan.fm.verification.required : [];
+  // Fix-wave Important #9 (AC8): one redactor for the whole streaming run,
+  // one streamer per check — live output rows flow through onEvent between
+  // the check's progress marker and its status row.
+  const streamRedactor = onEvent ? createRedactor() : null;
   // Sequential (not Promise.all): a later check must never start once
   // cancellation has been observed, and streaming rows must land in the same
   // order checks actually ran in.
@@ -262,7 +477,15 @@ export async function runVerify({ workspace, flags, signal, onEvent }) {
       continue;
     }
     onEvent?.('progress', { check: name, phase: 'start' });
-    const outcome = await runNamedCheck(workspace, name, named.checks[name], { signal });
+    const streamer = onEvent
+      ? createCheckOutputStreamer({ check: name, onEvent, redactText: streamRedactor.redactText })
+      : null;
+    const outcome = await runNamedCheck(workspace, name, named.checks[name], {
+      signal,
+      onStdout: streamer?.onStdout,
+      onStderr: streamer?.onStderr,
+    });
+    streamer?.flush();
     onEvent?.('row', { check: name, status: outcome.status, unifiedStatus: unifiedStatusForCheck(outcome), message: outcome.message });
     namedResults.push(outcome);
     if (signal?.aborted) break; // stop running further checks once cancelled

@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { createStyle } from './style.mjs';
+import { redactedJson } from './redact.mjs';
 
 const TYPES = ['feat', 'fix', 'docs', 'refactor', 'chore'];
 const RISKS = ['green', 'amber', 'red'];
@@ -137,6 +138,10 @@ export async function cmdPlanNew(argv) {
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     const next = () => argv[++i];
+    // Fix-wave C1: honor the literal-argument boundary, matching
+    // lib/flags.mjs#parseFlags and lib/registry.mjs#validateArgs — nothing
+    // after a bare `--` is ever interpreted as a flag.
+    if (a === '--') break;
     if (a === '--type') opts.type = next();
     else if (a === '--slug') opts.slug = next();
     else if (a === '--title') opts.title = next();
@@ -170,7 +175,9 @@ export async function cmdPlanNew(argv) {
     if (fs.existsSync(full)) throw new Error(`plan-new: ${rel} already exists`);
     fs.writeFileSync(full, content, 'utf8');
   }
-  if (json) console.log(JSON.stringify({ path: rel, created: !dryRun }));
+  // Fix-wave C2: legacy --json serializer routed through the shared
+  // redacting emission boundary (lib/redact.mjs) like every other sink.
+  if (json) console.log(redactedJson({ path: rel, created: !dryRun }));
   else {
     const ui = createStyle();
     console.log(ui.line({ state: 'ok', key: 'plan-new', value: dryRun ? `would create ${rel}` : rel }));

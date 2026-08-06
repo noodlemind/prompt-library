@@ -10,7 +10,21 @@
  * Degradation ladder: truecolor → 256 → ascii/no-color. Same meaning at
  * every fidelity — never fake a capability the terminal doesn't have.
  * JSON output (--json) is produced elsewhere and is never styled.
+ *
+ * Fix-wave (AC6 absolute-guarantee widening): the human ledger is now an
+ * emission boundary in scope for redaction, exactly like the machine sinks.
+ * Every string this renderer emits — a painted fragment, a ledger row, a
+ * summary tally, an error block line — passes through the shared secret
+ * redactor (lib/redact.mjs) before it is returned to a caller's console.log.
+ * A ledger row routinely echoes caller-typed args (`learnings --why <token>`)
+ * or retrieved store content (a learning's trigger/claim/path), so this is
+ * where a human-facing leak would otherwise escape. The pass is a genuine
+ * no-op for secret-free text (redactText returns its input unchanged), so
+ * every existing ledger byte is unaffected; only a real secret shape changes.
+ * Idempotent, so the overlap between a composite row and the fragments it
+ * paints internally is harmless.
  */
+import { createRedactor } from './redact.mjs';
 
 // Stable exit codes — the agent contract. Values are append-only.
 export const EXIT = Object.freeze({
@@ -59,7 +73,12 @@ const ASCII_GLYPH_WIDTH = 4; // '[ok]' — the widest twin
 const ANSI_RE = /\x1b\[[0-9;]*m/g;
 
 function detectColor({ stream, env, argv }) {
-  if (argv.includes('--no-color')) return 'none';
+  // Fix-wave C1: only honor --no-color BEFORE a literal `--` boundary —
+  // post-boundary tokens are free-text content, never flags (same rule as
+  // lib/flags.mjs#parseFlags / lib/registry.mjs#validateArgs).
+  const boundary = argv.indexOf('--');
+  const flagArgs = boundary === -1 ? argv : argv.slice(0, boundary);
+  if (flagArgs.includes('--no-color')) return 'none';
   if (env.NO_COLOR !== undefined && env.NO_COLOR !== '') return 'none';
   if (!stream || !stream.isTTY) return 'none';
   if (env.TERM === 'dumb') return 'none';
@@ -83,18 +102,25 @@ export function createStyle({
   env = process.env,
   argv = process.argv.slice(2),
   platform = process.platform,
+  redactor,
 } = {}) {
   const color = detectColor({ stream, env, argv });
   const unicode = detectUnicode({ env, platform, color });
+  // One redactor bound to this renderer's env snapshot (injectable for tests).
+  // Applied to every emitted string below so no human-facing surface can leak
+  // a secret. redactText never throws and no-ops on secret-free text.
+  const activeRedactor = redactor || createRedactor({ env });
+  const scrub = (text) => (typeof text === 'string' && text ? activeRedactor.redactText(text) : text);
 
   function paint(token, text) {
+    const safe = scrub(text);
     const entry = PALETTE[token];
-    if (!entry || color === 'none') return text;
+    if (!entry || color === 'none') return safe;
     const open =
       color === 'truecolor'
         ? `\x1b[38;2;${entry[0][0]};${entry[0][1]};${entry[0][2]}m`
         : `\x1b[38;5;${entry[1]}m`;
-    return `${open}${text}\x1b[0m`;
+    return `${open}${safe}\x1b[0m`;
   }
 
   function glyph(state) {
@@ -122,10 +148,13 @@ export function createStyle({
   function line({ state, key, value = '', note, next, keyWidth = 10 }) {
     let out = state ? glyphGutter(state) : '';
     out += `${String(key).padEnd(keyWidth)}  `;
+    // `value` is inserted verbatim (unpainted), so scrub the whole composed
+    // row — this is the choke point where a ledger `value` echoing a secret
+    // (e.g. `learnings --why <token>`'s id row) would otherwise reach stdout.
     out += value;
     if (note) out += paint('muted', ` · ${note}`);
     if (next) out += paint('muted', ` ${arrow} ${next}`);
-    return out.trimEnd();
+    return scrub(out.trimEnd());
   }
 
   /** The closing tally: "2 ok · 1 warn · 1 err → exit 6", all muted. */
@@ -138,8 +167,11 @@ export function createStyle({
 
   /** Error & recovery block: code, plain message, one fix, optional docs. */
   function errorBlock({ code, message, fix, docs, exit = 1 }) {
+    // `message` is inserted unpainted, so scrub it explicitly; code/fix/docs
+    // flow through paint (already scrubbed). An error's message/fix routinely
+    // echoes caller input (a bad flag value, an unknown target id).
     const lines = [`${glyph('error')} ${paint('error', code)}`];
-    if (message) lines.push(`  ${message}`);
+    if (message) lines.push(`  ${scrub(String(message))}`);
     if (fix) lines.push(paint('muted', `  ${arrow} fix   ${fix}`));
     if (docs) lines.push(paint('muted', `  ${arrow} docs  ${docs}`));
     lines.push(paint('muted', `  exit ${exit}`));
