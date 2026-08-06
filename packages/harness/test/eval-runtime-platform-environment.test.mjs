@@ -16,7 +16,7 @@ const DAYTONA_METADATA = Object.freeze({
   DAYTONA_REGION_ID: 'us',
   DAYTONA_SANDBOX_ID: '8d2890a2-57ef-4d75-91d5-2b0a81256b89',
   DAYTONA_SANDBOX_SNAPSHOT: SNAPSHOT_REFERENCE,
-  DAYTONA_SANDBOX_USER: 'root',
+  DAYTONA_SANDBOX_USER: 'daytona',
 });
 
 test('scrubs exactly the six validated Daytona platform metadata variables', () => {
@@ -68,6 +68,20 @@ test('accepts bounded Daytona snapshot references but keeps OTEL credential-free
   ]) {
     assert.throws(
       () => scrubDaytonaPlatformMetadata({ DAYTONA_OTEL_ENDPOINT: value }),
+      PlatformEnvironmentError,
+    );
+  }
+});
+
+test('accepts Daytona sandbox-user metadata without treating it as the runtime uid', () => {
+  for (const value of ['daytona', 'root']) {
+    assert.doesNotThrow(() => scrubDaytonaPlatformMetadata({
+      DAYTONA_SANDBOX_USER: value,
+    }));
+  }
+  for (const value of ['runner', 'Daytona', 'daytona-admin']) {
+    assert.throws(
+      () => scrubDaytonaPlatformMetadata({ DAYTONA_SANDBOX_USER: value }),
       PlatformEnvironmentError,
     );
   }

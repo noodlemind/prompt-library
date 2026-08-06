@@ -59,7 +59,13 @@ function validateMetadata(name, value) {
   } else if (name === 'DAYTONA_REGION_ID') {
     if (value !== 'us') fail('Daytona platform metadata is invalid');
   } else if (name === 'DAYTONA_SANDBOX_USER') {
-    if (value !== 'root') fail('Daytona platform metadata is invalid');
+    // Daytona reports the configured sandbox user here (currently `daytona`),
+    // not the effective uid of the snapshot entrypoint. Runtime privilege is
+    // attested independently with geteuid(), so keep this metadata allowlist
+    // exact without conflating it with the process identity.
+    if (value !== 'daytona' && value !== 'root') {
+      fail('Daytona platform metadata is invalid');
+    }
   }
 }
 

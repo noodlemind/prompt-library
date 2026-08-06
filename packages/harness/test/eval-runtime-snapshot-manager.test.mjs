@@ -27,7 +27,7 @@ const DAYTONA_METADATA = Object.freeze({
   DAYTONA_REGION_ID: 'us',
   DAYTONA_SANDBOX_ID: '8d2890a2-57ef-4d75-91d5-2b0a81256b89',
   DAYTONA_SANDBOX_SNAPSHOT: `ghcr.io/daytonaio/runtime@sha256:${HASH('a')}`,
-  DAYTONA_SANDBOX_USER: 'root',
+  DAYTONA_SANDBOX_USER: 'daytona',
 });
 
 async function withLiveDaytonaMetadata(action) {
