@@ -284,6 +284,52 @@ function emitError({ code, message, fix, exit }) {
   }
 }
 
+// P1.2 lane flag plumbing: `--output json-envelope|agent` (or `--output=...`)
+// selects the NEW opt-in envelope/agent rendering (lib/envelope.mjs,
+// lib/agent-lane.mjs) for registry-dispatched commands only. It is parsed
+// and stripped OUT of the args a registered command sees before anything
+// else runs, so `--json` and every existing flag stay byte-identical for
+// every command whether or not this flag exists — the pre-existing
+// switch/handler code paths never observe `--output` at all. Throws the
+// same structured E_USAGE shape as every other harness usage error, caught
+// by main()'s existing top-level catch — no new error-rendering path
+// required.
+//
+// Honors the codebase's `--` literal-argument boundary (lib/argv.mjs:24,
+// lib/registry.mjs's `validateArgs`): scanning stops at the first literal
+// `--` token, so `--output` appearing after it is free-text content, not a
+// flag — e.g. `orient --json -- --output agent` must keep emitting the
+// legacy JSON envelope, exactly like every other flag-shaped token after `--`.
+const OUTPUT_LANES = { 'json-envelope': 'json', agent: 'agent' };
+
+function extractOutputLane(rawArgs) {
+  let idx = -1;
+  for (let i = 0; i < rawArgs.length; i++) {
+    if (rawArgs[i] === '--') break; // literal-argument boundary — nothing past this is a flag
+    if (rawArgs[i] === '--output' || rawArgs[i].startsWith('--output=')) {
+      idx = i;
+      break;
+    }
+  }
+  if (idx === -1) return { args: rawArgs, output: 'ledger' };
+
+  const token = rawArgs[idx];
+  const eq = token.indexOf('=');
+  const hasInlineValue = eq !== -1;
+  const value = hasInlineValue ? token.slice(eq + 1) : rawArgs[idx + 1];
+  const consumed = hasInlineValue ? 1 : 2;
+  const lane = OUTPUT_LANES[value];
+  if (!lane) {
+    const shown = value === undefined ? '(missing)' : JSON.stringify(value);
+    throw Object.assign(new Error(`invalid --output: ${shown} — must be json-envelope or agent`), {
+      code: 'E_USAGE',
+      hint: 'harness help',
+      exit: EXIT.usage,
+    });
+  }
+  return { args: [...rawArgs.slice(0, idx), ...rawArgs.slice(idx + consumed)], output: lane };
+}
+
 async function main() {
   let code = 0;
   try {
@@ -293,7 +339,8 @@ async function main() {
     // other command falls through to the switch below unchanged; the
     // switch is not removed until a later phase migrates the rest.
     if (hasCommand(command)) {
-      code = await dispatchRegistered([command, ...args], {});
+      const { args: laneArgs, output } = extractOutputLane(args);
+      code = await dispatchRegistered([command, ...laneArgs], { style: out, output });
     } else switch (command) {
       case 'help':
       case '--help':

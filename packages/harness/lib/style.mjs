@@ -22,6 +22,18 @@ export const EXIT = Object.freeze({
   doctorFailed: 6,
   network: 7,
   interrupted: 130,
+  // The runner's `status: 'cancelled'` outcome (an AbortSignal fired) is the
+  // same process-level exit family as an interactive SIGINT — 130 already
+  // means "the run stopped because something asked it to, not because it
+  // failed" — so `cancelled` reuses `interrupted`'s value instead of
+  // claiming a new one. Kept as its own key (not just an alias reference)
+  // so callers can name the status-vocabulary term they mean.
+  cancelled: 130,
+  // Distinct from every status above: a `status: 'timed-out'` outcome must
+  // never collapse into a generic failure (exit 1) or into `cancelled` — the
+  // agent contract needs to tell "ran out of time" apart from "was stopped"
+  // apart from "errored". Next free append-only low value after `network:7`.
+  timedOut: 8,
 });
 
 // token → [truecolor rgb, 256-color index]

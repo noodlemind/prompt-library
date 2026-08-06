@@ -19,9 +19,22 @@
  * command and falls through to the hand-written switch for everything
  * else; the switch itself is not removed until a later phase (P1.6) moves
  * every remaining command over.
+ *
+ * P1.2 adds the output-lane machinery (lib/envelope.mjs, lib/agent-lane.mjs)
+ * behind `ctx.output` and an entry's optional `resultOf(argv, ctx)`
+ * producer — see `dispatch`'s doc comment below for the exact contract and
+ * the compatibility guarantee (every pre-P1.2 caller is unaffected).
  */
+import fs from 'node:fs';
+import path from 'node:path';
 import { EXIT } from './style.mjs';
-import { cmdOrient, cmdLearnings, cmdStatus } from './commands.mjs';
+import { cmdOrient, cmdLearnings, cmdStatus, pkgRoot } from './commands.mjs';
+import { parseFlags } from './flags.mjs';
+import { parseQueryFromArgv } from './argv.mjs';
+import { resolveCopilotHome } from './paths.mjs';
+import { readLock } from './lock.mjs';
+import { createEnvelope, createErrorEnvelope, STATUS } from './envelope.mjs';
+import { renderAgentLane } from './agent-lane.mjs';
 
 const REGISTRY = new Map();
 
@@ -153,17 +166,26 @@ export function validateArgs(entry, argv) {
  * Resolve, strictly validate, and run one registered command.
  *
  * `argv` is `[commandName, ...args]` — the same slice bin/harness.mjs
- * already computes from `process.argv`. `ctx` is reserved for later phases
- * (output-lane selection, injected clock/streams, policy) and is passed
- * through untouched; today's handlers ignore it.
+ * already computes from `process.argv`. `ctx` is `{style, output}` (P1.2):
+ * `output` selects the output lane — `'ledger' | 'json' | 'jsonl' | 'agent'`
+ * — and `style` is the bound `createStyle()` instance (see lib/style.mjs).
+ * `output` defaults to (and any caller omitting it behaves exactly as)
+ * `'ledger'`, which routes to the pre-existing handler untouched — every
+ * caller from before P1.2 (including every existing test that calls
+ * `dispatch(argv, {})`) is therefore unaffected byte-for-byte. Only
+ * `'json'` (the NEW versioned envelope — distinct from the legacy `--json`
+ * flag, which the handler still owns and renders exactly as before) and
+ * `'agent'` currently divert to the new lane machinery, and only for an
+ * entry that declares a `resultOf` producer (see `dispatchLane` below).
  *
- * Resolves to the handler's exit code. Throws the same `{ code: 'E_USAGE',
- * exit: EXIT.usage }` shape for an unregistered command or an unknown flag
- * that every other harness error already uses — bin/harness.mjs's existing
- * top-level catch renders it via `ui.errorBlock` / the `--json` error
- * envelope with no new error-handling path required. Callers that want the
- * switch-fallback behavior described in the Phase 1 plan should check
- * `hasCommand(name)` before calling `dispatch` for that command.
+ * Resolves to the handler's (or the lane renderer's) exit code. Throws the
+ * same `{ code: 'E_USAGE', exit: EXIT.usage }` shape for an unregistered
+ * command or an unknown flag that every other harness error already uses —
+ * bin/harness.mjs's existing top-level catch renders it via
+ * `ui.errorBlock` / the `--json` error envelope with no new error-handling
+ * path required. Callers that want the switch-fallback behavior described
+ * in the Phase 1 plan should check `hasCommand(name)` before calling
+ * `dispatch` for that command.
  */
 export async function dispatch(argv, ctx = {}) {
   const [name, ...rest] = argv;
@@ -172,7 +194,127 @@ export async function dispatch(argv, ctx = {}) {
     throw usageError(`unknown command: ${name}`, 'harness help');
   }
   validateArgs(entry, rest);
+  const lane = ctx.output;
+  if (lane && lane !== 'ledger' && entry.resultOf) {
+    return dispatchLane(entry, rest, ctx, lane);
+  }
   return entry.handler(rest, ctx);
+}
+
+/**
+ * Render one command through the NEW envelope/agent lane machinery
+ * (P1.2's opt-in surface — see the module doc and dispatch()'s doc above).
+ * `entry.resultOf(argv, ctx)` computes the SAME canonical result data the
+ * entry's legacy `handler` already prints internally — see each `resultOf`
+ * below for why it is a small, deliberate duplication of a few branches
+ * from lib/commands.mjs rather than a shared extraction (this task's file
+ * ownership excludes lib/commands.mjs; a later phase migrating every
+ * command onto the registry is the natural place to remove the
+ * duplication).
+ *
+ * Success always carries `status: 'ok'` here — true for all three P1.2
+ * pilots today, since each already always exits 0 on its success paths (see
+ * their `resultOf` functions: the two branches that don't are usage/target
+ * errors, which THROW instead of returning `pass:false`, and are handled by
+ * the catch branch below with their own real exit codes). A future
+ * registered command with a native non-zero-but-not-thrown outcome can
+ * extend this when it is migrated — not needed yet.
+ */
+async function dispatchLane(entry, rest, ctx, lane) {
+  const schema = 1;
+  try {
+    const result = await entry.resultOf(rest, ctx);
+    const envelope = createEnvelope({ command: entry.name, schema, status: STATUS.OK, ...result });
+    if (lane === 'agent') {
+      const rendered = renderAgentLane(envelope, {
+        budgetBytes: entry.agentBudgetBytes,
+        redactor: ctx.redactor,
+        inert: ctx.inert,
+      });
+      process.stdout.write(`${rendered.text}\n`);
+    } else {
+      // lane === 'json' (or any future lane this entry doesn't specialize
+      // for) — the versioned envelope is always a safe default rendering.
+      console.log(JSON.stringify(envelope));
+    }
+    return EXIT.ok;
+  } catch (err) {
+    const exit = Number.isInteger(err.exit) ? err.exit : 1;
+    const status = err.code === 'E_CANCELLED' ? STATUS.CANCELLED : err.code === 'E_TIMEOUT' ? STATUS.TIMED_OUT : STATUS.FAILED;
+    const errorEnvelope = createErrorEnvelope({
+      command: entry.name,
+      schema,
+      status,
+      code: err.code || 'E_UNEXPECTED',
+      message: err.message,
+      fix: err.hint,
+      exit,
+    });
+    if (lane === 'agent') {
+      const rendered = renderAgentLane(errorEnvelope, {
+        budgetBytes: entry.agentBudgetBytes,
+        redactor: ctx.redactor,
+        inert: ctx.inert,
+      });
+      process.stdout.write(`${rendered.text}\n`);
+    } else {
+      console.error(JSON.stringify(errorEnvelope));
+    }
+    return exit;
+  }
+}
+
+function readHarnessVersion() {
+  const pkg = JSON.parse(fs.readFileSync(path.join(pkgRoot, 'package.json'), 'utf8'));
+  return pkg.version;
+}
+
+// --- resultOf producers (P1.2): the canonical result data behind each
+// pilot's legacy `--json` output, recomputed via the SAME already-exported
+// building blocks lib/commands.mjs's cmdOrient/cmdLearnings/cmdStatus call
+// internally (runOrient, listingView/whyView, readLock + the package
+// version) — never lib/commands.mjs itself, which this task does not edit.
+
+async function orientResultOf(argv) {
+  const flags = parseFlags(argv);
+  const workspace = path.resolve(flags.workspace);
+  const copilotHome = resolveCopilotHome(flags.copilotHome);
+  const query = parseQueryFromArgv(argv, flags);
+  const { runOrient } = await import('./orient.mjs');
+  return runOrient({ workspace, copilotHome, flags, query });
+}
+
+async function learningsResultOf(argv) {
+  const flags = parseFlags(argv);
+  const workspace = path.resolve(flags.workspace);
+  const copilotHome = resolveCopilotHome(flags.copilotHome);
+  const { listingView, whyView } = await import('./knowledge/listing.mjs');
+
+  // Mirrors cmdLearnings' own two usage/target guards exactly (including
+  // the trailing-bare-`--why` case parseFlags itself can't detect), but
+  // THROWS instead of returning `{pass:false, ...}` — dispatchLane's catch
+  // branch turns this into the unified error envelope with the SAME exit
+  // codes cmdLearnings already returns for these cases (EXIT.usage / 1).
+  if (argv.includes('--why') && !flags.why) {
+    throw usageError('usage: harness learnings --why <id>', 'harness learnings --why <id>');
+  }
+  if (flags.why) {
+    const result = whyView({ workspace, id: flags.why });
+    if (!result) {
+      throw Object.assign(new Error(`no learning ${flags.why}`), { code: 'E_TARGET', exit: 1 });
+    }
+    return result;
+  }
+
+  const domain = argv[0] && !argv[0].startsWith('--') ? argv[0] : null;
+  return listingView({ workspace, copilotHome, domain });
+}
+
+async function statusResultOf(argv) {
+  const flags = parseFlags(argv);
+  const copilotHome = resolveCopilotHome(flags.copilotHome);
+  const lock = readLock(copilotHome);
+  return { packageVersion: readHarnessVersion(), copilotHome, lock };
 }
 
 function flagLabel(def) {
@@ -258,6 +400,7 @@ registerCommand({
     ],
   },
   handler: cmdOrient,
+  resultOf: orientResultOf,
 });
 
 registerCommand({
@@ -281,6 +424,7 @@ registerCommand({
     ],
   },
   handler: cmdLearnings,
+  resultOf: learningsResultOf,
 });
 
 registerCommand({
@@ -292,4 +436,5 @@ registerCommand({
   outputModes: ['ledger', 'json'],
   args: { positionals: [], flags: [] },
   handler: cmdStatus,
+  resultOf: statusResultOf,
 });
