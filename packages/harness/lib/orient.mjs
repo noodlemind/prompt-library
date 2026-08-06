@@ -13,11 +13,44 @@ import { parseQueryFromArgv } from './argv.mjs';
 import { rankLearnings, explainLearnings } from './knowledge/retrieve.mjs';
 import { readStoreConfig, storeDir } from './knowledge/store.mjs';
 import { consolidateStatus } from './knowledge/consolidate.mjs';
-import { redactRecallEntry } from './secret-scan.mjs';
+import { deriveGitContext } from './git-context.mjs';
+import { redactRecallEntry, redactSecrets } from './secret-scan.mjs';
+import { inertLine } from './knowledge/store.mjs';
+
+// The `--json` lane's copy of the git context. buildContextPack already
+// redacts, flattens, and caps the branch name before rendering it into the
+// pack (a fork checkout's ref name is attacker-influenced), and the session
+// keeps the RAW value because resolveWriteLayer compares it against live git
+// state — but `orient --json` returned the raw object straight to its
+// consumer, with no redaction and no cap, plus the absolute worktree path.
+// Same treatment as the pack, at the boundary where the JSON copy is built.
+const ORIENT_BRANCH_CAP = 80;
+function jsonGitContext(gitContext) {
+  if (!gitContext) return null;
+  return {
+    branch: gitContext.branch ? inertLine(redactSecrets(String(gitContext.branch))).slice(0, ORIENT_BRANCH_CAP) : null,
+    branchKey: gitContext.branchKey,
+    detached: gitContext.detached,
+    headSha: gitContext.headSha,
+    baseSha: gitContext.baseSha,
+  };
+}
 
 export function runOrient({ workspace, copilotHome, flags, query }) {
   const q = query || flags.query || '';
   ensureHarnessDir(workspace, flags.dryRun);
+
+  // Branch/worktree detection (blueprint P2): advisory display context —
+  // recorded in the session and rendered as a pack-header line. ADVISORY
+  // ONLY: layer routing always re-derives git context at WRITE time; a write
+  // whose current HEAD disagrees with this recorded branch warns.
+  let gitContext = null;
+  try {
+    gitContext = deriveGitContext({ workspace });
+    if (!gitContext.branch && !gitContext.detached) gitContext = null;
+  } catch {
+    gitContext = null;
+  }
 
   const recall = rankRecall(q, {
     copilotHome,
@@ -156,6 +189,7 @@ export function runOrient({ workspace, copilotHome, flags, query }) {
     repoMapRef,
     gatePreview: { pass: gatePreview.pass, blockedReason: gatePreview.blockedReason },
     nextTools,
+    gitContext,
   });
 
   // Injected-token ledger: bytes of the "## Learnings (memory)" section as it
@@ -188,6 +222,13 @@ export function runOrient({ workspace, copilotHome, flags, query }) {
     contextPack: packRel,
     gateStatus: gatePreview.pass ? 'pass' : 'blocked',
     blockedReason: gatePreview.blockedReason,
+    // Advisory branch context (blueprint P2/P1): display + staleness-warning
+    // baseline only — never an input to write-time layer routing, which
+    // re-derives git context fresh at every write.
+    gitBranch: gitContext?.branch || null,
+    gitBranchKey: gitContext?.branchKey || null,
+    gitDetached: gitContext?.detached || false,
+    gitHeadSha: gitContext?.headSha || null,
   };
   writeSession(workspace, newSession, flags.dryRun);
 
@@ -211,6 +252,7 @@ export function runOrient({ workspace, copilotHome, flags, query }) {
     contextPack: packRel,
     repoMap: repoMapRef,
     knowledgeDebt,
+    gitContext: jsonGitContext(gitContext),
     gateStatus: newSession.gateStatus,
     blockedReason: newSession.blockedReason,
     nextTools,

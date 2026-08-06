@@ -21,6 +21,15 @@ export const EVENT_TYPES = new Set([
   'learning',
   'knowledge',
   'session_end',
+  // Formerly silently dropped (harness-tool-contract.md footnote): these four
+  // commands always CALLED writeEvent, but their types were absent from this
+  // allow-list, so the writes no-opped. Allow-listed as Phase 1 hygiene
+  // (harness evolution blueprint P6) — the call sites in commands.mjs are
+  // unchanged; the events simply record now.
+  'init_repo',
+  'recall',
+  'validate_plan',
+  'index',
 ]);
 
 function shouldSkipEvents(flags = {}) {
@@ -44,6 +53,9 @@ function safeChecks(checks) {
     id: check.id,
     pass: Boolean(check.pass),
     severity: check.severity || (check.pass ? 'ok' : 'fail'),
+    // Retain the raw status so consumers can tell a skipped check (neutral)
+    // from a failed one — `pass: false` alone conflates the two.
+    ...(check.status ? { status: check.status } : {}),
   }));
 }
 
@@ -75,7 +87,7 @@ export function writeEvent(workspace, flags, payload) {
   };
   if (payload.blockedReason) event.blockedReason = payload.blockedReason;
   if (payload.usage) event.usage = payload.usage;
-  for (const field of ['tool', 'mutation', 'targets', 'targetResolved', 'gate', 'decision', 'durationMs', 'success', 'learnings', 'learningsBytes']) {
+  for (const field of ['tool', 'mutation', 'targets', 'targetResolved', 'gate', 'decision', 'durationMs', 'success', 'learnings', 'learningsBytes', 'learningLayers']) {
     if (payload[field] !== undefined) event[field] = payload[field];
   }
 

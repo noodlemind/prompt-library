@@ -227,6 +227,33 @@ capabilities:
     replacement: engineer-agent
     reason: Duplicated the normative Engineer runtime loop.
 
+  # Harness evolution surfaces (approved blueprint; candidate per its Human
+  # Decision conditions — promotion is a later human step with usage evidence).
+  knowledge-lifecycle:
+    type: cli
+    status: candidate
+    owner: developer-experience
+    version: 1
+    origin: harness-evolution
+    proposal: knowledge/proposals/harness-evolution-blueprint.md
+    triggers: [knowledge status, knowledge promote, knowledge prune, branch bucket, layered knowledge]
+  structural-index:
+    type: cli
+    status: candidate
+    owner: developer-experience
+    version: 1
+    origin: harness-evolution
+    proposal: knowledge/proposals/harness-evolution-blueprint.md
+    triggers: [index --structural, structural diff, symbol index, callers]
+  structural-expectations:
+    type: check
+    status: candidate
+    owner: developer-experience
+    version: 1
+    origin: harness-evolution
+    proposal: knowledge/proposals/harness-evolution-blueprint.md
+    triggers: [structural expectations, verify severity, advisory check]
+
 engineer_allowlist:
   - code-implementer
   - code-review-coordinator

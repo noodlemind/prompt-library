@@ -77,9 +77,13 @@ const CATALOG = [
     group: 'workspace',
     commands: [
       { name: 'init-repo', desc: 'seed the .harness workspace in a product repo', sig: '', options: [] },
-      { name: 'index', desc: 'rebuild knowledge index · --status reports drift',
-        sig: '[--status]',
-        options: [['--status', 'read-only freshness report vs HEAD (never rebuilds)']] },
+      { name: 'index', desc: 'rebuild knowledge index · --status reports drift · --structural builds the code symbol index',
+        sig: '[--status] [--structural [--since <ref>]]',
+        options: [
+          ['--status', 'read-only freshness report vs HEAD (never rebuilds)'],
+          ['--structural', 'build the persistent structural code index under ~/.harness/index/<repo-id>/<worktree-id>/structural (optional tree-sitter tier, lexical fallback)'],
+          ['--since <ref>', 'requires --structural: re-parse only files changed since <ref> (validated via git rev-parse; leading "-" rejected). Narrows ONLY when <ref> is the sha the prior index was built at — any other ref is reported and ignored for a full pass'],
+        ] },
       { name: 'plan-new', desc: 'scaffold a gate-ready plan',
         sig: '--type feat --slug <slug> --intent "..."',
         options: [
@@ -180,6 +184,9 @@ const CATALOG = [
         sig: '<on|suggest|off|freeze|capture-only> | --status | purge <file|--all> | commit <none|repo> | migrate-store',
         options: [
           ['--status', 'show the active mode (default)'],
+          ['status', 'layer-aware report: golden domain counts, branch buckets, recall-index drift (read-only)'],
+          ['promote [--branch <key>] [--ids a,b] [--all]', 'emit a reviewable branch→golden promotion op-set (.harness/promote-ops.json)'],
+          ['prune [--branch <key>] [--merged] [--stale <days>]', 'delete branch buckets (human authority, never mode-gated)'],
           ['purge <file>', 'cascade-delete an episode and dependent learnings'],
           ['purge --all', 'reset the learnings store (episodes remain, become debt)'],
           ['commit <none|repo>', 'repo mirrors ACTIVE learnings into docs/knowledge/learnings (opt-in, never git-commits the product repo); none is the default'],
@@ -192,6 +199,7 @@ const CATALOG = [
           ['--candidates', 'deterministic work packet for the consolidation skill'],
           ['--apply --ops <path>', 'validate and apply an ops JSON (sole writer); suggest mode requires --yes'],
           ['--rebuild --yes', 'T2 reset for model-upgrade regeneration (git history retains learnings)'],
+          ['--layer golden', 'explicit golden-layer override for --apply (writes otherwise route by write-time git context)'],
         ] },
       { name: 'remember', desc: 'teach the harness a durable claim (human-teaching episode + learning)',
         sig: '"<claim>" --trigger "<t>" [--domain <d>]',

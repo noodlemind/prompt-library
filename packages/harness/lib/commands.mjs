@@ -345,6 +345,16 @@ export async function cmdIndex(argv) {
   const workspace = path.resolve(flags.workspace);
   const logger = (m) => log(flags, m);
 
+  // `--since` only narrows a structural rebuild. Accepting and ignoring it
+  // anywhere else silently does nothing the caller asked for.
+  if (flags.since && !argv.includes('--structural')) {
+    throw Object.assign(new Error('--since requires --structural'), {
+      code: 'E_USAGE',
+      hint: 'run: harness index --structural --since <ref>',
+      exit: EXIT.usage,
+    });
+  }
+
   // Read-only freshness report — never rebuilds, zero model cost.
   if (argv.includes('--status')) {
     const { indexStatus } = await import('./index-status.mjs');
@@ -356,6 +366,102 @@ export async function cmdIndex(argv) {
       console.log(ui.line({ state, key: 'index', value, note: status.recommendation }));
     }
     return 0;
+  }
+
+  // Structural code index (blueprint P3). The async tree-sitter lifecycle is
+  // confined to THIS command path: grammars init here, the tables persist at
+  // ~/.harness/index/<repo-id>/structural/, and orient/buildRepoMap read the
+  // PREBUILT files synchronously. Fully functional with the optional grammar
+  // packages absent (lexical tier).
+  if (argv.includes('--structural')) {
+    const { buildStructuralIndex, validateSinceRef, renderStructuralDigest, readStructuralIndex } = await import(
+      './repo-map/structural-index.mjs'
+    );
+    const { createTreesitterExtract } = await import('./repo-map/treesitter-extractor.mjs');
+    const since = flags.since ? validateSinceRef(workspace, flags.since) : null;
+    const extractor = await createTreesitterExtract();
+    const result = await buildStructuralIndex({ workspace, extractor, since, dryRun: flags.dryRun, log: logger });
+    const integrity = (result.meta.integrityFailures || []).length > 0;
+    // A non-dry-run that could not persist (contained write refused) is a
+    // FAILURE — a caller must never treat an unavailable index as current.
+    const persistFailed = !flags.dryRun && !result.written;
+    writeEvent(workspace, flags, {
+      type: 'index',
+      command: 'index',
+      result: persistFailed ? 'fail' : integrity ? 'warn' : 'pass',
+      exitCode: persistFailed ? 1 : 0,
+    });
+    if (flags.json) {
+      // Program lane (§9): a bounded summary envelope — never the raw tables.
+      emitJson(flags, {
+        pass: !persistFailed,
+        exitCode: persistFailed ? 1 : 0,
+        dir: result.dir,
+        written: result.written,
+        sha: result.meta.sha,
+        baseSha: result.meta.baseSha,
+        tier: result.meta.extractorTier,
+        filesIndexed: result.meta.filesIndexed,
+        reparsed: result.reparsed,
+        reused: result.reused,
+        removedFiles: result.removedFiles,
+        parseFailures: result.meta.parseFailures,
+        grammarVersions: result.meta.grammarVersions,
+        missingGrammars: result.meta.missingGrammars,
+        integrityFailures: result.meta.integrityFailures,
+        // Cap hits are part of the contract: a consumer must be able to tell a
+        // complete table from one the build truncated.
+        truncated: {
+          files: result.meta.truncated,
+          symbols: result.meta.symbolsTruncated,
+          symbolDetail: result.meta.symbolDetailTruncated,
+          moduleEdges: result.meta.moduleEdgesTruncated,
+          callEdges: result.meta.callEdgesTruncated,
+          unresolved: result.meta.unresolvedTruncated,
+        },
+        sinceIgnored: result.sinceIgnored,
+        priorUnreadable: result.priorUnreadable,
+        delta: result.delta,
+      });
+    } else {
+      const truncatedTables = [
+        result.meta.symbolsTruncated ? 'symbols' : null,
+        result.meta.symbolDetailTruncated ? 'per-symbol lists' : null,
+        result.meta.moduleEdgesTruncated ? 'module edges' : null,
+        result.meta.callEdgesTruncated ? 'call edges' : null,
+        result.meta.unresolvedTruncated ? 'unresolved' : null,
+      ].filter(Boolean);
+      // The delta is ALWAYS measured against the prior index, not only under
+      // --since; say so whenever there was one.
+      const deltaNote =
+        `symbols +${result.delta.added.count} −${result.delta.removed.count} ~${result.delta.changed.count}` +
+        (result.basedOn ? ' vs prior index' : ' (no prior index)') +
+        (truncatedTables.length ? ` · TRUNCATED at build caps (${truncatedTables.join(', ')})` : '') +
+        (result.sinceIgnored ? ` · ${result.sinceIgnored} — full pass` : '') +
+        (result.priorUnreadable?.length ? ` · prior index unreadable (${result.priorUnreadable.length})` : '');
+      console.log(
+        ui.line({
+          state: persistFailed ? 'error' : integrity ? 'warn' : 'ok',
+          key: 'structural',
+          value: `${result.meta.filesIndexed} files · ${result.reparsed} parsed · ${result.reused} reused · tier ${result.meta.extractorTier}`,
+          note: persistFailed
+            ? 'index could not be persisted — structural data is NOT current'
+            : integrity
+              ? `grammar integrity mismatch (${result.meta.integrityFailures.length}) — loud lexical fallback; run harness doctor`
+              : deltaNote,
+        })
+      );
+      // Agent lane (§9): the budgeted inert digest, never raw index JSON.
+      if (result.written) {
+        const index = readStructuralIndex(workspace);
+        if (index) {
+          for (const line of renderStructuralDigest(index).body.split('\n')) {
+            console.log(ui.paint('muted', `  ${line}`));
+          }
+        }
+      }
+    }
+    return persistFailed ? 1 : 0;
   }
 
   // Stamp the current git HEAD so `index --status` can measure drift later.
@@ -469,6 +575,14 @@ export async function cmdOrient(argv) {
     // credits only delivered learnings.
     learnings: result.deliveredLearnings || (result.learnings || []).map((l) => l.id),
     learningsBytes: result.learningsBytes,
+    // Layer attribution (blueprint P6/report split): recorded only when a
+    // branch-bucket learning actually surfaced, so pre-bucket event shapes
+    // are unchanged. Per-OCCURRENCE entries, not an id-keyed map: the
+    // protected-shadow overlay can deliver golden and branch entries with
+    // the SAME id, and a map would silently drop one side's attribution.
+    ...((result.learnings || []).some((l) => l.layer)
+      ? { learningLayers: (result.learnings || []).map((l) => ({ id: l.id, layer: l.layer === 'branch' ? 'branch' : 'golden' })) }
+      : {}),
   });
 
   if (flags.json) {
@@ -555,7 +669,7 @@ export async function cmdGate(argv) {
 }
 
 export async function cmdVerify(argv) {
-  const { runVerify, exitCodeForOutcome } = await import('./verify.mjs');
+  const { runVerify, exitCodeForOutcome, isGatingCheck } = await import('./verify.mjs');
   const flags = parseFlags(argv);
   const workspace = path.resolve(flags.workspace);
   const result = runVerify({ workspace, flags });
@@ -586,7 +700,16 @@ export async function cmdVerify(argv) {
 
   if (flags.json) emitJson(flags, result);
   else {
-    const failed = result.checks.filter((c) => c.status !== 'passed').length;
+    // `skipped` is neutral (e.g. the advisory structural check without an
+    // index): never a failure count, never the next fix target. An `advisory`
+    // check is neutral for the same reason — it cannot move the outcome
+    // (resolveOutcome excludes it), so counting it here or pointing the agent
+    // at it would route attention to the one check that can never unblock the
+    // run. Both stay visible as rows and in `advisoryFailures`. The predicate
+    // itself lives in verify.mjs (`isGatingCheck`) so this surface and the test
+    // that pins it can never drift apart.
+    const gating = isGatingCheck;
+    const failed = result.checks.filter(gating).length;
     const passed = result.outcome === 'passed';
     console.log(
       ui.line({
@@ -598,11 +721,23 @@ export async function cmdVerify(argv) {
         note: result.evidencePath,
       })
     );
-    printChecks(flags, result.checks, (c) => c.status === 'passed');
+    // A policy that tried to mark a plan-required check advisory disagrees
+    // with the plan it is verifying; the run ignores it, and says so.
+    for (const refused of result.refusedSeverityDowngrades || []) {
+      console.log(
+        ui.line({
+          state: 'warn',
+          key: 'policy',
+          value: `checks.${refused.id}.severity: advisory ignored`,
+          note: `the active plan requires ${refused.id}; running as ${refused.effective}`,
+        })
+      );
+    }
+    printChecks(flags, result.checks, (c) => c.status === 'passed' || c.status === 'skipped');
     if (passed) {
       printNext('harness compound (or /auto-compound), then stop');
     } else {
-      const firstFail = result.checks.find((c) => c.status !== 'passed');
+      const firstFail = result.checks.find(gating);
       if (firstFail) {
         const detail = String(firstFail.message ?? firstFail.name ?? '').slice(0, 100);
         printNext(`fix ${firstFail.id} (${detail})`);
@@ -858,6 +993,7 @@ export async function cmdConsolidate(argv) {
       approve: flags.yes,
       log: logger,
       copilotHome,
+      layer: flags.layer,
     });
     writeEvent(workspace, flags, {
       type: 'consolidate',
@@ -1283,6 +1419,171 @@ export async function cmdKnowledge(argv) {
       }
     } else {
       console.log(ui.line({ state: 'ok', key: 'migrate-store', value: `${result.from} -> ${result.to}` }));
+    }
+    return result.exitCode;
+  }
+
+  // Layer-aware read-only report (blueprint P6, Phase 1): golden per-domain
+  // counts, branch-bucket rows when buckets exist, and the recall-index drift
+  // line. 'status' is never a member of KNOWLEDGE_MODES, so there's no
+  // ambiguity with the mode-set branch below.
+  if (subcommand === 'status') {
+    const { knowledgeStatus } = await import('./knowledge/status.mjs');
+    const report = knowledgeStatus({ workspace, copilotHome });
+    writeEvent(workspace, flags, {
+      type: 'knowledge',
+      command: 'knowledge',
+      decision: 'status',
+      result: 'pass',
+      exitCode: 0,
+    });
+    if (flags.json) {
+      emitJson(flags, report);
+      return 0;
+    }
+    const { inertLine } = await import('./knowledge/store.mjs');
+    const keyWidth = keyWidthFor(['knowledge', 'golden', 'drift', ...report.golden.domains.map((d) => d.domain), ...report.buckets.map((b) => b.key)]);
+    const contextNote = report.context
+      ? report.context.detached
+        ? 'detached HEAD'
+        : `branch ${inertLine(report.context.branch).slice(0, 80)}`
+      : 'no git context';
+    console.log(
+      ui.line({
+        state: report.storeExists ? 'ok' : 'pending',
+        key: 'knowledge',
+        value: report.storeExists ? `mode ${report.mode} · commit ${report.commit}` : 'no store yet',
+        note: contextNote,
+        keyWidth,
+      })
+    );
+    console.log(
+      ui.line({ key: 'golden', value: `${report.golden.active} active · ${report.golden.total} total`, keyWidth })
+    );
+    for (const d of report.golden.domains) {
+      console.log(ui.line({ key: d.domain, value: `${d.active} active · ${d.total} total`, keyWidth }));
+    }
+    for (const b of report.buckets) {
+      const noteParts = [];
+      if (b.branch) noteParts.push(inertLine(b.branch).slice(0, 80));
+      if (b.ageDays !== null) noteParts.push(`${b.ageDays}d old`);
+      if (b.baseSha) noteParts.push(`base ${b.baseSha.slice(0, 12)}`);
+      noteParts.push(b.promotable ? 'promotable' : 'never promotable');
+      if (b.prunable) noteParts.push('prunable — harness knowledge prune');
+      if (b.ancestryOk === false) noteParts.push('base not an ancestor of HEAD — excluded from overlay');
+      console.log(
+        ui.line({
+          state: b.ancestryOk === false ? 'warn' : 'ok',
+          key: b.key,
+          value: `${b.active} active · ${b.total} total${b.promoted ? ` · ${b.promoted} promoted` : ''}`,
+          note: noteParts.join(' · '),
+          keyWidth,
+        })
+      );
+    }
+    if (report.drift) {
+      console.log(
+        ui.line({
+          state: report.drift.indexed ? (report.drift.stale ? 'warn' : 'ok') : 'pending',
+          key: 'drift',
+          value: report.drift.indexed ? (report.drift.stale ? 'recall index stale' : 'recall index current') : 'no recall index',
+          note: report.drift.recommendation,
+          keyWidth,
+        })
+      );
+    }
+    return 0;
+  }
+
+  // Branch→golden promotion emitter (blueprint §5): writes ONLY the
+  // reviewable op-set at .harness/promote-ops.json — the store mutates
+  // exclusively through `consolidate --apply` running in promotion mode.
+  if (subcommand === 'promote') {
+    const { buildPromotionOps } = await import('./knowledge/promote.mjs');
+    const logger = (m) => log(flags, m);
+    const ids = flags.ids ? flags.ids.split(',').map((s) => s.trim()).filter(Boolean) : null;
+    const result = buildPromotionOps({ workspace, branchKey: flags.branch, ids, all: flags.all, log: logger });
+    writeEvent(workspace, flags, {
+      type: 'knowledge',
+      command: 'knowledge',
+      decision: 'promote',
+      result: result.pass ? 'pass' : 'fail',
+      exitCode: result.exitCode,
+      blockedReason: result.blockedReason,
+    });
+    if (flags.json) {
+      emitJson(flags, result);
+    } else if (!result.pass) {
+      for (const l of ui.errorBlock({ code: 'E_USAGE', message: result.blockedReason, exit: result.exitCode })) {
+        console.error(l);
+      }
+    } else {
+      console.log(
+        ui.line({
+          state: 'ok',
+          key: 'promote',
+          value: `${result.ops} op(s) → ${result.opsPath}`,
+          note: `${result.bucketKey}${result.remaining ? ` · remaining ${result.remaining}` : ''}${result.skipped.length ? ` · skipped ${result.skipped.length}` : ''}`,
+        })
+      );
+      for (const s of result.skipped) console.log(ui.paint('muted', `  skip ${s.id} — ${s.reason}`));
+      printNext(result.nextTools?.[0]);
+    }
+    return result.exitCode;
+  }
+
+  // Bucket deletion (blueprint P6/§5): human authority, never mode-gated —
+  // exactly like purge. One store commit removes the selected buckets.
+  if (subcommand === 'prune') {
+    const { pruneBuckets } = await import('./knowledge/prune.mjs');
+    const logger = (m) => log(flags, m);
+    const result = pruneBuckets({
+      workspace,
+      branchKey: flags.branch,
+      merged: flags.merged,
+      staleDays: flags.stale,
+      // Deleting a bucket that still holds ACTIVE, unpromoted learnings is a
+      // destructive human decision — prune previews it and refuses without --yes.
+      yes: flags.yes,
+      log: logger,
+    });
+    writeEvent(workspace, flags, {
+      type: 'knowledge',
+      command: 'knowledge',
+      decision: 'prune',
+      result: result.pass ? 'pass' : 'fail',
+      exitCode: result.exitCode,
+      blockedReason: result.blockedReason,
+    });
+    if (flags.json) {
+      emitJson(flags, result);
+    } else {
+      // The per-bucket preview prints on BOTH paths — it is what a human needs
+      // in order to decide whether to re-run with --yes, and what a human
+      // deserves to see after a prune that did land. `p.branch` is already
+      // redacted/flattened/capped at the data boundary (safeBranchName).
+      for (const p of result.preview || []) {
+        console.log(
+          ui.paint(
+            'muted',
+            `  ${p.key}${p.branch ? ` (${p.branch})` : ''} — ${p.active ?? '?'} active · ${p.promoted ?? '?'} promoted · ${p.total ?? '?'} total`
+          )
+        );
+      }
+      if (!result.pass) {
+        for (const l of ui.errorBlock({ code: 'E_USAGE', message: result.blockedReason, exit: result.exitCode })) {
+          console.error(l);
+        }
+      } else {
+        console.log(
+          ui.line({
+            state: 'warn',
+            key: 'prune',
+            value: `${result.removed.length} bucket(s) removed`,
+            note: result.removed.join(' · '),
+          })
+        );
+      }
     }
     return result.exitCode;
   }

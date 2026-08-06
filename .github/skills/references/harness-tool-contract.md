@@ -57,15 +57,15 @@ This table tracks only what differs in runtime character across commands — whi
 |---------|------|--------|-------|
 | `install` / `upgrade` | human/CI | none | mutates `~/.copilot/` |
 | `doctor` | human/CI | none | read-only (`--host vscode` runs an isolated hook-lifecycle fixture) |
-| `init-repo` | human/CI | none¹ | mutates workspace (`.harness/`, `docs/plans/`, `docs/codebase-map.md`) |
+| `init-repo` | human/CI | writes¹ | mutates workspace (`.harness/`, `docs/plans/`, `docs/codebase-map.md`) |
 | `status` / `uninstall` | human/CI | none | read-only / mutates `~/.copilot/` (uninstall removes hydrated files) |
 | `orient` | agent-runtime | writes | mutates `.harness/` (context-pack, repo-map, session) |
-| `recall` | agent-runtime | none¹ | read-only |
+| `recall` | agent-runtime | writes¹ | read-only |
 | `gate` | agent-runtime | writes | mutates session state |
 | `verify` | agent-runtime | writes | mutates (evidence file + session) |
-| `validate-plan` | agent-runtime | none¹ | read-only |
+| `validate-plan` | agent-runtime | writes¹ | read-only |
 | `plan-new` | agent-runtime | none | mutates workspace (writes the plan; `--stdout` prints instead) |
-| `index` | agent-runtime | none¹ | mutates the knowledge index (`--status` read-only) |
+| `index` | agent-runtime | writes¹ | mutates the knowledge index (`--status` read-only); `--structural` mutates `~/.harness/index/<repo-id>/<worktree-id>/structural/` |
 | `get` | agent-runtime | none | read-only |
 | `compound` | agent-runtime | writes | mutates (index + solution doc + telemetry) |
 | `consolidate` | agent-runtime | writes | read-only (`--status`/`--candidates`); mutates the learnings store (`--apply`/`--rebuild --yes`) |
@@ -77,11 +77,38 @@ This table tracks only what differs in runtime character across commands — whi
 | `events` | agent-runtime | none | read-only |
 | `report` | agent-runtime | none | read-only (`--sync` writes `~/.harness/telemetry/`) |
 
-¹ `init-repo`/`recall`/`validate-plan`/`index` each call `writeEvent` (types `init_repo`/`recall`/`validate_plan`/`index`), but none of those four type strings is in the `EVENT_TYPES` allow-list (`events.mjs`) — `writeEvent` silently no-ops for an unlisted type, so the call exists in code yet nothing actually lands in `events.jsonl`; "none" is the ledger truth, not a simplification.
+¹ `init-repo`/`recall`/`validate-plan`/`index` historically called `writeEvent` (types `init_repo`/`recall`/`validate_plan`/`index`) while those four type strings were absent from the `EVENT_TYPES` allow-list (`events.mjs`), so the calls silently no-opped. The allow-list now includes all four (harness evolution Phase 1 hygiene) — the events record in `events.jsonl` like every other lifecycle write.
 
 **Query construction (deterministic-retrieval discipline):** build `--query` from the user's salient nouns and identifiers **verbatim** (e.g. `SYSTEM-OVERRIDE`, `payment`, `token`) — do not paraphrase intent into synonyms. The retrieval tokenizer normalizes identifier formats and morphology, but it cannot recover a term the query never contained. Passing the literal request terms is what keeps recall stable across phrasings.
 
 **Repo map & knowledge freshness (deterministic-first).** `orient` regenerates `.harness/repo-map.md` every turn from `git ls-files` + a lexical symbol/import extractor — so code orientation is always current and never depends on a model. `init-repo` and `index` additionally write a committed, timestamp-free `docs/codebase-map.md` (~2.5k-token budget, query-less) so cold-start agents read one durable orientation file instead of exploring. Learnings (semantic memory) live in a local never-pushed git store at `~/.harness/knowledge/<repo-id>/`; `orient` injects the top-3 trigger-matched learnings inside the existing 2 KB pack, attributed by id, with insight-derived claims fenced `[unverified memory — advisory]`. The `.harness/repo-map.md` (like `.harness/context-pack.md`) is an ephemeral derived artifact, not a persistent type. The knowledge index is refreshed manually (`harness index`) — run it after a major pull from main or a docs rewrite; `index --status` and the `orient` next-hint tell you when it has drifted. A staleness-or-intent maintenance refresh may additionally re-derive conventions via `/codebase-context` (an optional, cheap, non-reasoning model pass) and promote generalizable solution docs to the global `~/.copilot/knowledge` store (episodes only — never the learnings store, whose sole writer is `consolidate --apply`) — never per turn. The extractor is a seam: a tree-sitter tier (WASM, lazy-loaded grammars, lexical fallback for SQL/HCL) can implement the same `extract` shape to power symbol-accurate `refs`/`def`/`callers`, built only when telemetry shows the lexical map misleads the agent.
+
+**Structural index (optional tier — Phase 3).** `harness index --structural [--since <ref>]` builds a persistent, derived symbol index at `~/.harness/index/<repo-id>/<worktree-id>/structural/` (`files.json`, `symbols.json`, `graph.json`, `meta.json` with the `{sha, branch, baseSha, generatedAt}` generation stamp). The path is keyed per WORKTREE as well as per repo: worktrees of one repo share a `repo-id` and can sit at the same `meta.sha` with different working-tree content, so a single directory would serve each worktree the other's tables. Parsing uses optional web-tree-sitter WASM grammars (TypeScript/JavaScript/TSX, Python, Java); any other language, missing grammar, parse failure, or init failure falls back **per file** to the lexical extractor, so the harness works fully with the optional grammar packages absent — the lexical tier records real export flags (JS/TS `export` forms and CommonJS, Python `__all__` or module-level public defs, Java `public` members) plus explicit named-import references, so the structural checks are meaningful with no grammar installed. `grammars.lock` pins a sha256 digest per wasm AND for the JS loader entry point the dynamic import executes, both verified before instantiation; a mismatch is a **loud** lexical fallback — recorded in `meta.json` and failed (not warned) by doctor S1 — and a missing or unreadable lock refuses the treesitter tier and fails S1 rather than silently disabling verification. Rebuilds are incremental (mtime+size fast path, sha256 content confirm); `--since <ref>` re-parses only `git diff --name-only <ref> --` files after `git rev-parse --verify` validation (leading `-` rejected), and **only when `<ref>` resolves to exactly the sha the prior index was built at** — any other ref would leave intermediate commits stale under a freshly stamped `meta.sha`, so it is ignored (reported as `sinceIgnored` and on the ledger) and the build degrades to a full incremental pass. `--since` without `--structural` is a usage error. Table caps are recorded, never silent: `meta.json` carries `symbolsTruncated` / `moduleEdgesTruncated` / `callEdgesTruncated` / `unresolvedTruncated` (table-level, where a finding could be wrong) plus `symbolDetailTruncated` (the routine per-symbol def/ref cap, which only shortens a list), and an existing-but-unreadable table is reported (doctor S1) instead of reading as empty. When `meta.sha` equals the current HEAD, `orient`'s repo map prefers the prebuilt structural tables (still a synchronous read — the async grammar lifecycle never enters orient, and a stale index is rejected from `meta.json` alone without parsing the tables); otherwise behavior is byte-identical lexical. The committed `docs/codebase-map.md` stays lexical-only so host-local index state never leaks into a committed artifact. Output follows the three-audience contract: styled ledger for humans, the bounded `--json` summary envelope below for programs (never the raw tables), and a ≤1000-token inert digest as the agent lane — raw index JSON never enters model context. The index is derived and rebuildable: deleting the directory never loses knowledge. Unresolved graph edges (imports or calls the tables cannot bind) are preserved explicitly, never fabricated.
+
+**index --structural**
+```json
+{
+  "pass": true,
+  "exitCode": 0,
+  "dir": "~/.harness/index/<repo-id>/<worktree-id>/structural",
+  "written": true,
+  "sha": "<head-sha>",
+  "baseSha": null,
+  "tier": "treesitter",
+  "filesIndexed": 42,
+  "reparsed": 3,
+  "reused": 39,
+  "removedFiles": 0,
+  "parseFailures": 0,
+  "grammarVersions": { "javascript": "0.23.1", "typescript": "0.23.2", "tsx": "0.23.2", "python": "0.23.6", "java": "0.23.5" },
+  "missingGrammars": [],
+  "integrityFailures": [],
+  "truncated": { "files": false, "symbols": false, "symbolDetail": false, "moduleEdges": false, "callEdges": false, "unresolved": false },
+  "sinceIgnored": null,
+  "priorUnreadable": [],
+  "delta": { "added": { "count": 1, "names": ["chargeV2"] }, "removed": { "count": 0, "names": [] }, "changed": { "count": 0, "names": [] } }
+}
+```
 
 ### JSON shapes (stable fields)
 
@@ -127,7 +154,9 @@ For locked plans, both commands enforce criterion-to-check mappings and configur
 {
   "outcome": "passed",
   "plan": "docs/plans/example-plan.md",
-  "checks": [],
+  "checks": [{ "id": "scope", "status": "passed", "message": "...", "severity": "enforce" }],
+  "advisoryFailures": [],
+  "refusedSeverityDowngrades": [],
   "unverifiedCriteria": [],
   "scopeViolations": [],
   "openHardGaps": [],
@@ -144,6 +173,22 @@ For locked plans, both commands enforce criterion-to-check mappings and configur
 ```
 
 Allowed outcomes are `passed`, `failed`, and `inconclusive`. Only fresh `passed` evidence bound to the current plan contract, base ref, changed-file set, and workspace contents permits a delivery completion claim or compound. Plan Activity entries are excluded from the contract digest so the append-only ledger can record the returned evidence path. Read-only Answer and Investigate modes do not run delivery verification. Plan frontmatter names checks; executable argv arrays come only from `.github/harness/checks.yaml` and run without a shell. Approved one-off commands run outside harness through explicit host tool approval and are recorded as external evidence.
+
+**Per-check severity (policy v2).** `.github/harness/policy.yaml` may declare `version: 2` with an optional `checks:` map assigning each verify check a severity — the check-level knob is orthogonal to the run-level `enforcement` mode:
+
+| Severity | Effect of a failed check |
+|----------|--------------------------|
+| `enforce` | Fails verification (v1 behavior; default for every check without a policy entry or built-in default) |
+| `warn` | Degrades the outcome to `inconclusive` (exit 2 under enforce) |
+| `advisory` | Reported only — never affects outcome or exit code |
+
+Every check in the `verify` payload carries its effective `severity`; non-passing advisory checks are additionally listed under `advisoryFailures` (with their findings) so an exit-neutral signal is never silently lost. A v1 policy file (no `checks:` map) behaves exactly as before.
+
+`advisory` is refused for the built-in gating checks at policy load (error names the check and points at `warn`), and — because a policy file is plan-agnostic — it is also refused per run for any check the ACTIVE PLAN gates on: everything in `verification.required` plus every check mapped under `verification.criteria`. That refusal does not abort the run (aborting would write no evidence at all, failing open): the downgrade is ignored, the check runs at its built-in default severity, and the run reports it in `refusedSeverityDowngrades` (`[{ "id": "team-lint", "requested": "advisory", "effective": "enforce" }]`) plus a `warn` line on the CLI. `warn` stays available for every check, including plan-required ones.
+
+**Sanitized check payloads.** Every check `message`, `findings`, and `informational` payload in the `verify` result is secret-redacted, flattened to one line, and capped (240 chars per string, 20 entries per list, 50 findings) before it reaches `--json`, `.harness/evidence/*.json`, or the event log — those fields carry current-side repo text (extracted symbol names, plan-declared expectations) with no length bound of their own. A check's `id`, `status`, `severity`, and numeric fields pass through unchanged; a named check's `stdout`/`stderr` keep their existing 4000-char `trimOutput` bound and stay multi-line.
+
+**structural-expectations (built-in verify check, advisory by default).** Compares the structural diff of the change against the plan using the structural index at `~/.harness/index/<repo-id>/<worktree-id>/structural/` (`files.json`/`symbols.json`/`graph.json`/`meta.json` — shape contract in `packages/harness/lib/structural/shape.mjs`). Flags: changed **exported** symbols in files outside `## Impacted Files` (`unplanned-symbol-change` — export flags come from the index, so a purely local addition never fires); removed exported symbols whose callers in the graph survive the change (`removed-symbol-with-callers`); unmet plan-frontmatter `structural_expectations:` entries marked `required: true` (`unmet-required-expectation` — unmarked entries stay informational). The check never asserts what it could not compare: a missing index or a baseline `meta.sha` that is not an ancestor of HEAD reports `skipped`; a per-file extractor-tier mismatch (`tier-mismatch-skipped`), a changed file in a language it cannot read (`file-not-evaluated` / `expectation-not-evaluated`), and findings computed from a table that hit an index build cap (`<finding>-informational`) all stay informational; and a run where NOTHING was compared reports `skipped`, never `passed`. `skipped` never affects the outcome at any severity. Policy `checks: { structural-expectations: { severity: warn|enforce } }` opts the flags into blocking.
 
 **Learning attribution (cited half).** `orient` records the learning ids it surfaced in a session; `verify --learnings <id1,id2>` closes the loop by recording the ids the skill actually applied while doing the work — pass only ids that materially changed an action, not every id the pack mentioned. `orient` also records `learningsBytes` on its own event — the post-truncation byte size of the "## Learnings (memory)" section actually injected into the pack — which `harness report`'s token ledger sums into an approximate injected-token count (`slos.knowledgeTokens`), a cost figure only, never a "tokens saved" claim. `harness report` derives knowledge-layer utilization from cited ÷ surfaced across the event log (both a unique-id rate and an occurrence-weighted rate), and `harness doctor` warns when the weighted utilization stays under 15% with 20+ surfaced occurrences.
 
@@ -245,6 +290,31 @@ Allowed outcomes are `passed`, `failed`, and `inconclusive`. Only fresh `passed`
 { "pass": true, "exitCode": 0, "removed": { "episode": "docs/solutions/...", "learnings": ["..."], "links": ["..."], "ledger": 1 }, "blockedReason": null }
 ```
 
+**knowledge status** — read-only layer-aware report (golden per-domain counts, branch-bucket rows when buckets exist, recall-index drift). Emits a `knowledge` event; never creates or mutates the store. Bucket `promotable` is derived from the key shape (`detached-*` is never promotable); `ancestryOk: false` marks a bucket whose recorded base is not an ancestor of the current HEAD (excluded from the read overlay).
+```json
+{
+  "pass": true,
+  "exitCode": 0,
+  "storeExists": true,
+  "mode": "on",
+  "commit": "none",
+  "context": { "branch": "feature/x", "branchKey": "feature-x-1a2b3c4d", "detached": false },
+  "golden": { "active": 12, "total": 14, "domains": [{ "domain": "sql", "active": 12, "total": 14 }] },
+  "buckets": [{ "key": "feature-x-1a2b3c4d", "branch": "feature/x", "baseSha": "<sha>", "ageDays": 3, "promotable": true, "active": 2, "total": 2, "promoted": 0, "prunable": false, "ancestryOk": true }],
+  "drift": { "indexed": true, "stale": false, "commitsSince": null, "filesChanged": null, "recommendation": "index is current with HEAD" }
+}
+```
+
+**knowledge promote** — emits a reviewable, digest-bound branch→golden op-set at `.harness/promote-ops.json` (never writes the store itself); applied only through `consolidate --apply` in promotion mode, where evidence re-validates from the sha256s recorded at branch-apply time, rejections never record quarantine strikes, promoted sources are tombstoned `promoted_to_golden:` (a retrieval exclusion), and an `absorb-branch` audit entry lands in the governance ledger (audit-only — the replay never lets it become an id's standing decision). `--all` chunks under the 5-op delta contract with deterministic id ordering as the cursor and `remaining: N` reporting. Detached-HEAD buckets (`detached-*`) are never promotable — derived from the key shape.
+```json
+{ "pass": true, "exitCode": 0, "opsPath": ".harness/promote-ops.json", "ops": 2, "remaining": 0, "skipped": [{ "id": "sql/x", "reason": "standing governance decision: retire" }], "bucketKey": "feature-x-1a2b3c4d", "nextTools": ["harness consolidate --apply --ops .harness/promote-ops.json"] }
+```
+
+**knowledge prune** — deletes branch buckets (`--branch <key>`, `--merged` via workspace git state plus fully-tombstoned buckets, `--stale <days>`; selectors combine). Human authority, never mode-gated — exactly like purge. Removal is one store commit.
+```json
+{ "pass": true, "exitCode": 0, "removed": ["feature-x-1a2b3c4d"], "blockedReason": null }
+```
+
 **eval-knowledge** — deterministic retrieval PROXY (hit/false-surface/token cost per arm on a temporally held-out split); never a model-graded net-benefit number, and no benefit claim is published from it
 ```json
 {
@@ -261,7 +331,7 @@ Allowed outcomes are `passed`, `failed`, and `inconclusive`. Only fresh `passed`
 }
 ```
 
-Lifecycle events are limited to `session_start`, `orient`, `gate`, `pre_tool`, `post_tool`, `skill_activation`, `verify`, `compound`, `consolidate`, `remember`, `learning`, `knowledge`, and `session_end`. Non-lifecycle commands `get`, `report`, `learnings`, and `eval-knowledge` never append events by design — they never call `writeEvent` at all. `init-repo`, `recall`, `validate-plan`, and `index` also never append events, but not by that same deliberate omission: all four DO call `writeEvent` (types `init_repo`/`recall`/`validate_plan`/`index`), and those types are simply absent from the allow-list above, so the calls silently no-op — see the Command catalog table's footnote. Every append-attempting command never stores prompt or query content; `skill_activation` stores only the skill and session binding.
+Lifecycle events are limited to `session_start`, `orient`, `gate`, `pre_tool`, `post_tool`, `skill_activation`, `verify`, `compound`, `consolidate`, `remember`, `learning`, `knowledge`, `session_end`, `init_repo`, `recall`, `validate_plan`, and `index` (the last four were formerly dropped by the allow-list despite their call sites — fixed as harness evolution Phase 1 hygiene; see the Command catalog table's footnote). Non-lifecycle commands `get`, `report`, `learnings`, and `eval-knowledge` never append events by design — they never call `writeEvent` at all. Every append-attempting command never stores prompt or query content; `skill_activation` stores only the skill and session binding.
 
 ## Host hook boundary
 

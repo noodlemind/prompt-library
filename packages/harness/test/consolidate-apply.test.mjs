@@ -1059,23 +1059,55 @@ test('an ADD asserting kind: fix for a real file whose own frontmatter says kind
 });
 
 test('updateFrontmatterField inserts a missing field on a CRLF-terminated learning file instead of silently no-opping', () => {
-  const file = path.join(tempDir('apply-crlf-'), 'crlf-learning.md');
+  // The fixture lives at a REAL store path (`<home>/knowledge/<id>/learnings/
+  // <domain>/<slug>.md`): updateFrontmatterField reads and writes through the
+  // store-io choke point, which derives its containment root from exactly that
+  // shape — and requires the derived root to sit inside a `knowledge/`
+  // directory, since `storeDirForId` is the only thing that ever builds one —
+  // refusing anything else outright.
+  const file = path.join(tempDir('apply-crlf-'), 'knowledge', 'repo-id', 'learnings', 'sql', 'crlf-learning.md');
+  fs.mkdirSync(path.dirname(file), { recursive: true });
   const text = '---\r\ntrigger: "x"\r\nstatus: active\r\n---\r\n\r\nbody\r\n';
   fs.writeFileSync(file, text);
-  updateFrontmatterField(file, 'superseded_by', 'sql/replacement');
+  assert.equal(updateFrontmatterField(file, 'superseded_by', 'sql/replacement'), true);
   const after = fs.readFileSync(file, 'utf8');
   assert.notEqual(after, text, 'the field must actually be inserted, not silently dropped');
   assert.match(after, /superseded_by: sql\/replacement/);
 });
 
-test('op.merged_from asserted as a non-array (e.g. a bare string) is rejected with E_SCHEMA', () => {
-  const c = ctx();
-  const op = ADD(c.ws, { merged_from: 'sql/some-id' });
-  const res = run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [op])]);
-  assert.equal(res.status, 1, res.stderr || res.stdout);
-  const out = JSON.parse(res.stdout);
-  assert.equal(out.rejected[0].code, 'E_SCHEMA');
-  assert.match(out.rejected[0].reason, /merged_from must be an array of strings/);
+test('updateFrontmatterField refuses a path that is not a learning file, and refuses a symlinked learning path', () => {
+  const root = tempDir('apply-choke-');
+  const stray = path.join(root, 'not-a-learning.md');
+  fs.writeFileSync(stray, '---\ntrigger: "x"\n---\n\nbody\n', 'utf8');
+  assert.equal(updateFrontmatterField(stray, 'status', 'retired'), false, 'a non-learning path is not writable through the choke point');
+  assert.match(fs.readFileSync(stray, 'utf8'), /trigger: "x"/, 'and it is left byte-identical');
+
+  const victim = path.join(root, 'victim.md');
+  fs.writeFileSync(victim, 'OUTSIDE\n', 'utf8');
+  const link = path.join(root, 'learnings', 'sql', 'linked.md');
+  fs.mkdirSync(path.dirname(link), { recursive: true });
+  fs.symlinkSync(victim, link);
+  assert.equal(updateFrontmatterField(link, 'status', 'retired'), false, 'a symlinked learning path is never written through');
+  assert.equal(fs.readFileSync(victim, 'utf8'), 'OUTSIDE\n', 'the symlink target is untouched');
+});
+
+// merged_from records that THIS store consolidated those ids into this claim,
+// tombstoning each one in the same run. It is derived from a MERGE's own
+// validated targets — never assertable by an op, in either shape. Accepting it
+// let any op JSON (including a hand-edited `.harness/promote-ops.json`) stamp
+// forged consolidation provenance onto a fresh claim while merging nothing.
+test('op.merged_from cannot be asserted by an op — neither a bare string nor a well-formed array of ids', () => {
+  for (const value of ['sql/some-id', ['sql/some-id', 'sql/other-id']]) {
+    const c = ctx();
+    const op = ADD(c.ws, { merged_from: value });
+    const res = run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [op])]);
+    assert.equal(res.status, 1, res.stderr || res.stdout);
+    const out = JSON.parse(res.stdout);
+    assert.equal(out.rejected[0].code, 'E_SCHEMA');
+    assert.match(out.rejected[0].reason, /merged_from is derived from a MERGE's own targets/);
+    const { dir } = ensureStore(c.ws, { home: c.harnessHome });
+    assert.equal(listLearnings(dir).length, 0, 'and nothing with forged provenance was written');
+  }
 });
 
 test('validateEpisodes rejects malformed episode field types (path: 42, sha256: null) with E_SCHEMA, not a throw', () => {

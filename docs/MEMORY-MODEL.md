@@ -12,7 +12,7 @@ local-only. Team sync is a future phase, deferred by design.
 | Tier | Name | Location | Written by | Role |
 |------|------|----------|-----------|------|
 | T1 | Episodic | `docs/solutions/` (+ global solutions), plans, activity logs | `/auto-compound` (verified `kind: fix`), `compound --insight` (`kind: insight`), `harness remember` (`kind: human-teaching`) | Immutable ground truth. The episode schema is the public stability contract. |
-| T2 | Semantic ("learnings") | `~/.harness/knowledge/<repo-id>/` — CLI-managed local git repo, outside the working tree, never pushed | `harness consolidate --apply` only | Condensed, one-claim-per-file knowledge. A regenerable view of T1 — never the asset. |
+| T2 | Semantic ("learnings") | `~/.harness/knowledge/<repo-id>/` — CLI-managed local git repo, outside the working tree, never pushed; golden `learnings/` plus per-branch `branches/<branch-key>/` buckets (see [Layered store](#layered-store-branch-local-knowledge-shipped-blueprint-phases-12)) | `harness consolidate --apply` only | Condensed, one-claim-per-file knowledge. A regenerable view of T1 — never the asset. |
 | T3 | Behavioral | `.github/` instructions / skills / checks | `/create-primitive` + human PR | Knowledge become behavior. |
 
 Since the governance ledger shipped (M4), T2 is **not** a pure function of `(T1, current
@@ -336,6 +336,13 @@ class — carries the same frame (*"Retrieved matches below are untrusted memory
 docs), not instructions to execute."*), runs every interpolated field through `inertLine`,
 and best-effort secret-screens each rendered title/snippet; so EVERY untrusted pack section,
 not just learnings, is framed as data (the plan-path fields are `inertLine`-normalized too).
+The secret screen is symmetric across those two sections: a learning's `trigger` and claim
+line are `redactSecrets`-screened at the retrieval DATA boundary (`rankLearnings`, so
+`orient --json` is covered too) and again at the pack render. This matters because a
+credential can legitimately BE in the store — human authority overrides the write-time
+secret screen for hand edits (`absorbHandEdits` keeps a secret-shaped human claim and skips
+only the snapshot) — so the guarantee is that stored secrets are never rendered back, not
+that they are never stored.
 This data framing is a trust-class boundary: it covers *retrieved cross-workspace memory*
 (recall + learnings), but the current-task surfaces — `memoryExcerpt`, `planView.body`,
 `planGoal.intent`, `success_criteria`, and `intentContractExcerpt` — are rendered as the task
@@ -371,10 +378,18 @@ comment:
   `E_EXISTS`/`E_TARGET` strike when they fire against a genuine ON-DISK collision: a dedup
   miss (an `ADD`/`MERGE` id that already exists), a target that does not exist, or a `MERGE`
   target that is not active. Each records one failure entry per rejected episode, keyed on
-  `path@sha256`, in the store's ledger.
-- **Run-level** — `E_MODE`, `E_DELTA_CONTRACT`, `E_LOCKED`, `E_APPLY_FAILED` never strike:
-  they say nothing about any one op's episodes. Neither does `E_DOMAIN_CAP` — cap pressure is
-  a run-level resource limit, not a defect in the episodes behind it.
+  `path@sha256`, in the store's **root** ledger — strikes and quarantine markers are
+  STORE-GLOBAL, never per-bucket, even when the learning OUTCOME is routed to a branch
+  layer. Three strikes is a control over an episode, and a provenance-less episode is
+  eligible in every branch lane, so a per-bucket count would reset simply by switching
+  branches; recording at the root is also what makes `consolidate --status` and doctor K2
+  report a quarantine from every lane rather than only the one that raised it.
+  An op listing the same `path@sha256` more than once is rejected outright (`E_SCHEMA`) —
+  duplicate links inflate `verifiedFixLinks` (the protected-target threshold) and
+  `verifiedAndPlans` (promotion eligibility) from one episode file.
+- **Run-level** — `E_MODE`, `E_DELTA_CONTRACT`, `E_LOCKED`, `E_APPLY_FAILED`, `E_LAYER`
+  never strike: they say nothing about any one op's episodes. Neither does `E_DOMAIN_CAP` —
+  cap pressure is a run-level resource limit, not a defect in the episodes behind it.
 - **Composition** — the SAME `E_EXISTS`/`E_TARGET` codes, raised instead when a SIBLING op
   earlier in the SAME run already claimed the id/target — including a `SUPERSEDE`/`MERGE`
   reusing a target an earlier `STRENGTHEN` in this run already touched — never strike. The
@@ -599,10 +614,13 @@ ingestion path had no `scanSecrets` before — residual #5's regex-grade caveat 
 
 ## Hand-editability
 
-A direct, non-CLI edit to a file under `~/.harness/knowledge/<repo-id>/learnings/` is
+A direct, non-CLI edit to a file under `~/.harness/knowledge/<repo-id>/learnings/` — or
+under a branch bucket's `branches/<branch-key>/learnings/` (absorbed identically; the
+bucket key is recorded in the snapshot's frontmatter) — is
 absorbed automatically — every mutation entry point (`consolidate --apply`, `remember`,
-`learning retire|dispute|confirm|promote`, `knowledge purge`, `consolidate --rebuild --yes`)
-runs `git status --porcelain` in the store first and commits any dirty edit as its own
+`learning retire|dispute|confirm|promote`, `knowledge purge`, `knowledge prune`,
+`consolidate --rebuild --yes`)
+runs `git status --porcelain -uall` in the store first and commits any dirty edit as its own
 `human edit: <id>` commit, landing before that entry point's own commit.
 
 - **A modified learning file** is snapshotted verbatim as a `kind: human-teaching` episode
@@ -617,6 +635,14 @@ runs `git status --porcelain` in the store first and commits any dirty edit as i
   dispute, run `harness learning confirm <id>` or re-teach it (`harness remember`, same
   trigger/domain, at least as recent as the record) — either records a fresh governance
   entry; a hand edit alone never does.
+- **A planted (never-tracked) learning file** absorbs exactly like a modified one. A file
+  dropped straight into `learnings/<domain>/<slug>.md` — or the bucket equivalent — is live,
+  retrievable content the moment it lands, so it gets the same treatment: secret scan,
+  byte-cap check, `docs/solutions/teachings/` snapshot, re-serialization by the canonical
+  writer, `source: human`, and its own `human edit: <id>` commit. It is never adopted
+  silently by a later transaction's `git add -A`, and a run whose op set is REJECTED still
+  records it as an absorbed hand edit rather than laundering it into store history
+  unvalidated.
 - **A hand-deleted learning file** is absorbed as a governance `retire`, not a purge: the
   working file, `INDEX.md` entry, and (under `knowledge commit repo`) the mirrored
   product-repo copy are removed immediately — human deletion always wins, same immediacy as
@@ -624,15 +650,366 @@ runs `git status --porcelain` in the store first and commits any dirty edit as i
   rather than being erased. If the backing episodes ever regenerate this id again (a
   `consolidate --rebuild --yes` later re-derives it fresh from T1), the governance ledger
   reapplies retire instead of silently resurrecting it. Use `knowledge purge` instead when
-  the episodes themselves — not just this one learning — must stop existing.
+  the episodes themselves — not just this one learning — must stop existing. The
+  "another layer still holds this id" exemption that suppresses the retire record counts
+  only **active** learnings: an inactive `promoted_to_golden` bucket tombstone is not a
+  surviving holder, so deleting a promoted golden claim still records the retire.
 - The absorbed content may exceed the 1,200-byte learning cap — human authority overrides
   the cap for hand edits (logged, not rejected; the cap binds only the sole writer's own
   ops).
+- **A symlink at any store FILE is inert — not just refused, and not just for learnings.**
+  (Store *directories* are a separate case with a separate answer — see the next bullet.)
+  Every read, write, append, delete, and existence check of a file the store owns goes
+  through ONE internal choke point (`lib/knowledge/store-io.mjs`), built on the shared
+  `fs-safe` primitives and contained against the STORE root, which it derives from the
+  path's own **allow-listed shape** rather than from a caller-supplied argument. That
+  derivation makes the root a fixed function of the path; it does not by itself prove the
+  path *is* a store path, since the shape matches by basename anywhere on the filesystem —
+  so the derived root must additionally sit inside a `knowledge/` directory, the only shape
+  `storeDirForId` ever builds. (Without that check `writeStoreFile('~/.ssh/config.json')`
+  was accepted and contained against `~/.ssh`.) The
+  allow-list covers `learnings/<domain>/<slug>.md` and its `branches/<key>/` equivalent,
+  the store-root metadata (`INDEX.md`, `consolidated.jsonl`, `governance.jsonl`,
+  `config.json`, `store.json`, `stale.json`, `.gitignore`), the bucket metadata
+  (`branches/<key>/INDEX.md|consolidated.jsonl|meta.json`), and the two nested files the
+  CLI owns (`.git/harness-txn.json`, `.lock/owner.json`). A planted symlink is therefore
+  never read through, never written through, never appended through, never deleted through,
+  never listed as an active learning by `harness learnings` / retrieval / ranking, never
+  copied into the workspace mirror under `knowledge commit repo` — and, critically, never
+  `existsSync`-trusted into "already fine": `existsSync` FOLLOWS a link, so the store now
+  asks `storeFileState`, which reports `symlink`, never `file`.
+  Scoping this to learning files was wrong for exactly the reason the store `.gitignore`
+  was already inside the choke point: the store root is a directory a human writes to, so
+  every metadata file in it is as plantable as a learning path. `ln -sf ~/.zshrc
+  <store>/INDEX.md` plus any command that rebuilds the index — retire, dispute, confirm,
+  promote, apply, absorb, purge, rebuild — truncated and replaced that outside file.
+  **The link itself is quarantined.** Refusing to follow it while leaving it standing was
+  not enough — it still looked like a real file to anything that only read the directory
+  listing, and the next writer met a live link. A write through the choke point MOVES the
+  link (never its target; `rename` does not follow a symlink) into `<store>/.quarantine/`
+  and writes the real file in its place; `absorbHandEdits` does the same for a learning
+  path and logs where it went. `.quarantine/` is gitignored, so a quarantined link never
+  enters store history and is never swept by `git clean -fd`.
+  A **filter-rewrite** (purge's ledger/governance rewrites) additionally fails CLOSED when
+  the file exists but could not be read: writing a filtered version of a file you never saw
+  is a truncation. An **append** never becomes a read-modify-write for the same reason — it
+  is a real `O_NOFOLLOW|O_APPEND` write, so a ledger too large to read whole is still
+  appendable rather than silently truncated by its next append. And a refused write,
+  append, or truncate throws rather than returning quietly: a store write nobody checked is
+  the same defect class as a rollback nobody checked.
+- **A tracked learning replaced by a symlink is quarantined too.** Replacing a *tracked*
+  file with a link is a git TYPECHANGE — `git status` emits ` T`, which is neither `??` nor
+  contains `M`. The absorb loop's status-code filter ran BEFORE the symlink branch, so
+  ` T` (and staged `A `) `continue`d: never quarantined, never logged, and the next
+  `git add -A` committed the symlink into store history while `listLearnings` silently
+  dropped the learning. The symlink check now runs before any code filter that could
+  exclude it, and the filter itself is an allow-list (`??`, `M`, `A`, `T`) rather than a
+  deny-list. The unmerged codes are carved out **before** any code is interpreted: `DD`,
+  `UD` and `DU` all contain a literal `D`, so while the carve-out sat below the deletion
+  branch an unresolved conflict was recorded as a hand deletion — a governance `retire`
+  that binds both layers and survives `consolidate --rebuild`.
+- **A symlink at a store-owned DIRECTORY is quarantined, restored, and then refused.**
+  The choke point's allow-list covers file *leaves*, and the absorb loop's learning-path
+  regex matches `…/<domain>/<slug>.md` — so a symlink at `<store>/learnings`, a domain
+  directory, `<store>/branches`, a bucket, or a bucket's learnings tree produced **no
+  absorb entry at all**: nothing quarantined it, every read path silently returned nothing
+  (the ancestor walk correctly refuses the whole subtree), and the next `git add -A`
+  recorded the link as a `120000` blob while the CLI reported success. Once tracked it is
+  self-reviving — every rollback `git reset --hard` re-materializes it, and `git clean -fd`
+  cannot sweep a tracked path. There is no arbitrary-file read or write in it (git stores
+  the link's target *path*, not the target's bytes, and writes still refuse via the
+  ancestor walk); it is silent, committed, reported-as-success **data loss**.
+  Two guards close it. `withStoreTransaction` sweeps the owned directory shapes as the
+  first thing it does under the lock — before crash recovery, before `fn`, before any git
+  read — quarantines each planted link, recreates the real directory, restores the subtree
+  from the last commit so the hidden learnings **reappear**, and then refuses *this* run
+  naming the directory. And `commitStore` — the one place `git add -A` runs — refuses to
+  stage at all while such a link stands, so no present or future caller can reach staging
+  around the sweep.
+- **The store lock cannot be lost, and is never released by a non-owner.** The first
+  transaction to open a store writes (and, for stores created by an older CLI, migrates in)
+  a `<store>/.gitignore` covering `/.lock/`, `/.lock.stale-*`, and `/.quarantine/`. It is
+  written **under the lock** — writing it is a store mutation, and `ensureStore` runs before
+  the lock is acquired — and an existing `.gitignore` that cannot be read for a reason other
+  than "it is a symlink" is left exactly as found rather than replaced. That file is what
+  makes lock loss structurally impossible rather than recoverable: the transaction rollback
+  runs `git clean -fd`, which used to sweep the untracked `.lock` out from under the very
+  transaction holding it, after which the code re-asserted with a bare `mkdir` and swallowed
+  `EEXIST` as "still there" — so if a second writer had claimed the freed lock in that
+  window, the first carried on inside a lock it no longer held, `git add -A`-ed the other
+  writer's in-flight files, and finally deleted THEIR lock. `git clean` without `-x` never
+  touches an ignored path and `git add -A` never stages one, so the window is gone.
+  Independently of that, every lock carries an **owner token** (pid + random nonce) written
+  inside the lock directory at acquisition. Re-assert and release both verify it: a lock
+  whose owner stamp names somebody else (or cannot be read) is never reclaimed and never
+  removed, and a transaction that discovers its lock has been taken over aborts instead of
+  continuing. A lock whose owner stamp could NOT be written **fails the acquisition** and is
+  removed again: leaving one live wedged the store for the full ten-minute staleness window,
+  because nobody — including its own creator — could then prove ownership to release it.
+  The store `.gitignore` is additive — entries a human added are preserved.
+- **Stale-lock takeover is a compare-and-swap, not a narrowed race.** Taking over a lock
+  older than ten minutes renames it to a tombstone whose name is DERIVED FROM THE IDENTITY
+  OBSERVED BEFORE THE RENAME, so the rename itself is the atomic swap: a second writer that
+  observed the same stale lock finds that exact tombstone in its way and fails. If it does
+  win the rename (the first writer already cleaned its tombstone up), the post-swap verify
+  catches that what it moved is not what it observed, and it puts the live lock straight
+  back. Previously both writers renamed, re-created, stamped and verified in turn, and both
+  returned "acquired".
+- **A transaction never clears a journal it does not own.** The intent journal is one shared
+  file, and clearing it used to be unconditional: a writer whose recovery rollback lost the
+  lock still removed the journal the WINNING writer had just written, leaving that writer
+  running unmarked — the exact state the fail-closed journal check exists to prevent,
+  reached from the other side. A journal now carries the same owner token its writer's lock
+  does, and is cleared only by its owner. Crash recovery is the one legitimate foreign
+  clear: it consumes a dead writer's journal under a freshly acquired lock.
+- **A rollback that failed is reported as failed.** `rollbackStore` checks both git
+  invocations AND re-reads the tree afterwards (a zero exit is not the same thing as a clean
+  tree), and a transaction that could not roll back what it meant to discard NEVER reaches
+  its commit — enforced in `withStoreTransaction` itself, not left to each caller to
+  remember. This is what makes the write-time `E_HEAD_MOVED` rejection's "nothing was
+  written" promise true: a failed discard of the materialized branch bucket aborts the run
+  loudly instead of letting the finalize commit publish it.
+- **`git status --porcelain` is always read with `-z`.** The line-oriented format C-quotes
+  and octal-escapes any path containing a non-ASCII byte, a quote, a backslash, or a control
+  char, and separates rename pairs with an in-band `" -> "`. Both are lossy: a hand edit to
+  `learnings/café/x.md` decoded as `learnings/caf303251/x.md`, and an ordinary file named
+  `learnings/a -> b/c.md` decoded as `b/c.md` — so residue discard silently no-opped WHILE
+  REPORTING SUCCESS, absorb missed the same file, and the next commit's `git add -A` swept it
+  into history unvalidated and unscanned. `-z` emits pathnames verbatim (NUL cannot occur in
+  a pathname) with the rename pair as two separate fields; one parser serves every consumer.
+- **Crash residue is not a hand edit.** Every store transaction writes an intent journal
+  under the store's `.git/` before its first mutation and clears it on commit or rollback,
+  so a writer killed mid-transaction leaves uncommitted state the next transaction can
+  positively identify as CLI-authored: it is rolled back to the dead writer's last
+  checkpoint (any intra-transaction commit it did land, such as an absorbed hand edit,
+  survives) instead of being absorbed as human authority. Dirt found with no journal behind
+  it is a genuine hand edit and absorbs exactly as described above. **The decision is
+  per-path**, not tree-wide: the journal records WHICH paths were already uncommitted when
+  it was written, and only paths dirty now that were not dirty then count as residue. A
+  tree-wide flag was too coarse — absorb deliberately ignores non-learning files
+  (`config.json`, `INDEX.md`, a scratch note), so one sitting uncommitted disarmed residue
+  rollback for the learning paths a later crash dirtied. **A journal that cannot be written
+  refuses the transaction** rather than running unmarked: the journal is the only thing that
+  tells residue from a hand edit, so proceeding without one is exactly the state whose
+  residue is later laundered into `source: human`. A checkpoint refresh that FAILS after an
+  intra-transaction commit aborts the transaction too, rather than leaving the previous
+  journal in place: the previous journal names an OLDER checkpoint, and recovery resets
+  `--hard` to exactly that sha — destroying the sub-commit that had just landed, which for
+  `absorbOrAbort` is an absorbed human hand edit. **A recovery whose rollback could not
+  clean the tree refuses the run**: the fallback rollback's result used to be discarded, so
+  a residue that survived both attempts was reported as recovered and inherited by the next
+  transaction's absorb as human authority.
+- **Every rollback goes through the transaction's own guard.** `rollbackToCheckpoint`
+  unwinds to the last checkpoint; `rollbackUncommitted` discards only what is uncommitted,
+  for an `fn` undoing its own failed sub-commit attempt (the quarantine-strike recorder).
+  Both set the "this transaction could not discard what it meant to discard" latch and
+  re-assert lock ownership afterwards. No `fn` calls `rollbackStore` directly any more: the
+  strike recorder's bare call was the last `git clean -fd` in the codebase that could free
+  the lock with nobody checking who held it next.
 
 Use `harness remember` to add a new claim and `harness learning retire|dispute|confirm` to
 change a learning's status when a CLI command is more convenient than a direct edit — both
 remain first-class paths; hand-editing is no longer a discouraged shortcut, it is absorbed
 with full provenance either way.
+
+## Layered store: branch-local knowledge (shipped, blueprint Phases 1–2)
+
+The approved [Harness Evolution Blueprint](../knowledge/proposals/harness-evolution-blueprint.md)
+(Human Decision 2026-08-06) Phases 1–2 are implemented. Current behavior:
+
+- **Layout.** Golden remains `learnings/` at the store root; branch-local layers live at
+  `branches/<branch-key>/` siblings, each with its own `learnings/`, per-bucket
+  `consolidated.jsonl`, `INDEX.md`, and a `meta.json` cache
+  (`{ branch, branchKey, baseSha, createdAt, promotable }` — a cache, never authority:
+  promotability is derived from the key shape at decision time, and `detached-*` keys are
+  never promotable). `ensureStore` stamps `store.json { schema: 2 }`; a CLI older than a
+  store's recorded schema refuses with an upgrade hint instead of operating layer-blind.
+- **Branch keys.** `<slug>-<8hex>` — the branch name lowercased with everything outside
+  `[a-z0-9._-]` collapsed to `-`, capped at 64 chars, plus the first 8 hex of sha256 over
+  the RAW name (`git-context.mjs`). Detached HEAD (including rebase/bisect states) derives
+  `detached-<12-char-short-sha>`.
+- **Provenance.** Episodes captured by the CLI and learnings written by `consolidate
+  --apply` carry optional `commit:`/`branch:`/`base:` frontmatter. Both learning
+  serializers emit AND preserve the fields across every re-render (STRENGTHEN, hand-edit
+  absorb, purge delink); legacy artifacts without them never error. The
+  `LEARNING_BYTE_CAP` check excludes the provenance lines from the measured size, so a
+  near-cap learning gaining provenance can never trip `E_BYTE_CAP` or a quarantine strike.
+- **Write routing** is derived from git context AT WRITE TIME: feature branch →
+  bucket; default branch → golden; detached → detached bucket. Default-branch resolution is
+  store `config.json` `defaultBranch` → `origin/HEAD` → unresolved, and an unresolved
+  default fails closed TO BRANCH-LOCAL, never golden (doctor K7 surfaces it). The
+  orient-recorded branch is advisory only — a write whose HEAD disagrees warns.
+- **Layer containment (what the boundary is, and what it is not).** "Promotion is the only
+  branch → golden route" is a containment claim, so the flag that bypasses routing is
+  gated like every other human-authority path in this store: `--layer golden` is an
+  explicit, logged override that requires the human-presence signal — a live human
+  (`harness remember`'s internal `humanPresent`, which the ops JSON can never assert) or an
+  explicit `--yes` after a person reviewed the ops file. Without it the run is refused with
+  `E_LAYER`; an unattended agent cannot grant itself golden. `--layer branch` is refused
+  outright rather than silently ignored: branch routing is derived, and there is nothing
+  for a flag to override.
+  An episode's `branch:` frontmatter is a DIFFERENT kind of thing and must not be read as
+  part of that boundary: it is an ACCIDENT-PREVENTION signal (it keeps unrelated branch
+  work from drifting into the golden lane), not a security control. It is written by the
+  agent that captured the episode, nothing verifies it against git, and per-layer
+  eligibility (`episodeEligibleForLayer`) trusts it as-is. A dishonest `branch:` can route
+  an episode into the golden CANDIDATE set; what it cannot do is write golden — that still
+  requires standing on the default branch, or the human-gated override above, or promotion.
+  A workspace checkout landing mid-transaction is refused with `E_HEAD_MOVED`, and that
+  refusal is **side-effect-free**: HEAD is re-validated once BEFORE the run materializes or
+  migrates any branch bucket, and the narrower write-time re-check discards everything the
+  transaction did back to its checkpoint — so "nothing was written" never leaves a stale
+  bucket behind for the finalize commit to publish.
+- **Governance is store-wide, so a branch lane never speaks for golden.** The governance
+  ledger binds both layers, which means a branch-local write must not append a decision
+  that resolves for golden. Two consequences: a re-teach landing in a BUCKET does not
+  append the `confirm` that would retract a standing golden `retire` (the standing decision
+  is reapplied to the bucket copy instead, and the CLI says so); and a hand-DELETE of a
+  bucket learning records a governance `retire` only when NO layer still holds that id —
+  the same guard `knowledge purge` already applies to its own cascade. Deleting a throwaway
+  branch copy is not a retirement of the golden claim of the same name.
+- **Read overlay.** Retrieval and the knowledge eval share one overlay
+  (`overlay.mjs`): golden actives ∪ current-branch bucket actives; a branch-local claim
+  shadows a same-id golden claim UNLESS the golden claim is protected (≥3 verified
+  `kind: fix` links or `source: human` — never shadowed; the branch claim renders as an
+  additional subordinate entry); ids under a standing `retire`/`dispute`/`promote`
+  decision are never surfaced from a bucket; branch-local wins equal-score ties (layer
+  tiebreak before the id tiebreak); a bucket whose recorded `baseSha` is not an ancestor
+  of HEAD (force-push name reuse) is excluded whole. With no `branches/` directory the
+  read path is byte-identical to the pre-layer behavior.
+- **Golden consolidation eligibility (P4).** Once a store has buckets, golden candidacy
+  requires `branch:` provenance naming the resolved default branch — an episode from an
+  unpromoted non-default branch, or one with no provenance, routes to branch-local review
+  and never silently into golden (this is also what a per-layer
+  `consolidate --rebuild --yes` re-derivation enforces; rebuild wipes each bucket's
+  learnings/ledger too, keeping `meta.json` as the layer identity).
+- **Promotion** (`harness knowledge promote`) emits a reviewable, digest-bound op-set at
+  `.harness/promote-ops.json` (a contained, atomic `fs-safe` write like every other
+  workspace write); only `consolidate --apply` in promotion mode applies it.
+  Promotion ops are exempt from golden candidacy — evidence re-validates from the sha256s
+  recorded at branch-apply time, never working-tree presence; promotion rejections never
+  record quarantine strikes; a shadow-of-golden maps to SUPERSEDE (STRENGTHEN when the
+  overlap is episodes-only); a protected golden target rejects and is marked disputed.
+  **The ops file is a plain JSON file anyone can hand-author, and its digest is computed by
+  whoever wrote it — so every admission gate is re-derived by the SOLE WRITER at write
+  time, never inherited from the emitter**: the bucket key must be a plain directory name
+  (one shared `isSafeBucketKey` definition — no separators, `..`, `.`, absolute path,
+  control character, or `:` drive/ADS shape), the bucket must not be a `detached-*` key,
+  its recorded base must not be provably non-ancestral to HEAD (re-read from the bucket's
+  own `meta.json`, never the envelope's copy), and each source must still be an ACTIVE,
+  unpromoted bucket learning (a fresh golden write carries `superseded_by: null`, so an
+  ungated promotion would strip a tombstone en route).
+  **Evidence is copied from the source, never described by the op.** An op selects WHICH
+  recorded episodes to carry; `kind` and `plan` are taken from the source learning's own
+  records. Re-labelling a recorded `insight` as `kind: fix` used to be enough to make a
+  promoted claim read as verified fixes across distinct plans — which is simultaneously
+  the promotion-eligibility signal and the PROTECTED-target signal — i.e. an insight-only
+  claim could launder itself into permanently protected golden knowledge.
+  **A promotion op is bound to its source IDENTITY, not just its evidence.** Promotion
+  moves a claim between layers; it is not an authoring operation. A promotion op-set may
+  carry only `ADD`/`STRENGTHEN`/`SUPERSEDE` (an allow-list — `MERGE` consolidates several
+  claims and tombstones every one of them, which no promotion ever does), the destination —
+  an ADD/SUPERSEDE's `domain/slug`, a STRENGTHEN's `target` — must equal the cited source
+  id, EVERY other id the op names (`target`, any `targets[]`) must equal it too, and the
+  promoted claim's `trigger` and `body` are read from the verified source learning rather
+  than from the op. Binding the destination alone was not enough: `SUPERSEDE.target` names
+  a DIFFERENT learning and gets stamped `superseded_by`, so a correctly re-digested op could
+  promote the authentic source claim while tombstoning unrelated golden knowledge the
+  operator never chose to touch. Without that binding a hand-authored, correctly-re-digested op
+  could cite one claim's verified identity (including its `source: human` standing, which
+  the promoted claim inherits) while writing an entirely different, attacker-authored one,
+  or graft one claim's verified-fix episodes onto an unrelated golden claim. A
+  rename/re-slug during promotion would have to be its own explicitly gated operation; it
+  is never implicit. The tombstone below likewise follows the SOURCE id, so a mis-bound or
+  refused run can never leave the cited source unconsumed and reusable.
+  Success tombstones each source `promoted_to_golden:` (a retrieval exclusion alongside
+  `promoted_to`) and records **`absorb-branch`** in the governance ledger — an AUDIT
+  action: `readGovernance`'s replay considers only `retire`/`dispute`/`confirm`/`promote`,
+  so an absorb-branch entry can never become an id's standing decision (regression-pinned:
+  retire → absorb-branch → rebuild still lands retired).
+- **Maintenance is layer-aware (§5a).** Hand edits under `branches/<key>/learnings/**`
+  absorb exactly like golden ones (the bucket key is recorded in the snapshot
+  frontmatter); `knowledge purge <file>`/`--all` cascade across every layer (`--all`
+  wipes `branches/` whole), with an id's governance record dropped only once no layer
+  holds it; commit-mode mirroring stays golden-only — buckets are never mirrored.
+- **Lifecycle.** `harness knowledge status` is the read-only layer report (golden
+  per-domain counts, bucket rows with age/base/promotability/ancestry, recall-index
+  drift); `harness knowledge prune [--branch <key>] [--merged] [--stale <days>]` deletes
+  buckets — human authority, never mode-gated, one store commit. **Prune previews and
+  confirms**: the selectors are not occupancy tests (a merged branch, a 30-day-old bucket,
+  or an explicitly named key can still hold live work), so prune and `knowledge status`
+  share ONE occupancy predicate. Every run prints a per-bucket preview (`active ·
+  promoted · total`) and any prune that would delete ACTIVE, unpromoted learnings is
+  refused without `--yes`; a bucket status calls prunable (nothing active) still prunes
+  unattended. Doctor K5 flags orphan buckets (branch gone locally and on remotes), K6 flags
+  bucket contents whose `branch:` provenance disagrees with the bucket's meta. Branch
+  renames auto-migrate a bucket to the new key when exactly one gone-branch,
+  ancestry-verified candidate exists; anything ambiguous is left for `knowledge status`/K5
+  and manual prune.
+- **Known gap (deferred, not fixed).** The human register is GOLDEN-ONLY: `harness
+  learnings`, `harness learnings --why <id>`, and `harness learning
+  <retire|dispute|confirm|promote> <id>` all read and write the store root, so a
+  branch-local learning is invisible to them — `--why` on a bucket id returns nothing and
+  `learning retire` reports `E_TARGET`. The layer-aware ways to act on bucket content
+  today are `knowledge status` (see it), `knowledge prune` (delete the bucket), a direct
+  hand edit in the store (absorbed, and now correctly scoped to its layer), or promotion
+  (move the claim to golden, where the register applies). Making the register layer-aware
+  is a larger change than this pass took on.
+
+Phase 3 (the optional tree-sitter structural index under
+`~/.harness/index/<repo-id>/structural/`) and Phase 4 (per-check verify severity via
+policy v2 and the advisory `structural-expectations` check) are shipped. The structural
+index is derived state, never knowledge: it lives outside this store, carries no
+governance, and is freely deletable and rebuildable — nothing else on this page applies
+to it.
+
+### `advisory` is not available for a gating verify check (human decision)
+
+Per-check severity has three values, and they are not three shades of the same thing.
+`enforce` fails verification, `warn` degrades a failure to `inconclusive` (still a non-zero
+exit under enforce), and `advisory` removes the check from the outcome ENTIRELY —
+`resolveOutcome` filters advisory checks out before deciding, so an advisory failure leaves
+`outcome: passed` in the evidence artifact that `harness gate` and `harness compound` trust
+(`validateEvidence` gates only on `outcome !== 'passed'`). Downgrading a real gate to
+advisory therefore does two things at once: it opens the gate on a genuine violation, and
+it mints a "verified" fix episode from a run that never verified — evidence that then feeds
+promotion eligibility in this store.
+
+So `advisory` is refused, at policy load, for the built-in gating checks —
+`plan-selection`, `plan-schema`, `plan-readiness`, `plan-state`, `phase-tasks`,
+`criteria-evidence`, `scope`, `primitive-evidence`, `required-reviews`, `hard-gaps`,
+`critical-findings`, `workspace-stability` (`NON_ADVISORY_CHECK_IDS`, `lib/policy.mjs`) —
+with an error naming the check and pointing at `warn`. `advisory` remains available for
+checks whose built-in DEFAULT is advisory (today only `structural-expectations`).
+`warn` remains available for every check. Existing v1 policies are unaffected.
+
+A project's own named check in `checks.yaml` is still the team's to mark advisory — but
+only while no plan gates on it. The moment the ACTIVE PLAN lists a check under
+`verification.required` (or maps it under `verification.criteria`), that check is a gate,
+and `advisory` would erase its failure from the outcome exactly as above. `loadPolicy`
+cannot refuse that at parse time — one policy file serves every plan in the repo and knows
+none of them — so the rule is applied where the plan and the policy meet, in
+`checkSeverityFor`'s `planGatedIds` argument (`lib/policy.mjs`, called from
+`applyCheckSeverities` in `lib/verify.mjs`).
+
+**Decision — ignore, do not refuse.** The downgrade is dropped for that run and the check
+falls back to its built-in default (`enforce` for a named check); the run then reports the
+refusal in `refusedSeverityDowngrades` on the result, in the evidence artifact, and as a
+`warn`-state `policy` line on the CLI. Throwing instead would abort before any evidence is
+written, which fails OPEN for the agent (no artifact to gate on at all); ignoring fails
+CLOSED, which is what a gate is for.
+
+Check findings are also less-trusted DATA, not report text: they carry current-side repo
+symbols from a lexical extractor with no length bound of its own — and plan-declared
+expectations echoed back verbatim — and the CANONICAL `result.checks` array is what
+`.harness/evidence/*.json`, `verify --json`, and the event log all serialize. So the
+sanitizer runs on that array, at `finalize`, not only on the advisory summary copy: every
+string reachable in a check's `message`, `findings`, or `informational` payload is
+secret-redacted, flattened to one line, and capped (240 chars per string, 20 entries per
+list, 50 findings). A check's `id`, `status`, `severity`, and numeric fields are code-set
+tokens and pass through; `stdout`/`stderr` are the trusted named command's own output,
+already bounded by `trimOutput` and deliberately left multi-line so a failing check stays
+readable.
 
 ## Related
 

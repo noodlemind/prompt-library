@@ -4,3 +4,12 @@ gate_ttl_minutes: 30
 evidence_ttl_hours: 24
 exemptions: []
 waivers: []
+# Policy v2 adds an optional per-check severity map (example — commented out,
+# not active). Severities: advisory (reported, never affects outcome or exit),
+# warn (failure degrades to inconclusive / exit 2), enforce (v1 behavior).
+# Absent entry → the check's built-in default (structural-expectations
+# defaults to advisory; every other check defaults to enforce).
+# version: 2
+# checks:
+#   structural-expectations:
+#     severity: advisory
