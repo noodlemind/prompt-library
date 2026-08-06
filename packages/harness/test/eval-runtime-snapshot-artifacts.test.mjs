@@ -31,6 +31,20 @@ import {
 const HASH = (character) => character.repeat(64);
 const sha256 = (value) => crypto.createHash('sha256').update(value).digest('hex');
 
+test('generated supervisor wrapper terminates a failed resumed control pipe', () => {
+  const source = fs.readFileSync(
+    new URL('../../../evals/runtime/runtime-snapshot-artifacts.mjs', import.meta.url),
+    'utf8',
+  );
+  const start = source.indexOf('  supervisor: `');
+  const end = source.indexOf('  archiveBridge: `', start);
+  assert.ok(start >= 0 && end > start, 'supervisor wrapper source is missing');
+  const wrapper = source.slice(start, end);
+  assert.match(wrapper, /terminateRemoteSupervisorProcess/);
+  assert.match(wrapper, /catch \(error\) \{ terminateRemoteSupervisorProcess\(error\); \}/);
+  assert.doesNotMatch(wrapper, /catch \{ process\.exitCode = 70; \}/);
+});
+
 test('bounded production artifact commands always hard-kill at their timeout', () => {
   const calls = [];
   const spawnImpl = (file, args, options) => {

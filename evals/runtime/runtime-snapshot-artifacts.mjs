@@ -931,8 +931,8 @@ function snapshotTrackedRuntime({ repoRoot, releaseSha, destination, workspace }
 
 const WRAPPERS = Object.freeze({
   supervisor: `#!/usr/local/bin/node
-import { runRemoteSupervisorCli } from '/opt/engineer/runtime/remote-supervisor.mjs';
-try { await runRemoteSupervisorCli(); } catch { process.exitCode = 70; }
+import { runRemoteSupervisorCli, terminateRemoteSupervisorProcess } from '/opt/engineer/runtime/remote-supervisor.mjs';
+try { await runRemoteSupervisorCli(); } catch (error) { terminateRemoteSupervisorProcess(error); }
 `,
   archiveBridge: `#!/usr/local/bin/node
 import { runRemoteBridgeCli } from '/opt/engineer/runtime/remote-bridge.mjs';
