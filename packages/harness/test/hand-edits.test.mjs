@@ -10,6 +10,7 @@ import { applyOps } from '../lib/knowledge/apply.mjs';
 import { absorbHandEdits, absorbOrAbort, removeEpisodeLink } from '../lib/knowledge/admin.mjs';
 import { setLearningStatus } from '../lib/knowledge/lifecycle.mjs';
 import { ensureBucket } from '../lib/knowledge/layer.mjs';
+import { QUARANTINE_DIR } from '../lib/knowledge/learning-io.mjs';
 import { ensureStore, storeDir, listLearnings, readLedger, parseLearningFrontmatter, serializeLearning, StoreTransactionAbort } from '../lib/knowledge/store.mjs';
 
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -650,8 +651,19 @@ test('a planted SYMLINK at a learning path is refused, never followed — the ou
 
   assert.equal(fs.readFileSync(goldenVictim, 'utf8'), original, 'the golden symlink target is byte-identical');
   assert.equal(fs.readFileSync(bucketVictim, 'utf8'), original, 'the bucket symlink target is byte-identical');
-  assert.ok(fs.lstatSync(goldenLink).isSymbolicLink(), 'the planted symlink was refused, not replaced');
-  assert.ok(fs.lstatSync(bucketLink).isSymbolicLink());
+  // REFUSED **AND** MADE INERT. The link itself is moved out of `learnings/`
+  // into the gitignored `<store>/.quarantine/` — leaving it live at a learning
+  // path is what let the previous round's "refused in absorb" fix still end in
+  // a truncated outside file, because every OTHER reader/writer still met a
+  // live symlink there.
+  assert.equal(fs.existsSync(goldenLink), false, 'the planted golden symlink no longer sits at a learning path');
+  assert.equal(fs.existsSync(bucketLink), false, 'nor does the bucket one');
+  const quarantined = fs.readdirSync(path.join(dir, QUARANTINE_DIR));
+  assert.equal(quarantined.length, 2, `both links are quarantined: ${quarantined.join(', ')}`);
+  for (const name of quarantined) {
+    assert.ok(fs.lstatSync(path.join(dir, QUARANTINE_DIR, name)).isSymbolicLink(), 'the LINK was moved, never its target');
+  }
+  assert.ok(logged.some((m) => /moved to \.quarantine/.test(m)), 'and the move is reported');
   assert.equal(fs.existsSync(path.join(c.ws, 'docs', 'solutions', 'teachings')), false, 'no teaching snapshot fabricated from an outside file');
 });
 

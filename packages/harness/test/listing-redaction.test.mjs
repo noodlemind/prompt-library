@@ -33,22 +33,6 @@ function makeStore(t) {
   return { home, workspace };
 }
 
-function writeLearning({ home, workspace }, { trigger, body, episodePath }) {
-  // Mirror the on-disk store layout directly: this test is about the RENDER
-  // path, so it must not depend on the writer's own validation refusing the
-  // content (which is exactly what a hand edit bypasses).
-  const { repoId } = { repoId: null };
-  void repoId;
-  const storeRoot = path.join(home, 'knowledge');
-  const dirs = fs.existsSync(storeRoot) ? fs.readdirSync(storeRoot) : [];
-  let dir = dirs.length ? path.join(storeRoot, dirs[0]) : null;
-  if (!dir) {
-    // Let the store module derive its own id by asking it for the path.
-    dir = null;
-  }
-  return { dir, trigger, body, episodePath };
-}
-
 test('listing and why redact secrets in trigger, claim, and episode refs', async (t) => {
   const { home, workspace } = makeStore(t);
   const { storeDir } = await import('../lib/knowledge/store.mjs');
@@ -107,4 +91,91 @@ test('listing and why redact secrets in trigger, claim, and episode refs', async
   assert.ok(!ep.path.includes(SECRET), `episode path leaked the key: ${ep.path}`);
   assert.ok(!ep.plan.includes(SECRET), `episode plan leaked the key: ${ep.plan}`);
   assert.equal(ep.kind, 'fix', 'episode kind is a code-set token and is preserved');
+});
+
+// The scalars the render sites used to emit RAW. `unquote` (store.mjs) DECODES
+// `\n`/`\r`/`\t` back into real control characters when a file is parsed off
+// disk, so a hand-edited or legacy learning can carry an embedded newline in
+// any of these — and every one lands in a single-line human surface (ui.line,
+// the learningNote status string, the muted episode bullets) as well as in
+// --json. Sanitized in listing.mjs, so no render site can forget.
+test('listing and why never emit a raw control char in status, source, kind, id, or the pointer fields', async (t) => {
+  const { home, workspace } = makeStore(t);
+  const { storeDir } = await import('../lib/knowledge/store.mjs');
+  const dir = storeDir(workspace, { home });
+  fs.mkdirSync(path.join(dir, 'learnings', 'sql'), { recursive: true });
+
+  // Two fixtures: the pointer fields (superseded_by / promoted_to) synthesize
+  // their own status, so a hostile `status:` needs a learning without them.
+  fs.writeFileSync(
+    path.join(dir, 'learnings', 'sql', 'hostile-code-set.md'),
+    [
+      '---',
+      'schema: 1',
+      'trigger: "a trigger"',
+      'status: "active\\n- [sql/fake] injected row"',
+      'source: "human\\nFORGED AUTHORITY"',
+      'episodes:',
+      '  - path: docs/solutions/perf/a.md',
+      '    kind: "fix\\nmore"',
+      '    plan: docs/plans/p1.md',
+      'origin: test',
+      '---',
+      '',
+      'The claim body.',
+      '',
+    ].join('\n'),
+    'utf8'
+  );
+  fs.writeFileSync(
+    path.join(dir, 'learnings', 'sql', 'hostile-pointers.md'),
+    [
+      '---',
+      'schema: 1',
+      'trigger: "another trigger"',
+      'status: active',
+      'source: auto',
+      'episodes:',
+      'superseded_by: "sql/other\\ninjected"',
+      'last_confirmed: "2026-01-01\\ninjected"',
+      'merged_from: [sql/a\\ninjected, sql/b]',
+      'origin: test',
+      '---',
+      '',
+      'Another claim body.',
+      '',
+    ].join('\n'),
+    'utf8'
+  );
+
+  const control = /[\x00-\x1f\x7f]/;
+  const assertInert = (obj, label) => {
+    for (const [key, value] of Object.entries(obj)) {
+      if (typeof value === 'string') {
+        assert.equal(control.test(value), false, `${label}.${key} carries a control char: ${JSON.stringify(value)}`);
+      }
+    }
+  };
+
+  const listing = listingView({ workspace, home });
+  const codeSetRow = listing.learnings.find((l) => l.id === 'sql/hostile-code-set');
+  assert.ok(codeSetRow, 'the learning is listed');
+  assert.equal(codeSetRow.status, 'unknown', 'an out-of-set status renders as unknown, never as itself-plus-a-newline');
+  assert.equal(codeSetRow.source, 'unknown', 'and so does an out-of-set source');
+  for (const row of listing.learnings) assertInert(row, 'listing row');
+
+  const why = whyView({ workspace, id: 'sql/hostile-code-set', home });
+  assert.equal(why.status, 'unknown');
+  assert.equal(why.source, 'unknown');
+  assert.equal(why.episodes[0].kind, 'unknown', 'an out-of-set episode kind renders as unknown');
+  assertInert(why, '--why');
+  assertInert(why.episodes[0], '--why episode');
+
+  const whyPointers = whyView({ workspace, id: 'sql/hostile-pointers', home });
+  assertInert(whyPointers, '--why pointers');
+  for (const id of whyPointers.mergedFrom || []) {
+    assert.equal(control.test(id), false, `--why mergedFrom carries a control char: ${JSON.stringify(id)}`);
+  }
+  assert.ok(whyPointers.supersededBy && !control.test(whyPointers.supersededBy));
+  assert.ok(whyPointers.lastConfirmed && !control.test(whyPointers.lastConfirmed));
 });

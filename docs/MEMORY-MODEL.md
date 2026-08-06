@@ -657,11 +657,54 @@ runs `git status --porcelain -uall` in the store first and commits any dirty edi
 - The absorbed content may exceed the 1,200-byte learning cap — human authority overrides
   the cap for hand edits (logged, not rejected; the cap binds only the sole writer's own
   ops).
-- **A symlink at a learning path is never a learning.** `learnings/<domain>/<slug>.md` (or
-  the bucket equivalent) planted as a SYMLINK is refused with a logged note, not followed —
-  on the read and on the canonical rewrite alike, both through the shared `fs-safe`
-  primitives. Following it would pull an arbitrary outside file into store history and a
-  workspace teaching snapshot, then overwrite that outside file with a serialized learning.
+- **A symlink at a learning path is never a learning — and it is made inert, not just
+  refused.** Every read, write, delete, and size check of a `learnings/<domain>/<slug>.md`
+  file (or its `branches/<key>/` equivalent) goes through ONE internal choke point
+  (`lib/knowledge/learning-io.mjs`), built on the shared `fs-safe` primitives and contained
+  against the STORE root, which it derives from the path's own required shape rather than
+  from a caller-supplied argument. So a planted symlink is: never read through, never
+  written through, never deleted through, never listed as an active learning by
+  `harness learnings` / retrieval / ranking, and never copied into the workspace mirror
+  under `knowledge commit repo`. Following it would otherwise pull an arbitrary outside file
+  into store history and a workspace teaching snapshot, then overwrite that outside file
+  with a serialized learning.
+  **The link itself is quarantined.** Refusing to follow it while leaving it sitting at a
+  live learning path was not enough — it still looked like a learning to anything that only
+  read the directory listing, and the next writer reaching for that id met a live link. The
+  next `absorbHandEdits` therefore MOVES the link (never its target; `rename` does not
+  follow a symlink) into `<store>/.quarantine/`, logs where it went, and leaves it there for
+  inspection. `.quarantine/` is gitignored, so a quarantined link never enters store
+  history and is never swept by `git clean -fd`.
+- **The store lock cannot be lost, and is never released by a non-owner.** `ensureStore`
+  writes (and, for stores created by an older CLI, migrates in) a `<store>/.gitignore`
+  covering `/.lock/`, `/.lock.stale-*`, and `/.quarantine/`. That is what makes lock loss
+  structurally impossible rather than recoverable: the transaction rollback runs
+  `git clean -fd`, which used to sweep the untracked `.lock` out from under the very
+  transaction holding it, after which the code re-asserted with a bare `mkdir` and swallowed
+  `EEXIST` as "still there" — so if a second writer had claimed the freed lock in that
+  window, the first carried on inside a lock it no longer held, `git add -A`-ed the other
+  writer's in-flight files, and finally deleted THEIR lock. `git clean` without `-x` never
+  touches an ignored path and `git add -A` never stages one, so the window is gone.
+  Independently of that, every lock carries an **owner token** (pid + random nonce) written
+  inside the lock directory at acquisition. Re-assert and release both verify it: a lock
+  whose owner stamp names somebody else (or cannot be read) is never reclaimed and never
+  removed, and a transaction that discovers its lock has been taken over aborts instead of
+  continuing. The store `.gitignore` is additive — entries a human added are preserved.
+- **A rollback that failed is reported as failed.** `rollbackStore` checks both git
+  invocations AND re-reads the tree afterwards (a zero exit is not the same thing as a clean
+  tree), and a transaction that could not roll back what it meant to discard NEVER reaches
+  its commit — enforced in `withStoreTransaction` itself, not left to each caller to
+  remember. This is what makes the write-time `E_HEAD_MOVED` rejection's "nothing was
+  written" promise true: a failed discard of the materialized branch bucket aborts the run
+  loudly instead of letting the finalize commit publish it.
+- **`git status --porcelain` is always read with `-z`.** The line-oriented format C-quotes
+  and octal-escapes any path containing a non-ASCII byte, a quote, a backslash, or a control
+  char, and separates rename pairs with an in-band `" -> "`. Both are lossy: a hand edit to
+  `learnings/café/x.md` decoded as `learnings/caf303251/x.md`, and an ordinary file named
+  `learnings/a -> b/c.md` decoded as `b/c.md` — so residue discard silently no-opped WHILE
+  REPORTING SUCCESS, absorb missed the same file, and the next commit's `git add -A` swept it
+  into history unvalidated and unscanned. `-z` emits pathnames verbatim (NUL cannot occur in
+  a pathname) with the rename pair as two separate fields; one parser serves every consumer.
 - **Crash residue is not a hand edit.** Every store transaction writes an intent journal
   under the store's `.git/` before its first mutation and clears it on commit or rollback,
   so a writer killed mid-transaction leaves uncommitted state the next transaction can
@@ -676,7 +719,11 @@ runs `git status --porcelain -uall` in the store first and commits any dirty edi
   rollback for the learning paths a later crash dirtied. **A journal that cannot be written
   refuses the transaction** rather than running unmarked: the journal is the only thing that
   tells residue from a hand edit, so proceeding without one is exactly the state whose
-  residue is later laundered into `source: human`.
+  residue is later laundered into `source: human`. A checkpoint refresh that FAILS after an
+  intra-transaction commit aborts the transaction too, rather than leaving the previous
+  journal in place: the previous journal names an OLDER checkpoint, and recovery resets
+  `--hard` to exactly that sha — destroying the sub-commit that had just landed, which for
+  `absorbOrAbort` is an absorbed human hand edit.
 
 Use `harness remember` to add a new claim and `harness learning retire|dispute|confirm` to
 change a learning's status when a CLI command is more convenient than a direct edit — both

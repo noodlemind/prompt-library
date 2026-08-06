@@ -573,7 +573,13 @@ test('K: every destructive knowledge path routes through an fs-safe realpath gua
   const guarded = [
     ['lib/knowledge/prune.mjs', /assertRealpathContained\(txDir, path\.join\('branches'/],
     ['lib/knowledge/layer.mjs', /assertRealpathContained\(dir, path\.join\('branches'/],
-    ['lib/knowledge/apply.mjs', /assertRealpathContained\(dir, path\.relative\(dir, src\.file\)\)/],
+    // Learning-file I/O no longer guards itself per call site: every read,
+    // write, and delete of a learning goes through learning-io.mjs, which owns
+    // the guard once (S1). The contract is therefore that the choke point holds
+    // it AND that apply.mjs's promotion tombstone goes through the choke point
+    // rather than touching `fs` directly.
+    ['lib/knowledge/learning-io.mjs', /assertRealpathContained\(p\.storeRoot, p\.rel\)/],
+    ['lib/knowledge/apply.mjs', /writeLearningFile\(src\.file, serializeLearning\(/],
   ];
   for (const [rel, pattern] of guarded) {
     const src = fs.readFileSync(path.join(packageRoot, rel), 'utf8');

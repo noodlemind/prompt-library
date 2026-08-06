@@ -29,7 +29,8 @@ import { absorbOrAbort, mirrorLearnings } from './admin.mjs';
 import { parseMergedFrom } from './listing.mjs';
 import { resolveWriteLayer, ensureBucket, migrateRenamedBucket, episodeEligibleForLayer, storeHasBuckets } from './layer.mjs';
 import { bucketDirFor, readBucketMeta, bucketAncestryOk, isSafeBucketKey } from './overlay.mjs';
-import { readFileNoFollow, assertNoSymlinkAncestors, assertRealpathContained } from '../fs-safe.mjs';
+import { readFileNoFollow, assertNoSymlinkAncestors } from '../fs-safe.mjs';
+import { readLearningFile, writeLearningFile } from './learning-io.mjs';
 
 /**
  * The SOLE writer of the learnings store. The consolidation skill emits an
@@ -1022,6 +1023,11 @@ export function applyOps({
           return true;
         });
       if (!eps.length) return null;
+      // Raised (outside the best-effort try below, which would otherwise
+      // swallow it) when the strike sub-commit failed AND its own rollback
+      // could not clean up: the tree is then dirty with a partial ledger write
+      // that the transaction's finalize would commit. Nothing may proceed.
+      let unrecoverable = null;
       try {
         // STRIKES AND QUARANTINE MARKERS ARE STORE-GLOBAL, NEVER PER-BUCKET
         // (P2). Three strikes is an anti-collapse control over an EPISODE, and
@@ -1047,12 +1053,26 @@ export function applyOps({
         appendLedger(dir, entries);
         const commitRes = commitStore(dir, `consolidate: record failure ${code}`);
         if (!commitRes.ok) {
-          rollbackStore(dir);
+          // Verified rollback (S4): `rollbackStore` now reports whether the
+          // tree is actually clean again. A failed discard cannot be folded
+          // into the rejection note — the partial ledger append is still on
+          // disk and finalize would commit it.
+          const rb = rollbackStore(dir);
+          if (!rb.ok) {
+            unrecoverable = `strike recording failed to commit (${commitRes.stderr || 'git commit failed'}) and could not be rolled back: ${rb.stderr}`;
+          }
           return `strike recording failed to commit: ${commitRes.stderr || 'git commit failed'}`;
         }
         recordCheckpoint();
-      } catch {
-        // Best effort — failure recording must never mask the original rejection.
+      } catch (err) {
+        // A recordCheckpoint abort is a real transaction failure, never a
+        // best-effort miss — it means a checkpoint could not be recorded, and
+        // swallowing it would leave a stale checkpoint a later recovery resets
+        // past. Everything else stays best effort: failure recording must never
+        // mask the original rejection.
+        if (err instanceof StoreTransactionAbort) throw err;
+      } finally {
+        if (unrecoverable) throw new Error(unrecoverable);
       }
       return null;
     }
@@ -1278,7 +1298,21 @@ export function applyOps({
             exitCode: 1,
           };
         }
-        const currentSha = crypto.createHash('sha256').update(fs.readFileSync(sourceLearning.file)).digest('hex');
+        // Through the choke point (S1) — the same reader promote.mjs hashed
+        // with, so the two sides can never disagree about what the bytes are,
+        // and neither can be steered onto an outside file by a symlink.
+        const sourceText = readLearningFile(sourceLearning.file);
+        if (sourceText === null) {
+          return {
+            kind: 'reject',
+            applied: [],
+            governed: [],
+            rejected: [fail('E_SCHEMA', `op ${i}: promotion source ${src.id} could not be read safely from the store`)],
+            committed: false,
+            exitCode: 1,
+          };
+        }
+        const currentSha = crypto.createHash('sha256').update(sourceText).digest('hex');
         if (currentSha !== src.sha256) {
           return {
             kind: 'reject',
@@ -1413,12 +1447,27 @@ export function applyOps({
         const notCandidate = assertCandidacy(op, i);
         if (notCandidate) return rejectOp(notCandidate.code, notCandidate.reason, op.episodes);
       }
-      // merged_from is only ever a MERGE-derived (op.targets) or ADD/SUPERSEDE-
-      // carried-forward field — an op JSON asserting it directly must be an
-      // array of strings, or renderLearning's `mergedFrom.join(', ')` throws on
-      // a non-array (e.g. a string) instead of failing closed.
-      if (op.merged_from !== undefined && (!Array.isArray(op.merged_from) || !op.merged_from.every((v) => typeof v === 'string'))) {
-        return rejectOp('E_SCHEMA', `op ${i}: merged_from must be an array of strings`, op.episodes);
+      // MERGED_FROM IS DERIVED, NEVER ASSERTED. `merged_from` records that
+      // THIS store consolidated those ids into this claim — a provenance
+      // statement about a mutation the writer performed, tombstoning each
+      // target in the same run. Accepting it from the op JSON let any op
+      // (including a hand-edited promotion op-set, which is a plain
+      // model/user-writable file at `.harness/promote-ops.json`) STAMP that
+      // provenance verbatim onto a fresh golden claim while merging nothing:
+      // forged consolidation history, indistinguishable on disk and in
+      // `learnings --why` from the real thing. The only legitimate values come
+      // from MERGE's own validated `op.targets` (below) and from a re-render
+      // carrying an ALREADY-PERSISTED value forward (composeStrengthenedLearning
+      // / serializeLearning) — neither of which reads this field. So the field
+      // is not authorable at all: asserting it is an E_SCHEMA rejection, an
+      // allow-list rather than a shape check on something that should never
+      // have been accepted.
+      if (op.merged_from !== undefined) {
+        return rejectOp(
+          'E_SCHEMA',
+          `op ${i}: merged_from is derived from a MERGE's own targets and cannot be asserted by an op`,
+          op.episodes
+        );
       }
 
       // Shared between the inactive-target exemption (below) and the
@@ -1859,7 +1908,9 @@ export function applyOps({
         status,
         source,
         supersededBy: null,
-        mergedFrom: op.op === 'MERGE' ? op.targets : op.merged_from,
+        // Only a MERGE's own validated targets — never an op-asserted value
+        // (rejected outright above).
+        mergedFrom: op.op === 'MERGE' ? op.targets : null,
         provenance,
       });
       // Byte-cap decision (Phase 1, recorded in the plan's Implementation
@@ -1893,6 +1944,9 @@ export function applyOps({
       if (op.op !== 'STRENGTHEN') continue;
       const target = existing.get(op.target);
       const content = composeStrengthenedLearning(target, op.episodes, workspace, copilotHome);
+      if (content === null) {
+        return rejectOp('E_TARGET', `op ${op.target}: learning file could not be read safely from the store`, op.episodes);
+      }
       // Same byte-cap decision as the fresh-write check above: the preserved
       // provenance lines are excluded from the measured size, so a near-cap
       // learning that carries commit/branch/base can still be strengthened
@@ -1928,7 +1982,19 @@ export function applyOps({
     // transaction's finalize commit published the stale bucket anyway.
     const moved = assertHeadUnmoved();
     if (moved) {
-      rollbackToCheckpoint();
+      // ACT ON THE ROLLBACK RESULT (S4). This return path is what makes
+      // E_HEAD_MOVED's "nothing was written" promise true — the bucket
+      // materialization above must be gone before the transaction's finalize
+      // commit runs. A rollback that FAILED means the materialization is still
+      // sitting in the tree, so returning the rejection normally would let
+      // finalize publish it under a message saying nothing happened. Throw
+      // instead: the transaction reports a hard failure, loudly, with the git
+      // reason attached.
+      if (!rollbackToCheckpoint()) {
+        throw new Error(
+          `${moved.rejected[0].reason} — and the store could not be rolled back to its checkpoint; the run is aborted with the store left for manual inspection`
+        );
+      }
       return moved;
     }
 
@@ -1952,8 +2018,13 @@ export function applyOps({
 
     for (const { op, id, domain, slug, content } of writes) {
       const file = path.join(layerRoot, 'learnings', domain, `${slug}.md`);
-      fs.mkdirSync(path.dirname(file), { recursive: true });
-      fs.writeFileSync(file, content, 'utf8');
+      // Through the choke point (S1): contained, atomic, never through a
+      // symlink. A refusal is a hard failure — the throw propagates out of
+      // runOnce and withStoreTransaction rolls the whole run back, rather than
+      // reporting a learning as applied when nothing landed.
+      if (!writeLearningFile(file, content)) {
+        throw new Error(`refused to write ${id}: the learning path does not resolve safely inside the knowledge store`);
+      }
       applied.push({ op: op.op, id });
       for (const e of op.episodes) ledgerEntries.push({ path: e.path, sha256: e.sha256, learning: id, at });
       // A SUPERSEDE whose target is the SAME id as the file just written
@@ -1965,14 +2036,18 @@ export function applyOps({
       // content at itself, so that step only runs when target !== id.
       if (op.op === 'SUPERSEDE' && op.target !== id) {
         const target = existing.get(op.target);
-        updateFrontmatterField(target.file, 'superseded_by', id);
+        if (!updateFrontmatterField(target.file, 'superseded_by', id)) {
+          throw new Error(`refused to tombstone ${op.target}: the learning path does not resolve safely inside the knowledge store`);
+        }
       }
       // A MERGE tombstones EVERY target it consolidates into the new id —
       // none of them can equal `id` (MERGE always writes a brand-new id).
       if (op.op === 'MERGE') {
         for (const t of op.targets) {
           const target = existing.get(t);
-          updateFrontmatterField(target.file, 'superseded_by', id);
+          if (!updateFrontmatterField(target.file, 'superseded_by', id)) {
+            throw new Error(`refused to tombstone ${t}: the learning path does not resolve safely inside the knowledge store`);
+          }
         }
       }
     }
@@ -2041,11 +2116,18 @@ export function applyOps({
           log(`consolidate: governance record for ${id} has an unsafe promote target (${entry.to}) — skipped reapply`);
           continue;
         }
-        const text = fs.readFileSync(file, 'utf8');
+        const text = readLearningFile(file);
+        if (text === null) {
+          throw new Error(`refused to reapply governance to ${id}: the learning path does not resolve safely inside the knowledge store`);
+        }
         const { fm, body } = parseLearningFrontmatter(text);
-        fs.writeFileSync(file, serializeLearning({ ...fm, promoted_to: entry.to }, body), 'utf8');
+        if (!writeLearningFile(file, serializeLearning({ ...fm, promoted_to: entry.to }, body))) {
+          throw new Error(`refused to reapply governance to ${id}: the learning path does not resolve safely inside the knowledge store`);
+        }
       } else {
-        updateFrontmatterField(file, 'status', entry.action === 'retire' ? 'retired' : 'disputed');
+        if (!updateFrontmatterField(file, 'status', entry.action === 'retire' ? 'retired' : 'disputed')) {
+          throw new Error(`refused to reapply governance to ${id}: the learning path does not resolve safely inside the knowledge store`);
+        }
       }
       governed.push({ id, action: entry.action });
     }
@@ -2054,7 +2136,9 @@ export function applyOps({
     // phase above verbatim — never recomputed here, so there is exactly one
     // place that decides a STRENGTHEN's rendered bytes.
     for (const { op, target, content } of strengthenWrites) {
-      fs.writeFileSync(target.file, content, 'utf8');
+      if (!writeLearningFile(target.file, content)) {
+        throw new Error(`refused to strengthen ${op.target}: the learning path does not resolve safely inside the knowledge store`);
+      }
       applied.push({ op: 'STRENGTHEN', id: op.target });
       for (const e of op.episodes) ledgerEntries.push({ path: e.path, sha256: e.sha256, learning: op.target, at });
     }
@@ -2080,19 +2164,22 @@ export function applyOps({
       for (const entry of [...writes, ...strengthenWrites]) {
         const src = entry.op.source?.id ? promotionSources.get(entry.op.source.id) : null;
         if (!src) continue;
-        // Defense in depth (fs-safe.mjs's own documented discipline): this is
-        // the one write in this module that targets a path under
-        // `branches/<key>/`, a directory tree a human hand-edits. A symlinked
-        // bucket component must never let the tombstone write land outside the
-        // store. Fail CLOSED — a throw here propagates out of runOnce and
-        // withStoreTransaction rolls the whole promotion back, rather than
-        // leaving a golden claim whose source was never tombstoned.
-        if (!assertRealpathContained(dir, path.relative(dir, src.file))) {
-          throw new Error(`refused to tombstone ${src.id}: bucket learning path escapes the knowledge store`);
+        // Through the choke point (S1): this write targets a path under
+        // `branches/<key>/`, a directory tree a human hand-edits, so both the
+        // read and the write are contained against the STORE root (which the
+        // choke point derives from the path shape — a bucket root would leave a
+        // symlinked `branches/` above the walked span). Fail CLOSED — a throw
+        // here propagates out of runOnce and withStoreTransaction rolls the
+        // whole promotion back, rather than leaving a golden claim whose source
+        // was never tombstoned.
+        const text = readLearningFile(src.file);
+        if (text === null) {
+          throw new Error(`refused to tombstone ${src.id}: bucket learning path does not resolve safely inside the knowledge store`);
         }
-        const text = fs.readFileSync(src.file, 'utf8');
         const parsedSource = parseLearningFrontmatter(text);
-        fs.writeFileSync(src.file, serializeLearning({ ...parsedSource.fm, promoted_to_golden: src.id }, parsedSource.body), 'utf8');
+        if (!writeLearningFile(src.file, serializeLearning({ ...parsedSource.fm, promoted_to_golden: src.id }, parsedSource.body))) {
+          throw new Error(`refused to tombstone ${src.id}: bucket learning path does not resolve safely inside the knowledge store`);
+        }
         appendGovernance(dir, {
           id: src.id,
           action: 'absorb-branch',
@@ -2114,7 +2201,9 @@ export function applyOps({
 
     for (const d of disputes) {
       const target = existing.get(d.target);
-      updateFrontmatterField(target.file, 'status', 'disputed');
+      if (!updateFrontmatterField(target.file, 'status', 'disputed')) {
+        throw new Error(`refused to dispute ${d.target}: the learning path does not resolve safely inside the knowledge store`);
+      }
       rejected.push({ ...fail('E_DISPUTED', 'disputed-pending-human'), reason: 'disputed-pending-human', target: d.target });
     }
 
@@ -2260,8 +2349,19 @@ export function applyOps({
     ...staleExtra,
   };
 }
+/**
+ * Set one frontmatter field on an existing learning file. Both halves go
+ * through the choke point (S1) — this used to be a bare readFileSync/
+ * writeFileSync pair, and it is reached from four call sites (SUPERSEDE and
+ * MERGE tombstones, governance retire/dispute reapply, the dispute loop) plus
+ * lifecycle.mjs's retire/dispute/confirm, so a symlink planted at a learning
+ * path was followed by all six. Returns true on success, false when the path
+ * is not a safely-resolvable learning file inside the store; callers treat
+ * false as a hard failure and let the transaction roll back.
+ */
 export function updateFrontmatterField(file, field, value) {
-  const text = fs.readFileSync(file, 'utf8');
+  const text = readLearningFile(file);
+  if (text === null) return false;
   const re = new RegExp(`^${field}:.*$`, 'm');
   // The insertion fallback (field absent from frontmatter) must tolerate a
   // CRLF-terminated leading `---` — an LF-only regex silently no-ops on a
@@ -2271,7 +2371,7 @@ export function updateFrontmatterField(file, field, value) {
   const next = re.test(text)
     ? text.replace(re, `${field}: ${value}`)
     : text.replace(/^---(\r?\n)/, (_, nl) => `---${nl}${field}: ${value}${nl}`);
-  fs.writeFileSync(file, next, 'utf8');
+  return writeLearningFile(file, next);
 }
 
 // Composes a STRENGTHEN's rendered content WITHOUT writing it — split out of
@@ -2281,7 +2381,12 @@ export function updateFrontmatterField(file, field, value) {
 // the strengthenWrites loop in the mutation phase, which writes this exact
 // string back verbatim.
 function composeStrengthenedLearning(target, episodes, workspace, copilotHome) {
-  const text = fs.readFileSync(target.file, 'utf8');
+  // Through the choke point (S1): null means the target is not safely readable
+  // as a learning (symlinked leaf/ancestor, escaped path, over-cap, vanished),
+  // and the caller turns that into an E_TARGET rejection rather than composing
+  // a rewrite of something outside the store.
+  const text = readLearningFile(target.file);
+  if (text === null) return null;
   const { fm, body } = parseLearningFrontmatter(text);
   const seen = new Set((fm.episodes || []).map((e) => `${e.path}@${e.sha256}`));
   const merged = [...(fm.episodes || [])];

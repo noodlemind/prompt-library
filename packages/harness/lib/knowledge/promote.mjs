@@ -6,6 +6,7 @@ import { isActiveFm, MAX_OPS_PER_RUN } from './consolidate.mjs';
 import { bucketDirFor, readBucketMeta, listBuckets, bucketAncestryOk, isSafeBucketKey } from './overlay.mjs';
 import { deriveGitContext, isDetachedKey } from '../git-context.mjs';
 import { writeFileContained } from '../fs-safe.mjs';
+import { readLearningFile } from './learning-io.mjs';
 
 /**
  * `harness knowledge promote` (blueprint §5): emits a REVIEWABLE op-set at
@@ -108,10 +109,23 @@ export function buildPromotionOps({ workspace, home, branchKey = null, ids = nul
 
   const skipped = [];
   const promotable = [];
+  // Through the choke point (S1), and the SAME reader apply.mjs re-hashes with
+  // at write time — so the emitted `source.sha256` and the write-time
+  // re-verification can never disagree about what the file's bytes are, and
+  // neither of them can be steered onto an outside file by a planted symlink.
+  const sourceSha = (learning) => {
+    const text = readLearningFile(learning.file);
+    return text === null ? null : crypto.createHash('sha256').update(text).digest('hex');
+  };
   for (const source of sources) {
     const decision = governance.get(source.id);
     if (decision && ['retire', 'dispute', 'promote'].includes(decision.action)) {
       skipped.push({ id: source.id, reason: `standing governance decision: ${decision.action}` });
+      continue;
+    }
+    const sha256 = sourceSha(source);
+    if (sha256 === null) {
+      skipped.push({ id: source.id, reason: 'learning file could not be read safely from the store' });
       continue;
     }
     const twin = goldenById.get(source.id);
@@ -128,7 +142,7 @@ export function buildPromotionOps({ workspace, home, branchKey = null, ids = nul
           op: 'STRENGTHEN',
           target: source.id,
           episodes: newEpisodes.map((e) => ({ path: e.path, sha256: e.sha256, kind: e.kind, plan: e.plan || null })),
-          source: { id: source.id, sha256: crypto.createHash('sha256').update(fs.readFileSync(source.file)).digest('hex') },
+          source: { id: source.id, sha256 },
         });
         continue;
       }
@@ -141,7 +155,7 @@ export function buildPromotionOps({ workspace, home, branchKey = null, ids = nul
       trigger: source.fm.trigger || '',
       body: source.body,
       episodes: (source.fm.episodes || []).filter((e) => e.path).map((e) => ({ path: e.path, sha256: e.sha256, kind: e.kind, plan: e.plan || null })),
-      source: { id: source.id, sha256: crypto.createHash('sha256').update(fs.readFileSync(source.file)).digest('hex') },
+      source: { id: source.id, sha256 },
     });
   }
 

@@ -6,12 +6,13 @@ import {
   withStoreTransaction,
   StoreTransactionAbort,
   LEARNING_FILE_RE,
-  parsePorcelainLine,
+  parsePorcelainZ,
   storeDir,
   storeDirForId,
   repoId,
   localRepoId,
   acquireStoreLock,
+  releaseStoreLock,
   listLearnings,
   readLedger,
   appendLedger,
@@ -28,6 +29,7 @@ import { consolidateStatus, LEARNING_BYTE_CAP, isActiveFm } from './consolidate.
 import { listBuckets, branchesRoot, bucketDirFor } from './overlay.mjs';
 import { scanSecrets } from '../secret-scan.mjs';
 import { assertNoSymlinkAncestors, assertRealpathContained, writeFileContained, readFileNoFollow } from '../fs-safe.mjs';
+import { readLearningFile, writeLearningFile, removeLearningFile, quarantineSymlinkedLearning } from './learning-io.mjs';
 import { runIndexKnowledge } from '../index-knowledge.mjs';
 import { loadManifest } from '../recall-rank.mjs';
 
@@ -57,14 +59,20 @@ function yamlQuote(v) {
  * byte-shape-compatible with the sole-writer's output.
  */
 export function removeEpisodeLink(file, targetPath) {
-  const text = fs.readFileSync(file, 'utf8');
+  // Through the choke point (S1) — both halves. Returns null when the path is
+  // not a safely-resolvable learning file inside the store (symlinked leaf or
+  // ancestor, escaped path, over-cap, vanished); the purge cascade treats that
+  // as a hard failure rather than silently reporting a delink that never
+  // happened.
+  const text = readLearningFile(file);
+  if (text === null) return null;
   const { fm, body } = parseLearningFrontmatter(text);
   // Preserve every other field, including last_confirmed as parsed — a purge
   // is a negative event on this learning's remaining evidence, not a fresh
   // human confirmation, so it must never refresh the last_confirmed trust
   // signal.
   fm.episodes = (fm.episodes || []).filter((e) => e.path !== targetPath);
-  fs.writeFileSync(file, serializeLearning(fm, body), 'utf8');
+  if (!writeLearningFile(file, serializeLearning(fm, body))) return null;
   return fm.episodes;
 }
 
@@ -121,7 +129,19 @@ export function mirrorLearnings({ workspace, home, log = () => {}, retiredIds = 
   const skippedIds = new Set();
 
   for (const learning of active) {
-    const text = fs.readFileSync(learning.file, 'utf8');
+    // Through the choke point (S1). `listLearnings` already refuses a symlinked
+    // learning, so this is the second, independent refusal on the same path —
+    // deliberately, because mirrorLearnings copies verbatim bytes into a
+    // COMMITTED workspace path under `knowledge commit repo`: following a
+    // planted link here published an arbitrary outside file into the product
+    // repo's PR flow. A null read is swept like any other skip.
+    const text = readLearningFile(learning.file);
+    if (text === null) {
+      skipped++;
+      skippedIds.add(learning.id);
+      log(`mirror: ${learning.id} could not be read safely from the store — skipped`);
+      continue;
+    }
     const secrets = scanSecrets(text);
     if (secrets.length) {
       skipped++;
@@ -245,7 +265,7 @@ export function absorbHandEdits({ workspace, home, log = () => {} }) {
   const dir = storeDir(workspace, { home });
   if (!fs.existsSync(dir) || !fs.existsSync(path.join(dir, '.git'))) return empty;
 
-  const status = spawnSync('git', ['status', '--porcelain', '-uall'], { cwd: dir, encoding: 'utf8' });
+  const status = spawnSync('git', ['status', '--porcelain', '-uall', '-z'], { cwd: dir, encoding: 'utf8' });
   // Fail CLOSED (P2): a spawn error or a non-zero `git status` exit used to be
   // coerced to an empty string — read as "tree is clean" — so a later
   // transaction rollback (git reset --hard + clean -fd) could silently destroy
@@ -257,8 +277,13 @@ export function absorbHandEdits({ workspace, home, log = () => {} }) {
     const detail = status.error ? status.error.message : status.stderr || `git status exited ${status.status}`;
     return { absorbed: [], deleted: [], committed: false, ok: false, stderr: `git status failed: ${detail}` };
   }
-  const lines = status.stdout.split('\n').filter(Boolean);
-  if (!lines.length) return empty;
+  // NUL-delimited, verbatim paths (S3): the line-oriented format C-quotes any
+  // path with a non-ASCII byte, a quote, a backslash, or a control char, and
+  // the old hand-rolled unquoting mis-decoded exactly those — so a hand edit to
+  // `learnings/café/x.md` was silently invisible to absorb and then swept into
+  // store history unvalidated by the next `git add -A`.
+  const entries = parsePorcelainZ(status.stdout);
+  if (!entries.length) return empty;
 
   const at = todayClamped();
   const absorbed = [];
@@ -271,8 +296,7 @@ export function absorbHandEdits({ workspace, home, log = () => {} }) {
   const ledgerByRoot = new Map();
   const touchedBucketRoots = new Set();
 
-  for (const line of lines) {
-    const { status: code, path: rel } = parsePorcelainLine(line);
+  for (const { status: code, path: rel } of entries) {
     const m = LEARNING_FILE_RE.exec(rel);
     if (!m) continue; // non-learning file — left for the normal commit
     // Bucket capture (blueprint §5a): a hand edit under
@@ -307,10 +331,21 @@ export function absorbHandEdits({ workspace, home, log = () => {} }) {
     // after acquiring the descriptor, closing the swap window the walk cannot.
     const file = assertNoSymlinkAncestors(dir, rel);
     if (!file) {
-      log(`hand-edit absorb: ${rel} is a symlink or sits under one — refused, never followed`);
+      // REFUSING IS NOT ENOUGH — THE LINK MUST BECOME INERT (S1). The previous
+      // round refused to follow it here and LEFT IT IN PLACE, so it stayed on
+      // disk at a live learning path for every other reader and writer to trip
+      // over. It is now moved (link itself, never its target) into
+      // `<store>/.quarantine/`, which is gitignored: out of `learnings/`, out
+      // of store history, preserved for inspection, and reported.
+      const quarantined = quarantineSymlinkedLearning(path.resolve(dir, rel));
+      log(
+        quarantined
+          ? `hand-edit absorb: ${rel} is a symlink — never followed; moved to ${quarantined}`
+          : `hand-edit absorb: ${rel} is a symlink or sits under one — refused, never followed`
+      );
       continue;
     }
-    const text = readFileNoFollow(file, { root: dir });
+    const text = readLearningFile(file);
     if (text === null) {
       // Vanished between status and read, swapped for a symlink since the walk
       // above, over the read cap, or resolving outside the store — nothing
@@ -388,8 +423,32 @@ export function absorbHandEdits({ workspace, home, log = () => {} }) {
     // is created empty, containment-verified in place, filled through the
     // verified descriptor, then renamed over the leaf (a rename replaces a
     // symlink, it never follows one).
-    if (!writeFileContained(dir, rel, content)) {
+    if (!writeLearningFile(file, content)) {
       log(`hand-edit absorb: refused to rewrite ${rel} — the path no longer resolves inside the knowledge store`);
+      // NO ORPHAN TEACHING SNAPSHOT. The snapshot is written BEFORE this
+      // refusal can happen, and until now the refusal just `continue`d — so
+      // `docs/solutions/teachings/<date>-hand-edit-<slug>.md` stayed behind in
+      // the workspace with nothing citing it. That file is a valid
+      // `kind: human-teaching` candidate episode, so a later ADD could cite it
+      // and be admitted with `source: human` authority for an absorb that was
+      // REFUSED. Snapshot and rewrite are therefore all-or-nothing: on refusal
+      // the snapshot is removed again, and only if it cannot be removed is the
+      // orphan reported rather than left silent.
+      if (snapshot) {
+        const snapFull = assertRealpathContained(workspace, snapshot);
+        let cleared = false;
+        if (snapFull) {
+          try {
+            fs.rmSync(snapFull, { force: true });
+            cleared = true;
+          } catch {
+            cleared = false;
+          }
+        }
+        if (!cleared) {
+          log(`hand-edit absorb: could not remove the orphaned teaching snapshot ${snapshot} — delete it by hand before it is cited as evidence`);
+        }
+      }
       continue;
     }
     if (ledgerEntry) {
@@ -871,11 +930,17 @@ export function purgeEpisode({ workspace, target, copilotHome, home, log = () =>
         // regardless of sha256, so this must match that filter exactly.
         const remaining = episodes.filter((e) => e.path !== target);
         if (remaining.length === 0) {
-          // No evidence left once every link to this path is gone.
-          fs.rmSync(l.file, { force: true });
+          // No evidence left once every link to this path is gone. Through the
+          // choke point (S1): a symlinked learning path is refused, never
+          // unlinked-through onto an outside file.
+          if (!removeLearningFile(l.file)) {
+            throw new Error(`refused to delete ${l.id}: the learning path does not resolve safely inside the knowledge store`);
+          }
           removedLearnings.push(l.id);
         } else {
-          removeEpisodeLink(l.file, target);
+          if (removeEpisodeLink(l.file, target) === null) {
+            throw new Error(`refused to delink ${l.id}: the learning path does not resolve safely inside the knowledge store`);
+          }
           removedLinks.push(l.id);
         }
       }
@@ -1413,7 +1478,7 @@ export function migrateStrandedStore({ workspace, home, log = () => {} }) {
     // location now; clear it so a normal withStoreTransaction against the
     // freshly migrated store is never blocked by a lock this function
     // itself created.
-    fs.rmSync(path.join(targetDir, '.lock'), { recursive: true, force: true });
+    releaseStoreLock(path.join(targetDir, '.lock'), lock.token);
     log(`migrated stranded store: ${legacyDir} -> ${targetDir}`);
     return {
       pass: true,
@@ -1441,7 +1506,9 @@ export function migrateStrandedStore({ workspace, home, log = () => {} }) {
     // targetDir/.lock is cleared separately above. Best effort: a cleanup
     // failure must never mask the real result.
     try {
-      fs.rmSync(lockPath, { recursive: true, force: true });
+      // Owner-checked (S2): only ever release the lock THIS call acquired. On
+      // the success path legacyDir has been renamed away, so this is a no-op.
+      releaseStoreLock(lockPath, lock.token);
     } catch {
       // ignored — a leftover lock is taken over as stale on the next attempt
     }

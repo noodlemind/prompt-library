@@ -3,7 +3,8 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { harnessGlobalHome } from '../paths.mjs';
-import { DEFAULT_MAX_BYTES, readFileNoFollow, writeFileContained, assertRealpathContained } from '../fs-safe.mjs';
+import { readFileNoFollow, writeFileContained, assertRealpathContained } from '../fs-safe.mjs';
+import { readLearningFile, QUARANTINE_DIR } from './learning-io.mjs';
 
 /**
  * The local knowledge store: a CLI-managed git repo OUTSIDE the working tree
@@ -118,12 +119,65 @@ export function assertStoreSchemaSupported(dir) {
   return recorded;
 }
 
+/**
+ * The store's `.gitignore` (S2 — LOCK LOSS MUST BE STRUCTURALLY IMPOSSIBLE).
+ *
+ * `rollbackStore` runs `git clean -fd`, which sweeps every untracked directory
+ * in the store — including the `.lock` the running transaction is holding. The
+ * previous rounds patched that by re-asserting the lock with a bare
+ * `fs.mkdirSync(lockPath)` afterwards and swallowing EEXIST as "still there":
+ * if a second writer had grabbed the freed lock in that window, the first
+ * writer carried on regardless, `git add -A`-ed the other writer's in-flight
+ * files, and finally `rmSync`-ed THEIR lock.
+ *
+ * A `.gitignore` removes the window instead of racing inside it: `git clean`
+ * without `-x` never touches an ignored path, and `git add -A` never stages
+ * one. The lock (and its stale-takeover tombstones, and the symlink quarantine
+ * bucket) therefore survive every rollback by construction. Ownership tokens
+ * below are the second, independent layer — belt to this brace — because a
+ * store whose `.gitignore` a human deleted must still never release a lock it
+ * does not own.
+ *
+ * The transaction journal needs no entry: it lives at `.git/harness-txn.json`,
+ * which git neither stages nor cleans.
+ */
+const STORE_IGNORE_ENTRIES = ['/.lock/', '/.lock.stale-*', `/${QUARANTINE_DIR}/`];
+
+/**
+ * Write or migrate the store `.gitignore`. Existing stores predate it, so this
+ * runs on EVERY open (ensureStore) rather than only at creation: a store built
+ * by an older CLI gains the entries the first time any command touches it,
+ * which is the only migration point that does not require the user to know a
+ * migration exists. Idempotent and additive — an entry a human already wrote
+ * is not duplicated, and lines this CLI does not own are preserved verbatim.
+ */
+function ensureStoreGitignore(dir) {
+  // fs-safe on both halves (rule 1): `.gitignore` sits in the store root, a
+  // directory a human writes to, so it is as symlink-plantable as any learning
+  // path — following one would append these entries to (and, with the read
+  // returning that file's content, rewrite) an arbitrary outside file.
+  const existing = readFileNoFollow(path.join(dir, '.gitignore'), { root: dir }) ?? '';
+  const lines = existing.split('\n').map((l) => l.trim());
+  const missing = STORE_IGNORE_ENTRIES.filter((entry) => !lines.includes(entry));
+  if (!missing.length) return;
+  const header = existing ? (existing.endsWith('\n') ? '' : '\n') : '# harness knowledge store — never staged, never swept by `git clean -fd`\n';
+  try {
+    // Best effort: an unwritable (or symlinked) `.gitignore` still lets the
+    // store run — it just falls back to the ownership-token layer below for
+    // lock safety, which is independent of this file.
+    writeFileContained(dir, '.gitignore', existing + header + missing.join('\n') + '\n');
+  } catch {
+    // writeFileContained mkdirs the parent, which can throw on a hand-built store
+  }
+}
+
 export function ensureStore(workspace, { home, dryRun = false } = {}) {
   const dir = storeDir(workspace, { home });
   assertStoreSchemaSupported(dir);
   const created = !fs.existsSync(path.join(dir, 'consolidated.jsonl'));
   if (dryRun) return { dir, created, git: fs.existsSync(path.join(dir, '.git')) };
   fs.mkdirSync(path.join(dir, 'learnings'), { recursive: true });
+  ensureStoreGitignore(dir);
   let gitOk = fs.existsSync(path.join(dir, '.git'));
   if (!gitOk) {
     gitOk = spawnSync('git', ['init', '-q'], { cwd: dir, encoding: 'utf8' }).status === 0;
@@ -569,17 +623,16 @@ export function listLearnings(dir) {
     for (const f of fs.readdirSync(dPath)) {
       if (!f.endsWith('.md')) continue;
       const file = path.join(dPath, f);
-      // Read-size cap (sweep P3 DoS): CLI writes byte-cap a learning file, but a
-      // hand-planted over-cap file in the local store would otherwise be read
-      // whole on every listing/rank. Skip it — never read whole.
-      let size;
-      try {
-        size = fs.statSync(file).size;
-      } catch {
-        continue;
-      }
-      if (size > DEFAULT_MAX_BYTES) continue;
-      const text = fs.readFileSync(file, 'utf8');
+      // THE ONLY READ (S1): `readLearningFile` (learning-io.mjs) is the store's
+      // single learning-file reader. It returns null — and this entry is simply
+      // not a learning — for a symlinked leaf or ancestor, a path resolving
+      // outside the store, a file over the DEFAULT_MAX_BYTES read cap (the
+      // hand-planted over-cap DoS this loop used to statSync for), or an absent
+      // file. That null is what makes a planted symlink INERT here: it is never
+      // presented as an active learning, so nothing downstream — retrieval,
+      // ranking, STRENGTHEN target resolution, the mirror — can reach it.
+      const text = readLearningFile(file);
+      if (text === null) continue;
       const { fm, body } = parseLearningFrontmatter(text);
       const slug = f.replace(/\.md$/, '');
       out.push({
@@ -616,7 +669,7 @@ export function commitStore(dir, message) {
   if (addRes.status !== 0) {
     return { committed: false, ok: false, stderr: addRes.stderr || `git add exited ${addRes.status}` };
   }
-  const statusRes = spawnSync('git', ['status', '--porcelain'], { cwd: dir, encoding: 'utf8' });
+  const statusRes = spawnSync('git', ['status', '--porcelain', '-z'], { cwd: dir, encoding: 'utf8' });
   if (statusRes.status !== 0) {
     return { committed: false, ok: false, stderr: statusRes.stderr || `git status exited ${statusRes.status}` };
   }
@@ -658,10 +711,109 @@ const STALE_LOCK_MS = 10 * 60 * 1000;
  * lock is genuinely held by someone else right now (`ageMs` is the lock
  * directory's current age, for a caller that wants to report it).
  */
+/**
+ * OWNER TOKENS (S2). The `.lock` directory alone says "someone holds this"; it
+ * never said WHO, so every re-assert and every release was an unverified
+ * guess. `fs.mkdirSync(lockPath)` after a `git clean -fd` swept the lock threw
+ * EEXIST when a SECOND process had taken it in the meantime, and that EEXIST
+ * was swallowed as "still there" — the first writer then continued inside a
+ * lock it no longer held and finally `rmSync`-ed the other writer's.
+ *
+ * A token — pid plus a random nonce, written INSIDE the lock directory the
+ * instant it is created — makes ownership checkable. `releaseStoreLock` and
+ * `reassertStoreLock` below both verify it and NEVER remove or claim a lock
+ * whose owner file names somebody else. The nonce (not just the pid) is what
+ * makes it sound across pid reuse and across two transactions in one process.
+ */
+const LOCK_OWNER_FILE = 'owner.json';
+
+function newLockToken() {
+  return `${process.pid}-${crypto.randomBytes(12).toString('hex')}`;
+}
+
+/** Stamp ownership into a lock directory we just created. Best effort: a lock
+ * whose owner file could not be written reads as `unknown` below, which is
+ * treated as NOT ours — fail closed, never claim what we cannot prove. */
+function writeLockOwner(lockPath, token) {
+  try {
+    // Contained write (rule 1), matching the contained read in `lockOwnership`:
+    // the lock directory is freshly mkdir'd, but the owner file inside it is
+    // still a path another process could reach, so neither half touches it with
+    // a bare `fs` call.
+    writeFileContained(lockPath, LOCK_OWNER_FILE, JSON.stringify({ token, pid: process.pid, at: new Date().toISOString() }) + '\n');
+  } catch {
+    // ignored — see the doc comment above: an unwritable owner stamp reads back
+    // as `foreign`, i.e. NOT ours, which fails closed.
+  }
+}
+
+/**
+ * `'absent'` (no lock directory at all), `'owned'` (the owner file names
+ * `token`), or `'foreign'` (it names something else, or cannot be read at all
+ * — an unreadable/absent/symlinked owner file is never assumed to be ours).
+ * The read goes through `readFileNoFollow` contained to the lock directory:
+ * `.lock` sits in a directory a human can write to, so the owner file is as
+ * attacker-influenced as anything else in the store.
+ */
+export function lockOwnership(lockPath, token) {
+  if (!fs.existsSync(lockPath)) return 'absent';
+  const text = readFileNoFollow(path.join(lockPath, LOCK_OWNER_FILE), { root: lockPath });
+  if (text === null) return 'foreign';
+  try {
+    const parsed = JSON.parse(text);
+    return parsed && parsed.token && parsed.token === token ? 'owned' : 'foreign';
+  } catch {
+    return 'foreign';
+  }
+}
+
+/**
+ * Re-establish the lock after an operation that COULD have removed it, without
+ * ever stealing one. `.lock` is gitignored (STORE_IGNORE_ENTRIES) so
+ * `git clean -fd` can no longer sweep it, but this is the independent second
+ * layer: absent → recreate and re-stamp (it was ours, nobody else took it);
+ * ours → nothing to do; SOMEBODY ELSE'S → return false, and the caller must
+ * abort rather than proceed inside a lock it does not hold.
+ */
+export function reassertStoreLock(lockPath, token) {
+  const state = lockOwnership(lockPath, token);
+  if (state === 'owned') return true;
+  if (state === 'foreign') return false;
+  try {
+    fs.mkdirSync(lockPath, { recursive: true });
+  } catch {
+    return false;
+  }
+  // Between the existence check and this mkdir another writer may have won the
+  // race; re-verify rather than assume the mkdir means we hold it.
+  writeLockOwner(lockPath, token);
+  return lockOwnership(lockPath, token) === 'owned';
+}
+
+/**
+ * Release ONLY a lock this holder owns. Returns true when the lock is gone (or
+ * was already gone) because of us, false when it belongs to someone else and
+ * was therefore LEFT ALONE — the single rule that keeps a confused writer from
+ * unlocking a live transaction it never held.
+ */
+export function releaseStoreLock(lockPath, token) {
+  const state = lockOwnership(lockPath, token);
+  if (state === 'absent') return true;
+  if (state === 'foreign') return false;
+  try {
+    fs.rmSync(lockPath, { recursive: true, force: true });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function acquireStoreLock(lockPath) {
+  const token = newLockToken();
   try {
     fs.mkdirSync(lockPath);
-    return { acquired: true, staleLockNote: null };
+    writeLockOwner(lockPath, token);
+    return { acquired: true, staleLockNote: null, token };
   } catch {
     // fall through to the stale-takeover attempt below
   }
@@ -686,6 +838,7 @@ export function acquireStoreLock(lockPath) {
       let staleLockNote = null;
       try {
         fs.mkdirSync(lockPath);
+        writeLockOwner(lockPath, token);
         staleLockNote = `stale lock (${Math.round(ageMs / 60000)}m old) removed`;
         recovered = true;
       } catch {
@@ -696,10 +849,12 @@ export function acquireStoreLock(lockPath) {
       } catch {
         // ignored — an orphaned tombstone is harmless disk debris either way
       }
-      if (recovered) return { acquired: true, staleLockNote };
+      // Only a lock the owner stamp confirms as OURS counts as acquired: the
+      // mkdir above can win while a racing takeover re-stamps it a moment later.
+      if (recovered && lockOwnership(lockPath, token) === 'owned') return { acquired: true, staleLockNote, token };
     }
   }
-  return { acquired: false, ageMs, lockPath };
+  return { acquired: false, ageMs, lockPath, token: null };
 }
 
 /**
@@ -715,10 +870,36 @@ export function acquireStoreLock(lockPath) {
  * keeping the tree clean before returning — otherwise withStoreTransaction's
  * own finalize step would inherit the dirt and risk masking the real
  * rejection behind a generic commit-failure error.
+ *
+ * VERIFIED, NEVER ASSUMED (S4). Both spawns used to be fire-and-forget and
+ * this function returned nothing, so a `git reset --hard` that failed — a
+ * stray `.git/index.lock`, a read-only store, a bad target sha — left the
+ * materialized mutation sitting in the working tree while every caller
+ * proceeded as though the store were clean, and the transaction's own
+ * `commitStore` then PUBLISHED exactly what the rollback existed to discard.
+ * It now reports `{ ok, stderr }`: both spawns are checked, and — because a
+ * zero exit is not the same thing as a clean tree — the tree itself is
+ * re-read afterwards and a still-dirty store is a FAILED rollback. Every
+ * caller acts on it; none may ignore it.
  */
 export function rollbackStore(dir, targetSha) {
-  spawnSync('git', targetSha ? ['reset', '--hard', targetSha] : ['reset', '--hard'], { cwd: dir, encoding: 'utf8' });
-  spawnSync('git', ['clean', '-fd'], { cwd: dir, encoding: 'utf8' });
+  const reset = spawnSync('git', targetSha ? ['reset', '--hard', targetSha] : ['reset', '--hard'], { cwd: dir, encoding: 'utf8' });
+  if (reset.error || reset.status !== 0) {
+    return { ok: false, stderr: reset.error ? reset.error.message : reset.stderr || `git reset exited ${reset.status}` };
+  }
+  const clean = spawnSync('git', ['clean', '-fd'], { cwd: dir, encoding: 'utf8' });
+  if (clean.error || clean.status !== 0) {
+    return { ok: false, stderr: clean.error ? clean.error.message : clean.stderr || `git clean exited ${clean.status}` };
+  }
+  // Exit codes alone are not proof: `git reset --hard <unreachable sha>` and a
+  // partially-applied clean can both leave content behind. Judge the POST
+  // STATE — the same discipline purgeEpisode already applies to its own
+  // completion check. `.lock`/`.quarantine` are gitignored (S2), so they never
+  // show up here as false dirt.
+  const remaining = dirtyPaths(dir);
+  if (remaining === null) return { ok: false, stderr: 'git status unreadable after rollback — cannot confirm the store is clean' };
+  if (remaining.length) return { ok: false, stderr: `store still dirty after rollback: ${remaining.slice(0, 5).join(', ')}` };
+  return { ok: true, stderr: null };
 }
 
 /**
@@ -728,7 +909,7 @@ export function rollbackStore(dir, targetSha) {
  * never left for transaction rollback to destroy) — the shapes
  * absorbHandEdits (admin.mjs) treats as an absorbable hand edit. Capture
  * groups: [1] = bucket key (undefined for golden), [2] = domain, [3] = slug.
- * Exported for admin.mjs's own porcelain scan; no longer used by store.mjs
+ * Exported for admin.mjs's own `parsePorcelainZ` scan; no longer used by store.mjs
  * itself (an earlier version of the rollback guard here matched dirty paths
  * against it, which incorrectly protected a path a transaction's OWN
  * legitimate mutation re-dirtied after an earlier absorb commit already
@@ -737,17 +918,61 @@ export function rollbackStore(dir, targetSha) {
  */
 export const LEARNING_FILE_RE = /^(?:branches\/([^/]+)\/)?learnings\/([^/]+)\/([^/]+)\.md$/;
 
-/** Parse one `git status --porcelain` line into its status code and path —
- * shared by admin.mjs's absorbHandEdits scan. */
-export function parsePorcelainLine(line) {
-  const status = line.slice(0, 2);
-  let rest = line.slice(3);
-  const arrow = rest.indexOf(' -> ');
-  if (arrow !== -1) rest = rest.slice(arrow + 4); // rename/copy: use the new path
-  if (rest.startsWith('"') && rest.endsWith('"')) {
-    rest = rest.slice(1, -1).replace(/\\(.)/g, '$1'); // git-quoted path (rare)
+/**
+ * Statuses whose porcelain entry carries a SECOND, NUL-terminated field (the
+ * original path). `git status --porcelain -z` emits `XY <new>\0<orig>\0` for a
+ * rename or copy — new path FIRST, unlike the line-oriented format's
+ * `XY <orig> -> <new>` — so the parser must consume that extra field or every
+ * subsequent entry is misaligned by one.
+ */
+const PORCELAIN_PAIRED = new Set(['R', 'C']);
+
+/**
+ * THE ONE PORCELAIN PARSER (S3), NUL-DELIMITED.
+ *
+ * The line-oriented `git status --porcelain` format is lossy in two ways that
+ * both produced silent, reported-as-success no-ops here:
+ *
+ *   1. C-QUOTING. A path with a non-ASCII byte, a quote, a backslash, or a
+ *      control char is emitted quoted and octal-escaped:
+ *      `?? "learnings/caf\303\251/x.md"`. The old parser stripped the quotes
+ *      and ran `.replace(/\\(.)/g, '$1')`, which turns `\303\251` into
+ *      `303251` — decoding `learnings/café/x.md` as `learnings/caf303251/x.md`.
+ *      Residue discard then "discarded" a path that does not exist (reporting
+ *      success), absorb missed the same file, and the next `commitStore`'s
+ *      `git add -A` swept the REAL file into store history unvalidated and
+ *      unscanned.
+ *   2. THE ` -> ` SPLIT. The old parser split on any literal ` -> ` anywhere in
+ *      the rest of the line, so an ordinary file named `learnings/a -> b/c.md`
+ *      parsed as `b/c.md`.
+ *
+ * `-z` has neither problem: pathnames are emitted VERBATIM (no quoting, no
+ * escaping — the terminator is NUL, which cannot occur in a pathname) and the
+ * rename pair is two separate NUL-terminated fields instead of an in-band
+ * separator. Parsing that is the only correct option, so it is the only one
+ * available: `parsePorcelainLine` is gone, and both consumers (dirtyPaths
+ * below, absorbHandEdits in admin.mjs) call THIS function on `-z` output.
+ *
+ * Returns `[{ status, path, origPath }]`. `origPath` is null except on a
+ * rename/copy, where it names where the file came from.
+ */
+export function parsePorcelainZ(stdout) {
+  const fields = String(stdout ?? '').split('\0');
+  const out = [];
+  for (let i = 0; i < fields.length; i += 1) {
+    const entry = fields[i];
+    // The final NUL leaves a trailing empty field; a path is never empty.
+    if (!entry || entry.length < 4) continue;
+    const status = entry.slice(0, 2);
+    const p = entry.slice(3);
+    let origPath = null;
+    if (PORCELAIN_PAIRED.has(status[0]) || PORCELAIN_PAIRED.has(status[1])) {
+      i += 1;
+      origPath = fields[i] ?? null;
+    }
+    out.push({ status, path: p, origPath });
   }
-  return { status, path: rest };
+  return out;
 }
 
 /** The store's current HEAD commit sha, or null on a store with no commits
@@ -770,12 +995,9 @@ function currentHeadSha(dir) {
  * not actually inspect.
  */
 function dirtyPaths(dir) {
-  const res = spawnSync('git', ['status', '--porcelain', '-uall'], { cwd: dir, encoding: 'utf8' });
+  const res = spawnSync('git', ['status', '--porcelain', '-uall', '-z'], { cwd: dir, encoding: 'utf8' });
   if (res.error || res.status !== 0) return null;
-  return res.stdout
-    .split('\n')
-    .filter(Boolean)
-    .map((line) => parsePorcelainLine(line).path);
+  return parsePorcelainZ(res.stdout).map((e) => e.path);
 }
 
 /**
@@ -907,42 +1129,40 @@ function clearTxnJournal(dir) {
  * exactly the behavior to preserve. Returns a human-readable note, or null
  * when nothing was recovered.
  */
-function recoverInterruptedTransaction(dir, git, lockPath) {
+function recoverInterruptedTransaction(dir, git, lockPath, token) {
   const journal = readTxnJournal(dir);
-  if (!journal) return null;
+  if (!journal) return { note: null, lockLost: false };
   clearTxnJournal(dir);
-  if (!git) return null;
+  if (!git) return { note: null, lockLost: false };
   const before = journalDirtySet(journal);
-  if (before === null) return null; // the journal cannot say — hands off
+  if (before === null) return { note: null, lockLost: false }; // the journal cannot say — hands off
   const now = dirtyPaths(dir);
-  if (now === null) return null; // unreadable status — fail closed, touch nothing
+  if (now === null) return { note: null, lockLost: false }; // unreadable status — fail closed, touch nothing
   const residue = now.filter((p) => !before.has(p));
-  if (!residue.length) return null;
+  if (!residue.length) return { note: null, lockLost: false };
   const checkpoint = typeof journal.checkpoint === 'string' && /^[0-9a-f]{40,64}$/.test(journal.checkpoint) ? journal.checkpoint : null;
+  let lockLost = false;
   if (before.size === 0) {
     // Nothing was dirty at the start, so EVERY uncommitted byte is residue —
     // the store's own whole-tree rollback is both the cheapest and the most
     // thorough discard.
-    rollbackStore(dir, checkpoint);
+    //
     // A recorded checkpoint can be unreachable (a store rewritten under the
-    // dead writer's feet) — `git reset --hard <sha>` then fails silently and
-    // leaves the residue in place. Fail closed to the store's plain
-    // "discard everything uncommitted" reset rather than let it through.
-    if (dirtyPaths(dir)?.length !== 0) rollbackStore(dir);
-    // rollbackStore's `git clean -fd` sweeps untracked directories — including
-    // the `.lock` this transaction is holding right now. Re-assert it before
-    // anything else runs.
-    try {
-      fs.mkdirSync(lockPath);
-    } catch {
-      // still there — nothing to re-assert
-    }
+    // dead writer's feet) — `git reset --hard <sha>` then fails and leaves the
+    // residue in place. rollbackStore now REPORTS that (S4), so the fallback to
+    // the plain "discard everything uncommitted" reset keys off the honest
+    // result rather than re-reading the tree by hand.
+    if (!rollbackStore(dir, checkpoint).ok) rollbackStore(dir);
+    // `.lock` is gitignored (S2) so `git clean -fd` can no longer sweep it, but
+    // re-assert through the OWNER-CHECKED path anyway: if this lock somehow
+    // went away and another writer took it, we must abort, never mkdir over it.
+    if (!reassertStoreLock(lockPath, token)) lockLost = true;
   } else {
     // Mixed tree: discard only what this dead writer added, one path at a
     // time, so the pre-existing dirt survives untouched.
     for (const rel of residue) discardResiduePath(dir, rel, checkpoint);
   }
-  return 'discarded interrupted write residue';
+  return { note: 'discarded interrupted write residue', lockLost };
 }
 
 /**
@@ -1067,13 +1287,31 @@ export function withStoreTransaction(workspace, { home, label, afterCommit } = {
   if (!lock.acquired) {
     return { ok: false, locked: true, rolledBack: false, error: null, committed: false, result: null, dir, git, staleLockNote: null };
   }
+  const token = lock.token;
   // Crash recovery BEFORE anything reads the tree (see
   // recoverInterruptedTransaction): a dead writer's uncommitted residue is
   // discarded here rather than inherited by the absorb step below as human
   // authority. Both notes ride the one existing recovery channel callers
   // already surface as `staleLockRemoved`.
-  const residueNote = recoverInterruptedTransaction(dir, git, lockPath);
-  const staleLockNote = [lock.staleLockNote, residueNote].filter(Boolean).join('; ') || null;
+  const recovery = recoverInterruptedTransaction(dir, git, lockPath, token);
+  const staleLockNote = [lock.staleLockNote, recovery.note].filter(Boolean).join('; ') || null;
+  if (recovery.lockLost) {
+    // Somebody else's lock is sitting where ours was. Nothing has been mutated
+    // by this transaction, and their lock is NOT ours to remove — refuse loudly
+    // and leave the store exactly as it is.
+    clearTxnJournal(dir);
+    return {
+      ok: false,
+      locked: true,
+      rolledBack: false,
+      error: new Error('store lock was taken over by another writer during crash recovery — refusing to run'),
+      committed: false,
+      result: null,
+      dir,
+      git,
+      staleLockNote,
+    };
+  }
 
   // The rollback floor: entry HEAD, advanced by recordCheckpoint() whenever
   // an intra-transaction commit lands. Re-queried from git (not a
@@ -1095,7 +1333,7 @@ export function withStoreTransaction(workspace, { home, label, afterCommit } = {
     const dirty = dirtyPaths(dir);
     if (dirty === null || !writeTxnJournal(dir, { ...journalBase, checkpoint: checkpointSha, dirty })) {
       clearTxnJournal(dir);
-      fs.rmSync(lockPath, { recursive: true, force: true });
+      releaseStoreLock(lockPath, token);
       return {
         ok: false,
         locked: false,
@@ -1114,27 +1352,61 @@ export function withStoreTransaction(workspace, { home, label, afterCommit } = {
     checkpointSha = currentHeadSha(dir);
     // The intra-transaction commit just cleaned the tree, so whatever is
     // dirty from here on is unambiguously this transaction's own work — even
-    // if a hand edit WAS pending when the journal was first written. A refresh
-    // that fails leaves the PREVIOUS journal in place, which is strictly more
-    // conservative (an older checkpoint, a larger already-dirty set) — the
-    // transaction stays marked either way, so this one stays best effort.
-    writeTxnJournal(dir, { ...journalBase, checkpoint: checkpointSha, dirty: [] });
+    // if a hand edit WAS pending when the journal was first written.
+    //
+    // A FAILED REFRESH IS NOT "STRICTLY MORE CONSERVATIVE" — the comment that
+    // used to stand here was simply wrong, and the wrongness was load-bearing.
+    // Leaving the PREVIOUS journal in place leaves an OLDER checkpoint on
+    // disk, and `recoverInterruptedTransaction` resets `--hard` to exactly
+    // that sha: the sub-commit just landed — an absorbed HUMAN HAND EDIT, in
+    // absorbOrAbort's case — is then destroyed by the next writer's recovery,
+    // which is the one outcome the whole journal exists to prevent. The tree is
+    // clean at this instant and the checkpoint IS the sub-commit, so aborting
+    // here costs nothing already written and keeps every recorded checkpoint
+    // truthful. StoreTransactionAbort (not a plain throw) because the standard
+    // rollback would itself reset past the commit we just failed to record.
+    if (!writeTxnJournal(dir, { ...journalBase, checkpoint: checkpointSha, dirty: [] })) {
+      throw new StoreTransactionAbort(
+        'store transaction journal could not record the checkpoint after an intra-transaction commit — aborting rather than leaving a stale checkpoint a later recovery would reset past'
+      );
+    }
   }
 
+  // Set once a rollback finds the lock in somebody else's hands: the `finally`
+  // must then leave that lock strictly alone.
+  let lockLost = false;
+  // Set by ANY failed guardedRollback. This is the structural half of S4: a
+  // transaction that could not discard what it meant to discard must never
+  // reach `commitStore`, no matter what `fn` does with the boolean it was
+  // handed. A caller that ignores the return value can no longer publish the
+  // residue the rollback failed to remove — the commit simply does not happen.
+  let rollbackFailed = false;
+  let rollbackError = null;
+
+  /**
+   * Roll back to the checkpoint and REPORT whether it worked (S4). Returns true
+   * only when git actually reset+cleaned the tree AND this transaction still
+   * holds its lock. A false return is not advisory — every caller must abort;
+   * `fn` bodies use it via `rollbackToCheckpoint`, and the terminal paths below
+   * carry it into `rolledBack`.
+   */
   function guardedRollback() {
     if (!git) return false;
-    rollbackStore(dir, checkpointSha);
-    // `git clean -fd` sweeps untracked directories — including the `.lock`
-    // this transaction still holds. Re-assert it: a rollback taken MID-`fn`
-    // (rollbackToCheckpoint below) must never hand the store to a concurrent
-    // writer before this transaction has finished. Harmless for the terminal
-    // rollbacks — the `finally` removes the lock immediately afterwards.
-    try {
-      fs.mkdirSync(lockPath);
-    } catch {
-      // still there — nothing to re-assert
+    const res = rollbackStore(dir, checkpointSha);
+    // `.lock` is gitignored (S2), so `git clean -fd` no longer sweeps it — but
+    // verify ownership rather than assume it: a rollback taken MID-`fn`
+    // (rollbackToCheckpoint) must never let this transaction keep writing after
+    // the store has been handed to a concurrent writer.
+    const held = reassertStoreLock(lockPath, token);
+    if (!held) lockLost = true;
+    const ok = res.ok && held;
+    if (!ok) {
+      rollbackFailed = true;
+      rollbackError = res.ok
+        ? 'store lock was taken over by another writer during rollback'
+        : `store rollback failed: ${res.stderr || 'unknown git failure'}`;
     }
-    return true;
+    return ok;
   }
 
   try {
@@ -1144,7 +1416,30 @@ export function withStoreTransaction(workspace, { home, label, afterCommit } = {
     } catch (err) {
       const isAbort = err instanceof StoreTransactionAbort;
       const rolledBack = isAbort ? false : guardedRollback();
-      return { ok: false, locked: false, rolledBack, error: err, committed: false, result: null, dir, git, staleLockNote };
+      // A rollback that itself failed is reported IN the error, not hidden
+      // behind a bare `rolledBack: false` no caller reads (S4).
+      const error = !isAbort && !rolledBack && rollbackError ? new Error(`${err.message} — AND ${rollbackError}`) : err;
+      return { ok: false, locked: false, rolledBack, error, committed: false, result: null, dir, git, staleLockNote };
+    }
+    // A FAILED ROLLBACK CAN NEVER BE FOLLOWED BY A COMMIT (S4). `fn` may have
+    // called `rollbackToCheckpoint` and returned normally — apply.mjs's
+    // write-time E_HEAD_MOVED gate does exactly that — so if that rollback did
+    // not actually clean the tree, committing here would publish the very
+    // mutation the rejection claims was never written. Refuse instead, and say
+    // why. Enforced HERE rather than trusting each `fn` to check, because a
+    // caller forgetting to check is precisely how this defect shipped.
+    if (rollbackFailed) {
+      return {
+        ok: false,
+        locked: false,
+        rolledBack: false,
+        error: new Error(`${rollbackError} — refusing to commit a store this transaction could not roll back`),
+        committed: false,
+        result: null,
+        dir,
+        git,
+        staleLockNote,
+      };
     }
     let commitRes = { committed: false, ok: true };
     if (git) {
@@ -1152,11 +1447,12 @@ export function withStoreTransaction(workspace, { home, label, afterCommit } = {
     }
     if (!commitRes.ok) {
       const rolledBack = guardedRollback();
+      const base = commitRes.stderr || 'git commit failed';
       return {
         ok: false,
         locked: false,
         rolledBack,
-        error: new Error(commitRes.stderr || 'git commit failed'),
+        error: new Error(!rolledBack && rollbackError ? `${base} — AND ${rollbackError}` : base),
         committed: false,
         result: null,
         dir,
@@ -1184,9 +1480,12 @@ export function withStoreTransaction(workspace, { home, label, afterCommit } = {
     // Cleared only once the commit or rollback above has finished: while it
     // exists, a crash at any point leaves the residue classifiable.
     clearTxnJournal(dir);
-    // The rollback above may have already removed the untracked .lock
-    // directory via `git clean -fd` — tolerate that instead of throwing.
-    fs.rmSync(lockPath, { recursive: true, force: true });
+    // OWNER-CHECKED RELEASE (S2), on every exit path including this one. The
+    // old unconditional `rmSync(lockPath)` was the release half of the lock-loss
+    // class: if anything had taken the lock in the meantime, this deleted a LIVE
+    // writer's lock. `releaseStoreLock` removes it only when the owner stamp is
+    // ours, and `lockLost` records that a rollback already found it foreign.
+    if (!lockLost) releaseStoreLock(lockPath, token);
   }
 }
 

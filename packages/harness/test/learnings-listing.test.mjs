@@ -284,14 +284,30 @@ test('learnings --why exposes lastConfirmed, supersededBy, mergedFrom, and claim
   const c = ctx();
   const { oldId, newId } = seedLegacyAndSupersede(c);
 
-  const mergedOp = {
+  // mergedFrom is DERIVED provenance — an op can no longer assert it — so the
+  // fixture performs a real MERGE and gets the merged_from the writer itself
+  // stamped. MERGE requires at least two ACTIVE targets, so a second claim is
+  // seeded alongside the superseding one.
+  const extraOp = {
     op: 'ADD',
+    domain: 'sql',
+    slug: 'legacy-claim-alt',
+    trigger: 'an alternate legacy trigger',
+    body: 'The alternate claim body.',
+    episodes: [{ ...writeFixEpisode(c.ws, 'docs/solutions/perf/legacy-alt.md'), kind: 'fix', plan: 'docs/plans/p11b.md' }],
+  };
+  const extraRes = run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [extraOp])]);
+  assert.equal(extraRes.status, 0, extraRes.stderr || extraRes.stdout);
+  const altId = JSON.parse(extraRes.stdout).applied[0].id;
+
+  const mergedOp = {
+    op: 'MERGE',
+    targets: [newId, altId],
     domain: 'sql',
     slug: 'merged-claim',
     trigger: 'a merged trigger',
     body: 'The merged claim body.',
     episodes: [{ ...writeFixEpisode(c.ws, 'docs/solutions/perf/merged.md'), kind: 'fix', plan: 'docs/plans/p12.md' }],
-    merged_from: ['sql/legacy-claim-alt'],
   };
   const mergedRes = run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [mergedOp])]);
   assert.equal(mergedRes.status, 0, mergedRes.stderr || mergedRes.stdout);
@@ -307,7 +323,7 @@ test('learnings --why exposes lastConfirmed, supersededBy, mergedFrom, and claim
 
   const whyMerged = JSON.parse(run(c, ['learnings', '--why', mergedId]).stdout);
   assert.equal(whyMerged.lastConfirmed, today);
-  assert.deepEqual(whyMerged.mergedFrom, ['sql/legacy-claim-alt']);
+  assert.deepEqual(whyMerged.mergedFrom, [newId, altId]);
   assert.equal(whyMerged.claimLine, 'The merged claim body.');
 });
 
