@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { createRequire } from 'node:module';
 import { test } from 'node:test';
 import {
   branchComplexity,
@@ -178,14 +179,21 @@ test('integrity mismatch: corrupted grammar wasm is a LOUD lexical fallback, abs
   fs.mkdirSync(jsDir, { recursive: true });
   fs.writeFileSync(path.join(jsDir, lock.grammars.javascript.file), 'not the pinned wasm bytes');
   // Runtime present and genuine when installed, else absent → absence mode.
-  const runtimeSrc = path.resolve(path.dirname(DEFAULT_LOCK_PATH), '..', '..', 'node_modules', lock.runtime.package, lock.runtime.file);
-  if (fs.existsSync(runtimeSrc)) {
+  // Resolve through the module resolver (not a hard-coded node_modules path)
+  // so hoisted installs still exercise the integrity assertions.
+  let runtimeSrc = null;
+  try {
+    runtimeSrc = createRequire(import.meta.url).resolve(`${lock.runtime.package}/${lock.runtime.file}`);
+  } catch {
+    runtimeSrc = null; // not installed anywhere the resolver can see — absence mode
+  }
+  if (runtimeSrc) {
     const rtDir = path.join(dir, lock.runtime.package);
     fs.mkdirSync(rtDir, { recursive: true });
     fs.copyFileSync(runtimeSrc, path.join(rtDir, lock.runtime.file));
   }
   const ext = await createTreesitterExtract({ grammarRoots: [dir] });
-  if (fs.existsSync(runtimeSrc)) {
+  if (runtimeSrc) {
     assert.ok(
       ext.integrityFailures.some((f) => f.language === 'javascript' && /sha256 mismatch/.test(f.reason)),
       'corrupt wasm must be recorded as an integrity failure'

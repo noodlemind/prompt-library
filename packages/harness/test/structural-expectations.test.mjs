@@ -376,6 +376,34 @@ test('removed exported symbol with a surviving caller is flagged', () => {
   assert.ok(!removed.some((finding) => finding.symbol === 'helper'), JSON.stringify(removed));
 });
 
+test('a treesitter-tier baseline entry is never diffed against the lexical current side — informational skip, no findings', () => {
+  const { workspace, home, sha } = structuralWorkspace();
+  const baseline = exampleBaseline(sha);
+  // The baseline entry for example.js was built by the treesitter tier; the
+  // check's current side is always lexical, so any diff would be unsound.
+  baseline.files['src/example.js'] = { ...baseline.files['src/example.js'], tier: 'treesitter' };
+  writeStructuralIndex(workspace, home, baseline);
+  // Without the tier gate this removal fabricates removed-symbol findings.
+  fs.writeFileSync(path.join(workspace, 'src', 'example.js'), 'export const other = 2;\n');
+
+  const result = runStructuralExpectations({
+    workspace,
+    plan: minimalPlan(['src/example.js'], {
+      structural_expectations: [{ file: 'src/example.js', symbol: 'other', change: 'added', required: true }],
+    }),
+    changedFiles: ['src/example.js'],
+    home,
+  });
+  assert.equal(result.status, 'passed', JSON.stringify(result.findings));
+  assert.deepEqual(result.findings, []);
+  const notes = result.informational.filter((note) => note.type === 'tier-mismatch-skipped');
+  assert.ok(notes.some((note) => note.file === 'src/example.js' && note.tier === 'treesitter'), JSON.stringify(result.informational));
+  // A required expectation on the tier-skipped file is unverifiable — it must
+  // surface informationally, never as a fabricated unmet-required failure.
+  assert.ok(notes.some((note) => note.symbol === 'other'), JSON.stringify(result.informational));
+  assert.match(result.message, /1 tier-mismatch-skipped/);
+});
+
 test('callers that changed in the same diff do not count as surviving', () => {
   const { workspace, home, sha } = structuralWorkspace();
   writeStructuralIndex(workspace, home, exampleBaseline(sha));
@@ -568,6 +596,19 @@ test('policy enforce severity makes a structural failure fail verification (exit
   // The only failed check is the structural one — the failure is genuinely its doing.
   const failed = result.checks.filter((check) => check.status === 'failed');
   assert.deepEqual(failed.map((check) => check.id), [STRUCTURAL_CHECK_ID]);
+});
+
+test('global observe enforcement never gates the exit code, but per-check enforce severity still routes the outcome', () => {
+  const { workspace, home, plan, sha } = structuralWorkspace({
+    policy: 'version: 2\nenforcement: observe\nchecks:\n  structural-expectations:\n    severity: enforce\n',
+  });
+  writeStructuralIndex(workspace, home, exampleBaseline(sha));
+  fs.writeFileSync(path.join(workspace, 'src', 'example.js'), 'export const other = 2;\n');
+
+  const result = withHome(home, () => runVerify({ workspace, flags: verifyFlags(plan) }));
+  assert.equal(result.outcome, 'failed', 'per-check enforce severity still fails the outcome');
+  assert.equal(result.enforcement, 'observe');
+  assert.equal(enforcementExitCode(result.outcome, result.enforcement), 0, 'observe mode reports without gating the exit code');
 });
 
 test('a passing verify run with no structural index behaves as before (v1 compatibility round-trip)', () => {

@@ -1747,14 +1747,19 @@ export function applyOps({
       : disputes.length
         ? `dispute ${disputes.map((d) => d.target).join(', ')}`
         : 'noop';
+    // Promotion mode reports the layer it actually WROTE — golden, always —
+    // never the write-time routing of the branch the CLI happens to run from,
+    // and its commit suffix names the promotion source bucket instead.
     return {
       kind: 'success',
       applied,
       rejected,
       governed,
-      layer: routing.layer,
-      bucketKey: routing.layer === 'branch' ? routing.bucketKey : null,
-      commitMessage: `consolidate: ${summary}${routing.layer === 'branch' ? ` [${routing.bucketKey}]` : ''}`,
+      layer: promotionMode ? 'golden' : routing.layer,
+      bucketKey: !promotionMode && routing.layer === 'branch' ? routing.bucketKey : null,
+      commitMessage: `consolidate: ${summary}${
+        promotionMode ? ` [promote ${promotion.branchKey}]` : routing.layer === 'branch' ? ` [${routing.bucketKey}]` : ''
+      }`,
     };
   }
 

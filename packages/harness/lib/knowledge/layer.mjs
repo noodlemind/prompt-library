@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { deriveGitContext, resolveDefaultBranch, isDetachedKey } from '../git-context.mjs';
-import { branchesRoot, bucketDirFor, readBucketMeta, listBuckets, bucketAncestryOk } from './overlay.mjs';
+import { branchesRoot, bucketDirFor, listBuckets, bucketAncestryOk } from './overlay.mjs';
 import { readSession } from '../session.mjs';
 
 /**
@@ -120,7 +120,16 @@ export function branchExists(workspace, branch) {
   if (!branch) return null;
   const refs = listRefs(workspace);
   if (refs === null) return null;
-  return refs.some((r) => r === `refs/heads/${branch}` || (r.startsWith('refs/remotes/') && r.endsWith(`/${branch}`)));
+  return refs.some((r) => {
+    if (r === `refs/heads/${branch}`) return true;
+    // A remote ref must be exactly `refs/remotes/<remote>/<branch>` — one
+    // remote-name segment, then the FULL branch name. A bare endsWith
+    // over-matches: refs/remotes/origin/release/main is not branch 'main'.
+    if (!r.startsWith('refs/remotes/')) return false;
+    const rest = r.slice('refs/remotes/'.length);
+    const slash = rest.indexOf('/');
+    return slash !== -1 && rest.slice(slash + 1) === branch;
+  });
 }
 
 /**
@@ -149,13 +158,18 @@ export function migrateRenamedBucket(dir, { workspace, context }) {
   const [source] = candidates;
   const target = bucketDirFor(dir, context.branchKey);
   try {
-    fs.renameSync(source.dir, target);
-    const meta = readBucketMeta(target) || {};
+    // Rewrite the meta cache in the SOURCE dir first, THEN rename: if the
+    // meta write throws, the bucket has not moved yet, so nothing is left
+    // migrated-but-unrecorded with a stale meta.branch. (Meta is a cache,
+    // never authority — a failed rename leaving updated meta under the old
+    // key is the recoverable orphan `knowledge status`/doctor K5 surface.)
+    const meta = source.meta || {};
     fs.writeFileSync(
-      path.join(target, 'meta.json'),
+      path.join(source.dir, 'meta.json'),
       JSON.stringify({ ...meta, branch: context.branch, branchKey: context.branchKey }) + '\n',
       'utf8'
     );
+    fs.renameSync(source.dir, target);
     return { migrated: true, from: source.key, to: context.branchKey };
   } catch {
     return null;

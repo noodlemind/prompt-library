@@ -56,7 +56,9 @@ function realFixEpisode(ws, rel) {
  * suite is about store IDENTITY migration, not layer routing).
  */
 function pinDefaultBranch(c) {
-  const branch = git(c.ws, ['symbolic-ref', '--short', 'HEAD']).stdout.trim() || 'main';
+  const res = git(c.ws, ['symbolic-ref', '--short', 'HEAD']);
+  const branch = res.stdout.trim();
+  assert.ok(branch, `fixture branch unresolvable: ${res.stderr}`);
   const { dir } = ensureStore(c.ws, { home: c.harnessHome });
   fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify({ mode: 'on', commit: 'none', defaultBranch: branch }) + '\n');
 }

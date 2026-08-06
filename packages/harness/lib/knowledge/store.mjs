@@ -489,7 +489,8 @@ export function episodeLines(episodes) {
  * through `inertLine`). Absent/invalid fields render nothing — a legacy
  * artifact without them never errors and never gains fabricated values.
  */
-const PROVENANCE_SHA_RE = /^[0-9a-f]{40}$/;
+// Both git object formats: 40-hex (SHA-1) and 64-hex (SHA-256 repos).
+const PROVENANCE_SHA_RE = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
 const PROVENANCE_BRANCH_CAP = 200;
 
 export function provenanceLines({ commit, branch, base } = {}) {

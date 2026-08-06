@@ -254,7 +254,7 @@ function layerView({ workspace, home, dir }) {
       routing = null;
     }
   }
-  const layer = routing?.layer === 'branch' ? 'branch' : 'golden';
+  const layer = routing?.layer === 'branch' && routing.bucketKey ? 'branch' : 'golden';
   const bucketKey = layer === 'branch' ? routing.bucketKey : null;
   const layerRoot = layer === 'branch' ? bucketDirFor(dir, bucketKey) : dir;
   return {
@@ -289,7 +289,10 @@ export function consolidateStatus({ workspace, copilotHome, home }) {
     .filter((e) => episodeEligibleForLayer(e.branch, view.eligibility))
     .filter((e) => !consumed.has(`${e.path}@${e.sha256}`))
     .map(({ path: p, sha256, kind, title }) => ({ path: p, sha256, kind, title }));
-  const learnings = listLearnings(dir);
+  // The learning-facing sections mirror the ROUTED write layer (layerRoot),
+  // matching applyOps' own validation target — a branch lane reports the
+  // bucket's learnings/domains/promotion candidates, never golden's.
+  const learnings = listLearnings(view.layerRoot);
   const active = activeLearnings(learnings);
   const debt = unconsolidated.length;
   // Consolidation writes (hints toward --apply) are gated to 'on'/'suggest' —

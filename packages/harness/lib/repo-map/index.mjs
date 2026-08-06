@@ -63,8 +63,8 @@ export function buildRepoMap({ workspace, query = '', maxTokens = DEFAULT_MAX_TO
       const hay = new Set(tokenize(`${f.rel} ${f.symbols.join(' ')}`));
       for (const t of queryTokens) if (hay.has(t)) queryScore += 1;
     }
-    const structural = f.importedBy * 2 + Math.min(f.symbols.length, 12);
-    return { ...f, score: queryScore * 5 + structural };
+    const degreeScore = f.importedBy * 2 + Math.min(f.symbols.length, 12);
+    return { ...f, score: queryScore * 5 + degreeScore };
   });
   // Locale-independent tie-break: the committed map must be byte-identical
   // across hosts for the same tree.

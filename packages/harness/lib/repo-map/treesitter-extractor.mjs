@@ -99,6 +99,10 @@ export function loadGrammarsLock({ lockPath = DEFAULT_LOCK_PATH } = {}) {
   try {
     const lock = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
     if (!lock || typeof lock !== 'object' || !lock.grammars) return null;
+    // Consumers dereference lock.runtime.package/.file directly — validate the
+    // runtime block here so a truncated lock reads as absent, never as a throw.
+    const rt = lock.runtime;
+    if (!rt || typeof rt !== 'object' || typeof rt.package !== 'string' || typeof rt.file !== 'string') return null;
     return lock;
   } catch {
     return null;

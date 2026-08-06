@@ -23,17 +23,27 @@
 //                 "unresolved": [ { "from": "<rel-path>#<symbol>", "to": "<bare-name>" } ] }
 // meta.json     { "version": 1, "sha": "<full commit sha the index was built at>",
 //                 "branch": "...", "baseSha": "...", "generatedAt": "<ISO 8601>",
-//                 "extractorTier": "lexical|tree-sitter", "grammarVersions": {} }
+//                 "extractorTier": "lexical|treesitter", "grammarVersions": {} }
 //
 // Read semantics: `meta.json` is mandatory — without it the index is treated
 // as absent. The other three degrade to empty structures when missing so a
 // partially written index never crashes a consumer; any malformed JSON marks
 // the whole index unreadable (consumers skip, never guess).
+//
+// TWO READERS, ONE CONTRACT: repo-map/structural-index.mjs also exports a
+// `readStructuralIndex` — the builder-side tolerant reader used by orient /
+// buildRepoMap, which returns the raw on-disk tables (null when absent) and
+// gates on meta.sha currency. THIS reader serves the verify/doctor consumers:
+// it returns an explicit `{ present, reason, ... }` skip signal, validates the
+// baseline sha shape, and NORMALIZES both accepted on-disk encodings to one
+// row/edge shape. Both readers use the same no-follow, dir-contained,
+// size-capped file reads (fs-safe readFileNoFollow).
 
 import fs from 'node:fs';
 import path from 'node:path';
 import { harnessGlobalHome } from '../paths.mjs';
 import { repoId } from '../knowledge/store.mjs';
+import { readFileNoFollow } from '../fs-safe.mjs';
 
 export const STRUCTURAL_SHAPE_VERSION = 1;
 
@@ -49,8 +59,13 @@ export function structuralDir(workspace, { home } = {}) {
 function readJson(dir, name) {
   const full = path.join(dir, name);
   if (!fs.existsSync(full)) return { value: null, error: null };
+  // No-follow, contained, size-capped read — same fs-safe discipline as the
+  // builder-side reader; a symlinked or oversized table is unreadable, never
+  // followed outside the index dir.
+  const body = readFileNoFollow(full, { root: dir });
+  if (body === null) return { value: null, error: `${name} is unreadable (symlink, oversized, or open failure)` };
   try {
-    const parsed = JSON.parse(fs.readFileSync(full, 'utf8'));
+    const parsed = JSON.parse(body);
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
       return { value: null, error: `${name} is not a JSON object` };
     }

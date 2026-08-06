@@ -21,6 +21,14 @@ function git(cwd, args) {
   });
 }
 
+/** Commit fixture files in the store repo through the config-neutralized
+ * git() helper (a developer's global gpgsign etc. must never leak in). */
+function commitFixture(dir) {
+  assert.equal(git(dir, ['add', '-A']).status, 0, 'fixture git add failed');
+  const res = git(dir, ['-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-qm', 'fixture']);
+  assert.equal(res.status, 0, `fixture git commit failed: ${res.stderr}`);
+}
+
 function gitWorkspace(branch = 'main') {
   const ws = tempDir('lmaint-ws-');
   git(ws, ['init', '-q', '-b', branch]);
@@ -76,8 +84,7 @@ test('purge cascades across golden AND bucket layers: files, links, ledgers, and
   // Ledger entries in both layers.
   fs.appendFileSync(path.join(dir, 'consolidated.jsonl'), JSON.stringify({ path: ep.rel, sha256: ep.sha256, learning: 'sql/solely-golden', at: '2026-08-01' }) + '\n');
   fs.appendFileSync(path.join(bucketDir, 'consolidated.jsonl'), JSON.stringify({ path: ep.rel, sha256: ep.sha256, learning: 'sql/solely-bucket', at: '2026-08-01' }) + '\n');
-  spawnSync('git', ['add', '-A'], { cwd: dir });
-  spawnSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-qm', 'fixture'], { cwd: dir });
+  commitFixture(dir);
 
   const result = purgeEpisode({ workspace: ws, target: ep.rel, copilotHome: tempDir('lmaint-ch-'), home });
   assert.equal(result.pass, true, result.blockedReason);
@@ -107,8 +114,7 @@ test('purge keeps the governance record while the id survives in ANY layer, drop
   const bucketDir = ensureBucket(dir, { key, branch: 'feature/gov' });
   writeLearning(bucketDir, 'sql/dual', { episodes: [ep] });
   appendGovernance(dir, { id: 'sql/dual', action: 'dispute', reason: 'r', to: null, at: new Date().toISOString() });
-  spawnSync('git', ['add', '-A'], { cwd: dir });
-  spawnSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-qm', 'fixture'], { cwd: dir });
+  commitFixture(dir);
 
   // Purging ep removes only the bucket copy — the golden twin survives, so
   // the governance record must survive with it.
@@ -131,8 +137,7 @@ test('purge --all wipes branches/ whole and counts bucket learnings', () => {
   writeLearning(dir, 'sql/golden-claim');
   const bucketDir = ensureBucket(dir, { key: branchKeyFor('feature/wipe'), branch: 'feature/wipe' });
   writeLearning(bucketDir, 'sql/bucket-claim');
-  spawnSync('git', ['add', '-A'], { cwd: dir });
-  spawnSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-qm', 'fixture'], { cwd: dir });
+  commitFixture(dir);
 
   const result = purgeAll({ workspace: ws, home });
   assert.equal(result.pass, true, result.blockedReason);
@@ -150,8 +155,7 @@ test('rebuild --yes wipes each bucket per layer but keeps bucket meta as the lay
   const bucketDir = ensureBucket(dir, { key, branch: 'feature/rebuild' });
   writeLearning(bucketDir, 'sql/bucket-claim');
   fs.appendFileSync(path.join(bucketDir, 'consolidated.jsonl'), JSON.stringify({ path: 'x.md', sha256: 'a'.repeat(64), learning: 'sql/bucket-claim', at: '2026-08-01' }) + '\n');
-  spawnSync('git', ['add', '-A'], { cwd: dir });
-  spawnSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-qm', 'fixture'], { cwd: dir });
+  commitFixture(dir);
 
   const result = rebuildStore({ workspace: ws, home, yes: true, copilotHome: tempDir('lmaint-ch4-') });
   assert.equal(result.pass, true, result.blockedReason);

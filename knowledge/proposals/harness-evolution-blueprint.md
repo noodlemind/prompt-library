@@ -1,11 +1,11 @@
 # Harness Evolution Blueprint: Local-First Adaptive Engineering System
 
-Status: **proposal — pending Human Decision.**
-Design documentation only. Nothing in this document describes current behavior, and no
-CLI, store, or primitive change may be built from it until the `## Human Decision`
-section records an approval (per Decision Handling semantics in
-[`capability-gap-proposal.md`](../../.github/skills/references/capability-gap-proposal.md):
-blank or incomplete = pending; do not create or modify primitives).
+Status: **approved.**
+The `## Human Decision` section records approval on 2026-08-06; its listed conditions
+remain binding on every implementation phase (per Decision Handling semantics in
+[`capability-gap-proposal.md`](../../.github/skills/references/capability-gap-proposal.md)).
+This document is the approved design, not a behavior reference — current behavior is
+documented in `docs/MEMORY-MODEL.md` and the harness tool contract as each phase ships.
 
 This blueprint adapts nine externally supplied proposals — a two-layer golden/branch-local
 knowledge model, deterministic retrieval, structural codebase indexing, layer-aware

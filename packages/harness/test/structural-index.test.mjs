@@ -241,6 +241,29 @@ test('secret-shaped extracted names are redacted at index-write time', async () 
   fs.rmSync(home, { recursive: true, force: true });
 });
 
+test('symbols named after Object.prototype members index as ordinary own keys', async () => {
+  // Regression: a repo defining `constructor` / `__proto__` / `toString`
+  // must not resolve to inherited prototype members in the symbol table —
+  // that made `.defs` access throw and aborted the whole build.
+  const { ws } = gitRepo({
+    'proto.mjs': 'export const constructor = 1;\nexport const __proto__ = 2;\nexport const toString = 3;\n',
+  });
+  const home = tempHome();
+  const first = await buildStructuralIndex({ workspace: ws, home, extractor: countingExtractor() });
+  assert.equal(first.written, true, 'indexing survives prototype-named symbols');
+  const symbols = JSON.parse(fs.readFileSync(path.join(structuralIndexDir(ws, { home }), 'symbols.json'), 'utf8'));
+  for (const name of ['constructor', '__proto__', 'toString']) {
+    assert.ok(Object.hasOwn(symbols, name), `${name} recorded as an own key`);
+    assert.equal(symbols[name].defs.length, 1, `${name} carries exactly its own def`);
+  }
+  // The rebuild delta must use own-key membership too: nothing added/removed.
+  const second = await buildStructuralIndex({ workspace: ws, home, extractor: countingExtractor() });
+  assert.deepEqual(second.delta.added.names, []);
+  assert.deepEqual(second.delta.removed.names, []);
+  fs.rmSync(ws, { recursive: true, force: true });
+  fs.rmSync(home, { recursive: true, force: true });
+});
+
 test('graph preserves unresolved edges explicitly and never fabricates targets', async () => {
   const { ws } = gitRepo({
     'a.mjs': "import { b } from './b.mjs';\nimport missing from './nowhere.mjs';\nexport function runA() { b(); ghostCall(); }\n",
@@ -317,7 +340,10 @@ test('buildRepoMap prefers a current structural index and is byte-identical with
   assert.equal(after.body, before.body, 'byte-identical output when no structural index exists');
 });
 
-test('no-network guard: the orient/recall structural read path is model- and network-free', () => {
+test('no-network guard: source-text scan of the structural read modules for model/network markers', () => {
+  // A source-text scan of THESE files only — a tripwire against obvious
+  // model/network use creeping into the listed modules, not a proof that the
+  // whole runtime path is network-free.
   const read = (rel) => fs.readFileSync(path.join(packageRoot, rel), 'utf8');
   for (const rel of [
     'lib/repo-map/index.mjs',
@@ -330,7 +356,7 @@ test('no-network guard: the orient/recall structural read path is model- and net
     const src = read(rel);
     assert.doesNotMatch(
       src,
-      /api\.anthropic\.com|openai|fetch\(|getProvider|ANTHROPIC_API_KEY|node:https|node:http'|net\.connect|dns\.lookup|XMLHttpRequest|WebSocket/,
+      /api\.anthropic\.com|openai|fetch\(|getProvider|ANTHROPIC_API_KEY|node:https?['"]|net\.connect|dns\.lookup|XMLHttpRequest|WebSocket/,
       `${rel} must be model- and network-free`
     );
   }

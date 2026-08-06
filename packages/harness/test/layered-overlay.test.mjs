@@ -142,8 +142,7 @@ test('a protected golden claim (>=3 fix links or source human) is never shadowed
 
   // source: human is equally protected.
   writeLearning(dir, 'sql/human', { trigger: 'human trigger', body: 'Human golden.', source: 'human' });
-  const bucketDir2 = path.join(bucketDir, '');
-  writeLearning(bucketDir2, 'sql/human', { trigger: 'human trigger', body: 'Branch challenger.' });
+  writeLearning(bucketDir, 'sql/human', { trigger: 'human trigger', body: 'Branch challenger.' });
   const again = loadLayeredLearnings({ workspace: ws, home }).learnings;
   const humanBranch = again.find((l) => l.id === 'sql/human' && l.layer === 'branch');
   assert.equal(humanBranch.subordinate, true);

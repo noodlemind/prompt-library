@@ -232,11 +232,10 @@ test('a newer store schema makes this CLI refuse with an upgrade hint', () => {
   assert.equal(recorded.schema, STORE_SCHEMA);
 
   fs.writeFileSync(path.join(dir, 'store.json'), JSON.stringify({ schema: STORE_SCHEMA + 1 }) + '\n');
-  assert.throws(
-    () => ensureStore(ws, { home }),
-    (err) => err.code === 'E_STORE_SCHEMA' && /newer than this CLI supports/.test(err.message) && /@dev-kit\/harness/.test(err.hint)
-  );
-  assert.throws(() => applyOps({ workspace: ws, opsPath: writeOps(ws, [addOp(ws, { slug: 'nope' })]), home }));
+  const isSchemaRefusal = (err) =>
+    err.code === 'E_STORE_SCHEMA' && /newer than this CLI supports/.test(err.message) && /@dev-kit\/harness/.test(err.hint);
+  assert.throws(() => ensureStore(ws, { home }), isSchemaRefusal);
+  assert.throws(() => applyOps({ workspace: ws, opsPath: writeOps(ws, [addOp(ws, { slug: 'nope' })]), home }), isSchemaRefusal);
 });
 
 test('branch rename auto-migrates the bucket to the new key when unambiguous', () => {

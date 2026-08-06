@@ -105,7 +105,10 @@ export function bucketAncestryOk(workspace, meta) {
       timeout: 10_000,
     });
     if (res.error) return null;
-    return res.status === 0 ? true : false;
+    // A signal-killed git (status null, e.g. a timeout) proved nothing —
+    // unverifiable, never "proven not an ancestor".
+    if (typeof res.status !== 'number') return null;
+    return res.status === 0;
   } catch {
     return null;
   }

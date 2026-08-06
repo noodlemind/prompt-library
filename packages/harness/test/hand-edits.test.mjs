@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 import { applyOps } from '../lib/knowledge/apply.mjs';
 import { absorbHandEdits, absorbOrAbort, removeEpisodeLink } from '../lib/knowledge/admin.mjs';
+import { ensureBucket } from '../lib/knowledge/layer.mjs';
 import { ensureStore, storeDir, listLearnings, readLedger, parseLearningFrontmatter, serializeLearning, StoreTransactionAbort } from '../lib/knowledge/store.mjs';
 
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -445,6 +446,46 @@ test('a hand-deleted learning file is committed as a human deletion and disappea
   const log = gitLog(dir);
   assert.ok(log.some((l) => l.includes(`human edit: ${learningId}`)));
   assert.ok(!listLearnings(dir).some((l) => l.id === learningId), 'the deleted learning no longer lists');
+});
+
+test('a bucket hand edit routes its ledger entry and INDEX.md rebuild to the bucket root, never golden', () => {
+  const c = ctx();
+  seedLearning(c); // materializes the store with a git history
+  const { dir } = ensureStore(c.ws, { home: c.harnessHome });
+  const bucketDir = ensureBucket(dir, { key: 'feature-x-12345678', branch: 'feature/x' });
+
+  // A tracked bucket learning (absorb only picks up MODIFIED learning files).
+  const bucketFile = path.join(bucketDir, 'learnings', 'sql', 'bucket-claim.md');
+  fs.mkdirSync(path.dirname(bucketFile), { recursive: true });
+  fs.writeFileSync(
+    bucketFile,
+    ['---', 'schema: 1', 'trigger: "bucket claim trigger"', 'status: active', 'source: auto', 'episodes:', 'anchors: []', 'superseded_by: null', 'last_confirmed: null', 'origin: t', '---', '', 'Original bucket body.', ''].join('\n'),
+    'utf8'
+  );
+  const gitEnv = { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_SYSTEM: '/dev/null' };
+  assert.equal(spawnSync('git', ['add', '-A'], { cwd: dir, encoding: 'utf8', env: gitEnv }).status, 0);
+  const committed = spawnSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-qm', 'fixture'], { cwd: dir, encoding: 'utf8', env: gitEnv });
+  assert.equal(committed.status, 0, committed.stderr);
+
+  handEditBody(bucketFile, 'A human edited the bucket claim directly on disk.');
+  const result = absorbHandEdits({ workspace: c.ws, home: c.harnessHome });
+  assert.equal(result.committed, true, result.stderr);
+  assert.deepEqual(result.absorbed.map((a) => a.id), ['sql/bucket-claim']);
+  assert.ok(result.absorbed[0].snapshot, 'the hand edit produced a human-teaching snapshot');
+
+  // Ledger evidence lands in the BUCKET's consolidated.jsonl, not golden's.
+  assert.ok(
+    readLedger(bucketDir).some((e) => e.learning === 'sql/bucket-claim' && e.path === result.absorbed[0].snapshot),
+    'bucket ledger links the snapshot to the bucket learning'
+  );
+  assert.ok(
+    !readLedger(dir).some((e) => e.learning === 'sql/bucket-claim'),
+    'golden ledger never records the bucket hand edit'
+  );
+
+  // The BUCKET INDEX.md is rebuilt to list the learning; golden's is not.
+  assert.match(fs.readFileSync(path.join(bucketDir, 'INDEX.md'), 'utf8'), /sql\/bucket-claim/);
+  assert.doesNotMatch(fs.readFileSync(path.join(dir, 'INDEX.md'), 'utf8'), /sql\/bucket-claim/);
 });
 
 test('multiple simultaneous hand edits (one modified, one deleted) absorb into exactly ONE commit naming both ids', () => {

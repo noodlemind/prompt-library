@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { storeDir, listLearnings, readGovernance } from './store.mjs';
 import { isActiveFm, MAX_OPS_PER_RUN } from './consolidate.mjs';
-import { bucketDirFor, readBucketMeta, listBuckets } from './overlay.mjs';
+import { bucketDirFor, readBucketMeta, listBuckets, bucketAncestryOk } from './overlay.mjs';
 import { deriveGitContext, isDetachedKey } from '../git-context.mjs';
 
 /**
@@ -50,6 +50,13 @@ export function buildPromotionOps({ workspace, home, branchKey = null, ids = nul
   if (!key) {
     return { pass: false, exitCode: 2, opsPath: null, ops: 0, remaining: 0, skipped: [], blockedReason: 'no branch bucket resolvable — pass --branch <key> (see harness knowledge status)' };
   }
+  // Path-safety: a bucket key is a plain directory name under branches/,
+  // never a path — same shape check apply.mjs enforces on the promotion
+  // envelope's branchKey, applied here so an explicit --branch value can
+  // never traverse outside the store via bucketDirFor's path.join.
+  if (/[\\/]|\.\./.test(key) || key === '.' || path.isAbsolute(key)) {
+    return { pass: false, exitCode: 2, opsPath: null, ops: 0, remaining: 0, skipped: [], blockedReason: `invalid branch key ${key} — bucket keys are plain directory names (see harness knowledge status)` };
+  }
   if (isDetachedKey(key)) {
     return { pass: false, exitCode: 2, opsPath: null, ops: 0, remaining: 0, skipped: [], blockedReason: `${key} is a detached-HEAD bucket — never promotable (derived from the key shape)` };
   }
@@ -64,6 +71,24 @@ export function buildPromotionOps({ workspace, home, branchKey = null, ids = nul
       remaining: 0,
       skipped: [],
       blockedReason: `no bucket ${key}${known.length ? ` — known buckets: ${known.join(', ')}` : ' — no buckets exist yet'}`,
+    };
+  }
+
+  // Ancestry gate (P7): a bucket whose recorded base PROVABLY shares no
+  // history with the current HEAD (force-push branch-name reuse) is excluded
+  // from the overlay — it must never promote to golden either. Matching the
+  // read path's semantics, only a verified `false` refuses; `null`
+  // (unverifiable — no recorded base, or git unavailable) stays allowed.
+  const bucketMeta = readBucketMeta(bucketDir);
+  if (bucketAncestryOk(workspace, bucketMeta) === false) {
+    return {
+      pass: false,
+      exitCode: 2,
+      opsPath: null,
+      ops: 0,
+      remaining: 0,
+      skipped: [],
+      blockedReason: `bucket ${key} has unrelated history — its recorded base is not an ancestor of HEAD (branch-name reuse); prune it instead: harness knowledge prune --branch ${key}`,
     };
   }
 
@@ -134,7 +159,7 @@ export function buildPromotionOps({ workspace, home, branchKey = null, ids = nul
 
   const opset = {
     schema: 1,
-    promotion: { branchKey: key, meta: readBucketMeta(bucketDir), digest: promotionDigest(chunk) },
+    promotion: { branchKey: key, meta: bucketMeta, digest: promotionDigest(chunk) },
     ops: chunk,
   };
   const opsFull = path.join(workspace, PROMOTE_OPS_REL);

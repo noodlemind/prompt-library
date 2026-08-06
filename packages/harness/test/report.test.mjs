@@ -5,7 +5,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
-import { buildReport, renderReport, recoveryLoops, trendRegression, budgetBreaches, hasBudgetBreach } from '../lib/report.mjs';
+import { buildReport, renderReport, recoveryLoops, trendRegression, budgetBreaches, hasBudgetBreach, knowledgeSlos } from '../lib/report.mjs';
 import { usageFields } from '../lib/token-meter.mjs';
 
 const binPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'bin', 'harness.mjs');
@@ -251,4 +251,44 @@ test('report does not render a partial host usage event as a measured zero', () 
   assert.match(text, /^report\s+token total unavailable/m);
   assert.match(text, /input 150 · output unavailable · partial usage 1\/1 event/);
   assert.doesNotMatch(text, /^report\s+~0 tokens/m);
+});
+
+test('layer split preserves both attributions for a protected-shadow same-id pair', () => {
+  // The protected-shadow overlay surfaces golden AND branch entries with one
+  // id; per-occurrence learningLayers entries must credit BOTH layers.
+  const events = [
+    {
+      version: 2,
+      type: 'orient',
+      session: 's1',
+      learnings: ['sql/same-id', 'sql/same-id', 'sql/other'],
+      learningLayers: [
+        { id: 'sql/same-id', layer: 'golden' },
+        { id: 'sql/same-id', layer: 'branch' },
+        { id: 'sql/other', layer: 'branch' },
+      ],
+    },
+    { version: 2, type: 'verify', session: 's1', learnings: ['sql/same-id'] },
+  ];
+  const slos = knowledgeSlos(events);
+  assert.equal(slos.surfaced, 2);
+  assert.equal(slos.layers.golden.surfaced, 1, 'golden side of the shadow pair retained');
+  assert.equal(slos.layers.branch.surfaced, 2, 'branch side of the pair plus the branch-only id');
+  assert.equal(slos.layers.golden.cited, 1);
+  assert.equal(slos.layers.branch.cited, 1);
+});
+
+test('layer split still reads legacy id-keyed learningLayers maps', () => {
+  const events = [
+    {
+      version: 2,
+      type: 'orient',
+      session: 's1',
+      learnings: ['sql/a'],
+      learningLayers: { 'sql/a': 'branch' },
+    },
+  ];
+  const slos = knowledgeSlos(events);
+  assert.equal(slos.layers.branch.surfaced, 1);
+  assert.equal(slos.layers.golden.surfaced, 0);
 });

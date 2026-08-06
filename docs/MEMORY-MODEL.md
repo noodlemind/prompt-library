@@ -705,8 +705,12 @@ The approved [Harness Evolution Blueprint](../knowledge/proposals/harness-evolut
   the new key when exactly one gone-branch, ancestry-verified candidate exists; anything
   ambiguous is left for `knowledge status`/K5 and manual prune.
 
-Phase 3 (structural index) and Phase 4 (per-check verify severity) remain unshipped
-design; nothing on this page describes them.
+Phase 3 (the optional tree-sitter structural index under
+`~/.harness/index/<repo-id>/structural/`) and Phase 4 (per-check verify severity via
+policy v2 and the advisory `structural-expectations` check) are shipped. The structural
+index is derived state, never knowledge: it lives outside this store, carries no
+governance, and is freely deletable and rebuildable — nothing else on this page applies
+to it.
 
 ## Related
 

@@ -372,17 +372,20 @@ export async function cmdIndex(argv) {
     const extractor = await createTreesitterExtract();
     const result = await buildStructuralIndex({ workspace, extractor, since, dryRun: flags.dryRun, log: logger });
     const integrity = (result.meta.integrityFailures || []).length > 0;
+    // A non-dry-run that could not persist (contained write refused) is a
+    // FAILURE — a caller must never treat an unavailable index as current.
+    const persistFailed = !flags.dryRun && !result.written;
     writeEvent(workspace, flags, {
       type: 'index',
       command: 'index',
-      result: integrity ? 'warn' : 'pass',
-      exitCode: 0,
+      result: persistFailed ? 'fail' : integrity ? 'warn' : 'pass',
+      exitCode: persistFailed ? 1 : 0,
     });
     if (flags.json) {
       // Program lane (§9): a bounded summary envelope — never the raw tables.
       emitJson(flags, {
-        pass: true,
-        exitCode: 0,
+        pass: !persistFailed,
+        exitCode: persistFailed ? 1 : 0,
         dir: result.dir,
         written: result.written,
         sha: result.meta.sha,
@@ -402,12 +405,14 @@ export async function cmdIndex(argv) {
       const deltaNote = `symbols +${result.delta.added.count} −${result.delta.removed.count} ~${result.delta.changed.count}${since ? ' vs prior index' : ''}`;
       console.log(
         ui.line({
-          state: integrity ? 'warn' : 'ok',
+          state: persistFailed ? 'error' : integrity ? 'warn' : 'ok',
           key: 'structural',
           value: `${result.meta.filesIndexed} files · ${result.reparsed} parsed · ${result.reused} reused · tier ${result.meta.extractorTier}`,
-          note: integrity
-            ? `grammar integrity mismatch (${result.meta.integrityFailures.length}) — loud lexical fallback; run harness doctor`
-            : deltaNote,
+          note: persistFailed
+            ? 'index could not be persisted — structural data is NOT current'
+            : integrity
+              ? `grammar integrity mismatch (${result.meta.integrityFailures.length}) — loud lexical fallback; run harness doctor`
+              : deltaNote,
         })
       );
       // Agent lane (§9): the budgeted inert digest, never raw index JSON.
@@ -420,7 +425,7 @@ export async function cmdIndex(argv) {
         }
       }
     }
-    return 0;
+    return persistFailed ? 1 : 0;
   }
 
   // Stamp the current git HEAD so `index --status` can measure drift later.
@@ -536,9 +541,11 @@ export async function cmdOrient(argv) {
     learningsBytes: result.learningsBytes,
     // Layer attribution (blueprint P6/report split): recorded only when a
     // branch-bucket learning actually surfaced, so pre-bucket event shapes
-    // are unchanged. `harness report` splits SLO totals per layer from this.
+    // are unchanged. Per-OCCURRENCE entries, not an id-keyed map: the
+    // protected-shadow overlay can deliver golden and branch entries with
+    // the SAME id, and a map would silently drop one side's attribution.
     ...((result.learnings || []).some((l) => l.layer)
-      ? { learningLayers: Object.fromEntries((result.learnings || []).map((l) => [l.id, l.layer || 'golden'])) }
+      ? { learningLayers: (result.learnings || []).map((l) => ({ id: l.id, layer: l.layer === 'branch' ? 'branch' : 'golden' })) }
       : {}),
   });
 
@@ -657,7 +664,9 @@ export async function cmdVerify(argv) {
 
   if (flags.json) emitJson(flags, result);
   else {
-    const failed = result.checks.filter((c) => c.status !== 'passed').length;
+    // `skipped` is neutral (e.g. the advisory structural check without an
+    // index): never a failure count, never the next fix target.
+    const failed = result.checks.filter((c) => c.status !== 'passed' && c.status !== 'skipped').length;
     const passed = result.outcome === 'passed';
     console.log(
       ui.line({
@@ -669,11 +678,11 @@ export async function cmdVerify(argv) {
         note: result.evidencePath,
       })
     );
-    printChecks(flags, result.checks, (c) => c.status === 'passed');
+    printChecks(flags, result.checks, (c) => c.status === 'passed' || c.status === 'skipped');
     if (passed) {
       printNext('harness compound (or /auto-compound), then stop');
     } else {
-      const firstFail = result.checks.find((c) => c.status !== 'passed');
+      const firstFail = result.checks.find((c) => c.status !== 'passed' && c.status !== 'skipped');
       if (firstFail) {
         const detail = String(firstFail.message ?? firstFail.name ?? '').slice(0, 100);
         printNext(`fix ${firstFail.id} (${detail})`);

@@ -3,10 +3,10 @@
 // can escalate to warn/enforce); a missing or stale structural index skips
 // rather than guessing, so this check can never invent a failure.
 
-import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { extract, SOURCE_EXTENSIONS } from '../repo-map/lexical-extractor.mjs';
+import { readFileSafe } from '../repo-map/scan.mjs';
 import { matchesScope, parseImpactedFiles } from '../plan-scope.mjs';
 import { readStructuralIndex } from './shape.mjs';
 
@@ -32,7 +32,13 @@ function symbolFile(qualified) {
   return at === -1 ? String(qualified || '') : String(qualified).slice(0, at);
 }
 
-/** Per-changed-file structural diff against the baseline index. */
+/** Per-changed-file structural diff against the baseline index.
+ * Returns `{ diffs, tierSkipped }`: `tierSkipped` maps files whose baseline
+ * entry was built by a non-lexical extractor tier — the current side of the
+ * diff is ALWAYS the lexical extractor, so comparing against a treesitter
+ * baseline would disagree on unchanged code and fabricate added/removed
+ * findings. Those files are skipped honestly (reported as informational
+ * `tier-mismatch-skipped`), never diffed. */
 function diffChangedFiles({ workspace, index, changedFiles }) {
   const rowsByFile = new Map();
   for (const row of index.symbols) {
@@ -42,17 +48,28 @@ function diffChangedFiles({ workspace, index, changedFiles }) {
   }
 
   const diffs = new Map();
+  const tierSkipped = new Map();
   for (const file of changedFiles) {
     const ext = path.extname(file).toLowerCase();
     const rows = rowsByFile.get(file) || [];
     const fileEntry = index.files[file];
     if (!SOURCE_EXTENSIONS.has(ext) && !fileEntry && rows.length === 0) continue;
+    // Per-file tier gate: only a lexical-tier (or untiered legacy/fixture)
+    // baseline entry diffs soundly against the lexical current side.
+    const tier = typeof fileEntry?.tier === 'string' ? fileEntry.tier : null;
+    if (tier && tier !== 'lexical') {
+      tierSkipped.set(file, tier);
+      continue;
+    }
 
-    const full = path.join(workspace, file);
+    // readFileSafe: symlink-safe (ancestor walk + no-follow leaf, contained in
+    // the workspace) and size-capped — a committed symlink or oversized file
+    // reads as empty, exactly like a deleted file.
     let current = [];
-    if (fs.existsSync(full)) {
+    const content = readFileSafe(workspace, file);
+    if (content) {
       try {
-        current = extract(file, fs.readFileSync(full, 'utf8')).symbols;
+        current = extract(file, content).symbols;
       } catch {
         current = [];
       }
@@ -72,7 +89,7 @@ function diffChangedFiles({ workspace, index, changedFiles }) {
       currentSet,
     });
   }
-  return diffs;
+  return { diffs, tierSkipped };
 }
 
 function survivingCallers({ index, file, symbol, changedSet }) {
@@ -100,7 +117,7 @@ function expectationObserved(expectation, diffs) {
   return diff.baselineNames.has(expectation.symbol) && diff.currentSet.has(expectation.symbol);
 }
 
-function evaluateExpectations(plan, diffs) {
+function evaluateExpectations(plan, diffs, tierSkipped = new Map()) {
   const raw = plan.fm?.structural_expectations;
   const findings = [];
   const informational = [];
@@ -118,6 +135,18 @@ function evaluateExpectations(plan, diffs) {
       EXPECTATION_CHANGES.has(entry.change);
     if (!valid) {
       informational.push({ type: 'malformed-expectation', entry, message: 'expected {file, symbol, change: added|removed|modified}' });
+      continue;
+    }
+    // A tier-skipped file has no diff to evaluate against — the expectation is
+    // unverifiable here, never a fabricated failure.
+    if (tierSkipped.has(entry.file)) {
+      informational.push({
+        type: 'tier-mismatch-skipped',
+        file: entry.file,
+        symbol: entry.symbol,
+        change: entry.change,
+        message: `expectation on ${entry.file} not evaluated: baseline entry tier '${tierSkipped.get(entry.file)}' does not match the lexical current side`,
+      });
       continue;
     }
     if (expectationObserved(entry, diffs)) continue;
@@ -159,7 +188,15 @@ export function runStructuralExpectations({ workspace, plan, changedFiles, home 
     const changed = [...new Set(changedFiles || [])];
     const changedSet = new Set(changed);
     const allowed = parseImpactedFiles(plan);
-    const diffs = diffChangedFiles({ workspace, index, changedFiles: changed });
+    const { diffs, tierSkipped } = diffChangedFiles({ workspace, index, changedFiles: changed });
+    // Per-file tier mismatches surface as informational notes, never findings:
+    // the skip is honest ("could not compare"), not evidence of a problem.
+    const tierNotes = [...tierSkipped].map(([file, tier]) => ({
+      type: 'tier-mismatch-skipped',
+      file,
+      tier,
+      message: `baseline entry for ${file} was built by the '${tier}' extractor tier; the current side is lexical — symbol diff skipped as unsound`,
+    }));
 
     const findings = [];
     for (const [file, diff] of diffs) {
@@ -173,8 +210,9 @@ export function runStructuralExpectations({ workspace, plan, changedFiles, home 
       }
     }
 
-    const expectations = evaluateExpectations(plan, diffs);
+    const expectations = evaluateExpectations(plan, diffs, tierSkipped);
     findings.push(...expectations.findings);
+    const informational = [...tierNotes, ...expectations.informational];
 
     if (findings.length) {
       const kinds = [...new Set(findings.map((finding) => finding.type))].join(', ');
@@ -182,15 +220,15 @@ export function runStructuralExpectations({ workspace, plan, changedFiles, home 
         status: 'failed',
         message: `${findings.length} structural finding${findings.length === 1 ? '' : 's'} (${kinds})`,
         findings,
-        informational: expectations.informational,
+        informational,
         baseline,
       };
     }
     return {
       status: 'passed',
-      message: `Structural diff matches the plan (${diffs.size} file${diffs.size === 1 ? '' : 's'} examined)`,
+      message: `Structural diff matches the plan (${diffs.size} file${diffs.size === 1 ? '' : 's'} examined${tierSkipped.size ? `, ${tierSkipped.size} tier-mismatch-skipped` : ''})`,
       findings,
-      informational: expectations.informational,
+      informational,
       baseline,
     };
   } catch (error) {

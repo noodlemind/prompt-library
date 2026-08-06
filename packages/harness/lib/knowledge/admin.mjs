@@ -25,7 +25,7 @@ import {
 } from './store.mjs';
 import { rebuildIndex, todayClamped } from './apply.mjs';
 import { consolidateStatus, LEARNING_BYTE_CAP, isActiveFm } from './consolidate.mjs';
-import { listBuckets, branchesRoot } from './overlay.mjs';
+import { listBuckets, branchesRoot, bucketDirFor } from './overlay.mjs';
 import { scanSecrets } from '../secret-scan.mjs';
 import { assertNoSymlinkAncestors, assertRealpathContained, writeFileContained } from '../fs-safe.mjs';
 import { runIndexKnowledge } from '../index-knowledge.mjs';
@@ -239,7 +239,13 @@ export function absorbHandEdits({ workspace, home, log = () => {} }) {
   const at = todayClamped();
   const absorbed = [];
   const deleted = [];
-  const ledgerEntries = [];
+  // Per-layer bookkeeping (blueprint §5a): a bucket hand edit's ledger
+  // evidence belongs in ITS root's consolidated.jsonl, and its bucket
+  // INDEX.md needs rebuilding too — same per-layer routing purgeEpisode and
+  // rebuildStore already do. Governance stays store-rooted: the single
+  // ledger binds both layers (§4).
+  const ledgerByRoot = new Map();
+  const touchedBucketRoots = new Set();
 
   for (const line of lines) {
     const { status: code, path: rel } = parsePorcelainLine(line);
@@ -251,10 +257,12 @@ export function absorbHandEdits({ workspace, home, log = () => {} }) {
     // provenance names which layer the human touched.
     const [, bucketKey, domain, slug] = m;
     const id = `${domain}/${slug}`;
+    const layerRoot = bucketKey ? bucketDirFor(dir, bucketKey) : dir;
 
     if (code.includes('D')) {
       // Human deletion always wins — nothing left to parse or re-render.
       deleted.push(id);
+      if (bucketKey) touchedBucketRoots.add(layerRoot);
       continue;
     }
     if (!code.includes('M')) continue; // untracked/other — out of absorb scope
@@ -313,7 +321,8 @@ export function absorbHandEdits({ workspace, home, log = () => {} }) {
         snapshot = snapRel.split(path.sep).join('/');
         const sha256 = crypto.createHash('sha256').update(doc).digest('hex');
         fm.episodes = [...(fm.episodes || []), { path: snapshot, sha256, kind: 'human-teaching', plan: null }];
-        ledgerEntries.push({ path: snapshot, sha256, learning: id, at });
+        if (!ledgerByRoot.has(layerRoot)) ledgerByRoot.set(layerRoot, []);
+        ledgerByRoot.get(layerRoot).push({ path: snapshot, sha256, learning: id, at });
       }
     }
 
@@ -327,11 +336,12 @@ export function absorbHandEdits({ workspace, home, log = () => {} }) {
     }
     fs.writeFileSync(file, content, 'utf8');
     absorbed.push({ id, snapshot });
+    if (bucketKey) touchedBucketRoots.add(layerRoot);
   }
 
   if (!absorbed.length && !deleted.length) return empty;
 
-  if (ledgerEntries.length) appendLedger(dir, ledgerEntries);
+  for (const [root, entries] of ledgerByRoot) appendLedger(root, entries);
   // Governance record (Milestone 4): a human deleting a learning file
   // directly is a retirement just as much as `learning retire` — recorded
   // here so it survives a later `consolidate --rebuild`. Appended before the
@@ -345,6 +355,11 @@ export function absorbHandEdits({ workspace, home, log = () => {} }) {
     appendGovernance(dir, { id, action: 'retire', reason: 'hand deletion (absorbed)', to: null, at: governanceAt });
   }
   rebuildIndex(dir);
+  // existsSync guard: a human may have deleted the whole bucket directory,
+  // not just a learning file inside it — nothing left to rebuild there.
+  for (const root of touchedBucketRoots) {
+    if (fs.existsSync(root)) rebuildIndex(root);
+  }
   const ids = [...absorbed.map((a) => a.id), ...deleted].join(', ');
   const commitRes = commitStore(dir, `human edit: ${ids}`);
   if (!commitRes.ok) {
@@ -1047,7 +1062,11 @@ export function rebuildStore({ workspace, home, yes, copilotHome, log = () => {}
     // even for the store's own existence, not just its contents. listLearnings
     // only runs on this (preview) path, once.
     const storePath = storeDir(workspace, { home });
-    const archivedPreview = fs.existsSync(storePath) ? listLearnings(storePath).length : 0;
+    // Preview counts what the wipe below actually archives: golden learnings
+    // PLUS every bucket's (blueprint §5a) — golden alone under-counts.
+    const archivedPreview = fs.existsSync(storePath)
+      ? listLearnings(storePath).length + listBuckets(storePath).reduce((n, b) => n + listLearnings(b.dir).length, 0)
+      : 0;
     return {
       pass: false,
       exitCode: 2,

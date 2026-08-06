@@ -53,6 +53,9 @@ function safeChecks(checks) {
     id: check.id,
     pass: Boolean(check.pass),
     severity: check.severity || (check.pass ? 'ok' : 'fail'),
+    // Retain the raw status so consumers can tell a skipped check (neutral)
+    // from a failed one — `pass: false` alone conflates the two.
+    ...(check.status ? { status: check.status } : {}),
   }));
 }
 

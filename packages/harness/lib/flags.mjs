@@ -11,8 +11,13 @@ function parseMinScore(raw, flagName) {
 }
 
 function parsePositiveInt(raw, flagName) {
+  // The COMPLETE string must be an integer: parseInt('30days') === 30 would
+  // silently accept a malformed value (e.g. a wrong prune cutoff).
+  if (typeof raw !== 'string' || !/^\d+$/.test(raw)) {
+    invalidFlag(flagName, raw, 'must be an integer >= 1');
+  }
   const n = parseInt(raw, 10);
-  if (!Number.isFinite(n) || n < 1) {
+  if (!Number.isSafeInteger(n) || n < 1) {
     invalidFlag(flagName, raw, 'must be an integer >= 1');
   }
   return n;
@@ -189,8 +194,15 @@ export function parseFlags(argv) {
       const next = argv[i + 1];
       if (next !== undefined && !next.startsWith('--')) flags.why = argv[++i];
     }
-    else if (a.startsWith('--since=')) flags.since = a.split('=').slice(1).join('=');
-    else if (a === '--since') flags.since = argv[++i];
+    else if (a.startsWith('--since=')) {
+      const value = a.split('=').slice(1).join('=');
+      if (!value) invalidFlag('--since', value, 'requires a git ref value');
+      flags.since = value;
+    } else if (a === '--since') {
+      const next = argv[++i];
+      if (next === undefined || next.startsWith('--')) invalidFlag('--since', next, 'requires a git ref value');
+      flags.since = next;
+    }
     else if (a === '--yes') flags.yes = true;
     else if (a.startsWith('--layer=')) flags.layer = parseLayer(a.split('=')[1]);
     else if (a === '--layer') flags.layer = parseLayer(argv[++i]);

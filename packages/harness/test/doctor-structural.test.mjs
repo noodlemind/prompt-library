@@ -8,8 +8,16 @@ import { structuralChecks, runDoctor } from '../lib/doctor.mjs';
 import { buildStructuralIndex } from '../lib/repo-map/structural-index.mjs';
 import { lexicalV2 } from '../lib/repo-map/treesitter-extractor.mjs';
 
-function gitRepo(files) {
-  const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-doctor-s1-'));
+// Temp dirs registered for t.after cleanup — a failing assertion must not
+// leak the tree (a trailing rmSync never runs on failure).
+function tempTree(t, prefix) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  return dir;
+}
+
+function gitRepo(t, files) {
+  const ws = tempTree(t, 'harness-doctor-s1-');
   const git = (args) =>
     spawnSync('git', args, {
       cwd: ws,
@@ -56,8 +64,8 @@ function withHome(t, home) {
 }
 
 test('S1: no index built → advisory pass with the build hint', (t) => {
-  const { ws } = gitRepo(FIXTURE);
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-home-'));
+  const { ws } = gitRepo(t, FIXTURE);
+  const home = tempTree(t, 'harness-home-');
   withHome(t, home);
   const checks = structuralChecks({ workspace: ws });
   assert.equal(checks.length, 1);
@@ -65,13 +73,11 @@ test('S1: no index built → advisory pass with the build hint', (t) => {
   assert.equal(checks[0].pass, true);
   assert.equal(checks[0].optional, true);
   assert.match(checks[0].hint, /harness index --structural/);
-  fs.rmSync(ws, { recursive: true, force: true });
-  fs.rmSync(home, { recursive: true, force: true });
 });
 
 test('S1: current healthy index passes; meta.sha drift and orphans degrade to advisory failure', async (t) => {
-  const { ws, git } = gitRepo(FIXTURE);
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-home-'));
+  const { ws, git } = gitRepo(t, FIXTURE);
+  const home = tempTree(t, 'harness-home-');
   withHome(t, home);
   await buildStructuralIndex({ workspace: ws, home, extractor: extractorWith() });
 
@@ -95,14 +101,11 @@ test('S1: current healthy index passes; meta.sha drift and orphans degrade to ad
   assert.equal(stale.pass, false);
   assert.equal(stale.optional, true);
   assert.match(stale.hint, /meta\.sha behind HEAD/);
-
-  fs.rmSync(ws, { recursive: true, force: true });
-  fs.rmSync(home, { recursive: true, force: true });
 });
 
 test('S1: a recorded grammar integrity mismatch is a hard failure, not a warning', async (t) => {
-  const { ws } = gitRepo(FIXTURE);
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-home-'));
+  const { ws } = gitRepo(t, FIXTURE);
+  const home = tempTree(t, 'harness-home-');
   withHome(t, home);
   await buildStructuralIndex({
     workspace: ws,
@@ -117,13 +120,11 @@ test('S1: a recorded grammar integrity mismatch is a hard failure, not a warning
   assert.ok(!check.optional, 'integrity mismatch must fail doctor, never warn');
   assert.match(check.hint, /sha256 mismatch/);
   assert.match(check.hint, /javascript/);
-  fs.rmSync(ws, { recursive: true, force: true });
-  fs.rmSync(home, { recursive: true, force: true });
 });
 
 test('S1: parse-failure rate over 20% degrades to advisory failure', async (t) => {
-  const { ws } = gitRepo(FIXTURE);
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-home-'));
+  const { ws } = gitRepo(t, FIXTURE);
+  const home = tempTree(t, 'harness-home-');
   withHome(t, home);
   const extractor = extractorWith();
   extractor.counters.parseFailures = 1; // 1 of 2 files
@@ -132,14 +133,12 @@ test('S1: parse-failure rate over 20% degrades to advisory failure', async (t) =
   assert.equal(check.pass, false);
   assert.equal(check.optional, true);
   assert.match(check.hint, /parse-failure rate/);
-  fs.rmSync(ws, { recursive: true, force: true });
-  fs.rmSync(home, { recursive: true, force: true });
 });
 
 test('runDoctor surfaces S1 alongside the existing check families', (t) => {
-  const { ws } = gitRepo(FIXTURE);
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-home-'));
-  const copilotHome = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-copilot-'));
+  const { ws } = gitRepo(t, FIXTURE);
+  const home = tempTree(t, 'harness-home-');
+  const copilotHome = tempTree(t, 'harness-copilot-');
   withHome(t, home);
   const { checks } = runDoctor({
     copilotHome,
@@ -151,7 +150,4 @@ test('runDoctor surfaces S1 alongside the existing check families', (t) => {
   assert.ok(s1, 'doctor includes the structural S1 check');
   assert.equal(s1.pass, true);
   assert.equal(s1.optional, true);
-  fs.rmSync(ws, { recursive: true, force: true });
-  fs.rmSync(home, { recursive: true, force: true });
-  fs.rmSync(copilotHome, { recursive: true, force: true });
 });

@@ -18,6 +18,14 @@
 // Extracted names/locations are UNTRUSTED repo text: every string passes
 // redactSecrets + a length cap at index-WRITE time here, and every human or
 // agent render additionally passes inertLine (renderStructuralDigest).
+//
+// TWO READERS, ONE CONTRACT: `readStructuralIndex` here is the builder-side
+// tolerant reader for orient/buildRepoMap — raw tables, null when absent,
+// with `readStructuralIndexIfCurrent` gating on meta.sha. The verify/doctor
+// consumers instead read through lib/structural/shape.mjs, which adds an
+// explicit `{ present, reason }` skip signal, sha-shape validation, and
+// normalization of both accepted on-disk encodings. Both readers share the
+// fs-safe readFileNoFollow discipline (no-follow, dir-contained, size-capped).
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -167,7 +175,11 @@ function sanitizeEntry(res, { hash, mtime, size }) {
 }
 
 function buildSymbolTable(files) {
-  const symbols = {};
+  // Null prototype: symbol names are untrusted repo text, and a repo defining
+  // `constructor`, `__proto__`, or `toString` must land as an ordinary own
+  // key, not resolve to an inherited Object.prototype member (which would
+  // make `.defs` access throw and abort indexing).
+  const symbols = Object.create(null);
   const rels = Object.keys(files).sort();
   for (const rel of rels) {
     for (const d of files[rel].defs) {
@@ -254,12 +266,14 @@ function symbolDelta(priorSymbols, nextSymbols) {
   const added = [];
   const removed = [];
   const changed = [];
+  // Own-key membership only: `prior` comes from JSON.parse (Object prototype
+  // intact), so `'constructor' in prior` would be true for every table.
   for (const name of Object.keys(nextSymbols)) {
-    if (!(name in prior)) added.push(name);
+    if (!Object.hasOwn(prior, name)) added.push(name);
     else if (JSON.stringify(prior[name].defs) !== JSON.stringify(nextSymbols[name].defs)) changed.push(name);
   }
   for (const name of Object.keys(prior)) {
-    if (!(name in nextSymbols)) removed.push(name);
+    if (!Object.hasOwn(nextSymbols, name)) removed.push(name);
   }
   const cap = (list) => ({ count: list.length, names: list.sort().slice(0, MAX_DELTA_NAMES) });
   return { added: cap(added), removed: cap(removed), changed: cap(changed) };

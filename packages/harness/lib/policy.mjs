@@ -8,6 +8,9 @@ const MODES = new Set(['observe', 'warn', 'enforce']);
 // v1 behavior (a failed check fails verification), `warn` degrades a failure
 // to an inconclusive (warn-exit) outcome, and `advisory` reports without ever
 // affecting outcome or exit code. Absent entry → the check's built-in default.
+// `checks:` is honored version-independently: a `version: 1` policy that adds
+// a `checks:` map gets the same severity behavior — the version field records
+// which schema the file was written against, not a feature gate.
 export const CHECK_SEVERITIES = new Set(['advisory', 'warn', 'enforce']);
 const POLICY_VERSIONS = new Set([1, 2]);
 
@@ -64,9 +67,12 @@ export function loadPolicy(workspace, override = null) {
   };
 }
 
-/** Effective severity for a verify check: policy entry, else the check's built-in default. */
+/** Effective severity for a verify check: policy entry, else the check's built-in default.
+ * Own-property check only: ids like `constructor`/`toString` must fall through
+ * to the default instead of resolving Object.prototype members. */
 export function checkSeverityFor(policy, id, defaultSeverity = 'enforce') {
-  return policy?.checkSeverities?.[id] ?? defaultSeverity;
+  const configured = policy?.checkSeverities;
+  return configured && Object.hasOwn(configured, id) ? configured[id] : defaultSeverity;
 }
 
 export function enforcementExitCode(outcome, enforcement) {

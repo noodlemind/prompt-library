@@ -103,6 +103,10 @@ test('promote emits a reviewable, digest-bound op-set and apply lands it golden 
   // absent from this checkout; evidence re-validates from recorded hashes.
   const applied = applyOps({ workspace: ws, opsPath: path.join(ws, PROMOTE_OPS_REL), home });
   assert.equal(applied.exitCode, 0, JSON.stringify(applied.rejected));
+  // Promotion reports the layer it WROTE (golden), not the feature branch the
+  // CLI runs from.
+  assert.equal(applied.layer, 'golden');
+  assert.equal(applied.bucketKey, null);
 
   // Golden now carries the claim.
   const golden = listLearnings(dir).find((l) => l.id === 'sql/claim-a');
@@ -282,6 +286,63 @@ test('governed and detached sources are refused at emit time', () => {
   const detached = buildPromotionOps({ workspace: ws, home, branchKey: 'detached-abcdefabcdef', all: true });
   assert.equal(detached.pass, false);
   assert.match(detached.blockedReason, /never promotable/);
+});
+
+test('path-shaped --branch keys are refused before any path construction', () => {
+  const ws = featureWorkspace('feature/keyshape');
+  const home = tempDir('promo-home9-');
+  seedBucketLearning(ws, home, 'safe-claim');
+
+  for (const key of ['../evil', 'a/b', 'a\\b', '.', path.resolve(os.tmpdir(), 'abs')]) {
+    const emitted = buildPromotionOps({ workspace: ws, home, branchKey: key, all: true });
+    assert.equal(emitted.pass, false, `key ${JSON.stringify(key)} must be refused`);
+    assert.match(emitted.blockedReason, /invalid branch key/, `key ${JSON.stringify(key)}: ${emitted.blockedReason}`);
+  }
+});
+
+test('a bucket whose recorded base is provably not an ancestor of HEAD never promotes (force-push name reuse)', () => {
+  const ws = featureWorkspace('feature/reused');
+  const home = tempDir('promo-home10-');
+  seedBucketLearning(ws, home, 'stale-claim');
+  const { dir } = ensureStore(ws, { home });
+  const key = branchKeyFor('feature/reused');
+
+  // Simulate branch-name reuse after a force push: the recorded base sha is
+  // unknown to this repo's history — verified NOT an ancestor.
+  const metaPath = path.join(bucketDirFor(dir, key), 'meta.json');
+  const meta = JSON.parse(fs.readFileSync(metaPath, 'utf8'));
+  fs.writeFileSync(metaPath, JSON.stringify({ ...meta, baseSha: 'f'.repeat(40) }) + '\n');
+
+  const emitted = buildPromotionOps({ workspace: ws, home, all: true });
+  assert.equal(emitted.pass, false, 'non-ancestor bucket must not promote');
+  assert.match(emitted.blockedReason, /unrelated history/);
+  assert.match(emitted.blockedReason, /prune/);
+});
+
+test('prune resolves bucket discovery and selection INSIDE the store transaction (TOCTOU guard)', () => {
+  // Structural assertion (the interleaving itself is not reproducible in a
+  // single-process test): every bucket listing call site must sit inside the
+  // withStoreTransaction callback, so selection happens under the store lock.
+  const src = fs.readFileSync(new URL('../lib/knowledge/prune.mjs', import.meta.url), 'utf8');
+  const txAt = src.indexOf('withStoreTransaction(');
+  assert.ok(txAt !== -1, 'prune uses withStoreTransaction');
+  const callSites = [...src.matchAll(/listBuckets\(/g)].map((m) => m.index);
+  assert.ok(callSites.length >= 1, 'prune discovers buckets via listBuckets');
+  for (const at of callSites) {
+    assert.ok(at > txAt, 'bucket discovery must happen under the store lock, never before it');
+  }
+});
+
+test('pruneBuckets refuses a non-integer staleDays at its own boundary', () => {
+  const ws = featureWorkspace('feature/staleness');
+  const home = tempDir('promo-home11-');
+  seedBucketLearning(ws, home, 'boundary-claim');
+
+  for (const staleDays of [2.5, 0, -1, NaN]) {
+    const result = pruneBuckets({ workspace: ws, home, staleDays });
+    assert.equal(result.pass, false, `staleDays ${staleDays} must be refused`);
+    assert.match(result.blockedReason, /positive whole number/, `staleDays ${staleDays}: ${result.blockedReason}`);
+  }
 });
 
 test('prune removes buckets by key, by merged/tombstoned state, and by staleness in one store commit', () => {

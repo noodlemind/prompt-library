@@ -174,18 +174,31 @@ export function knowledgeSlos(events) {
   // is noise, not utilization, so it must not inflate the weighted rate.
   const citedIdOccurrences = [];
   let consolidations = 0; let humanActions = 0;
-  // Layer attribution (branch-local vs golden): orient events record a
-  // learningLayers map only when a branch-bucket learning surfaced; an id's
-  // latest recorded layer wins. Absent everywhere → no split is reported.
-  const layerById = new Map();
+  // Layer attribution (branch-local vs golden): orient events record
+  // learningLayers only when a branch-bucket learning surfaced. Current shape
+  // is per-occurrence entries [{id, layer}] — the protected-shadow overlay
+  // can surface golden AND branch entries with the SAME id, so an id can
+  // legitimately belong to both layer sets; an id-keyed map would drop one
+  // side. Legacy id-keyed maps from older event files are still read.
+  // Absent everywhere → no split is reported.
+  const layersById = new Map(); // id -> Set of layers the id surfaced from
   let anyLayerInfo = false;
+  const recordLayer = (id, layer) => {
+    if (!layersById.has(id)) layersById.set(id, new Set());
+    layersById.get(id).add(layer === 'branch' ? 'branch' : 'golden');
+  };
   for (const e of events) {
     if (e.type === 'orient' && Array.isArray(e.learnings)) {
       e.learnings.forEach((id) => surfaced.add(id));
       surfacedOccurrences += e.learnings.length;
-      if (e.learningLayers && typeof e.learningLayers === 'object') {
+      if (Array.isArray(e.learningLayers)) {
         anyLayerInfo = true;
-        for (const [id, layer] of Object.entries(e.learningLayers)) layerById.set(id, layer === 'branch' ? 'branch' : 'golden');
+        for (const entry of e.learningLayers) {
+          if (entry && typeof entry.id === 'string') recordLayer(entry.id, entry.layer);
+        }
+      } else if (e.learningLayers && typeof e.learningLayers === 'object') {
+        anyLayerInfo = true;
+        for (const [id, layer] of Object.entries(e.learningLayers)) recordLayer(id, layer);
       }
     }
     if (e.type === 'verify' && Array.isArray(e.learnings)) {
@@ -198,15 +211,20 @@ export function knowledgeSlos(events) {
   const citedSurfaced = [...cited].filter((id) => surfaced.has(id)).length;
   const citedOccurrences = citedIdOccurrences.filter((id) => surfaced.has(id)).length;
   // Per-layer split (blueprint Phase 2, report/SLO layer split): unique-id
-  // based, attributed by each id's recorded layer (default golden). Only
-  // present once any layer info exists, so pre-bucket reports are unchanged.
+  // based, attributed to EVERY layer an id surfaced from (default golden), so
+  // a protected-shadow pair counts under both layers rather than losing one.
+  // Sums can therefore exceed the unique `surfaced` total by the number of
+  // dual-layer ids. Only present once any layer info exists, so pre-bucket
+  // reports are unchanged.
   let layers;
   if (anyLayerInfo) {
     layers = { golden: { surfaced: 0, cited: 0 }, branch: { surfaced: 0, cited: 0 } };
     for (const id of surfaced) {
-      const layer = layerById.get(id) || 'golden';
-      layers[layer].surfaced += 1;
-      if (cited.has(id)) layers[layer].cited += 1;
+      const idLayers = layersById.get(id) || new Set(['golden']);
+      for (const layer of idLayers) {
+        layers[layer].surfaced += 1;
+        if (cited.has(id)) layers[layer].cited += 1;
+      }
     }
   }
   return { surfaced: surfaced.size, cited: cited.size, citedSurfaced,
