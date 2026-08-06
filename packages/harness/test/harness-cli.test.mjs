@@ -2459,7 +2459,14 @@ test('completion hook bypasses read-only work and enforces each new recorded edi
   assert.equal(runHook('require-plan-gate.mjs', workspace, { file_path: 'src/example.js' }).status, 0);
   recordSuccessfulEdit(workspace, { file_path: 'src/example.js' });
   session = JSON.parse(fs.readFileSync(sessionPath, 'utf8'));
-  session.lastEditAt = new Date(Date.parse(session.lastCompletedEditAt) + 1000).toISOString();
+  // The edit must land strictly after BOTH the completion marker and the last
+  // verification — require-verification denies on `lastVerifyAt < lastEditAt`,
+  // so anchoring only to lastCompletedEditAt made this assertion depend on
+  // `verify` finishing within 1s. Under full-suite load it does not, the
+  // spoofed edit sorts BEFORE verification, and the hook correctly allows.
+  session.lastEditAt = new Date(
+    Math.max(Date.parse(session.lastCompletedEditAt), Date.parse(session.lastVerifyAt)) + 1000
+  ).toISOString();
   fs.writeFileSync(sessionPath, JSON.stringify(session));
   const changedAfter = runHook('require-verification.mjs', workspace);
   assertHookBlocked(changedAfter, /changed after/i);
