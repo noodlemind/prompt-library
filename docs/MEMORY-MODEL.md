@@ -634,6 +634,15 @@ change a learning's status when a CLI command is more convenient than a direct e
 remain first-class paths; hand-editing is no longer a discouraged shortcut, it is absorbed
 with full provenance either way.
 
+## Planned evolution (proposal, not current behavior)
+
+A pending design proposal — the
+[Harness Evolution Blueprint](../knowledge/proposals/harness-evolution-blueprint.md) —
+maps a branch-local knowledge overlay inside the existing `~/.harness/knowledge/<repo-id>/`
+store (golden `learnings/` plus per-branch buckets) and commit-SHA provenance on episodes
+and learnings. Nothing on this page changes until that proposal's Human Decision records
+approval and the work ships; this page continues to describe current behavior only.
+
 ## Related
 
 - [`.github/skills/references/harness-tool-contract.md`](../.github/skills/references/harness-tool-contract.md)
