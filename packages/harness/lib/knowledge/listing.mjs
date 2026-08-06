@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import { storeDir, listLearnings, inertLine } from './store.mjs';
+import { redactSecrets } from '../secret-scan.mjs';
 import { readEvents, EVENTS_MAX_LIMIT } from '../events.mjs';
 import { verifiedAndPlans, isPromotionEligible, consolidateStatus } from './consolidate.mjs';
 
@@ -80,7 +81,7 @@ export function listingView({ workspace, copilotHome, domain, home }) {
         // inertLine: a legacy/hand-edited learning's trigger can still carry
         // an embedded control char (store.mjs's doc comment) — collapsed to
         // a space so this listing row always renders as one line.
-        trigger: inertLine(l.fm.trigger || ''),
+        trigger: inertLine(redactSecrets(l.fm.trigger || '')),
         verified,
         plans,
         // A promoted learning is never eligible for promotion again — its
@@ -119,8 +120,8 @@ export function whyView({ workspace, id, home }) {
     id,
     // inertLine: same render-side normalization as listingView above — a
     // legacy/hand-edited trigger can still carry an embedded control char.
-    trigger: inertLine(fm.trigger || ''),
-    claimLine: inertLine(claimLine),
+    trigger: inertLine(redactSecrets(fm.trigger || '')),
+    claimLine: inertLine(redactSecrets(claimLine)),
     status: effectiveStatus(fm),
     source: fm.source || 'auto',
     lastConfirmed: fm.last_confirmed || null,

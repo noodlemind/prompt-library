@@ -305,7 +305,24 @@ test('integrity mismatch: corrupted grammar wasm is a LOUD lexical fallback, abs
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
-test('runtime integrity mismatch disables the whole tier loudly', async () => {
+test('runtime integrity mismatch disables the whole tier loudly', async (t) => {
+  const lockForSkip = JSON.parse(fs.readFileSync(DEFAULT_LOCK_PATH, 'utf8'));
+  // The loader is resolved through Node module resolution (import.meta.resolve),
+  // NOT from grammarRoots — so with the optional dependency absent the tier is
+  // already lexical for a legitimate reason ("loader not installed") and records
+  // no integrity failure. Asserting the corrupt-runtime path there would break
+  // the optionalDependencies contract: the suite must pass with or without the
+  // grammars installed.
+  let loaderInstalled = true;
+  try {
+    loaderInstalled = Boolean(import.meta.resolve?.(lockForSkip.runtime.package));
+  } catch {
+    loaderInstalled = false;
+  }
+  if (!loaderInstalled) {
+    t.skip(`${lockForSkip.runtime.package} not installed (optional) — no runtime to corrupt`);
+    return;
+  }
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-grammar-rt-'));
   const lock = JSON.parse(fs.readFileSync(DEFAULT_LOCK_PATH, 'utf8'));
   const rtDir = path.join(dir, lock.runtime.package);
