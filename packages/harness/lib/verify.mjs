@@ -7,11 +7,16 @@ import { selectPlan } from './plan-parse.mjs';
 import { extractAcceptanceCriteria, validatePlanSchema } from './plan-schema.mjs';
 import { validatePlanScope } from './plan-scope.mjs';
 import { createEvidenceBinding, writeEvidence } from './evidence.mjs';
-import { enforcementExitCode, loadPolicy } from './policy.mjs';
+import { checkSeverityFor, enforcementExitCode, loadPolicy } from './policy.mjs';
 import { verifyPrimitiveGovernance } from './primitive-governance.mjs';
 import { validatePlanReadiness } from './plan-readiness.mjs';
+import { STRUCTURAL_CHECK_ID, runStructuralExpectations } from './structural/expectations.mjs';
 
 const CHECKS_REL = '.github/harness/checks.yaml';
+
+// Built-in default severities. Any check without a policy entry and without a
+// default here is `enforce` — exactly the pre-severity behavior.
+const DEFAULT_CHECK_SEVERITIES = { [STRUCTURAL_CHECK_ID]: 'advisory' };
 
 function resultCheck(id, status, message, extra = {}) {
   return { id, status, message, ...extra };
@@ -82,10 +87,37 @@ function checkStatusForEvidence(mapped, byId) {
   return statuses.every((status) => status === 'passed') ? 'passed' : 'inconclusive';
 }
 
+// Outcome reflects only non-advisory checks: an advisory failure is reported
+// (checks + advisoryFailures in the evidence payload) but never flips the
+// outcome or the exit code. A warn-severity failure degrades to inconclusive
+// (exit 2 under enforce) instead of failed; `skipped` is always neutral.
 function resolveOutcome(checks) {
-  if (checks.some((check) => check.status === 'failed')) return 'failed';
-  if (checks.some((check) => ['unavailable', 'timeout', 'inconclusive'].includes(check.status))) return 'inconclusive';
+  const gating = checks.filter((check) => check.severity !== 'advisory');
+  if (gating.some((check) => check.status === 'failed' && check.severity !== 'warn')) return 'failed';
+  if (gating.some((check) => check.status === 'failed' || ['unavailable', 'timeout', 'inconclusive'].includes(check.status))) {
+    return 'inconclusive';
+  }
   return 'passed';
+}
+
+function applyCheckSeverities(checks, policy) {
+  return checks.map((check) => {
+    const severity = checkSeverityFor(policy, check.id, DEFAULT_CHECK_SEVERITIES[check.id] ?? 'enforce');
+    // `optional` is the existing ledger-rendering hook: advisory rows render
+    // as warn, never error, without touching the style pipeline.
+    return severity === 'advisory' ? { ...check, severity, optional: true } : { ...check, severity };
+  });
+}
+
+function collectAdvisoryFailures(checks) {
+  return checks
+    .filter((check) => check.severity === 'advisory' && !['passed', 'skipped'].includes(check.status))
+    .map((check) => ({
+      id: check.id,
+      status: check.status,
+      message: check.message,
+      ...(check.findings ? { findings: check.findings } : {}),
+    }));
 }
 
 function currentPhaseTasks(taskBody, phase) {
@@ -102,10 +134,12 @@ function currentPhaseTasks(taskBody, phase) {
 
 function finalize(workspace, flags, partial) {
   const policy = loadPolicy(workspace, flags.enforcement);
+  const checks = applyCheckSeverities(partial.checks, policy);
   const result = {
-    outcome: partial.outcome || resolveOutcome(partial.checks),
+    outcome: partial.outcome || resolveOutcome(checks),
     plan: partial.plan || null,
-    checks: partial.checks,
+    checks,
+    advisoryFailures: collectAdvisoryFailures(checks),
     unverifiedCriteria: partial.unverifiedCriteria || [],
     scopeViolations: partial.scopeViolations || [],
     openHardGaps: partial.openHardGaps || [],
@@ -202,6 +236,21 @@ export function runVerify({ workspace, flags }) {
 
   const scope = validatePlanScope({ workspace, plan, base: flags.base });
   checks.push(resultCheck('scope', scope.status, scope.message, { changedFiles: scope.changedFiles, allowed: scope.allowed }));
+
+  // Advisory structural diff vs plan (severity from policy; skips without an
+  // index or a current baseline — see lib/structural/expectations.mjs).
+  if (scope.status === 'inconclusive') {
+    checks.push(resultCheck(STRUCTURAL_CHECK_ID, 'skipped', 'Advisory structural check skipped: changed files unavailable'));
+  } else {
+    const structural = runStructuralExpectations({ workspace, plan, changedFiles: scope.changedFiles });
+    checks.push(
+      resultCheck(STRUCTURAL_CHECK_ID, structural.status, structural.message, {
+        findings: structural.findings,
+        informational: structural.informational,
+        baseline: structural.baseline,
+      })
+    );
+  }
 
   const primitive = verifyPrimitiveGovernance(plan, scope.changedFiles, Object.keys(named.checks || {}));
   if (primitive.required) {

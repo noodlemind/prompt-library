@@ -151,7 +151,8 @@ For locked plans, both commands enforce criterion-to-check mappings and configur
 {
   "outcome": "passed",
   "plan": "docs/plans/example-plan.md",
-  "checks": [],
+  "checks": [{ "id": "scope", "status": "passed", "message": "...", "severity": "enforce" }],
+  "advisoryFailures": [],
   "unverifiedCriteria": [],
   "scopeViolations": [],
   "openHardGaps": [],
@@ -168,6 +169,18 @@ For locked plans, both commands enforce criterion-to-check mappings and configur
 ```
 
 Allowed outcomes are `passed`, `failed`, and `inconclusive`. Only fresh `passed` evidence bound to the current plan contract, base ref, changed-file set, and workspace contents permits a delivery completion claim or compound. Plan Activity entries are excluded from the contract digest so the append-only ledger can record the returned evidence path. Read-only Answer and Investigate modes do not run delivery verification. Plan frontmatter names checks; executable argv arrays come only from `.github/harness/checks.yaml` and run without a shell. Approved one-off commands run outside harness through explicit host tool approval and are recorded as external evidence.
+
+**Per-check severity (policy v2).** `.github/harness/policy.yaml` may declare `version: 2` with an optional `checks:` map assigning each verify check a severity — the check-level knob is orthogonal to the run-level `enforcement` mode:
+
+| Severity | Effect of a failed check |
+|----------|--------------------------|
+| `enforce` | Fails verification (v1 behavior; default for every check without a policy entry or built-in default) |
+| `warn` | Degrades the outcome to `inconclusive` (exit 2 under enforce) |
+| `advisory` | Reported only — never affects outcome or exit code |
+
+Every check in the `verify` payload carries its effective `severity`; non-passing advisory checks are additionally listed under `advisoryFailures` (with their findings) so an exit-neutral signal is never silently lost. A v1 policy file (no `checks:` map) behaves exactly as before.
+
+**structural-expectations (built-in verify check, advisory by default).** Compares the structural diff of the change against the plan using the structural index at `~/.harness/index/<repo-id>/structural/` (`files.json`/`symbols.json`/`graph.json`/`meta.json` — shape contract in `packages/harness/lib/structural/shape.mjs`). Flags: changed exported symbols in files outside `## Impacted Files` (`unplanned-symbol-change`); removed public symbols whose callers in the graph survive the change (`removed-symbol-with-callers`); unmet plan-frontmatter `structural_expectations:` entries marked `required: true` (`unmet-required-expectation` — unmarked entries stay informational). A missing structural index or a baseline `meta.sha` that is not an ancestor of HEAD makes the check report `skipped` — it warns rather than guessing, and `skipped` never affects the outcome at any severity. Policy `checks: { structural-expectations: { severity: warn|enforce } }` opts the flags into blocking.
 
 **Learning attribution (cited half).** `orient` records the learning ids it surfaced in a session; `verify --learnings <id1,id2>` closes the loop by recording the ids the skill actually applied while doing the work — pass only ids that materially changed an action, not every id the pack mentioned. `orient` also records `learningsBytes` on its own event — the post-truncation byte size of the "## Learnings (memory)" section actually injected into the pack — which `harness report`'s token ledger sums into an approximate injected-token count (`slos.knowledgeTokens`), a cost figure only, never a "tokens saved" claim. `harness report` derives knowledge-layer utilization from cited ÷ surfaced across the event log (both a unique-id rate and an occurrence-weighted rate), and `harness doctor` warns when the weighted utilization stays under 15% with 20+ surfaced occurrences.
 
