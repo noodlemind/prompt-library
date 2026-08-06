@@ -1,0 +1,55 @@
+# Runs the harness's own trusted checks on every pull request, by the SAME
+# names a local run uses — so "green locally" and "green in CI" mean the same
+# thing. Until this existed, every reported pass came from one developer's
+# machine, and two consecutive review rounds each found a regression the
+# previous round's fix had introduced.
+name: Harness Tests
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Node 22: the lowest LTS the package's `engines: >=20` still admits
+      # (Node 20 left maintenance in April 2026). Single version on purpose —
+      # the suite is pure Node with one runtime dependency, so a matrix would
+      # buy little for double the compute. Add 24 here if that changes.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: packages/harness/package-lock.json
+
+      # optionalDependencies are installed (npm ci's default). The suite is
+      # green either way for the four NATIVE tree-sitter-* grammar packages —
+      # their cases skip when absent, and no native build is required because
+      # each ships prebuilt binaries. `web-tree-sitter` is the one optional dep
+      # that must actually be present (treesitter-extractor's "runtime
+      # integrity mismatch" case asserts on the runtime rather than skipping);
+      # it is pure WASM/JS with no install script, so it resolves everywhere.
+      # `npm ci` also runs the package's `prepare` script, which builds
+      # packages/harness/assets from the repo sources.
+      - name: Install harness dependencies
+        run: npm ci --prefix packages/harness
+
+      - name: Harness test suite
+        run: npm --prefix packages/harness test
+
+      - name: Prompt library contracts
+        run: node --test packages/harness/test/prompt-library-contracts.test.mjs
+
+      - name: Build harness assets
+        run: node scripts/build-harness-assets.mjs
