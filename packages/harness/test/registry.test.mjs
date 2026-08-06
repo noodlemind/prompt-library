@@ -477,3 +477,111 @@ test('CLI repro 3: a dash-prefixed --why id is consumed as the lookup id, not re
   assert.equal(body.id, '-weird-id');
   assert.equal(body.blockedReason, 'E_TARGET: no learning -weird-id');
 });
+
+// --- requireArgs: a missing REQUIRED argument is E_USAGE/exit 2, never
+// E_UNEXPECTED/exit 1 ---------------------------------------------------
+// Pre-fix, recall/get/plan-new each threw a bare `new Error(...)` (no
+// `.code`/`.exit`) for a missing required argument — bin/harness.mjs's
+// catch-all then classified it as E_UNEXPECTED/exit 1, the same shape as a
+// genuine harness FAULT, indistinguishable from caller misuse by a
+// programmatic caller. lib/registry.mjs's `requireArgs` entries (recall,
+// get, plan-new) now catch this before the handler runs and throw the same
+// structured E_USAGE/exit-2 shape an unknown flag already used. Message
+// text is unchanged byte-for-byte — only classification and exit change.
+
+test('CLI: recall without a query is E_USAGE/exit 2 with the original message (was E_UNEXPECTED/exit 1)', () => {
+  const workspace = tempDir('registry-recall-usage-ws-');
+  const copilotHome = tempDir('registry-recall-usage-home-');
+  const result = runHarness(['recall', '--workspace', workspace, '--copilot-home', copilotHome, '--json']);
+
+  assert.equal(result.status, EXIT.usage);
+  assert.equal(result.status, 2);
+  const body = JSON.parse(result.stderr);
+  assert.equal(body.ok, false);
+  assert.equal(body.error.code, 'E_USAGE');
+  assert.equal(body.error.message, 'recall requires a query string, e.g. harness recall "orders timeout"');
+  assert.equal(body.error.exit, 2);
+});
+
+test('CLI: get without --docid or --path is E_USAGE/exit 2 with the original message (was E_UNEXPECTED/exit 1)', () => {
+  const workspace = tempDir('registry-get-usage-ws-');
+  const copilotHome = tempDir('registry-get-usage-home-');
+  const result = runHarness(['get', '--workspace', workspace, '--copilot-home', copilotHome, '--json']);
+
+  assert.equal(result.status, EXIT.usage);
+  assert.equal(result.status, 2);
+  const body = JSON.parse(result.stderr);
+  assert.equal(body.ok, false);
+  assert.equal(body.error.code, 'E_USAGE');
+  assert.equal(body.error.message, 'get requires --docid <id> or --path <relative-path>');
+  assert.equal(body.error.exit, 2);
+});
+
+test('CLI: plan-new without --slug is E_USAGE/exit 2 with the original message (was E_UNEXPECTED/exit 1)', () => {
+  const workspace = tempDir('registry-plannew-slug-usage-ws-');
+  const result = runHarness(['plan-new', '--type', 'feat', '--intent', 'do the thing', '--workspace', workspace, '--dry-run', '--json']);
+
+  assert.equal(result.status, EXIT.usage);
+  assert.equal(result.status, 2);
+  const body = JSON.parse(result.stderr);
+  assert.equal(body.ok, false);
+  assert.equal(body.error.code, 'E_USAGE');
+  assert.equal(body.error.message, 'plan-new: --slug is required and must be lowercase-hyphen (a-z0-9-)');
+  assert.equal(body.error.exit, 2);
+});
+
+test('CLI: plan-new without --intent is E_USAGE/exit 2 with the original message (was E_UNEXPECTED/exit 1)', () => {
+  const workspace = tempDir('registry-plannew-intent-usage-ws-');
+  const result = runHarness(['plan-new', '--type', 'feat', '--slug', 'my-fine-slug', '--workspace', workspace, '--dry-run', '--json']);
+
+  assert.equal(result.status, EXIT.usage);
+  assert.equal(result.status, 2);
+  const body = JSON.parse(result.stderr);
+  assert.equal(body.ok, false);
+  assert.equal(body.error.code, 'E_USAGE');
+  assert.equal(body.error.message, 'plan-new: --intent is required');
+  assert.equal(body.error.exit, 2);
+});
+
+// A malformed --slug (present but not lowercase-hyphen) is the SAME message
+// as a missing one (buildPlanSkeleton's own guard covers both) — pin that
+// the "invalid", not just "missing", half of the same guard is also E_USAGE.
+test('CLI: plan-new with a malformed --slug is E_USAGE/exit 2 with the original message', () => {
+  const workspace = tempDir('registry-plannew-badslug-usage-ws-');
+  const result = runHarness([
+    'plan-new', '--type', 'feat', '--slug', 'Not A Slug!', '--intent', 'do the thing',
+    '--workspace', workspace, '--dry-run', '--json',
+  ]);
+
+  assert.equal(result.status, EXIT.usage);
+  const body = JSON.parse(result.stderr);
+  assert.equal(body.error.code, 'E_USAGE');
+  assert.equal(body.error.message, 'plan-new: --slug is required and must be lowercase-hyphen (a-z0-9-)');
+});
+
+// --- requireArgs: a correctly-invoked call is unaffected -------------------
+
+test('CLI: a correctly-invoked recall/get/plan-new is unaffected by requireArgs', () => {
+  const workspace = tempDir('registry-requireargs-ok-ws-');
+  const copilotHome = tempDir('registry-requireargs-ok-home-');
+
+  const recall = runHarness(['recall', 'orders timeout', '--workspace', workspace, '--copilot-home', copilotHome, '--json']);
+  assert.equal(recall.status, 0, recall.stderr);
+  assert.deepEqual(JSON.parse(recall.stdout), { query: 'orders timeout', recall: [], plans: [] });
+
+  const docPath = path.join(workspace, 'notes.md');
+  fs.writeFileSync(docPath, '# notes\n\nhello\n');
+  const get = runHarness(['get', '--path', 'notes.md', '--workspace', workspace, '--copilot-home', copilotHome, '--json']);
+  assert.equal(get.status, 0, get.stderr);
+  const getBody = JSON.parse(get.stdout);
+  assert.equal(getBody.path, 'notes.md');
+  assert.match(getBody.excerpt, /hello/);
+
+  const planWorkspace = tempDir('registry-requireargs-ok-plan-ws-');
+  const planNew = runHarness([
+    'plan-new', '--type', 'feat', '--slug', 'my-fine-slug', '--intent', 'do the thing',
+    '--workspace', planWorkspace, '--dry-run', '--json',
+  ]);
+  assert.equal(planNew.status, 0, planNew.stderr);
+  assert.equal(JSON.parse(planNew.stdout).created, false);
+});

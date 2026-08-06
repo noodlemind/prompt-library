@@ -7,8 +7,12 @@
  *
  * `dispatch(argv, ctx)` resolves a registered command from `argv[0]`,
  * validates its flags strictly (an unknown flag is rejected, never
- * silently dropped — AC2), and calls the entry's handler with the
- * remaining args. A handler has the exact signature every existing
+ * silently dropped — AC2), enforces the entry's optional `requireArgs`
+ * precondition (a REQUIRED argument missing or unsatisfied is the same
+ * `E_USAGE`/exit-2 class as an unknown flag, never a bare thrown Error that
+ * would misreport as a harness fault — see the "requireArgs predicates"
+ * section below), and calls the entry's handler with the remaining args. A
+ * handler has the exact signature every existing
  * `cmdX(argv)` function in lib/commands.mjs already has, so migrating a
  * command to the registry is "point `handler` at the existing function" —
  * no parsing logic is duplicated here; `lib/flags.mjs` / `lib/argv.mjs`
@@ -55,6 +59,7 @@ import {
 } from './commands.mjs';
 import { cmdPlanNew } from './plan-new.mjs';
 import { parseFlags, hasFlag } from './flags.mjs';
+import { parseQueryFromArgv } from './argv.mjs';
 import { resolveCopilotHome } from './paths.mjs';
 import { createEnvelope, createErrorEnvelope, STATUS } from './envelope.mjs';
 import { renderAgentLane, recordAgentLaneBytes } from './agent-lane.mjs';
@@ -237,6 +242,23 @@ export async function dispatch(argv, ctx = {}) {
   validateArgs(entry, rest);
   const lane = ctx.output;
   assertLaneSupported(entry, lane);
+  // Required-argument precondition (registry-declared, not ad hoc): a
+  // command invoked without a REQUIRED argument is caller misuse — the same
+  // `E_USAGE`/exit-2 class as an unknown flag above, never a bare thrown
+  // Error that bin/harness.mjs's catch-all would misclassify as
+  // `E_UNEXPECTED`/exit 1 (a harness FAULT, not a usage mistake). Checked
+  // here, after flag/lane validation and before any handler or telemetry
+  // runs, so a caller can rely on exit 2 to mean "you called it wrong"
+  // across every registered command uniformly. `entry.requireArgs` is
+  // optional and, like `resultOf`/`supportsJsonl`/`instrument`, declared
+  // per entry below — see the "requireArgs predicates" section for why each
+  // one is a small, deliberate duplication of a guard its own handler (or a
+  // helper it calls) already makes, kept byte-for-byte identical in message
+  // text so this is a pure classification fix, not a behavior change.
+  if (typeof entry.requireArgs === 'function') {
+    const message = entry.requireArgs(rest, parseFlags(rest));
+    if (message) throw usageError(message);
+  }
   // P1.6 (carry-list, AC7 widening): ctx.events now attaches on every path,
   // including the legacy ledger/--json default — EXCEPT `entry.instrument
   // === false`. The one entry that opts out today is `events` itself: its
@@ -568,6 +590,75 @@ async function statusResultOf(argv) {
   return { packageVersion: version, copilotHome, lock };
 }
 
+// --- requireArgs predicates: dispatch()'s optional per-entry REQUIRED-
+// argument precondition (see dispatch()'s own comment above). Each predicate
+// is `(rest, flags) => string | undefined` — `rest` is the raw per-command
+// argv dispatch() already has, `flags` is the SAME `parseFlags(rest)` result
+// computed once by dispatch() before calling it. Returning a string means
+// "unsatisfied" — dispatch() throws it as a structured `E_USAGE` error;
+// returning nothing means the precondition holds and dispatch proceeds to
+// the handler as normal.
+//
+// Every message below is copied byte-for-byte from the handler-side guard
+// it front-runs, which stays in place (unreachable defense-in-depth for any
+// caller that reaches the handler directly rather than through dispatch —
+// e.g. a test importing the handler/helper itself) — this section only
+// changes WHERE the same check runs and WHAT it throws, never the text a
+// caller sees.
+
+// recall: the query can come from EITHER free-text positional words OR
+// --query (lib/argv.mjs#parseQueryFromArgv decides which — reused here
+// verbatim so this can never drift from what lib/recall-cmd.mjs#runRecall's
+// own identical guard treats as "present").
+function recallRequireArgs(rest, flags) {
+  const query = parseQueryFromArgv(rest, flags);
+  if (!query) return 'recall requires a query string, e.g. harness recall "orders timeout"';
+}
+
+// get: --docid and --path are each individually optional, but at least one
+// is required — an either/or pair, not a single required flag. Mirrors
+// lib/get-cmd.mjs#runGet's own guard.
+function getRequireArgs(rest, flags) {
+  if (!flags.docid && !flags.path) {
+    return 'get requires --docid <id> or --path <relative-path>';
+  }
+}
+
+// plan-new: --slug and --intent have no default (unlike --type/--risk/date,
+// which do — see lib/plan-new.mjs#buildPlanSkeleton's own destructuring
+// defaults), so these two are plan-new's genuinely required arguments,
+// matching the registry's own `required: true` on both below. (--type is
+// ALSO marked `required: true` below, but buildPlanSkeleton defaults it to
+// 'feat' when omitted — omitting it is not an error today, so it is left
+// out of this predicate on purpose; its own bad-VALUE guard, reachable only
+// when --type IS explicitly supplied, is unchanged — out of this fix's
+// scope, a documented judgment call, not a spec value.) Re-parses `rest`
+// the same greedy, last-token-wins way lib/plan-new.mjs#cmdPlanNew's own
+// argv loop reads every flag (lib/flags.mjs#parseFlags doesn't know --slug
+// or --intent — plan-new's loop is bespoke), honoring the same `--` literal
+// boundary every other harness arg reader does.
+const PLAN_NEW_SLUG_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+
+function planNewFlagValue(rest, name) {
+  let value;
+  for (let i = 0; i < rest.length; i++) {
+    if (rest[i] === '--') break;
+    if (rest[i] === name) value = rest[++i];
+  }
+  return value;
+}
+
+function planNewRequireArgs(rest) {
+  const slug = planNewFlagValue(rest, '--slug');
+  if (!slug || !PLAN_NEW_SLUG_RE.test(slug)) {
+    return 'plan-new: --slug is required and must be lowercase-hyphen (a-z0-9-)';
+  }
+  const intent = planNewFlagValue(rest, '--intent');
+  if (!intent || !intent.trim()) {
+    return 'plan-new: --intent is required';
+  }
+}
+
 function flagLabel(def) {
   const names = [def.name, ...(def.aliases || [])];
   return def.type === 'boolean' ? names.join(', ') : `${names.join(', ')} <${def.valueName || 'value'}>`;
@@ -819,6 +910,7 @@ registerCommand({
     ],
   },
   handler: cmdPlanNew,
+  requireArgs: planNewRequireArgs,
 });
 
 // --- engineer loop --------------------------------------------------------
@@ -927,6 +1019,7 @@ registerCommand({
     ],
   },
   handler: cmdRecall,
+  requireArgs: recallRequireArgs,
 });
 
 registerCommand({
@@ -944,6 +1037,7 @@ registerCommand({
     ],
   },
   handler: cmdGet,
+  requireArgs: getRequireArgs,
 });
 
 registerCommand({
