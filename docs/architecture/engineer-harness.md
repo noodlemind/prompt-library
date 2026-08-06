@@ -212,7 +212,7 @@ For plan-governed delivery, the terminal gate is:
 harness verify --plan <path> --base <git-ref> --enforcement enforce
 ```
 
-The verification suite checks the thin Engineer contract, plan and policy schemas, hooks, trusted checks, capability inventory and lifecycle, skill trigger/outcome evals, host matrices, built-asset parity, and absence of retired runtime artifacts.
+The verification suite checks the thin Engineer contract, plan and policy schemas, hooks, trusted checks, capability inventory and lifecycle, built-asset parity, and absence of retired runtime artifacts.
 
 ## Related sources
 
@@ -221,7 +221,6 @@ The verification suite checks the thin Engineer contract, plan and policy schema
 - [Harness Tool Contract](../../.github/skills/references/harness-tool-contract.md)
 - [Knowledge Locations](../../.github/skills/references/knowledge-locations.md)
 - [Capability Registry](../../knowledge/capability-registry.yaml)
-- [Host Compatibility Matrix](../../evals/host-compatibility.yaml)
 - [Install Guide](../install.md)
 - [Harness Quickstart](../onboarding/harness-quickstart.md)
 - [Harness Evolution Blueprint](../../knowledge/proposals/harness-evolution-blueprint.md) (proposal — planned evolution, not current behavior)

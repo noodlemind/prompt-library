@@ -199,20 +199,6 @@ test('existing skills own structured findings, proportional plans, and primitive
   assert.match(primitive, /do not invent check names/i);
 });
 
-test('host evaluation contains the three executable golden behavior contracts', () => {
-  const matrix = YAML.parse(read('evals/host-compatibility.yaml'));
-  const scenarios = new Map((matrix.golden_scenarios || []).map((scenario) => [scenario.id, scenario]));
-  assert.deepEqual([...scenarios.keys()], ['scenario-a-investigate', 'scenario-b-schema-change', 'scenario-c-migration-primitive']);
-  for (const scenario of scenarios.values()) {
-    assert.match(scenario.prompt, /\S/);
-    assert.ok(scenario.required?.length >= 5, `${scenario.id} required behavior`);
-    assert.ok(scenario.forbidden?.length >= 2, `${scenario.id} forbidden behavior`);
-  }
-  assert.ok(scenarios.get('scenario-a-investigate').required.includes('Capture for Later handoff'));
-  assert.ok(scenarios.get('scenario-b-schema-change').required.includes('ungated mutation blocked'));
-  assert.ok(scenarios.get('scenario-c-migration-primitive').required.includes('create-primitive activated'));
-});
-
 test('engineer loads capabilities on demand and owns bounded consultations', () => {
   const surfaces = [
     read('.github/agents/engineer.agent.md'),
@@ -303,37 +289,6 @@ test('prompt-library retains at most one non-terminal PR plan and documents clea
   assert.match(policy, /transient/i);
   assert.match(policy, /after[^\n]*merge[^\n]*(?:remove|delete)/i);
   assert.match(policy, /status.*plan_lock.*phase/i);
-});
-
-test('core and confusable skills have trigger and outcome eval coverage', () => {
-  const suite = YAML.parse(read('evals/skill-trigger-evals.yaml'));
-  assert.equal(suite.version, 1);
-  const expectedSkills = [
-    'engineer',
-    'ensure-plan',
-    'plan-issue',
-    'ensure-capability',
-    'create-primitive',
-    'auto-compound',
-    'compound-learnings',
-    'code-review',
-  ];
-
-  for (const name of expectedSkills) {
-    const skill = suite.skills?.[name];
-    assert.ok(skill, `missing evals for ${name}`);
-    assert.ok(skill.positive?.length >= 8 && skill.positive.length <= 10, `${name} positive count`);
-    assert.ok(skill.negative?.length >= 8 && skill.negative.length <= 10, `${name} negative count`);
-    assert.ok(skill.outcomes?.length >= 1, `${name} outcome assertions`);
-    assert.deepEqual(
-      new Set(skill.hosts),
-      new Set(['github-copilot-vscode', 'github-copilot-cli', 'github-copilot-intellij'])
-    );
-    for (const scenario of [...skill.positive, ...skill.negative, ...skill.outcomes]) {
-      assert.match(scenario.prompt, /\S/);
-      assert.ok(scenario.assertions?.length >= 1, `${name} scenario lacks assertions`);
-    }
-  }
 });
 
 test('hooks and CI enforce explicit plans and passed verification evidence', () => {
@@ -517,17 +472,10 @@ test('enforcement is query-independent (deterministic-first invariant)', () => {
   }
 });
 
-test('native eval runner is dev tooling with labeled reconstructions, not a harness command', () => {
-  // The eval runner must NOT be a shipped harness CLI command (keeps AC14/surface intact).
+test('eval running is not a shipped harness command', () => {
+  // Keeps AC14/surface intact even though the eval tree itself is retired.
   const bin = read('packages/harness/bin/harness.mjs');
   assert.doesNotMatch(bin, /case 'eval'/, 'eval must not be a harness CLI command');
-  assert.ok(exists('evals/run.mjs'), 'eval runner entry exists');
-  // Deterministic tasks need no provider; the semantic task is a labeled reconstruction.
-  assert.ok(exists('evals/tasks/gate-blocks-ungated-mutation/task.mjs'));
-  assert.ok(exists('evals/tasks/fail-closed-mutation-detection/task.mjs'));
-  const semantic = read('evals/tasks/investigate-readonly-disposition/task.mjs');
-  assert.match(semantic, /runtime:\s*'reconstruction'/, 'semantic task must be labeled a reconstruction');
-  assert.match(semantic, /does NOT preserve/i, 'reconstruction limitation stated');
 });
 
 test('engineer step 8 runs harness compound to close the learn loop', () => {
@@ -724,8 +672,8 @@ test('review fixes preserve thin wrappers, complete skill metadata, and CI pinni
   assert.doesNotMatch(workflow, /grep -Ev ['"]\^\(docs\/plans\/\|docs\/\|\\\.github\/\)/);
 
   const checks = YAML.parse(read('.github/harness/checks.yaml'));
-  assert.notDeepEqual(checks.checks['host-contracts'].command, checks.checks['prompt-contracts'].command);
-  assert.match(checks.checks['host-contracts'].command.join(' '), /host-compatibility\.test\.mjs/);
+  assert.match(checks.checks['prompt-contracts'].command.join(' '), /prompt-library-contracts\.test\.mjs/);
+  assert.match(checks.checks['build-assets'].command.join(' '), /build-harness-assets\.mjs/);
 
   const coordinator = read('.github/agents/plan-coordinator.agent.md');
   assert.match(coordinator, /Required sections:[\s\S]*## Implementation Notes/i);

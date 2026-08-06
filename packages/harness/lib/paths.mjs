@@ -8,7 +8,10 @@ export function resolveCopilotHome(override) {
   if (process.env.COPILOT_HOME) return path.resolve(process.env.COPILOT_HOME);
   if (process.env.XDG_CONFIG_HOME) {
     const xdg = path.join(process.env.XDG_CONFIG_HOME, 'copilot');
-    if (fs.existsSync(xdg) || process.platform !== 'win32') return xdg;
+    // The XDG location only wins when it actually exists — returning a
+    // nonexistent XDG path would silently shadow ~/.copilot, where the
+    // Copilot session store really lives, and empty every host report.
+    if (fs.existsSync(xdg)) return xdg;
   }
   return path.join(os.homedir(), '.copilot');
 }
