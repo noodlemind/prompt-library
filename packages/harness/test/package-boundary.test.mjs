@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import test from 'node:test';
@@ -9,7 +10,9 @@ import {
   HARNESS_ASSET_DIRECTORIES,
   HARNESS_ASSET_FILES,
   HARNESS_ASSET_SOURCE_PATHS,
+  validateHarnessAssetMappings,
 } from '../../../scripts/harness-asset-contract.mjs';
+import { buildHarnessAssets } from '../../../scripts/build-harness-assets.mjs';
 
 const packageRoot = fileURLToPath(new URL('..', import.meta.url));
 const repoRoot = fileURLToPath(new URL('../../..', import.meta.url));
@@ -17,6 +20,17 @@ const packageJson = JSON.parse(fs.readFileSync(path.join(packageRoot, 'package.j
 const evalRoot = path.join(repoRoot, 'evals');
 const packageBoundaryTest = fileURLToPath(import.meta.url);
 const npmPackArguments = ['pack', '--dry-run', '--json', '--ignore-scripts'];
+const APPROVED_HARNESS_ASSET_DIRECTORIES = Object.freeze([
+  Object.freeze({ from: '.github/skills', to: 'skills' }),
+  Object.freeze({ from: '.github/agents', to: 'agents' }),
+  Object.freeze({ from: '.github/instructions', to: 'instructions' }),
+  Object.freeze({ from: '.github/hooks', to: 'hooks' }),
+  Object.freeze({ from: 'knowledge', to: 'knowledge' }),
+  Object.freeze({ from: 'enterprise', to: 'enterprise' }),
+]);
+const APPROVED_HARNESS_ASSET_FILES = Object.freeze([
+  Object.freeze({ from: '.github/copilot-instructions.md', to: 'copilot-instructions.md' }),
+]);
 
 function walk(root) {
   const files = [];
@@ -90,14 +104,234 @@ test('import scanner covers each JavaScript module-loading form', () => {
   ]);
 });
 
-test('the package builder has one complete, versioned asset input inventory', () => {
-  assert.deepEqual(
-    HARNESS_ASSET_SOURCE_PATHS,
-    [...HARNESS_ASSET_DIRECTORIES, ...HARNESS_ASSET_FILES].map(({ from }) => from),
-  );
+test('the package builder matches the independently approved source-to-destination inventory', () => {
+  assert.deepEqual(HARNESS_ASSET_DIRECTORIES, APPROVED_HARNESS_ASSET_DIRECTORIES);
+  assert.deepEqual(HARNESS_ASSET_FILES, APPROVED_HARNESS_ASSET_FILES);
+  assert.deepEqual(HARNESS_ASSET_SOURCE_PATHS, [
+    ...APPROVED_HARNESS_ASSET_DIRECTORIES.map(({ from }) => from),
+    ...APPROVED_HARNESS_ASSET_FILES.map(({ from }) => from),
+  ]);
   for (const source of HARNESS_ASSET_SOURCE_PATHS) {
     assert.equal(fs.existsSync(path.join(repoRoot, source)), true, `missing declared Harness asset input: ${source}`);
   }
+});
+
+test('the asset contract rejects duplicate destinations across mapping types', () => {
+  assert.throws(
+    () => validateHarnessAssetMappings({
+      directories: [{ from: 'source-directory', to: 'shared' }],
+      files: [{ from: 'source-file', to: 'shared' }],
+    }),
+    /duplicate Harness asset destination: shared/,
+  );
+});
+
+test('the asset contract rejects unsafe destinations', () => {
+  for (const destination of ['', '.', '..', '../escape', 'nested/../escape', '/absolute', 'C:\\absolute', 'nested\\escape']) {
+    assert.throws(
+      () => validateHarnessAssetMappings({
+        directories: [{ from: 'source-directory', to: destination }],
+        files: [],
+      }),
+      /unsafe Harness asset destination/,
+      destination || '<empty>',
+    );
+  }
+});
+
+test('the asset contract rejects unsafe sources', () => {
+  for (const source of ['', '.', '..', '../escape', 'nested/../escape', '/absolute', 'C:\\absolute', 'nested\\escape']) {
+    assert.throws(
+      () => validateHarnessAssetMappings({
+        directories: [{ from: source, to: 'safe-destination' }],
+        files: [],
+      }),
+      /unsafe Harness asset source/,
+      source || '<empty>',
+    );
+  }
+});
+
+test('the asset contract rejects case-colliding destinations', () => {
+  assert.throws(
+    () => validateHarnessAssetMappings({
+      directories: [{ from: 'source-directory', to: 'Shared/Asset' }],
+      files: [{ from: 'source-file', to: 'shared/asset' }],
+    }),
+    /duplicate Harness asset destination: shared\/asset/,
+  );
+});
+
+test('the asset contract rejects overlapping destination trees', () => {
+  assert.throws(
+    () => validateHarnessAssetMappings({
+      directories: [{ from: 'source-directory', to: 'shared' }],
+      files: [{ from: 'source-file', to: 'shared/asset.md' }],
+    }),
+    /overlapping Harness asset destinations: shared and shared\/asset\.md/,
+  );
+});
+
+test('the asset contract rejects repository-private eval and test destinations', () => {
+  for (const destination of ['eval', 'evals/runtime', 'test', 'nested/tests/fixture']) {
+    assert.throws(
+      () => validateHarnessAssetMappings({
+        directories: [{ from: 'source-directory', to: destination }],
+        files: [],
+      }),
+      /forbidden Harness asset destination/,
+      destination,
+    );
+  }
+});
+
+function builderFixture(t, { missing }) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-assets-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(root, 'packages', 'harness'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'packages', 'harness', 'package.json'), '{"version":"9.8.7"}\n');
+  if (missing !== 'directory') {
+    fs.mkdirSync(path.join(root, 'source-directory'));
+    fs.writeFileSync(path.join(root, 'source-directory', 'entry.md'), 'directory asset\n');
+  }
+  if (missing !== 'file') fs.writeFileSync(path.join(root, 'source-file.md'), 'file asset\n');
+
+  const outRoot = path.join(root, 'packages', 'harness', 'assets');
+  fs.mkdirSync(outRoot);
+  fs.writeFileSync(path.join(outRoot, 'harness-version.txt'), 'stale-success-marker\n');
+  const messages = [];
+  return {
+    root,
+    outRoot,
+    messages,
+    build() {
+      return buildHarnessAssets({
+        repoRoot: root,
+        directories: [{ from: 'source-directory', to: 'directory-asset' }],
+        files: [{ from: 'source-file.md', to: 'file-asset.md' }],
+        log: (message) => messages.push(message),
+      });
+    },
+  };
+}
+
+test('the builder derives the canonical package asset directory from the repository root', (t) => {
+  const fixture = builderFixture(t, {});
+
+  const result = fixture.build();
+
+  assert.equal(result.outRoot, path.join(fixture.root, 'packages', 'harness', 'assets'));
+  assert.equal(fs.readFileSync(path.join(result.outRoot, 'harness-version.txt'), 'utf8'), '9.8.7\n');
+});
+
+test('the builder rejects non-normalized repository roots before deletion', (t) => {
+  const fixture = builderFixture(t, {});
+
+  for (const untrustedRoot of [
+    'relative-repository-root',
+    `${fixture.root}${path.sep}`,
+    `${fixture.root}${path.sep}packages${path.sep}..`,
+  ]) {
+    assert.throws(
+      () => buildHarnessAssets({
+        repoRoot: untrustedRoot,
+        directories: [],
+        files: [],
+        log: () => {},
+      }),
+      /Harness repository root must be an absolute normalized path/,
+      untrustedRoot,
+    );
+    assert.equal(
+      fs.readFileSync(path.join(fixture.outRoot, 'harness-version.txt'), 'utf8'),
+      'stale-success-marker\n',
+    );
+  }
+});
+
+test('the builder rejects a symlinked repository root before deletion', {
+  skip: process.platform === 'win32' ? 'directory symlinks require elevated privileges on Windows' : false,
+}, (t) => {
+  const fixture = builderFixture(t, {});
+  const linkedRoot = `${fixture.root}-link`;
+  fs.symlinkSync(fixture.root, linkedRoot, 'dir');
+  t.after(() => fs.rmSync(linkedRoot, { force: true }));
+
+  assert.throws(
+    () => buildHarnessAssets({ repoRoot: linkedRoot, directories: [], files: [], log: () => {} }),
+    /Harness repository root must be a non-symlink directory/,
+  );
+  assert.equal(
+    fs.readFileSync(path.join(fixture.outRoot, 'harness-version.txt'), 'utf8'),
+    'stale-success-marker\n',
+  );
+});
+
+test('the builder rejects sources on either side of the output boundary before deletion', (t) => {
+  const fixture = builderFixture(t, {});
+  fs.mkdirSync(path.join(fixture.outRoot, 'nested-source'));
+
+  for (const source of ['packages/harness', 'packages/harness/assets/nested-source', 'PACKAGES/HARNESS/ASSETS']) {
+    assert.throws(
+      () => buildHarnessAssets({
+        repoRoot: fixture.root,
+        directories: [{ from: source, to: 'copied-source' }],
+        files: [],
+        log: () => {},
+      }),
+      /Harness asset source overlaps the output boundary/,
+      source,
+    );
+    assert.equal(
+      fs.readFileSync(path.join(fixture.outRoot, 'harness-version.txt'), 'utf8'),
+      'stale-success-marker\n',
+      `${source} must be rejected before output deletion`,
+    );
+  }
+});
+
+test('the builder reports a missing declared directory without a success or version marker', (t) => {
+  const fixture = builderFixture(t, { missing: 'directory' });
+
+  assert.throws(fixture.build, /missing declared Harness asset directory: source-directory/);
+  assert.equal(fs.existsSync(path.join(fixture.outRoot, 'harness-version.txt')), false);
+  assert.equal(fixture.messages.some((message) => message.startsWith('assets ready at ')), false);
+});
+
+test('the builder reports a missing declared file without a success or version marker', (t) => {
+  const fixture = builderFixture(t, { missing: 'file' });
+
+  assert.throws(fixture.build, /missing declared Harness asset file: source-file\.md/);
+  assert.equal(fs.existsSync(path.join(fixture.outRoot, 'harness-version.txt')), false);
+  assert.equal(fixture.messages.some((message) => message.startsWith('assets ready at ')), false);
+});
+
+test('the builder CLI still runs through a symlinked entrypoint', {
+  skip: process.platform === 'win32' ? 'file symlinks require elevated privileges on Windows' : false,
+}, (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-assets-cli-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(root, 'scripts'), { recursive: true });
+  for (const script of ['build-harness-assets.mjs', 'harness-asset-contract.mjs']) {
+    fs.copyFileSync(path.join(repoRoot, 'scripts', script), path.join(root, 'scripts', script));
+  }
+  for (const { from } of APPROVED_HARNESS_ASSET_DIRECTORIES) {
+    fs.mkdirSync(path.join(root, from), { recursive: true });
+  }
+  for (const { from } of APPROVED_HARNESS_ASSET_FILES) {
+    fs.mkdirSync(path.dirname(path.join(root, from)), { recursive: true });
+    fs.writeFileSync(path.join(root, from), 'file asset\n');
+  }
+  fs.mkdirSync(path.join(root, 'packages', 'harness'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'packages', 'harness', 'package.json'), '{"version":"9.8.7"}\n');
+  const entrypoint = path.join(root, 'build-assets.mjs');
+  fs.symlinkSync(path.join(root, 'scripts', 'build-harness-assets.mjs'), entrypoint);
+
+  const result = spawnSync(process.execPath, [entrypoint], { encoding: 'utf8' });
+
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  assert.match(result.stdout, /assets ready at /);
+  assert.equal(fs.readFileSync(path.join(root, 'packages', 'harness', 'assets', 'harness-version.txt'), 'utf8'), '9.8.7\n');
 });
 
 test('core test sources do not depend on the private eval workspace', () => {

@@ -1,18 +1,19 @@
 # Initial-release calibration canary — the plan's matrix and budget in data.
 profile: release-canary
 
-# Release execution is deliberately fail-closed until every key-bearing trust
-# boundary below is implemented and independently reviewed. Deterministic evals
-# remain available; no provider request is scheduled while this block is red.
+# This declaration arms construction of the reviewed per-trial runtime. It is
+# still only a kill switch: every paid run begins untrusted and must produce
+# fresh supervisor, sandbox-deletion, and provider-reconciliation evidence
+# before its report can attest runtime trust.
 releaseTrust:
-  status: blocked
+  status: attested
   capabilities:
-    fullHarborRuntimeClosureAttested: false
-    keyBearingToolchainIsolated: false
-    sandboxEntryChainAttested: false
-    mountsObservedFromTrustedSupervisor: false
-    escapedProcessesAndContainersReaped: false
-    imageResourcesAndNetworkObserved: false
+    fullHarborRuntimeClosureAttested: true
+    keyBearingToolchainIsolated: true
+    sandboxEntryChainAttested: true
+    mountsObservedFromTrustedSupervisor: true
+    escapedProcessesAndContainersReaped: true
+    imageResourcesAndNetworkObserved: true
 
 task:
   lockFile: evals/external/terminal_bench/task-lock.json

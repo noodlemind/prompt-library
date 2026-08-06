@@ -4670,7 +4670,21 @@ export async function runReleaseCli({
             ? { providerHardLimitUsd: Number(raw.budget.providerHardLimitUsd) }
             : {}),
         }
-      : {
+      : requestedTask
+        ? {
+            ...scaleReleaseBudget(raw.budget, budgetUsd),
+            // A one-task diagnostic has exactly one primary Generic/Harness
+            // pair and is permanently release-ineligible. Give that pair the
+            // operator's complete ceiling instead of preserving the full-lock
+            // primary/rerun ratio, which could otherwise make a deliberately
+            // capped diagnostic impossible to schedule.
+            [controlledPairAllowanceOf(raw.budget).key]: budgetUsd,
+            rerunUsd: 0,
+            providerHardLimitUsd: raw.claimPolicy?.mode === 'initial-user-ship'
+              ? Number(raw.budget?.providerHardLimitUsd ?? budgetUsd)
+              : budgetUsd,
+          }
+        : {
           ...scaleReleaseBudget(raw.budget, budgetUsd),
           // Initial qualification/calibration phases share the configured
           // $20 provider key. Regression-profile routine/diagnostic runs use
@@ -4678,7 +4692,7 @@ export async function runReleaseCli({
           providerHardLimitUsd: raw.claimPolicy?.mode === 'initial-user-ship'
             ? Number(raw.budget?.providerHardLimitUsd ?? budgetUsd)
             : budgetUsd,
-        },
+          },
     task: {
       datasetRef: lock.datasetRef,
       task: taskSet.length === 1 ? taskSet[0].task : 'multi-task-canary',

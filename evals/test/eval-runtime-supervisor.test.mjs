@@ -469,6 +469,19 @@ function supervisor(effects, overrides = {}) {
   });
 }
 
+async function captureSupervisorFailure(operation) {
+  let observedError;
+  try {
+    await operation();
+  } catch (error) {
+    observedError = error;
+  }
+  assert.ok(observedError instanceof RuntimeSupervisorError);
+  const diagnostic = readRuntimeSupervisorFailureDiagnostic(observedError);
+  assert.ok(diagnostic);
+  return diagnostic;
+}
+
 const prepareInput = (request = signedRequest()) => ({
   executionMode: CONTROLLED_PROVIDER,
   request,
@@ -1030,6 +1043,104 @@ test('control-channel loss transitions synchronously to fail-stop, kills the cgr
   );
 });
 
+test('assigns every public failure phase and code at its supervisor boundary', async (t) => {
+  const failingEffects = (method, message) => createEffects({
+    [method]: async () => {
+      throw new Error(message);
+    },
+  });
+  const prepareEffectCases = [
+    ['platform inspection', 'inspectPlatform', 'INSPECT_PLATFORM'],
+    ['provider key inspection', 'inspectProviderKeyFd', 'INSPECT_PROVIDER_KEY'],
+    ['evidence reservation', 'reserveEvidenceHeadroom', 'RESERVE_EVIDENCE_HEADROOM'],
+    ['private daemon startup', 'startPrivateDaemon', 'START_PRIVATE_DAEMON'],
+    ['Docker proxy startup', 'startDockerProxy', 'START_DOCKER_PROXY'],
+    ['readiness inspection', 'inspectReadiness', 'INSPECT_READINESS'],
+    ['provider broker startup', 'startProviderBroker', 'START_PROVIDER_BROKER'],
+    ['provider key closure', 'closeInheritedFd', 'CLOSE_PROVIDER_KEY'],
+  ];
+  const cases = [
+    {
+      name: 'request validation',
+      failureKey: 'REQUEST_VALIDATION',
+      invoke: () => {
+        const input = prepareInput();
+        input.runner.argv[0] = 'relative-runner';
+        return supervisor(createEffects()).prepare(input);
+      },
+    },
+    ...prepareEffectCases.map(([name, method, failureKey]) => ({
+      name,
+      failureKey,
+      invoke: () => supervisor(failingEffects(method, `${name} failed`)).prepare(prepareInput()),
+    })),
+    {
+      name: 'lease signing',
+      failureKey: 'LEASE_SIGNING',
+      invoke: () => supervisor(createEffects(), {
+        nonceFactory: () => HASH('5'),
+      }).prepare(prepareInput()),
+    },
+    {
+      name: 'runner launch',
+      failureKey: 'RUN',
+      invoke: async () => {
+        const runtime = supervisor(failingEffects('launchRunner', 'runner launch failed'));
+        await runtime.prepare(prepareInput());
+        return runtime.run();
+      },
+    },
+    {
+      name: 'final evidence collection',
+      failureKey: 'FINALIZE',
+      invoke: async () => {
+        const runtime = supervisor(failingEffects('collectFinalEvidence', 'final evidence failed'));
+        await runtime.prepare(prepareInput());
+        await runtime.run();
+        return runtime.finalize({ outcome: { status: 'succeeded', exitReason: 'completed' } });
+      },
+    },
+  ];
+
+  assert.deepEqual(
+    cases.map(({ failureKey }) => failureKey).sort(),
+    Object.keys(RuntimeControlFailurePhases).sort(),
+  );
+
+  for (const { name, failureKey, invoke } of cases) {
+    await t.test(name, async () => {
+      const diagnostic = await captureSupervisorFailure(invoke);
+      assert.equal(diagnostic.phase, RuntimeControlFailurePhases[failureKey]);
+      assert.equal(diagnostic.code, RuntimeControlFailureCodes[failureKey]);
+      assert.match(diagnostic.detailSha256, /^[a-f0-9]{64}$/);
+    });
+  }
+});
+
+test('failure detail digests are deterministic and sensitive to the private cause', async () => {
+  async function observeDetail(message) {
+    const effects = createEffects({
+      async startPrivateDaemon() {
+        throw new Error(message);
+      },
+    });
+    const diagnostic = await captureSupervisorFailure(
+      () => supervisor(effects).prepare(prepareInput()),
+    );
+    return diagnostic.detailSha256;
+  }
+
+  const stableMessage = 'private daemon exited with status 70';
+  const changedMessage = 'private daemon exited with status 71';
+  const first = await observeDetail(stableMessage);
+  const repeated = await observeDetail(stableMessage);
+  const changed = await observeDetail(changedMessage);
+
+  assert.match(first, /^[a-f0-9]{64}$/);
+  assert.equal(repeated, first);
+  assert.notEqual(changed, first);
+});
+
 test('bounds public state and errors so effect secrets and raw evidence cannot escape', async () => {
   const secret = 'sk-or-v1-never-return-this-value';
   const effects = createEffects({
@@ -1046,12 +1157,10 @@ test('bounds public state and errors so effect secrets and raw evidence cannot e
   }
   assert.equal(String(observedError).includes(secret), false);
   assert.equal(JSON.stringify(runtime.snapshot()).includes(secret), false);
-  assert.deepEqual(readRuntimeSupervisorFailureDiagnostic(observedError), {
-    phase: RuntimeControlFailurePhases.START_PRIVATE_DAEMON,
-    code: RuntimeControlFailureCodes.START_PRIVATE_DAEMON,
-    detailSha256: readRuntimeSupervisorFailureDiagnostic(observedError).detailSha256,
-  });
-  assert.match(readRuntimeSupervisorFailureDiagnostic(observedError).detailSha256, /^[a-f0-9]{64}$/);
+  const diagnostic = readRuntimeSupervisorFailureDiagnostic(observedError);
+  assert.equal(diagnostic.phase, RuntimeControlFailurePhases.START_PRIVATE_DAEMON);
+  assert.equal(diagnostic.code, RuntimeControlFailureCodes.START_PRIVATE_DAEMON);
+  assert.match(diagnostic.detailSha256, /^[a-f0-9]{64}$/);
   assert.equal(
     readRuntimeSupervisorFailureDiagnostic(new RuntimeSupervisorError('forged')),
     null,

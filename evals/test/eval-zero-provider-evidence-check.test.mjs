@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import test from 'node:test';
@@ -10,13 +11,19 @@ import {
   validateZeroProviderEvidenceForCommit,
   zeroProviderEvidencePath,
 } from '../verify-zero-provider-daytona.mjs';
+import { createZeroProviderGateReport } from '../runtime/zero-provider-gate.mjs';
+import { canonicalSha256, protocolDocumentHash } from '../runtime/protocol.mjs';
 import {
   MAX_ZERO_PROVIDER_DURABLE_EVIDENCE_BYTES,
   serializeZeroProviderDurableEvidence,
 } from '../zero-provider-daytona.mjs';
+import { createGenuineRuntimeSession } from './support/runtime-session-fixture.mjs';
 
+const HASH = (character) => character.repeat(64);
 const RELEASE_SHA = 'a'.repeat(40);
 const REPOSITORY = path.resolve('zero-provider-evidence-repository');
+const TASK_ID = 'cobol-modernization';
+const EXECUTION_MODE = 'zero-provider-canary';
 
 function evidence(releaseSha = RELEASE_SHA) {
   return {
@@ -34,6 +41,115 @@ function evidence(releaseSha = RELEASE_SHA) {
 function validateRuntimeRun(value) {
   assert.equal(value?.report?.bindings?.releaseSha?.length, 40);
   return structuredClone(value);
+}
+
+function canonicalArtifactJson(value) {
+  if (value === null) return 'null';
+  if (Array.isArray(value)) return `[${value.map(canonicalArtifactJson).join(',')}]`;
+  if (value && typeof value === 'object') {
+    return `{${Object.keys(value).sort().map((key) =>
+      `${JSON.stringify(key)}:${canonicalArtifactJson(value[key])}`).join(',')}}`;
+  }
+  return JSON.stringify(value);
+}
+
+function canonicalArtifactHash(value) {
+  return crypto.createHash('sha256').update(canonicalArtifactJson(value)).digest('hex');
+}
+
+async function retainedRuntimeRun({ sessionId }) {
+  const genuine = await createGenuineRuntimeSession({
+    releaseSha: RELEASE_SHA,
+    sessionId,
+    executionMode: EXECUTION_MODE,
+    providerSpendMicrousd: 0,
+  });
+  const sessionFinalAttestation = genuine.controller.finalize();
+  const protocolTrials = genuine.protocolTrials.map((trial) => {
+    const payload = Buffer.from(`retained-output-${trial.condition}`);
+    return {
+      ...trial,
+      outputArchiveReceipt: {
+        sha256: crypto.createHash('sha256').update(payload).digest('hex'),
+        byteLength: payload.length,
+      },
+    };
+  });
+  const report = createZeroProviderGateReport({
+    releaseSha: RELEASE_SHA,
+    snapshotBuildHash: HASH('4'),
+    taskLockHash: HASH('1'),
+    bundleHash: HASH('2'),
+    gateDefinitionHash: HASH('e'),
+    profileId: 'economical-small-model',
+    taskId: TASK_ID,
+    startedAt: '2026-08-04T20:00:00.000Z',
+    completedAt: '2026-08-04T20:01:00.000Z',
+    trials: protocolTrials.map((trial) => ({
+      condition: trial.condition,
+      trialId: trial.runtimeRequest.trialId,
+      sandboxId: trial.runtimeRequest.bindings.sandboxId,
+      sandboxBootId: trial.runtimeRequest.bindings.sandboxBootId,
+      readinessLeaseHash: protocolDocumentHash(trial.readinessLease),
+      outputArchiveHash: trial.outputArchiveReceipt.sha256,
+      trialAttestationHash: protocolDocumentHash(trial.trialAttestation),
+      deletionReceiptHash: canonicalSha256(trial.deletionReceipt),
+      harborCompleted: true,
+      finalEvidenceComplete: true,
+      deleted: true,
+      absentAfterDelete: true,
+      providerAttempts: 0,
+      providerCalls: 0,
+      providerSpendMicrousd: 0,
+      verifierReward: null,
+    })),
+    sessionFinalAttestationHash: protocolDocumentHash(sessionFinalAttestation),
+  });
+  const protocolEvidence = {
+    schema: 'engineer-zero-provider-daytona-protocol-evidence.v1',
+    sessionFinalAttestation,
+    trials: protocolTrials,
+  };
+  const lifecycleHash = canonicalSha256({
+    schema: 'engineer-zero-provider-daytona-lifecycle.v1',
+    executionMode: EXECUTION_MODE,
+    reportHash: report.reportHash,
+    sessionFinalAttestationHash: report.sessionFinalAttestationHash,
+    trialAttestationHashes: report.trials.map(({ trialAttestationHash }) => trialAttestationHash),
+    deletionReceiptHashes: report.trials.map(({ deletionReceiptHash }) => deletionReceiptHash),
+    readinessLeaseHashes: report.trials.map(({ readinessLeaseHash }) => readinessLeaseHash),
+    outputArchiveHashes: protocolTrials.map(({ outputArchiveReceipt }) => outputArchiveReceipt.sha256),
+  });
+  const unsigned = {
+    schema: 'engineer-zero-provider-daytona-run.v1',
+    executionMode: EXECUTION_MODE,
+    evidenceClass: 'infrastructure-validation',
+    releaseEligible: false,
+    authenticationScope: 'in-process-hmac-validated',
+    standaloneSignatureVerifiable: false,
+    report,
+    protocolEvidence,
+    lifecycleHash,
+  };
+  return { ...unsigned, artifactHash: canonicalArtifactHash(unsigned) };
+}
+
+function completeEvidence(runtimeRun) {
+  return {
+    schema: 'engineer-zero-provider-daytona-evidence.v1',
+    operatorTrustModel: 'trusted-local-owner',
+    artifactHashSemantics: 'canonical-content-integrity-only',
+    runtimeRun,
+  };
+}
+
+function productionVerifierDependencies(value) {
+  return {
+    releaseRepository: () => REPOSITORY,
+    currentGitReleaseSha: () => RELEASE_SHA,
+    assertCleanLiveReleaseSource: () => {},
+    readPrivateEvidenceFile: () => serializeZeroProviderDurableEvidence(value),
+  };
 }
 
 test('zero-provider durable evidence exposes one canonical byte contract', () => {
@@ -68,6 +184,35 @@ test('zero-provider evidence validation binds the complete durable envelope to c
       validateRuntimeRun,
     }),
     /current git HEAD/i,
+  );
+});
+
+test('configured check rejects a complete artifact-hash transplant with its production validator', async () => {
+  const donorRun = await retainedRuntimeRun({ sessionId: 'evidence-hash-donor' });
+  const recipientRun = await retainedRuntimeRun({ sessionId: 'evidence-hash-recipient' });
+  const donorEvidence = completeEvidence(donorRun);
+  const recipientEvidence = completeEvidence(recipientRun);
+
+  assert.equal(runZeroProviderEvidenceCheck({
+    stdout: () => {},
+    dependencies: productionVerifierDependencies(donorEvidence),
+  }).exitCode, 0);
+  assert.equal(runZeroProviderEvidenceCheck({
+    stdout: () => {},
+    dependencies: productionVerifierDependencies(recipientEvidence),
+  }).exitCode, 0);
+  assert.notEqual(donorRun.artifactHash, recipientRun.artifactHash);
+
+  const tamperedEvidence = completeEvidence({
+    ...recipientRun,
+    artifactHash: donorRun.artifactHash,
+  });
+  assert.throws(
+    () => runZeroProviderEvidenceCheck({
+      stdout: () => {},
+      dependencies: productionVerifierDependencies(tamperedEvidence),
+    }),
+    /retained artifact hash drifted/i,
   );
 });
 

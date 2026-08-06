@@ -194,7 +194,7 @@ remain useful but must be reported as degraded rather than hook-enforced.
 ```bash
 npm ci --prefix packages/harness
 npm ci --prefix evals
-node scripts/test-repository.mjs --core
+npm --prefix packages/harness test
 node scripts/test-repository.mjs --eval
 npm --prefix packages/harness run build:assets
 npm --prefix packages/harness version patch

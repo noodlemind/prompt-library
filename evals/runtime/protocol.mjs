@@ -10,34 +10,29 @@ export const RuntimeExecutionModes = Object.freeze({
   ZERO_PROVIDER_CANARY: 'zero-provider-canary',
 });
 export const RuntimeControlFailureSchema = 'engineer-runtime-control-failure.v1';
-export const RuntimeControlFailurePhases = Object.freeze({
-  REQUEST_VALIDATION: 'request-validation',
-  INSPECT_PLATFORM: 'inspect-platform',
-  INSPECT_PROVIDER_KEY: 'inspect-provider-key',
-  RESERVE_EVIDENCE_HEADROOM: 'reserve-evidence-headroom',
-  START_PRIVATE_DAEMON: 'start-private-daemon',
-  START_DOCKER_PROXY: 'start-docker-proxy',
-  INSPECT_READINESS: 'inspect-readiness',
-  LEASE_SIGNING: 'lease-signing',
-  START_PROVIDER_BROKER: 'start-provider-broker',
-  CLOSE_PROVIDER_KEY: 'close-provider-key',
-  RUN: 'run',
-  FINALIZE: 'finalize',
-});
-export const RuntimeControlFailureCodes = Object.freeze({
-  REQUEST_VALIDATION: 'ERR_RUNTIME_CONTROL_REQUEST_VALIDATION',
-  INSPECT_PLATFORM: 'ERR_RUNTIME_CONTROL_INSPECT_PLATFORM',
-  INSPECT_PROVIDER_KEY: 'ERR_RUNTIME_CONTROL_INSPECT_PROVIDER_KEY',
-  RESERVE_EVIDENCE_HEADROOM: 'ERR_RUNTIME_CONTROL_RESERVE_EVIDENCE_HEADROOM',
-  START_PRIVATE_DAEMON: 'ERR_RUNTIME_CONTROL_START_PRIVATE_DAEMON',
-  START_DOCKER_PROXY: 'ERR_RUNTIME_CONTROL_START_DOCKER_PROXY',
-  INSPECT_READINESS: 'ERR_RUNTIME_CONTROL_INSPECT_READINESS',
-  LEASE_SIGNING: 'ERR_RUNTIME_CONTROL_LEASE_SIGNING',
-  START_PROVIDER_BROKER: 'ERR_RUNTIME_CONTROL_START_PROVIDER_BROKER',
-  CLOSE_PROVIDER_KEY: 'ERR_RUNTIME_CONTROL_CLOSE_PROVIDER_KEY',
-  RUN: 'ERR_RUNTIME_CONTROL_RUN',
-  FINALIZE: 'ERR_RUNTIME_CONTROL_FINALIZE',
-});
+const RUNTIME_CONTROL_FAILURE_TAXONOMY = Object.freeze([
+  ['REQUEST_VALIDATION', 'request-validation', 'ERR_RUNTIME_CONTROL_REQUEST_VALIDATION'],
+  ['INSPECT_PLATFORM', 'inspect-platform', 'ERR_RUNTIME_CONTROL_INSPECT_PLATFORM'],
+  ['INSPECT_PROVIDER_KEY', 'inspect-provider-key', 'ERR_RUNTIME_CONTROL_INSPECT_PROVIDER_KEY'],
+  ['RESERVE_EVIDENCE_HEADROOM', 'reserve-evidence-headroom', 'ERR_RUNTIME_CONTROL_RESERVE_EVIDENCE_HEADROOM'],
+  ['START_PRIVATE_DAEMON', 'start-private-daemon', 'ERR_RUNTIME_CONTROL_START_PRIVATE_DAEMON'],
+  ['START_DOCKER_PROXY', 'start-docker-proxy', 'ERR_RUNTIME_CONTROL_START_DOCKER_PROXY'],
+  ['INSPECT_READINESS', 'inspect-readiness', 'ERR_RUNTIME_CONTROL_INSPECT_READINESS'],
+  ['LEASE_SIGNING', 'lease-signing', 'ERR_RUNTIME_CONTROL_LEASE_SIGNING'],
+  ['START_PROVIDER_BROKER', 'start-provider-broker', 'ERR_RUNTIME_CONTROL_START_PROVIDER_BROKER'],
+  ['CLOSE_PROVIDER_KEY', 'close-provider-key', 'ERR_RUNTIME_CONTROL_CLOSE_PROVIDER_KEY'],
+  ['RUN', 'run', 'ERR_RUNTIME_CONTROL_RUN'],
+  ['FINALIZE', 'finalize', 'ERR_RUNTIME_CONTROL_FINALIZE'],
+].map(Object.freeze));
+
+function runtimeControlFailureProjection(keyIndex, valueIndex) {
+  return Object.freeze(Object.fromEntries(
+    RUNTIME_CONTROL_FAILURE_TAXONOMY.map((entry) => [entry[keyIndex], entry[valueIndex]]),
+  ));
+}
+
+export const RuntimeControlFailurePhases = runtimeControlFailureProjection(0, 1);
+export const RuntimeControlFailureCodes = runtimeControlFailureProjection(0, 2);
 
 const HEX_64 = /^[a-f0-9]{64}$/;
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._:/-]*$/;
@@ -131,20 +126,7 @@ const CONTROL_FAILURE_BINDING_FIELDS = Object.freeze([
   'controlSequence',
   'requestHash',
 ]);
-export const RuntimeControlFailureCodeByPhase = Object.freeze({
-  [RuntimeControlFailurePhases.REQUEST_VALIDATION]: RuntimeControlFailureCodes.REQUEST_VALIDATION,
-  [RuntimeControlFailurePhases.INSPECT_PLATFORM]: RuntimeControlFailureCodes.INSPECT_PLATFORM,
-  [RuntimeControlFailurePhases.INSPECT_PROVIDER_KEY]: RuntimeControlFailureCodes.INSPECT_PROVIDER_KEY,
-  [RuntimeControlFailurePhases.RESERVE_EVIDENCE_HEADROOM]: RuntimeControlFailureCodes.RESERVE_EVIDENCE_HEADROOM,
-  [RuntimeControlFailurePhases.START_PRIVATE_DAEMON]: RuntimeControlFailureCodes.START_PRIVATE_DAEMON,
-  [RuntimeControlFailurePhases.START_DOCKER_PROXY]: RuntimeControlFailureCodes.START_DOCKER_PROXY,
-  [RuntimeControlFailurePhases.INSPECT_READINESS]: RuntimeControlFailureCodes.INSPECT_READINESS,
-  [RuntimeControlFailurePhases.LEASE_SIGNING]: RuntimeControlFailureCodes.LEASE_SIGNING,
-  [RuntimeControlFailurePhases.START_PROVIDER_BROKER]: RuntimeControlFailureCodes.START_PROVIDER_BROKER,
-  [RuntimeControlFailurePhases.CLOSE_PROVIDER_KEY]: RuntimeControlFailureCodes.CLOSE_PROVIDER_KEY,
-  [RuntimeControlFailurePhases.RUN]: RuntimeControlFailureCodes.RUN,
-  [RuntimeControlFailurePhases.FINALIZE]: RuntimeControlFailureCodes.FINALIZE,
-});
+export const RuntimeControlFailureCodeByPhase = runtimeControlFailureProjection(1, 2);
 
 export class ProtocolError extends Error {
   constructor(message, code = 'ERR_RUNTIME_PROTOCOL') {

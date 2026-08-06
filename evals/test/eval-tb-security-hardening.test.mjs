@@ -49,7 +49,7 @@ function snapshotFixtureSource({ repoRoot: sourceRoot, destination }) {
     path.join(destination, 'scripts', 'harness-asset-contract.mjs'),
   );
   fs.copyFileSync(path.join(sourceRoot, 'evals', '__init__.py'), path.join(destination, 'evals', '__init__.py'));
-  for (const directory of ['config', 'hosts', 'lib']) {
+  for (const directory of ['config', 'hosts', 'lib', 'runtime']) {
     fs.cpSync(path.join(sourceRoot, 'evals', directory), path.join(destination, 'evals', directory), { recursive: true });
   }
   fs.copyFileSync(path.join(sourceRoot, 'evals', 'external', '__init__.py'), path.join(destination, 'evals', 'external', '__init__.py'));
@@ -77,7 +77,7 @@ function writeBridgeFixture(root, { probe = 'process.stdout.write("{}\\n")', bou
     path.join(root, '.github', 'skills', 'ensure-plan', 'SKILL.md'),
     '---\ndescription: Fixture planning guidance\n---\n# Ensure Plan\nRetain a bounded plan.\n'
   );
-  for (const directory of ['config', 'hosts', 'lib']) {
+  for (const directory of ['config', 'hosts', 'lib', 'runtime']) {
     fs.mkdirSync(path.join(root, 'evals', directory), { recursive: true });
     fs.writeFileSync(path.join(root, 'evals', directory, 'fixture.mjs'), 'export default null;\n');
   }
@@ -123,9 +123,21 @@ function writeHarnessFixture(root) {
 function preparedFixture({
   nodeRuntimeDirectoryMode = 0o755,
   bundleDir = path.join(tmpdir('tb-bundle-output-'), 'bundle'),
+  actualBridge = false,
 } = {}) {
   const fixtureRoot = tmpdir('tb-bundle-fixture-');
   writeBridgeFixture(fixtureRoot);
+  if (actualBridge) {
+    for (const directory of ['config', 'hosts', 'lib', 'runtime']) {
+      const destination = path.join(fixtureRoot, 'evals', directory);
+      fs.rmSync(destination, { recursive: true });
+      fs.cpSync(path.join(repoRoot, 'evals', directory), destination, { recursive: true });
+    }
+    fs.copyFileSync(
+      path.join(repoRoot, 'evals', 'external', 'terminal_bench', 'agent.mjs'),
+      path.join(fixtureRoot, 'evals', 'external', 'terminal_bench', 'agent.mjs'),
+    );
+  }
   writeHarnessFixture(fixtureRoot);
   fs.mkdirSync(path.join(fixtureRoot, 'packages', 'harness', 'node_modules', '.bin'), { recursive: true });
   fs.mkdirSync(path.join(fixtureRoot, 'packages', 'harness', 'node_modules', 'yaml'), { recursive: true });
@@ -220,6 +232,37 @@ test('prepared bundles require an out-of-bundle digest and validate exact conten
     () => validatePrebuiltBundle(bundleDir, trustBundle(prepared)),
     /contents|manifest|unexpected/i
   );
+});
+
+test('the prepared bundle starts the real bridge with its complete import closure', () => {
+  const { bundleDir } = preparedFixture({ actualBridge: true });
+  const conditionFile = path.join(tmpdir('tb-real-bridge-condition-'), 'condition.json');
+  const telemetryFile = path.join(tmpdir('tb-real-bridge-telemetry-'), 'done.json');
+  fs.writeFileSync(conditionFile, `${JSON.stringify({
+    id: 'scripted-canary-import-closure',
+    instruction: 'Complete the code-owned scripted canary.',
+    systemPrompt: 'Run only the scripted canary.',
+    runtime: { driverMode: 'scripted-canary' },
+  })}\n`);
+  const result = spawnSync(process.execPath, [
+    fs.realpathSync(path.join(bundleDir, 'bridge', 'evals', 'external', 'terminal_bench', 'agent.mjs')),
+    '--condition',
+    conditionFile,
+  ], {
+    encoding: 'utf8',
+    env: {
+      PATH: process.env.PATH,
+      HARNESS_EVAL_TB_TELEMETRY_FILE: telemetryFile,
+    },
+  });
+
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  const done = JSON.parse(result.stdout.trim().split('\n').at(-1));
+  assert.equal(done.type, 'done');
+  assert.equal(done.doneFilePersisted, true);
+  const persisted = JSON.parse(fs.readFileSync(telemetryFile, 'utf8'));
+  assert.equal(persisted.type, 'done');
+  assert.equal(persisted.stopReason, 'scripted_canary');
 });
 
 test('Node projection removes an owner-read-only discarded runtime without hidden leftovers', () => {

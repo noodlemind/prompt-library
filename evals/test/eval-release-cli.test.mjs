@@ -112,8 +112,12 @@ function snapshotFixtureSource({ repoRoot: sourceRoot, destination }) {
     path.join(sourceRoot, 'scripts', 'harness-asset-contract.mjs'),
     path.join(destination, 'scripts', 'harness-asset-contract.mjs'),
   );
+  fs.copyFileSync(
+    path.join(sourceRoot, 'scripts', 'build-harness-assets.mjs'),
+    path.join(destination, 'scripts', 'build-harness-assets.mjs'),
+  );
   fs.copyFileSync(path.join(sourceRoot, 'evals', '__init__.py'), path.join(destination, 'evals', '__init__.py'));
-  for (const directory of ['config', 'hosts', 'lib']) {
+  for (const directory of ['config', 'hosts', 'lib', 'runtime']) {
     fs.cpSync(path.join(sourceRoot, 'evals', directory), path.join(destination, 'evals', directory), { recursive: true });
   }
   fs.copyFileSync(path.join(sourceRoot, 'evals', 'external', '__init__.py'), path.join(destination, 'evals', 'external', '__init__.py'));
@@ -367,10 +371,14 @@ process.stdout.write(JSON.stringify([images[args[2]]]));
   const bundleFixtureRoot = tmpdir();
   fs.mkdirSync(path.join(bundleFixtureRoot, '.github', 'agents'), { recursive: true });
   fs.mkdirSync(path.join(bundleFixtureRoot, '.github', 'skills', 'ensure-plan'), { recursive: true });
+  fs.mkdirSync(path.join(bundleFixtureRoot, 'scripts'), { recursive: true });
   fs.mkdirSync(path.join(bundleFixtureRoot, 'packages', 'harness', 'bin'), { recursive: true });
   fs.mkdirSync(path.join(bundleFixtureRoot, 'packages', 'harness', 'assets', 'agents'), { recursive: true });
   fs.mkdirSync(path.join(bundleFixtureRoot, 'packages', 'harness', 'assets', 'skills', 'engineer'), { recursive: true });
   fs.cpSync(path.join(repoRoot, 'evals'), path.join(bundleFixtureRoot, 'evals'), { recursive: true });
+  for (const file of ['harness-asset-contract.mjs', 'build-harness-assets.mjs']) {
+    fs.copyFileSync(path.join(repoRoot, 'scripts', file), path.join(bundleFixtureRoot, 'scripts', file));
+  }
   fs.writeFileSync(
     path.join(bundleFixtureRoot, 'packages', 'harness', 'package.json'),
     `${JSON.stringify({ name: '@dev-kit/harness', version: harnessVersion, files: ['bin', 'assets'] })}\n`

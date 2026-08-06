@@ -352,6 +352,83 @@ function canonicalArtifactHash(value) {
   return crypto.createHash('sha256').update(canonicalArtifactJson(value)).digest('hex');
 }
 
+async function retainedRuntimeRun({ sessionId = 'retained-zero-provider-run' } = {}) {
+  const genuine = await createGenuineRuntimeSession({
+    releaseSha: RELEASE_SHA,
+    sessionId,
+    executionMode: EXECUTION_MODE,
+    providerSpendMicrousd: 0,
+  });
+  const sessionFinalAttestation = genuine.controller.finalize();
+  const protocolTrials = genuine.protocolTrials.map((trial) => {
+    const payload = Buffer.from(`retained-output-${trial.condition}`);
+    return {
+      ...trial,
+      outputArchiveReceipt: {
+        sha256: crypto.createHash('sha256').update(payload).digest('hex'),
+        byteLength: payload.length,
+      },
+    };
+  });
+  const report = createZeroProviderGateReport({
+    releaseSha: RELEASE_SHA,
+    snapshotBuildHash: HASH('4'),
+    taskLockHash: HASH('1'),
+    bundleHash: HASH('2'),
+    gateDefinitionHash: HASH('e'),
+    profileId: 'economical-small-model',
+    taskId: TASK_ID,
+    startedAt: '2026-08-04T20:00:00.000Z',
+    completedAt: '2026-08-04T20:01:00.000Z',
+    trials: protocolTrials.map((trial) => ({
+      condition: trial.condition,
+      trialId: trial.runtimeRequest.trialId,
+      sandboxId: trial.runtimeRequest.bindings.sandboxId,
+      sandboxBootId: trial.runtimeRequest.bindings.sandboxBootId,
+      readinessLeaseHash: protocolDocumentHash(trial.readinessLease),
+      outputArchiveHash: trial.outputArchiveReceipt.sha256,
+      trialAttestationHash: protocolDocumentHash(trial.trialAttestation),
+      deletionReceiptHash: canonicalSha256(trial.deletionReceipt),
+      harborCompleted: true,
+      finalEvidenceComplete: true,
+      deleted: true,
+      absentAfterDelete: true,
+      providerAttempts: 0,
+      providerCalls: 0,
+      providerSpendMicrousd: 0,
+      verifierReward: null,
+    })),
+    sessionFinalAttestationHash: protocolDocumentHash(sessionFinalAttestation),
+  });
+  const protocolEvidence = {
+    schema: 'engineer-zero-provider-daytona-protocol-evidence.v1',
+    sessionFinalAttestation,
+    trials: protocolTrials,
+  };
+  const lifecycleHash = canonicalSha256({
+    schema: 'engineer-zero-provider-daytona-lifecycle.v1',
+    executionMode: EXECUTION_MODE,
+    reportHash: report.reportHash,
+    sessionFinalAttestationHash: report.sessionFinalAttestationHash,
+    trialAttestationHashes: report.trials.map(({ trialAttestationHash }) => trialAttestationHash),
+    deletionReceiptHashes: report.trials.map(({ deletionReceiptHash }) => deletionReceiptHash),
+    readinessLeaseHashes: report.trials.map(({ readinessLeaseHash }) => readinessLeaseHash),
+    outputArchiveHashes: protocolTrials.map(({ outputArchiveReceipt }) => outputArchiveReceipt.sha256),
+  });
+  const unsigned = {
+    schema: 'engineer-zero-provider-daytona-run.v1',
+    executionMode: EXECUTION_MODE,
+    evidenceClass: 'infrastructure-validation',
+    releaseEligible: false,
+    authenticationScope: 'in-process-hmac-validated',
+    standaloneSignatureVerifiable: false,
+    report,
+    protocolEvidence,
+    lifecycleHash,
+  };
+  return { ...unsigned, artifactHash: canonicalArtifactHash(unsigned) };
+}
+
 function input(t, fake) {
   const fx = fixture(t);
   return {
@@ -435,79 +512,7 @@ test('production publication capability excludes component, clock, and entropy i
 });
 
 test('validates a complete retained protocol chain and refuses to publish an unbranded reconstruction', async (t) => {
-  const genuine = await createGenuineRuntimeSession({
-    releaseSha: RELEASE_SHA,
-    executionMode: EXECUTION_MODE,
-    providerSpendMicrousd: 0,
-  });
-  const sessionFinalAttestation = genuine.controller.finalize();
-  const protocolTrials = genuine.protocolTrials.map((trial, index) => {
-    const payload = Buffer.from(`retained-output-${trial.condition}`);
-    return {
-      ...trial,
-      outputArchiveReceipt: {
-        sha256: crypto.createHash('sha256').update(payload).digest('hex'),
-        byteLength: payload.length,
-      },
-    };
-  });
-  const report = createZeroProviderGateReport({
-    releaseSha: RELEASE_SHA,
-    snapshotBuildHash: HASH('4'),
-    taskLockHash: HASH('1'),
-    bundleHash: HASH('2'),
-    gateDefinitionHash: HASH('e'),
-    profileId: 'economical-small-model',
-    taskId: TASK_ID,
-    startedAt: '2026-08-04T20:00:00.000Z',
-    completedAt: '2026-08-04T20:01:00.000Z',
-    trials: protocolTrials.map((trial) => ({
-      condition: trial.condition,
-      trialId: trial.runtimeRequest.trialId,
-      sandboxId: trial.runtimeRequest.bindings.sandboxId,
-      sandboxBootId: trial.runtimeRequest.bindings.sandboxBootId,
-      readinessLeaseHash: protocolDocumentHash(trial.readinessLease),
-      outputArchiveHash: trial.outputArchiveReceipt.sha256,
-      trialAttestationHash: protocolDocumentHash(trial.trialAttestation),
-      deletionReceiptHash: canonicalSha256(trial.deletionReceipt),
-      harborCompleted: true,
-      finalEvidenceComplete: true,
-      deleted: true,
-      absentAfterDelete: true,
-      providerAttempts: 0,
-      providerCalls: 0,
-      providerSpendMicrousd: 0,
-      verifierReward: null,
-    })),
-    sessionFinalAttestationHash: protocolDocumentHash(sessionFinalAttestation),
-  });
-  const protocolEvidence = {
-    schema: 'engineer-zero-provider-daytona-protocol-evidence.v1',
-    sessionFinalAttestation,
-    trials: protocolTrials,
-  };
-  const lifecycleHash = canonicalSha256({
-    schema: 'engineer-zero-provider-daytona-lifecycle.v1',
-    executionMode: EXECUTION_MODE,
-    reportHash: report.reportHash,
-    sessionFinalAttestationHash: report.sessionFinalAttestationHash,
-    trialAttestationHashes: report.trials.map(({ trialAttestationHash }) => trialAttestationHash),
-    deletionReceiptHashes: report.trials.map(({ deletionReceiptHash }) => deletionReceiptHash),
-    readinessLeaseHashes: report.trials.map(({ readinessLeaseHash }) => readinessLeaseHash),
-    outputArchiveHashes: protocolTrials.map(({ outputArchiveReceipt }) => outputArchiveReceipt.sha256),
-  });
-  const unsigned = {
-    schema: 'engineer-zero-provider-daytona-run.v1',
-    executionMode: EXECUTION_MODE,
-    evidenceClass: 'infrastructure-validation',
-    releaseEligible: false,
-    authenticationScope: 'in-process-hmac-validated',
-    standaloneSignatureVerifiable: false,
-    report,
-    protocolEvidence,
-    lifecycleHash,
-  };
-  const reconstructed = { ...unsigned, artifactHash: canonicalArtifactHash(unsigned) };
+  const reconstructed = await retainedRuntimeRun();
 
   assert.deepEqual(validateZeroProviderDaytonaRun(reconstructed), reconstructed);
   assert.equal(isZeroProviderDaytonaRun(reconstructed), false);
@@ -515,6 +520,23 @@ test('validates a complete retained protocol chain and refuses to publish an unb
   assert.throws(
     () => writeZeroProviderDaytonaRun({ destination, run: reconstructed }),
     /in-process|capability|publication/i,
+  );
+});
+
+test('rejects an artifact hash transplanted between independently valid retained runs', async () => {
+  const donor = await retainedRuntimeRun({ sessionId: 'artifact-hash-donor' });
+  const recipient = await retainedRuntimeRun({ sessionId: 'artifact-hash-recipient' });
+
+  assert.deepEqual(validateZeroProviderDaytonaRun(donor), donor);
+  assert.deepEqual(validateZeroProviderDaytonaRun(recipient), recipient);
+  assert.notEqual(donor.artifactHash, recipient.artifactHash);
+
+  assert.throws(
+    () => validateZeroProviderDaytonaRun({
+      ...recipient,
+      artifactHash: donor.artifactHash,
+    }),
+    /retained artifact hash drifted/i,
   );
 });
 

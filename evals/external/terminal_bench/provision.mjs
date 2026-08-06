@@ -131,6 +131,7 @@ export const BUNDLE_SOURCE_PATHS = Object.freeze([
   'evals/config',
   'evals/hosts',
   'evals/lib',
+  'evals/runtime',
   'evals/external/__init__.py',
   'evals/external/terminal_bench/__init__.py',
   'evals/external/terminal_bench/agent.mjs',

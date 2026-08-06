@@ -13,7 +13,8 @@ export const TREATMENT_EXPOSURE_FIELDS = Object.freeze(['generic', 'harness']);
 
 const LOWER_SHA256_HEX = /^[a-f0-9]{64}$/;
 const PACKAGE_VERSION = /^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$/;
-const SHA512_SRI = /^sha512-([A-Za-z0-9+/]{86}==)$/;
+const CANONICAL_SHA512_SRI_PATTERN = '^sha512-[A-Za-z0-9+/]{85}[AQgw]==$';
+const SHA512_SRI = new RegExp(CANONICAL_SHA512_SRI_PATTERN);
 
 function deepFreeze(value) {
   if (value && typeof value === 'object' && !Object.isFrozen(value)) {
@@ -38,7 +39,7 @@ export const TREATMENT_ARTIFACT_JSON_SCHEMA = deepFreeze({
         name: { const: HARNESS_PACKAGE_NAME },
         version: { type: 'string', pattern: '^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$' },
         sha256: { type: 'string', pattern: '^[a-f0-9]{64}$' },
-        integrity: { type: 'string', pattern: '^sha512-[A-Za-z0-9+/]{86}==$' },
+        integrity: { type: 'string', pattern: CANONICAL_SHA512_SRI_PATTERN },
         packedSize: { type: 'integer', minimum: 1 },
         unpackedSize: { type: 'integer', minimum: 1 },
         fileCount: { type: 'integer', minimum: 1 },
@@ -63,8 +64,8 @@ function exactObjectKeys(value, expected) {
 }
 
 function canonicalSha512Integrity(value) {
-  const encoded = SHA512_SRI.exec(String(value ?? ''))?.[1] ?? null;
-  if (encoded == null) return false;
+  if (typeof value !== 'string' || !SHA512_SRI.test(value)) return false;
+  const encoded = value.slice('sha512-'.length);
   const bytes = Buffer.from(encoded, 'base64');
   return bytes.length === 64 && bytes.toString('base64') === encoded;
 }

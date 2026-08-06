@@ -1792,6 +1792,38 @@ test('runReleaseCli reserves, constructs, injects, disposes, then publishes one 
   }
 });
 
+test('an operator-capped one-task diagnostic assigns the entire ceiling to its only pair', async () => {
+  const fixture = makeReleaseCliFixture();
+  try {
+    await runReleaseCli({
+      argv: [
+        '--task', 'cobol-modernization',
+        '--budget-usd', '1.3',
+        '--provider-key-fd', '9',
+        '--report-file', fixture.reportFile,
+        '--json',
+      ],
+      env: { PATH: process.env.PATH ?? '/usr/bin' },
+      stdout: () => {},
+      stderr: () => {},
+      dependencies: fixture.dependencies,
+    });
+
+    assert.equal(fixture.captured.runInput.config.evaluationScope.mode, 'diagnostic-task');
+    assert.equal(fixture.captured.runInput.config.evaluationScope.releaseEligible, false);
+    assert.deepEqual(fixture.captured.runInput.config.budget, {
+      releaseCeilingUsd: 1.3,
+      controlledPairUsd: 1.3,
+      rerunUsd: 0,
+      controlledArmCeilingUsd: 0.65,
+      providerHardLimitUsd: 1.3,
+    });
+    assert.equal(fixture.captured.runtimeInput.sessionCeilingMicrousd, 1_300_000);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
 test('armed qualification consumes one current owner-private zero-provider baseline before runtime custody', async () => {
   const fixture = makeReleaseCliFixture({ qualification: true, multiTaskLock: true });
   const baseline = qualificationBaselineFixture(fixture);

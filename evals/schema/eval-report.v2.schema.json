@@ -30,7 +30,7 @@
             "name": { "const": "@dev-kit/harness" },
             "version": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$" },
             "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
-            "integrity": { "type": "string", "pattern": "^sha512-[A-Za-z0-9+/]{86}==$" },
+            "integrity": { "type": "string", "pattern": "^sha512-[A-Za-z0-9+/]{85}[AQgw]==$" },
             "packedSize": { "type": "integer", "minimum": 1 },
             "unpackedSize": { "type": "integer", "minimum": 1 },
             "fileCount": { "type": "integer", "minimum": 1 },

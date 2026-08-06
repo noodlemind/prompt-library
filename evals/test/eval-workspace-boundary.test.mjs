@@ -7,14 +7,18 @@ import test from 'node:test';
 import YAML from 'yaml';
 
 import {
+  createRepositoryTestRoot,
   discoverRepositoryTestFiles,
+  removeRepositoryTestRoot,
   runRepositoryTests,
   scrubRepositoryTestEnvironment,
   selectRepositoryTestSuites,
+  validatedLocalDockerHost,
 } from '../../scripts/test-repository.mjs';
 
 const repoRoot = path.resolve(import.meta.dirname, '../..');
 const fixtureRepository = path.resolve(repoRoot, '..', 'repository-fixture');
+const fixtureIsolatedRoot = path.join(fixtureRepository, 'isolated-test-state');
 
 const entries = (...names) => names.map((name) => ({
   name,
@@ -35,6 +39,9 @@ function dependencies(overrides = {}) {
     },
     stdout: (line) => output.push(line),
     stderr: (line) => errors.push(line),
+    createIsolatedRoot: () => fixtureIsolatedRoot,
+    removeIsolatedRoot: () => {},
+    resolveLocalDockerHost: () => null,
     ...overrides,
   };
   return { value, calls, errors, output };
@@ -118,6 +125,19 @@ test('repository runner scrubs credential-like environment variables without mut
     LOGIN_PASS: 'secret-pass',
     GITHUB_PAT: 'secret-pat',
     AUTHORIZATION: 'secret-authorization',
+    HOME: '/attacker/home',
+    XDG_CONFIG_HOME: '/attacker/config',
+    DAYTONA_CONFIG: '/attacker/daytona',
+    DOCKER_HOST: 'tcp://remote.example:2376',
+    DOCKER_CERT_PATH: '/attacker/docker-certs',
+    DOCKER_CONFIG: '/attacker/docker-config',
+    SSH_AUTH_SOCK: '/attacker/agent.sock',
+    KUBECONFIG: '/attacker/kubeconfig',
+    AWS_PROFILE: 'production',
+    HTTPS_PROXY: 'https://user:secret@proxy.example',
+    NODE_OPTIONS: '--import=/attacker/preload.mjs',
+    npm_config_userconfig: '/attacker/npmrc',
+    GIT_CONFIG_GLOBAL: '/attacker/gitconfig',
     COMPASS: 'benign',
     KEYBOARD_LAYOUT: 'us',
     MONKEY: 'benign',
@@ -128,15 +148,101 @@ test('repository runner scrubs credential-like environment variables without mut
   const expected = {
     PATH: '/bin',
     CI: 'true',
-    COMPASS: 'benign',
-    KEYBOARD_LAYOUT: 'us',
-    MONKEY: 'benign',
-    TOKENIZER_MODE: 'local',
+    HOME: path.join(fixtureIsolatedRoot, 'home'),
+    XDG_CONFIG_HOME: path.join(fixtureIsolatedRoot, 'xdg-config'),
+    XDG_CACHE_HOME: path.join(fixtureIsolatedRoot, 'xdg-cache'),
+    XDG_DATA_HOME: path.join(fixtureIsolatedRoot, 'xdg-data'),
+    XDG_STATE_HOME: path.join(fixtureIsolatedRoot, 'xdg-state'),
+    TMPDIR: path.join(fixtureIsolatedRoot, 'tmp'),
+    TMP: path.join(fixtureIsolatedRoot, 'tmp'),
+    TEMP: path.join(fixtureIsolatedRoot, 'tmp'),
+    GIT_CONFIG_GLOBAL: '/dev/null',
+    GIT_CONFIG_SYSTEM: '/dev/null',
+    GIT_OPTIONAL_LOCKS: '0',
+    npm_config_userconfig: '/dev/null',
+    npm_config_cache: path.join(fixtureIsolatedRoot, 'npm-cache'),
+    npm_config_audit: 'false',
+    npm_config_fund: 'false',
+    PYTHONNOUSERSITE: '1',
   };
-  assert.deepEqual(scrubRepositoryTestEnvironment(environment), expected);
+  assert.deepEqual(scrubRepositoryTestEnvironment(environment, { isolatedRoot: fixtureIsolatedRoot }), expected);
   assert.equal(runRepositoryTests({ argv: ['--core'], ...harness.value }), 0);
   assert.deepEqual(harness.calls[0].options.env, expected);
   assert.equal(environment.OPENAI_API_KEY, 'secret-api-key');
+  assert.equal(environment.DOCKER_HOST, 'tcp://remote.example:2376');
+});
+
+test('only a validated local Docker socket can enter the isolated test environment', () => {
+  const socketStat = { isSocket: () => true, uid: 501, mode: 0o140660 };
+  const host = validatedLocalDockerHost({
+    platform: 'darwin',
+    realpathSync: () => '/private/local/docker.sock',
+    lstatSync: () => socketStat,
+    getuid: () => 501,
+  });
+  assert.equal(host, 'unix:///private/local/docker.sock');
+  assert.equal(
+    scrubRepositoryTestEnvironment(
+      { PATH: '/bin', DOCKER_HOST: 'tcp://remote.example:2376' },
+      { isolatedRoot: fixtureIsolatedRoot, dockerHost: host },
+    ).DOCKER_HOST,
+    host,
+  );
+  assert.equal(validatedLocalDockerHost({
+    platform: 'linux',
+    realpathSync: () => '/run/unsafe.sock',
+    lstatSync: () => ({ ...socketStat, mode: 0o140666 }),
+    getuid: () => 501,
+  }), null);
+  assert.equal(validatedLocalDockerHost({
+    platform: 'linux',
+    realpathSync: () => '/run/not-a-socket',
+    lstatSync: () => ({ ...socketStat, isSocket: () => false }),
+    getuid: () => 501,
+  }), null);
+});
+
+test('the private repository-test root stays short enough for nested Unix sockets', () => {
+  const calls = [];
+  const root = createRepositoryTestRoot({
+    platform: 'darwin',
+    mkdtempSync(prefix) {
+      calls.push(['mkdtemp', prefix]);
+      return '/tmp/hr-fixture';
+    },
+    chmodSync(target, mode) {
+      calls.push(['chmod', target, mode]);
+    },
+    chownSync(target, uid, gid) {
+      calls.push(['chown', target, uid, gid]);
+    },
+    getuid: () => 501,
+    getgid: () => 20,
+    mkdirSync(target, options) {
+      calls.push(['mkdir', target, options]);
+    },
+  });
+
+  assert.equal(root, '/tmp/hr-fixture');
+  assert.deepEqual(calls[0], ['mkdtemp', '/tmp/hr-']);
+  assert.deepEqual(calls[1], ['chown', '/tmp/hr-fixture', 501, 20]);
+  assert.deepEqual(calls[2], ['chmod', '/tmp/hr-fixture', 0o700]);
+  assert.equal(calls.filter(([operation]) => operation === 'chown').length, 8);
+  assert.equal(calls.filter(([operation]) => operation === 'mkdir').length, 7);
+});
+
+test('repository cleanup removes sealed owner-private eval fixture directories', (t) => {
+  if (process.platform === 'win32') return t.skip('POSIX directory modes are unavailable');
+  const root = fs.mkdtempSync('/tmp/hr-');
+  const sealed = path.join(root, 'tmp', 'sealed', 'nested');
+  fs.mkdirSync(sealed, { recursive: true, mode: 0o700 });
+  fs.writeFileSync(path.join(sealed, 'artifact.json'), '{}\n', { mode: 0o400 });
+  fs.chmodSync(sealed, 0o500);
+  fs.chmodSync(path.dirname(sealed), 0o500);
+
+  removeRepositoryTestRoot(root);
+
+  assert.equal(fs.existsSync(root), false);
 });
 
 test('repository runner rejects an empty selected suite', () => {
@@ -213,4 +319,23 @@ test('the eval workspace remains private and routes repository-owned scripts loc
     'test:daytona-zero-provider': 'node ./zero-provider-daytona.mjs',
     'verify:daytona-zero-provider': 'node ./verify-zero-provider-daytona.mjs',
   });
+});
+
+test('the maintainer release sequence runs both isolated suites before build and publish', () => {
+  const readme = fs.readFileSync(path.join(repoRoot, 'packages/harness/README.md'), 'utf8');
+  const block = readme.match(/## Maintainers \(prompt-library repo\)\s+```bash\n([\s\S]*?)\n```/);
+  assert.ok(block, 'README must retain one explicit prompt-library maintainer command block');
+  assert.deepEqual(block[1].split('\n'), [
+    'npm ci --prefix packages/harness',
+    'npm ci --prefix evals',
+    'node scripts/test-repository.mjs --core',
+    'node scripts/test-repository.mjs --eval',
+    'npm --prefix packages/harness run build:assets',
+    'npm --prefix packages/harness version patch',
+    'npm --prefix packages/harness publish',
+  ]);
+
+  const packageJson = JSON.parse(fs.readFileSync(path.join(repoRoot, 'packages/harness/package.json'), 'utf8'));
+  assert.equal(packageJson.scripts['build:assets'], 'node ../../scripts/build-harness-assets.mjs');
+  assert.equal(fs.existsSync(path.join(repoRoot, 'scripts/test-repository.mjs')), true);
 });
