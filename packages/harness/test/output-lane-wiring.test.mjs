@@ -57,8 +57,9 @@ async function withCapturedStdout(fn) {
 // --- CLI-level: bin/harness.mjs's extractOutputLane -----------------------
 
 test('CLI: --output json-envelope produces the versioned envelope for a registered pilot', () => {
+  const workspace = tempDir('lane-json-ws-');
   const copilotHome = tempDir('lane-json-home-');
-  const result = runHarness(['status', '--copilot-home', copilotHome, '--output', 'json-envelope']);
+  const result = runHarness(['status', '--workspace', workspace, '--copilot-home', copilotHome, '--output', 'json-envelope']);
   assert.equal(result.status, 0, result.stderr);
   const body = JSON.parse(result.stdout);
   assert.equal(body.schema, 1);
@@ -68,8 +69,9 @@ test('CLI: --output json-envelope produces the versioned envelope for a register
 });
 
 test('CLI: --output agent produces budgeted plain text, not JSON', () => {
+  const workspace = tempDir('lane-agent-ws-');
   const copilotHome = tempDir('lane-agent-home-');
-  const result = runHarness(['status', '--copilot-home', copilotHome, '--output', 'agent']);
+  const result = runHarness(['status', '--workspace', workspace, '--copilot-home', copilotHome, '--output', 'agent']);
   assert.equal(result.status, 0, result.stderr);
   assert.doesNotMatch(result.stdout, /^\s*\{/);
   assert.match(result.stdout, /^schema 1/);
@@ -77,32 +79,36 @@ test('CLI: --output agent produces budgeted plain text, not JSON', () => {
 });
 
 test('CLI: --output=agent (equals-form) is honored, matching the rest of the harness flag vocabulary', () => {
+  const workspace = tempDir('lane-eq-agent-ws-');
   const copilotHome = tempDir('lane-eq-agent-home-');
-  const result = runHarness(['status', '--copilot-home', copilotHome, '--output=agent']);
+  const result = runHarness(['status', '--workspace', workspace, '--copilot-home', copilotHome, '--output=agent']);
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /^schema 1/);
   assert.match(result.stdout, /command status/);
 });
 
 test('CLI: --output=json-envelope (equals-form) is honored', () => {
+  const workspace = tempDir('lane-eq-json-ws-');
   const copilotHome = tempDir('lane-eq-json-home-');
-  const result = runHarness(['status', '--copilot-home', copilotHome, '--output=json-envelope']);
+  const result = runHarness(['status', '--workspace', workspace, '--copilot-home', copilotHome, '--output=json-envelope']);
   assert.equal(result.status, 0, result.stderr);
   const body = JSON.parse(result.stdout);
   assert.equal(body.schema, 1);
 });
 
 test('CLI: --output with a missing value is a structured usage error, exit 2', () => {
+  const workspace = tempDir('lane-missing-ws-');
   const copilotHome = tempDir('lane-missing-home-');
-  const result = runHarness(['status', '--copilot-home', copilotHome, '--output']);
+  const result = runHarness(['status', '--workspace', workspace, '--copilot-home', copilotHome, '--output']);
   assert.equal(result.status, EXIT.usage);
   assert.equal(result.status, 2);
   assert.match(result.stderr, /invalid --output: \(missing\)/);
 });
 
 test('CLI: --output with an unrecognized value is a structured usage error, exit 2', () => {
+  const workspace = tempDir('lane-bogus-ws-');
   const copilotHome = tempDir('lane-bogus-home-');
-  const result = runHarness(['status', '--copilot-home', copilotHome, '--output', 'bogus']);
+  const result = runHarness(['status', '--workspace', workspace, '--copilot-home', copilotHome, '--output', 'bogus']);
   assert.equal(result.status, EXIT.usage);
   assert.match(result.stderr, /invalid --output: "bogus"/);
 });
@@ -137,8 +143,9 @@ test('CLI: --output after a literal `--` is inert free-text content — legacy -
 });
 
 test('CLI: --output before a literal `--` still works, proving the boundary check is positional, not blanket-disabling --output', () => {
+  const workspace = tempDir('lane-boundary-ok-ws-');
   const copilotHome = tempDir('lane-boundary-ok-home-');
-  const result = runHarness(['status', '--copilot-home', copilotHome, '--output', 'agent', '--', 'ignored-literal']);
+  const result = runHarness(['status', '--workspace', workspace, '--copilot-home', copilotHome, '--output', 'agent', '--', 'ignored-literal']);
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /^schema 1/);
 });

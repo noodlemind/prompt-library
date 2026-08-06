@@ -320,7 +320,25 @@ test('harness eval-knowledge CLI renders per-arm lines and a recommendation, and
   assert.equal(out.pass, true);
   assert.ok(out.arms.bm25.hitRate >= 0.5);
   assert.ok(['whole-index', 'bm25-top3'].includes(out.recommendation));
-  assert.equal(fs.existsSync(path.join(ws, '.harness', 'events.jsonl')), false, 'read-only command must not write events');
+  // P1.6: eval-knowledge is now dispatched through the shared command
+  // registry, which brackets every registered command's dispatch with
+  // command.start/command.result telemetry (uniform CLI observability) —
+  // so events.jsonl now exists. `cmdEvalKnowledge`'s own business logic is
+  // still exactly as read-only as before: it never calls writeEvent for a
+  // dedicated 'eval-knowledge'-type lifecycle event, which is what this
+  // assertion actually protects against.
+  if (fs.existsSync(path.join(ws, '.harness', 'events.jsonl'))) {
+    const types = fs
+      .readFileSync(path.join(ws, '.harness', 'events.jsonl'), 'utf8')
+      .trim()
+      .split('\n')
+      .filter(Boolean)
+      .map((line) => JSON.parse(line).type);
+    assert.ok(
+      types.every((type) => type === 'command.start' || type === 'command.result'),
+      `eval-knowledge must never write its own dedicated lifecycle event: ${types.join(', ')}`
+    );
+  }
 
   const human = spawnSync(process.execPath, [binPath, 'eval-knowledge', '--workspace', ws, '--copilot-home', ws], {
     encoding: 'utf8',

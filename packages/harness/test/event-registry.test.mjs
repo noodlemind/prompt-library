@@ -590,7 +590,14 @@ test('end-to-end CLI: --output json-envelope on a registered pilot appends valid
   assert.doesNotThrow(() => JSON.parse(eventsCmd.stdout));
 });
 
-test('end-to-end CLI: the legacy ledger/--json path on the same pilot does NOT gain any command.start/command.result events', () => {
+// P1.6 (carry-list, AC7 widening): the ledger/--json path used to be
+// deliberately excluded from ctx.events (see the superseded test this one
+// replaces, in git history) so that AC8 (verify's Ctrl-C cancellation ->
+// command.result with a real status) works uniformly whether or not
+// `--output` is present, and so every registered command gets the same
+// baseline dispatch telemetry bin/harness.mjs's docs describe. This test now
+// asserts the OPPOSITE of the old restriction on purpose.
+test('end-to-end CLI: the legacy ledger/--json path on the same pilot NOW gains command.start/command.result events too', () => {
   const workspace = tempDir('event-registry-e2e-ledger-ws-');
   const copilotHome = tempDir('event-registry-e2e-ledger-home-');
 
@@ -598,14 +605,10 @@ test('end-to-end CLI: the legacy ledger/--json path on the same pilot does NOT g
   assert.equal(result.status, 0, result.stderr);
 
   const file = eventPath(workspace);
-  // status writes nothing on the legacy path today; asserting non-existence
-  // (or, if present for any unrelated reason, that it carries none of the
-  // new event types) keeps this test valid either way.
-  if (fs.existsSync(file)) {
-    const types = readEvents(workspace).map((e) => e.type);
-    assert.ok(!types.includes('command.start'));
-    assert.ok(!types.includes('command.result'));
-  }
+  assert.ok(fs.existsSync(file), 'events.jsonl must exist after a registered command dispatches on the legacy ledger/--json path');
+  const events = readEvents(workspace);
+  assert.deepEqual(events.map((e) => e.type), ['command.start', 'command.result']);
+  assert.deepEqual(events.map((e) => e.result), ['pending', 'pass']);
 });
 
 // --- review round 1 regression: `harness events --summary` must not show

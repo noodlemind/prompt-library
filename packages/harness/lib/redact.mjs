@@ -375,7 +375,18 @@ export function createRedactor({ env = process.env, patterns = [] } = {}) {
    * Never mutates the input; never throws — on internal failure, returns
    * the fixed error mask rather than the possibly-unredacted original. A
    * fresh `seen`/`memo` pair is created per call, so this stays a pure
-   * function of `value` — no state (and no memory) survives between calls. */
+   * function of `value` — no state (and no memory) survives between calls.
+   *
+   * Output-aliasing note (P1.6 carry-list d): `memo` (see `walk` below) means
+   * every input reference to the SAME node produces the SAME output
+   * reference too — `out.a === out.b` for `redactValue({a: shared, b:
+   * shared})` — not independent copies. The output object graph mirrors the
+   * input's own sharing rather than expanding it into a tree; a caller that
+   * mutates one occurrence of a redacted shared subtree in place would see
+   * that mutation reflected at every other occurrence that pointed at the
+   * same input node. This is what makes a diamond-shaped input graph
+   * O(distinct nodes) instead of O(paths) to redact (see the module's fix
+   * round 2 notes) — a deliberate trade, not an oversight. */
   function redactValue(value) {
     try {
       return walk(value, redactText, new WeakSet(), new WeakMap(), 0);

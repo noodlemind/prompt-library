@@ -2,35 +2,18 @@
 /**
  * harness — install Adaptive Engineer Harness into global Copilot paths.
  * The npm package name is @dev-kit/harness; the command users and agents run is harness.
+ *
+ * P1.6: every command dispatches through lib/registry.mjs — the
+ * hand-written switch (and its hand-written CATALOG help data) is retired.
+ * `dispatch`/`hasCommand` (lib/registry.mjs) are the only command surface;
+ * `help`/`--help`/`-h` is the one remaining non-registered branch, handled
+ * directly below since it isn't a command with a side-effect class of its
+ * own — it renders data ABOUT the registry, sourced from
+ * `describeAll`/`describeCommand`.
  */
-import {
-  cmdInstallOrUpgrade,
-  cmdDoctor,
-  cmdStatus,
-  cmdInitRepo,
-  cmdIndex,
-  cmdOrient,
-  cmdGate,
-  cmdVerify,
-  cmdRecall,
-  cmdEvents,
-  cmdValidatePlan,
-  cmdCompound,
-  cmdConsolidate,
-  cmdRemember,
-  cmdLearning,
-  cmdLearnings,
-  cmdEvalKnowledge,
-  cmdKnowledge,
-  cmdGet,
-  cmdUninstall,
-  cmdResolve,
-  cmdReport,
-} from '../lib/commands.mjs';
 import path from 'node:path';
-import { cmdPlanNew } from '../lib/plan-new.mjs';
 import { createStyle, keyWidthFor, EXIT } from '../lib/style.mjs';
-import { dispatch as dispatchRegistered, hasCommand } from '../lib/registry.mjs';
+import { dispatch as dispatchRegistered, hasCommand, describeCommand } from '../lib/registry.mjs';
 import { createEventRegistry } from '../lib/event-registry.mjs';
 import { writeEvent as writeHarnessEvent } from '../lib/events.mjs';
 import { parseFlags } from '../lib/flags.mjs';
@@ -41,9 +24,21 @@ const ui = createStyle({ argv: args, stream: process.stderr });
 // Help writes to stdout — its own capability detection.
 const out = createStyle({ argv: args });
 
-// The catalog: every command with its group, one-line job, usage signature,
-// and its own options. The overview shows groups and jobs; signatures and
-// options disclose progressively via `harness help <command>`.
+// Explicit display order for `harness help` — mirrors the retired
+// hand-written CATALOG's ordering exactly (setup, workspace, engineer loop,
+// knowledge, utility; commands within each group in the same sequence).
+// Grouping itself is read from each registry entry's own `group` field
+// (single source of truth) — this array only controls display SEQUENCE,
+// since a `Map`'s insertion order is otherwise incidental to registration
+// order across files, not the curated order a human reads top to bottom.
+const HELP_COMMAND_ORDER = [
+  'install', 'upgrade', 'doctor', 'status', 'uninstall',
+  'init-repo', 'index', 'plan-new',
+  'orient', 'gate', 'verify', 'validate-plan', 'compound', 'recall', 'get', 'events', 'report',
+  'knowledge', 'consolidate', 'remember', 'learning', 'learnings', 'eval-knowledge',
+  'resolve',
+];
+
 const GLOBAL_OPTIONS = [
   ['--json', 'JSON output for machine readers'],
   ['--dry-run', 'print actions without writing'],
@@ -54,181 +49,31 @@ const GLOBAL_OPTIONS = [
   ['--no-events', 'do not write .harness/events.jsonl'],
 ];
 
-const CATALOG = [
-  {
-    group: 'setup',
-    commands: [
-      { name: 'install', desc: 'hydrate skills, agents, and team knowledge globally',
-        sig: '[--configure-vscode] [--configure-path] [--target vscode,cli,intellij]',
-        options: [
-          ['--target <t,..>', 'vscode,cli,intellij'],
-          ['--autonomy <mode>', 'full | balanced | strict'],
-          ['--configure-vscode', 'merge VS Code chat.* discovery settings'],
-          ['--configure-path', 'append ~/.copilot/bin to shell PATH (~/.zshrc, ~/.bashrc)'],
-          ['--force-profile', 'overwrite knowledge/profile.md'],
-          ['--force-knowledge-reset', 'overwrite knowledge/solutions (danger)'],
-        ] },
-      { name: 'upgrade', desc: 're-hydrate and purge retired primitives',
-        sig: '[same options as install]',
-        options: [] },
-      { name: 'doctor', desc: 'health checks for install, hooks, and knowledge',
-        sig: '[--host vscode]',
-        options: [['--host <name>', 'run host-specific checks (vscode executes installed-hook probes)']] },
-      { name: 'status', desc: 'installed version, home, tracked files', sig: '', options: [] },
-      { name: 'uninstall', desc: 'remove hydrated files tracked by the lock', sig: '', options: [] },
-    ],
-  },
-  {
-    group: 'workspace',
-    commands: [
-      { name: 'init-repo', desc: 'seed the .harness workspace in a product repo', sig: '', options: [] },
-      { name: 'index', desc: 'rebuild knowledge index · --status reports drift',
-        sig: '[--status]',
-        options: [['--status', 'read-only freshness report vs HEAD (never rebuilds)']] },
-      { name: 'plan-new', desc: 'scaffold a gate-ready plan',
-        sig: '--type feat --slug <slug> --intent "..."',
-        options: [
-          ['--type <t>', 'feat|fix|docs|refactor|chore'],
-          ['--slug <s>', 'lowercase-hyphen slug'],
-          ['--intent <text>', 'one-line intent'],
-          ['--impacted <a,b>', 'comma-separated Impacted Files'],
-          ['--criteria <text>', 'an acceptance criterion (repeatable)'],
-          ['--gap <id>:<path>', 'capability gap → blocked-capability + governed primitive plan'],
-          ['--stdout', 'print the plan instead of writing it'],
-        ] },
-    ],
-  },
-  {
-    group: 'engineer loop',
-    commands: [
-      { name: 'orient', desc: 'context pack for a task',
-        sig: '[--query "task summary"]',
-        options: [
-          ['--query <text>', 'agent/internal task summary'],
-          ['--limit <n>', 'recall result count (default 3)'],
-          ['-c, --collection <name>', 'filter by knowledge/collections.yaml'],
-          ['--min-score <n>', 'minimum score (default 0.15)'],
-          ['--explain', 'decompose learning ranking (deterministic)'],
-        ] },
-      { name: 'gate', desc: 'edit preconditions before editFiles',
-        sig: '[--phase implement|verify] [--plan <path>]',
-        options: [
-          ['--phase <name>', 'implement | verify'],
-          ['--plan <path>', 'explicit plan file'],
-          ['--strict-intent', 'fail locked plans missing intent fields'],
-          ['--enforcement <mode>', 'observe | warn | enforce (default enforce)'],
-        ] },
-      { name: 'verify', desc: 'run trusted named checks and capture evidence',
-        sig: '--plan docs/plans/file.md',
-        options: [
-          ['--plan <path>', 'plan file whose named checks run'],
-          ['--base <git-ref>', 'compare changed files to this git ref'],
-          ['--enforcement <mode>', 'observe | warn | enforce (default enforce)'],
-        ] },
-      { name: 'validate-plan', desc: 'plan readiness checks',
-        sig: '[--plan docs/plans/file.md]',
-        options: [
-          ['--plan <path>', 'explicit plan file'],
-          ['--enforcement <mode>', 'observe | warn | enforce (default enforce)'],
-        ] },
-      { name: 'compound', desc: 'record learning from passed evidence · --insight captures without evidence',
-        sig: '[--plan <path>] [--insight --title "..." --body "..."]',
-        options: [
-          ['--plan <path>', 'explicit plan file'],
-          ['--insight', 'evidence-free investigation capture (kind: insight, secret-scanned)'],
-          ['--title <t>', 'insight title (required with --insight)'],
-          ['--body <text>', 'insight body text'],
-          ['--body-file <path>', 'read insight body from a file'],
-          ['--category <c>', 'docs/solutions/<category>/ (default insights)'],
-          ['--tags <a,b>', 'comma-separated tags'],
-          ['--trigger <t>', 'applicability condition frontmatter'],
-          ['--claim <t>', 'one-line claim frontmatter'],
-        ] },
-      { name: 'recall', desc: 'search team knowledge',
-        sig: '"search terms" [--limit <n>] [--include-plans]',
-        options: [
-          ['--limit <n>', 'result count (default 3)'],
-          ['-c, --collection <name>', 'filter by knowledge/collections.yaml'],
-          ['--min-score <n>', 'minimum score (default 0.15)'],
-          ['--include-plans', 'include matching plans'],
-        ] },
-      { name: 'get', desc: 'bounded doc excerpt',
-        sig: '[--docid <id> | --path <rel>]',
-        options: [
-          ['--docid <id>', 'manifest doc id'],
-          ['--path <rel>', 'relative file path'],
-          ['--lines <n>', 'max lines (default 40)'],
-          ['--max-bytes <n>', 'max excerpt bytes (default 2048)'],
-        ] },
-      { name: 'events', desc: 'session telemetry',
-        sig: '[--summary] [--failures] [--session <id>]',
-        options: [
-          ['--session <id>', 'filter by host session ID'],
-          ['--summary', 'aggregate summary only'],
-          ['--failures', 'failed or blocked events only'],
-          ['--limit <n>', 'event count (default 20)'],
-        ] },
-      { name: 'report', desc: 'token-efficiency report from telemetry',
-        // AC14: harness report [--sync] [--global] [--check] [--json] stays documented.
-        sig: '[--sync] [--global] [--check] [--json]',
-        options: [
-          ['--sync', 'merge workspace events into the global store first'],
-          ['--global', 'report across all synced workspaces'],
-          ['--check', 'exit non-zero on a budget breach (CI)'],
-        ] },
-    ],
-  },
-  {
-    group: 'knowledge',
-    commands: [
-      { name: 'knowledge', desc: 'knowledge layer mode switch and purge (human deletion always wins)',
-        sig: '<on|suggest|off|freeze|capture-only> | --status | purge <file|--all> | commit <none|repo> | migrate-store',
-        options: [
-          ['--status', 'show the active mode (default)'],
-          ['purge <file>', 'cascade-delete an episode and dependent learnings'],
-          ['purge --all', 'reset the learnings store (episodes remain, become debt)'],
-          ['commit <none|repo>', 'repo mirrors ACTIVE learnings into docs/knowledge/learnings (opt-in, never git-commits the product repo); none is the default'],
-          ['migrate-store', 'move a stranded path-keyed store to this workspace\'s current (remote-keyed) store id; refuses if the target already exists'],
-        ] },
-      { name: 'consolidate', desc: 'episode→learning debt, work packet, and validated apply',
-        sig: '[--status | --candidates | --apply --ops <path> | --rebuild --yes]',
-        options: [
-          ['--status', 'debt vs threshold, quarantine, promotion candidates (default)'],
-          ['--candidates', 'deterministic work packet for the consolidation skill'],
-          ['--apply --ops <path>', 'validate and apply an ops JSON (sole writer); suggest mode requires --yes'],
-          ['--rebuild --yes', 'T2 reset for model-upgrade regeneration (git history retains learnings)'],
-        ] },
-      { name: 'remember', desc: 'teach the harness a durable claim (human-teaching episode + learning)',
-        sig: '"<claim>" --trigger "<t>" [--domain <d>]',
-        options: [
-          ['--trigger <t>', 'applicability condition (required)'],
-          ['--domain <d>', 'learning domain directory (default general)'],
-        ] },
-      { name: 'learning', desc: 'human authority over one learning: retire, dispute, confirm, or promote',
-        sig: '<retire|dispute|confirm|promote> <id> [--reason "<r>"] [--to <path>]',
-        options: [
-          ['--reason <r>', 'required for retire/dispute; recorded in the store commit'],
-          ['--to <path>', 'primitive path recorded on promote (behavior supersedes knowledge)'],
-        ] },
-      { name: 'learnings', desc: 'paged listing of learnings with provenance and failure annotations',
-        sig: '[domain] [--why <id>]',
-        options: [
-          ['--why <id>', 'full provenance chain for one learning'],
-        ] },
-      { name: 'eval-knowledge', desc: 'deterministic retrieval eval — hit/false-surface/token cost per arm (proxy, not net-benefit)',
-        sig: '[--json]',
-        options: [] },
-    ],
-  },
-  {
-    group: 'utility',
-    commands: [
-      { name: 'resolve', desc: 'print the resolved harness CLI path for agents', sig: '', options: [] },
-    ],
-  },
-];
+/** `describeCommand` for every name in HELP_COMMAND_ORDER, in that order,
+ * skipping anything not actually registered (defensive — every name in the
+ * list above is expected to be registered; this just avoids a hard crash if
+ * the two ever drift). */
+function orderedCommandEntries() {
+  return HELP_COMMAND_ORDER.map((name) => describeCommand(name)).filter(Boolean);
+}
 
-const ALL_COMMANDS = CATALOG.flatMap((g) => g.commands);
+/** Bucket ordered entries by group, preserving first-seen group order and
+ * within-group order — reproduces the retired CATALOG's exact grouping
+ * without a second, separately-maintained group->commands map. */
+function groupedForHelp() {
+  const groups = [];
+  const byGroup = new Map();
+  for (const entry of orderedCommandEntries()) {
+    let bucket = byGroup.get(entry.group);
+    if (!bucket) {
+      bucket = [];
+      byGroup.set(entry.group, bucket);
+      groups.push({ group: entry.group, commands: bucket });
+    }
+    bucket.push(entry);
+  }
+  return groups;
+}
 
 // Help is the front door: the same ledger grammar as every command, and it
 // fits in a glance. One row per group; `harness help <command>` holds the
@@ -240,8 +85,9 @@ function renderHelp() {
   lines.push('');
   lines.push(`Usage: harness ${out.paint('muted', '<command> [options]')}`);
   lines.push('');
-  const keyWidth = keyWidthFor([...CATALOG.map((g) => g.group), 'options'], 8);
-  for (const { group, commands } of CATALOG) {
+  const groups = groupedForHelp();
+  const keyWidth = keyWidthFor([...groups.map((g) => g.group), 'options'], 8);
+  for (const { group, commands } of groups) {
     lines.push(
       out.line({ key: group, value: commands.map((c) => c.name).join(' · '), keyWidth })
     );
@@ -260,12 +106,12 @@ function renderHelp() {
 }
 
 function renderCommandHelp(name) {
-  const c = ALL_COMMANDS.find((x) => x.name === name);
+  const c = describeCommand(name);
   if (!c) return null;
   const lines = [];
-  lines.push(`${c.name} ${out.paint('muted', `— ${c.desc}`)}`);
+  lines.push(`${c.name} ${out.paint('muted', `— ${c.summary}`)}`);
   lines.push('');
-  lines.push(`Usage: harness ${c.name}${c.sig ? ` ${out.paint('muted', c.sig)}` : ''}`);
+  lines.push(`Usage: harness ${c.name}${c.usage ? ` ${out.paint('muted', c.usage)}` : ''}`);
   if (c.options.length) {
     lines.push('');
     const optWidth = Math.max(...c.options.map(([o]) => o.length));
@@ -288,23 +134,28 @@ function emitError({ code, message, fix, exit }) {
   }
 }
 
-// P1.2 lane flag plumbing: `--output json-envelope|agent` (or `--output=...`)
-// selects the NEW opt-in envelope/agent rendering (lib/envelope.mjs,
-// lib/agent-lane.mjs) for registry-dispatched commands only. It is parsed
-// and stripped OUT of the args a registered command sees before anything
-// else runs, so `--json` and every existing flag stay byte-identical for
-// every command whether or not this flag exists — the pre-existing
-// switch/handler code paths never observe `--output` at all. Throws the
-// same structured E_USAGE shape as every other harness usage error, caught
-// by main()'s existing top-level catch — no new error-rendering path
-// required.
+// P1.2 lane flag plumbing: `--output json-envelope|agent|jsonl` (or
+// `--output=...`) selects a NEW opt-in rendering (lib/envelope.mjs,
+// lib/agent-lane.mjs) for registry-dispatched commands. It is parsed and
+// stripped OUT of the args a registered command sees before anything else
+// runs, so `--json` and every existing flag stay byte-identical for every
+// command whether or not this flag exists — the pre-existing handler code
+// paths never observe `--output` at all. Throws the same structured
+// E_USAGE shape as every other harness usage error, caught by main()'s
+// existing top-level catch — no new error-rendering path required.
 //
 // Honors the codebase's `--` literal-argument boundary (lib/argv.mjs:24,
 // lib/registry.mjs's `validateArgs`): scanning stops at the first literal
 // `--` token, so `--output` appearing after it is free-text content, not a
 // flag — e.g. `orient --json -- --output agent` must keep emitting the
 // legacy JSON envelope, exactly like every other flag-shaped token after `--`.
-const OUTPUT_LANES = { 'json-envelope': 'json', agent: 'agent' };
+//
+// P1.6: `jsonl` joins `json-envelope`/`agent` — currently exercised only by
+// `verify` (AC8's streaming row-per-event lane); every other registered
+// command without a `resultOf` falls through dispatch's legacy-handler path
+// for `--output jsonl` exactly like it does today for an unrecognized lane
+// value on a non-lane-aware entry — a no-op selector, not an error.
+const OUTPUT_LANES = { 'json-envelope': 'json', agent: 'agent', jsonl: 'jsonl' };
 
 function extractOutputLane(rawArgs) {
   let idx = -1;
@@ -325,7 +176,7 @@ function extractOutputLane(rawArgs) {
   const lane = OUTPUT_LANES[value];
   if (!lane) {
     const shown = value === undefined ? '(missing)' : JSON.stringify(value);
-    throw Object.assign(new Error(`invalid --output: ${shown} — must be json-envelope or agent`), {
+    throw Object.assign(new Error(`invalid --output: ${shown} — must be json-envelope, agent, or jsonl`), {
       code: 'E_USAGE',
       hint: 'harness help',
       exit: EXIT.usage,
@@ -354,126 +205,55 @@ function createProcessEventRegistry(rawArgs) {
 async function main() {
   let code = 0;
   try {
-    // Registered commands dispatch through the central registry first
-    // (lib/registry.mjs), which parses their flags strictly — an unknown
-    // flag is a structured E_USAGE error, never silently dropped. Every
-    // other command falls through to the switch below unchanged; the
-    // switch is not removed until a later phase migrates the rest.
-    if (hasCommand(command)) {
-      const { args: laneArgs, output } = extractOutputLane(args);
-      // The event registry backs ONLY the new envelope/agent output lanes
-      // here, never the legacy ledger/`--json` default path — every
-      // pilot's existing internal event-writing (lib/orient.mjs et al.)
-      // already covers that path today, and no existing test's events.jsonl
-      // assertions may change (see lib/registry.mjs's dispatch() doc for
-      // the full rationale). This is the one place that decides WHEN
-      // ctx.events exists; lib/registry.mjs wires both branches identically
-      // once it does.
-      const events = output === 'ledger' ? undefined : createProcessEventRegistry(args);
-      code = await dispatchRegistered([command, ...laneArgs], { style: out, output, events });
-    } else switch (command) {
-      case 'help':
-      case '--help':
-      case '-h': {
-        const topic = args.find((a) => !a.startsWith('-'));
-        if (topic) {
-          const detail = renderCommandHelp(topic);
-          if (detail) {
-            console.log(detail);
-          } else {
-            emitError({
-              code: 'E_USAGE',
-              message: `unknown command: ${topic}`,
-              fix: 'harness help',
-              exit: EXIT.usage,
-            });
-            code = EXIT.usage;
-          }
+    if (command === 'help' || command === '--help' || command === '-h') {
+      const topic = args.find((a) => !a.startsWith('-'));
+      if (topic) {
+        const detail = renderCommandHelp(topic);
+        if (detail) {
+          console.log(detail);
         } else {
-          console.log(renderHelp());
+          emitError({
+            code: 'E_USAGE',
+            message: `unknown command: ${topic}`,
+            fix: 'harness help',
+            exit: EXIT.usage,
+          });
+          code = EXIT.usage;
         }
-        break;
+      } else {
+        console.log(renderHelp());
       }
-      case 'install':
-        code = await cmdInstallOrUpgrade('install', args);
-        break;
-      case 'upgrade':
-        code = await cmdInstallOrUpgrade('upgrade', args);
-        break;
-      case 'doctor':
-        code = await cmdDoctor(args);
-        break;
-      case 'status':
-        code = await cmdStatus(args);
-        break;
-      case 'init-repo':
-        code = await cmdInitRepo(args);
-        break;
-      case 'index':
-        code = await cmdIndex(args);
-        break;
-      case 'plan-new':
-        code = await cmdPlanNew(args);
-        break;
-      case 'orient':
-        code = await cmdOrient(args);
-        break;
-      case 'gate':
-        code = await cmdGate(args);
-        break;
-      case 'verify':
-        code = await cmdVerify(args);
-        break;
-      case 'recall':
-        code = await cmdRecall(args);
-        break;
-      case 'get':
-        code = await cmdGet(args);
-        break;
-      case 'validate-plan':
-        code = await cmdValidatePlan(args);
-        break;
-      case 'compound':
-        code = await cmdCompound(args);
-        break;
-      case 'consolidate':
-        code = await cmdConsolidate(args);
-        break;
-      case 'remember':
-        code = await cmdRemember(args);
-        break;
-      case 'learning':
-        code = await cmdLearning(args);
-        break;
-      case 'learnings':
-        code = await cmdLearnings(args);
-        break;
-      case 'eval-knowledge':
-        code = await cmdEvalKnowledge(args);
-        break;
-      case 'knowledge':
-        code = await cmdKnowledge(args);
-        break;
-      case 'events':
-        code = await cmdEvents(args);
-        break;
-      case 'report':
-        code = await cmdReport(args);
-        break;
-      case 'uninstall':
-        code = await cmdUninstall(args);
-        break;
-      case 'resolve':
-        code = await cmdResolve(args);
-        break;
-      default:
-        emitError({
-          code: 'E_USAGE',
-          message: `unknown command: ${command}`,
-          fix: 'harness help',
-          exit: EXIT.usage,
-        });
-        code = EXIT.usage;
+    } else if (hasCommand(command)) {
+      const { args: laneArgs, output } = extractOutputLane(args);
+      // P1.6 (carry-list, AC7 widening): the event registry now attaches for
+      // EVERY registered-command dispatch, not just the envelope/agent
+      // lanes — command.result telemetry (including verify's Ctrl-C
+      // cancellation -> exit 130 -> result:'warn' per legacyResultForStatus,
+      // AC8) must exist on the plain ledger/--json path too, not only under
+      // --output. lib/registry.mjs's dispatch/dispatchLane wire both
+      // branches identically whenever ctx.events is present; the earlier
+      // ledger-only exclusion existed solely to keep one now-updated
+      // test/harness-cli.test.mjs assertion's exact events array stable.
+      const events = createProcessEventRegistry(args);
+      // Ctrl-C -> AbortSignal bridge (AC8), scoped to `verify` only: every
+      // other command keeps Node's default SIGINT behavior (immediate
+      // process exit) rather than risk a hang for a command whose handler
+      // never reads ctx.signal.
+      let signal;
+      if (command === 'verify') {
+        const controller = new AbortController();
+        process.once('SIGINT', () => controller.abort());
+        signal = controller.signal;
+      }
+      code = await dispatchRegistered([command, ...laneArgs], { style: out, output, events, signal });
+    } else {
+      emitError({
+        code: 'E_USAGE',
+        message: `unknown command: ${command}`,
+        fix: 'harness help',
+        exit: EXIT.usage,
+      });
+      code = EXIT.usage;
     }
   } catch (err) {
     const exit = Number.isInteger(err.exit) ? err.exit : 1;

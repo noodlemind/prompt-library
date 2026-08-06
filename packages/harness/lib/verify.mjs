@@ -1,6 +1,5 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
 import YAML from 'yaml';
 import { readSession } from './session.mjs';
 import { selectPlan } from './plan-parse.mjs';
@@ -10,6 +9,7 @@ import { createEvidenceBinding, writeEvidence } from './evidence.mjs';
 import { enforcementExitCode, loadPolicy } from './policy.mjs';
 import { verifyPrimitiveGovernance } from './primitive-governance.mjs';
 import { validatePlanReadiness } from './plan-readiness.mjs';
+import { runProcess } from './runner.mjs';
 
 const CHECKS_REL = '.github/harness/checks.yaml';
 
@@ -50,28 +50,73 @@ function trimOutput(value) {
   return text.length > 4000 ? `${text.slice(0, 4000)}\n…truncated…` : text;
 }
 
-function runNamedCheck(workspace, name, config) {
+// P1.6 (AC8): named checks now run through lib/runner.mjs's async spawn
+// instead of a blocking spawnSync — the same 1 MiB buffer cap as before, plus
+// an optional caller-supplied AbortSignal so a check-in-flight can actually
+// be cancelled (Ctrl-C -> SIGINT -> AbortSignal, wired in bin/harness.mjs for
+// `verify` only). The legacy per-check `status` vocabulary
+// (passed|failed|timeout|unavailable) is preserved byte-for-byte for every
+// outcome the old spawnSync path could produce; `runProcess`'s
+// 'cancelled' status is new (spawnSync had no cancellation concept) and maps
+// to 'unavailable' here — the run-level short-circuit in runVerify (see
+// below) is what actually matters for AC8, not this one check's own legacy
+// status label.
+async function runNamedCheck(workspace, name, config, { signal } = {}) {
   const invalid = validateCommand(name, config);
   if (invalid) return resultCheck(name, 'unavailable', invalid);
 
   const timeoutSeconds = config.timeout_seconds ?? 600;
-  const started = Date.now();
-  const execution = spawnSync(config.command[0], config.command.slice(1), {
+  const execution = await runProcess({
+    argv: config.command,
     cwd: workspace,
-    encoding: 'utf8',
-    timeout: timeoutSeconds * 1000,
-    shell: false,
+    timeoutMs: timeoutSeconds * 1000,
+    signal,
     maxBuffer: 1024 * 1024,
   });
-  const durationMs = Date.now() - started;
-  const output = { stdout: trimOutput(execution.stdout), stderr: trimOutput(execution.stderr), durationMs };
+  const output = { stdout: trimOutput(execution.stdout), stderr: trimOutput(execution.stderr), durationMs: execution.durationMs };
 
-  if (execution.error?.code === 'ETIMEDOUT' || execution.signal) {
+  if (execution.status === 'cancelled') {
+    return resultCheck(name, 'unavailable', 'Cancelled — verification was interrupted', output);
+  }
+  if (execution.status === 'timed-out') {
     return resultCheck(name, 'timeout', `Timed out after ${timeoutSeconds}s`, output);
   }
-  if (execution.error) return resultCheck(name, 'unavailable', execution.error.message, output);
-  if (execution.status !== 0) return resultCheck(name, 'failed', `Exited with status ${execution.status}`, { ...output, exitCode: execution.status });
+  if (execution.status === 'failed' && execution.exitCode === null) {
+    // Spawn-level failure (command not found, etc.) or death by an external
+    // signal we didn't ask for — mirrors the old spawnSync `execution.error`
+    // branch: no real exit code was ever reported.
+    const detail = execution.signalName ? `Terminated by signal ${execution.signalName}` : 'Named check could not be spawned';
+    return resultCheck(name, 'unavailable', detail, output);
+  }
+  if (execution.status === 'failed') {
+    return resultCheck(name, 'failed', `Exited with status ${execution.exitCode}`, { ...output, exitCode: execution.exitCode });
+  }
   return resultCheck(name, 'passed', 'Named check passed', { ...output, exitCode: 0 });
+}
+
+// The unified ok|failed|cancelled|timed-out status vocabulary (lib/envelope.mjs)
+// for ONE named check's legacy status label — used only by the new `verify
+// --output jsonl` row events (AC8's "terminal row with the unified status
+// vocabulary"); the legacy `checks[].status` field above is untouched.
+export function unifiedStatusForCheck(check) {
+  if (check.status === 'passed') return 'ok';
+  if (check.status === 'timeout') return 'timed-out';
+  return 'failed';
+}
+
+// Same unified vocabulary, for the WHOLE verify run (the jsonl stream's
+// terminal `result` row). A judgment call, documented: `cancelled` wins
+// outright (the run was interrupted, nothing else matters); `passed` -> ok;
+// a run whose only reason for not passing is a per-check timeout reports
+// `timed-out` at the run level too (AC8: "timeout per check yields
+// timed-out distinctly" — carried through to the terminal row, not just the
+// individual check); everything else (failed, inconclusive for any other
+// reason) is a generic `failed`.
+export function statusForVerifyResult(result) {
+  if (result.outcome === 'cancelled') return 'cancelled';
+  if (result.outcome === 'passed') return 'ok';
+  if ((result.checks || []).some((check) => check.status === 'timeout')) return 'timed-out';
+  return 'failed';
 }
 
 function checkStatusForEvidence(mapped, byId) {
@@ -100,7 +145,11 @@ function currentPhaseTasks(taskBody, phase) {
   return nextHeading === -1 ? remaining : remaining.slice(0, nextHeading);
 }
 
-function finalize(workspace, flags, partial) {
+// `skipEvidence` (AC8): a cancelled run must never write evidence — the
+// checks array is a partial, interrupted snapshot, not something a later
+// `compound`/completion gate should ever bind to. Every other caller keeps
+// writing evidence exactly as before.
+function finalize(workspace, flags, partial, { skipEvidence = false } = {}) {
   const policy = loadPolicy(workspace, flags.enforcement);
   const result = {
     outcome: partial.outcome || resolveOutcome(partial.checks),
@@ -116,11 +165,17 @@ function finalize(workspace, flags, partial) {
     binding: partial.binding || null,
     evidencePath: null,
   };
-  result.evidencePath = writeEvidence(workspace, result, flags.dryRun);
+  result.evidencePath = skipEvidence ? null : writeEvidence(workspace, result, flags.dryRun);
   return result;
 }
 
-export function runVerify({ workspace, flags }) {
+// P1.6 (AC8): async now that named checks run through lib/runner.mjs.
+// `signal` (an AbortSignal, optional) cancels a check in flight; `onEvent`
+// (optional `(event, fields) => void`) is the streaming hook `verify
+// --output jsonl` wires to lib/envelope.mjs's createJsonlStream — see
+// lib/commands.mjs's cmdVerify. Neither parameter changes behavior for any
+// caller that omits them (doctor.mjs's fixture probe, every existing test).
+export async function runVerify({ workspace, flags, signal, onEvent }) {
   const session = readSession(workspace);
   const selected = selectPlan(workspace, {
     planPath: flags.plan,
@@ -178,13 +233,46 @@ export function runVerify({ workspace, flags }) {
 
   const named = loadNamedChecks(workspace);
   const required = Array.isArray(plan.fm.verification?.required) ? plan.fm.verification.required : [];
-  const namedResults = required.map((name) => {
-    if (!readiness.pass) return resultCheck(name, 'inconclusive', 'Not run because plan readiness failed');
-    if (named.error) return resultCheck(name, 'unavailable', named.error);
-    if (!Object.hasOwn(named.checks, name)) return resultCheck(name, 'unavailable', `Named check is not configured: ${name}`);
-    return runNamedCheck(workspace, name, named.checks[name]);
-  });
+  // Sequential (not Promise.all): a later check must never start once
+  // cancellation has been observed, and streaming rows must land in the same
+  // order checks actually ran in.
+  const namedResults = [];
+  for (const name of required) {
+    if (!readiness.pass) {
+      namedResults.push(resultCheck(name, 'inconclusive', 'Not run because plan readiness failed'));
+      continue;
+    }
+    if (named.error) {
+      namedResults.push(resultCheck(name, 'unavailable', named.error));
+      continue;
+    }
+    if (!Object.hasOwn(named.checks, name)) {
+      namedResults.push(resultCheck(name, 'unavailable', `Named check is not configured: ${name}`));
+      continue;
+    }
+    onEvent?.('progress', { check: name, phase: 'start' });
+    const outcome = await runNamedCheck(workspace, name, named.checks[name], { signal });
+    onEvent?.('row', { check: name, status: outcome.status, unifiedStatus: unifiedStatusForCheck(outcome), message: outcome.message });
+    namedResults.push(outcome);
+    if (signal?.aborted) break; // stop running further checks once cancelled
+  }
   checks.push(...namedResults);
+
+  // AC8: cancellation short-circuits the whole run — no further checks
+  // (scope, criteria-evidence, workspace-stability, …) run against a
+  // partial/interrupted snapshot, and evidence is never written for it.
+  if (signal?.aborted) {
+    return finalize(
+      workspace,
+      flags,
+      {
+        outcome: 'cancelled',
+        plan: plan.path,
+        checks,
+      },
+      { skipEvidence: true }
+    );
+  }
 
   const byId = new Map(namedResults.map((check) => [check.id, check]));
   const criterionIds = extractAcceptanceCriteria(plan);

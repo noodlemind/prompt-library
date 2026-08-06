@@ -46,10 +46,10 @@ test('findStaleOrphans returns nothing for a clean home', () => {
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
-test('doctor H17 fails (optional) and lists the orphan', () => {
+test('doctor H17 fails (optional) and lists the orphan', async () => {
   const { dir, assets, home, pkg } = scaffold();
   fs.mkdirSync(path.join(dir, 'ws', 'docs', 'plans'), { recursive: true });
-  const { checks } = runDoctor({ copilotHome: home, assetsRoot: assets, pkgRoot: pkg, flags: { workspace: path.join(dir, 'ws') } });
+  const { checks } = await runDoctor({ copilotHome: home, assetsRoot: assets, pkgRoot: pkg, flags: { workspace: path.join(dir, 'ws') } });
   const h17 = checks.find((c) => c.id === 'H17');
   assert.ok(h17, 'H17 check present');
   assert.equal(h17.pass, false);

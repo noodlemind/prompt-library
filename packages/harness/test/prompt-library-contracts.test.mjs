@@ -6,6 +6,7 @@ import { test } from 'node:test';
 import YAML from 'yaml';
 import { estimateTokens } from '../lib/token-meter.mjs';
 import { CONTEXT_PACK_MAX_BYTES } from '../lib/context-pack.mjs';
+import { hasCommand, describeCommand } from '../lib/registry.mjs';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 
@@ -490,11 +491,19 @@ test('engineer step 8 runs harness compound to close the learn loop', () => {
   assert.match(workflow, /harness report --check/, 'CI must run the budget gate');
 });
 
+// P1.6: the hand-written CATALOG (and the switch it drove `harness help`
+// from) is retired — every command's help/sig data now comes from
+// lib/registry.mjs's describeCommand/describeAll, generated from each
+// entry's own declared flags/positionals (or an explicit `usage` override
+// for the handful of commands with subcommand/alternation syntax a flat
+// flag list can't express). These assertions were rewritten to pin the
+// REGISTRY-GENERATED equivalent (still rendering the identical `harness
+// help <command>` text) rather than grep bin/harness.mjs's source for a
+// literal `case`/CATALOG string that no longer exists there.
 test('read-only report command is registered and AC14 amendment is consistent', () => {
-  const bin = read('packages/harness/bin/harness.mjs');
-  assert.match(bin, /case 'report':/, 'report command must be registered');
-  assert.match(bin, /'\[--sync\] \[--global\] \[--check\] \[--json\]'/, 'help documents report');
-  assert.match(bin, /cmdReport/, 'report handler imported');
+  assert.equal(hasCommand('report'), true, 'report command must be registered');
+  const help = describeCommand('report');
+  assert.equal(help.usage, '[--sync] [--global] [--check] [--json]', 'help documents report');
   // report must not write session/plan state — it only reads telemetry (and syncs under ~/.harness).
   const commands = read('packages/harness/lib/commands.mjs');
   const reportFn = commands.slice(commands.indexOf('export async function cmdReport'), commands.indexOf('export async function cmdValidatePlan'));
@@ -510,26 +519,36 @@ test('consolidate skill treats a cluster as a category group the skill may split
 });
 
 test('knowledge layer surface: consolidate command and insight lane stay documented', () => {
-  const bin = read('packages/harness/bin/harness.mjs');
   // The knowledge group and its three modes are the M1 public contract.
-  assert.match(bin, /group: 'knowledge'/, 'CATALOG has a knowledge group');
-  assert.match(bin, /case 'consolidate':/, 'consolidate command registered');
-  assert.match(bin, /'\[--status \| --candidates \| --apply --ops <path> \| --rebuild --yes\]'/, 'help documents consolidate modes');
-  assert.match(bin, /--insight/, 'compound help documents the insight lane');
+  assert.equal(describeCommand('knowledge')?.group, 'knowledge', 'knowledge command is in the knowledge group');
+  assert.equal(hasCommand('consolidate'), true, 'consolidate command registered');
+  assert.equal(
+    describeCommand('consolidate')?.usage,
+    '[--status | --candidates | --apply --ops <path> | --rebuild --yes]',
+    'help documents consolidate modes'
+  );
+  assert.ok(
+    describeCommand('compound')?.options.some(([label]) => label.includes('--insight')),
+    'compound help documents the insight lane'
+  );
   // The M2 human-authority and read-only surfaces are the same public contract.
-  assert.match(bin, /case 'remember':/, 'remember command registered');
-  assert.match(bin, /case 'learning':/, 'learning command registered');
-  assert.match(bin, /case 'learnings':/, 'learnings command registered');
-  assert.match(bin, /case 'knowledge':/, 'knowledge command registered');
-  assert.match(bin, /case 'eval-knowledge':/, 'eval-knowledge command registered');
+  assert.equal(hasCommand('remember'), true, 'remember command registered');
+  assert.equal(hasCommand('learning'), true, 'learning command registered');
+  assert.equal(hasCommand('learnings'), true, 'learnings command registered');
+  assert.equal(hasCommand('knowledge'), true, 'knowledge command registered');
+  assert.equal(hasCommand('eval-knowledge'), true, 'eval-knowledge command registered');
   // The M3 surfaces (suggest mode, commit mode, promote, MERGE/domain cap) are
-  // now the same public contract — CATALOG's knowledge sig names every mode.
-  assert.match(
-    bin,
-    /'<on\|suggest\|off\|freeze\|capture-only> \| --status \| purge <file\|--all> \| commit <none\|repo> \| migrate-store'/,
+  // now the same public contract — the knowledge entry's usage names every mode.
+  assert.equal(
+    describeCommand('knowledge')?.usage,
+    '<on|suggest|off|freeze|capture-only> | --status | purge <file|--all> | commit <none|repo> | migrate-store',
     'help documents the knowledge suggest mode, opt-in commit mode, and stranded-store migration'
   );
-  assert.match(bin, /'<retire\|dispute\|confirm\|promote> <id> \[--reason "<r>"\] \[--to <path>\]'/, 'help documents learning promote');
+  assert.equal(
+    describeCommand('learning')?.usage,
+    '<retire|dispute|confirm|promote> <id> [--reason "<r>"] [--to <path>]',
+    'help documents learning promote'
+  );
   // The skill never writes learnings directly — apply is the sole writer.
   const apply = read('packages/harness/lib/knowledge/apply.mjs');
   assert.match(apply, /MAX_OPS_PER_RUN/, 'delta contract enforced in apply');

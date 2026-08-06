@@ -25,14 +25,37 @@
  * producer — see `dispatch`'s doc comment below for the exact contract and
  * the compatibility guarantee (every pre-P1.2 caller is unaffected).
  */
-import fs from 'node:fs';
 import path from 'node:path';
 import { EXIT } from './style.mjs';
-import { cmdOrient, cmdLearnings, cmdStatus, pkgRoot } from './commands.mjs';
+import {
+  cmdOrient,
+  computeOrientResult,
+  cmdLearnings,
+  cmdStatus,
+  computeStatusResult,
+  cmdInstallOrUpgrade,
+  cmdDoctor,
+  cmdInitRepo,
+  cmdIndex,
+  cmdGate,
+  cmdVerify,
+  cmdValidatePlan,
+  cmdCompound,
+  cmdRecall,
+  cmdGet,
+  cmdEvents,
+  cmdReport,
+  cmdKnowledge,
+  cmdConsolidate,
+  cmdRemember,
+  cmdLearning,
+  cmdEvalKnowledge,
+  cmdUninstall,
+  cmdResolve,
+} from './commands.mjs';
+import { cmdPlanNew } from './plan-new.mjs';
 import { parseFlags } from './flags.mjs';
-import { parseQueryFromArgv } from './argv.mjs';
 import { resolveCopilotHome } from './paths.mjs';
-import { readLock } from './lock.mjs';
 import { createEnvelope, createErrorEnvelope, STATUS } from './envelope.mjs';
 import { renderAgentLane, recordAgentLaneBytes } from './agent-lane.mjs';
 import { EVENT_TYPE, summarizeArgFlags } from './event-registry.mjs';
@@ -212,7 +235,24 @@ export async function dispatch(argv, ctx = {}) {
   }
   validateArgs(entry, rest);
   const lane = ctx.output;
-  const events = ctx.events && typeof ctx.events.withCommand === 'function' ? ctx.events.withCommand(entry.name) : null;
+  // P1.6 (carry-list, AC7 widening): ctx.events now attaches on every path,
+  // including the legacy ledger/--json default — EXCEPT `entry.instrument
+  // === false`. The one entry that opts out today is `events` itself: its
+  // own handler's whole job is "read and summarize everything in
+  // events.jsonl", so instrumenting its OWN dispatch would append that
+  // very invocation's command.start to the file an instant before the
+  // handler reads it — a self-referential read-your-own-write that
+  // silently inflates `harness events`'s own totals/first-row on every
+  // single call (reproduced against the pre-fix build: a fixture of 60
+  // events read back as 61; three sequential `harness events` calls each
+  // saw one more than the last). No other migrated command has this
+  // structural hazard (every other command either doesn't read
+  // events.jsonl at all, or — like `learnings`, already instrumented since
+  // P1.2/P1.5 — filters by a specific lifecycle `type` that command.start
+  // never matches, so ordinary event-log growth doesn't corrupt its
+  // result). Documented judgment call, not a spec value.
+  const instrumented = entry.instrument !== false;
+  const events = instrumented && ctx.events && typeof ctx.events.withCommand === 'function' ? ctx.events.withCommand(entry.name) : null;
   if (lane && lane !== 'ledger' && entry.resultOf) {
     return dispatchLane(entry, rest, ctx, lane, events);
   }
@@ -385,24 +425,24 @@ async function dispatchLane(entry, rest, ctx, lane, events) {
   }
 }
 
-function readHarnessVersion() {
-  const pkg = JSON.parse(fs.readFileSync(path.join(pkgRoot, 'package.json'), 'utf8'));
-  return pkg.version;
-}
-
 // --- resultOf producers (P1.2): the canonical result data behind each
-// pilot's legacy `--json` output, recomputed via the SAME already-exported
-// building blocks lib/commands.mjs's cmdOrient/cmdLearnings/cmdStatus call
-// internally (runOrient, listingView/whyView, readLock + the package
-// version) — never lib/commands.mjs itself, which this task does not edit.
+// pilot's legacy `--json` output. P1.6 (carry-list a): now that
+// lib/commands.mjs is editable, `orient` and `status` call the SAME shared
+// helper their own cmdX counterpart uses (computeOrientResult/
+// computeStatusResult, exported from commands.mjs) instead of duplicating
+// its body — collapsing that duplication, and the former local
+// readHarnessVersion (now commands.mjs's own exported readPkgVersion).
+// `learnings` still duplicates a handful of lines from cmdLearnings on
+// purpose: cmdLearnings' branching human/JSON rendering around the same
+// two usage/target guards is intricate and heavily tested
+// (test/learnings-listing.test.mjs) — collapsing it would mean reshaping
+// cmdLearnings' own control flow around a throw/return split for a
+// cosmetic dedup, a disproportionate regression risk for this carry-list
+// item. Flagged in the P1.6 report as a deliberate, bounded scope call.
 
 async function orientResultOf(argv) {
-  const flags = parseFlags(argv);
-  const workspace = path.resolve(flags.workspace);
-  const copilotHome = resolveCopilotHome(flags.copilotHome);
-  const query = parseQueryFromArgv(argv, flags);
-  const { runOrient } = await import('./orient.mjs');
-  return runOrient({ workspace, copilotHome, flags, query });
+  const { result } = await computeOrientResult(argv);
+  return result;
 }
 
 async function learningsResultOf(argv) {
@@ -432,10 +472,8 @@ async function learningsResultOf(argv) {
 }
 
 async function statusResultOf(argv) {
-  const flags = parseFlags(argv);
-  const copilotHome = resolveCopilotHome(flags.copilotHome);
-  const lock = readLock(copilotHome);
-  return { packageVersion: readHarnessVersion(), copilotHome, lock };
+  const { copilotHome, lock, version } = computeStatusResult(argv);
+  return { packageVersion: version, copilotHome, lock };
 }
 
 function flagLabel(def) {
@@ -460,8 +498,16 @@ function buildUsage(entry) {
  * design-system help rendering (bin/harness.mjs's `renderCommandHelp`,
  * which paints through lib/style.mjs) can consume it: a usage signature
  * plus an `[flagLabel, description]` options list, the same pair shape the
- * hand-written CATALOG entries already use. Returns `null` for an
- * unregistered command.
+ * hand-written CATALOG entries (P1.6: retired — this function is now the
+ * only source of `harness help`/`harness help <command>` data) already
+ * used. Returns `null` for an unregistered command.
+ *
+ * `entry.usage`, when present, is used verbatim instead of the
+ * flags/positionals auto-generated signature — an escape hatch for the
+ * handful of commands whose usage line is genuinely subcommand/alternation
+ * syntax (`knowledge`, `learning`, `consolidate`, `report`) rather than a
+ * flat flag list; every other command's usage is fully data-driven from
+ * `args.flags`/`args.positionals`.
  */
 export function describeCommand(name) {
   const entry = REGISTRY.get(name);
@@ -473,7 +519,7 @@ export function describeCommand(name) {
     sideEffect: entry.sideEffect,
     capabilities: entry.capabilities,
     outputModes: entry.outputModes,
-    usage: buildUsage(entry),
+    usage: entry.usage ?? buildUsage(entry),
     options: entry.args.flags.map((f) => [flagLabel(f), f.description || '']),
   };
 }
@@ -558,4 +604,405 @@ registerCommand({
   args: { positionals: [], flags: [] },
   handler: cmdStatus,
   resultOf: statusResultOf,
+});
+
+// --- P1.6: the remaining command groups — the rest of the former switch ---
+// Handlers are the existing lib/commands.mjs (or lib/plan-new.mjs) functions,
+// completely unchanged; the registry only adds strict flag validation and
+// (for the pilots above) the lane machinery in front of them. None of these
+// declare a `resultOf` — they stay on the `'ledger'` default forever (a
+// documented, valid choice per P1.2's own report: not every command needs
+// the envelope/agent lanes), except `verify`, whose own handler
+// (lib/commands.mjs#cmdVerify) special-cases `ctx.output === 'jsonl'`
+// itself for AC8's streaming lane — see lib/verify.mjs.
+//
+// Flag lists below are deliberately broader than the old hand-written
+// CATALOG's visible `options` in a few places (documented per entry) —
+// every additional flag was independently verified to be read somewhere in
+// that command's own call chain (directly via `flags.x`, or via `argv.
+// includes('--x')`), so strict validation never rejects a previously
+// working, if previously undocumented, invocation. A flag that has zero
+// effect on a command (never read anywhere) is NOT included, even if
+// `lib/flags.mjs` happens to parse it globally — AC2's whole point is to
+// stop silently accepting flags that don't do anything for that command.
+
+// --- setup ------------------------------------------------------------
+
+const INSTALL_FLAGS = [
+  { name: '--target', type: 'string', valueName: 't,..', description: 'vscode,cli,intellij', required: false, default: null },
+  { name: '--autonomy', type: 'string', valueName: 'mode', description: 'full | balanced | strict', required: false, default: null },
+  { name: '--configure-vscode', type: 'boolean', description: 'merge VS Code chat.* discovery settings', required: false, default: false },
+  { name: '--configure-path', type: 'boolean', description: 'append ~/.copilot/bin to shell PATH (~/.zshrc, ~/.bashrc)', required: false, default: false },
+  { name: '--force-profile', type: 'boolean', description: 'overwrite knowledge/profile.md', required: false, default: false },
+  { name: '--force-knowledge-reset', type: 'boolean', description: 'overwrite knowledge/solutions (danger)', required: false, default: false },
+  // Undocumented in the old CATALOG but genuinely read (lib/sync.mjs) —
+  // the explicit opposite of --force-knowledge-reset, defaults true either way.
+  { name: '--preserve-knowledge', type: 'boolean', description: 'keep existing knowledge/solutions (default)', required: false, default: true },
+];
+
+registerCommand({
+  name: 'install',
+  summary: 'hydrate skills, agents, and team knowledge globally',
+  group: 'setup',
+  sideEffect: 'mutate',
+  args: { positionals: [], flags: INSTALL_FLAGS },
+  handler: (argv) => cmdInstallOrUpgrade('install', argv),
+});
+
+registerCommand({
+  name: 'upgrade',
+  summary: 're-hydrate and purge retired primitives',
+  group: 'setup',
+  sideEffect: 'mutate',
+  args: { positionals: [], flags: INSTALL_FLAGS },
+  handler: (argv) => cmdInstallOrUpgrade('upgrade', argv),
+});
+
+registerCommand({
+  name: 'doctor',
+  summary: 'health checks for install, hooks, and knowledge',
+  group: 'setup',
+  sideEffect: 'read',
+  args: {
+    positionals: [],
+    flags: [
+      { name: '--host', type: 'string', valueName: 'name', description: 'run host-specific checks (vscode executes installed-hook probes)', required: false, default: null },
+    ],
+  },
+  handler: cmdDoctor,
+});
+
+registerCommand({
+  name: 'uninstall',
+  summary: 'remove hydrated files tracked by the lock',
+  group: 'setup',
+  sideEffect: 'mutate',
+  args: { positionals: [], flags: [] },
+  handler: cmdUninstall,
+});
+
+// --- workspace ----------------------------------------------------------
+
+registerCommand({
+  name: 'init-repo',
+  summary: 'seed the .harness workspace in a product repo',
+  group: 'workspace',
+  sideEffect: 'mutate',
+  args: { positionals: [], flags: [] },
+  handler: cmdInitRepo,
+});
+
+registerCommand({
+  name: 'index',
+  summary: 'rebuild knowledge index · --status reports drift',
+  group: 'workspace',
+  sideEffect: 'mutate',
+  args: {
+    positionals: [],
+    flags: [{ name: '--status', type: 'boolean', description: 'read-only freshness report vs HEAD (never rebuilds)', required: false, default: false }],
+  },
+  handler: cmdIndex,
+});
+
+registerCommand({
+  name: 'plan-new',
+  summary: 'scaffold a gate-ready plan',
+  group: 'workspace',
+  sideEffect: 'mutate',
+  args: {
+    positionals: [],
+    flags: [
+      { name: '--type', type: 'string', valueName: 't', description: 'feat|fix|docs|refactor|chore', required: true, default: null },
+      { name: '--slug', type: 'string', valueName: 's', description: 'lowercase-hyphen slug', required: true, default: null },
+      { name: '--intent', type: 'string', valueName: 'text', description: 'one-line intent', required: true, default: null },
+      { name: '--impacted', type: 'string', valueName: 'a,b', description: 'comma-separated Impacted Files', required: false, default: null },
+      { name: '--criteria', type: 'string', valueName: 'text', description: 'an acceptance criterion (repeatable)', required: false, default: null },
+      { name: '--gap', type: 'string', valueName: 'id:path', description: 'capability gap → blocked-capability + governed primitive plan', required: false, default: null },
+      { name: '--stdout', type: 'boolean', description: 'print the plan instead of writing it', required: false, default: false },
+      // Undocumented in the old CATALOG, but cmdPlanNew's own bespoke argv
+      // loop (lib/plan-new.mjs) genuinely reads all three.
+      { name: '--title', type: 'string', valueName: 'text', description: 'plan heading override (default: derived from slug)', required: false, default: null },
+      { name: '--date', type: 'string', valueName: 'yyyy-mm-dd', description: 'override the plan filename date (default: today)', required: false, default: null },
+      { name: '--risk', type: 'string', valueName: 'green|amber|red', description: 'risk rating (default green)', required: false, default: null },
+    ],
+  },
+  handler: cmdPlanNew,
+});
+
+// --- engineer loop --------------------------------------------------------
+
+registerCommand({
+  name: 'gate',
+  summary: 'edit preconditions before editFiles',
+  group: 'engineer loop',
+  sideEffect: 'mutate',
+  args: {
+    positionals: [{ name: 'query', description: 'free-text query words (plan-ranking only)', required: false, default: '', variadic: true }],
+    flags: [
+      { name: '--phase', type: 'string', valueName: 'name', description: 'implement | verify', required: false, default: 'implement' },
+      { name: '--plan', type: 'string', valueName: 'path', description: 'explicit plan file', required: false, default: null },
+      { name: '--strict-intent', type: 'boolean', description: 'fail locked plans missing intent fields', required: false, default: false },
+      { name: '--enforcement', type: 'string', valueName: 'mode', description: 'observe | warn | enforce (default enforce)', required: false, default: null },
+    ],
+  },
+  handler: cmdGate,
+});
+
+registerCommand({
+  name: 'verify',
+  summary: 'run trusted named checks and capture evidence',
+  group: 'engineer loop',
+  sideEffect: 'execute',
+  args: {
+    positionals: [],
+    flags: [
+      { name: '--plan', type: 'string', valueName: 'path', description: 'plan file whose named checks run', required: false, default: null },
+      { name: '--base', type: 'string', valueName: 'git-ref', description: 'compare changed files to this git ref', required: false, default: null },
+      { name: '--enforcement', type: 'string', valueName: 'mode', description: 'observe | warn | enforce (default enforce)', required: false, default: null },
+      // Undocumented in the old CATALOG, but read (lib/commands.mjs#cmdVerify)
+      // and directly tested end to end.
+      { name: '--learnings', type: 'string', valueName: 'a,b', description: 'learning ids cited by this verified change', required: false, default: null },
+    ],
+  },
+  handler: cmdVerify,
+});
+
+registerCommand({
+  name: 'validate-plan',
+  summary: 'plan readiness checks',
+  group: 'engineer loop',
+  sideEffect: 'read',
+  args: {
+    positionals: [],
+    flags: [
+      { name: '--plan', type: 'string', valueName: 'path', description: 'explicit plan file', required: false, default: null },
+      { name: '--enforcement', type: 'string', valueName: 'mode', description: 'observe | warn | enforce (default enforce)', required: false, default: null },
+      // Undocumented in the old CATALOG, but read (lib/validate-plan.mjs)
+      // and directly tested end to end.
+      { name: '--strict-intent', type: 'boolean', description: 'fail locked plans missing intent fields', required: false, default: false },
+    ],
+  },
+  handler: cmdValidatePlan,
+});
+
+registerCommand({
+  name: 'compound',
+  summary: 'record learning from passed evidence · --insight captures without evidence',
+  group: 'engineer loop',
+  sideEffect: 'mutate',
+  args: {
+    positionals: [],
+    flags: [
+      { name: '--plan', type: 'string', valueName: 'path', description: 'explicit plan file', required: false, default: null },
+      { name: '--insight', type: 'boolean', description: 'evidence-free investigation capture (kind: insight, secret-scanned)', required: false, default: false },
+      { name: '--title', type: 'string', valueName: 't', description: 'insight title (required with --insight)', required: false, default: null },
+      { name: '--body', type: 'string', valueName: 'text', description: 'insight body text', required: false, default: null },
+      { name: '--body-file', type: 'string', valueName: 'path', description: 'read insight body from a file', required: false, default: null },
+      { name: '--category', type: 'string', valueName: 'c', description: 'docs/solutions/<category>/ (default insights)', required: false, default: null },
+      { name: '--tags', type: 'string', valueName: 'a,b', description: 'comma-separated tags', required: false, default: null },
+      { name: '--trigger', type: 'string', valueName: 't', description: 'applicability condition frontmatter', required: false, default: null },
+      { name: '--claim', type: 'string', valueName: 't', description: 'one-line claim frontmatter', required: false, default: null },
+      // Undocumented in the old CATALOG, but read (lib/compound.mjs, via
+      // loadPolicy) for both --insight and evidence-bound compound.
+      { name: '--enforcement', type: 'string', valueName: 'mode', description: 'observe | warn | enforce (default enforce)', required: false, default: null },
+    ],
+  },
+  handler: cmdCompound,
+});
+
+registerCommand({
+  name: 'recall',
+  summary: 'search team knowledge',
+  group: 'engineer loop',
+  sideEffect: 'read',
+  args: {
+    positionals: [{ name: 'query', description: 'free-text search terms (joined)', required: false, default: '', variadic: true }],
+    flags: [
+      { name: '--limit', type: 'number', valueName: 'n', description: 'result count (default 3)', required: false, default: 3 },
+      { name: '--collection', aliases: ['-c'], type: 'string', valueName: 'name', description: 'filter by knowledge/collections.yaml', required: false, default: null },
+      { name: '--min-score', type: 'number', valueName: 'n', description: 'minimum score (default 0.15)', required: false, default: 0.15 },
+      { name: '--include-plans', type: 'boolean', description: 'include matching plans', required: false, default: false },
+    ],
+  },
+  handler: cmdRecall,
+});
+
+registerCommand({
+  name: 'get',
+  summary: 'bounded doc excerpt',
+  group: 'engineer loop',
+  sideEffect: 'read',
+  args: {
+    positionals: [],
+    flags: [
+      { name: '--docid', type: 'string', valueName: 'id', description: 'manifest doc id', required: false, default: null },
+      { name: '--path', type: 'string', valueName: 'rel', description: 'relative file path', required: false, default: null },
+      { name: '--lines', type: 'number', valueName: 'n', description: 'max lines (default 40)', required: false, default: 40 },
+      { name: '--max-bytes', type: 'number', valueName: 'n', description: 'max excerpt bytes (default 2048)', required: false, default: 2048 },
+    ],
+  },
+  handler: cmdGet,
+});
+
+registerCommand({
+  name: 'events',
+  summary: 'session telemetry',
+  group: 'engineer loop',
+  sideEffect: 'read',
+  // See dispatch()'s own comment: `events` reads and summarizes the whole
+  // events.jsonl file, so instrumenting ITS OWN dispatch would corrupt its
+  // own read window (self-referential read-your-own-write).
+  instrument: false,
+  args: {
+    positionals: [],
+    flags: [
+      { name: '--session', type: 'string', valueName: 'id', description: 'filter by host session ID', required: false, default: null },
+      { name: '--summary', type: 'boolean', description: 'aggregate summary only', required: false, default: false },
+      { name: '--failures', type: 'boolean', description: 'failed or blocked events only', required: false, default: false },
+      { name: '--limit', type: 'number', valueName: 'n', description: 'event count (default 20)', required: false, default: 20 },
+    ],
+  },
+  handler: cmdEvents,
+});
+
+registerCommand({
+  name: 'report',
+  summary: 'token-efficiency report from telemetry',
+  group: 'engineer loop',
+  // mutate, not read: --sync (lib/commands.mjs#cmdReport -> syncWorkspaceEvents,
+  // lib/telemetry-store.mjs) performs real fs.mkdirSync/appendFileSync writes
+  // to the global ~/.harness telemetry store — same mutating-capability rule
+  // already applied to consolidate/gate/plan-new/index (default invocation
+  // read-only, but classified by capability) and install/upgrade (writes to
+  // the equally-global ~/.copilot).
+  sideEffect: 'mutate',
+  // AC14: `harness report [--sync] [--global] [--check] [--json]` stays
+  // documented verbatim — an explicit usage override (buildUsage can't
+  // reproduce the `--json` mention, since --json is a global flag, not one
+  // of report's own).
+  usage: '[--sync] [--global] [--check] [--json]',
+  args: {
+    positionals: [],
+    flags: [
+      { name: '--sync', type: 'boolean', description: 'merge workspace events into the global store first', required: false, default: false },
+      { name: '--global', type: 'boolean', description: 'report across all synced workspaces', required: false, default: false },
+      { name: '--check', type: 'boolean', description: 'exit non-zero on a budget breach (CI)', required: false, default: false },
+      // Undocumented in the old CATALOG, but read (lib/commands.mjs#cmdReport
+      // -> collectHostUsage) to select a specific host's usage log.
+      { name: '--host', type: 'string', valueName: 'name', description: 'host usage log to overlay (default: auto-detect)', required: false, default: null },
+    ],
+  },
+  handler: cmdReport,
+});
+
+// --- knowledge ------------------------------------------------------------
+
+registerCommand({
+  name: 'knowledge',
+  summary: 'knowledge layer mode switch and purge (human deletion always wins)',
+  group: 'knowledge',
+  sideEffect: 'mutate',
+  // Subcommand/alternation syntax (`<on|suggest|...>`, `purge <file|--all>`,
+  // `commit <none|repo>`, `migrate-store`) — not a flat flag list, so this is
+  // an explicit `usage` override rather than an auto-generated signature.
+  usage: '<on|suggest|off|freeze|capture-only> | --status | purge <file|--all> | commit <none|repo> | migrate-store',
+  args: {
+    positionals: [
+      { name: 'subcommand', description: 'on|suggest|off|freeze|capture-only|purge|commit|migrate-store', required: false, default: null },
+      { name: 'target', description: 'purge target, or the commit mode (none|repo)', required: false, default: null },
+    ],
+    flags: [
+      // --status has no reader in cmdKnowledge (the bare/no-subcommand
+      // branch already IS the status view) — declared anyway so the
+      // pre-registry no-op invocation `harness knowledge --status` keeps
+      // validating, matching the old CATALOG's documented `--status` option.
+      { name: '--status', type: 'boolean', description: 'show the active mode (default)', required: false, default: false },
+      // `purge --all` reads this flag-shaped token directly off argv[1]
+      // (cmdKnowledge), never through lib/flags.mjs — still flag-shaped, so
+      // strict validation needs it declared or it rejects as unknown.
+      { name: '--all', type: 'boolean', description: 'purge --all: reset the whole learnings store', required: false, default: false },
+    ],
+  },
+  handler: cmdKnowledge,
+});
+
+registerCommand({
+  name: 'consolidate',
+  summary: 'episode→learning debt, work packet, and validated apply',
+  group: 'knowledge',
+  sideEffect: 'mutate',
+  usage: '[--status | --candidates | --apply --ops <path> | --rebuild --yes]',
+  args: {
+    positionals: [],
+    flags: [
+      // --status has no reader (the default/no-flag branch already IS the
+      // status view) — declared for the same no-op-but-documented reason as
+      // `knowledge --status` above.
+      { name: '--status', type: 'boolean', description: 'debt vs threshold, quarantine, promotion candidates (default)', required: false, default: false },
+      { name: '--candidates', type: 'boolean', description: 'deterministic work packet for the consolidation skill', required: false, default: false },
+      { name: '--apply', type: 'boolean', description: 'validate and apply an ops JSON (sole writer); suggest mode requires --yes', required: false, default: false },
+      { name: '--ops', type: 'string', valueName: 'path', description: 'ops JSON path (with --apply)', required: false, default: null },
+      { name: '--rebuild', type: 'boolean', description: 'T2 reset for model-upgrade regeneration (git history retains learnings)', required: false, default: false },
+      { name: '--yes', type: 'boolean', description: 'confirm --apply (suggest mode) or --rebuild', required: false, default: false },
+    ],
+  },
+  handler: cmdConsolidate,
+});
+
+registerCommand({
+  name: 'remember',
+  summary: 'teach the harness a durable claim (human-teaching episode + learning)',
+  group: 'knowledge',
+  sideEffect: 'mutate',
+  args: {
+    positionals: [{ name: 'claim', description: 'the durable claim text', required: true, default: null }],
+    flags: [
+      { name: '--trigger', type: 'string', valueName: 't', description: 'applicability condition (required)', required: true, default: null },
+      { name: '--domain', type: 'string', valueName: 'd', description: 'learning domain directory (default general)', required: false, default: null },
+      // Undocumented in the old CATALOG, but read (lib/knowledge/remember.mjs
+      // threads its whole `flags` object into the underlying insight write).
+      { name: '--category', type: 'string', valueName: 'c', description: 'docs/solutions/<category>/ (default teachings)', required: false, default: null },
+      { name: '--tags', type: 'string', valueName: 'a,b', description: 'comma-separated tags', required: false, default: null },
+    ],
+  },
+  handler: cmdRemember,
+});
+
+registerCommand({
+  name: 'learning',
+  summary: 'human authority over one learning: retire, dispute, confirm, or promote',
+  group: 'knowledge',
+  sideEffect: 'mutate',
+  usage: '<retire|dispute|confirm|promote> <id> [--reason "<r>"] [--to <path>]',
+  args: {
+    positionals: [
+      { name: 'action', description: 'retire|dispute|confirm|promote', required: true, default: null },
+      { name: 'id', description: 'the learning id', required: true, default: null },
+    ],
+    flags: [
+      { name: '--reason', type: 'string', valueName: 'r', description: 'required for retire/dispute; recorded in the store commit', required: false, default: null },
+      { name: '--to', type: 'string', valueName: 'path', description: 'primitive path recorded on promote (behavior supersedes knowledge)', required: false, default: null },
+    ],
+  },
+  handler: cmdLearning,
+});
+
+registerCommand({
+  name: 'eval-knowledge',
+  summary: 'deterministic retrieval eval — hit/false-surface/token cost per arm (proxy, not net-benefit)',
+  group: 'knowledge',
+  sideEffect: 'read',
+  args: { positionals: [], flags: [] },
+  handler: cmdEvalKnowledge,
+});
+
+// --- utility ----------------------------------------------------------
+
+registerCommand({
+  name: 'resolve',
+  summary: 'print the resolved harness CLI path for agents',
+  group: 'utility',
+  sideEffect: 'read',
+  args: { positionals: [], flags: [] },
+  handler: cmdResolve,
 });

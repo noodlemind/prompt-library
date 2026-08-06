@@ -440,16 +440,48 @@ test('lifecycle commands append schema-v2 events and omit non-lifecycle commands
     0
   );
 
+  // P1.6 (carry-list, AC7 widening): ctx.events now attaches on the legacy
+  // ledger/--json path too, for every registered command — each of the
+  // three CLI calls above now also brackets with command.start/
+  // command.result (P1.5's dispatch-pipeline telemetry), additive to the
+  // pre-existing 'orient'/'gate' lifecycle events (recall's own internal
+  // 'recall'-type writeEvent call is still a no-op — that type is still
+  // absent from lib/events.mjs's EVENT_TYPES allow-list, unchanged by this
+  // task — so recall contributes only its two dispatch-level events, no
+  // 'recall'-type entry).
   const events = readEvents(workspace);
-  assert.deepEqual(events.map((event) => event.type), ['orient', 'gate']);
-  for (const event of events) {
+  assert.deepEqual(events.map((event) => event.type), [
+    'command.start', 'orient', 'command.result',
+    'command.start', 'gate', 'command.result',
+    'command.start', 'command.result',
+  ]);
+  for (const [index, event] of events.entries()) {
     assert.equal(event.version, 2);
     assert.match(event.id, /.+/);
     assert.match(event.ts, /^\d{4}-\d{2}-\d{2}T/);
-    assert.ok(['pass', 'warn', 'fail'].includes(event.result));
-    assert.match(event.session, /.+/);
+    // command.start carries the new 'pending' marker (P1.5 fix round 1) —
+    // never tallied as pass/warn/fail; every other event still uses the
+    // original pass|warn|fail vocabulary.
+    assert.ok(['pass', 'warn', 'fail', 'pending'].includes(event.result));
+    // The very first event ever written for a brand-new workspace is this
+    // run's command.start (P1.5/P1.6: emitted before the handler runs) —
+    // session.json doesn't exist yet at that exact instant (orient's own
+    // handler is what creates it, moments later, before its OWN 'orient'
+    // event writes), so ONLY that one leading event may carry a null
+    // session; every other event (including every later command.start,
+    // once the session exists) must not.
+    if (index === 0) assert.ok(event.session === null || /.+/.test(event.session));
+    else assert.match(event.session, /.+/);
     assert.equal(event.host, 'harness-cli');
   }
+  assert.deepEqual(
+    events.filter((e) => e.type === 'command.start').map((e) => e.result),
+    ['pending', 'pending', 'pending']
+  );
+  assert.deepEqual(
+    events.filter((e) => e.type === 'command.result').map((e) => e.result),
+    ['pass', 'pass', 'pass']
+  );
 });
 
 test('lifecycle events carry gen_ai.usage token estimates and events --summary rolls them up', () => {
@@ -566,10 +598,16 @@ test('events command returns aggregate json output', () => {
 
   assert.equal(result.status, 0, result.stderr);
   const body = JSON.parse(result.stdout);
-  assert.equal(body.count, 1);
-  assert.equal(body.summary.total, 1);
+  // P1.6 (carry-list, AC7 widening): `gate` now also brackets with
+  // command.start/command.result (additive to its own pre-existing 'gate'
+  // lifecycle event) — 3 events, not 1. `events` itself is deliberately
+  // excluded from this instrumentation (lib/registry.mjs's `dispatch`,
+  // `instrument: false` on the `events` entry) specifically so this read
+  // never observes its OWN dispatch's telemetry.
+  assert.equal(body.count, 3);
+  assert.equal(body.summary.total, 3);
   assert.equal(body.summary.lastActivePlan, 'docs/plans/2026-05-22-fix-example-plan.md');
-  assert.equal(body.events[0].type, 'gate');
+  assert.deepEqual(body.events.map((e) => e.type), ['command.start', 'gate', 'command.result']);
 });
 
 test('events command filters by session and failures and supports summary-only output', () => {
@@ -679,7 +717,7 @@ test('VS Code settings parser preserves URL strings and accepts JSONC comments',
   assert.equal(settings['chat.hookFilesLocations']['custom/hooks'], true);
 });
 
-test('VS Code doctor distinguishes a missing installed hook bundle from package assets', () => {
+test('VS Code doctor distinguishes a missing installed hook bundle from package assets', async () => {
   const copilotHome = tempDir('harness-copilot-');
   const assetsRoot = tempDir('harness-assets-');
   const workspace = tempDir('harness-workspace-');
@@ -688,7 +726,7 @@ test('VS Code doctor distinguishes a missing installed hook bundle from package 
   const settingsPath = path.join(tempDir('harness-vscode-'), 'settings.json');
   fs.writeFileSync(settingsPath, JSON.stringify(mergeVSCodeSettings({})));
 
-  const result = runDoctor({
+  const result = await runDoctor({
     copilotHome,
     assetsRoot,
     pkgRoot: packageRoot,
@@ -701,7 +739,7 @@ test('VS Code doctor distinguishes a missing installed hook bundle from package 
   assert.equal(result.checks.find((check) => check.id === 'V1')?.pass, false);
 });
 
-test('VS Code doctor proves discovery, gate, post-tool, and completion behavior', () => {
+test('VS Code doctor proves discovery, gate, post-tool, and completion behavior', async () => {
   const copilotHome = tempDir('harness-copilot-');
   const assetsRoot = tempDir('harness-assets-');
   const workspace = tempDir('harness-workspace-');
@@ -711,7 +749,7 @@ test('VS Code doctor proves discovery, gate, post-tool, and completion behavior'
   const settingsPath = path.join(tempDir('harness-vscode-'), 'settings.json');
   fs.writeFileSync(settingsPath, JSON.stringify(mergeVSCodeSettings({})));
 
-  const result = runDoctor({
+  const result = await runDoctor({
     copilotHome,
     assetsRoot,
     pkgRoot: packageRoot,

@@ -49,6 +49,8 @@ Installed to `~/.copilot/bin/harness` on every `harness install`. Add to PATH wi
 | `1` | Fail — stop before `editFiles` or compound |
 | `2` | Warn — may proceed with Activity log (strict profile: treat as block) |
 
+**Envelope versioning (Phase 1 workbench, additive).** Every registry-migrated command now also accepts `--output json-envelope\|agent\|jsonl` (`--output=value` works too): `json-envelope` wraps the same result data in a versioned `{schema, command, status, ...}` envelope, `agent` renders a budgeted plain-text summary for LLM callers, and `jsonl` (currently `verify` only) streams row-per-event with a terminal `result` row. `status` in all three uses one shared vocabulary — `ok\|failed\|cancelled\|timed-out`, plus `blocked` where gate-like semantics already use it. These are opt-in, additive lanes: every legacy shape documented below (the default ledger render and `--json`) is **unversioned and unchanged** — no `schema` field, no wrapper, byte-identical output. Do not rely on `--output` unless a command's help (`harness help <command>`) or this doc documents it for that command.
+
 ## Command catalog
 
 This table tracks only what differs in runtime character across commands — which turn a command runs on, whether it writes a lifecycle event, whether it mutates anything. Sigs and flags: `harness help <command>` (the CLI CATALOG is the single source of truth).

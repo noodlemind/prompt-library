@@ -181,7 +181,10 @@ function hookBlocked(result, event) {
   }
 }
 
-function runVSCodeHookProbe(hookRoot) {
+// P1.6: async — runVerify (lib/verify.mjs) is now async (AC8, wired onto
+// lib/runner.mjs's async spawn). Nothing about this fixture probe's own
+// behavior changes; it just has to await the one call it already made.
+async function runVSCodeHookProbe(hookRoot) {
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-doctor-vscode-'));
   const planRel = 'docs/plans/vscode-hook-doctor-plan.md';
   const result = {
@@ -261,7 +264,7 @@ function runVSCodeHookProbe(hookRoot) {
     result.unverifiedDenied = hookBlocked(deniedStop, 'Stop');
 
     const plan = loadPlan(workspace, planRel);
-    const verification = runVerify({
+    const verification = await runVerify({
       workspace,
       flags: { plan: planRel, base: 'HEAD', dryRun: false, enforcement: 'enforce' },
     });
@@ -288,12 +291,12 @@ function runVSCodeHookProbe(hookRoot) {
   }
 }
 
-function vscodeChecks({ copilotHome, settingsPaths }) {
+async function vscodeChecks({ copilotHome, settingsPaths }) {
   const hookRoot = path.join(copilotHome, 'hooks');
   const installed = fs.existsSync(path.join(hookRoot, 'hooks.json'));
   const loaded = installed ? loadInstalledHookConfig(hookRoot) : { config: null, error: 'Installed hook bundle is missing' };
   const discovery = vscodeDiscoveryConfigured(settingsPaths);
-  const probe = loaded.config ? runVSCodeHookProbe(hookRoot) : {};
+  const probe = loaded.config ? await runVSCodeHookProbe(hookRoot) : {};
   return [
     { id: 'V1', name: 'VS Code hook bundle installed', pass: installed, hint: 'Run: harness upgrade --configure-vscode' },
     { id: 'V2', name: 'VS Code hook configuration and commands resolvable', pass: Boolean(loaded.config), hint: loaded.error || 'Reinstall hooks' },
@@ -413,7 +416,7 @@ function knowledgeChecks({ workspace, copilotHome }) {
   return checks;
 }
 
-export function runDoctor({ copilotHome, assetsRoot, pkgRoot, flags, vscodeSettingsPaths = null, workspace = flags.workspace }) {
+export async function runDoctor({ copilotHome, assetsRoot, pkgRoot, flags, vscodeSettingsPaths = null, workspace = flags.workspace }) {
   const checks = [];
 
   const manifest = path.join(copilotHome, 'knowledge', 'manifest.yaml');
@@ -598,10 +601,10 @@ export function runDoctor({ copilotHome, assetsRoot, pkgRoot, flags, vscodeSetti
 
   if (flags.host === 'vscode') {
     checks.push(
-      ...vscodeChecks({
+      ...(await vscodeChecks({
         copilotHome,
         settingsPaths: vscodeSettingsPaths || resolveVSCodeSettingsPaths(),
-      })
+      }))
     );
   } else if (flags.host) {
     checks.push({

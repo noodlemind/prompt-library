@@ -35,15 +35,31 @@ test('the three P1.1 pilots are registered', () => {
     assert.equal(hasCommand(name), true, `${name} should be registered`);
     assert.ok(getCommand(name), `${name} entry should be retrievable`);
   }
-  assert.deepEqual(listCommands(), PILOTS);
+  // P1.6 migrated every remaining command onto the same registry — the
+  // pilots are no longer the ONLY entries, just three among many; the
+  // command-count assertion moved to test/prompt-library-contracts.test.mjs
+  // ('single-entry' style coverage is out of scope here).
+  for (const name of PILOTS) assert.ok(listCommands().includes(name));
 });
 
-test('non-pilot commands are not registered and fall through untouched', () => {
-  for (const name of ['doctor', 'install', 'upgrade', 'events', 'consolidate', 'gate', 'verify', 'recall', 'help']) {
-    assert.equal(hasCommand(name), false, `${name} must not be registered in P1.1`);
-    assert.equal(getCommand(name), null);
-    assert.equal(describeCommand(name), null);
+// P1.6: every command formerly reached through bin/harness.mjs's
+// hand-written switch is now registered too — the switch itself is deleted
+// (AC1). `help`/`--help`/`-h` is the one deliberate exception: it isn't a
+// command with a side-effect class of its own, so bin/harness.mjs handles it
+// directly rather than registering it (see bin/harness.mjs's own comment).
+test('every migrated command is registered; help stays a dedicated non-command branch', () => {
+  for (const name of [
+    'doctor', 'install', 'upgrade', 'uninstall', 'init-repo', 'index', 'plan-new',
+    'events', 'consolidate', 'gate', 'verify', 'recall', 'get', 'validate-plan',
+    'compound', 'report', 'knowledge', 'remember', 'learning', 'eval-knowledge', 'resolve',
+  ]) {
+    assert.equal(hasCommand(name), true, `${name} should be registered (P1.6 migration)`);
+    assert.ok(getCommand(name), `${name} entry should be retrievable`);
+    assert.ok(describeCommand(name), `${name} should have help data`);
   }
+  assert.equal(hasCommand('help'), false, 'help is not a registered command');
+  assert.equal(getCommand('help'), null);
+  assert.equal(describeCommand('help'), null);
 });
 
 // --- side-effect metadata -----------------------------------------------
@@ -56,6 +72,170 @@ test('every pilot entry declares read-only side-effect metadata', () => {
     assert.deepEqual(entry.outputModes, ['ledger', 'json']);
     assert.equal(typeof entry.handler, 'function');
   }
+});
+
+// P1.6 requirement #7: every migrated command's sideEffect classification is
+// asserted, not just declared — read | mutate | execute per the registry's
+// own enum (lib/registry.mjs's assertValidEntry already rejects anything
+// else at registration time; this pins the actual classification per
+// command against the brief's read/mutate/execute judgment).
+test('P1.6 migrated commands carry the correct sideEffect classification', () => {
+  const expected = {
+    // read
+    doctor: 'read',
+    'validate-plan': 'read',
+    recall: 'read',
+    get: 'read',
+    events: 'read',
+    'eval-knowledge': 'read',
+    resolve: 'read',
+    // mutate — classified by mutating CAPABILITY, not default-invocation
+    // behavior: consolidate/gate/plan-new/index are mutate even though their
+    // default invocation is read-only; report is mutate for the same reason
+    // — `--sync` performs real writes to the global ~/.harness telemetry
+    // store (lib/telemetry-store.mjs), just as install/upgrade write to the
+    // equally-global ~/.copilot.
+    install: 'mutate',
+    upgrade: 'mutate',
+    uninstall: 'mutate',
+    'init-repo': 'mutate',
+    index: 'mutate',
+    'plan-new': 'mutate',
+    gate: 'mutate',
+    compound: 'mutate',
+    report: 'mutate',
+    knowledge: 'mutate',
+    consolidate: 'mutate',
+    remember: 'mutate',
+    learning: 'mutate',
+    // execute — spawns arbitrary trusted commands via lib/runner.mjs
+    verify: 'execute',
+  };
+  for (const [name, sideEffect] of Object.entries(expected)) {
+    const entry = getCommand(name);
+    assert.ok(entry, `${name} must be registered`);
+    assert.equal(entry.sideEffect, sideEffect, `${name} sideEffect classification`);
+    assert.equal(['read', 'mutate', 'execute'].includes(entry.sideEffect), true);
+  }
+});
+
+// P1.6 requirement #7: registry-level dispatch tests for at least the
+// mutate/execute-class commands — `dispatch()` called directly (not the CLI
+// process), proving the real handler runs and the side-effect actually
+// happens, not just that the entry is data-registered.
+test('dispatch: a mutate-class command (gate) actually mutates session state through the real handler', async () => {
+  const workspace = tempDir('registry-mutate-gate-');
+  fs.mkdirSync(path.join(workspace, 'docs', 'plans'), { recursive: true });
+  const sessionPath = path.join(workspace, '.harness', 'session.json');
+  assert.equal(fs.existsSync(sessionPath), false, 'precondition: no session yet');
+
+  const code = await dispatch(['gate', '--workspace', workspace, '--json'], {});
+  // No locked plan present -> gate blocks, but it still WRITES session state
+  // (gateStatus, lastGateAt) regardless of pass/fail — that write is the
+  // mutate-class side effect under test here, not the exit code.
+  assert.ok(Number.isInteger(code));
+  assert.equal(fs.existsSync(sessionPath), true, 'gate must have written .harness/session.json');
+  const session = JSON.parse(fs.readFileSync(sessionPath, 'utf8'));
+  assert.match(session.lastGateAt, /^\d{4}-\d{2}-\d{2}T/);
+  assert.equal(getCommand('gate').sideEffect, 'mutate');
+});
+
+test('dispatch: an execute-class command (verify) is registered as execute and actually spawns a trusted check via the real handler', async () => {
+  assert.equal(getCommand('verify').sideEffect, 'execute');
+
+  const workspace = tempDir('registry-execute-verify-');
+  const plansDir = path.join(workspace, 'docs', 'plans');
+  fs.mkdirSync(plansDir, { recursive: true });
+  const rel = 'docs/plans/2026-07-29-feat-registry-verify-plan.md';
+  fs.writeFileSync(
+    path.join(workspace, rel),
+    `---
+plan_schema: 1
+title: "Registry verify example"
+type: feat
+status: in-progress
+plan_lock: true
+phase: 1
+risk: green
+intent: "registry-level execute dispatch"
+expected_outputs: ["verified change"]
+success_criteria: ["AC1 Example works"]
+verification:
+  required: [unit-tests]
+  criteria:
+    AC1: [unit-tests]
+reviews: {required: [], completed: [], critical_open: []}
+capability_gaps: []
+skills_used: ["engineer"]
+---
+
+# Registry verify example
+
+## Overview
+
+Registry-level execute dispatch.
+
+## Intent Contract
+
+- **Goal:** Prove verify executes a trusted check via dispatch().
+- **Expected outputs:** verified change.
+- **Success criteria:** AC1 passes.
+
+## Acceptance Criteria
+
+- [x] **AC1** Example works.
+
+## Plan
+
+### Phase 1 — Implement
+
+- [x] Implement the example.
+
+## Impacted Files
+
+- \`src/example.js\`
+
+## Technical Notes
+
+None.
+
+## Verification Plan
+
+Run trusted named checks.
+
+## Risk & Review Routing
+
+No required specialist review.
+
+## Review Findings
+
+No open findings.
+
+## Activity
+
+- Work recorded.
+`,
+    'utf8'
+  );
+  const configDir = path.join(workspace, '.github', 'harness');
+  fs.mkdirSync(configDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(configDir, 'checks.yaml'),
+    `version: 1\nchecks:\n  unit-tests:\n    command: ${JSON.stringify([process.execPath, '-e', 'process.exit(0)'])}\n`
+  );
+  const git = (args) =>
+    spawnSync('git', args, { cwd: workspace, encoding: 'utf8', env: { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_SYSTEM: '/dev/null' } });
+  assert.equal(git(['init', '-q']).status, 0);
+  git(['config', 'user.email', 'harness@example.test']);
+  git(['config', 'user.name', 'Harness Test']);
+  fs.mkdirSync(path.join(workspace, 'src'), { recursive: true });
+  fs.writeFileSync(path.join(workspace, 'src', 'example.js'), 'export const value = 1;\n');
+  git(['add', '.']);
+  assert.equal(git(['commit', '-qm', 'baseline']).status, 0);
+
+  const code = await dispatch(['verify', '--plan', rel, '--base', 'HEAD', '--workspace', workspace, '--json'], {});
+  assert.equal(code, 0, 'the trusted check actually ran (exit 0) through the real handler, not a stub');
+  assert.ok(fs.existsSync(path.join(workspace, '.harness', 'evidence')), 'verify wrote evidence — the real cmdVerify ran, not a mock');
 });
 
 // --- help data generation -------------------------------------------------
@@ -79,9 +259,12 @@ test('describeCommand produces help data shaped for the existing renderer', () =
   assert.deepEqual(status.options, []);
 });
 
-test('describeAll lists exactly the registered pilots', () => {
+test('describeAll lists every registered command, pilots included', () => {
   const all = describeAll();
-  assert.deepEqual(all.map((d) => d.name), PILOTS);
+  const names = all.map((d) => d.name);
+  for (const name of PILOTS) assert.ok(names.includes(name));
+  // P1.6: no longer "exactly the pilots" — every migrated command is here too.
+  assert.ok(names.length > PILOTS.length, 'describeAll must include the P1.6-migrated commands, not just the pilots');
   for (const d of all) {
     assert.equal(typeof d.summary, 'string');
     assert.ok(d.summary.length > 0);
@@ -228,7 +411,12 @@ test('CLI: registry-dispatched status still renders the human ledger line unchan
   assert.match(result.stdout, /home\s+/);
 });
 
-test('CLI: a non-registered command still falls through to the existing switch untouched', () => {
+// P1.6: the switch this test's name originally referenced is deleted (AC1) —
+// `events` is itself a registered command now, dispatched through the same
+// `dispatch()` every other command uses. Kept (renamed) as a plain
+// behavioral regression check: a command outside this file's own pilot set
+// still produces its documented shape end to end.
+test('CLI: a non-pilot registered command (events) dispatches through the registry end to end', () => {
   const workspace = tempDir('registry-fallthrough-ws-');
   const result = runHarness(['events', '--workspace', workspace, '--json']);
 
@@ -237,7 +425,10 @@ test('CLI: a non-registered command still falls through to the existing switch u
   assert.ok('count' in body);
 });
 
-test('CLI: a genuinely unknown top-level command still hits the switch default case', () => {
+// P1.6: no switch/default case remains — bin/harness.mjs's `else` branch
+// (unregistered, non-'help' command name) produces the same structured
+// E_USAGE shape the switch's `default:` case used to.
+test('CLI: a genuinely unknown top-level command produces a structured E_USAGE error', () => {
   const result = runHarness(['this-command-does-not-exist']);
 
   assert.equal(result.status, EXIT.usage);

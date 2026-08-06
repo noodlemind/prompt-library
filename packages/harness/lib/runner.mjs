@@ -205,13 +205,29 @@ export function runProcess({
     child.stdout?.setEncoding('utf8');
     child.stderr?.setEncoding('utf8');
 
+    // P1.6 (carry-list c): a caller-supplied onStdout/onStderr that throws
+    // must never take down the spawned child's own stream handling with it —
+    // the buffered sink (and the process outcome itself) still has to be
+    // collected regardless of what the caller's own callback does.
     child.stdout?.on('data', (chunk) => {
       stdoutSink.push(chunk);
-      if (onStdout) onStdout(chunk);
+      if (onStdout) {
+        try {
+          onStdout(chunk);
+        } catch {
+          // caller's callback failed — swallow, buffered stdout is unaffected
+        }
+      }
     });
     child.stderr?.on('data', (chunk) => {
       stderrSink.push(chunk);
-      if (onStderr) onStderr(chunk);
+      if (onStderr) {
+        try {
+          onStderr(chunk);
+        } catch {
+          // caller's callback failed — swallow, buffered stderr is unaffected
+        }
+      }
     });
 
     child.on('close', (exitCode, signalName) => {

@@ -59,6 +59,24 @@ test('onStdout/onStderr stream live chunks that match the buffered result', asyn
   assert.equal(result.stderr, 'oops\n');
 });
 
+// P1.6 (carry-list c): a throwing onStdout/onStderr must not take the
+// buffered result down with it.
+test('a throwing onStdout/onStderr does not break buffering or the resolved result', async () => {
+  const script = "process.stdout.write('hi\\n'); process.stderr.write('bye\\n');";
+  const result = await runProcess({
+    argv: [process.execPath, '-e', script],
+    onStdout: () => {
+      throw new Error('boom stdout');
+    },
+    onStderr: () => {
+      throw new Error('boom stderr');
+    },
+  });
+  assert.equal(result.status, 'ok');
+  assert.equal(result.stdout, 'hi\n');
+  assert.equal(result.stderr, 'bye\n');
+});
+
 test('maxBuffer truncates buffered stdout at a line boundary', async () => {
   const script = "for (let i = 0; i < 5000; i++) process.stdout.write('x'.repeat(50) + '\\n');";
   const result = await runProcess({
@@ -201,7 +219,7 @@ test('env passed explicitly is used as-is, not merged with process.env', async (
   assert.deepEqual(Object.keys(seenEnv).filter((key) => key !== '__CF_USER_TEXT_ENCODING'), ['ONLY_VAR']);
 });
 
-test('rejects a malformed argv synchronously', () => {
+test('throws on a malformed argv synchronously', () => {
   assert.throws(() => runProcess({ argv: [] }), TypeError);
   assert.throws(() => runProcess({ argv: 'not-an-array' }), TypeError);
 });

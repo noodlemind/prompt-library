@@ -34,7 +34,11 @@ const ui = createStyle({ argv: process.argv.slice(2) });
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const pkgRoot = pkgRootFromImportMeta(import.meta.url);
 
-function readPkgVersion() {
+// Exported (P1.6 carry-list a): lib/registry.mjs's resultOf producers need
+// the installed package version too — this is the one building block behind
+// both cmdStatus's own reading and the former, now-deleted
+// lib/registry.mjs#readHarnessVersion duplicate.
+export function readPkgVersion() {
   const p = JSON.parse(fs.readFileSync(path.join(pkgRoot, 'package.json'), 'utf8'));
   return p.version;
 }
@@ -251,7 +255,7 @@ export async function cmdDoctor(argv) {
   } catch {
     /* doctor still runs */
   }
-  const { checks, pass } = runDoctor({
+  const { checks, pass } = await runDoctor({
     copilotHome,
     assetsRoot: assets,
     pkgRoot,
@@ -289,11 +293,19 @@ export async function cmdDoctor(argv) {
   return exitCode;
 }
 
-export async function cmdStatus(argv) {
+// P1.6 (carry-list a): same shared-prefix extraction as computeOrientResult,
+// for status — cmdStatus and lib/registry.mjs's statusResultOf both parse
+// flags and resolve copilotHome/lock/version identically.
+export function computeStatusResult(argv) {
   const flags = parseFlags(argv);
   const copilotHome = resolveCopilotHome(flags.copilotHome);
   const lock = readLock(copilotHome);
   const version = readPkgVersion();
+  return { flags, copilotHome, lock, version };
+}
+
+export async function cmdStatus(argv) {
+  const { flags, copilotHome, lock, version } = computeStatusResult(argv);
 
   if (flags.json) {
     emitJson(flags, { packageVersion: version, copilotHome, lock });
@@ -442,13 +454,25 @@ export async function cmdIndex(argv) {
   return 0;
 }
 
-export async function cmdOrient(argv) {
+// P1.6 (carry-list a): the shared prefix cmdOrient and lib/registry.mjs's
+// orientResultOf both need — parse flags, resolve workspace/copilotHome/
+// query, run orient — extracted once so resultOf calls this instead of
+// duplicating it (task-2's original, acknowledged, file-ownership-forced
+// duplication). Returns everything either caller needs: cmdOrient uses
+// `flags`/`workspace`/`query` for its own writeEvent/render tail;
+// orientResultOf only needs `result`.
+export async function computeOrientResult(argv) {
   const { runOrient } = await import('./orient.mjs');
   const flags = parseFlags(argv);
   const workspace = path.resolve(flags.workspace);
   const copilotHome = resolveCopilotHome(flags.copilotHome);
   const query = parseQueryFromArgv(argv, flags);
   const result = runOrient({ workspace, copilotHome, flags, query });
+  return { flags, workspace, copilotHome, query, result };
+}
+
+export async function cmdOrient(argv) {
+  const { flags, workspace, query, result } = await computeOrientResult(argv);
   const orientPack = (() => {
     try {
       return fs.readFileSync(path.join(workspace, result.contextPack), 'utf8');
@@ -554,12 +578,38 @@ export async function cmdGate(argv) {
   return policyExitCode;
 }
 
-export async function cmdVerify(argv) {
-  const { runVerify, exitCodeForOutcome } = await import('./verify.mjs');
+// P1.6: verify is the one command wired onto lib/runner.mjs for its named
+// check execution (AC8) — `ctx.signal` (bin/harness.mjs's SIGINT->AbortSignal
+// bridge, wired only for this command) lets a check-in-flight actually be
+// cancelled, and `ctx.output === 'jsonl'` opts into row-per-event streaming
+// via lib/envelope.mjs's createJsonlStream. Every other lane (the default
+// ledger render, and legacy --json) is byte-identical to before except that
+// `runVerify` itself is now async — see lib/verify.mjs's own doc comment for
+// the runner-wiring detail and the cancellation-skips-evidence contract.
+export async function cmdVerify(argv, ctx = {}) {
+  const { runVerify, exitCodeForOutcome, statusForVerifyResult, unifiedStatusForCheck } = await import('./verify.mjs');
   const flags = parseFlags(argv);
   const workspace = path.resolve(flags.workspace);
-  const result = runVerify({ workspace, flags });
-  const exitCode = exitCodeForOutcome(result.outcome, result.enforcement);
+  const signal = ctx.signal;
+  const streaming = ctx.output === 'jsonl';
+
+  let jsonl = null;
+  let onEvent;
+  if (streaming) {
+    const { createJsonlStream } = await import('./envelope.mjs');
+    jsonl = createJsonlStream(process.stdout);
+    jsonl.start({ command: 'verify', plan: flags.plan || null });
+    onEvent = (event, fields = {}) => {
+      if (event === 'progress') jsonl.progress(fields);
+      else if (event === 'row') jsonl.row(fields);
+      else jsonl.write(event, fields);
+    };
+  }
+
+  const result = await runVerify({ workspace, flags, signal, onEvent });
+  const cancelled = result.outcome === 'cancelled';
+  const exitCode = cancelled ? EXIT.cancelled : exitCodeForOutcome(result.outcome, result.enforcement);
+
   const previous = readSession(workspace) || {};
   writeSession(
     workspace,
@@ -577,12 +627,23 @@ export async function cmdVerify(argv) {
     command: 'verify',
     plan: result.plan,
     exitCode,
-    result: result.outcome === 'passed' ? 'pass' : result.outcome === 'failed' ? 'fail' : 'warn',
+    result: cancelled ? 'warn' : result.outcome === 'passed' ? 'pass' : result.outcome === 'failed' ? 'fail' : 'warn',
     checks: result.checks,
-    blockedReason: result.outcome === 'passed' ? null : `${result.outcome} verification`,
+    blockedReason: cancelled ? 'verification cancelled (SIGINT)' : result.outcome === 'passed' ? null : `${result.outcome} verification`,
     usage: usageFields({ input: result.plan || '', output: result.checks.map((c) => c.message).join('\n') }),
     learnings: flags.learnings ? flags.learnings.split(',').map((s) => s.trim()).filter(Boolean) : undefined,
   });
+
+  if (streaming) {
+    jsonl.result({
+      status: statusForVerifyResult(result),
+      outcome: result.outcome,
+      exitCode,
+      evidencePath: result.evidencePath,
+      checks: result.checks.map((c) => ({ id: c.id, status: c.status, unifiedStatus: unifiedStatusForCheck(c) })),
+    });
+    return exitCode;
+  }
 
   if (flags.json) emitJson(flags, result);
   else {
@@ -590,18 +651,20 @@ export async function cmdVerify(argv) {
     const passed = result.outcome === 'passed';
     console.log(
       ui.line({
-        state: passed ? 'ok' : exitCode === 0 ? 'warn' : 'error',
+        state: cancelled ? 'warn' : passed ? 'ok' : exitCode === 0 ? 'warn' : 'error',
         key: 'verify',
-        value: passed
-          ? `passed · ${result.checks.length} checks`
-          : `${result.outcome} · ${failed} of ${result.checks.length} checks`,
+        value: cancelled
+          ? 'cancelled · verification interrupted'
+          : passed
+            ? `passed · ${result.checks.length} checks`
+            : `${result.outcome} · ${failed} of ${result.checks.length} checks`,
         note: result.evidencePath,
       })
     );
     printChecks(flags, result.checks, (c) => c.status === 'passed');
     if (passed) {
       printNext('harness compound (or /auto-compound), then stop');
-    } else {
+    } else if (!cancelled) {
       const firstFail = result.checks.find((c) => c.status !== 'passed');
       if (firstFail) {
         const detail = String(firstFail.message ?? firstFail.name ?? '').slice(0, 100);
