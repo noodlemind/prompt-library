@@ -75,7 +75,6 @@ export function writeEvent(workspace, flags, payload) {
     plan: payload.plan || null,
     phase: payload.phase || null,
     result: eventResult({ result: payload.result, exitCode: payload.exitCode, checks }),
-    exitCode: payload.exitCode ?? 0,
     checks,
     session: payload.session || session?.sessionId || null,
     host: payload.host || flags.host || process.env.HARNESS_HOST || 'harness-cli',
@@ -84,6 +83,16 @@ export function writeEvent(workspace, flags, payload) {
   if (payload.blockedReason) event.blockedReason = payload.blockedReason;
   if (payload.usage) event.usage = payload.usage;
   for (const field of [
+    // Minor fix: `exitCode` used to be unconditionally stamped `?? 0` above
+    // — a `command.start`/`agent_lane` ('pending') event, which fires
+    // BEFORE the command has run at all, therefore falsely persisted
+    // `exitCode: 0` (a real, misleadingly-successful-looking value) instead
+    // of simply having no exit code yet. Moved into this same
+    // only-when-supplied loop as every other optional field — every
+    // caller that HAS a real exit code (command.result and every legacy
+    // writeEvent(workspace, flags, {...}) call site in lib/commands.mjs)
+    // already passes it explicitly, so this is a no-op for them.
+    'exitCode',
     'tool',
     'mutation',
     'targets',

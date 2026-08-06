@@ -76,7 +76,13 @@ async function runNamedCheck(workspace, name, config, { signal } = {}) {
   const output = { stdout: trimOutput(execution.stdout), stderr: trimOutput(execution.stderr), durationMs: execution.durationMs };
 
   if (execution.status === 'cancelled') {
-    return resultCheck(name, 'unavailable', 'Cancelled — verification was interrupted', output);
+    // `cancelled: true` is an explicit, structural marker distinguishing
+    // THIS 'unavailable' outcome (a genuine AbortSignal cancellation) from
+    // every other reason a check can land on 'unavailable' (a spawn
+    // failure, a missing/invalid config) — unifiedStatusForCheck (below)
+    // keys off this flag rather than pattern-matching the message text, so
+    // a later wording change here can never silently break that mapping.
+    return resultCheck(name, 'unavailable', 'Cancelled — verification was interrupted', { ...output, cancelled: true });
   }
   if (execution.status === 'timed-out') {
     return resultCheck(name, 'timeout', `Timed out after ${timeoutSeconds}s`, output);
@@ -101,6 +107,11 @@ async function runNamedCheck(workspace, name, config, { signal } = {}) {
 export function unifiedStatusForCheck(check) {
   if (check.status === 'passed') return 'ok';
   if (check.status === 'timeout') return 'timed-out';
+  // Minor fix: an aborted-in-flight check (the `cancelled: true` marker set
+  // above in runNamedCheck) must report 'cancelled', not the generic
+  // 'failed' every other 'unavailable' reason falls through to — the check
+  // never actually failed, it was interrupted.
+  if (check.cancelled) return 'cancelled';
   return 'failed';
 }
 

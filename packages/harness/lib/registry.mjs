@@ -59,6 +59,7 @@ import { resolveCopilotHome } from './paths.mjs';
 import { createEnvelope, createErrorEnvelope, STATUS } from './envelope.mjs';
 import { renderAgentLane, recordAgentLaneBytes } from './agent-lane.mjs';
 import { EVENT_TYPE, summarizeArgFlags } from './event-registry.mjs';
+import { createRedactor } from './redact.mjs';
 
 const REGISTRY = new Map();
 
@@ -235,6 +236,7 @@ export async function dispatch(argv, ctx = {}) {
   }
   validateArgs(entry, rest);
   const lane = ctx.output;
+  assertLaneSupported(entry, lane);
   // P1.6 (carry-list, AC7 widening): ctx.events now attaches on every path,
   // including the legacy ledger/--json default — EXCEPT `entry.instrument
   // === false`. The one entry that opts out today is `events` itself: its
@@ -253,10 +255,75 @@ export async function dispatch(argv, ctx = {}) {
   // result). Documented judgment call, not a spec value.
   const instrumented = entry.instrument !== false;
   const events = instrumented && ctx.events && typeof ctx.events.withCommand === 'function' ? ctx.events.withCommand(entry.name) : null;
-  if (lane && lane !== 'ledger' && entry.resultOf) {
+  // `assertLaneSupported` above already rejected every unsupported
+  // (entry, lane) combination, so by this point `lane === 'json' | 'agent'`
+  // implies `entry.resultOf` exists, and `lane === 'jsonl'` (verify only)
+  // has already been confirmed to fall through to the entry's own handler
+  // (lib/commands.mjs#cmdVerify reads `ctx.output === 'jsonl'` itself).
+  if (lane === 'json' || lane === 'agent') {
     return dispatchLane(entry, rest, ctx, lane, events);
   }
   return runHandler(entry, rest, ctx, events);
+}
+
+// Human-facing spelling for each internal `ctx.output` lane value — the
+// vocabulary bin/harness.mjs's `--output <value>` flag actually accepts
+// (its OUTPUT_LANES table maps the other direction). Duplicated here rather
+// than imported from bin/harness.mjs so this module stays free of any
+// dependency on the CLI wrapper — `dispatch()` is called directly by tests,
+// and could be called by any future embedder that shares the same
+// `ctx.output` contract documented on `dispatch` above.
+const LANE_DISPLAY_NAMES = { json: 'json-envelope', agent: 'agent', jsonl: 'jsonl' };
+
+/** One clause per group of commands that share the same lane support, e.g.
+ * "orient, learnings, status (--output json-envelope|agent); verify
+ * (--output jsonl)". Built from the registry itself, not a hand-maintained
+ * list, so a later command that gains `resultOf`/`supportsJsonl` is picked
+ * up automatically — the whole point of the Important-3 fix below is that
+ * this text can never silently drift from what dispatch() actually
+ * enforces. */
+function laneBearingCommands() {
+  const dispatchLaneCommands = [];
+  const jsonlCommands = [];
+  for (const candidate of REGISTRY.values()) {
+    if (candidate.resultOf) dispatchLaneCommands.push(candidate.name);
+    if (candidate.supportsJsonl) jsonlCommands.push(candidate.name);
+  }
+  const parts = [];
+  if (dispatchLaneCommands.length) parts.push(`${dispatchLaneCommands.join(', ')} (--output json-envelope|agent)`);
+  if (jsonlCommands.length) parts.push(`${jsonlCommands.join(', ')} (--output jsonl)`);
+  return parts.join('; ') || 'none registered';
+}
+
+/**
+ * Lane-contract honesty (Important-3 fix): a registered command that does
+ * not actually support the requested `--output` lane must fail loudly — a
+ * structured `E_USAGE` error, exit 2 — instead of silently rendering its
+ * ordinary ledger output as if `--output` had never been passed. Pre-fix
+ * repro: `harness gate --output json-envelope` printed plain ledger rows
+ * with no envelope, no error, and no signal to the caller that its request
+ * was ignored; same for any other non-lane-aware command under
+ * `json-envelope`/`agent`/`jsonl`.
+ *
+ * `lane` is `dispatch()`'s own short internal vocabulary (`'json' |
+ * 'agent' | 'jsonl'`); `'ledger'` or a falsy lane is always supported and
+ * returns immediately. Support is a STRUCTURAL fact about the entry, not a
+ * hand-maintained allowlist: `resultOf` is what lets `dispatchLane` render
+ * `json`/`agent` for an entry (see `dispatchLane`'s own doc comment above),
+ * and `supportsJsonl` is the one explicit opt-in for verify's own
+ * streaming special case (its own handler renders it, not `dispatchLane` —
+ * see lib/commands.mjs#cmdVerify).
+ */
+function assertLaneSupported(entry, lane) {
+  if (!lane || lane === 'ledger') return;
+  let supported = false;
+  if (lane === 'json' || lane === 'agent') supported = Boolean(entry.resultOf);
+  else if (lane === 'jsonl') supported = entry.supportsJsonl === true;
+  if (supported) return;
+  throw usageError(
+    `command ${entry.name} does not support --output ${LANE_DISPLAY_NAMES[lane] || lane}; lane-bearing commands: ${laneBearingCommands()}`,
+    'harness help'
+  );
 }
 
 // Reverse-maps a numeric exit code back onto the unified status vocabulary
@@ -378,6 +445,18 @@ async function runHandler(entry, rest, ctx, events) {
 async function dispatchLane(entry, rest, ctx, lane, events) {
   const schema = 1;
   const startedAt = Date.now();
+  // Critical fix: the json-envelope branch (the `else` below, both success
+  // and error) used to serialize `envelope`/`errorEnvelope` via a bare
+  // `JSON.stringify` — no redaction at all — while the `agent` branch right
+  // next to it already ran the SAME data through `renderAgentLane`'s
+  // redactor. Both branches render the identical command result data (a
+  // `--why` id, an echoed query, an error message built from caller input),
+  // so both must pass through the SAME data-boundary discipline before
+  // anything is written to stdout/stderr. One redactor instance, shared by
+  // both branches below (mirrors `ctx.redactor || createRedactor()` — the
+  // agent branch's own default, made explicit here since the json-envelope
+  // branch has no other component to default it for).
+  const redactor = ctx.redactor || createRedactor();
   events?.emit(EVENT_TYPE.COMMAND_START, { flags: summarizeArgFlags(rest, flagIndex(entry)), result: PENDING_RESULT });
   try {
     const result = await entry.resultOf(rest, ctx);
@@ -385,7 +464,7 @@ async function dispatchLane(entry, rest, ctx, lane, events) {
     if (lane === 'agent') {
       const rendered = renderAgentLane(envelope, {
         budgetBytes: entry.agentBudgetBytes,
-        redactor: ctx.redactor,
+        redactor,
         inert: ctx.inert,
       });
       process.stdout.write(`${rendered.text}\n`);
@@ -393,7 +472,8 @@ async function dispatchLane(entry, rest, ctx, lane, events) {
     } else {
       // lane === 'json' (or any future lane this entry doesn't specialize
       // for) — the versioned envelope is always a safe default rendering.
-      console.log(JSON.stringify(envelope));
+      // Redacted (see the fix comment above) before it ever reaches stdout.
+      console.log(JSON.stringify(redactor.redactValue(envelope)));
     }
     events?.emit(EVENT_TYPE.COMMAND_RESULT, commandResultPayload(STATUS.OK, Date.now() - startedAt, EXIT.ok));
     return EXIT.ok;
@@ -412,13 +492,17 @@ async function dispatchLane(entry, rest, ctx, lane, events) {
     if (lane === 'agent') {
       const rendered = renderAgentLane(errorEnvelope, {
         budgetBytes: entry.agentBudgetBytes,
-        redactor: ctx.redactor,
+        redactor,
         inert: ctx.inert,
       });
       process.stdout.write(`${rendered.text}\n`);
       if (events) recordAgentLaneBytes({ writeEvent: (record) => events.emit(record.type, { ...record, result: PENDING_RESULT }) }, entry.name, rendered.bytes);
     } else {
-      console.error(JSON.stringify(errorEnvelope));
+      // Redacted for the same reason as the success branch above — an
+      // error's `message`/`fix` is frequently built directly from caller
+      // input (e.g. learnings' `no learning ${flags.why}`), so it carries
+      // exactly the same secret-leak risk as the success envelope.
+      console.error(JSON.stringify(redactor.redactValue(errorEnvelope)));
     }
     events?.emit(EVENT_TYPE.COMMAND_RESULT, commandResultPayload(status, Date.now() - startedAt, exit));
     return exit;
@@ -753,6 +837,16 @@ registerCommand({
   summary: 'run trusted named checks and capture evidence',
   group: 'engineer loop',
   sideEffect: 'execute',
+  // No `resultOf` (verify's canonical result isn't duplicated for
+  // dispatchLane — see the P1.6 comment on the resultOf producers below),
+  // but it DOES support one lane on its own: `--output jsonl` is handled
+  // entirely inside its own handler (lib/commands.mjs#cmdVerify reads
+  // `ctx.output === 'jsonl'` itself). `supportsJsonl` is the explicit,
+  // structural opt-in `assertLaneSupported`/`laneBearingCommands` (this
+  // module) key off of — without it, `verify --output jsonl` would now be
+  // rejected by the Important-3 lane-contract-honesty guard alongside every
+  // other command that doesn't actually support the lane it was asked for.
+  supportsJsonl: true,
   args: {
     positionals: [],
     flags: [

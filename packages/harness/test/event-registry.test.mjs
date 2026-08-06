@@ -24,7 +24,7 @@ import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 import { createEventRegistry, detectActor, summarizeArgFlags, EVENT_TYPE } from '../lib/event-registry.mjs';
 import { dispatch, registerCommand } from '../lib/registry.mjs';
-import { EVENT_TYPES as REAL_EVENT_TYPES, eventPath, readEvents, summarizeEvents } from '../lib/events.mjs';
+import { EVENT_TYPES as REAL_EVENT_TYPES, eventPath, readEvents, summarizeEvents, writeEvent as writeRealEvent } from '../lib/events.mjs';
 
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const binPath = path.join(packageRoot, 'bin', 'harness.mjs');
@@ -380,13 +380,16 @@ test('runHandler (legacy/ledger branch): the persisted command.start event also 
     sideEffect: 'read',
     args: { flags: [], positionals: [] },
     handler: async () => 0,
-    // deliberately no resultOf — forces the ledger branch even under an
-    // output lane, same as the earlier forward-looking-path test.
+    // deliberately no resultOf — the legacy/ledger branch.
   });
 
   const writeEvent = spyWriteEvent();
   const events = createEventRegistry({ writeEvent, actor: { kind: 'user' } });
-  await dispatch(['__test-start-pending-ledger'], { output: 'agent', events });
+  // Important-3 fix (lane-contract honesty): a resultOf-less entry no longer
+  // silently accepts an output lane it can't render (`assertLaneSupported`
+  // now rejects that combination outright) — 'ledger' (the only lane this
+  // fixture actually supports) is what exercises the legacy handler here.
+  await dispatch(['__test-start-pending-ledger'], { output: 'ledger', events });
 
   const start = writeEvent.calls.find((e) => e.type === 'command.start');
   assert.ok(start);
@@ -435,6 +438,53 @@ test('dispatchLane: the persisted agent_lane event carries result:"pending" on t
   const metered = writeEvent.calls.find((e) => e.type === 'agent_lane');
   assert.ok(metered);
   assert.equal(metered.result, 'pending');
+});
+
+// --- Minor fix: a pending event must not persist a fabricated exitCode:0 --
+//
+// lib/events.mjs#writeEvent used to stamp `exitCode: payload.exitCode ?? 0`
+// unconditionally — a `command.start`/`agent_lane` ('pending') event, which
+// fires BEFORE the command has run at all, therefore persisted a real,
+// misleadingly-successful-looking `exitCode: 0` instead of simply having no
+// exit code yet. These tests exercise the REAL lib/events.mjs#writeEvent
+// (not the spy the tests above use), since the bug was specifically in that
+// function's own field-construction logic.
+
+test('lib/events.mjs#writeEvent omits exitCode entirely for a pending event, but still persists a caller-supplied exitCode (including 0)', () => {
+  const workspace = tempDir('events-exitcode-omit-ws-');
+
+  const started = writeRealEvent(workspace, {}, { type: 'command.start', command: 'x', result: 'pending' });
+  assert.ok(started, 'command.start is in the EVENT_TYPES allow-list, so this must not no-op');
+  assert.equal('exitCode' in started, false, 'a pending event must not carry a fabricated exitCode:0');
+
+  const metered = writeRealEvent(workspace, {}, { type: 'agent_lane', command: 'x', result: 'pending' });
+  assert.equal('exitCode' in metered, false, 'agent_lane is the other pending-only event type');
+
+  // A REAL exit code the caller supplied — including the falsy-but-real 0 —
+  // must still persist; this is a no-op fix for every caller with an actual
+  // outcome, not a blanket removal of the field.
+  const finished = writeRealEvent(workspace, {}, { type: 'command.result', command: 'x', result: 'pass', exitCode: 0 });
+  assert.equal('exitCode' in finished, true);
+  assert.equal(finished.exitCode, 0);
+  const failed = writeRealEvent(workspace, {}, { type: 'command.result', command: 'x', result: 'fail', exitCode: 1 });
+  assert.equal(failed.exitCode, 1);
+
+  // The persisted-to-disk rows must agree with the in-memory return values
+  // (writeEvent's return value is the exact object appended to the file).
+  const onDisk = readEvents(workspace, 10);
+  assert.equal(onDisk.length, 4);
+  assert.equal('exitCode' in onDisk.find((e) => e.id === started.id), false);
+  assert.equal('exitCode' in onDisk.find((e) => e.id === metered.id), false);
+  assert.equal(onDisk.find((e) => e.id === finished.id).exitCode, 0);
+  assert.equal(onDisk.find((e) => e.id === failed.id).exitCode, 1);
+
+  // No consumer regression: eventResult()'s pass/warn/fail tally never
+  // needed exitCode for these two pending records anyway (they always carry
+  // an explicit `result`) — summarizeEvents must still count sensibly.
+  const summary = summarizeEvents(onDisk);
+  assert.equal(summary.total, 4);
+  assert.equal(summary.pass, 1);
+  assert.equal(summary.fail, 1);
 });
 
 // --- dispatch()/dispatchLane() wiring: command.start/command.result ----
@@ -521,10 +571,10 @@ test('dispatchLane: a thrown E_TIMEOUT error produces command.result with status
   assert.equal(result.status, 'timed-out');
 });
 
-test('dispatch: the legacy-handler (ledger) branch also brackets with command.start/command.result when a resultOf-less entry runs under ctx.events (forward-looking path)', async () => {
+test('dispatch: the legacy-handler (ledger) branch also brackets with command.start/command.result for a resultOf-less entry under ctx.events', async () => {
   registerCommand({
     name: '__test-ledger-branch-events',
-    summary: 'fixture: no resultOf, so dispatch falls through to the legacy handler even with output set',
+    summary: 'fixture: no resultOf, so dispatch runs the legacy handler',
     sideEffect: 'read',
     args: { flags: [], positionals: [] },
     handler: async () => 0,
@@ -533,7 +583,11 @@ test('dispatch: the legacy-handler (ledger) branch also brackets with command.st
 
   const writeEvent = spyWriteEvent();
   const events = createEventRegistry({ writeEvent, actor: { kind: 'user' } });
-  const code = await dispatch(['__test-ledger-branch-events'], { output: 'agent', events });
+  // Important-3 fix (lane-contract honesty): this fixture has no `resultOf`,
+  // so it only supports the 'ledger' lane — requesting 'agent'/'json' for it
+  // would now be a structured E_USAGE error (see test/output-lane-wiring.test.mjs),
+  // not a silent fallthrough. 'ledger' is what exercises the legacy handler here.
+  const code = await dispatch(['__test-ledger-branch-events'], { output: 'ledger', events });
   assert.equal(code, 0);
 
   const types = writeEvent.calls.map((e) => e.type);
@@ -554,7 +608,10 @@ test('dispatch: a thrown error from the legacy handler still emits command.resul
 
   const writeEvent = spyWriteEvent();
   const events = createEventRegistry({ writeEvent, actor: { kind: 'user' } });
-  await assert.rejects(() => dispatch(['__test-ledger-branch-throws'], { output: 'agent', events }), (err) => err === original);
+  // 'ledger' — see the comment on the previous test for why (this fixture
+  // has no resultOf, so 'agent'/'json' would now be a structured E_USAGE
+  // error, not a fallthrough).
+  await assert.rejects(() => dispatch(['__test-ledger-branch-throws'], { output: 'ledger', events }), (err) => err === original);
 
   const result = writeEvent.calls.find((e) => e.type === 'command.result');
   assert.ok(result);

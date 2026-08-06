@@ -54,6 +54,23 @@ async function withCapturedStdout(fn) {
   }
 }
 
+/** Same as `withCapturedStdout`, for stderr — dispatchLane's json-envelope
+ * error branch writes there via `console.error`. */
+async function withCapturedStderr(fn) {
+  const originalWrite = process.stderr.write.bind(process.stderr);
+  let captured = '';
+  process.stderr.write = (chunk) => {
+    captured += chunk.toString();
+    return true;
+  };
+  try {
+    const code = await fn();
+    return { code, stderr: captured };
+  } finally {
+    process.stderr.write = originalWrite;
+  }
+}
+
 // --- CLI-level: bin/harness.mjs's extractOutputLane -----------------------
 
 test('CLI: --output json-envelope produces the versioned envelope for a registered pilot', () => {
@@ -202,4 +219,161 @@ test('dispatchLane error path honors entry.agentBudgetBytes, same as the success
     Buffer.byteLength(rendered, 'utf8') <= budgetBytes,
     `error-path agent-lane output (${Buffer.byteLength(rendered, 'utf8')} bytes) must honor agentBudgetBytes (${budgetBytes})`
   );
+});
+
+// --- Critical regression: the json-envelope lane must redact, same as agent ---
+//
+// Pre-fix, dispatchLane's `agent` branch ran the rendered result through
+// renderAgentLane's redactor, but the `else` (json-envelope) branch right
+// next to it serialized the SAME data via a bare `JSON.stringify` — no
+// redaction at all. Live repro this pins:
+//   harness learnings --why 'token=abcdef1234567890' --output json-envelope
+// leaked the raw token verbatim in `error.message` on stderr. These two
+// tests use a registered fixture command (success and error paths) instead
+// of the real `learnings --why` handler so the assertion is a precise,
+// minimal reproduction of the registry.mjs bug itself, not incidental to
+// learnings' own control flow.
+
+const PLANTED_SECRET = 'token=abcdef1234567890';
+const KV_SECRET_MASK = '«redacted:kv-secret»';
+
+test('dispatchLane json-envelope SUCCESS path redacts a secret-shaped result field before writing stdout', async () => {
+  registerCommand({
+    name: '__test-lane-json-redact-success',
+    summary: 'test fixture for the json-envelope success redaction regression',
+    sideEffect: 'read',
+    args: { flags: [], positionals: [] },
+    handler: async () => 0,
+    resultOf: async () => ({ note: `lookup failed: ${PLANTED_SECRET}` }),
+  });
+
+  const { code, stdout } = await withCapturedStdout(() => dispatch(['__test-lane-json-redact-success'], { output: 'json' }));
+  assert.equal(code, 0);
+  assert.doesNotMatch(stdout, /abcdef1234567890/, 'the raw secret must never reach stdout');
+  const body = JSON.parse(stdout);
+  assert.equal(body.note, `lookup failed: token=${KV_SECRET_MASK}`);
+});
+
+test('dispatchLane json-envelope ERROR path redacts a secret-shaped error message before writing stderr', async () => {
+  registerCommand({
+    name: '__test-lane-json-redact-error',
+    summary: 'test fixture for the json-envelope error redaction regression',
+    sideEffect: 'read',
+    args: { flags: [], positionals: [] },
+    handler: async () => 0,
+    resultOf: async () => {
+      // Mirrors the real repro: an E_TARGET error whose message echoes
+      // caller-supplied input verbatim (learningsResultOf's
+      // `no learning ${flags.why}`).
+      throw Object.assign(new Error(`no learning ${PLANTED_SECRET}`), { code: 'E_TARGET', exit: 1 });
+    },
+  });
+
+  const { code, stderr } = await withCapturedStderr(() => dispatch(['__test-lane-json-redact-error'], { output: 'json' }));
+  assert.equal(code, 1);
+  assert.doesNotMatch(stderr, /abcdef1234567890/, 'the raw secret must never reach stderr');
+  const body = JSON.parse(stderr);
+  assert.equal(body.error.message, `no learning token=${KV_SECRET_MASK}`);
+});
+
+// --- Important-3 regression: lane-contract honesty -------------------------
+//
+// Pre-fix, a non-lane-aware registered command (anything without a
+// `resultOf`) silently ignored `--output json-envelope|agent` and rendered
+// its ordinary human ledger — no envelope, no error, no signal to the
+// caller that its request was ignored. Live repro this pins:
+//   harness gate --output json-envelope
+// printed plain ledger rows, not an envelope. Fixed: `dispatch()` now
+// rejects an unsupported (command, lane) combination with a structured
+// E_USAGE error, exit 2, naming the lane-bearing commands.
+
+test('CLI: a non-lane-aware command (gate) rejects --output json-envelope with a structured usage error, exit 2', () => {
+  const workspace = tempDir('lane-unsupported-gate-ws-');
+  const copilotHome = tempDir('lane-unsupported-gate-home-');
+  const result = runHarness(['gate', '--workspace', workspace, '--copilot-home', copilotHome, '--output', 'json-envelope']);
+
+  assert.equal(result.status, EXIT.usage);
+  assert.equal(result.status, 2);
+  assert.match(result.stderr, /gate does not support --output json-envelope/);
+  assert.match(result.stderr, /lane-bearing commands/);
+  // The pre-fix bug was a SILENT no-op — pin that gate never even started
+  // (no session write), not just that an error text now appears alongside it.
+  assert.equal(fs.existsSync(path.join(workspace, '.harness', 'session.json')), false, 'gate must not have run at all');
+});
+
+test('dispatch: a non-lane-aware command (gate) rejects ctx.output "json" with a structured E_USAGE error naming lane-bearing commands', async () => {
+  const workspace = tempDir('dispatch-unsupported-gate-ws-');
+  await assert.rejects(
+    () => dispatch(['gate', '--workspace', workspace], { output: 'json' }),
+    (err) => {
+      assert.equal(err.code, 'E_USAGE');
+      assert.equal(err.exit, 2);
+      assert.match(err.message, /command gate does not support --output json-envelope/);
+      // `laneBearingCommands()` is built live from the whole registry, which
+      // by this point in the suite also carries other test files' own
+      // `registerCommand` fixtures (this module has no per-test registry
+      // reset) — so assert the THREE real pilots and the shape of each
+      // clause individually, not one exact contiguous "orient, learnings,
+      // status (--output ...)" substring, which would be a false failure
+      // the moment another resultOf-bearing fixture lands ahead of them.
+      assert.match(err.message, /lane-bearing commands: .*\borient\b/);
+      assert.match(err.message, /\blearnings\b/);
+      assert.match(err.message, /\bstatus\b/);
+      assert.match(err.message, /\(--output json-envelope\|agent\)/);
+      assert.match(err.message, /\bverify\b.*\(--output jsonl\)/);
+      return true;
+    }
+  );
+  assert.equal(fs.existsSync(path.join(workspace, '.harness')), false, 'gate must not have run at all — the check happens before the handler');
+});
+
+test('dispatch: a non-lane-aware command (gate) rejects ctx.output "agent" the same way', async () => {
+  const workspace = tempDir('dispatch-unsupported-gate-agent-ws-');
+  await assert.rejects(
+    () => dispatch(['gate', '--workspace', workspace], { output: 'agent' }),
+    (err) => {
+      assert.equal(err.code, 'E_USAGE');
+      assert.equal(err.exit, 2);
+      assert.match(err.message, /command gate does not support --output agent/);
+      return true;
+    }
+  );
+});
+
+test('dispatch: verify (jsonl-only, no resultOf) rejects ctx.output "json"/"agent" — jsonl support does not imply envelope/agent support', async () => {
+  const workspace = tempDir('dispatch-unsupported-verify-ws-');
+  await assert.rejects(
+    () => dispatch(['verify', '--workspace', workspace], { output: 'json' }),
+    (err) => {
+      assert.equal(err.code, 'E_USAGE');
+      assert.match(err.message, /command verify does not support --output json-envelope/);
+      return true;
+    }
+  );
+  await assert.rejects(
+    () => dispatch(['verify', '--workspace', workspace], { output: 'agent' }),
+    (err) => {
+      assert.equal(err.code, 'E_USAGE');
+      assert.match(err.message, /command verify does not support --output agent/);
+      return true;
+    }
+  );
+});
+
+test('dispatch: a non-lane-aware command (gate) rejects ctx.output "jsonl" too — jsonl is a verify-only opt-in, not a generic fallback', async () => {
+  const workspace = tempDir('dispatch-unsupported-gate-jsonl-ws-');
+  await assert.rejects(
+    () => dispatch(['gate', '--workspace', workspace], { output: 'jsonl' }),
+    (err) => {
+      assert.equal(err.code, 'E_USAGE');
+      assert.match(err.message, /command gate does not support --output jsonl/);
+      return true;
+    }
+  );
+});
+
+test('dispatch: ctx.output "ledger" (or omitted) is always accepted, regardless of lane support', async () => {
+  const workspace = tempDir('dispatch-ledger-always-ok-ws-');
+  const code = await dispatch(['gate', '--workspace', workspace, '--json'], { output: 'ledger' });
+  assert.ok(Number.isInteger(code));
 });

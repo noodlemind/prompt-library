@@ -4,6 +4,7 @@ import { createHash } from 'node:crypto';
 import { ensureHarnessDir } from './session.mjs';
 import { collectChangedFiles } from './plan-scope.mjs';
 import { assertNoSymlinkAncestors } from './fs-safe.mjs';
+import { createRedactor } from './redact.mjs';
 
 const EVIDENCE_VERSION = 2;
 
@@ -27,8 +28,22 @@ export function writeEvidence(workspace, result, dryRun = false) {
   if (!dryRun) {
     const full = path.join(workspace, rel);
     fs.mkdirSync(path.dirname(full), { recursive: true });
+    // Critical fix: a named check's captured stdout/stderr (result.checks[])
+    // is arbitrary output from a trusted-but-unreviewed command — a test
+    // run, a lint pass, a build — and routinely contains secret-shaped
+    // content (a token echoed by a misconfigured tool, a credential in an
+    // error trace). This artifact is a durable, on-disk file under
+    // `.harness/evidence/`, unlike a terminal scrollback, so it is redacted
+    // here at the persistence boundary before it is ever written — the
+    // SAME `lib/redact.mjs` discipline already applied to the events log
+    // (lib/event-registry.mjs) and the envelope/agent output lanes
+    // (lib/registry.mjs). `redactValue` returns a new, deep-copied
+    // structure — `result` itself (and therefore whatever the caller does
+    // with it afterward, e.g. render it to the console) is untouched; only
+    // the bytes actually written to disk are masked.
+    const redactor = createRedactor();
     const payload = {
-      ...result,
+      ...redactor.redactValue(result),
       version: EVIDENCE_VERSION,
       verifiedAt: new Date().toISOString(),
       evidencePath: rel,

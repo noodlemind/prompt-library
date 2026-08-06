@@ -20,6 +20,8 @@ import { recordSkillUsage } from '../lib/telemetry.mjs';
 import { mergeVSCodeSettings, parseVSCodeSettings } from '../lib/vscode-settings.mjs';
 import { runDoctor } from '../lib/doctor.mjs';
 import { validatePlanScope } from '../lib/plan-scope.mjs';
+import { listCommands } from '../lib/registry.mjs';
+import { HELP_COMMAND_ORDER } from '../bin/harness.mjs';
 import YAML from 'yaml';
 
 const packageRoot = path.resolve(
@@ -105,6 +107,27 @@ test('help works from a clean repo checkout without installed package deps', () 
   assert.match(result.stdout, /^setup\s+install · upgrade/m);
   assert.match(result.stdout, /@dev-kit\/harness/);
   assert.match(result.stdout, /^harness /);
+});
+
+// Minor fix: bin/harness.mjs's HELP_COMMAND_ORDER is a hand-maintained
+// display-order list, separate from lib/registry.mjs's REGISTRY — a
+// command registered in one but never added to the other would silently
+// vanish from `harness help` (orderedCommandEntries/groupedForHelp just
+// filter out anything that doesn't resolve via describeCommand, no error).
+// This pins parity between the two lists so that drift fails a test instead
+// of quietly shrinking the rendered help output.
+test('HELP_COMMAND_ORDER covers exactly the registered commands — nothing silently vanishes from help', () => {
+  const registered = listCommands();
+  const registeredSet = new Set(registered);
+  const orderedSet = new Set(HELP_COMMAND_ORDER);
+
+  assert.equal(HELP_COMMAND_ORDER.length, new Set(HELP_COMMAND_ORDER).size, 'HELP_COMMAND_ORDER must not list a command twice');
+
+  const missingFromHelp = registered.filter((name) => !orderedSet.has(name));
+  assert.deepEqual(missingFromHelp, [], `registered command(s) missing from HELP_COMMAND_ORDER (would vanish from "harness help"): ${missingFromHelp.join(', ')}`);
+
+  const staleInHelp = HELP_COMMAND_ORDER.filter((name) => !registeredSet.has(name));
+  assert.deepEqual(staleInHelp, [], `HELP_COMMAND_ORDER name(s) no longer registered: ${staleInHelp.join(', ')}`);
 });
 
 test('recall positional query excludes option values', () => {

@@ -11,7 +11,9 @@
  * own — it renders data ABOUT the registry, sourced from
  * `describeAll`/`describeCommand`.
  */
+import fs from 'node:fs';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { createStyle, keyWidthFor, EXIT } from '../lib/style.mjs';
 import { dispatch as dispatchRegistered, hasCommand, describeCommand } from '../lib/registry.mjs';
 import { createEventRegistry } from '../lib/event-registry.mjs';
@@ -31,7 +33,12 @@ const out = createStyle({ argv: args });
 // (single source of truth) — this array only controls display SEQUENCE,
 // since a `Map`'s insertion order is otherwise incidental to registration
 // order across files, not the curated order a human reads top to bottom.
-const HELP_COMMAND_ORDER = [
+// Exported (Minor fix) so test/harness-cli.test.mjs can assert this list
+// covers exactly `listCommands()` — a command registered in
+// lib/registry.mjs but never added here would otherwise vanish from
+// `harness help` silently (orderedCommandEntries below just skips any name
+// that doesn't resolve), with no test failure to catch the drift.
+export const HELP_COMMAND_ORDER = [
   'install', 'upgrade', 'doctor', 'status', 'uninstall',
   'init-repo', 'index', 'plan-new',
   'orient', 'gate', 'verify', 'validate-plan', 'compound', 'recall', 'get', 'events', 'report',
@@ -264,4 +271,32 @@ async function main() {
   process.exit(code);
 }
 
-main();
+// Only auto-run when this file is executed directly (`node bin/harness.mjs
+// ...`, the shebang, or any of the harness/global-bin install paths that
+// all invoke it the same way) — not when imported as a module (Minor fix:
+// test/harness-cli.test.mjs imports HELP_COMMAND_ORDER above). Every real
+// invocation still sets `process.argv[1]` to this file's own path, so this
+// guard is a no-op for every existing production entry point.
+//
+// `fs.realpathSync` on `process.argv[1]` before the comparison matters: the
+// ESM loader resolves `import.meta.url` through any symlinks in the path
+// (e.g. macOS's `/tmp` -> `/private/tmp`, `/var` -> `/private/var`, both
+// routinely on the resolved path when the CLI is invoked via a copied
+// runtime under `os.tmpdir()` — lib/install-harness-bin.mjs's own copy
+// target in test/production), while `process.argv[1]` is the raw,
+// unresolved argv string — a bare string comparison between the two
+// mismatches on any such symlinked path even though this genuinely IS the
+// entry module, which silently skipped `main()` entirely (reproduced: the
+// installed global harness shim ran with exit 0 and empty stdout).
+function isMainModule() {
+  if (!process.argv[1]) return false;
+  try {
+    return import.meta.url === pathToFileURL(fs.realpathSync(process.argv[1])).href;
+  } catch {
+    return false;
+  }
+}
+
+if (isMainModule()) {
+  main();
+}

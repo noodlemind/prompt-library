@@ -170,6 +170,42 @@ test('runVerify (async) still passes a real check through the async runner, byte
   assert.equal(statusForVerifyResult(result), 'ok');
 });
 
+// --- Critical regression: evidence artifacts must redact check output -----
+//
+// lib/evidence.mjs#writeEvidence persisted `result` (including every named
+// check's raw stdout/stderr) to `.harness/evidence/*.json` with no
+// redaction — a durable, on-disk artifact, unlike a terminal scrollback.
+// A check that echoes a secret-shaped value (a misconfigured tool leaking a
+// token into its own output, for instance) landed verbatim in that file.
+
+test('writeEvidence redacts a secret-shaped check stdout before persisting to .harness/evidence/*.json', async () => {
+  const workspace = tempDir('verify-stream-evidence-redact-');
+  const plan = writeVersionedPlan(workspace, { required: ['leaky-check'] });
+  writeChecks(workspace, {
+    'leaky-check': { command: [process.execPath, '-e', "console.log('token=abcdef1234567890'); process.exit(0)"] },
+  });
+  initGit(workspace);
+
+  const result = await runVerify({ workspace, flags: { plan, base: 'HEAD', dryRun: false, enforcement: 'enforce', workspace } });
+  assert.equal(result.outcome, 'passed');
+  const check = result.checks.find((c) => c.id === 'leaky-check');
+  // The in-memory result (what a live `verify`/`verify --json` process
+  // renders to its own stdout) is deliberately left unredacted here — this
+  // Critical fix's scope is the PERSISTED artifact, not the live process's
+  // own console output, which is unaffected by this change.
+  assert.match(check.stdout, /token=abcdef1234567890/, 'precondition: the raw secret really was captured in memory');
+
+  assert.ok(result.evidencePath, 'runVerify must have written evidence for a passed, non-cancelled run');
+  const evidenceFull = path.join(workspace, result.evidencePath);
+  assert.ok(fs.existsSync(evidenceFull), 'evidence file must exist on disk');
+  const onDisk = fs.readFileSync(evidenceFull, 'utf8');
+  assert.doesNotMatch(onDisk, /abcdef1234567890/, 'the raw secret must never be persisted to the evidence artifact');
+  assert.match(onDisk, /«redacted:kv-secret»/, 'the evidence artifact must carry the redaction mask instead');
+
+  const persistedCheck = JSON.parse(onDisk).checks.find((c) => c.id === 'leaky-check');
+  assert.match(persistedCheck.stdout, /^token=«redacted:kv-secret»/);
+});
+
 // --- AC8: per-check timeout is distinct from a generic failure ------------
 
 test('a per-check timeout reports the legacy "timeout" status AND the unified "timed-out" status distinctly from "failed"', async () => {
@@ -278,6 +314,20 @@ test('runVerify: an AbortSignal fired mid-check cancels the run, skips evidence,
   assert.ok(checkIds.includes('slow-check'));
   assert.ok(!checkIds.includes('never-runs'), 'a later check must never start once cancellation is observed');
   assert.equal(fs.existsSync(path.join(workspace, '.harness', 'evidence')), false, 'no evidence directory at all for a cancelled run');
+
+  // Minor fix: the aborted-in-flight check's own jsonl row must report the
+  // unified 'cancelled' status, not the generic 'failed' every other
+  // 'unavailable' reason falls through to — it was interrupted, not failed.
+  const slowCheck = result.checks.find((c) => c.id === 'slow-check');
+  assert.equal(slowCheck.status, 'unavailable', 'legacy per-check status vocabulary is unchanged');
+  assert.equal(unifiedStatusForCheck(slowCheck), 'cancelled');
+  assert.notEqual(unifiedStatusForCheck(slowCheck), 'failed');
+});
+
+test('unifiedStatusForCheck: an "unavailable" check that was NOT cancelled still reports "failed" (no over-broad match)', () => {
+  assert.equal(unifiedStatusForCheck({ status: 'unavailable', message: 'Named check is not configured: x' }), 'failed');
+  assert.equal(unifiedStatusForCheck({ status: 'unavailable', message: 'Cancelled — verification was interrupted' }), 'failed', 'message text alone must not trigger the cancelled mapping — only the explicit cancelled:true marker does');
+  assert.equal(unifiedStatusForCheck({ status: 'unavailable', cancelled: true }), 'cancelled');
 });
 
 // --- AC8: full CLI SIGINT -> exit 130, event telemetry, no evidence -------
