@@ -404,7 +404,13 @@ conforming citizens of them.
 
 ## Human Decision
 
-- **Decision:**
-- **Reviewer:**
-- **Date:**
-- **Conditions or required edits:**
+- **Decision:** Approved
+- **Reviewer:** Krish (repo owner)
+- **Date:** 2026-08-06
+- **Conditions or required edits:** The §4 protected-shadow and governance-binding gates,
+  the §5 promotion-lane mechanics and `absorb-branch` replay rule, and the §5a
+  layer-aware maintenance semantics are binding constraints on every implementation
+  phase. Phases ship through the repo's plan pipeline — one live dated plan at a time,
+  gated edits, trusted named checks — with registry `candidate` entries added via
+  `/create-primitive` in the phase that ships each surface. The structural tier remains
+  opt-in until the Phase 4 telemetry decision.
