@@ -68,7 +68,11 @@ test('canonical architecture replaces superseded harness architecture fragments'
     .readdirSync(path.join(repoRoot, 'docs', 'architecture'))
     .filter((name) => name.endsWith('.md'))
     .sort();
-  assert.deepEqual(architectureDocs, ['engineer-harness.md', 'skill-driven-prompt-library.md']);
+  assert.deepEqual(architectureDocs, [
+    'engineer-harness.md',
+    'harness-cli-workbench.md',
+    'skill-driven-prompt-library.md',
+  ]);
   for (const name of supersededArchitectureDocs) {
     assert.equal(exists(`docs/architecture/${name}`), false, `${name} should be removed`);
   }
