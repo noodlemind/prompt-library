@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { createRedactor } from '../lib/redact.mjs';
+import { createRedactor, redactedJson } from '../lib/redact.mjs';
 
 // Deterministic redactor with an empty env by default — env-derived masking
 // is exercised in its own dedicated tests below with an injected env, so
@@ -601,4 +601,109 @@ test('redactValue: a secret nested under an own __proto__ key is still masked an
   const out = redactValue(input);
   assert.ok(Object.prototype.hasOwnProperty.call(out, '__proto__'), 'the own __proto__ key must not vanish');
   assert.equal(JSON.stringify(out), '{"__proto__":{"leak":"token=«redacted:kv-secret»"}}');
+});
+
+// ---------------------------------------------------------------------------
+// JSON-validity regression — redactedJson must never emit malformed JSON.
+//
+// Pre-fix, redactedJson ran `redactText(JSON.stringify(safe))` — a TEXT pass
+// over the ALREADY-SERIALIZED JSON string. The kv-secret pattern's value
+// class (`[^\s&"']{1,500}` after `token=`/`password=`) excludes literal
+// quote characters but does NOT exclude a literal backslash — so when a
+// secret-shaped match was immediately followed by an escaped quote (`\"`) in
+// the serialized text, the match consumed the escaping backslash as part of
+// its capture, and the replacement discarded it, turning `\"` into a bare
+// `"` that terminated the JSON string early.
+//
+// Verified pre-fix leak: `redactedJson({message: 'no learning "token=…"
+// found'})` produced `{"message":"no learning \"token=«redacted:kv-secret»"
+// found"}` — text `JSON.parse` throws on (an unescaped `"` mid-string,
+// followed by trailing garbage `found"}`).
+//
+// Fixed by moving masking INTO serialization via a JSON.stringify replacer
+// (lib/redact.mjs), which operates on values BEFORE JSON.stringify does its
+// own escaping — so no matter what text a mask produces, valid escaping is
+// applied fresh afterward and can never be corrupted.
+// ---------------------------------------------------------------------------
+
+const GHP = 'ghp_' + 'a'.repeat(36);
+
+const ADVERSARIAL_JSON_CASES = [
+  {
+    name: 'secret immediately followed by an escaped quote (verified pre-fix leak)',
+    value: { message: 'no learning "token=abcdef1234567890" found' },
+  },
+  {
+    name: 'check stdout: secret immediately followed by an escaped quote (verified pre-fix leak, E_TARGET shape)',
+    value: { stdout: 'FAIL expected "token=abcdef1234567890" got x' },
+  },
+  {
+    name: 'password= variant immediately followed by an escaped quote',
+    value: { message: 'rejected "password=Sup3rSecret!" for user' },
+  },
+  {
+    name: 'secret containing a "," sequence in its captured value',
+    value: { note: 'bad "token=abcdef1234567890,x" here' },
+  },
+  {
+    name: 'secret immediately adjacent to a literal backslash (not an escaped quote)',
+    value: { path: String.raw`prefix token=abcdef1234567890\ trailing backslash` },
+  },
+  {
+    name: 'secret at the very end of a string value (no trailing text)',
+    value: { tail: 'find token=abcdef1234567890' },
+  },
+  {
+    name: 'secret as the entire string value',
+    value: { whole: 'token=abcdef1234567890' },
+  },
+  {
+    name: 'secret nested inside an array placement',
+    value: { rows: ['clean', 'no learning "token=abcdef1234567890" found', 'also clean'] },
+  },
+  {
+    name: 'secret nested two levels deep inside an object',
+    value: { outer: { inner: { deep: 'no learning "token=abcdef1234567890" found' } } },
+  },
+  {
+    name: 'multiple quoted secret shapes in the same string (kv-secret and github-token)',
+    value: { combo: `bad "token=abcdef1234567890" and "${GHP}" both quoted` },
+  },
+];
+
+test('redactedJson: adversarial secret/quote/backslash placements never produce malformed JSON (compact)', () => {
+  for (const { name, value } of ADVERSARIAL_JSON_CASES) {
+    const out = redactedJson(value, { redactor: redactor() });
+    let parsed;
+    assert.doesNotThrow(() => {
+      parsed = JSON.parse(out);
+    }, `[${name}] JSON.parse must not throw on: ${out}`);
+    const roundTripped = JSON.stringify(parsed);
+    assert.ok(!roundTripped.includes('abcdef1234567890'), `[${name}] raw kv-secret must not survive`);
+    assert.ok(!roundTripped.includes('Sup3rSecret!'), `[${name}] raw password must not survive`);
+    assert.ok(!roundTripped.includes('a'.repeat(36)), `[${name}] raw github token must not survive`);
+  }
+});
+
+test('redactedJson: adversarial secret/quote/backslash placements never produce malformed JSON (pretty)', () => {
+  for (const { name, value } of ADVERSARIAL_JSON_CASES) {
+    const out = redactedJson(value, { pretty: true, redactor: redactor() });
+    let parsed;
+    assert.doesNotThrow(() => {
+      parsed = JSON.parse(out);
+    }, `[${name}] pretty JSON.parse must not throw on: ${out}`);
+    const roundTripped = JSON.stringify(parsed);
+    assert.ok(!roundTripped.includes('abcdef1234567890'), `[${name}] raw kv-secret must not survive (pretty)`);
+  }
+});
+
+test('redactedJson: secret-free adversarial-shaped text (quotes, backslashes, commas) stays byte-identical', () => {
+  const value = {
+    message: 'no learning "clean value" found',
+    path: String.raw`C:\Users\example\file.txt`,
+    note: 'a,b","c irrelevant punctuation',
+    rows: ['clean "quoted" text', 'a\\b\\c'],
+  };
+  assert.equal(redactedJson(value, { redactor: redactor() }), JSON.stringify(value));
+  assert.equal(redactedJson(value, { pretty: true, redactor: redactor() }), JSON.stringify(value, null, 2));
 });

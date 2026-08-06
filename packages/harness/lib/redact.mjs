@@ -471,17 +471,37 @@ export function createRedactor({ env = process.env, patterns = [] } = {}) {
  */
 export function redactedJson(value, { pretty = false, redactor } = {}) {
   const active = redactor || createRedactor();
+  // Structural walk first: this masks free-text VALUES and rewrites
+  // secret-shaped OBJECT KEYS. Keys matter here because a JSON.stringify
+  // replacer (below) can only rewrite a property's VALUE, never its key
+  // name, so `redactValue`'s key-masking has no serialize-time equivalent
+  // and must run as its own pass regardless of how values get masked.
   const safe = active.redactValue(value);
-  const json = pretty ? JSON.stringify(safe, null, 2) : JSON.stringify(safe);
-  // Fix-wave P2 (toJSON bypass): `redactValue` walks the STRUCTURE, but
-  // `JSON.stringify` then invokes any surviving `toJSON()` / getter / replacer
-  // at serialize time — AFTER redaction — which can emit a raw secret the
-  // structural walk never saw. A final text-level pass over the serialized
-  // JSON closes that class for good: whatever a serialize-time hook produced
-  // still has to clear the text redactor before it leaves this boundary.
-  // Byte-identical (a genuine no-op) for secret-free data, because
-  // `redactText` returns its input unchanged when there is nothing to mask,
-  // and the masks it does emit (`«redacted:…»`) live inside JSON string
-  // tokens, so the result stays valid JSON.
-  return active.redactText(json);
+  // Fix-wave (JSON-validity regression): masking used to run as a TEXT pass
+  // over the ALREADY-SERIALIZED JSON string (`redactText(JSON.stringify(...))`).
+  // That is unsound: `redactText`'s pattern matching has no notion of JSON
+  // string escaping, so a secret-shaped match immediately followed by an
+  // escaped quote (`\"`) could consume the escaping backslash as part of the
+  // match, destroying the escape and terminating the JSON string early.
+  // Verified pre-fix leak: `redactedJson({message: 'no learning "token=…"
+  // found'})` produced `{"message":"no learning \"token=«redacted:kv-secret»"
+  // found"}` — text `JSON.parse` throws on. The old comment here claimed
+  // "the result stays valid JSON"; that guarantee was false.
+  //
+  // Fixed by moving masking INTO serialization via a JSON.stringify
+  // REPLACER instead of a post-serialization text pass:
+  //   - A replacer is invoked with each (key, value) pair AFTER any
+  //     toJSON()/getter has already run for that value (per the JSON.stringify
+  //     spec: Get -> toJSON -> replacer), so it still closes the
+  //     serialize-time toJSON-bypass class the text pass was originally added
+  //     for (fix-wave P2, still covered by the tests below).
+  //   - Because the replacer returns a plain JS value and JSON.stringify does
+  //     its own string escaping AFTER the replacer returns, the escaping can
+  //     never be corrupted by whatever the replacer returns — the output is
+  //     always valid JSON, independent of what the masked text looks like.
+  //   - Byte-identical for secret-free data: `redactText` returns its input
+  //     unchanged when there is nothing to mask, so the replacer is then a
+  //     no-op identity function and JSON.stringify's output is unaffected.
+  const replacer = (_key, val) => (typeof val === 'string' ? active.redactText(val) : val);
+  return pretty ? JSON.stringify(safe, replacer, 2) : JSON.stringify(safe, replacer);
 }

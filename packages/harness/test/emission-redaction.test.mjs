@@ -192,6 +192,58 @@ test('P1: HARNESS_DEBUG=1 routes the raw error stack through the redactor (no po
 // test hand-writes RAW secrets straight into the local log to prove the sync
 // boundary masks independently, as defense in depth.
 
+// --- JSON-validity regression: adversarial secret/quote placements must ----
+// --- never produce malformed JSON through the real serialize-independent ---
+// --- sinks (JSONL row writer, events.jsonl append), not just redactedJson --
+// --- in isolation. See test/redact.test.mjs for the isolated table and the
+// --- root-cause explanation (a text pass over already-serialized JSON
+// --- consuming the escaping backslash before an escaped quote).
+
+const QUOTE_ADJACENT_KV_SECRET = 'no learning "token=abcdef1234567890" found';
+const STDOUT_QUOTE_ADJACENT_KV_SECRET = 'FAIL expected "token=abcdef1234567890" got x';
+
+test('JSON-validity: a JSONL row carrying a secret adjacent to an escaped quote is still valid JSON', () => {
+  const chunks = [];
+  const sink = { write: (chunk) => chunks.push(chunk) };
+  const jsonl = createJsonlStream(sink, { redactor: createRedactor({ env: {} }) });
+  jsonl.row({ check: 'leaky', line: QUOTE_ADJACENT_KV_SECRET });
+  jsonl.row({ check: 'leaky', stream: 'stdout', line: STDOUT_QUOTE_ADJACENT_KV_SECRET });
+  jsonl.result({ status: 'failed', message: QUOTE_ADJACENT_KV_SECRET });
+  const text = chunks.join('');
+  const lines = text.trim().split('\n');
+  const rows = lines.map((line, i) => {
+    let parsed;
+    assert.doesNotThrow(() => {
+      parsed = JSON.parse(line);
+    }, `row ${i} must be valid JSON: ${line}`);
+    return parsed;
+  });
+  assert.doesNotMatch(text, /abcdef1234567890/, 'the raw secret must never reach the stream');
+  assert.match(rows[0].line, /«redacted:kv-secret»/);
+  assert.match(rows[1].line, /«redacted:kv-secret»/);
+  assert.match(rows[2].message, /«redacted:kv-secret»/);
+  assert.equal(rows[2].status, 'failed');
+});
+
+test('JSON-validity: writeEvent persists a secret-adjacent-to-quote blockedReason as parseable JSONL', () => {
+  const workspace = tempDir('emit-redact-json-validity-events-');
+  writeEvent(workspace, {}, {
+    type: 'gate',
+    command: 'gate',
+    result: 'fail',
+    exitCode: 1,
+    blockedReason: QUOTE_ADJACENT_KV_SECRET,
+  });
+  const onDisk = fs.readFileSync(eventPath(workspace), 'utf8');
+  const line = onDisk.trim();
+  let parsed;
+  assert.doesNotThrow(() => {
+    parsed = JSON.parse(line);
+  }, `events.jsonl row must be valid JSON: ${line}`);
+  assert.doesNotMatch(onDisk, /abcdef1234567890/, 'the raw secret must never be persisted');
+  assert.match(parsed.blockedReason, /«redacted:kv-secret»/);
+});
+
 test('P1: report --sync repersists each row through the redactor into the global store', async () => {
   const { syncWorkspaceEvents } = await import('../lib/telemetry-store.mjs');
   const workspace = tempDir('emit-redact-sync-ws-');
