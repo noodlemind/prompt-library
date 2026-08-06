@@ -9,9 +9,9 @@ import {
 } from './archive-limits.mjs';
 
 export const ARCHIVE_BOOTSTRAP =
-  'if [ -t 0 ]; then stty -echo || exit 70; fi; exec /opt/engineer/bin/engineer-archive-bridge --stdio';
+  'if [ -t 0 ]; then stty -echo || exit 70; fi; ulimit -c 0 || exit 70; exec /opt/engineer/bin/engineer-archive-bridge --stdio';
 export const SUPERVISOR_BOOTSTRAP =
-  'if [ -t 0 ]; then stty -echo || exit 70; fi; exec /opt/engineer/bin/engineer-runtime-supervisor --control-stdio';
+  'if [ -t 0 ]; then stty -echo || exit 70; fi; ulimit -c 0 || exit 70; exec /opt/engineer/bin/engineer-runtime-supervisor --control-stdio';
 
 const ARCHIVE_READY = 'ENGINEER-ARCHIVE/1 READY';
 const SUPERVISOR_READY = 'ENGINEER-SUPERVISOR/1 READY';

@@ -135,6 +135,17 @@ function transport(overrides = {}) {
   };
 }
 
+test('interactive bridges disable soft and hard core dumps before fixed execution', () => {
+  assert.equal(
+    ARCHIVE_BOOTSTRAP,
+    'if [ -t 0 ]; then stty -echo || exit 70; fi; ulimit -c 0 || exit 70; exec /opt/engineer/bin/engineer-archive-bridge --stdio',
+  );
+  assert.equal(
+    SUPERVISOR_BOOTSTRAP,
+    'if [ -t 0 ]; then stty -echo || exit 70; fi; ulimit -c 0 || exit 70; exec /opt/engineer/bin/engineer-runtime-supervisor --control-stdio',
+  );
+});
+
 test('remote commands use exact direct argv, scrub provider env, and return hashes rather than output', async () => {
   const harness = transport();
   const result = await harness.value.runRemote({
