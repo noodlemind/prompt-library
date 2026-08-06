@@ -1,6 +1,6 @@
 # Discoverable capability inventory. Skill metadata remains the primary trigger surface.
 version: 2
-updated: 2026-07-13
+updated: 2026-08-06
 lifecycle_states: [candidate, experimental, active, deprecated, retired]
 
 engineer:
@@ -26,7 +26,6 @@ capabilities:
     version: 2
     origin: starter
     triggers: [verified success, compound learning, promotion recommendation]
-    eval_suite: evals/skill-trigger-evals.yaml#auto-compound
     usage_count: 0
   auto-skill-draft: {type: skill, status: experimental, owner: developer-experience, version: 1, origin: starter}
   aws: {type: skill, status: active, owner: cloud-platform, version: 1, origin: starter}
@@ -38,7 +37,6 @@ capabilities:
     version: 2
     origin: starter
     triggers: [quick question, repository orientation, answer only]
-    eval_suite: evals/skill-trigger-evals.yaml#btw
     overlaps: [engineer]
     usage_count: 0
     retired_on: 2026-07-24
@@ -52,7 +50,6 @@ capabilities:
     version: 2
     origin: starter
     triggers: [review diff, independent code review, PR findings]
-    eval_suite: evals/skill-trigger-evals.yaml#code-review
     usage_count: 0
   codebase-context: {type: skill, status: active, owner: developer-experience, version: 1, origin: starter}
   compound-learnings:
@@ -62,7 +59,6 @@ capabilities:
     version: 2
     origin: starter
     triggers: [publish verified solution, team knowledge]
-    eval_suite: evals/skill-trigger-evals.yaml#compound-learnings
     usage_count: 0
   consolidate:
     type: skill
@@ -72,7 +68,6 @@ capabilities:
     origin: starter
     proposal: knowledge/proposals/consolidate.md
     triggers: [debt drain due, session-start consolidation hint, session-end consolidation hint]
-    eval_suite: evals/skill-trigger-evals.yaml#consolidate
     usage_count: 0
   create-primitive:
     type: skill
@@ -81,7 +76,6 @@ capabilities:
     version: 2
     origin: starter
     triggers: [create skill, create agent, promote procedure, retire capability]
-    eval_suite: evals/skill-trigger-evals.yaml#create-primitive
     usage_count: 0
   deepen-plan: {type: skill, status: active, owner: developer-experience, version: 1, origin: starter}
   document-review: {type: skill, status: active, owner: developer-experience, version: 1, origin: starter}
@@ -93,7 +87,6 @@ capabilities:
     version: 2
     origin: starter
     triggers: [substantial investigation, end-to-end engineering, own delivery]
-    eval_suite: evals/skill-trigger-evals.yaml#engineer
     usage_count: 0
   ensure-capability:
     type: skill
@@ -102,7 +95,6 @@ capabilities:
     version: 2
     origin: starter
     triggers: [explicit missing capability, high-risk assurance, encountered blocker]
-    eval_suite: evals/skill-trigger-evals.yaml#ensure-capability
     usage_count: 0
   ensure-plan:
     type: skill
@@ -111,7 +103,6 @@ capabilities:
     version: 2
     origin: starter
     triggers: [missing plan, unlocked plan, implement gate C1 C3]
-    eval_suite: evals/skill-trigger-evals.yaml#ensure-plan
     usage_count: 0
   harness-doctor: {type: skill, status: active, owner: developer-experience, version: 1, origin: starter}
   import-conventions: {type: skill, status: active, owner: developer-experience, version: 1, origin: starter}
@@ -124,7 +115,6 @@ capabilities:
     version: 2
     origin: starter
     triggers: [plan captured issue, phased implementation plan]
-    eval_suite: evals/skill-trigger-evals.yaml#plan-issue
     usage_count: 0
   project-readme: {type: skill, status: active, owner: developer-experience, version: 1, origin: starter}
   python: {type: skill, status: active, owner: application-platform, version: 1, origin: starter}
@@ -155,7 +145,6 @@ capabilities:
     version: 2
     origin: starter
     triggers: [isolated bug, failing regression test]
-    eval_suite: evals/skill-trigger-evals.yaml#tdd-fix
     usage_count: 0
     retired_on: 2026-07-24
     replacement: engineer-agent Deliver mode with code-implementer
@@ -168,7 +157,6 @@ capabilities:
     version: 2
     origin: starter
     triggers: [resume locked plan, execute current phase]
-    eval_suite: evals/skill-trigger-evals.yaml#work-on-task
     usage_count: 0
     retired_on: 2026-07-24
     replacement: engineer-agent Deliver mode
@@ -258,10 +246,9 @@ engineer_allowlist:
 
 growth:
   discovery: skill metadata → registry lookup when a gap is encountered
-  promotion: verified use → learning classification → evidence review → evals → governed creation
+  promotion: verified use → learning classification → evidence review → governed creation
   retirement: deprecate → warn and migrate → remove source → retain registry tombstone
 
 references:
   architecture: docs/architecture/engineer-harness.md
-  trigger_evals: evals/skill-trigger-evals.yaml
   harness_contract: .github/skills/references/harness-tool-contract.md
