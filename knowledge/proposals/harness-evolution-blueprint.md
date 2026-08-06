@@ -462,6 +462,34 @@ checks in `.github/harness/checks.yaml` (`harness-tests`, `prompt-contracts`,
   knowledge loss on prune-without-promote is the operator's explicit choice, mirroring
   the proposal's "promotion is explicit and reviewable, only".
 
+## 9. Relationship to the CLI workbench (TUI) track
+
+A parallel evolution track — the harness CLI workbench with a TUI session ledger (command
+registry dispatching every command, versioned JSON envelope plus JSONL streaming,
+append-only run journal with distinct `cancelled` and `timed-out` outcomes, async runner
+with cooperative cancellation, gate-state surfaces) — is planned separately and is not
+governed by this blueprint. The two tracks compose, and this blueprint's new surfaces must
+not paint the workbench into a corner:
+
+- Every command proposed here (`knowledge status`/`promote`/`prune`, `index --structural`
+  and any structural query surface) must be registry-dispatchable and emit the versioned
+  JSON envelope, with JSONL streaming for long operations (structural indexing, promotion
+  application), so the TUI renders them without bespoke adapters.
+- The generation-context stamp (P9) is the `gen <hash>` identity the TUI shows beside
+  knowledge and search results — keep it stable, short, and cheap to read.
+- The structural index (P3) is the backing store for the workbench's
+  `search --scope code` symbol hits; expose its query path as a command surface, not only
+  as orient-internal plumbing, so the TUI can call it directly.
+- Long-running operations proposed here must support cooperative cancellation and record
+  distinct `cancelled` vs `timed-out` outcomes in events, matching the run journal's
+  status model.
+- `knowledge status` output should serve both the workbench's one-line footer summary and
+  its expanded ledger view: summary scalars first, detail arrays after.
+
+Where the workbench track defines its own contracts (registry, envelope schema, run
+journal), those contracts govern; this blueprint commits its surfaces only to being
+conforming citizens of them.
+
 ## Human Decision
 
 - **Decision:**
