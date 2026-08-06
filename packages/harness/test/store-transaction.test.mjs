@@ -332,6 +332,99 @@ function gitPorcelainStatus(dir) {
   return spawnSync('git', ['status', '--porcelain'], { cwd: dir, encoding: 'utf8' }).stdout;
 }
 
+// Crash recovery used to be an all-or-nothing tree-wide decision: any dirt at
+// journal-write time disabled it wholesale. But absorb deliberately IGNORES
+// non-learning files (config.json, scratch notes, INDEX.md), so such a file
+// can sit uncommitted indefinitely — and its mere presence then disarmed
+// residue rollback for the LEARNING paths a later crash dirtied, handing the
+// dead writer's own partial write to the next transaction's absorb as
+// `source: human`. The decision has to be per-path.
+test('crash recovery is per-path: a dirty NON-learning file never disarms residue rollback for learning paths', () => {
+  const c = ctx();
+  const id = seedLearning(c);
+  const { dir } = ensureStore(c.ws, { home: c.harnessHome });
+  const learning = listLearnings(dir).find((l) => l.id === id);
+  const committed = fs.readFileSync(learning.file, 'utf8');
+
+  // Pre-existing, uncommitted, NON-learning dirt — absorb never touches it,
+  // so it can outlive any number of transactions.
+  const notes = path.join(dir, 'scratch-notes.txt');
+  const notesText = 'a human left this here; absorb ignores it\n';
+  fs.writeFileSync(notes, notesText, 'utf8');
+
+  const residue = committed.replace(
+    /(---\r?\n[\s\S]*?\r?\n---\r?\n\r?\n)[\s\S]*$/,
+    (_m, fm) => `${fm}A model-authored partial write that never reached a commit.\n`
+  );
+  const storeModule = pathToFileURL(path.join(packageRoot, 'lib', 'knowledge', 'store.mjs')).href;
+  const script = [
+    "import fs from 'node:fs';",
+    `import { withStoreTransaction } from ${JSON.stringify(storeModule)};`,
+    `withStoreTransaction(${JSON.stringify(c.ws)}, { home: ${JSON.stringify(c.harnessHome)}, label: 'crashing writer' }, () => {`,
+    `  fs.writeFileSync(${JSON.stringify(learning.file)}, ${JSON.stringify(residue)}, 'utf8');`,
+    "  process.kill(process.pid, 'SIGKILL');",
+    '});',
+  ].join('\n');
+  const child = spawnSync(process.execPath, ['--input-type=module', '-e', script], { encoding: 'utf8' });
+  assert.equal(child.signal, 'SIGKILL', `precondition: the writer really died mid-transaction (${child.stderr})`);
+  assert.equal(fs.readFileSync(learning.file, 'utf8'), residue, 'precondition: the residue is sitting in the tree');
+  assert.match(gitPorcelainStatus(dir), /scratch-notes\.txt/, 'precondition: unrelated non-learning dirt coexists with it');
+
+  const lockPath = path.join(dir, '.lock');
+  const old = new Date(Date.now() - 11 * 60 * 1000);
+  fs.utimesSync(lockPath, old, old);
+
+  const res = applyOps({
+    workspace: c.ws,
+    opsPath: writeOps(c.ws, [ADD(c.ws, { slug: 'after-mixed-kill', episodePath: 'docs/solutions/perf/after-mixed-kill.md' })]),
+    home: c.harnessHome,
+  });
+  assert.equal(res.exitCode, 0, JSON.stringify(res));
+  assert.match(res.staleLockRemoved || '', /residue/, 'the residue was still identified and discarded');
+
+  const after = listLearnings(dir).find((l) => l.id === id);
+  assert.equal(after.fm.source !== 'human', true, 'CLI residue is never laundered into human authority');
+  assert.doesNotMatch(after.body, /model-authored partial write/, 'the residue was rolled back');
+  assert.equal(
+    fs.existsSync(path.join(c.ws, 'docs', 'solutions', 'teachings')),
+    false,
+    'and no human-teaching snapshot was fabricated from it'
+  );
+  // The pre-existing non-learning dirt was NOT this transaction's to discard.
+  assert.equal(fs.readFileSync(notes, 'utf8'), notesText, 'unrelated dirt survives per-path recovery untouched');
+  assert.ok(listLearnings(dir).some((l) => l.id === 'sql/after-mixed-kill'));
+});
+
+// The journal is the ONLY thing that tells crash residue apart from a human
+// hand edit. A best-effort write that silently failed left the transaction
+// running UNMARKED — precisely the state whose residue the next transaction
+// absorbs as `source: human`. Fail closed instead: refuse the run.
+test('a transaction whose intent journal cannot be written is refused, not run unmarked', () => {
+  const c = ctx();
+  seedLearning(c);
+  const { dir } = ensureStore(c.ws, { home: c.harnessHome });
+  const before = listLearnings(dir).map((l) => l.id).sort();
+
+  // Make the journal path unwritable in a way that needs no chmod (and so
+  // behaves identically for a root-running CI): a non-empty DIRECTORY sitting
+  // exactly where the journal file goes.
+  const journalPath = txnJournalPath(dir);
+  fs.mkdirSync(journalPath, { recursive: true });
+  fs.writeFileSync(path.join(journalPath, 'occupied'), 'x', 'utf8');
+
+  const res = applyOps({
+    workspace: c.ws,
+    opsPath: writeOps(c.ws, [ADD(c.ws, { slug: 'unjournaled', episodePath: 'docs/solutions/perf/unjournaled.md' })]),
+    home: c.harnessHome,
+  });
+  assert.equal(res.exitCode, 1, JSON.stringify(res));
+  assert.equal(res.rejected[0].code, 'E_APPLY_FAILED');
+  assert.match(res.rejected[0].reason, /journal/i, 'the refusal names the journal, not a generic failure');
+
+  assert.deepEqual(listLearnings(dir).map((l) => l.id).sort(), before, 'the refused transaction wrote nothing');
+  assert.equal(fs.existsSync(path.join(dir, '.lock')), false, 'and it still released the lock');
+});
+
 // ---------------------------------------------------------------------------
 // Git fault injection: a real commit failure rolls back and reports nonzero.
 // ---------------------------------------------------------------------------

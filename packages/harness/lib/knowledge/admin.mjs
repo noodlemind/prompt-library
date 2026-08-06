@@ -27,7 +27,7 @@ import { rebuildIndex, todayClamped } from './apply.mjs';
 import { consolidateStatus, LEARNING_BYTE_CAP, isActiveFm } from './consolidate.mjs';
 import { listBuckets, branchesRoot, bucketDirFor } from './overlay.mjs';
 import { scanSecrets } from '../secret-scan.mjs';
-import { assertNoSymlinkAncestors, assertRealpathContained, writeFileContained } from '../fs-safe.mjs';
+import { assertNoSymlinkAncestors, assertRealpathContained, writeFileContained, readFileNoFollow } from '../fs-safe.mjs';
 import { runIndexKnowledge } from '../index-knowledge.mjs';
 import { loadManifest } from '../recall-rank.mjs';
 
@@ -231,6 +231,14 @@ export function mirrorLearnings({ workspace, home, log = () => {}, retiredIds = 
  * `-uall` is required for that: the default `-unormal` collapses a brand-new
  * `learnings/<domain>/` into a single directory entry that matches no
  * learning path shape.
+ *
+ * A SYMLINK AT A LEARNING PATH IS NEVER ABSORBED. Every read and write in this
+ * loop goes through fs-safe.mjs (`assertNoSymlinkAncestors` + `readFileNoFollow`
+ * on the way in, `writeFileContained` on the way out), because a planted
+ * symlink is otherwise followed in BOTH directions — reading an arbitrary
+ * outside file into store history and a workspace teaching snapshot, then
+ * overwriting that outside file with a canonically serialized learning. Such a
+ * path is refused with a logged note, never followed.
  */
 export function absorbHandEdits({ workspace, home, log = () => {} }) {
   const empty = { absorbed: [], deleted: [], committed: false };
@@ -286,12 +294,29 @@ export function absorbHandEdits({ workspace, home, log = () => {} }) {
     // stays out of absorb scope.
     if (code !== '??' && !code.includes('M')) continue;
 
-    const file = path.join(dir, rel);
-    let text;
-    try {
-      text = fs.readFileSync(file, 'utf8');
-    } catch {
-      continue; // vanished between status and read — nothing to absorb
+    // A SYMLINK AT A LEARNING PATH IS NEVER A LEARNING (P1). `rel` comes
+    // straight from `git status` over a directory a human hand-edits, and this
+    // block both READS the path and later REWRITES it canonically — so a
+    // planted symlink was followed BOTH ways: the read pulled an arbitrary
+    // outside file's content into the absorb pipeline (snapshotted into the
+    // workspace, committed into store history) and the rewrite overwrote that
+    // outside file with a serialized learning. Refused here rather than
+    // followed, through the same fs-safe.mjs primitives every other writer in
+    // this module uses: the ancestor walk rejects a symlinked component (or
+    // leaf) up front, and `readFileNoFollow` re-verifies against the store root
+    // after acquiring the descriptor, closing the swap window the walk cannot.
+    const file = assertNoSymlinkAncestors(dir, rel);
+    if (!file) {
+      log(`hand-edit absorb: ${rel} is a symlink or sits under one — refused, never followed`);
+      continue;
+    }
+    const text = readFileNoFollow(file, { root: dir });
+    if (text === null) {
+      // Vanished between status and read, swapped for a symlink since the walk
+      // above, over the read cap, or resolving outside the store — nothing
+      // safe to absorb either way.
+      log(`hand-edit absorb: ${rel} could not be read safely — skipped`);
+      continue;
     }
     const { fm, body } = parseLearningFrontmatter(text);
 
@@ -312,6 +337,11 @@ export function absorbHandEdits({ workspace, home, log = () => {} }) {
     const doc = `---\n${fmLines.join('\n')}\n---\n\n${body.trim()}\n`;
 
     let snapshot = null;
+    // Staged, not yet recorded: the ledger entry only becomes real once the
+    // learning file itself has been rewritten successfully below. Pushing it
+    // eagerly would leave the ledger crediting a snapshot for an absorb that
+    // was then refused.
+    let ledgerEntry = null;
     const secrets = scanSecrets(doc);
     if (secrets.length) {
       log(
@@ -340,8 +370,7 @@ export function absorbHandEdits({ workspace, home, log = () => {} }) {
         snapshot = snapRel.split(path.sep).join('/');
         const sha256 = crypto.createHash('sha256').update(doc).digest('hex');
         fm.episodes = [...(fm.episodes || []), { path: snapshot, sha256, kind: 'human-teaching', plan: null }];
-        if (!ledgerByRoot.has(layerRoot)) ledgerByRoot.set(layerRoot, []);
-        ledgerByRoot.get(layerRoot).push({ path: snapshot, sha256, learning: id, at });
+        ledgerEntry = { path: snapshot, sha256, learning: id, at };
       }
     }
 
@@ -353,7 +382,20 @@ export function absorbHandEdits({ workspace, home, log = () => {} }) {
     if (Buffer.byteLength(content, 'utf8') > LEARNING_BYTE_CAP) {
       log(`hand-edit absorb: ${id} exceeds ${LEARNING_BYTE_CAP} bytes after absorb — kept anyway (human authority)`);
     }
-    fs.writeFileSync(file, content, 'utf8');
+    // The write half of the symlink guard above (fs-safe.mjs): contained and
+    // atomic, so an ancestor swapped for a symlink AFTER the pre-read walk
+    // still cannot steer this rewrite onto a file outside the store — the temp
+    // is created empty, containment-verified in place, filled through the
+    // verified descriptor, then renamed over the leaf (a rename replaces a
+    // symlink, it never follows one).
+    if (!writeFileContained(dir, rel, content)) {
+      log(`hand-edit absorb: refused to rewrite ${rel} — the path no longer resolves inside the knowledge store`);
+      continue;
+    }
+    if (ledgerEntry) {
+      if (!ledgerByRoot.has(layerRoot)) ledgerByRoot.set(layerRoot, []);
+      ledgerByRoot.get(layerRoot).push(ledgerEntry);
+    }
     absorbed.push({ id, snapshot });
     if (bucketKey) touchedBucketRoots.add(layerRoot);
   }

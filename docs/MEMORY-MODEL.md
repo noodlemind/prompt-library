@@ -657,13 +657,26 @@ runs `git status --porcelain -uall` in the store first and commits any dirty edi
 - The absorbed content may exceed the 1,200-byte learning cap — human authority overrides
   the cap for hand edits (logged, not rejected; the cap binds only the sole writer's own
   ops).
+- **A symlink at a learning path is never a learning.** `learnings/<domain>/<slug>.md` (or
+  the bucket equivalent) planted as a SYMLINK is refused with a logged note, not followed —
+  on the read and on the canonical rewrite alike, both through the shared `fs-safe`
+  primitives. Following it would pull an arbitrary outside file into store history and a
+  workspace teaching snapshot, then overwrite that outside file with a serialized learning.
 - **Crash residue is not a hand edit.** Every store transaction writes an intent journal
   under the store's `.git/` before its first mutation and clears it on commit or rollback,
   so a writer killed mid-transaction leaves uncommitted state the next transaction can
   positively identify as CLI-authored: it is rolled back to the dead writer's last
   checkpoint (any intra-transaction commit it did land, such as an absorbed hand edit,
   survives) instead of being absorbed as human authority. Dirt found with no journal behind
-  it is a genuine hand edit and absorbs exactly as described above.
+  it is a genuine hand edit and absorbs exactly as described above. **The decision is
+  per-path**, not tree-wide: the journal records WHICH paths were already uncommitted when
+  it was written, and only paths dirty now that were not dirty then count as residue. A
+  tree-wide flag was too coarse — absorb deliberately ignores non-learning files
+  (`config.json`, `INDEX.md`, a scratch note), so one sitting uncommitted disarmed residue
+  rollback for the learning paths a later crash dirtied. **A journal that cannot be written
+  refuses the transaction** rather than running unmarked: the journal is the only thing that
+  tells residue from a hand edit, so proceeding without one is exactly the state whose
+  residue is later laundered into `source: human`.
 
 Use `harness remember` to add a new claim and `harness learning retire|dispute|confirm` to
 change a learning's status when a CLI command is more convenient than a direct edit — both
@@ -713,6 +726,11 @@ The approved [Harness Evolution Blueprint](../knowledge/proposals/harness-evolut
   eligibility (`episodeEligibleForLayer`) trusts it as-is. A dishonest `branch:` can route
   an episode into the golden CANDIDATE set; what it cannot do is write golden — that still
   requires standing on the default branch, or the human-gated override above, or promotion.
+  A workspace checkout landing mid-transaction is refused with `E_HEAD_MOVED`, and that
+  refusal is **side-effect-free**: HEAD is re-validated once BEFORE the run materializes or
+  migrates any branch bucket, and the narrower write-time re-check discards everything the
+  transaction did back to its checkpoint — so "nothing was written" never leaves a stale
+  bucket behind for the finalize commit to publish.
 - **Governance is store-wide, so a branch lane never speaks for golden.** The governance
   ledger binds both layers, which means a branch-local write must not append a decision
   that resolves for golden. Two consequences: a re-teach landing in a BUCKET does not
@@ -759,10 +777,16 @@ The approved [Harness Evolution Blueprint](../knowledge/proposals/harness-evolut
   the promotion-eligibility signal and the PROTECTED-target signal — i.e. an insight-only
   claim could launder itself into permanently protected golden knowledge.
   **A promotion op is bound to its source IDENTITY, not just its evidence.** Promotion
-  moves a claim between layers; it is not an authoring operation. The destination — an
-  ADD/SUPERSEDE's `domain/slug`, a STRENGTHEN's `target` — must equal the cited source id,
-  and the promoted claim's `trigger` and `body` are read from the verified source learning
-  rather than from the op. Without that binding a hand-authored, correctly-re-digested op
+  moves a claim between layers; it is not an authoring operation. A promotion op-set may
+  carry only `ADD`/`STRENGTHEN`/`SUPERSEDE` (an allow-list — `MERGE` consolidates several
+  claims and tombstones every one of them, which no promotion ever does), the destination —
+  an ADD/SUPERSEDE's `domain/slug`, a STRENGTHEN's `target` — must equal the cited source
+  id, EVERY other id the op names (`target`, any `targets[]`) must equal it too, and the
+  promoted claim's `trigger` and `body` are read from the verified source learning rather
+  than from the op. Binding the destination alone was not enough: `SUPERSEDE.target` names
+  a DIFFERENT learning and gets stamped `superseded_by`, so a correctly re-digested op could
+  promote the authentic source claim while tombstoning unrelated golden knowledge the
+  operator never chose to touch. Without that binding a hand-authored, correctly-re-digested op
   could cite one claim's verified identity (including its `source: human` standing, which
   the promoted claim inherits) while writing an entirely different, attacker-authored one,
   or graft one claim's verified-fix episodes onto an unrelated golden claim. A

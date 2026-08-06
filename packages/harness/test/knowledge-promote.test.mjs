@@ -380,6 +380,83 @@ test('a re-digested promotion STRENGTHEN cannot graft its source evidence onto a
   assert.equal(victimAfter.fm.episodes.length, 1, 'the unrelated golden claim gained no borrowed evidence');
 });
 
+// Binding the DESTINATION alone was not enough. `SUPERSEDE.target` and
+// `MERGE.targets` name OTHER learnings — ids the promotion never cited as its
+// source — and both stayed independently attacker-controlled, while MERGE was
+// admitted as a promotion op at all despite the emitter never producing one.
+// So a correctly re-digested op could promote the authentic source claim into
+// golden (passing every source binding) while tombstoning unrelated golden
+// claims the operator never chose to touch: a destructive write, laundered
+// through a legitimate-looking promotion.
+test('a re-digested promotion op cannot tombstone unrelated golden claims through target/targets, and MERGE is not a promotion op', () => {
+  const ws = featureWorkspace('feature/bound-targets');
+  const home = tempDir('promo-home13-');
+  const { dir } = ensureStore(ws, { home });
+
+  // Two unrelated golden claims, unprotected (source: auto, no fix links) so
+  // nothing but the target binding itself can save them. Committed, like the
+  // CLI always leaves the store — an uncommitted file would absorb as a hand
+  // edit and become `source: human`, i.e. protected for the wrong reason.
+  fs.mkdirSync(path.join(dir, 'learnings', 'sql'), { recursive: true });
+  for (const slug of ['treasure-a', 'treasure-b']) {
+    fs.writeFileSync(
+      path.join(dir, 'learnings', 'sql', `${slug}.md`),
+      `---\nschema: 1\ntrigger: "${slug} trigger"\nstatus: active\nsource: auto\nepisodes:\nanchors: []\nsuperseded_by: null\nlast_confirmed: null\norigin: t\n---\n\nGolden claim ${slug}.\n`
+    );
+  }
+  commitStore(dir, 'seed: unrelated golden claims');
+
+  seedBucketLearning(ws, home, 'authentic');
+  const opsFull = path.join(ws, PROMOTE_OPS_REL);
+  assert.equal(buildPromotionOps({ workspace: ws, home, all: true }).pass, true);
+  const pristine = fs.readFileSync(opsFull, 'utf8');
+  const emitted = JSON.parse(pristine).ops[0];
+  assert.equal(emitted.op, 'ADD');
+  assert.equal(emitted.source.id, 'sql/authentic');
+
+  const untouched = () => {
+    for (const slug of ['treasure-a', 'treasure-b']) {
+      const claim = listLearnings(dir).find((l) => l.id === `sql/${slug}`);
+      assert.equal(claim.fm.status, 'active', `sql/${slug} stays active`);
+      assert.equal(claim.fm.superseded_by, null, `sql/${slug} is never tombstoned`);
+    }
+    assert.equal(listLearnings(dir).some((l) => l.id === 'sql/authentic'), false, 'nothing reached golden');
+    const source = listLearnings(bucketDirFor(dir, branchKeyFor('feature/bound-targets'))).find((l) => l.id === 'sql/authentic');
+    assert.equal(source.fm.promoted_to_golden, undefined, 'a refused promotion never tombstones its source');
+    assert.equal(readLedger(dir).filter((e) => e.failure).length, 0, 'promotion rejections never strike');
+  };
+
+  // 1. A SUPERSEDE whose DESTINATION is the source (so the destination binding
+  //    passes cleanly) but whose `target` names an unrelated golden claim.
+  const forgedSupersede = JSON.parse(pristine);
+  forgedSupersede.ops = [{ ...emitted, op: 'SUPERSEDE', target: 'sql/treasure-a' }];
+  forgedSupersede.promotion.digest = promotionDigest(forgedSupersede.ops);
+  fs.writeFileSync(opsFull, JSON.stringify(forgedSupersede));
+  const supersede = applyOps({ workspace: ws, opsPath: opsFull, home });
+  assert.equal(supersede.exitCode, 1, JSON.stringify(supersede));
+  assert.equal(supersede.rejected[0].code, 'E_SCHEMA');
+  assert.match(supersede.rejected[0].reason, /sql\/treasure-a/);
+  untouched();
+
+  // 2. A MERGE — never emitted by `harness knowledge promote` — consolidating
+  //    two unrelated golden claims into the authentic source's own id.
+  const forgedMerge = JSON.parse(pristine);
+  forgedMerge.ops = [{ ...emitted, op: 'MERGE', targets: ['sql/treasure-a', 'sql/treasure-b'] }];
+  forgedMerge.promotion.digest = promotionDigest(forgedMerge.ops);
+  fs.writeFileSync(opsFull, JSON.stringify(forgedMerge));
+  const merge = applyOps({ workspace: ws, opsPath: opsFull, home });
+  assert.equal(merge.exitCode, 1, JSON.stringify(merge));
+  assert.equal(merge.rejected[0].code, 'E_SCHEMA');
+  assert.match(merge.rejected[0].reason, /never MERGE/);
+  untouched();
+
+  // The pristine op-set still promotes — the binding refuses forged targets,
+  // it does not break the legitimate lane.
+  fs.writeFileSync(opsFull, pristine);
+  assert.equal(applyOps({ workspace: ws, opsPath: opsFull, home }).exitCode, 0);
+  assert.ok(listLearnings(dir).some((l) => l.id === 'sql/authentic'));
+});
+
 test('governed and detached sources are refused at emit time', () => {
   const ws = featureWorkspace('feature/governed-promo');
   const home = tempDir('promo-home7-');

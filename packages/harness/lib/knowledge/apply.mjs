@@ -39,6 +39,17 @@ import { readFileNoFollow, assertNoSymlinkAncestors, assertRealpathContained } f
  */
 
 const FILE_TOUCHING = new Set(['ADD', 'STRENGTHEN', 'SUPERSEDE', 'MERGE']);
+/**
+ * The ONLY op kinds a promotion op-set may carry — an allow-list, deliberately
+ * narrower than FILE_TOUCHING. A promotion moves ONE claim between layers, so
+ * the three shapes the emitter produces (a fresh golden claim, more evidence on
+ * an existing one, a replacement of the golden claim it shadows) are the whole
+ * legal vocabulary. MERGE is not among them: it consolidates SEVERAL claims and
+ * tombstones every one of them, which is an authoring decision no promotion
+ * ever makes. Reusing FILE_TOUCHING here admitted MERGE by accident — a
+ * deny-list ("not a NOOP") where an allow-list was meant.
+ */
+const PROMOTION_OP_KINDS = new Set(['ADD', 'STRENGTHEN', 'SUPERSEDE']);
 const DISPUTED_FIX_THRESHOLD = 3;
 // Codes that indicate the CONTENT of a specific op was rejected (bad shape,
 // secret-shaped, imperative lint, over the byte cap, a dedup/rename collision
@@ -890,7 +901,21 @@ export function applyOps({
    * which propagates as a thrown exception instead and lets
    * withStoreTransaction perform the rollback.
    */
-  function runOnce({ dir, git, recordCheckpoint = () => {} }) {
+  function runOnce({ dir, git, recordCheckpoint = () => {}, rollbackToCheckpoint = () => false }) {
+    // HEAD RE-VALIDATION BEFORE THE FIRST MUTATION (P1). Bucket
+    // materialization/migration below already WRITES to the store, so the
+    // write-time gate further down was no longer the "nothing has been written
+    // yet" point its own doc comment claims: a HEAD move caught there left a
+    // freshly created (or renamed) bucket behind for the transaction's finalize
+    // to commit, while the rejection reported that nothing was written.
+    // Checked here first — the one point in a real apply where the store
+    // genuinely is untouched, so this rejection is side-effect-free by
+    // construction rather than by cleanup. A preview mutates nothing at all and
+    // takes no lock, so it has no stale-snapshot window to close.
+    if (!dryRun) {
+      const movedEarly = assertHeadUnmoved();
+      if (movedEarly) return movedEarly;
+    }
     // Layer root: every learning read/write, ledger entry, strike, and INDEX
     // rebuild below is anchored here — the store root for golden, the
     // branch bucket for a routed branch write. Governance stays store-rooted
@@ -1169,12 +1194,14 @@ export function applyOps({
       // (secret scan, imperative lint, renderLearning) reads what the source
       // actually says rather than what the ops file asserts.
       let op = parsed.ops[i];
-      if (promotionMode && !FILE_TOUCHING.has(op.op)) {
-        // The emitter only ever produces ADD/STRENGTHEN/SUPERSEDE. A
+      if (promotionMode && !PROMOTION_OP_KINDS.has(op.op)) {
+        // The emitter only ever produces ADD/STRENGTHEN/SUPERSEDE, and this is
+        // an ALLOW-LIST of exactly those (see PROMOTION_OP_KINDS): a
         // hand-authored promotion envelope carrying a NOOP would otherwise
         // consume its episodes into the GOLDEN ledger from any branch —
         // promotion mode pins layerRoot to golden — clearing debt in a lane the
-        // run never had authority over. Same reasoning as the envelope gates
+        // run never had authority over, and one carrying a MERGE would
+        // tombstone every id in `targets`. Same reasoning as the envelope gates
         // above: the writer enforces the emitter's shape, it doesn't assume it.
         return {
           kind: 'reject',
@@ -1296,6 +1323,37 @@ export function applyOps({
             committed: false,
             exitCode: 1,
           };
+        }
+        // EVERY ID THE OP NAMES IS BOUND, NOT JUST THE DESTINATION (P1).
+        // Binding the destination alone still left the TARGET fields —
+        // `SUPERSEDE.target`, and `targets[]` on any op that carries one —
+        // independently attacker-controlled: those name OTHER learnings, and a
+        // SUPERSEDE stamps `superseded_by` onto whatever they point at. So a
+        // correctly re-digested op could promote the authentic source claim
+        // into golden, passing every source binding above, while tombstoning
+        // unrelated golden claims the operator never chose to touch — a
+        // destructive write laundered through a legitimate-looking promotion.
+        // A promotion moves ONE claim, so every id it names must be that one.
+        const namedTargets = [
+          ...(op.target !== undefined ? [op.target] : []),
+          ...(Array.isArray(op.targets) ? op.targets : []),
+        ];
+        for (const t of namedTargets) {
+          if (t !== src.id) {
+            return {
+              kind: 'reject',
+              applied: [],
+              governed: [],
+              rejected: [
+                fail(
+                  'E_SCHEMA',
+                  `op ${i}: promotion target ${t || '(none)'} does not match source ${src.id} — a promotion moves one claim between layers, it never touches another`
+                ),
+              ],
+              committed: false,
+              exitCode: 1,
+            };
+          }
         }
         if (op.op !== 'STRENGTHEN') {
           op = { ...op, trigger: sourceLearning.fm.trigger || '', body: sourceLearning.body };
@@ -1861,10 +1919,18 @@ export function applyOps({
     }
 
     // Write-time HEAD re-validation (see assertHeadUnmoved): the last point
-    // before anything is written is the last point a stale routing/provenance
-    // snapshot can still be caught for free.
+    // before any LEARNING is written, closing the narrow window between the
+    // pre-mutation gate at the top of runOnce and here. Unlike that gate this
+    // one is NOT reached on a pristine store — bucket materialization/migration
+    // has already run — so the rejection explicitly discards everything this
+    // transaction did back to its checkpoint (any absorb/strike sub-commit
+    // survives). Without that, "nothing was written" was a false claim: the
+    // transaction's finalize commit published the stale bucket anyway.
     const moved = assertHeadUnmoved();
-    if (moved) return moved;
+    if (moved) {
+      rollbackToCheckpoint();
+      return moved;
+    }
 
     // Mutation phase. No manual try/catch + git reset here any more — a
     // throw from anywhere below propagates straight out of runOnce, out of
@@ -2116,7 +2182,7 @@ export function applyOps({
         mirrorLearnings({ workspace, home, log });
       },
     },
-    ({ dir, git, recordCheckpoint }) => {
+    ({ dir, git, recordCheckpoint, rollbackToCheckpoint }) => {
     // The run's ONE git snapshot (routing + provenance), taken under the store
     // lock rather than before it, and re-validated at write time
     // (assertHeadUnmoved) — see deriveRouting's doc comment above.
@@ -2153,7 +2219,7 @@ export function applyOps({
           : `knowledge mode is ${freshMode} — run: harness knowledge on`;
       return { kind: 'reject', applied: [], governed: [], rejected: [{ code: 'E_MODE', reason }], committed: false, exitCode: 2 };
     }
-    return runOnce({ dir, git, recordCheckpoint });
+    return runOnce({ dir, git, recordCheckpoint, rollbackToCheckpoint });
   });
 
   if (!tx.ok) {

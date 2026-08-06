@@ -366,3 +366,57 @@ test('a workspace checkout landing mid-transaction aborts the write instead of r
   // The hand edit the absorb captured before the abort is still intact.
   assert.match(listLearnings(dir).find((l) => l.id === 'sql/settled-claim').body, /Hand-edited claim body\./);
 });
+
+// The same race, but from a FEATURE branch — where the run materializes a
+// branch bucket (mkdir + ledger + INDEX.md + meta.json) on its way to the
+// mutation phase. `E_HEAD_MOVED` promises "nothing was written", but that
+// materialization happened BEFORE the check, and the rejection returned
+// normally — so the transaction's own finalize committed the stale bucket
+// while reporting that nothing had been written. A rejection must leave the
+// store byte-identical to what it was.
+test('E_HEAD_MOVED from a feature branch is side-effect-free: no bucket is materialized, nothing is committed', () => {
+  const ws = clonedWorkspace();
+  const home = tempDir('route-home12-');
+
+  const first = applyOps({ workspace: ws, opsPath: writeOps(ws, [addOp(ws, { slug: 'settled-claim' })]), home });
+  assert.equal(first.exitCode, 0, JSON.stringify(first.rejected));
+  const { dir } = ensureStore(ws, { home });
+
+  // Route to a bucket: the run starts on a feature branch, so runOnce
+  // materializes `branches/<key>/` for it.
+  git(ws, ['checkout', '-qb', 'feature/original']);
+  const stableKey = branchKeyFor('feature/original');
+
+  // The hand edit is what makes the absorb step commit — and therefore run the
+  // hook that moves the workspace HEAD mid-transaction.
+  const learning = listLearnings(dir).find((l) => l.id === 'sql/settled-claim');
+  fs.writeFileSync(
+    learning.file,
+    fs.readFileSync(learning.file, 'utf8').replace('Routed claim body.', 'Hand-edited claim body.'),
+    'utf8'
+  );
+  const hooks = path.join(dir, '.git', 'hooks');
+  fs.mkdirSync(hooks, { recursive: true });
+  fs.writeFileSync(
+    path.join(hooks, 'pre-commit'),
+    `#!/bin/sh\ngit -C ${JSON.stringify(ws)} checkout -qB feature/moved >/dev/null 2>&1\nexit 0\n`,
+    { mode: 0o755 }
+  );
+
+  const headBefore = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: dir, encoding: 'utf8' }).stdout.trim();
+  const res = applyOps({ workspace: ws, opsPath: writeOps(ws, [addOp(ws, { slug: 'raced-claim' })]), home });
+  assert.equal(res.exitCode, 1, JSON.stringify(res));
+  assert.equal(res.rejected[0].code, 'E_HEAD_MOVED');
+
+  assert.deepEqual(listBuckets(dir), [], 'no bucket was materialized by a run that wrote nothing');
+  assert.equal(fs.existsSync(bucketDirFor(dir, stableKey)), false, 'not even an empty bucket directory survives');
+  assert.equal(listLearnings(dir).some((l) => l.id === 'sql/raced-claim'), false);
+  // Exactly one commit landed — the absorb of the hand edit, which is the
+  // transaction's checkpoint and legitimately survives. Nothing after it.
+  const headAfter = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: dir, encoding: 'utf8' }).stdout.trim();
+  const subject = spawnSync('git', ['log', '--format=%s', '-1'], { cwd: dir, encoding: 'utf8' }).stdout.trim();
+  assert.notEqual(headAfter, headBefore, 'the absorb commit landed');
+  assert.match(subject, /^human edit: /, 'and it is the LAST commit — no bucket was committed on top of it');
+  assert.equal(spawnSync('git', ['status', '--porcelain'], { cwd: dir, encoding: 'utf8' }).stdout.trim(), '', 'the store tree is clean');
+  assert.match(listLearnings(dir).find((l) => l.id === 'sql/settled-claim').body, /Hand-edited claim body\./);
+});

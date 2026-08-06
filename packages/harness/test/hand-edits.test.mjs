@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 import { applyOps } from '../lib/knowledge/apply.mjs';
 import { absorbHandEdits, absorbOrAbort, removeEpisodeLink } from '../lib/knowledge/admin.mjs';
+import { setLearningStatus } from '../lib/knowledge/lifecycle.mjs';
 import { ensureBucket } from '../lib/knowledge/layer.mjs';
 import { ensureStore, storeDir, listLearnings, readLedger, parseLearningFrontmatter, serializeLearning, StoreTransactionAbort } from '../lib/knowledge/store.mjs';
 
@@ -608,6 +609,50 @@ test('a PLANTED untracked learning file absorbs as a hand edit — golden and bu
   assert.ok(readLedger(bucketDir).some((e) => e.learning === 'planted/bucket-claim'));
   assert.ok(!readLedger(dir).some((e) => e.learning === 'planted/bucket-claim'));
   assert.equal(spawnSync('git', ['status', '--porcelain'], { cwd: dir, encoding: 'utf8' }).stdout.trim(), '');
+});
+
+// A SYMLINK planted at a learning path is not a learning — it is a redirect.
+// Absorbing untracked learning files brought a bare `fs.readFileSync` +
+// `fs.writeFileSync` pair to a path derived straight from `git status`, so a
+// planted symlink was followed BOTH ways: the read pulled an arbitrary outside
+// file's content into the store's absorb pipeline, and the canonical rewrite
+// overwrote that outside file with a serialized learning. Refused on both
+// halves, through fs-safe.mjs, for golden and bucket paths alike.
+test('a planted SYMLINK at a learning path is refused, never followed — the outside target is untouched (golden and bucket)', () => {
+  const c = ctx();
+  const seeded = seedLearning(c);
+  const { dir } = ensureStore(c.ws, { home: c.harnessHome });
+
+  const outside = tempDir('hedit-outside-');
+  const original = '# an outside document\n\nNot a learning. Must never be read into the store or rewritten.\n';
+  const goldenVictim = path.join(outside, 'golden-victim.md');
+  const bucketVictim = path.join(outside, 'bucket-victim.md');
+  fs.writeFileSync(goldenVictim, original, 'utf8');
+  fs.writeFileSync(bucketVictim, original, 'utf8');
+
+  const goldenLink = path.join(dir, 'learnings', 'planted', 'golden-link.md');
+  fs.mkdirSync(path.dirname(goldenLink), { recursive: true });
+  fs.symlinkSync(goldenVictim, goldenLink);
+  const bucketDir = ensureBucket(dir, { key: 'linked-bucket', branch: 'feature/linked', baseSha: null });
+  const bucketLink = path.join(bucketDir, 'learnings', 'planted', 'bucket-link.md');
+  fs.mkdirSync(path.dirname(bucketLink), { recursive: true });
+  fs.symlinkSync(bucketVictim, bucketLink);
+
+  const logged = [];
+  const result = absorbHandEdits({ workspace: c.ws, home: c.harnessHome, log: (m) => logged.push(m) });
+  assert.deepEqual(result.absorbed.map((a) => a.id), [], 'a symlink at a learning path is never absorbed as a learning');
+  assert.equal(logged.filter((m) => /symlink/i.test(m)).length, 2, 'both refusals are reported, not silently skipped');
+
+  // A full store transaction (which runs absorb first, as every mutation entry
+  // point does) must not follow them either.
+  const tx = setLearningStatus({ workspace: c.ws, id: seeded, action: 'confirm', reason: 'unrelated', home: c.harnessHome });
+  assert.equal(tx.pass, true, tx.blockedReason);
+
+  assert.equal(fs.readFileSync(goldenVictim, 'utf8'), original, 'the golden symlink target is byte-identical');
+  assert.equal(fs.readFileSync(bucketVictim, 'utf8'), original, 'the bucket symlink target is byte-identical');
+  assert.ok(fs.lstatSync(goldenLink).isSymbolicLink(), 'the planted symlink was refused, not replaced');
+  assert.ok(fs.lstatSync(bucketLink).isSymbolicLink());
+  assert.equal(fs.existsSync(path.join(c.ws, 'docs', 'solutions', 'teachings')), false, 'no teaching snapshot fabricated from an outside file');
 });
 
 test('a planted secret-shaped learning file is still scanned on absorb — the snapshot is skipped, warned, and never written', () => {
