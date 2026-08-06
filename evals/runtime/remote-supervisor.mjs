@@ -860,12 +860,20 @@ function isDirectInvocation() {
   }
 }
 
+export function terminateRemoteSupervisorProcess(error, {
+  input = process.stdin,
+  errorOutput = process.stderr,
+} = {}) {
+  const code = error instanceof RemoteSupervisorEntrypointError
+    ? error.code
+    : 'ERR_REMOTE_SUPERVISOR';
+  process.exitCode = 70;
+  try { input?.destroy?.(); } catch { /* the failed control channel is already untrusted */ }
+  try { errorOutput?.write?.(`engineer remote supervisor failed: ${code}\n`); } catch {
+    // The process still terminates fail-closed when its diagnostic stream is unavailable.
+  }
+}
+
 if (isDirectInvocation()) {
-  runRemoteSupervisorCli().catch((error) => {
-    const code = error instanceof RemoteSupervisorEntrypointError
-      ? error.code
-      : 'ERR_REMOTE_SUPERVISOR';
-    process.stderr.write(`engineer remote supervisor failed: ${code}\n`);
-    process.exitCode = 70;
-  });
+  runRemoteSupervisorCli().catch((error) => terminateRemoteSupervisorProcess(error));
 }

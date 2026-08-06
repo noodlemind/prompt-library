@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { spawn } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import os from 'node:os';
@@ -13,6 +14,7 @@ import {
   createRemoteSupervisorEntrypoint,
   inspectBoundArchive,
   runRemoteSupervisorCli,
+  terminateRemoteSupervisorProcess,
 } from '../../../evals/runtime/remote-supervisor.mjs';
 
 const HASH = (character) => character.repeat(64);
@@ -482,6 +484,67 @@ test('direct CLI loads the one code-owned definition when no embedding definitio
     }),
     (error) => error.code === 'ERR_REMOTE_SUPERVISOR_DEFINITION'
   );
+});
+
+test('direct CLI closes a resumed control pipe after a sanitized fatal failure', () => {
+  const writes = [];
+  let destroyed = 0;
+  const previousExitCode = process.exitCode;
+  try {
+    terminateRemoteSupervisorProcess(new Error('sk-private-failure'), {
+      input: { destroy() { destroyed += 1; } },
+      errorOutput: { write(bytes) { writes.push(String(bytes)); } },
+    });
+    assert.equal(destroyed, 1);
+    assert.deepEqual(writes, ['engineer remote supervisor failed: ERR_REMOTE_SUPERVISOR\n']);
+    assert.equal(process.exitCode, 70);
+    assert.equal(writes.join('').includes('sk-private-failure'), false);
+  } finally {
+    process.exitCode = previousExitCode;
+  }
+});
+
+test('fatal direct process exits while its parent keeps the resumed stdin pipe open', async () => {
+  const moduleUrl = new URL('../../../evals/runtime/remote-supervisor.mjs', import.meta.url).href;
+  const child = spawn(process.execPath, [
+    '--input-type=module',
+    '--eval',
+    [
+      `import { terminateRemoteSupervisorProcess } from ${JSON.stringify(moduleUrl)};`,
+      'process.stdin.resume();',
+      "setImmediate(() => terminateRemoteSupervisorProcess(new Error('sk-private-child-failure')));",
+    ].join('\n'),
+  ], {
+    env: { LANG: 'C.UTF-8', PATH: process.env.PATH ?? '/usr/bin:/bin' },
+    stdio: ['pipe', 'pipe', 'pipe'],
+  });
+  const stdout = [];
+  const stderr = [];
+  child.stdout.on('data', (chunk) => stdout.push(Buffer.from(chunk)));
+  child.stderr.on('data', (chunk) => stderr.push(Buffer.from(chunk)));
+  const result = await new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      child.stdin.destroy();
+      child.kill('SIGKILL');
+      reject(new Error('fatal direct process did not close its resumed stdin pipe'));
+    }, 1_000);
+    timer.unref?.();
+    child.once('error', (error) => {
+      clearTimeout(timer);
+      reject(error);
+    });
+    child.once('close', (code, signal) => {
+      clearTimeout(timer);
+      resolve({ code, signal });
+    });
+  });
+  assert.deepEqual(result, { code: 70, signal: null });
+  assert.equal(Buffer.concat(stdout).length, 0);
+  assert.equal(
+    Buffer.concat(stderr).toString('utf8'),
+    'engineer remote supervisor failed: ERR_REMOTE_SUPERVISOR\n',
+  );
+  assert.equal(Buffer.concat(stderr).includes(Buffer.from('sk-private-child-failure')), false);
 });
 
 test('production remote CLI deletes Daytona metadata before definition loading', async () => {
