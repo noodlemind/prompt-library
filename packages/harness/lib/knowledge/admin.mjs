@@ -25,6 +25,7 @@ import {
 } from './store.mjs';
 import { rebuildIndex, todayClamped } from './apply.mjs';
 import { consolidateStatus, LEARNING_BYTE_CAP, isActiveFm } from './consolidate.mjs';
+import { listBuckets, branchesRoot } from './overlay.mjs';
 import { scanSecrets } from '../secret-scan.mjs';
 import { assertNoSymlinkAncestors, assertRealpathContained, writeFileContained } from '../fs-safe.mjs';
 import { runIndexKnowledge } from '../index-knowledge.mjs';
@@ -244,7 +245,11 @@ export function absorbHandEdits({ workspace, home, log = () => {} }) {
     const { status: code, path: rel } = parsePorcelainLine(line);
     const m = LEARNING_FILE_RE.exec(rel);
     if (!m) continue; // non-learning file — left for the normal commit
-    const [, domain, slug] = m;
+    // Bucket capture (blueprint §5a): a hand edit under
+    // branches/<key>/learnings/** absorbs exactly like a golden one; the
+    // bucket key is recorded in the snapshot frontmatter below so the
+    // provenance names which layer the human touched.
+    const [, bucketKey, domain, slug] = m;
     const id = `${domain}/${slug}`;
 
     if (code.includes('D')) {
@@ -273,6 +278,10 @@ export function absorbHandEdits({ workspace, home, log = () => {} }) {
       `date: ${at}`,
       `trigger: ${yamlQuote(trigger)}`,
     ];
+    // Layer provenance (blueprint §5a): a bucket hand edit's snapshot names
+    // its bucket so a later rebuild routes the human authority back to the
+    // branch layer it was taught in, never silently into golden.
+    if (bucketKey) fmLines.push(`bucket: ${yamlQuote(bucketKey)}`);
     const doc = `---\n${fmLines.join('\n')}\n---\n\n${body.trim()}\n`;
 
     let snapshot = null;
@@ -707,10 +716,17 @@ export function purgeEpisode({ workspace, target, copilotHome, home, log = () =>
     // bail with zero side effects (no commit) instead of reporting a false
     // "pass" for a target nothing ever cited. Read fresh, under the lock —
     // not before it — so this can never validate against a stale snapshot
-    // another writer has since moved past.
-    const matchingLearnings = listLearnings(dir).filter((l) => (l.fm.episodes || []).some((e) => e.path === target));
-    const ledger = readLedger(dir);
-    const ledgerHits = ledger.filter((e) => e.path === target).length;
+    // another writer has since moved past. The cascade is LAYER-AWARE
+    // (blueprint §5a): every layer root — golden plus every branch bucket —
+    // is scanned; human deletion always wins in every layer.
+    const roots = [dir, ...listBuckets(dir).map((b) => b.dir)];
+    const matchingByRoot = roots.map((root) => ({
+      root,
+      learnings: listLearnings(root).filter((l) => (l.fm.episodes || []).some((e) => e.path === target)),
+      ledger: readLedger(root),
+    }));
+    const matchingLearnings = matchingByRoot.flatMap((m) => m.learnings);
+    const ledgerHits = matchingByRoot.reduce((n, m) => n + m.ledger.filter((e) => e.path === target).length, 0);
 
     // Debris (a prior crash's stranded staging temp) also counts as "something
     // to purge": bailing here would leave that content on disk while reporting
@@ -728,49 +744,56 @@ export function purgeEpisode({ workspace, target, copilotHome, home, log = () =>
 
     const removedLearnings = [];
     const removedLinks = [];
-    for (const l of matchingLearnings) {
-      const episodes = l.fm.episodes || [];
-      // Decide by the post-filter count, not the pre-filter episode count: a
-      // learning can cite the same path twice with different sha256 values
-      // (ADD then STRENGTHEN after the episode file was edited), so "one
-      // episode total" is not the same thing as "one episode after this path
-      // is removed" — removeEpisodeLink strips every link to `target`
-      // regardless of sha256, so this must match that filter exactly.
-      const remaining = episodes.filter((e) => e.path !== target);
-      if (remaining.length === 0) {
-        // No evidence left once every link to this path is gone.
-        fs.rmSync(l.file, { force: true });
-        removedLearnings.push(l.id);
-      } else {
-        removeEpisodeLink(l.file, target);
-        removedLinks.push(l.id);
+    let ledgerRemoved = 0;
+    for (const m of matchingByRoot) {
+      for (const l of m.learnings) {
+        const episodes = l.fm.episodes || [];
+        // Decide by the post-filter count, not the pre-filter episode count: a
+        // learning can cite the same path twice with different sha256 values
+        // (ADD then STRENGTHEN after the episode file was edited), so "one
+        // episode total" is not the same thing as "one episode after this path
+        // is removed" — removeEpisodeLink strips every link to `target`
+        // regardless of sha256, so this must match that filter exactly.
+        const remaining = episodes.filter((e) => e.path !== target);
+        if (remaining.length === 0) {
+          // No evidence left once every link to this path is gone.
+          fs.rmSync(l.file, { force: true });
+          removedLearnings.push(l.id);
+        } else {
+          removeEpisodeLink(l.file, target);
+          removedLinks.push(l.id);
+        }
       }
+      const keptLedger = m.ledger.filter((e) => e.path !== target);
+      if (keptLedger.length !== m.ledger.length) {
+        fs.writeFileSync(
+          path.join(m.root, 'consolidated.jsonl'),
+          keptLedger.length ? keptLedger.map((e) => JSON.stringify(e)).join('\n') + '\n' : '',
+          'utf8'
+        );
+        ledgerRemoved += m.ledger.length - keptLedger.length;
+      }
+      if (m.learnings.length) rebuildIndex(m.root);
     }
-
-    const keptLedger = ledger.filter((e) => e.path !== target);
-    fs.writeFileSync(
-      path.join(dir, 'consolidated.jsonl'),
-      keptLedger.length ? keptLedger.map((e) => JSON.stringify(e)).join('\n') + '\n' : '',
-      'utf8'
-    );
+    rebuildIndex(dir);
 
     // Governance record (Milestone 4): a fully cascade-deleted learning's
-    // history is dropped too — nothing left for those records to govern —
-    // while a merely delinked (removedLinks) learning's governance history is
-    // untouched, since the learning itself still exists.
+    // history is dropped too — but ONLY once the id survives in NO layer
+    // (blueprint §5a): a bucket copy removed while a golden twin (or another
+    // bucket's copy) still exists must keep its governance history, since the
+    // surviving learning is still governed by it.
     if (removedLearnings.length) {
-      const removedIds = new Set(removedLearnings);
-      rewriteGovernance(dir, (e) => !removedIds.has(e.id));
+      const survivingIds = new Set(roots.flatMap((root) => listLearnings(root).map((l) => l.id)));
+      const fullyGone = new Set(removedLearnings.filter((id) => !survivingIds.has(id)));
+      if (fullyGone.size) rewriteGovernance(dir, (e) => !fullyGone.has(e.id));
     }
-
-    rebuildIndex(dir);
 
     return {
       kind: 'success',
       commitMessage: `purge: ${target}`,
       removedLearnings,
       removedLinks,
-      ledgerRemoved: ledger.length - keptLedger.length,
+      ledgerRemoved,
     };
   });
 
@@ -950,6 +973,13 @@ export function purgeAll({ workspace, home, log = () => {} }) {
         fs.rmSync(dPath, { recursive: true, force: true });
       }
     }
+    // Layer cascade (blueprint §5a): purge --all wipes `branches/` whole —
+    // human deletion always wins in every layer; bucket learnings count
+    // toward the removal total too.
+    for (const bucket of listBuckets(dir)) {
+      n += listLearnings(bucket.dir).length;
+    }
+    fs.rmSync(branchesRoot(dir), { recursive: true, force: true });
     fs.writeFileSync(path.join(dir, 'consolidated.jsonl'), '', 'utf8');
     // Truncate rather than rewriteGovernance(dir, () => false): purge --all
     // erases the entire store, so there is no surviving id left for a
@@ -1058,7 +1088,6 @@ export function rebuildStore({ workspace, home, yes, copilotHome, log = () => {}
     // idsBeforeReset: mirrorLearnings needs these ids named explicitly via
     // retiredIds since the store itself forgets them the instant the wipe runs.
     const archivedLearnings = listLearnings(dir);
-    const archived = archivedLearnings.length;
 
     const learningsDir = path.join(dir, 'learnings');
     if (fs.existsSync(learningsDir)) {
@@ -1068,6 +1097,22 @@ export function rebuildStore({ workspace, home, yes, copilotHome, log = () => {}
       }
     }
     fs.writeFileSync(path.join(dir, 'consolidated.jsonl'), '', 'utf8');
+    // Per-layer rebuild (blueprint §5a): every bucket's learnings and ledger
+    // are wiped too — bucket meta.json survives as the layer's identity — so
+    // each lane re-derives from raw episodes routed by their `branch:`
+    // provenance (episodeEligibleForLayer): golden consolidation on the
+    // default branch takes only default-branch episodes, each branch lane
+    // takes its own plus provenance-less ones. Nothing is laundered into
+    // golden by the wipe itself.
+    let archivedBranch = 0;
+    for (const bucket of listBuckets(dir)) {
+      archivedBranch += listLearnings(bucket.dir).length;
+      fs.rmSync(path.join(bucket.dir, 'learnings'), { recursive: true, force: true });
+      fs.mkdirSync(path.join(bucket.dir, 'learnings'), { recursive: true });
+      fs.writeFileSync(path.join(bucket.dir, 'consolidated.jsonl'), '', 'utf8');
+      rebuildIndex(bucket.dir);
+    }
+    const archived = archivedLearnings.length + archivedBranch;
     rebuildIndex(dir);
     fs.rmSync(path.join(dir, 'stale.json'), { force: true });
     return {

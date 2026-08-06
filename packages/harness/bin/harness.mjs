@@ -180,6 +180,9 @@ const CATALOG = [
         sig: '<on|suggest|off|freeze|capture-only> | --status | purge <file|--all> | commit <none|repo> | migrate-store',
         options: [
           ['--status', 'show the active mode (default)'],
+          ['status', 'layer-aware report: golden domain counts, branch buckets, recall-index drift (read-only)'],
+          ['promote [--branch <key>] [--ids a,b] [--all]', 'emit a reviewable branch→golden promotion op-set (.harness/promote-ops.json)'],
+          ['prune [--branch <key>] [--merged] [--stale <days>]', 'delete branch buckets (human authority, never mode-gated)'],
           ['purge <file>', 'cascade-delete an episode and dependent learnings'],
           ['purge --all', 'reset the learnings store (episodes remain, become debt)'],
           ['commit <none|repo>', 'repo mirrors ACTIVE learnings into docs/knowledge/learnings (opt-in, never git-commits the product repo); none is the default'],
@@ -192,6 +195,7 @@ const CATALOG = [
           ['--candidates', 'deterministic work packet for the consolidation skill'],
           ['--apply --ops <path>', 'validate and apply an ops JSON (sole writer); suggest mode requires --yes'],
           ['--rebuild --yes', 'T2 reset for model-upgrade regeneration (git history retains learnings)'],
+          ['--layer golden', 'explicit golden-layer override for --apply (writes otherwise route by write-time git context)'],
         ] },
       { name: 'remember', desc: 'teach the harness a durable claim (human-teaching episode + learning)',
         sig: '"<claim>" --trigger "<t>" [--domain <d>]',

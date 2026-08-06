@@ -9,6 +9,7 @@ import { loadPolicy } from './policy.mjs';
 import { recordSkillUsage } from './telemetry.mjs';
 import { scanSecrets } from './secret-scan.mjs';
 import { readStoreConfig } from './knowledge/store.mjs';
+import { deriveGitContext } from './git-context.mjs';
 import { assertNoSymlinkAncestors, realpathParentContained } from './fs-safe.mjs';
 
 // Byte-exact snapshot/restore of a single retrieval-state file, used to roll
@@ -181,6 +182,18 @@ export function runInsightCompound({ workspace, copilotHome, flags, log = () => 
   if (tags) fmLines.push(`tags: ${tags}`);
   if (flags.trigger) fmLines.push(`trigger: ${yamlQuote(flags.trigger)}`);
   if (flags.claim) fmLines.push(`claim: ${yamlQuote(flags.claim)}`);
+  // Git provenance (blueprint P1/P9): optional commit/branch/base stamped at
+  // capture time from the CURRENT workspace HEAD. This is the sole CLI
+  // episode writer — `compound --insight` (kind: insight) and
+  // `harness remember` (kind: human-teaching) both land here — so every
+  // CLI-captured episode carries provenance; skill-authored fix episodes stay
+  // reader-tolerant (absent fields are fine everywhere). Shas are stamped
+  // bare; the branch name is attacker-influenced text on fork checkouts, so
+  // it rides through yamlQuote like every other quoted field here.
+  const gitContext = deriveGitContext({ workspace, home });
+  if (gitContext.headSha) fmLines.push(`commit: ${gitContext.headSha}`);
+  if (gitContext.branch) fmLines.push(`branch: ${yamlQuote(gitContext.branch)}`);
+  if (gitContext.baseSha) fmLines.push(`base: ${gitContext.baseSha}`);
   const doc = `---\n${fmLines.join('\n')}\n---\n\n${body.trim()}\n`;
   const secrets = scanSecrets(doc);
   if (secrets.length) {

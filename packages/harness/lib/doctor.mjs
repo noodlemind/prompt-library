@@ -14,8 +14,11 @@ import { readSession, writeSession } from './session.mjs';
 import { parseVSCodeSettings } from './vscode-settings.mjs';
 import { resolveVSCodeSettingsPaths } from './paths.mjs';
 import { loadRetired, findStaleOrphans } from './sync.mjs';
-import { storeDir, storeDirForId, repoId, localRepoId } from './knowledge/store.mjs';
+import { storeDir, storeDirForId, repoId, localRepoId, listLearnings } from './knowledge/store.mjs';
 import { consolidateStatus } from './knowledge/consolidate.mjs';
+import { listBuckets } from './knowledge/overlay.mjs';
+import { branchExists } from './knowledge/layer.mjs';
+import { deriveGitContext, resolveDefaultBranch } from './git-context.mjs';
 import { loadReportEvents, knowledgeSlos } from './report.mjs';
 
 const require = createRequire(import.meta.url);
@@ -406,6 +409,84 @@ function knowledgeChecks({ workspace, copilotHome }) {
       hint,
       optional: true,
     });
+  } catch {
+    // Advisory; never fail doctor on a knowledge-check error.
+  }
+
+  // K5 (blueprint P6): a bucket whose branch no longer exists locally or on
+  // any remote is an orphan — its work was merged, deleted, or abandoned;
+  // the bucket sits as store growth until a human prunes it. Detached
+  // buckets carry no branch to check and are aged out via prune --stale
+  // instead. `branchExists` returning null means git state was unverifiable
+  // — never reported as an orphan.
+  try {
+    const dir = storeDir(workspace);
+    if (fs.existsSync(dir)) {
+      const orphans = [];
+      for (const bucket of listBuckets(dir)) {
+        const branch = bucket.meta?.branch;
+        if (!branch) continue;
+        if (branchExists(workspace, branch) === false) orphans.push(bucket.key);
+      }
+      checks.push({
+        id: 'K5',
+        name: 'No orphan branch buckets (branch gone locally and on remotes)',
+        pass: orphans.length === 0,
+        hint: orphans.length
+          ? `orphan bucket(s): ${orphans.join(', ')} — run: harness knowledge prune --branch <key> (or --merged/--stale)`
+          : 'harness knowledge prune',
+        optional: true,
+      });
+    }
+  } catch {
+    // Advisory; never fail doctor on a knowledge-check error.
+  }
+
+  // K6 (blueprint P6): layer misroute — bucket contents whose `branch:`
+  // provenance disagrees with the bucket's own meta.json branch. A learning
+  // carrying another branch's provenance inside this bucket means a write
+  // was routed into the wrong layer (or a bucket dir was hand-moved).
+  try {
+    const dir = storeDir(workspace);
+    if (fs.existsSync(dir)) {
+      const misrouted = [];
+      for (const bucket of listBuckets(dir)) {
+        const metaBranch = bucket.meta?.branch;
+        if (!metaBranch) continue;
+        for (const l of listLearnings(bucket.dir)) {
+          if (l.fm.branch && l.fm.branch !== metaBranch) misrouted.push(`${bucket.key}:${l.id}`);
+        }
+      }
+      checks.push({
+        id: 'K6',
+        name: 'Bucket contents match their bucket branch (no layer misroute)',
+        pass: misrouted.length === 0,
+        hint: misrouted.length
+          ? `misrouted learning(s): ${misrouted.slice(0, 5).join(', ')} — inspect the bucket, then knowledge prune or re-consolidate on the right branch`
+          : 'inspect with harness knowledge status',
+        optional: true,
+      });
+    }
+  } catch {
+    // Advisory; never fail doctor on a knowledge-check error.
+  }
+
+  // K7 (blueprint P1): the default branch drives write-layer routing; when it
+  // is unresolvable (no store config.json defaultBranch, no origin/HEAD),
+  // writes fail closed to branch-local — surfaced so a team can pin it.
+  try {
+    const dir = storeDir(workspace);
+    if (fs.existsSync(dir)) {
+      const context = deriveGitContext({ workspace });
+      const unresolved = Boolean(context.branch) && !resolveDefaultBranch(workspace, {});
+      checks.push({
+        id: 'K7',
+        name: 'Default branch resolvable for knowledge layer routing',
+        pass: !unresolved,
+        hint: 'set defaultBranch in the store config.json or run: git remote set-head origin -a — until then writes fail closed to branch-local',
+        optional: true,
+      });
+    }
   } catch {
     // Advisory; never fail doctor on a knowledge-check error.
   }

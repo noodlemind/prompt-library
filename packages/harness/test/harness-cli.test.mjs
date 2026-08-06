@@ -441,7 +441,10 @@ test('lifecycle commands append schema-v2 events and omit non-lifecycle commands
   );
 
   const events = readEvents(workspace);
-  assert.deepEqual(events.map((event) => event.type), ['orient', 'gate']);
+  // recall records too since the EVENT_TYPES allow-list fix (harness
+  // evolution Phase 1 hygiene) — its call site always existed; the type was
+  // simply dropped before.
+  assert.deepEqual(events.map((event) => event.type), ['orient', 'gate', 'recall']);
   for (const event of events) {
     assert.equal(event.version, 2);
     assert.match(event.id, /.+/);

@@ -12,7 +12,7 @@ local-only. Team sync is a future phase, deferred by design.
 | Tier | Name | Location | Written by | Role |
 |------|------|----------|-----------|------|
 | T1 | Episodic | `docs/solutions/` (+ global solutions), plans, activity logs | `/auto-compound` (verified `kind: fix`), `compound --insight` (`kind: insight`), `harness remember` (`kind: human-teaching`) | Immutable ground truth. The episode schema is the public stability contract. |
-| T2 | Semantic ("learnings") | `~/.harness/knowledge/<repo-id>/` — CLI-managed local git repo, outside the working tree, never pushed | `harness consolidate --apply` only | Condensed, one-claim-per-file knowledge. A regenerable view of T1 — never the asset. |
+| T2 | Semantic ("learnings") | `~/.harness/knowledge/<repo-id>/` — CLI-managed local git repo, outside the working tree, never pushed; golden `learnings/` plus per-branch `branches/<branch-key>/` buckets (see [Layered store](#layered-store-branch-local-knowledge-shipped-blueprint-phases-12)) | `harness consolidate --apply` only | Condensed, one-claim-per-file knowledge. A regenerable view of T1 — never the asset. |
 | T3 | Behavioral | `.github/` instructions / skills / checks | `/create-primitive` + human PR | Knowledge become behavior. |
 
 Since the governance ledger shipped (M4), T2 is **not** a pure function of `(T1, current
@@ -599,9 +599,12 @@ ingestion path had no `scanSecrets` before — residual #5's regex-grade caveat 
 
 ## Hand-editability
 
-A direct, non-CLI edit to a file under `~/.harness/knowledge/<repo-id>/learnings/` is
+A direct, non-CLI edit to a file under `~/.harness/knowledge/<repo-id>/learnings/` — or
+under a branch bucket's `branches/<branch-key>/learnings/` (absorbed identically; the
+bucket key is recorded in the snapshot's frontmatter) — is
 absorbed automatically — every mutation entry point (`consolidate --apply`, `remember`,
-`learning retire|dispute|confirm|promote`, `knowledge purge`, `consolidate --rebuild --yes`)
+`learning retire|dispute|confirm|promote`, `knowledge purge`, `knowledge prune`,
+`consolidate --rebuild --yes`)
 runs `git status --porcelain` in the store first and commits any dirty edit as its own
 `human edit: <id>` commit, landing before that entry point's own commit.
 
@@ -634,14 +637,76 @@ change a learning's status when a CLI command is more convenient than a direct e
 remain first-class paths; hand-editing is no longer a discouraged shortcut, it is absorbed
 with full provenance either way.
 
-## Planned evolution (proposal, not current behavior)
+## Layered store: branch-local knowledge (shipped, blueprint Phases 1–2)
 
-A pending design proposal — the
-[Harness Evolution Blueprint](../knowledge/proposals/harness-evolution-blueprint.md) —
-maps a branch-local knowledge overlay inside the existing `~/.harness/knowledge/<repo-id>/`
-store (golden `learnings/` plus per-branch buckets) and commit-SHA provenance on episodes
-and learnings. Nothing on this page changes until that proposal's Human Decision records
-approval and the work ships; this page continues to describe current behavior only.
+The approved [Harness Evolution Blueprint](../knowledge/proposals/harness-evolution-blueprint.md)
+(Human Decision 2026-08-06) Phases 1–2 are implemented. Current behavior:
+
+- **Layout.** Golden remains `learnings/` at the store root; branch-local layers live at
+  `branches/<branch-key>/` siblings, each with its own `learnings/`, per-bucket
+  `consolidated.jsonl`, `INDEX.md`, and a `meta.json` cache
+  (`{ branch, branchKey, baseSha, createdAt, promotable }` — a cache, never authority:
+  promotability is derived from the key shape at decision time, and `detached-*` keys are
+  never promotable). `ensureStore` stamps `store.json { schema: 2 }`; a CLI older than a
+  store's recorded schema refuses with an upgrade hint instead of operating layer-blind.
+- **Branch keys.** `<slug>-<8hex>` — the branch name lowercased with everything outside
+  `[a-z0-9._-]` collapsed to `-`, capped at 64 chars, plus the first 8 hex of sha256 over
+  the RAW name (`git-context.mjs`). Detached HEAD (including rebase/bisect states) derives
+  `detached-<12-char-short-sha>`.
+- **Provenance.** Episodes captured by the CLI and learnings written by `consolidate
+  --apply` carry optional `commit:`/`branch:`/`base:` frontmatter. Both learning
+  serializers emit AND preserve the fields across every re-render (STRENGTHEN, hand-edit
+  absorb, purge delink); legacy artifacts without them never error. The
+  `LEARNING_BYTE_CAP` check excludes the provenance lines from the measured size, so a
+  near-cap learning gaining provenance can never trip `E_BYTE_CAP` or a quarantine strike.
+- **Write routing** is derived from git context AT WRITE TIME: feature branch →
+  bucket; default branch → golden; detached → detached bucket; `--layer golden` is an
+  explicit, logged override. Default-branch resolution is store `config.json`
+  `defaultBranch` → `origin/HEAD` → unresolved, and an unresolved default fails closed TO
+  BRANCH-LOCAL, never golden (doctor K7 surfaces it). The orient-recorded branch is
+  advisory only — a write whose HEAD disagrees warns.
+- **Read overlay.** Retrieval and the knowledge eval share one overlay
+  (`overlay.mjs`): golden actives ∪ current-branch bucket actives; a branch-local claim
+  shadows a same-id golden claim UNLESS the golden claim is protected (≥3 verified
+  `kind: fix` links or `source: human` — never shadowed; the branch claim renders as an
+  additional subordinate entry); ids under a standing `retire`/`dispute`/`promote`
+  decision are never surfaced from a bucket; branch-local wins equal-score ties (layer
+  tiebreak before the id tiebreak); a bucket whose recorded `baseSha` is not an ancestor
+  of HEAD (force-push name reuse) is excluded whole. With no `branches/` directory the
+  read path is byte-identical to the pre-layer behavior.
+- **Golden consolidation eligibility (P4).** Once a store has buckets, golden candidacy
+  requires `branch:` provenance naming the resolved default branch — an episode from an
+  unpromoted non-default branch, or one with no provenance, routes to branch-local review
+  and never silently into golden (this is also what a per-layer
+  `consolidate --rebuild --yes` re-derivation enforces; rebuild wipes each bucket's
+  learnings/ledger too, keeping `meta.json` as the layer identity).
+- **Promotion** (`harness knowledge promote`) emits a reviewable, digest-bound op-set at
+  `.harness/promote-ops.json`; only `consolidate --apply` in promotion mode applies it.
+  Promotion ops are exempt from golden candidacy — evidence re-validates from the sha256s
+  recorded at branch-apply time, never working-tree presence; promotion rejections never
+  record quarantine strikes; a shadow-of-golden maps to SUPERSEDE (STRENGTHEN when the
+  overlap is episodes-only); a protected golden target rejects and is marked disputed.
+  Success tombstones each source `promoted_to_golden:` (a retrieval exclusion alongside
+  `promoted_to`) and records **`absorb-branch`** in the governance ledger — an AUDIT
+  action: `readGovernance`'s replay considers only `retire`/`dispute`/`confirm`/`promote`,
+  so an absorb-branch entry can never become an id's standing decision (regression-pinned:
+  retire → absorb-branch → rebuild still lands retired).
+- **Maintenance is layer-aware (§5a).** Hand edits under `branches/<key>/learnings/**`
+  absorb exactly like golden ones (the bucket key is recorded in the snapshot
+  frontmatter); `knowledge purge <file>`/`--all` cascade across every layer (`--all`
+  wipes `branches/` whole), with an id's governance record dropped only once no layer
+  holds it; commit-mode mirroring stays golden-only — buckets are never mirrored.
+- **Lifecycle.** `harness knowledge status` is the read-only layer report (golden
+  per-domain counts, bucket rows with age/base/promotability/ancestry, recall-index
+  drift); `harness knowledge prune [--branch <key>] [--merged] [--stale <days>]` deletes
+  buckets — human authority, never mode-gated, one store commit. Doctor K5 flags orphan
+  buckets (branch gone locally and on remotes), K6 flags bucket contents whose `branch:`
+  provenance disagrees with the bucket's meta. Branch renames auto-migrate a bucket to
+  the new key when exactly one gone-branch, ancestry-verified candidate exists; anything
+  ambiguous is left for `knowledge status`/K5 and manual prune.
+
+Phase 3 (structural index) and Phase 4 (per-check verify severity) remain unshipped
+design; nothing on this page describes them.
 
 ## Related
 

@@ -172,10 +172,19 @@ export function knowledgeSlos(events) {
   // is noise, not utilization, so it must not inflate the weighted rate.
   const citedIdOccurrences = [];
   let consolidations = 0; let humanActions = 0;
+  // Layer attribution (branch-local vs golden): orient events record a
+  // learningLayers map only when a branch-bucket learning surfaced; an id's
+  // latest recorded layer wins. Absent everywhere → no split is reported.
+  const layerById = new Map();
+  let anyLayerInfo = false;
   for (const e of events) {
     if (e.type === 'orient' && Array.isArray(e.learnings)) {
       e.learnings.forEach((id) => surfaced.add(id));
       surfacedOccurrences += e.learnings.length;
+      if (e.learningLayers && typeof e.learningLayers === 'object') {
+        anyLayerInfo = true;
+        for (const [id, layer] of Object.entries(e.learningLayers)) layerById.set(id, layer === 'branch' ? 'branch' : 'golden');
+      }
     }
     if (e.type === 'verify' && Array.isArray(e.learnings)) {
       e.learnings.forEach((id) => cited.add(id));
@@ -186,12 +195,25 @@ export function knowledgeSlos(events) {
   }
   const citedSurfaced = [...cited].filter((id) => surfaced.has(id)).length;
   const citedOccurrences = citedIdOccurrences.filter((id) => surfaced.has(id)).length;
+  // Per-layer split (blueprint Phase 2, report/SLO layer split): unique-id
+  // based, attributed by each id's recorded layer (default golden). Only
+  // present once any layer info exists, so pre-bucket reports are unchanged.
+  let layers;
+  if (anyLayerInfo) {
+    layers = { golden: { surfaced: 0, cited: 0 }, branch: { surfaced: 0, cited: 0 } };
+    for (const id of surfaced) {
+      const layer = layerById.get(id) || 'golden';
+      layers[layer].surfaced += 1;
+      if (cited.has(id)) layers[layer].cited += 1;
+    }
+  }
   return { surfaced: surfaced.size, cited: cited.size, citedSurfaced,
     utilization: surfaced.size ? Number((citedSurfaced / surfaced.size).toFixed(2)) : null,
     surfacedOccurrences, citedOccurrences,
     utilizationWeighted: surfacedOccurrences ? Number((citedOccurrences / surfacedOccurrences).toFixed(2)) : null,
     consolidations, humanActions,
-    engagement: consolidations ? Number((humanActions / consolidations).toFixed(2)) : null };
+    engagement: consolidations ? Number((humanActions / consolidations).toFixed(2)) : null,
+    ...(layers ? { layers } : {}) };
 }
 
 /** Injected-token ledger: the COST side of the knowledge layer's accounting.

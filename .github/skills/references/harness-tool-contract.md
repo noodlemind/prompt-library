@@ -57,15 +57,15 @@ This table tracks only what differs in runtime character across commands — whi
 |---------|------|--------|-------|
 | `install` / `upgrade` | human/CI | none | mutates `~/.copilot/` |
 | `doctor` | human/CI | none | read-only (`--host vscode` runs an isolated hook-lifecycle fixture) |
-| `init-repo` | human/CI | none¹ | mutates workspace (`.harness/`, `docs/plans/`, `docs/codebase-map.md`) |
+| `init-repo` | human/CI | writes¹ | mutates workspace (`.harness/`, `docs/plans/`, `docs/codebase-map.md`) |
 | `status` / `uninstall` | human/CI | none | read-only / mutates `~/.copilot/` (uninstall removes hydrated files) |
 | `orient` | agent-runtime | writes | mutates `.harness/` (context-pack, repo-map, session) |
-| `recall` | agent-runtime | none¹ | read-only |
+| `recall` | agent-runtime | writes¹ | read-only |
 | `gate` | agent-runtime | writes | mutates session state |
 | `verify` | agent-runtime | writes | mutates (evidence file + session) |
-| `validate-plan` | agent-runtime | none¹ | read-only |
+| `validate-plan` | agent-runtime | writes¹ | read-only |
 | `plan-new` | agent-runtime | none | mutates workspace (writes the plan; `--stdout` prints instead) |
-| `index` | agent-runtime | none¹ | mutates the knowledge index (`--status` read-only) |
+| `index` | agent-runtime | writes¹ | mutates the knowledge index (`--status` read-only) |
 | `get` | agent-runtime | none | read-only |
 | `compound` | agent-runtime | writes | mutates (index + solution doc + telemetry) |
 | `consolidate` | agent-runtime | writes | read-only (`--status`/`--candidates`); mutates the learnings store (`--apply`/`--rebuild --yes`) |
@@ -77,7 +77,7 @@ This table tracks only what differs in runtime character across commands — whi
 | `events` | agent-runtime | none | read-only |
 | `report` | agent-runtime | none | read-only (`--sync` writes `~/.harness/telemetry/`) |
 
-¹ `init-repo`/`recall`/`validate-plan`/`index` each call `writeEvent` (types `init_repo`/`recall`/`validate_plan`/`index`), but none of those four type strings is in the `EVENT_TYPES` allow-list (`events.mjs`) — `writeEvent` silently no-ops for an unlisted type, so the call exists in code yet nothing actually lands in `events.jsonl`; "none" is the ledger truth, not a simplification.
+¹ `init-repo`/`recall`/`validate-plan`/`index` historically called `writeEvent` (types `init_repo`/`recall`/`validate_plan`/`index`) while those four type strings were absent from the `EVENT_TYPES` allow-list (`events.mjs`), so the calls silently no-opped. The allow-list now includes all four (harness evolution Phase 1 hygiene) — the events record in `events.jsonl` like every other lifecycle write.
 
 **Query construction (deterministic-retrieval discipline):** build `--query` from the user's salient nouns and identifiers **verbatim** (e.g. `SYSTEM-OVERRIDE`, `payment`, `token`) — do not paraphrase intent into synonyms. The retrieval tokenizer normalizes identifier formats and morphology, but it cannot recover a term the query never contained. Passing the literal request terms is what keeps recall stable across phrasings.
 
@@ -245,6 +245,31 @@ Allowed outcomes are `passed`, `failed`, and `inconclusive`. Only fresh `passed`
 { "pass": true, "exitCode": 0, "removed": { "episode": "docs/solutions/...", "learnings": ["..."], "links": ["..."], "ledger": 1 }, "blockedReason": null }
 ```
 
+**knowledge status** — read-only layer-aware report (golden per-domain counts, branch-bucket rows when buckets exist, recall-index drift). Emits a `knowledge` event; never creates or mutates the store. Bucket `promotable` is derived from the key shape (`detached-*` is never promotable); `ancestryOk: false` marks a bucket whose recorded base is not an ancestor of the current HEAD (excluded from the read overlay).
+```json
+{
+  "pass": true,
+  "exitCode": 0,
+  "storeExists": true,
+  "mode": "on",
+  "commit": "none",
+  "context": { "branch": "feature/x", "branchKey": "feature-x-1a2b3c4d", "detached": false },
+  "golden": { "active": 12, "total": 14, "domains": [{ "domain": "sql", "active": 12, "total": 14 }] },
+  "buckets": [{ "key": "feature-x-1a2b3c4d", "branch": "feature/x", "baseSha": "<sha>", "ageDays": 3, "promotable": true, "active": 2, "total": 2, "promoted": 0, "prunable": false, "ancestryOk": true }],
+  "drift": { "indexed": true, "stale": false, "commitsSince": null, "filesChanged": null, "recommendation": "index is current with HEAD" }
+}
+```
+
+**knowledge promote** — emits a reviewable, digest-bound branch→golden op-set at `.harness/promote-ops.json` (never writes the store itself); applied only through `consolidate --apply` in promotion mode, where evidence re-validates from the sha256s recorded at branch-apply time, rejections never record quarantine strikes, promoted sources are tombstoned `promoted_to_golden:` (a retrieval exclusion), and an `absorb-branch` audit entry lands in the governance ledger (audit-only — the replay never lets it become an id's standing decision). `--all` chunks under the 5-op delta contract with deterministic id ordering as the cursor and `remaining: N` reporting. Detached-HEAD buckets (`detached-*`) are never promotable — derived from the key shape.
+```json
+{ "pass": true, "exitCode": 0, "opsPath": ".harness/promote-ops.json", "ops": 2, "remaining": 0, "skipped": [{ "id": "sql/x", "reason": "standing governance decision: retire" }], "bucketKey": "feature-x-1a2b3c4d", "nextTools": ["harness consolidate --apply --ops .harness/promote-ops.json"] }
+```
+
+**knowledge prune** — deletes branch buckets (`--branch <key>`, `--merged` via workspace git state plus fully-tombstoned buckets, `--stale <days>`; selectors combine). Human authority, never mode-gated — exactly like purge. Removal is one store commit.
+```json
+{ "pass": true, "exitCode": 0, "removed": ["feature-x-1a2b3c4d"], "blockedReason": null }
+```
+
 **eval-knowledge** — deterministic retrieval PROXY (hit/false-surface/token cost per arm on a temporally held-out split); never a model-graded net-benefit number, and no benefit claim is published from it
 ```json
 {
@@ -261,7 +286,7 @@ Allowed outcomes are `passed`, `failed`, and `inconclusive`. Only fresh `passed`
 }
 ```
 
-Lifecycle events are limited to `session_start`, `orient`, `gate`, `pre_tool`, `post_tool`, `skill_activation`, `verify`, `compound`, `consolidate`, `remember`, `learning`, `knowledge`, and `session_end`. Non-lifecycle commands `get`, `report`, `learnings`, and `eval-knowledge` never append events by design — they never call `writeEvent` at all. `init-repo`, `recall`, `validate-plan`, and `index` also never append events, but not by that same deliberate omission: all four DO call `writeEvent` (types `init_repo`/`recall`/`validate_plan`/`index`), and those types are simply absent from the allow-list above, so the calls silently no-op — see the Command catalog table's footnote. Every append-attempting command never stores prompt or query content; `skill_activation` stores only the skill and session binding.
+Lifecycle events are limited to `session_start`, `orient`, `gate`, `pre_tool`, `post_tool`, `skill_activation`, `verify`, `compound`, `consolidate`, `remember`, `learning`, `knowledge`, `session_end`, `init_repo`, `recall`, `validate_plan`, and `index` (the last four were formerly dropped by the allow-list despite their call sites — fixed as harness evolution Phase 1 hygiene; see the Command catalog table's footnote). Non-lifecycle commands `get`, `report`, `learnings`, and `eval-knowledge` never append events by design — they never call `writeEvent` at all. Every append-attempting command never stores prompt or query content; `skill_activation` stores only the skill and session binding.
 
 ## Host hook boundary
 

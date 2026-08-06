@@ -87,8 +87,40 @@ export function storeDir(workspace, { home } = {}) {
   return storeDirForId(repoId(workspace), { home });
 }
 
+/**
+ * Store schema version (blueprint §5a): stamped into `store.json` by
+ * ensureStore, checked wherever the store is opened for use. Schema 2 = the
+ * layered store (golden `learnings/` + `branches/<key>/` buckets). A store
+ * whose recorded schema is NEWER than this CLI supports refuses with an
+ * upgrade hint instead of operating layer-blind — an older CLI running
+ * root-anchored maintenance against a layered store is a data-loss hazard,
+ * not a degraded mode. An absent/corrupt store.json is treated as the
+ * current schema (legacy stores predate the marker and are fully readable).
+ */
+export const STORE_SCHEMA = 2;
+
+export function assertStoreSchemaSupported(dir) {
+  let recorded = null;
+  try {
+    const parsed = JSON.parse(fs.readFileSync(path.join(dir, 'store.json'), 'utf8'));
+    if (parsed && Number.isInteger(parsed.schema)) recorded = parsed.schema;
+  } catch {
+    recorded = null; // absent or corrupt — legacy/current, never a refusal
+  }
+  if (recorded !== null && recorded > STORE_SCHEMA) {
+    const err = new Error(
+      `knowledge store schema ${recorded} is newer than this CLI supports (${STORE_SCHEMA}) — upgrade @dev-kit/harness before touching this store`
+    );
+    err.code = 'E_STORE_SCHEMA';
+    err.hint = 'npm install -g @dev-kit/harness@latest && harness install';
+    throw err;
+  }
+  return recorded;
+}
+
 export function ensureStore(workspace, { home, dryRun = false } = {}) {
   const dir = storeDir(workspace, { home });
+  assertStoreSchemaSupported(dir);
   const created = !fs.existsSync(path.join(dir, 'consolidated.jsonl'));
   if (dryRun) return { dir, created, git: fs.existsSync(path.join(dir, '.git')) };
   fs.mkdirSync(path.join(dir, 'learnings'), { recursive: true });
@@ -100,6 +132,8 @@ export function ensureStore(workspace, { home, dryRun = false } = {}) {
   if (!fs.existsSync(indexPath)) fs.writeFileSync(indexPath, INDEX_STUB, 'utf8');
   const ledgerPath = path.join(dir, 'consolidated.jsonl');
   if (!fs.existsSync(ledgerPath)) fs.writeFileSync(ledgerPath, '', 'utf8');
+  const schemaPath = path.join(dir, 'store.json');
+  if (!fs.existsSync(schemaPath)) fs.writeFileSync(schemaPath, JSON.stringify({ schema: STORE_SCHEMA }) + '\n', 'utf8');
   return { dir, created, git: gitOk };
 }
 
@@ -150,7 +184,17 @@ export function writeStoreConfig(workspace, { home, mode, commit } = {}) {
     const current = readStoreConfig(workspace, { home });
     const nextMode = mode !== undefined ? mode : current.mode;
     const nextCommit = commit !== undefined ? commit : current.commit;
-    fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify({ mode: nextMode, commit: nextCommit }) + '\n', 'utf8');
+    // Preserve any OTHER fields the raw config carries (e.g. the
+    // `defaultBranch` layer-routing override, git-context.mjs) — this
+    // read-modify-write owns only mode/commit, never the whole file.
+    let raw = {};
+    try {
+      const parsed = JSON.parse(fs.readFileSync(path.join(dir, 'config.json'), 'utf8'));
+      if (parsed && typeof parsed === 'object') raw = parsed;
+    } catch {
+      // absent/corrupt — nothing extra to preserve
+    }
+    fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify({ ...raw, mode: nextMode, commit: nextCommit }) + '\n', 'utf8');
     const message = mode !== undefined ? `knowledge: mode ${nextMode}` : `knowledge: commit ${nextCommit}`;
     return { nextMode, nextCommit, commitMessage: message };
   });
@@ -246,10 +290,23 @@ function readGovernanceEntries(dir) {
  * one (e.g. correcting a recorded `--to` path) — only non-promote entries are
  * blocked from overriding a standing promote; there is no `unpromote`.
  */
+/**
+ * REPLAY RULE (blueprint §5, normative): only the human DECISION set can ever
+ * become an id's latest standing decision. `absorb-branch` entries — the
+ * audit record a branch→golden promotion appends — are deliberately NOT in
+ * this set: they are recorded for audit but skipped by the replay, so a
+ * promotion can never displace a standing retire/dispute (the required
+ * regression: retire → absorb-branch → `consolidate --rebuild --yes` still
+ * lands retired). Unknown/future actions are likewise audit-only until they
+ * are explicitly added here.
+ */
+const REPLAY_DECISION_ACTIONS = new Set(['retire', 'dispute', 'confirm', 'promote']);
+
 export function readGovernance(dir) {
   const map = new Map();
   for (const entry of readGovernanceEntries(dir)) {
     if (!entry || !entry.id) continue;
+    if (!REPLAY_DECISION_ACTIONS.has(entry.action)) continue; // audit-only (absorb-branch, future actions)
     const existing = map.get(entry.id);
     if (existing && existing.action === 'promote' && entry.action !== 'promote') continue;
     map.set(entry.id, entry);
@@ -418,6 +475,46 @@ export function episodeLines(episodes) {
 }
 
 /**
+ * Git provenance frontmatter (harness evolution blueprint P1/P9): optional,
+ * reader-tolerant `commit:` / `branch:` / `base:` fields on episodes and
+ * learnings. ONE rendering shared by BOTH learning serializers —
+ * `serializeLearning` below (parse → mutate → re-render round trips: absorb,
+ * purge delink, lifecycle promote) and apply.mjs's `renderLearning` (fresh
+ * ADD/SUPERSEDE/STRENGTHEN/MERGE writes) — because reader tolerance alone is
+ * insufficient: a serializer with a fixed field list silently DROPS the
+ * fields on any re-render. Shape-validated at render: commit/base must be
+ * full 40-hex shas; branch is an attacker-influenced string on fork
+ * checkouts, so it is yamlQuoted (round-tripped by `unquote`) and length-
+ * capped here at the write boundary (render surfaces additionally pass it
+ * through `inertLine`). Absent/invalid fields render nothing — a legacy
+ * artifact without them never errors and never gains fabricated values.
+ */
+const PROVENANCE_SHA_RE = /^[0-9a-f]{40}$/;
+const PROVENANCE_BRANCH_CAP = 200;
+
+export function provenanceLines({ commit, branch, base } = {}) {
+  const lines = [];
+  if (typeof commit === 'string' && PROVENANCE_SHA_RE.test(commit)) lines.push(`commit: ${commit}`);
+  if (typeof branch === 'string' && branch && branch.length <= PROVENANCE_BRANCH_CAP) {
+    lines.push(`branch: ${yamlQuote(branch)}`);
+  }
+  if (typeof base === 'string' && PROVENANCE_SHA_RE.test(base)) lines.push(`base: ${base}`);
+  return lines;
+}
+
+/**
+ * Byte cost of the provenance lines as they land in a rendered learning
+ * (each line plus its joining newline). The LEARNING_BYTE_CAP check in
+ * apply.mjs subtracts exactly this, so a near-cap learning gaining
+ * provenance can never trip E_BYTE_CAP (and never records a quarantine
+ * strike) purely because of the stamp — the cap keeps measuring the CLAIM,
+ * not the bookkeeping. Recorded as the Phase 1 byte-cap decision.
+ */
+export function provenanceBytes(fields) {
+  return provenanceLines(fields).reduce((n, line) => n + Buffer.byteLength(line, 'utf8') + 1, 0);
+}
+
+/**
  * Render a parsed `{ fm, body }` pair (as `parseLearningFrontmatter` above
  * hands back) to the canonical on-disk learning text — same field order and
  * escaping the sole writer's `renderLearning` (apply.mjs) uses for a fresh
@@ -430,6 +527,8 @@ export function episodeLines(episodes) {
  * array `mergedFrom`, a freshly-stamped `last_confirmed`) rather than a
  * parsed `fm`, so it is intentionally NOT rebased on this function — that
  * would require normalizing shapes it doesn't own; see apply.mjs.
+ * Provenance fields parsed off disk are re-emitted via provenanceLines
+ * (above), so no re-render ever drops them.
  */
 export function serializeLearning(fm, body) {
   const lines = [
@@ -452,7 +551,9 @@ export function serializeLearning(fm, body) {
   lines.push(`last_confirmed: ${fm.last_confirmed || 'null'}`);
   if (fm.merged_from) lines.push(`merged_from: ${fm.merged_from}`);
   if (fm.promoted_to) lines.push(`promoted_to: ${fm.promoted_to}`);
+  if (fm.promoted_to_golden) lines.push(`promoted_to_golden: ${fm.promoted_to_golden}`);
   lines.push(`origin: ${fm.origin || 'unknown'}`);
+  lines.push(...provenanceLines(fm));
   lines.push('---', '', body.trim(), '');
   return lines.join('\n');
 }
@@ -620,15 +721,20 @@ export function rollbackStore(dir, targetSha) {
 }
 
 /**
- * `learnings/<domain>/<slug>.md` — the shape absorbHandEdits (admin.mjs)
- * treats as an absorbable hand edit. Exported for admin.mjs's own porcelain
- * scan; no longer used by store.mjs itself (an earlier version of the
- * rollback guard here matched dirty paths against it, which incorrectly
- * protected a path a transaction's OWN legitimate mutation re-dirtied after
- * an earlier absorb commit already captured it — see withStoreTransaction's
- * checkpoint-based design below, which replaced that approach entirely).
+ * `learnings/<domain>/<slug>.md` — golden — OR
+ * `branches/<key>/learnings/<domain>/<slug>.md` — a branch bucket (blueprint
+ * §5a: hand edits under buckets are absorbed exactly like golden hand edits,
+ * never left for transaction rollback to destroy) — the shapes
+ * absorbHandEdits (admin.mjs) treats as an absorbable hand edit. Capture
+ * groups: [1] = bucket key (undefined for golden), [2] = domain, [3] = slug.
+ * Exported for admin.mjs's own porcelain scan; no longer used by store.mjs
+ * itself (an earlier version of the rollback guard here matched dirty paths
+ * against it, which incorrectly protected a path a transaction's OWN
+ * legitimate mutation re-dirtied after an earlier absorb commit already
+ * captured it — see withStoreTransaction's checkpoint-based design below,
+ * which replaced that approach entirely).
  */
-export const LEARNING_FILE_RE = /^learnings\/([^/]+)\/([^/]+)\.md$/;
+export const LEARNING_FILE_RE = /^(?:branches\/([^/]+)\/)?learnings\/([^/]+)\/([^/]+)\.md$/;
 
 /** Parse one `git status --porcelain` line into its status code and path —
  * shared by admin.mjs's absorbHandEdits scan. */

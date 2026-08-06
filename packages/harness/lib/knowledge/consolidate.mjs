@@ -3,6 +3,8 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { storeDir, readLedger, listLearnings, readStoreConfig, readGovernance, inertLine } from './store.mjs';
 import { readFileNoFollow, assertNoSymlinkAncestors } from '../fs-safe.mjs';
+import { resolveWriteLayer, episodeEligibleForLayer, storeHasBuckets } from './layer.mjs';
+import { bucketDirFor } from './overlay.mjs';
 
 export const CONSOLIDATION_THRESHOLD = 5;
 export const MAX_OPS_PER_RUN = 5;
@@ -141,6 +143,10 @@ export function collectEpisodes({ workspace, copilotHome }) {
           tags: fm.tags ? fm.tags.split(',').map((t) => t.trim()) : [],
           excerpt: excerpt(text),
           date: fm.date || null,
+          // Git provenance (blueprint P1/P4): the branch this episode was
+          // captured on, when its frontmatter recorded one. Layer routing
+          // (episodeEligibleForLayer) keys off this; absent = pre-provenance.
+          branch: fm.branch || null,
         });
       }
     }
@@ -231,14 +237,56 @@ export function promotionCandidates(learnings) {
   return out;
 }
 
+/**
+ * Layer view for the read-side consolidation surfaces (--status /
+ * --candidates), mirroring applyOps' own write-time routing so the packet a
+ * skill reads and the write the CLI validates agree on layer, consumption,
+ * and per-layer episode eligibility (blueprint P4). A store without buckets
+ * short-circuits to the pre-layer golden view with zero git spawns.
+ */
+function layerView({ workspace, home, dir }) {
+  const hasBuckets = storeHasBuckets(dir);
+  let routing = null;
+  if (hasBuckets) {
+    try {
+      routing = resolveWriteLayer({ workspace, home });
+    } catch {
+      routing = null;
+    }
+  }
+  const layer = routing?.layer === 'branch' ? 'branch' : 'golden';
+  const bucketKey = layer === 'branch' ? routing.bucketKey : null;
+  const layerRoot = layer === 'branch' ? bucketDirFor(dir, bucketKey) : dir;
+  return {
+    layer,
+    bucketKey,
+    layerRoot,
+    eligibility: {
+      layer,
+      currentBranch: routing?.context?.branch || null,
+      defaultBranchName: routing?.defaultBranch?.name || null,
+      storeHasBuckets: hasBuckets,
+    },
+  };
+}
+
 export function consolidateStatus({ workspace, copilotHome, home }) {
   // Non-creating read: --status must never materialize a store that isn't
   // there yet — an absent store just reports empty ledger/learnings.
   const dir = storeDir(workspace, { home });
   const { mode } = readStoreConfig(workspace, { home });
   const episodes = collectEpisodes({ workspace, copilotHome });
+  const view = layerView({ workspace, home, dir });
   const { consumed, quarantined } = splitLedger(readLedger(dir));
+  let layerQuarantined = [];
+  if (view.layer === 'branch') {
+    // The current bucket's ledger consumes (and quarantines) too.
+    const bucketSplit = splitLedger(readLedger(view.layerRoot));
+    for (const key of bucketSplit.consumed) consumed.add(key);
+    layerQuarantined = bucketSplit.quarantined;
+  }
   const unconsolidated = episodes
+    .filter((e) => episodeEligibleForLayer(e.branch, view.eligibility))
     .filter((e) => !consumed.has(`${e.path}@${e.sha256}`))
     .map(({ path: p, sha256, kind, title }) => ({ path: p, sha256, kind, title }));
   const learnings = listLearnings(dir);
@@ -253,11 +301,13 @@ export function consolidateStatus({ workspace, copilotHome, home }) {
     threshold: CONSOLIDATION_THRESHOLD,
     due,
     unconsolidated,
-    quarantined,
+    quarantined: [...quarantined, ...layerQuarantined],
     learnings: { active: active.length, total: learnings.length },
     domains: domainPressure(learnings),
     promotionCandidates: promotionCandidates(learnings),
     storeDir: dir,
+    layer: view.layer,
+    ...(view.bucketKey ? { bucketKey: view.bucketKey } : {}),
     nextTools: due ? ['harness consolidate --candidates'] : [],
   };
 }
@@ -337,9 +387,14 @@ export function consolidateCandidates({ workspace, copilotHome, home }) {
   }
 
   // Non-creating read: --candidates must never materialize a store either —
-  // an absent store just means no active learnings to report.
+  // an absent store just means no active learnings to report. The learning
+  // list mirrors the ROUTED write layer (layerView) so the skill proposes
+  // STRENGTHEN/SUPERSEDE targets that actually exist where the apply will
+  // land — a branch lane lists the bucket's learnings, never golden ids the
+  // bucket write would E_TARGET on.
   const dir = storeDir(workspace, { home });
-  const active = activeLearnings(listLearnings(dir));
+  const view = layerView({ workspace, home, dir });
+  const active = activeLearnings(listLearnings(view.layerRoot));
   const totalBytes = active.reduce((n, l) => n + l.bytes, 0);
   const includeBodies = totalBytes <= LEARNING_BODY_BUDGET_BYTES;
   const learnings = active.map((l) => ({
@@ -383,6 +438,8 @@ export function consolidateCandidates({ workspace, copilotHome, home }) {
     domains: status.domains,
     governed,
     storeDir: dir,
+    layer: view.layer,
+    ...(view.bucketKey ? { bucketKey: view.bucketKey } : {}),
     // Only present when the episode section was actually bounded (P2) — a
     // packet under budget carries neither field, matching every other
     // optional-flag shape in this response (e.g. `body` above).

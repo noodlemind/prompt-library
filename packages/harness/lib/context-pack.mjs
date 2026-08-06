@@ -39,11 +39,15 @@ export function buildLearningsLines(learnings) {
   lines.push(`Applied learnings: ${learnings.map((l) => l.id).join(', ')}`);
   for (const l of learnings) {
     const fence = l.advisory ? ' [unverified memory — advisory]' : '';
+    // Layer marker (blueprint §4): a branch-bucket claim is flagged
+    // [branch-local] — subordinate when it shadows a protected golden claim —
+    // inside the same untrusted-memory advisory framing as every other entry.
+    const layerMark = l.layer === 'branch' ? (l.subordinate ? ' [branch-local, subordinate]' : ' [branch-local]') : '';
     // inertLine: a legacy or hand-edited learning can still carry an
     // embedded control char in its trigger/claim (see store.mjs's doc
     // comment) — collapsed to a space so it can never inject extra
     // structure into this trusted context surface.
-    lines.push(`- [${l.id}]${fence} ${inertLine(l.trigger)} → ${inertLine(l.claimLine)}`);
+    lines.push(`- [${l.id}]${layerMark}${fence} ${inertLine(l.trigger)} → ${inertLine(l.claimLine)}`);
   }
   return lines;
 }
@@ -77,6 +81,12 @@ export function learningsSectionBytes(packBody) {
   return Buffer.byteLength(packBody.slice(start, end), 'utf8');
 }
 
+// Pack-header provenance cap: branch names are attacker-influenced strings on
+// fork checkouts (blueprint P9) — every rendered fragment passes inertLine AND
+// a hard length cap so a hostile name can neither inject structure nor flood
+// the 2 KB budget.
+const HEADER_BRANCH_CAP = 80;
+
 export function buildContextPack({
   query,
   recall,
@@ -88,6 +98,7 @@ export function buildContextPack({
   repoMapRef,
   gatePreview,
   nextTools,
+  gitContext,
 }) {
   // Order by priority so the 2 KB cap truncates the least-important content
   // last: high-value fixed sections (active plan, plan view, goal, gate, next
@@ -99,6 +110,16 @@ export function buildContextPack({
     '> Read this file only — do not re-read full plans/solutions into chat.',
     '> Excludes plan ## Activity and ## Verification Evidence by design.',
   ];
+
+  // Git provenance header (blueprint P2): one line naming the branch (or
+  // detached state) and short head/base shas, so the model and a human both
+  // see which line of history this orientation was derived from.
+  if (gitContext && (gitContext.branch || gitContext.detached)) {
+    const label = gitContext.detached ? '(detached)' : inertLine(gitContext.branch).slice(0, HEADER_BRANCH_CAP);
+    const headPart = gitContext.headSha ? ` @ ${inertLine(String(gitContext.headSha)).slice(0, 12)}` : '';
+    const basePart = gitContext.baseSha ? ` · base ${inertLine(String(gitContext.baseSha)).slice(0, 12)}` : '';
+    lines.push(`> Branch: ${label}${headPart}${basePart}`);
+  }
 
   if (activePlan) {
     // inertLine the plan path (filename-derived, same class as the Plans

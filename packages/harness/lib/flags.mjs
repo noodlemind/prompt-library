@@ -25,6 +25,13 @@ function parsePhase(raw) {
   return raw;
 }
 
+function parseLayer(raw) {
+  if (!['golden', 'branch'].includes(raw)) {
+    invalidFlag('--layer', raw, 'must be golden or branch');
+  }
+  return raw;
+}
+
 export function parseFlags(argv) {
   const flags = {
     dryRun: false,
@@ -78,6 +85,12 @@ export function parseFlags(argv) {
     to: null,
     why: null,
     yes: false,
+    layer: null,
+    branch: null,
+    ids: null,
+    all: false,
+    merged: false,
+    stale: null,
   };
 
   for (let i = 0; i < argv.length; i++) {
@@ -176,6 +189,16 @@ export function parseFlags(argv) {
       if (next !== undefined && !next.startsWith('--')) flags.why = argv[++i];
     }
     else if (a === '--yes') flags.yes = true;
+    else if (a.startsWith('--layer=')) flags.layer = parseLayer(a.split('=')[1]);
+    else if (a === '--layer') flags.layer = parseLayer(argv[++i]);
+    else if (a.startsWith('--branch=')) flags.branch = a.split('=').slice(1).join('=');
+    else if (a === '--branch') flags.branch = argv[++i];
+    else if (a.startsWith('--ids=')) flags.ids = a.split('=').slice(1).join('=');
+    else if (a === '--ids') flags.ids = argv[++i];
+    else if (a === '--all') flags.all = true;
+    else if (a === '--merged') flags.merged = true;
+    else if (a.startsWith('--stale=')) flags.stale = parsePositiveInt(a.split('=')[1], '--stale');
+    else if (a === '--stale') flags.stale = parsePositiveInt(argv[++i], '--stale');
   }
 
   return flags;
