@@ -701,8 +701,13 @@ export async function cmdVerify(argv) {
   if (flags.json) emitJson(flags, result);
   else {
     // `skipped` is neutral (e.g. the advisory structural check without an
-    // index): never a failure count, never the next fix target.
-    const failed = result.checks.filter((c) => c.status !== 'passed' && c.status !== 'skipped').length;
+    // index): never a failure count, never the next fix target. An `advisory`
+    // check is neutral for the same reason — it cannot move the outcome
+    // (resolveOutcome excludes it), so counting it here or pointing the agent
+    // at it would route attention to the one check that can never unblock the
+    // run. Both stay visible as rows and in `advisoryFailures`.
+    const gating = (c) => c.status !== 'passed' && c.status !== 'skipped' && c.severity !== 'advisory';
+    const failed = result.checks.filter(gating).length;
     const passed = result.outcome === 'passed';
     console.log(
       ui.line({
@@ -718,7 +723,7 @@ export async function cmdVerify(argv) {
     if (passed) {
       printNext('harness compound (or /auto-compound), then stop');
     } else {
-      const firstFail = result.checks.find((c) => c.status !== 'passed' && c.status !== 'skipped');
+      const firstFail = result.checks.find(gating);
       if (firstFail) {
         const detail = String(firstFail.message ?? firstFail.name ?? '').slice(0, 100);
         printNext(`fix ${firstFail.id} (${detail})`);
