@@ -29,6 +29,7 @@ import {
 } from '../lib/commands.mjs';
 import { cmdPlanNew } from '../lib/plan-new.mjs';
 import { createStyle, keyWidthFor, EXIT } from '../lib/style.mjs';
+import { dispatch as dispatchRegistered, hasCommand } from '../lib/registry.mjs';
 
 const [, , command = 'help', ...args] = process.argv;
 // This renderer only writes error blocks, which go to stderr — detect there.
@@ -286,7 +287,14 @@ function emitError({ code, message, fix, exit }) {
 async function main() {
   let code = 0;
   try {
-    switch (command) {
+    // Registered commands dispatch through the central registry first
+    // (lib/registry.mjs), which parses their flags strictly — an unknown
+    // flag is a structured E_USAGE error, never silently dropped. Every
+    // other command falls through to the switch below unchanged; the
+    // switch is not removed until a later phase migrates the rest.
+    if (hasCommand(command)) {
+      code = await dispatchRegistered([command, ...args], {});
+    } else switch (command) {
       case 'help':
       case '--help':
       case '-h': {
