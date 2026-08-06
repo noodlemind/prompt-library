@@ -32,7 +32,13 @@ function containerBindingHash(value) {
     .digest('hex');
 }
 
-function fixture({ probeOverrides = {}, mountOverrides = null, containerOverrides = {} } = {}) {
+function fixture({
+  probeOverrides = {},
+  mountOverrides = null,
+  containerOverrides = {},
+  nativeMountShape = true,
+  mountFieldOverrides = {},
+} = {}) {
   const contract = createTrialSecurityContract({
     trialId: 'pair-1-repetition-1-generic-1',
     immutableImage: IMAGE,
@@ -46,7 +52,17 @@ function fixture({ probeOverrides = {}, mountOverrides = null, containerOverride
     const parts = bind.split(':');
     const mode = parts.pop();
     const destination = parts.pop();
-    return { type: 'bind', source: parts.join(':'), destination, rw: mode === 'rw' };
+    return nativeMountShape
+      ? {
+        Type: 'bind',
+        Source: parts.join(':'),
+        Destination: destination,
+        Mode: '',
+        RW: mode === 'rw',
+        Propagation: 'rprivate',
+        ...mountFieldOverrides,
+      }
+      : { type: 'bind', source: parts.join(':'), destination, rw: mode === 'rw' };
   });
   const materialization = {
     schema: 'engineer-trial-security-materialization.v1',
@@ -114,6 +130,39 @@ test('observes exact live binds and runs the static canary inside the started ta
   assert.match(command, /container\0exec\0--privileged=false/);
   assert.match(command, new RegExp(TASK_ISOLATION_PROBE_PATH));
   assert.doesNotMatch(command, /\/bin\/sh|-c\0/);
+});
+
+test('accepts Docker native mount fields and rejects the fixture-only lowercase shape', () => {
+  const lowercase = fixture({ nativeMountShape: false });
+  assert.throws(() => observeLiveTaskContainer({
+    containerId: CONTAINER,
+    containerBindingHash: containerBindingHash(CONTAINER),
+    contract: lowercase.contract,
+    allowedBindSets: lowercase.allowedBindSets,
+    materialization: lowercase.materialization,
+    imageDigest: IMAGE_ID,
+    probeExecutableHash: HASH('d'),
+  }, { runDocker: lowercase.runDocker }), /mount.*(?:invalid|unexpected|missing)/i);
+});
+
+test('rejects bind mode and propagation drift even when source, destination, and RW match', () => {
+  for (const mountFieldOverrides of [
+    { Propagation: 'rshared' },
+    { Mode: 'z' },
+    { Mode: 'ro', RW: true },
+    { Mode: 'rw', RW: false },
+  ]) {
+    const drifted = fixture({ mountFieldOverrides });
+    assert.throws(() => observeLiveTaskContainer({
+      containerId: CONTAINER,
+      containerBindingHash: containerBindingHash(CONTAINER),
+      contract: drifted.contract,
+      allowedBindSets: drifted.allowedBindSets,
+      materialization: drifted.materialization,
+      imageDigest: IMAGE_ID,
+      probeExecutableHash: HASH('d'),
+    }, { runDocker: drifted.runDocker }), /invalid bind/i);
+  }
 });
 
 test('rejects writable-probe, treatment, namespace, capability, and raw-socket drift', () => {

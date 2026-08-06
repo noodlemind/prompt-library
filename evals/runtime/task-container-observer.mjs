@@ -138,15 +138,28 @@ function normalizedMounts(mounts) {
     fail('live task mount inventory is outside its bound');
   }
   const values = mounts.map((mount) => {
-    if (!plainObject(mount) || mount.type !== 'bind'
-        || typeof mount.source !== 'string' || !path.posix.isAbsolute(mount.source)
-        || path.posix.normalize(mount.source) !== mount.source
-        || typeof mount.destination !== 'string' || !path.posix.isAbsolute(mount.destination)
-        || path.posix.normalize(mount.destination) !== mount.destination
-        || typeof mount.rw !== 'boolean') {
+    if (!plainObject(mount)) fail('live task mount inventory contains an invalid bind');
+    exactKeys(
+      mount,
+      ['Type', 'Source', 'Destination', 'Mode', 'RW', 'Propagation'],
+      'live task mount',
+    );
+    if (mount.Type !== 'bind'
+        || typeof mount.Source !== 'string' || !path.posix.isAbsolute(mount.Source)
+        || path.posix.normalize(mount.Source) !== mount.Source
+        || typeof mount.Destination !== 'string' || !path.posix.isAbsolute(mount.Destination)
+        || path.posix.normalize(mount.Destination) !== mount.Destination
+        || typeof mount.Mode !== 'string'
+        || typeof mount.RW !== 'boolean'
+        || !(
+          mount.RW
+            ? mount.Mode === '' || mount.Mode === 'rw'
+            : mount.Mode === '' || mount.Mode === 'ro'
+        )
+        || mount.Propagation !== 'rprivate') {
       fail('live task mount inventory contains an invalid bind');
     }
-    return `${mount.source}:${mount.destination}:${mount.rw ? 'rw' : 'ro'}`;
+    return `${mount.Source}:${mount.Destination}:${mount.RW ? 'rw' : 'ro'}`;
   });
   if (new Set(values).size !== values.length) fail('live task mount inventory contains duplicates');
   return values.sort();

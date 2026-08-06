@@ -3158,7 +3158,6 @@ export function createNodeLinuxDriver(topology) {
       let recoveryError;
       try {
         const after = statFilesystem(parentPath);
-        availableBytesAfterCleanup = availableFilesystemBytes(parentPath);
         const recoveredReserve = fs.lstatSync(spec.reservePath);
         const canariesAbsent = records.every((record) => {
           try { fs.lstatSync(record.path); return false; } catch (error) {
@@ -3171,9 +3170,17 @@ export function createNodeLinuxDriver(topology) {
             || recoveredReserve.uid !== 0 || recoveredReserve.gid !== 0
             || (recoveredReserve.mode & 0o777) !== 0o600
             || recoveredReserve.blocks * 512 < spec.evidenceReserveBytes
-            || availableBytesAfterCleanup < spec.evidenceReserveBytes
             || !canariesAbsent) {
           throw new Error('storage readiness headroom did not recover');
+        }
+        const recoveryDeadline = Date.now() + Math.min(spec.timeoutMs, 5_000);
+        while (true) {
+          availableBytesAfterCleanup = availableFilesystemBytes(parentPath);
+          if (availableBytesAfterCleanup >= spec.evidenceReserveBytes) break;
+          if (Date.now() >= recoveryDeadline) {
+            throw new Error('storage readiness headroom did not recover');
+          }
+          await new Promise((resolve) => setTimeout(resolve, 25));
         }
       } catch (error) {
         recoveryError = error;

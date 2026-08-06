@@ -120,6 +120,8 @@ test('storage readiness preallocates with the protected allocator and bounds the
   assert.match(source, /allocatedBytesObserved/);
   assert.match(source, /bytesWrittenBeforeEnospc/);
   assert.match(source, /engineer-readiness-storage-observation\.v2/);
+  assert.match(source, /recoveryDeadline\s*=\s*Date\.now\(\)\s*\+\s*Math\.min\(spec\.timeoutMs,\s*5_000\)/);
+  assert.match(source, /await new Promise\(\(resolve\) => setTimeout\(resolve, 25\)\)/);
   assert.doesNotMatch(source, /while \(bytesWritten < spec\.totalBytes\)/);
 });
 
