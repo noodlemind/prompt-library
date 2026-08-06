@@ -206,10 +206,27 @@ export function parseFlags(argv) {
     else if (a === '--yes') flags.yes = true;
     else if (a.startsWith('--layer=')) flags.layer = parseLayer(a.split('=')[1]);
     else if (a === '--layer') flags.layer = parseLayer(argv[++i]);
-    else if (a.startsWith('--branch=')) flags.branch = a.split('=').slice(1).join('=');
-    else if (a === '--branch') flags.branch = argv[++i];
-    else if (a.startsWith('--ids=')) flags.ids = a.split('=').slice(1).join('=');
-    else if (a === '--ids') flags.ids = argv[++i];
+    // Same flag-shaped-value guard `--since` carries above: a separated form
+    // with a missing value used to swallow the NEXT flag as its argument
+    // (`--branch --ids x` set branch to "--ids" and dropped `--ids`' own
+    // effect), so a typo silently ran a DIFFERENT command than the one typed.
+    else if (a.startsWith('--branch=')) {
+      const value = a.split('=').slice(1).join('=');
+      if (!value) invalidFlag('--branch', value, 'requires a bucket key value');
+      flags.branch = value;
+    } else if (a === '--branch') {
+      const next = argv[++i];
+      if (next === undefined || next.startsWith('--')) invalidFlag('--branch', next, 'requires a bucket key value');
+      flags.branch = next;
+    } else if (a.startsWith('--ids=')) {
+      const value = a.split('=').slice(1).join('=');
+      if (!value) invalidFlag('--ids', value, 'requires a comma-separated learning id list');
+      flags.ids = value;
+    } else if (a === '--ids') {
+      const next = argv[++i];
+      if (next === undefined || next.startsWith('--')) invalidFlag('--ids', next, 'requires a comma-separated learning id list');
+      flags.ids = next;
+    }
     else if (a === '--all') flags.all = true;
     else if (a === '--merged') flags.merged = true;
     else if (a.startsWith('--stale=')) flags.stale = parsePositiveInt(a.split('=')[1], '--stale');

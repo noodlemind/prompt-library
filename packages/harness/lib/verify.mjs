@@ -89,6 +89,22 @@ function checkStatusForEvidence(mapped, byId) {
   return statuses.every((status) => status === 'passed') ? 'passed' : 'inconclusive';
 }
 
+/**
+ * Is this check one that can actually hold the run back? `skipped` is neutral
+ * (e.g. the advisory structural check with no index) and so is `advisory` —
+ * resolveOutcome excludes it, so counting it as a failure or offering it as the
+ * next fix target would point the agent at the one check that can never unblock
+ * the run. A check with NO severity field predates policy v2 and still counts.
+ *
+ * EXPORTED because it is a CONTRACT, not a local convenience (review finding):
+ * the CLI's failure count and "next fix" line (commands.mjs) and the test that
+ * pins this behavior must be the same predicate. A copy in the test can go on
+ * passing while production drifts away from it.
+ */
+export function isGatingCheck(check) {
+  return check.status !== 'passed' && check.status !== 'skipped' && check.severity !== 'advisory';
+}
+
 // Outcome reflects only non-advisory checks: an advisory failure is reported
 // (checks + advisoryFailures in the evidence payload) but never flips the
 // outcome or the exit code. A warn-severity failure degrades to inconclusive
@@ -162,7 +178,12 @@ const CHECK_DEPTH_CAP = 3;
 // `stdout`/`stderr` are the trusted named command's own output, already
 // length-bounded by trimOutput and deliberately left multi-line so a failing
 // check stays readable.
-const SANITIZED_CHECK_LISTS = ['findings', 'informational'];
+// `details` (plan-schema / plan-readiness sub-check messages) and `openTasks`
+// (verbatim `- [ ]` lines lifted out of the plan body) are PLAN-DERIVED text on
+// exactly the same surfaces — `.harness/evidence/*.json`, `verify --json`, the
+// event log — and a plan is an ordinary repo file a human or model writes. They
+// were the two list payloads shipping unredacted, unflattened, and unbounded.
+const SANITIZED_CHECK_LISTS = ['findings', 'informational', 'details', 'openTasks'];
 
 function checkText(value) {
   return inertLine(redactSecrets(String(value ?? ''))).slice(0, CHECK_TEXT_CAP);

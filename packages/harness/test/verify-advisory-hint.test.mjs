@@ -6,8 +6,9 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-
-const gating = (c) => c.status !== 'passed' && c.status !== 'skipped' && c.severity !== 'advisory';
+// The PRODUCTION predicate, imported rather than restated: a copy here could go
+// on passing while `harness verify`'s own counting drifted away from it.
+import { isGatingCheck as gating } from '../lib/verify.mjs';
 
 test('advisory and skipped checks are neither counted nor offered as the next fix', () => {
   const checks = [

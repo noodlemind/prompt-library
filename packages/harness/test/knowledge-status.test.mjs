@@ -116,6 +116,28 @@ test('a bucket with a non-ancestor base is flagged ancestryOk: false', () => {
   assert.equal(report.buckets[0].ancestryOk, false);
 });
 
+// meta.json is a hand-editable cache, so an arbitrary `baseSha` string reached
+// both the rendered CLI row and the `--json` lane verbatim — the one untreated
+// field on a report whose every other untrusted string is shape-checked or
+// redacted. It now passes the same 40-hex gate `bucketAncestryOk` applies
+// before handing the value to git.
+test('a malformed bucket baseSha is dropped rather than rendered verbatim', () => {
+  const ws = gitWorkspace('feature/basesha');
+  const home = tempDir('kstatus-home4-');
+  const { dir } = ensureStore(ws, { home });
+  writeBucket(dir, 'hostile-11111111', {
+    branch: 'hostile',
+    baseSha: 'AKIAIOSFODNN7EXAMPLE\nnot a sha at all',
+  });
+  const report = knowledgeStatus({ workspace: ws, home });
+  assert.equal(report.buckets[0].baseSha, null, 'a value the ancestry gate would refuse is never reported');
+  assert.equal(report.buckets[0].ancestryOk, null, 'and it stays unverifiable, not "proven not an ancestor"');
+
+  writeBucket(dir, 'ok-22222222', { branch: 'ok', baseSha: 'a'.repeat(40) });
+  const again = knowledgeStatus({ workspace: ws, home });
+  assert.equal(again.buckets.find((b) => b.key === 'ok-22222222').baseSha, 'a'.repeat(40), 'a well-formed sha still reports');
+});
+
 test('knowledge status is read-only and never materializes a store', () => {
   const ws = gitWorkspace('feature/empty');
   const home = tempDir('kstatus-home3-');
@@ -157,4 +179,23 @@ test('CLI: harness knowledge status --json emits the report and a knowledge even
   assert.equal(human.status, 0, human.stderr || human.stdout);
   assert.match(human.stdout, /golden/);
   assert.match(human.stdout, /sql/);
+});
+
+// `--since` already refused an option-shaped value; `--branch` and `--ids` did
+// not, so a separated form with a missing value swallowed the NEXT flag as its
+// argument (`--branch --ids x` set branch to "--ids" AND dropped `--ids`' own
+// effect) — a typo silently ran a different command than the one typed.
+test('CLI: --branch and --ids refuse a missing or flag-shaped value instead of swallowing the next flag', () => {
+  const ws = gitWorkspace('feature/flagguard');
+  const harnessHome = tempDir('kstatus-hh2-');
+  for (const args of [
+    ['knowledge', 'prune', '--branch', '--merged'],
+    ['knowledge', 'prune', '--branch='],
+    ['knowledge', 'promote', '--ids', '--all'],
+    ['knowledge', 'promote', '--ids='],
+  ]) {
+    const res = runHarness([...args, '--workspace', ws], { HARNESS_HOME: harnessHome });
+    assert.notEqual(res.status, 0, `${args.join(' ')} must be refused`);
+    assert.match(res.stderr, /invalid --(branch|ids)/, `${args.join(' ')}: ${res.stderr}`);
+  }
 });

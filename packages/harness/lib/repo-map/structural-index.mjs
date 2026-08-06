@@ -11,7 +11,9 @@
 //                 unresolved edges preserved EXPLICITLY, never fabricated
 //   meta.json     { sha, branch, baseSha, generatedAt, extractorTier,
 //                 grammarVersions, ... } — the P9 generation-context stamp
-// All writes are atomic temp+rename through fs-safe's writeFileContained.
+// All writes are atomic temp+rename through fs-safe's writeFileContained, and
+// the four together are published as ONE generation via a staged directory
+// swap (publishGeneration) so no reader can mix generations.
 // Building is async-command-path work (harness index --structural); READING
 // is fully synchronous so buildRepoMap/orient stay sync and model-free.
 //
@@ -353,13 +355,91 @@ function symbolDelta(priorSymbols, nextSymbols) {
   // intact), so `'constructor' in prior` would be true for every table.
   for (const name of Object.keys(nextSymbols)) {
     if (!Object.hasOwn(prior, name)) added.push(name);
-    else if (JSON.stringify(prior[name].defs) !== JSON.stringify(nextSymbols[name].defs)) changed.push(name);
+    // A CORRUPT PRIOR REBUILDS, IT NEVER CRASHES (review finding). `prior`
+    // comes from a hand-editable, possibly truncated symbols.json, so an entry
+    // may be null or a primitive — `prior[name].defs` then threw a TypeError
+    // straight out of `harness index --structural`, and only deleting the index
+    // by hand recovered. Same discipline as `usablePriorEntry` for files.json:
+    // an entry that is not an object is not comparable, so it counts as CHANGED
+    // (the safe direction — never silently "unchanged").
+    else if (
+      !prior[name] ||
+      typeof prior[name] !== 'object' ||
+      JSON.stringify(prior[name].defs) !== JSON.stringify(nextSymbols[name].defs)
+    ) {
+      changed.push(name);
+    }
   }
   for (const name of Object.keys(prior)) {
     if (!Object.hasOwn(nextSymbols, name)) removed.push(name);
   }
   const cap = (list) => ({ count: list.length, names: list.sort().slice(0, MAX_DELTA_NAMES) });
   return { added: cap(added), removed: cap(removed), changed: cap(changed) };
+}
+
+/**
+ * Publish the four tables as ONE generation (review finding).
+ *
+ * Each individual write is atomic, and meta.json is written LAST as the
+ * completeness signal — but that only orders the writes, it does not make the
+ * SET atomic. Both readers (`readStructuralIndex` here and shape.mjs's) read
+ * meta.json first and then the tables, so a build landing between those reads
+ * hands back meta.json from generation N-1 beside files.json from generation N
+ * — mixed generations, with symbol rows citing files the meta never saw.
+ *
+ * The whole generation is therefore staged in a sibling directory and swapped
+ * in with two renames. A concurrent reader sees the previous generation whole,
+ * the new one whole, or — for the instant between the renames — no index
+ * directory at all, which every reader already treats as "absent, skip". On any
+ * failure the previous generation is renamed back, so a refused publish leaves
+ * the index exactly as it was rather than empty. Returns `{ ok }` plus the
+ * table name that refused, for the caller's log line.
+ */
+function publishGeneration(dir, writes) {
+  const parent = path.dirname(dir);
+  const suffix = `${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  const staging = path.join(parent, `.staging-${path.basename(dir)}-${suffix}`);
+  const retired = path.join(parent, `.retired-${path.basename(dir)}-${suffix}`);
+  const discard = (p) => {
+    try {
+      fs.rmSync(p, { recursive: true, force: true });
+    } catch {
+      // best effort — derived, rebuildable data; never worth failing a build
+    }
+  };
+  try {
+    fs.mkdirSync(staging, { recursive: true });
+  } catch {
+    return { ok: false, failed: 'staging directory' };
+  }
+  for (const [name, data] of writes) {
+    if (!writeFileContained(staging, name, JSON.stringify(data) + '\n')) {
+      discard(staging);
+      return { ok: false, failed: name };
+    }
+  }
+  let movedAside = false;
+  try {
+    if (fs.existsSync(dir)) {
+      fs.renameSync(dir, retired);
+      movedAside = true;
+    }
+    fs.renameSync(staging, dir);
+  } catch {
+    // Restore the previous generation rather than leaving the index absent.
+    if (movedAside && !fs.existsSync(dir)) {
+      try {
+        fs.renameSync(retired, dir);
+      } catch {
+        discard(retired);
+      }
+    }
+    discard(staging);
+    discard(retired);
+    return { ok: false, failed: 'generation swap' };
+  }
+  discard(retired);
+  return { ok: true, failed: null };
 }
 
 /**
@@ -477,21 +557,20 @@ export async function buildStructuralIndex({ workspace, home, extractor, since =
   };
 
   if (!dryRun) {
-    // meta.json is written LAST: readers treat meta as the completeness
-    // signal, so a crashed build leaves the previous stamp in place instead
-    // of presenting fresh-looking metadata over half-written tables. Each
-    // individual write is atomic (fs-safe temp + rename).
-    const writes = [
+    // ONE GENERATION, PUBLISHED ATOMICALLY (publishGeneration above). meta.json
+    // is still written last within the staged set — readers treat meta as the
+    // completeness signal — but the whole set now becomes visible in a single
+    // directory swap, so no reader can pair this build's tables with the
+    // previous build's stamp.
+    const published = publishGeneration(dir, [
       ['files.json', nextFiles],
       ['symbols.json', symbols],
       ['graph.json', graph],
       ['meta.json', meta],
-    ];
-    for (const [name, data] of writes) {
-      if (!writeFileContained(dir, name, JSON.stringify(data) + '\n')) {
-        log(`structural index write refused: ${name}`);
-        return { dir, written: false, reparsed, reused, removedFiles, delta, meta, sinceIgnored, priorUnreadable, basedOn };
-      }
+    ]);
+    if (!published.ok) {
+      log(`structural index write refused: ${published.failed}`);
+      return { dir, written: false, reparsed, reused, removedFiles, delta, meta, sinceIgnored, priorUnreadable, basedOn };
     }
   }
 

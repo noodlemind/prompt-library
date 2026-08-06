@@ -130,6 +130,14 @@ export function listBuckets(dir) {
   return out.sort((a, b) => a.key.localeCompare(b.key));
 }
 
+/** The bucket `meta.baseSha` shape gate, shared by the ancestry check below and
+ * by every surface that RENDERS a baseSha (`knowledge status`). meta.json is a
+ * hand-editable cache, so a value the ancestry gate would refuse to feed to git
+ * must not be echoed onto a CLI row or into the `--json` lane either. */
+export function isBucketBaseSha(value) {
+  return typeof value === 'string' && SHA_RE.test(value);
+}
+
 /**
  * Ancestry gate for a bucket's recorded baseSha against the workspace HEAD.
  * `true` = verified ancestor; `false` = verified NOT an ancestor (or the sha
@@ -139,7 +147,7 @@ export function listBuckets(dir) {
  * not against missing metadata on a legacy bucket.
  */
 export function bucketAncestryOk(workspace, meta) {
-  if (!meta || typeof meta.baseSha !== 'string' || !SHA_RE.test(meta.baseSha)) return null;
+  if (!meta || !isBucketBaseSha(meta.baseSha)) return null;
   try {
     const res = spawnSync('git', ['merge-base', '--is-ancestor', meta.baseSha, 'HEAD'], {
       cwd: workspace,
@@ -186,7 +194,14 @@ export function loadLayeredLearnings({ workspace, home } = {}) {
   } catch {
     context = null;
   }
-  if (!context?.branchKey) return { learnings: golden, layered: false, context };
+  // Shape-check the key before it reaches `bucketDirFor`'s path.join — the
+  // same gate layer.mjs, promote.mjs, and apply.mjs already apply to a key they
+  // are about to join. `deriveGitContext` derives this one, so it is safe
+  // today; validating here keeps that a property of the READ path rather than
+  // of one particular producer staying honest.
+  if (!context?.branchKey || !isSafeBucketKey(context.branchKey)) {
+    return { learnings: golden, layered: false, context };
+  }
 
   const bucketDir = bucketDirFor(dir, context.branchKey);
   if (!fs.existsSync(path.join(bucketDir, 'learnings'))) {

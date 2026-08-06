@@ -518,6 +518,27 @@ test('prune resolves bucket discovery and selection INSIDE the store transaction
   }
 });
 
+test('prune containment-verifies EVERY selected bucket before the first delete (all-or-nothing)', () => {
+  // Structural assertion for the same reason as the TOCTOU guard above: the
+  // refusal it guards is only reachable by an ancestor swap racing the loop
+  // (`listBuckets` skips a symlinked bucket outright, so no single-process test
+  // can plant one), but the CONSEQUENCE of getting the order wrong is a silent
+  // partial deletion — the buckets ahead of the refused one already gone, the
+  // run reporting `removed: []`, and the transaction still committing it.
+  const src = fs.readFileSync(new URL('../lib/knowledge/prune.mjs', import.meta.url), 'utf8');
+  const firstDeleteAt = src.indexOf('fs.rmSync(');
+  assert.ok(firstDeleteAt !== -1, 'prune deletes bucket directories with rmSync');
+  for (const m of [...src.matchAll(/assertRealpathContained\(/g)]) {
+    assert.ok(m.index < firstDeleteAt, 'every containment check runs before anything is deleted');
+  }
+  // The delete loop must iterate the PRE-VALIDATED list, never the raw
+  // selection, and must not re-validate inside itself — validating in the
+  // delete loop is exactly what made a refusal partial.
+  const deleteLoop = src.slice(src.lastIndexOf('for (', firstDeleteAt), firstDeleteAt);
+  assert.doesNotMatch(deleteLoop, /assertRealpathContained/, 'no containment check inside the delete loop');
+  assert.doesNotMatch(deleteLoop, /selected\.values\(\)/, 'the delete loop never iterates the unvalidated selection');
+});
+
 test('pruneBuckets refuses a non-integer staleDays at its own boundary', () => {
   const ws = featureWorkspace('feature/staleness');
   const home = tempDir('promo-home11-');

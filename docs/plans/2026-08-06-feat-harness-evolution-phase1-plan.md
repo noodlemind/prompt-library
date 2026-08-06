@@ -175,9 +175,13 @@ Named checks only: `harness-tests` (full suite, includes all new tests) and `pro
   governance replay (regression: retire → absorb-branch → rebuild still lands retired);
   purge cascades across all layers and drops an id's governance record only when no
   layer still holds the id; store schema marker `store.json {schema: 2}` with
-  refuse-with-hint for newer stores; bucket strikes/quarantines live in the bucket's own
-  ledger. `consolidate --status` layer additions are additive fields (`layer`,
-  `bucketKey`); golden domain-pressure display stays golden-scoped.
+  refuse-with-hint for newer stores; episode strikes and quarantine markers are
+  STORE-GLOBAL — recorded in the store ROOT ledger even when the learning outcome is
+  routed to a branch bucket, so a count cannot reset by switching branches and every
+  lane reports the quarantine (`docs/MEMORY-MODEL.md` §"Caps, quarantine, and rejection
+  classes"); only learning OUTCOMES are per-layer. `consolidate --status` layer additions
+  are additive fields (`layer`, `bucketKey`); golden domain-pressure display stays
+  golden-scoped.
 - **Pre-existing tests updated for shipped behavior:** `harness-cli.test.mjs` (recall
   event now records — the old assertion pinned the dropped-write bug),
   `store-migration.test.mjs` (fixtures pin `defaultBranch` so identity-migration tests

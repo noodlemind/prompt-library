@@ -517,7 +517,30 @@ export function absorbHandEdits({ workspace, home, log = () => {} }) {
 
   if (!absorbed.length && !deleted.length) return empty;
 
-  for (const [root, entries] of ledgerByRoot) appendLedger(root, entries);
+  // THE EVIDENCE IS PART OF THE ABSORB, NOT A SIDE EFFECT (review finding).
+  // `appendLedger`/`appendGovernance` already fail closed by THROWING on a
+  // refused write — but a plain Error thrown from here lands in every
+  // transaction adopter's `catch (err) { if (err instanceof
+  // StoreTransactionAbort) throw err; }`, which swallows anything else as a
+  // best-effort absorb hiccup. By this point the learning files have ALREADY
+  // been rewritten, so the adopter went on to mutate further and the
+  // transaction's finalize commit published hand-rewritten learning content
+  // with no ledger line citing its teaching snapshot (and a hand DELETION with
+  // no governance `retire` a later `consolidate --rebuild` would honor).
+  //
+  // Re-raised as StoreTransactionAbort — abort, deliberately NOT a rollback:
+  // the absorb's own commit is still below, so the standard rollback
+  // (`git reset --hard` + `clean -fd`) would destroy the human's edit sitting
+  // uncommitted in the tree. Exactly the reasoning absorbOrAbort applies to a
+  // failed absorb sub-commit.
+  const recordEvidence = (write) => {
+    try {
+      write();
+    } catch (err) {
+      throw new StoreTransactionAbort(`hand-edit absorb could not record its evidence: ${err.message}`);
+    }
+  };
+  for (const [root, entries] of ledgerByRoot) recordEvidence(() => appendLedger(root, entries));
   // Governance record (Milestone 4): a human deleting a learning file
   // directly is a retirement just as much as `learning retire` — recorded
   // here so it survives a later `consolidate --rebuild`. Appended before the
@@ -564,7 +587,9 @@ export function absorbHandEdits({ workspace, home, log = () => {} }) {
       log(`hand-edit absorb: ${id} removed from one layer but still held by another — no store-wide retire recorded`);
       continue;
     }
-    appendGovernance(dir, { id, action: 'retire', reason: 'hand deletion (absorbed)', to: null, at: governanceAt });
+    recordEvidence(() =>
+      appendGovernance(dir, { id, action: 'retire', reason: 'hand deletion (absorbed)', to: null, at: governanceAt })
+    );
   }
   rebuildIndex(dir);
   // existsSync guard: a human may have deleted the whole bucket directory,

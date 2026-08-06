@@ -669,7 +669,7 @@ export async function cmdGate(argv) {
 }
 
 export async function cmdVerify(argv) {
-  const { runVerify, exitCodeForOutcome } = await import('./verify.mjs');
+  const { runVerify, exitCodeForOutcome, isGatingCheck } = await import('./verify.mjs');
   const flags = parseFlags(argv);
   const workspace = path.resolve(flags.workspace);
   const result = runVerify({ workspace, flags });
@@ -705,8 +705,10 @@ export async function cmdVerify(argv) {
     // check is neutral for the same reason — it cannot move the outcome
     // (resolveOutcome excludes it), so counting it here or pointing the agent
     // at it would route attention to the one check that can never unblock the
-    // run. Both stay visible as rows and in `advisoryFailures`.
-    const gating = (c) => c.status !== 'passed' && c.status !== 'skipped' && c.severity !== 'advisory';
+    // run. Both stay visible as rows and in `advisoryFailures`. The predicate
+    // itself lives in verify.mjs (`isGatingCheck`) so this surface and the test
+    // that pins it can never drift apart.
+    const gating = isGatingCheck;
     const failed = result.checks.filter(gating).length;
     const passed = result.outcome === 'passed';
     console.log(

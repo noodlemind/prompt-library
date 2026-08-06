@@ -843,3 +843,34 @@ test('P2: a git status failure makes absorbHandEdits fail closed (ok:false), not
     'absorbOrAbort must fail closed on a git status failure'
   );
 });
+
+// A REFUSED EVIDENCE APPEND MUST ABORT THE ABSORB, NOT FALL THROUGH (review
+// finding). `appendLedger`/`appendGovernance` fail closed by throwing, but a
+// PLAIN Error thrown from absorbHandEdits lands in every transaction adopter's
+// `catch (err) { if (err instanceof StoreTransactionAbort) throw err; }` —
+// which swallows it as a best-effort absorb hiccup. The learning file has
+// already been rewritten by then, so the adopter went on to finalize and commit
+// hand-rewritten content with NO ledger line citing its teaching snapshot.
+test('a refused ledger append aborts the absorb instead of committing evidence-free content', () => {
+  const c = ctx();
+  seedLearning(c);
+  const { dir } = ensureStore(c.ws, { home: c.harnessHome });
+  handEditBody(path.join(dir, 'learnings', 'sql', 'not-null-hot-tables.md'), 'Hand-rewritten claim body.');
+
+  // Poison the ledger path with a DIRECTORY: appendFileContained's
+  // O_APPEND|O_CREAT|O_NOFOLLOW open then fails (EISDIR), which is exactly the
+  // refusal appendLedger raises. (Not a symlink — a symlinked LEAF is
+  // quarantined and rewritten fresh, so it never refuses.) `consolidated.jsonl`
+  // is not a learning path, so LEARNING_FILE_RE skips it and the absorb still
+  // reaches the append.
+  fs.rmSync(path.join(dir, 'consolidated.jsonl'), { force: true });
+  fs.mkdirSync(path.join(dir, 'consolidated.jsonl'));
+
+  const commitsBefore = gitLog(dir).length;
+  assert.throws(
+    () => absorbOrAbort({ workspace: c.ws, home: c.harnessHome }),
+    (err) => err instanceof StoreTransactionAbort && /could not record its evidence/.test(err.message),
+    'a refused evidence append must abort the transaction, never be swallowed as a best-effort hiccup'
+  );
+  assert.equal(gitLog(dir).length, commitsBefore, 'and nothing is committed on the aborted path');
+});

@@ -21,7 +21,12 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
+      # persist-credentials: false — nothing in this job talks to GitHub after
+      # the clone, so the job token has no reason to sit in `.git/config` where
+      # every later step (and every action they invoke) could read it.
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       # Node 22: the lowest LTS the package's `engines: >=20` still admits
       # (Node 20 left maintenance in April 2026). Single version on purpose —

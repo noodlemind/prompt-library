@@ -382,6 +382,27 @@ for (const [surface, sanitize] of [
   });
 }
 
+// `details` (plan-schema / plan-readiness sub-check messages) and `openTasks`
+// (verbatim `- [ ]` lines lifted out of the plan body) ride the SAME surfaces —
+// evidence JSON, `verify --json`, the event log — and a plan is an ordinary repo
+// file a human or model writes. They were the two list payloads shipping
+// unredacted, unflattened, and unbounded.
+test('G: plan-derived details and openTasks are sanitized like every other list payload', () => {
+  const payload = sanitizeCheckPayload({
+    id: 'plan-schema',
+    status: 'failed',
+    severity: 'enforce',
+    message: 'schema invalid',
+    details: [{ pass: false, message: `bad field\n${AWS_KEY}` }],
+    openTasks: [`ship it using ${AWS_KEY}`, 'x'.repeat(200_000)],
+  });
+  const serialized = JSON.stringify(payload);
+  assert.ok(!serialized.includes(AWS_KEY), 'plan-derived text is redacted');
+  assert.ok(!payload.details[0].message.includes('\n'), 'details flatten to one line');
+  assert.equal(payload.openTasks[1].length, 240, 'an unbounded task line is capped');
+  assert.equal(payload.details[0].pass, false, 'well-formed structural fields pass through intact');
+});
+
 test('G: the canonical payload also sanitizes informational notes and keeps structural fields intact', () => {
   const check = sanitizeCheckPayload(hostileCheck());
   assert.ok(!JSON.stringify(check.informational).includes(AWS_KEY), 'informational notes are redacted');

@@ -88,7 +88,7 @@ to Deliver before editing.
 | `get` | Bounded doc excerpt by `--docid` or `--path` |
 | `validate-plan` | Read-only plan template / intent compliance |
 | `index` | Rebuild `knowledge/manifest.yaml` + `.harness-index/` |
-| `index --structural [--since <ref>]` | Build the persistent structural code index at `~/.harness/index/<repo-id>/structural/` (optional tree-sitter WASM tier for TS/JS/TSX, Python, Java; per-file lexical fallback; incremental; `--since` re-parses only the ref diff). Derived and rebuildable — safe to delete |
+| `index --structural [--since <ref>]` | Build the persistent structural code index at `~/.harness/index/<repo-id>/<worktree-id>/structural/` (optional tree-sitter WASM tier for TS/JS/TSX, Python, Java; per-file lexical fallback; incremental; `--since` re-parses only the ref diff). Derived and rebuildable — safe to delete |
 | `compound` | Consume passed evidence, index learning, and record usage/outcome telemetry |
 | `compound --insight` | Evidence-free capture of investigation learnings (`kind: insight`, secret-scanned, ranked below verified fixes, never promotable) |
 | `consolidate` | Knowledge loop: `--status` debt gauge (quarantine + at-cap domains surfaced) · `--candidates` deterministic work packet, plus any id a human already retired/disputed/promoted (`governed`) so the skill doesn't waste an op re-deriving it · `--apply --ops <path>` validated sole writer of learnings via ADD/STRENGTHEN/SUPERSEDE/MERGE/NOOP ops (`suggest` mode requires `--yes`); mechanically reapplies a standing governance decision when a regenerated id matches one, returning `governed` |

@@ -607,3 +607,75 @@ test('no-network guard: source-text scan of the structural read modules for mode
   assert.doesNotMatch(extractorSrc, /^import[^\n]*web-tree-sitter/m, 'no static web-tree-sitter import');
   assert.match(extractorSrc, /await import\('web-tree-sitter'\)/, 'runtime loads lazily in the factory');
 });
+
+// ONE GENERATION ON DISK, ALWAYS (review finding). Writing the four tables one
+// by one into the live directory is four independent publications: a write that
+// refuses partway (or a reader arriving mid-build) sees this build's files.json
+// beside the previous build's meta.json. `meta.filesIndexed` is written as
+// `Object.keys(files).length`, so within ONE generation the two always agree —
+// which makes the pair a direct, deterministic probe for a mixed set.
+test('a refused table write never leaves a mixed generation on disk', async (t) => {
+  const { ws, git } = gitRepo(FIXTURE);
+  const home = tempHome();
+  t.after(() => {
+    fs.rmSync(ws, { recursive: true, force: true });
+    fs.rmSync(home, { recursive: true, force: true });
+  });
+  await buildStructuralIndex({ workspace: ws, home, extractor: countingExtractor() });
+  const dir = structuralIndexDir(ws, { home });
+
+  // Generation 2 indexes one more file than generation 1.
+  writeFiles(ws, { 'extra.py': 'class Extra:\n    def run(self):\n        pass\n' });
+  git(['add', '.']);
+  git(['commit', '-qm', 'add extra']);
+
+  // A DIRECTORY where graph.json belongs: the temp+rename write refuses
+  // (rename onto a directory is EISDIR), which is the same shape a symlinked
+  // ancestor or a full disk produces on any one table. Before the staged
+  // publish, files.json had ALREADY been overwritten with generation 2 while
+  // meta.json still described generation 1.
+  fs.rmSync(path.join(dir, 'graph.json'), { force: true });
+  fs.mkdirSync(path.join(dir, 'graph.json'));
+
+  await buildStructuralIndex({ workspace: ws, home, extractor: countingExtractor() });
+
+  const files = JSON.parse(fs.readFileSync(path.join(dir, 'files.json'), 'utf8'));
+  const meta = JSON.parse(fs.readFileSync(path.join(dir, 'meta.json'), 'utf8'));
+  assert.equal(
+    Object.keys(files).length,
+    meta.filesIndexed,
+    'files.json and meta.json must always describe the SAME generation'
+  );
+});
+
+// A CORRUPT PRIOR REBUILDS, IT NEVER CRASHES (review finding). symbols.json is
+// a plain hand-editable file; a null or primitive entry made symbolDelta
+// dereference `.defs` on it and throw straight out of `harness index
+// --structural`, recoverable only by deleting the index by hand.
+test('a null or primitive prior symbol entry rebuilds instead of crashing the build', async (t) => {
+  const { ws } = gitRepo(FIXTURE);
+  const home = tempHome();
+  t.after(() => {
+    fs.rmSync(ws, { recursive: true, force: true });
+    fs.rmSync(home, { recursive: true, force: true });
+  });
+  await buildStructuralIndex({ workspace: ws, home, extractor: countingExtractor() });
+  const dir = structuralIndexDir(ws, { home });
+
+  const symbols = JSON.parse(fs.readFileSync(path.join(dir, 'symbols.json'), 'utf8'));
+  const names = Object.keys(symbols);
+  assert.ok(names.length >= 2, `precondition: at least two symbols, got ${names.length}`);
+  symbols[names[0]] = null;
+  symbols[names[1]] = 'truncated';
+  fs.writeFileSync(path.join(dir, 'symbols.json'), JSON.stringify(symbols));
+
+  const rebuilt = await buildStructuralIndex({ workspace: ws, home, extractor: countingExtractor() });
+  assert.equal(rebuilt.written, true, 'the build completes over a corrupt prior symbol table');
+  // Uncomparable priors count as CHANGED — the safe direction, never a silent
+  // "unchanged".
+  assert.ok(
+    rebuilt.delta.changed.names.includes(names[0]),
+    `a null prior entry is reported changed: ${JSON.stringify(rebuilt.delta.changed)}`
+  );
+  assert.ok(rebuilt.delta.changed.names.includes(names[1]), 'and so is a primitive one');
+});

@@ -173,11 +173,19 @@ export function pruneBuckets({ workspace, home, branchKey = null, merged = false
     }
 
     const keys = [...selected.keys()].sort();
+    // ALL-OR-NOTHING (review finding). Defense in depth (fs-safe.mjs): a
+    // recursive delete is the single most destructive syscall in this module,
+    // and `branches/` is a hand-editable tree, so a bucket whose real path
+    // resolves outside the store is refused rather than letting rmSync follow a
+    // swapped ancestor. That check used to run INSIDE the delete loop, which
+    // made the refusal PARTIAL: the buckets ahead of the offending one were
+    // already gone, the run returned `removed: []` (this reject path reports
+    // nothing removed), and withStoreTransaction still committed the deletion
+    // under the generic label — a silent, unreported loss. Every selected
+    // bucket is therefore containment-verified BEFORE the first rmSync; a
+    // refusal now costs the whole prune, not half of it.
+    const targets = [];
     for (const b of selected.values()) {
-      // Defense in depth (fs-safe.mjs): a recursive delete is the single most
-      // destructive syscall in this module, and `branches/` is a hand-editable
-      // tree. Refuse a bucket whose real path resolves outside the store rather
-      // than letting rmSync follow a swapped ancestor.
       const contained = assertRealpathContained(txDir, path.join('branches', b.key));
       if (!contained) {
         return {
@@ -187,9 +195,12 @@ export function pruneBuckets({ workspace, home, branchKey = null, merged = false
           blockedReason: `refused to prune ${b.key} — its real path resolves outside the knowledge store`,
         };
       }
+      targets.push({ bucket: b, contained });
+    }
+    for (const { bucket, contained } of targets) {
       fs.rmSync(contained, { recursive: true, force: true });
-      const shown = safeBranchName(b.meta?.branch);
-      log(`pruned bucket ${b.key}${shown ? ` (${shown})` : ''}`);
+      const shown = safeBranchName(bucket.meta?.branch);
+      log(`pruned bucket ${bucket.key}${shown ? ` (${shown})` : ''}`);
     }
     return { kind: 'success', commitMessage: `knowledge: prune ${keys.join(', ')}`, keys, preview };
   });

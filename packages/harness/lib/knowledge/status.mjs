@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import { storeDir, listLearnings, readStoreConfig } from './store.mjs';
 import { isActiveFm, bucketCounts } from './consolidate.mjs';
-import { listBuckets, bucketAncestryOk, safeBranchName } from './overlay.mjs';
+import { listBuckets, bucketAncestryOk, safeBranchName, isBucketBaseSha } from './overlay.mjs';
 import { deriveGitContext, isDetachedKey } from '../git-context.mjs';
 import { indexStatus } from '../index-status.mjs';
 
@@ -71,7 +71,12 @@ export function knowledgeStatus({ workspace, copilotHome, home } = {}) {
       buckets.push({
         key,
         branch: safeBranchName(meta?.branch),
-        baseSha: typeof meta?.baseSha === 'string' ? meta.baseSha : null,
+        // Same 40-hex gate `bucketAncestryOk` applies before handing the value
+        // to git (isBucketBaseSha, overlay.mjs). meta.json is hand-editable, so
+        // an arbitrary string here reached both the rendered row and the
+        // `--json` lane verbatim — the one untreated field on a report whose
+        // every other untrusted string is shape-checked or redacted.
+        baseSha: isBucketBaseSha(meta?.baseSha) ? meta.baseSha : null,
         createdAt,
         ageDays,
         // Derived from the key shape, never trusted from meta (cache only).
