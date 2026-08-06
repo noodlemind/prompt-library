@@ -27,9 +27,13 @@ import {
   cmdResolve,
   cmdReport,
 } from '../lib/commands.mjs';
+import path from 'node:path';
 import { cmdPlanNew } from '../lib/plan-new.mjs';
 import { createStyle, keyWidthFor, EXIT } from '../lib/style.mjs';
 import { dispatch as dispatchRegistered, hasCommand } from '../lib/registry.mjs';
+import { createEventRegistry } from '../lib/event-registry.mjs';
+import { writeEvent as writeHarnessEvent } from '../lib/events.mjs';
+import { parseFlags } from '../lib/flags.mjs';
 
 const [, , command = 'help', ...args] = process.argv;
 // This renderer only writes error blocks, which go to stderr — detect there.
@@ -330,6 +334,23 @@ function extractOutputLane(rawArgs) {
   return { args: [...rawArgs.slice(0, idx), ...rawArgs.slice(idx + consumed)], output: lane };
 }
 
+// P1.5 (lib/event-registry.mjs) — "registry construction plumbing" per the
+// task-5 file-ownership boundary: build the central event registry, bound to
+// this invocation's resolved workspace/flags via the existing lib/events.mjs
+// `writeEvent(workspace, flags, payload)` sink. `lib/registry.mjs`'s
+// dispatch/dispatchLane (not this file) own WHEN an event actually gets
+// emitted — this function only constructs the instance. `rawArgs` may still
+// contain `--output ...`; parseFlags ignores unrecognized flags (verified:
+// it silently skips both `--output` and its value token), so passing the
+// pre-extraction args here is equivalent to passing the stripped ones.
+function createProcessEventRegistry(rawArgs) {
+  const flags = parseFlags(rawArgs);
+  const workspace = path.resolve(flags.workspace);
+  return createEventRegistry({
+    writeEvent: (payload) => writeHarnessEvent(workspace, flags, payload),
+  });
+}
+
 async function main() {
   let code = 0;
   try {
@@ -340,7 +361,16 @@ async function main() {
     // switch is not removed until a later phase migrates the rest.
     if (hasCommand(command)) {
       const { args: laneArgs, output } = extractOutputLane(args);
-      code = await dispatchRegistered([command, ...laneArgs], { style: out, output });
+      // The event registry backs ONLY the new envelope/agent output lanes
+      // here, never the legacy ledger/`--json` default path — every
+      // pilot's existing internal event-writing (lib/orient.mjs et al.)
+      // already covers that path today, and no existing test's events.jsonl
+      // assertions may change (see lib/registry.mjs's dispatch() doc for
+      // the full rationale). This is the one place that decides WHEN
+      // ctx.events exists; lib/registry.mjs wires both branches identically
+      // once it does.
+      const events = output === 'ledger' ? undefined : createProcessEventRegistry(args);
+      code = await dispatchRegistered([command, ...laneArgs], { style: out, output, events });
     } else switch (command) {
       case 'help':
       case '--help':

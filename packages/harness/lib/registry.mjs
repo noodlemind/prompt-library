@@ -34,7 +34,8 @@ import { parseQueryFromArgv } from './argv.mjs';
 import { resolveCopilotHome } from './paths.mjs';
 import { readLock } from './lock.mjs';
 import { createEnvelope, createErrorEnvelope, STATUS } from './envelope.mjs';
-import { renderAgentLane } from './agent-lane.mjs';
+import { renderAgentLane, recordAgentLaneBytes } from './agent-lane.mjs';
+import { EVENT_TYPE, summarizeArgFlags } from './event-registry.mjs';
 
 const REGISTRY = new Map();
 
@@ -186,6 +187,22 @@ export function validateArgs(entry, argv) {
  * path required. Callers that want the switch-fallback behavior described
  * in the Phase 1 plan should check `hasCommand(name)` before calling
  * `dispatch` for that command.
+ *
+ * P1.5 (lib/event-registry.mjs): when `ctx.events` is supplied (an event
+ * registry instance — `{emit, withCommand}`), EVERY registered-command
+ * dispatch — whichever branch below actually runs, the legacy handler or
+ * `dispatchLane` — is bracketed with `command.start`/`command.result`
+ * telemetry (AC7 #3). `ctx.events` is entirely optional and `undefined` for
+ * every pre-P1.5 caller (including every existing test that calls
+ * `dispatch(argv, {})` or `dispatch(argv, {style, output})`), so this is a
+ * no-op branch for them — behavior is byte-for-byte unchanged. In practice,
+ * bin/harness.mjs (the one production caller) only ever attaches
+ * `ctx.events` for the NEW `--output json-envelope|agent` lanes, never for
+ * the legacy ledger/`--json` default path — see its own comment for why
+ * (the pilots' existing self-logging via lib/orient.mjs et al. must not be
+ * duplicated, and no existing test's exact events.jsonl assertions may
+ * change). This function itself does not know or care which lane triggered
+ * `ctx.events`'s presence; it wires both branches identically.
  */
 export async function dispatch(argv, ctx = {}) {
   const [name, ...rest] = argv;
@@ -195,10 +212,95 @@ export async function dispatch(argv, ctx = {}) {
   }
   validateArgs(entry, rest);
   const lane = ctx.output;
+  const events = ctx.events && typeof ctx.events.withCommand === 'function' ? ctx.events.withCommand(entry.name) : null;
   if (lane && lane !== 'ledger' && entry.resultOf) {
-    return dispatchLane(entry, rest, ctx, lane);
+    return dispatchLane(entry, rest, ctx, lane, events);
   }
-  return entry.handler(rest, ctx);
+  return runHandler(entry, rest, ctx, events);
+}
+
+// Reverse-maps a numeric exit code back onto the unified status vocabulary
+// (ok|failed|cancelled|timed-out) using the SAME fixed EXIT values every
+// other lane already treats as significant (lib/envelope.mjs's
+// STATUS_EXIT_CODES uses the identical ok/cancelled/timed-out set the other
+// direction). Only `ok`, `cancelled`, and `timed-out` map to one exact,
+// reserved exit code everywhere they occur; every other exit code is a
+// generic failure from this event's point of view — accurate for the three
+// P1.1/P1.2 pilots today (their only non-thrown-nonzero-exit outcomes are
+// already-handled `E_*` failures), and the same judgment call `dispatchLane`
+// itself already makes for its own error branch below.
+function statusForExit(exit) {
+  if (exit === EXIT.ok) return STATUS.OK;
+  if (exit === EXIT.cancelled) return STATUS.CANCELLED;
+  if (exit === EXIT.timedOut) return STATUS.TIMED_OUT;
+  return STATUS.FAILED;
+}
+
+// Best-effort projection of the new unified `status` onto lib/events.mjs's
+// existing pass|warn|fail `result` vocabulary, so `harness events --summary`
+// keeps counting these new event types sensibly instead of falling through
+// to that module's own generic exitCode-based guess (which has no
+// cancelled/timed-out cases and would misclassify exit 130 as a "pass").
+// ok -> pass, failed -> fail, cancelled|timed-out -> warn (interrupted, not
+// necessarily a code defect). A documented judgment call, not a spec value.
+// NOTE (review round 1): because cancelled/timed-out map to 'warn' here, not
+// 'fail', such a run will NOT surface under `harness events --failures`
+// (lib/events.mjs's failures filter only keeps `result === 'fail'` or an
+// explicit `decision: 'block'`/`blockedReason`) — only its own dedicated
+// `status: 'cancelled'|'timed-out'` field distinguishes it from an ordinary
+// warning once read back. Flagging for anyone querying `--failures` and
+// expecting cancelled/timed-out runs to appear there.
+function legacyResultForStatus(status) {
+  if (status === STATUS.OK) return 'pass';
+  if (status === STATUS.FAILED) return 'fail';
+  return 'warn';
+}
+
+function commandResultPayload(status, durationMs, exitCode) {
+  return { status, result: legacyResultForStatus(status), durationMs, exitCode };
+}
+
+// Review round 1 (Important): command.start and agent_lane events carry no
+// command OUTCOME of their own — command.start fires before the handler
+// even runs, and agent_lane is a byte-count metering record, not a
+// pass/fail signal. lib/events.mjs's writeEvent() computes a `result` field
+// via eventResult({result, exitCode, checks}), which — when neither
+// `result` nor a meaningful `exitCode`/`checks` is supplied — DEFAULTS TO
+// 'pass'. Left unset, every command.start and agent_lane event would
+// silently inflate `harness events --summary`'s pass count (reproduced: one
+// successful pilot run showed pass:3 for a single real outcome; a FAILING
+// `learnings --why <bad-id>` run showed pass:1/fail:1 — a phantom 50% pass
+// rate for a command that failed outright). PENDING_RESULT is an explicit,
+// non-tallied marker: eventResult()'s `if (result) return result` short-
+// circuits to 'pending' verbatim, and summarizeEvents' pass/warn/fail
+// tally (an exact `===` match against those three strings) does not
+// recognize it, so it is counted in `summary.total` but in none of
+// pass/warn/fail — and it carries no `decision`/`blockedReason`, so it is
+// also excluded by `harness events --failures`. lib/events.mjs itself is
+// NOT modified for this — PENDING_RESULT only ever appears as an explicit
+// payload value on the two event types below.
+const PENDING_RESULT = 'pending';
+
+/**
+ * Run a registered command's legacy handler (the ledger/default path),
+ * optionally bracketed with command.start/command.result telemetry — see
+ * `dispatch`'s doc comment above for when `events` is non-null. Re-throws
+ * whatever the handler throws, unmodified, so bin/harness.mjs's existing
+ * top-level error rendering (`emitError`, exit-code selection) is completely
+ * unaffected by this wrapper.
+ */
+async function runHandler(entry, rest, ctx, events) {
+  const startedAt = Date.now();
+  events?.emit(EVENT_TYPE.COMMAND_START, { flags: summarizeArgFlags(rest, flagIndex(entry)), result: PENDING_RESULT });
+  try {
+    const exit = await entry.handler(rest, ctx);
+    events?.emit(EVENT_TYPE.COMMAND_RESULT, commandResultPayload(statusForExit(exit), Date.now() - startedAt, exit));
+    return exit;
+  } catch (err) {
+    const exit = Number.isInteger(err.exit) ? err.exit : 1;
+    events?.emit(EVENT_TYPE.COMMAND_RESULT, commandResultPayload(statusForExit(exit), Date.now() - startedAt, exit));
+    throw err;
+  }
 }
 
 /**
@@ -219,9 +321,24 @@ export async function dispatch(argv, ctx = {}) {
  * the catch branch below with their own real exit codes). A future
  * registered command with a native non-zero-but-not-thrown outcome can
  * extend this when it is migrated — not needed yet.
+ *
+ * P1.5 additions (lib/event-registry.mjs), both gated on `events` (see
+ * `dispatch`'s doc comment — non-null only when `ctx.events` was supplied):
+ *   - command.start/command.result bracket the whole call, on both the
+ *     success and error paths (AC7 #3).
+ *   - AC10: wherever this function actually renders the agent lane (success
+ *     OR error branch — both call `renderAgentLane` today), it calls
+ *     `recordAgentLaneBytes` right after, so an `agent_lane` event records
+ *     the rendered byte count. `recordAgentLaneBytes` (lib/agent-lane.mjs,
+ *     unmodified/off-limits) expects an `eventsApi.writeEvent(record)`
+ *     shape; `events.emit(record.type, record)` adapts the command-scoped
+ *     emitter to exactly that call shape without lib/agent-lane.mjs needing
+ *     to know this registry exists.
  */
-async function dispatchLane(entry, rest, ctx, lane) {
+async function dispatchLane(entry, rest, ctx, lane, events) {
   const schema = 1;
+  const startedAt = Date.now();
+  events?.emit(EVENT_TYPE.COMMAND_START, { flags: summarizeArgFlags(rest, flagIndex(entry)), result: PENDING_RESULT });
   try {
     const result = await entry.resultOf(rest, ctx);
     const envelope = createEnvelope({ command: entry.name, schema, status: STATUS.OK, ...result });
@@ -232,11 +349,13 @@ async function dispatchLane(entry, rest, ctx, lane) {
         inert: ctx.inert,
       });
       process.stdout.write(`${rendered.text}\n`);
+      if (events) recordAgentLaneBytes({ writeEvent: (record) => events.emit(record.type, { ...record, result: PENDING_RESULT }) }, entry.name, rendered.bytes);
     } else {
       // lane === 'json' (or any future lane this entry doesn't specialize
       // for) — the versioned envelope is always a safe default rendering.
       console.log(JSON.stringify(envelope));
     }
+    events?.emit(EVENT_TYPE.COMMAND_RESULT, commandResultPayload(STATUS.OK, Date.now() - startedAt, EXIT.ok));
     return EXIT.ok;
   } catch (err) {
     const exit = Number.isInteger(err.exit) ? err.exit : 1;
@@ -257,9 +376,11 @@ async function dispatchLane(entry, rest, ctx, lane) {
         inert: ctx.inert,
       });
       process.stdout.write(`${rendered.text}\n`);
+      if (events) recordAgentLaneBytes({ writeEvent: (record) => events.emit(record.type, { ...record, result: PENDING_RESULT }) }, entry.name, rendered.bytes);
     } else {
       console.error(JSON.stringify(errorEnvelope));
     }
+    events?.emit(EVENT_TYPE.COMMAND_RESULT, commandResultPayload(status, Date.now() - startedAt, exit));
     return exit;
   }
 }

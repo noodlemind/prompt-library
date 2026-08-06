@@ -21,6 +21,14 @@ export const EVENT_TYPES = new Set([
   'learning',
   'knowledge',
   'session_end',
+  // P1.5 (lib/event-registry.mjs) — the central event registry's dispatch-
+  // pipeline vocabulary: command.start/command.result bracket a registered
+  // command's execution through the NEW envelope/agent output lanes;
+  // agent_lane is lib/agent-lane.mjs's existing (unmodified)
+  // `recordAgentLaneBytes` metering record.
+  'command.start',
+  'command.result',
+  'agent_lane',
 ]);
 
 function shouldSkipEvents(flags = {}) {
@@ -75,7 +83,25 @@ export function writeEvent(workspace, flags, payload) {
   };
   if (payload.blockedReason) event.blockedReason = payload.blockedReason;
   if (payload.usage) event.usage = payload.usage;
-  for (const field of ['tool', 'mutation', 'targets', 'targetResolved', 'gate', 'decision', 'durationMs', 'success', 'learnings', 'learningsBytes']) {
+  for (const field of [
+    'tool',
+    'mutation',
+    'targets',
+    'targetResolved',
+    'gate',
+    'decision',
+    'durationMs',
+    'success',
+    'learnings',
+    'learningsBytes',
+    // P1.5 (lib/event-registry.mjs) additions — additive only, never read
+    // by any pre-existing event type/call site.
+    'actor',
+    'execution',
+    'flags',
+    'status',
+    'bytes',
+  ]) {
     if (payload[field] !== undefined) event[field] = payload[field];
   }
 
