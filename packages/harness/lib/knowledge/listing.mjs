@@ -113,7 +113,10 @@ export function whyView({ workspace, id, home }) {
 
   const { fm, body } = learning;
   const { verified, plans } = verifiedAndPlans(fm);
-  const claimLine = (body.split('\n').find((line) => line.trim()) || '').trim().slice(0, 140);
+  // Redact BEFORE the cap (same order as retrieve.mjs's retrievedText): slicing
+  // first cuts a credential that straddles byte 140 into a fragment the secret
+  // scanner no longer matches, so the tail leaks unredacted.
+  const claimLine = inertLine(redactSecrets((body.split('\n').find((line) => line.trim()) || '').trim())).slice(0, 140);
   const failures = failureCounts(workspace).get(id) || 0;
 
   return {
@@ -121,14 +124,21 @@ export function whyView({ workspace, id, home }) {
     // inertLine: same render-side normalization as listingView above — a
     // legacy/hand-edited trigger can still carry an embedded control char.
     trigger: inertLine(redactSecrets(fm.trigger || '')),
-    claimLine: inertLine(redactSecrets(claimLine)),
+    claimLine,
     status: effectiveStatus(fm),
     source: fm.source || 'auto',
     lastConfirmed: fm.last_confirmed || null,
     supersededBy: fm.superseded_by || null,
     promotedTo: fm.promoted_to || null,
     mergedFrom: parseMergedFrom(fm.merged_from),
-    episodes: (fm.episodes || []).map((e) => ({ path: e.path, kind: e.kind, plan: e.plan || null })),
+    // Episode paths and plan refs come from learning frontmatter, which is
+    // hand-editable — same untrusted class as trigger/claim, so they get the
+    // same treatment rather than being emitted raw.
+    episodes: (fm.episodes || []).map((e) => ({
+      path: inertLine(redactSecrets(String(e.path || ''))),
+      kind: e.kind,
+      plan: e.plan ? inertLine(redactSecrets(String(e.plan))) : null,
+    })),
     verified,
     plans,
     // Same guard as listingView: a promoted learning is never eligible for
