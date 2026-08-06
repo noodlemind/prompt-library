@@ -102,50 +102,101 @@ function resolveOutcome(checks) {
   return 'passed';
 }
 
-function applyCheckSeverities(checks, policy) {
-  return checks.map((check) => {
-    const severity = checkSeverityFor(policy, check.id, DEFAULT_CHECK_SEVERITIES[check.id] ?? 'enforce');
+/** The check ids the ACTIVE PLAN gates on: everything in
+ * `verification.required` plus every id mapped under `verification.criteria`.
+ * A policy may not downgrade any of them to advisory (policy.mjs). */
+function planGatedCheckIds(plan) {
+  const verification = plan?.fm?.verification;
+  const ids = new Set();
+  for (const name of Array.isArray(verification?.required) ? verification.required : []) {
+    if (typeof name === 'string' && name) ids.add(name);
+  }
+  const criteria = verification?.criteria;
+  if (criteria && typeof criteria === 'object' && !Array.isArray(criteria)) {
+    for (const mapped of Object.values(criteria)) {
+      for (const name of Array.isArray(mapped) ? mapped : []) {
+        if (typeof name === 'string' && name) ids.add(name);
+      }
+    }
+  }
+  return ids;
+}
+
+/** Apply policy severities, refusing any advisory downgrade of a plan-gated
+ * check. Returns the refusals alongside the checks so the run can report them
+ * instead of silently disagreeing with the policy file. */
+function applyCheckSeverities(checks, policy, planGated) {
+  const refusedSeverityDowngrades = [];
+  const applied = checks.map((check) => {
+    const fallback = DEFAULT_CHECK_SEVERITIES[check.id] ?? 'enforce';
+    const severity = checkSeverityFor(policy, check.id, fallback, planGated);
+    if (severity !== 'advisory' && checkSeverityFor(policy, check.id, fallback) === 'advisory') {
+      refusedSeverityDowngrades.push({ id: check.id, requested: 'advisory', effective: severity });
+    }
     // `optional` is the existing ledger-rendering hook: advisory rows render
     // as warn, never error, without touching the style pipeline.
     return severity === 'advisory' ? { ...check, severity, optional: true } : { ...check, severity };
   });
+  return { checks: applied, refusedSeverityDowngrades };
 }
 
-// Advisory findings carry CURRENT-SIDE REPO TEXT (structural/expectations.mjs
-// derives its symbol names from a lexical extractor whose per-language
-// patterns are not length-bounded — a `.tf` string literal spanning newlines
-// can produce a six-figure-byte "symbol name"), and they are copied verbatim
-// into `.harness/evidence/*.json` and `verify --json`. Every other surface
-// that renders less-trusted repo-derived text redacts it, flattens control
-// characters, and caps it; the evidence lane must do the same at the point it
-// copies the payload, so the guarantee holds no matter which check produced
-// the findings.
-const ADVISORY_TEXT_CAP = 240;
-const ADVISORY_LIST_CAP = 20;
-const ADVISORY_FINDINGS_CAP = 50;
-const ADVISORY_DEPTH_CAP = 3;
+// Check messages and findings carry CURRENT-SIDE REPO TEXT (structural/
+// expectations.mjs derives its symbol names from a lexical extractor whose
+// per-language patterns are not length-bounded — a `.tf` string literal
+// spanning newlines can produce a six-figure-byte "symbol name" — and echoes
+// plan-declared expectations back verbatim), and the CANONICAL `result.checks`
+// array is what `.harness/evidence/*.json`, `verify --json`, and the event log
+// all serialize. Sanitizing only the advisory summary copy left every one of
+// those surfaces shipping the raw text. Every other surface that renders
+// less-trusted repo-derived text redacts it, flattens control characters, and
+// caps it; the shipped check payload must do the same, at the one boundary
+// (finalize) every consumer reads from.
+const CHECK_TEXT_CAP = 240;
+const CHECK_LIST_CAP = 20;
+const CHECK_FINDINGS_CAP = 50;
+const CHECK_DEPTH_CAP = 3;
 
-function advisoryText(value) {
-  return inertLine(redactSecrets(String(value ?? ''))).slice(0, ADVISORY_TEXT_CAP);
+// The free-text LIST payloads a check can carry (`message` is handled on its
+// own below). `id`/`status`/`severity`/`optional`/`exitCode`/`durationMs` are
+// code-set tokens, enums, or numbers — never credential carriers — and
+// `stdout`/`stderr` are the trusted named command's own output, already
+// length-bounded by trimOutput and deliberately left multi-line so a failing
+// check stays readable.
+const SANITIZED_CHECK_LISTS = ['findings', 'informational'];
+
+function checkText(value) {
+  return inertLine(redactSecrets(String(value ?? ''))).slice(0, CHECK_TEXT_CAP);
 }
 
 /** Redact + flatten + cap every string reachable in a finding, bound every
- * array/object to ADVISORY_LIST_CAP entries, and stop at ADVISORY_DEPTH_CAP —
+ * array/object to CHECK_LIST_CAP entries, and stop at CHECK_DEPTH_CAP —
  * shape-agnostic, so a check that grows a new findings field is covered
  * without this function knowing about it. */
-function advisoryValue(value, depth = 0) {
-  if (typeof value === 'string') return advisoryText(value);
+function checkValue(value, depth = 0) {
+  if (typeof value === 'string') return checkText(value);
   if (typeof value === 'number' || typeof value === 'boolean' || value === null) return value;
-  if (depth >= ADVISORY_DEPTH_CAP) return null;
-  if (Array.isArray(value)) return value.slice(0, ADVISORY_LIST_CAP).map((entry) => advisoryValue(entry, depth + 1));
+  if (depth >= CHECK_DEPTH_CAP) return null;
+  if (Array.isArray(value)) return value.slice(0, CHECK_LIST_CAP).map((entry) => checkValue(entry, depth + 1));
   if (value && typeof value === 'object') {
     const out = {};
-    for (const [key, entry] of Object.entries(value).slice(0, ADVISORY_LIST_CAP)) {
-      out[advisoryText(key)] = advisoryValue(entry, depth + 1);
+    for (const [key, entry] of Object.entries(value).slice(0, CHECK_LIST_CAP)) {
+      out[checkText(key)] = checkValue(entry, depth + 1);
     }
     return out;
   }
   return null;
+}
+
+/** Sanitize one check's shipped payload. Idempotent: applied at finalize and
+ * again (harmlessly) by collectAdvisoryFailures on the same objects. */
+export function sanitizeCheckPayload(check) {
+  const sanitized = { ...check };
+  if (check.message !== undefined) sanitized.message = checkText(check.message);
+  for (const field of SANITIZED_CHECK_LISTS) {
+    if (check[field] === undefined) continue;
+    sanitized[field] = (Array.isArray(check[field]) ? check[field] : []).slice(0, CHECK_FINDINGS_CAP).map((entry) => checkValue(entry));
+  }
+  return sanitized;
 }
 
 export function collectAdvisoryFailures(checks) {
@@ -154,9 +205,9 @@ export function collectAdvisoryFailures(checks) {
     .map((check) => ({
       id: check.id,
       status: check.status,
-      message: advisoryText(check.message),
+      message: checkText(check.message),
       ...(check.findings
-        ? { findings: (Array.isArray(check.findings) ? check.findings : []).slice(0, ADVISORY_FINDINGS_CAP).map((f) => advisoryValue(f)) }
+        ? { findings: (Array.isArray(check.findings) ? check.findings : []).slice(0, CHECK_FINDINGS_CAP).map((f) => checkValue(f)) }
         : {}),
     }));
 }
@@ -175,12 +226,16 @@ function currentPhaseTasks(taskBody, phase) {
 
 function finalize(workspace, flags, partial) {
   const policy = loadPolicy(workspace, flags.enforcement);
-  const checks = applyCheckSeverities(partial.checks, policy);
+  const severities = applyCheckSeverities(partial.checks, policy, partial.planGatedChecks || new Set());
+  // The single boundary every consumer reads from: evidence, `--json`, the
+  // event log, and the ledger all serialize this array.
+  const checks = severities.checks.map(sanitizeCheckPayload);
   const result = {
     outcome: partial.outcome || resolveOutcome(checks),
     plan: partial.plan || null,
     checks,
     advisoryFailures: collectAdvisoryFailures(checks),
+    refusedSeverityDowngrades: severities.refusedSeverityDowngrades,
     unverifiedCriteria: partial.unverifiedCriteria || [],
     scopeViolations: partial.scopeViolations || [],
     openHardGaps: partial.openHardGaps || [],
@@ -341,6 +396,7 @@ export function runVerify({ workspace, flags }) {
   return finalize(workspace, flags, {
     plan: plan.path,
     checks,
+    planGatedChecks: planGatedCheckIds(plan),
     unverifiedCriteria,
     scopeViolations: scope.violations,
     openHardGaps,

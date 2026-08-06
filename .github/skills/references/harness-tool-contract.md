@@ -156,6 +156,7 @@ For locked plans, both commands enforce criterion-to-check mappings and configur
   "plan": "docs/plans/example-plan.md",
   "checks": [{ "id": "scope", "status": "passed", "message": "...", "severity": "enforce" }],
   "advisoryFailures": [],
+  "refusedSeverityDowngrades": [],
   "unverifiedCriteria": [],
   "scopeViolations": [],
   "openHardGaps": [],
@@ -182,6 +183,10 @@ Allowed outcomes are `passed`, `failed`, and `inconclusive`. Only fresh `passed`
 | `advisory` | Reported only — never affects outcome or exit code |
 
 Every check in the `verify` payload carries its effective `severity`; non-passing advisory checks are additionally listed under `advisoryFailures` (with their findings) so an exit-neutral signal is never silently lost. A v1 policy file (no `checks:` map) behaves exactly as before.
+
+`advisory` is refused for the built-in gating checks at policy load (error names the check and points at `warn`), and — because a policy file is plan-agnostic — it is also refused per run for any check the ACTIVE PLAN gates on: everything in `verification.required` plus every check mapped under `verification.criteria`. That refusal does not abort the run (aborting would write no evidence at all, failing open): the downgrade is ignored, the check runs at its built-in default severity, and the run reports it in `refusedSeverityDowngrades` (`[{ "id": "team-lint", "requested": "advisory", "effective": "enforce" }]`) plus a `warn` line on the CLI. `warn` stays available for every check, including plan-required ones.
+
+**Sanitized check payloads.** Every check `message`, `findings`, and `informational` payload in the `verify` result is secret-redacted, flattened to one line, and capped (240 chars per string, 20 entries per list, 50 findings) before it reaches `--json`, `.harness/evidence/*.json`, or the event log — those fields carry current-side repo text (extracted symbol names, plan-declared expectations) with no length bound of their own. A check's `id`, `status`, `severity`, and numeric fields pass through unchanged; a named check's `stdout`/`stderr` keep their existing 4000-char `trimOutput` bound and stay multi-line.
 
 **structural-expectations (built-in verify check, advisory by default).** Compares the structural diff of the change against the plan using the structural index at `~/.harness/index/<repo-id>/<worktree-id>/structural/` (`files.json`/`symbols.json`/`graph.json`/`meta.json` — shape contract in `packages/harness/lib/structural/shape.mjs`). Flags: changed **exported** symbols in files outside `## Impacted Files` (`unplanned-symbol-change` — export flags come from the index, so a purely local addition never fires); removed exported symbols whose callers in the graph survive the change (`removed-symbol-with-callers`); unmet plan-frontmatter `structural_expectations:` entries marked `required: true` (`unmet-required-expectation` — unmarked entries stay informational). The check never asserts what it could not compare: a missing index or a baseline `meta.sha` that is not an ancestor of HEAD reports `skipped`; a per-file extractor-tier mismatch (`tier-mismatch-skipped`), a changed file in a language it cannot read (`file-not-evaluated` / `expectation-not-evaluated`), and findings computed from a table that hit an index build cap (`<finding>-informational`) all stay informational; and a run where NOTHING was compared reports `skipped`, never `passed`. `skipped` never affects the outcome at any severity. Policy `checks: { structural-expectations: { severity: warn|enforce } }` opts the flags into blocking.
 

@@ -719,6 +719,18 @@ export async function cmdVerify(argv) {
         note: result.evidencePath,
       })
     );
+    // A policy that tried to mark a plan-required check advisory disagrees
+    // with the plan it is verifying; the run ignores it, and says so.
+    for (const refused of result.refusedSeverityDowngrades || []) {
+      console.log(
+        ui.line({
+          state: 'warn',
+          key: 'policy',
+          value: `checks.${refused.id}.severity: advisory ignored`,
+          note: `the active plan requires ${refused.id}; running as ${refused.effective}`,
+        })
+      );
+    }
     printChecks(flags, result.checks, (c) => c.status === 'passed' || c.status === 'skipped');
     if (passed) {
       printNext('harness compound (or /auto-compound), then stop');

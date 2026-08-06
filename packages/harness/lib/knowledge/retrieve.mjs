@@ -1,7 +1,23 @@
 import fs from 'node:fs';
-import { storeDir, readStaleExclusions } from './store.mjs';
+import { storeDir, readStaleExclusions, inertLine } from './store.mjs';
 import { loadLayeredLearnings, layerTieRank } from './overlay.mjs';
+import { redactSecrets } from '../secret-scan.mjs';
 import { tokenize } from '../tokenize.mjs';
+
+/**
+ * Retrieved learning text, screened at the DATA boundary — the same doctrine
+ * redactRecallEntry (secret-scan.mjs) applies to recall results, for the same
+ * reason: a render-boundary-only screen misses the `--json` sibling, which
+ * serializes this object raw. Learning content is HAND-EDITABLE and human
+ * authority deliberately overrides the write-time secret screen for hand edits
+ * (absorbHandEdits keeps a secret-shaped human claim, skipping only the
+ * snapshot), so a stored credential is a supported state — it must simply
+ * never be rendered back to an agent. inertLine additionally flattens the
+ * control characters a legacy or hand-edited file can carry.
+ */
+function retrievedText(value) {
+  return inertLine(redactSecrets(String(value ?? '')));
+}
 
 /**
  * Read the raw learning set + stale-anchor exclusions for a workspace.
@@ -103,8 +119,10 @@ export function rankLearnings({ workspace, query, limit = 3, home, include }) {
       (l.fm.episodes || []).length > 0 && (l.fm.episodes || []).every((e) => e.kind === 'insight');
     results.push({
       id: l.id,
-      trigger: l.fm.trigger || '',
-      claimLine: scored.claimLine.slice(0, 140),
+      // Redact BEFORE the cap: slicing first could cut a credential in half
+      // and leave the fragment unmatched (and therefore unredacted).
+      trigger: retrievedText(l.fm.trigger),
+      claimLine: retrievedText(scored.claimLine).slice(0, 140),
       status: l.fm.status || 'active',
       advisory,
       score: scored.score,

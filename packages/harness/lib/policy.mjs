@@ -26,7 +26,10 @@ const POLICY_VERSIONS = new Set([1, 2]);
  * except the ones whose built-in DEFAULT is already advisory
  * (`structural-expectations`) — those stay downgradable because advisory is
  * what they already are. Project-defined named checks (checks.yaml) are
- * deliberately NOT listed: a team's own command is theirs to mark advisory.
+ * deliberately NOT listed: a team's own command is theirs to mark advisory —
+ * UNTIL the active plan gates on it, which is a per-run fact this static set
+ * cannot know. That half of the rule lives in checkSeverityFor's
+ * `planGatedIds` argument below.
  * `warn` remains available for every check — it degrades a failure to
  * inconclusive (a non-zero exit under enforce), it does not erase it.
  */
@@ -105,10 +108,30 @@ export function loadPolicy(workspace, override = null) {
 
 /** Effective severity for a verify check: policy entry, else the check's built-in default.
  * Own-property check only: ids like `constructor`/`toString` must fall through
- * to the default instead of resolving Object.prototype members. */
-export function checkSeverityFor(policy, id, defaultSeverity = 'enforce') {
+ * to the default instead of resolving Object.prototype members.
+ *
+ * `planGatedIds` closes the half of the advisory rule the static id list above
+ * cannot see. NON_ADVISORY_CHECK_IDS protects the BUILT-IN checks, but a
+ * PROJECT-DEFINED named check becomes just as gating the moment the ACTIVE
+ * PLAN lists it under `verification.required` (or maps it under
+ * `verification.criteria`) — and an advisory downgrade would filter its
+ * failure out of resolveOutcome exactly the same way, minting `outcome:
+ * passed` evidence from a run whose own required check failed. loadPolicy
+ * cannot refuse that at parse time: one policy file serves every plan in the
+ * repo and knows none of them. So the rule lands HERE, where the plan and the
+ * policy meet.
+ *
+ * DECISION (documented in docs/MEMORY-MODEL.md): the downgrade is IGNORED for
+ * that run rather than refused outright — the check falls back to its built-in
+ * default and verify reports the refusal in `refusedSeverityDowngrades` (and
+ * loudly on the CLI). Refusing would throw before any evidence is written,
+ * which fails OPEN for the agent (no artifact at all); ignoring fails CLOSED,
+ * which is what a gate is for. */
+export function checkSeverityFor(policy, id, defaultSeverity = 'enforce', planGatedIds = null) {
   const configured = policy?.checkSeverities;
-  return configured && Object.hasOwn(configured, id) ? configured[id] : defaultSeverity;
+  const severity = configured && Object.hasOwn(configured, id) ? configured[id] : defaultSeverity;
+  if (severity === 'advisory' && planGatedIds?.has(id)) return defaultSeverity;
+  return severity;
 }
 
 export function enforcementExitCode(outcome, enforcement) {

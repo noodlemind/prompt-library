@@ -6,9 +6,12 @@ import { test } from 'node:test';
 import { runRecall } from '../lib/recall-cmd.mjs';
 import { runOrient } from '../lib/orient.mjs';
 import { redactRecallEntry } from '../lib/secret-scan.mjs';
+import { rankLearnings } from '../lib/knowledge/retrieve.mjs';
+import { buildContextPack } from '../lib/context-pack.mjs';
+import { ensureStore, storeDir, serializeLearning } from '../lib/knowledge/store.mjs';
 
 /**
- * Data-boundary secret redaction for recall results.
+ * Data-boundary secret redaction for retrieved memory.
  *
  * Two reproduced leaks the render-boundary-only fix left open:
  *   1. `path` and `docid` were never redacted — a manifest entry with a
@@ -21,6 +24,13 @@ import { redactRecallEntry } from '../lib/secret-scan.mjs';
  *
  * The fix redacts at the DATA boundary (where the recall objects are built),
  * so BOTH the pack render AND every `--json` emit carry redacted fields.
+ *
+ * Third leak, same trust class, one section higher in the SAME pack: the
+ * `## Learnings (memory)` bullets rendered `inertLine(trigger) → inertLine(claim)`
+ * with NO redactSecrets, while the `## Recall` bullets right below them used
+ * `inertLine(redactSecrets(...))`. Learning content is hand-editable and human
+ * authority deliberately overrides the secret screen for hand edits
+ * (hand-edits.test.mjs), so a matching query surfaced the stored key verbatim.
  */
 
 const AWS = 'AKIAIOSFODNN7EXAMPLE'; // canonical \bAKIA[0-9A-Z]{16}\b shape
@@ -139,4 +149,75 @@ test('redactRecallEntry redacts docid/path/title/summary/snippet but never struc
   // A wholly normal entry is returned byte-for-byte equal (no corruption).
   const normal = { docid: 'a', path: 'docs/solutions/perf/x.md', title: 't', summary: 's', snippet: 'n' };
   assert.deepEqual(redactRecallEntry(normal), normal, 'a normal entry is unchanged');
+});
+
+// Finding 3 — the learnings section of the same pack. -------------------------
+
+/** A hand-edited learning store: written straight to disk, bypassing the write
+ * path's secret screen exactly as a human hand edit does (human authority
+ * overrides the cap/scan there by design). */
+function seedLearningStore({ trigger, claim }) {
+  const workspace = tmp('learn-secret-ws-');
+  const harnessHome = tmp('learn-secret-hh-');
+  const { dir } = ensureStore(workspace, { home: harnessHome });
+  fs.mkdirSync(path.join(dir, 'learnings', 'sql'), { recursive: true });
+  fs.writeFileSync(
+    path.join(dir, 'learnings', 'sql', 'orders-timeout.md'),
+    serializeLearning(
+      {
+        trigger,
+        status: 'active',
+        source: 'human',
+        episodes: [],
+        anchors: [],
+        superseded_by: null,
+        last_confirmed: null,
+        origin: 'hand-edit',
+      },
+      claim
+    ),
+    'utf8'
+  );
+  assert.equal(storeDir(workspace, { home: harnessHome }), dir);
+  return { workspace, harnessHome };
+}
+
+test('a secret-shaped learning trigger or claim is redacted in the ranked result and the rendered pack', () => {
+  for (const field of ['trigger', 'claim']) {
+    const { workspace, harnessHome } = seedLearningStore({
+      trigger: field === 'trigger' ? `orders timeout ${AWS}` : 'orders timeout on retry',
+      claim: field === 'claim' ? `Rotate ${AWS} before shipping.` : 'Retry with a bounded backoff.',
+    });
+
+    const ranked = rankLearnings({ workspace, query: 'orders timeout', limit: 3, home: harnessHome });
+    assert.equal(ranked.length, 1, `the learning is surfaced for the ${field} case`);
+
+    // FAIL-BEFORE: the raw key rode through the ranked object into orient --json.
+    const serialized = JSON.stringify(ranked);
+    assert.ok(!serialized.includes(AWS), `no raw key in the ranked ${field}`);
+    assert.match(serialized, /\[redacted:/, `a redaction marker replaces the ${field}`);
+
+    // …and through the pack the model actually reads.
+    const pack = buildContextPack({
+      query: 'orders timeout',
+      recall: [],
+      learnings: ranked,
+      plans: [],
+      gatePreview: { pass: true },
+      nextTools: [],
+    });
+    assert.ok(!pack.includes(AWS), `no raw key in the rendered pack for the ${field}`);
+    assert.match(pack, /\[redacted:/, `the pack bullet shows the redaction marker for the ${field}`);
+  }
+});
+
+test('a clean learning is surfaced byte-for-byte unchanged (no false-positive damage)', () => {
+  const { workspace, harnessHome } = seedLearningStore({
+    trigger: 'orders timeout on retry',
+    claim: 'Retry with a bounded backoff.',
+  });
+
+  const [ranked] = rankLearnings({ workspace, query: 'orders timeout', limit: 3, home: harnessHome });
+  assert.equal(ranked.trigger, 'orders timeout on retry');
+  assert.equal(ranked.claimLine, 'Retry with a bounded backoff.');
 });

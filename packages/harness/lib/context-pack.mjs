@@ -46,8 +46,15 @@ export function buildLearningsLines(learnings) {
     // inertLine: a legacy or hand-edited learning can still carry an
     // embedded control char in its trigger/claim (see store.mjs's doc
     // comment) — collapsed to a space so it can never inject extra
-    // structure into this trusted context surface.
-    lines.push(`- [${l.id}]${layerMark}${fence} ${inertLine(l.trigger)} → ${inertLine(l.claimLine)}`);
+    // structure into this trusted context surface. redactSecrets: the same
+    // treatment the Recall bullets below already give their retrieved text —
+    // a hand-edited learning may legitimately HOLD a credential (human
+    // authority overrides the write-time screen), but it must never be
+    // rendered back to the model. rankLearnings already screens at the data
+    // boundary; this keeps the guarantee true for any caller of the pack.
+    lines.push(
+      `- [${l.id}]${layerMark}${fence} ${inertLine(redactSecrets(l.trigger))} → ${inertLine(redactSecrets(l.claimLine))}`
+    );
   }
   return lines;
 }
