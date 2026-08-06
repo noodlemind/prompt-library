@@ -14,6 +14,10 @@
 //   R6  an unowned live lock, a pre-lock store mutation, a clobbered
 //       `.gitignore`, an unchecked recovery rollback, and porcelain rename
 //       field order pinned only by a hand-built string
+//   R7  a symlink planted at a store-owned DIRECTORY (the allow-list covered
+//       file leaves only), a source contract evadable by how a path is spelled,
+//       a short `writeSync` truncating a ledger append, and an unmerged
+//       porcelain code recorded as a hand deletion
 //
 // Every test is written against the ATTACKER'S move or the failure mode, never
 // against the shape of the fix.
@@ -47,8 +51,10 @@ import {
   observeStaleLock,
   takeOverStaleLock,
   lockOwnership,
+  commitStore,
 } from '../lib/knowledge/store.mjs';
-import { QUARANTINE_DIR } from '../lib/knowledge/store-io.mjs';
+import { QUARANTINE_DIR, findSymlinkedStoreDirectories, storePathParts, writeStoreFile } from '../lib/knowledge/store-io.mjs';
+import { appendFileContained } from '../lib/fs-safe.mjs';
 
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const tempDir = (p) => fs.mkdtempSync(path.join(os.tmpdir(), p));
@@ -235,51 +241,350 @@ test('R1: a symlinked bucket meta.json / INDEX.md cannot be written through', ()
   assert.equal(JSON.parse(fs.readFileSync(path.join(bucketDir, 'meta.json'), 'utf8')).branchKey, 'feature-x');
 });
 
-// The class-completeness contract: no store-owned FILE NAME may appear as the
-// argument of a bare `fs` read/write/append/exists/remove anywhere in
-// lib/knowledge/. Rule 3 (allow-lists, not deny-lists) applied to the source
-// itself — a new metadata writer that skips the choke point fails here.
-test('R1: no bare fs call in lib/knowledge names a store-owned file', () => {
-  const storeOwned = [
-    'INDEX.md',
-    'consolidated.jsonl',
-    'governance.jsonl',
-    'config.json',
-    'store.json',
-    'stale.json',
-    'meta.json',
-    '.gitignore',
-    'harness-txn.json',
-    'owner.json',
-  ];
-  // Comments stripped first (they discuss these filenames constantly), then the
-  // call's FULL argument list is read by balancing parentheses — a bare call
-  // split across lines is exactly the shape a line-by-line scan would miss.
-  const stripComments = (src) => src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
-  const argsOf = (src, openIdx) => {
-    let depth = 0;
-    for (let i = openIdx; i < src.length; i += 1) {
-      if (src[i] === '(') depth += 1;
-      else if (src[i] === ')') {
-        depth -= 1;
-        if (depth === 0) return src.slice(openIdx + 1, i);
-      }
+// ---------------------------------------------------------------------------
+// R1/R7 — THE SOURCE CONTRACT, MADE UNEVADABLE
+// ---------------------------------------------------------------------------
+//
+// The previous version of this contract grepped for bare `fs` verbs whose
+// ARGUMENT TEXT contained a store filename LITERAL. That is a contract about
+// how a path is SPELLED, and every spelling dodges it — including the exact
+// shape of the historical `ensureStore` bug the round existed to close:
+//
+//     const indexPath = path.join(dir, 'INDEX.md');
+//     fs.writeFileSync(indexPath, INDEX_STUB);     // literal not in the args
+//
+// so did double quotes, template literals, `dir + '/INDEX.md'`, a destructured
+// `import { writeFileSync } from 'node:fs'`, a helper alias,
+// `fs.promises.writeFile`, and every verb outside its six-name list
+// (renameSync, unlinkSync, openSync+writeSync, truncateSync, cpSync, lstatSync,
+// readdirSync). It also scanned `lib/knowledge` NON-recursively.
+//
+// The contract below never looks at a path at all. It is three structural
+// rules whose conjunction is exhaustive:
+//
+//   1. REACHABILITY. In a store-writing module the fs module may be reached in
+//      exactly ONE way: `import fs from 'node:fs'`. No named import, no
+//      namespace import, no `node:fs/promises`, no `require`/dynamic `import`,
+//      no destructuring off `fs`, no computed `fs[...]`, no aliasing the module
+//      object. This is what makes rule 2's textual scan COMPLETE: after rule 1,
+//      every raw fs use in the file is literally `fs.<verb>`.
+//   2. PER-FILE VERB ALLOW-LIST. Every `fs.<verb>` must appear in the table
+//      below for that file. Not a deny-list of dangerous verbs — an allow-list
+//      of the ones each module is known to need, each justified. A NEW verb in
+//      an existing module, or ANY verb in a new module, fails until a human
+//      adds it deliberately.
+//   3. SCOPE. `lib/knowledge/**` RECURSIVELY (so a future subdirectory is
+//      covered), plus every module anywhere under `lib/` that imports
+//      `store-io.mjs` — i.e. the import-graph definition of "a store-writing
+//      module", so one living outside lib/knowledge is held to the same rule.
+
+/**
+ * Permitted raw-`fs` verbs, per module, keyed by path relative to `lib/`.
+ * Every entry is a DIRECTORY/PROBE operation on the store tree or a
+ * WORKSPACE-path operation. No module may read, write, append or truncate
+ * FILE BYTES on a store path — that is store-io.mjs's monopoly, and the two
+ * content verbs that survive anywhere in the tree are on caller-supplied
+ * workspace paths, named individually below.
+ */
+const RAW_FS_ALLOW = new Map([
+  // The choke point itself: the ONE module allowed to touch store file leaves.
+  // `renameSync` is the quarantine (it moves the LINK, never its target);
+  // `lstatSync` is the never-follow probe; `rmSync` is removeStoreFile after
+  // assertRealpathContained; `mkdirSync` creates the quarantine bucket and
+  // re-creates a reclaimed store directory; `readdirSync(withFileTypes)` is the
+  // store-owned-DIRECTORY sweep, which reports each child's OWN type so the
+  // walk detects a symlinked directory instead of descending through it.
+  ['knowledge/store-io.mjs', ['lstatSync', 'mkdirSync', 'readdirSync', 'renameSync', 'rmSync']],
+  // Store repo plumbing: `.git`/`.lock` DIRECTORY probes, the lock mkdir/rmdir
+  // and its stale-takeover rename, the learnings-tree walk, residue removal,
+  // and realpathSync for the path-keyed store id. No content verb.
+  ['knowledge/store.mjs', ['existsSync', 'mkdirSync', 'readdirSync', 'realpathSync', 'renameSync', 'rmSync', 'statSync']],
+  // Maintenance: directory probes/walks, the workspace mirror tree, and the
+  // store-migration copy+remove. `cpSync` copies a legacy store DIRECTORY into
+  // its new id, never a store file's bytes on their own.
+  ['knowledge/admin.mjs', ['cpSync', 'existsSync', 'mkdirSync', 'readdirSync', 'renameSync', 'rmSync', 'rmdirSync']],
+  // `readFileSync` reads the CALLER'S ops.json (a workspace path the user
+  // passes on the command line), never a store file.
+  ['knowledge/apply.mjs', ['existsSync', 'readFileSync']],
+  // `readFileSync` reads a workspace EPISODE the caller cited; `writeFileSync`
+  // writes the temp ops.json handed to applyOps. Both workspace paths.
+  ['knowledge/remember.mjs', ['existsSync', 'mkdirSync', 'readFileSync', 'rmSync', 'writeFileSync']],
+  ['knowledge/consolidate.mjs', ['existsSync', 'readdirSync']],
+  ['knowledge/eval.mjs', ['existsSync']],
+  ['knowledge/layer.mjs', ['existsSync', 'mkdirSync', 'renameSync']],
+  ['knowledge/lifecycle.mjs', ['existsSync']],
+  ['knowledge/listing.mjs', ['existsSync']],
+  ['knowledge/overlay.mjs', ['existsSync', 'readdirSync']],
+  ['knowledge/promote.mjs', ['existsSync']],
+  ['knowledge/prune.mjs', ['existsSync', 'rmSync']],
+  ['knowledge/retrieve.mjs', ['existsSync']],
+  ['knowledge/status.mjs', ['existsSync']],
+]);
+
+/**
+ * Comment stripper that respects string and regex literals, so a `//` inside
+ * `/^[a-z+]+:\/\//` or inside `'https://…'` never eats the rest of the line
+ * (over-stripping would HIDE a violation, which is the one direction a
+ * contract test must not fail in).
+ */
+function stripCommentsJs(src) {
+  const REGEX_ALLOWED_AFTER = /[(,=:[!&|?{};+\-*%~^<>]/;
+  const REGEX_AFTER_WORD = new Set(['return', 'typeof', 'case', 'in', 'of', 'new', 'delete', 'void', 'instanceof', 'do', 'else', 'yield', 'await']);
+  let out = '';
+  let prevSig = '';
+  let prevWord = '';
+  let i = 0;
+  while (i < src.length) {
+    const ch = src[i];
+    const nx = src[i + 1];
+    if (ch === '/' && nx === '/') {
+      while (i < src.length && src[i] !== '\n') i += 1;
+      continue;
     }
-    return src.slice(openIdx + 1, openIdx + 400);
-  };
-  const bare = /fs\.(readFileSync|writeFileSync|appendFileSync|statSync|existsSync|rmSync)\(/g;
-  const offenders = [];
-  const knowledgeDir = path.join(packageRoot, 'lib', 'knowledge');
-  for (const f of fs.readdirSync(knowledgeDir).filter((n) => n.endsWith('.mjs'))) {
-    const src = stripComments(fs.readFileSync(path.join(knowledgeDir, f), 'utf8'));
-    bare.lastIndex = 0;
-    let m;
-    while ((m = bare.exec(src)) !== null) {
-      const args = argsOf(src, m.index + m[0].length - 1);
-      if (storeOwned.some((name) => args.includes(`'${name}'`))) offenders.push(`${f}: fs.${m[1]}(${args.replace(/\s+/g, ' ').slice(0, 90)})`);
+    if (ch === '/' && nx === '*') {
+      i += 2;
+      while (i < src.length && !(src[i] === '*' && src[i + 1] === '/')) i += 1;
+      i += 2;
+      continue;
+    }
+    if (ch === '"' || ch === "'" || ch === '`') {
+      out += ch;
+      i += 1;
+      while (i < src.length) {
+        if (src[i] === '\\') {
+          out += src[i] + (src[i + 1] ?? '');
+          i += 2;
+          continue;
+        }
+        out += src[i];
+        const done = src[i] === ch;
+        i += 1;
+        if (done) break;
+      }
+      prevSig = ch;
+      prevWord = '';
+      continue;
+    }
+    if (ch === '/' && (REGEX_ALLOWED_AFTER.test(prevSig) || REGEX_AFTER_WORD.has(prevWord) || prevSig === '')) {
+      out += ch;
+      i += 1;
+      let inClass = false;
+      while (i < src.length) {
+        if (src[i] === '\\') {
+          out += src[i] + (src[i + 1] ?? '');
+          i += 2;
+          continue;
+        }
+        if (src[i] === '[') inClass = true;
+        else if (src[i] === ']') inClass = false;
+        out += src[i];
+        const done = src[i] === '/' && !inClass;
+        i += 1;
+        if (done) break;
+      }
+      prevSig = '/';
+      prevWord = '';
+      continue;
+    }
+    out += ch;
+    if (!/\s/.test(ch)) {
+      prevSig = ch;
+      prevWord = /[A-Za-z_$\w]/.test(ch) ? prevWord + ch : '';
+    }
+    i += 1;
+  }
+  return out;
+}
+
+/**
+ * Rule 1, stated as an ALLOW-LIST (rule 3: allow-lists, not deny-lists).
+ *
+ * An ESM module can obtain another module's binding in exactly three ways:
+ * a static `import`, a dynamic `import()`, or `require()`. The first is
+ * allow-listed to ONE permitted form; the other two are not available at all.
+ * `fsImportViolations` therefore enumerates every static import of the fs
+ * module and requires each to be verbatim `import fs from 'node:fs'`, so a
+ * spelling nobody thought of fails by default rather than by omission.
+ */
+const FS_STATIC_IMPORT = /import\s+([^;'"]*?)\s*from\s*['"]((?:node:)?fs(?:\/promises)?)['"]/g;
+function fsImportViolations(src) {
+  const out = [];
+  FS_STATIC_IMPORT.lastIndex = 0;
+  let m;
+  while ((m = FS_STATIC_IMPORT.exec(src)) !== null) {
+    const [, clause, specifier] = m;
+    if (clause.trim() !== 'fs' || specifier !== 'node:fs') {
+      out.push(`only \`import fs from 'node:fs'\` may reach the fs module, found \`import ${clause.trim()} from '${specifier}'\``);
     }
   }
-  assert.deepEqual(offenders, [], 'every store-owned file must go through store-io.mjs');
+  return out;
+}
+
+/** The non-`import` ways a binding to fs (or to one of its verbs) can appear. */
+const FS_REACH_VIOLATIONS = [
+  [/require\s*\(\s*['"](node:)?fs/, 'require() of fs'],
+  [/import\s*\(\s*['"](node:)?fs/, 'dynamic import() of fs'],
+  [/(?:const|let|var)\s*\{[^}]*\}\s*=\s*fs\b/, 'destructuring verbs off the fs module object'],
+  [/\bfs\s*\[/, 'computed member access on fs (fs[...])'],
+  [/=\s*fs\s*[;,)]/, 'aliasing the whole fs module object'],
+];
+
+/** All `.mjs` under `dir`, recursively, as paths relative to `relativeTo`. */
+function mjsFiles(dir, relativeTo) {
+  const out = [];
+  let entries = [];
+  try {
+    entries = fs.readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return out;
+  }
+  for (const e of entries) {
+    const full = path.join(dir, e.name);
+    if (e.isDirectory()) out.push(...mjsFiles(full, relativeTo));
+    else if (e.isFile() && e.name.endsWith('.mjs')) out.push({ key: path.relative(relativeTo, full).split(path.sep).join('/'), full });
+  }
+  return out;
+}
+
+/**
+ * The checker, run against the SHIPPED source below and against a temp fixture
+ * of every evasion shape. Returns a list of violation strings; empty means the
+ * contract holds.
+ */
+function rawFsContractViolations({ libDir, knowledgeDir, allow = RAW_FS_ALLOW }) {
+  const scanned = new Map();
+  for (const f of mjsFiles(knowledgeDir, libDir)) scanned.set(f.key, f.full);
+  // The import-graph half: a store-writing module ANYWHERE under lib/.
+  for (const f of mjsFiles(libDir, libDir)) {
+    if (scanned.has(f.key)) continue;
+    const raw = fs.readFileSync(f.full, 'utf8');
+    if (/from\s*['"][^'"]*store-io\.mjs['"]/.test(stripCommentsJs(raw))) scanned.set(f.key, f.full);
+  }
+  const violations = [];
+  for (const [key, full] of [...scanned].sort()) {
+    const src = stripCommentsJs(fs.readFileSync(full, 'utf8'));
+    if (!/\bfs\b/.test(src)) continue;
+    for (const why of fsImportViolations(src)) violations.push(`${key}: ${why}`);
+    for (const [re, why] of FS_REACH_VIOLATIONS) {
+      if (re.test(src)) violations.push(`${key}: ${why}`);
+    }
+    const permitted = new Set(allow.get(key) || []);
+    const seen = new Set();
+    const member = /\bfs\.([A-Za-z_$][\w$]*)/g;
+    let m;
+    while ((m = member.exec(src)) !== null) {
+      if (permitted.has(m[1]) || seen.has(m[1])) continue;
+      seen.add(m[1]);
+      violations.push(
+        allow.has(key)
+          ? `${key}: fs.${m[1]} is not in the module's raw-fs allow-list`
+          : `${key}: reaches raw fs but is not in the raw-fs allow-list at all`
+      );
+    }
+  }
+  return violations;
+}
+
+test('R1/R7: every store-writing module obeys the raw-fs source contract', () => {
+  const libDir = path.join(packageRoot, 'lib');
+  const knowledgeDir = path.join(libDir, 'knowledge');
+  assert.deepEqual(rawFsContractViolations({ libDir, knowledgeDir }), [], 'every store-owned file must go through store-io.mjs');
+
+  // The allow-list must not rot: an entry for a module that no longer exists
+  // silently widens nothing today and hides a real module tomorrow.
+  for (const key of RAW_FS_ALLOW.keys()) {
+    assert.ok(fs.existsSync(path.join(libDir, key)), `stale raw-fs allow-list entry: ${key}`);
+  }
+  // Canary: prove the comment stripper did not eat live code (over-stripping is
+  // the one failure direction a contract test must never have).
+  const stripped = stripCommentsJs(fs.readFileSync(path.join(knowledgeDir, 'store.mjs'), 'utf8'));
+  assert.match(stripped, /export function commitStore\(/);
+  assert.match(stripped, /export function withStoreTransaction\(/);
+});
+
+// Every shape that evaded the old filename-literal grep, constructed as a temp
+// fixture and fed to the SAME checker. Each fixture is named after a real
+// module so the SHIPPED allow-list is the one being applied.
+test('R1/R7: the raw-fs contract rejects every spelling that evaded the filename grep', () => {
+  const evasions = [
+    // The historical ensureStore bug's own shape: the literal is in a variable.
+    ['knowledge/store.mjs', "const indexPath = path.join(dir, 'INDEX.md');\nfs.writeFileSync(indexPath, INDEX_STUB);", 'writeFileSync'],
+    ['knowledge/store.mjs', 'fs.writeFileSync(path.join(dir, "INDEX.md"), INDEX_STUB);', 'double-quoted literal'],
+    ['knowledge/store.mjs', 'fs.writeFileSync(path.join(dir, `INDEX.md`), INDEX_STUB);', 'template literal'],
+    ['knowledge/store.mjs', "fs.writeFileSync(dir + '/INDEX.md', INDEX_STUB);", 'string concatenation'],
+    ['knowledge/store.mjs', 'fs.promises.writeFile(p, INDEX_STUB);', 'fs.promises'],
+    ['knowledge/store.mjs', 'const w = fs.writeFileSync;\nw(p, INDEX_STUB);', 'helper alias'],
+    ['knowledge/store.mjs', 'fs.unlinkSync(p);', 'unlinkSync'],
+    ['knowledge/store.mjs', 'const fd = fs.openSync(p, "w");\nfs.writeSync(fd, buf);', 'openSync + writeSync'],
+    ['knowledge/store.mjs', 'fs.truncateSync(p, 0);', 'truncateSync'],
+    ['knowledge/store.mjs', 'fs.cpSync(a, b);', 'cpSync'],
+    ['knowledge/store.mjs', 'fs.appendFileSync(p, line);', 'appendFileSync'],
+    ['knowledge/store.mjs', 'fs.createWriteStream(p).end(text);', 'createWriteStream'],
+    ['knowledge/lifecycle.mjs', 'fs.lstatSync(p);', 'lstatSync in a module that may not stat'],
+    ['knowledge/lifecycle.mjs', 'fs.readdirSync(p);', 'readdirSync in a module that may not walk'],
+    ['knowledge/lifecycle.mjs', 'fs.renameSync(a, b);', 'renameSync in a module that may not rename'],
+    // A future subdirectory under lib/knowledge — the non-recursive scan missed it.
+    ['knowledge/sub/writer.mjs', "fs.writeFileSync(path.join(dir, 'INDEX.md'), text);", 'a module in a lib/knowledge subdirectory'],
+    // A brand-new store-writing module with NO allow-list entry at all.
+    ['knowledge/newcomer.mjs', 'fs.existsSync(p);', 'a new lib/knowledge module'],
+  ];
+  const importLine = "import fs from 'node:fs';\nimport path from 'node:path';\n";
+  for (const [key, body, label] of evasions) {
+    const root = tempDir('sio-contract-');
+    const full = path.join(root, key);
+    fs.mkdirSync(path.dirname(full), { recursive: true });
+    fs.writeFileSync(full, importLine + body + '\n', 'utf8');
+    const found = rawFsContractViolations({ libDir: root, knowledgeDir: path.join(root, 'knowledge') });
+    assert.ok(found.length > 0, `the contract must reject: ${label}`);
+  }
+
+  // Rule 1: every way of reaching fs other than `import fs from 'node:fs'`.
+  const reaches = [
+    ["import { writeFileSync } from 'node:fs';\nwriteFileSync(p, text);", 'destructured import'],
+    ["import * as nodefs from 'node:fs';\nnodefs.writeFileSync(p, text);", 'namespace import'],
+    ["import fsp from 'node:fs/promises';\nawait fsp.writeFile(p, text);", 'node:fs/promises'],
+    ["import fs from 'fs';\nfs.existsSync(p);", "bare 'fs' specifier"],
+    ["const fs = require('node:fs');\nfs.existsSync(p);", 'require()'],
+    ["const fs = await import('node:fs');\nfs.existsSync(p);", 'dynamic import()'],
+    ["import fs from 'node:fs';\nconst { writeFileSync } = fs;\nwriteFileSync(p, text);", 'destructuring off fs'],
+    ["import fs from 'node:fs';\nfs['writeFileSync'](p, text);", 'computed fs[...]'],
+    ["import fs from 'node:fs';\nconst raw = fs;\nraw.writeFileSync(p, text);", 'aliasing the module object'],
+    ["import fs, { writeFileSync } from 'node:fs';\nwriteFileSync(p, text);", 'default PLUS named import'],
+    ["import myfs from 'node:fs';\nmyfs.writeFileSync(p, text);", 'default import bound to another name'],
+  ];
+  for (const [body, label] of reaches) {
+    const root = tempDir('sio-reach-');
+    const full = path.join(root, 'knowledge', 'store.mjs');
+    fs.mkdirSync(path.dirname(full), { recursive: true });
+    fs.writeFileSync(full, body + '\n', 'utf8');
+    const found = rawFsContractViolations({ libDir: root, knowledgeDir: path.join(root, 'knowledge') });
+    assert.ok(found.length > 0, `the contract must reject: ${label}`);
+  }
+
+  // And a store-writing module OUTSIDE lib/knowledge is scanned via the
+  // import graph, not by its location.
+  const root = tempDir('sio-graph-');
+  fs.mkdirSync(path.join(root, 'knowledge'), { recursive: true });
+  fs.writeFileSync(
+    path.join(root, 'rogue-writer.mjs'),
+    "import fs from 'node:fs';\nimport { writeStoreFile } from './knowledge/store-io.mjs';\nfs.writeFileSync(p, text);\nexport { writeStoreFile };\n",
+    'utf8'
+  );
+  assert.ok(
+    rawFsContractViolations({ libDir: root, knowledgeDir: path.join(root, 'knowledge') }).some((v) => v.startsWith('rogue-writer.mjs')),
+    'a store-writing module outside lib/knowledge must be scanned too'
+  );
+
+  // Control: the shape the contract must NOT flag — an allow-listed verb in
+  // the module that owns it, however the path is spelled.
+  const okRoot = tempDir('sio-control-');
+  fs.mkdirSync(path.join(okRoot, 'knowledge'), { recursive: true });
+  fs.writeFileSync(
+    path.join(okRoot, 'knowledge', 'store.mjs'),
+    "import fs from 'node:fs';\nconst p = `${dir}/INDEX.md`;\nif (fs.existsSync(path.join(dir, '.git'))) fs.mkdirSync(p, { recursive: true });\n",
+    'utf8'
+  );
+  assert.deepEqual(rawFsContractViolations({ libDir: okRoot, knowledgeDir: path.join(okRoot, 'knowledge') }), []);
 });
 
 // ---------------------------------------------------------------------------
@@ -546,4 +851,242 @@ test('R6/S3: parsePorcelainZ decodes a REAL git rename new-path-first', () => {
   assert.equal(rename.path, 'new-name.txt', 'the FIRST field is the new path');
   assert.equal(rename.origPath, 'orig-name.txt', 'the SECOND field is the original path');
   assert.equal(entries.length, 1, 'the paired field must be consumed, not left to misalign the next entry');
+});
+
+// ---------------------------------------------------------------------------
+// R7 — a symlink planted at a store-owned DIRECTORY
+// ---------------------------------------------------------------------------
+//
+// The choke point's allow-list covers FILE LEAVES only, and LEARNING_FILE_RE
+// matches `…/<domain>/<slug>.md` only, so a symlinked DIRECTORY produced no
+// absorb entry to quarantine at all. Verified end to end:
+//
+//   rm -rf <store>/learnings/sql && ln -s /tmp/evil <store>/learnings/sql
+//   → absorbHandEdits: absorbed=[] deleted=[] committed=false
+//   → next transaction → pass:true
+//   → git ls-files -s: 120000 … learnings/sql   (symlink COMMITTED)
+//   → listLearnings(dir): []                    (every learning silently gone)
+//
+// `ln -s /tmp/x <store>/learnings` is worse: ALL learnings vanish from every
+// read path and the CLI reports success throughout. The plant is self-reviving
+// — once tracked, every `git reset --hard` re-materializes it and `git clean
+// -fd` cannot sweep it.
+
+/** A directory OUTSIDE the store a planted directory symlink points at. */
+function outsideDir(name = 'evil') {
+  const dir = tempDir(`sio-outside-${name}-`);
+  fs.writeFileSync(path.join(dir, 'bystander.txt'), `outside content for ${name}\n`, 'utf8');
+  return dir;
+}
+
+/** Every mode-120000 entry `git ls-files -s` reports — a symlink in history. */
+function trackedSymlinks(dir) {
+  return git(dir, ['ls-files', '-s'])
+    .stdout.split('\n')
+    .filter((l) => l.startsWith('120000'));
+}
+
+function plantDirSymlink(target, at) {
+  fs.rmSync(at, { recursive: true, force: true });
+  fs.symlinkSync(target, at);
+}
+
+for (const shape of ['learnings', path.join('learnings', 'sql'), 'branches']) {
+  test(`R7: a symlink planted at <store>/${shape.split(path.sep).join('/')} is quarantined or refused, never committed`, () => {
+    const c = ctx();
+    const id = seedLearning(c, 'dir-plant-victim');
+    const { dir } = ensureStore(c.ws, { home: c.harnessHome });
+    // A bucket layer exists too, so `branches` is a real directory to replace.
+    ensureBucket(dir, { key: 'feature-z', branch: 'feature/z', baseSha: null });
+    commitStore(dir, 'seed bucket');
+    const outside = outsideDir(shape.split(path.sep).join('-'));
+    const outsideBefore = fs.readdirSync(outside);
+
+    plantDirSymlink(outside, path.join(dir, shape));
+
+    const res = setLearningStatus({ workspace: c.ws, id, action: 'retire', reason: 'cleanup', home: c.harnessHome });
+
+    // 1. NEVER a silent success while a store directory is a symlink.
+    assert.equal(res.pass, false, `a transaction must never report success with <store>/${shape} symlinked`);
+    assert.match(String(res.blockedReason || ''), new RegExp(shape.split(path.sep).join('/')), 'the refusal must name the symlinked directory');
+
+    // 2. The link itself is inert — quarantined out of the live tree.
+    assert.equal(
+      fs.existsSync(path.join(dir, shape)) && fs.lstatSync(path.join(dir, shape)).isSymbolicLink(),
+      false,
+      'the planted directory link must not still stand at a live store path'
+    );
+    assert.ok(
+      quarantined(dir).some((f) => f.includes(shape.split(path.sep).join('__'))),
+      `the planted directory link is quarantined: ${JSON.stringify(quarantined(dir))}`
+    );
+
+    // 3. It is NEVER recorded as a 120000 blob in store history.
+    assert.deepEqual(trackedSymlinks(dir), [], 'a symlink must never be committed into store history');
+
+    // 4. The outside target is untouched.
+    assert.deepEqual(fs.readdirSync(outside), outsideBefore, 'the outside directory must be byte-for-byte unchanged');
+
+    // 5. The learnings the plant hid are back, and the next run is clean.
+    assert.ok(listLearnings(dir).some((l) => l.id === id), 'the real directory is restored, so the learnings reappear');
+    const after = setLearningStatus({ workspace: c.ws, id, action: 'retire', reason: 'cleanup', home: c.harnessHome });
+    assert.equal(after.pass, true, after.blockedReason || '');
+    assert.deepEqual(trackedSymlinks(dir), [], 'and still no symlink in history after the healed run');
+  });
+}
+
+test('R7: a symlink planted at a BUCKET learnings directory is quarantined or refused too', () => {
+  const c = ctx();
+  const id = seedLearning(c, 'bucket-dir-victim');
+  const { dir } = ensureStore(c.ws, { home: c.harnessHome });
+  const bucketDir = ensureBucket(dir, { key: 'feature-q', branch: 'feature/q', baseSha: null });
+  const bucketLearnings = path.join(dir, 'branches', 'feature-q', 'learnings', 'sql');
+  fs.mkdirSync(bucketLearnings, { recursive: true });
+  fs.writeFileSync(
+    path.join(bucketLearnings, 'bucket-claim.md'),
+    '---\nschema: 1\ntrigger: "bucket claim"\nstatus: active\nsource: auto\nepisodes:\nanchors: []\nsuperseded_by: null\nlast_confirmed: null\norigin: unknown\n---\n\nBucket claim body.\n',
+    'utf8'
+  );
+  commitStore(dir, 'seed bucket learning');
+  assert.ok(bucketDir);
+
+  const outside = outsideDir('bucket');
+  plantDirSymlink(outside, bucketLearnings);
+
+  const res = setLearningStatus({ workspace: c.ws, id, action: 'retire', reason: 'cleanup', home: c.harnessHome });
+  assert.equal(res.pass, false, 'a bucket learnings directory symlink must refuse the transaction too');
+  assert.match(String(res.blockedReason || ''), /branches\/feature-q\/learnings\/sql/);
+  assert.deepEqual(trackedSymlinks(dir), [], 'a symlink must never be committed into store history');
+  assert.ok(quarantined(dir).some((f) => f.includes('feature-q')), 'the bucket directory link is quarantined');
+});
+
+// The structural half: `git add -A` runs in exactly ONE place, so the refusal
+// belongs there — no future caller can reach staging around it.
+test('R7: commitStore itself refuses to stage a store whose owned directory is a symlink', () => {
+  const c = ctx();
+  seedLearning(c, 'commit-guard-anchor');
+  const { dir } = ensureStore(c.ws, { home: c.harnessHome });
+  const outside = outsideDir('commit');
+
+  plantDirSymlink(outside, path.join(dir, 'learnings'));
+
+  const res = commitStore(dir, 'must never land');
+  assert.equal(res.ok, false, 'staging must fail closed');
+  assert.equal(res.committed, false);
+  assert.match(String(res.stderr || ''), /learnings/, 'the refusal must name the symlinked directory');
+  assert.deepEqual(trackedSymlinks(dir), [], 'git add -A must never have run');
+});
+
+test('R7: findSymlinkedStoreDirectories reports every owned directory shape and nothing else', () => {
+  const c = ctx();
+  const { dir } = ensureStore(c.ws, { home: c.harnessHome });
+  const outside = outsideDir('shapes');
+  fs.mkdirSync(path.join(dir, 'learnings', 'sql'), { recursive: true });
+  fs.mkdirSync(path.join(dir, 'branches', 'k1', 'learnings', 'py'), { recursive: true });
+
+  assert.deepEqual(findSymlinkedStoreDirectories(dir), [], 'a clean store reports nothing');
+
+  plantDirSymlink(outside, path.join(dir, 'learnings', 'sql'));
+  plantDirSymlink(outside, path.join(dir, 'branches', 'k1', 'learnings', 'py'));
+  // A symlink OUTSIDE the owned shapes is not this scan's business.
+  fs.symlinkSync(outside, path.join(dir, 'unrelated-link'));
+
+  assert.deepEqual(findSymlinkedStoreDirectories(dir).sort(), ['branches/k1/learnings/py', 'learnings/sql']);
+});
+
+// ---------------------------------------------------------------------------
+// R7 — "no caller can supply a wrong root" was a claim about CALLERS
+// ---------------------------------------------------------------------------
+
+// Deriving the containment root from the path's own shape does make the root a
+// fixed function of the path — but the shape match is by BASENAME, ANYWHERE on
+// the filesystem, so `<anything>/config.json` matched and was contained against
+// its own parent. `writeStoreFile('/Users/x/.ssh/config.json')` was accepted.
+test('R7: a store-shaped basename outside any store root is refused, not contained against its own parent', () => {
+  const home = tempDir('sio-plausible-');
+  const ssh = path.join(home, '.ssh');
+  fs.mkdirSync(ssh, { recursive: true });
+  const victim = path.join(ssh, 'config.json');
+  fs.writeFileSync(victim, 'Host secret\n  IdentityFile ~/.ssh/id_ed25519\n', 'utf8');
+  const before = fs.readFileSync(victim, 'utf8');
+
+  assert.equal(storePathParts(victim), null, 'a derived root that could not be a store root is not a store path');
+  assert.equal(writeStoreFile(victim, 'owned by the store\n'), false, 'the write must be refused outright');
+  assert.equal(fs.readFileSync(victim, 'utf8'), before, 'the outside file must be byte-identical');
+
+  // The same basename inside a REAL store root (`<home>/knowledge/<id>`, the
+  // only shape storeDirForId ever builds) still works — the check narrows the
+  // allow-list, it does not break the store.
+  const store = path.join(home, 'knowledge', 'repo-id');
+  fs.mkdirSync(store, { recursive: true });
+  assert.equal(writeStoreFile(path.join(store, 'config.json'), '{"mode":"on"}\n'), true);
+});
+
+// ---------------------------------------------------------------------------
+// R7 — a short write must never silently truncate an appended ledger record
+// ---------------------------------------------------------------------------
+
+// `fs.writeSync` issues ONE write(2) and does not loop: a short write left the
+// ledger holding a partial JSON line and reported success.
+test('R7: appendFileContained loops until the whole record is written', () => {
+  const root = tempDir('sio-append-');
+  const record = `${JSON.stringify({ path: 'docs/solutions/x.md', learning: 'sql/x', at: '2026-01-01' })}\n`;
+  const realWrite = fs.writeSync;
+  let shortened = false;
+  fs.writeSync = (fd, buf, off, len, ...rest) => {
+    const offset = typeof off === 'number' ? off : 0;
+    const length = typeof len === 'number' ? len : buf.length - offset;
+    if (!shortened && length > 1) {
+      shortened = true;
+      return realWrite(fd, buf, offset, 1);
+    }
+    return realWrite(fd, buf, offset, length, ...rest);
+  };
+  let written;
+  try {
+    written = appendFileContained(root, 'consolidated.jsonl', record);
+  } finally {
+    fs.writeSync = realWrite;
+  }
+  assert.ok(shortened, 'the test must actually have forced a short write');
+  assert.ok(written, 'the append must still succeed');
+  assert.equal(fs.readFileSync(path.join(root, 'consolidated.jsonl'), 'utf8'), record, 'a short write must never truncate the record');
+});
+
+// ---------------------------------------------------------------------------
+// R7 — an unmerged porcelain code is not a hand deletion
+// ---------------------------------------------------------------------------
+
+// The `code.includes('D')` branch ran BEFORE the UNMERGED_CODES carve-out, so
+// `DD`/`UD`/`DU` were recorded as hand deletions → a governance `retire` that
+// survives `consolidate --rebuild`, for a conflict nobody resolved.
+test('R7: an unmerged (deleted-by-one-side) learning is never absorbed as a hand deletion', () => {
+  const c = ctx();
+  const id = seedLearning(c, 'unmerged-victim');
+  const { dir } = ensureStore(c.ws, { home: c.harnessHome });
+  const rel = 'learnings/sql/unmerged-victim.md';
+  const commit = (msg) => git(dir, ['-c', 'user.name=t', '-c', 'user.email=t@example.test', 'commit', '-qm', msg]);
+
+  // REAL git conflict state: one side edits the learning, the other deletes it.
+  const base = git(dir, ['rev-parse', 'HEAD']).stdout.trim();
+  git(dir, ['checkout', '-q', '-b', 'edited']);
+  fs.appendFileSync(path.join(dir, rel), '\nEdited on the branch.\n', 'utf8');
+  git(dir, ['add', '-A']);
+  commit('edit on branch');
+  git(dir, ['checkout', '-q', base]);
+  git(dir, ['checkout', '-q', '-b', 'deleted-side']);
+  fs.rmSync(path.join(dir, rel));
+  git(dir, ['add', '-A']);
+  commit('delete on branch');
+  const merge = git(dir, ['merge', '--no-commit', 'edited']);
+  assert.notEqual(merge.status, 0, 'the merge must actually conflict');
+
+  const entry = parsePorcelainZ(git(dir, ['status', '--porcelain', '-uall', '-z']).stdout).find((e) => e.path === rel);
+  assert.ok(entry, 'git must report the conflicted learning');
+  assert.equal(entry.status.includes('D'), true, `the unmerged code must contain D, got ${JSON.stringify(entry.status)}`);
+  assert.ok(['DD', 'AU', 'UD', 'UA', 'DU', 'AA', 'UU'].includes(entry.status), `must be an unmerged code, got ${JSON.stringify(entry.status)}`);
+
+  const res = absorbHandEdits({ workspace: c.ws, home: c.harnessHome, log: () => {} });
+  assert.deepEqual(res.deleted, [], 'an unresolved conflict is not a hand deletion');
+  assert.equal(readGovernance(dir).get(id)?.action, undefined, 'and it must never record a governance retire');
 });

@@ -393,7 +393,20 @@ export function appendFileContained(root, rel, content, { newlineGuard = false }
       fs.readSync(fd, last, 0, 1, stat.size - 1);
       if (last.toString('utf8') !== '\n') prefix = '\n';
     }
-    fs.writeSync(fd, Buffer.from(prefix + content, 'utf8'));
+    // WRITE UNTIL IT IS ALL WRITTEN. `fs.writeSync` issues ONE `write(2)` and
+    // does not loop, and `write(2)` is permitted to write fewer bytes than it
+    // was given. The return value used to be ignored, so a short write left a
+    // TRUNCATED record — half a JSON line — in an append-only ledger and
+    // reported success. Zero progress cannot be retried usefully (it is not the
+    // documented EAGAIN shape for a blocking fd), so it refuses rather than
+    // spinning.
+    const buf = Buffer.from(prefix + content, 'utf8');
+    let written = 0;
+    while (written < buf.length) {
+      const n = fs.writeSync(fd, buf, written, buf.length - written);
+      if (!(n > 0)) return refuse();
+      written += n;
+    }
     close();
     return full;
   } catch {

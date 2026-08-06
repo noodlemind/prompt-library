@@ -268,6 +268,18 @@ export function mirrorLearnings({ workspace, home, log = () => {}, retiredIds = 
  * outside file into store history and a workspace teaching snapshot, then
  * overwriting that outside file with a canonically serialized learning. Such a
  * path is refused with a logged note, never followed.
+ *
+ * THAT COVERS A SYMLINK AT A LEARNING FILE, AND ONLY THAT. A symlink at a
+ * store-owned DIRECTORY (`learnings/`, a domain directory, `branches/`, a
+ * bucket, a bucket's learnings tree) never reaches this loop at all:
+ * LEARNING_FILE_RE matches `…/<domain>/<slug>.md`, so a directory plant yields
+ * no entry to quarantine, and every learning it hides looks to absorb like it
+ * was simply never there. Worse, absorb would then read the resulting `D`
+ * entries as a human deleting every learning at once and record a governance
+ * `retire` for each. That whole class is handled UPSTREAM instead, before this
+ * function is ever called: `withStoreTransaction` (store.mjs) sweeps the owned
+ * directory shapes under the lock — quarantine, restore from the last commit,
+ * then refuse the run — and `commitStore` refuses to stage while one stands.
  */
 /** Truncate a store-owned file through the choke point, failing closed: a wipe
  * that was refused must never be reported as a completed purge/rebuild. */
@@ -364,6 +376,16 @@ export function absorbHandEdits({ workspace, home, log = () => {} }) {
       continue;
     }
 
+    // THE UNMERGED CARVE-OUT RUNS FIRST, BEFORE ANY CODE IS INTERPRETED (R7).
+    // A store repo never merges, and absorbing half a conflict would be worse
+    // than leaving it — but the carve-out used to sit BELOW the deletion branch,
+    // and every unmerged code that names a deletion (`DD` both deleted, `UD`
+    // deleted by them, `DU` deleted by us) contains a literal `D`. Those states
+    // were therefore recorded as HAND DELETIONS: a governance `retire` that
+    // binds both layers and survives `consolidate --rebuild`, written for a
+    // conflict nobody has resolved yet. The carve-out never ran, exactly
+    // contrary to the comment that claimed it did. Order is the fix.
+    if (UNMERGED_CODES.has(code)) continue;
     if (code.includes('D')) {
       // Human deletion always wins — nothing left to parse or re-render.
       deleted.push(id);
@@ -376,10 +398,7 @@ export function absorbHandEdits({ workspace, home, log = () => {} }) {
     // the next `git add -A`:
     //   `??` planted and never tracked   `M` modified in the worktree/index
     //   `A`  staged but never committed  `T` type changed back to a real file
-    // Unmerged codes are carved out explicitly: a store repo never merges, and
-    // absorbing half a conflict would be worse than leaving it. Everything else
-    // (rename-into, copy) stays out of absorb scope as before.
-    if (UNMERGED_CODES.has(code)) continue;
+    // Everything else (rename-into, copy) stays out of absorb scope as before.
     if (code !== '??' && ![...code].some((ch) => ABSORBABLE_CODES.has(ch))) continue;
 
     const text = readLearningFile(file);

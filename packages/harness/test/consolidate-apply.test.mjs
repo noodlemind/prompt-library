@@ -1059,11 +1059,13 @@ test('an ADD asserting kind: fix for a real file whose own frontmatter says kind
 });
 
 test('updateFrontmatterField inserts a missing field on a CRLF-terminated learning file instead of silently no-opping', () => {
-  // The fixture lives at a REAL learning path shape (`<root>/learnings/<domain>/
-  // <slug>.md`): updateFrontmatterField reads and writes through the store-io
-  // choke point, which derives its containment root from exactly that shape and
-  // refuses anything else outright.
-  const file = path.join(tempDir('apply-crlf-'), 'learnings', 'sql', 'crlf-learning.md');
+  // The fixture lives at a REAL store path (`<home>/knowledge/<id>/learnings/
+  // <domain>/<slug>.md`): updateFrontmatterField reads and writes through the
+  // store-io choke point, which derives its containment root from exactly that
+  // shape — and requires the derived root to sit inside a `knowledge/`
+  // directory, since `storeDirForId` is the only thing that ever builds one —
+  // refusing anything else outright.
+  const file = path.join(tempDir('apply-crlf-'), 'knowledge', 'repo-id', 'learnings', 'sql', 'crlf-learning.md');
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const text = '---\r\ntrigger: "x"\r\nstatus: active\r\n---\r\n\r\nbody\r\n';
   fs.writeFileSync(file, text);

@@ -657,11 +657,17 @@ runs `git status --porcelain -uall` in the store first and commits any dirty edi
 - The absorbed content may exceed the 1,200-byte learning cap — human authority overrides
   the cap for hand edits (logged, not rejected; the cap binds only the sole writer's own
   ops).
-- **A symlink at ANY store path is inert — not just refused, and not just for learnings.**
+- **A symlink at any store FILE is inert — not just refused, and not just for learnings.**
+  (Store *directories* are a separate case with a separate answer — see the next bullet.)
   Every read, write, append, delete, and existence check of a file the store owns goes
   through ONE internal choke point (`lib/knowledge/store-io.mjs`), built on the shared
   `fs-safe` primitives and contained against the STORE root, which it derives from the
-  path's own **allow-listed shape** rather than from a caller-supplied argument. The
+  path's own **allow-listed shape** rather than from a caller-supplied argument. That
+  derivation makes the root a fixed function of the path; it does not by itself prove the
+  path *is* a store path, since the shape matches by basename anywhere on the filesystem —
+  so the derived root must additionally sit inside a `knowledge/` directory, the only shape
+  `storeDirForId` ever builds. (Without that check `writeStoreFile('~/.ssh/config.json')`
+  was accepted and contained against `~/.ssh`.) The
   allow-list covers `learnings/<domain>/<slug>.md` and its `branches/<key>/` equivalent,
   the store-root metadata (`INDEX.md`, `consolidated.jsonl`, `governance.jsonl`,
   `config.json`, `store.json`, `stale.json`, `.gitignore`), the bucket metadata
@@ -697,8 +703,29 @@ runs `git status --porcelain -uall` in the store first and commits any dirty edi
   ` T` (and staged `A `) `continue`d: never quarantined, never logged, and the next
   `git add -A` committed the symlink into store history while `listLearnings` silently
   dropped the learning. The symlink check now runs before any code filter that could
-  exclude it, and the filter itself is an allow-list (`??`, `M`, `A`, `T`, with unmerged
-  codes carved out explicitly) rather than a deny-list.
+  exclude it, and the filter itself is an allow-list (`??`, `M`, `A`, `T`) rather than a
+  deny-list. The unmerged codes are carved out **before** any code is interpreted: `DD`,
+  `UD` and `DU` all contain a literal `D`, so while the carve-out sat below the deletion
+  branch an unresolved conflict was recorded as a hand deletion — a governance `retire`
+  that binds both layers and survives `consolidate --rebuild`.
+- **A symlink at a store-owned DIRECTORY is quarantined, restored, and then refused.**
+  The choke point's allow-list covers file *leaves*, and the absorb loop's learning-path
+  regex matches `…/<domain>/<slug>.md` — so a symlink at `<store>/learnings`, a domain
+  directory, `<store>/branches`, a bucket, or a bucket's learnings tree produced **no
+  absorb entry at all**: nothing quarantined it, every read path silently returned nothing
+  (the ancestor walk correctly refuses the whole subtree), and the next `git add -A`
+  recorded the link as a `120000` blob while the CLI reported success. Once tracked it is
+  self-reviving — every rollback `git reset --hard` re-materializes it, and `git clean -fd`
+  cannot sweep a tracked path. There is no arbitrary-file read or write in it (git stores
+  the link's target *path*, not the target's bytes, and writes still refuse via the
+  ancestor walk); it is silent, committed, reported-as-success **data loss**.
+  Two guards close it. `withStoreTransaction` sweeps the owned directory shapes as the
+  first thing it does under the lock — before crash recovery, before `fn`, before any git
+  read — quarantines each planted link, recreates the real directory, restores the subtree
+  from the last commit so the hidden learnings **reappear**, and then refuses *this* run
+  naming the directory. And `commitStore` — the one place `git add -A` runs — refuses to
+  stage at all while such a link stands, so no present or future caller can reach staging
+  around the sweep.
 - **The store lock cannot be lost, and is never released by a non-owner.** The first
   transaction to open a store writes (and, for stores created by an older CLI, migrates in)
   a `<store>/.gitignore` covering `/.lock/`, `/.lock.stale-*`, and `/.quarantine/`. It is

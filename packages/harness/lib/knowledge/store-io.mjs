@@ -36,7 +36,7 @@ import {
  * ledger, config, schema marker, stale report, bucket metadata, the lock owner
  * stamp, the transaction journal — goes through the functions below; `fs` is
  * not used on a store-owned path anywhere else in lib/knowledge/. A symlink
- * planted at ANY store path is therefore INERT:
+ * planted at ANY store FILE path is therefore INERT:
  *   - never read through          (readStoreFile → readFileNoFollow)
  *   - never written through       (writeStoreFile quarantines the link first)
  *   - never appended through      (appendStoreFile → O_NOFOLLOW append)
@@ -48,12 +48,29 @@ import {
  * what let an earlier "refused in absorb" fix still end in a truncated
  * `~/.zshrc`.
  *
- * NO ROOT ARGUMENT, BY DESIGN. An earlier draft took `(root, file)`; that just
- * moves the defect to "which root did this caller pass?" — a caller holding a
- * bucket root (`<store>/branches/<key>`) would contain against the bucket, and
- * a symlinked `<store>/branches` would escape containment while satisfying it.
- * The containment root is DERIVED from the path's own required shape instead,
- * so no caller can supply a wrong one. Extending the module to metadata
+ * FILE LEAVES ARE ONLY HALF THE STORE. The paragraph above was, for one round,
+ * written as if it covered every plant; it covered every plant AT A FILE. A
+ * symlink at a store-owned DIRECTORY (`<store>/learnings`, a domain directory,
+ * `<store>/branches`, a bucket, a bucket's learnings tree) produced no absorb
+ * entry at all — LEARNING_FILE_RE (store.mjs) matches
+ * `…/<domain>/<slug>.md` and nothing else — so nothing quarantined it, every
+ * read path silently returned NOTHING (assertNoSymlinkAncestors correctly
+ * refuses the whole subtree), and the next `git add -A` recorded the link as a
+ * `120000` blob while the CLI reported success. That plant is self-reviving
+ * once tracked: every rollback `git reset --hard` re-materializes it and
+ * `git clean -fd` cannot sweep a tracked path. There is no arbitrary-file
+ * READ or WRITE in it — git stores the link's target path, not the target's
+ * bytes, and writes still refuse via the ancestor walk — but silent,
+ * committed, reported-as-success data loss is its own failure.
+ * `findSymlinkedStoreDirectories` / `reclaimSymlinkedStoreDirectory` below
+ * close it, and `commitStore` (store.mjs) refuses to stage while one stands.
+ *
+ * NO ROOT ARGUMENT FOR A FILE PATH, BY DESIGN. An earlier draft took
+ * `(root, file)`; that just moves the defect to "which root did this caller
+ * pass?" — a caller holding a bucket root (`<store>/branches/<key>`) would
+ * contain against the bucket, and a symlinked `<store>/branches` would escape
+ * containment while satisfying it. The containment root is DERIVED from the
+ * path's own required shape instead. Extending the module to metadata
  * therefore extends the ALLOW-LIST of shapes, never the signature:
  *
  *     <storeRoot>/learnings/<domain>/<slug>.md
@@ -67,6 +84,19 @@ import {
  * Anything not matching that allow-listed shape (rule 3: allow-lists, not
  * deny-lists) is refused outright — there is no "unknown shape, assume the
  * caller knows best" path.
+ *
+ * WHAT THAT DERIVATION DOES AND DOES NOT PROVE. It proves the containment root
+ * is a fixed function of the path, so two callers holding the same path always
+ * contain against the same root; it does NOT prove the path is a store path.
+ * The shape match is by BASENAME, anywhere on the filesystem, so
+ * `<anything>/config.json` matched and `writeStoreFile('/Users/x/.ssh/config.json')`
+ * was accepted with `/Users/x/.ssh` as its own containment root — harmless
+ * only because every present-day caller happens to pass a real store path,
+ * which is an argument about callers, not about this module. The
+ * `isPlausibleStoreRoot` check below removes the "happens to" from that
+ * sentence: every store this CLI can build lives at `<home>/knowledge/<id>`
+ * (storeDirForId, store.mjs is the ONE constructor), so a derived root whose
+ * parent is not named `knowledge` is not a store root and the path is refused.
  */
 
 /** Quarantine bucket for planted symlinks. Gitignored by the store `.gitignore`
@@ -95,8 +125,30 @@ const BUCKET_FILES = new Set(['INDEX.md', 'consolidated.jsonl', 'meta.json']);
  * span rather than above it. */
 const NESTED_STORE_FILES = new Set(['.git/harness-txn.json', '.lock/owner.json']);
 
+/**
+ * The directory every knowledge store sits directly inside. `storeDirForId`
+ * (store.mjs) is the ONE place a store path is ever constructed, and it is
+ * always `path.join(home, 'knowledge', id)` — so `<parent>/knowledge/<id>` is
+ * not a heuristic about store paths, it is their definition.
+ */
+const STORE_PARENT_DIR = 'knowledge';
+
+/**
+ * Whether a DERIVED root can be a knowledge store root at all. Without this,
+ * the shape allow-list matches by basename ANYWHERE on the filesystem: a
+ * caller passing `/Users/x/.ssh/config.json` derived `/Users/x/.ssh` as "the
+ * store root" and was accepted, contained against a directory that is not a
+ * store. Refusing an implausible root turns "no present-day caller passes a
+ * wrong path" (a claim about callers) into "a wrong path is refused" (a claim
+ * about this module).
+ */
+function isPlausibleStoreRoot(storeRoot) {
+  return path.basename(path.dirname(storeRoot)) === STORE_PARENT_DIR;
+}
+
 function parts(rootParts, full, kind, bucket) {
   const storeRoot = rootParts.join(path.sep) || path.sep;
+  if (!isPlausibleStoreRoot(storeRoot)) return null;
   const rel = path.relative(storeRoot, full);
   if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) return null;
   return { storeRoot, rel, full, kind, bucket };
@@ -270,28 +322,155 @@ export function removeStoreFile(file) {
 export function quarantineSymlinkedStorePath(file) {
   const p = storePathParts(file);
   if (!p) return null;
-  const parentRel = path.dirname(p.rel);
-  if (!assertNoSymlinkAncestors(p.storeRoot, parentRel)) return null;
+  return quarantineLink(p.storeRoot, p.rel);
+}
+
+/**
+ * The rename itself, shared by the file-shaped and directory-shaped entry
+ * points: verify every ancestor from the store root down is a real directory,
+ * verify the leaf really IS a symlink, then rename the LINK (never its target)
+ * into `<store>/.quarantine/`. Returns the store-relative quarantine path, or
+ * null when there was nothing to quarantine or it could not be moved.
+ */
+function quarantineLink(storeRoot, rel) {
+  if (!assertNoSymlinkAncestors(storeRoot, path.dirname(rel))) return null;
+  const full = path.join(storeRoot, rel);
   let stat;
   try {
-    stat = fs.lstatSync(p.full);
+    stat = fs.lstatSync(full);
   } catch {
     return null; // nothing there (or unreadable) — nothing to quarantine
   }
   if (!stat.isSymbolicLink()) return null;
-  const destRel = path.join(
-    QUARANTINE_DIR,
-    `${p.rel.split(path.sep).join('__')}.${Date.now()}-${process.pid}.symlink`
-  );
-  const dest = assertNoSymlinkAncestors(p.storeRoot, destRel);
+  const destRel = path.join(QUARANTINE_DIR, `${rel.split(path.sep).join('__')}.${Date.now()}-${process.pid}.symlink`);
+  const dest = assertNoSymlinkAncestors(storeRoot, destRel);
   if (!dest) return null;
   try {
     fs.mkdirSync(path.dirname(dest), { recursive: true });
-    fs.renameSync(p.full, dest);
+    fs.renameSync(full, dest);
   } catch {
     return null;
   }
   return destRel.split(path.sep).join('/');
+}
+
+// ---------------------------------------------------------------------------
+// Store-owned DIRECTORY shapes.
+//
+// WHY THE DERIVATION RUNS THE OTHER WAY HERE. A store FILE names its own root
+// (see storePathParts): the shape is long enough that the root is a function of
+// the path. A store DIRECTORY is not — `<anything>/learnings` is one path
+// component, so deriving a root upward from it would accept any directory on
+// the filesystem called `learnings`. These functions therefore ENUMERATE
+// DOWNWARD from a store root the caller already holds (store.mjs's `dir`, the
+// same value it passes to `commitStore` and every git call), and every `rel`
+// they act on is produced by their OWN walk — never taken from a caller, never
+// derived from attacker-controlled text. `isPlausibleStoreRoot` still gates the
+// root, so a caller cannot point the sweep at an arbitrary directory tree.
+//
+// The walk never follows a link: `lstat` decides each component, and
+// `readdirSync(withFileTypes)` reports a child's OWN type, so a symlinked
+// directory is detected instead of being descended into.
+// ---------------------------------------------------------------------------
+
+/** `learnings/` and, one level down, its domain directories. A store `learnings`
+ * directory may contain ONLY real domain directories, so ANY symlink directly
+ * inside it is a plant regardless of name. */
+function scanLearningsTree(storeRoot, layerRel, found) {
+  const rel = layerRel ? path.join(layerRel, 'learnings') : 'learnings';
+  const full = path.join(storeRoot, rel);
+  let stat;
+  try {
+    stat = fs.lstatSync(full);
+  } catch {
+    return; // absent — nothing to scan
+  }
+  if (stat.isSymbolicLink()) {
+    found.push(rel);
+    return; // never descend through a link
+  }
+  if (!stat.isDirectory()) return;
+  let entries;
+  try {
+    entries = fs.readdirSync(full, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  for (const e of entries) {
+    if (e.isSymbolicLink()) found.push(path.join(rel, e.name));
+  }
+}
+
+/**
+ * Every store-owned DIRECTORY that is currently a symlink, as `/`-joined
+ * store-relative paths:
+ *
+ *     learnings                              learnings/<domain>
+ *     branches                               branches/<key>
+ *     branches/<key>/learnings               branches/<key>/learnings/<domain>
+ *
+ * Returns `[]` for a clean store, an implausible root, or an unreadable one —
+ * a scan that cannot see is never mistaken for a scan that found nothing,
+ * because callers treat a NON-empty result as the alarm and pair this with the
+ * `commitStore` refusal that fails closed either way.
+ */
+export function findSymlinkedStoreDirectories(storeRoot) {
+  const root = path.resolve(storeRoot);
+  if (!isPlausibleStoreRoot(root)) return [];
+  const found = [];
+  scanLearningsTree(root, '', found);
+  const branchesFull = path.join(root, 'branches');
+  let branchesStat = null;
+  try {
+    branchesStat = fs.lstatSync(branchesFull);
+  } catch {
+    branchesStat = null;
+  }
+  if (branchesStat) {
+    if (branchesStat.isSymbolicLink()) {
+      found.push('branches');
+    } else if (branchesStat.isDirectory()) {
+      let keys = [];
+      try {
+        keys = fs.readdirSync(branchesFull, { withFileTypes: true });
+      } catch {
+        keys = [];
+      }
+      for (const k of keys) {
+        const keyRel = path.join('branches', k.name);
+        if (k.isSymbolicLink()) found.push(keyRel);
+        else if (k.isDirectory()) scanLearningsTree(root, keyRel, found);
+      }
+    }
+  }
+  return found.map((r) => r.split(path.sep).join('/'));
+}
+
+/**
+ * Make a symlinked store DIRECTORY inert and put the real directory back:
+ * quarantine the link (same rename discipline as the file case — the link
+ * itself moves, its target is never touched) and recreate an empty real
+ * directory in its place, so the learnings the plant hid can be restored into
+ * it and every read path stops silently returning nothing.
+ *
+ * Returns `{ quarantined, ok }`. `ok` is false when the link is still standing
+ * at a live store path — the caller must then refuse rather than proceed, since
+ * a `git add -A` would record it as a `120000` blob.
+ */
+export function reclaimSymlinkedStoreDirectory(storeRoot, rel) {
+  const root = path.resolve(storeRoot);
+  if (!isPlausibleStoreRoot(root)) return { quarantined: null, ok: false };
+  const relNative = String(rel).split('/').join(path.sep);
+  const quarantinedTo = quarantineLink(root, relNative);
+  if (!quarantinedTo) return { quarantined: null, ok: false };
+  const full = assertNoSymlinkAncestors(root, relNative);
+  if (!full) return { quarantined: quarantinedTo, ok: false };
+  try {
+    fs.mkdirSync(full, { recursive: true });
+  } catch {
+    return { quarantined: quarantinedTo, ok: false };
+  }
+  return { quarantined: quarantinedTo, ok: true };
 }
 
 // ---------------------------------------------------------------------------

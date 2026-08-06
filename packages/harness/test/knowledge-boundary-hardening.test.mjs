@@ -656,7 +656,9 @@ test('a branch-lane re-teach cannot append a confirm that cancels a standing GOL
 });
 
 test('rebuildIndex excludes branch→golden tombstones so INDEX.md agrees with retrievalExclusion', () => {
-  const dir = tempDir('bh-index-');
+  // A REAL store path shape (`<home>/knowledge/<id>`): the store-io choke point
+  // refuses a derived root that could not be a store root at all.
+  const dir = path.join(tempDir('bh-index-'), 'knowledge', 'repo-id');
   fs.mkdirSync(path.join(dir, 'learnings', 'sql'), { recursive: true });
   fs.writeFileSync(
     path.join(dir, 'learnings', 'sql', 'gone.md'),

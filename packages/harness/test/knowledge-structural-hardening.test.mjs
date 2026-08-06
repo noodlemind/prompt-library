@@ -115,7 +115,12 @@ test('S1: a planted symlink at a learning path cannot be strengthened — the ou
 });
 
 test('S1: writeLearningFile never writes THROUGH a symlinked leaf, and refuses a non-learning path shape', () => {
-  const root = tempDir('sh-io-');
+  // A REAL store path shape (`<home>/knowledge/<id>`): the choke point refuses a
+  // derived root that could not be a store root at all, so `writeStoreFile` can
+  // no longer be handed `/Users/x/.ssh/config.json` and contain it against its
+  // own parent.
+  const root = path.join(tempDir('sh-io-'), 'knowledge', 'repo-id');
+  fs.mkdirSync(root, { recursive: true });
   const victim = path.join(root, 'victim.txt');
   fs.writeFileSync(victim, 'OUTSIDE\n', 'utf8');
   const link = path.join(root, 'learnings', 'sql', 'linked.md');

@@ -11,6 +11,8 @@ import {
   appendStoreFile,
   removeStoreFile,
   storeFileState,
+  findSymlinkedStoreDirectories,
+  reclaimSymlinkedStoreDirectory,
   QUARANTINE_DIR,
 } from './store-io.mjs';
 
@@ -777,6 +779,25 @@ export function listLearnings(dir) {
  * output is neither.
  */
 export function commitStore(dir, message) {
+  // THE LAST LINE BEFORE `git add -A` (R7). A symlink at a store-owned
+  // DIRECTORY is the one plant that reaches staging: it produces no absorb
+  // entry (LEARNING_FILE_RE matches file leaves only), every read path silently
+  // returns nothing through it, and `git add -A` records it as a `120000` blob
+  // — after which it is SELF-REVIVING, since every rollback `git reset --hard`
+  // re-materializes a tracked path and `git clean -fd` cannot sweep one.
+  // Staging happens in exactly this one function, so the refusal belongs here:
+  // no present or future caller can reach `git add -A` around it. Detect and
+  // REFUSE only — quarantining is a mutation, and `withStoreTransaction`
+  // (which owns the lock, the journal and the rollback) is where the store is
+  // allowed to be repaired.
+  const plantedDirs = findSymlinkedStoreDirectories(dir);
+  if (plantedDirs.length) {
+    return {
+      committed: false,
+      ok: false,
+      stderr: `refusing to stage the store: a symlink stands at store-owned director${plantedDirs.length > 1 ? 'ies' : 'y'} ${plantedDirs.join(', ')} — staging it would commit the link into store history and hide every learning under it`,
+    };
+  }
   const addRes = spawnSync('git', ['add', '-A'], { cwd: dir, encoding: 'utf8' });
   if (addRes.status !== 0) {
     return { committed: false, ok: false, stderr: addRes.stderr || `git add exited ${addRes.status}` };
@@ -1343,6 +1364,59 @@ function clearTxnJournal(dir, { token = null, force = false } = {}) {
 }
 
 /**
+ * SYMLINKED STORE DIRECTORIES: QUARANTINE, RESTORE, THEN REFUSE (R7).
+ *
+ * Run under the lock as the FIRST thing a transaction does — before crash
+ * recovery, before `fn`, before anything reads the tree — because every step
+ * after it is wrong in the presence of one:
+ *   - `listLearnings` returns NOTHING through a symlinked `learnings/`
+ *     (assertNoSymlinkAncestors correctly refuses the whole subtree), so absorb
+ *     would see a store-wide "the human deleted everything" and record a
+ *     governance `retire` per learning;
+ *   - recovery's `git reset --hard` would try to check paths back out THROUGH
+ *     the link;
+ *   - `git add -A` would record the link itself as a `120000` blob, after which
+ *     it is self-reviving.
+ *
+ * Three steps, in this order:
+ *   1. QUARANTINE the link (`reclaimSymlinkedStoreDirectory`, store-io.mjs) —
+ *      the link moves, its target is never touched — and put a real, empty
+ *      directory back in its place.
+ *   2. RESTORE what the last commit held under that directory (`git reset` to
+ *      HEAD for the path, then `git checkout`), so the learnings the plant hid
+ *      REAPPEAR instead of staying invisible. Nothing is destroyed by this: the
+ *      plant already replaced the whole subtree, so there is no worktree state
+ *      under it left to preserve.
+ *   3. REFUSE the transaction anyway. The auto-heal makes the NEXT run clean;
+ *      this run has already read a store that was lying to it, and "we found a
+ *      symlink where your learnings live" is not something to fix silently.
+ *
+ * Returns `{ planted, note }` — `planted` empty means nothing was found and the
+ * transaction proceeds normally.
+ */
+function healSymlinkedStoreDirectories(dir, git) {
+  const planted = findSymlinkedStoreDirectories(dir);
+  if (!planted.length) return { planted, note: null };
+  const notes = [];
+  for (const rel of planted) {
+    const { quarantined, ok } = reclaimSymlinkedStoreDirectory(dir, rel);
+    notes.push(
+      ok
+        ? `${rel} was a symlink — never followed; moved to ${quarantined}`
+        : `${rel} is a symlink this CLI could not quarantine — move it aside by hand`
+    );
+    if (!ok || !git) continue;
+    // Restore the subtree from the last commit. Both halves, exactly as
+    // discardResiduePath does: `reset` first so a staged deletion cannot make
+    // `checkout` a no-op, then `checkout` to materialize the files again.
+    const opts = { cwd: dir, encoding: 'utf8' };
+    spawnSync('git', ['reset', '-q', 'HEAD', '--', rel], opts);
+    spawnSync('git', ['checkout', '-q', '--', rel], opts);
+  }
+  return { planted, note: notes.join('; ') };
+}
+
+/**
  * Crash recovery, run under the freshly-acquired lock: a journal still on
  * disk means the previous holder never reached its commit or rollback. Every
  * path dirty NOW that the journal did not record as dirty THEN is that dead
@@ -1533,6 +1607,29 @@ export function withStoreTransaction(workspace, { home, label, afterCommit } = {
   // a store mutation must never happen. It runs here, before recovery, because
   // recovery's own rollback is the first thing that depends on it.
   ensureStoreGitignore(dir);
+  // BEFORE RECOVERY, BEFORE `fn`, BEFORE ANY GIT READ (R7). A symlink at a
+  // store-owned directory makes every step below operate on a store that is
+  // lying about its own contents — see healSymlinkedStoreDirectories. The
+  // link is quarantined and the real directory restored (so the next run is
+  // clean), and THIS run refuses: nothing has been mutated by the transaction
+  // itself at this point, so refusing costs only the run.
+  const dirGuard = healSymlinkedStoreDirectories(dir, git);
+  if (dirGuard.planted.length) {
+    releaseStoreLock(lockPath, token);
+    return {
+      ok: false,
+      locked: false,
+      rolledBack: false,
+      error: new Error(
+        `a symlink stands at store-owned director${dirGuard.planted.length > 1 ? 'ies' : 'y'} ${dirGuard.planted.join(', ')} — every learning under it was hidden from every read path; ${dirGuard.note}`
+      ),
+      committed: false,
+      result: null,
+      dir,
+      git,
+      staleLockNote: [lock.staleLockNote, dirGuard.note].filter(Boolean).join('; ') || null,
+    };
+  }
   // Crash recovery BEFORE anything reads the tree (see
   // recoverInterruptedTransaction): a dead writer's uncommitted residue is
   // discarded here rather than inherited by the absorb step below as human
