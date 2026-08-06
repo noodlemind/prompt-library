@@ -1,7 +1,7 @@
 // Persistent structural codebase index (blueprint P3). Lives OUTSIDE the
-// knowledge git store at ~/.harness/index/<repo-id>/structural/ — derived and
-// rebuildable: deleting the directory never loses knowledge, and it never
-// touches governance history. Four tables:
+// knowledge git store at ~/.harness/index/<repo-id>/<worktree-id>/structural/
+// — derived and rebuildable: deleting the directory never loses knowledge, and
+// it never touches governance history. Four tables:
 //   files.json    per-file { hash, mtime, size, symbols, imports, complexity,
 //                 defs, refs, tier } — the superset the incremental rebuild
 //                 and symbol table are derived from
@@ -33,6 +33,7 @@ import crypto from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { harnessGlobalHome } from '../paths.mjs';
 import { repoId, inertLine } from '../knowledge/store.mjs';
+import { worktreeId } from '../structural/shape.mjs';
 import { writeFileContained, readFileNoFollow } from '../fs-safe.mjs';
 import { redactSecrets } from '../secret-scan.mjs';
 import { estimateTokens } from '../token-meter.mjs';
@@ -61,53 +62,92 @@ function sha256(text) {
   return crypto.createHash('sha256').update(text).digest('hex');
 }
 
-/** ~/.harness/index/<repo-id>/structural — respects HARNESS_HOME via harnessGlobalHome. */
+/** ~/.harness/index/<repo-id>/<worktree-id>/structural — respects HARNESS_HOME
+ * via harnessGlobalHome. The worktree segment (shape.mjs `worktreeId`) keeps
+ * co-located worktrees of one repo from serving each other's tables: they
+ * share a `repoId` and can sit at the same `meta.sha` with different content. */
 export function structuralIndexDir(workspace, { home } = {}) {
-  return path.join(home || harnessGlobalHome(), 'index', repoId(workspace), 'structural');
+  return path.join(home || harnessGlobalHome(), 'index', repoId(workspace), worktreeId(workspace), 'structural');
+}
+
+/**
+ * Read one table. Distinguishes ABSENT (`{ value: null, error: null }`) from
+ * UNREADABLE — oversized past the fs-safe cap, symlinked, or corrupt JSON.
+ * Collapsing the two (the old `|| {}`) turned a 10 MB+ or truncated table into
+ * a silent empty one: a permanent silent full rebuild plus a bogus
+ * "everything added" delta, with nothing on any surface saying so.
+ */
+function readTable(dir, name) {
+  const full = path.join(dir, name);
+  if (!fs.existsSync(full)) return { value: null, error: null };
+  const body = readFileNoFollow(full, { root: dir });
+  if (body === null) return { value: null, error: `${name} is unreadable (oversized, symlink, or open failure)` };
+  try {
+    return { value: JSON.parse(body), error: null };
+  } catch {
+    return { value: null, error: `${name} is not valid JSON` };
+  }
 }
 
 function readJson(dir, name) {
-  const body = readFileNoFollow(path.join(dir, name), { root: dir });
-  if (body === null) return null;
-  try {
-    return JSON.parse(body);
-  } catch {
-    return null;
-  }
+  return readTable(dir, name).value;
+}
+
+function readMeta(dir) {
+  const meta = readJson(dir, 'meta.json');
+  if (!meta || typeof meta !== 'object') return null;
+  // `version` is written by the builder, so it is checked by the reader: an
+  // index from a NEWER writer must be skipped, never half-understood.
+  if (!Number.isFinite(meta.version) || meta.version > STRUCTURAL_INDEX_VERSION) return null;
+  return meta;
 }
 
 /**
  * Synchronous, tolerant read of the prebuilt index. Returns
- * { dir, meta, files, symbols, graph } or null when no readable index exists.
- * The `<home>/index` pre-check keeps the common no-index case free of the
- * repoId git spawn — orient calls this every session.
+ * { dir, meta, files, symbols, graph, unreadable } or null when no readable
+ * index exists. `unreadable` lists tables that exist but could not be read —
+ * loud rather than silently empty (doctor S1 surfaces it, the builder refuses
+ * to diff against it). The `<home>/index` pre-check keeps the common no-index
+ * case free of the repoId git spawn — orient calls this every session.
  */
 export function readStructuralIndex(workspace, { home } = {}) {
   if (!fs.existsSync(path.join(home || harnessGlobalHome(), 'index'))) return null;
   const dir = structuralIndexDir(workspace, { home });
   if (!fs.existsSync(path.join(dir, 'meta.json'))) return null;
-  const meta = readJson(dir, 'meta.json');
-  if (!meta || typeof meta !== 'object' || !meta.version) return null;
+  const meta = readMeta(dir);
+  if (!meta) return null;
+  const files = readTable(dir, 'files.json');
+  const symbols = readTable(dir, 'symbols.json');
+  const graph = readTable(dir, 'graph.json');
+  const unreadable = [files.error, symbols.error, graph.error].filter(Boolean);
   return {
     dir,
     meta,
-    files: readJson(dir, 'files.json') || {},
-    symbols: readJson(dir, 'symbols.json') || {},
-    graph: readJson(dir, 'graph.json') || {},
+    files: files.value || {},
+    symbols: symbols.value || {},
+    graph: graph.value || {},
+    unreadable,
   };
 }
 
 /**
  * The orient-side gate: hand back the index ONLY when its generation stamp
  * matches the current HEAD — otherwise consumers keep their unchanged lexical
- * behavior. Cheap when absent (one existsSync, no git spawn).
+ * behavior. Cheap when absent (one existsSync, no git spawn) and cheap when
+ * STALE: meta.json is read and compared FIRST, so the common stale case never
+ * parses (and discards) multi-megabyte tables on every orient turn.
  */
 export function readStructuralIndexIfCurrent(workspace, { home } = {}) {
   if (!fs.existsSync(path.join(home || harnessGlobalHome(), 'index'))) return null;
-  const index = readStructuralIndex(workspace, { home });
-  if (!index || !index.meta.sha) return null;
+  const dir = structuralIndexDir(workspace, { home });
+  if (!fs.existsSync(path.join(dir, 'meta.json'))) return null;
+  const meta = readMeta(dir);
+  if (!meta || !meta.sha) return null;
   const head = git(workspace, ['rev-parse', 'HEAD']);
-  if (!head || head !== index.meta.sha) return null;
+  if (!head || head !== meta.sha) return null;
+  const index = readStructuralIndex(workspace, { home });
+  // A current stamp over an unreadable table is not a usable index.
+  if (!index || index.unreadable.length) return null;
   return index;
 }
 
@@ -174,34 +214,69 @@ function sanitizeEntry(res, { hash, mtime, size }) {
   };
 }
 
-function buildSymbolTable(files) {
+/**
+ * Is a prior `files.json` entry usable as-is? Reused entries are written back
+ * verbatim and fed to buildSymbolTable, so a hand-edited or partially written
+ * table must be REJECTED here (the file is re-parsed instead) rather than
+ * crashing the build with a TypeError that only manual deletion recovers from.
+ */
+function usablePriorEntry(entry) {
+  return Boolean(
+    entry &&
+      typeof entry === 'object' &&
+      typeof entry.hash === 'string' &&
+      Array.isArray(entry.symbols) &&
+      Array.isArray(entry.imports) &&
+      Array.isArray(entry.defs) &&
+      Array.isArray(entry.refs)
+  );
+}
+
+function buildSymbolTable(files, truncation) {
   // Null prototype: symbol names are untrusted repo text, and a repo defining
   // `constructor`, `__proto__`, or `toString` must land as an ordinary own
   // key, not resolve to an inherited Object.prototype member (which would
   // make `.defs` access throw and abort indexing).
   const symbols = Object.create(null);
   const rels = Object.keys(files).sort();
+  // Own counter rather than Object.keys(symbols).length per def: that rebuilt
+  // the whole key array on every declaration, which is quadratic exactly where
+  // it hurts most (a repo big enough to approach the cap).
+  let distinct = 0;
   for (const rel of rels) {
-    for (const d of files[rel].defs) {
+    for (const d of Array.isArray(files[rel]?.defs) ? files[rel].defs : []) {
+      if (!d || typeof d.name !== 'string') continue;
       if (!symbols[d.name]) {
-        if (Object.keys(symbols).length >= MAX_SYMBOL_TABLE) continue;
+        if (distinct >= MAX_SYMBOL_TABLE) {
+          truncation.symbols = true;
+          continue;
+        }
         symbols[d.name] = { defs: [], refs: [] };
+        distinct += 1;
       }
       if (symbols[d.name].defs.length < MAX_DEFS_PER_SYMBOL) {
         symbols[d.name].defs.push({ file: rel, line: d.line, kind: d.kind, exported: d.exported });
+      } else {
+        // Per-symbol cap: the symbol IS in the table, only its long def list is
+        // shortened. Tracked separately from the table-level cap because it
+        // costs recall (a caller we never list), never soundness.
+        truncation.symbolDetail = true;
       }
     }
   }
   for (const rel of rels) {
-    for (const r of files[rel].refs) {
+    for (const r of Array.isArray(files[rel]?.refs) ? files[rel].refs : []) {
+      if (!r || typeof r.name !== 'string') continue;
       const entry = symbols[r.name];
-      if (entry && entry.refs.length < MAX_REFS_PER_SYMBOL) entry.refs.push({ file: rel, line: r.line });
+      if (!entry) continue;
+      if (entry.refs.length < MAX_REFS_PER_SYMBOL) entry.refs.push({ file: rel, line: r.line });
+      else truncation.symbolDetail = true;
     }
   }
   return symbols;
 }
 
-function buildGraph(files, symbols) {
+function buildGraph(files, symbols, truncation) {
   const rels = Object.keys(files).sort();
   // Module edges use the same basename-stem approximation the repo map uses
   // for import-degree. An import that resolves to no tracked file is KEPT as
@@ -227,10 +302,14 @@ function buildGraph(files, symbols) {
       const targets = (last && byStem.get(last)) || [];
       if (targets.length) {
         for (const to of targets) {
-          if (to !== rel && modules.length < MAX_MODULE_EDGES) modules.push({ from: rel, to, via: imp });
+          if (to === rel) continue;
+          if (modules.length < MAX_MODULE_EDGES) modules.push({ from: rel, to, via: imp });
+          else truncation.moduleEdges = true;
         }
       } else if (unresolvedImports.length < MAX_UNRESOLVED) {
         unresolvedImports.push({ from: rel, import: imp });
+      } else {
+        truncation.unresolved = true;
       }
     }
   }
@@ -242,18 +321,22 @@ function buildGraph(files, symbols) {
   const seenUnresolved = new Set();
   for (const rel of rels) {
     const perFile = new Map();
-    for (const r of files[rel].refs) {
-      if (perFile.has(r.name)) continue;
+    for (const r of Array.isArray(files[rel]?.refs) ? files[rel].refs : []) {
+      if (!r || typeof r.name !== 'string' || perFile.has(r.name)) continue;
       perFile.set(r.name, true);
       const entry = symbols[r.name];
       const to = entry ? [...new Set(entry.defs.map((d) => d.file))].filter((f) => f !== rel).slice(0, 5) : [];
       if (to.length) {
         if (calls.length < MAX_CALL_EDGES) calls.push({ from: rel, symbol: r.name, to });
+        else truncation.callEdges = true;
       } else if (!entry) {
         const key = `${rel} ${r.name}`;
-        if (!seenUnresolved.has(key) && unresolvedCalls.length < MAX_UNRESOLVED) {
+        if (seenUnresolved.has(key)) continue;
+        if (unresolvedCalls.length < MAX_UNRESOLVED) {
           seenUnresolved.add(key);
           unresolvedCalls.push({ from: rel, symbol: r.name });
+        } else {
+          truncation.unresolved = true;
         }
       }
     }
@@ -289,20 +372,44 @@ function symbolDelta(priorSymbols, nextSymbols) {
  *      prior entry without re-parsing;
  *   3. `since` (a PRE-VALIDATED sha from validateSinceRef) narrows the
  *      re-parse candidates to `git diff --name-only <sha> --`; files outside
- *      the diff keep their prior entries verbatim.
+ *      the diff keep their prior entries verbatim. SOUNDNESS RULE: that
+ *      narrowing is only valid when `since` is exactly the sha the PRIOR index
+ *      was built at. Any other ref leaves files changed between `since` and
+ *      the prior stamp stale while the rebuild stamps meta.sha = HEAD, so the
+ *      index would READ as current while carrying stale entries. A misaligned
+ *      `--since` is therefore IGNORED (reported, never silent) and the build
+ *      degrades to a full incremental pass.
  * Bounded by the shared MAX_FILES_SCANNED / MAX_FILE_BYTES caps.
  */
 export async function buildStructuralIndex({ workspace, home, extractor, since = null, dryRun = false, log = () => {} }) {
   const dir = structuralIndexDir(workspace, { home });
-  const prior = readStructuralIndex(workspace, { home });
+  const onDisk = readStructuralIndex(workspace, { home });
+  // An unreadable table is not a usable baseline: diffing against it would
+  // report every symbol as added and silently re-derive the whole index.
+  const priorUnreadable = onDisk?.unreadable?.length ? onDisk.unreadable : [];
+  if (priorUnreadable.length) log(`prior structural index unusable: ${priorUnreadable.join('; ')} — rebuilding from scratch`);
+  const prior = priorUnreadable.length ? null : onDisk;
   const { files: tracked, total } = trackedSourceFiles(workspace);
-  const changed = since && prior ? changedFilesSince(workspace, since) : null;
+
+  let sinceIgnored = null;
+  let appliedSince = null;
+  if (since && prior) {
+    if (prior.meta?.sha === since) appliedSince = since;
+    else sinceIgnored = `--since ${since.slice(0, 12)} does not match the prior index baseline ${String(prior.meta?.sha || 'unknown').slice(0, 12)}`;
+  } else if (since) {
+    sinceIgnored = '--since needs a prior index to narrow against';
+  }
+  if (sinceIgnored) log(`${sinceIgnored} — running a full incremental pass instead`);
+  const changed = appliedSince ? changedFilesSince(workspace, appliedSince) : null;
 
   const nextFiles = {};
   let reparsed = 0;
   let reused = 0;
   for (const rel of tracked) {
-    const priorEntry = prior?.files?.[rel];
+    const raw = prior?.files?.[rel];
+    // A hand-edited or partially written prior entry is discarded and rebuilt,
+    // never reused: it flows into files.json and the symbol table verbatim.
+    const priorEntry = usablePriorEntry(raw) ? raw : undefined;
     if (changed && priorEntry && !changed.has(rel)) {
       nextFiles[rel] = priorEntry;
       reused += 1;
@@ -331,16 +438,26 @@ export async function buildStructuralIndex({ workspace, home, extractor, since =
   }
   const removedFiles = Object.keys(prior?.files || {}).filter((rel) => !(rel in nextFiles)).length;
 
-  const symbols = buildSymbolTable(nextFiles);
-  const graph = buildGraph(nextFiles, symbols);
+  // Cap hits are RECORDED: past a cap a removed symbol simply has no callers
+  // and the delta misreports, so consumers must be able to tell a complete
+  // table from a truncated one instead of trusting a silently shortened one.
+  // `symbols` is the TABLE-level cap (a declaration that never entered the
+  // table at all — findings computed from it can be wrong); `symbolDetail` is
+  // the routine per-symbol def/ref cap, which only shortens a list.
+  const truncation = { symbols: false, symbolDetail: false, moduleEdges: false, callEdges: false, unresolved: false };
+  const symbols = buildSymbolTable(nextFiles, truncation);
+  const graph = buildGraph(nextFiles, symbols, truncation);
   const delta = symbolDelta(prior?.symbols, symbols);
 
   const errorFiles = Object.values(nextFiles).filter((f) => f.errors).length;
+  // What the reported delta is measured against — always the prior index when
+  // one was usable, so the ledger can qualify the numbers honestly.
+  const basedOn = prior?.meta?.sha || null;
   const meta = {
     version: STRUCTURAL_INDEX_VERSION,
     sha: git(workspace, ['rev-parse', 'HEAD']),
     branch: git(workspace, ['rev-parse', '--abbrev-ref', 'HEAD']),
-    baseSha: since || null,
+    baseSha: appliedSince || null,
     generatedAt: new Date().toISOString(),
     extractorTier: extractor.tier || 'lexical',
     webTreeSitter: extractor.webTreeSitter || null,
@@ -352,6 +469,11 @@ export async function buildStructuralIndex({ workspace, home, extractor, since =
     filesIndexed: Object.keys(nextFiles).length,
     totalTracked: total,
     truncated: total > tracked.length,
+    symbolsTruncated: truncation.symbols,
+    symbolDetailTruncated: truncation.symbolDetail,
+    moduleEdgesTruncated: truncation.moduleEdges,
+    callEdgesTruncated: truncation.callEdges,
+    unresolvedTruncated: truncation.unresolved,
   };
 
   if (!dryRun) {
@@ -368,12 +490,12 @@ export async function buildStructuralIndex({ workspace, home, extractor, since =
     for (const [name, data] of writes) {
       if (!writeFileContained(dir, name, JSON.stringify(data) + '\n')) {
         log(`structural index write refused: ${name}`);
-        return { dir, written: false, reparsed, reused, removedFiles, delta, meta };
+        return { dir, written: false, reparsed, reused, removedFiles, delta, meta, sinceIgnored, priorUnreadable, basedOn };
       }
     }
   }
 
-  return { dir, written: !dryRun, reparsed, reused, removedFiles, delta, meta };
+  return { dir, written: !dryRun, reparsed, reused, removedFiles, delta, meta, sinceIgnored, priorUnreadable, basedOn };
 }
 
 /**

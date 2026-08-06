@@ -133,15 +133,36 @@ abandoned experiments can pollute golden knowledge; no branch/commit provenance.
   for every grammar; each grammar's hash is verified before instantiation, and on any
   mismatch the extractor falls back to lexical *loudly* (doctor S1 fails, not warns).
 - **Storage location (resolved):** structural index lives **outside** the knowledge git
-  store at `~/.harness/index/<repo-id>/structural/` so it can be freely deleted or
-  rebuilt without touching governance history, and never collides across repos.
+  store at `~/.harness/index/<repo-id>/<worktree-id>/structural/` so it can be freely
+  deleted or rebuilt without touching governance history, and never collides across
+  repos — nor across co-located worktrees of ONE repo, which share a `repo-id` (it
+  hashes the origin remote) and can sit at the same `meta.sha` with different
+  working-tree content. The worktree segment hashes the worktree root's realpath.
   - `files.json`, `symbols.json`, `graph.json`, `meta.json`
 - Extracted content is untrusted repo text: symbols and excerpts pass the existing
   `scanSecrets`/`redactSecrets` boundary at index-write time and `inertLine` at every
   render, like all retrieved data.
 - Incremental: mtime+size fast path, content-hash confirm.
 - `harness index --structural --since <ref>` for targeted structural diffs (refs
-  validated via `git rev-parse --verify`, always passed after `--`).
+  validated via `git rev-parse --verify`, always passed after `--`). **Soundness rule:**
+  `--since` narrows only when the ref resolves to exactly the sha the PRIOR index was
+  built at; any other ref would leave files changed in between stale under a freshly
+  stamped `meta.sha`, so it is ignored (reported on every output lane) and the build
+  falls back to a full incremental pass.
+- Table caps (symbols, module/call edges, unresolved) are **recorded** in `meta.json`
+  (`symbolsTruncated`, `moduleEdgesTruncated`, `callEdgesTruncated`,
+  `unresolvedTruncated`, plus the routine per-symbol `symbolDetailTruncated`);
+  consumers degrade to informational rather than assert a finding computed from a
+  table-level truncation. An existing-but-unreadable table is reported
+  loudly (doctor S1) instead of reading as empty.
+- **Integrity covers the loader, not only the wasm:** `grammars.lock` also pins the
+  sha256 of the JS entry point `import('web-tree-sitter')` executes, verified before the
+  import; a missing or truncated lock refuses the treesitter tier and fails doctor S1
+  rather than silently disabling verification.
+- The lexical tier is a first-class tier, not a stub: it records the module export
+  surface (JS/TS `export` forms and CommonJS, Python `__all__` or module-level public
+  defs, Java `public` members) and explicit named-import references, so the structural
+  checks are meaningful with no grammar installed.
 - Opt-in first; consumers prefer structural tables when present and current, else
   lexical.
 - **Output lanes:** the structural query surface renders per the three-audience contract

@@ -21,7 +21,7 @@ import { branchExists } from './knowledge/layer.mjs';
 import { deriveGitContext, resolveDefaultBranch } from './git-context.mjs';
 import { loadReportEvents, knowledgeSlos } from './report.mjs';
 import { readStructuralIndex } from './repo-map/structural-index.mjs';
-import { grammarStatus } from './repo-map/treesitter-extractor.mjs';
+import { grammarStatus, packageGrammarRoots } from './repo-map/treesitter-extractor.mjs';
 import { assertNoSymlinkAncestors } from './fs-safe.mjs';
 
 const require = createRequire(import.meta.url);
@@ -497,29 +497,46 @@ function knowledgeChecks({ workspace, copilotHome }) {
   return checks;
 }
 
-// Structural-index health (blueprint P3, doctor S1). One check, four facts:
+// Structural-index health (blueprint P3, doctor S1). One check, five facts:
 // grammar availability + integrity (BOTH the mismatch recorded at index time
 // in meta.json AND the current on-disk wasm state via the sync grammarStatus
-// probe), meta.sha drift vs HEAD, parse-failure rate, and orphaned cache
-// entries. Binding blueprint rule: a grammar integrity mismatch FAILS S1
-// (optional: false) — the loud lexical fallback is a doctor failure, never a
-// warning. Everything else about the optional tier stays advisory. Exported
-// for direct testing, same as the check builders above are exercised through
-// runDoctor.
-export function structuralChecks({ workspace }) {
+// probe), meta.sha drift vs HEAD, parse-failure rate, unreadable index tables,
+// and orphaned cache entries. Binding blueprint rule: a grammar integrity
+// mismatch — or an unreadable grammars.lock, which disables verification
+// entirely — FAILS S1 (optional: false); the loud lexical fallback is a doctor
+// failure, never a warning. A mismatch RECORDED in meta that the current wasm
+// no longer has is stale, so it degrades to an advisory "re-run the index"
+// instead of failing forever. Everything else about the optional tier stays
+// advisory. The disk probe is scoped to the harness package's own node_modules
+// and both it and the lock path are injectable, so S1 is never a verdict on an
+// unrelated web-tree-sitter copy elsewhere on the filesystem (and the tests
+// stay hermetic). Exported for direct testing, same as the check builders
+// above are exercised through runDoctor.
+export function structuralChecks({ workspace, grammarRoots = packageGrammarRoots(), lockPath } = {}) {
   const checks = [];
   try {
-    const disk = grammarStatus();
+    // Scoped to the harness package's OWN node_modules: walking parent
+    // node_modules made any unrelated web-tree-sitter anywhere up the
+    // filesystem a hard doctor failure for a user who never built an index.
+    const disk = grammarStatus({ grammarRoots, lockPath });
     const index = readStructuralIndex(workspace);
     const recorded = index?.meta?.integrityFailures || [];
-    const mismatches = [...disk.integrityFailures, ...recorded];
+    // A recorded mismatch the disk now verifies as good is STALE, not live:
+    // the last build fell back, but the bytes are fixed — say "re-run", don't
+    // keep failing forever on a record no rebuild ever clears.
+    const stale = recorded.filter((f) => disk.grammars?.[f.language]?.ok === true);
+    const live = recorded.filter((f) => !stale.includes(f));
+    const mismatches = [...disk.integrityFailures, ...live];
     if (mismatches.length) {
       const languages = [...new Set(mismatches.map((f) => f.language))].join(', ');
+      const lockGone = mismatches.some((f) => f.language === 'lock');
       checks.push({
         id: 'S1',
         name: 'Structural index grammar integrity',
         pass: false,
-        hint: `grammar wasm sha256 mismatch vs grammars.lock (${languages}) — the index fell back to lexical loudly; reinstall the harness optional dependencies, then re-run: harness index --structural`,
+        hint: lockGone
+          ? `grammars.lock missing or unreadable — wasm integrity cannot be verified and the treesitter tier is refused; reinstall the harness package, then re-run: harness index --structural`
+          : `grammar wasm sha256 mismatch vs grammars.lock (${languages}) — the index fell back to lexical loudly; reinstall the harness optional dependencies, then re-run: harness index --structural`,
       });
       return checks;
     }
@@ -534,6 +551,13 @@ export function structuralChecks({ workspace }) {
       return checks;
     }
     const issues = [];
+    if (stale.length) {
+      const languages = [...new Set(stale.map((f) => f.language))].join(', ');
+      issues.push(`index meta still records a grammar integrity mismatch (${languages}) that the current wasm no longer has — re-run: harness index --structural`);
+    }
+    // An existing-but-unreadable table (oversized past the fs-safe cap,
+    // symlinked, corrupt JSON) used to read as empty everywhere. Say it.
+    if (index.unreadable?.length) issues.push(`${index.unreadable.join('; ')} — delete the index directory and re-run: harness index --structural`);
     const head = spawnSync('git', ['-C', workspace, 'rev-parse', 'HEAD'], { encoding: 'utf8', timeout: 10_000 });
     const headSha = head.status === 0 ? head.stdout.trim() : null;
     if (index.meta.sha && headSha && index.meta.sha !== headSha) {

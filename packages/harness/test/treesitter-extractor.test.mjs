@@ -11,14 +11,18 @@ import {
   grammarStatus,
   makeStructuralExtract,
   createTreesitterExtract,
+  packageGrammarRoots,
   MAX_IDENTIFIER_LENGTH,
+  MAX_DEFS_PER_FILE,
   DEFAULT_LOCK_PATH,
 } from '../lib/repo-map/treesitter-extractor.mjs';
 
 // One shared factory instance: init is the expensive part, extract is sync.
-// When the optional grammar packages are absent this resolves to the lexical
-// tier and the grammar-dependent tests below skip honestly.
-const extractor = await createTreesitterExtract();
+// Roots are pinned to the harness package's OWN node_modules so the suite
+// never depends on what happens to live in a parent directory; when the
+// optional grammar packages are absent this resolves to the lexical tier and
+// the grammar-dependent tests below skip honestly.
+const extractor = await createTreesitterExtract({ grammarRoots: packageGrammarRoots() });
 const grammars = extractor.tier === 'treesitter';
 const skipNote = 'optional tree-sitter grammars not installed — lexical absence mode';
 
@@ -41,13 +45,99 @@ test('branchComplexity is a cheap deterministic branch count with floor 1', () =
   assert.equal(branchComplexity('a && b || c ?? d'), 4);
 });
 
-test('lexicalV2 preserves v1 fields and adds approximate defs, empty refs, and complexity', () => {
-  const r = lexicalV2('a.ts', 'export function hi(){ if (x) {} }');
-  assert.deepEqual(r.symbols, ['hi']);
-  assert.deepEqual(r.defs, [{ name: 'hi', kind: 'symbol', line: 1, exported: false }]);
-  assert.deepEqual(r.refs, [], 'the lexical tier never fabricates call facts');
+test('lexicalV2 preserves v1 fields and adds approximate defs, real export flags, and complexity', () => {
+  const r = lexicalV2('a.ts', 'export function hi(){ if (x) {} }\nfunction Local(){}\n');
+  assert.deepEqual(r.symbols, ['hi', 'Local']);
+  assert.deepEqual(r.defs, [
+    { name: 'hi', kind: 'symbol', line: 1, exported: true },
+    { name: 'Local', kind: 'symbol', line: 2, exported: false },
+  ]);
+  assert.deepEqual(r.refs, [], 'no imports means no references — never a guessed call');
   assert.equal(r.tier, 'lexical');
   assert.equal(r.complexity, 2);
+});
+
+test('lexical export detection: the DEFAULT tier reports a real module surface', () => {
+  const ts = lexicalV2(
+    'mod.ts',
+    [
+      'const hidden = 1;',
+      'export const shown = 2;',
+      'export let mutable = 3;',
+      'function helper() {}',
+      'class Widget {}',
+      'export { helper, Widget as Gadget };',
+      'export * as ns from "./other";',
+      'export default hidden;',
+    ].join('\n')
+  );
+  const exported = new Set(ts.defs.filter((d) => d.exported).map((d) => d.name));
+  for (const name of ['shown', 'mutable', 'helper', 'Gadget', 'ns', 'hidden']) {
+    assert.ok(exported.has(name), `${name} must read as exported: ${JSON.stringify(ts.defs)}`);
+  }
+
+  const cjs = lexicalV2('legacy.cjs', 'function run() {}\nmodule.exports.run = run;\nexports.other = 1;\n');
+  const cjsExported = new Set(cjs.defs.filter((d) => d.exported).map((d) => d.name));
+  assert.ok(cjsExported.has('run') && cjsExported.has('other'), JSON.stringify(cjs.defs));
+
+  // Python has no export keyword: __all__ wins when present, otherwise
+  // module-level non-underscore defs — the same rule the AST tier applies.
+  const withAll = lexicalV2('svc.py', '__all__ = ["public_one"]\ndef public_one():\n    pass\ndef also_public():\n    pass\n');
+  const pyAll = new Map(withAll.defs.map((d) => [d.name, d.exported]));
+  assert.equal(pyAll.get('public_one'), true);
+  assert.equal(pyAll.get('also_public'), false, '__all__ is authoritative when present');
+  const noAll = lexicalV2('svc2.py', 'def public_one():\n    pass\ndef _private():\n    pass\nclass Inner:\n    def method(self):\n        pass\n');
+  const py = new Map(noAll.defs.map((d) => [d.name, d.exported]));
+  assert.equal(py.get('public_one'), true);
+  assert.equal(py.get('_private'), false);
+  assert.equal(py.get('method'), false, 'a nested method is not a module-level export');
+
+  const java = lexicalV2('A.java', 'public class A {\n  public void open() {}\n  private void shut() {}\n}\n');
+  const jv = new Map(java.defs.map((d) => [d.name, d.exported]));
+  assert.equal(jv.get('A'), true);
+  assert.equal(jv.get('open'), true);
+  assert.equal(jv.get('shut'), false);
+
+  // SQL/HCL have no module boundary — nothing is claimed as exported.
+  const sql = lexicalV2('schema.sql', 'CREATE TABLE payments (id int);');
+  assert.deepEqual(sql.defs.map((d) => d.exported), [false]);
+});
+
+test('lexical references are stated named imports, never inferred call sites', () => {
+  const js = lexicalV2('caller.mjs', "import { beta, gamma as g } from './a.mjs';\nexport const use = () => beta() + delta();\n");
+  assert.deepEqual(js.refs.map((r) => r.name).sort(), ['beta', 'gamma'], 'the imported names, not the local alias');
+  assert.ok(!js.refs.some((r) => r.name === 'delta'), 'a bare call is never invented as a reference');
+  const py = lexicalV2('svc.py', 'from billing.core import Charge\ndef run():\n    return Charge()\n');
+  assert.deepEqual(py.refs.map((r) => r.name), ['Charge']);
+  const java = lexicalV2('A.java', 'import com.acme.Role;\npublic class A {}\n');
+  assert.deepEqual(java.refs.map((r) => r.name), ['Role']);
+});
+
+test('lexicalV2 is linear in file size — the default tier must not rescan per name', () => {
+  // A crafted file: 20k long near-matching lines, then 512 declarations. The
+  // old shape ran one `lines.findIndex(l => l.includes(name))` PER NAME, so
+  // every declaration rescanned the whole prefix — ~1.3s here, on the DEFAULT
+  // tier, for one file of a full index. A single tokenizing pass is ~20ms.
+  const pad = `// ${'a'.repeat(200)}`;
+  const lines = [];
+  for (let i = 0; i < 20_000; i++) lines.push(pad);
+  for (let i = 0; i < 512; i++) lines.push(`export const ${'a'.repeat(40)}b${i} = ${i};`);
+  const content = lines.join('\n');
+  const started = Date.now();
+  const r = lexicalV2('big.ts', content);
+  const elapsed = Date.now() - started;
+  assert.equal(r.defs.length, 512);
+  assert.equal(r.defs[0].line, 20_001, 'declaration lines are still resolved exactly');
+  assert.ok(elapsed < 300, `lexicalV2 took ${elapsed}ms on one ${Math.round(content.length / 1024)}KB file — the per-name rescan is back`);
+});
+
+test('the lexical path caps symbols and imports like the AST path does', () => {
+  const symbols = Array.from({ length: MAX_DEFS_PER_FILE + 50 }, (_, i) => `export const s${i} = ${i};`).join('\n');
+  const capped = lexicalV2('many.ts', symbols);
+  assert.equal(capped.symbols.length, MAX_DEFS_PER_FILE, 'unbounded symbol lists would grow files.json without limit');
+  assert.equal(capped.defs.length, MAX_DEFS_PER_FILE);
+  const imports = Array.from({ length: 400 }, (_, i) => `import { n${i} } from './m${i}';`).join('\n');
+  assert.ok(lexicalV2('imports.ts', imports).imports.length <= 256);
 });
 
 test('extraction matrix: typescript defs, imports, refs, exported flags', (t) => {
@@ -225,6 +315,50 @@ test('runtime integrity mismatch disables the whole tier loudly', async () => {
   assert.equal(ext.tier, 'lexical');
   assert.ok(ext.integrityFailures.some((f) => f.language === 'runtime'));
   fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('the JS loader entry point is hash-pinned, not just the wasm', async (t) => {
+  const lock = loadGrammarsLock();
+  assert.ok(lock.runtime.loader, 'grammars.lock must pin the loader entry point');
+  assert.match(lock.runtime.loader.sha256, /^[0-9a-f]{64}$/);
+  assert.match(lock.runtime.loader.file, /\.(?:js|cjs|mjs)$/, 'the pinned loader is the JS entry the import executes');
+
+  // A tampered loader is the cheaper attack than a tampered wasm: it runs with
+  // full Node privileges. Point the factory at a forged entry point and the
+  // tier must refuse LOUDLY, never import it.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-loader-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const forged = path.join(dir, lock.runtime.loader.file);
+  fs.writeFileSync(forged, 'module.exports = { Parser: {}, Language: {} }; // not the pinned loader\n');
+  const ext = await createTreesitterExtract({ grammarRoots: packageGrammarRoots(), loaderPath: forged });
+  assert.equal(ext.tier, 'lexical', 'a loader mismatch disables the tier');
+  assert.ok(
+    ext.integrityFailures.some((f) => f.language === 'loader' && /sha256 mismatch/.test(f.reason)),
+    `loader mismatch must be recorded: ${JSON.stringify(ext.integrityFailures)}`
+  );
+  assert.deepEqual(ext.available, []);
+});
+
+test('a missing or truncated grammars.lock is a LOUD refusal, never a silent disable', async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-nolock-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const missing = path.join(dir, 'absent.lock');
+  const truncated = path.join(dir, 'truncated.lock');
+  // A lock without the runtime block cannot verify anything either.
+  fs.writeFileSync(truncated, JSON.stringify({ version: 1, grammars: {} }));
+
+  for (const lockPath of [missing, truncated]) {
+    assert.equal(loadGrammarsLock({ lockPath }), null, `${lockPath} must not parse as a usable lock`);
+    const ext = await createTreesitterExtract({ lockPath });
+    assert.equal(ext.tier, 'lexical');
+    assert.ok(
+      ext.integrityFailures.some((f) => f.language === 'lock'),
+      `an unverifiable lock must be recorded, not silently ignored: ${JSON.stringify(ext.integrityFailures)}`
+    );
+    const status = grammarStatus({ lockPath, grammarRoots: [dir] });
+    assert.equal(status.lock, false);
+    assert.ok(status.integrityFailures.some((f) => f.language === 'lock'), JSON.stringify(status.integrityFailures));
+  }
 });
 
 test('identifier length cap bounds extracted names', () => {

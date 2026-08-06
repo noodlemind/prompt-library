@@ -103,6 +103,45 @@ test('harness index --structural --since validates the ref and rejects option-sh
   fs.rmSync(home, { recursive: true, force: true });
 });
 
+test('a --since that is not the prior index baseline is ignored, reported, and falls back to a full pass', () => {
+  const { ws, git } = gitRepo(FIXTURE);
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-home-'));
+  assert.equal(runHarness(['index', '--structural'], { home, ws }).status, 0);
+
+  // Two commits after the index was built: `--since HEAD~1` would leave the
+  // first one's files stale under a current-looking meta.sha.
+  fs.writeFileSync(path.join(ws, 'src', 'pay.mjs'), 'export function charge() {}\nexport function first() {}\n');
+  git(['add', '.']);
+  git(['commit', '-qm', 'one']);
+  fs.writeFileSync(path.join(ws, 'src', 'audit.mjs'), 'export function audit() {}\nexport function second() {}\n');
+  git(['add', '.']);
+  git(['commit', '-qm', 'two']);
+
+  const out = runHarness(['index', '--structural', '--since', 'HEAD~1', '--json'], { home, ws });
+  assert.equal(out.status, 0, out.stderr);
+  const json = JSON.parse(out.stdout.trim().split('\n').at(-1));
+  assert.match(json.sinceIgnored || '', /does not match the prior index baseline/);
+  assert.equal(json.baseSha, null, 'an ignored --since is never stamped as the baseline');
+  assert.equal(json.reparsed, 2, 'both commits are re-parsed by the fallback full pass');
+
+  const human = runHarness(['index', '--structural', '--since', 'HEAD~1'], { home, ws });
+  assert.equal(human.status, 0, human.stderr);
+  assert.match(human.stdout, /full pass/, 'the ledger says the narrowing was dropped');
+
+  fs.rmSync(ws, { recursive: true, force: true });
+  fs.rmSync(home, { recursive: true, force: true });
+});
+
+test('--since without --structural is a usage error, not a silently ignored flag', () => {
+  const { ws } = gitRepo(FIXTURE);
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-home-'));
+  const r = runHarness(['index', '--since', 'HEAD~1'], { home, ws });
+  assert.notEqual(r.status, 0);
+  assert.match(r.stderr, /--since requires --structural/);
+  fs.rmSync(ws, { recursive: true, force: true });
+  fs.rmSync(home, { recursive: true, force: true });
+});
+
 test('plain harness index still works and never builds the structural tree', () => {
   const { ws } = gitRepo(FIXTURE);
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-home-'));

@@ -1,6 +1,11 @@
 // Phase 4 — per-check severity (policy v2) and the advisory
-// `structural-expectations` verify check. Fixtures build their own structural
-// index against the documented shape in lib/structural/shape.mjs.
+// `structural-expectations` verify check.
+//
+// FIXTURE DISCIPLINE: the baseline index under test is written by the REAL
+// builder (`buildStructuralIndex`) from the fixture workspace, so every
+// assertion here pins the contract against a shape the builder actually emits.
+// Hand-written index JSON is reserved for the reader's own malformed-input
+// tests below, where the point IS an off-contract file on disk.
 
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -11,6 +16,8 @@ import { test } from 'node:test';
 import { loadPolicy, checkSeverityFor, enforcementExitCode } from '../lib/policy.mjs';
 import { structuralDir, readStructuralIndex, STRUCTURAL_SHAPE_VERSION } from '../lib/structural/shape.mjs';
 import { runStructuralExpectations, STRUCTURAL_CHECK_ID } from '../lib/structural/expectations.mjs';
+import { buildStructuralIndex } from '../lib/repo-map/structural-index.mjs';
+import { lexicalV2 } from '../lib/repo-map/treesitter-extractor.mjs';
 import { runVerify } from '../lib/verify.mjs';
 import { readEvidence } from '../lib/evidence.mjs';
 
@@ -137,8 +144,30 @@ No open findings.
   return rel;
 }
 
-/** Baseline: src/example.js exports `value` and `helper`; consumer calls `value`. */
-function writeStructuralIndex(workspace, home, { sha, files, symbols, graph } = {}) {
+/** An injectable extractor in the builder's own shape. `tier: 'treesitter'`
+ * stamps the per-file tier the AST tier emits — the builder's real output for
+ * a grammar-parsed file — without needing the optional grammars installed. */
+function extractorFor(tier = 'lexical') {
+  return {
+    counters: { parseFailures: 0, parsed: 0, errorFiles: 0 },
+    tier,
+    webTreeSitter: null,
+    grammarVersions: {},
+    missingGrammars: [],
+    integrityFailures: [],
+    extract: (rel, content) => (tier === 'lexical' ? lexicalV2(rel, content) : { ...lexicalV2(rel, content), tier }),
+  };
+}
+
+/** Baseline written by the REAL builder from the fixture workspace:
+ * src/example.js exports `value` and `helper`; src/consumer.js imports
+ * `value`, so the tables carry the export flags and the caller edge. */
+function buildBaseline(workspace, home, { tier = 'lexical' } = {}) {
+  return buildStructuralIndex({ workspace, home, extractor: extractorFor(tier) });
+}
+
+/** Hand-written index for the READER's malformed/off-contract cases only. */
+function writeStructuralIndex(workspace, home, { sha, files, symbols, graph, extractorTier = 'lexical' } = {}) {
   const dir = structuralDir(workspace, { home });
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(
@@ -166,7 +195,7 @@ function writeStructuralIndex(workspace, home, { sha, files, symbols, graph } = 
         branch: 'main',
         baseSha: sha,
         generatedAt: new Date().toISOString(),
-        extractorTier: 'lexical',
+        extractorTier,
         grammarVersions: {},
       },
       null,
@@ -176,7 +205,10 @@ function writeStructuralIndex(workspace, home, { sha, files, symbols, graph } = 
   return dir;
 }
 
-function exampleBaseline(sha) {
+/** A LEGACY on-disk index: wrapper form, no per-file `tier` anywhere. Kept
+ * hand-written on purpose — the point of its one test is an index shape the
+ * current builder no longer emits. */
+function legacyUntieredBaseline(sha) {
   return {
     sha,
     files: {
@@ -337,14 +369,15 @@ test('missing structural index reports skipped, never fails', () => {
   assert.deepEqual(result.findings, []);
 });
 
-test('stale baseline (meta.sha not an ancestor of HEAD) warns and skips', () => {
+test('stale baseline (meta.sha not an ancestor of HEAD) warns and skips', async () => {
   const { workspace, home } = structuralWorkspace();
-  // A commit on a side branch is not an ancestor of the restored main HEAD.
+  // A commit on a side branch is not an ancestor of the restored main HEAD —
+  // the index is built there, so meta.sha is genuinely off-history.
   git(workspace, ['checkout', '-q', '-b', 'side']);
   fs.writeFileSync(path.join(workspace, 'src', 'side.js'), 'export const side = 1;\n');
-  const sideSha = commitAll(workspace, 'side work');
+  commitAll(workspace, 'side work');
+  await buildBaseline(workspace, home);
   git(workspace, ['checkout', '-q', '-']);
-  writeStructuralIndex(workspace, home, { ...exampleBaseline(sideSha) });
 
   const result = runStructuralExpectations({
     workspace,
@@ -357,9 +390,9 @@ test('stale baseline (meta.sha not an ancestor of HEAD) warns and skips', () => 
   assert.match(result.message, /harness index --structural/);
 });
 
-test('removed exported symbol with a surviving caller is flagged', () => {
+test('removed exported symbol with a surviving caller is flagged', async () => {
   const { workspace, home, sha } = structuralWorkspace();
-  writeStructuralIndex(workspace, home, exampleBaseline(sha));
+  await buildBaseline(workspace, home);
   // Remove `value` while the untouched consumer still calls it.
   fs.writeFileSync(path.join(workspace, 'src', 'example.js'), 'export const other = 2;\n');
 
@@ -376,13 +409,11 @@ test('removed exported symbol with a surviving caller is flagged', () => {
   assert.ok(!removed.some((finding) => finding.symbol === 'helper'), JSON.stringify(removed));
 });
 
-test('a treesitter-tier baseline entry is never diffed against the lexical current side — informational skip, no findings', () => {
-  const { workspace, home, sha } = structuralWorkspace();
-  const baseline = exampleBaseline(sha);
-  // The baseline entry for example.js was built by the treesitter tier; the
+test('a treesitter-tier baseline is never diffed against the lexical current side — skipped, not passed', async () => {
+  const { workspace, home } = structuralWorkspace();
+  // The whole baseline is written by the builder at the treesitter tier; the
   // check's current side is always lexical, so any diff would be unsound.
-  baseline.files['src/example.js'] = { ...baseline.files['src/example.js'], tier: 'treesitter' };
-  writeStructuralIndex(workspace, home, baseline);
+  await buildBaseline(workspace, home, { tier: 'treesitter' });
   // Without the tier gate this removal fabricates removed-symbol findings.
   fs.writeFileSync(path.join(workspace, 'src', 'example.js'), 'export const other = 2;\n');
 
@@ -394,19 +425,41 @@ test('a treesitter-tier baseline entry is never diffed against the lexical curre
     changedFiles: ['src/example.js'],
     home,
   });
-  assert.equal(result.status, 'passed', JSON.stringify(result.findings));
+  // Nothing was compared, so this is a SKIP, not a green gate over an empty
+  // comparison (which an `enforce` opt-in would read as a pass).
+  assert.equal(result.status, 'skipped', JSON.stringify(result.findings));
   assert.deepEqual(result.findings, []);
   const notes = result.informational.filter((note) => note.type === 'tier-mismatch-skipped');
   assert.ok(notes.some((note) => note.file === 'src/example.js' && note.tier === 'treesitter'), JSON.stringify(result.informational));
   // A required expectation on the tier-skipped file is unverifiable — it must
   // surface informationally, never as a fabricated unmet-required failure.
   assert.ok(notes.some((note) => note.symbol === 'other'), JSON.stringify(result.informational));
-  assert.match(result.message, /1 tier-mismatch-skipped/);
+  assert.match(result.message, /compared nothing/);
 });
 
-test('callers that changed in the same diff do not count as surviving', () => {
+test('an untiered file entry inherits meta.extractorTier — treesitter index never diffs against lexical', () => {
   const { workspace, home, sha } = structuralWorkspace();
-  writeStructuralIndex(workspace, home, exampleBaseline(sha));
+  // No per-file tier anywhere (a legacy index), but the index-wide meta
+  // declares treesitter: the untiered entry must inherit that tier and be
+  // skipped, not diffed as lexical (which would fabricate findings here).
+  writeStructuralIndex(workspace, home, { ...legacyUntieredBaseline(sha), extractorTier: 'treesitter' });
+  fs.writeFileSync(path.join(workspace, 'src', 'example.js'), 'export const other = 2;\n');
+
+  const result = runStructuralExpectations({
+    workspace,
+    plan: minimalPlan(['src/example.js']),
+    changedFiles: ['src/example.js'],
+    home,
+  });
+  assert.equal(result.status, 'skipped', JSON.stringify(result.findings));
+  assert.deepEqual(result.findings, []);
+  const notes = result.informational.filter((note) => note.type === 'tier-mismatch-skipped');
+  assert.ok(notes.some((note) => note.file === 'src/example.js' && note.tier === 'treesitter'), JSON.stringify(result.informational));
+});
+
+test('callers that changed in the same diff do not count as surviving', async () => {
+  const { workspace, home, sha } = structuralWorkspace();
+  await buildBaseline(workspace, home);
   fs.writeFileSync(path.join(workspace, 'src', 'example.js'), 'export const other = 2;\n');
   fs.writeFileSync(path.join(workspace, 'src', 'consumer.js'), "import { other } from './example.js';\nexport function main() { return other; }\n");
 
@@ -419,9 +472,9 @@ test('callers that changed in the same diff do not count as surviving', () => {
   assert.ok(!result.findings.some((finding) => finding.type === 'removed-symbol-with-callers'), JSON.stringify(result.findings));
 });
 
-test('changed exported symbols outside Impacted Files are flagged; planned ones are not', () => {
+test('changed exported symbols outside Impacted Files are flagged; planned ones are not', async () => {
   const { workspace, home, sha } = structuralWorkspace();
-  writeStructuralIndex(workspace, home, exampleBaseline(sha));
+  await buildBaseline(workspace, home);
   // Added symbol in a planned file: fine. New file with symbols outside the plan: flagged.
   fs.writeFileSync(path.join(workspace, 'src', 'example.js'), 'export const value = 1;\nexport function helper() { return value; }\nexport const added = 3;\n');
   fs.writeFileSync(path.join(workspace, 'src', 'unplanned.js'), 'export const rogue = 9;\n');
@@ -438,9 +491,98 @@ test('changed exported symbols outside Impacted Files are flagged; planned ones 
   assert.deepEqual(unplanned[0].added, ['rogue']);
 });
 
-test('a clean structural diff passes with an examined-files summary', () => {
+test('unplanned-symbol-change reports EXPORTED changes only — a local addition is not a public change', async () => {
+  const { workspace, home } = structuralWorkspace();
+  await buildBaseline(workspace, home);
+  // Unplanned file whose only new symbol is module-private: nothing about the
+  // module surface changed, so the contract ("changed exported symbols outside
+  // Impacted Files") must not fire.
+  fs.writeFileSync(path.join(workspace, 'src', 'private.js'), 'function Hidden() { return 1; }\nHidden();\n');
+
+  const quiet = runStructuralExpectations({
+    workspace,
+    plan: minimalPlan(['src/example.js']),
+    changedFiles: ['src/private.js'],
+    home,
+  });
+  assert.deepEqual(quiet.findings, [], JSON.stringify(quiet.findings));
+
+  // The same file gaining an EXPORT is a public change and does fire.
+  fs.writeFileSync(path.join(workspace, 'src', 'private.js'), 'export function Hidden() { return 1; }\n');
+  const loud = runStructuralExpectations({
+    workspace,
+    plan: minimalPlan(['src/example.js']),
+    changedFiles: ['src/private.js'],
+    home,
+  });
+  const unplanned = loud.findings.filter((finding) => finding.type === 'unplanned-symbol-change');
+  assert.deepEqual(unplanned.map((finding) => finding.added), [['Hidden']], JSON.stringify(loud.findings));
+});
+
+test('a changed file the check cannot evaluate never fails a required expectation', async () => {
+  const { workspace, home } = structuralWorkspace();
+  await buildBaseline(workspace, home);
+  // .go is not a language the lexical extractor reads and has no baseline
+  // entry: the check cannot say anything about it, so a required expectation
+  // on it is informational — not a hard finding regardless of the change.
+  fs.writeFileSync(path.join(workspace, 'src', 'thing.go'), 'package main\nfunc Thing() {}\n');
+
+  const result = runStructuralExpectations({
+    workspace,
+    plan: minimalPlan(['src/thing.go'], {
+      structural_expectations: [{ file: 'src/thing.go', symbol: 'Thing', change: 'added', required: true }],
+    }),
+    changedFiles: ['src/thing.go'],
+    home,
+  });
+  assert.deepEqual(result.findings, [], JSON.stringify(result.findings));
+  assert.equal(result.status, 'skipped', result.message);
+  assert.ok(
+    result.informational.some((note) => note.type === 'expectation-not-evaluated' && note.file === 'src/thing.go'),
+    JSON.stringify(result.informational)
+  );
+  assert.ok(
+    result.informational.some((note) => note.type === 'file-not-evaluated' && note.file === 'src/thing.go'),
+    JSON.stringify(result.informational)
+  );
+});
+
+test('a truncated baseline table degrades findings to informational instead of asserting them', async () => {
+  const { workspace, home } = structuralWorkspace();
+  // A build that hits MAX_SYMBOL_TABLE: past the cap the symbol table is
+  // incomplete, so "removed symbol with callers" cannot be asserted from it.
+  const build = await buildStructuralIndex({
+    workspace,
+    home,
+    extractor: {
+      ...extractorFor('lexical'),
+      extract: (rel, content) => {
+        const base = lexicalV2(rel, content);
+        if (rel !== 'src/example.js') return base;
+        const filler = Array.from({ length: 20_000 }, (_, i) => ({ name: `filler${i}`, kind: 'symbol', line: 1, exported: false }));
+        return { ...base, defs: [...base.defs, ...filler] };
+      },
+    },
+  });
+  assert.equal(build.meta.symbolsTruncated, true, 'the build must record that it hit the cap');
+
+  fs.writeFileSync(path.join(workspace, 'src', 'example.js'), 'export const other = 2;\n');
+  const result = runStructuralExpectations({
+    workspace,
+    plan: minimalPlan(['src/example.js']),
+    changedFiles: ['src/example.js'],
+    home,
+  });
+  assert.deepEqual(result.findings, [], JSON.stringify(result.findings));
+  assert.ok(
+    result.informational.some((note) => note.type === 'removed-symbol-with-callers-informational' && /build cap/.test(note.message)),
+    JSON.stringify(result.informational)
+  );
+});
+
+test('a clean structural diff passes with an examined-files summary', async () => {
   const { workspace, home, sha } = structuralWorkspace();
-  writeStructuralIndex(workspace, home, exampleBaseline(sha));
+  await buildBaseline(workspace, home);
   fs.writeFileSync(path.join(workspace, 'src', 'example.js'), 'export const value = 11;\nexport function helper() { return value; }\n');
 
   const result = runStructuralExpectations({
@@ -454,9 +596,9 @@ test('a clean structural diff passes with an examined-files summary', () => {
   assert.equal(result.baseline.sha, sha);
 });
 
-test('deleted files count every baseline exported symbol as removed', () => {
+test('deleted files count every baseline exported symbol as removed', async () => {
   const { workspace, home, sha } = structuralWorkspace();
-  writeStructuralIndex(workspace, home, exampleBaseline(sha));
+  await buildBaseline(workspace, home);
   fs.rmSync(path.join(workspace, 'src', 'example.js'));
 
   const result = runStructuralExpectations({
@@ -471,9 +613,9 @@ test('deleted files count every baseline exported symbol as removed', () => {
 
 // --- structural_expectations plan frontmatter (stretch hook) ---
 
-test('required structural expectations fail the check when unmet; optional ones stay informational', () => {
+test('required structural expectations fail the check when unmet; optional ones stay informational', async () => {
   const { workspace, home, sha } = structuralWorkspace();
-  writeStructuralIndex(workspace, home, exampleBaseline(sha));
+  await buildBaseline(workspace, home);
   fs.writeFileSync(path.join(workspace, 'src', 'example.js'), 'export const value = 11;\nexport function helper() { return value; }\n');
 
   const fm = {
@@ -497,9 +639,9 @@ test('required structural expectations fail the check when unmet; optional ones 
   assert.ok(result.informational.some((entry) => entry.type === 'unmet-expectation' && entry.symbol === 'alsoNew'));
 });
 
-test('met structural expectations pass and an absent block skips cleanly', () => {
+test('met structural expectations pass and an absent block skips cleanly', async () => {
   const { workspace, home, sha } = structuralWorkspace();
-  writeStructuralIndex(workspace, home, exampleBaseline(sha));
+  await buildBaseline(workspace, home);
   fs.writeFileSync(path.join(workspace, 'src', 'example.js'), 'export const value = 11;\nexport function helper() { return value; }\nexport const added = 3;\n');
 
   const met = runStructuralExpectations({
@@ -525,9 +667,9 @@ test('met structural expectations pass and an absent block skips cleanly', () =>
   assert.deepEqual(absent.informational, []);
 });
 
-test('malformed expectation entries are reported informationally, never fail', () => {
+test('malformed expectation entries are reported informationally, never fail', async () => {
   const { workspace, home, sha } = structuralWorkspace();
-  writeStructuralIndex(workspace, home, exampleBaseline(sha));
+  await buildBaseline(workspace, home);
   fs.writeFileSync(path.join(workspace, 'src', 'example.js'), 'export const value = 11;\nexport function helper() { return value; }\n');
 
   const result = runStructuralExpectations({
@@ -546,9 +688,9 @@ function verifyFlags(plan, overrides = {}) {
   return { plan, base: 'HEAD', dryRun: false, ...overrides };
 }
 
-test('advisory structural failure does not flip a passing verify outcome', () => {
+test('advisory structural failure does not flip a passing verify outcome', async () => {
   const { workspace, home, plan, sha } = structuralWorkspace();
-  writeStructuralIndex(workspace, home, exampleBaseline(sha));
+  await buildBaseline(workspace, home);
   fs.writeFileSync(path.join(workspace, 'src', 'example.js'), 'export const other = 2;\n');
 
   const result = withHome(home, () => runVerify({ workspace, flags: verifyFlags(plan) }));
@@ -568,11 +710,11 @@ test('advisory structural failure does not flip a passing verify outcome', () =>
   assert.ok(Array.isArray(result.advisoryFailures[0].findings));
 });
 
-test('policy warn severity degrades a structural failure to inconclusive (exit 2 under enforce)', () => {
+test('policy warn severity degrades a structural failure to inconclusive (exit 2 under enforce)', async () => {
   const { workspace, home, plan, sha } = structuralWorkspace({
     policy: 'version: 2\nenforcement: enforce\nchecks:\n  structural-expectations:\n    severity: warn\n',
   });
-  writeStructuralIndex(workspace, home, exampleBaseline(sha));
+  await buildBaseline(workspace, home);
   fs.writeFileSync(path.join(workspace, 'src', 'example.js'), 'export const other = 2;\n');
 
   const result = withHome(home, () => runVerify({ workspace, flags: verifyFlags(plan) }));
@@ -583,11 +725,11 @@ test('policy warn severity degrades a structural failure to inconclusive (exit 2
   assert.deepEqual(result.advisoryFailures, []);
 });
 
-test('policy enforce severity makes a structural failure fail verification (exit 1)', () => {
+test('policy enforce severity makes a structural failure fail verification (exit 1)', async () => {
   const { workspace, home, plan, sha } = structuralWorkspace({
     policy: 'version: 2\nenforcement: enforce\nchecks:\n  structural-expectations:\n    severity: enforce\n',
   });
-  writeStructuralIndex(workspace, home, exampleBaseline(sha));
+  await buildBaseline(workspace, home);
   fs.writeFileSync(path.join(workspace, 'src', 'example.js'), 'export const other = 2;\n');
 
   const result = withHome(home, () => runVerify({ workspace, flags: verifyFlags(plan) }));
@@ -598,11 +740,11 @@ test('policy enforce severity makes a structural failure fail verification (exit
   assert.deepEqual(failed.map((check) => check.id), [STRUCTURAL_CHECK_ID]);
 });
 
-test('global observe enforcement never gates the exit code, but per-check enforce severity still routes the outcome', () => {
+test('global observe enforcement never gates the exit code, but per-check enforce severity still routes the outcome', async () => {
   const { workspace, home, plan, sha } = structuralWorkspace({
     policy: 'version: 2\nenforcement: observe\nchecks:\n  structural-expectations:\n    severity: enforce\n',
   });
-  writeStructuralIndex(workspace, home, exampleBaseline(sha));
+  await buildBaseline(workspace, home);
   fs.writeFileSync(path.join(workspace, 'src', 'example.js'), 'export const other = 2;\n');
 
   const result = withHome(home, () => runVerify({ workspace, flags: verifyFlags(plan) }));
@@ -629,9 +771,9 @@ test('a passing verify run with no structural index behaves as before (v1 compat
   }
 });
 
-test('a hard check failure still fails verification regardless of advisory checks', () => {
+test('a hard check failure still fails verification regardless of advisory checks', async () => {
   const { workspace, home, plan, sha } = structuralWorkspace();
-  writeStructuralIndex(workspace, home, exampleBaseline(sha));
+  await buildBaseline(workspace, home);
   // Scope violation: change a file the plan does not allow.
   fs.writeFileSync(path.join(workspace, 'src', 'rogue.js'), 'export const rogue = 1;\n');
 
@@ -642,9 +784,9 @@ test('a hard check failure still fails verification regardless of advisory check
   assert.equal(scope.severity, 'enforce');
 });
 
-test('evidence payload records per-check severity and advisory failures', () => {
+test('evidence payload records per-check severity and advisory failures', async () => {
   const { workspace, home, plan, sha } = structuralWorkspace();
-  writeStructuralIndex(workspace, home, exampleBaseline(sha));
+  await buildBaseline(workspace, home);
   fs.writeFileSync(path.join(workspace, 'src', 'example.js'), 'export const other = 2;\n');
 
   const result = withHome(home, () => runVerify({ workspace, flags: verifyFlags(plan) }));

@@ -4,8 +4,9 @@
 // doctor S1). Consumers import THIS module only; when the builder lands, the
 // integration is one import swap here, not a change in every consumer.
 //
-// Storage root: `~/.harness/index/<repo-id>/structural/` (HARNESS_HOME
-// overrides the home for tests). Four files:
+// Storage root: `~/.harness/index/<repo-id>/<worktree-id>/structural/`
+// (HARNESS_HOME overrides the home for tests) — keyed per worktree as well as
+// per repo, see `worktreeId`. Four files:
 //
 // files.json    { "version": 1, "files": { "<rel-path>": {
 //                   "hash": "<sha256 of content>", "mtime": <epoch-ms>,
@@ -41,19 +42,51 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import crypto from 'node:crypto';
+import { spawnSync } from 'node:child_process';
 import { harnessGlobalHome } from '../paths.mjs';
 import { repoId } from '../knowledge/store.mjs';
 import { readFileNoFollow } from '../fs-safe.mjs';
 
 export const STRUCTURAL_SHAPE_VERSION = 1;
 
+const worktreeIds = new Map();
+
+/**
+ * Stable per-WORKTREE id, appended to the repo-keyed index path.
+ * `repoId` hashes the origin remote — deliberately path-independent, so every
+ * checkout of one repo shares a knowledge store. The structural index cannot
+ * be shared that way: two worktrees of the same repo sit at the same
+ * `meta.sha` with DIFFERENT working-tree content, and `meta.sha` is the only
+ * currency gate, so a single directory would serve each worktree the other's
+ * symbol tables (and thrash the mtime fast path when both are indexed).
+ * Derived from the worktree root's realpath, hashed and truncated like
+ * `localRepoId`; memoized per resolved path (this sits in orient's read path).
+ */
+export function worktreeId(workspace) {
+  const key = path.resolve(workspace);
+  const cached = worktreeIds.get(key);
+  if (cached) return cached;
+  let root = key;
+  const top = spawnSync('git', ['-C', key, 'rev-parse', '--show-toplevel'], { encoding: 'utf8', timeout: 10_000 });
+  if (top.status === 0 && top.stdout.trim()) root = top.stdout.trim();
+  try {
+    root = fs.realpathSync(root);
+  } catch {
+    // keep the resolved path
+  }
+  const id = `wt-${crypto.createHash('sha256').update(root).digest('hex').slice(0, 12)}`;
+  worktreeIds.set(key, id);
+  return id;
+}
+
 const EMPTY_FILES = Object.freeze({ version: STRUCTURAL_SHAPE_VERSION, files: {} });
 const EMPTY_SYMBOLS = Object.freeze({ version: STRUCTURAL_SHAPE_VERSION, symbols: [] });
 const EMPTY_GRAPH = Object.freeze({ version: STRUCTURAL_SHAPE_VERSION, calls: [], modules: [], unresolved: [] });
 
-/** `<home>/index/<repo-id>/structural` for this workspace. */
+/** `<home>/index/<repo-id>/<worktree-id>/structural` for this workspace. */
 export function structuralDir(workspace, { home } = {}) {
-  return path.join(home || harnessGlobalHome(), 'index', repoId(workspace), 'structural');
+  return path.join(home || harnessGlobalHome(), 'index', repoId(workspace), worktreeId(workspace), 'structural');
 }
 
 function readJson(dir, name) {
@@ -100,6 +133,12 @@ export function readStructuralIndex(workspace, { home } = {}) {
   if (!meta.value) return absent('structural index has no meta.json');
   if (typeof meta.value.sha !== 'string' || !/^[0-9a-f]{7,40}$/i.test(meta.value.sha)) {
     return absent('meta.json has no valid baseline sha');
+  }
+  // `version` is the shape contract, so it is enforced rather than merely
+  // written: an index from a NEWER writer must be skipped, not misread.
+  const version = meta.value.version;
+  if (version !== undefined && !(Number.isFinite(version) && version <= STRUCTURAL_SHAPE_VERSION)) {
+    return absent(`unsupported structural index version ${JSON.stringify(version)} (this harness reads ${STRUCTURAL_SHAPE_VERSION})`);
   }
 
   const files = readJson(dir, 'files.json');

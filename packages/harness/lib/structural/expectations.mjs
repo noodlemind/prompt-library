@@ -2,6 +2,13 @@
 // the change against the plan. Advisory by default (policy.yaml v2 `checks:`
 // can escalate to warn/enforce); a missing or stale structural index skips
 // rather than guessing, so this check can never invent a failure.
+//
+// ONE RULE THROUGHOUT: never assert what was not compared. A file whose
+// baseline came from another extractor tier, a file in a language this check
+// cannot read, and a finding computed from a table the index build truncated
+// all stay INFORMATIONAL; and a run that compared nothing reports `skipped`,
+// never `passed` — a green gate over an empty comparison is worse than no
+// gate, because an `enforce` opt-in would read it as evidence.
 
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -13,6 +20,23 @@ import { readStructuralIndex } from './shape.mjs';
 export const STRUCTURAL_CHECK_ID = 'structural-expectations';
 
 const EXPECTATION_CHANGES = new Set(['added', 'removed', 'modified']);
+// Findings are rendered and stored (evidence, ledger, JSON): the name lists
+// inside them are bounded like every other retrieved-text surface. A capped
+// list carries its own total so the count is never silently lost.
+const MAX_FINDING_NAMES = 50;
+
+function capList(list) {
+  return list.length > MAX_FINDING_NAMES ? list.slice(0, MAX_FINDING_NAMES) : list;
+}
+
+/** `{ added: [...] }` → `{ addedTotal: n }` for each list the cap shortened. */
+function overflow(lists) {
+  const extra = {};
+  for (const [field, list] of Object.entries(lists)) {
+    if (list.length > MAX_FINDING_NAMES) extra[`${field}Total`] = list.length;
+  }
+  return extra;
+}
 
 function shortSha(sha) {
   return String(sha || '').slice(0, 12);
@@ -33,12 +57,17 @@ function symbolFile(qualified) {
 }
 
 /** Per-changed-file structural diff against the baseline index.
- * Returns `{ diffs, tierSkipped }`: `tierSkipped` maps files whose baseline
- * entry was built by a non-lexical extractor tier — the current side of the
- * diff is ALWAYS the lexical extractor, so comparing against a treesitter
- * baseline would disagree on unchanged code and fabricate added/removed
- * findings. Those files are skipped honestly (reported as informational
- * `tier-mismatch-skipped`), never diffed. */
+ * Returns `{ diffs, tierSkipped, notEvaluated }`:
+ * - `tierSkipped` maps files whose baseline entry was built by a non-lexical
+ *   extractor tier — the current side of the diff is ALWAYS the lexical
+ *   extractor, so comparing against a treesitter baseline would disagree on
+ *   unchanged code and fabricate added/removed findings. Those files are
+ *   skipped honestly (reported as informational `tier-mismatch-skipped`).
+ * - `notEvaluated` maps changed files this check simply cannot speak about
+ *   (a language the lexical extractor does not read, with no baseline entry).
+ *   They are NOT diffed and, like tier skips, can never produce a finding —
+ *   including an `unmet-required-expectation`, which would otherwise fire for
+ *   every `.go`/`.rs`/`.rb` file regardless of what the change did. */
 function diffChangedFiles({ workspace, index, changedFiles }) {
   const rowsByFile = new Map();
   for (const row of index.symbols) {
@@ -49,14 +78,26 @@ function diffChangedFiles({ workspace, index, changedFiles }) {
 
   const diffs = new Map();
   const tierSkipped = new Map();
+  const notEvaluated = new Map();
   for (const file of changedFiles) {
     const ext = path.extname(file).toLowerCase();
     const rows = rowsByFile.get(file) || [];
     const fileEntry = index.files[file];
-    if (!SOURCE_EXTENSIONS.has(ext) && !fileEntry && rows.length === 0) continue;
-    // Per-file tier gate: only a lexical-tier (or untiered legacy/fixture)
-    // baseline entry diffs soundly against the lexical current side.
-    const tier = typeof fileEntry?.tier === 'string' ? fileEntry.tier : null;
+    if (!SOURCE_EXTENSIONS.has(ext) && !fileEntry && rows.length === 0) {
+      notEvaluated.set(file, `no baseline entry and ${ext || 'no extension'} is not a language this check reads`);
+      continue;
+    }
+    // Per-file tier gate: only a lexical-tier baseline entry diffs soundly
+    // against the lexical current side. An untiered entry inherits the
+    // index-wide meta.extractorTier — a legacy/fixture index with no tier
+    // anywhere still diffs, but an untiered file inside a treesitter-tier
+    // index must not be compared against lexical output.
+    const tier =
+      typeof fileEntry?.tier === 'string'
+        ? fileEntry.tier
+        : typeof index.meta?.extractorTier === 'string'
+          ? index.meta.extractorTier
+          : null;
     if (tier && tier !== 'lexical') {
       tierSkipped.set(file, tier);
       continue;
@@ -66,46 +107,65 @@ function diffChangedFiles({ workspace, index, changedFiles }) {
     // the workspace) and size-capped — a committed symlink or oversized file
     // reads as empty, exactly like a deleted file.
     let current = [];
+    let currentExported = [];
     const content = readFileSafe(workspace, file);
     if (content) {
       try {
-        current = extract(file, content).symbols;
+        const extracted = extract(file, content);
+        current = extracted.symbols;
+        currentExported = extracted.exported || [];
       } catch {
         current = [];
       }
     }
     const currentSet = new Set(current);
+    const currentExportedSet = new Set(currentExported);
     const baselineNames = new Set([
       ...(Array.isArray(fileEntry?.symbols) ? fileEntry.symbols : []),
       ...rows.map((row) => row.name),
     ]);
     const exportedRows = rows.filter((row) => row.exported === true);
+    const added = current.filter((name) => !baselineNames.has(name)).sort();
 
     diffs.set(file, {
-      added: current.filter((name) => !baselineNames.has(name)).sort(),
+      added,
+      // The contract speaks about EXPORTED symbols: an added local helper is
+      // not a change to what other modules can see.
+      addedExported: added.filter((name) => currentExportedSet.has(name)),
       removed: [...baselineNames].filter((name) => !currentSet.has(name)).sort(),
       removedExported: [...new Set(exportedRows.map((row) => row.name))].filter((name) => !currentSet.has(name)).sort(),
       baselineNames,
       currentSet,
     });
   }
-  return { diffs, tierSkipped };
+  return { diffs, tierSkipped, notEvaluated };
 }
 
-function survivingCallers({ index, file, symbol, changedSet }) {
-  const target = `${file}#${symbol}`;
-  const callers = new Set();
+/** Caller lookup tables, built ONCE per run. Building them per removed symbol
+ * re-walked the whole call-edge and symbol-row tables for every candidate. */
+function callerIndex(index) {
+  const byTarget = new Map();
+  const add = (key, file) => {
+    if (!file) return;
+    if (!byTarget.has(key)) byTarget.set(key, new Set());
+    byTarget.get(key).add(file);
+  };
   for (const edge of index.graph.calls) {
-    if (edge?.to === target) callers.add(symbolFile(edge.from));
+    if (edge && typeof edge.to === 'string') add(edge.to, symbolFile(edge.from));
   }
   for (const row of index.symbols) {
-    if (row?.file !== file || row?.name !== symbol) continue;
+    if (typeof row?.file !== 'string' || typeof row?.name !== 'string') continue;
     for (const ref of Array.isArray(row.refs) ? row.refs : []) {
-      if (ref && typeof ref.file === 'string') callers.add(ref.file);
+      if (ref && typeof ref.file === 'string') add(`${row.file}#${row.name}`, ref.file);
     }
   }
-  callers.delete(file);
-  return [...callers].filter((caller) => caller && !changedSet.has(caller)).sort();
+  return byTarget;
+}
+
+function survivingCallers({ callers, file, symbol, changedSet }) {
+  const found = callers.get(`${file}#${symbol}`);
+  if (!found) return [];
+  return [...found].filter((caller) => caller && caller !== file && !changedSet.has(caller)).sort();
 }
 
 function expectationObserved(expectation, diffs) {
@@ -117,7 +177,7 @@ function expectationObserved(expectation, diffs) {
   return diff.baselineNames.has(expectation.symbol) && diff.currentSet.has(expectation.symbol);
 }
 
-function evaluateExpectations(plan, diffs, tierSkipped = new Map()) {
+function evaluateExpectations(plan, diffs, tierSkipped = new Map(), notEvaluated = new Map()) {
   const raw = plan.fm?.structural_expectations;
   const findings = [];
   const informational = [];
@@ -146,6 +206,18 @@ function evaluateExpectations(plan, diffs, tierSkipped = new Map()) {
         symbol: entry.symbol,
         change: entry.change,
         message: `expectation on ${entry.file} not evaluated: baseline entry tier '${tierSkipped.get(entry.file)}' does not match the lexical current side`,
+      });
+      continue;
+    }
+    // Same discipline for a file the check cannot read at all: "could not
+    // compare" is informational, never a required-expectation failure.
+    if (notEvaluated.has(entry.file)) {
+      informational.push({
+        type: 'expectation-not-evaluated',
+        file: entry.file,
+        symbol: entry.symbol,
+        change: entry.change,
+        message: `expectation on ${entry.file} not evaluated: ${notEvaluated.get(entry.file)}`,
       });
       continue;
     }
@@ -188,7 +260,7 @@ export function runStructuralExpectations({ workspace, plan, changedFiles, home 
     const changed = [...new Set(changedFiles || [])];
     const changedSet = new Set(changed);
     const allowed = parseImpactedFiles(plan);
-    const { diffs, tierSkipped } = diffChangedFiles({ workspace, index, changedFiles: changed });
+    const { diffs, tierSkipped, notEvaluated } = diffChangedFiles({ workspace, index, changedFiles: changed });
     // Per-file tier mismatches surface as informational notes, never findings:
     // the skip is honest ("could not compare"), not evidence of a problem.
     const tierNotes = [...tierSkipped].map(([file, tier]) => ({
@@ -197,28 +269,85 @@ export function runStructuralExpectations({ workspace, plan, changedFiles, home 
       tier,
       message: `baseline entry for ${file} was built by the '${tier}' extractor tier; the current side is lexical — symbol diff skipped as unsound`,
     }));
+    const notEvaluatedNotes = [...notEvaluated].map(([file, reason]) => ({
+      type: 'file-not-evaluated',
+      file,
+      message: `${file} not compared: ${reason}`,
+    }));
 
+    // A truncated baseline table cannot support an assertion: past the cap a
+    // removed symbol simply has no recorded callers and the symbol table is
+    // incomplete, so these findings degrade to informational instead of
+    // claiming something the data cannot show.
+    const truncated = [
+      index.meta?.symbolsTruncated ? 'symbol table' : null,
+      index.meta?.callEdgesTruncated ? 'call edges' : null,
+    ].filter(Boolean);
     const findings = [];
+    const degraded = [];
+    const record = (finding) => {
+      if (truncated.length) {
+        degraded.push({
+          ...finding,
+          type: `${finding.type}-informational`,
+          message: `${finding.type} not asserted: the baseline ${truncated.join(' and ')} hit the index build cap, so this comparison is incomplete`,
+        });
+      } else {
+        findings.push(finding);
+      }
+    };
+    // Built on first use only: a run with no removed exports never walks the
+    // symbol/edge tables at all.
+    let callers = null;
     for (const [file, diff] of diffs) {
-      const symbolChanges = [...diff.added, ...diff.removedExported];
+      const symbolChanges = [...diff.addedExported, ...diff.removedExported];
       if (symbolChanges.length && !matchesScope(file, allowed)) {
-        findings.push({ type: 'unplanned-symbol-change', file, added: diff.added, removed: diff.removedExported });
+        record({
+          type: 'unplanned-symbol-change',
+          file,
+          added: capList(diff.addedExported),
+          removed: capList(diff.removedExported),
+          ...overflow({ added: diff.addedExported, removed: diff.removedExported }),
+        });
       }
       for (const symbol of diff.removedExported) {
-        const callers = survivingCallers({ index, file, symbol, changedSet });
-        if (callers.length) findings.push({ type: 'removed-symbol-with-callers', file, symbol, callers });
+        callers ??= callerIndex(index);
+        const surviving = survivingCallers({ callers, file, symbol, changedSet });
+        if (surviving.length) {
+          record({
+            type: 'removed-symbol-with-callers',
+            file,
+            symbol,
+            callers: capList(surviving),
+            ...overflow({ callers: surviving }),
+          });
+        }
       }
     }
 
-    const expectations = evaluateExpectations(plan, diffs, tierSkipped);
+    const expectations = evaluateExpectations(plan, diffs, tierSkipped, notEvaluated);
     findings.push(...expectations.findings);
-    const informational = [...tierNotes, ...expectations.informational];
+    const informational = [...tierNotes, ...notEvaluatedNotes, ...degraded, ...expectations.informational];
 
     if (findings.length) {
       const kinds = [...new Set(findings.map((finding) => finding.type))].join(', ');
       return {
         status: 'failed',
         message: `${findings.length} structural finding${findings.length === 1 ? '' : 's'} (${kinds})`,
+        findings,
+        informational,
+        baseline,
+      };
+    }
+    // Zero comparisons is not a pass. A run where every changed file was
+    // skipped (tier mismatch, unreadable language) or where nothing comparable
+    // changed examined NOTHING — reporting `passed` would be a green gate over
+    // an empty comparison, including under an `enforce` opt-in.
+    const skippedFiles = tierSkipped.size + notEvaluated.size;
+    if (diffs.size === 0) {
+      return {
+        status: 'skipped',
+        message: `Structural check compared nothing (0 files examined${skippedFiles ? `, ${skippedFiles} skipped` : ''})`,
         findings,
         informational,
         baseline,

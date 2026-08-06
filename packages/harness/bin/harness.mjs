@@ -81,8 +81,8 @@ const CATALOG = [
         sig: '[--status] [--structural [--since <ref>]]',
         options: [
           ['--status', 'read-only freshness report vs HEAD (never rebuilds)'],
-          ['--structural', 'build the persistent structural code index under ~/.harness/index/<repo-id>/structural (optional tree-sitter tier, lexical fallback)'],
-          ['--since <ref>', 'with --structural: re-parse only files changed since <ref> (validated via git rev-parse; leading "-" rejected)'],
+          ['--structural', 'build the persistent structural code index under ~/.harness/index/<repo-id>/<worktree-id>/structural (optional tree-sitter tier, lexical fallback)'],
+          ['--since <ref>', 'requires --structural: re-parse only files changed since <ref> (validated via git rev-parse; leading "-" rejected). Narrows ONLY when <ref> is the sha the prior index was built at — any other ref is reported and ignored for a full pass'],
         ] },
       { name: 'plan-new', desc: 'scaffold a gate-ready plan',
         sig: '--type feat --slug <slug> --intent "..."',

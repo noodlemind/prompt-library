@@ -3,10 +3,18 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { createRequire } from 'node:module';
 import { test } from 'node:test';
 import { structuralChecks, runDoctor } from '../lib/doctor.mjs';
-import { buildStructuralIndex } from '../lib/repo-map/structural-index.mjs';
-import { lexicalV2 } from '../lib/repo-map/treesitter-extractor.mjs';
+import { buildStructuralIndex, structuralIndexDir } from '../lib/repo-map/structural-index.mjs';
+import { lexicalV2, loadGrammarsLock, DEFAULT_LOCK_PATH } from '../lib/repo-map/treesitter-extractor.mjs';
+
+// HERMETIC GRAMMAR PROBE: every scenario pins its own grammar roots, so S1 is
+// never a verdict on whatever happens to be installed up the filesystem from
+// the test runner. `emptyRoots` is the "no grammars here" baseline.
+function emptyRoots(t) {
+  return [tempTree(t, 'harness-grammar-roots-')];
+}
 
 // Temp dirs registered for t.after cleanup — a failing assertion must not
 // leak the tree (a trailing rmSync never runs on failure).
@@ -66,8 +74,9 @@ function withHome(t, home) {
 test('S1: no index built → advisory pass with the build hint', (t) => {
   const { ws } = gitRepo(t, FIXTURE);
   const home = tempTree(t, 'harness-home-');
+  const roots = emptyRoots(t);
   withHome(t, home);
-  const checks = structuralChecks({ workspace: ws });
+  const checks = structuralChecks({ workspace: ws, grammarRoots: roots });
   assert.equal(checks.length, 1);
   assert.equal(checks[0].id, 'S1');
   assert.equal(checks[0].pass, true);
@@ -78,16 +87,17 @@ test('S1: no index built → advisory pass with the build hint', (t) => {
 test('S1: current healthy index passes; meta.sha drift and orphans degrade to advisory failure', async (t) => {
   const { ws, git } = gitRepo(t, FIXTURE);
   const home = tempTree(t, 'harness-home-');
+  const roots = emptyRoots(t);
   withHome(t, home);
   await buildStructuralIndex({ workspace: ws, home, extractor: extractorWith() });
 
-  const healthy = structuralChecks({ workspace: ws })[0];
+  const healthy = structuralChecks({ workspace: ws, grammarRoots: roots })[0];
   assert.equal(healthy.pass, true);
   assert.match(healthy.hint, /current with HEAD/);
 
   // Orphaned cache entry: an indexed file removed from disk.
   fs.rmSync(path.join(ws, 'b.mjs'));
-  const orphaned = structuralChecks({ workspace: ws })[0];
+  const orphaned = structuralChecks({ workspace: ws, grammarRoots: roots })[0];
   assert.equal(orphaned.pass, false);
   assert.equal(orphaned.optional, true, 'orphans are advisory, not a hard doctor failure');
   assert.match(orphaned.hint, /orphaned cache/);
@@ -97,7 +107,7 @@ test('S1: current healthy index passes; meta.sha drift and orphans degrade to ad
   fs.writeFileSync(path.join(ws, 'c.mjs'), 'export const c = 3;\n');
   git(['add', '.']);
   git(['commit', '-qm', 'advance']);
-  const stale = structuralChecks({ workspace: ws })[0];
+  const stale = structuralChecks({ workspace: ws, grammarRoots: roots })[0];
   assert.equal(stale.pass, false);
   assert.equal(stale.optional, true);
   assert.match(stale.hint, /meta\.sha behind HEAD/);
@@ -106,6 +116,7 @@ test('S1: current healthy index passes; meta.sha drift and orphans degrade to ad
 test('S1: a recorded grammar integrity mismatch is a hard failure, not a warning', async (t) => {
   const { ws } = gitRepo(t, FIXTURE);
   const home = tempTree(t, 'harness-home-');
+  const roots = emptyRoots(t);
   withHome(t, home);
   await buildStructuralIndex({
     workspace: ws,
@@ -114,7 +125,7 @@ test('S1: a recorded grammar integrity mismatch is a hard failure, not a warning
       integrityFailures: [{ language: 'javascript', file: 'tree-sitter-javascript.wasm', reason: 'sha256 mismatch vs grammars.lock' }],
     }),
   });
-  const check = structuralChecks({ workspace: ws })[0];
+  const check = structuralChecks({ workspace: ws, grammarRoots: roots })[0];
   assert.equal(check.id, 'S1');
   assert.equal(check.pass, false);
   assert.ok(!check.optional, 'integrity mismatch must fail doctor, never warn');
@@ -122,14 +133,74 @@ test('S1: a recorded grammar integrity mismatch is a hard failure, not a warning
   assert.match(check.hint, /javascript/);
 });
 
+test('S1: a recorded mismatch the disk now verifies is stale — advisory, not a permanent hard failure', async (t) => {
+  const lock = loadGrammarsLock();
+  const roots = emptyRoots(t);
+  // A root carrying the GENUINE javascript wasm: the bytes on disk verify now.
+  const jsDir = path.join(roots[0], lock.grammars.javascript.package);
+  let source = null;
+  try {
+    source = createRequire(import.meta.url).resolve(`${lock.grammars.javascript.package}/${lock.grammars.javascript.file}`);
+  } catch {
+    source = null;
+  }
+  if (!source) return t.skip('javascript grammar wasm not installed — nothing to verify as fixed');
+  fs.mkdirSync(jsDir, { recursive: true });
+  fs.copyFileSync(source, path.join(jsDir, lock.grammars.javascript.file));
+
+  const { ws } = gitRepo(t, FIXTURE);
+  const home = tempTree(t, 'harness-home-');
+  withHome(t, home);
+  await buildStructuralIndex({
+    workspace: ws,
+    home,
+    extractor: extractorWith({
+      integrityFailures: [{ language: 'javascript', file: lock.grammars.javascript.file, reason: 'sha256 mismatch vs grammars.lock' }],
+    }),
+  });
+  const check = structuralChecks({ workspace: ws, grammarRoots: roots })[0];
+  assert.equal(check.pass, false);
+  assert.equal(check.optional, true, 'a reinstalled grammar must stop being a hard failure without a rebuild');
+  assert.match(check.hint, /still records a grammar integrity mismatch/);
+  assert.match(check.hint, /harness index --structural/);
+});
+
+test('S1: an unreadable grammars.lock fails hard — integrity checking must never silently switch off', (t) => {
+  const { ws } = gitRepo(t, FIXTURE);
+  const home = tempTree(t, 'harness-home-');
+  const roots = emptyRoots(t);
+  withHome(t, home);
+  const check = structuralChecks({ workspace: ws, grammarRoots: roots, lockPath: path.join(roots[0], 'absent.lock') })[0];
+  assert.equal(check.id, 'S1');
+  assert.equal(check.pass, false);
+  assert.ok(!check.optional, 'no lock means nothing can be verified — that is a failure, not a warning');
+  assert.match(check.hint, /grammars\.lock missing or unreadable/);
+  // The shipped lock still passes the same probe.
+  assert.equal(loadGrammarsLock({ lockPath: DEFAULT_LOCK_PATH }) === null, false);
+});
+
+test('S1: an unreadable index table is surfaced, not silently read as empty', async (t) => {
+  const { ws } = gitRepo(t, FIXTURE);
+  const home = tempTree(t, 'harness-home-');
+  const roots = emptyRoots(t);
+  withHome(t, home);
+  await buildStructuralIndex({ workspace: ws, home, extractor: extractorWith() });
+  fs.writeFileSync(path.join(structuralIndexDir(ws, { home }), 'files.json'), '{ truncated');
+  const check = structuralChecks({ workspace: ws, grammarRoots: roots })[0];
+  assert.equal(check.pass, false);
+  assert.equal(check.optional, true);
+  assert.match(check.hint, /files\.json is not valid JSON/);
+});
+
 test('S1: parse-failure rate over 20% degrades to advisory failure', async (t) => {
   const { ws } = gitRepo(t, FIXTURE);
   const home = tempTree(t, 'harness-home-');
+  const roots = emptyRoots(t);
   withHome(t, home);
   const extractor = extractorWith();
   extractor.counters.parseFailures = 1; // 1 of 2 files
   await buildStructuralIndex({ workspace: ws, home, extractor });
-  const check = structuralChecks({ workspace: ws })[0];
+  const check = structuralChecks({ workspace: ws, grammarRoots: roots })[0];
   assert.equal(check.pass, false);
   assert.equal(check.optional, true);
   assert.match(check.hint, /parse-failure rate/);

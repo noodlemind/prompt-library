@@ -345,6 +345,16 @@ export async function cmdIndex(argv) {
   const workspace = path.resolve(flags.workspace);
   const logger = (m) => log(flags, m);
 
+  // `--since` only narrows a structural rebuild. Accepting and ignoring it
+  // anywhere else silently does nothing the caller asked for.
+  if (flags.since && !argv.includes('--structural')) {
+    throw Object.assign(new Error('--since requires --structural'), {
+      code: 'E_USAGE',
+      hint: 'run: harness index --structural --since <ref>',
+      exit: EXIT.usage,
+    });
+  }
+
   // Read-only freshness report — never rebuilds, zero model cost.
   if (argv.includes('--status')) {
     const { indexStatus } = await import('./index-status.mjs');
@@ -399,10 +409,36 @@ export async function cmdIndex(argv) {
         grammarVersions: result.meta.grammarVersions,
         missingGrammars: result.meta.missingGrammars,
         integrityFailures: result.meta.integrityFailures,
+        // Cap hits are part of the contract: a consumer must be able to tell a
+        // complete table from one the build truncated.
+        truncated: {
+          files: result.meta.truncated,
+          symbols: result.meta.symbolsTruncated,
+          symbolDetail: result.meta.symbolDetailTruncated,
+          moduleEdges: result.meta.moduleEdgesTruncated,
+          callEdges: result.meta.callEdgesTruncated,
+          unresolved: result.meta.unresolvedTruncated,
+        },
+        sinceIgnored: result.sinceIgnored,
+        priorUnreadable: result.priorUnreadable,
         delta: result.delta,
       });
     } else {
-      const deltaNote = `symbols +${result.delta.added.count} −${result.delta.removed.count} ~${result.delta.changed.count}${since ? ' vs prior index' : ''}`;
+      const truncatedTables = [
+        result.meta.symbolsTruncated ? 'symbols' : null,
+        result.meta.symbolDetailTruncated ? 'per-symbol lists' : null,
+        result.meta.moduleEdgesTruncated ? 'module edges' : null,
+        result.meta.callEdgesTruncated ? 'call edges' : null,
+        result.meta.unresolvedTruncated ? 'unresolved' : null,
+      ].filter(Boolean);
+      // The delta is ALWAYS measured against the prior index, not only under
+      // --since; say so whenever there was one.
+      const deltaNote =
+        `symbols +${result.delta.added.count} −${result.delta.removed.count} ~${result.delta.changed.count}` +
+        (result.basedOn ? ' vs prior index' : ' (no prior index)') +
+        (truncatedTables.length ? ` · TRUNCATED at build caps (${truncatedTables.join(', ')})` : '') +
+        (result.sinceIgnored ? ` · ${result.sinceIgnored} — full pass` : '') +
+        (result.priorUnreadable?.length ? ` · prior index unreadable (${result.priorUnreadable.length})` : '');
       console.log(
         ui.line({
           state: persistFailed ? 'error' : integrity ? 'warn' : 'ok',

@@ -14,6 +14,7 @@ import {
   renderStructuralDigest,
 } from '../lib/repo-map/structural-index.mjs';
 import { lexicalV2 } from '../lib/repo-map/treesitter-extractor.mjs';
+import { readStructuralIndex as readShapeIndex } from '../lib/structural/shape.mjs';
 
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -140,6 +141,93 @@ test('incremental: unchanged files are not re-parsed; touched-but-identical file
   fs.rmSync(home, { recursive: true, force: true });
 });
 
+test('--since is refused as a narrowing unless it matches the prior index baseline', async () => {
+  // The stale-index trap: an index built at A, three commits landing, then
+  // `--since HEAD~1`. Files changed in commits 1-2 are outside that diff, so
+  // they would keep their A-era entries verbatim while meta.sha is stamped to
+  // the new HEAD — an index that READS as current while carrying stale data.
+  const { ws, git } = gitRepo(FIXTURE);
+  const home = tempHome();
+  await buildStructuralIndex({ workspace: ws, home, extractor: countingExtractor() });
+  const builtAt = git(['rev-parse', 'HEAD']).stdout.trim();
+
+  fs.writeFileSync(path.join(ws, 'src', 'pay.mjs'), 'export function charge() {}\nexport function commitOne() {}\n');
+  git(['add', '.']);
+  git(['commit', '-qm', 'one']);
+  fs.writeFileSync(path.join(ws, 'src', 'audit.mjs'), 'export function audit() {}\nexport function commitTwo() {}\n');
+  git(['add', '.']);
+  git(['commit', '-qm', 'two']);
+  fs.writeFileSync(path.join(ws, 'svc.py'), 'class PaymentService:\n    def three(self):\n        pass\n');
+  git(['add', '.']);
+  git(['commit', '-qm', 'three']);
+
+  const misaligned = validateSinceRef(ws, 'HEAD~1');
+  assert.notEqual(misaligned, builtAt);
+  const ext = countingExtractor();
+  const r = await buildStructuralIndex({ workspace: ws, home, extractor: ext, since: misaligned });
+  assert.match(r.sinceIgnored || '', /does not match the prior index baseline/);
+  assert.equal(r.meta.baseSha, null, 'an ignored --since is never recorded as the baseline');
+
+  const index = readStructuralIndex(ws, { home });
+  assert.equal(index.meta.sha, git(['rev-parse', 'HEAD']).stdout.trim());
+  // The commits the misaligned --since would have skipped are indexed.
+  assert.ok(index.files['src/pay.mjs'].symbols.includes('commitOne'), 'commit 1 must not stay stale under a current stamp');
+  assert.ok(index.files['src/audit.mjs'].symbols.includes('commitTwo'), 'commit 2 must not stay stale under a current stamp');
+  assert.ok(index.files['svc.py'].symbols.includes('three'));
+
+  // Aligned: `since` IS the prior baseline, so narrowing is sound and applied.
+  const aligned = git(['rev-parse', 'HEAD']).stdout.trim();
+  fs.writeFileSync(path.join(ws, 'src', 'pay.mjs'), 'export function charge() {}\nexport function afterAligned() {}\n');
+  git(['add', '.']);
+  git(['commit', '-qm', 'four']);
+  const ext2 = countingExtractor();
+  const aligned2 = await buildStructuralIndex({ workspace: ws, home, extractor: ext2, since: aligned });
+  assert.equal(aligned2.sinceIgnored, null);
+  assert.equal(aligned2.meta.baseSha, aligned);
+  assert.deepEqual(ext2.calls, ['src/pay.mjs'], 'an aligned --since still narrows to the ref diff');
+
+  fs.rmSync(ws, { recursive: true, force: true });
+  fs.rmSync(home, { recursive: true, force: true });
+});
+
+test('co-located worktrees of one repo never serve each other structural tables', async () => {
+  // repoId hashes the ORIGIN REMOTE by design, so every worktree of a repo
+  // shares it; meta.sha is the only currency gate, and two worktrees sit at
+  // the same sha with different working-tree content. Without a per-worktree
+  // path segment each would read the other's symbol tables as its own.
+  const { ws, git } = gitRepo(FIXTURE);
+  git(['remote', 'add', 'origin', 'https://example.test/shared-repo.git']);
+  const linked = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-worktree-'));
+  const target = path.join(linked, 'checkout');
+  assert.equal(git(['worktree', 'add', '-q', '-b', 'side', target]).status, 0);
+  const home = tempHome();
+
+  const dirMain = structuralIndexDir(ws, { home });
+  const dirSide = structuralIndexDir(target, { home });
+  assert.notEqual(dirMain, dirSide, 'each worktree gets its own index directory');
+  assert.equal(path.dirname(path.dirname(dirMain)), path.dirname(path.dirname(dirSide)), 'both still live under one repo id');
+  assert.equal(
+    spawnSync('git', ['-C', ws, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).stdout.trim(),
+    spawnSync('git', ['-C', target, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).stdout.trim(),
+    'the two worktrees are at the same sha — the exact collision case'
+  );
+
+  fs.writeFileSync(path.join(target, 'src', 'pay.mjs'), 'export function onlyInTheWorktree() {}\n');
+  await buildStructuralIndex({ workspace: ws, home, extractor: countingExtractor() });
+  await buildStructuralIndex({ workspace: target, home, extractor: countingExtractor() });
+
+  const main = readStructuralIndex(ws, { home });
+  const side = readStructuralIndex(target, { home });
+  assert.ok(main.files['src/pay.mjs'].symbols.includes('charge'));
+  assert.ok(!main.files['src/pay.mjs'].symbols.includes('onlyInTheWorktree'), 'the main worktree keeps its own table');
+  assert.ok(side.files['src/pay.mjs'].symbols.includes('onlyInTheWorktree'), 'the linked worktree keeps its own table');
+
+  spawnSync('git', ['-C', ws, 'worktree', 'remove', '--force', target], { encoding: 'utf8' });
+  fs.rmSync(linked, { recursive: true, force: true });
+  fs.rmSync(ws, { recursive: true, force: true });
+  fs.rmSync(home, { recursive: true, force: true });
+});
+
 test('--since: only files in the ref diff are re-parsed; the ref is validated', async () => {
   const { ws, git } = gitRepo(FIXTURE);
   const home = tempHome();
@@ -199,6 +287,155 @@ test('readStructuralIndexIfCurrent gates on the generation sha', async () => {
 
   fs.rmSync(ws, { recursive: true, force: true });
   fs.rmSync(home, { recursive: true, force: true });
+});
+
+test('a stale index is rejected from meta.json alone — the tables are never parsed', async (t) => {
+  const { ws, git } = gitRepo(FIXTURE);
+  const home = tempHome();
+  t.after(() => {
+    fs.rmSync(ws, { recursive: true, force: true });
+    fs.rmSync(home, { recursive: true, force: true });
+  });
+  await buildStructuralIndex({ workspace: ws, home, extractor: countingExtractor() });
+  fs.writeFileSync(path.join(ws, 'later.mjs'), 'export const later = 1;\n');
+  git(['add', '.']);
+  git(['commit', '-qm', 'advance head']);
+
+  // orient runs this every turn; on a stale index the old order read and
+  // parsed all three tables (multi-MB in a real repo) only to discard them.
+  const opened = [];
+  const realOpen = fs.openSync;
+  fs.openSync = (target, ...rest) => {
+    opened.push(String(target));
+    return realOpen(target, ...rest);
+  };
+  try {
+    assert.equal(readStructuralIndexIfCurrent(ws, { home }), null, 'stale index is not served');
+  } finally {
+    fs.openSync = realOpen;
+  }
+  assert.ok(
+    opened.some((name) => name.endsWith('meta.json')),
+    'the generation stamp is read'
+  );
+  for (const table of ['files.json', 'symbols.json', 'graph.json']) {
+    assert.ok(!opened.some((name) => name.endsWith(table)), `${table} must not be parsed for a stale index: ${opened}`);
+  }
+});
+
+test('an existing-but-unreadable table is loud, never silently empty', async (t) => {
+  const { ws } = gitRepo(FIXTURE);
+  const home = tempHome();
+  t.after(() => {
+    fs.rmSync(ws, { recursive: true, force: true });
+    fs.rmSync(home, { recursive: true, force: true });
+  });
+  await buildStructuralIndex({ workspace: ws, home, extractor: countingExtractor() });
+  const dir = structuralIndexDir(ws, { home });
+  fs.writeFileSync(path.join(dir, 'symbols.json'), '{ "truncated": ');
+
+  const index = readStructuralIndex(ws, { home });
+  assert.deepEqual(
+    index.unreadable.map((reason) => reason.split(' ')[0]),
+    ['symbols.json'],
+    JSON.stringify(index.unreadable)
+  );
+  assert.equal(readStructuralIndexIfCurrent(ws, { home }), null, 'a current stamp over a broken table is not usable');
+
+  const logs = [];
+  const rebuilt = await buildStructuralIndex({ workspace: ws, home, extractor: countingExtractor(), log: (m) => logs.push(m) });
+  assert.deepEqual(rebuilt.priorUnreadable.length, 1);
+  assert.ok(logs.some((line) => /prior structural index unusable/.test(line)), JSON.stringify(logs));
+  assert.equal(rebuilt.reparsed, 3, 'an unusable prior forces an honest full rebuild');
+  assert.equal(readStructuralIndex(ws, { home }).unreadable.length, 0, 'the rebuild repairs the table');
+});
+
+test('a hand-edited or partial prior entry is discarded and rebuilt, never a crash', async (t) => {
+  const { ws } = gitRepo(FIXTURE);
+  const home = tempHome();
+  t.after(() => {
+    fs.rmSync(ws, { recursive: true, force: true });
+    fs.rmSync(home, { recursive: true, force: true });
+  });
+  await buildStructuralIndex({ workspace: ws, home, extractor: countingExtractor() });
+  const dir = structuralIndexDir(ws, { home });
+  const files = JSON.parse(fs.readFileSync(path.join(dir, 'files.json'), 'utf8'));
+  const stat = fs.statSync(path.join(ws, 'svc.py'));
+  // Same mtime+size as on disk, so the fast path WILL reuse it, but with no
+  // defs/refs arrays — the shape that used to abort the whole build.
+  files['svc.py'] = { hash: 'c'.repeat(64), mtime: stat.mtimeMs, size: stat.size };
+  fs.writeFileSync(path.join(dir, 'files.json'), JSON.stringify(files));
+
+  const ext = countingExtractor();
+  const rebuilt = await buildStructuralIndex({ workspace: ws, home, extractor: ext });
+  assert.equal(rebuilt.written, true);
+  assert.deepEqual(ext.calls, ['svc.py'], 'only the unusable entry is re-parsed');
+  const index = readStructuralIndex(ws, { home });
+  assert.ok(index.files['svc.py'].symbols.includes('PaymentService'));
+});
+
+test('table caps are recorded in meta, not silently applied', async (t) => {
+  const { ws } = gitRepo(FIXTURE);
+  const home = tempHome();
+  t.after(() => {
+    fs.rmSync(ws, { recursive: true, force: true });
+    fs.rmSync(home, { recursive: true, force: true });
+  });
+  const clean = await buildStructuralIndex({ workspace: ws, home, extractor: countingExtractor() });
+  assert.equal(clean.meta.symbolsTruncated, false);
+  assert.equal(clean.meta.callEdgesTruncated, false);
+  assert.equal(clean.meta.moduleEdgesTruncated, false);
+  assert.equal(clean.meta.unresolvedTruncated, false);
+
+  // A fresh home so every file is genuinely re-parsed by the bloated extractor.
+  const bloatedHome = tempHome();
+  t.after(() => fs.rmSync(bloatedHome, { recursive: true, force: true }));
+  const bloated = countingExtractor();
+  const inner = bloated.extract.bind(bloated);
+  bloated.extract = (rel, content) => {
+    const base = inner(rel, content);
+    if (rel !== 'svc.py') return base;
+    return { ...base, defs: [...base.defs, ...Array.from({ length: 20_000 }, (_, i) => ({ name: `f${i}`, kind: 'symbol', line: 1, exported: false }))] };
+  };
+  const capped = await buildStructuralIndex({ workspace: ws, home: bloatedHome, extractor: bloated });
+  assert.equal(capped.meta.symbolsTruncated, true, 'a dropped symbol must be recorded, not silent');
+  assert.equal(readStructuralIndex(ws, { home: bloatedHome }).meta.symbolsTruncated, true);
+});
+
+test('an index written by a NEWER version is skipped by both readers', async (t) => {
+  const { ws } = gitRepo(FIXTURE);
+  const home = tempHome();
+  t.after(() => {
+    fs.rmSync(ws, { recursive: true, force: true });
+    fs.rmSync(home, { recursive: true, force: true });
+  });
+  await buildStructuralIndex({ workspace: ws, home, extractor: countingExtractor() });
+  const dir = structuralIndexDir(ws, { home });
+  const meta = JSON.parse(fs.readFileSync(path.join(dir, 'meta.json'), 'utf8'));
+  assert.equal(meta.version, 1, 'meta.version is written');
+  fs.writeFileSync(path.join(dir, 'meta.json'), JSON.stringify({ ...meta, version: 99 }));
+
+  assert.equal(readStructuralIndex(ws, { home }), null, 'a future index shape is not half-read');
+  assert.equal(readStructuralIndexIfCurrent(ws, { home }), null);
+  const shape = readShapeIndex(ws, { home });
+  assert.equal(shape.present, false);
+  assert.match(shape.reason, /unsupported structural index version/);
+});
+
+test('.mts and .cts files are indexed like the other TypeScript extensions', async (t) => {
+  const { ws } = gitRepo({
+    'a.mts': 'export function fromMts() {}\n',
+    'b.cts': 'export function fromCts() {}\n',
+  });
+  const home = tempHome();
+  t.after(() => {
+    fs.rmSync(ws, { recursive: true, force: true });
+    fs.rmSync(home, { recursive: true, force: true });
+  });
+  await buildStructuralIndex({ workspace: ws, home, extractor: countingExtractor() });
+  const index = readStructuralIndex(ws, { home });
+  assert.ok(index.files['a.mts']?.symbols.includes('fromMts'), JSON.stringify(Object.keys(index.files)));
+  assert.ok(index.files['b.cts']?.symbols.includes('fromCts'));
 });
 
 test('atomic writes: no temp residue, every table is valid JSON, dry-run writes nothing', async () => {

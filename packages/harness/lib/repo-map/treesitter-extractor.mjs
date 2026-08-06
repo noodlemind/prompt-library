@@ -50,6 +50,8 @@ export const STRUCTURAL_LANGUAGES = {
   '.mjs': 'javascript',
   '.cjs': 'javascript',
   '.ts': 'typescript',
+  '.mts': 'typescript',
+  '.cts': 'typescript',
   '.tsx': 'tsx',
   '.py': 'python',
   '.java': 'java',
@@ -71,46 +73,121 @@ function capName(name) {
 }
 
 /**
+ * First line each wanted name appears on, in ONE pass over the text.
+ * The naive shape (`names.map(n => lines.findIndex(l => l.includes(n)))`) is
+ * quadratic — 512 names × every line of a large file — and the lexical tier is
+ * the DEFAULT tier, so that cost lands on every file of a full index. Here the
+ * text is tokenized once and identifier hits are recorded as they are seen;
+ * only names that are not plain identifiers (quoted HCL/SQL names) fall back
+ * to one native `indexOf` each, resolved against precomputed line starts.
+ */
+function firstLines(text, names) {
+  const wanted = new Set(names);
+  const found = new Map();
+  if (!wanted.size) return found;
+  const lines = text.split('\n');
+  const token = /[A-Za-z_$][\w$]*/g;
+  for (let i = 0; i < lines.length && found.size < wanted.size; i++) {
+    token.lastIndex = 0;
+    let m;
+    while ((m = token.exec(lines[i])) !== null) {
+      if (wanted.has(m[0]) && !found.has(m[0])) found.set(m[0], i + 1);
+    }
+  }
+  if (found.size === wanted.size) return found;
+  const starts = [0];
+  for (let i = 0; i < lines.length; i++) starts.push(starts[i] + lines[i].length + 1);
+  for (const name of wanted) {
+    if (found.has(name)) continue;
+    const at = text.indexOf(name);
+    if (at === -1) {
+      found.set(name, 0);
+      continue;
+    }
+    let lo = 0;
+    let hi = starts.length - 1;
+    while (lo < hi) {
+      const mid = (lo + hi + 1) >> 1;
+      if (starts[mid] <= at) lo = mid;
+      else hi = mid - 1;
+    }
+    found.set(name, lo + 1);
+  }
+  return found;
+}
+
+/**
  * Lexical extraction lifted to the v2 result shape — the permanent fallback
  * tier. Each lexical symbol becomes a `kind: 'symbol'` def located at its
  * first occurrence line (an approximation, honestly labeled by the lexical
- * tier — the AST tier records real declaration sites). `refs` stay empty:
- * the lexical tier has no call facts to offer and never fabricates any.
+ * tier — the AST tier records real declaration sites), carrying the lexical
+ * extractor's export verdict so the structural checks have a real exported
+ * surface in the default tier. `refs` are the names the file EXPLICITLY
+ * imports from other modules, at their first-use line — facts the source
+ * states outright; the lexical tier still never infers a call from a bare
+ * identifier, and without them a lexical index would carry no edges at all.
  */
 export function lexicalV2(rel, content) {
-  const { symbols, imports } = lexicalExtract(rel, content);
-  const lines = String(content || '').split('\n');
-  const defs = symbols.slice(0, MAX_DEFS_PER_FILE).map((name) => {
-    const at = lines.findIndex((l) => l.includes(name));
-    return { name: capName(name), kind: 'symbol', line: at === -1 ? 0 : at + 1, exported: false };
-  });
+  const { symbols, imports, exported, references } = lexicalExtract(rel, content);
+  const kept = symbols.slice(0, MAX_DEFS_PER_FILE);
+  const referenced = (references || []).slice(0, MAX_REFS_PER_FILE);
+  const exportedSet = new Set(exported || []);
+  const lines = firstLines(String(content || ''), [...kept, ...referenced]);
+  const defs = kept.map((name) => ({
+    name: capName(name),
+    kind: 'symbol',
+    line: lines.get(name) ?? 0,
+    exported: exportedSet.has(name),
+  }));
   return {
-    symbols: symbols.map(capName),
-    imports: imports.map(capName),
+    symbols: kept.map(capName),
+    imports: imports.slice(0, MAX_IMPORTS_PER_FILE).map(capName),
     defs,
-    refs: [],
+    refs: referenced.map((name) => ({ name: capName(name), line: lines.get(name) ?? 0 })),
     complexity: branchComplexity(content),
     tier: 'lexical',
   };
 }
 
-/** Read and parse grammars.lock. Returns null when missing/unreadable. */
+/** Read and parse grammars.lock. Returns null when missing/unreadable —
+ * which is never a silent condition: the lock IS the integrity mechanism, so
+ * `createTreesitterExtract` refuses the treesitter tier and doctor S1 fails
+ * hard when it cannot be read (see MISSING_LOCK_FAILURE). */
 export function loadGrammarsLock({ lockPath = DEFAULT_LOCK_PATH } = {}) {
   try {
     const lock = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
     if (!lock || typeof lock !== 'object' || !lock.grammars) return null;
-    // Consumers dereference lock.runtime.package/.file directly — validate the
-    // runtime block here so a truncated lock reads as absent, never as a throw.
+    // Consumers dereference lock.runtime.package/.file and .loader directly —
+    // validate the runtime block here so a truncated lock reads as absent,
+    // never as a throw.
     const rt = lock.runtime;
     if (!rt || typeof rt !== 'object' || typeof rt.package !== 'string' || typeof rt.file !== 'string') return null;
+    if (!rt.loader || typeof rt.loader.file !== 'string' || typeof rt.loader.sha256 !== 'string') return null;
     return lock;
   } catch {
     return null;
   }
 }
 
+/** The single failure record for an unreadable lock — the loud signal shared
+ * by the extractor (index meta) and the sync doctor probe. */
+export const MISSING_LOCK_FAILURE = Object.freeze({
+  language: 'lock',
+  file: 'grammars.lock',
+  reason: 'grammars.lock missing or unreadable — wasm integrity cannot be verified',
+});
+
 function sha256(bytes) {
   return crypto.createHash('sha256').update(bytes).digest('hex');
+}
+
+/** The harness package's OWN node_modules — where `optionalDependencies`
+ * install. Exported because the sync doctor probe must scope integrity
+ * verification to the copy this package owns: walking parent node_modules
+ * makes any unrelated web-tree-sitter anywhere up the filesystem a doctor
+ * failure for a user who never ran `harness index --structural`. */
+export function packageGrammarRoots() {
+  return [path.join(path.resolve(__dirname, '..', '..'), 'node_modules')];
 }
 
 /** Default roots searched for `<package>/<file>` grammar wasm files. */
@@ -129,6 +206,24 @@ function defaultGrammarRoots() {
   return roots;
 }
 
+/**
+ * The JS entry point `await import('web-tree-sitter')` will actually execute.
+ * Hash-pinning the wasm alone is not supply-chain integrity: an attacker who
+ * can edit node_modules edits THIS file instead and every wasm digest still
+ * verifies, with full Node privileges. Resolved through the module resolver
+ * (the same specifier the dynamic import uses) so the bytes hashed are the
+ * bytes run; falls back to the lock-named file under `roots` on older Node.
+ */
+function resolveLoaderPath(roots, lock) {
+  try {
+    const url = import.meta.resolve?.(lock.runtime.package);
+    if (typeof url === 'string' && url.startsWith('file:')) return fileURLToPath(url);
+  } catch {
+    // fall through to the root-scoped lookup
+  }
+  return findWasm(roots, lock.runtime.package, lock.runtime.loader.file);
+}
+
 function findWasm(roots, pkg, file) {
   for (const root of roots) {
     const full = path.join(root, pkg, file);
@@ -145,14 +240,25 @@ function findWasm(roots, pkg, file) {
  * Synchronous availability + integrity report — no instantiation, no async.
  * Doctor S1 uses this to check the CURRENT on-disk grammar state (an index
  * meta records what was true at build time; this records what is true now).
- * Shape: { lock, runtime: {present, ok, path?}, grammars: {lang: {present,
- * ok, version, path?}}, integrityFailures: [{language, file, reason}] }.
+ * Shape: { lock, runtime: {present, ok, path?}, loader: {present, ok, path?},
+ * grammars: {lang: {present, ok, version, path?}},
+ * integrityFailures: [{language, file, reason}] }. An unreadable lock is
+ * itself an integrity failure — with no lock nothing can be verified.
  */
 export function grammarStatus({ grammarRoots, lockPath } = {}) {
   const lock = loadGrammarsLock({ lockPath });
   const roots = grammarRoots || defaultGrammarRoots();
-  const status = { lock: Boolean(lock), runtime: { present: false, ok: false }, grammars: {}, integrityFailures: [] };
-  if (!lock) return status;
+  const status = {
+    lock: Boolean(lock),
+    runtime: { present: false, ok: false },
+    loader: { present: false, ok: false },
+    grammars: {},
+    integrityFailures: [],
+  };
+  if (!lock) {
+    status.integrityFailures.push({ ...MISSING_LOCK_FAILURE });
+    return status;
+  }
   const check = (language, spec) => {
     const full = findWasm(roots, spec.package, spec.file);
     if (!full) return { present: false, ok: false, version: spec.version };
@@ -167,6 +273,9 @@ export function grammarStatus({ grammarRoots, lockPath } = {}) {
     return { present: true, ok, version: spec.version, path: full };
   };
   status.runtime = check('runtime', lock.runtime);
+  // The JS loader is pinned like the wasm — a tampered entry point is the
+  // cheaper attack, so an unpinned loader would make the wasm digests theatre.
+  status.loader = check('loader', { ...lock.runtime.loader, package: lock.runtime.package });
   for (const [language, spec] of Object.entries(lock.grammars)) {
     status.grammars[language] = check(language, spec);
   }
@@ -410,7 +519,7 @@ export function makeStructuralExtract({ parseForLanguage, counters = { parseFail
  * mismatch ALSO degrades that grammar to lexical, but loudly: it is recorded
  * in `integrityFailures` for the index meta and doctor S1.
  */
-export async function createTreesitterExtract({ grammarRoots, lockPath } = {}) {
+export async function createTreesitterExtract({ grammarRoots, lockPath, loaderPath } = {}) {
   const counters = { parseFailures: 0, parsed: 0, errorFiles: 0 };
   const lexicalOnly = (reason, integrityFailures = []) => ({
     ...makeStructuralExtract({ parseForLanguage: () => null, counters }),
@@ -424,10 +533,28 @@ export async function createTreesitterExtract({ grammarRoots, lockPath } = {}) {
   });
 
   const lock = loadGrammarsLock({ lockPath });
-  if (!lock) return lexicalOnly('grammars.lock missing or unreadable');
+  // A missing/truncated lock is NOT a silent optional-tier absence: it would
+  // disable every integrity check while the tier kept running. Refuse loudly.
+  if (!lock) return lexicalOnly('grammars.lock missing or unreadable', [{ ...MISSING_LOCK_FAILURE }]);
 
   const roots = grammarRoots || defaultGrammarRoots();
   const integrityFailures = [];
+
+  // Verify the JS entry point BEFORE importing it — the import executes that
+  // file with full Node privileges, so it is pinned exactly like the wasm.
+  const loaderFull = loaderPath || resolveLoaderPath(roots, lock);
+  if (!loaderFull) return lexicalOnly('web-tree-sitter loader not installed (optional)');
+  let loaderBytes;
+  try {
+    loaderBytes = fs.readFileSync(loaderFull);
+  } catch {
+    return lexicalOnly('web-tree-sitter loader unreadable');
+  }
+  if (sha256(loaderBytes) !== lock.runtime.loader.sha256) {
+    return lexicalOnly('loader integrity mismatch', [
+      { language: 'loader', file: lock.runtime.loader.file, reason: 'sha256 mismatch vs grammars.lock' },
+    ]);
+  }
 
   // Runtime wasm: verified bytes are handed to init as `wasmBinary`, so the
   // exact object hashed is the exact object instantiated.
