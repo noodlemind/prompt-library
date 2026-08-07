@@ -343,7 +343,9 @@ test('gate rejects unsupported phases instead of bypassing lifecycle checks', ()
 
   const result = runHarness(['gate', '--phase', 'typo', '--plan', plan, '--workspace', workspace, '--json']);
 
-  assert.equal(result.status, 1);
+  // A bad flag value is caller misuse: E_USAGE/exit 2, not the E_UNEXPECTED/1
+  // that a bare Error from parseFlags used to produce.
+  assert.equal(result.status, 2, result.stderr);
   assert.match(result.stderr, /invalid --phase/i);
 });
 

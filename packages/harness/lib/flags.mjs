@@ -1,5 +1,17 @@
+import { EXIT } from './style.mjs';
+
+// A malformed flag value is caller misuse, not an internal fault, so it carries
+// the same structured shape as every other usage error the CLI raises
+// (registry.mjs#usageError, bin/harness.mjs's --output rejection): E_USAGE and
+// exit 2. Pre-fix this threw a bare Error, so bin/harness.mjs's top-level catch
+// fell back to E_UNEXPECTED/exit 1 — a typo in an argument was indistinguishable
+// on the machine lane from the harness crashing.
 function invalidFlag(name, value, hint) {
-  throw new Error(`invalid ${name}: ${JSON.stringify(value)} — ${hint}`);
+  throw Object.assign(new Error(`invalid ${name}: ${JSON.stringify(value)} — ${hint}`), {
+    code: 'E_USAGE',
+    hint: 'harness help',
+    exit: EXIT.usage,
+  });
 }
 
 function parseMinScore(raw, flagName) {

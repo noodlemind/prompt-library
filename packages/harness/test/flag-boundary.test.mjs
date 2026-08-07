@@ -92,6 +92,26 @@ test('CLI: `status --no-events -- --json` renders the human ledger, never JSON (
   assert.match(res.stdout, /harness/, 'the ordinary ledger rendering must appear');
 });
 
+// Codex P2 (round 2): the guard alone still surfaced as E_UNEXPECTED/exit 1,
+// because invalidFlag threw a bare Error and bin/harness.mjs's top-level catch
+// falls back to that shape. A malformed flag value is caller misuse and now
+// reports E_USAGE/exit 2 like every other usage error — asserted through the
+// real CLI, since the classification only exists at that boundary.
+test('CLI: a flag with a missing value is E_USAGE/exit 2, not an internal-fault exit 1', () => {
+  const missingBeforeBoundary = runHarness(['status', '--workspace', '--', '--json']);
+  assert.equal(missingBeforeBoundary.status, 2, missingBeforeBoundary.stderr);
+  assert.match(missingBeforeBoundary.stderr, /E_USAGE/);
+  assert.match(missingBeforeBoundary.stderr, /invalid --workspace/);
+
+  const missingAtEnd = runHarness(['status', '--workspace']);
+  assert.equal(missingAtEnd.status, 2, missingAtEnd.stderr);
+
+  // The whole family moves together, not just --workspace.
+  const otherFlag = runHarness(['status', '--since']);
+  assert.equal(otherFlag.status, 2, otherFlag.stderr);
+  assert.match(otherFlag.stderr, /invalid --since/);
+});
+
 test('CLI: control flags before `--` still work exactly as before (boundary is positional, not blanket)', () => {
   const workspace = tempDir('flag-boundary-json-ws-');
   const copilotHome = tempDir('flag-boundary-json-home-');

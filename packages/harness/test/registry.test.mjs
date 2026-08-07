@@ -442,17 +442,23 @@ test('CLI: a genuinely unknown top-level command produces a structured E_USAGE e
 // pre-registry (parseFlags-driven) behavior below. Each assertion pins the
 // exact pre-registry outcome.
 
-test('CLI repro 1: a negative-number --min-score value reaches parseMinScore unchanged (E_UNEXPECTED, exit 1)', () => {
+// What this pins is ROUTING: the dash-shaped value must reach parseMinScore and
+// be rejected on its own terms, rather than being swallowed by the registry's
+// value-lookahead as an "unknown flag" before the handler ever runs. The error's
+// classification is incidental to that and has since been corrected — a
+// malformed flag value is caller misuse, so it reports E_USAGE/exit 2 like every
+// other usage error instead of the E_UNEXPECTED/exit 1 a bare Error produced.
+test('CLI repro 1: a negative-number --min-score value reaches parseMinScore unchanged (E_USAGE, exit 2)', () => {
   const workspace = tempDir('registry-repro1-ws-');
   const copilotHome = tempDir('registry-repro1-home-');
   const result = runHarness(['orient', '--min-score', '-0.5', '--json', '--workspace', workspace, '--copilot-home', copilotHome]);
 
-  assert.equal(result.status, 1, result.stderr);
+  assert.equal(result.status, 2, result.stderr);
   const body = JSON.parse(result.stderr);
   assert.equal(body.ok, false);
-  assert.equal(body.error.code, 'E_UNEXPECTED');
+  assert.equal(body.error.code, 'E_USAGE');
   assert.match(body.error.message, /invalid --min-score: "-0\.5" — must be a number between 0 and 1/);
-  assert.equal(body.error.exit, 1);
+  assert.equal(body.error.exit, 2);
 });
 
 test('CLI repro 2: a dash-prefixed --query value is consumed as free text, not rejected (exit 0)', () => {
