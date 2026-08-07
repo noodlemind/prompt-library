@@ -1,13 +1,19 @@
 # Harness Evolution — Phase 2–4 plan drafts
 
-Draft successors to the live Phase 1 plan
-(`2026-08-06-feat-harness-evolution-phase1-plan.md`), derived from the approved
+> **Status: superseded.** Every phase below shipped in PR #42 alongside Phase 1
+> — Phase 2 (layered writes, promotion, prune), Phase 3 (`index --structural`),
+> and Phase 4 (per-check severity with advisory structural expectations). The
+> Phase 1 plan these drafted against has been removed as a spent artifact. Kept
+> only for the one item deliberately left open: the evidence-based **structural
+> default-on decision**, which Phase 4 defers until usage data has accumulated.
+> Read as a historical scoping record, not as pending work.
+
+Drafts derived from the approved
 [Harness Evolution Blueprint](../../knowledge/proposals/harness-evolution-blueprint.md)
 (Human Decision: Approved 2026-08-06). This file is deliberately **undated**: the repo
-retains at most one live dated plan at a time, so each draft below is promoted to a
-dated, schema-v1, gate-ready plan when its phase starts and the slot is free. Until
-then these are scoping records, not executable plans — `harness gate` never accepts
-this file.
+retains at most one live dated plan at a time, so each draft below was to be promoted to
+a dated, schema-v1, gate-ready plan when its phase started and the slot was free. These
+were scoping records, never executable plans — `harness gate` never accepts this file.
 
 The blueprint's approval conditions bind every phase: the §4 protected-shadow and
 governance-binding gates, the §5 promotion-lane mechanics and `absorb-branch` replay
