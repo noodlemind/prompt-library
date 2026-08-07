@@ -18,6 +18,7 @@
     "retired.json",
     "README.md"
   ],
+  "//bundledDependencies": "yaml ships INSIDE the tarball so a hand-delivered package installs without reaching a registry — it is the harness's only hard runtime dependency (zero transitive deps of its own) and the tree-sitter grammars stay optional, degrading to the lexical tier when unavailable. The trade is that the pinned version is what every consumer gets, registry installs included: they can no longer resolve a patched yaml themselves, so a yaml CVE is OUR republish. Keep the floor at a version with no known advisory (^2.9.0 clears CVE-2026-33532, which ^2.8.0 permitted) and re-check on every release.",
   "scripts": {
     "build:assets": "node ../../scripts/build-harness-assets.mjs",
     "prepare": "npm run build:assets",
@@ -38,8 +39,11 @@
     "directory": "packages/harness"
   },
   "dependencies": {
-    "yaml": "^2.8.0"
+    "yaml": "^2.9.0"
   },
+  "bundledDependencies": [
+    "yaml"
+  ],
   "keywords": [
     "github-copilot",
     "agent-skills",
