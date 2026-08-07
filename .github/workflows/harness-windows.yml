@@ -1,0 +1,156 @@
+# Exercises the harness CLI on a real Windows runner. The repository's primary
+# consumption platform is Windows (AGENTS.md), but every check until now ran on
+# ubuntu-latest, so the win32 branches shipped untested: runner.mjs terminates
+# descendants with `taskkill /T /F` instead of a POSIX process group, paths.mjs
+# resolves LOCALAPPDATA/USERPROFILE, style.mjs only enables Unicode glyphs when
+# a modern terminal announces itself, and global-bin.mjs writes a .cmd shim.
+#
+# Output is captured verbatim to artifacts so the real console rendering — not
+# a reconstruction of it — can be read after the fact.
+name: Harness on Windows
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ['feat/**']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: packages/harness/package-lock.json
+
+      - name: Install harness dependencies
+        run: npm ci --prefix packages/harness
+
+      # The suite has never run on Windows. Failures here are the point of the
+      # job, so they must not hide the CLI scenarios below.
+      - name: Harness test suite (Windows)
+        id: suite
+        continue-on-error: true
+        run: npm --prefix packages/harness test
+
+      - name: CLI scenarios
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Continue'
+          New-Item -ItemType Directory -Force -Path win-output | Out-Null
+          $ws = Join-Path $env:RUNNER_TEMP 'ws'
+          $ch = Join-Path $env:RUNNER_TEMP 'copilot'
+          New-Item -ItemType Directory -Force -Path $ws, $ch | Out-Null
+          git -C $ws init -q 2>&1 | Out-Null
+          git -C $ws -c user.email=ci@example.com -c user.name=ci commit -q --allow-empty -m init 2>&1 | Out-Null
+
+          function Probe($name, $cmdArgs) {
+            $header = "`n=== $name ===`n`$ harness $($cmdArgs -join ' ')"
+            Write-Host $header
+            $out = & node packages/harness/bin/harness.mjs @cmdArgs 2>&1 | Out-String
+            $code = $LASTEXITCODE
+            Write-Host $out
+            Write-Host "[exit $code]"
+            Add-Content -Path win-output/scenarios.txt -Value "$header`n$out[exit $code]"
+          }
+
+          Probe 'help — design system on the Windows console' @('help')
+          Probe 'status — ledger rendering' @('status', '--workspace', $ws, '--copilot-home', $ch)
+          Probe 'status --json — legacy machine shape' @('status', '--json', '--workspace', $ws, '--copilot-home', $ch)
+          Probe 'status --output json-envelope — versioned envelope lane' @('status', '--output', 'json-envelope', '--workspace', $ws, '--copilot-home', $ch)
+          Probe 'status --output agent — budgeted agent lane' @('status', '--output', 'agent', '--workspace', $ws, '--copilot-home', $ch)
+          Probe 'orient' @('orient', '--query', 'windows smoke', '--workspace', $ws, '--copilot-home', $ch)
+          Probe 'index --structural (from main #42)' @('index', '--structural', '--workspace', $ws, '--copilot-home', $ch)
+          Probe 'knowledge status (from main #42)' @('knowledge', 'status', '--workspace', $ws, '--copilot-home', $ch)
+          Probe 'unknown flag — strict validation, expect E_USAGE exit 2' @('status', '--bogus', '--workspace', $ws)
+          Probe 'missing required arg — expect E_USAGE exit 2' @('recall', '--workspace', $ws, '--copilot-home', $ch)
+          Probe 'literal boundary — --json after -- must stay literal' @('status', '--workspace', $ws, '--copilot-home', $ch, '--', '--json')
+
+      # Redaction and descendant termination are the two win32 paths with the
+      # least coverage, so they are exercised directly rather than inferred.
+      - name: Redaction on Windows
+        continue-on-error: true
+        shell: pwsh
+        env:
+          MY_API_TOKEN: 'ghp_windowssmoketest0123456789abcdefghij'
+        run: |
+          $ws = Join-Path $env:RUNNER_TEMP 'ws'
+          $out = & node packages/harness/bin/harness.mjs learnings --why $env:MY_API_TOKEN --workspace $ws 2>&1 | Out-String
+          Write-Host $out
+          Add-Content -Path win-output/scenarios.txt -Value "`n=== redaction (ledger) ===`n$out"
+          if ($out -match 'ghp_windowssmoketest') {
+            Write-Host '::error::SECRET LEAKED in ledger output on Windows'
+            Add-Content -Path win-output/scenarios.txt -Value 'RESULT: LEAKED'
+          } else {
+            Write-Host 'redaction held on Windows'
+            Add-Content -Path win-output/scenarios.txt -Value 'RESULT: masked'
+          }
+
+      - name: Runner descendant termination via taskkill
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $script = @'
+          import { runProcess } from './packages/harness/lib/runner.mjs';
+          const ctrl = new AbortController();
+          // A parent that spawns a long-lived grandchild, so termination has to
+          // reach the whole tree rather than just the process we spawned.
+          const child = process.platform === 'win32'
+            ? { argv: ['cmd', '/c', 'start /b timeout /t 60 >nul & timeout /t 60 >nul'] }
+            : { argv: ['sh', '-c', 'sleep 60 & sleep 60'] };
+          setTimeout(() => ctrl.abort(), 1200);
+          const started = Date.now();
+          const res = await runProcess({ ...child, signal: ctrl.signal, timeoutMs: 30000 });
+          console.log(JSON.stringify({
+            status: res.status,
+            exitCode: res.exitCode,
+            settledMs: Date.now() - started,
+            platform: process.platform,
+          }, null, 2));
+          if (res.status !== 'cancelled') { console.error('EXPECTED cancelled, GOT ' + res.status); process.exit(1); }
+          '@
+          Set-Content -Path win-cancel.mjs -Value $script
+          $out = & node win-cancel.mjs 2>&1 | Out-String
+          Write-Host $out
+          Add-Content -Path win-output/scenarios.txt -Value "`n=== runner cancellation (taskkill path) ===`n$out"
+
+      - name: Environment fingerprint
+        if: always()
+        shell: pwsh
+        run: |
+          $info = @{
+            os = (Get-CimInstance Win32_OperatingSystem).Caption
+            version = [System.Environment]::OSVersion.VersionString
+            node = (node --version)
+            shell = 'pwsh'
+            WT_SESSION = "$env:WT_SESSION"
+            TERM_PROGRAM = "$env:TERM_PROGRAM"
+          } | ConvertTo-Json
+          Write-Host $info
+          Add-Content -Path win-output/scenarios.txt -Value "`n=== environment ===`n$info"
+
+      - name: Upload captured output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: harness-windows-output
+          path: win-output/
+
+      - name: Report suite outcome
+        if: always()
+        shell: pwsh
+        run: |
+          Write-Host "test suite outcome: ${{ steps.suite.outcome }}"
