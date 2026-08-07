@@ -72,9 +72,19 @@ const REGISTRY = new Map();
 // GLOBAL_OPTIONS, restated as a declarative schema). Strict validation
 // merges these into each entry's own flags so a global flag is never
 // mistaken for an unknown one.
+//
+// Every one is `tui: 'cli-only'` — and that is a statement about the whole
+// global lane, not seven independent calls. A global flag either selects an
+// output lane (`--json`, `--verbose`, `--no-color`), suppresses a side
+// channel (`--dry-run`, `--no-events`), or names process-level context
+// (`--workspace`, `--copilot-home`). The TUI owns all three itself: it
+// renders the lane, it decides whether a run is real, and it already knows
+// which workspace the session is attached to. Offering any of them as a
+// palette row or a value picker would ask a user to re-answer a question the
+// session has already answered.
 export const GLOBAL_FLAGS = [
-  { name: '--json', type: 'boolean', description: 'JSON output for machine readers', required: false, default: false },
-  { name: '--dry-run', type: 'boolean', description: 'print actions without writing', required: false, default: false },
+  { name: '--json', type: 'boolean', description: 'JSON output for machine readers', required: false, default: false, tui: 'cli-only' },
+  { name: '--dry-run', type: 'boolean', description: 'print actions without writing', required: false, default: false, tui: 'cli-only' },
   {
     name: '--verbose',
     aliases: ['-v'],
@@ -82,6 +92,7 @@ export const GLOBAL_FLAGS = [
     description: 'full detail: per-file logging, all checks, unclamped hints',
     required: false,
     default: false,
+    tui: 'cli-only',
   },
   {
     name: '--no-color',
@@ -89,15 +100,17 @@ export const GLOBAL_FLAGS = [
     description: 'plain ascii output (also honors NO_COLOR; auto when piped)',
     required: false,
     default: false,
+    tui: 'cli-only',
   },
-  { name: '--workspace', type: 'string', valueName: 'path', description: 'repo root (default: cwd)', required: false, default: null },
-  { name: '--copilot-home', type: 'string', valueName: 'path', description: 'override ~/.copilot', required: false, default: null },
+  { name: '--workspace', type: 'string', valueName: 'path', description: 'repo root (default: cwd)', required: false, default: null, tui: 'cli-only' },
+  { name: '--copilot-home', type: 'string', valueName: 'path', description: 'override ~/.copilot', required: false, default: null, tui: 'cli-only' },
   {
     name: '--no-events',
     type: 'boolean',
     description: 'do not write .harness/events.jsonl',
     required: false,
     default: false,
+    tui: 'cli-only',
   },
 ];
 
@@ -876,8 +889,8 @@ registerCommand({
       },
     ],
     flags: [
-      { name: '--query', type: 'string', valueName: 'text', description: 'agent/internal task summary', required: false, default: null },
-      { name: '--limit', type: 'number', valueName: 'n', description: 'recall result count (default 3)', required: false, default: 3 },
+      { name: '--query', type: 'string', valueName: 'text', description: 'agent/internal task summary', required: false, default: null, tui: 'prompt' },
+      { name: '--limit', type: 'number', valueName: 'n', description: 'recall result count (default 3)', required: false, default: 3, tui: 'prompt' },
       {
         name: '--collection',
         aliases: ['-c'],
@@ -886,9 +899,14 @@ registerCommand({
         description: 'filter by knowledge/collections.yaml',
         required: false,
         default: null,
+        tui: 'prompt',
       },
-      { name: '--min-score', type: 'number', valueName: 'n', description: 'minimum score (default 0.15)', required: false, default: 0.15 },
-      { name: '--explain', type: 'boolean', description: 'decompose learning ranking (deterministic)', required: false, default: false },
+      { name: '--min-score', type: 'number', valueName: 'n', description: 'minimum score (default 0.15)', required: false, default: 0.15, tui: 'prompt' },
+      // A mode flag, not a modifier: --explain replaces orient's ordinary
+      // context pack with the deterministic ranking decomposition, so
+      // `orient explain` is a second thing orient does, not a louder
+      // version of the first.
+      { name: '--explain', type: 'boolean', description: 'decompose learning ranking (deterministic)', required: false, default: false, tui: 'verb' },
     ],
   },
   handler: cmdOrient,
@@ -912,6 +930,13 @@ registerCommand({
         description: 'full provenance chain for one learning',
         required: false,
         default: null,
+        // `verb`, not `prompt`, even though it takes a value: it selects what
+        // the command DOES (bare `learnings` pages a listing; `--why` renders
+        // one provenance chain), which is the verb test. A value-taking flag
+        // is only a `prompt` when it parameterizes an operation the command
+        // would perform anyway. The palette renders this as `learnings why`
+        // and asks for the id after the row is chosen.
+        tui: 'verb',
       },
     ],
   },
@@ -953,16 +978,23 @@ registerCommand({
 
 // --- setup ------------------------------------------------------------
 
+// Every install/upgrade flag is `tui: 'cli-only'` for one reason, stated
+// once here rather than seven times below: these decide how the harness is
+// hydrated onto a machine, not what it does during a session. A palette
+// exists inside an already-installed harness, so every answer here was given
+// before the palette could be opened — and the destructive ones
+// (--force-profile, --force-knowledge-reset) must stay behind a typed,
+// deliberate command line rather than a one-keystroke row.
 const INSTALL_FLAGS = [
-  { name: '--target', type: 'string', valueName: 't,..', description: 'vscode,cli,intellij', required: false, default: null },
-  { name: '--autonomy', type: 'string', valueName: 'mode', description: 'full | balanced | strict', required: false, default: null },
-  { name: '--configure-vscode', type: 'boolean', description: 'merge VS Code chat.* discovery settings', required: false, default: false },
-  { name: '--configure-path', type: 'boolean', description: 'append ~/.copilot/bin to shell PATH (~/.zshrc, ~/.bashrc)', required: false, default: false },
-  { name: '--force-profile', type: 'boolean', description: 'overwrite knowledge/profile.md', required: false, default: false },
-  { name: '--force-knowledge-reset', type: 'boolean', description: 'overwrite knowledge/solutions (danger)', required: false, default: false },
+  { name: '--target', type: 'string', valueName: 't,..', description: 'vscode,cli,intellij', required: false, default: null, tui: 'cli-only' },
+  { name: '--autonomy', type: 'string', valueName: 'mode', description: 'full | balanced | strict', required: false, default: null, tui: 'cli-only' },
+  { name: '--configure-vscode', type: 'boolean', description: 'merge VS Code chat.* discovery settings', required: false, default: false, tui: 'cli-only' },
+  { name: '--configure-path', type: 'boolean', description: 'append ~/.copilot/bin to shell PATH (~/.zshrc, ~/.bashrc)', required: false, default: false, tui: 'cli-only' },
+  { name: '--force-profile', type: 'boolean', description: 'overwrite knowledge/profile.md', required: false, default: false, tui: 'cli-only' },
+  { name: '--force-knowledge-reset', type: 'boolean', description: 'overwrite knowledge/solutions (danger)', required: false, default: false, tui: 'cli-only' },
   // Undocumented in the old CATALOG but genuinely read (lib/sync.mjs) —
   // the explicit opposite of --force-knowledge-reset, defaults true either way.
-  { name: '--preserve-knowledge', type: 'boolean', description: 'keep existing knowledge/solutions (default)', required: false, default: true },
+  { name: '--preserve-knowledge', type: 'boolean', description: 'keep existing knowledge/solutions (default)', required: false, default: true, tui: 'cli-only' },
 ];
 
 registerCommand({
@@ -970,6 +1002,10 @@ registerCommand({
   summary: 'hydrate skills, agents, and team knowledge globally',
   group: 'setup',
   sideEffect: 'mutate',
+  // Lifecycle, not session work: `install` is what puts the TUI and the
+  // agent lane on the machine in the first place, so neither surface can
+  // meaningfully offer it. Same reasoning for upgrade/uninstall/init-repo.
+  surfaces: ['cli'],
   args: { positionals: [], flags: INSTALL_FLAGS },
   handler: (argv) => cmdInstallOrUpgrade('install', argv),
 });
@@ -979,6 +1015,9 @@ registerCommand({
   summary: 're-hydrate and purge retired primitives',
   group: 'setup',
   sideEffect: 'mutate',
+  // Rewrites the hydrated primitives the running host has already loaded —
+  // a restart-shaped operation, not something to fire mid-session.
+  surfaces: ['cli'],
   args: { positionals: [], flags: INSTALL_FLAGS },
   handler: (argv) => cmdInstallOrUpgrade('upgrade', argv),
 });
@@ -991,7 +1030,7 @@ registerCommand({
   args: {
     positionals: [],
     flags: [
-      { name: '--host', type: 'string', valueName: 'name', description: 'run host-specific checks (vscode executes installed-hook probes)', required: false, default: null },
+      { name: '--host', type: 'string', valueName: 'name', description: 'run host-specific checks (vscode executes installed-hook probes)', required: false, default: null, tui: 'prompt' },
     ],
   },
   handler: cmdDoctor,
@@ -1002,6 +1041,10 @@ registerCommand({
   summary: 'remove hydrated files tracked by the lock',
   group: 'setup',
   sideEffect: 'mutate',
+  // Removes the very files the TUI/agent surfaces are hydrated from —
+  // offering it from inside those surfaces would let a user delete the
+  // thing they are standing on.
+  surfaces: ['cli'],
   args: { positionals: [], flags: [] },
   handler: cmdUninstall,
 });
@@ -1013,6 +1056,10 @@ registerCommand({
   summary: 'seed the .harness workspace in a product repo',
   group: 'workspace',
   sideEffect: 'mutate',
+  // Bootstrap: it CREATES the .harness workspace every other surface reads
+  // from, so by the time a palette or an agent lane is live it has already
+  // run. Nothing left to offer.
+  surfaces: ['cli'],
   args: { positionals: [], flags: [] },
   handler: cmdInitRepo,
 });
@@ -1030,7 +1077,10 @@ registerCommand({
   args: {
     positionals: [],
     flags: [
-      { name: '--status', type: 'boolean', description: 'read-only freshness report vs HEAD (never rebuilds)', required: false, default: false },
+      // Both booleans below select WHICH index operation runs, so both are
+      // palette rows: `index status` and `index structural` sit beside the
+      // bare `index` row rather than hiding flag syntax behind it.
+      { name: '--status', type: 'boolean', description: 'read-only freshness report vs HEAD (never rebuilds)', required: false, default: false, tui: 'verb' },
       // Merge (harness evolution P3): the structural code index. Read by
       // cmdIndex via the boundary-aware `hasFlag(argv, '--structural')`.
       {
@@ -1040,6 +1090,7 @@ registerCommand({
           'build the persistent structural code index under ~/.harness/index/<repo-id>/<worktree-id>/structural (optional tree-sitter tier, lexical fallback)',
         required: false,
         default: false,
+        tui: 'verb',
       },
       {
         name: '--since',
@@ -1049,6 +1100,14 @@ registerCommand({
           'requires --structural: re-parse only files changed since <ref> (validated via git rev-parse; leading "-" rejected). Narrows ONLY when <ref> is the sha the prior index was built at — any other ref is reported and ignored for a full pass',
         required: false,
         default: null,
+        tui: 'prompt',
+        // The one dependency the description already states in prose, now
+        // declared. cmdIndex (lib/commands.mjs) still raises the identical
+        // `--since requires --structural` message for any caller reaching
+        // the handler directly; declaring it here only moves the same
+        // rejection in front of the handler and, more importantly, tells the
+        // palette that picking a `<ref>` is only offered under `structural`.
+        requires: ['--structural'],
       },
     ],
   },
@@ -1060,21 +1119,35 @@ registerCommand({
   summary: 'scaffold a gate-ready plan',
   group: 'workspace',
   sideEffect: 'mutate',
+  // No `verbs`. plan-new does exactly one thing — scaffold a plan file — and
+  // its only alternation, `--risk <green|amber|red>`, is that flag's VALUE
+  // enum, not a set of subcommands: cmdPlanNew (lib/plan-new.mjs) reads it as
+  // a single `--risk` token whose argument it validates, and it appears in
+  // the auto-generated usage only because `valueName` renders inside the
+  // flag's own angle brackets. `plan-new green` is not, and never was, a
+  // legal invocation, so promoting the tiers to verbs would invent a grammar
+  // the handler cannot answer. They belong to `--risk`, which prompts for
+  // one of the three below.
   args: {
     positionals: [],
     flags: [
-      { name: '--type', type: 'string', valueName: 't', description: 'feat|fix|docs|refactor|chore', required: true, default: null },
-      { name: '--slug', type: 'string', valueName: 's', description: 'lowercase-hyphen slug', required: true, default: null },
-      { name: '--intent', type: 'string', valueName: 'text', description: 'one-line intent', required: true, default: null },
-      { name: '--impacted', type: 'string', valueName: 'a,b', description: 'comma-separated Impacted Files', required: false, default: null },
-      { name: '--criteria', type: 'string', valueName: 'text', description: 'an acceptance criterion (repeatable)', required: false, default: null },
-      { name: '--gap', type: 'string', valueName: 'id:path', description: 'capability gap → blocked-capability + governed primitive plan', required: false, default: null },
-      { name: '--stdout', type: 'boolean', description: 'print the plan instead of writing it', required: false, default: false },
+      { name: '--type', type: 'string', valueName: 't', description: 'feat|fix|docs|refactor|chore', required: true, default: null, tui: 'prompt' },
+      { name: '--slug', type: 'string', valueName: 's', description: 'lowercase-hyphen slug', required: true, default: null, tui: 'prompt' },
+      { name: '--intent', type: 'string', valueName: 'text', description: 'one-line intent', required: true, default: null, tui: 'prompt' },
+      { name: '--impacted', type: 'string', valueName: 'a,b', description: 'comma-separated Impacted Files', required: false, default: null, tui: 'prompt' },
+      { name: '--criteria', type: 'string', valueName: 'text', description: 'an acceptance criterion (repeatable)', required: false, default: null, tui: 'prompt' },
+      { name: '--gap', type: 'string', valueName: 'id:path', description: 'capability gap → blocked-capability + governed primitive plan', required: false, default: null, tui: 'prompt' },
+      // Output-lane plumbing, not a mode: it redirects the same scaffold to
+      // stdout for a caller that wants to pipe it. A palette user asked for
+      // a plan file, so the row that skips writing one is CLI-only.
+      { name: '--stdout', type: 'boolean', description: 'print the plan instead of writing it', required: false, default: false, tui: 'cli-only' },
       // Undocumented in the old CATALOG, but cmdPlanNew's own bespoke argv
       // loop (lib/plan-new.mjs) genuinely reads all three.
-      { name: '--title', type: 'string', valueName: 'text', description: 'plan heading override (default: derived from slug)', required: false, default: null },
-      { name: '--date', type: 'string', valueName: 'yyyy-mm-dd', description: 'override the plan filename date (default: today)', required: false, default: null },
-      { name: '--risk', type: 'string', valueName: 'green|amber|red', description: 'risk rating (default green)', required: false, default: null },
+      { name: '--title', type: 'string', valueName: 'text', description: 'plan heading override (default: derived from slug)', required: false, default: null, tui: 'prompt' },
+      { name: '--date', type: 'string', valueName: 'yyyy-mm-dd', description: 'override the plan filename date (default: today)', required: false, default: null, tui: 'prompt' },
+      // See the `verbs` note above: green|amber|red is this flag's value
+      // enum, which the palette picks from — not three plan-new verbs.
+      { name: '--risk', type: 'string', valueName: 'green|amber|red', description: 'risk rating (default green)', required: false, default: null, tui: 'prompt' },
     ],
   },
   handler: cmdPlanNew,
@@ -1091,10 +1164,14 @@ registerCommand({
   args: {
     positionals: [{ name: 'query', description: 'free-text query words (plan-ranking only)', required: false, default: '', variadic: true }],
     flags: [
-      { name: '--phase', type: 'string', valueName: 'name', description: 'implement | verify', required: false, default: 'implement' },
-      { name: '--plan', type: 'string', valueName: 'path', description: 'explicit plan file', required: false, default: null },
-      { name: '--strict-intent', type: 'boolean', description: 'fail locked plans missing intent fields', required: false, default: false },
-      { name: '--enforcement', type: 'string', valueName: 'mode', description: 'observe | warn | enforce (default enforce)', required: false, default: null },
+      { name: '--phase', type: 'string', valueName: 'name', description: 'implement | verify', required: false, default: 'implement', tui: 'prompt' },
+      { name: '--plan', type: 'string', valueName: 'path', description: 'explicit plan file', required: false, default: null, tui: 'prompt' },
+      // Strictness dial, not a mode: gate does the same job either way, it
+      // just refuses more. It reads as an adverb ("gate, strictly"), never
+      // as a verb, so it stays off the palette — the same call made for
+      // validate-plan's identical flag below.
+      { name: '--strict-intent', type: 'boolean', description: 'fail locked plans missing intent fields', required: false, default: false, tui: 'cli-only' },
+      { name: '--enforcement', type: 'string', valueName: 'mode', description: 'observe | warn | enforce (default enforce)', required: false, default: null, tui: 'prompt' },
     ],
   },
   handler: cmdGate,
@@ -1118,12 +1195,12 @@ registerCommand({
   args: {
     positionals: [],
     flags: [
-      { name: '--plan', type: 'string', valueName: 'path', description: 'plan file whose named checks run', required: false, default: null },
-      { name: '--base', type: 'string', valueName: 'git-ref', description: 'compare changed files to this git ref', required: false, default: null },
-      { name: '--enforcement', type: 'string', valueName: 'mode', description: 'observe | warn | enforce (default enforce)', required: false, default: null },
+      { name: '--plan', type: 'string', valueName: 'path', description: 'plan file whose named checks run', required: false, default: null, tui: 'prompt' },
+      { name: '--base', type: 'string', valueName: 'git-ref', description: 'compare changed files to this git ref', required: false, default: null, tui: 'prompt' },
+      { name: '--enforcement', type: 'string', valueName: 'mode', description: 'observe | warn | enforce (default enforce)', required: false, default: null, tui: 'prompt' },
       // Undocumented in the old CATALOG, but read (lib/commands.mjs#cmdVerify)
       // and directly tested end to end.
-      { name: '--learnings', type: 'string', valueName: 'a,b', description: 'learning ids cited by this verified change', required: false, default: null },
+      { name: '--learnings', type: 'string', valueName: 'a,b', description: 'learning ids cited by this verified change', required: false, default: null, tui: 'prompt' },
     ],
   },
   handler: cmdVerify,
@@ -1137,11 +1214,12 @@ registerCommand({
   args: {
     positionals: [],
     flags: [
-      { name: '--plan', type: 'string', valueName: 'path', description: 'explicit plan file', required: false, default: null },
-      { name: '--enforcement', type: 'string', valueName: 'mode', description: 'observe | warn | enforce (default enforce)', required: false, default: null },
+      { name: '--plan', type: 'string', valueName: 'path', description: 'explicit plan file', required: false, default: null, tui: 'prompt' },
+      { name: '--enforcement', type: 'string', valueName: 'mode', description: 'observe | warn | enforce (default enforce)', required: false, default: null, tui: 'prompt' },
       // Undocumented in the old CATALOG, but read (lib/validate-plan.mjs)
       // and directly tested end to end.
-      { name: '--strict-intent', type: 'boolean', description: 'fail locked plans missing intent fields', required: false, default: false },
+      // Strictness dial, same call as gate's identical flag above.
+      { name: '--strict-intent', type: 'boolean', description: 'fail locked plans missing intent fields', required: false, default: false, tui: 'cli-only' },
     ],
   },
   handler: cmdValidatePlan,
@@ -1155,18 +1233,29 @@ registerCommand({
   args: {
     positionals: [],
     flags: [
-      { name: '--plan', type: 'string', valueName: 'path', description: 'explicit plan file', required: false, default: null },
-      { name: '--insight', type: 'boolean', description: 'evidence-free investigation capture (kind: insight, secret-scanned)', required: false, default: false },
-      { name: '--title', type: 'string', valueName: 't', description: 'insight title (required with --insight)', required: false, default: null },
-      { name: '--body', type: 'string', valueName: 'text', description: 'insight body text', required: false, default: null },
-      { name: '--body-file', type: 'string', valueName: 'path', description: 'read insight body from a file', required: false, default: null },
-      { name: '--category', type: 'string', valueName: 'c', description: 'docs/solutions/<category>/ (default insights)', required: false, default: null },
-      { name: '--tags', type: 'string', valueName: 'a,b', description: 'comma-separated tags', required: false, default: null },
-      { name: '--trigger', type: 'string', valueName: 't', description: 'applicability condition frontmatter', required: false, default: null },
-      { name: '--claim', type: 'string', valueName: 't', description: 'one-line claim frontmatter', required: false, default: null },
+      { name: '--plan', type: 'string', valueName: 'path', description: 'explicit plan file', required: false, default: null, tui: 'prompt' },
+      // The one genuine mode switch here, and the summary above says so:
+      // compound normally requires passed evidence, `--insight` records
+      // without any. Two different jobs, so `compound insight` earns a row.
+      { name: '--insight', type: 'boolean', description: 'evidence-free investigation capture (kind: insight, secret-scanned)', required: false, default: false, tui: 'verb' },
+      // No `requires: ['--insight']` on the seven insight-shaped flags below,
+      // deliberately. lib/compound.mjs guards the pairing from the other
+      // direction and as a SET — "insight capture needs --title and --body
+      // (or --body-file)" — an or-of-two that `requires` cannot express, and
+      // whose message plus `nextTools` hint is strictly more useful than the
+      // generic one this module would generate. Declaring a one-sided
+      // dependency here would both degrade that error and newly reject
+      // invocations the handler accepts today.
+      { name: '--title', type: 'string', valueName: 't', description: 'insight title (required with --insight)', required: false, default: null, tui: 'prompt' },
+      { name: '--body', type: 'string', valueName: 'text', description: 'insight body text', required: false, default: null, tui: 'prompt' },
+      { name: '--body-file', type: 'string', valueName: 'path', description: 'read insight body from a file', required: false, default: null, tui: 'prompt' },
+      { name: '--category', type: 'string', valueName: 'c', description: 'docs/solutions/<category>/ (default insights)', required: false, default: null, tui: 'prompt' },
+      { name: '--tags', type: 'string', valueName: 'a,b', description: 'comma-separated tags', required: false, default: null, tui: 'prompt' },
+      { name: '--trigger', type: 'string', valueName: 't', description: 'applicability condition frontmatter', required: false, default: null, tui: 'prompt' },
+      { name: '--claim', type: 'string', valueName: 't', description: 'one-line claim frontmatter', required: false, default: null, tui: 'prompt' },
       // Undocumented in the old CATALOG, but read (lib/compound.mjs, via
       // loadPolicy) for both --insight and evidence-bound compound.
-      { name: '--enforcement', type: 'string', valueName: 'mode', description: 'observe | warn | enforce (default enforce)', required: false, default: null },
+      { name: '--enforcement', type: 'string', valueName: 'mode', description: 'observe | warn | enforce (default enforce)', required: false, default: null, tui: 'prompt' },
     ],
   },
   handler: cmdCompound,
@@ -1180,10 +1269,13 @@ registerCommand({
   args: {
     positionals: [{ name: 'query', description: 'free-text search terms (joined)', required: false, default: '', variadic: true }],
     flags: [
-      { name: '--limit', type: 'number', valueName: 'n', description: 'result count (default 3)', required: false, default: 3 },
-      { name: '--collection', aliases: ['-c'], type: 'string', valueName: 'name', description: 'filter by knowledge/collections.yaml', required: false, default: null },
-      { name: '--min-score', type: 'number', valueName: 'n', description: 'minimum score (default 0.15)', required: false, default: 0.15 },
-      { name: '--include-plans', type: 'boolean', description: 'include matching plans', required: false, default: false },
+      { name: '--limit', type: 'number', valueName: 'n', description: 'result count (default 3)', required: false, default: 3, tui: 'prompt' },
+      { name: '--collection', aliases: ['-c'], type: 'string', valueName: 'name', description: 'filter by knowledge/collections.yaml', required: false, default: null, tui: 'prompt' },
+      { name: '--min-score', type: 'number', valueName: 'n', description: 'minimum score (default 0.15)', required: false, default: 0.15, tui: 'prompt' },
+      // Widens the corpus recall searches; it does not change what recall
+      // DOES. `recall include-plans` reads as a noun phrase, not a verb, so
+      // it is a CLI refinement rather than a second palette row.
+      { name: '--include-plans', type: 'boolean', description: 'include matching plans', required: false, default: false, tui: 'cli-only' },
     ],
   },
   handler: cmdRecall,
@@ -1198,10 +1290,13 @@ registerCommand({
   args: {
     positionals: [],
     flags: [
-      { name: '--docid', type: 'string', valueName: 'id', description: 'manifest doc id', required: false, default: null },
-      { name: '--path', type: 'string', valueName: 'rel', description: 'relative file path', required: false, default: null },
-      { name: '--lines', type: 'number', valueName: 'n', description: 'max lines (default 40)', required: false, default: 40 },
-      { name: '--max-bytes', type: 'number', valueName: 'n', description: 'max excerpt bytes (default 2048)', required: false, default: 2048 },
+      // --docid and --path are an either/or pair, not a dependency, so
+      // neither carries `requires` — getRequireArgs above already enforces
+      // "at least one", which `requires` has no way to express.
+      { name: '--docid', type: 'string', valueName: 'id', description: 'manifest doc id', required: false, default: null, tui: 'prompt' },
+      { name: '--path', type: 'string', valueName: 'rel', description: 'relative file path', required: false, default: null, tui: 'prompt' },
+      { name: '--lines', type: 'number', valueName: 'n', description: 'max lines (default 40)', required: false, default: 40, tui: 'prompt' },
+      { name: '--max-bytes', type: 'number', valueName: 'n', description: 'max excerpt bytes (default 2048)', required: false, default: 2048, tui: 'prompt' },
     ],
   },
   handler: cmdGet,
@@ -1220,10 +1315,13 @@ registerCommand({
   args: {
     positionals: [],
     flags: [
-      { name: '--session', type: 'string', valueName: 'id', description: 'filter by host session ID', required: false, default: null },
-      { name: '--summary', type: 'boolean', description: 'aggregate summary only', required: false, default: false },
-      { name: '--failures', type: 'boolean', description: 'failed or blocked events only', required: false, default: false },
-      { name: '--limit', type: 'number', valueName: 'n', description: 'event count (default 20)', required: false, default: 20 },
+      { name: '--session', type: 'string', valueName: 'id', description: 'filter by host session ID', required: false, default: null, tui: 'prompt' },
+      // Both replace the event listing with a different view rather than
+      // trimming it — `events summary` and `events failures` are the two
+      // things a reader actually asks this command for.
+      { name: '--summary', type: 'boolean', description: 'aggregate summary only', required: false, default: false, tui: 'verb' },
+      { name: '--failures', type: 'boolean', description: 'failed or blocked events only', required: false, default: false, tui: 'verb' },
+      { name: '--limit', type: 'number', valueName: 'n', description: 'event count (default 20)', required: false, default: 20, tui: 'prompt' },
     ],
   },
   handler: cmdEvents,
@@ -1256,12 +1354,18 @@ registerCommand({
   args: {
     positionals: [],
     flags: [
-      { name: '--sync', type: 'boolean', description: 'merge workspace events into the global store first', required: false, default: false },
-      { name: '--global', type: 'boolean', description: 'report across all synced workspaces', required: false, default: false },
-      { name: '--check', type: 'boolean', description: 'exit non-zero on a budget breach (CI)', required: false, default: false },
+      // --sync performs the write this whole entry is classified `mutate`
+      // for, and --global swaps the corpus from this workspace to every
+      // synced one. Two distinct operations, two rows.
+      { name: '--sync', type: 'boolean', description: 'merge workspace events into the global store first', required: false, default: false, tui: 'verb' },
+      { name: '--global', type: 'boolean', description: 'report across all synced workspaces', required: false, default: false, tui: 'verb' },
+      // Renders the same report; all it changes is the process exit code for
+      // a CI job. Exit codes have no meaning inside a palette session, so
+      // this is the "meaningless mid-session" case rather than a mode.
+      { name: '--check', type: 'boolean', description: 'exit non-zero on a budget breach (CI)', required: false, default: false, tui: 'cli-only' },
       // Undocumented in the old CATALOG, but read (lib/commands.mjs#cmdReport
       // -> collectHostUsage) to select a specific host's usage log.
-      { name: '--host', type: 'string', valueName: 'name', description: 'host usage log to overlay (default: auto-detect)', required: false, default: null },
+      { name: '--host', type: 'string', valueName: 'name', description: 'host usage log to overlay (default: auto-detect)', required: false, default: null, tui: 'prompt' },
     ],
   },
   handler: cmdReport,
@@ -1295,6 +1399,51 @@ registerCommand({
     ['commit <none|repo>', 'repo mirrors ACTIVE learnings into docs/knowledge/learnings (opt-in, never git-commits the product repo); none is the default'],
     ['migrate-store', "move a stranded path-keyed store to this workspace's current (remote-keyed) store id; refuses if the target already exists"],
   ],
+  // The eleven subcommands cmdKnowledge actually branches on, promoted out
+  // of the `usage` string and the `extraOptions` rows above into data. Every
+  // one is the FIRST bare token of an invocation (cmdKnowledge reads
+  // `argv[0]`), which is exactly what `validateArgs` resolves as the
+  // selected verb — so the per-flag `verbs` scoping below keys off the same
+  // token the handler dispatches on. Summaries are the extraOptions text
+  // verbatim wherever a row exists, so `harness help knowledge` and the
+  // palette can never describe the same subcommand two different ways.
+  //
+  // The five modes come first, in the usage line's order. They are the
+  // knowledge layer's kill/approve switches (docs/MEMORY-MODEL.md
+  // §Knowledge modes) and have no extraOptions row, so their summaries are
+  // written from that matrix.
+  verbs: [
+    { verb: 'on', summary: 'default mode: orient injects, and every writer (remember, compound --insight, consolidate --apply) is open' },
+    { verb: 'suggest', summary: 'approve-before-write: consolidate --apply stops until a human re-runs it with --yes' },
+    { verb: 'off', summary: 'kill switch: no injection and no writers at all' },
+    { verb: 'freeze', summary: 'read-only layer: orient still injects, but remember and consolidate --apply stop writing' },
+    { verb: 'capture-only', summary: 'stop injecting into orient while compound --insight keeps capturing' },
+    // The one read-only subcommand under a mutating parent. Without this
+    // override the palette would paint a write glyph on a report that
+    // touches nothing — the exact mislabelling `sideEffect` exists to stop.
+    {
+      verb: 'status',
+      summary: 'layer-aware report: golden domain counts, branch buckets, recall-index drift (read-only)',
+      sideEffect: 'read',
+    },
+    { verb: 'promote', summary: 'emit a reviewable branch→golden promotion op-set (.harness/promote-ops.json)' },
+    { verb: 'prune', summary: 'delete branch buckets (human authority, never mode-gated)' },
+    // extraOptions documents purge as two rows (`purge <file>` and
+    // `purge --all`) because they read differently in help; they are one
+    // verb with one handler branch, so the file form's text is the summary
+    // and the reset form is described on `--all` itself below.
+    { verb: 'purge', summary: 'cascade-delete an episode and dependent learnings' },
+    {
+      verb: 'commit',
+      summary:
+        'repo mirrors ACTIVE learnings into docs/knowledge/learnings (opt-in, never git-commits the product repo); none is the default',
+    },
+    {
+      verb: 'migrate-store',
+      summary:
+        "move a stranded path-keyed store to this workspace's current (remote-keyed) store id; refuses if the target already exists",
+    },
+  ],
   args: {
     positionals: [
       {
@@ -1310,23 +1459,51 @@ registerCommand({
       // branch already IS the status view) — declared anyway so the
       // pre-registry no-op invocation `harness knowledge --status` keeps
       // validating, matching the old CATALOG's documented `--status` option.
-      { name: '--status', type: 'boolean', description: 'show the active mode (default)', required: false, default: false },
+      // cli-only, NOT `verb`: the `status` verb enumerated above is the same
+      // report reached through the token the handler actually branches on.
+      // Painting this no-op as a row too would put two palette entries in
+      // front of one behavior, and the one that "works" would be the one
+      // that does nothing.
+      { name: '--status', type: 'boolean', description: 'show the active mode (default)', required: false, default: false, tui: 'cli-only' },
       // `purge --all` reads this flag-shaped token directly off argv[1]
       // (cmdKnowledge), never through lib/flags.mjs — still flag-shaped, so
       // strict validation needs it declared or it rejects as unknown.
       // `promote --all` reads the SAME flag through flags.all.
-      { name: '--all', type: 'boolean', description: 'purge --all resets the whole learnings store; promote --all takes every promotable id in the bucket', required: false, default: false },
+      // Scoped to those two verbs: it is meaningless on a mode switch or a
+      // commit, and `knowledge on --all` silently accepting it is precisely
+      // the "flag that does nothing here" this registry refuses to keep.
+      // cli-only because it means two unrelated things depending on the verb
+      // (reset the store vs. take every id) — a palette row reading "all"
+      // would be ambiguous where a scoped picker under each verb is not.
+      {
+        name: '--all',
+        type: 'boolean',
+        description: 'purge --all resets the whole learnings store; promote --all takes every promotable id in the bucket',
+        required: false,
+        default: false,
+        tui: 'cli-only',
+        verbs: ['promote', 'purge'],
+      },
       // Merge (harness evolution P6, blueprint §5): the branch-bucket
       // maintenance surfaces. Each of the five below is genuinely read by
       // cmdKnowledge's promote/prune branches (flags.branch / flags.ids /
       // flags.merged / flags.stale / flags.yes), so strict validation must
       // know them or every one of main's new invocations is rejected as an
-      // unknown flag before its handler ever runs.
-      { name: '--branch', type: 'string', valueName: 'key', description: 'promote/prune: the branch bucket key to act on', required: false, default: null },
-      { name: '--ids', type: 'string', valueName: 'a,b', description: 'promote: comma-separated learning ids to include in the op-set', required: false, default: null },
-      { name: '--merged', type: 'boolean', description: 'prune: every bucket whose branch is already merged into the default branch', required: false, default: false },
-      { name: '--stale', type: 'string', valueName: 'days', description: 'prune: every bucket older than <days> (integer >= 1)', required: false, default: null },
-      { name: '--yes', type: 'boolean', description: 'prune: confirm deleting a bucket that still holds ACTIVE, unpromoted learnings', required: false, default: false },
+      // unknown flag before its handler ever runs. `verbs` below records
+      // WHICH of those branches reads each one — the extraOptions rows above
+      // already document the same scoping in prose (`promote [--branch]
+      // [--ids] [--all]`, `prune [--branch] [--merged] [--stale]`).
+      { name: '--branch', type: 'string', valueName: 'key', description: 'promote/prune: the branch bucket key to act on', required: false, default: null, tui: 'prompt', verbs: ['promote', 'prune'] },
+      { name: '--ids', type: 'string', valueName: 'a,b', description: 'promote: comma-separated learning ids to include in the op-set', required: false, default: null, tui: 'prompt', verbs: ['promote'] },
+      // The one flag here that earns a row: `knowledge prune merged` is a
+      // distinct sweep (every already-merged bucket) rather than a value to
+      // pick, and it reads as a verb phrase under prune.
+      { name: '--merged', type: 'boolean', description: 'prune: every bucket whose branch is already merged into the default branch', required: false, default: false, tui: 'verb', verbs: ['prune'] },
+      { name: '--stale', type: 'string', valueName: 'days', description: 'prune: every bucket older than <days> (integer >= 1)', required: false, default: null, tui: 'prompt', verbs: ['prune'] },
+      // A confirmation, which is always cli-only — a palette confirms
+      // destructive work with its own prompt, never by making the user
+      // pre-select the word "yes".
+      { name: '--yes', type: 'boolean', description: 'prune: confirm deleting a bucket that still holds ACTIVE, unpromoted learnings', required: false, default: false, tui: 'cli-only', verbs: ['prune'] },
     ],
   },
   handler: cmdKnowledge,
@@ -1344,15 +1521,50 @@ registerCommand({
       // --status has no reader (the default/no-flag branch already IS the
       // status view) — declared for the same no-op-but-documented reason as
       // `knowledge --status` above.
-      { name: '--status', type: 'boolean', description: 'debt vs threshold, quarantine, promotion candidates (default)', required: false, default: false },
-      { name: '--candidates', type: 'boolean', description: 'deterministic work packet for the consolidation skill', required: false, default: false },
-      { name: '--apply', type: 'boolean', description: 'validate and apply an ops JSON (sole writer); suggest mode requires --yes', required: false, default: false },
-      { name: '--ops', type: 'string', valueName: 'path', description: 'ops JSON path (with --apply)', required: false, default: null },
-      { name: '--rebuild', type: 'boolean', description: 'T2 reset for model-upgrade regeneration (git history retains learnings)', required: false, default: false },
-      { name: '--yes', type: 'boolean', description: 'confirm --apply (suggest mode) or --rebuild', required: false, default: false },
+      // cli-only for a related but not identical reason: consolidate has no
+      // subcommands, so the thing this no-op duplicates is the BARE
+      // `consolidate` row rather than a verb. Marking it `verb` would put
+      // `consolidate` and `consolidate status` side by side as two rows
+      // running the same code.
+      { name: '--status', type: 'boolean', description: 'debt vs threshold, quarantine, promotion candidates (default)', required: false, default: false, tui: 'cli-only' },
+      // The three real operations behind consolidate's alternation usage —
+      // emit a work packet, apply an ops file, reset the store. Each is a
+      // different job with a different side effect, so each is a row.
+      { name: '--candidates', type: 'boolean', description: 'deterministic work packet for the consolidation skill', required: false, default: false, tui: 'verb' },
+      {
+        name: '--apply',
+        type: 'boolean',
+        description: 'validate and apply an ops JSON (sole writer); suggest mode requires --yes',
+        required: false,
+        default: false,
+        tui: 'verb',
+        // The pairing the usage line already spells as `--apply --ops <path>`
+        // and cmdConsolidate already enforces before it imports applyOps.
+        // Declared so the palette knows `consolidate apply` must prompt for
+        // an ops path — there is no apply without one. No invocation changes
+        // class: same E_USAGE, same exit 2, and nothing that worked before
+        // is rejected now, since the handler refused this exact case
+        // already. What DOES shorten is the wording — the handler's
+        // "--apply requires --ops <path> (the skill-emitted operations
+        // JSON)" plus its `harness consolidate --apply --ops ops.json` hint
+        // become this module's generic pair. Accepted deliberately: the
+        // handler guard stays in place for direct callers, and the
+        // dependency has to be data for the palette to honor it at all.
+        requires: ['--ops'],
+      },
+      { name: '--ops', type: 'string', valueName: 'path', description: 'ops JSON path (with --apply)', required: false, default: null, tui: 'prompt' },
+      // No `requires: ['--yes']` on --rebuild despite the usage line pairing
+      // them: rebuild without --yes is not a usage error, it is the PREVIEW
+      // ("rebuild resets N learnings … re-run with --yes"), and a registry
+      // dependency would replace that count with a generic refusal.
+      { name: '--rebuild', type: 'boolean', description: 'T2 reset for model-upgrade regeneration (git history retains learnings)', required: false, default: false, tui: 'verb' },
+      { name: '--yes', type: 'boolean', description: 'confirm --apply (suggest mode) or --rebuild', required: false, default: false, tui: 'cli-only' },
       // Merge (harness evolution P6): explicit layer override threaded into
       // applyOps (lib/commands.mjs#cmdConsolidate -> `layer: flags.layer`).
-      { name: '--layer', type: 'string', valueName: 'golden|branch', description: 'explicit layer override for --apply (writes otherwise route by write-time git context)', required: false, default: null },
+      // No `requires: ['--apply']` — unlike --ops above, nothing rejects a
+      // stray --layer today, so declaring the dependency would newly fail an
+      // invocation that currently succeeds.
+      { name: '--layer', type: 'string', valueName: 'golden|branch', description: 'explicit layer override for --apply (writes otherwise route by write-time git context)', required: false, default: null, tui: 'prompt' },
     ],
   },
   handler: cmdConsolidate,
@@ -1366,12 +1578,12 @@ registerCommand({
   args: {
     positionals: [{ name: 'claim', description: 'the durable claim text', required: true, default: null }],
     flags: [
-      { name: '--trigger', type: 'string', valueName: 't', description: 'applicability condition (required)', required: true, default: null },
-      { name: '--domain', type: 'string', valueName: 'd', description: 'learning domain directory (default general)', required: false, default: null },
+      { name: '--trigger', type: 'string', valueName: 't', description: 'applicability condition (required)', required: true, default: null, tui: 'prompt' },
+      { name: '--domain', type: 'string', valueName: 'd', description: 'learning domain directory (default general)', required: false, default: null, tui: 'prompt' },
       // Undocumented in the old CATALOG, but read (lib/knowledge/remember.mjs
       // threads its whole `flags` object into the underlying insight write).
-      { name: '--category', type: 'string', valueName: 'c', description: 'docs/solutions/<category>/ (default teachings)', required: false, default: null },
-      { name: '--tags', type: 'string', valueName: 'a,b', description: 'comma-separated tags', required: false, default: null },
+      { name: '--category', type: 'string', valueName: 'c', description: 'docs/solutions/<category>/ (default teachings)', required: false, default: null, tui: 'prompt' },
+      { name: '--tags', type: 'string', valueName: 'a,b', description: 'comma-separated tags', required: false, default: null, tui: 'prompt' },
     ],
   },
   handler: cmdRemember,
@@ -1383,14 +1595,34 @@ registerCommand({
   group: 'knowledge',
   sideEffect: 'mutate',
   usage: '<retire|dispute|confirm|promote> <id> [--reason "<r>"] [--to <path>]',
+  // The four actions lib/knowledge/lifecycle.mjs dispatches on (its own
+  // ACTIONS set), lifted out of the `usage` alternation. cmdLearning reads
+  // them from argv[0], the same token validateArgs resolves as the selected
+  // verb. No `sideEffect` overrides: all four append a governance record and
+  // rewrite the learning's frontmatter, so every one is the parent's
+  // `mutate`.
+  verbs: [
+    { verb: 'retire', summary: 'retire the learning from ranking (requires --reason)' },
+    { verb: 'dispute', summary: 'mark the learning contested pending review (requires --reason)' },
+    { verb: 'confirm', summary: 'reaffirm the learning as active and stamp last_confirmed' },
+    { verb: 'promote', summary: 'record that behavior now lives in a primitive (requires --to); terminal for the other three' },
+  ],
   args: {
     positionals: [
       { name: 'action', description: 'retire|dispute|confirm|promote', required: true, default: null },
       { name: 'id', description: 'the learning id', required: true, default: null },
     ],
     flags: [
-      { name: '--reason', type: 'string', valueName: 'r', description: 'required for retire/dispute; recorded in the store commit', required: false, default: null },
-      { name: '--to', type: 'string', valueName: 'path', description: 'primitive path recorded on promote (behavior supersedes knowledge)', required: false, default: null },
+      // Deliberately NOT scoped to retire/dispute even though only those two
+      // require it: lifecycle.mjs records `reason` on all four actions
+      // (appendGovernance's `reason: reason || null`, and the commit message
+      // `${action} ${id}: ${reason}`), so `learning confirm <id> --reason
+      // "…"` is a working invocation, not a typo to reject.
+      { name: '--reason', type: 'string', valueName: 'r', description: 'required for retire/dispute; recorded in the store commit', required: false, default: null, tui: 'prompt' },
+      // Scoped, unlike --reason: `to` is read only inside lifecycle.mjs's
+      // promote branch, so on any other action it is a flag that silently
+      // does nothing — exactly what this registry declines to keep accepting.
+      { name: '--to', type: 'string', valueName: 'path', description: 'primitive path recorded on promote (behavior supersedes knowledge)', required: false, default: null, tui: 'prompt', verbs: ['promote'] },
     ],
   },
   handler: cmdLearning,
@@ -1412,6 +1644,15 @@ registerCommand({
   summary: 'print the resolved harness CLI path for agents',
   group: 'utility',
   sideEffect: 'read',
+  // The one machine-only entry in the registry, and the summary says so
+  // outright: it prints the path a WRAPPER needs in order to invoke the
+  // harness. Its whole output is an input to another program — a human
+  // choosing it from a palette gets a filesystem path and nothing to do
+  // with it. `cli` only (it is a shell/hook primitive), and NOT
+  // user-invocable, so a host building a menu from this registry leaves it
+  // out rather than listing plumbing beside real work.
+  surfaces: ['cli'],
+  userInvocable: false,
   args: { positionals: [], flags: [] },
   handler: cmdResolve,
 });
