@@ -21,7 +21,7 @@ import { parseQueryFromArgv } from './argv.mjs';
 import { readEvents, summarizeEvents, writeEvent } from './events.mjs';
 import { usageFields } from './token-meter.mjs';
 import { installHarnessBin } from './install-harness-bin.mjs';
-import { resolveHarnessBin, agentHarnessCommand } from './resolve-harness-bin.mjs';
+import { resolveHarnessBin, agentHarnessCommand, writeHarnessRunner, RUNNER_VERSION } from './resolve-harness-bin.mjs';
 import { installGlobalHarnessShim, configureShellPath, globalHarnessShimPath } from './global-bin.mjs';
 import { readSession, writeSession } from './session.mjs';
 import { loadPolicy } from './policy.mjs';
@@ -168,6 +168,25 @@ export async function cmdInstallOrUpgrade(command, argv) {
     mergeIntelliJInstructions(assets, ij, flags, logger);
   }
 
+  // Refresh THIS workspace's runner shim if it has one.
+  //
+  // The rest of this command is global-home scoped and deliberately leaves the
+  // workspace alone. `.harness/run.mjs` is the one narrow exception, because it
+  // is not workspace content — it is a generated shim whose only job is to point
+  // at the installed harness, so keeping it in step with the harness that just
+  // landed is this command's own business.
+  //
+  // It matters because the alternative is no path at all: writeHarnessRunner was
+  // reachable only from `init-repo`, which people run once at setup. A bug fixed
+  // in the runner source therefore never reached an existing workspace, however
+  // many times its owner upgraded. The write is version-stamp gated and a no-op
+  // when the runner is current, and it is skipped entirely where no runner
+  // exists, so upgrading outside a workspace still creates nothing.
+  const runnerWorkspace = path.resolve(flags.workspace);
+  if (fs.existsSync(path.join(runnerWorkspace, '.harness', 'run.mjs'))) {
+    allStats.runner = writeHarnessRunner(runnerWorkspace, flags.dryRun);
+  }
+
   const files = new Set([
     ...(allStats.vscode?.files || []),
     ...(allStats.intellij?.files || []),
@@ -203,6 +222,7 @@ export async function cmdInstallOrUpgrade(command, argv) {
           dryRun: flags.dryRun,
           vscode: allStats.vscode,
           intellij: allStats.intellij,
+          runner: allStats.runner ?? null,
         },
         { pretty: true }
       )
@@ -230,6 +250,11 @@ export async function cmdInstallOrUpgrade(command, argv) {
           value: `+${allStats.intellij.created} ~${allStats.intellij.updated} =${allStats.intellij.unchanged}`,
           keyWidth,
         })
+      );
+    }
+    if (allStats.runner?.updated) {
+      console.log(
+        ui.line({ key: 'runner', value: allStats.runner.path, note: `refreshed to v${RUNNER_VERSION}`, keyWidth })
       );
     }
     const shim = globalHarnessShimPath(copilotHome);

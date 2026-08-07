@@ -1669,6 +1669,50 @@ test('the generated runner injects the default --workspace BEFORE a caller-suppl
   assert.equal(JSON.parse(explicit.stdout).filter((a) => a === '--workspace').length, 1, 'no second --workspace is injected');
 });
 
+// A bumped RUNNER_VERSION only regenerates a runner when something CALLS
+// writeHarnessRunner, and its only caller was `init-repo` — which people run
+// once at setup. So a fixed runner bug never reached an existing workspace no
+// matter how many times its owner upgraded the harness. `install`/`upgrade` now
+// refresh the runner of the workspace they run in.
+test('upgrade refreshes a stale workspace runner, and creates none where there is no runner', () => {
+  const workspace = tempDir('runner-upgrade-ws-');
+  const copilotHome = tempDir('runner-upgrade-home-');
+  const runnerPath = path.join(workspace, '.harness', 'run.mjs');
+
+  // No runner: upgrade must not conjure one (upgrade runs from anywhere).
+  assert.equal(runHarness(['upgrade', '--workspace', workspace, '--copilot-home', copilotHome]).status, 0);
+  assert.equal(fs.existsSync(runnerPath), false, 'upgrade outside an initialized workspace creates nothing');
+
+  // A runner stamped by an older harness is rewritten.
+  fs.mkdirSync(path.join(workspace, '.harness'), { recursive: true });
+  fs.writeFileSync(runnerPath, harnessRunnerSource().replace(`@harness-runner-version ${RUNNER_VERSION}`, '@harness-runner-version 1'));
+  const res = runHarness(['upgrade', '--workspace', workspace, '--copilot-home', copilotHome]);
+  assert.equal(res.status, 0, res.stderr);
+  assert.match(fs.readFileSync(runnerPath, 'utf8'), new RegExp(`@harness-runner-version ${RUNNER_VERSION}\\b`),
+    'a runner from an older harness is brought up to the installed version');
+});
+
+// Existence was never the whole question: a runner carrying an already-fixed bug
+// is worth as much as a missing one, and its owner has no reason to suspect it.
+test('doctor H13 fails a runner that predates the installed harness', () => {
+  const workspace = tempDir('runner-doctor-ws-');
+  const copilotHome = tempDir('runner-doctor-home-');
+  fs.mkdirSync(path.join(workspace, '.harness'), { recursive: true });
+  const runnerPath = path.join(workspace, '.harness', 'run.mjs');
+  const h13 = () => {
+    const res = runHarness(['doctor', '--workspace', workspace, '--copilot-home', copilotHome, '--json']);
+    return JSON.parse(res.stdout).checks.find((c) => c.id === 'H13');
+  };
+
+  fs.writeFileSync(runnerPath, harnessRunnerSource().replace(`@harness-runner-version ${RUNNER_VERSION}`, '@harness-runner-version 1'));
+  const stale = h13();
+  assert.equal(stale.pass, false, 'a stale runner is not a healthy runner');
+  assert.match(stale.hint, /predates runner v\d+/);
+
+  fs.writeFileSync(runnerPath, harnessRunnerSource());
+  assert.equal(h13().pass, true, 'a current runner passes');
+});
+
 // Codex P1: detection matched only the separated `--workspace` token, so the
 // equally supported `--workspace=<path>` fell through to injection — and since
 // parseFlags reads argv in order, the INJECTED pair won. An explicit

@@ -5,7 +5,7 @@ import { spawnSync } from 'node:child_process';
 import { createRequire } from 'module';
 import { resolveIndexDir } from './recall-config.mjs';
 import { isIndexStale } from './postings-index.mjs';
-import { resolveHarnessBin } from './resolve-harness-bin.mjs';
+import { resolveHarnessBin, RUNNER_VERSION } from './resolve-harness-bin.mjs';
 import { globalHarnessShimPath, findHarnessOnPath } from './global-bin.mjs';
 import { planDigest } from './evidence.mjs';
 import { loadPlan } from './plan-parse.mjs';
@@ -589,6 +589,7 @@ export function structuralChecks({ workspace, grammarRoots = packageGrammarRoots
   } catch {
     // Advisory; never fail doctor on a structural-check error.
   }
+
   return checks;
 }
 
@@ -719,11 +720,31 @@ export async function runDoctor({ copilotHome, assetsRoot, pkgRoot, flags, vscod
       ? `Resolved via ${resolved.source}: ${resolved.bin}`
       : 'Run: harness install, then init-repo (creates .harness/run.mjs)',
   });
+  // Present AND current. Existence alone was not enough: the runner is
+  // regenerated only by `init-repo` and by an `install`/`upgrade` run from
+  // inside this workspace, so any other workspace can sit on a shim built by an
+  // older harness indefinitely — and its owner has no reason to suspect it,
+  // because upgrading the harness looks like it updated everything. A runner
+  // carrying a fixed bug is worth as much as a missing one, so it fails the
+  // same check with a hint that names the actual remedy.
+  const runnerExists = fs.existsSync(runnerPath);
+  let runnerCurrent = false;
+  if (runnerExists) {
+    try {
+      runnerCurrent = fs.readFileSync(runnerPath, 'utf8').includes(`@harness-runner-version ${RUNNER_VERSION}`);
+    } catch {
+      // Unreadable — treat as not current; the hint's remedy rewrites it.
+    }
+  }
   checks.push({
     id: 'H13',
     name: 'Workspace harness runner',
-    pass: fs.existsSync(runnerPath),
-    hint: 'Run: harness init-repo',
+    pass: runnerExists && runnerCurrent,
+    hint: !runnerExists
+      ? 'Run: harness init-repo'
+      : runnerCurrent
+        ? `.harness/run.mjs is current (v${RUNNER_VERSION})`
+        : `.harness/run.mjs predates runner v${RUNNER_VERSION} — regenerate with: harness init-repo (or run harness upgrade from this workspace)`,
     optional: true,
   });
 
