@@ -420,9 +420,37 @@ Primary views:
    - Provenance and precedence
    - Enable/disable/reload actions
 
+### Command palette
+
+The palette is a **searchable index over the command registry**, not a second command grammar. It is the TUI's only command-entry surface.
+
+**The CLI grammar does not change to accommodate it.** Every flag the CLI accepts today it still accepts; nothing is removed, renamed, or deprecated. The model invokes `harness <command> --flags` through the agent lane and never sees the palette; a person in a shell keeps `--help` and shell completion. The palette exists because the TUI is the one surface with neither.
+
+**No `--` is ever typed in the TUI.** The index contains options so a capability can be *found*; it must never require one to be *written*. The palette presents **noun + verb**, and the registry maps the verb onto the argv the CLI already accepts:
+
+```text
+index structural      →  harness index --structural
+index status          →  harness index --status
+learnings why         →  harness learnings --why <id>
+knowledge promote     →  harness knowledge promote --branch <key>
+```
+
+The left column is the TUI's entire vocabulary. The resolved argv is echoed into the ledger after the run, so the surface stays auditable and the shell form is learned by observation rather than by being typed.
+
+Contract:
+
+- **One flat namespace.** Commands, their verbs, and skills are sibling entries — reaching a capability never requires knowing its parent. `structural` resolves without the user knowing it lives under `index`.
+- **Skills are namespaced with `:`.** `/consolidate` is the deterministic command; `/skill:consolidate` is the workflow that calls it. The command owns the bare name; the qualified form is the escape hatch.
+- **Ranking is word-boundary weighted**, not substring. Exact match preselects; declared aliases outrank prefix matches.
+- **Values come from pickers.** A verb needing a value opens a chooser populated from live state (branch keys, learning ids, plan paths) — never a typed flag.
+- **Dependent options are refinements, not entries.** An option valid only alongside another (`--since` requires `--structural`) attaches to its parent verb and is offered after selection, never listed independently.
+- **Every row carries its side-effect class** — `read`, `mutate`, `execute` — so the consequence of a command is visible before it runs. This is possible because the registry already declares it per command.
+- **Availability is explained, not hidden.** A command that cannot currently run stays listed and greyed, carrying its reason (`no plan under docs/plans/`).
+- **Entry points:** `/` at line start, plus a configurable chord defaulting to `Ctrl-P` (`Cmd-K` aliased on macOS). `Ctrl-K` is reserved for readline's kill-to-line-end.
+- **Composer sigils:** `!` runs a shell command and puts its output in context, `!!` runs it privately, `@` completes file paths. No other sigil dispatches.
+
 Common TUI features:
 
-- Command palette
 - Multiline editor
 - Keyboard navigation
 - Configurable shortcuts
