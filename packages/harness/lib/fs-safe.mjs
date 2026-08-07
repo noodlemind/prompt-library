@@ -304,6 +304,117 @@ export function realpathParentContained(root, full) {
 }
 
 /**
+ * Contained APPEND via canonicalize-after-acquire — the append-only sibling of
+ * writeFileContained, for the store's two append-only ledgers
+ * (consolidated.jsonl, governance.jsonl).
+ *
+ * WHY NOT read-modify-write. Rewriting the whole file to append one line makes
+ * the append inherit the READ's failure modes: a ledger over DEFAULT_MAX_BYTES
+ * (or unreadable for any other reason) would read as empty and the "append"
+ * would TRUNCATE it. An append must be able to succeed on a file it cannot
+ * read, so it is a real O_APPEND write:
+ *   1. assertNoSymlinkAncestors — cheap lexical + ancestor-symlink pre-filter.
+ *   2. open O_RDWR|O_APPEND|O_CREAT|O_NOFOLLOW — O_NOFOLLOW makes the kernel
+ *      refuse atomically if the FINAL component is a symlink, so a planted link
+ *      is never appended through; O_APPEND makes every write land at EOF.
+ *   3. fstat the fd, then realpath-contain + inode-match it against the root
+ *      (fdMatchesCanonicalUnderRoot) — closing the ancestor-swap window step 1
+ *      cannot. On failure the fd is closed and, if THIS call created the file,
+ *      the empty file is unlinked again; a pre-existing file is left untouched.
+ *   4. Write through the verified descriptor, never by re-opening the path.
+ * `newlineGuard` reproduces the store's own append idiom (insert a separating
+ * newline when the file is non-empty and does not already end in one) by
+ * reading the last byte THROUGH the verified fd rather than re-reading the
+ * whole file. Returns the appended-to absolute path, or null on any refusal.
+ */
+export function appendFileContained(root, rel, content, { newlineGuard = false } = {}) {
+  const rootFull = path.resolve(root);
+  const full = assertNoSymlinkAncestors(rootFull, rel);
+  if (!full) return null;
+  const realRoot = canonicalRoot(rootFull);
+  if (realRoot === null) return null;
+  try {
+    fs.mkdirSync(path.dirname(full), { recursive: true });
+  } catch {
+    return null;
+  }
+  let existedBefore = true;
+  try {
+    fs.lstatSync(full);
+  } catch {
+    existedBefore = false;
+  }
+  const flags = fs.constants.O_RDWR | fs.constants.O_APPEND | fs.constants.O_CREAT | (O_NOFOLLOW === null ? 0 : O_NOFOLLOW);
+  let fd;
+  try {
+    fd = fs.openSync(full, flags, 0o666);
+  } catch {
+    return null;
+  }
+  let closed = false;
+  const close = () => {
+    if (closed) return;
+    closed = true;
+    try {
+      fs.closeSync(fd);
+    } catch {
+      /* already gone */
+    }
+  };
+  const refuse = () => {
+    close();
+    // Only ever unlink a file THIS call brought into existence — a
+    // pre-existing file is never ours to remove on a refusal.
+    if (!existedBefore) {
+      try {
+        fs.unlinkSync(full);
+      } catch {
+        /* best effort */
+      }
+    }
+    return null;
+  };
+  try {
+    const stat = fs.fstatSync(fd);
+    if (!stat.isFile()) return refuse();
+    // Windows / no O_NOFOLLOW: the open above followed a symlinked leaf, so
+    // detect it the non-atomic way before writing a single byte.
+    if (O_NOFOLLOW === null) {
+      try {
+        if (fs.lstatSync(full).isSymbolicLink()) return refuse();
+      } catch {
+        return refuse();
+      }
+    }
+    if (!fdMatchesCanonicalUnderRoot(full, stat, realRoot)) return refuse();
+    let prefix = '';
+    if (newlineGuard && stat.size > 0) {
+      const last = Buffer.alloc(1);
+      fs.readSync(fd, last, 0, 1, stat.size - 1);
+      if (last.toString('utf8') !== '\n') prefix = '\n';
+    }
+    // WRITE UNTIL IT IS ALL WRITTEN. `fs.writeSync` issues ONE `write(2)` and
+    // does not loop, and `write(2)` is permitted to write fewer bytes than it
+    // was given. The return value used to be ignored, so a short write left a
+    // TRUNCATED record — half a JSON line — in an append-only ledger and
+    // reported success. Zero progress cannot be retried usefully (it is not the
+    // documented EAGAIN shape for a blocking fd), so it refuses rather than
+    // spinning.
+    const buf = Buffer.from(prefix + content, 'utf8');
+    let written = 0;
+    while (written < buf.length) {
+      const n = fs.writeSync(fd, buf, written, buf.length - written);
+      if (!(n > 0)) return refuse();
+      written += n;
+    }
+    close();
+    return full;
+  } catch {
+    return refuse();
+  }
+}
+
+/**
  * Contained, atomic write via canonicalize-after-acquire. The sequence is
  * create-EMPTY → verify → write-through-fd → rename, so no content byte is ever
  * placed at a path that has not already passed the containment check — even for

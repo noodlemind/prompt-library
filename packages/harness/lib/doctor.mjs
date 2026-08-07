@@ -14,9 +14,15 @@ import { readSession, writeSession } from './session.mjs';
 import { parseVSCodeSettings } from './vscode-settings.mjs';
 import { resolveVSCodeSettingsPaths } from './paths.mjs';
 import { loadRetired, findStaleOrphans } from './sync.mjs';
-import { storeDir, storeDirForId, repoId, localRepoId } from './knowledge/store.mjs';
+import { storeDir, storeDirForId, repoId, localRepoId, listLearnings } from './knowledge/store.mjs';
 import { consolidateStatus } from './knowledge/consolidate.mjs';
+import { listBuckets } from './knowledge/overlay.mjs';
+import { branchExists } from './knowledge/layer.mjs';
+import { deriveGitContext, resolveDefaultBranch } from './git-context.mjs';
 import { loadReportEvents, knowledgeSlos } from './report.mjs';
+import { readStructuralIndex } from './repo-map/structural-index.mjs';
+import { grammarStatus, packageGrammarRoots } from './repo-map/treesitter-extractor.mjs';
+import { assertNoSymlinkAncestors } from './fs-safe.mjs';
 
 const require = createRequire(import.meta.url);
 
@@ -413,6 +419,176 @@ function knowledgeChecks({ workspace, copilotHome }) {
     // Advisory; never fail doctor on a knowledge-check error.
   }
 
+  // K5 (blueprint P6): a bucket whose branch no longer exists locally or on
+  // any remote is an orphan — its work was merged, deleted, or abandoned;
+  // the bucket sits as store growth until a human prunes it. Detached
+  // buckets carry no branch to check and are aged out via prune --stale
+  // instead. `branchExists` returning null means git state was unverifiable
+  // — never reported as an orphan.
+  try {
+    const dir = storeDir(workspace);
+    if (fs.existsSync(dir)) {
+      const orphans = [];
+      for (const bucket of listBuckets(dir)) {
+        const branch = bucket.meta?.branch;
+        if (!branch) continue;
+        if (branchExists(workspace, branch) === false) orphans.push(bucket.key);
+      }
+      checks.push({
+        id: 'K5',
+        name: 'No orphan branch buckets (branch gone locally and on remotes)',
+        pass: orphans.length === 0,
+        hint: orphans.length
+          ? `orphan bucket(s): ${orphans.join(', ')} — run: harness knowledge prune --branch <key> (or --merged/--stale)`
+          : 'harness knowledge prune',
+        optional: true,
+      });
+    }
+  } catch {
+    // Advisory; never fail doctor on a knowledge-check error.
+  }
+
+  // K6 (blueprint P6): layer misroute — bucket contents whose `branch:`
+  // provenance disagrees with the bucket's own meta.json branch. A learning
+  // carrying another branch's provenance inside this bucket means a write
+  // was routed into the wrong layer (or a bucket dir was hand-moved).
+  try {
+    const dir = storeDir(workspace);
+    if (fs.existsSync(dir)) {
+      const misrouted = [];
+      for (const bucket of listBuckets(dir)) {
+        const metaBranch = bucket.meta?.branch;
+        if (!metaBranch) continue;
+        for (const l of listLearnings(bucket.dir)) {
+          if (l.fm.branch && l.fm.branch !== metaBranch) misrouted.push(`${bucket.key}:${l.id}`);
+        }
+      }
+      checks.push({
+        id: 'K6',
+        name: 'Bucket contents match their bucket branch (no layer misroute)',
+        pass: misrouted.length === 0,
+        hint: misrouted.length
+          ? `misrouted learning(s): ${misrouted.slice(0, 5).join(', ')} — inspect the bucket, then knowledge prune or re-consolidate on the right branch`
+          : 'inspect with harness knowledge status',
+        optional: true,
+      });
+    }
+  } catch {
+    // Advisory; never fail doctor on a knowledge-check error.
+  }
+
+  // K7 (blueprint P1): the default branch drives write-layer routing; when it
+  // is unresolvable (no store config.json defaultBranch, no origin/HEAD),
+  // writes fail closed to branch-local — surfaced so a team can pin it.
+  try {
+    const dir = storeDir(workspace);
+    if (fs.existsSync(dir)) {
+      const context = deriveGitContext({ workspace });
+      const unresolved = Boolean(context.branch) && !resolveDefaultBranch(workspace, {});
+      checks.push({
+        id: 'K7',
+        name: 'Default branch resolvable for knowledge layer routing',
+        pass: !unresolved,
+        hint: 'set defaultBranch in the store config.json or run: git remote set-head origin -a — until then writes fail closed to branch-local',
+        optional: true,
+      });
+    }
+  } catch {
+    // Advisory; never fail doctor on a knowledge-check error.
+  }
+
+  return checks;
+}
+
+// Structural-index health (blueprint P3, doctor S1). One check, five facts:
+// grammar availability + integrity (BOTH the mismatch recorded at index time
+// in meta.json AND the current on-disk wasm state via the sync grammarStatus
+// probe), meta.sha drift vs HEAD, parse-failure rate, unreadable index tables,
+// and orphaned cache entries. Binding blueprint rule: a grammar integrity
+// mismatch — or an unreadable grammars.lock, which disables verification
+// entirely — FAILS S1 (optional: false); the loud lexical fallback is a doctor
+// failure, never a warning. A mismatch RECORDED in meta that the current wasm
+// no longer has is stale, so it degrades to an advisory "re-run the index"
+// instead of failing forever. Everything else about the optional tier stays
+// advisory. The disk probe is scoped to the harness package's own node_modules
+// and both it and the lock path are injectable, so S1 is never a verdict on an
+// unrelated web-tree-sitter copy elsewhere on the filesystem (and the tests
+// stay hermetic). Exported for direct testing, same as the check builders
+// above are exercised through runDoctor.
+export function structuralChecks({ workspace, grammarRoots = packageGrammarRoots(), lockPath } = {}) {
+  const checks = [];
+  try {
+    // Scoped to the harness package's OWN node_modules: walking parent
+    // node_modules made any unrelated web-tree-sitter anywhere up the
+    // filesystem a hard doctor failure for a user who never built an index.
+    const disk = grammarStatus({ grammarRoots, lockPath });
+    const index = readStructuralIndex(workspace);
+    const recorded = index?.meta?.integrityFailures || [];
+    // A recorded mismatch the disk now verifies as good is STALE, not live:
+    // the last build fell back, but the bytes are fixed — say "re-run", don't
+    // keep failing forever on a record no rebuild ever clears.
+    const stale = recorded.filter((f) => disk.grammars?.[f.language]?.ok === true);
+    const live = recorded.filter((f) => !stale.includes(f));
+    const mismatches = [...disk.integrityFailures, ...live];
+    if (mismatches.length) {
+      const languages = [...new Set(mismatches.map((f) => f.language))].join(', ');
+      const lockGone = mismatches.some((f) => f.language === 'lock');
+      checks.push({
+        id: 'S1',
+        name: 'Structural index grammar integrity',
+        pass: false,
+        hint: lockGone
+          ? `grammars.lock missing or unreadable — wasm integrity cannot be verified and the treesitter tier is refused; reinstall the harness package, then re-run: harness index --structural`
+          : `grammar wasm sha256 mismatch vs grammars.lock (${languages}) — the index fell back to lexical loudly; reinstall the harness optional dependencies, then re-run: harness index --structural`,
+      });
+      return checks;
+    }
+    if (!index) {
+      checks.push({
+        id: 'S1',
+        name: 'Structural index (optional tier)',
+        pass: true,
+        optional: true,
+        hint: 'not built — run: harness index --structural',
+      });
+      return checks;
+    }
+    const issues = [];
+    if (stale.length) {
+      const languages = [...new Set(stale.map((f) => f.language))].join(', ');
+      issues.push(`index meta still records a grammar integrity mismatch (${languages}) that the current wasm no longer has — re-run: harness index --structural`);
+    }
+    // An existing-but-unreadable table (oversized past the fs-safe cap,
+    // symlinked, corrupt JSON) used to read as empty everywhere. Say it.
+    if (index.unreadable?.length) issues.push(`${index.unreadable.join('; ')} — delete the index directory and re-run: harness index --structural`);
+    const head = spawnSync('git', ['-C', workspace, 'rev-parse', 'HEAD'], { encoding: 'utf8', timeout: 10_000 });
+    const headSha = head.status === 0 ? head.stdout.trim() : null;
+    if (index.meta.sha && headSha && index.meta.sha !== headSha) {
+      issues.push('meta.sha behind HEAD — re-run: harness index --structural');
+    }
+    const filesIndexed = Math.max(index.meta.filesIndexed || Object.keys(index.files).length, 1);
+    const failRate = (index.meta.parseFailures || 0) / filesIndexed;
+    if (failRate > 0.2) issues.push(`parse-failure rate ${(failRate * 100).toFixed(0)}% — inspect grammar installation`);
+    // Orphaned cache entries: indexed rels that no longer exist on disk.
+    // files.json can be hand-edited, so each rel is containment-checked
+    // before any stat — an escaping rel counts as an orphan, never a probe
+    // outside the workspace.
+    let orphans = 0;
+    for (const rel of Object.keys(index.files).slice(0, 500)) {
+      const full = assertNoSymlinkAncestors(workspace, rel);
+      if (!full || !fs.existsSync(full)) orphans += 1;
+    }
+    if (orphans) issues.push(`${orphans} orphaned cache entries — pruned on the next harness index --structural`);
+    checks.push({
+      id: 'S1',
+      name: 'Structural index health',
+      pass: issues.length === 0,
+      optional: true,
+      hint: issues.length ? issues.join(' · ') : 'current with HEAD; grammars verified',
+    });
+  } catch {
+    // Advisory; never fail doctor on a structural-check error.
+  }
   return checks;
 }
 
@@ -598,6 +774,7 @@ export async function runDoctor({ copilotHome, assetsRoot, pkgRoot, flags, vscod
   });
 
   checks.push(...knowledgeChecks({ workspace, copilotHome }));
+  checks.push(...structuralChecks({ workspace }));
 
   if (flags.host === 'vscode') {
     checks.push(

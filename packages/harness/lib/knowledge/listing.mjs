@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import { storeDir, listLearnings, inertLine } from './store.mjs';
+import { redactSecrets } from '../secret-scan.mjs';
 import { readEvents, EVENTS_MAX_LIMIT } from '../events.mjs';
 import { verifiedAndPlans, isPromotionEligible, consolidateStatus } from './consolidate.mjs';
 
@@ -37,13 +38,41 @@ function failureCounts(workspace) {
   return counts;
 }
 
+/**
+ * EVERY SCALAR THIS MODULE EMITS IS SANITIZED HERE, NOT AT THE RENDER SITE.
+ *
+ * `trigger`, `claimLine`, and episode `path`/`plan` were already passed through
+ * `inertLine` — but `status`, `source`, episode `kind`, `id`, `supersededBy`,
+ * `promotedTo`, `mergedFrom`, and `lastConfirmed` were emitted RAW. They are
+ * `unquote`d frontmatter scalars, and `unquote` DECODES `\n`/`\r`/`\t` escapes
+ * back into real control characters — so a hand-edited or legacy learning can
+ * carry an embedded newline in any of them, and every one of them lands in a
+ * single-line human surface (`ui.line`, the `learningNote` status string, the
+ * muted episode bullets) as well as in `--json`.
+ *
+ * Fixing this at the render sites in commands.mjs would leave `--json` raw and
+ * would have to be re-remembered at every new surface. Fixing it HERE means the
+ * view objects these two functions return simply cannot carry a control char,
+ * whoever renders them.
+ *
+ * `status`, `source`, and episode `kind` are CODE SETS, so they get the
+ * stronger treatment: an allow-list (rule 3), not an escape pass. A value
+ * outside the set renders as `unknown` rather than as itself-with-spaces —
+ * a code set with an open range is not a code set.
+ */
+const STATUS_VALUES = new Set(['active', 'provisional', 'retired', 'disputed', 'superseded', 'promoted']);
+const SOURCE_VALUES = new Set(['auto', 'human']);
+const EPISODE_KINDS = new Set(['fix', 'insight', 'human-teaching']);
+
+const allowed = (set, value, fallback) => (set.has(value) ? value : fallback);
+
 // fm.status never literally holds "superseded" (apply.mjs tracks it via the
 // separate superseded_by pointer) — synthesize it here since the listing row
 // carries a single status field and the render step needs it to fence pending rows.
 function effectiveStatus(fm) {
   if (fm.superseded_by) return 'superseded';
   if (fm.promoted_to) return 'promoted';
-  return fm.status || 'active';
+  return allowed(STATUS_VALUES, fm.status || 'active', 'unknown');
 }
 
 // Exported so apply.mjs's own STRENGTHEN path (the only other place that
@@ -61,6 +90,16 @@ export function parseMergedFrom(raw) {
   return items.length ? items : null;
 }
 
+/** parseMergedFrom for a RENDER surface: the same parse, then inertLine per id
+ * (see the code-set note above — merged_from ids are free-form scalars off a
+ * hand-editable frontmatter line, not a code set). apply.mjs's re-render path
+ * deliberately keeps using the raw parseMergedFrom: it is writing the value
+ * back to disk, where yamlQuote re-escapes it, not rendering it. */
+export function parseMergedFromForRender(raw) {
+  const items = parseMergedFrom(raw);
+  return items ? items.map((id) => inertLine(id)) : null;
+}
+
 export function listingView({ workspace, copilotHome, domain, home }) {
   const dir = storeDir(workspace, { home });
   // Read-only: a storeless workspace must never be materialized by a listing
@@ -74,13 +113,15 @@ export function listingView({ workspace, copilotHome, domain, home }) {
     .map((l) => {
       const { verified, plans } = verifiedAndPlans(l.fm);
       return {
-        id: l.id,
+        // A learning id is built from directory and file names, which on POSIX
+        // may contain any byte but `/` and NUL — including control chars.
+        id: inertLine(l.id),
         status: effectiveStatus(l.fm),
-        source: l.fm.source || 'auto',
+        source: allowed(SOURCE_VALUES, l.fm.source || 'auto', 'unknown'),
         // inertLine: a legacy/hand-edited learning's trigger can still carry
         // an embedded control char (store.mjs's doc comment) — collapsed to
         // a space so this listing row always renders as one line.
-        trigger: inertLine(l.fm.trigger || ''),
+        trigger: inertLine(redactSecrets(l.fm.trigger || '')),
         verified,
         plans,
         // A promoted learning is never eligible for promotion again — its
@@ -112,22 +153,38 @@ export function whyView({ workspace, id, home }) {
 
   const { fm, body } = learning;
   const { verified, plans } = verifiedAndPlans(fm);
-  const claimLine = (body.split('\n').find((line) => line.trim()) || '').trim().slice(0, 140);
+  // Redact BEFORE the cap (same order as retrieve.mjs's retrievedText): slicing
+  // first cuts a credential that straddles byte 140 into a fragment the secret
+  // scanner no longer matches, so the tail leaks unredacted.
+  const claimLine = inertLine(redactSecrets((body.split('\n').find((line) => line.trim()) || '').trim())).slice(0, 140);
   const failures = failureCounts(workspace).get(id) || 0;
 
   return {
-    id,
+    // `id` is the caller's lookup string echoed back into a rendered row.
+    id: inertLine(id),
     // inertLine: same render-side normalization as listingView above — a
     // legacy/hand-edited trigger can still carry an embedded control char.
-    trigger: inertLine(fm.trigger || ''),
-    claimLine: inertLine(claimLine),
+    trigger: inertLine(redactSecrets(fm.trigger || '')),
+    claimLine,
     status: effectiveStatus(fm),
-    source: fm.source || 'auto',
-    lastConfirmed: fm.last_confirmed || null,
-    supersededBy: fm.superseded_by || null,
-    promotedTo: fm.promoted_to || null,
-    mergedFrom: parseMergedFrom(fm.merged_from),
-    episodes: (fm.episodes || []).map((e) => ({ path: e.path, kind: e.kind, plan: e.plan || null })),
+    source: allowed(SOURCE_VALUES, fm.source || 'auto', 'unknown'),
+    // The remaining frontmatter scalars are free-form (a date, two learning
+    // ids, a workspace-relative primitive path), all `unquote`d off a
+    // hand-editable line, all rendered on a single line — same treatment.
+    lastConfirmed: fm.last_confirmed ? inertLine(fm.last_confirmed) : null,
+    supersededBy: fm.superseded_by ? inertLine(fm.superseded_by) : null,
+    promotedTo: fm.promoted_to ? inertLine(redactSecrets(String(fm.promoted_to))) : null,
+    mergedFrom: parseMergedFromForRender(fm.merged_from),
+    // Episode paths and plan refs come from learning frontmatter, which is
+    // hand-editable — same untrusted class as trigger/claim, so they get the
+    // same treatment rather than being emitted raw.
+    episodes: (fm.episodes || []).map((e) => ({
+      path: inertLine(redactSecrets(String(e.path || ''))),
+      // Code set (episodeLines normalizes an unknown kind to 'fix' at WRITE
+      // time; a legacy or hand-edited file can still carry anything here).
+      kind: allowed(EPISODE_KINDS, e.kind, 'unknown'),
+      plan: e.plan ? inertLine(redactSecrets(String(e.plan))) : null,
+    })),
     verified,
     plans,
     // Same guard as listingView: a promoted learning is never eligible for

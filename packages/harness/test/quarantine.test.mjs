@@ -144,6 +144,13 @@ test('a byte-cap rejection records one failure entry per run; the 3rd strike qua
 // count against the same static ledger snapshot, so a single run with two
 // duplicate refs would double-count toward the 3-strike threshold and
 // quarantine a run early (on the 2nd run instead of the 3rd).
+//
+// The duplicate itself is now REJECTED at admission (validateEpisodes,
+// apply.mjs — a duplicate link inflates verifiedFixLinks/verifiedAndPlans from
+// one episode file), so the rejection code is E_SCHEMA rather than the
+// E_BYTE_CAP this op would otherwise have earned. The strike-recorder's own
+// dedup invariant is unchanged and still pinned here: one entry per run, the
+// quarantine landing on exactly the 3rd.
 test('an op citing the same episode twice records one failure entry per run (dedup); quarantines on the 3rd run, not earlier', () => {
   const c = ctx();
   const ep = writeEpisode(c.ws, 'perf', 'dup-claim');
@@ -161,10 +168,11 @@ test('an op citing the same episode twice records one failure entry per run (ded
   for (let i = 0; i < 2; i++) {
     const res = run(c, ['consolidate', '--apply', '--ops', opsPath]);
     assert.equal(res.status, 1, res.stderr || res.stdout);
+    assert.match(JSON.parse(res.stdout).rejected[0].reason, /listed more than once/);
   }
   let ledger = readLedger(dir);
   assert.equal(ledger.length, 2, 'one failure entry per run — the duplicate episode ref must not double-count');
-  assert.ok(ledger.every((e) => e.failure === 'E_BYTE_CAP' && !e.quarantined), 'not quarantined after only 2 runs');
+  assert.ok(ledger.every((e) => e.failure === 'E_SCHEMA' && !e.quarantined), 'not quarantined after only 2 runs');
 
   const res3 = run(c, ['consolidate', '--apply', '--ops', opsPath]);
   assert.equal(res3.status, 1, res3.stderr || res3.stdout);

@@ -49,6 +49,20 @@ function realFixEpisode(ws, rel) {
   return { path: rel, sha256: crypto.createHash('sha256').update(text).digest('hex'), kind: 'fix', plan: 'docs/plans/p1.md' };
 }
 
+/**
+ * Pin the store's defaultBranch to the workspace's current branch so writes
+ * route GOLDEN (layer routing fails closed to branch-local when the default
+ * branch is unresolvable — these fixtures have no origin/HEAD, and this
+ * suite is about store IDENTITY migration, not layer routing).
+ */
+function pinDefaultBranch(c) {
+  const res = git(c.ws, ['symbolic-ref', '--short', 'HEAD']);
+  const branch = res.stdout.trim();
+  assert.ok(branch, `fixture branch unresolvable: ${res.stderr}`);
+  const { dir } = ensureStore(c.ws, { home: c.harnessHome });
+  fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify({ mode: 'on', commit: 'none', defaultBranch: branch }) + '\n');
+}
+
 function k4(doctorJson) {
   return JSON.parse(doctorJson).checks.find((c) => c.id === 'K4');
 }
@@ -73,6 +87,7 @@ test('adding an origin remote after building a local-keyed store strands it: doc
     body: 'This learning must survive the migration byte-for-byte.',
     episodes: [realFixEpisode(c.ws, 'docs/solutions/perf/stranded.md')],
   };
+  pinDefaultBranch(c);
   const applyRes = run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [addOp])]);
   assert.equal(applyRes.status, 0, applyRes.stderr || applyRes.stdout);
 
@@ -191,6 +206,7 @@ test('migrate-store takes over a stale lock left in the legacy store instead of 
     body: 'body',
     episodes: [realFixEpisode(c.ws, 'docs/solutions/perf/stale-lock.md')],
   };
+  pinDefaultBranch(c);
   assert.equal(run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [addOp])]).status, 0);
   const legacyId = localRepoId(c.ws);
   const legacyDir = storeDirForId(legacyId, { home: c.harnessHome });
@@ -297,6 +313,7 @@ test('migrate-store refuses when the migration target already exists and is non-
     body: 'legacy body',
     episodes: [realFixEpisode(c.ws, 'docs/solutions/perf/legacy.md')],
   };
+  pinDefaultBranch(c);
   assert.equal(run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [addOp])]).status, 0);
   const legacyId = localRepoId(c.ws);
   const legacyDir = storeDirForId(legacyId, { home: c.harnessHome });
@@ -314,6 +331,7 @@ test('migrate-store refuses when the migration target already exists and is non-
     body: 'destination body',
     episodes: [realFixEpisode(c.ws, 'docs/solutions/perf/already-here.md')],
   };
+  pinDefaultBranch(c); // repoId switched — the DESTINATION store needs its own pin
   assert.equal(run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [otherOp])]).status, 0);
   assert.ok(fs.existsSync(path.join(currentDir, 'consolidated.jsonl')), 'precondition: destination store already exists');
   const currentBefore = fs.readdirSync(currentDir).sort();

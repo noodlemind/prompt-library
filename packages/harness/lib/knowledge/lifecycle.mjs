@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { storeDir, withStoreTransaction, StoreTransactionAbort, listLearnings, serializeLearning, appendGovernance } from './store.mjs';
 import { updateFrontmatterField, todayClamped, rebuildIndex } from './apply.mjs';
+import { writeLearningFile } from './store-io.mjs';
 import { absorbOrAbort, mirrorLearnings } from './admin.mjs';
 
 /**
@@ -143,7 +144,13 @@ export function setLearningStatus({ workspace, id, action, reason, to, home, log
       // safe route to add it in its canonical position. status is left
       // untouched — promotion never overwrites the learning's own status.
       const nextFm = { ...learning.fm, promoted_to: promotedTo };
-      fs.writeFileSync(learning.file, serializeLearning(nextFm, learning.body), 'utf8');
+      // Through the choke point (S1) — a symlink at a learning path is refused
+      // here exactly as it is in every other learning writer. Fail closed: the
+      // throw rolls the whole lifecycle transaction back rather than recording
+      // a governance `promote` for a frontmatter write that never landed.
+      if (!writeLearningFile(learning.file, serializeLearning(nextFm, learning.body))) {
+        throw new Error(`refused to promote ${id}: the learning path does not resolve safely inside the knowledge store`);
+      }
       // Same as every other store writer (applyOps, absorbHandEdits, purge):
       // rebuild INDEX.md in the same commit as the mutation, so a promoted
       // learning drops out of the index immediately rather than waiting for
@@ -162,8 +169,12 @@ export function setLearningStatus({ workspace, id, action, reason, to, home, log
       return { kind: 'success', commitMessage: `promote ${id}: ${promotedTo}`, status: 'promoted' };
     }
 
-    updateFrontmatterField(learning.file, 'status', TARGET_STATUS[action]);
-    if (action === 'confirm') updateFrontmatterField(learning.file, 'last_confirmed', todayClamped());
+    if (!updateFrontmatterField(learning.file, 'status', TARGET_STATUS[action])) {
+      throw new Error(`refused to ${action} ${id}: the learning path does not resolve safely inside the knowledge store`);
+    }
+    if (action === 'confirm' && !updateFrontmatterField(learning.file, 'last_confirmed', todayClamped())) {
+      throw new Error(`refused to confirm ${id}: the learning path does not resolve safely inside the knowledge store`);
+    }
     rebuildIndex(dir);
     // Governance record (Milestone 4): appended BEFORE the transaction's own
     // commit, same reasoning as the promote branch above — one commit

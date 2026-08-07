@@ -1,7 +1,8 @@
 import fs from 'node:fs';
-import { storeDir, listLearnings, readLedger, readStaleExclusions } from './store.mjs';
+import { storeDir, readLedger, readStaleExclusions } from './store.mjs';
 import { collectEpisodes } from './consolidate.mjs';
 import { rankLearnings, retrievalExclusion } from './retrieve.mjs';
+import { loadLayeredLearnings } from './overlay.mjs';
 import { tokenize } from '../tokenize.mjs';
 
 /**
@@ -93,7 +94,11 @@ export function evalKnowledge({ workspace, copilotHome, home, negativeQueries = 
   const train = dated.filter((e) => e.date <= cutoff);
   const heldOut = dated.filter((e) => e.date > cutoff);
 
-  const learnings = listLearnings(dir);
+  // Share the PRODUCTION candidate set (loadLayeredLearnings, overlay.mjs —
+  // the same golden ∪ branch-bucket overlay retrieve.mjs's rankLearnings
+  // loads through) AND the production eligibility gate (retrievalExclusion),
+  // so the eval measures only learnings a real orient could actually surface.
+  const learnings = loadLayeredLearnings({ workspace, home }).learnings;
   // Share the PRODUCTION retrieval eligibility gate (retrievalExclusion,
   // retrieve.mjs) so the eval measures only learnings a real orient could
   // actually surface — excluding promoted/superseded/retired/disputed AND

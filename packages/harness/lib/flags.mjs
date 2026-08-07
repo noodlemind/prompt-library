@@ -11,8 +11,13 @@ function parseMinScore(raw, flagName) {
 }
 
 function parsePositiveInt(raw, flagName) {
+  // The COMPLETE string must be an integer: parseInt('30days') === 30 would
+  // silently accept a malformed value (e.g. a wrong prune cutoff).
+  if (typeof raw !== 'string' || !/^\d+$/.test(raw)) {
+    invalidFlag(flagName, raw, 'must be an integer >= 1');
+  }
   const n = parseInt(raw, 10);
-  if (!Number.isFinite(n) || n < 1) {
+  if (!Number.isSafeInteger(n) || n < 1) {
     invalidFlag(flagName, raw, 'must be an integer >= 1');
   }
   return n;
@@ -21,6 +26,13 @@ function parsePositiveInt(raw, flagName) {
 function parsePhase(raw) {
   if (!['implement', 'verify'].includes(raw)) {
     invalidFlag('--phase', raw, 'must be implement or verify');
+  }
+  return raw;
+}
+
+function parseLayer(raw) {
+  if (!['golden', 'branch'].includes(raw)) {
+    invalidFlag('--layer', raw, 'must be golden or branch');
   }
   return raw;
 }
@@ -101,6 +113,13 @@ export function parseFlags(argv) {
     to: null,
     why: null,
     yes: false,
+    layer: null,
+    branch: null,
+    ids: null,
+    all: false,
+    merged: false,
+    stale: null,
+    since: null,
   };
 
   for (let i = 0; i < scan.length; i++) {
@@ -200,7 +219,43 @@ export function parseFlags(argv) {
       const next = scan[i + 1];
       if (next !== undefined && !next.startsWith('--')) flags.why = scan[++i];
     }
+    else if (a.startsWith('--since=')) {
+      const value = a.split('=').slice(1).join('=');
+      if (!value) invalidFlag('--since', value, 'requires a git ref value');
+      flags.since = value;
+    } else if (a === '--since') {
+      const next = scan[++i];
+      if (next === undefined || next.startsWith('--')) invalidFlag('--since', next, 'requires a git ref value');
+      flags.since = next;
+    }
     else if (a === '--yes') flags.yes = true;
+    else if (a.startsWith('--layer=')) flags.layer = parseLayer(a.split('=')[1]);
+    else if (a === '--layer') flags.layer = parseLayer(scan[++i]);
+    // Same flag-shaped-value guard `--since` carries above: a separated form
+    // with a missing value used to swallow the NEXT flag as its argument
+    // (`--branch --ids x` set branch to "--ids" and dropped `--ids`' own
+    // effect), so a typo silently ran a DIFFERENT command than the one typed.
+    else if (a.startsWith('--branch=')) {
+      const value = a.split('=').slice(1).join('=');
+      if (!value) invalidFlag('--branch', value, 'requires a bucket key value');
+      flags.branch = value;
+    } else if (a === '--branch') {
+      const next = scan[++i];
+      if (next === undefined || next.startsWith('--')) invalidFlag('--branch', next, 'requires a bucket key value');
+      flags.branch = next;
+    } else if (a.startsWith('--ids=')) {
+      const value = a.split('=').slice(1).join('=');
+      if (!value) invalidFlag('--ids', value, 'requires a comma-separated learning id list');
+      flags.ids = value;
+    } else if (a === '--ids') {
+      const next = scan[++i];
+      if (next === undefined || next.startsWith('--')) invalidFlag('--ids', next, 'requires a comma-separated learning id list');
+      flags.ids = next;
+    }
+    else if (a === '--all') flags.all = true;
+    else if (a === '--merged') flags.merged = true;
+    else if (a.startsWith('--stale=')) flags.stale = parsePositiveInt(a.split('=')[1], '--stale');
+    else if (a === '--stale') flags.stale = parsePositiveInt(scan[++i], '--stale');
   }
 
   return flags;
