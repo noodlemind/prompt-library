@@ -223,5 +223,6 @@ The verification suite checks the thin Engineer contract, plan and policy schema
 - [Capability Registry](../../knowledge/capability-registry.yaml)
 - [Install Guide](../install.md)
 - [Harness Quickstart](../onboarding/harness-quickstart.md)
+- [Harness Evolution Blueprint](../../knowledge/proposals/harness-evolution-blueprint.md) (approved design — phases 1–4 shipped; conditions in its Human Decision remain binding)
 
 Historical proposals, comparative reviews, and implementation roadmaps are removed from active documentation after implementation. Their audit remains in Git and pull-request history; durable decisions are promoted to this architecture or team knowledge before completed plans are deleted.

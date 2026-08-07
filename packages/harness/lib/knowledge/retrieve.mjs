@@ -1,17 +1,40 @@
 import fs from 'node:fs';
-import { storeDir, listLearnings, readStaleExclusions } from './store.mjs';
+import { storeDir, readStaleExclusions, inertLine } from './store.mjs';
+import { loadLayeredLearnings, layerTieRank } from './overlay.mjs';
+import { redactSecrets } from '../secret-scan.mjs';
 import { tokenize } from '../tokenize.mjs';
+
+/**
+ * Retrieved learning text, screened at the DATA boundary — the same doctrine
+ * redactRecallEntry (secret-scan.mjs) applies to recall results, for the same
+ * reason: a render-boundary-only screen misses the `--json` sibling, which
+ * serializes this object raw. Learning content is HAND-EDITABLE and human
+ * authority deliberately overrides the write-time secret screen for hand edits
+ * (absorbHandEdits keeps a secret-shaped human claim, skipping only the
+ * snapshot), so a stored credential is a supported state — it must simply
+ * never be rendered back to an agent. inertLine additionally flattens the
+ * control characters a legacy or hand-edited file can carry.
+ */
+function retrievedText(value) {
+  return inertLine(redactSecrets(String(value ?? '')));
+}
 
 /**
  * Read the raw learning set + stale-anchor exclusions for a workspace.
  * Read-only and advisory: never creates the store, never throws — a missing
  * or unreadable store just means "nothing to rank/explain".
+ *
+ * The learning set comes from the SHARED layer overlay (overlay.mjs) — the
+ * one function eval.mjs also uses — so production retrieval and the eval can
+ * never drift on the golden ∪ branch-bucket candidate set or its
+ * protected-shadow/governance gates. With no `branches/` directory the
+ * overlay returns listLearnings' output untouched (byte-identical behavior).
  */
 function loadLearnings({ workspace, home }) {
   try {
     const dir = storeDir(workspace, { home });
     if (!fs.existsSync(dir)) return { learnings: [], staleExcluded: {} };
-    return { learnings: listLearnings(dir), staleExcluded: readStaleExclusions(dir).excluded };
+    return { learnings: loadLayeredLearnings({ workspace, home }).learnings, staleExcluded: readStaleExclusions(dir).excluded };
   } catch {
     return { learnings: [], staleExcluded: {} };
   }
@@ -46,6 +69,9 @@ function loadLearnings({ workspace, home }) {
 export function retrievalExclusion(l, staleExcluded = {}) {
   if (l.fm.superseded_by) return 'superseded';
   if (l.fm.promoted_to) return 'promoted';
+  // Branch→golden promotion tombstone (blueprint §5): a bucket entry whose
+  // claim was absorbed into golden is excluded exactly like promoted_to.
+  if (l.fm.promoted_to_golden) return 'promoted-to-golden';
   if (l.fm.status === 'retired') return 'retired';
   if (l.fm.status === 'disputed') return 'disputed';
   if (staleExcluded[l.id]) return 'stale-anchor';
@@ -93,15 +119,27 @@ export function rankLearnings({ workspace, query, limit = 3, home, include }) {
       (l.fm.episodes || []).length > 0 && (l.fm.episodes || []).every((e) => e.kind === 'insight');
     results.push({
       id: l.id,
-      trigger: l.fm.trigger || '',
-      claimLine: scored.claimLine.slice(0, 140),
+      // Redact BEFORE the cap: slicing first could cut a credential in half
+      // and leave the fragment unmatched (and therefore unredacted).
+      trigger: retrievedText(l.fm.trigger),
+      claimLine: retrievedText(scored.claimLine).slice(0, 140),
       status: l.fm.status || 'active',
       advisory,
       score: scored.score,
+      // Layer marker (blueprint §4): only branch-bucket entries carry the
+      // extra fields — golden results stay byte-identical to pre-overlay
+      // output, and the no-bucket path never adds a key.
+      ...(l.layer === 'branch' ? { layer: 'branch', ...(l.subordinate ? { subordinate: true } : {}) } : {}),
     });
   }
 
-  return results.sort((a, b) => b.score - a.score || a.id.localeCompare(b.id)).slice(0, limit);
+  // Equal-score ties break by layer BEFORE id (blueprint §4): branch-local
+  // wins, except a subordinate entry never outranks the protected golden
+  // claim it shadows. Entries without layer fields all rank identically, so
+  // the historical `score desc, id asc` order is unchanged without buckets.
+  return results
+    .sort((a, b) => b.score - a.score || layerTieRank(a) - layerTieRank(b) || a.id.localeCompare(b.id))
+    .slice(0, limit);
 }
 
 /**
@@ -129,6 +167,8 @@ export function explainLearnings({ workspace, query, home, include }) {
       base: scored.base ?? null,
       damping: scored.damping ?? null,
       score: scored.score ?? null,
+      // Same additive layer marker as rankLearnings — absent without buckets.
+      ...(l.layer === 'branch' ? { layer: 'branch' } : {}),
     };
   });
 

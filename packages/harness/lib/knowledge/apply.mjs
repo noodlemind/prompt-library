@@ -5,7 +5,6 @@ import {
   ensureStore,
   withStoreTransaction,
   StoreTransactionAbort,
-  rollbackStore,
   appendLedger,
   readLedger,
   listLearnings,
@@ -19,12 +18,18 @@ import {
   appendGovernance,
   serializeLearning,
   inertLine,
+  provenanceLines,
+  provenanceBytes,
 } from './store.mjs';
+import { deriveGitContext, isDetachedKey } from '../git-context.mjs';
 import { MAX_OPS_PER_RUN, LEARNING_BYTE_CAP, QUARANTINE_THRESHOLD, DOMAIN_ACTIVE_CAP, isActiveFm, collectEpisodes, splitLedger } from './consolidate.mjs';
 import { scanSecrets } from '../secret-scan.mjs';
 import { absorbOrAbort, mirrorLearnings } from './admin.mjs';
 import { parseMergedFrom } from './listing.mjs';
+import { resolveWriteLayer, ensureBucket, migrateRenamedBucket, episodeEligibleForLayer, storeHasBuckets } from './layer.mjs';
+import { bucketDirFor, readBucketMeta, bucketAncestryOk, isSafeBucketKey } from './overlay.mjs';
 import { readFileNoFollow, assertNoSymlinkAncestors } from '../fs-safe.mjs';
+import { readLearningFile, writeLearningFile, writeStoreFile } from './store-io.mjs';
 
 /**
  * The SOLE writer of the learnings store. The consolidation skill emits an
@@ -34,6 +39,17 @@ import { readFileNoFollow, assertNoSymlinkAncestors } from '../fs-safe.mjs';
  */
 
 const FILE_TOUCHING = new Set(['ADD', 'STRENGTHEN', 'SUPERSEDE', 'MERGE']);
+/**
+ * The ONLY op kinds a promotion op-set may carry — an allow-list, deliberately
+ * narrower than FILE_TOUCHING. A promotion moves ONE claim between layers, so
+ * the three shapes the emitter produces (a fresh golden claim, more evidence on
+ * an existing one, a replacement of the golden claim it shadows) are the whole
+ * legal vocabulary. MERGE is not among them: it consolidates SEVERAL claims and
+ * tombstones every one of them, which is an authoring decision no promotion
+ * ever makes. Reusing FILE_TOUCHING here admitted MERGE by accident — a
+ * deny-list ("not a NOOP") where an allow-list was meant.
+ */
+const PROMOTION_OP_KINDS = new Set(['ADD', 'STRENGTHEN', 'SUPERSEDE']);
 const DISPUTED_FIX_THRESHOLD = 3;
 // Codes that indicate the CONTENT of a specific op was rejected (bad shape,
 // secret-shaped, imperative lint, over the byte cap, a dedup/rename collision
@@ -238,7 +254,20 @@ function extractAnchors({ workspace, copilotHome, episodes }) {
   return [...found].sort().slice(0, ANCHOR_CAP);
 }
 
-function renderLearning({ trigger, body, episodes, anchors = [], origin, status, source, supersededBy, mergedFrom, promotedTo }) {
+function renderLearning({
+  trigger,
+  body,
+  episodes,
+  anchors = [],
+  origin,
+  status,
+  source,
+  supersededBy,
+  mergedFrom,
+  promotedTo,
+  promotedToGolden,
+  provenance,
+}) {
   const lines = [
     '---',
     'schema: 1',
@@ -263,7 +292,18 @@ function renderLearning({ trigger, body, episodes, anchors = [], origin, status,
   lines.push(`last_confirmed: ${todayClamped()}`);
   if (mergedFrom?.length) lines.push(`merged_from: [${mergedFrom.join(', ')}]`);
   if (promotedTo) lines.push(`promoted_to: ${promotedTo}`);
+  // Same field, same position, same optionality as serializeLearning
+  // (store.mjs). Without it here, ANY re-render through this function silently
+  // dropped the branch→golden tombstone — the STRENGTHEN path re-rendered a
+  // promoted bucket entry back into an ACTIVE claim that shadowed the golden
+  // claim it had become, was re-offered by `knowledge promote`, and stopped
+  // matching `prune --merged`'s fullyPromoted() check.
+  if (promotedToGolden) lines.push(`promoted_to_golden: ${promotedToGolden}`);
   lines.push(`origin: ${origin}`);
+  // Git provenance (blueprint P1/P9) — same shared rendering serializeLearning
+  // (store.mjs) uses, so a fresh write and a round-trip re-render emit
+  // byte-identical provenance lines. Optional: absent fields render nothing.
+  lines.push(...provenanceLines(provenance || {}));
   lines.push('---', '', body.trim(), '');
   return lines.join('\n');
 }
@@ -362,6 +402,15 @@ function validateEpisodes(episodes, opIndex) {
   if (!Array.isArray(episodes) || !episodes.length) {
     return fail('E_SCHEMA', `op ${opIndex}: episodes must be a non-empty array`);
   }
+  // One link per episode. An op listing the SAME `path@sha256` more than once
+  // is not two pieces of evidence — but every count downstream reads the
+  // rendered `episodes:` block as a flat list, so a duplicate inflates
+  // `verifiedFixLinks` (the protected/disputed-target threshold) and
+  // `verifiedAndPlans` (promotion eligibility) from a single episode file.
+  // Rejected at admission rather than silently deduped, so the op-set's author
+  // learns its evidence was double-counted instead of the store quietly
+  // disagreeing with the ops JSON.
+  const seenEpisodeKeys = new Set();
   for (const e of episodes) {
     if (
       !e ||
@@ -373,6 +422,11 @@ function validateEpisodes(episodes, opIndex) {
     ) {
       return fail('E_SCHEMA', `op ${opIndex}: each episode needs path + sha256`);
     }
+    const key = `${e.path}@${e.sha256}`;
+    if (seenEpisodeKeys.has(key)) {
+      return fail('E_SCHEMA', `op ${opIndex}: episode ${e.path} is listed more than once — one link per episode`);
+    }
+    seenEpisodeKeys.add(key);
     if (!validPlanField(e.plan)) {
       return fail(
         'E_SCHEMA',
@@ -615,6 +669,10 @@ export function applyOps({
   // lane. Never derived from anything in the ops JSON itself: a model can
   // never grant this to itself by asserting a field.
   humanPresent = false,
+  // `--layer golden` override (blueprint P4): explicit, logged, and HUMAN-
+  // GATED (see the admission check below). Routing is otherwise always
+  // derived from write-time git context, never from a flag.
+  layer = null,
 }) {
   // Kill switch: consolidate is a write path gated to mode 'on' — checked
   // first, before the ops file is even parsed, and before any lock. This is a
@@ -640,6 +698,42 @@ export function applyOps({
     };
   }
 
+  // LAYER CONTAINMENT (P2 security finding). "Promotion is the only branch →
+  // golden route" is a containment claim, so the one flag that bypasses
+  // write-time routing has to sit on the SAME trust plane as every other
+  // human-authority path in this module: a live human (`humanPresent`, set
+  // only by runRemember) or an explicit human approval (`approve`, set only
+  // by `--yes` after a person reviewed the ops JSON). Without this, `--layer
+  // golden` was a plain flag any unattended agent could pass to write
+  // straight into golden from a feature branch — self-granting exactly the
+  // authority the promotion lane exists to gate. `--layer branch` is refused
+  // outright rather than silently ignored (which is what it was): branch
+  // routing is DERIVED from write-time git context and there is nothing for a
+  // flag to override.
+  if (layer === 'branch') {
+    return {
+      applied: [],
+      governed: [],
+      rejected: [fail('E_LAYER', '--layer branch is not an override — branch routing is derived from write-time git context')],
+      committed: false,
+      exitCode: 2,
+    };
+  }
+  if (layer === 'golden' && !humanPresent && !approve) {
+    return {
+      applied: [],
+      governed: [],
+      rejected: [
+        fail(
+          'E_LAYER',
+          '--layer golden is a human-authority override — review the ops JSON and re-run with --yes, or promote the branch bucket: harness knowledge promote'
+        ),
+      ],
+      committed: false,
+      exitCode: 2,
+    };
+  }
+
   let parsed;
   try {
     parsed = JSON.parse(fs.readFileSync(opsPath, 'utf8'));
@@ -648,6 +742,64 @@ export function applyOps({
   }
   if (parsed.schema !== 1 || !Array.isArray(parsed.ops)) {
     return { applied: [], governed: [], rejected: [fail('E_SCHEMA', 'ops file must be { schema: 1, ops: [...] }')], committed: false, exitCode: 1 };
+  }
+
+  // PROMOTION LANE (blueprint §5): an op-set emitted by `harness knowledge
+  // promote` carries a `promotion` envelope naming the source bucket and a
+  // digest binding over the ops array. In this mode: writes land GOLDEN
+  // regardless of the current branch; candidacy/kind checks are replaced by
+  // re-validation against the sha256s recorded at branch-apply time (never
+  // working-tree presence); rejections NEVER record quarantine strikes (a
+  // distinct rejection class — the underlying episodes are not defective);
+  // and every promoted source is tombstoned `promoted_to_golden` with an
+  // `absorb-branch` audit entry (which the governance replay never treats as
+  // a standing decision — see readGovernance).
+  const promotion =
+    parsed.promotion && typeof parsed.promotion === 'object' && !Array.isArray(parsed.promotion) ? parsed.promotion : null;
+  const promotionMode = Boolean(promotion);
+  if (promotionMode) {
+    // ADMISSION GATES ARE RE-DERIVED HERE, NOT INHERITED FROM THE EMITTER
+    // (P1). `harness knowledge promote` refuses a path-shaped key, a
+    // detached-HEAD bucket, a non-ancestor bucket, and a governed or
+    // non-active source — but the ops file it writes is a plain JSON file
+    // anyone can hand-author and feed straight to `consolidate --apply`, and
+    // the digest is computed over the ops array by whoever wrote it. The SOLE
+    // WRITER must enforce every gate the emitter enforces; an emitter-only
+    // gate is not a gate. The key-shape check now shares ONE definition with
+    // the emitter (isSafeBucketKey, overlay.mjs) instead of a looser local
+    // copy that admitted `.`, absolute paths, and Windows drive/ADS shapes.
+    if (!isSafeBucketKey(promotion.branchKey)) {
+      return {
+        applied: [],
+        governed: [],
+        rejected: [fail('E_SCHEMA', 'promotion envelope needs a plain branchKey — a bucket directory name, never a path')],
+        committed: false,
+        exitCode: 1,
+      };
+    }
+    if (isDetachedKey(promotion.branchKey)) {
+      return {
+        applied: [],
+        governed: [],
+        rejected: [
+          fail('E_SCHEMA', `promotion source ${promotion.branchKey} is a detached-HEAD bucket — never promotable (derived from the key shape)`),
+        ],
+        committed: false,
+        exitCode: 1,
+      };
+    }
+    const digest = crypto.createHash('sha256').update(JSON.stringify(parsed.ops)).digest('hex');
+    if (digest !== promotion.digest) {
+      // Digest binding: a hand-edited promote-ops file must be regenerated,
+      // never partially applied. Plain rejection — promotion class, no strike.
+      return {
+        applied: [],
+        governed: [],
+        rejected: [fail('E_SCHEMA', 'promotion op-set digest mismatch — regenerate with: harness knowledge promote')],
+        committed: false,
+        exitCode: 1,
+      };
+    }
   }
   // Non-object entries (null, a bare string, a number, ...) must never reach
   // an `op.op` deref — checked over the WHOLE array up front, before
@@ -674,6 +826,64 @@ export function applyOps({
 
   const origin = repoId(workspace);
 
+  // ONE GIT SNAPSHOT PER RUN, TAKEN INSIDE THE TRANSACTION (P1). Routing and
+  // provenance describe the same thing — the HEAD this write belongs to — so
+  // they must come from the SAME read. They used to be TWO separate
+  // `deriveGitContext` calls, both taken BEFORE the store lock existed: a
+  // checkout landing between them could stamp provenance for branch A while
+  // routing the write to branch B's layer, and a checkout landing after both
+  // could cache golden routing from the default branch and then write it out
+  // from a feature branch — bypassing branch isolation outright. Now
+  // `resolveWriteLayer`'s own context IS the provenance source (one read), it
+  // is derived under the lock, and `assertHeadUnmoved` below re-validates it
+  // at write time and fails closed if HEAD moved mid-transaction.
+  //
+  // STRENGTHEN re-renders preserve the target's ORIGINAL provenance instead
+  // (composeStrengthenedLearning), so a claim's recorded origin never silently
+  // migrates to the strengthening commit. All fields optional: a non-git
+  // workspace stamps nothing.
+  //
+  // Routing itself follows blueprint P4: feature branch → bucket, default
+  // branch → golden, detached HEAD → non-promotable detached bucket,
+  // `--layer golden` explicit override (logged), unresolvable default branch
+  // fails closed to branch-local. The orient-recorded branch is advisory;
+  // resolveWriteLayer logs a warning when write-time HEAD disagrees.
+  let routing = null;
+  let writeProvenance = null;
+  function deriveRouting() {
+    routing = resolveWriteLayer({ workspace, home, layerOverride: layer === 'golden' ? 'golden' : null, log });
+    writeProvenance = { commit: routing.context.headSha, branch: routing.context.branch, base: routing.context.baseSha };
+  }
+
+  /**
+   * Fail-closed write-time re-validation of the snapshot above: a `git
+   * checkout` in the workspace between routing derivation and the mutation
+   * phase would leave this run writing a claim into a layer that no longer
+   * matches the HEAD it stamped. The store lock cannot serialize the
+   * WORKSPACE's git operations, so the only safe answer is to notice and
+   * abort — never to silently write to the stale layer. Returns a rejection
+   * (nothing has been written yet at the point it is called) or null.
+   */
+  function assertHeadUnmoved() {
+    const now = deriveGitContext({ workspace, home });
+    const before = routing.context;
+    if (now.headSha === before.headSha && now.branch === before.branch && now.detached === before.detached) return null;
+    const nameOf = (c) => c.branch || (c.detached ? `detached ${String(c.headSha).slice(0, 12)}` : c.headSha || 'unknown');
+    return {
+      kind: 'reject',
+      applied: [],
+      governed: [],
+      rejected: [
+        fail(
+          'E_HEAD_MOVED',
+          `workspace HEAD moved mid-transaction (${nameOf(before)} → ${nameOf(now)}) — nothing was written; re-run the apply from a settled checkout`
+        ),
+      ],
+      committed: false,
+      exitCode: 1,
+    };
+  }
+
   /**
    * Everything from the store-state snapshot through the mutation phase,
    * factored into one function so it can run either:
@@ -691,8 +901,80 @@ export function applyOps({
    * which propagates as a thrown exception instead and lets
    * withStoreTransaction perform the rollback.
    */
-  function runOnce({ dir, git, recordCheckpoint = () => {} }) {
-    const existing = new Map(listLearnings(dir).map((l) => [l.id, l]));
+  function runOnce({ dir, git, recordCheckpoint = () => {}, rollbackToCheckpoint = () => false, rollbackUncommitted = () => false }) {
+    // HEAD RE-VALIDATION BEFORE THE FIRST MUTATION (P1). Bucket
+    // materialization/migration below already WRITES to the store, so the
+    // write-time gate further down was no longer the "nothing has been written
+    // yet" point its own doc comment claims: a HEAD move caught there left a
+    // freshly created (or renamed) bucket behind for the transaction's finalize
+    // to commit, while the rejection reported that nothing was written.
+    // Checked here first — the one point in a real apply where the store
+    // genuinely is untouched, so this rejection is side-effect-free by
+    // construction rather than by cleanup. A preview mutates nothing at all and
+    // takes no lock, so it has no stale-snapshot window to close.
+    if (!dryRun) {
+      const movedEarly = assertHeadUnmoved();
+      if (movedEarly) return movedEarly;
+    }
+    // Layer root: every learning read/write, ledger entry, strike, and INDEX
+    // rebuild below is anchored here — the store root for golden, the
+    // branch bucket for a routed branch write. Governance stays store-rooted
+    // (readGovernance below): the single ledger binds BOTH layers (§4).
+    let layerRoot = dir;
+    if (promotionMode) {
+      // Promotion always lands GOLDEN — that is its entire job — regardless
+      // of which branch the CLI happens to run from.
+      layerRoot = dir;
+    } else if (routing.layer === 'branch' && routing.bucketKey) {
+      if (dryRun) {
+        // Preview must not materialize a bucket — an absent bucket simply
+        // reads as an empty layer.
+        layerRoot = bucketDirFor(dir, routing.bucketKey);
+      } else {
+        // Best-effort rename auto-migration (P7) before creating a fresh
+        // bucket: a bucket keyed by this branch's PRE-RENAME name (branch now
+        // gone, base still ancestral) is moved to the new key instead of
+        // being stranded next to an empty twin.
+        migrateRenamedBucket(dir, { workspace, context: routing.context });
+        layerRoot = ensureBucket(dir, {
+          key: routing.bucketKey,
+          branch: routing.context.branch,
+          baseSha: routing.context.baseSha,
+        });
+      }
+    }
+    const existing = new Map(listLearnings(layerRoot).map((l) => [l.id, l]));
+
+    // Promotion source table: the bucket learnings whose recorded evidence
+    // backs each promotion op. listLearnings on a missing bucket returns [].
+    const promotionSources = promotionMode
+      ? new Map(listLearnings(bucketDirFor(dir, promotion.branchKey)).map((l) => [l.id, l]))
+      : null;
+    if (promotionMode) {
+      // Ancestry gate re-derived at WRITE time from the bucket's OWN meta.json
+      // on disk — never from `promotion.meta`, which is emitter-recorded data
+      // inside the same hand-authorable ops file. A bucket whose recorded base
+      // provably shares no history with HEAD is a force-push name-reuse
+      // artifact: excluded from the read overlay, refused by the emitter, and
+      // now refused by the writer too. Only a verified `false` refuses; `null`
+      // (unverifiable) stays allowed, matching the read path.
+      const promotionBucketDir = bucketDirFor(dir, promotion.branchKey);
+      if (bucketAncestryOk(workspace, readBucketMeta(promotionBucketDir)) === false) {
+        return {
+          kind: 'reject',
+          applied: [],
+          governed: [],
+          rejected: [
+            fail(
+              'E_SCHEMA',
+              `promotion source bucket ${promotion.branchKey} has unrelated history — its recorded base is not an ancestor of HEAD (branch-name reuse); prune it instead: harness knowledge prune --branch ${promotion.branchKey}`
+            ),
+          ],
+          committed: false,
+          exitCode: 1,
+        };
+      }
+    }
 
     /**
      * Three-strikes bookkeeping (design §3): a content-failure code raised by a
@@ -720,7 +1002,11 @@ export function applyOps({
      * past this strike commit — same reasoning as absorbOrAbort's own call.
      */
     function recordContentFailure(code, episodes) {
-      if (dryRun || !git || !CONTENT_FAILURE_CODES.has(code)) return null;
+      // Promotion rejections NEVER record quarantine strikes (blueprint §5):
+      // promotion is a distinct rejection class, not a content failure of the
+      // underlying episodes — a repeatedly rejected promotion must never
+      // march innocent, branch-verified evidence toward quarantine.
+      if (dryRun || !git || promotionMode || !CONTENT_FAILURE_CODES.has(code)) return null;
       // Dedupe by path@sha256 before recording: an op citing the same episode
       // twice (a malformed or duplicated op JSON, not two distinct pieces of
       // evidence) must record ONE strike per run, not one per reference — a
@@ -736,7 +1022,23 @@ export function applyOps({
           return true;
         });
       if (!eps.length) return null;
+      // Raised (outside the best-effort try below, which would otherwise
+      // swallow it) when the strike sub-commit failed AND its own rollback
+      // could not clean up: the tree is then dirty with a partial ledger write
+      // that the transaction's finalize would commit. Nothing may proceed.
+      let unrecoverable = null;
       try {
+        // STRIKES AND QUARANTINE MARKERS ARE STORE-GLOBAL, NEVER PER-BUCKET
+        // (P2). Three strikes is an anti-collapse control over an EPISODE, and
+        // a provenance-less episode is eligible in every branch lane — so
+        // counting strikes in the per-bucket ledger meant the control reset
+        // simply by switching branches (three more strikes per branch, forever),
+        // and `consolidate --status`/doctor K2 reported zero quarantines from
+        // any lane but the one that recorded them. The golden ledger is read by
+        // every lane's consumption set (see candidateKeys below) and by
+        // consolidateStatus unconditionally, so recording here makes both the
+        // counting and the reporting branch-independent. Learning OUTCOMES
+        // (`learning: <id>`) stay per-layer — those really are the bucket's.
         const ledger = readLedger(dir);
         const at = todayClamped();
         const entries = [];
@@ -750,12 +1052,29 @@ export function applyOps({
         appendLedger(dir, entries);
         const commitRes = commitStore(dir, `consolidate: record failure ${code}`);
         if (!commitRes.ok) {
-          rollbackStore(dir);
+          // GUARDED rollback (R4): this used to call `rollbackStore(dir)`
+          // directly — the last rollback in the codebase whose `git clean -fd`
+          // could free the lock with NO ownership re-check and NO
+          // `rollbackFailed` latch, so a store handed to another writer here
+          // was never noticed and the transaction went on to commit.
+          // `rollbackUncommitted` keeps this rollback's semantics (undo only
+          // this strike attempt, never unwind to the checkpoint) while setting
+          // the latch and re-asserting ownership like every other rollback.
+          if (!rollbackUncommitted()) {
+            unrecoverable = `strike recording failed to commit (${commitRes.stderr || 'git commit failed'}) and could not be rolled back`;
+          }
           return `strike recording failed to commit: ${commitRes.stderr || 'git commit failed'}`;
         }
         recordCheckpoint();
-      } catch {
-        // Best effort — failure recording must never mask the original rejection.
+      } catch (err) {
+        // A recordCheckpoint abort is a real transaction failure, never a
+        // best-effort miss — it means a checkpoint could not be recorded, and
+        // swallowing it would leave a stale checkpoint a later recovery resets
+        // past. Everything else stays best effort: failure recording must never
+        // mask the original rejection.
+        if (err instanceof StoreTransactionAbort) throw err;
+      } finally {
+        if (unrecoverable) throw new Error(unrecoverable);
       }
       return null;
     }
@@ -837,8 +1156,27 @@ export function applyOps({
     const candidateKeys = new Set();
     {
       const onDisk = collectEpisodes({ workspace, copilotHome });
+      // Consumption is layered: the golden ledger AND the current layer's
+      // bucket ledger both consume — an episode consolidated in either place
+      // can never mint a second learning from spent evidence in this lane.
       const { consumed } = splitLedger(readLedger(dir));
+      if (layerRoot !== dir) {
+        for (const key of splitLedger(readLedger(layerRoot)).consumed) consumed.add(key);
+      }
+      // Per-layer eligibility (blueprint P4 + §5a): once the store HAS
+      // buckets, golden candidacy requires `branch:` provenance naming the
+      // resolved default branch — an episode from an unpromoted non-default
+      // branch, or one with NO provenance, routes to branch-local review and
+      // never silently into golden. A bucket-less store keeps pre-layer
+      // behavior byte-for-byte.
+      const eligibility = {
+        layer: routing.layer,
+        currentBranch: routing.context?.branch || null,
+        defaultBranchName: routing.defaultBranch?.name || null,
+        storeHasBuckets: storeHasBuckets(dir),
+      };
       for (const e of onDisk) {
+        if (!episodeEligibleForLayer(e.branch, eligibility)) continue;
         const key = `${e.path}@${e.sha256}`;
         if (!consumed.has(key)) candidateKeys.add(key);
       }
@@ -873,7 +1211,29 @@ export function applyOps({
     const planned = [];
     const disputes = [];
     for (let i = 0; i < parsed.ops.length; i++) {
-      const op = parsed.ops[i];
+      // Rebindable: a promotion op's claim CONTENT is replaced below with the
+      // verified source learning's own trigger/body, so everything downstream
+      // (secret scan, imperative lint, renderLearning) reads what the source
+      // actually says rather than what the ops file asserts.
+      let op = parsed.ops[i];
+      if (promotionMode && !PROMOTION_OP_KINDS.has(op.op)) {
+        // The emitter only ever produces ADD/STRENGTHEN/SUPERSEDE, and this is
+        // an ALLOW-LIST of exactly those (see PROMOTION_OP_KINDS): a
+        // hand-authored promotion envelope carrying a NOOP would otherwise
+        // consume its episodes into the GOLDEN ledger from any branch —
+        // promotion mode pins layerRoot to golden — clearing debt in a lane the
+        // run never had authority over, and one carrying a MERGE would
+        // tombstone every id in `targets`. Same reasoning as the envelope gates
+        // above: the writer enforces the emitter's shape, it doesn't assume it.
+        return {
+          kind: 'reject',
+          applied: [],
+          governed: [],
+          rejected: [fail('E_SCHEMA', `op ${i}: a promotion op-set carries only ADD/STRENGTHEN/SUPERSEDE ops, never ${op.op}`)],
+          committed: false,
+          exitCode: 1,
+        };
+      }
       if (op.op === 'NOOP') {
         const bad = validateEpisodes(op.episodes, i);
         if (bad) return rejectOp(bad.code, bad.reason, op.episodes);
@@ -891,26 +1251,225 @@ export function applyOps({
       }
       const bad = validateEpisodes(op.episodes, i);
       if (bad) return rejectOp(bad.code, bad.reason, op.episodes);
-      // Evidence-defect gate (see verifyAdmittedEpisodeKinds doc comment):
-      // every episode assertion — fix, insight, AND human-teaching — must
-      // disk-verify before anything downstream (gainedFix, verifiedFixLinks,
-      // promotion math, source/status derivation) ever trusts it.
-      const badKind = verifyAdmittedEpisodeKinds(workspace, copilotHome, op.episodes, i);
-      if (badKind) return rejectOp(badKind.code, badKind.reason, op.episodes);
-      // Candidate-set evidence gate (P1#3): the cited evidence must be a
-      // CURRENT unconsolidated candidate — not an episode already consumed by
-      // a prior consolidation (which would let an ADD mint a second learning
-      // from spent evidence). A STRENGTHEN/SUPERSEDE/MERGE re-citing its
-      // target's own already-consolidated evidence is exempt
-      // (episodesNeedingCandidacy); only its genuinely-new episodes are gated.
-      const notCandidate = assertCandidacy(op, i);
-      if (notCandidate) return rejectOp(notCandidate.code, notCandidate.reason, op.episodes);
-      // merged_from is only ever a MERGE-derived (op.targets) or ADD/SUPERSEDE-
-      // carried-forward field — an op JSON asserting it directly must be an
-      // array of strings, or renderLearning's `mergedFrom.join(', ')` throws on
-      // a non-array (e.g. a string) instead of failing closed.
-      if (op.merged_from !== undefined && (!Array.isArray(op.merged_from) || !op.merged_from.every((v) => typeof v === 'string'))) {
-        return rejectOp('E_SCHEMA', `op ${i}: merged_from must be an array of strings`, op.episodes);
+      // Promotion episodes are re-derived from the SOURCE learning's own
+      // recorded entries (see the promotion branch below) — never the op's
+      // asserted kind/plan. Null for every non-promotion op.
+      let promotedEpisodes = null;
+      if (promotionMode) {
+        // PROMOTION EXEMPTION (blueprint §5, normative): promotion ops are
+        // exempt from the golden candidacy check and the working-tree kind
+        // verification — their evidence was disk-verified (sha256) at
+        // BRANCH-APPLY time and is re-validated here from the hashes the
+        // bucket learning RECORDED, never from working-tree presence (the
+        // source files live on the source branch and may be absent from this
+        // checkout). Three bindings, all plain rejections (promotion class,
+        // never a strike): the source learning must exist in the named
+        // bucket, its file must hash to the sha recorded when the op-set was
+        // emitted (nothing changed since review), and every op episode must
+        // be one the source actually recorded.
+        const src = op.source && typeof op.source === 'object' ? op.source : null;
+        const sourceLearning = src && typeof src.id === 'string' ? promotionSources.get(src.id) : null;
+        if (!sourceLearning) {
+          return {
+            kind: 'reject',
+            applied: [],
+            governed: [],
+            rejected: [fail('E_SCHEMA', `op ${i}: promotion source ${src?.id || '(none)'} not found in bucket ${promotion.branchKey}`)],
+            committed: false,
+            exitCode: 1,
+          };
+        }
+        // A source that is no longer an eligible promotion candidate — already
+        // absorbed into golden, superseded, retired, disputed, or promoted to a
+        // primitive — must never be promoted by a hand-authored op-set either.
+        // renderLearning writes a FRESH golden file with `superseded_by: null`,
+        // so without this a superseded branch claim would be laundered into
+        // golden with its tombstone stripped en route.
+        if (!isActiveFm(sourceLearning.fm)) {
+          return {
+            kind: 'reject',
+            applied: [],
+            governed: [],
+            rejected: [
+              fail(
+                'E_SCHEMA',
+                `op ${i}: promotion source ${src.id} is not an active, unpromoted bucket learning — only active branch claims promote`
+              ),
+            ],
+            committed: false,
+            exitCode: 1,
+          };
+        }
+        // Through the choke point (S1) — the same reader promote.mjs hashed
+        // with, so the two sides can never disagree about what the bytes are,
+        // and neither can be steered onto an outside file by a symlink.
+        const sourceText = readLearningFile(sourceLearning.file);
+        if (sourceText === null) {
+          return {
+            kind: 'reject',
+            applied: [],
+            governed: [],
+            rejected: [fail('E_SCHEMA', `op ${i}: promotion source ${src.id} could not be read safely from the store`)],
+            committed: false,
+            exitCode: 1,
+          };
+        }
+        const currentSha = crypto.createHash('sha256').update(sourceText).digest('hex');
+        if (currentSha !== src.sha256) {
+          return {
+            kind: 'reject',
+            applied: [],
+            governed: [],
+            rejected: [fail('E_SCHEMA', `op ${i}: promotion source ${src.id} changed since the op-set was emitted — regenerate with: harness knowledge promote`)],
+            committed: false,
+            exitCode: 1,
+          };
+        }
+        // PROMOTION IS A LAYER MOVE, NOT AN AUTHORING OPERATION (P1). Until
+        // this gate, only the SOURCE side was bound: `src.id` was looked up
+        // and its file hashed, but the op's own DESTINATION (`domain`/`slug`
+        // for ADD/SUPERSEDE, `target` for STRENGTHEN) and its `trigger`/`body`
+        // were taken verbatim. The digest is computed over the ops array by
+        // whoever wrote the file, so it binds nothing an attacker doesn't also
+        // control — a hand-authored ADD could cite human-sourced claim `A`,
+        // name destination `B`, carry arbitrary content, and mint a golden `B`
+        // stamped `source: human` (the promoted claim inherits the SOURCE's
+        // derived source/status below), i.e. exactly the authority the normal
+        // lane reserves for disk-verified human teaching. A STRENGTHEN could
+        // likewise graft `A`'s verified-fix episodes onto an unrelated golden
+        // `B`, inflating the protected/promotion-eligibility counts. So the
+        // destination MUST equal the source id, and the claim text comes from
+        // the verified source learning, never from the op. A genuine
+        // rename/re-slug during promotion would have to be its own explicitly
+        // gated operation — it is never implicit here. The emitter already
+        // only ever produces this shape (promote.mjs derives domain/slug/
+        // target from the source), so nothing legitimate changes.
+        const destId = op.op === 'STRENGTHEN' ? op.target : newIdFor(op);
+        if (destId !== src.id) {
+          return {
+            kind: 'reject',
+            applied: [],
+            governed: [],
+            rejected: [
+              fail(
+                'E_SCHEMA',
+                `op ${i}: promotion destination ${destId || '(none)'} does not match source ${src.id} — promotion moves a claim between layers, it never renames or re-authors it`
+              ),
+            ],
+            committed: false,
+            exitCode: 1,
+          };
+        }
+        // EVERY ID THE OP NAMES IS BOUND, NOT JUST THE DESTINATION (P1).
+        // Binding the destination alone still left the TARGET fields —
+        // `SUPERSEDE.target`, and `targets[]` on any op that carries one —
+        // independently attacker-controlled: those name OTHER learnings, and a
+        // SUPERSEDE stamps `superseded_by` onto whatever they point at. So a
+        // correctly re-digested op could promote the authentic source claim
+        // into golden, passing every source binding above, while tombstoning
+        // unrelated golden claims the operator never chose to touch — a
+        // destructive write laundered through a legitimate-looking promotion.
+        // A promotion moves ONE claim, so every id it names must be that one.
+        const namedTargets = [
+          ...(op.target !== undefined ? [op.target] : []),
+          ...(Array.isArray(op.targets) ? op.targets : []),
+        ];
+        for (const t of namedTargets) {
+          if (t !== src.id) {
+            return {
+              kind: 'reject',
+              applied: [],
+              governed: [],
+              rejected: [
+                fail(
+                  'E_SCHEMA',
+                  `op ${i}: promotion target ${t || '(none)'} does not match source ${src.id} — a promotion moves one claim between layers, it never touches another`
+                ),
+              ],
+              committed: false,
+              exitCode: 1,
+            };
+          }
+        }
+        if (op.op !== 'STRENGTHEN') {
+          op = { ...op, trigger: sourceLearning.fm.trigger || '', body: sourceLearning.body };
+        }
+        // EVIDENCE IS COPIED FROM THE SOURCE, NEVER TRUSTED FROM THE OP (P1).
+        // Only `path@sha256` was ever compared here, so an op could re-label a
+        // recorded `insight` episode as `kind: fix` and attach a `plan:` the
+        // source never carried — and `episodeLines` (store.mjs) defaults an
+        // unknown/missing kind to `fix`, so a bare relabel was enough. The
+        // promoted golden claim then read as verified fixes across distinct
+        // plans, which is simultaneously the promotion-eligibility signal
+        // (verifiedAndPlans) and the PROTECTED-target signal (isDisputedTargetFm /
+        // isProtectedFm at ≥3 fix links) — i.e. an insight-only claim could
+        // launder itself into permanently protected golden knowledge, defeating
+        // the "insight-only learnings never promote" control by name. The op may
+        // still SELECT which recorded episodes to carry (that is what a
+        // STRENGTHEN promotion does); it may not describe them.
+        const recorded = new Map();
+        for (const e of sourceLearning.fm.episodes || []) {
+          if (e.path) recorded.set(`${e.path}@${e.sha256}`, e);
+        }
+        promotedEpisodes = [];
+        for (const e of op.episodes) {
+          const recordedEpisode = recorded.get(`${e.path}@${e.sha256}`);
+          if (!recordedEpisode) {
+            return {
+              kind: 'reject',
+              applied: [],
+              governed: [],
+              rejected: [
+                fail('E_SCHEMA', `op ${i}: episode ${e.path} was never recorded on the branch-applied source ${src.id} — promotion evidence re-validates from recorded hashes only`),
+              ],
+              committed: false,
+              exitCode: 1,
+            };
+          }
+          promotedEpisodes.push({
+            path: recordedEpisode.path,
+            sha256: recordedEpisode.sha256,
+            kind: recordedEpisode.kind,
+            plan: recordedEpisode.plan || null,
+          });
+        }
+      } else {
+        // Evidence-defect gate (see verifyAdmittedEpisodeKinds doc comment):
+        // every episode assertion — fix, insight, AND human-teaching — must
+        // disk-verify before anything downstream (gainedFix, verifiedFixLinks,
+        // promotion math, source/status derivation) ever trusts it.
+        const badKind = verifyAdmittedEpisodeKinds(workspace, copilotHome, op.episodes, i);
+        if (badKind) return rejectOp(badKind.code, badKind.reason, op.episodes);
+        // Candidate-set evidence gate (P1#3): the cited evidence must be a
+        // CURRENT unconsolidated candidate — not an episode already consumed by
+        // a prior consolidation (which would let an ADD mint a second learning
+        // from spent evidence). A STRENGTHEN/SUPERSEDE/MERGE re-citing its
+        // target's own already-consolidated evidence is exempt
+        // (episodesNeedingCandidacy); only its genuinely-new episodes are gated.
+        const notCandidate = assertCandidacy(op, i);
+        if (notCandidate) return rejectOp(notCandidate.code, notCandidate.reason, op.episodes);
+      }
+      // MERGED_FROM IS DERIVED, NEVER ASSERTED. `merged_from` records that
+      // THIS store consolidated those ids into this claim — a provenance
+      // statement about a mutation the writer performed, tombstoning each
+      // target in the same run. Accepting it from the op JSON let any op
+      // (including a hand-edited promotion op-set, which is a plain
+      // model/user-writable file at `.harness/promote-ops.json`) STAMP that
+      // provenance verbatim onto a fresh golden claim while merging nothing:
+      // forged consolidation history, indistinguishable on disk and in
+      // `learnings --why` from the real thing. The only legitimate values come
+      // from MERGE's own validated `op.targets` (below) and from a re-render
+      // carrying an ALREADY-PERSISTED value forward (composeStrengthenedLearning
+      // / serializeLearning) — neither of which reads this field. So the field
+      // is not authorable at all: asserting it is an E_SCHEMA rejection, an
+      // allow-list rather than a shape check on something that should never
+      // have been accepted.
+      if (op.merged_from !== undefined) {
+        return rejectOp(
+          'E_SCHEMA',
+          `op ${i}: merged_from is derived from a MERGE's own targets and cannot be asserted by an op`,
+          op.episodes
+        );
       }
 
       // Shared between the inactive-target exemption (below) and the
@@ -1307,7 +1866,10 @@ export function applyOps({
         }
         consumedTargets.add(op.target);
       }
-      planned.push({ ...op, index: i });
+      // Everything downstream (renderLearning, composeStrengthenedLearning, the
+      // ledger entries) reads `op.episodes` — so a promotion op is planned with
+      // the SOURCE-derived episode records, not the ones the ops file asserted.
+      planned.push({ ...op, ...(promotedEpisodes ? { episodes: promotedEpisodes } : {}), index: i });
     }
 
     // Compose ADD/SUPERSEDE/MERGE files and enforce the byte cap before writing.
@@ -1325,8 +1887,20 @@ export function applyOps({
       // so by this point every human-teaching assertion re-verifies; the
       // re-check here is defense in depth (this derivation never throws or
       // rejects the op, it just withholds the elevated standing).
-      const source = op.episodes.length && op.episodes.every((e) => verifyHumanTeachingEpisode(workspace, copilotHome, e)) ? 'human' : 'auto';
-      const status = source === 'human' ? 'active' : 'provisional';
+      let source = op.episodes.length && op.episodes.every((e) => verifyHumanTeachingEpisode(workspace, copilotHome, e)) ? 'human' : 'auto';
+      let status = source === 'human' ? 'active' : 'provisional';
+      let provenance = writeProvenance;
+      if (promotionMode) {
+        // The promoted claim carries the BRANCH-APPLIED derivation forward:
+        // the bucket write already derived source/status under the full
+        // writer rules, and the claim's git provenance names the branch that
+        // produced the evidence — promotion is a layer move, not a
+        // re-origination at the promoting commit.
+        const src = promotionSources.get(op.source.id);
+        source = src.fm.source || 'auto';
+        status = isActiveFm(src.fm) && src.fm.status === 'active' ? 'active' : src.fm.status || 'provisional';
+        provenance = { commit: src.fm.commit, branch: src.fm.branch, base: src.fm.base };
+      }
       const content = renderLearning({
         trigger: op.trigger,
         body: op.body,
@@ -1336,9 +1910,17 @@ export function applyOps({
         status,
         source,
         supersededBy: null,
-        mergedFrom: op.op === 'MERGE' ? op.targets : op.merged_from,
+        // Only a MERGE's own validated targets — never an op-asserted value
+        // (rejected outright above).
+        mergedFrom: op.op === 'MERGE' ? op.targets : null,
+        provenance,
       });
-      if (Buffer.byteLength(content, 'utf8') > LEARNING_BYTE_CAP) {
+      // Byte-cap decision (Phase 1, recorded in the plan's Implementation
+      // Notes): the cap measures the CLAIM, so the provenance frontmatter
+      // lines are excluded from the measured size — a near-cap learning
+      // gaining commit/branch/base can never hit E_BYTE_CAP (or a quarantine
+      // strike) purely from the stamp.
+      if (Buffer.byteLength(content, 'utf8') - provenanceBytes(provenance) > LEARNING_BYTE_CAP) {
         return rejectOp('E_BYTE_CAP', `${id} exceeds ${LEARNING_BYTE_CAP} bytes — split into two claims`, op.episodes);
       }
       writes.push({ op, id, domain, slug, content });
@@ -1364,7 +1946,14 @@ export function applyOps({
       if (op.op !== 'STRENGTHEN') continue;
       const target = existing.get(op.target);
       const content = composeStrengthenedLearning(target, op.episodes, workspace, copilotHome);
-      if (Buffer.byteLength(content, 'utf8') > LEARNING_BYTE_CAP) {
+      if (content === null) {
+        return rejectOp('E_TARGET', `op ${op.target}: learning file could not be read safely from the store`, op.episodes);
+      }
+      // Same byte-cap decision as the fresh-write check above: the preserved
+      // provenance lines are excluded from the measured size, so a near-cap
+      // learning that carries commit/branch/base can still be strengthened
+      // without tripping E_BYTE_CAP on bookkeeping bytes.
+      if (Buffer.byteLength(content, 'utf8') - provenanceBytes(target.fm) > LEARNING_BYTE_CAP) {
         return rejectOp(
           'E_BYTE_CAP',
           `${op.target} exceeds ${LEARNING_BYTE_CAP} bytes after strengthening — split into two claims or supersede`,
@@ -1383,6 +1972,32 @@ export function applyOps({
         // runs — always empty, same as every other pre-mutation return above.
         governed: [],
       };
+    }
+
+    // Write-time HEAD re-validation (see assertHeadUnmoved): the last point
+    // before any LEARNING is written, closing the narrow window between the
+    // pre-mutation gate at the top of runOnce and here. Unlike that gate this
+    // one is NOT reached on a pristine store — bucket materialization/migration
+    // has already run — so the rejection explicitly discards everything this
+    // transaction did back to its checkpoint (any absorb/strike sub-commit
+    // survives). Without that, "nothing was written" was a false claim: the
+    // transaction's finalize commit published the stale bucket anyway.
+    const moved = assertHeadUnmoved();
+    if (moved) {
+      // ACT ON THE ROLLBACK RESULT (S4). This return path is what makes
+      // E_HEAD_MOVED's "nothing was written" promise true — the bucket
+      // materialization above must be gone before the transaction's finalize
+      // commit runs. A rollback that FAILED means the materialization is still
+      // sitting in the tree, so returning the rejection normally would let
+      // finalize publish it under a message saying nothing happened. Throw
+      // instead: the transaction reports a hard failure, loudly, with the git
+      // reason attached.
+      if (!rollbackToCheckpoint()) {
+        throw new Error(
+          `${moved.rejected[0].reason} — and the store could not be rolled back to its checkpoint; the run is aborted with the store left for manual inspection`
+        );
+      }
+      return moved;
     }
 
     // Mutation phase. No manual try/catch + git reset here any more — a
@@ -1404,9 +2019,14 @@ export function applyOps({
     const governanceAt = new Date().toISOString();
 
     for (const { op, id, domain, slug, content } of writes) {
-      const file = path.join(dir, 'learnings', domain, `${slug}.md`);
-      fs.mkdirSync(path.dirname(file), { recursive: true });
-      fs.writeFileSync(file, content, 'utf8');
+      const file = path.join(layerRoot, 'learnings', domain, `${slug}.md`);
+      // Through the choke point (S1): contained, atomic, never through a
+      // symlink. A refusal is a hard failure — the throw propagates out of
+      // runOnce and withStoreTransaction rolls the whole run back, rather than
+      // reporting a learning as applied when nothing landed.
+      if (!writeLearningFile(file, content)) {
+        throw new Error(`refused to write ${id}: the learning path does not resolve safely inside the knowledge store`);
+      }
       applied.push({ op: op.op, id });
       for (const e of op.episodes) ledgerEntries.push({ path: e.path, sha256: e.sha256, learning: id, at });
       // A SUPERSEDE whose target is the SAME id as the file just written
@@ -1418,14 +2038,18 @@ export function applyOps({
       // content at itself, so that step only runs when target !== id.
       if (op.op === 'SUPERSEDE' && op.target !== id) {
         const target = existing.get(op.target);
-        updateFrontmatterField(target.file, 'superseded_by', id);
+        if (!updateFrontmatterField(target.file, 'superseded_by', id)) {
+          throw new Error(`refused to tombstone ${op.target}: the learning path does not resolve safely inside the knowledge store`);
+        }
       }
       // A MERGE tombstones EVERY target it consolidates into the new id —
       // none of them can equal `id` (MERGE always writes a brand-new id).
       if (op.op === 'MERGE') {
         for (const t of op.targets) {
           const target = existing.get(t);
-          updateFrontmatterField(target.file, 'superseded_by', id);
+          if (!updateFrontmatterField(target.file, 'superseded_by', id)) {
+            throw new Error(`refused to tombstone ${t}: the learning path does not resolve safely inside the knowledge store`);
+          }
         }
       }
     }
@@ -1456,11 +2080,24 @@ export function applyOps({
         op.episodes.length > 0 &&
         op.episodes.every((e) => verifyHumanTeachingEpisode(workspace, copilotHome, e)) &&
         overridesGovernanceRecency(workspace, copilotHome, op.episodes, entry, { humanPresent });
-      if (isReteach) {
+      // The override is SCOPED TO THE LAYER ACTUALLY WRITTEN. Governance binds
+      // both layers (§4) and lives in one store-root ledger, so a `confirm`
+      // appended from a branch lane cancels the standing decision for GOLDEN
+      // too — a `harness remember` on a throwaway feature branch could
+      // therefore retract a golden retire a human had made, from a write that
+      // never touched golden. A branch-lane re-teach still lands its own claim
+      // in the bucket; it just doesn't get to speak for the golden layer, so
+      // the standing decision is reapplied to the bucket copy instead.
+      if (isReteach && layerRoot === dir) {
         appendGovernance(dir, { id, action: 'confirm', reason: 'superseded by re-teach', to: null, at: governanceAt });
         continue;
       }
-      const file = path.join(dir, 'learnings', domain, `${slug}.md`);
+      if (isReteach) {
+        log(
+          `consolidate: re-teach of ${id} landed branch-local — the standing ${entry.action} decision still binds both layers; re-teach on the default branch (or promote) to retract it`
+        );
+      }
+      const file = path.join(layerRoot, 'learnings', domain, `${slug}.md`);
       if (entry.action === 'promote') {
         // promoted_to may be entirely absent from the just-written file —
         // the same parse -> mutate fm -> serializeLearning re-render
@@ -1481,11 +2118,18 @@ export function applyOps({
           log(`consolidate: governance record for ${id} has an unsafe promote target (${entry.to}) — skipped reapply`);
           continue;
         }
-        const text = fs.readFileSync(file, 'utf8');
+        const text = readLearningFile(file);
+        if (text === null) {
+          throw new Error(`refused to reapply governance to ${id}: the learning path does not resolve safely inside the knowledge store`);
+        }
         const { fm, body } = parseLearningFrontmatter(text);
-        fs.writeFileSync(file, serializeLearning({ ...fm, promoted_to: entry.to }, body), 'utf8');
+        if (!writeLearningFile(file, serializeLearning({ ...fm, promoted_to: entry.to }, body))) {
+          throw new Error(`refused to reapply governance to ${id}: the learning path does not resolve safely inside the knowledge store`);
+        }
       } else {
-        updateFrontmatterField(file, 'status', entry.action === 'retire' ? 'retired' : 'disputed');
+        if (!updateFrontmatterField(file, 'status', entry.action === 'retire' ? 'retired' : 'disputed')) {
+          throw new Error(`refused to reapply governance to ${id}: the learning path does not resolve safely inside the knowledge store`);
+        }
       }
       governed.push({ id, action: entry.action });
     }
@@ -1494,9 +2138,60 @@ export function applyOps({
     // phase above verbatim — never recomputed here, so there is exactly one
     // place that decides a STRENGTHEN's rendered bytes.
     for (const { op, target, content } of strengthenWrites) {
-      fs.writeFileSync(target.file, content, 'utf8');
+      if (!writeLearningFile(target.file, content)) {
+        throw new Error(`refused to strengthen ${op.target}: the learning path does not resolve safely inside the knowledge store`);
+      }
       applied.push({ op: 'STRENGTHEN', id: op.target });
       for (const e of op.episodes) ledgerEntries.push({ path: e.path, sha256: e.sha256, learning: op.target, at });
+    }
+
+    // Promotion tombstones + audit ledger (blueprint §5): every successfully
+    // promoted source is stamped `promoted_to_golden:` in its bucket (a
+    // retrieval exclusion — the bucket entry stops shadowing the golden claim
+    // it just became) and an `absorb-branch` entry lands in the governance
+    // ledger for AUDIT ONLY — the replay rule (readGovernance) never lets it
+    // become an id's standing decision, so a standing retire recorded before
+    // a promotion still lands retired after any later rebuild. Once every
+    // source is tombstoned the bucket is prunable (knowledge status/prune).
+    if (promotionMode && !dryRun) {
+      const bucketRoot = bucketDirFor(dir, promotion.branchKey);
+      let touchedBucket = false;
+      // THE TOMBSTONE FOLLOWS THE SOURCE, NOT THE DESTINATION (P1). This loop
+      // used to look the bucket entry up by the id the op WROTE, so an op
+      // naming a destination other than its source left the source untouched
+      // — still active, still promotable, reusable for repeat runs. Walking
+      // the planned writes gives each one its own `op.source.id` directly;
+      // the destination-binding gate above already makes the two equal, so
+      // this is the belt to that gate's braces.
+      for (const entry of [...writes, ...strengthenWrites]) {
+        const src = entry.op.source?.id ? promotionSources.get(entry.op.source.id) : null;
+        if (!src) continue;
+        // Through the choke point (S1): this write targets a path under
+        // `branches/<key>/`, a directory tree a human hand-edits, so both the
+        // read and the write are contained against the STORE root (which the
+        // choke point derives from the path shape — a bucket root would leave a
+        // symlinked `branches/` above the walked span). Fail CLOSED — a throw
+        // here propagates out of runOnce and withStoreTransaction rolls the
+        // whole promotion back, rather than leaving a golden claim whose source
+        // was never tombstoned.
+        const text = readLearningFile(src.file);
+        if (text === null) {
+          throw new Error(`refused to tombstone ${src.id}: bucket learning path does not resolve safely inside the knowledge store`);
+        }
+        const parsedSource = parseLearningFrontmatter(text);
+        if (!writeLearningFile(src.file, serializeLearning({ ...parsedSource.fm, promoted_to_golden: src.id }, parsedSource.body))) {
+          throw new Error(`refused to tombstone ${src.id}: bucket learning path does not resolve safely inside the knowledge store`);
+        }
+        appendGovernance(dir, {
+          id: src.id,
+          action: 'absorb-branch',
+          reason: `promoted from ${promotion.branchKey}`,
+          to: null,
+          at: governanceAt,
+        });
+        touchedBucket = true;
+      }
+      if (touchedBucket) rebuildIndex(bucketRoot);
     }
 
     for (const op of planned) {
@@ -1508,12 +2203,14 @@ export function applyOps({
 
     for (const d of disputes) {
       const target = existing.get(d.target);
-      updateFrontmatterField(target.file, 'status', 'disputed');
+      if (!updateFrontmatterField(target.file, 'status', 'disputed')) {
+        throw new Error(`refused to dispute ${d.target}: the learning path does not resolve safely inside the knowledge store`);
+      }
       rejected.push({ ...fail('E_DISPUTED', 'disputed-pending-human'), reason: 'disputed-pending-human', target: d.target });
     }
 
-    if (ledgerEntries.length) appendLedger(dir, ledgerEntries);
-    rebuildIndex(dir);
+    if (ledgerEntries.length) appendLedger(layerRoot, ledgerEntries);
+    rebuildIndex(layerRoot);
 
     // An apply run whose only effect was disputing targets (no ADD/STRENGTHEN/
     // SUPERSEDE/MERGE/NOOP actually applied) must not commit as "noop" — that
@@ -1526,10 +2223,27 @@ export function applyOps({
       : disputes.length
         ? `dispute ${disputes.map((d) => d.target).join(', ')}`
         : 'noop';
-    return { kind: 'success', applied, rejected, governed, commitMessage: `consolidate: ${summary}` };
+    // Promotion mode reports the layer it actually WROTE — golden, always —
+    // never the write-time routing of the branch the CLI happens to run from,
+    // and its commit suffix names the promotion source bucket instead.
+    return {
+      kind: 'success',
+      applied,
+      rejected,
+      governed,
+      layer: promotionMode ? 'golden' : routing.layer,
+      bucketKey: !promotionMode && routing.layer === 'branch' ? routing.bucketKey : null,
+      commitMessage: `consolidate: ${summary}${
+        promotionMode ? ` [promote ${promotion.branchKey}]` : routing.layer === 'branch' ? ` [${routing.bucketKey}]` : ''
+      }`,
+    };
   }
 
   if (dryRun) {
+    // A preview writes nothing and takes no lock, so one snapshot is all it
+    // can meaningfully have; the write-time re-validation above never runs
+    // (runOnce returns its preview before reaching it).
+    deriveRouting();
     const { dir, git } = ensureStore(workspace, { home, dryRun: true });
     const result = runOnce({ dir, git });
     if (result.kind === 'reject') {
@@ -1559,7 +2273,11 @@ export function applyOps({
         mirrorLearnings({ workspace, home, log });
       },
     },
-    ({ dir, git, recordCheckpoint }) => {
+    ({ dir, git, recordCheckpoint, rollbackToCheckpoint, rollbackUncommitted }) => {
+    // The run's ONE git snapshot (routing + provenance), taken under the store
+    // lock rather than before it, and re-validated at write time
+    // (assertHeadUnmoved) — see deriveRouting's doc comment above.
+    deriveRouting();
     // Absorb any hand edit sitting in the store BEFORE anything else reads or
     // mutates it — still its own self-contained commit (absorbHandEdits calls
     // commitStore itself), now made WHILE the lock is held instead of before
@@ -1592,7 +2310,7 @@ export function applyOps({
           : `knowledge mode is ${freshMode} — run: harness knowledge on`;
       return { kind: 'reject', applied: [], governed: [], rejected: [{ code: 'E_MODE', reason }], committed: false, exitCode: 2 };
     }
-    return runOnce({ dir, git, recordCheckpoint });
+    return runOnce({ dir, git, recordCheckpoint, rollbackToCheckpoint, rollbackUncommitted });
   });
 
   if (!tx.ok) {
@@ -1627,11 +2345,25 @@ export function applyOps({
     storeDir: tx.dir,
     indexPath: path.join(tx.dir, 'INDEX.md'),
     governed: inner.governed,
+    layer: inner.layer,
+    bucketKey: inner.bucketKey ?? null,
+    ...(routing?.branchWarning ? { branchWarning: routing.branchWarning } : {}),
     ...staleExtra,
   };
 }
+/**
+ * Set one frontmatter field on an existing learning file. Both halves go
+ * through the choke point (S1) — this used to be a bare readFileSync/
+ * writeFileSync pair, and it is reached from four call sites (SUPERSEDE and
+ * MERGE tombstones, governance retire/dispute reapply, the dispute loop) plus
+ * lifecycle.mjs's retire/dispute/confirm, so a symlink planted at a learning
+ * path was followed by all six. Returns true on success, false when the path
+ * is not a safely-resolvable learning file inside the store; callers treat
+ * false as a hard failure and let the transaction roll back.
+ */
 export function updateFrontmatterField(file, field, value) {
-  const text = fs.readFileSync(file, 'utf8');
+  const text = readLearningFile(file);
+  if (text === null) return false;
   const re = new RegExp(`^${field}:.*$`, 'm');
   // The insertion fallback (field absent from frontmatter) must tolerate a
   // CRLF-terminated leading `---` — an LF-only regex silently no-ops on a
@@ -1641,7 +2373,7 @@ export function updateFrontmatterField(file, field, value) {
   const next = re.test(text)
     ? text.replace(re, `${field}: ${value}`)
     : text.replace(/^---(\r?\n)/, (_, nl) => `---${nl}${field}: ${value}${nl}`);
-  fs.writeFileSync(file, next, 'utf8');
+  return writeLearningFile(file, next);
 }
 
 // Composes a STRENGTHEN's rendered content WITHOUT writing it — split out of
@@ -1651,7 +2383,12 @@ export function updateFrontmatterField(file, field, value) {
 // the strengthenWrites loop in the mutation phase, which writes this exact
 // string back verbatim.
 function composeStrengthenedLearning(target, episodes, workspace, copilotHome) {
-  const text = fs.readFileSync(target.file, 'utf8');
+  // Through the choke point (S1): null means the target is not safely readable
+  // as a learning (symlinked leaf/ancestor, escaped path, over-cap, vanished),
+  // and the caller turns that into an E_TARGET rejection rather than composing
+  // a rewrite of something outside the store.
+  const text = readLearningFile(target.file);
+  if (text === null) return null;
   const { fm, body } = parseLearningFrontmatter(text);
   const seen = new Set((fm.episodes || []).map((e) => `${e.path}@${e.sha256}`));
   const merged = [...(fm.episodes || [])];
@@ -1684,6 +2421,17 @@ function composeStrengthenedLearning(target, episodes, workspace, copilotHome) {
     // promoted_to (if any) forward, unlike a fresh ADD/SUPERSEDE/MERGE write
     // which never starts out already promoted.
     promotedTo: fm.promoted_to || null,
+    // Same carry-forward for the branch→golden tombstone: a STRENGTHEN must
+    // never resurrect a bucket entry whose claim already landed golden. In
+    // practice the inactive-target gate now rejects such a STRENGTHEN before
+    // this runs (isActiveFm counts promoted_to_golden), so this is the
+    // defense-in-depth half — the re-render itself can no longer lose it.
+    promotedToGolden: fm.promoted_to_golden || null,
+    // Preserve the learning's ORIGINAL git provenance across the re-render
+    // (blueprint P1): a STRENGTHEN adds evidence to an existing claim, it does
+    // not re-originate it. A legacy learning without the fields stays without
+    // them — provenanceLines renders nothing for absent values.
+    provenance: { commit: fm.commit, branch: fm.branch, base: fm.base },
   });
   return content;
 }
@@ -1701,5 +2449,15 @@ export function rebuildIndex(dir) {
     ...active.map((l) => `- [${l.id}] ${inertLine(l.fm.trigger || '')}`),
     '',
   ];
-  fs.writeFileSync(path.join(dir, 'INDEX.md'), lines.join('\n'), 'utf8');
+  // THE CHOKE POINT (R1). This was the verified exploit: `ln -sf ~/.zshrc
+  // <store>/INDEX.md` plus ANY command that rebuilds the index — retire,
+  // dispute, confirm, promote, apply, absorb, purge, rebuild — truncated and
+  // replaced the outside file, because `ensureStore`'s `fs.existsSync` had
+  // followed the link and reported it as already fine. `writeStoreFile`
+  // quarantines a planted link and writes the real file; a refusal is raised
+  // rather than swallowed, so the surrounding transaction rolls back instead of
+  // reporting a rebuild that never happened.
+  if (!writeStoreFile(path.join(dir, 'INDEX.md'), lines.join('\n'))) {
+    throw new Error(`refused to rebuild ${path.join(dir, 'INDEX.md')} — the path does not resolve safely inside the knowledge store`);
+  }
 }

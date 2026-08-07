@@ -4,8 +4,10 @@ import path from 'node:path';
 import { runInsightCompound } from '../compound.mjs';
 import { runIndexKnowledge } from '../index-knowledge.mjs';
 import { applyOps } from './apply.mjs';
-import { normalizeSlug, readStoreConfig, storeDir, listLearnings, withStoreTransaction, StoreTransactionAbort, readLedger } from './store.mjs';
+import { normalizeSlug, readStoreConfig, storeDir, listLearnings, withStoreTransaction, StoreTransactionAbort, readLedger, writeLedger } from './store.mjs';
 import { absorbOrAbort } from './admin.mjs';
+import { resolveWriteLayer } from './layer.mjs';
+import { bucketDirFor } from './overlay.mjs';
 
 /**
  * The human teaching lane: a direct claim from a person, captured as a
@@ -58,14 +60,31 @@ export function runRemember({ workspace, copilotHome, flags, argv, log = () => {
   // below writes the episode file, so a block here never leaves an orphan
   // to roll back.
   const dir = storeDir(workspace, { home });
-  const existingLearning = fs.existsSync(dir) ? listLearnings(dir).find((l) => l.id === learningId) : null;
-  if (existingLearning?.fm.promoted_to) {
+  const goldenLearning = fs.existsSync(dir) ? listLearnings(dir).find((l) => l.id === learningId) : null;
+  // Route-aware target lookup (blueprint P4): remember writes through
+  // applyOps, which routes by WRITE-TIME git context — on a feature branch
+  // the write lands in the branch bucket, so the ADD-vs-SUPERSEDE decision
+  // must look at the ROUTED layer's learnings (a golden twin is shadowed at
+  // read time, not superseded by a bucket write). Golden stays consulted for
+  // the promoted block below: behavior that lives in a primitive is never
+  // re-taught in ANY layer.
+  let layerRoot = dir;
+  try {
+    const routing = resolveWriteLayer({ workspace, home });
+    if (routing.layer === 'branch' && routing.bucketKey) layerRoot = bucketDirFor(dir, routing.bucketKey);
+  } catch {
+    layerRoot = dir;
+  }
+  const existingLearning =
+    layerRoot === dir ? goldenLearning : fs.existsSync(layerRoot) ? listLearnings(layerRoot).find((l) => l.id === learningId) : null;
+  const promotedTo = goldenLearning?.fm.promoted_to || existingLearning?.fm.promoted_to;
+  if (promotedTo) {
     return {
       pass: false,
       exitCode: 2,
       episodePath: null,
       learningId,
-      blockedReason: `this claim was promoted to ${existingLearning.fm.promoted_to} — update that primitive, or re-teach under a different --trigger/--domain`,
+      blockedReason: `this claim was promoted to ${promotedTo} — update that primitive, or re-teach under a different --trigger/--domain`,
       nextTools: [`harness learnings --why ${learningId}`],
     };
   }
@@ -191,11 +210,8 @@ export function runRemember({ workspace, copilotHome, flags, argv, log = () => {
         if (keptLedger.length === ledger.length) {
           return { kind: 'success', commitMessage: null };
         }
-        fs.writeFileSync(
-          path.join(dir, 'consolidated.jsonl'),
-          keptLedger.length ? keptLedger.map((e) => JSON.stringify(e)).join('\n') + '\n' : '',
-          'utf8'
-        );
+        // Through the choke point, fail-closed on an unreadable ledger (R1).
+        writeLedger(dir, keptLedger);
         return { kind: 'success', commitMessage: `remember: clear failure bookkeeping for ${episode.path}` };
       });
     } catch {

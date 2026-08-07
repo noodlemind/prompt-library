@@ -691,6 +691,15 @@ function buildUsage(entry) {
  * syntax (`knowledge`, `learning`, `consolidate`, `report`) rather than a
  * flat flag list; every other command's usage is fully data-driven from
  * `args.flags`/`args.positionals`.
+ *
+ * `entry.extraOptions`, when present, is an already-formatted
+ * `[label, description]` list appended AFTER the flag-derived rows. It is
+ * the second half of the same escape hatch: a subcommand-shaped command
+ * (`knowledge status`, `knowledge promote …`, `knowledge purge <file>`)
+ * documents rows that are not flags at all, exactly as the retired
+ * hand-written CATALOG did. These rows are documentation only — they are
+ * NOT part of `flagIndex`, so they can never widen strict flag validation
+ * (every flag a row mentions is separately declared in `args.flags`).
  */
 export function describeCommand(name) {
   const entry = REGISTRY.get(name);
@@ -703,7 +712,10 @@ export function describeCommand(name) {
     capabilities: entry.capabilities,
     outputModes: entry.outputModes,
     usage: entry.usage ?? buildUsage(entry),
-    options: entry.args.flags.map((f) => [flagLabel(f), f.description || '']),
+    options: [
+      ...entry.args.flags.map((f) => [flagLabel(f), f.description || '']),
+      ...(entry.extraOptions || []),
+    ],
   };
 }
 
@@ -877,12 +889,38 @@ registerCommand({
 
 registerCommand({
   name: 'index',
-  summary: 'rebuild knowledge index · --status reports drift',
+  summary: 'rebuild knowledge index · --status reports drift · --structural builds the code symbol index',
   group: 'workspace',
   sideEffect: 'mutate',
+  // Subcommand-shaped alternation (`--since` is only legal WITH `--structural`
+  // — cmdIndex raises E_USAGE otherwise), so the auto-generated flat signature
+  // would misdescribe it. Verbatim from the retired CATALOG (AC: the merge
+  // must not lose main's documented usage line).
+  usage: '[--status] [--structural [--since <ref>]]',
   args: {
     positionals: [],
-    flags: [{ name: '--status', type: 'boolean', description: 'read-only freshness report vs HEAD (never rebuilds)', required: false, default: false }],
+    flags: [
+      { name: '--status', type: 'boolean', description: 'read-only freshness report vs HEAD (never rebuilds)', required: false, default: false },
+      // Merge (harness evolution P3): the structural code index. Read by
+      // cmdIndex via the boundary-aware `hasFlag(argv, '--structural')`.
+      {
+        name: '--structural',
+        type: 'boolean',
+        description:
+          'build the persistent structural code index under ~/.harness/index/<repo-id>/<worktree-id>/structural (optional tree-sitter tier, lexical fallback)',
+        required: false,
+        default: false,
+      },
+      {
+        name: '--since',
+        type: 'string',
+        valueName: 'ref',
+        description:
+          'requires --structural: re-parse only files changed since <ref> (validated via git rev-parse; leading "-" rejected). Narrows ONLY when <ref> is the sha the prior index was built at — any other ref is reported and ignored for a full pass',
+        required: false,
+        default: null,
+      },
+    ],
   },
   handler: cmdIndex,
 });
@@ -1109,10 +1147,32 @@ registerCommand({
   // Subcommand/alternation syntax (`<on|suggest|...>`, `purge <file|--all>`,
   // `commit <none|repo>`, `migrate-store`) — not a flat flag list, so this is
   // an explicit `usage` override rather than an auto-generated signature.
+  // Kept verbatim (the M3 public contract, pinned by
+  // test/prompt-library-contracts.test.mjs); the merge's NEW subcommands are
+  // documented as `extraOptions` rows below, exactly as the retired CATALOG
+  // documented them.
   usage: '<on|suggest|off|freeze|capture-only> | --status | purge <file|--all> | commit <none|repo> | migrate-store',
+  // Non-flag documentation rows, carried over verbatim from the retired
+  // hand-written CATALOG (bin/harness.mjs) so `harness help knowledge` still
+  // describes every subcommand surface, including the ones the harness
+  // evolution branch added.
+  extraOptions: [
+    ['status', 'layer-aware report: golden domain counts, branch buckets, recall-index drift (read-only)'],
+    ['promote [--branch <key>] [--ids a,b] [--all]', 'emit a reviewable branch→golden promotion op-set (.harness/promote-ops.json)'],
+    ['prune [--branch <key>] [--merged] [--stale <days>]', 'delete branch buckets (human authority, never mode-gated)'],
+    ['purge <file>', 'cascade-delete an episode and dependent learnings'],
+    ['purge --all', 'reset the learnings store (episodes remain, become debt)'],
+    ['commit <none|repo>', 'repo mirrors ACTIVE learnings into docs/knowledge/learnings (opt-in, never git-commits the product repo); none is the default'],
+    ['migrate-store', "move a stranded path-keyed store to this workspace's current (remote-keyed) store id; refuses if the target already exists"],
+  ],
   args: {
     positionals: [
-      { name: 'subcommand', description: 'on|suggest|off|freeze|capture-only|purge|commit|migrate-store', required: false, default: null },
+      {
+        name: 'subcommand',
+        description: 'on|suggest|off|freeze|capture-only|status|promote|prune|purge|commit|migrate-store',
+        required: false,
+        default: null,
+      },
       { name: 'target', description: 'purge target, or the commit mode (none|repo)', required: false, default: null },
     ],
     flags: [
@@ -1124,7 +1184,19 @@ registerCommand({
       // `purge --all` reads this flag-shaped token directly off argv[1]
       // (cmdKnowledge), never through lib/flags.mjs — still flag-shaped, so
       // strict validation needs it declared or it rejects as unknown.
-      { name: '--all', type: 'boolean', description: 'purge --all: reset the whole learnings store', required: false, default: false },
+      // `promote --all` reads the SAME flag through flags.all.
+      { name: '--all', type: 'boolean', description: 'purge --all resets the whole learnings store; promote --all takes every promotable id in the bucket', required: false, default: false },
+      // Merge (harness evolution P6, blueprint §5): the branch-bucket
+      // maintenance surfaces. Each of the five below is genuinely read by
+      // cmdKnowledge's promote/prune branches (flags.branch / flags.ids /
+      // flags.merged / flags.stale / flags.yes), so strict validation must
+      // know them or every one of main's new invocations is rejected as an
+      // unknown flag before its handler ever runs.
+      { name: '--branch', type: 'string', valueName: 'key', description: 'promote/prune: the branch bucket key to act on', required: false, default: null },
+      { name: '--ids', type: 'string', valueName: 'a,b', description: 'promote: comma-separated learning ids to include in the op-set', required: false, default: null },
+      { name: '--merged', type: 'boolean', description: 'prune: every bucket whose branch is already merged into the default branch', required: false, default: false },
+      { name: '--stale', type: 'string', valueName: 'days', description: 'prune: every bucket older than <days> (integer >= 1)', required: false, default: null },
+      { name: '--yes', type: 'boolean', description: 'prune: confirm deleting a bucket that still holds ACTIVE, unpromoted learnings', required: false, default: false },
     ],
   },
   handler: cmdKnowledge,
@@ -1148,6 +1220,9 @@ registerCommand({
       { name: '--ops', type: 'string', valueName: 'path', description: 'ops JSON path (with --apply)', required: false, default: null },
       { name: '--rebuild', type: 'boolean', description: 'T2 reset for model-upgrade regeneration (git history retains learnings)', required: false, default: false },
       { name: '--yes', type: 'boolean', description: 'confirm --apply (suggest mode) or --rebuild', required: false, default: false },
+      // Merge (harness evolution P6): explicit layer override threaded into
+      // applyOps (lib/commands.mjs#cmdConsolidate -> `layer: flags.layer`).
+      { name: '--layer', type: 'string', valueName: 'golden|branch', description: 'explicit layer override for --apply (writes otherwise route by write-time git context)', required: false, default: null },
     ],
   },
   handler: cmdConsolidate,

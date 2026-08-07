@@ -6,7 +6,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
-import { storeDir, listLearnings, readLedger, readGovernance, ensureStore } from '../lib/knowledge/store.mjs';
+import { storeDir, listLearnings, readLedger, readGovernance, ensureStore, commitStore } from '../lib/knowledge/store.mjs';
 import { rankLearnings } from '../lib/knowledge/retrieve.mjs';
 import { rebuildIndex } from '../lib/knowledge/apply.mjs';
 import { isActiveFm } from '../lib/knowledge/consolidate.mjs';
@@ -137,6 +137,10 @@ test('cap-after-promote: promoting one of 25 active learnings frees room for a n
   const { dir } = ensureStore(c.ws, { home: c.harnessHome });
   for (let i = 0; i < 25; i++) seedActiveLearning(dir, 'sql', `cap-fill-${i}`);
   rebuildIndex(dir);
+  // Committed, like the CLI always leaves the store: an UNCOMMITTED learning
+  // file is a hand edit, and absorbHandEdits (admin.mjs) captures those —
+  // including planted, never-tracked ones — and stamps them `source: human`.
+  commitStore(dir, 'seed: pre-existing store state');
   assert.equal(listLearnings(dir).filter((l) => isActiveFm(l.fm)).length, 25, 'precondition: domain at cap');
 
   const to = primitivePath(c.ws);
@@ -191,6 +195,11 @@ A claim whose only qualifying-kind episode lacks a path.
 `,
     'utf8'
   );
+  // Committed so this stays a STALE ON-DISK RECORD rather than an uncommitted
+  // hand edit — absorbHandEdits (admin.mjs) would otherwise capture the
+  // planted file, re-serialize it (dropping the pathless episode outright) and
+  // stamp it `source: human`, which is the wrong shape for this regression.
+  commitStore(dir, 'seed: stale on-disk record');
   return `sql/${slug}`;
 }
 

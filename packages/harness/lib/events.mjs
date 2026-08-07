@@ -22,6 +22,15 @@ export const EVENT_TYPES = new Set([
   'learning',
   'knowledge',
   'session_end',
+  // Formerly silently dropped (harness-tool-contract.md footnote): these four
+  // commands always CALLED writeEvent, but their types were absent from this
+  // allow-list, so the writes no-opped. Allow-listed as Phase 1 hygiene
+  // (harness evolution blueprint P6) — the call sites in commands.mjs are
+  // unchanged; the events simply record now.
+  'init_repo',
+  'recall',
+  'validate_plan',
+  'index',
   // P1.5 (lib/event-registry.mjs) — the central event registry's dispatch-
   // pipeline vocabulary: command.start/command.result bracket a registered
   // command's execution through the NEW envelope/agent output lanes;
@@ -53,6 +62,9 @@ function safeChecks(checks) {
     id: check.id,
     pass: Boolean(check.pass),
     severity: check.severity || (check.pass ? 'ok' : 'fail'),
+    // Retain the raw status so consumers can tell a skipped check (neutral)
+    // from a failed one — `pass: false` alone conflates the two.
+    ...(check.status ? { status: check.status } : {}),
   }));
 }
 
@@ -104,6 +116,10 @@ export function writeEvent(workspace, flags, payload) {
     'success',
     'learnings',
     'learningsBytes',
+    // Harness evolution P6: per-occurrence layer attribution written by
+    // cmdOrient when a branch-bucket learning surfaced (lib/report.mjs's
+    // knowledgeSlos reads it back for the golden/branch split).
+    'learningLayers',
     // P1.5 (lib/event-registry.mjs) additions — additive only, never read
     // by any pre-existing event type/call site.
     'actor',
