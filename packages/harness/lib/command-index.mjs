@@ -223,7 +223,11 @@ function commandRow(entry, prompts, refinements) {
     verb: null,
     label: entry.name,
     summary: entry.summary || '',
-    sideEffect: entry.sideEffect,
+    // The bare form's own consequence, not the entry's policy-facing maximum:
+    // `report` is classified `mutate` because `--sync` writes, but `harness
+    // report` alone only reads, and a glyph that over-warns is a glyph nobody
+    // reads.
+    sideEffect: SIDE_EFFECTS.includes(entry.bareSideEffect) ? entry.bareSideEffect : entry.sideEffect,
     group: entry.group || 'general',
     argv: [entry.name],
     argvTokens: [{ kind: 'command', value: entry.name }],
@@ -286,7 +290,13 @@ function flagVerbRow(entry, def, under) {
     verb: qualified,
     label: `${entry.name} ${qualified}`,
     summary: def.description || entry.summary || '',
-    sideEffect: under && SIDE_EFFECTS.includes(under.sideEffect) ? under.sideEffect : entry.sideEffect,
+    // Precedence: the flag's own declared effect (index --status never
+    // rebuilds), then the verb it sits under, then the entry.
+    sideEffect: SIDE_EFFECTS.includes(def.sideEffect)
+      ? def.sideEffect
+      : under && SIDE_EFFECTS.includes(under.sideEffect)
+        ? under.sideEffect
+        : entry.sideEffect,
     group: entry.group || 'general',
     // The template: literal tokens only. A value slot is filled in later, so
     // `learnings why` is `['learnings','--why']` here, exactly as documented.

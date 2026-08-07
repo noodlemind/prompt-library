@@ -185,6 +185,9 @@ function assertValidFlagMetadata(entry, args) {
     if (def.tui !== undefined && !TUI_DISPOSITIONS.includes(def.tui)) {
       throw new Error(`registerCommand: "${entry.name}" flag ${def.name} has an invalid tui disposition "${def.tui}" (must be ${TUI_DISPOSITIONS.join(' | ')})`);
     }
+    if (def.sideEffect !== undefined && !['read', 'mutate', 'execute'].includes(def.sideEffect)) {
+      throw new Error(`registerCommand: "${entry.name}" flag ${def.name} has an invalid sideEffect "${def.sideEffect}"`);
+    }
     // A dependency naming a flag this command does not declare would never
     // fire, so it is a typo rather than a rule — fail at registration.
     for (const req of def.requires || []) {
@@ -212,6 +215,15 @@ function assertValidEntry(entry, args) {
   }
   if (!['read', 'mutate', 'execute'].includes(entry.sideEffect)) {
     throw new Error(`registerCommand: "${entry.name}" has an invalid sideEffect "${entry.sideEffect}" (must be read | mutate | execute)`);
+  }
+  // `sideEffect` is the policy-facing MAXIMUM across every form of the command
+  // — `report` is `mutate` because `--sync` writes, even though bare `report`
+  // only reads. Policy must assume the worst; the palette must not, or the
+  // glyph that promises "see the consequence before you run it" cries wolf on
+  // every read-only invocation. `bareSideEffect` is what the no-argument form
+  // actually does, and defaults to `sideEffect` when they agree.
+  if (entry.bareSideEffect !== undefined && !['read', 'mutate', 'execute'].includes(entry.bareSideEffect)) {
+    throw new Error(`registerCommand: "${entry.name}" has an invalid bareSideEffect "${entry.bareSideEffect}"`);
   }
   if (entry.surfaces !== undefined) {
     if (!Array.isArray(entry.surfaces) || entry.surfaces.length === 0) {
@@ -1080,7 +1092,7 @@ registerCommand({
       // Both booleans below select WHICH index operation runs, so both are
       // palette rows: `index status` and `index structural` sit beside the
       // bare `index` row rather than hiding flag syntax behind it.
-      { name: '--status', type: 'boolean', description: 'read-only freshness report vs HEAD (never rebuilds)', required: false, default: false, tui: 'verb' },
+      { name: '--status', type: 'boolean', description: 'read-only freshness report vs HEAD (never rebuilds)', required: false, default: false, tui: 'verb', sideEffect: 'read' },
       // Merge (harness evolution P3): the structural code index. Read by
       // cmdIndex via the boundary-aware `hasFlag(argv, '--structural')`.
       {
@@ -1338,6 +1350,10 @@ registerCommand({
   // read-only, but classified by capability) and install/upgrade (writes to
   // the equally-global ~/.copilot).
   sideEffect: 'mutate',
+  // …and that comment is itself the reason bareSideEffect exists: the entry is
+  // classified by its most-mutating form for policy, while `harness report`
+  // with no flags only reads. The palette shows the row's own consequence.
+  bareSideEffect: 'read',
   // AC14: `harness report [--sync] [--global] [--check] [--json]` stays
   // documented verbatim — an explicit usage override (buildUsage can't
   // reproduce the `--json` mention, since --json is a global flag, not one
@@ -1358,7 +1374,7 @@ registerCommand({
       // for, and --global swaps the corpus from this workspace to every
       // synced one. Two distinct operations, two rows.
       { name: '--sync', type: 'boolean', description: 'merge workspace events into the global store first', required: false, default: false, tui: 'verb' },
-      { name: '--global', type: 'boolean', description: 'report across all synced workspaces', required: false, default: false, tui: 'verb' },
+      { name: '--global', type: 'boolean', description: 'report across all synced workspaces', required: false, default: false, tui: 'verb', sideEffect: 'read' },
       // Renders the same report; all it changes is the process exit code for
       // a CI job. Exit codes have no meaning inside a palette session, so
       // this is the "meaningless mid-session" case rather than a mode.
@@ -1514,6 +1530,9 @@ registerCommand({
   summary: 'episode→learning debt, work packet, and validated apply',
   group: 'knowledge',
   sideEffect: 'mutate',
+  // Bare `consolidate` is the read-only status view; only --apply and
+  // --rebuild write. See bareSideEffect in assertValidEntry.
+  bareSideEffect: 'read',
   usage: '[--status | --candidates | --apply --ops <path> | --rebuild --yes]',
   args: {
     positionals: [],
@@ -1530,7 +1549,7 @@ registerCommand({
       // The three real operations behind consolidate's alternation usage —
       // emit a work packet, apply an ops file, reset the store. Each is a
       // different job with a different side effect, so each is a row.
-      { name: '--candidates', type: 'boolean', description: 'deterministic work packet for the consolidation skill', required: false, default: false, tui: 'verb' },
+      { name: '--candidates', type: 'boolean', description: 'deterministic work packet for the consolidation skill', required: false, default: false, tui: 'verb', sideEffect: 'read' },
       {
         name: '--apply',
         type: 'boolean',

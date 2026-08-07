@@ -369,3 +369,56 @@ test('skills are a tui-only concept', () => {
   }
   assert.equal(buildCommandIndex({ surface: 'tui', workspace }).rows.filter((r) => r.kind === 'skill').length, 1);
 });
+
+/**
+ * The side-effect glyph is the palette's one claim no surveyed agent CLI can
+ * make — "see what this will do to your repo before you run it". It is only
+ * worth anything if it is accurate per row, so the two directions are not
+ * symmetric:
+ *
+ * - Under-warning is a SAFETY bug: a row that writes must never read as `read`.
+ * - Over-warning is a TRUST bug: `harness report` alone only reads, and a
+ *   glyph that cries wolf on every read-only form stops being read at all.
+ *
+ * The entry's own `sideEffect` stays the policy-facing maximum; these rows
+ * carry `bareSideEffect` / per-verb / per-flag overrides.
+ */
+test('every row carries its own consequence, not its command policy maximum', () => {
+  const { rows } = buildCommandIndex({ surface: 'tui', workspace: process.cwd() });
+  const byLabel = new Map(rows.map((r) => [r.label, r]));
+
+  const expected = {
+    // read-only forms of commands classified `mutate` for policy
+    'index status': 'read',
+    'report': 'read',
+    'report global': 'read',
+    'consolidate': 'read',
+    'consolidate candidates': 'read',
+    // …and the forms that genuinely write, which must not be softened
+    'index': 'mutate',
+    'index structural': 'mutate',
+    'report sync': 'mutate',
+    'consolidate apply': 'mutate',
+    'consolidate rebuild': 'mutate',
+  };
+  for (const [label, effect] of Object.entries(expected)) {
+    const row = byLabel.get(label);
+    assert.ok(row, `${label} must be a palette row`);
+    assert.equal(row.sideEffect, effect, `${label} must render as ${effect}`);
+  }
+
+  // No row may claim a weaker consequence than the CLI is willing to allow for
+  // that command unless the registry explicitly says so — this is the guard
+  // against a stray override silently downgrading a writing command to `read`.
+  const rank = { read: 0, mutate: 1, execute: 2 };
+  for (const row of rows) {
+    if (row.kind === 'skill') continue;
+    const entry = getCommand(row.noun);
+    if (rank[row.sideEffect] >= rank[entry.sideEffect]) continue;
+    const declared =
+      entry.bareSideEffect === row.sideEffect ||
+      (entry.verbs || []).some((v) => v.sideEffect === row.sideEffect) ||
+      entry.args.flags.some((f) => f.sideEffect === row.sideEffect);
+    assert.ok(declared, `${row.id} reads as ${row.sideEffect} below its command's ${entry.sideEffect} without declaring it`);
+  }
+});
