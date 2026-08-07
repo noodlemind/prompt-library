@@ -16,7 +16,7 @@ Phase 1 ✅ CLI core ──▶ Phase 2 knowledge operator ──▶ Phase 3 gove
                                                     Phase 5 resources & plugins
 ```
 
-Phase 3 depends on Phase 1's runner and side-effect metadata, not on Phase 2. Phase 4a depends on Phase 1's event registry. Phase 4b depends on 4a (run views need the journal) and reads better after Phase 3 (execution views need something to execute). Phase 5 depends on the existing hydration pipeline plus Phase 1's registry.
+Phase 3 depends on Phase 1's runner and side-effect metadata, not on Phase 2. Phase 4a depends on Phase 1's event registry. Phase 4b depends on 4a (run views need the journal), on **Phase 2's command index** (the palette reads it and adds no metadata of its own), and reads better after Phase 3 (execution views need something to execute). Phase 5 depends on the existing hydration pipeline plus Phase 1's registry.
 
 ## Debt carried out of Phase 1
 
@@ -33,11 +33,39 @@ These are the deferred items whose natural home is a later phase. Each phase's p
 | Redaction residuals: glued-secret `\b` boundaries, base64/split-transform env values | P1.4 reviews | Phase 3 |
 | Cycle-guard returns masked sentinel — revisit if untrusted cyclic input ever reaches redaction | P1.4 round 2 | Phase 3 |
 
+## Settled decisions — command surface
+
+Recorded so they are not re-litigated. Each was decided against ground truth read from eight agent CLIs installed locally (pi 0.82.1, Claude Code 2.1.220, Codex 0.146.0, Cursor Agent 2025.09.18, Grok 0.2.67, Amp, Warp v0.2026.08.04, Gemini) — binaries, bundles, settings schemas, and shell completions, not documentation.
+
+**1. The CLI grammar does not change.** No flag is removed, renamed, or deprecated; no subcommand migration; no `config` store replacing configuration flags. An earlier proposal to collapse 91 command-specific flags was rejected: it paid a full migration cost — every hydrated skill calling `harness recall --collection …` breaks — to serve one of three audiences. The model reads a tool description per call and has no memory burden. A person in a shell has `--help` and completion. Only the TUI user lacked a discovery affordance, and an index supplies it without touching the grammar.
+
+**2. The palette is an index, not a grammar.** One flat namespace over commands, their verbs, and skills — currently 24 + 98 + 25 = 147 entries. Reaching a capability never requires knowing its parent.
+
+**3. No `--` is typed in the TUI.** Universal across all eight tools surveyed: not one accepts flag syntax inside a slash command. The palette presents noun + verb and resolves to argv internally, echoing the resolved command into the ledger.
+
+**4. `:` namespaces; whitespace separates.** No surveyed tool uses `:` as a command/subcommand separator. Three use it for namespace or scope (pi `/skill:name`, Grok `/local:commit`, Warp's palette filter prefixes). Claude Code stores `:` in the registered name and accepts a space on the input line — the pattern adopted here. This also resolves the live collision in this repository, where `/consolidate` and `/recall` exist both as harness commands and as prompt-library skills.
+
+**5. Sigils are `/`, `@`, `!`, `!!`.** The surveyed vocabulary converged on `/`, `@`, and a shell escape; `#` and `>` are dispatched by nobody. The `!`/`!!` split (output in context vs. private) is pi's, and is better than the single `!` that Claude Code, Codex, Cursor, and Grok ship.
+
+**6. `Ctrl-P`, not `Ctrl-K`.** Warp binds `Ctrl-K` to `kill_to_line_end` and Grok to scroll-up, both deliberately — it belongs to readline. `Cmd-K` aliases on macOS only.
+
+**7. The handler lives in the registry entry.** Pi keeps a data-only command table with dispatch in a separate branch chain, and the two have already drifted — three commands are dispatched but absent from the table, making them undiscoverable. A registry that does not own dispatch will drift the same way.
+
+**8. Side-effect glyphs in the palette are ours alone.** No surveyed tool can show what a command will do before it runs, because none declares a side-effect class per command. Harness already does, on every entry.
+
 ## Phase 2 — Knowledge operator
 
 **Goal.** Code, knowledge, learnings, and plans become searchable, exactly retrievable, and structurally navigable through the CLI — on the substrate the merged knowledge layer (M1–M4) already provides.
 
 **Scope.** `search` (ranked, literal, regex, path, symbol match modes; scopes incl. `learnings`), `lookup` (all entity kinds incl. `learning`/`episode`), `tree workspace|knowledge`, enhanced `get`/`orient`, content-addressed indexes, search snapshots, deterministic multi-source federation, pagination and filters, retrieval explanations, `recall` compatibility migration with deprecated aliases.
+
+**Plus: the command index (registry metadata).** The palette ships in 4b, but the metadata it reads belongs here — it is the same idea as the rest of this phase (make things findable) applied to commands, and it carries standalone value two phases before any TUI exists: richer `harness help`, and a strict-validation gap closed. Today `harness knowledge status --branch x` validates, because `--branch` is declared on the parent and nothing knows it is meaningless for that verb.
+
+Three registry additions, all internal and additive:
+
+- **Enumerate prose-only verbs.** `learning <retire|dispute|confirm|promote>`, `knowledge <on|suggest|off|freeze|capture-only>`, and `plan-new`'s risk tiers exist only inside `usage:` strings — roughly 18 working subcommands invisible to any index. Move them into data. Behavior is unchanged: `harness learning retire abc --reason "…"` runs identically before and after.
+- **Tag every option with a TUI disposition** — `verb` (its own palette row, ~19), `prompt` (a picker after the verb is chosen, ~34), or `cli-only` (never shown, ~45). Dependent options declare `requires:` so they attach to a parent verb instead of floating in as nonsense rows.
+- **Add `surfaces` and `userInvocable` per entry.** Warp's settings schema tags each of its 219 keys with the renderers that consume it; this is the command-side equivalent, and `userInvocable` is the field this repository's skills already carry.
 
 **Acceptance criteria (draft — refine when the plan file is cut).**
 1. `search` implements all five match modes with the documented scope list; empty result exits 0 with an empty result set.
@@ -47,10 +75,13 @@ These are the deferred items whose natural home is a later phase. Each phase's p
 5. `recall`/`get` continue to work via deprecated aliases; `harness-tool-contract.md` and every hydrated skill caller are updated in the same phase.
 6. Read paths never create the knowledge store (Phase 1 invariant holds under the new commands).
 7. All three output lanes work for every command this phase adds or touches, closing the AC3 lane-scope amendment.
+8. Every verb reachable on the CLI is enumerable from the registry — no capability exists only inside a `usage:` string. A test asserts the count against a fixture so a new prose-only verb fails the build.
+9. Every declared option carries a disposition; strict validation rejects an option applied to a verb that does not accept it.
+10. The command index is emitted through the envelope lane, so it is consumable and testable without a terminal.
 
-**Verification.** `harness-tests`, `prompt-contracts`, `build-assets`, plus new index/federation determinism tests (same query + same snapshot ⇒ byte-identical results).
+**Verification.** `harness-tests`, `prompt-contracts`, `build-assets`, plus new index/federation determinism tests (same query + same snapshot ⇒ byte-identical results) and a registry-enumerability test for AC8.
 
-**Risks.** Index generation identity must be stable enough to make results replayable; federation scoring is the most likely source of nondeterminism; the `recall` migration touches hydrated skills, so contract drift is the recurring Phase 1 failure mode to watch.
+**Risks.** Index generation identity must be stable enough to make results replayable; federation scoring is the most likely source of nondeterminism; the `recall` migration touches hydrated skills, so contract drift is the recurring Phase 1 failure mode to watch. The disposition tagging is mechanical across 98 options and is the kind of sweep where a miscategorized `cli-only` silently hides a capability from the palette two phases later — AC9's test is the guard.
 
 ## Phase 3 — Governed execution and control
 
@@ -96,7 +127,9 @@ These are the deferred items whose natural home is a later phase. Each phase's p
 
 **Design direction (settled).** Session Ledger — the flow-document form: a scrolling transcript in the terminal's main buffer (scrollback preserved; alt-screen a config, not a default), persistent chrome limited to a two-hairline editor and one dim status line, block meaning carried by faint background tints rather than boxes, near-monochrome with the harness v0.1 palette doing the semantic work, views dissolved into commands that print blocks, markdown plans rendered inline, ephemeral overlays for the command palette and run tree, editor border reflecting gate state, consequence context in the hint row, and an exit ritual that prints the closing tally and resume command into scrollback. Reference mock and research: the design session under `~/.gstack/projects/*/designs/harness-tui-*`.
 
-**Scope.** TUI shell and command palette; search, plans, checks views; streaming execution with cancellation; runs, events, evidence views; resource inspection view; ASCII fallback for limited terminals; all rendering through the existing design system.
+**Scope.** TUI shell; the command palette per the contract in `harness-cli-workbench.md` §Command palette; search, plans, checks views; streaming execution with cancellation; runs, events, evidence views; resource inspection view; ASCII fallback for limited terminals; all rendering through the existing design system.
+
+**The palette** consumes the Phase 2 command index and adds no grammar of its own: one flat namespace over commands, verbs, and `skill:`-namespaced workflows; word-boundary-weighted ranking with exact-match preselection; noun + verb presentation resolving to argv internally; value pickers populated from live state; dependent options offered as post-selection refinements; a side-effect glyph per row; unavailable commands greyed with their reason rather than hidden; `/` and `Ctrl-P` as entry points; `!`/`!!`/`@` as the composer sigils.
 
 **Acceptance criteria (draft).**
 1. Every TUI operation dispatches through the same command registry as the CLI — no second behavior path, no shell-out.
@@ -104,10 +137,14 @@ These are the deferred items whose natural home is a later phase. Each phase's p
 3. Streaming output renders without flicker; cancellation is available from every long-running view.
 4. All six state tokens render through `lib/style.mjs`, degrading to ASCII on limited terminals.
 5. The TUI performs search, plan inspection, check execution, and run navigation without a capability the CLI lacks.
+6. No palette path requires the user to type `--`; a test asserts that no rendered row and no accepted input contains flag syntax.
+7. Every registry entry marked `surfaces: tui` is reachable from the palette, and every palette row resolves to an argv the CLI accepts — asserted in both directions so the index cannot drift from dispatch.
+8. The resolved argv is echoed into the ledger for every palette-initiated run.
+9. Ranking is deterministic: the same query against the same index yields the same order, with word-boundary matches above interior ones.
 
-**Verification.** `harness-tests` plus TUI component tests; a rendering-golden approach for the ledger grammar.
+**Verification.** `harness-tests` plus TUI component tests; a rendering-golden approach for the ledger grammar; a palette-resolution test suite covering AC6–AC9.
 
-**Risks.** Terminal compatibility is the classic sink (every surveyed tool was forced to ship both buffer modes); budget for it rather than discovering it. Keep the kernel dependency one-directional — the TUI consumes the registry, never the reverse.
+**Risks.** Terminal compatibility is the classic sink (every surveyed tool was forced to ship both buffer modes); budget for it rather than discovering it. Keep the kernel dependency one-directional — the TUI consumes the registry, never the reverse. The bidirectional assertion in AC7 is the specific guard against the failure every surveyed tool has shipped: a palette list and a dispatcher that drift until commands become unreachable or undiscoverable.
 
 ## Phase 5 — Resources and plugins
 
