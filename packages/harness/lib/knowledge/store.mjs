@@ -979,6 +979,11 @@ const RM_LOCK_OPTS = { recursive: true, force: true, maxRetries: 10, retryDelay:
  * unlocking a live transaction it never held.
  */
 export function releaseStoreLock(lockPath, token) {
+  // Reset first: this records why THIS call failed. Left cumulative, it
+  // reported the last failure anywhere in the process — which is exactly how a
+  // stale ERR_INVALID_ARG_TYPE from an unrelated earlier call got attributed to
+  // this one.
+  lastLockReleaseError = null;
   const state = lockOwnership(lockPath, token);
   if (state === 'absent') return true;
   if (state === 'foreign') return false;
