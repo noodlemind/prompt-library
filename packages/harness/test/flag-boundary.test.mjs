@@ -52,9 +52,26 @@ test('parseFlags: a value-flag immediately before `--` never swallows the bounda
 // post-boundary `--json` was re-interpreted. `parseFlags(['--workspace','--','--json'])`
 // returned `{workspace:'--', json:true}` pre-fix.
 test('parseFlags: a value-flag with a missing value never consumes `--`, and parsing stops there', () => {
-  const flags = parseFlags(['--workspace', '--', '--json']);
-  assert.notEqual(flags.workspace, '--', 'the boundary token must never become a flag value');
+  const flags = parseFlags(['--query', '--', '--json']);
+  assert.notEqual(flags.query, '--', 'the boundary token must never become a flag value');
   assert.equal(flags.json, false, 'nothing after `--` is a flag, even when the value flag was empty');
+});
+
+// Codex P2: the boundary slice left `--workspace` as the LAST scanned token, so
+// `scan[++i]` handed back undefined — which overwrote the process.cwd() default
+// rather than being rejected. Workspace resolution then threw a raw
+// ERR_INVALID_ARG_TYPE from inside path.resolve, an opaque crash where every
+// other value flag reports a named error. `--workspace` now carries the same
+// guard as `--since`/`--branch`/`--ids`.
+test('parseFlags: --workspace with no value is a named error, never an undefined workspace', () => {
+  assert.throws(() => parseFlags(['--workspace', '--', '--json']), /invalid --workspace/, 'missing value before the boundary');
+  assert.throws(() => parseFlags(['--workspace']), /invalid --workspace/, 'missing value at the end of argv');
+  assert.throws(() => parseFlags(['--workspace', '--json']), /invalid --workspace/, 'a flag-shaped next token is a missing value');
+  assert.throws(() => parseFlags(['--workspace=']), /invalid --workspace/, 'the inline form with an empty value is the same missing value');
+});
+
+test('parseFlags: a workspace path containing `=` survives the inline form intact', () => {
+  assert.equal(parseFlags(['--workspace=/tmp/a=b']).workspace, '/tmp/a=b', 'only the FIRST = separates flag from value');
 });
 
 test('hasFlag honors the boundary where argv.includes() did not', () => {

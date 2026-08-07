@@ -131,11 +131,11 @@ async function runNamedCheck(workspace, name, config, { signal, onStdout, onStde
 //     single-line redactor's reach — the same documented ceiling as
 //     lib/redact.mjs — but the highest-value multi-line secret (a private
 //     key) is now caught structurally.
-//   - Bounded: at most `maxBytes` of emitted output per check (line content
-//     AND the per-row JSON envelope overhead — fix-wave P2: the overhead used
-//     to sit outside the budget, so true bytes written could exceed it), and
-//     `maxLineBytes` per row — one final `{truncated: true}` row marks the
-//     cut. A pathological no-newline flood force-flushes the carry once it
+//   - Bounded: at most `maxBytes` of emitted output per check, measured as the
+//     bytes actually written — each row's full serialized width (content AND
+//     JSON envelope AND the escaping expansion of both), with the final
+//     `{truncated: true}` marker row reserved up front so it fits inside the
+//     cap rather than overshooting it — and `maxLineBytes` per row. A pathological no-newline flood force-flushes the carry once it
 //     exceeds the carry cap; a PEM block that overflows its hold bound without
 //     an END is masked and then stays poisoned (drops raw lines) until END.
 //   - Redaction runs on the assembled LINE, before the row is handed to
@@ -164,11 +164,26 @@ export function createCheckOutputStreamer({ check, onEvent, redactText, maxBytes
     stdout: { carry: '', blockOpen: false, blockLines: [], blockBytes: 0, blockMasked: false },
     stderr: { carry: '', blockOpen: false, blockLines: [], blockBytes: 0, blockMasked: false },
   };
-  // Approximate serialized envelope cost of one emitted row, counted against
-  // the budget alongside the line content (fix-wave P2).
-  function rowOverhead(stream) {
-    return Buffer.byteLength(JSON.stringify({ schema: 1, event: 'row', check, stream, line: '' }), 'utf8') + 1;
+  // Exact serialized cost of one emitted row: the bytes lib/envelope.mjs will
+  // actually write for it (`{schema, event, ...fields}`, newline-terminated).
+  //
+  // Round 2: this used to be `raw line bytes + the envelope measured around an
+  // EMPTY line`, which prices every character JSON escaping expands at its
+  // pre-escape width — `\` and `"` double, a control byte becomes a 6-byte
+  // \\uXXXX. Backslash-heavy output could therefore write ~2x maxBytes while
+  // the counter still read under budget. Serializing the real payload prices
+  // the escaping exactly, so the cap holds for adversarial content too.
+  function rowBytes(payload) {
+    return Buffer.byteLength(JSON.stringify({ schema: 1, event: 'row', ...payload }), 'utf8') + 1;
   }
+  // The truncation marker is emitted output as well, so its cost is reserved up
+  // front rather than charged after the fact — otherwise the very row that
+  // trips the cut pushes the total past maxBytes by the marker's width. Both
+  // stream names are the same length today; take the max so that stays true.
+  const markerBytes = Math.max(
+    rowBytes({ check, stream: 'stdout', truncated: true }),
+    rowBytes({ check, stream: 'stderr', truncated: true }),
+  );
   let emittedBytes = 0;
   let truncated = false;
 
@@ -190,22 +205,22 @@ export function createCheckOutputStreamer({ check, onEvent, redactText, maxBytes
     return text.slice(0, end);
   }
 
-  function budgetRow(stream, size, payload) {
-    if (emittedBytes + size > maxBytes) {
+  function budgetRow(stream, payload) {
+    if (emittedBytes + rowBytes(payload) + markerBytes > maxBytes) {
       truncated = true;
       onEvent('row', { check, stream, truncated: true });
       return;
     }
-    emittedBytes += size;
+    emittedBytes += rowBytes(payload);
     onEvent('row', payload);
   }
 
-  // Emit one line as a row: redact, clip the redacted text, count line +
-  // envelope bytes against the per-check budget.
+  // Emit one line as a row: redact, clip the redacted text, count the row's
+  // full serialized width against the per-check budget.
   function emitLine(stream, line) {
     if (truncated || !line) return;
     const safe = clipToBytes(redactText(line), maxLineBytes);
-    budgetRow(stream, Buffer.byteLength(safe, 'utf8') + rowOverhead(stream), { check, stream, line: safe });
+    budgetRow(stream, { check, stream, line: safe });
   }
 
   // Emit a fixed private-key mask row for a structurally identified PEM block —
@@ -213,7 +228,7 @@ export function createCheckOutputStreamer({ check, onEvent, redactText, maxBytes
   // the BEGIN/END delimiters have already positively identified it.
   function emitPrivateKeyMask(stream) {
     if (truncated) return;
-    budgetRow(stream, Buffer.byteLength(PRIVATE_KEY_MASK, 'utf8') + rowOverhead(stream), { check, stream, line: PRIVATE_KEY_MASK });
+    budgetRow(stream, { check, stream, line: PRIVATE_KEY_MASK });
   }
 
   function resetBlock(s) {
@@ -277,7 +292,13 @@ export function createCheckOutputStreamer({ check, onEvent, redactText, maxBytes
     s.carry += chunk;
     let idx;
     while ((idx = s.carry.indexOf('\n')) !== -1) {
-      const line = s.carry.slice(0, idx);
+      let line = s.carry.slice(0, idx);
+      // A CRLF delimiter leaves its CR at the end of the line. Drop exactly the
+      // one CR that belongs to the delimiter (never a bare CR the check meant
+      // to emit) so a check's rows are byte-identical on Windows and POSIX —
+      // otherwise every JSONL `line` gains a trailing \\r on Windows and any
+      // consumer comparing rows exactly disagrees across platforms.
+      if (line.endsWith('\r')) line = line.slice(0, -1);
       s.carry = s.carry.slice(idx + 1);
       feedLine(stream, line);
       if (truncated) {

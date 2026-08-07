@@ -619,21 +619,20 @@ test('createCheckOutputStreamer: flush() redacts a trailing partial line (no new
 test('createCheckOutputStreamer: output is bounded — one truncated marker row, then silence', () => {
   const events = [];
   const { redactText } = createRedactor({ env: {} });
-  // Fix-wave P2: the budget now counts each row's JSON envelope overhead, not
-  // just its line content (pre-fix the overhead sat OUTSIDE the budget, so the
-  // bytes actually written could exceed it). One 'a'*25 row costs 25 + the
-  // per-row envelope (~67 bytes) ≈ 92; a budget of 100 admits exactly one such
-  // row and truncates at the second — the same intent as before, arithmetic
-  // corrected for the overhead now being in scope.
+  // The budget counts each row's FULL serialized width — line content plus the
+  // JSON envelope — and reserves the truncation marker up front, so the bytes
+  // actually written never exceed maxBytes. One 'a'*25 row serializes to 92
+  // bytes and the marker to 74: a budget of 200 admits one such row (92 + 74 =
+  // 166) and truncates at the second (184 + 74 = 258).
   const streamer = createCheckOutputStreamer({
     check: 'c',
     onEvent: (event, fields) => events.push({ event, ...fields }),
     redactText,
-    maxBytes: 100,
+    maxBytes: 200,
     maxLineBytes: 30,
   });
-  streamer.onStdout('a'.repeat(25) + '\n'); // ~92 bytes emitted (content + envelope)
-  streamer.onStdout('b'.repeat(25) + '\n'); // would exceed 100 -> truncation marker
+  streamer.onStdout('a'.repeat(25) + '\n'); // 92 serialized bytes, + 74 reserved marker
+  streamer.onStdout('b'.repeat(25) + '\n'); // would exceed 200 -> truncation marker
   streamer.onStdout('c'.repeat(25) + '\n'); // after truncation: dropped silently
   streamer.flush();
 
@@ -642,6 +641,58 @@ test('createCheckOutputStreamer: output is bounded — one truncated marker row,
   assert.equal(lines.length, 1, 'only the first row fits the byte budget once envelope overhead counts');
   assert.equal(markers.length, 1, 'exactly one truncation marker row');
   assert.equal(events.at(-1).truncated, true, 'the marker is the last thing emitted');
+});
+
+// Codex P2: the budget priced a row as `raw line bytes + an envelope measured
+// around an EMPTY line`, counting every character JSON escaping expands at its
+// PRE-escape width. Backslash-heavy output therefore wrote roughly twice the
+// cap while the counter still read comfortably under budget.
+test('createCheckOutputStreamer: escaped characters are budgeted at their serialized width, not their raw width', () => {
+  const events = [];
+  const { redactText } = createRedactor({ env: {} });
+  const maxBytes = 2048;
+  const streamer = createCheckOutputStreamer({
+    check: 'c',
+    onEvent: (event, fields) => events.push({ event, ...fields }),
+    redactText,
+    maxBytes,
+    maxLineBytes: 512,
+  });
+  // Every one of these bytes doubles under JSON.stringify (`\` -> `\\`).
+  for (let i = 0; i < 40; i += 1) streamer.onStdout('\\'.repeat(200) + '\n');
+  streamer.flush();
+
+  const written = events.reduce(
+    (sum, { event, ...fields }) => sum + Buffer.byteLength(JSON.stringify({ schema: 1, event: 'row', ...fields }), 'utf8') + 1,
+    0,
+  );
+  assert.ok(written > 0, 'the streamer emitted something to measure');
+  assert.ok(written <= maxBytes, `bytes actually written (${written}) must stay inside the ${maxBytes} budget`);
+  assert.equal(events.at(-1).truncated, true, 'the cut is still marked');
+});
+
+// Codex P2: splitting only on \n left the CR of every CRLF pair on the line, so
+// the same check produced different JSONL rows on Windows than on POSIX.
+test('createCheckOutputStreamer: a CRLF delimiter never leaves its CR on the row', () => {
+  const events = [];
+  const { redactText } = createRedactor({ env: {} });
+  const streamer = createCheckOutputStreamer({ check: 'c', onEvent: (event, fields) => events.push({ event, ...fields }), redactText });
+  streamer.onStdout('first line\r\nsecond line\r\n');
+  streamer.flush();
+  assert.deepEqual(
+    events.map((e) => e.line),
+    ['first line', 'second line'],
+    'rows must be byte-identical to the same output written with bare LF',
+  );
+});
+
+test('createCheckOutputStreamer: only the delimiter CR is stripped — a CR inside the line survives', () => {
+  const events = [];
+  const { redactText } = createRedactor({ env: {} });
+  const streamer = createCheckOutputStreamer({ check: 'c', onEvent: (event, fields) => events.push({ event, ...fields }), redactText });
+  streamer.onStdout('a\rb\r\n');
+  streamer.flush();
+  assert.deepEqual(events.map((e) => e.line), ['a\rb'], 'an interior CR is content, not a delimiter');
 });
 
 test('createCheckOutputStreamer: a single overlong line is clipped AFTER redaction, never exposing a cut secret', () => {

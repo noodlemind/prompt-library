@@ -180,8 +180,23 @@ export function parseFlags(argv) {
     else if (a === '--enforcement') flags.enforcement = scan[++i];
     else if (a.startsWith('--learnings=')) flags.learnings = a.split('=').slice(1).join('=');
     else if (a === '--learnings') flags.learnings = scan[++i];
-    else if (a.startsWith('--workspace=')) flags.workspace = a.split('=')[1];
-    else if (a === '--workspace') flags.workspace = scan[++i];
+    // `--workspace` carries the same missing-value guard as `--since`/`--branch`
+    // above, and for a sharper reason: an unguarded `scan[++i]` returns
+    // undefined when the flag is last before the `--` boundary, which
+    // OVERWROTE the process.cwd() default with undefined. Workspace resolution
+    // then threw ERR_INVALID_ARG_TYPE deep in path.resolve — surfacing as
+    // E_UNEXPECTED/exit 1 instead of the structured E_USAGE/exit 2 that a
+    // malformed system-boundary argument owes the caller. Values keep every
+    // `=` after the first, so a path containing one survives intact.
+    else if (a.startsWith('--workspace=')) {
+      const value = a.split('=').slice(1).join('=');
+      if (!value) invalidFlag('--workspace', value, 'requires a workspace path');
+      flags.workspace = value;
+    } else if (a === '--workspace') {
+      const next = scan[++i];
+      if (next === undefined || next.startsWith('--')) invalidFlag('--workspace', next, 'requires a workspace path');
+      flags.workspace = next;
+    }
     else if (a === '-c' || a === '--collection') flags.collection = scan[++i];
     else if (a.startsWith('--collection=')) flags.collection = a.split('=')[1];
     else if (a.startsWith('--min-score=')) flags.minScore = parseMinScore(a.split('=')[1], '--min-score');

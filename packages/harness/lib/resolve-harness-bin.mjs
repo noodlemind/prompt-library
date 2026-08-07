@@ -80,10 +80,13 @@ export function agentHarnessCommand(resolved) {
   return `node "${resolved.bin}"`;
 }
 
-// Bumped to 4 with the boundary-aware --workspace INJECTION fix below (v3
-// fixed only the detection): writeHarnessRunner rewrites any runner stamped
-// with an older version, so already-installed workspaces pick the fix up.
-export const RUNNER_VERSION = 4;
+// Bumped to 5 for the equals-form --workspace detection fix below (v3 made
+// detection boundary-aware, v4 moved the injection before the boundary, v5
+// makes detection see `--workspace=<path>` at all). writeHarnessRunner
+// rewrites any runner stamped with an older version, so already-installed
+// workspaces pick the fix up — without this bump the fix reaches only
+// workspaces that have never been initialized.
+export const RUNNER_VERSION = 5;
 
 export function harnessRunnerSource() {
   const home = os.homedir().replace(/\\/g, '/');
@@ -137,7 +140,12 @@ const args = process.argv.slice(2);
 // the default --workspace injection (same rule as lib/flags.mjs#hasFlag).
 const boundary = args.indexOf('--');
 const flagArgs = boundary === -1 ? args : args.slice(0, boundary);
-const hasWorkspace = flagArgs.includes('--workspace');
+// Both spellings count as "the caller chose a workspace": lib/flags.mjs parses
+// --workspace <path> AND --workspace=<path>. Matching only the separated token
+// let the equals form fall through to injection, and because parseFlags reads
+// argv in order the appended pair WON the tie — so an explicit
+// \`--workspace=/a\` silently ran against the runner's own workspace instead.
+const hasWorkspace = flagArgs.some((a) => a === '--workspace' || a.startsWith('--workspace='));
 // The injection must land BEFORE the boundary too, for the same reason the
 // detection reads before it: lib/flags.mjs#parseFlags slices argv at \`--\`, so
 // an appended --workspace would never be parsed — it would just become two

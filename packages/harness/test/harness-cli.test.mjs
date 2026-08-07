@@ -1667,6 +1667,41 @@ test('the generated runner injects the default --workspace BEFORE a caller-suppl
   assert.equal(JSON.parse(explicit.stdout).filter((a) => a === '--workspace').length, 1, 'no second --workspace is injected');
 });
 
+// Codex P1: detection matched only the separated `--workspace` token, so the
+// equally supported `--workspace=<path>` fell through to injection — and since
+// parseFlags reads argv in order, the INJECTED pair won. An explicit
+// `--workspace=/a` therefore ran silently against the runner's own workspace.
+test('the generated runner honors an explicit --workspace=<path> and injects no second one', () => {
+  const workspace = tempDir('runner-eqform-ws-');
+  fs.mkdirSync(path.join(workspace, '.harness'), { recursive: true });
+  const runnerPath = path.join(workspace, '.harness', 'run.mjs');
+  fs.writeFileSync(runnerPath, harnessRunnerSource());
+  const argvStub = path.join(workspace, 'argv-stub.mjs');
+  fs.writeFileSync(argvStub, 'process.stdout.write(JSON.stringify(process.argv.slice(2)));\n');
+
+  const run = (args) => {
+    const res = spawnSync(process.execPath, [runnerPath, ...args], {
+      encoding: 'utf8',
+      env: { ...process.env, HARNESS_BIN: argvStub },
+    });
+    assert.equal(res.status, 0, res.stderr);
+    return JSON.parse(res.stdout);
+  };
+
+  const eqForm = run(['learnings', `--workspace=${workspace}`]);
+  assert.equal(eqForm.filter((a) => a === '--workspace' || a.startsWith('--workspace=')).length, 1,
+    `the equals form must suppress injection, got ${JSON.stringify(eqForm)}`);
+  assert.ok(eqForm.includes(`--workspace=${workspace}`), 'the caller\'s own value is the one that survives');
+
+  // Still scoped by the boundary: a post-`--` equals form is literal content,
+  // so the default injection must still happen (and land before the boundary).
+  const literal = run(['learnings', '--', '--workspace=/not/a/flag']);
+  const boundary = literal.indexOf('--');
+  const injected = literal.indexOf('--workspace');
+  assert.notEqual(injected, -1, 'a post-boundary equals form is content, not a caller-chosen workspace');
+  assert.ok(injected < boundary, `injection must precede the boundary, got ${JSON.stringify(literal)}`);
+});
+
 test('writeHarnessRunner regenerates a runner stamped with an older @harness-runner-version', () => {
   // Pinned to the pre-fix runner version (2): the JSON.stringify quoting fix
   // above must ship with a version bump, or every already-hydrated
