@@ -65,7 +65,23 @@ function git(cwd, args) {
   return spawnSync('git', args, {
     cwd,
     encoding: 'utf8',
-    env: { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_SYSTEM: '/dev/null' },
+    env: {
+      ...process.env,
+      GIT_CONFIG_GLOBAL: '/dev/null',
+      GIT_CONFIG_SYSTEM: '/dev/null',
+      // Both config layers are nulled above, so git has no identity to fall
+      // back on. A developer machine hides that — its global identity is gone
+      // but git-for-macOS still runs a conflicting `merge`. On windows-latest
+      // there is no identity at all and merge refuses with exit 128
+      // ("unable to auto-detect email address"), which surfaced as a missing
+      // conflict entry rather than as the identity error it was. Supplying the
+      // identity through the environment keeps every invocation self-contained
+      // without reintroducing a config file the isolation is meant to remove.
+      GIT_AUTHOR_NAME: 'harness-test',
+      GIT_AUTHOR_EMAIL: 'harness-test@example.test',
+      GIT_COMMITTER_NAME: 'harness-test',
+      GIT_COMMITTER_EMAIL: 'harness-test@example.test',
+    },
   });
 }
 

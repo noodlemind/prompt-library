@@ -957,6 +957,22 @@ export function reassertStoreLock(lockPath, token) {
 }
 
 /**
+ * Options for removing a lock directory.
+ *
+ * Windows refuses to delete a directory whose entries still have an open
+ * handle, and returns EBUSY/EPERM/ENOTEMPTY transiently even after the last
+ * writer has closed — antivirus and the indexer both hold handles briefly.
+ * Without retries `releaseStoreLock` returns false, the `finally` swallows it,
+ * and the lock is LEAKED: the store stays wedged for the whole STALE_LOCK_MS
+ * window even though its owner exited cleanly. Observed on windows-latest,
+ * where the leaked `.lock` still contained its own `owner.json`.
+ *
+ * `maxRetries`/`retryDelay` are the options Node provides for exactly this;
+ * on POSIX they are inert because the first attempt always succeeds.
+ */
+const RM_LOCK_OPTS = { recursive: true, force: true, maxRetries: 10, retryDelay: 25 };
+
+/**
  * Release ONLY a lock this holder owns. Returns true when the lock is gone (or
  * was already gone) because of us, false when it belongs to someone else and
  * was therefore LEFT ALONE — the single rule that keeps a confused writer from
@@ -967,7 +983,7 @@ export function releaseStoreLock(lockPath, token) {
   if (state === 'absent') return true;
   if (state === 'foreign') return false;
   try {
-    fs.rmSync(lockPath, { recursive: true, force: true });
+    fs.rmSync(lockPath, RM_LOCK_OPTS);
     return true;
   } catch {
     return false;
@@ -1062,7 +1078,7 @@ export function takeOverStaleLock(lockPath, observed, token) {
     // Never leave a live lock nobody can prove they own (P3). Ours to remove:
     // the exclusive mkdir above is what created it.
     try {
-      fs.rmSync(lockPath, { recursive: true, force: true });
+      fs.rmSync(lockPath, RM_LOCK_OPTS);
     } catch {
       // best effort
     }
@@ -1096,7 +1112,7 @@ export function acquireStoreLock(lockPath) {
       return { acquired: true, staleLockNote: null, token };
     }
     try {
-      fs.rmSync(lockPath, { recursive: true, force: true });
+      fs.rmSync(lockPath, RM_LOCK_OPTS);
     } catch {
       // best effort — a lock we could not remove is taken over as stale later
     }
