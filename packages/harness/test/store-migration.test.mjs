@@ -260,7 +260,20 @@ test('migrate-store releases the legacy lock when the collision recheck fires mi
   const realReaddir = fs.readdirSync;
   let targetReads = 0;
   fs.readdirSync = (p, opts) => {
-    if (path.resolve(p) === path.resolve(targetDir)) {
+    // `p` is not always a string. Node 22's recursive `fs.rmSync` walks the
+    // tree through this very function and passes the path as a **Buffer**
+    // (verified: both calls report `Buffer.isBuffer(p) === true`). Calling
+    // `path.resolve` on a Buffer throws ERR_INVALID_ARG_TYPE — "paths[0] must
+    // be of type string" — and that throw escapes `rmSync`, so
+    // `releaseStoreLock` reports failure and LEAKS the lock this test then
+    // catches. The bug is in this patch, not in the store.
+    //
+    // Node 26 implements rmSync natively and never routes through here, which
+    // is why the failure appears only on CI (Linux and Windows, both on Node
+    // 22) and never locally. Normalize before comparing, and let every other
+    // call through completely untouched.
+    const asPath = Buffer.isBuffer(p) ? p.toString() : p;
+    if (typeof asPath === 'string' && path.resolve(asPath) === path.resolve(targetDir)) {
       targetReads += 1;
       return targetReads === 1 ? [] : ['ghost'];
     }
