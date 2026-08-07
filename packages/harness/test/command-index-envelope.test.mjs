@@ -32,8 +32,26 @@ function seedSkills(workspace, dirs) {
   return workspace;
 }
 
-function runHarness(args, cwd = packageRoot) {
-  return spawnSync(process.execPath, [binPath, ...args], { cwd, encoding: 'utf8' });
+function runHarness(args, { cwd = packageRoot, home } = {}) {
+  return spawnSync(process.execPath, [binPath, ...args], {
+    cwd,
+    encoding: 'utf8',
+    env: home ? { ...process.env, HARNESS_HOME: home } : process.env,
+  });
+}
+
+/** Every path under `root`, relative and sorted — a filesystem fingerprint. */
+function listTree(root) {
+  const out = [];
+  const walk = (dir, prefix) => {
+    for (const d of fs.readdirSync(dir, { withFileTypes: true }).sort((a, b) => (a.name < b.name ? -1 : 1))) {
+      const rel = prefix ? `${prefix}/${d.name}` : d.name;
+      out.push(rel);
+      if (d.isDirectory()) walk(path.join(dir, d.name), rel);
+    }
+  };
+  walk(root, '');
+  return out;
 }
 
 // --- AC10: the envelope shape --------------------------------------------
@@ -105,7 +123,8 @@ test('AC10: a non-tui surface envelope reports that surface and carries no skill
 
 test('AC10: the CLI palette branch emits parseable JSON on stdout and exits 0', () => {
   const workspace = seedSkills(tempDir('cmdindex-cli-'), ['brainstorming', 'consolidate', 'recall']);
-  const run = runHarness(['palette', '--workspace', workspace]);
+  const home = tempDir('cmdindex-cli-home-');
+  const run = runHarness(['palette', '--workspace', workspace], { home });
 
   assert.equal(run.status, 0, run.stderr);
   assert.equal(run.stderr, '', 'the palette lane writes nothing to stderr');
@@ -121,13 +140,17 @@ test('AC10: the CLI palette branch emits parseable JSON on stdout and exits 0', 
   assert.ok(payload.rows.some((r) => r.id === 'skill:brainstorming'));
   assert.ok(payload.rows.some((r) => r.id === 'verb:knowledge:promote'));
 
-  // Read path: emitting the index must not seed anything in the workspace.
+  // Read path: emitting the index must not seed anything in the workspace —
+  // nor in the global harness home, which is where the knowledge store lives
+  // and where an accidental write would otherwise go unnoticed.
   assert.deepEqual(fs.readdirSync(workspace), ['.github']);
+  assert.deepEqual(listTree(home), []);
 });
 
 test('AC10: the CLI palette branch degrades to commands-only in a repo with no skills', () => {
   const workspace = tempDir('cmdindex-cli-bare-');
-  const run = runHarness(['palette', '--workspace', workspace]);
+  const home = tempDir('cmdindex-cli-bare-home-');
+  const run = runHarness(['palette', '--workspace', workspace], { home });
 
   assert.equal(run.status, 0, run.stderr);
   const payload = JSON.parse(run.stdout);
@@ -135,7 +158,8 @@ test('AC10: the CLI palette branch degrades to commands-only in a repo with no s
   assert.equal(payload.skillsRoot, null);
   assert.deepEqual(payload.collisions, []);
   assert.ok(payload.commands > 0, 'commands are still enumerated');
-  assert.deepEqual(fs.readdirSync(workspace), [], 'nothing was created');
+  assert.deepEqual(fs.readdirSync(workspace), [], 'nothing was created in the workspace');
+  assert.deepEqual(listTree(home), [], 'nothing was created under the harness home');
 });
 
 test('AC10: palette output is stable across invocations', () => {

@@ -151,11 +151,32 @@ export const SURFACES = ['cli', 'tui', 'agent'];
  */
 export const TUI_DISPOSITIONS = ['verb', 'prompt', 'cli-only'];
 
-function assertValidVerbs(entry) {
+/**
+ * The side-effect classes, ordered by escalating consequence:
+ * `read` < `mutate` < `execute`. The ORDER is load-bearing, not decoration —
+ * `entry.sideEffect` is the maximum across every form of the command, so an
+ * override (`bareSideEffect`, a verb's, a flag's) may only ever move DOWN it.
+ * `assertNotAboveEntry` enforces that; the palette relies on it to render a
+ * glyph no invocation can then exceed.
+ */
+export const SIDE_EFFECTS = ['read', 'mutate', 'execute'];
+
+/** Guard the one direction an override must never go. `where` names the
+ * override so the error points at the declaration to fix. */
+function assertNotAboveEntry(entry, where, value) {
+  if (SIDE_EFFECTS.indexOf(value) <= SIDE_EFFECTS.indexOf(entry.sideEffect)) return;
+  throw new Error(
+    `registerCommand: "${entry.name}" ${where} declares sideEffect "${value}" above the command's own "${entry.sideEffect}" — entry.sideEffect is the maximum across every form`
+  );
+}
+
+function assertValidVerbs(entry, args) {
   if (entry.verbs === undefined) return;
   if (!Array.isArray(entry.verbs)) {
     throw new Error(`registerCommand: "${entry.name}" verbs must be an array`);
   }
+  const positionalNames = new Set(args.positionals.map((p) => p.name));
+  const verbSlot = args.positionals[0]?.name;
   const seen = new Set();
   for (const v of entry.verbs) {
     if (!v || typeof v !== 'object' || typeof v.verb !== 'string' || !v.verb) {
@@ -168,8 +189,22 @@ function assertValidVerbs(entry) {
       throw new Error(`registerCommand: "${entry.name}" declares verb "${v.verb}" twice`);
     }
     seen.add(v.verb);
-    if (v.sideEffect !== undefined && !['read', 'mutate', 'execute'].includes(v.sideEffect)) {
+    if (v.sideEffect !== undefined && !SIDE_EFFECTS.includes(v.sideEffect)) {
       throw new Error(`registerCommand: "${entry.name}" verb "${v.verb}" has an invalid sideEffect "${v.sideEffect}"`);
+    }
+    if (v.sideEffect !== undefined) assertNotAboveEntry(entry, `verb "${v.verb}"`, v.sideEffect);
+    // `positionals` names the REQUIRED arguments this verb consumes, by
+    // reference to the entry's own declarations — `knowledge commit` takes
+    // the `target` positional, `knowledge on` takes none. Naming an
+    // undeclared positional (or the verb's own slot, which the subcommand
+    // token already fills) would never resolve, so it is a typo.
+    for (const name of v.positionals || []) {
+      if (!positionalNames.has(name)) {
+        throw new Error(`registerCommand: "${entry.name}" verb "${v.verb}" consumes positional "${name}", which it does not declare`);
+      }
+      if (name === verbSlot) {
+        throw new Error(`registerCommand: "${entry.name}" verb "${v.verb}" consumes positional "${name}", which is the verb's own slot`);
+      }
     }
   }
 }
@@ -185,9 +220,10 @@ function assertValidFlagMetadata(entry, args) {
     if (def.tui !== undefined && !TUI_DISPOSITIONS.includes(def.tui)) {
       throw new Error(`registerCommand: "${entry.name}" flag ${def.name} has an invalid tui disposition "${def.tui}" (must be ${TUI_DISPOSITIONS.join(' | ')})`);
     }
-    if (def.sideEffect !== undefined && !['read', 'mutate', 'execute'].includes(def.sideEffect)) {
+    if (def.sideEffect !== undefined && !SIDE_EFFECTS.includes(def.sideEffect)) {
       throw new Error(`registerCommand: "${entry.name}" flag ${def.name} has an invalid sideEffect "${def.sideEffect}"`);
     }
+    if (def.sideEffect !== undefined) assertNotAboveEntry(entry, `flag ${def.name}`, def.sideEffect);
     // A dependency naming a flag this command does not declare would never
     // fire, so it is a typo rather than a rule — fail at registration.
     for (const req of def.requires || []) {
@@ -213,8 +249,8 @@ function assertValidEntry(entry, args) {
   if (typeof entry.handler !== 'function') {
     throw new Error(`registerCommand: "${entry.name}" needs a handler(argv, ctx) function`);
   }
-  if (!['read', 'mutate', 'execute'].includes(entry.sideEffect)) {
-    throw new Error(`registerCommand: "${entry.name}" has an invalid sideEffect "${entry.sideEffect}" (must be read | mutate | execute)`);
+  if (!SIDE_EFFECTS.includes(entry.sideEffect)) {
+    throw new Error(`registerCommand: "${entry.name}" has an invalid sideEffect "${entry.sideEffect}" (must be ${SIDE_EFFECTS.join(' | ')})`);
   }
   // `sideEffect` is the policy-facing MAXIMUM across every form of the command
   // — `report` is `mutate` because `--sync` writes, even though bare `report`
@@ -222,9 +258,10 @@ function assertValidEntry(entry, args) {
   // glyph that promises "see the consequence before you run it" cries wolf on
   // every read-only invocation. `bareSideEffect` is what the no-argument form
   // actually does, and defaults to `sideEffect` when they agree.
-  if (entry.bareSideEffect !== undefined && !['read', 'mutate', 'execute'].includes(entry.bareSideEffect)) {
+  if (entry.bareSideEffect !== undefined && !SIDE_EFFECTS.includes(entry.bareSideEffect)) {
     throw new Error(`registerCommand: "${entry.name}" has an invalid bareSideEffect "${entry.bareSideEffect}"`);
   }
+  if (entry.bareSideEffect !== undefined) assertNotAboveEntry(entry, 'bareSideEffect', entry.bareSideEffect);
   if (entry.surfaces !== undefined) {
     if (!Array.isArray(entry.surfaces) || entry.surfaces.length === 0) {
       throw new Error(`registerCommand: "${entry.name}" surfaces must be a non-empty array`);
@@ -235,7 +272,7 @@ function assertValidEntry(entry, args) {
       }
     }
   }
-  assertValidVerbs(entry);
+  assertValidVerbs(entry, args);
   assertValidFlagMetadata(entry, args);
 }
 
@@ -317,7 +354,15 @@ export function validateArgs(entry, argv) {
     if (!def) {
       throw usageError(`unknown flag: ${flagName}`, `harness help ${entry.name}`);
     }
-    present.add(def.name);
+    // PRESENCE means "the handler will act on this flag", because that is
+    // what the applicability pass below draws conclusions from. Handlers read
+    // booleans by exact token equality (lib/flags.mjs's `a === '--apply'`,
+    // `hasFlag`), so `--apply=false` — legal before this branch, and the
+    // status form as far as cmdConsolidate is concerned — is NOT the apply
+    // form and must not drag `--apply`'s `requires: ['--ops']` in with it.
+    // The token still names a declared flag, so it is accepted, exactly as it
+    // was; only the dependency conclusion is withheld.
+    if (def.type !== 'boolean' || eq === -1) present.add(def.name);
     if (def.type !== 'boolean' && eq === -1) {
       const next = argv[i + 1];
       const nextIsValue = next !== undefined && !next.startsWith('--');
@@ -1279,7 +1324,12 @@ registerCommand({
   group: 'engineer loop',
   sideEffect: 'read',
   args: {
-    positionals: [{ name: 'query', description: 'free-text search terms (joined)', required: false, default: '', variadic: true }],
+    // Required, unlike orient's identically-shaped query: recall has no
+    // `--query` flag, so this positional is the ONLY way to supply one, and
+    // `recallRequireArgs` below already refuses the invocation without it.
+    // Declaring it optional left the palette with a `recall` row that could
+    // never resolve to a runnable command.
+    positionals: [{ name: 'query', description: 'free-text search terms (joined)', required: true, default: '', variadic: true }],
     flags: [
       { name: '--limit', type: 'number', valueName: 'n', description: 'result count (default 3)', required: false, default: 3, tui: 'prompt' },
       { name: '--collection', aliases: ['-c'], type: 'string', valueName: 'name', description: 'filter by knowledge/collections.yaml', required: false, default: null, tui: 'prompt' },
@@ -1381,7 +1431,11 @@ registerCommand({
       { name: '--check', type: 'boolean', description: 'exit non-zero on a budget breach (CI)', required: false, default: false, tui: 'cli-only' },
       // Undocumented in the old CATALOG, but read (lib/commands.mjs#cmdReport
       // -> collectHostUsage) to select a specific host's usage log.
-      { name: '--host', type: 'string', valueName: 'name', description: 'host usage log to overlay (default: auto-detect)', required: false, default: null, tui: 'prompt' },
+      // `sideEffect: 'read'` because this flag is offered on the `report` and
+      // `report global` rows, which render as `read`: an option a read row
+      // carries has to say it cannot escalate that row, or the glyph is a
+      // promise the palette has no data to keep.
+      { name: '--host', type: 'string', valueName: 'name', description: 'host usage log to overlay (default: auto-detect)', required: false, default: null, tui: 'prompt', sideEffect: 'read' },
     ],
   },
   handler: cmdReport,
@@ -1448,11 +1502,16 @@ registerCommand({
     // `purge --all`) because they read differently in help; they are one
     // verb with one handler branch, so the file form's text is the summary
     // and the reset form is described on `--all` itself below.
-    { verb: 'purge', summary: 'cascade-delete an episode and dependent learnings' },
+    // `positionals` is what makes `purge <file>` and `commit <none|repo>`
+    // completable from the palette: the `target` positional is optional at
+    // the entry level (a mode switch takes none), so only the two verbs that
+    // genuinely demand it say so, and their rows carry a value slot for it.
+    { verb: 'purge', summary: 'cascade-delete an episode and dependent learnings', positionals: ['target'] },
     {
       verb: 'commit',
       summary:
         'repo mirrors ACTIVE learnings into docs/knowledge/learnings (opt-in, never git-commits the product repo); none is the default',
+      positionals: ['target'],
     },
     {
       verb: 'migrate-store',
@@ -1571,7 +1630,13 @@ registerCommand({
         // dependency has to be data for the palette to honor it at all.
         requires: ['--ops'],
       },
-      { name: '--ops', type: 'string', valueName: 'path', description: 'ops JSON path (with --apply)', required: false, default: null, tui: 'prompt' },
+      // `sideEffect: 'read'` on both value flags below for the same reason as
+      // report's `--host`: each is offered on the read-only `consolidate` and
+      // `consolidate candidates` rows, and naming a path or a layer does not
+      // itself write anything — `--apply` is the sole writer. The class here
+      // is what ADDING the option does to the invocation, not what the
+      // operation it parameterizes eventually does.
+      { name: '--ops', type: 'string', valueName: 'path', description: 'ops JSON path (with --apply)', required: false, default: null, tui: 'prompt', sideEffect: 'read' },
       // No `requires: ['--yes']` on --rebuild despite the usage line pairing
       // them: rebuild without --yes is not a usage error, it is the PREVIEW
       // ("rebuild resets N learnings … re-run with --yes"), and a registry
@@ -1583,7 +1648,7 @@ registerCommand({
       // No `requires: ['--apply']` — unlike --ops above, nothing rejects a
       // stray --layer today, so declaring the dependency would newly fail an
       // invocation that currently succeeds.
-      { name: '--layer', type: 'string', valueName: 'golden|branch', description: 'explicit layer override for --apply (writes otherwise route by write-time git context)', required: false, default: null, tui: 'prompt' },
+      { name: '--layer', type: 'string', valueName: 'golden|branch', description: 'explicit layer override for --apply (writes otherwise route by write-time git context)', required: false, default: null, tui: 'prompt', sideEffect: 'read' },
     ],
   },
   handler: cmdConsolidate,
@@ -1620,11 +1685,13 @@ registerCommand({
   // verb. No `sideEffect` overrides: all four append a governance record and
   // rewrite the learning's frontmatter, so every one is the parent's
   // `mutate`.
+  // Every action names exactly one learning, so all four consume the `id`
+  // positional — without it the row is a verb the CLI would refuse.
   verbs: [
-    { verb: 'retire', summary: 'retire the learning from ranking (requires --reason)' },
-    { verb: 'dispute', summary: 'mark the learning contested pending review (requires --reason)' },
-    { verb: 'confirm', summary: 'reaffirm the learning as active and stamp last_confirmed' },
-    { verb: 'promote', summary: 'record that behavior now lives in a primitive (requires --to); terminal for the other three' },
+    { verb: 'retire', summary: 'retire the learning from ranking (requires --reason)', positionals: ['id'] },
+    { verb: 'dispute', summary: 'mark the learning contested pending review (requires --reason)', positionals: ['id'] },
+    { verb: 'confirm', summary: 'reaffirm the learning as active and stamp last_confirmed', positionals: ['id'] },
+    { verb: 'promote', summary: 'record that behavior now lives in a primitive (requires --to); terminal for the other three', positionals: ['id'] },
   ],
   args: {
     positionals: [

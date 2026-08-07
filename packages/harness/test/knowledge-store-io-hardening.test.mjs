@@ -1081,8 +1081,16 @@ test('R7: an unmerged (deleted-by-one-side) learning is never absorbed as a hand
   const merge = git(dir, ['merge', '--no-commit', 'edited']);
   assert.notEqual(merge.status, 0, 'the merge must actually conflict');
 
-  const entry = parsePorcelainZ(git(dir, ['status', '--porcelain', '-uall', '-z']).stdout).find((e) => e.path === rel);
-  assert.ok(entry, 'git must report the conflicted learning');
+  const porcelain = git(dir, ['status', '--porcelain', '-uall', '-z']).stdout;
+  const entry = parsePorcelainZ(porcelain).find((e) => e.path === rel);
+  // The failure detail is part of the assertion because this precondition is
+  // about GIT's behaviour, not the store's: if a platform's git ever declines
+  // the merge for a reason other than the modify/delete conflict, the message
+  // has to say which reason rather than just "not found".
+  assert.ok(
+    entry,
+    `git must report the conflicted learning — merge exit ${merge.status}, stdout ${JSON.stringify(merge.stdout)}, stderr ${JSON.stringify(merge.stderr)}, porcelain ${JSON.stringify(porcelain)}`
+  );
   assert.equal(entry.status.includes('D'), true, `the unmerged code must contain D, got ${JSON.stringify(entry.status)}`);
   assert.ok(['DD', 'AU', 'UD', 'UA', 'DU', 'AA', 'UU'].includes(entry.status), `must be an unmerged code, got ${JSON.stringify(entry.status)}`);
 

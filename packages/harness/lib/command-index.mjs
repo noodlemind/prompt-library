@@ -33,7 +33,7 @@
  * trusted; skill directories are sorted explicitly before any row is built.
  */
 import fs from 'node:fs';
-import { listCommands, getCommand, SURFACES } from './registry.mjs';
+import { listCommands, getCommand, SIDE_EFFECTS, SURFACES } from './registry.mjs';
 import { createEnvelope, STATUS } from './envelope.mjs';
 import { assertNoSymlinkAncestors, readFileNoFollow } from './fs-safe.mjs';
 
@@ -45,8 +45,12 @@ export const ROW_KINDS = Object.freeze(['command', 'verb', 'skill']);
 /**
  * The token kinds an `argvTokens` template is built from. `command` and
  * `subcommand` are bare argv words, `flag` is a literal flag token, and
- * `value` is the one slot filled in later from a picker (never typed) — see
- * the palette contract's "Values come from pickers".
+ * `value` is a slot filled in later from a picker (never typed) — see the
+ * palette contract's "Values come from pickers".
+ *
+ * A `value` slot names its picker either by `flag` (the option it supplies)
+ * or by `positional` (the declared positional it fills). A flag key always
+ * starts with `--`, so one `values` map addresses both without collision.
  */
 export const TOKEN_KINDS = Object.freeze(['command', 'subcommand', 'flag', 'value']);
 
@@ -54,13 +58,15 @@ export const TOKEN_KINDS = Object.freeze(['command', 'subcommand', 'flag', 'valu
  * relative posix path so the envelope stays machine-independent. */
 export const SKILLS_DIR = '.github/skills';
 
-const SIDE_EFFECTS = ['read', 'mutate', 'execute'];
-
 /** `registerCommand` always normalizes `args`, but every accessor here goes
  * through this one helper anyway — a half-annotated registry is the expected
  * state, and one tolerant reader is cheaper than auditing each call site. */
 function flagsOf(entry) {
   return entry.args?.flags || [];
+}
+
+function positionalsOf(entry) {
+  return entry.args?.positionals || [];
 }
 
 function requiresList(def) {
@@ -131,14 +137,48 @@ function valueTokenFor(def) {
   };
 }
 
-/** The palette-facing projection of one option: enough to open a picker and
- * label it, without leaking the whole registry flag definition. */
-function optionRow(def) {
+/**
+ * The value slot one declared positional contributes — a bare argv word, so
+ * it must be a token in the template rather than an appended option: argv
+ * position is what makes it that positional (`learning confirm <id>`).
+ *
+ * Always `required`, because a row only projects the positionals its own form
+ * cannot run without. Without this, `learning confirm`, `knowledge commit`
+ * and `knowledge purge` were rows no answer could complete: they resolved to
+ * an invocation their own handler refuses.
+ */
+function positionalToken(p) {
+  return { kind: 'value', positional: p.name, valueName: p.name, required: true };
+}
+
+/** The positional slots one declared verb consumes, resolved by name against
+ * the entry's own declarations (registration already rejects a name the entry
+ * does not declare, so the filter only guards a half-written entry). */
+function positionalTokensForVerb(entry, declared) {
+  const byName = new Map(positionalsOf(entry).map((p) => [p.name, p]));
+  return (declared?.positionals || [])
+    .map((name) => byName.get(name))
+    .filter(Boolean)
+    .map(positionalToken);
+}
+
+/**
+ * The palette-facing projection of one option: enough to open a picker and
+ * label it, without leaking the whole registry flag definition.
+ *
+ * `sideEffect` is carried so a consumer can escalate the row's glyph once an
+ * option is chosen. An option that declares none inherits the ENTRY's
+ * maximum, never the row's — the registry has said nothing about this flag,
+ * and the only sound assumption about silence is the worst the command can
+ * do. Over-warning is a trust bug; under-warning is a safety bug.
+ */
+function optionRow(entry, def) {
   const row = {
     flag: def.name,
     type: def.type || 'string',
     valueName: def.type === 'boolean' ? null : def.valueName || 'value',
     required: Boolean(def.required),
+    sideEffect: SIDE_EFFECTS.includes(def.sideEffect) ? def.sideEffect : entry.sideEffect,
     description: def.description || '',
   };
   const requires = requiresList(def);
@@ -161,7 +201,7 @@ function promptsFor(entry, verb) {
       const scope = verbScope(def);
       return scope.length === 0 || (verb !== null && scope.includes(verb));
     })
-    .map(optionRow);
+    .map((def) => optionRow(entry, def));
 }
 
 /**
@@ -179,7 +219,7 @@ function promptsForFlagVerb(entry, def, verb) {
   const required = requiresList(def)
     .map((req) => byName.get(req))
     .filter((f) => f && f.tui !== 'cli-only')
-    .map((f) => ({ ...optionRow(f), required: true }));
+    .map((f) => ({ ...optionRow(entry, f), required: true }));
   // `optionRow`'s identity field is `flag`, not `name` — deduping on the wrong
   // key silently swallowed every optional prompt, since a Set of `undefined`
   // matches all of them.
@@ -194,28 +234,46 @@ function refinementsFor(entry, ownFlag) {
   if (!ownFlag) return [];
   return flagsOf(entry)
     .filter((def) => def.tui !== 'cli-only' && requiresList(def).includes(ownFlag))
-    .map(optionRow);
+    .map((def) => optionRow(entry, def));
 }
 
 /**
- * Dependent options whose required flag produced no row at all (it was
- * `cli-only`, or its own `requires` disqualified it). They have no parent to
- * attach to, so they land on the bare command row rather than disappearing —
- * a capability that exists must stay reachable, which is the same reason the
- * registry defaults an un-annotated command to visible.
+ * Dependent options that reach NO row anywhere — neither a row of their own
+ * nor a refinement of one, because every flag they require was demoted too.
+ * They land on the bare command row rather than disappearing: a capability
+ * that exists must stay reachable, the same reason the registry defaults an
+ * un-annotated command to visible.
+ *
+ * "No row anywhere" is the whole rule, and it is narrow on purpose. `--apply`
+ * owns the `consolidate apply` row, yet its requirement `--ops` produces no
+ * row, so a looser test attached it here as well — listing one capability
+ * twice AND, because `resolveArgv` appends refinements, letting the
+ * read-glyph `consolidate` row resolve to `consolidate --ops x.json --apply`,
+ * which writes the store. No row plus any combination of its own refinements
+ * may resolve to something more mutating than the row advertises.
  */
 function orphanRefinementsFor(entry, rowFlags) {
   return flagsOf(entry)
     .filter((def) => {
       if (def.tui === 'cli-only') return false;
+      // Already a row of its own, or already this row's own picker.
+      if (rowFlags.has(def.name) || isPromptFlag(entry, def)) return false;
       const requires = requiresList(def);
       if (requires.length === 0) return false;
       return requires.every((req) => !rowFlags.has(req));
     })
-    .map(optionRow);
+    .map((def) => optionRow(entry, def));
 }
 
 function commandRow(entry, prompts, refinements) {
+  // A bare command row projects the positionals its no-argument form cannot
+  // run without — `remember <claim>`, `recall <query>`. Optional ones are
+  // left out: the row is already runnable, and asking for a value the
+  // invocation does not need is the flag syntax the palette exists to avoid.
+  const argvTokens = [
+    { kind: 'command', value: entry.name },
+    ...positionalsOf(entry).filter((p) => p.required).map(positionalToken),
+  ];
   return {
     id: `command:${entry.name}`,
     kind: 'command',
@@ -230,18 +288,20 @@ function commandRow(entry, prompts, refinements) {
     sideEffect: SIDE_EFFECTS.includes(entry.bareSideEffect) ? entry.bareSideEffect : entry.sideEffect,
     group: entry.group || 'general',
     argv: [entry.name],
-    argvTokens: [{ kind: 'command', value: entry.name }],
+    argvTokens,
     prompts,
     refinements,
   };
 }
 
 /** A verb declared on the entry itself — a bare subcommand word on argv
- * (`knowledge promote` → `['knowledge','promote']`). */
+ * (`knowledge promote` → `['knowledge','promote']`), followed by the value
+ * slots for the positionals that verb consumes (`learning confirm <id>`). */
 function declaredVerbRow(entry, declared) {
   const argvTokens = [
     { kind: 'command', value: entry.name },
     { kind: 'subcommand', value: declared.verb },
+    ...positionalTokensForVerb(entry, declared),
   ];
   return {
     id: `verb:${entry.name}:${declared.verb}`,
@@ -255,7 +315,9 @@ function declaredVerbRow(entry, declared) {
     // row the user actually selected.
     sideEffect: SIDE_EFFECTS.includes(declared.sideEffect) ? declared.sideEffect : entry.sideEffect,
     group: entry.group || 'general',
-    argv: argvTokens.map((t) => t.value),
+    // Literal tokens only, exactly as `flagVerbRow` does: a value slot is
+    // filled in later, so `learning confirm` is `['learning','confirm']` here.
+    argv: argvTokens.filter((t) => t.kind !== 'value').map((t) => t.value),
     argvTokens,
     prompts: promptsFor(entry, declared.verb),
     refinements: [],
@@ -278,7 +340,12 @@ function declaredVerbRow(entry, declared) {
 function flagVerbRow(entry, def, under) {
   const verb = verbNameForFlag(def);
   const argvTokens = [{ kind: 'command', value: entry.name }];
-  if (under) argvTokens.push({ kind: 'subcommand', value: under.verb });
+  if (under) {
+    argvTokens.push({ kind: 'subcommand', value: under.verb });
+    // The scoped verb still demands its own arguments: `knowledge purge x`
+    // does not stop needing `x` because a flag row was built under it.
+    argvTokens.push(...positionalTokensForVerb(entry, under));
+  }
   argvTokens.push({ kind: 'flag', value: def.name });
   const value = valueTokenFor(def);
   if (value) argvTokens.push(value);
@@ -494,11 +561,12 @@ export function buildCommandIndex({ surface = 'tui', workspace = process.cwd() }
 /**
  * Resolve one row into the argv the CLI already accepts.
  *
- * `values` maps a flag name to the value chosen from a picker; anything absent
- * is simply left out, so `resolveArgv(row)` returns the row's own template
- * (`['learnings','--why']`) and `resolveArgv(row, {'--why': 'L-7'})` returns
- * the complete invocation. Boolean options are emitted as a bare flag when
- * their value is truthy and omitted otherwise.
+ * `values` maps a picker key — a flag name, or a positional's own name — to
+ * the value chosen; anything absent is simply left out, so `resolveArgv(row)`
+ * returns the row's own template (`['learnings','--why']`) and
+ * `resolveArgv(row, {'--why': 'L-7'})` returns the complete invocation.
+ * Boolean options are emitted as a bare flag when their value is truthy and
+ * omitted otherwise.
  *
  * This is the one place a row becomes argv. Prompts and refinements are
  * appended in registry declaration order so a given `{row, values}` pair always
@@ -514,7 +582,7 @@ export function resolveArgv(row, values = {}) {
       argv.push(token.value);
       continue;
     }
-    const value = values[token.flag];
+    const value = values[token.flag ?? token.positional];
     if (value === undefined || value === null) continue;
     argv.push(String(value));
   }

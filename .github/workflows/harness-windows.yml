@@ -103,29 +103,104 @@ jobs:
         continue-on-error: true
         shell: pwsh
         run: |
+          New-Item -ItemType Directory -Force -Path win-output | Out-Null
           $script = @'
           import { runProcess } from './packages/harness/lib/runner.mjs';
+
+          // The child is `process.execPath` on BOTH platforms: node is guaranteed to be
+          // installed, it never reads stdin, and it behaves identically everywhere. The
+          // previous probe ran `cmd /c "start /b timeout /t 60 >nul & timeout /t 60 >nul"`
+          // on win32, and Windows `timeout` refuses to run when stdin is not a console
+          // ("ERROR: Input redirection is not supported") — runProcess spawns with
+          // stdio: ['ignore','pipe','pipe'], so the whole tree exited on its own in ~75ms
+          // and the probe reported `failed` without cancellation ever being exercised.
+          // (The old POSIX branch, `sh -c 'sleep 60 & sleep 60'`, did not exit instantly,
+          // but it was shell-dependent and, like the win32 branch, never checked that the
+          // descendant actually died.) The settledMs and grandchild assertions below make
+          // both failure modes impossible to mistake for a pass.
+          const ABORT_AT_MS = 1200;
+          const SLEEP_MS = 60000;
+
+          // A parent that spawns a NON-detached grandchild, so termination has to reach
+          // the whole tree: on POSIX the grandchild stays inside the process group
+          // runProcess created for the direct child (detached: true), and on win32 it
+          // stays inside the pid tree that `taskkill /T` walks. The grandchild outlives
+          // its parent, so a termination that only reached the direct child leaves it
+          // running and this probe reports it.
+          const childSource = `
+          const { spawn } = require('node:child_process');
+          const grandchild = spawn(process.execPath, ['-e', 'setTimeout(() => {}, ${SLEEP_MS})'], { stdio: 'ignore' });
+          grandchild.unref();
+          process.stdout.write('grandchild-pid=' + grandchild.pid + '\\n');
+          setTimeout(() => {}, ${SLEEP_MS});
+          `;
+
+          // signum 0 is an existence probe on win32 too: libuv's uv__kill() answers it
+          // with GetExitCodeProcess and returns ESRCH once the process is no longer
+          // STILL_ACTIVE.
+          function alive(pid) {
+            try {
+              process.kill(pid, 0);
+              return true;
+            } catch (error) {
+              return error.code === 'EPERM';
+            }
+          }
+
           const ctrl = new AbortController();
-          // A parent that spawns a long-lived grandchild, so termination has to
-          // reach the whole tree rather than just the process we spawned.
-          const child = process.platform === 'win32'
-            ? { argv: ['cmd', '/c', 'start /b timeout /t 60 >nul & timeout /t 60 >nul'] }
-            : { argv: ['sh', '-c', 'sleep 60 & sleep 60'] };
-          setTimeout(() => ctrl.abort(), 1200);
+          // `started` is captured BEFORE the abort is scheduled, so the abort can never
+          // land earlier than started + ABORT_AT_MS.
           const started = Date.now();
-          const res = await runProcess({ ...child, signal: ctrl.signal, timeoutMs: 30000 });
+          setTimeout(() => ctrl.abort(), ABORT_AT_MS);
+          const res = await runProcess({
+            argv: [process.execPath, '-e', childSource],
+            signal: ctrl.signal,
+            timeoutMs: 30000,
+          });
+          const settledMs = Date.now() - started;
+
+          const pidMatch = /grandchild-pid=(\d+)/.exec(res.stdout);
+          const grandchildPid = pidMatch ? Number(pidMatch[1]) : null;
+          let grandchildAlive = grandchildPid !== null && alive(grandchildPid);
+          for (let i = 0; grandchildAlive && i < 20; i += 1) {
+            await new Promise((resolve) => setTimeout(resolve, 100));
+            grandchildAlive = alive(grandchildPid);
+          }
+
           console.log(JSON.stringify({
             status: res.status,
             exitCode: res.exitCode,
-            settledMs: Date.now() - started,
+            settledMs,
+            abortAtMs: ABORT_AT_MS,
+            grandchildPid,
+            grandchildAlive,
             platform: process.platform,
           }, null, 2));
-          if (res.status !== 'cancelled') { console.error('EXPECTED cancelled, GOT ' + res.status); process.exit(1); }
+
+          const failures = [];
+          if (res.status !== 'cancelled') failures.push(`EXPECTED cancelled, GOT ${res.status}`);
+          // The tree must still have been RUNNING when the abort fired. Settling near
+          // zero means the child died on its own and termination was never exercised —
+          // exactly how the previous probe passed a broken command off as a runner result.
+          if (settledMs < ABORT_AT_MS - 100) {
+            failures.push(`EXPECTED settledMs >= ${ABORT_AT_MS} (child alive when the abort fired), GOT ${settledMs}`);
+          }
+          if (settledMs > 15000) failures.push(`EXPECTED termination to settle promptly after the abort, GOT ${settledMs}ms`);
+          if (grandchildPid === null) failures.push('EXPECTED a grandchild pid on stdout; tree termination was never exercised');
+          if (grandchildAlive) failures.push(`EXPECTED the grandchild (pid ${grandchildPid}) to die with the tree, but it is still alive`);
+          if (failures.length) {
+            for (const failure of failures) console.error(failure);
+            process.exit(1);
+          }
+          console.log('runner cancellation terminated the whole tree');
           '@
           Set-Content -Path win-cancel.mjs -Value $script
           $out = & node win-cancel.mjs 2>&1 | Out-String
+          $code = $LASTEXITCODE
           Write-Host $out
-          Add-Content -Path win-output/scenarios.txt -Value "`n=== runner cancellation (taskkill path) ===`n$out"
+          Write-Host "[exit $code]"
+          Add-Content -Path win-output/scenarios.txt -Value "`n=== runner cancellation (taskkill path) ===`n$out[exit $code]"
+          if ($code -ne 0) { Write-Host '::error::runner descendant termination probe FAILED — see the JSON above' }
 
       - name: Environment fingerprint
         if: always()

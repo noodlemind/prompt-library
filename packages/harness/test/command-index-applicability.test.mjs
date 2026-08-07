@@ -23,6 +23,7 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 import { EXIT } from '../lib/style.mjs';
+import { hasFlag } from '../lib/flags.mjs';
 import { getCommand, hasCommand, registerCommand, validateArgs } from '../lib/registry.mjs';
 
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -98,6 +99,43 @@ test('AC9: a dependent option passes once its requirement is present', () => {
   // Order must not matter — `requires` is a set membership check over the
   // whole invocation, not a positional rule.
   accepts('index', ['--since', 'ref', '--structural']);
+});
+
+/**
+ * The dependency may only fire when the HANDLER would act on the flag.
+ * Handlers read booleans by exact token equality (lib/flags.mjs's `hasFlag`,
+ * `a === '--apply'`), so `--apply=false` is the status form to cmdConsolidate
+ * — and it validated fine before this branch. Enforcing `--apply`'s
+ * `requires` on a token the handler ignores newly rejects a working
+ * invocation, which is precisely what "the CLI grammar does not change to
+ * accommodate the palette" forbids.
+ */
+test('AC9: a boolean written as --flag=value is accepted, because that is not how a handler reads it', () => {
+  assert.equal(hasFlag(['--apply=false'], '--apply'), false, 'the coupling this rests on: the handler does not see it');
+  accepts('consolidate', ['--apply=false']);
+  // No reader treats `=true` as the apply form either, and verb scoping draws
+  // no conclusion from a token the handler ignores.
+  accepts('consolidate', ['--apply=true']);
+  accepts('knowledge', ['on', '--all=true']);
+  // The real form is unchanged in both directions.
+  rejects('consolidate', ['--apply'], '--apply requires --ops');
+  accepts('consolidate', ['--apply', '--ops', 'ops.json']);
+});
+
+test('AC9: end to end, `consolidate --apply=false` still runs the status view', () => {
+  const workspace = tempDir('cmdindex-applyeq-ws-');
+  const home = tempDir('cmdindex-applyeq-home-');
+  const run = (argv) =>
+    spawnSync(process.execPath, [binPath, ...argv, '--workspace', workspace, '--json'], {
+      cwd: packageRoot,
+      encoding: 'utf8',
+      env: { ...process.env, HARNESS_HOME: home },
+    });
+
+  const bare = run(['consolidate']);
+  const equalsFalse = run(['consolidate', '--apply=false']);
+  assert.equal(equalsFalse.status, 0, equalsFalse.stderr);
+  assert.equal(equalsFalse.stdout, bare.stdout, 'it is the same status view, not a rejected apply');
 });
 
 // --- AC9: the negative — unannotated commands are untouched --------------
@@ -214,4 +252,57 @@ test('registerCommand refuses an invalid verb sideEffect', () => {
   );
   // A verb without a summary would reach the palette as a blank row.
   refusesRegistration({ ...baseEntry, verbs: [{ verb: 'alpha' }] }, /verb "alpha" needs a summary/);
+});
+
+/**
+ * `entry.sideEffect` is documented as the MAXIMUM across every form of the
+ * command — policy reads it that way, and the palette's per-row glyph is only
+ * safe because of it. An enum check alone let an entry declare `read` and
+ * then hang a `mutate` flag off it, so the maximum was a maximum by comment
+ * only. An override may move down the ordering, never up.
+ */
+test('registerCommand refuses an override above the command own sideEffect', () => {
+  refusesRegistration(
+    { ...baseEntry, bareSideEffect: 'mutate' },
+    /bareSideEffect declares sideEffect "mutate" above the command's own "read"/
+  );
+  refusesRegistration(
+    { ...baseEntry, verbs: [{ verb: 'alpha', summary: 'declared', sideEffect: 'execute' }] },
+    /verb "alpha" declares sideEffect "execute" above the command's own "read"/
+  );
+  refusesRegistration(
+    { ...baseEntry, args: { flags: [{ name: '--x', type: 'boolean', sideEffect: 'mutate' }] } },
+    /flag --x declares sideEffect "mutate" above the command's own "read"/
+  );
+  // An execute-class command may still declare a mutating verb — only the
+  // upward direction is refused.
+  refusesRegistration(
+    { ...baseEntry, sideEffect: 'mutate', args: { flags: [{ name: '--x', type: 'boolean', sideEffect: 'execute' }] } },
+    /flag --x declares sideEffect "execute" above the command's own "mutate"/
+  );
+  // …and the downgrades the registry actually ships are untouched.
+  assert.equal(getCommand('consolidate').bareSideEffect, 'read');
+  assert.equal(getCommand('consolidate').sideEffect, 'mutate');
+  assert.equal(getCommand('report').args.flags.find((f) => f.name === '--host').sideEffect, 'read');
+});
+
+test('registerCommand refuses a verb consuming a positional it does not declare', () => {
+  refusesRegistration(
+    {
+      ...baseEntry,
+      verbs: [{ verb: 'alpha', summary: 'declared', positionals: ['ghost'] }],
+      args: { positionals: [{ name: 'action' }], flags: [] },
+    },
+    /verb "alpha" consumes positional "ghost", which it does not declare/
+  );
+  // The verb's own slot is already filled by the subcommand token, so naming
+  // it would put the same word on argv twice.
+  refusesRegistration(
+    {
+      ...baseEntry,
+      verbs: [{ verb: 'alpha', summary: 'declared', positionals: ['action'] }],
+      args: { positionals: [{ name: 'action' }, { name: 'id' }], flags: [] },
+    },
+    /verb "alpha" consumes positional "action", which is the verb's own slot/
+  );
 });

@@ -275,10 +275,17 @@ test('migrate-store releases the legacy lock when the collision recheck fires mi
   assert.equal(result.migrated, false);
   assert.match(result.blockedReason, /already exists and is non-empty/);
   assert.equal(targetReads, 2, 'precondition: the collision recheck inside the try actually fired');
+  // A leaked lock is reported WITH the lock directory's contents: an empty
+  // `.lock` means the removal itself failed partway (the owner stamp went, the
+  // directory did not), while a `.lock` still holding `owner.json` means
+  // releaseStoreLock never got as far as removing anything — two different
+  // bugs, and the message has to say which one this is.
+  const leftoverLock = path.join(legacyDir, '.lock');
+  const leftoverContents = fs.existsSync(leftoverLock) ? JSON.stringify(fs.readdirSync(leftoverLock)) : 'n/a';
   assert.equal(
-    fs.existsSync(path.join(legacyDir, '.lock')),
+    fs.existsSync(leftoverLock),
     false,
-    'the legacy .lock must be released on the collision-recheck return, not leaked'
+    `the legacy .lock must be released on the collision-recheck return, not leaked (contents: ${leftoverContents})`
   );
 });
 

@@ -18,7 +18,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { test } from 'node:test';
 import {
   runVerify,
@@ -384,6 +384,60 @@ test('unifiedStatusForCheck: an "unavailable" check that was NOT cancelled still
 });
 
 // --- AC8: full CLI SIGINT -> exit 130, event telemetry, no evidence -------
+//
+// Signal DELIVERY is the only part of this that is not portable; every
+// assertion below is identical on both platforms.
+//
+// POSIX: `child.kill('SIGINT')` delivers a real SIGINT, and the harness's
+// `process.once('SIGINT', () => controller.abort())` bridge
+// (bin/harness.mjs) turns it into the AbortSignal that cancels the run.
+//
+// win32: there is no POSIX signal delivery. libuv's uv__kill() maps
+// SIGINT/SIGTERM/SIGKILL onto TerminateProcess() (src/win/process.c), so
+// `child.kill('SIGINT')` destroys the harness outright — no handler runs, and
+// the parent sees exit code `null` with signal 'SIGINT' instead of 130. That
+// is a limitation of the DELIVERY mechanism, not a harness gap: a genuine
+// console Ctrl-C on Windows does reach Node, via the console control handler
+// dispatching CTRL_C_EVENT -> uv__signal_dispatch(SIGINT) -> Node emitting
+// 'SIGINT' on `process`. The win32 branch reproduces exactly that terminal
+// in-process dispatch through a NODE_OPTIONS `--import` preload, so the
+// harness's real Ctrl-C contract stays covered on Windows rather than
+// skipped. The preload only fires once bin/harness.mjs has actually installed
+// its listener, so a harness that stopped registering one would never be
+// interrupted, run its 5s check to completion, and fail the exit-130
+// assertion. The win32-only companion test after this one pins the kill()
+// semantics that force the split.
+
+const isWindows = process.platform === 'win32';
+
+/** Environment for the harness child that arranges SIGINT delivery. POSIX
+ * needs nothing (the test calls child.kill). win32 gets a preload that emits
+ * the signal in-process — see the block comment above. */
+function sigintDeliveryEnv() {
+  if (!isWindows) return process.env;
+  const preload = path.join(tempDir('verify-cancel-preload-'), 'emit-sigint.mjs');
+  fs.writeFileSync(
+    preload,
+    // Wait for bin/harness.mjs to install its SIGINT listener, then let the
+    // first named check actually get in flight before interrupting, so this
+    // cancels real work rather than racing process startup (same intent as
+    // the POSIX 300ms delay). Unref'd: this must never keep a process alive,
+    // including the check subprocesses that inherit NODE_OPTIONS and never
+    // register a SIGINT listener at all.
+    [
+      "const poll = setInterval(() => {",
+      "  if (process.listenerCount('SIGINT') === 0) return;",
+      '  clearInterval(poll);',
+      "  setTimeout(() => process.emit('SIGINT'), 250);",
+      '}, 25);',
+      'poll.unref();',
+      '',
+    ].join('\n'),
+    'utf8'
+  );
+  const importFlag = `--import "${pathToFileURL(preload).href}"`;
+  return { ...process.env, NODE_OPTIONS: `${process.env.NODE_OPTIONS || ''} ${importFlag}`.trim() };
+}
 
 test('CLI: Ctrl-C (SIGINT) during `harness verify` (plain ledger path, no --output) exits 130, skips evidence, and records a command.result event mapped to result:"warn"', async () => {
   const workspace = tempDir('verify-cancel-cli-');
@@ -393,6 +447,7 @@ test('CLI: Ctrl-C (SIGINT) during `harness verify` (plain ledger path, no --outp
 
   const child = spawn(process.execPath, [binPath, 'verify', '--plan', plan, '--base', 'HEAD', '--workspace', workspace], {
     stdio: ['ignore', 'pipe', 'pipe'],
+    env: sigintDeliveryEnv(),
   });
   let stdout = '';
   child.stdout.on('data', (chunk) => {
@@ -400,11 +455,13 @@ test('CLI: Ctrl-C (SIGINT) during `harness verify` (plain ledger path, no --outp
   });
 
   const exitPromise = new Promise((resolve) => child.on('exit', (code) => resolve(code)));
-  // Give the child a moment to spawn node and start the named check before
-  // interrupting it — this is a real cancellation of work in flight, not a
-  // race against process startup.
-  await delay(300);
-  child.kill('SIGINT');
+  if (!isWindows) {
+    // Give the child a moment to spawn node and start the named check before
+    // interrupting it — this is a real cancellation of work in flight, not a
+    // race against process startup.
+    await delay(300);
+    child.kill('SIGINT');
+  }
   const code = await exitPromise;
 
   assert.equal(code, 130, `expected exit 130 (EXIT.cancelled/interrupted), got ${code}. stdout: ${stdout}`);
@@ -423,6 +480,37 @@ test('CLI: Ctrl-C (SIGINT) during `harness verify` (plain ledger path, no --outp
   assert.ok(verifyEvent, `expected the verify command's own lifecycle event: ${JSON.stringify(events)}`);
   assert.equal(verifyEvent.result, 'warn');
 });
+
+// Pins the win32 platform behaviour that forces the delivery split above. If a
+// future Node/libuv ever delivers a graceful SIGINT to a child on Windows,
+// this test fails and the preload in sigintDeliveryEnv() should be dropped in
+// favour of the plain POSIX `child.kill('SIGINT')` path.
+test(
+  'CLI (win32): child.kill("SIGINT") force-terminates the harness — the platform reason SIGINT delivery differs there',
+  { skip: isWindows ? false : 'win32-only: pins Windows TerminateProcess-based kill() semantics' },
+  async () => {
+    const workspace = tempDir('verify-cancel-win32-kill-');
+    const plan = writeVersionedPlan(workspace, { required: ['slow-check'] });
+    writeChecks(workspace, { 'slow-check': { command: [process.execPath, '-e', 'setTimeout(() => {}, 5000)'] } });
+    initGit(workspace);
+
+    const child = spawn(process.execPath, [binPath, 'verify', '--plan', plan, '--base', 'HEAD', '--workspace', workspace], {
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    const exitPromise = new Promise((resolve) => child.on('exit', (code, signal) => resolve({ code, signal })));
+    await delay(300);
+    child.kill('SIGINT');
+    const { code, signal } = await exitPromise;
+
+    assert.equal(code, null, 'win32 kill() goes through TerminateProcess — the harness never reaches its own exit path, so 130 is unobservable this way');
+    assert.equal(signal, 'SIGINT', 'libuv records the requested signum as the term signal even though it terminated the process outright');
+    assert.equal(
+      fs.existsSync(path.join(workspace, '.harness', 'evidence')),
+      false,
+      'a hard-killed verify must still leave no evidence behind'
+    );
+  }
+);
 
 // --- Fix-wave Important #9 (AC8): check output IS streamed, redacted -------
 //

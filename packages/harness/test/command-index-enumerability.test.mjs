@@ -185,6 +185,42 @@ const VERB_FLAGS = Object.freeze({
   report: ['--sync', '--global'],
 });
 
+/**
+ * The other half of the same enumerability story. `knowledge commit
+ * <none|repo>` and `learning confirm <id>` name their argument in a usage
+ * line, which is prose; only `positionals` on the verb makes it data the
+ * palette can open a picker for. Dropping one silently leaves a row no answer
+ * can complete — a capability that is listed but unreachable, which is the
+ * same failure mode as a verb that never reached the index at all.
+ */
+const VERB_POSITIONALS = Object.freeze({
+  knowledge: { purge: ['target'], commit: ['target'] },
+  learning: { retire: ['id'], dispute: ['id'], confirm: ['id'], promote: ['id'] },
+});
+
+test('AC8: every verb-consumed positional is declared and reaches its row as a picker', () => {
+  const actual = {};
+  for (const name of listCommands()) {
+    const consuming = {};
+    for (const v of getCommand(name).verbs || []) if (v.positionals?.length) consuming[v.verb] = [...v.positionals];
+    if (Object.keys(consuming).length) actual[name] = consuming;
+  }
+  assert.deepEqual(actual, { ...VERB_POSITIONALS }, 'a verb argument was added or lost — update the fixture deliberately');
+
+  const { rows } = buildCommandIndex({ surface: 'tui', workspace: process.cwd() });
+  const byId = new Map(rows.map((r) => [r.id, r]));
+  for (const [command, verbs] of Object.entries(VERB_POSITIONALS)) {
+    for (const [verb, names] of Object.entries(verbs)) {
+      const row = byId.get(`verb:${command}:${verb}`);
+      assert.deepEqual(
+        row.argvTokens.filter((t) => t.kind === 'value').map((t) => t.positional),
+        names,
+        `${command} ${verb} must offer a picker for each positional it consumes, in argv order`,
+      );
+    }
+  }
+});
+
 test('AC8: the declared verb inventory matches its fixture exactly', () => {
   const actual = {};
   for (const name of listCommands()) {

@@ -134,7 +134,14 @@ test('runInsightCompound --dry-run logs "would write" (never "wrote") and create
     log: (m) => logs.push(m),
   });
   assert.equal(res.pass, true);
-  const episodeLog = logs.find((m) => m.includes(res.path));
+  // `res.path` is the POSIX-normalized contract form (`rel.split(path.sep)
+  // .join('/')`), but the log line renders the same path with the platform
+  // separator — on win32 `would write docs\solutions\...`, which never
+  // `includes` the forward-slash form. Compare on one spelling so the
+  // assertion is about the PATH, not the separator. On POSIX `path.sep` is
+  // '/', so this is a no-op there.
+  const toPosix = (p) => p.split(path.sep).join('/');
+  const episodeLog = logs.find((m) => toPosix(m).includes(res.path));
   assert.ok(episodeLog, 'an episode-path log line is emitted under dry-run');
   assert.match(episodeLog, /would write/);
   assert.doesNotMatch(episodeLog, /^wrote /);

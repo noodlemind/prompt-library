@@ -35,8 +35,14 @@ const supersededArchitectureDocs = [
   'tool-native-harness-design.md',
 ];
 
+// Every text file is stored LF in the index, but no .gitattributes pins the
+// working-tree form, so Git for Windows (core.autocrlf=true by default) checks
+// them out CRLF. These assertions pin file *content*, not its checkout
+// encoding, so normalize back to the committed LF form. Without this, `\n`-
+// anchored frontmatter regexes silently miss on Windows and the per-line `\r`
+// inflates the token budgets (engineer.agent.md measured 904 rather than 892).
 function read(rel) {
-  return fs.readFileSync(path.join(repoRoot, rel), 'utf8');
+  return fs.readFileSync(path.join(repoRoot, rel), 'utf8').replace(/\r\n/g, '\n');
 }
 
 function exists(rel) {
@@ -362,7 +368,8 @@ test('single-entry: the engineer is the only user-invocable agent', () => {
       const fm = read(`.github/agents/${name}`).match(/^---\n([\s\S]*?)\n---/)?.[1] || '';
       return !/^user-invocable:\s*false\s*$/m.test(fm);
     })
-    .map((name) => name.replace(/\.agent\.md$/, ''));
+    .map((name) => name.replace(/\.agent\.md$/, ''))
+    .sort(); // readdir order is filesystem-defined; sort so this set compare is deterministic
   assert.deepEqual(invocable, ['engineer'], `@ menu must expose only the engineer, found: ${invocable.join(', ')}`);
   // Retired routing surfaces stay gone.
   for (const gone of [

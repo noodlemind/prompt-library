@@ -221,6 +221,37 @@ test('the writeStoreConfig lock-failure CLI path (`harness knowledge on`) render
  * writer's residue. */
 const txnJournalPath = (dir) => path.join(dir, '.git', 'harness-txn.json');
 
+/**
+ * "The writer really died mid-transaction", asserted the way each platform can
+ * actually express it.
+ *
+ * POSIX delivers a real signal, so the parent observes `signal: 'SIGKILL'`.
+ * WINDOWS HAS NO POSIX SIGNALS AT ALL: `process.kill(pid, 'SIGKILL')` maps to
+ * `TerminateProcess(handle, SIGKILL)`, so the parent observes a nonzero exit
+ * CODE and `signal: null`. Asserting the POSIX shape there tests the platform,
+ * not the store.
+ *
+ * The precondition both platforms share is structural — and strictly stronger
+ * than either kill check: the in-transaction intent journal is STILL ON DISK.
+ * store.mjs writes it after the lock is taken, before `fn` runs, and removes it
+ * once the transaction commits or rolls back, so its presence proves the writer
+ * died BETWEEN its first write and its commit/rollback — exactly the state
+ * these two tests need — no matter how the kill was delivered.
+ */
+function assertDiedMidTransaction(child, dir) {
+  if (process.platform === 'win32') {
+    assert.equal(child.signal, null, 'Windows reports a terminated child by exit code, never by signal');
+    assert.notEqual(child.status, 0, `precondition: the writer really died mid-transaction (${child.stderr})`);
+  } else {
+    assert.equal(child.signal, 'SIGKILL', `precondition: the writer really died mid-transaction (${child.stderr})`);
+  }
+  assert.equal(
+    fs.existsSync(txnJournalPath(dir)),
+    true,
+    'precondition: it died BETWEEN its journal write and its commit/rollback — the journal is still on disk'
+  );
+}
+
 test('a crashed writer (stale lock + an uncommitted hand edit) is taken over cleanly: the hand edit is absorbed, not destroyed', () => {
   const c = ctx();
   const id = seedLearning(c);
@@ -297,7 +328,7 @@ test('a writer killed MID-TRANSACTION leaves CLI residue, not human authority: t
     '});',
   ].join('\n');
   const child = spawnSync(process.execPath, ['--input-type=module', '-e', script], { encoding: 'utf8' });
-  assert.equal(child.signal, 'SIGKILL', `precondition: the writer really died mid-transaction (${child.stderr})`);
+  assertDiedMidTransaction(child, dir);
   assert.equal(fs.readFileSync(learning.file, 'utf8'), residue, 'precondition: the residue is sitting in the tree');
   assert.match(gitPorcelainStatus(dir), /M\s+learnings\/sql\/not-null-hot-tables\.md/, 'precondition: dirty tracked file');
 
@@ -366,7 +397,7 @@ test('crash recovery is per-path: a dirty NON-learning file never disarms residu
     '});',
   ].join('\n');
   const child = spawnSync(process.execPath, ['--input-type=module', '-e', script], { encoding: 'utf8' });
-  assert.equal(child.signal, 'SIGKILL', `precondition: the writer really died mid-transaction (${child.stderr})`);
+  assertDiedMidTransaction(child, dir);
   assert.equal(fs.readFileSync(learning.file, 'utf8'), residue, 'precondition: the residue is sitting in the tree');
   assert.match(gitPorcelainStatus(dir), /scratch-notes\.txt/, 'precondition: unrelated non-learning dirt coexists with it');
 

@@ -204,21 +204,77 @@ test('win32 termination path calls killFn once with no POSIX-style escalation', 
   assert.equal(calls[0].plat, 'win32');
 });
 
+// Keys the OS/loader injects into EVERY spawned child BELOW the application
+// layer, whatever `env` object is handed to spawn. Their presence is never
+// evidence that runProcess merged `process.env`:
+//   - darwin: dyld/CoreFoundation adds __CF_USER_TEXT_ENCODING.
+//   - win32: libuv's make_program_env() copies a fixed list of "essential"
+//     variables out of the PARENT environment whenever the supplied
+//     environment block omits them (libuv src/win/process.c, `required_vars`
+//     — winsock will not initialize without SYSTEMROOT, and several Win32
+//     APIs need TEMP/PATH). That is why PATH arrives on Windows even though
+//     runProcess passes `env` straight through untouched.
+// Anything OUTSIDE this per-platform set that came from the parent is a real
+// merge bug, which is what the sentinel below proves is absent.
+const PLATFORM_INJECTED_ENV_KEYS = {
+  darwin: ['__CF_USER_TEXT_ENCODING'],
+  win32: [
+    'HOMEDRIVE',
+    'HOMEPATH',
+    'LOGONSERVER',
+    'PATH',
+    'SYSTEMDRIVE',
+    'SYSTEMROOT',
+    'TEMP',
+    'USERDOMAIN',
+    'USERNAME',
+    'USERPROFILE',
+    'WINDIR',
+  ],
+};
+
 test('env passed explicitly is used as-is, not merged with process.env', async () => {
-  const result = await runProcess({
-    argv: [process.execPath, '-e', 'process.stdout.write(JSON.stringify(process.env))'],
-    env: { ONLY_VAR: 'present' },
-  });
-  assert.equal(result.status, 'ok');
-  const seenEnv = JSON.parse(result.stdout);
-  assert.equal(seenEnv.ONLY_VAR, 'present');
-  // Proof of no implicit merge: nothing from this process's own env (e.g.
-  // PATH, HOME) leaked through. (macOS's loader injects its own
-  // __CF_USER_TEXT_ENCODING below the application layer regardless of the
-  // env object handed to spawn, so that one key is not diagnostic here.)
-  assert.equal(seenEnv.PATH, undefined);
-  assert.equal(seenEnv.HOME, undefined);
-  assert.deepEqual(Object.keys(seenEnv).filter((key) => key !== '__CF_USER_TEXT_ENCODING'), ['ONLY_VAR']);
+  // A variable that exists ONLY in this process's environment and is on no
+  // platform's injected list — the single thing that would cross over if
+  // runProcess ever merged process.env into an explicit `env`.
+  process.env.HARNESS_RUNNER_ENV_LEAK_PROBE = 'parent-only';
+  try {
+    const result = await runProcess({
+      argv: [process.execPath, '-e', 'process.stdout.write(JSON.stringify(process.env))'],
+      env: { ONLY_VAR: 'present' },
+    });
+    assert.equal(result.status, 'ok');
+    const seenEnv = JSON.parse(result.stdout);
+    assert.equal(seenEnv.ONLY_VAR, 'present');
+    assert.equal(
+      seenEnv.HARNESS_RUNNER_ENV_LEAK_PROBE,
+      undefined,
+      'runProcess must never merge process.env into an explicitly supplied env'
+    );
+    // ...and nothing else crossed over either, apart from the keys the
+    // platform itself injects. Windows environment names are case-insensitive
+    // by definition (libuv writes its injected names from uppercase literals,
+    // but the OS treats Path/PATH as one variable), so the comparison folds
+    // case there — that is the correct semantics, not a loosened check.
+    const fold = isWin32 ? (key) => key.toUpperCase() : (key) => key;
+    const injected = new Set((PLATFORM_INJECTED_ENV_KEYS[process.platform] || []).map(fold));
+    const leaked = Object.keys(seenEnv).filter((key) => key !== 'ONLY_VAR' && !injected.has(fold(key)));
+    assert.deepEqual(leaked, [], `only ONLY_VAR plus platform-injected keys may reach the child; leaked: ${leaked.join(', ')}`);
+    if (isWin32) {
+      // Pin the platform contract being tolerated rather than merely allowing
+      // it: PATH is present because libuv copied the PARENT's PATH verbatim
+      // into the block, not because the runner merged. If libuv ever stops
+      // doing this, this fails and the win32 allowlist above should shrink.
+      const seenPathKey = Object.keys(seenEnv).find((key) => key.toUpperCase() === 'PATH');
+      assert.ok(seenPathKey, 'win32: libuv must inject PATH into the child environment block');
+      assert.equal(seenEnv[seenPathKey], process.env.PATH, "win32 PATH must be libuv's verbatim copy of the parent PATH");
+    } else {
+      assert.equal(seenEnv.PATH, undefined);
+      assert.equal(seenEnv.HOME, undefined);
+    }
+  } finally {
+    delete process.env.HARNESS_RUNNER_ENV_LEAK_PROBE;
+  }
 });
 
 test('throws on a malformed argv synchronously', () => {

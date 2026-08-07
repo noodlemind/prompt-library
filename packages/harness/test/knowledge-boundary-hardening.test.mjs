@@ -60,7 +60,16 @@ function featureWorkspace(branch = 'feature/hardening') {
   git(ws, ['clone', '-q', origin, '.']);
   git(ws, ['config', 'user.email', 't@example.test']);
   git(ws, ['config', 'user.name', 'T']);
-  if (branch) git(ws, ['checkout', '-qb', branch]);
+  if (branch) {
+    // Assert the checkout LANDED. `checkout -b` can fail for reasons that have
+    // nothing to do with the assertion under test — most notably a branch whose
+    // loose-ref path (`<ws>/.git/refs/heads/<branch>[.lock]`) exceeds the
+    // platform's path limit (Windows MAX_PATH = 260). git then exits 128 and
+    // HEAD silently stays on `main`, so every downstream layer assertion reads
+    // 'golden' instead of 'branch' and blames the routing code.
+    const co = git(ws, ['checkout', '-qb', branch]);
+    assert.equal(co.status, 0, `checkout -b ${branch.slice(0, 40)}… failed: ${co.stderr}`);
+  }
   return ws;
 }
 
@@ -597,7 +606,13 @@ test('K: every destructive knowledge path routes through an fs-safe realpath gua
 // ---------------------------------------------------------------------------
 
 test('L: knowledge status --json redacts, flattens, and caps a bucket branch name; orient --json does the same and drops the absolute worktree', () => {
-  const longBranch = `feature/${'z'.repeat(220)}`;
+  // Comfortably over both caps under test — the 64-char slug cap
+  // (branchKeyFor) and the 80-char display cap (BRANCH_DISPLAY_CAP /
+  // ORIENT_BRANCH_CAP) — while the branch stays SHORT ENOUGH TO EXIST. The ref
+  // is a real file at `<ws>/.git/refs/heads/feature/<name>`; at 220 chars that
+  // path ran past Windows' 260-char MAX_PATH, `checkout -b` failed, and HEAD
+  // stayed on `main` (routing then correctly reports 'golden', not 'branch').
+  const longBranch = `feature/${'z'.repeat(100)}`;
   const ws = featureWorkspace(longBranch);
   const home = tempDir('bh-home-l-');
   seedBucketLearning(ws, home, 'branded');

@@ -17,6 +17,29 @@ import { storeDir } from '../lib/knowledge/store.mjs';
 
 const tempDir = (p) => fs.mkdtempSync(path.join(os.tmpdir(), p));
 
+/**
+ * Canonicalize a path before comparing it to another spelling of the same
+ * directory. `fs.realpathSync` (the JS walker) resolves symlinks — enough for
+ * macOS `/var` → `/private/var` — but on Windows it does NOT expand 8.3 short
+ * names, so `os.tmpdir()`'s `C:\Users\RUNNER~1\...` and git's
+ * `C:\Users\runneradmin\...` stay two spellings of one directory and compare
+ * unequal. `fs.realpathSync.native` goes through the OS canonicalizer
+ * (GetFinalPathNameByHandle on win32), which expands the short form. Degrades
+ * to the JS walker, then to the raw path, so a not-yet-created path never
+ * throws out of an assertion.
+ */
+function realPath(p) {
+  try {
+    return fs.realpathSync.native(p);
+  } catch {
+    try {
+      return fs.realpathSync(p);
+    } catch {
+      return p;
+    }
+  }
+}
+
 function git(cwd, args) {
   return spawnSync('git', args, {
     cwd,
@@ -91,7 +114,7 @@ test('deriveGitContext reports branch, key, worktree, and head on a normal branc
   assert.equal(ctx.branchKey, branchKeyFor('feature/slash-branch'));
   assert.equal(ctx.detached, false);
   assert.equal(ctx.headSha, head(ws));
-  assert.equal(fs.realpathSync(ctx.worktree), fs.realpathSync(ws));
+  assert.equal(realPath(ctx.worktree), realPath(ws));
   assert.equal(ctx.baseSha, null); // no default branch resolvable — never guessed
   // Deterministic across runs.
   assert.deepEqual(deriveGitContext({ workspace: ws }), ctx);

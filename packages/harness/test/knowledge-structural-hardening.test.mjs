@@ -342,7 +342,17 @@ test('S3: a hand edit to a non-ASCII learning path is absorbed, not silently ski
   assert.equal(listLearnings(dir).find((l) => l.id === 'café/délai').fm.source, 'human', 'and absorbed with honest provenance');
 });
 
-test('S3: a learning path containing a literal " -> " is absorbed, not mis-split into a phantom path', () => {
+// WINDOWS: `>` is not a legal character in a Windows filename, so this path
+// cannot be brought into existence there at all (`fs.mkdirSync` fails). That
+// also means the hazard itself is unreachable on Windows — no file there can
+// ever contain the ` -> ` rename marker. WHAT IS LEFT UNCOVERED ON WINDOWS is
+// therefore ONLY the end-to-end absorb of such a path; the mis-split rule
+// itself (that `learnings/a -> b/c.md` is one path and not a rename pair) is
+// pinned on EVERY platform by the parsePorcelainZ test above, which feeds the
+// parser that exact entry as data rather than as a real file.
+test('S3: a learning path containing a literal " -> " is absorbed, not mis-split into a phantom path', {
+  skip: process.platform === 'win32' ? 'a filename containing ">" cannot exist on Windows' : false,
+}, () => {
   const c = ctx();
   seedLearning(c, 'arrow-anchor');
   const { dir } = ensureStore(c.ws, { home: c.harnessHome });
@@ -496,15 +506,25 @@ test('a refused absorb rewrite leaves no orphaned teaching snapshot behind', { s
   // A real hand edit, so absorb reaches the snapshot + rewrite steps.
   fs.writeFileSync(learning.file, fs.readFileSync(learning.file, 'utf8').replace('Claim body', 'Hand-edited body'), 'utf8');
 
-  // Then make the rewrite impossible (the domain directory is read-only, so the
-  // contained temp+rename write cannot create its temp file).
-  const domainDir = path.dirname(learning.file);
-  fs.chmodSync(domainDir, 0o555);
+  // Then make the rewrite impossible. The MECHANISM has to differ by platform;
+  // the invariant under test does not.
+  //   POSIX  : a read-only DOMAIN DIRECTORY — the contained temp+rename write
+  //            cannot create its temp file, so it refuses at its first step.
+  //   WINDOWS: `chmod` on a directory only flips FILE_ATTRIBUTE_READONLY, which
+  //            Windows ignores for creating files inside it, so the POSIX trick
+  //            is a no-op there. A read-only DESTINATION FILE does bite:
+  //            MoveFileEx(MOVEFILE_REPLACE_EXISTING) refuses to replace it, so
+  //            the same contained write refuses at its LAST step (the rename)
+  //            instead of its first — the snapshot has already been written by
+  //            then, which is exactly the orphan window this test exists for.
+  const onWindows = process.platform === 'win32';
+  const blocked = onWindows ? learning.file : path.dirname(learning.file);
+  fs.chmodSync(blocked, onWindows ? 0o444 : 0o555);
   let logged = [];
   try {
     absorbHandEdits({ workspace: c.ws, home: c.harnessHome, log: (m) => logged.push(m) });
   } finally {
-    fs.chmodSync(domainDir, 0o755);
+    fs.chmodSync(blocked, onWindows ? 0o644 : 0o755);
   }
 
   assert.ok(logged.some((m) => /refused to rewrite/.test(m)), `the refusal is reported: ${logged.join(' | ')}`);
