@@ -985,9 +985,26 @@ export function releaseStoreLock(lockPath, token) {
   try {
     fs.rmSync(lockPath, RM_LOCK_OPTS);
     return true;
-  } catch {
+  } catch (err) {
+    // Record why. A swallowed error here is exactly what made a leaked lock on
+    // Windows cost six CI round-trips to attribute: the caller only ever sees
+    // `false`, which cannot distinguish "the lock is not mine" from "it is mine
+    // and the removal failed". The two have completely different causes and
+    // completely different fixes.
+    lastLockReleaseError = err.code || err.message;
     return false;
   }
+}
+
+/**
+ * Why the most recent `releaseStoreLock` returned false because removal failed
+ * (as opposed to the lock not being ours). Diagnostic only — never part of a
+ * control-flow decision, and cleared by nothing, so it reflects the last
+ * failure of the process rather than a live state.
+ */
+let lastLockReleaseError = null;
+export function lastStoreLockReleaseError() {
+  return lastLockReleaseError;
 }
 
 /**

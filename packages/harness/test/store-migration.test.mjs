@@ -6,7 +6,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
-import { repoId, localRepoId, storeDirForId, ensureStore, listLearnings, lockOwnership } from '../lib/knowledge/store.mjs';
+import { repoId, localRepoId, storeDirForId, ensureStore, listLearnings, lockOwnership, lastStoreLockReleaseError } from '../lib/knowledge/store.mjs';
 import { migrateStrandedStore } from '../lib/knowledge/admin.mjs';
 import { storePathParts } from '../lib/knowledge/store-io.mjs';
 import { assertNoSymlinkAncestors, readFileNoFollow } from '../lib/fs-safe.mjs';
@@ -323,6 +323,7 @@ test('migrate-store releases the legacy lock when the collision recheck fires mi
       }),
       probe('staleLockRemoved', () => result.staleLockRemoved ?? null),
       probe('pid', () => process.pid),
+      probe('releaseError', () => lastStoreLockReleaseError()),
     ].join(' ');
   }
   assert.equal(
