@@ -71,18 +71,43 @@ function verbScope(def) {
   return Array.isArray(def.verbs) ? def.verbs : [];
 }
 
-/** A flag is its own palette row only when it is dispositioned `verb` AND
- * stands alone. A dependent option is a refinement of the option it requires
- * ("never listed independently"), so `requires` disqualifies it from being a
- * row even if it was also annotated `verb`. */
-function isVerbFlag(def) {
-  return def.tui === 'verb' && requiresList(def).length === 0;
+/**
+ * `requires` points in one of two directions, and only one of them means
+ * "this is a refinement of something else".
+ *
+ * - UPWARD, at another `verb` flag: `--since requires --structural`. `since`
+ *   is meaningless alone, so it attaches to the `index structural` row and is
+ *   never listed independently.
+ * - DOWNWARD, at a `prompt` flag: `--apply requires --ops`. Here the
+ *   requirement is the verb's own parameter, not its parent — `apply` IS the
+ *   capability and `--ops` is the value the palette asks for once it is
+ *   chosen.
+ *
+ * Treating both alike demoted `consolidate apply` out of the index entirely,
+ * violating the contract's "reaching a capability never requires knowing its
+ * parent": `apply` became findable only by first knowing to look under
+ * `consolidate`.
+ */
+function dependsOnVerbFlag(entry, def) {
+  const byName = new Map();
+  for (const f of flagsOf(entry)) {
+    byName.set(f.name, f);
+    for (const alias of f.aliases || []) byName.set(alias, f);
+  }
+  return requiresList(def).some((req) => byName.get(req)?.tui === 'verb');
 }
 
-/** Prompt flags are asked for after selection; a dependent one is a
- * refinement instead, so it is likewise excluded here. */
-function isPromptFlag(def) {
-  return def.tui === 'prompt' && requiresList(def).length === 0;
+/** A flag is its own palette row when it is dispositioned `verb` and does not
+ * refine another verb flag (see `dependsOnVerbFlag`). */
+function isVerbFlag(entry, def) {
+  return def.tui === 'verb' && !dependsOnVerbFlag(entry, def);
+}
+
+/** Prompt flags are asked for after selection; one that refines a verb flag
+ * belongs to that row instead. A prompt flag required BY a verb flag is still
+ * that verb's parameter, which `promptsFor` resolves. */
+function isPromptFlag(entry, def) {
+  return def.tui === 'prompt' && !dependsOnVerbFlag(entry, def);
 }
 
 /** `--structural` presents as the verb `structural`. This derives the DISPLAY
@@ -132,11 +157,34 @@ function optionRow(def) {
 function promptsFor(entry, verb) {
   return flagsOf(entry)
     .filter((def) => {
-      if (!isPromptFlag(def)) return false;
+      if (!isPromptFlag(entry, def)) return false;
       const scope = verbScope(def);
       return scope.length === 0 || (verb !== null && scope.includes(verb));
     })
     .map(optionRow);
+}
+
+/**
+ * The prompts for a flag-derived verb row, with the flag's own `requires`
+ * hoisted to the front and marked required.
+ *
+ * `--apply requires --ops` means the palette cannot dispatch `consolidate
+ * apply` without asking for an ops path — the requirement is this verb's
+ * mandatory parameter, not an optional filter, and `validateArgs` now rejects
+ * the combination without it. Ordering it first and flagging it `required`
+ * keeps the picker's sequence honest.
+ */
+function promptsForFlagVerb(entry, def, verb) {
+  const byName = new Map(flagsOf(entry).map((f) => [f.name, f]));
+  const required = requiresList(def)
+    .map((req) => byName.get(req))
+    .filter((f) => f && f.tui !== 'cli-only')
+    .map((f) => ({ ...optionRow(f), required: true }));
+  // `optionRow`'s identity field is `flag`, not `name` — deduping on the wrong
+  // key silently swallowed every optional prompt, since a Set of `undefined`
+  // matches all of them.
+  const requiredFlags = new Set(required.map((r) => r.flag));
+  return [...required, ...promptsFor(entry, verb).filter((p) => !requiredFlags.has(p.flag))];
 }
 
 /** Refinements of one row: the dependent options whose `requires` names this
@@ -244,7 +292,7 @@ function flagVerbRow(entry, def, under) {
     // `learnings why` is `['learnings','--why']` here, exactly as documented.
     argv: argvTokens.filter((t) => t.kind !== 'value').map((t) => t.value),
     argvTokens,
-    prompts: promptsFor(entry, under ? under.verb : null),
+    prompts: promptsForFlagVerb(entry, def, under ? under.verb : null),
     refinements: refinementsFor(entry, def.name),
   };
 }
@@ -254,7 +302,7 @@ function flagVerbRow(entry, def, under) {
 function rowsForEntry(entry) {
   const declaredVerbs = entry.verbs || [];
   const byVerb = new Map(declaredVerbs.map((v) => [v.verb, v]));
-  const verbFlags = flagsOf(entry).filter(isVerbFlag);
+  const verbFlags = flagsOf(entry).filter((def) => isVerbFlag(entry, def));
   const rowFlags = new Set(verbFlags.map((def) => def.name));
   const rows = [commandRow(entry, promptsFor(entry, null), orphanRefinementsFor(entry, rowFlags))];
   for (const declared of declaredVerbs) rows.push(declaredVerbRow(entry, declared));
