@@ -7,6 +7,7 @@ import { resolveIndexDir } from './recall-config.mjs';
 import { isIndexStale } from './postings-index.mjs';
 import { resolveHarnessBin, RUNNER_VERSION } from './resolve-harness-bin.mjs';
 import { globalHarnessShimPath, findHarnessOnPath } from './global-bin.mjs';
+import { readLock } from './lock.mjs';
 import { planDigest } from './evidence.mjs';
 import { loadPlan } from './plan-parse.mjs';
 import { runVerify } from './verify.mjs';
@@ -670,12 +671,33 @@ export async function runDoctor({ copilotHome, assetsRoot, pkgRoot, flags, vscod
     hint: 'Maintainer: npm run build:assets before publish',
   });
 
-  const lockPath = path.join(copilotHome, '.harness-lock.json');
+  // Present AND matching the installed binary. Installing the package — from the
+  // registry or from a hand-delivered tarball, identically — replaces the binary
+  // and hydrates nothing: there is no postinstall. Until someone runs `upgrade`,
+  // the agents, skills and instructions in the Copilot home stay on whatever
+  // version last hydrated, and the only prior signal was `harness status`
+  // printing the two numbers next to each other for a human to compare.
+  // This is the channel-agnostic check: it compares what is installed against
+  // what was hydrated, which does not care how the package arrived.
+  // pkgRoot, not an import from commands.mjs — that module imports runDoctor,
+  // so reading its readPkgVersion from here would close an import cycle.
+  const lock = readLock(copilotHome);
+  let installedVersion = null;
+  try {
+    installedVersion = JSON.parse(fs.readFileSync(path.join(pkgRoot, 'package.json'), 'utf8')).version;
+  } catch {
+    // Unreadable package.json — fall back to presence-only, the pre-existing check.
+  }
+  const lockCurrent = Boolean(lock) && (installedVersion === null || lock.version === installedVersion);
   checks.push({
     id: 'H9',
-    name: 'Harness lock file',
-    pass: fs.existsSync(lockPath),
-    hint: 'Run install or upgrade',
+    name: 'Harness lock file matches the installed version',
+    pass: lockCurrent,
+    hint: !lock
+      ? 'Run install or upgrade'
+      : lockCurrent
+        ? `hydrated from ${lock.package}@${lock.version}`
+        : `harness ${installedVersion} is installed but the Copilot home was hydrated from ${lock.version} — run: harness upgrade`,
     optional: true,
   });
 

@@ -1692,6 +1692,30 @@ test('upgrade refreshes a stale workspace runner, and creates none where there i
     'a runner from an older harness is brought up to the installed version');
 });
 
+// Installing the package — from the registry or a hand-delivered tarball, the
+// same either way — replaces the binary and hydrates nothing; there is no
+// postinstall. Nothing used to detect "new harness installed, never upgraded":
+// H9 checked only that a lock file existed, so a home hydrated by an older
+// version looked healthy indefinitely.
+test('doctor H9 detects a harness installed but never hydrated by upgrade', () => {
+  const workspace = tempDir('lockdrift-ws-');
+  const copilotHome = tempDir('lockdrift-home-');
+  const h9 = () => {
+    const res = runHarness(['doctor', '--workspace', workspace, '--copilot-home', copilotHome, '--json']);
+    return JSON.parse(res.stdout).checks.find((c) => c.id === 'H9');
+  };
+
+  assert.equal(runHarness(['upgrade', '--workspace', workspace, '--copilot-home', copilotHome]).status, 0);
+  assert.equal(h9().pass, true, 'a freshly upgraded home is current');
+
+  const lockPath = path.join(copilotHome, '.harness-lock.json');
+  const lock = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
+  fs.writeFileSync(lockPath, JSON.stringify({ ...lock, version: '0.0.1-old' }));
+  const drifted = h9();
+  assert.equal(drifted.pass, false, 'a home hydrated by an older harness is not current');
+  assert.match(drifted.hint, /run: harness upgrade/);
+});
+
 // Existence was never the whole question: a runner carrying an already-fixed bug
 // is worth as much as a missing one, and its owner has no reason to suspect it.
 test('doctor H13 fails a runner that predates the installed harness', () => {
