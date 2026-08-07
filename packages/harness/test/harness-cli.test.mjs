@@ -1692,6 +1692,29 @@ test('upgrade refreshes a stale workspace runner, and creates none where there i
     'a runner from an older harness is brought up to the installed version');
 });
 
+// The version was reachable only through `harness status`, so the reflex every
+// user has — `harness --version` — returned `unknown command` and exit 2.
+test('harness --version and -V print the package version and exit 0', () => {
+  const expected = JSON.parse(
+    fs.readFileSync(path.join(packageRoot, 'package.json'), 'utf8')
+  ).version;
+  for (const flag of ['--version', '-V']) {
+    const res = runHarness([flag]);
+    assert.equal(res.status, 0, `${flag}: ${res.stderr}`);
+    assert.equal(res.stdout.trim(), expected, `${flag} prints the package version`);
+  }
+});
+
+// -v has always meant --verbose here. Quietly repurposing it for version would
+// break every existing caller, which is why version took -V instead.
+test('-v still means --verbose, never version', () => {
+  const workspace = tempDir('vflag-ws-');
+  const copilotHome = tempDir('vflag-home-');
+  const res = runHarness(['status', '-v', '--workspace', workspace, '--copilot-home', copilotHome]);
+  assert.equal(res.status, 0, res.stderr);
+  assert.match(res.stdout, /home/, '-v runs status verbosely rather than printing a bare version');
+});
+
 // Installing the package — from the registry or a hand-delivered tarball, the
 // same either way — replaces the binary and hydrates nothing; there is no
 // postinstall. Nothing used to detect "new harness installed, never upgraded":

@@ -22,6 +22,11 @@ import { writeEvent as writeHarnessEvent } from '../lib/events.mjs';
 import { parseFlags, hasFlag } from '../lib/flags.mjs';
 import { commandIndexEnvelope } from '../lib/command-index.mjs';
 import { createRedactor, redactedJson } from '../lib/redact.mjs';
+// The single package-version reader (lib/commands.mjs) — `cmdStatus`'s own
+// read and registry.mjs#readHarnessVersion were deliberately consolidated into
+// it, so `--version` reuses that one rather than reintroducing a third.
+// registry.mjs already imports this module, so it costs no extra load.
+import { readPkgVersion } from '../lib/commands.mjs';
 
 const [, , command = 'help', ...args] = process.argv;
 // This renderer only writes error blocks, which go to stderr — detect there.
@@ -50,6 +55,7 @@ export const HELP_COMMAND_ORDER = [
 ];
 
 const GLOBAL_OPTIONS = [
+  ['--version, -V', 'print the package version and exit'],
   ['--json', 'JSON output for machine readers'],
   ['--dry-run', 'print actions without writing'],
   ['--verbose, -v', 'full detail: per-file logging, all checks, unclamped hints'],
@@ -224,7 +230,17 @@ function createProcessEventRegistry(rawArgs) {
 async function main() {
   let code = 0;
   try {
-    if (command === 'help' || command === '--help' || command === '-h') {
+    // `--version` is universal CLI convention and was the one place the harness
+    // did not honor it: the version was reachable only through `harness status`,
+    // so the reflex every user has produced `unknown command: --version`.
+    // `-V`, not `-v`: `-v` has always meant `--verbose` here, and quietly
+    // repurposing it would break every existing caller (curl draws the same
+    // line for the same reason). Handled here beside `help` because both are
+    // data ABOUT the CLI rather than commands with a side-effect class, so
+    // neither dispatches through the registry or writes an event.
+    if (command === '--version' || command === '-V') {
+      console.log(readPkgVersion());
+    } else if (command === 'help' || command === '--help' || command === '-h') {
       const topic = args.find((a) => !a.startsWith('-'));
       if (topic) {
         const detail = renderCommandHelp(topic);
