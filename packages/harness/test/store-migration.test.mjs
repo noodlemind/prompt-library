@@ -6,7 +6,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
-import { repoId, localRepoId, storeDirForId, ensureStore, listLearnings } from '../lib/knowledge/store.mjs';
+import { repoId, localRepoId, storeDirForId, ensureStore, listLearnings, lockOwnership } from '../lib/knowledge/store.mjs';
 import { migrateStrandedStore } from '../lib/knowledge/admin.mjs';
 import { storePathParts } from '../lib/knowledge/store-io.mjs';
 import { assertNoSymlinkAncestors, readFileNoFollow } from '../lib/fs-safe.mjs';
@@ -313,6 +313,16 @@ test('migrate-store releases the legacy lock when the collision recheck fires mi
         const p = storePathParts(ownerPath);
         return p ? readFileNoFollow(p.full, { root: p.storeRoot })?.slice(0, 40) ?? null : 'no-parts';
       }),
+      // All four read gates pass, so lockOwnership can read the stamp — which
+      // leaves a token mismatch as the only way it still answers 'foreign'.
+      // Feed it the file's OWN token: 'owned' proves the stamp is well-formed
+      // and the releasing caller simply held a different token.
+      probe('ownWithFileToken', () => {
+        const own = JSON.parse(fs.readFileSync(ownerPath, 'utf8'));
+        return { token: own.token, ownership: lockOwnership(leftoverLock, own.token) };
+      }),
+      probe('staleLockRemoved', () => result.staleLockRemoved ?? null),
+      probe('pid', () => process.pid),
     ].join(' ');
   }
   assert.equal(
