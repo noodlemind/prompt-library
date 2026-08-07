@@ -105,7 +105,89 @@ function usageError(message, hint) {
   return Object.assign(new Error(message), { code: 'E_USAGE', hint, exit: EXIT.usage });
 }
 
-function assertValidEntry(entry) {
+/**
+ * Surfaces a command may appear on. `cli` is the argv projection (scripts,
+ * CI, hooks); `tui` is the command palette; `agent` is the agent-lane tool
+ * description. Modelled on Warp's `x-warp-surfaces`, which tags each of its
+ * settings with the renderers that consume it rather than leaving surface
+ * membership to convention.
+ *
+ * The default is all three. A command omitted from annotation is therefore
+ * *discoverable* rather than hidden — the opposite of pi, whose command
+ * table drifted from its dispatcher until three commands became reachable
+ * but invisible. Forgetting to annotate must never silently remove a
+ * capability from the palette.
+ */
+export const SURFACES = ['cli', 'tui', 'agent'];
+
+/**
+ * How one declared option presents in the TUI palette (see
+ * docs/architecture/harness-cli-workbench.md §Command palette).
+ *
+ * - `verb`     — its own palette row. `index --structural` shows as
+ *                `index structural` and resolves back to the flag.
+ * - `prompt`   — not a row; once its command or verb is chosen the palette
+ *                opens a picker for the value (branch keys, learning ids).
+ * - `cli-only` — never shown. Output-lane plumbing (`--json`), confirmations
+ *                (`--yes`), and install-time configuration live here.
+ *
+ * The default is `cli-only`: a wrongly-hidden option is still reachable from
+ * the CLI, while a wrongly-shown one puts flag syntax in front of a TUI user,
+ * which the palette contract forbids. Completeness is enforced by test, not
+ * by the default.
+ */
+export const TUI_DISPOSITIONS = ['verb', 'prompt', 'cli-only'];
+
+function assertValidVerbs(entry) {
+  if (entry.verbs === undefined) return;
+  if (!Array.isArray(entry.verbs)) {
+    throw new Error(`registerCommand: "${entry.name}" verbs must be an array`);
+  }
+  const seen = new Set();
+  for (const v of entry.verbs) {
+    if (!v || typeof v !== 'object' || typeof v.verb !== 'string' || !v.verb) {
+      throw new Error(`registerCommand: "${entry.name}" has a verb without a verb name`);
+    }
+    if (typeof v.summary !== 'string' || !v.summary) {
+      throw new Error(`registerCommand: "${entry.name}" verb "${v.verb}" needs a summary`);
+    }
+    if (seen.has(v.verb)) {
+      throw new Error(`registerCommand: "${entry.name}" declares verb "${v.verb}" twice`);
+    }
+    seen.add(v.verb);
+    if (v.sideEffect !== undefined && !['read', 'mutate', 'execute'].includes(v.sideEffect)) {
+      throw new Error(`registerCommand: "${entry.name}" verb "${v.verb}" has an invalid sideEffect "${v.sideEffect}"`);
+    }
+  }
+}
+
+function assertValidFlagMetadata(entry, args) {
+  const declared = new Set();
+  for (const def of args.flags) {
+    declared.add(def.name);
+    for (const alias of def.aliases || []) declared.add(alias);
+  }
+  const verbNames = new Set((entry.verbs || []).map((v) => v.verb));
+  for (const def of args.flags) {
+    if (def.tui !== undefined && !TUI_DISPOSITIONS.includes(def.tui)) {
+      throw new Error(`registerCommand: "${entry.name}" flag ${def.name} has an invalid tui disposition "${def.tui}" (must be ${TUI_DISPOSITIONS.join(' | ')})`);
+    }
+    // A dependency naming a flag this command does not declare would never
+    // fire, so it is a typo rather than a rule — fail at registration.
+    for (const req of def.requires || []) {
+      if (!declared.has(req)) {
+        throw new Error(`registerCommand: "${entry.name}" flag ${def.name} requires ${req}, which it does not declare`);
+      }
+    }
+    for (const verb of def.verbs || []) {
+      if (!verbNames.has(verb)) {
+        throw new Error(`registerCommand: "${entry.name}" flag ${def.name} is scoped to verb "${verb}", which it does not declare`);
+      }
+    }
+  }
+}
+
+function assertValidEntry(entry, args) {
   if (!entry || typeof entry !== 'object') {
     throw new Error('registerCommand: entry must be an object');
   }
@@ -118,16 +200,31 @@ function assertValidEntry(entry) {
   if (!['read', 'mutate', 'execute'].includes(entry.sideEffect)) {
     throw new Error(`registerCommand: "${entry.name}" has an invalid sideEffect "${entry.sideEffect}" (must be read | mutate | execute)`);
   }
+  if (entry.surfaces !== undefined) {
+    if (!Array.isArray(entry.surfaces) || entry.surfaces.length === 0) {
+      throw new Error(`registerCommand: "${entry.name}" surfaces must be a non-empty array`);
+    }
+    for (const s of entry.surfaces) {
+      if (!SURFACES.includes(s)) {
+        throw new Error(`registerCommand: "${entry.name}" has an invalid surface "${s}" (must be ${SURFACES.join(' | ')})`);
+      }
+    }
+  }
+  assertValidVerbs(entry);
+  assertValidFlagMetadata(entry, args);
 }
 
 /** Register one command entry. Entries are data — see the module doc for the shape. */
 export function registerCommand(entry) {
-  assertValidEntry(entry);
   const args = { flags: [], positionals: [], ...entry.args };
+  assertValidEntry(entry, args);
   REGISTRY.set(entry.name, {
     group: 'general',
     capabilities: [],
     outputModes: ['ledger', 'json'],
+    surfaces: SURFACES,
+    userInvocable: true,
+    verbs: [],
     ...entry,
     args,
   });
@@ -173,21 +270,54 @@ function flagIndex(entry) {
  */
 export function validateArgs(entry, argv) {
   const known = flagIndex(entry);
+  // Canonical flag names seen this invocation, plus the first bare token —
+  // the latter is the selected verb when the entry declares any (AC9).
+  const present = new Set();
+  let selectedVerb = null;
+  let sawBareToken = false;
   for (let i = 0; i < argv.length; i++) {
     const token = argv[i];
     if (token === '--') break;
     const isFlagShaped = token.startsWith('-') && token !== '-';
-    if (!isFlagShaped) continue;
+    if (!isFlagShaped) {
+      if (!sawBareToken) {
+        sawBareToken = true;
+        if ((entry.verbs || []).some((v) => v.verb === token)) selectedVerb = token;
+      }
+      continue;
+    }
     const eq = token.indexOf('=');
     const flagName = eq === -1 ? token : token.slice(0, eq);
     const def = known.get(flagName);
     if (!def) {
       throw usageError(`unknown flag: ${flagName}`, `harness help ${entry.name}`);
     }
+    present.add(def.name);
     if (def.type !== 'boolean' && eq === -1) {
       const next = argv[i + 1];
       const nextIsValue = next !== undefined && !next.startsWith('--');
       if (nextIsValue) i++;
+    }
+  }
+
+  // Applicability, once every flag is known to be declared. Both checks are
+  // no-ops for an entry that declares neither `requires` nor per-flag `verbs`,
+  // so every pre-existing command validates exactly as before.
+  for (const def of entry.args.flags) {
+    if (!present.has(def.name)) continue;
+    for (const req of def.requires || []) {
+      if (!present.has(req)) {
+        throw usageError(
+          `${def.name} requires ${req}`,
+          `harness help ${entry.name}`,
+        );
+      }
+    }
+    if (def.verbs && def.verbs.length && selectedVerb && !def.verbs.includes(selectedVerb)) {
+      throw usageError(
+        `${def.name} does not apply to "${entry.name} ${selectedVerb}"`,
+        `harness help ${entry.name}`,
+      );
     }
   }
 }
