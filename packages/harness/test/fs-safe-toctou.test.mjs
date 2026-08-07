@@ -122,12 +122,13 @@ test('write: the POST-CREATE verify branch refuses, cleans up, and NEVER lands c
   const CONTENT = 'CONTENT_BYTES_THAT_MUST_NEVER_LAND_BEFORE_VERIFY\n';
 
   const realRealpath = fs.realpathSync;
+  const realRealpathNative = fs.realpathSync.native;
   let tmpSizeAtVerify = null; // temp file size observed at the instant of the verify
   let tmpsAtVerify = null;
   // Mock ONLY the parent-resolution realpath call writeFileContained makes
   // during the post-create verify; delegate everything else (including the
   // root canonicalization) to the real implementation.
-  t.mock.method(fs, 'realpathSync', (p, ...rest) => {
+  const interceptParent = (real) => (p, ...rest) => {
     if (path.resolve(p) === path.resolve(parentDir)) {
       // The empty temp already exists here — capture its state, then force the
       // containment check to see an escape. Do NOT throw: realpathParentContained
@@ -137,7 +138,17 @@ test('write: the POST-CREATE verify branch refuses, cleans up, and NEVER lands c
       if (tmpsAtVerify.length === 1) tmpSizeAtVerify = fs.statSync(path.join(parentDir, tmpsAtVerify[0])).size;
       return outside; // parent "resolves" outside the root → containment fails
     }
-    return realRealpath(p, ...rest);
+    return real(p, ...rest);
+  };
+  // BOTH spellings must be intercepted. lib/fs-safe.mjs canonicalizes through
+  // `fs.realpathSync.native` (it expands Windows 8.3 short names, which the JS
+  // walker leaves alone) and only falls back to `fs.realpathSync`. Mocking just
+  // the fallback silently stopped intercepting anything, so this branch — the
+  // post-create containment verify — passed without ever being exercised.
+  t.mock.method(fs, 'realpathSync', interceptParent(realRealpath));
+  fs.realpathSync.native = interceptParent(realRealpathNative);
+  t.after(() => {
+    fs.realpathSync.native = realRealpathNative;
   });
 
   const result = writeFileContained(ws, rel, CONTENT);

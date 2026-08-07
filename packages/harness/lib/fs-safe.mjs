@@ -48,10 +48,39 @@ export const DEFAULT_MAX_BYTES = 10_000_000;
  * (missing/unreadable) so callers fail closed. `null`/`undefined` root means
  * "no containment root requested".
  */
+/**
+ * Canonicalize one path, expanding Windows 8.3 short names.
+ *
+ * `fs.realpathSync` (the JS walker) resolves symlinks but leaves a short name
+ * like `C:\Users\RUNNER~1\...` untouched, while other producers of the same
+ * path — git, and the OS itself — return the long form. Containment below is a
+ * `startsWith` comparison, so two spellings of ONE directory fail it and the
+ * hardened read path refuses a legitimate read.
+ *
+ * That is not hypothetical: on windows-latest, a store reached through
+ * `os.tmpdir()` (short form) made `readFileNoFollow` return null for its own
+ * lock owner file, `lockOwnership` therefore read `foreign`, and
+ * `releaseStoreLock` declined to remove a lock it genuinely held — leaking it
+ * for the whole stale window. Any containment-guarded read is exposed the same
+ * way.
+ *
+ * `realpathSync.native` calls the OS canonicalizer (GetFinalPathNameByHandle
+ * on Windows), which expands 8.3. It is used for BOTH sides of every
+ * comparison, so the two can never disagree; the fallback keeps the previous
+ * behavior on any platform where `.native` is unavailable or refuses.
+ */
+function canonicalPath(p) {
+  try {
+    return fs.realpathSync.native(p);
+  } catch {
+    return fs.realpathSync(p);
+  }
+}
+
 function canonicalRoot(root) {
   if (root == null) return null;
   try {
-    return fs.realpathSync(path.resolve(root));
+    return canonicalPath(path.resolve(root));
   } catch {
     return null;
   }
@@ -77,7 +106,7 @@ function containedUnder(candidate, realRoot) {
 function fdMatchesCanonicalUnderRoot(full, fdStat, realRoot) {
   let real;
   try {
-    real = fs.realpathSync(full);
+    real = canonicalPath(full);
   } catch {
     return false;
   }
@@ -174,7 +203,7 @@ export function assertRealpathContained(root, rel) {
   if (realRoot === null) return null;
   let realFull;
   try {
-    realFull = fs.realpathSync(full);
+    realFull = canonicalPath(full);
   } catch {
     return null; // target doesn't exist / unreadable — nothing safe to act on
   }
@@ -296,7 +325,7 @@ export function realpathParentContained(root, full) {
   if (realRoot === null) return false;
   let realParent;
   try {
-    realParent = fs.realpathSync(path.dirname(full));
+    realParent = canonicalPath(path.dirname(full));
   } catch {
     return false;
   }
