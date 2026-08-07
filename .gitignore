@@ -8,3 +8,6 @@ packages/harness/assets/
 
 # Retired eval tree — local run leftovers stay untracked
 evals/
+
+# SDD working state — never committed
+.superpowers/
