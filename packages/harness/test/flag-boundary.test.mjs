@@ -109,25 +109,35 @@ test('CLI: `bogus --json` (pre-boundary) still emits the JSON error envelope', (
 
 // --- e2e: --no-events after `--` must not suppress event writing ----------
 
+// `cmdKnowledge` resolves a copilot home on every path, so an un-isolated run
+// resolves the developer's real `~/.copilot`. Pinning it to a temp dir keeps
+// these two runs as hermetic as the `status` runs above, and keeps them that
+// way if the bare-`knowledge` path ever starts reading from that home.
 test('CLI: `knowledge -- --no-events` still writes events.jsonl (post-boundary --no-events is inert)', () => {
   const workspace = tempDir('flag-boundary-events-ws-');
-  const res = runHarness(['knowledge', '--workspace', workspace, '--', '--no-events']);
+  const copilotHome = tempDir('flag-boundary-events-home-');
+  const res = runHarness(['knowledge', '--workspace', workspace, '--copilot-home', copilotHome, '--', '--no-events']);
   assert.equal(res.status, 0, res.stderr);
   assert.ok(fs.existsSync(eventPath(workspace)), 'events must still be written — the post-boundary flag is content, not a control');
 });
 
 test('CLI: `knowledge --no-events` (pre-boundary, control case) suppresses events as always', () => {
   const workspace = tempDir('flag-boundary-noevents-ws-');
-  const res = runHarness(['knowledge', '--no-events', '--workspace', workspace]);
+  const copilotHome = tempDir('flag-boundary-noevents-home-');
+  const res = runHarness(['knowledge', '--no-events', '--workspace', workspace, '--copilot-home', copilotHome]);
   assert.equal(res.status, 0, res.stderr);
   assert.equal(fs.existsSync(eventPath(workspace)), false);
 });
 
 // --- e2e: --dry-run after `--` must not suppress writes -------------------
 
+// `runInitRepo` scans the copilot home for episodes (collectEpisodes,
+// consolidateStatus), so an un-isolated run reads the developer's real
+// `~/.copilot/knowledge` and the result varies by machine.
 test('CLI: `init-repo -- --dry-run` performs real writes (post-boundary --dry-run is inert)', () => {
   const workspace = tempDir('flag-boundary-dryrun-ws-');
-  const res = runHarness(['init-repo', '--workspace', workspace, '--', '--dry-run']);
+  const copilotHome = tempDir('flag-boundary-dryrun-home-');
+  const res = runHarness(['init-repo', '--workspace', workspace, '--copilot-home', copilotHome, '--', '--dry-run']);
   assert.equal(res.status, 0, res.stderr);
   assert.ok(fs.existsSync(path.join(workspace, '.harness')), 'init-repo must really initialize — post-boundary --dry-run is content');
 });
@@ -137,7 +147,8 @@ test('CLI: `init-repo -- --dry-run` performs real writes (post-boundary --dry-ru
 test('CLI: `init-repo --workspace A -- --workspace B` initializes A, never B', () => {
   const wsA = tempDir('flag-boundary-wsa-');
   const wsB = tempDir('flag-boundary-wsb-');
-  const res = runHarness(['init-repo', '--workspace', wsA, '--', '--workspace', wsB]);
+  const copilotHome = tempDir('flag-boundary-wsab-home-');
+  const res = runHarness(['init-repo', '--workspace', wsA, '--copilot-home', copilotHome, '--', '--workspace', wsB]);
   assert.equal(res.status, 0, res.stderr);
   assert.ok(fs.existsSync(path.join(wsA, '.harness')), 'the pre-boundary workspace is the real one');
   assert.equal(fs.existsSync(path.join(wsB, '.harness')), false, 'the post-boundary workspace token must be inert');
@@ -145,9 +156,12 @@ test('CLI: `init-repo --workspace A -- --workspace B` initializes A, never B', (
 
 // --- e2e: bespoke argv.includes() sites (consolidate --rebuild) -----------
 
+// `consolidate`'s debt count is computed over episodes collected from the
+// copilot home as well as the workspace — isolated for the same reason.
 test('CLI: `consolidate -- --rebuild --yes` treats the post-boundary tokens as content — the default status view runs', () => {
   const workspace = tempDir('flag-boundary-consolidate-ws-');
-  const res = runHarness(['consolidate', '--workspace', workspace, '--json', '--', '--rebuild', '--yes']);
+  const copilotHome = tempDir('flag-boundary-consolidate-home-');
+  const res = runHarness(['consolidate', '--workspace', workspace, '--copilot-home', copilotHome, '--json', '--', '--rebuild', '--yes']);
   assert.equal(res.status, 0, res.stderr);
   const body = JSON.parse(res.stdout);
   // The default --status shape (debt/threshold), not the rebuild result

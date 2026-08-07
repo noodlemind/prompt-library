@@ -461,7 +461,8 @@ export async function dispatch(argv, ctx = {}) {
   }
   // P1.6 (carry-list, AC7 widening): ctx.events now attaches on every path,
   // including the legacy ledger/--json default — EXCEPT `entry.instrument
-  // === false`. The one entry that opts out today is `events` itself: its
+  // === false`. TWO entries opt out today, `events` and `report`, for the
+  // same structural reason. `events`: its
   // own handler's whole job is "read and summarize everything in
   // events.jsonl", so instrumenting its OWN dispatch would append that
   // very invocation's command.start to the file an instant before the
@@ -1205,6 +1206,18 @@ registerCommand({
       // See the `verbs` note above: green|amber|red is this flag's value
       // enum, which the palette picks from — not three plan-new verbs.
       { name: '--risk', type: 'string', valueName: 'green|amber|red', description: 'risk rating (default green)', required: false, default: null, tui: 'prompt' },
+      // cmdPlanNew reads --status and passes it straight to buildPlanSkeleton
+      // (lib/plan-new.mjs), which writes it as the plan's status frontmatter;
+      // undeclared, strict validateArgs rejected a working invocation with
+      // `unknown flag: --status` before the handler ever ran. `cli-only`, not
+      // `prompt`: buildPlanSkeleton already picks the right status for a fresh
+      // plan (in-progress, or blocked-capability with --gap), so a palette user
+      // scaffolding one must never be asked to name it — this is the override
+      // escape hatch for a caller re-creating a plan mid-lifecycle, the same
+      // call --stdout above makes.
+      // The value enum lives in the description, like --type above: seven plan
+      // statuses inline would swamp the generated usage signature.
+      { name: '--status', type: 'string', valueName: 'name', description: 'open|planned|in-progress|review|done|blocked-capability|needs-info (default in-progress, or blocked-capability with --gap)', required: false, default: null, tui: 'cli-only' },
     ],
   },
   handler: cmdPlanNew,

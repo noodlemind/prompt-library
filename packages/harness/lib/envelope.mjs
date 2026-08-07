@@ -187,7 +187,16 @@ export function createJsonlStream(stream, { schema = ENVELOPE_SCHEMA_VERSION, re
    * has no event interface (a plain in-memory test sink). */
   function drained() {
     if (lastWriteOk || typeof stream.once !== 'function') return Promise.resolve();
-    return new Promise((resolve) => stream.once('drain', resolve));
+    // Clear the backpressure flag as the wait resolves: 'drain' means the
+    // stream is writable again, so the recorded `false` is stale. Left set, a
+    // SECOND drained() with no write in between would wait on a 'drain' that
+    // can never fire (the stream is already empty) and hang the caller
+    // forever. Today cmdVerify calls this once, so that hang is latent — this
+    // makes the emitter safe for the next caller rather than relying on one.
+    return new Promise((resolve) => stream.once('drain', () => {
+      lastWriteOk = true;
+      resolve();
+    }));
   }
 
   return {

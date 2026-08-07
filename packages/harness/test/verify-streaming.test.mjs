@@ -267,6 +267,37 @@ test('verify --output jsonl streams start/progress/row events plus a terminal re
   assert.equal(terminal.exitCode, 0);
 });
 
+// A stream that emitted `start` must always emit a terminal `result` row
+// (lib/envelope.mjs's contract). `jsonl.start(...)` is written before
+// runVerify, so a throwing runVerify used to leave the error on stderr and the
+// stdout stream unterminated — a consumer reading rows waited forever. The
+// failure here is real and reachable: `.harness/evidence` occupied by a FILE
+// makes writeEvidence's mkdir throw from inside runVerify (the same shape as a
+// read-only or full filesystem).
+test('verify --output jsonl still terminates the stream with a result row when runVerify throws', () => {
+  const workspace = tempDir('verify-stream-jsonl-throw-');
+  const plan = writeVersionedPlan(workspace, { required: ['unit-tests'] });
+  writeChecks(workspace, { 'unit-tests': { command: [process.execPath, '-e', 'process.exit(0)'] } });
+  initGit(workspace);
+  fs.mkdirSync(path.join(workspace, '.harness'), { recursive: true });
+  fs.writeFileSync(path.join(workspace, '.harness', 'evidence'), 'not a directory\n');
+
+  const res = spawnSync(
+    process.execPath,
+    [binPath, 'verify', '--plan', plan, '--base', 'HEAD', '--workspace', workspace, '--output', 'jsonl'],
+    { encoding: 'utf8' }
+  );
+  assert.notEqual(res.status, 0, 'the run still fails — only the stream framing changes');
+  const rows = res.stdout.trim().split('\n').filter(Boolean).map((line) => JSON.parse(line));
+  assert.equal(rows[0]?.event, 'start');
+  const terminal = rows.at(-1);
+  assert.equal(terminal.event, 'result', `the stream must terminate, got: ${res.stdout}`);
+  assert.equal(terminal.status, 'failed');
+  assert.equal(terminal.outcome, 'inconclusive');
+  assert.match(terminal.message, /evidence/, 'the terminal row carries the failure reason');
+  assert.match(res.stderr, /EEXIST|ENOTDIR|evidence/, 'the human/JSON error surface on stderr is unchanged');
+});
+
 test('verify --output jsonl reports a timed-out check as a distinct row and terminal status, and exits 8', () => {
   const workspace = tempDir('verify-stream-jsonl-timeout-');
   const plan = writeVersionedPlan(workspace, { required: ['slow-check'] });

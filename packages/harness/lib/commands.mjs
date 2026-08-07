@@ -730,7 +730,22 @@ export async function cmdVerify(argv, ctx = {}) {
     };
   }
 
-  const result = await runVerify({ workspace, flags, signal, onEvent });
+  // A JSONL stream that has emitted `start` MUST also emit a terminal
+  // `result` row (lib/envelope.mjs's documented contract) — otherwise a
+  // throwing runVerify leaves the error envelope on stderr and a stdout
+  // consumer blocked on a stream that never terminates. The row carries the
+  // failure, then the error rethrows untouched so bin/harness.mjs's own
+  // rendering, exit code, and telemetry are unchanged.
+  let result;
+  try {
+    result = await runVerify({ workspace, flags, signal, onEvent });
+  } catch (error) {
+    if (streaming) {
+      jsonl.result({ status: 'failed', outcome: 'inconclusive', message: error?.message || String(error) });
+      await jsonl.drained();
+    }
+    throw error;
+  }
   const cancelled = result.outcome === 'cancelled';
   // Fix-wave Important #5: explicit run-outcome precedence for the exit
   // code — cancelled (130) > timed-out (8) > the enforcement mapping.

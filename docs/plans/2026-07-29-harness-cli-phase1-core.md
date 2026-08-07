@@ -18,7 +18,7 @@ expected_outputs:
   - "Secret redaction pass on emitted and persisted output"
   - "Central event registry with actor/execution metadata"
 success_criteria:
-  - "AC1–AC9 below all pass via named checks"
+  - "AC1–AC10 below all pass via named checks"
 verification:
   required: [harness-tests, prompt-contracts, build-assets]
   criteria:
@@ -61,9 +61,9 @@ First phase of the Harness CLI Workbench plan (`docs/architecture/harness-cli-wo
 
 ## Intent Contract
 
-- **Goal:** every harness command dispatches through one registry with consistent human/JSON/JSONL output, a unified error/status model (distinct `cancelled` and `timed out` outcomes), secret redaction, and an async cancellable runner — with zero consumer breakage.
-- **Expected outputs:** see frontmatter `expected_outputs`.
-- **Success criteria:** AC1–AC9.
+- **Goal:** every harness command dispatches through one registry with a unified error/status model (distinct `cancelled` and `timed-out` outcomes), secret redaction, and an async cancellable runner — with zero consumer breakage. The `--output` lanes land on the lane-bearing commands and are refused explicitly everywhere else; see the AC3 scope amendment below for what the frontmatter `intent`'s "every harness command … three output lanes" actually shipped as.
+- **Expected outputs:** see frontmatter `expected_outputs`, read against the AC3 amendment for the lane-rendering entry.
+- **Success criteria:** AC1–AC10.
 - **Verification checks:** `harness-tests`, `prompt-contracts`, `build-assets` (`.github/harness/checks.yaml`).
 - **Organizational objective:** foundation for the five-release Harness CLI Workbench sequence; prerequisite for making the harness public.
 
@@ -78,10 +78,10 @@ First phase of the Harness CLI Workbench plan (`docs/architecture/harness-cli-wo
 - [x] **AC1** Every existing command — including `remember`, `learnings`, `learning …`, `consolidate`, `knowledge`, `eval-knowledge` — dispatches through the central registry; no hard-coded command switch remains in `bin/harness.mjs`.
 - [x] **AC2** Strict argument parsing: unknown flags are rejected with a structured error; help output is consistent and registry-generated.
 - [x] **AC3** Lane-bearing commands (`orient`, `learnings`, `status`; `verify` streams JSONL) emit the versioned JSON envelope; every other command rejects `--output` lanes with a structured `E_USAGE` error rather than silently degrading; lanes expand per command in Phase 2 as `resultOf` producers land. Existing JSON shapes byte-preserved, `prompt-contracts` green. *(Scope amended at final review 2026-08-06 — original text said "every command"; delivered surface + explicit-error behavior recorded honestly. Reverse by expanding `resultOf` to all commands if preferred.)*
-- [x] **AC4** Unified error/status model with stable exit codes, including distinct `cancelled` and `timed out` terminal outcomes.
+- [x] **AC4** Unified error/status model with stable exit codes, including distinct `cancelled` and `timed-out` terminal outcomes.
 - [x] **AC5** Blocking process execution is replaced by an async runner with timeout, Ctrl-C cancellation, and descendant-process termination.
 - [x] **AC6** A secret-redaction pass runs on command output before emission and before any persistence (events, artifacts).
-- [x] **AC7** Lifecycle events flow through a central event registry carrying actor and execution metadata.
+- [x] **AC7** Dispatch-level lifecycle events flow through the central event registry (`lib/event-registry.mjs`) carrying actor and execution metadata — every registered command's `command.start`/`command.result` bracketing plus the writers migrated in P1.5. The ~20 legacy `writeEvent` call sites still emitting domain events straight through `lib/events.mjs` (`lib/commands.mjs`, no actor metadata) are explicitly outside this criterion. *(Scope amended at final review 2026-08-06 — original text said "lifecycle events" unqualified, which claimed those call sites too; the migration was deferred with ruling to Phase 4a — debt table in `docs/architecture/harness-cli-workbench-delivery.md`, closed by its Phase 4a AC6. Reverse the narrowing by migrating them here instead.)*
 - [x] **AC8** `harness verify` streams check output and can be cancelled mid-run, recording the `cancelled` outcome.
 - [x] **AC9** Full regression: all existing tests pass and `build-assets` succeeds; no hydrated-skill caller of `orient`/`recall`/`get` observes a shape change without a version bump.
 - [x] **AC10** Every lane-bearing command ships an agent-lane rendering per the output-lanes contract — and any command gaining a `resultOf` producer must ship all three lanes (`docs/architecture/harness-cli-workbench.md`): hard local budget with item-boundary truncation, deterministic (no model pass), `inertLine` + redaction hardening on retrieved text, and rendered bytes emitted with the command's event; envelope output never enters model context.
@@ -169,7 +169,7 @@ Named checks only: `harness-tests`, `prompt-contracts`, `build-assets` (argv arr
 
 ## Review Findings
 
-Final whole-branch review (2026-08-06, architecture + security + patterns lenses): verdict NOT READY with a cheap fix list, all addressed in the final fix wave — 2 Critical AC6 gaps (json-envelope lane and evidence artifacts unredacted), lanes-scope honesty (structured `E_USAGE` on unsupported `--output` + AC3/AC10 amendment), tool-contract catalog drift, 3 small hardening minors. Explicitly deferred with ruling: ~20 legacy `writeEvent` call sites bypass the event registry (no actor metadata; mitigated by `safeChecks`) — migrates with the Phase 4a run journal. Deferred-minors triage: 8 OK-to-defer, 1 folded into the doc fix.
+Final whole-branch review (2026-08-06, architecture + security + patterns lenses): verdict NOT READY with a cheap fix list, all addressed in the final fix wave — 2 Critical AC6 gaps (json-envelope lane and evidence artifacts unredacted), lanes-scope honesty (structured `E_USAGE` on unsupported `--output` + AC3/AC10 amendment), tool-contract catalog drift, 3 small hardening minors. Explicitly deferred with ruling: ~20 legacy `writeEvent` call sites bypass the event registry (no actor metadata; mitigated by `safeChecks`) — migrates with the Phase 4a run journal, and AC7 above is narrowed to the dispatch paths actually covered rather than claiming them. Deferred-minors triage: 8 OK-to-defer, 1 folded into the doc fix.
 
 ## Agent Journal
 

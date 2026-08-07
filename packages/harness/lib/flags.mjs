@@ -153,10 +153,25 @@ export function parseFlags(argv) {
     else if (a === '--autonomy') flags.autonomy = scan[++i];
     else if (a.startsWith('--copilot-home=')) flags.copilotHome = a.split('=')[1];
     else if (a === '--copilot-home') flags.copilotHome = scan[++i];
+    // --target is the ONE separated-value flag in this loop that DEREFERENCES
+    // its value token (`.split(',')`) instead of just assigning it, so a
+    // missing value threw a TypeError from inside the parser — which
+    // bin/harness.mjs renders as E_UNEXPECTED/exit 1 instead of the usage
+    // error every other missing value produces. Reachable via `--target` as
+    // the last token AND via `install --target -- x`, where the boundary slice
+    // above legitimately truncates the value away. Guarded exactly like
+    // --since/--branch/--ids below; the sibling value flags either assign
+    // `undefined` harmlessly (flag treated as absent) or validate first
+    // (parsePhase/parseLayer/parseMinScore/parsePositiveInt all reject
+    // `undefined`), so none of them carry this hazard.
     else if (a.startsWith('--target=')) {
-      flags.targets = new Set(a.split('=')[1].split(',').map((t) => t.trim()));
+      const value = a.split('=')[1];
+      if (!value) invalidFlag('--target', value, 'requires a comma-separated target list');
+      flags.targets = new Set(value.split(',').map((t) => t.trim()));
     } else if (a === '--target') {
-      flags.targets = new Set(scan[++i].split(',').map((t) => t.trim()));
+      const next = scan[++i];
+      if (next === undefined || next.startsWith('--')) invalidFlag('--target', next, 'requires a comma-separated target list');
+      flags.targets = new Set(next.split(',').map((t) => t.trim()));
     } else if (a.startsWith('--plan=')) flags.plan = a.split('=').slice(1).join('=');
     else if (a === '--plan') flags.plan = scan[++i];
     else if (a.startsWith('--base=')) flags.base = a.split('=').slice(1).join('=');

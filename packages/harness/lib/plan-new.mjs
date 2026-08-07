@@ -135,13 +135,18 @@ export async function cmdPlanNew(argv) {
   let dryRun = false;
   let toStdout = false;
 
-  for (let i = 0; i < argv.length; i++) {
-    const a = argv[i];
-    const next = () => argv[++i];
-    // Fix-wave C1: honor the literal-argument boundary, matching
-    // lib/flags.mjs#parseFlags and lib/registry.mjs#validateArgs — nothing
-    // after a bare `--` is ever interpreted as a flag.
-    if (a === '--') break;
+  // Fix-wave C1: honor the literal-argument boundary, matching
+  // lib/flags.mjs#parseFlags and lib/registry.mjs#validateArgs — nothing after
+  // a bare `--` is ever interpreted as a flag. Sliced BEFORE the loop, not
+  // broken out of inside it, for the exact reason parseFlags gives: a mid-loop
+  // `break` cannot stop a value flag from having already consumed the literal
+  // `--` via `next()`. Verified pre-fix: `--workspace -- --json` resolved the
+  // workspace to `--` AND then re-interpreted the post-boundary `--json`.
+  const boundary = argv.indexOf('--');
+  const scan = boundary === -1 ? argv : argv.slice(0, boundary);
+  for (let i = 0; i < scan.length; i++) {
+    const a = scan[i];
+    const next = () => scan[++i];
     if (a === '--type') opts.type = next();
     else if (a === '--slug') opts.slug = next();
     else if (a === '--title') opts.title = next();

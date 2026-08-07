@@ -299,3 +299,30 @@ test('createJsonlStream: a plain in-memory sink (no once) never hangs drained()'
   await jsonl.drained();
   assert.equal(s.chunks.length, 1);
 });
+
+// The backpressure flag recorded `false` and never got cleared, so a SECOND
+// drained() with no write in between waited on a 'drain' the (already empty)
+// stream can never emit again — a permanent hang for the next caller that
+// awaits twice. Latent while cmdVerify was the only caller; pinned here so it
+// stays fixed as callers are added.
+test('createJsonlStream: a second drained() after the first resolved returns immediately', async () => {
+  const emitter = new EventEmitter();
+  const stream = { write: () => false, once: (event, cb) => emitter.once(event, cb) };
+  const jsonl = createJsonlStream(stream);
+  jsonl.row({ line: 'x' });
+
+  const first = jsonl.drained();
+  emitter.emit('drain');
+  await first;
+
+  let hangTimer;
+  const hang = new Promise((_, reject) => {
+    hangTimer = setTimeout(() => reject(new Error('a second drained() hung waiting for a drain that can never fire')), 500);
+  });
+  try {
+    await Promise.race([jsonl.drained(), hang]);
+  } finally {
+    clearTimeout(hangTimer);
+  }
+  assert.equal(emitter.listenerCount('drain'), 0, 'no stale drain listener is left armed');
+});

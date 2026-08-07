@@ -1622,6 +1622,51 @@ test('harnessRunnerSource embeds INSTALL_FIX_HINT via JSON.stringify, keeping th
   assert.equal(check.status, 0, check.stderr);
 });
 
+// The generated runner injects a default `--workspace <ws>` when the caller
+// didn't pass one. Detection reads only the pre-boundary slice (v3), but the
+// injection itself used to APPEND to args — so with a caller-supplied `--` the
+// injected flag landed after the boundary, where lib/flags.mjs#parseFlags never
+// looks. `run.mjs learnings --why -- --json` produced free-text content of
+// `--json --workspace <ws>` and a workspace that silently fell back to cwd.
+test('the generated runner injects the default --workspace BEFORE a caller-supplied `--` boundary', () => {
+  const workspace = tempDir('runner-inject-ws-');
+  fs.mkdirSync(path.join(workspace, '.harness'), { recursive: true });
+  const runnerPath = path.join(workspace, '.harness', 'run.mjs');
+  fs.writeFileSync(runnerPath, harnessRunnerSource());
+  // Stand in for the real harness bin: echo back exactly the argv it received.
+  const argvStub = path.join(workspace, 'argv-stub.mjs');
+  fs.writeFileSync(argvStub, 'process.stdout.write(JSON.stringify(process.argv.slice(2)));\n');
+
+  const withBoundary = spawnSync(process.execPath, [runnerPath, 'learnings', '--why', '--', '--json'], {
+    encoding: 'utf8',
+    env: { ...process.env, HARNESS_BIN: argvStub },
+  });
+  assert.equal(withBoundary.status, 0, withBoundary.stderr);
+  const argv = JSON.parse(withBoundary.stdout);
+  const injected = argv.indexOf('--workspace');
+  const boundary = argv.indexOf('--');
+  assert.notEqual(injected, -1, 'the default workspace is still injected');
+  assert.ok(injected < boundary, `--workspace must precede the boundary, got ${JSON.stringify(argv)}`);
+  assert.deepEqual(argv.slice(boundary), ['--', '--json'], 'the caller\'s literal content is untouched');
+  assert.notEqual(argv[injected + 1], '--', 'the workspace value is a path, not the boundary token');
+
+  // No boundary: the appended form is unchanged.
+  const noBoundary = spawnSync(process.execPath, [runnerPath, 'learnings'], {
+    encoding: 'utf8',
+    env: { ...process.env, HARNESS_BIN: argvStub },
+  });
+  assert.equal(noBoundary.status, 0, noBoundary.stderr);
+  assert.deepEqual(JSON.parse(noBoundary.stdout).slice(0, 2), ['learnings', '--workspace']);
+
+  // An explicit pre-boundary --workspace still suppresses the injection.
+  const explicit = spawnSync(process.execPath, [runnerPath, 'learnings', '--workspace', workspace, '--', '--json'], {
+    encoding: 'utf8',
+    env: { ...process.env, HARNESS_BIN: argvStub },
+  });
+  assert.equal(explicit.status, 0, explicit.stderr);
+  assert.equal(JSON.parse(explicit.stdout).filter((a) => a === '--workspace').length, 1, 'no second --workspace is injected');
+});
+
 test('writeHarnessRunner regenerates a runner stamped with an older @harness-runner-version', () => {
   // Pinned to the pre-fix runner version (2): the JSON.stringify quoting fix
   // above must ship with a version bump, or every already-hydrated

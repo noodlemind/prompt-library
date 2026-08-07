@@ -172,6 +172,7 @@ export function runProcess({
     let timeoutTimer = null;
     let killGraceTimer = null;
     let groupReapTimer = null;
+    let settleDeadlineTimer = null;
     // Set once cancellation/timeout is requested; wins over whatever exit
     // code the killed tree happens to report (AC4/AC5 hard contract).
     let outcomeStatus = null;
@@ -199,6 +200,7 @@ export function runProcess({
       // hang.
       if (killGraceTimer) clearTimeout(killGraceTimer);
       if (groupReapTimer) clearTimeout(groupReapTimer);
+      if (settleDeadlineTimer) clearTimeout(settleDeadlineTimer);
     }
 
     // Fix-wave Important #7 (round 2): a cancelled/timed-out run must not
@@ -284,6 +286,20 @@ export function runProcess({
       if (outcomeStatus) return; // already terminating for the other reason
       outcomeStatus = status;
       safeKill('SIGTERM');
+      // Absolute settlement backstop for the always-resolves contract. Every
+      // other settlement path hangs off `child.on('close')`, which fires only
+      // once the child has exited AND its stdio pipes are closed — a
+      // descendant that inherited stdout/stderr and escaped the process group
+      // (setsid, double-fork) holds those pipes open, so 'close' never
+      // arrives, and terminateTree alone never settles anything. Bounded by
+      // the same two dials the ordinary terminated path already spends
+      // (SIGKILL escalation, then the group reap window), so a run that WOULD
+      // have settled normally never reaches this timer; it is cleared on
+      // 'close' below and again at settlement. Ref'd on purpose, like the
+      // escalation timer: it is the guarantee, not a background nicety.
+      settleDeadlineTimer = setTimeout(() => {
+        finish({ status, exitCode: null, signalName: null });
+      }, killGraceMs + groupReapTimeoutMs);
       if (platform === 'win32') return; // taskkill /F is already unconditional
       if (!Number.isInteger(child.pid) || child.pid <= 0) return; // nothing to escalate against
       // Ref'd on purpose (fix-wave Important #7 round 2): the SIGKILL
@@ -339,6 +355,15 @@ export function runProcess({
     });
 
     child.on('close', (exitCode, signalName) => {
+      // 'close' arrived, so the real exit code is known and settlement is
+      // already bounded (immediately, or by settleAfterGroupDeath's own
+      // deadline). Disarm the backstop so it can never pre-empt that with a
+      // null-exit-code result mid-reap; it exists only for the case where this
+      // event never fires at all.
+      if (settleDeadlineTimer) {
+        clearTimeout(settleDeadlineTimer);
+        settleDeadlineTimer = null;
+      }
       const partial = {
         status: outcomeStatus || (exitCode === 0 ? 'ok' : 'failed'),
         exitCode,

@@ -6,17 +6,23 @@ Phase 1 (CLI core) shipped the kernel: command registry, three output lanes, asy
 
 **Plan-file convention.** This repository keeps at most one dated plan under `docs/plans/` at a time (enforced by the `prompt-contracts` check). Each phase gets its own dated plan file when its PR opens, derived from the corresponding section here, and that file is removed after merge. This document is the durable source those transient plans are cut from.
 
+**Standing exception (as of the Phase 1 branch).** Two dated plans exist right now — `2026-07-29-harness-cli-phase1-core.md` for this phase, and `2026-08-06-feat-harness-evolution-phase1-plan.md`, which came in from `main` with the harness-evolution merge (#42) and is still carrying unresolved follow-on work rather than being cleaned up. The one-plan assertion in `prompt-contracts` is therefore red on this branch, deliberately: the accepted cost of keeping a live plan that still has work in it is one failing contract, and deleting a plan file to turn the check green would trade a visible policy failure for an invisible loss of state. The check returns to green when the evolution plan is retired, without any change to the convention above. Recorded here so the stated policy and the observed check result do not silently contradict each other.
+
 ## Sequence and dependencies
 
 ```text
-Phase 1 ✅ CLI core ──▶ Phase 2 knowledge operator ──▶ Phase 3 governed execution
-                                                              │
-                                            Phase 4a durable runs ──▶ Phase 4b TUI
-                                                              │
-                                                    Phase 5 resources & plugins
+Phase 1 ✅ CLI core
+   │
+   ├──▶ Phase 2 knowledge operator ──┐
+   │                                 ├──▶ Phase 4b TUI
+   ├──▶ Phase 4a durable runs ───────┘
+   │
+   ├──▶ Phase 3 governed execution
+   │
+   └──▶ Phase 5 resources & plugins
 ```
 
-Phase 3 depends on Phase 1's runner and side-effect metadata, not on Phase 2. Phase 4a depends on Phase 1's event registry. Phase 4b depends on 4a (run views need the journal), on **Phase 2's command index** (the palette reads it and adds no metadata of its own), and reads better after Phase 3 (execution views need something to execute). Phase 5 depends on the existing hydration pipeline plus Phase 1's registry.
+Every branch hangs off Phase 1, and the only hard join is 4b. Phase 3 depends on Phase 1's runner and side-effect metadata, not on Phase 2 — it can be built the moment the kernel lands. The same is true of Phase 4a, which needs Phase 1's event registry and nothing later, and of Phase 5, which needs the existing hydration pipeline plus Phase 1's registry. Only the TUI joins two lines: 4b depends on 4a (run views need the journal) *and* on **Phase 2's command index** (the palette reads it and adds no metadata of its own), and it reads better after Phase 3 (execution views need something to execute) — a sequencing preference, not a dependency, which is why the diagram leaves that edge out.
 
 ## Debt carried out of Phase 1
 
@@ -26,7 +32,7 @@ These are the deferred items whose natural home is a later phase. Each phase's p
 |---|---|---|
 | Expand `resultOf` producers to all commands (reverses the AC3 lane-scope amendment) | P1.2 / final review | Phase 2 |
 | Surface quarantined learnings in search/tree results | P1.4 / M4 backlog | Phase 2 |
-| ~20 legacy `writeEvent` call sites bypass the event registry (no actor metadata) | P1.5 review, deferred with ruling | Phase 4a |
+| ~20 legacy `writeEvent` call sites bypass the event registry (no actor metadata) — the scope Phase 1's AC7 was narrowed to exclude | P1.5 review, deferred with ruling | Phase 4a |
 | `events.jsonl` 200-event cap and retention contract | P1.5 brief (explicitly out of scope) | Phase 4a |
 | `legacyResultForStatus` maps cancelled/timed-out to `warn`, hiding them from `--failures` | P1.5 review | Phase 4a |
 | `learningsResultOf` duplication with `cmdLearnings` | P1.6 judgment call | Phase 2 |
@@ -111,7 +117,7 @@ Three registry additions, all internal and additive:
 **Acceptance criteria (draft).**
 1. Every run carries a stable id; the journal is append-only and never rewritten.
 2. Journal entries cover command start/progress/result, plan and gate, execution and mutation, verification and evidence, cancellation and timeout.
-3. Run status uses the unified vocabulary incl. `cancelled` and `timed out` as distinct terminal states.
+3. Run status uses the unified vocabulary incl. `cancelled` and `timed-out` as distinct terminal states.
 4. `resume` restarts only from an explicitly safe boundary; interrupted commands are never auto-replayed.
 5. Runs are queryable by status, command, host, plan, and date.
 6. The ~20 legacy `writeEvent` call sites migrate onto the event registry, gaining actor metadata (Phase 1 deferral closed).

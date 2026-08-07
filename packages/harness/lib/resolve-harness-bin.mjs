@@ -80,7 +80,10 @@ export function agentHarnessCommand(resolved) {
   return `node "${resolved.bin}"`;
 }
 
-export const RUNNER_VERSION = 3;
+// Bumped to 4 with the boundary-aware --workspace INJECTION fix below (v3
+// fixed only the detection): writeHarnessRunner rewrites any runner stamped
+// with an older version, so already-installed workspaces pick the fix up.
+export const RUNNER_VERSION = 4;
 
 export function harnessRunnerSource() {
   const home = os.homedir().replace(/\\/g, '/');
@@ -135,7 +138,16 @@ const args = process.argv.slice(2);
 const boundary = args.indexOf('--');
 const flagArgs = boundary === -1 ? args : args.slice(0, boundary);
 const hasWorkspace = flagArgs.includes('--workspace');
-const finalArgs = hasWorkspace ? args : [...args, '--workspace', workspace];
+// The injection must land BEFORE the boundary too, for the same reason the
+// detection reads before it: lib/flags.mjs#parseFlags slices argv at \`--\`, so
+// an appended --workspace would never be parsed — it would just become two
+// spurious literal tokens in the command's free-text content
+// (\`learnings --why -- --json\` -> content \`--json --workspace <ws>\`).
+const finalArgs = hasWorkspace
+  ? args
+  : boundary === -1
+    ? [...args, '--workspace', workspace]
+    : [...args.slice(0, boundary), '--workspace', workspace, ...args.slice(boundary)];
 const spawnArgs = target.args.length
   ? [...target.args, ...finalArgs]
   : finalArgs;

@@ -19,19 +19,28 @@ Harness owns deterministic capabilities; the host owns LLM reasoning. Constraint
 - **Gate (vocabulary):** a gate is the existing plan/verification gate mechanism (`lib/gate.mjs`) that blocks lifecycle transitions until named checks and evidence pass. Later phases expose and record gates; they do not reinvent them.
 - **Enforcement classes:** every control in this plan is one of — **enforced** (blocks pre-execution), **detect-and-block** (best-effort detection that halts on trip), or **audit-only** (recorded, never blocks). Each control names its class where it is specified; "governed" always means at least detect-and-block.
 - **TUI boundary:** the TUI consumes the kernel in-process through the same command registry as the CLI — one behavior path, no separate implementation, no CLI shell-out requirement. This is the settled answer to the earlier SDK question; the CLI JSON/JSONL contracts serve out-of-process consumers on their program side (CI, hooks, Copilot, Codex) — the model side of any host consumes the agent lane per the output-lanes contract below.
-- **Three output lanes, produced at the source:** every command renders its one canonical result as ledger (human), envelope (programs/TUI), and agent (LLM) lanes — deterministically, never via a model pass, and never by converting one lane into another. See "Output lanes" below.
+- **Three output lanes, produced at the source:** every command renders its one canonical result as ledger (human), envelope (programs/TUI), and agent (LLM) lanes — deterministically, never via a model pass, and never by converting one lane into another. This is the target every command converges on, not a capability that already exists everywhere: Phase 1 shipped the lanes on `orient`, `learnings`, and `status` (plus JSONL streaming on `verify`), and every other command rejects `--output` with a structured `E_USAGE` error rather than degrading to ledger text. See "Output lanes" below.
 
 ## Output lanes: the three-audience contract
 
 Every workbench-dispatched command renders one canonical result three ways. All three
 renderings are deterministic CLI work — never a model pass. No output is ever converted
-from one audience's format into another's; each lane is produced at the source.
+from one audience's format into another's; each lane is produced at the source. The table
+below is the contract a command must satisfy once it produces a canonical result; a
+command joins the contract when it gains a `resultOf` producer.
 
 | Lane | Audience | Format | Contract |
 |---|---|---|---|
 | Ledger | Human | Styled ledger rows (`lib/style.mjs` conventions: glyph/key/value, truecolor → 256 → ASCII degradation) | What the TUI panes and plain terminal output render |
 | Envelope | Programs / TUI | Versioned JSON envelope; JSONL streaming for long-running operations | Summary scalars first, detail arrays after, so one payload serves both a one-line footer and an expanded view. Long operations stream row-per-event with distinct `cancelled` vs `timed-out` terminal outcomes |
 | Agent | LLM | Budgeted plain text | Token/byte-capped at the source; injection-hardened; byte-metered |
+
+**Delivered scope as of Phase 1.** `orient`, `learnings`, and `status` produce all three
+lanes; `verify` produces the ledger lane plus JSONL streaming (no `json-envelope`/`agent`
+of its own). Every other registered command has no `resultOf` producer yet and rejects
+`--output` with a structured `E_USAGE` error, so an unsupported lane fails loudly instead
+of quietly returning ledger text. Expanding `resultOf` to the remaining commands is Phase 2
+work — see the debt table and Phase 2 AC7 in `harness-cli-workbench-delivery.md`.
 
 ### Agent-lane requirements
 
@@ -261,7 +270,7 @@ Features:
   - inconclusive
   - blocked
   - cancelled
-  - timed out
+  - timed-out
 - Resume from an explicitly safe boundary
 - No automatic replay of interrupted commands
 - Evidence freshness against repository and plan digests
@@ -475,7 +484,7 @@ Implement:
 - Versioned JSON result mode
 - Versioned JSONL streaming mode
 - Agent-lane renderer: budgeted, hardened, metered plain-text rendering per command (see "Output lanes")
-- Unified error and status model, including distinct `cancelled` and `timed out` terminal outcomes with stable exit codes
+- Unified error and status model, including distinct `cancelled` and `timed-out` terminal outcomes with stable exit codes
 - Central event registry
 - Secret redaction
 - Async process runner
@@ -483,7 +492,7 @@ Implement:
 - Actor and execution metadata
 - Migrate all existing commands to the new command registry — including the M1–M4 knowledge commands; `.github/skills/references/harness-tool-contract.md` and the existing JSON shapes are the compatibility fixtures
 
-Done when every current command supports consistent ledger, envelope, and agent output, and `verify` can stream and cancel.
+Done when every current command dispatches through the registry with one canonical error and status model; the lane-bearing commands (`orient`, `learnings`, `status`, plus JSONL `verify`) support ledger, envelope, and agent output while every other command rejects `--output` with a structured `E_USAGE` error; and `verify` can stream and cancel. Extending the lanes to the remaining commands is Phase 2 work, tracked as the AC3 lane-scope amendment in the delivery plan's debt table.
 
 ## Phase 2 — Knowledge operator
 

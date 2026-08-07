@@ -81,28 +81,76 @@ jobs:
 
       # Redaction and descendant termination are the two win32 paths with the
       # least coverage, so they are exercised directly rather than inferred.
+      # Unlike the diagnostic steps above, these two are pass/fail assertions
+      # and they GATE the job — each writes an explicit verdict to
+      # $GITHUB_OUTPUT and the "Windows probe gate" step at the end turns any
+      # non-pass into a red job. `continue-on-error` stays on for ordering
+      # only: a failing probe must not skip the probe after it, the
+      # environment fingerprint, or the artifact upload. It no longer decides
+      # whether the job is green — the gate does, and it fails closed.
       - name: Redaction on Windows
+        id: redaction
         continue-on-error: true
         shell: pwsh
         env:
           MY_API_TOKEN: 'ghp_windowssmoketest0123456789abcdefghij'
         run: |
+          # GitHub prepends `$ErrorActionPreference = 'stop'` to every pwsh
+          # step. This probe is EXPECTED to exit nonzero — `learnings --why
+          # <unknown>` is an E_TARGET miss, verified exit 1 — and it redirects
+          # native stderr with 2>&1. Neither aborts the step on pwsh 7.4
+          # (`$PSNativeCommandUseErrorActionPreference` is $false there), but if
+          # a future runner image flips that default, an inherited 'stop' would
+          # kill this step on its own expected exit and leave the gate with no
+          # verdict. This step decides its own failure, below and explicitly.
+          $ErrorActionPreference = 'Continue'
+          New-Item -ItemType Directory -Force -Path win-output | Out-Null
           $ws = Join-Path $env:RUNNER_TEMP 'ws'
-          $out = & node packages/harness/bin/harness.mjs learnings --why $env:MY_API_TOKEN --workspace $ws 2>&1 | Out-String
+          # -Width is pinned: Out-String otherwise wraps at the console width,
+          # and a secret split across a wrap would slip past the match below.
+          $out = & node packages/harness/bin/harness.mjs learnings --why $env:MY_API_TOKEN --workspace $ws 2>&1 | Out-String -Width 4096
           Write-Host $out
           Add-Content -Path win-output/scenarios.txt -Value "`n=== redaction (ledger) ===`n$out"
-          if ($out -match 'ghp_windowssmoketest') {
-            Write-Host '::error::SECRET LEAKED in ledger output on Windows'
-            Add-Content -Path win-output/scenarios.txt -Value 'RESULT: LEAKED'
+
+          # TWO assertions, not one. "the raw token is absent" is worthless on
+          # its own — a probe that rendered nothing at all satisfies it. The
+          # mask must also be PRESENT, proving the token reached the ledger and
+          # came back masked. The marker is `«redacted:env:MY_API_TOKEN»` (the
+          # env-value rule fires before the github-token pattern because the
+          # token is exported to this step); only the ASCII middle is matched,
+          # so a console code page that mangles the guillemets cannot fake a
+          # failure.
+          $leaked = $out -match 'ghp_windowssmoketest'
+          $masked = $out -match 'redacted:'
+          if ($leaked) {
+            $verdict = 'fail'
+            $reason = 'SECRET LEAKED - the ledger printed the raw token, redaction did not hold on win32'
+          } elseif (-not $masked) {
+            $verdict = 'fail'
+            $reason = 'no redaction marker in the output - the token never reached the ledger, so "no leak" proves nothing'
           } else {
-            Write-Host 'redaction held on Windows'
-            Add-Content -Path win-output/scenarios.txt -Value 'RESULT: masked'
+            $verdict = 'pass'
+            $reason = 'the token reached the ledger and came back masked'
           }
+          Add-Content -Path $env:GITHUB_OUTPUT -Value "result=$verdict"
+          Add-Content -Path $env:GITHUB_OUTPUT -Value "reason=$reason"
+          Add-Content -Path win-output/scenarios.txt -Value "RESULT: $verdict - $reason"
+          if ($verdict -ne 'pass') {
+            Write-Host "::error title=Redaction on Windows::${reason}"
+            exit 1
+          }
+          Write-Host 'redaction held on Windows'
+          exit 0
 
       - name: Runner descendant termination via taskkill
+        id: cancellation
         continue-on-error: true
         shell: pwsh
         run: |
+          # See the note on the redaction step: an inherited 'stop' could abort
+          # this step on the probe's own nonzero exit — the exact signal the
+          # gate needs to read.
+          $ErrorActionPreference = 'Continue'
           New-Item -ItemType Directory -Force -Path win-output | Out-Null
           $script = @'
           import { runProcess } from './packages/harness/lib/runner.mjs';
@@ -195,12 +243,38 @@ jobs:
           console.log('runner cancellation terminated the whole tree');
           '@
           Set-Content -Path win-cancel.mjs -Value $script
-          $out = & node win-cancel.mjs 2>&1 | Out-String
+          $out = & node win-cancel.mjs 2>&1 | Out-String -Width 4096
           $code = $LASTEXITCODE
           Write-Host $out
           Write-Host "[exit $code]"
           Add-Content -Path win-output/scenarios.txt -Value "`n=== runner cancellation (taskkill path) ===`n$out[exit $code]"
-          if ($code -ne 0) { Write-Host '::error::runner descendant termination probe FAILED — see the JSON above' }
+          if ($code -eq 0) {
+            Add-Content -Path $env:GITHUB_OUTPUT -Value 'result=pass'
+            Add-Content -Path $env:GITHUB_OUTPUT -Value 'reason=cancellation terminated the whole process tree, grandchild included'
+            Add-Content -Path win-output/scenarios.txt -Value 'RESULT: pass'
+            exit 0
+          }
+          # The probe prints one `EXPECTED ... GOT ...` line per broken
+          # assertion. Carrying them into the gate is what makes the job
+          # summary say WHICH guarantee broke rather than just showing a red X.
+          # Unanchored on purpose: PowerShell may prefix native stderr lines
+          # when rendering them as error records, and losing the reason to a
+          # formatting detail would defeat the point.
+          $expected = @($out -split "`r?`n" | Where-Object { $_ -match 'EXPECTED ' })
+          if ($expected.Count -gt 0) {
+            $reason = ($expected -join ' | ')
+          } else {
+            $reason = "the probe exited $code without reporting an assertion - read the captured output"
+          }
+          # $GITHUB_OUTPUT is line-oriented `key=value`; a stray newline in the
+          # value would be read as another key.
+          $reason = ($reason -replace '[\r\n]+', ' ').Trim()
+          if ($reason.Length -gt 400) { $reason = $reason.Substring(0, 400) }
+          Add-Content -Path $env:GITHUB_OUTPUT -Value 'result=fail'
+          Add-Content -Path $env:GITHUB_OUTPUT -Value "reason=$reason"
+          Add-Content -Path win-output/scenarios.txt -Value "RESULT: fail - $reason"
+          Write-Host "::error title=Runner descendant termination via taskkill::${reason}"
+          exit 1
 
       - name: Environment fingerprint
         if: always()
@@ -224,8 +298,72 @@ jobs:
           name: harness-windows-output
           path: win-output/
 
-      - name: Report suite outcome
+      # The one step that decides whether this job is green. It runs LAST, and
+      # after the artifact upload, so a red gate never costs us the captured
+      # output that explains it.
+      #
+      # This shape exists so that two things stay true at once: a failing suite
+      # must never skip the CLI scenario and probe steps below it (hence
+      # `continue-on-error` on every step above), AND a real redaction leak or
+      # a broken taskkill path must never ship green (hence this gate). Only
+      # the two security-relevant probes gate; the suite outcome is reported,
+      # never enforced, exactly as the header comment describes.
+      #
+      # It fails CLOSED: a probe that reported no verdict at all — it crashed,
+      # or never ran — is a failure, not a pass. Verdicts arrive through `env`
+      # rather than inline `${{ }}` interpolation so no value can be parsed as
+      # PowerShell.
+      - name: Windows probe gate
         if: always()
         shell: pwsh
+        env:
+          SUITE_OUTCOME: ${{ steps.suite.outcome }}
+          REDACTION_RESULT: ${{ steps.redaction.outputs.result }}
+          REDACTION_REASON: ${{ steps.redaction.outputs.reason }}
+          CANCELLATION_RESULT: ${{ steps.cancellation.outputs.result }}
+          CANCELLATION_REASON: ${{ steps.cancellation.outputs.reason }}
         run: |
-          Write-Host "test suite outcome: ${{ steps.suite.outcome }}"
+          $ErrorActionPreference = 'Continue'
+          $names = @('Redaction on Windows', 'Runner descendant termination via taskkill')
+          $results = @($env:REDACTION_RESULT, $env:CANCELLATION_RESULT)
+          $reasons = @($env:REDACTION_REASON, $env:CANCELLATION_REASON)
+
+          $rows = @()
+          $failed = @()
+          for ($i = 0; $i -lt $names.Length; $i++) {
+            $name = $names[$i]
+            $result = $results[$i]
+            $reason = $reasons[$i]
+            if ([string]::IsNullOrWhiteSpace($result)) {
+              $result = 'no-verdict'
+              $reason = 'the probe reported nothing - it crashed, was cancelled, or never ran, so this win32 guarantee is UNPROVEN'
+            }
+            if ([string]::IsNullOrWhiteSpace($reason)) { $reason = '(no detail)' }
+            if ($result -ne 'pass') {
+              $failed += $name
+              Write-Host "::error title=${name}::${result} - ${reason}"
+            }
+            $rows += "| $name | $result | $reason |"
+          }
+
+          $lines = @()
+          $lines += '## Windows probe gate'
+          $lines += ''
+          $lines += '| probe | verdict | detail |'
+          $lines += '| --- | --- | --- |'
+          $lines += $rows
+          $lines += ''
+          $lines += ('Harness test suite (Windows): **' + $env:SUITE_OUTCOME + '** - reported, never gating. A red suite must not hide the CLI scenario and probe steps that follow it; see the header comment in this workflow.')
+          $lines += ''
+          if ($failed.Count -gt 0) {
+            $lines += ('**GATE FAILED** - ' + ($failed -join ', ') + '. Full console capture is in the harness-windows-output artifact.')
+          } else {
+            $lines += 'Both gating probes passed.'
+          }
+
+          $lines | ForEach-Object { Write-Host $_ }
+          if ($env:GITHUB_STEP_SUMMARY) {
+            $lines | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          }
+          if ($failed.Count -gt 0) { exit 1 }
+          exit 0

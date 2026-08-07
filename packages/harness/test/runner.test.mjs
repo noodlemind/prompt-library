@@ -92,10 +92,16 @@ test('maxBuffer truncates buffered stdout at a line boundary', async () => {
   assert.ok(result.stdout.endsWith('\n'), 'truncated stdout must end on a full line');
 });
 
+// `process.execPath` rather than the POSIX `sleep` binary: Windows ships no
+// `sleep`, so on win32 the spawn failed with ENOENT and the run settled
+// 'failed' before the timeout could ever fire — the assertion below would have
+// been red on the Windows job for a reason that has nothing to do with
+// timeouts. Node is guaranteed present on both platforms and sleeps
+// identically.
 test('timed-out kills the tree and reports status timed-out, not failed', async () => {
   const startedAt = Date.now();
   const result = await runProcess({
-    argv: ['sleep', '5'],
+    argv: [process.execPath, '-e', 'setTimeout(() => {}, 5000)'],
     timeoutMs: 150,
   });
   assert.equal(result.status, 'timed-out');
@@ -180,11 +186,14 @@ test('a pre-aborted signal resolves as cancelled without spawning', async () => 
   assert.equal(result.stdout, '');
 });
 
+// Same reason as the timeout test above — no `sleep` binary exists on the
+// Windows runner, and an ENOENT spawn settles 'failed' before the abort lands,
+// so killFn is never called and `calls.length` reads 0.
 test('win32 termination path calls killFn once with no POSIX-style escalation', async () => {
   const controller = new AbortController();
   const calls = [];
   const resultPromise = runProcess({
-    argv: ['sleep', '5'],
+    argv: [process.execPath, '-e', 'setTimeout(() => {}, 5000)'],
     signal: controller.signal,
     platform: 'win32',
     killFn: (pid, sig, plat) => {
@@ -313,10 +322,13 @@ test('a plain failed spawn (no abort) still settles as failed', async () => {
   assert.equal(result.exitCode, null);
 });
 
+// A short self-terminating child, again via `process.execPath` rather than
+// `sleep 0.4` — Windows has no `sleep`, and `sleep 0.4` is not even portable
+// across POSIX shells (fractional seconds are a GNU/BSD extension).
 test('a throwing killFn never breaks the always-resolve contract', async () => {
   const controller = new AbortController();
   const resultPromise = runProcess({
-    argv: ['sleep', '0.4'],
+    argv: [process.execPath, '-e', 'setTimeout(() => {}, 400)'],
     signal: controller.signal,
     killGraceMs: 50,
     killFn: () => {
