@@ -1,0 +1,18 @@
+# Line endings are a property of this repository, not of whoever checked it out.
+#
+# Every tracked text file is stored LF in the index, and the harness parses many
+# of them (plans, agent/skill frontmatter, learning frontmatter, hooks). Without
+# this pin, Git for Windows applies its core.autocrlf=true default and hands
+# those files back as CRLF, which silently changed parse results and token
+# measurements — the root cause of six Windows-only test failures and of a real
+# knowledge-store frontmatter data-loss bug.
+* text=auto eol=lf
+
+# Keep binaries byte-exact.
+*.png binary
+*.jpg binary
+*.gif binary
+*.ico binary
+*.pdf binary
+*.woff binary
+*.woff2 binary

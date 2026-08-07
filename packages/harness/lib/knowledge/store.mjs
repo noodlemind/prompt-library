@@ -216,6 +216,23 @@ export function ensureStore(workspace, { home, dryRun = false } = {}) {
   let gitOk = fs.existsSync(path.join(dir, '.git'));
   if (!gitOk) {
     gitOk = spawnSync('git', ['init', '-q'], { cwd: dir, encoding: 'utf8' }).status === 0;
+    if (gitOk) {
+      // The store's on-disk format is LF (admin.mjs writes '\n'), but `git
+      // init` inherits ambient config, and core.autocrlf=true is the
+      // Git-for-Windows default. Left unpinned, every `git reset --hard`
+      // (rollback) and `git checkout -- <path>` (residue discard) rewrites
+      // these files as CRLF — silently corrupting learning frontmatter, since
+      // the store is the one place git re-materializes files this module then
+      // parses. Pin it at both layers git honors, so the byte format is a
+      // property of the store rather than of whoever created it.
+      // Config only, deliberately: a `.gitattributes` would need the
+      // lock-protected `writeStoreFile` path (R1/R7 forbids raw fs here, and
+      // R6 puts store metadata writes under the lock), which is more surface
+      // than this needs. `parseLearningFrontmatter` is already CRLF-tolerant
+      // on its own, so this pin is defense in depth rather than the fix.
+      spawnSync('git', ['config', 'core.autocrlf', 'false'], { cwd: dir, encoding: 'utf8' });
+      spawnSync('git', ['config', 'core.eol', 'lf'], { cwd: dir, encoding: 'utf8' });
+    }
   }
   // `storeFileState` — never `fs.existsSync` — decides "is this file already
   // there?": existsSync FOLLOWS a symlink, so a planted link read as "already
@@ -511,7 +528,15 @@ export function parseLearningFrontmatter(text) {
   const fm = { episodes: [], anchors: [] };
   let openList = null; // 'episodes' | 'anchors' | null
   let current = null;
-  for (const line of m[1].split('\n')) {
+  // Split on \r?\n, not '\n'. The opening match above already tolerates CRLF,
+  // so a CRLF file gets past it and then loses EVERY scalar field here: each
+  // line keeps a trailing \r, and the scalar matcher below (`(.*)$`) cannot
+  // match it — `.` excludes \r and `$` without the m flag is end-of-input.
+  // The failure is silent, and on Windows it fires after any store rollback
+  // (`git reset --hard`) or residue discard (`git checkout -- <path>`) when
+  // core.autocrlf is on, which is the Git-for-Windows default: a retired
+  // learning reads back with no status at all, i.e. as active.
+  for (const line of m[1].split(/\r?\n/)) {
     if (/^episodes:\s*$/.test(line)) {
       openList = 'episodes';
       current = null;
