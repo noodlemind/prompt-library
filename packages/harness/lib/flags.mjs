@@ -182,7 +182,10 @@ export function parseFlags(argv) {
       flags.targets = new Set(value.split(',').map((t) => t.trim()));
     } else if (a === '--target') {
       const next = scan[++i];
-      if (next === undefined || next.startsWith('--')) invalidFlag('--target', next, 'requires a comma-separated target list');
+      // The empty string is rejected here exactly as `--target=` is above: the
+      // separated form used to accept it and seed a Set holding one empty
+      // target, so the two spellings of the same mistake behaved differently.
+      if (next === undefined || next === '' || next.startsWith('--')) invalidFlag('--target', next, 'requires a comma-separated target list');
       flags.targets = new Set(next.split(',').map((t) => t.trim()));
     } else if (a.startsWith('--plan=')) flags.plan = a.split('=').slice(1).join('=');
     else if (a === '--plan') flags.plan = scan[++i];
@@ -206,7 +209,10 @@ export function parseFlags(argv) {
       flags.workspace = value;
     } else if (a === '--workspace') {
       const next = scan[++i];
-      if (next === undefined || next.startsWith('--')) invalidFlag('--workspace', next, 'requires a workspace path');
+      // `--workspace ''` used to sail through and resolve to the current
+      // directory — the caller named a workspace, got a different one, and saw
+      // no error. Same rejection as `--workspace=` above.
+      if (next === undefined || next === '' || next.startsWith('--')) invalidFlag('--workspace', next, 'requires a workspace path');
       flags.workspace = next;
     }
     else if (a === '-c' || a === '--collection') flags.collection = scan[++i];

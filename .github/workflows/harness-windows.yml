@@ -343,7 +343,11 @@ jobs:
               $failed += $name
               Write-Host "::error title=${name}::${result} - ${reason}"
             }
-            $rows += "| $name | $result | $reason |"
+            # The cancellation probe joins its failures with ' | ', so an
+            # unescaped detail would split the row into extra columns and
+            # scramble the table in exactly the failure case it exists to explain.
+            $cellReason = $reason -replace '\|', '\|'
+            $rows += "| $name | $result | $cellReason |"
           }
 
           $lines = @()

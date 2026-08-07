@@ -492,7 +492,7 @@ Implement:
 - Actor and execution metadata
 - Migrate all existing commands to the new command registry — including the M1–M4 knowledge commands; `.github/skills/references/harness-tool-contract.md` and the existing JSON shapes are the compatibility fixtures
 
-Done when every current command dispatches through the registry with one canonical error and status model; the lane-bearing commands (`orient`, `learnings`, `status`, plus JSONL `verify`) support ledger, envelope, and agent output while every other command rejects `--output` with a structured `E_USAGE` error; and `verify` can stream and cancel. Extending the lanes to the remaining commands is Phase 2 work, tracked as the AC3 lane-scope amendment in the delivery plan's debt table.
+Done when every current command dispatches through the registry with one canonical error and status model; `orient`, `learnings`, and `status` support ledger, envelope, and agent output; `verify` supports ledger plus JSONL streaming (not `json-envelope` or agent output); every other command rejects `--output` with a structured `E_USAGE` error; and `verify` can stream and cancel. Extending the lanes to the remaining commands is Phase 2 work, tracked as the AC3 lane-scope amendment in the delivery plan's debt table.
 
 ## Phase 2 — Knowledge operator
 

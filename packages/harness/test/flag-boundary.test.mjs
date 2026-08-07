@@ -70,6 +70,15 @@ test('parseFlags: --workspace with no value is a named error, never an undefined
   assert.throws(() => parseFlags(['--workspace=']), /invalid --workspace/, 'the inline form with an empty value is the same missing value');
 });
 
+// Both spellings of "no value" must agree. The separated form used to accept
+// '': `--workspace ''` silently resolved to the current directory (the caller
+// named a workspace and got a different one, with no error) and `--target ''`
+// seeded a Set holding one empty target.
+test('parseFlags: an empty separated value is rejected exactly like the empty inline form', () => {
+  assert.throws(() => parseFlags(['--workspace', '']), /invalid --workspace/, "--workspace '' must not fall back to cwd");
+  assert.throws(() => parseFlags(['--target', '']), /invalid --target/, "--target '' must not create an empty target");
+});
+
 test('parseFlags: a workspace path containing `=` survives the inline form intact', () => {
   assert.equal(parseFlags(['--workspace=/tmp/a=b']).workspace, '/tmp/a=b', 'only the FIRST = separates flag from value');
 });

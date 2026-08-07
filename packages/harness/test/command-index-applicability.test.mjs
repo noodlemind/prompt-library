@@ -134,6 +134,10 @@ test('AC9: end to end, `consolidate --apply=false` still runs the status view', 
 
   const bare = run(['consolidate']);
   const equalsFalse = run(['consolidate', '--apply=false']);
+  // Assert the baseline too: without this, a `bare` that failed would make the
+  // comparison below pass on two identical empty stdouts — the test would go
+  // green while proving nothing.
+  assert.equal(bare.status, 0, bare.stderr);
   assert.equal(equalsFalse.status, 0, equalsFalse.stderr);
   assert.equal(equalsFalse.stdout, bare.stdout, 'it is the same status view, not a rejected apply');
 });

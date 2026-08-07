@@ -216,23 +216,31 @@ export function ensureStore(workspace, { home, dryRun = false } = {}) {
   let gitOk = fs.existsSync(path.join(dir, '.git'));
   if (!gitOk) {
     gitOk = spawnSync('git', ['init', '-q'], { cwd: dir, encoding: 'utf8' }).status === 0;
-    if (gitOk) {
-      // The store's on-disk format is LF (admin.mjs writes '\n'), but `git
-      // init` inherits ambient config, and core.autocrlf=true is the
-      // Git-for-Windows default. Left unpinned, every `git reset --hard`
-      // (rollback) and `git checkout -- <path>` (residue discard) rewrites
-      // these files as CRLF — silently corrupting learning frontmatter, since
-      // the store is the one place git re-materializes files this module then
-      // parses. Pin it at both layers git honors, so the byte format is a
-      // property of the store rather than of whoever created it.
-      // Config only, deliberately: a `.gitattributes` would need the
-      // lock-protected `writeStoreFile` path (R1/R7 forbids raw fs here, and
-      // R6 puts store metadata writes under the lock), which is more surface
-      // than this needs. `parseLearningFrontmatter` is already CRLF-tolerant
-      // on its own, so this pin is defense in depth rather than the fix.
-      spawnSync('git', ['config', 'core.autocrlf', 'false'], { cwd: dir, encoding: 'utf8' });
-      spawnSync('git', ['config', 'core.eol', 'lf'], { cwd: dir, encoding: 'utf8' });
-    }
+  }
+  if (gitOk) {
+    // The store's on-disk format is LF (admin.mjs writes '\n'), but `git
+    // init` inherits ambient config, and core.autocrlf=true is the
+    // Git-for-Windows default. Left unpinned, every `git reset --hard`
+    // (rollback) and `git checkout -- <path>` (residue discard) rewrites
+    // these files as CRLF — silently corrupting learning frontmatter, since
+    // the store is the one place git re-materializes files this module then
+    // parses. Pin it at both layers git honors, so the byte format is a
+    // property of the store rather than of whoever created it.
+    //
+    // Converged on EVERY ensureStore, not just the call that runs `git init`:
+    // scoping it to creation left every store initialized before this pin
+    // existed running on ambient config — which on Windows is precisely the
+    // configuration the paragraph above describes. A fix that reaches only
+    // stores created after it is no fix for the machines already affected.
+    // `git config` is idempotent and local to this repo, so re-asserting it is
+    // free.
+    // Config only, deliberately: a `.gitattributes` would need the
+    // lock-protected `writeStoreFile` path (R1/R7 forbids raw fs here, and
+    // R6 puts store metadata writes under the lock), which is more surface
+    // than this needs. `parseLearningFrontmatter` is already CRLF-tolerant
+    // on its own, so this pin is defense in depth rather than the fix.
+    spawnSync('git', ['config', 'core.autocrlf', 'false'], { cwd: dir, encoding: 'utf8' });
+    spawnSync('git', ['config', 'core.eol', 'lf'], { cwd: dir, encoding: 'utf8' });
   }
   // `storeFileState` — never `fs.existsSync` — decides "is this file already
   // there?": existsSync FOLLOWS a symlink, so a planted link read as "already
@@ -973,6 +981,18 @@ export function reassertStoreLock(lockPath, token) {
 const RM_LOCK_OPTS = { recursive: true, force: true, maxRetries: 10, retryDelay: 25 };
 
 /**
+ * Why the most recent `releaseStoreLock` returned false because removal failed
+ * (as opposed to the lock not being ours). Diagnostic only — never part of a
+ * control-flow decision. `releaseStoreLock` resets it on entry, so it always
+ * describes that call and never an earlier one.
+ *
+ * Declared above its writer: `releaseStoreLock` reads and writes it, and a
+ * `let` below the function would sit in the temporal dead zone if a circular
+ * import ever reached the function during module evaluation.
+ */
+let lastLockReleaseError = null;
+
+/**
  * Release ONLY a lock this holder owns. Returns true when the lock is gone (or
  * was already gone) because of us, false when it belongs to someone else and
  * was therefore LEFT ALONE — the single rule that keeps a confused writer from
@@ -1001,13 +1021,7 @@ export function releaseStoreLock(lockPath, token) {
   }
 }
 
-/**
- * Why the most recent `releaseStoreLock` returned false because removal failed
- * (as opposed to the lock not being ours). Diagnostic only — never part of a
- * control-flow decision, and cleared by nothing, so it reflects the last
- * failure of the process rather than a live state.
- */
-let lastLockReleaseError = null;
+/** Reader for `lastLockReleaseError`, declared above `releaseStoreLock`. */
 export function lastStoreLockReleaseError() {
   return lastLockReleaseError;
 }
