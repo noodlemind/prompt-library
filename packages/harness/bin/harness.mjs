@@ -20,6 +20,7 @@ import { dispatch as dispatchRegistered, hasCommand, describeCommand } from '../
 import { createEventRegistry } from '../lib/event-registry.mjs';
 import { writeEvent as writeHarnessEvent } from '../lib/events.mjs';
 import { parseFlags, hasFlag } from '../lib/flags.mjs';
+import { commandIndexEnvelope } from '../lib/command-index.mjs';
 import { createRedactor, redactedJson } from '../lib/redact.mjs';
 
 const [, , command = 'help', ...args] = process.argv;
@@ -241,6 +242,21 @@ async function main() {
       } else {
         console.log(renderHelp());
       }
+    } else if (command === 'palette') {
+      // Same class as `help` above, and handled the same way: data ABOUT the
+      // registry rather than a command with a side-effect class of its own, so
+      // it is not registered and never dispatches. `help` sources its rows
+      // from describeAll/describeCommand; this sources the palette index from
+      // lib/command-index.mjs.
+      //
+      // It deliberately does NOT go through extractOutputLane. The palette has
+      // exactly one audience by contract (architecture doc, §Command palette:
+      // the model "never sees the palette"; a person in a shell keeps --help
+      // and completion), so the envelope is its only rendering — there is no
+      // ledger or agent lane to select between. Emitted through the same
+      // redacting boundary every other JSON surface uses.
+      const flags = parseFlags(args);
+      console.log(redactedJson(commandIndexEnvelope({ workspace: path.resolve(flags.workspace) })));
     } else if (hasCommand(command)) {
       const { args: laneArgs, output } = extractOutputLane(args);
       // P1.6 (carry-list, AC7 widening): the event registry now attaches for
