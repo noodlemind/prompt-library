@@ -42,6 +42,7 @@ import { trackedSourceFiles } from '../repo-map/scan.mjs';
 import { loadManifest } from '../recall-rank.mjs';
 import { loadCollections, entryMatchesCollection } from '../recall-config.mjs';
 import { storeDir, listLearnings } from '../knowledge/store.mjs';
+import { consolidateStatus } from '../knowledge/consolidate.mjs';
 
 export const TREE_SCHEMA = 1;
 
@@ -394,6 +395,40 @@ function knowledgeTree({ workspace, copilotHome, home, target, depth, maxNodes }
           },
         ],
       });
+    }
+  }
+
+  // P2D2 (Phase 1 debt): quarantined episodes are the answer to "why did that
+  // claim stop appearing?". Quarantine lands on the EPISODE — three failed
+  // consolidation attempts stop it being retried — so the learning it would
+  // have produced simply never exists. Nothing in retrieval showed that, which
+  // made the absence indistinguishable from having never captured the episode
+  // at all, and the only way to see it was a separate admin command the person
+  // searching had no reason to run.
+  //
+  // Best-effort: a store that cannot be summarized must not take down
+  // navigation, which is the one command someone reaches for when the store
+  // looks wrong.
+  if (hasStore && !target) {
+    try {
+      for (const episode of consolidateStatus({ workspace, copilotHome }).quarantined || []) {
+        const id = clean(episode.path);
+        if (!id) continue;
+        rows.push({
+          parts: [
+            { name: 'quarantined', kind: 'quarantined' },
+            {
+              name: id,
+              kind: 'episode',
+              title: clean(episode.failure) || 'quarantined after repeated consolidation failures',
+              location: id,
+              status: 'quarantined',
+            },
+          ],
+        });
+      }
+    } catch {
+      // Advisory only — the rest of the corpus still renders.
     }
   }
 

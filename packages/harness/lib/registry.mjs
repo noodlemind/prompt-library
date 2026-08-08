@@ -59,6 +59,7 @@ import {
 } from './commands.mjs';
 import { cmdPlanNew } from './plan-new.mjs';
 import { cmdLookup, lookupResultOf } from './retrieval/lookup-cmd.mjs';
+import { recallResultOf, getResultOf } from './retrieval/compat-results.mjs';
 import {
   cmdSearch,
   searchResultOf,
@@ -1365,6 +1366,7 @@ registerCommand({
     ],
   },
   handler: cmdRecall,
+  resultOf: recallResultOf,
   requireArgs: recallRequireArgs,
 });
 
@@ -1386,6 +1388,7 @@ registerCommand({
     ],
   },
   handler: cmdGet,
+  resultOf: getResultOf,
   requireArgs: getRequireArgs,
 });
 
