@@ -60,6 +60,7 @@ import {
 import { cmdPlanNew } from './plan-new.mjs';
 import { cmdLookup, lookupResultOf } from './retrieval/lookup-cmd.mjs';
 import { recallResultOf, getResultOf } from './retrieval/compat-results.mjs';
+import { cmdChecks, checksResultOf, CHECKS_VERBS } from './checks-cmd.mjs';
 import {
   cmdSearch,
   searchResultOf,
@@ -1387,6 +1388,33 @@ registerCommand({
   handler: cmdGet,
   resultOf: getResultOf,
   requireArgs: getRequireArgs,
+});
+
+registerCommand({
+  name: 'checks',
+  summary: 'list, inspect, or run one named check from the trusted check config',
+  group: 'engineer loop',
+  // The policy-facing MAXIMUM across every form: `run` executes a repo-authored
+  // argv. `list`/`show` override DOWN to read, so the palette warns about the
+  // verb that actually executes rather than painting all three the same.
+  sideEffect: 'execute',
+  capabilities: [],
+  outputModes: ['ledger', 'json'],
+  usage: '<list|show|run> [name]',
+  verbs: [
+    { verb: 'list', summary: 'every check the workspace declares, with its argv and timeout', sideEffect: 'read' },
+    { verb: 'show', summary: 'one check: the exact argv it will execute, and whether it validates', sideEffect: 'read', positionals: ['name'] },
+    { verb: 'run', summary: 'execute one check on its own and exit non-zero if it does not pass', positionals: ['name'] },
+  ],
+  args: {
+    positionals: [
+      { name: 'verb', description: CHECKS_VERBS.join('|'), required: true, default: null },
+      { name: 'name', description: 'the check name, for show and run', required: false, default: null },
+    ],
+    flags: [],
+  },
+  handler: cmdChecks,
+  resultOf: checksResultOf,
 });
 
 registerCommand({

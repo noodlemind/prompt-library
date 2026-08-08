@@ -12,10 +12,12 @@ import { validatePlanReadiness } from './plan-readiness.mjs';
 import { STRUCTURAL_CHECK_ID, runStructuralExpectations } from './structural/expectations.mjs';
 import { redactSecrets } from './secret-scan.mjs';
 import { inertLine } from './knowledge/store.mjs';
-import { runProcess } from './runner.mjs';
+// Phase 3 prerequisite: the named-check config surface moved to lib/checks.mjs
+// so `checks list/show/run` can share it. Behavior here is unchanged — this is
+// the same loader, validator, and runner verify has always used.
+import { CHECKS_REL, loadNamedChecks, validateCommand, runNamedCheck } from './checks.mjs';
 import { createRedactor, redactionMarker } from './redact.mjs';
 
-const CHECKS_REL = '.github/harness/checks.yaml';
 
 // Built-in default severities. Any check without a policy entry and without a
 // default here is `enforce` — exactly the pre-severity behavior.
@@ -25,38 +27,8 @@ function resultCheck(id, status, message, extra = {}) {
   return { id, status, message, ...extra };
 }
 
-function loadNamedChecks(workspace) {
-  const full = path.join(workspace, CHECKS_REL);
-  if (!fs.existsSync(full)) return { checks: null, error: `Trusted check config not found: ${CHECKS_REL}` };
-  try {
-    const parsed = YAML.parse(fs.readFileSync(full, 'utf8'), { maxAliasCount: 50 });
-    if (parsed?.version !== 1 || !parsed.checks || typeof parsed.checks !== 'object') {
-      return { checks: null, error: `${CHECKS_REL} must declare version: 1 and checks` };
-    }
-    return { checks: parsed.checks, error: null };
-  } catch (error) {
-    return { checks: null, error: `Invalid ${CHECKS_REL}: ${error.message}` };
-  }
-}
 
-function validateCommand(name, config) {
-  if (!config || !Array.isArray(config.command) || config.command.length === 0) {
-    return `${name}.command must be a non-empty argv array`;
-  }
-  if (!config.command.every((part) => typeof part === 'string' && part.length > 0)) {
-    return `${name}.command entries must be non-empty strings`;
-  }
-  const timeout = config.timeout_seconds ?? 600;
-  if (!Number.isInteger(timeout) || timeout < 1 || timeout > 3600) {
-    return `${name}.timeout_seconds must be an integer from 1 to 3600`;
-  }
-  return null;
-}
 
-function trimOutput(value) {
-  const text = String(value || '');
-  return text.length > 4000 ? `${text.slice(0, 4000)}\n…truncated…` : text;
-}
 
 // P1.6 (AC8): named checks now run through lib/runner.mjs's async spawn
 // instead of a blocking spawnSync — the same 1 MiB buffer cap as before, plus
@@ -69,46 +41,6 @@ function trimOutput(value) {
 // to 'unavailable' here — the run-level short-circuit in runVerify (see
 // below) is what actually matters for AC8, not this one check's own legacy
 // status label.
-async function runNamedCheck(workspace, name, config, { signal, onStdout, onStderr } = {}) {
-  const invalid = validateCommand(name, config);
-  if (invalid) return resultCheck(name, 'unavailable', invalid);
-
-  const timeoutSeconds = config.timeout_seconds ?? 600;
-  const execution = await runProcess({
-    argv: config.command,
-    cwd: workspace,
-    timeoutMs: timeoutSeconds * 1000,
-    signal,
-    onStdout,
-    onStderr,
-    maxBuffer: 1024 * 1024,
-  });
-  const output = { stdout: trimOutput(execution.stdout), stderr: trimOutput(execution.stderr), durationMs: execution.durationMs };
-
-  if (execution.status === 'cancelled') {
-    // `cancelled: true` is an explicit, structural marker distinguishing
-    // THIS 'unavailable' outcome (a genuine AbortSignal cancellation) from
-    // every other reason a check can land on 'unavailable' (a spawn
-    // failure, a missing/invalid config) — unifiedStatusForCheck (below)
-    // keys off this flag rather than pattern-matching the message text, so
-    // a later wording change here can never silently break that mapping.
-    return resultCheck(name, 'unavailable', 'Cancelled — verification was interrupted', { ...output, cancelled: true });
-  }
-  if (execution.status === 'timed-out') {
-    return resultCheck(name, 'timeout', `Timed out after ${timeoutSeconds}s`, output);
-  }
-  if (execution.status === 'failed' && execution.exitCode === null) {
-    // Spawn-level failure (command not found, etc.) or death by an external
-    // signal we didn't ask for — mirrors the old spawnSync `execution.error`
-    // branch: no real exit code was ever reported.
-    const detail = execution.signalName ? `Terminated by signal ${execution.signalName}` : 'Named check could not be spawned';
-    return resultCheck(name, 'unavailable', detail, output);
-  }
-  if (execution.status === 'failed') {
-    return resultCheck(name, 'failed', `Exited with status ${execution.exitCode}`, { ...output, exitCode: execution.exitCode });
-  }
-  return resultCheck(name, 'passed', 'Named check passed', { ...output, exitCode: 0 });
-}
 
 // Fix-wave Important #9 (AC8): live check-output streaming for `verify
 // --output jsonl`. Pre-fix, runNamedCheck supplied no onStdout/onStderr, so
