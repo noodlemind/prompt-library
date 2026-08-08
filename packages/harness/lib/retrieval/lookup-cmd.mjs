@@ -1,0 +1,108 @@
+/**
+ * `harness lookup <kind> <identifier>` — the command surface over
+ * `lib/retrieval/lookup.mjs`.
+ *
+ * Lives in its own module rather than in lib/commands.mjs (which registry.mjs
+ * already sidesteps for `plan-new`) so the retrieval commands stay together
+ * with the kernel they share, instead of growing a 1900-line file further.
+ *
+ * `lookupResultOf` is the whole opt-in for the envelope and agent lanes:
+ * `assertLaneSupported` derives lane support structurally from the presence of
+ * `resultOf`, and `laneBearingCommands()` regenerates the help text from the
+ * same fact. Declaring it here is the first slice of the Phase 1 debt item to
+ * expand `resultOf` past the three commands that had it (P2D1), and it is what
+ * makes this command satisfy P2AC7 rather than shipping ledger-only.
+ */
+import path from 'node:path';
+import { parseFlags } from '../flags.mjs';
+import { resolveCopilotHome } from '../paths.mjs';
+import { createStyle, keyWidthFor } from '../style.mjs';
+import { redactedJson } from '../redact.mjs';
+import { inertLine } from '../knowledge/store.mjs';
+import { LOOKUP_KINDS, lookupEntity } from './lookup.mjs';
+
+const ui = createStyle({ argv: process.argv.slice(2) });
+
+/**
+ * Positional parsing, deliberately hand-rolled rather than via parseFlags:
+ * `lookup` takes two ORDERED positionals, and an identifier is free text that
+ * may legitimately begin with a dash (a symbol named `-foo`, a path fragment).
+ * Filtering on a leading dash would silently drop those; taking the first two
+ * non-flag tokens in order keeps them addressable.
+ */
+export function parseLookupArgv(argv) {
+  const positionals = [];
+  const flagsWithValues = new Set(['--workspace', '--copilot-home', '--output']);
+  for (let i = 0; i < argv.length; i += 1) {
+    const a = argv[i];
+    if (a === '--') break;
+    if (flagsWithValues.has(a)) {
+      i += 1;
+      continue;
+    }
+    if (a.startsWith('--')) continue;
+    positionals.push(a);
+    if (positionals.length === 2) break;
+  }
+  return { kind: positionals[0] ?? null, identifier: positionals[1] ?? null };
+}
+
+function resolveContext(argv) {
+  const flags = parseFlags(argv);
+  const { kind, identifier } = parseLookupArgv(argv);
+  return {
+    flags,
+    kind,
+    identifier,
+    workspace: path.resolve(flags.workspace),
+    copilotHome: resolveCopilotHome(flags.copilotHome),
+  };
+}
+
+export async function lookupResultOf(argv) {
+  const { kind, identifier, workspace, copilotHome } = resolveContext(argv);
+  return lookupEntity({ kind, identifier, workspace, copilotHome });
+}
+
+export async function cmdLookup(argv) {
+  const { flags, kind, identifier, workspace, copilotHome } = resolveContext(argv);
+  const result = lookupEntity({ kind, identifier, workspace, copilotHome });
+
+  if (flags.json) {
+    console.log(redactedJson(result, { pretty: flags.verbose }));
+    return 0;
+  }
+
+  const keyWidth = keyWidthFor(['location', 'provenance', 'preview', result.kind]);
+  console.log(ui.line({ key: result.kind, value: result.id, note: result.title ?? undefined, keyWidth }));
+  if (result.location) console.log(ui.line({ key: 'location', value: result.location, keyWidth }));
+
+  const provenance = Object.entries(result.provenance ?? {})
+    .filter(([, v]) => v !== null && v !== undefined && v !== '')
+    .map(([k, v]) => `${k}=${v}`)
+    .join(' · ');
+  if (provenance) console.log(ui.line({ key: 'provenance', value: provenance, keyWidth }));
+
+  const metadata = Object.entries(result.metadata ?? {})
+    .filter(([, v]) => v !== null && v !== undefined && v !== '' && !(Array.isArray(v) && !v.length))
+    .map(([k, v]) => `${k}=${Array.isArray(v) ? v.join(',') : v}`)
+    .join(' · ');
+  if (metadata) console.log(ui.line({ key: 'metadata', value: metadata, keyWidth }));
+
+  if (result.preview) {
+    console.log('');
+    // inertLine per line, the same discipline cmdGet applies: a preview is raw
+    // corpus content printed straight to a terminal, so an embedded ESC could
+    // drive the terminal itself. Split and rejoin so genuine multi-line
+    // formatting survives while control characters do not.
+    console.log(result.preview.split('\n').map(inertLine).join('\n'));
+  }
+
+  if (result.related?.length) {
+    console.log('');
+    for (const rel of result.related) {
+      console.log(ui.line({ key: 'related', value: rel.id, note: rel.location ?? undefined, keyWidth }));
+    }
+  }
+  return 0;
+}

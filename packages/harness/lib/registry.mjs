@@ -58,6 +58,8 @@ import {
   cmdResolve,
 } from './commands.mjs';
 import { cmdPlanNew } from './plan-new.mjs';
+import { cmdLookup, lookupResultOf } from './retrieval/lookup-cmd.mjs';
+import { LOOKUP_KINDS, LOOKUP_KIND_SUMMARIES } from './retrieval/lookup.mjs';
 import { parseFlags, hasFlag } from './flags.mjs';
 import { parseQueryFromArgv } from './argv.mjs';
 import { resolveCopilotHome } from './paths.mjs';
@@ -1376,6 +1378,62 @@ registerCommand({
   },
   handler: cmdGet,
   requireArgs: getRequireArgs,
+});
+
+registerCommand({
+  name: 'lookup',
+  summary: 'exact entity retrieval by kind and identifier',
+  group: 'engineer loop',
+  // Read, unconditionally: every resolver probes and reads, and none may
+  // create the knowledge store — the read-path invariant this command is
+  // tested against (P2AC6).
+  sideEffect: 'read',
+  capabilities: [],
+  outputModes: ['ledger', 'json'],
+  // The eleven kinds are declared as verbs, not left as a free-text positional.
+  // The command-index contract test caught why: a bare `kind` positional makes
+  // the palette offer a row whose value slot accepts anything, so it resolves
+  // to an argv `requireArgs` then refuses — a row no answer can complete, the
+  // exact defect the bidirectional palette/dispatch assertion exists to catch.
+  // As data they become eleven completable rows, each carrying the identifier
+  // slot its form cannot run without. Every kind reads, so none overrides the
+  // entry's `read` side effect.
+  verbs: LOOKUP_KINDS.map((kind) => ({
+    verb: kind,
+    summary: LOOKUP_KIND_SUMMARIES[kind],
+    positionals: ['identifier'],
+  })),
+  args: {
+    positionals: [
+      {
+        name: 'kind',
+        description: LOOKUP_KINDS.join('|'),
+        required: true,
+        default: null,
+      },
+      {
+        name: 'identifier',
+        description: 'entity id — a path, docid, symbol name, <domain>/<slug>, or path@sha256',
+        required: true,
+        default: null,
+      },
+    ],
+    flags: [],
+  },
+  handler: cmdLookup,
+  // The lane opt-in. Its presence is what `assertLaneSupported` reads, so
+  // declaring it here is what gives lookup the envelope and agent lanes
+  // (P2AC7) rather than shipping ledger-only like recall and get still do.
+  resultOf: lookupResultOf,
+  // No `requireArgs`, matching `learning` and `knowledge` — the other two
+  // verb-bearing commands. A requireArgs that validated the kind made the bare
+  // `lookup` row unsatisfiable: the palette fills a free-text positional with
+  // any word, and the gate then refused it, which is precisely the
+  // dispatch-refuses-a-palette-row defect the index contract test guards.
+  // `lookupEntity` still rejects an unknown kind with the same E_USAGE/exit 2,
+  // and every path reaches it, so nothing goes unvalidated — only the layer
+  // that reports it moves.
+  usage: `<${LOOKUP_KINDS.join('|')}> <identifier>`,
 });
 
 registerCommand({

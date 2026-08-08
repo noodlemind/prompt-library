@@ -48,6 +48,13 @@ export const EXIT = Object.freeze({
   // agent contract needs to tell "ran out of time" apart from "was stopped"
   // apart from "errored". Next free append-only low value after `network:7`.
   timedOut: 8,
+  // `lookup` asked for a specific entity and the entity does not exist. It is
+  // neither a usage error (the command was well-formed and the kind was valid)
+  // nor an internal fault, and collapsing it into either would make "you asked
+  // for something that isn't here" indistinguishable from "you called this
+  // wrong" or "the harness broke" — the distinction a caller scripting against
+  // lookup needs most. Next free append-only value after `timedOut: 8`.
+  notFound: 9,
 });
 
 // token → [truecolor rgb, 256-color index]

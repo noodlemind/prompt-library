@@ -172,6 +172,11 @@ test('AC8: the audit does not flag a fully declared usage line', () => {
 const DECLARED_VERBS = Object.freeze({
   knowledge: ['on', 'suggest', 'off', 'freeze', 'capture-only', 'status', 'promote', 'prune', 'purge', 'commit', 'migrate-store'],
   learning: ['retire', 'dispute', 'confirm', 'promote'],
+  // `lookup`'s eleven entity kinds are verbs rather than a free-text
+  // positional. As free text the palette filled the slot with any word and
+  // dispatch then refused the row; as verbs each kind is a completable row
+  // carrying the identifier slot its form cannot run without.
+  lookup: ['file', 'symbol', 'document', 'plan', 'skill', 'check', 'run', 'event', 'resource', 'learning', 'episode'],
 });
 
 const VERB_FLAGS = Object.freeze({
@@ -196,6 +201,21 @@ const VERB_FLAGS = Object.freeze({
 const VERB_POSITIONALS = Object.freeze({
   knowledge: { purge: ['target'], commit: ['target'] },
   learning: { retire: ['id'], dispute: ['id'], confirm: ['id'], promote: ['id'] },
+  // Every lookup kind names exactly one entity, so all eleven consume the
+  // identifier slot — a kind row without it is a row no answer can complete.
+  lookup: {
+    file: ['identifier'],
+    symbol: ['identifier'],
+    document: ['identifier'],
+    plan: ['identifier'],
+    skill: ['identifier'],
+    check: ['identifier'],
+    run: ['identifier'],
+    event: ['identifier'],
+    resource: ['identifier'],
+    learning: ['identifier'],
+    episode: ['identifier'],
+  },
 });
 
 test('AC8: every verb-consumed positional is declared and reaches its row as a picker', () => {
@@ -228,7 +248,7 @@ test('AC8: the declared verb inventory matches its fixture exactly', () => {
     if (verbs.length) actual[name] = verbs;
   }
   assert.deepEqual(actual, { ...DECLARED_VERBS }, 'a verb was added or lost — update the fixture deliberately');
-  assert.equal(Object.values(actual).flat().length, 15);
+  assert.equal(Object.values(actual).flat().length, 26, '15 knowledge/learning verbs + lookup’s 11 entity kinds');
 });
 
 test('AC8: the verb-dispositioned flag inventory matches its fixture exactly', () => {
@@ -255,7 +275,7 @@ test('AC8: every declared verb reaches the palette as its own row', () => {
       assert.ok(row.summary, `${command} ${verb} must carry its declared summary`);
     }
   }
-  assert.equal(rows.filter((r) => r.kind === 'verb').length, 28, '15 declared verbs + 13 row-bearing verb flags');
+  assert.equal(rows.filter((r) => r.kind === 'verb').length, 39, '26 declared verbs + 13 row-bearing verb flags');
 });
 
 /**
