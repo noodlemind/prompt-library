@@ -311,6 +311,19 @@ function workspaceTree({ workspace, target, depth, maxNodes }) {
     totals: { files: built.files, dirs: built.dirs, nodes: built.nodes, tracked: total },
     truncated: built.nodesDropped > 0 || filesUnscanned > 0,
     limits: { depth, maxNodes: MAX_NODES, nodesDropped: built.nodesDropped, filesUnscanned },
+    // An empty tree is ambiguous on its own: "this path holds nothing" and
+    // "this path holds nothing OF THE KINDS THIS TREE COVERS" are different
+    // answers, and the second is the common one — `tree workspace docs` renders
+    // empty in a repo full of markdown because the enumerator is source-file
+    // scoped. Say which it is rather than leaving the caller to guess from a
+    // blank tree beside a non-zero tracked count.
+    emptyReason: built.files > 0 || built.dirs > 0
+      ? null
+      : total > 0
+        ? scope
+          ? `no source files under ${scope} — this tree covers tracked source files, and other file types are not enumerated`
+          : 'no source files are tracked in this workspace'
+        : 'no tracked files — run this inside a git repository with committed files',
   };
 }
 

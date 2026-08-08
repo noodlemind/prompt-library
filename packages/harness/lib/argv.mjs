@@ -13,6 +13,13 @@ const FLAGS_WITH_VALUES = new Set([
   '--path',
   '--lines',
   '--max-bytes',
+  // search's value flags. Absent from this set, their VALUES are read as query
+  // words: `search foo --match regex` would search for "foo regex" and quietly
+  // run in ranked mode — a wrong answer with no error anywhere.
+  '--match',
+  '--source',
+  '--cursor',
+  '--depth',
 ]);
 
 export function parseQueryFromArgv(argv, flags) {

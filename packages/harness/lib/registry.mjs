@@ -59,6 +59,15 @@ import {
 } from './commands.mjs';
 import { cmdPlanNew } from './plan-new.mjs';
 import { cmdLookup, lookupResultOf } from './retrieval/lookup-cmd.mjs';
+import {
+  cmdSearch,
+  searchResultOf,
+  cmdTree,
+  treeResultOf,
+  SEARCH_MATCH_MODES,
+  SEARCH_SOURCE_NAMES,
+  TREE_SUBJECT_NAMES,
+} from './retrieval/search-cmd.mjs';
 import { LOOKUP_KINDS, LOOKUP_KIND_SUMMARIES } from './retrieval/lookup.mjs';
 import { parseFlags, hasFlag } from './flags.mjs';
 import { parseQueryFromArgv } from './argv.mjs';
@@ -1378,6 +1387,65 @@ registerCommand({
   },
   handler: cmdGet,
   requireArgs: getRequireArgs,
+});
+
+registerCommand({
+  name: 'search',
+  summary: 'ranked, literal, regex, path, or symbol search across code, knowledge, learnings and plans',
+  group: 'engineer loop',
+  sideEffect: 'read',
+  capabilities: [],
+  outputModes: ['ledger', 'json'],
+  usage: '<query> [--match <mode>] [--source <a,b>] [--explain] [--cursor <c>]',
+  args: {
+    positionals: [
+      { name: 'query', description: 'free-text query words (joined)', required: true, default: '', variadic: true },
+    ],
+    flags: [
+      // `--match` is the mode selector, so it is the one flag that earns its
+      // own palette rows: each mode is a different question a user is asking,
+      // not a refinement of one.
+      { name: '--match', type: 'string', valueName: 'mode', description: `match mode: ${SEARCH_MATCH_MODES.join('|')} (default ranked)`, required: false, default: 'ranked', tui: 'prompt' },
+      { name: '--source', type: 'string', valueName: 'a,b', description: `restrict to sources: ${SEARCH_SOURCE_NAMES.join(',')}`, required: false, default: null, tui: 'prompt' },
+      { name: '--explain', type: 'boolean', description: 'include the retrieval reason per result', required: false, default: false, tui: 'prompt' },
+      { name: '--cursor', type: 'string', valueName: 'c', description: 'resume from a previous page', required: false, default: null, tui: 'cli-only' },
+      { name: '--limit', type: 'number', valueName: 'n', description: 'results per page (default 20)', required: false, default: 20, tui: 'prompt' },
+      { name: '-c, --collection', type: 'string', valueName: 'name', description: 'filter by knowledge/collections.yaml', required: false, default: null, tui: 'prompt', aliases: ['-c'] },
+    ],
+  },
+  handler: cmdSearch,
+  resultOf: searchResultOf,
+});
+
+registerCommand({
+  name: 'tree',
+  summary: 'structural navigation of the workspace or the knowledge corpus',
+  group: 'engineer loop',
+  sideEffect: 'read',
+  capabilities: [],
+  outputModes: ['ledger', 'json'],
+  usage: '<workspace|knowledge> [target] [--depth <n>]',
+  // Subjects as verbs for the same reason lookup's kinds are: a free-text
+  // subject positional gives the palette a slot it can fill with anything,
+  // and the row then resolves to an argv the command refuses.
+  verbs: TREE_SUBJECT_NAMES.map((subject) => ({
+    verb: subject,
+    summary: subject === 'workspace'
+      ? 'tracked files as a directory tree'
+      : 'the knowledge corpus grouped by scope, category, and learning domain',
+    positionals: [],
+  })),
+  args: {
+    positionals: [
+      { name: 'subject', description: TREE_SUBJECT_NAMES.join('|'), required: true, default: null },
+      { name: 'target', description: 'subtree path, or a collection name for knowledge', required: false, default: null },
+    ],
+    flags: [
+      { name: '--depth', type: 'number', valueName: 'n', description: 'tree depth (default 3, max 10)', required: false, default: 3, tui: 'prompt' },
+    ],
+  },
+  handler: cmdTree,
+  resultOf: treeResultOf,
 });
 
 registerCommand({

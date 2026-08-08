@@ -177,6 +177,9 @@ const DECLARED_VERBS = Object.freeze({
   // dispatch then refused the row; as verbs each kind is a completable row
   // carrying the identifier slot its form cannot run without.
   lookup: ['file', 'symbol', 'document', 'plan', 'skill', 'check', 'run', 'event', 'resource', 'learning', 'episode'],
+  // Same reasoning as lookup's kinds: a free-text subject positional is a slot
+  // the palette fills with anything, producing a row the command refuses.
+  tree: ['workspace', 'knowledge'],
 });
 
 const VERB_FLAGS = Object.freeze({
@@ -248,7 +251,7 @@ test('AC8: the declared verb inventory matches its fixture exactly', () => {
     if (verbs.length) actual[name] = verbs;
   }
   assert.deepEqual(actual, { ...DECLARED_VERBS }, 'a verb was added or lost — update the fixture deliberately');
-  assert.equal(Object.values(actual).flat().length, 26, '15 knowledge/learning verbs + lookup’s 11 entity kinds');
+  assert.equal(Object.values(actual).flat().length, 28, '15 knowledge/learning verbs + lookup’s 11 kinds + tree’s 2 subjects');
 });
 
 test('AC8: the verb-dispositioned flag inventory matches its fixture exactly', () => {
@@ -275,7 +278,7 @@ test('AC8: every declared verb reaches the palette as its own row', () => {
       assert.ok(row.summary, `${command} ${verb} must carry its declared summary`);
     }
   }
-  assert.equal(rows.filter((r) => r.kind === 'verb').length, 39, '26 declared verbs + 13 row-bearing verb flags');
+  assert.equal(rows.filter((r) => r.kind === 'verb').length, 41, '28 declared verbs + 13 row-bearing verb flags');
 });
 
 /**
