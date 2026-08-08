@@ -1333,16 +1333,18 @@ export async function cmdLearning(argv) {
 // annotations, plus single-learning provenance via --why. Matches the
 // recall/report convention — no writeEvent call.
 export async function cmdLearnings(argv) {
-  const { listingView, whyView } = await import('./knowledge/listing.mjs');
+  const { resolveLearningsView } = await import('./knowledge/listing.mjs');
   const flags = parseFlags(argv);
   const workspace = path.resolve(flags.workspace);
   const copilotHome = resolveCopilotHome(flags.copilotHome);
 
-  // A trailing bare --why (no id following it) must never silently fall
-  // through to the full listing below — parseFlags leaves flags.why unset
-  // when there's no next token to consume.
-  if (hasFlag(argv, '--why') && !flags.why) {
-    const blockedReason = 'usage: harness learnings --why <id>';
+  // P2D3: which view to render is `resolveLearningsView`, shared with
+  // learningsResultOf. Only the presentation below is this path's own — a
+  // ledger plus an exit code, where the lane path throws for the envelope.
+  const view = resolveLearningsView({ argv, flags, workspace, copilotHome, hasFlag });
+
+  if (view.outcome === 'usage') {
+    const blockedReason = view.message;
     if (flags.json) {
       emitJson(flags, { pass: false, blockedReason });
     } else {
@@ -1353,8 +1355,8 @@ export async function cmdLearnings(argv) {
     return EXIT.usage;
   }
 
-  if (flags.why) {
-    const result = whyView({ workspace, id: flags.why });
+  if (view.outcome === 'why' || view.outcome === 'not-found') {
+    const result = view.outcome === 'why' ? view.result : null;
     if (!result) {
       const blockedReason = `E_TARGET: no learning ${flags.why}`;
       if (flags.json) {
@@ -1391,8 +1393,7 @@ export async function cmdLearnings(argv) {
     return 0;
   }
 
-  const domain = argv[0] && !argv[0].startsWith('--') ? argv[0] : null;
-  const result = listingView({ workspace, copilotHome, domain });
+  const result = view.result;
 
   if (flags.json) {
     emitJson(flags, result);

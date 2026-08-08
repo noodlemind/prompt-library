@@ -193,3 +193,43 @@ export function whyView({ workspace, id, home }) {
     failures,
   };
 }
+
+/**
+ * Which view `harness learnings` should render, and why — the single decision
+ * both callers share.
+ *
+ * P2D3 (Phase 1 debt): `cmdLearnings` and `learningsResultOf` each carried
+ * their own copy of this — the trailing-bare-`--why` guard, the domain
+ * positional sniff, and the not-found branch. Two copies of a decision drift
+ * silently: the ledger path could start accepting an input the envelope path
+ * rejects, and nothing would fail, because each side has its own tests. The
+ * duplication was carried as a judgment call at P1.6 rather than fixed.
+ *
+ * The RENDERING deliberately stays split. The two callers do genuinely
+ * different things with the same answer — one prints a ledger and returns an
+ * exit code, the other throws so `dispatchLane` can build the unified error
+ * envelope — and collapsing that too would mean one of them rendering through
+ * the other's error model. So this returns a discriminated outcome and lets
+ * each side own its own presentation.
+ *
+ * `outcome` is one of:
+ *   `usage`     — `--why` with no id; the caller reports E_USAGE / exit 2
+ *   `not-found` — a `--why` id that resolves to nothing; E_TARGET / exit 1
+ *   `why`       — the provenance view for one learning, in `result`
+ *   `listing`   — the paged listing, in `result`
+ */
+export function resolveLearningsView({ argv, flags, workspace, copilotHome, home, hasFlag }) {
+  // parseFlags leaves `why` unset when no token follows the flag, so a
+  // trailing bare `--why` is indistinguishable from its absence by flags
+  // alone — without this guard it silently falls through to the full listing,
+  // which is not what the caller asked for and looks like success.
+  if (hasFlag(argv, '--why') && !flags.why) {
+    return { outcome: 'usage', message: 'usage: harness learnings --why <id>' };
+  }
+  if (flags.why) {
+    const result = whyView({ workspace, id: flags.why, home });
+    return result ? { outcome: 'why', result } : { outcome: 'not-found', id: flags.why };
+  }
+  const domain = argv[0] && !argv[0].startsWith('--') ? argv[0] : null;
+  return { outcome: 'listing', result: listingView({ workspace, copilotHome, domain, home }) };
+}

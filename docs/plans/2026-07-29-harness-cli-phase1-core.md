@@ -51,7 +51,7 @@ domains: [cli, harness]
 specialists: []
 capability_gaps: []
 created: 2026-07-29
-updated: 2026-08-06
+updated: 2026-08-08
 ---
 
 # Phase 1 — CLI core: command registry, output modes, async runner
@@ -101,21 +101,21 @@ Phase 2 lands in this same PR by explicit user decision (see Activity, 2026-08-0
 
 Three of that section's ten criteria are already delivered by the command-index work in this PR and are recorded there, not repeated here: registry enumerability of every verb, per-option TUI dispositions with strict verb scoping, and the command index emitted through the envelope lane.
 
-- [ ] **P2AC1** `search` implements all five match modes (ranked, literal, regex, path, symbol) across the documented scope list; an empty result set exits 0 rather than erroring.
-- [ ] **P2AC2** Every result carries source, scope, location or entity id, relevance score, and index generation — plus a retrieval reason under `--explain`.
-- [ ] **P2AC3** Federation across scopes is deterministic: normalized scores, stable tie-break, cursor validity across sources, and explicit partial-source failure reporting. Same query against the same index generation yields byte-identical results.
-- [ ] **P2AC4** `lookup` resolves every declared entity kind and returns a structured not-found error rather than an empty success.
-- [ ] **P2AC5** `recall`/`get` keep working via deprecated aliases; `harness-tool-contract.md` and every hydrated skill caller are updated in the same phase.
-- [ ] **P2AC6** Read paths never create the knowledge store — the Phase 1 invariant holds under every new command.
-- [ ] **P2AC7** All three output lanes work for every command this phase adds or touches, closing the AC3 lane-scope amendment for that surface.
+- [x] **P2AC1** `search` implements all five match modes (ranked, literal, regex, path, symbol) across the documented scope list; an empty result set exits 0 rather than erroring.
+- [x] **P2AC2** Every result carries source, scope, location or entity id, relevance score, and index generation — plus a retrieval reason under `--explain`.
+- [x] **P2AC3** Federation across scopes is deterministic: normalized scores, stable tie-break, cursor validity across sources, and explicit partial-source failure reporting. Same query against the same index generation yields byte-identical results.
+- [x] **P2AC4** `lookup` resolves every declared entity kind and returns a structured not-found error rather than an empty success.
+- [x] **P2AC5** `recall`/`get` keep working via deprecated aliases; `harness-tool-contract.md` and every hydrated skill caller are updated in the same phase.
+- [x] **P2AC6** Read paths never create the knowledge store — the Phase 1 invariant holds under every new command.
+- [x] **P2AC7** All three output lanes work for every command this phase adds or touches, closing the AC3 lane-scope amendment for that surface.
 
 ### Phase 2 debt claimed from the Phase 1 carry-out
 
 `docs/architecture/harness-cli-workbench-delivery.md` §"Debt carried out of Phase 1" assigns three items to this phase, and states that each phase's plan must pick up the ones assigned to it. Recorded here so they are tracked rather than silently skipped:
 
-- [ ] **P2D1** Expand `resultOf` producers to the remaining commands, reversing the AC3 lane-scope amendment. `recall`, `get` and `index` have no `resultOf` today, so `--output json-envelope|agent` hard-fails for them; adding the field is the entire opt-in, and `laneBearingCommands()` regenerates the help text from it.
-- [ ] **P2D2** Surface quarantined learnings in search and tree results (M4 backlog): a quarantined cluster is currently invisible to retrieval, so a user cannot see why a claim stopped appearing.
-- [ ] **P2D3** Resolve the `learningsResultOf` / `cmdLearnings` duplication carried as a P1.6 judgment call.
+- [x] **P2D1** Expand `resultOf` producers to the remaining commands, reversing the AC3 lane-scope amendment. `recall`, `get` and `index` have no `resultOf` today, so `--output json-envelope|agent` hard-fails for them; adding the field is the entire opt-in, and `laneBearingCommands()` regenerates the help text from it.
+- [x] **P2D2** Surface quarantined learnings in search and tree results (M4 backlog): a quarantined cluster is currently invisible to retrieval, so a user cannot see why a claim stopped appearing.
+- [x] **P2D3** Resolve the `learningsResultOf` / `cmdLearnings` duplication carried as a P1.6 judgment call.
 
 ### Entity kinds for `lookup` — settled upstream, scoped honestly here
 
@@ -165,12 +165,12 @@ Two Codex adversarial reviews after the internal final review found real gaps th
 
 Each lands as one reviewable commit with its own review pass, per the delivery doc's execution rules. The command index (P2AC8–10 in the delivery doc) already shipped in P1.6.
 
-- [ ] **P2.1** Retrieval kernel: one scope registry and one result record shape (source, scope, id/location, score, index generation, reason) shared by every retrieval command, so federation has a single normalization point instead of per-command shapes.
-- [ ] **P2.2** `lookup` — exact resolution by entity kind, structured not-found (P2AC4), all three lanes.
-- [ ] **P2.3** `search` — five match modes over the scope list, `--explain` reasons, empty-set-exits-0 (P2AC1, P2AC2).
-- [ ] **P2.4** Federation determinism: normalized scoring, stable tie-break, cursors, partial-source failure reporting, byte-identity regression test (P2AC3).
-- [ ] **P2.5** `tree workspace|knowledge`, `recall`/`get` deprecated aliases, tool-contract and hydrated-caller updates (P2AC5, P2AC7).
-- [ ] **P2.6** Phase 1 debt assigned to this phase: `resultOf` for the remaining commands (P2D1), quarantined learnings visible in search/tree (P2D2), `learningsResultOf` de-duplication (P2D3).
+- [x] **P2.1** Retrieval kernel: one scope registry and one result record shape (source, scope, id/location, score, index generation, reason) shared by every retrieval command, so federation has a single normalization point instead of per-command shapes.
+- [x] **P2.2** `lookup` — exact resolution by entity kind, structured not-found (P2AC4), all three lanes.
+- [x] **P2.3** `search` — five match modes over the scope list, `--explain` reasons, empty-set-exits-0 (P2AC1, P2AC2).
+- [x] **P2.4** Federation determinism: normalized scoring, stable tie-break, cursors, partial-source failure reporting, byte-identity regression test (P2AC3).
+- [x] **P2.5** `tree workspace|knowledge`, `recall`/`get` deprecated aliases, tool-contract and hydrated-caller updates (P2AC5, P2AC7).
+- [x] **P2.6** Phase 1 debt assigned to this phase: `resultOf` for the remaining commands (P2D1), quarantined learnings visible in search/tree (P2D2), `learningsResultOf` de-duplication (P2D3).
 
 ## Research Notes
 
@@ -241,3 +241,13 @@ Final whole-branch review (2026-08-06, architecture + security + patterns lenses
 - `yaml` is bundled into the package (floor raised to ^2.9.0, clearing CVE-2026-33532) so a hand-delivered tarball installs without a registry. The trade — we now own its patch cadence for every consumer — is recorded in `package.json`.
 - **Decision (user, 2026-08-07):** deliver the remaining workbench phases stacked onto PR #43 rather than merging Phase 1 first and branching each phase off `main`. This departs from the delivery doc's execution rule 2; recorded here so the reviewer knows it was chosen, not overlooked. Consequence accepted: the PR grows past its approved review, so each workstream lands as one commit with a clear boundary to keep it reviewable.
 - **Status:** Phase 2 starting at P2.1 (retrieval kernel). `plan_lock` stays true; `phase` advanced to 8.
+
+### 2026-08-08 — Phase 2 complete
+
+- P2.1 retrieval kernel: one result record and one `federate()` with a total ordering (score, then source rank, then id), max-relative per-source normalization, rounded score comparison, position cursors rather than offsets, and explicit partial-source failure. Four corpora previously reached by four unrelated call sites now share one normalization point.
+- P2.2 `lookup` over the eleven settled entity kinds on all three lanes, with a new exit code `notFound: 9` — a not-found is neither a usage error nor an internal fault, and a caller scripting against lookup needs to tell them apart. P2.3 `search` across five match modes. P2.5 `tree workspace|knowledge`.
+- P2.4 determinism is a property of the kernel with per-mode byte-identity tests, rather than something each command re-implements.
+- Debt claimed from the Phase 1 carry-out and paid: **P2D1** (`resultOf` for `recall` and `get`, reversing the AC3 lane-scope amendment across the retrieval surface); **P2D2** (quarantined episodes visible in `tree knowledge` — quarantine lands on the episode, so the learning it would have produced never exists, and the absence was previously indistinguishable from never having captured it); **P2D3** (`resolveLearningsView` now shared by `cmdLearnings` and `learningsResultOf`, with only the error model differing between them).
+- **P2AC5**: the tool contract records the three new commands and the widened lane-bearing set.
+- Suite: 1322 tests, 1313 pass, 9 skipped, 0 fail.
+- **Carried forward, stated rather than implied:** `index` still has no `resultOf` — its handler branches and mutates, so a producer needs a real refactor rather than a wrapper, and wrapping it badly would have been worse than leaving it. Phases 3, 4a, 4b and 5 are unstarted. Phase 3's `config`, `trust`, environment allowlisting, network policy and isolation backend have **zero prior art** in this codebase and are net-new builds, not extensions.

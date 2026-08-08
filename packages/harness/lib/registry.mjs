@@ -772,30 +772,27 @@ async function orientResultOf(argv) {
   return result;
 }
 
+// P2D3: the view decision — the bare-`--why` guard, the domain sniff, and the
+// not-found branch — is `resolveLearningsView`, shared with cmdLearnings. Only
+// the ERROR MODEL differs here: this path throws so dispatchLane's catch builds
+// the unified error envelope, with the same codes and exit values cmdLearnings
+// returns for the same two cases.
 async function learningsResultOf(argv) {
   const flags = parseFlags(argv);
-  const workspace = path.resolve(flags.workspace);
-  const copilotHome = resolveCopilotHome(flags.copilotHome);
-  const { listingView, whyView } = await import('./knowledge/listing.mjs');
+  const { resolveLearningsView } = await import('./knowledge/listing.mjs');
+  const view = resolveLearningsView({
+    argv,
+    flags,
+    workspace: path.resolve(flags.workspace),
+    copilotHome: resolveCopilotHome(flags.copilotHome),
+    hasFlag,
+  });
 
-  // Mirrors cmdLearnings' own two usage/target guards exactly (including
-  // the trailing-bare-`--why` case parseFlags itself can't detect), but
-  // THROWS instead of returning `{pass:false, ...}` — dispatchLane's catch
-  // branch turns this into the unified error envelope with the SAME exit
-  // codes cmdLearnings already returns for these cases (EXIT.usage / 1).
-  if (hasFlag(argv, '--why') && !flags.why) {
-    throw usageError('usage: harness learnings --why <id>', 'harness learnings --why <id>');
+  if (view.outcome === 'usage') throw usageError(view.message, 'harness learnings --why <id>');
+  if (view.outcome === 'not-found') {
+    throw Object.assign(new Error(`no learning ${view.id}`), { code: 'E_TARGET', exit: 1 });
   }
-  if (flags.why) {
-    const result = whyView({ workspace, id: flags.why });
-    if (!result) {
-      throw Object.assign(new Error(`no learning ${flags.why}`), { code: 'E_TARGET', exit: 1 });
-    }
-    return result;
-  }
-
-  const domain = argv[0] && !argv[0].startsWith('--') ? argv[0] : null;
-  return listingView({ workspace, copilotHome, domain });
+  return view.result;
 }
 
 async function statusResultOf(argv) {
