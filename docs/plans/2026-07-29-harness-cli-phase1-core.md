@@ -109,6 +109,21 @@ Three of that section's ten criteria are already delivered by the command-index 
 - [ ] **P2AC6** Read paths never create the knowledge store — the Phase 1 invariant holds under every new command.
 - [ ] **P2AC7** All three output lanes work for every command this phase adds or touches, closing the AC3 lane-scope amendment for that surface.
 
+### Phase 2 debt claimed from the Phase 1 carry-out
+
+`docs/architecture/harness-cli-workbench-delivery.md` §"Debt carried out of Phase 1" assigns three items to this phase, and states that each phase's plan must pick up the ones assigned to it. Recorded here so they are tracked rather than silently skipped:
+
+- [ ] **P2D1** Expand `resultOf` producers to the remaining commands, reversing the AC3 lane-scope amendment. `recall`, `get` and `index` have no `resultOf` today, so `--output json-envelope|agent` hard-fails for them; adding the field is the entire opt-in, and `laneBearingCommands()` regenerates the help text from it.
+- [ ] **P2D2** Surface quarantined learnings in search and tree results (M4 backlog): a quarantined cluster is currently invisible to retrieval, so a user cannot see why a claim stopped appearing.
+- [ ] **P2D3** Resolve the `learningsResultOf` / `cmdLearnings` duplication carried as a P1.6 judgment call.
+
+### Entity kinds for `lookup` — settled upstream, scoped honestly here
+
+`docs/architecture/harness-cli-workbench.md` §`lookup` already fixes the kind list: `file | symbol | document | plan | skill | check | run | event | resource | learning | episode`. This plan does not re-decide it. Two scoping facts recorded so the delivered surface is not mistaken for the full contract:
+
+- **`run` and `resource` have no entities to resolve yet.** The run journal is Phase 4a and the resource model is Phase 5. `lookup run|resource` therefore returns the same structured not-found as any unknown identifier, naming the phase that will populate it, rather than being silently absent from the kind list.
+- **Identifiers reuse the keys the store already has** — no new id scheme. Learnings are `<domain>/<slug>` (`store.mjs`), episodes are `path@sha256` (`consolidate.mjs`, which is already how consolidation keys them). Neither corpus has an id index, so resolution is a bounded scan; that is a performance characteristic to measure, not an addressability gap, and inventing a second id scheme to avoid it would fork identity across the store and the retrieval layer.
+
 ## Primitive Governance
 
 This plan modifies one existing primitive — the `harness-tool-contract.md` reference — so the create-primitive governance applies (skill read; recorded in `skills_used`):
@@ -155,6 +170,7 @@ Each lands as one reviewable commit with its own review pass, per the delivery d
 - [ ] **P2.3** `search` — five match modes over the scope list, `--explain` reasons, empty-set-exits-0 (P2AC1, P2AC2).
 - [ ] **P2.4** Federation determinism: normalized scoring, stable tie-break, cursors, partial-source failure reporting, byte-identity regression test (P2AC3).
 - [ ] **P2.5** `tree workspace|knowledge`, `recall`/`get` deprecated aliases, tool-contract and hydrated-caller updates (P2AC5, P2AC7).
+- [ ] **P2.6** Phase 1 debt assigned to this phase: `resultOf` for the remaining commands (P2D1), quarantined learnings visible in search/tree (P2D2), `learningsResultOf` de-duplication (P2D3).
 
 ## Research Notes
 
