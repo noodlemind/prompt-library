@@ -1,10 +1,10 @@
 ---
 plan_schema: 1
-title: "Phase 1 — CLI core: command registry, output modes, async runner"
+title: "Harness CLI Workbench — Phase 1 core, then Phase 2 knowledge operator"
 type: feat
 status: review
 plan_lock: true
-phase: 7
+phase: 8
 priority: P1
 risk: amber
 autonomy: balanced
@@ -17,8 +17,10 @@ expected_outputs:
   - "Async process runner with timeout, Ctrl-C cancellation, and descendant termination"
   - "Secret redaction pass on emitted and persisted output"
   - "Central event registry with actor/execution metadata"
+  - "Phase 2: search/lookup/tree over code, knowledge, learnings and plans with deterministic federation"
 success_criteria:
   - "AC1–AC10 below all pass via named checks"
+  - "P2AC1–P2AC7 below all pass via named checks"
 verification:
   required: [harness-tests, prompt-contracts, build-assets]
   criteria:
@@ -32,6 +34,13 @@ verification:
     AC8: [harness-tests]
     AC9: [harness-tests, prompt-contracts, build-assets]
     AC10: [harness-tests, prompt-contracts]
+    P2AC1: [harness-tests]
+    P2AC2: [harness-tests]
+    P2AC3: [harness-tests]
+    P2AC4: [harness-tests]
+    P2AC5: [harness-tests, prompt-contracts]
+    P2AC6: [harness-tests]
+    P2AC7: [harness-tests, prompt-contracts]
 reviews:
   required: [architecture-strategist, security-sentinel, pattern-recognition-specialist]
   completed: [architecture-strategist, security-sentinel, pattern-recognition-specialist]
@@ -86,6 +95,20 @@ First phase of the Harness CLI Workbench plan (`docs/architecture/harness-cli-wo
 - [x] **AC9** Full regression: all existing tests pass and `build-assets` succeeds; no hydrated-skill caller of `orient`/`recall`/`get` observes a shape change without a version bump.
 - [x] **AC10** Every lane-bearing command ships an agent-lane rendering per the output-lanes contract — and any command gaining a `resultOf` producer must ship all three lanes (`docs/architecture/harness-cli-workbench.md`): hard local budget with item-boundary truncation, deterministic (no model pass), `inertLine` + redaction hardening on retrieved text, and rendered bytes emitted with the command's event; envelope output never enters model context.
 
+## Acceptance Criteria — Phase 2 (knowledge operator)
+
+Phase 2 lands in this same PR by explicit user decision (see Activity, 2026-08-07), so its criteria are tracked here rather than in a second dated plan — `docs/plans/README.md` allows exactly one live plan per open PR. Source of scope: `docs/architecture/harness-cli-workbench-delivery.md` §Phase 2.
+
+Three of that section's ten criteria are already delivered by the command-index work in this PR and are recorded there, not repeated here: registry enumerability of every verb, per-option TUI dispositions with strict verb scoping, and the command index emitted through the envelope lane.
+
+- [ ] **P2AC1** `search` implements all five match modes (ranked, literal, regex, path, symbol) across the documented scope list; an empty result set exits 0 rather than erroring.
+- [ ] **P2AC2** Every result carries source, scope, location or entity id, relevance score, and index generation — plus a retrieval reason under `--explain`.
+- [ ] **P2AC3** Federation across scopes is deterministic: normalized scores, stable tie-break, cursor validity across sources, and explicit partial-source failure reporting. Same query against the same index generation yields byte-identical results.
+- [ ] **P2AC4** `lookup` resolves every declared entity kind and returns a structured not-found error rather than an empty success.
+- [ ] **P2AC5** `recall`/`get` keep working via deprecated aliases; `harness-tool-contract.md` and every hydrated skill caller are updated in the same phase.
+- [ ] **P2AC6** Read paths never create the knowledge store — the Phase 1 invariant holds under every new command.
+- [ ] **P2AC7** All three output lanes work for every command this phase adds or touches, closing the AC3 lane-scope amendment for that surface.
+
 ## Primitive Governance
 
 This plan modifies one existing primitive — the `harness-tool-contract.md` reference — so the create-primitive governance applies (skill read; recorded in `skills_used`):
@@ -122,6 +145,16 @@ Two Codex adversarial reviews after the internal final review found real gaps th
 - [x] **P1.5** Event registry with actor/execution metadata; migrate existing event writes.
 - [x] **P1.6** Migrate all remaining commands; delete the switch; regenerate help; update tool contract with envelope versioning note.
 - [x] **P1.7** Regression + contract pass (AC9), fixture updates where shapes were versioned.
+
+### Phase 2 workstreams
+
+Each lands as one reviewable commit with its own review pass, per the delivery doc's execution rules. The command index (P2AC8–10 in the delivery doc) already shipped in P1.6.
+
+- [ ] **P2.1** Retrieval kernel: one scope registry and one result record shape (source, scope, id/location, score, index generation, reason) shared by every retrieval command, so federation has a single normalization point instead of per-command shapes.
+- [ ] **P2.2** `lookup` — exact resolution by entity kind, structured not-found (P2AC4), all three lanes.
+- [ ] **P2.3** `search` — five match modes over the scope list, `--explain` reasons, empty-set-exits-0 (P2AC1, P2AC2).
+- [ ] **P2.4** Federation determinism: normalized scoring, stable tie-break, cursors, partial-source failure reporting, byte-identity regression test (P2AC3).
+- [ ] **P2.5** `tree workspace|knowledge`, `recall`/`get` deprecated aliases, tool-contract and hydrated-caller updates (P2AC5, P2AC7).
 
 ## Research Notes
 
@@ -184,3 +217,11 @@ Final whole-branch review (2026-08-06, architecture + security + patterns lenses
 
 ### 2026-08-06 — P1.1–P1.6 complete
 - All six build workstreams landed on feat/workbench-phase1-core (PR #43), each through implement → task review → fix loop → scoped re-review. 840/840 tests. P1.7 in progress: named checks green via harness verify; final whole-branch review pending; AC9 and required reviews recorded on completion.
+
+### 2026-08-07 — Phase 1 closed out; Phase 2 stacked onto the same PR
+- Phase 1 complete: AC1–AC10 delivered, all three CI checks green (Linux, Windows, CodeRabbit), 19/19 review threads resolved.
+- Hardening after the Codex round-3 gap noted above: a fresh Codex review found four defects (equals-form `--workspace` in the generated runner, a `--workspace` boundary crash, JSONL rows budgeted at pre-escape width, and CRLF left on streamed rows) — all fixed with regression tests proven to fail against the pre-fix code. A CodeRabbit pass added seven more, replied to and resolved via the API.
+- Convergence fixes from that wave, recorded because they are a class rather than incidents: a correct fix reached no existing installation twice over. `RUNNER_VERSION` gates runner regeneration, and `writeHarnessRunner`'s only caller was `init-repo`, so `install`/`upgrade` now refresh the runner of the workspace they run in and doctor H13 fails a stale one; the store's line-ending pin ran only on `git init`, so it now converges on every `ensureStore`; and doctor H9 now compares the installed version against the hydrated lock, which is the only signal a tarball recipient gets that they never ran `upgrade`.
+- `yaml` is bundled into the package (floor raised to ^2.9.0, clearing CVE-2026-33532) so a hand-delivered tarball installs without a registry. The trade — we now own its patch cadence for every consumer — is recorded in `package.json`.
+- **Decision (user, 2026-08-07):** deliver the remaining workbench phases stacked onto PR #43 rather than merging Phase 1 first and branching each phase off `main`. This departs from the delivery doc's execution rule 2; recorded here so the reviewer knows it was chosen, not overlooked. Consequence accepted: the PR grows past its approved review, so each workstream lands as one commit with a clear boundary to keep it reviewable.
+- **Status:** Phase 2 starting at P2.1 (retrieval kernel). `plan_lock` stays true; `phase` advanced to 8.
