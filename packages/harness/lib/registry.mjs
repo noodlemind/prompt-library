@@ -60,7 +60,7 @@ import {
 import { cmdPlanNew } from './plan-new.mjs';
 import { cmdLookup, lookupResultOf } from './retrieval/lookup-cmd.mjs';
 import { recallResultOf, getResultOf } from './retrieval/compat-results.mjs';
-import { cmdChecks, checksResultOf, CHECKS_VERBS } from './checks-cmd.mjs';
+import { cmdChecks, checksResultOf, checksExitFor, CHECKS_VERBS } from './checks-cmd.mjs';
 import { cmdConfig, configResultOf, CONFIG_VERBS } from './config-cmd.mjs';
 import { cmdTrust, trustResultOf, TRUST_VERBS } from './trust-cmd.mjs';
 import { CONFIG_KEYS, SCOPES } from './config.mjs';
@@ -1542,6 +1542,10 @@ registerCommand({
   },
   handler: cmdChecks,
   resultOf: checksResultOf,
+  // `checks run` reports the check's own verdict through the exit code so CI
+  // can gate on one check. Without this the envelope/agent lanes exited 0 for a
+  // failing check while the ledger path exited 1.
+  exitOf: checksExitFor,
 });
 
 registerCommand({

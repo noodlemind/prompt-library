@@ -128,7 +128,38 @@ export async function checksResultOf(argv, ctx = {}) {
   // an execute-classed command that cannot be interrupted is worse than one
   // that never existed.
   const outcome = await runNamedCheck(workspace, name, checks[name], { signal: ctx.signal, copilotHome, events: ctx.events });
-  return { schema: 1, verb, config: CHECKS_REL, check: describeCheck(name, checks[name]), outcome };
+  // `status` is carried on the result so the ENVELOPE reports the check's real
+  // verdict. Without it `createEnvelope`'s `status: 'ok'` default stood, and
+  // `checks run` on the envelope lane printed `"status":"ok"` directly above an
+  // outcome of `failed` — see `checksExitFor` for the half of this that lied
+  // even louder.
+  return { schema: 1, verb, config: CHECKS_REL, status: statusForOutcome(outcome), check: describeCheck(name, checks[name]), outcome };
+}
+
+/** The unified status vocabulary for a check's legacy outcome status. */
+function statusForOutcome(outcome) {
+  if (outcome?.status === 'passed') return 'ok';
+  if (outcome?.status === 'timeout') return 'timed-out';
+  return 'failed';
+}
+
+/**
+ * The exit code for a `checks` result, on EVERY lane.
+ *
+ * `checks run` exists so CI can gate on a single check without parsing output.
+ * `dispatchLane` returns 0 on any success path unless the entry declares an
+ * `exitOf`, and this entry did not — so `checks run failing --output
+ * json-envelope` exited 0 while the ledger path for the same check exited 1. A
+ * pipeline gating through the envelope lane passed every failing check.
+ *
+ * Kept byte-identical to the ledger handler's rule (non-passed → 1) rather than
+ * routing `timeout` to the reserved exit 8: making the two lanes agree is the
+ * fix, and widening the exit vocabulary is a separate decision that would change
+ * behavior for callers of the path that was already correct.
+ */
+export function checksExitFor(result) {
+  if (result?.verb !== 'run') return EXIT.ok;
+  return result.outcome?.status === 'passed' ? EXIT.ok : 1;
 }
 
 const OUTCOME_STATE = { passed: 'ok', failed: 'error', timeout: 'error', unavailable: 'warn' };
@@ -174,9 +205,7 @@ export async function cmdChecks(argv, ctx = {}) {
     }
   }
 
-  // `run` reports the check's own verdict through the exit code so CI can gate
-  // on a single check without parsing output. `list`/`show` are queries and
-  // always succeed when they answer.
-  if (result.verb === 'run' && result.outcome?.status !== 'passed') return 1;
-  return 0;
+  // One rule, shared with the lane path via the registry's `exitOf`, so the two
+  // can no longer disagree about whether a check passed.
+  return checksExitFor(result);
 }

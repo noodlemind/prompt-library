@@ -202,3 +202,65 @@ checks:
   setConfigValue({ scope: 'user', key: 'checks.env_allowlist', value: 'true', copilotHome, workspace: ws });
   assert.match(invoke().stdout, /SEEN=undefined/, 'opting in must actually withhold the variable');
 });
+
+/**
+ * Found by the Codex phase review.
+ *
+ * `checks run` exists so CI can gate on a single check without parsing output.
+ * `dispatchLane` returns 0 on any success path unless the entry declares an
+ * `exitOf`, and this entry did not — so the envelope lane exited 0 for a failing
+ * check while the ledger lane exited 1, and the envelope printed
+ * `"status":"ok"` directly above `"status":"failed"`. A pipeline gating through
+ * the envelope lane passed every failing check.
+ */
+const FAILING = `version: 1
+checks:
+  failing:
+    command: ["node", "-e", "process.exit(3)"]
+  passing:
+    command: ["node", "-e", "process.exit(0)"]
+`;
+
+for (const lane of [null, 'json-envelope', 'agent']) {
+  test(`checks run reports the check's verdict through the exit code on the ${lane || 'ledger'} lane`, () => {
+    const ws = workspaceWithChecks(FAILING);
+    const copilotHome = tempDir('checks-exit-home-');
+    approveProject({ workspace: ws, copilotHome });
+    const invoke = (name) => {
+      const argv = ['checks', 'run', name, '--workspace', ws, '--copilot-home', copilotHome, '--no-events'];
+      if (lane) argv.push('--output', lane);
+      return spawnSync(process.execPath, [binPath, ...argv], { cwd: packageRoot, encoding: 'utf8' });
+    };
+    assert.equal(invoke('failing').status, 1, 'a failing check must be a non-zero exit on every lane');
+    assert.equal(invoke('passing').status, EXIT.ok);
+  });
+}
+
+test('the envelope never reports a status its own outcome contradicts', () => {
+  const ws = workspaceWithChecks(FAILING);
+  const copilotHome = tempDir('checks-envelope-home-');
+  approveProject({ workspace: ws, copilotHome });
+  const res = spawnSync(
+    process.execPath,
+    [binPath, 'checks', 'run', 'failing', '--workspace', ws, '--copilot-home', copilotHome, '--no-events', '--output', 'json-envelope'],
+    { cwd: packageRoot, encoding: 'utf8' },
+  );
+  const envelope = JSON.parse(res.stdout);
+  assert.equal(envelope.status, 'failed');
+  assert.equal(envelope.outcome.status, 'failed');
+  assert.equal(res.status, 1, 'the process exit and the envelope must describe the same outcome');
+});
+
+test('list and show stay exit 0 — they answer a question rather than run one', () => {
+  const ws = workspaceWithChecks(FAILING);
+  const copilotHome = tempDir('checks-query-home-');
+  approveProject({ workspace: ws, copilotHome });
+  for (const argv of [['checks', 'list'], ['checks', 'show', 'failing']]) {
+    const res = spawnSync(
+      process.execPath,
+      [binPath, ...argv, '--workspace', ws, '--copilot-home', copilotHome, '--no-events', '--output', 'json-envelope'],
+      { cwd: packageRoot, encoding: 'utf8' },
+    );
+    assert.equal(res.status, EXIT.ok, `${argv.join(' ')} must not inherit run's verdict`);
+  }
+});
