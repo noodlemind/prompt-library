@@ -154,7 +154,7 @@ test('P5AC9: a model-issued command gets the same deny-all environment an operat
   }
 });
 
-test('P5AC9: the tool call is dispatched with the workspace, so a model cannot run outside it', async () => {
+test('P5AC9: the tool call starts in the workspace (which is NOT confinement — see below)', async () => {
   const { ws, home } = scaffold('agent-cwd');
   const outcome = await dispatchToolCall(
     { id: 't1', name: 'exec', input: { argv: [process.execPath, '-e', 'console.log(process.cwd())'] } },
@@ -163,6 +163,24 @@ test('P5AC9: the tool call is dispatched with the workspace, so a model cannot r
   assert.equal(outcome.dispatched, true);
   assert.equal(outcome.result.cwd, ws);
   assert.equal(outcome.result.output.map((r) => r.line).join('\n').trim(), ws);
+});
+
+test('P5AC9: and the harness does NOT confine a model to the workspace — asserted so the claim cannot drift back', async () => {
+  // This test exists to keep a FALSE claim from returning. The previous version
+  // of the test above was named "so a model cannot run outside it" while
+  // asserting only the starting directory; Codex's final review caught the gap.
+  // `resolveExecCwd` validates where a command STARTS. Nothing stops it leaving.
+  const ws = tempDir('agent-escape-ws-');
+  const outside = path.join(ws, '..', `escape-probe-${process.pid}`);
+  const outcome = await dispatchToolCall(
+    { id: 't1', name: 'bash', input: { script: `cd .. && printf x > ${JSON.stringify(path.basename(outside))}` } },
+    { workspace: ws },
+  );
+  assert.equal(outcome.dispatched, true);
+  const escaped = fs.existsSync(outside);
+  if (escaped) fs.rmSync(outside, { force: true });
+  assert.equal(escaped, true,
+    'if this ever fails, real confinement has been added — delete this test and restore the stronger claim in agent-loop.mjs');
 });
 
 test('P5AC9: a refusal from the governed surface stops the loop rather than being re-tried forever', async () => {

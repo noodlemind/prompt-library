@@ -469,3 +469,89 @@ test('CRITICAL: the hydrated skills tree survives a hostile bundle name', () => 
   assert.equal(fs.existsSync(path.join(home, 'skills', 'my-team-skill', 'SKILL.md')), true,
     'a hydrated skill tree was removed by a bundle command');
 });
+
+// --- Codex final review ---------------------------------------------------
+
+test('FINAL-5: an invalid verb is not skipped in favour of a later valid one', async () => {
+  const { verbOf } = await import('../lib/positionals.mjs');
+  assert.equal(verbOf(['frobnicate', 'approve'], ['status', 'approve', 'revoke'], { fallback: 'status' }), 'frobnicate',
+    '`harness trust frobnicate approve` approved the workspace — a typo became a security mutation');
+  assert.equal(verbOf(['--json', 'approve'], ['status', 'approve', 'revoke'], { fallback: 'status' }), 'approve',
+    'while the flag-skipping half of that fix still holds');
+});
+
+test('FINAL-5: the CLI refuses the typo instead of approving', () => {
+  const ws = tempDir('final-trust-ws-');
+  const home = tempDir('final-trust-home-');
+  const res = spawnSync(process.execPath, [
+    path.join(packageRoot, 'bin', 'harness.mjs'), 'trust', 'frobnicate', 'approve',
+    '--workspace', ws, '--copilot-home', home,
+  ], { encoding: 'utf8' });
+  assert.notEqual(res.status, 0, 'an unknown verb must be an error');
+  assert.equal(fs.existsSync(path.join(home, 'harness', 'trust.yaml')), false, 'and must approve nothing');
+});
+
+test('FINAL-7: a value flag cannot swallow the `--` boundary', async () => {
+  const { positionalsOf } = await import('../lib/positionals.mjs');
+  assert.deepEqual(positionalsOf(['--status', '--', 'resume', 'abc']), [],
+    '`--` read as the status value let `resume abc` be parsed from beyond the boundary');
+  assert.deepEqual(positionalsOf(['--status', 'ok', 'list']), ['list'], 'a real value is still consumed');
+});
+
+test('FINAL-12: a base URL may not embed credentials', async () => {
+  const { PROVIDERS, resolveBaseUrl } = await import('../lib/provider.mjs');
+  assert.throws(
+    () => resolveBaseUrl(PROVIDERS.openai, { parentEnv: { OPENAI_BASE_URL: 'https://user:pass@gateway.example.com/v1' } }),
+    (e) => e.code === 'E_USAGE' && /credentials/.test(e.message),
+  );
+});
+
+test('FINAL-4: the adapter scrubs its own credential out of anything it sends back', () => {
+  // A gateway echoing the Authorization header into a 401 body put the key into
+  // `error.message`, then into the loop's `stopDetail`, then into the result.
+  // Core cannot mask it: core never sees the key.
+  for (const file of ['providers/openai-compatible.mjs', 'providers/anthropic.mjs']) {
+    const src = fs.readFileSync(path.join(packageRoot, 'lib', file), 'utf8');
+    assert.match(src, /function scrubCredential/, `${file} must scrub`);
+    assert.match(src, /const safe = scrubCredential\(message,/,
+      `${file} must scrub at the single emit choke point, so a future message type cannot forget`);
+  }
+});
+
+test('FINAL-6: a provider failure after the deadline is a time budget, not a provider error', async () => {
+  const ws = tempDir('final-deadline-ws-');
+  const home = tempDir('final-deadline-home-');
+  const provider = () => ({
+    provider: 'scripted', model: 's', alive: true, logs: [],
+    async complete() { await new Promise((r) => setTimeout(r, 1400)); throw new Error('gateway exploded'); },
+    close() {},
+  });
+  const result = await agentResultOf(
+    ['a', 'task', '--workspace', ws, '--copilot-home', home, '--no-events', '--max-seconds', '1'],
+    {}, { startProviderFn: provider },
+  );
+  assert.equal(result.stopReason, 'time-budget',
+    'blaming the provider for the operator’s budget produced exit 7 where 8 was the truth');
+});
+
+test('FINAL-3: the composer leaves raw mode while a command owns stdout', () => {
+  // In raw mode Ctrl-C is a keypress, not a signal, and keypresses are dropped
+  // while no `next()` is pending — which is exactly when a command is running.
+  // Cancellation was therefore impossible in the TUI.
+  const src = fs.readFileSync(path.join(packageRoot, 'lib', 'tui', 'input.mjs'), 'utf8');
+  const suspend = src.slice(src.indexOf('suspend()'), src.indexOf('resume()'));
+  assert.match(suspend, /setRawMode\(false\)/, 'suspend must restore cooked mode so SIGINT reaches the process');
+  const resume = src.slice(src.indexOf('resume()'), src.indexOf('/** The next thing'));
+  assert.match(resume, /setRawMode\(true\)/, 'and resume must take it back');
+});
+
+test('FINAL-10: close is idempotent and removes the resize listener', async () => {
+  const { createInput } = await import('../lib/tui/input.mjs');
+  const { PassThrough } = await import('node:stream');
+  const input = Object.assign(new PassThrough(), { isTTY: true, setRawMode() {} });
+  const output = Object.assign(new PassThrough(), { isTTY: true, columns: 60 });
+  const session = createInput({ input, output, ui: { paint: (_t, s) => s, unicode: true, arrow: '->' }, label: 'x' });
+  session.close();
+  session.close();
+  assert.equal(output.listenerCount('resize'), 0, 'an anonymous listener stayed attached for the life of the process');
+});

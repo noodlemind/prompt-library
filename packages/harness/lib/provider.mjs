@@ -142,6 +142,15 @@ export function resolveBaseUrl(provider, { parentEnv = process.env } = {}) {
   if (url.protocol !== 'https:' && url.protocol !== 'http:') {
     throw usageError(`${provider.baseUrlVar} must be http or https, got ${url.protocol}`, `expected something like ${provider.baseUrl}`);
   }
+  // Credentials embedded in the URL are refused rather than carried into the
+  // adapter environment. They do not bypass the hostname rule today; they are
+  // simply a second place a secret could live, which is one more than needed.
+  if (url.username || url.password) {
+    throw usageError(
+      `${provider.baseUrlVar} must not embed credentials`,
+      `put the key in ${provider.keyVar} instead of the URL`,
+    );
+  }
   if (url.protocol === 'http:' && !LOOPBACK.has(url.hostname)) {
     throw usageError(
       `refusing a plaintext base URL to ${url.hostname}`,

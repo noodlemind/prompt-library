@@ -141,6 +141,16 @@ function defaultGroupAlive(pid, platform) {
  *   settling anyway (POSIX only).
  * @returns {Promise<{status: 'ok'|'failed'|'cancelled'|'timed-out', exitCode: number|null, signalName: string|null, durationMs: number, stdout: string, stderr: string, truncated: boolean}>}
  */
+/**
+ * NOTE ON THE TERMINATION GUARANTEE (Codex final review). Killing the process
+ * GROUP reaps the ordinary case — a shell and the commands it ran. It does not
+ * reap a descendant that left the group on purpose: `setsid`, or a Node child
+ * spawned `{detached:true}` and `unref()`ed, survives the timeout and keeps
+ * working. A POSIX process group is not a containment boundary, and documenting
+ * it as "the process tree is terminated" overstated it. Reaping those needs a
+ * cgroup, a job object, or a PID namespace — i.e. the sandbox topology this
+ * project has declined.
+ */
 export function runProcess({
   argv,
   cwd,

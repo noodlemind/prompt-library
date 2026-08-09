@@ -10,10 +10,26 @@
  * harness called a model. It does now, out of process — see `lib/provider.mjs`.
  *
  * IT ADDS NO SECOND EXECUTION PATH. A tool call is dispatched through the same
- * `execResultOf`/`bashResultOf` an operator's `harness exec` goes through, with
- * the same argv, so a model's command is confined, allowlisted, timed out, and
- * AUDITED identically to one a person typed. Reimplementing execution here
- * would mean the one caller that cannot be reasoned with got the untested copy.
+ * `execResultOf`/`bashResultOf` an operator's `harness exec` goes through, so a
+ * model's command gets the same environment allowlist, the same starting
+ * directory, the same timeout and the same audit record as one a person typed.
+ * Reimplementing execution here would mean the one caller that cannot be
+ * reasoned with got the untested copy.
+ *
+ * WHAT THAT IS NOT, stated plainly because an earlier version of this comment
+ * said "confined" and a test claimed "a model cannot run outside the workspace"
+ * (Codex final review). Neither was true. `resolveExecCwd` validates the
+ * STARTING directory; nothing stops `cd ..`, an absolute path, or a detached
+ * child that outlives the process-group kill. A model's tool call therefore has
+ * exactly the authority the operator running the harness has — no more, and no
+ * less — and that is the honest boundary.
+ *
+ * Real filesystem confinement needs a sandbox or container with the workspace
+ * as the only writable mount. That is deliberately out of scope: "privileged
+ * sandbox topology" is a named Non-Goal inherited from the agent-loop spec. The
+ * consequence is that `harness agent` should be run where you would be willing
+ * to run a shell script you have not read — which is what pointing a model at a
+ * repository amounts to.
  *
  * IT IS PROVIDER-NEUTRAL. The loop speaks `{system, messages, tools}` and reads
  * back `{text, toolCalls, blocks}`; every wire shape belongs to the adapter.
@@ -98,9 +114,9 @@ export const AGENT_TOOLS = Object.freeze([
   Object.freeze({
     name: 'bash',
     description:
-      'Run one shell script in the workspace. The whole script is a single argument; use `;` or `&&` to sequence. '
-      + 'The environment is deny-all except an explicit allowlist, the working directory is confined to the workspace, '
-      + 'and the process tree is terminated at the timeout. Returns exit code, status, and combined output.',
+      'Run one shell script. The whole script is a single argument; use `;` or `&&` to sequence. '
+      + 'The environment is deny-all except an explicit allowlist, the working directory starts at the workspace root, '
+      + 'and the process group is terminated at the timeout. Returns exit code, status, and combined output.',
     schema: {
       type: 'object',
       properties: {
@@ -114,7 +130,7 @@ export const AGENT_TOOLS = Object.freeze([
     name: 'exec',
     description:
       'Run one program directly, never through a shell — no word splitting, no globbing, no command substitution. '
-      + 'Prefer this over `bash` whenever a shell is not genuinely needed. Same confinement, allowlist, and timeout.',
+      + 'Prefer this over `bash` whenever a shell is not genuinely needed. Same allowlist, starting directory, and timeout.',
     schema: {
       type: 'object',
       properties: {
@@ -418,12 +434,16 @@ export async function runAgentLoop({
           // holding a reference that keeps mutating under it is a bug waiting
           // for the first in-process caller.
           { system, messages: [...messages], tools: AGENT_TOOLS },
-          // The model call must not outlive the wall clock the operator set, or
-          // a 5-minute provider default would silently extend a 60-second run.
-          { timeout: Math.max(1000, Math.min(deadline - now(), 5 * 60_000)) },
+          // Bounded by whatever is left, with NO floor. The previous
+          // `Math.max(1000, …)` deliberately granted a full second when 10 ms
+          // remained, so the operator's wall clock was a suggestion at the edge.
+          { timeout: Math.max(1, Math.min(deadline - now(), 5 * 60_000)) },
         );
       } catch (error) {
-        stop = signal?.aborted ? 'cancelled' : 'provider-error';
+        // A failure that arrives after the deadline IS the deadline. Reporting
+        // it as `provider-error` blamed the provider for the operator's budget
+        // and produced exit 7 where 8 was the truth.
+        stop = signal?.aborted ? 'cancelled' : now() >= deadline ? 'time-budget' : 'provider-error';
         detail = error.message;
         break;
       }

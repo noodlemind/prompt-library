@@ -209,7 +209,13 @@ export async function agentResultOf(argv, ctx = {}, { startProviderFn = null, ru
     };
   }
 
+  // The clock starts BEFORE orientation. Orientation walks the repository and
+  // can take real time on a large one; starting the budget afterwards handed a
+  // `--max-seconds 10` run a fresh ten seconds however long it had already
+  // spent, which is the one number an operator uses to bound a run.
+  const startedAt = Date.now();
   const orientation = await orientForTask({ workspace: p.workspace, copilotHome: p.copilotHome, task: p.task, runOrientFn });
+  const spent = Math.floor((Date.now() - startedAt) / 1000);
   return runAgentLoop({
     task: p.task,
     workspace: p.workspace,
@@ -217,7 +223,10 @@ export async function agentResultOf(argv, ctx = {}, { startProviderFn = null, ru
     persona,
     orientation,
     maxTurns: p.maxTurns,
-    maxSeconds: p.maxSeconds,
+    // Only the REMAINDER. One second is the floor so a run that has already
+    // overspent still gets a turn and terminates with a stated reason rather
+    // than a zero-length budget nobody can interpret.
+    maxSeconds: Math.max(1, p.maxSeconds - spent),
     toolTimeoutSeconds: p.toolTimeoutSeconds,
     ctx,
     signal: ctx.signal ?? null,

@@ -109,18 +109,24 @@ test('P4bAC10: a transcript line lands above the composer, which stays at the bo
   session.close();
 });
 
-test('P4bAC10: typing repaints in place rather than stacking boxes', () => {
+test('P4bAC10: typing repaints in place rather than stacking boxes', async () => {
   const output = fakeTty();
   // A label that cannot collide with the status path — the first version used
   // `repo` for both and counted the status line as a second composer.
-  const session = createInput({ input: fakeInput(), output, ui, label: 'the-label' });
+  const input = fakeInput();
+  const session = createInput({ input, output, ui, label: 'the-label' });
   session.setStatus({ workspace: '~/somewhere' });
-  for (const ch of 'status') session.composer.handleKey(ch, { name: ch, sequence: ch });
-  // The binding repaints on every changed keypress; drive it the same way.
-  session.setStatus({});
+  // Driven through the REAL keypress binding, not by calling the composer
+  // directly. The previous version bypassed the binding entirely, so it could
+  // not have detected a stacked repaint per keystroke — the exact defect it was
+  // written to catch (Codex final review).
+  const pending = session.next();
+  for (const ch of 'status') input.emit('keypress', ch, { name: ch, sequence: ch });
   assert.equal(output.lines.filter((l) => l.includes('the-label')).length, 1,
     'six keypresses must not leave six composers behind');
   assert.equal(output.lines.filter((l) => l.includes('❯')).length, 1);
+  input.emit('keypress', null, { name: 'return' });
+  await pending;
   session.close();
 });
 

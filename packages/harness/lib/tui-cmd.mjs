@@ -115,6 +115,15 @@ export async function runLedger({
     session.setStatus({ workspace: tildePath(workspace), branch, gate });
   };
 
+  // Every path out restores the terminal. Raw mode and the SIGINT/resize
+  // listeners were previously torn down only on the normal path, so a throw
+  // anywhere after `createInput` — a palette failure, a status read, a write —
+  // left the operator's shell in raw mode with no echo.
+  const closeSession = () => {
+    try { session.close(); } catch { /* nothing left to restore */ }
+    process.off('SIGINT', onSigint);
+  };
+
   const writeBanner = () => {
     write(ui.paint('muted', 'harness — session ledger'));
     write(ui.paint('muted', `${ui.arrow} / to search · ! shell · clear · help · exit`));
@@ -325,6 +334,7 @@ export async function runLedger({
     askPrompt(plan.queue[0]);
   };
 
+  try {
   for (;;) {
     const event = await session.next();
     if (event.intent === 'exit') break;
@@ -464,8 +474,9 @@ export async function runLedger({
     }
   }
 
-  session.close();
-  process.off('SIGINT', onSigint);
+  } finally {
+    closeSession();
+  }
 
   // The exit ritual: the closing tally and the command to pick the thread back
   // up, printed INTO scrollback so it survives the session that produced it.

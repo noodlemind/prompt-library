@@ -494,6 +494,28 @@ Final whole-branch review (2026-08-06, architecture + security + patterns lenses
 
 ## Activity
 
+### 2026-08-09 — Codex final review: 12 findings, 10 fixed, 2 deferred with the TUI
+
+Verdict was **block**, and it was right to be. Pinned by `test/codex-phase5-findings.test.mjs`.
+
+**Two were my own overclaims, which is now a pattern worth naming.** For the third review running, the most serious finding was not a broken mechanism but a comment promising more than the code delivers:
+
+- **"A model cannot run outside the workspace" was false.** `resolveExecCwd` validates where a command STARTS; `cd .. && touch escaped` leaves. A model's tool call has exactly the authority of the operator running the harness — no more, no less — and that is the honest boundary. Real confinement needs a sandbox with the workspace as the only writable mount, which is a named Non-Goal. The claim is corrected in `agent-loop.mjs`, the tool descriptions say "starts at the workspace root", and **a test now asserts the escape succeeds**, so the false claim cannot drift back without failing.
+- **"The process tree is terminated" was false.** Killing the process group reaps a shell and its children; it does not reap `setsid` or a `{detached:true}` child that called `unref()`. A POSIX process group is not a containment boundary. Recorded at `runProcess`, where the guarantee is made.
+
+**The fix that broke something worse.** `verbOf` searched every positional for a known verb — my repair for `trust --json approve`. That made `harness trust frobnicate approve` find `approve` further along and **approve the workspace**, turning a typo into a security mutation. The first positional is the verb; the caller validates it. Skipping flag values was the right half of the fix, and scanning past an unrecognised word was not.
+
+**Cancellation was broken in the TUI, by the raw mode I added.** In raw mode Ctrl-C is a keypress rather than a signal, and the keypress handler drops everything while no `next()` promise is pending — which is precisely the window a command runs in. So Ctrl-C during a slow command was swallowed and the SIGINT bridge never fired. `suspend()` now leaves raw mode for the duration, which restores the terminal's own interrupt.
+
+**Also fixed:** a gateway echoing the Authorization header into an error body carried the key into `stopDetail` and the result object — core cannot mask it, because core never sees the key, so the adapters scrub it at their single emit choke point · a value flag could swallow the `--` boundary, so `run --status -- resume <id>` parsed an operation from beyond it · the provider timeout had a 1-second floor that outlived a 10 ms remaining budget, and a failure arriving after the deadline was blamed on the provider (exit 7) rather than the clock (exit 8) · orientation ran outside `--max-seconds`, so a large repository could spend a minute before the budget started · a base URL could embed credentials · the resize listener was never removed and raw mode was restored only on the happy path.
+
+**Deferred to the TUI PR, deliberately:** grapheme/`wcwidth` measurement (CJK and emoji are counted as one cell, and the composer can park the cursor on its own border at narrow widths), and resize handling for a composer taller than the viewport. Both are the TUI's own work and neither is a regression from this branch.
+
+**Three of my tests could not fail.** The repaint test called `composer.handleKey` directly, bypassing the binding it existed to exercise — so it could not have detected a stacked repaint per keystroke, the exact defect it was written for; it now drives real keypress events. The cwd test asserted a starting directory while claiming confinement. And a source comment pointed at `test/positionals.test.mjs`, which does not exist — a pointer to nothing reads as coverage.
+
+**On Codex's own numbers:** it could not run the suite (its sandbox is read-only and the fixtures need `mkdtemp`), and said so. Its focused runs passed. The counts here are from a real run: 1682 tests, 1673 pass, 9 skipped, 0 fail. `harness verify` 14/14.
+
+
 ### 2026-08-09 — The verify gate cannot tell a met criterion from a green test suite
 
 Found while confirming that Phase 4b's unchecked criteria would block the run. They do not. `harness verify` reports **P4bAC13, P4bAC14 and P4bAC15 as `passed`** while all three are `- [ ]` in this document.

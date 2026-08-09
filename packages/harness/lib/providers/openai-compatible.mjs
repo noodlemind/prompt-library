@@ -32,8 +32,37 @@ import https from 'node:https';
 const PROVIDER_ID = process.env.HARNESS_PROVIDER_ID || 'openai-compatible';
 const BASE_URL = process.env.HARNESS_PROVIDER_BASE_URL || '';
 
+/**
+ * Remove the credential from anything derived from a server response.
+ *
+ * The adapter is the only process that HOLDS the key, which makes it the only
+ * place that can reliably take it back out. A gateway — misconfigured, hostile,
+ * or merely verbose — that echoes the Authorization header into a 401 body sent
+ * that string back through `error.message`, into the loop's `stopDetail`, and
+ * into the result object. Core's redactor masks secret SHAPES and the ambient
+ * environment; it cannot know that this particular string is this run's key,
+ * because core never sees the key at all.
+ *
+ * Applied to errors AND to successful content: a model that reads a config file
+ * aloud is the same leak by a slower route.
+ */
+function scrubCredential(value, key) {
+  if (!key || key.length < 8) return value;
+  if (typeof value === 'string') return value.split(key).join('[redacted]');
+  if (Array.isArray(value)) return value.map((v) => scrubCredential(v, key));
+  if (value && typeof value === 'object') {
+    const out = {};
+    for (const [k, v] of Object.entries(value)) out[k] = scrubCredential(v, key);
+    return out;
+  }
+  return value;
+}
+
 function send(message) {
-  process.stdout.write(`${JSON.stringify(message)}\n`);
+  // ONE choke point, so a future message type cannot forget. The key is read
+  // here and nowhere else in the emit path.
+  const safe = scrubCredential(message, apiKey());
+  process.stdout.write(`${JSON.stringify(safe)}\n`);
 }
 
 /** The credential, read by NAME from the variable the harness nominated. A

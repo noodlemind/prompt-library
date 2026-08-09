@@ -93,6 +93,10 @@ export function createInput({
     paint();
   };
 
+  // Named, so `close` can remove it. An anonymous listener stayed attached for
+  // the life of the process, which for a long-lived shell is a leak per session.
+  const onResize = () => { erase(); paint(); };
+
   const onKeypress = (str, key = {}) => {
     if (closed || !resolveLine) return;
     const result = composer.handleKey(str, key);
@@ -114,7 +118,7 @@ export function createInput({
     readline.emitKeypressEvents(input);
     if (input.isTTY) input.setRawMode(true);
     input.on('keypress', onKeypress);
-    output.on?.('resize', () => { erase(); paint(); });
+    output.on?.('resize', onResize);
   } else {
     // The piped path is unchanged and stays scriptable: no raw mode, no
     // repaint, one line per line. Every existing test drives this.
@@ -160,8 +164,23 @@ export function createInput({
      * the block; the commands themselves are exactly that caller, and wrapping
      * their dispatch is the only place that can be fixed once for all of them.
      */
-    suspend() { erase(); suspended = true; },
-    resume() { suspended = false; paint(); },
+    suspend() {
+      erase();
+      suspended = true;
+      // RAW MODE COMES OFF for the duration, and this is the whole fix for a
+      // real defect: in raw mode Ctrl-C is a keypress, not a signal, and the
+      // keypress handler discards everything while no `next()` promise is
+      // pending — which is exactly the window a command runs in. So Ctrl-C
+      // during a slow command was swallowed and the SIGINT bridge never fired.
+      // Cooked mode restores the terminal's own interrupt for as long as
+      // something else owns stdout.
+      if (interactive && input.isTTY) { try { input.setRawMode(false); } catch { /* already gone */ } }
+    },
+    resume() {
+      if (interactive && input.isTTY && !closed) { try { input.setRawMode(true); } catch { /* already gone */ } }
+      suspended = false;
+      paint();
+    },
 
     /** The next thing the operator did: a line, or an intent the loop owns. */
     async next() {
@@ -179,10 +198,14 @@ export function createInput({
       write(`${ui.paint('muted', composer.render()[0] ? '' : '')}${ui.paint('ok', '❯')} ${line}`);
     },
     close() {
+      // Idempotent: an error path may close a session the normal path also
+      // closes, and restoring a terminal twice must not throw on the way out.
+      if (closed) return;
       closed = true;
       erase();
       if (interactive) {
         input.off?.('keypress', onKeypress);
+        output.off?.('resize', onResize);
         if (input.isTTY) { try { input.setRawMode(false); } catch { /* already gone */ } }
       }
       rl?.close();

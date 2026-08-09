@@ -24,8 +24,10 @@
  * value for. Both authorities are real — command flags are parsed by their own
  * commands and never reach `parseFlags`, while several global value flags never
  * appear in the registry's help surface — so a hand-written list would drift
- * from one of them. `test/positionals.test.mjs` asserts the union matches, which
- * turns "remember to update this" into a failing test.
+ * from one of them. `test/coderabbit-review-findings.test.mjs` asserts the union
+ * matches, which turns "remember to update this" into a failing test. (The
+ * comment previously named a file that does not exist — a pointer to nothing is
+ * worse than no pointer, because it reads as coverage.)
  */
 
 /**
@@ -74,7 +76,12 @@ export function positionalsOf(argv, { limit = Infinity, extra = null } = {}) {
     if (token === '--') break;
     if (typeof token !== 'string') continue;
     if (token.startsWith('-') && token !== '-') {
-      if (isValueFlag(token, widen) && argv[i + 1] !== undefined) i += 1;
+      // A value flag consumes the NEXT token — unless that token is the `--`
+      // boundary. `harness run --status -- resume <id>` used to read `--` as the
+      // status value and then parse `resume <id>` from beyond a boundary that
+      // was supposed to end parsing, turning a missing flag value into a
+      // different, valid operation.
+      if (isValueFlag(token, widen) && argv[i + 1] !== undefined && argv[i + 1] !== '--') i += 1;
       continue;
     }
     out.push(token);
@@ -83,16 +90,23 @@ export function positionalsOf(argv, { limit = Infinity, extra = null } = {}) {
 }
 
 /**
- * The verb a caller asked for, matched against what the command actually has.
+ * The verb a caller asked for: the first positional, once flag values are
+ * skipped.
  *
- * Matching beats positional guessing here: `trust --json approve` fell back to
- * `status` and reported success because the scan lost the word, and an operator
- * reading "not trusted" after asking to approve has no way to tell that their
- * request was dropped rather than refused. If a known verb appears anywhere in
- * the positionals, that is the verb.
+ * `known` is accepted so callers read declaratively and so this signature can
+ * validate later, but it is deliberately NOT searched. An earlier version
+ * scanned every positional for a known verb, which fixed `trust --json approve`
+ * and broke something worse: `harness trust frobnicate approve` found `approve`
+ * further along and approved the workspace, turning a typo into a security
+ * mutation. Skipping flag values was the right half of that fix. The caller
+ * validates the returned verb and reports an unknown one.
  */
 export function verbOf(argv, known, { fallback = null, extra = null } = {}) {
+  // THE FIRST positional is the verb. Searching all of them — which is what the
+  // previous fix did — meant `harness trust frobnicate approve` found `approve`
+  // further along and APPROVED THE WORKSPACE, turning a typo into a security
+  // mutation. Skipping flag values was the right half of that fix; scanning past
+  // an unrecognised word was not.
   const positionals = positionalsOf(argv, { extra });
-  const match = positionals.find((p) => known.includes(p));
-  return match ?? (positionals.length ? positionals[0] : fallback);
+  return positionals.length ? positionals[0] : fallback;
 }
