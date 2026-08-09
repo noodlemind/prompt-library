@@ -129,7 +129,10 @@ function addBundle(copilotHome, source) {
   if (!manifest) {
     throw Object.assign(new Error(`invalid bundle: ${errors[0]}`), { code: 'E_USAGE', exit: EXIT.usage });
   }
-  const dest = path.join(resourcesRoot(copilotHome), manifest.name);
+  // Same resolver `remove` uses. `parseManifest` already constrains the name,
+  // so this is belt-and-braces — but a containment guarantee that lives in a
+  // different function's validation is one refactor away from being gone.
+  const dest = resolveBundleDir(copilotHome, manifest.name);
   fs.rmSync(dest, { recursive: true, force: true });
   fs.mkdirSync(path.dirname(dest), { recursive: true });
   fs.cpSync(from, dest, { recursive: true });
@@ -139,6 +142,33 @@ function addBundle(copilotHome, source) {
     fs.rmSync(path.join(dest, marker), { force: true });
   }
   return { name: manifest.name, version: manifest.version, dir: dest, digest: bundleDigest(dest) };
+}
+
+
+/** A bundle directory named by the operator, resolved and proved to be inside
+ * the resources root before anything destructive happens to it.
+ *
+ * Two checks rather than one: the NAME must be the slug `parseManifest` already
+ * requires (so `remove` and `add` agree on what a bundle is), and the resolved
+ * path must still be a direct child of the root (so a future caller that
+ * loosens the pattern cannot reintroduce the escape). The recursive delete this
+ * guards is the most destructive operation in the CLI. */
+export function resolveBundleDir(copilotHome, name) {
+  if (!/^[a-z0-9][a-z0-9._-]*$/i.test(name)) {
+    throw usageError(
+      `invalid bundle name: ${JSON.stringify(name)}`,
+      'a bundle name is a plain directory name — harness resources bundles',
+    );
+  }
+  const root = path.resolve(resourcesRoot(copilotHome));
+  const dir = path.resolve(root, name);
+  if (path.dirname(dir) !== root) {
+    throw usageError(
+      `bundle name escapes the resources directory: ${JSON.stringify(name)}`,
+      'harness resources bundles',
+    );
+  }
+  return dir;
 }
 
 export async function resourcesResultOf(argv, ctx = {}) {
@@ -178,7 +208,17 @@ export async function resourcesResultOf(argv, ctx = {}) {
 
   if (verb === 'remove') {
     if (!target) throw usageError('resources remove requires a bundle name', 'harness resources bundles');
-    const dir = path.join(resourcesRoot(copilotHome), target);
+    // CRITICAL (CodeRabbit): `target` is an unvalidated operator positional that
+    // was joined onto the resources root and then removed RECURSIVELY. So
+    // `harness resources remove ../skills` deleted the whole hydrated skills
+    // tree, and `../../outside` reached past `~/.copilot` entirely — both while
+    // reporting `[ok]`.
+    //
+    // `add` was never exposed this way because `parseManifest` constrains a
+    // bundle's name to a slug; `remove` took whatever it was handed. The name
+    // is validated to the SAME shape here, so the two ends of the lifecycle
+    // agree on what a bundle is allowed to be called.
+    const dir = resolveBundleDir(copilotHome, target);
     if (!fs.existsSync(dir)) {
       throw Object.assign(new Error(`no bundle named ${JSON.stringify(target)}`), {
         code: 'E_NOT_FOUND', exit: EXIT.notFound, hint: 'harness resources bundles',

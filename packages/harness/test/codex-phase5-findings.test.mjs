@@ -18,6 +18,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { spawnSync } from 'node:child_process';
 import { test } from 'node:test';
 import YAML from 'yaml';
 import { approvedBundleNames, isContainedPlacement, readPlacements, syncBundles } from '../lib/bundle-sync.mjs';
@@ -433,4 +434,38 @@ test('F14: nothing in the set is actually a boolean, which would skip a word of 
   });
   assert.deepEqual(notValueTaking, [],
     'listing a boolean here makes the parser skip a word that belonged to the task');
+});
+
+// --- CodeRabbit critical: `resources remove` was a recursive delete on an
+//     unvalidated operator positional -------------------------------------
+
+test('CRITICAL: `resources remove` cannot delete anything outside the resources root', async () => {
+  const { resolveBundleDir } = await import('../lib/resources-cmd.mjs');
+  const home = tempDir('rr-home-');
+  fs.mkdirSync(path.join(home, 'resources'), { recursive: true });
+
+  for (const escape of ['../skills', '../../outside', '..', '/etc', 'a/b', './x', '']) {
+    assert.throws(
+      () => resolveBundleDir(home, escape),
+      (e) => e.code === 'E_USAGE',
+      `${JSON.stringify(escape)} reached a recursive delete and reported [ok]`,
+    );
+  }
+  // A real bundle name still resolves, or the fix would just break `remove`.
+  assert.equal(resolveBundleDir(home, 'demo-bundle'), path.join(fs.realpathSync(home), 'resources', 'demo-bundle'));
+});
+
+test('CRITICAL: the hydrated skills tree survives a hostile bundle name', () => {
+  const home = tempDir('rr2-home-');
+  fs.mkdirSync(path.join(home, 'resources'), { recursive: true });
+  fs.mkdirSync(path.join(home, 'skills', 'my-team-skill'), { recursive: true });
+  fs.writeFileSync(path.join(home, 'skills', 'my-team-skill', 'SKILL.md'), "our team's skill\n");
+
+  const res = spawnSync(process.execPath, [
+    path.join(packageRoot, 'bin', 'harness.mjs'), 'resources', 'remove', '../skills', '--copilot-home', home,
+  ], { cwd: packageRoot, encoding: 'utf8' });
+
+  assert.notEqual(res.status, 0, 'it reported [ok] while deleting the tree');
+  assert.equal(fs.existsSync(path.join(home, 'skills', 'my-team-skill', 'SKILL.md')), true,
+    'a hydrated skill tree was removed by a bundle command');
 });
