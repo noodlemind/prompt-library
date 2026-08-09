@@ -494,6 +494,24 @@ Final whole-branch review (2026-08-06, architecture + security + patterns lenses
 
 ## Activity
 
+### 2026-08-09 — Phase 4b verified on a real pty, and split
+
+`harness tui` had never run against a genuine TTY: the development sandbox refuses to allocate a pty, and every test drove the loop through injected streams. It was installed in a **Daytona Linux sandbox**, driven under `script(1)`, and the captured bytes replayed through **pyte** — a third-party VT emulator — before rendering. The indirection is the point: the defect that reopened this phase was a box drawn inside a box, produced entirely by cursor-movement escapes, and a picture drawn by the code that emits those escapes could not have shown it.
+
+**Two defects the suite could not see, both fixed:**
+
+- **Command output was written THROUGH the composer.** Every harness command prints with `console.log`, straight to the stream, with no idea a bordered block sits below the cursor — so `status` interleaved its rows with the border and left a second composer stranded underneath. Dispatch now suspends the composer and resumes after. The module note had warned that a direct writer would strand the block; the commands themselves are that writer, which is the sort of thing a comment cannot catch.
+- **The status line was never called.** Built and tested in the previous commit, wired to nothing, so it never appeared in a session. The same class of gap as the one that reopened the phase — a component with tests and no caller — found again by a screenshot rather than by the suite.
+
+**What the pty run confirms works:** the bordered composer with its workspace label; LEFT-arrow cursor movement landing an insert exactly where expected; `Ctrl-U` deleting to the cursor rather than the whole line; the two-row multiline box; a transcript above a single repainted composer; the status line; and `Ctrl-P` opening the palette with a side-effect class on every row.
+
+**What it confirms does not:** palette rows WRAP instead of clipping, so long descriptions spill across lines and the overlay reads as a wall of text next to the reference implementations; the palette is a flat numbered list rather than a bordered, arrow-navigable overlay; and `@` and the seven views are absent.
+
+**Decision: the remainder moves to its own PR.** P4bAC13 (arrow-key palette navigation), P4bAC14 (`@` completion) and P4bAC15 (the seven views) stay unchecked here, and this PR ships Phase 4b as explicitly partial rather than claiming otherwise. The four criteria that ARE met — composer, keyboard navigation, status line, terminal-free testability — are done and pinned.
+
+**Method worth reusing.** A pty in a throwaway Linux container, plus an independent VT emulator, turns "does the terminal surface work" from a question only a human with a screenshot can answer into one that can be answered on demand. That capability did not exist when P4bAC1–AC9 were written, which is a large part of why they measured the plumbing instead.
+
+
 ### 2026-08-09 — CodeRabbit review closed: 14 findings, all fixed
 
 Pinned by `test/coderabbit-review-findings.test.mjs`, written to fail against the pre-fix tree — **14 of its 15 behavioral tests fail on `3fb7b9d`**, and the one that passes is the deliberate guard that a TRUSTED project's broken policy still throws.
