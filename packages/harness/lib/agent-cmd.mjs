@@ -142,16 +142,23 @@ export async function agentResultOf(argv, ctx = {}, { startProviderFn = null, ru
   // persona, tools, orientation, budgets — is the useful half, and it costs no
   // tokens to look at.
   if (p.flags.dryRun) {
-    const orientation = await orientForTask({ workspace: p.workspace, copilotHome: p.copilotHome, task: p.task, runOrientFn });
+    const orientation = await orientForTask({ workspace: p.workspace, copilotHome: p.copilotHome, task: p.task, runOrientFn, dryRun: true });
     return {
       schema: 1,
       dryRun: true,
       task: p.task,
       persona: { name: persona.name, hydrated: persona.hydrated, source: persona.source },
       profile: { id: BENCHMARK_PROFILE.id, keeps: [...BENCHMARK_PROFILE.keeps], drops: BENCHMARK_PROFILE.drops.map((d) => ({ ...d })) },
-      orientation: { available: orientation.available, contextPack: orientation.contextPack ?? null, reason: orientation.reason },
+      orientation: {
+        available: orientation.available,
+        materialized: orientation.materialized === true,
+        contextPack: orientation.contextPack ?? null,
+        reason: orientation.reason,
+      },
       provider: p.providerId,
       model: p.model || PROVIDERS[p.providerId].defaultModel,
+      // Without the pack, which a dry run does not materialize — so this is the
+      // floor, not the figure the real run will send.
       systemPromptBytes: Buffer.byteLength(buildSystemPrompt({ persona, orientation: orientation.pack }), 'utf8'),
       maxTurns: p.maxTurns,
       maxSeconds: p.maxSeconds,
@@ -220,7 +227,7 @@ function renderDryRun(result, flags) {
     state: result.orientation.available ? 'ok' : 'warn',
     key: 'orientation',
     value: result.orientation.available ? result.orientation.contextPack : 'unavailable',
-    note: result.orientation.reason || undefined,
+    note: result.orientation.reason || (result.orientation.materialized ? undefined : 'would be written'),
     keyWidth,
   }));
   console.log(ui.line({ key: 'profile', value: result.profile.id, note: `keeps ${result.profile.keeps.join(', ')}`, keyWidth }));

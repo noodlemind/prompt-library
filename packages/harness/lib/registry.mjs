@@ -1582,7 +1582,7 @@ registerCommand({
       { name: '--model', type: 'string', valueName: 'id', description: "the model to call; the provider's default when omitted", required: false, default: null, tui: 'prompt' },
       { name: '--max-turns', type: 'number', valueName: 'n', description: `stop after this many turns (default ${DEFAULT_MAX_TURNS})`, required: false, default: DEFAULT_MAX_TURNS, tui: 'prompt' },
       { name: '--max-seconds', type: 'number', valueName: 's', description: `stop after this much wall clock (default ${DEFAULT_MAX_SECONDS})`, required: false, default: DEFAULT_MAX_SECONDS, tui: 'prompt' },
-      { name: '--tool-timeout', type: 'number', valueName: 's', description: "seconds before one tool's process tree is terminated", required: false, default: null, tui: 'prompt' },
+      { name: '--tool-timeout', type: 'number', valueName: 's', description: "ceiling on one tool's runtime in seconds; the model may ask for less, never more", required: false, default: null, tui: 'prompt' },
     ],
   },
   // A task is REQUIRED, and a missing one is a usage error rather than a loop

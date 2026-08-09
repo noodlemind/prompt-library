@@ -207,19 +207,78 @@ export function buildSystemPrompt({ persona, profile = BENCHMARK_PROFILE, orient
  * is a legitimate outcome rather than an error: a four-file task has nothing to
  * orient over. The loop reports what it got and continues.
  */
-export async function orientForTask({ workspace, copilotHome, task, runOrientFn }) {
+export async function orientForTask({ workspace, copilotHome, task, runOrientFn, dryRun = false }) {
   try {
-    const result = runOrientFn({ workspace, copilotHome, flags: { workspace, limit: 3 }, query: task });
-    if (!result) return { available: false, reason: 'orientation refused (.harness is not a real directory)', pack: null };
+    // `dryRun` has to reach `runOrient` or orientation writes the context pack
+    // and the session on a run whose whole promise is that it writes nothing.
+    // It was being handed no flag at all.
+    const result = runOrientFn({ workspace, copilotHome, flags: { workspace, limit: 3, dryRun }, query: task });
+    if (!result) return { available: false, materialized: false, reason: 'orientation refused (.harness is not a real directory)', pack: null };
+    // Under a dry run the pack was computed but not persisted, so there is
+    // nothing to read. That is NOT the same as being unable to orient, and
+    // reporting it as unavailable would tell the operator their container is
+    // broken when it is fine.
+    if (dryRun) {
+      return { available: true, materialized: false, reason: null, pack: null, contextPack: result.contextPack, repoMap: result.repoMap ?? null };
+    }
     const packPath = path.join(workspace, result.contextPack || '');
     const pack = fs.readFileSync(packPath, 'utf8');
-    return { available: true, reason: null, pack, contextPack: result.contextPack, repoMap: result.repoMap ?? null };
+    return { available: true, materialized: true, reason: null, pack, contextPack: result.contextPack, repoMap: result.repoMap ?? null };
   } catch (error) {
     // Orientation is context, not correctness. A container without a repo, an
     // index, or a knowledge store still has a task to attempt, and reporting
     // "no orientation" beats refusing to start.
-    return { available: false, reason: error.message, pack: null };
+    return { available: false, materialized: false, reason: error.message, pack: null };
   }
+}
+
+
+/**
+ * How long one tool may run, from the bounds the OPERATOR set.
+ *
+ * The model may ASK for a timeout — a long build genuinely needs one — but
+ * `--tool-timeout` is a control the operator set, so it is a CEILING and never
+ * a default beneath it. The first version took the model's value whenever it
+ * supplied one, which meant an operator who capped tools at 5 seconds got 3600
+ * the moment the model asked for it.
+ *
+ * `null` means "say nothing", and that is load-bearing: `exec` then applies the
+ * configured `exec.timeout_seconds`. Returning a computed number in that case
+ * would let the loop RAISE a timeout the operator lowered in their config,
+ * which is the opposite of what a ceiling is for. The wall clock is enforced
+ * separately, by cancellation — see `dispatchToolCall`.
+ */
+export function resolveToolTimeout({ requested, ceiling = null }) {
+  const bounds = [];
+  if (Number.isFinite(requested) && requested > 0) bounds.push(Math.floor(requested));
+  if (Number.isFinite(ceiling)) bounds.push(Math.floor(ceiling));
+  if (!bounds.length) return null;
+  return Math.max(1, Math.min(...bounds));
+}
+
+/**
+ * The signal that stops a tool at the wall clock.
+ *
+ * Enforcing `--max-seconds` by shortening `--timeout` looked simpler and was
+ * wrong: with no `--tool-timeout` there is no operator value to shorten, so the
+ * loop would have had to invent one — and any number it invented would override
+ * a lower `exec.timeout_seconds` the operator had configured, raising a limit
+ * while claiming to lower one.
+ *
+ * Cancellation has neither problem. It bounds the tool by the deadline no matter
+ * what `exec` was configured to allow, it cannot raise anything, and the run
+ * already speaks `cancelled` as a first-class status, so the tool reports the
+ * truth about why it stopped.
+ */
+function deadlineSignal(remainingSeconds, existing) {
+  if (!Number.isFinite(remainingSeconds)) return existing ?? undefined;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), Math.max(0, remainingSeconds * 1000));
+  // The process must not be held open by a timer whose only job is to fire on a
+  // deadline the run may well beat.
+  timer.unref?.();
+  const signal = existing ? AbortSignal.any([existing, controller.signal]) : controller.signal;
+  return { signal, done: () => clearTimeout(timer) };
 }
 
 /**
@@ -233,15 +292,15 @@ export async function orientForTask({ workspace, copilotHome, task, runOrientFn 
  * something the model can work around by trying again, and continuing would
  * burn the budget re-asking a question already answered no.
  */
-export async function dispatchToolCall(call, { workspace, copilotHome, ctx = {}, timeoutSeconds = null }) {
+export async function dispatchToolCall(call, { workspace, copilotHome, ctx = {}, timeoutSeconds = null, remainingSeconds = null }) {
   if (!TOOL_NAMES.has(call.name)) {
     return { dispatched: false, reason: `unknown tool: ${call.name}`, fatal: false };
   }
   const input = call.input && typeof call.input === 'object' ? call.input : {};
   const base = ['--workspace', workspace];
   if (copilotHome) base.push('--copilot-home', copilotHome);
-  const timeout = Number.isFinite(input.timeout) ? input.timeout : timeoutSeconds;
-  if (timeout !== null && timeout !== undefined) base.push('--timeout', String(timeout));
+  const timeout = resolveToolTimeout({ requested: input.timeout, ceiling: timeoutSeconds });
+  if (timeout !== null) base.push('--timeout', String(timeout));
 
   let argv;
   let run;
@@ -258,13 +317,17 @@ export async function dispatchToolCall(call, { workspace, copilotHome, ctx = {},
     run = execResultOf;
   }
 
+  const bound = deadlineSignal(remainingSeconds, ctx.signal);
+  const runCtx = bound && bound.signal ? { ...ctx, signal: bound.signal } : ctx;
   try {
-    const result = await run(argv, ctx);
-    return { dispatched: true, result };
+    const result = await run(argv, runCtx);
+    return { dispatched: true, result, timeoutSeconds: timeout };
   } catch (error) {
     // A refusal from the governed surface — denied, misconfigured, or confined
     // — is fatal to the loop. See the note above.
     return { dispatched: false, reason: error.message, hint: error.hint ?? null, fatal: true, code: error.code ?? null };
+  } finally {
+    bound?.done?.();
   }
 }
 
@@ -370,7 +433,13 @@ export async function runAgentLoop({
       let fatal = null;
       for (const call of calls) {
         if (signal?.aborted) { fatal = { reason: 'cancelled', cancelled: true }; break; }
-        const outcome = await dispatchToolCall(call, { workspace, copilotHome, ctx, timeoutSeconds: toolTimeoutSeconds });
+        const outcome = await dispatchToolCall(call, {
+          workspace,
+          copilotHome,
+          ctx,
+          timeoutSeconds: toolTimeoutSeconds,
+          remainingSeconds: (deadline - now()) / 1000,
+        });
         if (!outcome.dispatched && outcome.fatal) { fatal = outcome; break; }
         if (!outcome.dispatched) {
           // A malformed call the model can fix by trying again — hand the
@@ -386,6 +455,7 @@ export async function runAgentLoop({
           status: outcome.result.status,
           exitCode: outcome.result.exitCode,
           durationMs: outcome.result.durationMs,
+          timeoutSeconds: outcome.result.timeoutSeconds ?? outcome.timeoutSeconds ?? null,
         });
       }
 

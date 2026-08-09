@@ -27,6 +27,7 @@ import {
   dispatchToolCall,
   renderToolResult,
   resolvePersona,
+  resolveToolTimeout,
 } from '../lib/agent-loop.mjs';
 import { getCommand } from '../lib/registry.mjs';
 import { EXIT } from '../lib/style.mjs';
@@ -419,4 +420,80 @@ test('the system prompt survives a persona that is absent, empty, or enormous', 
     const system = buildSystemPrompt({ persona });
     assert.ok(system.includes('OUT OF SCOPE'), 'the profile section is never the part that gets dropped');
   }
+});
+
+// --- the three gaps found reading my own code back -------------------------
+
+test('--dry-run writes nothing into the workspace', async () => {
+  const { ws, home } = scaffold('agent-drywrite');
+  await agentResultOf(
+    [...'a task'.split(' '), '--workspace', ws, '--copilot-home', home, '--dry-run'],
+    {},
+    { startProviderFn: () => { throw new Error('must not start'); } },
+  );
+  const written = fs.existsSync(path.join(ws, '.harness'))
+    ? fs.readdirSync(path.join(ws, '.harness'), { recursive: true })
+    : [];
+  assert.deepEqual(written, [],
+    'orientation writes a context pack and a session; a dry run must not, and it was being handed no dry-run flag at all');
+});
+
+test('--dry-run still reports whether orientation would succeed, rather than claiming it failed', async () => {
+  const { ws, home } = scaffold('agent-dryreport');
+  const result = await agentResultOf(
+    [...'a task'.split(' '), '--workspace', ws, '--copilot-home', home, '--dry-run'],
+    {},
+    { startProviderFn: () => { throw new Error('must not start'); } },
+  );
+  assert.equal(result.orientation.available, true, 'not writing the pack is not the same as being unable to orient');
+  assert.equal(result.orientation.materialized, false, 'and the report says the pack is not on disk');
+});
+
+test('the operator’s --tool-timeout is a ceiling the model cannot raise', async () => {
+  const { ws, home } = scaffold('agent-ceiling');
+  const provider = scriptedProvider([
+    // 3600 is the configured maximum; without a ceiling the model simply wins.
+    callTool('t1', 'bash', { script: 'true', timeout: 3600 }),
+    say('done'),
+  ]);
+  const result = await agentResultOf(
+    argvFor(ws, home, 'run something', ['--tool-timeout', '5']),
+    {},
+    { startProviderFn: provider.start },
+  );
+  assert.equal(result.turns[0].tools[0].timeoutSeconds, 5,
+    'a control the operator set must bound the model, not default beneath it');
+});
+
+test('a tool cannot run past the wall clock the operator set', async () => {
+  const { ws, home } = scaffold('agent-wallclock');
+  const provider = scriptedProvider([
+    // An hour-long sleep against a one-second run. The wall clock is only
+    // checked BETWEEN turns, so without cancellation this would sail past it.
+    callTool('t1', 'bash', { script: 'sleep 3600', timeout: 3600 }),
+    say('done'),
+  ]);
+  const started = Date.now();
+  const result = await agentResultOf(
+    argvFor(ws, home, 'run something', ['--max-seconds', '1']),
+    {},
+    { startProviderFn: provider.start },
+  );
+  assert.ok(Date.now() - started < 30_000, 'the deadline stopped the tool rather than waiting on its own timeout');
+  assert.equal(result.turns[0].tools[0].status, 'cancelled', 'and the tool reports the truth about why it stopped');
+  assert.equal(result.stopReason, 'time-budget');
+});
+
+test('the loop never RAISES a timeout the operator lowered in their config', async () => {
+  // The bug the cancellation approach avoids: with no --tool-timeout there is
+  // no operator value to shorten, so shortening `--timeout` to fit the wall
+  // clock would have meant inventing one — and overriding a lower configured
+  // `exec.timeout_seconds` upward while claiming to lower it.
+  assert.equal(resolveToolTimeout({ requested: undefined, ceiling: null }), null,
+    'saying nothing is what lets `exec` apply the configured timeout');
+  assert.equal(resolveToolTimeout({ requested: 3600, ceiling: 5 }), 5, 'the operator ceiling wins');
+  assert.equal(resolveToolTimeout({ requested: 2, ceiling: 5 }), 2, 'and a shorter request is honored');
+  assert.equal(resolveToolTimeout({ requested: undefined, ceiling: 5 }), 5);
+  assert.equal(resolveToolTimeout({ requested: 0, ceiling: null }), null, 'a nonsense request is not a bound');
+  assert.equal(resolveToolTimeout({ requested: -5, ceiling: 10 }), 10);
 });
