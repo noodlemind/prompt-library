@@ -28,7 +28,7 @@ success_criteria:
   - "P3AC1–P3AC7 below all pass via named checks"
   - "P4aAC1–P4aAC7 below all pass via named checks"
   - "P4bAC1–P4bAC9 below all pass via named checks"
-  - "P5AC1–P5AC6 below all pass via named checks"
+  - "P5AC1–P5AC10 below all pass via named checks"
 verification:
   required: [harness-tests, prompt-contracts, build-assets]
   criteria:
@@ -78,6 +78,10 @@ verification:
     P5AC4: [harness-tests]
     P5AC5: [harness-tests]
     P5AC6: [harness-tests]
+    P5AC7: [harness-tests]
+    P5AC8: [harness-tests]
+    P5AC9: [harness-tests]
+    P5AC10: [harness-tests]
 reviews:
   required: [architecture-strategist, security-sentinel, pattern-recognition-specialist]
   completed: [architecture-strategist, security-sentinel, pattern-recognition-specialist]
@@ -270,7 +274,7 @@ So there are two supported routes for getting a skill or agent into `~/.copilot`
 - **Unmanaged** — copy the file in by hand. Discovered, validated, and explicitly registered via `resources list|show|register|unregister` (`lib/local-primitives.mjs`). Never in the harness lock, so `upgrade` and `uninstall` leave it alone.
 - **Managed** — install a bundle. `resources add|update|remove|bundles` plus placement on every `install`/`upgrade` (`lib/bundle-sync.mjs`), so contributions are versioned, provenance-tracked, precedence-resolved, and **withdrawn exactly** when the bundle is disabled or removed.
 
-`lib/plugin-host.mjs` remains in the tree as reviewed but **unwired groundwork** — nothing starts a plugin. Kept by explicit decision so an executable-extension answer exists if it is ever wanted; recorded here so its presence is not mistaken for a working feature.
+`lib/plugin-host.mjs` remains in the tree as reviewed but **unwired groundwork** for third-party use — no bundle and no operator command starts a plugin. See the narrow reversal below, which wires it for exactly one first-party caller without reopening that door.
 
 Two rules the placement layer enforces, both stated because they are permissions decisions rather than mechanics:
 
@@ -290,10 +294,36 @@ Lifecycle guarantees now pinned by tests: a hand-added primitive survives `insta
 - [x] **P5AC5** Plugins never mutate policy, the run journal, evidence, or the learnings store; contributed knowledge sources flow through the consolidation loop.
 - [x] **P5AC6** A crashing plugin cannot take down the host process.
 
+### Narrow reversal, absorbed from the agent-loop spec (2026-08-09)
+
+Source: `docs/plans/2026-08-09-feat-harness-agent-loop-plan.md` (session `a628c491`), folded in here at the user's direction rather than run as a third live plan.
+
+The harness is four fifths of an agent — it orients, retrieves, executes under policy, and journals durable runs — and cannot decide what to do next, because nothing in it calls a model. The spec adds the missing fifth so the harness can be measured **as an agent** rather than as a layer on a host it does not ship.
+
+**The reversal is narrow and its boundary is the whole point.** Phase 5 was settled as "resources only" because THIRD-PARTY executable extensions were the thing being declined. This wires `plugin-host.mjs` for a **first-party provider adapter only**: no bundle-sourced plugin, no operator-facing plugin install, no third-party registration. The original objection stands.
+
+**Why the seam already fits, so it is not re-argued.** The settled invariant is *"CLI never calls an LLM; Harness never consumes a model."* Out-of-process placement preserves it exactly: core links no model SDK and holds no key; the provider process does, and returns data. `plugin-host.mjs` is versioned JSON Lines with a deny-all child environment whose central rule is "the plugin answers requests and returns data, never brokers a write" — which is precisely a provider's contract. `harness-cli-workbench.md` line 562 already reserved "provider and host adapters through the plugin protocol."
+
+**Two collisions with what this PR already built, recorded because both block implementation:**
+
+1. **`harness run` is taken.** Phase 4a registered it as the run-journal query surface (`run list|show|tree|resume`). The spec's Impacted Files says "register `run` with strict flags" for the agent loop; it was written against a tree where Phase 4a had not landed. One of the two has to move, and renaming the journal surface after it has shipped tests and a palette contract is the more expensive direction. **Needs a naming decision before P5.8 starts.**
+2. **A bundle can declare `plugin:` in its manifest** — `parseManifest` carries the field today, and nothing reads it. The moment a start path exists, that field becomes a plausible route from a bundle to `startPlugin`, which is exactly the door the reversal promises to keep shut. First-party-only must be **enforced** — a test asserting the start path has one caller and it is not the bundle path — not merely intended.
+
+**Deliberately NOT absorbed into this PR.** The spec's later phases are evaluation work outside the harness package and are gated on their own review: the Harbor `BaseAgent` adapter, the pre-registered measurement protocol, and the first Terminal-Bench run. They stay in the agent-loop plan. Its Non-Goals list — no budget ledger, no credential custodian, no privileged sandbox topology, no `eval-run` schemas — is inherited verbatim; the prior attempt reached 223 files before it was deleted (see the eval-scope lesson).
+
+### Acceptance criteria — the absorbed provider seam and turn loop
+
+- [ ] **P5AC7** A first-party provider adapter runs behind `plugin-host.mjs`, receives its credential through the deny-all child environment, and returns a completion. Core imports no model SDK and reads no provider key — asserted by a source-level test in the style of the existing `FORBIDDEN_WRITE_SURFACES` check. The start path is reachable from core only: not from a bundle, not from an operator command.
+- [ ] **P5AC8** The protocol carries a model call: a streamed multi-part response type alongside `result`, a per-request timeout a caller can raise above the 30 s default, and a line bound a long completion cannot breach. Bounds stay enforced; only the defaults move.
+- [ ] **P5AC9** The turn loop completes a task end to end in a bare container — orient, model call, tool calls through `exec`/`bash` under `controls`, a journal record per turn, terminate on a stated stop condition — with `engineer` as the default persona and no editor host present.
+- [ ] **P5AC10** A loop run is resumable and inspectable through the existing `run list/show/resume` surface, and every turn carries its actor and run id.
+
 ### Phase 5 workstreams
 
 - [x] **P5.1** Resource manifests and bundles on the existing hydration machinery, with provenance and deterministic precedence (P5AC1, P5AC2).
-- [x] **P5.6** Locally-added primitives: discovery, validation, explicit registration, and the doctor fix — the workflow that replaced external distribution.
+- [x] **P5.6** Locally-added primitives: discovery, validation, explicit registration, and the doctor fix — the unmanaged route into `~/.copilot`.
+- [ ] **P5.7** Provider seam (P5AC7, P5AC8): first-party start path, streamed response type, caller-settable timeout and completion-safe line bound, and the source-level tests that keep both the no-model-SDK invariant and the first-party-only boundary honest.
+- [ ] **P5.8** The turn loop (P5AC9, P5AC10): orient → model call → governed act → journal, with a benchmark profile that keeps orientation, retrieval, governed exec and journaling and drops the lifecycle steps whose preconditions a bare container lacks. **Blocked on the `run` naming decision above.**
 - [x] **P5.2** Integrity pinning and trust for distributed bundles (P5AC3) — extends Phase 3's trust rather than adding a second model.
 - [x] **P5.3** The out-of-process plugin protocol: version negotiation, declared capabilities, timeout and cancellation, crash isolation (P5AC4, P5AC6).
 - [x] **P5.4** The write boundary: plugins never touch policy, journal, evidence, or the learnings store (P5AC5).
