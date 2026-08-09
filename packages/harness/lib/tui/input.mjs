@@ -42,6 +42,13 @@ export function createInput({
   });
   let status = {};
   let painted = 0;
+  // Where the cursor was PARKED inside the block by the last paint, counted in
+  // lines down from the block's first row. `erase` has to walk back exactly
+  // this far; assuming the cursor sat below the block (which it never does,
+  // because parking it is the last thing paint does) overshot by the same
+  // amount and left the old box on screen — so the next paint drew a second
+  // box inside the first.
+  let parkedRow = 0;
   let resolveLine = null;
   let closed = false;
 
@@ -53,12 +60,19 @@ export function createInput({
 
   const erase = () => {
     if (!interactive || painted === 0) return;
-    output.write(`${ESC}[${painted}A\r${ESC}[0J`);
+    if (parkedRow > 0) output.write(`${ESC}[${parkedRow}A`);
+    output.write(`\r${ESC}[0J`);
     painted = 0;
+    parkedRow = 0;
   };
 
   const paint = () => {
     if (!interactive || closed) return;
+    // Always a full redraw. `next()` and `write()` both used to paint, so a
+    // submitted line painted twice with no erase between — the second box drawn
+    // inside the first. Making paint idempotent removes the ordering rule
+    // rather than asking every caller to remember it.
+    erase();
     composer.setWidth(width());
     const lines = blockLines();
     output.write(`${lines.join('\n')}\n`);
@@ -67,7 +81,8 @@ export function createInput({
     // the block, then across. Without this it sits under the box and typing
     // looks like it is happening somewhere else.
     const { row, col } = composer.cursor;
-    output.write(`${ESC}[${painted - row}A\r${ESC}[${col}C`);
+    parkedRow = Math.max(0, Math.min(row, painted - 1));
+    output.write(`${ESC}[${painted - parkedRow}A\r${ESC}[${col}C`);
   };
 
   /** Write into the transcript above the composer. */
