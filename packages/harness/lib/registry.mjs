@@ -1474,6 +1474,28 @@ registerCommand({
 });
 
 registerCommand({
+  name: 'tui',
+  summary: 'open the session ledger — a scrolling transcript that dispatches through this same registry',
+  group: 'engineer loop',
+  // The ledger can run ANY command, so its policy maximum is the maximum of
+  // everything it can reach. Declaring it `read` because the shell itself only
+  // prints would mislabel a surface from which `bash` is one keystroke away.
+  sideEffect: 'execute',
+  capabilities: [],
+  outputModes: ['ledger'],
+  usage: '',
+  args: { positionals: [], flags: [] },
+  // Imported lazily: `tui-cmd` reaches the command index, which reaches this
+  // registry, so a static import would close a cycle. The ledger is also the
+  // one command nothing else needs loaded to answer `help`.
+  handler: async (argv, ctx) => (await import('./tui-cmd.mjs')).cmdTui(argv, ctx),
+  // No resultOf: the ledger is a terminal surface by contract, so there is no
+  // envelope or agent lane to render it into. `assertLaneSupported` therefore
+  // refuses `--output` on it with a structured error, which is the honest
+  // answer rather than a silently ignored flag.
+});
+
+registerCommand({
   name: 'run',
   summary: 'list, inspect, or judge the resumability of past harness runs',
   group: 'engineer loop',

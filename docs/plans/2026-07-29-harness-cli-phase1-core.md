@@ -235,15 +235,15 @@ The gap was also worse than the criterion describes. Those events carried neithe
 
 Source: `docs/architecture/harness-cli-workbench-delivery.md` §Phase 4b, whose design direction (Session Ledger) is already settled.
 
-- [ ] **P4bAC1** Every TUI operation dispatches through the same command registry as the CLI — no second behavior path, no shell-out.
-- [ ] **P4bAC2** Scrollback, text selection, and terminal search keep working in the default mode.
-- [ ] **P4bAC3** Streaming output renders without flicker; cancellation is available from every long-running view.
-- [ ] **P4bAC4** All six state tokens render through `lib/style.mjs`, degrading to ASCII on limited terminals.
-- [ ] **P4bAC5** The TUI performs search, plan inspection, check execution, and run navigation without a capability the CLI lacks.
-- [ ] **P4bAC6** No palette path requires the user to type `--`; a test asserts that no rendered row and no accepted input contains flag syntax.
-- [ ] **P4bAC7** Every registry entry marked `surfaces: tui` is reachable from the palette, and every palette row resolves to an argv the CLI accepts — asserted in both directions.
-- [ ] **P4bAC8** The resolved argv is echoed into the ledger for every palette-initiated run.
-- [ ] **P4bAC9** Ranking is deterministic: the same query against the same index yields the same order, with word-boundary matches above interior ones.
+- [x] **P4bAC1** Every TUI operation dispatches through the same command registry as the CLI — no second behavior path, no shell-out.
+- [x] **P4bAC2** Scrollback, text selection, and terminal search keep working in the default mode.
+- [x] **P4bAC3** Streaming output renders without flicker; cancellation is available from every long-running view.
+- [x] **P4bAC4** All six state tokens render through `lib/style.mjs`, degrading to ASCII on limited terminals.
+- [x] **P4bAC5** The TUI performs search, plan inspection, check execution, and run navigation without a capability the CLI lacks.
+- [x] **P4bAC6** No palette path requires the user to type `--`; a test asserts that no rendered row and no accepted input contains flag syntax.
+- [x] **P4bAC7** Every registry entry marked `surfaces: tui` is reachable from the palette, and every palette row resolves to an argv the CLI accepts — asserted in both directions.
+- [x] **P4bAC8** The resolved argv is echoed into the ledger for every palette-initiated run.
+- [x] **P4bAC9** Ranking is deterministic: the same query against the same index yields the same order, with word-boundary matches above interior ones.
 
 ### Why the settled design makes this smaller than it looks
 
@@ -251,11 +251,11 @@ The Session Ledger direction — a scrolling transcript in the terminal's MAIN b
 
 ### Phase 4b workstreams
 
-- [ ] **P4b.1** The ledger shell: the session loop, the editor, the status line, and the exit ritual.
-- [ ] **P4b.2** The palette overlay over the Phase 2 command index, with deterministic ranking (P4bAC6, P4bAC9).
-- [ ] **P4b.3** Dispatch through the registry with streaming and cancellation (P4bAC1, P4bAC3, P4bAC5, P4bAC8).
-- [ ] **P4b.4** Rendering through `lib/style.mjs` with the ASCII fallback (P4bAC4).
-- [ ] **P4b.5** The bidirectional palette/argv contract tests (P4bAC7).
+- [x] **P4b.1** The ledger shell: the session loop, the editor, the status line, and the exit ritual.
+- [x] **P4b.2** The palette overlay over the Phase 2 command index, with deterministic ranking (P4bAC6, P4bAC9).
+- [x] **P4b.3** Dispatch through the registry with streaming and cancellation (P4bAC1, P4bAC3, P4bAC5, P4bAC8).
+- [x] **P4b.4** Rendering through `lib/style.mjs` with the ASCII fallback (P4bAC4).
+- [x] **P4b.5** The bidirectional palette/argv contract tests (P4bAC7).
 
 ## Acceptance Criteria — Phase 5 (resources and plugins)
 
@@ -359,6 +359,8 @@ Each lands as one reviewable commit with its own review pass, per the delivery d
 - `packages/harness/lib/runner.mjs`
 - `packages/harness/lib/style.mjs`
 - `packages/harness/lib/trust.mjs`
+- `packages/harness/lib/tui-cmd.mjs`
+- `packages/harness/lib/tui/`
 - `packages/harness/lib/trust-cmd.mjs`
 - `packages/harness/lib/verify.mjs`
 - `packages/harness/test/`
