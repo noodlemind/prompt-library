@@ -36,18 +36,112 @@ export const PROVIDER_TIMEOUT_MS = 300_000;
 /**
  * Providers this harness ships an adapter for.
  *
- * A closed list, and deliberately one entry. A second provider is a separate,
- * later change: shipping two before either has run a real task would be
- * choosing an abstraction over a fact.
+ * TWO ADAPTERS, NOT SIX. Everything below `anthropic` speaks the same
+ * OpenAI-compatible `/chat/completions` shape, so OpenRouter, OpenCode Zen,
+ * Ollama and a self-hosted gateway are one file with different base URLs
+ * rather than four implementations that drift apart. The entries are separate
+ * because the DEFAULTS differ — key variable, endpoint, model — and a user
+ * should be able to say `--provider ollama` instead of exporting three
+ * variables to describe it.
+ *
+ * `baseUrlVar` follows the convention the ecosystem already uses
+ * (`ANTHROPIC_BASE_URL`, `OPENAI_BASE_URL`), so pointing any of these at a
+ * proxy, a corporate gateway or LiteLLM needs no harness-specific knowledge.
+ *
+ * `keyRequired: false` exists for exactly one case: a model running on the
+ * loopback interface has no account to bill and no credential to check.
+ * Demanding a fake key to talk to Ollama would be ceremony.
  */
 export const PROVIDERS = Object.freeze({
   anthropic: {
     id: 'anthropic',
     keyVar: 'ANTHROPIC_API_KEY',
+    baseUrlVar: 'ANTHROPIC_BASE_URL',
+    baseUrl: 'https://api.anthropic.com',
     adapter: 'providers/anthropic.mjs',
     defaultModel: 'claude-sonnet-5',
   },
+  openrouter: {
+    id: 'openrouter',
+    keyVar: 'OPENROUTER_API_KEY',
+    baseUrlVar: 'OPENROUTER_BASE_URL',
+    baseUrl: 'https://openrouter.ai/api/v1',
+    adapter: 'providers/openai-compatible.mjs',
+    defaultModel: 'anthropic/claude-sonnet-4.5',
+  },
+  zen: {
+    id: 'zen',
+    keyVar: 'OPENCODE_API_KEY',
+    baseUrlVar: 'OPENCODE_BASE_URL',
+    baseUrl: 'https://opencode.ai/zen/v1',
+    adapter: 'providers/openai-compatible.mjs',
+    defaultModel: 'claude-sonnet-4-5',
+  },
+  'zen-go': {
+    id: 'zen-go',
+    keyVar: 'OPENCODE_API_KEY',
+    baseUrlVar: 'OPENCODE_GO_BASE_URL',
+    baseUrl: 'https://opencode.ai/zen/go/v1',
+    adapter: 'providers/openai-compatible.mjs',
+    defaultModel: 'claude-sonnet-4-5',
+  },
+  openai: {
+    id: 'openai',
+    keyVar: 'OPENAI_API_KEY',
+    baseUrlVar: 'OPENAI_BASE_URL',
+    baseUrl: 'https://api.openai.com/v1',
+    adapter: 'providers/openai-compatible.mjs',
+    defaultModel: 'gpt-5',
+  },
+  ollama: {
+    id: 'ollama',
+    keyVar: 'OLLAMA_API_KEY',
+    keyRequired: false,
+    baseUrlVar: 'OLLAMA_BASE_URL',
+    baseUrl: 'http://127.0.0.1:11434/v1',
+    adapter: 'providers/openai-compatible.mjs',
+    defaultModel: 'qwen3:8b',
+  },
 });
+
+/** Loopback is the one place a plaintext base URL is not a mistake. */
+const LOOPBACK = new Set(['127.0.0.1', 'localhost', '::1', '[::1]', '0.0.0.0']);
+
+/**
+ * The endpoint a provider will actually call.
+ *
+ * PLAINTEXT IS REFUSED OFF-LOOPBACK, and this is the only rule here worth
+ * arguing about. A base URL is operator-supplied and may legitimately point at
+ * a proxy — but `http://` to anywhere but this machine puts the API key on the
+ * wire in the clear, and an override meant to reach a corporate gateway should
+ * not be able to quietly downgrade the transport carrying the credential. On
+ * loopback there is no wire, which is why Ollama's default is allowed to be
+ * plain http.
+ */
+export function resolveBaseUrl(provider, { parentEnv = process.env } = {}) {
+  const raw = provider.baseUrlVar ? parentEnv[provider.baseUrlVar] : null;
+  const value = (raw && String(raw).trim()) || provider.baseUrl;
+  let url;
+  try {
+    url = new URL(value);
+  } catch {
+    throw usageError(
+      `${provider.baseUrlVar} is not a valid URL: ${value}`,
+      `expected something like ${provider.baseUrl}`,
+    );
+  }
+  if (url.protocol !== 'https:' && url.protocol !== 'http:') {
+    throw usageError(`${provider.baseUrlVar} must be http or https, got ${url.protocol}`, `expected something like ${provider.baseUrl}`);
+  }
+  if (url.protocol === 'http:' && !LOOPBACK.has(url.hostname)) {
+    throw usageError(
+      `refusing a plaintext base URL to ${url.hostname}`,
+      `${provider.keyVar} would cross the network unencrypted — use https, or point at loopback for a local model`,
+    );
+  }
+  // Trailing slashes are the classic source of `//v1//chat/completions`.
+  return url.href.replace(/\/+$/, '');
+}
 
 function usageError(message, hint) {
   return Object.assign(new Error(message), { code: 'E_USAGE', exit: 2, hint });
@@ -70,14 +164,28 @@ export function providerEnv(provider, { parentEnv = process.env } = {}) {
   for (const name of ['PATH', 'HOME', 'TMPDIR', 'LANG', 'SYSTEMROOT', 'NODE_EXTRA_CA_CERTS']) {
     if (parentEnv[name] !== undefined) env[name] = parentEnv[name];
   }
+  // The harness tells the adapter where to point and who it is, rather than
+  // leaking the whole parent environment so the adapter can work it out. Both
+  // are harness-authored: neither can be set by the model, and neither is a
+  // credential.
+  env.HARNESS_PROVIDER_ID = provider.id;
+  env.HARNESS_PROVIDER_BASE_URL = resolveBaseUrl(provider, { parentEnv });
+
   const key = parentEnv[provider.keyVar];
   if (!key) {
+    // A local model has no account to bill; demanding a fake key would be
+    // ceremony. Every hosted provider still fails closed here.
+    if (provider.keyRequired === false) return env;
     throw usageError(
       `${provider.keyVar} is not set`,
       `the provider process reads it; harness core never does — export ${provider.keyVar} and re-run`,
     );
   }
   env[provider.keyVar] = key;
+  // Named so the adapter reads its credential without being told which of the
+  // six variables it is. The VALUE is still passed once, by name, and never
+  // read into a harness variable on the way through.
+  env.HARNESS_PROVIDER_KEY_VAR = provider.keyVar;
   return env;
 }
 

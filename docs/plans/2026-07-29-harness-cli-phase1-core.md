@@ -465,6 +465,25 @@ Final whole-branch review (2026-08-06, architecture + security + patterns lenses
 
 ## Activity
 
+### 2026-08-09 — Provider choice: one more adapter, five more providers
+
+Asked whether an Anthropic key is actually required. It is not, and the seam was built so the answer could be no: `lib/providers/openai-compatible.mjs` speaks `/chat/completions`, so **OpenRouter, OpenCode Zen, Zen Go, OpenAI and Ollama** are now `--provider` values rather than future work. The loop was not touched — which is the property the provider-neutrality test was written to protect, now demonstrated rather than asserted.
+
+**One adapter, not five.** Those providers differ in endpoint, key variable and model names, not in wire format. Five near-identical files would guarantee that a fix to tool-call parsing lands in one of them and the other four keep the bug; what varies is data, and it lives in `PROVIDERS`. A test pins the count.
+
+**Base URLs are operator-controlled, with one rule.** Every provider takes a `*_BASE_URL` override following the convention the ecosystem already uses, so a proxy, a corporate gateway or LiteLLM needs no harness-specific knowledge — and the Anthropic adapter appends its endpoint to a path prefix rather than replacing it, so a gateway mounting it under `/anthropic` works. **Plaintext is refused off-loopback**: an override meant to reach an internal gateway must not be able to quietly downgrade the transport carrying the API key. Loopback is exempt because there is no wire, which is what lets Ollama's default `http://127.0.0.1:11434/v1` stand.
+
+**Ollama needs no credential at all** (`keyRequired: false`) — a model on loopback has no account to bill, and demanding a fake key would be ceremony. Every hosted provider still fails closed without its key, pinned per provider.
+
+**The disclosure from earlier today is now half closed.** `test/provider-adapters.test.mjs` drives both adapters against a real HTTP server on loopback: the request reaches `/chat/completions` with a bearer credential, tool arguments parse from a JSON string OR an object OR neither, malformed arguments come back as data the loop can refuse rather than an exception, a 429 becomes a readable message that does not echo the key, and **the loop completes a task end to end** — a tool call driven by an HTTP response writes a file, and the result returns as a `role: "tool"` message the loop knows nothing about. A stub was chosen over a mock deliberately: everything interesting about an adapter lives in the parts a mock replaces.
+
+Still open, and narrower than before: no run has gone against a REAL model. That needs one of `ollama pull qwen3:8b` (free, local, proves the loop mechanically) or a key for any hosted provider.
+
+**Deliberately not built: a Claude Code subscription adapter.** Lifting the OAuth token out of Claude Code's credential store works mechanically and is the wrong thing — the subscription covers Claude Code, not arbitrary programs calling the API with its token, and it would put a credential custodian inside the harness, which this plan's Non-Goals list forbids by name. The legitimate route, shelling to `claude -p`, puts an agent inside an agent: Claude Code owns its own loop and tools, so using it as a completion engine means disabling those and parsing tool intents out of text, and a benchmark run would measure the hybrid rather than this loop. Recorded so it is not re-proposed as an oversight.
+
+Suite: 1586 tests, 1577 pass, 9 skipped, 0 fail. `harness verify` 14/14.
+
+
 ### 2026-08-09 — Phase 5 complete: resources, the provider seam, and the turn loop
 
 **P5.6 — the unmanaged route.** Discovery, validation and explicit registration for skills and agents copied into `~/.copilot` by hand. The registration marker lives in the user scope, never inside the primitive: a file that could register itself would mean anything dropped into the directory arrives pre-approved. It pins content, so an edit after approval reads as `stale` rather than riding the old decision.

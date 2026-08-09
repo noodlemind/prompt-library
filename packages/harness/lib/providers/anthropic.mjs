@@ -19,9 +19,15 @@
  * rule and a provider needs nothing more: the harness carries out what a
  * completion suggests, under `controls`, where it is audited.
  */
+import http from 'node:http';
 import https from 'node:https';
 
-const API_HOST = 'api.anthropic.com';
+// The endpoint is harness-supplied rather than hardcoded, so this same adapter
+// reaches a proxy, a corporate gateway, LiteLLM, or any Anthropic-compatible
+// endpoint. `resolveBaseUrl` refuses plaintext off-loopback before it gets
+// here, so the credential cannot be downgraded onto an unencrypted wire by an
+// override.
+const BASE_URL = process.env.HARNESS_PROVIDER_BASE_URL || 'https://api.anthropic.com';
 const API_PATH = '/v1/messages';
 const API_VERSION = '2023-06-01';
 
@@ -92,11 +98,17 @@ function callModel({ apiKey, model, system, messages, tools, maxTokens, temperat
     messages: toWireMessages(messages),
   });
 
+  const url = new URL(BASE_URL);
+  const transport = url.protocol === 'http:' ? http : https;
   return new Promise((resolve, reject) => {
-    const req = https.request(
+    const req = transport.request(
       {
-        host: API_HOST,
-        path: API_PATH,
+        protocol: url.protocol,
+        host: url.hostname,
+        port: url.port || undefined,
+        // A base URL may carry a path prefix (`https://gateway/anthropic`), so
+        // the endpoint is appended to it rather than replacing it.
+        path: `${url.pathname.replace(/\/+$/, '')}${API_PATH}`,
         method: 'POST',
         headers: {
           'content-type': 'application/json',
@@ -174,9 +186,12 @@ async function handle(message) {
     send({ type: 'error', id: message.id, message: `unknown method: ${message.method}` });
     return;
   }
-  const apiKey = process.env.ANTHROPIC_API_KEY;
+  // Read by NAME from the variable the harness nominated, so a gateway that
+  // wants a differently-named credential needs no change here.
+  const keyVar = process.env.HARNESS_PROVIDER_KEY_VAR || 'ANTHROPIC_API_KEY';
+  const apiKey = process.env[keyVar];
   if (!apiKey) {
-    send({ type: 'error', id: message.id, message: 'ANTHROPIC_API_KEY is not set in the provider environment' });
+    send({ type: 'error', id: message.id, message: `${keyVar} is not set in the provider environment` });
     return;
   }
   try {

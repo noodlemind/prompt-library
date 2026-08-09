@@ -70,6 +70,7 @@ import { RUN_STATUSES } from './run-journal.mjs';
 import { cmdExec, execResultOf, cmdBash, bashResultOf, exitFor as execExitFor } from './exec-cmd.mjs';
 import { cmdAgent, agentResultOf, agentExitFor, taskFromArgv } from './agent-cmd.mjs';
 import { DEFAULT_MAX_SECONDS, DEFAULT_MAX_TURNS, DEFAULT_PERSONA } from './agent-loop.mjs';
+import { PROVIDERS } from './provider.mjs';
 import {
   cmdSearch,
   searchResultOf,
@@ -1578,7 +1579,7 @@ registerCommand({
     positionals: [{ name: 'task...', description: 'what to do, in words', required: true, default: null }],
     flags: [
       { name: '--agent', type: 'string', valueName: 'persona', description: `which hydrated persona to run as (default ${DEFAULT_PERSONA})`, required: false, default: DEFAULT_PERSONA, tui: 'prompt' },
-      { name: '--provider', type: 'string', valueName: 'id', description: 'which provider adapter answers the model call (default anthropic)', required: false, default: 'anthropic', tui: 'prompt' },
+      { name: '--provider', type: 'string', valueName: 'id', description: `which provider answers the model call: ${Object.keys(PROVIDERS).join('|')} (default anthropic)`, required: false, default: 'anthropic', tui: 'prompt' },
       { name: '--model', type: 'string', valueName: 'id', description: "the model to call; the provider's default when omitted", required: false, default: null, tui: 'prompt' },
       { name: '--max-turns', type: 'number', valueName: 'n', description: `stop after this many turns (default ${DEFAULT_MAX_TURNS})`, required: false, default: DEFAULT_MAX_TURNS, tui: 'prompt' },
       { name: '--max-seconds', type: 'number', valueName: 's', description: `stop after this much wall clock (default ${DEFAULT_MAX_SECONDS})`, required: false, default: DEFAULT_MAX_SECONDS, tui: 'prompt' },
