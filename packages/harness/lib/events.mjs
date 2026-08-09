@@ -61,6 +61,12 @@ export const EVENT_TYPES = new Set([
   // security decision, and a security decision with no record is one nobody can
   // review after the fact.
   'trust',
+  // One turn of the headless loop (P5AC10). Separate from `exec`/`bash`, which
+  // record what each tool DID: this records what the agent decided, and the two
+  // correlate through the run id. It carries no transcript — see the note in
+  // lib/agent-loop.mjs for why a durable record of a conversation is the wrong
+  // place to be generous.
+  'agent.turn',
   // Retention writes this when it removes entries — a journal that silently
   // shrinks is worse than one that admits it.
   'journal.pruned',

@@ -68,6 +68,8 @@ import { cmdResources, resourcesResultOf, resourcesExitFor, RESOURCES_VERBS } fr
 import { CONFIG_KEYS, SCOPES } from './config.mjs';
 import { RUN_STATUSES } from './run-journal.mjs';
 import { cmdExec, execResultOf, cmdBash, bashResultOf, exitFor as execExitFor } from './exec-cmd.mjs';
+import { cmdAgent, agentResultOf, agentExitFor, taskFromArgv } from './agent-cmd.mjs';
+import { DEFAULT_MAX_SECONDS, DEFAULT_MAX_TURNS, DEFAULT_PERSONA } from './agent-loop.mjs';
 import {
   cmdSearch,
   searchResultOf,
@@ -881,6 +883,14 @@ function recallRequireArgs(rest, flags) {
   if (!query) return 'recall requires a query string, e.g. harness recall "orders timeout"';
 }
 
+// agent: the task is free-text positional words, and there is no flag
+// spelling of it — a loop that started without one would ask the model what it
+// would like to do, which is not a question a headless run can answer. Mirrors
+// lib/agent-cmd.mjs#planAgent's own guard.
+function agentRequireArgs(rest) {
+  if (!taskFromArgv(rest)) return 'agent needs a task, e.g. harness agent "make the failing test pass"';
+}
+
 // get: --docid and --path are each individually optional, but at least one
 // is required — an either/or pair, not a single required flag. Mirrors
 // lib/get-cmd.mjs#runGet's own guard.
@@ -1547,6 +1557,43 @@ registerCommand({
   handler: cmdResources,
   resultOf: resourcesResultOf,
   exitOf: resourcesExitFor,
+});
+
+registerCommand({
+  name: 'agent',
+  summary: 'run a task headlessly — orient, ask a model what to do, do it under controls, journal every turn',
+  group: 'engineer loop',
+  // The loop's whole purpose is to execute, and it does so through the same
+  // `exec`/`bash` surface an operator uses. Declaring anything softer would let
+  // it run somewhere `exec` itself is refused.
+  sideEffect: 'execute',
+  capabilities: [],
+  outputModes: ['ledger', 'json'],
+  usage: '<task...> [--agent <persona>] [--provider <id>] [--model <id>] [--max-turns <n>] [--max-seconds <s>] [--tool-timeout <s>] [--dry-run]',
+  args: {
+    // Named `task...` rather than `task` because it genuinely is variadic —
+    // every bare word is joined, so an unquoted task is not truncated to its
+    // first token. The usage line and the declared data have to agree; a
+    // capability that lives only in prose is what AC8 exists to catch.
+    positionals: [{ name: 'task...', description: 'what to do, in words', required: true, default: null }],
+    flags: [
+      { name: '--agent', type: 'string', valueName: 'persona', description: `which hydrated persona to run as (default ${DEFAULT_PERSONA})`, required: false, default: DEFAULT_PERSONA, tui: 'prompt' },
+      { name: '--provider', type: 'string', valueName: 'id', description: 'which provider adapter answers the model call (default anthropic)', required: false, default: 'anthropic', tui: 'prompt' },
+      { name: '--model', type: 'string', valueName: 'id', description: "the model to call; the provider's default when omitted", required: false, default: null, tui: 'prompt' },
+      { name: '--max-turns', type: 'number', valueName: 'n', description: `stop after this many turns (default ${DEFAULT_MAX_TURNS})`, required: false, default: DEFAULT_MAX_TURNS, tui: 'prompt' },
+      { name: '--max-seconds', type: 'number', valueName: 's', description: `stop after this much wall clock (default ${DEFAULT_MAX_SECONDS})`, required: false, default: DEFAULT_MAX_SECONDS, tui: 'prompt' },
+      { name: '--tool-timeout', type: 'number', valueName: 's', description: "seconds before one tool's process tree is terminated", required: false, default: null, tui: 'prompt' },
+    ],
+  },
+  // A task is REQUIRED, and a missing one is a usage error rather than a loop
+  // that starts and asks the model what it would like to do.
+  requireArgs: agentRequireArgs,
+  handler: cmdAgent,
+  resultOf: agentResultOf,
+  // The stop reason decides the exit code — see STOP_REASONS. Without this the
+  // envelope lane would exit 0 on a run that hit its turn budget without
+  // finishing, which is the reading the named stop conditions exist to prevent.
+  exitOf: agentExitFor,
 });
 
 registerCommand({

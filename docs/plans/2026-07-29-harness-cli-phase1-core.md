@@ -315,15 +315,15 @@ The harness is four fifths of an agent — it orients, retrieves, executes under
 
 - [x] **P5AC7** A first-party provider adapter runs behind `plugin-host.mjs`, receives its credential through the deny-all child environment, and returns a completion. Core imports no model SDK and reads no provider key — asserted by a source-level test in the style of the existing `FORBIDDEN_WRITE_SURFACES` check. The start path is reachable from core only: not from a bundle, not from an operator command.
 - [x] **P5AC8** The protocol carries a model call: a streamed multi-part response type alongside `result`, a per-request timeout a caller can raise above the 30 s default, and a line bound a long completion cannot breach. Bounds stay enforced; only the defaults move.
-- [ ] **P5AC9** The turn loop completes a task end to end in a bare container — orient, model call, tool calls through `exec`/`bash` under `controls`, a journal record per turn, terminate on a stated stop condition — with `engineer` as the default persona and no editor host present.
-- [ ] **P5AC10** A loop run is resumable and inspectable through the existing `run list/show/resume` surface, and every turn carries its actor and run id.
+- [x] **P5AC9** The turn loop completes a task end to end in a bare container — orient, model call, tool calls through `exec`/`bash` under `controls`, a journal record per turn, terminate on a stated stop condition — with `engineer` as the default persona and no editor host present.
+- [x] **P5AC10** A loop run is resumable and inspectable through the existing `run list/show/resume` surface, and every turn carries its actor and run id.
 
 ### Phase 5 workstreams
 
 - [x] **P5.1** Resource manifests and bundles on the existing hydration machinery, with provenance and deterministic precedence (P5AC1, P5AC2).
 - [x] **P5.6** Locally-added primitives: discovery, validation, explicit registration, and the doctor fix — the unmanaged route into `~/.copilot`.
 - [x] **P5.7** Provider seam (P5AC7, P5AC8): first-party start path, streamed response type, caller-settable timeout and completion-safe line bound, and the source-level tests that keep both the no-model-SDK invariant and the first-party-only boundary honest.
-- [ ] **P5.8** The turn loop as **`harness agent`** (P5AC9, P5AC10): orient → model call → governed act → journal, with a benchmark profile that keeps orientation, retrieval, governed exec and journaling and drops the lifecycle steps whose preconditions a bare container lacks.
+- [x] **P5.8** The turn loop as **`harness agent`** (P5AC9, P5AC10): orient → model call → governed act → journal, with a benchmark profile that keeps orientation, retrieval, governed exec and journaling and drops the lifecycle steps whose preconditions a bare container lacks.
 - [x] **P5.2** Integrity pinning and trust for distributed bundles (P5AC3) — extends Phase 3's trust rather than adding a second model.
 - [x] **P5.3** The out-of-process plugin protocol: version negotiation, declared capabilities, timeout and cancellation, crash isolation (P5AC4, P5AC6).
 - [x] **P5.4** The write boundary: plugins never touch policy, journal, evidence, or the learnings store (P5AC5).
@@ -385,7 +385,9 @@ Each lands as one reviewable commit with its own review pass, per the delivery d
 ## Impacted Files
 
 - `packages/harness/bin/harness.mjs`
+- `packages/harness/lib/agent-cmd.mjs`
 - `packages/harness/lib/agent-lane.mjs`
+- `packages/harness/lib/agent-loop.mjs`
 - `packages/harness/lib/bundle-sync.mjs`
 - `packages/harness/lib/commands.mjs`
 - `packages/harness/lib/checks.mjs`

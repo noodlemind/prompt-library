@@ -51,7 +51,7 @@ const out = createStyle({ argv: args });
 export const HELP_COMMAND_ORDER = [
   'install', 'upgrade', 'doctor', 'status', 'uninstall',
   'init-repo', 'index', 'plan-new', 'config', 'trust', 'resources',
-  'orient', 'gate', 'verify', 'checks', 'exec', 'bash', 'validate-plan', 'compound', 'recall', 'get', 'search', 'lookup', 'tree', 'run', 'tui', 'events', 'report',
+  'orient', 'gate', 'verify', 'checks', 'exec', 'bash', 'agent', 'validate-plan', 'compound', 'recall', 'get', 'search', 'lookup', 'tree', 'run', 'tui', 'events', 'report',
   'knowledge', 'consolidate', 'remember', 'learning', 'learnings', 'eval-knowledge',
   'resolve',
 ];

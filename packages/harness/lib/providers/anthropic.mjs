@@ -29,15 +29,67 @@ function send(message) {
   process.stdout.write(`${JSON.stringify(message)}\n`);
 }
 
+/**
+ * The neutral request the loop speaks, translated into this API's wire shape.
+ *
+ * EVERY provider-specific shape lives on this side of the line, deliberately.
+ * The loop sends `{role:'user', text}`, `{role:'assistant', blocks}` and
+ * `{role:'user', toolResults:[{id, output, isError}]}`; what those become —
+ * `tool_result` content blocks here, something else elsewhere — is this file's
+ * business. A loop that built `tool_use_id` fields itself would be an
+ * Anthropic-shaped loop wearing a neutral name, and the second provider would
+ * be the one that discovered it.
+ *
+ * An assistant turn is passed back VERBATIM as the blocks this adapter returned,
+ * which is what lets the loop stay uninterested in what a content block is.
+ */
+function toWireMessages(messages) {
+  const out = [];
+  for (const message of messages || []) {
+    if (message.role === 'assistant') {
+      const blocks = Array.isArray(message.blocks) && message.blocks.length
+        ? message.blocks
+        : [{ type: 'text', text: String(message.text ?? '') }];
+      out.push({ role: 'assistant', content: blocks });
+      continue;
+    }
+    if (Array.isArray(message.toolResults) && message.toolResults.length) {
+      out.push({
+        role: 'user',
+        content: message.toolResults.map((r) => ({
+          type: 'tool_result',
+          tool_use_id: r.id,
+          content: String(r.output ?? ''),
+          ...(r.isError ? { is_error: true } : {}),
+        })),
+      });
+      continue;
+    }
+    out.push({ role: 'user', content: String(message.text ?? '') });
+  }
+  return out;
+}
+
+function toWireTools(tools) {
+  if (!Array.isArray(tools) || !tools.length) return null;
+  return tools.map((t) => ({
+    name: t.name,
+    description: t.description,
+    input_schema: t.schema ?? { type: 'object', properties: {} },
+  }));
+}
+
 /** One Messages API call. Rejects with a message the host can render; never
  * with anything carrying the key. */
-function callModel({ apiKey, model, system, messages, maxTokens, temperature }) {
+function callModel({ apiKey, model, system, messages, tools, maxTokens, temperature }) {
+  const wireTools = toWireTools(tools);
   const payload = JSON.stringify({
     model,
     max_tokens: maxTokens ?? 4096,
     ...(system ? { system } : {}),
     ...(temperature === undefined ? {} : { temperature }),
-    messages,
+    ...(wireTools ? { tools: wireTools } : {}),
+    messages: toWireMessages(messages),
   });
 
   return new Promise((resolve, reject) => {
@@ -82,13 +134,22 @@ function callModel({ apiKey, model, system, messages, maxTokens, temperature }) 
   });
 }
 
-/** Flatten the content blocks into the text the loop reasons over, keeping the
- * raw blocks so a caller that wants tool_use later is not blocked by this
- * simplification. */
+/**
+ * Normalize the response into what the loop reads: the text, the tool calls,
+ * and the raw blocks it will echo back without looking inside them.
+ *
+ * `toolCalls` is the neutral shape — `{id, name, input}` — for the same reason
+ * the request translation lives here. The loop decides WHETHER to run a tool
+ * and dispatches it through the governed surface; it should not also have to
+ * know that this provider spells a call `tool_use`.
+ */
 function shapeResult(response) {
   const blocks = Array.isArray(response?.content) ? response.content : [];
   return {
     text: blocks.filter((b) => b?.type === 'text').map((b) => b.text).join(''),
+    toolCalls: blocks
+      .filter((b) => b?.type === 'tool_use')
+      .map((b) => ({ id: b.id, name: b.name, input: b.input ?? {} })),
     blocks,
     stopReason: response?.stop_reason ?? null,
     usage: {
