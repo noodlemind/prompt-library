@@ -696,6 +696,7 @@ export async function cmdGate(argv) {
   const policyExitCode = policy.enforcement === 'enforce' ? result.exitCode : 0;
   result.enforcement = policy.enforcement;
   result.projectPolicyIgnored = policy.projectPolicyIgnored;
+  result.projectPolicyError = policy.projectPolicyError ?? null;
   result.policyExitCode = policyExitCode;
   const previous = readSession(workspace) || {};
   writeSession(
@@ -887,6 +888,20 @@ export async function cmdVerify(argv, ctx = {}) {
         })
       );
     }
+    // …and if that file is ALSO broken, say so here rather than aborting the
+    // run. An unapproved repository must not be able to stop the harness, but
+    // the operator still needs to learn that the file they wrote would not have
+    // parsed even if they had approved it.
+    if (result.projectPolicyError) {
+      console.log(
+        ui.line({
+          state: 'warn',
+          key: 'policy',
+          value: 'and it would not parse',
+          note: clampNote(result.projectPolicyError),
+        })
+      );
+    }
     // A policy that tried to mark a plan-required check advisory disagrees
     // with the plan it is verifying; the run ignores it, and says so.
     for (const refused of result.refusedSeverityDowngrades || []) {
@@ -1069,6 +1084,7 @@ export async function cmdValidatePlan(argv) {
   const policyExitCode = policy.enforcement === 'enforce' ? result.exitCode : 0;
   result.enforcement = policy.enforcement;
   result.projectPolicyIgnored = policy.projectPolicyIgnored;
+  result.projectPolicyError = policy.projectPolicyError ?? null;
   result.policyExitCode = policyExitCode;
   writeEvent(workspace, flags, {
     type: 'validate_plan',

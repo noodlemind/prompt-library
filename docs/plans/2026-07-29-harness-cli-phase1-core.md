@@ -406,6 +406,7 @@ Each lands as one reviewable commit with its own review pass, per the delivery d
 - `packages/harness/lib/gate.mjs`
 - `packages/harness/lib/orient.mjs`
 - `packages/harness/lib/policy.mjs`
+- `packages/harness/lib/positionals.mjs`
 - `packages/harness/lib/local-primitives.mjs`
 - `packages/harness/lib/plugin-host.mjs`
 - `packages/harness/lib/provider.mjs`
@@ -464,6 +465,40 @@ Final whole-branch review (2026-08-06, architecture + security + patterns lenses
 (Empty.)
 
 ## Activity
+
+### 2026-08-09 — CodeRabbit review closed: 14 findings, all fixed
+
+Pinned by `test/coderabbit-review-findings.test.mjs`, written to fail against the pre-fix tree — **14 of its 15 behavioral tests fail on `3fb7b9d`**, and the one that passes is the deliberate guard that a TRUSTED project's broken policy still throws.
+
+Four of the fourteen had already been fixed by the Codex wave (the model-supplied timeout, the bundle symlink, `fileURLToPath`, `taskFromArgv`). **Two independent reviewers converging on the same four defects** is the most useful signal either of them produced.
+
+**The Critical, and it was worse than reported.** `resources remove` joined an unvalidated operator positional onto the resources root and removed the result recursively. Reproduced: `harness resources remove ../skills` deleted the entire hydrated skills tree, and `../../outside` reached past `~/.copilot` altogether — both while printing `[ok]` and exiting 0. `add` was never exposed only because `parseManifest` constrains a bundle's name; `remove` took whatever it was handed. Both ends now share one resolver that checks the name's shape AND proves the resolved path is still a direct child of the root.
+
+**The theme worth naming: four commands had independently hand-rolled the same argv scan, and three got it wrong the same way** — every `--flag` was assumed to take a value, so a boolean before a positional ate it. Each failed differently and one failed *silently and successfully*:
+
+- `harness trust --json approve` read `approve` as the value of `--json`, found no positional, fell back to `status`, printed the current state and **exited 0 having recorded no approval**. An operator reading "not trusted" could not tell their request had been dropped rather than refused.
+- `harness checks --json list` lost its verb and failed with "checks requires a verb"; `-v` was collected as a positional and reported as an unknown verb.
+- `harness run --status succeeded list` hit the OPPOSITE bug — `runRequireArgs` skipped no value flags, so the gate refused an invocation the handler understood perfectly. The same disagreement made `invokedVerb` read `/tmp/x` out of a stored `config --workspace /tmp/x show`, quietly restoring the P2-14 side-effect fallback that block exists to prevent.
+
+A fifth copy would have been a fifth spelling of one bug, so the rule now lives once in `lib/positionals.mjs`. Its value-flag set is the union of both real authorities — every non-boolean flag the registry declares, and every flag `parseFlags` reads a value for — because command flags never reach `parseFlags` and several global value flags never appear in the registry's help surface. Two contract tests pin the union, which turns "remember to update this" into a failing test.
+
+**The rest:**
+
+- **Fail-closed for named checks.** A configuration with parse errors dropped the offending key and ran on defaults — and the dropped key can be a control, since `checks.env_allowlist` defaults false and `exec.network` defaults allow. `exec` was taught this in the phase-3 review; `checks` had not been.
+- **Prototype keys bypassed config validation.** `key in CONFIG_SCHEMA` resolves inherited members, so `constructor`, `toString`, `valueOf` and `__proto__` passed both guards, came back with `spec.type` undefined, skipped every coercion branch, and were recorded rather than reported. `Object.hasOwn` on both sites.
+- **An unapproved repository could stop the harness.** `loadPolicy` validated before applying the trust gate and threw unconditionally, so any repo could abort every `verify` and `gate` run by committing `version: 99` — the file changing how the harness behaves is precisely what the gate exists to prevent. Untrusted now reports through `projectPolicyError` on the existing policy row; **trusted still throws**, because there the file really is in force.
+- **H17 was disabled, not fixed.** `new Set(readLock(...)?.files || [])` is truthy when empty, so `lockFiles && !lockFiles.has(rel)` skipped every candidate and the check passed unconditionally — strictly worse than the false positives the lock was added to remove. `null` now means "no lock", per `findStaleOrphans`'s own contract.
+- **Duplicate bundle identity.** Discovery replaced the directory name with `manifest.name`, and placement resolved by that name — so with two claimants a contribution could be read out of the wrong directory. A unique `id` is now carried through precedence and placement, and two enabled bundles claiming one name are reported as `conflicted` rather than silently decided.
+- **A refused placement exited 0**, so CI could not tell "installed" from "installed and silently contributed nothing".
+- **Three render paths printed persisted caller text without `inertLine`.** Redaction on write removes secrets, not terminal control sequences.
+- **The prune pass was O(n²)** — `keep.includes` per entry, ~100 million comparisons at the 1 MiB threshold, run while holding the prune lock and blocking every appender.
+- **The doctor leaked a fixture directory per probe.** Only `workspace` was removed, so each `--host vscode` run left a `harness-doctor-home-*` behind with a trust store inside it. **85 had accumulated on the development machine**, which is how a leak stays invisible: the stated goal was to stop fixture state accumulating in `~/.copilot`, and it moved the accumulation to tmpdir instead. Removed, and the 85 cleaned up.
+- **A malformed flag declaration**, found while deriving the value-flag set: `name: '-c, --collection'` registered one flag with a comma in its name, so `-c` was never an alias of anything. A contract test now rejects any flag name containing a comma or space.
+
+**Two of my own tests were weak and are recorded as such.** The doctor test passed vacuously through the CLI (the probe only runs when hooks are hydrated) and then failed under concurrency (it diffed a shared tmpdir against other suites); it now drives the probe in a child process with an isolated `TMPDIR`. And a grep-based test was defeated by the fix's own explanatory comment — the second time that has happened, so comment-stripping is now the habit in these source-level checks.
+
+Suite: 1632 tests, 1623 pass, 9 skipped, 0 fail — and the suite itself now leaks zero fixture directories. `harness verify` 14/14.
+
 
 ### 2026-08-09 — First real model run: P5AC9 and P5AC10 closed against GPT-5.6 Luna
 

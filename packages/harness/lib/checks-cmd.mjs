@@ -14,6 +14,7 @@
  */
 import path from 'node:path';
 import { parseFlags } from './flags.mjs';
+import { positionalsOf } from './positionals.mjs';
 import { createStyle, keyWidthFor, EXIT } from './style.mjs';
 import { redactedJson } from './redact.mjs';
 import { inertLine } from './knowledge/store.mjs';
@@ -60,17 +61,11 @@ function describeCheck(name, config) {
 
 function context(argv) {
   const flags = parseFlags(argv);
-  const positionals = [];
-  for (let i = 0; i < argv.length; i += 1) {
-    const a = argv[i];
-    if (a === '--') break;
-    if (a.startsWith('--')) {
-      if (!a.includes('=') && argv[i + 1] !== undefined && !argv[i + 1].startsWith('--')) i += 1;
-      continue;
-    }
-    positionals.push(a);
-    if (positionals.length === 2) break;
-  }
+  // Shared scan (see lib/positionals.mjs). The local copy treated every flag as
+  // value-taking, so `harness checks --json list` lost its verb and failed with
+  // "checks requires a verb", and `-v` was collected as a positional and
+  // reported as an unknown verb.
+  const positionals = positionalsOf(argv, { limit: 2 });
   return {
     flags,
     verb: positionals[0] ?? null,

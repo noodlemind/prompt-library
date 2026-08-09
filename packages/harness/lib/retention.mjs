@@ -143,18 +143,25 @@ export function pruneJournalFile(file, {
     else if (current === undefined || entry.at > current) newestByRun.set(id, entry.at);
   }
 
-  const keep = [];
+  // The drop set is built HERE, in the pass that already makes the decision.
+  // The second pass below used to rebuild it with `keep.includes(entry.line)` —
+  // a linear scan per entry, so O(n²). Pruning starts at 1 MiB, roughly ten
+  // thousand JSONL lines, which is ~100 million string comparisons run while
+  // holding the prune lock and blocking every appender.
+  const dropped = new Set();
   let removed = 0;
+  let keptCount = 0;
   for (const entry of parsed) {
     const id = entry.record?.run;
     const age = id ? newestByRun.get(id) : entry.at;
     if (age !== null && age !== undefined && Number.isFinite(age) && age < cutoffMs) {
       removed += 1;
+      dropped.add(entry.line);
       continue;
     }
-    keep.push(entry.line);
+    keptCount += 1;
   }
-  if (removed === 0) return { removed: 0, kept: keep.length, skipped: false };
+  if (removed === 0) return { removed: 0, kept: keptCount, skipped: false };
 
   // P1-1 (Codex phase-4a review): another process appending between the read
   // above and the rename below had its record silently discarded — audit data
@@ -177,10 +184,6 @@ export function pruneJournalFile(file, {
     // on disk, and must survive.
     const snapshot = fs.statSync(file);
     const currentLines = fs.readFileSync(file, 'utf8').split('\n').filter(Boolean);
-    const dropped = new Set();
-    for (const entry of parsed) {
-      if (!keep.includes(entry.line)) dropped.add(entry.line);
-    }
     const finalLines = currentLines.filter((line) => !dropped.has(line));
     if (markerFor) finalLines.push(JSON.stringify(markerFor({ removed, cutoff })));
 

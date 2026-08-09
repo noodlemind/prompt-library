@@ -145,7 +145,14 @@ export function configPathFor(scope, { copilotHome, workspace }) {
  * hand-edited file and a `config set` cannot disagree about what is legal.
  */
 export function coerceValue(key, raw) {
-  const spec = CONFIG_SCHEMA[key];
+  // `Object.hasOwn`, not `in`/plain lookup: `CONFIG_SCHEMA` is a plain object,
+  // so `constructor`, `toString`, `valueOf` and `__proto__` resolve to
+  // INHERITED members. Each of those passed both this guard and the unknown-key
+  // check below, then `spec.type` and `spec.validate` came back undefined — so
+  // the value skipped every coercion and validation branch and was returned
+  // unchanged, and the key was recorded rather than reported. Nothing reads
+  // those keys today; the bypass was on the surface that gates execution.
+  const spec = Object.hasOwn(CONFIG_SCHEMA, key) ? CONFIG_SCHEMA[key] : null;
   if (!spec) {
     throw usageError(`unknown config key: ${key}`, `known keys: ${CONFIG_KEYS.join(', ')}`);
   }
@@ -201,7 +208,7 @@ export function loadConfigFile(file) {
   const settings = doc.config && typeof doc.config === 'object' && !Array.isArray(doc.config) ? doc.config : doc;
   for (const [key, raw] of Object.entries(settings)) {
     if (key === 'version') continue;
-    if (!(key in CONFIG_SCHEMA)) {
+    if (!Object.hasOwn(CONFIG_SCHEMA, key)) {
       errors.push(`${file}: unknown key ${key}`);
       continue;
     }

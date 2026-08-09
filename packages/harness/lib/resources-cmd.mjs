@@ -357,5 +357,10 @@ export function resourcesExitFor(result) {
   // An invalid primitive makes `list` a failure so CI — or a person reading an
   // exit code — learns that something someone added will never load.
   if ((result?.verb === 'list' || result?.verb === 'bundles') && result.status !== 'ok') return 1;
+  // A refused placement means the bundle contributed NOTHING, and `add`,
+  // `update` and `remove` reported that as a warning line while exiting 0. A CI
+  // job that installs a bundle and checks the exit code could not tell the
+  // difference between "installed" and "installed and silently placed nothing".
+  if (result?.sync?.refused?.length) return 1;
   return EXIT.ok;
 }

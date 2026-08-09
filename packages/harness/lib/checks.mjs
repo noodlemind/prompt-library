@@ -113,6 +113,20 @@ export async function runNamedCheck(workspace, name, config, { signal, onStdout,
   // unconstrained is the "correct and unused seam" all over again.
   const home = copilotHome ?? resolveCopilotHome(null);
   const cfg = resolveConfig({ copilotHome: home, workspace, projectTrusted: isProjectTrusted({ workspace, copilotHome: home }) });
+  // FAIL CLOSED, the same rule `exec` was taught in the phase-3 review. A
+  // configuration with parse errors drops the offending key and falls back to
+  // defaults — and the dropped key can be a control: `checks.env_allowlist`
+  // defaults to false and `exec.network` to allow, so a file the operator
+  // believed was tightening things could hand a named check the entire parent
+  // environment and the network. An execute-class path must refuse a policy it
+  // could not read rather than run under one it invented.
+  if (cfg.errors.length) {
+    return {
+      status: 'unavailable',
+      reason: 'refusing to run: the harness configuration has errors',
+      hint: `run \`harness config validate\` — first error: ${cfg.errors[0]}`,
+    };
+  }
   // The environment is the one control NOT applied by default here, and the
   // reason is worth stating rather than hiding in a default. A named check only
   // runs after `trust approve`, which means someone decided to execute this

@@ -493,6 +493,7 @@ function finalize(workspace, flags, partial, { skipEvidence = false } = {}) {
     // Otherwise the operator sees `enforce` where their file says `warn` and
     // has nothing to connect it to.
     projectPolicyIgnored: policy.projectPolicyIgnored,
+    projectPolicyError: policy.projectPolicyError ?? null,
     exemptions: policy.exemptions,
     waivers: policy.waivers,
     binding: partial.binding || null,

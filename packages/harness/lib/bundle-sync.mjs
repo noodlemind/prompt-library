@@ -165,7 +165,7 @@ const digestOf = (bytes) => `sha256-${crypto.createHash('sha256').update(bytes).
 export function syncBundles({ copilotHome, shippedFiles = new Set(), trustedNames = new Set(), dryRun = false } = {}) {
   const bundles = discoverBundles(copilotHome, { trustedNames });
   const winners = resolvePrecedence(bundles);
-  const byName = new Map(bundles.map((b) => [b.dir.split(path.sep).pop(), b]));
+  const byId = new Map(bundles.map((b) => [b.id ?? b.dir.split(path.sep).pop(), b]));
 
   const placed = [];
   const refused = [];
@@ -173,7 +173,11 @@ export function syncBundles({ copilotHome, shippedFiles = new Set(), trustedName
   const nextBundles = {};
 
   for (const row of winners) {
-    const bundle = bundles.find((b) => b.name === row.winner) || byName.get(row.winner);
+    // By DIRECTORY id, not by manifest name. `find(b => b.name === winner)`
+    // returned whichever bundle came first with that manifest name, so with two
+    // claimants a contribution could be read out of the wrong directory —
+    // installing the wrong content or refusing a valid one.
+    const bundle = byId.get(row.winnerId) || byId.get(row.winner);
     if (!bundle) continue;
     const { source, target } = placementFor(row.kind, row.path);
 

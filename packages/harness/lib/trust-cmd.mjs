@@ -8,6 +8,7 @@
  */
 import path from 'node:path';
 import { parseFlags } from './flags.mjs';
+import { verbOf } from './positionals.mjs';
 import { resolveCopilotHome } from './paths.mjs';
 import { createStyle, keyWidthFor, EXIT } from './style.mjs';
 import { redactedJson } from './redact.mjs';
@@ -23,20 +24,15 @@ function usageError(message, hint) {
 
 function context(argv) {
   const flags = parseFlags(argv);
-  const positionals = [];
-  for (let i = 0; i < argv.length; i += 1) {
-    const a = argv[i];
-    if (a === '--') break;
-    if (a.startsWith('--')) {
-      if (!a.includes('=') && argv[i + 1] !== undefined && !argv[i + 1].startsWith('--')) i += 1;
-      continue;
-    }
-    positionals.push(a);
-    if (positionals.length === 1) break;
-  }
+  // Matched against TRUST_VERBS rather than taken positionally. The old scan
+  // read `approve` as the value of `--json`, found no positional, and fell back
+  // to `status` — so `harness trust --json approve` PRINTED THE CURRENT STATE
+  // AND EXITED 0 while recording no approval. An operator reading "not trusted"
+  // could not tell their request had been dropped rather than refused.
+  const verb = verbOf(argv, TRUST_VERBS, { fallback: 'status' });
   return {
     flags,
-    verb: positionals[0] ?? 'status',
+    verb,
     workspace: path.resolve(flags.workspace),
     copilotHome: resolveCopilotHome(flags.copilotHome),
   };

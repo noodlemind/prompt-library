@@ -192,7 +192,7 @@ function hookBlocked(result, event) {
 // P1.6: async — runVerify (lib/verify.mjs) is now async (AC8, wired onto
 // lib/runner.mjs's async spawn). Nothing about this fixture probe's own
 // behavior changes; it just has to await the one call it already made.
-async function runVSCodeHookProbe(hookRoot) {
+export async function runVSCodeHookProbe(hookRoot) {
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-doctor-vscode-'));
   // The probe's own throwaway user scope. The approval below belongs to this
   // fixture and must not accumulate temp-directory entries in the real
@@ -307,7 +307,13 @@ async function runVSCodeHookProbe(hookRoot) {
     }
     return result;
   } finally {
+    // BOTH fixtures. Only `workspace` was removed, so every
+    // `harness doctor --host vscode` left a `harness-doctor-home-*` directory
+    // behind — with a trust store inside it. The stated goal above was to stop
+    // fixture state accumulating; without this it accumulated in tmpdir instead
+    // of ~/.copilot, which is a move rather than a fix.
     fs.rmSync(workspace, { recursive: true, force: true });
+    fs.rmSync(doctorCopilotHome, { recursive: true, force: true });
   }
 }
 
@@ -815,8 +821,15 @@ export async function runDoctor({ copilotHome, assetsRoot, pkgRoot, flags, vscod
   // Degrade honestly: without the shipped asset bundle there is no ship list
   // to compare against, so never claim orphans that cannot be verified.
   const assetsAvailable = fs.existsSync(path.join(assetsRoot, 'skills', 'engineer', 'SKILL.md'));
+  // `null` means "no lock to consult", which findStaleOrphans treats as the
+  // pre-existing behavior. `new Set([])` is TRUTHY, so an unreadable or
+  // file-less lock made `lockFiles && !lockFiles.has(rel)` skip every
+  // candidate — H17 then passed unconditionally and detected nothing, which is
+  // strictly worse than the false positives the lock was added to fix. Reuses
+  // the `lock` already read above rather than reading it a second time.
+  const lockFiles = Array.isArray(lock?.files) && lock.files.length ? new Set(lock.files) : null;
   const orphans =
-    pkgRoot && assetsAvailable ? findStaleOrphans(copilotHome, assetsRoot, loadRetired(pkgRoot), new Set(readLock(copilotHome)?.files || [])) : [];
+    pkgRoot && assetsAvailable ? findStaleOrphans(copilotHome, assetsRoot, loadRetired(pkgRoot), lockFiles) : [];
   checks.push({
     id: 'H17',
     name: 'No stale orphaned primitives',

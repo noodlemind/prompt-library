@@ -102,26 +102,51 @@ export function loadPolicy(workspace, override = null, { copilotHome = null } = 
   // operator with a file they believe is in force, a syntax error nobody
   // reports, and no way to connect the two. Trust decides whose values win, not
   // whether mistakes are worth mentioning.
+  //
+  // WHERE A BROKEN FILE LANDS DEPENDS ON TRUST, and that distinction was
+  // missing. Validation threw unconditionally, so an UNAPPROVED repository
+  // could stop every `verify` and `gate` run by committing `version: 99` or a
+  // stray tab — the file changing how the harness behaves is exactly what the
+  // trust gate exists to prevent, and an operator could not bypass it without
+  // editing a file they had deliberately not approved. A trusted project still
+  // throws: there the file really is in force, and running on a policy nobody
+  // could parse would be worse than stopping.
   let parsed = {};
+  let policyError = null;
+  const invalid = (message) => {
+    if (trusted) throw new Error(message);
+    policyError = message;
+    parsed = {};
+    return true;
+  };
+
+  let bailed = false;
   if (onDisk) {
     try {
       parsed = YAML.parse(fs.readFileSync(policyPath, 'utf8'), { maxAliasCount: 50 }) || {};
     } catch (error) {
-      throw new Error(`Invalid harness policy ${policyPath}: ${error.message}`);
+      bailed = invalid(`Invalid harness policy ${policyPath}: ${error.message}`);
     }
   }
-  if (typeof parsed !== 'object' || Array.isArray(parsed)) {
-    throw new Error(`Invalid harness policy ${policyPath}: expected a YAML mapping`);
+  if (!bailed && (typeof parsed !== 'object' || Array.isArray(parsed))) {
+    bailed = invalid(`Invalid harness policy ${policyPath}: expected a YAML mapping`);
   }
-  if (onDisk && !POLICY_VERSIONS.has(parsed.version)) {
-    throw new Error(`Invalid harness policy ${policyPath}: expected version 1 or 2`);
+  if (!bailed && onDisk && !POLICY_VERSIONS.has(parsed.version)) {
+    bailed = invalid(`Invalid harness policy ${policyPath}: expected version 1 or 2`);
   }
   // Validate the severity map even when it will not be applied, for the same
   // reason — then drop it along with every other value if the project is not
   // trusted.
-  const parsedSeverities = parseCheckSeverities(parsed, policyPath);
+  let parsedSeverities = {};
+  if (!bailed) {
+    try {
+      parsedSeverities = parseCheckSeverities(parsed, policyPath);
+    } catch (error) {
+      bailed = invalid(error.message);
+    }
+  }
 
-  const applied = onDisk && trusted;
+  const applied = onDisk && trusted && !bailed;
   const policy = applied ? parsed : {};
   const requested = override ?? policy.enforcement ?? 'enforce';
   if (!MODES.has(requested)) {
@@ -134,6 +159,11 @@ export function loadPolicy(workspace, override = null, { copilotHome = null } = 
     // `warn` to `enforce` because a policy file was ignored needs to be able to
     // learn that from the run, not deduce it.
     projectPolicyIgnored: onDisk && !trusted,
+    // The complaint still reaches the operator — `verify` prints it on the same
+    // policy row — it just no longer aborts a run that was never going to apply
+    // the file. "Do not hide a broken policy" and "an unapproved repo cannot
+    // change the run" are both satisfied by reporting instead of throwing.
+    projectPolicyError: policyError,
     policyPath,
     gateTtlMinutes: Number.isFinite(policy.gate_ttl_minutes) ? policy.gate_ttl_minutes : 30,
     evidenceTtlHours: Number.isFinite(policy.evidence_ttl_hours) ? policy.evidence_ttl_hours : 24,

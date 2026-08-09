@@ -239,6 +239,10 @@ test('E: the advisory-by-default structural check stays downgradable, and v1 pol
     // check against, so the trust gate is not engaged and the policy loads
     // exactly as it did before — which is what this assertion is pinning.
     projectPolicyIgnored: false,
+    // A broken policy in an UNTRUSTED project is reported here instead of
+    // thrown, so an unapproved repository cannot abort every verify/gate run by
+    // committing a stray tab. `null` when the file parsed, as here.
+    projectPolicyError: null,
     policyPath: path.join(v1, '.github', 'harness', 'policy.yaml'),
     gateTtlMinutes: 15,
     evidenceTtlHours: 24,

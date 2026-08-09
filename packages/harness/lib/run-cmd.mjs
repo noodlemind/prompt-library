@@ -10,6 +10,7 @@
  */
 import path from 'node:path';
 import { parseFlags } from './flags.mjs';
+import { positionalsOf } from './positionals.mjs';
 import { createStyle, keyWidthFor, EXIT } from './style.mjs';
 import { redactedJson } from './redact.mjs';
 import fs from 'node:fs';
@@ -45,21 +46,9 @@ function readValueFlag(argv, name) {
 /** Flags on this entry that take a value. A BOOLEAN flag before the verb —
  * `harness run --json show <id>` — must not swallow the next token, which is
  * what a blanket "skip the following word" rule did (P2-12). */
-const VALUE_FLAGS = new Set(['--status', '--command', '--host', '--plan', '--since', '--until', '--limit', '--workspace', '--copilot-home']);
-
 function context(argv) {
   const flags = parseFlags(argv);
-  const positionals = [];
-  for (let i = 0; i < argv.length; i += 1) {
-    const a = argv[i];
-    if (a === '--') break;
-    if (a.startsWith('-')) {
-      if (!a.includes('=') && VALUE_FLAGS.has(a) && argv[i + 1] !== undefined) i += 1;
-      continue;
-    }
-    positionals.push(a);
-    if (positionals.length === 2) break;
-  }
+  const positionals = positionalsOf(argv, { limit: 2 });
   return {
     flags,
     verb: positionals[0] ?? 'list',
@@ -188,14 +177,14 @@ export function resumePlanFor(run, { sideEffect = 'execute' } = {}) {
  * it, so a value check here would refuse legitimate palette output.
  */
 export function runRequireArgs(rest) {
-  const verb = rest.find((a) => typeof a === 'string' && !a.startsWith('-')) ?? 'list';
+  // The SAME scan `context()` uses. These two disagreed: `context()` skipped
+  // value-flag arguments and this did not, so `harness run --status succeeded
+  // list` was refused with "unknown run verb: succeeded" — the gate rejecting an
+  // invocation the handler would have understood perfectly.
+  const positionals = positionalsOf(rest);
+  const verb = positionals[0] ?? 'list';
   if (!RUN_VERBS.includes(verb)) return `unknown run verb: ${verb}`;
   if (['show', 'tree', 'resume'].includes(verb)) {
-    const positionals = rest.filter((a, i) => {
-      if (typeof a !== 'string' || a.startsWith('-')) return false;
-      const prev = rest[i - 1];
-      return !(typeof prev === 'string' && VALUE_FLAGS.has(prev));
-    });
     if (positionals.length < 2) return `run ${verb} requires a run id`;
   }
   // `undefined`, not `null`: the registry's requireArgs contract is "a message
@@ -274,7 +263,11 @@ export async function runResultOf(argv, ctx = {}) {
   // read — inherited `config`'s `mutate` and was refused as unsafe. The verb
   // actually invoked is recorded in the run's argv, and its own declared class
   // is the honest answer.
-  const invokedVerb = (run.argv || []).find((a) => typeof a === 'string' && !a.startsWith('-'));
+  // Same scan again. A stored argv like `config --workspace /tmp/x show` used to
+  // yield `/tmp/x` as the verb, so `verbEntry` was undefined and `sideEffect`
+  // fell back to the family maximum — quietly restoring the exact P2-14
+  // behavior this block exists to prevent.
+  const invokedVerb = positionalsOf(run.argv || [])[0];
   const verbEntry = entry?.verbs?.find((v) => v.verb === invokedVerb);
   const sideEffect = verbEntry?.sideEffect
     ?? (invokedVerb ? entry?.sideEffect : entry?.bareSideEffect ?? entry?.sideEffect)
@@ -292,7 +285,11 @@ function renderList(result) {
       state: STATUS_STATE[r.status] || 'warn',
       key: r.run,
       value: inertLine(`${r.command || '(unknown)'} · ${r.status}`),
-      note: [r.startedAt, r.status === 'running' && !r.live ? 'no outcome recorded' : null, r.plan].filter(Boolean).join(' · '),
+      // `r.plan` is the caller's own `--plan` value, persisted by startRun and
+      // printed back here. Redaction on write removes secrets, not terminal
+      // control sequences — `inertLine` is what stops a stored argv repainting
+      // the operator's screen. The `value` above already had it; this did not.
+      note: inertLine([r.startedAt, r.status === 'running' && !r.live ? 'no outcome recorded' : null, r.plan].filter(Boolean).join(' · ')),
       keyWidth,
     }));
   }
@@ -341,11 +338,13 @@ export async function cmdRun(argv, ctx = {}) {
       state: result.resume.resumable ? 'ok' : 'warn',
       key: 'resume',
       value: result.resume.resumable ? `safe from ${result.resume.boundary}` : 'refused',
-      note: result.resume.reason,
+      // All three of these embed the stored `run.command` and `run.argv`, which
+      // is caller free-text that was persisted and is now being printed back.
+      note: inertLine(String(result.resume.reason ?? '')),
       keyWidth,
     }));
-    if (result.resume.guidance) console.log(ui.paint('muted', `  ${result.resume.guidance}`));
-    if (result.resume.resumable) console.log(ui.paint('muted', `  harness ${result.resume.argv.join(' ')}`));
+    if (result.resume.guidance) console.log(ui.paint('muted', `  ${inertLine(String(result.resume.guidance))}`));
+    if (result.resume.resumable) console.log(ui.paint('muted', `  harness ${inertLine(result.resume.argv.join(' '))}`));
   }
 
   // `resume` reports whether resuming is safe; it does not itself re-run

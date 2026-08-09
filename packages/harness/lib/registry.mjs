@@ -1762,7 +1762,7 @@ registerCommand({
       { name: '--explain', type: 'boolean', description: 'include the retrieval reason per result', required: false, default: false, tui: 'prompt' },
       { name: '--cursor', type: 'string', valueName: 'c', description: 'resume from a previous page', required: false, default: null, tui: 'cli-only' },
       { name: '--limit', type: 'number', valueName: 'n', description: 'results per page (default 20)', required: false, default: 20, tui: 'prompt' },
-      { name: '-c, --collection', type: 'string', valueName: 'name', description: 'filter by knowledge/collections.yaml', required: false, default: null, tui: 'prompt', aliases: ['-c'] },
+      { name: '--collection', aliases: ['-c'], type: 'string', valueName: 'name', description: 'filter by knowledge/collections.yaml', required: false, default: null, tui: 'prompt' },
     ],
   },
   handler: cmdSearch,

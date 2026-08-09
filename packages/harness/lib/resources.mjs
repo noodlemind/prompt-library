@@ -245,7 +245,29 @@ export function discoverBundles(copilotHome, { trustedNames = new Set() } = {}) 
       reason = 'not approved — run `harness resources enable` after reading what it contributes';
     }
 
-    bundles.push({ dir, name: manifest.name, manifest, state, reason, errors: [], digest });
+    // `id` is the DIRECTORY name and is unique by construction; `name` is the
+    // manifest's, which is not. Both are carried because they answer different
+    // questions — `name` is what an operator reads, `id` is what the placement
+    // layer must key off. Replacing one with the other is how a winning
+    // contribution came to be read from whichever bundle happened to be first
+    // in the list with that manifest name.
+    bundles.push({ id: entry.name, dir, name: manifest.name, manifest, state, reason, errors: [], digest });
+  }
+
+  // Two enabled bundles claiming the same manifest name is a conflict the
+  // operator has to resolve, not one this code should silently pick a side in.
+  // Reported on every claimant so `resources bundles` names both.
+  const claims = new Map();
+  for (const b of bundles) {
+    if (b.state !== 'enabled' || !b.manifest) continue;
+    (claims.get(b.name) || claims.set(b.name, []).get(b.name)).push(b);
+  }
+  for (const [name, group] of claims) {
+    if (group.length < 2) continue;
+    for (const b of group) {
+      b.state = 'conflicted';
+      b.reason = `another enabled bundle also declares the name ${JSON.stringify(name)} (${group.map((g) => g.id).join(', ')}) — disable or rename one`;
+    }
   }
   return bundles;
 }
@@ -273,7 +295,9 @@ export function resolvePrecedence(bundles) {
     for (const kind of CONTRIBUTION_KINDS) {
       for (const rel of bundle.manifest.contributes[kind] || []) {
         const key = `${kind}/${rel}`;
-        if (!byPath.has(key)) byPath.set(key, { kind, path: rel, winner: bundle.name, shadowed: [] });
+        // `winnerId` is what the placement layer resolves against; `winner`
+        // stays the readable manifest name for reports.
+        if (!byPath.has(key)) byPath.set(key, { kind, path: rel, winner: bundle.name, winnerId: bundle.id, shadowed: [] });
         else byPath.get(key).shadowed.push(bundle.name);
       }
     }
