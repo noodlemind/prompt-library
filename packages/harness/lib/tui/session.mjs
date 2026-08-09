@@ -41,6 +41,13 @@ export function tokenize(line) {
     current += ch;
     started = true;
   }
+  if (quote) {
+    // Dispatching an unterminated quote would silently run something other than
+    // what was typed — the closing quote is where the value was meant to end.
+    throw Object.assign(new Error(`unterminated ${quote === '"' ? 'double' : 'single'} quote`), {
+      code: 'E_USAGE', exit: 2, hint: 'close the quote, or drop it',
+    });
+  }
   if (started || current) argv.push(current);
   return argv;
 }
@@ -78,7 +85,11 @@ export function interpretLine(rawLine) {
     return { kind: 'reference', target: line.slice(1).trim() };
   }
 
-  return { kind: 'command', argv: tokenize(line) };
+  try {
+    return { kind: 'command', argv: tokenize(line) };
+  } catch (error) {
+    return { kind: 'invalid', reason: error.message, hint: error.hint };
+  }
 }
 
 /**

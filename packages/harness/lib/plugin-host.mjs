@@ -21,6 +21,7 @@
  * through the consolidation loop that already reviews everything else.
  */
 import { spawn } from 'node:child_process';
+import { StringDecoder } from 'node:string_decoder';
 
 export const PROTOCOL_VERSION = 1;
 
@@ -83,6 +84,10 @@ export function startPlugin({
   const pending = new Map();
   let seq = 0;
   let buffer = '';
+  // A streaming decoder, not `chunk.toString()` per chunk: a multi-byte
+  // character split across two stdout writes decoded to replacement characters,
+  // corrupting a message the plugin sent correctly.
+  const decoder = new StringDecoder('utf8');
   let closed = false;
   const logs = [];
   let crash = null;
@@ -101,7 +106,7 @@ export function startPlugin({
   };
 
   child.stdout?.on('data', (chunk) => {
-    buffer += chunk.toString();
+    buffer += decoder.write(chunk);
     // A line that will not end is not a message. Drop the buffer rather than
     // grow it, and say so — the alternative is the host dying on behalf of a
     // plugin it is supposed to be insulated from.
@@ -164,9 +169,24 @@ export function startPlugin({
     }
   });
 
+  // A plugin that closes its stdin while staying alive turned the next write
+  // into an unhandled EPIPE, which terminated the HOST — the precise opposite
+  // of crash isolation. A broken pipe is the plugin's failure and is reported
+  // as one.
+  child.stdin?.on('error', (error) => {
+    pushLog({ level: 'error', text: `plugin stdin: ${error.code || error.message}` });
+    closed = true;
+    settleAll(Object.assign(new Error(`plugin stdin closed (${error.code || error.message})`), { code: 'E_PLUGIN_CRASH' }));
+  });
+
   const send = (message) => {
     if (closed) throw Object.assign(new Error('plugin is not running'), { code: 'E_PLUGIN_CRASH' });
-    child.stdin.write(`${JSON.stringify(message)}\n`);
+    try {
+      child.stdin.write(`${JSON.stringify(message)}\n`);
+    } catch (error) {
+      closed = true;
+      throw Object.assign(new Error(`plugin stdin unwritable (${error.code || error.message})`), { code: 'E_PLUGIN_CRASH' });
+    }
   };
 
   send({ type: 'hello', protocol: PROTOCOL_VERSION, capabilities });
@@ -206,7 +226,7 @@ export function startPlugin({
         }
       });
     },
-    close() {
+    close({ graceMs = 2000 } = {}) {
       if (closed) return;
       try {
         send({ type: 'shutdown' });
@@ -215,6 +235,15 @@ export function startPlugin({
       }
       child.kill();
       closed = true;
+      // A child that ignores SIGTERM would otherwise stay alive with the host
+      // waiting on its requests until they time out. Settle them now — the
+      // handle is closed either way — and escalate so a stuck plugin cannot
+      // hold the process open.
+      settleAll(Object.assign(new Error('plugin closed with requests in flight'), { code: 'E_PLUGIN_CRASH' }));
+      const escalate = setTimeout(() => {
+        try { child.kill('SIGKILL'); } catch { /* already gone */ }
+      }, graceMs);
+      escalate.unref?.();
     },
   };
 }

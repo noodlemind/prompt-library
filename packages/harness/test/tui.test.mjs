@@ -170,7 +170,8 @@ test('P4bAC1: the ledger dispatches through the registry rather than shelling ou
   const text = await ledger(['status', 'exit'], {
     dispatcher: async (argv) => { calls.push(argv); return 0; },
   });
-  assert.deepEqual(calls, [['status']], 'the ledger must call dispatch, not spawn a CLI');
+  assert.equal(calls.length, 1, 'the ledger must call dispatch, not spawn a CLI');
+  assert.equal(calls[0][0], 'status');
   assert.match(text, /session/);
 });
 
@@ -184,13 +185,45 @@ test('P4bAC8: a palette-initiated run echoes the resolved argv into the ledger',
     'a transcript showing a choice but not the command cannot be replayed or reviewed');
 });
 
+/**
+ * Every dispatched command carries the session's own workspace and home.
+ *
+ * Without it, `harness tui --workspace B` opened a ledger on B and ran each
+ * command against the process cwd — a mutating command could act on a different
+ * repository than the session was opened for, silently.
+ */
+test('the session context reaches every command the ledger dispatches', async () => {
+  const calls = [];
+  const workspace = tempDir('tui-ctx-');
+  await ledger(['status', 'search foo', 'exit'], {
+    workspace,
+    dispatcher: async (argv) => { calls.push(argv); return 0; },
+  });
+  for (const argv of calls) {
+    assert.ok(argv.includes('--workspace'), `${argv[0]} must carry the session workspace`);
+    assert.equal(argv[argv.indexOf('--workspace') + 1], workspace);
+  }
+});
+
+test('a command that names its own workspace keeps it', async () => {
+  const calls = [];
+  await ledger(['status --workspace /elsewhere', 'exit'], {
+    workspace: tempDir('tui-ctx2-'),
+    dispatcher: async (argv) => { calls.push(argv); return 0; },
+  });
+  assert.equal(calls[0][calls[0].indexOf('--workspace') + 1], '/elsewhere',
+    'an explicit argument is the operator speaking now — the session default must not override it');
+});
+
 test('a shell escape is routed through the gated bash command, not spawned directly', async () => {
   const calls = [];
   await ledger(['!echo hi', 'exit'], {
     dispatcher: async (argv) => { calls.push(argv); return 0; },
   });
-  assert.deepEqual(calls[0], ['bash', '--', 'echo hi'],
+  assert.equal(calls[0][0], 'bash',
     'the shell gate, env allowlist, cwd containment and audit must all apply to a ledger shell-out');
+  assert.deepEqual(calls[0].slice(calls[0].indexOf('--')), ['--', 'echo hi'],
+    'the script reaches bash unchanged, after the session context');
 });
 
 test('an unknown command is answered, not dispatched', async () => {

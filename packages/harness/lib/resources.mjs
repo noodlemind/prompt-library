@@ -25,6 +25,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import YAML from 'yaml';
+import { byteCompare } from './tui/ranking.mjs';
 
 export const MANIFEST_FILE = 'harness-resource.yaml';
 export const RESOURCES_DIRNAME = 'resources';
@@ -147,7 +148,7 @@ export function parseManifest(text, { source = '(inline)' } = {}) {
  * pin catching the operator's own approval instead of the tampering it exists
  * for. Found by the Phase 5 integrity test.
  */
-const NON_CONTENT_FILES = new Set([MANIFEST_FILE, '.enabled', '.disabled']);
+const NON_CONTENT_FILES = new Set(['.enabled', '.disabled']);
 
 /** The digest a bundle's integrity pin is checked against: every contributed
  * file's path and content, in a stable order. */
@@ -166,7 +167,15 @@ export function bundleDigest(dir) {
   for (const [rel, full] of files) {
     hash.update(rel);
     hash.update('\0');
-    hash.update(fs.readFileSync(full));
+    if (rel === MANIFEST_FILE) {
+      // The manifest IS covered, minus the `integrity:` line that states the
+      // digest — excluding it entirely meant changing `plugin: safe.mjs` to
+      // `plugin: ../../outside.mjs` left the pin matching. A pin that does not
+      // authorize the file declaring what to load authorizes very little.
+      hash.update(fs.readFileSync(full, 'utf8').split(/\r?\n/).filter((l) => !/^\s*integrity\s*:/.test(l)).join('\n'));
+    } else {
+      hash.update(fs.readFileSync(full));
+    }
   }
   return `sha256-${hash.digest('hex')}`;
 }
@@ -174,16 +183,27 @@ export function bundleDigest(dir) {
 /**
  * Every bundle under the resources root, with its state and the reason for it.
  *
+ * `trustedNames` defaults to EMPTY, not to "trust everything". Defaulting to
+ * null-means-trusted made `discoverBundles(home)` report an unapproved bundle
+ * as `enabled`, so any caller that forgot the argument silently bypassed
+ * approval. A trust check whose default is open is not a trust check.
+ *
+ * It is keyed by DIRECTORY name, matching where the marker lives. Keying the
+ * marker by directory and the check by MANIFEST name let a directory `grant`
+ * whose manifest called itself `decoy` hand its approval to a different bundle
+ * that called itself `grant` — bundle content transferring an operator's
+ * approval to something else.
+ *
  * `state` is one of `enabled`, `disabled`, `invalid`, `untrusted`, or
  * `tampered`. Each is reported rather than filtered away — a bundle a user
  * installed and cannot see is a support ticket; one shown greyed with a reason
  * is a fix they can make.
  */
-export function discoverBundles(copilotHome, { trustedNames = null } = {}) {
+export function discoverBundles(copilotHome, { trustedNames = new Set() } = {}) {
   const root = resourcesRoot(copilotHome);
   if (!fs.existsSync(root)) return [];
   const bundles = [];
-  for (const entry of fs.readdirSync(root, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+  for (const entry of fs.readdirSync(root, { withFileTypes: true }).sort((a, b) => byteCompare(a.name, b.name))) {
     if (!entry.isDirectory()) continue;
     const dir = path.join(root, entry.name);
     const manifestPath = path.join(dir, MANIFEST_FILE);
@@ -208,7 +228,7 @@ export function discoverBundles(copilotHome, { trustedNames = null } = {}) {
     if (manifest.integrity && manifest.integrity !== digest) {
       state = 'tampered';
       reason = `integrity pin does not match the bundle's contents (${manifest.integrity} vs ${digest})`;
-    } else if (state === 'enabled' && trustedNames && !trustedNames.has(manifest.name)) {
+    } else if (state === 'enabled' && !trustedNames.has(entry.name)) {
       state = 'untrusted';
       reason = 'not approved — run `harness resources enable` after reading what it contributes';
     }
@@ -234,7 +254,7 @@ export function resolvePrecedence(bundles) {
   const enabled = bundles.filter((b) => b.state === 'enabled' && b.manifest);
   const ordered = [...enabled].sort((a, b) => (
     (b.manifest.priority ?? 0) - (a.manifest.priority ?? 0)
-    || a.name.localeCompare(b.name)
+    || byteCompare(a.name, b.name)
   ));
   const byPath = new Map();
   for (const bundle of ordered) {
@@ -246,5 +266,5 @@ export function resolvePrecedence(bundles) {
       }
     }
   }
-  return [...byPath.values()].sort((a, b) => `${a.kind}/${a.path}`.localeCompare(`${b.kind}/${b.path}`));
+  return [...byPath.values()].sort((a, b) => byteCompare(`${a.kind}/${a.path}`, `${b.kind}/${b.path}`));
 }

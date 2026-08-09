@@ -17,6 +17,20 @@
  * depends on registration order across files — which is incidental.
  */
 
+/**
+ * Byte-order comparison, deliberately NOT `localeCompare`.
+ *
+ * `localeCompare` sorts by the runtime's locale: `aa` and `zz` order oppositely
+ * under en_US and da_DK, so the "deterministic ranking" this module promises
+ * held only for people sharing a locale. A palette whose order depends on
+ * LANG is not deterministic; it is coincidentally stable.
+ */
+export function byteCompare(a, b) {
+  const x = String(a);
+  const y = String(b);
+  return x < y ? -1 : x > y ? 1 : 0;
+}
+
 /** Score bands, highest first. Kept as named constants so a reader can see the
  * intended hierarchy without decoding arithmetic. */
 export const SCORE = Object.freeze({
@@ -24,8 +38,11 @@ export const SCORE = Object.freeze({
   PREFIX: 800,
   WORD_BOUNDARY: 600,
   ALL_WORDS: 400,
-  SUBSEQUENCE: 200,
-  INTERIOR: 100,
+  // Interior ABOVE subsequence: `tatu` inside `substatus` is a contiguous run
+  // of the query, while `test and tune` merely contains those letters in order.
+  // The reverse ordering contradicted this table's own stated hierarchy.
+  INTERIOR: 200,
+  SUBSEQUENCE: 100,
 });
 
 /** Split a label into the words a person would think of it as having.
@@ -98,8 +115,8 @@ export function rankRows(rows, query) {
   scored.sort((a, b) => (
     b.score - a.score
     || String(a.row.label).length - String(b.row.label).length
-    || String(a.row.label).localeCompare(String(b.row.label))
-    || String(a.row.id).localeCompare(String(b.row.id))
+    || byteCompare(a.row.label, b.row.label)
+    || byteCompare(a.row.id, b.row.id)
   ));
   return scored.map((s) => s.row);
 }

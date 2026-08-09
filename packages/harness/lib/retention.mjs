@@ -27,6 +27,50 @@ export const PRUNE_MIN_BYTES = 1024 * 1024;
 
 export const DEFAULT_RETENTION_DAYS = 30;
 
+/** The lock a prune holds and an append respects. Same path derivation on both
+ * sides, so the two cannot disagree about which file they are coordinating on. */
+export function pruneLockPath(file) {
+  return `${file}.prune-lock`;
+}
+
+/**
+ * Append a line while a prune is not mid-rewrite.
+ *
+ * The first version of the lock was held only by the pruner, which left the
+ * race exactly where it started: a writer appending between the pruner's read
+ * and its rename had its record discarded — measured at 54,070 appends
+ * acknowledged and 52,450 surviving. A lock only one side takes is not a lock.
+ *
+ * A writer that cannot acquire it within the window appends ANYWAY. That is the
+ * deliberate direction: the pruner verifies the file is unchanged immediately
+ * before renaming and abandons the prune if it is not, so the worst case is an
+ * unpruned file. Losing an audit record to save disk is the wrong trade.
+ */
+export function appendGuarded(file, line, { retries = 20, waitMs = 5, fsImpl = fs } = {}) {
+  const lockPath = pruneLockPath(file);
+  let held = null;
+  for (let i = 0; i < retries; i += 1) {
+    try {
+      held = fsImpl.openSync(lockPath, 'wx');
+      break;
+    } catch {
+      // Busy-wait briefly. These are millisecond-scale rewrites, and a promise
+      // here would make every append path async for a case that almost never
+      // happens.
+      const until = Date.now() + waitMs;
+      while (Date.now() < until) { /* spin */ }
+    }
+  }
+  try {
+    fsImpl.appendFileSync(file, line, 'utf8');
+  } finally {
+    if (held !== null) {
+      try { fsImpl.closeSync(held); } catch { /* already closed */ }
+      try { fsImpl.unlinkSync(lockPath); } catch { /* already gone */ }
+    }
+  }
+}
+
 // At most one prune per file per process. Pruning is a maintenance action, not
 // something to repeat between two appends of the same command.
 const pruned = new Set();
@@ -117,7 +161,7 @@ export function pruneJournalFile(file, {
   // lost, and not even counted by the marker. An exclusive lock file makes the
   // read-modify-rename one critical section; a process that cannot take the
   // lock simply does not prune, which costs disk rather than history.
-  const lockPath = `${file}.prune-lock`;
+  const lockPath = pruneLockPath(file);
   let lockFd;
   try {
     lockFd = fs.openSync(lockPath, 'wx');
@@ -131,6 +175,7 @@ export function pruneJournalFile(file, {
   try {
     // Re-read INSIDE the lock: anything appended while we were parsing is still
     // on disk, and must survive.
+    const snapshot = fs.statSync(file);
     const currentLines = fs.readFileSync(file, 'utf8').split('\n').filter(Boolean);
     const dropped = new Set();
     for (const entry of parsed) {
@@ -141,6 +186,15 @@ export function pruneJournalFile(file, {
 
     const tmp = path.join(path.dirname(file), `.${path.basename(file)}.prune-${process.pid}`);
     fs.writeFileSync(tmp, finalLines.length ? `${finalLines.join('\n')}\n` : '', 'utf8');
+
+    // Last check before the swap: if anything landed since the read above, this
+    // rewrite would discard it. Abandon the prune instead — an unpruned file
+    // costs disk, and a discarded append costs evidence.
+    const now = fs.statSync(file);
+    if (now.size !== snapshot.size || now.mtimeMs !== snapshot.mtimeMs) {
+      try { fs.unlinkSync(tmp); } catch { /* best effort */ }
+      return { removed: 0, kept: 0, skipped: true, abandoned: 'the journal changed while pruning' };
+    }
     fs.renameSync(tmp, file);
     return { removed, kept: finalLines.length, skipped: false };
   } finally {

@@ -38,7 +38,8 @@ function jsonGitContext(gitContext) {
 
 export function runOrient({ workspace, copilotHome, flags, query }) {
   const q = query || flags.query || '';
-  ensureHarnessDir(workspace, flags.dryRun);
+  // A symlinked .harness redirects the context pack out of the workspace.
+  if (ensureHarnessDir(workspace, flags.dryRun) === null) return null;
 
   // Branch/worktree detection (blueprint P2): advisory display context —
   // recorded in the session and rendered as a pack-header line. ADVISORY

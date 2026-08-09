@@ -52,9 +52,13 @@ function makeBundle(home, name, { manifest = {}, files = {}, enabled = false } =
     fs.mkdirSync(path.dirname(target), { recursive: true });
     fs.writeFileSync(target, body);
   }
-  if (full.integrity === true) lines.push(`integrity: ${bundleDigest(dir)}`);
-  else if (typeof full.integrity === 'string') lines.push(`integrity: ${full.integrity}`);
-  fs.writeFileSync(path.join(dir, 'harness-resource.yaml'), `${lines.join('\n')}\n`);
+  // The manifest is now inside the digest (minus its own `integrity:` line), so
+  // it has to exist BEFORE the pin is computed. Appending the pin afterwards
+  // does not disturb it, which is exactly why that line is excluded.
+  const manifestPath = path.join(dir, 'harness-resource.yaml');
+  fs.writeFileSync(manifestPath, `${lines.join('\n')}\n`);
+  if (full.integrity === true) fs.appendFileSync(manifestPath, `integrity: ${bundleDigest(dir)}\n`);
+  else if (typeof full.integrity === 'string') fs.appendFileSync(manifestPath, `integrity: ${full.integrity}\n`);
   if (enabled) fs.writeFileSync(path.join(dir, '.enabled'), 'x');
   return dir;
 }
@@ -318,4 +322,49 @@ test('a plugin cannot make the host retain unbounded log text either', async () 
   await new Promise((r) => setTimeout(r, 800));
   plugin.close();
   assert.ok(plugin.logs.length <= MAX_LOG_ENTRIES, `logs grew to ${plugin.logs.length}`);
+});
+
+/**
+ * Found by the phase-4b/5 review. The pin excluded the manifest entirely, so
+ * retargeting what a bundle loads — `plugin: safe.mjs` → `plugin:
+ * ../../outside.mjs` — left the digest matching. A pin that does not authorize
+ * the file declaring what to load authorizes very little.
+ */
+test('P5AC3: editing the manifest breaks the pin, even when no other file changed', () => {
+  const home = tempDir('res-manifest-pin-');
+  const dir = makeBundle(home, 'pinned', {
+    manifest: { plugin: 'safe.mjs', contributes: { skills: ['a.md'] }, integrity: true },
+    files: { 'skills/a.md': 'x', 'safe.mjs': 'ok' },
+    enabled: true,
+  });
+  assert.equal(discoverBundles(home, { trustedNames: trusted(home) })[0].state, 'enabled');
+
+  const manifestPath = path.join(dir, 'harness-resource.yaml');
+  fs.writeFileSync(manifestPath, fs.readFileSync(manifestPath, 'utf8').replace('plugin: safe.mjs', 'plugin: elsewhere.mjs'));
+  assert.equal(discoverBundles(home, { trustedNames: trusted(home) })[0].state, 'tampered',
+    'retargeting what a bundle loads must break its pin');
+});
+
+/**
+ * The default was "trust everything", so any caller that forgot the argument
+ * bypassed approval entirely.
+ */
+test('P5AC3: discoverBundles fails closed when no trust set is supplied', () => {
+  const home = tempDir('res-failopen-');
+  makeBundle(home, 'demo', { manifest: { contributes: { skills: ['a.md'] } }, files: { 'skills/a.md': 'x' }, enabled: true });
+  assert.equal(discoverBundles(home)[0].state, 'untrusted',
+    'a trust check whose default is open is not a trust check');
+});
+
+/**
+ * The marker lived in a directory and the check read the manifest's name, so a
+ * directory could hand its operator approval to a differently-named bundle.
+ */
+test('P5AC3: a bundle cannot transfer approval to another by naming itself after it', () => {
+  const home = tempDir('res-crosskey-');
+  makeBundle(home, 'grant', { manifest: { name: 'decoy' }, enabled: true });
+  makeBundle(home, 'other', { manifest: { name: 'grant' } });
+  const states = Object.fromEntries(discoverBundles(home, { trustedNames: trusted(home) }).map((b) => [b.dir.split('/').pop(), b.state]));
+  assert.equal(states.other, 'untrusted',
+    'approval belongs to the directory the operator approved, not to a name its contents claim');
 });

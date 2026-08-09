@@ -15,6 +15,7 @@
  */
 import { buildCommandIndex, resolveArgv } from '../command-index.mjs';
 import { getCommand, validateArgs } from '../registry.mjs';
+import { parseFlags } from '../flags.mjs';
 import { rankRows } from './ranking.mjs';
 
 /** Flag syntax must never appear in a row a person is asked to read, nor in
@@ -79,7 +80,11 @@ export function resolveSelection(row, values = {}) {
   try {
     validateArgs(entry, rest);
     if (typeof entry.requireArgs === 'function') {
-      const message = entry.requireArgs(rest, {});
+      // Parsed flags, not `{}`. Dispatch calls this with `parseFlags(rest)`, so
+      // handing it an empty object asked a different question than the one the
+      // CLI will ask — `get --docid=doc-1` was rejected here and accepted
+      // there. A validator that disagrees with dispatch is worse than none.
+      const message = entry.requireArgs(rest, parseFlags(rest));
       if (message) return { argv: null, missing: [], invalid: message };
     }
   } catch (error) {

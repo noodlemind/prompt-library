@@ -5,7 +5,7 @@ import { ensureHarnessDir, readSession } from './session.mjs';
 import { summarizeUsage } from './token-meter.mjs';
 import { createRedactor } from './redact.mjs';
 import { currentRunContext } from './run-context.mjs';
-import { pruneJournalFile } from './retention.mjs';
+import { appendGuarded, pruneJournalFile } from './retention.mjs';
 import { retentionDaysFor } from './retention-config.mjs';
 
 export const EVENTS_FILE = 'events.jsonl';
@@ -100,7 +100,11 @@ export function eventPath(workspace) {
 export function writeEvent(workspace, flags, payload) {
   if (shouldSkipEvents(flags)) return null;
   if (!EVENT_TYPES.has(payload.type)) return null;
-  ensureHarnessDir(workspace, false);
+  // A refusal from ensureHarnessDir means `.harness` is a symlink; writing
+  // anyway is exactly the escape it just declined. Returning null here is the
+  // same "no event was written" answer `--no-events` produces, which every
+  // caller already handles.
+  if (ensureHarnessDir(workspace, false) === null) return null;
 
   const checks = safeChecks(payload.checks);
   const session = readSession(workspace);
@@ -196,7 +200,7 @@ export function writeEvent(workspace, flags, payload) {
   // unredacted original. Byte-identical for secret-free events.
   const safeEvent = createRedactor().redactValue(event);
   const file = eventPath(workspace);
-  fs.appendFileSync(file, JSON.stringify(safeEvent) + '\n', 'utf8');
+  appendGuarded(file, JSON.stringify(safeEvent) + '\n');
   // P4aAC7: bound the file itself, not just what a read returns. Gated to once
   // per process and to files that have actually grown — see lib/retention.mjs.
   pruneJournalFile(file, {

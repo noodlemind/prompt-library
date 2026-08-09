@@ -22,10 +22,11 @@ import {
   queryRuns,
   readJournal,
   runsPath,
+  sortRuns,
   startRun,
 } from '../lib/run-journal.mjs';
 import { resumePlanFor } from '../lib/run-cmd.mjs';
-import { pruneJournalFile, resetRetentionState } from '../lib/retention.mjs';
+import { appendGuarded, pruneJournalFile, resetRetentionState } from '../lib/retention.mjs';
 import { approveProject } from '../lib/trust.mjs';
 
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -383,4 +384,67 @@ test('P2-11: a filter value never becomes the querying run’s own identity', ()
   run(['run', 'list', '--host', 'vscode'], s);
   const [start] = readJournal(s.workspace).filter((r) => r.type === 'run.start');
   assert.notEqual(start.host, 'vscode', 'identity comes from the environment, not from what the caller queried with');
+});
+
+// --- phase-4b/5 review: the live criticals -------------------------------
+
+/**
+ * The first symlink fix was partial — `runs.jsonl` was contained but
+ * `.gitignore` and `events.jsonl` still escaped, because the check ran after
+ * one write and the event writer had none. The guard now lives at the single
+ * directory choke point every writer passes through.
+ */
+test('no writer under .harness escapes through a symlinked directory', () => {
+  const s = scopes();
+  const outside = tempDir('rj-escape2-');
+  fs.symlinkSync(outside, path.join(s.workspace, '.harness'), 'dir');
+  for (const argv of [['status'], ['orient', '--query', 'x'], ['gate']]) run(argv, s);
+  assert.deepEqual(fs.readdirSync(outside), [],
+    'even a read-class command could otherwise be steered into writing outside the workspace');
+});
+
+/**
+ * A lock only the pruner took was not a lock: a writer appending between the
+ * pruner's read and its rename had its record discarded.
+ */
+test('a concurrent append is never discarded by a prune', () => {
+  resetRetentionState();
+  const { workspace } = scopes();
+  fs.mkdirSync(path.join(workspace, '.harness'), { recursive: true });
+  const file = runsPath(workspace);
+  const old = '2020-01-01T00:00:00.000Z';
+  fs.writeFileSync(file, `${Array.from({ length: 6000 }, (_, i) => JSON.stringify({ run: `old${i}`, ts: old, pad: 'x'.repeat(200) })).join('\n')}\n`);
+
+  // Append while the prune is deciding, through the same guarded path the
+  // journals use.
+  const appended = [];
+  const originalRead = fs.readFileSync;
+  let injected = false;
+  fs.readFileSync = (...args) => {
+    const out = originalRead.apply(fs, args);
+    if (!injected && String(args[0]) === file) {
+      injected = true;
+      appendGuarded(file, `${JSON.stringify({ run: 'raced', ts: new Date().toISOString() })}\n`);
+      appended.push('raced');
+    }
+    return out;
+  };
+  try {
+    pruneJournalFile(file, { retentionDays: 30 });
+  } finally {
+    fs.readFileSync = originalRead;
+  }
+
+  const survivors = readJournal(workspace).map((r) => r.run);
+  assert.ok(survivors.includes('raced'),
+    'an acknowledged append must survive a prune — losing evidence to save disk is the wrong trade');
+});
+
+test('run ordering compares instants, not timestamp spellings', () => {
+  const ordered = sortRuns([
+    { run: 'utc', startedAt: '2026-08-09T05:30:00.000Z' },
+    { run: 'offset', startedAt: '2026-08-09T01:00:00.000-05:00' }, // 06:00Z — later
+  ]).map((r) => r.run);
+  assert.deepEqual(ordered, ['offset', 'utc'],
+    'filtering was already instant-based; display ordering disagreeing with it is worse than either rule alone');
 });

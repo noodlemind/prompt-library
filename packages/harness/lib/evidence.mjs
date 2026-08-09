@@ -23,7 +23,8 @@ function legacyEvidenceRel(planPath) {
 }
 
 export function writeEvidence(workspace, result, dryRun = false) {
-  ensureHarnessDir(workspace, dryRun);
+  // Same reason as every other writer under .harness — see harnessDirEscapes.
+  if (ensureHarnessDir(workspace, dryRun) === null) return null;
   const rel = evidenceRel(result.plan);
   if (!dryRun) {
     const full = path.join(workspace, rel);

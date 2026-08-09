@@ -29,7 +29,7 @@ import path from 'node:path';
 import { ensureHarnessDir } from './session.mjs';
 import { assertNoSymlinkAncestors } from './fs-safe.mjs';
 import { createRedactor } from './redact.mjs';
-import { pruneJournalFile } from './retention.mjs';
+import { appendGuarded, pruneJournalFile } from './retention.mjs';
 import { retentionDaysFor } from './retention-config.mjs';
 
 export const RUNS_FILE = 'runs.jsonl';
@@ -66,7 +66,7 @@ export function newRunId() {
 }
 
 function append(workspace, record, flags = {}) {
-  ensureHarnessDir(workspace, false);
+  if (ensureHarnessDir(workspace, false) === null) return null;
   // P1-5 (Codex phase-4a review): `.harness` replaced by a symlink redirected
   // every journal write outside the workspace — a read-class command could be
   // made to append attacker-chosen bytes to an attacker-chosen path. The repo
@@ -80,7 +80,7 @@ function append(workspace, record, flags = {}) {
   const safe = createRedactor().redactValue(record);
   const file = runsPath(workspace);
   ensureNewlineTerminated(file);
-  fs.appendFileSync(file, `${JSON.stringify(safe)}\n`, 'utf8');
+  appendGuarded(file, `${JSON.stringify(safe)}\n`);
   // Bounded by the same policy the event log uses, and it says so when it
   // prunes — see lib/retention.mjs on why that is not a breach of append-only.
   pruneJournalFile(file, {
@@ -301,9 +301,20 @@ export function queryRuns(runs, { status = null, command = null, host = null, pl
   });
 }
 
-/** Newest first — the ordering every `list` in this CLI already uses. */
+/**
+ * Newest first, by INSTANT.
+ *
+ * Filtering was already instant-based; display ordering was not, so a run
+ * stamped `01:00-05:00` (later than `05:30Z`) sorted behind it. Two halves of
+ * the same command disagreeing about which run is newer is worse than either
+ * rule alone.
+ */
 export function sortRuns(runs) {
-  return [...runs].sort((a, b) => String(b.startedAt || '').localeCompare(String(a.startedAt || '')));
+  const at = (r) => {
+    const parsed = Date.parse(r.startedAt || r.finishedAt || '');
+    return Number.isFinite(parsed) ? parsed : -Infinity;
+  };
+  return [...runs].sort((a, b) => at(b) - at(a) || (a.run < b.run ? -1 : a.run > b.run ? 1 : 0));
 }
 
 export function readRuns(workspace, filters = {}, options = {}) {

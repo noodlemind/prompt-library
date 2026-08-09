@@ -24,6 +24,7 @@ export function readSession(workspace) {
 }
 
 export function writeSession(workspace, session, dryRun) {
+  if (harnessDirEscapes(workspace)) return null;
   const dir = harnessDir(workspace);
   if (!dryRun) fs.mkdirSync(dir, { recursive: true });
   const p = sessionPath(workspace);
@@ -41,8 +42,31 @@ export function writeSession(workspace, session, dryRun) {
   return payload;
 }
 
+/**
+ * Is `.harness` a real directory we own, or a symlink pointing somewhere else?
+ *
+ * Exported so every writer under `.harness` asks the same question. The
+ * alternative — a check inside each writer — is a check someone eventually
+ * forgets, and the one they forget is the one that writes outside the
+ * workspace.
+ */
+export function harnessDirEscapes(workspace) {
+  try {
+    return fs.lstatSync(harnessDir(workspace)).isSymbolicLink();
+  } catch {
+    return false; // absent: nothing to escape through
+  }
+}
+
 export function ensureHarnessDir(workspace, dryRun) {
   const dir = harnessDir(workspace);
+  // `.harness` replaced by a symlink redirected every write this function
+  // guards — the ignore file, the event log, the run journal — to wherever the
+  // link pointed. Even a read-class command could then be steered into
+  // appending attacker-chosen bytes outside the workspace. Refused HERE because
+  // it is the one place all of those writes pass through; a check in each
+  // writer is a check someone eventually forgets to add.
+  if (harnessDirEscapes(workspace)) return null;
   const gitignore = path.join(dir, '.gitignore');
   // `runs.jsonl` joins the list: it is durable history containing argv, and a
   // journal committed by accident is both noise in review and a leak of what
