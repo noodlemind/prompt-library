@@ -75,16 +75,37 @@ export function stripControl(text) {
   return String(text ?? '').replace(CONTROL_SEQUENCES, '');
 }
 
+/**
+ * Session-owned words — not harness commands, not palette queries.
+ *
+ * Operators type these with or without a leading `/` because every other
+ * agent CLI treats `/exit` and `/clear` as slash-commands, and answering
+ * "nothing matches" for the session's own words is the same discoverability
+ * failure `/help` used to have. Reserved here so a slash never ships them to
+ * the palette filter.
+ */
+const SESSION_WORDS = Object.freeze({
+  exit: 'exit',
+  quit: 'exit',
+  help: 'help',
+  '?': 'help',
+  clear: 'clear',
+});
+
 export function interpretLine(rawLine) {
   const line = stripControl(rawLine).trim();
   if (!line) return { kind: 'empty' };
 
-  if (line === 'exit' || line === 'quit') return { kind: 'exit' };
-  // Asked for constantly and previously answered with `nothing matches "help"`,
-  // because `help` is handled in bin/harness.mjs and never registered, so the
-  // palette index genuinely does not contain it. Discoverability is the one
-  // thing a blank prompt cannot afford to get wrong.
-  if (line === 'help' || line === '/help' || line === '?' || line === '/?') return { kind: 'help' };
+  // Session words win over every other reading, with or without `/`.
+  // `/exit` must not open a palette filter for "exit"; `clear` must not be
+  // dispatched as an unknown harness command; `/help` must not say
+  // "nothing matches". Checked before `!` so `!clear` stays a real shell
+  // escape (and still fails under ghostty's terminfo — which is why the
+  // session owns a native clear).
+  const sessionKey = line.startsWith('/') ? line.slice(1).trim() : line;
+  if (Object.hasOwn(SESSION_WORDS, sessionKey) && !sessionKey.includes(' ')) {
+    return { kind: SESSION_WORDS[sessionKey] };
+  }
 
   // `!!` before `!`: the longer sigil has to win, or the private form would
   // parse as the public one with a `!` in the script.
@@ -99,6 +120,7 @@ export function interpretLine(rawLine) {
     // A bare `/` opens the palette; `/something` is a filtered palette query.
     // It is NOT a command invocation — the palette is how a capability is
     // chosen, so a slash always lands there and never dispatches directly.
+    // Session words are already handled above; everything else is a filter.
     return { kind: 'palette', query: line.slice(1).trim() };
   }
 

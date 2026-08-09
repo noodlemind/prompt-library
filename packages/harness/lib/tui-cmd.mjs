@@ -22,7 +22,7 @@
  * (P4bAC4) comes for free, since `createStyle` already degrades glyphs on
  * limited terminals.
  */
-import readline from 'node:readline';
+import { createInput } from './tui/input.mjs';
 import path from 'node:path';
 import { parseFlags } from './flags.mjs';
 import { createStyle, keyWidthFor, EXIT } from './style.mjs';
@@ -68,39 +68,31 @@ export async function runLedger({
   now = () => new Date().toISOString(),
 } = {}) {
   const ui = createStyle({ argv, stream: output });
-  const write = (line = '') => output.write(`${line}\n`);
   const tally = createTally();
   const started = now();
 
-  write(ui.paint('muted', 'harness — session ledger'));
-  write(ui.paint('muted', `${ui.arrow} / to search commands · ! to run a shell command · help for the full list · exit to close`));
-  write('');
-
-  // `terminal` follows the INPUT, and this was a real defect rather than a
-  // preference. With it pinned false, readline did no line editing, so an
-  // arrow key was never interpreted — the terminal echoed the raw bytes and
-  // then submitted them, producing `^[[A^[[A^[[Aexit` and an "unknown command"
-  // for a word the operator had typed correctly. Pressing Up for history, the
-  // single most reflexive thing anyone does in a prompt, corrupted the line.
-  //
-  // `terminal: true` does NOT mean an alternate screen. It gives line editing,
-  // history and a rendered prompt while still writing into the main buffer, so
-  // the scrolling-transcript design is untouched. A piped stdin keeps the old
-  // path, which is what makes the session scriptable and testable.
-  const interactive = Boolean(input.isTTY);
-  const rl = readline.createInterface({
+  // The composer, not a bare readline. What was here before was a single-line
+  // `readline` pinned to `terminal: false`: no caret, no status line, no
+  // multiline, and arrow keys that arrived as raw `^[[A` bytes inside the
+  // dispatched command. See lib/tui/composer.mjs for why the logic lives there
+  // and only the painting lives here.
+  const session = createInput({
     input,
     output,
-    terminal: interactive,
-    // A VISIBLE input affordance, and named for what it acts on. The session
-    // previously showed a bare blank line: nothing said the harness was waiting
-    // rather than working, nothing said which repository a command would hit,
-    // and nothing distinguished the input line from the transcript above it.
-    // "Is this hung?" is not a question an interactive surface should provoke.
-    prompt: interactive ? `${ui.paint('info', path.basename(path.resolve(workspace)))} ${ui.paint('ok', '❯')} ` : '',
-    historySize: 200,
+    ui,
+    label: path.basename(path.resolve(workspace)),
+    ascii: !ui.unicode,
   });
-  if (interactive) rl.prompt();
+  const interactive = session.interactive;
+  const write = (line = '') => session.write(line);
+
+
+  const writeBanner = () => {
+    write(ui.paint('muted', 'harness — session ledger'));
+    write(ui.paint('muted', `${ui.arrow} / to search · ! shell · clear · help · exit`));
+    write('');
+  };
+  writeBanner();
 
   // Ctrl-C cancels the RUNNING command, not the session. A ledger that exited
   // on the first interrupt would make cancellation and quitting the same
@@ -295,8 +287,19 @@ export async function runLedger({
     askPrompt(plan.queue[0]);
   };
 
-  for await (const rawLine of rl) {
-    const line = stripControl(String(rawLine));
+  for (;;) {
+    const event = await session.next();
+    if (event.intent === 'exit') break;
+    if (event.intent === 'cancel') {
+      // Ctrl-C with a half-typed line clears it; with nothing typed it is the
+      // running command that is being interrupted, and the SIGINT handler owns
+      // that. Neither is "quit" — see the note on onSigint.
+      if (!event.hadInput) write(ui.paint('muted', '  (nothing running — type exit to close)'));
+      continue;
+    }
+    if (event.intent === 'palette') { pending = showPalette(''); continue; }
+    const line = stripControl(String(event.line ?? ''));
+    session.echo(line);
 
     // Collecting values for a chosen palette row. Checked first so a number
     // typed as a value (e.g. --limit) is not re-read as a palette index.
@@ -305,7 +308,6 @@ export async function runLedger({
       if (trimmed === 'exit' || trimmed === 'quit') {
         write(ui.paint('muted', '  cancelled'));
         pending = null;
-        if (interactive) rl.prompt();
         continue;
       }
       const prompt = pending.queue[pending.index];
@@ -313,7 +315,6 @@ export async function runLedger({
         if (prompt.required) {
           write(ui.line({ state: 'warn', key: 'needs', value: prompt.label, note: 'required — enter a value, or exit to cancel' }));
           askPrompt(prompt);
-          if (interactive) rl.prompt();
           continue;
         }
         // Optional blank: skip this key entirely.
@@ -322,7 +323,6 @@ export async function runLedger({
         if (!['y', 'yes', 'true', '1', 'n', 'no', 'false', '0'].includes(t)) {
           write(ui.line({ state: 'warn', key: 'needs', value: prompt.label, note: 'yes or no' }));
           askPrompt(prompt);
-          if (interactive) rl.prompt();
           continue;
         }
         // Boolean, not the strings "true"/"false": resolveArgv treats any
@@ -341,7 +341,6 @@ export async function runLedger({
           const values = pending.values;
           pending = null;
           await finishSelection(row, values);
-          if (interactive) rl.prompt();
           continue;
         }
       }
@@ -349,34 +348,42 @@ export async function runLedger({
       pending.index += 1;
       if (pending.index < pending.queue.length) {
         askPrompt(pending.queue[pending.index]);
-        if (interactive) rl.prompt();
         continue;
       }
       const row = pending.row;
       const values = pending.values;
       pending = null;
       await finishSelection(row, values);
-      if (interactive) rl.prompt();
       continue;
     }
 
     // A number answers an open palette. Checked before interpretation so `3`
     // means "the third row" rather than "a command called 3".
-    if (pending?.kind === 'palette' && /^\d+$/.test(line.trim())) {
-      const choice = pending.rows[Number(line.trim()) - 1];
-      pending = null;
-      if (!choice) {
-        write(ui.line({ state: 'warn', key: 'palette', value: 'no such row' }));
-        if (interactive) rl.prompt();
+    if (pending?.kind === 'palette') {
+      const trimmed = line.trim();
+      if (trimmed === '') {
+        // Empty Enter after `/` is not a choice — restate the affordance so the
+        // operator is not left staring at a prompt that silently dropped the
+        // palette. The rows are still in `pending`; we do not re-fetch.
+        write(ui.paint('muted', `  type 1–${pending.rows.length} to pick a row, /text to refilter, or a command`));
         continue;
       }
-      await beginSelection(choice);
-      if (interactive) rl.prompt();
-      continue;
+      if (/^\d+$/.test(trimmed)) {
+        const choice = pending.rows[Number(trimmed) - 1];
+        pending = null;
+        if (!choice) {
+          write(ui.line({ state: 'warn', key: 'palette', value: 'no such row' }));
+          continue;
+        }
+        await beginSelection(choice);
+        continue;
+      }
+      // Non-numeric input leaves the palette and is interpreted as a normal line
+      // (a command, another `/filter`, exit, clear, …).
     }
 
     const parsed = interpretLine(line);
-    if (parsed.kind === 'empty') { if (interactive) rl.prompt(); continue; }
+    if (parsed.kind === 'empty') continue;
     if (parsed.kind === 'exit') break;
 
     pending = null;
@@ -396,27 +403,30 @@ export async function runLedger({
       // context — and echoing it identically made `!!` a synonym for `!`.
       await runArgv(['bash', '--', parsed.script], { echo: !parsed.private, quiet: parsed.private });
     } else if (parsed.kind === 'help') {
-      // `help` is handled in bin/harness.mjs rather than registered, so the
-      // palette index does not contain it and `/help` answered `nothing
-      // matches "help"` — the first thing a new operator types, met with a
-      // refusal.
+      // Session-owned: not a registered command, so the palette cannot contain
+      // it. Same reason `/exit` and `/clear` are reserved before the filter.
       write(ui.line({ key: 'help', value: 'type a command directly, or:' }));
       write(ui.paint('muted', '  /            open the command palette'));
       write(ui.paint('muted', '  /<text>      filter the palette'));
-      write(ui.paint('muted', '  /<text> then a number   pick a row; answer any values by name'));
+      write(ui.paint('muted', '  1–9          pick a palette row (then answer any values by name)'));
       write(ui.paint('muted', '  !<command>   run a shell command through governed bash'));
       write(ui.paint('muted', '  !!<command>  the same, kept out of the ledger'));
-      write(ui.paint('muted', '  exit         close the session and print the tally'));
-      write(ui.paint('muted', `  ${ui.arrow} up/down recalls what you typed · Ctrl-C cancels a running command`));
+      write(ui.paint('muted', '  clear        clear the viewport (keeps scrollback)'));
+      write(ui.paint('muted', '  exit / quit  close the session and print the tally'));
+      write(ui.paint('muted', `  ${ui.arrow} up/down history · Ctrl-C cancels a running command`));
+    } else if (parsed.kind === 'clear') {
+      // Native clear — not `!clear`. See createInput.clearScreen.
+      if (typeof session.clearScreen === 'function') session.clearScreen();
+      else if (output.isTTY) output.write('\x1b[2J\x1b[H');
+      writeBanner();
     } else if (parsed.kind === 'reference') {
       write(ui.line({ state: 'warn', key: 'reference', value: parsed.target, note: 'file references are not wired yet' }));
     } else {
       await runArgv(parsed.argv);
     }
-    if (interactive) rl.prompt();
   }
 
-  rl.close();
+  session.close();
   process.off('SIGINT', onSigint);
 
   // The exit ritual: the closing tally and the command to pick the thread back

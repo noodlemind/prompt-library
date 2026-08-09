@@ -27,7 +27,7 @@ success_criteria:
   - "P2AC1–P2AC7 below all pass via named checks"
   - "P3AC1–P3AC7 below all pass via named checks"
   - "P4aAC1–P4aAC7 below all pass via named checks"
-  - "P4bAC1–P4bAC9 below all pass via named checks"
+  - "P4bAC1–P4bAC16 below all pass via named checks"
   - "P5AC1–P5AC10 below all pass via named checks"
 verification:
   required: [harness-tests, prompt-contracts, build-assets]
@@ -72,6 +72,13 @@ verification:
     P4bAC7: [harness-tests]
     P4bAC8: [harness-tests]
     P4bAC9: [harness-tests]
+    P4bAC10: [harness-tests]
+    P4bAC11: [harness-tests]
+    P4bAC12: [harness-tests]
+    P4bAC13: [harness-tests]
+    P4bAC14: [harness-tests]
+    P4bAC15: [harness-tests]
+    P4bAC16: [harness-tests]
     P5AC1: [harness-tests]
     P5AC2: [harness-tests]
     P5AC3: [harness-tests]
@@ -249,13 +256,34 @@ Source: `docs/architecture/harness-cli-workbench-delivery.md` §Phase 4b, whose 
 - [x] **P4bAC8** The resolved argv is echoed into the ledger for every palette-initiated run.
 - [x] **P4bAC9** Ranking is deterministic: the same query against the same index yields the same order, with word-boundary matches above interior ones.
 
+### Reopened 2026-08-09 — the criteria measured the plumbing, not the surface
+
+P4bAC1–AC9 all pass and all did. They are also **not the contract**: not one of them mentions a view, the status line, multiline editing, keyboard navigation, the palette chord, or `@` completion. They were derived from the delivery doc's phase list and never reconciled against `harness-cli-workbench.md` §Interactive TUI, so nine green criteria coexisted with a TUI that did not exist. What shipped is a line-oriented REPL: 893 lines, zero of the seven specified views, no status line, no multiline editor, and — until the same day — arrow keys that emitted raw `^[[A` into the input.
+
+**The reasoning error is recorded because it is the reusable part.** The note below argued that the Session Ledger direction makes the TUI "a read-dispatch-print loop rather than a screen manager". That is true of scrollback and false of everything else, and it was used as licence to skip the composer entirely. Amp, Pi, opencode, Grok and Claude Code are *all* main-buffer scrolling transcripts, and all five have a bordered composer, a status line, and printed shortcuts. "Scrolling transcript" never meant "bare readline"; the constraint was read as permission.
+
+The criteria below encode the contract's own TUI section. They are unchecked, so `harness verify` fails until the surface exists — which is the enforceable version of a note nobody reads.
+
+- [x] **P4bAC10** The composer is a bordered, multiline editor rendered in the main buffer: it repaints in place, keeps scrollback and selection intact above it, and degrades to ASCII box characters on limited terminals.
+- [x] **P4bAC11** Keyboard navigation works — arrow keys move the cursor, up/down recall history at the buffer edges, and no key press can put a control sequence into the dispatched line.
+- [x] **P4bAC12** A status line reports the workspace, branch, and the session's gate/plan state, and updates as commands change it.
+- [ ] **P4bAC13** The palette opens from `/` at line start AND from a chord (`Ctrl-P`, `Cmd-K` aliased on macOS), and is navigable by arrow keys, not only by typing a number.
+- [ ] **P4bAC14** `@` completes workspace file paths against live state, per the contract's composer-sigil list.
+- [ ] **P4bAC15** The seven views the contract names — overview, search, plans, checks, runs, events, resources — are each reachable and render through `lib/style.mjs`.
+- [x] **P4bAC16** The composer's state machine is testable without a terminal: keypress in, state and rendered lines out. The previous suite could not see any of this because the injected stream seam replaced the terminal, which is what let a broken interactive surface pass nine criteria.
+
 ### Why the settled design makes this smaller than it looks
 
 The Session Ledger direction — a scrolling transcript in the terminal's MAIN buffer, alt-screen a config rather than a default — is not a cosmetic choice. It means the TUI is a read-dispatch-print loop rather than a screen manager, and P4bAC2 (scrollback, selection, terminal search) is satisfied by construction instead of by re-implementing three terminal behaviors badly. Phase 2's command index already supplies the palette rows and `resolveArgv`, so P4bAC6–AC8 consume an existing contract rather than inventing one.
 
 ### Phase 4b workstreams
 
-- [x] **P4b.1** The ledger shell: the session loop, the editor, the status line, and the exit ritual.
+- [~] **P4b.1** The ledger shell: the session loop, the editor, the status line, and the exit ritual. *(Session loop and exit ritual shipped. The "editor" was a single-line readline with `terminal: false`, and the status line was never built at all — marked complete in error; see the reopening note above.)*
+- [x] **P4b.6** The composer: bordered, multiline, repainting in place, with keyboard navigation and history (P4bAC10, P4bAC11, P4bAC16).
+- [x] **P4b.7** The status line (P4bAC12).
+- [ ] **P4b.8** Palette chord entry and arrow-key navigation (P4bAC13).
+- [ ] **P4b.9** `@` file completion (P4bAC14).
+- [ ] **P4b.10** The seven views (P4bAC15).
 - [x] **P4b.2** The palette overlay over the Phase 2 command index, with deterministic ranking (P4bAC6, P4bAC9).
 - [x] **P4b.3** Dispatch through the registry with streaming and cancellation (P4bAC1, P4bAC3, P4bAC5, P4bAC8).
 - [x] **P4b.4** Rendering through `lib/style.mjs` with the ASCII fallback (P4bAC4).

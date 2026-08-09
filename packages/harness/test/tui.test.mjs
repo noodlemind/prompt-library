@@ -147,6 +147,23 @@ test('the sigils parse, and `!!` wins over `!`', () => {
   assert.deepEqual(interpretLine('status --json'), { kind: 'command', argv: ['status', '--json'] });
 });
 
+test('session words work with or without a leading slash', () => {
+  // Operators coming from other agent CLIs type /exit and /clear. Shipping
+  // those to the palette filter produced "nothing matches" for the session's
+  // own words — the same class of failure /help used to have.
+  for (const [line, kind] of [
+    ['exit', 'exit'], ['quit', 'exit'], ['/exit', 'exit'], ['/quit', 'exit'],
+    ['clear', 'clear'], ['/clear', 'clear'],
+    ['help', 'help'], ['/help', 'help'], ['?', 'help'], ['/?', 'help'],
+  ]) {
+    assert.equal(interpretLine(line).kind, kind, line);
+  }
+  // A real palette filter is still a filter — only reserved words are special.
+  assert.deepEqual(interpretLine('/status'), { kind: 'palette', query: 'status' });
+  // Shell escape still wins for !clear (even though native clear is preferred).
+  assert.deepEqual(interpretLine('!clear'), { kind: 'shell', script: 'clear', private: false });
+});
+
 test('tokenize honors quotes but is deliberately not a shell', () => {
   assert.deepEqual(tokenize('search "two words" --limit 5'), ['search', 'two words', '--limit', '5']);
   assert.deepEqual(tokenize("recall 'a b'"), ['recall', 'a b']);
@@ -284,14 +301,17 @@ test('`help` and `/help` answer instead of reporting nothing matches', () => {
   }
 });
 
-test('the session renders a visible prompt naming the workspace it acts on', () => {
-  const source = fs.readFileSync(new URL('../lib/tui-cmd.mjs', import.meta.url), 'utf8');
-  assert.match(source, /prompt: interactive \?/, 'a blank line gives an operator nothing to react to');
-  assert.match(source, /\u276f/, 'the caret is what distinguishes the input line from the transcript above it');
-  assert.match(source, /path\.basename\(path\.resolve\(workspace\)\)/,
-    'and it names the repository, because a session that says which project it is about has to show it');
-  assert.match(source, /terminal: interactive/,
-    'line editing follows the input: a TTY gets history and editing, a pipe keeps the scriptable path');
+test('the session renders a visible prompt naming the workspace it acts on', async () => {
+  // Asserted against the composer rather than by grepping tui-cmd.mjs for
+  // readline options. The old version pinned the shape of an implementation
+  // that has since been replaced, which is exactly the kind of test that has to
+  // be rewritten instead of read — the behaviour is what was ever at stake.
+  const { createComposer } = await import('../lib/tui/composer.mjs');
+  const c = createComposer({ width: 60, label: 'prompt-library' });
+  const block = c.render();
+  assert.ok(block.length >= 3, 'the input is a bordered block, not a blank line');
+  assert.match(block.join('\n'), /prompt-library/, 'and it names what a command would act on');
+  assert.match(block.join('\n'), /\u276f/, 'with a caret, so a waiting session never reads as a hung one');
 });
 
 // --- palette value collection (the ledger was unusable without this) --------
@@ -371,4 +391,28 @@ test('exit during value collection cancels the choice without running', async ()
   assert.equal(calls.length, 1);
   assert.equal(calls[0][0], 'status', 'exit cancels the pending search, then status still runs');
   assert.match(text, /cancelled/);
+});
+
+test('/exit closes the session instead of filtering the palette', async () => {
+  const text = await ledger(['/exit'], { dispatcher: async () => 0 });
+  assert.match(text, /session/);
+  assert.match(text, /resume with: harness run list/);
+  assert.equal(text.includes('nothing matches'), false);
+});
+
+test('clear is a session builtin, not an unknown command', async () => {
+  const calls = [];
+  const text = await ledger(['clear', 'status', 'exit'], {
+    dispatcher: async (argv) => { calls.push(argv); return 0; },
+  });
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0][0], 'status');
+  assert.equal(text.includes('unknown'), false, 'clear must not dispatch as a harness command');
+  assert.match(text, /session ledger/, 'clear re-prints the banner so the operator knows they are still in the ledger');
+});
+
+test('empty Enter after the palette restates how to pick a row', async () => {
+  const text = await ledger(['/', '', 'exit'], { dispatcher: async () => 0 });
+  assert.match(text, /type 1/);
+  assert.match(text, /pick a row/);
 });
