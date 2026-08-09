@@ -465,6 +465,33 @@ Final whole-branch review (2026-08-06, architecture + security + patterns lenses
 
 ## Activity
 
+### 2026-08-09 — Phase 5 complete: resources, the provider seam, and the turn loop
+
+**P5.6 — the unmanaged route.** Discovery, validation and explicit registration for skills and agents copied into `~/.copilot` by hand. The registration marker lives in the user scope, never inside the primitive: a file that could register itself would mean anything dropped into the directory arrives pre-approved. It pins content, so an edit after approval reads as `stale` rather than riding the old decision.
+
+That work fixed a defect worse than anything in the phase as specified. `doctor` H17 classified a hand-added skill as a stale orphan and told the operator to add it to `retired.json` — advice which, if followed, would have made the next `upgrade` **delete their own team's skill**. The lock file distinguishes the two cases and now does.
+
+**P5.7 — the provider seam.** `lib/provider.mjs` starts `lib/providers/anthropic.mjs` as its own process over the existing plugin protocol. Core links no model SDK and reads no provider key; the adapter does both. Once the seam exists the invariant stops being maintained by absence, so `test/provider-seam.test.mjs` replaces the absence with checked facts — no SDK import under `lib/`, no key read outside the module that passes it by name, no import of the adapter, and exactly one production caller of `startPlugin` asserted against an exported list rather than a comment.
+
+The adapter uses no SDK either. A plain HTTPS request to the Messages API is fewer moving parts than a dependency, keeps the package installable without a registry, and means the credential passes only through code visible in one file.
+
+**P5.8 — `harness agent`.** Orient → model call → governed tool call → journal, stopping on a named condition. Three properties carry it:
+
+- **No second execution path.** A tool call is dispatched through the same `execResultOf`/`bashResultOf` an operator's `harness exec` goes through. Pinned by a test that asks the model to print a parent-environment secret and gets `undefined`. The one distinction the loop draws is between a tool that RAN and failed — handed back, because that is what a loop is for — and one the harness REFUSED to dispatch, which stops the run rather than spending the budget re-asking a settled no.
+- **Provider-neutral.** The loop speaks `{system, messages, tools}` and reads `{text, toolCalls, blocks}`; an assistant turn is echoed back verbatim as opaque blocks. A test greps the loop for `tool_use_id`, `input_schema` and friends, so an Anthropic-shaped loop cannot ship wearing a neutral name.
+- **The journal records what the agent DID, never the transcript.** Turn records carry tools and outcomes, correlated to the `exec`/`bash` audit by run id. A conversation is where a pasted credential ends up, and the journal is durable.
+
+**Three gaps found reading the loop back against its own claims**, before any external review:
+
+- `--dry-run` **wrote** — orientation was handed no dry-run flag at all, so a command whose whole promise is "show me what you would do" wrote a context pack, a session and a `.gitignore`.
+- `--tool-timeout` was a **default, not a ceiling**: the model's requested value won whenever it supplied one, so an operator who capped tools at 5 s got 3600 the moment the model asked.
+- A tool could **outrun the wall clock**. `--max-seconds` is checked only between turns, so a tool starting a second before the deadline ran for its own full timeout past it. Enforced by cancellation rather than by shortening `--timeout`: with no `--tool-timeout` there is no operator value to shorten, so that approach would have had to invent one, and any invented number would override a lower configured `exec.timeout_seconds` **upward** while claiming to lower it.
+
+**Disclosure — what is not proven.** The adapter's protocol conformance and its error path are tested; the live HTTP call to the Messages API is not, because no provider key was available in this environment. `harness agent` has never completed a turn against a real model. That is the first thing to run before trusting P5AC9 end to end, and it needs nothing but a key.
+
+Suite: 1571 tests, 1562 pass, 9 skipped, 0 fail. `harness verify` 14/14.
+
+
 ### 2026-07-29 — Captured and planned
 
 - Plan derived from `docs/architecture/harness-cli-workbench.md` (finalized feature plan) after the workbench roadmap review rounds.
