@@ -22,6 +22,7 @@ import { getCommand } from '../lib/registry.mjs';
 import { EXIT } from '../lib/style.mjs';
 import { loadNamedChecks, validateCommand } from '../lib/checks.mjs';
 import { approveProject } from '../lib/trust.mjs';
+import { setConfigValue } from '../lib/config.mjs';
 
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const binPath = path.join(packageRoot, 'bin', 'harness.mjs');
@@ -148,4 +149,56 @@ test('checks answers the envelope lane', () => {
   const body = JSON.parse(res.stdout);
   assert.equal(body.command, 'checks');
   assert.equal(body.status, 'ok');
+});
+
+// --- P3.6: the execution audit for the named-check path ---
+
+/**
+ * `runNamedCheck` is the choke point BOTH `verify` and `checks run` go through,
+ * which is why the audit lives there rather than in either caller — the same
+ * lesson `exec` learned when its audit sat in the handler and the envelope lane
+ * executed with no record at all.
+ */
+test('running a named check writes an execution audit in the same shape exec uses', () => {
+  const ws = workspaceWithChecks(PASSING);
+  const copilotHome = tempDir('checks-audit-home-');
+  approveProject({ workspace: ws, copilotHome });
+  spawnSync(process.execPath, [binPath, 'checks', 'run', 'ok-check', '--workspace', ws, '--copilot-home', copilotHome], {
+    cwd: packageRoot,
+    encoding: 'utf8',
+  });
+
+  const events = fs.readFileSync(path.join(ws, '.harness', 'events.jsonl'), 'utf8')
+    .split('\n').filter(Boolean).map((l) => JSON.parse(l)).filter((e) => e.type === 'exec');
+  assert.equal(events.length, 1, 'executing a repo-authored argv must leave exactly one execution record');
+  const [event] = events;
+  assert.equal(event.exec.check, 'ok-check', 'the record must name which check ran');
+  assert.deepEqual(event.exec.argv, ['node', '-e', 'process.exit(0)']);
+  assert.equal(event.exec.cwd, fs.realpathSync(ws));
+  assert.ok(Array.isArray(event.exec.controls) && event.exec.controls.length > 0,
+    'a check runs under the same declared controls as any other execution');
+  assert.equal(event.status, 'ok');
+});
+
+// The default is the behavior checks have always had; the point of the key is
+// that an operator can change it without patching the harness.
+test('checks.env_allowlist is off by default and opt-in-able', () => {
+  const ws = workspaceWithChecks(`version: 1
+checks:
+  echo-env:
+    command: ${JSON.stringify([process.execPath, '-e', 'console.log("SEEN=" + String(process.env.MY_CHECK_SECRET))'])}
+`);
+  const copilotHome = tempDir('checks-env-home-');
+  approveProject({ workspace: ws, copilotHome });
+  const invoke = () => spawnSync(
+    process.execPath,
+    [binPath, 'checks', 'run', 'echo-env', '--workspace', ws, '--copilot-home', copilotHome, '--no-events'],
+    { cwd: packageRoot, encoding: 'utf8', env: { ...process.env, MY_CHECK_SECRET: 'inherited-value' } },
+  );
+
+  assert.match(invoke().stdout, /SEEN=inherited-value/,
+    'the default must be what named checks have always done — flipping it silently would break checks that need a variable nobody enumerated');
+
+  setConfigValue({ scope: 'user', key: 'checks.env_allowlist', value: 'true', copilotHome, workspace: ws });
+  assert.match(invoke().stdout, /SEEN=undefined/, 'opting in must actually withhold the variable');
 });

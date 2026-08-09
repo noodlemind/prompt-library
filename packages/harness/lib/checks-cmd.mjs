@@ -127,7 +127,7 @@ export async function checksResultOf(argv, ctx = {}) {
   // the same way `verify` already is — Phase 1 wired Ctrl-C to verify only, and
   // an execute-classed command that cannot be interrupted is worse than one
   // that never existed.
-  const outcome = await runNamedCheck(workspace, name, checks[name], { signal: ctx.signal });
+  const outcome = await runNamedCheck(workspace, name, checks[name], { signal: ctx.signal, copilotHome, events: ctx.events });
   return { schema: 1, verb, config: CHECKS_REL, check: describeCheck(name, checks[name]), outcome };
 }
 

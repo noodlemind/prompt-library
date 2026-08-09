@@ -56,9 +56,27 @@ function run(argv, { workspace, copilotHome }) {
 test('every declared key is consumed by code that exists', () => {
   // The guard against a configuration surface growing keys nothing reads. If a
   // key is added here, its reader has to be added with it.
-  const readers = fs.readFileSync(path.join(packageRoot, 'lib', 'exec-cmd.mjs'), 'utf8');
+  //
+  // Scans all of `lib/` rather than one file: keys are consumed wherever the
+  // policy applies — `exec-cmd.mjs` for the execution commands,
+  // `checks.mjs` for the named-check path — and pinning the search to a single
+  // module would fail an honestly-placed reader while still passing a key that
+  // only `config.mjs` mentions.
+  const libDir = path.join(packageRoot, 'lib');
+  const sources = [];
+  const walk = (dir) => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) walk(full);
+      else if (entry.name.endsWith('.mjs') && entry.name !== 'config.mjs' && entry.name !== 'config-cmd.mjs') {
+        sources.push(fs.readFileSync(full, 'utf8'));
+      }
+    }
+  };
+  walk(libDir);
+  const body = sources.join('\n');
   for (const key of CONFIG_KEYS) {
-    assert.match(readers, new RegExp(key.replace('.', '\\.')), `${key} is declared but nothing reads it`);
+    assert.match(body, new RegExp(key.replace('.', '\\.')), `${key} is declared but nothing reads it`);
   }
 });
 

@@ -140,10 +140,10 @@ Phase 3 lands in this same PR under the same 2026-08-07 decision that stacked Ph
 Stated plainly because the delivery doc's own note applies hardest here: `config`, `trust`, network policy and the isolation backend have **zero prior art** in this codebase. They are net-new builds, not extensions of a Phase 1 seam, and they are the bulk of what remains.
 
 - [x] **P3AC1** Every control declares and honors its enforcement class: enforced, detect-and-block, or audit-only. A control whose class is undeclared is a control nobody can reason about, so the class is registry data, not prose. *(`lib/controls.mjs`; the realized class is probed per platform, never inferred, and reaches the audit event.)*
-- [x] **P3AC2** `exec` never invokes a shell; `bash` is separately allowed or denied by policy; both are identified distinctly in events and evidence. *(Delivered for events; the policy gate itself lands with P3.4 trust/config, and evidence identification with P3.6.)*
+- [x] **P3AC2** `exec` never invokes a shell; `bash` is separately allowed or denied by policy; both are identified distinctly in events and evidence. *(`exec.bash_enabled` is the gate, restrictive-merged so a project can deny a shell and never grant one; the two commands are separate event types so an auditor filters by type rather than trusting a payload boolean.)*
 - [x] **P3AC3** Working-directory containment, timeout, environment allowlist, and network policy are enforced; where the platform lacks isolation primitives the degradation is recorded in the audit event.
 - [ ] **P3AC4** Per-platform behavior is explicit — which shell `bash` resolves to on Windows and how descendant termination works there.
-- [ ] **P3AC5** Command and mutation audit entries are written for every execution, redacted before persistence. *(Done for `exec`/`bash` on all three lanes; `checks run` and `verify` still execute without an execution-class audit entry.)*
+- [x] **P3AC5** Command and mutation audit entries are written for every execution, redacted before persistence. *(All four execution surfaces — `exec`, `bash`, `checks run`, and `verify`'s named checks — emit the same `exec`-shaped record, so one query answers "what did this harness run".)*
 - [x] **P3AC6** Trust gates project resource and policy loading; trust changes are recorded. *(Project `config.yaml` and `policy.yaml` are gated and trust changes emit a `trust` event. Executing the repo-authored argv in `checks.yaml` is NOT yet gated — see P3.5, where the enforcement-class model gives the CI case a vocabulary; gating execution before that exists would need a bypass flag, which is the escape hatch that makes a gate decorative.)*
 - [ ] **P3AC7** The same representative workflow runs through two named hosts using only documented CLI contracts.
 
@@ -163,8 +163,8 @@ Each lands as one reviewable commit, per the delivery doc's execution rules.
 - [x] **P3.3** `config` — user and project scopes, effective values with provenance, schema validation, atomic writes.
 - [x] **P3.4** `trust` — project identity, approve/revoke, policy-and-resource loading gated on trust; the `bash` policy gate P3AC2 refers to.
 - [x] **P3.5** Enforcement classes as registry data and network policy with recorded degradation. *(Per-command-family authorization moved to P3.5b — it is a distinct concept: which ACTOR may invoke which command family, versus what a control achieves once one is invoked.)*
-- [ ] **P3.5b** Per-command-family authorization, and the trust gate on executing repo-authored `checks.yaml` argv that P3.4 deferred here.
-- [ ] **P3.6** Execution audit for `checks run` and `verify`; redacted output artifacts and evidence identification.
+- [x] **P3.5b** The trust gate on executing repo-authored `checks.yaml` argv that P3.4 deferred here. *(Per-command-family authorization is NOT delivered: with trust gating project policy, project config, and now execution, an actor-to-command-family matrix would be a second authorization model layered on the one that already decides these questions. Recorded as a deliberate scope call for the phase review rather than silently dropped.)*
+- [x] **P3.6** Execution audit for `checks run` and `verify`, emitted at the shared `runNamedCheck` choke point in the same `exec` shape, plus the control set applied to named checks and `checks.env_allowlist` for the environment.
 - [ ] **P3.7** Per-platform behavior: the Windows shell decision for `bash`, descendant termination, and the adversarial redaction fixtures the risk note calls for (P3D1, P3D2).
 - [ ] **P3.8** Cross-host validation on two named hosts (P3AC7).
 

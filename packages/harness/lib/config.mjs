@@ -83,6 +83,19 @@ export const CONFIG_SCHEMA = Object.freeze({
     restrict: (a, b) => (a === 'deny' || b === 'deny' ? 'deny' : 'allow'),
     description: 'whether executed processes may reach the network (deny is enforced only where the platform has a primitive)',
   },
+  'checks.env_allowlist': {
+    type: 'boolean',
+    // OFF by default, deliberately — see the note in `runNamedCheck`. A named
+    // check runs only after `trust approve`, so the allowlist is
+    // defence-in-depth there rather than the boundary, and defaulting it on
+    // would break every check that needs a variable nobody enumerated.
+    default: false,
+    // Restrictive by OR: turning the allowlist ON is the safer state, so a
+    // project may enable it and may not switch it back off.
+    merge: 'restrictive',
+    restrict: (a, b) => a || b,
+    description: 'apply the exec environment allowlist to named checks too',
+  },
   'exec.bash_enabled': {
     type: 'boolean',
     default: true,

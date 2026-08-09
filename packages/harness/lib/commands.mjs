@@ -764,7 +764,7 @@ export async function cmdVerify(argv, ctx = {}) {
   // rendering, exit code, and telemetry are unchanged.
   let result;
   try {
-    result = await runVerify({ workspace, flags, signal, onEvent });
+    result = await runVerify({ workspace, flags, signal, onEvent, events: ctx.events });
   } catch (error) {
     if (streaming) {
       jsonl.result({ status: 'failed', outcome: 'inconclusive', message: error?.message || String(error) });

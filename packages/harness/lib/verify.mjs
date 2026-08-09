@@ -508,7 +508,7 @@ function finalize(workspace, flags, partial, { skipEvidence = false } = {}) {
 // --output jsonl` wires to lib/envelope.mjs's createJsonlStream — see
 // lib/commands.mjs's cmdVerify. Neither parameter changes behavior for any
 // caller that omits them (doctor.mjs's fixture probe, every existing test).
-export async function runVerify({ workspace, flags, signal, onEvent }) {
+export async function runVerify({ workspace, flags, signal, onEvent, events = null }) {
   const session = readSession(workspace);
   const selected = selectPlan(workspace, {
     planPath: flags.plan,
@@ -614,6 +614,8 @@ export async function runVerify({ workspace, flags, signal, onEvent }) {
       signal,
       onStdout: streamer?.onStdout,
       onStderr: streamer?.onStderr,
+      copilotHome: resolveCopilotHome(flags.copilotHome),
+      events,
     });
     streamer?.flush();
     onEvent?.('row', { check: name, status: outcome.status, unifiedStatus: unifiedStatusForCheck(outcome), message: outcome.message });
