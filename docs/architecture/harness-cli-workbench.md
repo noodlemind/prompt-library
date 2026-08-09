@@ -571,3 +571,50 @@ Implement:
 - Provider and host adapters through the plugin protocol
 
 Done when an external plugin can add one command, one search scope, one named check, and one TUI panel without modifying Harness core.
+
+### Delivered scope, and the two decisions that changed it (2026-08-09)
+
+**Third-party executable extensions are declined.** The "done when" above is
+not the shipped contract. Plugin lifecycle commands, extension commands, search
+sources, policies and TUI panels are NOT built and are not planned: the wanted
+capability was "get a skill or an agent in front of every host", and that has
+two routes that need no executable extension.
+
+- **Unmanaged** — copy the file into `~/.copilot` by hand. Discovered,
+  validated and explicitly registered (`resources list|show|register|
+  unregister`). Never in the harness lock, so `upgrade` and `uninstall` leave
+  it alone.
+- **Managed** — install a bundle. `resources add|update|remove|bundles`, placed
+  on every `install`/`upgrade` and withdrawn exactly when the bundle is
+  disabled or removed, with provenance, precedence and integrity pinning.
+
+Two rules the placement layer enforces, stated because they are permissions
+decisions rather than mechanics. **The package always wins:** a bundle
+contributing a path the harness itself ships is refused, not layered over —
+replacing `skills/engineer/SKILL.md` would let an installed extension silently
+redefine the harness's own behavior, which is a much larger permission than
+"add a skill". **Installing is not approving:** `resources add` strips any
+`.enabled` marker a bundle shipped with, so nothing arrives pre-approved.
+
+**The plugin protocol is wired for exactly one first-party caller.** The
+"Provider and host adapters through the plugin protocol" line above reserved
+this seam before there was anything to put in it, and that is where the model
+call now lives: `lib/provider.mjs` starts an adapter process that holds the
+credential and returns data. Out-of-process placement is what keeps the settled
+invariant — *CLI never calls an LLM; Harness never consumes a model* —
+literally true rather than reinterpreted, since core links no SDK and reads no
+key.
+
+This does not reopen the third-party door. A bundle cannot start a plugin, no
+operator command starts a plugin, there is no registration path, and the
+sanctioned-caller list is exported as data so `test/provider-seam.test.mjs`
+asserts the count rather than trusting the comment. A bundle manifest may still
+carry a `plugin:` field; nothing reads it.
+
+`harness agent` is the loop that consumes the seam — orient, model call,
+governed tool call through `exec`/`bash`, one journal record per turn, stop on
+a stated condition. It runs a **benchmark profile** that keeps orientation,
+retrieval, governed execution and journaling, and drops `gate`, `verify`,
+`compound` and human review, whose preconditions a bare container lacks. The
+drops are reported rather than synthesized: a plan file written to satisfy
+`gate` would measure ceremony instead of capability.
