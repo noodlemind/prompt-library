@@ -707,3 +707,43 @@ test('redactedJson: secret-free adversarial-shaped text (quotes, backslashes, co
   assert.equal(redactedJson(value, { redactor: redactor() }), JSON.stringify(value));
   assert.equal(redactedJson(value, { pretty: true, redactor: redactor() }), JSON.stringify(value, null, 2));
 });
+
+// --- P3D1: glued-secret boundaries (Phase 1 debt, assigned to Phase 3) ---
+
+/**
+ * A leading `\b` requires a NON-word character before the match. A token glued
+ * straight onto a preceding word — which is exactly what string concatenation
+ * without a separator produces — therefore did not match, and streamed out in
+ * full through every sink that trusts this module.
+ */
+test('a secret glued onto a preceding word is still masked', () => {
+  const { redactText } = createRedactor();
+  const cases = [
+    ['prefixghp_abcdefghijklmnopqrstuvwxyz012345', 'github-token'],
+    ['xAKIAIOSFODNN7EXAMPLE', 'aws-access-key'],
+    ['zzxoxb-1234567890-abcdef', 'slack-token'],
+    ['id:42github_pat_abcdefghijklmnopqrstuvwx', 'github-token'],
+  ];
+  for (const [input, kind] of cases) {
+    const out = redactText(input);
+    assert.match(out, new RegExp(`redacted:${kind}`), `${input} must be masked`);
+    assert.equal(/abcdefghijklmnopqrst|IOSFODNN7EXAMPLE|1234567890-abcdef/.test(out), false,
+      `${input} must not leave any of the secret behind`);
+  }
+});
+
+// The asymmetry is the point: "sk-" keeps its boundary because it occurs inside
+// ordinary words, where a false positive would corrupt legitimate output rather
+// than merely over-mask.
+test('dropping the boundary did not start masking ordinary prose', () => {
+  const { redactText } = createRedactor();
+  for (const prose of [
+    'the task-oriented-refactoring-notes file',
+    'a risk-assessment-document-here',
+    'disk-usage-report-generated-today',
+  ]) {
+    assert.equal(redactText(prose), prose, `${prose} is not a secret and must survive untouched`);
+  }
+  // …while a genuine sk- key still masks.
+  assert.match(redactText('sk-abcdefghijklmnopqrstuvwxyz'), /redacted:api-key/);
+});

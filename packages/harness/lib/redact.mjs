@@ -125,22 +125,39 @@ const DEFAULT_PATTERNS = [
   {
     // GitHub personal access tokens (classic ghp_/gho_/ghu_/ghs_/ghr_ and the
     // newer fine-grained github_pat_ prefix).
+    //
+    // P3D1 (Phase 1 debt): NO leading `\b`. A `\b` requires a non-word
+    // character before the match, so a token glued straight onto a preceding
+    // word — `prefixghp_…`, which is what string concatenation without a
+    // separator produces — did not match and streamed out in full. The prefixes
+    // here are distinctive enough that dropping the boundary costs no realistic
+    // false positive, and for a secret screen a false positive is a cosmetic
+    // cost while a false negative is the whole failure.
     kind: 'github-token',
-    re: /\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,255}\b|\bgithub_pat_[A-Za-z0-9_]{20,255}\b/,
+    re: /(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,255}\b|github_pat_[A-Za-z0-9_]{20,255}\b/,
   },
   {
     // "sk-"-style secret API keys (OpenAI classic + "sk-proj-…" project keys).
+    //
+    // This one KEEPS its leading `\b`, unlike the prefixes above, and the
+    // asymmetry is deliberate: "sk-" occurs inside ordinary words — task-,
+    // risk-, disk- — so dropping the boundary would mask running prose like
+    // "task-oriented-refactoring-notes". Here a false positive corrupts
+    // legitimate output, which flips the trade the comment above describes.
     kind: 'api-key',
     re: /\bsk-[A-Za-z0-9_-]{16,255}\b/,
   },
   {
     // Slack bot/user tokens.
     kind: 'slack-token',
-    re: /\bxox[abprs]-[A-Za-z0-9-]{10,255}\b/,
+    // No leading `\b` — same P3D1 reasoning as the GitHub prefixes; "xox" plus
+    // a type letter and a dash does not occur in prose.
+    re: /xox[abprs]-[A-Za-z0-9-]{10,255}\b/,
   },
   {
     kind: 'aws-access-key',
-    re: /\bAKIA[0-9A-Z]{16}\b/,
+    // No leading `\b` — same P3D1 reasoning.
+    re: /AKIA[0-9A-Z]{16}\b/,
   },
   {
     // Three-segment base64url JWT. No trailing \b: base64url's own `-`/`_`

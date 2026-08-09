@@ -15,6 +15,7 @@
  * way: a build that needs a variable breaks loudly and the operator adds it,
  * which is a conversation rather than a breach.
  */
+import fs from 'node:fs';
 import path from 'node:path';
 import { EXIT } from './style.mjs';
 
@@ -136,6 +137,53 @@ export function resolveExecCwd({ workspace, cwd = null, realpath }) {
     );
   }
   return realCandidate;
+}
+
+/**
+ * Which shell `harness bash` resolves to (P3AC4).
+ *
+ * On POSIX this is `/bin/sh -c`, unremarkably.
+ *
+ * On Windows it is NOT `cmd.exe`, which is what an earlier version did. A
+ * script written for `bash` is written in a different language from `cmd`, so
+ * running it there does not degrade — it MISBEHAVES. `harness bash -- 'echo
+ * $HOME'` under `cmd.exe` prints the literal `$HOME` and exits 0, which is a
+ * wrong answer reported as success, the worst of the available outcomes.
+ *
+ * So Windows resolves a real `bash.exe` — Git for Windows and WSL both provide
+ * one — and REFUSES when there is none. A refusal is recoverable: the operator
+ * installs a shell or switches to `harness exec`, which never needed one. A
+ * silent language substitution is not.
+ */
+export function resolveShell({ platform = process.platform, lookup = defaultShellLookup } = {}) {
+  if (platform !== 'win32') return { argv: ['/bin/sh', '-c'], shell: '/bin/sh' };
+  const found = lookup();
+  if (!found) {
+    throw Object.assign(new Error('bash is unavailable: no bash.exe found on PATH'), {
+      code: 'E_DENIED',
+      exit: EXIT.needsApproval,
+      hint: 'install Git for Windows or enable WSL, or use `harness exec`, which never invokes a shell — cmd.exe is deliberately NOT substituted, because a POSIX script running under cmd fails silently rather than loudly',
+    });
+  }
+  return { argv: [found, '-c'], shell: found };
+}
+
+/** Locate `bash.exe` on PATH. Split out so the resolution above is testable on
+ * any platform without a Windows runner. */
+function defaultShellLookup() {
+  const exts = ['.exe', ''];
+  const dirs = (process.env.PATH || '').split(path.delimiter).filter(Boolean);
+  for (const dir of dirs) {
+    for (const ext of exts) {
+      const candidate = path.join(dir, `bash${ext}`);
+      try {
+        if (fs.statSync(candidate).isFile()) return candidate;
+      } catch {
+        /* not here — keep looking */
+      }
+    }
+  }
+  return null;
 }
 
 export const TIMEOUT_MIN_SECONDS = 1;

@@ -17,6 +17,7 @@ import {
   NEVER_ALLOWED,
   buildChildEnv,
   resolveExecCwd,
+  resolveShell,
   resolveTimeoutSeconds,
   TIMEOUT_DEFAULT_SECONDS,
 } from '../lib/exec-policy.mjs';
@@ -145,4 +146,36 @@ test('the timeout is bounded on both ends, with no unlimited spelling', () => {
   for (const bad of ['0', '-1', '3601', 'abc', '1.5']) {
     assert.throws(() => resolveTimeoutSeconds(bad), (err) => err.code === 'E_USAGE', `${bad} must be refused`);
   }
+});
+
+// --- P3AC4: which shell `bash` resolves to, per platform ---
+
+test('POSIX resolves /bin/sh', () => {
+  const { argv, shell } = resolveShell({ platform: 'linux' });
+  assert.deepEqual(argv, ['/bin/sh', '-c']);
+  assert.equal(shell, '/bin/sh');
+});
+
+// The correctness point, not a portability nicety: a bash script under cmd.exe
+// is a script running in a different LANGUAGE. `echo $HOME` prints the literal
+// `$HOME` and exits 0 — a wrong answer reported as success.
+test('Windows uses a real bash.exe when one exists', () => {
+  const found = 'C:\\Program Files\\Git\\bin\\bash.exe';
+  const { argv, shell } = resolveShell({ platform: 'win32', lookup: () => found });
+  assert.deepEqual(argv, [found, '-c']);
+  assert.equal(shell, found);
+});
+
+test('Windows REFUSES rather than silently substituting cmd.exe', () => {
+  assert.throws(
+    () => resolveShell({ platform: 'win32', lookup: () => null }),
+    (err) => {
+      assert.equal(err.code, 'E_DENIED');
+      assert.match(err.message, /no bash\.exe/);
+      assert.match(err.hint, /cmd\.exe is deliberately NOT substituted/);
+      assert.equal(/cmd\.exe['"]?\s*,/.test(String(err.message)), false);
+      return true;
+    },
+    'a refusal is recoverable; a silent language substitution is not',
+  );
 });

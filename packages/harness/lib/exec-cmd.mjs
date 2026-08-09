@@ -21,7 +21,7 @@ import { redactedJson, createRedactor } from './redact.mjs';
 import { inertLine } from './knowledge/store.mjs';
 import { runProcess } from './runner.mjs';
 import { createCheckOutputStreamer } from './verify.mjs';
-import { buildChildEnv, resolveExecCwd, resolveTimeoutSeconds } from './exec-policy.mjs';
+import { buildChildEnv, resolveExecCwd, resolveShell, resolveTimeoutSeconds } from './exec-policy.mjs';
 import { resolveConfig } from './config.mjs';
 import { resolveCopilotHome } from './paths.mjs';
 import { isProjectTrusted } from './trust.mjs';
@@ -121,9 +121,8 @@ function plan(argv, { shell }) {
   // A shell script is one argument to the shell, never a token list: joining
   // multiple tokens would re-introduce the word-splitting `exec` exists to
   // avoid, at the one boundary where it is hardest to see.
-  const target = shell
-    ? [process.platform === 'win32' ? 'cmd.exe' : '/bin/sh', process.platform === 'win32' ? '/c' : '-c', childArgs.join(' ')]
-    : childArgs;
+  const resolvedShell = shell ? resolveShell() : null;
+  const target = shell ? [...resolvedShell.argv, childArgs.join(' ')] : childArgs;
 
   // The isolation wrapper goes in FRONT of the target rather than replacing it,
   // and is reported separately from `argv` in the audit — the operator asked to
@@ -132,7 +131,7 @@ function plan(argv, { shell }) {
   const { controls, networkWrapper, degraded } = resolveControls({ networkPolicy: config.values['exec.network'] });
   const argvToRun = [...networkWrapper, ...target];
 
-  return { flags, workspace, cwd, timeoutSeconds, envReport, argvToRun, childArgs, shell, controls, degraded };
+  return { flags, workspace, cwd, timeoutSeconds, envReport, argvToRun, childArgs, shell, controls, degraded, shellPath: resolvedShell?.shell ?? null };
 }
 
 /**
@@ -165,6 +164,10 @@ function emitAudit(ctx, mode, p, result) {
     // The invocation descriptor: what ran, where, and under what policy.
     exec: {
       shell: p.shell,
+      // Which shell, not just whether one was used — `bash` resolves
+      // differently per platform, and an auditor reading "shell: true" cannot
+      // tell a POSIX sh from a Git-Bash on Windows.
+      shellPath: p.shellPath,
       argv: p.childArgs,
       cwd: p.cwd,
       timeoutSeconds: p.timeoutSeconds,

