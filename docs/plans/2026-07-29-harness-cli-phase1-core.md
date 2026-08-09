@@ -1,10 +1,10 @@
 ---
 plan_schema: 1
-title: "Harness CLI Workbench — Phase 1 core, then Phase 2 knowledge operator"
+title: "Harness CLI Workbench — Phase 1 core, Phase 2 knowledge operator, Phase 3 governed execution"
 type: feat
 status: review
 plan_lock: true
-phase: 8
+phase: 9
 priority: P1
 risk: amber
 autonomy: balanced
@@ -18,9 +18,11 @@ expected_outputs:
   - "Secret redaction pass on emitted and persisted output"
   - "Central event registry with actor/execution metadata"
   - "Phase 2: search/lookup/tree over code, knowledge, learnings and plans with deterministic federation"
+  - "Phase 3: checks/exec/bash with declared enforcement classes, config and trust, and an execution audit"
 success_criteria:
   - "AC1–AC10 below all pass via named checks"
   - "P2AC1–P2AC7 below all pass via named checks"
+  - "P3AC1–P3AC7 below all pass via named checks"
 verification:
   required: [harness-tests, prompt-contracts, build-assets]
   criteria:
@@ -41,6 +43,13 @@ verification:
     P2AC5: [harness-tests, prompt-contracts]
     P2AC6: [harness-tests]
     P2AC7: [harness-tests, prompt-contracts]
+    P3AC1: [harness-tests]
+    P3AC2: [harness-tests]
+    P3AC3: [harness-tests]
+    P3AC4: [harness-tests]
+    P3AC5: [harness-tests]
+    P3AC6: [harness-tests]
+    P3AC7: [harness-tests, prompt-contracts]
 reviews:
   required: [architecture-strategist, security-sentinel, pattern-recognition-specialist]
   completed: [architecture-strategist, security-sentinel, pattern-recognition-specialist]
@@ -51,7 +60,7 @@ domains: [cli, harness]
 specialists: []
 capability_gaps: []
 created: 2026-07-29
-updated: 2026-08-08
+updated: 2026-08-09
 ---
 
 # Phase 1 — CLI core: command registry, output modes, async runner
@@ -123,6 +132,40 @@ Three of that section's ten criteria are already delivered by the command-index 
 
 - **`run` and `resource` have no entities to resolve yet.** The run journal is Phase 4a and the resource model is Phase 5. `lookup run|resource` therefore returns the same structured not-found as any unknown identifier, naming the phase that will populate it, rather than being silently absent from the kind list.
 - **Identifiers reuse the keys the store already has** — no new id scheme. Learnings are `<domain>/<slug>` (`store.mjs`), episodes are `path@sha256` (`consolidate.mjs`, which is already how consolidation keys them). Neither corpus has an id index, so resolution is a bounded scan; that is a performance characteristic to measure, not an addressability gap, and inventing a second id scheme to avoid it would fork identity across the store and the retrieval layer.
+
+## Acceptance Criteria — Phase 3 (governed execution and control)
+
+Phase 3 lands in this same PR under the same 2026-08-07 decision that stacked Phase 2. Source of scope: `docs/architecture/harness-cli-workbench-delivery.md` §Phase 3.
+
+Stated plainly because the delivery doc's own note applies hardest here: `config`, `trust`, network policy and the isolation backend have **zero prior art** in this codebase. They are net-new builds, not extensions of a Phase 1 seam, and they are the bulk of what remains.
+
+- [ ] **P3AC1** Every control declares and honors its enforcement class: enforced, detect-and-block, or audit-only. A control whose class is undeclared is a control nobody can reason about, so the class is registry data, not prose.
+- [x] **P3AC2** `exec` never invokes a shell; `bash` is separately allowed or denied by policy; both are identified distinctly in events and evidence. *(Delivered for events; the policy gate itself lands with P3.4 trust/config, and evidence identification with P3.6.)*
+- [ ] **P3AC3** Working-directory containment, timeout, environment allowlist, and network policy are enforced; where the platform lacks isolation primitives the degradation is recorded in the audit event. *(Three of four enforced by `exec-policy.mjs`; network policy and the degradation record are open.)*
+- [ ] **P3AC4** Per-platform behavior is explicit — which shell `bash` resolves to on Windows and how descendant termination works there.
+- [ ] **P3AC5** Command and mutation audit entries are written for every execution, redacted before persistence. *(Done for `exec`/`bash` on all three lanes; `checks run` and `verify` still execute without an execution-class audit entry.)*
+- [ ] **P3AC6** Trust gates project resource and policy loading; trust changes are recorded.
+- [ ] **P3AC7** The same representative workflow runs through two named hosts using only documented CLI contracts.
+
+### Phase 1 debt claimed from the carry-out
+
+`docs/architecture/harness-cli-workbench-delivery.md` §"Debt carried out of Phase 1" assigns two redaction items to this phase:
+
+- [ ] **P3D1** Redaction residuals: glued-secret `\b` boundaries, and base64 / split-transform env values.
+- [ ] **P3D2** The cycle-guard masked sentinel — revisit now that genuinely untrusted output (child process stdout/stderr) flows through the redaction layer.
+
+### Phase 3 workstreams
+
+Each lands as one reviewable commit, per the delivery doc's execution rules.
+
+- [x] **P3.1** Extract the named-check surface out of `verify.mjs`; `checks list|show|run`. *(commit `c787f8e`)*
+- [x] **P3.2** `exec` and `bash` with the environment allowlist, cwd containment, bounded timeout, and the execution audit on every lane. *(commit `c140486`)*
+- [ ] **P3.3** `config` — user and project scopes, effective values with provenance, schema validation, atomic writes.
+- [ ] **P3.4** `trust` — project identity, approve/revoke, policy-and-resource loading gated on trust; the `bash` policy gate P3AC2 refers to.
+- [ ] **P3.5** Enforcement classes as registry data, per-command-family authorization, and network policy with recorded degradation.
+- [ ] **P3.6** Execution audit for `checks run` and `verify`; redacted output artifacts and evidence identification.
+- [ ] **P3.7** Per-platform behavior: the Windows shell decision for `bash`, descendant termination, and the adversarial redaction fixtures the risk note calls for (P3D1, P3D2).
+- [ ] **P3.8** Cross-host validation on two named hosts (P3AC7).
 
 ## Primitive Governance
 
@@ -251,3 +294,11 @@ Final whole-branch review (2026-08-06, architecture + security + patterns lenses
 - **P2AC5**: the tool contract records the three new commands and the widened lane-bearing set.
 - Suite: 1322 tests, 1313 pass, 9 skipped, 0 fail.
 - **Carried forward, stated rather than implied:** `index` still has no `resultOf` — its handler branches and mutates, so a producer needs a real refactor rather than a wrapper, and wrapping it badly would have been worse than leaving it. Phases 3, 4a, 4b and 5 are unstarted. Phase 3's `config`, `trust`, environment allowlisting, network policy and isolation backend have **zero prior art** in this codebase and are net-new builds, not extensions.
+
+### 2026-08-09 — Phase 3 started; P3.1 and P3.2 landed
+
+- Phase 3 is now tracked here (P3AC1–P3AC7, P3.1–P3.8, and the two redaction debt items assigned to this phase). P3.1 had already landed as `c787f8e` without plan bookkeeping — recorded now rather than left implicit, because a stacked PR that stops tracking its own phases is how the remaining scope becomes unknowable.
+- **P3.1** extracted `loadNamedChecks`/`validateCommand`/`runNamedCheck` out of `verify.mjs` (which had four independent parsers) into `lib/checks.mjs`, and added `checks list|show|run`. The checks were previously reachable only through the whole plan-gated `verify` pipeline, so "what does this repo declare, and does that one check pass" had no cheap answer.
+- **P3.2** `exec`/`bash` with `lib/exec-policy.mjs`. The seam being filled is worth naming: `runProcess` has always accepted an explicit `env` documented as "the caller owns allowlisting", and **no caller ever supplied one** — so every named check has run with the full parent environment since the runner landed. Default-deny with an operator escape hatch, three loader-hijacking names refused unconditionally, cwd containment with symlinks resolved before the test, and a timeout bounded at both ends.
+- Three defects found while wiring P3.2, fixed rather than carried: the audit event fired from the handler only, so `--output json-envelope` executed a child with **no execution record at all**; the audit carried an exit code but never what ran; and `dispatchLane` hardcoded exit 0 on its success path, so the envelope lane printed `"status":"failed"` beside exit 0. The third was latent by design ("a future command with a native non-zero-but-not-thrown outcome can extend this") and `exec` is the first such command — entries now declare `exitOf` beside `resultOf`.
+- Suite: 1360 tests, 1351 pass, 9 skipped, 0 fail.
