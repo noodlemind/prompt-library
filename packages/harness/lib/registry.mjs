@@ -63,7 +63,9 @@ import { recallResultOf, getResultOf } from './retrieval/compat-results.mjs';
 import { cmdChecks, checksResultOf, checksExitFor, CHECKS_VERBS } from './checks-cmd.mjs';
 import { cmdConfig, configResultOf, configExitFor, CONFIG_VERBS } from './config-cmd.mjs';
 import { cmdTrust, trustResultOf, TRUST_VERBS } from './trust-cmd.mjs';
+import { cmdRun, runResultOf, runExitFor, RUN_VERBS } from './run-cmd.mjs';
 import { CONFIG_KEYS, SCOPES } from './config.mjs';
+import { RUN_STATUSES } from './run-journal.mjs';
 import { cmdExec, execResultOf, cmdBash, bashResultOf, exitFor as execExitFor } from './exec-cmd.mjs';
 import {
   cmdSearch,
@@ -476,6 +478,13 @@ export async function dispatch(argv, ctx = {}) {
     const message = entry.requireArgs(rest, parseFlags(rest));
     if (message) throw usageError(message);
   }
+  // Phase 4a: the run opens HERE — after every validation above has passed and
+  // before any handler runs. Opening it earlier (in bin/harness.mjs, next to
+  // where the id is minted) wrote a journal entry and created `.harness/` for
+  // invocations the CLI then REFUSED, breaking the standing invariant that a
+  // rejected option touches nothing. A refused command never started, so it has
+  // no run.
+  ctx.onRunStart?.();
   // P1.6 (carry-list, AC7 widening): ctx.events now attaches on every path,
   // including the legacy ledger/--json default — EXCEPT `entry.instrument
   // === false`. TWO entries opt out today, `events` and `report`, for the
@@ -1462,6 +1471,45 @@ registerCommand({
   handler: cmdBash,
   resultOf: bashResultOf,
   exitOf: execExitFor,
+});
+
+registerCommand({
+  name: 'run',
+  summary: 'list, inspect, or judge the resumability of past harness runs',
+  group: 'engineer loop',
+  // Every verb reads. `resume` REPORTS whether resuming is safe rather than
+  // performing it — see resumePlanFor for why an interrupted command is never
+  // replayed — so nothing here mutates or executes.
+  sideEffect: 'read',
+  capabilities: [],
+  outputModes: ['ledger', 'json'],
+  usage: '<list|show|tree|resume> [run-id] [--status <status>] [--command <name>] [--host <host>] [--plan <path>] [--since <date>] [--until <date>] [--limit <n>]',
+  verbs: [
+    { verb: 'list', summary: 'past runs, newest first, with the documented filters' },
+    { verb: 'show', summary: 'one run and every event it recorded', positionals: ['run-id'] },
+    { verb: 'tree', summary: 'one run and the work it caused', positionals: ['run-id'] },
+    { verb: 'resume', summary: 'whether this run can safely be resumed, and from where', positionals: ['run-id'] },
+  ],
+  args: {
+    positionals: [
+      { name: 'verb', description: RUN_VERBS.join('|'), required: false, default: 'list' },
+      { name: 'run-id', description: 'a run id or an unambiguous prefix', required: false, default: null },
+    ],
+    flags: [
+      { name: '--status', type: 'string', valueName: 'status', description: `list: ${RUN_STATUSES.join('|')}`, required: false, default: null, tui: 'prompt', verbs: ['list'] },
+      { name: '--command', type: 'string', valueName: 'name', description: 'list: only runs of this command', required: false, default: null, tui: 'prompt', verbs: ['list'] },
+      { name: '--host', type: 'string', valueName: 'host', description: 'list: only runs from this host', required: false, default: null, tui: 'prompt', verbs: ['list'] },
+      { name: '--plan', type: 'string', valueName: 'path', description: 'list: only runs against this plan', required: false, default: null, tui: 'prompt', verbs: ['list'] },
+      { name: '--since', type: 'string', valueName: 'date', description: 'list: runs at or after this date', required: false, default: null, tui: 'prompt', verbs: ['list'] },
+      { name: '--until', type: 'string', valueName: 'date', description: 'list: runs at or before this date', required: false, default: null, tui: 'prompt', verbs: ['list'] },
+      { name: '--limit', type: 'number', valueName: 'n', description: 'list: how many runs to show (default 20)', required: false, default: 20, tui: 'prompt', verbs: ['list'] },
+    ],
+  },
+  // A bare `harness run` lists, which reads.
+  bareSideEffect: 'read',
+  handler: cmdRun,
+  resultOf: runResultOf,
+  exitOf: runExitFor,
 });
 
 registerCommand({

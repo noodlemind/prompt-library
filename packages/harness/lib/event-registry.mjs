@@ -165,6 +165,12 @@ export function createEventRegistry({
   clock = () => new Date().toISOString(),
   pid = process.pid,
   harnessVersion = readDefaultHarnessVersion(),
+  // Phase 4a: the id of the invocation these events belong to. Stamped on
+  // EVERY event rather than only the lifecycle pair, because the point of a run
+  // id is joining a run to everything it caused — a `verify` and the four
+  // checks it spawned were previously indistinguishable from four unrelated
+  // commands that happened to run nearby.
+  run = null,
 } = {}) {
   if (typeof writeEvent !== 'function') {
     throw new TypeError('createEventRegistry: writeEvent(payload) function is required');
@@ -181,6 +187,7 @@ export function createEventRegistry({
       type,
       ts: clock(),
       actor,
+      ...(run ? { run } : {}),
       ...(command ? { command } : {}),
       ...safePayload,
     };

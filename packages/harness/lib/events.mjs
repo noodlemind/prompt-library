@@ -138,6 +138,10 @@ export function writeEvent(workspace, flags, payload) {
     // P1.5 (lib/event-registry.mjs) additions — additive only, never read
     // by any pre-existing event type/call site.
     'actor',
+    // Phase 4a: the run this event belongs to. Without it `events.jsonl` is a
+    // flat stream in which a command and the work it spawned cannot be told
+    // apart from unrelated commands that ran nearby.
+    'run',
     'execution',
     'flags',
     'status',

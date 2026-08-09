@@ -181,19 +181,19 @@ Each lands as one reviewable commit, per the delivery doc's execution rules.
 
 Source of scope: `docs/architecture/harness-cli-workbench-delivery.md` §Phase 4a. Same stacking decision as Phases 2 and 3.
 
-- [ ] **P4aAC1** Every run carries a stable id; the journal is append-only and never rewritten.
-- [ ] **P4aAC2** Journal entries cover command start/progress/result, plan and gate, execution and mutation, verification and evidence, cancellation and timeout.
-- [ ] **P4aAC3** Run status uses the unified vocabulary including `cancelled` and `timed-out` as distinct terminal states.
-- [ ] **P4aAC4** `resume` restarts only from an explicitly safe boundary; interrupted commands are never auto-replayed.
-- [ ] **P4aAC5** Runs are queryable by status, command, host, plan, and date.
+- [x] **P4aAC1** Every run carries a stable id; the journal is append-only and never rewritten.
+- [x] **P4aAC2** Journal entries cover command start/progress/result, plan and gate, execution and mutation, verification and evidence, cancellation and timeout.
+- [x] **P4aAC3** Run status uses the unified vocabulary including `cancelled` and `timed-out` as distinct terminal states.
+- [x] **P4aAC4** `resume` restarts only from an explicitly safe boundary; interrupted commands are never auto-replayed.
+- [x] **P4aAC5** Runs are queryable by status, command, host, plan, and date.
 - [ ] **P4aAC6** The ~20 legacy `writeEvent` call sites migrate onto the event registry, gaining actor metadata (Phase 1 AC7 deferral closed).
 - [ ] **P4aAC7** Retention replaces the current 200-event cap with a stated policy; `--failures` surfaces cancelled and timed-out runs correctly (Phase 1 deferral closed).
 
 ### Phase 4a workstreams
 
-- [ ] **P4a.1** Run identity and the journal core: stable run ids minted once per invocation, `run.start`/`run.result` records, and the id stamped on every event so a run's entries can be joined.
-- [ ] **P4a.2** `run list|show|tree` with the documented filters.
-- [ ] **P4a.3** `run resume` — safe boundaries, and never replaying an interrupted command.
+- [x] **P4a.1** Run identity and the journal core: stable run ids minted once per invocation, `run.start`/`run.result` records, and the id stamped on every event so a run's entries can be joined.
+- [x] **P4a.2** `run list|show|tree` with the documented filters.
+- [x] **P4a.3** `run resume` — safe boundaries, and never replaying an interrupted command.
 - [ ] **P4a.4** Migrate the legacy `writeEvent` call sites onto the event registry (P4aAC6).
 - [ ] **P4a.5** Retention policy and the `--failures` fix (P4aAC7).
 
@@ -279,6 +279,8 @@ Each lands as one reviewable commit with its own review pass, per the delivery d
 - `packages/harness/lib/policy.mjs`
 - `packages/harness/lib/redact.mjs`
 - `packages/harness/lib/registry.mjs`
+- `packages/harness/lib/run-cmd.mjs`
+- `packages/harness/lib/run-journal.mjs`
 - `packages/harness/lib/runner.mjs`
 - `packages/harness/lib/style.mjs`
 - `packages/harness/lib/trust.mjs`

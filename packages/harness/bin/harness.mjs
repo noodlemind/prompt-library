@@ -27,6 +27,7 @@ import { createRedactor, redactedJson } from '../lib/redact.mjs';
 // it, so `--version` reuses that one rather than reintroducing a third.
 // registry.mjs already imports this module, so it costs no extra load.
 import { readPkgVersion } from '../lib/commands.mjs';
+import { newRunId, startRun, finishRun } from '../lib/run-journal.mjs';
 
 const [, , command = 'help', ...args] = process.argv;
 // This renderer only writes error blocks, which go to stderr — detect there.
@@ -49,7 +50,7 @@ const out = createStyle({ argv: args });
 export const HELP_COMMAND_ORDER = [
   'install', 'upgrade', 'doctor', 'status', 'uninstall',
   'init-repo', 'index', 'plan-new', 'config', 'trust',
-  'orient', 'gate', 'verify', 'checks', 'exec', 'bash', 'validate-plan', 'compound', 'recall', 'get', 'search', 'lookup', 'tree', 'events', 'report',
+  'orient', 'gate', 'verify', 'checks', 'exec', 'bash', 'validate-plan', 'compound', 'recall', 'get', 'search', 'lookup', 'tree', 'run', 'events', 'report',
   'knowledge', 'consolidate', 'remember', 'learning', 'learnings', 'eval-knowledge',
   'resolve',
 ];
@@ -219,16 +220,62 @@ function extractOutputLane(rawArgs) {
 // contain `--output ...`; parseFlags ignores unrecognized flags (verified:
 // it silently skips both `--output` and its value token), so passing the
 // pre-extraction args here is equivalent to passing the stripped ones.
-function createProcessEventRegistry(rawArgs) {
+function createProcessEventRegistry(rawArgs, run) {
   const flags = parseFlags(rawArgs);
   const workspace = path.resolve(flags.workspace);
   return createEventRegistry({
+    run,
     writeEvent: (payload) => writeHarnessEvent(workspace, flags, payload),
   });
 }
 
+// Phase 4a (P4aAC1/P4aAC2): a run brackets one CLI invocation. The id is minted
+// ONCE here, before dispatch, and threaded into the event registry so every
+// event the invocation produces carries it — that is what lets `run show` join
+// a command to the work it caused.
+//
+// Journal writes honor the same `--no-events`/`--dry-run` suppression as every
+// other record, through `shouldSkipRunJournal`. A dry run performs nothing, so
+// journaling it would record work that did not happen.
+function shouldSkipRunJournal(flags) {
+  return Boolean(flags.dryRun || flags.noEvents || process.env.HARNESS_NO_EVENTS === '1');
+}
+
+/**
+ * Map a process exit code onto the run vocabulary.
+ *
+ * Only the codes the harness itself reserves are given a specific meaning; a
+ * child's passed-through code (see `exitFor` in lib/exec-cmd.mjs) is a generic
+ * failure from the journal's point of view, because the journal cannot tell
+ * `exec`'s child exiting 8 from a harness timeout — the same ambiguity recorded
+ * there, resolved the same way rather than guessed at differently here.
+ */
+function runStatusForExit(code) {
+  if (code === EXIT.ok) return 'succeeded';
+  if (code === EXIT.cancelled) return 'cancelled';
+  if (code === EXIT.timedOut) return 'timed-out';
+  if (code === EXIT.needsApproval) return 'blocked';
+  if (code === EXIT.usage) return 'inconclusive';
+  return 'failed';
+}
+
+/** The actor that opened this run. Mirrors the event registry's own detection
+ * so a run and its events never disagree about who was driving. */
+function detectRunActor() {
+  if (process.env.CI || process.env.GITHUB_ACTIONS) return { kind: 'ci' };
+  if (process.env.HARNESS_HOST) return { kind: 'host', host: process.env.HARNESS_HOST };
+  return { kind: 'user' };
+}
+
 async function main() {
   let code = 0;
+  let runId = null;
+  let runStartedAt = null;
+  let runWorkspacePath = null;
+  let runJournalFlags = null;
+  // Only a run that actually OPENED gets a terminal record; a refused
+  // invocation has neither.
+  let runOpened = false;
   try {
     // `--version` is universal CLI convention and was the one place the harness
     // did not honor it: the version was reachable only through `harness status`,
@@ -275,6 +322,31 @@ async function main() {
       console.log(redactedJson(commandIndexEnvelope({ workspace: path.resolve(flags.workspace) })));
     } else if (hasCommand(command)) {
       const { args: laneArgs, output } = extractOutputLane(args);
+      const runFlags = parseFlags(args);
+      const runWorkspace = path.resolve(runFlags.workspace);
+      const journaling = !shouldSkipRunJournal(runFlags);
+      runId = newRunId();
+      runStartedAt = Date.now();
+      runWorkspacePath = runWorkspace;
+      runJournalFlags = runFlags;
+      // Deferred to `ctx.onRunStart`, which lib/registry.mjs calls once the
+      // command has passed validation and is about to run — see the note there.
+      const openRun = () => {
+        if (!journaling || runOpened) return;
+        runOpened = true;
+        startRun(runWorkspace, {
+          run: runId,
+          command,
+          // The argv WITHOUT the lane flag, matching what dispatch actually
+          // received — a journal that records a command the harness did not run
+          // is the same class of lie as an audit that names the wrong argv.
+          argv: laneArgs,
+          plan: runFlags.plan || null,
+          host: runFlags.host || process.env.HARNESS_HOST || 'harness-cli',
+          actor: detectRunActor(),
+          harnessVersion: readPkgVersion(),
+        });
+      };
       // P1.6 (carry-list, AC7 widening): the event registry now attaches for
       // EVERY registered-command dispatch, not just the envelope/agent
       // lanes — command.result telemetry (including verify's Ctrl-C
@@ -284,7 +356,7 @@ async function main() {
       // branches identically whenever ctx.events is present; the earlier
       // ledger-only exclusion existed solely to keep one now-updated
       // test/harness-cli.test.mjs assertion's exact events array stable.
-      const events = createProcessEventRegistry(args);
+      const events = createProcessEventRegistry(args, runId);
       // Ctrl-C -> AbortSignal bridge (AC8), scoped to `verify` only: every
       // other command keeps Node's default SIGINT behavior (immediate
       // process exit) rather than risk a hang for a command whose handler
@@ -295,7 +367,7 @@ async function main() {
         process.once('SIGINT', () => controller.abort());
         signal = controller.signal;
       }
-      code = await dispatchRegistered([command, ...laneArgs], { style: out, output, events, signal });
+      code = await dispatchRegistered([command, ...laneArgs], { style: out, output, events, signal, onRunStart: openRun });
     } else {
       emitError({
         code: 'E_USAGE',
@@ -318,6 +390,25 @@ async function main() {
       console.error(redactText(inspect(err)));
     }
     code = exit;
+  }
+  // Close the run on EVERY path out of the try, success and error alike. A
+  // journal whose terminal records only appear when nothing went wrong would
+  // leave exactly the runs an operator cares about looking like they never
+  // finished. A failure to journal is swallowed: the command's own outcome is
+  // the answer the caller is waiting for, and losing it to a bookkeeping error
+  // would be a worse trade than an incomplete journal.
+  if (runOpened && runId && runWorkspacePath && !shouldSkipRunJournal(runJournalFlags || {})) {
+    try {
+      finishRun(runWorkspacePath, {
+        run: runId,
+        status: runStatusForExit(code),
+        exitCode: code,
+        durationMs: runStartedAt === null ? null : Date.now() - runStartedAt,
+        plan: runJournalFlags?.plan || null,
+      });
+    } catch {
+      /* the command's outcome matters more than the bookkeeping */
+    }
   }
   // Fix-wave P2 (JSONL backpressure): flush buffered stdout/stderr before the
   // hard exit. `process.exit` does not wait for async pipe writes, so a
