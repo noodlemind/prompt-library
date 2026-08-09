@@ -145,7 +145,7 @@ Stated plainly because the delivery doc's own note applies hardest here: `config
 - [x] **P3AC4** Per-platform behavior is explicit — which shell `bash` resolves to on Windows and how descendant termination works there. *(`resolveShell` uses a real `bash.exe` on Windows and REFUSES when there is none rather than substituting `cmd.exe`; descendant termination's `taskkill /T /F` path was already explicit in `runner.mjs` and is exercised by the Windows workflow.)*
 - [x] **P3AC5** Command and mutation audit entries are written for every execution, redacted before persistence. *(All four execution surfaces — `exec`, `bash`, `checks run`, and `verify`'s named checks — emit the same `exec`-shaped record, so one query answers "what did this harness run".)*
 - [x] **P3AC6** Trust gates project resource and policy loading; trust changes are recorded. *(Project `config.yaml` and `policy.yaml` are gated and trust changes emit a `trust` event. Executing the repo-authored argv in `checks.yaml` is NOT yet gated — see P3.5, where the enforcement-class model gives the CI case a vocabulary; gating execution before that exists would need a bypass flag, which is the escape hatch that makes a gate decorative.)*
-- [ ] **P3AC7** The same representative workflow runs through two named hosts using only documented CLI contracts.
+- [x] **P3AC7** The same representative workflow runs through two named hosts using only documented CLI contracts. *(Claude Code and Codex CLI, six steps — trust status → checks list → refused `checks run` → approve → allowed `checks run` → verify — byte-identical results from independent trust state. Codex was given only the contract excerpt and told not to read the source. **GitHub Copilot CLI was NOT used**: it is not installed, and `gh copilot` would have downloaded it onto the machine, which is not a side effect to take unasked. If Copilot CLI is wanted as the named second host, install it and the same fixture re-runs.)*
 
 ### Phase 1 debt claimed from the carry-out
 
@@ -166,7 +166,7 @@ Each lands as one reviewable commit, per the delivery doc's execution rules.
 - [x] **P3.5b** The trust gate on executing repo-authored `checks.yaml` argv that P3.4 deferred here. *(Per-command-family authorization is NOT delivered: with trust gating project policy, project config, and now execution, an actor-to-command-family matrix would be a second authorization model layered on the one that already decides these questions. Recorded as a deliberate scope call for the phase review rather than silently dropped.)*
 - [x] **P3.6** Execution audit for `checks run` and `verify`, emitted at the shared `runNamedCheck` choke point in the same `exec` shape, plus the control set applied to named checks and `checks.env_allowlist` for the environment.
 - [x] **P3.7** Per-platform behavior: the Windows shell decision for `bash`, descendant termination, and the redaction debt (P3D1 fixed; P3D2 assessed).
-- [ ] **P3.8** Cross-host validation on two named hosts (P3AC7).
+- [x] **P3.8** Cross-host validation on two named hosts (P3AC7).
 
 ## Primitive Governance
 
