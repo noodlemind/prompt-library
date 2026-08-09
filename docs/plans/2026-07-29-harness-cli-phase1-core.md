@@ -465,6 +465,28 @@ Final whole-branch review (2026-08-06, architecture + security + patterns lenses
 
 ## Activity
 
+### 2026-08-09 — First real model run: P5AC9 and P5AC10 closed against GPT-5.6 Luna
+
+The disclosure carried through the last three entries — *"no run has gone against a REAL model"* — is closed. `harness agent` completed a task end to end against `openai/gpt-5.6-luna` through the OpenRouter adapter, on a shallow clone of this repository.
+
+**The task was chosen so a bluff would be obvious:** *"Find every model provider this harness supports and report each one's default model. Read the code, do not guess."* The answer is checkable against `PROVIDERS`, and the model got all six right — including the two that share a default (`zen` and `zen-go`) and the one that is not a Claude model (`ollama` → `qwen3:8b`) — and cited `provider.mjs:64–114` plus the two `startProvider` lines that consume `defaultModel`.
+
+**Five turns, 12.6 seconds, 30,609 in + 653 out, $0.0035.** Four `bash` calls, each `exit 0`.
+
+What the run demonstrates that no stub could:
+
+- **P5AC9.** Orient → model call → governed tool call → journal → stop on a stated condition, with no editor host anywhere. The persona reached the model intact: it opened its answer with `Mode: Answer`, which is `engineer.agent.md`'s own vocabulary, not something the loop supplies.
+- **P5AC10.** The run appears in `run list` as `succeeded`/exit 0 with its id and actor; every event carries the run id; five `agent.turn` records sit alongside four `bash` audit events, correlated by that id.
+- **Governed execution under a real model.** Every command the model issued ran with **6 environment variables allowed and 59 dropped** — the same deny-all allowlist an operator's `harness exec` gets. The model chose `rg`, `sed` and `nl`; it never got a wider environment by asking.
+- **The F9 fix, in practice.** The task text appears **zero times** in `runs.jsonl` and `events.jsonl`. The journal records `<task:113b:8f063f26df2e>` — length and digest — beside the readable configuration flags.
+- **The profile reported its drops** rather than hiding them: `gate`, `verify`, `compound` and `human-review` each printed with the precondition it lacks.
+- **Nothing was written.** No source file in the sample clone was modified.
+
+Run in a clone rather than the live worktree on purpose: the loop executes, and a first outing should not be able to dirty a branch. Nothing about the run depended on that choice.
+
+Still not proven: a task that WRITES code, and any run under Daytona (Phase 3 of the agent-loop spec, still deferred).
+
+
 ### 2026-08-09 — Codex phase-5 review: 14 findings, 13 fixed, 1 disputed and fixed differently
 
 Per the standing instruction to close each phase with a Codex review. Every finding was reproduced before being fixed, and each fix is pinned by `test/codex-phase5-findings.test.mjs`, written to fail against the pre-fix tree — **15 of its 16 behavioral tests fail on commit `640dd38`**; the one that passes is the deliberate both-directions guard that retirement still works.
