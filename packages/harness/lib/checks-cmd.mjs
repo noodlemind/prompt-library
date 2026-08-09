@@ -152,14 +152,17 @@ function statusForOutcome(outcome) {
  * json-envelope` exited 0 while the ledger path for the same check exited 1. A
  * pipeline gating through the envelope lane passed every failing check.
  *
- * Kept byte-identical to the ledger handler's rule (non-passed → 1) rather than
- * routing `timeout` to the reserved exit 8: making the two lanes agree is the
- * fix, and widening the exit vocabulary is a separate decision that would change
- * behavior for callers of the path that was already correct.
+ * `timeout` routes to the reserved `EXIT.timedOut` (8). An earlier version kept
+ * it at 1 to avoid widening the vocabulary, but that left the envelope
+ * reporting `"status":"timed-out"` beside exit 1 — the same status/exit
+ * contradiction this function exists to remove, just quieter. Found by the
+ * Codex phase review.
  */
 export function checksExitFor(result) {
   if (result?.verb !== 'run') return EXIT.ok;
-  return result.outcome?.status === 'passed' ? EXIT.ok : 1;
+  if (result.outcome?.status === 'passed') return EXIT.ok;
+  if (result.outcome?.status === 'timeout') return EXIT.timedOut;
+  return 1;
 }
 
 const OUTCOME_STATE = { passed: 'ok', failed: 'error', timeout: 'error', unavailable: 'warn' };

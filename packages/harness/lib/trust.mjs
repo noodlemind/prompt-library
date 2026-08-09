@@ -19,19 +19,20 @@
  * and collapsing them would either nag about untouched projects or wave through
  * edited ones.
  *
- * WHAT TRUST GATES, in this phase: project `config.yaml` and project
- * `policy.yaml` — the two files that change harness behavior without executing
- * anything. Both fail SAFE when untrusted: configuration falls back to the user
- * and default scopes, and policy falls back to built-in enforcement, so an
- * untrusted project gets the stricter treatment rather than the looser one.
+ * WHAT TRUST GATES: project `config.yaml`, project `policy.yaml`, and the
+ * execution of repo-authored argv from `checks.yaml`. The first two change
+ * harness behavior without executing anything and fail SAFE when untrusted —
+ * configuration falls back to the user and default scopes, policy falls back to
+ * built-in enforcement — so an untrusted project gets the stricter treatment
+ * rather than the looser one. The third is refused outright: `git clone &&
+ * harness verify` must not run a stranger's commands.
  *
- * WHAT IT DOES NOT GATE YET: executing the repo-authored argv in `checks.yaml`.
- * That is the larger hole and it is deliberately left to P3.5, where the
- * enforcement-class model arrives — gating execution needs a way to express the
- * CI case (an unattended runner cannot answer an approval prompt), and bolting
- * a bypass onto trust before that vocabulary exists would produce exactly the
- * escape hatch that makes the whole gate decorative. Recorded here rather than
- * left to be discovered.
+ * There is no bypass flag, and that is deliberate. An unattended CI runner
+ * cannot answer an approval prompt, so the temptation is an env-var escape
+ * hatch — which is the thing that makes a gate decorative, because anything
+ * that can set the variable can also skip the gate. CI approves explicitly with
+ * `harness trust approve` in its workflow, where the decision is a reviewable
+ * line in a diff rather than an invisible default.
  */
 import crypto from 'node:crypto';
 import fs from 'node:fs';
@@ -43,10 +44,19 @@ import { writeFileContained } from './fs-safe.mjs';
 export const TRUST_SCHEMA_VERSION = 1;
 
 /** The files whose content an approval pins. Each one can change how the
- * harness behaves; a change to any of them is a change to what was approved. */
+ * harness behaves; a change to any of them is a change to what was approved.
+ *
+ * `checks.yaml` is here because it is the file whose content is EXECUTED, which
+ * makes it the most important of the three and the one an earlier version
+ * omitted. Without it, approving a repository with a benign check and then
+ * pulling a commit that rewrites that check's argv left trust reading `trusted`
+ * and ran the new command — approval authorizing code that did not exist when
+ * anyone looked at it, which is the exact failure content-pinning exists to
+ * prevent. Found by the Codex phase review. */
 export const PINNED_FILES = Object.freeze([
   path.join('.github', 'harness', 'config.yaml'),
   path.join('.github', 'harness', 'policy.yaml'),
+  path.join('.github', 'harness', 'checks.yaml'),
 ]);
 
 export const TRUST_STATES = Object.freeze(['trusted', 'untrusted', 'stale', 'revoked']);
@@ -100,8 +110,18 @@ function readStore(copilotHome) {
   if (!fs.existsSync(file)) return { version: TRUST_SCHEMA_VERSION, projects: {} };
   try {
     const doc = YAML.parse(fs.readFileSync(file, 'utf8'), { maxAliasCount: 50 });
-    if (!doc || typeof doc !== 'object' || Array.isArray(doc)) return { version: TRUST_SCHEMA_VERSION, projects: {} };
-    return { version: doc.version || TRUST_SCHEMA_VERSION, projects: doc.projects && typeof doc.projects === 'object' ? doc.projects : {} };
+    // A file that exists but does not carry a `projects` MAPPING is damaged,
+    // not empty. Treating `version: 1\nprojects:\n` — a truncated write — as
+    // "no records" let `approve` overwrite it and silently discard every
+    // approval and revocation it had held. Found by the Codex phase review.
+    if (!doc || typeof doc !== 'object' || Array.isArray(doc)) {
+      return { version: TRUST_SCHEMA_VERSION, projects: {}, unreadable: true };
+    }
+    const projects = doc.projects;
+    if (projects === undefined || projects === null || typeof projects !== 'object' || Array.isArray(projects)) {
+      return { version: TRUST_SCHEMA_VERSION, projects: {}, unreadable: true };
+    }
+    return { version: doc.version || TRUST_SCHEMA_VERSION, projects };
   } catch {
     // An unreadable trust store denies rather than grants. The alternative —
     // treating a corrupt file as "no record, so proceed" — turns damaging the

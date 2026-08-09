@@ -149,7 +149,13 @@ export async function configResultOf(argv, ctx = {}) {
   if (!SCOPES.includes(scope)) throw usageError(`unknown scope: ${scope}`, `--scope ${SCOPES.join(' or --scope ')}`);
 
   const written = setConfigValue({ scope, key, value, copilotHome, workspace });
-  const after = resolveConfig({ copilotHome, workspace, projectTrusted });
+  // Trust is recomputed AFTER the write. `config.yaml` is a pinned file, so
+  // writing the project scope invalidates the approval that was covering it —
+  // reusing the pre-write boolean reported an effective value from a project
+  // that had just become `stale`, and the very next read disagreed. Found by
+  // the Codex phase review.
+  const trustedAfter = isProjectTrusted({ workspace, copilotHome });
+  const after = resolveConfig({ copilotHome, workspace, projectTrusted: trustedAfter });
   return {
     schema: 1,
     verb,
@@ -164,6 +170,10 @@ export async function configResultOf(argv, ctx = {}) {
     value: after.values[key],
     ...after.provenance[key],
     effectiveChanged: after.values[key] === written.value,
+    // Surfaced because it is the likeliest surprise: a project-scope write makes
+    // the project's own approval stale, so the value just written does not take
+    // effect until someone re-approves after reading the change.
+    ...(scope === 'project' && !trustedAfter ? { trustNowStale: true } : {}),
   };
 }
 

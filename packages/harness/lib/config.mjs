@@ -232,14 +232,27 @@ export function resolveConfig({ copilotHome, workspace, projectTrusted = true } 
       note = 'ignored: project is not trusted';
     } else if (projectSets) {
       const projectValue = project.values[key];
-      if (source !== 'default' && spec.merge === 'restrictive') {
+      if (spec.merge === 'restrictive') {
+        // Folded against whatever is currently effective — the USER value when
+        // there is one, otherwise the DEFAULT. Comparing only when a user value
+        // existed made the arithmetic depend on whether a second scope happened
+        // to be present: with no user config, a project could raise
+        // `exec.timeout_seconds` from the 600 default to 3600 and the rule
+        // "a project may tighten and never loosen" quietly did not apply.
+        //
+        // The USER scope is deliberately NOT folded against the default. The
+        // default is a starting point, not a ceiling; folding it would make it
+        // impossible for the operator to raise their own timeout, which turns
+        // the escape hatch into a wall.
         const restricted = spec.restrict(value, projectValue);
         if (restricted !== value) {
           value = restricted;
           source = 'project';
           file = projectFile;
         } else if (restricted !== projectValue) {
-          note = 'project asked for a less restrictive value; the user scope wins';
+          note = source === 'default'
+            ? 'project asked for a less restrictive value than the default; the default wins'
+            : 'project asked for a less restrictive value; the user scope wins';
         }
       } else if (spec.merge === 'union') {
         const merged = [...new Set([...(Array.isArray(value) ? value : []), ...projectValue])].sort();
@@ -253,7 +266,14 @@ export function resolveConfig({ copilotHome, workspace, projectTrusted = true } 
       }
     }
 
-    values[key] = value;
+    // Normalized regardless of how many scopes contributed. Previously a
+    // user-only list came back verbatim (`["A","A"]`) while the same list
+    // merged with a project scope was deduplicated and sorted through the
+    // `Set` above — the shape of a value should not depend on how many files
+    // happened to mention it.
+    values[key] = spec.type === 'list' && Array.isArray(value)
+      ? [...new Set(value)].sort()
+      : value;
     provenance[key] = { source, file, ...(note ? { note } : {}) };
   }
 

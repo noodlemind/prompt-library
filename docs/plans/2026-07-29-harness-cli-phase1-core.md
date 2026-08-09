@@ -230,6 +230,7 @@ Each lands as one reviewable commit with its own review pass, per the delivery d
 - `packages/harness/lib/checks-cmd.mjs`
 - `packages/harness/lib/compound.mjs`
 - `packages/harness/lib/config.mjs`
+- `packages/harness/lib/controls.mjs`
 - `packages/harness/lib/config-cmd.mjs`
 - `packages/harness/lib/doctor.mjs`
 - `packages/harness/lib/envelope.mjs`
@@ -314,6 +315,21 @@ Final whole-branch review (2026-08-06, architecture + security + patterns lenses
 - **P3.2** `exec`/`bash` with `lib/exec-policy.mjs`. The seam being filled is worth naming: `runProcess` has always accepted an explicit `env` documented as "the caller owns allowlisting", and **no caller ever supplied one** — so every named check has run with the full parent environment since the runner landed. Default-deny with an operator escape hatch, three loader-hijacking names refused unconditionally, cwd containment with symlinks resolved before the test, and a timeout bounded at both ends.
 - Three defects found while wiring P3.2, fixed rather than carried: the audit event fired from the handler only, so `--output json-envelope` executed a child with **no execution record at all**; the audit carried an exit code but never what ran; and `dispatchLane` hardcoded exit 0 on its success path, so the envelope lane printed `"status":"failed"` beside exit 0. The third was latent by design ("a future command with a native non-zero-but-not-thrown outcome can extend this") and `exec` is the first such command — entries now declare `exitOf` beside `resultOf`.
 - Suite: 1360 tests, 1351 pass, 9 skipped, 0 fail.
+
+### 2026-08-09 — Codex phase-3 review: 12 findings, 11 fixed, 1 ruled
+
+Per the standing instruction to close each phase with a Codex review. Worth recording that the FIRST attempt was killed by OpenAI's content filter mid-run ("flagged for possible cybersecurity risk") because the prompt was framed adversarially; reframed as a correctness review of my own code, it completed. Anyone repeating this should expect the same and frame accordingly.
+
+Two findings were reporting-untruths rather than mere bugs, which makes them the worst kind — a wrong answer nobody can detect beats a missing one:
+
+- **F1 (high)** the trust digest pinned `config.yaml` and `policy.yaml` but **not `checks.yaml`**, the file whose content is executed. Approving a repository with a benign check and then pulling a commit that rewrote that check's argv left trust reading `trusted` and ran the new command. Reproduced end-to-end (marker file written). `checks.yaml` is now pinned.
+- **F2 (high)** the audit recorded `environment-allowlist: enforced` for named checks that had inherited the entire parent environment (`checks.env_allowlist` defaults off). The control's realized class is now caller-dependent and degrades to `audit-only` with a reason.
+- **F3 (high)** `--dry-run` executed the child, and because the same flag suppresses the event log, that execution left **no audit at all**. It now reports the resolved plan and runs nothing.
+- **F5** an unparseable config dropped the offending key and fell back to permissive defaults — and the dropped key can be the gate itself (`exec.bash_enabled: definitely-not-false` yielded a shell). Execution now fails closed.
+- **F4** restrictive merge only applied when a user value existed, so with none a project could raise `exec.timeout_seconds` from 600 to 3600. The project is now folded against the default too. The USER scope deliberately is not — the default is a starting point, not a ceiling, and folding it would turn the operator's escape hatch into a wall.
+- **F6** `config set --scope project` reused the pre-write trust boolean, reporting an effective value from a project its own write had just made stale. **F7** a truncated trust store parsed as "no records" and was then overwritten, discarding every approval. **F8** malformed single-value flags (`--timeout=`, `--cwd --timeout=1`, duplicates) silently fell back to defaults instead of erroring — on the flags that bound a runaway process. **F9** `bash` joined every post-boundary token, so the audit described three argv entries while the shell ran a different joined script. **F11** a timed-out check reported `timed-out` and exited 1. **F12** a single-scope list skipped the normalization a merged one got.
+- **F10 — ruled, not fixed.** Child exit codes pass through, so a child exiting 8 is indistinguishable from a harness timeout by exit code alone. Remapping into a private range would break the passthrough contract that makes `exec` a drop-in (GNU `timeout` pays exactly this cost with 124/125/126/127). The envelope already separates harness-authored `status` from the child's `exitCode`; a caller needing to tell them apart reads the status. Recorded in `exitFor`'s comment.
+- All eleven fixes are pinned by `test/codex-review-findings.test.mjs`, each written to fail against the pre-fix code. Suite: 1437 tests, 1428 pass, 9 skipped, 0 fail.
 
 ### 2026-08-09 — P3.3 config and P3.4 trust
 

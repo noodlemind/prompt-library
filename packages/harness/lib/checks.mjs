@@ -113,8 +113,6 @@ export async function runNamedCheck(workspace, name, config, { signal, onStdout,
   // unconstrained is the "correct and unused seam" all over again.
   const home = copilotHome ?? resolveCopilotHome(null);
   const cfg = resolveConfig({ copilotHome: home, workspace, projectTrusted: isProjectTrusted({ workspace, copilotHome: home }) });
-  const { controls, networkWrapper, degraded } = resolveControls({ networkPolicy: cfg.values['exec.network'] });
-
   // The environment is the one control NOT applied by default here, and the
   // reason is worth stating rather than hiding in a default. A named check only
   // runs after `trust approve`, which means someone decided to execute this
@@ -127,6 +125,11 @@ export async function runNamedCheck(workspace, name, config, { signal, onStdout,
   // always had.
   const allowlisted = cfg.values['checks.env_allowlist'] === true;
   const envReport = allowlisted ? buildChildEnv({ allow: cfg.values['exec.allow_env'] }) : null;
+
+  const { controls, networkWrapper, degraded } = resolveControls({
+    networkPolicy: cfg.values['exec.network'],
+    environmentAllowlisted: allowlisted,
+  });
 
   const execution = await runProcess({
     argv: [...networkWrapper, ...config.command],

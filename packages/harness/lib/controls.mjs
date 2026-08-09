@@ -38,6 +38,10 @@ export const STATIC_CONTROLS = Object.freeze([
   { id: 'shell-gate', class: 'enforced', constrains: 'whether a shell may be invoked at all' },
 ]);
 
+/** Controls whose realized class depends on how the caller invoked them, rather
+ * than on the platform. */
+const CALLER_DEPENDENT = new Set(['environment-allowlist']);
+
 /**
  * macOS: a sandbox profile that allows everything except the network. The
  * `(allow default)` is deliberate — this control is about network reachability,
@@ -135,10 +139,31 @@ export function resolveNetworkControl({
  * The full control set for one execution, each with the class it actually
  * achieved. This is what the audit event records and what the ledger renders.
  */
-export function resolveControls({ networkPolicy = 'allow', platform = process.platform, spawn = spawnSync, cache = probeCache } = {}) {
+export function resolveControls({
+  networkPolicy = 'allow',
+  platform = process.platform,
+  spawn = spawnSync,
+  cache = probeCache,
+  // Whether the child's environment was actually built from the allowlist. The
+  // named-check path can inherit the parent environment (`checks.env_allowlist`
+  // defaults off), and reporting `environment-allowlist: enforced` for a
+  // process that could read every variable the harness could is precisely the
+  // lie this module exists to prevent — an audit contradicting reality is worse
+  // than no audit, because it is believed. Found by the Codex phase review.
+  environmentAllowlisted = true,
+} = {}) {
   const network = resolveNetworkControl({ policy: networkPolicy, platform, spawn, cache });
   const controls = [
-    ...STATIC_CONTROLS.map((c) => ({ id: c.id, declared: c.class, realized: c.class, constrains: c.constrains })),
+    ...STATIC_CONTROLS.map((c) => {
+      const downgraded = CALLER_DEPENDENT.has(c.id) && !environmentAllowlisted;
+      return {
+        id: c.id,
+        declared: c.class,
+        realized: downgraded ? 'audit-only' : c.class,
+        constrains: c.constrains,
+        ...(downgraded ? { reason: 'the child inherited the parent environment — set checks.env_allowlist to enforce this' } : {}),
+      };
+    }),
     { id: network.id, declared: network.declared, realized: network.realized, constrains: network.constrains, reason: network.reason },
   ];
   return { controls, networkWrapper: network.wrapper, degraded: controls.filter((c) => c.declared !== c.realized) };

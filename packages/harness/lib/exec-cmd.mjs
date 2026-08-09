@@ -67,13 +67,44 @@ function repeatedFlag(argv, name) {
   return out.flatMap((v) => v.split(',').map((s) => s.trim()).filter(Boolean));
 }
 
+/**
+ * A single-valued flag, validated rather than best-guessed.
+ *
+ * These flags are safety controls — the timeout that bounds a runaway process,
+ * the cwd that confines it — and the previous version answered every malformed
+ * spelling with a silent fallback to the default. `--timeout=` ran with the
+ * configured default; `--cwd --timeout=1` swallowed the next flag as the cwd
+ * value, resolved it to empty, and used the workspace; `--timeout 11 --timeout
+ * 22` and `--timeout 11 --timeout=22` disagreed with each other about which one
+ * won. A control the operator got wrong must say so, not proceed under a value
+ * they did not choose. Found by the Codex phase review.
+ */
 function singleFlag(argv, name) {
-  const eq = argv.find((a) => a.startsWith(`${name}=`));
-  if (eq) return eq.slice(name.length + 1);
-  const i = argv.indexOf(name);
-  if (i === -1 || i > (argv.indexOf('--') === -1 ? Infinity : argv.indexOf('--'))) return null;
-  const next = argv[i + 1];
-  return next === undefined || next.startsWith('--') ? '' : next;
+  const occurrences = [];
+  for (let i = 0; i < argv.length; i += 1) {
+    const a = argv[i];
+    if (a === '--') break;
+    if (a === name) {
+      const next = argv[i + 1];
+      if (next === undefined || next.startsWith('-')) {
+        throw usageError(`${name} requires a value`, `e.g. ${name} <value>`);
+      }
+      occurrences.push(next);
+      i += 1;
+    } else if (a.startsWith(`${name}=`)) {
+      const value = a.slice(name.length + 1);
+      if (value === '') throw usageError(`${name} requires a value`, `e.g. ${name}=<value>`);
+      occurrences.push(value);
+    }
+  }
+  if (occurrences.length === 0) return null;
+  if (occurrences.length > 1) {
+    throw usageError(
+      `${name} was given more than once`,
+      `values seen: ${occurrences.map((v) => JSON.stringify(v)).join(', ')} — pass it once so there is no question which applies`,
+    );
+  }
+  return occurrences[0];
 }
 
 function plan(argv, { shell }) {
@@ -86,6 +117,19 @@ function plan(argv, { shell }) {
     workspace,
     projectTrusted: isProjectTrusted({ workspace, copilotHome }),
   });
+
+  // F5 (Codex phase review): a configuration with parse errors previously fell
+  // back to defaults and RAN. The dropped key can be the gate itself — a user
+  // writing `exec.bash_enabled: definitely-not-false` got the permissive default
+  // `true` and a shell, while `config validate` exited 1 about the same file.
+  // An execute-class command must fail CLOSED on a policy it could not read.
+  if (config.errors.length) {
+    throw Object.assign(new Error('refusing to execute: the harness configuration has errors'), {
+      code: 'E_DENIED',
+      exit: EXIT.needsApproval,
+      hint: `run \`harness config validate\` — first error: ${config.errors[0]}`,
+    });
+  }
 
   // The P3AC2 policy gate: `bash` is allowed or denied separately from `exec`.
   // Checked BEFORE the boundary error below, so a denied shell reports being
@@ -105,6 +149,18 @@ function plan(argv, { shell }) {
       shell ? 'harness bash -- "<script>"' : 'harness exec -- <program> [args...]',
     );
   }
+  // F9 (Codex phase review): `bash` used to JOIN every post-boundary token with
+  // spaces into one script. `harness bash -- printf '[%s]' 'a b'` audited three
+  // argv entries and executed `printf [%s] a b` — different quoting, different
+  // behavior, and an audit describing something other than what ran. A shell
+  // script is one argument; asking for exactly one removes the ambiguity
+  // instead of resolving it silently.
+  if (shell && childArgs.length !== 1) {
+    throw usageError(
+      `bash takes exactly one script argument (got ${childArgs.length})`,
+      'quote the whole script: harness bash -- "cmd one; cmd two"',
+    );
+  }
 
   // The flag wins over configuration where it is given — an explicit argument
   // is the operator speaking now — but it is still bounded by the same
@@ -122,7 +178,7 @@ function plan(argv, { shell }) {
   // multiple tokens would re-introduce the word-splitting `exec` exists to
   // avoid, at the one boundary where it is hardest to see.
   const resolvedShell = shell ? resolveShell() : null;
-  const target = shell ? [...resolvedShell.argv, childArgs.join(' ')] : childArgs;
+  const target = shell ? [...resolvedShell.argv, childArgs[0]] : childArgs;
 
   // The isolation wrapper goes in FRONT of the target rather than replacing it,
   // and is reported separately from `argv` in the audit — the operator asked to
@@ -185,6 +241,30 @@ function emitAudit(ctx, mode, p, result) {
 
 async function execute(argv, ctx, { shell }) {
   const p = plan(argv, { shell });
+
+  // F3 (Codex phase review): `--dry-run` used to run the child anyway — and
+  // because the same flag suppresses the event log, the execution happened with
+  // no audit at all. A flag whose whole meaning is "show me what you would do"
+  // must not do it. The resolved plan is reported instead, which is the useful
+  // half of what the flag promised.
+  if (p.flags.dryRun) {
+    return {
+      schema: 1,
+      mode: p.shell ? 'bash' : 'exec',
+      dryRun: true,
+      argv: p.childArgs,
+      cwd: p.cwd,
+      timeoutSeconds: p.timeoutSeconds,
+      status: 'ok',
+      exitCode: null,
+      signal: null,
+      durationMs: 0,
+      truncated: false,
+      env: { allowed: p.envReport.allowed, droppedCount: p.envReport.dropped.length, refused: p.envReport.refused },
+      controls: p.controls,
+      output: [],
+    };
+  }
   const { redactText } = createRedactor();
   const rows = [];
 
@@ -280,7 +360,19 @@ export function exitFor(result) {
   if (result.status in STATUS_EXIT) return STATUS_EXIT[result.status];
   // The child's own code is passed through where it is a normal failure, so a
   // caller scripting around `exec` sees what it would have seen running the
-  // command directly.
+  // command directly — the same contract `env`, `nice`, and `sudo` keep.
+  //
+  // KNOWN AMBIGUITY, kept deliberately (Codex phase review F10): a child that
+  // exits 8 is indistinguishable, by exit code alone, from a harness timeout,
+  // and one exiting 2 from a usage error. The alternative is to remap child
+  // codes into a private range, which breaks the passthrough contract that makes
+  // `exec` usable as a drop-in — GNU `timeout` pays exactly this cost with its
+  // 124/125/126/127 convention and is regularly surprising for it.
+  //
+  // The disambiguation is the envelope: `status` is harness-authored
+  // (ok|failed|timed-out|cancelled) and `exitCode` is the child's, so
+  // `--output json-envelope` always separates the two. A caller that must tell
+  // them apart should read the status rather than guess from the code.
   return result.exitCode === null || result.exitCode === 0 ? 1 : result.exitCode;
 }
 
