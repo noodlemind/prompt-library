@@ -11,6 +11,7 @@ import { readLock } from './lock.mjs';
 import { planDigest } from './evidence.mjs';
 import { loadPlan } from './plan-parse.mjs';
 import { runVerify } from './verify.mjs';
+import { approveProject } from './trust.mjs';
 import { readSession, writeSession } from './session.mjs';
 import { parseVSCodeSettings } from './vscode-settings.mjs';
 import { resolveVSCodeSettingsPaths } from './paths.mjs';
@@ -193,6 +194,10 @@ function hookBlocked(result, event) {
 // behavior changes; it just has to await the one call it already made.
 async function runVSCodeHookProbe(hookRoot) {
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-doctor-vscode-'));
+  // The probe's own throwaway user scope. The approval below belongs to this
+  // fixture and must not accumulate temp-directory entries in the real
+  // ~/.copilot trust store every time someone runs `harness doctor`.
+  const doctorCopilotHome = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-doctor-home-'));
   const planRel = 'docs/plans/vscode-hook-doctor-plan.md';
   const result = {
     recognized: false,
@@ -228,6 +233,14 @@ async function runVSCodeHookProbe(hookRoot) {
     git(['config', 'user.name', 'Harness Doctor']);
     git(['add', '.']);
     if (git(['commit', '-qm', 'fixture']).status !== 0) return result;
+
+    // P3AC6: named checks execute repo-authored argv and are gated on trust.
+    // This fixture is not a repository anyone cloned — the doctor created the
+    // directory and wrote `checks.yaml` itself moments ago, so the code it is
+    // about to run is the harness's own. Approving it is a statement of that
+    // fact, not a bypass: the probe would otherwise fail V9 for a reason that
+    // has nothing to do with the hook behavior it exists to prove.
+    approveProject({ workspace, copilotHome: doctorCopilotHome });
 
     const pre = path.join(hookRoot, 'require-plan-gate.mjs');
     const post = path.join(hookRoot, 'record-successful-edit.mjs');
@@ -273,7 +286,7 @@ async function runVSCodeHookProbe(hookRoot) {
     const plan = loadPlan(workspace, planRel);
     const verification = await runVerify({
       workspace,
-      flags: { plan: planRel, base: 'HEAD', dryRun: false, enforcement: 'enforce' },
+      flags: { plan: planRel, base: 'HEAD', dryRun: false, enforcement: 'enforce', copilotHome: doctorCopilotHome },
     });
     if (verification.outcome === 'passed' && plan) {
       writeSession(workspace, {

@@ -23,6 +23,7 @@ import { validatePlanScope } from '../lib/plan-scope.mjs';
 import { listCommands } from '../lib/registry.mjs';
 import { HELP_COMMAND_ORDER } from '../bin/harness.mjs';
 import YAML from 'yaml';
+import { approveProject } from '../lib/trust.mjs';
 
 const packageRoot = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -34,12 +35,50 @@ function tempDir(prefix) {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
 }
 
+/**
+ * Spawn the CLI against a fixture that behaves like a project the user set up.
+ *
+ * Two things happen here that the raw spawn did not do:
+ *
+ *   - An isolated `--copilot-home` is injected when the args do not name one.
+ *     Without it `resolveCopilotHome` falls back to the DEVELOPER'S real
+ *     ~/.copilot, so the suite would read (and, once trust exists, write)
+ *     state on whatever machine it runs on.
+ *   - The fixture workspace is approved. P3AC6 gates named-check execution on
+ *     trust, and these tests exercise `verify`/`checks run`, not the gate —
+ *     `test/trust.test.mjs` owns the gate and asserts the refusal directly.
+ */
 function runHarness(args, options = {}) {
-  return spawnSync(process.execPath, [binPath, ...args], {
+  const full = [...args];
+  const workspace = valueOf(full, '--workspace');
+  let copilotHome = valueOf(full, '--copilot-home');
+  // Only for workspace-scoped invocations. Appending a flag to something like
+  // `harness help` would hand its topic parser the injected path as the topic —
+  // and a command with no workspace has no project to trust anyway.
+  if (!copilotHome && workspace) {
+    copilotHome = tempDir('harness-home-');
+    full.push('--copilot-home', copilotHome);
+  }
+  if (workspace && copilotHome && options.trust !== false) {
+    try {
+      approveProject({ workspace, copilotHome });
+    } catch {
+      /* a fixture with no writable home is a test that does not need trust */
+    }
+  }
+  return spawnSync(process.execPath, [binPath, ...full], {
     cwd: packageRoot,
     encoding: 'utf8',
     env: { ...process.env, ...(options.env || {}) },
   });
+}
+
+/** Read a flag's value out of an argv, honoring `--flag=value`. */
+function valueOf(argv, name) {
+  const eq = argv.find((a) => typeof a === 'string' && a.startsWith(`${name}=`));
+  if (eq) return eq.slice(name.length + 1);
+  const i = argv.indexOf(name);
+  return i === -1 ? null : argv[i + 1] ?? null;
 }
 
 function writePlan(workspace, { frontmatter = '', activity = '- Plan created.' } = {}) {

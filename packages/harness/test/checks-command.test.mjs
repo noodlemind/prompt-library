@@ -21,6 +21,7 @@ import { test } from 'node:test';
 import { getCommand } from '../lib/registry.mjs';
 import { EXIT } from '../lib/style.mjs';
 import { loadNamedChecks, validateCommand } from '../lib/checks.mjs';
+import { approveProject } from '../lib/trust.mjs';
 
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const binPath = path.join(packageRoot, 'bin', 'harness.mjs');
@@ -36,8 +37,13 @@ function workspaceWithChecks(body) {
   return ws;
 }
 
+/** P3AC6: `checks run` executes repo-authored argv and is gated on trust.
+ * These tests are about the verb contract, so the fixture is approved against
+ * its own throwaway home; `test/trust.test.mjs` asserts the refusal. */
 function run(argv, ws) {
-  return spawnSync(process.execPath, [binPath, ...argv, '--workspace', ws, '--copilot-home', tempDir('checks-home-')], {
+  const copilotHome = tempDir('checks-home-');
+  approveProject({ workspace: ws, copilotHome });
+  return spawnSync(process.execPath, [binPath, ...argv, '--workspace', ws, '--copilot-home', copilotHome], {
     cwd: packageRoot,
     encoding: 'utf8',
   });

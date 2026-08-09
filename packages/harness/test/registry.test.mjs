@@ -6,6 +6,7 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 import { EXIT } from '../lib/style.mjs';
+import { approveProject } from '../lib/trust.mjs';
 import {
   dispatch,
   hasCommand,
@@ -24,8 +25,31 @@ function tempDir(prefix) {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
 }
 
+/** Spawn the CLI against a fixture that behaves like a project the user set
+ * up: an isolated `--copilot-home` (so the suite never reads the developer's
+ * real one) and an approved workspace (P3AC6 gates named-check execution on
+ * trust; `test/trust.test.mjs` owns the gate itself). */
 function runHarness(args) {
-  return spawnSync(process.execPath, [binPath, ...args], { cwd: packageRoot, encoding: 'utf8' });
+  const full = [...args];
+  const workspace = valueOf(full, '--workspace');
+  let copilotHome = valueOf(full, '--copilot-home');
+  if (!copilotHome && workspace) {
+    copilotHome = tempDir('registry-home-');
+    full.push('--copilot-home', copilotHome);
+  }
+  if (workspace && copilotHome) {
+    try {
+      approveProject({ workspace, copilotHome });
+    } catch { /* a fixture with no writable home does not need trust */ }
+  }
+  return spawnSync(process.execPath, [binPath, ...full], { cwd: packageRoot, encoding: 'utf8' });
+}
+
+function valueOf(argv, name) {
+  const eq = argv.find((a) => typeof a === 'string' && a.startsWith(`${name}=`));
+  if (eq) return eq.slice(name.length + 1);
+  const i = argv.indexOf(name);
+  return i === -1 ? null : argv[i + 1] ?? null;
 }
 
 // --- registration -----------------------------------------------------
@@ -233,7 +257,13 @@ No open findings.
   git(['add', '.']);
   assert.equal(git(['commit', '-qm', 'baseline']).status, 0);
 
-  const code = await dispatch(['verify', '--plan', rel, '--base', 'HEAD', '--workspace', workspace, '--json'], {});
+  // "a trusted check", literally: P3AC6 gates named-check execution on trust,
+  // and this test dispatches directly rather than through `runHarness`, so it
+  // states the approval itself against its own throwaway home.
+  const copilotHome = tempDir('registry-execute-home-');
+  approveProject({ workspace, copilotHome });
+
+  const code = await dispatch(['verify', '--plan', rel, '--base', 'HEAD', '--workspace', workspace, '--copilot-home', copilotHome, '--json'], {});
   assert.equal(code, 0, 'the trusted check actually ran (exit 0) through the real handler, not a stub');
   assert.ok(fs.existsSync(path.join(workspace, '.harness', 'evidence')), 'verify wrote evidence — the real cmdVerify ran, not a mock');
 });

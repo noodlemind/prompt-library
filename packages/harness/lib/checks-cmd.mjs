@@ -18,6 +18,8 @@ import { createStyle, keyWidthFor, EXIT } from './style.mjs';
 import { redactedJson } from './redact.mjs';
 import { inertLine } from './knowledge/store.mjs';
 import { CHECKS_REL, loadNamedChecks, validateCommand, runNamedCheck, CHECK_TIMEOUT_DEFAULT_SECONDS } from './checks.mjs';
+import { resolveCopilotHome } from './paths.mjs';
+import { isProjectTrusted } from './trust.mjs';
 
 const ui = createStyle({ argv: process.argv.slice(2) });
 
@@ -74,11 +76,12 @@ function context(argv) {
     verb: positionals[0] ?? null,
     name: positionals[1] ?? null,
     workspace: path.resolve(flags.workspace),
+    copilotHome: resolveCopilotHome(flags.copilotHome),
   };
 }
 
 export async function checksResultOf(argv, ctx = {}) {
-  const { verb, name, workspace } = context(argv);
+  const { verb, name, workspace, copilotHome } = context(argv);
   if (!verb) throw usageError('checks requires a verb', `harness checks <${CHECKS_VERBS.join('|')}>`);
   if (!CHECKS_VERBS.includes(verb)) {
     throw usageError(`unknown checks verb: ${verb}`, `one of ${CHECKS_VERBS.join(', ')}`);
@@ -104,7 +107,23 @@ export async function checksResultOf(argv, ctx = {}) {
     return { schema: 1, verb, config: CHECKS_REL, check: describeCheck(name, checks[name]) };
   }
 
-  // `run`. The AbortSignal is threaded through so a long check is cancellable
+  // `run` executes a repo-authored argv, so it is gated on trust for the same
+  // reason `verify`'s named checks are: the threat is `git clone && harness
+  // checks run`. Refused outright here rather than degraded, because unlike
+  // `verify` — which has built-in checks worth reporting either way — running
+  // the check IS the whole command, and a `checks run` that quietly did nothing
+  // would read as a pass.
+  //
+  // `list` and `show` are deliberately still allowed: reading what a repository
+  // would execute is exactly what someone needs before deciding to approve it.
+  if (!isProjectTrusted({ workspace, copilotHome })) {
+    throw Object.assign(new Error(`refusing to run ${JSON.stringify(name)}: this project is not trusted`), {
+      code: 'E_DENIED',
+      exit: EXIT.needsApproval,
+      hint: `a named check runs commands this repository authored — read them with \`harness checks show ${name}\`, then \`harness trust approve\``,
+    });
+  }
+  // The AbortSignal is threaded through so a long check is cancellable
   // the same way `verify` already is — Phase 1 wired Ctrl-C to verify only, and
   // an execute-classed command that cannot be interrupted is worse than one
   // that never existed.

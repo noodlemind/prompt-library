@@ -8,6 +8,7 @@ import { validatePlanScope } from './plan-scope.mjs';
 import { createEvidenceBinding, writeEvidence } from './evidence.mjs';
 import { checkSeverityFor, enforcementExitCode, loadPolicy } from './policy.mjs';
 import { resolveCopilotHome } from './paths.mjs';
+import { isProjectTrusted } from './trust.mjs';
 import { verifyPrimitiveGovernance } from './primitive-governance.mjs';
 import { validatePlanReadiness } from './plan-readiness.mjs';
 import { STRUCTURAL_CHECK_ID, runStructuralExpectations } from './structural/expectations.mjs';
@@ -572,10 +573,29 @@ export async function runVerify({ workspace, flags, signal, onEvent }) {
   // Sequential (not Promise.all): a later check must never start once
   // cancellation has been observed, and streaming rows must land in the same
   // order checks actually ran in.
+  // A named check is a repo-authored argv, so running one is executing code
+  // that arrived with a clone. That is the sharpest edge in this phase: the
+  // threat is not a hostile config value, it is `git clone && harness verify`.
+  //
+  // Refused per check rather than by aborting the run, so every BUILT-IN check
+  // — plan schema, scope, readiness — still reports. `unavailable` cannot
+  // produce a passing outcome, which is the property that matters: there is no
+  // way to get a `passed` evidence artifact out of a repository whose own
+  // checks were never run. Degrading to a quiet skip would have written exactly
+  // that artifact, and `gate` and `compound` both trust it.
+  const namedChecksTrusted = isProjectTrusted({ workspace, copilotHome: resolveCopilotHome(flags.copilotHome) });
   const namedResults = [];
   for (const name of required) {
     if (!readiness.pass) {
       namedResults.push(resultCheck(name, 'inconclusive', 'Not run because plan readiness failed'));
+      continue;
+    }
+    if (!namedChecksTrusted) {
+      namedResults.push(resultCheck(
+        name,
+        'unavailable',
+        `Not run: this project is not trusted, and a named check executes repo-authored commands. Approve it with \`harness trust approve\` after reading ${CHECKS_REL}.`,
+      ));
       continue;
     }
     if (named.error) {

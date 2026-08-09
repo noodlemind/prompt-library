@@ -28,6 +28,7 @@ import {
   createCheckOutputStreamer,
 } from '../lib/verify.mjs';
 import { createRedactor } from '../lib/redact.mjs';
+import { approveProject } from '../lib/trust.mjs';
 
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const binPath = path.join(packageRoot, 'bin', 'harness.mjs');
@@ -137,6 +138,13 @@ No open findings.
   return rel;
 }
 
+// One isolated user scope for this whole file. Set as COPILOT_HOME so every
+// in-process `runVerify` AND every spawned CLI call resolves here instead of
+// the developer's real ~/.copilot — which, now that trust lives there, would
+// make the suite's behavior depend on the machine running it.
+const FIXTURE_COPILOT_HOME = tempDir('vstream-home-');
+process.env.COPILOT_HOME = FIXTURE_COPILOT_HOME;
+
 function initGit(workspace) {
   const run = (args) =>
     spawnSync('git', args, {
@@ -151,6 +159,10 @@ function initGit(workspace) {
   fs.writeFileSync(path.join(workspace, 'src', 'example.js'), 'export const value = 1;\n');
   assert.equal(run(['add', '.']).status, 0);
   assert.equal(run(['commit', '-qm', 'baseline']).status, 0);
+  // P3AC6: named checks execute repo-authored argv and are gated on trust.
+  // These fixtures test STREAMING, not the gate — `test/trust.test.mjs` owns
+  // that — so the workspace is approved as soon as it exists.
+  approveProject({ workspace, copilotHome: FIXTURE_COPILOT_HOME });
 }
 
 function readEventsRaw(workspace) {
