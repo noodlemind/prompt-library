@@ -63,6 +63,19 @@ function auditUsage(entry, usage, usedAllowKeys = new Set()) {
   const { flags, valueNames, verbs, positionals } = declaredNames(entry);
   const violations = [];
 
+  // Everything after a bare `--` is passthrough: the harness hands those tokens
+  // to a child process and never parses them (`exec -- <program> [args...]`).
+  // They are the CHILD's capability, not this entry's, so requiring them to
+  // resolve against registry data would demand the harness declare arguments it
+  // deliberately does not understand — and declaring them would be worse than
+  // the prose, because the palette would then offer pickers for them.
+  //
+  // A general rule rather than a per-command allow-list entry: it holds for any
+  // passthrough command, and it states the actual semantic instead of excusing
+  // five tokens by name.
+  const boundary = usage.search(/(^|\s)--(\s|$)/);
+  if (boundary !== -1) usage = usage.slice(0, boundary);
+
   const allowed = (token) => {
     const key = `${entry.name}:${token}`;
     if (!(key in USAGE_ALLOW_LIST)) return false;

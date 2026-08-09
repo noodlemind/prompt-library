@@ -61,6 +61,7 @@ import { cmdPlanNew } from './plan-new.mjs';
 import { cmdLookup, lookupResultOf } from './retrieval/lookup-cmd.mjs';
 import { recallResultOf, getResultOf } from './retrieval/compat-results.mjs';
 import { cmdChecks, checksResultOf, CHECKS_VERBS } from './checks-cmd.mjs';
+import { cmdExec, execResultOf, cmdBash, bashResultOf, exitFor as execExitFor } from './exec-cmd.mjs';
 import {
   cmdSearch,
   searchResultOf,
@@ -717,8 +718,20 @@ async function dispatchLane(entry, rest, ctx, lane, events) {
       // boundary before it ever reaches stdout.
       console.log(redactedJson(envelope, { redactor }));
     }
-    events?.emit(EVENT_TYPE.COMMAND_RESULT, commandResultPayload(STATUS.OK, Date.now() - startedAt, EXIT.ok));
-    return EXIT.ok;
+    // A NATIVE non-zero outcome — the command ran to completion and reports a
+    // failure as DATA rather than by throwing. Phase 3's `exec`/`bash` are the
+    // first such entries: a child exiting 7 is not a harness error, so nothing
+    // throws, but returning `EXIT.ok` here would make the envelope lane report
+    // exit 0 alongside `"status":"failed"` and hand a scripted caller a false
+    // success. `entry.exitOf(result)` is the entry's own mapping, declared as
+    // registry data beside `resultOf`; entries without one keep the previous
+    // always-ok behavior byte-for-byte. The status comes off the ENVELOPE, not
+    // a second derivation, so the event and the rendered output can never
+    // disagree about what happened.
+    const status = envelope.status || STATUS.OK;
+    const exit = typeof entry.exitOf === 'function' ? entry.exitOf(result) : EXIT.ok;
+    events?.emit(EVENT_TYPE.COMMAND_RESULT, commandResultPayload(status, Date.now() - startedAt, exit));
+    return exit;
   } catch (err) {
     const exit = Number.isInteger(err.exit) ? err.exit : 1;
     const status = err.code === 'E_CANCELLED' ? STATUS.CANCELLED : err.code === 'E_TIMEOUT' ? STATUS.TIMED_OUT : STATUS.FAILED;
@@ -1388,6 +1401,54 @@ registerCommand({
   handler: cmdGet,
   resultOf: getResultOf,
   requireArgs: getRequireArgs,
+});
+
+registerCommand({
+  name: 'exec',
+  summary: 'run an argv directly — never through a shell — with a confined cwd and an allowlisted environment',
+  group: 'engineer loop',
+  sideEffect: 'execute',
+  capabilities: [],
+  outputModes: ['ledger', 'json'],
+  usage: '[--cwd <dir>] [--timeout <s>] [--allow-env <NAME>] -- <program> [args...]',
+  args: {
+    positionals: [],
+    flags: [
+      { name: '--cwd', type: 'string', valueName: 'dir', description: 'working directory, confined to the workspace', required: false, default: null, tui: 'prompt' },
+      { name: '--timeout', type: 'number', valueName: 's', description: 'seconds before the process tree is terminated (default 600, max 3600)', required: false, default: 600, tui: 'prompt' },
+      { name: '--allow-env', type: 'string', valueName: 'NAME', description: 'pass one parent environment variable through (repeatable); the default is deny-all', required: false, default: null, tui: 'prompt' },
+    ],
+  },
+  handler: cmdExec,
+  resultOf: execResultOf,
+  // The child's own exit code is the command's exit code on every lane, not
+  // just the ledger — see `dispatchLane`'s `exitOf` note. Without this the
+  // envelope lane would print `"status":"failed"` and exit 0.
+  exitOf: execExitFor,
+});
+
+registerCommand({
+  name: 'bash',
+  // A separate command rather than `exec --shell`: the two carry different
+  // risk, are separately policy-gated, and an auditor filtering for shell
+  // invocations should not have to trust a boolean inside a payload.
+  summary: 'run a script through a shell — separately gated from exec, which never uses one',
+  group: 'engineer loop',
+  sideEffect: 'execute',
+  capabilities: [],
+  outputModes: ['ledger', 'json'],
+  usage: '[--cwd <dir>] [--timeout <s>] [--allow-env <NAME>] -- "<script>"',
+  args: {
+    positionals: [],
+    flags: [
+      { name: '--cwd', type: 'string', valueName: 'dir', description: 'working directory, confined to the workspace', required: false, default: null, tui: 'prompt' },
+      { name: '--timeout', type: 'number', valueName: 's', description: 'seconds before the process tree is terminated (default 600, max 3600)', required: false, default: 600, tui: 'prompt' },
+      { name: '--allow-env', type: 'string', valueName: 'NAME', description: 'pass one parent environment variable through (repeatable); the default is deny-all', required: false, default: null, tui: 'prompt' },
+    ],
+  },
+  handler: cmdBash,
+  resultOf: bashResultOf,
+  exitOf: execExitFor,
 });
 
 registerCommand({

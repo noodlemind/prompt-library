@@ -49,7 +49,7 @@ const out = createStyle({ argv: args });
 export const HELP_COMMAND_ORDER = [
   'install', 'upgrade', 'doctor', 'status', 'uninstall',
   'init-repo', 'index', 'plan-new',
-  'orient', 'gate', 'verify', 'checks', 'validate-plan', 'compound', 'recall', 'get', 'search', 'lookup', 'tree', 'events', 'report',
+  'orient', 'gate', 'verify', 'checks', 'exec', 'bash', 'validate-plan', 'compound', 'recall', 'get', 'search', 'lookup', 'tree', 'events', 'report',
   'knowledge', 'consolidate', 'remember', 'learning', 'learnings', 'eval-knowledge',
   'resolve',
 ];
@@ -290,7 +290,7 @@ async function main() {
       // process exit) rather than risk a hang for a command whose handler
       // never reads ctx.signal.
       let signal;
-      if (command === 'verify') {
+      if (['verify', 'exec', 'bash', 'checks'].includes(command)) {
         const controller = new AbortController();
         process.once('SIGINT', () => controller.abort());
         signal = controller.signal;

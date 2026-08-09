@@ -1,0 +1,246 @@
+/**
+ * `harness exec -- <argv...>` and `harness bash -- <script>` — Phase 3's
+ * governed execution surface.
+ *
+ * Two commands rather than one with a `--shell` flag, deliberately. They carry
+ * different risk and are separately policy-gated, and an auditor filtering the
+ * event log for shell invocations should not have to trust a boolean inside a
+ * payload to find them. The event types are separate for the same reason.
+ *
+ * `exec` never invokes a shell: `runProcess` hardcodes `shell: false`, so the
+ * argv the operator wrote is the argv that runs — no word splitting, no glob
+ * expansion, no `$(…)`. `bash` exists because some workflows genuinely need a
+ * shell, and pretending otherwise just pushes people to write
+ * `exec sh -c "…"`, which is the same risk with none of the labelling.
+ */
+import fs from 'node:fs';
+import path from 'node:path';
+import { parseFlags } from './flags.mjs';
+import { createStyle, keyWidthFor, EXIT } from './style.mjs';
+import { redactedJson, createRedactor } from './redact.mjs';
+import { inertLine } from './knowledge/store.mjs';
+import { runProcess } from './runner.mjs';
+import { createCheckOutputStreamer } from './verify.mjs';
+import { buildChildEnv, resolveExecCwd, resolveTimeoutSeconds } from './exec-policy.mjs';
+
+const ui = createStyle({ argv: process.argv.slice(2) });
+
+function usageError(message, hint) {
+  return Object.assign(new Error(message), { code: 'E_USAGE', exit: EXIT.usage, hint });
+}
+
+const realpath = (p) => {
+  try {
+    return fs.realpathSync(p);
+  } catch {
+    return null;
+  }
+};
+
+/**
+ * Everything after the first bare `--` is the command to run.
+ *
+ * The boundary is REQUIRED rather than optional: without it a flag meant for
+ * the child (`--json`, `--workspace`) would be eaten by the harness's own
+ * parser, and the operator would watch the harness reconfigure itself instead
+ * of passing the argument along. Making it mandatory means there is exactly
+ * one reading of every invocation.
+ */
+export function splitAtBoundary(argv) {
+  const i = argv.indexOf('--');
+  if (i === -1) return { harnessArgs: argv, childArgs: null };
+  return { harnessArgs: argv.slice(0, i), childArgs: argv.slice(i + 1) };
+}
+
+function repeatedFlag(argv, name) {
+  const out = [];
+  for (let i = 0; i < argv.length; i += 1) {
+    const a = argv[i];
+    if (a === '--') break;
+    if (a.startsWith(`${name}=`)) out.push(a.slice(name.length + 1));
+    else if (a === name && argv[i + 1] !== undefined && !argv[i + 1].startsWith('--')) out.push(argv[i += 1]);
+  }
+  return out.flatMap((v) => v.split(',').map((s) => s.trim()).filter(Boolean));
+}
+
+function singleFlag(argv, name) {
+  const eq = argv.find((a) => a.startsWith(`${name}=`));
+  if (eq) return eq.slice(name.length + 1);
+  const i = argv.indexOf(name);
+  if (i === -1 || i > (argv.indexOf('--') === -1 ? Infinity : argv.indexOf('--'))) return null;
+  const next = argv[i + 1];
+  return next === undefined || next.startsWith('--') ? '' : next;
+}
+
+function plan(argv, { shell }) {
+  const { harnessArgs, childArgs } = splitAtBoundary(argv);
+  const flags = parseFlags(harnessArgs);
+  const workspace = path.resolve(flags.workspace);
+
+  if (childArgs === null || childArgs.length === 0) {
+    throw usageError(
+      shell ? 'bash requires a script after --' : 'exec requires a command after --',
+      shell ? 'harness bash -- "<script>"' : 'harness exec -- <program> [args...]',
+    );
+  }
+
+  const timeoutSeconds = resolveTimeoutSeconds(singleFlag(harnessArgs, '--timeout'));
+  const cwd = resolveExecCwd({ workspace, cwd: singleFlag(harnessArgs, '--cwd'), realpath });
+  const envReport = buildChildEnv({ allow: repeatedFlag(harnessArgs, '--allow-env') });
+
+  // A shell script is one argument to the shell, never a token list: joining
+  // multiple tokens would re-introduce the word-splitting `exec` exists to
+  // avoid, at the one boundary where it is hardest to see.
+  const argvToRun = shell
+    ? [process.platform === 'win32' ? 'cmd.exe' : '/bin/sh', process.platform === 'win32' ? '/c' : '-c', childArgs.join(' ')]
+    : childArgs;
+
+  return { flags, workspace, cwd, timeoutSeconds, envReport, argvToRun, childArgs, shell };
+}
+
+/**
+ * The execution audit entry (Phase 3 AC5) — written for EVERY execution.
+ *
+ * It lives here, in the one function both the handler and the `resultOf`
+ * producer call, rather than in `cmdExec`/`cmdBash`. Emitting from the handler
+ * alone meant `--output json-envelope|agent` spawned a child process and left
+ * no execution record at all: the lane path never touches the handler. An audit
+ * that a caller can skip by choosing an output format is not an audit.
+ *
+ * It records WHAT RAN — argv, cwd, timeout, and the environment the child could
+ * see. An execution log that carries only an exit code cannot answer the
+ * question it exists for. Env is names-and-counts only, never values: the
+ * allowlist withheld those credentials, and writing them into the audit would
+ * hand them back. Everything here passes through the event registry's redactor
+ * before persistence, so a secret typed into the argv is masked in the record.
+ */
+function emitAudit(ctx, mode, p, result) {
+  const events = ctx?.events;
+  const sink = typeof events?.withCommand === 'function' ? events.withCommand(mode) : events;
+  sink?.emit?.(mode, {
+    // Outcome scalars stay top-level, where every other event type already
+    // puts them, so `harness events --failures` and the summaries read this
+    // record without knowing anything about executions.
+    result: result.status === 'ok' ? 'pass' : 'fail',
+    status: result.status,
+    exitCode: result.exitCode,
+    durationMs: result.durationMs,
+    // The invocation descriptor: what ran, where, and under what policy.
+    exec: {
+      shell: p.shell,
+      argv: p.childArgs,
+      cwd: p.cwd,
+      timeoutSeconds: p.timeoutSeconds,
+      env: { allowed: p.envReport.allowed, droppedCount: p.envReport.dropped.length, refused: p.envReport.refused },
+      signal: result.signal,
+      truncated: result.truncated,
+    },
+  });
+}
+
+async function execute(argv, ctx, { shell }) {
+  const p = plan(argv, { shell });
+  const { redactText } = createRedactor();
+  const rows = [];
+
+  // The same bounded, redacted streamer `verify` uses for check output: a
+  // secret split across two chunks is reassembled before redaction, a PEM block
+  // is masked whole, and the byte budget counts the serialized row width. None
+  // of that is worth reimplementing differently for a second execution surface.
+  const streamer = createCheckOutputStreamer({
+    check: p.shell ? 'bash' : 'exec',
+    onEvent: (_event, fields) => rows.push(fields),
+    redactText,
+  });
+
+  const execution = await runProcess({
+    argv: p.argvToRun,
+    cwd: p.cwd,
+    env: p.envReport.env,
+    timeoutMs: p.timeoutSeconds * 1000,
+    signal: ctx?.signal,
+    onStdout: (chunk) => streamer.onStdout(chunk),
+    onStderr: (chunk) => streamer.onStderr(chunk),
+  });
+  streamer.flush();
+
+  const result = {
+    schema: 1,
+    mode: p.shell ? 'bash' : 'exec',
+    // The argv is reported as a list, never joined: a joined string reads as
+    // something a shell interpreted, which for `exec` is precisely wrong.
+    argv: p.childArgs,
+    cwd: p.cwd,
+    timeoutSeconds: p.timeoutSeconds,
+    status: execution.status,
+    exitCode: execution.exitCode,
+    signal: execution.signalName,
+    durationMs: execution.durationMs,
+    truncated: execution.truncated,
+    // Names only. The audit answers "what could this process see", and a value
+    // here would put the very credentials the allowlist withheld into the log.
+    env: { allowed: p.envReport.allowed, droppedCount: p.envReport.dropped.length, refused: p.envReport.refused },
+    output: rows,
+  };
+
+  emitAudit(ctx, result.mode, p, result);
+  return result;
+}
+
+const STATUS_EXIT = { ok: EXIT.ok, cancelled: EXIT.cancelled, 'timed-out': EXIT.timedOut };
+
+function render(result, flags) {
+  if (flags.json) {
+    console.log(redactedJson(result, { pretty: flags.verbose }));
+    return;
+  }
+  const keyWidth = keyWidthFor(['command', 'cwd', 'env', 'status']);
+  const state = result.status === 'ok' ? 'ok' : result.status === 'failed' ? 'error' : 'warn';
+  console.log(ui.line({ state, key: result.mode, value: result.argv.join(' '), keyWidth }));
+  console.log(ui.line({ key: 'cwd', value: result.cwd, keyWidth }));
+  console.log(ui.line({
+    key: 'env',
+    value: `${result.env.allowed.length} allowed`,
+    note: `${result.env.droppedCount} dropped${result.env.refused.length ? ` · ${result.env.refused.length} refused` : ''}`,
+    keyWidth,
+  }));
+  for (const row of result.output) {
+    if (row.line) console.log(inertLine(row.line));
+    else if (row.truncated) console.log(ui.paint('muted', '  …output truncated'));
+  }
+  console.log(ui.line({
+    state,
+    key: 'status',
+    value: result.status,
+    note: result.exitCode === null ? undefined : `exit ${result.exitCode} · ${result.durationMs}ms`,
+    keyWidth,
+  }));
+}
+
+export function exitFor(result) {
+  if (result.status in STATUS_EXIT) return STATUS_EXIT[result.status];
+  // The child's own code is passed through where it is a normal failure, so a
+  // caller scripting around `exec` sees what it would have seen running the
+  // command directly.
+  return result.exitCode === null || result.exitCode === 0 ? 1 : result.exitCode;
+}
+
+export async function execResultOf(argv, ctx = {}) {
+  return execute(argv, ctx, { shell: false });
+}
+
+export async function cmdExec(argv, ctx = {}) {
+  const result = await execute(argv, ctx, { shell: false });
+  render(result, parseFlags(splitAtBoundary(argv).harnessArgs));
+  return exitFor(result);
+}
+
+export async function bashResultOf(argv, ctx = {}) {
+  return execute(argv, ctx, { shell: true });
+}
+
+export async function cmdBash(argv, ctx = {}) {
+  const result = await execute(argv, ctx, { shell: true });
+  render(result, parseFlags(splitAtBoundary(argv).harnessArgs));
+  return exitFor(result);
+}

@@ -39,6 +39,17 @@ export const EVENT_TYPES = new Set([
   'command.start',
   'command.result',
   'agent_lane',
+  // Phase 3 — the execution audit. This allow-list is CLOSED: `writeEvent`
+  // silently returns null for an unlisted type, so an audit event added without
+  // a line here would record nothing while every call site looked correct. That
+  // failure is invisible by construction, which is exactly the wrong property
+  // for the record of what the harness was asked to execute.
+  //
+  // `exec` and `bash` are separate types rather than one with a flag: they are
+  // separately policy-gated, and an auditor filtering for shell invocations
+  // should not have to trust a boolean inside a payload to find them.
+  'exec',
+  'bash',
 ]);
 
 function shouldSkipEvents(flags = {}) {
@@ -127,6 +138,15 @@ export function writeEvent(workspace, flags, payload) {
     'flags',
     'status',
     'bytes',
+    // Phase 3 — the execution descriptor on `exec`/`bash` audit events: what
+    // was asked to run and under what policy (argv, cwd, timeout, the child's
+    // environment allowlist). One namespaced field rather than six loose keys,
+    // so an execution record's fields stay distinguishable from the generic
+    // event envelope's. The OUTCOME scalars stay top-level (`status`,
+    // `exitCode`, `durationMs`, `result`) where every other event already puts
+    // them, so `harness events --failures` and the summaries keep working
+    // without knowing this field exists.
+    'exec',
   ]) {
     if (payload[field] !== undefined) event[field] = payload[field];
   }
