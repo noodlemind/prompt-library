@@ -21,8 +21,8 @@ import { EXIT } from '../lib/style.mjs';
 import { getCommand, listCommands, validateArgs } from '../lib/registry.mjs';
 import { buildCommandIndex } from '../lib/command-index.mjs';
 import { rankRows, scoreRow, SCORE } from '../lib/tui/ranking.mjs';
-import { containsFlagSyntax, openPalette, promptsFor, resolveSelection } from '../lib/tui/palette.mjs';
-import { createTally, interpretLine, tokenize } from '../lib/tui/session.mjs';
+import { containsFlagSyntax, openPalette, promptsFor, resolveSelection, selectionPlan } from '../lib/tui/palette.mjs';
+import { createTally, interpretLine, stripControl, tokenize } from '../lib/tui/session.mjs';
 import { runLedger } from '../lib/tui-cmd.mjs';
 
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -257,4 +257,118 @@ test('P4bAC2: tui declares no output lanes, so --output is refused rather than i
   });
   assert.equal(res.status, EXIT.usage);
   assert.match(res.stdout + res.stderr, /does not support --output/);
+});
+
+// --- the session was unusable interactively, and these are the reasons ------
+
+test('an arrow key cannot corrupt the command it precedes', () => {
+  const UP = '\u001b[A';
+  const DOWN = '\u001b[B';
+  // Exactly what the terminal handed us while readline was not doing line
+  // editing: the raw bytes for three Up presses, echoed, then the word.
+  assert.equal(interpretLine(`${UP}${UP}${UP}exit`).kind, 'exit',
+    'this arrived as ^[[A^[[A^[[Aexit and was rejected as an unknown command');
+  assert.equal(interpretLine(`${DOWN}status`).kind, 'command');
+  assert.deepEqual(interpretLine(`${DOWN}status`).argv, ['status']);
+  // A line that is ONLY arrow keys is empty input, not an unknown command —
+  // the session reported `unknown` with a blank value for exactly this.
+  assert.equal(interpretLine(`${UP}${UP}${DOWN}${DOWN}`).kind, 'empty');
+  assert.equal(stripControl('\u001b[31mred\u001b[0m'), 'red');
+  assert.equal(stripControl('a\u0007b\u007f'), 'ab', 'bell and delete are not input either');
+});
+
+test('`help` and `/help` answer instead of reporting nothing matches', () => {
+  for (const line of ['help', '/help', '?', '/?']) {
+    assert.equal(interpretLine(line).kind, 'help',
+      `${line} fell through to the palette, which cannot contain \`help\` — it is handled in bin/harness.mjs and never registered`);
+  }
+});
+
+test('the session renders a visible prompt naming the workspace it acts on', () => {
+  const source = fs.readFileSync(new URL('../lib/tui-cmd.mjs', import.meta.url), 'utf8');
+  assert.match(source, /prompt: interactive \?/, 'a blank line gives an operator nothing to react to');
+  assert.match(source, /\u276f/, 'the caret is what distinguishes the input line from the transcript above it');
+  assert.match(source, /path\.basename\(path\.resolve\(workspace\)\)/,
+    'and it names the repository, because a session that says which project it is about has to show it');
+  assert.match(source, /terminal: interactive/,
+    'line editing follows the input: a TTY gets history and editing, a pipe keeps the scriptable path');
+});
+
+// --- palette value collection (the ledger was unusable without this) --------
+
+test('required flag prompts keep their required bit from the command index', () => {
+  const row = openPalette({ workspace: process.cwd(), query: 'plan-new' }).rows[0];
+  const required = promptsFor(row).filter((p) => p.required).map((p) => p.label);
+  assert.deepEqual(required, ['type', 'slug', 'intent'],
+    'hard-coding required:false made plan-new look optional and the ledger never asked');
+});
+
+test('selectionPlan asks for search query and plan-new required flags', () => {
+  const search = selectionPlan(openPalette({ workspace: process.cwd(), query: 'search' }).rows[0]);
+  assert.equal(search.ready, null);
+  assert.deepEqual(search.queue.map((p) => p.label), ['query']);
+
+  const planNew = selectionPlan(openPalette({ workspace: process.cwd(), query: 'plan-new' }).rows[0]);
+  assert.deepEqual(planNew.queue.map((p) => p.label), ['type', 'slug', 'intent']);
+
+  const status = selectionPlan(openPalette({ workspace: process.cwd(), query: 'status' }).rows[0]);
+  assert.deepEqual(status.ready, ['status']);
+});
+
+test('the ledger collects required values from a palette choice and dispatches', async () => {
+  const calls = [];
+  const text = await ledger(['/search', '1', 'hello world', 'exit'], {
+    dispatcher: async (argv) => { calls.push(argv); return 0; },
+  });
+  assert.equal(calls.length, 1, 'search must run after the query is supplied');
+  assert.equal(calls[0][0], 'search');
+  assert.ok(calls[0].includes('hello world'), `argv was ${calls[0].join(' ')}`);
+  assert.match(text, /\$ harness search/, 'resolved argv is still echoed into the ledger');
+  assert.equal(text.includes('not available from a piped session'), false,
+    'the previous dead-end message must not appear once collection works');
+});
+
+test('the ledger collects plan-new required flags by name, not flag syntax', async () => {
+  const calls = [];
+  await ledger(['/plan-new', '1', 'feat', 'fix-tui-prompts', 'make the palette ask for values', 'exit'], {
+    dispatcher: async (argv) => { calls.push(argv); return 0; },
+  });
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0][0], 'plan-new');
+  assert.ok(calls[0].includes('--slug'));
+  assert.ok(calls[0].includes('fix-tui-prompts'));
+  assert.ok(calls[0].includes('--intent'));
+});
+
+test('either/or rows like get stop collecting once resolveSelection accepts', async () => {
+  const calls = [];
+  // docid left blank, path answered — must not keep asking for lines/max-bytes.
+  const text = await ledger(['/get', '1', '', 'README.md', 'exit'], {
+    dispatcher: async (argv) => { calls.push(argv); return 0; },
+  });
+  assert.equal(calls.length, 1, `expected one get, got ${calls.length}: ${JSON.stringify(calls)}`);
+  assert.equal(calls[0][0], 'get');
+  assert.ok(calls[0].includes('--path'));
+  assert.ok(calls[0].includes('README.md'));
+  assert.equal(calls[0].includes('--lines'), false, 'untilResolves must not force every optional field');
+  assert.match(text, /\$ harness get/);
+});
+
+test('nested tui from the palette is refused rather than hanging on the same stdin', async () => {
+  const calls = [];
+  const text = await ledger(['/tui', '1', 'exit'], {
+    dispatcher: async (argv) => { calls.push(argv); return 0; },
+  });
+  assert.deepEqual(calls, [], 'opening the ledger from inside the ledger must not dispatch');
+  assert.match(text, /already open/);
+});
+
+test('exit during value collection cancels the choice without running', async () => {
+  const calls = [];
+  const text = await ledger(['/search', '1', 'exit', 'status', 'exit'], {
+    dispatcher: async (argv) => { calls.push(argv); return 0; },
+  });
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0][0], 'status', 'exit cancels the pending search, then status still runs');
+  assert.match(text, /cancelled/);
 });

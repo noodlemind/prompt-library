@@ -59,11 +59,32 @@ export function tokenize(line) {
  * part of the design — a session that ends should print its tally, and a person
  * who types `exit` deserves that as much as one who presses a key.
  */
+/**
+ * Control bytes an operator never meant to type.
+ *
+ * A terminal that is not doing line editing echoes an arrow key as `\x1b[A`
+ * and hands it to us as part of the line, so `exit` preceded by three Up
+ * presses arrived as `^[[A^[[A^[[Aexit` and was rejected as an unknown command.
+ * The readline fix stops that at the source; this stops it reaching a
+ * DISPATCH decision at all, which matters for piped input too — a stray escape
+ * in a script should not silently change which command runs.
+ */
+const CONTROL_SEQUENCES = /\u001b\[[0-9;?]*[ -/]*[@-~]|\u001b[@-Z\\-_]|[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g;
+
+export function stripControl(text) {
+  return String(text ?? '').replace(CONTROL_SEQUENCES, '');
+}
+
 export function interpretLine(rawLine) {
-  const line = String(rawLine ?? '').trim();
+  const line = stripControl(rawLine).trim();
   if (!line) return { kind: 'empty' };
 
   if (line === 'exit' || line === 'quit') return { kind: 'exit' };
+  // Asked for constantly and previously answered with `nothing matches "help"`,
+  // because `help` is handled in bin/harness.mjs and never registered, so the
+  // palette index genuinely does not contain it. Discoverability is the one
+  // thing a blank prompt cannot afford to get wrong.
+  if (line === 'help' || line === '/help' || line === '?' || line === '/?') return { kind: 'help' };
 
   // `!!` before `!`: the longer sigil has to win, or the private form would
   // parse as the public one with a `!` in the script.

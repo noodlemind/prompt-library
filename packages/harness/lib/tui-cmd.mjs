@@ -27,8 +27,8 @@ import path from 'node:path';
 import { parseFlags } from './flags.mjs';
 import { createStyle, keyWidthFor, EXIT } from './style.mjs';
 import { dispatch, hasCommand } from './registry.mjs';
-import { openPalette, promptsFor, resolveSelection } from './tui/palette.mjs';
-import { createTally, interpretLine } from './tui/session.mjs';
+import { openPalette, resolveSelection, selectionPlan } from './tui/palette.mjs';
+import { createTally, interpretLine, stripControl } from './tui/session.mjs';
 
 /**
  * Flag spellings removed from prose a person reads in the palette.
@@ -73,10 +73,34 @@ export async function runLedger({
   const started = now();
 
   write(ui.paint('muted', 'harness — session ledger'));
-  write(ui.paint('muted', `${ui.arrow} / to search commands · ! to run a shell command · exit to close`));
+  write(ui.paint('muted', `${ui.arrow} / to search commands · ! to run a shell command · help for the full list · exit to close`));
   write('');
 
-  const rl = readline.createInterface({ input, output, terminal: false });
+  // `terminal` follows the INPUT, and this was a real defect rather than a
+  // preference. With it pinned false, readline did no line editing, so an
+  // arrow key was never interpreted — the terminal echoed the raw bytes and
+  // then submitted them, producing `^[[A^[[A^[[Aexit` and an "unknown command"
+  // for a word the operator had typed correctly. Pressing Up for history, the
+  // single most reflexive thing anyone does in a prompt, corrupted the line.
+  //
+  // `terminal: true` does NOT mean an alternate screen. It gives line editing,
+  // history and a rendered prompt while still writing into the main buffer, so
+  // the scrolling-transcript design is untouched. A piped stdin keeps the old
+  // path, which is what makes the session scriptable and testable.
+  const interactive = Boolean(input.isTTY);
+  const rl = readline.createInterface({
+    input,
+    output,
+    terminal: interactive,
+    // A VISIBLE input affordance, and named for what it acts on. The session
+    // previously showed a bare blank line: nothing said the harness was waiting
+    // rather than working, nothing said which repository a command would hit,
+    // and nothing distinguished the input line from the transcript above it.
+    // "Is this hung?" is not a question an interactive surface should provoke.
+    prompt: interactive ? `${ui.paint('info', path.basename(path.resolve(workspace)))} ${ui.paint('ok', '❯')} ` : '',
+    historySize: 200,
+  });
+  if (interactive) rl.prompt();
 
   // Ctrl-C cancels the RUNNING command, not the session. A ledger that exited
   // on the first interrupt would make cancellation and quitting the same
@@ -183,45 +207,181 @@ export async function runLedger({
     return rows;
   };
 
-  let pending = null; // palette rows awaiting a numeric choice
+  // pending is either:
+  //   { kind: 'palette', rows }     — waiting for a number
+  //   { kind: 'values', row, queue, index, values, untilResolves } — collecting
+  //                                   prompt answers for a chosen row
+  // The previous code refused every row that needed a value with "not available
+  // from a piped session", which made the palette unusable for search, plan-new,
+  // get, remember, and every other command whose argv is not empty. Collection
+  // is the palette contract: choose a capability, answer for the values by name,
+  // never type `--`.
+  let pending = null;
+
+  const askPrompt = (prompt) => {
+    const note = prompt.description
+      || (prompt.type === 'boolean' ? 'yes / no' : prompt.required ? 'required' : 'optional — leave blank to skip');
+    write(ui.line({
+      state: prompt.required ? 'warn' : 'muted',
+      key: '?',
+      value: prompt.label,
+      note,
+    }));
+  };
+
+  const finishSelection = async (row, values) => {
+    const { argv: resolved, invalid, missing } = resolveSelection(row, values);
+    if (missing?.length) {
+      write(ui.line({
+        state: 'warn',
+        key: 'needs',
+        value: missing.map((k) => String(k).replace(/^--/, '')).join(', '),
+        note: 'still required',
+      }));
+      return;
+    }
+    if (invalid) {
+      write(ui.line({ state: 'warn', key: 'needs', value: row.label, note: invalid }));
+      return;
+    }
+    // Nested Session Ledger would steal the same stdin and never return cleanly.
+    if (resolved?.[0] === 'tui') {
+      write(ui.line({
+        state: 'warn',
+        key: 'tui',
+        value: 'already open',
+        note: 'the session ledger is this surface — pick another command',
+      }));
+      return;
+    }
+    if (resolved) await runArgv(resolved, { echo: true });
+  };
+
+  const beginSelection = async (choice) => {
+    // Re-entry into the ledger from its own palette is a no-op, not a hang.
+    if (choice?.argvTokens?.[0]?.value === 'tui' || choice?.noun === 'tui') {
+      write(ui.line({
+        state: 'warn',
+        key: 'tui',
+        value: 'already open',
+        note: 'the session ledger is this surface — pick another command',
+      }));
+      return;
+    }
+    const plan = selectionPlan(choice);
+    if (plan.ready) {
+      await finishSelection(choice, {});
+      return;
+    }
+    if (plan.invalid && !plan.queue.length) {
+      write(ui.line({ state: 'warn', key: 'needs', value: choice.label, note: plan.invalid }));
+      return;
+    }
+    if (!plan.queue.length) {
+      write(ui.line({ state: 'warn', key: 'needs', value: choice.label, note: plan.invalid || 'nothing to run' }));
+      return;
+    }
+    pending = {
+      kind: 'values',
+      row: choice,
+      queue: plan.queue,
+      index: 0,
+      values: {},
+      untilResolves: plan.untilResolves,
+    };
+    // The palette never asks a person to type flag syntax (P4bAC6) — it asks
+    // for the VALUE by name and assembles the argv itself.
+    write(ui.paint('muted', `  ${plan.queue.length} value(s) needed · blank skips optional · exit cancels`));
+    askPrompt(plan.queue[0]);
+  };
 
   for await (const rawLine of rl) {
-    const line = String(rawLine);
+    const line = stripControl(String(rawLine));
+
+    // Collecting values for a chosen palette row. Checked first so a number
+    // typed as a value (e.g. --limit) is not re-read as a palette index.
+    if (pending?.kind === 'values') {
+      const trimmed = line.trim();
+      if (trimmed === 'exit' || trimmed === 'quit') {
+        write(ui.paint('muted', '  cancelled'));
+        pending = null;
+        if (interactive) rl.prompt();
+        continue;
+      }
+      const prompt = pending.queue[pending.index];
+      if (trimmed === '') {
+        if (prompt.required) {
+          write(ui.line({ state: 'warn', key: 'needs', value: prompt.label, note: 'required — enter a value, or exit to cancel' }));
+          askPrompt(prompt);
+          if (interactive) rl.prompt();
+          continue;
+        }
+        // Optional blank: skip this key entirely.
+      } else if (prompt.type === 'boolean') {
+        const t = trimmed.toLowerCase();
+        if (!['y', 'yes', 'true', '1', 'n', 'no', 'false', '0'].includes(t)) {
+          write(ui.line({ state: 'warn', key: 'needs', value: prompt.label, note: 'yes or no' }));
+          askPrompt(prompt);
+          if (interactive) rl.prompt();
+          continue;
+        }
+        // Boolean, not the strings "true"/"false": resolveArgv treats any
+        // truthy value as "include the flag", and the string "false" is truthy.
+        pending.values[prompt.key] = ['y', 'yes', 'true', '1'].includes(t);
+      } else {
+        pending.values[prompt.key] = trimmed;
+      }
+
+      // either/or gates (get's --docid OR --path): stop as soon as the CLI
+      // would accept what we have, rather than forcing every optional field.
+      if (pending.untilResolves) {
+        const attempt = resolveSelection(pending.row, pending.values);
+        if (attempt.argv && !attempt.invalid && !(attempt.missing?.length)) {
+          const row = pending.row;
+          const values = pending.values;
+          pending = null;
+          await finishSelection(row, values);
+          if (interactive) rl.prompt();
+          continue;
+        }
+      }
+
+      pending.index += 1;
+      if (pending.index < pending.queue.length) {
+        askPrompt(pending.queue[pending.index]);
+        if (interactive) rl.prompt();
+        continue;
+      }
+      const row = pending.row;
+      const values = pending.values;
+      pending = null;
+      await finishSelection(row, values);
+      if (interactive) rl.prompt();
+      continue;
+    }
 
     // A number answers an open palette. Checked before interpretation so `3`
     // means "the third row" rather than "a command called 3".
-    if (pending && /^\d+$/.test(line.trim())) {
-      const choice = pending[Number(line.trim()) - 1];
+    if (pending?.kind === 'palette' && /^\d+$/.test(line.trim())) {
+      const choice = pending.rows[Number(line.trim()) - 1];
       pending = null;
       if (!choice) {
         write(ui.line({ state: 'warn', key: 'palette', value: 'no such row' }));
+        if (interactive) rl.prompt();
         continue;
       }
-      const needed = promptsFor(choice).filter((p) => p.required);
-      if (needed.length) {
-        // The palette never asks a person to type flag syntax (P4bAC6) — it
-        // asks for the VALUE by name and assembles the argv itself.
-        write(ui.line({ state: 'warn', key: 'needs', value: needed.map((p) => p.label).join(', '), note: 'not available from a piped session — run it from the CLI with those values' }));
-        continue;
-      }
-      const { argv: resolved, invalid } = resolveSelection(choice, {});
-      if (invalid) {
-        // The palette refuses to hand dispatch an argv the CLI would reject, so
-        // the reason surfaces here instead of as a usage error after the fact.
-        write(ui.line({ state: 'warn', key: 'needs', value: choice.label, note: invalid }));
-        continue;
-      }
-      if (resolved) await runArgv(resolved, { echo: true });
+      await beginSelection(choice);
+      if (interactive) rl.prompt();
       continue;
     }
 
     const parsed = interpretLine(line);
-    if (parsed.kind === 'empty') continue;
+    if (parsed.kind === 'empty') { if (interactive) rl.prompt(); continue; }
     if (parsed.kind === 'exit') break;
 
     pending = null;
     if (parsed.kind === 'palette') {
-      pending = showPalette(parsed.query);
+      pending = { kind: 'palette', rows: showPalette(parsed.query) };
     } else if (parsed.kind === 'invalid') {
       write(ui.line({ state: 'error', key: 'input', value: parsed.reason, note: parsed.hint }));
     } else if (parsed.kind === 'shell') {
@@ -235,11 +395,25 @@ export async function runLedger({
       // reason to shell out is precisely that you do not want the result in
       // context — and echoing it identically made `!!` a synonym for `!`.
       await runArgv(['bash', '--', parsed.script], { echo: !parsed.private, quiet: parsed.private });
+    } else if (parsed.kind === 'help') {
+      // `help` is handled in bin/harness.mjs rather than registered, so the
+      // palette index does not contain it and `/help` answered `nothing
+      // matches "help"` — the first thing a new operator types, met with a
+      // refusal.
+      write(ui.line({ key: 'help', value: 'type a command directly, or:' }));
+      write(ui.paint('muted', '  /            open the command palette'));
+      write(ui.paint('muted', '  /<text>      filter the palette'));
+      write(ui.paint('muted', '  /<text> then a number   pick a row; answer any values by name'));
+      write(ui.paint('muted', '  !<command>   run a shell command through governed bash'));
+      write(ui.paint('muted', '  !!<command>  the same, kept out of the ledger'));
+      write(ui.paint('muted', '  exit         close the session and print the tally'));
+      write(ui.paint('muted', `  ${ui.arrow} up/down recalls what you typed · Ctrl-C cancels a running command`));
     } else if (parsed.kind === 'reference') {
       write(ui.line({ state: 'warn', key: 'reference', value: parsed.target, note: 'file references are not wired yet' }));
     } else {
       await runArgv(parsed.argv);
     }
+    if (interactive) rl.prompt();
   }
 
   rl.close();

@@ -122,13 +122,22 @@ export function promptsFor(row) {
       // The label a person reads. Never the flag spelling: `--query` is how the
       // CLI names it, and "query" is what a human is being asked for.
       label: humanLabel(t.flag ?? t.positional),
-      required: true,
+      // A required positional is required whether the session is interactive or
+      // piped. Hardcoding true here matches argvTokens; the flag-derived prompts
+      // below honor their own `required` field.
+      required: t.required !== false,
+      type: 'string',
+      description: t.valueName || '',
     }));
   const fromPrompts = (row.prompts || []).map((p) => ({
     key: p.flag,
     label: humanLabel(p.flag),
-    required: false,
-    type: p.type,
+    // Honor the index. The previous hard-coded `false` made plan-new's required
+    // --type/--slug/--intent look optional, so the ledger never asked for them
+    // and resolveSelection failed with a CLI usage string after the choice.
+    required: Boolean(p.required),
+    type: p.type || 'string',
+    description: p.description || '',
   }));
   const seen = new Set();
   return [...fromTokens, ...fromPrompts].filter((p) => {
@@ -136,4 +145,47 @@ export function promptsFor(row) {
     seen.add(p.key);
     return true;
   });
+}
+
+/**
+ * What must be collected before a palette row can become a runnable argv.
+ *
+ * Three sources, in order of certainty:
+ *   1. Prompts marked required on the row (positionals and required flags).
+ *   2. Keys `resolveSelection` reports as `missing` for an empty values map.
+ *   3. When the row still cannot resolve (e.g. `get` needs --docid OR --path,
+ *      neither required alone), the optional non-boolean prompts — collected
+ *      until resolve succeeds, empty answers skipped.
+ *
+ * Returns `{ ready, queue, untilResolves, invalid }`. `ready` is a finished
+ * argv when nothing is needed; `queue` is the ordered list of prompts to ask;
+ * `untilResolves` means later prompts may be skipped once resolve succeeds.
+ */
+export function selectionPlan(row) {
+  if (!row) return { ready: null, queue: [], untilResolves: false, invalid: 'no row' };
+
+  const all = promptsFor(row);
+  const required = all.filter((p) => p.required);
+  if (required.length) {
+    return { ready: null, queue: required, untilResolves: false, invalid: null };
+  }
+
+  const empty = resolveSelection(row, {});
+  if (empty.argv) return { ready: empty.argv, queue: [], untilResolves: false, invalid: null };
+  if (empty.missing?.length) {
+    const byKey = new Map(all.map((p) => [p.key, p]));
+    const queue = empty.missing.map((key) => byKey.get(key) || {
+      key, label: humanLabel(key), required: true, type: 'string', description: '',
+    });
+    return { ready: null, queue, untilResolves: false, invalid: null };
+  }
+
+  // Either/or and similar requireArgs gates: no single prompt is required, but
+  // the empty form is invalid. Offer the optional non-boolean prompts and stop
+  // as soon as resolveSelection accepts the values.
+  const optional = all.filter((p) => !p.required && p.type !== 'boolean');
+  if (optional.length) {
+    return { ready: null, queue: optional, untilResolves: true, invalid: null };
+  }
+  return { ready: null, queue: [], untilResolves: false, invalid: empty.invalid || 'this row cannot be resolved' };
 }
