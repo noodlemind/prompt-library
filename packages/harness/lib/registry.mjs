@@ -63,7 +63,8 @@ import { recallResultOf, getResultOf } from './retrieval/compat-results.mjs';
 import { cmdChecks, checksResultOf, checksExitFor, CHECKS_VERBS } from './checks-cmd.mjs';
 import { cmdConfig, configResultOf, configExitFor, CONFIG_VERBS } from './config-cmd.mjs';
 import { cmdTrust, trustResultOf, TRUST_VERBS } from './trust-cmd.mjs';
-import { cmdRun, runResultOf, runExitFor, RUN_VERBS } from './run-cmd.mjs';
+import { cmdRun, runResultOf, runExitFor, runRequireArgs, RUN_VERBS } from './run-cmd.mjs';
+import { cmdResources, resourcesResultOf, resourcesExitFor, RESOURCES_VERBS } from './resources-cmd.mjs';
 import { CONFIG_KEYS, SCOPES } from './config.mjs';
 import { RUN_STATUSES } from './run-journal.mjs';
 import { cmdExec, execResultOf, cmdBash, bashResultOf, exitFor as execExitFor } from './exec-cmd.mjs';
@@ -126,7 +127,7 @@ export const GLOBAL_FLAGS = [
   {
     name: '--no-events',
     type: 'boolean',
-    description: 'do not write .harness/events.jsonl',
+    description: 'do not write any local record: .harness/events.jsonl or runs.jsonl',
     required: false,
     default: false,
     tui: 'cli-only',
@@ -453,6 +454,13 @@ export function validateArgs(entry, argv) {
  * `ctx.events`'s presence; it wires both branches identically.
  */
 export async function dispatch(argv, ctx = {}) {
+  // One place for a handler or lane to say what actually happened, so callers
+  // never have to guess it back out of an exit code.
+  const outer = ctx.reportStatus;
+  ctx.reportStatus = (status) => {
+    ctx.__reportedStatus = status;
+    outer?.(status);
+  };
   const [name, ...rest] = argv;
   const entry = REGISTRY.get(name);
   if (!entry) {
@@ -650,7 +658,11 @@ async function runHandler(entry, rest, ctx, events) {
   events?.emit(EVENT_TYPE.COMMAND_START, { flags: summarizeArgFlags(rest, flagIndex(entry)), result: PENDING_RESULT });
   try {
     const exit = await entry.handler(rest, ctx);
-    events?.emit(EVENT_TYPE.COMMAND_RESULT, commandResultPayload(statusForExit(exit), Date.now() - startedAt, exit));
+    // A handler may have reported its own status through `ctx.reportStatus`
+    // (exec/bash/checks do, because their exit code is the CHILD's and cannot
+    // be reverse-mapped). Fall back to the exit mapping only when it did not.
+    const status = ctx.__reportedStatus ?? statusForExit(exit);
+    events?.emit(EVENT_TYPE.COMMAND_RESULT, commandResultPayload(status, Date.now() - startedAt, exit));
     return exit;
   } catch (err) {
     const exit = Number.isInteger(err.exit) ? err.exit : 1;
@@ -741,6 +753,14 @@ async function dispatchLane(entry, rest, ctx, lane, events) {
     // a second derivation, so the event and the rendered output can never
     // disagree about what happened.
     const status = envelope.status || STATUS.OK;
+    // The command's OWN outcome, reported upward. bin/harness.mjs used to infer
+    // the run status by reverse-mapping the numeric exit — which is exactly the
+    // ambiguity `exitFor` documents for `exec`: a child exiting 8 is not a
+    // harness timeout, but the reverse map called it one and the journal
+    // recorded a `timed-out` run beside an envelope saying `failed`. Found by
+    // the Codex phase-4a review, in a hazard this codebase had already written
+    // down and then walked into.
+    ctx.reportStatus?.(status);
     // The DEFAULT is derived from the status, not hardcoded to ok. Hardcoding
     // it meant a result that declared `"status":"failed"` still exited 0 unless
     // its entry remembered to add `exitOf` — and that was forgotten twice
@@ -1496,6 +1516,35 @@ registerCommand({
 });
 
 registerCommand({
+  name: 'resources',
+  summary: 'list, inspect, enable, or disable installed resource bundles',
+  group: 'setup',
+  // `enable`/`disable` write a marker inside a bundle; the two read verbs
+  // override DOWN so the palette warns about the verbs that change what loads.
+  sideEffect: 'mutate',
+  capabilities: [],
+  outputModes: ['ledger', 'json'],
+  usage: '<list|show|enable|disable> [name]',
+  verbs: [
+    { verb: 'list', summary: 'every installed bundle, including the ones not contributing and why', sideEffect: 'read' },
+    { verb: 'show', summary: 'one bundle: capabilities, integrity, and what it wins or is shadowed on', sideEffect: 'read', positionals: ['name'] },
+    { verb: 'enable', summary: 'approve a bundle so its contributions load', positionals: ['name'] },
+    { verb: 'disable', summary: 'stop a bundle contributing without removing it', positionals: ['name'] },
+  ],
+  args: {
+    positionals: [
+      { name: 'verb', description: RESOURCES_VERBS.join('|'), required: false, default: 'list' },
+      { name: 'name', description: 'the bundle name', required: false, default: null },
+    ],
+    flags: [],
+  },
+  bareSideEffect: 'read',
+  handler: cmdResources,
+  resultOf: resourcesResultOf,
+  exitOf: resourcesExitFor,
+});
+
+registerCommand({
   name: 'run',
   summary: 'list, inspect, or judge the resumability of past harness runs',
   group: 'engineer loop',
@@ -1532,6 +1581,9 @@ registerCommand({
   handler: cmdRun,
   resultOf: runResultOf,
   exitOf: runExitFor,
+  // Filter values are validated in the registry phase so a refused invocation
+  // never opens a run — see runRequireArgs.
+  requireArgs: runRequireArgs,
 });
 
 registerCommand({

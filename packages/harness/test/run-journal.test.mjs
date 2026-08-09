@@ -34,9 +34,14 @@ const tempDir = (p) => fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), p))
 const scopes = () => ({ workspace: tempDir('rj-ws-'), copilotHome: tempDir('rj-home-') });
 
 function run(argv, { workspace, copilotHome }) {
-  return spawnSync(process.execPath, [binPath, ...argv, '--workspace', workspace, '--copilot-home', copilotHome], {
-    cwd: packageRoot, encoding: 'utf8',
-  });
+  // Spliced before any `--`: appended after it, `exec` would hand these to the
+  // child and the command under test would use a different workspace.
+  const flags = ['--workspace', workspace, '--copilot-home', copilotHome];
+  const boundary = argv.indexOf('--');
+  const full = boundary === -1
+    ? [...argv, ...flags]
+    : [...argv.slice(0, boundary), ...flags, ...argv.slice(boundary)];
+  return spawnSync(process.execPath, [binPath, ...full], { cwd: packageRoot, encoding: 'utf8' });
 }
 
 test('P4aAC1: every run carries a stable id, and ids do not collide', () => {
@@ -224,4 +229,158 @@ test('a refused invocation opens no run and touches nothing', () => {
   const res = run(['index', '--since', 'ref'], s);
   assert.equal(res.status, EXIT.usage);
   assert.equal(fs.existsSync(runsPath(s.workspace)), false, 'a command that never started has no run');
+});
+
+// --- regressions for the Codex phase-4a review ---------------------------
+
+/**
+ * P1-2. The journal used to infer a run's status by reverse-mapping the exit
+ * code, so `exec` passing through a child's exit 8 was recorded as a harness
+ * `timed-out`. The hazard was already written down in `exitFor`; the journal
+ * walked into it anyway.
+ */
+for (const lane of [null, 'json-envelope']) {
+  test(`P1-2: a child's exit code is not mistaken for a harness status on the ${lane || 'ledger'} lane`, () => {
+    const s = scopes();
+    const argv = ['exec'];
+    if (lane) argv.push('--output', lane);
+    argv.push('--', process.execPath, '-e', 'process.exit(8)');
+    run(argv, s);
+    const [result] = readJournal(s.workspace).filter((r) => r.type === 'run.result');
+    assert.equal(result.status, 'failed', 'exit 8 from a child is not the harness timing out');
+    assert.equal(result.exitCode, 8);
+  });
+}
+
+// P1-3. Retention may forget a run; it may never change what one says.
+test('P1-3: pruning never splits a run group, so an outcome cannot be revised', () => {
+  resetRetentionState();
+  const { workspace } = scopes();
+  fs.mkdirSync(path.join(workspace, '.harness'), { recursive: true });
+  const file = runsPath(workspace);
+  const old = '2020-01-01T00:00:00.000Z';
+  const lines = [
+    JSON.stringify({ schema: 1, type: 'run.start', run: 'r1', ts: old, command: 'status' }),
+    JSON.stringify({ schema: 1, type: 'run.result', run: 'r1', ts: old, status: 'succeeded', pad: 'x'.repeat(200) }),
+    JSON.stringify({ schema: 1, type: 'run.result', run: 'r1', ts: new Date().toISOString(), status: 'failed' }),
+    ...Array.from({ length: 6000 }, (_, i) => JSON.stringify({ schema: 1, type: 'run.start', run: `filler${i}`, ts: old, pad: 'x'.repeat(200) })),
+  ];
+  fs.writeFileSync(file, `${lines.join('\n')}\n`);
+
+  const before = foldRuns(readJournal(workspace)).find((r) => r.run === 'r1').status;
+  pruneJournalFile(file, { retentionDays: 30 });
+  const after = foldRuns(readJournal(workspace)).find((r) => r.run === 'r1');
+  assert.equal(before, 'succeeded');
+  assert.equal(after.status, 'succeeded', 'pruning the older half of a run would have flipped this to failed');
+});
+
+// P1-4. A timestamp is an instant, not a spelling.
+test('P1-4: an unparseable timestamp is kept, not deleted by a string comparison', () => {
+  resetRetentionState();
+  const { workspace } = scopes();
+  fs.mkdirSync(path.join(workspace, '.harness'), { recursive: true });
+  const file = runsPath(workspace);
+  const lines = [
+    // Not `'0'`: Date.parse('0') is a real date (year 2000), so pruning it is
+    // correct. The invariant is about a value that cannot be read at all.
+    JSON.stringify({ schema: 1, type: 'run.start', run: 'weird', ts: 'not-a-date' }),
+    ...Array.from({ length: 6000 }, () => JSON.stringify({ schema: 1, type: 'run.start', run: 'old', ts: '2020-01-01T00:00:00.000Z', pad: 'x'.repeat(200) })),
+  ];
+  fs.writeFileSync(file, `${lines.join('\n')}\n`);
+  pruneJournalFile(file, { retentionDays: 30 });
+  assert.ok(readJournal(workspace).some((r) => r.run === 'weird'),
+    'dropping a record because its date could not be read costs evidence');
+});
+
+// P1-5. Even a read-class command must not be steered into writing elsewhere.
+test('P1-5: a symlinked .harness does not redirect journal writes out of the workspace', () => {
+  const { workspace } = scopes();
+  const elsewhere = tempDir('rj-escape-');
+  fs.symlinkSync(elsewhere, path.join(workspace, '.harness'), 'dir');
+  startRun(workspace, { run: newRunId(), command: 'status' });
+  assert.equal(fs.existsSync(path.join(elsewhere, 'runs.jsonl')), false,
+    'a read-class command could otherwise append attacker-chosen bytes to an attacker-chosen path');
+});
+
+// P2-6. A crash mid-append must cost one record, not two.
+test('P2-6: a torn tail does not swallow the next valid append', () => {
+  const { workspace } = scopes();
+  fs.mkdirSync(path.join(workspace, '.harness'), { recursive: true });
+  fs.writeFileSync(runsPath(workspace), '{"schema":1,"type":"run.start"');
+  startRun(workspace, { run: 'after-crash', command: 'status' });
+  assert.ok(readJournal(workspace).some((r) => r.run === 'after-crash'),
+    'recovery from a crash must not lose the following invocation too');
+});
+
+// P2-16 / P2-17.
+test('P2-16: a terminal record with no timestamp still ends the run', () => {
+  const folded = foldRuns([
+    { type: 'run.start', run: 'r', ts: '2026-08-09T00:00:00.000Z', command: 'status' },
+    { type: 'run.result', run: 'r', ts: null, status: 'succeeded' },
+    { type: 'run.result', run: 'r', ts: '2026-08-09T00:00:01.000Z', status: 'failed' },
+  ]);
+  assert.equal(folded[0].status, 'succeeded', 'terminality is tracked, not inferred from a truthy timestamp');
+});
+
+test('P2-17: a second start cannot rewrite a run’s identity', () => {
+  const folded = foldRuns([
+    { type: 'run.start', run: 'r', ts: '2026-08-09T00:00:00.000Z', command: 'verify', argv: ['--plan', 'a'] },
+    { type: 'run.start', run: 'r', ts: '2026-08-09T00:00:05.000Z', command: 'compound', argv: ['--other'] },
+  ]);
+  assert.equal(folded[0].command, 'verify', 'the first start is the truth, as the comment always claimed');
+  assert.deepEqual(folded[0].argv, ['--plan', 'a']);
+});
+
+// P2-15.
+test('P2-15: a status outside the vocabulary is not believed, and is never resumable', () => {
+  const [folded] = foldRuns([
+    { type: 'run.start', run: 'r', ts: '2026-08-09T00:00:00.000Z', command: 'status' },
+    { type: 'run.result', run: 'r', ts: '2026-08-09T00:00:01.000Z', status: 'interrupted' },
+  ]);
+  assert.equal(folded.status, 'running');
+  assert.match(folded.corrupt, /unrecognized status/);
+  assert.equal(resumePlanFor(folded, { sideEffect: 'read' }).resumable, false);
+});
+
+// P2-13.
+test('P2-13: dates are compared as instants, and a nonsense date is refused', () => {
+  // The run's own timestamp carries an offset: as an INSTANT it is exactly the
+  // bound, but as a STRING it sorts before it. String comparison excluded it.
+  const runs = [{ run: 'a', status: 'succeeded', startedAt: '2026-08-08T20:00:00.000-05:00' }];
+  assert.equal(queryRuns(runs, { since: '2026-08-09T00:00:00.000Z' }).length, 1);
+  assert.throws(() => queryRuns(runs, { since: '2026-99-99' }), (e) => e.code === 'E_USAGE');
+});
+
+// P2-7.
+test('P2-7: a run’s events are not hidden by the display cap', () => {
+  const s = scopes();
+  run(['orient', '--query', 'anything'], s);
+  const listed = JSON.parse(run(['run', 'list', '--command', 'orient', '--json'], s).stdout);
+  const target = listed.runs[0].run;
+  // Bury it under more events than the legacy read cap allows.
+  const file = path.join(s.workspace, '.harness', 'events.jsonl');
+  const filler = Array.from({ length: 250 }, (_, i) => JSON.stringify({ version: 2, id: `f${i}`, ts: new Date().toISOString(), type: 'orient', command: 'orient', result: 'pass', checks: [], run: 'unrelated' }));
+  fs.appendFileSync(file, `${filler.join('\n')}\n`);
+
+  const shown = JSON.parse(run(['run', 'show', target, '--json'], s).stdout);
+  assert.ok(shown.events.length > 0, 'retained evidence must not be made invisible by a display cap');
+});
+
+// P2-20.
+test('P2-20: journal text is inerted before it reaches a terminal', () => {
+  const s = scopes();
+  const osc = `${String.fromCharCode(27)}]0;pwned${String.fromCharCode(7)}`;
+  fs.mkdirSync(path.join(s.workspace, '.harness'), { recursive: true });
+  fs.writeFileSync(runsPath(s.workspace), `${JSON.stringify({ schema: 1, type: 'run.start', run: 'osc-run', ts: new Date().toISOString(), command: 'status', argv: [osc] })}\n`);
+  const res = run(['run', 'show', 'osc-run', '--no-color'], s);
+  assert.equal(res.stdout.includes(String.fromCharCode(27)), false,
+    'stored journal text can otherwise manipulate the terminal or forge output');
+});
+
+// P2-11.
+test('P2-11: a filter value never becomes the querying run’s own identity', () => {
+  const s = scopes();
+  run(['run', 'list', '--host', 'vscode'], s);
+  const [start] = readJournal(s.workspace).filter((r) => r.type === 'run.start');
+  assert.notEqual(start.host, 'vscode', 'identity comes from the environment, not from what the caller queried with');
 });

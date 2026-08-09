@@ -1,0 +1,207 @@
+/**
+ * The out-of-process plugin protocol (P5AC4, P5AC5, P5AC6).
+ *
+ * OUT OF PROCESS IS THE WHOLE DESIGN. An in-process plugin shares the harness's
+ * memory, its file handles, its `process.exit`, and its crash — and no amount
+ * of care inside the plugin changes that. A separate process means a plugin
+ * that throws, loops, or aborts takes down itself and nothing else (P5AC6), and
+ * it means the capability boundary is enforced by the operating system rather
+ * than by a convention the plugin is asked to respect.
+ *
+ * THE PROTOCOL IS VERSIONED JSON LINES over stdin/stdout. Line-delimited
+ * because it is the only framing that survives a plugin printing something
+ * unexpected: a stray line is a parse failure for that line, not a desynced
+ * stream for the rest of the session.
+ *
+ * WHAT A PLUGIN CANNOT DO (P5AC5) is not enforced by asking. The host exposes
+ * exactly one direction — the plugin answers requests and returns data — and
+ * never brokers a write. Policy, the run journal, evidence, and the learnings
+ * store are simply not reachable through any message this protocol defines;
+ * contributed knowledge flows back as DATA and enters the store, if at all,
+ * through the consolidation loop that already reviews everything else.
+ */
+import { spawn } from 'node:child_process';
+
+export const PROTOCOL_VERSION = 1;
+
+/** Message types the host will send and accept. Closed on both directions: an
+ * unknown type from a plugin is dropped with a reason rather than dispatched,
+ * because a protocol that tries to be helpful about unrecognized messages is
+ * one whose surface nobody can state. */
+export const HOST_MESSAGES = Object.freeze(['hello', 'request', 'shutdown']);
+export const PLUGIN_MESSAGES = Object.freeze(['hello', 'result', 'error', 'log']);
+
+export const DEFAULT_TIMEOUT_MS = 30_000;
+
+function nowMs() {
+  return Date.now();
+}
+
+/**
+ * Start a plugin and negotiate.
+ *
+ * Returns a handle with `request`, `close`, and the negotiated `capabilities` —
+ * which are the INTERSECTION of what the plugin asked for and what the operator
+ * granted. A plugin that requests more than it was granted still runs; it
+ * simply does not receive the extra, and the difference is reported rather than
+ * silently applied, so "why can it not see my workspace" has an answer.
+ */
+export function startPlugin({
+  command,
+  args = [],
+  cwd,
+  granted = [],
+  requested = [],
+  timeoutMs = DEFAULT_TIMEOUT_MS,
+  spawnFn = spawn,
+  env = {},
+} = {}) {
+  const capabilities = requested.filter((c) => granted.includes(c));
+  const refused = requested.filter((c) => !granted.includes(c));
+
+  const child = spawnFn(command, args, {
+    cwd,
+    // Deny-all by default, exactly like `exec`: a plugin is third-party code,
+    // and the argument for allowlisting a check's environment applies with more
+    // force to something that arrived from a bundle.
+    env,
+    stdio: ['pipe', 'pipe', 'pipe'],
+  });
+
+  const pending = new Map();
+  let seq = 0;
+  let buffer = '';
+  let closed = false;
+  const logs = [];
+  let crash = null;
+
+  const settleAll = (error) => {
+    for (const [, entry] of pending) entry.reject(error);
+    pending.clear();
+  };
+
+  child.stdout?.on('data', (chunk) => {
+    buffer += chunk.toString();
+    let index = buffer.indexOf('\n');
+    while (index !== -1) {
+      const line = buffer.slice(0, index);
+      buffer = buffer.slice(index + 1);
+      index = buffer.indexOf('\n');
+      if (!line.trim()) continue;
+      let message;
+      try {
+        message = JSON.parse(line);
+      } catch {
+        // A stray line is that line's problem. Line framing is what keeps it
+        // from being the rest of the session's problem.
+        logs.push({ level: 'warn', text: `unparseable line from plugin: ${line.slice(0, 200)}` });
+        continue;
+      }
+      if (!PLUGIN_MESSAGES.includes(message?.type)) {
+        logs.push({ level: 'warn', text: `unknown message type from plugin: ${String(message?.type).slice(0, 40)}` });
+        continue;
+      }
+      if (message.type === 'log') {
+        logs.push({ level: message.level === 'error' ? 'error' : 'info', text: String(message.text ?? '') });
+        continue;
+      }
+      const entry = pending.get(message.id);
+      if (!entry) continue;
+      pending.delete(message.id);
+      if (message.type === 'error') entry.reject(Object.assign(new Error(String(message.message ?? 'plugin error')), { code: 'E_PLUGIN' }));
+      else entry.resolve(message.result);
+    }
+  });
+
+  child.stderr?.on('data', (chunk) => {
+    logs.push({ level: 'error', text: chunk.toString().slice(0, 2000) });
+  });
+
+  // P5AC6: a crash settles every in-flight request as a failure and marks the
+  // handle dead. It does not throw into the host, and it does not leave a
+  // caller awaiting a promise that can never resolve — a hung host is the
+  // failure mode "crash isolation" is supposed to prevent, not produce.
+  child.on('error', (error) => {
+    crash = error;
+    closed = true;
+    settleAll(Object.assign(new Error(`plugin failed to start: ${error.message}`), { code: 'E_PLUGIN_CRASH' }));
+  });
+  child.on('exit', (code, signal) => {
+    closed = true;
+    if (pending.size) {
+      settleAll(Object.assign(
+        new Error(`plugin exited (${signal ? `signal ${signal}` : `code ${code}`}) with ${pending.size} request(s) in flight`),
+        { code: 'E_PLUGIN_CRASH' },
+      ));
+    }
+  });
+
+  const send = (message) => {
+    if (closed) throw Object.assign(new Error('plugin is not running'), { code: 'E_PLUGIN_CRASH' });
+    child.stdin.write(`${JSON.stringify(message)}\n`);
+  };
+
+  send({ type: 'hello', protocol: PROTOCOL_VERSION, capabilities });
+
+  return {
+    capabilities,
+    refused,
+    logs,
+    get alive() {
+      return !closed;
+    },
+    get crash() {
+      return crash;
+    },
+    /**
+     * One request. Every request is bounded: a plugin that never answers is
+     * indistinguishable from one that is slow, so the host stops waiting rather
+     * than letting a third party decide how long the harness hangs.
+     */
+    request(method, params = {}, { timeout = timeoutMs } = {}) {
+      const id = `r${(seq += 1)}`;
+      return new Promise((resolve, reject) => {
+        const timer = setTimeout(() => {
+          pending.delete(id);
+          reject(Object.assign(new Error(`plugin request ${method} timed out after ${timeout}ms`), { code: 'E_PLUGIN_TIMEOUT' }));
+        }, timeout);
+        pending.set(id, {
+          resolve: (value) => { clearTimeout(timer); resolve(value); },
+          reject: (error) => { clearTimeout(timer); reject(error); },
+        });
+        try {
+          send({ type: 'request', id, method, params, at: nowMs() });
+        } catch (error) {
+          clearTimeout(timer);
+          pending.delete(id);
+          reject(error);
+        }
+      });
+    },
+    close() {
+      if (closed) return;
+      try {
+        send({ type: 'shutdown' });
+      } catch {
+        /* already gone */
+      }
+      child.kill();
+      closed = true;
+    },
+  };
+}
+
+/**
+ * The write surfaces a plugin may never reach (P5AC5).
+ *
+ * Exported as data so the contract test asserts against the same list the
+ * protocol is designed around, rather than a second list that can drift from
+ * it. The enforcement is structural — no message in this protocol brokers a
+ * write to any of these — and this names what that structure is protecting.
+ */
+export const FORBIDDEN_WRITE_SURFACES = Object.freeze([
+  'policy',
+  'run-journal',
+  'evidence',
+  'learnings-store',
+]);

@@ -67,35 +67,88 @@ export function pruneJournalFile(file, {
   if (oncePerProcess) pruned.add(file);
   if (size < minBytes) return { removed: 0, kept: 0, skipped: true };
 
+  const cutoffMs = now - retentionDays * 24 * 60 * 60 * 1000;
   const cutoff = cutoffIso(retentionDays, now);
   const lines = fs.readFileSync(file, 'utf8').split('\n').filter(Boolean);
+
+  // Parse once. A timestamp is an INSTANT, not a spelling: comparing ISO
+  // strings lexically got `{"ts":"0"}` deleted and would mis-order any offset
+  // timestamp against a UTC bound. A value that will not parse is KEPT, which
+  // is what the module doc promised and the string compare quietly broke.
+  const parsed = lines.map((line) => {
+    try {
+      const record = JSON.parse(line);
+      const at = Date.parse(record?.ts);
+      return { line, record, at: Number.isFinite(at) ? at : null };
+    } catch {
+      return { line, record: null, at: null };
+    }
+  });
+
+  // A run's records are pruned as a GROUP or not at all. Removing only the
+  // older half of a run rewrote history: a run with an old `succeeded` result
+  // and a newer `failed` one folded as succeeded, and pruning the first made it
+  // fold as failed. Retention may forget a run; it may never change what one
+  // says. Found by the Codex phase-4a review.
+  const newestByRun = new Map();
+  for (const entry of parsed) {
+    const id = entry.record?.run;
+    if (!id) continue;
+    const current = newestByRun.get(id);
+    if (entry.at === null) newestByRun.set(id, Infinity);
+    else if (current === undefined || entry.at > current) newestByRun.set(id, entry.at);
+  }
+
   const keep = [];
   let removed = 0;
-  for (const line of lines) {
-    let ts = null;
-    try {
-      ts = JSON.parse(line)?.ts ?? null;
-    } catch {
-      // Unparseable: keep. See the note above — a torn line is still evidence
-      // that something happened here.
-      keep.push(line);
-      continue;
-    }
-    if (typeof ts === 'string' && ts < cutoff) {
+  for (const entry of parsed) {
+    const id = entry.record?.run;
+    const age = id ? newestByRun.get(id) : entry.at;
+    if (age !== null && age !== undefined && Number.isFinite(age) && age < cutoffMs) {
       removed += 1;
       continue;
     }
-    keep.push(line);
+    keep.push(entry.line);
   }
   if (removed === 0) return { removed: 0, kept: keep.length, skipped: false };
 
-  if (markerFor) keep.push(JSON.stringify(markerFor({ removed, cutoff })));
+  // P1-1 (Codex phase-4a review): another process appending between the read
+  // above and the rename below had its record silently discarded — audit data
+  // lost, and not even counted by the marker. An exclusive lock file makes the
+  // read-modify-rename one critical section; a process that cannot take the
+  // lock simply does not prune, which costs disk rather than history.
+  const lockPath = `${file}.prune-lock`;
+  let lockFd;
+  try {
+    lockFd = fs.openSync(lockPath, 'wx');
+  } catch {
+    // Someone else is pruning, or a previous prune died holding the lock. Both
+    // resolve to "not now" — a stale lock costs an unpruned file, which is the
+    // safe direction for an audit log.
+    return { removed: 0, kept: 0, skipped: true };
+  }
 
-  // Temp-and-rename in the same directory, so a reader sees either the whole
-  // old file or the whole new one. A journal half-rewritten by a crash would be
-  // exactly the corruption this module exists to avoid causing.
-  const tmp = path.join(path.dirname(file), `.${path.basename(file)}.prune-${process.pid}`);
-  fs.writeFileSync(tmp, keep.length ? `${keep.join('\n')}\n` : '', 'utf8');
-  fs.renameSync(tmp, file);
-  return { removed, kept: keep.length, skipped: false };
+  try {
+    // Re-read INSIDE the lock: anything appended while we were parsing is still
+    // on disk, and must survive.
+    const currentLines = fs.readFileSync(file, 'utf8').split('\n').filter(Boolean);
+    const dropped = new Set();
+    for (const entry of parsed) {
+      if (!keep.includes(entry.line)) dropped.add(entry.line);
+    }
+    const finalLines = currentLines.filter((line) => !dropped.has(line));
+    if (markerFor) finalLines.push(JSON.stringify(markerFor({ removed, cutoff })));
+
+    const tmp = path.join(path.dirname(file), `.${path.basename(file)}.prune-${process.pid}`);
+    fs.writeFileSync(tmp, finalLines.length ? `${finalLines.join('\n')}\n` : '', 'utf8');
+    fs.renameSync(tmp, file);
+    return { removed, kept: finalLines.length, skipped: false };
+  } finally {
+    fs.closeSync(lockFd);
+    try {
+      fs.unlinkSync(lockPath);
+    } catch {
+      /* best effort */
+    }
+  }
 }

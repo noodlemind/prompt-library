@@ -204,6 +204,8 @@ const DECLARED_VERBS = Object.freeze({
   // Every run verb reads. `resume` REPORTS whether resuming is safe rather than
   // performing it, so the palette must not paint it as an action.
   run: ['list', 'show', 'tree', 'resume'],
+  // `enable`/`disable` change what loads; `list`/`show` override DOWN to read.
+  resources: ['list', 'show', 'enable', 'disable'],
 });
 
 const VERB_FLAGS = Object.freeze({
@@ -249,6 +251,8 @@ const VERB_POSITIONALS = Object.freeze({
   config: { get: ['key'], set: ['key', 'value'] },
   // `list` takes no id — it is the query over all of them.
   run: { show: ['run-id'], tree: ['run-id'], resume: ['run-id'] },
+  // `list` takes no name — it is the query over all of them.
+  resources: { show: ['name'], enable: ['name'], disable: ['name'] },
 });
 
 test('AC8: every verb-consumed positional is declared and reaches its row as a picker', () => {
@@ -281,7 +285,7 @@ test('AC8: the declared verb inventory matches its fixture exactly', () => {
     if (verbs.length) actual[name] = verbs;
   }
   assert.deepEqual(actual, { ...DECLARED_VERBS }, 'a verb was added or lost — update the fixture deliberately');
-  assert.equal(Object.values(actual).flat().length, 42, '15 knowledge/learning verbs + lookup’s 11 kinds + tree’s 2 subjects + checks’ 3 verbs + config’s 4 verbs + trust’s 3 verbs + run’s 4 verbs');
+  assert.equal(Object.values(actual).flat().length, 46, '15 knowledge/learning verbs + lookup’s 11 kinds + tree’s 2 subjects + checks’ 3 verbs + config’s 4 verbs + trust’s 3 verbs + run’s 4 verbs + resources’ 4 verbs');
 });
 
 test('AC8: the verb-dispositioned flag inventory matches its fixture exactly', () => {
@@ -308,7 +312,7 @@ test('AC8: every declared verb reaches the palette as its own row', () => {
       assert.ok(row.summary, `${command} ${verb} must carry its declared summary`);
     }
   }
-  assert.equal(rows.filter((r) => r.kind === 'verb').length, 55, '42 declared verbs + 13 row-bearing verb flags');
+  assert.equal(rows.filter((r) => r.kind === 'verb').length, 59, '46 declared verbs + 13 row-bearing verb flags');
 });
 
 /**

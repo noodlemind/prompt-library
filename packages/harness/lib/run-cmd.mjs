@@ -12,8 +12,10 @@ import path from 'node:path';
 import { parseFlags } from './flags.mjs';
 import { createStyle, keyWidthFor, EXIT } from './style.mjs';
 import { redactedJson } from './redact.mjs';
-import { readEvents } from './events.mjs';
+import fs from 'node:fs';
+import { eventPath } from './events.mjs';
 import { RUN_STATUSES, readRuns, readJournal, foldRuns } from './run-journal.mjs';
+import { inertLine } from './knowledge/store.mjs';
 
 const ui = createStyle({ argv: process.argv.slice(2) });
 
@@ -40,14 +42,19 @@ function readValueFlag(argv, name) {
   return next === undefined || next.startsWith('--') ? null : next;
 }
 
+/** Flags on this entry that take a value. A BOOLEAN flag before the verb —
+ * `harness run --json show <id>` — must not swallow the next token, which is
+ * what a blanket "skip the following word" rule did (P2-12). */
+const VALUE_FLAGS = new Set(['--status', '--command', '--host', '--plan', '--since', '--until', '--limit', '--workspace', '--copilot-home']);
+
 function context(argv) {
   const flags = parseFlags(argv);
   const positionals = [];
   for (let i = 0; i < argv.length; i += 1) {
     const a = argv[i];
     if (a === '--') break;
-    if (a.startsWith('--')) {
-      if (!a.includes('=') && argv[i + 1] !== undefined && !argv[i + 1].startsWith('--')) i += 1;
+    if (a.startsWith('-')) {
+      if (!a.includes('=') && VALUE_FLAGS.has(a) && argv[i + 1] !== undefined) i += 1;
       continue;
     }
     positionals.push(a);
@@ -95,9 +102,17 @@ export function resolveRunId(runs, id) {
 /** The events belonging to one run. The run id is on every event the invocation
  * produced, so this is a filter rather than a reconstruction. */
 function eventsForRun(workspace, runId) {
-  // The read cap exists to stop a full-history dump on the human path; a single
-  // run's events are a bounded slice of that, so ask for the maximum and filter.
-  return readEvents(workspace, { limit: Number.MAX_SAFE_INTEGER }).filter((e) => e.run === runId);
+  // Read the file directly rather than through `readEvents`. That reader clamps
+  // to EVENTS_MAX_LIMIT and applies the clamp BEFORE any filter, so a run
+  // followed by 200 unrelated events reported zero of its own — retained
+  // evidence made invisible by a display cap (P2-7, Codex phase-4a review).
+  const file = eventPath(workspace);
+  if (!fs.existsSync(file)) return [];
+  return fs.readFileSync(file, 'utf8')
+    .split('\n')
+    .filter(Boolean)
+    .map((line) => { try { return JSON.parse(line); } catch { return null; } })
+    .filter((e) => e && e.run === runId);
 }
 
 const STATUS_STATE = {
@@ -154,6 +169,41 @@ export function resumePlanFor(run, { sideEffect = 'execute' } = {}) {
   };
 }
 
+/**
+ * Registry-phase validation — STRUCTURAL only.
+ *
+ * P2-8 reported that `run list --status bogus` exits 2 having already written a
+ * run, and asked for values to be validated before `onRunStart`. Ruled
+ * narrower than requested, because the finding conflates two things:
+ *
+ *   - a DISPATCH-phase refusal (an unknown verb, a missing run id, an unknown
+ *     flag) means the command never started, so it has no run — that invariant
+ *     is real and is enforced here;
+ *   - a VALUE the handler rejects means the command ran, read the journal, and
+ *     failed. Recording that as an `inconclusive` run is accurate, and it is
+ *     the kind of failed invocation an operator most wants to find later.
+ *
+ * The registry's `requireArgs` contract also constrains this: the command-index
+ * test fills every picker with a placeholder and requires the gate to accept
+ * it, so a value check here would refuse legitimate palette output.
+ */
+export function runRequireArgs(rest) {
+  const verb = rest.find((a) => typeof a === 'string' && !a.startsWith('-')) ?? 'list';
+  if (!RUN_VERBS.includes(verb)) return `unknown run verb: ${verb}`;
+  if (['show', 'tree', 'resume'].includes(verb)) {
+    const positionals = rest.filter((a, i) => {
+      if (typeof a !== 'string' || a.startsWith('-')) return false;
+      const prev = rest[i - 1];
+      return !(typeof prev === 'string' && VALUE_FLAGS.has(prev));
+    });
+    if (positionals.length < 2) return `run ${verb} requires a run id`;
+  }
+  // `undefined`, not `null`: the registry's requireArgs contract is "a message
+  // or nothing", and the contract test asserts the absence is `undefined` the
+  // way every other predicate here returns it.
+  return undefined;
+}
+
 export async function runResultOf(argv, ctx = {}) {
   const { verb, id, workspace, filters } = context(argv);
   if (!RUN_VERBS.includes(verb)) {
@@ -161,6 +211,15 @@ export async function runResultOf(argv, ctx = {}) {
   }
   if (filters.status && !RUN_STATUSES.includes(filters.status)) {
     throw usageError(`unknown run status: ${filters.status}`, `one of ${RUN_STATUSES.join(', ')}`);
+  }
+  // Bounds are validated HERE, before anything is read or opened, so a rejected
+  // filter leaves no run behind (P2-8). `queryRuns` throws E_USAGE on an
+  // unparseable date; doing it eagerly keeps the refusal on the same side of
+  // the no-run invariant as every other usage error.
+  for (const [name, value] of [['--since', filters.since], ['--until', filters.until]]) {
+    if (!value) continue;
+    const at = Date.parse(/^\d{4}-\d{2}-\d{2}$/.test(value) ? `${value}T00:00:00.000Z` : value);
+    if (!Number.isFinite(at)) throw usageError(`${name} is not a date: ${JSON.stringify(value)}`);
   }
 
   const all = readRuns(workspace, verb === 'list' ? filters : {});
@@ -211,7 +270,16 @@ export async function runResultOf(argv, ctx = {}) {
   // side-effect class, which is what makes it testable without a registry.
   const { getCommand: lookup } = await import('./registry.mjs');
   const entry = run.command ? lookup(run.command) : null;
-  const plan = resumePlanFor(run, { sideEffect: entry?.sideEffect ?? 'execute' });
+  // P2-14: the ENTRY's sideEffect is the family maximum, so `config show` — a
+  // read — inherited `config`'s `mutate` and was refused as unsafe. The verb
+  // actually invoked is recorded in the run's argv, and its own declared class
+  // is the honest answer.
+  const invokedVerb = (run.argv || []).find((a) => typeof a === 'string' && !a.startsWith('-'));
+  const verbEntry = entry?.verbs?.find((v) => v.verb === invokedVerb);
+  const sideEffect = verbEntry?.sideEffect
+    ?? (invokedVerb ? entry?.sideEffect : entry?.bareSideEffect ?? entry?.sideEffect)
+    ?? 'execute';
+  const plan = resumePlanFor(run, { sideEffect });
   return { schema: 1, verb, run, status: plan.resumable ? 'ok' : 'blocked', resume: plan };
 }
 
@@ -223,7 +291,7 @@ function renderList(result) {
     console.log(ui.line({
       state: STATUS_STATE[r.status] || 'warn',
       key: r.run,
-      value: `${r.command || '(unknown)'} · ${r.status}`,
+      value: inertLine(`${r.command || '(unknown)'} · ${r.status}`),
       note: [r.startedAt, r.status === 'running' && !r.live ? 'no outcome recorded' : null, r.plan].filter(Boolean).join(' · '),
       keyWidth,
     }));
@@ -234,7 +302,11 @@ function renderList(result) {
 function renderRunHeader(run) {
   const keyWidth = keyWidthFor(['run', 'command', 'started', 'status']);
   console.log(ui.line({ state: STATUS_STATE[run.status] || 'warn', key: 'run', value: run.run, note: run.status, keyWidth }));
-  console.log(ui.line({ key: 'command', value: [run.command, ...(run.argv || [])].filter(Boolean).join(' '), keyWidth }));
+  // P2-20: an argv is caller free-text that was PERSISTED and is now on its way
+  // back to a terminal. Without inerting, a stored OSC sequence would set the
+  // window title or forge output when someone ran `run show`. Everything read
+  // out of the journal passes the same sanitizer `get` uses on file excerpts.
+  console.log(ui.line({ key: 'command', value: inertLine([run.command, ...(run.argv || [])].filter(Boolean).join(' ')), keyWidth }));
   console.log(ui.line({ key: 'started', value: run.startedAt || '(unknown)', note: run.finishedAt ? `finished ${run.finishedAt}` : undefined, keyWidth }));
   if (run.status === 'running') {
     console.log(ui.line({ state: run.live ? 'warn' : 'error', key: 'process', value: run.live ? `alive (pid ${run.pid})` : `gone (pid ${run.pid}) — no outcome was recorded`, keyWidth }));
@@ -254,14 +326,14 @@ export async function cmdRun(argv, ctx = {}) {
     const keyWidth = renderRunHeader(result.run);
     console.log(ui.line({ key: 'events', value: `${result.events.length}`, keyWidth }));
     for (const e of result.events) {
-      console.log(ui.paint('muted', `  ${e.ts}  ${e.type}${e.status ? ` · ${e.status}` : ''}`));
+      console.log(ui.paint('muted', inertLine(`  ${e.ts}  ${e.type}${e.status ? ` · ${e.status}` : ''}`)));
     }
   } else if (result.verb === 'tree') {
     renderRunHeader(result.run);
     console.log(ui.paint('muted', `  caused ${result.caused.length} recorded action(s)`));
     for (const e of result.caused) {
       const what = e.exec ? [e.exec.check, ...(e.exec.argv || [])].filter(Boolean).join(' ') : e.type;
-      console.log(ui.paint('muted', `  └─ ${e.type}  ${what}${e.status ? ` · ${e.status}` : ''}`));
+      console.log(ui.paint('muted', inertLine(`  └─ ${e.type}  ${what}${e.status ? ` · ${e.status}` : ''}`)));
     }
   } else {
     const keyWidth = renderRunHeader(result.run);

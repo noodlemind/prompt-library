@@ -44,7 +44,10 @@ export function writeSession(workspace, session, dryRun) {
 export function ensureHarnessDir(workspace, dryRun) {
   const dir = harnessDir(workspace);
   const gitignore = path.join(dir, '.gitignore');
-  const content = '# Ephemeral per-turn artifacts\nsession.json\ncontext-pack.md\nevents.jsonl\nevidence/\n';
+  // `runs.jsonl` joins the list: it is durable history containing argv, and a
+  // journal committed by accident is both noise in review and a leak of what
+  // someone ran locally (P2-19, Codex phase-4a review).
+  const content = '# Ephemeral per-turn artifacts\nsession.json\ncontext-pack.md\nevents.jsonl\nruns.jsonl\nevidence/\n';
   if (!fs.existsSync(gitignore)) {
     if (!dryRun) {
       fs.mkdirSync(dir, { recursive: true });
@@ -53,7 +56,7 @@ export function ensureHarnessDir(workspace, dryRun) {
   } else if (!dryRun) {
     const current = fs.readFileSync(gitignore, 'utf8');
     const lines = current.split(/\r?\n/);
-    const missing = ['session.json', 'context-pack.md', 'events.jsonl', 'evidence/'].filter((entry) => !lines.includes(entry));
+    const missing = ['session.json', 'context-pack.md', 'events.jsonl', 'runs.jsonl', 'evidence/'].filter((entry) => !lines.includes(entry));
     if (missing.length) {
       const separator = current.length > 0 && !current.endsWith('\n') ? '\n' : '';
       fs.appendFileSync(gitignore, `${separator}${missing.join('\n')}\n`, 'utf8');

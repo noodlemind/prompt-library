@@ -209,6 +209,11 @@ export function writeEvent(workspace, flags, payload) {
       command: 'journal.pruned',
       result: 'pass',
       checks: [],
+      // P2-9: a maintenance action is still an action. Without these, the one
+      // event that explains a gap in the history is the one `run show` cannot
+      // join to the run that caused it.
+      ...(ambient.run ? { run: ambient.run } : {}),
+      ...(ambient.actor ? { actor: ambient.actor } : {}),
       removed,
       reason: `older than ${cutoff}`,
     }),

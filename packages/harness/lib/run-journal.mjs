@@ -27,6 +27,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { ensureHarnessDir } from './session.mjs';
+import { assertNoSymlinkAncestors } from './fs-safe.mjs';
 import { createRedactor } from './redact.mjs';
 import { pruneJournalFile } from './retention.mjs';
 import { retentionDaysFor } from './retention-config.mjs';
@@ -64,17 +65,26 @@ export function newRunId() {
   return `${Date.now().toString(36)}-${crypto.randomBytes(5).toString('hex')}`;
 }
 
-function append(workspace, record) {
+function append(workspace, record, flags = {}) {
   ensureHarnessDir(workspace, false);
+  // P1-5 (Codex phase-4a review): `.harness` replaced by a symlink redirected
+  // every journal write outside the workspace — a read-class command could be
+  // made to append attacker-chosen bytes to an attacker-chosen path. The repo
+  // already has the primitive for this; use it rather than trusting the path's
+  // spelling.
+  if (!assertNoSymlinkAncestors(path.resolve(workspace), path.join('.harness', RUNS_FILE))) {
+    return null;
+  }
   // Redacted before it lands, on the same terms as every other persisted
   // surface: a run record carries the argv, which is caller free-text.
   const safe = createRedactor().redactValue(record);
   const file = runsPath(workspace);
+  ensureNewlineTerminated(file);
   fs.appendFileSync(file, `${JSON.stringify(safe)}\n`, 'utf8');
   // Bounded by the same policy the event log uses, and it says so when it
   // prunes — see lib/retention.mjs on why that is not a breach of append-only.
   pruneJournalFile(file, {
-    retentionDays: retentionDaysFor(workspace),
+    retentionDays: retentionDaysFor(workspace, flags),
     markerFor: ({ removed, cutoff }) => ({
       schema: RUN_SCHEMA,
       type: 'journal.pruned',
@@ -90,7 +100,7 @@ function append(workspace, record) {
  * Open a run. Returns the record actually written, so a caller never has to
  * guess what was persisted after redaction.
  */
-export function startRun(workspace, { run, command, argv = [], plan = null, host = null, actor = null, pid = process.pid, harnessVersion = null, ts = new Date().toISOString() }) {
+export function startRun(workspace, { run, command, argv = [], plan = null, host = null, actor = null, pid = process.pid, harnessVersion = null, ts = new Date().toISOString(), flags = {} }) {
   return append(workspace, {
     schema: RUN_SCHEMA,
     type: 'run.start',
@@ -102,7 +112,7 @@ export function startRun(workspace, { run, command, argv = [], plan = null, host
     host,
     actor,
     execution: { pid, harnessVersion },
-  });
+  }, flags);
 }
 
 /**
@@ -112,7 +122,7 @@ export function startRun(workspace, { run, command, argv = [], plan = null, host
  * that no filter matches and no reader can classify, and it would be persisted
  * forever in an append-only file.
  */
-export function finishRun(workspace, { run, status, exitCode = null, durationMs = null, plan = null, ts = new Date().toISOString() }) {
+export function finishRun(workspace, { run, status, exitCode = null, durationMs = null, plan = null, ts = new Date().toISOString(), flags = {} }) {
   if (!TERMINAL_RUN_STATUSES.includes(status)) {
     throw new TypeError(`finishRun: status must be one of ${TERMINAL_RUN_STATUSES.join(', ')} (got ${JSON.stringify(status)})`);
   }
@@ -125,7 +135,26 @@ export function finishRun(workspace, { run, status, exitCode = null, durationMs 
     exitCode,
     durationMs,
     ...(plan ? { plan } : {}),
-  });
+  }, flags);
+}
+
+/**
+ * P2-6: a torn final line — a crash mid-append — would otherwise have the next
+ * valid record concatenated onto it, losing BOTH. Terminate the file first so
+ * recovery costs one damaged record rather than two.
+ */
+function ensureNewlineTerminated(file) {
+  try {
+    const size = fs.statSync(file).size;
+    if (size === 0) return;
+    const fd = fs.openSync(file, 'r');
+    const tail = Buffer.alloc(1);
+    fs.readSync(fd, tail, 0, 1, size - 1);
+    fs.closeSync(fd);
+    if (tail.toString() !== '\n') fs.appendFileSync(file, '\n', 'utf8');
+  } catch {
+    /* nothing to terminate */
+  }
 }
 
 /** Note that entries were removed, and why. See the module doc on pruning. */
@@ -179,6 +208,10 @@ export function foldRuns(records, { isAlive = pidAlive } = {}) {
     if (!record?.run) continue;
     if (record.type === 'run.start') {
       const existing = runs.get(record.run);
+      // P2-17: the comment below has always said the first start is the truth,
+      // and the spread underneath quietly let a second one replace command,
+      // argv, actor, host, pid and start time. Now it says no.
+      if (existing?.startedAt) continue;
       runs.set(record.run, {
         run: record.run,
         command: record.command,
@@ -189,33 +222,43 @@ export function foldRuns(records, { isAlive = pidAlive } = {}) {
         pid: record.execution?.pid ?? null,
         harnessVersion: record.execution?.harnessVersion ?? null,
         startedAt: record.ts,
-        // A duplicate start for the same id would be a bug, but the journal is
-        // append-only, so the first one is the truth and the later one is not
-        // allowed to overwrite it.
-        ...(existing ? { status: existing.status, exitCode: existing.exitCode } : {}),
         status: existing?.status ?? 'running',
         exitCode: existing?.exitCode ?? null,
         durationMs: existing?.durationMs ?? null,
         finishedAt: existing?.finishedAt ?? null,
+        terminal: existing?.terminal ?? false,
       });
     } else if (record.type === 'run.result') {
       const existing = runs.get(record.run) || { run: record.run, command: null, argv: [], plan: null, host: null, actor: null, pid: null, startedAt: null };
-      // First terminal record wins: a second one cannot rewrite an outcome.
-      if (existing.finishedAt) continue;
+      // First terminal record wins. Tracked as an explicit flag rather than
+      // inferred from `finishedAt` being truthy — a result whose `ts` was null
+      // left the run looking un-terminated and let the NEXT result revise the
+      // outcome (P2-16).
+      if (existing.terminal) continue;
       runs.set(record.run, {
         ...existing,
         status: record.status,
         exitCode: record.exitCode ?? null,
         durationMs: record.durationMs ?? null,
-        finishedAt: record.ts,
+        finishedAt: record.ts ?? null,
+        terminal: true,
         plan: record.plan ?? existing.plan ?? null,
       });
     }
   }
-  return [...runs.values()].map((r) => ({
-    ...r,
-    live: r.status === 'running' ? isAlive(r.pid) : false,
-  }));
+  return [...runs.values()].map((r) => {
+    // P2-15: a hand-edited or corrupted journal could carry a status outside
+    // the fixed vocabulary, and `resume` would then treat it as a terminal
+    // read-class run and call it resumable. An unrecognized status is reported
+    // as such rather than believed.
+    const known = RUN_STATUSES.includes(r.status);
+    return {
+      ...r,
+      status: known ? r.status : 'running',
+      ...(known ? {} : { corrupt: `unrecognized status ${JSON.stringify(r.status)}` }),
+      live: (known ? r.status : 'running') === 'running' ? isAlive(r.pid) : false,
+    };
+  });
 }
 
 const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
@@ -229,10 +272,19 @@ const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
  */
 export function queryRuns(runs, { status = null, command = null, host = null, plan = null, since = null, until = null } = {}) {
   const lower = (v) => (typeof v === 'string' ? v.toLowerCase() : v);
+  // Compared as INSTANTS. String comparison excluded any offset timestamp that
+  // was chronologically inside a UTC bound, and accepted `--since 2026-99-99`
+  // as a filter that silently matched nothing (P2-13).
   const bound = (value, endOfDay) => {
     if (!value) return null;
-    if (DATE_ONLY.test(value)) return endOfDay ? `${value}T23:59:59.999Z` : `${value}T00:00:00.000Z`;
-    return value;
+    const text = DATE_ONLY.test(value)
+      ? `${value}T${endOfDay ? '23:59:59.999' : '00:00:00.000'}Z`
+      : value;
+    const at = Date.parse(text);
+    if (!Number.isFinite(at)) {
+      throw Object.assign(new Error(`not a date: ${JSON.stringify(value)}`), { code: 'E_USAGE', exit: 2 });
+    }
+    return at;
   };
   const from = bound(since, false);
   const to = bound(until, true);
@@ -242,9 +294,9 @@ export function queryRuns(runs, { status = null, command = null, host = null, pl
     if (command && lower(run.command) !== lower(command)) return false;
     if (host && lower(run.host) !== lower(host)) return false;
     if (plan && run.plan !== plan) return false;
-    const at = run.startedAt || run.finishedAt;
-    if (from && (!at || at < from)) return false;
-    if (to && (!at || at > to)) return false;
+    const at = Date.parse(run.startedAt || run.finishedAt || '');
+    if (from !== null && (!Number.isFinite(at) || at < from)) return false;
+    if (to !== null && (!Number.isFinite(at) || at > to)) return false;
     return true;
   });
 }

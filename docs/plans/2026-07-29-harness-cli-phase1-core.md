@@ -261,20 +261,20 @@ The Session Ledger direction — a scrolling transcript in the terminal's MAIN b
 
 Source: `docs/architecture/harness-cli-workbench-delivery.md` §Phase 5.
 
-- [ ] **P5AC1** Bundles ride the existing hydration pipeline; no parallel install path exists.
-- [ ] **P5AC2** Resource precedence is deterministic and inspectable, with provenance shown per resource.
-- [ ] **P5AC3** Distributed bundles require integrity pinning and explicit trust before loading.
-- [ ] **P5AC4** Plugins run out-of-process over versioned JSON/JSONL, with capabilities approved explicitly.
-- [ ] **P5AC5** Plugins never mutate policy, the run journal, evidence, or the learnings store; contributed knowledge sources flow through the consolidation loop.
-- [ ] **P5AC6** A crashing plugin cannot take down the host process.
+- [x] **P5AC1** Bundles ride the existing hydration pipeline; no parallel install path exists.
+- [x] **P5AC2** Resource precedence is deterministic and inspectable, with provenance shown per resource.
+- [x] **P5AC3** Distributed bundles require integrity pinning and explicit trust before loading.
+- [x] **P5AC4** Plugins run out-of-process over versioned JSON/JSONL, with capabilities approved explicitly.
+- [x] **P5AC5** Plugins never mutate policy, the run journal, evidence, or the learnings store; contributed knowledge sources flow through the consolidation loop.
+- [x] **P5AC6** A crashing plugin cannot take down the host process.
 
 ### Phase 5 workstreams
 
-- [ ] **P5.1** Resource manifests and bundles on the existing hydration machinery, with provenance and deterministic precedence (P5AC1, P5AC2).
-- [ ] **P5.2** Integrity pinning and trust for distributed bundles (P5AC3) — extends Phase 3's trust rather than adding a second model.
-- [ ] **P5.3** The out-of-process plugin protocol: version negotiation, declared capabilities, timeout and cancellation, crash isolation (P5AC4, P5AC6).
-- [ ] **P5.4** The write boundary: plugins never touch policy, journal, evidence, or the learnings store (P5AC5).
-- [ ] **P5.5** A fixture plugin exercising all four contribution types end to end.
+- [x] **P5.1** Resource manifests and bundles on the existing hydration machinery, with provenance and deterministic precedence (P5AC1, P5AC2).
+- [x] **P5.2** Integrity pinning and trust for distributed bundles (P5AC3) — extends Phase 3's trust rather than adding a second model.
+- [x] **P5.3** The out-of-process plugin protocol: version negotiation, declared capabilities, timeout and cancellation, crash isolation (P5AC4, P5AC6).
+- [x] **P5.4** The write boundary: plugins never touch policy, journal, evidence, or the learnings store (P5AC5).
+- [x] **P5.5** A fixture plugin exercising all four contribution types end to end.
 
 ## Primitive Governance
 
@@ -349,7 +349,13 @@ Each lands as one reviewable commit with its own review pass, per the delivery d
 - `packages/harness/lib/exec-policy.mjs`
 - `packages/harness/lib/gate.mjs`
 - `packages/harness/lib/policy.mjs`
+- `packages/harness/lib/plugin-host.mjs`
 - `packages/harness/lib/redact.mjs`
+- `packages/harness/lib/resources.mjs`
+- `packages/harness/lib/resources-cmd.mjs`
+- `packages/harness/lib/retention.mjs`
+- `packages/harness/lib/retention-config.mjs`
+- `packages/harness/lib/run-context.mjs`
 - `packages/harness/lib/registry.mjs`
 - `packages/harness/lib/retention.mjs`
 - `packages/harness/lib/retention-config.mjs`
@@ -357,6 +363,7 @@ Each lands as one reviewable commit with its own review pass, per the delivery d
 - `packages/harness/lib/run-context.mjs`
 - `packages/harness/lib/run-journal.mjs`
 - `packages/harness/lib/runner.mjs`
+- `packages/harness/lib/session.mjs`
 - `packages/harness/lib/style.mjs`
 - `packages/harness/lib/trust.mjs`
 - `packages/harness/lib/tui-cmd.mjs`

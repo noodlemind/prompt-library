@@ -383,6 +383,9 @@ export async function execResultOf(argv, ctx = {}) {
 export async function cmdExec(argv, ctx = {}) {
   const result = await execute(argv, ctx, { shell: false });
   render(result, parseFlags(splitAtBoundary(argv).harnessArgs));
+  // The child's exit code cannot be reverse-mapped to a harness status — see
+  // `exitFor` — so the status is reported rather than inferred.
+  ctx.reportStatus?.(result.status === 'ok' ? 'ok' : result.status);
   return exitFor(result);
 }
 
@@ -393,5 +396,6 @@ export async function bashResultOf(argv, ctx = {}) {
 export async function cmdBash(argv, ctx = {}) {
   const result = await execute(argv, ctx, { shell: true });
   render(result, parseFlags(splitAtBoundary(argv).harnessArgs));
+  ctx.reportStatus?.(result.status === 'ok' ? 'ok' : result.status);
   return exitFor(result);
 }

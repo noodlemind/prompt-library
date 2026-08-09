@@ -50,7 +50,7 @@ const out = createStyle({ argv: args });
 // that doesn't resolve), with no test failure to catch the drift.
 export const HELP_COMMAND_ORDER = [
   'install', 'upgrade', 'doctor', 'status', 'uninstall',
-  'init-repo', 'index', 'plan-new', 'config', 'trust',
+  'init-repo', 'index', 'plan-new', 'config', 'trust', 'resources',
   'orient', 'gate', 'verify', 'checks', 'exec', 'bash', 'validate-plan', 'compound', 'recall', 'get', 'search', 'lookup', 'tree', 'run', 'tui', 'events', 'report',
   'knowledge', 'consolidate', 'remember', 'learning', 'learnings', 'eval-knowledge',
   'resolve',
@@ -64,7 +64,7 @@ const GLOBAL_OPTIONS = [
   ['--no-color', 'plain ascii output (also honors NO_COLOR; auto when piped)'],
   ['--workspace <path>', 'repo root (default: cwd)'],
   ['--copilot-home <path>', 'override ~/.copilot'],
-  ['--no-events', 'do not write .harness/events.jsonl'],
+  ['--no-events', 'do not write any local record: .harness/events.jsonl or runs.jsonl'],
 ];
 
 /** `describeCommand` for every name in HELP_COMMAND_ORDER, in that order,
@@ -236,8 +236,16 @@ function createProcessEventRegistry(rawArgs, run) {
 // a command to the work it caused.
 //
 // Journal writes honor the same `--no-events`/`--dry-run` suppression as every
-// other record, through `shouldSkipRunJournal`. A dry run performs nothing, so
-// journaling it would record work that did not happen.
+// other record. A dry run performs nothing, so journaling it would record work
+// that did not happen.
+//
+// P2-18 (Codex phase-4a review) observed that this makes `--no-events` broader
+// than its help text claimed, and that it collides with "one run per accepted
+// invocation". Ruled in favor of the flag: someone passing `--no-events` is
+// asking the harness not to write a local record of what they ran, and honoring
+// that for the event log while persisting their argv to a durable journal would
+// be the more surprising behavior of the two. The flag's description now says
+// what it does instead of naming one file.
 function shouldSkipRunJournal(flags) {
   return Boolean(flags.dryRun || flags.noEvents || process.env.HARNESS_NO_EVENTS === '1');
 }
@@ -251,6 +259,20 @@ function shouldSkipRunJournal(flags) {
  * `exec`'s child exiting 8 from a harness timeout — the same ambiguity recorded
  * there, resolved the same way rather than guessed at differently here.
  */
+/**
+ * Map the UNIFIED status a command reported onto the run vocabulary. This is
+ * the preferred path: the command knows what happened, and the exit code alone
+ * cannot be reverse-mapped (a child exiting 8 through `exec` is not a harness
+ * timeout).
+ */
+function runStatusFromReported(status) {
+  if (status === 'ok') return 'succeeded';
+  if (status === 'failed') return 'failed';
+  if (status === 'cancelled') return 'cancelled';
+  if (status === 'timed-out') return 'timed-out';
+  return null;
+}
+
 function runStatusForExit(code) {
   if (code === EXIT.ok) return 'succeeded';
   if (code === EXIT.cancelled) return 'cancelled';
@@ -277,6 +299,8 @@ async function main() {
   // Only a run that actually OPENED gets a terminal record; a refused
   // invocation has neither.
   let runOpened = false;
+  // What the command said happened, if it said. Preferred over the exit map.
+  let reportedStatus = null;
   try {
     // `--version` is universal CLI convention and was the one place the harness
     // did not honor it: the version was reachable only through `harness status`,
@@ -347,10 +371,16 @@ async function main() {
           // received — a journal that records a command the harness did not run
           // is the same class of lie as an audit that names the wrong argv.
           argv: laneArgs,
-          plan: runFlags.plan || null,
-          host: runFlags.host || process.env.HARNESS_HOST || 'harness-cli',
+          // P2-11: `--plan` and `--host` are FILTERS on `run list`, and reusing
+          // them as this run's own attribution made `run list --host vscode`
+          // record itself as having come from vscode. Identity comes from the
+          // environment, never from a value the caller passed to query with.
+          plan: command === 'run' ? null : (runFlags.plan || null),
+          host: process.env.HARNESS_HOST || 'harness-cli',
           actor: detectRunActor(),
           harnessVersion: readPkgVersion(),
+          // So run retention resolves the same configuration event retention does.
+          flags: runFlags,
         });
       };
       // P1.6 (carry-list, AC7 widening): the event registry now attaches for
@@ -373,7 +403,16 @@ async function main() {
         process.once('SIGINT', () => controller.abort());
         signal = controller.signal;
       }
-      code = await dispatchRegistered([command, ...laneArgs], { style: out, output, events, signal, onRunStart: openRun });
+      code = await dispatchRegistered([command, ...laneArgs], {
+        style: out,
+        output,
+        events,
+        signal,
+        onRunStart: openRun,
+        // The command's own account of what happened, used in preference to
+        // inferring it from the exit code — see runStatusFromReported.
+        reportStatus: (status) => { reportedStatus = status; },
+      });
     } else {
       emitError({
         code: 'E_USAGE',
@@ -407,10 +446,11 @@ async function main() {
     try {
       finishRun(runWorkspacePath, {
         run: runId,
-        status: runStatusForExit(code),
+        status: runStatusFromReported(reportedStatus) ?? runStatusForExit(code),
         exitCode: code,
         durationMs: runStartedAt === null ? null : Date.now() - runStartedAt,
-        plan: runJournalFlags?.plan || null,
+        plan: command === 'run' ? null : (runJournalFlags?.plan || null),
+        flags: runJournalFlags || {},
       });
     } catch {
       /* the command's outcome matters more than the bookkeeping */
