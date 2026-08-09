@@ -306,15 +306,15 @@ The harness is four fifths of an agent — it orients, retrieves, executes under
 
 **Two collisions with what this PR already built, recorded because both block implementation:**
 
-1. **`harness run` is taken.** Phase 4a registered it as the run-journal query surface (`run list|show|tree|resume`). The spec's Impacted Files says "register `run` with strict flags" for the agent loop; it was written against a tree where Phase 4a had not landed. One of the two has to move, and renaming the journal surface after it has shipped tests and a palette contract is the more expensive direction. **Needs a naming decision before P5.8 starts.**
+1. **`harness run` is taken** — settled 2026-08-09. Phase 4a registered it as the run-journal query surface (`run list|show|tree|resume`); the spec assumed it for the loop, having been written against a tree where Phase 4a had not landed. **The loop is `harness agent`**, on the user's reasoning that the engineer is internally the default agent, so the command names the actor rather than the activity. Nothing shipped moves: `run` keeps meaning run history, `agent` is the agent, and the two read honestly side by side.
 2. **A bundle can declare `plugin:` in its manifest** — `parseManifest` carries the field today, and nothing reads it. The moment a start path exists, that field becomes a plausible route from a bundle to `startPlugin`, which is exactly the door the reversal promises to keep shut. First-party-only must be **enforced** — a test asserting the start path has one caller and it is not the bundle path — not merely intended.
 
 **Deliberately NOT absorbed into this PR.** The spec's later phases are evaluation work outside the harness package and are gated on their own review: the Harbor `BaseAgent` adapter, the pre-registered measurement protocol, and the first Terminal-Bench run. They stay in the agent-loop plan. Its Non-Goals list — no budget ledger, no credential custodian, no privileged sandbox topology, no `eval-run` schemas — is inherited verbatim; the prior attempt reached 223 files before it was deleted (see the eval-scope lesson).
 
 ### Acceptance criteria — the absorbed provider seam and turn loop
 
-- [ ] **P5AC7** A first-party provider adapter runs behind `plugin-host.mjs`, receives its credential through the deny-all child environment, and returns a completion. Core imports no model SDK and reads no provider key — asserted by a source-level test in the style of the existing `FORBIDDEN_WRITE_SURFACES` check. The start path is reachable from core only: not from a bundle, not from an operator command.
-- [ ] **P5AC8** The protocol carries a model call: a streamed multi-part response type alongside `result`, a per-request timeout a caller can raise above the 30 s default, and a line bound a long completion cannot breach. Bounds stay enforced; only the defaults move.
+- [x] **P5AC7** A first-party provider adapter runs behind `plugin-host.mjs`, receives its credential through the deny-all child environment, and returns a completion. Core imports no model SDK and reads no provider key — asserted by a source-level test in the style of the existing `FORBIDDEN_WRITE_SURFACES` check. The start path is reachable from core only: not from a bundle, not from an operator command.
+- [x] **P5AC8** The protocol carries a model call: a streamed multi-part response type alongside `result`, a per-request timeout a caller can raise above the 30 s default, and a line bound a long completion cannot breach. Bounds stay enforced; only the defaults move.
 - [ ] **P5AC9** The turn loop completes a task end to end in a bare container — orient, model call, tool calls through `exec`/`bash` under `controls`, a journal record per turn, terminate on a stated stop condition — with `engineer` as the default persona and no editor host present.
 - [ ] **P5AC10** A loop run is resumable and inspectable through the existing `run list/show/resume` surface, and every turn carries its actor and run id.
 
@@ -322,8 +322,8 @@ The harness is four fifths of an agent — it orients, retrieves, executes under
 
 - [x] **P5.1** Resource manifests and bundles on the existing hydration machinery, with provenance and deterministic precedence (P5AC1, P5AC2).
 - [x] **P5.6** Locally-added primitives: discovery, validation, explicit registration, and the doctor fix — the unmanaged route into `~/.copilot`.
-- [ ] **P5.7** Provider seam (P5AC7, P5AC8): first-party start path, streamed response type, caller-settable timeout and completion-safe line bound, and the source-level tests that keep both the no-model-SDK invariant and the first-party-only boundary honest.
-- [ ] **P5.8** The turn loop (P5AC9, P5AC10): orient → model call → governed act → journal, with a benchmark profile that keeps orientation, retrieval, governed exec and journaling and drops the lifecycle steps whose preconditions a bare container lacks. **Blocked on the `run` naming decision above.**
+- [x] **P5.7** Provider seam (P5AC7, P5AC8): first-party start path, streamed response type, caller-settable timeout and completion-safe line bound, and the source-level tests that keep both the no-model-SDK invariant and the first-party-only boundary honest.
+- [ ] **P5.8** The turn loop as **`harness agent`** (P5AC9, P5AC10): orient → model call → governed act → journal, with a benchmark profile that keeps orientation, retrieval, governed exec and journaling and drops the lifecycle steps whose preconditions a bare container lacks.
 - [x] **P5.2** Integrity pinning and trust for distributed bundles (P5AC3) — extends Phase 3's trust rather than adding a second model.
 - [x] **P5.3** The out-of-process plugin protocol: version negotiation, declared capabilities, timeout and cancellation, crash isolation (P5AC4, P5AC6).
 - [x] **P5.4** The write boundary: plugins never touch policy, journal, evidence, or the learnings store (P5AC5).
@@ -406,6 +406,8 @@ Each lands as one reviewable commit with its own review pass, per the delivery d
 - `packages/harness/lib/policy.mjs`
 - `packages/harness/lib/local-primitives.mjs`
 - `packages/harness/lib/plugin-host.mjs`
+- `packages/harness/lib/provider.mjs`
+- `packages/harness/lib/providers/`
 - `packages/harness/lib/redact.mjs`
 - `packages/harness/lib/resources.mjs`
 - `packages/harness/lib/resources-cmd.mjs`

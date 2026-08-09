@@ -30,7 +30,16 @@ export const PROTOCOL_VERSION = 1;
  * because a protocol that tries to be helpful about unrecognized messages is
  * one whose surface nobody can state. */
 export const HOST_MESSAGES = Object.freeze(['hello', 'request', 'shutdown']);
-export const PLUGIN_MESSAGES = Object.freeze(['hello', 'result', 'error', 'log']);
+export const PLUGIN_MESSAGES = Object.freeze([
+  'hello', 'result', 'error', 'log',
+  // A multi-part response: zero or more `chunk`s followed by the `result` that
+  // closes the request. Added for the provider seam, where a completion arrives
+  // incrementally — but the loop deliberately consumes the non-streaming path,
+  // so nothing is blocked on renderer work. A `chunk` never settles a request;
+  // only `result` and `error` do, which keeps the one-response-per-request
+  // contract intact while allowing progress to be observed.
+  'chunk',
+]);
 
 export const DEFAULT_TIMEOUT_MS = 30_000;
 
@@ -45,6 +54,16 @@ export const DEFAULT_TIMEOUT_MS = 30_000;
  */
 export const MAX_LINE_BYTES = 1024 * 1024;
 export const MAX_LOG_ENTRIES = 500;
+
+/**
+ * The bound a model completion needs.
+ *
+ * A long completion is a legitimately large single line, and the 1 MiB default
+ * exists to stop a plugin flooding the host — not to cap honest output. The
+ * caller raises the ceiling for a channel it expects large messages on; it does
+ * not remove it, because "no limit" is how the host dies on a plugin's behalf.
+ */
+export const MAX_COMPLETION_LINE_BYTES = 16 * 1024 * 1024;
 
 function nowMs() {
   return Date.now();
@@ -68,6 +87,11 @@ export function startPlugin({
   timeoutMs = DEFAULT_TIMEOUT_MS,
   spawnFn = spawn,
   env = {},
+  // Caller-settable, because a model call is slower than the 30 s a local tool
+  // needs and a provider that has not answered in 30 s is usually still
+  // thinking. Bounded either way — see MAX_COMPLETION_LINE_BYTES.
+  maxLineBytes = MAX_LINE_BYTES,
+  onChunk = null,
 } = {}) {
   const capabilities = requested.filter((c) => granted.includes(c));
   const refused = requested.filter((c) => !granted.includes(c));
@@ -110,7 +134,7 @@ export function startPlugin({
     // A line that will not end is not a message. Drop the buffer rather than
     // grow it, and say so — the alternative is the host dying on behalf of a
     // plugin it is supposed to be insulated from.
-    if (buffer.length > MAX_LINE_BYTES && !buffer.includes('\n')) {
+    if (buffer.length > maxLineBytes && !buffer.includes('\n')) {
       pushLog({ level: 'warn', text: `discarded ${buffer.length} bytes of unterminated output from plugin` });
       buffer = '';
       return;
@@ -132,6 +156,11 @@ export function startPlugin({
       }
       if (!PLUGIN_MESSAGES.includes(message?.type)) {
         pushLog({ level: 'warn', text: `unknown message type from plugin: ${String(message?.type).slice(0, 40)}` });
+        continue;
+      }
+      if (message.type === 'chunk') {
+        // Progress, not an answer: reported and never used to settle.
+        onChunk?.({ id: message.id, text: String(message.text ?? '') });
         continue;
       }
       if (message.type === 'log') {

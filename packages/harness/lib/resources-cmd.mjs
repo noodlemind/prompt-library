@@ -15,10 +15,14 @@
  * the host would never load it is the failure mode with the longest feedback
  * loop in the system.
  *
- * The bundle/manifest machinery in `lib/resources.mjs` and the plugin protocol
- * in `lib/plugin-host.mjs` remain as reviewed but UNWIRED groundwork: external
- * distribution is not a workflow this project wants today, and neither module
- * has a production caller. That is recorded rather than implied — see the plan.
+ * Bundles are the managed route and they are wired: `bundle-sync` places an
+ * approved bundle's contributions on every install and upgrade, and withdraws
+ * them when it is disabled or removed.
+ *
+ * The plugin protocol is NOT reachable from here. A manifest may declare a
+ * plugin entry point and nothing reads it; the only sanctioned start path is
+ * the first-party provider seam, and `test/provider-seam.test.mjs` asserts this
+ * file cannot reach it.
  */
 import fs from 'node:fs';
 import path from 'node:path';
