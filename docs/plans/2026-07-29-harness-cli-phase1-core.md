@@ -494,6 +494,22 @@ Final whole-branch review (2026-08-06, architecture + security + patterns lenses
 
 ## Activity
 
+### 2026-08-09 — The verify gate cannot tell a met criterion from a green test suite
+
+Found while confirming that Phase 4b's unchecked criteria would block the run. They do not. `harness verify` reports **P4bAC13, P4bAC14 and P4bAC15 as `passed`** while all three are `- [ ]` in this document.
+
+The mechanism, at `lib/verify.mjs:648`: `criteria-evidence` maps each criterion id to its named checks and asserts those checks passed. It never reads the criterion's checkbox. Every criterion in this plan maps to `harness-tests`, so **one green suite is reported as sixteen satisfied criteria** — the check answers "did the named check pass?" and presents the answer as "is this criterion met?".
+
+This is not a side issue; it is the mechanism behind the phase-4b reopening. Nine criteria "passed" for a TUI that did not exist because nine of them meant the same single fact: the suite is green. A criterion that maps to a suite-wide check carries no information about itself, and the gate cannot distinguish "this criterion is satisfied" from "the tests compile".
+
+**Two things would fix it, and they are separable:**
+
+1. **Read the checkbox.** An unchecked criterion is not verified, whatever its named check did. Cheap, and it would have made the reopening visible the moment the criteria were written down.
+2. **Reject a criterion whose only evidence is a suite-wide check.** `plan-readiness` already asserts "every acceptance criterion maps to a required named check" — a stronger form would require the mapping to be *discriminating*, so a criterion cannot point at a check that passes for reasons unrelated to it. Harder, and the more valuable of the two.
+
+**Not fixed here, deliberately.** Both change the gate every plan in this repository is measured by, at the end of a long session, with no review. The first would also fail this PR's own verify, which is arguably correct and is the user's call rather than mine. Recorded so the next person meets a written finding rather than rediscovering it from a symptom.
+
+
 ### 2026-08-09 — Phase 4b verified on a real pty, and split
 
 `harness tui` had never run against a genuine TTY: the development sandbox refuses to allocate a pty, and every test drove the loop through injected streams. It was installed in a **Daytona Linux sandbox**, driven under `script(1)`, and the captured bytes replayed through **pyte** — a third-party VT emulator — before rendering. The indirection is the point: the defect that reopened this phase was a box drawn inside a box, produced entirely by cursor-movement escapes, and a picture drawn by the code that emits those escapes could not have shown it.
