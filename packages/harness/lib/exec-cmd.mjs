@@ -24,6 +24,7 @@ import { createCheckOutputStreamer } from './verify.mjs';
 import { buildChildEnv, resolveExecCwd, resolveTimeoutSeconds } from './exec-policy.mjs';
 import { resolveConfig } from './config.mjs';
 import { resolveCopilotHome } from './paths.mjs';
+import { isProjectTrusted } from './trust.mjs';
 
 const ui = createStyle({ argv: process.argv.slice(2) });
 
@@ -74,14 +75,15 @@ function singleFlag(argv, name) {
   return next === undefined || next.startsWith('--') ? '' : next;
 }
 
-function plan(argv, { shell, projectTrusted = true }) {
+function plan(argv, { shell }) {
   const { harnessArgs, childArgs } = splitAtBoundary(argv);
   const flags = parseFlags(harnessArgs);
   const workspace = path.resolve(flags.workspace);
+  const copilotHome = resolveCopilotHome(flags.copilotHome);
   const config = resolveConfig({
-    copilotHome: resolveCopilotHome(flags.copilotHome),
+    copilotHome,
     workspace,
-    projectTrusted,
+    projectTrusted: isProjectTrusted({ workspace, copilotHome }),
   });
 
   // The P3AC2 policy gate: `bash` is allowed or denied separately from `exec`.
@@ -166,7 +168,7 @@ function emitAudit(ctx, mode, p, result) {
 }
 
 async function execute(argv, ctx, { shell }) {
-  const p = plan(argv, { shell, projectTrusted: ctx?.projectTrusted !== false });
+  const p = plan(argv, { shell });
   const { redactText } = createRedactor();
   const rows = [];
 

@@ -7,6 +7,7 @@ import { extractAcceptanceCriteria, validatePlanSchema } from './plan-schema.mjs
 import { validatePlanScope } from './plan-scope.mjs';
 import { createEvidenceBinding, writeEvidence } from './evidence.mjs';
 import { checkSeverityFor, enforcementExitCode, loadPolicy } from './policy.mjs';
+import { resolveCopilotHome } from './paths.mjs';
 import { verifyPrimitiveGovernance } from './primitive-governance.mjs';
 import { validatePlanReadiness } from './plan-readiness.mjs';
 import { STRUCTURAL_CHECK_ID, runStructuralExpectations } from './structural/expectations.mjs';
@@ -470,7 +471,7 @@ function currentPhaseTasks(taskBody, phase) {
 // `compound`/completion gate should ever bind to. Every other caller keeps
 // writing evidence exactly as before.
 function finalize(workspace, flags, partial, { skipEvidence = false } = {}) {
-  const policy = loadPolicy(workspace, flags.enforcement);
+  const policy = loadPolicy(workspace, flags.enforcement, { copilotHome: resolveCopilotHome(flags.copilotHome) });
   const severities = applyCheckSeverities(partial.checks, policy, partial.planGatedChecks || new Set());
   // The single boundary every consumer reads from: evidence, `--json`, the
   // event log, and the ledger all serialize this array.
@@ -486,6 +487,11 @@ function finalize(workspace, flags, partial, { skipEvidence = false } = {}) {
     openHardGaps: partial.openHardGaps || [],
     requiredReviews: partial.requiredReviews || [],
     enforcement: policy.enforcement,
+    // P3AC6: a run whose enforcement mode came from the built-in default
+    // because an unapproved project's policy.yaml was skipped must say so.
+    // Otherwise the operator sees `enforce` where their file says `warn` and
+    // has nothing to connect it to.
+    projectPolicyIgnored: policy.projectPolicyIgnored,
     exemptions: policy.exemptions,
     waivers: policy.waivers,
     binding: partial.binding || null,

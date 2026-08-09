@@ -677,9 +677,10 @@ export async function cmdGate(argv) {
   const workspace = path.resolve(flags.workspace);
   const query = parseQueryFromArgv(argv, flags);
   const result = runGate({ workspace, flags, query });
-  const policy = loadPolicy(workspace, flags.enforcement);
+  const policy = loadPolicy(workspace, flags.enforcement, { copilotHome: resolveCopilotHome(flags.copilotHome) });
   const policyExitCode = policy.enforcement === 'enforce' ? result.exitCode : 0;
   result.enforcement = policy.enforcement;
+  result.projectPolicyIgnored = policy.projectPolicyIgnored;
   result.policyExitCode = policyExitCode;
   const previous = readSession(workspace) || {};
   writeSession(
@@ -857,6 +858,20 @@ export async function cmdVerify(argv, ctx = {}) {
         note: result.evidencePath,
       })
     );
+    // P3AC6: the enforcement mode came from the built-in default because this
+    // project is not approved, not because anyone chose it. Printed at the same
+    // altitude as the refused-downgrade row below, and for the same reason — a
+    // run behaving differently from the file on disk has to say why.
+    if (result.projectPolicyIgnored) {
+      console.log(
+        ui.line({
+          state: 'warn',
+          key: 'policy',
+          value: 'project policy.yaml ignored — this project is not trusted',
+          note: `running as ${result.enforcement} · harness trust approve`,
+        })
+      );
+    }
     // A policy that tried to mark a plan-required check advisory disagrees
     // with the plan it is verifying; the run ignores it, and says so.
     for (const refused of result.refusedSeverityDowngrades || []) {
@@ -1035,9 +1050,10 @@ export async function cmdValidatePlan(argv) {
   const flags = parseFlags(argv);
   const workspace = path.resolve(flags.workspace);
   const result = runValidatePlan({ workspace, flags, planPath: flags.plan });
-  const policy = loadPolicy(workspace, flags.enforcement);
+  const policy = loadPolicy(workspace, flags.enforcement, { copilotHome: resolveCopilotHome(flags.copilotHome) });
   const policyExitCode = policy.enforcement === 'enforce' ? result.exitCode : 0;
   result.enforcement = policy.enforcement;
+  result.projectPolicyIgnored = policy.projectPolicyIgnored;
   result.policyExitCode = policyExitCode;
   writeEvent(workspace, flags, {
     type: 'validate_plan',

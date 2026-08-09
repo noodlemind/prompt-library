@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import YAML from 'yaml';
+import { isProjectTrusted } from './trust.mjs';
 
 const MODES = new Set(['observe', 'warn', 'enforce']);
 
@@ -74,35 +75,71 @@ function parseCheckSeverities(policy, policyPath) {
   return severities;
 }
 
-export function loadPolicy(workspace, override = null) {
+/**
+ * P3AC6 — trust gates project policy loading.
+ *
+ * A project's `policy.yaml` can only ever make verification LOOSER: it
+ * downgrades check severity and picks the enforcement mode. That is authority,
+ * and it is authority carried by a file that arrives with a clone. An untrusted
+ * project therefore falls back to built-in enforcement, which is the strict
+ * direction — the failure mode is "checks were stricter than the repo asked
+ * for", never "a repository nobody read turned its own gates off".
+ *
+ * `copilotHome` is where the trust record lives, so supplying it is what turns
+ * the gate on. Omitting it means "no user scope was resolved" and keeps the
+ * pre-trust behavior — which every fixture-driven test relies on. That default
+ * is a silent bypass if a production caller ever forgets, so it is not left to
+ * convention: `test/policy-trust.test.mjs` asserts that every `loadPolicy` call
+ * under `lib/` passes it.
+ */
+export function loadPolicy(workspace, override = null, { copilotHome = null } = {}) {
   const policyPath = path.join(workspace, '.github', 'harness', 'policy.yaml');
-  const policyExists = fs.existsSync(policyPath);
-  let policy = {};
-  if (policyExists) {
+  const onDisk = fs.existsSync(policyPath);
+  const trusted = copilotHome === null || isProjectTrusted({ workspace, copilotHome });
+  // PARSED AND VALIDATED whether or not the project is trusted; only APPLIED
+  // when it is. A broken policy file is a broken policy file, and staying quiet
+  // about it because the project happens to be unapproved would leave an
+  // operator with a file they believe is in force, a syntax error nobody
+  // reports, and no way to connect the two. Trust decides whose values win, not
+  // whether mistakes are worth mentioning.
+  let parsed = {};
+  if (onDisk) {
     try {
-      policy = YAML.parse(fs.readFileSync(policyPath, 'utf8'), { maxAliasCount: 50 }) || {};
+      parsed = YAML.parse(fs.readFileSync(policyPath, 'utf8'), { maxAliasCount: 50 }) || {};
     } catch (error) {
       throw new Error(`Invalid harness policy ${policyPath}: ${error.message}`);
     }
   }
-  if (typeof policy !== 'object' || Array.isArray(policy)) {
+  if (typeof parsed !== 'object' || Array.isArray(parsed)) {
     throw new Error(`Invalid harness policy ${policyPath}: expected a YAML mapping`);
   }
-  if (policyExists && !POLICY_VERSIONS.has(policy.version)) {
+  if (onDisk && !POLICY_VERSIONS.has(parsed.version)) {
     throw new Error(`Invalid harness policy ${policyPath}: expected version 1 or 2`);
   }
+  // Validate the severity map even when it will not be applied, for the same
+  // reason — then drop it along with every other value if the project is not
+  // trusted.
+  const parsedSeverities = parseCheckSeverities(parsed, policyPath);
+
+  const applied = onDisk && trusted;
+  const policy = applied ? parsed : {};
   const requested = override ?? policy.enforcement ?? 'enforce';
   if (!MODES.has(requested)) {
     throw new Error(`Invalid enforcement mode: ${requested}. Expected observe, warn, or enforce`);
   }
   return {
-    version: policyExists ? policy.version : null,
+    version: applied ? policy.version : null,
     enforcement: requested,
+    // Surfaced, never silent: an operator whose enforcement mode flipped from
+    // `warn` to `enforce` because a policy file was ignored needs to be able to
+    // learn that from the run, not deduce it.
+    projectPolicyIgnored: onDisk && !trusted,
+    policyPath,
     gateTtlMinutes: Number.isFinite(policy.gate_ttl_minutes) ? policy.gate_ttl_minutes : 30,
     evidenceTtlHours: Number.isFinite(policy.evidence_ttl_hours) ? policy.evidence_ttl_hours : 24,
     exemptions: Array.isArray(policy.exemptions) ? policy.exemptions : [],
     waivers: Array.isArray(policy.waivers) ? policy.waivers : [],
-    checkSeverities: parseCheckSeverities(policy, policyPath),
+    checkSeverities: applied ? parsedSeverities : {},
   };
 }
 

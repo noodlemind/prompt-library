@@ -6,6 +6,7 @@ import { findMatchingPlans } from './recall-rank.mjs';
 import { intentContractHasContent } from './plan-goal.mjs';
 import { planDigest, readEvidence, validateEvidence } from './evidence.mjs';
 import { loadPolicy } from './policy.mjs';
+import { resolveCopilotHome } from './paths.mjs';
 import { primitivePlanGovernance } from './primitive-governance.mjs';
 import { validatePlanReadiness } from './plan-readiness.mjs';
 
@@ -169,7 +170,7 @@ export function runGate({ workspace, flags, query = '' }) {
         workspace,
         plan,
         evidence,
-        maxAgeHours: loadPolicy(workspace, flags.enforcement).evidenceTtlHours,
+        maxAgeHours: loadPolicy(workspace, flags.enforcement, { copilotHome: resolveCopilotHome(flags.copilotHome) }).evidenceTtlHours,
       });
       if (!freshness.pass) {
         pass = false;

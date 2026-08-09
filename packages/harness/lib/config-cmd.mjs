@@ -14,6 +14,7 @@
 import path from 'node:path';
 import { parseFlags } from './flags.mjs';
 import { resolveCopilotHome } from './paths.mjs';
+import { isProjectTrusted } from './trust.mjs';
 import { createStyle, keyWidthFor, EXIT } from './style.mjs';
 import { redactedJson } from './redact.mjs';
 import {
@@ -85,7 +86,8 @@ export async function configResultOf(argv, ctx = {}) {
     throw usageError(`unknown config verb: ${verb}`, `one of ${CONFIG_VERBS.join(', ')}`);
   }
 
-  const resolved = resolveConfig({ copilotHome, workspace, projectTrusted: ctx.projectTrusted !== false });
+  const projectTrusted = isProjectTrusted({ workspace, copilotHome });
+  const resolved = resolveConfig({ copilotHome, workspace, projectTrusted });
 
   if (verb === 'show') {
     return {
@@ -137,7 +139,7 @@ export async function configResultOf(argv, ctx = {}) {
   if (!SCOPES.includes(scope)) throw usageError(`unknown scope: ${scope}`, `--scope ${SCOPES.join(' or --scope ')}`);
 
   const written = setConfigValue({ scope, key, value, copilotHome, workspace });
-  const after = resolveConfig({ copilotHome, workspace, projectTrusted: ctx.projectTrusted !== false });
+  const after = resolveConfig({ copilotHome, workspace, projectTrusted });
   return {
     schema: 1,
     verb,

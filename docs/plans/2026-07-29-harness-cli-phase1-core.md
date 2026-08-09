@@ -144,7 +144,7 @@ Stated plainly because the delivery doc's own note applies hardest here: `config
 - [ ] **P3AC3** Working-directory containment, timeout, environment allowlist, and network policy are enforced; where the platform lacks isolation primitives the degradation is recorded in the audit event. *(Three of four enforced by `exec-policy.mjs`; network policy and the degradation record are open.)*
 - [ ] **P3AC4** Per-platform behavior is explicit — which shell `bash` resolves to on Windows and how descendant termination works there.
 - [ ] **P3AC5** Command and mutation audit entries are written for every execution, redacted before persistence. *(Done for `exec`/`bash` on all three lanes; `checks run` and `verify` still execute without an execution-class audit entry.)*
-- [ ] **P3AC6** Trust gates project resource and policy loading; trust changes are recorded.
+- [x] **P3AC6** Trust gates project resource and policy loading; trust changes are recorded. *(Project `config.yaml` and `policy.yaml` are gated and trust changes emit a `trust` event. Executing the repo-authored argv in `checks.yaml` is NOT yet gated — see P3.5, where the enforcement-class model gives the CI case a vocabulary; gating execution before that exists would need a bypass flag, which is the escape hatch that makes a gate decorative.)*
 - [ ] **P3AC7** The same representative workflow runs through two named hosts using only documented CLI contracts.
 
 ### Phase 1 debt claimed from the carry-out
@@ -160,8 +160,8 @@ Each lands as one reviewable commit, per the delivery doc's execution rules.
 
 - [x] **P3.1** Extract the named-check surface out of `verify.mjs`; `checks list|show|run`. *(commit `c787f8e`)*
 - [x] **P3.2** `exec` and `bash` with the environment allowlist, cwd containment, bounded timeout, and the execution audit on every lane. *(commit `c140486`)*
-- [ ] **P3.3** `config` — user and project scopes, effective values with provenance, schema validation, atomic writes.
-- [ ] **P3.4** `trust` — project identity, approve/revoke, policy-and-resource loading gated on trust; the `bash` policy gate P3AC2 refers to.
+- [x] **P3.3** `config` — user and project scopes, effective values with provenance, schema validation, atomic writes.
+- [x] **P3.4** `trust` — project identity, approve/revoke, policy-and-resource loading gated on trust; the `bash` policy gate P3AC2 refers to.
 - [ ] **P3.5** Enforcement classes as registry data, per-command-family authorization, and network policy with recorded degradation.
 - [ ] **P3.6** Execution audit for `checks run` and `verify`; redacted output artifacts and evidence identification.
 - [ ] **P3.7** Per-platform behavior: the Windows shell decision for `bash`, descendant termination, and the adversarial redaction fixtures the risk note calls for (P3D1, P3D2).
@@ -225,15 +225,26 @@ Each lands as one reviewable commit with its own review pass, per the delivery d
 - `packages/harness/bin/harness.mjs`
 - `packages/harness/lib/agent-lane.mjs`
 - `packages/harness/lib/commands.mjs`
+- `packages/harness/lib/checks.mjs`
+- `packages/harness/lib/checks-cmd.mjs`
+- `packages/harness/lib/compound.mjs`
+- `packages/harness/lib/config.mjs`
+- `packages/harness/lib/config-cmd.mjs`
 - `packages/harness/lib/doctor.mjs`
 - `packages/harness/lib/envelope.mjs`
 - `packages/harness/lib/event-registry.mjs`
 - `packages/harness/lib/events.mjs`
 - `packages/harness/lib/evidence.mjs`
+- `packages/harness/lib/exec-cmd.mjs`
+- `packages/harness/lib/exec-policy.mjs`
+- `packages/harness/lib/gate.mjs`
+- `packages/harness/lib/policy.mjs`
 - `packages/harness/lib/redact.mjs`
 - `packages/harness/lib/registry.mjs`
 - `packages/harness/lib/runner.mjs`
 - `packages/harness/lib/style.mjs`
+- `packages/harness/lib/trust.mjs`
+- `packages/harness/lib/trust-cmd.mjs`
 - `packages/harness/lib/verify.mjs`
 - `packages/harness/test/`
 - `.github/skills/references/harness-tool-contract.md`
@@ -302,3 +313,13 @@ Final whole-branch review (2026-08-06, architecture + security + patterns lenses
 - **P3.2** `exec`/`bash` with `lib/exec-policy.mjs`. The seam being filled is worth naming: `runProcess` has always accepted an explicit `env` documented as "the caller owns allowlisting", and **no caller ever supplied one** — so every named check has run with the full parent environment since the runner landed. Default-deny with an operator escape hatch, three loader-hijacking names refused unconditionally, cwd containment with symlinks resolved before the test, and a timeout bounded at both ends.
 - Three defects found while wiring P3.2, fixed rather than carried: the audit event fired from the handler only, so `--output json-envelope` executed a child with **no execution record at all**; the audit carried an exit code but never what ran; and `dispatchLane` hardcoded exit 0 on its success path, so the envelope lane printed `"status":"failed"` beside exit 0. The third was latent by design ("a future command with a native non-zero-but-not-thrown outcome can extend this") and `exec` is the first such command — entries now declare `exitOf` beside `resultOf`.
 - Suite: 1360 tests, 1351 pass, 9 skipped, 0 fail.
+
+### 2026-08-09 — P3.3 config and P3.4 trust
+
+- **P3.3** `config show|get|set|validate` across a user and a project scope, atomic through the existing `writeFileContained`. Three keys, each read by code that exists — a contract test asserts every declared key appears in a reader, because a configuration surface whose keys nothing consumes is the same dead seam `runProcess`'s unused `env` parameter already was.
+- The merge rule is the part worth re-reading: precedence is default < user < project, EXCEPT for keys marked restrictive, where the safer scope wins regardless of specificity. A repository is content, often content nobody has read; letting a checked-in file re-enable a shell its owner disabled would make the user-scope setting advisory. `show` reports when a project asked for something looser and lost, and `set` reports the effective value after the write as well as what it wrote.
+- **P3.4** `trust status|approve|revoke`. Two properties carry it: the record lives in the **user scope** (a project that ships its own approval is self-certifying, so cloning would grant the authority it claims), and approval is pinned to the **content** of the policy files (approving a path once and trusting it forever lets a `git pull` change policy under an approval nobody re-examined). `stale` is a third state on purpose — "you approved this, and it changed" is different information from "you never approved it".
+- Trust now gates project `config.yaml` and `policy.yaml`. Both fail SAFE: config falls back to user and default scopes, policy falls back to built-in enforcement. The failure mode is always "stricter than the repo asked for", never "a repository nobody read turned its own gates off". A malformed policy is still parsed and still errors regardless of trust — staying quiet about a broken file because the project is unapproved would leave an operator with a file they believe is in force and no way to learn otherwise.
+- `loadPolicy`'s trust gate engages only when `copilotHome` is supplied, which is a silent bypass if a production caller forgets. That is guarded by a test that greps every `loadPolicy` call under `lib/` rather than left to convention.
+- `verify` prints a `policy` row when an untrusted project's file was skipped, at the same altitude as the refused-downgrade row — a run behaving differently from the file on disk has to say why. This repo's own CI is unaffected: it runs the named checks directly, not `harness verify`.
+- Suite: 1399 tests, 1390 pass, 9 skipped, 0 fail. `harness verify --plan` 14/14.

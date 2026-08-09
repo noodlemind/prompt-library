@@ -62,6 +62,7 @@ import { cmdLookup, lookupResultOf } from './retrieval/lookup-cmd.mjs';
 import { recallResultOf, getResultOf } from './retrieval/compat-results.mjs';
 import { cmdChecks, checksResultOf, CHECKS_VERBS } from './checks-cmd.mjs';
 import { cmdConfig, configResultOf, CONFIG_VERBS } from './config-cmd.mjs';
+import { cmdTrust, trustResultOf, TRUST_VERBS } from './trust-cmd.mjs';
 import { CONFIG_KEYS, SCOPES } from './config.mjs';
 import { cmdExec, execResultOf, cmdBash, bashResultOf, exitFor as execExitFor } from './exec-cmd.mjs';
 import {
@@ -1451,6 +1452,33 @@ registerCommand({
   handler: cmdBash,
   resultOf: bashResultOf,
   exitOf: execExitFor,
+});
+
+registerCommand({
+  name: 'trust',
+  summary: 'show, grant, or withdraw this project\u2019s permission to change harness behavior',
+  group: 'engineer loop',
+  // `approve`/`revoke` write the user-scope trust store; `status` reads.
+  sideEffect: 'mutate',
+  capabilities: [],
+  outputModes: ['ledger', 'json'],
+  usage: '<status|approve|revoke>',
+  verbs: [
+    { verb: 'status', summary: 'whether this project is trusted, why, and which files an approval pins', sideEffect: 'read' },
+    { verb: 'approve', summary: 'grant this project permission and pin its policy files by content' },
+    { verb: 'revoke', summary: 'withdraw permission; project config and policy stop taking effect' },
+  ],
+  args: {
+    positionals: [
+      { name: 'verb', description: TRUST_VERBS.join('|'), required: false, default: 'status' },
+    ],
+    flags: [],
+  },
+  // A bare `harness trust` reports status, which reads. Without this the
+  // palette would paint the bare row with the entry's mutate maximum.
+  bareSideEffect: 'read',
+  handler: cmdTrust,
+  resultOf: trustResultOf,
 });
 
 registerCommand({

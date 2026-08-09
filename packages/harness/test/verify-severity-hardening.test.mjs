@@ -9,6 +9,7 @@ import { loadPolicy, NON_ADVISORY_CHECK_IDS } from '../lib/policy.mjs';
 import { collectAdvisoryFailures, runVerify, sanitizeCheckPayload } from '../lib/verify.mjs';
 import { readEvidence } from '../lib/evidence.mjs';
 import { STRUCTURAL_CHECK_ID } from '../lib/structural/expectations.mjs';
+import { approveProject } from '../lib/trust.mjs';
 import { buildStructuralIndex } from '../lib/repo-map/structural-index.mjs';
 import { lexicalV2 } from '../lib/repo-map/treesitter-extractor.mjs';
 
@@ -168,20 +169,36 @@ function verifiableWorkspace({ required, criteria, extraFrontmatter, checks, pol
   if (policy) writeConfig(workspace, 'policy.yaml', policy);
   git(workspace, ['add', '.']);
   git(workspace, ['commit', '-qm', 'baseline']);
+  // P3AC6: project policy loads only for a trusted project. These fixtures are
+  // about POLICY behavior, so they approve themselves against their own
+  // isolated home — `withHome` points COPILOT_HOME here, so nothing touches the
+  // developer's real ~/.copilot. `test/trust.test.mjs` owns the gate itself.
+  approveProject({ workspace, copilotHome: copilotHomeFor(home) });
   return { workspace, home, plan };
 }
 
 // P1.6: runVerify is async (lib/runner.mjs wiring), so the HARNESS_HOME
 // override must survive until the run RESOLVES — a sync try/finally would
 // restore the env the instant the promise was created, mid-run.
+/** The isolated Copilot home that pairs with a fixture's HARNESS_HOME. Derived
+ * rather than passed so every existing `withHome(home, ...)` call keeps working
+ * unchanged while still resolving trust inside the fixture. */
+function copilotHomeFor(home) {
+  return path.join(home, 'copilot');
+}
+
 async function withHome(home, fn) {
   const previous = process.env.HARNESS_HOME;
+  const previousCopilot = process.env.COPILOT_HOME;
   process.env.HARNESS_HOME = home;
+  process.env.COPILOT_HOME = copilotHomeFor(home);
   try {
     return await fn();
   } finally {
     if (previous === undefined) delete process.env.HARNESS_HOME;
     else process.env.HARNESS_HOME = previous;
+    if (previousCopilot === undefined) delete process.env.COPILOT_HOME;
+    else process.env.COPILOT_HOME = previousCopilot;
   }
 }
 
@@ -218,6 +235,11 @@ test('E: the advisory-by-default structural check stays downgradable, and v1 pol
   assert.deepEqual(loadPolicy(v1), {
     version: 1,
     enforcement: 'warn',
+    // P3AC6 additions. With no `copilotHome` supplied there is no user scope to
+    // check against, so the trust gate is not engaged and the policy loads
+    // exactly as it did before — which is what this assertion is pinning.
+    projectPolicyIgnored: false,
+    policyPath: path.join(v1, '.github', 'harness', 'policy.yaml'),
     gateTtlMinutes: 15,
     evidenceTtlHours: 24,
     exemptions: ['docs/**'],

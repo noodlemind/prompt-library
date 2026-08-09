@@ -50,6 +50,10 @@ export const EVENT_TYPES = new Set([
   // should not have to trust a boolean inside a payload to find them.
   'exec',
   'bash',
+  // Trust changes (P3AC6). Granting or withdrawing a project's authority is a
+  // security decision, and a security decision with no record is one nobody can
+  // review after the fact.
+  'trust',
 ]);
 
 function shouldSkipEvents(flags = {}) {
@@ -147,6 +151,8 @@ export function writeEvent(workspace, flags, payload) {
     // them, so `harness events --failures` and the summaries keep working
     // without knowing this field exists.
     'exec',
+    // The trust-change descriptor: which project, and which way it moved.
+    'trust',
   ]) {
     if (payload[field] !== undefined) event[field] = payload[field];
   }

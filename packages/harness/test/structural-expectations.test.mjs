@@ -16,6 +16,7 @@ import { test } from 'node:test';
 import { loadPolicy, checkSeverityFor, enforcementExitCode } from '../lib/policy.mjs';
 import { structuralDir, readStructuralIndex, STRUCTURAL_SHAPE_VERSION } from '../lib/structural/shape.mjs';
 import { runStructuralExpectations, STRUCTURAL_CHECK_ID } from '../lib/structural/expectations.mjs';
+import { approveProject } from '../lib/trust.mjs';
 import { buildStructuralIndex } from '../lib/repo-map/structural-index.mjs';
 import { lexicalV2 } from '../lib/repo-map/treesitter-extractor.mjs';
 import { runVerify } from '../lib/verify.mjs';
@@ -247,6 +248,11 @@ function structuralWorkspace({ policy = null } = {}) {
   writeChecks(workspace, { 'unit-tests': { command: [process.execPath, '-e', 'process.exit(0)'] } });
   if (policy) writePolicy(workspace, policy);
   const sha = commitAll(workspace, 'baseline');
+  // P3AC6: project policy loads only for a trusted project. These fixtures test
+  // POLICY behavior, so they approve themselves against their own isolated
+  // home — `withHome` points COPILOT_HOME there, so the developer's real
+  // ~/.copilot is never touched. `test/trust.test.mjs` owns the gate itself.
+  approveProject({ workspace, copilotHome: copilotHomeFor(home) });
   return { workspace, home, plan, sha };
 }
 
@@ -261,14 +267,25 @@ function minimalPlan(impacted, fm = {}) {
 // P1.6: runVerify is async (lib/runner.mjs wiring), so the HARNESS_HOME
 // override must survive until the run RESOLVES — a sync try/finally would
 // restore the env the instant the promise was created, mid-run.
+/** The isolated Copilot home paired with a fixture's HARNESS_HOME. Derived
+ * rather than passed so every existing `withHome(home, ...)` call keeps working
+ * unchanged while trust still resolves inside the fixture. */
+function copilotHomeFor(home) {
+  return path.join(home, 'copilot');
+}
+
 async function withHome(home, fn) {
   const previous = process.env.HARNESS_HOME;
+  const previousCopilot = process.env.COPILOT_HOME;
   process.env.HARNESS_HOME = home;
+  process.env.COPILOT_HOME = copilotHomeFor(home);
   try {
     return await fn();
   } finally {
     if (previous === undefined) delete process.env.HARNESS_HOME;
     else process.env.HARNESS_HOME = previous;
+    if (previousCopilot === undefined) delete process.env.COPILOT_HOME;
+    else process.env.COPILOT_HOME = previousCopilot;
   }
 }
 

@@ -6,6 +6,7 @@ import { readSession, writeSession } from './session.mjs';
 import { readEvidence, validateEvidence } from './evidence.mjs';
 import { selectPlan } from './plan-parse.mjs';
 import { loadPolicy } from './policy.mjs';
+import { resolveCopilotHome } from './paths.mjs';
 import { recordSkillUsage } from './telemetry.mjs';
 import { scanSecrets } from './secret-scan.mjs';
 import { readStoreConfig } from './knowledge/store.mjs';
@@ -366,7 +367,7 @@ export function runCompound({ workspace, copilotHome, flags, log = () => {} }) {
     workspace,
     plan: selected.plan,
     evidence,
-    maxAgeHours: loadPolicy(workspace, flags.enforcement).evidenceTtlHours,
+    maxAgeHours: loadPolicy(workspace, flags.enforcement, { copilotHome: resolveCopilotHome(flags.copilotHome) }).evidenceTtlHours,
   });
   if (!freshness.pass) {
     return {
