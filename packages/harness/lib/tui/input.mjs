@@ -51,6 +51,7 @@ export function createInput({
   let parkedRow = 0;
   let resolveLine = null;
   let closed = false;
+  let suspended = false;
 
   const blockLines = () => {
     const lines = composer.render();
@@ -67,7 +68,7 @@ export function createInput({
   };
 
   const paint = () => {
-    if (!interactive || closed) return;
+    if (!interactive || closed || suspended) return;
     // Always a full redraw. `next()` and `write()` both used to paint, so a
     // submitted line painted twice with no erase between — the second box drawn
     // inside the first. Making paint idempotent removes the ordering rule
@@ -148,6 +149,20 @@ export function createInput({
       painted = 0;
       paint();
     },
+    /**
+     * Take the composer off screen while something else owns stdout.
+     *
+     * THE DEFECT THIS FIXES: every harness command prints with `console.log`,
+     * straight to the stream, with no idea a composer is painted below the
+     * cursor. `status` therefore wrote its rows THROUGH the box — output
+     * interleaved with the border, and a second composer stranded underneath.
+     * The module note above warned that a caller writing directly would strand
+     * the block; the commands themselves are exactly that caller, and wrapping
+     * their dispatch is the only place that can be fixed once for all of them.
+     */
+    suspend() { erase(); suspended = true; },
+    resume() { suspended = false; paint(); },
+
     /** The next thing the operator did: a line, or an intent the loop owns. */
     async next() {
       if (!interactive) {

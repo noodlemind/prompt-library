@@ -23,12 +23,21 @@
  * limited terminals.
  */
 import { createInput } from './tui/input.mjs';
+import os from 'node:os';
 import path from 'node:path';
 import { parseFlags } from './flags.mjs';
 import { createStyle, keyWidthFor, EXIT } from './style.mjs';
 import { dispatch, hasCommand } from './registry.mjs';
 import { openPalette, resolveSelection, selectionPlan } from './tui/palette.mjs';
 import { createTally, interpretLine, stripControl } from './tui/session.mjs';
+import { deriveGitContext } from './git-context.mjs';
+import { readSession } from './session.mjs';
+
+/** `/Users/me/x` reads better as `~/x`, and the status line has one row. */
+const tildePath = (full) => {
+  const home = os.homedir();
+  return home && full.startsWith(home) ? `~${full.slice(home.length)}` : full;
+};
 
 /**
  * Flag spellings removed from prose a person reads in the palette.
@@ -87,12 +96,32 @@ export async function runLedger({
   const write = (line = '') => session.write(line);
 
 
+  /**
+   * The status line was built and tested and then never CALLED, so it never
+   * appeared in a real session — the same class of gap as the one that
+   * reopened this phase, caught by a screenshot rather than by the suite.
+   * Refreshed after every command, because a gate can close under you.
+   */
+  const refreshStatus = () => {
+    let branch = null;
+    let gate = null;
+    try {
+      const git = deriveGitContext({ workspace });
+      branch = git?.branch || (git?.detached ? 'detached' : null);
+    } catch { /* a container may have no repo; the row simply omits it */ }
+    try {
+      gate = readSession(workspace)?.gateStatus || null;
+    } catch { /* no session yet */ }
+    session.setStatus({ workspace: tildePath(workspace), branch, gate });
+  };
+
   const writeBanner = () => {
     write(ui.paint('muted', 'harness — session ledger'));
     write(ui.paint('muted', `${ui.arrow} / to search · ! shell · clear · help · exit`));
     write('');
   };
   writeBanner();
+  refreshStatus();
 
   // Ctrl-C cancels the RUNNING command, not the session. A ledger that exited
   // on the first interrupt would make cancellation and quitting the same
@@ -147,6 +176,13 @@ export async function runLedger({
     activeController = new AbortController();
     let exitCode = 0;
     let cancelled = false;
+    // The composer comes OFF SCREEN for the duration. Every harness command
+    // prints with `console.log` — straight to the stream, with no idea a
+    // bordered block is painted below the cursor — so `status` wrote its rows
+    // through the border and left a second composer stranded underneath.
+    // Suspending here fixes it once for every command rather than asking each
+    // to route its output somewhere new.
+    session.suspend();
     try {
       exitCode = await dispatcher([name, ...rest], {
         style: ui,
@@ -163,11 +199,13 @@ export async function runLedger({
       })) write(l);
     } finally {
       activeController = null;
+      session.resume();
     }
     // EXIT.cancelled is cancellation however it arrives. Keying only off a
     // thrown E_CANCELLED counted an interrupted command as a failure, which is
     // the one distinction the tally exists to draw.
     tally.record(exitCode, { cancelled: cancelled || exitCode === EXIT.cancelled });
+    refreshStatus();
   };
 
   const showPalette = (query) => {
