@@ -1,34 +1,53 @@
 /**
- * `harness resources list|show|enable|disable` — the bundle surface.
+ * `harness resources list|show|register|unregister` — the locally-added
+ * primitive surface.
  *
- * `list` shows every bundle INCLUDING the ones that are not contributing, with
- * the reason. A bundle a user installed and cannot see is a support ticket; one
- * shown greyed with "not approved" or "integrity pin does not match" is a fix
- * they can make themselves.
+ * The workflow this serves: someone obtains a skill or agent from an external
+ * source and drops it straight into `~/.copilot/skills` or `~/.copilot/agents`,
+ * where every host already looks. It is deliberately NOT in the harness lock,
+ * so `upgrade` and `uninstall` never touch it. What was missing is that the
+ * harness had no idea it existed — worse, it read as cruft, and `doctor` told
+ * people to tombstone their own team's work.
  *
- * `show` is where precedence becomes inspectable (P5AC2): it prints the winner
- * for each contributed path AND the bundles it shadowed, because the question a
- * precedence rule exists to answer is not "what won" but "why did mine not".
+ * So this command answers three questions: what did we add, does it actually
+ * work, and is it recognized. `register` is the operator saying "I read this
+ * and I want it" — validated first, because marking a primitive as working when
+ * the host would never load it is the failure mode with the longest feedback
+ * loop in the system.
+ *
+ * The bundle/manifest machinery in `lib/resources.mjs` and the plugin protocol
+ * in `lib/plugin-host.mjs` remain as reviewed but UNWIRED groundwork: external
+ * distribution is not a workflow this project wants today, and neither module
+ * has a production caller. That is recorded rather than implied — see the plan.
  */
-import fs from 'node:fs';
 import path from 'node:path';
 import { parseFlags } from './flags.mjs';
 import { resolveCopilotHome } from './paths.mjs';
 import { createStyle, keyWidthFor, EXIT } from './style.mjs';
 import { redactedJson } from './redact.mjs';
-import { discoverBundles, resolvePrecedence, resourcesRoot } from './resources.mjs';
+import { inertLine } from './knowledge/store.mjs';
+import { readLock } from './lock.mjs';
+import { getAssetsRoot } from './commands.mjs';
+import { collectAllAssetFiles } from './sync.mjs';
+import {
+  localPrimitiveStatus,
+  registerPrimitive,
+  registeredPath,
+  unregisterPrimitive,
+  validatePrimitive,
+} from './local-primitives.mjs';
 
 const ui = createStyle({ argv: process.argv.slice(2) });
 
-export const RESOURCES_VERBS = Object.freeze(['list', 'show', 'enable', 'disable']);
+export const RESOURCES_VERBS = Object.freeze(['list', 'show', 'register', 'unregister']);
 
 function usageError(message, hint) {
   return Object.assign(new Error(message), { code: 'E_USAGE', exit: EXIT.usage, hint });
 }
 
-function notFoundError(message, hint) {
-  return Object.assign(new Error(message), { code: 'E_NOT_FOUND', exit: EXIT.notFound, hint });
-}
+/** Flags on this entry that take a value — a BOOLEAN flag before the verb must
+ * not swallow it, which is the bug the same parser had in `run`. */
+const VALUE_FLAGS = new Set(['--workspace', '--copilot-home']);
 
 function context(argv) {
   const flags = parseFlags(argv);
@@ -36,8 +55,8 @@ function context(argv) {
   for (let i = 0; i < argv.length; i += 1) {
     const a = argv[i];
     if (a === '--') break;
-    if (a.startsWith('--')) {
-      if (!a.includes('=') && argv[i + 1] !== undefined && !argv[i + 1].startsWith('--')) i += 1;
+    if (a.startsWith('-')) {
+      if (!a.includes('=') && VALUE_FLAGS.has(a) && argv[i + 1] !== undefined) i += 1;
       continue;
     }
     positionals.push(a);
@@ -46,103 +65,88 @@ function context(argv) {
   return {
     flags,
     verb: positionals[0] ?? 'list',
-    name: positionals[1] ?? null,
+    target: positionals[1] ?? null,
     copilotHome: resolveCopilotHome(flags.copilotHome),
   };
 }
 
 /**
- * Which bundles the operator has approved.
+ * What the package ships, and what it has hydrated here.
  *
- * A marker file inside the bundle, written by `resources enable`. It lives with
- * the bundle rather than in a central list so that removing the directory
- * removes the approval too — a stale approval naming a bundle that is gone is
- * the kind of state that later grants something unintended.
+ * Both are needed to tell a local addition from an orphan. A failure to resolve
+ * assets is not fatal: without them every non-lock file simply reads as local,
+ * which errs toward showing a file rather than hiding it.
  */
-function approvedNames(copilotHome) {
-  const root = resourcesRoot(copilotHome);
-  if (!fs.existsSync(root)) return new Set();
-  const names = new Set();
-  for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
-    if (entry.isDirectory() && fs.existsSync(path.join(root, entry.name, '.enabled'))) names.add(entry.name);
+function origins(copilotHome) {
+  let shippedFiles = new Set();
+  try {
+    const assets = getAssetsRoot();
+    shippedFiles = new Set(collectAllAssetFiles(assets));
+  } catch {
+    /* assets unavailable — see the note above */
   }
-  return names;
+  return { shippedFiles, lockFiles: new Set(readLock(copilotHome)?.files || []) };
 }
 
 export async function resourcesResultOf(argv, ctx = {}) {
-  const { verb, name, copilotHome } = context(argv);
+  const { verb, target, copilotHome } = context(argv);
   if (!RESOURCES_VERBS.includes(verb)) {
     throw usageError(`unknown resources verb: ${verb}`, `one of ${RESOURCES_VERBS.join(', ')}`);
   }
-
-  const bundles = discoverBundles(copilotHome, { trustedNames: approvedNames(copilotHome) });
+  const { shippedFiles, lockFiles } = origins(copilotHome);
+  const primitives = localPrimitiveStatus({ copilotHome, shippedFiles, lockFiles });
 
   if (verb === 'list') {
+    const invalid = primitives.filter((p) => p.state === 'invalid').length;
     return {
       schema: 1,
       verb,
-      root: resourcesRoot(copilotHome),
-      status: bundles.some((b) => b.state === 'tampered') ? 'failed' : 'ok',
-      bundles: bundles.map((b) => ({
-        name: b.name,
-        version: b.manifest?.version ?? null,
-        state: b.state,
-        reason: b.reason,
-        contributes: b.manifest?.contributes ?? {},
-        capabilities: b.manifest?.capabilities ?? [],
-      })),
-    };
-  }
-
-  if (verb === 'show') {
-    if (!name) throw usageError('resources show requires a bundle name', 'harness resources list');
-    const bundle = bundles.find((b) => b.name === name);
-    if (!bundle) throw notFoundError(`no bundle named ${JSON.stringify(name)}`, 'harness resources list');
-    return {
-      schema: 1,
-      verb,
-      bundle: {
-        name: bundle.name,
-        version: bundle.manifest?.version ?? null,
-        state: bundle.state,
-        reason: bundle.reason,
-        dir: bundle.dir,
-        digest: bundle.digest ?? null,
-        integrity: bundle.manifest?.integrity ?? null,
-        capabilities: bundle.manifest?.capabilities ?? [],
-        plugin: bundle.manifest?.plugin ?? null,
+      home: copilotHome,
+      registry: registeredPath(copilotHome),
+      // An invalid primitive is a real problem someone should see; a merely
+      // pending one is a decision waiting to be made, not a failure.
+      status: invalid ? 'failed' : 'ok',
+      counts: {
+        total: primitives.length,
+        registered: primitives.filter((p) => p.state === 'registered').length,
+        pending: primitives.filter((p) => p.state === 'pending').length,
+        stale: primitives.filter((p) => p.state === 'stale').length,
+        invalid,
       },
-      // Precedence across ALL bundles, not just this one — the shadowing that
-      // matters to a reader is the shadowing of their own contributions.
-      precedence: resolvePrecedence(bundles),
+      primitives,
     };
   }
 
-  // `enable` / `disable`
-  if (!name) throw usageError(`resources ${verb} requires a bundle name`, 'harness resources list');
-  const bundle = bundles.find((b) => b.name === name);
-  if (!bundle) throw notFoundError(`no bundle named ${JSON.stringify(name)}`, 'harness resources list');
-  if (verb === 'enable' && bundle.state === 'tampered') {
-    throw Object.assign(new Error(`refusing to enable ${name}: ${bundle.reason}`), {
-      code: 'E_DENIED',
-      exit: EXIT.needsApproval,
-      hint: 'the bundle’s contents no longer match its integrity pin — reinstall it from a source you trust',
-    });
+  if (!target) throw usageError(`resources ${verb} requires a path`, 'harness resources list');
+  // Matched generously on purpose. A person types the name they gave the thing
+  // — `my-team-skill` — not `skills/my-team-skill/SKILL.md`. Matching only the
+  // full path or the frontmatter name meant an INVALID primitive (whose name
+  // could not be read) reported "not found", hiding the actual problem behind a
+  // misleading error.
+  const matches = (p) => p.path === target
+    || p.path.endsWith(`/${target}`)
+    || p.name === target
+    || p.path.split('/')[1] === target
+    || path.basename(p.path).replace(/\.(agent|instructions)\.md$/, '') === target;
+  const found = primitives.find(matches);
+  if (verb === 'show') {
+    if (!found) {
+      throw Object.assign(new Error(`no locally-added primitive matching ${JSON.stringify(target)}`), {
+        code: 'E_NOT_FOUND', exit: EXIT.notFound, hint: 'harness resources list',
+      });
+    }
+    return { schema: 1, verb, primitive: found, validation: validatePrimitive(copilotHome, found.path) };
   }
 
-  const marker = path.join(bundle.dir, verb === 'enable' ? '.enabled' : '.disabled');
-  const opposite = path.join(bundle.dir, verb === 'enable' ? '.disabled' : '.enabled');
-  fs.writeFileSync(marker, `${new Date().toISOString()}\n`);
-  try {
-    fs.unlinkSync(opposite);
-  } catch {
-    /* not previously in the other state */
+  const rel = found?.path ?? target;
+  if (verb === 'register') {
+    const result = registerPrimitive({ copilotHome, rel, shippedFiles, lockFiles });
+    return { schema: 1, verb, primitive: { ...result, reason: 'registered' } };
   }
-  const after = discoverBundles(copilotHome, { trustedNames: approvedNames(copilotHome) }).find((b) => b.name === name);
-  return { schema: 1, verb, bundle: { name, state: after?.state ?? 'unknown', reason: after?.reason ?? null } };
+  return { schema: 1, verb, primitive: unregisterPrimitive({ copilotHome, rel }) };
 }
 
-const STATE_STYLE = { enabled: 'ok', disabled: 'muted', invalid: 'error', untrusted: 'warn', tampered: 'error' };
+const STATE_STYLE = { registered: 'ok', pending: 'warn', stale: 'warn', invalid: 'error' };
 
 export async function cmdResources(argv, ctx = {}) {
   const { flags } = context(argv);
@@ -151,41 +155,48 @@ export async function cmdResources(argv, ctx = {}) {
   if (flags.json) {
     console.log(redactedJson(result, { pretty: flags.verbose }));
   } else if (result.verb === 'list') {
-    const keyWidth = keyWidthFor(['resources', ...result.bundles.map((b) => b.name)]);
-    console.log(ui.line({ key: 'resources', value: `${result.bundles.length} bundle(s)`, note: result.root, keyWidth }));
-    for (const b of result.bundles) {
+    const keyWidth = keyWidthFor(['primitives', ...result.primitives.map((p) => p.path)]);
+    const c = result.counts;
+    console.log(ui.line({
+      key: 'primitives',
+      value: `${c.total} locally added`,
+      note: [`${c.registered} registered`, `${c.pending} pending`, c.stale ? `${c.stale} stale` : null, c.invalid ? `${c.invalid} invalid` : null].filter(Boolean).join(' · '),
+      keyWidth,
+    }));
+    for (const p of result.primitives) {
+      // Untrusted text from a file someone else wrote, on its way to a
+      // terminal: inerted like every other external string the harness renders.
       console.log(ui.line({
-        state: STATE_STYLE[b.state] || 'warn',
-        key: b.name,
-        value: `${b.version ?? '(no version)'} · ${b.state}`,
-        note: b.reason || Object.keys(b.contributes).join(', ') || undefined,
+        state: STATE_STYLE[p.state] || 'warn',
+        key: p.path,
+        value: p.state,
+        note: inertLine(String(p.reason || '')),
         keyWidth,
       }));
     }
-    if (!result.bundles.length) console.log(ui.paint('muted', '  no bundles installed'));
-  } else if (result.verb === 'show') {
-    const b = result.bundle;
-    const keyWidth = keyWidthFor(['bundle', 'state', 'capabilities', 'integrity']);
-    console.log(ui.line({ state: STATE_STYLE[b.state] || 'warn', key: 'bundle', value: `${b.name} ${b.version ?? ''}`.trim(), note: b.state, keyWidth }));
-    if (b.reason) console.log(ui.line({ state: 'warn', key: 'reason', value: b.reason, keyWidth }));
-    console.log(ui.line({ key: 'capabilities', value: b.capabilities.join(', ') || '(none requested)', keyWidth }));
-    console.log(ui.line({ key: 'integrity', value: b.integrity ? (b.integrity === b.digest ? 'pinned · matches' : 'pinned · MISMATCH') : 'unpinned', keyWidth }));
-    for (const row of result.precedence.filter((r) => r.winner === b.name || r.shadowed.includes(b.name))) {
-      const shadowed = row.shadowed.length ? ` · shadows ${row.shadowed.join(', ')}` : '';
-      console.log(ui.paint('muted', `  ${row.kind}/${row.path} → ${row.winner}${shadowed}`));
+    if (!result.primitives.length) {
+      console.log(ui.paint('muted', `  nothing added by hand under ${result.home}/skills or /agents`));
     }
+  } else if (result.verb === 'show') {
+    const p = result.primitive;
+    const keyWidth = keyWidthFor(['primitive', 'state', 'kind', 'digest']);
+    console.log(ui.line({ state: STATE_STYLE[p.state] || 'warn', key: 'primitive', value: inertLine(p.path), note: p.state, keyWidth }));
+    console.log(ui.line({ key: 'kind', value: `${p.kind ?? 'unknown'}${p.name ? ` · ${inertLine(p.name)}` : ''}`, keyWidth }));
+    console.log(ui.line({ key: 'digest', value: p.digest ?? '(unreadable)', keyWidth }));
+    console.log(ui.line({ state: p.state === 'invalid' ? 'error' : 'muted', key: 'reason', value: inertLine(String(p.reason || '')), keyWidth }));
+    for (const error of result.validation.errors) console.log(ui.paint('muted', `  ${inertLine(error)}`));
   } else {
-    const keyWidth = keyWidthFor(['bundle', 'state']);
-    console.log(ui.line({ state: STATE_STYLE[result.bundle.state] || 'warn', key: result.verb, value: result.bundle.name, note: result.bundle.state, keyWidth }));
-    if (result.bundle.reason) console.log(ui.paint('muted', `  ${result.bundle.reason}`));
+    const p = result.primitive;
+    const keyWidth = keyWidthFor(['register', 'unregister']);
+    console.log(ui.line({ state: p.state === 'registered' ? 'ok' : 'warn', key: result.verb, value: inertLine(p.path), note: p.state, keyWidth }));
   }
 
   return resourcesExitFor(result);
 }
 
 export function resourcesExitFor(result) {
-  // A tampered bundle makes `list` a failure: the whole point of a pin is that a
-  // mismatch is loud, and an exit code CI can gate on is the loudest channel.
+  // An invalid primitive makes `list` a failure so CI — or a person reading an
+  // exit code — learns that something someone added will never load.
   if (result?.verb === 'list' && result.status !== 'ok') return 1;
   return EXIT.ok;
 }

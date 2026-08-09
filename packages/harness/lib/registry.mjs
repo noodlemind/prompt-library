@@ -1517,24 +1517,25 @@ registerCommand({
 
 registerCommand({
   name: 'resources',
-  summary: 'list, inspect, enable, or disable installed resource bundles',
+  summary: 'list, inspect, register, or unregister locally-added skills and agents',
   group: 'setup',
-  // `enable`/`disable` write a marker inside a bundle; the two read verbs
-  // override DOWN so the palette warns about the verbs that change what loads.
+  // `register`/`unregister` write the user-scope registration store; the two
+  // read verbs override DOWN so the palette warns about the verbs that change
+  // what the harness recognizes.
   sideEffect: 'mutate',
   capabilities: [],
   outputModes: ['ledger', 'json'],
-  usage: '<list|show|enable|disable> [name]',
+  usage: '<list|show|register|unregister> [path]',
   verbs: [
-    { verb: 'list', summary: 'every installed bundle, including the ones not contributing and why', sideEffect: 'read' },
-    { verb: 'show', summary: 'one bundle: capabilities, integrity, and what it wins or is shadowed on', sideEffect: 'read', positionals: ['name'] },
-    { verb: 'enable', summary: 'approve a bundle so its contributions load', positionals: ['name'] },
-    { verb: 'disable', summary: 'stop a bundle contributing without removing it', positionals: ['name'] },
+    { verb: 'list', summary: 'skills and agents added by hand, with whether each is registered and valid', sideEffect: 'read' },
+    { verb: 'show', summary: 'one added primitive: its kind, name, digest, and why it is in that state', sideEffect: 'read', positionals: ['path'] },
+    { verb: 'register', summary: 'validate an added primitive and record that this machine recognizes it', positionals: ['path'] },
+    { verb: 'unregister', summary: 'withdraw recognition without deleting the file', positionals: ['path'] },
   ],
   args: {
     positionals: [
       { name: 'verb', description: RESOURCES_VERBS.join('|'), required: false, default: 'list' },
-      { name: 'name', description: 'the bundle name', required: false, default: null },
+      { name: 'path', description: 'the primitive path, name, or filename', required: false, default: null },
     ],
     flags: [],
   },

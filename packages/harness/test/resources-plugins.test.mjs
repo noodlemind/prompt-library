@@ -125,21 +125,19 @@ test('P5AC3: a bundle whose contents no longer match its pin is tampered, and ca
   const [after] = discoverBundles(home, { trustedNames: trusted(home) });
   assert.equal(after.state, 'tampered', 'a pin exists precisely so content changing under an approval is loud');
 
-  const res = spawnSync(process.execPath, [binPath, 'resources', 'enable', 'pinned', '--copilot-home', home, '--no-events'], {
-    cwd: packageRoot, encoding: 'utf8',
-  });
-  assert.equal(res.status, EXIT.needsApproval);
+  // The CLI no longer surfaces bundles — `resources` serves locally-added
+  // primitives now — so the guarantee is asserted where it lives: a tampered
+  // bundle contributes nothing, whatever a caller does with it.
+  assert.equal(resolvePrecedence([after]).length, 0,
+    'a bundle whose contents changed under its pin must not contribute');
 });
 
-test('P5AC3: a tampered bundle makes `resources list` exit non-zero so CI can gate on it', () => {
+test('P5AC3: a mismatched pin is reported as tampered with the reason', () => {
   const home = tempDir('res-ci-');
-  const dir = makeBundle(home, 'pinned', { manifest: { integrity: 'sha256-not-the-real-one' }, files: { 'skills/a.md': 'x' } });
-  assert.ok(fs.existsSync(dir));
-  const res = spawnSync(process.execPath, [binPath, 'resources', 'list', '--copilot-home', home, '--no-events'], {
-    cwd: packageRoot, encoding: 'utf8',
-  });
-  assert.equal(res.status, 1);
-  assert.match(res.stdout, /tampered/);
+  makeBundle(home, 'pinned', { manifest: { integrity: 'sha256-not-the-real-one' }, files: { 'skills/a.md': 'x' } });
+  const [bundle] = discoverBundles(home, { trustedNames: new Set(['pinned']) });
+  assert.equal(bundle.state, 'tampered');
+  assert.match(bundle.reason, /integrity pin does not match/);
 });
 
 // --- P5AC4 / P5AC6: the plugin protocol, against a real child process -------

@@ -261,16 +261,32 @@ The Session Ledger direction — a scrolling transcript in the terminal's MAIN b
 
 Source: `docs/architecture/harness-cli-workbench-delivery.md` §Phase 5.
 
-- [x] **P5AC1** Bundles ride the existing hydration pipeline; no parallel install path exists.
+### Scope changed by user decision, 2026-08-09 — read this before the criteria
+
+The phase's stated goal is "an external plugin can add one command, one search scope, one named check, and one TUI panel without modifying Harness core". **That goal is not being pursued.** The user's decision: no external plugin support; the only extension route is a person placing a skill or agent directly into `~/.copilot`, where every host already looks, so it is used by everyone including the Engineer.
+
+Two consequences, stated rather than implied:
+
+- **P5AC1 is NOT delivered.** Bundles do not ride the hydration pipeline, because bundles are not the mechanism. `lib/resources.mjs` (manifests, precedence, integrity) and `lib/plugin-host.mjs` (the out-of-process protocol) remain in the tree as reviewed but **unwired groundwork** — neither has a production caller. Kept by explicit decision so an external-distribution answer exists if it is ever wanted; recorded here so nobody mistakes their presence for a working feature.
+- **What shipped instead** is the workflow the user actually has: locally-added primitives are discovered, validated, and explicitly registered. `lib/local-primitives.mjs` plus the repointed `resources list|show|register|unregister`.
+
+That work also fixed a defect that was worse than anything in the phase as specified. `doctor` H17 classified a hand-added skill as a stale orphan and told the operator to add it to `retired.json` — advice which, if followed, would have made the next `upgrade` **delete their own team's skill**. The lock file distinguishes the two cases: a file the harness never hydrated is a local addition, not a leftover.
+
+Registration follows the trust model rather than inventing a second one: the marker lives in the user scope (`~/.copilot/harness/registered.yaml`), never inside the primitive, because a file that could register itself would mean anything dropped into the directory arrives pre-approved. It pins content, so an edit after approval reads as `stale` rather than riding the old decision.
+
+Lifecycle guarantees now pinned by tests: a hand-added primitive survives `install`, `upgrade` and `uninstall` — the last structurally, since `uninstall` removes exactly the lock's files and a local addition is never in the lock.
+
+- [ ] **P5AC1** Bundles ride the existing hydration pipeline; no parallel install path exists. **NOT DELIVERED** — see the scope note above; bundles are not the extension mechanism this project wants.
 - [x] **P5AC2** Resource precedence is deterministic and inspectable, with provenance shown per resource.
 - [x] **P5AC3** Distributed bundles require integrity pinning and explicit trust before loading.
-- [x] **P5AC4** Plugins run out-of-process over versioned JSON/JSONL, with capabilities approved explicitly.
+- [x] **P5AC4** Plugins run out-of-process over versioned JSON/JSONL, with capabilities approved explicitly. *(Protocol built and tested against a real child process; unwired — nothing starts a plugin.)*
 - [x] **P5AC5** Plugins never mutate policy, the run journal, evidence, or the learnings store; contributed knowledge sources flow through the consolidation loop.
 - [x] **P5AC6** A crashing plugin cannot take down the host process.
 
 ### Phase 5 workstreams
 
-- [x] **P5.1** Resource manifests and bundles on the existing hydration machinery, with provenance and deterministic precedence (P5AC1, P5AC2).
+- [x] **P5.1** Resource manifests and bundles with provenance and deterministic precedence (P5AC2). *(Hydration integration dropped with P5AC1.)*
+- [x] **P5.6** Locally-added primitives: discovery, validation, explicit registration, and the doctor fix — the workflow that replaced external distribution.
 - [x] **P5.2** Integrity pinning and trust for distributed bundles (P5AC3) — extends Phase 3's trust rather than adding a second model.
 - [x] **P5.3** The out-of-process plugin protocol: version negotiation, declared capabilities, timeout and cancellation, crash isolation (P5AC4, P5AC6).
 - [x] **P5.4** The write boundary: plugins never touch policy, journal, evidence, or the learnings store (P5AC5).
@@ -349,6 +365,7 @@ Each lands as one reviewable commit with its own review pass, per the delivery d
 - `packages/harness/lib/exec-policy.mjs`
 - `packages/harness/lib/gate.mjs`
 - `packages/harness/lib/policy.mjs`
+- `packages/harness/lib/local-primitives.mjs`
 - `packages/harness/lib/plugin-host.mjs`
 - `packages/harness/lib/redact.mjs`
 - `packages/harness/lib/resources.mjs`
@@ -365,6 +382,7 @@ Each lands as one reviewable commit with its own review pass, per the delivery d
 - `packages/harness/lib/runner.mjs`
 - `packages/harness/lib/session.mjs`
 - `packages/harness/lib/style.mjs`
+- `packages/harness/lib/sync.mjs`
 - `packages/harness/lib/trust.mjs`
 - `packages/harness/lib/tui-cmd.mjs`
 - `packages/harness/lib/tui/`

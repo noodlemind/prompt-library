@@ -204,8 +204,9 @@ const DECLARED_VERBS = Object.freeze({
   // Every run verb reads. `resume` REPORTS whether resuming is safe rather than
   // performing it, so the palette must not paint it as an action.
   run: ['list', 'show', 'tree', 'resume'],
-  // `enable`/`disable` change what loads; `list`/`show` override DOWN to read.
-  resources: ['list', 'show', 'enable', 'disable'],
+  // `register`/`unregister` change what the harness recognizes; `list`/`show`
+  // override DOWN to read.
+  resources: ['list', 'show', 'register', 'unregister'],
 });
 
 const VERB_FLAGS = Object.freeze({
@@ -252,7 +253,7 @@ const VERB_POSITIONALS = Object.freeze({
   // `list` takes no id — it is the query over all of them.
   run: { show: ['run-id'], tree: ['run-id'], resume: ['run-id'] },
   // `list` takes no name — it is the query over all of them.
-  resources: { show: ['name'], enable: ['name'], disable: ['name'] },
+  resources: { show: ['path'], register: ['path'], unregister: ['path'] },
 });
 
 test('AC8: every verb-consumed positional is declared and reaches its row as a picker', () => {

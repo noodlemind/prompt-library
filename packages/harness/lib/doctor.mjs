@@ -816,7 +816,7 @@ export async function runDoctor({ copilotHome, assetsRoot, pkgRoot, flags, vscod
   // to compare against, so never claim orphans that cannot be verified.
   const assetsAvailable = fs.existsSync(path.join(assetsRoot, 'skills', 'engineer', 'SKILL.md'));
   const orphans =
-    pkgRoot && assetsAvailable ? findStaleOrphans(copilotHome, assetsRoot, loadRetired(pkgRoot)) : [];
+    pkgRoot && assetsAvailable ? findStaleOrphans(copilotHome, assetsRoot, loadRetired(pkgRoot), new Set(readLock(copilotHome)?.files || [])) : [];
   checks.push({
     id: 'H17',
     name: 'No stale orphaned primitives',
