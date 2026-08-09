@@ -24,7 +24,7 @@ jobs:
       # persist-credentials: false — nothing in this job talks to GitHub after
       # the clone, so the job token has no reason to sit in `.git/config` where
       # every later step (and every action they invoke) could read it.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
 
@@ -32,7 +32,7 @@ jobs:
       # (Node 20 left maintenance in April 2026). Single version on purpose —
       # the suite is pure Node with one runtime dependency, so a matrix would
       # buy little for double the compute. Add 24 here if that changes.
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '22'
           cache: npm
