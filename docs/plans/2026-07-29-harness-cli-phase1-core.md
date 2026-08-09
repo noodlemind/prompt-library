@@ -465,6 +465,39 @@ Final whole-branch review (2026-08-06, architecture + security + patterns lenses
 
 ## Activity
 
+### 2026-08-09 — Codex phase-5 review: 14 findings, 13 fixed, 1 disputed and fixed differently
+
+Per the standing instruction to close each phase with a Codex review. Every finding was reproduced before being fixed, and each fix is pinned by `test/codex-phase5-findings.test.mjs`, written to fail against the pre-fix tree — **15 of its 16 behavioral tests fail on commit `640dd38`**; the one that passes is the deliberate both-directions guard that retirement still works.
+
+**Three were reporting-untruths**, which is the worse class — a wrong answer nobody can detect beats a missing one:
+
+- **F2 (high)** withdrawal deleted whatever now sat at a recorded path. Two ways that destroys someone else's file: a bundle places `skills/x/SKILL.md`, a later harness version SHIPS that path, hydration writes the package copy, placement refuses the bundle (the package wins) — and withdrawal then deletes the package file it just wrote. Or the operator simply edits the file before disabling the bundle. **A path is not ownership; the bytes are.** Placements now record a digest, and withdrawal deletes only bytes that still match.
+- **F10 (medium)** a deletion that failed with `EBUSY`/`EACCES` was caught, reported as withdrawn, and dropped from the record — leaving a stale file that nothing claimed. Only `ENOENT` now means "already gone"; anything else is retained, reported, and keeps its record.
+- **F13 (medium)** the comment on `providerEnv` said the key was "passed by NAME and never read into a harness variable". That is not what the code does and cannot be: `spawn` takes an environment OBJECT, so building a deny-all one requires the parent to hold the value long enough to copy it. **The test passed only because it skipped the file.**
+
+**F13 is the one I disputed, and the disagreement is worth recording.** Codex's remedy was a credential store or broker so the adapter acquires the secret itself. That is a named Non-Goal — "no credential custodian, no `--provider-key-fd`, no separate-UID provider broker" — inherited from the agent-loop spec precisely because it is the kind of thing that grew the retired 223-file evaluation tree. The alternative Codex did not consider is worse: handing the child the ambient environment so it can find the key itself abandons the deny-all guarantee for the one child that holds a secret. **The design is right and the claim was overstated**, so the comment now states the true, narrower property and three tests assert it directly — a getter proxy counts reads (exactly one), the returned environment is checked for the value appearing anywhere but its own name, and no module outside the seam may call `providerEnv`.
+
+**A related wording fix.** Codex flagged "no operator command starts a plugin" as false now that `harness agent` exists, and that was fair. Stated precisely: an operator cannot NOMINATE a plugin. `--provider` selects from a frozen list shipped in this package; no flag, config key, manifest field or environment variable introduces an executable. Choosing among first-party adapters is not the permission that was declined.
+
+**The rest, fixed as reported:**
+
+- **F1 (high)** placement records were trusted on the way back out, so `files: ["../../victim.txt"]` deleted a file outside `~/.copilot` entirely. The manifest parser refusing traversal on the way IN is not a reason to trust a separate artifact on the way OUT.
+- **F3 (high)** integrity hashed the bundle at discovery and placement read it AGAIN, so bytes swapped between the two were installed under a pin that approved something else. Worse for a symlink: `Dirent.isFile()` excluded it from the digest while `readFileSync` followed it, so its target was never pinned at all. Sources are now read once through an `lstat`-checked handle, symlinks are refused at placement, and the digest covers them by target so repointing breaks the pin.
+- **F4 (high)** `new URL(import.meta.url).pathname` is percent-ENCODED, so an install under `C:\Users\Jane Doe\` resolved to `Jane%20Doe` and **every** `harness agent` run failed with "provider adapter missing".
+- **F5 (high)** validation and the registration digest were separate reads, so content swapped between them was pinned as approved without ever being validated. One read, one buffer, one decision.
+- **F6 (high)** the frame cap only rejected buffers with NO newline, so a 200 MB frame ending in `\n` was extracted and parsed. The cap now applies to the frame, not merely to the wait for one.
+- **F7 (medium)** `agent` was missing from the SIGINT bridge, so Ctrl-C during a model call skipped the `finally` that closes the provider — orphaning its HTTP request — and wrote no terminal journal record, on the longest-running command in the CLI.
+- **F8 (medium)** the deadline was checked only at the top of a turn. Three tool calls where the first exhausted the budget spawned all three, the last two with negative remaining time; and a completion arriving after the deadline was reported as `done` rather than `time-budget`.
+- **F9 (medium)** `run.start` persisted the raw argv, so `harness agent "summarize the BLUEBIRD acquisition"` wrote the task verbatim into `runs.jsonl`. Redaction recognizes secret SHAPES and cannot know a sentence is confidential. The loop's own turn records were careful about this from the start; the generic journal write underneath them was not — which made "the transcript is never journaled" true of the part I wrote and false of the whole. The task is now recorded as a length and a digest, via a `journalArgv` entry hook so a future free-text command gets the same treatment rather than having to remember.
+- **F11 (medium)** settlement was the fall-through for any typed message carrying an id, so `{"type":"hello","id":"<pending>"}` resolved a live request with `undefined` — the agent would have reported a completed turn it never received.
+- **F12 (medium)** `closed` conflated "the protocol is unusable" with "the process is gone", so a child that closed stdin while staying alive tripped EPIPE, marked the handle closed, and was never killed. **The original test for this passed vacuously** — its child used `require` in an `.mjs` file, so the heartbeat threw, the marker was never written, and the assertion compared `'0'` to `'0'`. Rewritten with a real import; it now hangs the runner against the pre-fix tree, which is the leak itself.
+- **F14 (low)** every `--flag` was assumed to take a value, so `harness agent --dry-run fix the bug` ran the task "the bug". Silently, which is the worst way to get a task wrong.
+
+**Verification caveat from the reviewer, recorded honestly:** Codex could not run the suite — its sandbox rejected every `mkdtemp` with `EPERM` — so its findings come from static analysis and in-memory probes rather than a green run. Every one was reproduced here before being fixed.
+
+Suite: 1611 tests, 1602 pass, 9 skipped, 0 fail. `harness verify` 14/14.
+
+
 ### 2026-08-09 — Provider choice: one more adapter, five more providers
 
 Asked whether an Anthropic key is actually required. It is not, and the seam was built so the answer could be no: `lib/providers/openai-compatible.mjs` speaks `/chat/completions`, so **OpenRouter, OpenCode Zen, Zen Go, OpenAI and Ollama** are now `--provider` values rather than future work. The loop was not touched — which is the property the provider-neutrality test was written to protect, now demonstrated rather than asserted.

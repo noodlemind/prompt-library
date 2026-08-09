@@ -15,10 +15,18 @@
  * source level, so it survives as a checked fact rather than a habit.
  *
  * THE BOUNDARY: first-party only. Phase 5 declined THIRD-PARTY executable
- * extensions, and that decision stands. A bundle cannot start a plugin; no
- * operator command starts a plugin; there is no registration path. The reversal
- * that allowed this seam allowed one caller — this one — and the test suite
- * enforces the count rather than trusting the comment.
+ * extensions, and that decision stands. A bundle cannot start a plugin, there
+ * is no registration path, and the reversal that allowed this seam allowed one
+ * caller — this one — with the test suite enforcing the count rather than
+ * trusting the comment.
+ *
+ * Stated precisely, because the loose version was flagged (Codex phase-5
+ * review) and it was fair: `harness agent` IS an operator command and it DOES
+ * start a plugin. What an operator cannot do is NOMINATE one. `--provider`
+ * selects from `PROVIDERS`, a frozen list of adapters shipped in this package;
+ * there is no flag, config key, manifest field or environment variable that
+ * introduces a new executable. Choosing among first-party adapters is not the
+ * permission that was declined.
  *
  * A bundle manifest can still carry a `plugin:` field. Nothing reads it, and
  * nothing here consults it. It is parsed so a manifest that declares one is
@@ -27,6 +35,7 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { MAX_COMPLETION_LINE_BYTES, startPlugin } from './plugin-host.mjs';
 
 /** A model call is slower than a local tool, and a provider that has not
@@ -155,9 +164,25 @@ function usageError(message, hint) {
  * child the harness gives a secret to, which makes it the child whose
  * environment deserves the most scrutiny, not the least.
  *
- * The key is passed by NAME from the parent environment and never read into a
- * harness variable, so it cannot reach a log, an event, or the journal by
- * accident on its way through.
+ * WHAT THIS FUNCTION ACTUALLY DOES WITH THE CREDENTIAL, corrected after the
+ * Codex phase-5 review (F13) called out the previous comment as false. It read
+ * "the key is passed by NAME and never read into a harness variable", which is
+ * not what the code does and could not be: `spawn` takes an environment OBJECT,
+ * so building a deny-all one REQUIRES the parent to hold the value long enough
+ * to copy it in. The alternative — handing the child the ambient environment so
+ * it can find the key itself — abandons the deny-all guarantee, which is a much
+ * worse trade for the one child that holds a secret.
+ *
+ * The true and narrower property: the value lives in this function and in the
+ * object it returns, is read by nothing else in core, is never returned to a
+ * caller in any other shape, and never reaches a log, an event, the journal or
+ * a result. `test/provider-seam.test.mjs` asserts that directly rather than by
+ * excluding this file, which is how the old claim survived being wrong.
+ *
+ * A credential broker, a `--provider-key-fd`, or a separate-UID launcher would
+ * remove even the transient copy. All three are named Non-Goals in the plan —
+ * they are what grew the retired 223-file evaluation tree — and an env var on a
+ * dedicated key is the proportionate control.
  */
 export function providerEnv(provider, { parentEnv = process.env } = {}) {
   const env = {};
@@ -215,7 +240,11 @@ export function startProvider({
   spawnFn = undefined,
 } = {}) {
   const provider = resolveProvider(providerId);
-  const root = packageRoot || path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
+  // F4 (Codex phase-5 review): `new URL(...).pathname` is percent-ENCODED, so
+  // an install under `C:\Users\Jane Doe\` resolved to `Jane%20Doe` and every
+  // `harness agent` run failed with "provider adapter missing". `fileURLToPath`
+  // is the decoding conversion, and it also gets Windows drive letters right.
+  const root = packageRoot || path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
   const adapter = path.join(root, 'lib', provider.adapter);
   if (!fs.existsSync(adapter)) {
     throw Object.assign(new Error(`provider adapter missing: ${provider.adapter}`), { code: 'E_TARGET', exit: 1 });

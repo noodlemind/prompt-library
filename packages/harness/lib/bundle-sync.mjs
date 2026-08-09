@@ -26,6 +26,7 @@
  * mixing them would make `uninstall` remove someone's bundle or leave the
  * package's own files behind. `harness/bundles.yaml` records who placed what.
  */
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import YAML from 'yaml';
@@ -65,6 +66,14 @@ export function readPlacements(copilotHome) {
     if (!bundles || typeof bundles !== 'object' || Array.isArray(bundles)) {
       return { version: PLACEMENTS_SCHEMA, bundles: {}, unreadable: true };
     }
+    // Every recorded path is checked here, at the boundary, so no consumer has
+    // to remember to — the deletion loop below is the one that would forget.
+    for (const record of Object.values(bundles)) {
+      if (!record || !Array.isArray(record.files)) continue;
+      if (!record.files.every((f) => isContainedPlacement(typeof f === 'string' ? f : f?.path))) {
+        return { version: PLACEMENTS_SCHEMA, bundles: {}, unreadable: true };
+      }
+    }
     return { version: doc.version || PLACEMENTS_SCHEMA, bundles };
   } catch {
     // Damaged, not empty — the same rule the trust and registration stores
@@ -86,7 +95,7 @@ export function placedFiles(copilotHome) {
   const placements = readPlacements(copilotHome);
   const all = new Set();
   for (const record of Object.values(placements.bundles)) {
-    for (const rel of record?.files || []) all.add(rel);
+    for (const entry of record?.files || []) all.add(typeof entry === 'string' ? entry : entry.path);
   }
   return all;
 }
@@ -102,6 +111,48 @@ export function placedFiles(copilotHome) {
 export function placementFor(kind, rel) {
   return { source: path.join(kind, rel), target: `${kind}/${rel}`.split(path.sep).join('/') };
 }
+
+/**
+ * Whether a recorded placement path is one this code may act on.
+ *
+ * F1 (Codex phase-5 review): withdrawal did `fs.rmSync(path.join(copilotHome,
+ * rel))` over paths read back from `bundles.yaml` without checking them, so a
+ * record containing `../../victim.txt` deleted a file outside `~/.copilot`
+ * entirely. The manifest parser already refuses traversal on the way IN; that
+ * is not a reason to trust the file on the way back OUT, because the record is
+ * a separate artifact that a different bug — or a hand edit — can corrupt.
+ *
+ * Lexical, deliberately: this decides whether a path is well-formed, and runs
+ * before anything is resolved or opened. A `realpath` check belongs at the
+ * moment of deletion, where `assertRealpathContained` already does it.
+ */
+export function isContainedPlacement(rel) {
+  if (typeof rel !== 'string' || !rel || rel.includes('\0')) return false;
+  if (path.isAbsolute(rel) || /^[a-zA-Z]:/.test(rel)) return false;
+  const normalized = path.normalize(rel).split(path.sep).join('/');
+  if (normalized.startsWith('../') || normalized === '..') return false;
+  return !normalized.split('/').includes('..');
+}
+
+/**
+ * A source file's bytes, read once, refusing anything that is not a regular
+ * file.
+ *
+ * F3 (Codex phase-5 review): integrity hashed the bundle at discovery and
+ * placement read it AGAIN, so bytes swapped between the two were installed
+ * under a pin that had approved something else. Worse for a symlink: the
+ * digest walk skips it (`Dirent.isFile()` is false) while `readFileSync`
+ * follows it, so its target was never pinned at all and could be anything on
+ * the filesystem.
+ */
+function readSourceOnce(full) {
+  const stat = fs.lstatSync(full);
+  if (stat.isSymbolicLink()) throw Object.assign(new Error('is a symlink'), { code: 'E_TARGET' });
+  if (!stat.isFile()) throw Object.assign(new Error('is not a regular file'), { code: 'E_TARGET' });
+  return fs.readFileSync(full);
+}
+
+const digestOf = (bytes) => `sha256-${crypto.createHash('sha256').update(bytes).digest('hex')}`;
 
 /**
  * Place every enabled bundle's winning contributions, and withdraw anything a
@@ -132,19 +183,32 @@ export function syncBundles({ copilotHome, shippedFiles = new Set(), trustedName
       continue;
     }
     const from = path.join(bundle.dir, source);
-    if (!fs.existsSync(from)) {
-      refused.push({ bundle: row.winner, target, reason: `declared but missing from the bundle: ${source}` });
+    let bytes;
+    try {
+      bytes = readSourceOnce(from);
+    } catch (error) {
+      refused.push({
+        bundle: row.winner,
+        target,
+        reason: error.code === 'E_TARGET' ? `${source} ${error.message}` : `declared but missing from the bundle: ${source}`,
+      });
       continue;
     }
     if (!dryRun) {
-      const written = writeFileContained(copilotHome, target, fs.readFileSync(from));
+      // The SNAPSHOT is written, and the snapshot is what gets hashed — no
+      // second read for anything to happen between.
+      const written = writeFileContained(copilotHome, target, bytes);
       if (!written) {
         refused.push({ bundle: row.winner, target, reason: 'refused by path containment' });
         continue;
       }
     }
     placed.push({ bundle: row.winner, target });
-    (nextBundles[row.winner] ||= { version: bundle.manifest?.version ?? null, files: [] }).files.push(target);
+    // The digest is what makes withdrawal safe: it is how a later run tells a
+    // file this bundle put there from one the package or the operator has since
+    // written over the top of it.
+    (nextBundles[row.winner] ||= { version: bundle.manifest?.version ?? null, files: [] })
+      .files.push({ path: target, digest: digestOf(bytes) });
     for (const loser of row.shadowed) shadowed.push({ bundle: loser, target, winner: row.winner });
   }
 
@@ -155,19 +219,61 @@ export function syncBundles({ copilotHome, shippedFiles = new Set(), trustedName
   const previous = readPlacements(copilotHome);
   const stillPlaced = new Set(placed.map((p) => p.target));
   const withdrawn = [];
+  const retained = [];
   if (!previous.unreadable) {
-    for (const record of Object.values(previous.bundles)) {
-      for (const rel of record?.files || []) {
+    for (const [name, record] of Object.entries(previous.bundles)) {
+      for (const entry of record?.files || []) {
+        const rel = typeof entry === 'string' ? entry : entry.path;
+        const recordedDigest = typeof entry === 'string' ? null : entry.digest;
         if (stillPlaced.has(rel)) continue;
-        const full = path.join(copilotHome, rel);
-        if (!dryRun) {
-          try {
-            fs.rmSync(full, { force: true });
-          } catch {
-            /* already gone */
-          }
+
+        // F2 (Codex phase-5 review): withdrawal used to delete whatever now sat
+        // at the path. Two ways that destroys someone else's file. A bundle
+        // places `skills/x/SKILL.md`; a later harness version SHIPS that path;
+        // hydration writes the package's copy, placement refuses the bundle
+        // (the package wins), and withdrawal then deletes the package file. Or
+        // the operator simply edits the file before disabling the bundle. A
+        // path is not ownership — the bytes are.
+        if (shippedFiles.has(rel)) {
+          retained.push({ bundle: name, target: rel, reason: 'the harness now ships this path' });
+          continue;
         }
-        withdrawn.push(rel);
+        const full = path.join(copilotHome, rel);
+        let current = null;
+        try {
+          current = fs.lstatSync(full).isFile() ? digestOf(fs.readFileSync(full)) : null;
+        } catch (error) {
+          if (error.code === 'ENOENT') { withdrawn.push(rel); continue; }
+          retained.push({ bundle: name, target: rel, reason: `unreadable (${error.code || error.message})` });
+          continue;
+        }
+        if (current === null) {
+          retained.push({ bundle: name, target: rel, reason: 'not a regular file' });
+          continue;
+        }
+        // A record written before digests existed has nothing to compare, and
+        // deleting on a path match alone is what this fix removes. It is
+        // retained and reported rather than guessed at.
+        if (!recordedDigest) {
+          retained.push({ bundle: name, target: rel, reason: 'placed before placements recorded content; remove it by hand' });
+          continue;
+        }
+        if (current !== recordedDigest) {
+          retained.push({ bundle: name, target: rel, reason: 'the file has changed since this bundle placed it' });
+          continue;
+        }
+        if (dryRun) { withdrawn.push(rel); continue; }
+        try {
+          fs.rmSync(full);
+          withdrawn.push(rel);
+        } catch (error) {
+          // F10: only ENOENT means "already gone". Reporting an EBUSY or EACCES
+          // as withdrawn AND dropping it from the record left the file in place
+          // with nothing recording that a bundle owns it.
+          if (error.code === 'ENOENT') { withdrawn.push(rel); continue; }
+          retained.push({ bundle: name, target: rel, reason: `could not remove (${error.code || error.message})` });
+          (nextBundles[name] ||= { version: record?.version ?? null, files: [] }).files.push(entry);
+        }
       }
     }
   }
@@ -175,5 +281,5 @@ export function syncBundles({ copilotHome, shippedFiles = new Set(), trustedName
   if (!dryRun && !previous.unreadable) {
     writePlacements(copilotHome, { version: PLACEMENTS_SCHEMA, bundles: nextBundles });
   }
-  return { placed, withdrawn, refused, shadowed, unreadable: previous.unreadable === true };
+  return { placed, withdrawn, retained, refused, shadowed, unreadable: previous.unreadable === true };
 }

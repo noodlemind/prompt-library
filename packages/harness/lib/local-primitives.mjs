@@ -78,7 +78,31 @@ export function fileDigest(full) {
  * "not yet working" — from Copilot's side it simply does not exist, and the
  * person who added it has no signal at all.
  */
-export function validatePrimitive(copilotHome, rel) {
+/**
+ * Read a primitive once, refusing anything that is not a regular file.
+ *
+ * F5/F3 (Codex phase-5 review): validation read the file and registration read
+ * it AGAIN to hash it, so content swapped between the two reads was registered
+ * as approved while never having been validated. One read, one buffer, one
+ * decision — and `lstat` first, because a symlink passes `readFileSync` by
+ * following it somewhere the containment check never looked.
+ */
+export function readPrimitiveOnce(copilotHome, rel) {
+  const full = path.join(copilotHome, rel);
+  const stat = fs.lstatSync(full);
+  if (stat.isSymbolicLink()) {
+    throw Object.assign(new Error(`${rel}: is a symlink`), { code: 'E_TARGET', exit: 1 });
+  }
+  if (!stat.isFile()) {
+    throw Object.assign(new Error(`${rel}: is not a regular file`), { code: 'E_TARGET', exit: 1 });
+  }
+  const bytes = fs.readFileSync(full);
+  // Same shape `fileDigest` produces, so a snapshot digest and a re-read digest
+  // are comparable — `localPrimitiveStatus` compares them to decide `stale`.
+  return { bytes, text: bytes.toString('utf8'), digest: `sha256-${crypto.createHash('sha256').update(bytes).digest('hex')}` };
+}
+
+export function validatePrimitive(copilotHome, rel, snapshot = null) {
   const errors = [];
   const kindKey = Object.keys(PRIMITIVE_KINDS).find((k) => rel.startsWith(`${PRIMITIVE_KINDS[k].dir}/`));
   const kind = kindKey ? PRIMITIVE_KINDS[kindKey] : null;
@@ -87,30 +111,35 @@ export function validatePrimitive(copilotHome, rel) {
     errors.push(`${rel}: a ${kindKey.replace(/s$/, '')} must be ${kind.describe} — a file elsewhere is never discovered`);
   }
 
-  const full = path.join(copilotHome, rel);
+  // The caller may supply the bytes it is about to pin, so validation and the
+  // digest describe the same content. Reading here is the convenience path for
+  // callers that only want an opinion.
   let text = '';
+  let digest = null;
   try {
-    text = fs.readFileSync(full, 'utf8');
+    const read = snapshot || readPrimitiveOnce(copilotHome, rel);
+    text = read.text;
+    digest = read.digest;
   } catch (error) {
-    return { valid: false, kind: kindKey, name: null, errors: [`${rel}: unreadable (${error.code || error.message})`] };
+    return { valid: false, kind: kindKey, name: null, digest: null, errors: [`${rel}: unreadable (${error.code || error.message})`] };
   }
 
   // Frontmatter: the host reads it to learn the primitive exists at all.
   const match = /^---\r?\n([\s\S]*?)\r?\n---/.exec(text);
   if (!match) {
     errors.push(`${rel}: no YAML frontmatter — the host cannot discover a primitive without it`);
-    return { valid: false, kind: kindKey, name: null, errors };
+    return { valid: false, kind: kindKey, name: null, digest, errors };
   }
   let front;
   try {
     front = YAML.parse(match[1], { maxAliasCount: 50 });
   } catch (error) {
     errors.push(`${rel}: frontmatter is not valid YAML (${error.message})`);
-    return { valid: false, kind: kindKey, name: null, errors };
+    return { valid: false, kind: kindKey, name: null, digest, errors };
   }
   if (!front || typeof front !== 'object' || Array.isArray(front)) {
     errors.push(`${rel}: frontmatter must be a mapping`);
-    return { valid: false, kind: kindKey, name: null, errors };
+    return { valid: false, kind: kindKey, name: null, digest, errors };
   }
   const name = typeof front.name === 'string' ? front.name.trim() : '';
   if (!name) errors.push(`${rel}: frontmatter needs a name`);
@@ -124,7 +153,7 @@ export function validatePrimitive(copilotHome, rel) {
     errors.push(`${rel}: frontmatter name ${JSON.stringify(name)} does not match its path (${onDisk})`);
   }
 
-  return { valid: errors.length === 0, kind: kindKey, name: name || null, errors };
+  return { valid: errors.length === 0, kind: kindKey, name: name || null, digest, errors };
 }
 
 function readRegistry(copilotHome) {
@@ -224,7 +253,19 @@ export function registerPrimitive({ copilotHome, rel, now = new Date().toISOStri
       hint: 'harness resources list — only files the harness did not ship can be registered',
     });
   }
-  const validation = validatePrimitive(copilotHome, rel);
+  // One read for both decisions — see readPrimitiveOnce. The digest below is
+  // OF THE BYTES THAT PASSED, not of whatever is on disk a moment later.
+  let snapshot;
+  try {
+    snapshot = readPrimitiveOnce(copilotHome, rel);
+  } catch (error) {
+    throw Object.assign(new Error(`refusing to register ${rel}: ${error.message}`), {
+      code: error.code || 'E_TARGET',
+      exit: error.exit || 1,
+      hint: 'registration pins content, which requires a regular file it can read once',
+    });
+  }
+  const validation = validatePrimitive(copilotHome, rel, snapshot);
   if (!validation.valid) {
     // Validation gates registration, which is the whole point of the flow: a
     // primitive the host would never load must not be marked as working.
@@ -245,7 +286,7 @@ export function registerPrimitive({ copilotHome, rel, now = new Date().toISOStri
   registry.version = REGISTRY_SCHEMA;
   registry.primitives[rel] = {
     registeredAt: now,
-    digest: fileDigest(path.join(copilotHome, rel)),
+    digest: snapshot.digest,
     kind: validation.kind,
     name: validation.name,
   };

@@ -77,20 +77,51 @@ test('P5AC7: harness core imports no model SDK', () => {
     'out-of-process placement is what keeps "Harness never consumes a model" literally true; an SDK in core collapses it');
 });
 
-test('P5AC7: harness core never reads a provider key', () => {
+test('P5AC7: no module in core except the seam names a provider key at all', () => {
   const keyVars = Object.values(PROVIDERS).map((p) => p.keyVar);
   const offenders = [];
   for (const { rel, text } of libSources()) {
-    // `provider.mjs` names the variable to pass it BY NAME into the child
-    // environment; it never reads the value into a harness variable.
+    // `provider.mjs` is checked BY BEHAVIOR below rather than skipped here.
+    // Excluding it is how the previous version of this test passed while the
+    // property it claimed was false (Codex phase-5 review, F13).
     if (rel === 'lib/provider.mjs') continue;
     for (const keyVar of keyVars) {
-      if (text.includes(`process.env.${keyVar}`) || text.includes(`process.env[`) && text.includes(keyVar)) {
-        offenders.push(`${rel} reads ${keyVar}`);
-      }
+      if (text.includes(keyVar)) offenders.push(`${rel} names ${keyVar}`);
     }
   }
-  assert.deepEqual(offenders, [], 'the provider process holds the credential; core must not touch it');
+  assert.deepEqual(offenders, [], 'the seam is the only module in core that should know a credential variable exists');
+});
+
+test('P5AC7: the credential is touched exactly once, and goes nowhere but the child environment', () => {
+  // A getter counts every read, so this measures what the code DOES rather
+  // than what its comment says. `spawn` takes an environment object, so one
+  // read is unavoidable — the property worth asserting is that it is one, and
+  // that the value appears nowhere else.
+  let reads = 0;
+  const parentEnv = { PATH: '/usr/bin' };
+  Object.defineProperty(parentEnv, 'ANTHROPIC_API_KEY', {
+    enumerable: true,
+    get() { reads += 1; return 'sk-ant-SENTINEL'; },
+  });
+
+  const env = providerEnv(resolveProvider('anthropic'), { parentEnv });
+  assert.equal(reads, 1, 'a second read is a second place the value can be captured');
+  assert.equal(env.ANTHROPIC_API_KEY, 'sk-ant-SENTINEL', 'the child does need it');
+
+  // It must appear under its own name and nowhere else — not duplicated into a
+  // diagnostic field, not echoed into the base URL, not in the provider id.
+  const elsewhere = Object.entries(env).filter(([k, v]) => k !== 'ANTHROPIC_API_KEY' && String(v).includes('SENTINEL'));
+  assert.deepEqual(elsewhere, [], 'the credential is in the environment, not in the report about it');
+});
+
+test('P5AC7: no core module outside the seam calls providerEnv, so the copy cannot spread', () => {
+  const callers = [];
+  for (const { rel, text } of libSources()) {
+    if (rel === 'lib/provider.mjs') continue;
+    if (/\bproviderEnv\s*\(/.test(text)) callers.push(rel);
+  }
+  assert.deepEqual(callers, [],
+    'the transient copy is acceptable BECAUSE it is confined to one function; a second caller is what would make it a leak');
 });
 
 test('P5AC7: the adapter is a separate process — nothing in core imports it', () => {

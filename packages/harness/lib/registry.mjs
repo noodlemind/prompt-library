@@ -68,7 +68,7 @@ import { cmdResources, resourcesResultOf, resourcesExitFor, RESOURCES_VERBS } fr
 import { CONFIG_KEYS, SCOPES } from './config.mjs';
 import { RUN_STATUSES } from './run-journal.mjs';
 import { cmdExec, execResultOf, cmdBash, bashResultOf, exitFor as execExitFor } from './exec-cmd.mjs';
-import { cmdAgent, agentResultOf, agentExitFor, taskFromArgv } from './agent-cmd.mjs';
+import { cmdAgent, agentResultOf, agentExitFor, agentJournalArgv, taskFromArgv } from './agent-cmd.mjs';
 import { DEFAULT_MAX_SECONDS, DEFAULT_MAX_TURNS, DEFAULT_PERSONA } from './agent-loop.mjs';
 import { PROVIDERS } from './provider.mjs';
 import {
@@ -1591,6 +1591,11 @@ registerCommand({
   requireArgs: agentRequireArgs,
   handler: cmdAgent,
   resultOf: agentResultOf,
+  // The journal records WHICH run this was and how it was configured, not what
+  // it was asked to do in words — see agentJournalArgv. Declared as an entry
+  // hook so any future command carrying free text gets the same treatment
+  // rather than each one remembering to.
+  journalArgv: agentJournalArgv,
   // The stop reason decides the exit code — see STOP_REASONS. Without this the
   // envelope lane would exit 0 on a run that hit its turn budget without
   // finishing, which is the reading the named stop conditions exist to prevent.

@@ -15,6 +15,7 @@
  * and the per-turn ledger a person watches while it works.
  */
 import path from 'node:path';
+import { createHash } from 'node:crypto';
 import { parseFlags } from './flags.mjs';
 import { createStyle, keyWidthFor, EXIT } from './style.mjs';
 import { redactedJson, createRedactor } from './redact.mjs';
@@ -23,6 +24,7 @@ import { resolveCopilotHome } from './paths.mjs';
 import { runOrient } from './orient.mjs';
 import { startProvider, PROVIDERS } from './provider.mjs';
 import {
+  AGENT_VALUE_FLAGS,
   BENCHMARK_PROFILE,
   DEFAULT_MAX_SECONDS,
   DEFAULT_MAX_TURNS,
@@ -89,13 +91,51 @@ export function taskFromArgv(argv) {
   for (let i = 0; i < argv.length; i += 1) {
     const a = argv[i];
     if (a === '--') break;
-    if (a.startsWith('--')) {
-      if (!a.includes('=') && argv[i + 1] !== undefined && !argv[i + 1].startsWith('--')) i += 1;
+    if (a.startsWith('-')) {
+      // Only a flag that DECLARES a value may consume the next token. The
+      // previous version let any flag do it, so a boolean before the task ate
+      // its first word — see AGENT_VALUE_FLAGS.
+      if (!a.includes('=') && AGENT_VALUE_FLAGS.includes(a) && argv[i + 1] !== undefined) i += 1;
       continue;
     }
     words.push(a);
   }
   return words.join(' ').trim();
+}
+
+/**
+ * What the run journal is allowed to record about an `agent` invocation.
+ *
+ * F9 (Codex phase-5 review): `run.start` persists the raw argv, so
+ * `harness agent "summarize the BLUEBIRD acquisition"` wrote the task verbatim
+ * into `runs.jsonl` — durable, and untouched by redaction, which recognizes
+ * secret SHAPES and cannot know that a sentence is confidential. The loop's
+ * own turn records were careful about this from the start; the generic journal
+ * write underneath them was not, which made the module's "the transcript is
+ * never journaled" claim true of the part I wrote and false of the whole.
+ *
+ * The task is replaced by its length and a digest. That keeps the two things a
+ * journal is actually for — correlating a run with its work, and telling two
+ * runs apart — without keeping the words. Flags are preserved: a persona name,
+ * a provider id and a turn budget are configuration, not conversation.
+ */
+export function agentJournalArgv(argv) {
+  const out = [];
+  const task = [];
+  for (let i = 0; i < argv.length; i += 1) {
+    const a = argv[i];
+    if (a === '--') break;
+    if (a.startsWith('-')) {
+      out.push(a);
+      if (!a.includes('=') && AGENT_VALUE_FLAGS.includes(a) && argv[i + 1] !== undefined) out.push(argv[i += 1]);
+      continue;
+    }
+    task.push(a);
+  }
+  if (!task.length) return out;
+  const text = task.join(' ');
+  const digest = createHash('sha256').update(text).digest('hex').slice(0, 12);
+  return [`<task:${Buffer.byteLength(text, 'utf8')}b:${digest}>`, ...out];
 }
 
 export function planAgent(argv) {

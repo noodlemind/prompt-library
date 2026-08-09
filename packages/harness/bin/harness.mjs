@@ -16,7 +16,7 @@ import path from 'node:path';
 import { inspect } from 'node:util';
 import { pathToFileURL } from 'node:url';
 import { createStyle, keyWidthFor, EXIT } from '../lib/style.mjs';
-import { dispatch as dispatchRegistered, hasCommand, describeCommand } from '../lib/registry.mjs';
+import { dispatch as dispatchRegistered, hasCommand, describeCommand, getCommand } from '../lib/registry.mjs';
 import { createEventRegistry } from '../lib/event-registry.mjs';
 import { writeEvent as writeHarnessEvent } from '../lib/events.mjs';
 import { parseFlags, hasFlag } from '../lib/flags.mjs';
@@ -370,7 +370,10 @@ async function main() {
           // The argv WITHOUT the lane flag, matching what dispatch actually
           // received — a journal that records a command the harness did not run
           // is the same class of lie as an audit that names the wrong argv.
-          argv: laneArgs,
+          // A command may project what it is willing to persist — see
+          // `journalArgv` in lib/registry.mjs. Free-text arguments are durable
+          // otherwise, and redaction recognizes secret shapes, not sentences.
+          argv: getCommand(command)?.journalArgv?.(laneArgs) ?? laneArgs,
           // P2-11: `--plan` and `--host` are FILTERS on `run list`, and reusing
           // them as this run's own attribution made `run list --host vscode`
           // record itself as having come from vscode. Identity comes from the
@@ -398,7 +401,12 @@ async function main() {
       // process exit) rather than risk a hang for a command whose handler
       // never reads ctx.signal.
       let signal;
-      if (['verify', 'exec', 'bash', 'checks'].includes(command)) {
+      // F7 (Codex phase-5 review): `agent` was missing here, so Ctrl-C during a
+      // model call took Node's default signal path — no `finally`, so the
+      // provider child was never closed and its HTTP request outlived the
+      // harness, and no terminal journal record was written for the longest
+      // running command in the CLI.
+      if (['verify', 'exec', 'bash', 'checks', 'agent'].includes(command)) {
         const controller = new AbortController();
         process.once('SIGINT', () => controller.abort());
         signal = controller.signal;

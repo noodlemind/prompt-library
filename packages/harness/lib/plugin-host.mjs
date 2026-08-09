@@ -113,6 +113,13 @@ export function startPlugin({
   // corrupting a message the plugin sent correctly.
   const decoder = new StringDecoder('utf8');
   let closed = false;
+  // F12 (Codex phase-5 review): `closed` conflated two different facts, and
+  // `close()` skipped `child.kill()` whenever it was set. A plugin that closed
+  // its stdin while STAYING ALIVE therefore tripped the EPIPE handler, marked
+  // the handle closed, and was then never killed — the host considered it dead
+  // while it held pipes and an in-flight HTTP request. Only an actual exit
+  // means there is nothing left to kill.
+  let exited = false;
   const logs = [];
   let crash = null;
 
@@ -145,6 +152,16 @@ export function startPlugin({
       buffer = buffer.slice(index + 1);
       index = buffer.indexOf('\n');
       if (!line.trim()) continue;
+      // F6 (Codex phase-5 review): the guard above only rejected a buffer with
+      // NO newline in it, so a plugin that terminated its flood was never
+      // bounded at all — a 200 MB frame ending in `\n` was extracted and
+      // handed to JSON.parse. The cap has to apply to the frame, not merely to
+      // the wait for one, or "bounded" describes the failure mode nobody
+      // triggers rather than the one they do.
+      if (line.length > maxLineBytes) {
+        pushLog({ level: 'warn', text: `discarded a ${line.length}-byte frame from plugin (cap ${maxLineBytes})` });
+        continue;
+      }
       let message;
       try {
         message = JSON.parse(line);
@@ -167,6 +184,19 @@ export function startPlugin({
         pushLog({ level: message.level === 'error' ? 'error' : 'info', text: String(message.text ?? '').slice(0, 4000) });
         continue;
       }
+      if (message.type === 'hello') {
+        // The handshake answer, and NOTHING else. F11 (Codex phase-5 review):
+        // settlement used to be the fall-through for any typed message
+        // carrying an id, so `{"type":"hello","id":"<pending>"}` resolved a
+        // live request with `undefined` — an agent would have reported a
+        // completed turn it never received. Only the two types the protocol
+        // defines as answers may settle one.
+        if (message.protocol !== undefined && message.protocol !== PROTOCOL_VERSION) {
+          pushLog({ level: 'warn', text: `plugin answered the handshake with protocol ${String(message.protocol).slice(0, 20)}, expected ${PROTOCOL_VERSION}` });
+        }
+        continue;
+      }
+      if (message.type !== 'result' && message.type !== 'error') continue;
       const entry = pending.get(message.id);
       if (!entry) continue;
       pending.delete(message.id);
@@ -190,6 +220,7 @@ export function startPlugin({
   });
   child.on('exit', (code, signal) => {
     closed = true;
+    exited = true;
     if (pending.size) {
       settleAll(Object.assign(
         new Error(`plugin exited (${signal ? `signal ${signal}` : `code ${code}`}) with ${pending.size} request(s) in flight`),
@@ -256,11 +287,13 @@ export function startPlugin({
       });
     },
     close({ graceMs = 2000 } = {}) {
-      if (closed) return;
+      // Nothing to do only once the process has actually gone. A closed
+      // PROTOCOL still leaves a child to terminate — see the `exited` note.
+      if (exited) return;
       try {
         send({ type: 'shutdown' });
       } catch {
-        /* already gone */
+        /* the pipe is already unusable; the kill below is the point */
       }
       child.kill();
       closed = true;

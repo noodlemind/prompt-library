@@ -160,13 +160,25 @@ export function bundleDigest(dir) {
       const relative = rel ? `${rel}/${entry.name}` : entry.name;
       if (entry.isDirectory()) walk(full, relative);
       else if (entry.isFile() && !NON_CONTENT_FILES.has(relative)) files.push([relative, full]);
+      // F3 (Codex phase-5 review): a symlink is neither a directory nor a file
+      // to `Dirent`, so it fell out of the digest entirely — the pin approved a
+      // bundle without covering the one entry whose content is decided
+      // elsewhere. It is HASHED AS A LINK, by its target string, so repointing
+      // it breaks the pin. `bundle-sync` refuses to place one regardless; this
+      // makes the integrity record honest about what is in the directory.
+      else if (entry.isSymbolicLink()) files.push([relative, full, 'symlink']);
     }
   };
   walk(dir);
   const hash = crypto.createHash('sha256');
-  for (const [rel, full] of files) {
+  for (const [rel, full, kind] of files) {
     hash.update(rel);
     hash.update('\0');
+    if (kind === 'symlink') {
+      hash.update('symlink\0');
+      hash.update(fs.readlinkSync(full));
+      continue;
+    }
     if (rel === MANIFEST_FILE) {
       // The manifest IS covered, minus the `integrity:` line that states the
       // digest — excluding it entirely meant changing `plugin: safe.mjs` to

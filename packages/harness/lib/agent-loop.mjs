@@ -128,6 +128,23 @@ export const AGENT_TOOLS = Object.freeze([
 
 const TOOL_NAMES = new Set(AGENT_TOOLS.map((t) => t.name));
 
+/**
+ * Flags that consume the token after them.
+ *
+ * F14 (Codex phase-5 review): `taskFromArgv` assumed every `--flag` took a
+ * value, so `harness agent --dry-run fix the bug` ate `fix` and ran the task
+ * "the bug" — silently, which is the worst way to get a task wrong.
+ *
+ * Declared here rather than in `lib/registry.mjs` only because the registry
+ * imports this module; `test/codex-phase5-findings.test.mjs` asserts this set
+ * matches the registry's own `type: 'string'` declarations exactly, so the two
+ * cannot drift. The registry stays the source of truth for what a flag IS.
+ */
+export const AGENT_VALUE_FLAGS = Object.freeze([
+  '--agent', '--provider', '--model', '--max-turns', '--max-seconds', '--tool-timeout',
+  '--workspace', '--copilot-home', '--output', '--plan', '--host', '--limit', '--query',
+]);
+
 function usageError(message, hint) {
   return Object.assign(new Error(message), { code: 'E_USAGE', exit: EXIT.usage, hint });
 }
@@ -416,6 +433,17 @@ export async function runAgentLoop({
       finalText = typeof completion?.text === 'string' ? completion.text : '';
       const calls = normalizeCalls(completion);
 
+      // F8 (Codex phase-5 review): the deadline was checked only at the TOP of
+      // a turn, so a completion arriving after it was reported as `done` — a
+      // run that ran out of time looked like a run that finished. It is checked
+      // again here, before the answer is acted on or accepted.
+      if (now() >= deadline) {
+        turns.push(recordTurn({ turnIndex, turnStartedAt, now, tools: [], usage: completion?.usage ?? null, ended: false }));
+        onTurn?.(turns[turns.length - 1], { text: finalText });
+        stop = 'time-budget';
+        break;
+      }
+
       // The assistant's own content goes back verbatim: the loop does not
       // interpret it, so a provider whose content model differs needs no change
       // here. See the module note.
@@ -433,6 +461,10 @@ export async function runAgentLoop({
       let fatal = null;
       for (const call of calls) {
         if (signal?.aborted) { fatal = { reason: 'cancelled', cancelled: true }; break; }
+        // …and again between calls in one batch. Three tool calls where the
+        // first exhausts the budget used to spawn all three, the last two with
+        // a negative remaining time. Nothing starts after the deadline.
+        if (now() >= deadline) { fatal = { reason: 'the wall clock was reached mid-batch', expired: true }; break; }
         const outcome = await dispatchToolCall(call, {
           workspace,
           copilotHome,
@@ -464,7 +496,7 @@ export async function runAgentLoop({
       onTurn?.(turn, { text: finalText });
 
       if (fatal) {
-        stop = fatal.cancelled ? 'cancelled' : 'tool-error';
+        stop = fatal.cancelled ? 'cancelled' : fatal.expired ? 'time-budget' : 'tool-error';
         detail = fatal.reason;
         break;
       }
