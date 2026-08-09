@@ -1,6 +1,6 @@
 ---
 plan_schema: 1
-title: "Harness CLI Workbench — Phase 1 core, Phase 2 knowledge operator, Phase 3 governed execution"
+title: "Harness CLI Workbench — Phase 1 core, Phase 2 knowledge operator, Phase 3 governed execution, Phase 4a durable runs"
 type: feat
 status: review
 plan_lock: true
@@ -19,10 +19,12 @@ expected_outputs:
   - "Central event registry with actor/execution metadata"
   - "Phase 2: search/lookup/tree over code, knowledge, learnings and plans with deterministic federation"
   - "Phase 3: checks/exec/bash with declared enforcement classes, config and trust, and an execution audit"
+  - "Phase 4a: an append-only run journal with stable ids, queryable history, and safe-boundary resume"
 success_criteria:
   - "AC1–AC10 below all pass via named checks"
   - "P2AC1–P2AC7 below all pass via named checks"
   - "P3AC1–P3AC7 below all pass via named checks"
+  - "P4aAC1–P4aAC7 below all pass via named checks"
 verification:
   required: [harness-tests, prompt-contracts, build-assets]
   criteria:
@@ -50,6 +52,13 @@ verification:
     P3AC5: [harness-tests]
     P3AC6: [harness-tests]
     P3AC7: [harness-tests, prompt-contracts]
+    P4aAC1: [harness-tests]
+    P4aAC2: [harness-tests]
+    P4aAC3: [harness-tests]
+    P4aAC4: [harness-tests]
+    P4aAC5: [harness-tests]
+    P4aAC6: [harness-tests]
+    P4aAC7: [harness-tests]
 reviews:
   required: [architecture-strategist, security-sentinel, pattern-recognition-specialist]
   completed: [architecture-strategist, security-sentinel, pattern-recognition-specialist]
@@ -167,6 +176,33 @@ Each lands as one reviewable commit, per the delivery doc's execution rules.
 - [x] **P3.6** Execution audit for `checks run` and `verify`, emitted at the shared `runNamedCheck` choke point in the same `exec` shape, plus the control set applied to named checks and `checks.env_allowlist` for the environment.
 - [x] **P3.7** Per-platform behavior: the Windows shell decision for `bash`, descendant termination, and the redaction debt (P3D1 fixed; P3D2 assessed).
 - [x] **P3.8** Cross-host validation on two named hosts (P3AC7).
+
+## Acceptance Criteria — Phase 4a (durable runs)
+
+Source of scope: `docs/architecture/harness-cli-workbench-delivery.md` §Phase 4a. Same stacking decision as Phases 2 and 3.
+
+- [ ] **P4aAC1** Every run carries a stable id; the journal is append-only and never rewritten.
+- [ ] **P4aAC2** Journal entries cover command start/progress/result, plan and gate, execution and mutation, verification and evidence, cancellation and timeout.
+- [ ] **P4aAC3** Run status uses the unified vocabulary including `cancelled` and `timed-out` as distinct terminal states.
+- [ ] **P4aAC4** `resume` restarts only from an explicitly safe boundary; interrupted commands are never auto-replayed.
+- [ ] **P4aAC5** Runs are queryable by status, command, host, plan, and date.
+- [ ] **P4aAC6** The ~20 legacy `writeEvent` call sites migrate onto the event registry, gaining actor metadata (Phase 1 AC7 deferral closed).
+- [ ] **P4aAC7** Retention replaces the current 200-event cap with a stated policy; `--failures` surfaces cancelled and timed-out runs correctly (Phase 1 deferral closed).
+
+### Phase 4a workstreams
+
+- [ ] **P4a.1** Run identity and the journal core: stable run ids minted once per invocation, `run.start`/`run.result` records, and the id stamped on every event so a run's entries can be joined.
+- [ ] **P4a.2** `run list|show|tree` with the documented filters.
+- [ ] **P4a.3** `run resume` — safe boundaries, and never replaying an interrupted command.
+- [ ] **P4a.4** Migrate the legacy `writeEvent` call sites onto the event registry (P4aAC6).
+- [ ] **P4a.5** Retention policy and the `--failures` fix (P4aAC7).
+
+### The durability tension, stated before it bites
+
+`.harness/` is gitignored and was explicitly ephemeral; a journal that must survive is a different contract. Two consequences are decided here rather than discovered later:
+
+- **Append-only means no entry is ever MODIFIED.** Retention still has to bound the file, so pruning writes a fresh file atomically and appends a record saying how many entries went and why. A journal that silently shrinks is worse than one that admits it.
+- **A run with no terminal record is `running`, not `interrupted`.** Distinguishing a live run from one whose process died needs liveness, so the recorded pid is checked and reported as a separate `live` field. Inventing an `interrupted` status the contract does not list would have been the easier lie.
 
 ## Primitive Governance
 
