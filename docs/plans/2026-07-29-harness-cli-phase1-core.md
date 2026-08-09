@@ -20,11 +20,15 @@ expected_outputs:
   - "Phase 2: search/lookup/tree over code, knowledge, learnings and plans with deterministic federation"
   - "Phase 3: checks/exec/bash with declared enforcement classes, config and trust, and an execution audit"
   - "Phase 4a: an append-only run journal with stable ids, queryable history, and safe-boundary resume"
+  - "Phase 4b: a Session Ledger TUI dispatching through the same registry as the CLI"
+  - "Phase 5: resource bundles and an out-of-process plugin protocol"
 success_criteria:
   - "AC1–AC10 below all pass via named checks"
   - "P2AC1–P2AC7 below all pass via named checks"
   - "P3AC1–P3AC7 below all pass via named checks"
   - "P4aAC1–P4aAC7 below all pass via named checks"
+  - "P4bAC1–P4bAC9 below all pass via named checks"
+  - "P5AC1–P5AC6 below all pass via named checks"
 verification:
   required: [harness-tests, prompt-contracts, build-assets]
   criteria:
@@ -59,6 +63,21 @@ verification:
     P4aAC5: [harness-tests]
     P4aAC6: [harness-tests]
     P4aAC7: [harness-tests]
+    P4bAC1: [harness-tests]
+    P4bAC2: [harness-tests]
+    P4bAC3: [harness-tests]
+    P4bAC4: [harness-tests]
+    P4bAC5: [harness-tests]
+    P4bAC6: [harness-tests]
+    P4bAC7: [harness-tests]
+    P4bAC8: [harness-tests]
+    P4bAC9: [harness-tests]
+    P5AC1: [harness-tests]
+    P5AC2: [harness-tests]
+    P5AC3: [harness-tests]
+    P5AC4: [harness-tests]
+    P5AC5: [harness-tests]
+    P5AC6: [harness-tests]
 reviews:
   required: [architecture-strategist, security-sentinel, pattern-recognition-specialist]
   completed: [architecture-strategist, security-sentinel, pattern-recognition-specialist]
@@ -211,6 +230,51 @@ The gap was also worse than the criterion describes. Those events carried neithe
 
 - **Append-only means no entry is ever MODIFIED.** Retention still has to bound the file, so pruning writes a fresh file atomically and appends a record saying how many entries went and why. A journal that silently shrinks is worse than one that admits it.
 - **A run with no terminal record is `running`, not `interrupted`.** Distinguishing a live run from one whose process died needs liveness, so the recorded pid is checked and reported as a separate `live` field. Inventing an `interrupted` status the contract does not list would have been the easier lie.
+
+## Acceptance Criteria — Phase 4b (TUI)
+
+Source: `docs/architecture/harness-cli-workbench-delivery.md` §Phase 4b, whose design direction (Session Ledger) is already settled.
+
+- [ ] **P4bAC1** Every TUI operation dispatches through the same command registry as the CLI — no second behavior path, no shell-out.
+- [ ] **P4bAC2** Scrollback, text selection, and terminal search keep working in the default mode.
+- [ ] **P4bAC3** Streaming output renders without flicker; cancellation is available from every long-running view.
+- [ ] **P4bAC4** All six state tokens render through `lib/style.mjs`, degrading to ASCII on limited terminals.
+- [ ] **P4bAC5** The TUI performs search, plan inspection, check execution, and run navigation without a capability the CLI lacks.
+- [ ] **P4bAC6** No palette path requires the user to type `--`; a test asserts that no rendered row and no accepted input contains flag syntax.
+- [ ] **P4bAC7** Every registry entry marked `surfaces: tui` is reachable from the palette, and every palette row resolves to an argv the CLI accepts — asserted in both directions.
+- [ ] **P4bAC8** The resolved argv is echoed into the ledger for every palette-initiated run.
+- [ ] **P4bAC9** Ranking is deterministic: the same query against the same index yields the same order, with word-boundary matches above interior ones.
+
+### Why the settled design makes this smaller than it looks
+
+The Session Ledger direction — a scrolling transcript in the terminal's MAIN buffer, alt-screen a config rather than a default — is not a cosmetic choice. It means the TUI is a read-dispatch-print loop rather than a screen manager, and P4bAC2 (scrollback, selection, terminal search) is satisfied by construction instead of by re-implementing three terminal behaviors badly. Phase 2's command index already supplies the palette rows and `resolveArgv`, so P4bAC6–AC8 consume an existing contract rather than inventing one.
+
+### Phase 4b workstreams
+
+- [ ] **P4b.1** The ledger shell: the session loop, the editor, the status line, and the exit ritual.
+- [ ] **P4b.2** The palette overlay over the Phase 2 command index, with deterministic ranking (P4bAC6, P4bAC9).
+- [ ] **P4b.3** Dispatch through the registry with streaming and cancellation (P4bAC1, P4bAC3, P4bAC5, P4bAC8).
+- [ ] **P4b.4** Rendering through `lib/style.mjs` with the ASCII fallback (P4bAC4).
+- [ ] **P4b.5** The bidirectional palette/argv contract tests (P4bAC7).
+
+## Acceptance Criteria — Phase 5 (resources and plugins)
+
+Source: `docs/architecture/harness-cli-workbench-delivery.md` §Phase 5.
+
+- [ ] **P5AC1** Bundles ride the existing hydration pipeline; no parallel install path exists.
+- [ ] **P5AC2** Resource precedence is deterministic and inspectable, with provenance shown per resource.
+- [ ] **P5AC3** Distributed bundles require integrity pinning and explicit trust before loading.
+- [ ] **P5AC4** Plugins run out-of-process over versioned JSON/JSONL, with capabilities approved explicitly.
+- [ ] **P5AC5** Plugins never mutate policy, the run journal, evidence, or the learnings store; contributed knowledge sources flow through the consolidation loop.
+- [ ] **P5AC6** A crashing plugin cannot take down the host process.
+
+### Phase 5 workstreams
+
+- [ ] **P5.1** Resource manifests and bundles on the existing hydration machinery, with provenance and deterministic precedence (P5AC1, P5AC2).
+- [ ] **P5.2** Integrity pinning and trust for distributed bundles (P5AC3) — extends Phase 3's trust rather than adding a second model.
+- [ ] **P5.3** The out-of-process plugin protocol: version negotiation, declared capabilities, timeout and cancellation, crash isolation (P5AC4, P5AC6).
+- [ ] **P5.4** The write boundary: plugins never touch policy, journal, evidence, or the learnings store (P5AC5).
+- [ ] **P5.5** A fixture plugin exercising all four contribution types end to end.
 
 ## Primitive Governance
 
