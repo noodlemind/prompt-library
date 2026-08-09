@@ -82,6 +82,31 @@ export function parseManifest(text, { source = '(inline)' } = {}) {
   for (const kind of Object.keys(contributes)) {
     if (!CONTRIBUTION_KINDS.includes(kind)) {
       fail(errors, `${source}: unknown contribution kind ${kind} (one of ${CONTRIBUTION_KINDS.join(', ')})`);
+      continue;
+    }
+    const list = contributes[kind];
+    if (!Array.isArray(list)) {
+      fail(errors, `${source}: contributes.${kind} must be a list of paths`);
+      continue;
+    }
+    // A contributed path is a path INSIDE the bundle, and nothing else. A
+    // manifest declaring `../../../etc/passwd` was previously accepted without
+    // complaint — this is a third-party file describing what the harness should
+    // load, which makes it the least trustworthy input in the system and the
+    // one place a traversal must be refused rather than normalized away.
+    for (const rel of list) {
+      if (typeof rel !== 'string' || !rel) {
+        fail(errors, `${source}: contributes.${kind} entries must be non-empty strings`);
+        continue;
+      }
+      if (path.isAbsolute(rel) || /^[A-Za-z]:/.test(rel)) {
+        fail(errors, `${source}: contributes.${kind} entry must be relative to the bundle: ${rel}`);
+        continue;
+      }
+      const normalized = path.normalize(rel).split(path.sep).join('/');
+      if (normalized === '..' || normalized.startsWith('../') || normalized.includes('/../')) {
+        fail(errors, `${source}: contributes.${kind} entry escapes the bundle: ${rel}`);
+      }
     }
   }
   const capabilities = Array.isArray(doc.capabilities) ? doc.capabilities : [];

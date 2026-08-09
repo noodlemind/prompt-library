@@ -33,6 +33,18 @@ export const PLUGIN_MESSAGES = Object.freeze(['hello', 'result', 'error', 'log']
 
 export const DEFAULT_TIMEOUT_MS = 30_000;
 
+/**
+ * Bounds on what a plugin can make the HOST hold.
+ *
+ * Crash isolation is not only about a plugin that dies — a plugin that never
+ * dies can be worse. A chatty one writing megabytes with no newline grew the
+ * host's line buffer to 438 MB in two seconds, exhausting the process it was
+ * supposed to be isolated from. Third-party output is bounded on arrival, the
+ * same way check output already is.
+ */
+export const MAX_LINE_BYTES = 1024 * 1024;
+export const MAX_LOG_ENTRIES = 500;
+
 function nowMs() {
   return Date.now();
 }
@@ -80,8 +92,24 @@ export function startPlugin({
     pending.clear();
   };
 
+  /** Bounded push: a plugin cannot make the host retain unbounded log text
+   * either, and the oldest entries are the least interesting when a flood is
+   * what you are diagnosing. */
+  const pushLog = (entry) => {
+    logs.push(entry);
+    if (logs.length > MAX_LOG_ENTRIES) logs.splice(0, logs.length - MAX_LOG_ENTRIES);
+  };
+
   child.stdout?.on('data', (chunk) => {
     buffer += chunk.toString();
+    // A line that will not end is not a message. Drop the buffer rather than
+    // grow it, and say so — the alternative is the host dying on behalf of a
+    // plugin it is supposed to be insulated from.
+    if (buffer.length > MAX_LINE_BYTES && !buffer.includes('\n')) {
+      pushLog({ level: 'warn', text: `discarded ${buffer.length} bytes of unterminated output from plugin` });
+      buffer = '';
+      return;
+    }
     let index = buffer.indexOf('\n');
     while (index !== -1) {
       const line = buffer.slice(0, index);
@@ -94,15 +122,15 @@ export function startPlugin({
       } catch {
         // A stray line is that line's problem. Line framing is what keeps it
         // from being the rest of the session's problem.
-        logs.push({ level: 'warn', text: `unparseable line from plugin: ${line.slice(0, 200)}` });
+        pushLog({ level: 'warn', text: `unparseable line from plugin: ${line.slice(0, 200)}` });
         continue;
       }
       if (!PLUGIN_MESSAGES.includes(message?.type)) {
-        logs.push({ level: 'warn', text: `unknown message type from plugin: ${String(message?.type).slice(0, 40)}` });
+        pushLog({ level: 'warn', text: `unknown message type from plugin: ${String(message?.type).slice(0, 40)}` });
         continue;
       }
       if (message.type === 'log') {
-        logs.push({ level: message.level === 'error' ? 'error' : 'info', text: String(message.text ?? '') });
+        pushLog({ level: message.level === 'error' ? 'error' : 'info', text: String(message.text ?? '').slice(0, 4000) });
         continue;
       }
       const entry = pending.get(message.id);
@@ -114,7 +142,7 @@ export function startPlugin({
   });
 
   child.stderr?.on('data', (chunk) => {
-    logs.push({ level: 'error', text: chunk.toString().slice(0, 2000) });
+    pushLog({ level: 'error', text: chunk.toString().slice(0, 2000) });
   });
 
   // P5AC6: a crash settles every in-flight request as a failure and marks the

@@ -25,7 +25,7 @@ import {
   parseManifest,
   resolvePrecedence,
 } from '../lib/resources.mjs';
-import { FORBIDDEN_WRITE_SURFACES, PROTOCOL_VERSION, startPlugin } from '../lib/plugin-host.mjs';
+import { FORBIDDEN_WRITE_SURFACES, MAX_LOG_ENTRIES, PROTOCOL_VERSION, startPlugin } from '../lib/plugin-host.mjs';
 
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const binPath = path.join(packageRoot, 'bin', 'harness.mjs');
@@ -264,4 +264,60 @@ test('P5AC5: the protocol defines no message that writes policy, the journal, ev
     assert.equal(source.includes(forbidden), false,
       `plugin-host must not import ${forbidden}: a plugin cannot be denied a write the host is able to broker`);
   }
+});
+
+// --- self-review findings, verified before the phase review returned --------
+
+/**
+ * A contributed path is a path INSIDE the bundle. A manifest is a third-party
+ * file describing what the harness should load, which makes it the least
+ * trustworthy input in the system — and it was previously accepted with a
+ * traversal in it.
+ */
+test('a manifest cannot contribute a path outside its own bundle', () => {
+  for (const bad of ['../../../etc/passwd', '/etc/passwd', 'a/../../b', '..']) {
+    const { errors } = parseManifest(`schema: 1\nname: x\nversion: 1.0.0\ncontributes:\n  skills: [${JSON.stringify(bad)}]\n`);
+    assert.ok(errors.length, `${bad} must be refused`);
+    assert.match(errors[0], /escapes the bundle|must be relative/);
+  }
+  for (const ok of ['skill.md', 'nested/deep/skill.md']) {
+    const { errors } = parseManifest(`schema: 1\nname: x\nversion: 1.0.0\ncontributes:\n  skills: [${JSON.stringify(ok)}]\n`);
+    assert.deepEqual(errors, [], `${ok} is an ordinary in-bundle path`);
+  }
+});
+
+/**
+ * Crash isolation is not only about a plugin that dies. A chatty one writing
+ * megabytes with no newline grew the host's line buffer to 438 MB in two
+ * seconds — exhausting the process it was supposed to be insulated from,
+ * without ever crashing itself.
+ */
+test('P5AC6: a plugin flooding stdout without a newline cannot exhaust the host', async () => {
+  const dir = tempDir('plug-flood-');
+  const file = writePlugin(dir, 'setInterval(() => process.stdout.write("x".repeat(1024 * 512)), 1);');
+  const plugin = startPlugin({ command: process.execPath, args: [file], env: { PATH: process.env.PATH } });
+
+  const before = process.memoryUsage().heapUsed;
+  await new Promise((r) => setTimeout(r, 1200));
+  const grown = (process.memoryUsage().heapUsed - before) / (1024 * 1024);
+  plugin.close();
+
+  assert.ok(grown < 100, `host heap grew ${grown.toFixed(0)}MB — third-party output must be bounded on arrival`);
+  assert.ok(plugin.logs.some((l) => /unterminated output/.test(l.text)),
+    'discarding it silently would leave the operator with no explanation for missing messages');
+});
+
+test('a plugin cannot make the host retain unbounded log text either', async () => {
+  const dir = tempDir('plug-logs-');
+  const file = writePlugin(dir, `
+    let i = 0;
+    const t = setInterval(() => {
+      if (i++ > 2000) { clearInterval(t); return; }
+      process.stdout.write(JSON.stringify({ type: 'log', text: 'entry ' + i }) + '\\n');
+    }, 0);
+  `);
+  const plugin = startPlugin({ command: process.execPath, args: [file], env: { PATH: process.env.PATH } });
+  await new Promise((r) => setTimeout(r, 800));
+  plugin.close();
+  assert.ok(plugin.logs.length <= MAX_LOG_ENTRIES, `logs grew to ${plugin.logs.length}`);
 });
