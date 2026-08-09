@@ -73,6 +73,16 @@ export const CONFIG_SCHEMA = Object.freeze({
       return value;
     },
   },
+  'exec.network': {
+    type: 'enum',
+    values: ['allow', 'deny'],
+    default: 'allow',
+    // Restrictive: `deny` always wins. Same rule as the shell gate — a project
+    // may cut network access off and may never restore it.
+    merge: 'restrictive',
+    restrict: (a, b) => (a === 'deny' || b === 'deny' ? 'deny' : 'allow'),
+    description: 'whether executed processes may reach the network (deny is enforced only where the platform has a primitive)',
+  },
   'exec.bash_enabled': {
     type: 'boolean',
     default: true,
@@ -128,6 +138,10 @@ export function coerceValue(key, raw) {
       value = raw.split(',').map((s) => s.trim()).filter(Boolean);
     }
     if (!Array.isArray(value)) throw usageError(`${key} must be a list (got ${JSON.stringify(raw)})`);
+  } else if (spec.type === 'enum') {
+    if (typeof value !== 'string' || !spec.values.includes(value)) {
+      throw usageError(`${key} must be one of ${spec.values.join(', ')} (got ${JSON.stringify(raw)})`);
+    }
   }
   return spec.validate ? spec.validate(value) : value;
 }

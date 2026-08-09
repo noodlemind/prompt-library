@@ -25,6 +25,7 @@ import { buildChildEnv, resolveExecCwd, resolveTimeoutSeconds } from './exec-pol
 import { resolveConfig } from './config.mjs';
 import { resolveCopilotHome } from './paths.mjs';
 import { isProjectTrusted } from './trust.mjs';
+import { resolveControls } from './controls.mjs';
 
 const ui = createStyle({ argv: process.argv.slice(2) });
 
@@ -120,11 +121,18 @@ function plan(argv, { shell }) {
   // A shell script is one argument to the shell, never a token list: joining
   // multiple tokens would re-introduce the word-splitting `exec` exists to
   // avoid, at the one boundary where it is hardest to see.
-  const argvToRun = shell
+  const target = shell
     ? [process.platform === 'win32' ? 'cmd.exe' : '/bin/sh', process.platform === 'win32' ? '/c' : '-c', childArgs.join(' ')]
     : childArgs;
 
-  return { flags, workspace, cwd, timeoutSeconds, envReport, argvToRun, childArgs, shell };
+  // The isolation wrapper goes in FRONT of the target rather than replacing it,
+  // and is reported separately from `argv` in the audit — the operator asked to
+  // run their command, and an audit that showed `sandbox-exec …` as the thing
+  // they ran would misattribute it.
+  const { controls, networkWrapper, degraded } = resolveControls({ networkPolicy: config.values['exec.network'] });
+  const argvToRun = [...networkWrapper, ...target];
+
+  return { flags, workspace, cwd, timeoutSeconds, envReport, argvToRun, childArgs, shell, controls, degraded };
 }
 
 /**
@@ -163,6 +171,11 @@ function emitAudit(ctx, mode, p, result) {
       env: { allowed: p.envReport.allowed, droppedCount: p.envReport.dropped.length, refused: p.envReport.refused },
       signal: result.signal,
       truncated: result.truncated,
+      // P3AC1/P3AC3: what each control ACTUALLY achieved for this run, and any
+      // control that could not do what it declares. A degradation nobody
+      // records is a control nobody can audit.
+      controls: p.controls,
+      degraded: p.degraded.map((c) => ({ id: c.id, declared: c.declared, realized: c.realized, reason: c.reason })),
     },
   });
 }
@@ -209,6 +222,7 @@ async function execute(argv, ctx, { shell }) {
     // Names only. The audit answers "what could this process see", and a value
     // here would put the very credentials the allowlist withheld into the log.
     env: { allowed: p.envReport.allowed, droppedCount: p.envReport.dropped.length, refused: p.envReport.refused },
+    controls: p.controls,
     output: rows,
   };
 
@@ -233,6 +247,19 @@ function render(result, flags) {
     note: `${result.env.droppedCount} dropped${result.env.refused.length ? ` · ${result.env.refused.length} refused` : ''}`,
     keyWidth,
   }));
+  // A control that could not do what it declares is printed BEFORE the output,
+  // where it is still read. `network: deny` that silently achieved nothing is
+  // the exact failure this phase exists to make impossible to ship quietly.
+  for (const control of result.controls || []) {
+    if (control.declared === control.realized) continue;
+    console.log(ui.line({
+      state: 'warn',
+      key: 'control',
+      value: `${control.id}: ${control.realized}, not ${control.declared}`,
+      note: control.reason,
+      keyWidth,
+    }));
+  }
   for (const row of result.output) {
     if (row.line) console.log(inertLine(row.line));
     else if (row.truncated) console.log(ui.paint('muted', '  …output truncated'));
