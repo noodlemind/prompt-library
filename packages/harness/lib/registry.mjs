@@ -1525,12 +1525,16 @@ registerCommand({
   sideEffect: 'mutate',
   capabilities: [],
   outputModes: ['ledger', 'json'],
-  usage: '<list|show|register|unregister> [path]',
+  usage: '<list|show|register|unregister|bundles|add|update|remove> [path]',
   verbs: [
     { verb: 'list', summary: 'skills and agents added by hand, with whether each is registered and valid', sideEffect: 'read' },
     { verb: 'show', summary: 'one added primitive: its kind, name, digest, and why it is in that state', sideEffect: 'read', positionals: ['path'] },
     { verb: 'register', summary: 'validate an added primitive and record that this machine recognizes it', positionals: ['path'] },
     { verb: 'unregister', summary: 'withdraw recognition without deleting the file', positionals: ['path'] },
+    { verb: 'bundles', summary: 'installed bundles, their state, and what each has placed', sideEffect: 'read' },
+    { verb: 'add', summary: 'install a bundle directory and place its contributions', positionals: ['path'] },
+    { verb: 'update', summary: 'replace an installed bundle and re-place its contributions', positionals: ['path'] },
+    { verb: 'remove', summary: 'uninstall a bundle and withdraw everything it placed', positionals: ['path'] },
   ],
   args: {
     positionals: [

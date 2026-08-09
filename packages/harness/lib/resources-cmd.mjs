@@ -20,6 +20,7 @@
  * distribution is not a workflow this project wants today, and neither module
  * has a production caller. That is recorded rather than implied — see the plan.
  */
+import fs from 'node:fs';
 import path from 'node:path';
 import { parseFlags } from './flags.mjs';
 import { resolveCopilotHome } from './paths.mjs';
@@ -29,6 +30,8 @@ import { inertLine } from './knowledge/store.mjs';
 import { readLock } from './lock.mjs';
 import { getAssetsRoot } from './commands.mjs';
 import { collectAllAssetFiles } from './sync.mjs';
+import { approvedBundleNames, placedFiles, readPlacements, syncBundles } from './bundle-sync.mjs';
+import { bundleDigest, discoverBundles, parseManifest, MANIFEST_FILE, resourcesRoot } from './resources.mjs';
 import {
   localPrimitiveStatus,
   registerPrimitive,
@@ -39,7 +42,13 @@ import {
 
 const ui = createStyle({ argv: process.argv.slice(2) });
 
-export const RESOURCES_VERBS = Object.freeze(['list', 'show', 'register', 'unregister']);
+export const RESOURCES_VERBS = Object.freeze([
+  'list', 'show', 'register', 'unregister',
+  // Bundle verbs. A bundle is the MANAGED way to put primitives into the
+  // Copilot home — versioned, removable, and provenance-tracked — next to the
+  // unmanaged way of copying a file in by hand, which `register` covers.
+  'add', 'update', 'remove', 'bundles',
+]);
 
 function usageError(message, hint) {
   return Object.assign(new Error(message), { code: 'E_USAGE', exit: EXIT.usage, hint });
@@ -80,12 +89,52 @@ function context(argv) {
 function origins(copilotHome) {
   let shippedFiles = new Set();
   try {
-    const assets = getAssetsRoot();
-    shippedFiles = new Set(collectAllAssetFiles(assets));
+    shippedFiles = new Set(collectAllAssetFiles(getAssetsRoot()));
   } catch {
     /* assets unavailable — see the note above */
   }
-  return { shippedFiles, lockFiles: new Set(readLock(copilotHome)?.files || []) };
+  // A bundle's placed files are not hand-added, so they are excluded from the
+  // local set: reporting a managed file as "pending registration" would ask the
+  // operator to approve something a bundle already accounts for.
+  const lockFiles = new Set([...(readLock(copilotHome)?.files || []), ...placedFiles(copilotHome)]);
+  return { shippedFiles, lockFiles };
+}
+
+/** Re-place every enabled bundle. Shared by add/update/remove so the three
+ * cannot drift about what "applied" means. */
+function applyBundles(copilotHome) {
+  let shippedFiles = new Set();
+  try {
+    shippedFiles = new Set(collectAllAssetFiles(getAssetsRoot()));
+  } catch { /* assets unavailable */ }
+  return syncBundles({ copilotHome, shippedFiles, trustedNames: approvedBundleNames(copilotHome) });
+}
+
+/** Copy a bundle directory in, refusing anything whose manifest does not parse
+ * — an invalid bundle installed is one that fails later, further from the
+ * decision that caused it. */
+function addBundle(copilotHome, source) {
+  const from = path.resolve(source);
+  const manifestPath = path.join(from, MANIFEST_FILE);
+  if (!fs.existsSync(manifestPath)) {
+    throw Object.assign(new Error(`no ${MANIFEST_FILE} in ${source}`), {
+      code: 'E_USAGE', exit: EXIT.usage, hint: 'a bundle is a directory containing a manifest',
+    });
+  }
+  const { manifest, errors } = parseManifest(fs.readFileSync(manifestPath, 'utf8'), { source });
+  if (!manifest) {
+    throw Object.assign(new Error(`invalid bundle: ${errors[0]}`), { code: 'E_USAGE', exit: EXIT.usage });
+  }
+  const dest = path.join(resourcesRoot(copilotHome), manifest.name);
+  fs.rmSync(dest, { recursive: true, force: true });
+  fs.mkdirSync(path.dirname(dest), { recursive: true });
+  fs.cpSync(from, dest, { recursive: true });
+  // Never carries approval across: a bundle arriving pre-enabled would mean
+  // installing it and approving it were the same act.
+  for (const marker of ['.enabled', '.disabled']) {
+    fs.rmSync(path.join(dest, marker), { force: true });
+  }
+  return { name: manifest.name, version: manifest.version, dir: dest, digest: bundleDigest(dest) };
 }
 
 export async function resourcesResultOf(argv, ctx = {}) {
@@ -95,6 +144,48 @@ export async function resourcesResultOf(argv, ctx = {}) {
   }
   const { shippedFiles, lockFiles } = origins(copilotHome);
   const primitives = localPrimitiveStatus({ copilotHome, shippedFiles, lockFiles });
+
+  if (verb === 'bundles') {
+    const bundles = discoverBundles(copilotHome, { trustedNames: approvedBundleNames(copilotHome) });
+    const placements = readPlacements(copilotHome);
+    return {
+      schema: 1,
+      verb,
+      status: bundles.some((b) => b.state === 'tampered' || b.state === 'invalid') ? 'failed' : 'ok',
+      bundles: bundles.map((b) => ({
+        name: b.name,
+        dir: b.dir,
+        version: b.manifest?.version ?? null,
+        state: b.state,
+        reason: b.reason,
+        placed: placements.bundles[b.name]?.files ?? [],
+      })),
+    };
+  }
+
+  if (verb === 'add' || verb === 'update') {
+    if (!target) throw usageError(`resources ${verb} requires a bundle directory`, `harness resources ${verb} ./my-bundle`);
+    const added = addBundle(copilotHome, target);
+    // Placement happens on the same pass, so `add` leaves the home in the state
+    // the next `upgrade` would produce rather than a half-applied one.
+    const sync = applyBundles(copilotHome);
+    return { schema: 1, verb, bundle: added, sync };
+  }
+
+  if (verb === 'remove') {
+    if (!target) throw usageError('resources remove requires a bundle name', 'harness resources bundles');
+    const dir = path.join(resourcesRoot(copilotHome), target);
+    if (!fs.existsSync(dir)) {
+      throw Object.assign(new Error(`no bundle named ${JSON.stringify(target)}`), {
+        code: 'E_NOT_FOUND', exit: EXIT.notFound, hint: 'harness resources bundles',
+      });
+    }
+    fs.rmSync(dir, { recursive: true, force: true });
+    // Withdrawal is the same sync: whatever this bundle placed is no longer
+    // contributed, so the pass that re-places everything removes exactly it.
+    const sync = applyBundles(copilotHome);
+    return { schema: 1, verb, bundle: { name: target }, sync };
+  }
 
   if (verb === 'list') {
     const invalid = primitives.filter((p) => p.state === 'invalid').length;
@@ -177,6 +268,30 @@ export async function cmdResources(argv, ctx = {}) {
     if (!result.primitives.length) {
       console.log(ui.paint('muted', `  nothing added by hand under ${result.home}/skills or /agents`));
     }
+  } else if (result.verb === 'bundles') {
+    const keyWidth = keyWidthFor(['bundles', ...result.bundles.map((b) => b.name)]);
+    console.log(ui.line({ key: 'bundles', value: `${result.bundles.length} installed`, keyWidth }));
+    for (const b of result.bundles) {
+      console.log(ui.line({
+        state: b.state === 'enabled' ? 'ok' : b.state === 'tampered' || b.state === 'invalid' ? 'error' : 'warn',
+        key: b.name,
+        value: `${b.version ?? '(no version)'} · ${b.state}`,
+        note: inertLine(b.reason || `${b.placed.length} file(s) placed`),
+        keyWidth,
+      }));
+    }
+    if (!result.bundles.length) console.log(ui.paint('muted', '  no bundles installed'));
+  } else if (result.verb === 'add' || result.verb === 'update' || result.verb === 'remove') {
+    const keyWidth = keyWidthFor(['bundle', 'placed', 'withdrew', 'refused']);
+    console.log(ui.line({ state: 'ok', key: result.verb, value: inertLine(result.bundle.name), note: result.bundle.version || undefined, keyWidth }));
+    console.log(ui.line({ key: 'placed', value: `${result.sync.placed.length} file(s)`, keyWidth }));
+    if (result.sync.withdrawn.length) console.log(ui.line({ key: 'withdrew', value: `${result.sync.withdrawn.length} file(s)`, keyWidth }));
+    for (const r of result.sync.refused) {
+      console.log(ui.line({ state: 'warn', key: 'refused', value: inertLine(r.target), note: inertLine(r.reason), keyWidth }));
+    }
+    for (const s of result.sync.shadowed) {
+      console.log(ui.paint('muted', `  ${inertLine(s.target)} — ${inertLine(s.bundle)} shadowed by ${inertLine(s.winner)}`));
+    }
   } else if (result.verb === 'show') {
     const p = result.primitive;
     const keyWidth = keyWidthFor(['primitive', 'state', 'kind', 'digest']);
@@ -197,6 +312,6 @@ export async function cmdResources(argv, ctx = {}) {
 export function resourcesExitFor(result) {
   // An invalid primitive makes `list` a failure so CI — or a person reading an
   // exit code — learns that something someone added will never load.
-  if (result?.verb === 'list' && result.status !== 'ok') return 1;
+  if ((result?.verb === 'list' || result?.verb === 'bundles') && result.status !== 'ok') return 1;
   return EXIT.ok;
 }

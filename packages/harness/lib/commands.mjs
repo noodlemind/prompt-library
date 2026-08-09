@@ -12,7 +12,9 @@ import {
   syncAssetsToTarget,
   seedProfile,
   mergeIntelliJInstructions,
+  collectAllAssetFiles,
 } from './sync.mjs';
+import { approvedBundleNames, syncBundles } from './bundle-sync.mjs';
 import { runDoctor } from './doctor.mjs';
 import { runInitRepo } from './init-repo.mjs';
 import { runIndexKnowledge } from './index-knowledge.mjs';
@@ -148,6 +150,19 @@ export async function cmdInstallOrUpgrade(command, argv) {
     applyRetired(copilotHome, retired, previousLock, flags, logger);
     allStats.vscode = syncAssetsToTarget(assets, copilotHome, flags, logger);
     seedProfile(assets, copilotHome, flags, logger);
+    // P5AC1: enabled bundles ride the SAME call that places the package's own
+    // files, after them — so the package always wins a path conflict, and
+    // withdrawal happens on the same pass that would have replaced it. A second
+    // pipeline would have to reimplement retirement, which is the half that
+    // gets forgotten.
+    allStats.bundles = syncBundles({
+      copilotHome,
+      shippedFiles: new Set(collectAllAssetFiles(assets)),
+      trustedNames: approvedBundleNames(copilotHome),
+      dryRun: flags.dryRun,
+    });
+    for (const r of allStats.bundles.refused) log(flags, `bundle ${r.bundle}: refused ${r.target} — ${r.reason}`);
+    for (const w of allStats.bundles.withdrawn) log(flags, `withdrew ${w} (no longer contributed)`);
     const binStats = installHarnessBin(pkgRoot, copilotHome, flags, logger);
     allStats.harnessBin = binStats;
     allStats.globalShim = installGlobalHarnessShim(copilotHome, flags, logger);

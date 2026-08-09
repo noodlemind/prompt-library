@@ -261,14 +261,21 @@ The Session Ledger direction — a scrolling transcript in the terminal's MAIN b
 
 Source: `docs/architecture/harness-cli-workbench-delivery.md` §Phase 5.
 
-### Scope changed by user decision, 2026-08-09 — read this before the criteria
+### Scope narrowed by user decision, 2026-08-09 — read this before the criteria
 
-The phase's stated goal is "an external plugin can add one command, one search scope, one named check, and one TUI panel without modifying Harness core". **That goal is not being pursued.** The user's decision: no external plugin support; the only extension route is a person placing a skill or agent directly into `~/.copilot`, where every host already looks, so it is used by everyone including the Engineer.
+The phase's stated goal is "an external plugin can add one command, one search scope, one named check, and one TUI panel without modifying Harness core". **The plugin half is not pursued** — the user's decision is that no executable extensions are wanted. The RESOURCE half is delivered in full.
 
-Two consequences, stated rather than implied:
+So there are two supported routes for getting a skill or agent into `~/.copilot`, where every host already looks:
 
-- **P5AC1 is NOT delivered.** Bundles do not ride the hydration pipeline, because bundles are not the mechanism. `lib/resources.mjs` (manifests, precedence, integrity) and `lib/plugin-host.mjs` (the out-of-process protocol) remain in the tree as reviewed but **unwired groundwork** — neither has a production caller. Kept by explicit decision so an external-distribution answer exists if it is ever wanted; recorded here so nobody mistakes their presence for a working feature.
-- **What shipped instead** is the workflow the user actually has: locally-added primitives are discovered, validated, and explicitly registered. `lib/local-primitives.mjs` plus the repointed `resources list|show|register|unregister`.
+- **Unmanaged** — copy the file in by hand. Discovered, validated, and explicitly registered via `resources list|show|register|unregister` (`lib/local-primitives.mjs`). Never in the harness lock, so `upgrade` and `uninstall` leave it alone.
+- **Managed** — install a bundle. `resources add|update|remove|bundles` plus placement on every `install`/`upgrade` (`lib/bundle-sync.mjs`), so contributions are versioned, provenance-tracked, precedence-resolved, and **withdrawn exactly** when the bundle is disabled or removed.
+
+`lib/plugin-host.mjs` remains in the tree as reviewed but **unwired groundwork** — nothing starts a plugin. Kept by explicit decision so an executable-extension answer exists if it is ever wanted; recorded here so its presence is not mistaken for a working feature.
+
+Two rules the placement layer enforces, both stated because they are permissions decisions rather than mechanics:
+
+- **The package always wins.** A bundle contributing a path the harness itself ships is refused, not layered over. Letting a bundle replace `skills/engineer/SKILL.md` would let an installed extension silently redefine the harness's own behavior — a much larger permission than "add a skill".
+- **Installing is not approving.** `resources add` strips any `.enabled` marker the bundle shipped with, so a bundle cannot arrive pre-approved.
 
 That work also fixed a defect that was worse than anything in the phase as specified. `doctor` H17 classified a hand-added skill as a stale orphan and told the operator to add it to `retired.json` — advice which, if followed, would have made the next `upgrade` **delete their own team's skill**. The lock file distinguishes the two cases: a file the harness never hydrated is a local addition, not a leftover.
 
@@ -276,7 +283,7 @@ Registration follows the trust model rather than inventing a second one: the mar
 
 Lifecycle guarantees now pinned by tests: a hand-added primitive survives `install`, `upgrade` and `uninstall` — the last structurally, since `uninstall` removes exactly the lock's files and a local addition is never in the lock.
 
-- [ ] **P5AC1** Bundles ride the existing hydration pipeline; no parallel install path exists. **NOT DELIVERED** — see the scope note above; bundles are not the extension mechanism this project wants.
+- [x] **P5AC1** Bundles ride the existing hydration pipeline; no parallel install path exists. *(Placement happens inside `cmdInstallOrUpgrade`, after the package's own sync, and withdrawal rides the same pass — the retirement half a parallel pipeline gets wrong.)*
 - [x] **P5AC2** Resource precedence is deterministic and inspectable, with provenance shown per resource.
 - [x] **P5AC3** Distributed bundles require integrity pinning and explicit trust before loading.
 - [x] **P5AC4** Plugins run out-of-process over versioned JSON/JSONL, with capabilities approved explicitly. *(Protocol built and tested against a real child process; unwired — nothing starts a plugin.)*
@@ -285,7 +292,7 @@ Lifecycle guarantees now pinned by tests: a hand-added primitive survives `insta
 
 ### Phase 5 workstreams
 
-- [x] **P5.1** Resource manifests and bundles with provenance and deterministic precedence (P5AC2). *(Hydration integration dropped with P5AC1.)*
+- [x] **P5.1** Resource manifests and bundles on the existing hydration machinery, with provenance and deterministic precedence (P5AC1, P5AC2).
 - [x] **P5.6** Locally-added primitives: discovery, validation, explicit registration, and the doctor fix — the workflow that replaced external distribution.
 - [x] **P5.2** Integrity pinning and trust for distributed bundles (P5AC3) — extends Phase 3's trust rather than adding a second model.
 - [x] **P5.3** The out-of-process plugin protocol: version negotiation, declared capabilities, timeout and cancellation, crash isolation (P5AC4, P5AC6).
@@ -349,6 +356,7 @@ Each lands as one reviewable commit with its own review pass, per the delivery d
 
 - `packages/harness/bin/harness.mjs`
 - `packages/harness/lib/agent-lane.mjs`
+- `packages/harness/lib/bundle-sync.mjs`
 - `packages/harness/lib/commands.mjs`
 - `packages/harness/lib/checks.mjs`
 - `packages/harness/lib/checks-cmd.mjs`
@@ -364,6 +372,7 @@ Each lands as one reviewable commit with its own review pass, per the delivery d
 - `packages/harness/lib/exec-cmd.mjs`
 - `packages/harness/lib/exec-policy.mjs`
 - `packages/harness/lib/gate.mjs`
+- `packages/harness/lib/orient.mjs`
 - `packages/harness/lib/policy.mjs`
 - `packages/harness/lib/local-primitives.mjs`
 - `packages/harness/lib/plugin-host.mjs`
