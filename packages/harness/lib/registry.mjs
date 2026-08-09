@@ -61,7 +61,7 @@ import { cmdPlanNew } from './plan-new.mjs';
 import { cmdLookup, lookupResultOf } from './retrieval/lookup-cmd.mjs';
 import { recallResultOf, getResultOf } from './retrieval/compat-results.mjs';
 import { cmdChecks, checksResultOf, checksExitFor, CHECKS_VERBS } from './checks-cmd.mjs';
-import { cmdConfig, configResultOf, CONFIG_VERBS } from './config-cmd.mjs';
+import { cmdConfig, configResultOf, configExitFor, CONFIG_VERBS } from './config-cmd.mjs';
 import { cmdTrust, trustResultOf, TRUST_VERBS } from './trust-cmd.mjs';
 import { CONFIG_KEYS, SCOPES } from './config.mjs';
 import { cmdExec, execResultOf, cmdBash, bashResultOf, exitFor as execExitFor } from './exec-cmd.mjs';
@@ -732,7 +732,17 @@ async function dispatchLane(entry, rest, ctx, lane, events) {
     // a second derivation, so the event and the rendered output can never
     // disagree about what happened.
     const status = envelope.status || STATUS.OK;
-    const exit = typeof entry.exitOf === 'function' ? entry.exitOf(result) : EXIT.ok;
+    // The DEFAULT is derived from the status, not hardcoded to ok. Hardcoding
+    // it meant a result that declared `"status":"failed"` still exited 0 unless
+    // its entry remembered to add `exitOf` — and that was forgotten twice
+    // (`exec`, then `checks run`, the latter caught only by an external
+    // review). `exitOf` remains the override for a command that needs a
+    // SPECIFIC code, like `exec` passing through its child's; every other
+    // command now gets a non-zero exit for free the moment it reports a
+    // non-ok status, which is the behavior a caller would assume anyway.
+    const exit = typeof entry.exitOf === 'function'
+      ? entry.exitOf(result)
+      : (status === STATUS.OK ? EXIT.ok : 1);
     events?.emit(EVENT_TYPE.COMMAND_RESULT, commandResultPayload(status, Date.now() - startedAt, exit));
     return exit;
   } catch (err) {
@@ -1515,6 +1525,9 @@ registerCommand({
   },
   handler: cmdConfig,
   resultOf: configResultOf,
+  // `config validate` is gated on in CI; without this the envelope lane exited
+  // 0 over a body reporting `"valid": false`.
+  exitOf: configExitFor,
 });
 
 registerCommand({

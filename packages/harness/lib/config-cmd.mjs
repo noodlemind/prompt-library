@@ -93,6 +93,9 @@ export async function configResultOf(argv, ctx = {}) {
     return {
       schema: 1,
       verb,
+      // Same reason as `checks`: without a `status` the envelope's default
+      // `ok` stood next to a body full of parse errors.
+      status: resolved.errors.length ? 'failed' : 'ok',
       files: resolved.files,
       settings: CONFIG_KEYS.map((k) => ({
         key: k,
@@ -109,7 +112,14 @@ export async function configResultOf(argv, ctx = {}) {
     // Exits non-zero on a broken file so CI can gate on it. A config that does
     // not parse is a policy nobody is enforcing, which is worse than an absent
     // one because it looks present.
-    return { schema: 1, verb, files: resolved.files, valid: resolved.errors.length === 0, errors: resolved.errors };
+    return {
+      schema: 1,
+      verb,
+      status: resolved.errors.length ? 'failed' : 'ok',
+      files: resolved.files,
+      valid: resolved.errors.length === 0,
+      errors: resolved.errors,
+    };
   }
 
   if (!key) throw usageError(`config ${verb} requires a key`, `known keys: ${CONFIG_KEYS.join(', ')}`);
@@ -201,9 +211,23 @@ export async function cmdConfig(argv, ctx = {}) {
     }));
   }
 
-  if (result.verb === 'validate' && !result.valid) return 1;
-  if (result.verb === 'show' && result.errors.length) return 1;
-  return 0;
+  // One rule, shared with the lane path through the registry's `exitOf`.
+  return configExitFor(result);
+}
+
+/**
+ * The exit code for a `config` result, on EVERY lane.
+ *
+ * `config validate` is meant to be gated on in CI, and `dispatchLane` returns 0
+ * on any success path unless the entry declares this — so `config validate
+ * --output json-envelope` exited 0 over a body saying `"valid": false`. Same
+ * defect the Codex review found in `checks run`, in a command whose whole
+ * purpose is likewise the exit code.
+ */
+export function configExitFor(result) {
+  if (result?.verb === 'validate') return result.valid ? EXIT.ok : 1;
+  if (result?.verb === 'show') return result.errors?.length ? 1 : EXIT.ok;
+  return EXIT.ok;
 }
 
 export { configPathFor };

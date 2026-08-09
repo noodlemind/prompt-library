@@ -9,6 +9,7 @@ import { EXIT } from '../lib/style.mjs';
 import { approveProject } from '../lib/trust.mjs';
 import {
   dispatch,
+  registerCommand,
   hasCommand,
   getCommand,
   listCommands,
@@ -620,4 +621,73 @@ test('CLI: a correctly-invoked recall/get/plan-new is unaffected by requireArgs'
   ]);
   assert.equal(planNew.status, 0, planNew.stderr);
   assert.equal(JSON.parse(planNew.stdout).created, false);
+});
+
+/**
+ * The lane-parity guard.
+ *
+ * `dispatchLane` used to return EXIT.ok on every success path unless the entry
+ * declared `exitOf`, so a result reporting `"status":"failed"` still exited 0.
+ * That shipped twice — `exec`, then `checks run`, the latter caught only by an
+ * external review — which is two more times than a rule enforced by memory
+ * deserves.
+ *
+ * So the DEFAULT is now derived from the envelope status, and this exercises
+ * the default directly rather than grepping for the shape of the mistake. An
+ * earlier version of this test DID grep, passed while `config` was genuinely
+ * broken, and is the reason this one drives real dispatch instead.
+ */
+test('a lane-bearing result reporting a non-ok status exits non-zero without needing exitOf', async () => {
+  const name = `probe-lane-parity-${process.pid}`;
+  registerCommand({
+    name,
+    summary: 'fixture: reports failure as data rather than by throwing',
+    group: 'engineer loop',
+    sideEffect: 'read',
+    capabilities: [],
+    outputModes: ['ledger', 'json'],
+    args: { positionals: [], flags: [] },
+    handler: async () => 1,
+    // Deliberately NO exitOf — that is the property under test.
+    resultOf: async () => ({ schema: 1, status: 'failed', detail: 'the thing did not work' }),
+  });
+
+  const failed = await dispatch([name], { output: 'json' });
+  assert.equal(failed, 1, 'a non-ok status must reach the exit code even with no exitOf declared');
+
+  const okName = `${name}-ok`;
+  registerCommand({
+    name: okName,
+    summary: 'fixture: succeeds',
+    group: 'engineer loop',
+    sideEffect: 'read',
+    capabilities: [],
+    outputModes: ['ledger', 'json'],
+    args: { positionals: [], flags: [] },
+    handler: async () => 0,
+    resultOf: async () => ({ schema: 1, detail: 'fine' }),
+  });
+  assert.equal(await dispatch([okName], { output: 'json' }), EXIT.ok,
+    'and a result with no status still succeeds, so nothing regressed for the read commands');
+});
+
+/**
+ * `exitOf` remains the override for a command needing a SPECIFIC code rather
+ * than a generic 1 — `exec` passes through its child's exit code.
+ */
+test('exitOf overrides the derived default when a command needs a specific code', async () => {
+  const name = `probe-exit-override-${process.pid}`;
+  registerCommand({
+    name,
+    summary: 'fixture: needs its own code',
+    group: 'engineer loop',
+    sideEffect: 'read',
+    capabilities: [],
+    outputModes: ['ledger', 'json'],
+    args: { positionals: [], flags: [] },
+    handler: async () => 7,
+    resultOf: async () => ({ schema: 1, status: 'failed', exitCode: 7 }),
+    exitOf: (result) => result.exitCode,
+  });
+  assert.equal(await dispatch([name], { output: 'json' }), 7);
 });
