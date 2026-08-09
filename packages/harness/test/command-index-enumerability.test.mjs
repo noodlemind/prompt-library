@@ -196,6 +196,9 @@ const DECLARED_VERBS = Object.freeze({
   // `run` executes a repo-authored argv; `list`/`show` override DOWN to read,
   // so the palette warns about the verb that actually executes.
   checks: ['list', 'show', 'run'],
+  // `set` writes a file; the three read verbs override DOWN, so the palette
+  // warns about the one verb that mutates.
+  config: ['show', 'get', 'set', 'validate'],
 });
 
 const VERB_FLAGS = Object.freeze({
@@ -236,6 +239,9 @@ const VERB_POSITIONALS = Object.freeze({
     episode: ['identifier'],
   },
   checks: { show: ['name'], run: ['name'] },
+  // `show` and `validate` take no argument — they report on the whole key
+  // space, so a picker on them would be asking for something they ignore.
+  config: { get: ['key'], set: ['key', 'value'] },
 });
 
 test('AC8: every verb-consumed positional is declared and reaches its row as a picker', () => {
@@ -268,7 +274,7 @@ test('AC8: the declared verb inventory matches its fixture exactly', () => {
     if (verbs.length) actual[name] = verbs;
   }
   assert.deepEqual(actual, { ...DECLARED_VERBS }, 'a verb was added or lost — update the fixture deliberately');
-  assert.equal(Object.values(actual).flat().length, 31, '15 knowledge/learning verbs + lookup’s 11 kinds + tree’s 2 subjects + checks’ 3 verbs');
+  assert.equal(Object.values(actual).flat().length, 35, '15 knowledge/learning verbs + lookup’s 11 kinds + tree’s 2 subjects + checks’ 3 verbs + config’s 4 verbs');
 });
 
 test('AC8: the verb-dispositioned flag inventory matches its fixture exactly', () => {
@@ -295,7 +301,7 @@ test('AC8: every declared verb reaches the palette as its own row', () => {
       assert.ok(row.summary, `${command} ${verb} must carry its declared summary`);
     }
   }
-  assert.equal(rows.filter((r) => r.kind === 'verb').length, 44, '31 declared verbs + 13 row-bearing verb flags');
+  assert.equal(rows.filter((r) => r.kind === 'verb').length, 48, '35 declared verbs + 13 row-bearing verb flags');
 });
 
 /**

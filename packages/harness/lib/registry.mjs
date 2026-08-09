@@ -61,6 +61,8 @@ import { cmdPlanNew } from './plan-new.mjs';
 import { cmdLookup, lookupResultOf } from './retrieval/lookup-cmd.mjs';
 import { recallResultOf, getResultOf } from './retrieval/compat-results.mjs';
 import { cmdChecks, checksResultOf, CHECKS_VERBS } from './checks-cmd.mjs';
+import { cmdConfig, configResultOf, CONFIG_VERBS } from './config-cmd.mjs';
+import { CONFIG_KEYS, SCOPES } from './config.mjs';
 import { cmdExec, execResultOf, cmdBash, bashResultOf, exitFor as execExitFor } from './exec-cmd.mjs';
 import {
   cmdSearch,
@@ -1449,6 +1451,42 @@ registerCommand({
   handler: cmdBash,
   resultOf: bashResultOf,
   exitOf: execExitFor,
+});
+
+registerCommand({
+  name: 'config',
+  summary: 'show, read, or change harness configuration across the user and project scopes',
+  group: 'engineer loop',
+  // `set` mutates a file; the three read verbs override DOWN, so the palette
+  // warns about the verb that actually writes rather than all four.
+  sideEffect: 'mutate',
+  capabilities: [],
+  outputModes: ['ledger', 'json'],
+  // The scope enum lives in the flag's description, not the usage line — the
+  // same convention `--type` and `--match` follow, and what keeps every token
+  // in a usage string resolvable to declared registry data.
+  usage: '<show|get|set|validate> [key] [value] [--scope <scope>]',
+  verbs: [
+    { verb: 'show', summary: 'every key, its effective value, and which scope supplied it', sideEffect: 'read' },
+    { verb: 'get', summary: 'one key: its effective value and provenance', sideEffect: 'read', positionals: ['key'] },
+    { verb: 'set', summary: 'write one key into the user or project scope, atomically', positionals: ['key', 'value'] },
+    { verb: 'validate', summary: 'parse both scopes and report every schema violation', sideEffect: 'read' },
+  ],
+  args: {
+    positionals: [
+      { name: 'verb', description: CONFIG_VERBS.join('|'), required: true, default: null },
+      { name: 'key', description: CONFIG_KEYS.join('|'), required: false, default: null },
+      { name: 'value', description: 'the new value, for set', required: false, default: null },
+    ],
+    flags: [
+      // Scoped to `set`: it selects which FILE to write, so offering it on the
+      // three read verbs would put a mutate-class option on a row the palette
+      // paints as read — the escalation the command-index contract forbids.
+      { name: '--scope', type: 'string', valueName: 'scope', description: `set: which file to write, ${SCOPES.join(' or ')}`, required: false, default: null, tui: 'prompt', verbs: ['set'] },
+    ],
+  },
+  handler: cmdConfig,
+  resultOf: configResultOf,
 });
 
 registerCommand({

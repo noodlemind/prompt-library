@@ -22,6 +22,8 @@ import { inertLine } from './knowledge/store.mjs';
 import { runProcess } from './runner.mjs';
 import { createCheckOutputStreamer } from './verify.mjs';
 import { buildChildEnv, resolveExecCwd, resolveTimeoutSeconds } from './exec-policy.mjs';
+import { resolveConfig } from './config.mjs';
+import { resolveCopilotHome } from './paths.mjs';
 
 const ui = createStyle({ argv: process.argv.slice(2) });
 
@@ -72,10 +74,27 @@ function singleFlag(argv, name) {
   return next === undefined || next.startsWith('--') ? '' : next;
 }
 
-function plan(argv, { shell }) {
+function plan(argv, { shell, projectTrusted = true }) {
   const { harnessArgs, childArgs } = splitAtBoundary(argv);
   const flags = parseFlags(harnessArgs);
   const workspace = path.resolve(flags.workspace);
+  const config = resolveConfig({
+    copilotHome: resolveCopilotHome(flags.copilotHome),
+    workspace,
+    projectTrusted,
+  });
+
+  // The P3AC2 policy gate: `bash` is allowed or denied separately from `exec`.
+  // Checked BEFORE the boundary error below, so a denied shell reports being
+  // denied rather than complaining about the syntax of a command it was never
+  // going to run.
+  if (shell && config.values['exec.bash_enabled'] !== true) {
+    throw Object.assign(new Error('bash is disabled by configuration'), {
+      code: 'E_DENIED',
+      exit: EXIT.needsApproval,
+      hint: `set exec.bash_enabled true (currently from ${config.provenance['exec.bash_enabled'].source}), or use \`harness exec\`, which never invokes a shell`,
+    });
+  }
 
   if (childArgs === null || childArgs.length === 0) {
     throw usageError(
@@ -84,9 +103,17 @@ function plan(argv, { shell }) {
     );
   }
 
-  const timeoutSeconds = resolveTimeoutSeconds(singleFlag(harnessArgs, '--timeout'));
+  // The flag wins over configuration where it is given — an explicit argument
+  // is the operator speaking now — but it is still bounded by the same
+  // validator, so `--timeout` cannot exceed the ceiling either.
+  const rawTimeout = singleFlag(harnessArgs, '--timeout');
+  const timeoutSeconds = rawTimeout === null || rawTimeout === ''
+    ? config.values['exec.timeout_seconds']
+    : resolveTimeoutSeconds(rawTimeout);
   const cwd = resolveExecCwd({ workspace, cwd: singleFlag(harnessArgs, '--cwd'), realpath });
-  const envReport = buildChildEnv({ allow: repeatedFlag(harnessArgs, '--allow-env') });
+  const envReport = buildChildEnv({
+    allow: [...config.values['exec.allow_env'], ...repeatedFlag(harnessArgs, '--allow-env')],
+  });
 
   // A shell script is one argument to the shell, never a token list: joining
   // multiple tokens would re-introduce the word-splitting `exec` exists to
@@ -139,7 +166,7 @@ function emitAudit(ctx, mode, p, result) {
 }
 
 async function execute(argv, ctx, { shell }) {
-  const p = plan(argv, { shell });
+  const p = plan(argv, { shell, projectTrusted: ctx?.projectTrusted !== false });
   const { redactText } = createRedactor();
   const rows = [];
 
