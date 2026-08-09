@@ -13,7 +13,6 @@ import { parseFlags } from './flags.mjs';
 import { createStyle, keyWidthFor, EXIT } from './style.mjs';
 import { redactedJson } from './redact.mjs';
 import { readEvents } from './events.mjs';
-import { getCommand } from './registry.mjs';
 import { RUN_STATUSES, readRuns, readJournal, foldRuns } from './run-journal.mjs';
 
 const ui = createStyle({ argv: process.argv.slice(2) });
@@ -125,7 +124,7 @@ const STATUS_STATE = {
  * which is the only case where "just run it again" is honest advice. Everything
  * else is reported with what it would have taken.
  */
-export function resumePlanFor(run) {
+export function resumePlanFor(run, { sideEffect = 'execute' } = {}) {
   if (!run) return { resumable: false, reason: 'no such run' };
   if (run.status === 'running') {
     return {
@@ -139,8 +138,6 @@ export function resumePlanFor(run) {
         : 'inspect the workspace, then re-run the command yourself if its effects are safe to repeat',
     };
   }
-  const entry = run.command ? getCommand(run.command) : null;
-  const sideEffect = entry?.sideEffect ?? 'execute';
   if (sideEffect !== 'read') {
     return {
       resumable: false,
@@ -206,8 +203,15 @@ export async function runResultOf(argv, ctx = {}) {
     };
   }
 
-  // `resume`
-  const plan = resumePlanFor(run);
+  // `resume`. The registry is imported HERE rather than at module load: it
+  // imports this module for its handler and verbs, so a static import would
+  // close a cycle that breaks whenever this module is loaded first (a test
+  // importing `resumePlanFor` directly did exactly that). Resolving it at call
+  // time also keeps `resumePlanFor` a pure function of the run and its
+  // side-effect class, which is what makes it testable without a registry.
+  const { getCommand: lookup } = await import('./registry.mjs');
+  const entry = run.command ? lookup(run.command) : null;
+  const plan = resumePlanFor(run, { sideEffect: entry?.sideEffect ?? 'execute' });
   return { schema: 1, verb, run, status: plan.resumable ? 'ok' : 'blocked', resume: plan };
 }
 

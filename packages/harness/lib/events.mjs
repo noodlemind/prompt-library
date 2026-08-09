@@ -4,10 +4,17 @@ import path from 'path';
 import { ensureHarnessDir, readSession } from './session.mjs';
 import { summarizeUsage } from './token-meter.mjs';
 import { createRedactor } from './redact.mjs';
+import { currentRunContext } from './run-context.mjs';
+import { pruneJournalFile } from './retention.mjs';
+import { retentionDaysFor } from './retention-config.mjs';
 
 export const EVENTS_FILE = 'events.jsonl';
 export const EVENTS_DEFAULT_LIMIT = 20;
 export const EVENTS_MAX_LIMIT = 200;
+/** Terminal statuses an operator asking for failures means to see. `ok` is
+ * excluded; everything else that ended badly is included. */
+export const FAILURE_STATUSES = new Set(['failed', 'cancelled', 'timed-out']);
+
 export const EVENT_TYPES = new Set([
   'session_start',
   'orient',
@@ -54,6 +61,9 @@ export const EVENT_TYPES = new Set([
   // security decision, and a security decision with no record is one nobody can
   // review after the fact.
   'trust',
+  // Retention writes this when it removes entries — a journal that silently
+  // shrinks is worse than one that admits it.
+  'journal.pruned',
 ]);
 
 function shouldSkipEvents(flags = {}) {
@@ -94,6 +104,14 @@ export function writeEvent(workspace, flags, payload) {
 
   const checks = safeChecks(payload.checks);
   const session = readSession(workspace);
+  // P4aAC6: every event carries the run it belongs to and the actor that drove
+  // it, whether or not the writer went through the event registry. The ~20
+  // legacy call sites in lib/commands.mjs supplied neither, so `run show` and
+  // `run tree` saw the lifecycle pair and none of the domain events that say
+  // what the command actually did. A payload that supplies its own values still
+  // wins — the registry stamps both explicitly and knows more than the ambient
+  // default.
+  const ambient = currentRunContext();
   const event = {
     version: 2,
     id: eventId(),
@@ -107,6 +125,8 @@ export function writeEvent(workspace, flags, payload) {
     session: payload.session || session?.sessionId || null,
     host: payload.host || flags.host || process.env.HARNESS_HOST || 'harness-cli',
     agent: payload.agent || process.env.HARNESS_AGENT || null,
+    ...(payload.run ?? ambient.run ? { run: payload.run ?? ambient.run } : {}),
+    ...(payload.actor ?? ambient.actor ? { actor: payload.actor ?? ambient.actor } : {}),
   };
   if (payload.blockedReason) event.blockedReason = payload.blockedReason;
   if (payload.usage) event.usage = payload.usage;
@@ -155,6 +175,8 @@ export function writeEvent(workspace, flags, payload) {
     // them, so `harness events --failures` and the summaries keep working
     // without knowing this field exists.
     'exec',
+    'removed',
+    'reason',
     // The trust-change descriptor: which project, and which way it moved.
     'trust',
   ]) {
@@ -173,7 +195,24 @@ export function writeEvent(workspace, flags, payload) {
   // redacted event is also what gets RETURNED, so no caller can re-emit the
   // unredacted original. Byte-identical for secret-free events.
   const safeEvent = createRedactor().redactValue(event);
-  fs.appendFileSync(eventPath(workspace), JSON.stringify(safeEvent) + '\n', 'utf8');
+  const file = eventPath(workspace);
+  fs.appendFileSync(file, JSON.stringify(safeEvent) + '\n', 'utf8');
+  // P4aAC7: bound the file itself, not just what a read returns. Gated to once
+  // per process and to files that have actually grown — see lib/retention.mjs.
+  pruneJournalFile(file, {
+    retentionDays: retentionDaysFor(workspace, flags),
+    markerFor: ({ removed, cutoff }) => ({
+      version: 2,
+      id: eventId(),
+      ts: new Date().toISOString(),
+      type: 'journal.pruned',
+      command: 'journal.pruned',
+      result: 'pass',
+      checks: [],
+      removed,
+      reason: `older than ${cutoff}`,
+    }),
+  });
   return safeEvent;
 }
 
@@ -195,7 +234,17 @@ export function readEvents(workspace, options = 20) {
     .filter(Boolean);
   const filtered = events.filter((event) => {
     if (config.session && event.session !== config.session) return false;
-    if (config.failures && event.result !== 'fail' && event.decision !== 'block' && !event.blockedReason) return false;
+    // P4aAC7 (Phase 1 deferral): `cancelled` and `timed-out` map to the legacy
+    // `warn` result, so filtering on `result === 'fail'` alone hid exactly the
+    // runs an operator asking for failures wants most — the ones that were
+    // interrupted or ran out of time. The unified `status` is consulted
+    // alongside the legacy vocabulary rather than replacing it, so every
+    // pre-existing event still filters the way it always did.
+    if (config.failures
+      && event.result !== 'fail'
+      && event.decision !== 'block'
+      && !event.blockedReason
+      && !FAILURE_STATUSES.has(event.status)) return false;
     return true;
   });
   // Always bounded: a non-positive or missing limit clamps to the default, and

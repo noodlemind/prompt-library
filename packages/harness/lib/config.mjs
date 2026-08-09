@@ -96,6 +96,23 @@ export const CONFIG_SCHEMA = Object.freeze({
     restrict: (a, b) => a || b,
     description: 'apply the exec environment allowlist to named checks too',
   },
+  'runs.retention_days': {
+    type: 'number',
+    default: 30,
+    // Plain precedence (default < user < project), NOT restrictive. Every other
+    // key here gates authority, where a project must never be able to loosen
+    // what the user set. Retention length is not authority — it is how much
+    // history a team wants to keep — so the ordinary "more specific wins" rule
+    // applies and a repository may state its own policy.
+    merge: 'override',
+    description: 'days of run and event history to keep before pruning',
+    validate: (value) => {
+      if (!Number.isInteger(value) || value < 1 || value > 3650) {
+        throw usageError('runs.retention_days must be an integer from 1 to 3650');
+      }
+      return value;
+    },
+  },
   'exec.bash_enabled': {
     type: 'boolean',
     default: true,

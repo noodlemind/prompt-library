@@ -28,6 +28,7 @@ import { createRedactor, redactedJson } from '../lib/redact.mjs';
 // registry.mjs already imports this module, so it costs no extra load.
 import { readPkgVersion } from '../lib/commands.mjs';
 import { newRunId, startRun, finishRun } from '../lib/run-journal.mjs';
+import { setRunContext } from '../lib/run-context.mjs';
 
 const [, , command = 'help', ...args] = process.argv;
 // This renderer only writes error blocks, which go to stderr — detect there.
@@ -327,6 +328,11 @@ async function main() {
       const journaling = !shouldSkipRunJournal(runFlags);
       runId = newRunId();
       runStartedAt = Date.now();
+      // Established BEFORE dispatch so every write in this process — including
+      // the legacy `writeEvent` call sites that never went through the event
+      // registry — carries the run and actor. See lib/run-context.mjs for why
+      // this is ambient rather than threaded.
+      setRunContext({ run: runId, actor: detectRunActor() });
       runWorkspacePath = runWorkspace;
       runJournalFlags = runFlags;
       // Deferred to `ctx.onRunStart`, which lib/registry.mjs calls once the

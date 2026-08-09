@@ -186,16 +186,24 @@ Source of scope: `docs/architecture/harness-cli-workbench-delivery.md` §Phase 4
 - [x] **P4aAC3** Run status uses the unified vocabulary including `cancelled` and `timed-out` as distinct terminal states.
 - [x] **P4aAC4** `resume` restarts only from an explicitly safe boundary; interrupted commands are never auto-replayed.
 - [x] **P4aAC5** Runs are queryable by status, command, host, plan, and date.
-- [ ] **P4aAC6** The ~20 legacy `writeEvent` call sites migrate onto the event registry, gaining actor metadata (Phase 1 AC7 deferral closed).
-- [ ] **P4aAC7** Retention replaces the current 200-event cap with a stated policy; `--failures` surfaces cancelled and timed-out runs correctly (Phase 1 deferral closed).
+- [x] **P4aAC6** The ~20 legacy `writeEvent` call sites migrate onto the event registry, gaining actor metadata (Phase 1 AC7 deferral closed).
+- [x] **P4aAC7** Retention replaces the current 200-event cap with a stated policy; `--failures` surfaces cancelled and timed-out runs correctly (Phase 1 deferral closed).
 
 ### Phase 4a workstreams
 
 - [x] **P4a.1** Run identity and the journal core: stable run ids minted once per invocation, `run.start`/`run.result` records, and the id stamped on every event so a run's entries can be joined.
 - [x] **P4a.2** `run list|show|tree` with the documented filters.
 - [x] **P4a.3** `run resume` — safe boundaries, and never replaying an interrupted command.
-- [ ] **P4a.4** Migrate the legacy `writeEvent` call sites onto the event registry (P4aAC6).
-- [ ] **P4a.5** Retention policy and the `--failures` fix (P4aAC7).
+- [x] **P4a.4** Migrate the legacy `writeEvent` call sites onto the event registry (P4aAC6).
+- [x] **P4a.5** Retention policy and the `--failures` fix (P4aAC7).
+
+### P4aAC6 delivered differently from its wording, deliberately
+
+The criterion asks for the ~20 legacy `writeEvent` call sites to be "migrated onto the event registry" so they gain actor metadata. They now carry actor AND run, but not by being migrated one at a time: an ambient run context (`lib/run-context.mjs`) is established once per process and read inside the single `writeEvent` sink.
+
+The reason is the lesson this PR has now learned three times. Migrating twenty call sites fixes twenty and does nothing about the twenty-first, which regresses silently the moment someone adds it; reading the context in the one sink cannot be forgotten, because there is nothing for a future call site to remember. Ambient state is usually a smell, and it is right here for a specific reason: a run is a PROCESS fact — one invocation is exactly one run — so threading it through call sites would model it as a per-call fact that it is not.
+
+The gap was also worse than the criterion describes. Those events carried neither actor nor run, so `run show` and `run tree` saw the lifecycle pair and none of the domain events that say what the command actually did.
 
 ### The durability tension, stated before it bites
 
@@ -279,7 +287,10 @@ Each lands as one reviewable commit with its own review pass, per the delivery d
 - `packages/harness/lib/policy.mjs`
 - `packages/harness/lib/redact.mjs`
 - `packages/harness/lib/registry.mjs`
+- `packages/harness/lib/retention.mjs`
+- `packages/harness/lib/retention-config.mjs`
 - `packages/harness/lib/run-cmd.mjs`
+- `packages/harness/lib/run-context.mjs`
 - `packages/harness/lib/run-journal.mjs`
 - `packages/harness/lib/runner.mjs`
 - `packages/harness/lib/style.mjs`

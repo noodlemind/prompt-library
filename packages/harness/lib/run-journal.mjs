@@ -28,6 +28,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { ensureHarnessDir } from './session.mjs';
 import { createRedactor } from './redact.mjs';
+import { pruneJournalFile } from './retention.mjs';
+import { retentionDaysFor } from './retention-config.mjs';
 
 export const RUNS_FILE = 'runs.jsonl';
 export const RUN_SCHEMA = 1;
@@ -67,7 +69,20 @@ function append(workspace, record) {
   // Redacted before it lands, on the same terms as every other persisted
   // surface: a run record carries the argv, which is caller free-text.
   const safe = createRedactor().redactValue(record);
-  fs.appendFileSync(runsPath(workspace), `${JSON.stringify(safe)}\n`, 'utf8');
+  const file = runsPath(workspace);
+  fs.appendFileSync(file, `${JSON.stringify(safe)}\n`, 'utf8');
+  // Bounded by the same policy the event log uses, and it says so when it
+  // prunes — see lib/retention.mjs on why that is not a breach of append-only.
+  pruneJournalFile(file, {
+    retentionDays: retentionDaysFor(workspace),
+    markerFor: ({ removed, cutoff }) => ({
+      schema: RUN_SCHEMA,
+      type: 'journal.pruned',
+      ts: new Date().toISOString(),
+      removed,
+      reason: `older than ${cutoff}`,
+    }),
+  });
   return safe;
 }
 
