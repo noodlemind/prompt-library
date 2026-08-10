@@ -77,8 +77,11 @@ export function createComposer({
    * its border. A rule is a row already being spent; the label rides free. */
   let ruleLabel = '';
   /** Muted text shown while the buffer is empty (Codex, Grok). Vanishes on
-   * the first keystroke; never part of the value. */
-  const PLACEHOLDER = 'run a command · / for the palette';
+   * the first keystroke; never part of the value. Overridable: when the ledger
+   * is collecting a value, the QUESTION sits here — at the composer, where the
+   * answer is typed — rather than in the transcript forty rows away. */
+  const DEFAULT_PLACEHOLDER = 'run a command · / for the palette';
+  let placeholder = DEFAULT_PLACEHOLDER;
 
   const asText = (clusters) => clusters.join('');
   const clampCursor = () => {
@@ -322,7 +325,7 @@ export function createComposer({
     const body = [];
     const empty = lines.length === 1 && lines[0].length === 0;
     if (empty) {
-      body.push(`${paint('info', caret)}${paint('muted', PLACEHOLDER)}`);
+      body.push(`${paint('info', caret)}${paint('muted', placeholder)}`);
     } else {
       lines.forEach((clusters, i) => {
         const wrapped = wrapCells(asText(clusters), inner);
@@ -380,6 +383,7 @@ export function createComposer({
     setWidth(next) { width = Math.max(24, next); },
     setHint(next) { hint = next; },
     setRuleLabel(next) { ruleLabel = String(next ?? ''); },
+    setPlaceholder(next) { placeholder = next == null ? DEFAULT_PLACEHOLDER : String(next); },
     setGate(next) { gate = next; },
     setCompletion(items) {
       completion = items?.length ? { items, index: 0 } : null;

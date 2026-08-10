@@ -62,6 +62,10 @@ export function createInput({
   });
   let status = {};
   let hintState = { mode: 'deliver', gate: null, shell: 'allowed', rerun: null };
+  /** The value being collected, or null. While set, the composer's rule label
+   * names the command and the placeholder asks the question — the answer is
+   * typed exactly where the question is asked. */
+  let prompt = null;
   let overlay = null;      // modal picker: run tree, block navigation
   let palette = null;      // composer-attached list: { overlay, filter }
   let live = null;
@@ -111,6 +115,15 @@ export function createInput({
       if (palette) rows.push(...renderPaletteRows(palette.overlay, { ui, width: w }));
       composer.setWidth(w);
       composer.setHint(renderHint({ ui, width: w, ...hintState }));
+      // The rule label and the placeholder are computed HERE, per paint, from
+      // one source of truth each — a prompt in flight owns both.
+      if (prompt) {
+        composer.setRuleLabel(`${hintState.mode} · ${prompt.title}`);
+        composer.setPlaceholder(`${prompt.label}${prompt.note ? ` — ${prompt.note}` : ''} · ↵ submits · exit cancels`);
+      } else {
+        composer.setRuleLabel([hintState.mode, hintState.shell === 'denied' ? 'shell denied' : null].filter(Boolean).join(' · '));
+        composer.setPlaceholder(null);
+      }
       rows.push(...composer.render());
     }
     const footer = renderFooter(status, { ui, width: w, items: footerItems });
@@ -124,7 +137,8 @@ export function createInput({
     let offset = 0;
     if (live?.block) offset += 1 + Math.min(live.block.lines.length, LIVE_TAIL);
     if (overlay) {
-      return { row: offset + 2, col: ui.stripAnsi(`  ${overlay.title ? `${overlay.title} ` : ''}${overlay.query}`).length + 2 };
+      // The boxed overlay's input row is its second row — index 1, 0-based.
+      return { row: offset + 1, col: ui.stripAnsi(`  ${overlay.title ? `${overlay.title} ` : ''}${overlay.query}`).length + 2 };
     }
     if (palette) offset += palette.overlay.visible.length + (palette.overlay.footerText ? 1 : 0);
     const c = composer.cursor;
@@ -162,7 +176,10 @@ export function createInput({
     emit(lines.join('\n'));
     painted = lines.length;
     const { row, col } = cursorInRegion();
-    moveTo(top + Math.min(row, painted) - 1, 1);
+    // `row` is a 0-based index within the region (the composer reports its
+    // cursor with the top rule at 0). Treating it as 1-based parked the
+    // blinker ON the hairline, one row above the text it belonged to.
+    moveTo(top + Math.max(0, Math.min(row, painted - 1)), 1);
     if (col > 0) emit(`${ESC}[${col}C`);
   };
 
@@ -299,9 +316,10 @@ export function createInput({
     setHint(next) {
       hintState = { ...hintState, ...next };
       composer.setGate(hintState.gate);
-      composer.setRuleLabel([hintState.mode, hintState.shell === 'denied' ? 'shell denied' : null].filter(Boolean).join(' · '));
       if (interactive) frame(() => { erase(); paint(); });
     },
+    /** Ask a value question at the composer; null clears it. */
+    setPrompt(next) { prompt = next; if (interactive) frame(() => { erase(); paint(); }); },
     openOverlay(next) { overlay = next; if (interactive) frame(() => { erase(); paint(); }); },
     closeOverlay() { overlay = null; if (interactive) frame(() => { erase(); paint(); }); },
     get overlay() { return overlay; },

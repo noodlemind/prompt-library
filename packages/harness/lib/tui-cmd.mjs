@@ -231,10 +231,10 @@ export async function runLedger({
     if (gate && gate !== 'pass' && gate !== 'ok') {
       rows.push(ui.line({
         state: 'warn',
-        key: ui.unicode ? '⚠' : '[!]',
-        value: `gate ${gate}`,
+        key: `gate ${gate}`,
+        value: '',
         note: 'verify collects the evidence that opens it',
-        keyWidth: 1,
+        keyWidth: `gate ${gate}`.length,
       }));
       rows.push('');
     }
@@ -512,14 +512,32 @@ export async function runLedger({
    * to type flag syntax — it asks for the VALUE by name and assembles the argv
    * itself. */
   let pending = null;
+  /** True while the composer holds an inline completion (`search ▏`) — the
+   * next submitted line answers it, so the prompt clears then. */
+  let inlineHint = false;
 
-  const askPrompt = (prompt) => {
+  /**
+   * Ask for a value WHERE THE ANSWER IS TYPED. The first build committed the
+   * question into the transcript — which, bottom-anchored, is forty rows above
+   * the composer. The operator chose `search`, the ledger asked for the query
+   * at the top of the screen, and the surface read as "search doesn't work".
+   * Interactive sessions seat the question in the composer's rule label and
+   * placeholder; piped sessions keep the printed line, which is their whole
+   * interface.
+   */
+  const askPrompt = (prompt, title = '') => {
     const note = prompt.description
-      || (prompt.type === 'boolean' ? 'yes / no' : prompt.required ? 'required' : 'optional — leave blank to skip');
+      || (prompt.type === 'boolean' ? 'yes / no' : prompt.required ? 'required' : 'optional — blank skips');
+    if (interactive) {
+      session.setPrompt({ title, label: prompt.label, note });
+      return;
+    }
     say(ui.line({ state: prompt.required ? 'warn' : 'pending', key: '?', value: prompt.label, note }));
   };
+  const clearPrompt = () => { if (interactive) session.setPrompt(null); };
 
   const finishSelection = async (row, values) => {
+    clearPrompt();
     const { argv: resolved, invalid, missing } = resolveSelection(row, values);
     if (missing?.length) {
       say(ui.line({ state: 'warn', key: 'needs', value: missing.map((k) => String(k).replace(/^--/, '')).join(', '), note: 'still required' }));
@@ -554,9 +572,35 @@ export async function runLedger({
       say(ui.line({ state: 'warn', key: 'needs', value: choice.label, note: plan.invalid || 'nothing to run' }));
       return;
     }
+    // INLINE COMPLETION — Claude Code's flow, and the one an operator expects:
+    // choosing a command whose missing values are WORDS (positionals, never
+    // flags) does not submit anything. It completes the composer to
+    // `search ▏` and the rule label names what is expected; the operator keeps
+    // typing and presses Enter once. The question-and-answer collection remains
+    // only for flag-valued commands (`plan-new` needs --type/--slug/--intent),
+    // where typed positionals would not map, and for piped sessions, where the
+    // printed exchange is the whole interface.
+    if (interactive) {
+      const tokens = choice.argvTokens || [];
+      const inlineSafe = tokens.every((t) => t.kind !== 'flag')
+        && plan.queue.every((q) => tokens.some((t) => t.kind === 'value' && t.positional === q.key));
+      if (inlineSafe) {
+        const words = tokens.filter((t) => t.kind === 'command' || t.kind === 'subcommand').map((t) => t.value);
+        if (words.length) {
+          session.composer.setValue(`${words.join(' ')} `);
+          session.setPrompt({
+            title: `${words.join(' ')} · ${plan.queue.map((q) => q.label).join(' · ')}`,
+            label: plan.queue.map((q) => q.label).join(' · '),
+            note: 'type it, ↵ runs',
+          });
+          inlineHint = true;
+          return;
+        }
+      }
+    }
     pending = { row: choice, queue: plan.queue, index: 0, values: {}, untilResolves: plan.untilResolves };
-    say(ui.paint('muted', `${plan.queue.length} value(s) needed · blank skips optional · exit cancels`));
-    askPrompt(plan.queue[0]);
+    if (!interactive) say(ui.paint('muted', `${plan.queue.length} value(s) needed · blank skips optional · exit cancels`));
+    askPrompt(plan.queue[0], choice.label);
   };
 
   // ── block navigation & the run tree ───────────────────────────────────
@@ -744,6 +788,7 @@ export async function runLedger({
       }
 
       const line = stripControl(String(event.line ?? ''));
+      if (inlineHint) { clearPrompt(); inlineHint = false; }
       // NO SEPARATE ECHO. The block's first row IS the command, verbatim — see
       // the design's block anatomy — so echoing the line here printed it twice,
       // once bare and once inside the block that followed. Lines that produce
@@ -753,19 +798,19 @@ export async function runLedger({
       // that looks like a command is not re-read as one.
       if (pending) {
         const trimmed = line.trim();
-        if (trimmed === 'exit' || trimmed === 'quit') { say(ui.paint('muted', 'cancelled')); pending = null; continue; }
+        if (trimmed === 'exit' || trimmed === 'quit') { clearPrompt(); say(ui.paint('muted', 'cancelled')); pending = null; continue; }
         const prompt = pending.queue[pending.index];
         if (trimmed === '') {
           if (prompt.required) {
             say(ui.line({ state: 'warn', key: 'needs', value: prompt.label, note: 'required — enter a value, or exit to cancel' }));
-            askPrompt(prompt);
+            askPrompt(prompt, pending.row.label);
             continue;
           }
         } else if (prompt.type === 'boolean') {
           const t = trimmed.toLowerCase();
           if (!['y', 'yes', 'true', '1', 'n', 'no', 'false', '0'].includes(t)) {
             say(ui.line({ state: 'warn', key: 'needs', value: prompt.label, note: 'yes or no' }));
-            askPrompt(prompt);
+            askPrompt(prompt, pending.row.label);
             continue;
           }
           // Boolean, not the strings "true"/"false": resolveArgv treats any
@@ -788,7 +833,7 @@ export async function runLedger({
         }
 
         pending.index += 1;
-        if (pending.index < pending.queue.length) { askPrompt(pending.queue[pending.index]); continue; }
+        if (pending.index < pending.queue.length) { askPrompt(pending.queue[pending.index], pending.row.label); continue; }
         const { row, values } = pending;
         pending = null;
         await finishSelection(row, values);
@@ -909,7 +954,9 @@ function safeGit(workspace) {
     const git = deriveGitContext({ workspace });
     return {
       branch: git?.branch || (git?.detached ? 'detached' : null),
-      commit: git?.commit ? String(git.commit).slice(0, 7) : null,
+      // The field is `headSha` — `commit` matched nothing, so the header never
+      // showed `main @ 5461fb5` the way the board draws it.
+      commit: git?.headSha ? String(git.headSha).slice(0, 7) : null,
     };
   } catch {
     // A container may have no repository; the header simply omits the fields.

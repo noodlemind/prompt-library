@@ -29,8 +29,11 @@ import { fakeTty, plainUi } from './helpers/tty.mjs';
 const fakeInput = () => Object.assign(new PassThrough(), { isTTY: true, setRawMode() {} });
 const ui = plainUi();
 
-/** Rows that are part of the editor, identified by the rule it draws. */
-const ruleRows = (out) => out.lines.filter((l) => /^─{4,}$/.test(l.trim())).length;
+/** Rows that are part of the editor, identified by the rule it draws. The top
+ * rule may carry a right-embedded label (`── deliver ──`), so both spellings
+ * count. */
+const isRule = (t) => /^─{4,}$/.test(t) || /^─{3,} \S.* ──$/.test(t);
+const ruleRows = (out) => out.lines.filter((l) => isRule(l.trim())).length;
 const caretRows = (out) => out.lines.filter((l) => l.includes('❯')).length;
 
 test('P4bAC10: repainting repeatedly leaves ONE editor on screen', () => {

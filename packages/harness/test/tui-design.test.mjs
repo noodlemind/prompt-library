@@ -982,3 +982,155 @@ test('REVIEW-4: a blocked gate gets one actionable warning at open', async () =>
   assert.match(text, /gate blocked.*verify collects the evidence/,
     'the problem AND the command that fixes it, once, at open — Claude Code’s ⚠ pattern');
 });
+
+// ── first hands-on test: the blinker and the invisible question ─────────
+
+test('FIELD: the blinker sits on the input row, not on the hairline above it', async () => {
+  // The composer reports its cursor 0-indexed from the block top (0 = top
+  // rule, 1 = the text row); the absolute positioning treated it as 1-based
+  // and parked the blinker ON the hairline — visible in the first real
+  // launch, one row above where typing would land.
+  const { createInput } = await import('../lib/tui/input.mjs');
+  const { PassThrough } = await import('node:stream');
+  const { fakeTty } = await import('./helpers/tty.mjs');
+  const output = fakeTty({ columns: 80, rows: 24 });
+  const input = Object.assign(new PassThrough(), { isTTY: true, setRawMode() {} });
+  const session = createInput({ input, output, ui });
+  const pending = session.next();
+
+  const caretRow = output.lines.findIndex((l) => l.includes('❯'));
+  assert.equal(output.cursor.row, caretRow, 'the cursor row IS the caret row');
+  assert.equal(output.cursor.col, 2, 'parked just after the caret, where the first character lands');
+
+  // Enter on an EMPTY buffer submits nothing — resolve the pending read with a
+  // real line so the test cannot hang on its own affordance.
+  input.emit('keypress', 'x', { name: 'x' });
+  input.emit('keypress', null, { name: 'return' });
+  await pending;
+  session.close();
+});
+
+test('FIELD: a value question is asked at the composer, where the answer is typed', async () => {
+  // Choosing `search` from the palette asked for the query in the transcript —
+  // forty rows above a bottom-anchored composer. The operator read it as
+  // "search doesn't work", which for every practical purpose it was. The
+  // question now sits in the composer's own rule label and placeholder.
+  const { createInput } = await import('../lib/tui/input.mjs');
+  const { PassThrough } = await import('node:stream');
+  const { fakeTty } = await import('./helpers/tty.mjs');
+  const output = fakeTty({ columns: 100, rows: 24 });
+  const input = Object.assign(new PassThrough(), { isTTY: true, setRawMode() {} });
+  const session = createInput({ input, output, ui });
+
+  session.setPrompt({ title: 'search', label: 'query', note: 'required' });
+  const lines = output.lines;
+  const ruleAt = lines.findIndex((l) => /deliver · search/.test(l));
+  const askAt = lines.findIndex((l) => /query — required · ↵ submits · exit cancels/.test(l));
+  assert.ok(ruleAt !== -1, 'the rule label names the command being served');
+  assert.equal(askAt, ruleAt + 1, 'and the question is the very next row — the input row itself');
+
+  session.setPrompt(null);
+  assert.ok(output.lines.some((l) => /run a command · \/ for the palette/.test(l)),
+    'clearing the prompt restores the ordinary placeholder');
+  session.close();
+});
+
+test('FIELD: the startup warning carries one glyph, not a glyph and a key', async () => {
+  const { runLedger } = await import('../lib/tui-cmd.mjs');
+  const { PassThrough } = await import('node:stream');
+  const fs = await import('node:fs');
+  const os = await import('node:os');
+  const path = await import('node:path');
+  const workspace = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'tui-glyph-')));
+  fs.mkdirSync(path.join(workspace, '.harness'), { recursive: true });
+  fs.writeFileSync(path.join(workspace, '.harness', 'session.json'), JSON.stringify({ gateStatus: 'blocked' }));
+
+  const input = new PassThrough();
+  const output = new PassThrough();
+  let text = '';
+  output.on('data', (c) => { text += c.toString(); });
+  const done = runLedger({ input, output, workspace, argv: ['--no-color', '--no-events'], dispatcher: async () => 0 });
+  input.write('exit\n');
+  input.end();
+  await done;
+  const warn = text.split('\n').find((l) => l.includes('verify collects'));
+  assert.ok(warn, 'the actionable line prints');
+  assert.doesNotMatch(warn, /⚠/, 'the state glyph is the only glyph — `! ⚠ gate blocked` said warning twice');
+  assert.match(warn, /gate blocked/);
+});
+
+// ── first hands-on test: the blinker and the invisible question ─────────
+
+test('FIELD: the blinker sits on the input row, not on the hairline above it', async () => {
+  // The composer reports its cursor 0-indexed from the block top (0 = top
+  // rule, 1 = the text row); the absolute positioning treated it as 1-based
+  // and parked the blinker ON the hairline — visible in the first real
+  // launch, one row above where typing would land.
+  const { createInput } = await import('../lib/tui/input.mjs');
+  const { PassThrough } = await import('node:stream');
+  const { fakeTty } = await import('./helpers/tty.mjs');
+  const output = fakeTty({ columns: 80, rows: 24 });
+  const input = Object.assign(new PassThrough(), { isTTY: true, setRawMode() {} });
+  const session = createInput({ input, output, ui });
+  const pending = session.next();
+
+  const caretRow = output.lines.findIndex((l) => l.includes('❯'));
+  assert.equal(output.cursor.row, caretRow, 'the cursor row IS the caret row');
+  assert.equal(output.cursor.col, 2, 'parked just after the caret, where the first character lands');
+
+  // Enter on an EMPTY buffer submits nothing — resolve the pending read with a
+  // real line so the test cannot hang on its own affordance.
+  input.emit('keypress', 'x', { name: 'x' });
+  input.emit('keypress', null, { name: 'return' });
+  await pending;
+  session.close();
+});
+
+test('FIELD: a value question is asked at the composer, where the answer is typed', async () => {
+  // Choosing `search` from the palette asked for the query in the transcript —
+  // forty rows above a bottom-anchored composer. The operator read it as
+  // "search doesn't work", which for every practical purpose it was. The
+  // question now sits in the composer's own rule label and placeholder.
+  const { createInput } = await import('../lib/tui/input.mjs');
+  const { PassThrough } = await import('node:stream');
+  const { fakeTty } = await import('./helpers/tty.mjs');
+  const output = fakeTty({ columns: 100, rows: 24 });
+  const input = Object.assign(new PassThrough(), { isTTY: true, setRawMode() {} });
+  const session = createInput({ input, output, ui });
+
+  session.setPrompt({ title: 'search', label: 'query', note: 'required' });
+  const lines = output.lines;
+  const ruleAt = lines.findIndex((l) => /deliver · search/.test(l));
+  const askAt = lines.findIndex((l) => /query — required · ↵ submits · exit cancels/.test(l));
+  assert.ok(ruleAt !== -1, 'the rule label names the command being served');
+  assert.equal(askAt, ruleAt + 1, 'and the question is the very next row — the input row itself');
+
+  session.setPrompt(null);
+  assert.ok(output.lines.some((l) => /run a command · \/ for the palette/.test(l)),
+    'clearing the prompt restores the ordinary placeholder');
+  session.close();
+});
+
+test('FIELD: the startup warning carries one glyph, not a glyph and a key', async () => {
+  const { runLedger } = await import('../lib/tui-cmd.mjs');
+  const { PassThrough } = await import('node:stream');
+  const fs = await import('node:fs');
+  const os = await import('node:os');
+  const path = await import('node:path');
+  const workspace = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'tui-glyph-')));
+  fs.mkdirSync(path.join(workspace, '.harness'), { recursive: true });
+  fs.writeFileSync(path.join(workspace, '.harness', 'session.json'), JSON.stringify({ gateStatus: 'blocked' }));
+
+  const input = new PassThrough();
+  const output = new PassThrough();
+  let text = '';
+  output.on('data', (c) => { text += c.toString(); });
+  const done = runLedger({ input, output, workspace, argv: ['--no-color', '--no-events'], dispatcher: async () => 0 });
+  input.write('exit\n');
+  input.end();
+  await done;
+  const warn = text.split('\n').find((l) => l.includes('verify collects'));
+  assert.ok(warn, 'the actionable line prints');
+  assert.doesNotMatch(warn, /⚠/, 'the state glyph is the only glyph — `! ⚠ gate blocked` said warning twice');
+  assert.match(warn, /gate blocked/);
+});
