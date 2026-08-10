@@ -592,11 +592,16 @@ test('CONSISTENCY: a successful block does not restate its record line as a tall
   output.on('data', (c) => { text += c.toString(); });
   const done = runLedger({
     input, output, workspace: process.cwd(), argv: ['--no-color', '--no-events'],
-    dispatcher: async () => { console.log('one line of output'); return 0; },
+    // Through the INJECTED stream, which is what `capture` hooks — a
+    // `console.log` here writes to process.stdout, bypasses the capture, and
+    // leaves the block empty, so the tally assertion below would hold
+    // vacuously for a block with no output at all.
+    dispatcher: async () => { output.write('one line of output\n'); return 0; },
   });
   input.write('status\nexit\n');
   input.end();
   await done;
+  assert.match(text, /one line of output/, 'the block carried the output the tally is about');
   assert.doesNotMatch(text, /1 line (→|->) exit 0/,
     '`N lines → exit 0` under `ok · exit 0` said the exit twice — a tally must add something');
   assert.match(text, /ok · exit 0/, 'the record line still carries the outcome');
