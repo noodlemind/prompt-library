@@ -483,13 +483,23 @@ test('!! <id> resolves a block by id or unique prefix, and says so when it canno
   assert.equal(ledgerStore.byId(a.id)?.command, 'verify', 'an exact id resolves');
   assert.equal(ledgerStore.byId(b.id.slice(0, 12))?.command, '!echo hi', 'so does a unique prefix');
   assert.equal(ledgerStore.byId('zzzzzzzz'), null, 'and an id that matches nothing resolves to nothing');
-  // Ambiguity is a refusal, never a pick: two blocks share a run id's
-  // time-ordered head, and guessing between them would replay the wrong one.
-  assert.equal(ledgerStore.byId(''), null, 'an empty id resolves to nothing at all');
-
   assert.deepEqual(b.argv, ['bash', '--', 'echo hi'],
     'the block keeps the argv that was dispatched, which is what a replay needs');
-  assert.equal(ledgerStore.lastCommand().command, '!echo hi');
+  assert.equal(ledgerStore.lastCommand().command, '!echo hi',
+    'asserted before the ambiguity blocks below are opened, which become the new last command');
+  // Ambiguity is a refusal, never a pick: two blocks share a run id's
+  // time-ordered head, and guessing between them would replay the wrong one.
+  // Constructed ids rather than real ones, so the shared head is guaranteed
+  // instead of depending on two `newRunId()` calls landing in the same
+  // millisecond.
+  const c = ledgerStore.open({ command: 'first', argv: ['first'] });
+  const d = ledgerStore.open({ command: 'second', argv: ['second'] });
+  c.id = 'shared0head-aaaa'; c.run = c.id;
+  d.id = 'shared0head-bbbb'; d.run = d.id;
+  assert.equal(ledgerStore.byId('shared0head'), null,
+    'a prefix matching two blocks resolves to neither — replaying the wrong one is worse than asking');
+  assert.equal(ledgerStore.byId('shared0head-aa')?.command, 'first', 'one more character disambiguates');
+  assert.equal(ledgerStore.byId(''), null, 'and an empty id resolves to nothing at all');
 });
 
 test('an unknown block id is reported rather than guessed at', async () => {
@@ -497,31 +507,76 @@ test('an unknown block id is reported rather than guessed at', async () => {
   assert.match(text, /no block with that id in this session/);
 });
 
+/** The shared `ledger` helper passes `--no-events`, which turns journaling off
+ * for the whole session — correct for grammar tests, and blinding for these
+ * two. They run their own session with journaling ON in a temp workspace. */
+async function journalingLedger(lines, { workspace, dispatcher }) {
+  const input = new PassThrough();
+  const output = new PassThrough();
+  let text = '';
+  output.on('data', (c) => { text += c.toString(); });
+  const done = runLedger({ input, output, workspace, argv: ['--no-color'], dispatcher });
+  for (const line of lines) input.write(`${line}\n`);
+  input.end();
+  await done;
+  return text;
+}
+
+const readRuns = (workspace) => {
+  const file = path.join(workspace, '.harness', 'runs.jsonl');
+  return fs.existsSync(file)
+    ? fs.readFileSync(file, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l))
+    : [];
+};
+
 test('a TUI dispatch carries its own run into the event registry', async () => {
   // Every command in the ledger opens its own run. Dispatching without that
   // run's registry wrote events with no run at all, so `run show` for a command
   // typed in the TUI came back empty and its domain events were attributed to
-  // the outer `tui` invocation instead.
+  // the outer `tui` invocation instead. Journaling is ON here — the shared
+  // helper disables it, which made the previous version of this test unable to
+  // fail for the reason it named.
+  const workspace = tempDir('tui-events-');
   let ctx = null;
-  await ledger(['status', 'exit'], {
-    workspace: tempDir('tui-events-'),
-    dispatcher: async (_argv, received) => { ctx = received; return 0; },
+  await journalingLedger(['status', 'exit'], {
+    workspace,
+    dispatcher: async (_argv, received) => {
+      ctx = received;
+      // The registry calls this once validation passes; the stub stands in.
+      received.onRunStart?.();
+      return 0;
+    },
   });
   assert.ok(ctx, 'the command dispatched');
+  assert.ok(ctx.events, 'the dispatch carries the run’s own event registry');
   assert.equal(typeof ctx.onRunStart, 'function',
     'the run record is deferred past validation, exactly as bin/harness.mjs defers it');
   assert.equal(typeof ctx.reportStatus, 'function',
     'and the command can report its own status, which beats reverse-mapping an exit code');
+
+  const runs = readRuns(workspace);
+  const starts = runs.filter((r) => r.type === 'run.start' && r.command === 'status');
+  const results = runs.filter((r) => r.type === 'run.result');
+  assert.equal(starts.length, 1, 'the command opened exactly one run');
+  assert.ok(results.some((r) => r.run === starts[0].run && r.status === 'succeeded'),
+    'and closed it with a terminal status');
 });
 
-test('a refused command journals no run', async () => {
-  // `onRunStart` is called by the registry only once a command has passed
-  // validation. A command that never ran must not leave a run behind.
+test('a refused command journals no run — while an accepted one does', async () => {
+  // `openRun` is deferred until validation passes. The CONTROL COMMAND is the
+  // point: with journaling disabled (as the previous version had it), an empty
+  // journal proved the flag rather than the refusal. `status` journaling in the
+  // same session proves the journal was live and the unknown command still
+  // left nothing.
   const workspace = tempDir('tui-refused-');
-  await ledger(['definitely-not-a-command', 'exit'], { workspace, dispatcher: async () => 0 });
-  const journal = path.join(workspace, '.harness', 'runs.jsonl');
-  const lines = fs.existsSync(journal)
-    ? fs.readFileSync(journal, 'utf8').split('\n').filter(Boolean)
-    : [];
-  assert.deepEqual(lines, [], 'an unknown command is refused before dispatch and journals nothing');
+  await journalingLedger(['definitely-not-a-command', 'status', 'exit'], {
+    workspace,
+    dispatcher: async (_argv, received) => { received.onRunStart?.(); return 0; },
+  });
+  const runs = readRuns(workspace);
+  const starts = runs.filter((r) => r.type === 'run.start');
+  assert.equal(starts.length, 1, `only the accepted command opened a run: ${JSON.stringify(starts.map((r) => r.command))}`);
+  assert.equal(starts[0].command, 'status');
+  assert.ok(!starts.some((r) => r.command === 'definitely-not-a-command'),
+    'a command refused before dispatch never reaches the journal');
 });

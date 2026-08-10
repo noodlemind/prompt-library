@@ -267,6 +267,16 @@ export function createComposer({
     }
 
     if (!ctrl && !meta && isPrintable(str)) {
+      // `/` AT THE START OF AN EMPTY LINE IS THE PALETTE, IMMEDIATELY — not
+      // after Enter. Typing the sigil is the request; making someone finish
+      // the word, press Enter, read a printed list and type a number is the
+      // flow every reference CLI abandoned. The overlay filters live from the
+      // next keystroke. Anywhere else `/` is a character, because paths are
+      // typed mid-command (`get docs/plans/x.md`) far more often than the
+      // palette is wanted mid-word.
+      if (str === '/' && row === 0 && col === 0 && lines.length === 1 && lines[0].length === 0) {
+        return { intent: 'palette', changed: false };
+      }
       insert(str);
       completion = null;
       // Typing `@` is itself the request for a completion list — asking someone

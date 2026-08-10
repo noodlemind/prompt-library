@@ -484,7 +484,7 @@ shell's own meaning is the useful one, and blocks-as-records make it exact.
 
 | tier | keys |
 |---|---|
-| typing | `↵` run · `shift+↵` newline · `!` shell · `!!` re-run · `@` file · `/` palette |
+| typing | `↵` run · `shift+↵` newline · `!` shell · `!!` re-run · `@` file · `/` palette — the sigil opens it **immediately** on an empty line and filters live from the next keystroke; no Enter, no numbered list |
 | navigating | `ctrl+↑` leaves the editor, then `↑↓` walk blocks, `↵` inspects |
 | block | `ctrl+o` fold · `y` copy · `m` mark (persists) · `r` re-run · `t` run tree |
 | overlay | `ctrl+p` palette (`cmd+k` aliased; `ctrl+k` when the line is empty) · `esc esc` run tree · `esc` closes |

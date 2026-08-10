@@ -640,3 +640,43 @@ test('STABILITY: every repaint is wrapped in synchronized output, and the pairs 
   assert.ok(begins >= 3, `repaints are batched into frames (saw ${begins})`);
   assert.equal(begins, ends, 'and every begin has its end — an unbalanced pair freezes the terminal');
 });
+
+test('STABILITY: clip and wrap consume non-SGR escapes instead of hanging on them', async () => {
+  // `tokens` only knew SGR. Any other escape — `\x1b[K`, an OSC title,
+  // `\x1b7` — left the scan pointing at the same ESC forever: an infinite
+  // loop reachable from a child process\u2019s captured output, hanging the whole
+  // TUI. Non-SGR escapes are consumed and DROPPED, matching `stripAnsi`, and
+  // never passed through — an erase-line surviving into a padded, tinted row
+  // would wipe the row it was wrapped in.
+  const { clipTo: clip, wrapCells: wrap, displayWidth: width } = await import('../lib/tui/width.mjs');
+  const cases = [
+    ['ab\x1b[Kcd', 'abcd'],
+    ['a\x1b]0;title\x07b', 'ab'],
+    ['x\x1b7y', 'xy'],
+    ['a\x1b', 'a'],
+  ];
+  for (const [input, plain] of cases) {
+    assert.equal(clip(input, 20), plain, `clip drops the escape: ${JSON.stringify(input)}`);
+    assert.equal(wrap(input, 20).join(''), plain, `wrap drops it too`);
+    assert.equal(width(input), plain.length, 'and displayWidth agrees with both');
+  }
+  assert.match(clip('\x1b[31mred\x1b[39m', 20), /\x1b\[31m/, 'while SGR — colour — is still kept');
+});
+
+test('DESIGN: `/` at the start of an empty line opens the palette immediately', () => {
+  // The reported flow: type `/index`, press Enter, read a printed list, type a
+  // number, press Enter again. The design's entry point is the SIGIL — the
+  // palette appears on the keystroke and filters live from the next one, the
+  // way every reference CLI in the survey behaves.
+  const composer = createComposer({ width: 40 });
+  const result = composer.handleKey('/', {});
+  assert.equal(result.intent, 'palette', 'the keystroke IS the request');
+  assert.equal(composer.value, '', 'and the sigil is consumed, not typed');
+
+  // Anywhere else, `/` is a character: paths are typed mid-command far more
+  // often than the palette is wanted mid-word.
+  for (const ch of 'get docs') composer.handleKey(ch, {});
+  const midLine = composer.handleKey('/', {});
+  assert.equal(midLine.intent, undefined, 'mid-line, / inserts');
+  assert.equal(composer.value, 'get docs/');
+});

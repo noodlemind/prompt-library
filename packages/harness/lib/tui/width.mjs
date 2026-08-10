@@ -24,8 +24,23 @@
  * fails narrow (a new wide character measured as 1) rather than wide.
  */
 
-/** ANSI SGR — colour, not content, and never occupies a cell. */
-const ANSI_RE = /\x1b\[[0-9;]*m/g;
+/**
+ * Escape sequences — never content, never a cell.
+ *
+ * BROADER THAN SGR, deliberately. `displayWidth` strips before measuring, and
+ * a strip that only knew `…m` sequences counted an OSC title's payload and a
+ * CSI's parameter bytes as text — so the three width helpers disagreed about
+ * any string carrying a non-colour escape. One alternation covers the forms a
+ * captured child process actually emits: CSI with any final byte (`\x1b[K`),
+ * OSC terminated by BEL or ST (`\x1b]0;title\x07`), and the single-character
+ * escapes (`\x1b7`).
+ */
+const ANSI_RE = /\x1b(?:\[[0-9;?]*[ -\/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\)?|[0-Z\\-_])/g;
+/** Just the SGR form — the one kind of escape clip and wrap PRESERVE, because
+ * colour survives a cut and everything else must not. */
+const SGR_RE = /^\x1b\[[0-9;]*m/;
+/** Any escape sequence at the start of a string, for consuming without keeping. */
+const ESCAPE_RE = /^\x1b(?:\[[0-9;?]*[ -\/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\)?|[0-Z\\-_])/;
 
 export function stripAnsi(text) {
   return String(text ?? '').replace(ANSI_RE, '');
@@ -167,12 +182,25 @@ function* tokens(text) {
   let i = 0;
   while (i < s.length) {
     if (s[i] === '\x1b') {
-      const m = /^\x1b\[[0-9;]*m/.exec(s.slice(i));
-      if (m) {
-        yield { ansi: m[0] };
-        i += m[0].length;
+      const sgr = SGR_RE.exec(s.slice(i));
+      if (sgr) {
+        yield { ansi: sgr[0] };
+        i += sgr[0].length;
         continue;
       }
+      // A NON-SGR ESCAPE IS CONSUMED AND DROPPED — never yielded, never left.
+      // Leaving it made the plain-run scan below stop immediately at the same
+      // ESC, slice nothing, and loop forever: any `\x1b[K` or OSC title in a
+      // child's captured output hung the whole TUI process. And it cannot be
+      // passed through either — an erase-line sequence surviving into a padded,
+      // tinted row would wipe the row it was wrapped in. Colour is the only
+      // escape a clip can honestly keep; everything else is dropped, exactly as
+      // `stripAnsi` and therefore `displayWidth` treat it. The final arm
+      // consumes a lone or malformed ESC one byte at a time, so progress is
+      // unconditional.
+      const esc = ESCAPE_RE.exec(s.slice(i));
+      i += esc ? esc[0].length : 1;
+      continue;
     }
     // Grapheme-cluster the remaining plain run in one pass rather than
     // per character, so combining marks and ZWJ sequences stay whole.
