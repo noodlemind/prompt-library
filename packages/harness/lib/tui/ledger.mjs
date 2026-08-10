@@ -24,7 +24,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { startRun, finishRun, newRunId, readJournal, foldRuns } from '../run-journal.mjs';
-import { createBlock, newBlockId } from './block.mjs';
+import { createBlock, newBlockId, formatActor } from './block.mjs';
+import { detectActor } from '../event-registry.mjs';
 import { writeFileContained } from '../fs-safe.mjs';
 
 /** How many prior runs a fresh session restores. Enough that yesterday's work
@@ -76,7 +77,11 @@ export { runStatusForExit as statusForExit } from '../run-journal.mjs';
 
 export function createLedger({
   workspace = process.cwd(),
-  actor = 'you',
+  // The JOURNAL gets the contract's shape (`{kind:'user'}`), exactly as
+  // `bin/harness.mjs` writes it — the ledger briefly wrote the display string
+  // instead, which put two actor shapes into one append-only file. Blocks get
+  // the word.
+  actor = detectActor(),
   harnessVersion = null,
   journaling = true,
   now = () => Date.now(),
@@ -91,7 +96,7 @@ export function createLedger({
    * eight `search` records has spent its first screen telling you what you
    * already know. What earns the space is what changed something or failed.
    */
-  function hydrate({ limit = HYDRATE_LIMIT } = {}) {
+  function hydrate({ limit = HYDRATE_LIMIT, restoreWorthy = null } = {}) {
     // A session that is not journaling is not reading history either: the two
     // are the same switch, and restoring records a session cannot add to would
     // show a history that silently stops growing.
@@ -102,9 +107,23 @@ export function createLedger({
     } catch {
       return [];
     }
+    // WHAT EARNS THE SPACE: failures always; successes only when the command
+    // changed something. The first session against a real journal opened with
+    // six restored `tui` records — the ledger's own previous sessions — and
+    // two `status` reads: eight blocks that told the operator nothing. The
+    // session's own runs are never interesting to the session, and a
+    // succeeded read left nothing behind to point at. `restoreWorthy` is
+    // injectable so the caller can consult the registry's side-effect class;
+    // the default list covers the read-class commands the registry declares
+    // today.
+    const worthKeeping = restoreWorthy ?? ((r) => {
+      if (r.command === 'tui') return false;
+      if (r.status !== 'succeeded') return true;
+      return !['search', 'lookup', 'tree', 'run', 'orient', 'status', 'get', 'recall', 'help', 'doctor', 'report'].includes(r.command);
+    });
     const interesting = folded
       .filter((r) => r.terminal && r.command)
-      .filter((r) => r.status !== 'succeeded' || !['search', 'lookup', 'tree', 'run', 'orient'].includes(r.command))
+      .filter(worthKeeping)
       .sort((a, b) => String(a.startedAt).localeCompare(String(b.startedAt)))
       .slice(-limit);
 
@@ -116,7 +135,7 @@ export function createLedger({
       exit: Number.isInteger(r.exitCode) ? r.exitCode : null,
       startedAt: r.startedAt,
       durationMs: r.durationMs,
-      actor: r.actor || 'you',
+      actor: formatActor(r.actor) || 'you',
       marked: marks.has(r.run),
       // Restored records replay from the journal's own argv rather than from
       // the display string, for the same reason live blocks do.
@@ -146,7 +165,7 @@ export function createLedger({
       command,
       status: 'running',
       startedAt: new Date().toISOString(),
-      actor,
+      actor: formatActor(actor),
       kind,
       cwd: workspace,
     });

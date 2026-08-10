@@ -685,3 +685,101 @@ test('DESIGN: `/` at the start of an empty line opens the palette immediately', 
   assert.equal(midLine.intent, undefined, 'mid-line, / inserts');
   assert.equal(composer.value, 'get docs/');
 });
+
+// ── field lessons: the references open quiet ────────────────────────────
+
+test('FIELD: an actor renders as a word, never as [object Object]', async () => {
+  // The journal stores the contract's shape — {kind:'user'} — and the first
+  // session against a real journal printed `actor [object Object]` on every
+  // restored record line.
+  const { formatActor } = await import('../lib/tui/block.mjs');
+  assert.equal(formatActor({ kind: 'user' }), 'you');
+  assert.equal(formatActor({ kind: 'ci' }), 'ci');
+  assert.equal(formatActor({ kind: 'host', host: 'vscode' }), 'vscode');
+  assert.equal(formatActor('you'), 'you');
+  assert.equal(formatActor(null), null);
+
+  const segments = recordSegments(createBlock({ status: 'ok', actor: { kind: 'user' } }));
+  const text = segments.map((s) => s.text).join(' · ');
+  assert.match(text, /actor you/);
+  assert.doesNotMatch(text, /object Object/);
+});
+
+test('FIELD: the session opens quiet — history hydrates without printing blocks', async () => {
+  // Amp, Claude Code, Grok and opencode all open onto identity, a hint or
+  // two, and an EMPTY transcript. A ledger that dumps eight blocks of its own
+  // past on open is a history lesson, not a prompt. The records still load —
+  // ctrl+↑ walks them, !! <id> replays one — but the first screen gets one
+  // muted summary line, or silence when there is nothing worth restoring.
+  const { runLedger } = await import('../lib/tui-cmd.mjs');
+  const { startRun, finishRun, newRunId } = await import('../lib/run-journal.mjs');
+  const { PassThrough } = await import('node:stream');
+  const fs = await import('node:fs');
+  const os = await import('node:os');
+  const path = await import('node:path');
+  const workspace = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'tui-quiet-')));
+
+  // A journal with one failed verify (worth restoring), one succeeded status
+  // (a read — not worth it), and a prior tui session (never worth it).
+  const mk = (command, status) => {
+    const run = newRunId();
+    startRun(workspace, { run, command, argv: [], actor: { kind: 'user' } });
+    finishRun(workspace, { run, status, exitCode: status === 'succeeded' ? 0 : 1 });
+  };
+  mk('verify', 'failed');
+  mk('status', 'succeeded');
+  mk('tui', 'succeeded');
+
+  const input = new PassThrough();
+  const output = new PassThrough();
+  let text = '';
+  output.on('data', (c) => { text += c.toString(); });
+  const done = runLedger({ input, output, workspace, argv: ['--no-color'], dispatcher: async () => 0 });
+  input.write('exit\n');
+  input.end();
+  await done;
+
+  assert.doesNotMatch(text, /[▌|] [>❯] verify/, 'no restored block is printed onto the first screen');
+  assert.doesNotMatch(text, /object Object/, 'and no mis-rendered actor anywhere');
+  assert.match(text, /1 prior run · 1 failed/, 'one muted line says the history exists');
+  assert.doesNotMatch(text, /[>❯] status.*restored/s, 'reads and prior tui sessions are not even counted');
+});
+
+test('FIELD: the startup hints are two short lines, not a manual', async () => {
+  const { runLedger } = await import('../lib/tui-cmd.mjs');
+  const { PassThrough } = await import('node:stream');
+  const input = new PassThrough();
+  const output = new PassThrough();
+  let text = '';
+  output.on('data', (c) => { text += c.toString(); });
+  const done = runLedger({
+    input, output, workspace: process.cwd(), argv: ['--no-color', '--no-events'],
+    dispatcher: async () => 0,
+  });
+  input.write('exit\n');
+  input.end();
+  await done;
+  assert.match(text, /\/ for commands/);
+  assert.match(text, /\? for shortcuts/);
+  assert.doesNotMatch(text, /! shell · !! re-run · @ file/,
+    'the full grammar lives in help — a startup that lists every sigil is a manual, not a hint');
+});
+
+test('FIELD: the ledger journals the contract actor shape, not a display string', async () => {
+  const { createLedger } = await import('../lib/tui/ledger.mjs');
+  const fs = await import('node:fs');
+  const os = await import('node:os');
+  const path = await import('node:path');
+  const workspace = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'tui-actor-')));
+  const store = createLedger({ workspace, journaling: true });
+  const block = store.open({ command: 'verify', argv: ['verify'] });
+  store.openRun(block);
+  store.close(block, { status: 'succeeded', exitCode: 0 });
+
+  const lines = fs.readFileSync(path.join(workspace, '.harness', 'runs.jsonl'), 'utf8')
+    .split('\n').filter(Boolean).map((l) => JSON.parse(l));
+  const start = lines.find((r) => r.type === 'run.start');
+  assert.equal(typeof start.actor, 'object', 'the journal gets the {kind} object, same as bin/harness.mjs');
+  assert.ok(typeof start.actor.kind === 'string' && start.actor.kind.length > 0);
+  assert.equal(typeof block.actor, 'string', 'while the block displays the word');
+});

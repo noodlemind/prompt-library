@@ -63,6 +63,24 @@ export function formatDuration(ms) {
   return `${Math.floor(total / 60)}m${String(total % 60).padStart(2, '0')}s`;
 }
 
+/**
+ * The actor as a WORD.
+ *
+ * The journal stores the actor in the contract's shape — `{kind:'user'}`,
+ * `{kind:'ci'}`, `{kind:'host', host}` — and a record line that interpolates
+ * that object prints `actor [object Object]`, which is exactly what the first
+ * session against a real journal showed. `user` renders as `you` because the
+ * record line is read by the person it names.
+ */
+export function formatActor(actor) {
+  if (!actor) return null;
+  if (typeof actor === 'string') return actor;
+  if (actor.kind === 'user') return 'you';
+  if (actor.kind === 'ci') return 'ci';
+  if (actor.kind === 'host') return actor.host || 'host';
+  return actor.kind || null;
+}
+
 /** `14:07:03` — local wall time, which is what someone reading their own
  * scrollback is comparing against. */
 export function formatClock(ts) {
@@ -128,7 +146,8 @@ export function recordSegments(block) {
   if (Number.isInteger(block.exit)) segments.push({ token: 'faint', text: `exit ${block.exit}` });
   const dur = formatDuration(block.durationMs);
   if (dur) segments.push({ token: 'faint', text: dur });
-  if (block.actor) segments.push({ token: 'faint', text: `actor ${block.actor}` });
+  const actor = formatActor(block.actor);
+  if (actor) segments.push({ token: 'faint', text: `actor ${actor}` });
   const clock = formatClock(block.startedAt);
   if (clock) segments.push({ token: 'faint', text: clock });
   if (block.run) segments.push({ token: 'faint', text: block.run });

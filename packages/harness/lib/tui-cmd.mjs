@@ -33,7 +33,7 @@ import { fileURLToPath } from 'node:url';
 import { createInput } from './tui/input.mjs';
 import { parseFlags } from './flags.mjs';
 import { createStyle, EXIT } from './style.mjs';
-import { dispatch, hasCommand } from './registry.mjs';
+import { dispatch, hasCommand, getCommand } from './registry.mjs';
 import { openPalette, resolveSelection, selectionPlan } from './tui/palette.mjs';
 import { createTally, interpretLine, stripControl, tokenize } from './tui/session.mjs';
 import { createOverlay, splitPrefix, applyPrefix, treeRows } from './tui/overlay.mjs';
@@ -227,18 +227,44 @@ export async function runLedger({
 
   // Restore what happened before this session. The record persists; the
   // transcript deliberately does not — see lib/tui/ledger.mjs.
+  // HISTORY HYDRATES SILENTLY. The first pass printed every restored record
+  // as a block, so a session opened onto a screenful of its own past — while
+  // every reference surface in the survey (Amp, Claude Code, Grok, opencode)
+  // opens onto identity, a hint or two, and an EMPTY transcript. The records
+  // still load: `ctrl+↑` walks them, `!! <id>` replays one, `run list` prints
+  // the full history as a block when asked. What the first screen gets is one
+  // muted line saying the history exists — or nothing, when there is none.
   const restoreLimit = Number.isInteger(settings['tui.restore']) ? settings['tui.restore'] : 8;
   if (restoreLimit > 0) {
-    const restored = ledger.hydrate({ limit: restoreLimit });
-    for (const block of restored) emit(block);
+    const restored = ledger.hydrate({
+      limit: restoreLimit,
+      // The registry already declares every command's side-effect class, so
+      // the judgment is looked up rather than listed: a succeeded READ left
+      // nothing behind to point at, and the session's own `tui` runs are
+      // never interesting to the session.
+      restoreWorthy: (r) => {
+        if (r.command === 'tui') return false;
+        if (r.status !== 'succeeded') return true;
+        return getCommand(r.command)?.sideEffect !== 'read';
+      },
+    });
     if (restored.length) {
-      session.commit([ui.paint('muted', `  ${ui.arrow} ${restored.length} restored from the run journal · output is not kept, !! <id> re-runs one`), ...separator()]);
+      const failed = restored.filter((b) => b.status !== 'ok').length;
+      const parts = [`${restored.length} prior run${restored.length === 1 ? '' : 's'}`];
+      if (failed) parts.push(`${failed} failed`);
+      session.commit([
+        ui.paint('muted', `  ${ui.arrow} ${parts.join(' · ')} · ctrl+↑ to browse · run list for history`),
+        ...separator(),
+      ]);
     }
   }
 
   if (startup.has('shortcuts')) {
+    // Two short lines, the way the field does it. The full grammar lives in
+    // `help`; a startup that lists every sigil is a manual, not a hint.
     session.commit([
-      ui.paint('muted', `  / palette · ! shell · !! re-run · @ file · ctrl+${settings['tui.palette_chord'] === 'ctrl+k' ? 'k' : 'p'} palette · ctrl+↑ blocks · esc esc runs · help`),
+      ui.paint('muted', '  / for commands'),
+      ui.paint('muted', '  ? for shortcuts'),
       ...separator(),
     ]);
   }

@@ -227,7 +227,20 @@ export function renderOverlay(overlay, { ui, width = 80, maxWidth = 72 } = {}) {
     const effect = row.sideEffect
       ? ui.paint(row.sideEffect === 'read' ? 'ok' : row.sideEffect === 'mutate' ? 'warn' : 'error', row.sideEffect)
       : '';
-    const label = disabled ? ui.paint('muted', row.label) : row.label;
+    // THE NAMESPACE IS DIM, THE VERB IS BRIGHT — Amp's palette typography,
+    // and the reason its rows scan: `thread new in orb` reads as a verb you
+    // want inside a group you already know. `run list` renders the same way:
+    // the noun a person has already narrowed to recedes, the choice stands
+    // out. Single-word labels stay bright; disabled rows stay muted whole,
+    // because nothing in them is a choice.
+    const splitLabel = () => {
+      if (disabled) return ui.paint('muted', row.label);
+      if (overlay.kind !== 'palette') return row.label;
+      const at = String(row.label).indexOf(' ');
+      if (at <= 0) return row.label;
+      return `${ui.paint('muted', row.label.slice(0, at))} ${row.label.slice(at + 1)}`;
+    };
+    const label = splitLabel();
     const note = disabled
       ? ui.paint('muted', row.reason || row.unavailable || 'unavailable')
       : ui.paint('muted', row.note || row.summary || '');
