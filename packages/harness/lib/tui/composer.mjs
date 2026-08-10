@@ -132,6 +132,11 @@ export function createComposer({
    */
   function activeReference() {
     const clusters = lines[row];
+    // AT COLUMN 0 THERE IS NOTHING BEHIND THE CURSOR. Without this the scan
+    // fell straight through, `start` landed on 0, and a line beginning with
+    // `@` reported a zero-width reference — so Home (or ctrl-a) followed by Tab
+    // spliced the chosen path in FRONT of the token instead of replacing it.
+    if (col === 0) return null;
     let start = col - 1;
     while (start >= 0 && !/\s/.test(clusters[start])) start -= 1;
     start += 1;

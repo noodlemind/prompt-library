@@ -31,6 +31,10 @@ export function fakeTty({ columns = 80, rows = 40 } = {}) {
   let bg = null;
   let altScreen = false;
   const written = [];
+  /** Escapes the model does not implement, kept so a test can assert the
+   * renderer stopped emitting something rather than discovering it as garbage
+   * on screen. */
+  const unknownEscapes = [];
 
   const ensure = (row) => {
     while (screen.length <= row) { screen.push(''); attrs.push([]); }
@@ -81,6 +85,13 @@ export function fakeTty({ columns = 80, rows = 40 } = {}) {
         const ch = rest[0];
         if (ch === '\n') { cy += 1; cx = 0; ensure(cy); rest = rest.slice(1); continue; }
         if (ch === '\r') { cx = 0; rest = rest.slice(1); continue; }
+        // AN UNMODELLED ESCAPE CONSUMES ONE BYTE. `search` returns 0 for a
+        // leading `\x1b` that no rule above matched, so the slice below was
+        // empty and `rest` never shrank — the loop spun forever on a bare
+        // `\x1b`, an `\x1b7`, an OSC title, or any CSI with a final byte
+        // outside A-Za-z. That hangs the test process instead of failing a
+        // test, which blocks CI rather than reporting anything.
+        if (ch === '\x1b') { unknownEscapes.push(rest.slice(0, 8)); rest = rest.slice(1); continue; }
         const stop = rest.search(/[\n\r\x1b]/);
         const run = stop === -1 ? rest : rest.slice(0, stop);
         ensure(cy);
@@ -107,6 +118,7 @@ export function fakeTty({ columns = 80, rows = 40 } = {}) {
     get altScreen() { return altScreen; },
     get bytes() { return written.join(''); },
     get cursor() { return { row: cy, col: cx }; },
+    get unknownEscapes() { return [...unknownEscapes]; },
   };
 }
 

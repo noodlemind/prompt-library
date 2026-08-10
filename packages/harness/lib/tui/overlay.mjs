@@ -186,6 +186,12 @@ export function createOverlay({
  * inner width so the selected row's tint spans the whole line — a highlight
  * that stops at the text is a highlight on the text, not on the row.
  */
+/** Cells the side-effect class needs, so the label knows how much it may keep.
+ * The class is the last thing a narrow row gives up — see the contract note. */
+function effectFloor(row, ui) {
+  return row?.sideEffect ? displayWidth(ui.stripAnsi(row.sideEffect)) + 1 : 0;
+}
+
 export function renderOverlay(overlay, { ui, width = 80, maxWidth = 72 } = {}) {
   const box = Math.max(32, Math.min(width, maxWidth));
   const inner = box - 2;
@@ -225,7 +231,11 @@ export function renderOverlay(overlay, { ui, width = 80, maxWidth = 72 } = {}) {
     const note = disabled
       ? ui.paint('muted', row.reason || row.unavailable || 'unavailable')
       : ui.paint('muted', row.note || row.summary || '');
-    const head = ` ${label}`;
+    // CLIPPED, because `padTo` never truncates and `gap` is floored at one: an
+    // over-long label pushed the closing `│` past the box width and broke the
+    // border. The prompt row and the footer already clip; this one did not.
+    const headRoom = Math.max(4, inner - effectFloor(row, ui) - 3);
+    const head = ` ${displayWidth(label) > headRoom ? clipTo(label, headRoom - 1).concat(ui.paint('muted', '…')) : label}`;
     // THE NOTE IS WHAT GIVES WAY, never the label or the side-effect class.
     // An earlier version fell back to one clipped `label — summary` string when
     // the row did not fit, which dropped the effect — and "every row carries

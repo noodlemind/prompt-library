@@ -120,7 +120,14 @@ export function interpretLine(rawLine) {
     // records. Anything that is not id-shaped is a mistake worth naming rather
     // than a command worth guessing at.
     if (!target) return { kind: 'rerun', target: null };
-    if (/^[0-9a-z]{4,}$/i.test(target)) return { kind: 'rerun', target };
+    // HYPHENS ARE PART OF A RUN ID. `newRunId()` produces
+    // `msmtwjuy-98f5bdc77b` — a time-ordered head, a hyphen, then random
+    // bytes — and this pattern refused it, so copying an id straight off a
+    // record line, which is the only way anyone gets one, was rejected as "not
+    // a block id". The primary path for the feature was the one that failed.
+    if (/^[0-9a-z]+(-[0-9a-z]+)*$/i.test(target) && target.replace(/-/g, '').length >= 4) {
+      return { kind: 'rerun', target };
+    }
     return {
       kind: 'invalid',
       reason: `!! re-runs a block, and ${JSON.stringify(target)} is not a block id`,

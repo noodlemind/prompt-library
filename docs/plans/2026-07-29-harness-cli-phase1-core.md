@@ -573,7 +573,7 @@ The remainder shipped, and reopening the phase against the design rather than th
 
 **Verified on a real pty**, driven through `pty.fork` and replayed through `pyte` — a third-party VT emulator — so the rendering could not be flattered by the code that produced it. pyte reports 112 of 112 cells tinted on every block row, `#1a2021` for succeeded and `#221e21` for failed, matching the mock's palette, and no tint anywhere else. The screen model in `test/helpers/tty.mjs` reproduces the same assertions in CI, where no pty is available.
 
-**`test/tui-design.test.mjs` is the durable part.** Thirty assertions, each naming the design commitment it protects in the design's own words. A future change that wants a box back has to delete a test that says why there isn't one.
+**`test/tui-design.test.mjs` is the durable part.** Thirty-one test blocks, each naming the design commitment it protects in the design's own words. A future change that wants a box back has to delete a test that says why there isn't one.
 
 **Method worth reusing.** A pty in a throwaway Linux container, plus an independent VT emulator, turns "does the terminal surface work" from a question only a human with a screenshot can answer into one that can be answered on demand. That capability did not exist when P4bAC1–AC9 were written, which is a large part of why they measured the plumbing instead.
 

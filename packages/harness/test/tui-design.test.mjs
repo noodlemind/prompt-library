@@ -227,9 +227,17 @@ test('DESIGN: the footer order is the setting, not an accident', () => {
 });
 
 test('DESIGN: two columns never collide, and the right one is never half-printed', () => {
-  const row = twoColumn('left'.padEnd(30), 'right-hand-side', 40);
-  assert.ok(displayWidth(row) <= 40);
-  assert.ok(!row.includes('right-hand-side') || displayWidth(row) <= 40);
+  // Wide enough for both: they share the row with a gap between them.
+  const roomy = twoColumn('left', 'right-hand-side', 40);
+  assert.ok(displayWidth(roomy) <= 40);
+  assert.match(roomy, /left {2,}right-hand-side/, 'both columns, pushed apart');
+
+  // Too narrow: the RIGHT column goes whole. Half of `right-hand-side` reads as
+  // a different value, and a value that is quietly wrong is worse than absent.
+  const tight = twoColumn('left'.padEnd(30), 'right-hand-side', 40);
+  assert.ok(displayWidth(tight) <= 40);
+  assert.doesNotMatch(tight, /right/, 'dropped entirely rather than truncated');
+  assert.match(tight, /^left/, 'and the left column survives intact');
 });
 
 // ── overlays: summoned, never resident ──────────────────────────────────
@@ -408,4 +416,73 @@ test('DESIGN: the tint covers every cell of a block row, not just the first one'
       `row ${row} has a gap in its tint: ${JSON.stringify(backgrounds)} — a fragment closed with SGR 0 instead of SGR 39`);
   }
   session.close();
+});
+
+// ── review round 2: the ones a per-cell reading found ───────────────────
+
+test('DESIGN: clip and wrap measure the same string the same way as displayWidth', async () => {
+  // `displayWidth` strips ANSI before measuring; `clipTo` and `wrapCells` did
+  // not, so `clusterWidth` dropped the ESC as a control character and counted
+  // the remaining `[38;2;134;201;154m` as eighteen cells. A painted row that
+  // measured as fitting was cut a third of the way through, and the cut landed
+  // inside the escape — leaving the colour open for the rest of the terminal.
+  const { clipTo: clip, wrapCells: wrap } = await import('../lib/tui/width.mjs');
+  const painted = '\x1b[38;2;134;201;154m✓\x1b[39m ok status line here';
+  assert.equal(displayWidth(painted), 21, 'colour is not content');
+  assert.equal(displayWidth(clip(painted, 10)), 10, 'a clip lands where it was asked to');
+  for (const row of wrap(painted, 8)) {
+    assert.ok(displayWidth(row) <= 8, `wrapped row is ${displayWidth(row)} cells: ${JSON.stringify(row)}`);
+  }
+  assert.deepEqual(wrap('日本語です', 4).map(displayWidth), [4, 4, 2], 'and wide clusters still never split');
+});
+
+test('DESIGN: nothing inside a tinted row closes with SGR 0', async () => {
+  // The clip and wrap helpers run INSIDE a tinted row, so a `0m` closer of
+  // their own resets the background `tintRow` wrapped around them — the same
+  // defect as the original, one layer down.
+  const { clipTo: clip, wrapCells: wrap } = await import('../lib/tui/width.mjs');
+  const painted = '\x1b[38;2;134;201;154mabcdefghij\x1b[39m';
+  assert.doesNotMatch(clip(painted, 4), /\x1b\[0m/, 'clip closes the foreground only');
+  for (const row of wrap(painted, 4)) {
+    assert.doesNotMatch(row, /\x1b\[0m/, 'and so does every wrapped row');
+  }
+});
+
+test('DESIGN: the 256-colour tint follows the ground it was told about', async () => {
+  const { createStyle: mk } = await import('../lib/style.mjs');
+  const dark = mk({ stream: { isTTY: true }, env: { TERM: 'xterm-256color', LANG: 'en_US.UTF-8' }, argv: [], platform: 'darwin', tintMode: 'dark' });
+  const light = mk({ stream: { isTTY: true }, env: { TERM: 'xterm-256color', LANG: 'en_US.UTF-8' }, argv: [], platform: 'darwin', tintMode: 'light' });
+  const idxOf = (ui2) => Number(/\x1b\[48;5;(\d+)m/.exec(ui2.tintRow('failed', 'x'))[1]);
+  assert.ok(idxOf(dark) < 240, 'the dark ground uses the bottom of the greyscale ramp');
+  assert.ok(idxOf(light) > 240,
+    'and the light ground the top — one shared dark index painted a near-black band across a light profile');
+});
+
+test('DESIGN: an over-long overlay label is clipped rather than breaking the border', () => {
+  const overlay = createOverlay({
+    rows: [{ label: 'knowledge promote branch '.repeat(6).trim(), sideEffect: 'mutate', summary: 'x' }],
+  });
+  for (const row of renderOverlay(overlay, { ui, width: 40, maxWidth: 40 })) {
+    assert.ok(displayWidth(row) <= 40, `overlay row is ${displayWidth(row)} cells wide: ${row}`);
+    if (row.startsWith('│')) assert.ok(row.endsWith('│'), `border broken: ${row}`);
+  }
+});
+
+test('DESIGN: `@` reports no reference when the cursor sits before the sigil', () => {
+  const composer = createComposer({ width: 40 });
+  for (const ch of '@docs') composer.handleKey(ch, { name: ch });
+  assert.ok(composer.reference, 'mid-token there is a reference');
+  composer.handleKey(null, { name: 'home' });
+  assert.equal(composer.reference, null,
+    'at column 0 there is nothing behind the cursor — completing here spliced the path in FRONT of the token');
+});
+
+test('DESIGN: the screen model consumes an escape it does not implement', async () => {
+  // It used to slice zero bytes and loop forever, which hangs the test process
+  // rather than failing a test — CI blocked instead of reporting.
+  const { fakeTty } = await import('./helpers/tty.mjs');
+  const out = fakeTty({ columns: 20 });
+  out.write('a\x1b7b\x1b]0;title\x07c\n');
+  assert.match(out.lines[0], /a/, 'the surrounding text still lands');
+  assert.ok(out.unknownEscapes.length > 0, 'and the unmodelled sequence is reported rather than swallowed');
 });

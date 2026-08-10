@@ -148,50 +148,118 @@ export function padTo(text, width) {
 }
 
 /**
- * Clip to `width` cells, cluster-wise.
+ * Walk a string as a sequence of SGR runs and grapheme clusters.
+ *
+ * WHY EVERY HELPER BELOW NEEDS THIS. `displayWidth` strips ANSI before
+ * measuring; `clipTo` and `wrapCells` originally did not, so the three
+ * disagreed with each other about the same string. `clusterWidth` drops the
+ * `\x1b` as a control character and then counts the remaining
+ * `[38;2;134;201;154m` as eighteen cells — so a painted row measured as fitting
+ * by one helper was cut a third of the way through by another, and the cut
+ * landed inside an escape sequence, leaving the colour open for the rest of the
+ * terminal.
+ *
+ * Yielding the runs instead of stripping them means a clip can keep the colour
+ * it was given and still close it.
+ */
+function* tokens(text) {
+  const s = String(text ?? '');
+  let i = 0;
+  while (i < s.length) {
+    if (s[i] === '\x1b') {
+      const m = /^\x1b\[[0-9;]*m/.exec(s.slice(i));
+      if (m) {
+        yield { ansi: m[0] };
+        i += m[0].length;
+        continue;
+      }
+    }
+    // Grapheme-cluster the remaining plain run in one pass rather than
+    // per character, so combining marks and ZWJ sequences stay whole.
+    let j = i;
+    while (j < s.length && s[j] !== '\x1b') j += 1;
+    for (const g of graphemes(s.slice(i, j))) yield { cluster: g, width: clusterWidth(g) };
+    i = j;
+  }
+}
+
+/**
+ * Clip to `width` cells, cluster-wise and ANSI-aware.
  *
  * A wide cluster that would straddle the boundary is dropped rather than split:
  * half of `日` is not a character, and terminals disagree about what to do with
- * the leftover cell. Returns at most `width` cells, possibly one short.
+ * the leftover cell. Colour is preserved and CLOSED when anything was dropped —
+ * a clip that ends mid-colour leaves the rest of the screen painted. *
+ * CLOSERS ARE SGR 39, NOT SGR 0, for the same reason `style.mjs#paint` closes
+ * that way: these helpers run INSIDE a tinted row, and `tintRow` wraps their
+ * output with a background. `0m` would reset that background from the first
+ * closer onward, which is exactly the defect a per-cell screen reading caught
+ * once already — reintroducing it here, one layer down, would have been the
+ * same bug with a better disguise.
  */
 export function clipTo(text, width) {
   if (width <= 0) return '';
   let used = 0;
   let out = '';
-  for (const g of graphemes(String(text ?? ''))) {
-    const w = clusterWidth(g);
-    if (used + w > width) break;
-    out += g;
-    used += w;
+  let sawAnsi = false;
+  let dropped = false;
+  for (const t of tokens(text)) {
+    if (t.ansi) {
+      // An escape costs no cells, so it is kept even at the boundary — but only
+      // while there is still content to colour.
+      if (!dropped) { out += t.ansi; sawAnsi = true; }
+      continue;
+    }
+    if (used + t.width > width) { dropped = true; break; }
+    out += t.cluster;
+    used += t.width;
   }
-  return out;
+  return dropped && sawAnsi ? `${out}\x1b[39m` : out;
 }
 
 /**
  * Break one logical line into rows of at most `width` cells.
  *
- * Cluster-wise, so a wide character is never split and a combining mark never
- * leaves its base behind. An empty line yields one empty row, because a blank
- * line in the editor is still a line you can put the cursor on.
+ * Cluster-wise and ANSI-aware, so a wide character is never split, a combining
+ * mark never leaves its base behind, and an escape sequence is never cut in
+ * half. The active SGR state is carried onto each continuation row and closed
+ * at the end of every row, because a terminal does not re-apply colour across a
+ * newline for you.
+ *
+ * An empty line yields one empty row, because a blank line in the editor is
+ * still a line you can put the cursor on.
  */
 export function wrapCells(line, width) {
   if (width <= 0) return [''];
-  const clusters = graphemes(String(line ?? ''));
-  if (!clusters.length) return [''];
   const rows = [];
   let current = '';
   let used = 0;
-  for (const g of clusters) {
-    const w = clusterWidth(g);
-    if (used + w > width && current) {
-      rows.push(current);
-      current = '';
-      used = 0;
+  let open = '';
+  let openInRow = false;
+
+  const flush = () => {
+    rows.push(openInRow ? `${current}\x1b[39m` : current);
+    current = open;
+    openInRow = Boolean(open);
+    used = 0;
+  };
+
+  for (const t of tokens(line)) {
+    if (t.ansi) {
+      // A closer clears what would otherwise be carried onto the next row.
+      // `0m` closes everything; `39m`/`49m` close the foreground and background
+      // that `paint` and `tintRow` open. Carrying an open sequence AND its
+      // closer forward is visually a no-op but leaves both on every row.
+      open = /^\x1b\[(0|39|49)?m$/.test(t.ansi) ? '' : `${open}${t.ansi}`;
+      current += t.ansi;
+      openInRow = openInRow || Boolean(open);
+      continue;
     }
-    current += g;
-    used += w;
+    if (used + t.width > width && used > 0) flush();
+    current += t.cluster;
+    used += t.width;
   }
-  if (current || !rows.length) rows.push(current);
+  if (used > 0 || !rows.length) rows.push(openInRow ? `${current}\x1b[39m` : current);
   return rows;
 }
 

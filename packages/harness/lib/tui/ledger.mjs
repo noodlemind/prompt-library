@@ -258,8 +258,13 @@ export function createLedger({
     /** Toggle a mark, persisting it. Returns the new state, or null when the
      * block has no durable id to hang a mark on. */
     toggleMark(block) {
-      if (!block) return null;
-      const key = block.run || block.id;
+      // A MARK NEEDS A DURABLE ID. `block.id` is ephemeral for anything that
+      // was never journaled — a note, or a block whose `startRun` failed — so
+      // marking one wrote an id no later session could resolve and told the
+      // operator it was "kept with the journal", which was not true. The doc
+      // comment already promised this guard; only the code was missing it.
+      if (!block?.run) return null;
+      const key = block.run;
       block.marked = !block.marked;
       if (block.marked) marks.add(key);
       else marks.delete(key);

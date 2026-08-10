@@ -428,7 +428,16 @@ test('clear is a session builtin, not an unknown command', async () => {
   assert.equal(calls.length, 1);
   assert.equal(calls[0][0], 'status');
   assert.equal(text.includes('unknown'), false, 'clear must not dispatch as a harness command');
-  assert.match(text, /harness/, 'clear re-prints the header so the operator knows they are still in the ledger');
+  // COUNT the header, do not merely find one. The startup header is printed
+  // before `clear` runs, so a substring match passed even with the re-print
+  // removed — the assertion could not fail for the reason it named.
+  //
+  // The marker is the header's own leading dot rather than the version string:
+  // at 80 columns a long workspace path clips the right of the header away, so
+  // `harness 0.5.0` is not always on it. The dot always is.
+  const headers = text.split('\n').filter((l) => /^[●o] /.test(l)).length;
+  assert.equal(headers, 2,
+    'once at startup and once after clear — otherwise a cleared viewport reads as a session that ended');
 });
 
 test('empty Enter after the palette restates how to pick a row', async () => {

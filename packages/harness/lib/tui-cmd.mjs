@@ -503,8 +503,27 @@ export async function runLedger({
   const openRunTree = (runId = null) => {
     let runs;
     try { runs = foldRuns(readJournal(workspace)); } catch { runs = []; }
-    const target = runId ? runs.find((r) => r.run === runId || String(r.run).startsWith(runId)) : runs.at(-1);
-    if (!target) { say(ui.paint('muted', 'no runs in the journal yet')); return null; }
+    // A run with a result record and no start record folds to `command: null`;
+    // `runs.at(-1)` can select one, and interpolating it printed the literal
+    // word "null" as the command. Skip those rather than render them.
+    const named = runs.filter((r) => r.command);
+    const target = runId
+      ? named.find((r) => r.run === runId || String(r.run).startsWith(runId))
+      : named.at(-1);
+    if (!target) {
+      // SAY WHICH IT IS. Reporting "no runs in the journal yet" for a block that
+      // simply was not journaled — a note, or a session running `--no-events` —
+      // claimed an empty journal while the journal was not empty.
+      say(ui.line({
+        state: 'warn',
+        key: 'run tree',
+        value: runId ? String(runId).slice(0, 12) : 'latest',
+        note: runId
+          ? (named.length ? 'no run with that id — this block was never journaled' : 'no runs in the journal yet')
+          : 'no runs in the journal yet',
+      }));
+      return null;
+    }
     const node = {
       label: `${ui.paint('muted', 'run')} ${target.run.slice(0, 6)} ${ui.paint(target.status === 'succeeded' ? 'ok' : 'error', target.status)}`,
       status: target.status,
@@ -728,6 +747,11 @@ export async function runLedger({
         // a session that ended rather than one that was tidied, and the header
         // is the only thing that says which repository this still is.
         writeHeader();
+        // And the footer comes back down to match. `ledger.clear()` empties the
+        // block list, so `lastCommand()` is now null — without this the footer
+        // kept showing the run id of a block that is no longer in the ledger,
+        // and the hint row kept offering `!!` a target it had just discarded.
+        refreshStatus();
       } else if (parsed.kind === 'reference') {
         const hits = completePath(parsed.target, { workspace });
         if (!hits.length) say(ui.line({ state: 'warn', key: 'file', value: parsed.target, note: 'no match in this workspace' }));
