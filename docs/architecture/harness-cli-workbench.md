@@ -423,8 +423,11 @@ three rows and no more:
   whether the shell is allowed, and what `!!` would repeat — stated where Enter
   is pressed. Under pressure it drops the keys before the posture, because keys
   are learned once and the posture changes under you.
-- **The footer is two columns**: lifecycle left, scale right. Clipping drops the
-  right column whole rather than truncating a number into a wrong one.
+- **The footer is two columns**: workspace and branch first — outside the
+  configurable item list, because they decide which repository every block
+  above acted on — then lifecycle; scale on the right. Clipping drops the
+  right column whole, then lifecycle from the right; the workspace is the
+  last thing standing.
 
 #### A block is a record, not a rendering
 
@@ -556,7 +559,7 @@ merge by plain precedence — they are taste and accessibility, never authority.
 
 | key | default | what it decides |
 |---|---|---|
-| `tui.density` | `compact` | blank line between blocks |
+| `tui.density` | `comfortable` | blank line between blocks — the mock's own inter-block gap; `compact` is the zero-gap opt-in |
 | `tui.dividers` | `false` | a rule between blocks instead of relying on the tint |
 | `tui.statusline` | `plan, gate, run, knowledge` | footer items, **in order** |
 | `tui.tint` | `auto` | tint ground: auto-detect, force dark/light, or `off` |
@@ -598,6 +601,14 @@ Status never depends on colour alone at any setting.
 - Existing `ok`, `warn`, `error`, `active`, `blocked`, and `cancelled` visual
   states rendered through `lib/style.mjs`; no TUI-private palette exists
 - ASCII fallback for limited terminals
+- Every repaint delivered as one frame via synchronized output (CSI ?2026),
+  so a keystroke never shows the region half-erased; terminals without the
+  extension ignore it. Rendering smoothness is a converged feature of the
+  field, not a nicety
+- A stripe means exactly one thing — a record of something that ran. Messages
+  (help, prompts, refusals) are plain ledger rows; blocks are separated by one
+  row of untinted ground so consecutive same-state blocks stay distinct; a
+  success ends on its own output and only failures and folds carry a tally
 
 ## Implementation sequence
 

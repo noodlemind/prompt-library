@@ -304,8 +304,12 @@ export function createComposer({
     });
 
     const out = [rule, ...body, rule];
-    if (hint) out.push(hint);
+    // The completion list sits DIRECTLY under the editor it refines; the hint
+    // row stays last. The other order wedged the consequence row between the
+    // `@` token and its candidates, which read as the list belonging to the
+    // hint rather than to what was being typed.
     if (completion?.items?.length) out.push(...renderCompletion());
+    if (hint) out.push(hint);
     return out;
   }
 

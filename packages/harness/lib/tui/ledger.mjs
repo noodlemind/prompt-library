@@ -226,16 +226,6 @@ export function createLedger({
       if (block && line !== undefined && line !== null) block.lines.push(String(line));
       return block;
     },
-    /** A free-standing note — the palette's own messages, the help text. Kept
-     * as a block so `clear`, fold and navigation treat it like everything else
-     * rather than needing a second concept for "text that is not a command". */
-    note(text, { state = 'user', next = null } = {}) {
-      const block = createBlock({
-        id: newBlockId(), command: '', status: state, kind: 'note', tally: text, next, actor,
-      });
-      blocks.push(block);
-      return block;
-    },
     /** The most recent block that actually ran something — what bare `!!`
      * repeats. Notes and restored records are skipped: repeating a note is
      * meaningless, and a restored block's command is a string we did not parse. */

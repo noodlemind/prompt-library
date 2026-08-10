@@ -30,7 +30,6 @@
  */
 import readline from 'node:readline';
 import { createComposer } from './composer.mjs';
-import { renderStatus } from './status.mjs';
 import { renderFooter, renderHint } from './chrome.mjs';
 import { renderOverlay } from './overlay.mjs';
 import { renderBlock, runningHeader } from './block.mjs';
@@ -129,15 +128,13 @@ export function createInput({
       composer.setHint(renderHint({ ui, width: w, ...hintState }));
       rows.push(...composer.render());
     }
+    // ONE footer renderer for every state of the session. There used to be a
+    // fallback to the older single-row status when no lifecycle facts existed
+    // yet, which meant the footer changed shape after the first command — and
+    // the new shape dropped the workspace. `renderFooter` now carries the
+    // workspace unconditionally, so the fallback (and the inconsistency) died.
     const footer = renderFooter(status, { ui, width: w, items: footerItems });
     if (footer) rows.push(footer);
-    else {
-      // No lifecycle facts yet (a fresh workspace with no plan and no gate).
-      // The older single-row status still says which repository this is, which
-      // is the one fact that must never be missing.
-      const line = renderStatus(status, { width: w, paint: (t, s) => ui.paint(t, s) });
-      if (line) rows.push(`  ${line}`);
-    }
     return rows;
   };
 
@@ -152,6 +149,27 @@ export function createInput({
     }
     const c = composer.cursor;
     return { row: offset + c.row, col: c.col };
+  };
+
+  /**
+   * One visual update, delivered atomically.
+   *
+   * A repaint is an erase followed by a redraw, and a terminal that renders
+   * between the two shows the region missing for a frame — the flicker every
+   * keystroke used to produce. CSI ?2026 (synchronized output) tells the
+   * terminal to hold rendering until the frame is complete; terminals that do
+   * not support it ignore the sequence and behave exactly as before, so this
+   * costs nothing where it does not help. The research round named rendering
+   * smoothness a converged feature of the field, not a nicety.
+   */
+  const frame = (fn) => {
+    const sync = interactive && Boolean(output.isTTY);
+    if (sync) emit(`${ESC}[?2026h`);
+    try {
+      fn();
+    } finally {
+      if (sync) emit(`${ESC}[?2026l`);
+    }
   };
 
   const erase = () => {
@@ -180,12 +198,14 @@ export function createInput({
   const commit = (lines) => {
     const rows = Array.isArray(lines) ? lines : [lines];
     if (!rows.length) return;
-    erase();
-    emit(`${rows.join('\n')}\n`);
-    paint();
+    frame(() => {
+      erase();
+      emit(`${rows.join('\n')}\n`);
+      paint();
+    });
   };
 
-  const onResize = () => { erase(); paint(); };
+  const onResize = () => { frame(() => { erase(); paint(); }); };
 
   const onKeypress = (str, key = {}) => {
     if (closed) return;
@@ -205,7 +225,7 @@ export function createInput({
       if (owner.intent === 'action') { deliver({ intent: 'action', action: owner.action, row: owner.row }); return; }
       // `filter` is handled inside the overlay so a keystroke costs a repaint
       // rather than a round trip through the loop.
-      if (owner.changed) { erase(); paint(); }
+      if (owner.changed) frame(() => { erase(); paint(); });
       return;
     }
 
@@ -217,7 +237,7 @@ export function createInput({
     if (owner.intent === 'complete') { deliver({ intent: 'complete', prefix: owner.prefix }); return; }
     if (owner.intent === 'cancel') { deliver({ intent: 'cancel', hadInput: owner.hadInput }); return; }
     if (owner.submitted !== undefined) { deliver({ line: owner.submitted }); return; }
-    if (owner.changed) { erase(); paint(); }
+    if (owner.changed) frame(() => { erase(); paint(); });
   };
 
   let rl = null;
@@ -247,14 +267,14 @@ export function createInput({
      * session would show without owning a terminal. */
     regionLines,
 
-    setStatus(next) { status = { ...status, ...next }; if (interactive) { erase(); paint(); } },
+    setStatus(next) { status = { ...status, ...next }; if (interactive) frame(() => { erase(); paint(); }); },
     setHint(next) {
       hintState = { ...hintState, ...next };
       composer.setGate(hintState.gate);
-      if (interactive) { erase(); paint(); }
+      if (interactive) frame(() => { erase(); paint(); });
     },
-    openOverlay(next) { overlay = next; if (interactive) { erase(); paint(); } },
-    closeOverlay() { overlay = null; if (interactive) { erase(); paint(); } },
+    openOverlay(next) { overlay = next; if (interactive) frame(() => { erase(); paint(); }); },
+    closeOverlay() { overlay = null; if (interactive) frame(() => { erase(); paint(); }); },
     get overlay() { return overlay; },
 
     /**
@@ -304,8 +324,8 @@ export function createInput({
      * move and one erase — but it is also throttled by the caller, since a
      * test suite printing 500 lines does not need 500 repaints.
      */
-    beginLive(block) { live = { block }; if (interactive) { erase(); paint(); } },
-    refreshLive() { if (interactive && live) { erase(); paint(); } },
+    beginLive(block) { live = { block }; if (interactive) frame(() => { erase(); paint(); }); },
+    refreshLive() { if (interactive && live) frame(() => { erase(); paint(); }); },
     endLive() { live = null; },
 
     /**

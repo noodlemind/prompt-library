@@ -486,3 +486,157 @@ test('DESIGN: the screen model consumes an escape it does not implement', async 
   assert.match(out.lines[0], /a/, 'the surrounding text still lands');
   assert.ok(out.unknownEscapes.length > 0, 'and the unmodelled sequence is reported rather than swallowed');
 });
+
+// ── consistency: one surface, one treatment ─────────────────────────────
+
+test('CONSISTENCY: the footer carries the workspace before AND after lifecycle facts exist', () => {
+  // The footer used to fall back to a different renderer until the first
+  // command ran, then switch shape and drop the workspace entirely — the same
+  // surface, two treatments, and the lost fact was the one that decides which
+  // repository every block above acted on.
+  const before = renderFooter({ workspace: '~/repo', branch: 'main' }, { ui, width: 90 });
+  const after = renderFooter({ workspace: '~/repo', branch: 'main', plan: 'x.md', gate: 'pass', run: 'abc123' }, { ui, width: 90 });
+  assert.match(before, /~\/repo/, 'a fresh session names its workspace');
+  assert.match(after, /~\/repo/, 'and it stays named once lifecycle facts arrive');
+  assert.match(after, /plan x\.md/, 'alongside them, not instead of them');
+});
+
+test('CONSISTENCY: clipping the footer drops lifecycle before it ever drops the workspace', () => {
+  const tight = renderFooter(
+    { workspace: '~/repo', branch: 'main', plan: 'a-plan.md', gate: 'pass', run: 'abc123' },
+    { ui, width: 26 },
+  );
+  assert.match(tight, /~\/repo/, 'the workspace is the last thing standing');
+  assert.doesNotMatch(tight, /run abc123/, 'lifecycle gives way from the right');
+  assert.ok(displayWidth(tight) <= 26);
+});
+
+test('CONSISTENCY: blocks are separated by untinted ground by default', async () => {
+  // Two consecutive ok blocks carry identical tints; without a gap they read
+  // as one block. The mock separates every block with untinted ground
+  // (`.blk+.blk{margin-top:9px}`) — one blank row is the terminal equivalent,
+  // so it is the default and `tui.density=compact` is the zero-gap opt-in.
+  const { CONFIG_SCHEMA } = await import('../lib/config.mjs');
+  assert.equal(CONFIG_SCHEMA['tui.density'].default, 'comfortable');
+
+  const { runLedger } = await import('../lib/tui-cmd.mjs');
+  const { PassThrough } = await import('node:stream');
+  // `config` passed explicitly so the assertion is about the setting's effect,
+  // not about whatever config the machine running the suite happens to have.
+  const transcript = async (config) => {
+    const input = new PassThrough();
+    const output = new PassThrough();
+    let text = '';
+    output.on('data', (c) => { text += c.toString(); });
+    const done = runLedger({
+      input, output, workspace: process.cwd(), argv: ['--no-color', '--no-events'],
+      dispatcher: async () => 0, config,
+    });
+    input.write('status\nstatus\nexit\n');
+    input.end();
+    await done;
+    return text;
+  };
+
+  const comfy = (await transcript({ 'tui.density': 'comfortable' })).split('\n');
+  const carets = comfy.map((l, i) => [l, i]).filter(([l]) => /^[▌|] [>❯] status/.test(l)).map(([, i]) => i);
+  assert.equal(carets.length, 2, `two blocks expected:\n${comfy.slice(0, 20).join('\n')}`);
+  assert.ok(comfy.slice(carets[0] + 1, carets[1]).some((l) => l.trim() === ''),
+    'an untinted blank row separates consecutive blocks — without it two same-state blocks read as one');
+
+  const dense = (await transcript({ 'tui.density': 'compact' })).split('\n');
+  const denseCarets = dense.map((l, i) => [l, i]).filter(([l]) => /^[▌|] [>❯] status/.test(l)).map(([, i]) => i);
+  assert.equal(denseCarets.length, 2);
+  assert.ok(!dense.slice(denseCarets[0] + 1, denseCarets[1]).some((l) => l.trim() === ''),
+    'and compact is the zero-gap opt-in, so the setting demonstrably reaches the surface');
+});
+
+test('CONSISTENCY: a message is plain rows — only a block carries the stripe', async () => {
+  // `help` used to render as eleven one-row note blocks, each with a stripe
+  // and a tint, while the startup shortcuts line rendered plain: the same
+  // class of content, two treatments. A stripe now means exactly one thing —
+  // "this is a record of something that ran".
+  const { runLedger } = await import('../lib/tui-cmd.mjs');
+  const { PassThrough } = await import('node:stream');
+  const input = new PassThrough();
+  const output = new PassThrough();
+  let text = '';
+  output.on('data', (c) => { text += c.toString(); });
+  const done = runLedger({
+    input, output, workspace: process.cwd(), argv: ['--no-color', '--no-events'],
+    dispatcher: async () => 0,
+  });
+  input.write('help\nstatus\nexit\n');
+  input.end();
+  await done;
+  const lines = text.split('\n');
+  const helpRows = lines.filter((l) => /open the command palette|re-run the previous block|governed bash/.test(l));
+  assert.ok(helpRows.length >= 3, 'the help rows rendered');
+  for (const row of helpRows) {
+    assert.doesNotMatch(row, /^[▌|]/, `a message row carries no stripe: ${JSON.stringify(row)}`);
+  }
+  assert.ok(lines.some((l) => /^[▌|] [>❯] status/.test(l)), 'while a command block still does');
+
+  // And the help columns align — the first row used the default gutter while
+  // the rest used an explicit one, so the columns stepped after line one.
+  const starts = new Set(helpRows.map((l) => l.search(/open the|re-run the|run a shell/)));
+  assert.equal(starts.size, 1, `help value columns align: ${[...starts].join(', ')}`);
+});
+
+test('CONSISTENCY: a successful block does not restate its record line as a tally', async () => {
+  const { runLedger } = await import('../lib/tui-cmd.mjs');
+  const { PassThrough } = await import('node:stream');
+  const input = new PassThrough();
+  const output = new PassThrough();
+  let text = '';
+  output.on('data', (c) => { text += c.toString(); });
+  const done = runLedger({
+    input, output, workspace: process.cwd(), argv: ['--no-color', '--no-events'],
+    dispatcher: async () => { console.log('one line of output'); return 0; },
+  });
+  input.write('status\nexit\n');
+  input.end();
+  await done;
+  assert.doesNotMatch(text, /1 line (→|->) exit 0/,
+    '`N lines → exit 0` under `ok · exit 0` said the exit twice — a tally must add something');
+  assert.match(text, /ok · exit 0/, 'the record line still carries the outcome');
+});
+
+test('CONSISTENCY: the completion list sits under the editor, and the hint row stays last', () => {
+  const composer = createComposer({ width: 60 });
+  composer.setHint('  deliver · shell allowed');
+  composer.setCompletion([{ path: 'docs/', kind: 'dir' }, { path: 'README.md', kind: 'file' }]);
+  const rows = composer.render();
+  const ruleRows = rows.map((r, i) => [r, i]).filter(([r]) => /^─+$/.test(r)).map(([, i]) => i);
+  const completionAt = rows.findIndex((r) => r.includes('docs/'));
+  const hintAt = rows.findIndex((r) => r.includes('deliver'));
+  assert.ok(completionAt > ruleRows[1], 'candidates come after the bottom rule');
+  assert.ok(hintAt > completionAt, 'and the hint is the last row — the list refines the editor, not the hint');
+  assert.equal(hintAt, rows.length - 1);
+});
+
+test('STABILITY: every repaint is wrapped in synchronized output, and the pairs balance', async () => {
+  // A repaint is an erase then a redraw; a terminal that renders between the
+  // two shows the region missing for a frame — flicker on every keystroke.
+  // CSI ?2026 holds rendering until the frame completes; terminals without it
+  // ignore the sequence, so this costs nothing where it does not help.
+  const { createInput } = await import('../lib/tui/input.mjs');
+  const { PassThrough } = await import('node:stream');
+  const { fakeTty } = await import('./helpers/tty.mjs');
+  const output = fakeTty({ columns: 60 });
+  const input = Object.assign(new PassThrough(), { isTTY: true, setRawMode() {} });
+  const session = createInput({ input, output, ui });
+
+  session.setStatus({ workspace: '~/repo' });
+  session.commit(['a line']);
+  const pending = session.next();
+  input.emit('keypress', 'x', { name: 'x' });
+  input.emit('keypress', null, { name: 'return' });
+  await pending;
+  session.close();
+
+  const begins = (output.bytes.match(/\x1b\[\?2026h/g) || []).length;
+  const ends = (output.bytes.match(/\x1b\[\?2026l/g) || []).length;
+  assert.ok(begins >= 3, `repaints are batched into frames (saw ${begins})`);
+  assert.equal(begins, ends, 'and every begin has its end — an unbalanced pair freezes the terminal');
+});

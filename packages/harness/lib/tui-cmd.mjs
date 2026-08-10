@@ -44,6 +44,8 @@ import { completePath } from './tui/complete.mjs';
 import { deriveGitContext } from './git-context.mjs';
 import { readSession } from './session.mjs';
 import { resolveConfig } from './config.mjs';
+import { resolveCopilotHome } from './paths.mjs';
+import { isProjectTrusted } from './trust.mjs';
 import { readJournal, foldRuns, runStatusFromReported } from './run-journal.mjs';
 import { createProcessEventRegistry, detectActor } from './event-registry.mjs';
 import { setRunContext, currentRunContext } from './run-context.mjs';
@@ -160,12 +162,19 @@ export async function runLedger({
     const rows = renderBlock(block, { ui, width: termWidth(), fold: {} });
     session.commit([...rows, ...separator()]);
   };
-  /** A one-line message that is not a command — help, a palette refusal, a
-   * hint. Still a block, so `clear` and navigation need no second concept. */
-  const say = (text, { state = 'user', next = null } = {}) => {
-    const block = ledger.note(text, { state, next });
-    emit(block);
-    return block;
+  /**
+   * A message that is not a command — help, a palette refusal, a prompt.
+   *
+   * PLAIN ROWS, NOT BLOCKS. An earlier version wrapped each one in a note
+   * block, which put a stripe and a tint on informational text — so `help`
+   * rendered as eleven separate one-row blocks while the startup shortcuts
+   * line, the same class of content, rendered plain. A block is a record of
+   * something that RAN; a message carries no status, so it gets the ledger
+   * grammar and nothing else. Accepts an array so a multi-row message commits
+   * as one unit with one trailing separator rather than eleven.
+   */
+  const say = (rows) => {
+    session.commit([...(Array.isArray(rows) ? rows : [rows]), ...separator()]);
   };
 
   // ── session chrome ────────────────────────────────────────────────────
@@ -374,10 +383,21 @@ export async function runLedger({
     return block;
   };
 
+  /**
+   * The closing tally — only where it adds something the record line does not.
+   *
+   * `4 lines → exit 0` under `ok · exit 0 · …` said the exit code twice and the
+   * line count once too often; the mock's tallies carry information (`1 err →
+   * exit 6`, `3 hits · complete`), and a tally that merely restates the record
+   * line is ceremony. A success ends on its own output; failures and folds get
+   * the count, because there the count IS the summary.
+   */
   const closingTally = (block, exitCode, cancelled) => {
     const rows = block.lines.length;
     if (cancelled) return `cancelled · ${rows} line${rows === 1 ? '' : 's'} · journal entry appended`;
-    return `${rows} line${rows === 1 ? '' : 's'} ${ui.arrow} exit ${exitCode}`;
+    if (exitCode !== 0) return `${rows} line${rows === 1 ? '' : 's'} ${ui.arrow} exit ${exitCode}`;
+    const fold = foldState(block);
+    return fold.folded ? `${rows} lines · ${fold.hidden} folded` : null;
   };
 
   /** The one action that follows. Suggested only where the registry makes it
@@ -772,8 +792,11 @@ export async function runLedger({
 
   // ── helpers that need the closure ─────────────────────────────────────
   function emitHelp() {
-    say(ui.line({ key: 'help', value: 'type a command directly, or:' }));
-    for (const [k, v] of [
+    // ONE message, ONE key width. Emitting a row at a time gave the first row
+    // the default gutter (10) and the rest an explicit 12, so the columns
+    // stepped sideways after the first line — visible in any capture.
+    const rows = [
+      ['help', 'type a command directly, or:'],
       ['/', 'open the command palette'],
       ['/<text>', 'filter the palette (run: plan: search: check: res: learn:)'],
       ['!<command>', 'run a shell command through governed bash'],
@@ -784,7 +807,9 @@ export async function runLedger({
       ['esc esc', 'open the run tree'],
       ['clear', 'clear the viewport (keeps scrollback)'],
       ['exit / quit', 'close the session and print the tally'],
-    ]) say(ui.line({ key: k, value: v, keyWidth: 12 }));
+    ];
+    const keyWidth = Math.max(...rows.map(([k]) => k.length));
+    say(rows.map(([k, v]) => ui.line({ key: k, value: v, keyWidth })));
   }
 }
 
@@ -817,10 +842,23 @@ function safeGit(workspace) {
  * footer order. Refusing to open a session because the density setting has a
  * typo would trade a cosmetic fault for a total one, and the fault still gets
  * reported by `harness config` and `doctor`.
+ *
+ * THE HOME IS RESOLVED FIRST, like every other resolveConfig caller. This
+ * function used to pass the raw flag value straight through, which is null in
+ * any session that did not spell `--copilot-home` — so `configPathFor` threw
+ * inside `path.join`, the catch below swallowed it, and EVERY `tui.*` key was
+ * silently dead in real sessions: the whole settings surface tested green and
+ * did nothing. Found by a test that asserted a default's visible effect rather
+ * than its declared value.
  */
 function safeConfig({ copilotHome, workspace }) {
   try {
-    const resolved = resolveConfig({ copilotHome, workspace });
+    const home = resolveCopilotHome(copilotHome);
+    const resolved = resolveConfig({
+      copilotHome: home,
+      workspace,
+      projectTrusted: isProjectTrusted({ workspace, copilotHome: home }),
+    });
     return resolved?.values ?? {};
   } catch {
     return {};

@@ -134,9 +134,16 @@ export const CONFIG_SCHEMA = Object.freeze({
   'tui.density': {
     type: 'enum',
     values: ['compact', 'comfortable'],
-    default: 'compact',
+    // COMFORTABLE IS THE MOCK'S OWN RENDERING. Its ledger separates every
+    // block with untinted ground (`.blk+.blk{margin-top:9px}`), and that gap
+    // is what distinguishes two consecutive same-state blocks — two ok blocks
+    // with identical tints and no gap read as one. The §6 table's word
+    // "compact" described that 9px gap, not zero; a terminal's smallest gap is
+    // one blank row, so one blank row is the default and `compact` is the
+    // zero-gap opt-in for those who want maximum density.
+    default: 'comfortable',
     merge: 'override',
-    description: 'blank line between ledger blocks (comfortable) or none (compact)',
+    description: 'blank line between ledger blocks (comfortable, default) or none (compact)',
   },
   'tui.dividers': {
     type: 'boolean',

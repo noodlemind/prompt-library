@@ -133,7 +133,16 @@ export function renderFooter(snapshot = {}, {
   items = DEFAULT_FOOTER_ITEMS,
 } = {}) {
   const sep = ui.paint('muted', ' · ');
-  const left = footerSegments(snapshot, items).map((s) => {
+  // THE WORKSPACE IS NOT AN ITEM. It heads the footer unconditionally, outside
+  // the configurable list, because it is the one fact that must never be
+  // missing: it decides which repository every block above acted on. Before
+  // this, the footer FELL BACK to a different renderer until the first command
+  // ran and then dropped the workspace entirely — the same surface changed
+  // shape mid-session, and lost its most important fact in the trade.
+  const fixed = [];
+  if (snapshot.workspace) fixed.push(ui.paint('info', snapshot.workspace));
+  if (snapshot.branch) fixed.push(ui.paint('muted', snapshot.branch));
+  const lifecycle = footerSegments(snapshot, items).map((s) => {
     const glyph = s.state ? ` ${ui.glyph(s.state === 'ok' || s.state === 'succeeded' ? 'ok' : s.state === 'failed' ? 'error' : 'pending')}` : '';
     return `${ui.paint(s.token, s.text)}${glyph}`;
   });
@@ -142,8 +151,18 @@ export function renderFooter(snapshot = {}, {
   if (snapshot.learnings) right.push(ui.paint('muted', snapshot.learnings));
   if (snapshot.generation) right.push(ui.paint('muted', `gen ${snapshot.generation}`));
 
-  if (!left.length && !right.length) return '';
-  return twoColumn(`  ${left.join(sep)}`, right.length ? `${right.join(sep)}  ` : '', width);
+  if (!fixed.length && !lifecycle.length && !right.length) return '';
+  // Clipping order: the right column goes whole, then lifecycle segments from
+  // the right — the workspace is the last thing standing.
+  const compose = (life) => `  ${[...fixed, ...life].join(sep)}`;
+  let life = [...lifecycle];
+  let leftText = compose(life);
+  const rightText = right.length ? `${right.join(sep)}  ` : '';
+  while (life.length && displayWidth(ui.stripAnsi(leftText)) > width) {
+    life.pop();
+    leftText = compose(life);
+  }
+  return twoColumn(leftText, rightText, width);
 }
 
 /**

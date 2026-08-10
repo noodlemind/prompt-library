@@ -194,8 +194,6 @@ export function renderBlock(block, {
   // a block reads as the echo of a line that was typed there.
   if (block.command) {
     push(`${ui.paint('info', ui.unicode ? '❯' : '>')} ${block.command}`);
-  } else if (block.kind === 'note') {
-    push(ui.paint('muted', block.tally || ''));
   }
 
   // 2 — the record line.
@@ -215,7 +213,7 @@ export function renderBlock(block, {
   }
 
   // 4 — the closing tally, and the one action that follows.
-  if (block.tally && block.kind !== 'note') {
+  if (block.tally) {
     const next = block.next ? ui.paint('info', ` ${ui.arrow} ${block.next}`) : '';
     pushStyled(`  ${ui.paint('muted', block.tally)}${next}`);
   } else if (block.next) {
