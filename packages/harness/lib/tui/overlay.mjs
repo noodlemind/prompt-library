@@ -192,8 +192,13 @@ function effectFloor(row, ui) {
   return row?.sideEffect ? displayWidth(ui.stripAnsi(row.sideEffect)) + 1 : 0;
 }
 
-export function renderOverlay(overlay, { ui, width = 80, maxWidth = 72 } = {}) {
-  const box = Math.max(32, Math.min(width, maxWidth));
+export function renderOverlay(overlay, { ui, width = 80, maxWidth = 110 } = {}) {
+  // SCALED, NOT FIXED. A 72-column box on a 200-column terminal crammed the
+  // label, the summary and the side-effect class into ellipses while most of
+  // the screen sat empty — the reported "search options showing broken". The
+  // box takes the room the terminal has, up to a measure that keeps a row
+  // readable; on narrow terminals it takes everything but a margin.
+  const box = Math.max(40, Math.min(width - 4, maxWidth));
   const inner = box - 2;
   const b = ui.unicode
     ? { tl: '┌', tr: '┐', bl: '└', br: '┘', h: '─', v: '│' }
@@ -217,6 +222,16 @@ export function renderOverlay(overlay, { ui, width = 80, maxWidth = 72 } = {}) {
   if (!overlay.visible.length) {
     out.push(rowOf(` ${ui.paint('muted', 'nothing matches')}`));
   }
+  // The namespace gutter's width, over this page of rows (capped so one long
+  // noun cannot push every verb off the right edge).
+  const nounWidth = overlay.kind === 'palette'
+    ? Math.min(12, Math.max(0, ...overlay.visible
+        .filter((r) => !(r.unavailable || r.disabled))
+        .map((r) => {
+          const at = String(r.label ?? '').indexOf(' ');
+          return at > 0 ? at : 0;
+        })))
+    : 0;
   for (const [i, row] of overlay.visible.entries()) {
     const chosen = overlay.offset + i === overlay.index;
     const disabled = Boolean(row.unavailable || row.disabled);
@@ -236,9 +251,17 @@ export function renderOverlay(overlay, { ui, width = 80, maxWidth = 72 } = {}) {
     const splitLabel = () => {
       if (disabled) return ui.paint('muted', row.label);
       if (overlay.kind !== 'palette') return row.label;
+      // Amp's palette typography, fully: the namespace sits in a RIGHT-ALIGNED
+      // dim gutter and the verb stands bright beside it, so a filtered list
+      // reads as choices inside a group rather than as repeated stems. The
+      // gutter width is computed over the visible page so the column holds.
       const at = String(row.label).indexOf(' ');
-      if (at <= 0) return row.label;
-      return `${ui.paint('muted', row.label.slice(0, at))} ${row.label.slice(at + 1)}`;
+      const noun = at > 0 ? row.label.slice(0, at) : '';
+      const rest = at > 0 ? row.label.slice(at + 1) : row.label;
+      const pad = ' '.repeat(Math.max(0, nounWidth - noun.length));
+      return noun
+        ? `${pad}${ui.paint('muted', noun)}  ${rest}`
+        : `${' '.repeat(nounWidth ? nounWidth + 2 : 0)}${rest}`;
     };
     const label = splitLabel();
     const note = disabled
@@ -272,8 +295,21 @@ export function renderOverlay(overlay, { ui, width = 80, maxWidth = 72 } = {}) {
       : clipped;
     const paintedNote = shownNote ? ui.paint('muted', shownNote) : '';
     const tail = `${paintedNote}${paintedNote && effect ? ui.paint('muted', ' · ') : ''}${effect}${effect || paintedNote ? ' ' : ''}`;
-    const gap = Math.max(1, inner - displayWidth(head) - displayWidth(tail));
-    out.push(rowOf(`${head}${' '.repeat(gap)}${tail}`, chosen ? 'selected' : null));
+    // NO FLOOR ON THE GAP. `max(1, …)` added a phantom column whenever head and
+    // tail exactly filled the row, pushing the closing border one cell out —
+    // every clipped row measured inner+1. If the parts do not fit, the note is
+    // re-clipped by the deficit instead of the row growing.
+    let gap = inner - displayWidth(head) - displayWidth(tail);
+    let body = `${head}${' '.repeat(Math.max(0, gap))}${tail}`;
+    if (gap < 1) {
+      const spill = 1 - gap;
+      const tighter = clipTo(plainNote, Math.max(0, displayWidth(shownNote) - spill - 1));
+      const note2 = tighter ? ui.paint('muted', `${tighter}…`) : '';
+      const tail2 = `${note2}${note2 && effect ? ui.paint('muted', ' · ') : ''}${effect}${effect || note2 ? ' ' : ''}`;
+      gap = Math.max(1, inner - displayWidth(head) - displayWidth(tail2));
+      body = `${head}${' '.repeat(gap)}${tail2}`;
+    }
+    out.push(rowOf(body, chosen ? 'selected' : null));
   }
 
   if (overlay.footerText) {

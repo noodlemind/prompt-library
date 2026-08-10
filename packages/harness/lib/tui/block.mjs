@@ -146,12 +146,26 @@ export function recordSegments(block) {
   if (Number.isInteger(block.exit)) segments.push({ token: 'faint', text: `exit ${block.exit}` });
   const dur = formatDuration(block.durationMs);
   if (dur) segments.push({ token: 'faint', text: dur });
+  // The actor is a bare word (`you`, `ci`, a host name) — the label `actor`
+  // said nothing the word does not, and no surveyed CLI spends the column.
   const actor = formatActor(block.actor);
-  if (actor) segments.push({ token: 'faint', text: `actor ${actor}` });
+  if (actor) segments.push({ token: 'faint', text: actor });
   const clock = formatClock(block.startedAt);
   if (clock) segments.push({ token: 'faint', text: clock });
-  if (block.run) segments.push({ token: 'faint', text: block.run });
+  // A SHORT, ADDRESSABLE id. The full run id is twenty characters of mostly
+  // timestamp — noise on every record line, and its time-ordered head is the
+  // part that collides. The LAST six characters are the random tail, unique by
+  // construction, and `!!`, block navigation and `run tree` all resolve them
+  // by unique suffix. The full id stays in `run list`, where ids are the point.
+  if (block.run) segments.push({ token: 'faint', text: `#${shortId(block.run)}` });
   return segments;
+}
+
+/** The addressable spelling of a run id: the random tail, which is the part
+ * that cannot collide. What the record line prints after `#`, and what `!!`
+ * and the overlays accept back. */
+export function shortId(run) {
+  return String(run ?? '').slice(-6);
 }
 
 /** How many output rows a block shows right now, and what the fold line says. */

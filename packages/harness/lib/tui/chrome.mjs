@@ -100,7 +100,10 @@ export function renderHint({
   const keys = [
     `${ui.paint('muted', ui.unicode ? '↵' : 'enter')} ${ui.paint('muted', 'run')}`,
     `${ui.paint('muted', 'esc')} ${ui.paint('muted', 'interrupt')}`,
-    `${ui.paint('muted', '/')} ${ui.paint('muted', 'palette')}`,
+    // The one key the quiet-open pass made invisible: exit worked three ways
+    // and appeared nowhere. The hint row is where Enter's consequences live,
+    // so it is also where leaving lives.
+    `${ui.paint('muted', 'ctrl+d')} ${ui.paint('muted', 'exit')}`,
   ];
   const sep = ui.paint('muted', ' · ');
   const posture = parts.join(sep);
@@ -187,7 +190,7 @@ export function twoColumn(left, right, width) {
  * state and resume command on the way out; a session that ends with nothing to
  * show teaches nothing.
  */
-export function renderExit({ ui, counts, started, resume = 'harness run list', width = 80 } = {}) {
+export function renderExit({ ui, counts, started, resume = 'harness tui', width = 80 } = {}) {
   const rows = [''];
   rows.push(ui.line({
     state: counts.failed ? 'warn' : 'ok',

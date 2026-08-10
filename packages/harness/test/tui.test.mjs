@@ -264,7 +264,7 @@ test('an unknown command is answered, not dispatched', async () => {
 test('the exit ritual prints the tally and how to pick the thread back up', async () => {
   const text = await ledger(['exit'], { dispatcher: async () => 0 });
   assert.match(text, /session/);
-  assert.match(text, /resume with: harness run list/);
+  assert.match(text, /resume with: harness tui/);
 });
 
 // --- P4bAC4 / P4bAC2 -------------------------------------------------------
@@ -416,7 +416,7 @@ test('exit during value collection cancels the choice without running', async ()
 test('/exit closes the session instead of filtering the palette', async () => {
   const text = await ledger(['/exit'], { dispatcher: async () => 0 });
   assert.match(text, /session/);
-  assert.match(text, /resume with: harness run list/);
+  assert.match(text, /resume with: harness tui/);
   assert.equal(text.includes('nothing matches'), false);
 });
 
@@ -482,6 +482,9 @@ test('!! <id> resolves a block by id or unique prefix, and says so when it canno
   assert.notEqual(a.id, b.id);
   assert.equal(ledgerStore.byId(a.id)?.command, 'verify', 'an exact id resolves');
   assert.equal(ledgerStore.byId(b.id.slice(0, 12))?.command, '!echo hi', 'so does a unique prefix');
+  assert.equal(ledgerStore.byId(b.id.slice(-6))?.command, '!echo hi',
+    'and a unique SUFFIX — the record line prints the id tail (#xxxxxx), because the time-ordered head is the colliding part');
+  assert.equal(ledgerStore.byId(`#${b.id.slice(-6)}`)?.command, '!echo hi', 'with or without the # sigil');
   assert.equal(ledgerStore.byId('zzzzzzzz'), null, 'and an id that matches nothing resolves to nothing');
   assert.deepEqual(b.argv, ['bash', '--', 'echo hi'],
     'the block keeps the argv that was dispatched, which is what a replay needs');

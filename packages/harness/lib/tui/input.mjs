@@ -78,7 +78,14 @@ export function createInput({
    */
   onInterrupt = null,
 } = {}) {
-  const width = () => Math.max(40, Math.min(output.columns || 80, 160));
+  // THE TERMINAL'S WIDTH IS THE WIDTH. An earlier cap at 160 columns left the
+  // right quarter of a wide terminal permanently unpainted — hairlines, tints
+  // and the footer all stopped short, which reads as "not adapting to the
+  // terminal". Ultrawide readability is the OPERATOR'S layout decision, not
+  // this renderer's; content that wants a measure (notes, previews) clips
+  // itself. Resize repaints the region at the new width; committed scrollback
+  // keeps the width it was born at, which is what scrollback means.
+  const width = () => Math.max(40, output.columns || 80);
   const composer = createComposer({
     width: width(), ascii, history, paint: (t, s) => ui.paint(t, s), paletteChord,
   });

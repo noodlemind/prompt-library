@@ -141,7 +141,7 @@ export async function runLedger({
     interactive: screenReader ? false : Boolean(input.isTTY),
   });
   const interactive = session.interactive;
-  const termWidth = () => Math.max(40, Math.min(output.columns || 80, 160));
+  const termWidth = () => Math.max(40, output.columns || 80);
 
   /**
    * What goes between two blocks.
@@ -436,14 +436,42 @@ export async function runLedger({
   };
 
   // ── the palette ───────────────────────────────────────────────────────
+  /**
+   * The session's own words, as palette rows.
+   *
+   * `exit` worked three ways — the word, `/exit`, `ctrl+d` — and appeared
+   * NOWHERE on screen, which is the difference between existing and being
+   * discoverable. Amp lists `quit` in its palette with its chord; the ledger
+   * does the same for the words the session owns. They rank after the real
+   * commands unless the query asks for them.
+   */
+  const SESSION_ROWS = Object.freeze([
+    { label: 'exit', session: 'exit', note: 'close the session · also ctrl+d', sideEffect: null },
+    { label: 'clear', session: 'clear', note: 'clear the viewport · scrollback survives', sideEffect: null },
+    { label: 'help', session: 'help', note: 'the sigils and the keys', sideEffect: null },
+  ]);
+
   const paletteRows = (query) => {
     const { prefix, rest } = splitPrefix(query);
     const palette = openPalette({ workspace, query: rest });
-    return applyPrefix(palette.rows, prefix).map((row) => ({
+    const rows = applyPrefix(palette.rows, prefix).map((row) => ({
       ...row,
       note: stripFlagSyntax(row.summary),
       reason: row.unavailable || null,
     }));
+    if (!prefix) {
+      const q = rest.trim().toLowerCase();
+      const matching = SESSION_ROWS.filter((r) => !q || r.label.includes(q));
+      // A session word the query PREFIXES outranks a fuzzy command match:
+      // someone three letters into `exit` means exit, not `orient explain`.
+      // With no query, the session words sit at the bottom where Amp keeps
+      // its own housekeeping rows.
+      for (const row of matching) {
+        if (q && row.label.startsWith(q)) rows.unshift(row);
+        else rows.push(row);
+      }
+    }
+    return rows;
   };
 
   const openPaletteOverlay = (query = '') => {
@@ -608,6 +636,17 @@ export async function runLedger({
     await runArgv(argv, { display: block.command });
   };
 
+  /** Clear the viewport (never scrollback), then restore the two things a
+   * bare screen needs: the header saying which repository this is, and a
+   * footer not pointing at blocks that are no longer in the ledger. */
+  const doClear = () => {
+    if (typeof session.clearScreen === 'function') session.clearScreen();
+    else if (output.isTTY) output.write('\x1b[2J\x1b[H');
+    ledger.clear();
+    writeHeader();
+    refreshStatus();
+  };
+
   // ── the loop ──────────────────────────────────────────────────────────
   let lastEscape = 0;
   try {
@@ -648,6 +687,9 @@ export async function runLedger({
       if (event.intent === 'choose') {
         session.closeOverlay();
         const row = event.row;
+        if (row?.session === 'exit') break;
+        if (row?.session === 'clear') { doClear(); continue; }
+        if (row?.session === 'help') { emitHelp(); continue; }
         if (row?.block) { emit({ ...row.block, folded: false }); continue; }
         if (row?.node) continue; // a tree row is a view, not a command
         if (row) await beginSelection(row);
@@ -749,7 +791,10 @@ export async function runLedger({
         const rows = paletteRows(parsed.query).slice(0, PALETTE_PAGE);
         if (!rows.length) { say(ui.line({ state: 'warn', key: 'palette', value: `nothing matches ${JSON.stringify(parsed.query)}` })); continue; }
         rows.forEach((row, i) => say(ui.line({
-          state: row.sideEffect === 'read' ? 'ok' : row.sideEffect === 'mutate' ? 'warn' : 'error',
+          // No side-effect class means no glyph — a session word is not an
+          // execute-class hazard, and painting it with the error glyph said
+          // exactly that.
+          state: row.sideEffect === 'read' ? 'ok' : row.sideEffect === 'mutate' ? 'warn' : row.sideEffect ? 'error' : undefined,
           key: String(i + 1),
           value: row.label,
           note: [row.sideEffect, row.note].filter(Boolean).join(' · '),
@@ -762,6 +807,9 @@ export async function runLedger({
         const choice = pipedPalette[Number(line.trim()) - 1];
         pipedPalette = null;
         if (!choice) { say(ui.line({ state: 'warn', key: 'palette', value: 'no such row' })); continue; }
+        if (choice.session === 'exit') break;
+        if (choice.session === 'clear') { doClear(); continue; }
+        if (choice.session === 'help') { emitHelp(); continue; }
         await beginSelection(choice);
         continue;
       }
@@ -786,18 +834,7 @@ export async function runLedger({
       } else if (parsed.kind === 'help') {
         emitHelp();
       } else if (parsed.kind === 'clear') {
-        if (typeof session.clearScreen === 'function') session.clearScreen();
-        else if (output.isTTY) output.write('\x1b[2J\x1b[H');
-        ledger.clear();
-        // The header goes back up. A cleared viewport with no context reads as
-        // a session that ended rather than one that was tidied, and the header
-        // is the only thing that says which repository this still is.
-        writeHeader();
-        // And the footer comes back down to match. `ledger.clear()` empties the
-        // block list, so `lastCommand()` is now null — without this the footer
-        // kept showing the run id of a block that is no longer in the ledger,
-        // and the hint row kept offering `!!` a target it had just discarded.
-        refreshStatus();
+        doClear();
       } else if (parsed.kind === 'reference') {
         const hits = completePath(parsed.target, { workspace });
         if (!hits.length) say(ui.line({ state: 'warn', key: 'file', value: parsed.target, note: 'no match in this workspace' }));

@@ -95,7 +95,7 @@ test('DESIGN: a block renders four parts — command, record line, output, tally
   const text = rows.join('\n');
 
   assert.match(text, /❯ checks run build-assets/, 'the command, verbatim');
-  assert.match(text, /failed · exit 6 · 0m12s · actor you/, 'the journal entry made visible');
+  assert.match(text, /failed · exit 6 · 0m12s · you/, 'the journal entry made visible');
   assert.match(text, /E_ASSET_BUILD/, 'the output');
   assert.match(text, /1 err → exit 6 → patch fix-manifest\.patch/, 'the tally and the one action that follows');
 });
@@ -701,7 +701,7 @@ test('FIELD: an actor renders as a word, never as [object Object]', async () => 
 
   const segments = recordSegments(createBlock({ status: 'ok', actor: { kind: 'user' } }));
   const text = segments.map((s) => s.text).join(' · ');
-  assert.match(text, /actor you/);
+  assert.match(text, /\byou\b/, 'a bare word — the label `actor` said nothing the word does not');
   assert.doesNotMatch(text, /object Object/);
 });
 
@@ -782,4 +782,56 @@ test('FIELD: the ledger journals the contract actor shape, not a display string'
   assert.equal(typeof start.actor, 'object', 'the journal gets the {kind} object, same as bin/harness.mjs');
   assert.ok(typeof start.actor.kind === 'string' && start.actor.kind.length > 0);
   assert.equal(typeof block.actor, 'string', 'while the block displays the word');
+});
+
+// ── field round 2: size, scale, and the way out ─────────────────────────
+
+test('FIELD: the chrome takes the width the terminal actually has', async () => {
+  // A cap at 160 columns left the right quarter of a wide terminal
+  // permanently unpainted — hairlines, tints and footer all stopped short,
+  // which reads as "not adapting to the terminal". The mockups were drawn at
+  // 110 columns, so no capture ever showed it: fixture-width, again.
+  const { createInput } = await import('../lib/tui/input.mjs');
+  const { PassThrough } = await import('node:stream');
+  const { fakeTty } = await import('./helpers/tty.mjs');
+  const output = fakeTty({ columns: 200 });
+  const input = Object.assign(new PassThrough(), { isTTY: true, setRawMode() {} });
+  const session = createInput({ input, output, ui });
+  const rule = session.regionLines().find((r) => /^─+$/.test(ui.stripAnsi(r)));
+  assert.ok(rule, 'the composer hairline is in the region');
+  assert.equal(displayWidth(rule), 200, 'and it spans all 200 columns');
+  session.close();
+});
+
+test('FIELD: the palette scales with the terminal instead of cramming into 72 columns', () => {
+  const overlay = createOverlay({ rows: [{ label: 'index status', summary: 'x', sideEffect: 'read' }] });
+  const wide = renderOverlay(overlay, { ui, width: 200 });
+  assert.equal(displayWidth(wide[0]), 110, 'on a wide terminal the box takes a readable measure');
+  const narrow = renderOverlay(overlay, { ui, width: 50 });
+  assert.equal(displayWidth(narrow[0]), 46, 'on a narrow one it takes everything but a margin');
+});
+
+test('FIELD: exit is discoverable — a palette row and a key in the hint row', async () => {
+  // exit worked three ways (the word, /exit, ctrl+d) and appeared NOWHERE on
+  // screen. Existing and being discoverable are different properties.
+  const hint = renderHint({ ui, width: 160 });
+  assert.match(hint, /ctrl\+d exit/, 'leaving lives where Enter’s consequences live');
+
+  const { runLedger } = await import('../lib/tui-cmd.mjs');
+  const { PassThrough } = await import('node:stream');
+  const input = new PassThrough();
+  const output = new PassThrough();
+  let text = '';
+  output.on('data', (c) => { text += c.toString(); });
+  const done = runLedger({
+    input, output, workspace: process.cwd(), argv: ['--no-color', '--no-events'],
+    dispatcher: async () => 0,
+  });
+  // `/exi` filters the palette; the session row `exit` must be offered, and
+  // choosing it must end the session with the ritual — no typed word needed.
+  input.write('/exi\n1\n');
+  input.end();
+  await done;
+  assert.match(text, /exit.*close the session/, 'the palette lists the way out, with its chord');
+  assert.match(text, /session\s+0 commands/, 'and choosing it leaves through the exit ritual');
 });

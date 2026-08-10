@@ -257,11 +257,17 @@ export function createLedger({
     /** Find a block by id or unique id prefix, so `!! 5e08c7` works from what
      * is on screen rather than from a full run id. */
     byId(id) {
-      const wanted = String(id ?? '').trim();
+      const wanted = String(id ?? '').trim().replace(/^#/, '');
       if (!wanted) return null;
       const exact = blocks.find((b) => b.id === wanted || b.run === wanted);
       if (exact) return exact;
-      const hits = blocks.filter((b) => String(b.id).startsWith(wanted) || String(b.run ?? '').startsWith(wanted));
+      // Prefix OR suffix, unique either way. The record line prints the id's
+      // TAIL (`#5e08c7`) because the time-ordered head is the colliding part;
+      // `run list` prints the full id, whose head someone may copy. Ambiguity
+      // is a refusal in both directions — replaying the wrong block is worse
+      // than asking for one more character.
+      const matches = (v) => String(v ?? '').startsWith(wanted) || String(v ?? '').endsWith(wanted);
+      const hits = blocks.filter((b) => matches(b.id) || matches(b.run));
       return hits.length === 1 ? hits[0] : null;
     },
     /** Toggle a mark, persisting it. Returns the new state, or null when the
