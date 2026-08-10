@@ -1,37 +1,40 @@
 /**
  * Binding the ledger to a real terminal.
  *
- * THIS IS THE ONLY PART THAT NEEDS A TTY, and it is deliberately the part with
- * the least thinking in it: read a keypress, hand it to whatever currently owns
- * input, repaint what that thing says to paint. Every decision — what a key
- * means, what a block looks like, how tall it is — lives in a module a test can
- * reach without a pty. The phase-4b reopening happened because that split did
- * not exist and the untestable half was the entire product.
+ * THE REGION IS ANCHORED TO THE BOTTOM OF THE VIEWPORT. Every reference
+ * surface — Claude Code, Amp, Codex, OpenCode, Grok — puts the composer at
+ * the bottom of the screen, content flowing above it, the empty space in the
+ * MIDDLE of a fresh session. The first build anchored to the top: chrome at
+ * rows 1–12 of a 45-row terminal with thirty-three dead rows underneath,
+ * which read as unfinished no matter what the chrome looked like. Anchoring
+ * is the single largest "feel" difference between this surface and the field.
  *
- * THE BOTTOM REGION is everything that repaints in place:
+ * HOW THE ANCHOR WORKS in the main buffer. On open, the prior shell content
+ * is scrolled into scrollback (a screenful of newlines — nothing is erased
+ * from history) and the session owns a clean viewport. Committed content is
+ * written top-down from `contentRow`; the region — live block, palette,
+ * composer, hint, footer — is painted with absolute positioning into the
+ * LAST rows of the viewport. While a gap exists between content and region,
+ * commits fill it downward; once they meet, commits write through the bottom
+ * and the terminal scrolls naturally, exactly as before. Scrollback,
+ * selection and terminal search are untouched throughout — the design's
+ * main-buffer commitment holds.
  *
- *     [ live block — the running command, sticky header + streaming tail ]
- *     [ composer (two hairlines) OR an overlay, never both ]
- *     [ hint row ]
- *     [ footer ]
+ * THE WIDTH IS THE TERMINAL'S WIDTH, live: the region repaints at the current
+ * width on every SIGWINCH, and nothing in it is capped. Content that already
+ * scrolled keeps the width it was born at — that is what scrollback means,
+ * and no reference reflows it either.
  *
- * Everything above it is committed scrollback and is never touched again. That
- * is what keeps selection, the terminal's own search, and scrollback itself
- * working — the whole reason the design declines the alternate screen.
- *
- * COMMAND OUTPUT IS CAPTURED, NOT PASSED THROUGH. Every harness command prints
- * with `console.log`, straight to the stream, with no idea a region is painted
- * below the cursor. Phase 4b's answer was to take the composer off screen for
- * the duration, which fixed the corruption and cost the design its central
- * idea: output that goes straight to the terminal is not a block, cannot be
- * tinted, folded, marked or re-run, and is not a record of anything. So stdout
- * is intercepted for the duration of a dispatch and the lines become the
- * block's. See `capture`.
+ * COMMAND OUTPUT IS CAPTURED, NOT PASSED THROUGH — see `capture`. Every
+ * repaint is one synchronized frame (CSI ?2026): terminals that support it
+ * render each update atomically, the rest ignore the sequence. This module
+ * remains the only one that needs a TTY, and still the one with the least
+ * thinking in it.
  */
 import readline from 'node:readline';
 import { createComposer } from './composer.mjs';
 import { renderFooter, renderHint } from './chrome.mjs';
-import { renderOverlay } from './overlay.mjs';
+import { renderOverlay, renderPaletteRows } from './overlay.mjs';
 import { renderBlock, runningHeader } from './block.mjs';
 
 const ESC = '\x1b';
@@ -49,71 +52,40 @@ export function createInput({
   history = [],
   footerItems,
   paletteChord = 'ctrl+p',
-  /**
-   * The alternate screen, for operators who want the trade the other way.
-   *
-   * Off by default and stated as a commitment rather than a preference: the
-   * alternate screen costs scrollback, selection and the terminal's own search,
-   * which is why the design puts the ledger in the main buffer. It is a config
-   * because Codex and Amp both shipped alt-screen and were both forced to add
-   * an escape hatch — the pressure exists in both directions, and a tool that
-   * refuses to have the argument just gets forked.
-   */
   altScreen = false,
-  /**
-   * Called when Ctrl-C or Esc arrives while NO `next()` is pending — that is,
-   * while a command is running.
-   *
-   * THIS IS THE WHOLE CANCELLATION STORY, and it replaces a worse one. Phase 4b
-   * dropped raw mode for the duration of a dispatch so the terminal's own
-   * SIGINT would fire, because in raw mode Ctrl-C is a keypress and keypresses
-   * were discarded whenever no promise was waiting — which is exactly the
-   * window a command runs in.
-   *
-   * Capturing output instead of passing it through means the region stays on
-   * screen for the whole run, so raw mode has to stay on: the live block
-   * repaints, and Esc — which the sticky header promises cancels — is a
-   * keypress that only exists in raw mode. So the interrupt is handled here
-   * rather than being handed back to the tty.
-   */
   onInterrupt = null,
 } = {}) {
-  // THE TERMINAL'S WIDTH IS THE WIDTH. An earlier cap at 160 columns left the
-  // right quarter of a wide terminal permanently unpainted — hairlines, tints
-  // and the footer all stopped short, which reads as "not adapting to the
-  // terminal". Ultrawide readability is the OPERATOR'S layout decision, not
-  // this renderer's; content that wants a measure (notes, previews) clips
-  // itself. Resize repaints the region at the new width; committed scrollback
-  // keeps the width it was born at, which is what scrollback means.
   const width = () => Math.max(40, output.columns || 80);
+  const height = () => Math.max(8, output.rows || 24);
   const composer = createComposer({
     width: width(), ascii, history, paint: (t, s) => ui.paint(t, s), paletteChord,
   });
   let status = {};
   let hintState = { mode: 'deliver', gate: null, shell: 'allowed', rerun: null };
-  let overlay = null;
+  let overlay = null;      // modal picker: run tree, block navigation
+  let palette = null;      // composer-attached list: { overlay, filter }
   let live = null;
   let painted = 0;
-  // Where the cursor was PARKED inside the region by the last paint, counted in
-  // lines down from the region's first row. `erase` walks back exactly this
-  // far; assuming the cursor sat below the region (it never does, because
-  // parking it is the last thing paint does) overshot and left the old region
-  // on screen, so the next paint drew a second one inside the first.
-  let parkedRow = 0;
+  /** The next free row for committed content, 1-based absolute. */
+  let contentRow = 1;
   let resolveEvent = null;
   let closed = false;
-  /**
-   * The real stdout writer, held while `capture` owns `output.write`.
-   *
-   * WITHOUT THIS the region draws itself into the block it is drawing. `capture`
-   * replaces `output.write` so a command's `console.log` becomes block content;
-   * `paint` then calls `output.write` too, so every live repaint — hairlines,
-   * sticky header, footer — was appended to the running command's output and
-   * committed to scrollback as if the command had printed it. The real-pty
-   * capture showed a block that contained its own editor.
-   */
   let rawWrite = null;
   const emit = (text) => (rawWrite ?? output.write.bind(output))(text);
+
+  /** One visual update, delivered atomically — CSI ?2026 holds rendering until
+   * the frame completes; terminals without it ignore the sequence. */
+  const frame = (fn) => {
+    const sync = interactive && Boolean(output.isTTY);
+    if (sync) emit(`${ESC}[?2026h`);
+    try {
+      fn();
+    } finally {
+      if (sync) emit(`${ESC}[?2026l`);
+    }
+  };
+
+  const moveTo = (row, col = 1) => emit(`${ESC}[${row};${col}H`);
 
   /** The rows of the bottom region, in order. */
   const regionLines = () => {
@@ -129,113 +101,160 @@ export function createInput({
         ));
       }
     }
-    if (overlay) rows.push(...renderOverlay(overlay, { ui, width: w }));
-    else {
+    if (overlay) {
+      rows.push(...renderOverlay(overlay, { ui, width: w }));
+    } else {
+      // The palette grows UPWARD above the composer, Claude Code's shape: the
+      // input row never moves and never loses focus; the candidates stack over
+      // it and vanish. A menu that replaced the editor sent the query ten rows
+      // up-screen the moment `/` was pressed.
+      if (palette) rows.push(...renderPaletteRows(palette.overlay, { ui, width: w }));
       composer.setWidth(w);
       composer.setHint(renderHint({ ui, width: w, ...hintState }));
       rows.push(...composer.render());
     }
-    // ONE footer renderer for every state of the session. There used to be a
-    // fallback to the older single-row status when no lifecycle facts existed
-    // yet, which meant the footer changed shape after the first command — and
-    // the new shape dropped the workspace. `renderFooter` now carries the
-    // workspace unconditionally, so the fallback (and the inconsistency) died.
     const footer = renderFooter(status, { ui, width: w, items: footerItems });
     if (footer) rows.push(footer);
     return rows;
   };
 
-  /** Where the terminal cursor belongs inside the region. */
+  /** Where the terminal cursor belongs inside the region (1-based from the
+   * region's first row). */
   const cursorInRegion = () => {
     let offset = 0;
     if (live?.block) offset += 1 + Math.min(live.block.lines.length, LIVE_TAIL);
     if (overlay) {
-      // Inside an overlay the cursor sits at the end of the typed query, which
-      // is row 1 of the box (row 0 is the top edge).
-      return { row: offset + 1, col: ui.stripAnsi(`  ${overlay.title ? `${overlay.title} ` : ''}${overlay.query}`).length + 2 };
+      return { row: offset + 2, col: ui.stripAnsi(`  ${overlay.title ? `${overlay.title} ` : ''}${overlay.query}`).length + 2 };
     }
+    if (palette) offset += palette.overlay.visible.length + (palette.overlay.footerText ? 1 : 0);
     const c = composer.cursor;
     return { row: offset + c.row, col: c.col };
   };
 
-  /**
-   * One visual update, delivered atomically.
-   *
-   * A repaint is an erase followed by a redraw, and a terminal that renders
-   * between the two shows the region missing for a frame — the flicker every
-   * keystroke used to produce. CSI ?2026 (synchronized output) tells the
-   * terminal to hold rendering until the frame is complete; terminals that do
-   * not support it ignore the sequence and behave exactly as before, so this
-   * costs nothing where it does not help. The research round named rendering
-   * smoothness a converged feature of the field, not a nicety.
-   */
-  const frame = (fn) => {
-    const sync = interactive && Boolean(output.isTTY);
-    if (sync) emit(`${ESC}[?2026h`);
-    try {
-      fn();
-    } finally {
-      if (sync) emit(`${ESC}[?2026l`);
-    }
-  };
+  /** Top row of the region, clamped so it never overlaps committed content. */
+  const regionTop = (h) => Math.max(contentRow, height() - h + 1);
 
   const erase = () => {
     if (!interactive || painted === 0) return;
-    if (parkedRow > 0) emit(`${ESC}[${parkedRow}A`);
-    emit(`\r${ESC}[0J`);
+    moveTo(regionTop(painted), 1);
+    emit(`${ESC}[0J`);
     painted = 0;
-    parkedRow = 0;
   };
 
   const paint = () => {
     if (!interactive || closed) return;
-    // Always a full redraw. Making paint idempotent removes an ordering rule
-    // rather than asking every caller to remember it.
     erase();
     const lines = regionLines();
-    emit(`${lines.join('\n')}\n`);
+    let top = regionTop(lines.length);
+    // A region taller than the space below the content pushes the content up:
+    // scroll by the deficit from the bottom row, exactly what the terminal
+    // would have done had the rows been printed there.
+    const deficit = top + lines.length - 1 - height();
+    if (deficit > 0) {
+      moveTo(height(), 1);
+      emit('\n'.repeat(deficit));
+      contentRow = Math.max(1, contentRow - deficit);
+      top = regionTop(lines.length);
+    }
+    moveTo(top, 1);
+    // No trailing newline: a newline on the bottom row scrolls the screen,
+    // which would walk the region up one row per repaint.
+    emit(lines.join('\n'));
     painted = lines.length;
     const { row, col } = cursorInRegion();
-    parkedRow = Math.max(0, Math.min(row, painted - 1));
-    emit(`${ESC}[${painted - parkedRow}A\r${col > 0 ? `${ESC}[${col}C` : ''}`);
+    moveTo(top + Math.min(row, painted) - 1, 1);
+    if (col > 0) emit(`${ESC}[${col}C`);
   };
 
-  /** Commit rows into scrollback, above the region. Once written they are
-   * never touched again. */
+  /** Commit rows into the flow above the region. While a gap exists between
+   * content and region they fill it; afterwards they scroll through. */
   const commit = (lines) => {
     const rows = Array.isArray(lines) ? lines : [lines];
     if (!rows.length) return;
+    if (!interactive) {
+      emit(`${rows.join('\n')}\n`);
+      return;
+    }
     frame(() => {
       erase();
+      moveTo(contentRow, 1);
       emit(`${rows.join('\n')}\n`);
+      contentRow = Math.min(contentRow + rows.length, height());
       paint();
     });
   };
 
-  const onResize = () => { frame(() => { erase(); paint(); }); };
+  const onResize = () => {
+    // Everything from the content boundary down is cleared before repainting:
+    // a shrink leaves the tail of every wider row on screen otherwise, and a
+    // 60-column hairline over a 100-column ghost reads as a broken rule. The
+    // committed content above keeps the width it was born at — the terminal
+    // reflows scrollback itself, and no reference reflows it either.
+    contentRow = Math.min(contentRow, Math.max(1, height()));
+    frame(() => {
+      moveTo(Math.min(contentRow, height()), 1);
+      emit(`${ESC}[0J`);
+      painted = 0;
+      paint();
+    });
+  };
+
+  const dropPalette = () => {
+    palette = null;
+    composer.setValue('');
+  };
 
   const onKeypress = (str, key = {}) => {
     if (closed) return;
-    // Interrupts are read BEFORE the pending-promise check, because the moment
-    // they matter most is the moment no promise is pending. See `onInterrupt`.
     if (!resolveEvent) {
       const isCtrlC = Boolean(key.ctrl) && key.name === 'c';
       if ((isCtrlC || key.name === 'escape') && typeof onInterrupt === 'function') onInterrupt();
       return;
     }
-    const owner = overlay ? overlay.handleKey(str, key) : composer.handleKey(str, key);
-    const deliver = (event) => { const r = resolveEvent; resolveEvent = null; erase(); r(event); };
+    const deliver = (event) => { const r = resolveEvent; resolveEvent = null; r(event); };
 
     if (overlay) {
-      if (owner.intent === 'close') { overlay = null; erase(); paint(); return; }
+      const owner = overlay.handleKey(str, key);
+      if (owner.intent === 'close') { overlay = null; frame(() => { erase(); paint(); }); return; }
       if (owner.intent === 'choose') { deliver({ intent: 'choose', row: owner.row }); return; }
       if (owner.intent === 'action') { deliver({ intent: 'action', action: owner.action, row: owner.row }); return; }
-      // `filter` is handled inside the overlay so a keystroke costs a repaint
-      // rather than a round trip through the loop.
       if (owner.changed) frame(() => { erase(); paint(); });
       return;
     }
 
+    // Palette-attached mode: the composer keeps the text and the focus; the
+    // list above it owns only the navigation keys.
+    if (palette) {
+      const name = key.name;
+      if (name === 'escape') { dropPalette(); frame(() => { erase(); paint(); }); return; }
+      if (['up', 'down', 'pageup', 'pagedown'].includes(name)) {
+        const r = palette.overlay.handleKey(str, key);
+        if (r.changed) frame(() => { erase(); paint(); });
+        return;
+      }
+      if (name === 'return' || name === 'enter' || name === 'tab') {
+        const chosen = palette.overlay.selected;
+        dropPalette();
+        deliver({ intent: 'choose', row: chosen });
+        return;
+      }
+      const result = composer.handleKey(str, key);
+      const value = composer.value;
+      if (!value.startsWith('/')) {
+        // The sigil was deleted: the request is withdrawn.
+        dropPalette();
+        frame(() => { erase(); paint(); });
+        return;
+      }
+      if (result.changed) {
+        palette.overlay.setQuery(value.slice(1));
+        palette.overlay.setRows(palette.filter(value.slice(1)));
+        frame(() => { erase(); paint(); });
+      }
+      return;
+    }
+
+    const owner = composer.handleKey(str, key);
     if (owner.intent === 'exit') { deliver({ intent: 'exit' }); return; }
     if (owner.intent === 'palette') { deliver({ intent: 'palette' }); return; }
     if (owner.intent === 'navigate') { deliver({ intent: 'navigate' }); return; }
@@ -254,13 +273,17 @@ export function createInput({
     if (input.isTTY) input.setRawMode(true);
     input.on('keypress', onKeypress);
     output.on?.('resize', onResize);
-    // 1049 saves the cursor and swaps buffers in one sequence, and its pair
-    // restores both — the two-sequence spelling (47 + cursor save) leaves the
-    // cursor somewhere else if the process dies between them.
     if (usingAltScreen) emit(`${ESC}[?1049h`);
+    // THE ANCHOR: scroll whatever the shell had on screen into scrollback and
+    // take a clean viewport. Nothing is erased — a screenful of newlines is
+    // exactly what a long command's output would have done — and every
+    // reference opens the same way, on its own canvas.
+    frame(() => {
+      emit('\n'.repeat(Math.max(0, height() - 1)));
+      moveTo(1, 1);
+      emit(`${ESC}[0J`);
+    });
   } else {
-    // The piped path stays scriptable: no raw mode, no repaint, one line per
-    // line. Every non-visual test drives this.
     rl = readline.createInterface({ input, output, terminal: false });
   }
 
@@ -270,14 +293,13 @@ export function createInput({
     interactive,
     composer,
     commit,
-    /** Rows of the bottom region — exposed so a test can assert what a real
-     * session would show without owning a terminal. */
     regionLines,
 
     setStatus(next) { status = { ...status, ...next }; if (interactive) frame(() => { erase(); paint(); }); },
     setHint(next) {
       hintState = { ...hintState, ...next };
       composer.setGate(hintState.gate);
+      composer.setRuleLabel([hintState.mode, hintState.shell === 'denied' ? 'shell denied' : null].filter(Boolean).join(' · '));
       if (interactive) frame(() => { erase(); paint(); });
     },
     openOverlay(next) { overlay = next; if (interactive) frame(() => { erase(); paint(); }); },
@@ -285,19 +307,23 @@ export function createInput({
     get overlay() { return overlay; },
 
     /**
-     * Take ownership of stdout for the duration of one dispatch.
-     *
-     * Returns a `release` that restores it. Lines are handed to `onLine` as
-     * they complete, so a long command streams into its block instead of
-     * arriving all at once when it finishes. A partial final line — a command
-     * that printed without a trailing newline — is flushed on release rather
-     * than dropped.
+     * Open the composer-attached palette. `filter(query)` returns the rows for
+     * a query; the composer's text after the sigil IS the query, so typing
+     * filters live and backspacing the sigil away withdraws the request.
      */
+    openPalette({ overlay: paletteOverlay, filter }) {
+      palette = { overlay: paletteOverlay, filter };
+      if (!composer.value.startsWith('/')) composer.setValue(`/${composer.value}`);
+      if (interactive) frame(() => { erase(); paint(); });
+    },
+    closePalette() { dropPalette(); if (interactive) frame(() => { erase(); paint(); }); },
+    get palette() { return palette; },
+
     capture(onLine) {
       const original = output.write.bind(output);
       rawWrite = original;
       let buffer = '';
-      const emit = (chunk, encoding) => {
+      const emitLines = (chunk, encoding) => {
         const text = typeof chunk === 'string' ? chunk : Buffer.from(chunk).toString(typeof encoding === 'string' ? encoding : 'utf8');
         buffer += text;
         let at = buffer.indexOf('\n');
@@ -308,7 +334,7 @@ export function createInput({
         }
       };
       output.write = (chunk, encoding, callback) => {
-        try { emit(chunk, encoding); } catch { /* a write must never throw into a command */ }
+        try { emitLines(chunk, encoding); } catch { /* a write must never throw into a command */ }
         if (typeof encoding === 'function') encoding();
         else if (typeof callback === 'function') callback();
         return true;
@@ -323,59 +349,43 @@ export function createInput({
       };
     },
 
-    /**
-     * Show a block as it runs.
-     *
-     * `refresh` repaints the region so streamed lines appear. It is called
-     * once per output line, which is cheap because a repaint is one cursor
-     * move and one erase — but it is also throttled by the caller, since a
-     * test suite printing 500 lines does not need 500 repaints.
-     */
     beginLive(block) { live = { block }; if (interactive) frame(() => { erase(); paint(); }); },
     refreshLive() { if (interactive && live) frame(() => { erase(); paint(); }); },
     endLive() { live = null; },
 
-    /**
-     * Clear the visible screen and repaint.
-     *
-     * CSI 2J + cursor home — NOT 3J, which also wipes scrollback. The ledger is
-     * a scrolling transcript; operators clear the viewport, not the history the
-     * design exists to keep.
-     *
-     * A session builtin, not `!clear`: governed bash strips enough of the
-     * environment that terminfo cannot resolve ghostty/kitty/etc., so shelling
-     * out fails with "unknown terminal type" on the terminals people use.
-     */
     clearScreen() {
-      erase();
-      if (interactive && output.isTTY) emit(`${ESC}[2J${ESC}[H`);
-      painted = 0;
-      paint();
+      frame(() => {
+        erase();
+        if (interactive && output.isTTY) emit(`${ESC}[2J${ESC}[H`);
+        painted = 0;
+        contentRow = 1;
+        paint();
+      });
     },
 
-    /** The next thing the operator did: a line, or an intent the loop owns. */
     async next() {
       if (!interactive) {
         const { value, done } = await lineIterator.next();
         return done ? { intent: 'exit' } : { line: String(value ?? '') };
       }
-      paint();
+      frame(() => paint());
       return new Promise((resolve) => { resolveEvent = resolve; });
     },
 
     close() {
-      // Idempotent: an error path may close a session the normal path also
-      // closes, and restoring a terminal twice must not throw on the way out.
       if (closed) return;
       closed = true;
-      erase();
+      frame(() => {
+        erase();
+        // Leave the cursor where the flow ended, so the exit ritual (and the
+        // shell prompt after it) print after the content rather than at the
+        // bottom of a mostly-empty screen.
+        if (interactive) moveTo(Math.min(contentRow, height()), 1);
+      });
       if (interactive) {
         input.off?.('keypress', onKeypress);
         output.off?.('resize', onResize);
         if (input.isTTY) { try { input.setRawMode(false); } catch { /* already gone */ } }
-        // Leaving the alternate screen is the LAST thing, after the region is
-        // erased: leaving first would put the erase on the main buffer and take
-        // two lines of the operator's own scrollback with it.
         if (usingAltScreen) emit(`${ESC}[?1049l`);
       }
       rl?.close();

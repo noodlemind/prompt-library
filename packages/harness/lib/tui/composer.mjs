@@ -72,6 +72,13 @@ export function createComposer({
   let historyIndex = null;
   let draft = null;
   let completion = null;
+  /** Right-embedded label on the top rule — mode and posture, the way Claude
+   * Code carries the session title in its hairline and Amp carries the mode in
+   * its border. A rule is a row already being spent; the label rides free. */
+  let ruleLabel = '';
+  /** Muted text shown while the buffer is empty (Codex, Grok). Vanishes on
+   * the first keystroke; never part of the value. */
+  const PLACEHOLDER = 'run a command · / for the palette';
 
   const asText = (clusters) => clusters.join('');
   const clampCursor = () => {
@@ -303,17 +310,30 @@ export function createComposer({
     const inner = Math.max(8, width - caretCells);
     const token = GATE_TOKEN[gate] ?? 'muted';
     const rule = paint(token, glyphs.rule.repeat(Math.max(1, width)));
+    // The top rule carries the label right-aligned inside it — Claude Code's
+    // `── title ──` shape. The bottom rule stays plain.
+    let topRule = rule;
+    if (ruleLabel) {
+      const tail = ` ${ruleLabel} `;
+      const lead = Math.max(1, width - displayWidth(tail) - 2);
+      topRule = paint(token, glyphs.rule.repeat(lead)) + paint('muted', tail) + paint(token, glyphs.rule.repeat(2));
+    }
 
     const body = [];
-    lines.forEach((clusters, i) => {
-      const wrapped = wrapCells(asText(clusters), inner);
-      wrapped.forEach((piece, j) => {
-        const prefix = i === 0 && j === 0 ? paint('info', caret) : ' '.repeat(caretCells);
-        body.push(`${prefix}${piece}`);
+    const empty = lines.length === 1 && lines[0].length === 0;
+    if (empty) {
+      body.push(`${paint('info', caret)}${paint('muted', PLACEHOLDER)}`);
+    } else {
+      lines.forEach((clusters, i) => {
+        const wrapped = wrapCells(asText(clusters), inner);
+        wrapped.forEach((piece, j) => {
+          const prefix = i === 0 && j === 0 ? paint('info', caret) : ' '.repeat(caretCells);
+          body.push(`${prefix}${piece}`);
+        });
       });
-    });
+    }
 
-    const out = [rule, ...body, rule];
+    const out = [topRule, ...body, rule];
     // The completion list sits DIRECTLY under the editor it refines; the hint
     // row stays last. The other order wedged the consequence row between the
     // `@` token and its candidates, which read as the list belonging to the
@@ -359,6 +379,7 @@ export function createComposer({
     },
     setWidth(next) { width = Math.max(24, next); },
     setHint(next) { hint = next; },
+    setRuleLabel(next) { ruleLabel = String(next ?? ''); },
     setGate(next) { gate = next; },
     setCompletion(items) {
       completion = items?.length ? { items, index: 0 } : null;

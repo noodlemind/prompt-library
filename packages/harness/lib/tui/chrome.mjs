@@ -54,24 +54,33 @@ export function renderHeader({
   gate = null,
   run = null,
 } = {}) {
+  // TWO LINES, the field's identity rhythm: Claude Code gives identity a
+  // three-line block, Codex a boxed panel; a single 160-character line mixing
+  // identity with lifecycle read as data, not presence. Line one is WHERE —
+  // workspace, branch, commit. Line two is WHAT — the tool and the lifecycle.
   const dot = ui.paint(gate && gate !== 'pass' && gate !== 'ok' ? 'warn' : 'ok', ui.unicode ? '●' : 'o');
-  const left = [];
-  if (workspace) left.push(ui.paint('info', workspace));
-  if (branch) left.push(ui.paint('muted', commit ? `${branch} @ ${commit}` : branch));
-  if (version) left.push(ui.paint('muted', `harness ${version}`));
+  const sep = ui.paint('muted', ' · ');
 
-  const right = [];
-  if (plan) right.push(`${ui.paint('muted', 'plan')} ${ui.paint('info', plan)}`);
+  const where = [];
+  if (workspace) where.push(ui.paint('info', workspace));
+  if (branch) where.push(ui.paint('muted', commit ? `${branch} @ ${commit}` : branch));
+
+  const what = [];
+  if (version) what.push(ui.paint('muted', `harness ${version}`));
+  if (plan) what.push(`${ui.paint('muted', 'plan')} ${ui.paint('info', plan)}`);
   if (gate) {
     const [token] = GATE_GLYPH[gate] || ['warn'];
-    right.push(`${ui.paint('muted', 'gate')} ${ui.glyph(token === 'ok' ? 'ok' : token === 'error' ? 'error' : 'warn')} ${ui.paint(token, gate)}`);
+    what.push(`${ui.paint('muted', 'gate')} ${ui.paint(token, gate)}`);
   }
-  right.push(`${ui.paint('muted', 'run')} ${ui.paint('muted', run || (ui.unicode ? '—' : '-'))}`);
+  what.push(`${ui.paint('muted', 'run')} ${ui.paint('muted', run || (ui.unicode ? '—' : '-'))}`);
 
-  const sep = ui.paint('muted', ' · ');
-  const leftText = `${dot} ${left.join(sep)}`;
-  const rightText = right.join(sep);
-  return [twoColumn(leftText, rightText, width), ''];
+  const line1 = clipLine(`${dot} ${where.join(sep)}`, width, ui);
+  const line2 = clipLine(`  ${what.join(sep)}`, width, ui);
+  return [line1, line2, ''];
+}
+
+function clipLine(text, width, ui) {
+  return displayWidth(text) <= width ? text : clipTo(ui.stripAnsi(text), width);
 }
 
 /**
@@ -85,15 +94,16 @@ export function renderHint({
   ui,
   width = 80,
   mode = 'deliver',
-  gate = null,
+  gate = null, // accepted and unused: the gate's textual home is the footer
   shell = 'allowed',
   rerun = null,
 } = {}) {
+  void gate;
+  // The gate is NOT here. It was stated three times — hint, footer, header —
+  // and with the hairline tint carrying it at the exact point of typing, the
+  // hint row's copy was the redundant one. Each fact gets one textual home
+  // (the footer) and one ambient one (the tint).
   const parts = [ui.paint('muted', mode)];
-  if (gate) {
-    const [token] = GATE_GLYPH[gate] || ['warn'];
-    parts.push(`${ui.paint('muted', 'gate')} ${ui.paint(token, gate === 'pass' ? 'ok' : gate)}`);
-  }
   parts.push(ui.paint('muted', `shell ${shell}`));
   if (rerun) parts.push(`${ui.paint('muted', '!!')} ${ui.paint('muted', `re-runs ${rerun}`)}`);
 
@@ -153,6 +163,10 @@ export function renderFooter(snapshot = {}, {
   if (snapshot.tests) right.push(ui.paint('muted', snapshot.tests));
   if (snapshot.learnings) right.push(ui.paint('muted', snapshot.learnings));
   if (snapshot.generation) right.push(ui.paint('muted', `gen ${snapshot.generation}`));
+  // The version sits bottom-right — OpenCode's and Grok's home for it. In a
+  // real workspace the right column was otherwise empty, and a two-column
+  // footer with nothing on the right is a one-column footer.
+  if (snapshot.version) right.push(ui.paint('muted', `harness ${snapshot.version}`));
 
   if (!fixed.length && !lifecycle.length && !right.length) return '';
   // Clipping order: the right column goes whole, then lifecycle segments from

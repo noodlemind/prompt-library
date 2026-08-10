@@ -348,3 +348,44 @@ export function treeRows(node, { ui, prefix = '', last = true, depth = 0 } = {})
   });
   return rows;
 }
+
+/**
+ * The composer-attached palette rows — Claude Code's shape, not a box.
+ *
+ * Two columns: a fixed-width command column, the description LEFT-ALIGNED
+ * beside it, the side-effect class right-aligned at the row's end. The old
+ * right-aligned note made every row's midfield a different width — ragged to
+ * scan, truncating mid-word. The list sits directly above the composer and
+ * the selection is a full-width tint, so the input row never moves and never
+ * loses focus.
+ */
+export function renderPaletteRows(overlay, { ui, width = 80 } = {}) {
+  const rows = overlay.visible;
+  if (!rows.length) {
+    return [ui.tintRow('panel', padTo(`  ${ui.paint('muted', 'nothing matches')}`, width))];
+  }
+  const labelW = Math.min(26, Math.max(...rows.map((r) => displayWidth(String(r.label ?? '')))));
+  const out = [];
+  for (const [i, row] of rows.entries()) {
+    const chosen = overlay.offset + i === overlay.index;
+    const disabled = Boolean(row.unavailable || row.disabled);
+    const effect = row.sideEffect
+      ? ui.paint(row.sideEffect === 'read' ? 'ok' : row.sideEffect === 'mutate' ? 'warn' : 'error', row.sideEffect)
+      : '';
+    const effectW = row.sideEffect ? row.sideEffect.length + 1 : 0;
+    const label = clipTo(String(row.label ?? ''), labelW);
+    const labelOut = disabled ? ui.paint('muted', padTo(label, labelW)) : padTo(label, labelW);
+    const descRoom = Math.max(8, width - 2 - labelW - 2 - effectW - 1);
+    const source = disabled ? (row.reason || row.unavailable || 'unavailable') : (row.note || row.summary || '');
+    const plain = ui.stripAnsi(String(source));
+    const desc = displayWidth(plain) > descRoom ? `${clipTo(plain, descRoom - 1)}…` : plain;
+    const body = `  ${labelOut}  ${ui.paint(disabled ? 'muted' : 'muted', desc)}`;
+    const gap = Math.max(1, width - displayWidth(body) - effectW);
+    const line = `${body}${' '.repeat(gap)}${effect}${effect ? ' ' : ''}`;
+    out.push(ui.tintRow(chosen ? 'selected' : 'panel', padTo(line, width)));
+  }
+  if (overlay.footerText) {
+    out.push(ui.tintRow('panel', padTo(`  ${ui.paint('muted', clipTo(overlay.footerText, width - 4))}`, width)));
+  }
+  return out;
+}

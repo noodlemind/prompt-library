@@ -23,6 +23,7 @@
 const CSI = '\x1b[';
 
 export function fakeTty({ columns = 80, rows = 40 } = {}) {
+  const listeners = {};
   const screen = [''];
   /** Background SGR active at each written cell, parallel to `screen`. */
   const attrs = [[]];
@@ -44,6 +45,7 @@ export function fakeTty({ columns = 80, rows = 40 } = {}) {
     isTTY: true,
     columns,
     rows,
+    // eslint-disable-next-line sort-keys
     write(chunk) {
       const text = String(chunk);
       written.push(text);
@@ -67,7 +69,13 @@ export function fakeTty({ columns = 80, rows = 40 } = {}) {
               attrs.length = cy + 1;
             } else if (final === 'J' && params === '2') {
               screen.length = 0; attrs.length = 0; ensure(0); cy = 0; cx = 0;
-            } else if (final === 'H') { cy = 0; cx = 0; }
+            } else if (final === 'H') {
+              // Parameterized: `ESC[r;cH` is 1-based absolute addressing — the
+              // bottom-anchored region positions with it. Bare `ESC[H` is home.
+              const parts = params.split(';').map((v) => Number(v));
+              cy = Math.max(0, (parts[0] || 1) - 1);
+              cx = Math.max(0, (parts[1] || 1) - 1);
+            }
             else if (final === 'h' && params === '?1049') altScreen = true;
             else if (final === 'l' && params === '?1049') altScreen = false;
             else if (final === 'm') {
@@ -103,7 +111,15 @@ export function fakeTty({ columns = 80, rows = 40 } = {}) {
       }
       return true;
     },
-    on() {}, off() {},
+    on(event, handler) { (listeners[event] ??= []).push(handler); },
+    off(event, handler) { listeners[event] = (listeners[event] ?? []).filter((h) => h !== handler); },
+    /** Change the terminal's size and fire the resize handlers, the way a real
+     * TTY does on SIGWINCH. */
+    resize(nextCols, nextRows) {
+      this.columns = nextCols;
+      if (nextRows) this.rows = nextRows;
+      for (const h of listeners.resize ?? []) h();
+    },
 
     /** The screen as a person would read it, trailing blanks trimmed. */
     get lines() { return screen.map((l) => l.replace(/\s+$/, '')); },

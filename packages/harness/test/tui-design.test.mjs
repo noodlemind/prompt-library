@@ -22,7 +22,7 @@ import { test } from 'node:test';
 import { createComposer } from '../lib/tui/composer.mjs';
 import { createBlock, renderBlock, foldState, formatDuration, recordSegments } from '../lib/tui/block.mjs';
 import { renderHeader, renderHint, renderFooter, twoColumn } from '../lib/tui/chrome.mjs';
-import { createOverlay, renderOverlay, splitPrefix, applyPrefix } from '../lib/tui/overlay.mjs';
+import { createOverlay, renderOverlay, renderPaletteRows, splitPrefix, applyPrefix } from '../lib/tui/overlay.mjs';
 import { createStyle } from '../lib/style.mjs';
 import { displayWidth } from '../lib/tui/width.mjs';
 import { plainUi } from './helpers/tty.mjs';
@@ -177,34 +177,41 @@ test('DESIGN: 256-colour keeps greyscale separation instead of inventing a satur
 
 // ── chrome: header once, hint and footer persistent ─────────────────────
 
-test('DESIGN: the header is two rows printed once, not a bar pinned to the viewport', () => {
+test('DESIGN: the header is a two-line identity block printed once', () => {
+  // Line one is WHERE — workspace, branch, commit. Line two is WHAT — the
+  // tool and the lifecycle. The field gives identity vertical room (Claude
+  // Code three lines, Codex a panel); one dense line read as data, not
+  // presence. Still printed into scrollback, never pinned.
   const rows = renderHeader({
     ui, width: 100, workspace: '~/repo', branch: 'main', commit: '9f2c1e4', version: '2.0.0',
     plan: 'phase1-core.md', gate: 'blocked',
   });
-  assert.equal(rows.length, 2, 'the header and one blank — a pinned bar would need the alternate screen');
+  assert.equal(rows.length, 3, 'two lines and a blank');
   assert.match(rows[0], /~\/repo/);
   assert.match(rows[0], /main @ 9f2c1e4/);
-  assert.match(rows[0], /harness 2\.0\.0/);
-  assert.match(rows[0], /plan phase1-core\.md/);
-  assert.match(rows[0], /gate/);
+  assert.match(rows[1], /harness 2\.0\.0/);
+  assert.match(rows[1], /plan phase1-core\.md/);
+  assert.match(rows[1], /gate blocked/);
+  assert.equal(rows[2], '');
 });
 
-test('DESIGN: the hint row states consequence at the point of action', () => {
+test('DESIGN: the hint row states consequence — and the gate is not repeated here', () => {
   const row = renderHint({ ui, width: 120, mode: 'deliver', gate: 'pass', shell: 'allowed', rerun: 'verify' });
   assert.match(row, /deliver/, 'the mode');
-  assert.match(row, /gate ok/, 'the posture');
-  assert.match(row, /shell allowed/, 'and whether the shell is available');
+  assert.match(row, /shell allowed/, 'whether the shell is available');
   assert.match(row, /!! re-runs verify/, 'what !! would repeat');
-  assert.match(row, /↵ run/, 'and what Enter does');
+  assert.match(row, /↵ run/, 'what Enter does');
+  assert.match(row, /ctrl\+d exit/, 'and the way out');
+  assert.doesNotMatch(row, /gate/,
+    'the gate was stated three times; its textual home is the footer and its ambient home is the hairline tint');
 });
 
 test('DESIGN: the hint drops keys before it drops posture — posture is what changes', () => {
-  const narrow = renderHint({ ui, width: 44, gate: 'blocked', shell: 'denied' });
-  assert.match(narrow, /gate blocked/);
+  const narrow = renderHint({ ui, width: 26, shell: 'denied' });
+  assert.match(narrow, /deliver/);
   assert.match(narrow, /shell denied/);
   assert.doesNotMatch(narrow, /interrupt/, 'the keys are learned once; the posture changes under you');
-  assert.ok(displayWidth(narrow) <= 44);
+  assert.ok(displayWidth(narrow) <= 26);
 });
 
 test('DESIGN: the footer is two columns and drops the right one first', () => {
@@ -834,4 +841,144 @@ test('FIELD: exit is discoverable — a palette row and a key in the hint row', 
   await done;
   assert.match(text, /exit.*close the session/, 'the palette lists the way out, with its chord');
   assert.match(text, /session\s+0 commands/, 'and choosing it leaves through the exit ritual');
+});
+
+// ── the field review: all nine, plus live resize ────────────────────────
+
+test('REVIEW-1: the region anchors to the bottom of the viewport', async () => {
+  // Every reference — Claude Code, Amp, Codex, OpenCode, Grok — keeps the
+  // composer at the bottom of the screen with the empty space in the MIDDLE.
+  // The first build stacked everything at the top and left thirty-three dead
+  // rows underneath.
+  const { createInput } = await import('../lib/tui/input.mjs');
+  const { PassThrough } = await import('node:stream');
+  const { fakeTty } = await import('./helpers/tty.mjs');
+  const output = fakeTty({ columns: 90, rows: 30 });
+  const input = Object.assign(new PassThrough(), { isTTY: true, setRawMode() {} });
+  const session = createInput({ input, output, ui });
+  session.commit(['header line']);
+  session.setStatus({ workspace: '~/repo' });
+
+  const lines = output.lines;
+  assert.match(lines[0], /header line/, 'content flows from the top');
+  const caretAt = lines.findIndex((l) => l.includes('❯'));
+  assert.ok(caretAt >= 25, `the composer sits in the last rows of a 30-row viewport (row ${caretAt + 1})`);
+  const between = lines.slice(1, caretAt - 1);
+  assert.ok(between.some((l) => l.trim() === ''), 'and the empty space is in the middle, not below');
+  session.close();
+});
+
+test('REVIEW-width: resize repaints the region at the new width and clears the ghosts', async () => {
+  const { createInput } = await import('../lib/tui/input.mjs');
+  const { PassThrough } = await import('node:stream');
+  const { fakeTty } = await import('./helpers/tty.mjs');
+  const output = fakeTty({ columns: 120, rows: 24 });
+  const input = Object.assign(new PassThrough(), { isTTY: true, setRawMode() {} });
+  const session = createInput({ input, output, ui });
+  session.setStatus({ workspace: '~/repo' });
+
+  const ruleWidths = () => output.lines.filter((l) => /^─+$/.test(l.trim())).map((l) => displayWidth(l.trim()));
+  assert.deepEqual([...new Set(ruleWidths())], [120], 'hairlines take the full width');
+
+  output.resize(70);
+  assert.deepEqual([...new Set(ruleWidths())], [70],
+    'after a shrink the rules are 70 wide with no 120-wide ghost tails left behind');
+  output.resize(150);
+  assert.deepEqual([...new Set(ruleWidths())], [150], 'and a grow follows too');
+  session.close();
+});
+
+test('REVIEW-3: the palette grows upward above a composer that never moves', async () => {
+  const { createInput } = await import('../lib/tui/input.mjs');
+  const { PassThrough } = await import('node:stream');
+  const { fakeTty } = await import('./helpers/tty.mjs');
+  const output = fakeTty({ columns: 100, rows: 30 });
+  const input = Object.assign(new PassThrough(), { isTTY: true, setRawMode() {} });
+  const session = createInput({ input, output, ui });
+
+  const rowsFor = (q) => [
+    { label: 'index', note: 'rebuild the knowledge index', sideEffect: 'mutate' },
+    { label: 'index status', note: 'freshness vs HEAD', sideEffect: 'read' },
+  ].filter((r) => r.label.includes(q));
+  session.openPalette({ overlay: createOverlay({ rows: rowsFor('') }), filter: rowsFor });
+
+  let lines = output.lines;
+  const caretAt = () => output.lines.findIndex((l) => l.includes('❯ /'));
+  assert.ok(caretAt() !== -1, 'the input row shows the sigil and stays visible (`❯ /`)');
+  const listAt = output.lines.findIndex((l) => l.includes('rebuild the knowledge index'));
+  assert.ok(listAt !== -1 && listAt < caretAt(), 'the candidates sit ABOVE the input, Claude Code’s shape');
+
+  // Typing filters live through the composer; the input row shows the query.
+  const pending = session.next();
+  for (const ch of 'index s') input.emit('keypress', ch, { name: ch, sequence: ch });
+  lines = output.lines;
+  assert.ok(lines.some((l) => l.includes('❯ /index s')), 'the query is visible at the input row');
+  assert.ok(lines.some((l) => l.includes('freshness vs HEAD')), 'and the list narrowed to the match');
+  assert.ok(!lines.some((l) => l.includes('rebuild the knowledge index')), 'dropping what no longer matches');
+
+  // Enter chooses the selection and closes the list.
+  input.emit('keypress', null, { name: 'return' });
+  const event = await pending;
+  assert.equal(event.intent, 'choose');
+  assert.equal(event.row.label, 'index status');
+  session.close();
+});
+
+test('REVIEW-2: palette rows are two aligned columns, description left-aligned', () => {
+  const overlay = createOverlay({
+    rows: [
+      { label: 'index', note: 'rebuild the knowledge index', sideEffect: 'mutate' },
+      { label: 'index structural', note: 'build the code symbol index', sideEffect: 'mutate' },
+    ],
+  });
+  const rows = renderPaletteRows(overlay, { ui, width: 100 });
+  const descCols = rows.slice(0, 2).map((r) => ui.stripAnsi(r).search(/rebuild|build the/));
+  assert.equal(new Set(descCols).size, 1,
+    'descriptions start at one shared column — right-aligning them made every midfield a different width');
+  for (const r of rows) assert.ok(displayWidth(r) <= 100);
+  assert.match(ui.stripAnsi(rows[0]), /mutate\s*$/, 'the side-effect class holds the right edge');
+});
+
+test('REVIEW-7: the empty composer carries a placeholder that vanishes on typing', () => {
+  const composer = createComposer({ width: 80 });
+  assert.match(composer.render()[1], /run a command · \/ for the palette/, 'Codex and Grok both seat one here');
+  composer.handleKey('s', { name: 's' });
+  assert.doesNotMatch(composer.render()[1], /run a command/, 'and it is never part of the value');
+  assert.equal(composer.value, 's');
+});
+
+test('REVIEW-8: the top hairline carries the mode label, Claude Code’s shape', () => {
+  const composer = createComposer({ width: 60 });
+  composer.setRuleLabel('deliver');
+  const top = composer.render()[0];
+  assert.match(top, /deliver/, 'the label rides a row already being spent');
+  assert.equal(displayWidth(top), 60, 'without changing the rule’s width');
+  assert.match(composer.render().at(-1), /^─+$/, 'the bottom rule stays plain');
+});
+
+test('REVIEW-6: the version sits bottom-right in the footer', () => {
+  const row = renderFooter({ workspace: '~/repo', version: '0.5.0' }, { ui, width: 100 });
+  assert.match(row, /harness 0\.5\.0\s*$/, 'OpenCode’s and Grok’s home for it');
+});
+
+test('REVIEW-4: a blocked gate gets one actionable warning at open', async () => {
+  const { runLedger } = await import('../lib/tui-cmd.mjs');
+  const { PassThrough } = await import('node:stream');
+  const fs = await import('node:fs');
+  const os = await import('node:os');
+  const path = await import('node:path');
+  const workspace = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'tui-warn-')));
+  fs.mkdirSync(path.join(workspace, '.harness'), { recursive: true });
+  fs.writeFileSync(path.join(workspace, '.harness', 'session.json'), JSON.stringify({ gateStatus: 'blocked' }));
+
+  const input = new PassThrough();
+  const output = new PassThrough();
+  let text = '';
+  output.on('data', (c) => { text += c.toString(); });
+  const done = runLedger({ input, output, workspace, argv: ['--no-color', '--no-events'], dispatcher: async () => 0 });
+  input.write('exit\n');
+  input.end();
+  await done;
+  assert.match(text, /gate blocked.*verify collects the evidence/,
+    'the problem AND the command that fixes it, once, at open — Claude Code’s ⚠ pattern');
 });

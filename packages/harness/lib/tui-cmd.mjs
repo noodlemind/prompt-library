@@ -199,6 +199,7 @@ export async function runLedger({
       plan: plan ? path.basename(plan) : null,
       run: last?.run ? last.run.slice(0, 6) : null,
       runStatus: last?.status ?? null,
+      version,
     });
     session.setHint({
       gate,
@@ -212,7 +213,7 @@ export async function runLedger({
    * session is about. */
   const writeHeader = () => {
     if (!startup.has('context')) return;
-    session.commit(renderHeader({
+    const rows = renderHeader({
       ui,
       width: termWidth(),
       workspace: tildePath(workspace),
@@ -221,7 +222,23 @@ export async function runLedger({
       version,
       plan: planOf() ? path.basename(planOf()) : null,
       gate: gateOf(),
-    }));
+    });
+    // ONE actionable warning, Claude Code's pattern: state the problem AND the
+    // command that fixes it, once, at open. The session knew the gate was
+    // blocked — it said so in three passive places — and never once said what
+    // to do about it.
+    const gate = gateOf();
+    if (gate && gate !== 'pass' && gate !== 'ok') {
+      rows.push(ui.line({
+        state: 'warn',
+        key: ui.unicode ? '⚠' : '[!]',
+        value: `gate ${gate}`,
+        note: 'verify collects the evidence that opens it',
+        keyWidth: 1,
+      }));
+      rows.push('');
+    }
+    session.commit(rows);
   };
   writeHeader();
 
@@ -475,15 +492,19 @@ export async function runLedger({
   };
 
   const openPaletteOverlay = (query = '') => {
+    // Attached above the composer, never replacing it: the input row stays at
+    // the bottom of the screen with the query visible (`❯ /in`), and the list
+    // grows upward — Claude Code's shape. The old overlay owned the input and
+    // moved the typed query ten rows up-screen the moment `/` was pressed.
     const overlay = createOverlay({
       title: '',
       query,
       rows: paletteRows(query),
       filter: (q) => paletteRows(q),
-      footer: `${ui.unicode ? '↑↓' : 'up/down'} walk · ${ui.unicode ? '↵' : 'enter'} choose · esc closes · prefixes: run: plan: search: check: res: learn:`,
+      footer: `${ui.unicode ? '↑↓' : 'up/down'} walk · ${ui.unicode ? '↵' : 'enter'} run · esc closes · run: plan: search: check: learn: narrow`,
       page: PALETTE_PAGE,
     });
-    session.openOverlay(overlay);
+    session.openPalette({ overlay, filter: (q) => paletteRows(q) });
     return overlay;
   };
 
@@ -687,12 +708,13 @@ export async function runLedger({
       if (event.intent === 'choose') {
         session.closeOverlay();
         const row = event.row;
-        if (row?.session === 'exit') break;
-        if (row?.session === 'clear') { doClear(); continue; }
-        if (row?.session === 'help') { emitHelp(); continue; }
-        if (row?.block) { emit({ ...row.block, folded: false }); continue; }
-        if (row?.node) continue; // a tree row is a view, not a command
-        if (row) await beginSelection(row);
+        if (!row) continue; // Enter on an empty palette list is a dismissal
+        if (row.session === 'exit') break;
+        if (row.session === 'clear') { doClear(); continue; }
+        if (row.session === 'help') { emitHelp(); continue; }
+        if (row.block) { emit({ ...row.block, folded: false }); continue; }
+        if (row.node) continue; // a tree row is a view, not a command
+        await beginSelection(row);
         continue;
       }
 
