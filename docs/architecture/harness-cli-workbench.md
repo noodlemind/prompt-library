@@ -372,70 +372,146 @@ Plugin controls:
 - Redacted communication
 - No direct policy, journal, evidence, or learnings-store mutation (contributed knowledge sources flow through the consolidation loop)
 
-### Interactive TUI
+### Interactive TUI — the Session Ledger
 
 ```text
 harness tui
 ```
 
-Primary views:
+**The design of record lives in this document, not outside it.** The approved
+mock and the research round behind it (`approved.json`, `research.md`, the
+`harness-tui-*` design board) settled the form; phase 4b shipped a four-sided
+box anyway, because the repository's own pointer to that direction was one glob
+in a delivery doc and nobody opened it. What follows is the direction itself, in
+enough detail to build from — a prose paraphrase somewhere else is not a
+substitute, and neither is a link.
 
-1. **Overview**
-   - Workspace
-   - Harness health
-   - Current plan
-   - Gate status
-   - Active run
-   - Required next action
+#### The shape
 
-2. **Search**
-   - Query editor
-   - Scope and match-mode selectors
-   - Ranked results
-   - File/document preview
-   - Retrieval explanation
-   - Knowledge and workspace trees
+A flowing transcript in the terminal's **main buffer**. Persistent chrome is
+three rows and no more:
 
-3. **Plans**
-   - Active plans
-   - Plan readiness
-   - Impacted files
-   - Acceptance criteria
-   - Named checks
-   - Gate and verification state
+```text
+● ~/repo · main @ 9f2c1e4 · harness 2.0.0        plan phase1-core.md · gate ■ blocked · run —
+                                                            ← header, printed ONCE into scrollback
 
-4. **Checks**
-   - Available named checks
-   - Run check
-   - Streaming output
-   - Duration and previous result
-   - Cancel current check
+▌ ❯ checks run build-assets                                 ← a block: command, verbatim
+▌   failed · exit 6 · 0m12s · actor you · 14:07:03          ← the journal record, made visible
+▌   ✗ E_ASSET_BUILD                                         ← output, folded past a threshold
+▌     asset manifest references a retired skill wrapper
+▌   … 7 more lines (ctrl+o)
+▌   1 err → exit 6 → patch fix-manifest.patch               ← tally, and the one action that follows
 
-5. **Runs**
-   - Run history
-   - Status filters
-   - Run tree
-   - Commands, evidence and failures
-   - Resume safe interrupted work
+────────────────────────────────────────────────────────────  ← hairline, tinted by GATE STATE
+❯ compound --insight "windows taskkill needs its own probe"
+────────────────────────────────────────────────────────────  ← hairline
+  deliver · gate ✓ ok · shell allowed · !! re-runs verify · ↵ run · esc interrupt
+  plan phase1-core ● locked · gate ✓ · run 9a12f4 ✓            930 tests · 34 learnings · gen 8c31f0
+```
 
-6. **Events**
-   - Live lifecycle events
-   - Failures and blocks
-   - Host and actor filters
-   - Cancellation and timeout events
+- **Two hairlines, not a box.** The editor is a rule above, a rule below, and
+  the text flush between them. Four dashboard-styled variants were rejected
+  before the research round that produced this; panel and tab chrome in a
+  terminal is the thing being avoided, and a bordered composer is that thing.
+- **The hairlines carry the gate state** as colour — the one adaptation taken
+  from Pi, whose editor border carries thinking level. An unknown gate is muted,
+  never green: an unverified gate is not a passing one.
+- **The header is printed once**, into scrollback. A bar pinned to the viewport
+  needs the alternate screen, and the alternate screen costs scrollback,
+  selection and the terminal's own search.
+- **The hint row is consequence context** (from Cursor CLI): mode, gate posture,
+  whether the shell is allowed, and what `!!` would repeat — stated where Enter
+  is pressed. Under pressure it drops the keys before the posture, because keys
+  are learned once and the posture changes under you.
+- **The footer is two columns**: lifecycle left, scale right. Clipping drops the
+  right column whole rather than truncating a number into a wrong one.
 
-7. **Resources**
-   - Loaded skills, prompts, checks and policies
-   - Provenance and precedence
-   - Enable/disable/reload actions
+#### A block is a record, not a rendering
 
-### Command palette
+Each block stores command, status, exit code, duration, actor and time. The run
+journal (§Runs and evidence) is its storage: the ledger opens a run before
+dispatch and closes it after, exactly as `bin/harness.mjs` does, so work done in
+the TUI appears in `run list` and `run tree` like any other. Tint, fold, mark,
+re-run and restore are views over that one structure.
 
-The palette is a **searchable index over the command registry**, not a second command grammar. It is the TUI's only command-entry surface.
+- **What persists is the record, never the transcript.** A restored block
+  carries its record line and no output — the same line `harness agent` holds,
+  for the same reason: a transcript is where a pasted credential ends up, and
+  the journal is durable. Output is what a re-run regenerates.
+- **Status is encoded four times** — tint, painted stripe, glyph, and the status
+  word in plain text — because each channel dies in a different terminal. The
+  design asks for two; the rest are free once the record exists.
+- **Tints are pre-composited** for a dark or light ground (`tui.tint`), degrade
+  to greyscale separation at 256 colours, and vanish at the contrast floor. They
+  never carry meaning alone.
 
-**The CLI grammar does not change to accommodate it.** Every flag the CLI accepts today it still accepts; nothing is removed, renamed, or deprecated. The model invokes `harness <command> --flags` through the agent lane and never sees the palette; a person in a shell keeps `--help` and shell completion. The palette exists because the TUI is the one surface with neither.
+#### Views dissolve into commands
 
-**No `--` is ever typed in the TUI.** The index contains options so a capability can be *found*; it must never require one to be *written*. The palette presents **noun + verb**, and the registry maps the verb onto the argv the CLI already accepts:
+There are no screens. `runs` prints the run table, `plan show` renders the plan
+inline, `resources` prints what is loaded — each as a block in the flow. What
+would have been seven views is seven commands that already exist, which is what
+makes "one kernel, one behaviour path" literal rather than aspirational.
+
+Pickers are **ephemeral overlays** that replace the editor and vanish; you never
+live inside one. Overlays are the one place the ledger draws a border, because a
+bordered box is fine as a gesture and wrong as furniture.
+
+#### Verbs interactively, flags for machines
+
+A person types `search lease fencing`; a script or an LLM host passes
+`harness search "lease fencing" --scope code --output json-envelope`. Both reach
+the same registry entry. Defaults live in policy and configuration, never in
+anyone's fingers, and every flag stays available non-interactively.
+
+#### Sigils
+
+| typed | means | governed as |
+|---|---|---|
+| `!npm test` | run through the shell | explicit shell — separately policy-gated, recorded, redacted |
+| `!!` | re-run the previous block | replays that record, appends a new one — never edits history |
+| `!! 5e08c7` | re-run any block by id | same command, same cwd, fresh record |
+| `/` , `/text` | open or filter the palette | registry dispatch, same as the CLI |
+| `@path` | complete a workspace path | fuzzy find, read-only, workspace-confined |
+
+`!!` means **re-run**, not "run privately". Pi's reading — run without telling
+the model — is meaningless here, because the harness never talks to one; the
+shell's own meaning is the useful one, and blocks-as-records make it exact.
+
+#### Keyboard
+
+| tier | keys |
+|---|---|
+| typing | `↵` run · `shift+↵` newline · `!` shell · `!!` re-run · `@` file · `/` palette |
+| navigating | `ctrl+↑` leaves the editor, then `↑↓` walk blocks, `↵` inspects |
+| block | `ctrl+o` fold · `y` copy · `m` mark (persists) · `r` re-run · `t` run tree |
+| overlay | `ctrl+p` palette (`cmd+k` aliased; `ctrl+k` when the line is empty) · `esc esc` run tree · `esc` closes |
+| session | `esc` interrupt · `q` quit from block navigation, printing the tally and resume line |
+
+`ctrl+p` rather than the mock's `ctrl+k`: `ctrl+k` is readline's
+kill-to-end-of-line and taking it costs a reflex every shell user has. It still
+opens the palette when there is nothing to kill, and the chord is configurable.
+
+Block navigation happens **in an overlay** rather than in place. In the main
+buffer a block that has scrolled past the top of the viewport cannot be
+highlighted where it sits, and redrawing it lower would duplicate it in
+scrollback; walking in an ephemeral overlay is the design's own rule for every
+other picker.
+
+#### Command palette
+
+The palette is a **searchable index over the command registry**, not a second
+command grammar. It is the TUI's only command-entry surface.
+
+**The CLI grammar does not change to accommodate it.** Every flag the CLI
+accepts today it still accepts; nothing is removed, renamed, or deprecated. The
+model invokes `harness <command> --flags` through the agent lane and never sees
+the palette; a person in a shell keeps `--help` and shell completion. The
+palette exists because the TUI is the one surface with neither.
+
+**No `--` is ever typed in the TUI.** The index contains options so a capability
+can be *found*; it must never require one to be *written*. The palette presents
+**noun + verb**, and the registry maps the verb onto the argv the CLI already
+accepts:
 
 ```text
 index structural      →  harness index --structural
@@ -444,30 +520,83 @@ learnings why         →  harness learnings --why <id>
 knowledge promote     →  harness knowledge promote --branch <key>
 ```
 
-The left column is the TUI's entire vocabulary. The resolved argv is echoed into the ledger after the run, so the surface stays auditable and the shell form is learned by observation rather than by being typed.
+The left column is the TUI's entire vocabulary. The resolved argv is echoed into
+the ledger as the block's own command row, so the surface stays auditable and
+the shell form is learned by observation rather than by being typed.
 
 Contract:
 
-- **One flat namespace.** Commands, their verbs, and skills are sibling entries — reaching a capability never requires knowing its parent. `structural` resolves without the user knowing it lives under `index`.
-- **Skills are namespaced with `:`.** `/consolidate` is the deterministic command; `/skill:consolidate` is the workflow that calls it. The command owns the bare name; the qualified form is the escape hatch.
-- **Ranking is word-boundary weighted**, not substring. Exact match preselects; declared aliases outrank prefix matches.
-- **Values come from pickers.** A verb needing a value opens a chooser populated from live state (branch keys, learning ids, plan paths) — never a typed flag.
-- **Dependent options are refinements, not entries.** An option valid only alongside another (`--since` requires `--structural`) attaches to its parent verb and is offered after selection, never listed independently.
-- **Every row carries its side-effect class** — `read`, `mutate`, `execute` — so the consequence of a command is visible before it runs. This is possible because the registry already declares it per command.
-- **Availability is explained, not hidden.** A command that cannot currently run stays listed and greyed, carrying its reason (`no plan under docs/plans/`).
-- **Entry points:** `/` at line start, plus a configurable chord defaulting to `Ctrl-P` (`Cmd-K` aliased on macOS). `Ctrl-K` is reserved for readline's kill-to-line-end.
-- **Composer sigils:** `!` runs a shell command and puts its output in context, `!!` runs it privately, `@` completes file paths. No other sigil dispatches.
+- **One flat namespace.** Commands, their verbs, and skills are sibling entries —
+  reaching a capability never requires knowing its parent. `structural` resolves
+  without the user knowing it lives under `index`.
+- **Skills are namespaced with `:`.** `/consolidate` is the deterministic
+  command; `/skill:consolidate` is the workflow that calls it.
+- **Ranking is word-boundary weighted**, not substring. Exact match preselects;
+  declared aliases outrank prefix matches.
+- **Values come from pickers.** A verb needing a value opens a chooser populated
+  from live state (branch keys, learning ids, plan paths) — never a typed flag.
+- **Dependent options are refinements, not entries.**
+- **Every row carries its side-effect class** — `read`, `mutate`, `execute` — so
+  the consequence of a command is visible before it runs. It is the last thing a
+  narrow row gives up; the note is clipped first.
+- **Availability is explained, not hidden.** A command that cannot currently run
+  stays listed, greyed, and selectable, carrying its reason (`no plan under
+  docs/plans/`). Navigation does not skip past it, because the reason is the
+  part that teaches.
+- **Typed prefixes narrow the same flat index** — `run:`, `plan:`, `search:`,
+  `check:`, `res:`, `learn:` — a way to say less, never a way to reach something
+  otherwise unreachable.
+- **Filtering happens inside the overlay**, so a keystroke costs a repaint rather
+  than a round trip.
 
-Common TUI features:
+#### Settings, not opinions
 
-- Multiline editor
-- Keyboard navigation
-- Configurable shortcuts
-- Streaming process output
-- Cancellation
-- Bounded previews
+The things people argue about are configurable (§Configuration and trust). All
+merge by plain precedence — they are taste and accessibility, never authority.
+
+| key | default | what it decides |
+|---|---|---|
+| `tui.density` | `compact` | blank line between blocks |
+| `tui.dividers` | `false` | a rule between blocks instead of relying on the tint |
+| `tui.statusline` | `plan, gate, run, knowledge` | footer items, **in order** |
+| `tui.tint` | `auto` | tint ground: auto-detect, force dark/light, or `off` |
+| `tui.palette_chord` | `ctrl+p` | the chord that opens the palette |
+| `tui.startup` | `context, knowledge, shortcuts` | what the ledger shows on open |
+| `tui.verbosity` | `normal` | `screen-reader` drops the repainting region and the tints |
+| `tui.alt_screen` | `false` | render in the alternate screen (costs scrollback) |
+| `tui.restore` | `8` | prior runs restored from the journal on open |
+
+`tui.statusline` keeps the order it was written in; every other list key is a
+set and is normalised. The order *is* the setting.
+
+#### Accessibility
+
+Both gaps the design named as "must be specified, not discovered later" have
+answers:
+
+- **Screen-reader verbosity** is `tui.verbosity=screen-reader`. A region that
+  repaints on every streamed line is announced on every streamed line, so that
+  mode drops the live region entirely, drops the tints, and states each block's
+  status in words — which the record line already does.
+- **A contrast floor** is `tui.tint=off`. Nothing is painted over the operator's
+  own background, and block state falls back to the stripe, the glyph and the
+  status word — three channels that never depended on the tint.
+
+Status never depends on colour alone at any setting.
+
+#### Common TUI features
+
+- Multiline editor, with display-cell measurement (grapheme clusters and East
+  Asian width), so CJK and emoji neither overflow a rule nor split
+- Keyboard navigation and configurable shortcuts
+- Streaming process output into the running block, with a sticky header naming
+  the command and how to stop it
+- Cancellation from the keyboard during a run — `esc` or `ctrl+c` — which the
+  sticky header promises and raw mode would otherwise swallow
+- Bounded previews and folding
 - Human-readable next actions
-- Existing `ok`, `warn`, `error`, `active`, `blocked`, and `cancelled` visual states rendered through `lib/style.mjs` (the design-system total-coverage rule applies to the TUI)
+- Existing `ok`, `warn`, `error`, `active`, `blocked`, and `cancelled` visual
+  states rendered through `lib/style.mjs`; no TUI-private palette exists
 - ASCII fallback for limited terminals
 
 ## Implementation sequence

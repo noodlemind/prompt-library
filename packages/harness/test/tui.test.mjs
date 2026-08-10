@@ -36,7 +36,10 @@ async function ledger(lines, { workspace = process.cwd(), dispatcher } = {}) {
   const output = new PassThrough();
   let text = '';
   output.on('data', (c) => { text += c.toString(); });
-  const done = runLedger({ input, output, workspace, argv: ['--no-color'], dispatcher });
+  // `--no-events` so the suite does not append to the repository's own run
+  // journal. The ledger opens and closes a real run per command now — that is
+  // the point of blocks being records — and a test run is not history.
+  const done = runLedger({ input, output, workspace, argv: ['--no-color', '--no-events'], dispatcher });
   for (const line of lines) input.write(`${line}\n`);
   input.end();
   await done;
@@ -138,9 +141,15 @@ test('P4bAC7: every palette row resolves to an argv the CLI actually accepts', (
 test('the sigils parse, and `!!` wins over `!`', () => {
   assert.deepEqual(interpretLine('/run'), { kind: 'palette', query: 'run' });
   assert.deepEqual(interpretLine('/'), { kind: 'palette', query: '' });
-  assert.deepEqual(interpretLine('!ls -a'), { kind: 'shell', script: 'ls -a', private: false });
-  assert.deepEqual(interpretLine('!!ls -a'), { kind: 'shell', script: 'ls -a', private: true },
-    'the longer sigil must win, or the private form parses as the public one');
+  assert.deepEqual(interpretLine('!ls -a'), { kind: 'shell', script: 'ls -a' });
+  // `!!` is RE-RUN, not "run privately". The final design mock rejects pi's
+  // reading outright: with no model in the loop there is no context to keep
+  // something out of, so the shell's own meaning is the useful one.
+  assert.deepEqual(interpretLine('!!'), { kind: 'rerun', target: null });
+  assert.deepEqual(interpretLine('!! 5e08c7'), { kind: 'rerun', target: '5e08c7' },
+    'the longer sigil must win, or a re-run parses as a shell command starting with `!`');
+  assert.equal(interpretLine('!! not an id').kind, 'invalid',
+    'anything that is not id-shaped is a mistake worth naming rather than a command worth guessing at');
   assert.deepEqual(interpretLine('@notes.md'), { kind: 'reference', target: 'notes.md' });
   assert.equal(interpretLine('   ').kind, 'empty');
   assert.equal(interpretLine('exit').kind, 'exit');
@@ -161,7 +170,7 @@ test('session words work with or without a leading slash', () => {
   // A real palette filter is still a filter — only reserved words are special.
   assert.deepEqual(interpretLine('/status'), { kind: 'palette', query: 'status' });
   // Shell escape still wins for !clear (even though native clear is preferred).
-  assert.deepEqual(interpretLine('!clear'), { kind: 'shell', script: 'clear', private: false });
+  assert.deepEqual(interpretLine('!clear'), { kind: 'shell', script: 'clear' });
 });
 
 test('tokenize honors quotes but is deliberately not a shell', () => {
@@ -198,8 +207,8 @@ test('P4bAC8: a palette-initiated run echoes the resolved argv into the ledger',
     dispatcher: async (argv) => { calls.push(argv); return 0; },
   });
   assert.ok(calls.length >= 1, 'choosing a row must run something');
-  assert.match(text, /\$ harness status/,
-    'a transcript showing a choice but not the command cannot be replayed or reviewed');
+  assert.match(text, /[>❯] status/,
+    'a transcript showing a choice but not the command cannot be replayed or reviewed — the block carries the resolved argv');
 });
 
 /**
@@ -307,11 +316,22 @@ test('the session renders a visible prompt naming the workspace it acts on', asy
   // that has since been replaced, which is exactly the kind of test that has to
   // be rewritten instead of read — the behaviour is what was ever at stake.
   const { createComposer } = await import('../lib/tui/composer.mjs');
-  const c = createComposer({ width: 60, label: 'prompt-library' });
+  const c = createComposer({ width: 60 });
+  c.setHint('  deliver · gate ok · shell allowed');
   const block = c.render();
-  assert.ok(block.length >= 3, 'the input is a bordered block, not a blank line');
-  assert.match(block.join('\n'), /prompt-library/, 'and it names what a command would act on');
+  assert.ok(block.length >= 3, 'the input is a ruled region, not a blank line');
   assert.match(block.join('\n'), /\u276f/, 'with a caret, so a waiting session never reads as a hung one');
+  // The workspace moved OFF the editor and onto the header and the footer.
+  // Naming it on the editor meant repeating it on every repaint, and the
+  // design gives the editor two rules and nothing else.
+  assert.match(block.join('\n'), /deliver · gate ok/, 'the editor carries consequence, not identity');
+  const { renderFooter } = await import('../lib/tui/chrome.mjs');
+  const { plainUi } = await import('./helpers/tty.mjs');
+  assert.match(
+    renderFooter({ plan: 'x.md', gate: 'pass', run: 'abc123' }, { ui: plainUi(), width: 80 }),
+    /plan x\.md/,
+    'and the footer names what a command would act on',
+  );
 });
 
 // --- palette value collection (the ledger was unusable without this) --------
@@ -343,7 +363,7 @@ test('the ledger collects required values from a palette choice and dispatches',
   assert.equal(calls.length, 1, 'search must run after the query is supplied');
   assert.equal(calls[0][0], 'search');
   assert.ok(calls[0].includes('hello world'), `argv was ${calls[0].join(' ')}`);
-  assert.match(text, /\$ harness search/, 'resolved argv is still echoed into the ledger');
+  assert.match(text, /[>❯] search/, 'resolved argv is still echoed into the ledger');
   assert.equal(text.includes('not available from a piped session'), false,
     'the previous dead-end message must not appear once collection works');
 });
@@ -371,7 +391,7 @@ test('either/or rows like get stop collecting once resolveSelection accepts', as
   assert.ok(calls[0].includes('--path'));
   assert.ok(calls[0].includes('README.md'));
   assert.equal(calls[0].includes('--lines'), false, 'untilResolves must not force every optional field');
-  assert.match(text, /\$ harness get/);
+  assert.match(text, /[>❯] get/);
 });
 
 test('nested tui from the palette is refused rather than hanging on the same stdin', async () => {
@@ -408,11 +428,14 @@ test('clear is a session builtin, not an unknown command', async () => {
   assert.equal(calls.length, 1);
   assert.equal(calls[0][0], 'status');
   assert.equal(text.includes('unknown'), false, 'clear must not dispatch as a harness command');
-  assert.match(text, /session ledger/, 'clear re-prints the banner so the operator knows they are still in the ledger');
+  assert.match(text, /harness/, 'clear re-prints the header so the operator knows they are still in the ledger');
 });
 
 test('empty Enter after the palette restates how to pick a row', async () => {
   const text = await ledger(['/', '', 'exit'], { dispatcher: async () => 0 });
   assert.match(text, /type 1/);
   assert.match(text, /pick a row/);
+  // Piped sessions get the numbered palette: there is no overlay to walk, and
+  // the arrow-key form needs a terminal. The interactive path is covered in
+  // tui-design.test.mjs and tui-repaint.test.mjs.
 });

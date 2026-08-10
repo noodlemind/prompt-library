@@ -75,6 +75,65 @@ const GLYPHS = {
   pending: ['·', '.', 'muted'],
 };
 
+/**
+ * Block tints — the Session Ledger's second channel.
+ *
+ * The design mock carries these as `rgba(…)` over its own `#14171B` ground.
+ * A terminal has no compositor, so they are pre-composited here: the value is
+ * what the browser would have produced, not the overlay that produced it.
+ *
+ * TWO GROUNDS, because a tint is an absolute background once it reaches a
+ * terminal and a dark tint painted across a light profile is unreadable. The
+ * light column is the same overlay recomposited over `#faf9f5`, so the tints
+ * stay the same *relationship* to the ground rather than the same bytes.
+ *
+ * 256-colour keeps only the greyscale separation. The cube has nothing near
+ * these values, and inventing a saturated approximation would say "failed"
+ * louder in 256 than in truecolour. State meaning never rested on the tint
+ * anyway — it is carried by the glyph, the stripe, and the word in the record
+ * line, all three of which survive to no-colour.
+ *
+ * state → { dark: [r,g,b], light: [r,g,b], idx256: n, token }
+ */
+const TINTS = {
+  // `user` is the raised ground a typed command sits on: no state, just "you
+  // said this". White at 3.5% over the mock's ground.
+  user: { dark: [28, 31, 35], light: [244, 243, 239], idx256: 234, token: 'muted' },
+  running: { dark: [27, 33, 40], light: [238, 241, 246], idx256: 236, token: 'info' },
+  ok: { dark: [26, 32, 33], light: [240, 245, 241], idx256: 235, token: 'ok' },
+  failed: { dark: [34, 30, 33], light: [248, 240, 239], idx256: 237, token: 'error' },
+  cancelled: { dark: [24, 26, 30], light: [246, 245, 241], idx256: 233, token: 'muted' },
+  // Overlay chrome. `selected` is the only tint that reads as a cursor rather
+  // than as a state, and it is deliberately the strongest of them: an overlay
+  // is a place you are choosing in, so the choice has to be unmissable.
+  panel: { dark: [23, 27, 32], light: [245, 244, 240], idx256: 234, token: 'muted' },
+  selected: { dark: [33, 41, 50], light: [228, 234, 242], idx256: 238, token: 'info' },
+};
+
+/** The left stripe. Present on every block so the gutter is column-stable;
+ * painted in the state's own token so it reads without the tint behind it. */
+const STRIPE = { unicode: '▌', ascii: '|' };
+
+/**
+ * Which ground the tints are composited against.
+ *
+ * `COLORFGBG` is the only broadly-set signal a terminal gives about its own
+ * background (xterm, rxvt, konsole, and several others export it; the second
+ * field is the background's ANSI index). Absent it, dark is the assumption,
+ * because every terminal-first tool in the surveyed field assumes dark and a
+ * wrong guess here is recoverable with one config line.
+ */
+function detectGround({ env }) {
+  const raw = String(env.COLORFGBG || '');
+  if (!raw) return 'dark';
+  const bg = Number(raw.split(';').pop());
+  if (!Number.isInteger(bg)) return 'dark';
+  // 0-6 and 8 are the dark half of the ANSI 16; 7 and 15 (and the greys above
+  // 250) are the light ones.
+  if (bg === 7 || bg === 15 || bg >= 250) return 'light';
+  return 'dark';
+}
+
 const ASCII_GLYPH_WIDTH = 4; // '[ok]' — the widest twin
 
 const ANSI_RE = /\x1b\[[0-9;]*m/g;
@@ -110,9 +169,15 @@ export function createStyle({
   argv = process.argv.slice(2),
   platform = process.platform,
   redactor,
+  // `auto` composites the tints against whatever ground the terminal admits to;
+  // `off` is the contrast floor, and turns the second channel off entirely so
+  // nothing is painted over the operator's own background.
+  tintMode = 'auto',
 } = {}) {
   const color = detectColor({ stream, env, argv });
   const unicode = detectUnicode({ env, platform, color });
+  const ground = tintMode === 'dark' || tintMode === 'light' ? tintMode : detectGround({ env });
+  const tintsOn = tintMode !== 'off' && color !== 'none';
   // One redactor bound to this renderer's env snapshot (injectable for tests).
   // Applied to every emitted string below so no human-facing surface can leak
   // a secret. redactText never throws and no-ops on secret-free text.
@@ -127,7 +192,16 @@ export function createStyle({
       color === 'truecolor'
         ? `\x1b[38;2;${entry[0][0]};${entry[0][1]};${entry[0][2]}m`
         : `\x1b[38;5;${entry[1]}m`;
-    return `${open}${safe}\x1b[0m`;
+    // CLOSE THE FOREGROUND ONLY (SGR 39), never SGR 0.
+    //
+    // `paint` sets a foreground and nothing else, so resetting everything was
+    // always doing more than it meant to — and once the ledger started painting
+    // block tints it became a visible defect: the first painted fragment in a
+    // tinted row (the stripe, at column 0) closed with `0m` and took the row's
+    // BACKGROUND with it, so a "tinted" block was tinted for exactly one cell.
+    // Caught by asserting the background per cell on a modelled screen; a test
+    // that only grepped for the opening sequence would have passed.
+    return `${open}${safe}\x1b[39m`;
   }
 
   function glyph(state) {
@@ -189,8 +263,61 @@ export function createStyle({
     return text.replace(ANSI_RE, '');
   }
 
-  return { color, unicode, arrow, paint, glyph, line, summary, errorBlock, stripAnsi };
+  /**
+   * Wrap one already-rendered row in a block tint.
+   *
+   * The caller pads to the block width FIRST — a background only reads as a
+   * block if it runs the full width, and this function must not guess at the
+   * width because it cannot see the terminal. Returns the row untouched when
+   * tints are off, which is what makes the contrast floor a one-line change
+   * rather than a second rendering path.
+   */
+  function tintRow(state, paddedRow) {
+    const entry = TINTS[state];
+    if (!entry || !tintsOn) return paddedRow;
+    const open = color === 'truecolor'
+      ? `\x1b[48;2;${entry[ground][0]};${entry[ground][1]};${entry[ground][2]}m`
+      : `\x1b[48;5;${entry.idx256}m`;
+    // Reset at the end of EVERY row, not once at the end of the block: a row is
+    // written with its own newline, and a background left open at a line end is
+    // what makes a terminal paint the rest of the screen.
+    return `${open}${paddedRow}\x1b[0m`;
+  }
+
+  /**
+   * The block's left stripe — the state channel that survives everything.
+   *
+   * It is a painted character, so it reads at 256 colour where the tint has
+   * gone greyscale, and it is still a distinct character at no-colour where
+   * meaning falls back to the glyph and the record line's own word.
+   */
+  function stripe(state) {
+    const entry = TINTS[state];
+    const mark = unicode ? STRIPE.unicode : STRIPE.ascii;
+    if (!entry) return ' ';
+    return paint(entry.token, mark);
+  }
+
+  return {
+    color,
+    unicode,
+    arrow,
+    ground,
+    tints: tintsOn,
+    paint,
+    glyph,
+    line,
+    summary,
+    errorBlock,
+    stripAnsi,
+    tintRow,
+    stripe,
+  };
 }
+
+/** The tint states, exported so a caller cannot invent one the renderer would
+ * silently drop. */
+export const BLOCK_STATES = Object.freeze(Object.keys(TINTS));
 
 /** Fixed key gutter for a set of rows so columns hold across a command. */
 export function keyWidthFor(keys, min = 10) {

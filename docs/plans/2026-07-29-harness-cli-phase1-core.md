@@ -27,7 +27,7 @@ success_criteria:
   - "P2AC1–P2AC7 below all pass via named checks"
   - "P3AC1–P3AC7 below all pass via named checks"
   - "P4aAC1–P4aAC7 below all pass via named checks"
-  - "P4bAC1–P4bAC16 below all pass via named checks"
+  - "P4bAC1–P4bAC20 below all pass via named checks"
   - "P5AC1–P5AC10 below all pass via named checks"
 verification:
   required: [harness-tests, prompt-contracts, build-assets]
@@ -79,6 +79,10 @@ verification:
     P4bAC14: [harness-tests]
     P4bAC15: [harness-tests]
     P4bAC16: [harness-tests]
+    P4bAC17: [harness-tests]
+    P4bAC18: [harness-tests]
+    P4bAC19: [harness-tests]
+    P4bAC20: [harness-tests]
     P5AC1: [harness-tests]
     P5AC2: [harness-tests]
     P5AC3: [harness-tests]
@@ -264,12 +268,16 @@ P4bAC1–AC9 all pass and all did. They are also **not the contract**: not one o
 
 The criteria below encode the contract's own TUI section. They are unchecked, so `harness verify` fails until the surface exists — which is the enforceable version of a note nobody reads.
 
-- [x] **P4bAC10** The composer is a bordered, multiline editor rendered in the main buffer: it repaints in place, keeps scrollback and selection intact above it, and degrades to ASCII box characters on limited terminals.
+- [x] **P4bAC10** The composer is a multiline editor rendered in the main buffer: it repaints in place, keeps scrollback and selection intact above it, and degrades to ASCII on limited terminals. **Amended 2026-08-10:** the original wording said *bordered*, and a four-sided rounded box was built to satisfy it. The approved design says two hairlines and tints rather than borders; the criterion was written from the phase list, not from the design, and it is the wording that was wrong. It now reads as the design does, and `tui-design.test.mjs` fails if a vertical or a corner reappears.
 - [x] **P4bAC11** Keyboard navigation works — arrow keys move the cursor, up/down recall history at the buffer edges, and no key press can put a control sequence into the dispatched line.
 - [x] **P4bAC12** A status line reports the workspace, branch, and the session's gate/plan state, and updates as commands change it.
-- [ ] **P4bAC13** The palette opens from `/` at line start AND from a chord (`Ctrl-P`, `Cmd-K` aliased on macOS), and is navigable by arrow keys, not only by typing a number.
-- [ ] **P4bAC14** `@` completes workspace file paths against live state, per the contract's composer-sigil list.
-- [ ] **P4bAC15** The seven views the contract names — overview, search, plans, checks, runs, events, resources — are each reachable and render through `lib/style.mjs`.
+- [x] **P4bAC13** The palette opens from `/` at line start AND from a chord (`Ctrl-P`, `Cmd-K` aliased on macOS, configurable via `tui.palette_chord`), and is navigable by arrow keys as an ephemeral overlay rather than by typing a number. The numbered form remains for piped sessions, which have no overlay to walk.
+- [x] **P4bAC14** `@` completes workspace file paths against live state, workspace-confined through `safeResolveUnderRoot`, per the contract's composer-sigil list.
+- [x] **P4bAC15** **Restated 2026-08-10, and this is a correction of the criterion rather than a claim against it.** The design's own words are *views dissolve into commands that print blocks* — `runs` prints the run table, `plan show` renders the plan inline, `resources` prints what is loaded. Reading "seven views" as seven screens was a misreading of the direction the whole phase was reopened over, and building them would have added the panel chrome the design exists to avoid. What is required and delivered: each of the seven concerns is reachable as a command that prints a block, and every block renders through `lib/style.mjs`.
+- [x] **P4bAC17** A block is a journal record. Every command run in the ledger opens and closes a run in `runs.jsonl`, so TUI work appears in `run list` and `run tree`; a session restores prior records on open, and `!!` / `!! <id>` replay one by appending a new record rather than editing the one replayed.
+- [x] **P4bAC18** The persistent chrome is a two-hairline editor tinted by gate state, a consequence hint row, and a two-column footer — and nothing else. The header is printed once into scrollback.
+- [x] **P4bAC19** Block state is carried by tint, painted stripe, glyph and the status word, and never by colour alone. `tui.tint=off` is the contrast floor; `tui.verbosity=screen-reader` is the screen-reader answer. Both gaps the design named as "specify in 4b, do not discover later" are specified.
+- [x] **P4bAC20** Every measurement is in display cells — grapheme clusters plus East Asian width — so CJK, combining marks and ZWJ emoji neither overflow a rule nor split.
 - [x] **P4bAC16** The composer's state machine is testable without a terminal: keypress in, state and rendered lines out. The previous suite could not see any of this because the injected stream seam replaced the terminal, which is what let a broken interactive surface pass nine criteria.
 
 ### Why the settled design makes this smaller than it looks
@@ -278,12 +286,16 @@ The Session Ledger direction — a scrolling transcript in the terminal's MAIN b
 
 ### Phase 4b workstreams
 
-- [~] **P4b.1** The ledger shell: the session loop, the editor, the status line, and the exit ritual. *(Session loop and exit ritual shipped. The "editor" was a single-line readline with `terminal: false`, and the status line was never built at all — marked complete in error; see the reopening note above.)*
+- [x] **P4b.1** The ledger shell: the session loop, the editor, the status line, and the exit ritual. *(Session loop and exit ritual shipped in P4b.1. The "editor" was then a single-line readline with `terminal: false` and the status line was never built — marked complete in error. Rebuilt 2026-08-10 as the two-hairline composer, hint row and two-column footer the design specifies.)*
 - [x] **P4b.6** The composer: bordered, multiline, repainting in place, with keyboard navigation and history (P4bAC10, P4bAC11, P4bAC16).
 - [x] **P4b.7** The status line (P4bAC12).
-- [ ] **P4b.8** Palette chord entry and arrow-key navigation (P4bAC13).
-- [ ] **P4b.9** `@` file completion (P4bAC14).
-- [ ] **P4b.10** The seven views (P4bAC15).
+- [x] **P4b.8** Palette chord entry and arrow-key overlay navigation (P4bAC13).
+- [x] **P4b.9** `@` file completion (P4bAC14).
+- [x] **P4b.10** Views as commands that print blocks (P4bAC15).
+- [x] **P4b.11** The block model over the run journal: record line, tint, stripe, fold, tally, marks, re-run, restore (P4bAC17).
+- [x] **P4b.12** The chrome: header, two-hairline editor, hint row, two-column footer (P4bAC18).
+- [x] **P4b.13** Accessibility and configuration: contrast floor, screen-reader verbosity, density, statusline order, alt-screen, restore depth (P4bAC19).
+- [x] **P4b.14** Cell-accurate measurement (P4bAC20).
 - [x] **P4b.2** The palette overlay over the Phase 2 command index, with deterministic ranking (P4bAC6, P4bAC9).
 - [x] **P4b.3** Dispatch through the registry with streaming and cancellation (P4bAC1, P4bAC3, P4bAC5, P4bAC8).
 - [x] **P4b.4** Rendering through `lib/style.mjs` with the ASCII fallback (P4bAC4).
@@ -546,6 +558,22 @@ This is not a side issue; it is the mechanism behind the phase-4b reopening. Nin
 **What it confirms does not:** palette rows WRAP instead of clipping, so long descriptions spill across lines and the overlay reads as a wall of text next to the reference implementations; the palette is a flat numbered list rather than a bordered, arrow-navigable overlay; and `@` and the seven views are absent.
 
 **Decision: the remainder moves to its own PR.** P4bAC13 (arrow-key palette navigation), P4bAC14 (`@` completion) and P4bAC15 (the seven views) stay unchecked here, and this PR ships Phase 4b as explicitly partial rather than claiming otherwise. The four criteria that ARE met — composer, keyboard navigation, status line, terminal-free testability — are done and pinned.
+
+### Closed 2026-08-10 — the follow-up PR, and what it found
+
+The remainder shipped, and reopening the phase against the design rather than the phase list turned up more than the three deferred criteria.
+
+**The surface did not match the design at all.** P4bAC10 had been marked complete by a four-sided rounded box; the approved direction is two hairlines with tints rather than borders, and four dashboard-styled variants had been rejected before the research round that settled it. Nothing in the criteria described the surface, so nothing failed. The deeper miss was structural: commands printed through `console.log` with the composer suspended, so output was undifferentiated text — no block, no record line, no tally, nothing addressable — and nothing done in the ledger reached the run journal at all. `!!`, marks, fold, re-run and restore are all consequences of the block being a record, and none of them could exist.
+
+**Three defects were found by looking at a real screen**, and none of them could have been found any other way:
+
+- *The tint covered one cell.* `lib/style.mjs#paint` closed every coloured fragment with SGR 0, which resets the background as well as the foreground. The first painted thing in a block row is the stripe, at column 0 — so a tinted block was tinted for exactly one cell and the rest of the row fell back to the terminal's ground. Every string-level assertion passed: the opening `48;2;…` was there, the width was right, the closing reset was there. Fixed by closing with SGR 39.
+- *Cancellation stopped working.* Capturing stdout means the region stays on screen and raw mode has to stay on for the whole dispatch — and in raw mode Ctrl-C is a keypress, which the handler dropped whenever no `next()` was pending. That is exactly the window a command runs in. The old fix (drop raw mode during dispatch) was no longer available, so the interrupt is handled in the binding instead, which also makes `esc` cancel as the sticky header promises.
+- *The region drew itself into the block it was drawing.* `capture` replaces `output.write`; `paint` used `output.write` too, so every live repaint became part of the running command's output and was committed to scrollback as if the command had printed it.
+
+**Verified on a real pty**, driven through `pty.fork` and replayed through `pyte` — a third-party VT emulator — so the rendering could not be flattered by the code that produced it. pyte reports 112 of 112 cells tinted on every block row, `#1a2021` for succeeded and `#221e21` for failed, matching the mock's palette, and no tint anywhere else. The screen model in `test/helpers/tty.mjs` reproduces the same assertions in CI, where no pty is available.
+
+**`test/tui-design.test.mjs` is the durable part.** Thirty assertions, each naming the design commitment it protects in the design's own words. A future change that wants a box back has to delete a test that says why there isn't one.
 
 **Method worth reusing.** A pty in a throwaway Linux container, plus an independent VT emulator, turns "does the terminal surface work" from a question only a human with a screenshot can answer into one that can be answered on demand. That capability did not exist when P4bAC1–AC9 were written, which is a large part of why they measured the plumbing instead.
 

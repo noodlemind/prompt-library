@@ -5,11 +5,15 @@
  * understood is a pure function here, so the whole grammar is testable without
  * a pty. The interactive module does I/O and nothing else.
  *
- * THE SIGILS ARE `/`, `!`, `!!`, `@`, settled from the eight-CLI survey. The
- * `!`/`!!` split — output in context vs. output kept out of it — is pi's, and
- * is better than the single `!` four other tools ship, because the reason to
- * shell out is often exactly that you do NOT want the result in the model's
- * context.
+ * THE SIGILS ARE `/`, `!`, `!!`, `@`.
+ *
+ * `!!` MEANS RE-RUN, not "run privately". Phase 4b took pi's meaning — run
+ * without telling the model — and the final design mock rejects it in as many
+ * words: pi's reading is meaningless here, because the harness never talks to a
+ * model, so there is no context to keep something out of. The shell's own
+ * meaning is the useful one, and blocks-as-records make it exact: `!!` replays
+ * the previous block's argv, `!! 5e08c7` replays any block by id, and each
+ * appends a NEW record rather than editing the one it replayed.
  */
 
 /** Split a command line into argv, honoring single and double quotes so a
@@ -107,13 +111,24 @@ export function interpretLine(rawLine) {
     return { kind: SESSION_WORDS[sessionKey] };
   }
 
-  // `!!` before `!`: the longer sigil has to win, or the private form would
-  // parse as the public one with a `!` in the script.
+  // `!!` before `!`: the longer sigil has to win, or a re-run would parse as a
+  // shell command whose script starts with `!`.
   if (line.startsWith('!!')) {
-    return { kind: 'shell', script: line.slice(2).trim(), private: true };
+    const target = line.slice(2).trim();
+    // A bare `!!` repeats the last block. An argument is a block id — the same
+    // id `run tree` and `run resume` take, which is the point of blocks being
+    // records. Anything that is not id-shaped is a mistake worth naming rather
+    // than a command worth guessing at.
+    if (!target) return { kind: 'rerun', target: null };
+    if (/^[0-9a-z]{4,}$/i.test(target)) return { kind: 'rerun', target };
+    return {
+      kind: 'invalid',
+      reason: `!! re-runs a block, and ${JSON.stringify(target)} is not a block id`,
+      hint: 'use !! on its own for the last block, or !! <id> from the record line',
+    };
   }
   if (line.startsWith('!')) {
-    return { kind: 'shell', script: line.slice(1).trim(), private: false };
+    return { kind: 'shell', script: line.slice(1).trim() };
   }
 
   if (line.startsWith('/')) {

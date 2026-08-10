@@ -1,0 +1,411 @@
+/**
+ * The Session Ledger's design contract, as executable assertions.
+ *
+ * WHY THIS FILE IS THE POINT. Phase 4b shipped a four-sided rounded box while
+ * the approved design said "two hairlines, tints rather than borders", and nine
+ * acceptance criteria stayed green through it — because not one of them
+ * described the surface. The criteria had been derived from a phase list and
+ * never reconciled against the design, so "all tests pass" and "the design was
+ * built" were unrelated statements.
+ *
+ * Every assertion below names the commitment it protects, in the design's own
+ * words. If a future change wants a box back, it has to delete a test that says
+ * why there isn't one.
+ *
+ * Source of record: the approved mock (§7 "What this commits the build to"),
+ * `~/.gstack/projects/noodlemind-prompt-library/designs/harness-tui-20260731/`
+ * (`approved.json`, `research.md`), and §Interactive TUI of
+ * `docs/architecture/harness-cli-workbench.md`.
+ */
+import assert from 'node:assert/strict';
+import { test } from 'node:test';
+import { createComposer } from '../lib/tui/composer.mjs';
+import { createBlock, renderBlock, foldState, formatDuration, recordSegments } from '../lib/tui/block.mjs';
+import { renderHeader, renderHint, renderFooter, twoColumn } from '../lib/tui/chrome.mjs';
+import { createOverlay, renderOverlay, splitPrefix, applyPrefix } from '../lib/tui/overlay.mjs';
+import { createStyle } from '../lib/style.mjs';
+import { displayWidth } from '../lib/tui/width.mjs';
+import { plainUi } from './helpers/tty.mjs';
+
+const ui = plainUi();
+const ascii = plainUi({ unicode: false });
+
+// ── "the persistent chrome is a two-hairline editor" ────────────────────
+
+test('DESIGN: the composer is two hairlines — no verticals, no corners', () => {
+  const composer = createComposer({ width: 40 });
+  const rows = composer.render();
+
+  assert.equal(rows.length, 3, 'a rule, the input line, a rule — nothing else');
+  assert.match(rows[0], /^─+$/, 'the top is a plain rule spanning the width');
+  assert.match(rows[2], /^─+$/, 'and so is the bottom');
+  assert.equal(displayWidth(rows[0]), 40, 'the rule spans the full width');
+
+  const box = /[│|╭╮╰╯┌┐└┘]/;
+  for (const row of rows) {
+    assert.doesNotMatch(row, box,
+      `"${row}" contains box drawing — the design rejected panel chrome in terminals, and four dashboard variants were rejected before the research round that settled this`);
+  }
+});
+
+test('DESIGN: the hairlines carry the gate state, which is a channel and not decoration', () => {
+  const painted = [];
+  const composer = createComposer({
+    width: 20,
+    paint: (token, text) => { painted.push(token); return text; },
+  });
+  composer.setGate('blocked');
+  composer.render();
+  assert.ok(painted.includes('warn'), 'a blocked gate paints the rules warn');
+
+  painted.length = 0;
+  composer.setGate('pass');
+  composer.render();
+  assert.ok(painted.includes('ok'), 'a passing gate paints them ok');
+
+  painted.length = 0;
+  composer.setGate(null);
+  composer.render();
+  assert.ok(painted.includes('muted') && !painted.includes('ok'),
+    'an UNKNOWN gate is muted, never green — an unverified gate is not a passing one');
+});
+
+test('DESIGN: the ASCII twin is still two rules', () => {
+  const rows = createComposer({ width: 24, ascii: true }).render();
+  assert.match(rows[0], /^-+$/);
+  assert.match(rows[2], /^-+$/);
+  assert.match(rows[1], /^> /, 'and the caret degrades to `>`');
+});
+
+// ── "a block is a record, not a rendering" ──────────────────────────────
+
+test('DESIGN: a block renders four parts — command, record line, output, tally', () => {
+  const block = createBlock({
+    command: 'checks run build-assets',
+    status: 'failed',
+    exit: 6,
+    durationMs: 12_000,
+    actor: 'you',
+    startedAt: '2026-08-10T14:07:03Z',
+    lines: ['✗ E_ASSET_BUILD', '  asset manifest references a retired skill wrapper'],
+    tally: '1 err → exit 6',
+    next: 'patch fix-manifest.patch',
+  });
+  const rows = renderBlock(block, { ui, width: 78 });
+  const text = rows.join('\n');
+
+  assert.match(text, /❯ checks run build-assets/, 'the command, verbatim');
+  assert.match(text, /failed · exit 6 · 0m12s · actor you/, 'the journal entry made visible');
+  assert.match(text, /E_ASSET_BUILD/, 'the output');
+  assert.match(text, /1 err → exit 6 → patch fix-manifest\.patch/, 'the tally and the one action that follows');
+});
+
+test('DESIGN: failure is encoded more than once, so it survives ASCII and a screenshot', () => {
+  const block = createBlock({ command: 'verify', status: 'failed', exit: 1, lines: ['[x] E_FAILED'] });
+
+  // Channel 1: the painted stripe, present at any colour depth.
+  const stripes = [];
+  const stripeUi = { ...ascii, stripe: (state) => { stripes.push(state); return '|'; } };
+  renderBlock(block, { ui: stripeUi, width: 60 });
+  assert.deepEqual([...new Set(stripes)], ['failed'], 'every row carries the failed stripe');
+
+  // Channel 2: the word, in plain text, with no colour at all.
+  const rows = renderBlock(block, { ui: ascii, width: 60 });
+  assert.match(rows.join('\n'), /\bfailed\b/,
+    'the status word is text — it survives a screen reader, a screenshot and a monochrome terminal');
+});
+
+test('DESIGN: the record line omits what it does not know rather than saying "unknown"', () => {
+  const segments = recordSegments(createBlock({ status: 'ok', exit: null, durationMs: null, actor: null, startedAt: 'not-a-date' }));
+  assert.deepEqual(segments.map((s) => s.text), ['ok'],
+    'a row that says `exit —` invites the reader to wonder what broke in the lookup');
+});
+
+test('DESIGN: `failed` is muted while `ok` is green — colour goes where attention is owed', () => {
+  const failed = recordSegments(createBlock({ status: 'failed' }))[0];
+  const ok = recordSegments(createBlock({ status: 'ok' }))[0];
+  assert.equal(failed.token, 'muted',
+    'a failed block already carries a red tint, a red stripe and a red glyph; a fourth red thing is louder, not clearer');
+  assert.equal(ok.token, 'ok');
+});
+
+test('DESIGN: long output folds, and ctrl+o is an answer to the heuristic rather than a re-run of it', () => {
+  const long = createBlock({ command: 'verify', status: 'ok', lines: Array.from({ length: 40 }, (_, i) => `row ${i}`) });
+  assert.equal(foldState(long).folded, true, 'past the threshold a block folds by default');
+  assert.match(renderBlock(long, { ui, width: 60 }).join('\n'), /… 34 more lines \(ctrl\+o\)/);
+
+  long.folded = false;
+  assert.equal(foldState(long).folded, false, 'an explicit unfold beats the threshold');
+  const short = createBlock({ command: 'x', status: 'ok', lines: ['one'] });
+  short.folded = true;
+  assert.equal(foldState(short).folded, false, 'and folding cannot hide a block shorter than the head');
+});
+
+test('DESIGN: a tinted row spans the full width, or it is a highlight on text rather than a block', () => {
+  const tinted = createStyle({
+    stream: { isTTY: true }, env: { COLORTERM: 'truecolor', LANG: 'en_US.UTF-8' }, argv: [], platform: 'darwin',
+  });
+  const rows = renderBlock(createBlock({ command: 'ok', status: 'ok', lines: [] }), { ui: tinted, width: 50 });
+  for (const row of rows) {
+    assert.match(row, /^\x1b\[48;2;/, 'each row opens its own background');
+    assert.match(row, /\x1b\[0m$/, 'and closes it — a background left open at a line end paints the rest of the screen');
+    assert.equal(displayWidth(row), 50, 'padded to the full width');
+  }
+});
+
+test('DESIGN: the contrast floor turns the tint off and keeps every other channel', () => {
+  const floor = createStyle({
+    stream: { isTTY: true }, env: { COLORTERM: 'truecolor', LANG: 'en_US.UTF-8' }, argv: [], platform: 'darwin',
+    tintMode: 'off',
+  });
+  assert.equal(floor.tints, false);
+  const rows = renderBlock(createBlock({ command: 'verify', status: 'failed', exit: 1 }), { ui: floor, width: 50 });
+  const text = rows.join('\n');
+  assert.doesNotMatch(text, /\x1b\[48;/, 'nothing is painted over the operator’s own background');
+  assert.match(floor.stripAnsi(text), /▌/, 'the stripe stays');
+  assert.match(floor.stripAnsi(text), /\bfailed\b/, 'and so does the word');
+});
+
+test('DESIGN: 256-colour keeps greyscale separation instead of inventing a saturated approximation', () => {
+  const c256 = createStyle({
+    stream: { isTTY: true }, env: { TERM: 'xterm-256color', LANG: 'en_US.UTF-8' }, argv: [], platform: 'darwin',
+  });
+  const row = renderBlock(createBlock({ command: 'x', status: 'failed' }), { ui: c256, width: 40 })[0];
+  assert.match(row, /\x1b\[48;5;\d+m/, 'a 256-colour background');
+  assert.doesNotMatch(row, /\x1b\[48;2;/, 'never a truecolour one the terminal did not declare');
+});
+
+// ── chrome: header once, hint and footer persistent ─────────────────────
+
+test('DESIGN: the header is two rows printed once, not a bar pinned to the viewport', () => {
+  const rows = renderHeader({
+    ui, width: 100, workspace: '~/repo', branch: 'main', commit: '9f2c1e4', version: '2.0.0',
+    plan: 'phase1-core.md', gate: 'blocked',
+  });
+  assert.equal(rows.length, 2, 'the header and one blank — a pinned bar would need the alternate screen');
+  assert.match(rows[0], /~\/repo/);
+  assert.match(rows[0], /main @ 9f2c1e4/);
+  assert.match(rows[0], /harness 2\.0\.0/);
+  assert.match(rows[0], /plan phase1-core\.md/);
+  assert.match(rows[0], /gate/);
+});
+
+test('DESIGN: the hint row states consequence at the point of action', () => {
+  const row = renderHint({ ui, width: 120, mode: 'deliver', gate: 'pass', shell: 'allowed', rerun: 'verify' });
+  assert.match(row, /deliver/, 'the mode');
+  assert.match(row, /gate ok/, 'the posture');
+  assert.match(row, /shell allowed/, 'and whether the shell is available');
+  assert.match(row, /!! re-runs verify/, 'what !! would repeat');
+  assert.match(row, /↵ run/, 'and what Enter does');
+});
+
+test('DESIGN: the hint drops keys before it drops posture — posture is what changes', () => {
+  const narrow = renderHint({ ui, width: 44, gate: 'blocked', shell: 'denied' });
+  assert.match(narrow, /gate blocked/);
+  assert.match(narrow, /shell denied/);
+  assert.doesNotMatch(narrow, /interrupt/, 'the keys are learned once; the posture changes under you');
+  assert.ok(displayWidth(narrow) <= 44);
+});
+
+test('DESIGN: the footer is two columns and drops the right one first', () => {
+  const snapshot = { plan: 'phase1-core', planLocked: true, gate: 'pass', run: '9a12f4', runStatus: 'ok', tests: '930 tests', learnings: '34 learnings', generation: '8c31f0' };
+  const wide = renderFooter(snapshot, { ui, width: 120 });
+  assert.match(wide, /plan phase1-core/);
+  assert.match(wide, /gate ok/);
+  assert.match(wide, /930 tests/);
+  assert.match(wide, /gen 8c31f0/);
+
+  const narrow = renderFooter(snapshot, { ui, width: 44 });
+  assert.match(narrow, /plan phase1-core/, 'lifecycle survives');
+  assert.doesNotMatch(narrow, /930 tests/, 'scale is dropped whole rather than truncated into a wrong number');
+});
+
+test('DESIGN: the footer order is the setting, not an accident', () => {
+  const snapshot = { plan: 'p', gate: 'pass', run: 'r' };
+  const gateFirst = renderFooter(snapshot, { ui, width: 120, items: ['gate', 'plan', 'run'] });
+  assert.ok(gateFirst.indexOf('gate') < gateFirst.indexOf('plan p'));
+});
+
+test('DESIGN: two columns never collide, and the right one is never half-printed', () => {
+  const row = twoColumn('left'.padEnd(30), 'right-hand-side', 40);
+  assert.ok(displayWidth(row) <= 40);
+  assert.ok(!row.includes('right-hand-side') || displayWidth(row) <= 40);
+});
+
+// ── overlays: summoned, never resident ──────────────────────────────────
+
+test('DESIGN: an overlay is arrow-navigable — the palette is not a numbered menu', () => {
+  const overlay = createOverlay({
+    rows: [{ label: 'a' }, { label: 'b' }, { label: 'c' }],
+    footer: 'esc closes',
+  });
+  assert.equal(overlay.selected.label, 'a');
+  overlay.handleKey(null, { name: 'down' });
+  assert.equal(overlay.selected.label, 'b', '↑↓ walk the rows (P4bAC13)');
+  overlay.handleKey(null, { name: 'up' });
+  overlay.handleKey(null, { name: 'up' });
+  assert.equal(overlay.selected.label, 'c', 'and wrap');
+  assert.equal(overlay.handleKey(null, { name: 'return' }).intent, 'choose');
+  assert.equal(overlay.handleKey(null, { name: 'escape' }).intent, 'close');
+});
+
+test('DESIGN: an unavailable row stays listed, selectable, and carries its reason', () => {
+  const overlay = createOverlay({
+    rows: [{ label: 'gate', unavailable: 'no plan under docs/plans/' }, { label: 'verify' }],
+  });
+  const rows = renderOverlay(overlay, { ui, width: 80 });
+  assert.match(rows.join('\n'), /no plan under docs\/plans\//,
+    'a capability that silently disappears teaches that it does not exist');
+  overlay.handleKey(null, { name: 'down' });
+  assert.equal(overlay.selected.label, 'verify', 'navigation does not skip past the reason');
+});
+
+test('DESIGN: every palette row shows its side-effect class before it runs', () => {
+  const overlay = createOverlay({ rows: [{ label: 'bash', sideEffect: 'execute' }] });
+  assert.match(renderOverlay(overlay, { ui, width: 80 }).join('\n'), /execute/,
+    'the registry declares it per command, so the consequence is visible before the choice');
+});
+
+test('DESIGN: typed prefixes narrow one flat namespace rather than adding a grammar', () => {
+  assert.deepEqual(splitPrefix('run:resume'), { prefix: 'run', rest: 'resume' });
+  assert.deepEqual(splitPrefix('docs/a:b'), { prefix: null, rest: 'docs/a:b' },
+    'a colon that is not a declared namespace is left alone');
+  const rows = [{ noun: 'run', label: 'run list' }, { noun: 'search', label: 'search' }];
+  assert.deepEqual(applyPrefix(rows, 'run').map((r) => r.label), ['run list']);
+  assert.equal(applyPrefix(rows, null).length, 2);
+});
+
+test('DESIGN: an action overlay takes keys as commands and never as filter text', () => {
+  const overlay = createOverlay({
+    rows: [{ label: 'verify', block: { id: 'abc' } }],
+    actions: { y: 'copy', m: 'mark', r: 'rerun' },
+  });
+  const result = overlay.handleKey('r', { name: 'r' });
+  assert.equal(result.intent, 'action');
+  assert.equal(result.action, 'rerun');
+  assert.equal(overlay.query, '', 'a surface cannot decide whether `r` meant re-run or the letter r, so it never guesses');
+});
+
+test('DESIGN: filtering happens inside the overlay, so a keystroke costs a repaint and not a round trip', () => {
+  const calls = [];
+  const overlay = createOverlay({
+    rows: [{ label: 'a' }],
+    filter: (q) => { calls.push(q); return [{ label: q }]; },
+  });
+  overlay.handleKey('x', { name: 'x' });
+  assert.deepEqual(calls, ['x']);
+  assert.equal(overlay.selected.label, 'x');
+});
+
+// ── measurement ─────────────────────────────────────────────────────────
+
+test('DESIGN: width is measured in cells, so CJK and emoji do not break the rules', () => {
+  assert.equal(displayWidth('日本語'), 6, 'wide characters take two cells each');
+  assert.equal(displayWidth('é'), 1, 'a combining mark takes none');
+  assert.equal(displayWidth('👩‍💻'), 2, 'a ZWJ sequence is one glyph');
+  assert.equal(displayWidth('\x1b[31mred\x1b[0m'), 3, 'colour is not content');
+});
+
+test('DESIGN: a composer holding wide text still draws a full-width rule', () => {
+  const composer = createComposer({ width: 30 });
+  for (const ch of '日本語です') composer.handleKey(ch, { name: ch });
+  const rows = composer.render();
+  assert.equal(displayWidth(rows[0]), 30);
+  assert.equal(displayWidth(rows[rows.length - 1]), 30,
+    'the previous version measured code points, so this rule came out short by one cell per wide character');
+});
+
+test('DESIGN: the cursor is placed in cells, not in code points', () => {
+  const composer = createComposer({ width: 40 });
+  for (const ch of '日本') composer.handleKey(ch, { name: ch });
+  assert.equal(composer.cursor.col, 2 + 4, 'caret gutter plus four cells for two wide characters');
+});
+
+test('DESIGN: duration reads as elapsed time, not as a clock', () => {
+  assert.equal(formatDuration(12_000), '0m12s');
+  assert.equal(formatDuration(161_000), '2m41s');
+  assert.equal(formatDuration(4_380_000), '73m00s', 'minutes never roll into hours you have to subtract');
+  assert.equal(formatDuration(null), null);
+});
+
+
+// ── the whole region, drawn onto a modelled screen ──────────────────────
+
+test('DESIGN: a session paints header, blocks, editor, hint and footer, in that order', async () => {
+  // The closest a pty-less suite gets to a screenshot. `helpers/tty.mjs` models
+  // the cursor and the SGR state, so this asserts what is ON SCREEN rather than
+  // which bytes were written — the distinction the phase-4b reopening turned on.
+  const { createInput } = await import('../lib/tui/input.mjs');
+  const { PassThrough } = await import('node:stream');
+  const { fakeTty } = await import('./helpers/tty.mjs');
+  const { createStyle } = await import('../lib/style.mjs');
+
+  const styled = createStyle({
+    stream: { isTTY: true }, env: { COLORTERM: 'truecolor', LANG: 'en_US.UTF-8' }, argv: [], platform: 'darwin',
+  });
+  const output = fakeTty({ columns: 90 });
+  const input = Object.assign(new PassThrough(), { isTTY: true, setRawMode() {} });
+  const session = createInput({ input, output, ui: styled });
+
+  session.commit(renderHeader({ ui: styled, width: 90, workspace: '~/repo', branch: 'main', version: '0.5.0' }));
+  session.commit(renderBlock(
+    createBlock({ command: 'verify', status: 'failed', exit: 1, durationMs: 2000, lines: ['E_CHECK'], tally: '1 err' }),
+    { ui: styled, width: 90 },
+  ));
+  session.setStatus({ plan: 'phase1.md', gate: 'blocked', run: 'abc123', runStatus: 'failed' });
+
+  const lines = output.lines;
+  const at = (needle) => lines.findIndex((l) => styled.stripAnsi(l).includes(needle));
+  assert.equal(at('~/repo'), 0, 'the header is printed once, at the top');
+  assert.ok(at('verify') > at('~/repo'), 'blocks follow it');
+  assert.ok(at('failed · exit 1') > at('verify'), 'each block carries its record line');
+  const editorAt = lines.findIndex((l) => /^─{10,}$/.test(styled.stripAnsi(l)));
+  assert.ok(editorAt > at('1 err'), 'the editor sits below every committed block');
+  assert.ok(at('gate blocked') > editorAt, 'the hint and footer sit below the editor');
+
+  // The colour channel, read back off the modelled screen rather than off the
+  // string that produced it.
+  const blockRow = at('verify');
+  assert.deepEqual(output.backgroundsAt(blockRow), ['48;2;34;30;33'],
+    'the failed block is tinted, and tinted with the failed colour');
+  assert.deepEqual(output.backgroundsAt(0), [null], 'the header is not');
+  session.close();
+});
+
+test('DESIGN: the tint covers every cell of a block row, not just the first one', async () => {
+  // THE BUG THIS PINS. `paint` closed every coloured fragment with SGR 0, which
+  // resets the background as well as the foreground. The first painted thing in
+  // a block row is the stripe, at column 0 — so a "tinted" block was tinted for
+  // exactly one cell and the rest of the row fell back to the terminal's own
+  // ground. Every string-level assertion passed: the opening `48;2;…` was
+  // present, the row was the right width, and the closing `0m` was there.
+  // Only a per-cell reading of a modelled screen could see it.
+  const { createInput } = await import('../lib/tui/input.mjs');
+  const { PassThrough } = await import('node:stream');
+  const { fakeTty } = await import('./helpers/tty.mjs');
+  const { createStyle } = await import('../lib/style.mjs');
+
+  const styled = createStyle({
+    stream: { isTTY: true }, env: { COLORTERM: 'truecolor', LANG: 'en_US.UTF-8' }, argv: [], platform: 'darwin',
+  });
+  const columns = 70;
+  const output = fakeTty({ columns });
+  const input = Object.assign(new PassThrough(), { isTTY: true, setRawMode() {} });
+  const session = createInput({ input, output, ui: styled });
+
+  session.commit(renderBlock(
+    createBlock({ command: 'verify', status: 'ok', exit: 0, lines: ['one', 'two'], tally: '2 ok' }),
+    { ui: styled, width: columns },
+  ));
+
+  const rows = output.lines
+    .map((_, i) => i)
+    .filter((i) => ['verify', 'one', 'two', '2 ok'].some((needle) => styled.stripAnsi(output.lines[i]).includes(needle)));
+  assert.ok(rows.length >= 2, 'the block reached the screen');
+  for (const row of rows) {
+    const backgrounds = output.backgroundsAt(row);
+    assert.deepEqual(backgrounds, ['48;2;26;32;33'],
+      `row ${row} has a gap in its tint: ${JSON.stringify(backgrounds)} — a fragment closed with SGR 0 instead of SGR 39`);
+  }
+  session.close();
+});

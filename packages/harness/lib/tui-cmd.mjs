@@ -2,38 +2,51 @@
  * `harness tui` — the Session Ledger.
  *
  * A SCROLLING TRANSCRIPT IN THE TERMINAL'S MAIN BUFFER, not an alt-screen app.
- * That is the settled design direction and it is doing real work: scrollback,
- * text selection, and the terminal's own search keep working because they were
- * never taken away (P4bAC2). Every alt-screen TUI has to re-implement those
- * three badly; this one declines to.
+ * Scrollback, text selection and the terminal's own search keep working because
+ * they were never taken away. Every alt-screen TUI re-implements those three
+ * badly; this one declines to, and offers `tui.alt_screen` for the minority who
+ * want the trade the other way.
  *
- * Which makes the shell a read-dispatch-print loop. Every operation goes
- * through the SAME registry `bin/harness.mjs` dispatches to (P4bAC1) — there is
- * no second behavior path and nothing shells out to the CLI, so a command
- * cannot behave one way here and another way there.
+ * EVERY COMMAND PRINTS A BLOCK, and a block is a journal record. That sentence
+ * is the whole design and it is what phase 4b did not build: commands printed
+ * through `console.log` with the composer suspended, so output arrived as
+ * undifferentiated text that could not be tinted, folded, marked, re-run or
+ * restored, and nothing a person did inside the ledger reached `run list`. Here
+ * a dispatch opens a run, streams its output into a block, closes the run with
+ * a real status, and commits the rendered block to scrollback.
  *
- * The loop reads stdin whether or not it is a TTY. That is not only for tests:
- * a ledger that accepts piped input is scriptable, and the same code path
- * serving both is what keeps the tested behavior and the interactive behavior
- * from drifting.
+ * ONE KERNEL, ONE PATH. Every operation goes through the same registry
+ * `bin/harness.mjs` dispatches to. Nothing shells out to the CLI and the TUI
+ * adds no capability the CLI lacks — the difference between the two surfaces is
+ * only how much has to be said out loud.
  *
- * All rendering goes through `lib/style.mjs`, per the design-system rule that
- * no harness surface renders unstyled — which is also how the ASCII fallback
- * (P4bAC4) comes for free, since `createStyle` already degrades glyphs on
- * limited terminals.
+ * VERBS INTERACTIVELY, FLAGS FOR MACHINES. A person types `search lease
+ * fencing`; a script types `harness search "lease fencing" --scope code
+ * --output json-envelope`. Both reach the same registry entry. The palette
+ * resolves verbs onto argv and echoes the resolved form into the ledger, so the
+ * shell spelling is learned by observation rather than by being typed.
  */
-import { createInput } from './tui/input.mjs';
+import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { createInput } from './tui/input.mjs';
 import { parseFlags } from './flags.mjs';
-import { createStyle, keyWidthFor, EXIT } from './style.mjs';
+import { createStyle, EXIT } from './style.mjs';
 import { dispatch, hasCommand } from './registry.mjs';
 import { openPalette, resolveSelection, selectionPlan } from './tui/palette.mjs';
-import { createTally, interpretLine, stripControl } from './tui/session.mjs';
+import { createTally, interpretLine, stripControl, tokenize } from './tui/session.mjs';
+import { createOverlay, splitPrefix, applyPrefix, treeRows } from './tui/overlay.mjs';
+import { createLedger, statusForExit } from './tui/ledger.mjs';
+import { renderBlock, foldState } from './tui/block.mjs';
+import { renderHeader, renderExit } from './tui/chrome.mjs';
+import { completePath } from './tui/complete.mjs';
 import { deriveGitContext } from './git-context.mjs';
 import { readSession } from './session.mjs';
+import { resolveConfig } from './config.mjs';
+import { readJournal, foldRuns } from './run-journal.mjs';
 
-/** `/Users/me/x` reads better as `~/x`, and the status line has one row. */
+/** `/Users/me/x` reads better as `~/x`, and the header has one row. */
 const tildePath = (full) => {
   const home = os.homedir();
   return home && full.startsWith(home) ? `~${full.slice(home.length)}` : full;
@@ -57,15 +70,24 @@ export function stripFlagSyntax(text) {
  * a list, and a list is what the palette exists instead of. */
 export const PALETTE_PAGE = 9;
 
+/** Repaint the live region at most this often while output streams. A command
+ * printing 500 lines does not need 500 repaints, and a terminal asked for them
+ * spends the whole run scrolling. */
+const LIVE_REPAINT_MS = 60;
+
 function usageError(message, hint) {
   return Object.assign(new Error(message), { code: 'E_USAGE', exit: EXIT.usage, hint });
 }
 
+/** The registry declares a side-effect class per command; the palette shows it
+ * so the consequence of a row is visible before it runs. */
+const effectToken = (effect) => (effect === 'read' ? 'ok' : effect === 'mutate' ? 'warn' : 'error');
+
 /**
  * One ledger session.
  *
- * `input`/`output` are injected so a test drives the whole loop over strings.
- * The interactive command passes the real streams.
+ * `input`/`output` are injected so a test drives the whole loop over strings;
+ * the interactive command passes the real streams.
  */
 export async function runLedger({
   input = process.stdin,
@@ -75,71 +97,155 @@ export async function runLedger({
   argv = [],
   dispatcher = dispatch,
   now = () => new Date().toISOString(),
+  config = null,
 } = {}) {
-  const ui = createStyle({ argv, stream: output });
+  // Declared before `createInput`, which closes over it for `onInterrupt`.
+  let activeController = null;
+  const settings = config ?? safeConfig({ copilotHome, workspace });
+  const version = readVersion();
+  const ui = createStyle({ argv, stream: output, tintMode: settings['tui.tint'] ?? 'auto' });
+  const screenReader = settings['tui.verbosity'] === 'screen-reader';
   const tally = createTally();
   const started = now();
+  // Journaling follows the SAME rule the CLI entry uses (`shouldSkipRunJournal`
+  // in bin/harness.mjs): `--dry-run`, `--no-events`, or `HARNESS_NO_EVENTS=1`.
+  // A surface that journaled under conditions the CLI does not would make the
+  // run history depend on which door a command came through.
+  const ledgerFlags = parseFlags(argv);
+  const journaling = !(ledgerFlags.dryRun || ledgerFlags.noEvents || process.env.HARNESS_NO_EVENTS === '1');
+  const ledger = createLedger({ workspace, harnessVersion: version, journaling });
+  // The numbered palette a piped session falls back to. Scoped to the session,
+  // not the module: a module-level binding would leak one session's rows into
+  // the next, which matters as soon as two ledgers share a process (a test
+  // suite, an embedded host).
+  let pipedPalette = null;
 
-  // The composer, not a bare readline. What was here before was a single-line
-  // `readline` pinned to `terminal: false`: no caret, no status line, no
-  // multiline, and arrow keys that arrived as raw `^[[A` bytes inside the
-  // dispatched command. See lib/tui/composer.mjs for why the logic lives there
-  // and only the painting lives here.
   const session = createInput({
     input,
     output,
     ui,
-    label: path.basename(path.resolve(workspace)),
     ascii: !ui.unicode,
+    footerItems: settings['tui.statusline'],
+    paletteChord: settings['tui.palette_chord'] ?? 'ctrl+p',
+    altScreen: settings['tui.alt_screen'] === true,
+    // Ctrl-C and Esc during a running command reach the abort controller here,
+    // not through SIGINT: raw mode stays on for the whole dispatch so the live
+    // block can repaint, and in raw mode the terminal never raises the signal.
+    onInterrupt: () => { if (activeController) activeController.abort(); },
+    // A screen reader announces a repainting region on every repaint, so the
+    // live tail is suppressed and the block is announced once, when it is done.
+    interactive: screenReader ? false : Boolean(input.isTTY),
   });
   const interactive = session.interactive;
-  const write = (line = '') => session.write(line);
-
+  const termWidth = () => Math.max(40, Math.min(output.columns || 80, 160));
 
   /**
-   * The status line was built and tested and then never CALLED, so it never
-   * appeared in a real session — the same class of gap as the one that
-   * reopened this phase, caught by a screenshot rather than by the suite.
-   * Refreshed after every command, because a gate can close under you.
+   * What goes between two blocks.
+   *
+   * Density is taste, and the mock's §6 argues — from Warp's own settings
+   * schema — that the things people argue about are the things to make
+   * configurable rather than decide for them. The harness default is compact
+   * with no divider, because the tint already separates the blocks and a rule
+   * on top of a tint is the same information twice.
    */
-  const refreshStatus = () => {
-    let branch = null;
-    let gate = null;
-    try {
-      const git = deriveGitContext({ workspace });
-      branch = git?.branch || (git?.detached ? 'detached' : null);
-    } catch { /* a container may have no repo; the row simply omits it */ }
-    try {
-      gate = readSession(workspace)?.gateStatus || null;
-    } catch { /* no session yet */ }
-    session.setStatus({ workspace: tildePath(workspace), branch, gate });
+  const separator = () => {
+    if (settings['tui.dividers'] === true) return [ui.paint('muted', (ui.unicode ? '─' : '-').repeat(termWidth()))];
+    return settings['tui.density'] === 'comfortable' ? [''] : [];
   };
 
-  // Every path out restores the terminal. Raw mode and the SIGINT/resize
-  // listeners were previously torn down only on the normal path, so a throw
-  // anywhere after `createInput` — a palette failure, a status read, a write —
-  // left the operator's shell in raw mode with no echo.
+  /** Commit a block to scrollback, in the design's grammar. */
+  const emit = (block) => {
+    const rows = renderBlock(block, { ui, width: termWidth(), fold: {} });
+    session.commit([...rows, ...separator()]);
+  };
+  /** A one-line message that is not a command — help, a palette refusal, a
+   * hint. Still a block, so `clear` and navigation need no second concept. */
+  const say = (text, { state = 'user', next = null } = {}) => {
+    const block = ledger.note(text, { state, next });
+    emit(block);
+    return block;
+  };
+
+  // ── session chrome ────────────────────────────────────────────────────
+  const git = safeGit(workspace);
+  const startup = new Set(settings['tui.startup'] ?? ['context', 'knowledge', 'shortcuts']);
+
+  const gateOf = () => {
+    try { return readSession(workspace)?.gateStatus || null; } catch { return null; }
+  };
+  const planOf = () => {
+    try { return readSession(workspace)?.plan || null; } catch { return null; }
+  };
+
+  const refreshStatus = () => {
+    const gate = gateOf();
+    const plan = planOf();
+    const last = ledger.lastCommand();
+    session.setStatus({
+      workspace: tildePath(workspace),
+      branch: git.branch,
+      gate,
+      plan: plan ? path.basename(plan) : null,
+      run: last?.run ? last.run.slice(0, 6) : null,
+      runStatus: last?.status ?? null,
+    });
+    session.setHint({
+      gate,
+      shell: settings['exec.bash_enabled'] === false ? 'denied' : 'allowed',
+      rerun: last?.command ? shortCommand(last.command) : null,
+    });
+  };
+
+  /** The session header. Printed once at the top and again after `clear`,
+   * because those are the two moments where nothing above it says what this
+   * session is about. */
+  const writeHeader = () => {
+    if (!startup.has('context')) return;
+    session.commit(renderHeader({
+      ui,
+      width: termWidth(),
+      workspace: tildePath(workspace),
+      branch: git.branch,
+      commit: git.commit,
+      version,
+      plan: planOf() ? path.basename(planOf()) : null,
+      gate: gateOf(),
+    }));
+  };
+  writeHeader();
+
+  // Restore what happened before this session. The record persists; the
+  // transcript deliberately does not — see lib/tui/ledger.mjs.
+  const restoreLimit = Number.isInteger(settings['tui.restore']) ? settings['tui.restore'] : 8;
+  if (restoreLimit > 0) {
+    const restored = ledger.hydrate({ limit: restoreLimit });
+    for (const block of restored) emit(block);
+    if (restored.length) {
+      session.commit([ui.paint('muted', `  ${ui.arrow} ${restored.length} restored from the run journal · output is not kept, !! <id> re-runs one`), ...separator()]);
+    }
+  }
+
+  if (startup.has('shortcuts')) {
+    session.commit([
+      ui.paint('muted', `  / palette · ! shell · !! re-run · @ file · ctrl+${settings['tui.palette_chord'] === 'ctrl+k' ? 'k' : 'p'} palette · ctrl+↑ blocks · esc esc runs · help`),
+      ...separator(),
+    ]);
+  }
+  refreshStatus();
+
+  // ── cancellation ──────────────────────────────────────────────────────
+  // A SIGINT still reaches a PIPED session, which never enters raw mode; the
+  // interactive path is handled by `onInterrupt` above. Both abort the running
+  // command and neither closes the session — cancellation and quitting are
+  // opposite intentions, and a ledger that exited on the first interrupt would
+  // make them the same gesture.
+  const onSigint = () => { if (activeController) activeController.abort(); };
+  process.on('SIGINT', onSigint);
+
   const closeSession = () => {
     try { session.close(); } catch { /* nothing left to restore */ }
     process.off('SIGINT', onSigint);
   };
-
-  const writeBanner = () => {
-    write(ui.paint('muted', 'harness — session ledger'));
-    write(ui.paint('muted', `${ui.arrow} / to search · ! shell · clear · help · exit`));
-    write('');
-  };
-  writeBanner();
-  refreshStatus();
-
-  // Ctrl-C cancels the RUNNING command, not the session. A ledger that exited
-  // on the first interrupt would make cancellation and quitting the same
-  // gesture, and they are opposite intentions.
-  let activeController = null;
-  const onSigint = () => {
-    if (activeController) activeController.abort();
-  };
-  process.on('SIGINT', onSigint);
 
   /**
    * The session's own workspace and home, applied to every command that does
@@ -148,7 +254,6 @@ export async function runLedger({
    * Without this, `harness tui --workspace B` opened a ledger on B and then ran
    * every command against the process cwd — so a mutating command could act on
    * a DIFFERENT repository than the one the session was opened for, silently.
-   * A session that says which project it is about has to mean it.
    */
   const withSessionContext = (commandArgv) => {
     const out = [...commandArgv];
@@ -164,332 +269,510 @@ export async function runLedger({
     return out;
   };
 
-  const runArgv = async (rawArgv, { echo = false, quiet = false } = {}) => {
-    if (!rawArgv.length) return;
+  /**
+   * Run one argv and produce one block.
+   *
+   * `display` is what the block shows as its command — what the operator typed,
+   * not the argv with session flags spliced in. The transcript is a record of
+   * the session, and repeating `--workspace` on every line would bury the
+   * command in ceremony.
+   */
+  const runArgv = async (rawArgv, { display = null } = {}) => {
+    if (!rawArgv.length) return null;
     const commandArgv = withSessionContext(rawArgv);
     const [name, ...rest] = commandArgv;
     if (!hasCommand(name)) {
-      write(ui.line({ state: 'error', key: 'unknown', value: name, note: 'type / to see what exists' }));
-      return;
+      const block = ledger.open({ command: display ?? rawArgv.join(' '), argv: rawArgv });
+      ledger.append(block, ui.line({ state: 'error', key: 'unknown', value: name, note: 'type / to see what exists' }));
+      ledger.close(block, { status: 'failed', exitCode: EXIT.usage, tally: ui.summary({ ok: 0, err: 1, exit: EXIT.usage }) });
+      tally.record(EXIT.usage, {});
+      emit(block);
+      return block;
     }
-    // P4bAC8: the resolved argv is echoed for every palette-initiated run, so
-    // the ledger records what actually ran rather than what was clicked. A
-    // transcript that shows a choice but not a command cannot be replayed or
-    // reviewed.
-    // Echo what the OPERATOR typed, not the argv with session flags spliced in:
-    // the transcript is a record of the session, and repeating its own
-    // `--workspace` on every line would bury the command in ceremony.
-    if (echo) write(ui.paint('muted', `  $ harness ${rawArgv.join(' ')}`));
 
-    if (quiet) write(ui.paint('muted', '  $ (private) — output withheld from the ledger'));
+    const block = ledger.open({ command: display ?? rawArgv.join(' '), argv: rawArgv });
     activeController = new AbortController();
+    session.beginLive(block);
+
+    // Output is CAPTURED, not passed through: a line that reaches the terminal
+    // directly is not part of any block and cannot be folded, marked, re-run or
+    // restored. See lib/tui/input.mjs#capture.
+    let lastPaint = 0;
+    const capture = session.capture((line) => {
+      ledger.append(block, line);
+      const t = Date.now();
+      if (t - lastPaint >= LIVE_REPAINT_MS) { lastPaint = t; session.refreshLive(); }
+    });
+
     let exitCode = 0;
     let cancelled = false;
-    // The composer comes OFF SCREEN for the duration. Every harness command
-    // prints with `console.log` — straight to the stream, with no idea a
-    // bordered block is painted below the cursor — so `status` wrote its rows
-    // through the border and left a second composer stranded underneath.
-    // Suspending here fixes it once for every command rather than asking each
-    // to route its output somewhere new.
-    session.suspend();
+    let timedOut = false;
     try {
-      exitCode = await dispatcher([name, ...rest], {
-        style: ui,
-        signal: activeController.signal,
-      });
+      exitCode = await dispatcher([name, ...rest], { style: ui, signal: activeController.signal });
     } catch (error) {
       exitCode = Number.isInteger(error?.exit) ? error.exit : 1;
       cancelled = error?.code === 'E_CANCELLED';
+      timedOut = error?.code === 'E_TIMEOUT' || exitCode === EXIT.timedOut;
       for (const l of ui.errorBlock({
         code: error?.code || 'E_UNEXPECTED',
         message: error?.message || String(error),
         fix: error?.hint,
         exit: exitCode,
-      })) write(l);
+      })) ledger.append(block, l);
     } finally {
+      capture.release();
       activeController = null;
-      session.resume();
+      session.endLive();
     }
-    // EXIT.cancelled is cancellation however it arrives. Keying only off a
-    // thrown E_CANCELLED counted an interrupted command as a failure, which is
-    // the one distinction the tally exists to draw.
-    tally.record(exitCode, { cancelled: cancelled || exitCode === EXIT.cancelled });
-    refreshStatus();
-  };
 
-  const showPalette = (query) => {
-    const palette = openPalette({ workspace, query });
-    const rows = palette.rows.slice(0, PALETTE_PAGE);
-    if (!rows.length) {
-      write(ui.line({ state: 'warn', key: 'palette', value: `nothing matches ${JSON.stringify(query)}` }));
-      return [];
-    }
-    const keyWidth = keyWidthFor(['palette', ...rows.map((_, i) => String(i + 1))]);
-    write(ui.line({ key: 'palette', value: `${rows.length} of ${palette.rows.length}`, note: query || undefined, keyWidth }));
-    rows.forEach((row, i) => {
-      write(ui.line({
-        // The side-effect glyph is the palette's own contribution: no surveyed
-        // tool can show what a command will do before it runs, because none
-        // declares a side-effect class per command. This one does, on every
-        // entry, so the row can warn before the choice rather than after.
-        state: row.sideEffect === 'read' ? 'ok' : row.sideEffect === 'mutate' ? 'warn' : 'error',
-        key: String(i + 1),
-        value: row.label,
-        // The summary is rendered text a person reads, so P4bAC6 applies to it
-        // as much as to the label: `/index` was printing `--status` and
-        // `--structural` at someone told they never need to type a flag.
-        note: [row.sideEffect, stripFlagSyntax(row.summary)].filter(Boolean).join(' · '),
-        keyWidth,
-      }));
+    // `EXIT.cancelled` is cancellation however it arrives. Keying only off a
+    // thrown `E_CANCELLED` counted an interrupted command as a failure, which
+    // is the one distinction the tally exists to draw.
+    cancelled = cancelled || exitCode === EXIT.cancelled;
+    const status = statusForExit(exitCode, { cancelled, timedOut: timedOut && !cancelled });
+    ledger.close(block, {
+      status,
+      exitCode,
+      tally: closingTally(block, exitCode, cancelled),
+      next: nextAction(name, status),
     });
-    write(ui.paint('muted', '  choose a number, or keep typing to narrow'));
-    return rows;
+    tally.record(exitCode, { cancelled });
+    emit(block);
+    refreshStatus();
+    return block;
   };
 
-  // pending is either:
-  //   { kind: 'palette', rows }     — waiting for a number
-  //   { kind: 'values', row, queue, index, values, untilResolves } — collecting
-  //                                   prompt answers for a chosen row
-  // The previous code refused every row that needed a value with "not available
-  // from a piped session", which made the palette unusable for search, plan-new,
-  // get, remember, and every other command whose argv is not empty. Collection
-  // is the palette contract: choose a capability, answer for the values by name,
-  // never type `--`.
+  const closingTally = (block, exitCode, cancelled) => {
+    const rows = block.lines.length;
+    if (cancelled) return `cancelled · ${rows} line${rows === 1 ? '' : 's'} · journal entry appended`;
+    return `${rows} line${rows === 1 ? '' : 's'} ${ui.arrow} exit ${exitCode}`;
+  };
+
+  /** The one action that follows. Suggested only where the registry makes it
+   * unambiguous — a wrong next action is worse than none. */
+  const nextAction = (name, status) => {
+    if (status === 'succeeded') return null;
+    if (name === 'verify' || name === 'checks') return 'run tree <id>';
+    if (name === 'gate') return 'plan show';
+    return null;
+  };
+
+  // ── the palette ───────────────────────────────────────────────────────
+  const paletteRows = (query) => {
+    const { prefix, rest } = splitPrefix(query);
+    const palette = openPalette({ workspace, query: rest });
+    return applyPrefix(palette.rows, prefix).map((row) => ({
+      ...row,
+      note: stripFlagSyntax(row.summary),
+      reason: row.unavailable || null,
+    }));
+  };
+
+  const openPaletteOverlay = (query = '') => {
+    const overlay = createOverlay({
+      title: '',
+      query,
+      rows: paletteRows(query),
+      filter: (q) => paletteRows(q),
+      footer: `${ui.unicode ? '↑↓' : 'up/down'} walk · ${ui.unicode ? '↵' : 'enter'} choose · esc closes · prefixes: run: plan: search: check: res: learn:`,
+      page: PALETTE_PAGE,
+    });
+    session.openOverlay(overlay);
+    return overlay;
+  };
+
+  /** Collecting values for a chosen palette row. The palette never asks anyone
+   * to type flag syntax — it asks for the VALUE by name and assembles the argv
+   * itself. */
   let pending = null;
 
   const askPrompt = (prompt) => {
     const note = prompt.description
       || (prompt.type === 'boolean' ? 'yes / no' : prompt.required ? 'required' : 'optional — leave blank to skip');
-    write(ui.line({
-      state: prompt.required ? 'warn' : 'muted',
-      key: '?',
-      value: prompt.label,
-      note,
-    }));
+    say(ui.line({ state: prompt.required ? 'warn' : 'pending', key: '?', value: prompt.label, note }));
   };
 
   const finishSelection = async (row, values) => {
     const { argv: resolved, invalid, missing } = resolveSelection(row, values);
     if (missing?.length) {
-      write(ui.line({
-        state: 'warn',
-        key: 'needs',
-        value: missing.map((k) => String(k).replace(/^--/, '')).join(', '),
-        note: 'still required',
-      }));
+      say(ui.line({ state: 'warn', key: 'needs', value: missing.map((k) => String(k).replace(/^--/, '')).join(', '), note: 'still required' }));
       return;
     }
     if (invalid) {
-      write(ui.line({ state: 'warn', key: 'needs', value: row.label, note: invalid }));
+      say(ui.line({ state: 'warn', key: 'needs', value: row.label, note: invalid }));
       return;
     }
-    // Nested Session Ledger would steal the same stdin and never return cleanly.
+    // A nested ledger would steal the same stdin and never return cleanly.
     if (resolved?.[0] === 'tui') {
-      write(ui.line({
-        state: 'warn',
-        key: 'tui',
-        value: 'already open',
-        note: 'the session ledger is this surface — pick another command',
-      }));
+      say(ui.line({ state: 'warn', key: 'tui', value: 'already open', note: 'the session ledger is this surface — pick another command' }));
       return;
     }
-    if (resolved) await runArgv(resolved, { echo: true });
+    if (resolved) await runArgv(resolved);
   };
 
   const beginSelection = async (choice) => {
-    // Re-entry into the ledger from its own palette is a no-op, not a hang.
+    if (choice?.unavailable) {
+      // Listed and greyed, with its reason — choosing one explains rather than
+      // runs. Hiding it would teach that the capability does not exist.
+      say(ui.line({ state: 'warn', key: 'blocked', value: choice.label, note: choice.unavailable }));
+      return;
+    }
     if (choice?.argvTokens?.[0]?.value === 'tui' || choice?.noun === 'tui') {
-      write(ui.line({
-        state: 'warn',
-        key: 'tui',
-        value: 'already open',
-        note: 'the session ledger is this surface — pick another command',
-      }));
+      say(ui.line({ state: 'warn', key: 'tui', value: 'already open', note: 'the session ledger is this surface — pick another command' }));
       return;
     }
     const plan = selectionPlan(choice);
-    if (plan.ready) {
-      await finishSelection(choice, {});
-      return;
-    }
-    if (plan.invalid && !plan.queue.length) {
-      write(ui.line({ state: 'warn', key: 'needs', value: choice.label, note: plan.invalid }));
-      return;
-    }
+    if (plan.ready) { await finishSelection(choice, {}); return; }
     if (!plan.queue.length) {
-      write(ui.line({ state: 'warn', key: 'needs', value: choice.label, note: plan.invalid || 'nothing to run' }));
+      say(ui.line({ state: 'warn', key: 'needs', value: choice.label, note: plan.invalid || 'nothing to run' }));
       return;
     }
-    pending = {
-      kind: 'values',
-      row: choice,
-      queue: plan.queue,
-      index: 0,
-      values: {},
-      untilResolves: plan.untilResolves,
-    };
-    // The palette never asks a person to type flag syntax (P4bAC6) — it asks
-    // for the VALUE by name and assembles the argv itself.
-    write(ui.paint('muted', `  ${plan.queue.length} value(s) needed · blank skips optional · exit cancels`));
+    pending = { row: choice, queue: plan.queue, index: 0, values: {}, untilResolves: plan.untilResolves };
+    say(ui.paint('muted', `${plan.queue.length} value(s) needed · blank skips optional · exit cancels`));
     askPrompt(plan.queue[0]);
   };
 
+  // ── block navigation & the run tree ───────────────────────────────────
+  const blockRows = () => ledger.blocks
+    .filter((b) => b.kind !== 'note')
+    .slice(-40)
+    .reverse()
+    .map((b) => ({
+      label: `${b.marked ? (ui.unicode ? '★ ' : '* ') : ''}${shortCommand(b.command) || '(note)'}`,
+      note: [b.status, b.id.slice(0, 6)].filter(Boolean).join(' · '),
+      sideEffect: null,
+      block: b,
+    }));
+
+  /**
+   * Block navigation, as an overlay.
+   *
+   * The design's keyboard table says `ctrl+↑` leaves the editor and then the
+   * arrows walk blocks in place. In the main buffer that is not implementable
+   * and pretending otherwise would be worse than adapting: a block that has
+   * scrolled past the top of the viewport cannot be highlighted where it sits,
+   * and re-drawing it lower would duplicate it in scrollback. So walking
+   * happens in an ephemeral overlay — which is the design's own rule for every
+   * other picker — and the block keys act on the selection.
+   */
+  const openBlockNav = () => {
+    const rows = blockRows();
+    if (!rows.length) { say(ui.paint('muted', 'nothing in the ledger yet')); return null; }
+    const overlay = createOverlay({
+      title: 'blocks',
+      rows,
+      actions: { y: 'copy', m: 'mark', r: 'rerun', q: 'quit', 'ctrl+o': 'fold', t: 'tree' },
+      footer: `${ui.unicode ? '↑↓' : 'up/down'} walk · ${ui.unicode ? '↵' : 'enter'} inspect · ctrl+o fold · y copy · m mark · r re-run · t tree · q quit · esc closes`,
+    });
+    session.openOverlay(overlay);
+    return overlay;
+  };
+
+  const openRunTree = (runId = null) => {
+    let runs;
+    try { runs = foldRuns(readJournal(workspace)); } catch { runs = []; }
+    const target = runId ? runs.find((r) => r.run === runId || String(r.run).startsWith(runId)) : runs.at(-1);
+    if (!target) { say(ui.paint('muted', 'no runs in the journal yet')); return null; }
+    const node = {
+      label: `${ui.paint('muted', 'run')} ${target.run.slice(0, 6)} ${ui.paint(target.status === 'succeeded' ? 'ok' : 'error', target.status)}`,
+      status: target.status,
+      duration: target.durationMs ? `${Math.round(target.durationMs / 1000)}s` : null,
+      children: [{
+        label: `${target.command} ${(target.argv || []).join(' ')}`.trim(),
+        status: target.status,
+        duration: null,
+        children: [],
+      }],
+    };
+    const overlay = createOverlay({
+      title: `run tree · ${target.run.slice(0, 6)}`,
+      rows: treeRows(node, { ui }),
+      actions: { q: 'quit' },
+      footer: `${ui.unicode ? '↑↓' : 'up/down'} walk · ${ui.unicode ? '↵' : 'enter'} inspect · esc closes`,
+    });
+    session.openOverlay(overlay);
+    return overlay;
+  };
+
+  /** Re-run a block: same argv, fresh record. Never edits the one it replays —
+   * the journal is append-only and history is not a draft. */
+  const rerun = async (block) => {
+    if (!block?.command) { say(ui.line({ state: 'warn', key: 'rerun', value: 'nothing to re-run' })); return; }
+    let parsed;
+    try { parsed = tokenize(block.command); } catch { parsed = null; }
+    if (!parsed?.length) { say(ui.line({ state: 'warn', key: 'rerun', value: block.command, note: 'cannot be parsed back into a command' })); return; }
+    await runArgv(parsed, { display: block.command });
+  };
+
+  // ── the loop ──────────────────────────────────────────────────────────
+  let lastEscape = 0;
   try {
-  for (;;) {
-    const event = await session.next();
-    if (event.intent === 'exit') break;
-    if (event.intent === 'cancel') {
-      // Ctrl-C with a half-typed line clears it; with nothing typed it is the
-      // running command that is being interrupted, and the SIGINT handler owns
-      // that. Neither is "quit" — see the note on onSigint.
-      if (!event.hadInput) write(ui.paint('muted', '  (nothing running — type exit to close)'));
-      continue;
-    }
-    if (event.intent === 'palette') { pending = showPalette(''); continue; }
-    const line = stripControl(String(event.line ?? ''));
-    session.echo(line);
+    for (;;) {
+      const event = await session.next();
 
-    // Collecting values for a chosen palette row. Checked first so a number
-    // typed as a value (e.g. --limit) is not re-read as a palette index.
-    if (pending?.kind === 'values') {
-      const trimmed = line.trim();
-      if (trimmed === 'exit' || trimmed === 'quit') {
-        write(ui.paint('muted', '  cancelled'));
+      if (event.intent === 'exit') break;
+
+      if (event.intent === 'escape') {
+        if (activeController) { activeController.abort(); continue; }
+        const t = Date.now();
+        // Esc-Esc opens the run tree. The pairing is timed here because only
+        // the loop knows whether the first Esc was consumed by a cancellation.
+        if (t - lastEscape < 600) { lastEscape = 0; openRunTree(); } else lastEscape = t;
+        continue;
+      }
+
+      if (event.intent === 'cancel') {
+        if (!event.hadInput) say(ui.paint('muted', '(nothing running — type exit to close)'));
+        continue;
+      }
+
+      if (event.intent === 'palette') { openPaletteOverlay(''); continue; }
+      if (event.intent === 'navigate') { openBlockNav(); continue; }
+
+      if (event.intent === 'fold') {
+        const last = ledger.lastCommand();
+        if (last) { last.folded = !foldState(last).folded; emit(last); }
+        continue;
+      }
+
+      if (event.intent === 'complete') {
+        const hits = completePath(event.prefix ?? '', { workspace });
+        session.composer.setCompletion(hits);
+        continue;
+      }
+
+      if (event.intent === 'choose') {
+        session.closeOverlay();
+        const row = event.row;
+        if (row?.block) { emit({ ...row.block, folded: false }); continue; }
+        if (row?.node) continue; // a tree row is a view, not a command
+        if (row) await beginSelection(row);
+        continue;
+      }
+
+      if (event.intent === 'action') {
+        const block = event.row?.block ?? null;
+        if (event.action === 'quit') { session.closeOverlay(); break; }
+        if (event.action === 'fold' && block) { block.folded = !foldState(block).folded; session.closeOverlay(); emit(block); continue; }
+        if (event.action === 'mark' && block) {
+          const on = ledger.toggleMark(block);
+          session.closeOverlay();
+          say(ui.line({ state: on ? 'ok' : 'pending', key: 'mark', value: shortCommand(block.command), note: on ? 'kept with the journal' : 'unmarked' }));
+          continue;
+        }
+        if (event.action === 'copy' && block) {
+          session.closeOverlay();
+          // The ledger cannot reach the system clipboard without a spawn, and a
+          // spawn here would be a second execution path outside the governed
+          // one. Printing the command plainly is what a person can act on with
+          // the terminal's own selection, which the main buffer preserves.
+          say(ui.line({ key: 'copy', value: block.command, note: 'select with the terminal — scrollback is intact' }));
+          continue;
+        }
+        if (event.action === 'rerun' && block) { session.closeOverlay(); await rerun(block); continue; }
+        if (event.action === 'tree' && block) { session.closeOverlay(); openRunTree(block.run || block.id); continue; }
+        session.closeOverlay();
+        continue;
+      }
+
+      const line = stripControl(String(event.line ?? ''));
+      // NO SEPARATE ECHO. The block's first row IS the command, verbatim — see
+      // the design's block anatomy — so echoing the line here printed it twice,
+      // once bare and once inside the block that followed. Lines that produce
+      // no block (`help`, `clear`, a palette filter) answer for themselves.
+
+      // Collecting values for a chosen palette row. Checked first so a value
+      // that looks like a command is not re-read as one.
+      if (pending) {
+        const trimmed = line.trim();
+        if (trimmed === 'exit' || trimmed === 'quit') { say(ui.paint('muted', 'cancelled')); pending = null; continue; }
+        const prompt = pending.queue[pending.index];
+        if (trimmed === '') {
+          if (prompt.required) {
+            say(ui.line({ state: 'warn', key: 'needs', value: prompt.label, note: 'required — enter a value, or exit to cancel' }));
+            askPrompt(prompt);
+            continue;
+          }
+        } else if (prompt.type === 'boolean') {
+          const t = trimmed.toLowerCase();
+          if (!['y', 'yes', 'true', '1', 'n', 'no', 'false', '0'].includes(t)) {
+            say(ui.line({ state: 'warn', key: 'needs', value: prompt.label, note: 'yes or no' }));
+            askPrompt(prompt);
+            continue;
+          }
+          // Boolean, not the strings "true"/"false": resolveArgv treats any
+          // truthy value as "include the flag", and the string "false" is truthy.
+          pending.values[prompt.key] = ['y', 'yes', 'true', '1'].includes(t);
+        } else {
+          pending.values[prompt.key] = trimmed;
+        }
+
+        // Either/or gates (`get`'s --docid OR --path): stop as soon as the CLI
+        // would accept what we have, rather than forcing every optional field.
+        if (pending.untilResolves) {
+          const attempt = resolveSelection(pending.row, pending.values);
+          if (attempt.argv && !attempt.invalid && !(attempt.missing?.length)) {
+            const { row, values } = pending;
+            pending = null;
+            await finishSelection(row, values);
+            continue;
+          }
+        }
+
+        pending.index += 1;
+        if (pending.index < pending.queue.length) { askPrompt(pending.queue[pending.index]); continue; }
+        const { row, values } = pending;
         pending = null;
+        await finishSelection(row, values);
         continue;
       }
-      const prompt = pending.queue[pending.index];
-      if (trimmed === '') {
-        if (prompt.required) {
-          write(ui.line({ state: 'warn', key: 'needs', value: prompt.label, note: 'required — enter a value, or exit to cancel' }));
-          askPrompt(prompt);
-          continue;
-        }
-        // Optional blank: skip this key entirely.
-      } else if (prompt.type === 'boolean') {
-        const t = trimmed.toLowerCase();
-        if (!['y', 'yes', 'true', '1', 'n', 'no', 'false', '0'].includes(t)) {
-          write(ui.line({ state: 'warn', key: 'needs', value: prompt.label, note: 'yes or no' }));
-          askPrompt(prompt);
-          continue;
-        }
-        // Boolean, not the strings "true"/"false": resolveArgv treats any
-        // truthy value as "include the flag", and the string "false" is truthy.
-        pending.values[prompt.key] = ['y', 'yes', 'true', '1'].includes(t);
-      } else {
-        pending.values[prompt.key] = trimmed;
-      }
 
-      // either/or gates (get's --docid OR --path): stop as soon as the CLI
-      // would accept what we have, rather than forcing every optional field.
-      if (pending.untilResolves) {
-        const attempt = resolveSelection(pending.row, pending.values);
-        if (attempt.argv && !attempt.invalid && !(attempt.missing?.length)) {
-          const row = pending.row;
-          const values = pending.values;
-          pending = null;
-          await finishSelection(row, values);
-          continue;
-        }
-      }
-
-      pending.index += 1;
-      if (pending.index < pending.queue.length) {
-        askPrompt(pending.queue[pending.index]);
+      const parsed = interpretLine(line);
+      if (parsed.kind === 'empty') {
+        // A bare Enter under an open numbered palette is not a choice. Saying
+        // so beats leaving the operator staring at a prompt that silently
+        // dropped their rows; the rows are still held, so nothing is re-ranked.
+        if (pipedPalette) say(ui.paint('muted', `type 1–${pipedPalette.length} to pick a row, /text to refilter, or a command`));
         continue;
       }
-      const row = pending.row;
-      const values = pending.values;
-      pending = null;
-      await finishSelection(row, values);
-      continue;
-    }
+      if (parsed.kind === 'exit') break;
 
-    // A number answers an open palette. Checked before interpretation so `3`
-    // means "the third row" rather than "a command called 3".
-    if (pending?.kind === 'palette') {
-      const trimmed = line.trim();
-      if (trimmed === '') {
-        // Empty Enter after `/` is not a choice — restate the affordance so the
-        // operator is not left staring at a prompt that silently dropped the
-        // palette. The rows are still in `pending`; we do not re-fetch.
-        write(ui.paint('muted', `  type 1–${pending.rows.length} to pick a row, /text to refilter, or a command`));
+      if (parsed.kind === 'palette') {
+        if (interactive) { openPaletteOverlay(parsed.query); continue; }
+        // Piped sessions have no overlay to walk, so the palette prints its
+        // rows and takes a number — the phase-4b behaviour, kept for exactly
+        // the case it suits.
+        const rows = paletteRows(parsed.query).slice(0, PALETTE_PAGE);
+        if (!rows.length) { say(ui.line({ state: 'warn', key: 'palette', value: `nothing matches ${JSON.stringify(parsed.query)}` })); continue; }
+        rows.forEach((row, i) => say(ui.line({
+          state: row.sideEffect === 'read' ? 'ok' : row.sideEffect === 'mutate' ? 'warn' : 'error',
+          key: String(i + 1),
+          value: row.label,
+          note: [row.sideEffect, row.note].filter(Boolean).join(' · '),
+        })));
+        pipedPalette = rows;
         continue;
       }
-      if (/^\d+$/.test(trimmed)) {
-        const choice = pending.rows[Number(trimmed) - 1];
-        pending = null;
-        if (!choice) {
-          write(ui.line({ state: 'warn', key: 'palette', value: 'no such row' }));
-          continue;
-        }
+
+      if (pipedPalette && /^\d+$/.test(line.trim())) {
+        const choice = pipedPalette[Number(line.trim()) - 1];
+        pipedPalette = null;
+        if (!choice) { say(ui.line({ state: 'warn', key: 'palette', value: 'no such row' })); continue; }
         await beginSelection(choice);
         continue;
       }
-      // Non-numeric input leaves the palette and is interpreted as a normal line
-      // (a command, another `/filter`, exit, clear, …).
+      pipedPalette = null;
+
+      if (parsed.kind === 'invalid') {
+        say(ui.line({ state: 'error', key: 'input', value: parsed.reason, note: parsed.hint }));
+      } else if (parsed.kind === 'rerun') {
+        const target = parsed.target ? ledger.byId(parsed.target) : ledger.lastCommand();
+        if (!target) {
+          say(ui.line({ state: 'warn', key: 'rerun', value: parsed.target || 'last', note: parsed.target ? 'no block with that id in this session' : 'nothing has run yet' }));
+        } else {
+          await rerun(target);
+        }
+      } else if (parsed.kind === 'shell') {
+        // Routed through the harness's own gated `bash`, never spawned
+        // directly: the shell gate, the environment allowlist, the cwd
+        // containment and the execution audit all apply to a ledger shell-out
+        // exactly as they do to `harness bash`. A TUI that spawned its own
+        // shell would be a second behaviour path.
+        await runArgv(['bash', '--', parsed.script], { display: `!${parsed.script}` });
+      } else if (parsed.kind === 'help') {
+        emitHelp();
+      } else if (parsed.kind === 'clear') {
+        if (typeof session.clearScreen === 'function') session.clearScreen();
+        else if (output.isTTY) output.write('\x1b[2J\x1b[H');
+        ledger.clear();
+        // The header goes back up. A cleared viewport with no context reads as
+        // a session that ended rather than one that was tidied, and the header
+        // is the only thing that says which repository this still is.
+        writeHeader();
+      } else if (parsed.kind === 'reference') {
+        const hits = completePath(parsed.target, { workspace });
+        if (!hits.length) say(ui.line({ state: 'warn', key: 'file', value: parsed.target, note: 'no match in this workspace' }));
+        else hits.forEach((h) => say(ui.line({ state: 'pending', key: h.kind, value: h.path })));
+      } else {
+        await runArgv(parsed.argv);
+      }
     }
-
-    const parsed = interpretLine(line);
-    if (parsed.kind === 'empty') continue;
-    if (parsed.kind === 'exit') break;
-
-    pending = null;
-    if (parsed.kind === 'palette') {
-      pending = { kind: 'palette', rows: showPalette(parsed.query) };
-    } else if (parsed.kind === 'invalid') {
-      write(ui.line({ state: 'error', key: 'input', value: parsed.reason, note: parsed.hint }));
-    } else if (parsed.kind === 'shell') {
-      // Routed through the harness's own gated `bash`, never spawned directly:
-      // the shell gate, the environment allowlist, the cwd containment, and the
-      // execution audit all apply to a ledger shell-out exactly as they do to
-      // `harness bash`. A TUI that spawned its own shell would be the second
-      // behavior path P4bAC1 forbids.
-      // `!!` is the PRIVATE form: it runs, and its output stays out of the
-      // ledger. That distinction is the reason the two sigils exist — the usual
-      // reason to shell out is precisely that you do not want the result in
-      // context — and echoing it identically made `!!` a synonym for `!`.
-      await runArgv(['bash', '--', parsed.script], { echo: !parsed.private, quiet: parsed.private });
-    } else if (parsed.kind === 'help') {
-      // Session-owned: not a registered command, so the palette cannot contain
-      // it. Same reason `/exit` and `/clear` are reserved before the filter.
-      write(ui.line({ key: 'help', value: 'type a command directly, or:' }));
-      write(ui.paint('muted', '  /            open the command palette'));
-      write(ui.paint('muted', '  /<text>      filter the palette'));
-      write(ui.paint('muted', '  1–9          pick a palette row (then answer any values by name)'));
-      write(ui.paint('muted', '  !<command>   run a shell command through governed bash'));
-      write(ui.paint('muted', '  !!<command>  the same, kept out of the ledger'));
-      write(ui.paint('muted', '  clear        clear the viewport (keeps scrollback)'));
-      write(ui.paint('muted', '  exit / quit  close the session and print the tally'));
-      write(ui.paint('muted', `  ${ui.arrow} up/down history · Ctrl-C cancels a running command`));
-    } else if (parsed.kind === 'clear') {
-      // Native clear — not `!clear`. See createInput.clearScreen.
-      if (typeof session.clearScreen === 'function') session.clearScreen();
-      else if (output.isTTY) output.write('\x1b[2J\x1b[H');
-      writeBanner();
-    } else if (parsed.kind === 'reference') {
-      write(ui.line({ state: 'warn', key: 'reference', value: parsed.target, note: 'file references are not wired yet' }));
-    } else {
-      await runArgv(parsed.argv);
-    }
-  }
-
   } finally {
     closeSession();
   }
 
   // The exit ritual: the closing tally and the command to pick the thread back
   // up, printed INTO scrollback so it survives the session that produced it.
-  const counts = tally.snapshot();
-  write('');
-  write(ui.line({
-    state: counts.failed ? 'warn' : 'ok',
-    key: 'session',
-    value: `${counts.commands} command(s)`,
-    note: `${counts.ok} ok · ${counts.failed} failed · ${counts.cancelled} cancelled`,
-  }));
-  write(ui.paint('muted', `  started ${started} · resume with: harness run list`));
+  const counts = { ...tally.snapshot(), marked: ledger.markCount };
+  for (const row of renderExit({ ui, counts, started, width: termWidth() })) output.write(`${row}\n`);
   return EXIT.ok;
+
+  // ── helpers that need the closure ─────────────────────────────────────
+  function emitHelp() {
+    say(ui.line({ key: 'help', value: 'type a command directly, or:' }));
+    for (const [k, v] of [
+      ['/', 'open the command palette'],
+      ['/<text>', 'filter the palette (run: plan: search: check: res: learn:)'],
+      ['!<command>', 'run a shell command through governed bash'],
+      ['!!', 're-run the previous block'],
+      ['!! <id>', 're-run any block by id'],
+      ['@<path>', 'complete a file path'],
+      ['ctrl+↑', 'walk the ledger blocks'],
+      ['esc esc', 'open the run tree'],
+      ['clear', 'clear the viewport (keeps scrollback)'],
+      ['exit / quit', 'close the session and print the tally'],
+    ]) say(ui.line({ key: k, value: v, keyWidth: 12 }));
+  }
+}
+
+/** `bash -- npm test` reads as `!npm test` in a hint row with one line. */
+function shortCommand(command, max = 34) {
+  const text = String(command ?? '').replace(/^bash\s+--\s+/, '!');
+  return text.length <= max ? text : `${text.slice(0, max - 1)}…`;
+}
+
+function safeGit(workspace) {
+  try {
+    const git = deriveGitContext({ workspace });
+    return {
+      branch: git?.branch || (git?.detached ? 'detached' : null),
+      commit: git?.commit ? String(git.commit).slice(0, 7) : null,
+    };
+  } catch {
+    // A container may have no repository; the header simply omits the fields.
+    return { branch: null, commit: null };
+  }
+}
+
+/**
+ * The ledger's settings.
+ *
+ * FAILS OPEN, deliberately, and this is the one place in the harness where
+ * that is right. `checks` and `exec` fail CLOSED on a bad config because the
+ * dropped key can be a control — `exec.network` defaulting back to `allow` is
+ * a real widening. Every key read here is presentation: a tint, a chord, a
+ * footer order. Refusing to open a session because the density setting has a
+ * typo would trade a cosmetic fault for a total one, and the fault still gets
+ * reported by `harness config` and `doctor`.
+ */
+function safeConfig({ copilotHome, workspace }) {
+  try {
+    const resolved = resolveConfig({ copilotHome, workspace });
+    return resolved?.values ?? {};
+  } catch {
+    return {};
+  }
+}
+
+/** The version shown in the header. Absent rather than guessed when the
+ * package cannot be read. */
+function readVersion() {
+  try {
+    const here = path.dirname(fileURLToPath(import.meta.url));
+    return JSON.parse(fs.readFileSync(path.join(here, '..', 'package.json'), 'utf8')).version || null;
+  } catch {
+    return null;
+  }
 }
 
 export async function cmdTui(argv, ctx = {}) {

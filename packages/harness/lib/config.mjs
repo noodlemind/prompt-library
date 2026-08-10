@@ -122,6 +122,116 @@ export const CONFIG_SCHEMA = Object.freeze({
     restrict: (a, b) => a && b,
     description: 'whether `harness bash` may run a shell at all',
   },
+
+  // ── Session Ledger presentation ────────────────────────────────────────
+  //
+  // These exist because the design mock's §6 makes an argument worth taking:
+  // the things people argue about are the things a terminal tool should make
+  // configurable rather than decide for them. Every one of them is taste or
+  // accessibility, never authority, so they all merge by plain precedence —
+  // a repository may state how its ledger looks and can grant nothing by
+  // doing so.
+  'tui.density': {
+    type: 'enum',
+    values: ['compact', 'comfortable'],
+    default: 'compact',
+    merge: 'override',
+    description: 'blank line between ledger blocks (comfortable) or none (compact)',
+  },
+  'tui.dividers': {
+    type: 'boolean',
+    default: false,
+    merge: 'override',
+    description: 'draw a rule between ledger blocks instead of relying on the tint',
+  },
+  'tui.statusline': {
+    type: 'list',
+    // A SEQUENCE, not a set — see the `ordered` note in `resolveConfig`. The
+    // order is the setting.
+    ordered: true,
+    default: ['plan', 'gate', 'run', 'knowledge'],
+    merge: 'override',
+    description: 'footer items, in order (plan, gate, run, knowledge)',
+    validate: (value) => {
+      const allowed = ['plan', 'gate', 'run', 'knowledge'];
+      for (const item of value) {
+        if (!allowed.includes(item)) {
+          throw usageError(`tui.statusline entries must be one of ${allowed.join(', ')} (got ${JSON.stringify(item)})`);
+        }
+      }
+      return value;
+    },
+  },
+  'tui.tint': {
+    type: 'enum',
+    values: ['auto', 'dark', 'light', 'off'],
+    default: 'auto',
+    merge: 'override',
+    // `off` IS the minimum-contrast answer the mock lists as an unfilled gap.
+    // Nothing is painted over the operator's own background, and block state
+    // falls back to the stripe, the glyph and the word in the record line —
+    // three channels that never depended on the tint in the first place.
+    description: 'block tint ground: auto-detect, force dark/light, or off for maximum contrast',
+  },
+  'tui.palette_chord': {
+    type: 'enum',
+    values: ['ctrl+p', 'ctrl+k', 'ctrl+space'],
+    default: 'ctrl+p',
+    merge: 'override',
+    // Ctrl-P by contract, because Ctrl-K is readline's kill-to-end-of-line and
+    // taking it costs a reflex every shell user has. Ctrl-K still opens the
+    // palette when the line is empty, where there is nothing to kill.
+    description: 'chord that opens the command palette',
+  },
+  'tui.startup': {
+    type: 'list',
+    default: ['context', 'knowledge', 'shortcuts'],
+    merge: 'override',
+    description: 'sections shown when the ledger opens (context, knowledge, shortcuts)',
+    validate: (value) => {
+      const allowed = ['context', 'knowledge', 'shortcuts'];
+      for (const item of value) {
+        if (!allowed.includes(item)) {
+          throw usageError(`tui.startup entries must be one of ${allowed.join(', ')} (got ${JSON.stringify(item)})`);
+        }
+      }
+      return value;
+    },
+  },
+  'tui.verbosity': {
+    type: 'enum',
+    values: ['normal', 'screen-reader'],
+    default: 'normal',
+    merge: 'override',
+    // The mock names screen-reader verbosity as a gap that must be specified in
+    // 4b rather than discovered later. `screen-reader` drops the tints and the
+    // live repaint — a region that redraws on every streamed line is read aloud
+    // on every streamed line — and states each block's status in words.
+    description: 'screen-reader mode: no repainting region, no tints, status stated in words',
+  },
+  'tui.alt_screen': {
+    type: 'boolean',
+    default: false,
+    merge: 'override',
+    // Main buffer by default is a design commitment, not a default worth
+    // flipping casually: the alternate screen costs scrollback, selection and
+    // the terminal's own search. It is a config because Codex and Amp both
+    // shipped alt-screen and were both forced to add an escape hatch, and the
+    // same pressure exists in reverse.
+    description: 'render in the alternate screen instead of the main buffer (costs scrollback)',
+  },
+  'tui.restore': {
+    type: 'number',
+    default: 8,
+    merge: 'override',
+    description: 'how many prior runs the ledger restores from the journal on open',
+    validate: (value) => {
+      if (!Number.isInteger(value) || value < 0 || value > 100) {
+        throw usageError('tui.restore must be an integer from 0 to 100');
+      }
+      return value;
+    },
+  },
 });
 
 export const CONFIG_KEYS = Object.freeze(Object.keys(CONFIG_SCHEMA));
@@ -295,8 +405,15 @@ export function resolveConfig({ copilotHome, workspace, projectTrusted = true } 
     // merged with a project scope was deduplicated and sorted through the
     // `Set` above — the shape of a value should not depend on how many files
     // happened to mention it.
+    // ORDERED lists keep the order they were written in. Sorting is right for a
+    // list that is a SET — `exec.allow_env` means the same thing in any order,
+    // and normalizing it makes two files that grant the same access compare
+    // equal. It is wrong for a list that is a SEQUENCE: `tui.statusline` is a
+    // footer's left-to-right order, and sorting it silently rearranges the
+    // thing the operator was configuring. Dedup still applies to both, since a
+    // repeated entry is a mistake in either reading.
     values[key] = spec.type === 'list' && Array.isArray(value)
-      ? [...new Set(value)].sort()
+      ? (spec.ordered ? [...new Set(value)] : [...new Set(value)].sort())
       : value;
     provenance[key] = { source, file, ...(note ? { note } : {}) };
   }

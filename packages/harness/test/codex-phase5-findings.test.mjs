@@ -534,17 +534,43 @@ test('FINAL-6: a provider failure after the deadline is a time budget, not a pro
     'blaming the provider for the operator’s budget produced exit 7 where 8 was the truth');
 });
 
-test('FINAL-3: the composer leaves raw mode while a command owns stdout', () => {
-  // In raw mode Ctrl-C is a keypress, not a signal, and keypresses are dropped
-  // while no `next()` is pending — which is exactly when a command is running.
-  // Cancellation was therefore impossible in the TUI.
-  const src = fs.readFileSync(path.join(packageRoot, 'lib', 'tui', 'input.mjs'), 'utf8');
-  const suspend = src.slice(src.indexOf('suspend()'), src.indexOf('resume()'));
-  assert.match(suspend, /setRawMode\(false\)/, 'suspend must restore cooked mode so SIGINT reaches the process');
-  const resume = src.slice(src.indexOf('resume()'), src.indexOf('/** The next thing'));
-  assert.match(resume, /setRawMode\(true\)/, 'and resume must take it back');
-});
+test('FINAL-3: a running command can still be cancelled from the keyboard', async () => {
+  // THE DEFECT: in raw mode Ctrl-C is a keypress, not a signal, and keypresses
+  // were discarded while no `next()` was pending — which is exactly when a
+  // command is running. Cancellation was therefore impossible in the TUI.
+  //
+  // The original fix dropped raw mode for the duration of the dispatch so the
+  // terminal's own SIGINT would fire. That is no longer available: output is
+  // captured now rather than passed through, so the region stays on screen and
+  // has to keep repainting, and Esc — which the running block's sticky header
+  // promises cancels — only exists as a keypress in raw mode.
+  //
+  // So this asserts the BEHAVIOUR rather than the mechanism, which is what was
+  // ever at stake: an interrupt arriving with nothing pending must still reach
+  // the caller.
+  const { createInput } = await import('../lib/tui/input.mjs');
+  const { PassThrough } = await import('node:stream');
+  const input = Object.assign(new PassThrough(), { isTTY: true, setRawMode() {} });
+  const output = Object.assign(new PassThrough(), { isTTY: true, columns: 60 });
+  const interrupts = [];
+  const ui = { paint: (_t, s2) => s2, unicode: true, arrow: '->', glyph: () => '', stripe: () => '|', tintRow: (_st, r) => r, stripAnsi: (t) => t, line: () => '' };
+  const session = createInput({ input, output, ui, onInterrupt: () => interrupts.push('abort') });
 
+  // No `next()` pending — the window a command runs in.
+  input.emit('keypress', '\u0003', { name: 'c', ctrl: true });
+  assert.deepEqual(interrupts, ['abort'], 'Ctrl-C during a command must reach the abort controller');
+  input.emit('keypress', null, { name: 'escape' });
+  assert.equal(interrupts.length, 2, 'and so must Esc, which the sticky header promises cancels');
+
+  // With a promise pending the keys belong to the composer again, not to the
+  // interrupt path — otherwise Esc could never open anything.
+  const pending = session.next();
+  input.emit('keypress', null, { name: 'escape' });
+  const event = await pending;
+  assert.equal(event.intent, 'escape');
+  assert.equal(interrupts.length, 2, 'an idle Esc is not an interrupt');
+  session.close();
+});
 test('FINAL-10: close is idempotent and removes the resize listener', async () => {
   const { createInput } = await import('../lib/tui/input.mjs');
   const { PassThrough } = await import('node:stream');

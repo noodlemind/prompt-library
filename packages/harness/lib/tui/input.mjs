@@ -1,127 +1,239 @@
 /**
- * Binding the composer to a real terminal (P4bAC10, P4bAC12).
+ * Binding the ledger to a real terminal.
  *
- * This is the ONLY part of the ledger that needs a TTY, and it is deliberately
- * the part with the least thinking in it: read a keypress, hand it to the
- * composer, repaint what the composer says to paint. Every decision — what a
- * key means, what the block looks like, how tall it is — lives in
- * `composer.mjs`, where a test can reach it without a pty. The phase-4b
- * reopening happened because that split did not exist and the untestable half
- * was the whole product.
+ * THIS IS THE ONLY PART THAT NEEDS A TTY, and it is deliberately the part with
+ * the least thinking in it: read a keypress, hand it to whatever currently owns
+ * input, repaint what that thing says to paint. Every decision — what a key
+ * means, what a block looks like, how tall it is — lives in a module a test can
+ * reach without a pty. The phase-4b reopening happened because that split did
+ * not exist and the untestable half was the entire product.
  *
- * REPAINT IN PLACE, IN THE MAIN BUFFER. The composer occupies the last N lines
- * of the terminal; a repaint moves the cursor up N, clears to the end of the
- * screen, and draws again. Nothing above is touched, so scrollback, selection
- * and the terminal's own search keep working — which is what P4bAC2 always
- * meant and what the alt-screen alternative would have cost.
+ * THE BOTTOM REGION is everything that repaints in place:
  *
- * WRITING TO THE TRANSCRIPT GOES THROUGH `write`, which erases the block first
- * and repaints after. A caller that wrote to the stream directly would leave
- * the composer's old pixels stranded mid-scrollback, so the session's `write`
- * is the one that must be used.
+ *     [ live block — the running command, sticky header + streaming tail ]
+ *     [ composer (two hairlines) OR an overlay, never both ]
+ *     [ hint row ]
+ *     [ footer ]
+ *
+ * Everything above it is committed scrollback and is never touched again. That
+ * is what keeps selection, the terminal's own search, and scrollback itself
+ * working — the whole reason the design declines the alternate screen.
+ *
+ * COMMAND OUTPUT IS CAPTURED, NOT PASSED THROUGH. Every harness command prints
+ * with `console.log`, straight to the stream, with no idea a region is painted
+ * below the cursor. Phase 4b's answer was to take the composer off screen for
+ * the duration, which fixed the corruption and cost the design its central
+ * idea: output that goes straight to the terminal is not a block, cannot be
+ * tinted, folded, marked or re-run, and is not a record of anything. So stdout
+ * is intercepted for the duration of a dispatch and the lines become the
+ * block's. See `capture`.
  */
 import readline from 'node:readline';
 import { createComposer } from './composer.mjs';
 import { renderStatus } from './status.mjs';
+import { renderFooter, renderHint } from './chrome.mjs';
+import { renderOverlay } from './overlay.mjs';
+import { renderBlock, runningHeader } from './block.mjs';
 
-const ESC = '';
+const ESC = '\x1b';
+
+/** How much of a running command's output stays on screen while it runs. The
+ * rest is in the block; this is the tail you watch. */
+export const LIVE_TAIL = 8;
 
 export function createInput({
   input,
   output,
   ui,
   interactive = Boolean(input.isTTY),
-  label = '',
-  hint = '',
   ascii = false,
   history = [],
+  footerItems,
+  paletteChord = 'ctrl+p',
+  /**
+   * The alternate screen, for operators who want the trade the other way.
+   *
+   * Off by default and stated as a commitment rather than a preference: the
+   * alternate screen costs scrollback, selection and the terminal's own search,
+   * which is why the design puts the ledger in the main buffer. It is a config
+   * because Codex and Amp both shipped alt-screen and were both forced to add
+   * an escape hatch — the pressure exists in both directions, and a tool that
+   * refuses to have the argument just gets forked.
+   */
+  altScreen = false,
+  /**
+   * Called when Ctrl-C or Esc arrives while NO `next()` is pending — that is,
+   * while a command is running.
+   *
+   * THIS IS THE WHOLE CANCELLATION STORY, and it replaces a worse one. Phase 4b
+   * dropped raw mode for the duration of a dispatch so the terminal's own
+   * SIGINT would fire, because in raw mode Ctrl-C is a keypress and keypresses
+   * were discarded whenever no promise was waiting — which is exactly the
+   * window a command runs in.
+   *
+   * Capturing output instead of passing it through means the region stays on
+   * screen for the whole run, so raw mode has to stay on: the live block
+   * repaints, and Esc — which the sticky header promises cancels — is a
+   * keypress that only exists in raw mode. So the interrupt is handled here
+   * rather than being handed back to the tty.
+   */
+  onInterrupt = null,
 } = {}) {
-  const width = () => Math.max(24, Math.min(output.columns || 80, 120));
+  const width = () => Math.max(40, Math.min(output.columns || 80, 160));
   const composer = createComposer({
-    width: width(), ascii, history, label, hint, paint: (t, s) => ui.paint(t, s),
+    width: width(), ascii, history, paint: (t, s) => ui.paint(t, s), paletteChord,
   });
   let status = {};
+  let hintState = { mode: 'deliver', gate: null, shell: 'allowed', rerun: null };
+  let overlay = null;
+  let live = null;
   let painted = 0;
-  // Where the cursor was PARKED inside the block by the last paint, counted in
-  // lines down from the block's first row. `erase` has to walk back exactly
-  // this far; assuming the cursor sat below the block (which it never does,
-  // because parking it is the last thing paint does) overshot by the same
-  // amount and left the old box on screen — so the next paint drew a second
-  // box inside the first.
+  // Where the cursor was PARKED inside the region by the last paint, counted in
+  // lines down from the region's first row. `erase` walks back exactly this
+  // far; assuming the cursor sat below the region (it never does, because
+  // parking it is the last thing paint does) overshot and left the old region
+  // on screen, so the next paint drew a second one inside the first.
   let parkedRow = 0;
-  let resolveLine = null;
+  let resolveEvent = null;
   let closed = false;
-  let suspended = false;
+  /**
+   * The real stdout writer, held while `capture` owns `output.write`.
+   *
+   * WITHOUT THIS the region draws itself into the block it is drawing. `capture`
+   * replaces `output.write` so a command's `console.log` becomes block content;
+   * `paint` then calls `output.write` too, so every live repaint — hairlines,
+   * sticky header, footer — was appended to the running command's output and
+   * committed to scrollback as if the command had printed it. The real-pty
+   * capture showed a block that contained its own editor.
+   */
+  let rawWrite = null;
+  const emit = (text) => (rawWrite ?? output.write.bind(output))(text);
 
-  const blockLines = () => {
-    const lines = composer.render();
-    const statusLine = renderStatus(status, { width: width(), paint: (t, s) => ui.paint(t, s) });
-    return statusLine ? [...lines, `  ${statusLine}`] : lines;
+  /** The rows of the bottom region, in order. */
+  const regionLines = () => {
+    const w = width();
+    const rows = [];
+    if (live?.block) {
+      rows.push(runningHeader(live.block, { ui, width: w, lineCount: live.block.lines.length }));
+      const tail = live.block.lines.slice(-LIVE_TAIL);
+      for (const line of tail) {
+        rows.push(...renderBlock(
+          { ...live.block, command: '', lines: [line], tally: null, next: null, kind: 'note-row' },
+          { ui, width: w, showRecord: false },
+        ));
+      }
+    }
+    if (overlay) rows.push(...renderOverlay(overlay, { ui, width: w }));
+    else {
+      composer.setWidth(w);
+      composer.setHint(renderHint({ ui, width: w, ...hintState }));
+      rows.push(...composer.render());
+    }
+    const footer = renderFooter(status, { ui, width: w, items: footerItems });
+    if (footer) rows.push(footer);
+    else {
+      // No lifecycle facts yet (a fresh workspace with no plan and no gate).
+      // The older single-row status still says which repository this is, which
+      // is the one fact that must never be missing.
+      const line = renderStatus(status, { width: w, paint: (t, s) => ui.paint(t, s) });
+      if (line) rows.push(`  ${line}`);
+    }
+    return rows;
+  };
+
+  /** Where the terminal cursor belongs inside the region. */
+  const cursorInRegion = () => {
+    let offset = 0;
+    if (live?.block) offset += 1 + Math.min(live.block.lines.length, LIVE_TAIL);
+    if (overlay) {
+      // Inside an overlay the cursor sits at the end of the typed query, which
+      // is row 1 of the box (row 0 is the top edge).
+      return { row: offset + 1, col: ui.stripAnsi(`  ${overlay.title ? `${overlay.title} ` : ''}${overlay.query}`).length + 2 };
+    }
+    const c = composer.cursor;
+    return { row: offset + c.row, col: c.col };
   };
 
   const erase = () => {
     if (!interactive || painted === 0) return;
-    if (parkedRow > 0) output.write(`${ESC}[${parkedRow}A`);
-    output.write(`\r${ESC}[0J`);
+    if (parkedRow > 0) emit(`${ESC}[${parkedRow}A`);
+    emit(`\r${ESC}[0J`);
     painted = 0;
     parkedRow = 0;
   };
 
   const paint = () => {
-    if (!interactive || closed || suspended) return;
-    // Always a full redraw. `next()` and `write()` both used to paint, so a
-    // submitted line painted twice with no erase between — the second box drawn
-    // inside the first. Making paint idempotent removes the ordering rule
+    if (!interactive || closed) return;
+    // Always a full redraw. Making paint idempotent removes an ordering rule
     // rather than asking every caller to remember it.
     erase();
-    composer.setWidth(width());
-    const lines = blockLines();
-    output.write(`${lines.join('\n')}\n`);
+    const lines = regionLines();
+    emit(`${lines.join('\n')}\n`);
     painted = lines.length;
-    // Park the cursor where the next character will go: up from the line below
-    // the block, then across. Without this it sits under the box and typing
-    // looks like it is happening somewhere else.
-    const { row, col } = composer.cursor;
+    const { row, col } = cursorInRegion();
     parkedRow = Math.max(0, Math.min(row, painted - 1));
-    output.write(`${ESC}[${painted - parkedRow}A\r${ESC}[${col}C`);
+    emit(`${ESC}[${painted - parkedRow}A\r${col > 0 ? `${ESC}[${col}C` : ''}`);
   };
 
-  /** Write into the transcript above the composer. */
-  const write = (line = '') => {
+  /** Commit rows into scrollback, above the region. Once written they are
+   * never touched again. */
+  const commit = (lines) => {
+    const rows = Array.isArray(lines) ? lines : [lines];
+    if (!rows.length) return;
     erase();
-    output.write(`${line}\n`);
+    emit(`${rows.join('\n')}\n`);
     paint();
   };
 
-  // Named, so `close` can remove it. An anonymous listener stayed attached for
-  // the life of the process, which for a long-lived shell is a leak per session.
   const onResize = () => { erase(); paint(); };
 
   const onKeypress = (str, key = {}) => {
-    if (closed || !resolveLine) return;
-    const result = composer.handleKey(str, key);
-    if (result.intent === 'exit') { const r = resolveLine; resolveLine = null; erase(); r({ intent: 'exit' }); return; }
-    if (result.intent === 'palette') { const r = resolveLine; resolveLine = null; erase(); r({ intent: 'palette' }); return; }
-    if (result.intent === 'cancel') { const r = resolveLine; resolveLine = null; erase(); r({ intent: 'cancel', hadInput: result.hadInput }); return; }
-    if (result.submitted !== undefined) {
-      const r = resolveLine;
-      resolveLine = null;
-      erase();
-      r({ line: result.submitted });
+    if (closed) return;
+    // Interrupts are read BEFORE the pending-promise check, because the moment
+    // they matter most is the moment no promise is pending. See `onInterrupt`.
+    if (!resolveEvent) {
+      const isCtrlC = Boolean(key.ctrl) && key.name === 'c';
+      if ((isCtrlC || key.name === 'escape') && typeof onInterrupt === 'function') onInterrupt();
       return;
     }
-    if (result.changed) { erase(); paint(); }
+    const owner = overlay ? overlay.handleKey(str, key) : composer.handleKey(str, key);
+    const deliver = (event) => { const r = resolveEvent; resolveEvent = null; erase(); r(event); };
+
+    if (overlay) {
+      if (owner.intent === 'close') { overlay = null; erase(); paint(); return; }
+      if (owner.intent === 'choose') { deliver({ intent: 'choose', row: owner.row }); return; }
+      if (owner.intent === 'action') { deliver({ intent: 'action', action: owner.action, row: owner.row }); return; }
+      // `filter` is handled inside the overlay so a keystroke costs a repaint
+      // rather than a round trip through the loop.
+      if (owner.changed) { erase(); paint(); }
+      return;
+    }
+
+    if (owner.intent === 'exit') { deliver({ intent: 'exit' }); return; }
+    if (owner.intent === 'palette') { deliver({ intent: 'palette' }); return; }
+    if (owner.intent === 'navigate') { deliver({ intent: 'navigate' }); return; }
+    if (owner.intent === 'escape') { deliver({ intent: 'escape' }); return; }
+    if (owner.intent === 'fold') { deliver({ intent: 'fold' }); return; }
+    if (owner.intent === 'complete') { deliver({ intent: 'complete', prefix: owner.prefix }); return; }
+    if (owner.intent === 'cancel') { deliver({ intent: 'cancel', hadInput: owner.hadInput }); return; }
+    if (owner.submitted !== undefined) { deliver({ line: owner.submitted }); return; }
+    if (owner.changed) { erase(); paint(); }
   };
 
   let rl = null;
+  const usingAltScreen = Boolean(altScreen) && interactive && Boolean(output.isTTY);
   if (interactive) {
     readline.emitKeypressEvents(input);
     if (input.isTTY) input.setRawMode(true);
     input.on('keypress', onKeypress);
     output.on?.('resize', onResize);
+    // 1049 saves the cursor and swaps buffers in one sequence, and its pair
+    // restores both — the two-sequence spelling (47 + cursor save) leaves the
+    // cursor somewhere else if the process dies between them.
+    if (usingAltScreen) emit(`${ESC}[?1049h`);
   } else {
-    // The piped path is unchanged and stays scriptable: no raw mode, no
-    // repaint, one line per line. Every existing test drives this.
+    // The piped path stays scriptable: no raw mode, no repaint, one line per
+    // line. Every non-visual test drives this.
     rl = readline.createInterface({ input, output, terminal: false });
   }
 
@@ -129,56 +241,88 @@ export function createInput({
 
   return {
     interactive,
-    write,
     composer,
+    commit,
+    /** Rows of the bottom region — exposed so a test can assert what a real
+     * session would show without owning a terminal. */
+    regionLines,
+
     setStatus(next) { status = { ...status, ...next }; if (interactive) { erase(); paint(); } },
-    setLabel(next) { composer.setLabel(next); },
+    setHint(next) {
+      hintState = { ...hintState, ...next };
+      composer.setGate(hintState.gate);
+      if (interactive) { erase(); paint(); }
+    },
+    openOverlay(next) { overlay = next; if (interactive) { erase(); paint(); } },
+    closeOverlay() { overlay = null; if (interactive) { erase(); paint(); } },
+    get overlay() { return overlay; },
+
     /**
-     * Clear the visible screen and repaint the composer.
+     * Take ownership of stdout for the duration of one dispatch.
      *
-     * Uses CSI 2J (erase display) + cursor home — NOT 3J, which also wipes
-     * scrollback. The ledger is a scrolling transcript; operators clear the
-     * viewport, not the history the design exists to keep (P4bAC2).
+     * Returns a `release` that restores it. Lines are handed to `onLine` as
+     * they complete, so a long command streams into its block instead of
+     * arriving all at once when it finishes. A partial final line — a command
+     * that printed without a trailing newline — is flushed on release rather
+     * than dropped.
+     */
+    capture(onLine) {
+      const original = output.write.bind(output);
+      rawWrite = original;
+      let buffer = '';
+      const emit = (chunk, encoding) => {
+        const text = typeof chunk === 'string' ? chunk : Buffer.from(chunk).toString(typeof encoding === 'string' ? encoding : 'utf8');
+        buffer += text;
+        let at = buffer.indexOf('\n');
+        while (at !== -1) {
+          onLine(buffer.slice(0, at).replace(/\r$/, ''));
+          buffer = buffer.slice(at + 1);
+          at = buffer.indexOf('\n');
+        }
+      };
+      output.write = (chunk, encoding, callback) => {
+        try { emit(chunk, encoding); } catch { /* a write must never throw into a command */ }
+        if (typeof encoding === 'function') encoding();
+        else if (typeof callback === 'function') callback();
+        return true;
+      };
+      return {
+        write: original,
+        release() {
+          output.write = original;
+          rawWrite = null;
+          if (buffer) { onLine(buffer); buffer = ''; }
+        },
+      };
+    },
+
+    /**
+     * Show a block as it runs.
+     *
+     * `refresh` repaints the region so streamed lines appear. It is called
+     * once per output line, which is cheap because a repaint is one cursor
+     * move and one erase — but it is also throttled by the caller, since a
+     * test suite printing 500 lines does not need 500 repaints.
+     */
+    beginLive(block) { live = { block }; if (interactive) { erase(); paint(); } },
+    refreshLive() { if (interactive && live) { erase(); paint(); } },
+    endLive() { live = null; },
+
+    /**
+     * Clear the visible screen and repaint.
+     *
+     * CSI 2J + cursor home — NOT 3J, which also wipes scrollback. The ledger is
+     * a scrolling transcript; operators clear the viewport, not the history the
+     * design exists to keep.
      *
      * A session builtin, not `!clear`: governed bash strips enough of the
-     * environment that terminfo cannot resolve ghostty/kitty/etc., so
-     * shelling out to `clear` fails with "unknown terminal type" on the
-     * terminals people actually use.
+     * environment that terminfo cannot resolve ghostty/kitty/etc., so shelling
+     * out fails with "unknown terminal type" on the terminals people use.
      */
     clearScreen() {
       erase();
-      if (interactive && output.isTTY) {
-        output.write(`${ESC}[2J${ESC}[H`);
-      }
+      if (interactive && output.isTTY) emit(`${ESC}[2J${ESC}[H`);
       painted = 0;
-      paint();
-    },
-    /**
-     * Take the composer off screen while something else owns stdout.
-     *
-     * THE DEFECT THIS FIXES: every harness command prints with `console.log`,
-     * straight to the stream, with no idea a composer is painted below the
-     * cursor. `status` therefore wrote its rows THROUGH the box — output
-     * interleaved with the border, and a second composer stranded underneath.
-     * The module note above warned that a caller writing directly would strand
-     * the block; the commands themselves are exactly that caller, and wrapping
-     * their dispatch is the only place that can be fixed once for all of them.
-     */
-    suspend() {
-      erase();
-      suspended = true;
-      // RAW MODE COMES OFF for the duration, and this is the whole fix for a
-      // real defect: in raw mode Ctrl-C is a keypress, not a signal, and the
-      // keypress handler discards everything while no `next()` promise is
-      // pending — which is exactly the window a command runs in. So Ctrl-C
-      // during a slow command was swallowed and the SIGINT bridge never fired.
-      // Cooked mode restores the terminal's own interrupt for as long as
-      // something else owns stdout.
-      if (interactive && input.isTTY) { try { input.setRawMode(false); } catch { /* already gone */ } }
-    },
-    resume() {
-      if (interactive && input.isTTY && !closed) { try { input.setRawMode(true); } catch { /* already gone */ } }
-      suspended = false;
       paint();
     },
 
@@ -189,14 +333,9 @@ export function createInput({
         return done ? { intent: 'exit' } : { line: String(value ?? '') };
       }
       paint();
-      return new Promise((resolve) => { resolveLine = resolve; });
+      return new Promise((resolve) => { resolveEvent = resolve; });
     },
-    /** Echo a submitted line into the transcript, the way a shell does — so the
-     * session reads as a record of what was asked, not only of what happened. */
-    echo(line) {
-      if (!interactive || !line) return;
-      write(`${ui.paint('muted', composer.render()[0] ? '' : '')}${ui.paint('ok', '❯')} ${line}`);
-    },
+
     close() {
       // Idempotent: an error path may close a session the normal path also
       // closes, and restoring a terminal twice must not throw on the way out.
@@ -207,6 +346,10 @@ export function createInput({
         input.off?.('keypress', onKeypress);
         output.off?.('resize', onResize);
         if (input.isTTY) { try { input.setRawMode(false); } catch { /* already gone */ } }
+        // Leaving the alternate screen is the LAST thing, after the region is
+        // erased: leaving first would put the erase on the main buffer and take
+        // two lines of the operator's own scrollback with it.
+        if (usingAltScreen) emit(`${ESC}[?1049l`);
       }
       rl?.close();
     },
