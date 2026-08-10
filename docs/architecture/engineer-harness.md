@@ -1,5 +1,7 @@
 # Engineer Harness Architecture
 
+_Last updated 2026-08-02 — reflects the July 2026 hardening wave (PRs #33–#37: budgets and telemetry, CLI design system, host token metering, knowledge layer)._
+
 This is the canonical architecture document for the Adaptive Engineer Harness. It describes current boundaries and behavior; it is not a second runtime checklist. The sole normative delivery lifecycle lives in [the Engineer agent](../../.github/agents/engineer.agent.md), and command semantics live in the [Harness Tool Contract](../../.github/skills/references/harness-tool-contract.md).
 
 ## System at a glance
@@ -97,6 +99,8 @@ Primitive paths (`.github/skills/`, agents, instructions, checks, the capability
 
 Hook and lifecycle events use schema version 2 in the local `.harness/events.jsonl`. They retain session and host identifiers plus tool, resolved targets, gate, decision, result, and duration, but never prompt content. A `skill_activation` event records only the loaded skill name and current session binding. `harness events --session <id>`, `--failures`, and `--summary` provide bounded diagnosis without introducing a trace database or dashboard.
 
+`harness report` turns that telemetry into a token-efficiency report. It reads real host token usage from Copilot's own session-state logs (input, output, cache, and reasoning tokens plus premium requests — recorded as `source: 'host'`, never estimated) and summarizes tokens-per-session trend, ranked token sinks by event type, turns, tool calls and failures, lines changed, and the estimated cost of repeated enforcement blocks. Breaches of the enforced budgets — the 2 KB orient context pack and the ~900-token Engineer definition — are reported, and `report --check` exits non-zero for CI.
+
 Repository rollout policy is defined in `.github/harness/policy.yaml`:
 
 | Mode | Recorded result | Process behavior |
@@ -190,7 +194,7 @@ Automated evidence covers the supported surfaces:
 
 | Surface | Evidence |
 |---|---|
-| GitHub Copilot in VS Code | Hydrated agents, skills, instructions, discovered user hooks, frozen Engineer budget, task-mode contracts, and executable V1–V9 doctor probes |
+| GitHub Copilot in VS Code | Hydrated agents, skills, instructions, discovered user hooks, frozen Engineer budget (~900 tokens, asserted by contract tests), task-mode contracts, and executable V1–V9 doctor probes |
 | GitHub Copilot CLI | Hydrated hooks plus executable read-only bypass, pre-edit, completion, gate, verify, and compound tests |
 | GitHub Copilot in IntelliJ IDEA | Host-neutral sources, merged instruction contract, terminal CLI behavior, and no provider-specific model pinning |
 | Portable Agent Skills hosts | Standard skill frontmatter, host-native fallbacks, and explicit degraded behavior |
