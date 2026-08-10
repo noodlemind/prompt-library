@@ -68,14 +68,11 @@ const STATUS_FROM_RUN = {
   running: 'running',
 };
 
-/** Exit code → journal status. The run journal's vocabulary is fixed by the
- * contract, and a command that reports its own status is always preferred; this
- * is the fallback for one that does not. */
-export function statusForExit(exitCode, { cancelled = false, timedOut = false } = {}) {
-  if (cancelled) return 'cancelled';
-  if (timedOut) return 'timed-out';
-  return exitCode === 0 ? 'succeeded' : 'failed';
-}
+// The exit-code fallback lives in lib/run-journal.mjs, beside the vocabulary it
+// produces. This module briefly had its own narrower copy, which journaled a
+// usage error as `failed` where the CLI journaled it as `inconclusive` — the
+// same command, two records, depending on which surface it was typed into.
+export { runStatusForExit as statusForExit } from '../run-journal.mjs';
 
 export function createLedger({
   workspace = process.cwd(),
@@ -121,6 +118,9 @@ export function createLedger({
       durationMs: r.durationMs,
       actor: r.actor || 'you',
       marked: marks.has(r.run),
+      // Restored records replay from the journal's own argv rather than from
+      // the display string, for the same reason live blocks do.
+      argv: [r.command, ...(r.argv || [])].filter(Boolean),
       // No output: see the module note. The record line carries what is known,
       // and the tally says where the rest went.
       lines: [],
@@ -150,26 +150,48 @@ export function createLedger({
       kind,
       cwd: workspace,
     });
+    // THE DISPATCHED ARGV, kept alongside the display string.
+    //
+    // `!!` used to re-tokenize `block.command`, which is what a person TYPED —
+    // so re-running `!echo hi` produced `['!echo', 'hi']` and an unknown-command
+    // error instead of replaying the governed `bash -- echo hi` that actually
+    // ran. The display string is for reading; this is for replaying, and the
+    // two stopped being the same thing the moment sigils existed.
+    block.argv = [...argv];
     block._startedMs = now();
-    if (journaling) {
-      try {
-        startRun(workspace, {
-          run,
-          command: argv[0] || command,
-          argv: argv.slice(1),
-          plan,
-          host: process.env.HARNESS_HOST || 'harness-tui',
-          actor,
-          harnessVersion,
-        });
-      } catch {
-        // A journal that cannot be written must not stop the command from
-        // running. The block still exists in memory; only its durability is
-        // lost, and `doctor` is where an unwritable `.harness` gets reported.
-        block.run = null;
-      }
-    }
+    block._plan = plan;
     blocks.push(block);
+    return block;
+  }
+
+  /**
+   * Write the run's opening record.
+   *
+   * DEFERRED PAST VALIDATION, exactly as `bin/harness.mjs` defers it through
+   * `ctx.onRunStart`: a command the registry refuses never ran, and a journal
+   * that opened a run for it would record work that did not happen. The run id
+   * is minted in `open` regardless, because the event registry needs it before
+   * dispatch — only the record waits.
+   */
+  function openRun(block) {
+    if (!block || !journaling || !block.run || block._runOpened) return block;
+    block._runOpened = true;
+    try {
+      startRun(workspace, {
+        run: block.run,
+        command: block.argv?.[0] || block.command,
+        argv: block.argv?.slice(1) ?? [],
+        plan: block._plan ?? null,
+        host: process.env.HARNESS_HOST || 'harness-tui',
+        actor,
+        harnessVersion,
+      });
+    } catch {
+      // A journal that cannot be written must not stop the command from
+      // running. The block still exists in memory; only its durability is
+      // lost, and `doctor` is where an unwritable `.harness` gets reported.
+      block.run = null;
+    }
     return block;
   }
 
@@ -182,10 +204,12 @@ export function createLedger({
     block.durationMs = durationMs;
     if (tally) block.tally = tally;
     if (next) block.next = next;
-    if (block.run) {
+    // Only a run that actually OPENED gets a terminal record; a refused
+    // command has neither, same rule as the CLI entry.
+    if (block.run && block._runOpened) {
       try {
         finishRun(workspace, { run: block.run, status, exitCode, durationMs });
-      } catch { /* see open() — durability is best effort, the session is not */ }
+      } catch { /* see openRun() — durability is best effort, the session is not */ }
     }
     return block;
   }
@@ -195,6 +219,7 @@ export function createLedger({
     get blocks() { return blocks; },
     hydrate,
     open,
+    openRun,
     close,
     /** Append an output row to a block as it streams. */
     append(block, line) {

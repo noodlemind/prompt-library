@@ -439,3 +439,80 @@ test('empty Enter after the palette restates how to pick a row', async () => {
   // the arrow-key form needs a terminal. The interactive path is covered in
   // tui-design.test.mjs and tui-repaint.test.mjs.
 });
+
+
+// --- review findings: replay fidelity and run attribution -------------------
+
+test('!! replays the governed argv of a shell block, not the string that was typed', async () => {
+  // `!echo hi` DISPATCHES `bash -- echo hi` and DISPLAYS `!echo hi`. Re-running
+  // by re-tokenizing the display string produced `['!echo', 'hi']` and failed as
+  // an unknown command, so the one sigil whose whole point is being repeatable
+  // was the one that could not be repeated.
+  const calls = [];
+  await ledger(['!echo hi', '!!', 'exit'], {
+    dispatcher: async (argv) => { calls.push(argv.filter((a) => !a.startsWith('--') && a !== process.cwd())); return 0; },
+  });
+  assert.equal(calls.length, 2, 'the shell command ran, and then ran again');
+  assert.deepEqual(calls[1], calls[0], 'the replay is the same argv, not a re-parse of the display string');
+  assert.equal(calls[1][0], 'bash', 'and it is still the governed bash, not a bare `!echo`');
+});
+
+test('!! <id> resolves a block by id or unique prefix, and says so when it cannot', async () => {
+  // Resolution is tested against the store rather than through the piped loop:
+  // a scripted session runs with `--no-events`, so its blocks carry no run id
+  // and there is nothing on a record line to copy back. What matters is the
+  // lookup rule — exact id, then a UNIQUE prefix, and never a guess.
+  const { createLedger } = await import('../lib/tui/ledger.mjs');
+  // Journaling on, so ids are real run ids — the ones that appear on a record
+  // line and that `run tree` also takes. A prefix is only worth supporting on
+  // an id someone can actually read off the screen.
+  const ledgerStore = createLedger({ workspace: tempDir('tui-byid-'), journaling: true });
+  const a = ledgerStore.open({ command: 'verify', argv: ['verify'] });
+  const b = ledgerStore.open({ command: '!echo hi', argv: ['bash', '--', 'echo hi'] });
+
+  assert.notEqual(a.id, b.id);
+  assert.equal(ledgerStore.byId(a.id)?.command, 'verify', 'an exact id resolves');
+  assert.equal(ledgerStore.byId(b.id.slice(0, 12))?.command, '!echo hi', 'so does a unique prefix');
+  assert.equal(ledgerStore.byId('zzzzzzzz'), null, 'and an id that matches nothing resolves to nothing');
+  // Ambiguity is a refusal, never a pick: two blocks share a run id's
+  // time-ordered head, and guessing between them would replay the wrong one.
+  assert.equal(ledgerStore.byId(''), null, 'an empty id resolves to nothing at all');
+
+  assert.deepEqual(b.argv, ['bash', '--', 'echo hi'],
+    'the block keeps the argv that was dispatched, which is what a replay needs');
+  assert.equal(ledgerStore.lastCommand().command, '!echo hi');
+});
+
+test('an unknown block id is reported rather than guessed at', async () => {
+  const text = await ledger([`!! ${'z'.repeat(8)}`, 'exit'], { dispatcher: async () => 0 });
+  assert.match(text, /no block with that id in this session/);
+});
+
+test('a TUI dispatch carries its own run into the event registry', async () => {
+  // Every command in the ledger opens its own run. Dispatching without that
+  // run's registry wrote events with no run at all, so `run show` for a command
+  // typed in the TUI came back empty and its domain events were attributed to
+  // the outer `tui` invocation instead.
+  let ctx = null;
+  await ledger(['status', 'exit'], {
+    workspace: tempDir('tui-events-'),
+    dispatcher: async (_argv, received) => { ctx = received; return 0; },
+  });
+  assert.ok(ctx, 'the command dispatched');
+  assert.equal(typeof ctx.onRunStart, 'function',
+    'the run record is deferred past validation, exactly as bin/harness.mjs defers it');
+  assert.equal(typeof ctx.reportStatus, 'function',
+    'and the command can report its own status, which beats reverse-mapping an exit code');
+});
+
+test('a refused command journals no run', async () => {
+  // `onRunStart` is called by the registry only once a command has passed
+  // validation. A command that never ran must not leave a run behind.
+  const workspace = tempDir('tui-refused-');
+  await ledger(['definitely-not-a-command', 'exit'], { workspace, dispatcher: async () => 0 });
+  const journal = path.join(workspace, '.harness', 'runs.jsonl');
+  const lines = fs.existsSync(journal)
+    ? fs.readFileSync(journal, 'utf8').split('\n').filter(Boolean)
+    : [];
+  assert.deepEqual(lines, [], 'an unknown command is refused before dispatch and journals nothing');
+});

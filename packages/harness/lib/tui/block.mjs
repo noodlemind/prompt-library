@@ -104,10 +104,13 @@ export function createBlock({
   folded = null,
   cwd = null,
   kind = 'command',
+  // What was DISPATCHED, as distinct from `command`, which is what was typed.
+  // `!echo hi` is one string to read and another to replay.
+  argv = [],
 } = {}) {
   return {
     id, command, status, exit, startedAt, durationMs, actor, run,
-    lines: [...lines], tally, next, marked, folded, cwd, kind,
+    lines: [...lines], tally, next, marked, folded, cwd, kind, argv: [...argv],
   };
 }
 

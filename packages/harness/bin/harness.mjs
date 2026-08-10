@@ -17,8 +17,7 @@ import { inspect } from 'node:util';
 import { pathToFileURL } from 'node:url';
 import { createStyle, keyWidthFor, EXIT } from '../lib/style.mjs';
 import { dispatch as dispatchRegistered, hasCommand, describeCommand, getCommand } from '../lib/registry.mjs';
-import { createEventRegistry } from '../lib/event-registry.mjs';
-import { writeEvent as writeHarnessEvent } from '../lib/events.mjs';
+import { createProcessEventRegistry, detectActor } from '../lib/event-registry.mjs';
 import { parseFlags, hasFlag } from '../lib/flags.mjs';
 import { commandIndexEnvelope } from '../lib/command-index.mjs';
 import { createRedactor, redactedJson } from '../lib/redact.mjs';
@@ -27,7 +26,7 @@ import { createRedactor, redactedJson } from '../lib/redact.mjs';
 // it, so `--version` reuses that one rather than reintroducing a third.
 // registry.mjs already imports this module, so it costs no extra load.
 import { readPkgVersion } from '../lib/commands.mjs';
-import { newRunId, startRun, finishRun } from '../lib/run-journal.mjs';
+import { newRunId, startRun, finishRun, runStatusFromReported, runStatusForExit } from '../lib/run-journal.mjs';
 import { setRunContext } from '../lib/run-context.mjs';
 
 const [, , command = 'help', ...args] = process.argv;
@@ -221,14 +220,10 @@ function extractOutputLane(rawArgs) {
 // contain `--output ...`; parseFlags ignores unrecognized flags (verified:
 // it silently skips both `--output` and its value token), so passing the
 // pre-extraction args here is equivalent to passing the stripped ones.
-function createProcessEventRegistry(rawArgs, run) {
-  const flags = parseFlags(rawArgs);
-  const workspace = path.resolve(flags.workspace);
-  return createEventRegistry({
-    run,
-    writeEvent: (payload) => writeHarnessEvent(workspace, flags, payload),
-  });
-}
+// Moved to lib/event-registry.mjs once the Session Ledger became a second
+// caller: it mints a run per command run inside a session, and a duplicate
+// constructor there would have drifted from this one.
+
 
 // Phase 4a (P4aAC1/P4aAC2): a run brackets one CLI invocation. The id is minted
 // ONCE here, before dispatch, and threaded into the event registry so every
@@ -265,30 +260,11 @@ function shouldSkipRunJournal(flags) {
  * cannot be reverse-mapped (a child exiting 8 through `exec` is not a harness
  * timeout).
  */
-function runStatusFromReported(status) {
-  if (status === 'ok') return 'succeeded';
-  if (status === 'failed') return 'failed';
-  if (status === 'cancelled') return 'cancelled';
-  if (status === 'timed-out') return 'timed-out';
-  return null;
-}
-
-function runStatusForExit(code) {
-  if (code === EXIT.ok) return 'succeeded';
-  if (code === EXIT.cancelled) return 'cancelled';
-  if (code === EXIT.timedOut) return 'timed-out';
-  if (code === EXIT.needsApproval) return 'blocked';
-  if (code === EXIT.usage) return 'inconclusive';
-  return 'failed';
-}
-
-/** The actor that opened this run. Mirrors the event registry's own detection
- * so a run and its events never disagree about who was driving. */
-function detectRunActor() {
-  if (process.env.CI || process.env.GITHUB_ACTIONS) return { kind: 'ci' };
-  if (process.env.HARNESS_HOST) return { kind: 'host', host: process.env.HARNESS_HOST };
-  return { kind: 'user' };
-}
+// `runStatusFromReported` and `runStatusForExit` moved to lib/run-journal.mjs,
+// which owns the status vocabulary, once the Session Ledger became a second
+// surface that opens runs — two copies had already drifted apart on the usage
+// exit code. `detectRunActor` was a third copy of the event registry's own
+// `detectActor`, which its comment already said it mirrored; there is now one.
 
 async function main() {
   let code = 0;
@@ -356,7 +332,7 @@ async function main() {
       // the legacy `writeEvent` call sites that never went through the event
       // registry — carries the run and actor. See lib/run-context.mjs for why
       // this is ambient rather than threaded.
-      setRunContext({ run: runId, actor: detectRunActor() });
+      setRunContext({ run: runId, actor: detectActor() });
       runWorkspacePath = runWorkspace;
       runJournalFlags = runFlags;
       // Deferred to `ctx.onRunStart`, which lib/registry.mjs calls once the
@@ -380,7 +356,7 @@ async function main() {
           // environment, never from a value the caller passed to query with.
           plan: command === 'run' ? null : (runFlags.plan || null),
           host: process.env.HARNESS_HOST || 'harness-cli',
-          actor: detectRunActor(),
+          actor: detectActor(),
           harnessVersion: readPkgVersion(),
           // So run retention resolves the same configuration event retention does.
           flags: runFlags,

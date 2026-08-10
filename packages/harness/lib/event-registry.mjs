@@ -42,6 +42,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createRedactor } from './redact.mjs';
 import { pkgRootFromImportMeta } from './paths.mjs';
+import { parseFlags } from './flags.mjs';
+import { writeEvent as writeHarnessEvent } from './events.mjs';
 
 const PKG_ROOT = pkgRootFromImportMeta(import.meta.url);
 
@@ -217,4 +219,29 @@ export function createEventRegistry({
   }
 
   return { emit, withCommand };
+}
+
+/**
+ * Build a registry bound to one invocation's resolved workspace and flags.
+ *
+ * THERE ARE TWO CALLERS NOW, which is why this moved here from
+ * `bin/harness.mjs`. The CLI entry mints a run per invocation; the Session
+ * Ledger mints one per command a person runs inside it. A ledger dispatch that
+ * did not carry its own registry wrote events with no run at all — so
+ * `run show` and `run tree` for a command run in the TUI came back empty, and
+ * whatever ambient context was still set attributed its domain events to the
+ * outer `tui` invocation. Duplicating the construction in the second caller
+ * would have made the two drift; one function cannot.
+ *
+ * `rawArgs` may still contain `--output ...`; `parseFlags` ignores unrecognized
+ * flags, so passing the pre-extraction args is equivalent to passing the
+ * stripped ones.
+ */
+export function createProcessEventRegistry(rawArgs, run) {
+  const flags = parseFlags(rawArgs);
+  const workspace = path.resolve(flags.workspace);
+  return createEventRegistry({
+    run,
+    writeEvent: (payload) => writeHarnessEvent(workspace, flags, payload),
+  });
 }

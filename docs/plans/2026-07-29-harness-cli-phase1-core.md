@@ -266,7 +266,7 @@ P4bAC1–AC9 all pass and all did. They are also **not the contract**: not one o
 
 **The reasoning error is recorded because it is the reusable part.** The note below argued that the Session Ledger direction makes the TUI "a read-dispatch-print loop rather than a screen manager". That is true of scrollback and false of everything else, and it was used as licence to skip the composer entirely. Amp, Pi, opencode, Grok and Claude Code are *all* main-buffer scrolling transcripts, and all five have a bordered composer, a status line, and printed shortcuts. "Scrolling transcript" never meant "bare readline"; the constraint was read as permission.
 
-The criteria below encode the contract's own TUI section. They are unchecked, so `harness verify` fails until the surface exists — which is the enforceable version of a note nobody reads.
+The criteria below encode the contract's own TUI section. They were written unchecked, so `harness verify` failed until the surface existed — the enforceable version of a note nobody reads. All of them are met as of 2026-08-10; the closing note at the end of this section records what the rebuild found.
 
 - [x] **P4bAC10** The composer is a multiline editor rendered in the main buffer: it repaints in place, keeps scrollback and selection intact above it, and degrades to ASCII on limited terminals. **Amended 2026-08-10:** the original wording said *bordered*, and a four-sided rounded box was built to satisfy it. The approved design says two hairlines and tints rather than borders; the criterion was written from the phase list, not from the design, and it is the wording that was wrong. It now reads as the design does, and `tui-design.test.mjs` fails if a vertical or a corner reappears.
 - [x] **P4bAC11** Keyboard navigation works — arrow keys move the cursor, up/down recall history at the buffer edges, and no key press can put a control sequence into the dispatched line.
@@ -274,11 +274,11 @@ The criteria below encode the contract's own TUI section. They are unchecked, so
 - [x] **P4bAC13** The palette opens from `/` at line start AND from a chord (`Ctrl-P`, `Cmd-K` aliased on macOS, configurable via `tui.palette_chord`), and is navigable by arrow keys as an ephemeral overlay rather than by typing a number. The numbered form remains for piped sessions, which have no overlay to walk.
 - [x] **P4bAC14** `@` completes workspace file paths against live state, workspace-confined through `safeResolveUnderRoot`, per the contract's composer-sigil list.
 - [x] **P4bAC15** **Restated 2026-08-10, and this is a correction of the criterion rather than a claim against it.** The design's own words are *views dissolve into commands that print blocks* — `runs` prints the run table, `plan show` renders the plan inline, `resources` prints what is loaded. Reading "seven views" as seven screens was a misreading of the direction the whole phase was reopened over, and building them would have added the panel chrome the design exists to avoid. What is required and delivered: each of the seven concerns is reachable as a command that prints a block, and every block renders through `lib/style.mjs`.
+- [x] **P4bAC16** The composer's state machine is testable without a terminal: keypress in, state and rendered lines out. The previous suite could not see any of this because the injected stream seam replaced the terminal, which is what let a broken interactive surface pass nine criteria.
 - [x] **P4bAC17** A block is a journal record. Every command run in the ledger opens and closes a run in `runs.jsonl`, so TUI work appears in `run list` and `run tree`; a session restores prior records on open, and `!!` / `!! <id>` replay one by appending a new record rather than editing the one replayed.
 - [x] **P4bAC18** The persistent chrome is a two-hairline editor tinted by gate state, a consequence hint row, and a two-column footer — and nothing else. The header is printed once into scrollback.
 - [x] **P4bAC19** Block state is carried by tint, painted stripe, glyph and the status word, and never by colour alone. `tui.tint=off` is the contrast floor; `tui.verbosity=screen-reader` is the screen-reader answer. Both gaps the design named as "specify in 4b, do not discover later" are specified.
 - [x] **P4bAC20** Every measurement is in display cells — grapheme clusters plus East Asian width — so CJK, combining marks and ZWJ emoji neither overflow a rule nor split.
-- [x] **P4bAC16** The composer's state machine is testable without a terminal: keypress in, state and rendered lines out. The previous suite could not see any of this because the injected stream seam replaced the terminal, which is what let a broken interactive surface pass nine criteria.
 
 ### Why the settled design makes this smaller than it looks
 
@@ -287,7 +287,7 @@ The Session Ledger direction — a scrolling transcript in the terminal's MAIN b
 ### Phase 4b workstreams
 
 - [x] **P4b.1** The ledger shell: the session loop, the editor, the status line, and the exit ritual. *(Session loop and exit ritual shipped in P4b.1. The "editor" was then a single-line readline with `terminal: false` and the status line was never built — marked complete in error. Rebuilt 2026-08-10 as the two-hairline composer, hint row and two-column footer the design specifies.)*
-- [x] **P4b.6** The composer: bordered, multiline, repainting in place, with keyboard navigation and history (P4bAC10, P4bAC11, P4bAC16).
+- [x] **P4b.6** The composer: two hairlines, multiline, repainting in place, with keyboard navigation and history (P4bAC10, P4bAC11, P4bAC16). *(Said "bordered" until 2026-08-10 — the same wording that produced the box AC10 now records as wrong.)*
 - [x] **P4b.7** The status line (P4bAC12).
 - [x] **P4b.8** Palette chord entry and arrow-key overlay navigation (P4bAC13).
 - [x] **P4b.9** `@` file completion (P4bAC14).

@@ -31,6 +31,7 @@ import { assertNoSymlinkAncestors } from './fs-safe.mjs';
 import { createRedactor } from './redact.mjs';
 import { appendGuarded, pruneJournalFile } from './retention.mjs';
 import { retentionDaysFor } from './retention-config.mjs';
+import { EXIT } from './style.mjs';
 
 export const RUNS_FILE = 'runs.jsonl';
 export const RUN_SCHEMA = 1;
@@ -48,6 +49,41 @@ export const RUN_STATUSES = Object.freeze([
 ]);
 
 export const TERMINAL_RUN_STATUSES = Object.freeze(RUN_STATUSES.filter((s) => s !== 'running'));
+
+/**
+ * Map a command's own reported status onto the run vocabulary.
+ *
+ * PREFERRED over the exit code, because the exit code cannot be reverse-mapped:
+ * a child exiting 8 through `exec` is not a harness timeout, and only the
+ * command knows which it was. Returns null when the command said nothing.
+ */
+export function runStatusFromReported(status) {
+  if (status === 'ok') return 'succeeded';
+  if (status === 'failed') return 'failed';
+  if (status === 'cancelled') return 'cancelled';
+  if (status === 'timed-out') return 'timed-out';
+  return null;
+}
+
+/**
+ * The fallback: what an exit code alone implies.
+ *
+ * SHARED BY EVERY SURFACE THAT OPENS A RUN. It lived in `bin/harness.mjs` while
+ * the CLI was the only one; the Session Ledger then grew its own narrower copy,
+ * and the two disagreed — the same usage error journaled as `inconclusive`
+ * through the CLI and as `failed` through the TUI. "One kernel, one behaviour
+ * path" has to include the record the kernel writes.
+ */
+export function runStatusForExit(code, { cancelled = false, timedOut = false } = {}) {
+  if (cancelled) return 'cancelled';
+  if (timedOut) return 'timed-out';
+  if (code === EXIT.ok) return 'succeeded';
+  if (code === EXIT.cancelled) return 'cancelled';
+  if (code === EXIT.timedOut) return 'timed-out';
+  if (code === EXIT.needsApproval) return 'blocked';
+  if (code === EXIT.usage) return 'inconclusive';
+  return 'failed';
+}
 
 export function runsPath(workspace) {
   return path.join(workspace, '.harness', RUNS_FILE);

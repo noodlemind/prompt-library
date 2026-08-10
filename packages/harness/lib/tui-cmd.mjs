@@ -44,7 +44,9 @@ import { completePath } from './tui/complete.mjs';
 import { deriveGitContext } from './git-context.mjs';
 import { readSession } from './session.mjs';
 import { resolveConfig } from './config.mjs';
-import { readJournal, foldRuns } from './run-journal.mjs';
+import { readJournal, foldRuns, runStatusFromReported } from './run-journal.mjs';
+import { createProcessEventRegistry, detectActor } from './event-registry.mjs';
+import { setRunContext, currentRunContext } from './run-context.mjs';
 
 /** `/Users/me/x` reads better as `~/x`, and the header has one row. */
 const tildePath = (full) => {
@@ -290,9 +292,25 @@ export async function runLedger({
       return block;
     }
 
+    // The DISPATCHED argv is what the block keeps for replay — `!echo hi` is
+    // one string to read and another to run.
     const block = ledger.open({ command: display ?? rawArgv.join(' '), argv: rawArgv });
     activeController = new AbortController();
     session.beginLive(block);
+
+    // EVERY COMMAND GETS ITS OWN RUN, and the run has to reach the writes.
+    //
+    // `bin/harness.mjs` sets the ambient context and builds an event registry
+    // before dispatch so every event an invocation produces carries its run —
+    // that is what lets `run show` join a command to the work it caused. A
+    // ledger dispatch that skipped both wrote events with no run, and left
+    // whatever context the outer `tui` invocation had set to claim them. The
+    // previous context is restored afterwards rather than cleared, because the
+    // session itself is still running inside one.
+    const outerContext = currentRunContext();
+    setRunContext({ run: block.run, actor: detectActor() });
+    const events = block.run ? createProcessEventRegistry(commandArgv, block.run) : undefined;
+    let reportedStatus = null;
 
     // Output is CAPTURED, not passed through: a line that reaches the terminal
     // directly is not part of any block and cannot be folded, marked, re-run or
@@ -308,7 +326,19 @@ export async function runLedger({
     let cancelled = false;
     let timedOut = false;
     try {
-      exitCode = await dispatcher([name, ...rest], { style: ui, signal: activeController.signal });
+      exitCode = await dispatcher([name, ...rest], {
+        style: ui,
+        signal: activeController.signal,
+        events,
+        // Deferred past validation, exactly as the CLI defers it: a command the
+        // registry refuses never ran, and opening a run for it would journal
+        // work that did not happen.
+        onRunStart: () => ledger.openRun(block),
+        // The command's own account of what happened, preferred over inferring
+        // it from the exit code — a child exiting 8 through `exec` is not a
+        // harness timeout, and only the command knows which it was.
+        reportStatus: (reported) => { reportedStatus = reported; },
+      });
     } catch (error) {
       exitCode = Number.isInteger(error?.exit) ? error.exit : 1;
       cancelled = error?.code === 'E_CANCELLED';
@@ -323,13 +353,15 @@ export async function runLedger({
       capture.release();
       activeController = null;
       session.endLive();
+      setRunContext(outerContext);
     }
 
     // `EXIT.cancelled` is cancellation however it arrives. Keying only off a
     // thrown `E_CANCELLED` counted an interrupted command as a failure, which
     // is the one distinction the tally exists to draw.
     cancelled = cancelled || exitCode === EXIT.cancelled;
-    const status = statusForExit(exitCode, { cancelled, timedOut: timedOut && !cancelled });
+    const status = runStatusFromReported(reportedStatus)
+      ?? statusForExit(exitCode, { cancelled, timedOut: timedOut && !cancelled });
     ledger.close(block, {
       status,
       exitCode,
@@ -498,10 +530,17 @@ export async function runLedger({
    * the journal is append-only and history is not a draft. */
   const rerun = async (block) => {
     if (!block?.command) { say(ui.line({ state: 'warn', key: 'rerun', value: 'nothing to re-run' })); return; }
-    let parsed;
-    try { parsed = tokenize(block.command); } catch { parsed = null; }
-    if (!parsed?.length) { say(ui.line({ state: 'warn', key: 'rerun', value: block.command, note: 'cannot be parsed back into a command' })); return; }
-    await runArgv(parsed, { display: block.command });
+    // THE STORED ARGV FIRST. Re-tokenizing the display string replayed what was
+    // TYPED, which is only the same thing when no sigil was involved: `!echo hi`
+    // came back as `['!echo', 'hi']` and failed as an unknown command instead of
+    // re-running the governed `bash -- echo hi` that actually ran. Tokenizing is
+    // the fallback for a block that predates the stored argv.
+    let argv = block.argv?.length ? [...block.argv] : null;
+    if (!argv) {
+      try { argv = tokenize(block.command); } catch { argv = null; }
+    }
+    if (!argv?.length) { say(ui.line({ state: 'warn', key: 'rerun', value: block.command, note: 'cannot be parsed back into a command' })); return; }
+    await runArgv(argv, { display: block.command });
   };
 
   // ── the loop ──────────────────────────────────────────────────────────
