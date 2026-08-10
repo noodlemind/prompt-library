@@ -206,12 +206,12 @@ test('S1: parse-failure rate over 20% degrades to advisory failure', async (t) =
   assert.match(check.hint, /parse-failure rate/);
 });
 
-test('runDoctor surfaces S1 alongside the existing check families', (t) => {
+test('runDoctor surfaces S1 alongside the existing check families', async (t) => {
   const { ws } = gitRepo(t, FIXTURE);
   const home = tempTree(t, 'harness-home-');
   const copilotHome = tempTree(t, 'harness-copilot-');
   withHome(t, home);
-  const { checks } = runDoctor({
+  const { checks } = await runDoctor({
     copilotHome,
     assetsRoot: copilotHome,
     pkgRoot: null,

@@ -1,0 +1,373 @@
+# Exercises the harness CLI on a real Windows runner. The repository's primary
+# consumption platform is Windows (AGENTS.md), but every check until now ran on
+# ubuntu-latest, so the win32 branches shipped untested: runner.mjs terminates
+# descendants with `taskkill /T /F` instead of a POSIX process group, paths.mjs
+# resolves LOCALAPPDATA/USERPROFILE, style.mjs only enables Unicode glyphs when
+# a modern terminal announces itself, and global-bin.mjs writes a .cmd shim.
+#
+# Output is captured verbatim to artifacts so the real console rendering — not
+# a reconstruction of it — can be read after the fact.
+name: Harness on Windows
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ['feat/**']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: packages/harness/package-lock.json
+
+      - name: Install harness dependencies
+        run: npm ci --prefix packages/harness
+
+      # The suite has never run on Windows. Failures here are the point of the
+      # job, so they must not hide the CLI scenarios below.
+      - name: Harness test suite (Windows)
+        id: suite
+        continue-on-error: true
+        run: npm --prefix packages/harness test
+
+      - name: CLI scenarios
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Continue'
+          New-Item -ItemType Directory -Force -Path win-output | Out-Null
+          $ws = Join-Path $env:RUNNER_TEMP 'ws'
+          $ch = Join-Path $env:RUNNER_TEMP 'copilot'
+          New-Item -ItemType Directory -Force -Path $ws, $ch | Out-Null
+          git -C $ws init -q 2>&1 | Out-Null
+          git -C $ws -c user.email=ci@example.com -c user.name=ci commit -q --allow-empty -m init 2>&1 | Out-Null
+
+          function Probe($name, $cmdArgs) {
+            $header = "`n=== $name ===`n`$ harness $($cmdArgs -join ' ')"
+            Write-Host $header
+            $out = & node packages/harness/bin/harness.mjs @cmdArgs 2>&1 | Out-String
+            $code = $LASTEXITCODE
+            Write-Host $out
+            Write-Host "[exit $code]"
+            Add-Content -Path win-output/scenarios.txt -Value "$header`n$out[exit $code]"
+          }
+
+          Probe 'help — design system on the Windows console' @('help')
+          Probe 'status — ledger rendering' @('status', '--workspace', $ws, '--copilot-home', $ch)
+          Probe 'status --json — legacy machine shape' @('status', '--json', '--workspace', $ws, '--copilot-home', $ch)
+          Probe 'status --output json-envelope — versioned envelope lane' @('status', '--output', 'json-envelope', '--workspace', $ws, '--copilot-home', $ch)
+          Probe 'status --output agent — budgeted agent lane' @('status', '--output', 'agent', '--workspace', $ws, '--copilot-home', $ch)
+          Probe 'orient' @('orient', '--query', 'windows smoke', '--workspace', $ws, '--copilot-home', $ch)
+          Probe 'index --structural (from main #42)' @('index', '--structural', '--workspace', $ws, '--copilot-home', $ch)
+          Probe 'knowledge status (from main #42)' @('knowledge', 'status', '--workspace', $ws, '--copilot-home', $ch)
+          Probe 'unknown flag — strict validation, expect E_USAGE exit 2' @('status', '--bogus', '--workspace', $ws)
+          Probe 'missing required arg — expect E_USAGE exit 2' @('recall', '--workspace', $ws, '--copilot-home', $ch)
+          Probe 'literal boundary — --json after -- must stay literal' @('status', '--workspace', $ws, '--copilot-home', $ch, '--', '--json')
+
+      # Redaction and descendant termination are the two win32 paths with the
+      # least coverage, so they are exercised directly rather than inferred.
+      # Unlike the diagnostic steps above, these two are pass/fail assertions
+      # and they GATE the job — each writes an explicit verdict to
+      # $GITHUB_OUTPUT and the "Windows probe gate" step at the end turns any
+      # non-pass into a red job. `continue-on-error` stays on for ordering
+      # only: a failing probe must not skip the probe after it, the
+      # environment fingerprint, or the artifact upload. It no longer decides
+      # whether the job is green — the gate does, and it fails closed.
+      - name: Redaction on Windows
+        id: redaction
+        continue-on-error: true
+        shell: pwsh
+        env:
+          MY_API_TOKEN: 'ghp_windowssmoketest0123456789abcdefghij'
+        run: |
+          # GitHub prepends `$ErrorActionPreference = 'stop'` to every pwsh
+          # step. This probe is EXPECTED to exit nonzero — `learnings --why
+          # <unknown>` is an E_TARGET miss, verified exit 1 — and it redirects
+          # native stderr with 2>&1. Neither aborts the step on pwsh 7.4
+          # (`$PSNativeCommandUseErrorActionPreference` is $false there), but if
+          # a future runner image flips that default, an inherited 'stop' would
+          # kill this step on its own expected exit and leave the gate with no
+          # verdict. This step decides its own failure, below and explicitly.
+          $ErrorActionPreference = 'Continue'
+          New-Item -ItemType Directory -Force -Path win-output | Out-Null
+          $ws = Join-Path $env:RUNNER_TEMP 'ws'
+          # -Width is pinned: Out-String otherwise wraps at the console width,
+          # and a secret split across a wrap would slip past the match below.
+          $out = & node packages/harness/bin/harness.mjs learnings --why $env:MY_API_TOKEN --workspace $ws 2>&1 | Out-String -Width 4096
+          Write-Host $out
+          Add-Content -Path win-output/scenarios.txt -Value "`n=== redaction (ledger) ===`n$out"
+
+          # TWO assertions, not one. "the raw token is absent" is worthless on
+          # its own — a probe that rendered nothing at all satisfies it. The
+          # mask must also be PRESENT, proving the token reached the ledger and
+          # came back masked. The marker is `«redacted:env:MY_API_TOKEN»` (the
+          # env-value rule fires before the github-token pattern because the
+          # token is exported to this step); only the ASCII middle is matched,
+          # so a console code page that mangles the guillemets cannot fake a
+          # failure.
+          $leaked = $out -match 'ghp_windowssmoketest'
+          $masked = $out -match 'redacted:'
+          if ($leaked) {
+            $verdict = 'fail'
+            $reason = 'SECRET LEAKED - the ledger printed the raw token, redaction did not hold on win32'
+          } elseif (-not $masked) {
+            $verdict = 'fail'
+            $reason = 'no redaction marker in the output - the token never reached the ledger, so "no leak" proves nothing'
+          } else {
+            $verdict = 'pass'
+            $reason = 'the token reached the ledger and came back masked'
+          }
+          Add-Content -Path $env:GITHUB_OUTPUT -Value "result=$verdict"
+          Add-Content -Path $env:GITHUB_OUTPUT -Value "reason=$reason"
+          Add-Content -Path win-output/scenarios.txt -Value "RESULT: $verdict - $reason"
+          if ($verdict -ne 'pass') {
+            Write-Host "::error title=Redaction on Windows::${reason}"
+            exit 1
+          }
+          Write-Host 'redaction held on Windows'
+          exit 0
+
+      - name: Runner descendant termination via taskkill
+        id: cancellation
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          # See the note on the redaction step: an inherited 'stop' could abort
+          # this step on the probe's own nonzero exit — the exact signal the
+          # gate needs to read.
+          $ErrorActionPreference = 'Continue'
+          New-Item -ItemType Directory -Force -Path win-output | Out-Null
+          $script = @'
+          import { runProcess } from './packages/harness/lib/runner.mjs';
+
+          // The child is `process.execPath` on BOTH platforms: node is guaranteed to be
+          // installed, it never reads stdin, and it behaves identically everywhere. The
+          // previous probe ran `cmd /c "start /b timeout /t 60 >nul & timeout /t 60 >nul"`
+          // on win32, and Windows `timeout` refuses to run when stdin is not a console
+          // ("ERROR: Input redirection is not supported") — runProcess spawns with
+          // stdio: ['ignore','pipe','pipe'], so the whole tree exited on its own in ~75ms
+          // and the probe reported `failed` without cancellation ever being exercised.
+          // (The old POSIX branch, `sh -c 'sleep 60 & sleep 60'`, did not exit instantly,
+          // but it was shell-dependent and, like the win32 branch, never checked that the
+          // descendant actually died.) The settledMs and grandchild assertions below make
+          // both failure modes impossible to mistake for a pass.
+          const ABORT_AT_MS = 1200;
+          const SLEEP_MS = 60000;
+
+          // A parent that spawns a NON-detached grandchild, so termination has to reach
+          // the whole tree: on POSIX the grandchild stays inside the process group
+          // runProcess created for the direct child (detached: true), and on win32 it
+          // stays inside the pid tree that `taskkill /T` walks. The grandchild outlives
+          // its parent, so a termination that only reached the direct child leaves it
+          // running and this probe reports it.
+          const childSource = `
+          const { spawn } = require('node:child_process');
+          const grandchild = spawn(process.execPath, ['-e', 'setTimeout(() => {}, ${SLEEP_MS})'], { stdio: 'ignore' });
+          grandchild.unref();
+          process.stdout.write('grandchild-pid=' + grandchild.pid + '\\n');
+          setTimeout(() => {}, ${SLEEP_MS});
+          `;
+
+          // signum 0 is an existence probe on win32 too: libuv's uv__kill() answers it
+          // with GetExitCodeProcess and returns ESRCH once the process is no longer
+          // STILL_ACTIVE.
+          function alive(pid) {
+            try {
+              process.kill(pid, 0);
+              return true;
+            } catch (error) {
+              return error.code === 'EPERM';
+            }
+          }
+
+          const ctrl = new AbortController();
+          // `started` is captured BEFORE the abort is scheduled, so the abort can never
+          // land earlier than started + ABORT_AT_MS.
+          const started = Date.now();
+          setTimeout(() => ctrl.abort(), ABORT_AT_MS);
+          const res = await runProcess({
+            argv: [process.execPath, '-e', childSource],
+            signal: ctrl.signal,
+            timeoutMs: 30000,
+          });
+          const settledMs = Date.now() - started;
+
+          const pidMatch = /grandchild-pid=(\d+)/.exec(res.stdout);
+          const grandchildPid = pidMatch ? Number(pidMatch[1]) : null;
+          let grandchildAlive = grandchildPid !== null && alive(grandchildPid);
+          for (let i = 0; grandchildAlive && i < 20; i += 1) {
+            await new Promise((resolve) => setTimeout(resolve, 100));
+            grandchildAlive = alive(grandchildPid);
+          }
+
+          console.log(JSON.stringify({
+            status: res.status,
+            exitCode: res.exitCode,
+            settledMs,
+            abortAtMs: ABORT_AT_MS,
+            grandchildPid,
+            grandchildAlive,
+            platform: process.platform,
+          }, null, 2));
+
+          const failures = [];
+          if (res.status !== 'cancelled') failures.push(`EXPECTED cancelled, GOT ${res.status}`);
+          // The tree must still have been RUNNING when the abort fired. Settling near
+          // zero means the child died on its own and termination was never exercised —
+          // exactly how the previous probe passed a broken command off as a runner result.
+          if (settledMs < ABORT_AT_MS - 100) {
+            failures.push(`EXPECTED settledMs >= ${ABORT_AT_MS} (child alive when the abort fired), GOT ${settledMs}`);
+          }
+          if (settledMs > 15000) failures.push(`EXPECTED termination to settle promptly after the abort, GOT ${settledMs}ms`);
+          if (grandchildPid === null) failures.push('EXPECTED a grandchild pid on stdout; tree termination was never exercised');
+          if (grandchildAlive) failures.push(`EXPECTED the grandchild (pid ${grandchildPid}) to die with the tree, but it is still alive`);
+          if (failures.length) {
+            for (const failure of failures) console.error(failure);
+            process.exit(1);
+          }
+          console.log('runner cancellation terminated the whole tree');
+          '@
+          Set-Content -Path win-cancel.mjs -Value $script
+          $out = & node win-cancel.mjs 2>&1 | Out-String -Width 4096
+          $code = $LASTEXITCODE
+          Write-Host $out
+          Write-Host "[exit $code]"
+          Add-Content -Path win-output/scenarios.txt -Value "`n=== runner cancellation (taskkill path) ===`n$out[exit $code]"
+          if ($code -eq 0) {
+            Add-Content -Path $env:GITHUB_OUTPUT -Value 'result=pass'
+            Add-Content -Path $env:GITHUB_OUTPUT -Value 'reason=cancellation terminated the whole process tree, grandchild included'
+            Add-Content -Path win-output/scenarios.txt -Value 'RESULT: pass'
+            exit 0
+          }
+          # The probe prints one `EXPECTED ... GOT ...` line per broken
+          # assertion. Carrying them into the gate is what makes the job
+          # summary say WHICH guarantee broke rather than just showing a red X.
+          # Unanchored on purpose: PowerShell may prefix native stderr lines
+          # when rendering them as error records, and losing the reason to a
+          # formatting detail would defeat the point.
+          $expected = @($out -split "`r?`n" | Where-Object { $_ -match 'EXPECTED ' })
+          if ($expected.Count -gt 0) {
+            $reason = ($expected -join ' | ')
+          } else {
+            $reason = "the probe exited $code without reporting an assertion - read the captured output"
+          }
+          # $GITHUB_OUTPUT is line-oriented `key=value`; a stray newline in the
+          # value would be read as another key.
+          $reason = ($reason -replace '[\r\n]+', ' ').Trim()
+          if ($reason.Length -gt 400) { $reason = $reason.Substring(0, 400) }
+          Add-Content -Path $env:GITHUB_OUTPUT -Value 'result=fail'
+          Add-Content -Path $env:GITHUB_OUTPUT -Value "reason=$reason"
+          Add-Content -Path win-output/scenarios.txt -Value "RESULT: fail - $reason"
+          Write-Host "::error title=Runner descendant termination via taskkill::${reason}"
+          exit 1
+
+      - name: Environment fingerprint
+        if: always()
+        shell: pwsh
+        run: |
+          $info = @{
+            os = (Get-CimInstance Win32_OperatingSystem).Caption
+            version = [System.Environment]::OSVersion.VersionString
+            node = (node --version)
+            shell = 'pwsh'
+            WT_SESSION = "$env:WT_SESSION"
+            TERM_PROGRAM = "$env:TERM_PROGRAM"
+          } | ConvertTo-Json
+          Write-Host $info
+          Add-Content -Path win-output/scenarios.txt -Value "`n=== environment ===`n$info"
+
+      - name: Upload captured output
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: harness-windows-output
+          path: win-output/
+
+      # The one step that decides whether this job is green. It runs LAST, and
+      # after the artifact upload, so a red gate never costs us the captured
+      # output that explains it.
+      #
+      # This shape exists so that two things stay true at once: a failing suite
+      # must never skip the CLI scenario and probe steps below it (hence
+      # `continue-on-error` on every step above), AND a real redaction leak or
+      # a broken taskkill path must never ship green (hence this gate). Only
+      # the two security-relevant probes gate; the suite outcome is reported,
+      # never enforced, exactly as the header comment describes.
+      #
+      # It fails CLOSED: a probe that reported no verdict at all — it crashed,
+      # or never ran — is a failure, not a pass. Verdicts arrive through `env`
+      # rather than inline `${{ }}` interpolation so no value can be parsed as
+      # PowerShell.
+      - name: Windows probe gate
+        if: always()
+        shell: pwsh
+        env:
+          SUITE_OUTCOME: ${{ steps.suite.outcome }}
+          REDACTION_RESULT: ${{ steps.redaction.outputs.result }}
+          REDACTION_REASON: ${{ steps.redaction.outputs.reason }}
+          CANCELLATION_RESULT: ${{ steps.cancellation.outputs.result }}
+          CANCELLATION_REASON: ${{ steps.cancellation.outputs.reason }}
+        run: |
+          $ErrorActionPreference = 'Continue'
+          $names = @('Redaction on Windows', 'Runner descendant termination via taskkill')
+          $results = @($env:REDACTION_RESULT, $env:CANCELLATION_RESULT)
+          $reasons = @($env:REDACTION_REASON, $env:CANCELLATION_REASON)
+
+          $rows = @()
+          $failed = @()
+          for ($i = 0; $i -lt $names.Length; $i++) {
+            $name = $names[$i]
+            $result = $results[$i]
+            $reason = $reasons[$i]
+            if ([string]::IsNullOrWhiteSpace($result)) {
+              $result = 'no-verdict'
+              $reason = 'the probe reported nothing - it crashed, was cancelled, or never ran, so this win32 guarantee is UNPROVEN'
+            }
+            if ([string]::IsNullOrWhiteSpace($reason)) { $reason = '(no detail)' }
+            if ($result -ne 'pass') {
+              $failed += $name
+              Write-Host "::error title=${name}::${result} - ${reason}"
+            }
+            # The cancellation probe joins its failures with ' | ', so an
+            # unescaped detail would split the row into extra columns and
+            # scramble the table in exactly the failure case it exists to explain.
+            $cellReason = $reason -replace '\|', '\|'
+            $rows += "| $name | $result | $cellReason |"
+          }
+
+          $lines = @()
+          $lines += '## Windows probe gate'
+          $lines += ''
+          $lines += '| probe | verdict | detail |'
+          $lines += '| --- | --- | --- |'
+          $lines += $rows
+          $lines += ''
+          $lines += ('Harness test suite (Windows): **' + $env:SUITE_OUTCOME + '** - reported, never gating. A red suite must not hide the CLI scenario and probe steps that follow it; see the header comment in this workflow.')
+          $lines += ''
+          if ($failed.Count -gt 0) {
+            $lines += ('**GATE FAILED** - ' + ($failed -join ', ') + '. Full console capture is in the harness-windows-output artifact.')
+          } else {
+            $lines += 'Both gating probes passed.'
+          }
+
+          $lines | ForEach-Object { Write-Host $_ }
+          if ($env:GITHUB_STEP_SUMMARY) {
+            $lines | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          }
+          if ($failed.Count -gt 0) { exit 1 }
+          exit 0

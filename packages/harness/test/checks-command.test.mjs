@@ -1,0 +1,266 @@
+/**
+ * Phase 3 — `harness checks list|show|run`.
+ *
+ * The named checks were previously reachable only through `verify`, which runs
+ * the whole plan-gated pipeline, so "what does this repo run, and does that one
+ * check pass" had no answer short of reading the YAML by hand. That is how the
+ * file came to have four independent parsers.
+ *
+ * What is pinned here: the per-verb side-effect split (a palette must not paint
+ * an execute glyph on a listing), the exit-code contract (`run` reports the
+ * check's own verdict so CI can gate on one check), and that an unknown check
+ * is a not-found rather than a usage error or a crash.
+ */
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import { test } from 'node:test';
+import { getCommand } from '../lib/registry.mjs';
+import { EXIT } from '../lib/style.mjs';
+import { loadNamedChecks, validateCommand } from '../lib/checks.mjs';
+import { approveProject } from '../lib/trust.mjs';
+import { setConfigValue } from '../lib/config.mjs';
+
+const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const binPath = path.join(packageRoot, 'bin', 'harness.mjs');
+
+function tempDir(prefix) {
+  return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+}
+
+function workspaceWithChecks(body) {
+  const ws = tempDir('checks-ws-');
+  fs.mkdirSync(path.join(ws, '.github', 'harness'), { recursive: true });
+  fs.writeFileSync(path.join(ws, '.github', 'harness', 'checks.yaml'), body);
+  return ws;
+}
+
+/** P3AC6: `checks run` executes repo-authored argv and is gated on trust.
+ * These tests are about the verb contract, so the fixture is approved against
+ * its own throwaway home; `test/trust.test.mjs` asserts the refusal. */
+function run(argv, ws) {
+  const copilotHome = tempDir('checks-home-');
+  approveProject({ workspace: ws, copilotHome });
+  return spawnSync(process.execPath, [binPath, ...argv, '--workspace', ws, '--copilot-home', copilotHome], {
+    cwd: packageRoot,
+    encoding: 'utf8',
+  });
+}
+
+const PASSING = `version: 1
+checks:
+  ok-check:
+    command: ["node", "-e", "process.exit(0)"]
+    timeout_seconds: 30
+  bad-check:
+    command: ["node", "-e", "process.exit(3)"]
+`;
+
+test('the shared check surface is importable — the whole point of the extraction', () => {
+  assert.equal(typeof loadNamedChecks, 'function');
+  assert.equal(typeof validateCommand, 'function');
+  const ws = workspaceWithChecks(PASSING);
+  const { checks, error } = loadNamedChecks(ws);
+  assert.equal(error, null);
+  assert.deepEqual(Object.keys(checks).sort(), ['bad-check', 'ok-check']);
+});
+
+// The entry's sideEffect is the policy-facing maximum; a palette that painted
+// every verb with it would warn about a listing as loudly as an execution.
+test('checks declares execute as its maximum, with list and show overriding down to read', () => {
+  const entry = getCommand('checks');
+  assert.equal(entry.sideEffect, 'execute', 'run executes a repo-authored argv, so the maximum is execute');
+  const byVerb = Object.fromEntries(entry.verbs.map((v) => [v.verb, v.sideEffect ?? entry.sideEffect]));
+  assert.equal(byVerb.list, 'read');
+  assert.equal(byVerb.show, 'read');
+  assert.equal(byVerb.run, 'execute', 'run inherits the maximum rather than overriding it');
+});
+
+test('checks list reports every declared check with its argv and timeout', () => {
+  const ws = workspaceWithChecks(PASSING);
+  const res = run(['checks', 'list', '--json'], ws);
+  assert.equal(res.status, 0, res.stderr);
+  const body = JSON.parse(res.stdout);
+  assert.equal(body.checks.length, 2);
+  const ok = body.checks.find((c) => c.name === 'ok-check');
+  assert.deepEqual(ok.command, ['node', '-e', 'process.exit(0)']);
+  assert.equal(ok.timeoutSeconds, 30);
+  assert.equal(ok.valid, true);
+  // The default is applied on read, not left undefined for the caller to guess.
+  assert.equal(body.checks.find((c) => c.name === 'bad-check').timeoutSeconds, 600);
+});
+
+test('checks run exits 0 on pass and non-zero on failure, so CI can gate one check', () => {
+  const ws = workspaceWithChecks(PASSING);
+  const pass = run(['checks', 'run', 'ok-check', '--json'], ws);
+  assert.equal(pass.status, 0, pass.stderr);
+  assert.equal(JSON.parse(pass.stdout).outcome.status, 'passed');
+
+  const fail = run(['checks', 'run', 'bad-check', '--json'], ws);
+  assert.notEqual(fail.status, 0, 'a failing check must not report success');
+  assert.equal(JSON.parse(fail.stdout).outcome.status, 'failed');
+});
+
+test('an unknown check is a not-found that names the checks that exist', () => {
+  const ws = workspaceWithChecks(PASSING);
+  const res = run(['checks', 'show', 'nope'], ws);
+  assert.equal(res.status, EXIT.notFound, res.stderr);
+  assert.match(res.stderr, /E_NOT_FOUND/);
+  assert.match(res.stderr, /bad-check, ok-check/, 'a typo is recoverable without a second command');
+});
+
+test('an unknown verb is a usage error, distinct from an absent check', () => {
+  const ws = workspaceWithChecks(PASSING);
+  const res = run(['checks', 'teleport'], ws);
+  assert.equal(res.status, EXIT.usage, res.stderr);
+  assert.match(res.stderr, /E_USAGE/);
+});
+
+test('a workspace with no check config reports that, rather than an empty list', () => {
+  const ws = tempDir('checks-none-');
+  const res = run(['checks', 'list'], ws);
+  assert.equal(res.status, EXIT.notFound, res.stderr);
+  assert.match(res.stderr, /Trusted check config not found/);
+});
+
+// An invalid entry must be visible rather than silently omitted: a check that
+// cannot run is a broken gate, and a listing that hides it reads as healthy.
+test('a malformed check entry is listed and marked invalid, not dropped', () => {
+  const ws = workspaceWithChecks(`version: 1
+checks:
+  broken:
+    command: []
+`);
+  const res = run(['checks', 'list', '--json'], ws);
+  assert.equal(res.status, 0, res.stderr);
+  const entry = JSON.parse(res.stdout).checks[0];
+  assert.equal(entry.name, 'broken');
+  assert.equal(entry.valid, false);
+  assert.match(entry.invalidReason, /non-empty argv array/);
+});
+
+test('checks answers the envelope lane', () => {
+  const ws = workspaceWithChecks(PASSING);
+  const res = run(['checks', 'list', '--output', 'json-envelope'], ws);
+  assert.equal(res.status, 0, res.stderr);
+  const body = JSON.parse(res.stdout);
+  assert.equal(body.command, 'checks');
+  assert.equal(body.status, 'ok');
+});
+
+// --- P3.6: the execution audit for the named-check path ---
+
+/**
+ * `runNamedCheck` is the choke point BOTH `verify` and `checks run` go through,
+ * which is why the audit lives there rather than in either caller — the same
+ * lesson `exec` learned when its audit sat in the handler and the envelope lane
+ * executed with no record at all.
+ */
+test('running a named check writes an execution audit in the same shape exec uses', () => {
+  const ws = workspaceWithChecks(PASSING);
+  const copilotHome = tempDir('checks-audit-home-');
+  approveProject({ workspace: ws, copilotHome });
+  spawnSync(process.execPath, [binPath, 'checks', 'run', 'ok-check', '--workspace', ws, '--copilot-home', copilotHome], {
+    cwd: packageRoot,
+    encoding: 'utf8',
+  });
+
+  const events = fs.readFileSync(path.join(ws, '.harness', 'events.jsonl'), 'utf8')
+    .split('\n').filter(Boolean).map((l) => JSON.parse(l)).filter((e) => e.type === 'exec');
+  assert.equal(events.length, 1, 'executing a repo-authored argv must leave exactly one execution record');
+  const [event] = events;
+  assert.equal(event.exec.check, 'ok-check', 'the record must name which check ran');
+  assert.deepEqual(event.exec.argv, ['node', '-e', 'process.exit(0)']);
+  assert.equal(event.exec.cwd, fs.realpathSync(ws));
+  assert.ok(Array.isArray(event.exec.controls) && event.exec.controls.length > 0,
+    'a check runs under the same declared controls as any other execution');
+  assert.equal(event.status, 'ok');
+});
+
+// The default is the behavior checks have always had; the point of the key is
+// that an operator can change it without patching the harness.
+test('checks.env_allowlist is off by default and opt-in-able', () => {
+  const ws = workspaceWithChecks(`version: 1
+checks:
+  echo-env:
+    command: ${JSON.stringify([process.execPath, '-e', 'console.log("SEEN=" + String(process.env.MY_CHECK_SECRET))'])}
+`);
+  const copilotHome = tempDir('checks-env-home-');
+  approveProject({ workspace: ws, copilotHome });
+  const invoke = () => spawnSync(
+    process.execPath,
+    [binPath, 'checks', 'run', 'echo-env', '--workspace', ws, '--copilot-home', copilotHome, '--no-events'],
+    { cwd: packageRoot, encoding: 'utf8', env: { ...process.env, MY_CHECK_SECRET: 'inherited-value' } },
+  );
+
+  assert.match(invoke().stdout, /SEEN=inherited-value/,
+    'the default must be what named checks have always done — flipping it silently would break checks that need a variable nobody enumerated');
+
+  setConfigValue({ scope: 'user', key: 'checks.env_allowlist', value: 'true', copilotHome, workspace: ws });
+  assert.match(invoke().stdout, /SEEN=undefined/, 'opting in must actually withhold the variable');
+});
+
+/**
+ * Found by the Codex phase review.
+ *
+ * `checks run` exists so CI can gate on a single check without parsing output.
+ * `dispatchLane` returns 0 on any success path unless the entry declares an
+ * `exitOf`, and this entry did not — so the envelope lane exited 0 for a failing
+ * check while the ledger lane exited 1, and the envelope printed
+ * `"status":"ok"` directly above `"status":"failed"`. A pipeline gating through
+ * the envelope lane passed every failing check.
+ */
+const FAILING = `version: 1
+checks:
+  failing:
+    command: ["node", "-e", "process.exit(3)"]
+  passing:
+    command: ["node", "-e", "process.exit(0)"]
+`;
+
+for (const lane of [null, 'json-envelope', 'agent']) {
+  test(`checks run reports the check's verdict through the exit code on the ${lane || 'ledger'} lane`, () => {
+    const ws = workspaceWithChecks(FAILING);
+    const copilotHome = tempDir('checks-exit-home-');
+    approveProject({ workspace: ws, copilotHome });
+    const invoke = (name) => {
+      const argv = ['checks', 'run', name, '--workspace', ws, '--copilot-home', copilotHome, '--no-events'];
+      if (lane) argv.push('--output', lane);
+      return spawnSync(process.execPath, [binPath, ...argv], { cwd: packageRoot, encoding: 'utf8' });
+    };
+    assert.equal(invoke('failing').status, 1, 'a failing check must be a non-zero exit on every lane');
+    assert.equal(invoke('passing').status, EXIT.ok);
+  });
+}
+
+test('the envelope never reports a status its own outcome contradicts', () => {
+  const ws = workspaceWithChecks(FAILING);
+  const copilotHome = tempDir('checks-envelope-home-');
+  approveProject({ workspace: ws, copilotHome });
+  const res = spawnSync(
+    process.execPath,
+    [binPath, 'checks', 'run', 'failing', '--workspace', ws, '--copilot-home', copilotHome, '--no-events', '--output', 'json-envelope'],
+    { cwd: packageRoot, encoding: 'utf8' },
+  );
+  const envelope = JSON.parse(res.stdout);
+  assert.equal(envelope.status, 'failed');
+  assert.equal(envelope.outcome.status, 'failed');
+  assert.equal(res.status, 1, 'the process exit and the envelope must describe the same outcome');
+});
+
+test('list and show stay exit 0 — they answer a question rather than run one', () => {
+  const ws = workspaceWithChecks(FAILING);
+  const copilotHome = tempDir('checks-query-home-');
+  approveProject({ workspace: ws, copilotHome });
+  for (const argv of [['checks', 'list'], ['checks', 'show', 'failing']]) {
+    const res = spawnSync(
+      process.execPath,
+      [binPath, ...argv, '--workspace', ws, '--copilot-home', copilotHome, '--no-events', '--output', 'json-envelope'],
+      { cwd: packageRoot, encoding: 'utf8' },
+    );
+    assert.equal(res.status, EXIT.ok, `${argv.join(' ')} must not inherit run's verdict`);
+  }
+});

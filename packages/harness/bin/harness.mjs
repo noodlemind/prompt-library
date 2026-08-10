@@ -2,33 +2,33 @@
 /**
  * harness — install Adaptive Engineer Harness into global Copilot paths.
  * The npm package name is @dev-kit/harness; the command users and agents run is harness.
+ *
+ * P1.6: every command dispatches through lib/registry.mjs — the
+ * hand-written switch (and its hand-written CATALOG help data) is retired.
+ * `dispatch`/`hasCommand` (lib/registry.mjs) are the only command surface;
+ * `help`/`--help`/`-h` is the one remaining non-registered branch, handled
+ * directly below since it isn't a command with a side-effect class of its
+ * own — it renders data ABOUT the registry, sourced from
+ * `describeAll`/`describeCommand`.
  */
-import {
-  cmdInstallOrUpgrade,
-  cmdDoctor,
-  cmdStatus,
-  cmdInitRepo,
-  cmdIndex,
-  cmdOrient,
-  cmdGate,
-  cmdVerify,
-  cmdRecall,
-  cmdEvents,
-  cmdValidatePlan,
-  cmdCompound,
-  cmdConsolidate,
-  cmdRemember,
-  cmdLearning,
-  cmdLearnings,
-  cmdEvalKnowledge,
-  cmdKnowledge,
-  cmdGet,
-  cmdUninstall,
-  cmdResolve,
-  cmdReport,
-} from '../lib/commands.mjs';
-import { cmdPlanNew } from '../lib/plan-new.mjs';
+import fs from 'node:fs';
+import path from 'node:path';
+import { inspect } from 'node:util';
+import { pathToFileURL } from 'node:url';
 import { createStyle, keyWidthFor, EXIT } from '../lib/style.mjs';
+import { dispatch as dispatchRegistered, hasCommand, describeCommand, getCommand } from '../lib/registry.mjs';
+import { createEventRegistry } from '../lib/event-registry.mjs';
+import { writeEvent as writeHarnessEvent } from '../lib/events.mjs';
+import { parseFlags, hasFlag } from '../lib/flags.mjs';
+import { commandIndexEnvelope } from '../lib/command-index.mjs';
+import { createRedactor, redactedJson } from '../lib/redact.mjs';
+// The single package-version reader (lib/commands.mjs) — `cmdStatus`'s own
+// read and registry.mjs#readHarnessVersion were deliberately consolidated into
+// it, so `--version` reuses that one rather than reintroducing a third.
+// registry.mjs already imports this module, so it costs no extra load.
+import { readPkgVersion } from '../lib/commands.mjs';
+import { newRunId, startRun, finishRun } from '../lib/run-journal.mjs';
+import { setRunContext } from '../lib/run-context.mjs';
 
 const [, , command = 'help', ...args] = process.argv;
 // This renderer only writes error blocks, which go to stderr — detect there.
@@ -36,202 +36,62 @@ const ui = createStyle({ argv: args, stream: process.stderr });
 // Help writes to stdout — its own capability detection.
 const out = createStyle({ argv: args });
 
-// The catalog: every command with its group, one-line job, usage signature,
-// and its own options. The overview shows groups and jobs; signatures and
-// options disclose progressively via `harness help <command>`.
+// Explicit display order for `harness help` — mirrors the retired
+// hand-written CATALOG's ordering exactly (setup, workspace, engineer loop,
+// knowledge, utility; commands within each group in the same sequence).
+// Grouping itself is read from each registry entry's own `group` field
+// (single source of truth) — this array only controls display SEQUENCE,
+// since a `Map`'s insertion order is otherwise incidental to registration
+// order across files, not the curated order a human reads top to bottom.
+// Exported (Minor fix) so test/harness-cli.test.mjs can assert this list
+// covers exactly `listCommands()` — a command registered in
+// lib/registry.mjs but never added here would otherwise vanish from
+// `harness help` silently (orderedCommandEntries below just skips any name
+// that doesn't resolve), with no test failure to catch the drift.
+export const HELP_COMMAND_ORDER = [
+  'install', 'upgrade', 'doctor', 'status', 'uninstall',
+  'init-repo', 'index', 'plan-new', 'config', 'trust', 'resources',
+  'orient', 'gate', 'verify', 'checks', 'exec', 'bash', 'agent', 'validate-plan', 'compound', 'recall', 'get', 'search', 'lookup', 'tree', 'run', 'tui', 'events', 'report',
+  'knowledge', 'consolidate', 'remember', 'learning', 'learnings', 'eval-knowledge',
+  'resolve',
+];
+
 const GLOBAL_OPTIONS = [
+  ['--version, -V', 'print the package version and exit'],
   ['--json', 'JSON output for machine readers'],
   ['--dry-run', 'print actions without writing'],
   ['--verbose, -v', 'full detail: per-file logging, all checks, unclamped hints'],
   ['--no-color', 'plain ascii output (also honors NO_COLOR; auto when piped)'],
   ['--workspace <path>', 'repo root (default: cwd)'],
   ['--copilot-home <path>', 'override ~/.copilot'],
-  ['--no-events', 'do not write .harness/events.jsonl'],
+  ['--no-events', 'do not write any local record: .harness/events.jsonl or runs.jsonl'],
 ];
 
-const CATALOG = [
-  {
-    group: 'setup',
-    commands: [
-      { name: 'install', desc: 'hydrate skills, agents, and team knowledge globally',
-        sig: '[--configure-vscode] [--configure-path] [--target vscode,cli,intellij]',
-        options: [
-          ['--target <t,..>', 'vscode,cli,intellij'],
-          ['--autonomy <mode>', 'full | balanced | strict'],
-          ['--configure-vscode', 'merge VS Code chat.* discovery settings'],
-          ['--configure-path', 'append ~/.copilot/bin to shell PATH (~/.zshrc, ~/.bashrc)'],
-          ['--force-profile', 'overwrite knowledge/profile.md'],
-          ['--force-knowledge-reset', 'overwrite knowledge/solutions (danger)'],
-        ] },
-      { name: 'upgrade', desc: 're-hydrate and purge retired primitives',
-        sig: '[same options as install]',
-        options: [] },
-      { name: 'doctor', desc: 'health checks for install, hooks, and knowledge',
-        sig: '[--host vscode]',
-        options: [['--host <name>', 'run host-specific checks (vscode executes installed-hook probes)']] },
-      { name: 'status', desc: 'installed version, home, tracked files', sig: '', options: [] },
-      { name: 'uninstall', desc: 'remove hydrated files tracked by the lock', sig: '', options: [] },
-    ],
-  },
-  {
-    group: 'workspace',
-    commands: [
-      { name: 'init-repo', desc: 'seed the .harness workspace in a product repo', sig: '', options: [] },
-      { name: 'index', desc: 'rebuild knowledge index · --status reports drift · --structural builds the code symbol index',
-        sig: '[--status] [--structural [--since <ref>]]',
-        options: [
-          ['--status', 'read-only freshness report vs HEAD (never rebuilds)'],
-          ['--structural', 'build the persistent structural code index under ~/.harness/index/<repo-id>/<worktree-id>/structural (optional tree-sitter tier, lexical fallback)'],
-          ['--since <ref>', 'requires --structural: re-parse only files changed since <ref> (validated via git rev-parse; leading "-" rejected). Narrows ONLY when <ref> is the sha the prior index was built at — any other ref is reported and ignored for a full pass'],
-        ] },
-      { name: 'plan-new', desc: 'scaffold a gate-ready plan',
-        sig: '--type feat --slug <slug> --intent "..."',
-        options: [
-          ['--type <t>', 'feat|fix|docs|refactor|chore'],
-          ['--slug <s>', 'lowercase-hyphen slug'],
-          ['--intent <text>', 'one-line intent'],
-          ['--impacted <a,b>', 'comma-separated Impacted Files'],
-          ['--criteria <text>', 'an acceptance criterion (repeatable)'],
-          ['--gap <id>:<path>', 'capability gap → blocked-capability + governed primitive plan'],
-          ['--stdout', 'print the plan instead of writing it'],
-        ] },
-    ],
-  },
-  {
-    group: 'engineer loop',
-    commands: [
-      { name: 'orient', desc: 'context pack for a task',
-        sig: '[--query "task summary"]',
-        options: [
-          ['--query <text>', 'agent/internal task summary'],
-          ['--limit <n>', 'recall result count (default 3)'],
-          ['-c, --collection <name>', 'filter by knowledge/collections.yaml'],
-          ['--min-score <n>', 'minimum score (default 0.15)'],
-          ['--explain', 'decompose learning ranking (deterministic)'],
-        ] },
-      { name: 'gate', desc: 'edit preconditions before editFiles',
-        sig: '[--phase implement|verify] [--plan <path>]',
-        options: [
-          ['--phase <name>', 'implement | verify'],
-          ['--plan <path>', 'explicit plan file'],
-          ['--strict-intent', 'fail locked plans missing intent fields'],
-          ['--enforcement <mode>', 'observe | warn | enforce (default enforce)'],
-        ] },
-      { name: 'verify', desc: 'run trusted named checks and capture evidence',
-        sig: '--plan docs/plans/file.md',
-        options: [
-          ['--plan <path>', 'plan file whose named checks run'],
-          ['--base <git-ref>', 'compare changed files to this git ref'],
-          ['--enforcement <mode>', 'observe | warn | enforce (default enforce)'],
-        ] },
-      { name: 'validate-plan', desc: 'plan readiness checks',
-        sig: '[--plan docs/plans/file.md]',
-        options: [
-          ['--plan <path>', 'explicit plan file'],
-          ['--enforcement <mode>', 'observe | warn | enforce (default enforce)'],
-        ] },
-      { name: 'compound', desc: 'record learning from passed evidence · --insight captures without evidence',
-        sig: '[--plan <path>] [--insight --title "..." --body "..."]',
-        options: [
-          ['--plan <path>', 'explicit plan file'],
-          ['--insight', 'evidence-free investigation capture (kind: insight, secret-scanned)'],
-          ['--title <t>', 'insight title (required with --insight)'],
-          ['--body <text>', 'insight body text'],
-          ['--body-file <path>', 'read insight body from a file'],
-          ['--category <c>', 'docs/solutions/<category>/ (default insights)'],
-          ['--tags <a,b>', 'comma-separated tags'],
-          ['--trigger <t>', 'applicability condition frontmatter'],
-          ['--claim <t>', 'one-line claim frontmatter'],
-        ] },
-      { name: 'recall', desc: 'search team knowledge',
-        sig: '"search terms" [--limit <n>] [--include-plans]',
-        options: [
-          ['--limit <n>', 'result count (default 3)'],
-          ['-c, --collection <name>', 'filter by knowledge/collections.yaml'],
-          ['--min-score <n>', 'minimum score (default 0.15)'],
-          ['--include-plans', 'include matching plans'],
-        ] },
-      { name: 'get', desc: 'bounded doc excerpt',
-        sig: '[--docid <id> | --path <rel>]',
-        options: [
-          ['--docid <id>', 'manifest doc id'],
-          ['--path <rel>', 'relative file path'],
-          ['--lines <n>', 'max lines (default 40)'],
-          ['--max-bytes <n>', 'max excerpt bytes (default 2048)'],
-        ] },
-      { name: 'events', desc: 'session telemetry',
-        sig: '[--summary] [--failures] [--session <id>]',
-        options: [
-          ['--session <id>', 'filter by host session ID'],
-          ['--summary', 'aggregate summary only'],
-          ['--failures', 'failed or blocked events only'],
-          ['--limit <n>', 'event count (default 20)'],
-        ] },
-      { name: 'report', desc: 'token-efficiency report from telemetry',
-        // AC14: harness report [--sync] [--global] [--check] [--json] stays documented.
-        sig: '[--sync] [--global] [--check] [--json]',
-        options: [
-          ['--sync', 'merge workspace events into the global store first'],
-          ['--global', 'report across all synced workspaces'],
-          ['--check', 'exit non-zero on a budget breach (CI)'],
-        ] },
-    ],
-  },
-  {
-    group: 'knowledge',
-    commands: [
-      { name: 'knowledge', desc: 'knowledge layer mode switch and purge (human deletion always wins)',
-        sig: '<on|suggest|off|freeze|capture-only> | --status | purge <file|--all> | commit <none|repo> | migrate-store',
-        options: [
-          ['--status', 'show the active mode (default)'],
-          ['status', 'layer-aware report: golden domain counts, branch buckets, recall-index drift (read-only)'],
-          ['promote [--branch <key>] [--ids a,b] [--all]', 'emit a reviewable branch→golden promotion op-set (.harness/promote-ops.json)'],
-          ['prune [--branch <key>] [--merged] [--stale <days>]', 'delete branch buckets (human authority, never mode-gated)'],
-          ['purge <file>', 'cascade-delete an episode and dependent learnings'],
-          ['purge --all', 'reset the learnings store (episodes remain, become debt)'],
-          ['commit <none|repo>', 'repo mirrors ACTIVE learnings into docs/knowledge/learnings (opt-in, never git-commits the product repo); none is the default'],
-          ['migrate-store', 'move a stranded path-keyed store to this workspace\'s current (remote-keyed) store id; refuses if the target already exists'],
-        ] },
-      { name: 'consolidate', desc: 'episode→learning debt, work packet, and validated apply',
-        sig: '[--status | --candidates | --apply --ops <path> | --rebuild --yes]',
-        options: [
-          ['--status', 'debt vs threshold, quarantine, promotion candidates (default)'],
-          ['--candidates', 'deterministic work packet for the consolidation skill'],
-          ['--apply --ops <path>', 'validate and apply an ops JSON (sole writer); suggest mode requires --yes'],
-          ['--rebuild --yes', 'T2 reset for model-upgrade regeneration (git history retains learnings)'],
-          ['--layer golden', 'explicit golden-layer override for --apply (writes otherwise route by write-time git context)'],
-        ] },
-      { name: 'remember', desc: 'teach the harness a durable claim (human-teaching episode + learning)',
-        sig: '"<claim>" --trigger "<t>" [--domain <d>]',
-        options: [
-          ['--trigger <t>', 'applicability condition (required)'],
-          ['--domain <d>', 'learning domain directory (default general)'],
-        ] },
-      { name: 'learning', desc: 'human authority over one learning: retire, dispute, confirm, or promote',
-        sig: '<retire|dispute|confirm|promote> <id> [--reason "<r>"] [--to <path>]',
-        options: [
-          ['--reason <r>', 'required for retire/dispute; recorded in the store commit'],
-          ['--to <path>', 'primitive path recorded on promote (behavior supersedes knowledge)'],
-        ] },
-      { name: 'learnings', desc: 'paged listing of learnings with provenance and failure annotations',
-        sig: '[domain] [--why <id>]',
-        options: [
-          ['--why <id>', 'full provenance chain for one learning'],
-        ] },
-      { name: 'eval-knowledge', desc: 'deterministic retrieval eval — hit/false-surface/token cost per arm (proxy, not net-benefit)',
-        sig: '[--json]',
-        options: [] },
-    ],
-  },
-  {
-    group: 'utility',
-    commands: [
-      { name: 'resolve', desc: 'print the resolved harness CLI path for agents', sig: '', options: [] },
-    ],
-  },
-];
+/** `describeCommand` for every name in HELP_COMMAND_ORDER, in that order,
+ * skipping anything not actually registered (defensive — every name in the
+ * list above is expected to be registered; this just avoids a hard crash if
+ * the two ever drift). */
+function orderedCommandEntries() {
+  return HELP_COMMAND_ORDER.map((name) => describeCommand(name)).filter(Boolean);
+}
 
-const ALL_COMMANDS = CATALOG.flatMap((g) => g.commands);
+/** Bucket ordered entries by group, preserving first-seen group order and
+ * within-group order — reproduces the retired CATALOG's exact grouping
+ * without a second, separately-maintained group->commands map. */
+function groupedForHelp() {
+  const groups = [];
+  const byGroup = new Map();
+  for (const entry of orderedCommandEntries()) {
+    let bucket = byGroup.get(entry.group);
+    if (!bucket) {
+      bucket = [];
+      byGroup.set(entry.group, bucket);
+      groups.push({ group: entry.group, commands: bucket });
+    }
+    bucket.push(entry);
+  }
+  return groups;
+}
 
 // Help is the front door: the same ledger grammar as every command, and it
 // fits in a glance. One row per group; `harness help <command>` holds the
@@ -243,8 +103,9 @@ function renderHelp() {
   lines.push('');
   lines.push(`Usage: harness ${out.paint('muted', '<command> [options]')}`);
   lines.push('');
-  const keyWidth = keyWidthFor([...CATALOG.map((g) => g.group), 'options'], 8);
-  for (const { group, commands } of CATALOG) {
+  const groups = groupedForHelp();
+  const keyWidth = keyWidthFor([...groups.map((g) => g.group), 'options'], 8);
+  for (const { group, commands } of groups) {
     lines.push(
       out.line({ key: group, value: commands.map((c) => c.name).join(' · '), keyWidth })
     );
@@ -263,12 +124,12 @@ function renderHelp() {
 }
 
 function renderCommandHelp(name) {
-  const c = ALL_COMMANDS.find((x) => x.name === name);
+  const c = describeCommand(name);
   if (!c) return null;
   const lines = [];
-  lines.push(`${c.name} ${out.paint('muted', `— ${c.desc}`)}`);
+  lines.push(`${c.name} ${out.paint('muted', `— ${c.summary}`)}`);
   lines.push('');
-  lines.push(`Usage: harness ${c.name}${c.sig ? ` ${out.paint('muted', c.sig)}` : ''}`);
+  lines.push(`Usage: harness ${c.name}${c.usage ? ` ${out.paint('muted', c.usage)}` : ''}`);
   if (c.options.length) {
     lines.push('');
     const optWidth = Math.max(...c.options.map(([o]) => o.length));
@@ -283,128 +144,393 @@ function renderCommandHelp(name) {
 
 // Single error surface for both readers: the JSON envelope under --json,
 // the styled error block otherwise. Keeps the two failure paths from drifting.
+// Fix-wave C2: an error's message/fix frequently echoes caller input (an
+// unknown command name, a bad flag value), so BOTH renderings pass through
+// the shared redacting emission boundary (lib/redact.mjs) before stderr.
 function emitError({ code, message, fix, exit }) {
-  if (args.includes('--json')) {
-    console.error(JSON.stringify({ ok: false, error: { code, message, hint: fix, exit } }));
+  // Fix-wave C1: `--json` after a literal `--` is free-text content, not a
+  // flag — route this check through the boundary-aware hasFlag so a
+  // top-level error for `harness bogus -- --json` renders the human error
+  // block, never a JSON envelope (pre-fix `args.includes('--json')` matched
+  // the post-boundary token and emitted JSON).
+  if (hasFlag(args, '--json')) {
+    console.error(redactedJson({ ok: false, error: { code, message, hint: fix, exit } }));
   } else {
-    for (const l of ui.errorBlock({ code, message, fix, exit })) console.error(l);
+    const { redactText } = createRedactor();
+    for (const l of ui.errorBlock({ code, message: redactText(message), fix: redactText(fix), exit })) console.error(l);
   }
+}
+
+// P1.2 lane flag plumbing: `--output json-envelope|agent|jsonl` (or
+// `--output=...`) selects a NEW opt-in rendering (lib/envelope.mjs,
+// lib/agent-lane.mjs) for registry-dispatched commands. It is parsed and
+// stripped OUT of the args a registered command sees before anything else
+// runs, so `--json` and every existing flag stay byte-identical for every
+// command whether or not this flag exists — the pre-existing handler code
+// paths never observe `--output` at all. Throws the same structured
+// E_USAGE shape as every other harness usage error, caught by main()'s
+// existing top-level catch — no new error-rendering path required.
+//
+// Honors the codebase's `--` literal-argument boundary (lib/argv.mjs:24,
+// lib/registry.mjs's `validateArgs`): scanning stops at the first literal
+// `--` token, so `--output` appearing after it is free-text content, not a
+// flag — e.g. `orient --json -- --output agent` must keep emitting the
+// legacy JSON envelope, exactly like every other flag-shaped token after `--`.
+//
+// P1.6: `jsonl` joins `json-envelope`/`agent` — currently exercised only by
+// `verify` (AC8's streaming row-per-event lane); every other registered
+// command without a `resultOf` falls through dispatch's legacy-handler path
+// for `--output jsonl` exactly like it does today for an unrecognized lane
+// value on a non-lane-aware entry — a no-op selector, not an error.
+const OUTPUT_LANES = { 'json-envelope': 'json', agent: 'agent', jsonl: 'jsonl' };
+
+function extractOutputLane(rawArgs) {
+  let idx = -1;
+  for (let i = 0; i < rawArgs.length; i++) {
+    if (rawArgs[i] === '--') break; // literal-argument boundary — nothing past this is a flag
+    if (rawArgs[i] === '--output' || rawArgs[i].startsWith('--output=')) {
+      idx = i;
+      break;
+    }
+  }
+  if (idx === -1) return { args: rawArgs, output: 'ledger' };
+
+  const token = rawArgs[idx];
+  const eq = token.indexOf('=');
+  const hasInlineValue = eq !== -1;
+  const value = hasInlineValue ? token.slice(eq + 1) : rawArgs[idx + 1];
+  const consumed = hasInlineValue ? 1 : 2;
+  const lane = OUTPUT_LANES[value];
+  if (!lane) {
+    const shown = value === undefined ? '(missing)' : JSON.stringify(value);
+    throw Object.assign(new Error(`invalid --output: ${shown} — must be json-envelope, agent, or jsonl`), {
+      code: 'E_USAGE',
+      hint: 'harness help',
+      exit: EXIT.usage,
+    });
+  }
+  return { args: [...rawArgs.slice(0, idx), ...rawArgs.slice(idx + consumed)], output: lane };
+}
+
+// P1.5 (lib/event-registry.mjs) — "registry construction plumbing" per the
+// task-5 file-ownership boundary: build the central event registry, bound to
+// this invocation's resolved workspace/flags via the existing lib/events.mjs
+// `writeEvent(workspace, flags, payload)` sink. `lib/registry.mjs`'s
+// dispatch/dispatchLane (not this file) own WHEN an event actually gets
+// emitted — this function only constructs the instance. `rawArgs` may still
+// contain `--output ...`; parseFlags ignores unrecognized flags (verified:
+// it silently skips both `--output` and its value token), so passing the
+// pre-extraction args here is equivalent to passing the stripped ones.
+function createProcessEventRegistry(rawArgs, run) {
+  const flags = parseFlags(rawArgs);
+  const workspace = path.resolve(flags.workspace);
+  return createEventRegistry({
+    run,
+    writeEvent: (payload) => writeHarnessEvent(workspace, flags, payload),
+  });
+}
+
+// Phase 4a (P4aAC1/P4aAC2): a run brackets one CLI invocation. The id is minted
+// ONCE here, before dispatch, and threaded into the event registry so every
+// event the invocation produces carries it — that is what lets `run show` join
+// a command to the work it caused.
+//
+// Journal writes honor the same `--no-events`/`--dry-run` suppression as every
+// other record. A dry run performs nothing, so journaling it would record work
+// that did not happen.
+//
+// P2-18 (Codex phase-4a review) observed that this makes `--no-events` broader
+// than its help text claimed, and that it collides with "one run per accepted
+// invocation". Ruled in favor of the flag: someone passing `--no-events` is
+// asking the harness not to write a local record of what they ran, and honoring
+// that for the event log while persisting their argv to a durable journal would
+// be the more surprising behavior of the two. The flag's description now says
+// what it does instead of naming one file.
+function shouldSkipRunJournal(flags) {
+  return Boolean(flags.dryRun || flags.noEvents || process.env.HARNESS_NO_EVENTS === '1');
+}
+
+/**
+ * Map a process exit code onto the run vocabulary.
+ *
+ * Only the codes the harness itself reserves are given a specific meaning; a
+ * child's passed-through code (see `exitFor` in lib/exec-cmd.mjs) is a generic
+ * failure from the journal's point of view, because the journal cannot tell
+ * `exec`'s child exiting 8 from a harness timeout — the same ambiguity recorded
+ * there, resolved the same way rather than guessed at differently here.
+ */
+/**
+ * Map the UNIFIED status a command reported onto the run vocabulary. This is
+ * the preferred path: the command knows what happened, and the exit code alone
+ * cannot be reverse-mapped (a child exiting 8 through `exec` is not a harness
+ * timeout).
+ */
+function runStatusFromReported(status) {
+  if (status === 'ok') return 'succeeded';
+  if (status === 'failed') return 'failed';
+  if (status === 'cancelled') return 'cancelled';
+  if (status === 'timed-out') return 'timed-out';
+  return null;
+}
+
+function runStatusForExit(code) {
+  if (code === EXIT.ok) return 'succeeded';
+  if (code === EXIT.cancelled) return 'cancelled';
+  if (code === EXIT.timedOut) return 'timed-out';
+  if (code === EXIT.needsApproval) return 'blocked';
+  if (code === EXIT.usage) return 'inconclusive';
+  return 'failed';
+}
+
+/** The actor that opened this run. Mirrors the event registry's own detection
+ * so a run and its events never disagree about who was driving. */
+function detectRunActor() {
+  if (process.env.CI || process.env.GITHUB_ACTIONS) return { kind: 'ci' };
+  if (process.env.HARNESS_HOST) return { kind: 'host', host: process.env.HARNESS_HOST };
+  return { kind: 'user' };
 }
 
 async function main() {
   let code = 0;
+  let runId = null;
+  let runStartedAt = null;
+  let runWorkspacePath = null;
+  let runJournalFlags = null;
+  // Only a run that actually OPENED gets a terminal record; a refused
+  // invocation has neither.
+  let runOpened = false;
+  // What the command said happened, if it said. Preferred over the exit map.
+  let reportedStatus = null;
   try {
-    switch (command) {
-      case 'help':
-      case '--help':
-      case '-h': {
-        const topic = args.find((a) => !a.startsWith('-'));
-        if (topic) {
-          const detail = renderCommandHelp(topic);
-          if (detail) {
-            console.log(detail);
-          } else {
-            emitError({
-              code: 'E_USAGE',
-              message: `unknown command: ${topic}`,
-              fix: 'harness help',
-              exit: EXIT.usage,
-            });
-            code = EXIT.usage;
-          }
+    // `--version` is universal CLI convention and was the one place the harness
+    // did not honor it: the version was reachable only through `harness status`,
+    // so the reflex every user has produced `unknown command: --version`.
+    // `-V`, not `-v`: `-v` has always meant `--verbose` here, and quietly
+    // repurposing it would break every existing caller (curl draws the same
+    // line for the same reason). Handled here beside `help` because both are
+    // data ABOUT the CLI rather than commands with a side-effect class, so
+    // neither dispatches through the registry or writes an event.
+    if (command === '--version' || command === '-V') {
+      console.log(readPkgVersion());
+    } else if (command === 'help' || command === '--help' || command === '-h') {
+      const topic = args.find((a) => !a.startsWith('-'));
+      if (topic) {
+        const detail = renderCommandHelp(topic);
+        if (detail) {
+          console.log(detail);
         } else {
-          console.log(renderHelp());
+          emitError({
+            code: 'E_USAGE',
+            message: `unknown command: ${topic}`,
+            fix: 'harness help',
+            exit: EXIT.usage,
+          });
+          code = EXIT.usage;
         }
-        break;
+      } else {
+        console.log(renderHelp());
       }
-      case 'install':
-        code = await cmdInstallOrUpgrade('install', args);
-        break;
-      case 'upgrade':
-        code = await cmdInstallOrUpgrade('upgrade', args);
-        break;
-      case 'doctor':
-        code = await cmdDoctor(args);
-        break;
-      case 'status':
-        code = await cmdStatus(args);
-        break;
-      case 'init-repo':
-        code = await cmdInitRepo(args);
-        break;
-      case 'index':
-        code = await cmdIndex(args);
-        break;
-      case 'plan-new':
-        code = await cmdPlanNew(args);
-        break;
-      case 'orient':
-        code = await cmdOrient(args);
-        break;
-      case 'gate':
-        code = await cmdGate(args);
-        break;
-      case 'verify':
-        code = await cmdVerify(args);
-        break;
-      case 'recall':
-        code = await cmdRecall(args);
-        break;
-      case 'get':
-        code = await cmdGet(args);
-        break;
-      case 'validate-plan':
-        code = await cmdValidatePlan(args);
-        break;
-      case 'compound':
-        code = await cmdCompound(args);
-        break;
-      case 'consolidate':
-        code = await cmdConsolidate(args);
-        break;
-      case 'remember':
-        code = await cmdRemember(args);
-        break;
-      case 'learning':
-        code = await cmdLearning(args);
-        break;
-      case 'learnings':
-        code = await cmdLearnings(args);
-        break;
-      case 'eval-knowledge':
-        code = await cmdEvalKnowledge(args);
-        break;
-      case 'knowledge':
-        code = await cmdKnowledge(args);
-        break;
-      case 'events':
-        code = await cmdEvents(args);
-        break;
-      case 'report':
-        code = await cmdReport(args);
-        break;
-      case 'uninstall':
-        code = await cmdUninstall(args);
-        break;
-      case 'resolve':
-        code = await cmdResolve(args);
-        break;
-      default:
-        emitError({
-          code: 'E_USAGE',
-          message: `unknown command: ${command}`,
-          fix: 'harness help',
-          exit: EXIT.usage,
+    } else if (command === 'palette') {
+      // Same class as `help` above, and handled the same way: data ABOUT the
+      // registry rather than a command with a side-effect class of its own, so
+      // it is not registered and never dispatches. `help` sources its rows
+      // from describeAll/describeCommand; this sources the palette index from
+      // lib/command-index.mjs.
+      //
+      // It deliberately does NOT go through extractOutputLane. The palette has
+      // exactly one audience by contract (architecture doc, §Command palette:
+      // the model "never sees the palette"; a person in a shell keeps --help
+      // and completion), so the envelope is its only rendering — there is no
+      // ledger or agent lane to select between. Emitted through the same
+      // redacting boundary every other JSON surface uses.
+      const flags = parseFlags(args);
+      console.log(redactedJson(commandIndexEnvelope({ workspace: path.resolve(flags.workspace) })));
+    } else if (hasCommand(command)) {
+      const { args: laneArgs, output } = extractOutputLane(args);
+      const runFlags = parseFlags(args);
+      const runWorkspace = path.resolve(runFlags.workspace);
+      const journaling = !shouldSkipRunJournal(runFlags);
+      runId = newRunId();
+      runStartedAt = Date.now();
+      // Established BEFORE dispatch so every write in this process — including
+      // the legacy `writeEvent` call sites that never went through the event
+      // registry — carries the run and actor. See lib/run-context.mjs for why
+      // this is ambient rather than threaded.
+      setRunContext({ run: runId, actor: detectRunActor() });
+      runWorkspacePath = runWorkspace;
+      runJournalFlags = runFlags;
+      // Deferred to `ctx.onRunStart`, which lib/registry.mjs calls once the
+      // command has passed validation and is about to run — see the note there.
+      const openRun = () => {
+        if (!journaling || runOpened) return;
+        runOpened = true;
+        startRun(runWorkspace, {
+          run: runId,
+          command,
+          // The argv WITHOUT the lane flag, matching what dispatch actually
+          // received — a journal that records a command the harness did not run
+          // is the same class of lie as an audit that names the wrong argv.
+          // A command may project what it is willing to persist — see
+          // `journalArgv` in lib/registry.mjs. Free-text arguments are durable
+          // otherwise, and redaction recognizes secret shapes, not sentences.
+          argv: getCommand(command)?.journalArgv?.(laneArgs) ?? laneArgs,
+          // P2-11: `--plan` and `--host` are FILTERS on `run list`, and reusing
+          // them as this run's own attribution made `run list --host vscode`
+          // record itself as having come from vscode. Identity comes from the
+          // environment, never from a value the caller passed to query with.
+          plan: command === 'run' ? null : (runFlags.plan || null),
+          host: process.env.HARNESS_HOST || 'harness-cli',
+          actor: detectRunActor(),
+          harnessVersion: readPkgVersion(),
+          // So run retention resolves the same configuration event retention does.
+          flags: runFlags,
         });
-        code = EXIT.usage;
+      };
+      // P1.6 (carry-list, AC7 widening): the event registry now attaches for
+      // EVERY registered-command dispatch, not just the envelope/agent
+      // lanes — command.result telemetry (including verify's Ctrl-C
+      // cancellation -> exit 130 -> result:'warn' per legacyResultForStatus,
+      // AC8) must exist on the plain ledger/--json path too, not only under
+      // --output. lib/registry.mjs's dispatch/dispatchLane wire both
+      // branches identically whenever ctx.events is present; the earlier
+      // ledger-only exclusion existed solely to keep one now-updated
+      // test/harness-cli.test.mjs assertion's exact events array stable.
+      const events = createProcessEventRegistry(args, runId);
+      // Ctrl-C -> AbortSignal bridge (AC8), scoped to `verify` only: every
+      // other command keeps Node's default SIGINT behavior (immediate
+      // process exit) rather than risk a hang for a command whose handler
+      // never reads ctx.signal.
+      let signal;
+      // F7 (Codex phase-5 review): `agent` was missing here, so Ctrl-C during a
+      // model call took Node's default signal path — no `finally`, so the
+      // provider child was never closed and its HTTP request outlived the
+      // harness, and no terminal journal record was written for the longest
+      // running command in the CLI.
+      if (['verify', 'exec', 'bash', 'checks', 'agent'].includes(command)) {
+        const controller = new AbortController();
+        process.once('SIGINT', () => controller.abort());
+        signal = controller.signal;
+      }
+      code = await dispatchRegistered([command, ...laneArgs], {
+        style: out,
+        output,
+        events,
+        signal,
+        onRunStart: openRun,
+        // The command's own account of what happened, used in preference to
+        // inferring it from the exit code — see runStatusFromReported.
+        reportStatus: (status) => { reportedStatus = status; },
+      });
+    } else {
+      emitError({
+        code: 'E_USAGE',
+        message: `unknown command: ${command}`,
+        fix: 'harness help',
+        exit: EXIT.usage,
+      });
+      code = EXIT.usage;
     }
   } catch (err) {
     const exit = Number.isInteger(err.exit) ? err.exit : 1;
     emitError({ code: err.code || 'E_UNEXPECTED', message: err.message, fix: err.hint, exit });
-    if (process.env.HARNESS_DEBUG) console.error(err);
+    // Fix-wave P1 (human/debug output leaks): the sanitized error block above
+    // must NOT be followed by an unredacted raw dump. A thrown error's stack
+    // embeds its message (which routinely echoes caller input) and can surface
+    // env-derived secrets in frames — route the whole HARNESS_DEBUG dump
+    // through the redactor, same guarantee as every other emission boundary.
+    if (process.env.HARNESS_DEBUG) {
+      const { redactText } = createRedactor();
+      console.error(redactText(inspect(err)));
+    }
     code = exit;
   }
+  // Close the run on EVERY path out of the try, success and error alike. A
+  // journal whose terminal records only appear when nothing went wrong would
+  // leave exactly the runs an operator cares about looking like they never
+  // finished. A failure to journal is swallowed: the command's own outcome is
+  // the answer the caller is waiting for, and losing it to a bookkeeping error
+  // would be a worse trade than an incomplete journal.
+  if (runOpened && runId && runWorkspacePath && !shouldSkipRunJournal(runJournalFlags || {})) {
+    try {
+      finishRun(runWorkspacePath, {
+        run: runId,
+        status: runStatusFromReported(reportedStatus) ?? runStatusForExit(code),
+        exitCode: code,
+        durationMs: runStartedAt === null ? null : Date.now() - runStartedAt,
+        plan: command === 'run' ? null : (runJournalFlags?.plan || null),
+        flags: runJournalFlags || {},
+      });
+    } catch {
+      /* the command's outcome matters more than the bookkeeping */
+    }
+  }
+  // Fix-wave P2 (JSONL backpressure): flush buffered stdout/stderr before the
+  // hard exit. `process.exit` does not wait for async pipe writes, so a
+  // terminal JSONL `result` row (or any tail of streamed output) written under
+  // backpressure could be discarded — drain first so it is never lost.
+  await flushStreams();
   process.exit(code);
 }
 
-main();
+/** Resolve once a writable stream's buffered bytes have been handed to the OS
+ * — the reliable "drained" signal to wait on before a hard process.exit. */
+function flushStream(stream) {
+  return new Promise((resolve) => {
+    if (!stream || typeof stream.write !== 'function' || stream.writableLength === 0) {
+      resolve();
+      return;
+    }
+    let done = false;
+    const finish = () => {
+      if (!done) {
+        done = true;
+        resolve();
+      }
+    };
+    // The empty-write callback fires after the preceding buffered bytes flush.
+    try {
+      stream.write('', finish);
+    } catch {
+      finish();
+      return;
+    }
+    // Safety valve: never let a stuck pipe hang the CLI. Unref'd so the timer
+    // itself can't keep the process alive past the drain.
+    const t = setTimeout(finish, 2000);
+    t.unref?.();
+  });
+}
+
+function flushStreams() {
+  return Promise.all([flushStream(process.stdout), flushStream(process.stderr)]);
+}
+
+// Only auto-run when this file is executed directly (`node bin/harness.mjs
+// ...`, the shebang, or any of the harness/global-bin install paths that
+// all invoke it the same way) — not when imported as a module (Minor fix:
+// test/harness-cli.test.mjs imports HELP_COMMAND_ORDER above). Every real
+// invocation still sets `process.argv[1]` to this file's own path, so this
+// guard is a no-op for every existing production entry point.
+//
+// `fs.realpathSync` on `process.argv[1]` before the comparison matters: the
+// ESM loader resolves `import.meta.url` through any symlinks in the path
+// (e.g. macOS's `/tmp` -> `/private/tmp`, `/var` -> `/private/var`, both
+// routinely on the resolved path when the CLI is invoked via a copied
+// runtime under `os.tmpdir()` — lib/install-harness-bin.mjs's own copy
+// target in test/production), while `process.argv[1]` is the raw,
+// unresolved argv string — a bare string comparison between the two
+// mismatches on any such symlinked path even though this genuinely IS the
+// entry module, which silently skipped `main()` entirely (reproduced: the
+// installed global harness shim ran with exit 0 and empty stdout).
+function isMainModule() {
+  if (!process.argv[1]) return false;
+  try {
+    return import.meta.url === pathToFileURL(fs.realpathSync(process.argv[1])).href;
+  } catch {
+    return false;
+  }
+}
+
+if (isMainModule()) {
+  main();
+}

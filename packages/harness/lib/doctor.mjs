@@ -5,11 +5,13 @@ import { spawnSync } from 'node:child_process';
 import { createRequire } from 'module';
 import { resolveIndexDir } from './recall-config.mjs';
 import { isIndexStale } from './postings-index.mjs';
-import { resolveHarnessBin } from './resolve-harness-bin.mjs';
+import { resolveHarnessBin, RUNNER_VERSION } from './resolve-harness-bin.mjs';
 import { globalHarnessShimPath, findHarnessOnPath } from './global-bin.mjs';
+import { readLock } from './lock.mjs';
 import { planDigest } from './evidence.mjs';
 import { loadPlan } from './plan-parse.mjs';
 import { runVerify } from './verify.mjs';
+import { approveProject } from './trust.mjs';
 import { readSession, writeSession } from './session.mjs';
 import { parseVSCodeSettings } from './vscode-settings.mjs';
 import { resolveVSCodeSettingsPaths } from './paths.mjs';
@@ -187,8 +189,15 @@ function hookBlocked(result, event) {
   }
 }
 
-function runVSCodeHookProbe(hookRoot) {
+// P1.6: async — runVerify (lib/verify.mjs) is now async (AC8, wired onto
+// lib/runner.mjs's async spawn). Nothing about this fixture probe's own
+// behavior changes; it just has to await the one call it already made.
+export async function runVSCodeHookProbe(hookRoot) {
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-doctor-vscode-'));
+  // The probe's own throwaway user scope. The approval below belongs to this
+  // fixture and must not accumulate temp-directory entries in the real
+  // ~/.copilot trust store every time someone runs `harness doctor`.
+  const doctorCopilotHome = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-doctor-home-'));
   const planRel = 'docs/plans/vscode-hook-doctor-plan.md';
   const result = {
     recognized: false,
@@ -224,6 +233,14 @@ function runVSCodeHookProbe(hookRoot) {
     git(['config', 'user.name', 'Harness Doctor']);
     git(['add', '.']);
     if (git(['commit', '-qm', 'fixture']).status !== 0) return result;
+
+    // P3AC6: named checks execute repo-authored argv and are gated on trust.
+    // This fixture is not a repository anyone cloned — the doctor created the
+    // directory and wrote `checks.yaml` itself moments ago, so the code it is
+    // about to run is the harness's own. Approving it is a statement of that
+    // fact, not a bypass: the probe would otherwise fail V9 for a reason that
+    // has nothing to do with the hook behavior it exists to prove.
+    approveProject({ workspace, copilotHome: doctorCopilotHome });
 
     const pre = path.join(hookRoot, 'require-plan-gate.mjs');
     const post = path.join(hookRoot, 'record-successful-edit.mjs');
@@ -267,9 +284,9 @@ function runVSCodeHookProbe(hookRoot) {
     result.unverifiedDenied = hookBlocked(deniedStop, 'Stop');
 
     const plan = loadPlan(workspace, planRel);
-    const verification = runVerify({
+    const verification = await runVerify({
       workspace,
-      flags: { plan: planRel, base: 'HEAD', dryRun: false, enforcement: 'enforce' },
+      flags: { plan: planRel, base: 'HEAD', dryRun: false, enforcement: 'enforce', copilotHome: doctorCopilotHome },
     });
     if (verification.outcome === 'passed' && plan) {
       writeSession(workspace, {
@@ -290,16 +307,22 @@ function runVSCodeHookProbe(hookRoot) {
     }
     return result;
   } finally {
+    // BOTH fixtures. Only `workspace` was removed, so every
+    // `harness doctor --host vscode` left a `harness-doctor-home-*` directory
+    // behind — with a trust store inside it. The stated goal above was to stop
+    // fixture state accumulating; without this it accumulated in tmpdir instead
+    // of ~/.copilot, which is a move rather than a fix.
     fs.rmSync(workspace, { recursive: true, force: true });
+    fs.rmSync(doctorCopilotHome, { recursive: true, force: true });
   }
 }
 
-function vscodeChecks({ copilotHome, settingsPaths }) {
+async function vscodeChecks({ copilotHome, settingsPaths }) {
   const hookRoot = path.join(copilotHome, 'hooks');
   const installed = fs.existsSync(path.join(hookRoot, 'hooks.json'));
   const loaded = installed ? loadInstalledHookConfig(hookRoot) : { config: null, error: 'Installed hook bundle is missing' };
   const discovery = vscodeDiscoveryConfigured(settingsPaths);
-  const probe = loaded.config ? runVSCodeHookProbe(hookRoot) : {};
+  const probe = loaded.config ? await runVSCodeHookProbe(hookRoot) : {};
   return [
     { id: 'V1', name: 'VS Code hook bundle installed', pass: installed, hint: 'Run: harness upgrade --configure-vscode' },
     { id: 'V2', name: 'VS Code hook configuration and commands resolvable', pass: Boolean(loaded.config), hint: loaded.error || 'Reinstall hooks' },
@@ -586,10 +609,11 @@ export function structuralChecks({ workspace, grammarRoots = packageGrammarRoots
   } catch {
     // Advisory; never fail doctor on a structural-check error.
   }
+
   return checks;
 }
 
-export function runDoctor({ copilotHome, assetsRoot, pkgRoot, flags, vscodeSettingsPaths = null, workspace = flags.workspace }) {
+export async function runDoctor({ copilotHome, assetsRoot, pkgRoot, flags, vscodeSettingsPaths = null, workspace = flags.workspace }) {
   const checks = [];
 
   const manifest = path.join(copilotHome, 'knowledge', 'manifest.yaml');
@@ -666,12 +690,33 @@ export function runDoctor({ copilotHome, assetsRoot, pkgRoot, flags, vscodeSetti
     hint: 'Maintainer: npm run build:assets before publish',
   });
 
-  const lockPath = path.join(copilotHome, '.harness-lock.json');
+  // Present AND matching the installed binary. Installing the package — from the
+  // registry or from a hand-delivered tarball, identically — replaces the binary
+  // and hydrates nothing: there is no postinstall. Until someone runs `upgrade`,
+  // the agents, skills and instructions in the Copilot home stay on whatever
+  // version last hydrated, and the only prior signal was `harness status`
+  // printing the two numbers next to each other for a human to compare.
+  // This is the channel-agnostic check: it compares what is installed against
+  // what was hydrated, which does not care how the package arrived.
+  // pkgRoot, not an import from commands.mjs — that module imports runDoctor,
+  // so reading its readPkgVersion from here would close an import cycle.
+  const lock = readLock(copilotHome);
+  let installedVersion = null;
+  try {
+    installedVersion = JSON.parse(fs.readFileSync(path.join(pkgRoot, 'package.json'), 'utf8')).version;
+  } catch {
+    // Unreadable package.json — fall back to presence-only, the pre-existing check.
+  }
+  const lockCurrent = Boolean(lock) && (installedVersion === null || lock.version === installedVersion);
   checks.push({
     id: 'H9',
-    name: 'Harness lock file',
-    pass: fs.existsSync(lockPath),
-    hint: 'Run install or upgrade',
+    name: 'Harness lock file matches the installed version',
+    pass: lockCurrent,
+    hint: !lock
+      ? 'Run install or upgrade'
+      : lockCurrent
+        ? `hydrated from ${lock.package}@${lock.version}`
+        : `harness ${installedVersion} is installed but the Copilot home was hydrated from ${lock.version} — run: harness upgrade`,
     optional: true,
   });
 
@@ -716,11 +761,31 @@ export function runDoctor({ copilotHome, assetsRoot, pkgRoot, flags, vscodeSetti
       ? `Resolved via ${resolved.source}: ${resolved.bin}`
       : 'Run: harness install, then init-repo (creates .harness/run.mjs)',
   });
+  // Present AND current. Existence alone was not enough: the runner is
+  // regenerated only by `init-repo` and by an `install`/`upgrade` run from
+  // inside this workspace, so any other workspace can sit on a shim built by an
+  // older harness indefinitely — and its owner has no reason to suspect it,
+  // because upgrading the harness looks like it updated everything. A runner
+  // carrying a fixed bug is worth as much as a missing one, so it fails the
+  // same check with a hint that names the actual remedy.
+  const runnerExists = fs.existsSync(runnerPath);
+  let runnerCurrent = false;
+  if (runnerExists) {
+    try {
+      runnerCurrent = fs.readFileSync(runnerPath, 'utf8').includes(`@harness-runner-version ${RUNNER_VERSION}`);
+    } catch {
+      // Unreadable — treat as not current; the hint's remedy rewrites it.
+    }
+  }
   checks.push({
     id: 'H13',
     name: 'Workspace harness runner',
-    pass: fs.existsSync(runnerPath),
-    hint: 'Run: harness init-repo',
+    pass: runnerExists && runnerCurrent,
+    hint: !runnerExists
+      ? 'Run: harness init-repo'
+      : runnerCurrent
+        ? `.harness/run.mjs is current (v${RUNNER_VERSION})`
+        : `.harness/run.mjs predates runner v${RUNNER_VERSION} — regenerate with: harness init-repo (or run harness upgrade from this workspace)`,
     optional: true,
   });
 
@@ -756,8 +821,15 @@ export function runDoctor({ copilotHome, assetsRoot, pkgRoot, flags, vscodeSetti
   // Degrade honestly: without the shipped asset bundle there is no ship list
   // to compare against, so never claim orphans that cannot be verified.
   const assetsAvailable = fs.existsSync(path.join(assetsRoot, 'skills', 'engineer', 'SKILL.md'));
+  // `null` means "no lock to consult", which findStaleOrphans treats as the
+  // pre-existing behavior. `new Set([])` is TRUTHY, so an unreadable or
+  // file-less lock made `lockFiles && !lockFiles.has(rel)` skip every
+  // candidate — H17 then passed unconditionally and detected nothing, which is
+  // strictly worse than the false positives the lock was added to fix. Reuses
+  // the `lock` already read above rather than reading it a second time.
+  const lockFiles = Array.isArray(lock?.files) && lock.files.length ? new Set(lock.files) : null;
   const orphans =
-    pkgRoot && assetsAvailable ? findStaleOrphans(copilotHome, assetsRoot, loadRetired(pkgRoot)) : [];
+    pkgRoot && assetsAvailable ? findStaleOrphans(copilotHome, assetsRoot, loadRetired(pkgRoot), lockFiles) : [];
   checks.push({
     id: 'H17',
     name: 'No stale orphaned primitives',
@@ -775,10 +847,10 @@ export function runDoctor({ copilotHome, assetsRoot, pkgRoot, flags, vscodeSetti
 
   if (flags.host === 'vscode') {
     checks.push(
-      ...vscodeChecks({
+      ...(await vscodeChecks({
         copilotHome,
         settingsPaths: vscodeSettingsPaths || resolveVSCodeSettingsPaths(),
-      })
+      }))
     );
   } else if (flags.host) {
     checks.push({

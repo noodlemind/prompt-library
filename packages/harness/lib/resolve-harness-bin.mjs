@@ -80,7 +80,13 @@ export function agentHarnessCommand(resolved) {
   return `node "${resolved.bin}"`;
 }
 
-export const RUNNER_VERSION = 3;
+// Bumped to 5 for the equals-form --workspace detection fix below (v3 made
+// detection boundary-aware, v4 moved the injection before the boundary, v5
+// makes detection see `--workspace=<path>` at all). writeHarnessRunner
+// rewrites any runner stamped with an older version, so already-installed
+// workspaces pick the fix up — without this bump the fix reaches only
+// workspaces that have never been initialized.
+export const RUNNER_VERSION = 5;
 
 export function harnessRunnerSource() {
   const home = os.homedir().replace(/\\/g, '/');
@@ -129,8 +135,27 @@ if (!target) {
 }
 
 const args = process.argv.slice(2);
-const hasWorkspace = args.includes('--workspace');
-const finalArgs = hasWorkspace ? args : [...args, '--workspace', workspace];
+// Fix-wave C1: honor the literal-argument boundary — a --workspace appearing
+// after a bare -- is free-text content, not a flag, so it must not suppress
+// the default --workspace injection (same rule as lib/flags.mjs#hasFlag).
+const boundary = args.indexOf('--');
+const flagArgs = boundary === -1 ? args : args.slice(0, boundary);
+// Both spellings count as "the caller chose a workspace": lib/flags.mjs parses
+// --workspace <path> AND --workspace=<path>. Matching only the separated token
+// let the equals form fall through to injection, and because parseFlags reads
+// argv in order the appended pair WON the tie — so an explicit
+// \`--workspace=/a\` silently ran against the runner's own workspace instead.
+const hasWorkspace = flagArgs.some((a) => a === '--workspace' || a.startsWith('--workspace='));
+// The injection must land BEFORE the boundary too, for the same reason the
+// detection reads before it: lib/flags.mjs#parseFlags slices argv at \`--\`, so
+// an appended --workspace would never be parsed — it would just become two
+// spurious literal tokens in the command's free-text content
+// (\`learnings --why -- --json\` -> content \`--json --workspace <ws>\`).
+const finalArgs = hasWorkspace
+  ? args
+  : boundary === -1
+    ? [...args, '--workspace', workspace]
+    : [...args.slice(0, boundary), '--workspace', workspace, ...args.slice(boundary)];
 const spawnArgs = target.args.length
   ? [...target.args, ...finalArgs]
   : finalArgs;

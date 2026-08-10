@@ -261,7 +261,7 @@ test('branch rename auto-migrates the bucket to the new key when unambiguous', (
   assert.ok(moved.some((l) => l.id === 'sql/renamed-claim'));
 });
 
-test('doctor K5 flags orphan buckets and K6 flags misrouted bucket contents', () => {
+test('doctor K5 flags orphan buckets and K6 flags misrouted bucket contents', async () => {
   const ws = clonedWorkspace();
   const home = tempDir('route-home9-');
   // Doctor reads the store via the UNSCOPED storeDir (HARNESS_HOME), so run
@@ -278,7 +278,7 @@ test('doctor K5 flags orphan buckets and K6 flags misrouted bucket contents', ()
   const prevHome = process.env.HARNESS_HOME;
   process.env.HARNESS_HOME = home;
   try {
-    const { checks } = runDoctor({
+    const { checks } = await runDoctor({
       copilotHome: tempDir('route-ch-'),
       assetsRoot: tempDir('route-assets-'),
       pkgRoot: null,

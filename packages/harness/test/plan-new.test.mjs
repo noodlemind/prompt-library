@@ -74,6 +74,52 @@ test('scaffolded capability-gap plan is blocked-capability and the gate denies i
   fs.rmSync(ws, { recursive: true, force: true });
 });
 
+// cmdPlanNew's bespoke argv loop broke OUT of the boundary instead of slicing
+// at it like lib/flags.mjs#parseFlags, so a value flag sitting right before
+// `--` consumed the boundary token through next() and parsing continued past
+// it. Verified pre-fix: `--title -- --json` set the plan heading to `--` AND
+// re-interpreted the post-boundary `--json` as the output selector.
+test('CLI: plan-new slices at the `--` boundary — no value flag swallows it, nothing after it is a flag', () => {
+  const ws = workspace();
+  const r = spawnSync(
+    process.execPath,
+    [
+      binPath, 'plan-new', '--type', 'feat', '--slug', 'boundary-demo', '--intent', 'Do the thing',
+      '--date', '2026-07-21', '--workspace', ws, '--title', '--', '--json',
+    ],
+    { cwd: ws, encoding: 'utf8' }
+  );
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /plan-new/, 'the human ledger renders');
+  assert.throws(() => JSON.parse(r.stdout), 'the post-boundary --json must be inert content, not the output selector');
+  const content = fs.readFileSync(path.join(ws, 'docs/plans/2026-07-21-feat-boundary-demo-plan.md'), 'utf8');
+  assert.match(content, /^title: "Boundary Demo"$/m, 'the boundary token must never become the --title value');
+  fs.rmSync(ws, { recursive: true, force: true });
+});
+
+// cmdPlanNew has always read --status (it feeds buildPlanSkeleton's status
+// frontmatter), but the registry entry never declared it — so strict
+// validateArgs rejected the invocation with `unknown flag: --status` before
+// the handler ran.
+test('CLI: plan-new --status is declared and writes the requested status frontmatter', () => {
+  const ws = workspace();
+  const explicit = harness(ws, [
+    'plan-new', '--type', 'feat', '--slug', 'status-demo', '--intent', 'Do the demo',
+    '--date', '2026-07-21', '--status', 'planned', '--json',
+  ]);
+  assert.equal(explicit.status, 0, `${explicit.stdout}${explicit.stderr}`);
+  assert.match(fs.readFileSync(path.join(ws, JSON.parse(explicit.stdout).path), 'utf8'), /^status: planned$/m);
+
+  // The documented default is untouched by declaring the override.
+  const implicit = harness(ws, [
+    'plan-new', '--type', 'feat', '--slug', 'status-default', '--intent', 'Do the demo',
+    '--date', '2026-07-21', '--json',
+  ]);
+  assert.equal(implicit.status, 0, `${implicit.stdout}${implicit.stderr}`);
+  assert.match(fs.readFileSync(path.join(ws, JSON.parse(implicit.stdout).path), 'utf8'), /^status: in-progress$/m);
+  fs.rmSync(ws, { recursive: true, force: true });
+});
+
 test('cmdPlanNew CLI writes the dated plan file', () => {
   const ws = workspace();
   const r = harness(ws, ['plan-new', '--type', 'feat', '--slug', 'demo-thing', '--intent', 'Do the demo', '--date', '2026-07-21', '--impacted', 'src/A.java,src/B.java', '--json']);

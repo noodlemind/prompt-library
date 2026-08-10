@@ -217,6 +217,31 @@ export function ensureStore(workspace, { home, dryRun = false } = {}) {
   if (!gitOk) {
     gitOk = spawnSync('git', ['init', '-q'], { cwd: dir, encoding: 'utf8' }).status === 0;
   }
+  if (gitOk) {
+    // The store's on-disk format is LF (admin.mjs writes '\n'), but `git
+    // init` inherits ambient config, and core.autocrlf=true is the
+    // Git-for-Windows default. Left unpinned, every `git reset --hard`
+    // (rollback) and `git checkout -- <path>` (residue discard) rewrites
+    // these files as CRLF — silently corrupting learning frontmatter, since
+    // the store is the one place git re-materializes files this module then
+    // parses. Pin it at both layers git honors, so the byte format is a
+    // property of the store rather than of whoever created it.
+    //
+    // Converged on EVERY ensureStore, not just the call that runs `git init`:
+    // scoping it to creation left every store initialized before this pin
+    // existed running on ambient config — which on Windows is precisely the
+    // configuration the paragraph above describes. A fix that reaches only
+    // stores created after it is no fix for the machines already affected.
+    // `git config` is idempotent and local to this repo, so re-asserting it is
+    // free.
+    // Config only, deliberately: a `.gitattributes` would need the
+    // lock-protected `writeStoreFile` path (R1/R7 forbids raw fs here, and
+    // R6 puts store metadata writes under the lock), which is more surface
+    // than this needs. `parseLearningFrontmatter` is already CRLF-tolerant
+    // on its own, so this pin is defense in depth rather than the fix.
+    spawnSync('git', ['config', 'core.autocrlf', 'false'], { cwd: dir, encoding: 'utf8' });
+    spawnSync('git', ['config', 'core.eol', 'lf'], { cwd: dir, encoding: 'utf8' });
+  }
   // `storeFileState` — never `fs.existsSync` — decides "is this file already
   // there?": existsSync FOLLOWS a symlink, so a planted link read as "already
   // fine" and was left live for the next writer to follow (the verified
@@ -511,7 +536,15 @@ export function parseLearningFrontmatter(text) {
   const fm = { episodes: [], anchors: [] };
   let openList = null; // 'episodes' | 'anchors' | null
   let current = null;
-  for (const line of m[1].split('\n')) {
+  // Split on \r?\n, not '\n'. The opening match above already tolerates CRLF,
+  // so a CRLF file gets past it and then loses EVERY scalar field here: each
+  // line keeps a trailing \r, and the scalar matcher below (`(.*)$`) cannot
+  // match it — `.` excludes \r and `$` without the m flag is end-of-input.
+  // The failure is silent, and on Windows it fires after any store rollback
+  // (`git reset --hard`) or residue discard (`git checkout -- <path>`) when
+  // core.autocrlf is on, which is the Git-for-Windows default: a retired
+  // learning reads back with no status at all, i.e. as active.
+  for (const line of m[1].split(/\r?\n/)) {
     if (/^episodes:\s*$/.test(line)) {
       openList = 'episodes';
       current = null;
@@ -932,21 +965,65 @@ export function reassertStoreLock(lockPath, token) {
 }
 
 /**
+ * Options for removing a lock directory.
+ *
+ * Windows refuses to delete a directory whose entries still have an open
+ * handle, and returns EBUSY/EPERM/ENOTEMPTY transiently even after the last
+ * writer has closed — antivirus and the indexer both hold handles briefly.
+ * Without retries `releaseStoreLock` returns false, the `finally` swallows it,
+ * and the lock is LEAKED: the store stays wedged for the whole STALE_LOCK_MS
+ * window even though its owner exited cleanly. Observed on windows-latest,
+ * where the leaked `.lock` still contained its own `owner.json`.
+ *
+ * `maxRetries`/`retryDelay` are the options Node provides for exactly this;
+ * on POSIX they are inert because the first attempt always succeeds.
+ */
+const RM_LOCK_OPTS = { recursive: true, force: true, maxRetries: 10, retryDelay: 25 };
+
+/**
+ * Why the most recent `releaseStoreLock` returned false because removal failed
+ * (as opposed to the lock not being ours). Diagnostic only — never part of a
+ * control-flow decision. `releaseStoreLock` resets it on entry, so it always
+ * describes that call and never an earlier one.
+ *
+ * Declared above its writer: `releaseStoreLock` reads and writes it, and a
+ * `let` below the function would sit in the temporal dead zone if a circular
+ * import ever reached the function during module evaluation.
+ */
+let lastLockReleaseError = null;
+
+/**
  * Release ONLY a lock this holder owns. Returns true when the lock is gone (or
  * was already gone) because of us, false when it belongs to someone else and
  * was therefore LEFT ALONE — the single rule that keeps a confused writer from
  * unlocking a live transaction it never held.
  */
 export function releaseStoreLock(lockPath, token) {
+  // Reset first: this records why THIS call failed. Left cumulative, it
+  // reported the last failure anywhere in the process — which is exactly how a
+  // stale ERR_INVALID_ARG_TYPE from an unrelated earlier call got attributed to
+  // this one.
+  lastLockReleaseError = null;
   const state = lockOwnership(lockPath, token);
   if (state === 'absent') return true;
   if (state === 'foreign') return false;
   try {
-    fs.rmSync(lockPath, { recursive: true, force: true });
+    fs.rmSync(lockPath, RM_LOCK_OPTS);
     return true;
-  } catch {
+  } catch (err) {
+    // Record why. A swallowed error here is exactly what made a leaked lock on
+    // Windows cost six CI round-trips to attribute: the caller only ever sees
+    // `false`, which cannot distinguish "the lock is not mine" from "it is mine
+    // and the removal failed". The two have completely different causes and
+    // completely different fixes.
+    lastLockReleaseError = err.code || err.message;
     return false;
   }
+}
+
+/** Reader for `lastLockReleaseError`, declared above `releaseStoreLock`. */
+export function lastStoreLockReleaseError() {
+  return lastLockReleaseError;
 }
 
 /**
@@ -1037,7 +1114,7 @@ export function takeOverStaleLock(lockPath, observed, token) {
     // Never leave a live lock nobody can prove they own (P3). Ours to remove:
     // the exclusive mkdir above is what created it.
     try {
-      fs.rmSync(lockPath, { recursive: true, force: true });
+      fs.rmSync(lockPath, RM_LOCK_OPTS);
     } catch {
       // best effort
     }
@@ -1071,7 +1148,7 @@ export function acquireStoreLock(lockPath) {
       return { acquired: true, staleLockNote: null, token };
     }
     try {
-      fs.rmSync(lockPath, { recursive: true, force: true });
+      fs.rmSync(lockPath, RM_LOCK_OPTS);
     } catch {
       // best effort — a lock we could not remove is taken over as stale later
     }

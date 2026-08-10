@@ -2,7 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { execSync } from 'child_process';
-import { parseFlags } from './flags.mjs';
+import { parseFlags, hasFlag } from './flags.mjs';
 import { resolveCopilotHome, resolveIntelliJHome, pkgRootFromImportMeta } from './paths.mjs';
 import { readLock, writeLock, LOCK_NAME } from './lock.mjs';
 import {
@@ -12,7 +12,9 @@ import {
   syncAssetsToTarget,
   seedProfile,
   mergeIntelliJInstructions,
+  collectAllAssetFiles,
 } from './sync.mjs';
+import { approvedBundleNames, syncBundles } from './bundle-sync.mjs';
 import { runDoctor } from './doctor.mjs';
 import { runInitRepo } from './init-repo.mjs';
 import { runIndexKnowledge } from './index-knowledge.mjs';
@@ -21,11 +23,12 @@ import { parseQueryFromArgv } from './argv.mjs';
 import { readEvents, summarizeEvents, writeEvent } from './events.mjs';
 import { usageFields } from './token-meter.mjs';
 import { installHarnessBin } from './install-harness-bin.mjs';
-import { resolveHarnessBin, agentHarnessCommand } from './resolve-harness-bin.mjs';
+import { resolveHarnessBin, agentHarnessCommand, writeHarnessRunner, RUNNER_VERSION } from './resolve-harness-bin.mjs';
 import { installGlobalHarnessShim, configureShellPath, globalHarnessShimPath } from './global-bin.mjs';
 import { readSession, writeSession } from './session.mjs';
 import { loadPolicy } from './policy.mjs';
 import { createStyle, keyWidthFor, clampNote, EXIT } from './style.mjs';
+import { redactedJson } from './redact.mjs';
 
 // One renderer per process, bound to stdout's real capabilities.
 // --no-color / NO_COLOR / non-TTY all degrade to the ascii surface.
@@ -34,7 +37,11 @@ const ui = createStyle({ argv: process.argv.slice(2) });
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const pkgRoot = pkgRootFromImportMeta(import.meta.url);
 
-function readPkgVersion() {
+// Exported (P1.6 carry-list a): lib/registry.mjs's resultOf producers need
+// the installed package version too — this is the one building block behind
+// both cmdStatus's own reading and the former, now-deleted
+// lib/registry.mjs#readHarnessVersion duplicate.
+export function readPkgVersion() {
   const p = JSON.parse(fs.readFileSync(path.join(pkgRoot, 'package.json'), 'utf8'));
   return p.version;
 }
@@ -78,8 +85,13 @@ function execSyncSafe(cmd, cwd) {
 
 // Compact JSON by default (fewer tokens for the agent to read); pretty-print
 // only under --verbose. Both are valid JSON for machine consumers.
+// Fix-wave C2: every legacy `--json` payload flows through the shared
+// redacting emission boundary (lib/redact.mjs#redactedJson) before it
+// reaches stdout — a `--why` id, an echoed query, or a check's captured
+// output can carry caller-supplied secrets, and this is the one choke point
+// for all of them. Byte-identical output for secret-free payloads.
 function emitJson(flags, obj) {
-  console.log(flags.verbose ? JSON.stringify(obj, null, 2) : JSON.stringify(obj));
+  console.log(redactedJson(obj, { pretty: flags.verbose }));
 }
 
 // Answer-first: a one-line verdict, then only the checks that did not pass,
@@ -138,6 +150,19 @@ export async function cmdInstallOrUpgrade(command, argv) {
     applyRetired(copilotHome, retired, previousLock, flags, logger);
     allStats.vscode = syncAssetsToTarget(assets, copilotHome, flags, logger);
     seedProfile(assets, copilotHome, flags, logger);
+    // P5AC1: enabled bundles ride the SAME call that places the package's own
+    // files, after them — so the package always wins a path conflict, and
+    // withdrawal happens on the same pass that would have replaced it. A second
+    // pipeline would have to reimplement retirement, which is the half that
+    // gets forgotten.
+    allStats.bundles = syncBundles({
+      copilotHome,
+      shippedFiles: new Set(collectAllAssetFiles(assets)),
+      trustedNames: approvedBundleNames(copilotHome),
+      dryRun: flags.dryRun,
+    });
+    for (const r of allStats.bundles.refused) log(flags, `bundle ${r.bundle}: refused ${r.target} — ${r.reason}`);
+    for (const w of allStats.bundles.withdrawn) log(flags, `withdrew ${w} (no longer contributed)`);
     const binStats = installHarnessBin(pkgRoot, copilotHome, flags, logger);
     allStats.harnessBin = binStats;
     allStats.globalShim = installGlobalHarnessShim(copilotHome, flags, logger);
@@ -156,6 +181,25 @@ export async function cmdInstallOrUpgrade(command, argv) {
     allStats.intellij = syncAssetsToTarget(assets, ij, flags, logger);
     seedProfile(assets, ij, flags, logger);
     mergeIntelliJInstructions(assets, ij, flags, logger);
+  }
+
+  // Refresh THIS workspace's runner shim if it has one.
+  //
+  // The rest of this command is global-home scoped and deliberately leaves the
+  // workspace alone. `.harness/run.mjs` is the one narrow exception, because it
+  // is not workspace content — it is a generated shim whose only job is to point
+  // at the installed harness, so keeping it in step with the harness that just
+  // landed is this command's own business.
+  //
+  // It matters because the alternative is no path at all: writeHarnessRunner was
+  // reachable only from `init-repo`, which people run once at setup. A bug fixed
+  // in the runner source therefore never reached an existing workspace, however
+  // many times its owner upgraded. The write is version-stamp gated and a no-op
+  // when the runner is current, and it is skipped entirely where no runner
+  // exists, so upgrading outside a workspace still creates nothing.
+  const runnerWorkspace = path.resolve(flags.workspace);
+  if (fs.existsSync(path.join(runnerWorkspace, '.harness', 'run.mjs'))) {
+    allStats.runner = writeHarnessRunner(runnerWorkspace, flags.dryRun);
   }
 
   const files = new Set([
@@ -182,8 +226,10 @@ export async function cmdInstallOrUpgrade(command, argv) {
   }
 
   if (flags.json) {
+    // Fix-wave C2: same shared redacting boundary as emitJson (this call
+    // site pretty-prints unconditionally, its pre-existing shape).
     console.log(
-      JSON.stringify(
+      redactedJson(
         {
           command,
           version,
@@ -191,9 +237,9 @@ export async function cmdInstallOrUpgrade(command, argv) {
           dryRun: flags.dryRun,
           vscode: allStats.vscode,
           intellij: allStats.intellij,
+          runner: allStats.runner ?? null,
         },
-        null,
-        2
+        { pretty: true }
       )
     );
   } else {
@@ -219,6 +265,11 @@ export async function cmdInstallOrUpgrade(command, argv) {
           value: `+${allStats.intellij.created} ~${allStats.intellij.updated} =${allStats.intellij.unchanged}`,
           keyWidth,
         })
+      );
+    }
+    if (allStats.runner?.updated) {
+      console.log(
+        ui.line({ key: 'runner', value: allStats.runner.path, note: `refreshed to v${RUNNER_VERSION}`, keyWidth })
       );
     }
     const shim = globalHarnessShimPath(copilotHome);
@@ -251,7 +302,7 @@ export async function cmdDoctor(argv) {
   } catch {
     /* doctor still runs */
   }
-  const { checks, pass } = runDoctor({
+  const { checks, pass } = await runDoctor({
     copilotHome,
     assetsRoot: assets,
     pkgRoot,
@@ -289,11 +340,19 @@ export async function cmdDoctor(argv) {
   return exitCode;
 }
 
-export async function cmdStatus(argv) {
+// P1.6 (carry-list a): same shared-prefix extraction as computeOrientResult,
+// for status — cmdStatus and lib/registry.mjs's statusResultOf both parse
+// flags and resolve copilotHome/lock/version identically.
+export function computeStatusResult(argv) {
   const flags = parseFlags(argv);
   const copilotHome = resolveCopilotHome(flags.copilotHome);
   const lock = readLock(copilotHome);
   const version = readPkgVersion();
+  return { flags, copilotHome, lock, version };
+}
+
+export async function cmdStatus(argv) {
+  const { flags, copilotHome, lock, version } = computeStatusResult(argv);
 
   if (flags.json) {
     emitJson(flags, { packageVersion: version, copilotHome, lock });
@@ -347,7 +406,9 @@ export async function cmdIndex(argv) {
 
   // `--since` only narrows a structural rebuild. Accepting and ignoring it
   // anywhere else silently does nothing the caller asked for.
-  if (flags.since && !argv.includes('--structural')) {
+  // Boundary-aware read (P1 hardening): a post-`--` literal is content, not a
+  // flag — `hasFlag` stops at the `--` boundary where `argv.includes` would not.
+  if (flags.since && !hasFlag(argv, '--structural')) {
     throw Object.assign(new Error('--since requires --structural'), {
       code: 'E_USAGE',
       hint: 'run: harness index --structural --since <ref>',
@@ -356,7 +417,7 @@ export async function cmdIndex(argv) {
   }
 
   // Read-only freshness report — never rebuilds, zero model cost.
-  if (argv.includes('--status')) {
+  if (hasFlag(argv, '--status')) {
     const { indexStatus } = await import('./index-status.mjs');
     const status = indexStatus({ workspace, copilotHome });
     if (flags.json) emitJson(flags, status);
@@ -373,7 +434,7 @@ export async function cmdIndex(argv) {
   // ~/.harness/index/<repo-id>/structural/, and orient/buildRepoMap read the
   // PREBUILT files synchronously. Fully functional with the optional grammar
   // packages absent (lexical tier).
-  if (argv.includes('--structural')) {
+  if (hasFlag(argv, '--structural')) {
     const { buildStructuralIndex, validateSinceRef, renderStructuralDigest, readStructuralIndex } = await import(
       './repo-map/structural-index.mjs'
     );
@@ -548,13 +609,25 @@ export async function cmdIndex(argv) {
   return 0;
 }
 
-export async function cmdOrient(argv) {
+// P1.6 (carry-list a): the shared prefix cmdOrient and lib/registry.mjs's
+// orientResultOf both need — parse flags, resolve workspace/copilotHome/
+// query, run orient — extracted once so resultOf calls this instead of
+// duplicating it (task-2's original, acknowledged, file-ownership-forced
+// duplication). Returns everything either caller needs: cmdOrient uses
+// `flags`/`workspace`/`query` for its own writeEvent/render tail;
+// orientResultOf only needs `result`.
+export async function computeOrientResult(argv) {
   const { runOrient } = await import('./orient.mjs');
   const flags = parseFlags(argv);
   const workspace = path.resolve(flags.workspace);
   const copilotHome = resolveCopilotHome(flags.copilotHome);
   const query = parseQueryFromArgv(argv, flags);
   const result = runOrient({ workspace, copilotHome, flags, query });
+  return { flags, workspace, copilotHome, query, result };
+}
+
+export async function cmdOrient(argv) {
+  const { flags, workspace, query, result } = await computeOrientResult(argv);
   const orientPack = (() => {
     try {
       return fs.readFileSync(path.join(workspace, result.contextPack), 'utf8');
@@ -619,9 +692,11 @@ export async function cmdGate(argv) {
   const workspace = path.resolve(flags.workspace);
   const query = parseQueryFromArgv(argv, flags);
   const result = runGate({ workspace, flags, query });
-  const policy = loadPolicy(workspace, flags.enforcement);
+  const policy = loadPolicy(workspace, flags.enforcement, { copilotHome: resolveCopilotHome(flags.copilotHome) });
   const policyExitCode = policy.enforcement === 'enforce' ? result.exitCode : 0;
   result.enforcement = policy.enforcement;
+  result.projectPolicyIgnored = policy.projectPolicyIgnored;
+  result.projectPolicyError = policy.projectPolicyError ?? null;
   result.policyExitCode = policyExitCode;
   const previous = readSession(workspace) || {};
   writeSession(
@@ -668,12 +743,72 @@ export async function cmdGate(argv) {
   return policyExitCode;
 }
 
-export async function cmdVerify(argv) {
-  const { runVerify, exitCodeForOutcome, isGatingCheck } = await import('./verify.mjs');
+// P1.6: verify is the one command wired onto lib/runner.mjs for its named
+// check execution (AC8) — `ctx.signal` (bin/harness.mjs's SIGINT->AbortSignal
+// bridge, wired only for this command) lets a check-in-flight actually be
+// cancelled, and `ctx.output === 'jsonl'` opts into row-per-event streaming
+// via lib/envelope.mjs's createJsonlStream. Every other lane (the default
+// ledger render, and legacy --json) is byte-identical to before except that
+// `runVerify` itself is now async — see lib/verify.mjs's own doc comment for
+// the runner-wiring detail and the cancellation-skips-evidence contract.
+export async function cmdVerify(argv, ctx = {}) {
+  const { runVerify, exitCodeForOutcome, statusForVerifyResult, unifiedStatusForCheck, isGatingCheck } =
+    await import('./verify.mjs');
   const flags = parseFlags(argv);
   const workspace = path.resolve(flags.workspace);
-  const result = runVerify({ workspace, flags });
-  const exitCode = exitCodeForOutcome(result.outcome, result.enforcement);
+  const signal = ctx.signal;
+  const streaming = ctx.output === 'jsonl';
+
+  let jsonl = null;
+  let onEvent;
+  if (streaming) {
+    const { createJsonlStream } = await import('./envelope.mjs');
+    jsonl = createJsonlStream(process.stdout);
+    jsonl.start({ command: 'verify', plan: flags.plan || null });
+    onEvent = (event, fields = {}) => {
+      if (event === 'progress') jsonl.progress(fields);
+      else if (event === 'row') jsonl.row(fields);
+      else jsonl.write(event, fields);
+    };
+  }
+
+  // A JSONL stream that has emitted `start` MUST also emit a terminal
+  // `result` row (lib/envelope.mjs's documented contract) — otherwise a
+  // throwing runVerify leaves the error envelope on stderr and a stdout
+  // consumer blocked on a stream that never terminates. The row carries the
+  // failure, then the error rethrows untouched so bin/harness.mjs's own
+  // rendering, exit code, and telemetry are unchanged.
+  let result;
+  try {
+    result = await runVerify({ workspace, flags, signal, onEvent, events: ctx.events });
+  } catch (error) {
+    if (streaming) {
+      jsonl.result({ status: 'failed', outcome: 'inconclusive', message: error?.message || String(error) });
+      await jsonl.drained();
+    }
+    throw error;
+  }
+  const cancelled = result.outcome === 'cancelled';
+  // Fix-wave Important #5: explicit run-outcome precedence for the exit
+  // code — cancelled (130) > timed-out (8) > the enforcement mapping.
+  // Pre-fix, a run whose checks timed out fell through to
+  // `outcome: inconclusive` -> exit 2, while the SAME run's jsonl terminal
+  // row said `status: timed-out` — EXIT.timedOut and its command.result
+  // telemetry were unreachable. `timed-out` maps BEFORE the enforcement
+  // mapping on purpose: enforcement modes (observe/warn) downgrade policy
+  // VERDICTS, but a timeout means verification never completed — there is
+  // no verdict to downgrade, and masking it as exit 0/2 loses the one
+  // signal that distinguishes "ran out of time" from "checked and found
+  // inconclusive". The unified status comes from statusForVerifyResult
+  // (lib/verify.mjs) so the exit code, the jsonl terminal row, and
+  // command.result telemetry can never disagree.
+  const runStatus = statusForVerifyResult(result);
+  const exitCode = cancelled
+    ? EXIT.cancelled
+    : runStatus === 'timed-out'
+      ? EXIT.timedOut
+      : exitCodeForOutcome(result.outcome, result.enforcement);
+
   const previous = readSession(workspace) || {};
   writeSession(
     workspace,
@@ -691,12 +826,28 @@ export async function cmdVerify(argv) {
     command: 'verify',
     plan: result.plan,
     exitCode,
-    result: result.outcome === 'passed' ? 'pass' : result.outcome === 'failed' ? 'fail' : 'warn',
+    result: cancelled ? 'warn' : result.outcome === 'passed' ? 'pass' : result.outcome === 'failed' ? 'fail' : 'warn',
     checks: result.checks,
-    blockedReason: result.outcome === 'passed' ? null : `${result.outcome} verification`,
+    blockedReason: cancelled ? 'verification cancelled (SIGINT)' : result.outcome === 'passed' ? null : `${result.outcome} verification`,
     usage: usageFields({ input: result.plan || '', output: result.checks.map((c) => c.message).join('\n') }),
     learnings: flags.learnings ? flags.learnings.split(',').map((s) => s.trim()).filter(Boolean) : undefined,
   });
+
+  if (streaming) {
+    jsonl.result({
+      status: runStatus,
+      outcome: result.outcome,
+      exitCode,
+      evidencePath: result.evidencePath,
+      checks: result.checks.map((c) => ({ id: c.id, status: c.status, unifiedStatus: unifiedStatusForCheck(c) })),
+    });
+    // Fix-wave P2 (JSONL backpressure): await the stream draining the terminal
+    // result row before returning — the CLI's hard process.exit must not race
+    // ahead of a row buffered under backpressure (bin/harness.mjs also flushes
+    // stdout before exit as a second guarantee).
+    await jsonl.drained();
+    return exitCode;
+  }
 
   if (flags.json) emitJson(flags, result);
   else {
@@ -713,14 +864,44 @@ export async function cmdVerify(argv) {
     const passed = result.outcome === 'passed';
     console.log(
       ui.line({
-        state: passed ? 'ok' : exitCode === 0 ? 'warn' : 'error',
+        state: cancelled ? 'warn' : passed ? 'ok' : exitCode === 0 ? 'warn' : 'error',
         key: 'verify',
-        value: passed
-          ? `passed · ${result.checks.length} checks`
-          : `${result.outcome} · ${failed} of ${result.checks.length} checks`,
+        value: cancelled
+          ? 'cancelled · verification interrupted'
+          : passed
+            ? `passed · ${result.checks.length} checks`
+            : `${result.outcome} · ${failed} of ${result.checks.length} checks`,
         note: result.evidencePath,
       })
     );
+    // P3AC6: the enforcement mode came from the built-in default because this
+    // project is not approved, not because anyone chose it. Printed at the same
+    // altitude as the refused-downgrade row below, and for the same reason — a
+    // run behaving differently from the file on disk has to say why.
+    if (result.projectPolicyIgnored) {
+      console.log(
+        ui.line({
+          state: 'warn',
+          key: 'policy',
+          value: 'project policy.yaml ignored — this project is not trusted',
+          note: `running as ${result.enforcement} · harness trust approve`,
+        })
+      );
+    }
+    // …and if that file is ALSO broken, say so here rather than aborting the
+    // run. An unapproved repository must not be able to stop the harness, but
+    // the operator still needs to learn that the file they wrote would not have
+    // parsed even if they had approved it.
+    if (result.projectPolicyError) {
+      console.log(
+        ui.line({
+          state: 'warn',
+          key: 'policy',
+          value: 'and it would not parse',
+          note: clampNote(result.projectPolicyError),
+        })
+      );
+    }
     // A policy that tried to mark a plan-required check advisory disagrees
     // with the plan it is verifying; the run ignores it, and says so.
     for (const refused of result.refusedSeverityDowngrades || []) {
@@ -736,8 +917,12 @@ export async function cmdVerify(argv) {
     printChecks(flags, result.checks, (c) => c.status === 'passed' || c.status === 'skipped');
     if (passed) {
       printNext('harness compound (or /auto-compound), then stop');
-    } else {
+    } else if (!cancelled) {
+      // Main's `isGatingCheck` predicate (skipped/advisory are neutral) AND
+      // P1.6's cancelled guard: an interrupted run has no "first failure" to
+      // point at — the run never finished deciding.
       const firstFail = result.checks.find(gating);
+
       if (firstFail) {
         const detail = String(firstFail.message ?? firstFail.name ?? '').slice(0, 100);
         printNext(`fix ${firstFail.id} (${detail})`);
@@ -750,7 +935,7 @@ export async function cmdVerify(argv) {
 export async function cmdRecall(argv) {
   const { runRecall } = await import('./recall-cmd.mjs');
   const flags = parseFlags(argv);
-  if (argv.includes('--include-plans')) flags.includePlans = true;
+  if (hasFlag(argv, '--include-plans')) flags.includePlans = true;
   const workspace = path.resolve(flags.workspace);
   const copilotHome = resolveCopilotHome(flags.copilotHome);
   const result = runRecall({ workspace, copilotHome, flags, argv });
@@ -895,9 +1080,11 @@ export async function cmdValidatePlan(argv) {
   const flags = parseFlags(argv);
   const workspace = path.resolve(flags.workspace);
   const result = runValidatePlan({ workspace, flags, planPath: flags.plan });
-  const policy = loadPolicy(workspace, flags.enforcement);
+  const policy = loadPolicy(workspace, flags.enforcement, { copilotHome: resolveCopilotHome(flags.copilotHome) });
   const policyExitCode = policy.enforcement === 'enforce' ? result.exitCode : 0;
   result.enforcement = policy.enforcement;
+  result.projectPolicyIgnored = policy.projectPolicyIgnored;
+  result.projectPolicyError = policy.projectPolicyError ?? null;
   result.policyExitCode = policyExitCode;
   writeEvent(workspace, flags, {
     type: 'validate_plan',
@@ -977,7 +1164,7 @@ export async function cmdConsolidate(argv) {
   const copilotHome = resolveCopilotHome(flags.copilotHome);
   const logger = (m) => log(flags, m);
 
-  if (argv.includes('--apply')) {
+  if (hasFlag(argv, '--apply')) {
     const { applyOps } = await import('./knowledge/apply.mjs');
     if (!flags.ops) {
       throw Object.assign(new Error('--apply requires --ops <path> (the skill-emitted operations JSON)'), {
@@ -1030,7 +1217,7 @@ export async function cmdConsolidate(argv) {
     return result.exitCode;
   }
 
-  if (argv.includes('--candidates')) {
+  if (hasFlag(argv, '--candidates')) {
     const { consolidateCandidates } = await import('./knowledge/consolidate.mjs');
     const packet = consolidateCandidates({ workspace, copilotHome });
     writeEvent(workspace, flags, { type: 'consolidate', command: 'consolidate', result: 'pass', exitCode: 0 });
@@ -1050,7 +1237,7 @@ export async function cmdConsolidate(argv) {
     return 0;
   }
 
-  if (argv.includes('--rebuild')) {
+  if (hasFlag(argv, '--rebuild')) {
     const { rebuildStore } = await import('./knowledge/admin.mjs');
     const { CONSOLIDATION_THRESHOLD } = await import('./knowledge/consolidate.mjs');
     const result = rebuildStore({ workspace, yes: flags.yes, copilotHome, log: logger });
@@ -1193,16 +1380,18 @@ export async function cmdLearning(argv) {
 // annotations, plus single-learning provenance via --why. Matches the
 // recall/report convention — no writeEvent call.
 export async function cmdLearnings(argv) {
-  const { listingView, whyView } = await import('./knowledge/listing.mjs');
+  const { resolveLearningsView } = await import('./knowledge/listing.mjs');
   const flags = parseFlags(argv);
   const workspace = path.resolve(flags.workspace);
   const copilotHome = resolveCopilotHome(flags.copilotHome);
 
-  // A trailing bare --why (no id following it) must never silently fall
-  // through to the full listing below — parseFlags leaves flags.why unset
-  // when there's no next token to consume.
-  if (argv.includes('--why') && !flags.why) {
-    const blockedReason = 'usage: harness learnings --why <id>';
+  // P2D3: which view to render is `resolveLearningsView`, shared with
+  // learningsResultOf. Only the presentation below is this path's own — a
+  // ledger plus an exit code, where the lane path throws for the envelope.
+  const view = resolveLearningsView({ argv, flags, workspace, copilotHome, hasFlag });
+
+  if (view.outcome === 'usage') {
+    const blockedReason = view.message;
     if (flags.json) {
       emitJson(flags, { pass: false, blockedReason });
     } else {
@@ -1213,8 +1402,8 @@ export async function cmdLearnings(argv) {
     return EXIT.usage;
   }
 
-  if (flags.why) {
-    const result = whyView({ workspace, id: flags.why });
+  if (view.outcome === 'why' || view.outcome === 'not-found') {
+    const result = view.outcome === 'why' ? view.result : null;
     if (!result) {
       const blockedReason = `E_TARGET: no learning ${flags.why}`;
       if (flags.json) {
@@ -1251,8 +1440,7 @@ export async function cmdLearnings(argv) {
     return 0;
   }
 
-  const domain = argv[0] && !argv[0].startsWith('--') ? argv[0] : null;
-  const result = listingView({ workspace, copilotHome, domain });
+  const result = view.result;
 
   if (flags.json) {
     emitJson(flags, result);
@@ -1741,7 +1929,8 @@ export async function cmdUninstall(argv) {
     const message = 'no lock file — nothing to uninstall';
     const hint = 'harness install';
     if (flags.json) {
-      console.error(JSON.stringify({ ok: false, error: { code, message, hint, exit: 1 } }));
+      // Fix-wave C2: error envelopes are emission sinks too.
+      console.error(redactedJson({ ok: false, error: { code, message, hint, exit: 1 } }));
     } else {
       for (const l of ui.errorBlock({ code, message, fix: hint, exit: 1 })) console.error(l);
     }

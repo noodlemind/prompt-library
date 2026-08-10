@@ -26,7 +26,7 @@ const ORPHAN_SCAN_DIRS = ['skills', 'agents', 'instructions', 'prompts', 'hooks'
  * harness that upgrade will not clean because nobody tombstoned them. Returns
  * the sorted relative paths so `doctor` can flag them for retirement.
  */
-export function findStaleOrphans(copilotHome, assetsRoot, retiredList = []) {
+export function findStaleOrphans(copilotHome, assetsRoot, retiredList = [], lockFiles = null) {
   const current = new Set();
   for (const top of SYNC_TOP_LEVEL) {
     for (const f of walkFiles(path.join(assetsRoot, top))) current.add(`${top}/${f}`);
@@ -43,6 +43,12 @@ export function findStaleOrphans(copilotHome, assetsRoot, retiredList = []) {
       const rel = `${top}/${f}`;
       if (current.has(rel)) continue; // still shipped
       if (retiredCovered(rel)) continue; // explicitly retired — upgrade removes it
+      // A file the harness NEVER HYDRATED is not a leftover from an older
+      // version — someone added it. Treating it as an orphan told operators to
+      // tombstone their own team's skill in retired.json, which would have made
+      // the next upgrade delete it. `lockFiles` is null for callers that cannot
+      // supply the lock, which keeps the pre-existing behavior for them.
+      if (lockFiles && !lockFiles.has(rel)) continue;
       // `.harness/` under a scan dir is runtime state written by hooks at
       // execution time — never a shipped primitive, so never an orphan.
       if (/(^|\/)\.harness\//.test(rel)) continue;

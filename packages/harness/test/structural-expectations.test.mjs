@@ -16,6 +16,7 @@ import { test } from 'node:test';
 import { loadPolicy, checkSeverityFor, enforcementExitCode } from '../lib/policy.mjs';
 import { structuralDir, readStructuralIndex, STRUCTURAL_SHAPE_VERSION } from '../lib/structural/shape.mjs';
 import { runStructuralExpectations, STRUCTURAL_CHECK_ID } from '../lib/structural/expectations.mjs';
+import { approveProject } from '../lib/trust.mjs';
 import { buildStructuralIndex } from '../lib/repo-map/structural-index.mjs';
 import { lexicalV2 } from '../lib/repo-map/treesitter-extractor.mjs';
 import { runVerify } from '../lib/verify.mjs';
@@ -247,6 +248,11 @@ function structuralWorkspace({ policy = null } = {}) {
   writeChecks(workspace, { 'unit-tests': { command: [process.execPath, '-e', 'process.exit(0)'] } });
   if (policy) writePolicy(workspace, policy);
   const sha = commitAll(workspace, 'baseline');
+  // P3AC6: project policy loads only for a trusted project. These fixtures test
+  // POLICY behavior, so they approve themselves against their own isolated
+  // home — `withHome` points COPILOT_HOME there, so the developer's real
+  // ~/.copilot is never touched. `test/trust.test.mjs` owns the gate itself.
+  approveProject({ workspace, copilotHome: copilotHomeFor(home) });
   return { workspace, home, plan, sha };
 }
 
@@ -258,14 +264,28 @@ function minimalPlan(impacted, fm = {}) {
   };
 }
 
-function withHome(home, fn) {
+// P1.6: runVerify is async (lib/runner.mjs wiring), so the HARNESS_HOME
+// override must survive until the run RESOLVES — a sync try/finally would
+// restore the env the instant the promise was created, mid-run.
+/** The isolated Copilot home paired with a fixture's HARNESS_HOME. Derived
+ * rather than passed so every existing `withHome(home, ...)` call keeps working
+ * unchanged while trust still resolves inside the fixture. */
+function copilotHomeFor(home) {
+  return path.join(home, 'copilot');
+}
+
+async function withHome(home, fn) {
   const previous = process.env.HARNESS_HOME;
+  const previousCopilot = process.env.COPILOT_HOME;
   process.env.HARNESS_HOME = home;
+  process.env.COPILOT_HOME = copilotHomeFor(home);
   try {
-    return fn();
+    return await fn();
   } finally {
     if (previous === undefined) delete process.env.HARNESS_HOME;
     else process.env.HARNESS_HOME = previous;
+    if (previousCopilot === undefined) delete process.env.COPILOT_HOME;
+    else process.env.COPILOT_HOME = previousCopilot;
   }
 }
 
@@ -693,7 +713,7 @@ test('advisory structural failure does not flip a passing verify outcome', async
   await buildBaseline(workspace, home);
   fs.writeFileSync(path.join(workspace, 'src', 'example.js'), 'export const other = 2;\n');
 
-  const result = withHome(home, () => runVerify({ workspace, flags: verifyFlags(plan) }));
+  const result = await withHome(home, () => runVerify({ workspace, flags: verifyFlags(plan) }));
   assert.equal(result.outcome, 'passed', JSON.stringify(result.checks, null, 2));
   assert.equal(enforcementExitCode(result.outcome, 'enforce'), 0);
 
@@ -717,7 +737,7 @@ test('policy warn severity degrades a structural failure to inconclusive (exit 2
   await buildBaseline(workspace, home);
   fs.writeFileSync(path.join(workspace, 'src', 'example.js'), 'export const other = 2;\n');
 
-  const result = withHome(home, () => runVerify({ workspace, flags: verifyFlags(plan) }));
+  const result = await withHome(home, () => runVerify({ workspace, flags: verifyFlags(plan) }));
   assert.equal(result.outcome, 'inconclusive');
   assert.equal(enforcementExitCode(result.outcome, result.enforcement), 2);
   const structural = result.checks.find((check) => check.id === STRUCTURAL_CHECK_ID);
@@ -732,7 +752,7 @@ test('policy enforce severity makes a structural failure fail verification (exit
   await buildBaseline(workspace, home);
   fs.writeFileSync(path.join(workspace, 'src', 'example.js'), 'export const other = 2;\n');
 
-  const result = withHome(home, () => runVerify({ workspace, flags: verifyFlags(plan) }));
+  const result = await withHome(home, () => runVerify({ workspace, flags: verifyFlags(plan) }));
   assert.equal(result.outcome, 'failed');
   assert.equal(enforcementExitCode(result.outcome, result.enforcement), 1);
   // The only failed check is the structural one — the failure is genuinely its doing.
@@ -747,19 +767,19 @@ test('global observe enforcement never gates the exit code, but per-check enforc
   await buildBaseline(workspace, home);
   fs.writeFileSync(path.join(workspace, 'src', 'example.js'), 'export const other = 2;\n');
 
-  const result = withHome(home, () => runVerify({ workspace, flags: verifyFlags(plan) }));
+  const result = await withHome(home, () => runVerify({ workspace, flags: verifyFlags(plan) }));
   assert.equal(result.outcome, 'failed', 'per-check enforce severity still fails the outcome');
   assert.equal(result.enforcement, 'observe');
   assert.equal(enforcementExitCode(result.outcome, result.enforcement), 0, 'observe mode reports without gating the exit code');
 });
 
-test('a passing verify run with no structural index behaves as before (v1 compatibility round-trip)', () => {
+test('a passing verify run with no structural index behaves as before (v1 compatibility round-trip)', async () => {
   // No structural index written; v1 policy file present.
   const { workspace, home, plan } = structuralWorkspace({
     policy: 'version: 1\nenforcement: enforce\ngate_ttl_minutes: 30\nevidence_ttl_hours: 24\nexemptions: []\nwaivers: []\n',
   });
 
-  const result = withHome(home, () => runVerify({ workspace, flags: verifyFlags(plan) }));
+  const result = await withHome(home, () => runVerify({ workspace, flags: verifyFlags(plan) }));
   assert.equal(result.outcome, 'passed', JSON.stringify(result.checks, null, 2));
   const structural = result.checks.find((check) => check.id === STRUCTURAL_CHECK_ID);
   assert.equal(structural.status, 'skipped');
@@ -777,7 +797,7 @@ test('a hard check failure still fails verification regardless of advisory check
   // Scope violation: change a file the plan does not allow.
   fs.writeFileSync(path.join(workspace, 'src', 'rogue.js'), 'export const rogue = 1;\n');
 
-  const result = withHome(home, () => runVerify({ workspace, flags: verifyFlags(plan) }));
+  const result = await withHome(home, () => runVerify({ workspace, flags: verifyFlags(plan) }));
   assert.equal(result.outcome, 'failed');
   const scope = result.checks.find((check) => check.id === 'scope');
   assert.equal(scope.status, 'failed');
@@ -789,7 +809,7 @@ test('evidence payload records per-check severity and advisory failures', async 
   await buildBaseline(workspace, home);
   fs.writeFileSync(path.join(workspace, 'src', 'example.js'), 'export const other = 2;\n');
 
-  const result = withHome(home, () => runVerify({ workspace, flags: verifyFlags(plan) }));
+  const result = await withHome(home, () => runVerify({ workspace, flags: verifyFlags(plan) }));
   const evidence = readEvidence(workspace, result.plan);
   assert.ok(evidence, 'evidence artifact must exist');
   assert.equal(evidence.outcome, 'passed');

@@ -9,6 +9,7 @@ import { loadPolicy, NON_ADVISORY_CHECK_IDS } from '../lib/policy.mjs';
 import { collectAdvisoryFailures, runVerify, sanitizeCheckPayload } from '../lib/verify.mjs';
 import { readEvidence } from '../lib/evidence.mjs';
 import { STRUCTURAL_CHECK_ID } from '../lib/structural/expectations.mjs';
+import { approveProject } from '../lib/trust.mjs';
 import { buildStructuralIndex } from '../lib/repo-map/structural-index.mjs';
 import { lexicalV2 } from '../lib/repo-map/treesitter-extractor.mjs';
 
@@ -168,17 +169,36 @@ function verifiableWorkspace({ required, criteria, extraFrontmatter, checks, pol
   if (policy) writeConfig(workspace, 'policy.yaml', policy);
   git(workspace, ['add', '.']);
   git(workspace, ['commit', '-qm', 'baseline']);
+  // P3AC6: project policy loads only for a trusted project. These fixtures are
+  // about POLICY behavior, so they approve themselves against their own
+  // isolated home — `withHome` points COPILOT_HOME here, so nothing touches the
+  // developer's real ~/.copilot. `test/trust.test.mjs` owns the gate itself.
+  approveProject({ workspace, copilotHome: copilotHomeFor(home) });
   return { workspace, home, plan };
 }
 
-function withHome(home, fn) {
+// P1.6: runVerify is async (lib/runner.mjs wiring), so the HARNESS_HOME
+// override must survive until the run RESOLVES — a sync try/finally would
+// restore the env the instant the promise was created, mid-run.
+/** The isolated Copilot home that pairs with a fixture's HARNESS_HOME. Derived
+ * rather than passed so every existing `withHome(home, ...)` call keeps working
+ * unchanged while still resolving trust inside the fixture. */
+function copilotHomeFor(home) {
+  return path.join(home, 'copilot');
+}
+
+async function withHome(home, fn) {
   const previous = process.env.HARNESS_HOME;
+  const previousCopilot = process.env.COPILOT_HOME;
   process.env.HARNESS_HOME = home;
+  process.env.COPILOT_HOME = copilotHomeFor(home);
   try {
-    return fn();
+    return await fn();
   } finally {
     if (previous === undefined) delete process.env.HARNESS_HOME;
     else process.env.HARNESS_HOME = previous;
+    if (previousCopilot === undefined) delete process.env.COPILOT_HOME;
+    else process.env.COPILOT_HOME = previousCopilot;
   }
 }
 
@@ -215,6 +235,15 @@ test('E: the advisory-by-default structural check stays downgradable, and v1 pol
   assert.deepEqual(loadPolicy(v1), {
     version: 1,
     enforcement: 'warn',
+    // P3AC6 additions. With no `copilotHome` supplied there is no user scope to
+    // check against, so the trust gate is not engaged and the policy loads
+    // exactly as it did before — which is what this assertion is pinning.
+    projectPolicyIgnored: false,
+    // A broken policy in an UNTRUSTED project is reported here instead of
+    // thrown, so an unapproved repository cannot abort every verify/gate run by
+    // committing a stray tab. `null` when the file parsed, as here.
+    projectPolicyError: null,
+    policyPath: path.join(v1, '.github', 'harness', 'policy.yaml'),
     gateTtlMinutes: 15,
     evidenceTtlHours: 24,
     exemptions: ['docs/**'],
@@ -250,7 +279,7 @@ test('E: every built-in check verify.mjs pushes is either non-downgradable or ad
 // it under `verification.required`, and a policy `severity: advisory` used to
 // filter its failure straight out of `resolveOutcome` — evidence `passed`,
 // gate open, `compound` free to mint a verified episode from a failed run.
-test('E: a failed plan-required check cannot be downgraded to advisory — the run does not pass', () => {
+test('E: a failed plan-required check cannot be downgraded to advisory — the run does not pass', async () => {
   const { workspace, home, plan } = verifiableWorkspace({
     // `team-lint` is required but is NOT the sole check mapped to AC1, so the
     // criteria-evidence check stays green and the outcome hinges on severity.
@@ -263,7 +292,7 @@ test('E: a failed plan-required check cannot be downgraded to advisory — the r
     policy: 'version: 2\nenforcement: enforce\nchecks:\n  team-lint:\n    severity: advisory\n',
   });
 
-  const result = withHome(home, () => runVerify({ workspace, flags: { plan, base: 'HEAD', dryRun: false } }));
+  const result = await withHome(home, () => runVerify({ workspace, flags: { plan, base: 'HEAD', dryRun: false } }));
 
   const teamLint = result.checks.find((check) => check.id === 'team-lint');
   assert.equal(teamLint.status, 'failed', JSON.stringify(result.checks, null, 2));
@@ -285,7 +314,7 @@ test('E: a failed plan-required check cannot be downgraded to advisory — the r
   assert.equal(evidence.checks.find((check) => check.id === 'team-lint').severity, 'enforce');
 });
 
-test('E: a check mapped under verification.criteria is protected the same way', () => {
+test('E: a check mapped under verification.criteria is protected the same way', async () => {
   const { workspace, home, plan } = verifiableWorkspace({
     required: ['unit-tests', 'team-lint'],
     criteria: { AC1: ['unit-tests', 'team-lint'] },
@@ -296,13 +325,13 @@ test('E: a check mapped under verification.criteria is protected the same way', 
     policy: 'version: 2\nenforcement: enforce\nchecks:\n  team-lint:\n    severity: advisory\n',
   });
 
-  const result = withHome(home, () => runVerify({ workspace, flags: { plan, base: 'HEAD', dryRun: false } }));
+  const result = await withHome(home, () => runVerify({ workspace, flags: { plan, base: 'HEAD', dryRun: false } }));
 
   assert.equal(result.checks.find((check) => check.id === 'team-lint').severity, 'enforce');
   assert.equal(result.outcome, 'failed');
 });
 
-test('E: a project-defined check the plan does NOT gate on stays freely downgradable, and warn still degrades', () => {
+test('E: a project-defined check the plan does NOT gate on stays freely downgradable, and warn still degrades', async () => {
   // Same failing command, but nothing in the plan requires it: the team keeps
   // its own advisory checks, which is what the static-id-list rule intended.
   const advisory = verifiableWorkspace({
@@ -311,7 +340,7 @@ test('E: a project-defined check the plan does NOT gate on stays freely downgrad
     checks: { 'unit-tests': { command: [process.execPath, '-e', 'process.exit(0)'] } },
     policy: `version: 2\nenforcement: enforce\nchecks:\n  ${STRUCTURAL_CHECK_ID}:\n    severity: advisory\n`,
   });
-  const advisoryResult = withHome(advisory.home, () =>
+  const advisoryResult = await withHome(advisory.home, () =>
     runVerify({ workspace: advisory.workspace, flags: { plan: advisory.plan, base: 'HEAD', dryRun: false } })
   );
   assert.equal(advisoryResult.outcome, 'passed', JSON.stringify(advisoryResult.checks, null, 2));
@@ -329,7 +358,7 @@ test('E: a project-defined check the plan does NOT gate on stays freely downgrad
     },
     policy: 'version: 2\nenforcement: enforce\nchecks:\n  team-lint:\n    severity: warn\n',
   });
-  const warnedResult = withHome(warned.home, () =>
+  const warnedResult = await withHome(warned.home, () =>
     runVerify({ workspace: warned.workspace, flags: { plan: warned.plan, base: 'HEAD', dryRun: false } })
   );
   assert.equal(warnedResult.checks.find((check) => check.id === 'team-lint').severity, 'warn');
@@ -462,7 +491,7 @@ test('G: hostile check text never reaches the on-disk evidence artifact or the -
   });
   fs.writeFileSync(path.join(workspace, 'src', 'example.js'), 'export const value = 2;\nexport function helper() { return value; }\n');
 
-  const result = withHome(home, () => runVerify({ workspace, flags: { plan, base: 'HEAD', dryRun: false } }));
+  const result = await withHome(home, () => runVerify({ workspace, flags: { plan, base: 'HEAD', dryRun: false } }));
 
   const structural = result.checks.find((check) => check.id === STRUCTURAL_CHECK_ID);
   assert.equal(structural.status, 'failed', JSON.stringify(structural, null, 2));

@@ -101,14 +101,22 @@ Run the relevant test command.
   return planPath;
 }
 
+// P1.6 (carry-list, AC7 widening): the raw last LINE of events.jsonl is no
+// longer necessarily the 'orient' lifecycle event — every registered
+// command's dispatch now also brackets with command.start/command.result
+// (P1.5 telemetry), and command.result is the true last line for an orient
+// run. This helper specifically wants orient's OWN event (learnings/
+// gateStatus fields live there), so it filters by type instead of assuming
+// position.
 function lastEvent(ws) {
   const p = path.join(ws, '.harness', 'events.jsonl');
   const lines = fs
     .readFileSync(p, 'utf8')
     .trim()
     .split('\n')
-    .filter(Boolean);
-  return JSON.parse(lines[lines.length - 1]);
+    .filter(Boolean)
+    .map((line) => JSON.parse(line));
+  return [...lines].reverse().find((event) => event.type === 'orient');
 }
 
 test('due debt with no active plan: hint pushed, knowledgeDebt reported, surfaced learnings recorded on the event', () => {

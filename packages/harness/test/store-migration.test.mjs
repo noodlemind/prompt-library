@@ -6,8 +6,10 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
-import { repoId, localRepoId, storeDirForId, ensureStore, listLearnings } from '../lib/knowledge/store.mjs';
+import { repoId, localRepoId, storeDirForId, ensureStore, listLearnings, lockOwnership, lastStoreLockReleaseError } from '../lib/knowledge/store.mjs';
 import { migrateStrandedStore } from '../lib/knowledge/admin.mjs';
+import { storePathParts } from '../lib/knowledge/store-io.mjs';
+import { assertNoSymlinkAncestors, readFileNoFollow } from '../lib/fs-safe.mjs';
 
 /**
  * P2 (design §2): repoId (store.mjs) switches from a path-keyed
@@ -258,7 +260,20 @@ test('migrate-store releases the legacy lock when the collision recheck fires mi
   const realReaddir = fs.readdirSync;
   let targetReads = 0;
   fs.readdirSync = (p, opts) => {
-    if (path.resolve(p) === path.resolve(targetDir)) {
+    // `p` is not always a string. Node 22's recursive `fs.rmSync` walks the
+    // tree through this very function and passes the path as a **Buffer**
+    // (verified: both calls report `Buffer.isBuffer(p) === true`). Calling
+    // `path.resolve` on a Buffer throws ERR_INVALID_ARG_TYPE — "paths[0] must
+    // be of type string" — and that throw escapes `rmSync`, so
+    // `releaseStoreLock` reports failure and LEAKS the lock this test then
+    // catches. The bug is in this patch, not in the store.
+    //
+    // Node 26 implements rmSync natively and never routes through here, which
+    // is why the failure appears only on CI (Linux and Windows, both on Node
+    // 22) and never locally. Normalize before comparing, and let every other
+    // call through completely untouched.
+    const asPath = Buffer.isBuffer(p) ? p.toString() : p;
+    if (typeof asPath === 'string' && path.resolve(asPath) === path.resolve(targetDir)) {
       targetReads += 1;
       return targetReads === 1 ? [] : ['ghost'];
     }
@@ -275,10 +290,59 @@ test('migrate-store releases the legacy lock when the collision recheck fires mi
   assert.equal(result.migrated, false);
   assert.match(result.blockedReason, /already exists and is non-empty/);
   assert.equal(targetReads, 2, 'precondition: the collision recheck inside the try actually fired');
+  // A leaked lock is reported WITH the lock directory's contents: an empty
+  // `.lock` means the removal itself failed partway (the owner stamp went, the
+  // directory did not), while a `.lock` still holding `owner.json` means
+  // releaseStoreLock never got as far as removing anything — two different
+  // bugs, and the message has to say which one this is.
+  const leftoverLock = path.join(legacyDir, '.lock');
+  const leftoverContents = fs.existsSync(leftoverLock) ? JSON.stringify(fs.readdirSync(leftoverLock)) : 'n/a';
+  // An intact owner.json means releaseStoreLock returned false at its ownership
+  // check rather than failing to remove anything — and lockOwnership reads
+  // 'foreign' whenever readStoreFile returns null, which four different gates
+  // can cause. Report which one, so a Windows-only failure names its own cause
+  // instead of costing another CI round-trip to guess at.
+  let gates = 'n/a';
+  if (fs.existsSync(leftoverLock)) {
+    const ownerPath = path.join(leftoverLock, 'owner.json');
+    const probe = (label, fn) => {
+      try {
+        return `${label}=${JSON.stringify(fn())}`;
+      } catch (err) {
+        return `${label}=threw:${err.code || err.message}`;
+      }
+    };
+    gates = [
+      probe('plainRead', () => fs.readFileSync(ownerPath, 'utf8').slice(0, 40)),
+      probe('pathParts', () => {
+        const p = storePathParts(ownerPath);
+        return p && { storeRoot: p.storeRoot, rel: p.rel, kind: p.kind };
+      }),
+      probe('noSymlinkAncestors', () => {
+        const p = storePathParts(ownerPath);
+        return p ? assertNoSymlinkAncestors(p.storeRoot, p.rel) : 'no-parts';
+      }),
+      probe('readNoFollow', () => {
+        const p = storePathParts(ownerPath);
+        return p ? readFileNoFollow(p.full, { root: p.storeRoot })?.slice(0, 40) ?? null : 'no-parts';
+      }),
+      // All four read gates pass, so lockOwnership can read the stamp — which
+      // leaves a token mismatch as the only way it still answers 'foreign'.
+      // Feed it the file's OWN token: 'owned' proves the stamp is well-formed
+      // and the releasing caller simply held a different token.
+      probe('ownWithFileToken', () => {
+        const own = JSON.parse(fs.readFileSync(ownerPath, 'utf8'));
+        return { token: own.token, ownership: lockOwnership(leftoverLock, own.token) };
+      }),
+      probe('staleLockRemoved', () => result.staleLockRemoved ?? null),
+      probe('pid', () => process.pid),
+      probe('releaseError', () => lastStoreLockReleaseError()),
+    ].join(' ');
+  }
   assert.equal(
-    fs.existsSync(path.join(legacyDir, '.lock')),
+    fs.existsSync(leftoverLock),
     false,
-    'the legacy .lock must be released on the collision-recheck return, not leaked'
+    `the legacy .lock must be released on the collision-recheck return, not leaked (contents: ${leftoverContents}; gates: ${gates})`
   );
 });
 

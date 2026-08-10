@@ -27,6 +27,22 @@ function scaffold() {
   write(home, 'prompts/old.prompt.md'); // retired (covered by "prompts")
   write(home, 'agents/ghost-reviewer.agent.md'); // ORPHAN: gone from assets, not retired
   write(home, 'knowledge/solutions/user.md'); // user-owned, never an orphan
+  write(home, 'skills/team-added/SKILL.md'); // added by hand — NOT hydrated, so never an orphan
+  // The lock is what says "the harness put this here". Without it, a file the
+  // package no longer ships is indistinguishable from one someone added by
+  // hand — which is exactly how a team's own skill came to be recommended for
+  // retirement. The fixture now states what it always meant.
+  fs.writeFileSync(path.join(home, '.harness-lock.json'), JSON.stringify({
+    package: '@dev-kit/harness',
+    version: '0.0.0-test',
+    files: [
+      'agents/engineer.agent.md',
+      'skills/engineer/SKILL.md',
+      'skills/btw/SKILL.md',
+      'prompts/old.prompt.md',
+      'agents/ghost-reviewer.agent.md',
+    ],
+  }));
   fs.mkdirSync(pkg, { recursive: true });
   fs.writeFileSync(path.join(pkg, 'retired.json'), JSON.stringify({ retired: ['skills/btw', 'prompts'] }));
   return { dir, assets, home, pkg };
@@ -34,22 +50,33 @@ function scaffold() {
 
 test('findStaleOrphans flags only hydrated files that are neither shipped nor retired', () => {
   const { dir, assets, home } = scaffold();
-  const orphans = findStaleOrphans(home, assets, ['skills/btw', 'prompts']);
+  const hydrated = new Set(JSON.parse(fs.readFileSync(path.join(home, '.harness-lock.json'), 'utf8')).files);
+  const orphans = findStaleOrphans(home, assets, ['skills/btw', 'prompts'], hydrated);
   assert.deepEqual(orphans, ['agents/ghost-reviewer.agent.md']);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('a hand-added primitive is never an orphan, however long it sits there', () => {
+  const { dir, assets, home } = scaffold();
+  const hydrated = new Set(JSON.parse(fs.readFileSync(path.join(home, '.harness-lock.json'), 'utf8')).files);
+  const orphans = findStaleOrphans(home, assets, ['skills/btw', 'prompts'], hydrated);
+  assert.equal(orphans.includes('skills/team-added/SKILL.md'), false,
+    'recommending retirement for it would have made the next upgrade delete someone’s own work');
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
 test('findStaleOrphans returns nothing for a clean home', () => {
   const { dir, assets, home } = scaffold();
   fs.rmSync(path.join(home, 'agents', 'ghost-reviewer.agent.md'));
-  assert.deepEqual(findStaleOrphans(home, assets, ['skills/btw', 'prompts']), []);
+  const hydrated = new Set(JSON.parse(fs.readFileSync(path.join(home, '.harness-lock.json'), 'utf8')).files);
+  assert.deepEqual(findStaleOrphans(home, assets, ['skills/btw', 'prompts'], hydrated), []);
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
-test('doctor H17 fails (optional) and lists the orphan', () => {
+test('doctor H17 fails (optional) and lists the orphan', async () => {
   const { dir, assets, home, pkg } = scaffold();
   fs.mkdirSync(path.join(dir, 'ws', 'docs', 'plans'), { recursive: true });
-  const { checks } = runDoctor({ copilotHome: home, assetsRoot: assets, pkgRoot: pkg, flags: { workspace: path.join(dir, 'ws') } });
+  const { checks } = await runDoctor({ copilotHome: home, assetsRoot: assets, pkgRoot: pkg, flags: { workspace: path.join(dir, 'ws') } });
   const h17 = checks.find((c) => c.id === 'H17');
   assert.ok(h17, 'H17 check present');
   assert.equal(h17.pass, false);
