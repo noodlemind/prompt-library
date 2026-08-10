@@ -1134,3 +1134,34 @@ test('FIELD: the startup warning carries one glyph, not a glyph and a key', asyn
   assert.doesNotMatch(warn, /⚠/, 'the state glyph is the only glyph — `! ⚠ gate blocked` said warning twice');
   assert.match(warn, /gate blocked/);
 });
+
+test('FIELD: the default search reaches code — no flags, no index, no skip', async () => {
+  // `search regex engineer` in a real repo returned three filename-grade plan
+  // hits and `code skipped · ranked match needs a content index`. The default
+  // mode categorically refused the corpus a developer cares most about, and
+  // the operator was reduced to guessing flag spellings (`--match engineer`
+  // swallowed the query as the flag's value). The approved design's search
+  // frame shows code hits in a ranked query; ranked code is now served by
+  // distinct-term matching, and a file holding the WHOLE query outranks one
+  // repeating a single word.
+  const { execSync } = await import('node:child_process');
+  const fs = await import('node:fs');
+  const os = await import('node:os');
+  const path = await import('node:path');
+
+  const workspace = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'ranked-code-')));
+  execSync('git init -q .', { cwd: workspace });
+  fs.writeFileSync(path.join(workspace, 'both.mjs'), 'const lease = 1;\nconst fencing = 2;\n');
+  fs.writeFileSync(path.join(workspace, 'one.mjs'), 'const lease = 1;\nconst lease2 = lease;\nconst lease3 = lease;\n');
+  execSync('git add -A && git -c user.email=t@t -c user.name=t commit -q -m x', { cwd: workspace });
+
+  const { runSearch } = await import('../lib/retrieval/search.mjs');
+  const out = runSearch({ query: 'lease fencing', workspace, copilotHome: workspace });
+  const code = out.sources.find((s2) => s2.source === 'code');
+  assert.ok(code, 'the code corpus is present');
+  assert.equal(code.status, 'ok', `ranked no longer skips code: ${code.reason ?? ''}`);
+  const ids = out.results.filter((r) => r.source === 'code').map((r) => r.id);
+  assert.ok(ids.includes('both.mjs') && ids.includes('one.mjs'), `both files matched: ${ids.join(', ')}`);
+  assert.equal(ids[0], 'both.mjs',
+    'the file containing every term outranks the one repeating a single term');
+});

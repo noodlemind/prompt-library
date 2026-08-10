@@ -107,9 +107,14 @@ const PENDING_SOURCES = Object.freeze({
  * simply omitted a corpus from its fan-out would report nothing at all about it.
  */
 const MODE_UNSUPPORTED = Object.freeze({
-  ranked: {
-    code: 'ranked match needs a content index and code has none — use --match literal, regex, path, or symbol',
-  },
+  // `ranked`+`code` used to sit here: "ranked match needs a content index and
+  // code has none". Structurally true and practically useless — the DEFAULT
+  // search silently skipped the corpus a developer cares most about, and the
+  // approved design's own search frame shows code hits in a ranked query
+  // (`lib/lock.mjs:41 acquireLease() · code 0.87 · symbol`). Ranked code is
+  // now served by term matching over tracked files, merged with structural
+  // symbol hits when that index exists — see `codeRanked`.
+  ranked: {},
   literal: {},
   regex: {},
   path: {
@@ -324,7 +329,67 @@ function codeSymbols({ query, workspace, home, explain }) {
   return sourceEntry('code', 'ok', { generation, results: topCandidates(results) });
 }
 
+/**
+ * Ranked code, without a content index: bag-of-words term matching.
+ *
+ * Every term is matched case-insensitively across each tracked file; a file
+ * scores by how many DISTINCT terms it contains first and total matched lines
+ * second, so a file holding the whole query outranks one repeating a single
+ * word. Structural symbol hits merge in when that index exists — the mock's
+ * `code 0.87 · symbol` row is exactly this. Honest, cheap, and bounded by the
+ * same caps as every other scan; a real content index can replace the scoring
+ * later without changing the contract.
+ */
+function codeRanked({ query, workspace, home, explain, headSha }) {
+  const { files } = trackedSourceFiles(workspace);
+  if (!files.length) return skipped('code', 'no tracked source files (not a git repository, or nothing tracked)');
+
+  const terms = [...new Set(String(query).toLowerCase().split(/\s+/).filter(Boolean))];
+  if (!terms.length) return sourceEntry('code', 'ok', { generation: headSha, results: [] });
+  const matchers = terms.map((t) => lineMatcher('literal', t));
+
+  const results = [];
+  for (const rel of files) {
+    const text = readFileSafe(workspace, rel);
+    if (!text) continue;
+    let distinct = 0;
+    let total = 0;
+    let firstLine = 0;
+    let firstText = '';
+    for (const match of matchers) {
+      const { hits, firstLine: line, firstText: snippet } = scanText(text, match);
+      if (!hits) continue;
+      distinct += 1;
+      total += hits;
+      if (!firstLine) { firstLine = line; firstText = snippet; }
+    }
+    if (!distinct) continue;
+    results.push(
+      createRetrievalResult({
+        source: 'code',
+        id: rel,
+        location: `${rel}:${firstLine}`,
+        title: path.posix.basename(rel),
+        snippet: snippetOf(firstText),
+        kind: 'file',
+        // Distinct-term coverage dominates; matched-line volume breaks ties.
+        score: distinct * 1000 + Math.min(total, 999),
+        generation: headSha,
+        reason: explain ? `${distinct} of ${terms.length} terms · ${total} matching line(s)` : null,
+      }),
+    );
+  }
+
+  // Symbol hits ride along when the structural index exists; its absence is
+  // not an error for a ranked query, so a failed/skipped symbol pass is
+  // silently omitted rather than failing the corpus.
+  const symbols = codeSymbols({ query, workspace, home, explain });
+  if (symbols.status === 'ok') results.push(...symbols.results);
+  return sourceEntry('code', 'ok', { generation: headSha, results: topCandidates(results) });
+}
+
 function codeSource({ mode, query, workspace, home, explain, headSha }) {
+  if (mode === 'ranked') return codeRanked({ query, workspace, home, explain, headSha });
   if (mode === 'symbol') return codeSymbols({ query, workspace, home, explain });
 
   const { files } = trackedSourceFiles(workspace);

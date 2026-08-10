@@ -111,7 +111,7 @@ const search = (fx, overrides = {}) =>
 const ids = (out) => out.results.map((r) => `${r.source}:${r.id}`);
 const statusOf = (out, source) => out.sources.find((s) => s.source === source);
 
-test('ranked match scores knowledge, learnings and plans, and says why code is absent', () => {
+test('ranked match scores knowledge, learnings, plans AND code in one federation', () => {
   const fx = fixture('search-ranked-');
   const out = search(fx, { query: 'lease fencing token', explain: true });
 
@@ -126,11 +126,18 @@ test('ranked match scores knowledge, learnings and plans, and says why code is a
 
   assert.ok(out.results.some((r) => r.source === 'plans'), 'plans rank in the same federation');
 
-  // Code has no content index, so ranked must SAY so rather than report a clean
-  // empty corpus.
+  // Ranked code is SERVED now — by distinct-term matching over tracked files —
+  // rather than skipped. The old behaviour refused the corpus a developer
+  // cares most about from the DEFAULT search mode, which read in the field as
+  // "search doesn't work"; the approved design's own search frame shows code
+  // hits in a ranked query. The fixture's src/lease.mjs contains the terms, so
+  // it must surface with a pinned first-match location.
   const code = statusOf(out, 'code');
-  assert.equal(code.status, 'skipped');
-  assert.match(code.reason, /no code content index|has none/);
+  assert.equal(code.status, 'ok', code.reason ?? '');
+  const codeHit = out.results.find((r) => r.source === 'code');
+  assert.ok(codeHit, 'ranked reaches code without flags or an index');
+  assert.equal(codeHit.id, 'src/lease.mjs');
+  assert.match(codeHit.location, /^src\/lease\.mjs:\d+$/);
   assert.equal(out.match, 'ranked');
 });
 
