@@ -1369,8 +1369,16 @@ export async function runLedger({
       ['replay', 're-run the previous block'],
       ['replay <id>', 're-run any block by id, from its record line'],
       ['@<path>', 'complete a file path'],
-      ['ctrl+↑', 'walk the ledger blocks'],
+      ['results', 'open one of the last search\u2019s results'],
+      ['ctrl+\u2191', 'walk the ledger blocks'],
+      ['ctrl+o', 'fold or unfold the last block'],
       ['esc esc', 'open the run tree'],
+      // The three the hint row used to carry. It listed seven items under the
+      // cursor; these are the ones that belong in a list you go looking for
+      // rather than one you read while typing.
+      ['shift+tab', 'agent mode on or off \u2014 whether a bare line is a question'],
+      ['esc', 'interrupt a running command'],
+      ['ctrl+d', 'close the session'],
       ['clear', 'clear the viewport (keeps scrollback)'],
       ['exit / quit', 'close the session and print the tally'],
     ];

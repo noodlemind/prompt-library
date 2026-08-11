@@ -171,7 +171,7 @@ const ASCII_GLYPH_WIDTH = 4; // '[ok]' — the widest twin
 
 const ANSI_RE = /\x1b\[[0-9;]*m/g;
 
-function detectColor({ stream, env, argv }) {
+function detectColor({ stream, env, argv, platform }) {
   // Fix-wave C1: only honor --no-color BEFORE a literal `--` boundary —
   // post-boundary tokens are free-text content, never flags (same rule as
   // lib/flags.mjs#parseFlags / lib/registry.mjs#validateArgs).
@@ -183,6 +183,23 @@ function detectColor({ stream, env, argv }) {
   if (env.TERM === 'dumb') return 'none';
   if (/truecolor|24bit/i.test(env.COLORTERM || '')) return 'truecolor';
   if (/-256color$/i.test(env.TERM || '')) return '256';
+  // WINDOWS DECLARES ITSELF DIFFERENTLY, and reading only the POSIX variables
+  // meant the harness's PRIMARY platform got the degraded surface. Windows
+  // Terminal sets neither COLORTERM nor TERM — it sets WT_SESSION — and the VS
+  // Code terminal on Windows sets TERM_PROGRAM with no TERM. Both render
+  // 24-bit colour and UTF-8 perfectly, and both were being handed the no-colour
+  // ASCII fallback. Worse, `detectUnicode` short-circuits on `color === 'none'`,
+  // so one missed capability cascaded into two: box drawing, tints, stripes and
+  // glyphs all fell back at once on the platform this repository targets.
+  //
+  // Still a declaration, not a guess: each name below is set by a terminal that
+  // documents VT support. A bare `cmd.exe` on old conhost declares nothing and
+  // correctly gets nothing.
+  if (platform === 'win32') {
+    if (env.WT_SESSION) return 'truecolor'; // Windows Terminal
+    if (env.TERM_PROGRAM) return 'truecolor'; // VS Code, and others that say so
+    if (/^on$/i.test(env.ConEmuANSI || '')) return '256'; // ConEmu / Cmder
+  }
   return 'none'; // degrade honestly — never fake a capability the terminal didn't declare
 }
 
@@ -209,7 +226,7 @@ export function createStyle({
   /** `default` | `colorblind` — which semantic palette carries state. */
   scheme = 'default',
 } = {}) {
-  const color = detectColor({ stream, env, argv });
+  const color = detectColor({ stream, env, argv, platform });
   const unicode = detectUnicode({ env, platform, color });
   const ground = tintMode === 'dark' || tintMode === 'light' ? tintMode : detectGround({ env });
   const palette = scheme === 'colorblind' ? PALETTE_CVD : PALETTE;

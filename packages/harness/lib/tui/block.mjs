@@ -238,6 +238,28 @@ export function renderBlock(block, {
   // row loses the column alignment that makes it a ledger row.
   const pushStyled = (content) => {
     const visible = displayWidth(content);
+    // PROSE WRAPS; A LEDGER ROW CLIPS. The rule was "pre-styled output is
+    // clipped", justified because wrapping a `glyph key value · note` row
+    // destroys the column alignment that makes it readable — true, and it was
+    // applied to everything that arrives from a command. An agent's answer is a
+    // PARAGRAPH, and clipping a paragraph destroys the thing itself: `The plan
+    // path is \`docs/plans/2026-08-06-feat-harness-evo…` is not a shorter
+    // answer, it is a lost one.
+    //
+    // Carrying no escape sequence is what separates them: a ledger row is
+    // painted by `ui.line`, so it always has one, while text a model wrote is
+    // plain. That also happens to be the exact condition under which wrapping
+    // is safe — there is no escape to cut in half.
+    if (visible > inner && !content.includes('\x1b')) {
+      // The caller's indent is re-applied to every piece rather than wrapped
+      // with the text, so a continuation lines up under the line it continues
+      // instead of starting hard against the stripe.
+      const indent = /^\s*/.exec(content)[0];
+      for (const piece of wrapCells(content.slice(indent.length), Math.max(8, inner - indent.length))) {
+        rows.push(ui.tintRow(tintState, padTo(`${gutter}${indent}${piece}`, width)));
+      }
+      return;
+    }
     const body = visible <= inner ? content : `${clipTo(ui.stripAnsi(content), inner - 1)}…`;
     // MEASURE WHAT WAS PRODUCED, not what came in. The padding used to be
     // computed from the ORIGINAL width, which is only the same number when

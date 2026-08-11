@@ -198,22 +198,34 @@ test('DESIGN: the header is a two-line identity block printed once', () => {
   assert.equal(rows[2], '');
 });
 
-test('DESIGN: the hint row states consequence — and the gate is not repeated here', () => {
+test('DESIGN: the hint row carries what you can act on now, and nothing else', () => {
+  // IT GREW BY ACCRETION AND NOBODY READ THE TOTAL. Each item arrived with its
+  // own good argument — the shell posture, what `replay` would repeat, the exit
+  // chord, the mode key — until seven sat under the cursor competing with the
+  // composer they exist to support. What survives is the mode, what Enter does,
+  // the key that changes what a bare line MEANS, and where the rest is.
   const row = renderHint({ ui, width: 120, mode: 'deliver', gate: 'pass', shell: 'allowed', rerun: 'verify' });
   assert.match(row, /deliver/, 'the mode');
-  assert.match(row, /shell allowed/, 'whether the shell is available');
-  assert.match(row, /replay re-runs verify/, 'what `replay` would repeat — `!!` retired because `!` already means the shell');
   assert.match(row, /↵ run/, 'what Enter does');
-  assert.match(row, /ctrl\+d exit/, 'and the way out');
+  assert.match(row, /shift\+tab mode/, 'the gate that decides what a bare line means');
+  assert.match(row, /\? keys/, 'and where every other key is listed');
+
+  // The four that moved out, each to somewhere it reads better.
+  assert.doesNotMatch(row, /shell allowed/, 'a standing policy fact belongs in `?`, not under the cursor');
+  assert.doesNotMatch(row, /replay re-runs/, 'restated a block already on screen — and read as a fragment');
+  assert.doesNotMatch(row, /ctrl\+d/, 'listed by `?`');
+  assert.doesNotMatch(row, /interrupt/, 'the live region announces `esc cancels` while something is actually running');
   assert.doesNotMatch(row, /gate/,
     'the gate was stated three times; its textual home is the footer and its ambient home is the hairline tint');
+
+  // Four items, not seven. The count is the point.
+  assert.equal(row.split('·').length, 4);
 });
 
 test('DESIGN: the hint drops keys before it drops posture — posture is what changes', () => {
   const narrow = renderHint({ ui, width: 26, shell: 'denied' });
   assert.match(narrow, /deliver/);
-  assert.match(narrow, /shell denied/);
-  assert.doesNotMatch(narrow, /interrupt/, 'the keys are learned once; the posture changes under you');
+  assert.doesNotMatch(narrow, /run/, 'the keys are learned once; the posture changes under you');
   assert.ok(displayWidth(narrow) <= 26);
 });
 
@@ -828,8 +840,12 @@ test('FIELD: the palette scales with the terminal instead of cramming into 72 co
 test('FIELD: exit is discoverable — a palette row and a key in the hint row', async () => {
   // exit worked three ways (the word, /exit, ctrl+d) and appeared NOWHERE on
   // screen. Existing and being discoverable are different properties.
+  // It is no longer in the HINT row — that row was cut to four items because
+  // seven under the cursor is clutter — so the requirement moves rather than
+  // relaxes: the way out must still be reachable without being known already.
+  // `?` is named in the hint row and lists it, and `exit` is a palette row.
   const hint = renderHint({ ui, width: 160 });
-  assert.match(hint, /ctrl\+d exit/, 'leaving lives where Enter’s consequences live');
+  assert.match(hint, /\? keys/, 'the hint row names where every key is listed');
 
   const { runLedger } = await import('../lib/tui-cmd.mjs');
   const { PassThrough } = await import('node:stream');
@@ -1513,4 +1529,82 @@ test('ASK: a bare line is a question, but a known command is still a command', a
   assert.equal(routes('exit'), 'exit');
   assert.equal(routes('results'), 'results');
   assert.equal(routes('!ls'), 'shell');
+});
+
+
+test('WINDOWS: the platform this harness targets is not handed the degraded surface', async () => {
+  // Windows Terminal sets neither COLORTERM nor TERM — it sets WT_SESSION —
+  // and the VS Code terminal on Windows sets TERM_PROGRAM with no TERM. Reading
+  // only the POSIX variables handed both the no-colour ASCII fallback, and
+  // because `detectUnicode` short-circuits on `color === 'none'`, one missed
+  // capability cascaded into two: box drawing, tints, stripes and glyphs all
+  // fell back at once, on the platform this repository actually targets.
+  const { createStyle: mk } = await import('../lib/style.mjs');
+  const style = (env, platform = 'win32') => mk({ stream: { isTTY: true }, env, argv: [], platform });
+
+  for (const env of [{ WT_SESSION: 'abc-123' }, { TERM_PROGRAM: 'vscode' }]) {
+    const ui = style(env);
+    assert.equal(ui.color, 'truecolor', `${JSON.stringify(env)} renders 24-bit colour`);
+    assert.equal(ui.unicode, true, `${JSON.stringify(env)} renders UTF-8`);
+  }
+
+  // ConEmu declares ANSI but not 24-bit; it gets the middle rung.
+  assert.equal(style({ ConEmuANSI: 'ON' }).color, '256');
+
+  // A DECLARATION, NOT A GUESS. Bare conhost says nothing and gets nothing —
+  // the ladder still degrades honestly rather than assuming Windows is modern.
+  const bare = style({});
+  assert.equal(bare.color, 'none');
+  assert.equal(bare.unicode, false);
+  // And the ascii surface stays complete: same meanings, different characters.
+  assert.equal(bare.glyph('ok'), '[ok]');
+  assert.equal(bare.glyph('error'), '[x]');
+
+  // An explicit refusal still wins on every platform.
+  assert.equal(mk({ stream: { isTTY: true }, env: { WT_SESSION: 'x', NO_COLOR: '1' }, argv: [], platform: 'win32' }).color, 'none');
+  assert.equal(mk({ stream: { isTTY: true }, env: { WT_SESSION: 'x' }, argv: ['--no-color'], platform: 'win32' }).color, 'none');
+});
+
+
+test('BLOCK: prose wraps, a ledger row clips — clipping a paragraph loses it', () => {
+  // `The plan path is `docs/plans/2026-08-06-feat-harness-evo…` is not a
+  // shorter answer, it is a lost one. The clip rule was written for
+  // `glyph key value · note` rows, where wrapping destroys the column
+  // alignment that makes them readable, and was applied to everything.
+  const answer = 'Yes, there is one pending plan, titled "Phase 1" and its path is docs/plans/2026-08-06-feat-harness-evolution-phase1-plan.md which is a long way past the edge.';
+  const block = createBlock({ command: 'any pending plans?', argv: ['agent', 'x'] });
+  block.lines.push(ui.line({ key: 'persona', value: 'engineer' }));
+  block.lines.push(`  ${answer}`);
+  block.status = 'succeeded';
+  block.exitCode = 0;
+
+  for (const width of [60, 80, 100, 120]) {
+    const rows = renderBlock(block, { ui, width });
+    const text = rows.join('\n');
+    // Every word survives, in order, however narrow the terminal.
+    // WHERE the wrap falls is a layout choice; that nothing was thrown away is
+    // the contract. A clipped paragraph fits on one row and ends in an ellipsis,
+    // so both of those are what the assertions look for.
+    assert.equal(text.includes('\u2026'), false, `nothing is elided at width ${width}`);
+    assert.ok(rows.length >= 5, `the answer occupies several rows at width ${width}, rather than one truncated one`);
+    for (const row of rows) assert.equal(displayWidth(row), width, 'and the tint band stays square');
+  }
+
+  // A PAINTED ROW STILL CLIPS. It carries an escape sequence, which is both
+  // what identifies it as chrome and what makes wrapping it unsafe.
+  const painted = createStyle({
+    stream: { isTTY: true },
+    env: { COLORTERM: 'truecolor', LANG: 'en_US.UTF-8' },
+    argv: [],
+    platform: 'darwin',
+  });
+  // Painted, deliberately: an unstyled row carries no escape to cut, so it
+  // wraps like prose — losing column alignment is a smaller harm than losing
+  // the text, which is the whole point of this change.
+  const ledgerRow = createBlock({ command: 'x', argv: ['x'] });
+  ledgerRow.lines.push(`  ${painted.paint('info', 'k'.repeat(40))} ${painted.paint('muted', 'v'.repeat(300))}`);
+  ledgerRow.status = 'succeeded';
+  ledgerRow.exitCode = 0;
+  const out = renderBlock(ledgerRow, { ui: painted, width: 70 });
+  assert.ok(out.some((r) => r.includes('…')), 'a painted row is clipped, not wrapped');
 });

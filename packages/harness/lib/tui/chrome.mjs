@@ -99,25 +99,29 @@ export function renderHint({
   rerun = null,
 } = {}) {
   void gate;
-  // The gate is NOT here. It was stated three times — hint, footer, header —
-  // and with the hairline tint carrying it at the exact point of typing, the
-  // hint row's copy was the redundant one. Each fact gets one textual home
-  // (the footer) and one ambient one (the tint).
+  void shell;
+  void rerun;
+  // THE ROW GREW BY ACCRETION AND NOBODY READ THE TOTAL. Each item arrived with
+  // its own good argument — the shell posture, what `replay` would repeat, the
+  // exit chord nothing else advertised, and finally the mode key — until seven
+  // of them sat under the cursor competing with the composer they were meant to
+  // support. `replay re-runs agent mode on` was the tell: a fragment that reads
+  // as a broken sentence, restating a block already on screen.
+  //
+  // WHAT SURVIVES IS WHAT YOU CAN ACT ON RIGHT NOW at the moment of typing:
+  // which mode you are in, what Enter will do, the key that changes the mode,
+  // and where the rest is. The others did not go away, they went somewhere they
+  // read better — `?` lists every key, the footer carries the standing facts,
+  // and `esc interrupt` is announced by the live region while something is
+  // actually running (`◐ agent … · esc cancels`), which is the only moment it
+  // means anything.
   const parts = [ui.paint('muted', mode)];
-  parts.push(ui.paint('muted', `shell ${shell}`));
-  if (rerun) parts.push(ui.paint('muted', `replay re-runs ${rerun}`));
 
   const keys = [
     `${ui.paint('muted', ui.unicode ? '↵' : 'enter')} ${ui.paint('muted', 'run')}`,
-    `${ui.paint('muted', 'esc')} ${ui.paint('muted', 'interrupt')}`,
     // The gate that decides what a bare line MEANS, and the key that flips it.
-    // It was reachable only as one of nineteen `config show` rows — fourteen of
-    // them folded — which is a setting nobody can find.
     `${ui.paint('muted', 'shift+tab')} ${ui.paint('muted', 'mode')}`,
-    // The one key the quiet-open pass made invisible: exit worked three ways
-    // and appeared nowhere. The hint row is where Enter's consequences live,
-    // so it is also where leaving lives.
-    `${ui.paint('muted', 'ctrl+d')} ${ui.paint('muted', 'exit')}`,
+    `${ui.paint('muted', '?')} ${ui.paint('muted', 'keys')}`,
   ];
   const sep = ui.paint('muted', ' · ');
   const posture = parts.join(sep);
