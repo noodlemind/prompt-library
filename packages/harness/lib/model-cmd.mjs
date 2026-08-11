@@ -19,7 +19,7 @@
  * provenance all work here for free. The credential never touches this file.
  */
 import path from 'node:path';
-import { PROVIDERS, providerReadiness } from './provider.mjs';
+import { PROVIDERS, providerReadiness, modelCatalog } from './provider.mjs';
 import { resolveConfig, setConfigValue } from './config.mjs';
 import { isProjectTrusted } from './trust.mjs';
 import { resolveCopilotHome } from './paths.mjs';
@@ -56,6 +56,48 @@ export function modelStatus({ workspace, copilotHome, parentEnv = process.env } 
     reason: active?.reason ?? null,
     providers: readiness,
   };
+}
+
+/**
+ * Rows for a grouped picker — OpenCode's shape: a section per provider, the
+ * ones you can actually use first, the active pair marked.
+ *
+ * Returned as flat rows with a `section` marker rather than nested groups,
+ * because the overlay walks a list and a heading is just a row you cannot
+ * select.
+ */
+export function modelPickerRows({ workspace, copilotHome, parentEnv = process.env } = {}) {
+  const status = modelStatus({ workspace, copilotHome, parentEnv });
+  const catalog = modelCatalog({ parentEnv });
+  const ordered = [...catalog].sort((a, b) => {
+    if (a.ready !== b.ready) return a.ready ? -1 : 1;
+    if (a.id === status.provider) return -1;
+    if (b.id === status.provider) return 1;
+    return a.id.localeCompare(b.id);
+  });
+
+  const rows = [];
+  for (const provider of ordered) {
+    rows.push({
+      section: true,
+      label: provider.id,
+      note: provider.ready ? provider.how : provider.reason,
+      ready: provider.ready,
+      disabled: true,
+    });
+    for (const model of provider.models) {
+      const active = provider.id === status.provider && model === status.model;
+      rows.push({
+        label: model,
+        provider: provider.id,
+        model,
+        note: active ? 'active' : provider.ready ? '' : provider.reason,
+        unavailable: provider.ready ? null : provider.reason,
+        active,
+      });
+    }
+  }
+  return rows;
 }
 
 export function modelResultOf(result) {

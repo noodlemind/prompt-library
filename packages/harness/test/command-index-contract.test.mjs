@@ -183,6 +183,20 @@ test('every row resolves to argv the registry accepts and dispatch will run', ()
         continue;
       }
 
+      // A SKILL ROW IS THE ONE ROW WHOSE NOUN IS NOT A COMMAND. It resolves to
+      // READING the skill (`get --path …/SKILL.md`), because a palette row
+      // that can only answer "resolves to no command" is a dead end and the
+      // palette's contract is that every row reaches a capability. Running the
+      // workflow remains the host's job; `read` is honest about what the
+      // harness itself does.
+      if (row.kind === 'skill') {
+        assert.deepEqual(row.argv.slice(0, 2), ['get', '--path'], `${row.id} must resolve to reading the skill`);
+        assert.match(row.argv[2], /^\.github\/skills\/.+\/SKILL\.md$/, `${row.id} points at its own SKILL.md`);
+        assert.equal(row.sideEffect, 'read');
+        assert.ok(hasCommand('get'));
+        continue;
+      }
+
       // The bare template must be exactly the row's own argv — no value slots,
       // nothing reconstructed from the label.
       assert.deepEqual(resolveArgv(row), row.argv, `${row.id} template drift`);

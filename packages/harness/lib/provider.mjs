@@ -202,6 +202,46 @@ export const PROVIDERS = Object.freeze({
   },
 });
 
+/**
+ * The models each provider is known to serve.
+ *
+ * WHY A TABLE AND NOT A FETCH. OpenCode and Amp enumerate models by calling
+ * each provider's `/models`, which means a network round trip — with a
+ * credential — before a picker can render. The harness declines that: the
+ * seam's whole contract is that core never holds a key and never calls a
+ * provider outside the agent loop, and a picker that phoned home would break
+ * it for a list that changes a few times a year. This is a starting point a
+ * person can pick from, not an inventory: `model set <provider> <anything>`
+ * still accepts an id that is not listed here, because the provider is the
+ * authority on what it serves and this file is only trying to save typing.
+ *
+ * Ordered best-known-first; the provider's own `defaultModel` leads.
+ */
+export const PROVIDER_MODELS = Object.freeze({
+  'github-copilot': ['gpt-4o', 'gpt-5', 'claude-sonnet-4.5', 'claude-opus-4.1', 'gemini-2.5-pro', 'o3-mini'],
+  anthropic: ['claude-sonnet-5', 'claude-opus-5', 'claude-haiku-4-5-20251001'],
+  openai: ['gpt-5', 'gpt-5-mini', 'o3', 'o4-mini'],
+  openrouter: ['anthropic/claude-sonnet-4.5', 'openai/gpt-5', 'google/gemini-2.5-pro', 'deepseek/deepseek-chat'],
+  zen: ['claude-sonnet-4-5', 'gpt-5', 'qwen3-coder'],
+  'zen-go': ['claude-sonnet-4-5', 'gpt-5'],
+  gemini: ['gemini-2.5-pro', 'gemini-2.5-flash'],
+  xai: ['grok-4', 'grok-3-mini'],
+  groq: ['llama-3.3-70b-versatile', 'qwen/qwen3-32b'],
+  deepseek: ['deepseek-chat', 'deepseek-reasoner'],
+  mistral: ['mistral-large-latest', 'codestral-latest'],
+  'github-models': ['openai/gpt-4o', 'openai/o3-mini', 'meta/Llama-3.3-70B-Instruct'],
+  ollama: ['qwen3:8b', 'llama3.3', 'deepseek-r1'],
+  lmstudio: ['qwen/qwen3-8b'],
+});
+
+/** Every (provider, model) pair a picker can offer, ready-first. */
+export function modelCatalog({ parentEnv = process.env } = {}) {
+  return providerReadiness({ parentEnv }).map((provider) => ({
+    ...provider,
+    models: PROVIDER_MODELS[provider.id] ?? [provider.defaultModel],
+  }));
+}
+
 /** Loopback is the one place a plaintext base URL is not a mistake. */
 const LOOPBACK = new Set(['127.0.0.1', 'localhost', '::1', '[::1]', '0.0.0.0']);
 

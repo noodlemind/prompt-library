@@ -47,6 +47,7 @@ import { resolveConfig } from './config.mjs';
 import { resolveCopilotHome } from './paths.mjs';
 import { isProjectTrusted } from './trust.mjs';
 import { readJournal, foldRuns, runStatusFromReported } from './run-journal.mjs';
+import { modelPickerRows } from './model-cmd.mjs';
 import { createProcessEventRegistry, detectActor } from './event-registry.mjs';
 import { setRunContext, currentRunContext } from './run-context.mjs';
 
@@ -503,6 +504,7 @@ export async function runLedger({
    * commands unless the query asks for them.
    */
   const SESSION_ROWS = Object.freeze([
+    { label: 'model', session: 'model', note: 'choose the provider and model that answer', sideEffect: null },
     { label: 'replay', signature: '[id]', session: 'replay', note: 're-run the last block, or one by id', sideEffect: null },
     { label: 'exit', session: 'exit', note: 'close the session · also ctrl+d', sideEffect: null },
     { label: 'clear', session: 'clear', note: 'clear the viewport · scrollback survives', sideEffect: null },
@@ -668,6 +670,31 @@ export async function runLedger({
    * happens in an ephemeral overlay — which is the design's own rule for every
    * other picker — and the block keys act on the selection.
    */
+  /**
+   * The model picker — grouped by provider, ready ones first, OpenCode's shape.
+   *
+   * A modal overlay rather than the composer-attached palette: this is a
+   * choice from a catalogue, not a command being typed, and the sections make
+   * no sense growing upward out of an input line.
+   */
+  const openModelPicker = () => {
+    const rows = modelPickerRows({ workspace, copilotHome: resolveCopilotHome(copilotHome) });
+    const overlay = createOverlay({
+      title: 'model',
+      rows,
+      kind: 'model',
+      page: 14,
+      actions: null,
+      footer: `${ui.unicode ? '↑↓' : 'up/down'} navigate · ${ui.unicode ? '↵' : 'enter'} select · esc close`,
+    });
+    // Open on the active pair rather than the top: a picker that forgets where
+    // you are makes you find yourself before you can move.
+    const activeAt = rows.findIndex((r) => r.active);
+    if (activeAt > 0) for (let i = 0; i < activeAt; i += 1) overlay.handleKey(null, { name: 'down' });
+    session.openOverlay(overlay);
+    return overlay;
+  };
+
   const openBlockNav = () => {
     const rows = blockRows();
     if (!rows.length) { say(ui.paint('muted', 'nothing in the ledger yet')); return null; }
@@ -817,6 +844,15 @@ export async function runLedger({
         const row = event.row;
         if (!row) continue; // Enter on an empty palette list is a dismissal
         if (row.session === 'exit') break;
+        if (row.session === 'model') { openModelPicker(); continue; }
+        if (row.provider && row.model) {
+          // Persisted through the ordinary command, so scope precedence,
+          // atomic writes and `config show` provenance all apply.
+          await runArgv(['model', 'set', row.provider, row.model]);
+          readActiveModel();
+          refreshStatus();
+          continue;
+        }
         if (row.session === 'replay') { await rerun(ledger.lastCommand()); continue; }
         if (row.session === 'clear') { doClear(); continue; }
         if (row.session === 'help') { emitHelp(); continue; }
@@ -947,6 +983,7 @@ export async function runLedger({
         pipedPalette = null;
         if (!choice) { say(ui.line({ state: 'warn', key: 'palette', value: 'no such row' })); continue; }
         if (choice.session === 'exit') break;
+        if (choice.session === 'model') { openModelPicker(); continue; }
         if (choice.session === 'replay') { await rerun(ledger.lastCommand()); continue; }
         if (choice.session === 'clear') { doClear(); continue; }
         if (choice.session === 'help') { emitHelp(); continue; }

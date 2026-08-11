@@ -484,6 +484,16 @@ function readSkills(workspace) {
  * a guarantee the harness cannot make.
  */
 function skillRow(skill) {
+  // A SKILL RESOLVES TO READING IT. The row used to carry `argv: null`, on the
+  // correct reasoning that a skill is a workflow for the HOST to run and the
+  // harness cannot run it — but a palette row that can only answer "this row
+  // resolves to no command" is a dead end, and the palette's contract is that
+  // every row reaches a capability. From the harness, a skill IS a document:
+  // choosing it shows the workflow, which is both true and the thing an
+  // operator wants when they cannot remember what a skill does. Invoking it
+  // remains the host's job, and `read` is now an honest class because reading
+  // is exactly what happens.
+  const relPath = `${SKILLS_DIR}/${skill.dir}/SKILL.md`;
   return {
     id: `skill:${skill.dir}`,
     kind: 'skill',
@@ -491,10 +501,14 @@ function skillRow(skill) {
     verb: null,
     label: `skill:${skill.name}`,
     summary: skill.description,
-    sideEffect: null,
+    sideEffect: 'read',
     group: 'skills',
-    argv: null,
-    argvTokens: [],
+    argv: ['get', '--path', relPath],
+    argvTokens: [
+      { kind: 'command', value: 'get' },
+      { kind: 'flag', value: '--path' },
+      { kind: 'literal', value: relPath },
+    ],
     prompts: [],
     refinements: [],
   };

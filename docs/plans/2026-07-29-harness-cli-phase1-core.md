@@ -472,6 +472,7 @@ Each lands as one reviewable commit with its own review pass, per the delivery d
 - `packages/harness/lib/tui/`
 - `packages/harness/lib/retrieval/`
 - `packages/harness/lib/model-cmd.mjs`
+- `packages/harness/lib/command-index.mjs`
 - `packages/harness/package.json`
 - `packages/harness/package-lock.json`
 - `packages/harness/lib/trust-cmd.mjs`

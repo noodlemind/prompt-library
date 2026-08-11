@@ -1169,3 +1169,67 @@ test('FIELD: the default search reaches code — no flags, no index, no skip', a
   assert.equal(ids[0], 'both.mjs',
     'the file containing every term outranks the one repeating a single term');
 });
+
+// ── the model picker, and the skill row that used to go nowhere ─────────
+
+test('FIELD: a skill row resolves to reading the skill instead of nowhere', async () => {
+  // `skill:engineer · this row resolves to no command` was a dead end in a
+  // palette whose contract is that every row reaches a capability. Running the
+  // workflow is the host's job; showing it is the harness's.
+  const { buildCommandIndex } = await import('../lib/command-index.mjs');
+  const rows = buildCommandIndex({ surface: 'tui', workspace: process.cwd() }).rows;
+  const skill = rows.find((r) => r.kind === 'skill');
+  if (!skill) return; // a workspace with no skills has nothing to assert
+  assert.deepEqual(skill.argv.slice(0, 2), ['get', '--path']);
+  assert.match(skill.argv[2], /SKILL\.md$/);
+  assert.equal(skill.sideEffect, 'read', 'reading is what actually happens');
+});
+
+test('FIELD: the model picker groups by provider, ready first, with the active pair marked', async () => {
+  const { modelPickerRows } = await import('../lib/model-cmd.mjs');
+  const rows = modelPickerRows({
+    workspace: process.cwd(),
+    copilotHome: process.cwd(),
+    parentEnv: { GROQ_API_KEY: 'k' },
+  });
+
+  const sections = rows.filter((r) => r.section);
+  assert.ok(sections.length >= 5, 'a section per provider');
+  const first = sections[0];
+  assert.equal(first.ready, true, 'providers you can actually use come first — a menu of failures is a menu of disappointments');
+
+  // Every non-heading row carries the pair it would set.
+  for (const row of rows.filter((r) => !r.section)) {
+    assert.ok(row.provider && row.model, `${row.label} names the pair it sets`);
+  }
+  assert.ok(rows.some((r) => r.provider === 'groq'), 'a provider with a key present is offered');
+});
+
+test('FIELD: arrow keys skip section headings — a heading is not a choice', () => {
+  const overlay = createOverlay({
+    rows: [
+      { section: true, label: 'copilot', disabled: true },
+      { label: 'gpt-4o', provider: 'github-copilot', model: 'gpt-4o' },
+      { section: true, label: 'groq', disabled: true },
+      { label: 'llama', provider: 'groq', model: 'llama' },
+    ],
+  });
+  // Opens on a heading; the first move must land on a selectable row.
+  overlay.handleKey(null, { name: 'down' });
+  assert.equal(overlay.selected.label, 'gpt-4o');
+  overlay.handleKey(null, { name: 'down' });
+  assert.equal(overlay.selected.label, 'llama', 'the second heading is stepped over, not landed on');
+});
+
+test('FIELD: the catalog is a starting point, never an inventory that phones home', async () => {
+  const { PROVIDER_MODELS, modelCatalog } = await import('../lib/provider.mjs');
+  // Every provider has at least one model to offer, and the table is static —
+  // the seam's contract is that core never calls a provider outside the agent
+  // loop, so a picker that fetched `/models` would break it for a list that
+  // changes a few times a year.
+  const catalog = modelCatalog({ parentEnv: {} });
+  for (const provider of catalog) {
+    assert.ok(provider.models.length >= 1, `${provider.id} offers something`);
+  }
+  assert.ok(PROVIDER_MODELS['github-copilot'].includes('gpt-4o'));
+});

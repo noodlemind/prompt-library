@@ -110,7 +110,17 @@ export function createOverlay({
    * one prints why instead of running it. */
   const move = (delta) => {
     if (!items.length) return false;
-    index = (index + delta + items.length) % items.length;
+    // SECTION HEADINGS ARE SKIPPED. An unavailable command stays selectable
+    // because its reason teaches; a heading has nothing to choose and landing
+    // on it makes the arrow keys feel broken. Steps in the same direction
+    // until it finds a real row, and gives up rather than looping forever if
+    // every row is a heading.
+    const step = delta === 0 ? 1 : Math.sign(delta);
+    let next = (index + delta + items.length) % items.length;
+    for (let guard = 0; guard < items.length && items[next]?.section; guard += 1) {
+      next = (next + step + items.length) % items.length;
+    }
+    index = next;
     clamp();
     return true;
   };
@@ -372,6 +382,12 @@ export function renderPaletteRows(overlay, { ui, width = 80 } = {}) {
   for (const [i, row] of rows.entries()) {
     const chosen = overlay.offset + i === overlay.index;
     const disabled = Boolean(row.unavailable || row.disabled);
+    if (row.section) {
+      // A provider heading: the name in the accent, its readiness beside it.
+      const head = `  ${ui.paint(row.ready ? 'info' : 'muted', row.label)}${row.note ? ui.paint('muted', `  ${row.note}`) : ''}`;
+      out.push(ui.tintRow('panel', padTo(head, width)));
+      continue;
+    }
     const effect = row.sideEffect
       ? ui.paint(row.sideEffect === 'read' ? 'ok' : row.sideEffect === 'mutate' ? 'warn' : 'error', row.sideEffect)
       : '';
