@@ -1691,3 +1691,34 @@ test('CATALOG: fetchModels normalizes an adapter answer, and refuses an empty on
     /no models/,
   );
 });
+
+
+test('PICKER: typing narrows a sectioned list, and a heading only survives its children', async () => {
+  // The model picker shipped with sections, arrows, and no filter at all, so
+  // typing changed the query line and nothing else. With a fetched catalogue
+  // running to forty models, scrolling is not a substitute for searching.
+  const { filterSectioned } = await import('../lib/tui/overlay.mjs');
+  const rows = [
+    { section: true, label: 'github-copilot', note: 'editor credential found' },
+    { label: 'claude-sonnet-5', note: 'Claude Sonnet 5' },
+    { label: 'gpt-4o', note: 'active · GPT-4o' },
+    { section: true, label: 'groq', note: 'GROQ_API_KEY is set' },
+    { label: 'llama-3.3-70b-versatile', note: '' },
+  ];
+
+  assert.equal(filterSectioned(rows, '').length, rows.length, 'an empty query narrows nothing');
+
+  const sonnet = filterSectioned(rows, 'sonnet');
+  assert.deepEqual(sonnet.map((r) => r.label), ['github-copilot', 'claude-sonnet-5']);
+  assert.equal(sonnet[0].section, true, 'its heading comes with it');
+
+  // A HEADING WITHOUT CHILDREN IS DROPPED. A plain `.filter()` leaves every
+  // heading standing over nothing, so a search returns a screen of provider
+  // names — which looks exactly like a filter that did not run.
+  assert.deepEqual(filterSectioned(rows, 'llama').map((r) => r.label), ['groq', 'llama-3.3-70b-versatile']);
+  assert.deepEqual(filterSectioned(rows, 'nothing-matches'), []);
+
+  // The NOTE is searched too: it is where the human-readable name lives, and
+  // someone typing "GPT-4o" means the model whatever its id spells.
+  assert.deepEqual(filterSectioned(rows, 'GPT-4o').map((r) => r.label), ['github-copilot', 'gpt-4o']);
+});

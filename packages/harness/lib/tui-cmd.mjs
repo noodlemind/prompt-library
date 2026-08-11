@@ -36,7 +36,7 @@ import { createStyle, EXIT } from './style.mjs';
 import { dispatch, hasCommand, getCommand } from './registry.mjs';
 import { openPalette, resolveSelection, selectionPlan, signatureOf } from './tui/palette.mjs';
 import { createTally, interpretLine, stripControl, tokenize } from './tui/session.mjs';
-import { createOverlay, splitPrefix, applyPrefix, treeRows } from './tui/overlay.mjs';
+import { createOverlay, splitPrefix, applyPrefix, treeRows, filterSectioned } from './tui/overlay.mjs';
 import { createLedger, statusForExit } from './tui/ledger.mjs';
 import { renderBlock, foldState } from './tui/block.mjs';
 import { renderHeader, renderExit } from './tui/chrome.mjs';
@@ -837,7 +837,13 @@ export async function runLedger({
       kind: 'model',
       page: 14,
       actions: null,
-      footer: `${ui.unicode ? '↑↓' : 'up/down'} navigate · ${ui.unicode ? '↵' : 'enter'} select · esc close`,
+      // IT NEVER HAD ONE. The picker was built with sections and arrows and no
+      // filter at all, so typing into it changed the query line and nothing
+      // else — and with a fetched catalogue running to forty models, scrolling
+      // is not a substitute. Sectioned, so a heading survives only when a model
+      // under it does; otherwise a search returns a screen of provider names.
+      filter: (query) => filterSectioned(rows, query),
+      footer: `${ui.unicode ? '↑↓' : 'up/down'} navigate · ${ui.unicode ? '↵' : 'enter'} select · type to filter · esc close`,
     });
     // Open on the active pair rather than the top: a picker that forgets where
     // you are makes you find yourself before you can move.
@@ -890,11 +896,7 @@ export async function runLedger({
       rows,
       kind: 'results',
       page: 12,
-      filter: (query) => {
-        const q = String(query ?? '').toLowerCase();
-        if (!q) return rows;
-        return rows.filter((r) => r.label.toLowerCase().includes(q) || String(r.note ?? '').toLowerCase().includes(q));
-      },
+      filter: (query) => filterSectioned(rows, query),
       footer: `${ui.unicode ? '↑↓' : 'up/down'} navigate · ${ui.unicode ? '↵' : 'enter'} open · type to filter · esc closes`,
     });
     session.openOverlay(overlay);

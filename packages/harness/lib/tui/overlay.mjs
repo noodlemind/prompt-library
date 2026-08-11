@@ -64,6 +64,38 @@ export function applyPrefix(rows, prefix) {
 }
 
 /**
+ * Narrow a sectioned list, keeping only the headings that still have children.
+ *
+ * A picker whose rows are grouped cannot be filtered with a plain `.filter()`:
+ * doing so leaves every heading standing over nothing, so a search for a model
+ * returns a screen of provider names. A heading survives exactly when something
+ * under it did.
+ *
+ * Matches label AND note, because the note is where the human-readable name
+ * lives (`gpt-4o · GPT-4o`) and someone typing "Sonnet" means the model called
+ * Claude Sonnet whatever its id spells.
+ */
+export function filterSectioned(rows, query) {
+  const q = String(query ?? '').trim().toLowerCase();
+  if (!q) return [...rows];
+  const hit = (row) => `${row.label ?? ''} ${row.note ?? ''}`.toLowerCase().includes(q);
+  const out = [];
+  let heading = null;
+  let kept = false;
+  for (const row of rows) {
+    if (row.section) {
+      heading = row;
+      kept = false;
+      continue;
+    }
+    if (!hit(row)) continue;
+    if (heading && !kept) { out.push(heading); kept = true; }
+    out.push(row);
+  }
+  return out;
+}
+
+/**
  * An overlay.
  *
  * `rows` is the full ranked set; the overlay owns which slice is visible and
