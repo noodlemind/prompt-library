@@ -36,6 +36,7 @@ import { createStyle, EXIT } from './style.mjs';
 import { dispatch, hasCommand, getCommand } from './registry.mjs';
 import { openPalette, resolveSelection, selectionPlan, signatureOf } from './tui/palette.mjs';
 import { routeTypedLine } from './tui/typed-line.mjs';
+import { buildCommandIndex } from './command-index.mjs';
 import { createTally, interpretLine, stripControl, tokenize } from './tui/session.mjs';
 import { createOverlay, splitPrefix, applyPrefix, treeRows, filterSectioned } from './tui/overlay.mjs';
 import { createLedger, statusForExit } from './tui/ledger.mjs';
@@ -257,6 +258,22 @@ export async function runLedger({
     } catch {
       return false;
     }
+  };
+
+  /**
+   * The command index used to route typed lines, built once for the session.
+   *
+   * Rebuilding it per line walked the skills tree on every Enter, in the middle
+   * of an interactive loop, to answer a question that cannot change while the
+   * process runs: `routeTypedLine` only ever matches COMMAND rows — `hasCommand`
+   * gates entry, so a skill can never be the match — and the registry is fixed
+   * at import. The palette keeps building its own per open, where the ranking
+   * and the skills tree both genuinely matter.
+   */
+  let routingIndex = null;
+  const indexForRouting = () => {
+    routingIndex ??= buildCommandIndex({ surface: 'tui', workspace });
+    return routingIndex;
   };
 
   const refreshStatus = () => {
@@ -1382,7 +1399,7 @@ export async function runLedger({
         // typed and `config set` chosen are the same request, and until now
         // only one of them worked. `routeTypedLine` declines everything that is
         // a genuine mistake, so a wrong flag still fails as a wrong flag.
-        const routed = interactive ? routeTypedLine(parsed.argv, { workspace }) : null;
+        const routed = interactive ? routeTypedLine(parsed.argv, { workspace, index: indexForRouting() }) : null;
         if (routed?.picker === 'model') openModelPicker();
         else if (routed) await beginSelection(routed.row, routed.values);
         else await runArgv(parsed.argv);

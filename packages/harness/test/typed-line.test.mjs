@@ -189,6 +189,15 @@ test('a single unknown word is still a typo, not a question', async () => {
   assert.match(text, /unknown/);
 });
 
+// Routing runs on every submitted line, so rebuilding the index there walked
+// the skills tree on each Enter to answer a question that cannot change while
+// the process runs.
+test('the ledger builds the routing index once, not per typed line', () => {
+  const source = fs.readFileSync(path.join(packageRoot, 'lib', 'tui-cmd.mjs'), 'utf8');
+  assert.match(source, /routeTypedLine\(parsed\.argv, \{ workspace, index: indexForRouting\(\) \}\)/);
+  assert.match(source, /routingIndex \?\?= buildCommandIndex/, 'built lazily and kept for the session');
+});
+
 // A previous fix in this repo introduced a variable nothing consumed while the
 // real render used a different value twenty lines below, and every string
 // assertion passed. The audit above proves the ROUTER is correct; this proves
