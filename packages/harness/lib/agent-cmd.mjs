@@ -22,6 +22,8 @@ import { redactedJson, createRedactor } from './redact.mjs';
 import { inertLine } from './knowledge/store.mjs';
 import { resolveCopilotHome } from './paths.mjs';
 import { runOrient } from './orient.mjs';
+import { resolveConfig } from './config.mjs';
+import { isProjectTrusted } from './trust.mjs';
 import { startProvider, PROVIDERS } from './provider.mjs';
 import {
   AGENT_VALUE_FLAGS,
@@ -39,6 +41,29 @@ const ui = createStyle({ argv: process.argv.slice(2) });
 
 function usageError(message, hint) {
   return Object.assign(new Error(message), { code: 'E_USAGE', exit: EXIT.usage, hint });
+}
+
+/**
+ * The configured provider and model, or empty when nothing is set.
+ *
+ * Fails OPEN: an unreadable config must not stop an agent run that named its
+ * provider on the command line, and `harness config validate` is where a
+ * broken file gets reported.
+ */
+function agentDefaults({ argv = [] } = {}) {
+  try {
+    const flags = parseFlags(argv);
+    const workspace = path.resolve(flags.workspace);
+    const copilotHome = resolveCopilotHome(flags.copilotHome);
+    const values = resolveConfig({
+      copilotHome,
+      workspace,
+      projectTrusted: isProjectTrusted({ workspace, copilotHome }),
+    })?.values ?? {};
+    return { provider: values['agent.provider'] || '', model: values['agent.model'] || '' };
+  } catch {
+    return { provider: '', model: '' };
+  }
 }
 
 /**
@@ -148,7 +173,11 @@ export function planAgent(argv) {
   if (!task) throw usageError('agent needs a task, e.g. harness agent "make the failing test pass"');
 
   const personaName = stringFlag(argv, '--agent') || DEFAULT_PERSONA;
-  const providerId = stringFlag(argv, '--provider') || 'anthropic';
+  // PRECEDENCE: the flag wins, then configuration, then the built-in default.
+  // Without the middle rung an operator on a Copilot subscription retyped
+  // `--provider github-copilot` on every invocation — see `harness model`.
+  const configured = agentDefaults({ argv });
+  const providerId = stringFlag(argv, '--provider') || configured.provider || 'anthropic';
   if (!(providerId in PROVIDERS)) {
     throw usageError(`unknown provider: ${providerId}`, `known providers: ${Object.keys(PROVIDERS).join(', ')}`);
   }
@@ -159,7 +188,7 @@ export function planAgent(argv) {
     task,
     personaName,
     providerId,
-    model: stringFlag(argv, '--model'),
+    model: stringFlag(argv, '--model') || configured.model || null,
     maxTurns: boundedNumber(argv, '--max-turns', { min: 1, max: 500, fallback: DEFAULT_MAX_TURNS }),
     maxSeconds: boundedNumber(argv, '--max-seconds', { min: 1, max: 86_400, fallback: DEFAULT_MAX_SECONDS }),
     toolTimeoutSeconds: boundedNumber(argv, '--tool-timeout', { min: 1, max: 3600, fallback: null }),

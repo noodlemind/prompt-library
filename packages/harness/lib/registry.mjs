@@ -88,6 +88,7 @@ import { createEnvelope, createErrorEnvelope, STATUS } from './envelope.mjs';
 import { renderAgentLane, recordAgentLaneBytes } from './agent-lane.mjs';
 import { EVENT_TYPE, summarizeArgFlags } from './event-registry.mjs';
 import { createRedactor, redactedJson } from './redact.mjs';
+import { cmdModel, modelResultOf, MODEL_VERBS } from './model-cmd.mjs';
 
 const REGISTRY = new Map();
 
@@ -1642,6 +1643,36 @@ registerCommand({
   // Filter values are validated in the registry phase so a refused invocation
   // never opens a run — see runRequireArgs.
   requireArgs: runRequireArgs,
+});
+
+registerCommand({
+  name: 'model',
+  summary: 'show which model answers, and change it — the providers you can actually use',
+  group: 'engineer loop',
+  // `set`/`clear` write config; a bare `model` reads, which is the common call.
+  sideEffect: 'mutate',
+  capabilities: [],
+  outputModes: ['ledger', 'json'],
+  usage: '[show|set|clear] [provider] [model] [--scope <scope>]',
+  verbs: [
+    { verb: 'show', summary: 'the active provider and model, and every provider you can reach', sideEffect: 'read' },
+    { verb: 'set', summary: 'make a provider (and optionally a model) the default', positionals: ['provider', 'model'] },
+    { verb: 'clear', summary: 'forget the choice and fall back to the built-in default' },
+  ],
+  args: {
+    positionals: [
+      { name: 'verb', description: MODEL_VERBS.join('|'), required: false, default: 'show' },
+      { name: 'provider', description: 'the provider id, for set', required: false, default: null },
+      { name: 'model', description: 'the model id, for set; omit for the provider default', required: false, default: null },
+    ],
+    flags: [
+      { name: '--scope', type: 'string', valueName: 'scope', description: `which file remembers the choice, ${SCOPES.join(' or ')}`, required: false, default: null, tui: 'prompt', verbs: ['set', 'clear'] },
+    ],
+  },
+  // A bare `harness model` is the picker view, and reading is what it does.
+  bareSideEffect: 'read',
+  handler: cmdModel,
+  resultOf: modelResultOf,
 });
 
 registerCommand({

@@ -49,7 +49,8 @@ const out = createStyle({ argv: args });
 // that doesn't resolve), with no test failure to catch the drift.
 export const HELP_COMMAND_ORDER = [
   'install', 'upgrade', 'doctor', 'status', 'uninstall',
-  'init-repo', 'index', 'plan-new', 'config', 'trust', 'resources',
+  'init-repo', 'index', 'plan-new', 'config',
+  'model', 'trust', 'resources',
   'orient', 'gate', 'verify', 'checks', 'exec', 'bash', 'agent', 'validate-plan', 'compound', 'recall', 'get', 'search', 'lookup', 'tree', 'run', 'tui', 'events', 'report',
   'knowledge', 'consolidate', 'remember', 'learning', 'learnings', 'eval-knowledge',
   'resolve',

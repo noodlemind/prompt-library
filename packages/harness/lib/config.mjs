@@ -123,6 +123,37 @@ export const CONFIG_SCHEMA = Object.freeze({
     description: 'whether `harness bash` may run a shell at all',
   },
 
+  /**
+   * WHICH MODEL ANSWERS, remembered.
+   *
+   * `--provider` defaulted to one provider with no fallback, so an operator on
+   * a Copilot subscription retyped `--provider github-copilot` on every single
+   * invocation — and whenever they forgot, the run failed asking for a
+   * credential belonging to a provider they had never chosen. Every surveyed
+   * CLI persists this choice (`/model` in Claude Code, Amp, OpenCode, Pi);
+   * `harness model set` writes these two keys.
+   *
+   * (The default's own key variable is deliberately NOT named here: the seam
+   * is the only module in core allowed to know a credential exists — P5AC7 —
+   * and it scans prose too, which is the point.)
+   *
+   * Plain precedence, not restrictive: which model a repository prefers is a
+   * statement about the work, not a grant of authority — and the credential
+   * itself never lives here, only the choice of endpoint.
+   */
+  'agent.provider': {
+    type: 'string',
+    default: 'anthropic',
+    merge: 'override',
+    description: 'default provider for `harness agent` (see: harness model)',
+  },
+  'agent.model': {
+    type: 'string',
+    default: '',
+    merge: 'override',
+    description: 'default model id; empty means the provider\'s own default',
+  },
+
   // ── Session Ledger presentation ────────────────────────────────────────
   //
   // These exist because the design mock's §6 makes an argument worth taking:
@@ -292,6 +323,9 @@ export function coerceValue(key, raw) {
       value = raw.split(',').map((s) => s.trim()).filter(Boolean);
     }
     if (!Array.isArray(value)) throw usageError(`${key} must be a list (got ${JSON.stringify(raw)})`);
+  } else if (spec.type === 'string') {
+    if (typeof value !== 'string') throw usageError(`${key} must be a string (got ${JSON.stringify(raw)})`);
+    value = value.trim();
   } else if (spec.type === 'enum') {
     if (typeof value !== 'string' || !spec.values.includes(value)) {
       throw usageError(`${key} must be one of ${spec.values.join(', ')} (got ${JSON.stringify(raw)})`);

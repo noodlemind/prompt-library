@@ -206,6 +206,7 @@ const DECLARED_VERBS = Object.freeze({
   run: ['list', 'show', 'tree', 'resume'],
   // `register`/`unregister` change what the harness recognizes; `list`/`show`
   // override DOWN to read.
+  model: ['show', 'set', 'clear'],
   resources: ['list', 'show', 'register', 'unregister', 'bundles', 'add', 'update', 'remove'],
 });
 
@@ -252,6 +253,10 @@ const VERB_POSITIONALS = Object.freeze({
   config: { get: ['key'], set: ['key', 'value'] },
   // `list` takes no id — it is the query over all of them.
   run: { show: ['run-id'], tree: ['run-id'], resume: ['run-id'] },
+  // `set` names the provider it is switching to, and optionally the model;
+  // `show` and `clear` take neither — one reports on every provider, the
+  // other forgets the choice.
+  model: { set: ['provider', 'model'] },
   // `list` takes no name — it is the query over all of them.
   resources: { show: ['path'], register: ['path'], unregister: ['path'], add: ['path'], update: ['path'], remove: ['path'] },
 });
@@ -286,7 +291,7 @@ test('AC8: the declared verb inventory matches its fixture exactly', () => {
     if (verbs.length) actual[name] = verbs;
   }
   assert.deepEqual(actual, { ...DECLARED_VERBS }, 'a verb was added or lost — update the fixture deliberately');
-  assert.equal(Object.values(actual).flat().length, 50, '15 knowledge/learning verbs + lookup’s 11 kinds + tree’s 2 subjects + checks’ 3 verbs + config’s 4 verbs + trust’s 3 verbs + run’s 4 verbs + resources’ 8 verbs');
+  assert.equal(Object.values(actual).flat().length, 53, '15 knowledge/learning verbs + lookup’s 11 kinds + tree’s 2 subjects + checks’ 3 verbs + config’s 4 verbs + trust’s 3 verbs + run’s 4 verbs + resources’ 8 verbs + model’s 3 verbs');
 });
 
 test('AC8: the verb-dispositioned flag inventory matches its fixture exactly', () => {
@@ -313,7 +318,7 @@ test('AC8: every declared verb reaches the palette as its own row', () => {
       assert.ok(row.summary, `${command} ${verb} must carry its declared summary`);
     }
   }
-  assert.equal(rows.filter((r) => r.kind === 'verb').length, 63, '50 declared verbs + 13 row-bearing verb flags');
+  assert.equal(rows.filter((r) => r.kind === 'verb').length, 66, '53 declared verbs + 13 row-bearing verb flags');
 });
 
 /**

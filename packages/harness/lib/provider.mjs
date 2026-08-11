@@ -34,6 +34,7 @@
  * sure that stays true as the file grows.
  */
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { MAX_COMPLETION_LINE_BYTES, startPlugin } from './plugin-host.mjs';
@@ -358,6 +359,65 @@ export function resolveProvider(id) {
  * channel. Widening the surface later is a decision someone has to make on
  * purpose rather than one that happens by having the object in hand.
  */
+/**
+ * Which providers are READY, without ever reading a credential's value.
+ *
+ * `/model` in the surveyed CLIs lists what you can actually pick, not every
+ * endpoint that exists — a menu of things that will fail is a menu of
+ * disappointments. This is the only function that can answer it, because this
+ * file is the only one in core that knows a credential variable exists
+ * (P5AC7). It reports PRESENCE and never the value: `Boolean(env[keyVar])`
+ * leaves the harness's "core never sees the key" property intact.
+ *
+ * `reason` is what to do about a provider that is not ready, so the picker can
+ * teach rather than merely grey a row out.
+ */
+export function providerReadiness({ parentEnv = process.env } = {}) {
+  return Object.values(PROVIDERS).map((provider) => {
+    const local = provider.keyRequired === false;
+    const hasKey = Boolean(parentEnv[provider.keyVar]);
+
+    if (provider.id === 'github-copilot') {
+      // A subscription, not a key: an editor login counts, and it is the rung
+      // most operators are already standing on.
+      const viaEnv = hasKey || Boolean(parentEnv.GH_TOKEN || parentEnv.GITHUB_TOKEN);
+      const viaEditor = copilotEditorLogin({ parentEnv });
+      return {
+        id: provider.id,
+        defaultModel: provider.defaultModel,
+        ready: viaEnv || viaEditor,
+        how: viaEnv ? 'token in the environment' : viaEditor ? 'editor sign-in' : null,
+        reason: viaEnv || viaEditor ? null : 'sign in to Copilot in an editor, or export a GitHub token',
+      };
+    }
+
+    return {
+      id: provider.id,
+      defaultModel: provider.defaultModel,
+      ready: local || hasKey,
+      how: local ? 'runs locally' : hasKey ? `${provider.keyVar} is set` : null,
+      reason: local || hasKey ? null : `${provider.keyVar} is not set`,
+    };
+  });
+}
+
+/** Does an editor hold a Copilot grant? A file's EXISTENCE and shape, never
+ * its contents beyond the one field that says a login happened. */
+function copilotEditorLogin({ parentEnv = process.env } = {}) {
+  const dir = parentEnv.XDG_CONFIG_HOME
+    ? path.join(parentEnv.XDG_CONFIG_HOME, 'github-copilot')
+    : path.join(os.homedir(), '.config', 'github-copilot');
+  for (const file of ['apps.json', 'hosts.json']) {
+    try {
+      const parsed = JSON.parse(fs.readFileSync(path.join(dir, file), 'utf8'));
+      for (const value of Object.values(parsed ?? {})) {
+        if (value && typeof value === 'object' && typeof value.oauth_token === 'string') return true;
+      }
+    } catch { /* absent or unreadable is simply "not signed in" */ }
+  }
+  return false;
+}
+
 export function startProvider({
   provider: providerId = 'anthropic',
   model = null,
