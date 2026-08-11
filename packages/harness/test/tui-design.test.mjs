@@ -1233,3 +1233,37 @@ test('FIELD: the catalog is a starting point, never an inventory that phones hom
   }
   assert.ok(PROVIDER_MODELS['github-copilot'].includes('gpt-4o'));
 });
+
+test('ACCESS: the colourblind scheme gives up the green/red axis entirely', async () => {
+  // `ok` green against `error` red is the exact pair deuteranopia and
+  // protanopia collapse — around 6% of men — and they are the harness's two
+  // most consequential states. The default stays USABLE for them because
+  // meaning never rested on colour (glyph, stripe and word carry it too);
+  // this scheme makes it comfortable.
+  const { createStyle: mk } = await import('../lib/style.mjs');
+  const env = { COLORTERM: 'truecolor', LANG: 'en_US.UTF-8' };
+  const rgbOf = (ui2, token) => {
+    const m = /\x1b\[38;2;(\d+);(\d+);(\d+)m/.exec(ui2.paint(token, 'x'));
+    return m ? [Number(m[1]), Number(m[2]), Number(m[3])] : null;
+  };
+
+  const cvd = mk({ stream: { isTTY: true }, env, argv: [], platform: 'darwin', scheme: 'colorblind' });
+  const ok = rgbOf(cvd, 'ok');
+  const err = rgbOf(cvd, 'error');
+  assert.ok(ok && err);
+  // `ok` is no longer the greenest channel; it sits on the blue side.
+  assert.ok(ok[2] > ok[1], `ok must lean blue, got rgb(${ok})`);
+  assert.ok(err[0] > err[2], `error must lean warm, got rgb(${err})`);
+  // And the two are far apart on the blue axis, which is the axis every
+  // common form of colour blindness preserves.
+  assert.ok(Math.abs(ok[2] - err[2]) > 100, 'ok and error separate on the channel CVD keeps');
+
+  const dflt = mk({ stream: { isTTY: true }, env, argv: [], platform: 'darwin' });
+  assert.notDeepEqual(rgbOf(dflt, 'ok'), ok, 'the default palette is untouched');
+
+  // The glyph CHARACTER is identical in both — colour was never the only
+  // signal, so a reader who cannot separate the hues still separates the
+  // states. (The painted strings differ, of course: that is the whole point.)
+  assert.equal(cvd.stripAnsi(cvd.glyph('ok')), dflt.stripAnsi(dflt.glyph('ok')));
+  assert.equal(cvd.stripAnsi(cvd.glyph('error')), dflt.stripAnsi(dflt.glyph('error')));
+});

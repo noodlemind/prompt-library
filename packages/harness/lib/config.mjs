@@ -205,6 +205,18 @@ export const CONFIG_SCHEMA = Object.freeze({
       return value;
     },
   },
+  'tui.scheme': {
+    type: 'enum',
+    values: ['default', 'colorblind'],
+    default: 'default',
+    merge: 'override',
+    // `ok` green against `error` red is the exact pair deuteranopia and
+    // protanopia collapse, and they are the harness's two most consequential
+    // states. `colorblind` swaps in the Okabe-Ito set, which keeps a blue/warm
+    // axis and gives up green/red entirely. Meaning never rested on colour —
+    // glyph, stripe and word carry it too — so this is comfort, not rescue.
+    description: 'semantic palette: default, or colorblind (Okabe-Ito, no green/red axis)',
+  },
   'tui.tint': {
     type: 'enum',
     values: ['auto', 'dark', 'light', 'off'],

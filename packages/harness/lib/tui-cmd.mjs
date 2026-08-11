@@ -108,7 +108,7 @@ export async function runLedger({
   let activeController = null;
   const settings = config ?? safeConfig({ copilotHome, workspace });
   const version = readVersion();
-  const ui = createStyle({ argv, stream: output, tintMode: settings['tui.tint'] ?? 'auto' });
+  const ui = createStyle({ argv, stream: output, tintMode: settings['tui.tint'] ?? 'auto', scheme: settings['tui.scheme'] ?? 'default' });
   const screenReader = settings['tui.verbosity'] === 'screen-reader';
   const tally = createTally();
   const started = now();

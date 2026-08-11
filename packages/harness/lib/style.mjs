@@ -66,6 +66,30 @@ const PALETTE = {
   muted: [[111, 110, 105], 243], // #6f6e69 — notes, next actions, chrome
 };
 
+/**
+ * A colour-vision-safe palette, offered because the default is not one.
+ *
+ * THE PROBLEM IS GREEN AGAINST RED. `ok` (#86c99a) and `error` (#d97c74) are
+ * the harness's two most consequential states and they are the exact pair
+ * deuteranopia and protanopia collapse — the two most common forms, around 6%
+ * of men. The design already refuses to let colour carry meaning alone (a
+ * state is also a glyph, a stripe and a word), which is what keeps the default
+ * USABLE rather than merely legible; this makes it comfortable.
+ *
+ * The substitution is the established one: keep a blue/warm axis, which every
+ * common form of colour blindness preserves, and give up the green/red axis
+ * entirely. `ok` becomes a blue-teal, `error` a vivid orange-red distinguished
+ * from `warn` by lightness rather than hue. Antigravity ships the same idea as
+ * `colorblind-friendly light` / `colorblind-friendly dark`.
+ */
+const PALETTE_CVD = {
+  ok: [[86, 180, 233], 74], // sky blue — Okabe-Ito, the reference CVD-safe set
+  warn: [[230, 159, 0], 214], // amber, unchanged in role and clearly warmer
+  error: [[213, 94, 0], 166], // vermilion — darker and redder than warn
+  info: [[0, 158, 115], 36], // bluish green, distinct from `ok` by lightness
+  muted: [[111, 110, 105], 243], // unchanged: grey is grey to everyone
+};
+
 // state → [unicode glyph, ascii twin, paint token]
 const GLYPHS = {
   ok: ['✓', '[ok]', 'ok'],
@@ -182,10 +206,13 @@ export function createStyle({
   // `off` is the contrast floor, and turns the second channel off entirely so
   // nothing is painted over the operator's own background.
   tintMode = 'auto',
+  /** `default` | `colorblind` — which semantic palette carries state. */
+  scheme = 'default',
 } = {}) {
   const color = detectColor({ stream, env, argv });
   const unicode = detectUnicode({ env, platform, color });
   const ground = tintMode === 'dark' || tintMode === 'light' ? tintMode : detectGround({ env });
+  const palette = scheme === 'colorblind' ? PALETTE_CVD : PALETTE;
   const tintsOn = tintMode !== 'off' && color !== 'none';
   // One redactor bound to this renderer's env snapshot (injectable for tests).
   // Applied to every emitted string below so no human-facing surface can leak
@@ -195,7 +222,7 @@ export function createStyle({
 
   function paint(token, text) {
     const safe = scrub(text);
-    const entry = PALETTE[token];
+    const entry = palette[token];
     if (!entry || color === 'none') return safe;
     const open =
       color === 'truecolor'
