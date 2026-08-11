@@ -358,6 +358,11 @@ export function runEdit({ workspace, path: relPath, old, next, dryRun = false })
     }
 
     const before = target.content;
+    // Which line the match begins on, 1-indexed: the text before it, split the
+    // same CRLF-tolerant way the rest of this file splits, is exactly that many
+    // lines. An audit that says a file grew by nine bytes and not where cannot
+    // be reviewed without diffing the file.
+    const lineNumber = before.slice(0, first).split(/\r?\n/).length;
     const after = before.slice(0, first) + next + before.slice(first + old.length);
     // `--dry-run` promises to show what would happen without doing it, and a
     // flag that writes anyway is worse than no flag — `exec` learned the same
@@ -367,7 +372,8 @@ export function runEdit({ workspace, path: relPath, old, next, dryRun = false })
       return {
         ...dryRunResult('edit', relPath, before, after),
         matches: 1,
-        output: [{ line: `would edit ${relPath}` }, { line: `1 replacement · ${Buffer.byteLength(before, 'utf8')} → ${Buffer.byteLength(after, 'utf8')} bytes` }],
+        line: lineNumber,
+        output: [{ line: `would edit ${relPath} on line ${lineNumber}` }, { line: `1 replacement · ${Buffer.byteLength(before, 'utf8')} → ${Buffer.byteLength(after, 'utf8')} bytes` }],
       };
     }
     const snap = snapshot(workspaceResolved, relPath, target);
@@ -391,8 +397,9 @@ export function runEdit({ workspace, path: relPath, old, next, dryRun = false })
       sha256After,
       undo,
       degraded: lock.degraded,
+      line: lineNumber,
       output: [
-        { line: `edited ${relPath}` },
+        { line: `edited ${relPath} on line ${lineNumber}` },
         { line: `1 replacement · ${Buffer.byteLength(before, 'utf8')} → ${Buffer.byteLength(after, 'utf8')} bytes` },
         ...(snap.reason ? [{ line: snap.reason }] : []),
       ],
@@ -648,6 +655,7 @@ function emitAudit(ctx, result) {
       sha256Before: result.sha256Before,
       sha256After: result.sha256After,
       undoId: result.undo?.id ?? null,
+      line: result.line ?? null,
     },
   });
 }
