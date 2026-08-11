@@ -307,6 +307,7 @@ export function createInput({
     if (owner.intent === 'palette') { deliver({ intent: 'palette' }); return; }
     if (owner.intent === 'navigate') { deliver({ intent: 'navigate' }); return; }
     if (owner.intent === 'escape') { deliver({ intent: 'escape' }); return; }
+    if (owner.intent === 'agent-mode') { deliver({ intent: 'agent-mode' }); return; }
     if (owner.intent === 'fold') { deliver({ intent: 'fold' }); return; }
     if (owner.intent === 'clear') { deliver({ intent: 'clear' }); return; }
     if (owner.intent === 'complete') { deliver({ intent: 'complete', prefix: owner.prefix }); return; }

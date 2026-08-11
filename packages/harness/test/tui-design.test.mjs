@@ -1485,3 +1485,32 @@ test('BLOCK: a block whose payload is at the end folds its middle, not its answe
   small.keepTail = true;
   assert.equal(foldState(small).folded, false, 'a fold that saves nothing is not a fold');
 });
+
+
+test('ASK: a bare line is a question, but a known command is still a command', async () => {
+  // `Looks like there is a lot of implementation notes in the code, please
+  // investigate` came back as `unknown Looks · type / to see what exists`, and
+  // the only way to be heard was to retype the sentence behind the word
+  // `agent`. The ledger already reserves `/` for the palette and `!` for the
+  // shell, so the bare line was the one gesture left meaning "no".
+  const { hasCommand } = await import('../lib/registry.mjs');
+  const { interpretLine } = await import('../lib/tui/session.mjs');
+
+  // The routing rule, stated as the loop applies it: first word decides.
+  const routes = (line) => {
+    const parsed = interpretLine(line);
+    if (parsed.kind !== 'command') return parsed.kind;
+    return parsed.argv?.length && !hasCommand(parsed.argv[0]) ? 'ask' : 'command';
+  };
+
+  assert.equal(routes('Looks like there are a lot of implementation notes'), 'ask');
+  assert.equal(routes('why is the gate failing?'), 'ask');
+  // Known commands keep the bare form they have always had.
+  assert.equal(routes('search engineer'), 'command');
+  assert.equal(routes('config get agent.enabled'), 'command');
+  assert.equal(routes('model'), 'command');
+  // And the session's own words are still neither.
+  assert.equal(routes('exit'), 'exit');
+  assert.equal(routes('results'), 'results');
+  assert.equal(routes('!ls'), 'shell');
+});

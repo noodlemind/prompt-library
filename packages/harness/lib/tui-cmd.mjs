@@ -48,7 +48,7 @@ import { resolveConfig } from './config.mjs';
 import { resolveCopilotHome } from './paths.mjs';
 import { isProjectTrusted } from './trust.mjs';
 import { readJournal, foldRuns, runStatusFromReported } from './run-journal.mjs';
-import { modelPickerRows } from './model-cmd.mjs';
+import { modelPickerRows, modelStatus } from './model-cmd.mjs';
 import { createProcessEventRegistry, detectActor } from './event-registry.mjs';
 import { setRunContext, currentRunContext } from './run-context.mjs';
 
@@ -212,11 +212,23 @@ export async function runLedger({
   /** The configured provider and model, refreshed alongside the rest of the
    * lifecycle facts rather than on every repaint. */
   let activeModel = null;
+  /**
+   * What the footer says about what this surface will do with what you type.
+   *
+   * READ FRESH, NOT FROM THE STARTUP SNAPSHOT. `settings` is resolved once when
+   * the session opens, so a `config set` made INSIDE the ledger — by the model
+   * picker, or by shift+tab — left the footer describing the session that had
+   * just ended. The whole point of putting the mode on screen is that it is
+   * current.
+   *
+   * With agent mode off the ledger is a command surface, and saying so beats
+   * naming a model that will not be asked anything.
+   */
   const readActiveModel = () => {
     try {
-      const provider = settings['agent.provider'] || 'github-copilot';
-      const model = settings['agent.model'] || '';
-      activeModel = model ? `${provider} · ${model}` : provider;
+      const status = modelStatus({ workspace, copilotHome: resolveCopilotHome(copilotHome) });
+      if (!status.agentEnabled) { activeModel = 'commands only'; return; }
+      activeModel = status.model ? `${status.provider} · ${status.model}` : status.provider;
     } catch {
       activeModel = null;
     }
@@ -947,6 +959,53 @@ export async function runLedger({
     return overlay;
   };
 
+  /**
+   * A LINE THAT IS NOT A COMMAND IS A QUESTION.
+   *
+   * `Looks like there is a lot of implementation notes in the code, please
+   * investigate` came back as `unknown Looks · type / to see what exists`, and
+   * the only way to be heard was to retype the whole sentence behind the word
+   * `agent`. Every surveyed CLI reads a bare line as something to ASK and
+   * reserves a sigil for commands; the ledger already reserves two (`/` for the
+   * palette, `!` for the shell), so the bare line was the one gesture left
+   * meaning "no". Known commands still win — `search x` searches — so this
+   * costs nothing that worked before and only claims the space that was an
+   * error message.
+   *
+   * The refusals TEACH rather than report. "agent mode is off" with the gesture
+   * that turns it on is the answer to what was actually asked; `unknown Looks`
+   * answered a question nobody had.
+   */
+  /**
+   * Is the ledger in agent mode?
+   *
+   * THE GATE DECIDES WHAT A BARE LINE MEANS. With agent mode off, the ledger is
+   * a command surface and an unknown word is a typo — answered as one, exactly
+   * as before. With it on, a known command is still a command and anything else
+   * is a question. One config key, two coherent behaviours, and no third state
+   * where the same keystroke means different things for reasons the operator
+   * cannot see.
+   */
+  const agentMode = () => {
+    try {
+      return modelStatus({ workspace, copilotHome: resolveCopilotHome(copilotHome) }).agentEnabled === true;
+    } catch {
+      return false;
+    }
+  };
+
+  const askAgent = async (text) => {
+    const status = modelStatus({ workspace, copilotHome: resolveCopilotHome(copilotHome) });
+    if (!status.ready) {
+      say(ui.line({ state: 'warn', key: 'ask', value: `${status.provider} is not connected`, note: status.reason || 'model to choose a provider' }));
+      return;
+    }
+    // The typed sentence stays ONE argv word — re-splitting it would hand the
+    // agent a task the person did not write. `display` keeps the block reading
+    // as what was typed, the same way bash mode shows `! echo hi`.
+    await runArgv(['agent', text], { display: text });
+  };
+
   /** Re-run a block: same argv, fresh record. Never edits the one it replays —
    * the journal is append-only and history is not a draft. */
   const rerun = async (block) => {
@@ -1001,6 +1060,19 @@ export async function runLedger({
       if (event.intent === 'navigate') { openBlockNav(); continue; }
 
       if (event.intent === 'clear') { doClear(); continue; }
+
+      // SHIFT+TAB — flip the gate, through the ordinary config write so there is
+      // exactly one truth about it: `config show` reports it with provenance,
+      // and a session cannot believe something the next one will not.
+      if (event.intent === 'agent-mode') {
+        const on = agentMode();
+        await runArgv(['config', 'set', 'agent.enabled', on ? 'false' : 'true', '--scope', 'user'], {
+          display: on ? 'agent mode off' : 'agent mode on',
+        });
+        readActiveModel();
+        refreshStatus();
+        continue;
+      }
 
       if (event.intent === 'fold') {
         const last = ledger.lastCommand();
@@ -1078,7 +1150,7 @@ export async function runLedger({
         if (row.session === 'exit') break;
         // A row the index marked as a picker opens it instead of dispatching.
         if (row.picker === 'model') { openModelPicker(); continue; }
-        if (row.enableAgent) {
+        if (row.enableAgent !== undefined) {
           // Through the ordinary config command, so the write is atomic, scoped
           // and shows up in `config show` with its provenance like any other.
           //
@@ -1088,7 +1160,9 @@ export async function runLedger({
           // repository cannot grant it on your behalf. Omitting the scope was a
           // usage error — the same defect as offering `model set` with no
           // provider, committed one layer up.
-          await runArgv(['config', 'set', 'agent.enabled', 'true', '--scope', 'user']);
+          await runArgv(['config', 'set', 'agent.enabled', row.enableAgent ? 'true' : 'false', '--scope', 'user'], {
+            display: row.enableAgent ? 'agent mode on' : 'agent mode off',
+          });
           readActiveModel();
           refreshStatus();
           continue;
@@ -1265,6 +1339,8 @@ export async function runLedger({
         // The palette no longer offers it, but the word is still typeable —
         // and a nested ledger would steal the same stdin and never return.
         say(ui.line({ state: 'warn', key: 'tui', value: 'already open', note: 'the session ledger is this surface' }));
+      } else if (parsed.argv?.length && !hasCommand(parsed.argv[0]) && agentMode()) {
+        await askAgent(line);
       } else {
         await runArgv(parsed.argv);
       }

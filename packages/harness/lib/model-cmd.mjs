@@ -142,6 +142,12 @@ export function modelPickerRows({ workspace, copilotHome, parentEnv = process.en
     rows.push({ section: true, label: 'forget the choice', note: `remembered in ${status.source}`, ready: true, disabled: true });
     rows.push({ label: 'use the built-in default', clear: true, note: 'github-copilot · provider default model' });
   }
+
+  // SYMMETRY. The picker offered `enable agent mode` when it was off and then
+  // nothing when it was on — a switch you can flip one way is a trap, and the
+  // only route back was one of nineteen config keys, fourteen of them folded.
+  rows.push({ section: true, label: 'mode', note: 'also shift+tab', ready: true, disabled: true });
+  rows.push({ label: 'turn agent mode off', enableAgent: false, note: 'commands only — a bare line stops being a question' });
   return rows;
 }
 

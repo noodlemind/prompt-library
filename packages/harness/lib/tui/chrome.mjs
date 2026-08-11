@@ -110,6 +110,10 @@ export function renderHint({
   const keys = [
     `${ui.paint('muted', ui.unicode ? '↵' : 'enter')} ${ui.paint('muted', 'run')}`,
     `${ui.paint('muted', 'esc')} ${ui.paint('muted', 'interrupt')}`,
+    // The gate that decides what a bare line MEANS, and the key that flips it.
+    // It was reachable only as one of nineteen `config show` rows — fourteen of
+    // them folded — which is a setting nobody can find.
+    `${ui.paint('muted', 'shift+tab')} ${ui.paint('muted', 'mode')}`,
     // The one key the quiet-open pass made invisible: exit worked three ways
     // and appeared nowhere. The hint row is where Enter's consequences live,
     // so it is also where leaving lives.

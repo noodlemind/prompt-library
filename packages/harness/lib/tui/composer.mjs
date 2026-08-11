@@ -104,7 +104,10 @@ export function createComposer({
    * the first keystroke; never part of the value. Overridable: when the ledger
    * is collecting a value, the QUESTION sits here — at the composer, where the
    * answer is typed — rather than in the transcript forty rows away. */
-  const DEFAULT_PLACEHOLDER = 'run a command · / for the palette';
+  // ASKING IS LISTED FIRST because it is what a bare line now does — a
+  // placeholder that named only commands was why a typed sentence came back
+  // as `unknown`.
+  const DEFAULT_PLACEHOLDER = 'ask, or run a command · / for the palette';
   let placeholder = DEFAULT_PLACEHOLDER;
 
   const asText = (clusters) => clusters.join('');
@@ -270,6 +273,11 @@ export function createComposer({
         if (chosen && applyCompletion(chosen.path ?? chosen)) return { changed: true };
       }
     }
+    // SHIFT+TAB CYCLES THE MODE — the gesture Claude Code, Amp and Antigravity
+    // all spend on "what does this surface do with what I type". Here there are
+    // two answers and one gate between them: commands only, or commands plus
+    // anything else being a question. Checked before plain Tab, which completes.
+    if (name === 'tab' && shift) return { intent: 'agent-mode', changed: false };
     if (name === 'tab') {
       const ref = activeReference();
       if (ref) return { intent: 'complete', prefix: ref.prefix, changed: false };

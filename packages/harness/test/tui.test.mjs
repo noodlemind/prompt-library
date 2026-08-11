@@ -31,7 +31,19 @@ const tempDir = (p) => fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), p))
 const ESC = String.fromCharCode(27);
 
 /** Drive the whole loop over strings — the reason input/output are injected. */
-async function ledger(lines, { workspace = process.cwd(), dispatcher } = {}) {
+/**
+ * A copilot home of its own, per test run.
+ *
+ * The helper used to leave `copilotHome` unset, so every ledger test resolved
+ * the REAL `~/.copilot` and read whatever configuration this machine happened
+ * to hold. That is a suite whose result depends on the developer running it:
+ * turning agent mode on locally changed what a bare line means, and two tests
+ * that had nothing to do with agent mode began to fail. An empty directory is
+ * the only honest default — every key then comes from its declared default.
+ */
+const LEDGER_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-ledger-home-'));
+
+async function ledger(lines, { workspace = process.cwd(), dispatcher, copilotHome = LEDGER_HOME } = {}) {
   const input = new PassThrough();
   const output = new PassThrough();
   let text = '';
@@ -39,7 +51,7 @@ async function ledger(lines, { workspace = process.cwd(), dispatcher } = {}) {
   // `--no-events` so the suite does not append to the repository's own run
   // journal. The ledger opens and closes a real run per command now — that is
   // the point of blocks being records — and a test run is not history.
-  const done = runLedger({ input, output, workspace, argv: ['--no-color', '--no-events'], dispatcher });
+  const done = runLedger({ input, output, workspace, copilotHome, argv: ['--no-color', '--no-events'], dispatcher });
   for (const line of lines) input.write(`${line}\n`);
   input.end();
   await done;
@@ -520,12 +532,12 @@ test('an unknown block id is reported rather than guessed at', async () => {
 /** The shared `ledger` helper passes `--no-events`, which turns journaling off
  * for the whole session — correct for grammar tests, and blinding for these
  * two. They run their own session with journaling ON in a temp workspace. */
-async function journalingLedger(lines, { workspace, dispatcher }) {
+async function journalingLedger(lines, { workspace, dispatcher, copilotHome = LEDGER_HOME }) {
   const input = new PassThrough();
   const output = new PassThrough();
   let text = '';
   output.on('data', (c) => { text += c.toString(); });
-  const done = runLedger({ input, output, workspace, argv: ['--no-color'], dispatcher });
+  const done = runLedger({ input, output, workspace, copilotHome, argv: ['--no-color'], dispatcher });
   for (const line of lines) input.write(`${line}\n`);
   input.end();
   await done;
