@@ -199,7 +199,7 @@ test('DESIGN: the hint row states consequence — and the gate is not repeated h
   const row = renderHint({ ui, width: 120, mode: 'deliver', gate: 'pass', shell: 'allowed', rerun: 'verify' });
   assert.match(row, /deliver/, 'the mode');
   assert.match(row, /shell allowed/, 'whether the shell is available');
-  assert.match(row, /!! re-runs verify/, 'what !! would repeat');
+  assert.match(row, /replay re-runs verify/, 'what `replay` would repeat — `!!` retired because `!` already means the shell');
   assert.match(row, /↵ run/, 'what Enter does');
   assert.match(row, /ctrl\+d exit/, 'and the way out');
   assert.doesNotMatch(row, /gate/,
@@ -577,7 +577,11 @@ test('CONSISTENCY: a message is plain rows — only a block carries the stripe',
   input.end();
   await done;
   const lines = text.split('\n');
-  const helpRows = lines.filter((l) => /open the command palette|re-run the previous block|governed bash/.test(l));
+  // ONE phrase list, used for both picking the rows and locating their value
+  // column. Two lists drifted the moment the help text was reworded, and the
+  // column check then searched for a phrase the picked row did not contain.
+  const HELP_NEEDLE = /open the command palette|re-run the previous block|complete a file path/;
+  const helpRows = lines.filter((l) => HELP_NEEDLE.test(l));
   assert.ok(helpRows.length >= 3, 'the help rows rendered');
   for (const row of helpRows) {
     assert.doesNotMatch(row, /^[▌|]/, `a message row carries no stripe: ${JSON.stringify(row)}`);
@@ -586,7 +590,7 @@ test('CONSISTENCY: a message is plain rows — only a block carries the stripe',
 
   // And the help columns align — the first row used the default gutter while
   // the rest used an explicit one, so the columns stepped after line one.
-  const starts = new Set(helpRows.map((l) => l.search(/open the|re-run the|run a shell/)));
+  const starts = new Set(helpRows.map((l) => l.search(HELP_NEEDLE)));
   assert.equal(starts.size, 1, `help value columns align: ${[...starts].join(', ')}`);
 });
 
@@ -768,7 +772,7 @@ test('FIELD: the startup hints are two short lines, not a manual', async () => {
   await done;
   assert.match(text, /\/ for commands/);
   assert.match(text, /\? for shortcuts/);
-  assert.doesNotMatch(text, /! shell · !! re-run · @ file/,
+  assert.doesNotMatch(text, /@ file · ctrl\+p palette/,
     'the full grammar lives in help — a startup that lists every sigil is a manual, not a hint');
 });
 

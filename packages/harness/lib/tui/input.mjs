@@ -119,7 +119,10 @@ export function createInput({
       composer.setHint(renderHint({ ui, width: w, ...hintState }));
       // The rule label and the placeholder are computed HERE, per paint, from
       // one source of truth each — a prompt in flight owns both.
-      if (prompt) {
+      if (composer.bashMode) {
+        composer.setRuleLabel('bash');
+        composer.setPlaceholder(null);
+      } else if (prompt) {
         composer.setRuleLabel(`${hintState.mode} · ${prompt.title}`);
         composer.setPlaceholder(`${prompt.label}${prompt.note ? ` — ${prompt.note}` : ''} · ↵ submits · exit cancels`);
       } else {
@@ -295,7 +298,8 @@ export function createInput({
     if (owner.intent === 'clear') { deliver({ intent: 'clear' }); return; }
     if (owner.intent === 'complete') { deliver({ intent: 'complete', prefix: owner.prefix }); return; }
     if (owner.intent === 'cancel') { deliver({ intent: 'cancel', hadInput: owner.hadInput }); return; }
-    if (owner.submitted !== undefined) { deliver({ line: owner.submitted }); return; }
+    if (owner.intent === 'bash-mode') { frame(() => { erase(); paint(); }); return; }
+    if (owner.submitted !== undefined) { deliver({ line: owner.submitted, bash: owner.bash === true }); return; }
     if (owner.changed) frame(() => { erase(); paint(); });
   };
 

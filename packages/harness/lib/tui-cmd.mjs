@@ -245,6 +245,7 @@ export async function runLedger({
       shell: settings['exec.bash_enabled'] === false ? 'denied' : 'allowed',
       rerun: last?.command ? shortCommand(last.command) : null,
     });
+    readActiveModel();
   };
 
   /** The session header. Printed once at the top and again after `clear`,
@@ -319,7 +320,7 @@ export async function runLedger({
     // Two short lines, the way the field does it. The full grammar lives in
     // `help`; a startup that lists every sigil is a manual, not a hint.
     session.commit([
-      ui.paint('muted', '  / for commands'),
+      ui.paint('muted', '  / for commands · ! for bash'),
       ui.paint('muted', '  ? for shortcuts'),
       ...separator(),
     ]);
@@ -502,6 +503,7 @@ export async function runLedger({
    * commands unless the query asks for them.
    */
   const SESSION_ROWS = Object.freeze([
+    { label: 'replay', signature: '[id]', session: 'replay', note: 're-run the last block, or one by id', sideEffect: null },
     { label: 'exit', session: 'exit', note: 'close the session · also ctrl+d', sideEffect: null },
     { label: 'clear', session: 'clear', note: 'clear the viewport · scrollback survives', sideEffect: null },
     { label: 'help', session: 'help', note: 'the sigils and the keys', sideEffect: null },
@@ -815,6 +817,7 @@ export async function runLedger({
         const row = event.row;
         if (!row) continue; // Enter on an empty palette list is a dismissal
         if (row.session === 'exit') break;
+        if (row.session === 'replay') { await rerun(ledger.lastCommand()); continue; }
         if (row.session === 'clear') { doClear(); continue; }
         if (row.session === 'help') { emitHelp(); continue; }
         if (row.block) { emit({ ...row.block, folded: false }); continue; }
@@ -850,6 +853,14 @@ export async function runLedger({
 
       const line = stripControl(String(event.line ?? ''));
       if (inlineHint) { clearPrompt(); inlineHint = false; }
+
+      // BASH MODE: the whole line is a shell line, no sigil required. It still
+      // goes through the governed `bash` — the mode changes what you type, not
+      // what is allowed.
+      if (event.bash && line.trim()) {
+        await runArgv(['bash', '--', line.trim()], { display: `! ${line.trim()}` });
+        continue;
+      }
       // NO SEPARATE ECHO. The block's first row IS the command, verbatim — see
       // the design's block anatomy — so echoing the line here printed it twice,
       // once bare and once inside the block that followed. Lines that produce
@@ -936,6 +947,7 @@ export async function runLedger({
         pipedPalette = null;
         if (!choice) { say(ui.line({ state: 'warn', key: 'palette', value: 'no such row' })); continue; }
         if (choice.session === 'exit') break;
+        if (choice.session === 'replay') { await rerun(ledger.lastCommand()); continue; }
         if (choice.session === 'clear') { doClear(); continue; }
         if (choice.session === 'help') { emitHelp(); continue; }
         await beginSelection(choice);
@@ -994,9 +1006,10 @@ export async function runLedger({
       ['help', 'type a command directly, or:'],
       ['/', 'open the command palette'],
       ['/<text>', 'filter the palette (run: plan: search: check: res: learn:)'],
-      ['!<command>', 'run a shell command through governed bash'],
-      ['!!', 're-run the previous block'],
-      ['!! <id>', 're-run any block by id'],
+      ['!', 'enter bash mode — every line runs through governed bash · esc leaves'],
+      ['!<command>', 'run one shell command without entering the mode'],
+      ['replay', 're-run the previous block'],
+      ['replay <id>', 're-run any block by id, from its record line'],
       ['@<path>', 'complete a file path'],
       ['ctrl+↑', 'walk the ledger blocks'],
       ['esc esc', 'open the run tree'],

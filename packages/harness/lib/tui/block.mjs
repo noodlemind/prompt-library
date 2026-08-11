@@ -239,8 +239,19 @@ export function renderBlock(block, {
   }
 
   // 3 — output, folded past the threshold.
+  //
+  // A SHELL BLOCK'S OUTPUT HANGS OFF A CORNER (`└`), which is how Antigravity
+  // renders it and why its shell blocks read as one thing: the command is the
+  // statement, the output is subordinate to it, and the eye gets that from the
+  // shape before it reads a word. Harness commands keep the plain indent —
+  // their output is already ledger rows in the design's own grammar, and a
+  // corner would imply a nesting that is not there.
   const state = foldState(block, fold);
-  for (const line of block.lines.slice(0, state.shown)) pushStyled(`  ${line}`);
+  const shell = block.command.startsWith('!') || block.argv?.[0] === 'bash';
+  const corner = ui.unicode ? '└' : '\\';
+  block.lines.slice(0, state.shown).forEach((line, i) => {
+    pushStyled(shell ? `  ${i === 0 ? ui.paint('muted', corner) : ' '} ${line}` : `  ${line}`);
+  });
   if (state.folded) {
     pushStyled(`  ${ui.paint('muted', `… ${state.hidden} more line${state.hidden === 1 ? '' : 's'}`)}${ui.paint('muted', ' (ctrl+o)')}`);
   }

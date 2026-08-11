@@ -96,6 +96,9 @@ const SESSION_WORDS = Object.freeze({
   clear: 'clear',
 });
 
+/** `replay` and `replay <id>` — re-run a block by name rather than by sigil. */
+const REPLAY_WORDS = new Set(['replay', 'rerun', 're-run']);
+
 export function interpretLine(rawLine) {
   const line = stripControl(rawLine).trim();
   if (!line) return { kind: 'empty' };
@@ -111,8 +114,27 @@ export function interpretLine(rawLine) {
     return { kind: SESSION_WORDS[sessionKey] };
   }
 
-  // `!!` before `!`: the longer sigil has to win, or a re-run would parse as a
-  // shell command whose script starts with `!`.
+  // `replay`, `replay <id>` — with or without a leading slash.
+  const replayParts = sessionKey.split(/\s+/);
+  if (REPLAY_WORDS.has(replayParts[0])) {
+    const target = replayParts[1] ? replayParts[1].replace(/^#/, '') : null;
+    if (!target) return { kind: 'rerun', target: null };
+    if (/^[0-9a-z]+(-[0-9a-z]+)*$/i.test(target) && target.replace(/-/g, '').length >= 4) {
+      return { kind: 'rerun', target };
+    }
+    return {
+      kind: 'invalid',
+      reason: `replay takes a block id, and ${JSON.stringify(target)} is not one`,
+      hint: 'replay on its own repeats the last block; replay <id> takes an id from a record line',
+    };
+  }
+
+  // `!!` KEPT ONLY AS A QUIET ALIAS. Pi and Claude Code both read `!` and
+  // `!!` as the shell, so spending the doubled sigil on re-run put two
+  // meanings behind one gesture every operator's muscle memory had already
+  // assigned. Re-running is now `replay`, a named session word that appears
+  // in the palette with its own signature; `!!` still works for the fingers
+  // that learned it, and `help` no longer advertises it.
   if (line.startsWith('!!')) {
     const target = line.slice(2).trim();
     // A bare `!!` repeats the last block. An argument is a block id — the same

@@ -88,6 +88,18 @@ export function createComposer({
    * Code carries the session title in its hairline and Amp carries the mode in
    * its border. A rule is a row already being spent; the label rides free. */
   let ruleLabel = '';
+  /**
+   * Bash mode — `!` on an empty line, sticky until Esc.
+   *
+   * WHY A MODE AND NOT A PREFIX. `!` and `!!` both read as "shell" in Pi and
+   * Claude Code, so using `!!` for re-run put two different meanings behind
+   * one sigil that every operator's muscle memory already assigns to the
+   * shell. Antigravity resolves it by making `!` a MODE the surface announces
+   * ("activated bash mode · esc to cancel") and giving re-run its own named
+   * command. The mode also removes a per-line tax: a session spent in the
+   * shell types `!` once rather than on every line.
+   */
+  let bashMode = false;
   /** Muted text shown while the buffer is empty (Codex, Grok). Vanishes on
    * the first keystroke; never part of the value. Overridable: when the ledger
    * is collecting a value, the QUESTION sits here — at the composer, where the
@@ -141,7 +153,9 @@ export function createComposer({
     if (!value) return { changed: true };
     past.push(value);
     while (past.length > historyLimit) past.shift();
-    return { submitted: value, changed: true };
+    // The mode STAYS ON after a run — a session in the shell is usually there
+    // for more than one command, and Esc is the way out.
+    return { submitted: value, bash: bashMode, changed: true };
   }
 
   /**
@@ -234,6 +248,11 @@ export function createComposer({
       return { changed: true };
     }
 
+    if (name === 'escape' && bashMode) {
+      bashMode = false;
+      return { intent: 'bash-mode', changed: true };
+    }
+
     if (name === 'escape') {
       // Esc interrupts a running command; the loop decides, because only it
       // knows whether one is running. A second Esc opens the run tree, and that
@@ -308,8 +327,14 @@ export function createComposer({
       // next keystroke. Anywhere else `/` is a character, because paths are
       // typed mid-command (`get docs/plans/x.md`) far more often than the
       // palette is wanted mid-word.
-      if (str === '/' && row === 0 && col === 0 && lines.length === 1 && lines[0].length === 0) {
+      const atStartOfEmptyLine = row === 0 && col === 0 && lines.length === 1 && lines[0].length === 0;
+      if (str === '/' && atStartOfEmptyLine && !bashMode) {
         return { intent: 'palette', changed: false };
+      }
+      // The sigil is consumed by the mode it opens, exactly as `/` is.
+      if (str === '!' && atStartOfEmptyLine && !bashMode) {
+        bashMode = true;
+        return { intent: 'bash-mode', changed: true };
       }
       insert(str);
       completion = null;
@@ -348,14 +373,18 @@ export function createComposer({
 
     const body = [];
     const empty = lines.length === 1 && lines[0].length === 0;
+    // In bash mode the caret IS the sigil, painted warn: the same colour the
+    // ledger gives an execute-class command, because that is what the next
+    // Enter will be.
+    const caretOut = bashMode ? paint('warn', `${ascii ? '!' : '!'} `) : paint('info', caret);
     if (empty) {
-      body.push(`${paint('info', caret)}${paint('muted', placeholder)}`);
+      body.push(`${caretOut}${paint('muted', bashMode ? 'shell command · esc leaves bash mode' : placeholder)}`);
     } else {
       lines.forEach((clusters, i) => {
         const text = asText(clusters);
         const wrapped = wrapCells(text, inner);
         wrapped.forEach((piece, j) => {
-          const prefix = i === 0 && j === 0 ? paint('info', caret) : ' '.repeat(caretCells);
+          const prefix = i === 0 && j === 0 ? caretOut : ' '.repeat(caretCells);
           // Highlighting applies to an UNWRAPPED first row only: painting
           // across a wrap boundary would need the escape state carried between
           // rows, and a long multiline command is the case where the shape is
@@ -388,6 +417,7 @@ export function createComposer({
    * does not exist.
    */
   function highlight(text) {
+    if (bashMode) return text; // the shell owns this grammar, not the registry
     if (!classify || !text) return text;
     // Shell escapes and re-runs are their own grammar: paint the sigil and
     // leave the script alone, because the shell owns what follows.
@@ -448,6 +478,8 @@ export function createComposer({
     setHint(next) { hint = next; },
     setRuleLabel(next) { ruleLabel = String(next ?? ''); },
     setPlaceholder(next) { placeholder = next == null ? DEFAULT_PLACEHOLDER : String(next); },
+    get bashMode() { return bashMode; },
+    setBashMode(on) { bashMode = Boolean(on); },
     setGate(next) { gate = next; },
     setCompletion(items) {
       completion = items?.length ? { items, index: 0 } : null;

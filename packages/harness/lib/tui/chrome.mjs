@@ -105,7 +105,7 @@ export function renderHint({
   // (the footer) and one ambient one (the tint).
   const parts = [ui.paint('muted', mode)];
   parts.push(ui.paint('muted', `shell ${shell}`));
-  if (rerun) parts.push(`${ui.paint('muted', '!!')} ${ui.paint('muted', `re-runs ${rerun}`)}`);
+  if (rerun) parts.push(ui.paint('muted', `replay re-runs ${rerun}`));
 
   const keys = [
     `${ui.paint('muted', ui.unicode ? '↵' : 'enter')} ${ui.paint('muted', 'run')}`,
