@@ -666,7 +666,7 @@ export async function cmdOrient(argv) {
         state: result.gateStatus === 'pass' ? 'ok' : 'warn',
         key: 'orient',
         value: result.contextPack,
-        note: `recall ${result.recall.length} · learnings ${result.learnings?.length ?? 0} · plans ${result.plans.length} · gate ${result.gateStatus}`,
+        note: `recall ${result.recall.length} · learnings ${result.learnings?.length ?? 0} · plans ${result.plans.length} of ${result.planTotal ?? result.plans.length} · gate ${result.gateStatus}`,
       })
     );
     if (result.explain) {

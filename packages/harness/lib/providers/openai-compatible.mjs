@@ -46,7 +46,7 @@ const BASE_URL = process.env.HARNESS_PROVIDER_BASE_URL || '';
  * Applied to errors AND to successful content: a model that reads a config file
  * aloud is the same leak by a slower route.
  */
-function scrubCredential(value, key) {
+export function scrubCredential(value, key) {
   if (!key || key.length < 8) return value;
   if (typeof value === 'string') return value.split(key).join('[redacted]');
   if (Array.isArray(value)) return value.map((v) => scrubCredential(v, key));
@@ -80,7 +80,7 @@ function apiKey() {
  * has no notion of several results in one turn. The loop does not need to know
  * that, which is the point of translating on this side of the line.
  */
-function toWireMessages(messages) {
+export function toWireMessages(messages) {
   const out = [];
   for (const message of messages || []) {
     if (message.role === 'assistant') {
@@ -103,7 +103,7 @@ function toWireMessages(messages) {
   return out;
 }
 
-function toWireTools(tools) {
+export function toWireTools(tools) {
   if (!Array.isArray(tools) || !tools.length) return null;
   return tools.map((t) => ({
     type: 'function',
@@ -117,7 +117,7 @@ function toWireTools(tools) {
 
 /** Tool arguments, whichever of the two shapes the server chose. See the
  * module note: a malformed value is data, never an exception. */
-function parseArguments(raw) {
+export function parseArguments(raw) {
   if (raw && typeof raw === 'object') return raw;
   if (typeof raw !== 'string' || !raw.trim()) return {};
   try {
@@ -126,6 +126,34 @@ function parseArguments(raw) {
   } catch {
     return { _raw: raw };
   }
+}
+
+/** How long one request may take before it is failed and retried. */
+const REQUEST_TIMEOUT_MS = Number(process.env.HARNESS_PROVIDER_REQUEST_TIMEOUT_MS) || 120_000;
+
+/**
+ * Two retries on the failures that are the NETWORK'S fault — 429, 5xx, a
+ * dropped socket, a timeout — with backoff and Retry-After honored. A flaky
+ * gateway response used to kill an agent turn the operator had budgeted for
+ * with --max-turns; a 4xx that is the REQUEST'S fault is never retried,
+ * because the same request would fail the same way.
+ */
+export async function withRetry(attempt, { retries = 2, baseDelayMs = 1000 } = {}) {
+  let lastError;
+  for (let i = 0; i <= retries; i += 1) {
+    try {
+      return await attempt();
+    } catch (error) {
+      lastError = error;
+      const status = error?.status ?? null;
+      const retriable = error?.retriable === true || status === 429 || (status >= 500 && status <= 599);
+      if (!retriable || i === retries) throw error;
+      const retryAfter = Number(error?.retryAfterMs) || 0;
+      const delay = Math.max(retryAfter, baseDelayMs * (i + 1) * (i + 1));
+      await new Promise((r) => setTimeout(r, delay));
+    }
+  }
+  throw lastError;
 }
 
 function requestOptions() {
@@ -160,7 +188,7 @@ function callModel({ model, system, messages, tools, maxTokens, temperature }) {
   });
 
   const { url, headers, transport } = requestOptions();
-  return new Promise((resolve, reject) => {
+  return withRetry(() => new Promise((resolve, reject) => {
     const req = transport.request(
       {
         protocol: url.protocol,
@@ -184,7 +212,7 @@ function callModel({ model, system, messages, tools, maxTokens, temperature }) {
               const parsed = JSON.parse(body);
               detail = parsed?.error?.message ?? parsed?.error ?? detail;
             } catch { /* keep the raw prefix */ }
-            reject(new Error(`${PROVIDER_ID} ${res.statusCode}: ${typeof detail === 'string' ? detail : JSON.stringify(detail)}`));
+            reject(Object.assign(new Error(`${PROVIDER_ID} ${res.statusCode}: ${typeof detail === 'string' ? detail : JSON.stringify(detail)}`), { status: res.statusCode, retryAfterMs: Number(res.headers['retry-after']) * 1000 || null }));
             return;
           }
           try {
@@ -195,10 +223,16 @@ function callModel({ model, system, messages, tools, maxTokens, temperature }) {
         });
       },
     );
-    req.on('error', (error) => reject(new Error(`${PROVIDER_ID} request failed: ${error.code || error.message}`)));
+    req.on('error', (error) => reject(Object.assign(
+      new Error(`${PROVIDER_ID} request failed: ${error.code || error.message}`),
+      { retriable: true },
+    )));
+    req.setTimeout(REQUEST_TIMEOUT_MS, () => {
+      req.destroy(Object.assign(new Error(`${PROVIDER_ID} request timed out after ${REQUEST_TIMEOUT_MS}ms`), { retriable: true }));
+    });
     req.write(payload);
     req.end();
-  });
+  }));
 }
 
 /**
@@ -206,7 +240,7 @@ function callModel({ model, system, messages, tools, maxTokens, temperature }) {
  * `{id, name, input}` shape, and the raw assistant message it will echo back
  * without looking inside it.
  */
-function shapeResult(response) {
+export function shapeResult(response) {
   const message = response?.choices?.[0]?.message ?? {};
   const calls = Array.isArray(message.tool_calls) ? message.tool_calls : [];
   return {
@@ -253,6 +287,14 @@ async function handle(message) {
   }
 }
 
+/**
+ * The stdin loop attaches only when this file IS the adapter process. The
+ * github-copilot adapter imports the wire shaping from here — same format,
+ * different auth — and an import that attached a second stdin listener would
+ * have both adapters answering every request.
+ */
+const isMain = process.argv[1] && import.meta.url === (await import('node:url')).pathToFileURL(process.argv[1]).href;
+if (isMain) {
 let buffer = '';
 process.stdin.setEncoding('utf8');
 process.stdin.on('data', (chunk) => {
@@ -271,3 +313,4 @@ process.stdin.on('data', (chunk) => {
     }
   }
 });
+}

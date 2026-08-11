@@ -330,6 +330,11 @@ export function createInput({
      * filters live and backspacing the sigil away withdraws the request.
      */
     openPalette({ overlay: paletteOverlay, filter }) {
+      // A pending question belongs to the command that asked it. Opening the
+      // palette abandons that command, so its title must go with it —
+      // otherwise the rule reads `deliver · get` while the operator is
+      // filtering for something else entirely.
+      prompt = null;
       palette = { overlay: paletteOverlay, filter };
       if (!composer.value.startsWith('/')) composer.setValue(`/${composer.value}`);
       if (interactive) frame(() => { erase(); paint(); });

@@ -82,11 +82,18 @@ test('every provider resolves to an adapter that exists on disk', () => {
   }
 });
 
-test('the OpenAI-compatible providers share ONE adapter rather than five copies of it', () => {
-  const shared = Object.values(PROVIDERS).filter((p) => p.id !== 'anthropic').map((p) => p.adapter);
+test('the OpenAI-compatible providers share ONE adapter, and copilot only adds auth', () => {
+  const shared = Object.values(PROVIDERS).filter((p) => !['anthropic', 'github-copilot'].includes(p.id)).map((p) => p.adapter);
   assert.equal(new Set(shared).size, 1,
-    'five near-identical files would guarantee a tool-call fix lands in one and the other four keep the bug');
-  assert.ok(shared.length >= 4);
+    'near-identical files would guarantee a tool-call fix lands in one and the others keep the bug');
+  assert.ok(shared.length >= 10, `the table rows all ride the shared adapter (${shared.length})`);
+  // github-copilot differs only in how the credential comes to exist: its
+  // adapter IMPORTS the wire shaping from the shared one rather than copying
+  // it, pinned here so the import cannot quietly become a fork.
+  const root = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
+  const copilot = fs.readFileSync(path.join(root, 'lib', 'providers', 'github-copilot.mjs'), 'utf8');
+  assert.match(copilot, /from '\.\/openai-compatible\.mjs'/);
+  assert.doesNotMatch(copilot, /function toWireMessages/, 'shaping lives once');
 });
 
 // --- the base URL is operator-controlled, within one rule ------------------
@@ -325,4 +332,106 @@ test('the Anthropic adapter honors a base URL override, including a path prefix'
   } finally {
     await stub.close();
   }
+});
+
+
+// --- the second wave: rows, retry, and a subscription ---------------------
+
+test('the provider table covers the round-one set, each with a distinct key variable', () => {
+  const ids = Object.keys(PROVIDERS);
+  for (const expected of [
+    'anthropic', 'openai', 'openrouter', 'zen', 'zen-go', 'ollama',
+    'gemini', 'xai', 'groq', 'deepseek', 'mistral', 'github-models', 'lmstudio',
+    'github-copilot',
+  ]) {
+    assert.ok(ids.includes(expected), `${expected} is missing from the table`);
+  }
+  // A shared key variable would make one provider's credential reach another's
+  // process — and `github-models` deliberately does NOT reuse GITHUB_TOKEN,
+  // which core names for redaction and for the exec denylist.
+  const keyVars = Object.values(PROVIDERS).map((p) => p.keyVar);
+  assert.equal(new Set(keyVars).size, keyVars.length - 1,
+    'only zen/zen-go intentionally share OPENCODE_API_KEY');
+  assert.equal(PROVIDERS['github-models'].keyVar, 'GITHUB_MODELS_TOKEN');
+});
+
+test('a local provider needs no key; every hosted one in the new wave still fails closed', () => {
+  assert.equal('LMSTUDIO_API_KEY' in providerEnv(PROVIDERS.lmstudio, { parentEnv: {} }), false);
+  for (const id of ['gemini', 'xai', 'groq', 'deepseek', 'mistral', 'github-models']) {
+    assert.throws(
+      () => providerEnv(PROVIDERS[id], { parentEnv: {} }),
+      (e) => e.code === 'E_USAGE',
+      `${id} must refuse to start without its credential`,
+    );
+  }
+});
+
+test('github-models honours the ecosystem variables, and only the seam names them', () => {
+  const env = providerEnv(PROVIDERS['github-models'], { parentEnv: { GITHUB_TOKEN: 'ghp_conventional' } });
+  assert.equal(env.GITHUB_MODELS_TOKEN, 'ghp_conventional',
+    'the conventional variable is accepted and normalized onto the provider key');
+});
+
+test('COPILOT: a subscription is a credential ladder, resolved by the seam', () => {
+  const copilot = PROVIDERS['github-copilot'];
+  assert.equal(copilot.keyRequired, false, 'the editor login is a valid rung — no key need be exported');
+
+  // Rung 1: a pre-minted bearer.
+  const bearer = providerEnv(copilot, { parentEnv: { GITHUB_COPILOT_TOKEN: 'tid=abc;exp=123' } });
+  assert.equal(bearer.HARNESS_COPILOT_BEARER, 'tid=abc;exp=123');
+  assert.equal(bearer.HARNESS_COPILOT_OAUTH, undefined);
+
+  // Rung 2: an OAuth token, recognized by shape and passed for exchange.
+  const oauth = providerEnv(copilot, { parentEnv: { GITHUB_COPILOT_TOKEN: 'gho_grant' } });
+  assert.equal(oauth.HARNESS_COPILOT_OAUTH, 'gho_grant');
+  assert.equal(oauth.HARNESS_COPILOT_BEARER, undefined, 'an oauth token is not a bearer');
+
+  const viaGh = providerEnv(copilot, { parentEnv: { GH_TOKEN: 'gho_from_cli' } });
+  assert.equal(viaGh.HARNESS_COPILOT_OAUTH, 'gho_from_cli');
+
+  // Rung 3: nothing exported — the adapter falls back to the editor's store,
+  // so the seam must NOT refuse to start.
+  const none = providerEnv(copilot, { parentEnv: { PATH: '/usr/bin' } });
+  assert.equal(none.HARNESS_PROVIDER_BASE_URL, 'https://api.githubcopilot.com');
+  assert.equal(none.HARNESS_COPILOT_OAUTH, undefined);
+});
+
+test('withRetry retries what the network broke and never what the request broke', async () => {
+  const { withRetry } = await import('../lib/providers/openai-compatible.mjs');
+
+  let calls = 0;
+  const flaky = await withRetry(async () => {
+    calls += 1;
+    if (calls < 3) throw Object.assign(new Error('boom'), { status: 503 });
+    return 'ok';
+  }, { baseDelayMs: 1 });
+  assert.equal(flaky, 'ok');
+  assert.equal(calls, 3, 'a 5xx is the network’s fault and is retried');
+
+  let badCalls = 0;
+  await assert.rejects(
+    () => withRetry(async () => {
+      badCalls += 1;
+      throw Object.assign(new Error('bad request'), { status: 400 });
+    }, { baseDelayMs: 1 }),
+    /bad request/,
+  );
+  assert.equal(badCalls, 1, 'a 4xx is the request’s fault — the same request would fail the same way');
+
+  let rateLimited = 0;
+  await withRetry(async () => {
+    rateLimited += 1;
+    if (rateLimited === 1) throw Object.assign(new Error('slow down'), { status: 429, retryAfterMs: 2 });
+    return 'ok';
+  }, { baseDelayMs: 1 });
+  assert.equal(rateLimited, 2, 'a 429 is retried, honouring Retry-After');
+});
+
+test('the shared adapter does not attach a stdin listener when merely imported', async () => {
+  // The copilot adapter imports the wire shaping. If importing also attached
+  // the IPC loop, two adapters would answer every request in that process.
+  const before = process.stdin.listenerCount('data');
+  await import('../lib/providers/openai-compatible.mjs');
+  assert.equal(process.stdin.listenerCount('data'), before,
+    'the stdin loop attaches only when the file IS the adapter process');
 });

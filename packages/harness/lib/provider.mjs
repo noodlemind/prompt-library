@@ -111,6 +111,94 @@ export const PROVIDERS = Object.freeze({
     adapter: 'providers/openai-compatible.mjs',
     defaultModel: 'qwen3:8b',
   },
+  // ── the second wave: every row below is the SAME wire format ──────────
+  gemini: {
+    id: 'gemini',
+    keyVar: 'GEMINI_API_KEY',
+    baseUrlVar: 'GEMINI_BASE_URL',
+    baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai',
+    adapter: 'providers/openai-compatible.mjs',
+    defaultModel: 'gemini-2.5-pro',
+  },
+  xai: {
+    id: 'xai',
+    keyVar: 'XAI_API_KEY',
+    baseUrlVar: 'XAI_BASE_URL',
+    baseUrl: 'https://api.x.ai/v1',
+    adapter: 'providers/openai-compatible.mjs',
+    defaultModel: 'grok-4',
+  },
+  groq: {
+    id: 'groq',
+    keyVar: 'GROQ_API_KEY',
+    baseUrlVar: 'GROQ_BASE_URL',
+    baseUrl: 'https://api.groq.com/openai/v1',
+    adapter: 'providers/openai-compatible.mjs',
+    defaultModel: 'llama-3.3-70b-versatile',
+  },
+  deepseek: {
+    id: 'deepseek',
+    keyVar: 'DEEPSEEK_API_KEY',
+    baseUrlVar: 'DEEPSEEK_BASE_URL',
+    baseUrl: 'https://api.deepseek.com/v1',
+    adapter: 'providers/openai-compatible.mjs',
+    defaultModel: 'deepseek-chat',
+  },
+  mistral: {
+    id: 'mistral',
+    keyVar: 'MISTRAL_API_KEY',
+    baseUrlVar: 'MISTRAL_BASE_URL',
+    baseUrl: 'https://api.mistral.ai/v1',
+    adapter: 'providers/openai-compatible.mjs',
+    defaultModel: 'mistral-large-latest',
+  },
+  'github-models': {
+    id: 'github-models',
+    // ITS OWN VARIABLE, not `GITHUB_TOKEN`. Core legitimately names that one
+    // in two places — the redactor knows its shape, and the exec policy
+    // refuses to forward it — so making it a provider key var would have made
+    // those two correct mentions look like credential leaks to P5AC7. The
+    // seam still accepts the ecosystem's conventional variables below.
+    keyVar: 'GITHUB_MODELS_TOKEN',
+    baseUrlVar: 'GITHUB_MODELS_BASE_URL',
+    baseUrl: 'https://models.github.ai/inference',
+    adapter: 'providers/openai-compatible.mjs',
+    defaultModel: 'openai/gpt-4o',
+  },
+  lmstudio: {
+    id: 'lmstudio',
+    keyVar: 'LMSTUDIO_API_KEY',
+    keyRequired: false,
+    baseUrlVar: 'LMSTUDIO_BASE_URL',
+    baseUrl: 'http://127.0.0.1:1234/v1',
+    adapter: 'providers/openai-compatible.mjs',
+    defaultModel: 'qwen/qwen3-8b',
+  },
+  /**
+   * A Copilot SUBSCRIPTION as a provider — Enterprise, Business, or Pro.
+   *
+   * The July decision deferred Copilot-as-HOST (the SDK owning the loop).
+   * This is the reverse shape and the reason it is now sanctioned: the
+   * harness owns its own agent loop, and Copilot is just another model
+   * endpoint behind it. Auth is the part that differs: the adapter reads the
+   * operator's existing Copilot login (GITHUB_COPILOT_TOKEN, GH_TOKEN /
+   * GITHUB_TOKEN, or the editor's own store at ~/.config/github-copilot/)
+   * and exchanges it for the short-lived bearer the API requires. The wire
+   * format past auth is the same chat/completions every row above speaks.
+   */
+  'github-copilot': {
+    id: 'github-copilot',
+    keyVar: 'GITHUB_COPILOT_TOKEN',
+    keyRequired: false,
+    baseUrlVar: 'GITHUB_COPILOT_BASE_URL',
+    baseUrl: 'https://api.githubcopilot.com',
+    adapter: 'providers/github-copilot.mjs',
+    defaultModel: 'gpt-4o',
+    // The adapter needs the config dir where editors store the OAuth grant;
+    // the token variables themselves are NORMALIZED in providerEnv below, so
+    // the adapter never has to name them (P5AC7: only this file names keys).
+    passEnv: ['XDG_CONFIG_HOME'],
+  },
 });
 
 /** Loopback is the one place a plaintext base URL is not a mistake. */
@@ -204,6 +292,37 @@ export function providerEnv(provider, { parentEnv = process.env } = {}) {
   // credential.
   env.HARNESS_PROVIDER_ID = provider.id;
   env.HARNESS_PROVIDER_BASE_URL = resolveBaseUrl(provider, { parentEnv });
+
+  // A provider may name extra parent variables its adapter needs — the
+  // Copilot adapter reads the operator's existing GitHub auth. Only the named
+  // variables cross; the deny-all default stands for everything else.
+  for (const name of provider.passEnv ?? []) {
+    if (parentEnv[name] !== undefined) env[name] = parentEnv[name];
+  }
+
+  // Copilot's credential is a LADDER, not a key, and this file is the one
+  // place allowed to name its rungs (P5AC7). They are normalized into two
+  // harness-authored variables so the adapter can climb without naming:
+  // a pre-minted bearer, or an OAuth token to exchange. The editor's own
+  // file store (~/.config/github-copilot/) stays the adapter's fallback —
+  // a path, not a key name.
+  // GitHub Models: honour the ecosystem's conventional variables when the
+  // provider-specific one is unset. Named here, in the seam, and nowhere else.
+  if (provider.id === 'github-models' && !parentEnv[provider.keyVar]) {
+    const conventional = parentEnv.GH_TOKEN || parentEnv.GITHUB_TOKEN;
+    if (conventional) {
+      env[provider.keyVar] = conventional;
+      return env;
+    }
+  }
+
+  if (provider.id === 'github-copilot') {
+    const oauthShape = /^(gho_|ghu_|ghp_|github_pat_)/;
+    const direct = parentEnv.GITHUB_COPILOT_TOKEN;
+    if (direct && !oauthShape.test(direct)) env.HARNESS_COPILOT_BEARER = direct;
+    const oauth = (direct && oauthShape.test(direct) ? direct : null) || parentEnv.GH_TOKEN || parentEnv.GITHUB_TOKEN;
+    if (oauth) env.HARNESS_COPILOT_OAUTH = oauth;
+  }
 
   const key = parentEnv[provider.keyVar];
   if (!key) {

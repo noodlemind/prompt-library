@@ -92,6 +92,13 @@ export function scoreRow(row, rawQuery) {
   }
 
   if (label.includes(query)) return SCORE.INTERIOR;
+  // SUBSEQUENCE ONLY AS A LAST RESORT, and only when nothing else matched
+  // anywhere — see `rankRows`. Scattered-letter matching put `consolidate
+  // rebuild` (consolida·T·e reb·UI·ld) in the results for `/tui`, which reads
+  // as a broken filter rather than as a clever one. Editors can afford it
+  // because their lists are files you recognize; a command palette's rows are
+  // capabilities you are still learning, and a wrong row there is a wrong
+  // command run.
   if (isSubsequence(query, label)) return SCORE.SUBSEQUENCE;
   return null;
 }
@@ -112,11 +119,21 @@ export function rankRows(rows, query) {
     if (score === null) continue;
     scored.push({ row, score });
   }
-  scored.sort((a, b) => (
+  // SUBSEQUENCE ROWS ARE A FALLBACK, NOT A RESULT. When anything matched more
+  // strongly — a prefix, a word boundary, an interior run — the scattered
+  // matches are noise beside it: `/tui` returned `tui` AND `consolidate
+  // rebuild`, and a palette that offers a wrong command is worse than one that
+  // offers fewer. They survive only when they are all there is, which is what
+  // makes them a safety net rather than a distraction.
+  const strong = scored.filter((s) => s.score > SCORE.SUBSEQUENCE);
+  const kept = strong.length ? strong : scored;
+  kept.sort((a, b) => (
     b.score - a.score
     || String(a.row.label).length - String(b.row.label).length
     || byteCompare(a.row.label, b.row.label)
     || byteCompare(a.row.id, b.row.id)
   ));
-  return scored.map((s) => s.row);
+  return kept.map((s) => s.row);
 }
+
+

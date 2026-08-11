@@ -74,6 +74,10 @@ export function runOrient({ workspace, copilotHome, flags, query }) {
     ranker: e.ranker || 'overlap',
   }));
 
+  // The TOTAL rides alongside the matches: `plans 0` with an empty query read
+  // as "no plans exist" in a repo holding five, while orient's own next-action
+  // named one of them — a self-contradiction on one screen.
+  const planTotal = listPlanRels(workspace).length;
   const plans = findMatchingPlans(workspace, q, flags.limit || 3).map((p) => ({
     path: p.path,
     status: p.status,
@@ -176,6 +180,7 @@ export function runOrient({ workspace, copilotHome, flags, query }) {
     recall,
     learnings,
     plans,
+    planTotal,
     activePlan: active
       ? {
           path: active.path,
@@ -240,6 +245,7 @@ export function runOrient({ workspace, copilotHome, flags, query }) {
     explain,
     learningsBytes,
     plans,
+    planTotal,
     activePlan: active ? { path: active.path, status: active.status, plan_lock: active.plan_lock } : null,
     planGoal: planGoal
       ? {

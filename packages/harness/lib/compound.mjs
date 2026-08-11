@@ -157,8 +157,17 @@ export function runInsightCompound({ workspace, copilotHome, flags, log = () => 
       nextTools: ['harness knowledge on'],
     };
   }
-  const body = flags.body || (flags.bodyFile ? fs.readFileSync(path.resolve(flags.bodyFile), 'utf8') : '');
-  if (!flags.title || !body.trim()) {
+  // The one-liner form is the contract the approved TUI mock shows in its own
+  // composer example: `compound --insight "windows taskkill needs its own
+  // probe"`. When the insight text is all there is, it IS the title and the
+  // body — demanding both separately for a one-sentence observation turned a
+  // capture affordance into a form.
+  const insightText = typeof flags.insight === 'string' ? flags.insight.trim() : '';
+  const title = flags.title || (insightText.length > 3 ? insightText.slice(0, 96) : '');
+  const body = flags.body
+    || (flags.bodyFile ? fs.readFileSync(path.resolve(flags.bodyFile), 'utf8') : '')
+    || (flags.title ? '' : insightText);
+  if (!title || !body.trim()) {
     return {
       pass: false,
       exitCode: 2,
@@ -179,7 +188,7 @@ export function runInsightCompound({ workspace, copilotHome, flags, log = () => 
         .filter(Boolean)
         .join(',')
     : '';
-  const fmLines = [`title: ${yamlQuote(flags.title)}`, `kind: ${kind}`, `date: ${date}`];
+  const fmLines = [`title: ${yamlQuote(title)}`, `kind: ${kind}`, `date: ${date}`];
   if (tags) fmLines.push(`tags: ${tags}`);
   if (flags.trigger) fmLines.push(`trigger: ${yamlQuote(flags.trigger)}`);
   if (flags.claim) fmLines.push(`claim: ${yamlQuote(flags.claim)}`);
@@ -212,7 +221,7 @@ export function runInsightCompound({ workspace, copilotHome, flags, log = () => 
   }
   // Never silently overwrite an earlier capture: same-day same-title collisions
   // get a deterministic numeric suffix.
-  const base = `${date}-${slugify(flags.title)}`;
+  const base = `${date}-${slugify(title)}`;
   const dirRel = path.join('docs', 'solutions', category);
   // Physical containment (sweep-completeness finding, probe C): this is the
   // PRIMARY episode write path for both `harness compound --insight` and
